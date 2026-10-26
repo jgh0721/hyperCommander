@@ -1,4 +1,5 @@
 ﻿#include <QtTest>
+#include "UniqueLibs/document/documentViewPane.hpp"
 #include "commonLibs/layout/productLayout.hpp"
 #include <QtConcurrent>
 #include <QJsonArray>
@@ -135,16 +136,16 @@ private slots:
         QCOMPARE(Workspace.findChildren<QToolBar*>("viewToolbar").size(), 2);
         Workspace.activateWindow(); Workspace.raise();
         auto* Tabs = Workspace.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs);
-        auto* Editor = Tabs->currentWidget()->findChild<QPlainTextEdit*>("textDocument"); QVERIFY(Editor);
+        auto* Editor = qobject_cast<DocumentViewPane*>(Tabs->currentWidget())->InputWidget(); QVERIFY(Editor);
         Editor->setFocus(); QTest::keyClick(Editor, Qt::Key_Tab, Qt::ControlModifier);
         QCOMPARE(Workspace.Snapshot()["activeDocumentId"].toString(), One);
         QTest::keyClick(Editor, Qt::Key_Tab, Qt::ControlModifier | Qt::ShiftModifier);
         QCOMPARE(Workspace.Snapshot()["activeDocumentId"].toString(), Two);
-        Editor = Tabs->currentWidget()->findChild<QPlainTextEdit*>("textDocument"); Editor->setFocus();
+        Editor = qobject_cast<DocumentViewPane*>(Tabs->currentWidget())->InputWidget(); Editor->setFocus();
         QInputMethodEvent InputMethod; InputMethod.setCommitString("한글 조합 입력");
         QCoreApplication::sendEvent(Editor, &InputMethod);
-        QVERIFY(Editor->toPlainText().contains("한글 조합 입력"));
-        Editor->undo(); QVERIFY(!Document(Workspace.Snapshot(), Two)["dirty"].toBool());
+        QVERIFY(qobject_cast<DocumentViewPane*>(Tabs->currentWidget())->Content().contains(QString("한글 조합 입력").toUtf8()));
+        qobject_cast<DocumentViewPane*>(Tabs->currentWidget())->Undo(); QVERIFY(!Document(Workspace.Snapshot(), Two)["dirty"].toBool());
         QVERIFY(!Workspace.Handle({{"action", "replaceText"}, {"documentId", One}, {"text", "changed\n"}}).contains("error"));
         QVERIFY(Document(Workspace.Snapshot(), One)["dirty"].toBool()); QVERIFY(!Document(Workspace.Snapshot(), Two)["dirty"].toBool());
         QVERIFY(Workspace.Handle({{"action", "close"}, {"documentId", One}}).contains("error"));

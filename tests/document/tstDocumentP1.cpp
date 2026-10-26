@@ -1,6 +1,7 @@
 ﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <QtTest>
+#include "text/QTextView.h"
 #include "commonLibs/layout/productLayout.hpp"
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -172,7 +173,7 @@ private slots:
         QTRY_VERIFY(!Document(Widget, Id)["saving"].toBool()); QVERIFY(Document(Widget, Id)["error"].toString().isEmpty());
         QCOMPARE(Bytes(Output), QByteArray("edited\r\n")); QVERIFY(!Document(Widget, Id)["dirty"].toBool());
         Widget.Handle({{"action", "reload"}, {"documentId", Id}}); QTRY_VERIFY(Ready(Widget, Id));
-        QCOMPARE(Widget.findChild<QPlainTextEdit*>("textDocument")->toPlainText(), QString("edited\n"));
+        QCOMPARE(Widget.findChild<DocumentViewPane*>()->Content(), QByteArray("edited\r\n"));
         Widget.Handle({{"action", "replaceText"}, {"documentId", Id}, {"text", "overwrite source\n"}});
         QVERIFY(Put(Output, "another external\n")); Widget.Handle({{"action", "save"}, {"documentId", Id}});
         QTRY_COMPARE(Document(Widget, Id)["saveState"].toString(), QString("conflict"));
@@ -248,9 +249,9 @@ private slots:
         QVERIFY(Widget.ApplyChromeSettings(Settings)); QVERIFY(Widget.findChild<QMenuBar*>("mainMenu")->isHidden());
         QVERIFY(Widget.findChild<QToolBar*>("mainToolbar")->isHidden()); QVERIFY(Widget.findChild<QAction*>("workspaceDisplayOptions"));
         QVERIFY(Document(Widget, Id)["canSave"].toBool()); // chrome never changes editing authority
-        Widget.activateWindow(); Widget.raise(); Pane->Editor()->setFocus();
+        Widget.activateWindow(); Widget.raise(); Pane->InputWidget()->setFocus();
         Widget.Handle({{"action", "replaceText"}, {"documentId", Id}, {"text", "keyboard content"}});
-        QTest::keyClick(Pane->Editor(), Qt::Key_S, Qt::ControlModifier);
+        QTest::keyClick(Pane->InputWidget(), Qt::Key_S, Qt::ControlModifier);
         QTRY_VERIFY(!Document(Widget, Id)["saving"].toBool());
         QCOMPARE(Bytes(Path), QByteArray("keyboard content")); QVERIFY(!Document(Widget, Id)["dirty"].toBool());
         Settings["viewOverrides"] = QJsonObject{{"text", QJsonObject{{"mainMenuMode", "show"}}}};
@@ -262,8 +263,8 @@ private slots:
         auto& Theme = fm::style::ThemeManager::instance(); auto Scheme = Theme.scheme(); auto Family = Theme.monoFontFamily(); auto Size = Theme.monoFontPx();
         auto Restore = qScopeGuard([&] { Theme.setScheme(Scheme); Theme.setMonoFont(Family, Size); });
         Theme.setScheme(fm::style::ThemeManager::Scheme::Dark); Theme.setMonoFont("Consolas", 15);
-        QCOMPARE(Pane->Editor()->font().family(), QString("Consolas")); QCOMPARE(Pane->Editor()->toPlainText(), QString("keyboard content")); QVERIFY(!Document(Widget, Id)["dirty"].toBool());
-        QCOMPARE(Pane->Editor()->palette().color(QPalette::Base), QApplication::palette().color(QPalette::Base));
+        QCOMPARE(Pane->findChild<QTextView*>()->editorFont().family(), QString("Consolas")); QCOMPARE(Pane->Content(), QByteArray("keyboard content")); QVERIFY(!Document(Widget, Id)["dirty"].toBool());
+        QVERIFY(Pane->findChildren<QPlainTextEdit*>().isEmpty());
         QVERIFY(!Widget.Handle({{"action", "open"}, {"path", Root.filePath("other.txt")}})["documentId"].isString());
     }
     void recoveryListAndSaveAsOnlyRestoration()

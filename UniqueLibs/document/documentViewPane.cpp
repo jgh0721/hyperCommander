@@ -55,21 +55,6 @@ namespace hc::document
         epubRuntime_ = MakeProductEpubRuntime(QCoreApplication::applicationDirPath());
         InitializePortedViewResources();setObjectName("documentViewPane");
         auto* Layout=new QVBoxLayout(this);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
-        // Retain the P1 control adapter for callers; Scintilla owns visible text,
-        // selection, byte positions, folds and history.
-        editor_=new QPlainTextEdit(this);
-        // This hidden P1 compatibility adapter never paints. Laying out its
-        // duplicate of a long Scintilla line stalls the helper control channel.
-        editor_->document()->setLayoutEnabled(false); editor_->setLineWrapMode(QPlainTextEdit::NoWrap);editor_->setObjectName("textDocument");editor_->setReadOnly(true);editor_->hide();DocumentThemeAdapter::Attach(editor_);
-        connect(editor_,&QPlainTextEdit::textChanged,this,[this] {
-            if(syncing_||!text_)return;QScopedValueRollback<bool> Guard(syncing_,true);
-            const auto Text=editor_->document()->toRawText().replace(QChar(0x2029),'\n');
-            editor_->setProperty("scalarText",Text);auto Normalized=Text;if(eol_=="CRLF")Normalized.replace("\r\n","\n").replace("\n","\r\n");text_->ReplaceContent(Normalized);emit ContentChanged();
-        });
-        connect(editor_,&QPlainTextEdit::selectionChanged,this,[this] {
-            if(syncing_||!text_)return;const auto Cursor=editor_->textCursor();const auto Text=editor_->document()->toRawText();
-            text_->Backend()->setSelectionByPos(Text.left(Cursor.selectionStart()).toUtf8().size(),Text.left(Cursor.selectionEnd()).toUtf8().size());
-        });
         auto& Theme=fm::style::ThemeManager::instance();
         connect(&Theme,&fm::style::ThemeManager::changed,this,&DocumentViewPane::applyTheme);
         connect(&Theme,&fm::style::ThemeManager::fontsChanged,this,&DocumentViewPane::applyTheme);
@@ -89,7 +74,7 @@ namespace hc::document
             const auto Last=epub_->ViewState()["lastReaderState"].toObject();
             if(!Last["profile"].toObject()["privateReading"].toBool() && Last["profile"].toObject()["resume"].toBool(true))RetryLocator=Last["locator"].toString();
         }
-        const QSignalBlocker Block(this),EditorBlock(editor_);
+        const QSignalBlocker Block(this);
         viewId_=Input.viewId_;encoding_=Input.encoding_;bom_=Input.bom_;eol_=Input.eol_;
         originalImageBytes_ = viewId_ == "image" ? Input.bytes_ : QByteArray{};
         originalImageHash_ = viewId_ == "image" ? Input.hash_ : QByteArray{};
@@ -173,7 +158,7 @@ namespace hc::document
         bool Success=true;
         if(viewId_=="pdf") {pdf_=new QPDFView(this);view_=pdf_;Success=pdf_->LoadContent(Input.bytes_,Input.path_);}
         else if(viewId_=="image") {image_=new QImageView(this);view_=image_;image_->LoadContent(Input.image_,Input.path_,Traverse);if(readingEntry_.isEmpty()&&!readingPath_.isEmpty())image_->SetNavigationSource(readingPath_);}
-        else {text_=new QTextView(this);view_=text_;text_->LoadContent(Input.text_,Input.path_,Input.encoding_);editor_->setProperty("scalarText",Input.text_);editor_->setPlainText(Input.text_);editor_->setReadOnly(false);}
+        else {text_=new QTextView(this);view_=text_;text_->LoadContent(Input.text_,Input.path_,Input.encoding_);readOnly_=false;}
         if(!Success)return false;
         toolbar_=view_->createToolBar();
         if(!toolbar_)toolbar_=new QToolBar(this);
@@ -184,7 +169,7 @@ namespace hc::document
         contribution_.viewId_=viewId_;contribution_.menuTitle_=viewId_=="pdf"?tr("PDF"):viewId_=="image"?tr("이미지"):tr("텍스트");
         contribution_.menuActions_=toolbar_->actions();
         if(text_) {
-            connect(text_,&QTextView::ContentChanged,this,[this]{syncText();emit ContentChanged();});
+            connect(text_,&QTextView::ContentChanged,this,[this]{emit ContentChanged();});
             connect(text_,&QTextView::EncodingRequested,this,&DocumentViewPane::EncodingRequested);
             auto* Encoding=new QComboBox(toolbar_);Encoding->setObjectName("documentEncoding");Encoding->setAccessibleName(tr("저장 인코딩"));Encoding->addItems({"UTF-8","UTF-16LE","UTF-16BE","CP949"});Encoding->setCurrentText(encoding_);
             toolbar_->addWidget(Encoding);
@@ -289,11 +274,6 @@ namespace hc::document
         connect(view_,&QBaseView::SaveRequested,this,&DocumentViewPane::SaveRequested);
         contribution_.menuActions_=toolbar_->actions();applyTheme();return true;
     }
-    void DocumentViewPane::syncText()
-    {
-        if(syncing_||!text_)return;QScopedValueRollback<bool> Guard(syncing_,true);
-        const QSignalBlocker Block(editor_);const auto Text=text_->Content();editor_->setProperty("scalarText",Text);editor_->setPlainText(Text);
-    }
     void DocumentViewPane::DiscardEpubRecovery(){if(epubEditor_)epubEditor_->DiscardRecovery();}
     void DocumentViewPane::SetEpubRecoveryEnabled(bool Enabled){if(epubEditor_)epubEditor_->SetRecoveryEnabled(Enabled);}
     void DocumentViewPane::CheckpointEpub(){if(epubEditor_)epubEditor_->Checkpoint();}
@@ -393,7 +373,7 @@ namespace hc::document
         }
         if(IsEpubEditing()){if(auto* Source=epubEditor_->findChild<QPlainTextEdit*>())Source->setFocus();}else if(epub_)currentEpub()->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
     }
-    void DocumentViewPane::SetReadOnly(bool Enabled){editor_->setReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
+    void DocumentViewPane::SetReadOnly(bool Enabled){readOnly_=Enabled;if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
     {
         if(view_)view_->RestrictClipboard(Enabled);

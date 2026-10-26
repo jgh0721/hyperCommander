@@ -70,10 +70,6 @@ namespace hc::document
 {
     namespace
     {
-        // toPlainText substitutes NBSP and Unicode line separators. Preserve
-        // scalar text while mapping Qt document block separators to LF.
-        QString EditorText(const QPlainTextEdit* Editor)
-        { return Editor->property("scalarText").isValid() ? Editor->property("scalarText").toString() : Editor->document()->toRawText().replace(QChar(0x2029), QChar('\n')); }
         QJsonObject Error(const QString& Code) { return {{"error", Code}}; }
         QString Message(const QString& Code)
         {
@@ -173,7 +169,7 @@ namespace hc::document
         TextInput input_;
         QPointer<DocumentViewPane> pane_;
         QPointer<QMessageBox> externalPrompt_;
-        QPointer<QPlainTextEdit> editor_;
+
         std::shared_ptr<std::stop_source> cancellation_ = std::make_shared<std::stop_source>();
         bool loading_ = true, saving_ = false, hostSlot_ = false, broker_ = false;
         bool navigating_ = false, closeRequested_ = false, choosingSavePath_ = false;
@@ -632,7 +628,7 @@ namespace hc::document
                 if (!hosted_ && Tab->session_->Text().size() > DocumentByteLimit) return Error("p0-text-byte-limit");
                 // SDK owns one slot; a newer pending Load supersedes its predecessor.
                 pendingHostOpen_ = {{"path", Path}, {"sourceToken", SourceToken}, {"broker", Broker}, {"displayName", DisplayName}};
-                Tab->editor_->setReadOnly(true); Checkpoint(); return {{"replacing", true}, {"documentId", Tab->id_}};
+                Tab->pane_->SetReadOnly(true); Checkpoint(); return {{"replacing", true}, {"documentId", Tab->id_}};
             }
             retire(Tab, true); break;
         }
@@ -650,44 +646,16 @@ namespace hc::document
         Tab->originalAuthority_ = !HostSlot && !Broker && SourceToken.isEmpty() && !Tab->recovered_; Tab->originalSave_ = Tab->originalAuthority_;
         auto* Pane = new DocumentViewPane(tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_);
         Pane->SetUnlimitedBytes(hosted_);
-        auto* Editor = Pane->Editor(); Tab->pane_ = Pane; Tab->editor_ = Editor;
+        Tab->pane_ = Pane;
         connect(Pane, &DocumentViewPane::ClipboardRequested, this, [this, Tab](const QString& Mode) { clipboard(Tab, Mode); });
-        Editor->installEventFilter(this); Editor->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(Editor, &QWidget::customContextMenuRequested, this, [this, Tab, Editor](const QPoint& Position) {
-            auto* Menu = clipboardBroker_ ? new QMenu(Editor) : Editor->createStandardContextMenu();
-            connect(Menu, &QMenu::aboutToHide, Menu, [Menu] { QTimer::singleShot(0,Menu,[Menu] { delete Menu; }); });
-            if (!clipboardBroker_) { Menu->popup(Editor->mapToGlobal(Position)); return; }
-            for (const auto& Mode : {QString("copy"), QString("cut"), QString("paste")}) {
-                auto* Action = Menu->addAction(Mode == "copy" ? tr("복사") : Mode == "cut" ? tr("잘라내기") : tr("붙여넣기"));
-                connect(Action, &QAction::triggered, this, [this, Tab, Mode] { clipboard(Tab, Mode); });
-            }
-            Menu->popup(Editor->mapToGlobal(Position));
-        });
-        connect(Editor, &QPlainTextEdit::textChanged, this, [this, Tab] {
-            if (Tab->loading_ || Tab->closed_) return;
-            const auto Text = EditorText(Tab->editor_);
-            auto Result = !Text.isValidUtf16() || (!hosted_ && EncodeText(Text, Tab->input_.bom_, Tab->input_.eol_).size() > TextByteLimit)
-                ? storage::Result<storage::Unit>{storage::Error{storage::ErrorCategory::BudgetExceeded, "p0-text-byte-limit"}}
-                : Tab->session_->Execute("document.setText", Tab->pane_->Content().toStdString());
-            if (!Result.HasValue()) {
-                QSignalBlocker Block(Tab->editor_);
-                if (Tab->editor_->document()->isUndoAvailable()) Tab->editor_->undo();
-                if (EditorText(Tab->editor_).toUtf8().toStdString() != Tab->session_->Text())
-                    Tab->editor_->setPlainText(QString::fromUtf8(Tab->session_->Text()));
-                Tab->error_ = QString::fromStdString(Result.Failure().code_);
-            }
-            else Tab->error_.clear();
-            Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo()); update();
-        });
-        connect(Editor, &QPlainTextEdit::undoAvailable, this, [this, Tab](bool) {
-            Tab->session_->SetHistoryState(Tab->editor_->document()->isUndoAvailable(), Tab->editor_->document()->isRedoAvailable()); update();
-        });
-        connect(Editor, &QPlainTextEdit::redoAvailable, this, [this, Tab](bool) {
-            Tab->session_->SetHistoryState(Tab->editor_->document()->isUndoAvailable(), Tab->editor_->document()->isRedoAvailable()); update();
-        });
         connect(Pane,&DocumentViewPane::ContentChanged,this,[this,Tab] {
             if(Tab->loading_||Tab->closed_)return;
             auto Bytes=Tab->pane_->SessionContent();
+            if(Tab->pane_->ViewId()=="text" && !hosted_ && Bytes.size()>TextByteLimit) {
+                const QSignalBlocker Block(Tab->pane_);
+                Tab->pane_->Undo();Tab->error_="p0-text-byte-limit";
+                Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo());update();return;
+            }
             if(Tab->pane_->ViewId()!="text"&&Bytes.isEmpty()){Tab->error_="document-serialization-failed";update();return;}
             auto Result=Tab->session_->Execute("document.setText",Bytes.toStdString());
             if(!Result.HasValue())Tab->error_=QString::fromStdString(Result.Failure().code_);else Tab->error_.clear();
@@ -978,7 +946,7 @@ namespace hc::document
                     ? Revision : std::numeric_limits<std::uint64_t>::max();
                 if (Tab->hostSlot_ && !pendingHostOpen_.isEmpty()) {
                     if (Stored && !Tab->closed_) Checkpoint();
-                    else { pendingHostOpen_ = {}; if (Tab->editor_) Tab->editor_->setReadOnly(false); }
+                    else { pendingHostOpen_ = {}; if (Tab->pane_) Tab->pane_->SetReadOnly(false); }
                 }
                 else if (!Tab->Dirty()) cleanupRecovery(Tab, Tab->session_->Snapshot().savedRevision_);
                 update(); tryFinishClose();
@@ -1190,7 +1158,7 @@ namespace hc::document
             if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-close-dirty");
             retire(Tab, Request["discard"].toBool()); update(); return {{"accepted", true}};
         }
-        if (Tab->loading_ || Tab->navigating_ || !Tab->editor_) return Error("document-not-ready");
+        if (Tab->loading_ || Tab->navigating_ || !Tab->pane_) return Error("document-not-ready");
         if (Action == "activate") { activate(Tab); Tab->pane_->Focus(); }
         else if(Action=="editHwp")return editHwp(Tab);
         else if(Action=="editEpub")return editEpub(Tab);
@@ -1198,7 +1166,7 @@ namespace hc::document
             if (!Request["text"].toString().isValidUtf16()) return Error("p0-utf8-text-required");
             if(Tab->pane_->ViewId()!="text")return Error("document-text-command-on-binary");
             if (!Request["text"].isString() || (!hosted_ && EncodeText(Request["text"].toString(), Tab->input_.bom_, Tab->input_.eol_).size() > TextByteLimit) || Request["text"].toString().contains(QChar::Null)) return Error("p0-text-byte-limit");
-            if (Tab->editor_->isReadOnly()) return Error("document-edit-unavailable");
+            if (Tab->pane_->IsReadOnly()) return Error("document-edit-unavailable");
             auto Result=Tab->pane_->Execute(Request);if(Result.contains("error"))return Result;
         }
         else if (Action == "clipboard") return clipboard(Tab, Request["mode"].toString());
@@ -1316,7 +1284,7 @@ namespace hc::document
             if(Id.startsWith("epub."))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing());
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
                 Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->ViewId() == "text"
-                    && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->editor_->isReadOnly()));
+                    && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->pane_->IsReadOnly()));
             if (Id == "file.new") Action->setEnabled((hosted_ || documents_.size() < 16) && (tabbed_ || documents_.empty()));
             if (Id == "tab.next" || Id == "tab.previous") Action->setEnabled(tabbed_ && tabs_->count() > 1);
         }
@@ -1360,7 +1328,7 @@ namespace hc::document
     }
     QJsonObject DocumentWorkspaceWidget::clipboard(const std::shared_ptr<Tab>& Tab, const QString& Mode)
     {
-        if (!clipboardBroker_ || !clipboardRequest_.isEmpty() || !Tab || (Mode != "copy" && Tab->editor_->isReadOnly())
+        if (!clipboardBroker_ || !clipboardRequest_.isEmpty() || !Tab || (Mode != "copy" && Tab->pane_->IsReadOnly())
             || (Mode != "copy" && Mode != "cut" && Mode != "paste")) return Error("document-clipboard-unavailable");
         if (Tab->pane_->ViewId() != "text" && Mode != "copy") return Error("document-clipboard-view-unavailable");
         clipboardSelection_=Tab->pane_->CaptureSelection();
@@ -1400,7 +1368,7 @@ namespace hc::document
         if (clipboardBroker_ && Event->type() == QEvent::KeyPress) {
             auto* Key = static_cast<QKeyEvent*>(Event); QString Mode;
             if (Key->matches(QKeySequence::Copy)) Mode = "copy"; if (Key->matches(QKeySequence::Cut)) Mode = "cut"; if (Key->matches(QKeySequence::Paste)) Mode = "paste";
-            if (!Mode.isEmpty()) { for (const auto& Tab : documents_) if (Tab->editor_ == Watched || Tab->pane_->InputWidget()==Watched || (qobject_cast<QWidget*>(Watched)&&Tab->pane_->InputWidget()&&Tab->pane_->InputWidget()->isAncestorOf(qobject_cast<QWidget*>(Watched)))) {clipboard(Tab,Mode);return true;} }
+            if (!Mode.isEmpty()) { for (const auto& Tab : documents_) if (Tab->pane_->InputWidget()==Watched || (qobject_cast<QWidget*>(Watched)&&Tab->pane_->InputWidget()&&Tab->pane_->InputWidget()->isAncestorOf(qobject_cast<QWidget*>(Watched)))) {clipboard(Tab,Mode);return true;} }
         }
         return QWidget::eventFilter(Watched, Event);
     }

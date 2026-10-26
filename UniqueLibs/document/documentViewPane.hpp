@@ -4,7 +4,7 @@
 #include "hwpOpenWindow.hpp"
 #include <QWidget>
 #include <QJsonObject>
-class QPlainTextEdit;
+
 class QToolBar;
 class QBaseView;
 class QTextView;
@@ -22,7 +22,7 @@ namespace hc::document
     public:
         explicit DocumentViewPane(QWidget* Parent = nullptr);
         ~DocumentViewPane() override;
-        QPlainTextEdit* Editor() const { return editor_; }
+        bool IsReadOnly() const { return readOnly_; }
         ViewUiContribution Contribution() const { return contribution_; }
         bool Load(const TextInput& Input, bool Traverse, bool ImageEditing = true);
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
@@ -73,11 +73,11 @@ namespace hc::document
         void RetryRequested();
         void EditEpubRequested();
     private:
-        void syncText();
+
         bool editEpub(const QString& Locator={},int Chapter=-1);
         EpubProcessView* currentEpub()const;
         void applyTheme();
-        QPlainTextEdit* editor_;
+        bool readOnly_ = true;
         QToolBar* toolbar_ = nullptr;
         QBaseView* view_ = nullptr;
         QTextView* text_ = nullptr;
