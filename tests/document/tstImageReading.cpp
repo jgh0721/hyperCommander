@@ -415,6 +415,13 @@ class ImageReadingTests : public QObject
         View.GoTo(1);
         QTRY_VERIFY_WITH_TIMEOUT(!View.CurrentImage().isNull(), 20000);
         QCOMPARE(View.State()["page"].toInt(), 1);
+        View.GoTo(0);
+        QTRY_VERIFY(!View.State()["pageError"].toString().isEmpty());
+        QVERIFY(Picture(Qt::blue).save(Root.filePath("1.png")));
+        View.RetryPage();
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsBusy() && !View.CurrentImage().isNull(),20000);
+        QCOMPARE(View.CurrentImage().pixelColor(0,0),QColor(Qt::blue));
+        QVERIFY(View.State()["pageError"].toString().isEmpty());
         View.OpenVolume(1);
         QTRY_VERIFY(!View.IsBusy());
         View.SetFilter("spline16");

@@ -1,4 +1,5 @@
 ﻿#include "imageReadingView.hpp"
+#include <QAction>
 #include "imageAsync.hpp"
 #include "imageResampler.hpp"
 #include "imageDisplayColor.hpp"
@@ -129,6 +130,11 @@ ImageReadingView::ImageReadingView(QWidget *Parent) : QAbstractScrollArea(Parent
                 viewport()->update();
                 emit Changed();
             });
+    auto* Retry=new QAction(tr("이 페이지 다시 읽기"),this);Retry->setObjectName("image.retryPage");
+    addAction(Retry);connect(Retry,&QAction::triggered,this,&ImageReadingView::RetryPage);
+    auto* Next=new QAction(tr("다음 페이지"),this);Next->setObjectName("image.nextReadablePage");
+    addAction(Next);connect(Next,&QAction::triggered,this,[this]{Move(1,true);});
+    setContextMenuPolicy(Qt::ActionsContextMenu);
     saveTimer_.setSingleShot(true);
     saveTimer_.setInterval(600);
     connect(&saveTimer_, &QTimer::timeout, this, &ImageReadingView::persist);
@@ -267,6 +273,14 @@ void ImageReadingView::invalidateRenders()
     ++generation_;
     pending_.clear();
 }
+void ImageReadingView::RetryPage()
+{
+    if(!book_ || index_<0 || index_>=book_->pages_.size())return;
+    // Re-enumerate on an explicit retry so repaired files get a fresh revision;
+    // a transient failure never silently discards the rest of the book.
+    OpenPath(book_->path_,book_->pages_[index_].name_,int(mode_));
+}
+
 void ImageReadingView::Cancel()
 {
     prefetchStop_->request_stop();
@@ -615,7 +629,7 @@ void ImageReadingView::paintEvent(QPaintEvent *)
                     else
                     {
                         Painter.setPen(palette().color(QPalette::Text));
-                        Painter.drawText(Visible, Qt::AlignCenter, pageErrors_.value(P.page_, tr("불러오는 중…")));
+                        Painter.drawText(Visible, Qt::AlignCenter, pageErrors_.contains(P.page_)?tr("이 페이지를 읽지 못했습니다.\n다른 페이지로 이동하거나 마우스 오른쪽 메뉴에서 다시 읽을 수 있습니다.\n%1").arg(pageErrors_.value(P.page_)):tr("불러오는 중…"));
                     }
                     request(P, Tile);
                 }
@@ -937,6 +951,7 @@ QJsonObject ImageReadingView::State() const
     return {{"page", index_},
             {"pageCount", book_ ? book_->pages_.size() : 0},
             {"pageName", CurrentName()},
+            {"pageError",pageErrors_.value(index_)},{"failedPages",pageErrors_.size()},
             {"book", book_ ? book_->path_ : QString{}},
             {"mode", int(mode_)},
             {"relative", mode_ == Webtoon ? relative_ : Relative},

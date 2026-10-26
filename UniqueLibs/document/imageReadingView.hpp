@@ -42,6 +42,7 @@ class ImageReadingView final : public QAbstractScrollArea
     void GoTo(int Index, double Relative = 0);
     void OpenVolume(int Direction);
     void Cancel();
+    void RetryPage();
     QJsonObject State() const;
     QImage CurrentImage() const;
     QString CurrentName() const;
