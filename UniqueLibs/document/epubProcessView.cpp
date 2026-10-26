@@ -28,6 +28,7 @@
 #include <mutex>
 #include <system_error>
 #include <thread>
+#include <future>
 #include <vector>
 
 namespace hc::document
@@ -336,15 +337,24 @@ namespace hc::document
                 Limits.memoryBytes_=Limits.memoryBytes_?qMin(Limits.memoryBytes_,std::uint64_t(1024ULL*1024*1024)):1024ULL*1024*1024;
                 State->Update({{"status","loading"}});
                 QDeadlineTimer Deadline(60000);
-                auto Package = epub::Prepare(State->bytes_, Cancelled);
-                Metrics["prepareMs"] = Elapsed.elapsed();
+                // Package validation and runtime verification are independent.
+                // Both must succeed before any content reaches the renderer.
+                std::atomic_bool StopPreparation{false};
+                auto Preparation=std::async(std::launch::async,[&]{
+                    QElapsedTimer Clock;Clock.start();
+                    auto Package=epub::Prepare(State->bytes_,[&]{return StopPreparation.load()||Cancelled();});
+                    return std::pair{std::move(Package),Clock.elapsed()};
+                });
+                Owner = DocumentWebProcess::Start(Runtime, Limits, State->parent_, Error, &Pending, Cancelled);
+                Metrics["authenticatedMs"] = Elapsed.elapsed();
+                if(!Owner)StopPreparation.store(true);
+                auto Prepared=Preparation.get();auto Package=std::move(Prepared.first);
+                Metrics["prepareMs"] = Prepared.second;
+                if(!Owner) { Failure = Error.code_; return; }
                 if(!Package) { Failure = Package.error_; return; }
                 if(Cancelled()) return;
                 Id = Package.publication_["sourceSha256"].toString();
                 Payload = QJsonDocument(Package.publication_).toJson(QJsonDocument::Compact);
-                Owner = DocumentWebProcess::Start(Runtime, Limits, State->parent_, Error, &Pending, Cancelled);
-                if(!Owner) { Failure = Error.code_; return; }
-                Metrics["authenticatedMs"] = Elapsed.elapsed();
                 State->snapshot_ = Owner->Snapshot();
                 State->ready_.store(true, std::memory_order_release);
                 while(!State->attached_.load(std::memory_order_acquire) && !Cancelled() && !Deadline.hasExpired())

@@ -100,16 +100,17 @@ namespace hc::document
         Input->ticket_ = Ticket; Input->file_ = std::move(File);
         startup::Scope HashRead("input.lockedReadHash");
         Input->bytes_.resize(static_cast<qsizetype>(Size.QuadPart));
-        qsizetype Offset = 0;
+        qsizetype Offset = 0;QCryptographicHash Hash(QCryptographicHash::Sha256);
         Error = "rhwp-input-read";
         while(Offset < Input->bytes_.size()) {
             DWORD Count = 0;
             const auto Wanted = static_cast<DWORD>(qMin<qsizetype>(192 * 1024, Input->bytes_.size() - Offset));
             if(!ReadFile(Handle, Input->bytes_.data() + Offset, Wanted, &Count, nullptr) || !Count) return {};
+            Hash.addData(QByteArrayView(Input->bytes_.constData()+Offset,Count));
             Offset += Count;
         }
         Error = "rhwp-input-integrity";
-        if(QCryptographicHash::hash(Input->bytes_, QCryptographicHash::Sha256).toHex() != Sha) return {};
+        if(Hash.result().toHex() != Sha) return {};
         // Inspect the exact locked/hash-verified bytes before any IPC transfer.
         // Container admission is not parser success or permission to edit.
         HashRead.End(Input->bytes_.size(),1);
