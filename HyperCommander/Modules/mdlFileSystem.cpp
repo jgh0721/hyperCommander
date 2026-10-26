@@ -172,6 +172,12 @@ namespace nsHC
         readFsInformation();
     }
 
+    CFSLocal::CFSLocal(const VolumeInformation& Information) : CFileSystemT(Information.root_)
+    {
+        cate_ = FS_CATE_LOCAL; volumeName_ = Information.name_;
+        if (Information.valid_) applyFsInformation(Information.flags_, Information.maxComponentLength_);
+    }
+
     bool CFSLocal::IsRemovable()
     {
         return GetDriveTypeW( GetRoot().toStdWString().c_str() ) == DRIVE_REMOVABLE;
@@ -201,6 +207,12 @@ namespace nsHC
         if( GetVolumeInformationW( GetRoot().toStdWString().c_str(), nullptr, 0, nullptr, &maxComponentLength_, &FsFlags, nullptr, 0 ) == FALSE )
             return;
 
+        applyFsInformation(FsFlags, maxComponentLength_);
+    }
+
+    void CFSLocal::applyFsInformation(DWORD FsFlags, DWORD MaximumLength)
+    {
+        maxComponentLength_ = MaximumLength;
         features_ |= FS_FEA_LIST;
         features_ |= FS_FEA_READABLE;
 
@@ -226,6 +238,7 @@ namespace nsHC
 
     QString CFSNtfs::GetVolumeName()
     {
+        if (volumeName_) return *volumeName_;
         QVector< wchar_t > VecBuffer( MAX_PATH );
 
         if( GetVolumeInformationW( GetRoot().toStdWString().c_str(), VecBuffer.data(), VecBuffer.size(), nullptr, nullptr, nullptr, nullptr, 0 ) == FALSE )

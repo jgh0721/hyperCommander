@@ -698,7 +698,14 @@ void QMainUI::initialize()
 
     workspace_ = hc::workspace::Load(hc::settings::WorkspaceSettings()); workspaceLoaded_ = true;
     if (workspace_.exists_ && workspace_.writable_ && hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["restoreWorkspace"].toBool(true)) RestoreWorkspace(workspace_.state_);
-    else if (!workspace_.writable_) statusBar()->showMessage(tr("저장된 작업공간을 읽을 수 없어 원본을 보존합니다: %1").arg(workspace_.error_));
+    else {
+        hc::workspace::State Initial;
+        hc::workspace::TabState Home; Home.id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        Home.location_ = {hc::storage::LocatorKind::Local, QDir::toNativeSeparators(QDir::homePath()).toStdString()};
+        Initial.left_.tabs_.append(Home); Home.id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        Initial.right_.tabs_.append(Home); RestoreWorkspace(Initial);
+        if (!workspace_.writable_) statusBar()->showMessage(tr("저장된 작업공간을 읽을 수 없어 원본을 보존합니다: %1").arg(workspace_.error_));
+    }
 }
 
 hc::workspace::State QMainUI::CaptureWorkspace() const

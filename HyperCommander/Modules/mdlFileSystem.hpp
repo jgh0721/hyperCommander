@@ -146,10 +146,18 @@ namespace nsHC
 
     using TySpFileSystem = QSharedPointer< CFileSystemT >;
 
+    struct VolumeInformation {
+        QString root_, name_, fileSystem_;
+        DWORD type_ = DRIVE_UNKNOWN, flags_ = 0, maxComponentLength_ = 0;
+        bool valid_ = false;
+    };
+
     class CFSLocal : public CFileSystemT
     {
     public:
         explicit CFSLocal( const QString& Root );
+        explicit CFSLocal(const VolumeInformation& Information);
+        QString GetVolumeName() override { return volumeName_.value_or(QString{}); }
 
         bool                    IsRemovable() override;
         
@@ -162,12 +170,15 @@ namespace nsHC
     protected:
 
         DWORD                   maxComponentLength_ = 0;
+        std::optional<QString> volumeName_;
+        void applyFsInformation(DWORD Flags, DWORD MaximumLength);
     };
 
     class CFSNtfs : public CFSLocal
     {
     public:
         explicit CFSNtfs( const QString& Root );
+        explicit CFSNtfs(const VolumeInformation& Information) : CFSLocal(Information) {}
 
         QString                 GetVolumeName() override;
     };

@@ -39,6 +39,21 @@
 
 #include "Modules/mdlFileEngine.hpp"
 
+namespace {
+struct VolumeDiscovery {
+    DWORD mask_ = 0;
+    QElapsedTimer age_;
+    QFuture<QList<nsHC::VolumeInformation>> future_;
+    quint64 generation_ = 0;
+};
+VolumeDiscovery& SharedVolumes()
+{
+    // Accessed only from the GUI thread. The worker captures the drive mask
+    // and returns plain values; filesystem QObjects are constructed below.
+    static VolumeDiscovery Value; return Value;
+}
+}
+
 DECLARE_CMNLIBSV2_NAMESPACE
 
 //////////////////////////////////////////////////////////////////////////////
@@ -55,8 +70,8 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
     OnColorSchemeChanged( StColorSchemeMgr->GetColorScheme( StColorSchemeMgr->GetCurrentColorScheme() ) );
 
     QMetaObject::invokeMethod( this, "RefreshVolumeList", Qt::QueuedConnection );
-    QTimer::singleShot( 100, this, [this]() {
-        if( workspaceRestored_ || ui.cbxVolume->count() == 0 )
+    QTimer::singleShot(0, this, [this] { QTimer::singleShot(0, this, [this]() {
+        if( workspaceRestored_ )
             return;
 
         // Start in the user's home; restored tabs keep their saved location.
@@ -66,26 +81,59 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
         Tab.location_ = {hc::storage::LocatorKind::Local, QDir::toNativeSeparators(QDir::homePath()).toStdString()};
         Initial.tabs_.append(Tab);
         RestoreWorkspace(Initial);
-    } );
+    }); });
 }
 
 void CmpPanel::RefreshVolumeList() const
 {
     hc::startup::Span Trace("volumes.refresh");
+    auto& Discovery = SharedVolumes();
+    const DWORD Drives = GetLogicalDrives();
+    if (!Discovery.generation_ || (Discovery.future_.isFinished() &&
+        (Discovery.mask_ != Drives || Discovery.age_.elapsed() > 1000))) {
+        Discovery.mask_ = Drives; ++Discovery.generation_; Discovery.age_.start();
+        Discovery.future_ = QtConcurrent::run([Drives] {
+            hc::startup::Span Trace("volumes.metadata");
+            QList<nsHC::VolumeInformation> Result;
+            for (int Index = 0; Index < 26; ++Index) {
+                if (!(Drives & (1 << Index))) continue;
+                nsHC::VolumeInformation Info; Info.root_ = QString(QChar('A' + Index)) + ":";
+                const auto Native = (Info.root_ + "\\").toStdWString(); Info.type_ = GetDriveTypeW(Native.c_str());
+                if (Info.type_ == DRIVE_REMOTE) { Info.valid_ = true; Result.append(Info); continue; }
+                WCHAR Name[MAX_PATH]{}, System[MAX_PATH]{};
+                Info.valid_ = GetVolumeInformationW(Native.c_str(), Name, MAX_PATH, nullptr,
+                    &Info.maxComponentLength_, &Info.flags_, System, MAX_PATH);
+                Info.name_ = QString::fromWCharArray(Name); Info.fileSystem_ = QString::fromWCharArray(System);
+                if (Info.valid_) Result.append(std::move(Info));
+            }
+            return Result;
+        });
+    }
+    if (!Discovery.future_.isFinished()) {
+        auto* Self = const_cast<CmpPanel*>(this);
+        if (Self->property("hc.volumeGeneration").toULongLong() != Discovery.generation_) {
+            Self->setProperty("hc.volumeGeneration", QVariant::fromValue(Discovery.generation_));
+            auto* Watcher = new QFutureWatcher<QList<nsHC::VolumeInformation>>(Self);
+            connect(Watcher, &QFutureWatcher<QList<nsHC::VolumeInformation>>::finished, Self, [Self, Watcher] {
+                Watcher->deleteLater(); SharedVolumes().age_.restart(); Self->RefreshVolumeList();
+            });
+            Watcher->setFuture(Discovery.future_);
+        }
+        return;
+    }
     const auto Previous = ui.cbxVolume->currentData().value<nsHC::TySpFileSystem>();
     const auto PreviousRoot = Previous ? Previous->GetRoot() : QString{};
     const QSignalBlocker Blocker(ui.cbxVolume);
     ui.cbxVolume->clear();
     QFileIconProvider Icons;
     const auto DriveIcon = Icons.icon(QAbstractFileIconProvider::Drive);
-    const DWORD Drives = GetLogicalDrives();
-    for (int Index = 0; Index < 26; ++Index) {
-        if (!(Drives & (1 << Index))) continue;
-        const auto Root = QString(QChar('A' + Index)) + ":\\";
-        const auto Fs = nsHC::TySpFileSystem(nsHC::CFileSystemT::MakeFileSystem(Root));
-        if (!Fs) continue;
-        const auto Name = Fs->GetVolumeName().trimmed();
-        const auto Label = QString(QChar('A' + Index)) + (Name.isEmpty() ? ":" : ":  " + Name);
+    for (const auto& Info : Discovery.future_.result()) {
+        nsHC::TySpFileSystem Fs;
+        if (Info.type_ == DRIVE_REMOTE) Fs.reset(new nsHC::CFSNetworkDrive(Info.root_));
+        else if (Info.fileSystem_.compare("NTFS", Qt::CaseInsensitive) == 0) Fs.reset(new nsHC::CFSNtfs(Info));
+        else Fs.reset(new nsHC::CFSLocal(Info));
+        const auto Name = Info.name_.trimmed();
+        const auto Label = Info.root_ + (Name.isEmpty() ? QString{} : "  " + Name);
         ui.cbxVolume->addItem(DriveIcon, Label, QVariant::fromValue(Fs));
     }
     const auto Network = nsHC::TySpFileSystem(nsHC::CFileSystemT::MakeFileSystem(R"(\\)"));
@@ -96,6 +144,9 @@ void CmpPanel::RefreshVolumeList() const
         if (Fs && Fs->GetRoot() == PreviousRoot) { Current = Index; break; }
     }
     ui.cbxVolume->setCurrentIndex(Current);
+    if (const auto State = vecTabStates.value(ui.tabWidget->currentIndex()); State && State->Model) {
+        auto* Self = const_cast<CmpPanel*>(this); Self->updateWorkspaceStatus(); Self->syncPanelChrome();
+    }
 }
 
 
