@@ -27,6 +27,7 @@
 #include "image/QImageView.h"
 #include <QtCore/private/qzipwriter_p.h>
 #include "UniqueLibs/document/imageBook.hpp"
+#include "UniqueLibs/document/imageZipRecovery.hpp"
 #include "UniqueLibs/document/imageReadingView.hpp"
 #include "UniqueLibs/document/imageFullscreen.hpp"
 #include "UniqueLibs/document/imageFramePlayer.hpp"
@@ -414,6 +415,32 @@ class ImageReadingTests : public QObject
         auto Book=OpenImageBook(Root.path());QVERIFY(Book.HasValue());auto Page=ReadImagePage(Book.Value(),0);
         QVERIFY(Page.HasValue());QVERIFY(!Page.Value().image_.isNull());QCOMPARE(Page.Value().warning_,QString("image-jpeg-incomplete"));
         QCOMPARE(QFileInfo(File).size(),qint64(Bytes.size()));
+    }
+    void zip64AndDescriptorRecovery_data()
+    {
+        QTest::addColumn<bool>("Deflate");QTest::addColumn<bool>("Wide");QTest::addColumn<bool>("Signature");QTest::addColumn<bool>("Descriptor");
+        for(bool D:{false,true})for(bool W:{false,true})for(bool S:{false,true})
+            QTest::newRow(qPrintable(QString("descriptor-%1-%2-%3").arg(D).arg(W).arg(S)))<<D<<W<<S<<true;
+        QTest::newRow("zip64-local-size")<<true<<true<<false<<false;
+    }
+    void zip64AndDescriptorRecovery()
+    {
+        QFETCH(bool,Deflate);QFETCH(bool,Wide);QFETCH(bool,Signature);QFETCH(bool,Descriptor);
+        const auto Image=Png(Qt::red);auto Packed=Image;
+        if(Deflate){const auto Z=qCompress(Image,6);Packed=Z.mid(6,Z.size()-10);}
+        const auto Crc=quint32(crc32(0,reinterpret_cast<const Bytef*>(Image.constData()),uInt(Image.size())));
+        const auto Number=[](quint64 V,int N){QByteArray Out;for(int I=0;I<N;++I)Out+=char(V>>(8*I));return Out;};
+        QByteArray Extra;if(Wide)Extra=Number(1,2)+Number(16,2)+Number(Descriptor?0:Image.size(),8)+Number(Descriptor?0:Packed.size(),8);
+        QByteArray Bytes("PK\x03\x04",4);Bytes+=Number(Wide?45:20,2)+Number(Descriptor?8:0,2)+Number(Deflate?8:0,2)+Number(0,4);
+        Bytes+=Number(Descriptor?0:Crc,4)+Number(Wide?UINT32_MAX:Descriptor?0:Packed.size(),4)+Number(Wide?UINT32_MAX:Descriptor?0:Image.size(),4);
+        Bytes+=Number(5,2)+Number(Extra.size(),2)+"1.png"+Extra+Packed;
+        if(Descriptor){if(Signature)Bytes+=QByteArray("PK\x07\x08",4);Bytes+=Number(Crc,4)+Number(Packed.size(),Wide?8:4)+Number(Image.size(),Wide?8:4);}
+        QTemporaryDir Root;QFile File(Root.filePath("broken.cbz"));QVERIFY(File.open(QIODevice::WriteOnly));File.write(Bytes);File.close();
+        auto Entries=zipRecovery::Scan(File.fileName(),{});QVERIFY2(Entries.HasValue(),Entries.HasValue()?"":Entries.Failure().code_.c_str());QCOMPARE(Entries.Value().size(),1);
+        auto Recovered=zipRecovery::Read(File.fileName(),Entries.Value().first(),{});QVERIFY(Recovered.HasValue());QCOMPARE(Recovered.Value().bytes_,Image);QVERIFY(Recovered.Value().warning_.isEmpty());
+        QVERIFY(File.open(QIODevice::ReadOnly));QCOMPARE(File.readAll(),Bytes);File.close();
+        Bytes[6]=char(quint8(Bytes[6])|1);QVERIFY(File.open(QIODevice::WriteOnly|QIODevice::Truncate));File.write(Bytes);File.close();
+        QVERIFY(!zipRecovery::Scan(File.fileName(),{}).HasValue());
     }
     void missingZipDirectoryRetainsReadablePages()
     {
