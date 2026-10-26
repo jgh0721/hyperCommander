@@ -1892,33 +1892,18 @@ QString CFSModel::retrieveRootWithPath() const
 
 void CFSModel::createBuiltFsValues( QVector<nsHC::TySpFileSource>& Items )
 {
-    for (const auto& Item : Items)
-    {
-        Item->VecContent.clear(); Item->VecContent.reserve(columnView_.VecColumns.size());
-        Item->columnValues_.clear(); Item->columnValues_.reserve(columnView_.VecColumns.size());
-        for (const auto& Column : columnView_.VecColumns)
-        {
-            const auto Value = evaluateColumn(Item, Column, false);
-            Item->columnValues_.append(Value);
-            Item->VecContent.append(CColumnMgr::FormatValue(Column.definition_, Value, Item.get()));
-        }
-    }
+    // Display/Edit roles evaluate and format the requested cell directly.
+    // Only the first raw column is consumed by the name-sort fallback;
+    // eagerly formatting every cell here duplicates invisible UI work.
+    for (const auto& Item : Items) createBuiltFsValues(Item, 0);
 }
 
 void CFSModel::createBuiltFsValues(const nsHC::TySpFileSource& Item, int Column)
 {
-    if (!Item) return;
-    if (Column < 0) {
-        for (int Index = 0; Index < columnView_.VecColumns.size(); ++Index) createBuiltFsValues(Item, Index);
-        return;
-    }
-    if (Column >= columnView_.VecColumns.size()) return;
-    const auto& Definition = columnView_.VecColumns[Column].definition_;
-    const auto Value = evaluateColumn(Item, columnView_.VecColumns[Column], false);
-    Item->columnValues_.resize(columnView_.VecColumns.size());
-    Item->VecContent.resize(columnView_.VecColumns.size());
-    Item->columnValues_[Column] = Value;
-    Item->VecContent[Column] = CColumnMgr::FormatValue(Definition, Value, Item.get());
+    if (!Item || Column > 0) return;
+    Item->VecContent.clear(); Item->columnValues_.clear();
+    if (!columnView_.VecColumns.isEmpty())
+        Item->columnValues_.append(evaluateColumn(Item, columnView_.VecColumns.front(), false));
 }
 
 //DWORD FSModel::Rename( const QModelIndex& Index, const QString& NewName )
