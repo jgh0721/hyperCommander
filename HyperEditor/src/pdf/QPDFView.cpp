@@ -18,6 +18,7 @@
 #include <QEvent>
 #include <QDebug>
 #include <QPainter>
+#include <QPaintEvent>
 #include <QActionGroup>
 #include <QVBoxLayout>
 #include <QScrollBar>
@@ -225,6 +226,7 @@ void QPDFView::closeFileInternal(bool emitSignals)
     m_annotationManager.setDocument(nullptr);
     if (m_document) { FPDF_CloseDocument(m_document); m_document = nullptr; }
     m_fileData.clear();
+    continuousPages_.clear();continuousScale_=0;
     m_pageCount = 0; m_currentPage = 0; setModifiedState(false);
     m_searchPage = 0; m_searchMatchStart = -1; m_searchMatchCount = 0;
     m_searchResultIndex = -1; m_searchResultTotal = 0;
@@ -334,6 +336,10 @@ void QPDFView::goToPage(int page)
 {
     if (!m_document || page < 0 || page >= m_pageCount) return;
     m_currentPage = page;
+    if(m_viewMode==ContinuousScroll && page<continuousPages_.size()){
+        m_scrollArea->verticalScrollBar()->setValue(qRound(continuousPages_[page].top()));
+        emit pageChanged(page+1,m_pageCount);emit viewStateChanged();return;
+    }
     m_pageCache.clear();
     renderCurrentPage();
     emit pageChanged(m_currentPage + 1, m_pageCount);
@@ -766,7 +772,7 @@ QList<QPDFView::PageViewportInfo> QPDFView::currentViewportPages(qreal& scaleRat
     }
 
     const QPixmap pixmap = m_pageLabel->pixmap();
-    if (pixmap.isNull()) {
+    if (m_viewMode != ContinuousScroll && pixmap.isNull()) {
         scaleRatio = 1.0;
         return pages;
     }
@@ -777,29 +783,9 @@ QList<QPDFView::PageViewportInfo> QPDFView::currentViewportPages(qreal& scaleRat
     };
 
     if (m_viewMode == ContinuousScroll) {
-        const int gap = 24;
-        qreal maxWidth = 0.0;
-        QVector<QSizeF> pageSizes;
-        pageSizes.reserve(m_pageCount);
-        for (int i = 0; i < m_pageCount; ++i) {
-            const QSizeF size = rotatedPageSize(i) * scaleRatio;
-            if (!size.isValid() || size.isEmpty()) {
-                pageSizes.append(QSizeF());
-                continue;
-            }
-            maxWidth = qMax(maxWidth, size.width());
-            pageSizes.append(size);
-        }
-
-        qreal y = 0.0;
-        for (int i = 0; i < pageSizes.size(); ++i) {
-            const QSizeF size = pageSizes.at(i);
-            if (!size.isValid() || size.isEmpty())
-                continue;
-            const qreal x = (maxWidth - size.width()) / 2.0;
-            pages.append({i, mapLabelRectToView(QRectF(x, y, size.width(), size.height()))});
-            y += size.height() + gap;
-        }
+        scaleRatio=continuousScale_;
+        for(int i=0;i<continuousPages_.size();++i)
+            pages.append({i,mapLabelRectToView(continuousPages_[i])});
         return pages;
     }
 
@@ -882,43 +868,34 @@ QImage QPDFView::renderSpreadImage(int firstPageIndex, qreal scale)
     return canvas;
 }
 
-QImage QPDFView::renderContinuousImage(qreal scale)
+void QPDFView::layoutContinuousPages(qreal scale)
 {
-    if (!m_document || m_pageCount <= 0)
-        return {};
-
-    const int gap = 24;
-    QList<QImage> pages;
-    pages.reserve(m_pageCount);
-
-    int maxWidth = 1;
-    int totalHeight = 0;
-    for (int i = 0; i < m_pageCount; ++i) {
-        QImage page = renderPageToImage(i, scale);
-        if (page.isNull())
-            continue;
-        maxWidth = qMax(maxWidth, page.width());
-        totalHeight += page.height();
-        if(std::uint64_t(qMax(1,maxWidth))*qMax(1,totalHeight)>16*1024*1024)return {};
-        pages.append(page);
+    if(!qFuzzyCompare(continuousScale_,scale))m_pageCache.clear();
+    continuousScale_=scale;continuousPages_.clear();
+    qreal width=1,y=0;
+    for(int i=0;i<m_pageCount;++i){
+        const auto size=rotatedPageSize(i)*scale;
+        continuousPages_.append(QRectF(0,y,qMax(1.,size.width()),qMax(1.,size.height())));
+        width=qMax(width,size.width());y+=qMax(1.,size.height())+24;
     }
-
-    if (pages.isEmpty())
-        return {};
-
-    totalHeight += gap * (pages.size() - 1);
-    QImage canvas(qMax(1, maxWidth), qMax(1, totalHeight), QImage::Format_ARGB32);
-    canvas.fill(ThemeManager::instance().color(QStringLiteral("pdf.pageGap")));
-
-    QPainter painter(&canvas);
-    int y = 0;
-    for (const QImage& page : pages) {
-        const int x = (maxWidth - page.width()) / 2;
-        painter.drawImage(x, y, page);
-        y += page.height() + gap;
+    for(auto& rect:continuousPages_)rect.moveLeft((width-rect.width())/2);
+    m_pageLabel->clear();
+    m_pageLabel->resize(qBound(1,qCeil(width),QWIDGETSIZE_MAX),qBound(1,int(qMin(qreal(QWIDGETSIZE_MAX),y-24)),QWIDGETSIZE_MAX));
+    m_pageLabel->update();
+}
+void QPDFView::paintContinuousPages(const QRect& region)
+{
+    QPainter painter(m_pageLabel);
+    painter.fillRect(region,ThemeManager::instance().color(QStringLiteral("pdf.pageGap")));
+    // Geometry is cheap; pixels are allocated only for intersecting pages.
+    for(int i=0;i<continuousPages_.size();++i){
+        const auto rect=continuousPages_[i];if(!rect.intersects(region))continue;
+        auto* cached=m_pageCache.object(i);
+        QImage page=cached?*cached:renderPageToImage(i,continuousScale_);
+        if(page.isNull())continue;
+        if(!cached)m_pageCache.insert(i,new QImage(page),qMax(1,int(page.sizeInBytes()/1024)));
+        painter.drawImage(rect,page);
     }
-    painter.end();
-    return canvas;
 }
 
 void QPDFView::renderCurrentPageNow()
@@ -940,10 +917,9 @@ void QPDFView::renderCurrentPageNow()
                 if (!size.isValid() || size.isEmpty())
                     continue;
                 targetWidth = qMax(targetWidth, size.width());
-                targetHeight += size.height();
+                targetHeight = qMax(targetHeight,size.height());
             }
-            if (m_pageCount > 1)
-                targetHeight += 24.0 * (m_pageCount - 1);
+
         } else if (m_viewMode == TwoPageSpread) {
             const auto [leftPageIndex, rightPageIndex] = spreadPagePair(m_currentPage);
             const QSizeF leftSize = rotatedPageSize(leftPageIndex);
@@ -977,7 +953,7 @@ void QPDFView::renderCurrentPageNow()
     if (m_viewMode == TwoPageSpread) {
         img = renderSpreadImage(m_currentPage, scale);
     } else if (m_viewMode == ContinuousScroll) {
-        img = renderContinuousImage(scale);
+        layoutContinuousPages(scale);emit viewStateChanged();return;
     } else {
         QImage* cached = m_pageCache.object(m_currentPage);
         img = cached ? *cached : renderPageToImage(m_currentPage, scale);
@@ -1979,6 +1955,9 @@ bool QPDFView::copySelection()
 
 bool QPDFView::eventFilter(QObject* watched, QEvent* event)
 {
+    if(watched==m_pageLabel && event->type()==QEvent::Paint && m_viewMode==ContinuousScroll && m_document){
+        paintContinuousPages(static_cast<QPaintEvent*>(event)->rect());return true;
+    }
     if (m_scrollArea && (watched == m_scrollArea || watched == m_pageLabel
         || watched == m_scrollArea->viewport() || watched == m_scrollArea->verticalScrollBar()
         || watched == m_scrollArea->horizontalScrollBar())

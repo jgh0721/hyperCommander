@@ -175,7 +175,10 @@ private:
     QSizeF pageSize(int pageIndex) const;
     QSizeF rotatedPageSize(int pageIndex) const;
     QImage renderSpreadImage(int firstPageIndex, qreal scale);
-    QImage renderContinuousImage(qreal scale);
+    void layoutContinuousPages(qreal scale);
+    void paintContinuousPages(const QRect& region);
+    QVector<QRectF> continuousPages_;
+    qreal continuousScale_ = 0;
     QList<PageViewportInfo> currentViewportPages(qreal& scaleRatio) const;
     QPair<int, int> spreadPagePair(int firstPageIndex) const;
     QRectF mapPdfRectToImageRect(const PdfRect& rect, int pageIndex, qreal scale) const;

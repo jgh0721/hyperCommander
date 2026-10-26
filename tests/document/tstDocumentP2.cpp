@@ -26,6 +26,7 @@
 #include "UniqueLibs/document/imageResampler.hpp"
 #include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include "pdf/QPDFView.h"
+#include <QScrollBar>
 void InitializeDocumentPdfium();
 using namespace hc::document;
 namespace {
@@ -33,9 +34,9 @@ bool Put(const QString& Path,const QByteArray& Bytes){QFile File(Path);return Fi
 QByteArray Read(const QString& Path){QFile File(Path);return File.open(QIODevice::ReadOnly)?File.readAll():QByteArray{};}
 QJsonObject Doc(const DocumentWorkspaceWidget& Workspace,const QString& Id){for(auto Item:Workspace.Snapshot()["documents"].toArray())if(Item.toObject()["documentId"]==Id)return Item.toObject();return {};}
 bool Ready(const DocumentWorkspaceWidget& Workspace,const QString& Id){return Doc(Workspace,Id)["lifecycle"]=="ready";}
-QByteArray PdfFixture(){
+QByteArray PdfFixture(int Pages=2){
     InitializeDocumentPdfium();auto Document=FPDF_CreateNewDocument();
-    for(int At=0;At<2;++At){auto Page=FPDFPage_New(Document,At,300,400);FPDFPage_SetRotation(Page,At?2:0);
+    for(int At=0;At<Pages;++At){auto Page=FPDFPage_New(Document,At,300,400);FPDFPage_SetRotation(Page,At?2:0);
         auto Text=FPDFPageObj_NewTextObj(Document,"Helvetica",18);const unsigned short Message[]={'P','2',' ','s','e','a','r','c','h',0};
         FPDFText_SetText(Text,Message);FPDFPageObj_Transform(Text,1,0,0,1,30,250);FPDFPage_InsertObject(Page,Text);FPDFPage_GenerateContent(Page);FPDF_ClosePage(Page);}
     struct Writer:FPDF_FILEWRITE {QByteArray bytes_;static int Write(FPDF_FILEWRITE* Self,const void* Data,unsigned long Size){static_cast<Writer*>(Self)->bytes_.append(static_cast<const char*>(Data),Size);return 1;}} Writer;
@@ -48,6 +49,20 @@ QJsonObject Native(HWND Viewer,HMODULE Module,const QJsonObject& Request){using 
 class DocumentP2Tests final:public QObject {
 Q_OBJECT
 private slots:
+void continuousPdfShowsLastPageWithoutWholeBookBitmap(){
+    QPDFView View;View.resize(800,600);View.setSidebarPosition(QPDFView::SidebarHidden);
+    QVERIFY(View.LoadContent(PdfFixture(120),"many.pdf"));
+    View.setViewMode(QPDFView::ContinuousScroll);View.setZoomMode(QPDFView::FitWidth);
+    View.show();QVERIFY(QTest::qWaitForWindowExposed(&View));QTRY_VERIFY(!View.IsRendering());
+    auto* Scroll=View.findChild<QScrollArea*>();QVERIFY(Scroll);QVERIFY(Scroll->verticalScrollBar()->maximum()>0);
+    View.goToPage(119);QTRY_VERIFY(!View.IsRendering());QCOMPARE(View.currentPage(),119);
+    const auto Frame=Scroll->viewport()->grab().toImage();QVERIFY(!Frame.isNull());
+    const auto Color=Frame.pixelColor(Frame.width()/2,Frame.height()/2);
+    QVERIFY2(Color.red()>230 && Color.green()>230 && Color.blue()>230,"last PDF page must be visible");
+    View.setRotationAngle(QPDFView::Rotate90);QTRY_VERIFY(!View.IsRendering());
+    View.setViewMode(QPDFView::SinglePage);QTRY_VERIFY(!View.IsRendering());
+    QCOMPARE(View.currentPage(),119);
+}
 void imageFitTracksViewportAfterHiddenLoad(){
     QImageView View; View.resize(900,650);
     QImage Source(320,200,QImage::Format_RGB32); Source.fill(Qt::blue);
