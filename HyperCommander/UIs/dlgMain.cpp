@@ -713,9 +713,17 @@ hc::workspace::State QMainUI::CaptureWorkspace() const
 void QMainUI::RestoreWorkspace(const hc::workspace::State& State)
 {
     commandLine_->SetHistory(State.commandHistory_);
-    ui.cmpLeftPanel->RestoreWorkspace(State.left_, State.defaults_); ui.cmpRightPanel->RestoreWorkspace(State.right_, State.defaults_);
     if (!State.geometry_.isEmpty() && !restoreGeometry(State.geometry_)) statusBar()->showMessage(tr("저장된 창 위치가 올바르지 않아 기본 위치를 사용합니다."));
     if (!State.layout_.isEmpty() && !ui.splitter->restoreState(State.layout_)) statusBar()->showMessage(tr("저장된 패널 배치가 올바르지 않아 기본 배치를 사용합니다."));
+    setActivePanel(State.activePane_);
+    // Dispatch the command source's listing first, with its final pane size.
+    if (State.activePane_ == 1) {
+        ui.cmpRightPanel->RestoreWorkspace(State.right_, State.defaults_);
+        ui.cmpLeftPanel->RestoreWorkspace(State.left_, State.defaults_);
+    } else {
+        ui.cmpLeftPanel->RestoreWorkspace(State.left_, State.defaults_);
+        ui.cmpRightPanel->RestoreWorkspace(State.right_, State.defaults_);
+    }
     setActivePanel(State.activePane_);
     const auto Panel = currentPanelIndex ? ui.cmpRightPanel : ui.cmpLeftPanel;
     Panel->SetFocusView(Panel->CurrentTabIndex()); emit Panel->sig_NotifyPanelActivated();

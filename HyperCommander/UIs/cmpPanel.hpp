@@ -85,7 +85,7 @@ public:
     void                            NotifyDriveRemoved(const QString& Root);
 
     void                            AddTab(bool Navigate = true);
-    hc::workspace::PaneState        CaptureWorkspace() const;
+    hc::workspace::PaneState        CaptureWorkspace(int OnlyTab = -1) const;
     void                            RestoreWorkspace(const hc::workspace::PaneState& Pane, const QJsonObject& Defaults = {});
     QString                         CurrentPath() const;
     QString                         Search() const;

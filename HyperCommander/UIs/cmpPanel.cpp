@@ -102,7 +102,8 @@ void CmpPanel::RefreshVolumeList() const
 void CmpPanel::AddTab(bool Navigate)
 {
     if (vecTabStates.size() >= 64) return;
-    const auto Previous = CaptureWorkspace();
+    const int PreviousIndex = ui.tabWidget->currentIndex();
+    const auto Previous = Navigate ? CaptureWorkspace(PreviousIndex) : hc::workspace::PaneState{};
     auto Columns = TyStColumnMgr::GetInstance()->GetColumnView(0);
     auto* View = static_cast<CGridView*>(createGridView());
     auto* Model = new CFSModel; auto* Proxy = new CFSProxyModel;
@@ -264,7 +265,7 @@ void CmpPanel::AddTab(bool Navigate)
     if (Navigate) {
         const auto Position = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["newTabPosition"].toString("last");
         const int Last = int(vecTabStates.size()) - 1;
-        const int Target = Position == "first" ? 0 : Position == "left" ? Previous.active_ : Position == "right" ? Previous.active_ + 1 : Last;
+        const int Target = Position == "first" ? 0 : Position == "left" ? PreviousIndex : Position == "right" ? PreviousIndex + 1 : Last;
         if (Target >= 0 && Target < Last) {
             // QTabBar::moveTab keeps the page, signals and stable tab IDs intact.
             QSignalBlocker Blocker(ui.tabWidget);
@@ -274,7 +275,7 @@ void CmpPanel::AddTab(bool Navigate)
             ui.tabWidget->setCurrentIndex(Target);
         }
     }
-    on_tabWidget_currentChanged(ui.tabWidget->currentIndex());
+    if (Navigate) on_tabWidget_currentChanged(ui.tabWidget->currentIndex());
     View->AdjustSizeToContents();
 }
 
@@ -295,10 +296,12 @@ void CmpPanel::NotifyDriveRemoved(const QString& Root)
     RefreshVolumeList(); updateWorkspaceStatus(); syncPanelChrome();
 }
 
-hc::workspace::PaneState CmpPanel::CaptureWorkspace() const
+hc::workspace::PaneState CmpPanel::CaptureWorkspace(int OnlyTab) const
 {
-    hc::workspace::PaneState Result; Result.active_ = std::max(0, ui.tabWidget->currentIndex());
-    for (const auto& State : vecTabStates) {
+    hc::workspace::PaneState Result; Result.active_ = OnlyTab >= 0 ? 0 : std::max(0, ui.tabWidget->currentIndex());
+    for (int Index = 0; Index < vecTabStates.size(); ++Index) {
+        if (OnlyTab >= 0 && Index != OnlyTab) continue;
+        const auto& State = vecTabStates[Index];
         auto Tab = State->workspace_;
         const auto Model = static_cast<CFSModel*>(State->Model);
         const auto View = static_cast<CGridView*>(State->View);
