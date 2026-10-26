@@ -656,6 +656,20 @@ QModelIndexList CGridView::VisibleSourceRows(int Overscan) const
         }
         return Entries;
     }
+    if (!Overscan) {
+        // Group headers and pinned rows have separate layout coordinates.
+        // Read the actual cell rectangles instead of treating all rows as
+        // one continuous scroll range.
+        const auto Area = grid_->viewport()->rect();
+        for (const auto& Hit : grid_->hitInfoAll()) {
+            if (Hit.info() != Qtitan::GridHitInfo::Cell || !Hit.rect().intersects(Area)
+                || Hit.row().type() != Qtitan::GridRow::DataRow) continue;
+            auto Index = Hit.row().modelIndex(0);
+            if (proxy_) Index = proxy_->mapToSource(Index);
+            if (Index.isValid() && !Entries.contains(Index)) Entries.append(Index);
+        }
+        return Entries;
+    }
     auto* Layout=static_cast<Qtitan::GridViewBase*>(view_)->layout();const int Count=view_->getRowCount();if(!Count)return Entries;
     const int Scroll=view_->verticalScrollBar()->value(),Height=std::max(1,Layout->rowsPanel()->boundedRect().height());
     const auto Position=[&](int Y){int Low=0,High=Count;while(Low+1<High){int Mid=(Low+High)/2;if(Layout->getRowScrollPos(Mid)<=Y)Low=Mid;else High=Mid;}return Low;};
@@ -909,8 +923,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         // starts at the top; refreshes retain their viewport and parent
         // navigation restores its saved anchor below.
         const auto NativeModel = qobject_cast<CFSModel*>(model_);
-        if (!Path.isEmpty() && Path != resetPath_ && (!NativeModel || !NativeModel->LastNavigationError())) {
-            if (view_->getRowCount()) view_->setFocusedRowIndex(0);
+        if (!resetPath_.isEmpty() && !Path.isEmpty() && Path != resetPath_ && (!NativeModel || !NativeModel->LastNavigationError())) {
             view_->verticalScrollBar()->setValue(0);
         }
         resetPath_.clear(); resetSelection_.clear(); resetFocus_.clear(); resetFocusFallback_.clear();
@@ -1494,12 +1507,15 @@ void CGridView::RestoreScrollState(const QJsonObject& State)
 void CGridView::RestoreSelection(const QStringList& Selection, const QString& Focus)
 {
     if (!model_ || !view_) return;
+    // A saved file index can resolve to its group header before the queued
+    // grouping projection expands the rows. Finish that projection first.
+    if (groupingTimer_.isActive() && !groupingProjection_ && !groupingUpdateDepth_) applyGrouping();
     const QSet<QString> Keys(Selection.begin(), Selection.end());
     const auto Previous = groupedSelection_;
     QScopedValueRollback Guard(groupingProjection_, true);
     view_->beginUpdate(); view_->deselectAll();
     if (GroupingActive()) groupedSelection_.clear();
-    int FocusRow = -1;
+    int FocusRow = -1; QModelIndex FocusIndex;
     for (const auto& Source : SelectionCandidates()) {
         const auto Key = sourceSelectionKey(Source);
         const bool Selected = !Key.isEmpty() && Keys.contains(Key);
@@ -1508,12 +1524,13 @@ void CGridView::RestoreSelection(const QStringList& Selection, const QString& Fo
         if (Selected && GroupingActive()) groupedSelection_.insert(Key);
         const auto Row = view_->getRow(Visible); if (!Row.isValid()) continue;
         if (Selected && Row.type() == Qtitan::GridRow::DataRow) view_->selectRow(Row.rowIndex(), Qtitan::Select);
-        if (!Key.isEmpty() && Key == Focus) FocusRow = Row.rowIndex();
+        if (!Key.isEmpty() && Key == Focus) { FocusRow = Row.rowIndex(); FocusIndex = Visible; }
     }
     if (Focus.startsWith("@group:")) for (const auto& Group : view_->modelController()->groupRows())
         if (Group._groupValue.toString() == Focus.mid(7)) { FocusRow = Group.rowIndex; break; }
-    if (FocusRow >= 0) view_->setFocusedRowIndex(FocusRow);
     view_->endUpdate();
+    if (FocusIndex.isValid()) FocusRow = view_->getRow(FocusIndex).rowIndex();
+    if (FocusRow >= 0) view_->setFocusedRowIndex(FocusRow);
     if (GroupingActive() && Previous != groupedSelection_) emit sigSelectionIdentityChanged();
     selectionSummaryTimer_.start(0);
 }

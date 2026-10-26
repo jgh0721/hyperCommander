@@ -5687,6 +5687,10 @@ private slots:
         QVERIFY(View->ColumnWidths()->SetPolicy(View->ColumnWidths()->ColumnId(0), Policy));
         auto* Column = static_cast<Qtitan::GridTableColumn*>(View->BaseView()->getColumnByModelColumn(0));
         Column->setSortOrder(Qtitan::SortDescending, true);
+        for (const auto& Definition : View->ColumnProfile().columns_) if (Definition.fieldId_ == "file.extension") {
+            QVERIFY(View->SetGrouping({true, Definition.id_, "value", Qt::AscendingOrder})); break;
+        }
+        View->RestoreSelection({Key}, Key);
         const auto Saved = Panel->CaptureWorkspace(); QCOMPARE(Saved.tabs_[0].selection_, QStringList{Key});
         QPointer<CGridView> OldGrid = View;
         Panel->OpenQuickView(0, {}); QPointer<CViewT> OldPreview = Panel->GetFocusView(0);
@@ -9242,7 +9246,7 @@ private slots:
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         // More rows than the worker seeds and than the indexed-order threshold.
-        const int Count = 4400;
+        const int Count = qEnvironmentVariableIntValue("HC_COLOR_BOUNDARY_ROWS") > 0 ? qEnvironmentVariableIntValue("HC_COLOR_BOUNDARY_ROWS") : 4400;
         for (int I = 0; I < Count; ++I) { QFile F(Directory.filePath(QString("page_%1.txt").arg(I, 5, 10, QChar('0')))); QVERIFY(F.open(QIODevice::WriteOnly)); F.write("d"); }
         auto Rules = FileColorRules::Empty(); Rules["version"] = 2;
         Rules["groups"] = QJsonArray{QJsonObject{{"id", "large-folder"}, {"name", "텍스트"}, {"join", "all"},
@@ -9253,7 +9257,7 @@ private slots:
         const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme()); Model->SetColorScheme(Scheme);
         const QColor Expected(Scheme.IsDarkMode ? "#88bbee" : "#2266aa");
         Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() >= Count, 30000);
-        QVERIFY(Model->UsesIndexedOrder());
+        QCOMPARE(Model->UsesIndexedOrder(), Count > int(CFSModel::IndexedOrderThreshold));
         // The background pass styles the rows past the seeds before paging can
         // reach them; every row then paints from the cache on its first read.
         QTRY_VERIFY_WITH_TIMEOUT(Model->FileRuleCompletionIdle(), 10000);
