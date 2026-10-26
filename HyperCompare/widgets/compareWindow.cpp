@@ -1,5 +1,8 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
+#include "UniqueLibs/qtDialogFrame.hpp"
+#include <fmwidgets/WindowChrome.h>
 #include "largeTextView.hpp"
 #include "largeTextMultiView.hpp"
 #include "boundedEditor.hpp"
@@ -82,11 +85,23 @@ namespace hc::compare
             return "null";
         }
         sptr_t color(const QColor& Color) { return Color.red() | (Color.green() << 8) | (Color.blue() << 16); }
+        // "product" follows HyperCommander's general.themeMode (set by main from its settings); light · dark override it.
+        fm::style::ThemeManager::Scheme themeScheme(const QString& Mode)
+        {
+            using Scheme = fm::style::ThemeManager::Scheme;
+            const auto effective = Mode == "product" ? qApp->property("hc.productThemeMode").toString() : Mode;
+            return effective == "dark" ? Scheme::Dark : effective == "light" ? Scheme::Light : Scheme::System;
+        }
     }
     CompareWindow::CompareWindow(Request Input) : request_(std::move(Input))
     {
         setWindowTitle("HyperCompare"); resize(1280, 800);
-        QSettings settings; dark_ = request_.theme_.isEmpty() ? settings.value("theme/dark", false).toBool() : request_.theme_ == "dark";
+        QSettings settings;
+        // The former bool is read once: a saved dark choice stays dark, anything else follows the product.
+        themeMode_ = settings.contains("theme/mode") ? settings.value("theme/mode").toString() : settings.value("theme/dark", false).toBool() ? QString("dark") : QString("product");
+        if (!request_.theme_.isEmpty()) themeMode_ = request_.theme_;
+        if (themeMode_ != "light" && themeMode_ != "dark") themeMode_ = "product";
+        { auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(themeScheme(themeMode_)); dark_ = theme.colors().isDark(); }
         uiFont_ = qApp->font(); uiFont_.fromString(settings.value("fonts/ui", uiFont_.toString()).toString());
         listFont_ = uiFont_; listFont_.fromString(settings.value("fonts/list", listFont_.toString()).toString());
         textFont_ = QFont("Cascadia Mono", 11); textFont_.fromString(settings.value("fonts/text", textFont_.toString()).toString());
@@ -116,7 +131,7 @@ namespace hc::compare
         directory_ = new DirectoryView(layout); layout->addWidget(directory_); directory_->hide();
         directory_->activityChanged_ = [this] { updateMerge(); cancel_->setEnabled(busy()); if (closing_ && !busy()) close(); };
         directory_->open_ = [this](Request Input) {
-            if (busy() && !directoryStreaming_) return; Input.theme_ = dark_ ? "dark" : "light";
+            if (busy() && !directoryStreaming_) return; Input.theme_ = themeMode_;
             auto* window = new CompareWindow(std::move(Input)); window->setAttribute(Qt::WA_DeleteOnClose); window->show();
         };
         directory_->levelChanged_ = [this](const QString& Level) {
@@ -203,7 +218,8 @@ namespace hc::compare
             auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog); auto* copy = buttons->addButton(tr("설정 복사"), QDialogButtonBox::ActionRole);
             buttons->button(QDialogButtonBox::Close)->setText(tr("닫기"));
             copy->setObjectName("copyGitSetup"); connect(copy, &QPushButton::clicked, dialog, [text] { QApplication::clipboard()->setText(text->toPlainText()); });
-            connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close); layout->addWidget(buttons); dialog->show();
+            connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close); layout->addWidget(buttons);
+            explanation->hide(); hc::ui::ApplyDialogFrame(dialog, buttons, {{}, explanation->text(), fm::ui::glyph::Info}); dialog->show();
         });
         gitSetup->setObjectName("openGitSetup");
         saveWork_ = fileMenu->addAction(tr("작업 저장..."), this, [this] {
@@ -313,8 +329,13 @@ namespace hc::compare
             if (!Enabled && overview_->hasFocus()) overview_->FocusSource();
             QSettings{}.setValue("view/overview", Enabled); overview_->setVisible(Enabled && scroll_);
         });
-        auto* dark = viewMenu->addAction(tr("Dark")); dark->setObjectName("darkTheme"); dark->setCheckable(true); dark->setChecked(dark_);
-        connect(dark, &QAction::toggled, this, [this](bool Value) { dark_ = Value; applyAppearance(); });
+        // Theme: follow HyperCommander (default) or override light/dark here. "Dark" keeps its name and toggle;
+        // turning either choice off means light.
+        auto* product = viewMenu->addAction(tr("본체 테마 따르기")); product->setObjectName("productTheme"); product->setCheckable(true);
+        auto* dark = viewMenu->addAction(tr("Dark")); dark->setObjectName("darkTheme"); dark->setCheckable(true);
+        syncThemeActions();
+        connect(product, &QAction::toggled, this, [this](bool Value) { themeMode_ = Value ? "product" : "light"; syncThemeActions(); applyAppearance(); });
+        connect(dark, &QAction::toggled, this, [this](bool Value) { themeMode_ = Value ? "dark" : "light"; syncThemeActions(); applyAppearance(); });
         for (const auto& role : {QString("ui"), QString("list"), QString("text")})
             viewMenu->addAction(role.toUpper() + tr(" 글꼴"), this, [this, role] { chooseFont(role); });
         auto* settingsAction = viewMenu->addAction(tr("설정…"), this, &CompareWindow::showSettings);
@@ -448,6 +469,16 @@ namespace hc::compare
         });
         applyAppearance();
         setupInputEditing();
+        // Product title bar above the menu bar, as in HyperCommander's main window. The bar leaves the layout
+        // before setMenuWidget, so QMainWindow keeps it; menuBar() must not be called after this point.
+        if (!parentWidget()) {
+            auto* bar = menuBar(); setWindowFlag(Qt::FramelessWindowHint);
+            auto* header = new QWidget(this); header->setObjectName("compareHeader");
+            auto* headerLayout = new QVBoxLayout(header); headerLayout->setContentsMargins(0, 0, 0, 0); headerLayout->setSpacing(0);
+            headerLayout->addWidget(new fm::ui::WindowChrome(this, header));
+            bar->setParent(header); headerLayout->addWidget(bar);
+            setMenuWidget(header);
+        }
         for (auto* action : inputSaveActions_) icon(action, QStyle::SP_DialogSaveButton);
         for (const auto& entry : {std::pair{"compareFindPrevious", QStyle::SP_ArrowUp},
             std::pair{"compareFindNext", QStyle::SP_ArrowDown}, std::pair{"compareFindAll", QStyle::SP_FileDialogContentsView},
@@ -461,7 +492,7 @@ namespace hc::compare
     void CompareWindow::openDirectories(bool Three)
     {
         if (busy()) return;
-        if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 디렉터리를 여시겠습니까?")) != QMessageBox::Yes) return;
+        if (dirty_ && hc::ui::MessageDialog::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 디렉터리를 여시겠습니까?")) != QMessageBox::Yes) return;
         const auto left = QFileDialog::getExistingDirectory(this, tr("왼쪽 디렉터리")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getExistingDirectory(this, tr("오른쪽 디렉터리")); if (right.isEmpty()) return;
         const auto third = Three ? QFileDialog::getExistingDirectory(this, tr("FILE 3 디렉터리(BASE 아님)")) : QString{}; if (Three && third.isEmpty()) return;
@@ -470,7 +501,7 @@ namespace hc::compare
     void CompareWindow::openInputs()
     {
         if (busy()) return;
-        if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 파일을 여시겠습니까?")) != QMessageBox::Yes) return;
+        if (dirty_ && hc::ui::MessageDialog::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 파일을 여시겠습니까?")) != QMessageBox::Yes) return;
         const auto left = QFileDialog::getOpenFileName(this, tr("왼쪽 파일")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getOpenFileName(this, tr("오른쪽 파일")); if (right.isEmpty()) return;
         request_.file1_ = left; request_.file2_ = right; request_.base_.clear(); request_.file3_.clear();
@@ -492,7 +523,7 @@ namespace hc::compare
             if (!owner) return QString{};
             QMetaObject::invokeMethod(owner.data(), [owner, Side, Depth, reply, aborted] {
                 if (!owner || aborted->load()) { reply->set_value(QString{}); return; }
-                QInputDialog dialog; dialog.setWindowModality(Qt::ApplicationModal); dialog.setWindowTitle(tr("압축 암호")); dialog.setLabelText(tr("%1 · 중첩 단계 %2 암호").arg(Side ? "RIGHT" : "LEFT").arg(Depth)); dialog.setTextEchoMode(QLineEdit::Password);
+                hc::ui::InputDialog dialog; dialog.setWindowModality(Qt::ApplicationModal); dialog.setWindowTitle(tr("압축 암호")); dialog.setLabelText(tr("%1 · 중첩 단계 %2 암호").arg(Side ? "RIGHT" : "LEFT").arg(Depth)); dialog.setTextEchoMode(QLineEdit::Password);
                 QTimer timer; QObject::connect(&timer, &QTimer::timeout, &dialog, [&] { if (!owner || aborted->load()) dialog.reject(); }); timer.start(30);
                 reply->set_value(dialog.exec() == QDialog::Accepted ? dialog.textValue() : QString{});
             }, Qt::QueuedConnection);
@@ -1004,7 +1035,7 @@ namespace hc::compare
         if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->SaveActive(); return; }
         if (sourceEditing_) { saveInput(activeInput_); return; }
         if (!output_ || busy()) return;
-        if (unresolved_) { QMessageBox::information(this, tr("충돌 해결"), tr("충돌을 검토하고 ‘수동 해결 완료’를 선택하십시오.")); return; }
+        if (unresolved_) { hc::ui::MessageDialog::information(this, tr("충돌 해결"), tr("충돌을 검토하고 ‘수동 해결 완료’를 선택하십시오.")); return; }
         const auto text = contents(output_);
         output_->send(SCI_SETREADONLY, 1); save_->setEnabled(false); saving_ = true; state_->setText(tr("저장 중…"));
         watcher_.setFuture(QtConcurrent::run([request = request_, result = result_, text]() mutable {
@@ -1095,7 +1126,7 @@ namespace hc::compare
             editor->send(SCI_SETINDICATORCURRENT, sourceDifferenceIndicator);
             editor->send(SCI_INDICATORCLEARRANGE, 0, editor->send(SCI_GETLENGTH));
             editor->send(SCI_INDICSETSTYLE, sourceDifferenceIndicator, INDIC_ROUNDBOX);
-            editor->send(SCI_INDICSETFORE, sourceDifferenceIndicator, color(dark_ ? QColor("#ef947e") : QColor("#b84b32")));
+            editor->send(SCI_INDICSETFORE, sourceDifferenceIndicator, color(fm::style::ThemeManager::instance().colors()[fm::style::Token::Danger]));
             editor->send(SCI_INDICSETALPHA, sourceDifferenceIndicator, dark_ ? 70 : 50);
             editor->send(SCI_INDICSETOUTLINEALPHA, sourceDifferenceIndicator, 160);
             editor->send(SCI_INDICSETUNDER, sourceDifferenceIndicator, 1);
@@ -1111,12 +1142,15 @@ namespace hc::compare
     }
     void CompareWindow::applyAppearance()
     {
-        auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(dark_ ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
+        auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(themeScheme(themeMode_)); dark_ = theme.colors().isDark();
         for (auto* action : findChildren<QAction*>()) if (action->property("compareIcon").isValid())
             action->setIcon(style()->standardIcon(QStyle::StandardPixmap(action->property("compareIcon").toInt())));
         qApp->setFont(uiFont_); changes_->setFont(listFont_); find_->SetListFont(listFont_); directory_->SetListFont(listFont_); semantic_->SetListFont(listFont_);
         if (extensionView_) { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->SetDark(dark_); extensionView_->SetListFont(listFont_); extensionView_->SetTextFont(textFont_); }
-        const QColor background = dark_ ? QColor("#202632") : QColor("#fbfcff"), foreground = dark_ ? QColor("#e3e8ef") : QColor("#202630");
+        // Surface, text, caret, gutter, selections and the changed-line marker follow the product tokens; the
+        // syntax hues stay per light/dark so comments, keywords and strings keep their meaning.
+        const auto& tokens = theme.colors();
+        const QColor background = tokens[fm::style::Token::Surface], foreground = tokens[fm::style::Token::Fg];
         const auto family = textFont_.family().toUtf8();
         for (auto* editor : editors_)
         {
@@ -1126,23 +1160,29 @@ namespace hc::compare
             for (const auto style : {1, 2, 3}) editor->send(SCI_STYLESETFORE, style, color(dark_ ? QColor("#90b58b") : QColor("#51774c")));
             editor->send(SCI_STYLESETFORE, 5, color(dark_ ? QColor("#a6c7ff") : QColor("#255ba4")));
             editor->send(SCI_STYLESETFORE, 6, color(dark_ ? QColor("#edc38a") : QColor("#945410")));
-            editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(background));
+            editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(tokens[fm::style::Token::Alt]));
             editor->send(SCI_SETCARETFORE, color(foreground));
             // Search keeps focus in the find bar. Both active and inactive
             // selections must remain readable against Light/Dark syntax colors.
             for (const auto element : {SC_ELEMENT_SELECTION_TEXT, SC_ELEMENT_SELECTION_ADDITIONAL_TEXT,
                 SC_ELEMENT_SELECTION_INACTIVE_TEXT, SC_ELEMENT_SELECTION_INACTIVE_ADDITIONAL_TEXT})
-                editor->send(SCI_SETELEMENTCOLOUR, element, color(dark_ ? QColor("#ffffff") : QColor("#142236")) | 0xff000000u);
+                editor->send(SCI_SETELEMENTCOLOUR, element, color(foreground) | 0xff000000u);
             for (const auto element : {SC_ELEMENT_SELECTION_BACK, SC_ELEMENT_SELECTION_ADDITIONAL_BACK})
-                editor->send(SCI_SETELEMENTCOLOUR, element, color(dark_ ? QColor("#395d83") : QColor("#bdd5f6")) | 0xff000000u);
+                editor->send(SCI_SETELEMENTCOLOUR, element, color(tokens[fm::style::Token::AccentSoft]) | 0xff000000u);
             for (const auto element : {SC_ELEMENT_SELECTION_INACTIVE_BACK, SC_ELEMENT_SELECTION_INACTIVE_ADDITIONAL_BACK})
-                editor->send(SCI_SETELEMENTCOLOUR, element, color(dark_ ? QColor("#344252") : QColor("#dae5f3")) | 0xff000000u);
-            editor->send(SCI_MARKERSETBACK, 8, color(dark_ ? QColor("#4d4635") : QColor("#fff0bb")));
+                editor->send(SCI_SETELEMENTCOLOUR, element, color(tokens[fm::style::Token::SelIn]) | 0xff000000u);
+            editor->send(SCI_MARKERSETBACK, 8, color(tokens[fm::style::Token::WarnBg]));
             editor->send(SCI_COLOURISE, 0, -1);
         }
         applyInlineHighlights(); overview_->SetDark(dark_);
-        QSettings settings; settings.setValue("theme/dark", dark_); settings.setValue("fonts/ui", uiFont_.toString());
+        // theme/dark stays for older builds that only read the bool.
+        QSettings settings; settings.setValue("theme/mode", themeMode_); settings.setValue("theme/dark", themeMode_ == "dark"); settings.setValue("fonts/ui", uiFont_.toString());
         settings.setValue("fonts/list", listFont_.toString()); settings.setValue("fonts/text", textFont_.toString());
+    }
+    void CompareWindow::syncThemeActions()
+    {
+        for (const auto& [name, mode] : {std::pair{"productTheme", "product"}, std::pair{"darkTheme", "dark"}})
+            if (auto* action = findChild<QAction*>(name)) { const QSignalBlocker block(action); action->setChecked(themeMode_ == mode); }
     }
     void CompareWindow::showSettings()
     {
@@ -1152,7 +1192,9 @@ namespace hc::compare
         auto* tabs = new QTabWidget(&dialog); layout->addWidget(tabs);
         auto* appearance = new QWidget(tabs); auto* form = new QFormLayout(appearance);
         auto* theme = new QComboBox(appearance); theme->setObjectName("settingsTheme");
-        theme->addItems({tr("밝게"), tr("어둡게")}); theme->setCurrentIndex(dark_ ? 1 : 0);
+        theme->addItem(tr("본체 따르기"), "product"); theme->addItem(tr("밝게"), "light"); theme->addItem(tr("어둡게"), "dark");
+        theme->setCurrentIndex(std::max(0, theme->findData(themeMode_)));
+        theme->setToolTip(tr("색과 강조색은 HyperCommander 설정을 따릅니다. 밝게·어둡게는 HyperCompare에만 적용합니다."));
         form->addRow(tr("테마(&T)"), theme);
         QFont fonts[]{uiFont_, listFont_, textFont_};
         const QString labels[]{tr("화면 글꼴"), tr("목록 글꼴"), tr("본문 글꼴")};
@@ -1180,15 +1222,16 @@ namespace hc::compare
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply, &dialog);
         buttons->button(QDialogButtonBox::Ok)->setText(tr("확인")); buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));
         buttons->button(QDialogButtonBox::Apply)->setText(tr("적용")); layout->addWidget(buttons);
+        hc::ui::ApplyDialogFrame(&dialog, buttons, {{}, tr("화면 테마와 글꼴, 비교 표시 옵션을 바꿉니다."), fm::ui::glyph::App});
         const auto apply = [&] {
             // Apply through the existing actions so the menu and rendered view agree.
             for (auto* widget : QApplication::topLevelWidgets()) if (auto* window = dynamic_cast<CompareWindow*>(widget))
             {
-                window->dark_ = theme->currentIndex() == 1;
+                window->themeMode_ = theme->currentData().toString();
                 window->uiFont_ = fonts[0]; window->listFont_ = fonts[1]; window->textFont_ = fonts[2];
                 const QList<QAction*> targets{window->alignAll_, window->alignRows_, window->syncScroll_, window->inlineHighlights_, window->showOverview_};
                 for (qsizetype i = 0; i < targets.size(); ++i) targets[i]->setChecked(checks[i]->isChecked());
-                if (auto* dark = window->findChild<QAction*>("darkTheme")) { QSignalBlocker block(dark); dark->setChecked(window->dark_); }
+                window->syncThemeActions();
                 window->applyAppearance();
             }
         };
@@ -1212,7 +1255,7 @@ namespace hc::compare
     void CompareWindow::closeEvent(QCloseEvent* Event)
     {
         if (busy()) { CancelRemoteRequest(); closing_ = true; Event->ignore(); return; }
-        if (dirty_ && QMessageBox::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 닫으시겠습니까?")) != QMessageBox::Yes) { closing_ = false; Event->ignore(); return; }
+        if (dirty_ && hc::ui::MessageDialog::question(this, tr("수정 결과"), tr("저장하지 않은 결과를 버리고 닫으시겠습니까?")) != QMessageBox::Yes) { closing_ = false; Event->ignore(); return; }
         Event->accept(); if (auto completed = std::move(completed_)) completed(exitCode_);
     }
 }

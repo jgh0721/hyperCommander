@@ -6,6 +6,7 @@
 #include <SciLexer.h>
 #include <QSpinBox>
 #include "widgets/guiRequestServer.hpp"
+#include "UniqueLibs/productTheme.hpp"
 #include "runtime/guiIpc.hpp"
 #include "runtime/controllerMemory.hpp"
 #include "widgets/mergeController.hpp"
@@ -1071,7 +1072,7 @@ private slots:
         QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
         QCoreApplication::setOrganizationName("HyperCompareTests"); QCoreApplication::setApplicationName("UI");
         QSettings::setDefaultFormat(QSettings::IniFormat); QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_.path());
-        auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(fm::style::Design::Watercolor); theme.install(*qApp);
+        auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(hc::theme::ProductDesign); theme.install(*qApp);
     }
     void init()
     {
@@ -1083,7 +1084,7 @@ private slots:
     }
     void settingsApplyCancelAndIcons()
     {
-        QSettings settings; settings.setValue("theme/dark", false);
+        QSettings settings; settings.setValue("theme/dark", false); settings.remove("theme/mode");
         CompareWindow window(Request{}); window.show();
         CompareWindow other(Request{});
         auto* open = window.findChild<QAction*>("openCompareSettings"); QVERIFY(open); QVERIFY(!open->icon().isNull());
@@ -1105,7 +1106,7 @@ private slots:
                 dialog->findChild<QTabWidget*>()->setCurrentIndex(1);
                 dialog->grab().save(capture + "/settings-options.png");
             }
-            if (theme && highlight) { theme->setCurrentIndex(1); highlight->setChecked(false); canceled = true; }
+            if (theme && highlight) { theme->setCurrentIndex(theme->findData("dark")); highlight->setChecked(false); canceled = true; }
             dialog->reject();
         });
         open->trigger(); QVERIFY(canceled);
@@ -1118,7 +1119,7 @@ private slots:
             auto* buttons = dialog->findChild<QDialogButtonBox*>();
             if (theme && highlight && buttons)
             {
-                theme->setCurrentIndex(1); highlight->setChecked(false);
+                theme->setCurrentIndex(theme->findData("dark")); highlight->setChecked(false);
                 buttons->button(QDialogButtonBox::Apply)->click();
                 applied = settings.value("theme/dark").toBool() && !settings.value("view/inlineHighlights").toBool()
                     && other.findChild<QAction*>("darkTheme")->isChecked();
@@ -1995,7 +1996,7 @@ private slots:
         QTest::qWait(30); const auto initial = bar->grab().toImage();
         // A one-bin insertion at BOF remains visible under the viewport marker.
         const auto scale = initial.devicePixelRatio();
-        QCOMPARE(initial.pixelColor(qRound(bar->width() * 0.75 * scale), qCeil((bar->fontMetrics().height() + 8) * scale)), QColor("#31804b"));
+        QCOMPARE(initial.pixelColor(qRound(bar->width() * 0.75 * scale), qCeil((bar->fontMetrics().height() + 8) * scale)), fm::style::themeColorsFor(bar)[fm::style::Token::Ok]);   // insertions use the theme's Ok token
         QCOMPARE(left->send(SCI_GETANCHOR), sptr_t(2));
         QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, QPoint(bar->width() / 4, bar->height() / 2));
         QTRY_VERIFY(left->send(SCI_GETFIRSTVISIBLELINE) > 400 && left->send(SCI_GETFIRSTVISIBLELINE) < 600);
@@ -2702,7 +2703,7 @@ private slots:
         QCOMPARE(tree->topLevelItem(1)->text(3), QString("미해결")); QVERIFY(!save->isEnabled()); QCOMPARE(window.ExitCode(), 3);
         output->send(SCI_UNDO); QCOMPARE(contents(output), QByteArray("head\na\nkeep\nz")); QCOMPARE(window.ExitCode(), 0);
         output->send(SCI_REDO); QCOMPARE(contents(output), text); QVERIFY(!save->isEnabled());
-        auto* fileMenu = window.menuBar()->actions().front()->menu(); fileMenu->popup(window.mapToGlobal(QPoint(8, 48))); QTest::qWait(70);
+        auto* fileMenu = window.findChild<QMenuBar*>()->actions().front()->menu(); fileMenu->popup(window.mapToGlobal(QPoint(8, 48))); QTest::qWait(70);
         QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/work-light.png"));
         QVERIFY(fileMenu->grab().save(QCoreApplication::applicationDirPath() + "/work-menu-light.png")); fileMenu->hide();
         action(window, "Dark")->setChecked(true); QTest::qWait(70);

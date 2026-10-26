@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QLabel>
 #include <QPainter>
+#include <fmstyle/ThemeManager.h>
 #include <QPaintEvent>
 #include <QScrollArea>
 #include <QSplitter>
@@ -34,13 +35,15 @@ namespace hc::compare
                 const auto visible = Event->rect().intersected(target.toAlignedRect());
                 const int originX = int(target.left()), originY = int(target.top());
                 const int beginX = originX + ((visible.left() - originX) / 16) * 16, beginY = originY + ((visible.top() - originY) / 16) * 16;
+                // Transparency checkerboard and difference bounds from the theme, so dark mode stays dark.
+                const auto& tokens = fm::style::themeColorsFor(this);
                 for (int y = beginY; y <= visible.bottom(); y += 16)
                     for (int x = beginX; x <= visible.right(); x += 16)
-                        painter.fillRect(x, y, 16, 16, ((x - int(target.left())) / 16 + (y - int(target.top())) / 16) % 2 ? QColor("#b0b0b0") : QColor("#e0e0e0"));
+                        painter.fillRect(x, y, 16, 16, ((x - int(target.left())) / 16 + (y - int(target.top())) / 16) % 2 ? tokens[fm::style::Token::Line] : tokens[fm::style::Token::Alt]);
                 painter.drawImage(target, image_);
                 if (!bounds_.isEmpty())
                 {
-                    painter.setPen(QPen(QColor("#e14545"), 2)); painter.setBrush(Qt::NoBrush);
+                    painter.setPen(QPen(tokens[fm::style::Token::Danger], 2)); painter.setBrush(Qt::NoBrush);
                     painter.drawRect(QRectF(target.topLeft() + QPointF(bounds_.x() * scale, bounds_.y() * scale), QSizeF(bounds_.width() * scale, bounds_.height() * scale)));
                 }
                 painter.restore();

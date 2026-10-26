@@ -67,11 +67,11 @@ qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widget
     widgets/docxCompareView.cpp widgets/docxCompareView.hpp
     widgets/mergeController.cpp widgets/mergeController.hpp widgets/scrollSynchronizer.cpp widgets/scrollSynchronizer.hpp
     widgets/findBar.cpp widgets/findBar.hpp widgets/overviewBar.cpp widgets/overviewBar.hpp)
-target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Qt6::Concurrent)
+target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Fm::widgets Qt6::Concurrent)
 target_precompile_headers(hc_compare_widgets PRIVATE stdafx.h)
 
 qt_add_executable(HyperCompare WIN32 main.cpp)
-target_link_libraries(HyperCompare PRIVATE hc_compare_widgets fmstyle)
+target_link_libraries(HyperCompare PRIVATE hc_compare_widgets fmstyle Fm::widgets)
 qt_add_executable(HyperCompareCli cliMain.cpp)
 target_link_libraries(HyperCompareCli PRIVATE hc_compare_runtime hc_compare_semantic_worker)
 foreach(target IN ITEMS hc_compare_core hc_compare_runtime hc_compare_widgets HyperCompare HyperCompareCli)

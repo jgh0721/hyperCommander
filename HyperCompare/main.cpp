@@ -1,10 +1,14 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "runtime/batch.hpp"
 #include "runtime/guiIpc.hpp"
 #include "widgets/guiRequestServer.hpp"
 #include "widgets/compareWindow.hpp"
+#include "UniqueLibs/productTheme.hpp"
+#include "UniqueLibs/qtTranslation.hpp"
 #include <QApplication>
+#include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QMessageBox>
@@ -48,8 +52,22 @@ int main(int argc, char** argv)
         if (!error.isEmpty()) print(error.toUtf8() + '\n', stderr); return code;
     }
     QApplication app(argc, argv);
-    auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(fm::style::Design::Watercolor); theme.install(app);
-    if (!parsed.error_.isEmpty()) { QMessageBox::warning(nullptr, "HyperCompare", parsed.error_); return 2; }
+    hc::ui::InstallQtTranslation(app);
+    auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(hc::theme::ProductDesign); theme.install(app);
+    // Tokens, accent and fonts come from HyperCommander's settings next to the executable (read only);
+    // HyperCompare chooses only light/dark itself. Without the file the design defaults stay.
+    {
+        QFile product(QDir(QCoreApplication::applicationDirPath()).filePath("HyperCommander.json"));
+        if (product.open(QIODevice::ReadOnly))
+        {
+            const auto settings = QJsonDocument::fromJson(product.readAll()).object(); const auto general = settings["general"].toObject();
+            theme.setColorScheme(hc::theme::ReadProductScheme(settings["appearance"].toObject()["watercolorTheme"].toObject()));
+            theme.setDarkTitleBar(general["darkTitleBar"].toBool(true));
+            theme.setMonoFont(general["monoFontFamily"].toString("Cascadia Mono"), general["monoFontPx"].toInt(12));
+            app.setProperty("hc.productThemeMode", general["themeMode"].toString("system"));
+        }
+    }
+    if (!parsed.error_.isEmpty()) { hc::ui::MessageDialog::warning(nullptr, "HyperCompare", parsed.error_); return 2; }
     hc::compare::GuiRequestServer server; const bool listening = server.Listen();
     if (host)
     {

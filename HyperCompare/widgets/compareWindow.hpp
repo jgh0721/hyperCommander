@@ -75,6 +75,7 @@ namespace hc::compare
         void openInputs();
         void openDirectories(bool Three = false);
         void applyAppearance();
+        void syncThemeActions();
         void updateFormats();
         void rebuildMultiAlignment();
         void updateAlignmentView();
@@ -162,6 +163,7 @@ namespace hc::compare
         QVector<QLabel*> formatLabels_;
         QVector<ChunkGutter*> gutters_;
         QFont uiFont_, listFont_, textFont_;
+        QString themeMode_ = "product";
         bool dark_ = false, dirty_ = false, unresolved_ = false, closing_ = false, saving_ = false;
         bool refreshing_ = false;
         int exitCode_ = 3;

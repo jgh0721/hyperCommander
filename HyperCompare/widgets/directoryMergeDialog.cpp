@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "directoryMergeDialog.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
+#include "UniqueLibs/qtDialogFrame.hpp"
 #include "runtime/requestFile.hpp"
 #include "directoryView.hpp"
 #include <QSettings>
@@ -130,7 +132,7 @@ namespace hc::compare
         auto* options = new QHBoxLayout(); overwrite_ = new QCheckBox(tr("기존 출력 파일 교체 허용"), this); mirror_ = new QCheckBox(tr("출력에만 있는 항목 제거 계획 포함"), this);
         options->addWidget(overwrite_); options->addWidget(mirror_); options->addStretch(); prepare_ = new QPushButton(tr("계획 만들기"), this); options->addWidget(prepare_); box->addLayout(options);
         connect(prepare_, &QPushButton::clicked, this, [this] {
-            if (model_->HasPlan() && QMessageBox::question(this, tr("계획 다시 만들기"), tr("현재 파일별 선택을 버리고 새 계획을 만드시겠습니까?")) != QMessageBox::Yes) return;
+            if (model_->HasPlan() && hc::ui::MessageDialog::question(this, tr("계획 다시 만들기"), tr("현재 파일별 선택을 버리고 새 계획을 만드시겠습니까?")) != QMessageBox::Yes) return;
             if (transfer_) PrepareTransfer(transferSource_, transferPath_); else Prepare(output_->text(), mirror_->isChecked(), overwrite_->isChecked());
         });
         auto* copyRow = new QHBoxLayout(); metadata_ = new QCheckBox(tr("파일 수정 시각·특성"), this); acl_ = new QCheckBox(tr("파일 DACL"), this); streams_ = new QCheckBox(tr("파일 추가 데이터 스트림(ADS)"), this);
@@ -157,9 +159,14 @@ namespace hc::compare
         state_ = new QLabel(this); state_->setObjectName("directoryPlanState"); state_->setTextFormat(Qt::PlainText); state_->setWordWrap(true); state_->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard); box->addWidget(state_);
         auto* buttons = new QHBoxLayout(); save_ = new QPushButton(tr("계획 저장…"), this); apply_ = new QPushButton(tr("계획 실행…"), this); cancel_ = new QPushButton(tr("닫기"), this);
         buttons->addWidget(save_); buttons->addWidget(apply_); buttons->addStretch(); buttons->addWidget(cancel_); box->addLayout(buttons);
+        // Header band and footer band; the introduction stays in the body because transfers rewrite it.
+        // Save · run plan stay at the left of the footer, close at the right.
+        auto* footer = hc::ui::ApplyDialogFrame(this, {{}, {}, fm::ui::glyph::Folder});
+        save_->setParent(footer->parentWidget()); footer->insertWidget(0, save_); apply_->setParent(footer->parentWidget()); footer->insertWidget(1, apply_);
+        fm::style::setButtonRole(apply_, fm::style::ButtonRole::Primary); hc::ui::MoveToFooter(footer, cancel_);
         connect(save_, &QPushButton::clicked, this, [this] { const auto path = QFileDialog::getSaveFileName(this, tr("새 병합 계획 저장"), {}, "HyperCompare directory plan (*.json)"); if (!path.isEmpty()) SavePlan(path); });
         connect(apply_, &QPushButton::clicked, this, [this] {
-            if (QMessageBox::question(this, tr("디렉터리 병합 실행"), tr("검토한 계획을 출력 디렉터리에 적용합니다. 교체와 제외 항목의 삭제가 포함될 수 있습니다. 실행하시겠습니까?")) == QMessageBox::Yes)
+            if (hc::ui::MessageDialog::question(this, tr("디렉터리 병합 실행"), tr("검토한 계획을 출력 디렉터리에 적용합니다. 교체와 제외 항목의 삭제가 포함될 수 있습니다. 실행하시겠습니까?")) == QMessageBox::Yes)
                 ApplyPlan(true, QFileInfo::exists(planPath_ + ".journal"));
         });
         connect(cancel_, &QPushButton::clicked, this, [this] { reject(); });

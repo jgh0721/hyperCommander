@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "saveRecoveryDialog.hpp"
 #include "runtime/saveRecovery.hpp"
+#include "UniqueLibs/qtDialogFrame.hpp"
 #include <QtConcurrent/QtConcurrentRun>
 #include <QTreeWidget>
 #include <QHeaderView>
@@ -48,6 +49,10 @@ namespace hc::compare
         details_ = new QPlainTextEdit(this); details_->setObjectName("recoveryDetails"); details_->setAccessibleName(tr("복구 결과와 보존 파일")); details_->setReadOnly(true); layout->addWidget(details_, 1);
         auto* actions = new QHBoxLayout(); actions->addStretch();
         recover_ = button(tr("상태 확인 및 누락 파일 복원"), "recoveryApply"); close_ = button(tr("닫기"), "recoveryClose"); actions->addWidget(recover_); actions->addWidget(close_); layout->addLayout(actions);
+        // The description becomes the header subtitle; recover · close move to the footer band.
+        description->hide();
+        auto* footer = hc::ui::ApplyDialogFrame(this, {{}, description->text(), fm::ui::glyph::Undo});
+        hc::ui::MoveToFooter(footer, recover_, true); hc::ui::MoveToFooter(footer, close_);
         connect(refresh_, &QPushButton::clicked, this, &SaveRecoveryDialog::Refresh);
         connect(browse_, &QPushButton::clicked, this, [this] {
             const auto path = QFileDialog::getOpenFileName(this, tr("저장 복구 기록 열기"), {}, tr("HyperCompare 복구 기록 (*.hcsave)")); if (!path.isEmpty()) OpenJournal(path);

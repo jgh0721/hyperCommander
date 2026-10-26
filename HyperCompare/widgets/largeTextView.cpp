@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "largeTextView.hpp"
+#include <fmstyle/ThemeManager.h>
 #include "largeTextSyntax.hpp"
 #include "boundedEditor.hpp"
 #include "chunkGutter.hpp"
@@ -160,13 +161,15 @@ namespace hc::compare
     void ApplyLargeTextEditorAppearance(ScintillaEditBase* Editor, const QFont& Font, bool Dark, int LexerId)
     {
         const auto color = [](QColor Value) { return Value.red() | (Value.green() << 8) | (Value.blue() << 16); };
+        // Surface, text, caret, gutter and the changed-line marker follow the product tokens; syntax hues stay per light/dark.
+        const auto& Tokens = fm::style::ThemeManager::instance().colors();
             const auto name = Font.family().toUtf8(); Editor->send(SCI_STYLESETFONT, STYLE_DEFAULT, reinterpret_cast<sptr_t>(name.constData()));
-            Editor->send(SCI_STYLESETSIZE, STYLE_DEFAULT, std::max(1, Font.pointSize())); Editor->send(SCI_STYLESETFORE, STYLE_DEFAULT, color(Dark ? QColor("#e5e5e5") : QColor("#142236")));
-            Editor->send(SCI_STYLESETBACK, STYLE_DEFAULT, color(Dark ? QColor("#202020") : QColor("#fafbfc"))); Editor->send(SCI_STYLECLEARALL);
-            Editor->send(SCI_SETCARETFORE, color(Dark ? QColor("#ffffff") : QColor("#142236")));
+            Editor->send(SCI_STYLESETSIZE, STYLE_DEFAULT, std::max(1, Font.pointSize())); Editor->send(SCI_STYLESETFORE, STYLE_DEFAULT, color(Tokens[fm::style::Token::Fg]));
+            Editor->send(SCI_STYLESETBACK, STYLE_DEFAULT, color(Tokens[fm::style::Token::Surface])); Editor->send(SCI_STYLECLEARALL);
+            Editor->send(SCI_SETCARETFORE, color(Tokens[fm::style::Token::Fg]));
             Editor->send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_RTEXT); Editor->send(SCI_SETMARGINWIDTHN, 0, 60); Editor->send(SCI_SETMARGINWIDTHN, 1, 0);
-            Editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(Dark ? QColor("#282828") : QColor("#f0f0f0")));
-            Editor->send(SCI_MARKERDEFINE, 8, SC_MARK_BACKGROUND); Editor->send(SCI_MARKERSETBACK, 8, color(Dark ? QColor("#4d4635") : QColor("#fff0bb")));
+            Editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(Tokens[fm::style::Token::Alt]));
+            Editor->send(SCI_MARKERDEFINE, 8, SC_MARK_BACKGROUND); Editor->send(SCI_MARKERSETBACK, 8, color(Tokens[fm::style::Token::WarnBg]));
             const auto paint = [&](std::initializer_list<int> Styles, const QColor& LightColor, const QColor& DarkColor) { for (const auto style : Styles) Editor->send(SCI_STYLESETFORE, style, color(Dark ? DarkColor : LightColor)); };
             switch (LexerId) {
             case SCLEX_CPP:

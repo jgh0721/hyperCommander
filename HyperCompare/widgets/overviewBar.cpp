@@ -5,6 +5,7 @@
 #include <QKeyEvent>
 #include <QFocusEvent>
 #include <ScintillaEditBase.h>
+#include <fmstyle/ThemeManager.h>
 
 namespace hc::compare
 {
@@ -64,9 +65,9 @@ namespace hc::compare
     {
         QPainter painter(this); painter.fillRect(rect(), palette().window());
         if (!map_ || !editors_[0] || !editors_[1]) return;
-        const std::array<QColor, 4> colors = dark_ ?
-            std::array<QColor, 4>{QColor("#d5b561"), QColor("#87c29b"), QColor("#e18c8c"), QColor("#8fb2de")} :
-            std::array<QColor, 4>{QColor("#a87916"), QColor("#31804b"), QColor("#b44848"), QColor("#376fac")};
+        // Changed · added · removed · moved follow the status tokens, so they track the product theme and accent.
+        const auto& tokens = fm::style::themeColorsFor(this);
+        const std::array<QColor, 4> colors{tokens[fm::style::Token::Warn], tokens[fm::style::Token::Ok], tokens[fm::style::Token::Danger], tokens[fm::style::Token::Accent]};
         painter.setOpacity(isEnabled() ? 1.0 : 0.45);
         for (unsigned side = 0; side < 2; ++side)
         {

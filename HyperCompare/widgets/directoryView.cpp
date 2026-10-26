@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryView.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include <QTimer>
 #include "runtime/directoryApply.hpp"
 #include <QToolButton>
@@ -245,7 +246,7 @@ namespace hc::compare
         if (Side == 2 && request_.file3_.isEmpty()) return;
         const auto item = currentEntry(); const auto entry = item[sideKeys[Side]].toObject(); if (!entry["present"].toBool() || entry["reparse"].toBool()) return;
         const auto path = entry["path"].toString(item["path"].toString()); bool ok = false;
-        const auto name = QInputDialog::getText(this, Side == 0 ? tr("왼쪽 이름 변경") : Side == 1 ? tr("오른쪽 이름 변경") : tr("FILE 3 이름 변경"), tr("새 이름:"), QLineEdit::Normal, QFileInfo(path).fileName(), &ok);
+        const auto name = hc::ui::InputDialog::getText(this, Side == 0 ? tr("왼쪽 이름 변경") : Side == 1 ? tr("오른쪽 이름 변경") : tr("FILE 3 이름 변경"), tr("새 이름:"), QLineEdit::Normal, QFileInfo(path).fileName(), &ok);
         if (ok) RenameCurrent(Side, name);
     }
     void DirectoryView::RenameCurrent(int Side, const QString& Name)
