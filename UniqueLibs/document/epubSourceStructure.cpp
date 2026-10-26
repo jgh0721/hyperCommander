@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
+#include "UniqueLibs/qtDialogFrame.hpp"
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
@@ -32,9 +34,10 @@ void EpubSourceEditor::setupStructure(QVBoxLayout* Layout) {
     auto* Metadata=Menu->addAction(tr("서지정보 편집…"));Metadata->setObjectName("epubMetadataAction");connect(Metadata,&QAction::triggered,this,&EpubSourceEditor::editMetadata);
     auto* Properties=Menu->addAction(tr("이미지 사용 위치·속성…"));Properties->setObjectName("epubImagePropertiesAction");connect(Properties,&QAction::triggered,this,&EpubSourceEditor::inspectImage);Menu->addSeparator();
     connect(&imageInspection_,&QFutureWatcherBase::finished,this,[this]{if(imageInspectionToken_!=Token()){status_->setText(tr("사용 위치 조사 중 내용이 변경되었습니다. 다시 확인해 주세요."));return;}editImageProperties(imageInspection_.result());});
-    auto* Rename=Menu->addAction(tr("선택 리소스 이름·경로 변경…"));connect(Rename,&QAction::triggered,this,[this]{bool Ok=false;const auto Path=QInputDialog::getText(this,tr("리소스 이름·경로 변경"),tr("EPUB 내부 경로 · 참조는 함께 갱신됩니다."),QLineEdit::Normal,current_,&Ok);if(Ok && Path!=current_)structure({{"operation","rename"},{"resource",current_},{"destination",Path}});});
+    auto* Rename=Menu->addAction(tr("선택 리소스 이름·경로 변경…"));connect(Rename,&QAction::triggered,this,[this]{bool Ok=false;const auto Path=hc::ui::InputDialog::getText(this,tr("리소스 이름·경로 변경"),tr("EPUB 내부 경로 · 참조는 함께 갱신됩니다."),QLineEdit::Normal,current_,&Ok);if(Ok && Path!=current_)structure({{"operation","rename"},{"resource",current_},{"destination",Path}});});
     auto* Remove=Menu->addAction(tr("선택 리소스 삭제…"));connect(Remove,&QAction::triggered,this,[this]{
         QDialog Dialog(this);Dialog.setWindowTitle(tr("EPUB 리소스 삭제"));auto* Layout=new QVBoxLayout(&Dialog);auto* Note=new QLabel(tr("%1\n리소스를 삭제합니다. 남아 있는 참조가 있으면 작업을 중단합니다. 실행 취소가 가능하며 원본 파일은 유지됩니다.").arg(current_),&Dialog);Note->setTextFormat(Qt::PlainText);Note->setWordWrap(true);Layout->addWidget(Note);auto* Images=new QCheckBox(tr("이 이미지를 표시하는 img·SVG image 요소도 삭제"),&Dialog);Images->setVisible(resources_->currentData().toString().startsWith("image/"));Layout->addWidget(Images);auto* Buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&Dialog);Buttons->button(QDialogButtonBox::Ok)->setText(tr("확인"));Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));Layout->addWidget(Buttons);connect(Buttons,&QDialogButtonBox::accepted,&Dialog,&QDialog::accept);connect(Buttons,&QDialogButtonBox::rejected,&Dialog,&QDialog::reject);
+        hc::ui::ApplyDialogFrame(&Dialog,Buttons,{{},tr("선택한 리소스를 EPUB에서 삭제합니다."),fm::ui::glyph::Trash});
         if(Dialog.exec()==QDialog::Accepted)structure({{"operation","remove"},{"resource",current_},{"removeImageReferences",Images->isChecked()}});
     });
     auto* Convert=Menu->addAction(tr("선택 이미지 PNG·JPEG 변환…"));connect(Convert,&QAction::triggered,this,&EpubSourceEditor::convertImageResource);
@@ -78,16 +81,19 @@ void EpubSourceEditor::addImageResource() {
     const auto FileName=QFileDialog::getOpenFileName(this,tr("EPUB에 이미지 추가"),{},tr("이미지 (*.png *.jpg *.jpeg *.gif *.webp)"));if(FileName.isEmpty())return;
     QDialog Dialog(this);Dialog.setWindowTitle(tr("이미지 추가"));auto* Form=new QFormLayout(&Dialog);auto* Path=new QLineEdit(QDir::cleanPath(QFileInfo(model_.Publication()["rootfile"].toString()).path()+"/Images/"+QFileInfo(FileName).fileName()),&Dialog);Path->setMaxLength(2048);Form->addRow(tr("EPUB 내부 경로"),Path);auto* Alt=new QLineEdit(&Dialog);Alt->setMaxLength(2048);Form->addRow(tr("대체 설명 · 장식 이미지는 빈 값"),Alt);
     auto* Insert=new QCheckBox(tr("현재 장 끝에 이미지 추가"),&Dialog);bool Chapter=false;for(const auto& Value:model_.Publication()["spine"].toArray())Chapter|=Value.toObject()["path"]==current_;Insert->setEnabled(Chapter);Insert->setChecked(Chapter);Form->addRow(Insert);auto* Cover=new QCheckBox(tr("이 이미지로 표지 교체"),&Dialog);Form->addRow(Cover);auto* Buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&Dialog);Buttons->button(QDialogButtonBox::Ok)->setText(tr("확인"));Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));Form->addRow(Buttons);connect(Buttons,&QDialogButtonBox::accepted,&Dialog,&QDialog::accept);connect(Buttons,&QDialogButtonBox::rejected,&Dialog,&QDialog::reject);
+    hc::ui::ApplyDialogFrame(&Dialog,Buttons,{{},tr("선택한 이미지 파일을 EPUB 리소스로 추가합니다."),fm::ui::glyph::PlusSmall});
     if(Dialog.exec()==QDialog::Accepted)structure({{"operation","image-add"},{"resource",Path->text()},{"imageFile",FileName},{"alt",Alt->text()},{"chapter",Insert->isChecked()?current_:QString{}},{"cover",Cover->isChecked()}});
 }
 void EpubSourceEditor::convertImageResource() {
     QDialog Dialog(this);Dialog.setWindowTitle(tr("이미지 형식 변환"));auto* Form=new QFormLayout(&Dialog);auto* Format=new QComboBox(&Dialog);Format->addItem("PNG","png");Format->addItem("JPEG","jpeg");Form->addRow(tr("형식"),Format);auto* Quality=new QSpinBox(&Dialog);Quality->setRange(1,100);Quality->setValue(92);Form->addRow(tr("JPEG 품질"),Quality);auto* Path=new QLineEdit(&Dialog);Path->setMaxLength(2048);Form->addRow(tr("변환 후 EPUB 내부 경로"),Path);
     auto* Alpha=new QCheckBox(tr("JPEG 변환 시 투명 영역을 흰색으로 합치기"),&Dialog);Form->addRow(Alpha);auto* Animation=new QCheckBox(tr("애니메이션은 첫 프레임만 변환"),&Dialog);Form->addRow(Animation);
     const auto Update=[&]{const bool Jpeg=Format->currentData()=="jpeg";Quality->setEnabled(Jpeg);Alpha->setEnabled(Jpeg);Path->setText(QFileInfo(current_).path()+"/"+QFileInfo(current_).completeBaseName()+(Jpeg?".jpg":".png"));};connect(Format,&QComboBox::currentIndexChanged,&Dialog,Update);Update();auto* Buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&Dialog);Buttons->button(QDialogButtonBox::Ok)->setText(tr("확인"));Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));Form->addRow(Buttons);connect(Buttons,&QDialogButtonBox::accepted,&Dialog,&QDialog::accept);connect(Buttons,&QDialogButtonBox::rejected,&Dialog,&QDialog::reject);
+    hc::ui::ApplyDialogFrame(&Dialog,Buttons,{{},tr("선택한 이미지를 PNG 또는 JPEG로 변환합니다."),fm::ui::glyph::File});
     if(Dialog.exec()==QDialog::Accepted)structure({{"operation","image-convert"},{"resource",current_},{"destination",Path->text()},{"format",Format->currentData().toString()},{"quality",Quality->value()},{"flattenAlpha",Alpha->isChecked()},{"flattenAnimation",Animation->isChecked()}});
 }
 void EpubSourceEditor::addChapterResource() {
     QDialog Dialog(this);Dialog.setWindowTitle(tr("새 장 추가"));auto* Form=new QFormLayout(&Dialog);auto* Title=new QLineEdit(tr("새 장"),&Dialog);Title->setMaxLength(1024);Form->addRow(tr("제목"),Title);auto* Path=new QLineEdit(QFileInfo(model_.Publication()["rootfile"].toString()).path()+"/Text/chapter-"+QUuid::createUuid().toString(QUuid::Id128)+".xhtml",&Dialog);Path->setMaxLength(2048);Form->addRow(tr("EPUB 내부 경로"),Path);auto* Note=new QLabel(tr("선택한 장 뒤에 읽기 순서를 추가하고 목차에도 연결합니다. 장이 선택되지 않으면 마지막에 추가합니다."),&Dialog);Note->setWordWrap(true);Form->addRow(Note);auto* Buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&Dialog);Buttons->button(QDialogButtonBox::Ok)->setText(tr("확인"));Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));Form->addRow(Buttons);connect(Buttons,&QDialogButtonBox::accepted,&Dialog,&QDialog::accept);connect(Buttons,&QDialogButtonBox::rejected,&Dialog,&QDialog::reject);
+    hc::ui::ApplyDialogFrame(&Dialog,Buttons,{{},tr("현재 장 다음에 새 장을 추가합니다."),fm::ui::glyph::NewFile});
     if(Dialog.exec()==QDialog::Accepted){const auto Spine=model_.Publication()["spine"].toArray();int Index=-1;for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Index=I;structure({{"operation","chapter-add"},{"resource",Path->text()},{"title",Title->text()},{"after",Index}});}
 }
 }

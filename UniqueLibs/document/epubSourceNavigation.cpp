@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/qtDialogFrame.hpp"
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -43,6 +44,7 @@ void EpubSourceEditor::editNavigation() {
     connect(Outdent,&QPushButton::clicked,&Dialog,[&]{auto* Item=Tree->currentItem();if(!Item || !Item->parent())return;auto* Parent=Item->parent();auto* Grand=Parent->parent()?Parent->parent():Tree->invisibleRootItem();Parent->takeChild(Parent->indexOfChild(Item));Grand->insertChild(Grand->indexOfChild(Parent)+1,Item);Tree->setCurrentItem(Item);});
     connect(Reset,&QPushButton::clicked,&Dialog,[&]{QJsonArray Generated;const auto Current=model_.Publication()["navigation"].toArray();for(const auto& Value:model_.Publication()["spine"].toArray()){const auto Path=Value.toObject()["path"].toString();QString Caption=QFileInfo(Path).completeBaseName();for(const auto& Entry:Current)if(Entry.toObject()["path"]==Path){Caption=Entry.toObject()["label"].toString();break;}Generated.append(QJsonObject{{"label",Caption},{"path",Path},{"fragment",""},{"depth",0}});}Populate(Generated);});
     connect(Buttons,&QDialogButtonBox::accepted,&Dialog,[&]{if(!Serialize()){Error->setText(tr("목차 제목·대상·계층을 확인해 주세요. 최대 1,024개, 32단계까지 지원합니다."));return;}tocDraft_=Rows;tocDraftToken_=Token();Dialog.accept();});
+    {auto* Footer=hc::ui::ApplyDialogFrame(&Dialog,Buttons,{{},tr("목차 항목의 제목·대상·앵커와 계층·순서를 편집합니다."),fm::ui::glyph::Rename});Error->setParent(Footer->parentWidget());Footer->insertWidget(0,Error,1);}
     if(Dialog.exec()==QDialog::Accepted)structure({{"operation","toc"},{"entries",tocDraft_}});
 }
 }

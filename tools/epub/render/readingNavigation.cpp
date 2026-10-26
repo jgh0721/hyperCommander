@@ -40,7 +40,6 @@ ReadingNavigation::ReadingNavigation(const QString& Settings,const QString& Book
     }
     auto* Layout=new QVBoxLayout(this);Layout->setContentsMargins(0,0,0,0);auto* Tabs=new QTabWidget(this);Layout->addWidget(Tabs);
     toc_=new QTreeWidget(Tabs);toc_->setObjectName("epubToc");toc_->setAccessibleName(tr("목차"));toc_->setHeaderHidden(true);
-    toc_->setStyleSheet("QTreeWidget:focus { border: 2px solid palette(highlight); }");
     toc_->setMinimumHeight(180);Tabs->addTab(toc_,tr("목차"));
     const auto OpenToc=[this](QTreeWidgetItem* Item){const auto Index=Item->data(0,Qt::UserRole).toInt();if(navigation_[Index].toObject()["path"].toString().isEmpty())Item->setExpanded(!Item->isExpanded());else Execute("toc",Index);};
     connect(toc_,&QTreeWidget::itemClicked,this,OpenToc);connect(toc_,&QTreeWidget::itemActivated,this,OpenToc);

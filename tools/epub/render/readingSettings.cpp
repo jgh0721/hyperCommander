@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingSettings.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 
 /// Platform/framework headers
 #include <QComboBox>
@@ -319,7 +320,7 @@ void ReadingSettings::SetGlobalOnly() {
     clearPositions_=new QPushButton(tr("모든 책의 읽던 위치 초기화…"),History);Form->addRow(clearPositions_);
     connect(clearPositions_,&QPushButton::clicked,this,[this]{
         if(IsDirty() || busy_)return;
-        if(QMessageBox::question(this,tr("읽던 위치 초기화"),tr("저장된 읽던 위치를 지금 초기화합니다. 책갈피와 책별 서식은 유지됩니다. 설정 취소로 되돌릴 수 없습니다."))!=QMessageBox::Yes)return;
+        if(hc::ui::MessageDialog::question(this,tr("읽던 위치 초기화"),tr("저장된 읽던 위치를 지금 초기화합니다. 책갈피와 책별 서식은 유지됩니다. 설정 취소로 되돌릴 수 없습니다."))!=QMessageBox::Yes)return;
         busy_=true;refresh();worker_.setFuture(QtConcurrent::run([Path=path_,Book=book_,Base=base_]{
             const auto Error=ReadingStore::ClearPositions(Path);if(!Error.isEmpty())return ReadingSnapshot{{},{},Error};
             auto Draft=Base;Draft["historyEpoch"]=QDateTime::currentMSecsSinceEpoch();return ReadingStore::Save(Path,Book,true,Base,Draft);

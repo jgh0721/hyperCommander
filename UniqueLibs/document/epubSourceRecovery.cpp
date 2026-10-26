@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/settings/unifiedConfig.hpp"
 #include <QApplication>
@@ -46,7 +47,7 @@ void EpubSourceEditor::setupRecovery(QVBoxLayout* Layout) {
     connect(recoverDraft_,&QPushButton::clicked,this,[this]{restoreRecovery(recoveries_->currentData().toString());});
     connect(removeDraft_,&QPushButton::clicked,this,[this]{
         const auto Path=recoveries_->currentData().toString();if(Path.isEmpty())return;
-        auto* Box=new QMessageBox(QMessageBox::Question,tr("복구 초안 삭제"),tr("선택한 복구 초안을 삭제하시겠습니까? 원본 EPUB은 변경하지 않습니다."),QMessageBox::Yes|QMessageBox::No,this);Box->setAttribute(Qt::WA_DeleteOnClose);
+        auto* Box=new hc::ui::MessageDialog(QMessageBox::Question,tr("복구 초안 삭제"),tr("선택한 복구 초안을 삭제하시겠습니까? 원본 EPUB은 변경하지 않습니다."),QMessageBox::Yes|QMessageBox::No,this);Box->setAttribute(Qt::WA_DeleteOnClose);
         connect(Box,&QMessageBox::finished,this,[this,Path](int Answer){if(Answer==QMessageBox::Yes){if(!epub::DraftStore::Remove(recoveryRoot_,Path))recoveryStatus_->setText(tr("초안을 삭제하지 못했습니다. 파일을 유지합니다."));refreshRecovery();}});Box->open();
     });
     connect(&draftFinder_,&QFutureWatcher<QList<epub::DraftInfo>>::finished,this,[this]{

@@ -60,7 +60,7 @@ foreach(HC_EPUB_RENDER_TARGET IN LISTS HC_EPUB_RENDER_TARGETS)
     )
     target_precompile_headers(${HC_EPUB_RENDER_TARGET} PRIVATE render/stdafx.h)
     target_include_directories(${HC_EPUB_RENDER_TARGET} PRIVATE "${PROJECT_SOURCE_DIR}")
-    target_link_libraries(${HC_EPUB_RENDER_TARGET} PRIVATE hc_epub_package Qt6::Widgets Qt6::WebEngineWidgets Qt6::Concurrent Qt6::Network Fm::style shell32)
+    target_link_libraries(${HC_EPUB_RENDER_TARGET} PRIVATE hc_epub_package Qt6::Widgets Qt6::WebEngineWidgets Qt6::Concurrent Qt6::Network Fm::style Fm::widgets shell32)
     target_compile_options(${HC_EPUB_RENDER_TARGET} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     set_target_properties(${HC_EPUB_RENDER_TARGET} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/epub-poc"
@@ -114,7 +114,7 @@ if(BUILD_TESTING AND HC_BUILD_EPUB_POC)
         render/stdafx.h
     )
     target_precompile_headers(hc_epub_settings_tests PRIVATE render/stdafx.h)
-    target_link_libraries(hc_epub_settings_tests PRIVATE Qt6::Widgets Qt6::Concurrent Qt6::Test)
+    target_link_libraries(hc_epub_settings_tests PRIVATE Qt6::Widgets Qt6::Concurrent Qt6::Test Fm::widgets)
     target_compile_options(hc_epub_settings_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     set_target_properties(hc_epub_settings_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/epub-poc")
     add_test(NAME hc.epub.p0.settings COMMAND hc_epub_settings_tests -platform offscreen)
