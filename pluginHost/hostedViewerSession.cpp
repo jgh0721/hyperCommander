@@ -26,13 +26,13 @@ namespace hc::plugins
     {
         Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"wlx"}}; }
         QJsonObject ReadingSource(const EntrySnapshot& Entry){
-            if(Entry.locator_.kind_==LocatorKind::Local)return {{"path",QString::fromUtf8(Entry.locator_.root_)}};
+            if((Entry.locator_.kind_==LocatorKind::Local || Entry.locator_.kind_==LocatorKind::Smb))return {{"path",QString::fromUtf8(Entry.locator_.root_)}};
             if(Entry.locator_.kind_==LocatorKind::Archive&&Entry.locator_.nesting_.size()==1)return {{"path",QString::fromUtf8(Entry.locator_.root_)},{"entry",QString::fromUtf8(Entry.locator_.nesting_.front().entry_)}};
             return {};
         }
         bool IsDirectBook(const EntrySnapshot& Entry)
         {
-            return Entry.locator_.kind_==LocatorKind::Local && !Entry.directory_
+            return (Entry.locator_.kind_==LocatorKind::Local || Entry.locator_.kind_==LocatorKind::Smb) && !Entry.directory_
                 && QStringList{"zip","cbz","rar","cbr","7z","cb7"}.contains(QFileInfo(QString::fromUtf8(Entry.locator_.root_)).suffix().toLower());
         }
         // Only the approved built-in reader may borrow the original archive.
