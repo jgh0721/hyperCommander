@@ -91,7 +91,7 @@ public:
     void CancelRename();
     void SyncThumbnailCursor();
     void ClearThumbnailCache();
-    ThumbnailModel* Thumbnails() const { return thumbnailModel_; }
+    ThumbnailModel* Thumbnails() const;
 
 
     void                            SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnView* Columns );
@@ -214,6 +214,8 @@ private:
     std::stop_source automaticColumnsStop_;
     std::optional<hc::columns::ColumnProfile> automaticColumnsBase_;
     void applyThumbnailPresentation();
+    void ensureThumbnails();
+    QFont thumbnailFont_;
     fm::filelist::ThumbnailView* thumbnails_ = nullptr;
     ThumbnailModel* thumbnailModel_ = nullptr;
     QStackedWidget* presentationStack_ = nullptr;

@@ -357,49 +357,8 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     QueryBar->addWidget(columnStatus_, 1); QueryBar->addWidget(Stop); QueryBar->addWidget(Resume);
     auto* QueryWidget = new QWidget(this); QueryWidget->setLayout(QueryBar); QueryWidget->hide();
     presentationStack_ = new QStackedWidget(this);
-    thumbnails_ = new fm::filelist::ThumbnailView(this); thumbnails_->setObjectName("hc.thumbnails");
-    thumbnails_->listView()->setObjectName("hc.thumbnailTiles"); thumbnails_->listView()->setModelColumn(0);
-    thumbnailModel_ = new ThumbnailModel(this); thumbnails_->setModel(thumbnailModel_);
-    auto* Tiles = thumbnails_->listView(); Tiles->setItemDelegate(new ProductThumbnailDelegate(Tiles->itemDelegate(), this, Tiles));
-    thumbnails_->listView()->installEventFilter(this);
-    thumbnails_->listView()->viewport()->installEventFilter(this);
-    presentationStack_->addWidget(grid_); presentationStack_->addWidget(thumbnails_);
+    presentationStack_->addWidget(grid_);
     vbox_->addWidget(QueryWidget); vbox_->addWidget(presentationStack_, 1);
-    connect(thumbnails_, &fm::filelist::ThumbnailView::paneActivated, this, &CViewT::sig_NotifyViewActivated);
-    connect(thumbnails_, &fm::filelist::ThumbnailView::cursorRowChanged, this, [this](int Row) {
-        if (syncingThumbnailCursor_ || Row < 0 || !IsThumbnailMode()) return;
-        const auto NativeRow = view_->getRow(thumbnailModel_->SourceIndex(Row));
-        if (NativeRow.isValid()) view_->setFocusedRowIndex(NativeRow.rowIndex());
-    });
-    connect(view_, &Qtitan::GridViewBase::focusRowChanged, this, [this] { SyncThumbnailCursor(); });
-    connect(view_, &Qtitan::GridViewBase::selectionChanged, thumbnailModel_, &ThumbnailModel::Repaint);
-    connect(view_, &Qtitan::GridViewBase::sortingChanged, thumbnailModel_, &ThumbnailModel::Schedule);
-    connect(thumbnails_, &fm::filelist::ThumbnailView::activated, this, [this](const QModelIndex& Index) {
-        QKeyEvent Event(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-        TyStCommandMgr::GetInstance()->ProcessKeyPressEvent(&Event, thumbnailModel_->SourceIndex(Index.row()));
-    });
-    connect(thumbnails_, &fm::filelist::ThumbnailView::upRequested, this, [this] {
-        QKeyEvent Event(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier);
-        auto* Commands = TyStCommandMgr::GetInstance();
-        if (!Commands->ProcessKeyPressEvent(&Event, retrieveCursorIndex()) && Commands->Bridge())
-            Commands->Bridge()->ExecuteCommand("hc.navigate.parent", retrieveCursorIndex());
-    });
-    connect(thumbnails_, &fm::filelist::ThumbnailView::sizeChanged, this, [this](int Size) {
-        thumbnailSizeOverride_ = Size; emit sigViewSettingsChanged(); requestPresentation();
-    });
-    connect(thumbnails_->listView()->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
-        if (!IsThumbnailMode()) return;
-        // Reprioritize a new viewport: cached images survive; obsolete queued
-        // extraction and running results are discarded before new tiles paint.
-        thumbnailModel_->Provider()->CancelRequests();
-        thumbnails_->listView()->viewport()->update();
-    });
-    thumbnails_->listView()->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(thumbnails_->listView(), &QWidget::customContextMenuRequested, this, [this](const QPoint& Point) {
-        const auto Tile = thumbnails_->listView()->indexAt(Point);
-        if (Tile.isValid()) thumbnails_->setCursorRow(Tile.row());
-        ShowShellMenu(Tile.isValid() ? thumbnailModel_->SourceIndex(Tile.row()) : QModelIndex{}, true);
-    });
     connect(Stop, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->CancelColumnQueries(); });
     connect(Resume, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ResumeColumnQueries(); });
     columnSortTimer_.setSingleShot(true);
@@ -447,6 +406,63 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     });
 }
 
+void CGridView::ensureThumbnails()
+{
+    if (thumbnails_) return;
+    hc::startup::Span Trace("view.thumbnails");
+    thumbnails_ = new fm::filelist::ThumbnailView(this); thumbnails_->setObjectName("hc.thumbnails");
+    thumbnails_->listView()->setObjectName("hc.thumbnailTiles"); thumbnails_->listView()->setModelColumn(0);
+    thumbnailModel_ = new ThumbnailModel(this); thumbnails_->setModel(thumbnailModel_);
+    auto* Tiles = thumbnails_->listView(); Tiles->setItemDelegate(new ProductThumbnailDelegate(Tiles->itemDelegate(), this, Tiles));
+    thumbnails_->listView()->installEventFilter(this);
+    thumbnails_->listView()->viewport()->installEventFilter(this);
+    presentationStack_->addWidget(thumbnails_);
+    connect(thumbnails_, &fm::filelist::ThumbnailView::paneActivated, this, &CViewT::sig_NotifyViewActivated);
+    connect(thumbnails_, &fm::filelist::ThumbnailView::cursorRowChanged, this, [this](int Row) {
+        if (syncingThumbnailCursor_ || Row < 0 || !IsThumbnailMode()) return;
+        const auto NativeRow = view_->getRow(thumbnailModel_->SourceIndex(Row));
+        if (NativeRow.isValid()) view_->setFocusedRowIndex(NativeRow.rowIndex());
+    });
+    connect(view_, &Qtitan::GridViewBase::focusRowChanged, this, [this] { SyncThumbnailCursor(); });
+    connect(view_, &Qtitan::GridViewBase::selectionChanged, thumbnailModel_, &ThumbnailModel::Repaint);
+    connect(view_, &Qtitan::GridViewBase::sortingChanged, thumbnailModel_, &ThumbnailModel::Schedule);
+    connect(thumbnails_, &fm::filelist::ThumbnailView::activated, this, [this](const QModelIndex& Index) {
+        QKeyEvent Event(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        TyStCommandMgr::GetInstance()->ProcessKeyPressEvent(&Event, thumbnailModel_->SourceIndex(Index.row()));
+    });
+    connect(thumbnails_, &fm::filelist::ThumbnailView::upRequested, this, [this] {
+        QKeyEvent Event(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier);
+        auto* Commands = TyStCommandMgr::GetInstance();
+        if (!Commands->ProcessKeyPressEvent(&Event, retrieveCursorIndex()) && Commands->Bridge())
+            Commands->Bridge()->ExecuteCommand("hc.navigate.parent", retrieveCursorIndex());
+    });
+    connect(thumbnails_, &fm::filelist::ThumbnailView::sizeChanged, this, [this](int Size) {
+        thumbnailSizeOverride_ = Size; emit sigViewSettingsChanged(); requestPresentation();
+    });
+    connect(thumbnails_->listView()->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+        if (!IsThumbnailMode()) return;
+        // Reprioritize a new viewport: cached images survive; obsolete queued
+        // extraction and running results are discarded before new tiles paint.
+        thumbnailModel_->Provider()->CancelRequests();
+        thumbnails_->listView()->viewport()->update();
+    });
+    thumbnails_->listView()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(thumbnails_->listView(), &QWidget::customContextMenuRequested, this, [this](const QPoint& Point) {
+        const auto Tile = thumbnails_->listView()->indexAt(Point);
+        if (Tile.isValid()) thumbnails_->setCursorRow(Tile.row());
+        ShowShellMenu(Tile.isValid() ? thumbnailModel_->SourceIndex(Tile.row()) : QModelIndex{}, true);
+    });
+    thumbnails_->setFont(thumbnailFont_);
+    thumbnails_->listView()->setPalette(QApplication::palette());
+    thumbnails_->setPaneActive(panelActive_);
+    thumbnailModel_->Bind(proxy_ ? static_cast<QAbstractItemModel*>(proxy_) : model_);
+    if (thumbnailModel_) thumbnailModel_->SetEnabled(false);
+}
+ThumbnailModel* CGridView::Thumbnails() const
+{
+    const_cast<CGridView*>(this)->ensureThumbnails(); return thumbnailModel_;
+}
+
 CGridView::~CGridView()
 {
     CancelQuickFind();
@@ -454,7 +470,7 @@ CGridView::~CGridView()
     if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->SetSelectionInputActive(false);
     presentationTimer_.stop();
     automaticColumnsStop_.request_stop();
-    thumbnailModel_->SetEnabled(false);
+    if (thumbnailModel_) thumbnailModel_->SetEnabled(false);
     view_->setRecordPainter(nullptr); delete recordPainter_;
 }
 void CGridView::CancelQuickFind()
@@ -500,7 +516,7 @@ void CGridView::MoveQuickFindCursor(const QString& Query, const QString& Match, 
     }
 }
 
-bool CGridView::IsThumbnailMode() const { return presentationStack_ && presentationStack_->currentWidget() == thumbnails_; }
+bool CGridView::IsThumbnailMode() const { return thumbnails_ && presentationStack_ && presentationStack_->currentWidget() == thumbnails_; }
 QPoint CGridView::ListContentTopLeft() const
 {
     if (IsThumbnailMode()) return thumbnails_->listView()->viewport()->mapToGlobal(QPoint());
@@ -520,11 +536,11 @@ void CGridView::SyncThumbnailCursor()
             break;
         }
 }
-void CGridView::ClearThumbnailCache() { thumbnailModel_->ClearCache(); }
+void CGridView::ClearThumbnailCache() { if (thumbnailModel_) thumbnailModel_->ClearCache(); }
 void CGridView::hideEvent(QHideEvent* Event)
 {
     CancelRename();
-    thumbnailModel_->SetEnabled(false);
+    if (thumbnailModel_) thumbnailModel_->SetEnabled(false);
     if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->SetIconViewport({}, false);
     CViewT::hideEvent(Event);
 }
@@ -535,8 +551,9 @@ void CGridView::showEvent(QShowEvent* Event)
 void CGridView::applyThumbnailPresentation()
 {
     const auto Settings = hc::ui::ReadThumbnailSettings(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["thumbnails"].toObject());
-    thumbnailModel_->Apply(Settings);
     const bool Automatic = !everythingPresentation_ && ListMode() == "auto" && Settings.autoSwitch_;
+    if (!thumbnails_ && (everythingPresentation_ || (ListMode() != "thumbnails" && !Automatic))) return;
+    ensureThumbnails(); thumbnailModel_->Apply(Settings);
     if (ListMode() == "thumbnails" || Automatic) thumbnailModel_->Rebuild();
     const auto Percent = Automatic ? thumbnailModel_->TargetPercent() : 0.0;
     const bool Show = !everythingPresentation_ && (ListMode() == "thumbnails" || (Automatic && Percent >= Settings.autoPercent_));
@@ -690,8 +707,15 @@ void CGridView::StartupPaintCompleted()
         // Only the previous and current cursor rows require repaint on navigation.
         if((sourceSelectionKey(Index)==Focus||(startupInput_&&sourceSelectionKey(Index)==startupInputFocus_)) && Paint.focus_!=Focus)return;
     }
-    hc::startup::Record("colors.uiPaint",{{"rows",Rows.size()},{"focus",Focus}});
     auto* FocusWidget=QApplication::focusWidget();
+    QJsonObject Evidence{{"rows",Rows.size()},{"focus",Focus}};
+    if (hc::startup::Detail()) {
+        Evidence["focusClass"] = FocusWidget ? FocusWidget->metaObject()->className() : "none";
+        Evidence["focusObject"] = FocusWidget ? FocusWidget->objectName() : QString{};
+        Evidence["foreground"] = QString::number(quintptr(GetForegroundWindow()));
+        Evidence["window"] = QString::number(quintptr(window()->winId()));
+    }
+    hc::startup::Record("colors.uiPaint", Evidence);
     if(GetForegroundWindow()!=reinterpret_cast<HWND>(window()->winId())||!FocusWidget||!(FocusWidget==this||isAncestorOf(FocusWidget)))return;
     if(!hc::startup::Data().ready_)hc::startup::Ready({{"focus",Focus},{"rows",Rows.size()},{"hwnd",QString::number(quintptr(window()->winId()))}});
     if(startupInput_&&Focus!=startupInputFocus_)hc::startup::Used({{"focus",Focus},{"rows",Rows.size()}});
@@ -815,7 +839,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     }
     model_ = Source;
     proxy_ = Proxy;
-    thumbnailModel_->Bind(Proxy ? static_cast<QAbstractItemModel*>(Proxy) : Source);
+    if (thumbnailModel_) thumbnailModel_->Bind(Proxy ? static_cast<QAbstractItemModel*>(Proxy) : Source);
     // HC-QTN-005: 8.2.0 can retain selection ranges across a model reset.
     // Clear them before rows disappear: selectedRowIndexes otherwise dereferences
     // an invalid GridRow, and old row positions must not target different files.
@@ -918,7 +942,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     if (!Source->property("hc.presentationSignals").toBool()) {
         Source->setProperty("hc.presentationSignals", true);
         const auto Schedule = [this] { requestPresentation(); };
-        connect(Source, &QAbstractItemModel::layoutChanged, this, [this] { requestIconViewport(); });
+        connect(Source, &QAbstractItemModel::layoutChanged, this, [this] { startupPaints_.clear(); requestIconViewport(); });
         connect(Source, &QAbstractItemModel::modelReset, this, Schedule);
         connect(Source, &QAbstractItemModel::modelReset, this, [this] { groupingTimer_.start(0); });
         connect(Source, &QAbstractItemModel::rowsInserted, this, Schedule);
@@ -1055,8 +1079,8 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
     view_->beginUpdate();
     auto& BaseOpts = view_->options();
     grid_->setFont(ColorScheme.FileList_Font);
-    thumbnails_->setFont(ColorScheme.FileList_Font);
-    thumbnails_->listView()->setPalette(QApplication::palette());
+    thumbnailFont_ = ColorScheme.FileList_Font;
+    if (thumbnails_) { thumbnails_->setFont(thumbnailFont_); thumbnails_->listView()->setPalette(QApplication::palette()); }
     recordColors_ = fm::style::themeColorsFor(this);
     recordColors_.setColor(fm::style::Token::Surface, ColorScheme.FileList_BGColor);
     recordColors_.setColor(fm::style::Token::Fg, ColorScheme.FileList_FGColor);
@@ -1102,8 +1126,9 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
 void CGridView::SetPanelActive(bool Active)
 {
     if (!Active) { resetRenameClicks(); finishSelectionInput(); }
+    if (panelActive_ != Active) startupPaints_.clear();
     panelActive_ = Active;
-    thumbnails_->setPaneActive(Active);
+    if (thumbnails_) thumbnails_->setPaneActive(Active);
     grid_->viewport()->update(); requestIconViewport();
     // Keep the logical cursor and marks intact; only suppress cursor painting.
     if (view_ && view_->options().showFocusDecoration() != Active)
@@ -1988,7 +2013,10 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
         const auto Info = grid_->hitInfo(grid_->viewport()->mapFrom(static_cast<QWidget*>(Watched), Drop->position().toPoint())).info();
         if (Info == Qtitan::GridHitInfo::GroupRow || Info == Qtitan::GridHitInfo::GroupBranchButton) { Event->ignore(); return true; }
     }
-    if (Watched == grid_->viewport() && (Event->type() == QEvent::Paint || Event->type() == QEvent::Resize)) requestIconViewport();
+    if (Watched == grid_->viewport() && (Event->type() == QEvent::Paint || Event->type() == QEvent::Resize)) {
+        if (Event->type() == QEvent::Resize) startupPaints_.clear();
+        requestIconViewport();
+    }
     // Changing the main window frame stylesheet on maximize repolishes children,
     // which resets viewport auto-fill. Restore it after stylesheet processing.
     if (Watched == grid_ && Event->type() == QEvent::StyleChange)
