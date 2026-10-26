@@ -1,4 +1,6 @@
 ﻿#include <QImageIOPlugin>
+#include <QPainter>
+#include <src/webp/decode.h>
 #include <QImageIOHandler>
 #include <QImage>
 #include <QColorSpace>
@@ -297,4 +299,61 @@ class ModernImagePlugin final : public QImageIOPlugin
         return Handler;
     }
 };
+
+// Internal preview ABI. The caller treats every pixel as provisional; these
+// entry points never change QImageReader's complete-input success contract.
+extern "C" Q_DECL_EXPORT bool HC_ReadWebpPreview(const QByteArray* Bytes,QImage* Output)
+{
+    if(!Bytes || !Output)return false;
+    const auto* Data=reinterpret_cast<const uint8_t*>(Bytes->constData());
+    int Width=0,Height=0;
+    if(!WebPGetInfo(Data,size_t(Bytes->size()),&Width,&Height) || Width<=0 || Height<=0
+        || Width>16384 || Height>16384 || qint64(Width)*Height>16*1024*1024)return false;
+    auto* Decoder=WebPINewRGB(MODE_RGBA,nullptr,0,0);if(!Decoder)return false;
+    const std::unique_ptr<WebPIDecoder,decltype(&WebPIDelete)> Owner(Decoder,WebPIDelete);
+    const auto Status=WebPIAppend(Decoder,Data,size_t(Bytes->size()));
+    if(Status!=VP8_STATUS_OK && Status!=VP8_STATUS_SUSPENDED)return false;
+    int Rows=0,Stride=0;const auto* Pixels=WebPIDecGetRGB(Decoder,&Rows,&Width,&Height,&Stride);
+    if(!Pixels || Rows<=0 || Rows>Height || Stride<Width*4)return false;
+    const auto Size=QSize(Width,Height).scaled(1024,1024,Qt::KeepAspectRatio);
+    QImage Result(Size,QImage::Format_RGBA8888);if(Result.isNull())return false;Result.fill(Qt::transparent);
+    const QImage Available(Pixels,Width,Rows,Stride,QImage::Format_RGBA8888);
+    {QPainter Painter(&Result);Painter.drawImage(QRect(0,0,Size.width(),qMax(1,qRound(double(Rows)*Size.height()/Height))),Available);}
+    Result.setText("PreviewRows",QString::number(Rows));*Output=std::move(Result);return true;
+}
+extern "C" Q_DECL_EXPORT bool HC_ReadAvifPreview(const QByteArray* Bytes,QImage* Output)
+{
+    if(!Bytes || !Output)return false;
+    avifIO Io{};auto* Decoder=avifDecoderCreate();if(!Decoder)return false;
+    const std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)> Owner(Decoder,avifDecoderDestroy);
+    Decoder->maxThreads=2;Decoder->imageSizeLimit=16*1024*1024;Decoder->imageDimensionLimit=16384;
+    Decoder->allowIncremental=AVIF_TRUE;Decoder->ignoreExif=AVIF_TRUE;Decoder->ignoreXMP=AVIF_TRUE;
+    Io.data=const_cast<QByteArray*>(Bytes);Io.persistent=AVIF_TRUE;
+    Io.read=[](avifIO* Self,uint32_t Flags,uint64_t Offset,size_t Size,avifROData* Out)->avifResult{
+        const auto& Data=*static_cast<QByteArray*>(Self->data);
+        if(Flags)return AVIF_RESULT_IO_ERROR;
+        if(Offset>uint64_t(Data.size()) || Size>uint64_t(Data.size())-Offset)return AVIF_RESULT_WAITING_ON_IO;
+        Out->data=reinterpret_cast<const uint8_t*>(Data.constData())+Offset;Out->size=Size;return AVIF_RESULT_OK;
+    };
+    avifDecoderSetIO(Decoder,&Io);
+    if(avifDecoderParse(Decoder)!=AVIF_RESULT_OK)return false;
+    const auto Status=avifDecoderNextImage(Decoder);
+    if(Status!=AVIF_RESULT_OK && Status!=AVIF_RESULT_WAITING_ON_IO)return false;
+    const auto Rows=avifDecoderDecodedRowCount(Decoder);const auto* Image=Decoder->image;
+    if(!Rows || !Image || Rows>Image->height || !Image->width || !Image->height)return false;
+    avifImage Available=*Image;Available.height=Rows;
+    QImage Pixels(int(Image->width),int(Rows),QImage::Format_RGBA8888);if(Pixels.isNull())return false;
+    avifRGBImage Rgb;avifRGBImageSetDefaults(&Rgb,&Available);Rgb.depth=8;Rgb.format=AVIF_RGB_FORMAT_RGBA;
+    Rgb.pixels=Pixels.bits();Rgb.rowBytes=uint32_t(Pixels.bytesPerLine());Rgb.maxThreads=2;
+    if(avifImageYUVToRGB(&Available,&Rgb)!=AVIF_RESULT_OK)return false;
+    const auto Size=QSize(int(Image->width),int(Image->height)).scaled(1024,1024,Qt::KeepAspectRatio);
+    QImage Result(Size,QImage::Format_RGBA8888);if(Result.isNull())return false;Result.fill(Qt::transparent);
+    {QPainter Painter(&Result);Painter.drawImage(QRect(0,0,Size.width(),qMax(1,qRound(double(Rows)*Size.height()/Image->height))),Pixels);}
+    auto Profile=Image->icc.size?QColorSpace::fromIccProfile(QByteArray(reinterpret_cast<const char*>(Image->icc.data),qsizetype(Image->icc.size))):ColorSpace(Image->colorPrimaries,Image->transferCharacteristics);
+    if(Profile.isValid())Result.setColorSpace(Profile);
+    if(Image->transformFlags&AVIF_TRANSFORM_IROT)Result=Result.transformed(QTransform().rotate(-90*Image->irot.angle));
+    if(Image->transformFlags&AVIF_TRANSFORM_IMIR)Result=Result.flipped(Image->imir.axis==0?Qt::Vertical:Qt::Horizontal);
+    Result.setText("PreviewRows",QString::number(Rows));*Output=std::move(Result);return true;
+}
+
 #include "modernImagePlugin.moc"

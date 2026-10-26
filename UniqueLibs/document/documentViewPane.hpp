@@ -22,7 +22,7 @@ namespace hc::document
     public:
         explicit DocumentViewPane(QWidget* Parent = nullptr);
         ~DocumentViewPane() override;
-        void ShowLoadingPreview(const QImage& Image);
+        void ShowLoadingPreview(const QImage& Image,bool Partial=false);
         bool IsReadOnly() const { return readOnly_; }
         ViewUiContribution Contribution() const { return contribution_; }
         bool Load(const TextInput& Input, bool Traverse, bool ImageEditing = true);

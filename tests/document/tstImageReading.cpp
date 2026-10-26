@@ -28,6 +28,7 @@
 #include <QtCore/private/qzipwriter_p.h>
 #include "UniqueLibs/document/imageBook.hpp"
 #include "UniqueLibs/document/imageZipRecovery.hpp"
+#include "UniqueLibs/document/imagePartialDecoder.hpp"
 #include "UniqueLibs/document/imageReadingView.hpp"
 #include "UniqueLibs/document/imageFullscreen.hpp"
 #include "UniqueLibs/document/imageFramePlayer.hpp"
@@ -39,6 +40,26 @@
 using namespace hc::document;
 namespace
 {
+// Decoder-level fixture: the archive engine has already yielded decoded bytes,
+// then reports damage or an authority failure. This contract is format-neutral.
+namespace st=hc::storage;namespace plug=hc::plugins;
+class InterruptedArchive final : public plug::IArchiveBackend {
+public:
+    QByteArray bytes_;st::ErrorCategory failure_=st::ErrorCategory::Unavailable;
+    st::Result<std::unique_ptr<plug::IArchiveListing>> Enumerate(std::string,bool,st::OperationContext) override{return st::Error{st::ErrorCategory::Unsupported,"unused"};}
+    st::Result<st::Unit> Extract(std::string,plug::ArchiveHeader,std::string,st::OperationContext) override{return st::Error{st::ErrorCategory::Unsupported,"unused"};}
+    st::Result<st::Unit> Update(plug::ArchiveUpdate,st::OperationContext) override{return st::Error{st::ErrorCategory::Unsupported,"unused"};}
+    st::Result<std::unique_ptr<plug::IArchiveReadSession>> OpenReadSession(std::string,std::vector<std::uint32_t>,st::OperationContext) override {
+        struct Stream final:plug::IArchiveReadSession {
+            QByteArray bytes_;st::ErrorCategory failure_;bool sent_=false;
+            st::Result<st::ReadChunk> Read(std::uint32_t,std::size_t,st::OperationContext) override {
+                if(sent_)return st::Error{failure_,"archive-interrupted"};sent_=true;
+                const auto* First=reinterpret_cast<const std::byte*>(bytes_.constData());return st::ReadChunk{std::vector<std::byte>(First,First+bytes_.size()),false};
+            }
+        };
+        auto Result=std::make_unique<Stream>();Result->bytes_=bytes_;Result->failure_=failure_;return std::unique_ptr<plug::IArchiveReadSession>(std::move(Result));
+    }
+};
 QImage Picture(QColor Color = Qt::red, QSize Size = {80, 120})
 {
     QImage I(Size, QImage::Format_RGBA8888);
@@ -405,6 +426,43 @@ class ImageReadingTests : public QObject
         ImageDecodeCache::Clear();std::stop_source Stop;hc::storage::OperationContext Context;Context.stopToken_=Stop.get_token();
         auto Cancelled=ReadDocumentFile(Path,Context,false,[&](QImage){Stop.request_stop();});
         QVERIFY(!Cancelled.HasValue());QCOMPARE(Cancelled.Failure().category_,hc::storage::ErrorCategory::Cancelled);
+    }
+    void partialPngAndWebpPreserveAvailableRows_data(){QTest::addColumn<QByteArray>("Format");QTest::newRow("png")<<QByteArray("PNG");QTest::newRow("webp")<<QByteArray("WEBP");}
+    void partialPngAndWebpPreserveAvailableRows()
+    {
+        QFETCH(QByteArray,Format);QImage Original(320,360,QImage::Format_RGBA8888);quint32 Seed=31;
+        for(int Y=0;Y<Original.height();++Y)for(int X=0;X<Original.width();++X){Seed=Seed*1664525U+1013904223U;Original.setPixelColor(X,Y,QColor(Seed&255,(Seed>>8)&255,(Seed>>16)&255));}
+        QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);QVERIFY(Original.save(&Buffer,Format.constData(),95));Buffer.close();
+        const auto Prefix=Bytes.left(Bytes.size()/2);auto Preview=ImagePartialDecoder::Decode(Prefix);
+        QVERIFY2(!Preview.isNull(),Format.constData());const int Rows=Preview.text("PreviewRows").toInt();QVERIFY(Rows>0&&Rows<Original.height());
+        QVERIFY(Preview.width()<=1024&&Preview.height()<=1024);QVERIFY(Preview.pixelColor(0,0).alpha()>0);QCOMPARE(Preview.pixelColor(0,Preview.height()-1).alpha(),0);
+        QTemporaryDir Root;const auto Path=Root.filePath("partial."+QString::fromLatin1(Format).toLower());QFile File(Path);QVERIFY(File.open(QIODevice::WriteOnly));File.write(Prefix);File.close();
+        auto Book=OpenImageBook(Root.path());QVERIFY(Book.HasValue());auto Page=ReadImagePage(Book.Value(),0);QVERIFY(Page.HasValue());QCOMPARE(Page.Value().warning_,QString("image-page-partial-preview"));
+        QImage Standalone;auto Single=ReadDocumentFile(Path,{},false,[&](QImage Image){Standalone=std::move(Image);});QVERIFY(!Single.HasValue());QVERIFY(!Standalone.isNull());
+        DocumentWorkspaceWidget Workspace(Root.filePath("recovery"));Workspace.resize(600,500);Workspace.show();
+        QVERIFY(!Workspace.Handle({{"action","open"},{"path",Path}}).contains("error"));QTRY_VERIFY(Workspace.IsIdle());
+        const auto State=Workspace.Snapshot()["documents"].toArray().first().toObject();QVERIFY(!State["error"].toString().isEmpty());QVERIFY(!State["canSave"].toBool());QVERIFY(!State["canSaveAs"].toBool());
+        auto* Overlay=Workspace.findChild<QWidget*>("documentLoadingPreview");QVERIFY(Overlay);QVERIFY(Overlay->property("partialImage").toBool());QVERIFY(!Overlay->isHidden());
+        Workspace.RequestClose(); QTRY_VERIFY(Workspace.IsIdle()); QVERIFY(Workspace.RequestClose());
+        QVERIFY(ImagePartialDecoder::Decode(Prefix.left(25)).isNull());
+    }
+    void archiveDamageRetainsPixelsButAuthorityFailureDoesNot()
+    {
+        QTemporaryDir Root;Fixture(Root.path(),1);auto Book=OpenImageBook(Root.path());QVERIFY(Book.HasValue());
+        auto Engine=std::make_shared<InterruptedArchive>();Engine->bytes_=Png(Qt::red);Engine->bytes_.chop(12);
+        Book.Value()->archive_=Engine;Book.Value()->pages_[0].entry_.encrypted_=true;
+        auto Partial=ReadImagePage(Book.Value(),0);QVERIFY(Partial.HasValue());QVERIFY(!Partial.Value().warning_.isEmpty());QVERIFY(!Partial.Value().image_.isNull());
+        Engine->failure_=st::ErrorCategory::AccessDenied;auto Denied=ReadImagePage(Book.Value(),0);QVERIFY(!Denied.HasValue());QCOMPARE(Denied.Failure().category_,st::ErrorCategory::AccessDenied);
+        Engine->failure_=st::ErrorCategory::Cancelled;auto Cancelled=ReadImagePage(Book.Value(),0);QVERIFY(!Cancelled.HasValue());QCOMPARE(Cancelled.Failure().category_,st::ErrorCategory::Cancelled);
+    }
+    void gridAvifPreviewUsesDecodedRows()
+    {
+        // libavif 1.4.2 BSD test corpus; copyright retained beside the fixture.
+        QFile File(QFINDTESTDATA("fixtures/libavif/sofa_grid1x5_420.avif"));QVERIFY(File.open(QIODevice::ReadOnly));const auto Bytes=File.readAll();
+        auto Complete=ImagePartialDecoder::Decode(Bytes);QVERIFY(!Complete.isNull());bool Found=false;
+        for(int Part=2;Part<10;++Part){auto Preview=ImagePartialDecoder::Decode(Bytes.left(Bytes.size()*Part/10));
+            if(!Preview.isNull()&&Preview.pixelColor(0,Preview.height()-1).alpha()==0){QVERIFY(Preview.text("PreviewRows").toInt()>0);Found=true;break;}}
+        QVERIFY2(Found,"grid AVIF must expose completed rows before the remaining tiles arrive");
     }
     void truncatedJpegRemainsViewableWithWarning()
     {

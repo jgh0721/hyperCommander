@@ -366,8 +366,11 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     Content.format_ = QString::fromLatin1(Reader.format());
     if(Content.bytes_.startsWith(QByteArray("\xff\xd8",2)) && !Content.bytes_.right(64).contains(QByteArray("\xff\xd9",2)))
         Content.warning_="image-jpeg-incomplete";
-    if (Content.image_.isNull())
-        return Error("image-page-decode");
+    if(Content.image_.isNull()){
+        Content.image_=ImagePartialDecoder::Decode(Content.bytes_);
+        if(Content.image_.isNull())return Error("image-page-decode");
+        Content.warning_="image-page-partial-preview";
+    }
     if (auto Stop = Context.Check({"image-book"}))
         return *Stop;
     if (Book->archive_ ? Revision(Book->path_) != Book->revision_ : Page.sourceRevision_ != Revision(Page.file_))

@@ -765,16 +765,20 @@ namespace hc::document
         auto* PreviewTimer=new QTimer(Watcher);PreviewTimer->setInterval(50);
         connect(PreviewTimer,&QTimer::timeout,this,[Tab,Generation,Cancellation,Progress]{
             if(Tab->closed_ || !Tab->loading_ || Cancellation->stop_requested() || Generation!=Tab->session_->Snapshot().generation_)return;
-            QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=std::exchange(Progress->image_,{});}
+            QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;}
             if(!Image.isNull())Tab->pane_->ShowLoadingPreview(Image);
         });PreviewTimer->start();
-        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, PreviewTimer, Generation] {
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, PreviewTimer, Progress, Generation] {
             PreviewTimer->stop();
             auto Result = Watcher->result();
             if(Result.HasValue()&&Result.Value().viewId_=="image")DeleteCompletedImageWork(Watcher);else Watcher->deleteLater();
             if (Tab->closed_ || Generation != Tab->session_->Snapshot().generation_) return;
             Tab->loading_ = false;Tab->pane_->ShowLoadingPreview({});
             if (!Result.HasValue()) {
+                if(Result.Failure().category_!=storage::ErrorCategory::Cancelled){
+                    QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;}
+                    Tab->pane_->ShowLoadingPreview(Image,true);
+                }
                 Tab->session_->CompleteOpen(Generation, Result.Failure()); Tab->error_ = QString::fromStdString(Result.Failure().code_);
             }
             else {

@@ -118,13 +118,20 @@ namespace hc::document
                 // Qt and the OS report allocation failure; image dimensions are not a product quota.
                 QImageReader::setAllocationLimit(0);
                 ImageReader.setAutoTransform(true);{ImageTraceSpan DecodeTrace("image.decode",Path);Input.image_=ImageReader.read();}
-                if(Input.image_.isNull())return Invalid("document-image-decode");
+                const bool IncompleteJpeg=Input.bytes_.startsWith(QByteArray("\xff\xd8",2))&&!Input.bytes_.right(64).contains(QByteArray("\xff\xd9",2));
+                if(Input.image_.isNull() || IncompleteJpeg){
+                    if(Preview){auto Partial=ImagePartialDecoder::Decode(Input.bytes_);if(!Partial.isNull())Preview(std::move(Partial));}
+                    return Invalid("document-image-incomplete");
+                }
                 if(auto Stop=Context.Check({"document"}))return *Stop;
                 ImageDecodeCache::Remember(Canonical,{Input.bytes_,Input.hash_,Revision,Input.image_});
                 Input.viewId_="image";return Input;
             }
         }
-        if(IsImageFile(Path)||QStringList{"heic","heif","avif","jxl"}.contains(Suffix))return Invalid("document-image-codec-unavailable-or-corrupt");
+        if(IsImageFile(Path)||QStringList{"heic","heif","avif","jxl"}.contains(Suffix)){
+            if(Preview){auto Partial=ImagePartialDecoder::Decode(Input.bytes_);if(!Partial.isNull())Preview(std::move(Partial));}
+            return Invalid("document-image-codec-unavailable-or-corrupt");
+        }
         if(!Unlimited&&Input.bytes_.size()>TextByteLimit)return Error{ErrorCategory::BudgetExceeded,"document-text-byte-limit"};
         auto Text=DecodeDocumentText(Input.bytes_);if(!Text.HasValue())return Text.Failure();
         Input.text_=Text.Value().text_;Input.encoding_=Text.Value().encoding_;Input.bom_=Text.Value().bom_;

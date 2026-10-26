@@ -56,21 +56,23 @@ namespace hc::document
         class LoadingImagePreview final : public QWidget {
         public:
             explicit LoadingImagePreview(QWidget* Parent):QWidget(Parent){setObjectName("documentLoadingPreview");}
-            QImage image_;
+            QImage image_;bool partial_=false;
         protected:
             void paintEvent(QPaintEvent*) override {
                 QPainter Painter(this);Painter.fillRect(rect(),palette().brush(QPalette::Base));
                 const auto Size=image_.size().scaled(width(),qMax(1,height()-44),Qt::KeepAspectRatio);
                 Painter.drawImage(QRect(QPoint((width()-Size.width())/2,44+(height()-44-Size.height())/2),Size),image_);
                 Painter.setPen(palette().color(QPalette::Text));
-                Painter.drawText(QRect(8,0,qMax(1,width()-16),44),Qt::AlignCenter|Qt::TextWordWrap,tr("파일을 읽는 중입니다. 임시 미리보기이며 편집·저장은 완료 후 가능합니다."));
+                Painter.drawText(QRect(8,0,qMax(1,width()-16),44),Qt::AlignCenter|Qt::TextWordWrap,partial_?tr("파일이 불완전하여 읽을 수 있는 부분의 축소 미리보기만 표시합니다. 원본 편집·저장은 사용할 수 없습니다."):tr("파일을 읽는 중입니다. 임시 미리보기이며 편집·저장은 완료 후 가능합니다."));
             }
         };
     }
-    void DocumentViewPane::ShowLoadingPreview(const QImage& Image){
+    void DocumentViewPane::ShowLoadingPreview(const QImage& Image,bool Partial){
         if(Image.isNull()){if(loadingPreview_)loadingPreview_->hide();return;}
         if(!loadingPreview_)loadingPreview_=new LoadingImagePreview(this);
-        static_cast<LoadingImagePreview*>(loadingPreview_)->image_=Image;
+        auto* Preview=static_cast<LoadingImagePreview*>(loadingPreview_);
+        if(!Preview->isHidden() && Preview->image_.cacheKey()==Image.cacheKey() && Preview->partial_==Partial)return;
+        Preview->image_=Image;Preview->partial_=Partial;Preview->setProperty("partialImage",Partial);
         loadingPreview_->setGeometry(rect());loadingPreview_->show();loadingPreview_->raise();loadingPreview_->update();
     }
     void DocumentViewPane::resizeEvent(QResizeEvent* Event){QWidget::resizeEvent(Event);if(loadingPreview_)loadingPreview_->setGeometry(rect());}
