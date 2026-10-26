@@ -14,6 +14,8 @@ public:
     QByteArray StructuralBytes()const{return publication_["sourceSha256"].toString()==originalHash_?QByteArray{}:edition_;}
     QString RestoreStructuralBytes(const QByteArray& Bytes);
     QString Structure(const QJsonObject& Request,const Cancellation& Cancel={});
+    QJsonObject Metadata()const;
+    QJsonObject InspectImage(const QString& Path,const Cancellation& Cancel={})const;
     QMap<QString,QByteArray> Changes()const{return replacements_;}
     bool IsEditable(const QString& Path)const{return media_.contains(Path);}
     QString Replace(const QString& Path,const QByteArray& Bytes);
@@ -23,6 +25,7 @@ public:
     QByteArray Fingerprint(const QMap<QString,QByteArray>& Draft={})const;
     EditOutput Export(const QMap<QString,QByteArray>& Draft={},const Cancellation& Cancel={})const;
 private:
+    QString modifyProperties(const QJsonObject& Request,const Cancellation& Cancel);
     void assign(const QString& Path,const QByteArray& Bytes);
     struct State {QByteArray edition_;QJsonObject publication_;QMap<QString,QString> media_;QMap<QString,QByteArray> changes_;};
     State state()const;void restore(const State& Value);void record(State Before);

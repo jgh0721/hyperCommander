@@ -2,6 +2,7 @@ import EpubIframeView from "epubjs/src/managers/views/iframe.js";
 import EpubRendition from "epubjs/src/rendition.js";
 import { EVENTS } from "epubjs/src/utils/constants.js";
 import EpubQueue from "epubjs/src/utils/queue.js";
+import { sourcePositionForNode, placeSourcePosition } from "./sourcePositions.js";
 import { createReaderTools } from "./readerTools.js";
 import ePub from "epubjs";
 import { compileCss } from "./customCss.js";
@@ -327,7 +328,10 @@ function getLocator() {
 }
 
 function readingLocation() {
-    const location=rendition?.currentLocation(), index=location?.start?.index ?? 0;
+    const location=rendition?.currentLocation();
+    const readiumHref=navigator?.currentLocator?.href;
+    const index=location?.start?.index ?? Math.max(0,readiumHref ? publication.spine.findIndex(item=>
+        new URL(encodePath(item.path),root).href===new URL(readiumHref,root).href) : 0);
     const path=publication?.spine[index]?.path;
     let tocIndex=-1;
     const doc=documents()[0], section=book?.spine.get(index), compare=new EpubCFI();
@@ -482,6 +486,9 @@ async function selfTest() {
     }
     const initialProfile = { ...profile };
     const initial = currentSnapshot();
+    await applyProfile({override:false});
+    const publisherBefore=currentSnapshot().paragraphs[0];
+    await applyProfile(initialProfile);
     const checks = { noReaderHorizontalScrollbar: !initial.readerHorizontalScrollbar, firstText: initial.text.length > 10,
         imagesDecoded: initial.images.length > 0 && initial.images.every(img => img.complete && img.naturalWidth > 0),
         viewportFilled: initial.frameBounds.length > 0 && initial.frameBounds.every(f => f.width >= initial.paneWidth * 0.9 && f.height >= initial.paneHeight * 0.9),
@@ -507,10 +514,10 @@ async function selfTest() {
     await applyProfile({ before: 0.7, after: 1.8 });
     const paragraphOnly = currentSnapshot().paragraphs[0];
     checks.paragraphSpacingIndependent = near(paragraphOnly.line, 57.6) && near(paragraphOnly.before, 16.8) && near(paragraphOnly.after, 43.2);
-    await applyProfile({ override: false });
+    await applyProfile({ override: false, theme:initialProfile.theme });
     const publisher = currentSnapshot();
-    checks.publisherReset = publisher.paragraphs[0]?.color === "rgb(48, 56, 64)"
-        && !near(publisher.paragraphs[0]?.letter || "0", 1.92);
+    checks.publisherReset = !!publisherBefore && publisher.paragraphs[0]?.color === publisherBefore.color
+        && publisher.paragraphs[0]?.letter === publisherBefore.letter;
     await applyProfile({ ...initialProfile, override: true });
     if (publication.spine.length > 1) {
         await goChapter(1);
@@ -521,7 +528,6 @@ async function selfTest() {
         await restoreLocator(locator);
         checks.locatorRestored = currentSnapshot().text === second.text;
     }
-    const doc = documents()[0];
     await navigate("toc",0);
     checks.tocNavigation=readingLocation().chapterIndex===publication.spine.findIndex(item=>item.path===publication.navigation[0].path);
     const beforeJump=readingLocation().chapterIndex;
@@ -529,6 +535,19 @@ async function selfTest() {
         await navigate("next-chapter");checks.nextChapter=readingLocation().chapterIndex===beforeJump+1;
         await navigate("back");checks.backNavigation=readingLocation().chapterIndex===beforeJump;
     }
+    const sourcePositionChecks = {};
+    const mappingDoc=documents()[0], walker=mappingDoc.createTreeWalker(mappingDoc.body,4);
+    let mappingNode;while((mappingNode=walker.nextNode()) && !mappingNode.textContent.trim()) {}
+    if(mappingNode) {
+        const markup=mappingDoc.body.innerHTML, point=sourcePositionForNode(mappingDoc,mappingNode,0);
+        placeSourcePosition(mappingDoc,point);
+        const selection=mappingDoc.defaultView.getSelection();
+        sourcePositionChecks.rangeRoundTrip=selection.anchorNode===mappingNode && selection.anchorOffset===0;
+        sourcePositionChecks.markupPreserved=mappingDoc.body.innerHTML===markup;
+        let rejected=false;try{placeSourcePosition(mappingDoc,{path:[-1],child:0,offset:0});}catch{rejected=true;}
+        sourcePositionChecks.invalidPositionRejected=rejected && selection.anchorNode===mappingNode;
+    }else sourcePositionChecks.rangeRoundTrip=false;
+    const doc = documents()[0];
     const script = doc.createElement("script"); script.textContent = "window.hcUntrustedExecuted=1";
     doc.body.append(script);
     const button = doc.createElement("button"); button.setAttribute("onclick", "window.hcUntrustedExecuted=2");
@@ -546,8 +565,8 @@ async function selfTest() {
     checks.fileBlocked = !(await fetch("file:///C:/hc-epub-denied.txt").then(() => true, () => false));
     await goChapter(0);
     await applyProfile(initialProfile);
-    window.hcEvidence = { status: Object.values(checks).every(Boolean) ? "passed" : "failed", phase: "P0-B",
-        engine, checks, initial, typography, publisher, final: currentSnapshot(), sourceSha256: publication.sourceSha256,
+    window.hcEvidence = { status: Object.values(checks).every(Boolean) && Object.values(sourcePositionChecks).every(Boolean) ? "passed" : "failed", phase: "P0-B",
+        engine, checks, sourcePositionChecks, initial, typography, publisher, final: currentSnapshot(), sourceSha256: publication.sourceSha256,
         locatorScope: "same-session chapter restore; durable cross-edit locator unverified" };
 }
 

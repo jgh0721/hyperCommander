@@ -29,6 +29,9 @@ void EpubSourceEditor::setupStructure(QVBoxLayout* Layout) {
     tocEdit_=new QPushButton(tr("목차 편집…"),this);tocEdit_->setObjectName("epubEditNavigation");Row->addWidget(tocEdit_);auto* Cancel=new QPushButton(tr("구조 작업 취소"),this);Cancel->setObjectName("epubStructureCancel");Row->addWidget(Cancel);Row->addStretch();Layout->addLayout(Row);
     auto* Add=Menu->addAction(tr("이미지 추가…"));connect(Add,&QAction::triggered,this,&EpubSourceEditor::addImageResource);
     auto* Chapter=Menu->addAction(tr("새 장 추가…"));connect(Chapter,&QAction::triggered,this,&EpubSourceEditor::addChapterResource);Menu->addSeparator();
+    auto* Metadata=Menu->addAction(tr("서지정보 편집…"));Metadata->setObjectName("epubMetadataAction");connect(Metadata,&QAction::triggered,this,&EpubSourceEditor::editMetadata);
+    auto* Properties=Menu->addAction(tr("이미지 사용 위치·속성…"));Properties->setObjectName("epubImagePropertiesAction");connect(Properties,&QAction::triggered,this,&EpubSourceEditor::inspectImage);Menu->addSeparator();
+    connect(&imageInspection_,&QFutureWatcherBase::finished,this,[this]{if(imageInspectionToken_!=Token()){status_->setText(tr("사용 위치 조사 중 내용이 변경되었습니다. 다시 확인해 주세요."));return;}editImageProperties(imageInspection_.result());});
     auto* Rename=Menu->addAction(tr("선택 리소스 이름·경로 변경…"));connect(Rename,&QAction::triggered,this,[this]{bool Ok=false;const auto Path=QInputDialog::getText(this,tr("리소스 이름·경로 변경"),tr("EPUB 내부 경로 · 참조는 함께 갱신됩니다."),QLineEdit::Normal,current_,&Ok);if(Ok && Path!=current_)structure({{"operation","rename"},{"resource",current_},{"destination",Path}});});
     auto* Remove=Menu->addAction(tr("선택 리소스 삭제…"));connect(Remove,&QAction::triggered,this,[this]{
         QDialog Dialog(this);Dialog.setWindowTitle(tr("EPUB 리소스 삭제"));auto* Layout=new QVBoxLayout(&Dialog);auto* Note=new QLabel(tr("%1\n리소스를 삭제합니다. 남아 있는 참조가 있으면 작업을 중단합니다. 실행 취소가 가능하며 원본 파일은 유지됩니다.").arg(current_),&Dialog);Note->setTextFormat(Qt::PlainText);Note->setWordWrap(true);Layout->addWidget(Note);auto* Images=new QCheckBox(tr("이 이미지를 표시하는 img·SVG image 요소도 삭제"),&Dialog);Images->setVisible(resources_->currentData().toString().startsWith("image/"));Layout->addWidget(Images);auto* Buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&Dialog);Buttons->button(QDialogButtonBox::Ok)->setText(tr("확인"));Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));Layout->addWidget(Buttons);connect(Buttons,&QDialogButtonBox::accepted,&Dialog,&QDialog::accept);connect(Buttons,&QDialogButtonBox::rejected,&Dialog,&QDialog::reject);
@@ -44,7 +47,7 @@ void EpubSourceEditor::setupStructure(QVBoxLayout* Layout) {
     connect(&structureWorker_,&QFutureWatcher<StructureOutput>::finished,this,[this]{
         const auto Result=structureWorker_.result();structuring_=false;text_->setReadOnly(false);resources_->setEnabled(ready_);structureError_=Result.error_;
         if(!structureError_.isEmpty())status_->setText(structureError_=="cancelled"?tr("구조 작업을 취소했습니다. 편집 내용은 유지됩니다."):tr("구조 작업을 반영하지 못했습니다. 편집 내용은 유지됩니다.\n%1").arg(structureError_));
-        else {model_=Result.model_;setDiagnostics({});checkerVerifiedToken_.clear();checkerState_="idle";refreshResources(Result.selected_);tocDraft_={};status_->setText(tr("구조 변경을 반영했습니다. 실행 취소와 다른 이름 저장을 사용할 수 있습니다. 저장 전 검사를 다시 진행해 주세요."));emit Changed();}
+        else {model_=Result.model_;bookUndoPriority_=true;bookRedoPriority_=false;setDiagnostics({});checkerVerifiedToken_.clear();checkerState_="idle";refreshResources(Result.selected_);tocDraft_={};status_->setText(tr("구조 변경을 반영했습니다. 실행 취소와 다른 이름 저장을 사용할 수 있습니다. 저장 전 검사를 다시 진행해 주세요."));emit Changed();}
         emit StateChanged();
     });
 }

@@ -13,6 +13,7 @@
 #include <optional>
 #include <utility>
 class QScrollArea;class QEvent;class QToolButton;class QProcess;class QTreeWidget;
+class QTextDocument;
 class QComboBox;class QPlainTextEdit;class QLabel;class QVBoxLayout;class QPushButton;class QSplitter;class QStackedLayout;class QCheckBox;class QTemporaryDir;class QResizeEvent;
 namespace hc::document {
 class EpubProcessView;
@@ -77,6 +78,13 @@ private:
     void admitPreview(EpubProcessView* Candidate);
     void retirePreview(EpubProcessView* View);
     void syncPreviewSource(bool Force=false);
+    void saveSourceState();void activateSource(const QByteArray& Data,const QString& Media);
+    void rehighlightSources();void locateSource();bool selectPreviewSource();
+    void editMetadata();void inspectImage();void editImageProperties(const QJsonObject& Inspection);
+    struct SourceState {QPointer<QTextDocument> document_;QByteArray applied_;int position_=0,anchor_=0,vertical_=0,horizontal_=0;};
+    QMap<QString,SourceState> sourceBuffers_;QString bufferResource_;
+    QTimer sourceSyncTimer_;bool sourceSyncPending_=false;int sourceSyncAttempts_=0;qint64 sourceSelectionSerial_=-1;
+    QFutureWatcher<QJsonObject> imageInspection_;QByteArray imageInspectionToken_;
     QJsonObject previewSnapshot()const;
     epub::EditModel model_;QFutureWatcher<epub::EditModel> worker_;
     QFutureWatcher<epub::EditOutput> validation_;QByteArray validationToken_,validatedToken_,validatedBytes_;bool saveAfter_=false,nativeValidating_=false;
@@ -84,6 +92,7 @@ private:
     QComboBox* resources_=nullptr;QPlainTextEdit* text_=nullptr;QLabel *image_=nullptr,*status_=nullptr;
     QString current_,error_;QStringList protectedPaths_;QList<QByteArray> identities_;QByteArray baseToken_,reference_;
     bool ready_=false,updating_=false,sourceComposing_=false,commitRestore_=false,commitFocus_=false;
+    bool bookUndoPriority_=false,bookRedoPriority_=false;
     QString commitResource_;int commitPosition_=0,commitAnchor_=0,commitVertical_=0,commitHorizontal_=0;QScrollArea* sourceScroll_=nullptr;
     struct DraftSession {std::atomic_bool cancelled_=false,discard_=false;};
     std::shared_ptr<DraftSession> draftSession_=std::make_shared<DraftSession>();

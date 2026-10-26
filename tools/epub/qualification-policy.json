@@ -14,7 +14,7 @@
     "productDirectory": "Libs/Epub",
     "productManifest": "epub-runtime-inventory.json",
     "productSchemaVersion": 3,
-    "qualifiedCandidateInventorySha256": "ee658e4745a24fe2e3a752fef50d952c730c37dbed6480a6cb8f7eb7d26ad613",
+    "qualifiedCandidateInventorySha256": "48c4de2cc9a23269375647eb26f31cde5a904a9026178538b5158a8b146a4535",
     "authority": "Independent native policy pin; never trust an adjacent manifest alone; preserve separately approved RHWP and Compare files"
   },
   "currentCapabilities": [
@@ -24,7 +24,13 @@
     "Source/image/structure/TOC editing, validated Save As and crash draft recovery",
     "Named style profile and exact managed PNG transfer without private reading state",
     "Native-authoritative highlights/notes with conflict-safe persistence and bounded edition transfer",
-    "Viewport-based scroll navigation, stable frames, numeric keypad page keys, source caret restoration and deferred composition-time preview swap"
+    "Viewport-based scroll navigation, stable frames, numeric keypad page keys, source caret restoration and deferred composition-time preview swap",
+    "XML/CSS syntax highlighting and per-resource document, cursor, selection, scroll and undo retained across unchanged Save As revisions",
+    "Revision-guarded bounded source/DOM text-position synchronization; UTF-16, entity, CDATA and real helper round trips",
+    "Basic OPF metadata form and occurrence-specific image alt/simple caption form, natural/declared dimensions and raw linked CSS inspection",
+    "Stale property request rejection; atomic structural undo; preservation of identifiers, extra metadata, long existing values and unrelated resource bytes",
+    "Owned EPUB2/3 originals, metadata and structural copies: EPUBCheck 5.4.0 and two independent reader engines in light/dark",
+    "Occurrence-specific integer width/height attributes, including clear-to-auto; invalid dimensions rejected atomically and complex existing dimensions preserved"
   ],
   "currentLimits": {
     "inputBytes": 67108864,
@@ -45,23 +51,81 @@
     ]
   },
   "currentQualification": {
-    "evidence": "_build/epub-next/acceptance-* and _build/epub-interaction/acceptance*",
-    "tests": {
-      "readingSettings": 26,
-      "documentPreferences": 28,
-      "workspaceDpr100": 19,
-      "workspaceDpr150": 63
+    "evidence": "_build/epub-r02-r05",
+    "workspaceDpr100": {
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": "_build/epub-r02-r05/final100d"
     },
+    "workspaceDpr200": {
+      "passed": 33,
+      "failed": 0,
+      "skipped": 1,
+      "evidence": "_build/epub-r02-r05/final200c"
+    },
+    "nativePackageCases": 19,
+    "epubCheckCases": 6,
+    "readerEngineThemeCases": 24,
     "observedDevicePixelRatios": [
       1,
-      1.5
+      2
     ],
     "connectedMonitorCount": 1,
-    "monitor": "MSI MAG281URF",
-    "realKoreanIme": "Physical G K S R M F and Space input; composition observed across preview delay; committed Korean and focus verified at both scales",
-    "frameEvidence": "_build/epub-next/acceptance-frames150; same chapter, chapter boundaries and resize in light/dark",
-    "sourceIntegrity": "Owned fixtures and user EPUB originals preserved by read-only/byte comparison checks",
-    "saveCopy": "Resource, cursor, selection and focus restored after successful Save As reload"
+    "monitor": "\\\\.\\DISPLAY33",
+    "nativeDisplayScale": 1.5,
+    "realKoreanIme": "Win32 SendInput G K S R M F and Space events in the owned editor at observed DPR 1 and 2; native Korean composition across delayed preview and committed text/focus verified",
+    "frameEvidence": [
+      "_build/epub-r02-r05/final100d/frames",
+      "_build/epub-r02-r05/final200c/frames"
+    ],
+    "sourceIntegrity": "Owned originals SHA256 preserved; independent strict XML and unchanged ZIP payload comparisons for EPUB2/3 saved copies",
+    "saveCopy": "Per-resource QTextDocument identity, undo, cursor and selection retained for unchanged resources; structural undo priority verified",
+    "compatibility": {
+      "manifest": "_build/epub-r02-r05/compatibility5/corpus/manifest.json",
+      "toolchain": "_build/epub-r02-r05/compatibility5/toolchain.json",
+      "readerHost": "Two independent reader engines share the QtWebEngine host; external application acceptance not claimed"
+    },
+    "limitations": [
+      "Source-position mapping requires well-formed publisher XML within 2097152 UTF-16 code units, 32768 elements and depth 128; arbitrary browser DOM normalization is outside the measured corpus",
+      "Complex captions and existing property values beyond form limits are preserved and edited in source; CSS computed cascade dimensions are not inferred"
+    ],
+    "commonTests": {
+      "readingSettings": 26,
+      "inputTransfer": 40,
+      "resources": 4
+    },
+    "sourcePositionDpr200Retest": "_build/epub-r02-r05/final200c",
+    "nativePackageEvidence": "_build/epub-r02-r05/native-package-dimensions.log",
+    "testIsolation": {
+      "initialBackgroundFocusObservation": "_build/epub-r02-r05/final200b/tests.txt",
+      "isolatedPass": "_build/epub-r02-r05/background200-retest",
+      "finalCombinedPass": "_build/epub-r02-r05/final200c",
+      "cleanup": "Precise source-position test waits for EpubProcessView::IsDrained before the next GUI test; no focus assertions disabled"
+    },
+    "localIntegratedDelivery": {
+      "evidence": "_build/epub-r02-r05/delivery2/completion.json",
+      "productFilesVerified": 278,
+      "protectedFilesPreserved": 22,
+      "installedRuntimeReady": true,
+      "productEntryTests": [
+        {
+          "name": "epub-product-keys",
+          "exitCode": 0,
+          "passed": 6,
+          "failed": 0,
+          "skipped": 0
+        },
+        {
+          "name": "compare-directory-probe",
+          "exitCode": 0,
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0
+        }
+      ],
+      "published": false
+    }
   },
   "manualAcceptance": [
     "Physical movement between multiple monitors of different DPI: not tested; only one monitor is connected",
@@ -222,5 +286,24 @@
       "Windows TSF candidate windows and screen-reader user sessions",
       "Full publication CSS syntax and EPUBCheck validation for authored output"
     ]
+  },
+  "qualificationBeforeR02R05": {
+    "evidence": "_build/epub-next/acceptance-* and _build/epub-interaction/acceptance*",
+    "tests": {
+      "readingSettings": 26,
+      "documentPreferences": 28,
+      "workspaceDpr100": 19,
+      "workspaceDpr150": 63
+    },
+    "observedDevicePixelRatios": [
+      1,
+      1.5
+    ],
+    "connectedMonitorCount": 1,
+    "monitor": "MSI MAG281URF",
+    "realKoreanIme": "Physical G K S R M F and Space input; composition observed across preview delay; committed Korean and focus verified at both scales",
+    "frameEvidence": "_build/epub-next/acceptance-frames150; same chapter, chapter boundaries and resize in light/dark",
+    "sourceIntegrity": "Owned fixtures and user EPUB originals preserved by read-only/byte comparison checks",
+    "saveCopy": "Resource, cursor, selection and focus restored after successful Save As reload"
   }
 }

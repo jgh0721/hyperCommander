@@ -1,3 +1,4 @@
+import { createSourcePositions, placeSourcePosition } from "./sourcePositions.js";
 import { createReadingAnnotations } from "./readingAnnotations.js";
 
 // Trusted reader controls; all publication markup remains passive.
@@ -26,6 +27,7 @@ export function findText(section, query, limit = 200) {
 export function validCfi(value) { return typeof value === "string" && value.length <= 8192 && /^epubcfi\([^\u0000-\u001f\u007f-\u009f\u2028\u2029]+\)$/u.test(value); }
 export function createReaderTools({ publication, documents, snapshot, restore, book, apply, navigate, remember=()=>{} }) {
     const annotations=createReadingAnnotations({book,documents});
+    const sourcePositions=createSourcePositions(snapshot);
     let result = { serial: 0 }, popup = null, dialog = null, focus = null;
     const hooked = new WeakSet();
     const close = () => { dialog?.remove(); dialog=null; popup=null; if(focus?.isConnected)focus.focus();else window.hcFocusReading?.(); };
@@ -63,7 +65,7 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         show("footnote",{text:target.textContent.trim().slice(0,8192)});
     }
     function hook(doc) {
-        if(hooked.has(doc))return;hooked.add(doc);annotations.hook(doc);
+        if(hooked.has(doc))return;hooked.add(doc);annotations.hook(doc);sourcePositions.hook(doc);
         for(const image of doc.images){image.tabIndex=0;image.setAttribute("role","button");image.setAttribute("aria-label",image.alt||"책 이미지 확대");}
         doc.addEventListener("keydown",event=>{if(!event.isComposing && event.target.matches?.("img") && ["Enter"," "].includes(event.key)){event.preventDefault();event.target.click();}});
         doc.addEventListener("click",e=>{
@@ -80,6 +82,7 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         const {action,value,serial}=request;result={serial,busy:true};
         try {
             if(["annotations-set","annotation-capture","annotation-resolve"].includes(action)){await annotations.action(request);result={serial,annotation:true};}
+            else if(action==="source-position") {const doc=documents()[0];if(!doc)throw Error("본문이 준비되지 않았습니다.");placeSourcePosition(doc,value);sourcePositions.capture(doc);result={serial,located:true};}
             else if(action==="search") {
                 const b=book();if(!b)throw Error("EPUB.js 검색을 사용할 수 없습니다.");
                 const hits=[];let characters=0,limited=false;
@@ -100,5 +103,5 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         } catch(error) {result={serial,error:String(error)};}
     }
     window.hcDismissPopup = () => {if(!dialog)return false;close();return true;};
-    return {hook,action,cancelAnnotations:annotations.cancel,state:()=>({...annotations.state(),readerAction:result,popup})};
+    return {hook,action,cancelAnnotations:annotations.cancel,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),readerAction:result,popup})};
 }

@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--native", action="store_true", help="Open original EPUB with the C++ package reader")
+    parser.add_argument("--compatibility-manifest", type=Path, help="Owned compatibility corpus including edited Save As copies")
     parser.add_argument("--typography", action="store_true", help="Observe typography corpus capabilities; not a compatibility pass")
     parser.add_argument("--require-reading-overrides", action="store_true", help="Fail unless typography override and restoration capabilities pass")
     args = parser.parse_args()
@@ -36,6 +37,15 @@ def main():
     startup.wShowWindow = 0
     cases = []
     filenames = ["epub3-images.epub"] if args.quick else ["epub3-images.epub", "epub2-ncx.epub"]
+    if args.compatibility_manifest:
+        manifest = json.loads(args.compatibility_manifest.read_text(encoding="utf-8"))
+        filenames = [case["file"] for case in manifest["cases"]]
+        if not args.native or args.typography or not filenames or len(filenames) > 32:
+            parser.error("Compatibility matrix requires native mode, 1..32 cases and no typography mode")
+        for case in manifest["cases"]:
+            name = case["file"]
+            if Path(name).name != name or not name.endswith(".epub") or hashlib.sha256((args.corpus/name).read_bytes()).hexdigest() != case["sha256"]:
+                parser.error("Invalid compatibility corpus path or hash")
     if args.typography:
         filenames = [case["file"] for case in json.loads((args.corpus/"manifest.json").read_text(encoding="utf-8"))["cases"]]
         if any(Path(name).name != name or not name.endswith(".epub") for name in filenames):
@@ -59,6 +69,7 @@ def main():
                 result = json.loads((evidence/"result.json").read_text(encoding="utf-8")) if (evidence/"result.json").exists() else {}
                 record = dict(case=name, exitCode=run.returncode, status=result.get("status", "no-result"),
                               elapsedSeconds=round(time.monotonic()-started, 3), checks=result.get("checks", {}),
+                              sourcePositionChecks=result.get("sourcePositionChecks", {}),
                               sourcePreserved=source.read_bytes() == original)
                 if args.typography:
                     record["capabilities"] = result.get("capabilities", {})
@@ -71,7 +82,7 @@ def main():
                         record["readingOverridesAccepted"] = all(record["capabilities"].get(key) is True for key in required)
                 cases.append(record)
                 print(json.dumps(record, ensure_ascii=False), flush=True)
-    summary = dict(schemaVersion=1, phase="P0-B-typography" if args.typography else "P0-B", inputMode="native-epub" if args.native else "python-snapshot", cases=cases,
+    summary = dict(schemaVersion=1, phase="compatibility-save-as" if args.compatibility_manifest else "P0-B-typography" if args.typography else "P0-B", inputMode="native-epub" if args.native else "python-snapshot", cases=cases,
                    executableSha256=hashlib.sha256(args.executable.read_bytes()).hexdigest(),
                    bundle=json.loads((args.bundle/"bundle.json").read_text(encoding="utf-8")))
     (args.output/"validation.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

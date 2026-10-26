@@ -26,7 +26,7 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
     if(previewRuntime_)return;previewRuntime_=Runtime;previewPreferredChapter_=previewRestoreChapter_=Chapter;
     auto* Panel=new QWidget(previewSplitter_);auto* Layout=new QVBoxLayout(Panel);Layout->setContentsMargins(4,4,4,4);
     auto* Controls=new QHBoxLayout;previewAutomatic_=new QCheckBox(tr("실시간 미리보기"),Panel);previewAutomatic_->setChecked(true);previewAutomatic_->setObjectName("epubAutoPreview");
-    previewSynchronize_=new QCheckBox(tr("소스·본문 장 연결"),Panel);previewSynchronize_->setChecked(true);previewSynchronize_->setObjectName("epubPreviewSync");
+    previewSynchronize_=new QCheckBox(tr("소스·본문 위치 연결"),Panel);previewSynchronize_->setChecked(true);previewSynchronize_->setObjectName("epubPreviewSync");
     auto* Refresh=new QPushButton(tr("미리보기 갱신"),Panel);Refresh->setObjectName("epubPreviewRefresh");Controls->addWidget(previewAutomatic_);Controls->addWidget(previewSynchronize_);Controls->addStretch();Controls->addWidget(Refresh);Layout->addLayout(Controls);
     previewStatus_=new QLabel(tr("저장 전 미리보기 · 원문 스타일 · 사용자 읽기 설정과 기록은 유지됩니다."),Panel);previewStatus_->setTextFormat(Qt::PlainText);previewStatus_->setWordWrap(true);previewStatus_->setAccessibleName(tr("EPUB 미리보기 상태"));Layout->addWidget(previewStatus_);
     auto* Frame=new QWidget(Panel);Frame->setMinimumSize(240,160);Frame->setObjectName("epubPreviewFrame");previewStack_=new QStackedLayout(Frame);previewStack_->setContentsMargins(0,0,0,0);previewStack_->setStackingMode(QStackedLayout::StackAll);Layout->addWidget(Frame,1);
@@ -138,7 +138,7 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
     }
     if(previewCandidateSerial_>=0 && State["readerAction"].toObject()["serial"].toInteger()<previewCandidateSerial_)return;
     if(!State["inputEnabled"].toBool()) {if(!previewCandidateInputRequested_)previewCandidateInputRequested_=Candidate->ReaderAction("enable-input",true);return;}
-    auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();
+    auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;sourceSelectionSerial_=-1;if((sourceSyncPending_ || text_->hasFocus()) && previewSynchronize_->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();
     if(Old)retirePreview(Old);
     const auto LocationError=State["readerAction"].toObject()["error"].toString();
     previewStatus_->setText(LocationError.isEmpty()?tr("저장 전 미리보기 · 원문 스타일 · 표시된 내용은 아직 파일에 저장되지 않았습니다."):tr("미리보기를 갱신했습니다. 이전 읽기 위치를 복원하지 못해 장 위치를 확인해 주세요."));emit PreviewCommitted();emit StateChanged();
@@ -150,6 +150,7 @@ void EpubSourceEditor::syncPreviewSource(bool Force) {
     const auto Spine=model_.Publication()["spine"].toArray();const int Chapter=State["chapterIndex"].toInt(-1);if(Chapter<0 || Chapter>=Spine.size())return;
     if(previewActiveToken_==Token())recoveryLocator_=State["locator"].toString();
     if(!previewSynchronize_->isChecked())return;
+    if(!Force && !text_->hasFocus() && selectPreviewSource())return;
     if(Force){int Index=-1;for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Index=I;
         if(Index>=0 && Index!=Chapter && previewView_->ReaderAction("chapter",Index))previewNavigationSerial_=State["readerAction"].toObject()["serial"].toInteger()+1;return;}
     if(Chapter==previewChapter_)return;previewChapter_=Chapter;

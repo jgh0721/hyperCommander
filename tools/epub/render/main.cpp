@@ -546,6 +546,14 @@ namespace
         {
             if(finished_) return;
             if(evidence_.isEmpty()) {latest_=Result;if(Result["status"]=="error"){finished_=true;poll_.stop();}statusBar()->showMessage(Result["status"].toString() + ": " + Result["message"].toString()); return; }
+#ifndef HC_EPUB_PRODUCT_HELPER
+            // A hidden panel retains its startup scrollbar range. Measure the
+            // comparison window only after showing and laying out its settings.
+            if(settingsScroll_->isHidden()) {
+                poll_.stop();readAction("focus-settings",{});
+                QTimer::singleShot(100,this,[this,Result]{finish(Result);});return;
+            }
+#endif
             finished_ = true; poll_.stop();
             if(!expectedBookFont_.isEmpty()) {
                 const auto Final = Result["final"].toObject();

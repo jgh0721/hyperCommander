@@ -2,6 +2,7 @@
 #include "epubEditModel.hpp"
 #include "epubArchive.hpp"
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QDomDocument>
 #include <QDateTime>
 #include <QDir>
@@ -12,6 +13,7 @@
 #include <QPainter>
 #include <QRegularExpression>
 #include <QUrl>
+#include <QXmlStreamReader>
 #include <QUuid>
 #include <new>
 namespace hc::document::epub {
@@ -132,7 +134,7 @@ void Package::toc(const QJsonArray& Rows) {
     QDomDocument Document;QDomElement Container;
     if(Path.isEmpty()) {
         Path=QFileInfo(rootfile_).path()+"/hc-toc-"+QUuid::createUuid().toString(QUuid::Id128)+(Epub2?".ncx":".xhtml");
-        auto Root=element(Document,Epub2?Ncx:Xhtml,Epub2?"ncx":"html");Root.setAttribute("xmlns",Epub2?Ncx:Xhtml);Document.appendChild(Root);
+        auto Root=element(Document,Epub2?Ncx:Xhtml,Epub2?"ncx":"html");Document.appendChild(Root);
         if(Epub2) {
             Root.setAttribute("version","2005-1");auto Head=element(Document,Ncx,"head");Root.appendChild(Head);auto Meta=element(Document,Ncx,"meta");Meta.setAttribute("name","dtb:uid");
             const auto Unique=opf_.documentElement().attribute("unique-identifier");const auto Ids=opf_.elementsByTagNameNS("http://purl.org/dc/elements/1.1/","identifier");QString Identifier;
@@ -230,7 +232,7 @@ void Package::cover(const QString& Path) {
     if(!Old.isEmpty() && Old!=Path)references(Old,Path,false,false);
 }
 void Package::chapter(const QString& Path,const QString& Title,int After) {
-    if(Title.trimmed().isEmpty() || Title.size()>1024)Reject("edit-chapter-title");QDomDocument Document;auto Html=element(Document,Xhtml,"html");Html.setAttribute("xmlns",Xhtml);const auto Languages=publication_["languages"].toArray();const auto Language=Languages.isEmpty()?QString{}:Languages.first().toString();if(!Language.isEmpty())Html.setAttributeNS("http://www.w3.org/XML/1998/namespace","xml:lang",Language);Document.appendChild(Html);
+    if(Title.trimmed().isEmpty() || Title.size()>1024)Reject("edit-chapter-title");QDomDocument Document;auto Html=element(Document,Xhtml,"html");const auto Languages=publication_["languages"].toArray();const auto Language=Languages.isEmpty()?QString{}:Languages.first().toString();if(!Language.isEmpty())Html.setAttributeNS("http://www.w3.org/XML/1998/namespace","xml:lang",Language);Document.appendChild(Html);
     auto Head=element(Document,Xhtml,"head");Head.appendChild(element(Document,Xhtml,"title",Title));Html.appendChild(Head);auto Body=element(Document,Xhtml,"body");Body.appendChild(element(Document,Xhtml,"h1",Title));Body.appendChild(element(Document,Xhtml,"p",QStringLiteral("새 문단")));Html.appendChild(Body);add(Path,"application/xhtml+xml",bytes(Document));
     auto Ref=element(opf_,Opf,"itemref");Ref.setAttribute("idref",item(Path).attribute("id"));QList<QDomElement> Spine;for(auto Node=spine().firstChildElement();!Node.isNull();Node=Node.nextSiblingElement())if(Node.localName()=="itemref")Spine.append(Node);
     if(After>=0 && After<Spine.size())spine().insertAfter(Ref,Spine[After]);else spine().appendChild(Ref);
@@ -243,6 +245,7 @@ void Package::move(const QString& Path,int Delta) {
 }
 QString EditModel::Structure(const QJsonObject& Request,const Cancellation& Cancel) {
     try {
+        if(Request["operation"]=="metadata" || Request["operation"]=="image-attributes")return modifyProperties(Request,Cancel);
         const auto Current=Export({},Cancel);if(!Current)return Current.error_+": "+Current.location_;const auto Prepared=Prepare(Current.bytes_,Cancel);if(!Prepared)return Prepared.error_+": "+Prepared.location_;
         Package Book(Current.bytes_,Prepared.publication_,Cancel);const auto Action=Request["operation"].toString(),Path=Request["resource"].toString();
         if(Action=="image-add") {
@@ -272,4 +275,78 @@ QString EditModel::Structure(const QJsonObject& Request,const Cancellation& Canc
         auto Before=state();edition_=CandidateBytes;publication_=Candidate.publication_;media_=Candidate.media_;replacements_.clear();record(std::move(Before));return {};
     }catch(const Rejected& Error){return Error.code_+(Error.location_.isEmpty()?QString{}:": "+Error.location_);}catch(const std::bad_alloc&){return "edit-structure-memory-limit";}
 }
+namespace {
+const QString Dc="http://purl.org/dc/elements/1.1/";
+QDomDocument propertyXml(const QByteArray& Bytes,const QString& Path) {
+    QXmlStreamReader Reader(Bytes);XhtmlEntities Entities;Entities.enabled_=true;Reader.setEntityResolver(&Entities);int Nodes=0,Depth=0;
+    while(!Reader.atEnd()){const auto Token=Reader.readNext();if(Token==QXmlStreamReader::StartElement && (++Nodes>32768 || ++Depth>128))Reject("edit-property-xml-budget",Path);if(Token==QXmlStreamReader::EndElement)--Depth;if(Token==QXmlStreamReader::DTD && !PassiveDoctype(Reader))Reject("xml-dtd-or-entity",Path);}
+    if(Reader.hasError())Reject("edit-xml-syntax",Path);return xml(Bytes,Path);
+}
+QString contentHash(const QByteArray& Bytes){return QString::fromLatin1(QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256).toHex());}
+QDomElement atPath(QDomDocument& Document,const QJsonArray& Path) {
+    auto Node=Document.documentElement();if(Path.size()>128)Reject("edit-image-position");
+    for(const auto& Part:Path){if(!Part.isDouble() || Part.toDouble()!=Part.toInt(-1) || Part.toInt(-1)<0)Reject("edit-image-position");int I=0;auto Child=Node.firstChildElement();for(;!Child.isNull() && I<Part.toInt();++I)Child=Child.nextSiblingElement();if(Child.isNull())Reject("edit-image-position");Node=Child;}return Node;
+}
+QJsonObject captionInfo(const QDomElement& Image) {
+    const auto Parent=Image.parentNode().toElement();const bool Figure=Parent.namespaceURI()==Xhtml && (Parent.localName()=="figure" || Parent.localName()=="div" && tokens(Parent.attribute("class")).contains("hc-image-figure"));
+    auto Caption=Figure?child(Parent,Xhtml,"figcaption"):QDomElement{};if(Figure && Caption.isNull())for(auto Node=Parent.firstChildElement();!Node.isNull();Node=Node.nextSiblingElement())if(Node.localName()=="p" && tokens(Node.attribute("class")).contains("hc-image-caption")){Caption=Node;break;}
+    const bool Allowed=Figure?Parent.elementsByTagNameNS(Xhtml,"img").size()==1:Parent.namespaceURI()==Xhtml && QStringList{"body","div","section","article","li","td","aside"}.contains(Parent.localName());
+    return {{"caption",Caption.text()},{"captionEditable",Allowed && Caption.firstChildElement().isNull()}};
+}
+bool imageUses(const QString& Document,const QDomElement& Node,const QString& Path) {
+    bool Uses=false;const auto Check=[&](const QString& Value){Uses|=resolve(Document,Value)==Path;return Value;};
+    for(const auto& Name:{"src","href"})Check(Node.attribute(Name));Check(Node.attributeNS("http://www.w3.org/1999/xlink","href"));srcsetReferences(Node.attribute("srcset"),Check);return Uses;
+}
+}
+QJsonObject EditModel::Metadata()const {
+    try {const auto Path=publication_["rootfile"].toString();const auto Data=Read(Path);auto Document=propertyXml(Data,Path);const auto Root=child(Document.documentElement(),Opf,"metadata");QJsonObject Values,Counts;
+        for(const auto& Name:{"title","creator","language","publisher","description","identifier"}){const auto Elements=Root.elementsByTagNameNS(Dc,Name);Values[Name]=Elements.isEmpty()?QString{}:Elements.at(0).toElement().text();Counts[Name]=Elements.size();}
+        return {{"resource",Path},{"sha256",contentHash(Data)},{"values",Values},{"counts",Counts}};
+    }catch(const Rejected& Error){return {{"error",Error.code_},{"location",Error.location_}};}catch(const std::bad_alloc&){return {{"error","edit-property-memory-limit"}};}
+}
+QJsonObject EditModel::InspectImage(const QString& Path,const Cancellation& Cancel)const {
+    try {
+        if(!media_.value(Path).startsWith("image/"))Reject("edit-image-resource",Path);QJsonArray Rows;
+        for(auto I=media_.begin();I!=media_.end();++I){
+            Check(Cancel);const auto Resource=I.key(),Media=I.value();
+            if(Media=="text/css"){bool Uses=false;cssReferences(QString::fromUtf8(Read(Resource)),[&](const QString& Url){Uses|=resolve(Resource,Url)==Path;return Url;});if(Uses)Rows.append(QJsonObject{{"document",Resource},{"editable",false},{"kind","css"}});continue;}
+            if(Media!="application/xhtml+xml" && Media!="image/svg+xml")continue;const auto Data=Read(Resource);auto Document=propertyXml(Data,Resource);const auto Hash=contentHash(Data);QJsonArray Stylesheets;const auto Links=Document.elementsByTagNameNS(Xhtml,"link");for(int J=0;J<Links.size();++J){const auto Link=Links.at(J).toElement();if(tokens(Link.attribute("rel").toLower()).contains("stylesheet")){const auto Css=resolve(Resource,Link.attribute("href"));if(media_.value(Css)=="text/css" && !Stylesheets.contains(Css))Stylesheets.append(Css);}}
+            struct Location {QDomElement node_;QJsonArray path_;};QList<Location> Pending{{Document.documentElement(),{}}};
+            while(!Pending.isEmpty()) {
+                Check(Cancel);auto Location=Pending.takeLast();const auto Node=Location.node_;const bool Direct=imageUses(Resource,Node,Path);bool Css=false;cssReferences(Node.attribute("style"),[&](const QString& Url){Css|=resolve(Resource,Url)==Path;return Url;});
+                if(Node.localName()=="style")cssReferences(Node.text(),[&](const QString& Url){Css|=resolve(Resource,Url)==Path;return Url;});
+                if(Direct || Css){auto Row=captionInfo(Node);Row["document"]=Resource;Row["elementPath"]=Location.path_;Row["sha256"]=Hash;Row["stylesheets"]=Stylesheets;Row["editable"]=Direct && Node.namespaceURI()==Xhtml && Node.localName()=="img";Row["kind"]=Direct?Node.tagName():"css";Row["alt"]=Node.attribute("alt");Row["hasAlt"]=Node.hasAttribute("alt");Row["width"]=Node.attribute("width");Row["height"]=Node.attribute("height");Row["style"]=Node.attribute("style");Rows.append(Row);if(Rows.size()>4096)Reject("edit-image-occurrence-limit");}
+                int Index=0;for(auto Child=Node.firstChildElement();!Child.isNull();Child=Child.nextSiblingElement()){auto Next=Location.path_;Next.append(Index++);if(Next.size()>128)Reject("edit-image-position");Pending.append({Child,Next});}
+            }
+        }
+        QString Width,Height;if(media_.value(Path)=="image/svg+xml"){const auto Svg=propertyXml(Read(Path),Path).documentElement();Width=Svg.attribute("width");Height=Svg.attribute("height");}else{QBuffer Buffer;Buffer.setData(Read(Path));Buffer.open(QIODevice::ReadOnly);QImageReader Reader(&Buffer);const auto Size=Reader.size();if(Size.isValid()){Width=QString::number(Size.width());Height=QString::number(Size.height());}}
+        return {{"resource",Path},{"width",Width},{"height",Height},{"occurrences",Rows}};
+    }catch(const Rejected& Error){return {{"error",Error.code_},{"location",Error.location_}};}catch(const std::bad_alloc&){return {{"error","edit-property-memory-limit"}};}
+}
+QString EditModel::modifyProperties(const QJsonObject& Request,const Cancellation& Cancel) {
+    const auto Action=Request["operation"].toString();const auto Path=Action=="metadata"?publication_["rootfile"].toString():Request["document"].toString();
+    if(!media_.contains(Path))Reject("edit-property-resource",Path);const auto Raw=Read(Path);if(contentHash(Raw)!=Request["expectedSha256"].toString())Reject("edit-property-revision-changed",Path);auto Document=propertyXml(Raw,Path);
+    if(Action=="metadata") {
+        const auto Values=Request["values"].toObject();auto Metadata=child(Document.documentElement(),Opf,"metadata");if(Metadata.isNull() || Values.isEmpty())Reject("edit-metadata-values");
+        for(auto I=Values.begin();I!=Values.end();++I){const auto Key=I.key(),Value=I.value().toString();if(!I.value().isString() || !QStringList{"title","creator","language","publisher","description"}.contains(Key) || Value.size()>(Key=="description"?8192:1024) || Value.contains(QChar::Null))Reject("edit-metadata-value",Key);
+            if(Key=="title" && Value.trimmed().isEmpty())Reject("edit-metadata-title");if(Key=="language" && !QRegularExpression("^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$").match(Value).hasMatch())Reject("edit-metadata-language");
+            auto Field=child(Metadata,Dc,Key);if(Field.isNull()){Field=Document.createElementNS(Dc,"dc:"+Key);Metadata.appendChild(Field);}while(!Field.firstChild().isNull())Field.removeChild(Field.firstChild());Field.appendChild(Document.createTextNode(Value));
+        }
+        if(Document.documentElement().attribute("version")!="2.0"){QDomElement Modified;for(auto Node=Metadata.firstChildElement();!Node.isNull();Node=Node.nextSiblingElement())if(Node.attribute("property")=="dcterms:modified"){Modified=Node;break;}if(Modified.isNull()){Modified=element(Document,Opf,"meta");Modified.setAttribute("property","dcterms:modified");Metadata.appendChild(Modified);}while(!Modified.firstChild().isNull())Modified.removeChild(Modified.firstChild());Modified.appendChild(Document.createTextNode(QDateTime::currentDateTimeUtc().toString("yyyy-MM-dd'T'HH:mm:ss'Z'")));}
+    }else {
+        if(media_.value(Path)!="application/xhtml+xml" || !Request["elementPath"].isArray())Reject("edit-image-position");auto Image=atPath(Document,Request["elementPath"].toArray());if(Image.namespaceURI()!=Xhtml || Image.localName()!="img" || !imageUses(Path,Image,Request["resource"].toString()))Reject("edit-image-position");
+        if(Request.contains("alt")){if(!Request["alt"].isString() || Request["alt"].toString().size()>2048)Reject("edit-image-alt-limit");Image.setAttribute("alt",Request["alt"].toString());}
+        for(const auto& Key:QStringList{"width","height"})if(Request.contains(Key)) {
+            if(!Request[Key].isString())Reject("edit-image-dimension");const auto Value=Request[Key].toString();
+            if(Value.isEmpty())Image.removeAttribute(Key);else {if(!QRegularExpression("^[0-9]{1,6}$").match(Value).hasMatch())Reject("edit-image-dimension");Image.setAttribute(Key,Value);}
+        }
+        if(Request.contains("caption")) {
+            if(!Request["caption"].isString() || Request["caption"].toString().size()>4096 || !captionInfo(Image)["captionEditable"].toBool())Reject("edit-image-caption-structure");const auto Text=Request["caption"].toString();auto Figure=Image.parentNode().toElement();
+            const bool Epub2=publication_["packageVersion"]=="2.0";const bool Wrapped=Figure.localName()=="figure" || Figure.localName()=="div" && tokens(Figure.attribute("class")).contains("hc-image-figure");if(!Wrapped && !Text.isEmpty()){auto Next=element(Document,Xhtml,Epub2?"div":"figure");if(Epub2)Next.setAttribute("class","hc-image-figure");Figure.replaceChild(Next,Image);Next.appendChild(Image);Figure=Next;}
+            auto Caption=child(Figure,Xhtml,"figcaption");if(Caption.isNull())for(auto Node=Figure.firstChildElement();!Node.isNull();Node=Node.nextSiblingElement())if(Node.localName()=="p" && tokens(Node.attribute("class")).contains("hc-image-caption")){Caption=Node;break;}if(!Caption.isNull() && Text.isEmpty())Figure.removeChild(Caption);else if(!Text.isEmpty()){if(Caption.isNull()){Caption=element(Document,Xhtml,Epub2?"p":"figcaption");if(Epub2)Caption.setAttribute("class","hc-image-caption");Figure.appendChild(Caption);}while(!Caption.firstChild().isNull())Caption.removeChild(Caption.firstChild());Caption.appendChild(Document.createTextNode(Text));}
+        }
+    }
+    Check(Cancel);const auto Next=bytes(Document);if(Next==Raw)return {};auto Candidate=*this;const auto Error=Candidate.Replace(Path,Next);if(!Error.isEmpty())return Error;const auto Verified=Candidate.Export({},Cancel);if(!Verified)return Verified.error_+": "+Verified.location_;auto Before=state();replacements_=Candidate.replacements_;record(std::move(Before));return {};
+}
+
 }

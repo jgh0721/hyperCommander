@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+import xml.etree.ElementTree as ET
 from make_corpus import archive, generate, publication, webp
 from prepare_render import prepare
 
@@ -74,6 +75,21 @@ class NativePackageTests(unittest.TestCase):
             self.assertEqual(result["error"], error)
             self.assertNotIn("resources", result)
         return result
+
+    def test_save_as_new_chapter_has_strict_xml(self):
+        for version in ("2.0", "3.0"):
+            with self.subTest(version=version):
+                source=self.root/(version+"-original.epub");source.write_bytes(archive(publication(version)))
+                original=source.read_bytes();request=self.root/(version+"-requests.json")
+                request.write_text(json.dumps([dict(operation="chapter-add",resource="EPUB/Text/new.xhtml",title="새 장",after=0)]),encoding="utf-8")
+                destination=self.root/(version+"-saved.epub")
+                run=subprocess.run([str(EXECUTABLE),str(source),"--edit-requests",str(request),"--output",str(destination)],capture_output=True,timeout=30)
+                self.assertEqual(run.returncode,0,run.stdout.decode("utf-8","replace"))
+                with zipfile.ZipFile(destination) as saved:
+                    for name in saved.namelist():
+                        if name.endswith((".xhtml",".opf",".ncx",".xml",".svg")):
+                            ET.fromstring(saved.read(name))
+                self.assertEqual(source.read_bytes(),original)
 
     def test_corpus_and_python_snapshot_parity(self):
         manifest = generate(self.root / "corpus")

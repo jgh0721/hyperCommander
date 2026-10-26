@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import {findText,validCfi} from "./readerTools.js";
+import {build} from "esbuild";
+import {fileURLToPath} from "node:url";
+// Match the product bundler: EPUB.js upstream imports omit .js extensions.
+const bundled=await build({stdin:{contents:'export {findText,validCfi} from "./readerTools.js";',resolveDir:fileURLToPath(new URL(".",import.meta.url))},bundle:true,platform:"node",format:"esm",write:false});
+const {findText,validCfi}=await import("data:text/javascript;base64,"+Buffer.from(bundled.outputFiles[0].contents).toString("base64"));
 const section = chunks => {
     const nodes=chunks.map(textContent=>({textContent,parentElement:{closest:()=>null}}));let index=0;
     return {document:{documentElement:{},createTreeWalker:()=>{index=0;return {nextNode:()=>nodes[index++]};},createRange:()=>({setStart(node,offset){this.start=[nodes.indexOf(node),offset];},setEnd(node,offset){this.end=[nodes.indexOf(node),offset];}})},cfiFromRange:r=>JSON.stringify([r.start,r.end])};
