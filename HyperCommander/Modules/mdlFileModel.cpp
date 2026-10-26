@@ -6,6 +6,29 @@
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QFutureWatcher>
+#include <QJsonDocument>
+#include "UniqueLibs/startupTrace.hpp"
+
+namespace {
+struct CompiledFileRules {
+    hc::settings::FileColorRules rules_;
+    QString error_;
+};
+QFuture<CompiledFileRules> SharedFileRules(const QJsonObject& Document)
+{
+    // Called on the GUI thread. Futures retain immutable compilation results;
+    // each model keeps its own evaluation context, cache and generation guard.
+    static QList<QPair<QByteArray, QFuture<CompiledFileRules>>> Cache;
+    const auto Key = QJsonDocument(Document).toJson(QJsonDocument::Compact);
+    for (const auto& Item : Cache) if (Item.first == Key) return Item.second;
+    while (Cache.size() >= 8) Cache.removeFirst();
+    auto Future = QtConcurrent::run([Document] {
+        hc::startup::Span Trace("rules.compile");
+        CompiledFileRules Result; Result.error_ = Result.rules_.Load(Document); return Result;
+    });
+    Cache.append({Key, Future}); return Future;
+}
+}
 
 DECLARE_CMNLIBSV2_NAMESPACE
 
@@ -281,17 +304,15 @@ void CFsModelT::SetColorScheme( const TyColorScheme& ColorScheme )
         fileRuleDocument_ = Document; fileRulesLoading_ = false; fileRulesError_.clear(); const auto Generation = ++fileRuleLoadGeneration_;
         if (hc::settings::FileColorRules::HasRegex(Document)) {
             fileRulesLoading_ = true;
-            auto Previous = fileColorRules_;
-            auto Failure=std::make_shared<QString>();
             fileColorRules_.Load(hc::settings::FileColorRules::Empty());
-            auto* Watcher = new QFutureWatcher<hc::settings::FileColorRules>(this);
-            connect(Watcher, &QFutureWatcher<hc::settings::FileColorRules>::finished, this, [this, Watcher, Generation, Failure] {
-                auto Rules = Watcher->future().takeResult(); Watcher->deleteLater();
+            auto* Watcher = new QFutureWatcher<CompiledFileRules>(this);
+            connect(Watcher, &QFutureWatcher<CompiledFileRules>::finished, this, [this, Watcher, Generation] {
+                auto Result = Watcher->result(); Watcher->deleteLater();
                 if (Generation != fileRuleLoadGeneration_) return;
-                fileRulesError_=*Failure; fileRulesLoading_ = false; fileColorRules_ = std::move(Rules); fileColorCache_.clear();
-                if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole});
+                fileRulesError_ = Result.error_; fileRulesLoading_ = false; fileColorRules_ = std::move(Result.rules_); fileColorCache_.clear();
+                if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {});
             });
-            Watcher->setFuture(QtConcurrent::run([Document, Previous, Failure]() mutable { *Failure=Previous.Load(Document); return Previous; }));
+            Watcher->setFuture(SharedFileRules(Document));
         } else fileRulesError_=fileColorRules_.Load(Document);
     }
     fileRuleClock_->stop(); fileRuleExpiry_.reset();
