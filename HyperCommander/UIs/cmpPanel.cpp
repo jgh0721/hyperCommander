@@ -104,14 +104,55 @@ void CmpPanel::AddTab(bool Navigate)
     if (vecTabStates.size() >= 64) return;
     const int PreviousIndex = ui.tabWidget->currentIndex();
     const auto Previous = Navigate ? CaptureWorkspace(PreviousIndex) : hc::workspace::PaneState{};
+    auto State = std::make_shared<TyTabState>(); State->Index = vecTabStates.size();
+    State->workspace_.id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    vecTabStates.append(State);
+    { QSignalBlocker Blocker(ui.tabWidget);
+      ui.tabWidget->addTab(new QWidget(this), tr("새 탭")); ui.tabWidget->setCurrentIndex(State->Index); }
+    materializeTab(State->Index);
+    auto* View = static_cast<CGridView*>(State->View);
+    auto* Model = static_cast<CFSModel*>(State->Model);
+    if (Navigate) {
+        if (!Previous.tabs_.isEmpty()) {
+            auto Saved = Previous.tabs_.value(Previous.active_); Saved.id_ = State->workspace_.id_;
+            Saved.view_ = View->CaptureWorkspaceView();
+            State->workspace_ = Saved; State->restoreSelection_ = true;
+            // A new tab inherits its panel's display defaults, while navigation
+            // and selection follow the current location.
+            restoreTab(vecTabStates.size() - 1);
+        } else if (const auto Fs = ui.cbxVolume->currentData().value<nsHC::TySpFileSystem>()) {
+            Model->SetRoot(Fs);
+            Model->SetCurrentPath("\\"); Model->Refresh();
+        }
+    }
+    if (Navigate) {
+        const auto Position = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["newTabPosition"].toString("last");
+        const int Last = int(vecTabStates.size()) - 1;
+        const int Target = Position == "first" ? 0 : Position == "left" ? PreviousIndex : Position == "right" ? PreviousIndex + 1 : Last;
+        if (Target >= 0 && Target < Last) {
+            // QTabBar::moveTab keeps the page, signals and stable tab IDs intact.
+            QSignalBlocker Blocker(ui.tabWidget);
+            ui.tabWidget->tabBar()->moveTab(Last, Target);
+            vecTabStates.move(Last, Target);
+            for (int Index = 0; Index < vecTabStates.size(); ++Index) vecTabStates[Index]->Index = Index;
+            ui.tabWidget->setCurrentIndex(Target);
+        }
+    }
+    if (Navigate) on_tabWidget_currentChanged(ui.tabWidget->currentIndex());
+    View->AdjustSizeToContents();
+}
+
+void CmpPanel::materializeTab(int Index)
+{
+    if (Index < 0 || Index >= vecTabStates.size() || vecTabStates[Index]->View) return;
+    hc::startup::Span Trace("tab.materialize");
     auto Columns = TyStColumnMgr::GetInstance()->GetColumnView(0);
     auto* View = static_cast<CGridView*>(createGridView());
     auto* Model = new CFSModel; auto* Proxy = new CFSProxyModel;
     View->SetModel(Model, Proxy, &Columns);
-    const auto State = std::make_shared<TyTabState>(int(vecTabStates.size()), View, nullptr, Model, Proxy);
-    State->workspace_.id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const auto State = vecTabStates[Index];
+    State->View = View; State->Model = Model; State->ProxyModel = Proxy;
     Model->setProperty("hc.tabId", State->workspace_.id_);
-    vecTabStates.append(State);
     connect(View, &CViewT::sig_NotifyViewActivated, this, &CmpPanel::sig_NotifyPanelActivated);
     connect(View, &CGridView::sigViewSettingsChanged, this, &CmpPanel::sigViewSettingsChanged);
     connect(View, &CGridView::sigListPresentationChanged, this, [this, View] {
@@ -241,42 +282,21 @@ void CmpPanel::AddTab(bool Navigate)
         if (const auto Current = retrieveFocusState(); Current && Current->Model == Model)
             processVolumeStatusText(Model->GetRoot());
     });
-    { QSignalBlocker Blocker(ui.tabWidget);
-      ui.tabWidget->addTab(View, tr("새 탭")); ui.tabWidget->setCurrentIndex(vecTabStates.size() - 1); }
-    // uic assigns the pane objectName after its constructor returns. Defer the
-    // initial M3 profile lookup until that stable pane identity is available.
-    if (objectName().isEmpty()) QTimer::singleShot(0, View, [View] { View->RestoreWorkspaceView({}); });
-    else View->RestoreWorkspaceView({});
+    {
+        QSignalBlocker Blocker(ui.tabWidget);
+        const int Current = ui.tabWidget->currentIndex();
+        auto* Placeholder = ui.tabWidget->widget(Index);
+        const auto Title = ui.tabWidget->tabText(Index);
+        const auto Tip = ui.tabWidget->tabToolTip(Index);
+        ui.tabWidget->removeTab(Index); ui.tabWidget->insertTab(Index, View, Title);
+        ui.tabWidget->setTabToolTip(Index, Tip); ui.tabWidget->setCurrentIndex(Current);
+        delete Placeholder;
+    }
+    View->RestoreWorkspaceView(State->pending_ ? hc::workspace::MergeView(workspaceDefaults_, State->workspace_.view_) : QJsonObject{});
     const auto Color = TyStColorSchemeMgr::GetInstance();
     View->ApplyColorScheme(Color->GetColorScheme(Color->GetCurrentColorScheme()));
-    if (Navigate) {
-        if (!Previous.tabs_.isEmpty()) {
-            auto Saved = Previous.tabs_.value(Previous.active_); Saved.id_ = State->workspace_.id_;
-            Saved.view_ = View->CaptureWorkspaceView();
-            State->workspace_ = Saved; State->restoreSelection_ = true;
-            // A new tab inherits its panel's display defaults, while navigation
-            // and selection follow the current location.
-            restoreTab(vecTabStates.size() - 1);
-        } else if (const auto Fs = ui.cbxVolume->currentData().value<nsHC::TySpFileSystem>()) {
-            Model->SetRoot(Fs);
-            Model->SetCurrentPath("\\"); Model->Refresh();
-        }
-    }
-    if (Navigate) {
-        const auto Position = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["newTabPosition"].toString("last");
-        const int Last = int(vecTabStates.size()) - 1;
-        const int Target = Position == "first" ? 0 : Position == "left" ? PreviousIndex : Position == "right" ? PreviousIndex + 1 : Last;
-        if (Target >= 0 && Target < Last) {
-            // QTabBar::moveTab keeps the page, signals and stable tab IDs intact.
-            QSignalBlocker Blocker(ui.tabWidget);
-            ui.tabWidget->tabBar()->moveTab(Last, Target);
-            vecTabStates.move(Last, Target);
-            for (int Index = 0; Index < vecTabStates.size(); ++Index) vecTabStates[Index]->Index = Index;
-            ui.tabWidget->setCurrentIndex(Target);
-        }
-    }
-    if (Navigate) on_tabWidget_currentChanged(ui.tabWidget->currentIndex());
-    View->AdjustSizeToContents();
+    View->SetPanelActive(activePanel_);
+    hc::startup::Record("tab.materialized", {{"tab", State->workspace_.id_}});
 }
 
 void CmpPanel::NotifyDriveRemoved(const QString& Root)
@@ -288,6 +308,7 @@ void CmpPanel::NotifyDriveRemoved(const QString& Root)
         if (Location.kind_ != hc::storage::LocatorKind::Local && Location.kind_ != hc::storage::LocatorKind::Archive) continue;
         if (!QDir::toNativeSeparators(QString::fromStdString(Location.root_)).startsWith(QDir::toNativeSeparators(Root), Qt::CaseInsensitive)) continue;
         const auto State = vecTabStates[Index]; State->workspace_ = Saved.tabs_[Index];
+        if (!State->Model) continue;
         State->Model->setProperty("hc.restoreTicket", QUuid::createUuid().toString());
         State->Model->setProperty("hc.restorePending", false);
         static_cast<CFSModel*>(State->Model)->SetPlaceholder(Location, tr("드라이브가 제거되었습니다."));
@@ -303,6 +324,7 @@ hc::workspace::PaneState CmpPanel::CaptureWorkspace(int OnlyTab) const
         if (OnlyTab >= 0 && Index != OnlyTab) continue;
         const auto& State = vecTabStates[Index];
         auto Tab = State->workspace_;
+        if (!State->View || State->pending_) { Result.tabs_.append(std::move(Tab)); continue; }
         const auto Model = static_cast<CFSModel*>(State->Model);
         const auto View = static_cast<CGridView*>(State->View);
         if (State->searchOrigin_) {
@@ -335,7 +357,7 @@ hc::workspace::PaneState CmpPanel::CaptureWorkspace(int OnlyTab) const
 void CmpPanel::RestoreWorkspace(const hc::workspace::PaneState& Pane, const QJsonObject& Defaults)
 {
     if (Pane.tabs_.isEmpty() || Pane.tabs_.size() > 64 || Pane.active_ < 0 || Pane.active_ >= Pane.tabs_.size()) return;
-    workspaceRestored_ = true;
+    workspaceRestored_ = true; workspaceDefaults_ = Defaults;
     // A preview temporarily replaces its grid in QTabWidget. Restore that grid
     // first so replacing a workspace also destroys its hidden model/watchers.
     for (int Index = 0; Index < vecTabStates.size(); ++Index)
@@ -346,12 +368,14 @@ void CmpPanel::RestoreWorkspace(const hc::workspace::PaneState& Pane, const QJso
       // updates both panels' appearance from that event filter.
       vecTabStates.clear();
       while (ui.tabWidget->count()) { auto* Widget = ui.tabWidget->widget(0); ui.tabWidget->removeTab(0); delete Widget; } }
-    for (const auto& Tab : Pane.tabs_) {
-        AddTab(false); const auto State = vecTabStates.back();
-        State->workspace_ = Tab; State->pending_ = true; State->restoreSelection_ = true;
-        State->Model->setProperty("hc.tabId", Tab.id_);
-        static_cast<CGridView*>(State->View)->RestoreWorkspaceView(hc::workspace::MergeView(Defaults, Tab.view_));
-        ui.tabWidget->setTabText(vecTabStates.size() - 1, QString::fromStdString(Tab.location_.root_));
+    {
+        QSignalBlocker Blocker(ui.tabWidget);
+        for (const auto& Tab : Pane.tabs_) {
+            auto State = std::make_shared<TyTabState>(); State->Index = vecTabStates.size();
+            State->workspace_ = Tab; State->pending_ = true; State->restoreSelection_ = true;
+            vecTabStates.append(State);
+            ui.tabWidget->addTab(new QWidget(this), QString::fromStdString(Tab.location_.root_));
+        }
     }
     { QSignalBlocker Blocker(ui.tabWidget); ui.tabWidget->setCurrentIndex(Pane.active_); }
     on_tabWidget_currentChanged(Pane.active_);
@@ -360,6 +384,7 @@ void CmpPanel::RestoreWorkspace(const hc::workspace::PaneState& Pane, const QJso
 void CmpPanel::restoreTab(int Index)
 {
     if (Index < 0 || Index >= vecTabStates.size()) return;
+    materializeTab(Index);
     const auto State = vecTabStates[Index]; State->pending_ = false;
     static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true); State->searchOrigin_.reset();
     static_cast<CGridView*>(State->View)->SetEverythingPresentation(false);
@@ -379,6 +404,7 @@ void CmpPanel::updateWorkspaceStatus()
     updateNavigationProgress();
     if (!workspaceStatus_ || ui.tabWidget->currentIndex() < 0 || ui.tabWidget->currentIndex() >= vecTabStates.size()) return;
     const auto Model = static_cast<CFSModel*>(vecTabStates[ui.tabWidget->currentIndex()]->Model);
+    if (!Model) return;
     const auto Location = Model->WorkspaceLocation();
     int Volume = -1;
     if (Location.kind_ == hc::storage::LocatorKind::Local || Location.kind_ == hc::storage::LocatorKind::Smb || Location.kind_ == hc::storage::LocatorKind::Archive) {
@@ -484,6 +510,7 @@ CViewT* CmpPanel::GetFocusView( int TabIndex ) const
     if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
         return {};
 
+    const_cast<CmpPanel*>(this)->materializeTab(TabIndex);
     const auto& State = vecTabStates.value( TabIndex );
     if( State->QuickView != nullptr )
         return State->QuickView;
@@ -496,6 +523,7 @@ void CmpPanel::OpenQuickView( int TabIndex, const QString& FilePath )
     if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
         return;
 
+    materializeTab(TabIndex);
     if (vecTabStates[TabIndex]->QuickView) CloseQuickView(TabIndex);
 
     {
@@ -539,6 +567,7 @@ void CmpPanel::RefreshSource( int TabIndex )
     if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
         return;
 
+    if (vecTabStates[TabIndex]->pending_ || !vecTabStates[TabIndex]->Model) { restoreTab(TabIndex); return; }
     if (static_cast<CFSModel*>(vecTabStates[TabIndex]->Model)->HasPlaceholder()) restoreTab(TabIndex);
     else if (!static_cast<CFSModel*>(vecTabStates[TabIndex]->Model)->RetryFailedNavigation()) vecTabStates[TabIndex]->Model->Refresh();
 }
@@ -816,7 +845,7 @@ void CmpPanel::OnColorSchemeChanged( const TyColorScheme& ColorScheme )
         State->View->ApplyColorScheme( ColorScheme );
     }
 
-    if (const auto State = retrieveFocusState()) {
+    if (const auto State = vecTabStates.value(ui.tabWidget->currentIndex()); State && State->Model) {
         if (State->Model->GetRoot()) processVolumeStatusText(State->Model->GetRoot());
         processPanelStatusText();
     }
@@ -893,11 +922,13 @@ void CmpPanel::changeVolumeIndex( int index, const QString& Path )
 void CmpPanel::on_tabWidget_currentChanged(int Index)
 {
     if (Index < 0 || Index >= vecTabStates.size()) return;
+    materializeTab(Index);
     emit sig_NotifyPanelActivated();
     const auto State = vecTabStates[Index];
     if (State->pending_) restoreTab(Index);
     for (int Candidate = 0; Candidate < vecTabStates.size(); ++Candidate)
     {
+        if (!vecTabStates[Candidate]->Model) continue;
         if (Candidate != Index) static_cast<CFSModel*>(vecTabStates[Candidate]->Model)->StopEverythingSearch();
         static_cast<CFSModel*>(vecTabStates[Candidate]->Model)->SetWatchEnabled(Candidate == Index);
     }
@@ -1046,7 +1077,11 @@ void CmpPanel::initializeUIs()
     Notice->hide();
     connect(retry_, &QPushButton::clicked, this, [this] { RefreshSource(ui.tabWidget->currentIndex()); });
     status_ = new fm::ui::PanelStatusBar(this); status_->setObjectName("hc.panelStatus"); ui.verticalLayout->addWidget(status_);
-    AddTab(false);
+    auto State = std::make_shared<TyTabState>(); State->Index = 0;
+    State->workspace_.id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    State->workspace_.location_ = {hc::storage::LocatorKind::Local, QDir::toNativeSeparators(QDir::homePath()).toStdString()};
+    State->pending_ = true; vecTabStates.append(State);
+    QSignalBlocker Blocker(ui.tabWidget); ui.tabWidget->addTab(new QWidget(this), tr("새 탭"));
 }
 
 QString CmpPanel::CurrentPath() const
@@ -1061,16 +1096,17 @@ QString CmpPanel::CurrentPath() const
 QString CmpPanel::Search() const
 {
     const int Index = ui.tabWidget->currentIndex();
-    return Index >= 0 && Index < vecTabStates.size() ? vecTabStates[Index]->ProxyModel->Search() : QString{};
+    return Index >= 0 && Index < vecTabStates.size() && vecTabStates[Index]->ProxyModel ? vecTabStates[Index]->ProxyModel->Search() : QString{};
 }
 QString CmpPanel::SearchMatch() const
 {
     const int Index = ui.tabWidget->currentIndex();
-    return Index >= 0 && Index < vecTabStates.size() ? vecTabStates[Index]->ProxyModel->SearchMatch() : QString{};
+    return Index >= 0 && Index < vecTabStates.size() && vecTabStates[Index]->ProxyModel ? vecTabStates[Index]->ProxyModel->SearchMatch() : QString{};
 }
 void CmpPanel::SetSearch(const QString& Query, const QString& Match)
 {
     const int Index = ui.tabWidget->currentIndex(); if (Index < 0 || Index >= vecTabStates.size()) return;
+    materializeTab(Index);
     vecTabStates[Index]->ProxyModel->SetSearch(Query, Match);
     { QSignalBlocker Blocker(search_); search_->setText(Query); }
     processPanelStatusText(); emit sigNavigationStateChanged();
@@ -1135,7 +1171,7 @@ bool CmpPanel::CanNavigateHistory(int Offset) const
 {
     const int Index = ui.tabWidget->currentIndex(); if (Index < 0 || Index >= vecTabStates.size()) return false;
     const auto State = vecTabStates[Index]; const int Target = State->workspace_.historyIndex_ + Offset;
-    return !static_cast<CFSModel*>(State->Model)->IsLoading() && Target >= 0 && Target < State->workspace_.history_.size();
+    return State->Model && !static_cast<CFSModel*>(State->Model)->IsLoading() && Target >= 0 && Target < State->workspace_.history_.size();
 }
 void CmpPanel::NavigateHistory(int Offset)
 {
@@ -1198,9 +1234,9 @@ int CmpPanel::retrieveCurrentIndex() const
 CmpPanel::TySpTabState CmpPanel::retrieveFocusState()
 {
     const auto Index = ui.tabWidget->currentIndex();
-    Q_ASSERT( Index >= 0 );
-    
-    return vecTabStates[ Index ];
+    if (Index < 0 || Index >= vecTabStates.size()) return {};
+    materializeTab(Index);
+    return vecTabStates[Index];
 }
 
 CViewT* CmpPanel::retrieveFocusView() const
@@ -1209,6 +1245,7 @@ CViewT* CmpPanel::retrieveFocusView() const
     if( Current < 0 || Current >= vecTabStates.size() )
         return {};
 
+    const_cast<CmpPanel*>(this)->materializeTab(Current);
     const auto& State = vecTabStates.value( Current );
     if( State->QuickView != nullptr )
         return State->QuickView;

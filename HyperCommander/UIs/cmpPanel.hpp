@@ -69,7 +69,7 @@ class CmpPanel : public QWidget
         bool restoreSearchGroups_ = false;
         bool                       pending_ = false, restoreSelection_ = false;
 
-        CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : View->GetViewMode(); }
+        CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : View ? View->GetViewMode() : CViewT::VM_GRID; }
         QModelIndex                 ConvertToSrcIndex( const QModelIndex& Index ) const { if( ProxyModel != nullptr ) return ProxyModel->mapToSource( Index ); return Index; }
 
 // QVector< QModelIndex >      SelectedRowIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다.
@@ -140,6 +140,8 @@ private:
     void                            closeTabAt(int Index);
     void                            navigateHistoryIndex(int Index);
     void                            restoreTab(int Index);
+    void                            materializeTab(int Index);
+    QJsonObject                     workspaceDefaults_;
     void                            updateWorkspaceStatus();
     void                            updateNavigationProgress();
 

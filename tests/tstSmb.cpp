@@ -5630,6 +5630,22 @@ private slots:
         TabState Tab; Tab.id_ = "m7-active"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
         Tab.view_ = {{"hiddenSystem", true}};
         auto Missing = Tab; Missing.id_ = "m7-missing"; Missing.location_ = {hc::storage::LocatorKind::Plugin, "wfx://missing/saved-folder"}; Missing.provider_ = Directory.filePath("removed.json");
+        PaneState Many;
+        for (int Index = 0; Index < 64; ++Index) {
+            auto SavedTab = Tab; SavedTab.id_ = QString("lazy-%1").arg(Index);
+            SavedTab.view_["futureSetting"] = QJsonObject{{"value", Index}};
+            Many.tabs_.append(SavedTab);
+        }
+        Many.active_ = 31;
+        Panel->RestoreWorkspace(Many, QJsonObject{{"hiddenSystem", false}});
+        QCOMPARE(Panel->findChildren<CGridView*>().size(), 1);
+        const auto Untouched = Panel->CaptureWorkspace();
+        QCOMPARE(Untouched.tabs_[0].view_, Many.tabs_[0].view_);
+        QCOMPARE(Untouched.tabs_[63].view_, Many.tabs_[63].view_);
+        auto* LazyTabs = Panel->findChild<QTabWidget*>("tabWidget"); QVERIFY(LazyTabs);
+        LazyTabs->setCurrentIndex(63);
+        QCOMPARE(Panel->findChildren<CGridView*>().size(), 2);
+        QCOMPARE(Panel->CaptureWorkspace().tabs_[0].view_, Many.tabs_[0].view_);
         PaneState Pane; Pane.tabs_ = {Tab, Missing}; Panel->RestoreWorkspace(Pane);
         auto* Model = static_cast<CFSModel*>(model(Panel));
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("alpha.txt"), 10000);
