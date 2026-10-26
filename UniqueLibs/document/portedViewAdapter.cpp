@@ -50,7 +50,7 @@ bool QPDFView::LoadContent(const QByteArray& Bytes, const QString& Path)
     // Original form implementation never creates a valid form handle. Keep it
     // unavailable until a separate, validated form-fill lifecycle is implemented.
     m_formHandle=nullptr; m_nextThumbnailPage=0;
-    m_pageCache.setMaxCost(32*1024);loadBookmarks();renderCurrentPage();startThumbnailGeneration();endLoading();
+    m_pageCache.setMaxCost(128*1024);renderCurrentPage();startThumbnailGeneration();endLoading();
     emit pageChanged(1,m_pageCount);return true;
 }
 QByteArray QPDFView::SerializeContent() const

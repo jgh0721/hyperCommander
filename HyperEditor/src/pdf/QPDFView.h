@@ -18,10 +18,13 @@
 #include <QVector>
 
 #include <atomic>
+#include <memory>
+#include <QSet>
 
 #include <fpdfview.h>
 #include <fpdf_formfill.h>
 
+struct PdfRenderTask;
 class QPropertyAnimation;
 class QTimer;
 
@@ -30,7 +33,7 @@ class QPDFView : public QBaseView
     Q_OBJECT
 
 public:
-    bool IsRendering() const {return renderPending_;}
+    bool IsRendering() const {return renderPending_ || bool(renderTask_) || !renderQueue_.isEmpty();}
     bool LoadContent(const QByteArray& Bytes, const QString& Path);
     QByteArray SerializeContent() const;
     int PageRotation(int Page) const;
@@ -165,6 +168,17 @@ private:
     bool handleNavigationKey(QKeyEvent* event);
     void renderCurrentPage();
     void renderCurrentPageNow();
+    QImage requestPageImage(int page,qreal scale);
+    QImage decoratePageImage(QImage image,int page,qreal scale);
+    void continuePageRender();
+    void cancelPageRender();
+    std::shared_ptr<PdfRenderTask> renderTask_;
+    QList<QPair<int,qreal>> renderQueue_;
+    QSet<int> renderFailed_;
+    bool renderTickPending_ = false, bookmarksLoaded_ = false;
+    QSet<int> thumbnailsDone_;
+    QByteArray renderSnapshot_;
+    bool renderHasEdits_=false;
     bool renderPending_ = false;
     void updateSidebar();
     void startThumbnailGeneration();

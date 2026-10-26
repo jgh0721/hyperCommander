@@ -6,6 +6,8 @@
 #include "utils/FileLoadHelper.h"
 
 #include <fpdfview.h>
+#include <fpdf_progressive.h>
+#include <QElapsedTimer>
 #include <fpdf_annot.h>
 #include <fpdf_formfill.h>
 #include <fpdf_save.h>
@@ -48,6 +50,15 @@
 #include <climits>
 #include <cstring>
 #include <limits>
+
+// Progressive PDFium calls execute on the GUI/owner thread. Each render owns
+// an immutable document snapshot, so edits or close cannot invalidate a paused page.
+struct PdfRenderTask {
+    QByteArray bytes;FPDF_DOCUMENT document=nullptr;FPDF_PAGE page=nullptr;FPDF_BITMAP bitmap=nullptr;
+    QImage image;QElapsedTimer budget;IFSDK_PAUSE pause{};int index=-1,status=FPDF_RENDER_FAILED;qreal scale=1;
+    PdfRenderTask(){pause.version=1;pause.user=this;pause.NeedToPauseNow=[](IFSDK_PAUSE* p)->FPDF_BOOL{return static_cast<PdfRenderTask*>(p->user)->budget.elapsed()>=8;};}
+    ~PdfRenderTask(){if(page)FPDF_RenderPage_Close(page);if(bitmap)FPDFBitmap_Destroy(bitmap);if(page)FPDF_ClosePage(page);if(document)FPDF_CloseDocument(document);}
+};
 
 void InitializeDocumentPdfium();
 namespace {
@@ -183,6 +194,7 @@ void QPDFView::closeFile()
 
 void QPDFView::closeFileInternal(bool emitSignals)
 {
+    cancelPageRender();
     if (m_closeFileInProgress) {
         qDebug().noquote() << "[QPDFView] closeFile reentry ignored" << this << "file=" << m_filePath;
         return;
@@ -227,7 +239,7 @@ void QPDFView::closeFileInternal(bool emitSignals)
     if (m_document) { FPDF_CloseDocument(m_document); m_document = nullptr; }
     m_fileData.clear();
     continuousPages_.clear();continuousScale_=0;
-    m_pageCount = 0; m_currentPage = 0; setModifiedState(false);
+    m_pageCount = 0; m_currentPage = 0;bookmarksLoaded_=false;thumbnailsDone_.clear();renderSnapshot_.clear();renderHasEdits_=false; setModifiedState(false);
     m_searchPage = 0; m_searchMatchStart = -1; m_searchMatchCount = 0;
     m_searchResultIndex = -1; m_searchResultTotal = 0;
     m_nextThumbnailPage = 0;
@@ -337,6 +349,7 @@ void QPDFView::goToPage(int page)
     if (!m_document || page < 0 || page >= m_pageCount) return;
     m_currentPage = page;
     if(m_viewMode==ContinuousScroll && page<continuousPages_.size()){
+        cancelPageRender();requestPageImage(page,continuousScale_);
         m_scrollArea->verticalScrollBar()->setValue(qRound(continuousPages_[page].top()));
         emit pageChanged(page+1,m_pageCount);emit viewStateChanged();return;
     }
@@ -426,6 +439,7 @@ QPDFView::RotationAngle QPDFView::rotationAngle() const
 
 void QPDFView::setModifiedState(bool modified)
 {
+    if(modified){renderSnapshot_.clear();renderHasEdits_=true;}
     m_modified=modified; emit modifiedChanged(modified); emit ContentChanged();
 }
 
@@ -603,6 +617,11 @@ QImage QPDFView::renderPageToImage(int pageIndex, qreal scale)
 
     FPDFBitmap_Destroy(bitmap);
 
+    FPDF_ClosePage(page);
+    return decoratePageImage(std::move(img),pageIndex,scale);
+}
+QImage QPDFView::decoratePageImage(QImage img,int pageIndex,qreal scale)
+{
     if (m_rotationAngle != Rotate0) {
         QTransform transform;
         transform.rotate(static_cast<int>(m_rotationAngle));
@@ -643,7 +662,6 @@ QImage QPDFView::renderPageToImage(int pageIndex, qreal scale)
     }
     overlayPainter.end();
 
-    FPDF_ClosePage(page);
     return img;
 }
 
@@ -843,12 +861,12 @@ QImage QPDFView::renderSpreadImage(int firstPageIndex, qreal scale)
 
     const int gap = 24;
     const auto [leftPageIndex, rightPageIndex] = spreadPagePair(firstPageIndex);
-    const QImage left = leftPageIndex >= 0 ? renderPageToImage(leftPageIndex, scale) : QImage();
+    const QImage left = leftPageIndex >= 0 ? requestPageImage(leftPageIndex, scale) : QImage();
     if (left.isNull())
         return {};
 
     const bool hasRightPage = rightPageIndex >= 0 && rightPageIndex < m_pageCount;
-    const QImage right = hasRightPage ? renderPageToImage(rightPageIndex, scale) : QImage();
+    const QImage right = hasRightPage ? requestPageImage(rightPageIndex, scale) : QImage();
 
     const int width = left.width() + (hasRightPage ? gap + right.width() : 0);
     const int height = qMax(left.height(), right.height());
@@ -891,7 +909,7 @@ void QPDFView::paintContinuousPages(const QRect& region)
     for(int i=0;i<continuousPages_.size();++i){
         const auto rect=continuousPages_[i];if(!rect.intersects(region))continue;
         auto* cached=m_pageCache.object(i);
-        QImage page=cached?*cached:renderPageToImage(i,continuousScale_);
+        QImage page=cached?*cached:requestPageImage(i,continuousScale_);
         if(page.isNull())continue;
         if(!cached)m_pageCache.insert(i,new QImage(page),qMax(1,int(page.sizeInBytes()/1024)));
         painter.drawImage(rect,page);
@@ -953,10 +971,12 @@ void QPDFView::renderCurrentPageNow()
     if (m_viewMode == TwoPageSpread) {
         img = renderSpreadImage(m_currentPage, scale);
     } else if (m_viewMode == ContinuousScroll) {
-        layoutContinuousPages(scale);emit viewStateChanged();return;
+        layoutContinuousPages(scale);
+        requestPageImage(m_currentPage,scale);
+        emit viewStateChanged();return;
     } else {
         QImage* cached = m_pageCache.object(m_currentPage);
-        img = cached ? *cached : renderPageToImage(m_currentPage, scale);
+        img = cached ? *cached : requestPageImage(m_currentPage, scale);
         if (!cached && !img.isNull())
             m_pageCache.insert(m_currentPage,new QImage(img),qMax(1,int(img.sizeInBytes()/1024)));
     }
@@ -985,63 +1005,28 @@ void QPDFView::updateSidebar()
 
 void QPDFView::startThumbnailGeneration()
 {
-    if (!m_thumbList) {
-        endLoading();
-        return;
-    }
-
-    m_thumbList->clear();
-    m_nextThumbnailPage = 0;
-    if (m_pageCount <= 0) {
-        endLoading();
-        return;
-    }
-
-    updateLoadingProgress(tr("PDF 썸네일 생성 중..."), 0, m_pageCount);
-    if (m_thumbnailTimer)
-        m_thumbnailTimer->start(0);
+    if(!m_thumbList)return;m_thumbList->clear();thumbnailsDone_.clear();
+    for(int i=0;i<m_pageCount;++i)m_thumbList->addItem(tr("Page %1").arg(i+1));
+    if(m_thumbnailTimer)m_thumbnailTimer->start(30);
 }
-
 void QPDFView::generateNextThumbnail()
 {
-    if (!m_document || !m_thumbList || m_pageCount <= 0) {
-        if (m_thumbnailTimer)
-            m_thumbnailTimer->stop();
-        endLoading();
-        return;
-    }
-
-    if (m_nextThumbnailPage >= m_pageCount) {
-        if (m_thumbnailTimer)
-            m_thumbnailTimer->stop();
-        if (m_currentPage >= 0 && m_currentPage < m_thumbList->count()) {
-            const QSignalBlocker blocker(m_thumbList);
-            m_thumbList->setCurrentRow(m_currentPage);
-        }
-        endLoading();
-        return;
-    }
-
-    const int pageIndex = m_nextThumbnailPage++;
-    QImage thumb = renderPageToImage(pageIndex, 0.2);
-    auto* item = new QListWidgetItem(QIcon(QPixmap::fromImage(thumb)), tr("Page %1").arg(pageIndex + 1));
-    m_thumbList->addItem(item);
-    if (pageIndex == m_currentPage) {
-        const QSignalBlocker blocker(m_thumbList);
-        m_thumbList->setCurrentRow(m_currentPage);
-    }
-
-    updateLoadingProgress(tr("PDF 썸네일 생성 중..."), pageIndex + 1, m_pageCount);
-    if (m_nextThumbnailPage >= m_pageCount) {
-        if (m_thumbnailTimer)
-            m_thumbnailTimer->stop();
-        endLoading();
+    if(!m_document || !m_thumbList || IsRendering())return;
+    if(!m_sidebarTabs->isVisible())return;
+    if(m_sidebarTabs->currentWidget()==m_bookmarkTree){if(!bookmarksLoaded_)loadBookmarks();return;}
+    const int first=qMax(0,m_thumbList->indexAt(QPoint(5,5)).row());
+    for(int i=first;i<m_thumbList->count();++i){
+        auto* item=m_thumbList->item(i);const auto rect=m_thumbList->visualItemRect(item);
+        if(rect.top()>m_thumbList->viewport()->height())break;
+        if(thumbnailsDone_.contains(i)||!rect.intersects(m_thumbList->viewport()->rect()))continue;
+        const auto image=renderPageToImage(i,.2);item->setIcon(QIcon(QPixmap::fromImage(image)));thumbnailsDone_.insert(i);return;
     }
 }
 
 // ── 목차/북마크 ──
 void QPDFView::loadBookmarks()
 {
+    bookmarksLoaded_=true;
     m_bookmarkTree->clear();
     if (!m_document) return;
     FPDF_BOOKMARK root = FPDFBookmark_GetFirstChild(m_document, nullptr);
@@ -2377,8 +2362,58 @@ bool QPDFView::handleNavigationKey(QKeyEvent* event)
 
 void QPDFView::renderCurrentPage()
 {
+    cancelPageRender();
     if(renderPending_)return;renderPending_=true;
     // PDFium handles remain on their owner thread. Coalesce resize/navigation
     // requests instead of sharing non-thread-safe handles with worker threads.
     QTimer::singleShot(0,this,[this]{renderPending_=false;renderCurrentPageNow();});
+}
+
+QImage QPDFView::requestPageImage(int page,qreal scale)
+{
+    if(auto* image=m_pageCache.object(page))return *image;
+    if(renderFailed_.contains(page))return {};
+    if(!(renderTask_ && renderTask_->index==page)){
+        bool queued=false;for(const auto& item:renderQueue_)queued|=item.first==page;
+        if(!queued && renderQueue_.size()<8)renderQueue_.append({page,scale});
+    }
+    if(!renderTickPending_){renderTickPending_=true;QTimer::singleShot(0,this,&QPDFView::continuePageRender);}
+    return {};
+}
+void QPDFView::cancelPageRender()
+{
+    renderTask_.reset();renderQueue_.clear();renderFailed_.clear();
+}
+void QPDFView::continuePageRender()
+{
+    renderTickPending_=false;
+    if(!m_document)return;
+    if(!renderTask_){
+        if(renderQueue_.isEmpty())return;
+        const auto next=renderQueue_.takeFirst();auto task=std::make_shared<PdfRenderTask>();task->index=next.first;task->scale=next.second;
+        if(renderSnapshot_.isEmpty())renderSnapshot_=renderHasEdits_?SerializeContent():m_fileData;
+        task->bytes=renderSnapshot_;
+        task->document=FPDF_LoadMemDocument64(task->bytes.constData(),task->bytes.size(),nullptr);
+        if(task->document)task->page=FPDF_LoadPage(task->document,task->index);
+        if(task->page){
+            const double w=FPDF_GetPageWidth(task->page)*task->scale,h=FPDF_GetPageHeight(task->page)*task->scale;
+            if(qIsFinite(w)&&qIsFinite(h)&&w>0&&h>0&&w<=16384&&h<=16384&&w*h<=16*1024*1024){
+                task->image=QImage(qMax(1,int(w)),qMax(1,int(h)),QImage::Format_ARGB32);task->image.fill(Qt::white);
+                if(!task->image.isNull())task->bitmap=FPDFBitmap_CreateEx(task->image.width(),task->image.height(),FPDFBitmap_BGRA,task->image.bits(),int(task->image.bytesPerLine()));
+                if(task->bitmap){task->budget.start();task->status=FPDF_RenderPageBitmap_Start(task->bitmap,task->page,0,0,task->image.width(),task->image.height(),0,FPDF_ANNOT|FPDF_PRINTING,&task->pause);}
+            }
+        }
+        renderTask_=std::move(task);
+    }else if(renderTask_->status==FPDF_RENDER_TOBECONTINUED){
+        renderTask_->budget.restart();renderTask_->status=FPDF_RenderPage_Continue(renderTask_->page,&renderTask_->pause);
+    }
+    if(renderTask_->status!=FPDF_RENDER_TOBECONTINUED){
+        const int page=renderTask_->index;
+        if(renderTask_->status==FPDF_RENDER_DONE){
+            auto image=decoratePageImage(renderTask_->image,page,renderTask_->scale);
+            m_pageCache.insert(page,new QImage(image),qMax(1,int(image.sizeInBytes()/1024)));
+        }else renderFailed_.insert(page);
+        renderTask_.reset();renderCurrentPageNow();m_pageLabel->update();emit viewStateChanged();
+    }
+    if((renderTask_ || !renderQueue_.isEmpty()) && !renderTickPending_){renderTickPending_=true;QTimer::singleShot(0,this,&QPDFView::continuePageRender);}
 }
