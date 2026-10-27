@@ -136,6 +136,8 @@ public:
                     ++Errors;
                     const auto Failure = ParseJson(ReadBounded(Path(Root.toStdWString()) / L".update/last-error.json", 32768)).At("error", Json::Kind::String).text_;
                     if (Failure.empty() || !Message->text().contains(QString::fromUtf8(Failure))) throw std::runtime_error("service-error-not-persisted");
+                    if (Mode == "minimum-version" && Failure != "이 버전에서는 Portable ZIP을 직접 설치해야 합니다.")
+                        throw std::runtime_error("incompatible-update-manual-install-message");
                 }
                 else ++Offers;
                 if (Message->text().contains("파일 작업·명령 실행")) Blocked = true;
@@ -169,6 +171,11 @@ public:
             || HashFile(Path(Root.toStdWString()) / L"HyperCommanderUpdater.exe") != HashFile(Path(Controller.tx_.toStdWString()) / L"HyperCommanderUpdater.exe")))
             throw std::runtime_error("failed-helper-closed-parent-or-stale-helper");
         if (Mode == "redirect" && Network->requests_ != 1) throw std::runtime_error("redirect-was-followed");
+        if (Mode == "minimum-version" && (Errors != 1 || Offers != 0 || Network->requests_ != 2 || Network->zip_
+            || Controller.ready_ || Controller.restartRequested_
+            || QFileInfo::exists(QDir(Root).filePath(".update/ready.json"))
+            || QFileInfo::exists(QDir(Root).filePath(".update/active.json"))))
+            throw std::runtime_error("incompatible-update-not-blocked-before-download");
         std::cout << "Service " << Mode.toStdString() << ": PASS, requests=" << Network->requests_ << ", heartbeats=" << Heartbeats << '\n'; return 0;
     }
 };

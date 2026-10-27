@@ -10,6 +10,13 @@ if ($Version -notmatch '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$' -or @($Version.Spli
 $InventoryPath=Join-Path $Root 'product-inventory.json'
 $Inventory=Get-Content -LiteralPath $InventoryPath -Raw -Encoding UTF8|ConvertFrom-Json
 if ($Inventory.schemaVersion -ne 1 -or $Inventory.configuration -ne 'Release' -or $Inventory.version -ne $Version) { throw 'Portable packages require a matching Release inventory.' }
+# Early 2026.10.26.1 clients reject HyperCompare during inventory parsing, before the new
+# updater can be installed. They must use a Portable ZIP once to cross this boundary.
+$MinimumFromVersion='2026.10.18.1'
+if (@($Inventory.files | Where-Object { $_.path -in @('HyperCompare.exe','HyperCompareCli.exe') }).Count) {
+    $MinimumFromVersion='2026.10.27.1'
+}
+if ([version]$Version -lt [version]$MinimumFromVersion) { throw 'Package version predates its updater ownership requirements.' }
 & (Join-Path $PSScriptRoot 'Test-ProductSignatures.ps1') -Root $Root
 $Contract=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'update-contract.json') -Raw -Encoding UTF8|ConvertFrom-Json
 [IO.Directory]::CreateDirectory($OutputRoot)|Out-Null
@@ -82,7 +89,7 @@ try{
         try{$Input.CopyTo($Output)}finally{$Output.Dispose();$Input.Dispose()}
     }}finally{$Symbols.Dispose()}
 }finally{$SymbolsStream.Dispose()}
-$Manifest=[ordered]@{schema=1;product='HyperCommander';channel='stable';platform='windows';arch='x64';version=$Version;tag="v$Version";releasedAt=[DateTime]::UtcNow.ToString('o');updaterProtocol=1;layoutVersion=1;minimumFromVersion='2026.10.18.1';notesUrl="https://github.com/jgh0721/hyperCommander/releases/tag/v$Version";inventorySha256=$Names['product-inventory.json'];asset=[ordered]@{kind='zip';rootDir=$RootName;url="https://github.com/jgh0721/hyperCommander/releases/download/v$Version/$AssetName";size=(Get-Item -LiteralPath $ZipPath).Length;sha256=(Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant();unpackedSize=$Unpacked;fileCount=$Names.Count}}
+$Manifest=[ordered]@{schema=1;product='HyperCommander';channel='stable';platform='windows';arch='x64';version=$Version;tag="v$Version";releasedAt=[DateTime]::UtcNow.ToString('o');updaterProtocol=1;layoutVersion=1;minimumFromVersion=$MinimumFromVersion;notesUrl="https://github.com/jgh0721/hyperCommander/releases/tag/v$Version";inventorySha256=$Names['product-inventory.json'];asset=[ordered]@{kind='zip';rootDir=$RootName;url="https://github.com/jgh0721/hyperCommander/releases/download/v$Version/$AssetName";size=(Get-Item -LiteralPath $ZipPath).Length;sha256=(Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant();unpackedSize=$Unpacked;fileCount=$Names.Count}}
 $ManifestPath=Join-Path $OutputRoot 'update-manifest.json'
 Write-UpdateJson $ManifestPath $Manifest
 $CatInput=Join-Path $OutputRoot ('catalog-input-'+[Guid]::NewGuid().ToString('N'))

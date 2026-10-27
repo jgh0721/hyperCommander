@@ -87,6 +87,13 @@ int main(int Count, char** Arguments) {
             for (const auto Text : {"../a", "C:/a", "a\\b", "a/file:stream", "a/NUL.txt", "a/CONIN$", "a/COM1", "a/file.", "a//b", "a/"}) Reject([&] { CheckRelative(Text); });
             for (const auto Text : {"HyperCommander.json", "config/settings.json", "Addons/WCX/User/a.dll", ".update/active.json", "Plugins/User/a.dll", "HyperCompareOther.exe", "HyperCompareCli.exe.bak"}) Reject([&] { CheckProductRelative(Text); });
             for (const auto Text : {"Addons/WCX/IsoImage/hc_isoimage_wcx.wcx64", "HyperCompare.exe", "HyperCompareCli.exe"}) { CheckProductRelative(Text); ++Passed; }
+            for (const auto Text : {"HyperCompareOther.exe", "Addons/WCX/User/custom.dll"}) {
+                try { CheckProductRelative(Text); throw std::logic_error("unowned-path-accepted"); }
+                catch (const std::runtime_error& Error) {
+                    if (std::string(Error.what()) != "update-unowned-path: " + std::string(Text)) throw;
+                    ++Passed;
+                }
+            }
             if (ParseVersion("2026.10.18.1") != std::array<unsigned, 4>{2026, 10, 18, 1}) throw std::runtime_error("valid-version"); ++Passed;
             for (const auto Text : {"2026.10.18", "2026.10.18.1a", "2026.10.18.65536", "2026.10.18.1.2"}) Reject([&] { ParseVersion(Text); });
             std::cout << "Contract: " << Passed << " passed, 0 failed\n";
