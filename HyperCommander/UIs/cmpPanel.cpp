@@ -1015,7 +1015,10 @@ void CmpPanel::updateNavigationProgress()
     const auto Model = State ? static_cast<CFSModel*>(State->Model) : nullptr;
     const auto View = State ? static_cast<CGridView*>(State->View) : nullptr;
     const bool ColorsPending = Model && View && !Model->AreFileColorsReady(View->VisibleSourceRows());
-    const bool Busy = Model && (Model->IsLoading() || ColorsPending);
+    // Background change notifications keep the accepted listing visible. Do not
+    // flash navigation/color progress on every write to a downloading file.
+    const bool Busy = Model && !Model->IsAutomaticRefresh()
+        && (Model->IsLoading() || (ColorsPending && !State->automaticSnapshot_));
     navigationProgress_->setGeometry(2, qMax(0, path_->height() - 4), qMax(0, path_->width() - 4), 3);
     navigationProgress_->setVisible(Busy);
     if (Busy) {
@@ -1409,10 +1412,12 @@ void CmpPanel::processVolumeStatusText(const nsHC::TySpFileSystem& SpFileSystem)
 {
     const auto Current = retrieveFocusState();
     const auto* CurrentModel = Current ? static_cast<CFSModel*>(Current->Model) : nullptr;
-    if (CurrentModel && CurrentModel->IsAutomaticRefresh()
+    const bool Automatic = CurrentModel && CurrentModel->IsAutomaticRefresh();
+    if (Automatic
         && !hc::refresh::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["refresh"].toObject()).updateHeader) return;
     const auto Generation = ++capacityGeneration_;
-    ui.lblVolumeStatus->setToolTip({});
+    // Keep the last capacity until its replacement is ready during auto refresh.
+    if (!Automatic) ui.lblVolumeStatus->setToolTip({});
     if (!SpFileSystem) { ui.lblVolumeStatus->clear(); return; }
     const auto Root = SpFileSystem->GetRoot();
     const auto Cate = SpFileSystem->GetCate();
@@ -1425,8 +1430,10 @@ void CmpPanel::processVolumeStatusText(const nsHC::TySpFileSystem& SpFileSystem)
         auto Description = QString::fromStdString(Location.root_);
         for (std::size_t Index = 0; Index + 1 < Location.nesting_.size(); ++Index)
             Description += " → " + QString::fromStdString(Location.nesting_[Index].entry_);
-        ui.lblVolumeStatus->setText(tr("[%1] 크기 정보 조회 중").arg(Name));
-        ui.lblVolumeStatus->setToolTip(Description);
+        if (!Automatic) {
+            ui.lblVolumeStatus->setText(tr("[%1] 크기 정보 조회 중").arg(Name));
+            ui.lblVolumeStatus->setToolTip(Description);
+        }
         // Use the accepted provider so another tab refreshing the same archive
         // cannot replace this tab's metadata. Never scan an archive on the GUI thread.
         if (!Model || State->pending_ || Model->IsLoading() || Model->HasPlaceholder() || Model->LastNavigationError()) return;
@@ -1491,7 +1498,7 @@ void CmpPanel::processVolumeStatusText(const nsHC::TySpFileSystem& SpFileSystem)
     auto Volume = Root;
     if (Remote)
     {
-        ui.lblVolumeStatus->setText(tr("[%1] 네트워크 드라이브").arg(Directory.isEmpty() ? Root : Directory));
+        if (!Automatic) ui.lblVolumeStatus->setText(tr("[%1] 네트워크 드라이브").arg(Directory.isEmpty() ? Root : Directory));
         // Probe only a successfully opened location. Drive enumeration and failed
         // navigation must not reconnect an unavailable mapping for metadata.
         if (!Model || State->pending_ || Model->GetRoot() != SpFileSystem || Model->IsLoading()
@@ -1508,7 +1515,7 @@ void CmpPanel::processVolumeStatusText(const nsHC::TySpFileSystem& SpFileSystem)
     }
     const auto Name = Remote ? Volume : SpFileSystem->GetVolumeName();
     const auto QueryPath = Remote ? Directory : Root;
-    ui.lblVolumeStatus->setText(tr("[%1] 용량 조회 중").arg(Name.isEmpty() ? Root : Name));
+    if (!Automatic) ui.lblVolumeStatus->setText(tr("[%1] 용량 조회 중").arg(Name.isEmpty() ? Root : Name));
     auto* Watcher = new QFutureWatcher<QPair<quint64, quint64>>(this);
     connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation, SpFileSystem, Directory, Root, Name] {
         const auto Value = Watcher->result(); Watcher->deleteLater();
@@ -1559,7 +1566,7 @@ void CmpPanel::processPanelStatusText()
         const auto First = Model->rowCount() ? Model->GetFileInfo(Model->index(0, 0)) : nullptr;
         const int ParentCount = First && First->Name_ == ".." ? 1 : 0;
         const int FolderCount = std::max(0, State->footerDirectoryCount_ - ParentCount);
-        status_->setLeftText(Model->IsLoading() ? (State->navigationStatus_.isEmpty() ? tr("목록 조회 중…") : State->navigationStatus_) : Model->LastNavigationError()
+        status_->setLeftText(Model->IsLoading() && !Model->IsAutomaticRefresh() ? (State->navigationStatus_.isEmpty() ? tr("목록 조회 중…") : State->navigationStatus_) : Model->LastNavigationError()
             ? (Model->LastNavigationError()->category_ == hc::storage::ErrorCategory::Cancelled ? tr("목록 조회 취소 · 다시 시도하십시오") : tr("목록 조회 실패 · 다시 시도하십시오")) :
             tr("파일 %1 / %2개 선택 · %3 / %4").arg(State->SelectedFileCount).arg(State->footerFileCount_)
             .arg(GetFormattedSizeText(State->SelectedSize, SizeStyle), GetFormattedSizeText(State->footerTotalSize_, SizeStyle)));

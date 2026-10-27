@@ -27,6 +27,7 @@
 #include <fmwidgets/BreadcrumbBar.h>
 #include "HyperCommander/UIs/panelPathBar.hpp"
 #include <fmwidgets/ProgressBar.h>
+#include <fmwidgets/PanelStatusBar.h>
 #include <fmwidgets/PanelTabStrip.h>
 #include <fmwidgets/CommandLine.h>
 #include <fmwidgets/WindowChrome.h>
@@ -3876,6 +3877,44 @@ private slots:
         };
         { QFile File(Directory.filePath("b.txt")); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write("size"), 4); }
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && FileSize() == 11, 5000);
+        // Check the visible chrome at dispatch as well as after completion:
+        // the old UI briefly replaced totals with loading messages each time.
+        auto* Status = Panel->findChild<fm::ui::PanelStatusBar*>("hc.panelStatus"); QVERIFY(Status);
+        auto* Busy = Panel->findChild<fm::ui::ProgressBar*>("hc.navigation.progress"); QVERIFY(Busy);
+        Policy.updateHeader = Policy.updateFooter = true; General["refresh"] = Policy.ToJson();
+        General["sizeInFooter"] = "bytes";
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); Model->ApplyRefreshSettings();
+        QVERIFY(QMetaObject::invokeMethod(Panel, "processPanelStatusText", Qt::DirectConnection));
+        QTRY_VERIFY(!Panel->findChild<QLabel*>("lblVolumeStatus")->text().contains(QStringLiteral("조회 중")));
+        int AutomaticStarts = 0;
+        bool StableFooter = true, HiddenProgress = true, StableHeader = true;
+        QString PreviousLeft, PreviousRight;
+        const auto Started = connect(Model, &CFSModel::DirectoryReadStarted, Panel, [&] {
+            if (!Model->IsAutomaticRefresh()) return;
+            ++AutomaticStarts;
+            if (Status->leftText() != PreviousLeft || Status->rightText() != PreviousRight)
+                qWarning() << "Automatic refresh changed footer at dispatch:" << PreviousLeft << Status->leftText() << PreviousRight << Status->rightText();
+            StableFooter &= Status->leftText() == PreviousLeft && Status->rightText() == PreviousRight;
+            HiddenProgress &= Busy->isHidden();
+        });
+        const auto Completed = connect(Model, &CFSModel::sigRefreshCompleted, Panel, [&] {
+            if (Model->IsAutomaticRefresh()) {
+                const auto Text = Panel->findChild<QLabel*>("lblVolumeStatus")->text();
+                StableHeader &= !Text.contains(QStringLiteral("조회 중"));
+                HiddenProgress &= Busy->isHidden();
+            }
+        });
+        const auto Disconnect = qScopeGuard([&] { disconnect(Started); disconnect(Completed); });
+        for (int Cycle = 0; Cycle < 4; ++Cycle) {
+            PreviousLeft = Status->leftText(); PreviousRight = Status->rightText();
+            const auto PreviousFooter = Panel->findChild<QLabel*>("lblStatus")->text();
+            { QFile File(Directory.filePath("b.txt")); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write("size"), 4); }
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && FileSize() == 15 + 4 * Cycle, 5000);
+            QTRY_VERIFY(Panel->findChild<QLabel*>("lblStatus")->text() != PreviousFooter);
+            QVERIFY(Status->leftText().startsWith(QStringLiteral("파일 ")));
+            QVERIFY(Busy->isHidden());
+        }
+        QVERIFY(AutomaticStarts >= 4); QVERIFY(StableFooter); QVERIFY(StableHeader); QVERIFY(HiddenProgress);
         Policy.excludedDrives = QDir::fromNativeSeparators(Directory.path()).left(2); General["refresh"] = Policy.ToJson();
         QVERIFY(Settings.Put(hc::settings::Section::General, General)); Model->ApplyRefreshSettings();
         QVERIFY(Create("excluded.txt")); QTest::qWait(600); QVERIFY(!names(Model).contains("excluded.txt"));
