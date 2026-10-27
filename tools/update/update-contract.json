@@ -19,9 +19,25 @@
   "manifestRedirectLimit": 5,
   "transferIdleTimeoutSeconds": 30,
   "transferTotalTimeoutSeconds": 1800,
+  "archiveResumeAttempts": 20,
   "archiveReader": "builtin-sevenzip-forward-stream",
   "archiveLinkPolicy": "reject",
   "fileSystems": ["NTFS", "ReFS"],
   "networkInstall": false,
-  "elevatedInstall": false
+  "elevatedInstall": false,
+  "ownershipNote": "Updater path ownership is cumulative. Never change a released entry: add an entry whose since is the first client version that accepts the new paths. Packages derive minimumFromVersion from these entries.",
+  "ownership": [
+    {
+      "since": "2026.10.18.1",
+      "rootFiles": ["HyperCommander.exe", "HyperCommanderAdmin.exe", "HyperEditor.exe", "HyperEditorWeb.exe", "QtWebEngineProcess.exe",
+        "hc-plugin-host-x64.exe", "hc-plugin-inspect.exe", "hc-search-index.exe", "HyperCommanderUpdater.exe", "hc-updater.exe",
+        "Everything64.dll", "pdfium.dll", "opengl32sw.dll", "runtime-inventory.json", "product-inventory.json"],
+      "rootDllPrefixes": ["Qt6", "vcruntime", "msvcp", "concrt", "d3dcompiler_"],
+      "directories": ["Libs/", "Licenses/", "Addons/WCX/IsoImage/", "Addons/WLX/HyperViewer/", "Third-Party/SevenZip/", "Third-Party/AlzEgg/"]
+    },
+    {
+      "since": "2026.10.27.1",
+      "rootFiles": ["HyperCompare.exe", "HyperCompareCli.exe"]
+    }
+  ]
 }

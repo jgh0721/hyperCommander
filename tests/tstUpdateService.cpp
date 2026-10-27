@@ -1,5 +1,6 @@
 ﻿#include "HyperCommanderUpdater/stdafx.h"
 #include "HyperCommanderUpdater/updateController.hpp"
+#include "HyperCommanderUpdater/updateMessages.hpp"
 #include "HyperCommanderUpdater/updateTransaction.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 
@@ -33,15 +34,24 @@ protected:
 };
 class FixtureReply final : public QNetworkReply {
 public:
-    FixtureReply(const QNetworkRequest& Request, const QString& FileName, bool Redirect, bool Failure, QObject* Parent) : QNetworkReply(Parent), file_(FileName) {
+    // CutAt drops the connection after that many body bytes; a Range request is answered with 206.
+    FixtureReply(const QNetworkRequest& Request, const QString& FileName, bool Redirect, bool Failure, qint64 CutAt, QObject* Parent) : QNetworkReply(Parent), file_(FileName) {
         setRequest(Request); setUrl(Request.url()); setOperation(QNetworkAccessManager::GetOperation); open(QIODevice::ReadOnly | QIODevice::Unbuffered);
-        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, Redirect ? 302 : Failure ? 404 : 200);
         if (Redirect) setAttribute(QNetworkRequest::RedirectionTargetAttribute, QUrl("http://localhost/disallowed"));
         if (!Redirect && !Failure && !file_.open(QIODevice::ReadOnly)) throw std::runtime_error("fixture-open");
-        if (file_.isOpen()) setHeader(QNetworkRequest::ContentLengthHeader, file_.size());
-        timer_.setInterval(0); connect(&timer_, &QTimer::timeout, this, [this, Redirect, Failure] {
+        qint64 Offset = 0; const auto Range = Request.rawHeader("Range");
+        if (file_.isOpen() && Range.startsWith("bytes=") && Range.endsWith('-')) {
+            Offset = Range.mid(6, Range.size() - 7).toLongLong();
+            if (!file_.seek(Offset)) throw std::runtime_error("fixture-range");
+            setRawHeader("Content-Range", "bytes " + QByteArray::number(Offset) + "-" + QByteArray::number(file_.size() - 1) + "/" + QByteArray::number(file_.size()));
+        }
+        setAttribute(QNetworkRequest::HttpStatusCodeAttribute, Redirect ? 302 : Failure ? 404 : Offset ? 206 : 200);
+        if (file_.isOpen()) setHeader(QNetworkRequest::ContentLengthHeader, file_.size() - Offset);
+        timer_.setInterval(0); connect(&timer_, &QTimer::timeout, this, [this, Redirect, Failure, CutAt] {
             if (Redirect || Failure) { finish(); return; }
-            if (!buffer_.isEmpty()) return; buffer_ = file_.read(65536); if (!buffer_.isEmpty()) emit readyRead();
+            if (CutAt >= 0 && sent_ >= CutAt) { setError(RemoteHostClosedError, "fixture-cut"); finish(); return; }
+            if (!buffer_.isEmpty()) return; buffer_ = file_.read(CutAt >= 0 ? std::min<qint64>(65536, CutAt - sent_) : 65536); sent_ += buffer_.size();
+            if (!buffer_.isEmpty()) emit readyRead();
             if (file_.atEnd() && buffer_.isEmpty()) finish();
         }); timer_.start();
     }
@@ -54,16 +64,22 @@ protected:
     }
 private:
     void finish() { if (isFinished()) return; timer_.stop(); setFinished(true); emit finished(); }
-    QFile file_; QByteArray buffer_; QTimer timer_;
+    QFile file_; QByteArray buffer_; QTimer timer_; qint64 sent_ = 0;
 };
 class FixtureNetwork final : public QNetworkAccessManager {
 public:
     FixtureNetwork(QString Package, QString Mode, QObject* Parent) : QNetworkAccessManager(Parent), package_(std::move(Package)), mode_(std::move(Mode)) {}
-    int requests_ = 0; bool zip_ = false;
+    int requests_ = 0; bool zip_ = false; QList<QByteArray> ranges_; qint64 cut_ = -1;
 protected:
     QNetworkReply* createRequest(Operation, const QNetworkRequest& Request, QIODevice*) override {
         ++requests_; auto Name = Request.url().fileName(); zip_ = Name.endsWith(".zip");
-        return new FixtureReply(Request, QDir(package_).filePath(Name), mode_ == "redirect", (mode_ == "http-error" || mode_ == "automatic"), this);
+        // Resume: the first archive transfer drops halfway; the next must continue from there.
+        qint64 CutAt = -1;
+        if (zip_) {
+            ranges_.append(Request.rawHeader("Range"));
+            if (mode_ == "resume" && ranges_.size() == 1) CutAt = cut_ = QFileInfo(QDir(package_).filePath(Name)).size() / 2;
+        }
+        return new FixtureReply(Request, QDir(package_).filePath(Name), mode_ == "redirect", (mode_ == "http-error" || mode_ == "automatic"), CutAt, this);
     }
 private:
     QString package_, mode_;
@@ -163,8 +179,10 @@ public:
             if (!Controller.busy_ && !Controller.reply_ && (Controller.ready_ || Errors || Mode == "cancel" && Controller.stop_.stop_requested() || Mode == "automatic" && Network->requests_ > 0)) Finished = true;
         }); Timer.start(5); if (Mode == "restore") Controller.restore(); else if (Mode == "automatic") Controller.checkAutomatically(); else Controller.Check();
         const auto Start = GetTickCount64(); while (!Finished && GetTickCount64() - Start < 120000) QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-        const bool Prepared = Mode == "success" || Mode == "blocked" || Mode == "restore" || Mode == "restart" || Mode == "launch-failure";
-        if (!Finished || (Prepared ? !Controller.ready_ || (Mode != "restore" && (Offers < 2 || Network->requests_ != 3 || Heartbeats < 5)) : Controller.ready_)) throw std::runtime_error("service-state-or-liveness");
+        const bool Prepared = Mode == "success" || Mode == "blocked" || Mode == "restore" || Mode == "restart" || Mode == "launch-failure" || Mode == "resume";
+        if (!Finished || (Prepared ? !Controller.ready_ || (Mode != "restore" && (Offers < 2 || Network->requests_ != (Mode == "resume" ? 4 : 3) || Heartbeats < 5)) : Controller.ready_)) throw std::runtime_error("service-state-or-liveness");
+        if (Mode == "resume" && (Errors || Network->ranges_.size() != 2 || !Network->ranges_[0].isEmpty() || Network->ranges_[1] != "bytes=" + QByteArray::number(Network->cut_) + "-"))
+            throw std::runtime_error("interrupted-download-not-resumed");
         if (Mode == "restore" && (Network->requests_ != 0 || Offers != 1)
             || Mode == "blocked" && (!Blocked || Controller.restartRequested_)) throw std::runtime_error("service-restore-or-blocked-restart");
         if (Mode == "restart" && !Controller.restartRequested_) throw std::runtime_error("own-background-host-blocked-restart");
@@ -189,6 +207,35 @@ public:
             throw std::runtime_error("incompatible-update-not-blocked-before-download");
         std::cout << "Service " << Mode.toStdString() << ": PASS, requests=" << Network->requests_ << ", heartbeats=" << Heartbeats << '\n'; return 0;
     }
+    // Offline cases for the health check retry and user guidance. Root is an installed fixture.
+    static int Health(const QString& Root) {
+        const Path NativeRoot(Root.toStdWString()); unsigned Passed = 0;
+        RestartWindow Window; UpdateController Controller(&Window, [] { return true; });
+        Controller.root_ = Root; Controller.currentVersion_ = ParseInventory(ReadBounded(NativeRoot / L"product-inventory.json", 1048576)).version_;
+        delete Controller.network_; auto* Network = new FixtureNetwork({}, "http-error", &Controller); Controller.network_ = Network;
+        // An active update whose journal cannot be read: the check retries the health
+        // check, keeps the update active and reports why instead of a generic code.
+        const auto Tx = NativeRoot / L".update/00000000-0000-4000-8000-0000000000aa";
+        std::filesystem::create_directories(Tx); DurableWrite(Tx / L"journal.json", "{}");
+        DurableWrite(NativeRoot / L".update/active.json", "{\"transaction\":\"00000000-0000-4000-8000-0000000000aa\"}");
+        const auto Cleanup = qScopeGuard([&] { DeleteFileW((NativeRoot / L".update/active.json").c_str()); std::error_code Ignored; std::filesystem::remove_all(Tx, Ignored); });
+        QString Shown; QTimer Timer; QObject::connect(&Timer, &QTimer::timeout, &Window, [&] {
+            for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Message = qobject_cast<QMessageBox*>(Widget); Message && Message->isVisible()) { Shown = Message->text(); Message->accept(); }
+        }); Timer.start(5);
+        Controller.Check();
+        const auto Start = GetTickCount64(); while ((Controller.busy_ || Shown.isEmpty()) && GetTickCount64() - Start < 60000) QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        const auto Failure = ParseJson(ReadBounded(NativeRoot / L".update/last-error.json", 32768)).At("error", Json::Kind::String).text_;
+        if (!std::string_view(Failure).starts_with("update-health-check-failed: update-json-field") || Network->requests_ != 0
+            || !Shown.contains(QString::fromUtf8(Failure)) || !Shown.contains("--recover") || !std::filesystem::exists(NativeRoot / L".update/active.json"))
+            throw std::runtime_error("health-check-retry: " + Failure + " / " + Shown.toStdString());
+        ++Passed;
+        // Guidance keeps the code and adds what the user can do.
+        if (Explain("update-disk-space: 1700 MiB", NativeRoot).find(L"1700 MiB") == std::wstring::npos
+            || Explain("update-elevated-process", NativeRoot).empty() || Explain("update-root-not-writable: C:\\x", NativeRoot).empty()
+            || !Explain("update-cancelled", NativeRoot).empty()) throw std::runtime_error("update-guidance");
+        ++Passed;
+        std::cout << "Service health: " << Passed << " passed\n"; return 0;
+    }
 };
 }
 int main(int Count, char** Args) {
@@ -197,6 +244,7 @@ int main(int Count, char** Args) {
         if (Arguments.size() == 5 && Arguments[1] == "--capture-ui" && Arguments[3] == "--config-dir")
             return hc::update::UpdateControllerTest::CaptureUi(Arguments[2]);
         if (Arguments.size() != 6 || Arguments[4] != "--config-dir") throw std::runtime_error("service-test-arguments");
+        if (Arguments[3] == "health") return hc::update::UpdateControllerTest::Health(Arguments[1]);
         return hc::update::UpdateControllerTest::Run(Arguments[1], Arguments[2], Arguments[3]);
     } catch (const std::exception& Error) { std::cerr << Error.what() << '\n'; return 1; }
 }

@@ -2,6 +2,7 @@
 #include "updateController.hpp"
 
 #include "updateArchive.hpp"
+#include "updateMessages.hpp"
 #include "updateTransaction.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/settings/updateSettings.hpp"
@@ -13,6 +14,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QMessageBox>
@@ -57,7 +59,8 @@ void Eligible(const Manifest& Release, std::string_view Version) {
 }
 }
 UpdateController::UpdateController(QWidget* Window, std::function<bool()> CanRestart)
-    : QObject(Window), window_(Window), canRestart_(std::move(CanRestart)), network_(new QNetworkAccessManager(this)), root_(QCoreApplication::applicationDirPath()), currentVersion_(nsHC::CLIENT_VERSION) {
+    : QObject(Window), window_(Window), canRestart_(std::move(CanRestart)), network_(new QNetworkAccessManager(this))
+    , root_(QDir::fromNativeSeparators(QString::fromStdWString(InstallRoot(Native(QCoreApplication::applicationDirPath())).wstring()))), currentVersion_(nsHC::CLIENT_VERSION) {
     setObjectName("hc.update.controller");
     auto* CheckAction = new QAction(tr("업데이트 확인…"), this); CheckAction->setObjectName("hc.update.check");
     connect(CheckAction, &QAction::triggered, this, &UpdateController::Check);
@@ -72,7 +75,13 @@ UpdateController::UpdateController(QWidget* Window, std::function<bool()> CanRes
         // the event thread along with inventory hashing.
         auto* Watcher = new QFutureWatcher<void>(this);
         connect(Watcher, &QFutureWatcher<void>::finished, Watcher, &QObject::deleteLater);
-        Watcher->setFuture(QtConcurrent::run([Root] { try { AcknowledgeTransaction(Native(Root)); } catch (...) {} }));
+        Watcher->setFuture(QtConcurrent::run([Root] {
+            // The update stays active on failure. The next check retries it and shows the reason.
+            try { AcknowledgeTransaction(Native(Root)); }
+            catch (const std::exception& Error) {
+                try { DurableWrite(Native(Root) / L".update/last-error.json", "{\"error\":" + QuoteJson(std::string("update-health-check-failed: ") + Error.what()) + "}"); } catch (...) {}
+            } catch (...) {}
+        }));
     });
 }
 UpdateProgressDialog::UpdateProgressDialog(const QString& Label, QWidget* Parent) : QDialog(Parent)
@@ -104,7 +113,9 @@ void UpdateController::fail(const QString& Error) {
     // Preserve check/download failures as well as native helper failures, so a
     // dismissed dialog still leaves the reason available for diagnosis.
     try { DurableWrite(Native(root_) / L".update/last-error.json", "{\"error\":" + QuoteJson(Error.toUtf8().toStdString()) + "}"); } catch (...) {}
-    if (!automatic_) hc::ui::MessageDialog(QMessageBox::Warning, tr("업데이트"), tr("업데이트를 완료하지 못했습니다. 현재 설치 파일은 유지됩니다.\n%1").arg(Error), QMessageBox::Ok, window_).exec();
+    if (automatic_) return;
+    QString Guide; try { Guide = QString::fromStdWString(Explain(Error.toUtf8().toStdString(), Native(root_))); } catch (...) {}
+    hc::ui::MessageDialog(QMessageBox::Warning, tr("업데이트"), tr("업데이트를 완료하지 못했습니다. 현재 설치 파일은 유지됩니다.\n%1").arg(Guide.isEmpty() ? Error : Guide + "\n\n" + Error), QMessageBox::Ok, window_).exec();
 }
 void UpdateController::checkAutomatically() {
     if (busy_ || ready_ || hc::settings::AppSettings().Editing() || !hc::settings::AppSettings().Writable()) return;
@@ -164,15 +175,88 @@ void UpdateController::fetch(const QString& Address, const QString& Destination,
         Done();
     });
 }
+// The Portable ZIP goes to a partial file kept across attempts. An interrupted transfer
+// resumes with a Range request, and each attempt that made progress gets a new time limit.
+void UpdateController::fetchArchive(const QString& Origin, const QString& Address, const QString& Partial, std::uint64_t Limit, std::function<void()> Done, int Redirects, int Attempt) {
+    if (stop_.stop_requested()) { busy_ = false; if (progress_) progress_->hide(); return; }
+    const QUrl Url(Address);
+    if (!AllowedUrl(Url) || Redirects > 5 || QDateTime::currentMSecsSinceEpoch() - transferStarted_ > 1800000) { fail("update-download-url-or-time-limit"); return; }
+    auto File = std::make_shared<QFile>(Partial);
+    try { CheckPlainPath(Native(Partial)); } catch (const std::exception& Error) { fail(Error.what()); return; }
+    if (!File->open(QIODevice::ReadWrite)) { fail("update-download-write: " + File->errorString()); return; }
+    auto Base = std::make_shared<std::uint64_t>(std::uint64_t(File->size()));
+    if (*Base > Limit) { File->resize(0); *Base = 0; }
+    if (*Base == Limit) { File->close(); Done(); return; }
+    File->seek(qint64(*Base));
+    QNetworkRequest Request(Url); Request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+    Request.setRawHeader("User-Agent", QByteArray("HyperCommander/") + nsHC::CLIENT_VERSION); Request.setRawHeader("Accept-Encoding", "identity"); Request.setTransferTimeout(30000);
+    if (*Base) Request.setRawHeader("Range", "bytes=" + QByteArray::number(qulonglong(*Base)) + "-");
+    auto* Reply = network_->get(Request); Reply->setReadBufferSize(65536); reply_ = Reply;
+    auto Count = std::make_shared<std::uint64_t>(0); auto Error = std::make_shared<QString>(); auto Checked = std::make_shared<bool>(false);
+    auto* Deadline = new QTimer(Reply); Deadline->setSingleShot(true);
+    connect(Deadline, &QTimer::timeout, Reply, &QNetworkReply::abort); Deadline->start(int(1800000 - (QDateTime::currentMSecsSinceEpoch() - transferStarted_)));
+    const auto Read = [Reply, File, Base, Count, Error, Checked, Limit] {
+        const auto Data = Reply->read(65536); if (Data.isEmpty()) return;
+        // Redirect and error bodies are read and discarded.
+        const auto Status = Reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); if (Status != 200 && Status != 206) return;
+        if (!*Checked) {
+            *Checked = true;
+            // A server that ignores Range sends the whole file again.
+            if (Status == 200 && *Base) { if (!File->resize(0) || !File->seek(0)) { *Error = "update-download-write"; Reply->abort(); return; } *Base = 0; }
+            const auto Expected = "bytes " + QByteArray::number(qulonglong(*Base)) + "-" + QByteArray::number(qulonglong(Limit - 1)) + "/" + QByteArray::number(qulonglong(Limit));
+            if (Status == 206 && Reply->rawHeader("Content-Range") != Expected) { *Error = "update-download-range"; Reply->abort(); return; }
+        }
+        if (std::uint64_t(Data.size()) > Limit - *Base - *Count) { *Error = "update-download-size-limit"; Reply->abort(); return; }
+        *Count += Data.size();
+        if (File->write(Data) != Data.size()) { *Error = "update-download-write"; Reply->abort(); }
+    };
+    connect(Reply, &QNetworkReply::readyRead, this, [this, Reply, Read, Limit, Base, Count] {
+        while (Reply->bytesAvailable() > 0 && Reply->isOpen()) { const auto Before = Reply->bytesAvailable(); Read(); if (Reply->bytesAvailable() >= Before) break; }
+        if (progress_) { progress_->setRange(0, 1000); progress_->setValue(int((*Base + *Count) * 1000 / Limit)); }
+    });
+    connect(Reply, &QNetworkReply::finished, this, [this, Reply, File, Base, Count, Error, Limit, Done = std::move(Done), Origin, Partial, Redirects, Attempt, Read] {
+        while (Reply->bytesAvailable() > 0 && Reply->isOpen()) { const auto Before = Reply->bytesAvailable(); Read(); if (Reply->bytesAvailable() >= Before) break; }
+        Reply->deleteLater(); if (reply_ == Reply) reply_.clear();
+        const bool Flushed = File->flush(); File->close();
+        if (stop_.stop_requested()) { busy_ = false; if (progress_) progress_->hide(); return; }
+        const auto Status = Reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (Status >= 300 && Status <= 399 && Error->isEmpty()) {
+            const auto Next = Reply->url().resolved(Reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl());
+            fetchArchive(Origin, Next.toString(QUrl::FullyEncoded), Partial, Limit, Done, Redirects + 1, Attempt); return;
+        }
+        if (Error->isEmpty() && Reply->error() == QNetworkReply::NoError && (Status == 200 || Status == 206) && *Base + *Count == Limit && Flushed) { Done(); return; }
+        // A range the server no longer matches restarts the file. Otherwise retry only
+        // after progress, starting from the original address for a fresh signed URL.
+        const bool Restart = *Error == "update-download-range" || Status == 416;
+        if (Restart) QFile::remove(Partial);
+        if ((Restart || (Error->isEmpty() && *Count > 0)) && Attempt < 20) {
+            transferStarted_ = QDateTime::currentMSecsSinceEpoch(); fetchArchive(Origin, Origin, Partial, Limit, Done, 0, Attempt + 1); return;
+        }
+        fail(Error->isEmpty() ? "update-download-incomplete" : *Error);
+    });
+}
 void UpdateController::check(bool Automatic) {
     automatic_ = Automatic; stop_ = std::stop_source{}; ready_ = false; showProgress(tr("새 버전과 서명을 확인하고 있습니다…"));
     SaveOption("lastAttemptUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
-    const auto Root = root_; const auto Current = currentVersion_; const auto Id = QUuid::createUuid().toString(QUuid::WithoutBraces); tx_ = QDir(Root).filePath(".update/" + Id); const auto Tx = tx_;
-    run([Root, Tx, Current](std::stop_token) {
-        CheckInstallRoot(Native(Root)); Require(StartupAllowed(Native(Root)) && !std::filesystem::exists(Native(Root) / L".update/active.json"), "update-recovery-or-health-check-pending");
+    const auto Root = root_; const auto Current = currentVersion_; const auto Previous = tx_;
+    const auto Id = QUuid::createUuid().toString(QUuid::WithoutBraces); tx_ = QDir(Root).filePath(".update/" + Id); const auto Tx = tx_;
+    run([Root, Tx, Previous, Current](std::stop_token) {
+        CheckInstallRoot(Native(Root));
+        // An applied update stays active until its health check passes. Retry it here so
+        // a failure at startup does not block every later check without a reason.
+        if (std::filesystem::exists(Native(Root) / L".update/active.json")) {
+            try { AcknowledgeTransaction(Native(Root)); }
+            catch (const std::exception& Error) { throw std::runtime_error(std::string("update-health-check-failed: ") + Error.what()); }
+        }
+        Require(StartupAllowed(Native(Root)) && !std::filesystem::exists(Native(Root) / L".update/active.json"), "update-recovery-or-health-check-pending");
         const auto Inventory = ParseInventory(ReadBounded(Native(Root) / L"product-inventory.json", 1048576));
         Require(Inventory.version_ == Current, "update-installed-version"); VerifyProductSignature(Native(Root) / L"HyperCommanderUpdater.exe");
-        CheckPlainPath(Native(Tx)); std::filesystem::create_directories(Native(Tx)); return Result{};
+        // Earlier checks, cancellations and failed downloads leave unapplied transactions.
+        try { PruneTransactions(Native(Root), Native(Previous), std::chrono::hours(1)); } catch (const std::exception&) {}
+        // Protected folders such as Program Files cannot hold the transaction.
+        CheckPlainPath(Native(Tx)); std::error_code Failure; std::filesystem::create_directories(Native(Tx), Failure);
+        if (Failure) throw std::runtime_error("update-root-not-writable: " + Utf8(Native(Root).make_preferred().wstring()));
+        return Result{};
     }, [this](Result) {
         busy_ = true; transferStarted_ = QDateTime::currentMSecsSinceEpoch();
         fetch("https://github.com/jgh0721/hyperCommander/releases/latest/download/update-manifest.json", QDir(tx_).filePath("update-manifest.json"), 262144, [this] {
@@ -209,13 +293,26 @@ void UpdateController::offer() {
 void UpdateController::download() {
     stop_ = std::stop_source{}; const auto Root = root_, Tx = tx_; const auto Release = release_; const auto Current = currentVersion_;
     showProgress(tr("Portable ZIP을 다운로드하고 있습니다…"));
+    // The partial download is named by the archive hash, so it survives later checks
+    // and is never mistaken for another release.
+    const auto Partial = QDir(Root).filePath(".update/download/" + Text(Release.zipHash_) + ".part");
     run([Root, Release, Current](std::stop_token) {
-        Eligible(Release, Current); CheckInstallRoot(Native(Root)); Require(std::filesystem::space(Native(Root)).available >= Release.zipBytes_ + Release.unpackedBytes_ + 603979776, "update-disk-space"); return Result{};
-    }, [this, Root, Tx, Release](Result) {
+        Eligible(Release, Current); CheckInstallRoot(Native(Root));
+        const auto Need = Release.zipBytes_ + Release.unpackedBytes_ + 603979776;
+        if (std::filesystem::space(Native(Root)).available < Need) throw std::runtime_error("update-disk-space: " + std::to_string((Need + 1048575) / 1048576) + " MiB");
+        const auto Downloads = Native(Root) / L".update/download"; CheckPlainPath(Downloads); std::filesystem::create_directories(Downloads);
+        const auto Keep = Wide(Release.zipHash_) + L".part";
+        for (const auto& Entry : std::filesystem::directory_iterator(Downloads))
+            if (Entry.is_regular_file() && Entry.path().extension() == L".part" && Entry.path().filename() != Keep) { CheckPlainPath(Entry.path()); DeleteFileW(Entry.path().c_str()); }
+        return Result{};
+    }, [this, Root, Tx, Partial, Release](Result) {
         busy_ = true; transferStarted_ = QDateTime::currentMSecsSinceEpoch();
-        fetch(Text(Release.url_), QDir(Tx).filePath("portable.zip"), Release.zipBytes_, [this, Root, Tx, Release] {
+        fetchArchive(Text(Release.url_), Text(Release.url_), Partial, Release.zipBytes_, [this, Root, Tx, Partial, Release] {
             showProgress(tr("ZIP·파일 해시·코드 서명을 검증하고 있습니다…"));
-            run([Root, Tx, Release](std::stop_token Stop) {
+            run([Root, Tx, Partial, Release](std::stop_token Stop) {
+                // The completed download becomes this transaction's archive.
+                const auto Zip = Native(Tx) / L"portable.zip"; CheckPlainPath(Native(Partial)); CheckPlainPath(Zip);
+                Require(MoveFileExW(Native(Partial).c_str(), Zip.c_str(), MOVEFILE_WRITE_THROUGH), "update-archive-move");
                 const auto Stage = QDir(Tx).filePath("staging"); CheckPlainPath(Native(Stage)); Require(QDir().mkpath(Stage), "update-staging-directory");
                 StageArchive(QDir(Tx).filePath("portable.zip"), Stage, Root, Release, Stop); Require(!Stop.stop_requested(), "update-cancelled");
                 VerifyProductSignature(Native(Root) / L"HyperCommanderUpdater.exe"); const auto Helper = Native(Tx) / L"HyperCommanderUpdater.exe";

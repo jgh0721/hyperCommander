@@ -18,9 +18,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 include("${HC_UPDATER_REPO_ROOT}/cmake/UpdateTrustPolicy.cmake")
 hc_generate_update_trust_policy("${CMAKE_CURRENT_BINARY_DIR}/updateSigningPolicy.hpp")
+include("${HC_UPDATER_REPO_ROOT}/cmake/UpdateOwnershipPolicy.cmake")
+hc_generate_update_ownership_policy("${CMAKE_CURRENT_BINARY_DIR}/updateOwnershipPolicy.hpp")
 # Shared trust and transaction code deliberately imports no Qt APIs. The helper
 # must remain runnable when a Qt DLL is absent or an update was interrupted.
-add_library(hc_update_core STATIC updateJson.cpp updateTrust.cpp updateProtocol.cpp updateTransaction.cpp)
+add_library(hc_update_core STATIC updateJson.cpp updateTrust.cpp updateProtocol.cpp updateTransaction.cpp updateMessages.cpp)
 target_precompile_headers(hc_update_core PRIVATE stdafx.h)
 set_target_properties(hc_update_core PROPERTIES AUTOMOC OFF AUTOUIC OFF)
 target_include_directories(hc_update_core PUBLIC ${HC_UPDATER_REPO_ROOT} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})

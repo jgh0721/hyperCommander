@@ -142,7 +142,23 @@ while([DateTime]::UtcNow -lt $Deadline -and -not $Child.HasExited){
 if(-not $Interrupted){throw 'Could not interrupt the isolated test during replacement.'};$Child.Dispose()
 $null=Invoke-Probe @('gate',$Root) -Reject
 $null=Invoke-Probe @('recover',$Root);Assert-Original $Root $Hashes;Proof 'process-interruption-recovery' 'Blocked startup; reverse restoration matched all baseline hashes'
-$null=Invoke-Probe $Arguments;$null=Invoke-Probe @('verify',$CandidatePackage,$Root);$null=Invoke-Probe @('gate',$Root)
+# A scanner briefly holding a product file must not roll the update back. Release the
+# lock only after the move of that file has started failing.
+$Transient=[IO.File]::Open((Join-Path $Root 'Libs/platforms/qwindows.dll'),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+try{
+    $Child=Start-Child $Probe $Command;$Journal=Join-Path $Tx 'journal.json';$Index=-1;$Deadline=[DateTime]::UtcNow.AddSeconds(60)
+    while([DateTime]::UtcNow -lt $Deadline -and -not $Child.HasExited){
+        if($Index -lt 0 -and (Test-Path -LiteralPath $Journal)){try{$Files=@((Get-Content -LiteralPath $Journal -Raw|ConvertFrom-Json).files);for($I=0;$I -lt $Files.Count;++$I){if($Files[$I].path -eq 'Libs/platforms/qwindows.dll'){$Index=$I}}}catch{}}
+        if($Index -gt 0 -and (Test-Path -LiteralPath (Join-Path $Tx "backup/$($Index-1)"))){Start-Sleep -Milliseconds 700;break}
+        Start-Sleep -Milliseconds 5
+    }
+    if($Index -le 0){throw 'Transient lock test did not reach the locked file.'}
+}finally{$Transient.Dispose()}
+$Out=$Child.StandardOutput.ReadToEndAsync();$Err=$Child.StandardError.ReadToEndAsync()
+if(-not $Child.WaitForExit(120000)){$Child.Kill();throw 'Transient lock apply timed out.'}
+if($Child.ExitCode -ne 0){throw "Transient file lock rolled the update back: $($Out.GetAwaiter().GetResult())$($Err.GetAwaiter().GetResult())"};$Child.Dispose()
+Proof 'transient-file-lock-retry' 'Move retried until a briefly held product file was released'
+$null=Invoke-Probe @('verify',$CandidatePackage,$Root);$null=Invoke-Probe @('gate',$Root)
 $null=Invoke-Probe @('recover',$Root);Assert-Original $Root $Hashes;Proof 'installed-before-health-recovery' 'Candidate verified; explicit recovery restored baseline'
 $null=Invoke-Probe $Arguments
 $Retired=Join-Path $Root ('.update/'+[Guid]::NewGuid().ToString());$Protected=Join-Path $Root ('.update/'+[Guid]::NewGuid().ToString())
@@ -171,7 +187,8 @@ Write-UpdateJson (Join-Path $ServiceRoot 'product-inventory.json') $Inventory
 $ServiceHashes=Original-Hashes $ServiceRoot
 $PreviousPlatform=$env:QT_QPA_PLATFORM;$env:QT_QPA_PLATFORM='offscreen'
 try{
-    foreach($Mode in @('success','restart','restore','redirect','http-error','cancel','blocked','launch-failure')){
+    # resume runs before cancel, which leaves a partial download behind.
+    foreach($Mode in @('success','resume','restart','restore','redirect','http-error','cancel','blocked','launch-failure','health')){
         $ServiceConfig=Join-Path $Run ('service-config-'+$Mode);[IO.Directory]::CreateDirectory($ServiceConfig)|Out-Null
         $Command=(@($ServiceRoot,$CandidatePackage,$Mode,'--config-dir',$ServiceConfig)|ForEach-Object{'"'+$_+'"'}) -join ' '
         $Process=Start-Child $Service $Command;$Out=$Process.StandardOutput.ReadToEndAsync();$Err=$Process.StandardError.ReadToEndAsync()

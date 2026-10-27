@@ -1,4 +1,5 @@
 ﻿#include "stdafx.h"
+#include "updateMessages.hpp"
 #include "updateTransaction.hpp"
 
 #include <shellapi.h>
@@ -70,7 +71,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         std::wstring Details; try { Details = Wide(Error); } catch (...) { Details = L"update-failed"; }
         const bool CanStart = !ParentRunning && !Root.empty() && StartupAllowed(Root); bool Relaunched = false;
         if (Applying && CanStart) { try { Launch(Root, Tx); Relaunched = true; } catch (...) {} }
-        auto Message = L"업데이트를 완료하지 못했습니다. 파일과 복구 기록을 보존했습니다.\n\n" + Details;
+        std::wstring Guide; try { Guide = Explain(Error, Root); } catch (...) {}
+        auto Message = L"업데이트를 완료하지 못했습니다. 파일과 복구 기록을 보존했습니다.\n\n" + (Guide.empty() ? Details : Guide + L"\n\n" + Details);
         if (ParentRunning) Message += L"\n\n기존 HyperCommander 프로세스가 아직 종료되지 않았습니다. 파일은 교체하지 않았습니다. 종료를 확인한 뒤 다시 실행하십시오.";
         else if (CanStart) Message += Relaunched ? L"\n\n기존 제품을 다시 실행했습니다." : L"\n\n기존 제품을 다시 실행할 수 있습니다.";
         else Message += L"\n\n제품 창을 모두 닫은 뒤 다음 명령으로 복구하십시오.\n"

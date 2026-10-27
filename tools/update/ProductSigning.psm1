@@ -13,6 +13,47 @@ function Assert-UpdatePlainPath([string]$Path) {
         $Parent = [IO.Directory]::GetParent($Current); $Current = if ($Parent) { $Parent.FullName } else { $null }
     }
 }
+# Path ownership entries are cumulative. A client accepts the union of the
+# entries whose since is not newer than its own version (see update-contract.json).
+function Get-UpdateOwnership {
+    $Contract = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'update-contract.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $Entries = @($Contract.ownership)
+    if (-not $Entries.Count) { throw 'The update contract has no path ownership entries.' }
+    for ($Index = 1; $Index -lt $Entries.Count; ++$Index) {
+        if ([version]$Entries[$Index].since -le [version]$Entries[$Index - 1].since) { throw 'Update ownership entries need increasing versions.' }
+    }
+    return $Entries
+}
+function Get-UpdateOwnershipValues($Entry, [string]$Key) {
+    $Property = $Entry.PSObject.Properties[$Key]
+    if ($Property) { return @($Property.Value) } else { return @() }
+}
+function Test-UpdateOwnedPath([string]$Path, $Entries) {
+    foreach ($Entry in $Entries) {
+        if ($Path.Contains('/')) {
+            foreach ($Directory in (Get-UpdateOwnershipValues $Entry 'directories')) { if ($Path.StartsWith($Directory, [StringComparison]::Ordinal)) { return $true } }
+        } else {
+            if ((Get-UpdateOwnershipValues $Entry 'rootFiles') -ccontains $Path) { return $true }
+            if ($Path.EndsWith('.dll', [StringComparison]::Ordinal)) {
+                foreach ($Prefix in (Get-UpdateOwnershipValues $Entry 'rootDllPrefixes')) { if ($Path.StartsWith($Prefix, [StringComparison]::Ordinal)) { return $true } }
+            }
+        }
+    }
+    return $false
+}
+# The oldest client version whose updater accepts every path in the inventory.
+function Get-UpdateMinimumFromVersion($Inventory) {
+    $Entries = Get-UpdateOwnership; $Minimum = [version]$Entries[0].since
+    foreach ($Name in @(@($Inventory.files | ForEach-Object { [string]$_.path }) + 'product-inventory.json')) {
+        $Since = $null
+        for ($Count = 1; $Count -le $Entries.Count; ++$Count) {
+            if (Test-UpdateOwnedPath $Name $Entries[0..($Count - 1)]) { $Since = [version]$Entries[$Count - 1].since; break }
+        }
+        if ($null -eq $Since) { throw "Unowned product path: $Name. Add it to update-contract.json ownership." }
+        if ($Since -gt $Minimum) { $Minimum = $Since }
+    }
+    return $Minimum.ToString()
+}
 function Test-UpdatePe([string]$Path) {
     $File = [IO.File]::OpenRead($Path)
     try {
@@ -103,4 +144,4 @@ function Set-UpdateProductSignature([string]$Path, [string]$RelativePath, [strin
         return [pscustomobject]@{path=$RelativePath;sha256=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant();originalSha256=$Before;signature=$Result;action=$Action}
     } finally { if ($Locked) { $Mutex.ReleaseMutex() }; $Mutex.Dispose() }
 }
-Export-ModuleMember -Function Write-UpdateJson,Assert-UpdatePlainPath,Test-UpdatePe,Get-UpdateSignature,Assert-UpdateSignature,Set-UpdateProductSignature
+Export-ModuleMember -Function Write-UpdateJson,Assert-UpdatePlainPath,Get-UpdateOwnership,Test-UpdateOwnedPath,Get-UpdateMinimumFromVersion,Test-UpdatePe,Get-UpdateSignature,Assert-UpdateSignature,Set-UpdateProductSignature

@@ -1,0 +1,8 @@
+﻿@HC_HEADER_BOM@#pragma once
+#include <string_view>
+// Generated from tools/update/update-contract.json: the union of all ownership entries.
+namespace hc::update::policy {
+inline constexpr std::string_view OwnedRootFiles[] = { @HC_OWNED_rootFiles_CPP@ };
+inline constexpr std::string_view OwnedRootDllPrefixes[] = { @HC_OWNED_rootDllPrefixes_CPP@ };
+inline constexpr std::string_view OwnedDirectories[] = { @HC_OWNED_directories_CPP@ };
+}

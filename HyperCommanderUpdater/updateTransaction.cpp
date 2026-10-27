@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "updateTransaction.hpp"
+#include "updateOwnershipPolicy.hpp"
 
 #include <TlHelp32.h>
 #include <algorithm>
@@ -7,6 +8,28 @@
 namespace hc::update {
 namespace {
 void Require(bool Value, const char* Error) { if (!Value) throw std::runtime_error(Error); }
+// Antivirus and indexing scanners briefly open new files without sharing them.
+// Retry those errors for a few seconds before the transaction rolls back.
+template <class Action> bool Retried(Action&& Attempt) {
+    const auto Until = GetTickCount64() + 5000; DWORD Delay = 50;
+    for (;;) {
+        if (Attempt()) return true;
+        const auto Error = GetLastError();
+        if ((Error != ERROR_SHARING_VIOLATION && Error != ERROR_LOCK_VIOLATION && Error != ERROR_ACCESS_DENIED) || GetTickCount64() >= Until) { SetLastError(Error); return false; }
+        Sleep(Delay); Delay = std::min<DWORD>(Delay * 2, 500);
+    }
+}
+[[noreturn]] void FailFile(const char* Code, const Path& File) {
+    const auto Error = GetLastError();
+    throw std::runtime_error(std::string(Code) + ": " + Utf8(File.wstring()) + " (win32=" + std::to_string(Error) + ")");
+}
+// A process keeps the spelling it was started with, including 8.3 names.
+std::wstring LongName(std::wstring Text) {
+    if (Text.find(L'~') == std::wstring::npos) return Text;
+    std::wstring Long(32768, L'\0'); const auto Size = GetLongPathNameW(Text.c_str(), Long.data(), DWORD(Long.size()));
+    if (!Size || Size >= Long.size()) return Text;
+    Long.resize(Size); return Long;
+}
 struct Handle {
     HANDLE value_ = INVALID_HANDLE_VALUE;
     Handle() = default;
@@ -38,10 +61,17 @@ Path Active(const Path& Root) {
     const auto Name = ParseJson(ReadBounded(Root / L".update/active.json", 4096)).At("transaction", Json::Kind::String).text_;
     const auto Tx = Root / L".update" / Wide(Name); CheckTransaction(Root, Tx); return Tx;
 }
-Handle Lock(const Path& Root) {
+// Cleanup, health checks and the helper take the same lock for a short time.
+// Wait for it instead of failing an apply because cleanup happened to run.
+Handle Lock(const Path& Root, DWORD WaitMs = 10000) {
     CheckInstallRoot(Root); std::filesystem::create_directories(Root / L".update"); CheckPlainPath(Root / L".update/lock");
-    Handle Result; Result.value_ = CreateFileW((Root / L".update/lock").c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
-    Require(Result.value_ != INVALID_HANDLE_VALUE, "update-root-locked"); return Result;
+    const auto Until = GetTickCount64() + WaitMs;
+    for (;;) {
+        Handle Result; Result.value_ = CreateFileW((Root / L".update/lock").c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
+        if (Result.value_ != INVALID_HANDLE_VALUE) return Result;
+        Require(GetLastError() == ERROR_SHARING_VIOLATION && GetTickCount64() < Until, "update-root-locked");
+        Sleep(50);
+    }
 }
 struct Entry { std::string name_, original_, replacement_; std::uint64_t size_ = 0; bool existed_ = false; };
 struct Journal { std::string state_; std::vector<Entry> files_; };
@@ -76,7 +106,7 @@ Journal Load(const Path& Tx) {
 }
 void Move(const Path& From, const Path& To, bool Replace = false) {
     CheckPlainPath(From); CheckPlainPath(To); std::filesystem::create_directories(To.parent_path()); CheckPlainPath(To);
-    if (!MoveFileExW(From.c_str(), To.c_str(), MOVEFILE_WRITE_THROUGH | (Replace ? MOVEFILE_REPLACE_EXISTING : 0))) {
+    if (!Retried([&] { return MoveFileExW(From.c_str(), To.c_str(), MOVEFILE_WRITE_THROUGH | (Replace ? MOVEFILE_REPLACE_EXISTING : 0)) != FALSE; })) {
         const auto Error = GetLastError();
         throw std::runtime_error("update-move-failed: " + Utf8(From.wstring()) + " -> " + Utf8(To.wstring())
             + " (win32=" + std::to_string(Error) + ")");
@@ -98,7 +128,7 @@ void Rollback(const Path& Root, const Path& Tx, Journal& Journal) {
             Require(std::filesystem::exists(Destination) && HashFile(Destination) == Entry.original_, "update-backup-missing");
         } else if (std::filesystem::exists(Destination)) {
             Require(!Entry.replacement_.empty() && HashFile(Destination) == Entry.replacement_, "update-rollback-user-file-conflict");
-            Require(DeleteFileW(Destination.c_str()), "update-rollback-delete");
+            if (!Retried([&] { return DeleteFileW(Destination.c_str()) != FALSE; })) FailFile("update-rollback-delete", Destination);
         }
     }
     Journal.state_ = "rolledBack"; Save(Tx, Journal);
@@ -119,7 +149,7 @@ void WaitParent(const Path& Root, unsigned Pid, std::uint64_t Created, std::wstr
     if (((std::uint64_t(Creation.dwHighDateTime) << 32) | Creation.dwLowDateTime) != Created) { Require(Handoff.empty(), "update-parent-changed-before-handoff"); return; }
     const bool Queried = QueryFullProcessImageNameW(Parent.value_, 0, Name, &Length);
     if (WaitForSingleObject(Parent.value_, 0) == WAIT_OBJECT_0) { Require(Handoff.empty(), "update-parent-exited-before-handoff"); return; }
-    Require(Queried && Same(Name, (Root / L"HyperCommander.exe").wstring()), "update-parent-identity");
+    Require(Queried && Same(LongName(std::wstring(Name, Length)), (Root / L"HyperCommander.exe").wstring()), "update-parent-identity");
     if (!Handoff.empty()) {
         constexpr std::wstring_view Prefix = L"Local\\HyperCommander.Update.";
         Require(Handoff.starts_with(Prefix) && Handoff.size() == Prefix.size() + 36, "update-handoff-name");
@@ -201,16 +231,39 @@ void CleanAcknowledged(const Path& Root, const Path& Tx, bool Retire) {
     for (const auto& Directory : Directories) { CheckPlainPath(Directory); std::filesystem::remove(Directory); }
     if (Retire) std::filesystem::remove(Tx);
 }
+// Removes a transaction that never reached ApplyTransaction: its manifests,
+// archive and staging tree. Any other content keeps the whole transaction.
+void DiscardUnapplied(const Path& Tx, std::optional<std::filesystem::file_time_type> Cutoff) {
+    if (std::filesystem::exists(Tx / L"journal.json")) return;
+    const std::wstring_view Downloads[]{L"update-manifest.json", L"update-manifest.cat", L"portable.zip", L"HyperCommanderUpdater.exe"};
+    std::vector<Path> Files, Directories; auto Newest = std::filesystem::last_write_time(Tx);
+    for (const auto& Entry : std::filesystem::recursive_directory_iterator(Tx)) {
+        const auto& Item = Entry.path(); CheckPlainPath(Item); Require(Under(Item, Tx), "update-clean-boundary");
+        Newest = std::max(Newest, Entry.last_write_time());
+        const bool Staged = Item == Tx / L"staging" || Under(Item, Tx / L"staging");
+        if (Entry.is_directory()) { Require(Staged, "update-clean-unrecognized-file"); Directories.push_back(Item); continue; }
+        // An interrupted QSaveFile leaves its temporary copy beside the target.
+        const auto Name = Item.filename().wstring();
+        const bool Download = Item.parent_path() == Tx && std::ranges::any_of(Downloads, [&](std::wstring_view Base) { return Name.starts_with(Base); });
+        Require(Staged || Download, "update-clean-unrecognized-file"); Files.push_back(Item);
+    }
+    if (Cutoff && Newest > *Cutoff) return;
+    for (const auto& File : Files) Require(DeleteFileW(File.c_str()), "update-clean-delete");
+    std::sort(Directories.begin(), Directories.end(), [](const auto& A, const auto& B) { return A.native().size() > B.native().size(); });
+    for (const auto& Directory : Directories) std::filesystem::remove(Directory);
+    std::filesystem::remove(Tx);
+}
 }
 void CheckProductRelative(std::string_view Relative) {
     CheckRelative(Relative);
-    const bool Root = Relative.find('/') == std::string_view::npos;
-    const std::set<std::string_view> Names{"HyperCommander.exe", "HyperCommanderAdmin.exe", "HyperEditor.exe", "HyperCompare.exe", "HyperCompareCli.exe", "HyperEditorWeb.exe", "QtWebEngineProcess.exe",
-        "hc-plugin-host-x64.exe", "hc-plugin-inspect.exe", "hc-search-index.exe", "HyperCommanderUpdater.exe", "hc-updater.exe", "Everything64.dll", "pdfium.dll", "runtime-inventory.json", "product-inventory.json"};
-    const bool Owned = (Root && (Names.contains(Relative) || ((Relative.starts_with("Qt6") || Relative.starts_with("vcruntime") || Relative.starts_with("msvcp")
-        || Relative.starts_with("concrt") || Relative.starts_with("d3dcompiler_") || Relative == "opengl32sw.dll") && Relative.ends_with(".dll"))))
-        || Relative.starts_with("Libs/") || Relative.starts_with("Licenses/") || Relative.starts_with("Addons/WCX/IsoImage/")
-        || Relative.starts_with("Addons/WLX/HyperViewer/") || Relative.starts_with("Third-Party/SevenZip/") || Relative.starts_with("Third-Party/AlzEgg/");
+    // A client accepts only the paths its own build owned. Extend ownership in
+    // update-contract.json; packages derive their oldest client from it.
+    const auto Owned = [&] {
+        if (Relative.find('/') != std::string_view::npos)
+            return std::ranges::any_of(policy::OwnedDirectories, [&](std::string_view Directory) { return Relative.starts_with(Directory); });
+        return std::ranges::find(policy::OwnedRootFiles, Relative) != std::end(policy::OwnedRootFiles)
+            || (Relative.ends_with(".dll") && std::ranges::any_of(policy::OwnedRootDllPrefixes, [&](std::string_view Prefix) { return Relative.starts_with(Prefix); }));
+    }();
     if (!Owned) throw std::runtime_error("update-unowned-path: " + std::string(Relative));
 }
 void CheckInstallRoot(const Path& Root) {
@@ -222,9 +275,20 @@ void CheckInstallRoot(const Path& Root) {
     Require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token.value_) && GetTokenInformation(Token.value_, TokenElevation, &Elevation, sizeof(Elevation), &Size)
         && !Elevation.TokenIsElevated, "update-elevated-process");
 }
+Path InstallRoot(const Path& Launched) {
+    // Launch spellings can differ from the stored names in letter case and 8.3
+    // names. Only those differences are normalized; a junction or SUBST root
+    // keeps its spelling, so CheckInstallRoot still rejects it.
+    try {
+        const auto Stored = std::filesystem::weakly_canonical(Launched);
+        auto Spelled = Launched.lexically_normal(); Spelled.make_preferred();
+        if (Same(LongName(Spelled.wstring()), Stored.lexically_normal().wstring())) return Stored;
+    } catch (const std::exception&) {}
+    return Launched;
+}
 Path ExecutableRoot() {
     wchar_t Image[32768]{}; const auto Length = GetModuleFileNameW(nullptr, Image, DWORD(std::size(Image)));
-    Require(Length && Length < std::size(Image), "update-executable-root"); return Path(Image).parent_path();
+    Require(Length && Length < std::size(Image), "update-executable-root"); return InstallRoot(Path(Image).parent_path());
 }
 void DurableWrite(const Path& File, std::string_view Bytes) {
     CheckPlainPath(File); const auto Temp = Path(File.wstring() + L".new"); CheckPlainPath(Temp);
@@ -249,11 +313,12 @@ bool OtherProductProcesses(const Path& Root, unsigned IgnorePid, ProductProcessC
         Handle Process; Process.value_ = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Entry.th32ProcessID);
         wchar_t Name[32768]{}; DWORD Size = DWORD(std::size(Name));
         if (Process.value_ && QueryFullProcessImageNameW(Process.value_, 0, Name, &Size)) {
-            if (!Under(Name, Root)) continue;
+            const auto Image = LongName(std::wstring(Name, Size));
+            if (!Under(Image, Root)) continue;
             // Only our own windowless plugin host belongs to normal app
             // shutdown. Other instances and visible/embedded viewers still block.
             if (Check == ProductProcessCheck::BeforeRestart && Entry.th32ParentProcessID == GetCurrentProcessId()
-                && Same(Path(Name).lexically_normal().wstring(), (Root / L"hc-plugin-host-x64.exe").lexically_normal().wstring())
+                && Same(Path(Image).lexically_normal().wstring(), (Root / L"hc-plugin-host-x64.exe").lexically_normal().wstring())
                 && !HasVisibleWindows(Entry.th32ProcessID)) continue;
             return true;
         }
@@ -298,7 +363,8 @@ void ApplyTransaction(const Path& InputRoot, const Path& InputTx, unsigned Paren
             if (Entry.existed_) { Require(HashFile(Destination) == Entry.original_, "update-product-changed"); Move(Destination, Tx / L"backup" / std::to_wstring(Index)); }
             if (!Entry.replacement_.empty()) {
                 const auto& File = Replacements.at(Entry.name_); const auto Temp = Tx / L"replacement.tmp"; CheckPlainPath(Temp);
-                Require(CopyFileW((Tx / L"staging" / Wide(Entry.name_)).c_str(), Temp.c_str(), FALSE), "update-copy-failed");
+                const auto Source = Tx / L"staging" / Wide(Entry.name_);
+                if (!Retried([&] { return CopyFileW(Source.c_str(), Temp.c_str(), FALSE) != FALSE; })) FailFile("update-copy-failed", Source);
                 VerifyProductFile(Temp, Entry.name_, File.hash_, File.size_);
                 Handle Flush; Flush.value_ = CreateFileW(Temp.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
                 Require(Flush.value_ != INVALID_HANDLE_VALUE && FlushFileBuffers(Flush.value_), "update-product-flush");
@@ -330,5 +396,26 @@ void AcknowledgeTransaction(const Path& InputRoot) {
             try { CleanAcknowledged(Root, Entry.path(), true); } catch (...) {}
         }
     } catch (...) {}
+}
+void PruneTransactions(const Path& InputRoot, const Path& Own, std::chrono::seconds MinimumAge) {
+    // Cleanup is optional: skip it rather than wait while an update holds the root.
+    const auto Root = Canonical(InputRoot); auto RootLock = Lock(Root, 0);
+    // Prepared and applied transactions stay. An unreadable reference stops pruning.
+    std::set<std::wstring> Referenced;
+    for (const auto Name : {L"active.json", L"ready.json"}) {
+        const auto File = Root / L".update" / Name;
+        if (std::filesystem::exists(File)) Referenced.insert(Wide(ParseJson(ReadBounded(File, 4096)).At("transaction", Json::Kind::String).text_));
+    }
+    // Other instances may still be downloading; only the caller's own earlier
+    // transaction is removed regardless of age.
+    const auto Cutoff = std::filesystem::file_time_type::clock::now() - MinimumAge;
+    for (const auto& Entry : std::filesystem::directory_iterator(Root / L".update")) {
+        const auto Name = Entry.path().filename().wstring();
+        if (!Entry.is_directory() || Referenced.contains(Name)) continue;
+        try {
+            CheckTransaction(Root, Entry.path());
+            DiscardUnapplied(Entry.path(), !Own.empty() && Name == Own.filename().wstring() ? std::nullopt : std::optional(Cutoff));
+        } catch (const std::exception&) {}
+    }
 }
 }

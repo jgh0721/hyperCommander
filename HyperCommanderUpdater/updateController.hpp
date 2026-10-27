@@ -51,6 +51,7 @@ private:
     void fail(const QString& Error);
     void showProgress(const QString& Text);
     void fetch(const QString& Url, const QString& Destination, std::uint64_t Limit, std::function<void()> Done, int Redirects = 0);
+    void fetchArchive(const QString& Origin, const QString& Url, const QString& Partial, std::uint64_t Limit, std::function<void()> Done, int Redirects = 0, int Attempt = 0);
     void run(std::function<Result(std::stop_token)> Work, std::function<void(Result)> Done);
     QWidget* window_;
     std::function<bool()> canRestart_;
