@@ -28,6 +28,7 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     void sigActivePanelChanged( CmpPanel* Panel );
 
   public slots:
+    void ActivateCommandLine();
     void SubmitCommandLine(bool KeepOpen);
 
     void OnDriveAdd( const QString& Root );

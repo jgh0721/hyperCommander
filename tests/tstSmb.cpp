@@ -351,6 +351,89 @@ private slots:
         QVERIFY(Dialog.grab().save(QDir(QCoreApplication::applicationDirPath()).filePath("keyboard-columns.png"))); Dialog.reject();
     }
 
+    void todoBugCommandLineScopedKeys()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        auto* Manager = TyStCommandMgr::GetInstance();
+        auto* Command = main_->findChild<fm::ui::CommandLine*>("hc.commandLine"); QVERIFY(Command);
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Text = Command->lineEdit()->text(); const auto History = Command->history();
+        const bool Visible = Command->isVisible();
+        const auto Restore = qScopeGuard([&] {
+            Settings.Replace(Original); Manager->Refresh(); main_->RestoreWorkspace(Workspace);
+            Command->lineEdit()->setText(Text); Command->SetHistory(History); Command->setVisible(Visible);
+        });
+        auto General = Settings.Read(hc::settings::Section::General).toObject(); General["useBuiltInShortcuts"] = true;
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        QVERIFY(Settings.Put(hc::settings::Section::Shortcuts, QJsonObject{})); Manager->Refresh();
+        Manager->SaveSettings(); Manager->Refresh(); // Reproduce the saved panel-key snapshot.
+        const auto PanelKeys = Manager->Retrieve();
+        QCOMPARE(hc::ui::CommandId(PanelKeys.value(QKeyCombination(Qt::Key_Return))), QString("hc.navigate.open"));
+        {
+            hc::ui::KeyboardSettingsPage Keys;
+            auto* Table = Keys.findChild<QTableWidget*>("hc.keys.commands"); QVERIFY(Table);
+            const auto CheckRow = [&](const QString& Id, const QString& Key, const QString& Scope) {
+                for (int Row = 0; Row < Table->rowCount(); ++Row) if (Table->item(Row, 1)->text() == Id)
+                    return Table->item(Row, 3)->text() == Key && Table->item(Row, 4)->text() == Key && Table->item(Row, 0)->text() == Scope;
+                return false;
+            };
+            QVERIFY(CheckRow("hc.commandLine.execute", "Return", QStringLiteral("명령행 입력")));
+            QVERIFY(CheckRow("hc.commandLine.keepOpen", "Shift+Return", QStringLiteral("명령행 입력")));
+            QVERIFY(CheckRow("hc.commandLine.activate", "Ctrl+/", QStringLiteral("창·설정")));
+            auto* Selector = static_cast<hc::ui::CommandSelector*>(Keys.findChild<QComboBox*>("hc.keys.command"));
+            auto* Capture = Keys.findChild<fm::ui::KeyCaptureEdit*>("hc.keys.capture");
+            auto* Assign = Keys.findChild<QPushButton*>("hc.keys.assign");
+            auto* Replace = Keys.findChild<QPushButton*>("hc.keys.reassign");
+            const auto Choose = [&](const QString& Id, const QKeySequence& Key) {
+                Selector->SetCommand(Id); Capture->setPending(Key); Capture->captured(Key);
+            };
+            Choose("hc.commandLine.execute", QKeySequence(Qt::Key_Return));
+            QVERIFY(Assign->isEnabled()); QVERIFY(Replace->isHidden()); Assign->click();
+            Choose("hc.commandLine.keepOpen", QKeySequence(Qt::Key_Return));
+            QVERIFY(!Assign->isEnabled()); QVERIFY(!Replace->isHidden());
+            Choose("hc.commandLine.keepOpen", QKeySequence(Qt::SHIFT | Qt::Key_Return));
+            QVERIFY(Assign->isEnabled()); Assign->click();
+            QCOMPARE(Manager->Retrieve(), PanelKeys);
+            Keys.findChild<QPushButton*>("hc.keys.clear")->click();
+            QVERIFY(hc::ui::CommandKeys(Manager->RetrieveForCommand("hc.commandLine.keepOpen"), "hc.commandLine.keepOpen").isEmpty());
+            QCOMPARE(Manager->Retrieve(), PanelKeys);
+            Capture->setPending(QKeySequence(Qt::SHIFT | Qt::Key_Return));
+            Selector->SetCommand("hc.commandLine.execute"); Selector->SetCommand("hc.commandLine.keepOpen");
+            QVERIFY(Assign->isEnabled()); Assign->click();
+        }
+        Manager->SaveSettings(); Manager->Refresh();
+        const auto Saved = Settings.Read(hc::settings::Section::Shortcuts).toObject();
+        QCOMPARE(Saved["Return"].toString(), QString("hc.navigate.open"));
+        QCOMPARE(Saved["commandLine"].toObject()["Return"].toString(), QString("hc.commandLine.execute"));
+        QCOMPARE(Saved["commandLine"].toObject()["Shift+Return"].toString(), QString("hc.commandLine.keepOpen"));
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(Directory.path(), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading());
+        Panel->sig_NotifyPanelActivated();
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        main_->showNormal(); main_->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(main_)); View->EnsureKeyboardFocusOnView();
+        Command->hide(); Command->lineEdit()->setText("retained input");
+        QVERIFY(QApplication::focusWidget());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Slash, Qt::ControlModifier);
+        QTRY_VERIFY(Command->isVisible()); QTRY_VERIFY(Command->lineEdit()->hasFocus());
+        QCOMPARE(Command->lineEdit()->text(), QString("retained input"));
+        for (int I = 0; I < 4; ++I) {
+            const auto Name = QString("command-%1.txt").arg(I);
+            Command->lineEdit()->setText(QString("cmd /D /C echo launched>%1").arg(Name));
+            QTest::keyClick(Command->lineEdit(), I % 2 ? Qt::Key_Enter : Qt::Key_Return, I >= 2 ? Qt::ShiftModifier : Qt::NoModifier);
+            QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(Directory.filePath(Name)).size() > 0, 5000);
+            QVERIFY(Command->lineEdit()->text().isEmpty());
+        }
+        Manager->SetShortcutWithCMD(QKeyCombination(Qt::ControlModifier, Qt::Key_J), "hc.commandLine.activate");
+        main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
+        View->EnsureKeyboardFocusOnView();
+        QVERIFY(QApplication::focusWidget());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_J, Qt::ControlModifier);
+        QTRY_VERIFY(Command->lineEdit()->hasFocus());
+        qInfo() << "Command-input scope: saved panel Enter, assignment/conflicts/clear, defaults, activation, and four cmd launches passed";
+    }
+
     void fileCompareUi()
     {
         auto& Settings = hc::settings::AppSettings(); const auto Saved = Settings.Object();

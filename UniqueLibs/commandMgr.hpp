@@ -21,10 +21,11 @@ class CCommandMgr : public QObject
     void                  Refresh();
     void                  SaveSettings();
     TyMapShortcutToCMDStr Retrieve() const;
+    TyMapShortcutToCMDStr RetrieveForCommand(const QString& Id) const;
     TyHC_COMMAND          GetDefaultCMD( const QString& Command );
 
     void SetShortcutWithCMD( QKeyCombination Key, const QString& CMD );
-    void DelShortcut( QKeyCombination Key );
+    void DelShortcut( QKeyCombination Key, const QString& Id = {} );
 
     QWidget*         GetMainUI() const;
     void             SetMainUI( QWidget* MainUI );

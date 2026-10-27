@@ -46,14 +46,47 @@ private slots:
     void commandLineContextualKeys()
     {
         const auto Keys = EffectiveShortcuts({}, {});
-        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), Keys, {}), QString("hc.commandLine.execute"));
-        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Enter, Qt::ShiftModifier | Qt::KeypadModifier), Keys, {}), QString("hc.commandLine.keepOpen"));
-        QVERIFY(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier), Keys, {}).isEmpty());
-        const QJsonObject Overrides{{"Return", QJsonValue::Null}, {"Ctrl+R", "hc.commandLine.keepOpen"}};
+        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), {}), QString("hc.commandLine.execute"));
+        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Enter, Qt::ShiftModifier | Qt::KeypadModifier), {}), QString("hc.commandLine.keepOpen"));
+        QVERIFY(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier), {}).isEmpty());
+        const QJsonObject Overrides{{"commandLine", QJsonObject{{"Return", QJsonValue::Null}, {"Ctrl+R", "hc.commandLine.keepOpen"}}}};
         const auto Custom = EffectiveShortcuts({}, Overrides);
-        QVERIFY(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), Custom, Overrides).isEmpty());
-        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_R, Qt::ControlModifier), Custom, Overrides), QString("hc.commandLine.keepOpen"));
+        QVERIFY(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), Overrides).isEmpty());
+        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_R, Qt::ControlModifier), Overrides), QString("hc.commandLine.keepOpen"));
+        QCOMPARE(Custom.value(QKeyCombination(Qt::Key_Return)), Keys.value(QKeyCombination(Qt::Key_Return)));
         QCOMPARE(ShortcutCommand(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), Keys), QString("hc.navigate.open"));
+    }
+    void commandLineSavedPanelBindings()
+    {
+        // SaveSettings materializes every effective panel key. Such a snapshot
+        // used to turn off both command-input defaults after opening settings.
+        for (const auto* Preset : {"legacy", "prototype"}) {
+            const QJsonObject General{{"shortcutPreset", Preset}};
+            const auto Keys = EffectiveShortcuts(General, {});
+            QJsonObject Saved;
+            for (auto It = Keys.begin(); It != Keys.end(); ++It)
+                Saved[QKeySequence(It.key()).toString(QKeySequence::PortableText)] = CommandId(It.value());
+            for (const auto Key : {Qt::Key_Return, Qt::Key_Enter}) {
+                QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Key, Qt::NoModifier), Saved), QString("hc.commandLine.execute"));
+                QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Key, Qt::ShiftModifier), Saved), QString("hc.commandLine.keepOpen"));
+            }
+            QCOMPARE(EffectiveShortcuts(General, Saved), Keys);
+            Saved["Return"] = QJsonValue::Null;
+            QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), Saved), QString("hc.commandLine.execute"));
+            QCOMPARE(ShortcutCommand(QKeyEvent(QEvent::KeyPress, Qt::Key_Slash, Qt::ControlModifier), Keys), QString("hc.commandLine.activate"));
+        }
+        const QJsonObject Legacy{{"Return", "hc.commandLine.keepOpen"}, {"Ctrl+R", "hc.commandLine.execute"}};
+        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), Legacy), QString("hc.commandLine.keepOpen"));
+        QCOMPARE(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_R, Qt::ControlModifier), Legacy), QString("hc.commandLine.execute"));
+        QCOMPARE(ShortcutCommand(QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier), EffectiveShortcuts({}, Legacy)), QString("hc.navigate.open"));
+        auto Scoped = Legacy;
+        Scoped["commandLine"] = QJsonObject{{"Return", QJsonValue::Null}, {"Ctrl+C", "hc.commandLine.execute"}};
+        QVERIFY(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_Enter, Qt::KeypadModifier), Scoped).isEmpty());
+        QVERIFY(CommandLineShortcut(QKeyEvent(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier), Scoped).isEmpty());
+        const QJsonObject Disabled{{"Ctrl+/", QJsonValue::Null}};
+        QVERIFY(CommandKeys(EffectiveShortcuts({}, Disabled), "hc.commandLine.activate").isEmpty());
+        const QJsonObject Rebound{{"Ctrl+/", "hc.jobs.show"}};
+        QCOMPARE(ShortcutCommand(QKeyEvent(QEvent::KeyPress, Qt::Key_Slash, Qt::ControlModifier), EffectiveShortcuts({}, Rebound)), QString("hc.jobs.show"));
     }
     void commandLineLaunchPlans()
     {

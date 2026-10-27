@@ -60,15 +60,12 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     commandLine_->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showCommandLine"].toBool(true));
     connect(commandLine_, &fm::ui::CommandLine::commandEntered, this, [this](const QString& Command) { executeCommandLine(Command, false); });
     const auto RefreshCommandHelp = [this] {
-        const auto Keys = TyStCommandMgr::GetInstance()->Retrieve();
         const auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
-        auto Candidates = Keys.keys();
-        Candidates.append(QKeyCombination(Qt::Key_Return));
-        Candidates.append(QKeyCombination(Qt::ShiftModifier, Qt::Key_Return));
+        const auto Candidates = hc::ui::EffectiveCommandLineShortcuts(Overrides).keys();
         QStringList Run, Keep;
         for (const auto Key : Candidates) {
             const QKeyEvent Event(QEvent::KeyPress, Key.key(), Key.keyboardModifiers());
-            const auto Id = hc::ui::CommandLineShortcut(Event, Keys, Overrides);
+            const auto Id = hc::ui::CommandLineShortcut(Event, Overrides);
             const auto Label = QKeySequence(Key).toString(QKeySequence::NativeText);
             if (Id == "hc.commandLine.execute") Run.append(Label);
             if (Id == "hc.commandLine.keepOpen") Keep.append(Label);
@@ -583,11 +580,16 @@ bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
         && (Event->type() == QEvent::ShortcutOverride || Event->type() == QEvent::KeyPress)) {
         const auto* Key = static_cast<QKeyEvent*>(Event);
         const auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
-        const auto Id = hc::ui::CommandLineShortcut(*Key, TyStCommandMgr::GetInstance()->Retrieve(), Overrides);
+        const auto Id = hc::ui::CommandLineShortcut(*Key, Overrides);
         const bool Execute = Id == "hc.commandLine.execute" || Id == "hc.commandLine.keepOpen";
         if (Event->type() == QEvent::ShortcutOverride) {
             // Keep editing shortcuts (especially Ctrl+C) inside the line edit.
-            Event->accept(); return true;
+            const auto Activation = hc::ui::ShortcutCommand(*Key, TyStCommandMgr::GetInstance()->Retrieve());
+            const bool Editing = Key->matches(QKeySequence::Copy) || Key->matches(QKeySequence::Cut)
+                || Key->matches(QKeySequence::Paste) || Key->matches(QKeySequence::SelectAll)
+                || Key->matches(QKeySequence::Undo) || Key->matches(QKeySequence::Redo);
+            if (Execute || Editing || Activation != "hc.commandLine.activate") { Event->accept(); return true; }
+            return QMainWindow::eventFilter(Object, Event);
         }
         if (Execute) { SubmitCommandLine(Id == "hc.commandLine.keepOpen"); return true; }
         if (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter) return true;
@@ -776,6 +778,12 @@ void QMainUI::updateCommandLinePrompt(const QString& Path)
     Prompt->setText(Text);
     Prompt->setAccessibleName(Path);
     // setPrompt() keeps the original full path in the label tooltip.
+}
+
+void QMainUI::ActivateCommandLine()
+{
+    commandLine_->show();
+    commandLine_->lineEdit()->setFocus(Qt::ShortcutFocusReason);
 }
 
 void QMainUI::SubmitCommandLine(bool KeepOpen)

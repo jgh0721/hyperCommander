@@ -855,7 +855,8 @@ void CommandUiBridge::RefreshShortcutLabels()
     for (auto It = actions_.begin(); It != actions_.end(); ++It) {
         if (!It.value()) continue;
         auto* Command = It.value().data();
-        const auto Keys = hc::ui::CommandKeys(Values, It.key());
+        const auto Keys = hc::ui::CommandKeys(hc::ui::IsCommandLineShortcut(It.key())
+            ? TyStCommandMgr::GetInstance()->RetrieveForCommand(It.key()) : Values, It.key());
         QStringList Labels;
         for (const auto& Key : Keys) Labels.append(Key.toString(QKeySequence::NativeText));
         const auto Label = Labels.value(0);
@@ -1011,6 +1012,9 @@ void CommandUiBridge::createCommandUi()
         if (auto* Model = PanelModel(activePanel_)) Model->RequestDirectorySizes();
     });
     Add("hc.file.context", tr("상황메뉴"), [this] { ShowShellMenu(commandIndex()); });
+    Add("hc.commandLine.activate", tr("명령행 입력 활성화"), [Window] {
+        QMetaObject::invokeMethod(Window, "ActivateCommandLine", Qt::DirectConnection);
+    });
     Add("hc.commandLine.execute", tr("명령행 실행"), [Window] {
         QMetaObject::invokeMethod(Window, "SubmitCommandLine", Qt::DirectConnection, Q_ARG(bool, false));
     });
@@ -1084,7 +1088,7 @@ void CommandUiBridge::createCommandUi()
     Add("hc.search.focus", tr("설정 범위에서 찾기"), [QuickFind] { QuickFind->FocusStandard(); });
     Add("hc.search.everything", tr("Everything에서 찾기"), [QuickFind] { QuickFind->FocusEverything(); });
     Add("hc.search.openLocation", tr("검색 결과의 원본 위치 열기"), [this] { if (activePanel_) activePanel_->OpenSearchLocation(); });
-    for (const auto* Id : {"hc.search.focus", "hc.search.everything", "hc.navigate.back", "hc.navigate.forward"}) {
+    for (const auto* Id : {"hc.search.focus", "hc.search.everything", "hc.navigate.back", "hc.navigate.forward", "hc.commandLine.activate"}) {
         auto* Key = new QShortcut(Window); Key->setContext(Qt::WindowShortcut);
         const auto Update = [Key, Id] { Key->setKeys(hc::ui::CommandKeys(TyStCommandMgr::GetInstance()->Retrieve(), Id)); };
         Update(); connect(TyStCommandMgr::GetInstance(), &CCommandMgr::ShortcutsChanged, Key, Update);

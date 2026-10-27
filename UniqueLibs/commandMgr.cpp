@@ -40,6 +40,9 @@ void CCommandMgr::Refresh()
 void CCommandMgr::SaveSettings()
 {
     QJsonObject Overrides;
+    const auto Scoped = hc::ui::CommandLineShortcutOverrides(
+        hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject());
+    if (!Scoped.isEmpty()) Overrides["commandLine"] = Scoped;
     const auto Values = Retrieve();
     const auto Defaults = hc::ui::DefaultShortcuts(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject());
     for (auto It = Defaults.cbegin(); It != Defaults.cend(); ++It)
@@ -59,14 +62,37 @@ TyHC_COMMAND CCommandMgr::GetDefaultCMD( const QString& Command )
     return hc::ui::FindCommand(Command);
 }
 
+TyMapShortcutToCMDStr CCommandMgr::RetrieveForCommand(const QString& Id) const
+{
+    return hc::ui::IsCommandLineShortcut(Id)
+        ? hc::ui::EffectiveCommandLineShortcuts(hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject())
+        : Retrieve();
+}
+
 void CCommandMgr::SetShortcutWithCMD( QKeyCombination Key, const QString& CMD )
 {
     if (GetDefaultCMD(CMD).Name.isEmpty()) return;
+    if (hc::ui::IsCommandLineShortcut(CMD)) {
+        auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+        auto Scoped = hc::ui::CommandLineShortcutOverrides(Overrides);
+        Scoped[QKeySequence(Key).toString(QKeySequence::PortableText)] = hc::ui::CommandId(CMD);
+        Overrides["commandLine"] = Scoped;
+        hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides);
+        emit ShortcutsChanged(); return;
+    }
     (*SpMapKeyToCMDText_)[Key] = GetDefaultCMD(CMD).Name; SaveSettings(); emit ShortcutsChanged();
 }
 
-void CCommandMgr::DelShortcut( QKeyCombination Key )
+void CCommandMgr::DelShortcut( QKeyCombination Key, const QString& Id )
 {
+    if (hc::ui::IsCommandLineShortcut(Id)) {
+        auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+        auto Scoped = hc::ui::CommandLineShortcutOverrides(Overrides);
+        Scoped[QKeySequence(Key).toString(QKeySequence::PortableText)] = QJsonValue::Null;
+        Overrides["commandLine"] = Scoped;
+        hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides);
+        emit ShortcutsChanged(); return;
+    }
     SpMapKeyToCMDText_->remove(Key); SaveSettings(); emit ShortcutsChanged();
 }
 

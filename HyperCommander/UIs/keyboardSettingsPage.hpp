@@ -17,7 +17,7 @@ public:
         auto* Page = new QWidget; auto* Rows = new QVBoxLayout(Page); Tabs->addTab(Page, tr("단축키"));
         auto* Filter = new QHBoxLayout; Rows->addLayout(Filter);
         search_ = new fm::ui::SearchField(Page); search_->setObjectName("hc.keys.search"); search_->setPlaceholderText(tr("명령 또는 키 찾기")); Filter->addWidget(search_, 1);
-        scope_ = new QComboBox(Page); scope_->setObjectName("hc.keys.scope"); scope_->addItems({tr("전체"), tr("파일 작업"), tr("패널·탭"), tr("탐색"), tr("창·설정")}); Filter->addWidget(scope_);
+        scope_ = new QComboBox(Page); scope_->setObjectName("hc.keys.scope"); scope_->addItems({tr("전체"), tr("파일 작업"), tr("패널·탭"), tr("탐색"), tr("창·설정"), tr("명령행 입력")}); Filter->addWidget(scope_);
         auto* PresetLabel = new QLabel(tr("기본 키:"), Page); Filter->addWidget(PresetLabel);
         preset_ = new QComboBox(Page); preset_->setObjectName("hc.keys.preset"); preset_->addItems({tr("기존 기본값"), tr("파일 작업 기본값")}); Filter->addWidget(preset_); PresetLabel->setBuddy(preset_);
         preset_->setAccessibleName(tr("기본 단축키 구성"));
@@ -62,7 +62,7 @@ public:
         connect(key_, &fm::ui::KeyCaptureEdit::captured, this, [this] { updateConflict(); });
         connect(key_, &fm::ui::KeyCaptureEdit::cleared, this, [this] { updateConflict(); });
         connect(assign_, &QPushButton::clicked, this, [this] { assign(false); }); connect(reassign_, &QPushButton::clicked, this, [this] { assign(true); });
-        connect(Clear, &QPushButton::clicked, this, [this] { auto* M = TyStCommandMgr::GetInstance(); const auto Id = selector_->Command(); for (const auto& K : CommandKeys(M->Retrieve(), Id)) M->DelShortcut(K[0]); Refresh(); });
+        connect(Clear, &QPushButton::clicked, this, [this] { auto* M = TyStCommandMgr::GetInstance(); const auto Id = selector_->Command(); for (const auto& K : CommandKeys(M->RetrieveForCommand(Id), Id)) M->DelShortcut(K[0], Id); Refresh(); });
         connect(preset_, &QComboBox::currentIndexChanged, this, [this](int I) { if (loading_) return; auto G = settings::AppSettings().Read(settings::Section::General).toObject(); G["shortcutPreset"] = I ? "prototype" : "legacy"; settings::AppSettings().Put(settings::Section::General, G); Refresh(); });
         connect(Reset, &QPushButton::clicked, this, [this] { if (hc::ui::MessageDialog::question(this, tr("단축키 초기화"), tr("사용자 키를 지우고 선택한 기본값으로 되돌리시겠습니까?")) != QMessageBox::Yes) return; settings::AppSettings().Put(settings::Section::Shortcuts, QJsonObject{}); Refresh(); });
         Load();
@@ -79,15 +79,18 @@ public:
             auto* Item = new QTableWidgetItem(Command); Item->setData(Qt::UserRole, Command); Item->setToolTip(Command); table_->setItem(Row, CommandColumn, Item);
             auto* Description = new QTableWidgetItem(Label); Description->setToolTip(Label); table_->setItem(Row, DescriptionColumn, Description);
             const auto Join = [&](const auto& Keys) { QStringList Labels; for (const auto& K : CommandKeys(Keys, Command)) Labels.append(K.toString()); return Labels.join(", "); };
-            table_->setItem(Row, CurrentKeyColumn, new QTableWidgetItem(Join(Values))); table_->setItem(Row, DefaultKeyColumn, new QTableWidgetItem(Join(Defaults))); const int Scope = category(Command); table_->setItem(Row, ScopeColumn, new QTableWidgetItem(scope_->itemText(Scope))); table_->item(Row, ScopeColumn)->setData(Qt::UserRole, Scope);
+            const bool CommandInput = IsCommandLineShortcut(Command);
+            table_->setItem(Row, CurrentKeyColumn, new QTableWidgetItem(Join(CommandInput ? M->RetrieveForCommand(Command) : Values)));
+            table_->setItem(Row, DefaultKeyColumn, new QTableWidgetItem(Join(CommandInput ? DefaultCommandLineShortcuts() : Defaults)));
+            const int Scope = category(Command); table_->setItem(Row, ScopeColumn, new QTableWidgetItem(scope_->itemText(Scope))); table_->item(Row, ScopeColumn)->setData(Qt::UserRole, Scope);
         }
         selector_->SetCommand(Id); filter(); updateConflict();
     }
 private:
-    static int category(const QString& Id) { if (Id.startsWith("hc.file.") || Id.startsWith("hc.archive.") || Id.startsWith("hc.viewer.") || Id.startsWith("hc.jobs.")) return 1; if (Id.startsWith("hc.panel.") || Id.startsWith("hc.tab.") || Id.startsWith("hc.view.") || Id.startsWith("hc.selection.")) return 2; if (Id.startsWith("hc.navigate.") || Id.startsWith("hc.search.")) return 3; return 4; }
+    static int category(const QString& Id) { if (IsCommandLineShortcut(Id)) return 5; if (Id.startsWith("hc.file.") || Id.startsWith("hc.archive.") || Id.startsWith("hc.viewer.") || Id.startsWith("hc.jobs.")) return 1; if (Id.startsWith("hc.panel.") || Id.startsWith("hc.tab.") || Id.startsWith("hc.view.") || Id.startsWith("hc.selection.")) return 2; if (Id.startsWith("hc.navigate.") || Id.startsWith("hc.search.")) return 3; return 4; }
     void filter() { const auto Text = search_->text().trimmed(); for (int R = 0; R < table_->rowCount(); ++R) { QString Match; for (int C = 0; C < ColumnCount; ++C) Match += " " + table_->item(R, C)->text(); table_->setRowHidden(R, (scope_->currentIndex() && table_->item(R, ScopeColumn)->data(Qt::UserRole) != scope_->currentIndex()) || !Match.contains(Text, Qt::CaseInsensitive)); } }
-    void updateConflict() { const auto Key = key_->pending(); const auto Existing = Key.isEmpty() ? QString{} : CommandId(TyStCommandMgr::GetInstance()->Retrieve().value(Key[0])); const auto Id = selector_->Command(); const bool Valid = !Key.isEmpty() && Key.count() == 1 && !FindCommand(Id).Name.isEmpty(); const bool Conflict = Valid && !Existing.isEmpty() && Existing != Id; assign_->setEnabled(Valid && !Conflict); reassign_->setVisible(Conflict); conflict_->setText(Conflict ? tr("%1은(는) '%2'에서 사용 중입니다. 재지정하면 기존 명령에서 이 키가 해제됩니다.").arg(Key.toString(), FindCommand(Existing).Desc) : Valid ? tr("적용 전 초안으로 키를 지정할 수 있습니다.") : tr("명령을 선택하고 키 누르기를 실행하세요. Esc로 입력을 취소합니다.")); }
-    void assign(bool Replace) { const auto K = key_->pending(); if (K.isEmpty() || K.count() != 1) return; auto* M = TyStCommandMgr::GetInstance(); const auto Existing = CommandId(M->Retrieve().value(K[0])); if (!Replace && !Existing.isEmpty() && Existing != selector_->Command()) return; M->SetShortcutWithCMD(K[0], selector_->Command()); Refresh(); }
+    void updateConflict() { const auto Key = key_->pending(); const auto Id = selector_->Command(); const auto Existing = Key.isEmpty() ? QString{} : CommandId(TyStCommandMgr::GetInstance()->RetrieveForCommand(Id).value(Key[0])); const bool Valid = !Key.isEmpty() && Key.count() == 1 && !FindCommand(Id).Name.isEmpty(); const bool Conflict = Valid && !Existing.isEmpty() && Existing != Id; assign_->setEnabled(Valid && !Conflict); reassign_->setVisible(Conflict); conflict_->setText(Conflict ? tr("%1은(는) 같은 입력 범위의 '%2'에서 사용 중입니다. 재지정하면 기존 명령에서 이 키가 해제됩니다.").arg(Key.toString(), FindCommand(Existing).Desc) : Valid ? tr("적용 전 초안으로 키를 지정할 수 있습니다. 명령행 실행 키는 명령행 입력 칸에서만 사용합니다.") : tr("명령을 선택하고 키 누르기를 실행하세요. Esc로 입력을 취소합니다.")); }
+    void assign(bool Replace) { const auto K = key_->pending(); if (K.isEmpty() || K.count() != 1) return; auto* M = TyStCommandMgr::GetInstance(); const auto Existing = CommandId(M->RetrieveForCommand(selector_->Command()).value(K[0])); if (!Replace && !Existing.isEmpty() && Existing != selector_->Command()) return; M->SetShortcutWithCMD(K[0], selector_->Command()); Refresh(); }
     QLineEdit* search_; QComboBox *scope_, *preset_; QTableWidget* table_; CommandSelector* selector_; fm::ui::KeyCaptureEdit* key_; QLabel* conflict_; QPushButton *assign_, *reassign_; QList<CommandSelector*> functions_; QList<QLineEdit*> captions_; bool loading_ = false;
 };
 }

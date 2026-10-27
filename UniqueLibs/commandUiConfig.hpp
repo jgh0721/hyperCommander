@@ -24,12 +24,51 @@ inline TyHC_COMMAND FindCommand(const QString& Name)
     return {};
 }
 
+inline bool IsCommandLineShortcut(const QString& Id)
+{
+    return Id.compare("hc.commandLine.execute", Qt::CaseInsensitive) == 0
+        || Id.compare("hc.commandLine.keepOpen", Qt::CaseInsensitive) == 0;
+}
+
+inline TyMapShortcutToCMDStr DefaultCommandLineShortcuts()
+{
+    TyMapShortcutToCMDStr Values;
+    for (const auto& Command : {BuiltInCMD_CommandLine_Execute, BuiltInCMD_CommandLine_KeepOpen})
+        Values[Command.Default] = Command.Name;
+    return Values;
+}
+
+inline QJsonObject CommandLineShortcutOverrides(const QJsonObject& Overrides)
+{
+    auto Scoped = Overrides["commandLine"].toObject();
+    // Retain legacy execution-key customizations, but panel bindings (including
+    // their explicit removal) never disable the command input's Enter keys.
+    for (auto It = Overrides.begin(); It != Overrides.end(); ++It)
+        if (It.value().isString() && IsCommandLineShortcut(It.value().toString()) && !Scoped.contains(It.key()))
+            Scoped[It.key()] = It.value();
+    return Scoped;
+}
+
+inline TyMapShortcutToCMDStr EffectiveCommandLineShortcuts(const QJsonObject& Overrides)
+{
+    // These are input-widget defaults, independent of the panel preset toggle.
+    auto Values = DefaultCommandLineShortcuts();
+    const auto Scoped = CommandLineShortcutOverrides(Overrides);
+    for (auto It = Scoped.begin(); It != Scoped.end(); ++It) {
+        const auto Key = QKeySequence::fromString(It.key(), QKeySequence::PortableText);
+        if (Key.count() != 1 || Key[0].key() == Qt::Key_unknown) continue;
+        if (It.value().isNull()) Values.remove(Key[0]);
+        else if (IsCommandLineShortcut(It.value().toString())) Values[Key[0]] = FindCommand(It.value().toString()).Name;
+    }
+    return Values;
+}
+
 inline TyMapShortcutToCMDStr DefaultShortcuts(const QJsonObject& General)
 {
     TyMapShortcutToCMDStr Values;
     if (!General["useBuiltInShortcuts"].toBool(true)) return Values;
     for (const auto& Command : hc::defaults::Commands())
-        if (Command.Default.key() != Qt::Key_unknown) Values[Command.Default] = Command.Name;
+        if (Command.Default.key() != Qt::Key_unknown && !IsCommandLineShortcut(Command.Name)) Values[Command.Default] = Command.Name;
     const auto Changes = hc::defaults::ShortcutPresetChanges(General["shortcutPreset"].toString(hc::defaults::ExistingShortcutPreset));
     for (auto It = Changes.cbegin(); It != Changes.cend(); ++It) {
         if (It.value().isEmpty()) Values.remove(It.key());
@@ -49,7 +88,7 @@ inline TyMapShortcutToCMDStr EffectiveShortcuts(const QJsonObject& General, cons
         if (Key.count() != 1 || Key[0].key() == Qt::Key_unknown) continue;
         if (It.value().isNull()) { Values.remove(Key[0]); continue; }
         const auto Command = FindCommand(It.value().toString());
-        if (!Command.Name.isEmpty()) Values[Key[0]] = Command.Name;
+        if (!Command.Name.isEmpty() && !IsCommandLineShortcut(Command.Name)) Values[Key[0]] = Command.Name;
     }
     return Values;
 }
@@ -111,24 +150,19 @@ inline bool InvokeShortcut(const QKeyEvent& Event, const TyMapShortcutToCMDStr& 
     return !Command.isEmpty() && Invoke(Command);
 }
 
-// Command-edit bindings are contextual: panel Enter/Shift+Enter keep their
-// existing actions. Explicit user overrides (including null) take precedence.
-inline QString CommandLineShortcut(const QKeyEvent& Event, const TyMapShortcutToCMDStr& Values,
-    const QJsonObject& Overrides)
+// Resolve only the command input's scope; panel shortcuts may use the same key.
+inline QString CommandLineShortcut(const QKeyEvent& Event, const QJsonObject& Overrides)
 {
     if (Event.matches(QKeySequence::Copy) || Event.matches(QKeySequence::Cut)
         || Event.matches(QKeySequence::Paste) || Event.matches(QKeySequence::SelectAll)
         || Event.matches(QKeySequence::Undo) || Event.matches(QKeySequence::Redo)) return {};
     auto Key = Event.keyCombination();
+    const auto Scoped = CommandLineShortcutOverrides(Overrides);
+    const auto Values = EffectiveCommandLineShortcuts(Overrides);
     const auto OriginalName = QKeySequence(Key).toString(QKeySequence::PortableText);
-    if (Event.key() == Qt::Key_Enter && !Overrides.contains(OriginalName))
+    if (Event.key() == Qt::Key_Enter && !Scoped.contains(OriginalName) && !Values.contains(Key))
         Key = QKeyCombination(Event.modifiers() & ~Qt::KeypadModifier, Qt::Key_Return);
-    auto Id = CommandId(Values.value(Key));
-    if (!Overrides.contains(QKeySequence(Key).toString(QKeySequence::PortableText))) {
-        if (Key == QKeyCombination(Qt::Key_Return)) Id = "hc.commandLine.execute";
-        if (Key == QKeyCombination(Qt::ShiftModifier, Qt::Key_Return)) Id = "hc.commandLine.keepOpen";
-    }
-    return Id == "hc.commandLine.execute" || Id == "hc.commandLine.keepOpen" ? Id : QString{};
+    return CommandId(Values.value(Key));
 }
 
 inline QString CommandLinePrompt(const QString& Path, int MaxCharacters = 36)
