@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
+#include "UniqueLibs/bundledFonts.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "runtime/batch.hpp"
 #include "runtime/guiIpc.hpp"
@@ -52,6 +53,7 @@ int main(int argc, char** argv)
         if (!error.isEmpty()) print(error.toUtf8() + '\n', stderr); return code;
     }
     QApplication app(argc, argv);
+    hc::fonts::RegisterBundledFonts();
     hc::ui::InstallQtTranslation(app);
     auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(hc::theme::ProductDesign); theme.install(app);
     // Tokens, accent and fonts come from HyperCommander's settings next to the executable (read only);

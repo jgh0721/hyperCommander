@@ -30,11 +30,11 @@ const TyOpts OPT_COLOR_SCHEME_COUNT = { "", "", "",
                                         "ColorScheme", "", "", "", 1 };
 
 const TyOpts OPT_COLORS_LISTFONT  = { QObject::tr( "색상" ), QObject::tr( "글꼴" ), QObject::tr( "파일 목록의 글꼴" ),
-                                      "Colors", "FileListFontName", "FontName", "맑은 고딕",
+                                      "Colors", "FileListFontName", "FontName", "D2Coding ligature",
                                       1 };
 
 const TyOpts OPT_COLORS_LISTFONTSIZE = { QObject::tr( "색상" ), QObject::tr( "글꼴 크기" ), QObject::tr( "파일 목록의 글꼴 크기" ),
-                                      "Colors", "FileListFontSize", "int", "14",
+                                      "Colors", "FileListFontSize", "int", "16",
                                       1 };
 
 const TyOpts OPT_COLORS_FORECOLOR = { QObject::tr( "색상" ), QObject::tr( "글꼴 색상" ), QObject::tr( "파일 목록의 글꼴 색상" ),

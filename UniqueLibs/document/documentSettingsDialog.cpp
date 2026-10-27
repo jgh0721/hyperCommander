@@ -89,6 +89,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     // Font names must not widen the card past the page; the list still shows full names.
     auto FontField = [&](QFormLayout* Form, const QString& Key, const QString& Label) {
         auto* Field = new QFontComboBox(this); Field->setObjectName("documentViews/textView/" + Key);
+        if (Key == "fontFamily") Field->setProperty("defaultValue", "D2Coding ligature");
         Field->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); Field->setMinimumContentsLength(12);
         controls_[Field->objectName()] = Field; Form->addRow(Label, Field);
     };
@@ -117,7 +118,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Text = Page(tr("텍스트 편집기"), tr("글꼴과 편집 화면, 들여쓰기·줄바꿈, 새 문서 저장과 외부 파일 변경 처리를 설정합니다."));
     auto* Fonts = Card(Text, tr("글꼴"));
     FontField(Fonts, "fontFamily", tr("글꼴"));
-    Spin(Fonts, "fontSize", tr("글꼴 크기 (pt)"), 6, 72, 10);
+    Spin(Fonts, "fontSize", tr("글꼴 크기 (pt)"), 6, 72, 16);
     auto* Spacing = new QDoubleSpinBox(this); Spacing->setRange(1.0, 3.0); Spacing->setSingleStep(.1); Spacing->setDecimals(2); Spacing->setProperty("defaultValue", 1.1);
     Spacing->setObjectName("documentViews/textView/lineSpacing"); controls_[Spacing->objectName()] = Spacing; Fonts->addRow(tr("줄 간격"), Spacing);
     Combo(Fonts, "documentViews/textView/fontRendering", tr("글꼴 렌더링"), {tr("기본"), tr("안티앨리어싱 없음"), tr("회색조"), tr("ClearType")}, {0, 1, 2, 3});

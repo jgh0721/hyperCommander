@@ -1109,9 +1109,9 @@ void QTextView::ReloadPreferences()
     }
     AppSettings Settings;
     auto Font = editorFont();
-    const auto Family = Settings.value("textView/fontFamily").toString();
+    const auto Family = Settings.value("textView/fontFamily", "D2Coding ligature").toString();
     if (!Family.isEmpty()) Font.setFamily(Family);
-    const int Size = Settings.value("textView/fontSize", 0).toInt();
+    const int Size = Settings.value("textView/fontSize", 16).toInt();
     if (Size >= 6 && Size <= 72) Font.setPointSize(Size);
     m_editor->setEditorFont(Font);
     applyEditorSettings();

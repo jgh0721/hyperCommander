@@ -226,6 +226,8 @@ qt_add_executable(HyperCommander
         ${UNIQUELIBS_SRC}
 )
 hc_add_version_resource(HyperCommander "HyperCommander" ICON "${CMAKE_CURRENT_SOURCE_DIR}/Resources/HyperCommander.ico")
+include("${PROJECT_SOURCE_DIR}/cmake/BundledFonts.cmake")
+hc_add_bundled_fonts(HyperCommander)
 
 target_precompile_headers( HyperCommander PRIVATE stdafx.h )
 

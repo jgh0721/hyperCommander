@@ -1,5 +1,7 @@
-﻿#include "runtimeVerification.hpp"
+﻿#include "stdafx.h"
+#include "runtimeVerification.hpp"
 #include "UniqueLibs/document/epubProcessView.hpp"
+#include "HyperEditor/src/text/QTextView.h"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include <QApplication>
 #include <QTemporaryDir>
@@ -37,6 +39,16 @@ int VerifyDocumentRuntime() {
     const auto Font = QFontDatabase::systemFont(QFontDatabase::GeneralFont); Report["fontFamily"] = QFontInfo(Font).family();
     const bool Korean = QFontDatabase::writingSystems().contains(QFontDatabase::Korean); Report["koreanFontAvailable"] = Korean;
     if (QFontInfo(Font).family().isEmpty() || !Korean) Fail("font-fallback-unavailable");
+    QJsonArray BundledFonts;
+    for (const auto* Family : {"D2Coding", "D2Coding ligature"}) {
+        for (const bool Bold : {false, true}) {
+            QFont Requested(Family, 16); Requested.setBold(Bold);
+            const QFontInfo Actual(Requested);
+            BundledFonts.append(QJsonObject{{"requested", Family}, {"family", Actual.family()}, {"bold", Actual.bold()}, {"pointSize", Actual.pointSizeF()}});
+            if (Actual.family() != Family || Actual.bold() != Bold) Fail("bundled-font-unavailable:" + QString::fromLatin1(Family));
+        }
+    }
+    Report["bundledFonts"] = BundledFonts;
     if (!Temp.isValid()) Fail("temporary-directory-unavailable");
     else {
         const auto TextPath = Temp.filePath("한글.txt"), PdfPath = Temp.filePath("document.pdf"), ImagePath = Temp.filePath("alpha.png");
@@ -47,6 +59,12 @@ int VerifyDocumentRuntime() {
         QStringList Ids;
         for (const auto& Path : {TextPath, PdfPath, ImagePath}) { const auto Opened = Workspace.Handle({{"action", "open"}, {"path", Path}}); Ids.append(Opened["documentId"].toString()); if (Opened.contains("error") || Ids.back().isEmpty()) Fail("document-open-rejected"); }
         if (!Wait([&] { return Workspace.IsIdle(); })) Fail("document-load-timeout");
+        QJsonArray TextFonts;
+        for (const auto* Editor : Workspace.findChildren<QTextView*>()) {
+            const auto Requested = Editor->editorFont(); const QFontInfo Actual(Requested);
+            TextFonts.append(QJsonObject{{"family", Actual.family()}, {"pointSize", Requested.pointSizeF()}});
+        }
+        Report["textEditorFonts"] = TextFonts;
         for (const auto& Id : Ids) { const auto State = Document(Workspace.Snapshot(), Id); if (State["lifecycle"].toString() != "ready" || !State["error"].toString().isEmpty()) Fail("document-load:" + State["error"].toString()); }
         if (Errors.empty()) {
             const QString Edited = QStringLiteral("P5 저장 확인\r\n");

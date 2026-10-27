@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* 기본 글꼴: D2Coding TTF를 공용 리소스로 배포하여 세 앱이 함께 사용하고 OFL 고지 포함. HyperCommander 목록·HyperEditor 텍스트는 D2Coding Ligature 16pt, HyperCompare TEXT는 Ligature 14pt·LIST는 D2Coding 12pt로 설정. 기존 사용자 글꼴 설정 유지.
+
 * 자동 새로고침: 다운로드 등 잦은 파일 변경 시 하단 파일 수·용량과 드라이브 용량을 조회 중 표시로 바꾸지 않고 새 값으로 갱신. 자동 갱신 중 경로 진행막대 깜빡임 제거.
 
 * 파일 목록: Ctrl+Enter·Alt+Enter·Ctrl+Shift+Enter 등으로 기본 셀 편집기가 열려 이름이 사라지고 모델 입력 오류가 나타나는 문제 수정. 이름 변경은 전용 편집기로만 처리.

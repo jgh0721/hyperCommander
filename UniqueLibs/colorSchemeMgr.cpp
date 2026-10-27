@@ -65,7 +65,9 @@ void CColorSchemeMgr::Refresh()
         const auto Fonts = Record["fonts"].toObject(); const auto Colors = Record["colors"].toObject();
         Scheme.Menu_Font = retrieveFont(Fonts["menu"].toObject(), 9);
         Scheme.Dialog_Font = retrieveFont(Fonts["dialog"].toObject(), 9);
-        Scheme.FileList_Font = retrieveFont(Fonts["list"].toObject(), 14);
+        auto ListFont = Fonts["list"].toObject();
+        if (!ListFont.contains("family")) ListFont["family"] = "D2Coding ligature";
+        Scheme.FileList_Font = retrieveFont(ListFont, 16);
         const auto Defaults = defaultColors(Scheme.IsDarkMode);
         const auto Legacy = Fallback["colors"].toObject();
         const auto Explicit = Record.value("colorOverrides").toObject();

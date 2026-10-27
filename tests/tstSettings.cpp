@@ -258,7 +258,7 @@ private slots:
         Root["appearance"] = QJsonObject{{"selected","sample"},{"schemes",QJsonObject{{"sample",Invalid}}}};
         const auto Original = QJsonDocument(Root).toJson(); QVERIFY(Write(Settings.FileName(),Original)); QVERIFY(Restart.Reload());
         const auto Scheme = Restart.Read(Section::Appearance).toObject()["schemes"].toObject()["sample"].toObject();
-        QCOMPARE(Scheme["fonts"].toObject()["list"].toObject()["pointSize"].toInt(),14);
+        QCOMPARE(Scheme["fonts"].toObject()["list"].toObject()["pointSize"].toInt(),16);
         QCOMPARE(Scheme["colors"].toObject()["listText"].toString(),QString("#202020"));
         QVERIFY(!Restart.Issues().isEmpty()); QCOMPARE(Bytes(Settings.FileName()),Original);
     }

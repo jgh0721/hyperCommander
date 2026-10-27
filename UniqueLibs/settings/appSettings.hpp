@@ -380,9 +380,9 @@ protected:
             auto Fonts = Record.value("fonts").toObject();
             for (auto Font = Fonts.begin(); Font != Fonts.end(); ++Font) {
                 auto Value = Font.value().toObject();
-                if (!Value["family"].isString() || Value["family"].toString().isEmpty()) { Value["family"] = "Malgun Gothic"; Report(Prefix + ".fonts." + Font.key() + ".family"); }
+                if (!Value["family"].isString() || Value["family"].toString().isEmpty()) { Value["family"] = Font.key() == "list" ? "D2Coding ligature" : "Malgun Gothic"; Report(Prefix + ".fonts." + Font.key() + ".family"); }
                 const auto Size = Value["pointSize"].toDouble(-1);
-                if (Size < 6 || Size > 72 || Size != int(Size)) { Value["pointSize"] = Font.key() == "list" ? 14 : 9; Report(Prefix + ".fonts." + Font.key() + ".pointSize"); }
+                if (Size < 6 || Size > 72 || Size != int(Size)) { Value["pointSize"] = Font.key() == "list" ? 16 : 9; Report(Prefix + ".fonts." + Font.key() + ".pointSize"); }
                 Font.value() = Value;
             }
             if (Record.contains("fonts")) Record["fonts"] = Fonts;

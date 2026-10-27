@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/settings/singleInstance.hpp"
+#include "UniqueLibs/bundledFonts.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <QStandardPaths>
 #include "HyperCommander.hpp"
@@ -158,6 +159,7 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     : QApplication( argc, argv )
 {
     hc::ui::InstallQtTranslation(*this);
+    hc::fonts::RegisterBundledFonts();
     auto& Theme = fm::style::ThemeManager::instance();
     Theme.setDesign(hc::theme::ProductDesign);
     Theme.setScheme(fm::style::ThemeManager::Scheme::Light);

@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/hc/fonts">
+        <file>D2Coding-Regular.ttf</file>
+        <file>D2Coding-Bold.ttf</file>
+        <file>D2CodingLigature-Regular.ttf</file>
+        <file>D2CodingLigature-Bold.ttf</file>
+        <file>OFL.txt</file>
+    </qresource>
+</RCC>

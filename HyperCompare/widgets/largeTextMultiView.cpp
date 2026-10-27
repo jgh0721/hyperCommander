@@ -104,7 +104,7 @@ namespace hc::compare
                 } catch (const std::exception& error) { response.error_ = QString::fromUtf8(error.what()); } return response;
             }));
         }
-        int memory_, lexerId_ = 0; bool dark_ = false; QFont font_{"Consolas", 10}; QLabel* title_ = nullptr; QLabel* status_ = nullptr; QSpinBox* line_ = nullptr; QToolButton* copyButton_ = nullptr; BoundedEditor* editor_ = nullptr;
+        int memory_, lexerId_ = 0; bool dark_ = false; QFont font_{"D2Coding ligature", 14}; QLabel* title_ = nullptr; QLabel* status_ = nullptr; QSpinBox* line_ = nullptr; QToolButton* copyButton_ = nullptr; BoundedEditor* editor_ = nullptr;
         std::shared_ptr<LargeTextComparison> value_; std::shared_ptr<LargeTextSyntax> syntax_; std::uint64_t begin_ = 0, end_ = 0; QString query_; Qt::CaseSensitivity case_ = Qt::CaseInsensitive; bool regex_ = false; LargeTextMatch match_;
         QFutureWatcher<Response> watcher_; std::shared_ptr<std::atomic_bool> canceled_ = std::make_shared<std::atomic_bool>(false);
     };

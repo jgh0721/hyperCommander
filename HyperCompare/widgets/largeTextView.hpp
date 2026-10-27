@@ -111,7 +111,7 @@ namespace hc::compare
         int lastSearchDocument_ = -1;
         std::uint64_t generation_ = 0;
         int activeSide_ = 0;
-        QFont textFont_{"Consolas", 10};
+        QFont textFont_{"D2Coding ligature", 14};
         QLabel* status_ = nullptr;
         std::array<std::uint64_t, 2> begin_{}, end_{};
         std::array<std::optional<std::uint64_t>, 2> pageStart_;

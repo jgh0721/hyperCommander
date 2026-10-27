@@ -23,7 +23,7 @@ if(HC_SIGNING_SCRIPT AND CONFIG STREQUAL "Release")
     endif()
 endif()
 set(FILES HyperCommander.exe HyperCommanderAdmin.exe HyperEditor.exe HyperCompare.exe HyperCompareCli.exe
-    hc-plugin-host-x64.exe hc-plugin-inspect.exe hc-search-index.exe Everything64.dll)
+    hc-plugin-host-x64.exe hc-plugin-inspect.exe hc-search-index.exe Everything64.dll Libs/Fonts/D2Coding.rcc)
 if(EXISTS "${SOURCE}/HyperCommanderUpdater.exe")
     list(APPEND FILES HyperCommanderUpdater.exe)
 endif()

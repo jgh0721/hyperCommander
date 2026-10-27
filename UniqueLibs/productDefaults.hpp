@@ -718,7 +718,7 @@ namespace hc::defaults
         for( const bool Dark : { false, true } )
         {
             const QJsonObject Font{ { "family", "Malgun Gothic" }, { "pointSize", 11 } };
-            const QJsonObject ListFont{ { "family", "Malgun Gothic" }, { "pointSize", 12 } };
+            const QJsonObject ListFont{ { "family", "D2Coding ligature" }, { "pointSize", 16 } };
             Schemes[ Dark ? QStringLiteral( "기본 다크" ) : QStringLiteral( "기본 라이트" ) ] =
                 QJsonObject{ { "dark", Dark },
                              { "inverseCursor",           false },

@@ -103,8 +103,8 @@ namespace hc::compare
         if (themeMode_ != "light" && themeMode_ != "dark") themeMode_ = "product";
         { auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(themeScheme(themeMode_)); dark_ = theme.colors().isDark(); }
         uiFont_ = qApp->font(); uiFont_.fromString(settings.value("fonts/ui", uiFont_.toString()).toString());
-        listFont_ = uiFont_; listFont_.fromString(settings.value("fonts/list", listFont_.toString()).toString());
-        textFont_ = QFont("Cascadia Mono", 11); textFont_.fromString(settings.value("fonts/text", textFont_.toString()).toString());
+        listFont_ = QFont("D2Coding", 12); listFont_.fromString(settings.value("fonts/list", listFont_.toString()).toString());
+        textFont_ = QFont("D2Coding ligature", 14); textFont_.fromString(settings.value("fonts/text", textFont_.toString()).toString());
         auto* layout = new QSplitter(Qt::Vertical, this);
         auto* sources = new QWidget(layout); sources_ = sources; auto* row = new QHBoxLayout(sources); row->setContentsMargins(0, 0, 0, 0); row->setSpacing(0);
         panes_ = new QSplitter(Qt::Horizontal, sources); overview_ = new OverviewBar(sources);

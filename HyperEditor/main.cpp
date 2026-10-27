@@ -2,6 +2,7 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "runtimeVerification.hpp"
+#include "UniqueLibs/bundledFonts.hpp"
 #include "editorInstance.hpp"
 #include <fmstyle/ThemeManager.h>
 #include "UniqueLibs/productTheme.hpp"
@@ -49,6 +50,7 @@ int main(int Argc, char** Argv)
     hc::document::startup::Data().Begin("editor.entryToTitle");
     const auto QtStart = hc::document::startup::Data().Begin("editor.qtApplication");
     QApplication App(Argc, Argv); App.setOrganizationName("HyperCommander"); App.setApplicationName("HyperEditor"); hc::ui::InstallQtTranslation(App);
+    hc::fonts::RegisterBundledFonts();
     InitializePortedViewResources(); App.setWindowIcon(QIcon(":/icons/app/hypereditor.svg"));
     hc::document::startup::Data().End(QtStart);
     QCommandLineParser Parser; Parser.addHelpOption();
