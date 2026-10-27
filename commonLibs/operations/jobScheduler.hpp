@@ -11,7 +11,8 @@ namespace hc::operations
     bool IsTerminal(JobState State);
     const char* StateName(JobState State);
     enum class InteractionKind { Overwrite, Rename, Elevation, Password, DeleteConfirmation, RetryFailure, ReadOnlyRemoval };
-    enum class InteractionChoice { Replace, Skip, Rename, Retry, Elevate, Confirm, Cancel, ConfirmAll, ElevateAll, SkipAll, CopyOnly };
+    enum class InteractionChoice { Replace, Skip, Rename, Retry, Elevate, Confirm, Cancel, ConfirmAll, ElevateAll, SkipAll, CopyOnly,
+        ReplaceAll, RenameIncoming, RenameExisting };
     struct InteractionRequest
     {
         std::string id_;

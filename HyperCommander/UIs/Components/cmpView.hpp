@@ -123,6 +123,7 @@ public:
     QJsonObject CaptureScrollState() const;
     void RestoreScrollState(const QJsonObject& State);
     void                           RestoreSelection(const QStringList& Selection, const QString& Focus);
+    void                           RemoveSelection(const QStringList& Selection);
     bool SetGrouping(const hc::columns::GroupingState& State);
     hc::columns::GroupingState Grouping() const { return grouping_; }
     bool GroupingActive() const;

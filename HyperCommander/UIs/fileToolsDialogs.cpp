@@ -77,7 +77,7 @@ void NewFileDialog::done(int Result) { SaveToolGeometry(this, "newFileGeometry")
 void NewFileDialog::accept() {
     if (busy_ || !AcceptButton()->isEnabled()) return;
     if (submit_) {
-        auto Prepared = filetools::PrepareCreate(writer_, location_, name_->text(), type_, bom_->isChecked());
+        auto Prepared = filetools::PrepareCreate(writer_, location_, name_->text(), type_, bom_->isChecked(), {}, {}, true);
         if (!Prepared.HasValue()) { SetMessage(QString::fromStdString(Prepared.Failure().code_), true); return; }
         auto Submitted = submit_(std::move(Prepared.Value()));
         if (!Submitted.HasValue()) { SetMessage(QString::fromStdString(Submitted.Failure().code_), true); return; }

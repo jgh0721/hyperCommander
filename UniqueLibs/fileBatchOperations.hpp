@@ -187,8 +187,8 @@ inline QDateTime ReadExifDate(const QString& Path) {
 // aborts the private stage and cannot expose a partially written destination.
 class CreateTask final : public operations::IJobTask {
 public:
-    CreateTask(std::shared_ptr<storage::IWritableStorage> Writer, storage::Locator Target, QByteArray Data, std::shared_ptr<operations::IFileElevationService> Elevation = {})
-        : writer_(std::move(Writer)), target_(std::move(Target)), data_(std::move(Data)), elevation_(std::move(Elevation)) {}
+    CreateTask(std::shared_ptr<storage::IWritableStorage> Writer, storage::Locator Target, QByteArray Data, std::shared_ptr<operations::IFileElevationService> Elevation = {}, bool AskForName = false)
+        : writer_(std::move(Writer)), target_(std::move(Target)), data_(std::move(Data)), elevation_(std::move(Elevation)), askForName_(AskForName) {}
     operations::JobStep Advance(operations::JobStepContext Context) override {
         using namespace storage; using namespace operations;
         const auto Fail = [&](Error E) {
@@ -203,6 +203,19 @@ public:
             JobStep S{JobState::Failed}; S.error_=std::move(E); return S;
         };
         if(child_)return child_->Advance(Context);
+        if(phase_==101) {
+            if(!Context.answer_) {
+                JobStep S{JobState::WaitingForUser}; S.interaction_=InteractionRequest{"",InteractionKind::Rename,"destination-exists",
+                    {InteractionChoice::Rename,InteractionChoice::Cancel},{},{},Serialize(target_)}; return S;
+            }
+            const auto Name=QString::fromStdString(Context.answer_->value_);
+            if(Context.answer_->choice_!=InteractionChoice::Rename)return JobStep{JobState::Cancelled};
+            if(!NameError(Name).isEmpty())return Fail(Error{ErrorCategory::InvalidRequest,"unsafe-destination-name"});
+            const auto End=target_.root_.find_last_of("/\\");
+            if(End==std::string::npos)return Fail(Error{ErrorCategory::InvalidRequest,"destination-parent-required"});
+            target_.root_.resize(End+1);target_.root_+=Name.toStdString();
+            phase_=0; return JobStep{JobState::Running};
+        }
         if(phase_==100) {
             if(!Context.answer_) {
                 JobStep S{JobState::WaitingForUser};S.interaction_=InteractionRequest{"",InteractionKind::Elevation,permissionError_->code_,{InteractionChoice::Elevate,InteractionChoice::Retry,InteractionChoice::Cancel},{},"",target_.root_};return S;
@@ -219,6 +232,10 @@ public:
             auto Support = writer_->Supports(Mutation::CreateContent, target_, Operation);
             if (!Support.HasValue()) return Fail(Support.Failure());
             if (Support.Value().availability_ == Availability::Unsupported) return Fail(Error{ErrorCategory::Unsupported, Support.Value().reason_.empty() ? "create-content-unavailable" : Support.Value().reason_, writer_->Id()});
+            if(askForName_) {
+                auto Existing=writer_->Inspect(target_,Operation);if(!Existing.HasValue())return Fail(Existing.Failure());
+                if(Existing.Value()) {phase_=101;return JobStep{JobState::Running};}
+            }
         } else if (phase_ == 1) {
             auto Started = writer_->BeginWrite(target_, {}, Operation);
             if (!Started.HasValue()) return Fail(Started.Failure()); session_ = std::move(Started.Value());
@@ -251,10 +268,10 @@ private:
     std::unique_ptr<operations::IJobTask> child_;
     operations::FileElevationRequest permissionRequest_;
     std::optional<storage::Error> permissionError_;
-    int phase_ = 0; bool committed_ = false;
+    int phase_ = 0; bool committed_ = false, askForName_ = false;
 };
 inline storage::Result<operations::PreparedJob> PrepareCreate(std::shared_ptr<storage::IWritableStorage> Writer, storage::Locator Parent,
-    const QString& Name, int Type, bool Bom, storage::OperationContext Context = {}, std::shared_ptr<operations::IFileElevationService> Elevation = {}) {
+    const QString& Name, int Type, bool Bom, storage::OperationContext Context = {}, std::shared_ptr<operations::IFileElevationService> Elevation = {}, bool AskForName = false) {
     using namespace storage; using namespace operations;
     if (!Writer || !NameError(Name).isEmpty() || Type < 0 || Type >= Templates().size()
         || (Parent.kind_ != LocatorKind::Local && Parent.kind_ != LocatorKind::Smb && Parent.kind_ != LocatorKind::Plugin))
@@ -269,7 +286,7 @@ inline storage::Result<operations::PreparedJob> PrepareCreate(std::shared_ptr<st
     Job.request_.resourceLanes_ = {FileOperationLane(Parent)};
     Job.request_.metadata_.destination_ = Target.root_; Job.request_.metadata_.options_ = "create-new; template=" + std::to_string(Type) + (Bom && Type ? "; UTF-8 BOM" : "; UTF-8");
     Job.request_.metadata_.kind_ = JobKind::MakeFile;
-    Job.task_ = std::make_unique<CreateTask>(std::move(Writer), std::move(Target), Data, std::move(Elevation)); return Job;
+    Job.task_ = std::make_unique<CreateTask>(std::move(Writer), std::move(Target), Data, std::move(Elevation), AskForName); return Job;
 }
 struct Rules {
     QString name_ = "[N]", extension_ = "[E]", find_, replace_, dateFormat_ = "yyyy-MM-dd";

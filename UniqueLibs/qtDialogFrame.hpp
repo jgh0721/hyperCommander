@@ -25,9 +25,38 @@ struct DialogFrameOptions
     fm::ui::glyph::Glyph glyph_ = fm::ui::glyph::App;
     bool header_ = true;
     bool caption_ = true;                               // the header band is the title bar (board option B)
+    bool outline_ = false;                              // distinct edges for overlapping file-job windows
 };
 
 namespace detail {
+class DialogOutline final : public QWidget
+{
+public:
+    explicit DialogOutline(QDialog* Dialog) : QWidget(Dialog), dialog_(Dialog)
+    {
+        setObjectName("hc.dialog.outline"); setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground); setFocusPolicy(Qt::NoFocus);
+        Dialog->installEventFilter(this); setGeometry(Dialog->rect());
+        QObject::connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, qOverload<>(&QWidget::update));
+    }
+protected:
+    bool eventFilter(QObject* Object, QEvent* Event) override
+    {
+        if (Event->type() == QEvent::Resize || Event->type() == QEvent::Show) { setGeometry(dialog_->rect()); raise(); }
+        if (Event->type() == QEvent::WindowActivate || Event->type() == QEvent::WindowDeactivate || Event->type() == QEvent::PaletteChange) update();
+        return QWidget::eventFilter(Object, Event);
+    }
+    void paintEvent(QPaintEvent*) override
+    {
+        const auto& Colors = fm::style::themeColorsFor(this);
+        const auto Color = Colors[dialog_->isActiveWindow() ? fm::style::Token::Focus : fm::style::Token::Fg2];
+        QPainter Painter(this); Painter.setPen(QPen(Color, 2)); Painter.setBrush(Qt::NoBrush);
+        Painter.drawRect(QRectF(rect()).adjusted(1, 1, -1, -1));
+    }
+private:
+    QDialog* dialog_;
+};
+
 /// Paper Fluent header band: a surface strip with a bottom line above the window-colored body.
 class HeaderBand final : public QWidget
 {
@@ -85,6 +114,7 @@ inline QHBoxLayout* ApplyDialogFrame( QDialog* Dialog, const DialogFrameOptions&
     auto* Footer = new fm::ui::DialogFooter( Dialog ); Footer->setObjectName( QStringLiteral( "hc.dialog.footer" ) );
     auto* Row = new QHBoxLayout( Footer ); Row->setContentsMargins( 20, 12, 20, 12 ); Row->setSpacing( 8 ); Row->addStretch( 1 );
     Layout->addWidget( Footer );
+    if (Options.outline_) { Layout->setContentsMargins(2, 2, 2, 2); new detail::DialogOutline(Dialog); }
     return Row;
 }
 

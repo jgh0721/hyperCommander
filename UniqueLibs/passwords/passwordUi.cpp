@@ -374,4 +374,15 @@ namespace hc::passwords
         if (Context.Check({"passwords"}) || Context.workload_.IsAutomatic()) return {};
         return candidateValue(candidates(Archive, Context), Attempt);
     }
+    void RememberArchivePasswordForJob(const std::string& Archive, const QString& Password,
+        const hc::storage::OperationContext& Context)
+    {
+        if (Password.isEmpty() || !Context.stopToken_.stop_possible() || Context.stopToken_.stop_requested()) return;
+        const auto Path = QDir::cleanPath(QFileInfo(QString::fromStdString(Archive)).absoluteFilePath()).toCaseFolded();
+        auto Bytes = Password.toUtf8(); auto ClearBytes = qScopeGuard([&] { SecureZeroMemory(Bytes.data(), size_t(Bytes.size())); });
+        auto& Cache = memory();
+        Cache.removeIf([&](const Remembered& Value) { return Value.archive_ == Path && !Value.session_ && Value.stop_ == Context.stopToken_; });
+        if (Cache.size() >= 256) Cache.removeFirst();
+        Cache.append({Path, Store::Protect(Bytes), Context.stopToken_, false});
+    }
 }

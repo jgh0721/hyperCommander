@@ -1,7 +1,8 @@
 ﻿#include "stdafx.h"
+#include "fileJobUi.hpp"
+#include "fileJobInteraction.hpp"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
 #include "qtMessageDialog.hpp"
-#include "fileJobUi.hpp"
 #include "UniqueLibs/qtArchivePassword.hpp"
 #include "folderSize.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
@@ -68,6 +69,8 @@ namespace
         if(Value.code_.starts_with("permission-history-save-failed"))return QObject::tr("권한 작업은 처리했지만 요청 이력을 저장하지 못했습니다. 작업 결과와 보안 백업을 확인하세요.");
         if (Value.code_ == "recovery-committed-checkpoints") return QObject::tr("중단 전 목적지 저장 완료 기록(건):");
         if (Value.code_ == "recovery-artifact-preserved") return QObject::tr("확인을 위해 보존한 파일:");
+        if (Value.code_ == "conflict-destination-preserved") return QObject::tr("이름을 변경하여 보관한 기존 대상 파일:");
+        if (Value.code_.starts_with("automatic-name-failed:")) return QObject::tr("자동 이름 변경을 완료하지 못해 해당 항목을 중단했습니다. 기존 대상을 덮어쓰지 않습니다. (%1)").arg(QString::fromStdString(Value.code_.substr(22)));
         if (Value.code_ == "write-recovery-original-missing") return QObject::tr("원본 위치와 백업을 찾을 수 없습니다. 보존된 파일을 확인하세요.");
         if (Value.code_ == "destination-added-hidden-attribute")
             return QObject::tr("파일 내용은 복사되었지만 대상에서 숨김 속성이 추가되었습니다. 대상 서버의 숨김 파일 정책을 확인하세요. 이동 작업의 원본은 유지됩니다.");
@@ -293,97 +296,17 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     Pages->addWidget(previousPage_); Pages->addWidget(nextPage_); Pages->addStretch(); Layout->addWidget(pagesBlock_); pagesBlock_->hide();
     connect(previousPage_, &QPushButton::clicked, this, [this] { resultOffset_ = resultOffset_ >= 200 ? resultOffset_ - 200 : 0; updateSelection(); });
     connect(nextPage_, &QPushButton::clicked, this, [this] { resultOffset_ += 200; updateSelection(); });
-    renamed_ = new QLineEdit(dialog_); renamed_->setPlaceholderText(tr("새 이름"));
-    renamed_->setAccessibleName(tr("충돌한 항목의 새 이름"));
-    renamed_->setObjectName("hc.jobs.newName"); Layout->addWidget(renamed_);
     connect(Toggle, &QPushButton::clicked, this, [this, Toggle, Axis] {
         detailed_ = !detailed_;
         updateSelection(); fitProgressDialog();
     });
     autoClose_ = new QCheckBox(tr("완료되면 창 닫기(&W)"), dialog_); autoClose_->setObjectName("hc.jobs.closeOnSuccess");
     autoClose_->setToolTip(tr("정상 완료 또는 사용자 취소의 정리가 끝나면 창을 닫습니다. 실패·정리 오류가 있으면 결과를 유지합니다."));
-    answersBlock_ = new QWidget(dialog_); auto* Buttons = new fm::ui::WrapLayout(answersBlock_); Buttons->setContentsMargins(0, 0, 0, 0);
-    Layout->addWidget(answersBlock_); answersBlock_->hide();
-    const std::vector<std::pair<InteractionChoice, QString>> Choices{
-        {InteractionChoice::Confirm, tr("영구 삭제")}, {InteractionChoice::ConfirmAll, tr("모두 허용")}, {InteractionChoice::Replace, tr("덮어쓰기")},
-        {InteractionChoice::Retry, tr("다시 시도")}, {InteractionChoice::Skip, tr("건너뛰기")}, {InteractionChoice::Rename, tr("이름 변경")}
-    };
-    for (const auto& [Choice, Text] : Choices)
-    {
-        auto* Button = new fm::ui::Button(Text, dialog_);
-        Button->setObjectName("hc.jobs.choice." + QString::number(static_cast<int>(Choice)));
-        choices_[Choice] = Button; Buttons->addWidget(Button);
-        connect(Button, &QPushButton::clicked, this, [this, Choice] { answer(Choice); });
-    }
-    permission_ = new fm::ui::Button(tr("권한 오류 자세히(&P)"), dialog_); permission_->setObjectName("hc.jobs.permission"); Buttons->addWidget(permission_);
-    fileLocks_ = new fm::ui::Button(tr("파일 사용 정보(&L)"), dialog_); fileLocks_->setObjectName("hc.jobs.fileLocks"); Buttons->addWidget(fileLocks_);
-    connect(fileLocks_, &QPushButton::clicked, this, [this] {
-        const auto Current = scheduler_.Snapshot(selectedId()); if (!Current.HasValue()) return;
-        const auto Snapshot = Current.Value();
-        const bool Waiting = Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::RetryFailure
-            && Snapshot.interaction_->reason_.starts_with("file-in-use:");
-        const bool PermissionInspection = Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::Elevation;
-        const auto Target = Waiting || PermissionInspection ? Snapshot.interaction_->source_ : Snapshot.error_ ? Snapshot.error_->nativePath_ : std::string{};
-        if (!hc::filelocks::IsLocalLockPath(QString::fromStdString(Target))) return;
-        hc::ui::FileLockDialogRequest Request;
-        Request.source_ = QString::fromStdString(Target);
-        Request.destination_ = Waiting ? QString::fromStdString(Snapshot.interaction_->destination_) : QString();
-        Request.reason_ = Waiting ? QString::fromStdString(Snapshot.interaction_->reason_.substr(12))
-            : Snapshot.error_ ? ErrorText(*Snapshot.error_) : Snapshot.interaction_ ? QString::fromStdString(Snapshot.interaction_->reason_) : QString();
-        Request.canRetry_ = Waiting;
-        Request.canSkip_ = Waiting && std::find(Snapshot.interaction_->choices_.begin(),Snapshot.interaction_->choices_.end(),InteractionChoice::Skip) != Snapshot.interaction_->choices_.end();
-        QPointer<FileJobUi> Owner(this);
-        const auto InteractionId = Snapshot.interaction_ ? Snapshot.interaction_->id_ : std::string{};
-        Request.current_ = [Owner, Id = Snapshot.id_, InteractionId] {
-            if (!Owner) return false;
-            const auto Now = Owner->Scheduler().Snapshot(Id); if (!Now.HasValue()) return false;
-            return InteractionId.empty() || (Now.Value().state_ == JobState::WaitingForUser && !Now.Value().cancelRequested_
-                && Now.Value().interaction_ && Now.Value().interaction_->id_ == InteractionId);
-        };
-        hc::ui::FileLockDialog Dialog(std::move(Request), dialog_); Dialog.exec();
-        if (!Owner || !Waiting) return;
-        const auto Fresh = scheduler_.Snapshot(Snapshot.id_);
-        if (!Fresh.HasValue() || Fresh.Value().state_ != JobState::WaitingForUser || Fresh.Value().cancelRequested_
-            || !Fresh.Value().interaction_ || Fresh.Value().interaction_->id_ != InteractionId) return;
-        using Reply = hc::ui::FileLockDialog::Reply;
-        if (Dialog.SelectedReply() == Reply::CancelJob) scheduler_.Cancel(Snapshot.id_);
-        else if (Dialog.SelectedReply() == Reply::Retry || Dialog.SelectedReply() == Reply::Skip)
-            scheduler_.Reply(Snapshot.id_, {InteractionId, Dialog.SelectedReply() == Reply::Retry ? InteractionChoice::Retry : InteractionChoice::Skip, {}});
-        updateSelection();
-    });
-    connect(permission_, &QPushButton::clicked, this, [this] {
-        const auto Current=scheduler_.Snapshot(selectedId()); if(!Current.HasValue())return;
-        const auto S=Current.Value(); const auto Op=static_cast<hc::operations::FileOperation>(jobs_->currentData(Qt::UserRole+1).toInt());
-        hc::ui::PermissionRequest Request; Request.screen_=Op==hc::operations::FileOperation::Move?"A03":Op==hc::operations::FileOperation::Delete?"A04":Op==hc::operations::FileOperation::Rename?"A05":Op==hc::operations::FileOperation::MakeDirectory?"A06":"A02";
-        if(S.error_&&S.error_->code_.starts_with("elevation-outcome-unknown"))Request.screen_="A08";
-        Request.source_=QString::fromStdString(S.progress_.currentItem_); Request.destination_=endpoints_.contains(S.id_)?endpoints_.at(S.id_):QString(); Request.reason_=S.error_?ErrorText(*S.error_):tr("실제 작업에서 확인된 권한 오류 또는 권한 응답 요청입니다.");
-        if(S.interaction_) {
-            const auto Has=[&](InteractionChoice C){const auto& V=S.interaction_->choices_;return std::find(V.begin(),V.end(),C)!=V.end();};
-            Request.canSkip_=Has(InteractionChoice::Skip);Request.canRetry_=Has(InteractionChoice::Retry);Request.canCopyOnly_=Has(InteractionChoice::CopyOnly);
-            if(Op==hc::operations::FileOperation::Move)Request.screen_=Request.canCopyOnly_?"A03":"A02";
-            Request.canElevate_=Has(InteractionChoice::Elevate);Request.canApplyAll_=Has(InteractionChoice::ElevateAll)||Has(InteractionChoice::SkipAll);Request.jobId_=QString::fromStdString(S.id_);
-            if(!S.interaction_->source_.empty())Request.source_=QString::fromStdString(S.interaction_->source_);
-            if(!S.interaction_->destination_.empty())Request.destination_=QString::fromStdString(S.interaction_->destination_);
-            Request.reason_=QString::fromStdString(S.interaction_->reason_);
-        }
-        hc::ui::PermissionDialog Dialog(Request,dialog_); Dialog.exec();
-        if(S.interaction_) {
-            std::optional<InteractionChoice> Choice;
-            switch(Dialog.ResultDecision()) {
-            case hc::ui::PermissionDialog::Elevate:Choice=Dialog.ApplyAll()?InteractionChoice::ElevateAll:InteractionChoice::Elevate;break;
-            case hc::ui::PermissionDialog::Skip:Choice=Dialog.ApplyAll()?InteractionChoice::SkipAll:InteractionChoice::Skip;break;
-            case hc::ui::PermissionDialog::CopyOnly:Choice=InteractionChoice::CopyOnly;break;
-            case hc::ui::PermissionDialog::Retry:Choice=InteractionChoice::Retry;break;
-            default:if(Dialog.result()==QDialog::Rejected)Choice=InteractionChoice::Cancel;break;
-            }
-            if(Choice)scheduler_.Reply(S.id_,{S.interaction_->id_,*Choice,{}});updateSelection();
-        }
-    });
     pause_ = new fm::ui::Button(tr("일시 정지"), dialog_); pause_->setObjectName("hc.jobs.pause");
     cancel_ = new fm::ui::Button(tr("취소(&C)"), dialog_); cancel_->setObjectName("hc.jobs.cancel");
     auto* Hide = new fm::ui::Button(tr("백그라운드로(&B)"), dialog_); Hide->setObjectName("hc.jobs.background");
     {
-        hc::ui::DialogFrameOptions Frame; Frame.header_ = false;
+        hc::ui::DialogFrameOptions Frame; Frame.header_ = false; Frame.outline_ = true;
         auto* Footer = hc::ui::ApplyDialogFrame(dialog_, Frame);
         auto* Outer = qobject_cast<QVBoxLayout*>(dialog_->layout()); Outer->setVerticalSizeConstraint(QLayout::SetMinimumSize);
         hc::ui::PlaceHeaderBand(dialog_, status_);
@@ -550,7 +473,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     connect(Hide, &QPushButton::clicked, dialog_, &QDialog::hide);
     connect(pause_, &QPushButton::clicked, this, [this] { controlSelected(true); });
     connect(cancel_, &QPushButton::clicked, this, [this] { controlSelected(false); });
-    connect(jobs_, &QComboBox::currentIndexChanged, this, [this] { renamed_->clear(); resultOffset_ = 0; updateSelection(); });
+    connect(jobs_, &QComboBox::currentIndexChanged, this, [this] { resultOffset_ = 0; updateSelection(); });
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, [this] { updateJobs(); });
     timer_->start(250);
@@ -600,7 +523,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     updateSelection();
 }
 
-FileJobUi::~FileJobUi() { timer_->stop(); scheduler_.Shutdown(); if(hc::permissions::Controller()==this)QCoreApplication::instance()->setProperty("hc.permission.controller",QVariant::fromValue<QObject*>(previousPermissionController_.data())); }
+FileJobUi::~FileJobUi() { if (interaction_) interaction_->Dismiss(); timer_->stop(); scheduler_.Shutdown(); if(hc::permissions::Controller()==this)QCoreApplication::instance()->setProperty("hc.permission.controller",QVariant::fromValue<QObject*>(previousPermissionController_.data())); }
 
 std::shared_ptr<IFileElevationService> FileJobUi::ElevationService() const {
     if(!hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["allowElevation"].toBool(true))return {};
@@ -783,7 +706,7 @@ void FileJobUi::ApplyDefaults()
 }
 
 void FileJobUi::Show() { updateManager(); manager_->show(); manager_->raise(); manager_->activateWindow(); updateSelection(); }
-void FileJobUi::showProgress() { updateSelection(); fitProgressDialog(); dialog_->show(); dialog_->raise(); dialog_->activateWindow(); }
+void FileJobUi::showProgress() { updateSelection(); fitProgressDialog(); dialog_->show(); dialog_->raise(); dialog_->activateWindow(); updateSelection(); }
 void FileJobUi::controlSelected(bool Pause)
 {
     if (!Pause) {
@@ -961,7 +884,7 @@ void FileJobUi::updateManagerSelection(const JobSnapshot* Snapshot)
     else if (Snapshot->state_ == JobState::Paused) Lines.append(tr("일시 정지되었습니다. 재개하면 남은 작업을 이어 실행합니다."));
     else if (Snapshot->pauseRequested_) Lines.append(tr("안전한 시점에 일시 정지합니다. 요청을 해제하면 계속 진행합니다."));
     else if (Snapshot->deferred_) Lines.append(tr("시작 전 대기 작업입니다. 선택 작업 시작 또는 대기열 시작으로 실행하세요."));
-    else if (Snapshot->state_ == JobState::WaitingForUser) Lines.append(tr("상세 보기에서 질문에 응답하면 이어서 진행합니다."));
+    else if (Snapshot->state_ == JobState::WaitingForUser) Lines.append(tr("진행 창을 열어 안내 팝업에서 처리 방법을 선택하세요."));
     else if (!Snapshot->retriedAs_.empty()) Lines.append(tr("재시도가 새 작업으로 접수되었습니다. 목록에서 후속 작업의 결과를 확인하세요."));
     else if (Snapshot->state_ == JobState::Failed) Lines.append(canRetry(Snapshot->id_) ? tr("목적지 저장 전 실패한 항목만 원본을 다시 확인하여 재시도합니다. 완료 항목은 유지됩니다.") : tr("자동 재시도 대상이 아닙니다. 상세 결과와 원본·대상을 확인하세요."));
     selectionSummary_->setText(Lines.join('\n'));
@@ -981,7 +904,8 @@ void FileJobUi::updateJobs()
             retryRequests_.erase(Stored->first); retryContexts_.erase(Stored->first);
             preparedRetries_.erase(Stored->first);
         }
-        if (Stored->second.snapshot_.state_ == JobState::Failed && !closing_) {
+        if (!closing_ && !CloseFinishedJob(Stored->second) && (Stored->second.snapshot_.state_ == JobState::Failed
+            || Stored->second.snapshot_.failedItems_ || Stored->second.snapshot_.error_ || !Stored->second.cleanupErrors_.empty())) {
             const auto& Snapshot = Stored->second.snapshot_;
             auto* Message = new hc::ui::MessageDialog(QMessageBox::Warning, tr("파일 작업 실패"),
                 tr("파일 작업을 완료하지 못했습니다. 완료 %1 / 건너뜀 %2 / 실패 %3")
@@ -991,6 +915,7 @@ void FileJobUi::updateJobs()
             Message->setProperty("hc.jobs.id", QString::fromStdString(Snapshot.id_));
             Message->setAttribute(Qt::WA_DeleteOnClose);
             Message->setTextFormat(Qt::PlainText);
+            auto MessageFont = Message->font(); MessageFont.setPointSizeF(12); Message->setFont(MessageFont); Message->setMinimumWidth(480);
             QString Information;
             if (Snapshot.error_) {
                 const auto& Error = *Snapshot.error_;
@@ -999,7 +924,12 @@ void FileJobUi::updateJobs()
             }
             if (!Snapshot.metadata_.source_.empty()) Information += tr("\n원본: %1").arg(DisplayPath(Snapshot.metadata_.source_));
             if (!Snapshot.metadata_.destination_.empty()) Information += tr("\n대상: %1").arg(DisplayPath(Snapshot.metadata_.destination_));
+            for (const auto& Error : Stored->second.cleanupErrors_) {
+                Information += "\n" + ErrorText(Error);
+                if (!Error.nativePath_.empty()) Information += "\n" + DisplayPath(Error.nativePath_);
+            }
             Message->setInformativeText(Information.trimmed());
+            if (auto* Ok = Message->button(QMessageBox::Ok)) { Ok->setText(tr("확인(&O)")); Ok->setFont(MessageFont); Ok->setMinimumHeight(qMax(44, QFontMetrics(MessageFont).height() + 16)); }
             // Consume each completion once; other jobs and controls stay usable.
             Message->setWindowModality(Qt::NonModal);
             Message->show();
@@ -1019,7 +949,7 @@ void FileJobUi::updateJobs()
     updateManager();
     // Snapshot polling recovers even when a bounded event subscriber drops progress.
     if (dialog_->isVisible() || manager_->isVisible()) updateSelection();
-    if (closing_ && pending_.empty() && main_) { timer_->stop(); main_->close(); }
+    if (closing_ && pending_.empty() && main_ && !passwordDialogOpen_) { timer_->stop(); main_->close(); }
 }
 
 void FileJobUi::updateSelection()
@@ -1030,72 +960,31 @@ void FileJobUi::updateSelection()
     const bool Valid = Current.HasValue();
     const auto Snapshot = Valid ? Current.Value() : JobSnapshot{};
     const bool Active = Valid && !IsTerminal(Snapshot.state_);
-    pause_->setEnabled(Active && !Snapshot.cancelRequested_ && Snapshot.state_ != JobState::Committing);
+    pause_->setEnabled(Active && !Snapshot.cancelRequested_ && Snapshot.state_ != JobState::Committing && Snapshot.state_ != JobState::WaitingForUser);
     pause_->setText(Snapshot.state_ == JobState::Paused ? tr("재개(&P)") : Snapshot.pauseRequested_ ? tr("일시 정지 요청 해제(&P)") : tr("일시 정지(&P)"));
     if (managerPause_) updateManagerSelection(Valid ? &Snapshot : nullptr);
     cancel_->setEnabled(Valid && (!Active || (!Snapshot.cancelRequested_ && Snapshot.state_ != JobState::Committing)));
     cancel_->setText(Active ? tr("취소(&C)") : tr("닫기(&C)"));
-    for (const auto& [Choice, Button] : choices_)
-        Button->setVisible(Active && !Snapshot.cancelRequested_ && Snapshot.interaction_
-            && std::find(Snapshot.interaction_->choices_.begin(), Snapshot.interaction_->choices_.end(), Choice) != Snapshot.interaction_->choices_.end());
-    const bool Password = Active && !Snapshot.cancelRequested_ && Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::Password;
-    const bool FileInUse = Active && !Snapshot.cancelRequested_ && Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::RetryFailure
+    updateInteraction(Valid ? &Snapshot : nullptr);
+    const bool Password = Active && Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::Password;
+    const bool FileInUse = Active && Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::RetryFailure
         && Snapshot.interaction_->reason_.starts_with("file-in-use:");
-    const bool PermissionInspection = Active && !Snapshot.cancelRequested_ && Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::Elevation;
-    const auto LockTarget = FileInUse || PermissionInspection ? QString::fromStdString(Snapshot.interaction_->source_)
-        : Snapshot.error_ ? QString::fromStdString(Snapshot.error_->nativePath_) : QString();
-    fileLocks_->setVisible(Valid && hc::filelocks::IsLocalLockPath(LockTarget));
-    const auto Echo = Password ? QLineEdit::Password : QLineEdit::Normal;
-    if (renamed_->echoMode() != Echo) { renamed_->clear(); renamed_->setEchoMode(Echo); }
-    renamed_->setPlaceholderText(Password ? tr("암호") : tr("새 이름"));
-    renamed_->setAccessibleName(Password ? tr("압축 파일 암호") : tr("충돌한 항목의 새 이름"));
-    choices_.at(InteractionChoice::Confirm)->setText(Password ? tr("확인")
-        : Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::ReadOnlyRemoval ? tr("허용")
-        : Snapshot.interaction_ && Snapshot.interaction_->reason_ == "confirm-recycle-delete" ? tr("휴지통으로") : tr("영구 삭제"));
-    renamed_->setVisible(!Password && choices_.at(InteractionChoice::Rename)->isVisibleTo(dialog_));
-    if (Password) {
-        choices_.at(InteractionChoice::Confirm)->setText(tr("비밀번호 입력…"));
-        if (!passwordDialogOpen_ && passwordRequestId_ != Snapshot.interaction_->id_) {
-            passwordRequestId_ = Snapshot.interaction_->id_;
-            QTimer::singleShot(0, this, [this, Id = Snapshot.id_, Query = Snapshot.interaction_->id_] {
-                const auto Current = scheduler_.Snapshot(Id);
-                if (!passwordDialogOpen_ && selectedId() == Id && Current.HasValue() && !Current.Value().cancelRequested_
-                    && Current.Value().interaction_ && Current.Value().interaction_->id_ == Query) {
-                    hc::storage::OperationContext Context; Context.stopToken_ = passwordScopes_[Id].get_token();
-                    const auto& Request = *Current.Value().interaction_;
-                    if (auto Password = hc::passwords::TryAutomaticArchivePassword(Request.source_, Request.passwordAttempt_, Context))
-                        scheduler_.Reply(Id, {Query, InteractionChoice::Confirm, Password->Value()});
-                }
-            });
-        }
-    }
     const bool ShowRecords = hc::settings::AppSettings().CommittedObject()["options"].toObject()["showJobDetails"].toBool(false);
     details_->setVisible(ShowRecords);
     pagesBlock_->setVisible(ShowRecords);
     previousPage_->setVisible(ShowRecords); nextPage_->setVisible(ShowRecords);
     QString Notice;
     if (Snapshot.error_) Notice = ErrorText(*Snapshot.error_);
-    if (Snapshot.interaction_) {
-        if (!Notice.isEmpty()) Notice += "\n";
-        Notice += Password ? tr("압축 파일의 암호를 입력하세요.") : Snapshot.interaction_->kind_ == InteractionKind::DeleteConfirmation
-            ? Snapshot.interaction_->reason_ == "confirm-recycle-delete" ? tr("선택한 항목을 Windows 휴지통으로 이동합니다.") : tr("선택한 항목과 하위 항목을 영구 삭제합니다. 복원할 수 없습니다.")
-            : Snapshot.interaction_->kind_ == InteractionKind::ReadOnlyRemoval ? tr("읽기 전용 항목의 삭제를 허용할지 선택하세요. 모두 허용은 이 작업 안에서 적용됩니다.")
-            : Snapshot.interaction_->kind_ == InteractionKind::Overwrite ? tr("대상에 같은 이름의 항목이 있습니다. 처리 방법을 선택하세요.")
-            : Snapshot.interaction_->kind_ == InteractionKind::Elevation ? tr("작업에 필요한 권한을 얻지 못했습니다. 권한 오류 자세히에서 지원 가능한 응답을 확인하세요.")
-            : FileInUse ? tr("파일이 사용 중입니다. 파일 사용 정보에서 점유 항목을 확인하거나 파일을 닫은 뒤 다시 시도하세요.")
-            : Snapshot.interaction_->kind_ == InteractionKind::RetryFailure ? tr("작업 실패 후 재시도 또는 취소 응답을 기다립니다.")
-            : tr("작업을 계속하려면 아래에서 응답을 선택하세요.");
-    }
+    if (Snapshot.interaction_) Notice = Password ? tr("응답 대기 · 암호 입력 창에서 응답하세요.") : tr("응답 대기 · 안내 창에서 처리 방법을 선택하세요.");
     notice_->setText(Notice); notice_->setVisible(Valid && !Notice.isEmpty());
     if (!Valid) {
-        permission_->hide(); metrics_->clear(); graph_->hide(); graphAxis_->hide(); graphToggle_->hide(); axisBlock_->hide(); answersBlock_->hide();
+        metrics_->clear(); graph_->hide(); graphAxis_->hide(); graphToggle_->hide(); axisBlock_->hide();
         sourceBlock_->hide(); destinationBlock_->hide(); currentBlock_->hide(); phaseBlock_->hide();
         status_->setText(tr("파일 작업이 없습니다.")); details_->clear(); overallMetrics_->clear(); overallPercent_->clear();
         progress_->setRange(0, 1); progress_->setValue(0); progress_->setFormat({}); return;
     }
     updateProgressView(Snapshot);
     QString Details;
-    bool PermissionError = Snapshot.error_ && Snapshot.error_->category_ == ErrorCategory::AccessDenied;
     if (!Snapshot.metadata_.options_.empty() && !Snapshot.metadata_.options_.starts_with("extract;")) Details += tr("옵션: %1\n").arg(QString::fromStdString(Snapshot.metadata_.options_));
     if (!Snapshot.metadata_.retryOf_.empty()) Details += tr("재시도 원본 작업: %1\n").arg(QString::fromStdString(Snapshot.metadata_.retryOf_));
     if (Snapshot.error_ && Snapshot.error_->code_ == "job-interrupted") Details += tr("이전 실행이 중단되었습니다. 자동 실행하지 않습니다. 원본·목적지·보존 파일을 확인하세요.\n");
@@ -1113,7 +1002,6 @@ void FileJobUi::updateSelection()
         const auto& Items = It->second.outcomes_ ? resultPage_ : It->second.items_;
         for (const auto& Item : Items)
         {
-            if(Item.error_ && Item.error_->category_==ErrorCategory::AccessDenied) PermissionError=true;
             if (++Shown > 200) { Details += tr("\n표시 한도: 처음 200개 항목. 전체 결과는 작업 이력에 보관됩니다."); break; }
             Details += "\n" + DisplayPath(Item.item_) + " — " + (Item.status_ == ItemOutcome::Status::Completed ? tr("완료")
                 : Item.status_ == ItemOutcome::Status::Skipped ? tr("건너뜀") : tr("실패"));
@@ -1125,9 +1013,8 @@ void FileJobUi::updateSelection()
             if (Item.error_) Details += ": " + ErrorText(*Item.error_);
             if (Item.destinationCommitted_ && !Item.sourceRemoved_) Details += tr(" (목적지 저장됨, 원본 유지)");
         }
-        for (const auto& Error : It->second.cleanupErrors_) Details += tr("\n완료 후 확인: %1 %2").arg(ErrorText(Error), QString::fromStdString(Error.userAction_));
+        for (const auto& Error : It->second.cleanupErrors_) Details += tr("\n완료 후 확인: %1 %2 %3").arg(ErrorText(Error), QString::fromStdString(Error.userAction_), DisplayPath(Error.nativePath_));
     }
-    permission_->setVisible((Snapshot.error_&&Snapshot.error_->code_.starts_with("elevation-outcome-unknown")) || PermissionError || (Snapshot.interaction_ && Snapshot.interaction_->kind_==InteractionKind::Elevation));
     Details = Details.trimmed();
     if (details_->toPlainText() != Details) details_->setPlainText(Details);
     const auto LineHeight=QFontMetrics(details_->font()).lineSpacing();
@@ -1137,9 +1024,7 @@ void FileJobUi::updateSelection()
     previousPage_->setVisible(ShowRecords && results_.contains(Snapshot.id_));
     nextPage_->setVisible(ShowRecords && results_.contains(Snapshot.id_));
     dialog_->layout()->activate();
-    const bool Answers = !permission_->isHidden() || !fileLocks_->isHidden()
-        || std::ranges::any_of(choices_, [&](const auto& Entry) { return !Entry.second->isHidden(); });
-    answersBlock_->setVisible(Answers);
+
 }
 
 void FileJobUi::layoutProgressFooter()
@@ -1481,6 +1366,97 @@ void FileJobUi::loadResultPage(const std::string& Id)
     Watcher->setFuture(QtConcurrent::run([Store, Offset] { return Store->Read(Offset, 200); }));
 }
 
+void FileJobUi::updateInteraction(const JobSnapshot* Snapshot)
+{
+    if (passwordDialogOpen_) return;
+    if (interaction_ && (!Snapshot || !interaction_->Matches(*Snapshot) || !dialog_->isVisible())) {
+        interaction_->Dismiss(); interaction_.clear();
+    }
+    if (!Snapshot || !Snapshot->interaction_ || Snapshot->state_ != JobState::WaitingForUser
+        || Snapshot->cancelRequested_ || !dialog_->isVisible() || closing_ || interaction_
+        || Snapshot->id_ + "\n" + Snapshot->interaction_->id_ == repliedInteraction_) return;
+    const auto Id = Snapshot->id_; const auto Request = *Snapshot->interaction_;
+    if (Request.kind_ == InteractionKind::Password && interactionPasswordRequest_ != Id + "\n" + Request.id_) {
+        interactionPasswordRequest_ = Id + "\n" + Request.id_;
+        hc::storage::OperationContext Context; Context.stopToken_ = passwordScopes_[Id].get_token();
+        if (auto Password = hc::passwords::TryAutomaticArchivePassword(Request.source_, Request.passwordAttempt_, Context)) {
+            replyInteraction(Id, Request.id_, InteractionChoice::Confirm, QString::fromStdString(Password->Value())); return;
+        }
+    }
+    std::function<void()> SavedPasswords;
+    if (Request.kind_ == InteractionKind::Password) SavedPasswords = [this, Id, Key = Request.id_] {
+        const auto Now = scheduler_.Snapshot(Id);
+        if (Now.HasValue() && selectedId() == Id && Now.Value().interaction_ && Now.Value().interaction_->id_ == Key) answer(InteractionChoice::Confirm);
+    };
+    std::function<void()> Details;
+    if (Request.kind_ == InteractionKind::Elevation || (Request.kind_ == InteractionKind::RetryFailure
+        && Request.reason_.starts_with("file-in-use:") && hc::filelocks::IsLocalLockPath(QString::fromStdString(Request.source_))))
+        Details = [this, Saved = *Snapshot] { showInteractionDetails(Saved); };
+    interaction_ = new hc::ui::FileJobInteraction(*Snapshot, OperationText(Snapshot->metadata_.kind_),
+        [this, Id, Key = Request.id_](InteractionChoice Choice, const QString& Value) { replyInteraction(Id, Key, Choice, Value); },
+        std::move(SavedPasswords), std::move(Details), dialog_);
+    interaction_->show(); interaction_->raise(); interaction_->activateWindow();
+}
+
+void FileJobUi::replyInteraction(const std::string& Id, const std::string& Request, InteractionChoice Choice, const QString& Value)
+{
+    const auto Now = scheduler_.Snapshot(Id);
+    if (!Now.HasValue() || Now.Value().state_ != JobState::WaitingForUser || Now.Value().cancelRequested_
+        || !Now.Value().interaction_ || Now.Value().interaction_->id_ != Request) {
+        if (interaction_) { interaction_->Dismiss(); interaction_.clear(); } return;
+    }
+    if (Choice != InteractionChoice::Cancel && std::ranges::find(Now.Value().interaction_->choices_, Choice) == Now.Value().interaction_->choices_.end()) return;
+    const auto Replied = Choice == InteractionChoice::Cancel ? scheduler_.Cancel(Id)
+        : scheduler_.Reply(Id, {Request, Choice, Value.toStdString()});
+    if (!Replied.HasValue()) { if (interaction_) interaction_->SetError(tr("응답을 적용할 수 없습니다: %1").arg(QString::fromStdString(Replied.Failure().code_))); return; }
+    if (Choice == InteractionChoice::Confirm && Now.Value().interaction_->kind_ == InteractionKind::Password) {
+        hc::storage::OperationContext Context; Context.stopToken_ = passwordScopes_[Id].get_token();
+        hc::passwords::RememberArchivePasswordForJob(Now.Value().interaction_->source_, Value, Context);
+    }
+    repliedInteraction_ = Id + "\n" + Request;
+    if (interaction_) { interaction_->Dismiss(); interaction_.clear(); }
+    updateSelection();
+}
+
+void FileJobUi::showInteractionDetails(const JobSnapshot& Snapshot)
+{
+    const auto Current = scheduler_.Snapshot(Snapshot.id_);
+    if (!Current.HasValue() || !Current.Value().interaction_ || Current.Value().cancelRequested_
+        || Current.Value().interaction_->id_ != Snapshot.interaction_->id_) return;
+    const auto& Query = *Snapshot.interaction_;
+    const auto Has = [&](InteractionChoice Choice) { return std::ranges::find(Query.choices_, Choice) != Query.choices_.end(); };
+    if (Query.kind_ == InteractionKind::RetryFailure) {
+        hc::ui::FileLockDialogRequest Request;
+        Request.source_ = QString::fromStdString(Query.source_); Request.destination_ = QString::fromStdString(Query.destination_);
+        Request.reason_ = QString::fromStdString(Query.reason_); Request.canRetry_ = Has(InteractionChoice::Retry); Request.canSkip_ = Has(InteractionChoice::Skip);
+        QPointer<FileJobUi> Owner(this);
+        Request.current_ = [Owner, Id = Snapshot.id_, Key = Query.id_] {
+            if (!Owner) return false; const auto Now = Owner->Scheduler().Snapshot(Id);
+            return Now.HasValue() && !Now.Value().cancelRequested_ && Now.Value().interaction_ && Now.Value().interaction_->id_ == Key;
+        };
+        hc::ui::FileLockDialog Dialog(std::move(Request), dialog_); Dialog.exec();
+        using Reply = hc::ui::FileLockDialog::Reply;
+        if (Dialog.SelectedReply() == Reply::Retry || Dialog.SelectedReply() == Reply::Skip || Dialog.SelectedReply() == Reply::CancelJob)
+            replyInteraction(Snapshot.id_, Query.id_, Dialog.SelectedReply() == Reply::Retry ? InteractionChoice::Retry
+                : Dialog.SelectedReply() == Reply::Skip ? InteractionChoice::Skip : InteractionChoice::Cancel, {});
+    }
+    else {
+        hc::ui::PermissionRequest Request; Request.screen_ = Snapshot.metadata_.kind_ == JobKind::Move ? "A03" : "A02";
+        Request.source_ = QString::fromStdString(Query.source_); Request.destination_ = QString::fromStdString(Query.destination_);
+        Request.reason_ = QString::fromStdString(Query.reason_); Request.jobId_ = QString::fromStdString(Snapshot.id_);
+        Request.canSkip_ = Has(InteractionChoice::Skip); Request.canRetry_ = Has(InteractionChoice::Retry); Request.canCopyOnly_ = Has(InteractionChoice::CopyOnly);
+        Request.canElevate_ = Has(InteractionChoice::Elevate); Request.canApplyAll_ = Has(InteractionChoice::ElevateAll) || Has(InteractionChoice::SkipAll);
+        hc::ui::PermissionDialog Dialog(Request, dialog_); Dialog.exec();
+        switch (Dialog.ResultDecision()) {
+        case hc::ui::PermissionDialog::Elevate: replyInteraction(Snapshot.id_, Query.id_, Dialog.ApplyAll() ? InteractionChoice::ElevateAll : InteractionChoice::Elevate, {}); break;
+        case hc::ui::PermissionDialog::Skip: replyInteraction(Snapshot.id_, Query.id_, Dialog.ApplyAll() ? InteractionChoice::SkipAll : InteractionChoice::Skip, {}); break;
+        case hc::ui::PermissionDialog::Retry: replyInteraction(Snapshot.id_, Query.id_, InteractionChoice::Retry, {}); break;
+        case hc::ui::PermissionDialog::CopyOnly: replyInteraction(Snapshot.id_, Query.id_, InteractionChoice::CopyOnly, {}); break;
+        default: break;
+        }
+    }
+}
+
 void FileJobUi::answer(InteractionChoice Choice)
 {
     const auto Current = scheduler_.Snapshot(selectedId());
@@ -1501,17 +1477,16 @@ void FileJobUi::answer(InteractionChoice Choice)
         auto Reply = hc::plugins::PromptArchivePassword(Query.source_, Query.passwordAttempt_, Context);
         auto Fresh = scheduler_.Snapshot(Id);
         if (!Fresh.HasValue() || Fresh.Value().cancelRequested_ || !Fresh.Value().interaction_ || Fresh.Value().interaction_->id_ != Query.id_) return;
-        if (Reply.HasValue()) scheduler_.Reply(Id, {Query.id_, InteractionChoice::Confirm, Reply.Value().Value()});
-        else scheduler_.Reply(Id, {Query.id_, InteractionChoice::Cancel, {}});
+        if (Reply.HasValue()) replyInteraction(Id, Query.id_, InteractionChoice::Confirm, QString::fromStdString(Reply.Value().Value()));
+        else replyInteraction(Id, Query.id_, InteractionChoice::Cancel, {});
         updateSelection(); return;
     }
-    const auto Replied = scheduler_.Reply(selectedId(), {Current.Value().interaction_->id_, Choice, renamed_->text().toStdString()});
-    if (!Replied.HasValue()) status_->setText(tr("응답을 적용할 수 없습니다: %1").arg(QString::fromStdString(Replied.Failure().code_)));
-    else { renamed_->clear(); updateSelection(); }
+
 }
 
 bool FileJobUi::eventFilter(QObject* Object, QEvent* Event)
 {
+    if (Object == dialog_ && Event->type() == QEvent::Hide && interaction_ && !passwordDialogOpen_) { interaction_->Dismiss(); interaction_.clear(); }
     if (Object == dialog_ && Event->type() == QEvent::Resize && progressFooter_ && metricsLayout_) {
         layoutProgressFooter();
         const auto Snapshot = scheduler_.Snapshot(selectedId());

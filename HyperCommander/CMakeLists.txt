@@ -154,6 +154,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/nativeFileElevation.cpp
         ../UniqueLibs/nativeFileElevation.hpp
         ../UniqueLibs/fileJobUi.cpp
+        ../UniqueLibs/fileJobInteraction.cpp
+        ../UniqueLibs/fileJobInteraction.hpp
         UIs/fileAttributesDialog.cpp
         UIs/fileAttributesDialog.hpp
         ../UniqueLibs/fileAttributes.hpp

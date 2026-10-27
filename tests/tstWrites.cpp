@@ -23,7 +23,7 @@ using namespace hc::operations;
 
 namespace
 {
-    enum class WriteFault { Remove, Append, Metadata, Commit, AppendAndCleanup, Directory, Corrupt };
+    enum class WriteFault { Remove, Append, Metadata, Commit, AppendAndCleanup, Directory, Corrupt, PreserveRename, AutomaticInspect };
     class FaultSession final : public IWriteSession
     {
     public:
@@ -157,7 +157,10 @@ namespace
         explicit FailedRemoveWriter(std::shared_ptr<IWritableStorage> Writer, WriteFault Fault = WriteFault::Remove) : writer_(std::move(Writer)), fault_(Fault) {}
         ProviderId Id() const override { return writer_->Id(); }
         Result<SupportDecision> Supports(Mutation Operation, Locator At, OperationContext Context) override { return writer_->Supports(Operation, std::move(At), Context); }
-        Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override { return writer_->Inspect(std::move(At), Context); }
+        Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override {
+            if (fault_ == WriteFault::AutomaticInspect && At.root_.find("(3)") != std::string::npos) return Error{ErrorCategory::AccessDenied, "injected-name-inspect"};
+            return writer_->Inspect(std::move(At), Context);
+        }
         Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context) override
         {
             auto Session = writer_->BeginWrite(std::move(At), std::move(Expected), Context);
@@ -173,7 +176,10 @@ namespace
         }
         Result<Unit> MakeDirectory(Locator At, OperationContext Context) override { if (fault_ == WriteFault::Directory && made_++ == 1) return Error{ErrorCategory::AccessDenied, "injected-parent-create"}; return writer_->MakeDirectory(std::move(At), Context); }
         Result<Unit> Remove(EntrySnapshot, OperationContext) override { return Error{ErrorCategory::AccessDenied, "injected-source-delete"}; }
-        Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override { return writer_->Rename(std::move(Entry), std::move(To), Context); }
+        Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override {
+            if (fault_ == WriteFault::PreserveRename) return Error{ErrorCategory::AccessDenied, "injected-preserve-denied"};
+            return writer_->Rename(std::move(Entry), std::move(To), Context);
+        }
     private:
         std::shared_ptr<IWritableStorage> writer_;
         WriteFault fault_; int made_ = 0;
@@ -344,6 +350,96 @@ private:
     QStringList artifacts()
     { return QDir(root_->path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden | QDir::System); }
 private slots:
+    void conflictResponses_data()
+    {
+        QTest::addColumn<int>("Mode");
+        QTest::newRow("rename-incoming") << 0;
+        QTest::newRow("preserve-existing") << 1;
+        QTest::newRow("replace-all") << 2;
+        QTest::newRow("skip-all") << 3;
+        QTest::newRow("preserved-target-on-copy-failure") << 4;
+        QTest::newRow("changed-target-is-not-renamed") << 5;
+        QTest::newRow("racing-backup-is-not-replaced") << 6;
+        QTest::newRow("cancel-reports-preserved-target") << 7;
+        QTest::newRow("parallel-replace-all") << 8;
+        QTest::newRow("parallel-skip-all") << 9;
+        QTest::newRow("preserve-permission-failure-never-replaces") << 10;
+        QTest::newRow("name-inspection-permission-failure-never-replaces") << 11;
+        QTest::newRow("parallel-preserve-failure-never-elevates-copy") << 12;
+        QTest::newRow("continued-copy-failure-reports-preserved-target") << 13;
+    }
+    void conflictResponses()
+    {
+        QFETCH(int, Mode);
+        const auto Prefix = QString("interaction-%1").arg(Mode);
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/from")));
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/to")));
+        const auto Source = Prefix + "/from/report.txt", Target = Prefix + "/to/report.txt";
+        QVERIFY(write(Source, "incoming")); QVERIFY(write(Target, "original"));
+        QVERIFY(write(Prefix + "/to/report (2).txt", "occupied"));
+        FileOperationRequest Request; Request.destination_ = at(Prefix + "/to"); Request.destinationWriter_ = writer_;
+        auto Entry = writer_->Inspect(at(Source), {}); QVERIFY(Entry.HasValue() && Entry.Value());
+        Request.sources_.push_back({*Entry.Value(), reader_, writer_});
+        const bool All = Mode == 2 || Mode == 3 || Mode == 8 || Mode == 9;
+        if (All || Mode == 12) {
+            QVERIFY(write(Prefix + "/from/second.txt", "incoming-second")); QVERIFY(write(Prefix + "/to/second.txt", "old-second"));
+            auto Second = writer_->Inspect(at(Prefix + "/from/second.txt"), {}); QVERIFY(Second.HasValue() && Second.Value());
+            Request.sources_.push_back({*Second.Value(), reader_, writer_});
+        }
+        if (Mode == 4 || Mode == 13) Request.destinationWriter_ = std::make_shared<FailedRemoveWriter>(writer_, WriteFault::Commit);
+        if (Mode == 13) Request.continueSelectedFiles_ = true;
+        if (Mode == 10 || Mode == 11 || Mode == 12) {
+            Request.destinationWriter_ = std::make_shared<FailedRemoveWriter>(writer_, Mode == 11 ? WriteFault::AutomaticInspect : WriteFault::PreserveRename);
+            Request.elevation_ = std::make_shared<FixtureElevationService>(reader_, writer_);
+        }
+        OperationContext Operation; Operation.fileCopyWorkers_ = 1;
+        if (Mode == 8 || Mode == 9 || Mode == 12) {
+            auto Probe = std::make_shared<ParallelProbe>(); Request.destinationWriter_ = std::make_shared<ParallelWriter>(Request.destinationWriter_, Probe);
+            Operation.fileCopyWorkers_ = 4;
+        }
+        std::stop_source Stop; Operation.stopToken_ = Stop.get_token();
+        auto Prepared = PrepareFileOperation(Request, Operation); QVERIFY(Prepared.HasValue());
+        JobStepContext Context; Context.operation_ = Operation; Context.jobId_ = "conflict-fixture";
+        JobState State = JobState::Running; int Questions = 0; bool Injected = false;
+        std::optional<Error> Error; const auto Start = std::chrono::steady_clock::now();
+        while (!IsTerminal(State) && std::chrono::steady_clock::now() - Start < std::chrono::seconds(10)) {
+            auto Step = Prepared.Value().task_->Advance(Context); Context.answer_.reset(); State = Step.next_; Error = Step.error_;
+            if (Step.interaction_) {
+                ++Questions;
+                QVERIFY(!Step.interaction_->source_.empty()); QVERIFY(!Step.interaction_->destination_.empty());
+                const auto Choice = Mode == 0 || Mode == 11 ? InteractionChoice::RenameIncoming
+                    : Mode == 2 || Mode == 8 ? InteractionChoice::ReplaceAll
+                    : Mode == 3 || Mode == 9 ? InteractionChoice::SkipAll : InteractionChoice::RenameExisting;
+                QVERIFY(std::ranges::find(Step.interaction_->choices_, Choice) != Step.interaction_->choices_.end());
+                if (Mode == 5) QVERIFY(write(Target, "changed-after-question"));
+                Context.answer_ = InteractionAnswer{"", Choice};
+            }
+            if (Mode == 6 && State == JobState::Committing && !Injected) { QVERIFY(write(Prefix + "/to/report (3).txt", "racing-file")); Injected = true; }
+            if (Mode == 7 && !QFileInfo::exists(root_->filePath(Target)) && QFileInfo::exists(root_->filePath(Prefix + "/to/report (3).txt"))) Stop.request_stop();
+            Context.committing_ = State == JobState::Committing;
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+        QVERIFY(IsTerminal(State));
+        const auto Cleanup = Prepared.Value().task_->Finalize(State);
+        QCOMPARE(Questions, 1); QCOMPARE(read(Source), QByteArray("incoming")); QCOMPARE(read(Prefix + "/to/report (2).txt"), QByteArray("occupied"));
+        if (Mode == 0) { QCOMPARE(State, JobState::Completed); QCOMPARE(read(Target), QByteArray("original")); QCOMPARE(read(Prefix + "/to/report (3).txt"), QByteArray("incoming")); }
+        else if (Mode == 1) { QCOMPARE(State, JobState::Completed); QCOMPARE(read(Target), QByteArray("incoming")); QCOMPARE(read(Prefix + "/to/report (3).txt"), QByteArray("original")); }
+        else if (All) {
+            QCOMPARE(State, JobState::Completed); const bool Skip = Mode == 3 || Mode == 9;
+            QCOMPARE(read(Target), Skip ? QByteArray("original") : QByteArray("incoming"));
+            QCOMPARE(read(Prefix + "/to/second.txt"), Skip ? QByteArray("old-second") : QByteArray("incoming-second"));
+        }
+        else if (Mode == 4 || Mode == 7 || Mode == 13) {
+            if (Mode == 13) QCOMPARE(State, JobState::Completed); else QVERIFY(State != JobState::Completed);
+            QVERIFY(!QFileInfo::exists(root_->filePath(Target)));
+            QCOMPARE(read(Prefix + "/to/report (3).txt"), QByteArray("original"));
+            QVERIFY(std::ranges::any_of(Cleanup, [](const auto& E) { return E.code_ == "conflict-destination-preserved" && E.nativePath_.find("(3)") != std::string::npos; }));
+        }
+        else if (Mode == 5) { QVERIFY(State != JobState::Completed); QCOMPARE(read(Target), QByteArray("changed-after-question")); QVERIFY(!QFileInfo::exists(root_->filePath(Prefix + "/to/report (3).txt"))); }
+        else if (Mode == 6) { QVERIFY(State != JobState::Completed); QCOMPARE(read(Target), QByteArray("original")); QCOMPARE(read(Prefix + "/to/report (3).txt"), QByteArray("racing-file")); }
+        else if (Mode == 10 || Mode == 11 || Mode == 12) { QVERIFY(State != JobState::Completed); QCOMPARE(read(Target), QByteArray("original")); QVERIFY(!QFileInfo::exists(root_->filePath(Prefix + "/to/report (3).txt"))); }
+        QCOMPARE(QDir(root_->filePath(Prefix + "/to")).entryList({".hc-*"}, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).size(), 0);
+    }
     void parallelCopy_data()
     {
         QTest::addColumn<int>("Mode");
@@ -1193,6 +1289,36 @@ private slots:
         QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(4))==std::future_status::ready);const auto& Result=Started.Value().completion_.get();QCOMPARE(Result.snapshot_.state_,JobState::Failed);QVERIFY(Result.snapshot_.error_);QCOMPARE(Result.snapshot_.error_->category_,ErrorCategory::StaleRevision);
         if(DestinationChanged)QCOMPARE(read("r10-change-dst/r10-change.txt"),QByteArray("concurrent destination"));else QVERIFY(!QFileInfo::exists(root_->filePath("r10-change-dst/r10-change.txt")));
         QFile::remove(root_->filePath("r10-change-dst/r10-change.txt"));
+    }
+    void createAndRenameConflictPrompts_data()
+    {
+        QTest::addColumn<int>("Mode");
+        QTest::newRow("new-file") << 0; QTest::newRow("new-folder") << 1; QTest::newRow("rename") << 2;
+    }
+    void createAndRenameConflictPrompts()
+    {
+        QFETCH(int, Mode);
+        const auto Prefix = QString("name-request-%1").arg(Mode); QVERIFY(QDir().mkpath(root_->filePath(Prefix)));
+        const auto Existing = Prefix + "/existing.txt", New = Prefix + "/new.txt";
+        if (Mode == 1) QVERIFY(QDir().mkdir(root_->filePath(Existing))); else QVERIFY(write(Existing, "existing"));
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); Result<PreparedJob> Work = Error{};
+        if (Mode == 0) Work = hc::filetools::PrepareCreate(writer_, at(Prefix), "existing.txt", 0, false, {}, {}, true);
+        else {
+            FileOperationRequest Request; Request.operation_ = Mode == 1 ? hc::operations::FileOperation::MakeDirectory : hc::operations::FileOperation::Rename;
+            Request.fileLockInteractions_ = true; Request.destination_ = at(Existing); Request.destinationWriter_ = writer_;
+            if (Mode == 2) { QVERIFY(write(Prefix + "/source.txt", "source")); auto Source = writer_->Inspect(at(Prefix + "/source.txt"), {}); QVERIFY(Source.HasValue() && Source.Value()); Request.sources_ = {{*Source.Value(), reader_, writer_}}; }
+            Work = PrepareFileOperation(std::move(Request));
+        }
+        QVERIFY(Work.HasValue()); auto Started = Scheduler.Submit(std::move(Work.Value().request_), std::move(Work.Value().task_)); QVERIFY(Started.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Started.Value().id_).Value().state_, JobState::WaitingForUser);
+        const auto Query = *Scheduler.Snapshot(Started.Value().id_).Value().interaction_; QCOMPARE(Query.kind_, InteractionKind::Rename);
+        QVERIFY(!Query.destination_.empty()); QVERIFY(std::ranges::find(Query.choices_, InteractionChoice::Replace) == Query.choices_.end());
+        QVERIFY(Scheduler.Reply(Started.Value().id_, {Query.id_, InteractionChoice::Rename, "new.txt"}).HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        if (Mode == 1) { QVERIFY(QFileInfo(root_->filePath(Existing)).isDir()); QVERIFY(QFileInfo(root_->filePath(New)).isDir()); }
+        else { QCOMPARE(read(Existing), QByteArray("existing")); QVERIFY(QFileInfo::exists(root_->filePath(New))); QCOMPARE(read(New), Mode == 2 ? QByteArray("source") : QByteArray()); }
+        if (Mode == 2) QVERIFY(!QFileInfo::exists(root_->filePath(Prefix + "/source.txt")));
     }
     void r9CreateTemplatesThroughScheduler()
     {

@@ -1538,6 +1538,20 @@ void CGridView::RestoreSelection(const QStringList& Selection, const QString& Fo
     selectionSummaryTimer_.start(0);
 }
 
+void CGridView::RemoveSelection(const QStringList& Selection)
+{
+    const QSet<QString> Keys(Selection.begin(), Selection.end());
+    const auto Remove = [&Keys](QStringList& List) { List.removeIf([&Keys](const QString& Key) { return Keys.contains(Key); }); };
+    // A provider refresh may already have saved the selection for restoration.
+    // Remove completed entries there as well, so they cannot reappear after reset.
+    Remove(resetSelection_); Remove(querySelection_);
+    if (model_) model_->setProperty("hc.selectAllEntries", false);
+    // Loading keeps the old rows visible until the new snapshot is published.
+    // Clear those marks too, before modelAboutToBeReset captures them again.
+    auto Current = CaptureSelection(); Remove(Current);
+    RestoreSelection(Current, CaptureFocus());
+}
+
 void CGridView::EnsureKeyboardFocusOnView() const
 {
     if( view_ == nullptr )

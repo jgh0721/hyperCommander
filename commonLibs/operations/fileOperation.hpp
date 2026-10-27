@@ -3,6 +3,7 @@
 #include "fileElevation.hpp"
 #include "../storage/writableStorage.hpp"
 #include "../storage/entryIndex.hpp"
+#include <atomic>
 
 namespace hc::operations
 {
@@ -43,6 +44,8 @@ namespace hc::operations
         storage::Locator destination_;
         std::shared_ptr<storage::IWritableStorage> destinationWriter_;
         ConflictPolicy conflict_ = ConflictPolicy::Ask;
+        // Shared only by the children of this job (selection pages and copy workers).
+        std::shared_ptr<std::atomic<ConflictPolicy>> conflictDecision_;
         // A single-item helper preserves the caller's immutable overwrite
         // decision instead of making a fresh replacement decision after UAC.
         std::optional<storage::DestinationExpectation> approvedDestination_;

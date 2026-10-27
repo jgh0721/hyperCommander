@@ -210,6 +210,7 @@ namespace hc::operations
                     readOnlyAnswered_ = true; phase_ = Phase::Begin; return progress();
                 }
                 if (phase_ == Phase::Conflict) return conflict(Context);
+                if (phase_ == Phase::AutomaticName) return automaticName(Context.operation_);
                 if (phase_ == Phase::Begin) {
                     if (!copies_.empty() || canStartCopies(Context.operation_)) return advanceCopies(std::move(Context));
                     return begin(Context.operation_);
@@ -405,6 +406,9 @@ namespace hc::operations
                     auto Closed=Reader->FinishReadBatch({}).get(); if (!Closed.HasValue()) cleanup_.push_back(Closed.Failure());
                 }
                 batchReaders_.clear();
+                if (State != JobState::Completed || preservedFailure_)
+                    for (const auto& At : preservedDestinations_)
+                        cleanup_.push_back({ErrorCategory::Unavailable, "conflict-destination-preserved", {}, {}, false, {}, Serialize(At)});
                 return cleanup_;
             }
         private:
@@ -463,6 +467,7 @@ namespace hc::operations
                 Request.sources_ = {Item.source_}; Request.destination_ = Parent(Item.destination_);
                 Request.destinationWriter_ = request_.destinationWriter_;
                 Request.conflict_ = request_.conflict_; Request.copyOptions_ = request_.copyOptions_;
+                Request.conflictDecision_ = request_.conflictDecision_;
                 Request.approvedDestination_ = request_.approvedDestination_; Request.maxBytes_ = Item.source_.entry_.size_;
                 auto Task = std::make_unique<FileTask>(std::move(Request));
                 // The parent already checked this immutable source plan.
@@ -598,7 +603,7 @@ namespace hc::operations
                 std::size_t next_ = 0;
                 bool ended_ = false;
             };
-            enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, OpenRead, Produce, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun, LockPrompt };
+            enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, AutomaticName, PreserveDestination, OpenRead, Produce, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun, LockPrompt };
             PlannedItem& current() { return items_[index_]; }
             std::string itemLocator()
             { return Serialize(current().source_.entry_.locator_.root_.empty() ? current().destination_ : current().source_.entry_.locator_); }
@@ -637,6 +642,14 @@ namespace hc::operations
             }
             JobStep failed(Error Error)
             {
+                if (!preservedDestinations_.empty()) preservedFailure_ = true;
+                // An automatic-name lookup or preservation failure must never
+                // turn into an elevated replacement of the original target.
+                if (phase_ == Phase::AutomaticName || phase_ == Phase::PreserveDestination || Error.code_.starts_with("automatic-name-failed:")) {
+                    if (!Error.code_.starts_with("automatic-name-failed:")) Error.code_ = "automatic-name-failed:" + Error.code_;
+                    if (Error.nativePath_.empty() && index_ < items_.size()) Error.nativePath_ = current().destination_.root_;
+                    return terminalFailure(std::move(Error));
+                }
                 if (request_.fileLockInteractions_ && index_ < items_.size()
                     && (phase_ == Phase::Rename || phase_ == Phase::Remove)
                     && current().source_.entry_.locator_.kind_ == LocatorKind::Local
@@ -977,7 +990,8 @@ namespace hc::operations
             }
             JobStep readOnlyQuestion() {
                 JobStep Step{JobState::WaitingForUser}; Step.interaction_ = InteractionRequest{"", InteractionKind::ReadOnlyRemoval, "read-only-removal",
-                    {InteractionChoice::Confirm, InteractionChoice::ConfirmAll, InteractionChoice::Skip, InteractionChoice::Cancel}, current().source_.entry_.id_}; return Step;
+                    {InteractionChoice::Confirm, InteractionChoice::ConfirmAll, InteractionChoice::Skip, InteractionChoice::Cancel}, current().source_.entry_.id_,
+                    Serialize(current().source_.entry_.locator_)}; return Step;
             }
             JobStep begin(OperationContext Context)
             {
@@ -1009,11 +1023,32 @@ namespace hc::operations
                     return failed({ErrorCategory::Unsupported, Supported.Value().reason_, Writer->Id()});
                 if (request_.operation_ == FileOperation::MakeDirectory) {
                     const auto Existing = Writer->Inspect(current().destination_, Context); if (!Existing.HasValue()) return failed(Existing.Failure());
-                    if (Existing.Value()) { if (!Existing.Value()->directory_) return failed({ErrorCategory::InvalidRequest, "destination-is-not-directory", Writer->Id()}); return done(ItemOutcome::Status::Completed, true); }
+                    if (Existing.Value()) {
+                        if (request_.fileLockInteractions_) {
+                            phase_ = Phase::Conflict; replaceAllowed_ = false;
+                            auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                            Step.interaction_ = InteractionRequest{"", InteractionKind::Rename, "destination-exists",
+                                {InteractionChoice::Rename, InteractionChoice::Cancel}, Existing.Value()->id_, {}, Serialize(current().destination_)};
+                            return Step;
+                        }
+                        if (!Existing.Value()->directory_) return failed({ErrorCategory::InvalidRequest, "destination-is-not-directory", Writer->Id()}); return done(ItemOutcome::Status::Completed, true);
+                    }
                     phase_ = Phase::MakeDirectory;
                 }
                 else if (request_.operation_ == FileOperation::Delete || current().removeDirectory_) phase_ = Phase::Remove;
-                else if (request_.operation_ == FileOperation::Rename) phase_ = Phase::Rename;
+                else if (request_.operation_ == FileOperation::Rename) {
+                    if (request_.fileLockInteractions_) {
+                        const auto Existing = Writer->Inspect(current().destination_, Context); if (!Existing.HasValue()) return failed(Existing.Failure());
+                        if (Existing.Value() && Existing.Value()->id_ != current().source_.entry_.id_) {
+                            phase_ = Phase::Conflict; replaceAllowed_ = false;
+                            auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                            Step.interaction_ = InteractionRequest{"", InteractionKind::Rename, "destination-exists",
+                                {InteractionChoice::Rename, InteractionChoice::Cancel}, Existing.Value()->id_, Serialize(current().source_.entry_.locator_), Serialize(current().destination_)};
+                            return Step;
+                        }
+                    }
+                    phase_ = Phase::Rename;
+                }
                 else
                 {
                     const auto Existing = request_.destinationWriter_->Inspect(current().destination_, Context);
@@ -1028,16 +1063,33 @@ namespace hc::operations
                     {
                         if (Existing.Value()->directory_ && current().source_.entry_.directory_) return done(ItemOutcome::Status::Completed, true);
                         expected_ = {true, Existing.Value()->id_.revision_};
-                        if (request_.conflict_ == ConflictPolicy::Skip && !current().source_.entry_.directory_) return done(ItemOutcome::Status::Skipped);
-                        if (request_.conflict_ != ConflictPolicy::Replace || Existing.Value()->directory_ || current().source_.entry_.directory_)
+                        const auto Policy = request_.conflictDecision_ ? request_.conflictDecision_->load() : request_.conflict_;
+                        if (Policy == ConflictPolicy::Skip && !current().source_.entry_.directory_) return done(ItemOutcome::Status::Skipped);
+                        if (Policy != ConflictPolicy::Replace || Existing.Value()->directory_ || current().source_.entry_.directory_)
                         {
                             replaceAllowed_ = !Existing.Value()->directory_ && !current().source_.entry_.directory_;
                             phase_ = Phase::Conflict;
                             JobStep Step{JobState::WaitingForUser};
                             Step.interaction_ = InteractionRequest{"", InteractionKind::Overwrite, "destination-exists",
-                                {InteractionChoice::Rename, InteractionChoice::Cancel}, Existing.Value()->id_};
-                            if (!current().source_.entry_.directory_) Step.interaction_->choices_.push_back(InteractionChoice::Skip);
-                            if (replaceAllowed_) Step.interaction_->choices_.push_back(InteractionChoice::Replace);
+                                {InteractionChoice::Rename, InteractionChoice::Cancel}, Existing.Value()->id_,
+                                Serialize(current().source_.entry_.locator_), Serialize(current().destination_)};
+                            if (!current().source_.entry_.directory_) {
+                                Step.interaction_->choices_.push_back(InteractionChoice::Skip);
+                                Step.interaction_->choices_.push_back(InteractionChoice::SkipAll);
+                            }
+                            if (replaceAllowed_) {
+                                Step.interaction_->choices_.push_back(InteractionChoice::Replace);
+                                Step.interaction_->choices_.push_back(InteractionChoice::ReplaceAll);
+                                if (request_.operation_ == FileOperation::Copy) {
+                                    Step.interaction_->choices_.push_back(InteractionChoice::RenameIncoming);
+                                    const auto RenameSupport = request_.destinationWriter_->Supports(Mutation::Rename, current().destination_, Context);
+                                    if (RenameSupport.HasValue() && RenameSupport.Value().availability_ != Availability::Unsupported
+                                        && Existing.Value()->id_ != current().source_.entry_.id_) {
+                                        conflictEntry_ = *Existing.Value();
+                                        Step.interaction_->choices_.push_back(InteractionChoice::RenameExisting);
+                                    }
+                                }
+                            }
                             return Step;
                         }
                     }
@@ -1050,7 +1102,19 @@ namespace hc::operations
             JobStep conflict(const JobStepContext& Context)
             {
                 if (!Context.answer_) return failed({ErrorCategory::Internal, "conflict-answer-required"});
-                if (Context.answer_->choice_ == InteractionChoice::Skip) return done(ItemOutcome::Status::Skipped);
+                const auto Choice = Context.answer_->choice_;
+                if (Choice == InteractionChoice::Skip || Choice == InteractionChoice::SkipAll) {
+                    if (Choice == InteractionChoice::SkipAll && request_.conflictDecision_) request_.conflictDecision_->store(ConflictPolicy::Skip);
+                    return done(ItemOutcome::Status::Skipped);
+                }
+                if (Choice == InteractionChoice::RenameIncoming || Choice == InteractionChoice::RenameExisting) {
+                    if (request_.operation_ != FileOperation::Copy || !replaceAllowed_
+                        || (Choice == InteractionChoice::RenameExisting && !conflictEntry_))
+                        return failed({ErrorCategory::InvalidRequest, "invalid-automatic-rename"});
+                    automaticExisting_ = Choice == InteractionChoice::RenameExisting;
+                    automaticIndex_ = 2; automaticOriginal_ = current().destination_;
+                    phase_ = Phase::AutomaticName; return progress();
+                }
                 if (Context.answer_->choice_ == InteractionChoice::Rename)
                 {
                     if (!SafeName(Context.answer_->value_)) return failed({ErrorCategory::InvalidRequest, "unsafe-destination-name"});
@@ -1069,12 +1133,42 @@ namespace hc::operations
                     }
                     current().destination_ = New; phase_ = Phase::Begin; return progress();
                 }
-                if (Context.answer_->choice_ != InteractionChoice::Replace || !replaceAllowed_) return failed({ErrorCategory::InvalidRequest, "invalid-conflict-choice"});
+                if ((Choice != InteractionChoice::Replace && Choice != InteractionChoice::ReplaceAll) || !replaceAllowed_) return failed({ErrorCategory::InvalidRequest, "invalid-conflict-choice"});
+                if (Choice == InteractionChoice::ReplaceAll && request_.conflictDecision_) request_.conflictDecision_->store(ConflictPolicy::Replace);
                 phase_ = Phase::OpenRead;
                 return progress();
             }
+            JobStep automaticName(OperationContext Context)
+            {
+                // One provider lookup per advance keeps large collision sets cancellable.
+                if (automaticIndex_ > 100000) return failed({ErrorCategory::BudgetExceeded, "automatic-name-budget"});
+                auto Original = automaticOriginal_;
+                const auto Path = EntryPath(Original);
+                const auto Name = Path.substr(Path.find_last_of("/\\") + 1);
+                const auto Dot = Name.find_last_of('.');
+                const auto Split = Dot == std::string::npos || Dot == 0 ? Name.size() : Dot;
+                const auto Candidate = Name.substr(0, Split) + " (" + std::to_string(automaticIndex_++) + ")" + Name.substr(Split);
+                automaticTarget_ = Child(Parent(Original), Candidate);
+                const auto Existing = request_.destinationWriter_->Inspect(automaticTarget_, Context);
+                if (!Existing.HasValue()) return failed(Existing.Failure());
+                if (Existing.Value()) return progress();
+                if (!automaticExisting_) {
+                    current().destination_ = automaticTarget_; expected_ = {};
+                    phase_ = Phase::Begin; return progress();
+                }
+                phase_ = Phase::PreserveDestination;
+                auto Step = progress(); Step.next_ = JobState::Committing; return Step;
+            }
             JobStep commit(OperationContext Context)
             {
+                if (phase_ == Phase::PreserveDestination) {
+                    // Rename must enforce both immutable source identity and no replacement.
+                    const auto Preserved = request_.destinationWriter_->Rename(*conflictEntry_, automaticTarget_, Context);
+                    if (!Preserved.HasValue()) return failed(Preserved.Failure());
+                    preservedDestinations_.push_back(automaticTarget_);
+                    conflictEntry_.reset(); expected_ = {}; phase_ = Phase::Begin;
+                    return progress();
+                }
                 if (phase_ == Phase::MakeDirectory)
                 {
                     const auto Made = request_.destinationWriter_->MakeDirectory(current().destination_, Context);
@@ -1175,6 +1269,11 @@ namespace hc::operations
             std::uint32_t sourceRemoveRetries_ = 0;
             std::uint64_t bytesTotal_ = 0, bytesDone_ = 0, itemBytes_ = 0;
             bool replaceAllowed_ = false, destinationCommitted_ = false;
+            std::optional<EntrySnapshot> conflictEntry_;
+            Locator automaticOriginal_, automaticTarget_;
+            std::vector<Locator> preservedDestinations_;
+            unsigned automaticIndex_ = 2;
+            bool automaticExisting_ = false, preservedFailure_ = false;
             std::string jobId_;
             FileElevationRequest elevatedRequest_;
             std::unique_ptr<IFileElevationSession> elevatedSession_;
@@ -1319,6 +1418,7 @@ namespace hc::operations
     }
     Result<PreparedJob> PrepareFileOperation(FileOperationRequest Request, OperationContext Context)
     {
+        if (!Request.conflictDecision_) Request.conflictDecision_ = std::make_shared<std::atomic<ConflictPolicy>>(Request.conflict_);
         if (Request.continueSelectedFiles_ && (Request.selection_ || Request.operation_ != FileOperation::Copy || Request.sources_.size() > 64
                 || std::any_of(Request.sources_.begin(), Request.sources_.end(), [](const auto& Source) { return Source.entry_.directory_; })))
             return Error{ErrorCategory::InvalidRequest, "invalid-selected-file-page"};

@@ -225,6 +225,14 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     connect(PreviewTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview); PreviewTimer->start();
     fileJobs_->onFinished_ = [Guard = QPointer<CommandUiBridge>(this)](const hc::operations::JobResult& Result) {
         if (!Guard || !Guard->main_) return;
+        if (auto Selection = Guard->jobSelections_.find(Result.snapshot_.id_); Selection != Guard->jobSelections_.end()) {
+            const auto Saved = std::move(Selection->second); Guard->jobSelections_.erase(Selection);
+            if (Saved.view_ && Saved.model_ && Saved.view_->BaseModel() == Saved.model_
+                && Saved.location_ == Saved.model_->property("hc.snapshotLocation").toString()
+                && Result.snapshot_.state_ == hc::operations::JobState::Completed && !Result.snapshot_.cancelRequested_
+                && Result.snapshot_.completedItems_ > 0 && !Result.snapshot_.skippedItems_ && !Result.snapshot_.failedItems_
+                && !Result.snapshot_.error_ && Result.cleanupErrors_.empty()) Saved.view_->RemoveSelection(Saved.keys_);
+        }
         if (auto Move = Guard->clipboardMoves_.find(Result.snapshot_.id_); Move != Guard->clipboardMoves_.end()) {
             const auto Token = Move->second; Guard->clipboardMoves_.erase(Move);
             if (Token == Guard->clipboardToken_ && Result.snapshot_.state_ == hc::operations::JobState::Completed
@@ -301,6 +309,24 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
 }
 
 CommandUiBridge::~CommandUiBridge() { clipboardImportStop_.request_stop(); }
+
+void CommandUiBridge::rememberJobSelection(const std::string& Id, const CommandContext& Context)
+{
+    auto* Model = findModel(Context.tabId_);
+    if (!Model || !main_) return;
+    std::set<std::string> Ids;
+    for (const auto& Entry : Context.selection_) Ids.insert(Serialize(Entry));
+    for (auto* View : main_->findChildren<CGridView*>()) if (View->BaseModel() == Model) {
+        QStringList Keys;
+        for (const auto& Index : View->SelectedSourceIndexes()) {
+            const auto Entry = Model->GetFileInfo(Index);
+            if (Entry && Entry->storageEntry_ && (Context.selectionManifest_ || Ids.contains(Serialize(Entry->storageEntry_->id_))))
+                Keys.append(hc::workspace::SelectionKey(*Entry->storageEntry_));
+        }
+        if (!Keys.isEmpty()) jobSelections_[Id] = {View, Model, Model->property("hc.snapshotLocation").toString(), std::move(Keys)};
+        return;
+    }
+}
 
 void CommandUiBridge::bindModels()
 {
@@ -1239,6 +1265,7 @@ void CommandUiBridge::extractArchive() {
     if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), QString::fromStdString(Submitted.Failure().code_)); return; }
     auto Parent = Target; Parent.root_ = QFileInfo(Path).absolutePath().toStdString();
     affectedLocations_[Submitted.Value().id_] = {Target, Parent};
+    rememberJobSelection(Submitted.Value().id_, Context);
 }
 
 void CommandUiBridge::openArchive(std::string InitialFormat)
@@ -1283,6 +1310,7 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
         }, [Guard = QPointer<CommandUiBridge>(this), Affected](const std::string& Id) { if (Guard) Guard->affectedLocations_[Id] = {Affected}; });
     if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축"), QString::fromStdString(Submitted.Failure().code_)); return; }
     affectedLocations_[Submitted.Value().id_] = {Affected};
+    rememberJobSelection(Submitted.Value().id_, Context);
 }
 
 void CommandUiBridge::openIso(bool Inspect)
@@ -1905,6 +1933,7 @@ bool CommandUiBridge::ownsFileClipboard() const
 void CommandUiBridge::updateClipboard()
 {
     if (HasFileClipboard() && ownsFileClipboard()) { refreshActionState(); return; }
+    jobSelections_.erase("clipboard");
     clipboardImportStop_.request_stop(); clipboardImportStop_ = std::stop_source{};
     const auto Generation = ++clipboardGeneration_;
     clipboard_.reset(); clipboardToken_.clear(); clipboardLocations_.clear(); cutKeys_.clear(); cutRoot_.clear();
@@ -1970,6 +1999,7 @@ void CommandUiBridge::refreshClipboardVisuals()
 bool CommandUiBridge::CancelClipboard()
 {
     if (!HasFileClipboard()) return false;
+    jobSelections_.erase("clipboard");
     const bool Owned = ownsFileClipboard();
     clipboardImportStop_.request_stop(); ++clipboardGeneration_; clipboardImporting_ = false; clipboardExternal_ = false;
     clipboard_.reset(); clipboardToken_.clear(); cutKeys_.clear(); cutRoot_.clear(); clipboardLocations_.clear();
@@ -2009,6 +2039,7 @@ Result<CommandOutcome> CommandUiBridge::executeClipboard(const CommandInvocation
         if (!Started.HasValue()) return Started.Failure();
         auto Affected = clipboardLocations_; Affected.push_back(Invocation.context_.location_);
         affectedLocations_[Started.Value().id_] = std::move(Affected);
+        if (const auto Selection = jobSelections_.find("clipboard"); Selection != jobSelections_.end()) jobSelections_[Started.Value().id_] = Selection->second;
         if (clipboard_->operation_ == hc::operations::FileOperation::Move) clipboardMoves_[Started.Value().id_] = clipboardToken_;
         return CommandOutcome{CommandOutcome::Status::Accepted, Started.Value().id_};
     }
@@ -2068,6 +2099,7 @@ Result<CommandOutcome> CommandUiBridge::executeClipboard(const CommandInvocation
     clipboard_ = std::move(Request); clipboardToken_ = Token; clipboardLocations_ = std::move(Locations);
     cutKeys_ = Cut ? std::move(Keys) : QSet<QString>{};
     cutRoot_ = Cut && clipboard_->selection_ ? hc::workspace::LocationKey(Invocation.context_.location_) : QString{};
+    jobSelections_.erase("clipboard"); rememberJobSelection("clipboard", Invocation.context_);
     QApplication::clipboard()->setMimeData(Mime);
     if (!ownsFileClipboard()) {
         CancelClipboard(); return Error{ErrorCategory::Unavailable, "clipboard-write-failed"};
@@ -2091,7 +2123,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         const auto Type = Invocation.parameters_.contains("template") ? std::get<std::int64_t>(Invocation.parameters_.at("template")) : 0;
         if (Type < 0 || Type >= hc::filetools::Templates().size()) return Error{ErrorCategory::InvalidRequest, "invalid-file-template"};
         const bool Bom = Invocation.parameters_.contains("bom") && std::get<bool>(Invocation.parameters_.at("bom"));
-        auto Prepared = hc::filetools::PrepareCreate(Writer, Invocation.context_.location_, Name, int(Type), Bom, Invocation.operation_, fileJobs_->ElevationService());
+        auto Prepared = hc::filetools::PrepareCreate(Writer, Invocation.context_.location_, Name, int(Type), Bom, Invocation.operation_, fileJobs_->ElevationService(), !Invocation.operation_.workload_.IsAutomatic());
         if (!Prepared.HasValue()) return Prepared.Failure();
         Prepared.Value().request_.correlationId_ = Invocation.correlationId_;
         Prepared.Value().request_.deferred_ = Invocation.parameters_.contains("queued") && std::get<bool>(Invocation.parameters_.at("queued"));
@@ -2338,6 +2370,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
     }
     if (!Started.HasValue()) return Started.Failure();
     affectedLocations_.emplace(Started.Value().id_, std::move(Affected));
+    rememberJobSelection(Started.Value().id_, Invocation.context_);
     if (Flag("openCreated") && Invocation.id_ == "hc.file.mkdir" && NativeTarget)
         createdFolderNavigation_[Started.Value().id_] = {Invocation.context_.tabId_, Invocation.context_.location_, FullTarget, Model};
     if (Remember && !hc::ui::FileOperationDialog::RememberTarget(QString::fromStdString(RecentProvider), QString::fromStdString(RecentTarget.root_)))

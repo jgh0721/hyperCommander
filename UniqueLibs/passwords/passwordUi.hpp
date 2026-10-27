@@ -67,5 +67,7 @@ namespace hc::passwords
         const hc::storage::OperationContext& Context, QWidget* Parent = nullptr);
     std::optional<hc::storage::Password> TryAutomaticArchivePassword(const std::string& Archive, unsigned Attempt,
         const hc::storage::OperationContext& Context);
+    void RememberArchivePasswordForJob(const std::string& Archive, const QString& Password,
+        const hc::storage::OperationContext& Context);
     void ForgetSessionPasswords();
 }

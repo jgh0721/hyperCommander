@@ -21,6 +21,7 @@ class QSpinBox;
 class QGridLayout;
 class QBoxLayout;
 namespace fm::ui { class TransferGraph; class DialogHeader; }
+namespace hc::ui { class FileJobInteraction; }
 
 class FileJobUi : public QObject, public hc::permissions::JobController, public hc::filetools::RenameJobController
 {
@@ -72,6 +73,9 @@ private:
     void fitProgressDialog();
     void loadResultPage(const std::string& Id);
     void answer(hc::operations::InteractionChoice Choice);
+    void updateInteraction(const hc::operations::JobSnapshot* Snapshot);
+    void replyInteraction(const std::string& Id, const std::string& Request, hc::operations::InteractionChoice Choice, const QString& Value);
+    void showInteractionDetails(const hc::operations::JobSnapshot& Snapshot);
     std::string selectedId() const;
     std::shared_ptr<hc::operations::IJobJournal> journal_;
     hc::operations::JobScheduler scheduler_;
@@ -88,7 +92,7 @@ private:
     QProgressBar* currentProgress_ = nullptr;
     QWidget *sourceBlock_ = nullptr, *destinationBlock_ = nullptr, *currentBlock_ = nullptr;
     QWidget* phaseBlock_ = nullptr;
-    QWidget *axisBlock_ = nullptr, *answersBlock_ = nullptr, *pagesBlock_ = nullptr;
+    QWidget *axisBlock_ = nullptr, *pagesBlock_ = nullptr;
     QLabel *sourcePath_ = nullptr, *sourceName_ = nullptr, *destinationPath_ = nullptr, *destinationName_ = nullptr;
     QLabel *currentTitle_ = nullptr, *currentPercent_ = nullptr, *currentMetrics_ = nullptr;
     QLabel *overallTitle_ = nullptr, *overallPercent_ = nullptr, *overallMetrics_ = nullptr;
@@ -98,12 +102,11 @@ private:
     QGridLayout* progressFooter_ = nullptr;
     QBoxLayout* metricsLayout_ = nullptr;
     QPlainTextEdit* details_ = nullptr;
-    QLineEdit* renamed_ = nullptr;
     QPushButton* pause_ = nullptr;
     QPushButton* cancel_ = nullptr;
-    std::map<hc::operations::InteractionChoice, QPushButton*> choices_;
-    QPushButton* permission_ = nullptr;
-    QPushButton* fileLocks_ = nullptr;
+    QPointer<hc::ui::FileJobInteraction> interaction_;
+    std::string interactionPasswordRequest_;
+    std::string repliedInteraction_;
     QTimer* timer_ = nullptr;
     bool closing_ = false;
     QDialog* manager_ = nullptr;
@@ -150,7 +153,6 @@ private:
     uint64_t loadedOffset_ = UINT64_MAX;
     std::vector<hc::operations::ItemOutcome> resultPage_;
     bool pageLoading_ = false;
-    std::string passwordRequestId_;
     bool passwordDialogOpen_ = false;
     std::map<std::string, std::stop_source> passwordScopes_;
 };

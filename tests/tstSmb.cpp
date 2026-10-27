@@ -294,6 +294,8 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobInteractionUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileClipboardUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileColorRtlUi"
@@ -2392,6 +2394,168 @@ private slots:
         QVERIFY(List->MoveRow(0, 1)); Page->findChild<QLineEdit*>("hc.rules.name")->setText("취소할 편집");
         Dialog.reject();
         QCOMPARE(Settings.Read(Section::Options).toObject()["fileColorRules"].toObject()["groups"].toArray(), Groups);
+    }
+
+    void fileJobInteractionUi_data()
+    {
+        QTest::addColumn<int>("Mode");
+        for (int Mode = 0; Mode != 11; ++Mode) QTest::newRow(qPrintable(QString("interaction-%1").arg(Mode))) << Mode;
+    }
+    void fileJobInteractionUi()
+    {
+        QFETCH(int, Mode);
+        using namespace hc::operations;
+        struct ReplyState { std::atomic<int> choice_{-1}; };
+        class PromptTask final : public IJobTask {
+        public:
+            PromptTask(InteractionRequest Request, std::shared_ptr<ReplyState> Reply) : request_(std::move(Request)), reply_(std::move(Reply)) {}
+            JobStep Advance(JobStepContext Context) override {
+                if (Context.answer_) { reply_->choice_.store(int(Context.answer_->choice_)); return JobStep{JobState::Completed}; }
+                JobStep Step{JobState::WaitingForUser}; Step.interaction_ = request_; return Step;
+            }
+            std::vector<hc::storage::Error> Finalize(JobState) override { return {}; }
+        private: InteractionRequest request_; std::shared_ptr<ReplyState> reply_;
+        };
+        QTemporaryDir Files; QVERIFY(Files.isValid()); QVERIFY(QDir().mkpath(Files.filePath("from"))); QVERIFY(QDir().mkpath(Files.filePath("to")));
+        const auto Source = Files.filePath("from/image.png"), Destination = Files.filePath("to/image.png");
+        QImage Image(160, 90, QImage::Format_RGB32); Image.fill(QColor(60, 120, 180)); QVERIFY(Image.save(Source)); Image.fill(QColor(180, 120, 60)); QVERIFY(Image.save(Destination));
+        const auto Kind = Mode == 1 ? InteractionKind::Rename : Mode == 2 ? InteractionKind::Password : Mode == 3 ? InteractionKind::DeleteConfirmation
+            : Mode == 4 ? InteractionKind::ReadOnlyRemoval : Mode == 5 ? InteractionKind::Elevation : Mode == 6 || Mode == 7 || Mode >= 9 ? InteractionKind::RetryFailure : InteractionKind::Overwrite;
+        InteractionRequest Request; Request.kind_ = Kind; Request.source_ = Source.toStdString(); Request.destination_ = Destination.toStdString();
+        Request.reason_ = Kind == InteractionKind::DeleteConfirmation ? "confirm-permanent-delete" : Kind == InteractionKind::RetryFailure ? "file-in-use:win32:32" : "destination-exists";
+        Request.choices_ = Kind == InteractionKind::Overwrite ? std::vector{InteractionChoice::Replace, InteractionChoice::ReplaceAll, InteractionChoice::Skip, InteractionChoice::SkipAll, InteractionChoice::Rename, InteractionChoice::RenameIncoming, InteractionChoice::RenameExisting, InteractionChoice::Cancel}
+            : Kind == InteractionKind::Rename ? std::vector{InteractionChoice::Rename, InteractionChoice::Cancel}
+            : Kind == InteractionKind::Password || Kind == InteractionKind::DeleteConfirmation ? std::vector{InteractionChoice::Confirm, InteractionChoice::Cancel}
+            : Kind == InteractionKind::ReadOnlyRemoval ? std::vector{InteractionChoice::Confirm, InteractionChoice::ConfirmAll, InteractionChoice::Skip, InteractionChoice::Cancel}
+            : Kind == InteractionKind::Elevation ? std::vector{InteractionChoice::Elevate, InteractionChoice::Retry, InteractionChoice::CopyOnly, InteractionChoice::Cancel}
+            : Mode == 7 ? std::vector{InteractionChoice::Retry, InteractionChoice::Cancel} : std::vector{InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::Cancel};
+        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); Window.show();
+        FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        auto Reply = std::make_shared<ReplyState>(); PreparedJob Work; Work.task_ = std::make_unique<PromptTask>(Request, Reply);
+        Work.request_.metadata_.source_ = Source.toStdString(); Work.request_.metadata_.destination_ = Destination.toStdString();
+        Work.request_.metadata_.kind_ = Mode == 3 || Mode == 4 ? JobKind::Delete : Mode == 5 ? JobKind::Move : Mode == 2 ? JobKind::Extract : Mode == 7 ? JobKind::BatchRename : JobKind::Copy;
+        auto Started = Jobs.Submit(std::move(Work), QStringLiteral("응답 팝업 시험")); QVERIFY(Started.HasValue());
+        QTRY_VERIFY(Window.findChild<QDialog*>("hc.jobs.interaction") && Window.findChild<QDialog*>("hc.jobs.interaction")->isVisible());
+        QPointer<QDialog> Popup = Window.findChild<QDialog*>("hc.jobs.interaction"); auto* Progress = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Popup && Progress && Popup != Progress);
+        auto* Editor = Popup->findChild<QLineEdit*>("hc.jobs.newName"); QVERIFY(Editor); QCOMPARE(Editor->window(), Popup.data());
+        const auto ChoiceButton = [&](InteractionChoice Choice) { return Popup->findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(Choice))); };
+        QVERIFY(Popup->findChild<QWidget*>("hc.dialog.outline")); QVERIFY(Progress->findChild<QWidget*>("hc.dialog.outline"));
+        if (Mode != 1 && Mode != 2) {
+            auto* Initial = ChoiceButton(InteractionChoice::Skip);
+            if (!Initial) Initial = Popup->findChild<QPushButton*>("hc.jobs.interaction.cancel");
+            QTRY_COMPARE(Popup->focusWidget(), Initial); QTRY_VERIFY(Initial->hasFocus());
+        } else QTRY_COMPARE(Popup->focusWidget(), Editor);
+        for (auto* Button : Popup->findChildren<QPushButton*>()) if (Button->isVisibleTo(Popup) && !Button->objectName().startsWith("hc.dialog")) { QVERIFY(!Button->isDefault()); QVERIFY(!Button->autoDefault()); }
+        if (Mode == 0) {
+            auto* Skip = ChoiceButton(InteractionChoice::Skip);
+            QTest::keyClick(Skip, Qt::Key_Left); QCOMPARE(Popup->focusWidget(), ChoiceButton(InteractionChoice::Replace));
+            QTest::keyClick(Popup->focusWidget(), Qt::Key_Right); QCOMPARE(Popup->focusWidget(), Skip);
+            QTest::keyClick(Skip, Qt::Key_Down); auto* Lower = Popup->focusWidget(); QVERIFY(Lower && Lower != Skip);
+            QVERIFY(Lower->mapTo(Popup, QPoint{}).y() > Skip->mapTo(Popup, QPoint{}).y());
+            QTest::keyClick(Lower, Qt::Key_Up); QVERIFY(Popup->focusWidget()->mapTo(Popup, QPoint{}).y() == Skip->mapTo(Popup, QPoint{}).y());
+            QTRY_VERIFY(Popup->findChild<QLabel*>("hc.jobs.interaction.source.preview")->property("hc.jobs.thumbnail").toBool());
+            QVERIFY(ChoiceButton(InteractionChoice::Rename)->text().endsWith("(&R)..."));
+            Popup->resize(520, Popup->height()); QTest::qWait(20); Popup->resize(760, Popup->sizeHint().height());
+            auto* Body = Popup->findChild<QWidget*>("hc.dialog.body"); QVERIFY(Body && Body->layout());
+            QVERIFY(Body->height() <= Body->layout()->totalHeightForWidth(Body->width()) + 4);
+        }
+        if (const auto Capture = qEnvironmentVariable("HC_JOB_INTERACTION_CAPTURE"); !Capture.isEmpty()) {
+            QDir().mkpath(Capture); auto& Theme = fm::style::ThemeManager::instance(); const auto Before = Theme.scheme();
+            for (const auto Dark : {false, true}) {
+                Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light); QTest::qWait(30);
+                QVERIFY(Popup->grab().save(QDir(Capture).filePath(QString("interaction-%1-%2.png").arg(Mode).arg(Dark ? "dark" : "light"))));
+            }
+            Theme.setScheme(Before);
+        }
+        if (Mode == 8) {
+            QVERIFY(Jobs.Scheduler().Cancel(Started.Value().id_).HasValue());
+            QTRY_VERIFY(!Popup || !Popup->isVisible()); QCOMPARE(Reply->choice_.load(), -1); return;
+        }
+        if (Mode == 7 || Mode >= 9) {
+            if (Mode == 7) Popup->findChild<QPushButton*>("hc.jobs.interaction.cancel")->click();
+            else if (Mode == 9) QTest::keyClick(Popup, Qt::Key_Escape);
+            else Popup->close();
+            QTRY_VERIFY(Started.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+            QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Cancelled);
+            QTRY_VERIFY(!Popup || !Popup->isVisible()); QCOMPARE(Reply->choice_.load(), -1); return;
+        }
+        InteractionChoice Expected = InteractionChoice::Confirm;
+        if (Mode == 0 || Mode == 1) {
+            if (Mode == 0) { QVERIFY(Editor->isHidden()); ChoiceButton(InteractionChoice::Rename)->click(); }
+            QTRY_VERIFY(Editor->isVisibleTo(Popup)); Editor->setText("bad/name.png"); auto* Apply = Popup->findChild<QPushButton*>("hc.jobs.renameApply"); QVERIFY(Apply && !Apply->isEnabled());
+            Editor->setText("changed.png"); QTest::qWait(300); QCOMPARE(Editor->text(), QString("changed.png")); QVERIFY(Apply->isEnabled());
+            Apply->click(); Expected = InteractionChoice::Rename;
+        }
+        else if (Mode == 2) { QCOMPARE(Editor->echoMode(), QLineEdit::Password); Editor->setText("test-only-secret"); QTest::keyClick(Editor, Qt::Key_Return); }
+        else if (Mode == 3) ChoiceButton(InteractionChoice::Confirm)->click();
+        else if (Mode == 4) { ChoiceButton(InteractionChoice::ConfirmAll)->click(); Expected = InteractionChoice::ConfirmAll; }
+        else if (Mode == 5) { ChoiceButton(InteractionChoice::CopyOnly)->click(); Expected = InteractionChoice::CopyOnly; }
+        else {
+            QTest::keyClick(Popup->focusWidget(), Qt::Key_Left); QCOMPARE(Popup->focusWidget(), ChoiceButton(InteractionChoice::Retry));
+            QTest::keyClick(Popup->focusWidget(), Qt::Key_Return); Expected = InteractionChoice::Retry;
+        }
+        QTRY_COMPARE(Reply->choice_.load(), int(Expected));
+        QTRY_VERIFY(Started.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QTRY_VERIFY(!Popup || !Popup->isVisible());
+    }
+
+    void fileJobSelectionUi_data()
+    {
+        QTest::addColumn<int>("Mode");
+        const QStringList Names{"copy", "move", "delete", "cancel", "skip", "new-selection", "navigate", "failure", "refresh"};
+        for (int Mode = 0; Mode < Names.size(); ++Mode) QTest::newRow(qPrintable(Names[Mode])) << Mode;
+    }
+    void fileJobSelectionUi()
+    {
+        QFETCH(int, Mode); using namespace hc::operations;
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        const auto Restore = qScopeGuard([&] {
+            for (auto* Dialog : main_->findChildren<QDialog*>()) if (Dialog->objectName().startsWith("hc.jobs") || Dialog->objectName() == "hc.fileJobs") Dialog->hide();
+            Settings.DiscardEdit(); Settings.Replace(Before); main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(QDir().mkpath(Directory.filePath("target")));
+        const auto Put = [](const QString& Path) { QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write("selection test") == 14; };
+        QVERIFY(Put(Directory.filePath("source.txt"))); QVERIFY(Put(Directory.filePath("other.txt")));
+        if (Mode == 4) QVERIFY(Put(Directory.filePath("target/source.txt")));
+        if (Mode == 7) QVERIFY(Put(Directory.filePath("not-a-directory")));
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading()); emit Panel->sig_NotifyPanelActivated();
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        const auto IndexFor = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
+        const auto Source = IndexFor("source.txt"), Other = IndexFor("other.txt"); QVERIFY(Source.isValid() && Other.isValid());
+        const auto Key = hc::workspace::SelectionKey(*Model->GetFileInfo(Source)->storageEntry_);
+        const auto OtherKey = hc::workspace::SelectionKey(*Model->GetFileInfo(Other)->storageEntry_);
+        View->RestoreSelection({Key}, Key); QCOMPARE(View->CaptureSelection(), QStringList{Key});
+        QVariantMap Parameters{{"queued", true}};
+        if (Mode == 2) { Parameters.remove("queued"); Parameters["deleteMode"] = QString("permanent"); Parameters["confirmed"] = true; }
+        else { Parameters["destination"] = Directory.filePath(Mode == 7 ? "not-a-directory" : "target"); Parameters["conflict"] = Mode == 4 ? "skip" : "replace"; }
+        auto Submitted = Bridge->Dispatch(Mode == 1 ? "hc.file.move" : Mode == 2 ? "hc.file.delete" : "hc.file.copy", Parameters, "test", Source);
+        QTRY_VERIFY(Submitted.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        auto Started = Submitted.get(); QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str()); const auto Id = Started.Value().jobId_;
+        if (Mode != 2) QVERIFY(Scheduler.Snapshot(Id).Value().deferred_);
+        QStringList Expected;
+        if (Mode == 3 || Mode == 4 || Mode == 7) Expected = {Key};
+        if (Mode == 5) { View->RestoreSelection({Key, OtherKey}, Key); Expected = {OtherKey}; }
+        if (Mode == 6) {
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath("target")), {}); QTRY_VERIFY(!Model->IsLoading());
+            QVERIFY(Put(Directory.filePath("target/new.txt"))); Model->Refresh(); QTRY_VERIFY(!Model->IsLoading());
+            const auto New = IndexFor("new.txt"); QVERIFY(New.isValid());
+            const auto NewKey = hc::workspace::SelectionKey(*Model->GetFileInfo(New)->storageEntry_); View->RestoreSelection({NewKey}, NewKey); Expected = {NewKey};
+        }
+        if (Mode == 8) {
+            Model->Refresh(); QVERIFY(Model->IsLoading()); View->RemoveSelection({Key});
+            QVERIFY(View->CaptureSelection().isEmpty());
+        }
+        if (Mode == 3) QVERIFY(Scheduler.Cancel(Id).HasValue()); else if (Mode != 2) QVERIFY(Scheduler.Control({Id}, JobControl::Start).HasValue());
+        QTRY_VERIFY(IsTerminal(Scheduler.Snapshot(Id).Value().state_));
+        QCOMPARE(Scheduler.Snapshot(Id).Value().state_, Mode == 3 ? JobState::Cancelled : Mode == 7 ? JobState::Failed : JobState::Completed);
+        QTest::qWait(350); QTRY_VERIFY(!Model->IsLoading());
+        Expected.sort();
+        const auto Current = [&] { auto Keys = View->CaptureSelection(); Keys.sort(); return Keys; };
+        QTRY_COMPARE(Current(), Expected);
+        if (Mode == 0 || Mode == 1 || Mode == 5 || Mode == 6 || Mode == 8) QVERIFY(QFile::exists(Directory.filePath("target/source.txt")));
+        if (Mode == 1 || Mode == 2) QVERIFY(!QFile::exists(Directory.filePath("source.txt")));
     }
 
     void fileJobDesignUi()
