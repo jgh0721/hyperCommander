@@ -1776,16 +1776,14 @@ private slots:
     {
         auto* Jobs = main_->findChild<QPushButton*>("hc.jobs.indicator"); QVERIFY(Jobs);
         auto* Settings = main_->findChild<QToolButton*>("hc.menuRecovery"); QVERIFY(Settings);
-        auto* Update = main_->findChild<QToolButton*>("hc.update.menuButton"); QVERIFY(Update);
+        QVERIFY(!main_->findChild<QToolButton*>("hc.update.menuButton"));
         const auto Original = main_->font();
         const auto Restore = qScopeGuard([&] { main_->setFont(Original); });
         for (const int Points : {10, 14, 20}) {
             auto Font = Original; Font.setPointSize(Points); main_->setFont(Font); QTest::qWait(100);
             QCOMPARE(Jobs->geometry().top(), Settings->geometry().top());
-            QCOMPARE(Settings->geometry().top(), Update->geometry().top());
             QCOMPARE(Jobs->height(), Settings->height());
-            QCOMPARE(Settings->height(), Update->height());
-            for (auto* Button : {static_cast<QWidget*>(Jobs), static_cast<QWidget*>(Settings), static_cast<QWidget*>(Update)}) {
+            for (auto* Button : {static_cast<QWidget*>(Jobs), static_cast<QWidget*>(Settings)}) {
                 QVERIFY(Button->isVisible());
                 QVERIFY(Button->height() >= Button->fontMetrics().height() + 8);
             }
@@ -1798,7 +1796,7 @@ private slots:
         QVERIFY(!Bar->cornerWidget(Qt::TopRightCorner));
         auto* Corner = main_->findChild<QWidget*>("hc.headerActions"); QVERIFY(Corner);
         QCOMPARE(Corner->parentWidget(), Bar->parentWidget());
-        auto* Help = main_->findChild<QToolButton*>("hc.update.menuButton"); QVERIFY(Help);
+        auto* Help = main_->findChild<QToolButton*>("hc.menuRecovery"); QVERIFY(Help);
         QCOMPARE(Help->parentWidget(), Corner);
         QVERIFY(Corner->layout()->indexOf(Help) >= 0);
         const auto OriginalSize = main_->size();
@@ -1824,13 +1822,71 @@ private slots:
                 Action->menu()->hide();
             }
             auto* HelpMenu = Help->menu(); QVERIFY(HelpMenu);
-            QVERIFY(HelpMenu->findChild<QAction*>("hc.update.check"));
+            QVERIFY(!HelpMenu->findChild<QAction*>("hc.update.check"));
             QSignalSpy Opened(HelpMenu, &QMenu::aboutToShow);
             QTimer::singleShot(100, HelpMenu, [HelpMenu] { HelpMenu->hide(); });
             QTest::mouseClick(Help, Qt::LeftButton);
             QCOMPARE(Opened.count(), 1);
         }
         QVERIFY(SaveR9Dialog(*main_, "help-menu-placement"));
+    }
+
+    void todoBugUpdateSettingsUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); TyStColorSchemeMgr::GetInstance()->Refresh(); TyStCommandMgr::GetInstance()->Refresh(); });
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        const QJsonObject Legacy{{"automaticCheck", false}, {"lastAttemptUtc", "2026-10-26T00:00:00Z"}, {"skippedVersion", "2026.10.28.1"}, {"future", 42}};
+        General["update"] = Legacy; QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        {
+            QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(100); Dialog.LoadSettings();
+            auto* Interval = Dialog.findChild<QComboBox*>("hc.settings.updateCheckInterval"); QVERIFY(Interval);
+            QCOMPARE(Interval->count(), 4); QCOMPARE(Interval->currentData().toInt(), 0);
+            QCOMPARE(Interval->accessibleName(), QString("업데이트 점검 주기"));
+            QCOMPARE(qobject_cast<QGroupBox*>(Interval->parentWidget())->title(), QString("시작과 창"));
+            const QStringList Labels{"안함", "매일", "1주일", "30일"};
+            for (int Index = 0; Index < Labels.size(); ++Index) QCOMPARE(Interval->itemText(Index), Labels[Index]);
+            Interval->setCurrentIndex(3); Dialog.reject();
+        }
+        QCOMPARE(Settings.Read(hc::settings::Section::General).toObject()["update"].toObject(), Legacy);
+        for (const int Days : {0, 1, 7, 30}) {
+            QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(80); Dialog.LoadSettings();
+            auto* Interval = Dialog.findChild<QComboBox*>("hc.settings.updateCheckInterval"); QVERIFY(Interval);
+            Interval->setCurrentIndex(Interval->findData(Days));
+            QVERIFY(Dialog.SaveSettings());
+            const auto Update = Settings.CommittedObject()["general"].toObject()["update"].toObject();
+            QCOMPARE(Update["checkIntervalDays"].toInt(-1), Days); QCOMPARE(Update["automaticCheck"].toBool(), Days != 0);
+            for (const auto* Key : {"lastAttemptUtc", "skippedVersion", "future"}) QCOMPARE(Update[Key], Legacy[Key]);
+            if (Days == 7) QVERIFY(SaveR9Dialog(Dialog, "update-check-settings"));
+            Dialog.reject();
+            QMainOpts Reload(main_); Reload.show(); QTest::qWait(80); Reload.LoadSettings();
+            QCOMPARE(Reload.findChild<QComboBox*>("hc.settings.updateCheckInterval")->currentData().toInt(), Days); Reload.reject();
+        }
+    }
+
+    void todoBugAboutUpdateUi()
+    {
+        QVERIFY(!main_->findChild<QToolButton*>("hc.update.menuButton"));
+        auto* Original = main_->findChild<QAction*>("hc.update.check"); QVERIFY(Original);
+        Original->setObjectName("hc.update.check.original");
+        const auto Restore = qScopeGuard([&] { Original->setObjectName("hc.update.check"); });
+        QAction Check(main_); Check.setObjectName("hc.update.check"); QSignalSpy Triggered(&Check, &QAction::triggered);
+        auto* About = TyStCommandMgr::GetInstance()->Bridge()->Action("hc.app.about"); QVERIFY(About);
+        bool Found = false, Captured = false, Pressed = false;
+        QTimer Close; Close.setSingleShot(true); connect(&Close, &QTimer::timeout, main_, [this] {
+            if (auto* Dialog = main_->findChild<QDialog*>("hc.about")) Dialog->reject();
+        }); Close.start(5000);
+        QTimer::singleShot(100, main_, [&] {
+            auto* Dialog = main_->findChild<QDialog*>("hc.about");
+            if (!Dialog) return;
+            auto* Button = Dialog->findChild<QPushButton*>("hc.about.checkUpdate");
+            Found = Button && Button->isVisible() && Button->isEnabled();
+            Captured = SaveR9Dialog(*Dialog, "about-update-check");
+            if (Found) { Button->setFocus(); QTest::keyClick(Button, Qt::Key_Space); Pressed = true; }
+            else Dialog->reject();
+        });
+        About->trigger(); Close.stop();
+        QVERIFY(Found); QVERIFY(Captured); QVERIFY(Pressed); QCOMPARE(Triggered.count(), 1);
     }
 
     void menuBarSettingsUi()

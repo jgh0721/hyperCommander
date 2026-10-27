@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "dlgOpts.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
+#include "UniqueLibs/settings/updateSettings.hpp"
 #include <fmfilelist/RecordPreview.h>
 #include "thumbnailSettingsPage.hpp"
 #include "menuBarSettingsPage.hpp"
@@ -289,6 +290,8 @@ void QMainOpts::LoadSettings()
     findChild<QCheckBox*>("hc.settings.showFunctionBar")->setChecked(General["showFunctionBar"].toBool(true));
     findChild<QComboBox*>("hc.settings.startup")->setCurrentIndex(General["restoreWorkspace"].toBool(true) ? 0 : 1);
     findChild<QCheckBox*>("hc.settings.singleInstance")->setChecked(General["singleInstance"].toBool(false));
+    auto* UpdateInterval = findChild<QComboBox*>("hc.settings.updateCheckInterval");
+    UpdateInterval->setCurrentIndex(UpdateInterval->findData(hc::settings::UpdateCheckIntervalDays(General["update"].toObject())));
     findChild<QComboBox*>("hc.settings.newTabPosition")->setCurrentIndex(qMax(0, QStringList{"last", "right", "left", "first"}.indexOf(General["newTabPosition"].toString("last"))));
     findChild<QFontComboBox*>("hc.settings.monoFont")->setCurrentFont(QFont(General["monoFontFamily"].toString("Cascadia Mono")));
     findChild<QSpinBox*>("hc.settings.monoSize")->setValue(General["monoFontPx"].toInt(12));
@@ -462,6 +465,10 @@ bool QMainOpts::SaveSettings()
     General["showFunctionBar"] = findChild<QCheckBox*>("hc.settings.showFunctionBar")->isChecked();
     General["restoreWorkspace"] = findChild<QComboBox*>("hc.settings.startup")->currentIndex() == 0;
     General["singleInstance"] = findChild<QCheckBox*>("hc.settings.singleInstance")->isChecked();
+    auto Update = General["update"].toObject();
+    const int UpdateDays = findChild<QComboBox*>("hc.settings.updateCheckInterval")->currentData().toInt();
+    Update["checkIntervalDays"] = UpdateDays; Update["automaticCheck"] = UpdateDays != 0;
+    General["update"] = Update;
     General["newTabPosition"] = QStringList{"last", "right", "left", "first"}.value(findChild<QComboBox*>("hc.settings.newTabPosition")->currentIndex(), "last");
     General["monoFontFamily"] = findChild<QFontComboBox*>("hc.settings.monoFont")->currentFont().family(); General["monoFontPx"] = findChild<QSpinBox*>("hc.settings.monoSize")->value();
     General["thumbnails"] = thumbnailSettings_->Save();
@@ -930,6 +937,12 @@ void QMainOpts::initializeDesignPages()
     auto* Line = new QCheckBox(tr("명령줄 표시"), Startup); Line->setObjectName("hc.settings.showCommandLine"); StartupForm->addRow(SwitchRow(Line, Startup));
     auto* FunctionBar = new QCheckBox(tr("기능 키 막대 표시"), Startup); FunctionBar->setObjectName("hc.settings.showFunctionBar"); StartupForm->addRow(SwitchRow(FunctionBar, Startup));
     auto* Single = new QCheckBox(tr("창 하나만 실행 · 기존 창에 새 탭"), Startup); Single->setObjectName("hc.settings.singleInstance"); Single->setToolTip(tr("다음 실행부터 적용합니다. 같은 사용자·설정 폴더의 기존 창에 경로를 새 탭으로 전달합니다.")); StartupForm->addRow(SwitchRow(Single, Startup));
+    auto* UpdateInterval = new QComboBox(Startup); UpdateInterval->setObjectName("hc.settings.updateCheckInterval");
+    UpdateInterval->addItem(tr("안함"), 0); UpdateInterval->addItem(tr("매일"), 1);
+    UpdateInterval->addItem(tr("1주일"), 7); UpdateInterval->addItem(tr("30일"), 30);
+    UpdateInterval->setAccessibleName(tr("업데이트 점검 주기"));
+    UpdateInterval->setToolTip(tr("선택한 주기가 지나면 실행 중 새 버전을 확인합니다. ‘안함’이어도 정보창에서 직접 확인할 수 있습니다."));
+    StartupForm->addRow(tr("업데이트 점검 주기(&U)"), UpdateInterval);
     // The new-tab position belongs to the same "시작과 창" card on the board.
     auto* Tabs = Startup; auto* TabForm = StartupForm;
     auto* TabPosition = new QComboBox(Tabs); TabPosition->setObjectName("hc.settings.newTabPosition"); TabPosition->addItems({tr("마지막"), tr("현재 탭 오른쪽"), tr("현재 탭 왼쪽"), tr("처음")}); TabForm->addRow(tr("새 탭 위치"), TabPosition);

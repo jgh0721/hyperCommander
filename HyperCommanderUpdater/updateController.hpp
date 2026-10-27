@@ -7,7 +7,6 @@
 #include <functional>
 #include <stop_token>
 
-class QMenu;
 class QWidget;
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -35,7 +34,7 @@ private:
 };
 class UpdateController final : public QObject {
 public:
-    UpdateController(QWidget* Window, QMenu* Menu, std::function<bool()> CanRestart);
+    UpdateController(QWidget* Window, std::function<bool()> CanRestart);
     ~UpdateController() override;
     void Check();
     bool RestartRequested() const { return restartRequested_; }
@@ -44,6 +43,7 @@ private:
     friend class UpdateControllerTest;
     struct Result { Manifest release_; QString error_, transaction_; };
     void check(bool Automatic);
+    void checkAutomatically();
     void offer();
     void download();
     void restore();

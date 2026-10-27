@@ -651,20 +651,14 @@ void QMainUI::initialize()
 
     StCommandMgr->SetMainUI( this );
 
-    // Use the row layout for the status/settings/update controls. QMenuBar's
+    // Use the row layout for the status/settings controls. QMenuBar's
     // corner geometry can lag behind their changing size hints.
     auto* HeaderActions = ui.menubar->cornerWidget(Qt::TopRightCorner);
     ui.menubar->setCornerWidget(nullptr, Qt::TopRightCorner);
     HeaderActions->setParent(ui.menubar->parentWidget());
     ui.menubar->parentWidget()->layout()->addWidget(HeaderActions);
     HeaderActions->show();
-    auto* UpdateButton = new QToolButton(HeaderActions);
-    UpdateButton->setObjectName("hc.update.menuButton"); UpdateButton->setText(tr("업데이트"));
-    UpdateButton->setPopupMode(QToolButton::InstantPopup);
-    UpdateButton->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
-    auto* UpdateMenu = new QMenu(UpdateButton); UpdateButton->setMenu(UpdateMenu);
-    HeaderActions->layout()->addWidget(UpdateButton);
-    update_ = new hc::update::UpdateController(this, UpdateMenu, [this] { return canRestartForUpdate(); });
+    update_ = new hc::update::UpdateController(this, [this] { return canRestartForUpdate(); });
 
     shlChangeNotify = new QSHChangeNotify(this);
     shlChangeNotify->hide();

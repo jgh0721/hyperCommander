@@ -4,6 +4,7 @@
 #include "updateArchive.hpp"
 #include "updateTransaction.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
+#include "UniqueLibs/settings/updateSettings.hpp"
 #include "UniqueLibs/solTypeDefs_Ver.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <QAction>
@@ -14,7 +15,6 @@
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QFutureWatcher>
-#include <QMenu>
 #include <QMessageBox>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -56,21 +56,16 @@ void Eligible(const Manifest& Release, std::string_view Version) {
     Require(ParseVersion(Release.version_) > Current && Current >= ParseVersion(Release.minimum_), "update-version-order");
 }
 }
-UpdateController::UpdateController(QWidget* Window, QMenu* Menu, std::function<bool()> CanRestart)
+UpdateController::UpdateController(QWidget* Window, std::function<bool()> CanRestart)
     : QObject(Window), window_(Window), canRestart_(std::move(CanRestart)), network_(new QNetworkAccessManager(this)), root_(QCoreApplication::applicationDirPath()), currentVersion_(nsHC::CLIENT_VERSION) {
     setObjectName("hc.update.controller");
-    auto* CheckAction = Menu->addAction(tr("업데이트 확인…")); CheckAction->setObjectName("hc.update.check"); connect(CheckAction, &QAction::triggered, this, &UpdateController::Check);
-    auto* Auto = Menu->addAction(tr("7일마다 업데이트 확인")); Auto->setCheckable(true); Auto->setChecked(Options()["automaticCheck"].toBool(true));
-    connect(Auto, &QAction::toggled, this, [this, Auto](bool Enabled) {
-        if (!SaveOption("automaticCheck", Enabled)) { Auto->blockSignals(true); Auto->setChecked(!Enabled); Auto->blockSignals(false); fail(tr("설정 편집을 마친 후 업데이트 설정을 저장하십시오.")); }
-    });
+    auto* CheckAction = new QAction(tr("업데이트 확인…"), this); CheckAction->setObjectName("hc.update.check");
+    connect(CheckAction, &QAction::triggered, this, &UpdateController::Check);
     if (QStandardPaths::isTestModeEnabled()) return;
     QTimer::singleShot(1500, this, &UpdateController::restore);
-    QTimer::singleShot(10000, this, [this] {
-        if (busy_ || ready_ || !Options()["automaticCheck"].toBool(true) || hc::settings::AppSettings().Editing()) return;
-        const auto Last = QDateTime::fromString(Options()["lastAttemptUtc"].toString(), Qt::ISODate);
-        if (!Last.isValid() || Last.secsTo(QDateTime::currentDateTimeUtc()) >= 7 * 86400) check(true);
-    });
+    QTimer::singleShot(10000, this, &UpdateController::checkAutomatically);
+    auto* Automatic = new QTimer(this); Automatic->setObjectName("hc.update.schedule");
+    Automatic->setInterval(60000); connect(Automatic, &QTimer::timeout, this, &UpdateController::checkAutomatically); Automatic->start();
     QTimer::singleShot(60000, this, [this] {
         const auto Root = root_;
         // Trust verification can use the system certificate cache; keep it off
@@ -110,6 +105,10 @@ void UpdateController::fail(const QString& Error) {
     // dismissed dialog still leaves the reason available for diagnosis.
     try { DurableWrite(Native(root_) / L".update/last-error.json", "{\"error\":" + QuoteJson(Error.toUtf8().toStdString()) + "}"); } catch (...) {}
     if (!automatic_) hc::ui::MessageDialog(QMessageBox::Warning, tr("업데이트"), tr("업데이트를 완료하지 못했습니다. 현재 설치 파일은 유지됩니다.\n%1").arg(Error), QMessageBox::Ok, window_).exec();
+}
+void UpdateController::checkAutomatically() {
+    if (busy_ || ready_ || hc::settings::AppSettings().Editing() || !hc::settings::AppSettings().Writable()) return;
+    if (hc::settings::UpdateCheckDue(Options(), QDateTime::currentDateTimeUtc())) check(true);
 }
 void UpdateController::Check() {
     automatic_ = false;
@@ -201,7 +200,7 @@ void UpdateController::offer() {
         if (!ready_) { download(); return; }
         try {
             if (!canRestart_() || OtherProductProcesses(Native(root_), 0, ProductProcessCheck::BeforeRestart)) {
-                hc::ui::MessageDialog(QMessageBox::Information, tr("업데이트"), tr("파일 작업·명령 실행을 마치고 다른 HyperCommander·편집기·플러그인 창을 닫으십시오.\n업데이트는 아직 적용되지 않았습니다. 업데이트 메뉴에서 ‘업데이트 후 재시작’을 다시 선택하십시오."), QMessageBox::Ok, window_).exec(); return;
+                hc::ui::MessageDialog(QMessageBox::Information, tr("업데이트"), tr("파일 작업·명령 실행을 마치고 다른 HyperCommander·편집기·플러그인 창을 닫으십시오.\n업데이트는 아직 적용되지 않았습니다. 정보창에서 ‘업데이트 확인’을 다시 선택하십시오."), QMessageBox::Ok, window_).exec(); return;
             }
         } catch (const std::exception& Error) { fail(Error.what()); return; }
         restartRequested_ = true; if (!window_->close()) restartRequested_ = false;

@@ -18,6 +18,7 @@
 #include "UniqueLibs/productDefaults.hpp"
 #include "profileConfig.hpp"
 #include "unifiedConfig.hpp"
+#include "updateSettings.hpp"
 
 namespace hc::settings {
 struct ConfigPaths {
@@ -322,6 +323,11 @@ protected:
                 Refresh["fallbackSeconds"] = 15; Report("general.refresh.fallbackSeconds");
             }
             General["refresh"] = Refresh;
+        }
+        auto Update = General.value("update").toObject();
+        if (Update.contains("checkIntervalDays") && Update["checkIntervalDays"] != QJsonValue(UpdateCheckIntervalDays(Update))) {
+            Update["checkIntervalDays"] = UpdateCheckIntervalDays(Update);
+            General["update"] = Update; Report("general.update.checkIntervalDays");
         }
         Document["general"] = General;
         auto Copy = Document["options"].toObject();

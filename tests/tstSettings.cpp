@@ -9,6 +9,44 @@ private:
     static QByteArray Bytes(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static bool Write(const QString& Path, const QByteArray& Data) { QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write(Data) == Data.size(); }
 private slots:
+    void updateCheckSchedule()
+    {
+        const auto Now = QDateTime::fromString("2026-10-27T12:00:00Z", Qt::ISODate);
+        QVERIFY(Now.isValid());
+        QCOMPARE(UpdateCheckIntervalDays({}), 7);
+        QCOMPARE(UpdateCheckIntervalDays(QJsonObject{{"automaticCheck", false}}), 0);
+        QVERIFY(!UpdateCheckDue(QJsonObject{{"automaticCheck", false}}, Now));
+        QVERIFY(UpdateCheckDue({}, Now));
+        for (const int Days : {0, 1, 7, 30}) {
+            QJsonObject Update{{"checkIntervalDays", Days}, {"automaticCheck", false}};
+            QCOMPARE(UpdateCheckIntervalDays(Update), Days);
+            Update["lastAttemptUtc"] = Now.addSecs(-qint64(Days) * 86400 + 1).toString(Qt::ISODate);
+            QVERIFY(!UpdateCheckDue(Update, Now));
+            Update["lastAttemptUtc"] = Now.addSecs(-qint64(Days) * 86400).toString(Qt::ISODate);
+            QCOMPARE(UpdateCheckDue(Update, Now), Days != 0);
+            Update["lastAttemptUtc"] = "invalid";
+            QCOMPARE(UpdateCheckDue(Update, Now), Days != 0);
+            Update["lastAttemptUtc"] = Now.addDays(1).toString(Qt::ISODate);
+            QCOMPARE(UpdateCheckDue(Update, Now), Days != 0);
+        }
+        QTemporaryDir Directory; Repository Settings(Directory.path());
+        auto General = Settings.Read(Section::General).toObject();
+        const QJsonObject Legacy{{"automaticCheck", false}, {"lastAttemptUtc", "2026-10-26T00:00:00Z"}, {"skippedVersion", "2026.10.28.1"}, {"future", 42}};
+        General["update"] = Legacy; QVERIFY(Settings.Put(Section::General, General));
+        Repository Reload(Directory.path()); QCOMPARE(Reload.Read(Section::General).toObject()["update"].toObject(), Legacy);
+        for (const int Days : {0, 1, 7, 30}) {
+            auto Update = Legacy; Update["checkIntervalDays"] = Days; General["update"] = Update;
+            QVERIFY(Reload.Put(Section::General, General));
+            Repository Saved(Directory.path()); QCOMPARE(Saved.Read(Section::General).toObject()["update"].toObject(), Update);
+            QCOMPARE(UpdateCheckIntervalDays(Update), Days);
+        }
+        const auto SavedBytes = Bytes(Reload.FileName());
+        for (const auto Invalid : {QJsonValue(-1), QJsonValue(2), QJsonValue(1.5), QJsonValue("7"), QJsonValue(true)}) {
+            auto Update = Legacy; Update["checkIntervalDays"] = Invalid; General["update"] = Update;
+            Reload.BeginEdit(); QVERIFY(Reload.Put(Section::General, General)); QVERIFY(!Reload.Commit()); Reload.DiscardEdit();
+            QCOMPARE(Bytes(Reload.FileName()), SavedBytes);
+        }
+    }
     void productDefaultsAndUserOverrides()
     {
         QTemporaryDir Temp; Repository Fresh(Temp.path());

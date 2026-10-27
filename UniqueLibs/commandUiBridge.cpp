@@ -985,7 +985,25 @@ void CommandUiBridge::createCommandUi()
         if (userMenu_ && !QDesktopServices::openUrl(QUrl::fromLocalFile(userMenu_->FileName())))
             Window->statusBar()->showMessage(tr("메뉴 파일을 열 수 없습니다: %1").arg(userMenu_->FileName()));
     });
-    Add("hc.app.about", tr("HyperCommander 정보"), [Window] { hc::ui::MessageDialog::about(Window, QObject::tr("HyperCommander"), QObject::tr("HyperCommander\n버전 %1\n두 패널 파일 관리자 · Watercolor UI").arg(QString::fromLatin1(nsHC::CLIENT_VERSION))); });
+    Add("hc.app.about", tr("HyperCommander 정보"), [Window] {
+        QDialog Box(Window); Box.setWindowTitle(QObject::tr("HyperCommander 정보")); Box.setObjectName("hc.about");
+        // Reserve room for the title, application badge and caption controls.
+        Box.setMinimumWidth(Box.fontMetrics().horizontalAdvance(Box.windowTitle()) + 208);
+        auto* Layout = new QVBoxLayout(&Box);
+        auto* Description = new QLabel(QObject::tr("HyperCommander\n버전 %1\n두 패널 파일 관리자 · Watercolor UI")
+            .arg(QString::fromLatin1(nsHC::CLIENT_VERSION)), &Box);
+        Description->setTextFormat(Qt::PlainText); Description->setTextInteractionFlags(Qt::TextSelectableByMouse); Layout->addWidget(Description);
+        auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Close, &Box); Layout->addWidget(Buttons);
+        Buttons->button(QDialogButtonBox::Close)->setText(QObject::tr("닫기"));
+        auto* Update = Buttons->addButton(QObject::tr("업데이트 확인…"), QDialogButtonBox::ActionRole); Update->setObjectName("hc.about.checkUpdate");
+        Update->setEnabled(Window->findChild<QAction*>("hc.update.check") != nullptr);
+        bool CheckRequested = false;
+        QObject::connect(Update, &QPushButton::clicked, &Box, [&] { CheckRequested = true; Box.accept(); });
+        QObject::connect(Buttons, &QDialogButtonBox::rejected, &Box, &QDialog::reject);
+        hc::ui::ApplyDialogFrame(&Box, Buttons);
+        if (Box.exec() == QDialog::Accepted && CheckRequested)
+            if (auto* Action = Window->findChild<QAction*>("hc.update.check")) Action->trigger();
+    });
     Add("hc.app.update", tr("업데이트 확인"), [Window] { if (auto* Action = Window->findChild<QAction*>("hc.update.check")) Action->trigger(); });
     Add("hc.file.shellMenu", tr("탐색기 메뉴"), [this] { ShowShellMenu(commandIndex()); });
     Add("hc.file.folderSize", tr("하위 폴더 점유 공간 계산"), [this] {

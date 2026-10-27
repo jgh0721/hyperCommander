@@ -1,13 +1,13 @@
 ﻿#include "HyperCommanderUpdater/stdafx.h"
 #include "HyperCommanderUpdater/updateController.hpp"
 #include "HyperCommanderUpdater/updateTransaction.hpp"
+#include "UniqueLibs/settings/appSettings.hpp"
 
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QMenu>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QProgressDialog>
@@ -63,7 +63,7 @@ public:
 protected:
     QNetworkReply* createRequest(Operation, const QNetworkRequest& Request, QIODevice*) override {
         ++requests_; auto Name = Request.url().fileName(); zip_ = Name.endsWith(".zip");
-        return new FixtureReply(Request, QDir(package_).filePath(Name), mode_ == "redirect", mode_ == "http-error", this);
+        return new FixtureReply(Request, QDir(package_).filePath(Name), mode_ == "redirect", (mode_ == "http-error" || mode_ == "automatic"), this);
     }
 private:
     QString package_, mode_;
@@ -75,11 +75,8 @@ public:
     static int CaptureUi(const QString& Directory) {
         if (!QDir().mkpath(Directory)) throw std::runtime_error("capture-directory");
         QWidget Window; Window.resize(800, 480); Window.setWindowTitle("HyperCommander");
-        QMenu Menu(QString::fromUtf8("도움말"), &Window);
-        UpdateController Controller(&Window, &Menu, [] { return false; });
+        UpdateController Controller(&Window, [] { return false; });
         bool Saved = true;
-        Menu.popup(QPoint(300, 200)); QCoreApplication::processEvents();
-        Saved &= Menu.grab().save(QDir(Directory).filePath("01-update-menu.png")); Menu.hide();
         Controller.showProgress(QString::fromUtf8("새 버전과 서명을 확인하고 있습니다…")); QCoreApplication::processEvents();
         Saved &= Controller.progress_->grab().save(QDir(Directory).filePath("02-update-checking.png")); Controller.progress_->hide();
         Controller.release_.version_ = "2026.10.18.4"; Controller.release_.zipBytes_ = 192382226;
@@ -97,12 +94,12 @@ public:
             Controller.offer();
         }
         if (!Saved) throw std::runtime_error("capture-save");
-        std::cout << "Production update menu and dialogs captured with a simulated release; no network or installation performed.\n";
+        std::cout << "Production update dialogs captured with a simulated release; no network or installation performed.\n";
         return 0;
     }
     static int Run(const QString& Root, const QString& Package, const QString& Mode) {
-        RestartWindow Window; QMenu Menu;
-        UpdateController Controller(&Window, &Menu, [&] { return Mode == "restart" || Mode == "launch-failure"; });
+        RestartWindow Window;
+        UpdateController Controller(&Window, [&] { return Mode == "restart" || Mode == "launch-failure"; });
         if (Mode == "launch-failure") {
             Window.launch_ = [&] { return Controller.LaunchPending(); };
             Window.show();
@@ -126,6 +123,12 @@ public:
             if (!Host.waitForStarted(5000) || !Host.waitForReadyRead(5000) || !Host.readAllStandardOutput().contains("ready")) throw std::runtime_error("fixture-host-start");
             const Path NativeRoot(Root.toStdWString());
             if (!OtherProductProcesses(NativeRoot) || OtherProductProcesses(NativeRoot, 0, ProductProcessCheck::BeforeRestart)) throw std::runtime_error("fixture-host-policy");
+        }
+        if (Mode == "automatic" || Mode == "minimum-version") {
+            auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+            General["update"] = QJsonObject{{"checkIntervalDays", Mode == "automatic" ? 1 : 0}, {"automaticCheck", Mode == "automatic"},
+                {"lastAttemptUtc", QDateTime::currentDateTimeUtc().addSecs(-86401).toString(Qt::ISODate)}};
+            if (!hc::settings::AppSettings().Put(hc::settings::Section::General, General)) throw std::runtime_error("schedule-settings");
         }
         int Heartbeats = 0, Offers = 0, Errors = 0; bool Finished = false, Blocked = false; QTimer Timer;
         QObject::connect(&Timer, &QTimer::timeout, &Window, [&] {
@@ -157,8 +160,8 @@ public:
                         || Message->buttonRole(Button) == QMessageBox::AcceptRole && Errors) { Button->click(); break; }
                 }
             }
-            if (!Controller.busy_ && !Controller.reply_ && (Controller.ready_ || Errors || Mode == "cancel" && Controller.stop_.stop_requested())) Finished = true;
-        }); Timer.start(5); if (Mode == "restore") Controller.restore(); else Controller.Check();
+            if (!Controller.busy_ && !Controller.reply_ && (Controller.ready_ || Errors || Mode == "cancel" && Controller.stop_.stop_requested() || Mode == "automatic" && Network->requests_ > 0)) Finished = true;
+        }); Timer.start(5); if (Mode == "restore") Controller.restore(); else if (Mode == "automatic") Controller.checkAutomatically(); else Controller.Check();
         const auto Start = GetTickCount64(); while (!Finished && GetTickCount64() - Start < 120000) QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
         const bool Prepared = Mode == "success" || Mode == "blocked" || Mode == "restore" || Mode == "restart" || Mode == "launch-failure";
         if (!Finished || (Prepared ? !Controller.ready_ || (Mode != "restore" && (Offers < 2 || Network->requests_ != 3 || Heartbeats < 5)) : Controller.ready_)) throw std::runtime_error("service-state-or-liveness");
@@ -170,6 +173,14 @@ public:
             || QFileInfo::exists(QDir(Root).filePath(".update/active.json"))
             || HashFile(Path(Root.toStdWString()) / L"HyperCommanderUpdater.exe") != HashFile(Path(Controller.tx_.toStdWString()) / L"HyperCommanderUpdater.exe")))
             throw std::runtime_error("failed-helper-closed-parent-or-stale-helper");
+        if (Mode == "automatic") {
+            if (Network->requests_ != 1 || Errors || Offers || Network->zip_ || !Controller.automatic_)
+                throw std::runtime_error("automatic-check-not-background");
+            Controller.checkAutomatically();
+            if (Controller.busy_ || Network->requests_ != 1) throw std::runtime_error("automatic-check-repeated-too-soon");
+            const auto Failure = ParseJson(ReadBounded(Path(Root.toStdWString()) / L".update/last-error.json", 32768)).At("error", Json::Kind::String).text_;
+            if (Failure != "update-download-incomplete") throw std::runtime_error("automatic-check-error-not-persisted");
+        }
         if (Mode == "redirect" && Network->requests_ != 1) throw std::runtime_error("redirect-was-followed");
         if (Mode == "minimum-version" && (Errors != 1 || Offers != 0 || Network->requests_ != 2 || Network->zip_
             || Controller.ready_ || Controller.restartRequested_
