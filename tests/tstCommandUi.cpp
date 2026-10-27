@@ -368,6 +368,40 @@ private slots:
         QVERIFY(Light.matched_ && Dark.matched_); QVERIFY(Light.foreground_.isValid() && Dark.foreground_.isValid());
         QVERIFY(Light.foreground_ != Dark.foreground_);
     }
+    void defaultFileGroups()
+    {
+        using hc::settings::FileColorRules;
+        const auto Fresh = hc::defaults::FileGroups(), Existing = hc::defaults::FileGroups(true);
+        QVERIFY2(FileColorRules::Validate(Fresh).isEmpty(), qPrintable(FileColorRules::Validate(Fresh)));
+        QCOMPARE(Fresh["mode"].toString(), QString("merge")); QCOMPARE(Fresh["groups"].toArray().size(), 28);
+        QVERIFY(Existing["groups"].toArray().isEmpty());
+        QCOMPARE(hc::defaults::Settings()["options"].toObject()["fileColorRules"].toObject(), Fresh);
+        QCOMPARE(hc::defaults::Settings(true)["options"].toObject()["fileColorRules"].toObject(), Existing);
+        QHash<QString, QString> Owners;
+        for (const auto Value : Fresh["groups"].toArray()) {
+            const auto G = Value.toObject(); QVERIFY(G["id"].toString().startsWith("default.")); QVERIFY(!G["autoDark"].toBool());
+            for (const auto C : G["conditions"].toArray()) if (C.toObject()["type"] == "extension")
+                for (const auto& Ext : FileColorRules::Extensions(C.toObject()["value"].toString())) {
+                    QVERIFY2(!Owners.contains(Ext), qPrintable(Ext + ": " + Owners.value(Ext) + " / " + G["name"].toString()));
+                    Owners.insert(Ext, G["name"].toString());
+                }
+        }
+        QCOMPARE(Owners.size(), 443);
+        FileColorRules Rules; QVERIFY(Rules.Load(Fresh).isEmpty());
+        const auto Style = [&](const QString& Name, quint32 Attributes = 0, quint64 Size = 1, bool Dark = false) { return Rules.Evaluate({Name, Attributes, Size, Dark}); };
+        const auto Disguised = Style("report.pdf.exe");
+        QCOMPARE(Disguised.foreground_, QColor("#B8231A")); QCOMPARE(Disguised.background_, QColor("#FBE9E7")); QVERIFY(Disguised.font_.value("bold").toBool());
+        QCOMPARE(Style(QString("photo") + QChar(0x202E) + "gpj.exe", 0, 1, true).background_, QColor("#3A1E1B"));
+        QCOMPARE(Style(QString("left-") + QChar(0x05D0) + ".txt").foreground_, QColor("#B8231A"));
+        QCOMPARE(Style("setup.exe").foreground_, QColor("#18793A")); QCOMPARE(Style("setup.exe", 0, 1, true).foreground_, QColor("#56D364"));
+        QCOMPARE(Style("src", 0x10).foreground_, QColor("#C42B1C")); QCOMPARE(Style("src", 0x10 | 0x2).foreground_, QColor("#6C6961"));
+        const auto Large = Style("movie.mkv", 0, 2ull << 30);
+        QCOMPARE(Large.foreground_, QColor("#00706A")); QCOMPARE(Large.background_, QColor("#FBEAE6"));
+        QCOMPARE(Style("CMakeLists.txt").foreground_, QColor("#1D5BC7")); QCOMPARE(Style(".gitignore").foreground_, QColor("#00639A"));
+        QCOMPARE(Style("id_ed25519").foreground_, QColor("#8F4A05")); QVERIFY(Style("~$report.docx").font_.value("italic").toBool());
+        QVERIFY(Style(QString("한글.txt").normalized(QString::NormalizationForm_D)).font_.value("underline").toBool());
+        QVERIFY(!Style("model.stl").matched_);
+    }
     void shortFunctionCaptionsKeepCommandIdentity()
     {
         const auto Ids = FunctionCommands({});

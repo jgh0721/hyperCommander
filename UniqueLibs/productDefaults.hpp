@@ -575,8 +575,8 @@ namespace hc::defaults
                  { "hc.file.batchRename",     QObject::tr( "다중 이름 변경" ) } };
     }
 
-    // 현재 제품은 파일 그룹을 자동 등록하지 않는다. 아래 예제 팔레트는 설정의
-    // '예제 추가'에서도 사용한다. FileGroups()의 groups에 이를 지정하면 설치 기본값이 된다.
+    // 아래 예제 팔레트는 설정의 '기본 예제 그룹 추가'에서 사용한다.
+    // 신규 설치에 등록하는 그룹은 DefaultFileGroups()다.
     inline QJsonArray ExampleFileGroups()
     {
         // 조건 선언: C(Type, Op, Value[, Unit]). 아래 키는 대소문자를 구분한다.
@@ -650,7 +650,7 @@ namespace hc::defaults
         // Font는 { { "bold", true }, { "italic", true }, { "underline", true },
         //           { "strike", true } } 중 필요한 효과만 지정한다(false로 명시적 해제 가능).
         // 그룹은 활성화된 예제로 등록되며, 다크 색상은 라이트 색상에서 자동 생성한다.
-        // FileGroups()의 mode="first"에서는 먼저 일치한 그룹만 적용하므로 순서도 고려한다.
+        // mode="first"에서는 먼저 일치한 그룹만 적용하므로 순서도 고려한다.
         // mode="merge"에서는 일치한 그룹을 합치되 색상·글꼴 효과별 첫 지정값이 우선한다.
         // 예: Add("log", QObject::tr("로그"), { C("extension", "in", "log") },
         //         "#667085", { { "italic", true } });
@@ -694,12 +694,207 @@ namespace hc::defaults
         return Result;
     }
 
-    inline QJsonObject FileGroups()
+    // 신규 설치에 등록하는 파일 그룹. 병합(merge) 모드에서는 위 그룹이 글자색·배경·글꼴 효과를
+    // 효과별로 먼저 가져가므로 순서가 곧 우선순위다. 확장자는 그룹 사이에 겹치지 않는다.
+    // 라이트·다크 색을 따로 두며, 글자색은 목록 바탕·교차 행·배경 지정 그룹 위에서 4.5:1 이상이다.
+    // 배경은 선택 행과 헷갈리지 않도록 위장 실행파일·인증서·온라인 전용·대용량에만 쓴다.
+    inline QJsonArray DefaultFileGroups()
+    {
+        // 조건 선언은 ExampleFileGroups()와 같다. E는 확장자 목록, P는 파일명 와일드카드 목록이다.
+        const auto C = []( const char* Type, const char* Op, const QString& Value, const char* Unit = "" )
+        {
+            QJsonObject Result{ { "type", Type }, { "op", Op }, { "value", Value } };
+            if( *Unit )
+                Result[ "unit" ] = Unit;
+            return Result;
+        };
+        const auto E = [ & ]( const char* Extensions ) { return C( "extension", "in", Extensions ); };
+        const auto P = []( const QStringList& Patterns )
+        { return QJsonObject{ { "type", "pattern" }, { "op", "matches" }, { "value", QJsonArray::fromStringList( Patterns ) } }; };
+        // 색 선언: Colors(Foreground[, Background]). ""는 지정 생략이다.
+        const auto Colors = []( const char* Foreground, const char* Background = "" )
+        {
+            QJsonObject Result;
+            if( *Foreground )
+                Result[ "foreground" ] = Foreground;
+            if( *Background )
+                Result[ "background" ] = Background;
+            return Result;
+        };
+        QJsonArray Result;
+        // 그룹 선언: Add(Id, Name, Conditions, Light, Dark[, Font[, Enabled]]). 저장 ID는 "default." + Id다.
+        // 다크 색을 직접 지정하므로 autoDark=false로 등록하고, 조건은 join="any"(OR)로 결합한다.
+        const auto Add = [ & ]( const char*        Id,
+                                const QString&     Name,
+                                QJsonArray         Conditions,
+                                const QJsonObject& Light,
+                                const QJsonObject& Dark,
+                                QJsonObject        Font    = {},
+                                bool               Enabled = true )
+        {
+            Result.append( QJsonObject{ { "id", QString( "default." ) + Id },
+                                        { "name",                    Name },
+                                        { "enabled",                 Enabled },
+                                        { "join",                    "any" },
+                                        { "conditions",              Conditions },
+                                        { "light",                   Light },
+                                        { "dark",                    Dark },
+                                        { "autoDark",                false },
+                                        { "font",                    Font } } );
+        };
+        const QJsonObject Bold{ { "bold", true } }, Italic{ { "italic", true } };
+
+        // 문서처럼 보이는 실행 파일: 이중 확장자, 확장자 앞 공백, 글자 방향을 뒤집는 U+202E(RLO).
+        // 패턴은 조건당 32개 상한에 맞춘 흔한 조합이다. 맨 위에서 다른 그룹의 표시를 모두 덮는다.
+        // U+202E는 RTL 문자 조건으로 잡는다. 이 조건은 아랍어·히브리어 글자가 든 이름도 함께 표시한다.
+        Add( "disguisedExecutable",
+             QObject::tr( "위장 실행파일" ),
+             { P( { "*.pdf.exe", "*.doc.exe", "*.docx.exe", "*.xls.exe", "*.xlsx.exe", "*.ppt.exe", "*.pptx.exe", "*.hwp.exe",
+                    "*.hwpx.exe", "*.txt.exe", "*.jpg.exe", "*.png.exe", "*.mp4.exe", "*.zip.exe", "*.pdf.scr", "*.doc.scr",
+                    "*.docx.scr", "*.hwp.scr", "*.jpg.scr", "*.txt.scr", "*.pdf.js", "*.pdf.vbs", "*.pdf.lnk", "*.jpg.lnk",
+                    "*.pdf.bat", "*.pdf.cmd", "*.pdf.hta", "*.doc.js", "*  .exe", "*  .scr", "*.pdf.com", "*.jpg.com" } ),
+               QJsonObject{ { "type", "rtl" }, { "op", "contains" } } },
+             Colors( "#B8231A", "#FBE9E7" ),
+             Colors( "#FF8A80", "#3A1E1B" ),
+             Bold );
+        // 다음 다섯 그룹은 글자색·굵게·기울임·배경 중 하나만 써서 종류 색과 함께 보인다.
+        Add( "hidden", QObject::tr( "숨김·시스템" ), { C( "attributes", "any", "6" ) }, Colors( "#6C6961" ), Colors( "#97948B" ) );
+        Add( "recent", QObject::tr( "최근 변경" ), { C( "modified", "within", "24", "hours" ) }, {}, {}, Bold );
+        Add( "link", QObject::tr( "링크·바로가기" ), { C( "link", "is", "any" ) }, {}, {}, Italic );
+        // 오프라인(0x1000) · 열 때 회수(0x40000) · 읽을 때 회수(0x400000). OneDrive 등의 자리표시 파일이다.
+        Add( "onlineOnly",
+             QObject::tr( "온라인 전용 파일" ),
+             { C( "attributes", "any", "4460544" ) },
+             Colors( "", "#E6EEF9" ),
+             Colors( "", "#1E2A3D" ) );
+        Add( "large", QObject::tr( "대용량 파일" ), { C( "size", "ge", "1", "GiB" ) }, Colors( "", "#FBEAE6" ), Colors( "", "#3A2320" ) );
+        // key는 Keynote가 아니라 개인 키로 본다. .env는 뜻이 넓은 env 확장자 대신 파일명으로 잡는다.
+        Add( "certificate",
+             QObject::tr( "인증서·키" ),
+             { E( "cer,pem,crt,der,csr,pfx,p12,key,jks,p7b,ppk,pgp,gpg,asc,kdbx,keystore,keytab,p7c,p7s,p8,spc" ),
+               P( { ".env", ".env.*", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519" } ) },
+             Colors( "#8F4A05", "#FFF3D6" ),
+             Colors( "#F2BA52", "#3A3318" ),
+             Bold );
+        Add( "folder", QObject::tr( "폴더" ), { C( "folder", "is", "true" ) }, Colors( "#C42B1C" ), Colors( "#FF7B72" ) );
+        // 마지막 점 뒤를 비교하므로 .gitignore는 gitignore로 잡힌다.
+        Add( "document",
+             QObject::tr( "문서" ),
+             { E( "md,rst,json,csv,xml,yaml,yml,toml,ini,cfg,conf,tsv,jsonl,ndjson,jsonc,json5,xsd,xsl,xslt,plist,inf,"
+                  "properties,gitignore,gitattributes,editorconfig,clang-format,clang-tidy,adoc,tex,bib" ) },
+             Colors( "#00639A" ),
+             Colors( "#5CC3F5" ) );
+        Add( "office",
+             QObject::tr( "문서(오피스)" ),
+             { E( "xls,xlsx,ppt,pptx,hwp,hwpx,doc,docx,pdf,rtf,odt,ods,odp,cell,show,docm,dot,dotx,dotm,xlsm,xlsb,xltx,xltm,"
+                  "pptm,potx,pps,ppsx,odg,hwt,xps,oxps,one,vsd,vsdx,mpp,pages,numbers" ) },
+             Colors( "#AD4407" ),
+             Colors( "#FFA25C" ) );
+        // ts는 TypeScript로 본다(MPEG-TS는 동영상의 m2ts·mts).
+        Add( "source",
+             QObject::tr( "소스코드" ),
+             { E( "c,cpp,cxx,cc,h,hpp,hxx,hh,js,py,ts,cs,java,rs,go,lua,qml,ui,qrc,html,css,inl,ipp,ixx,cmake,c++,cppm,m,mm,"
+                  "swift,kt,kts,dart,php,rb,pl,r,scala,sql,asm,vue,jsx,tsx,mjs,cjs,scss,sass,less,vb,fs,zig,proto,idl,def,rc,"
+                  "natvis,glsl,hlsl,ipynb,vcxproj,filters,props,targets,csproj,vbproj,pro,pri,qbs,gradle,mk,mak,ninja,slnf,"
+                  "sln,slnx" ),
+               P( { "CMakeLists.txt", "Makefile", "GNUmakefile", "Dockerfile", "meson.build", "BUILD.bazel" } ) },
+             Colors( "#1D5BC7" ),
+             Colors( "#7AA7FF" ) );
+        Add( "text", QObject::tr( "텍스트" ), { E( "txt,log,nfo,diz" ) }, Colors( "#5C5850" ), Colors( "#BDB7A9" ) );
+        Add( "executable", QObject::tr( "실행파일" ), { E( "exe,com,scr,cpl,pif,appref-ms" ) }, Colors( "#18793A" ), Colors( "#56D364" ) );
+        Add( "installer",
+             QObject::tr( "설치 패키지" ),
+             { E( "msi,msp,msix,msixbundle,appx,appxbundle,deb,rpm,pkg,apk,aab,vsix,nupkg,whl" ) },
+             Colors( "#527000" ),
+             Colors( "#B3D35A" ) );
+        // reg·hta는 더블클릭으로 시스템을 바꾸므로 문서가 아니라 스크립트에 둔다.
+        Add( "script",
+             QObject::tr( "스크립트" ),
+             { E( "bat,cmd,ps1,psm1,psd1,sh,vbs,wsf,reg,hta,vbe,jse,ahk,au3,nsi,nsh,iss,bash,zsh,fish" ) },
+             Colors( "#856000" ),
+             Colors( "#E8C14A" ) );
+        // jar·war·ear는 실행할 수 있지만 내용이 zip이므로 압축파일에 둔다.
+        Add( "archive",
+             QObject::tr( "압축파일" ),
+             { E( "zip,7z,rar,lzh,gz,tar,tgz,bz2,xz,zst,lz4,z,zipx,cab,alz,egg,arj,lzma,tbz,tbz2,txz,tzst,jar,war,ear,cpio" ) },
+             Colors( "#9C27A6" ),
+             Colors( "#EE8CF0" ) );
+        Add( "diskImage",
+             QObject::tr( "디스크 이미지" ),
+             { E( "iso,img,vhd,vhdx,vmdk,wim,esd,dmg,vdi,qcow2,nrg,cue,swm" ) },
+             Colors( "#6D3FB5" ),
+             Colors( "#B99AF5" ) );
+        Add( "video",
+             QObject::tr( "동영상" ),
+             { E( "avi,mp4,mkv,mov,wmv,webm,m4v,flv,mpg,mpeg,m2ts,3gp,ogv,rm,rmvb,asf,vob,divx,f4v,mts" ) },
+             Colors( "#00706A" ),
+             Colors( "#3DD6C3" ) );
+        Add( "subtitle",
+             QObject::tr( "자막 파일" ),
+             { E( "smi,sami,srt,ass,ssa,vtt,sub,idx,sup,lrc,ttml,dfxp,sbv" ) },
+             Colors( "#3A716A" ),
+             Colors( "#8FC9C0" ),
+             Italic );
+        Add( "image",
+             QObject::tr( "이미지" ),
+             { E( "jpg,jpeg,gif,png,tif,bmp,webp,heic,heif,avif,ico,svg,psd,tiff,jfif,jxl,jp2,apng,dng,cr2,cr3,nef,arw,raf,"
+                  "orf,rw2,tga,dds,exr,hdr,xcf,kra,ai,eps,emf,wmf,cur,pcx" ) },
+             Colors( "#C2185B" ),
+             Colors( "#FF79B0" ) );
+        Add( "ebook",
+             QObject::tr( "전자책·만화" ),
+             { E( "epub,mobi,azw,azw3,kfx,fb2,djvu,cbz,cbr,cb7,cbt" ) },
+             Colors( "#8E3B5E" ),
+             Colors( "#F0A3C4" ) );
+        // mod는 go.mod가 오디오로 잡히므로 넣지 않는다.
+        Add( "audio",
+             QObject::tr( "오디오" ),
+             { E( "mp3,flac,aac,wav,ac3,dts,m4a,ogg,opus,wma,mid,midi,aif,aiff,ape,wv,mka,amr,mp2,caf,dsf,dff,mpc,xm,s3m" ) },
+             Colors( "#7A4B1E" ),
+             Colors( "#D7A574" ) );
+        Add( "font", QObject::tr( "글꼴" ), { E( "ttf,otf,ttc,otc,woff,woff2,fon,fnt,pfb,pfm,eot" ) }, Colors( "#6B5A2E" ), Colors( "#D2BE8C" ) );
+        // mdf는 Alcohol 디스크 이미지가 아니라 SQL Server 데이터베이스로 본다.
+        Add( "database",
+             QObject::tr( "데이터베이스" ),
+             { E( "db,db-wal,db-shm,sqlite,sqlite3,mdb,accdb,mdf,ldf,ndf,frm,ibd,sdf,fdb,realm,duckdb,parquet,db-journal,"
+                  "sqlite-wal,sqlite-shm" ) },
+             Colors( "#4B4FB8" ),
+             Colors( "#A3A8FF" ) );
+        // 필요할 때 켜도록 꺼 둔다. obj는 빌드 산출물과 겹치므로 넣지 않는다.
+        Add( "cad",
+             QObject::tr( "3D·CAD" ),
+             { E( "stl,3mf,fbx,gltf,glb,blend,dwg,dxf,step,stp,iges,igs,skp,usd,usdz,ply,3ds,dae" ) },
+             Colors( "#3B6475" ),
+             Colors( "#8CC2D6" ),
+             {},
+             false );
+        // qm은 번역 원본 ts를 컴파일한 결과이므로 여기에 둔다.
+        Add( "build",
+             QObject::tr( "라이브러리·빌드·진단" ),
+             { E( "dll,sys,lib,obj,pdb,ilk,exp,idb,ipch,pch,tlog,iobj,ipdb,res,tlb,winmd,ocx,ax,so,dylib,a,o,class,pyc,pyo,"
+                  "qm,dmp,mdmp,hdmp,etl,evtx" ) },
+             Colors( "#5F6573" ),
+             Colors( "#9AA1AC" ) );
+        // 오피스(~$*)·LibreOffice(.~lock.*#) 잠금 파일과 편집기 백업(*~)을 포함한다.
+        Add( "temporary",
+             QObject::tr( "임시 파일" ),
+             { E( "tmp,bak,old,swp,part,crdownload,temp,cache,orig,rej" ), P( { "~$*", "*~", ".~lock.*#" } ) },
+             Colors( "#6C6961" ),
+             Colors( "#97948B" ),
+             Italic );
+        // 밑줄만 쓰므로 순서와 상관없이 다른 그룹 표시에 더해진다.
+        Add( "normalization", QObject::tr( "파일명 정규화" ), { C( "normalization", "is", "decomposed" ) }, {}, {}, { { "underline", true } } );
+        return Result;
+    }
+
+    // 신규 설치에만 DefaultFileGroups()를 등록한다. 기존 설치의 누락 키는 예전처럼 빈 문서로
+    // 채우며, 저장된 groups 배열은 MergeDefaults가 덮어쓰지 않으므로 사용자의 삭제·편집이 유지된다.
+    inline QJsonObject FileGroups( bool ExistingInstallation = false )
     {
         // groups: id, name, enabled, join(any/all), conditions, light/dark, autoDark, font.
-        // 예: QJsonArray Groups = ExampleFileGroups(); 기존 사용자 배열은 덮어쓰지 않는다.
-        const QJsonArray Groups;
-        return { { "version", 2 }, { "mode", "first" }, { "groups", Groups } };
+        if( ExistingInstallation )
+            return { { "version", 2 }, { "mode", "first" }, { "groups", QJsonArray{} } };
+        return { { "version", 2 }, { "mode", "merge" }, { "groups", DefaultFileGroups() } };
     }
     inline QJsonArray LegacyFileSets()
     {
@@ -787,7 +982,7 @@ namespace hc::defaults
                  { "filePanel",               FilePanel() },
                  { "thumbnails",              Thumbnails() } };
     }
-    inline QJsonObject Options()
+    inline QJsonObject Options( bool ExistingInstallation = false )
     {
         return { { "allowElevation", true },
                  { "fileConflict",            "ask" },
@@ -815,7 +1010,7 @@ namespace hc::defaults
                  { "enableJobRecovery",       false },
                  { "saveJobProgress",         false },
                  { "showJobDetails",          false },
-                 { "fileColorRules",          FileGroups() } };
+                 { "fileColorRules",          FileGroups( ExistingInstallation ) } };
     }
     inline QJsonObject DocumentHandlers()
     {
@@ -846,6 +1041,6 @@ namespace hc::defaults
                                 { "dopusViewer",             QJsonArray{} } } },
                  { "columns",                 QJsonObject{} },
                  { "automation",              QJsonObject{ { "version", 2 }, { "scripts", QJsonArray{} } } },
-                 { "options",                 Options() } };
+                 { "options",                 Options( ExistingInstallation ) } };
     }
 } // namespace hc::defaults
