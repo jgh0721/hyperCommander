@@ -338,19 +338,6 @@
             <string>모든 연결된 파일 + ELE/LNK (느림)</string>
            </property>
           </widget>
-          <widget class="QCheckBox" name="chkIsDimmedIconWhenHidden">
-           <property name="geometry">
-            <rect>
-             <x>320</x>
-             <y>190</y>
-             <width>159</width>
-             <height>20</height>
-            </rect>
-           </property>
-           <property name="text">
-            <string>숨김 파일 흐릿하게 표시</string>
-           </property>
-          </widget>
          </widget>
          <widget class="QLabel" name="lblSortMethod">
           <property name="geometry">

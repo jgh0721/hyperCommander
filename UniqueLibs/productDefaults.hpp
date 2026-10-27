@@ -760,7 +760,6 @@ namespace hc::defaults
                  { "useBuiltInShortcuts",     true },
                  { "shortcutPreset",          ExistingInstallation ? ExistingShortcutPreset : FreshShortcutPreset },
                  { "iconMode",                "standard" },
-                 { "dimHiddenIcons",          true },
                  { "specialFolderIcons",      true },
                  { "virtualFolderIcons",      true },
                  { "explorerDefaultIcons",    true },

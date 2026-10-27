@@ -109,7 +109,7 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     directoryStyles_ = new QButtonGroup(this);
     int DirectoryIndex = 0;
     for (auto* Choice : {ui.radioButton, ui.radioButton_2, ui.radioButton_3}) directoryStyles_->addButton(Choice, DirectoryIndex++);
-    Icons->addWidget(ui.chkIsDimmedIconWhenHidden); IconRows->addWidget(ui.grpIconDisplay);
+    IconRows->addWidget(ui.grpIconDisplay);
     auto* ShellOptions = new QGroupBox(tr("Windows 탐색기 아이콘"), IconBody);
     auto* ShellRows = new QVBoxLayout(ShellOptions);
     specialFolderIcons_ = new QCheckBox(tr("특별한 폴더용 아이콘 보기: 파일 시스템 (예: 휴지통)(&W)"), ShellOptions);
@@ -126,7 +126,7 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     IconRows->addWidget(ShellOptions); IconRows->addStretch();
     connect(iconModes_, &QButtonGroup::idToggled, this, [this, ShellOptions](int, bool) {
         const bool Enabled = iconModes_->checkedId() != 3;
-        ShellOptions->setEnabled(Enabled); ui.chkIsDimmedIconWhenHidden->setEnabled(Enabled);
+        ShellOptions->setEnabled(Enabled);
     });
     auto* SizeCard = new QGroupBox(tr("크기 표시"), SizeBody); auto* Sizes = new QFormLayout(SizeCard); Sizes->setContentsMargins(14, 12, 14, 14);
     Sizes->addRow(ui.lblHeaderSizeDisplay, ui.cbxHeaderSizeDisplay);
@@ -245,7 +245,6 @@ void QMainOpts::LoadSettings()
     resetListModeDraft_ = false;
     iconModes_->button(qMax(0, QStringList{"all", "associated", "standard", "none"}.indexOf(General["iconMode"].toString())))->setChecked(true);
     directoryStyles_->button(qMax(0, QStringList{"plain", "brackets", "suffix"}.indexOf(General["directoryStyle"].toString())))->setChecked(true);
-    ui.chkIsDimmedIconWhenHidden->setChecked(General["dimHiddenIcons"].toBool(true));
     specialFolderIcons_->setChecked(General["specialFolderIcons"].toBool(true));
     virtualFolderIcons_->setChecked(General["virtualFolderIcons"].toBool(true));
     explorerDefaultIcons_->setChecked(General["explorerDefaultIcons"].toBool(true));
@@ -420,7 +419,6 @@ bool QMainOpts::SaveSettings()
     General["sizeInFooter"] = hc::settings::SizeFormats().value(ui.cbxFooterSizeDisplay->currentIndex(), "bytes");
     General["iconMode"] = QStringList{"all", "associated", "standard", "none"}.value(iconModes_->checkedId(), "standard");
     General["directoryStyle"] = QStringList{"plain", "brackets", "suffix"}.value(directoryStyles_->checkedId(), "plain");
-    General["dimHiddenIcons"] = ui.chkIsDimmedIconWhenHidden->isChecked();
     General["specialFolderIcons"] = specialFolderIcons_->isChecked();
     General["virtualFolderIcons"] = virtualFolderIcons_->isChecked();
     General["explorerDefaultIcons"] = explorerDefaultIcons_->isChecked();

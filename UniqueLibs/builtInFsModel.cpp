@@ -381,11 +381,8 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                 RoleWith.setData( static_cast< quint32 >( Item->Attributes_ ) );
             } break;
             case CFsModelT::USR_ROLE_HIDDENOPACITY: {
-                if (displaySettings_["dimHiddenIcons"].toBool(true) &&
-                    (FlagOn(Item->Attributes_, FILE_ATTRIBUTE_HIDDEN) || FlagOn(Item->Attributes_, FILE_ATTRIBUTE_SYSTEM)))
-                    RoleWith.setData( 0.5f );
-                else
-                    RoleWith.setData( 1.0f );
+                // Keep the shared opacity role neutral; file rules control dimming.
+                RoleWith.setData( 1.0f );
             } break;
             case ClipboardCutRole: {
                 RoleWith.setData(Item->Name_ != ".." && Item->storageEntry_

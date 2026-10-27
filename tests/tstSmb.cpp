@@ -3473,7 +3473,7 @@ private slots:
         auto* Special = Check("specialFolderIcons"); QVERIFY(Special);
         Tabs->setCurrentIndex(2); QTRY_VERIFY(Special->isVisible());
         QVERIFY(Dialog.findChild<QRadioButton*>("radioButton_5")->isVisible());
-        QVERIFY(Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden")->isVisible());
+        QVERIFY(!Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden"));
         QVERIFY(!Dialog.findChild<QCheckBox*>("chkSortNumericAware")->isVisible());
         ShowIcon("link.lnk");
         hc::icons::Request GenericFile; GenericFile.pixels_ = Model->IconPixels();
@@ -3551,10 +3551,11 @@ private slots:
             main_->RestoreWorkspace(Workspace);
         });
         QVERIFY(QDir(Directory.path()).mkdir("zzPrevious"));
-        for (const auto* Name : {"item2.txt", "item10.txt", "hidden.txt", "a-case.txt", "B-case.txt"}) {
+        for (const auto* Name : {"item2.txt", "item10.txt", "hidden.txt", "system.txt", "a-case.txt", "B-case.txt"}) {
             QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(QByteArray(2048, 'x')), 2048);
         }
         QVERIFY(SetFileAttributesW(QDir::toNativeSeparators(Directory.filePath("hidden.txt")).toStdWString().c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE));
+        QVERIFY(SetFileAttributesW(QDir::toNativeSeparators(Directory.filePath("system.txt")).toStdWString().c_str(), FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE));
         auto* Panel = panels_.front(); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
         auto* Model = static_cast<CFSModel*>(model(Panel));
         auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
@@ -3576,7 +3577,7 @@ private slots:
         QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.show(); QTest::qWait(50); Dialog.LoadSettings();
         Dialog.findChild<QRadioButton*>("radioButton_4")->setChecked(true);
         Dialog.findChild<QRadioButton*>("radioButton_2")->setChecked(true);
-        Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden")->setChecked(false);
+        QVERIFY(!Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden"));
         Dialog.findChild<QCheckBox*>("chkSortNumericAware")->setChecked(false);
         Dialog.findChild<QCheckBox*>("chkSortCaseSensitive")->setChecked(true);
         Dialog.findChild<QCheckBox*>("chkSortLocaleAware")->setChecked(false);
@@ -3587,20 +3588,26 @@ private slots:
         QCOMPARE(Model->data(Find("zzPrevious")).toString(), QString("[zzPrevious]"));
         QCOMPARE(Model->GetName(Find("zzPrevious")), QString("zzPrevious"));
         QVERIFY(!Model->data(Find("item2.txt"), Qt::DecorationRole).isValid());
+        QVERIFY(Find("hidden.txt").isValid()); QVERIFY(Find("system.txt").isValid());
         QCOMPARE(Model->data(Find("hidden.txt"), CFsModelT::USR_ROLE_HIDDENOPACITY).toFloat(), 1.0f);
+        QCOMPARE(Model->data(Find("system.txt"), CFsModelT::USR_ROLE_HIDDENOPACITY).toFloat(), 1.0f);
         QTRY_VERIFY(VisualRow("item10.txt") < VisualRow("item2.txt"));
         QTRY_VERIFY(VisualRow("B-case.txt") < VisualRow("a-case.txt"));
         QTRY_VERIFY(Panel->findChild<QLabel*>("lblVolumeStatus")->text().contains(QStringLiteral("여유")));
         QTRY_VERIFY(Panel->findChild<QLabel*>("lblVolumeStatus")->text() != BeforeHeader);
-        QVERIFY(Panel->findChild<QLabel*>("lblStatus")->text().contains("10240"));
+        QVERIFY(Panel->findChild<QLabel*>("lblStatus")->text().contains("12288"));
         Dialog.findChild<QRadioButton*>("radioButton_3")->setChecked(true);
         Dialog.findChild<QRadioButton*>("radioButton_6")->setChecked(true);
         Dialog.findChild<QCheckBox*>("chkSortNumericAware")->setChecked(true);
         Dialog.findChild<QCheckBox*>("chkSortCaseSensitive")->setChecked(false);
-        Dialog.findChild<QCheckBox*>("chkIsDimmedIconWhenHidden")->setChecked(true);
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        General["dimHiddenIcons"] = true; // Legacy preferences must not restore automatic dimming.
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
         QVERIFY(Dialog.SaveSettings());
         QCOMPARE(Model->data(Find("zzPrevious")).toString(), QString("zzPrevious\\"));
-        QCOMPARE(Model->data(Find("hidden.txt"), CFsModelT::USR_ROLE_HIDDENOPACITY).toFloat(), 0.5f);
+        QVERIFY(Find("hidden.txt").isValid()); QVERIFY(Find("system.txt").isValid());
+        QCOMPARE(Model->data(Find("hidden.txt"), CFsModelT::USR_ROLE_HIDDENOPACITY).toFloat(), 1.0f);
+        QCOMPARE(Model->data(Find("system.txt"), CFsModelT::USR_ROLE_HIDDENOPACITY).toFloat(), 1.0f);
         QTRY_VERIFY(VisualRow("item2.txt") < VisualRow("item10.txt"));
         QTRY_VERIFY(VisualRow("a-case.txt") < VisualRow("B-case.txt"));
         QTRY_VERIFY(!qvariant_cast<QPixmap>(Model->data(Find("item2.txt"), Qt::DecorationRole)).isNull());
