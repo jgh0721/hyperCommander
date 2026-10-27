@@ -51,6 +51,12 @@ namespace hc::operations
                 {"items", Items}, {"cleanup", Cleanup}};
             Out.insert("writes", bool(Result.writes_));
             Out.insert("metadata", QJsonObject{{"label", S(Snapshot.metadata_.label_)}, {"source", S(Snapshot.metadata_.source_)}, {"destination", S(Snapshot.metadata_.destination_)}, {"options", S(Snapshot.metadata_.options_)}, {"retryOf", S(Snapshot.metadata_.retryOf_)}});
+            auto Presentation = Out["metadata"].toObject(); Presentation.insert("kind", int(Snapshot.metadata_.kind_)); Out.insert("metadata", Presentation);
+            Out.insert("currentSource", S(Snapshot.progress_.source_)); Out.insert("currentDestination", S(Snapshot.progress_.destination_));
+            Out.insert("phase", int(Snapshot.progress_.phase_)); Out.insert("activeFiles", int(Snapshot.progress_.activeFiles_));
+            if (Snapshot.progress_.itemsDone_) Out.insert("itemsDone", QString::number(*Snapshot.progress_.itemsDone_));
+            if (Snapshot.progress_.outputIndex_) Out.insert("outputIndex", QString::number(*Snapshot.progress_.outputIndex_));
+            if (Snapshot.progress_.outputCount_) Out.insert("outputCount", QString::number(*Snapshot.progress_.outputCount_));
             Out.insert("deferred", Snapshot.deferred_); Out.insert("order", QString::number(Snapshot.queueOrder_));
             Out.insert("submittedUtcMs", QString::number(Snapshot.submittedUtcMs_)); Out.insert("retriedAs", S(Snapshot.retriedAs_));
             Out.insert("samplePolicy", "recent-600-at-500ms; rate-window-2000ms; samples-session-only");
@@ -64,7 +70,7 @@ namespace hc::operations
             if (Snapshot.error_) Out.insert("error", EncodeError(*Snapshot.error_));
             Out.insert("saveProgress", SaveProgress);
             if (!SaveProgress && !IsTerminal(Snapshot.state_)) {
-                for (const auto* Key : {"current", "bytes", "total", "planned", "currentBytes", "currentTotal", "discoveredItems", "discoveredFiles", "deletedFiles"}) Out.remove(Key);
+                for (const auto* Key : {"current", "bytes", "total", "planned", "currentBytes", "currentTotal", "discoveredItems", "discoveredFiles", "deletedFiles", "currentSource", "currentDestination", "phase", "activeFiles", "itemsDone", "outputIndex", "outputCount"}) Out.remove(Key);
                 // Version 2 reconstructs counts from the durable outcome ledger.
                 // Version 1 embeds outcomes and must retain their matching counts.
                 if (Result.outcomes_) for (const auto* Key : {"completed", "skipped", "failed"}) Out.remove(Key);
@@ -81,6 +87,16 @@ namespace hc::operations
             Snapshot.skippedItems_ = Object["skipped"].toString().toULongLong(); Snapshot.failedItems_ = Object["failed"].toString().toULongLong();
             const auto Metadata = Object["metadata"].toObject();
             Snapshot.metadata_ = {Metadata["label"].toString().toStdString(), Metadata["source"].toString().toStdString(), Metadata["destination"].toString().toStdString(), Metadata["options"].toString().toStdString(), Metadata["retryOf"].toString().toStdString()};
+            const auto Kind = Metadata["kind"].toInt();
+            if (Kind >= 0 && Kind <= int(JobKind::SecurityRestore)) Snapshot.metadata_.kind_ = JobKind(Kind);
+            Snapshot.progress_.source_ = Object["currentSource"].toString().toStdString();
+            Snapshot.progress_.destination_ = Object["currentDestination"].toString().toStdString();
+            const auto Phase = Object["phase"].toInt();
+            if (Phase >= 0 && Phase <= int(JobPhase::RestoringSecurity)) Snapshot.progress_.phase_ = JobPhase(Phase);
+            Snapshot.progress_.activeFiles_ = uint32_t(std::max(0, Object["activeFiles"].toInt()));
+            if (Object.contains("itemsDone")) Snapshot.progress_.itemsDone_ = Object["itemsDone"].toString().toULongLong();
+            if (Object.contains("outputIndex")) Snapshot.progress_.outputIndex_ = Object["outputIndex"].toString().toULongLong();
+            if (Object.contains("outputCount")) Snapshot.progress_.outputCount_ = Object["outputCount"].toString().toULongLong();
             Snapshot.deferred_ = Object["deferred"].toBool(); Snapshot.queueOrder_ = Object["order"].toString().toULongLong();
             Snapshot.submittedUtcMs_ = Object["submittedUtcMs"].toString().toLongLong(); Snapshot.retriedAs_ = Object["retriedAs"].toString().toStdString();
             if (Object.contains("total")) Snapshot.progress_.bytesTotal_ = Object["total"].toString().toULongLong();

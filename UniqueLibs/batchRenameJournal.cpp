@@ -248,7 +248,18 @@ private:
     }
     JobStep running() const {
         JobStep Step; Step.progress_ = JobProgress{}; Step.progress_->plannedItems_ = record_.rows_.size();
-        Step.progress_->currentItem_ = record_.folder_.toStdString(); return Step;
+        const auto Count = int(record_.rows_.size());
+        const int Index = Count ? std::min(phase_ < 2 ? move_ : outcome_, Count - 1) : 0;
+        Step.progress_->itemsDone_ = phase_ == 0 ? 0 : phase_ == 1 ? move_ : Count;
+        Step.progress_->phase_ = pinned_ < Count ? JobPhase::Inspecting : phase_ == 0 ? JobPhase::TemporaryNames
+            : restore_ ? JobPhase::RestoringNames : JobPhase::ApplyingNames;
+        if (Count) {
+            const auto& Row = record_.rows_[Index];
+            Step.progress_->source_ = (Index < current_.size() && !current_[Index].isEmpty() ? current_[Index] : Row.source_.path_).toStdString();
+            Step.progress_->destination_ = (restore_ ? Row.source_.path_ : Row.target_).toStdString();
+            Step.progress_->currentItem_ = QFileInfo(QString::fromStdString(Step.progress_->source_)).fileName().toStdString();
+        }
+        return Step;
     }
     JobStep fail(const QString& Error) { record_.error_ = Error; JobStep Step; Step.next_ = JobState::Failed; Step.error_ = Failure(Error); return Step; }
     QString directory_;
@@ -267,6 +278,8 @@ PreparedJob Job(const QString& Directory, RenameRecord Record, bool Recovery, bo
     PreparedJob Out; Out.request_.resourceLanes_ = {FileOperationLane({NativeFolder(Record.folder_) && !LocalFolder(Record.folder_) ? LocatorKind::Smb : LocatorKind::Local, Record.folder_.toStdString()})};
     Out.request_.metadata_.source_ = Record.folder_.toStdString(); Out.request_.metadata_.destination_ = Record.folder_.toStdString();
     Out.request_.metadata_.options_ = "rename-record=" + Record.id_.toStdString(); Out.request_.maxItemResults_ = 200;
+    Out.request_.metadata_.kind_ = Recovery ? (Restore ? JobKind::RenameRestore : JobKind::RenameResume)
+        : Record.kind_ == "undo" ? JobKind::RenameUndo : Record.kind_ == "redo" ? JobKind::RenameRedo : JobKind::BatchRename;
     Out.task_ = std::make_unique<RenameTask>(Directory, std::move(Record), Recovery, Restore); return Out;
 }
 }

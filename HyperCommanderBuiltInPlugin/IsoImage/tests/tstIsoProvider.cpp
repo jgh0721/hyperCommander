@@ -45,6 +45,10 @@ private slots:
             unsigned Count = 0;
             for (;;) { auto Page = Cursor.Value()->Next(1, {}).get(); QVERIFY(Page.HasValue()); Count += unsigned(Page.Value().entries_.size()); if (Page.Value().end_) break; }
             QCOMPARE(Count, 2u);
+            auto Summary = Provider->Resolve(Root(Image), {}).get(); QVERIFY(Summary.HasValue());
+            QCOMPARE(Summary.Value().hints_.at("containerKind"), std::string("diskImage"));
+            QCOMPARE(std::stoull(Summary.Value().hints_.at("containerBytes")), uint64_t(QFileInfo(Image).size()));
+            QVERIFY(!Summary.Value().hints_.contains("unpackedBytes"));
             auto FileAt = Root(Image); FileAt.nesting_.back().entry_ = "/DIR/DATA.BIN";
             auto File = Provider->Resolve(FileAt, {}).get(); QVERIFY(File.HasValue()); QCOMPARE(File.Value().size_, uint64_t(Payload.size()));
             auto First = Provider->OpenRead(File.Value().id_, {}).get(); QVERIFY(First.HasValue());

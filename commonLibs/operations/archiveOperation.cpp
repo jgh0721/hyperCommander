@@ -121,7 +121,15 @@ namespace hc::operations
             JobStep progress() const
             {
                 JobStep Step{phase_ == Phase::Plan ? JobState::Preparing : JobState::Running};
-                Step.progress_ = JobProgress{0, {}, current_.source_.entry_.name_.empty() ? current_.destination_ : current_.source_.entry_.name_}; return Step;
+                Step.progress_ = JobProgress{0, {}, current_.source_.entry_.name_.empty() ? current_.destination_ : current_.source_.entry_.name_};
+                if (!current_.source_.entry_.locator_.root_.empty()) Step.progress_->source_ = Serialize(current_.source_.entry_.locator_);
+                auto Target = request_.archive_;
+                if (!Target.nesting_.empty()) Target.nesting_.back().entry_ = current_.destination_;
+                else if (!current_.destination_.empty()) Target.nesting_.push_back({"wcx", current_.destination_});
+                if (request_.operation_ != FileOperation::Delete) Step.progress_->destination_ = Serialize(Target);
+                Step.progress_->phase_ = phase_ == Phase::Plan || phase_ == Phase::Conflict || phase_ == Phase::Confirm
+                    ? JobPhase::Preparing : phase_ == Phase::Prepare ? JobPhase::RewritingArchive : JobPhase::Committing;
+                return Step;
             }
             JobStep skip()
             {

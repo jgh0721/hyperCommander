@@ -286,6 +286,7 @@ void QMainOpts::LoadSettings()
     findChild<fm::ui::AccentPicker*>("hc.settings.accent")->setCurrent(themeSettings_->Scheme().seeds.accent);
     { const QSignalBlocker Block(findChild<QCheckBox*>("hc.settings.systemAccent")); findChild<QCheckBox*>("hc.settings.systemAccent")->setChecked(themeSettings_->Scheme().seeds.useSystemAccent); }
     findChild<QCheckBox*>("hc.settings.darkTitle")->setChecked(General["darkTitleBar"].toBool(true));
+    findChild<QCheckBox*>("hc.settings.showMainToolbar")->setChecked(General["showMainToolbar"].toBool(false));
     findChild<QCheckBox*>("hc.settings.showCommandLine")->setChecked(General["showCommandLine"].toBool(true));
     findChild<QCheckBox*>("hc.settings.showFunctionBar")->setChecked(General["showFunctionBar"].toBool(true));
     findChild<QComboBox*>("hc.settings.startup")->setCurrentIndex(General["restoreWorkspace"].toBool(true) ? 0 : 1);
@@ -461,6 +462,7 @@ bool QMainOpts::SaveSettings()
     if (keyboardSettings_ && !keyboardSettings_->SaveFunctions(General)) return false;
     if (themeModeEdited_) General["themeMode"] = QStringList{"light", "dark", "system"}.value(findChild<QComboBox*>("hc.settings.theme")->currentIndex(), "light");
     General["darkTitleBar"] = findChild<QCheckBox*>("hc.settings.darkTitle")->isChecked();
+    General["showMainToolbar"] = findChild<QCheckBox*>("hc.settings.showMainToolbar")->isChecked();
     General["showCommandLine"] = findChild<QCheckBox*>("hc.settings.showCommandLine")->isChecked();
     General["showFunctionBar"] = findChild<QCheckBox*>("hc.settings.showFunctionBar")->isChecked();
     General["restoreWorkspace"] = findChild<QComboBox*>("hc.settings.startup")->currentIndex() == 0;
@@ -902,9 +904,7 @@ void QMainOpts::initializeDesignPages()
         for (auto* B : Group->buttons()) static_cast<fm::ui::ThemeModeCard*>(B)->setAccent(themeSettings_->Scheme().seeds.accent.value_or(fm::style::ThemeManager::instance().colors()[fm::style::Token::Accent]));
     };
     auto* DarkTitle = new QCheckBox(tr("다크 테마에서 제목 표시줄도 어둡게"), ThemeCard); DarkTitle->setObjectName("hc.settings.darkTitle"); ThemeForm->addWidget(DarkTitle);
-    auto* ColorEdit = new QPushButton(tr("색 편집(&T)..."), ThemeCard); ThemeForm->addWidget(ColorEdit, 0, Qt::AlignLeft); ThemeForm->addStretch(); connect(ColorEdit, &QPushButton::clicked, this, [this] {
-        for (int R = 0; R < ui.lstOptCate->count(); ++R) if (ui.lstOptCate->item(R)->data(Qt::UserRole).toInt() == ui.stkOpts->indexOf(themeSettings_)) ui.lstOptCate->setCurrentRow(R);
-    });
+    ThemeForm->addStretch();
     // Fonts span both columns as a two-pair grid: caption · family · size, so the page fits without scrolling.
     auto* Fonts = new QGroupBox(tr("글꼴"), GeneralBody); auto* FontGrid = new QGridLayout(Fonts); GeneralGrid->addWidget(Fonts, 1, 0, 1, 2);
     FontGrid->setContentsMargins(14, 12, 14, 14); FontGrid->setHorizontalSpacing(10); FontGrid->setVerticalSpacing(8);
@@ -934,6 +934,7 @@ void QMainOpts::initializeDesignPages()
     auto* Startup = new QGroupBox(tr("시작과 창"), GeneralBody); auto* StartupForm = new QFormLayout(Startup); StartupForm->setRowWrapPolicy(QFormLayout::WrapLongRows); GeneralGrid->addWidget(Startup, 0, 1);
     StartupForm->setContentsMargins(14, 12, 14, 14); StartupForm->setVerticalSpacing(8);
     auto* StartMode = new QComboBox(Startup); StartMode->setObjectName("hc.settings.startup"); StartMode->addItems({tr("마지막 탭과 폴더 복원"), tr("기본 작업공간으로 시작")}); StartupForm->addRow(tr("시작할 때"), StartMode);
+    auto* Toolbar = new QCheckBox(tr("주 도구모음 표시"), Startup); Toolbar->setObjectName("hc.settings.showMainToolbar"); StartupForm->addRow(SwitchRow(Toolbar, Startup));
     auto* Line = new QCheckBox(tr("명령줄 표시"), Startup); Line->setObjectName("hc.settings.showCommandLine"); StartupForm->addRow(SwitchRow(Line, Startup));
     auto* FunctionBar = new QCheckBox(tr("기능 키 막대 표시"), Startup); FunctionBar->setObjectName("hc.settings.showFunctionBar"); StartupForm->addRow(SwitchRow(FunctionBar, Startup));
     auto* Single = new QCheckBox(tr("창 하나만 실행 · 기존 창에 새 탭"), Startup); Single->setObjectName("hc.settings.singleInstance"); Single->setToolTip(tr("다음 실행부터 적용합니다. 같은 사용자·설정 폴더의 기존 창에 경로를 새 탭으로 전달합니다.")); StartupForm->addRow(SwitchRow(Single, Startup));
@@ -1043,7 +1044,7 @@ void QMainOpts::initializeDesignPages()
     auto* ProgressForm = JobGroup(CommonRows, tr("진행창 · 완료 알림"));
     auto* Progress = ProgressForm->parentWidget();
     defaultDetailed_ = new QCheckBox(tr("처음 열 때 그래프 보이기"), Progress); defaultDetailed_->setObjectName("hc.settings.jobDetailed"); ProgressForm->addRow(SwitchRow(defaultDetailed_, Progress));
-    defaultClose_ = new QCheckBox(tr("성공하면 진행창 닫기"), Progress); defaultClose_->setObjectName("hc.settings.jobCloseOnSuccess"); ProgressForm->addRow(SwitchRow(defaultClose_, Progress));
+    defaultClose_ = new QCheckBox(tr("완료되면 창 닫기"), Progress); defaultClose_->setObjectName("hc.settings.jobCloseOnSuccess"); ProgressForm->addRow(SwitchRow(defaultClose_, Progress));
     auto* Notification = new QComboBox(Progress); Notification->setObjectName("hc.settings.jobNotification"); Notification->addItems({tr("알리지 않음"), tr("상태 표시줄"), tr("상태 표시줄 · 작업 표시줄"), tr("상태 표시줄 · 작업 표시줄 · 소리")}); ProgressForm->addRow(tr("백그라운드 작업 완료 알림"), Notification);
     auto* QueueForm = JobGroup(CommonRows, tr("대기열 · 동시 실행"));
     auto* Queue = QueueForm->parentWidget();

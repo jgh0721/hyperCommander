@@ -19,6 +19,7 @@
 #include "UniqueLibs/commandLineExecution.hpp"
 #include "UniqueLibs/commandUiConfig.hpp"
 #include <QToolButton>
+#include <QToolBar>
 #include "Components/cmpView.hpp"
 #include "UIs/dlgOpts.hpp"
 #include "UIs/dlgFavoriteDir.hpp"
@@ -191,6 +192,7 @@ void QMainUI::OnColorSchemeChanged( const TyColorScheme& ColorScheme )
     ui.menubar->setFont(ColorScheme.Menu_Font);
 
     const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+    if (auto* Toolbar = findChild<QToolBar*>("hc.navigationToolbar")) Toolbar->setVisible(General["showMainToolbar"].toBool(false));
     commandLine_->setVisible(General["showCommandLine"].toBool(true));
     if (auto* Bar = findChild<QWidget*>("hc.functionBar")) Bar->setVisible(General["showFunctionBar"].toBool(true));
     ui.cmpLeftPanel->OnColorSchemeChanged( ColorScheme );

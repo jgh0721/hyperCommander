@@ -770,6 +770,7 @@ namespace hc::defaults
                  { "quickFind",               hc::quickfind::Settings{}.ToJson() },
                  { "refresh",                 hc::refresh::Settings{}.ToJson() },
                  { "darkTitleBar",            true },
+                 { "showMainToolbar",         false },
                  { "showCommandLine",         true },
                  { "showFunctionBar",         true },
                  { "restoreWorkspace",        true },

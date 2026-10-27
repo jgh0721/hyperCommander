@@ -30,6 +30,7 @@
 #include "UniqueLibs/solTCPluginMgr.hpp"
 #include "UniqueLibs/colorSchemeMgr.hpp"
 #include "UniqueLibs/cmnHCUtils.hpp"
+#include "HyperCommanderBuiltInPlugin/IsoImage/builtinIso.hpp"
 
 #include <shtypes.h>
 #include <ShlObj.h>
@@ -1415,6 +1416,73 @@ void CmpPanel::processVolumeStatusText(const nsHC::TySpFileSystem& SpFileSystem)
     if (!SpFileSystem) { ui.lblVolumeStatus->clear(); return; }
     const auto Root = SpFileSystem->GetRoot();
     const auto Cate = SpFileSystem->GetCate();
+    if (SpFileSystem->GetFeatures() & nsHC::FS_FEA_PACK) {
+        const auto State = retrieveFocusState();
+        const auto* Model = State ? static_cast<CFSModel*>(State->Model) : nullptr;
+        auto Location = SpFileSystem->ReadLocation("/");
+        const auto SourceName = Location.nesting_.size() > 1 ? Location.nesting_[Location.nesting_.size() - 2].entry_ : Location.root_;
+        const auto Name = QFileInfo(QString::fromStdString(SourceName)).fileName();
+        auto Description = QString::fromStdString(Location.root_);
+        for (std::size_t Index = 0; Index + 1 < Location.nesting_.size(); ++Index)
+            Description += " → " + QString::fromStdString(Location.nesting_[Index].entry_);
+        ui.lblVolumeStatus->setText(tr("[%1] 크기 정보 조회 중").arg(Name));
+        ui.lblVolumeStatus->setToolTip(Description);
+        // Use the accepted provider so another tab refreshing the same archive
+        // cannot replace this tab's metadata. Never scan an archive on the GUI thread.
+        if (!Model || State->pending_ || Model->IsLoading() || Model->HasPlaceholder() || Model->LastNavigationError()) return;
+        const bool Snapshot = Model->ProviderEnabled();
+        const auto Provider = Snapshot ? Model->SnapshotProvider() : SpFileSystem->ReadProvider();
+        const auto Pack = qSharedPointerDynamicCast<nsHC::CFSPack>(SpFileSystem);
+        const bool DiskContainer = Pack && Pack->GetWCX() && QFileInfo(Pack->GetWCX()->PluginPath()).absoluteFilePath().compare(
+            QFileInfo(hc::plugins::BuiltinIsoOptions().binaryPath_).absoluteFilePath(), Qt::CaseInsensitive) == 0;
+        if (!Provider) return;
+        const auto Directory = QDir::toNativeSeparators(CurrentPath());
+        using ContainerResult = hc::storage::Result<hc::storage::EntrySnapshot>;
+        auto* Watcher = new QFutureWatcher<ContainerResult>(this);
+        // Compare identities without retaining old archive/plugin resources on the GUI thread.
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation, FileSystemIdentity = SpFileSystem.data(), ProviderIdentity = Provider.get(), Snapshot, DiskContainer, Directory, Name, Description] {
+            const auto Result = Watcher->result(); Watcher->deleteLater();
+            const auto Current = retrieveFocusState();
+            if (Generation != capacityGeneration_ || !Current || Current->pending_ || Current->Model->GetRoot().data() != FileSystemIdentity
+                || Directory.compare(QDir::toNativeSeparators(CurrentPath()), Qt::CaseInsensitive) != 0) return;
+            const auto* Model = static_cast<CFSModel*>(Current->Model);
+            if (Snapshot && (!Model->ProviderEnabled() || Model->SnapshotProvider().get() != ProviderIdentity)) return;
+            if (!Result.HasValue()) {
+                ui.lblVolumeStatus->setText(tr("[%1] 크기 정보 확인 불가").arg(Name));
+                ui.lblVolumeStatus->setToolTip(Description + '\n' + QString::fromStdString(Result.Failure().code_)); return;
+            }
+            const auto& Hints = Result.Value().hints_;
+            const auto Number = [&](const char* Key) -> std::optional<quint64> {
+                const auto It = Hints.find(Key); if (It == Hints.end()) return {};
+                bool Ok = false; const auto Bytes = QString::fromStdString(It->second).toULongLong(&Ok);
+                return Ok ? std::optional<quint64>(Bytes) : std::nullopt;
+            };
+            const auto Packed = Number("containerBytes"), Unpacked = Number("unpackedBytes");
+            const auto Kind = Hints.find("containerKind");
+            const bool Image = DiskContainer || (Kind != Hints.end() && Kind->second == "diskImage");
+            const auto Style = static_cast<TyEnSizeStyle>(hc::settings::AppSettings().SizeStyle(true));
+            const auto Format = [Style](quint64 Bytes) {
+                return Bytes <= quint64(std::numeric_limits<qint64>::max()) ? GetFormattedSizeText(qint64(Bytes), Style)
+                    : tr("%1 바이트").arg(QString::number(Bytes));
+            };
+            QString Summary;
+            if (Image && Packed) Summary = tr("디스크 이미지 크기 %1").arg(Format(*Packed));
+            else if (Packed && Unpacked) Summary = tr("해제 %1 / 압축 %2").arg(Format(*Unpacked), Format(*Packed));
+            else if (Packed) Summary = tr("압축 크기 %1").arg(Format(*Packed));
+            else Summary = tr("크기 정보 확인 불가");
+            ui.lblVolumeStatus->setText(tr("[%1] %2").arg(Name, Summary));
+            auto Details = Description + '\n' + Summary;
+            if (Unpacked && !Image) Details += '\n' + tr("해제 크기: %1 바이트 · 압축 파일 전체 기준").arg(QString::number(*Unpacked));
+            if (Packed) Details += '\n' + (Image ? tr("이미지 파일: %1 바이트") : tr("압축 파일: %1 바이트 · 헤더 등 포함")).arg(QString::number(*Packed));
+            ui.lblVolumeStatus->setToolTip(Details);
+        });
+        Watcher->setFuture(QtConcurrent::run([Provider, Location] {
+            hc::storage::OperationContext Context; Context.workload_.intent_ = hc::storage::WorkloadIntent::Automatic;
+            Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            return Provider->Resolve(Location, Context).get();
+        }));
+        return;
+    }
     if (Cate != nsHC::FS_CATE_LOCAL && Cate != nsHC::FS_CATE_REMOTE) { ui.lblVolumeStatus->setText(Root); return; }
     const auto State = retrieveFocusState();
     const auto* Model = State ? static_cast<CFSModel*>(State->Model) : nullptr;

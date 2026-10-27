@@ -29,6 +29,12 @@ namespace hc::operations
         // Password replies stay in the task channel, never in event payloads.
         std::string value_;
     };
+    enum class JobKind { Unknown, Copy, Move, Delete, Recycle, Extract, ArchiveCreate, ArchiveSeparate, IsoCreate,
+        ArchiveAdd, ArchiveMove, ArchiveDelete, ArchiveRename, ArchiveMakeDirectory, Rename, BatchRename,
+        RenameUndo, RenameRedo, RenameResume, RenameRestore, MakeFile, MakeDirectory, SecurityChange, SecurityRestore };
+    enum class JobPhase { None, Preparing, Copying, Verifying, RemovingSource, PreparingInputs, BuildingArchive,
+        SavingOutput, RewritingArchive, Committing, Inspecting, TemporaryNames, ApplyingNames, RestoringNames,
+        Creating, BackingUpSecurity, ApplyingSecurity, RestoringSecurity };
     struct JobProgress
     {
         std::uint64_t bytesDone_ = 0;
@@ -39,6 +45,11 @@ namespace hc::operations
         // Confirmed discovery is a lower bound until plannedItems_ is present.
         // Deleted files exclude skipped items and directory-removal operations.
         std::optional<std::uint64_t> discoveredItems_, discoveredFiles_, deletedFiles_;
+        // Current paths and phase describe the actual bounded operation, not the selected root.
+        std::string source_, destination_;
+        JobPhase phase_ = JobPhase::None;
+        std::optional<std::uint64_t> itemsDone_, outputIndex_, outputCount_;
+        std::uint32_t activeFiles_ = 0;
     };
     struct ItemOutcome
     {
@@ -56,6 +67,7 @@ namespace hc::operations
     {
         // Display-only policy summary. Never serialize credentials or callbacks.
         std::string label_, source_, destination_, options_, retryOf_;
+        JobKind kind_ = JobKind::Unknown;
     };
     enum class JobControl { Start, Pause, Resume, Cancel };
     struct JobSnapshot

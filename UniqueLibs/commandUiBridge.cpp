@@ -694,6 +694,7 @@ void CommandUiBridge::createActions()
     Toolbar->setObjectName("hc.navigationToolbar");
     Toolbar->setMovable(false); Toolbar->setFloatable(false); Toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
     Toolbar->setIconSize(QSize(16, 16));
+    Toolbar->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showMainToolbar"].toBool(false));
     const std::vector<std::pair<QString, QString>> Actions{
         {"hc.navigate.path", tr("경로 이동")}, {"hc.navigate.parent", tr("상위 폴더")},
         {"hc.navigate.forceRefresh", tr("강제 새로 고침")}, {"hc.navigate.refresh", tr("새로 고침")}, {"hc.navigate.cancel", tr("중지")},
@@ -1229,6 +1230,7 @@ void CommandUiBridge::extractArchive() {
     if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), QString::fromStdString(Prepared.Failure().code_)); return; }
     Prepared.Value().request_.deferred_ = Dialog.Queued();
     Prepared.Value().request_.metadata_.source_ = Context.location_.root_; Prepared.Value().request_.metadata_.destination_ = Target.root_;
+    Prepared.Value().request_.metadata_.kind_ = hc::operations::JobKind::Extract;
     auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("파일 압축 해제"));
     if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), QString::fromStdString(Submitted.Failure().code_)); return; }
     auto Parent = Target; Parent.root_ = QFileInfo(Path).absolutePath().toStdString();

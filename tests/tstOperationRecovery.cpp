@@ -145,6 +145,24 @@ private slots:
         auto Enabled=MakeFileJobJournal(JournalPath,false,true,true)->Recover(); QVERIFY(Enabled.HasValue()); QCOMPARE(Enabled.Value().size(),size_t(1));
         QCOMPARE(Enabled.Value()[0].snapshot_.id_,std::string("hc-job-r22-on")); QCOMPARE(Enabled.Value()[0].writes_->Count(),1ull);
     }
+    void jobPresentationRoundTrip()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto Journal = MakeFileJobJournal(Directory.path(), true);
+        JobResult Result; auto& Snapshot = Result.snapshot_; Snapshot.id_ = "hc-job-presentation";
+        Snapshot.state_ = JobState::Completed; Snapshot.metadata_.kind_ = JobKind::ArchiveSeparate;
+        Snapshot.metadata_.source_ = "D:/source"; Snapshot.metadata_.destination_ = "E:/target/output.7z";
+        Snapshot.progress_.source_ = "D:/source/file.txt"; Snapshot.progress_.destination_ = "E:/target/output.7z";
+        Snapshot.progress_.phase_ = JobPhase::SavingOutput; Snapshot.progress_.itemsDone_ = 7;
+        Snapshot.progress_.outputIndex_ = 2; Snapshot.progress_.outputCount_ = 4; Snapshot.progress_.activeFiles_ = 3;
+        QVERIFY(Journal->Checkpoint(Result).HasValue());
+        auto Recovered = Journal->Recover(); QVERIFY(Recovered.HasValue()); QCOMPARE(Recovered.Value().size(), size_t(1));
+        const auto& Copy = Recovered.Value().front().snapshot_;
+        QCOMPARE(Copy.metadata_.kind_, JobKind::ArchiveSeparate); QCOMPARE(Copy.progress_.phase_, JobPhase::SavingOutput);
+        QCOMPARE(Copy.progress_.source_, Snapshot.progress_.source_); QCOMPARE(Copy.progress_.destination_, Snapshot.progress_.destination_);
+        QCOMPARE(Copy.progress_.itemsDone_.value(), 7ull); QCOMPARE(Copy.progress_.outputIndex_.value(), 2ull);
+        QCOMPARE(Copy.progress_.outputCount_.value(), 4ull); QCOMPARE(Copy.progress_.activeFiles_, 3u);
+    }
     void copyWithoutRecoveryRetainsSessionResults()
     {
         QTemporaryDir Directory; QVERIFY(QDir().mkdir(Directory.filePath("source"))); QVERIFY(QDir().mkdir(Directory.filePath("target")));

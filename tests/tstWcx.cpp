@@ -147,6 +147,47 @@ class WcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void containerSizeMetadata()
+    {
+        using namespace hc::plugins;
+        struct CountingBackend final : IArchiveBackend {
+            std::shared_ptr<IArchiveBackend> real_ = MakeInProcessWcxBackend(Fixture().toStdString());
+            int listings_ = 0;
+            Result<std::unique_ptr<IArchiveListing>> Enumerate(std::string Path, bool Test, OperationContext Context) override
+            { ++listings_; return real_->Enumerate(std::move(Path), Test, Context); }
+            Result<Unit> Extract(std::string Path, ArchiveHeader Header, std::string Output, OperationContext Context) override
+            { return real_->Extract(std::move(Path), std::move(Header), std::move(Output), Context); }
+            Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override { return real_->Update(std::move(Request), Context); }
+        };
+        QTemporaryDir Directory; const auto Path = Directory.filePath("sample.hct"); QVERIFY(Put(Path, "HCWCX01"));
+        auto Backend = std::make_shared<CountingBackend>();
+        auto Reader = MakeWcxReadProvider(Fixture().toStdString(), Location(Path), Directory.path().toStdString(), Backend);
+        QVERIFY(Reader->Enumerate(Location(Path), {}).get().HasValue());
+        const auto Alpha = Reader->Resolve(Location(Path, "/alpha.txt"), {}).get(); QVERIFY(Alpha.HasValue());
+        const auto Korean = Reader->Resolve(Location(Path, "/sub/한글.txt"), {}).get(); QVERIFY(Korean.HasValue());
+        const auto Size = Alpha.Value().size_ + Korean.Value().size_;
+        for (int Attempt = 0; Attempt < 3; ++Attempt) {
+            const auto Root = Reader->Resolve(Location(Path), {}).get(); QVERIFY(Root.HasValue()); QVERIFY(Root.Value().directory_);
+            QCOMPARE(Root.Value().hints_.at("containerKind"), std::string("archive"));
+            QCOMPARE(std::stoull(Root.Value().hints_.at("containerBytes")), uint64_t(QFileInfo(Path).size()));
+            QCOMPARE(std::stoull(Root.Value().hints_.at("unpackedBytes")), Size);
+            const auto Fresh = Reader->Stat(Root.Value().id_, {}).get(); QVERIFY(Fresh.HasValue()); QCOMPARE(Fresh.Value().hints_, Root.Value().hints_);
+        }
+        QCOMPARE(Backend->listings_, 1);
+        const auto Outer = Directory.filePath("outer.hct"); QVERIFY(Put(Outer, NestedFixture("HCWCX01")));
+        auto Parent = MakeWcxReadProvider(Fixture().toStdString(), Location(Outer), Directory.path().toStdString());
+        auto OuterRoot = Parent->Resolve(Location(Outer), {}).get(); QVERIFY(OuterRoot.HasValue());
+        QCOMPARE(std::stoull(OuterRoot.Value().hints_.at("unpackedBytes")), uint64_t(11));
+        auto Inner = Location(Outer, "/inner.hct"); Inner.nesting_.push_back({"wcx", "/"});
+        auto InnerReader = MakeWcxReadProvider(Fixture().toStdString(), Inner, Directory.path().toStdString());
+        auto InnerRoot = InnerReader->Resolve(Inner, {}).get(); QVERIFY2(InnerRoot.HasValue(), InnerRoot.HasValue() ? "" : InnerRoot.Failure().code_.c_str());
+        QCOMPARE(std::stoull(InnerRoot.Value().hints_.at("containerBytes")), uint64_t(7));
+        QCOMPARE(std::stoull(InnerRoot.Value().hints_.at("unpackedBytes")), Size);
+        const auto EmptyPath = Directory.filePath("empty.hct");
+        QByteArray Empty("HCWCX02", 7); Empty.append(5, '\0'); QVERIFY(Put(EmptyPath, Empty));
+        auto EmptyRoot = MakeWcxReadProvider(Fixture().toStdString(), Location(EmptyPath), Directory.path().toStdString())->Resolve(Location(EmptyPath), {}).get();
+        QVERIFY(EmptyRoot.HasValue()); QCOMPARE(EmptyRoot.Value().hints_.at("unpackedBytes"), std::string("0"));
+    }
     void directBatchAfterMaterializedPreview()
     {
         using namespace hc::plugins;

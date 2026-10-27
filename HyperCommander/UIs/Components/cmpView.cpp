@@ -1012,7 +1012,6 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             // GridColumn->setWidth( 100 );
             GridColumn->setTextAlignment( Column.definition_.alignment_ );
               GridColumn->setProperty("hc.everything.path", Column.definition_.fieldId_ == "file.parentPath");
-            GridColumn->editorRepository()->setEditorActivationPolicy( GridEditor::ActivationPolicy() );
             GridColumn->dataBinding()->setSortRole(static_cast<Qt::ItemDataRole>(CFSModel::GridSortRole));
             if (Column.definition_.id_ == Columns->profile_.primaryNameId_)
             {
@@ -1023,6 +1022,10 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             GridColumn->setEditorType(Qtitan::GridEditor::DelegateAdapter);
             static_cast<Qtitan::GridDelegateAdapterEditorRepository*>(GridColumn->editorRepository())
                 ->setDelegate(new ProductCellDelegate(this, GridColumn->editorRepository()));
+            // setEditorType replaces the repository and restores its default triggers.
+            // File renames use the product editor; model cells are display-only.
+            GridColumn->editorRepository()->setEditorActivationPolicy(GridEditor::ActivationPolicy());
+            GridColumn->editorRepository()->setEditable(false);
         }
     }
 
@@ -1828,12 +1831,9 @@ void CGridView::oo_grid_rowFocusChanged( int OldRowIndex, int NewRowIndex )
 
 void CGridView::oo_grid_editorStarting( Qtitan::EditorEventArgs* Args )
 {
-    const auto Policy = Args->activationPolicy();
-    const auto MousePolicies = GridEditor::ActivateByMousePress | GridEditor::ActivateByClick | GridEditor::ActivateByDblClick;
-    if (!(Policy & MousePolicies)) return;
+    // Reject every native editor, including Enter with modifiers and explicit
+    // showEditor calls. Only BeginRename may open the product rename editor.
     viewClickTimer_.stop(); mouseRenameIndex_ = QPersistentModelIndex{};
-    if (Args->dataBinding()->column() != 0) return;
-    // Mouse edits must use the product editor and its rename policies.
     Args->setHandled(true);
 }
 

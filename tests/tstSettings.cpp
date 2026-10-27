@@ -52,6 +52,10 @@ private slots:
         QTemporaryDir Temp; Repository Fresh(Temp.path());
         QCOMPARE(Fresh.Object(), hc::defaults::Settings());
         QVERIFY(!Fresh.Exists()); QVERIFY(!QFileInfo::exists(Fresh.FileName()));
+        QCOMPARE(Fresh.Read(Section::General).toObject()["showMainToolbar"], QJsonValue(false));
+        auto ToolbarGeneral = Fresh.Read(Section::General).toObject(); ToolbarGeneral["showMainToolbar"] = true;
+        QVERIFY(Fresh.Put(Section::General, ToolbarGeneral));
+        Repository ToolbarReload(Temp.path()); QVERIFY(ToolbarReload.Read(Section::General).toObject()["showMainToolbar"].toBool());
         const QJsonObject Group{{"id", "custom.text"}, {"name", "사용자 문서"}, {"enabled", true}, {"join", "any"},
             {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "txt"}}}},
             {"light", QJsonObject{{"foreground", "#123456"}}}, {"dark", QJsonObject{{"foreground", "#abcdef"}}}, {"autoDark", false}};
@@ -61,11 +65,12 @@ private slots:
         QVERIFY(Fresh.Put(Section::Options, QJsonObject{{"copyVerify", true}, {"fileColorRules", Rules}}));
         QVERIFY(Fresh.Put(Section::Shortcuts, QJsonObject{{"F5", QJsonValue::Null}, {"Alt+C", "hc.file.copy"}}));
         auto Partial = Fresh.Object(); auto General = Partial["general"].toObject();
-        General.remove("shortcutPreset"); General.remove("showFunctionBar"); General["thumbnails"] = QJsonObject{{"version", 99}, {"future", true}};
+        General.remove("shortcutPreset"); General.remove("showFunctionBar"); General.remove("showMainToolbar"); General["thumbnails"] = QJsonObject{{"version", 99}, {"future", true}};
         Partial["general"] = General; const auto Original = QJsonDocument(Partial).toJson();
         QVERIFY(Write(Fresh.FileName(), Original)); Repository Reload(Temp.path());
         QCOMPARE(Reload.Read(Section::General).toObject()["shortcutPreset"].toString(), QString(hc::defaults::ExistingShortcutPreset));
         QVERIFY(Reload.Read(Section::General).toObject()["showFunctionBar"].toBool());
+        QCOMPARE(Reload.Read(Section::General).toObject()["showMainToolbar"], QJsonValue(false));
         QCOMPARE(Reload.Read(Section::General).toObject()["thumbnails"], General["thumbnails"]);
         QCOMPARE(Reload.Read(Section::FileSets).toArray(), FileSets);
         QCOMPARE(Reload.Read(Section::Options).toObject()["fileColorRules"].toObject(), Rules);

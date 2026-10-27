@@ -213,6 +213,8 @@ public:
         }
         auto Operation = Context.operation_; Operation.expectedWriteBytes_ = data_.size();
         JobStep S; S.progress_ = JobProgress{phase_ >= 3 ? std::uint64_t(data_.size()) : 0, std::uint64_t(data_.size()), target_.root_, 0, std::uint64_t(data_.size()), 1};
+        S.progress_->destination_ = Serialize(target_);
+        S.progress_->phase_ = phase_ == 0 ? JobPhase::Preparing : phase_ >= 3 ? JobPhase::Verifying : JobPhase::Creating;
         if (phase_ == 0) {
             auto Support = writer_->Supports(Mutation::CreateContent, target_, Operation);
             if (!Support.HasValue()) return Fail(Support.Failure());
@@ -266,6 +268,7 @@ inline storage::Result<operations::PreparedJob> PrepareCreate(std::shared_ptr<st
     PreparedJob Job; Job.request_.operation_ = Context; Job.request_.maxItemResults_ = 256;
     Job.request_.resourceLanes_ = {FileOperationLane(Parent)};
     Job.request_.metadata_.destination_ = Target.root_; Job.request_.metadata_.options_ = "create-new; template=" + std::to_string(Type) + (Bom && Type ? "; UTF-8 BOM" : "; UTF-8");
+    Job.request_.metadata_.kind_ = JobKind::MakeFile;
     Job.task_ = std::make_unique<CreateTask>(std::move(Writer), std::move(Target), Data, std::move(Elevation)); return Job;
 }
 struct Rules {

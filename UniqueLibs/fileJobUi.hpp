@@ -18,6 +18,8 @@ class QTimer;
 class QTreeWidget;
 class QCheckBox;
 class QSpinBox;
+class QGridLayout;
+class QBoxLayout;
 namespace fm::ui { class TransferGraph; class DialogHeader; }
 
 class FileJobUi : public QObject, public hc::permissions::JobController, public hc::filetools::RenameJobController
@@ -65,6 +67,9 @@ private:
     void updateGraph(const hc::operations::JobSnapshot& Snapshot);
     void recordSamples();
     void updateSelection();
+    void updateProgressView(const hc::operations::JobSnapshot& Snapshot);
+    void layoutProgressFooter();
+    void fitProgressDialog();
     void loadResultPage(const std::string& Id);
     void answer(hc::operations::InteractionChoice Choice);
     std::string selectedId() const;
@@ -80,6 +85,18 @@ private:
     QComboBox* jobs_ = nullptr;
     QLabel* status_ = nullptr;
     QProgressBar* progress_ = nullptr;
+    QProgressBar* currentProgress_ = nullptr;
+    QWidget *sourceBlock_ = nullptr, *destinationBlock_ = nullptr, *currentBlock_ = nullptr;
+    QWidget* phaseBlock_ = nullptr;
+    QWidget *axisBlock_ = nullptr, *answersBlock_ = nullptr, *pagesBlock_ = nullptr;
+    QLabel *sourcePath_ = nullptr, *sourceName_ = nullptr, *destinationPath_ = nullptr, *destinationName_ = nullptr;
+    QLabel *currentTitle_ = nullptr, *currentPercent_ = nullptr, *currentMetrics_ = nullptr;
+    QLabel *overallTitle_ = nullptr, *overallPercent_ = nullptr, *overallMetrics_ = nullptr;
+    QPushButton* graphToggle_ = nullptr;
+    QComboBox* graphAxis_ = nullptr;
+    QWidget *footerLeft_ = nullptr, *footerRight_ = nullptr;
+    QGridLayout* progressFooter_ = nullptr;
+    QBoxLayout* metricsLayout_ = nullptr;
     QPlainTextEdit* details_ = nullptr;
     QLineEdit* renamed_ = nullptr;
     QPushButton* pause_ = nullptr;
@@ -99,7 +116,6 @@ private:
     bool clearingHistory_ = false;
     std::string preparingRetry_;
     QLabel* metrics_ = nullptr;
-    fm::ui::DialogHeader* header_ = nullptr;
     fm::ui::TransferGraph* graph_ = nullptr;
     QPushButton* managerPause_ = nullptr;
     QPushButton* managerCancel_ = nullptr;
@@ -123,6 +139,8 @@ private:
     qint64 graphTotal_ = -1;
     struct Sample { qint64 elapsed_; qint64 bytes_; bool paused_; };
     std::map<std::string, std::vector<Sample>> samples_;
+    std::map<std::string, int> sampleKinds_;
+    std::map<std::string, hc::operations::JobPhase> samplePhases_;
     std::map<std::string, QString> endpoints_;
     std::map<std::string,QJsonObject> sizeFormats_;
     QPushButton* previousPage_ = nullptr;

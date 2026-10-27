@@ -275,7 +275,8 @@ namespace hc::operations
                     }
                     if (production_.valid()) {
                         if (production_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
-                            auto Step = progress(); Step.progress_->bytesDone_ += std::min(Size, productionProgress_->load());
+                            const auto Producing = std::min(Size, productionProgress_->load());
+                            auto Step = progress(); Step.progress_->bytesDone_ += Producing; Step.progress_->currentBytes_ += Producing;
                             Step.deferFor_ = std::chrono::milliseconds(10); return Step;
                         }
                         Produced = production_.get(); productionProgress_.reset();
@@ -503,6 +504,8 @@ namespace hc::operations
             {
                 auto Step = progress();
                 for (const auto& Copy : copies_) Step.progress_->bytesDone_ += Copy->bytes_.load();
+                Step.progress_->activeFiles_ = static_cast<uint32_t>(copies_.size());
+                if (!copies_.empty()) Step.progress_->currentBytes_ = copies_.front()->bytes_.load();
                 return Step;
             }
             JobStep advanceCopies(JobStepContext Context)
@@ -615,6 +618,15 @@ namespace hc::operations
                 }
                 Step.progress_->currentBytes_ = itemBytes_;
                 if (index_ < items_.size() && !current().source_.entry_.directory_) Step.progress_->currentTotal_ = current().source_.entry_.size_;
+                if (index_ < items_.size()) {
+                    if (!current().source_.entry_.locator_.root_.empty()) Step.progress_->source_ = Serialize(current().source_.entry_.locator_);
+                    if (!current().destination_.root_.empty()) Step.progress_->destination_ = Serialize(current().destination_);
+                }
+                Step.progress_->phase_ = phase_ == Phase::Preparing ? JobPhase::Preparing
+                    : phase_ == Phase::Rename ? JobPhase::ApplyingNames : phase_ == Phase::MakeDirectory ? JobPhase::Creating
+                    : phase_ == Phase::Verify ? JobPhase::Verifying
+                    : (phase_ == Phase::Remove || phase_ == Phase::RetryRemove) && request_.operation_ == FileOperation::Move ? JobPhase::RemovingSource
+                    : phase_ == Phase::Commit ? JobPhase::Committing : JobPhase::Copying;
                 return Step;
             }
             JobStep paced(std::uint64_t Bytes)

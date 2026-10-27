@@ -14,6 +14,22 @@ public:
     explicit CreateTask(CreateJobRequest Request) : request_(std::move(Request)) {}
     JobStep Advance(JobStepContext Context) override
     {
+        auto Step = advance(std::move(Context));
+        if (!Step.progress_) Step.progress_ = JobProgress{};
+        auto& Progress = *Step.progress_;
+        Progress.phase_ = phase_ == Phase::Build ? JobPhase::BuildingArchive : phase_ == Phase::Save ? JobPhase::SavingOutput
+            : phase_ == Phase::Recheck ? JobPhase::Verifying : phase_ == Phase::Commit ? JobPhase::Committing : JobPhase::PreparingInputs;
+        if (!outputs_.empty()) { Progress.outputIndex_ = group_; Progress.outputCount_ = outputs_.size(); }
+        if (!outputs_.empty()) Progress.plannedItems_ = outputs_.size();
+        if (Progress.source_.empty() && !request_.value_.sourceRoot_.root_.empty()) Progress.source_ = Serialize(request_.value_.sourceRoot_);
+        if (group_ < outputs_.size()) Progress.destination_ = Serialize(outputs_[group_].destination_);
+        if (Progress.phase_ == JobPhase::SavingOutput && Progress.bytesTotal_) {
+            Progress.currentBytes_ = Progress.bytesDone_; Progress.currentTotal_ = Progress.bytesTotal_;
+        }
+        return Step;
+    }
+    JobStep advance(JobStepContext Context)
+    {
         if (const auto Stop = Context.operation_.Check({"archive-create"})) return failed(*Stop);
         if (phase_ == Phase::Admission) {
             auto Checked = RevalidateCreator(request_.creator_, Context.operation_); if (!Checked.HasValue()) return failed(Checked.Failure());
@@ -90,7 +106,7 @@ public:
                     return failed({ErrorCategory::Unavailable, "archive-create-directory-metadata"});
                 return progress("입력 폴더 속성 보존");
             }
-            phase_ = Phase::Build;
+            phase_ = Phase::Build; return progress("압축 생성");
         }
         if (phase_ == Phase::Build) {
             auto Checked = RevalidateCreator(request_.creator_, Context.operation_); if (!Checked.HasValue()) return failed(Checked.Failure());
@@ -176,6 +192,9 @@ Result<PreparedJob> PrepareCreation(CreateJobRequest Request, OperationContext C
     Job.deferred_ = Request.value_.schedule_ == plugins::ArchiveCreateSchedule::Queued;
     Job.resourceLanes_ = {FileOperationLane(Request.value_.output_), "archive-creator:" + Request.value_.creator_.id_};
     Job.metadata_.destination_ = Request.value_.output_.root_; Job.metadata_.options_ = Request.value_.format_ + " · " + Request.value_.creator_.displayName_;
+    Job.metadata_.source_ = Request.value_.sourceRoot_.root_;
+    Job.metadata_.kind_ = Request.value_.composition_.separateArchives_ ? JobKind::ArchiveSeparate
+        : Request.value_.format_ == "iso" ? JobKind::IsoCreate : JobKind::ArchiveCreate;
     return PreparedJob{std::move(Job), std::make_unique<CreateTask>(std::move(Request))};
 }
 CreateJobRequest RetryCreation(CreateJobRequest Request, const JobResult& Result)

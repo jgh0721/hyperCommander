@@ -1,4 +1,6 @@
-﻿#include "qtPluginManagementPage.hpp"
+﻿#include "stdafx.h"
+#include "qtPluginManagementPage.hpp"
+#include <fmwidgets/DialogHeader.h>
 #include "qtPluginHostSettings.hpp"
 #include "qtMessageDialog.hpp"
 #include "qtDialogFrame.hpp"
@@ -452,15 +454,15 @@ void QPluginManagementPage::State::testFiles() {
 }
 
 QPluginManagementPage::QPluginManagementPage(QWidget* Parent, QString ProductDirectory) : QWidget(Parent), state_(std::make_unique<State>(this, ProductDirectory.isEmpty() ? QCoreApplication::applicationDirPath() : std::move(ProductDirectory))) {
-    setObjectName("pluginManagementPage"); auto& S = *state_; auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(10);
-    auto* Header = new QLabel(tr("플러그인 관리")); auto Font = Header->font(); Font.setPointSize(Font.pointSize() + 3); Font.setBold(true); Header->setFont(Font); Layout->addWidget(Header);
-    auto* Hint = new QLabel(tr("① 종류와 플러그인 선택   ② 적용 조건 설정   ③ 조건 확인 후 적용")); Hint->setWordWrap(true); Layout->addWidget(Hint);
+    setObjectName("pluginManagementPage"); auto& S = *state_; auto* Layout = new QVBoxLayout(this);
+    auto* Header = new fm::ui::DialogHeader(this); Header->setTitle(tr("플러그인 관리"));
+    Header->setSubtitle(tr("① 종류와 플러그인 선택   ② 적용 조건 설정   ③ 조건 확인 후 적용")); Layout->addWidget(Header);
     auto* Body = new QHBoxLayout; Layout->addLayout(Body, 1);
     S.roles_ = new QListWidget; S.roles_->setObjectName("pluginRoles"); S.roles_->addItems({tr("전체"), tr("압축"), tr("문서"), tr("파일 시스템"), tr("파일 정보")}); S.roles_->setFixedWidth(116); S.roles_->setSpacing(3); for (int Row = 0; Row < S.roles_->count(); ++Row) S.roles_->item(Row)->setSizeHint(QSize(0, 30)); Body->addWidget(S.roles_);
     auto* Catalog = new QVBoxLayout; Body->addLayout(Catalog, 3); S.search_ = new QLineEdit; S.search_->setPlaceholderText(tr("이름·지원 형식 검색")); S.search_->setClearButtonEnabled(true); S.search_->setObjectName("pluginSearch"); Catalog->addWidget(S.search_);
     S.list_ = new QTreeWidget; S.list_->setObjectName("pluginCatalog"); S.list_->setHeaderLabels({tr("처리기 / 지원 형식"), tr("지원 작업")}); S.list_->setRootIsDecorated(false); S.list_->setIndentation(10); S.list_->setUniformRowHeights(false); S.list_->header()->setSectionResizeMode(0, QHeaderView::Stretch); S.list_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents); S.list_->setMinimumWidth(270); Catalog->addWidget(S.list_, 1);
     auto* CatalogButtons = new QHBoxLayout; Catalog->addLayout(CatalogButtons); auto* Add = new QPushButton(tr("추가…")); Add->setObjectName("pluginAdd"); CatalogButtons->addWidget(Add); S.remove_ = new QPushButton(tr("제거")); S.remove_->setObjectName("pluginRemove"); CatalogButtons->addWidget(S.remove_); S.up_ = new QPushButton(tr("위로")); CatalogButtons->addWidget(S.up_); S.down_ = new QPushButton(tr("아래로")); CatalogButtons->addWidget(S.down_);
-    auto* Inspector = new QVBoxLayout; Body->addLayout(Inspector, 4); S.heading_ = new QLabel; S.heading_->setFont(Font); Inspector->addWidget(S.heading_); S.support_ = new QLabel; S.support_->setWordWrap(true); S.support_->setMaximumHeight(54); Inspector->addWidget(S.support_); S.actions_ = new QLabel; Inspector->addWidget(S.actions_); S.status_ = new QLabel; Inspector->addWidget(S.status_);
+    auto* Inspector = new QVBoxLayout; Body->addLayout(Inspector, 4); S.heading_ = new QLabel; auto Font = S.heading_->font(); Font.setPointSize(Font.pointSize() + 3); Font.setBold(true); S.heading_->setFont(Font); Inspector->addWidget(S.heading_); S.support_ = new QLabel; S.support_->setWordWrap(true); S.support_->setMaximumHeight(54); Inspector->addWidget(S.support_); S.actions_ = new QLabel; Inspector->addWidget(S.actions_); S.status_ = new QLabel; Inspector->addWidget(S.status_);
     S.tabs_ = new QTabWidget; S.tabs_->setObjectName("pluginInspectorTabs"); Inspector->addWidget(S.tabs_, 1);
     S.status_->setObjectName("pluginStatus"); S.status_->setWordWrap(true);
     auto* Conditions = new QWidget; S.tabs_->addTab(Conditions, tr("적용 조건")); auto* ConditionLayout = new QVBoxLayout(Conditions); S.enabled_ = new QCheckBox(tr("이 플러그인 사용")); S.enabled_->setObjectName("pluginApplicationEnabled"); ConditionLayout->addWidget(S.enabled_);

@@ -96,6 +96,11 @@ namespace hc::operations
             auto Status = session_->Poll(); if (!Status.HasValue()) return Fail(Status.Failure());
             JobStep Step{commitSent_ ? JobState::Committing : JobState::Running};
             Step.progress_ = JobProgress{Status.Value().bytesDone_, {}, request_.source_ ? request_.source_->name_ : request_.destination_.root_};
+            if (request_.source_) Step.progress_->source_ = storage::Serialize(request_.source_->locator_);
+            Step.progress_->destination_ = storage::Serialize(request_.destination_);
+            Step.progress_->phase_ = commitSent_ ? JobPhase::Verifying
+                : request_.action_ == FileElevationAction::SecurityRestore ? JobPhase::RestoringSecurity
+                : request_.action_ == FileElevationAction::SecurityChange ? JobPhase::ApplyingSecurity : JobPhase::Creating;
             if (Status.Value().readyToCommit_ && !commitSent_)
             {
                 if (Context.committing_)

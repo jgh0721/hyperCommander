@@ -32,6 +32,7 @@ public:
         auto* AutoRows = TabPage(tr("자동 전환"));
         auto* ViewCard = new QGroupBox(tr("크기 · 캡션"), settingsColumn_); SettingsRows->addWidget(ViewCard); auto* ViewRows = new QVBoxLayout(ViewCard);
         ViewRows->setContentsMargins(14, 12, 14, 14);
+        auto* ChoiceGrid = new QGridLayout; ChoiceGrid->setVerticalSpacing(8); ViewRows->addLayout(ChoiceGrid);
         auto* Form = new QFormLayout; Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Form->setVerticalSpacing(8); ViewRows->addLayout(Form);
         // Caption at the left edge, switch at the right edge.
         const auto SwitchRow = [this](QFormLayout* Target, QCheckBox* Check, const QString& Hint) {
@@ -41,22 +42,26 @@ public:
             Line->addStretch(); Check->setAccessibleName(QString(Check->text()).remove('&')); Check->setText({}); fm::style::setSwitch(Check); Line->addWidget(Check);
             Target->addRow(Row);
         };
-        const auto Combo = [this](QFormLayout* Form, const QString& Name, const QString& Label, const QStringList& Items) {
+        QList<QPushButton*> ChoiceButtons;
+        const auto Combo = [this, &ChoiceButtons, ChoiceGrid](QFormLayout* Form, const QString& Name, const QString& Label, const QStringList& Items) {
             auto* Result = new QComboBox(this); Result->setObjectName(Name); Result->addItems(Items);
             if (Name == "hc.settings.thumbMethod") { Form->addRow(Label, Result); return Result; }
             Result->hide(); auto* Choices = new QWidget(this); auto* Buttons = new QHBoxLayout(Choices); Buttons->setContentsMargins(0, 0, 0, 0); Buttons->setSpacing(2);
             auto* Group = new QButtonGroup(Choices);
             for (int I = 0; I < Items.size(); ++I) { const auto Text = Name == "hc.settings.thumbInfo" ? Items[I] : Items[I].section(QStringLiteral(" · "), 0, 0);
-                auto* Button = new QPushButton(Text, Choices); Button->setObjectName(Name + ".choice" + QString::number(I)); Button->setCheckable(true); Button->setChecked(I == 0); Button->setToolTip(Items[I]); Button->setAccessibleName(Label + " · " + Items[I]); Group->addButton(Button, I); Buttons->addWidget(Button); }
+                auto* Button = new QPushButton(Text, Choices); Button->setObjectName(Name + ".choice" + QString::number(I)); Button->setCheckable(true); Button->setChecked(I == 0); Button->setToolTip(Items[I]); Button->setAccessibleName(Label + " · " + Items[I]); Group->addButton(Button, I); Buttons->addWidget(Button); ChoiceButtons.append(Button); }
             QList<QAbstractButton*> Segment; for (auto* Button : Group->buttons()) Segment.append(Button); fm::style::setSegments(Segment); Buttons->addStretch();
             connect(Group, &QButtonGroup::idClicked, Result, &QComboBox::setCurrentIndex);
             connect(Result, &QComboBox::currentIndexChanged, Choices, [Group](int I) { if (auto* Button = Group->button(I)) Button->setChecked(true); });
-            Form->addRow(Label, Choices); return Result;
+            const int Row = ChoiceGrid->rowCount(); ChoiceGrid->addWidget(new QLabel(Label, this), Row, 0); ChoiceGrid->addWidget(Choices, Row, 1); return Result;
         };
         size_ = Combo(Form, "hc.settings.thumbSize", tr("썸네일 크기"), {tr("작게 · 64 px"), tr("보통 · 96 px"), tr("크게 · 160 px"), tr("아주 크게 · 256 px")});
         lines_ = Combo(Form, "hc.settings.thumbLines", tr("이름 줄 수"), {tr("1줄"), tr("2줄"), tr("전체 · 가장 긴 이름에 높이 맞춤")});
         info_ = Combo(Form, "hc.settings.thumbInfo", tr("이름 아래 정보"), {tr("없음"), tr("크기"), tr("날짜"), tr("크기 · 날짜")});
         fit_ = Combo(Form, "hc.settings.thumbFit", tr("이미지 맞춤"), {tr("맞춤 · 전체 이미지"), tr("채움 · 중앙 잘라내기")});
+        // Share one content-derived cell size across all four segmented rows.
+        QSize ChoiceSize; for (auto* Button : ChoiceButtons) ChoiceSize = ChoiceSize.expandedTo(Button->sizeHint());
+        for (auto* Button : ChoiceButtons) Button->setFixedSize(ChoiceSize);
         badges_ = new QCheckBox(tr("파일 종류 배지 표시"), this); badges_->setObjectName("hc.settings.thumbBadges"); SwitchRow(Form, badges_, tr("보통 크기 이상에서"));
         ViewCard->setToolTip(tr("크기: 64 · 96 · 160 · 256 px. 이름 전체는 가장 긴 이름에 맞추고, 채움은 이미지 중앙을 잘라 표시합니다."));
         previewCard_ = new QGroupBox(tr("미리보기"), Body); auto* PreviewRows = new QVBoxLayout(previewCard_); PreviewRows->setContentsMargins(12, 10, 12, 12);

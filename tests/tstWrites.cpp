@@ -806,6 +806,13 @@ private slots:
         auto Job = SubmitFileOperation(Scheduler, Request, Context); QVERIFY(Job.HasValue());
         QTRY_VERIFY(Reader->entered_.load());
         QTRY_VERIFY(Scheduler.Snapshot(Job.Value().id_).Value().progress_.bytesDone_ >= 512);
+        QTRY_VERIFY(Scheduler.Snapshot(Job.Value().id_).Value().progress_.currentBytes_ >= 512);
+        const auto Progress = Scheduler.Snapshot(Job.Value().id_).Value().progress_;
+        QCOMPARE(Progress.currentTotal_.value_or(0), uint64_t(2 * 1024 * 1024));
+        const auto CurrentSource = ParseLocator(Progress.source_); const auto CurrentDestination = ParseLocator(Progress.destination_);
+        QVERIFY(CurrentSource.HasValue() && CurrentDestination.HasValue());
+        QCOMPARE(CurrentSource.Value().root_, Entry.Value().locator_.root_);
+        QCOMPARE(QDir::fromNativeSeparators(QString::fromStdString(CurrentDestination.Value().root_)), Directory.filePath("output/source.bin"));
         if (Paused) { QVERIFY(Scheduler.Pause(Job.Value().id_, true).HasValue()); QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().state_, JobState::Paused); }
         QVERIFY(Scheduler.Cancel(Job.Value().id_).HasValue());
         const bool Stopped = Job.Value().completion_.wait_for(std::chrono::seconds(2)) == std::future_status::ready;

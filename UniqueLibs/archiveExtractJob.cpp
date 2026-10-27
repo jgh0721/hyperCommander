@@ -120,6 +120,7 @@ Result<PreparedJob> PrepareExtract(ExtractRequest Request, OperationContext Cont
         || !QDir::isAbsolutePath(QString::fromStdString(Request.destination_.root_))) return Error{ErrorCategory::InvalidRequest, "invalid-extract-request"};
     PreparedJob Out; Out.request_.operation_ = Context; Out.request_.maxItemResults_ = Context.EnumerationLimit();
     Out.request_.metadata_ = {"파일 압축 해제", Request.sourceRoot_.root_, Request.destination_.root_, Request.separateFolders_ ? "extract; separate-folders" : "extract; shared-folder"};
+    Out.request_.metadata_.kind_ = JobKind::Extract;
     Out.request_.resourceLanes_ = {FileOperationLane(Request.sourceRoot_), FileOperationLane(Request.destination_)};
     Out.task_ = std::make_unique<ProviderInteractionTask>(std::make_unique<ExtractTask>(std::move(Request)), "압축 내용을 준비·해독하는 중…"); return Out;
 }

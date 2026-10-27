@@ -122,7 +122,11 @@ struct Session {
         EntrySnapshot Value;
         Value.id_ = {{"iso"}, Prefix() + std::to_string(Index), IdentityScope::NavigationSession, revision_};
         Value.locator_ = root_;
-        if (Index == RootIndex) { Value.name_ = "/"; Value.directory_ = true; Value.attributes_ = FILE_ATTRIBUTE_DIRECTORY; return Value; }
+        if (Index == RootIndex) {
+            Value.name_ = "/"; Value.directory_ = true; Value.attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+            Value.hints_ = {{"containerKind", "diskImage"}, {"containerBytes", std::to_string(info_.imageBytes_)}};
+            return Value;
+        }
         HcIsoEntry Raw{sizeof(HcIsoEntry)};
         const auto Status = runtime_->entry_(image_, Index, &Raw); if (Status != HC_ISO_OK) return EngineError(Status);
         const std::string Path = Raw.path_;

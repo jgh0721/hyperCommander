@@ -31,7 +31,7 @@ namespace hc::operations
         }
         class MoveTask final : public IJobTask
         {
-            struct Copied { ItemOutcome outcome_; std::size_t index_; bool preserveDirectory_ = false; };
+            struct Copied { ItemOutcome outcome_; std::size_t index_; bool preserveDirectory_ = false; std::string destination_; };
         public:
             MoveTask(MoveOperationRequest Request, std::unique_ptr<IJobTask> Copy) : request_(std::move(Request)), copy_(std::move(Copy)) {}
             JobStep Advance(JobStepContext Context) override
@@ -40,12 +40,13 @@ namespace hc::operations
                 if (phase_ == Phase::Copy)
                 {
                     auto Step = copy_->Advance(Context);
+                    if (Step.progress_) copiedProgress_ = *Step.progress_;
                     if (Step.item_)
                     {
                         if (Step.item_->source_)
                         {
                             if (Step.item_->status_ == ItemOutcome::Status::Completed && Step.item_->destinationCommitted_)
-                                copied_.push_back({*Step.item_, emitted_});
+                                copied_.push_back({*Step.item_, emitted_, false, Step.progress_ ? Step.progress_->destination_ : std::string{}});
                             else preserveParents(Step.item_->source_->locator_);
                         }
                         ++emitted_;
@@ -111,8 +112,13 @@ namespace hc::operations
         private:
             enum class Phase { Copy, PlanRemoval, NativeCheck, NativeRemove, ArchiveCommit, ArchiveReport, PreservedReport };
             static JobStep failed(Error Failure) { JobStep Step{JobState::Failed}; Step.error_ = std::move(Failure); return Step; }
-            static JobStep update(const Copied& Item)
-            { JobStep Step{JobState::Running}; Step.item_ = Item.outcome_; Step.replaceItem_ = Item.index_; return Step; }
+            JobStep update(const Copied& Item)
+            {
+                JobStep Step{JobState::Running}; Step.item_ = Item.outcome_; Step.replaceItem_ = Item.index_;
+                Step.progress_ = copiedProgress_; Step.progress_->phase_ = JobPhase::RemovingSource;
+                if (Item.outcome_.source_) Step.progress_->source_ = Serialize(Item.outcome_.source_->locator_);
+                Step.progress_->destination_ = Item.destination_.empty() ? copiedProgress_.destination_ : Item.destination_; return Step;
+            }
             JobStep removalFailure(Error Failure)
             {
                 auto Step = update(copied_[index_]); Step.next_ = JobState::Failed; Step.error_ = Failure;
@@ -167,6 +173,7 @@ namespace hc::operations
             }
             MoveOperationRequest request_;
             std::unique_ptr<IJobTask> copy_;
+            JobProgress copiedProgress_;
             std::unique_ptr<IArchiveMutationSession> removal_;
             std::vector<Copied> copied_;
             std::set<std::string> preserved_;

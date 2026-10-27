@@ -158,7 +158,9 @@ namespace hc::storage
             {
                 return run<EntrySnapshot>(Context, [At = std::move(At)](WcxProvider& Self, OperationContext Context) -> Result<EntrySnapshot> {
                     auto Valid = Self.mount(Context); if (!Valid.HasValue()) return Valid.Failure();
-                    if (!Self.validLocation(At) || !Self.entries_.contains(At.nesting_.back().entry_)) return Error{ErrorCategory::NotFound, "archive-entry-not-found"};
+                    if (!Self.validLocation(At)) return Error{ErrorCategory::NotFound, "archive-entry-not-found"};
+                    if (At.nesting_.back().entry_ == "/") return Self.rootEntry();
+                    if (!Self.entries_.contains(At.nesting_.back().entry_)) return Error{ErrorCategory::NotFound, "archive-entry-not-found"};
                     return Self.entries_.at(At.nesting_.back().entry_);
                 });
             }
@@ -349,6 +351,14 @@ namespace hc::storage
                 Entry.id_ = {Id(), session_ + Path, IdentityScope::NavigationSession, ResourceRevision{archive_.id_.revision_->token_ + ":" + Path}};
                 return Entry;
             }
+            EntrySnapshot rootEntry() const
+            {
+                auto Entry = makeEntry("/", true); Entry.name_ = "/";
+                Entry.hints_["containerBytes"] = std::to_string(archive_.size_);
+                if (unpackedBytes_) Entry.hints_["unpackedBytes"] = std::to_string(*unpackedBytes_);
+                Entry.hints_["containerKind"] = "archive";
+                return Entry;
+            }
             Result<Unit> mount(OperationContext Context)
             {
                 if (mounted_) { if (bulkPin_) return Unit{}; const auto Fresh = native_->Stat(archive_.id_, Context).get(); return Fresh.HasValue() ? Result<Unit>(Unit{}) : Result<Unit>(Fresh.Failure()); }
@@ -394,10 +404,14 @@ namespace hc::storage
                     });
                     if (!Lease.HasValue()) return Lease.Failure(); containerLease_ = std::move(Lease.Value()); archivePath_ = containerLease_->LocalPath();
                 }
-                entries_.clear(); std::uint64_t Ordinal=0;
+                entries_.clear(); unpackedBytes_.reset(); std::uint64_t Ordinal=0, Unpacked=0; bool SizeKnown=true;
                 const auto Scanned = scan(Context, [&](const hc::plugins::ArchiveHeader& Header, const std::string& Path) -> Result<bool> {
                     if (entries_.size() >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
                     const bool Directory = Header.directory_;
+                    if (!Directory && SizeKnown) {
+                        if (Header.size_ > std::numeric_limits<std::uint64_t>::max() - Unpacked) SizeKnown = false;
+                        else Unpacked += Header.size_;
+                    }
                     if (entries_.contains(Path) && !(Directory && entries_.at(Path).directory_ && entries_.at(Path).hints_.empty()))
                         return Error{ErrorCategory::InvalidRequest, "duplicate-archive-entry"};
                     auto Entry = makeEntry(Path, Directory);
@@ -423,12 +437,18 @@ namespace hc::storage
                     return false;
                 });
                 if (!Scanned.HasValue()) { entries_.clear(); return Scanned.Failure(); }
+                if (SizeKnown) unpackedBytes_ = Unpacked;
                 mounted_ = true; return Unit{};
             }
             Result<EntrySnapshot> stat(const ResourceId& Resource, OperationContext Context)
             {
                 if (Resource.providerId_ != Id() || !Resource.key_.starts_with(session_)) return Error{ErrorCategory::NotFound, "foreign-session"};
                 const auto Valid = mount(Context); if (!Valid.HasValue()) return Valid.Failure();
+                if (Resource.key_.substr(session_.size()) == "/") {
+                    auto Entry = rootEntry();
+                    if (Entry.id_ != Resource) return Error{ErrorCategory::StaleRevision, "revision-changed"};
+                    return Entry;
+                }
                 const auto It = entries_.find(Resource.key_.substr(session_.size()));
                 if (It == entries_.end()) return Error{ErrorCategory::NotFound, "archive-entry-not-found"};
                 if (It->second.id_ != Resource) return Error{ErrorCategory::StaleRevision, "revision-changed"};
@@ -485,6 +505,7 @@ namespace hc::storage
             bool batchRead_ = false, batchUnsupported_ = false, streamUnsupported_ = false;
             std::shared_ptr<hc::plugins::IArchiveReadSession> streamingBatch_;
             bool mounted_ = false;
+            std::optional<std::uint64_t> unpackedBytes_;
             std::recursive_timed_mutex mutex_;
         };
     }
