@@ -12,7 +12,7 @@ class FileNameGlob
 {
 public:
     QString Compile(const QString& Pattern) {
-        tokens_.clear(); literal_.clear(); valid_ = false;
+        tokens_.clear(); literal_.clear(); runs_.clear(); valid_ = false;
         const auto Points = Pattern.toUcs4();
         for (qsizetype I = 0; I < Points.size(); ++I) {
             const auto C = Points[I]; Token T;
@@ -57,23 +57,28 @@ public:
         valid_ = true;
         simple_ = std::all_of(tokens_.cbegin(), tokens_.cend(), [](const auto& T) { return T.kind_ == Literal; });
         if (simple_) literal_ = Pattern;
+        // Star-only patterns ('*.tmp', '~$*', '*draft*') need no DP. A literal
+        // separator keeps the DP: only it knows a star must not cross one.
+        else if (std::all_of(tokens_.cbegin(), tokens_.cend(), [](const auto& T) {
+                return T.kind_ == Star || (T.kind_ == Literal && T.character_ != '/' && T.character_ != '\\'); })) {
+            runs_.emplaceBack();
+            for (const auto& T : tokens_) if (T.kind_ == Star) runs_.emplaceBack(); else runs_.last().append(T.character_);
+        }
         return {};
     }
     bool IsValid() const { return valid_; }
-    bool Matches(const QString& Name) const {
+    bool Matches(QStringView Name) const {
         if (!valid_) return false;
         if (simple_) return Name.compare(literal_, Qt::CaseInsensitive) == 0;
+        if (!runs_.isEmpty()) return matchesRuns(Name);
         // Small arrays keep the common case on the stack, and no state is shared
         // between readers of a compiled rule set.
         QVarLengthArray<quint8, 128> Previous(tokens_.size() + 1), Next(tokens_.size() + 1);
         std::fill(Previous.begin(), Previous.end(), quint8(0));
         Previous[0] = 1;
         for (qsizetype J = 0; J < tokens_.size() && tokens_[J].kind_ == Star; ++J) Previous[J + 1] = 1;
-        for (qsizetype At = 0; At < Name.size(); ++At) {
-            char32_t Point = Name[At].unicode();
-            if (Name[At].isHighSurrogate() && At + 1 < Name.size() && Name[At + 1].isLowSurrogate()) {
-                Point = QChar::surrogateToUcs4(Name[At], Name[At + 1]); ++At;
-            }
+        for (qsizetype At = 0; At < Name.size();) {
+            const char32_t Point = next(Name, At);
             Next[0] = 0;
             for (qsizetype J = 0; J < tokens_.size(); ++J) {
                 const auto& T = tokens_[J];
@@ -102,8 +107,47 @@ private:
         }();
         return Cases;
     }
+    static char32_t fold(char32_t Point) {
+        // ASCII folds by range; the rest goes through the Unicode table.
+        return Point < 128 ? (Point - U'A' < 26u ? Point + 32 : Point) : QChar::toCaseFolded(Point);
+    }
+    // Pairs decode identically in both directions, so boundaries found from
+    // either end of a name agree.
+    static char32_t next(QStringView Name, qsizetype& At) {
+        char32_t Point = Name[At].unicode();
+        if (Name[At].isHighSurrogate() && At + 1 < Name.size() && Name[At + 1].isLowSurrogate()) {
+            Point = QChar::surrogateToUcs4(Name[At], Name[At + 1]); ++At;
+        }
+        ++At; return Point;
+    }
+    static char32_t previous(QStringView Name, qsizetype& At) {
+        char32_t Point = Name[--At].unicode();
+        if (Name[At].isLowSurrogate() && At > 0 && Name[At - 1].isHighSurrogate()) {
+            --At; Point = QChar::surrogateToUcs4(Name[At], Name[At + 1]);
+        }
+        return Point;
+    }
+    bool matchesRuns(QStringView Name) const {
+        // Anchor the outer runs, then take each inner run leftmost: with stars
+        // alone, an earlier placement never prevents a later one.
+        qsizetype Begin = 0, End = Name.size();
+        for (const auto C : runs_.first()) if (Begin >= End || fold(next(Name, Begin)) != C) return false;
+        for (auto It = runs_.last().crbegin(); It != runs_.last().crend(); ++It) if (End <= Begin || fold(previous(Name, End)) != *It) return false;
+        for (qsizetype R = 1; R + 1 < runs_.size(); ++R) {
+            for (;;) {
+                if (Begin >= End) return false;
+                qsizetype At = Begin; bool Hit = true;
+                for (const auto C : runs_[R]) if (At >= End || fold(next(Name, At)) != C) { Hit = false; break; }
+                if (Hit) { Begin = At; break; }
+                next(Name, Begin);
+            }
+        }
+        // No literal can take a separator, so in any placement one would fall
+        // to a star.
+        return !Name.contains(u'/') && !Name.contains(u'\\');
+    }
     static bool accepts(const Token& T, char32_t Point) {
-        if (T.kind_ == Literal) return QChar::toCaseFolded(Point) == T.character_;
+        if (T.kind_ == Literal) return fold(Point) == T.character_;
         if (T.kind_ == Any) return Point != '/' && Point != '\\';
         const char32_t Variants[]{Point, QChar::toLower(Point), QChar::toUpper(Point),
             QChar::toCaseFolded(Point), QChar::toUpper(QChar::toCaseFolded(Point))};
@@ -132,6 +176,9 @@ private:
     }
     QList<Token> tokens_;
     QString literal_;
+    // Folded literal runs between the stars of a star-only pattern; empty
+    // whenever the DP decides.
+    QList<QList<char32_t>> runs_;
     bool valid_ = false, simple_ = false;
 };
 } // namespace hc::text

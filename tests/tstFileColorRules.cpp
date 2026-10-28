@@ -108,6 +108,63 @@ private slots:
             }
         }
     }
+    void globRunsMatchReference()
+    {
+        // Star-only patterns skip the DP; '?' patterns still take it. Both must
+        // agree with an independent DP over case-folded code points.
+        const QString Kelvin = QString(QChar(0x212a)), Smile = QString::fromUcs4(U"😀"), High = QString(QChar(0xd800)), Low = QString(QChar(0xdc00));
+        QStringList Patterns{"*", "**", "*.*", "*.txt", "*.TXT", "~$*", "*draft*", "a*b*c", "ab*ba", "*aa*aa*", "*a*a*a*", "a*", "*a", Kelvin + "*",
+            "*ς", "*Σ*", "ẞ*", "*" + Smile, Smile + "*" + Smile, "*/*", "a/*", "*\\", "*.tar.gz", "*.한글", "?*", "*?", "a?b*", "*?.txt", "*" + High, Low + "*"};
+        QStringList Names{"", "a", "A", "ab", "aba", "abba", "aaa", "aaaa", "abc", "aXbYc", "acb", "x.txt", "X.TXT", "x.txt.bak", "~$doc.docx", "~doc",
+            "my_draft_v2", "DRAFT", "k", "K", Kelvin, "σ", "ς", "Σ", "ß", "ss", "ẞ", Smile, Smile + "x" + Smile, Smile + Smile, "a" + High, Low + "a",
+            High + Low, "x" + High, "a/b", "a\\b", "/", "x.tar.gz", "가.한글", "a.b.c"};
+        QRandomGenerator Random(20261028);
+        const QStringList PatternParts{"a", "A", "b", Kelvin, "*", "*", "?", "/", Smile}, NameParts{"a", "A", "b", "B", "k", Kelvin, "/", ".", Smile, High, Low};
+        const auto Compose = [&](const QStringList& Parts, int Longest) {
+            QString Text; for (int I = int(Random.bounded(Longest + 1)); I > 0; --I) Text += Parts[Random.bounded(int(Parts.size()))];
+            return Text;
+        };
+        for (int I = 0; I < 400; ++I) Patterns.append(Compose(PatternParts, 6));
+        for (int I = 0; I < 200; ++I) Names.append(Compose(NameParts, 8));
+        for (const auto& Pattern : Patterns) {
+            hc::text::FileNameGlob Glob; QVERIFY(Glob.Compile(Pattern).isEmpty());
+            for (const auto& Name : Names)
+                QVERIFY2(Glob.Matches(Name) == referenceGlob(Pattern, Name), qPrintable(QString("pattern=%1 name=%2").arg(Pattern, Name)));
+        }
+    }
+    void suffixMatchesFileInfo()
+    {
+        const QStringList Names{"", ".", "..", "...", "a", "a.", ".a", "..a", "a..", "a..b", "a.b.c", ".bashrc", ".tar.gz", "a/b.c", "a\\b.c",
+            "a.b/c", "a.b\\c", "a.b/", "/a.b", "C:a.txt", "C:", "a:b.c", "a.b:c", "a.txt ", "a. b", " .txt", "file.tar.gz", "\\\\server\\share.x",
+            "가.나다", QString::fromUcs4(U"😀.😀"), QString("a.") + QChar(0xd800), QString(QChar(0xdc00)) + ".b", "a.b::$DATA"};
+        for (const auto& Name : Names) QCOMPARE(FileColorRules::Suffix(Name).toString(), QFileInfo(Name).suffix());
+        FileColorRules Rules; QVERIFY(Rules.Load(document({{"type", "link"}, {"op", "is"}, {"value", "shortcut"}})).isEmpty());
+        QVERIFY(Rules.Matches(FileRuleInput{"a.LNK"}).matched_); QVERIFY(Rules.Matches(FileRuleInput{"a.Url"}).matched_);
+        QVERIFY(!Rules.Matches(FileRuleInput{"a.lnk.txt"}).matched_); QVERIFY(!Rules.Matches(FileRuleInput{"a.lnk", 0x10}).matched_);
+    }
+    void styleComposition()
+    {
+        // Effects outside the six keys never reach a result.
+        const auto Group = [](const QString& Id, const QJsonObject& Font) {
+            QJsonObject G{{"id", Id}, {"name", Id}, {"join", "all"}, {"light", QJsonObject{{"foreground", "#2266AA"}}},
+                {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "txt"}}}}};
+            if (!Font.isEmpty()) G["font"] = Font;
+            return G;
+        };
+        const QJsonArray Groups{Group("plain", {}), Group("first", {{"italic", true}, {"size", 9}}),
+            Group("second", {{"bold", true}, {"italic", false}, {"border", "dot"}}), Group("third", {{"underline", true}, {"bold", false}})};
+        FileColorRules Rules; QVERIFY(Rules.Load({{"version", 3}, {"mode", "first"}, {"groups", QJsonArray{Groups[1]}}}).isEmpty());
+        FileColorRules::EvaluationContext Context;
+        QCOMPARE(Rules.EvaluateStyle(FileRuleInput{"a.txt"}, &Context).font_, (QJsonObject{{"italic", true}}));
+        QVERIFY(Rules.Load({{"version", 3}, {"mode", "merge"}, {"groups", Groups}}).isEmpty());
+        const QJsonObject Expected{{"italic", true}, {"bold", true}, {"border", "dot"}, {"underline", true}};
+        for (int Pass = 0; Pass < 2; ++Pass) QCOMPARE(Rules.EvaluateStyle(FileRuleInput{"a.txt"}, &Context).font_, Expected);
+        const auto Diagnosed = Rules.Evaluate(FileRuleInput{"a.txt"});
+        QCOMPARE(Diagnosed.font_, Expected); QCOMPARE(Diagnosed.groups_, (QStringList{"plain", "first", "second", "third"}));
+        QCOMPARE(Diagnosed.owners_, (QMap<QString, QString>{{"foreground", "plain"}, {"italic", "first"}, {"bold", "second"}, {"border", "second"}, {"underline", "third"}}));
+        QVERIFY(Rules.Load({{"version", 3}, {"mode", "merge"}, {"groups", QJsonArray{Groups[0], Groups[3]}}}).isEmpty());
+        QCOMPARE(Rules.EvaluateStyle(FileRuleInput{"a.txt"}, &Context).font_, (QJsonObject{{"underline", true}, {"bold", false}}));
+    }
     void matchModes_data()
     {
         QTest::addColumn<QString>("Type"); QTest::addColumn<QString>("Syntax"); QTest::addColumn<QString>("Pattern");
@@ -234,7 +291,46 @@ private slots:
         std::sort(Samples.begin(), Samples.end());
         qInfo() << QStringLiteral("10000 rows / 64 groups with extension cache, median ms:") << Samples[2] / 1e6 << QStringLiteral("samples ns:") << Samples;
     }
+    void wildcardBenchmark()
+    {
+        QJsonArray Groups;
+        for (int I = 0; I < 16; ++I) Groups.append(QJsonObject{{"id", QString::number(I)}, {"name", QString::number(I)}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "pattern"}, {"syntax", "wildcard"}, {"op", "matches"}, {"value", QJsonArray{QString("*.ext%1").arg(I)}}}}},
+            {"light", QJsonObject{{"foreground", "#2266AA"}}}, {"font", QJsonObject{{"bold", true}}}});
+        FileColorRules Rules; QVERIFY(Rules.Load({{"version", 3}, {"mode", "first"}, {"groups", Groups}}).isEmpty());
+        QList<FileRuleInput> Inputs;
+        for (int I = 0; I < 10000; ++I) Inputs.append(FileRuleInput{QString("file_%1.ext%2").arg(I).arg(I % 80), 0, 123, true});
+        QList<qint64> Samples;
+        for (int Run = 0; Run < 5; ++Run) {
+            FileColorRules::EvaluationContext Context; int Hits = 0; QElapsedTimer Clock; Clock.start();
+            for (const auto& Input : Inputs) Hits += Rules.EvaluateStyle(Input, &Context).matched_;
+            Samples.append(Clock.nsecsElapsed()); QCOMPARE(Hits, 2000);
+        }
+        std::sort(Samples.begin(), Samples.end());
+        qInfo() << QStringLiteral("10000 rows / 16 wildcard groups with font, median ms:") << Samples[2] / 1e6 << QStringLiteral("samples ns:") << Samples;
+    }
 private:
+    // Literals, '?' and '*' only. Suffix DP: Can[I][J] says Name[I..] matches
+    // Tokens[J..]. Unpaired surrogates in a name stay code points, as in the
+    // matcher; the pattern side goes through toUcs4() like Compile().
+    static bool referenceGlob(const QString& Pattern, const QString& Name) {
+        QList<char32_t> Tokens, Text;
+        for (const auto Point : Pattern.toUcs4())
+            if (Point != '*' || Tokens.isEmpty() || Tokens.last() != '*') Tokens.append(Point == '*' || Point == '?' ? Point : QChar::toCaseFolded(Point));
+        for (qsizetype At = 0; At < Name.size(); ++At) {
+            char32_t Point = Name[At].unicode();
+            if (Name[At].isHighSurrogate() && At + 1 < Name.size() && Name[At + 1].isLowSurrogate()) { Point = QChar::surrogateToUcs4(Name[At], Name[At + 1]); ++At; }
+            Text.append(Point);
+        }
+        const auto Free = [](char32_t Point) { return Point != '/' && Point != '\\'; };
+        std::vector<std::vector<char>> Can(Text.size() + 1, std::vector<char>(Tokens.size() + 1, 0));
+        Can[Text.size()][Tokens.size()] = 1;
+        for (qsizetype I = Text.size(); I >= 0; --I) for (qsizetype J = Tokens.size() - 1; J >= 0; --J) {
+            if (Tokens[J] == '*') Can[I][J] = Can[I][J + 1] || (I < Text.size() && Free(Text[I]) && Can[I + 1][J]);
+            else if (I < Text.size()) Can[I][J] = (Tokens[J] == '?' ? Free(Text[I]) : QChar::toCaseFolded(Text[I]) == Tokens[J]) && Can[I + 1][J + 1];
+        }
+        return Can[0][0];
+    }
     static QJsonObject document(const QJsonObject& Condition) {
         const QJsonObject Group{{"id", "test"}, {"name", "시험"}, {"join", "all"},
             {"conditions", QJsonArray{Condition}}, {"light", QJsonObject{{"foreground", "#2266AA"}}}};

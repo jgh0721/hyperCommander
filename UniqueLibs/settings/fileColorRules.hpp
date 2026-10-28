@@ -84,6 +84,12 @@ public:
         }
         return Result;
     }
+    // QFileInfo::suffix() of a name without building a QFileInfo, which costs
+    // more than every extension condition behind a cache hit.
+    static QStringView Suffix(QStringView Name) {
+        const auto Dot = Name.lastIndexOf(u'.');
+        return Dot < 0 || Dot < Name.lastIndexOf(u'/') || Dot < Name.lastIndexOf(u'\\') ? QStringView{} : Name.sliced(Dot + 1);
+    }
     static QJsonObject Empty() { return {{"version", 1}, {"mode", "first"}, {"groups", QJsonArray{}}}; }
     static bool Supported(const QJsonObject& Document) { return Document["version"] == QJsonValue(1) || Document["version"] == QJsonValue(2) || Document["version"] == QJsonValue(3); }
     static QString Syntax(const QJsonObject& C, int Version = 3) {
@@ -258,7 +264,10 @@ public:
                 continue;
             }
             Group G; G.all_ = Object["join"] == "all"; G.label_ = Object["name"].toString();
-            G.font_ = Object["font"].toObject();
+            const auto Font = Object["font"].toObject();
+            for (qsizetype Bit = 0; Bit < fontKeys().size(); ++Bit) if (Font.contains(fontKeys()[Bit])) {
+                G.fontKeys_ |= quint8(1u << Bit); G.font_.insert(fontKeys()[Bit], Font[fontKeys()[Bit]]);
+            }
             for (int Dark = 0; Dark < 2; ++Dark) {
                 const auto Palette = Colors(Object, Dark);
                 G.foreground_[Dark] = QColor(Palette["foreground"].toString());
@@ -318,30 +327,41 @@ private:
     };
     struct Group {
         QString label_; bool all_ = false; QList<Condition> conditions_;
-        QColor foreground_[2], background_[2]; QJsonObject font_;
+        // Only the effects a result carries, one bit per fontKeys() entry.
+        QColor foreground_[2], background_[2]; QJsonObject font_; quint8 fontKeys_ = 0;
     };
+    static const QList<QLatin1StringView>& fontKeys() {
+        static const QList<QLatin1StringView> Keys{QLatin1StringView("bold"), QLatin1StringView("italic"), QLatin1StringView("underline"),
+            QLatin1StringView("strike"), QLatin1StringView("dim"), QLatin1StringView("border")};
+        return Keys;
+    }
     static const QStringList& typeNames() {
         static const QStringList Names{"extension", "pattern", "folder", "normalization", "attributes", "size", "modified", "link", "rtl"}; return Names;
     }
     static const QStringList& opNames() {
         static const QStringList Names{"in", "notIn", "matches", "notMatches", "contains", "notContains", "is", "any", "all", "gt", "ge", "lt", "le", "eq", "ne", "before", "after", "within"}; return Names;
     }
-    static qint8 textHit(const Condition& C, const QString& Text) {
+    // QString for names, QStringView for suffixes. Taking a view for names too
+    // cost about 5 ns per condition in the evaluation loop.
+    template <typename Subject> static qint8 textHit(const Condition& C, const Subject& Text) {
         bool Hit = false;
         if (C.syntax_ == GlobSyntax) {
             for (const auto& Glob : C.globs_) if (Glob.Matches(Text)) { Hit = true; break; }
         } else if (C.syntax_ == RegexSyntax) {
-            const auto Match = C.regex_.match(Text);
+            const auto Match = C.regex_.matchView(Text);
             if (!Match.isValid()) return 2; // Never negate an execution error.
             Hit = Match.hasMatch();
         } else Hit = Text.contains(C.value_, Qt::CaseInsensitive);
         return Hit != C.negate_;
     }
-    static qint8 conditionHit(const Condition& C, const FileRuleInput& Input, const QString& Ext, bool IsFolder, std::optional<bool>& Decomposed, std::optional<bool>& RtlName) {
+    static qint8 conditionHit(const Condition& C, const FileRuleInput& Input, QStringView Ext, bool IsFolder, std::optional<bool>& Decomposed, std::optional<bool>& RtlName, std::optional<QString>& ListedExt) {
         switch (C.type_) {
         case Extension:
             if (IsFolder) return 0;
-            if (C.syntax_ == LiteralSyntax) return C.extensions_.contains(Ext.isEmpty() ? QStringLiteral("<none>") : Ext.toLower()) != C.negate_;
+            if (C.syntax_ == LiteralSyntax) {
+                if (!ListedExt) ListedExt = Ext.isEmpty() ? QStringLiteral("<none>") : Ext.toString().toLower();
+                return C.extensions_.contains(*ListedExt) != C.negate_;
+            }
             return textHit(C, Ext);
         case Pattern: return textHit(C, Input.name_);
         case Folder: return IsFolder == (C.value_ == "true");
@@ -365,7 +385,7 @@ private:
             if (C.op_ == After) return *Input.modifiedUtcMs_ > C.date_;
             return *Input.modifiedUtcMs_ <= Input.referenceUtcMs_ && quint64(Input.referenceUtcMs_) - quint64(*Input.modifiedUtcMs_) <= C.number_;
         case Link: {
-            const bool Shortcut = !IsFolder && (Ext.compare("lnk", Qt::CaseInsensitive) == 0 || Ext.compare("url", Qt::CaseInsensitive) == 0);
+            const bool Shortcut = !IsFolder && (Ext.compare(u"lnk", Qt::CaseInsensitive) == 0 || Ext.compare(u"url", Qt::CaseInsensitive) == 0);
             const bool Reparse = (Input.attributes_ & 0x400) != 0;
             const bool Known = !Reparse || Input.reparseTag_.value_or(0) != 0;
             const bool Symbolic = Reparse && (Input.reparseTag_ == 0xa000000cu || Input.reparseTag_ == 0xa0000003u);
@@ -380,8 +400,8 @@ private:
         FileRuleResult Result;
         if (Input.name_ == ".." || groups_.isEmpty()) return Result;
         const bool IsFolder = (Input.attributes_ & 0x10) != 0;
-        const auto Ext = needsExtension_ ? QFileInfo(Input.name_).suffix() : QString{};
-        std::optional<bool> Decomposed, RtlName;
+        const auto Ext = needsExtension_ ? Suffix(Input.name_) : QStringView{};
+        std::optional<bool> Decomposed, RtlName; std::optional<QString> ListedExt;
         // Deadlines are independent of Boolean short circuiting. An earlier
         // currently false group may acquire precedence when its date changes.
         if (relativeDates_ && Input.modifiedUtcMs_) for (const auto& G : groups_) for (const auto& C : G.conditions_) {
@@ -396,7 +416,7 @@ private:
             if (Context->revision_ != revision_) { Context->extensions_.clear(); Context->revision_ = revision_; }
             // Keep original spelling: regex inline case-sensitive options can
             // deliberately distinguish suffixes even with default caseless mode.
-            const auto Key = QString(IsFolder ? u'D' : u'F') + Ext;
+            QString Key; Key.reserve(Ext.size() + 1); Key.append(IsFolder ? u'D' : u'F').append(Ext);
             Cached = Context->extensions_.object(Key);
             if (Cached) ++Context->hits_;
             else {
@@ -414,7 +434,7 @@ private:
                 for (const auto& C : G.conditions_) {
                     qint8 Value = Cached && C.cacheIndex_ >= 0 ? Cached->conditions_[C.cacheIndex_] : -1;
                     if (Value < 0) {
-                        Value = conditionHit(C, Input, Ext, IsFolder, Decomposed, RtlName);
+                        Value = conditionHit(C, Input, Ext, IsFolder, Decomposed, RtlName, ListedExt);
                         if (Cached && C.cacheIndex_ >= 0) Cached->conditions_[C.cacheIndex_] = Value;
                     }
                     if (Value == 2) { Failed = true; continue; }
@@ -437,13 +457,16 @@ private:
             if (!Result.background_.isValid() && G.background_[Input.dark_].isValid()) {
                 Result.background_ = G.background_[Input.dark_]; if (Diagnostics) Result.owners_["background"] = G.label_;
             }
-            quint8 Bit = 1;
-            for (const auto* Key : {"bold", "italic", "underline", "strike", "dim", "border"}) {
-                if (!(FontOwners & Bit) && G.font_.contains(Key)) {
-                    FontOwners |= Bit; Result.font_[Key] = G.font_[Key]; if (Diagnostics) Result.owners_[Key] = G.label_;
-                }
-                Bit <<= 1;
+            // The first group with effects lends its object unchanged, which is
+            // the whole answer in first mode; later groups add only unowned keys.
+            const quint8 Fresh = quint8(G.fontKeys_ & ~FontOwners);
+            if (!Fresh) continue;
+            if (!FontOwners) Result.font_ = G.font_;
+            for (qsizetype Bit = 0; Bit < fontKeys().size(); ++Bit) if (Fresh & (1u << Bit)) {
+                if (FontOwners) Result.font_.insert(fontKeys()[Bit], G.font_[fontKeys()[Bit]]);
+                if (Diagnostics) Result.owners_[QString(fontKeys()[Bit])] = G.label_;
             }
+            FontOwners |= Fresh;
         }
         return Result;
     }
