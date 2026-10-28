@@ -482,9 +482,8 @@ void QtColumnProfileEditor::SetContextFields(QVector<FieldDefinition> Fields)
 void QtColumnProfileEditor::Load(const ColumnProfile& Profile, const QJsonObject& Library, bool Writable)
 {
     draft_ = Profile; library_ = Library; writable_ = Writable; dirty_ = false;
-    // Missing shipped presets are offered without replacing saved definitions.
-    for (const auto& BuiltIn : {DefaultProfile(), ReferenceProfile(), ReferenceProfile(true)})
-        if (!library_.contains(IdText(BuiltIn.id_))) library_[IdText(BuiltIn.id_)] = EncodeProfile(BuiltIn);
+    // New libraries offer Details only; saved reference/custom sets stay intact.
+    if (!library_.contains(IdText(BuiltInProfileId))) library_[IdText(BuiltInProfileId)] = EncodeProfile(DefaultProfile());
     { const QSignalBlocker Block(scope_); scope_->setCurrentIndex(0); }
     library_[IdText(draft_.id_)] = EncodeProfile(draft_);
     refreshProfiles(); rebuildList(0); setEnabled(Writable);

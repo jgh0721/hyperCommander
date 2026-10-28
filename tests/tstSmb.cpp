@@ -294,6 +294,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "firstRunProductDefaultsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobInteractionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
@@ -309,6 +310,52 @@ private slots:
     }
 
 
+
+    void firstRunProductDefaultsUi()
+    {
+        using namespace hc::settings;
+        using namespace hc::columns;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace(); auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
+            emit Colors->sigColorSchemeChanged(OriginalScheme); TyStCommandMgr::GetInstance()->Refresh(); main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Temp; Repository Fresh(Temp.path()); QVERIFY(Settings.Replace(Fresh.Object()));
+        Colors->Refresh(); TyStCommandMgr::GetInstance()->Refresh();
+        auto* View = qobject_cast<CGridView*>(panels_.front()->GetFocusView(panels_.front()->CurrentTabIndex())); QVERIFY(View);
+        QVERIFY(View->ApplyColumnProfile(DefaultProfile()));
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.show(); QTest::qWait(80); Dialog.LoadSettings();
+        QCOMPARE(Dialog.findChild<QComboBox*>("hc.settings.theme")->currentIndex(), 1);
+        QCOMPARE(Dialog.findChild<QComboBox*>("hc.keys.preset")->currentIndex(), 2);
+        for (const auto& Pair : {qMakePair("hc.settings.inverseCursor", false), qMakePair("hc.settings.inverseSelection", true),
+                qMakePair("hc.settings.recycleDefault", false), qMakePair("hc.settings.deleteWhileListing", true),
+                qMakePair("hc.settings.renameInDialog", false), qMakePair("hc.settings.copyStreams", true)}) {
+            auto* Check = Dialog.findChild<QCheckBox*>(Pair.first); QVERIFY(Check); QCOMPARE(Check->isChecked(), Pair.second);
+        }
+        QVERIFY(Dialog.findChild<QRadioButton*>("radioButton_7")->isChecked());
+        QVERIFY(Dialog.findChild<QRadioButton*>("radioButton_2")->isChecked());
+        auto* Commands = Dialog.findChild<QTableWidget*>("hc.keys.commands"); QVERIFY(Commands);
+        const QMap<QString, QString> Requested{{"Ctrl+C", "hc.file.copy"}, {"F2", "hc.file.rename"},
+            {"Ctrl+R", "hc.file.rename"}, {"Ctrl+M", "hc.file.move"}, {"Ctrl+Alt+R", "hc.file.batchRename"},
+            {"Ctrl+K", "hc.file.mkdir"}, {"Ctrl+A", "hc.archive.create"}, {"Ctrl+X", "hc.archive.extract"}};
+        for (auto It = Requested.cbegin(); It != Requested.cend(); ++It) {
+            int Row = 0; while (Row < Commands->rowCount() && Commands->item(Row, 1)->text() != It.value()) ++Row;
+            QVERIFY(Row < Commands->rowCount());
+            QVERIFY(Commands->item(Row, 3)->text().contains(It.key())); QVERIFY(Commands->item(Row, 4)->text().contains(It.key()));
+        }
+        auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); QVERIFY(Editor);
+        QCOMPARE(Editor->Library().size(), 1); QCOMPARE(Editor->Profile().columns_[1].format_.size_, SizeFormat::Adaptive);
+        auto Saved = DefaultProfile(); Saved.columns_[1].format_.size_ = SizeFormat::Bytes;
+        const auto Reference = ReferenceProfile(true);
+        Editor->Load(Saved, {{IdText(Saved.id_), EncodeProfile(Saved)}, {IdText(Reference.id_), EncodeProfile(Reference)}});
+        QCOMPARE(Editor->Library().size(), 2); QCOMPARE(Editor->Library()[IdText(Reference.id_)], QJsonValue(EncodeProfile(Reference)));
+        QCOMPARE(Editor->Profile().columns_[1].format_.size_, SizeFormat::Bytes);
+        const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+        if (!Artifacts.isEmpty()) QVERIFY(Dialog.grab().save(QDir(Artifacts).filePath("fresh-install-defaults.png")));
+        Dialog.reject();
+    }
 
     void keyboardCommandColumnsUi()
     {

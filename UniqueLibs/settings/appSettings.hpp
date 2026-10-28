@@ -307,7 +307,7 @@ protected:
     {
         const auto Report = [&](const QString& Path) { if (!Issues.contains(Path)) Issues.append(Path); };
         auto General = Document["general"].toObject();
-        if (!QStringList{"legacy", "prototype"}.contains(General["shortcutPreset"].toString())) { General["shortcutPreset"] = "legacy"; Report("general.shortcutPreset"); }
+        if (!hc::defaults::ShortcutPresetIds().contains(General["shortcutPreset"].toString())) { General["shortcutPreset"] = "legacy"; Report("general.shortcutPreset"); }
         for (const auto* Key : {"sizeInHeader", "sizeInFooter"})
             if (!SizeFormats().contains(General[Key].toString())) { General[Key] = "bytes"; Report(QString("general.") + Key); }
         if (!QStringList{"all", "associated", "standard", "none"}.contains(General["iconMode"].toString())) { General["iconMode"] = "standard"; Report("general.iconMode"); }

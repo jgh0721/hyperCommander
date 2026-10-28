@@ -19,11 +19,12 @@ public:
         search_ = new fm::ui::SearchField(Page); search_->setObjectName("hc.keys.search"); search_->setPlaceholderText(tr("명령 또는 키 찾기")); Filter->addWidget(search_, 1);
         scope_ = new QComboBox(Page); scope_->setObjectName("hc.keys.scope"); scope_->addItems({tr("전체"), tr("파일 작업"), tr("패널·탭"), tr("탐색"), tr("창·설정"), tr("명령행 입력")}); Filter->addWidget(scope_);
         auto* PresetLabel = new QLabel(tr("기본 키:"), Page); Filter->addWidget(PresetLabel);
-        preset_ = new QComboBox(Page); preset_->setObjectName("hc.keys.preset"); preset_->addItems({tr("기존 기본값"), tr("파일 작업 기본값")}); Filter->addWidget(preset_); PresetLabel->setBuddy(preset_);
+        preset_ = new QComboBox(Page); preset_->setObjectName("hc.keys.preset"); preset_->addItems({tr("기존 기본값"), tr("파일 작업 기본값"), tr("제품 기본값")}); Filter->addWidget(preset_); PresetLabel->setBuddy(preset_);
         preset_->setAccessibleName(tr("기본 단축키 구성"));
         preset_->setToolTip(tr("기본값 열에 표시할 단축키 구성을 선택합니다. 내장 단축키 사용이 켜져 있으면 현재 키에도 반영하며, 사용자 지정 키가 우선합니다.\n초기화 버튼을 누르면 사용자 지정을 지우고 선택한 기본값으로 되돌립니다.\n변경은 적용/확인으로 저장하고 취소하면 복원합니다."));
         preset_->setItemData(0, tr("기존 단축키 구성 · F5 새로 고침"), Qt::ToolTipRole);
         preset_->setItemData(1, tr("파일 작업 구성 · F5 새로 고침 · F6 이동 · F7 새 폴더 · F8 삭제 · Ctrl+R 이름 변경"), Qt::ToolTipRole);
+        preset_->setItemData(2, tr("제품 기본값 · Ctrl+C 복사 · F2/Ctrl+R 이름 변경 · Ctrl+M 이동 · Ctrl+Alt+R 다중 이름 변경 · Ctrl+K 새 폴더 · Ctrl+A 압축 · Ctrl+X 압축 해제"), Qt::ToolTipRole);
         table_ = new QTableWidget(Page); table_->setObjectName("hc.keys.commands"); table_->setColumnCount(ColumnCount); table_->setHorizontalHeaderLabels({tr("범위"), tr("명령"), tr("설명"), tr("현재 키"), tr("기본값")});
         table_->setItemDelegateForColumn(CurrentKeyColumn, new fm::ui::KeySequenceDelegate(false, table_)); table_->setItemDelegateForColumn(DefaultKeyColumn, new fm::ui::KeySequenceDelegate(true, table_));
         table_->setSelectionBehavior(QAbstractItemView::SelectRows); table_->setSelectionMode(QAbstractItemView::SingleSelection); table_->setEditTriggers(QAbstractItemView::NoEditTriggers); table_->verticalHeader()->hide();
@@ -63,11 +64,11 @@ public:
         connect(key_, &fm::ui::KeyCaptureEdit::cleared, this, [this] { updateConflict(); });
         connect(assign_, &QPushButton::clicked, this, [this] { assign(false); }); connect(reassign_, &QPushButton::clicked, this, [this] { assign(true); });
         connect(Clear, &QPushButton::clicked, this, [this] { auto* M = TyStCommandMgr::GetInstance(); const auto Id = selector_->Command(); for (const auto& K : CommandKeys(M->RetrieveForCommand(Id), Id)) M->DelShortcut(K[0], Id); Refresh(); });
-        connect(preset_, &QComboBox::currentIndexChanged, this, [this](int I) { if (loading_) return; auto G = settings::AppSettings().Read(settings::Section::General).toObject(); G["shortcutPreset"] = I ? "prototype" : "legacy"; settings::AppSettings().Put(settings::Section::General, G); Refresh(); });
+        connect(preset_, &QComboBox::currentIndexChanged, this, [this](int I) { if (loading_) return; auto G = settings::AppSettings().Read(settings::Section::General).toObject(); G["shortcutPreset"] = hc::defaults::ShortcutPresetIds().value(I, "legacy"); settings::AppSettings().Put(settings::Section::General, G); Refresh(); });
         connect(Reset, &QPushButton::clicked, this, [this] { if (hc::ui::MessageDialog::question(this, tr("단축키 초기화"), tr("사용자 키를 지우고 선택한 기본값으로 되돌리시겠습니까?")) != QMessageBox::Yes) return; settings::AppSettings().Put(settings::Section::Shortcuts, QJsonObject{}); Refresh(); });
         Load();
     }
-    void Load() { loading_ = true; const auto G = settings::AppSettings().Read(settings::Section::General).toObject(); preset_->setCurrentIndex(G["shortcutPreset"] == "prototype" ? 1 : 0); const auto Ids = FunctionCommands(G); for (int I = 0; I < functions_.size(); ++I) { functions_[I]->SetCommand(Ids[I]); captions_[I]->setText((I < G["functionCaptions"].toArray().size() ? G["functionCaptions"].toArray()[I].toString() : QString{})); } loading_ = false; Refresh(); }
+    void Load() { loading_ = true; const auto G = settings::AppSettings().Read(settings::Section::General).toObject(); preset_->setCurrentIndex(qMax(0, hc::defaults::ShortcutPresetIds().indexOf(G["shortcutPreset"].toString()))); const auto Ids = FunctionCommands(G); for (int I = 0; I < functions_.size(); ++I) { functions_[I]->SetCommand(Ids[I]); captions_[I]->setText((I < G["functionCaptions"].toArray().size() ? G["functionCaptions"].toArray()[I].toString() : QString{})); } loading_ = false; Refresh(); }
     bool SaveFunctions(QJsonObject& G) { QJsonArray Items; for (auto* C : functions_) { if (FindCommand(C->Command()).Name.isEmpty()) { conflict_->setText(tr("기능 막대에 등록되지 않은 명령이 있습니다.")); return false; } Items.append(C->Command()); } G["functionCommands"] = Items; QJsonArray Captions; for (auto* Caption : captions_) Captions.append(Caption->text()); G["functionCaptions"] = Captions; return true; }
     void Refresh() {
         auto* M = TyStCommandMgr::GetInstance(); M->Refresh();

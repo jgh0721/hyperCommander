@@ -268,7 +268,7 @@ void QMainOpts::LoadSettings()
         else if (auto* Text = findChild<QLineEdit*>(Name)) Text->setText(It.value().toString());
     }
     if (auto* Preset = findChild<QComboBox*>("hc.settings.shortcutPreset")) {
-        const QSignalBlocker Block(Preset); Preset->setCurrentIndex(General["shortcutPreset"].toString("legacy") == "prototype" ? 1 : 0);
+        const QSignalBlocker Block(Preset); Preset->setCurrentIndex(qMax(0, hc::defaults::ShortcutPresetIds().indexOf(General["shortcutPreset"].toString("legacy"))));
     }
     StColorSchemeMgr->Refresh();
     TyStFileSetMgr::GetInstance()->Refresh();
@@ -1113,13 +1113,13 @@ void QMainOpts::initializeDesignPages()
     ui.keySequenceEdit->setMaximumSequenceLength(1);
     auto* KeyOptions = new QWidget(Keyboard); auto* KeyForm = new QFormLayout(KeyOptions);
     auto* Preset = new QComboBox(KeyOptions); Preset->setObjectName("hc.settings.shortcutPreset");
-    Preset->addItems({tr("기존 기본값 (F5 새로 고침)"), tr("파일 작업 기본값 (F5 새로 고침 · F6 이동 · F7 새 폴더 · F8 삭제)")});
+    Preset->addItems({tr("기존 기본값 (F5 새로 고침)"), tr("파일 작업 기본값 (F5 새로 고침 · F6 이동 · F7 새 폴더 · F8 삭제)"), tr("제품 기본값 (Ctrl+C 복사 · Ctrl+M 이동 · Ctrl+K 새 폴더)")});
     KeyForm->addRow(tr("기본 단축키"), Preset);
     auto* ResetKeys = new QPushButton(tr("선택한 기본값으로 단축키 초기화"), KeyOptions); ResetKeys->setObjectName("hc.settings.resetShortcuts"); KeyForm->addRow(ResetKeys);
     auto* KeyHelp = new QLabel(tr("사용자가 지정한 키는 기본값보다 우선합니다. 변경 내용은 적용/확인으로 저장하고, 취소하면 되돌립니다.\n기능바와 메뉴에는 현재 연결된 키가 표시됩니다."), KeyOptions); KeyHelp->setWordWrap(true); KeyForm->addRow(KeyHelp);
     if (auto* Layout = qobject_cast<QVBoxLayout*>(Keyboard->layout())) Layout->insertWidget(0, KeyOptions); else Keyboard->layout()->addWidget(KeyOptions);
     connect(Preset, &QComboBox::currentIndexChanged, this, [this](int Index) {
-        auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject(); General["shortcutPreset"] = Index == 1 ? "prototype" : "legacy";
+        auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject(); General["shortcutPreset"] = hc::defaults::ShortcutPresetIds().value(Index, "legacy");
         hc::settings::AppSettings().Put(hc::settings::Section::General, General); RefreshShortcuts();
     });
     connect(ResetKeys, &QPushButton::clicked, this, [this] {

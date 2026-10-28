@@ -16,6 +16,17 @@ class ColumnTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void detailsDefaultUsesAutomaticSizeUnits()
+    {
+        using namespace hc::columns;
+        auto Profile = DefaultProfile();
+        const auto& Size = Profile.columns_[1];
+        QCOMPARE(Size.fieldId_, QString("file.size")); QCOMPARE(Size.format_.size_, SizeFormat::Adaptive);
+        QVERIFY(Format(CellValue::Ready(quint64(1024 * 1024)), Size.format_).contains("MiB"));
+        Profile.columns_[1].format_.size_ = SizeFormat::Bytes;
+        const auto Stored = EncodeProfile(Profile); const auto Loaded = DecodeProfile(Stored); QVERIFY(Loaded);
+        QCOMPARE(Loaded->columns_[1].format_.size_, SizeFormat::Bytes); QCOMPARE(EncodeProfile(*Loaded), Stored);
+    }
     void fitColumnsToPane()
     {
         const std::vector<ColumnWidthAllocation> Columns{{{460, 200, 1000000}, false},

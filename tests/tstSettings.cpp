@@ -9,6 +9,54 @@ private:
     static QByteArray Bytes(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static bool Write(const QString& Path, const QByteArray& Data) { QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write(Data) == Data.size(); }
 private slots:
+    void freshInstallationPreferences()
+    {
+        QTemporaryDir Temp; Repository Fresh(Temp.path());
+        const auto General = Fresh.Read(Section::General).toObject();
+        QCOMPARE(General["shortcutPreset"].toString(), QString("product"));
+        QCOMPARE(General["themeMode"].toString(), QString("dark"));
+        QCOMPARE(General["iconMode"].toString(), QString("all"));
+        QCOMPARE(General["directoryStyle"].toString(), QString("brackets"));
+        const auto Appearance = Fresh.Read(Section::Appearance).toObject();
+        QCOMPARE(Appearance["selected"].toString(), QString::fromUtf8("기본 다크"));
+        for (const auto& Value : Appearance["schemes"].toObject()) {
+            const auto Scheme = Value.toObject();
+            QCOMPARE(Scheme["inverseCursor"], QJsonValue(false));
+            QCOMPARE(Scheme["inverseSelection"], QJsonValue(true));
+        }
+        const auto Options = Fresh.Read(Section::Options).toObject();
+        QCOMPARE(Options["deleteToRecycle"], QJsonValue(false));
+        QCOMPARE(Options["deleteWhileListing"], QJsonValue(true));
+        QCOMPARE(Options["renameInDialog"], QJsonValue(false));
+        QCOMPARE(Options["copyStreams"], QJsonValue(true));
+        bool Hidden = false;
+        for (const auto& Value : Options["fileColorRules"].toObject()["groups"].toArray()) {
+            const auto Group = Value.toObject();
+            if (Group["id"] != "default.hidden") continue;
+            Hidden = true; QCOMPARE(Group["font"].toObject()["dim"], QJsonValue(true));
+        }
+        QVERIFY(Hidden); QVERIFY(!QFileInfo::exists(Fresh.FileName()));
+        QVERIFY(Fresh.Commit()); Repository Reload(Temp.path()); QCOMPARE(Reload.Object(), Fresh.Object());
+    }
+    void existingInstallationPreferencesStayStable()
+    {
+        QTemporaryDir Temp;
+        auto Original = hc::defaults::Settings(true);
+        auto General = Original["general"].toObject(); General["shortcutPreset"] = "prototype"; Original["general"] = General;
+        Original["shortcuts"] = QJsonObject{{"Ctrl+M", "hc.file.batchRename"}, {"F2", QJsonValue::Null}};
+        const auto Before = QJsonDocument(Original).toJson();
+        const auto Path = QDir(Temp.path()).filePath("settings.json"); QVERIFY(Write(Path, Before));
+        Repository Existing(Temp.path());
+        QCOMPARE(Existing.Read(Section::General).toObject(), General);
+        QCOMPARE(Existing.Read(Section::Appearance).toObject(), Original["appearance"].toObject());
+        QCOMPARE(Existing.Read(Section::Shortcuts).toObject(), Original["shortcuts"].toObject());
+        const auto Options = Existing.Read(Section::Options).toObject();
+        QCOMPARE(Options["deleteToRecycle"], QJsonValue(true));
+        QCOMPARE(Options["renameInDialog"], QJsonValue(true));
+        QCOMPARE(Options["copyStreams"], QJsonValue(false));
+        QVERIFY(Options["fileColorRules"].toObject()["groups"].toArray().isEmpty());
+        QCOMPARE(Bytes(Path), Before);
+    }
     void updateCheckSchedule()
     {
         const auto Now = QDateTime::fromString("2026-10-27T12:00:00Z", Qt::ISODate);
@@ -215,7 +263,7 @@ private slots:
         QCOMPARE(Appearance, BuiltInAppearance());
         QCOMPARE(Appearance["schemes"].toObject().size(), 2);
         QVERIFY(!QFileInfo::exists(Settings.FileName())); QCOMPARE(Bytes(Temp.filePath("HyperCommander.ini")), Ini);
-        QCOMPARE(Settings.Read(Section::General).toObject()["shortcutPreset"].toString(), QString("prototype"));
+        QCOMPARE(Settings.Read(Section::General).toObject()["shortcutPreset"].toString(), QString(hc::defaults::FreshShortcutPreset));
         QVERIFY(Settings.Commit()); Repository Reload(Temp.path()); QCOMPARE(Reload.Object(), Settings.Object());
     }
     void nativeObjectsAndUnicodeRoundTrip()

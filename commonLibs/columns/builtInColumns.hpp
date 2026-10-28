@@ -60,6 +60,7 @@ namespace hc::columns
             Column.fieldId_ = Fields[Index].id_;
             Column.title_ = Index == 0 ? QObject::tr("이름") : Index == 7 ? QObject::tr("종류") : Fields[Index].title_;
             Column.alignment_ = Index == 1 ? Qt::AlignRight : Index == 2 || Index == 3 || Index == 4 ? Qt::AlignCenter : Qt::AlignLeft;
+            if (Index == 1) Column.format_.size_ = SizeFormat::Adaptive;
             hc::view::ColumnWidthPolicy Width;
             if (Index < 5) Width = {hc::view::WidthUnit::Percent, hc::view::WidthMode::Flexible,
                 Index == 0 ? 46.0 : Index == 1 ? 15.0 : Index == 3 ? 9.0 : 30.0};

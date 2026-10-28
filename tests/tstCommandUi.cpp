@@ -327,11 +327,12 @@ private slots:
     }
     void renameSelectionAndDefaults()
     {
-        for (const auto& Preset : {QString("legacy"), QString("prototype")}) {
+        for (const auto& Preset : hc::defaults::ShortcutPresetIds()) {
             const auto Shortcuts = EffectiveShortcuts({{"shortcutPreset", Preset}}, {});
             QCOMPARE(CommandId(Shortcuts.value(QKeyCombination(Qt::Key_F2))), QString("hc.file.rename"));
         }
-        QCOMPARE(hc::defaults::Options()["renameInDialog"].toBool(), true);
+        QCOMPARE(hc::defaults::Options()["renameInDialog"].toBool(), false);
+        QCOMPARE(hc::defaults::Options(true)["renameInDialog"].toBool(), true);
         QCOMPARE(hc::defaults::Options()["renameSelectExtension"].toBool(), false);
         QLineEdit Input;
         const QList<QPair<QString, QString>> Names{{"report.tar.gz", "report.tar"}, {"이름.자료.txt", "이름.자료"}, {"README", "README"}, {".gitignore", ".gitignore"}};
@@ -428,13 +429,22 @@ private slots:
         hc::settings::Repository New(NewDirectory.path());
         QVERIFY(!New.Editing()); QVERIFY(!New.Exists());
         const auto General = New.Read(hc::settings::Section::General).toObject();
-        QCOMPARE(General["shortcutPreset"].toString(), "prototype");
+        QCOMPARE(General["shortcutPreset"].toString(), "product");
         const auto Values = EffectiveShortcuts(General, {});
+        const QMap<QString, QString> Requested{{"Ctrl+C", "hc.file.copy"}, {"F2", "hc.file.rename"},
+            {"Ctrl+R", "hc.file.rename"}, {"Ctrl+M", "hc.file.move"}, {"Ctrl+Alt+R", "hc.file.batchRename"},
+            {"Ctrl+K", "hc.file.mkdir"}, {"Ctrl+A", "hc.archive.create"}, {"Ctrl+X", "hc.archive.extract"}};
+        for (auto It = Requested.cbegin(); It != Requested.cend(); ++It)
+            QCOMPARE(CommandId(Values.value(QKeySequence::fromString(It.key(), QKeySequence::PortableText)[0])), It.value());
         QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F5))), "hc.navigate.refresh");
-        QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F6))), "hc.file.move");
-        QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F7))), "hc.file.mkdir");
-        QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F8))), "hc.file.delete");
-        QCOMPARE(CommandKeys(Values, "hc.file.batchRename").first().toString(QKeySequence::PortableText), "Ctrl+M");
+        const auto Prototype = EffectiveShortcuts({{"shortcutPreset", "prototype"}}, {});
+        QCOMPARE(CommandId(Prototype.value(QKeyCombination(Qt::Key_F6))), "hc.file.move");
+        QCOMPARE(CommandId(Prototype.value(QKeyCombination(Qt::Key_F7))), "hc.file.mkdir");
+        QCOMPARE(CommandId(Prototype.value(QKeyCombination(Qt::Key_F8))), "hc.file.delete");
+        QCOMPARE(CommandKeys(Prototype, "hc.file.batchRename").first().toString(QKeySequence::PortableText), "Ctrl+M");
+        const auto UserKeys = EffectiveShortcuts(General, {{"Ctrl+C", QJsonValue::Null}, {"Ctrl+M", "hc.file.batchRename"}});
+        QVERIFY(!UserKeys.contains(QKeySequence("Ctrl+C")[0]));
+        QCOMPARE(CommandId(UserKeys.value(QKeySequence("Ctrl+M")[0])), QString("hc.file.batchRename"));
         QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::ControlModifier, Qt::Key_F5))), "hc.navigate.forceRefresh");
         const auto RefreshKeys = EffectiveShortcuts(General, {{"Ctrl+R", "hc.file.rename"}, {"F5", "hc.navigate.refresh"}, {"Shift+F5", "hc.navigate.forceRefresh"}});
         QCOMPARE(CommandId(RefreshKeys.value(QKeyCombination(Qt::ControlModifier, Qt::Key_R))), "hc.file.rename");
@@ -449,7 +459,7 @@ private slots:
         const QJsonObject Overrides{{"F5", "cm_RereadSource"}, {"Ctrl+Alt+C", "hc.file.copy"}, {"F8", QJsonValue::Null}};
         const auto Custom = EffectiveShortcuts(General, Overrides);
         QCOMPARE(CommandId(Custom.value(QKeyCombination(Qt::Key_F5))), "hc.navigate.refresh");
-        QCOMPARE(CommandKeys(Custom, "cm_CopyOtherPanel").first().toString(QKeySequence::PortableText), "Ctrl+Alt+C");
+        QVERIFY(CommandKeys(Custom, "cm_CopyOtherPanel").contains(QKeySequence("Ctrl+Alt+C")));
         QVERIFY(!Custom.contains(QKeyCombination(Qt::Key_F8)));
         QCOMPARE(FindCommand("HC.FILE.COPY").Name, QLatin1String("hc.file.copy"));
         QCOMPARE(CommandId("cm_MultiRenameFiles"), "hc.file.batchRename");

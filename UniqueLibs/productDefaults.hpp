@@ -365,8 +365,9 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
 namespace hc::defaults
 {
     // 신규 설치용 키 배치와 이전 설치에서 빠진 필드의 호환 기본값.
-    inline constexpr auto FreshShortcutPreset    = "prototype";
+    inline constexpr auto FreshShortcutPreset    = "product";
     inline constexpr auto ExistingShortcutPreset = "legacy";
+    inline QStringList ShortcutPresetIds() { return { "legacy", "prototype", "product" }; }
 
     // 구식 ID는 저장된 설정·메뉴를 읽는 호환 별칭으로만 사용한다.
     inline QHash<QString, QString> CommandAliases()
@@ -547,6 +548,16 @@ namespace hc::defaults
     // 빈 명령 ID는 해당 키 해제. 사용자 지정 단축키는 이 프리셋 위에 적용한다.
     inline QHash<QKeyCombination, QString> ShortcutPresetChanges( const QString& Preset )
     {
+        // Keep saved legacy/prototype bindings stable when fresh-install keys change.
+        if( Preset == "product" )
+            return { { QKeyCombination( Qt::ControlModifier, Qt::Key_C ), "hc.file.copy" },
+                     { QKeyCombination( Qt::Key_F2 ), "hc.file.rename" },
+                     { QKeyCombination( Qt::ControlModifier, Qt::Key_R ), "hc.file.rename" },
+                     { QKeyCombination( Qt::ControlModifier, Qt::Key_M ), "hc.file.move" },
+                     { QKeyCombination( Qt::ControlModifier | Qt::AltModifier, Qt::Key_R ), "hc.file.batchRename" },
+                     { QKeyCombination( Qt::ControlModifier, Qt::Key_K ), "hc.file.mkdir" },
+                     { QKeyCombination( Qt::ControlModifier, Qt::Key_A ), "hc.archive.create" },
+                     { QKeyCombination( Qt::ControlModifier, Qt::Key_X ), "hc.archive.extract" } };
         if( Preset != "prototype" )
             return {};
         return { { QKeyCombination( Qt::ControlModifier, Qt::Key_C ), {} },
@@ -758,7 +769,7 @@ namespace hc::defaults
              Colors( "#FF8A80", "#3A1E1B" ),
              Bold );
         // 다음 다섯 그룹은 글자색·굵게·기울임·배경 중 하나만 써서 종류 색과 함께 보인다.
-        Add( "hidden", QObject::tr( "숨김·시스템" ), { C( "attributes", "any", "6" ) }, Colors( "#6C6961" ), Colors( "#97948B" ) );
+        Add( "hidden", QObject::tr( "숨김·시스템" ), { C( "attributes", "any", "6" ) }, Colors( "#6C6961" ), Colors( "#97948B" ), { { "dim", true } } );
         Add( "recent", QObject::tr( "최근 변경" ), { C( "modified", "within", "24", "hours" ) }, {}, {}, Bold );
         Add( "link", QObject::tr( "링크·바로가기" ), { C( "link", "is", "any" ) }, {}, {}, Italic );
         // 오프라인(0x1000) · 열 때 회수(0x40000) · 읽을 때 회수(0x400000). OneDrive 등의 자리표시 파일이다.
@@ -907,7 +918,7 @@ namespace hc::defaults
         Q_UNUSED( Dark );
         return {};
     }
-    inline QJsonObject Appearance()
+    inline QJsonObject Appearance( bool ExistingInstallation = false )
     {
         QJsonObject Schemes;
         for( const bool Dark : { false, true } )
@@ -917,7 +928,7 @@ namespace hc::defaults
             Schemes[ Dark ? QStringLiteral( "기본 다크" ) : QStringLiteral( "기본 라이트" ) ] =
                 QJsonObject{ { "dark", Dark },
                              { "inverseCursor",           false },
-                             { "inverseSelection",        false },
+                             { "inverseSelection",        !ExistingInstallation },
                              { "fonts",                   QJsonObject{ { "menu", Font }, { "dialog", Font }, { "list", ListFont } } },
                              { "colors",
                                QJsonObject{ { "dialogText", Dark ? "#E8EDF5" : "#20242B" },
@@ -928,7 +939,7 @@ namespace hc::defaults
                                             { "listSelection",           Dark ? "#405575" : "#C9D9F1" } } },
                              { "fileSets",                LegacyFileSetColors( Dark ) } };
         }
-        return { { "selected", QStringLiteral( "기본 라이트" ) }, { "schemes", Schemes } };
+        return { { "selected", ExistingInstallation ? QStringLiteral( "기본 라이트" ) : QStringLiteral( "기본 다크" ) }, { "schemes", Schemes } };
     }
     inline QJsonObject FilePanel()
     {
@@ -954,7 +965,7 @@ namespace hc::defaults
                  { "sizeInFooter",            "adaptive2" },
                  { "useBuiltInShortcuts",     true },
                  { "shortcutPreset",          ExistingInstallation ? ExistingShortcutPreset : FreshShortcutPreset },
-                 { "iconMode",                "standard" },
+                 { "iconMode",                ExistingInstallation ? "standard" : "all" },
                  { "specialFolderIcons",      true },
                  { "virtualFolderIcons",      true },
                  { "explorerDefaultIcons",    true },
@@ -962,7 +973,7 @@ namespace hc::defaults
                  { "sortCaseSensitive",       false },
                  { "sortLocaleAware",         true },
                  { "sortNumericAware",        true },
-                 { "directoryStyle",          "plain" },
+                 { "directoryStyle",          ExistingInstallation ? "plain" : "brackets" },
                  { "focusPreviousDirectory",  true },
                  { "quickFind",               hc::quickfind::Settings{}.ToJson() },
                  { "refresh",                 hc::refresh::Settings{}.ToJson() },
@@ -976,7 +987,7 @@ namespace hc::defaults
                  { "monoFontFamily",          "Cascadia Mono" },
                  { "monoFontPx",              12 },
                  // 빈 themeMode는 저장된 선택 색상표의 light/dark를 따른다(기존 설치 호환).
-                 { "themeMode",               "" },
+                 { "themeMode",               ExistingInstallation ? "" : "dark" },
                  { "functionCommands",        QJsonArray::fromStringList( FunctionCommands() ) },
                  { "functionCaptions",        QJsonArray{} },
                  { "filePanel",               FilePanel() },
@@ -986,7 +997,7 @@ namespace hc::defaults
     {
         return { { "allowElevation", true },
                  { "fileConflict",            "ask" },
-                 { "renameInDialog",          true },
+                 { "renameInDialog",          ExistingInstallation },
                  { "renameSelectExtension",   false },
                  { "renameOnSlowClick",       true },
                  { "folderSizeOnSpace",       true },
@@ -996,13 +1007,13 @@ namespace hc::defaults
                  { "copyMetadata",            true },
                  { "copyVerify",              false },
                  { "copyAcl",                 false },
-                 { "copyStreams",             false },
+                 { "copyStreams",             !ExistingInstallation },
                  { "copyPattern",             "*" },
                  { "copySpeedMiB",            0 },
                  { "delayedFileWrites",       true },
                  { "jobDetailed",             false },
                  { "jobCloseOnSuccess",       true },
-                 { "deleteToRecycle",         true },
+                 { "deleteToRecycle",         ExistingInstallation },
                  { "deleteWhileListing",      true },
                  { "jobNotification",         "attention" },
                  { "queueInsertion",          "last" },
@@ -1025,7 +1036,7 @@ namespace hc::defaults
     {
         return { { "schemaVersion", 1 },
                  { "general",                 General( ExistingInstallation ) },
-                 { "appearance",              Appearance() },
+                 { "appearance",              Appearance( ExistingInstallation ) },
                  // shortcuts는 사용자 차이만 저장한다. 제품 키는 위 명령·프리셋에서 설정한다.
                  { "shortcuts",               QJsonObject{} },
                  { "favorites",               QJsonObject{ { "drivesOn", "none" }, { "items", QJsonArray{} } } },
