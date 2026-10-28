@@ -35,6 +35,8 @@ namespace hc::compare
         void RecoverWork(const QString& Path);
         void ExportReport(const QString& Path, bool ReplaceExisting = false);
         void SaveActive();
+        void FindCommand(int Direction);
+        void NavigateDifference(int Direction);
         void Undo(bool Redo);
         bool CanUndo(bool Redo) const;
         bool CanExport() const { return !Busy(); }

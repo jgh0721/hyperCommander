@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "chunkGutter.hpp"
+#include "comparePalette.hpp"
 #include <ScintillaEditBase.h>
 #include <QPainter>
 #include <QPainterPath>
@@ -170,8 +171,8 @@ namespace hc::compare
             path.cubicTo(width() / 2, clip(row.leftTop_), width() / 2, clip(row.rightTop_), width(), clip(row.rightTop_));
             path.lineTo(width(), clip(row.rightBottom_));
             path.cubicTo(width() / 2, clip(row.rightBottom_), width() / 2, clip(row.leftBottom_), 0, clip(row.leftBottom_)); path.closeSubpath();
-            auto color = palette().highlight().color(); color.setAlpha(chunk.resolved_ ? 25 : 65);
-            auto outline = palette().windowText().color(); outline.setAlpha(130);
+            auto color = CompareColor(chunk.conflict_ ? (chunk.resolved_ ? "resolvedBg" : "conflictBg") : "connector", CompareIsDark()); color.setAlpha(CompareAlpha(chunk.resolved_ ? "resolvedAlpha" : "connectorAlpha", CompareIsDark()));
+            auto outline = CompareColor("connectorOutline", CompareIsDark()); outline.setAlpha(130);
             painter.fillPath(path, color); painter.setPen(QPen(outline, 1)); painter.drawPath(path);
         }
     }

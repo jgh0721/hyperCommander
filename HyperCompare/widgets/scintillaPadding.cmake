@@ -86,7 +86,7 @@ foreach(_name ContractionState.h ContractionState.cxx Editor.cxx EditView.cxx)
         hc_compare_padding_replace([=[	if (subLine >= ll->lines) {
 		DrawAnnotation]=] [=[    if (subLine >= ll->lines + model.pdoc->AnnotationLines(line)) {
         if (FlagSet(phase, DrawPhase::back))
-            surface->FillRectangleAligned(rcLine, Fill(vsDraw.styles[StyleDefault].back));
+            surface->FillRectangleAligned(rcLine, Fill(vsDraw.styles[255].back));
         return;
     }
 	if (subLine >= ll->lines) {
@@ -107,7 +107,7 @@ foreach(_name ContractionState.h ContractionState.cxx Editor.cxx EditView.cxx)
                         gap.left -= leftTextOverlap;
                         gap.top = static_cast<XYPOSITION>(yposScreen);
                         gap.bottom = gap.top + vsDraw.lineHeight;
-                        surfaceWindow->FillRectangleAligned(gap, Fill(vsDraw.styles[StyleDefault].back));
+                        surfaceWindow->FillRectangleAligned(gap, Fill(vsDraw.styles[255].back));
                     }
                     if (!bufferedDraw) ypos += vsDraw.lineHeight;
                     yposScreen += vsDraw.lineHeight;

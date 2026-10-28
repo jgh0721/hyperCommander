@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "findBar.hpp"
+#include "comparePalette.hpp"
+#include "compareCommands.hpp"
 #include "runtime/workerHost.hpp"
 #include "runtime/controllerMemory.hpp"
 #include <QtConcurrentRun>
@@ -39,8 +41,8 @@ namespace hc::compare
         auto button = [this, layout](const QString& Text, const QString& Name) {
             auto* value = new QToolButton(controls_); value->setText(Text); value->setObjectName(Name); layout->addWidget(value); return value;
         };
-        auto* previous = button(tr("이전"), "compareFindPrevious"); previous->setToolTip(tr("이전 찾기 (Shift+F3)"));
-        auto* next = button(tr("다음"), "compareFindNext"); next->setToolTip(tr("다음 찾기 (F3)"));
+        auto* previous = button(tr("이전"), "compareFindPrevious"); previous->setToolTip(tr("이전 찾기"));
+        auto* next = button(tr("다음"), "compareFindNext"); next->setToolTip(tr("다음 찾기"));
         auto* all = button(tr("모두 찾기"), "compareFindAll"); all->setToolTip(tr("일치 구간 강조와 결과 목록 · 최대 1,000건"));
         case_ = new QCheckBox(tr("대소문자"), controls_); case_->setObjectName("compareFindCase"); layout->addWidget(case_);
         regex_ = new QCheckBox(tr("정규식"), controls_); regex_->setObjectName("compareFindRegex"); layout->addWidget(regex_);
@@ -106,14 +108,23 @@ namespace hc::compare
     }
     void FindBar::clearFeedback() { ++searchGeneration_; if (extendedCanceled_) extendedCanceled_->store(true); resetSearch(); clearMatches(); lastZeroEditor_.clear(); lastZeroPosition_ = -1; }
     void FindBar::SetListFont(const QFont& Font) { if (results_) results_->setFont(Font); }
+    void FindBar::RefreshAppearance()
+    {
+        styleMatches();
+        for (const auto& pair : {std::pair{"compareFindPrevious", "find.previous"}, {"compareFindNext", "find.next"}})
+            if (auto* button = findChild<QToolButton*>(pair.first)) {
+                QStringList labels; for (const auto& key : CompareKeys(pair.second, ActiveCompareSettings().shortcuts_)) labels.append(key.toString(QKeySequence::NativeText));
+                button->setToolTip(button->text() + (labels.isEmpty() ? QString{} : " (" + labels.join(", ") + ")"));
+            }
+    }
     void FindBar::styleMatches()
     {
-        const auto color = palette().color(QPalette::Highlight);
+        const auto color = CompareColor("search", CompareIsDark());
         const auto rgb = color.red() | (color.green() << 8) | (color.blue() << 16);
         for (const auto& target : editors_) if (target)
         {
             target->send(SCI_INDICSETSTYLE, searchMatchIndicator, INDIC_ROUNDBOX);
-            target->send(SCI_INDICSETFORE, searchMatchIndicator, rgb); target->send(SCI_INDICSETALPHA, searchMatchIndicator, 55);
+            target->send(SCI_INDICSETFORE, searchMatchIndicator, rgb); target->send(SCI_INDICSETALPHA, searchMatchIndicator, CompareAlpha("searchAlpha", CompareIsDark()));
             target->send(SCI_INDICSETOUTLINEALPHA, searchMatchIndicator, 220); target->send(SCI_INDICSETUNDER, searchMatchIndicator, 1);
         }
     }

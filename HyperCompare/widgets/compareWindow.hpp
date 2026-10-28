@@ -74,7 +74,8 @@ namespace hc::compare
         void showBlocks();
         void openInputs();
         void openDirectories(bool Three = false);
-        void applyAppearance();
+        void applyAppearance(bool SelectTheme = true);
+        void saveAppearance();
         void syncThemeActions();
         void updateFormats();
         void rebuildMultiAlignment();

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "largeTextMultiView.hpp"
+#include "comparePalette.hpp"
 #include "largeTextSyntax.hpp"
 #include "boundedEditor.hpp"
 #include "chunkGutter.hpp"
@@ -52,8 +53,8 @@ namespace hc::compare
                         const auto& offsets = value_->lines_[0]; const auto first = std::size_t(std::upper_bound(offsets.begin(), offsets.end(), begin_) - offsets.begin() - 1);
                         editor_->send(SCI_MARGINTEXTCLEARALL); for (sptr_t row = 0; row < editor_->send(SCI_GETLINECOUNT); ++row) { const auto number = QByteArray::number(qulonglong(first + row + 1)); editor_->send(SCI_MARGINSETTEXT, row, reinterpret_cast<sptr_t>(number.constData())); editor_->send(SCI_MARGINSETSTYLE, row, STYLE_LINENUMBER); }
                         const auto last = first + std::size_t(editor_->send(SCI_GETLINECOUNT));
-                        editor_->send(SCI_MARKERDELETEALL, 8); auto edit = std::lower_bound(value_->changes_.begin(), value_->changes_.end(), first, [](const auto& Edit, auto Line) { return Edit.end_ < Line; });
-                        for (; edit != value_->changes_.end() && edit->begin_ < last; ++edit) for (auto row = std::max(first, edit->begin_); row < std::min(edit->end_, last); ++row) editor_->send(SCI_MARKERADD, row - first, 8);
+                        ClearCompareMarks(editor_); auto edit = std::lower_bound(value_->changes_.begin(), value_->changes_.end(), first, [](const auto& Edit, auto Line) { return Edit.end_ < Line; });
+                        for (; edit != value_->changes_.end() && edit->begin_ < last; ++edit) for (auto row = std::max(first, edit->begin_); row < std::min(edit->end_, last); ++row) editor_->send(SCI_MARKERADD, row - first, CompareEditMarker(edit->begin_, edit->end_, edit->otherBegin_, edit->otherEnd_));
                         const auto& session = *value_->session_; const auto& source = session.documents_[document_]; title_->setText(session.titles_[document_] + " — " + source.original_.path_); title_->setToolTip(title_->text()); line_->setRange(1, std::max(1, int(offsets.size()))); line_->setValue(int(first) + 1);
                         auto* lexer = CreateLexer(LargeTextLexer(source.original_.path_)); lexerId_ = lexer ? lexer->GetIdentifier() : 0; if (lexer) lexer->Release(); Appearance(font_, dark_); editor_->send(SCI_SETREADONLY, 1); status_->setText(tr("%1 · 읽기 전용 · %2–%3 바이트").arg(source.original_.encoding_).arg(begin_).arg(end_));
                         if (response.match_) { match_ = *response.match_; editor_->send(SCI_SETSEL, match_.begin_ - begin_, std::min(match_.end_, end_) - begin_); editor_->send(SCI_SCROLLCARET); status_->setText(match_.wrapped_ ? tr("문서 처음/끝으로 돌아가 찾았습니다.") : tr("전체 파일에서 찾았습니다.")); }

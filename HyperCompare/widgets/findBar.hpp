@@ -35,6 +35,7 @@ namespace hc::compare
         void Close();
         void Find(bool Backwards);
         void FindAll();
+        void RefreshAppearance();
         void SetListFont(const QFont& Font);
     protected:
         void changeEvent(QEvent* Event) override;

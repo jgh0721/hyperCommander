@@ -13,7 +13,7 @@ namespace hc::compare
     {
         std::uint64_t id_ = 0;
         std::array<std::size_t, 2> begin_{}, end_{};
-        bool enabled_ = true, resolved_ = false;
+        bool enabled_ = true, resolved_ = false, conflict_ = false;
         bool operator==(const GutterChunk&) const = default;
     };
     // Only visible chunks have controls; positions are UTF-8 byte boundaries.

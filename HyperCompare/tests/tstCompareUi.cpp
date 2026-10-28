@@ -1,5 +1,9 @@
 ﻿#include "stdafx.h"
 #include "widgets/compareWindow.hpp"
+#include "widgets/compareSettingsDialog.hpp"
+#include "widgets/compareCommands.hpp"
+#include "widgets/comparePalette.hpp"
+#include <QTableWidget>
 #include "widgets/largeTextView.hpp"
 #include "widgets/largeTextMultiView.hpp"
 #include "widgets/largeTextSyntax.hpp"
@@ -1076,11 +1080,119 @@ private slots:
     }
     void init()
     {
+        QSettings{}.remove("compare/customizationV1");
+        SetActiveCompareSettings(CompareSettings::Load());
         QSettings settings; settings.setValue("view/alignSourceRows", false);
         settings.setValue("view/alignAllPanes", false);
         settings.setValue("view/inlineHighlights", true);
         settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
         settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+    }
+    void customizationPersistenceAndValidation()
+    {
+        auto settings = CompareSettings::Load();
+        settings.shortcuts_["navigate.next"] = "Ctrl+F8"; settings.shortcuts_["find.all"] = "";
+        settings.shortcuts_["future.command"] = "Alt+F10";
+        settings.colors_[0]["modifiedBg"] = "#eeddaa"; settings.colors_[1]["modifiedBg"] = "#554422";
+        settings.colors_[1]["barModified"] = "#abcdef"; settings.linked_[1] = false;
+        QString error; QVERIFY2(settings.Save(error), qPrintable(error)); auto loaded = CompareSettings::Load();
+        QCOMPARE(loaded, settings); QCOMPARE(CompareKeys("find.all", loaded.shortcuts_).size(), 0);
+        QCOMPARE(CompareKeys("navigate.next", loaded.shortcuts_).first(), QKeySequence("Ctrl+F8"));
+        QCOMPARE(loaded.shortcuts_["future.command"].toString(), QString("Alt+F10"));
+        loaded.shortcuts_["navigate.next"] = "F3"; QVERIFY(!loaded.Save(error)); QVERIFY(error.contains(QString::fromUtf8("다음 찾기")));
+        QCOMPARE(CompareSettings::Load(), settings);
+        for (const auto* key : {"Ctrl+C", "Ctrl+V", "Escape", "Tab", "A", "Alt+F4", "Ctrl+Alt+K"}) QVERIFY(!CompareKeyError(QKeySequence(key)).isEmpty());
+        QVERIFY(CompareKeyError(QKeySequence("Ctrl+F8")).isEmpty());
+        loaded = settings; loaded.colors_[1]["modifiedBg"] = "bad-value";
+        // Corrupt input is repaired on load without discarding unrelated overrides.
+        QVERIFY(loaded.Save(error)); loaded = CompareSettings::Load();
+        QVERIFY(!loaded.colors_[1].contains("modifiedBg")); QVERIFY(!loaded.warnings_.isEmpty());
+        QCOMPARE(loaded.shortcuts_["navigate.next"].toString(), QString("Ctrl+F8"));
+        auto malformed = QJsonDocument::fromJson(QSettings{}.value("compare/customizationV1").toByteArray()).object();
+        auto keys = malformed["shortcuts"].toObject(); keys["navigate.next"] = "F3"; keys["file.open"] = "Ctrl+9"; malformed["shortcuts"] = keys;
+        QSettings{}.setValue("compare/customizationV1", QJsonDocument(malformed).toJson(QJsonDocument::Compact));
+        loaded = CompareSettings::Load(); QVERIFY(!loaded.shortcuts_.contains("navigate.next"));
+        QCOMPARE(loaded.shortcuts_["file.open"].toString(), QString("Ctrl+9")); QCOMPARE(loaded.shortcuts_["future.command"].toString(), QString("Alt+F10"));
+    }
+    void customizationDialogDraftAndCapture()
+    {
+        CompareSettingsDialog dialog(CompareSettings::Load(), nullptr); dialog.show();
+        auto* tabs = dialog.findChild<QTabWidget*>("compareSettingsTabs"); tabs->setCurrentIndex(2);
+        auto* search = dialog.findChild<QLineEdit*>("shortcutSearch"); search->setText(QString::fromUtf8("다음 차이"));
+        auto* capture = dialog.findChild<QLineEdit*>("shortcutCapture"); auto* assign = dialog.findChild<QPushButton*>("shortcutAssign");
+        QTest::keyClick(capture, Qt::Key_F3); QVERIFY(!assign->isEnabled());
+        QVERIFY(dialog.findChild<QLabel*>("shortcutConflict")->text().contains(QString::fromUtf8("다음 찾기")));
+        QTest::keyClick(capture, Qt::Key_Escape); QVERIFY(dialog.isVisible()); QVERIFY(capture->text().isEmpty());
+        QTest::keyClick(capture, Qt::Key_F8, Qt::ControlModifier); QVERIFY(assign->isEnabled()); assign->click();
+        auto* buttons = dialog.findChild<QDialogButtonBox*>(); buttons->button(QDialogButtonBox::Apply)->click();
+        QCOMPARE(CompareSettings::Load().shortcuts_["navigate.next"].toString(), QString("Ctrl+F8"));
+        tabs->setCurrentIndex(3); dialog.findChild<QComboBox*>("colorMode")->setCurrentIndex(1);
+        auto* color = dialog.findChild<QLineEdit*>("color_modifiedBg"); QVERIFY(color); color->setText("#abcdef");
+        buttons->button(QDialogButtonBox::Apply)->click(); color->setText("#123456"); dialog.reject();
+        QCOMPARE(CompareSettings::Load().colors_[1]["modifiedBg"].toString(), QString("#abcdef"));
+        CompareSettingsDialog restored(CompareSettings::Load(), nullptr); restored.show();
+        restored.findChild<QTabWidget*>("compareSettingsTabs")->setCurrentIndex(3); restored.findChild<QComboBox*>("colorMode")->setCurrentIndex(1);
+        auto* hex = restored.findChild<QLineEdit*>("color_modifiedBg"); hex->setText("#bad");
+        auto* controls = restored.findChild<QDialogButtonBox*>(); QVERIFY(!controls->button(QDialogButtonBox::Ok)->isEnabled());
+        hex->setText("#102030"); QVERIFY(controls->button(QDialogButtonBox::Ok)->isEnabled());
+        restored.findChild<QComboBox*>("colorGroup")->setCurrentIndex(1); auto* linked = restored.findChild<QCheckBox*>("linkOverviewColors");
+        linked->setChecked(false); restored.findChild<QLineEdit*>("color_barModified")->setText("#fedcba");
+        linked->setChecked(true); linked->setChecked(false); QCOMPARE(restored.findChild<QLineEdit*>("color_barModified")->text(), QString("#FEDCBA"));
+        restored.reject();
+    }
+    void customizationEditorColorsAndShortcuts()
+    {
+        auto settings = CompareSettings::Load(); settings.theme_ = "dark";
+        settings.shortcuts_["find.open"] = "Ctrl+8"; settings.shortcuts_["edit.undo"] = "Ctrl+7";
+        settings.colors_[1]["modifiedBg"] = "#554422"; settings.colors_[1]["removedBg"] = "#663344";
+        settings.colors_[1]["addedBg"] = "#224433"; settings.colors_[1]["background"] = "#171923";
+        settings.colors_[1]["modifiedFg"] = "#ffeecc";
+        QString error; QVERIFY(settings.Save(error));
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.txt"); request.file2_ = dir.filePath("right.txt");
+        write(request.file1_, "same\nold\nend\n"); write(request.file2_, "same\nnew\nend\n");
+        CompareWindow window(request); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        auto* editor = window.findChild<ScintillaEditBase*>("FILE 1");
+        const auto before = contents(editor); QCOMPARE(editor->send(SCI_STYLEGETBACK, STYLE_DEFAULT), sptr_t(0x231917));
+        QCOMPARE(editor->send(SCI_MARKERGET, 1) & (1 << 8), sptr_t(1 << 8));
+        QCOMPARE(CompareColor("modifiedBg", true), QColor("#554422"));
+        editor->send(SCI_SETINDICATORCURRENT, 19); editor->send(SCI_SETINDICATORVALUE, 7);
+        ApplyCompareEditorColors(editor, true);
+        QVERIFY(editor->send(SCI_INDICATORVALUEAT, 22, 5) != 0);
+        QCOMPARE(editor->send(SCI_GETINDICATORCURRENT), sptr_t(19)); QCOMPARE(editor->send(SCI_GETINDICATORVALUE), sptr_t(7));
+        auto* find = window.findChild<FindBar*>("compareFindBar"); QVERIFY(find);
+        editor->setFocus(); QTest::keyClick(editor, Qt::Key_8, Qt::ControlModifier); QTRY_VERIFY(find->isVisible());
+        find->Close(); editor->setFocus(); QTest::keyClick(editor, Qt::Key_F, Qt::ControlModifier); QVERIFY(!find->isVisible());
+        QCOMPARE(contents(editor), before);
+        editor->send(SCI_SETSEL, 0, 0); QTest::keyClicks(editor, "x"); const auto edited = contents(editor); QVERIFY(edited != before);
+        QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        QTest::keyClick(editor, Qt::Key_Z, Qt::ControlModifier); QCOMPARE(contents(editor), edited);
+        QTest::keyClick(editor, Qt::Key_7, Qt::ControlModifier); QTRY_COMPARE(contents(editor), before);
+        window.close();
+    }
+    void customizationMultipleWindowThemeSettles()
+    {
+        Request dark; dark.theme_ = "dark"; CompareWindow first(dark);
+        QSignalSpy changed(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed);
+        Request light; light.theme_ = "light"; CompareWindow second(light);
+        QTest::qWait(100);
+        QVERIFY(changed.size() < 4);
+        QVERIFY(!fm::style::ThemeManager::instance().colors().isDark());
+    }
+    void customizationNativeScreens()
+    {
+        const auto path = qEnvironmentVariable("HC_COMPARE_CUSTOM_CAPTURE"); if (path.isEmpty()) return;
+        CompareWindow window(Request{}); auto settings = CompareSettings::Load(); settings.theme_ = "dark";
+        CompareSettingsDialog dialog(settings, &window); dialog.show(); auto* tabs = dialog.findChild<QTabWidget*>("compareSettingsTabs");
+        qInfo("Settings capture DPR: %.2f, logical size: %d x %d", dialog.devicePixelRatioF(), dialog.width(), dialog.height());
+        tabs->setCurrentIndex(2); QTest::qWait(100); dialog.grab().save(path + "/shortcuts.png");
+        tabs->setCurrentIndex(3); dialog.findChild<QComboBox*>("colorMode")->setCurrentIndex(1); QTest::qWait(100); dialog.grab().save(path + "/colors-dark.png");
+        dialog.findChild<QComboBox*>("colorGroup")->setCurrentIndex(1); QTest::qWait(100); dialog.grab().save(path + "/overview.png");
+        dialog.findChild<QComboBox*>("colorMode")->setCurrentIndex(0); QTest::qWait(100); dialog.grab().save(path + "/colors-light.png");
+        dialog.resize(860, 640); QTest::qWait(100); dialog.grab().save(path + "/narrow.png");
+        fm::style::ThemeManager::instance().setScheme(fm::style::ThemeManager::Scheme::Light);
+        dialog.resize(1120, 780); QTest::qWait(100); dialog.grab().save(path + "/application-light.png"); dialog.reject();
     }
     void settingsApplyCancelAndIcons()
     {

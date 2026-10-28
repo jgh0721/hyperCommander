@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "overviewBar.hpp"
+#include "comparePalette.hpp"
 #include <QPainter>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -65,16 +66,15 @@ namespace hc::compare
     {
         QPainter painter(this); painter.fillRect(rect(), palette().window());
         if (!map_ || !editors_[0] || !editors_[1]) return;
-        // Changed · added · removed · moved follow the status tokens, so they track the product theme and accent.
-        const auto& tokens = fm::style::themeColorsFor(this);
-        const std::array<QColor, 4> colors{tokens[fm::style::Token::Warn], tokens[fm::style::Token::Ok], tokens[fm::style::Token::Danger], tokens[fm::style::Token::Accent]};
+        // Changed · added · removed · alignment gap follow the status tokens, so they track the product theme and accent.
+        const std::array<QColor, 4> colors{CompareColor("barModified", dark_), CompareColor("barAdded", dark_), CompareColor("barRemoved", dark_), CompareColor("barGap", dark_)};
         painter.setOpacity(isEnabled() ? 1.0 : 0.45);
         for (unsigned side = 0; side < 2; ++side)
         {
             const auto area = track(side); const auto& bands = raster_.bands_[side];
-            painter.setPen(side == active_ && hasFocus() ? palette().highlight().color() : palette().windowText().color());
+            painter.setPen(side == active_ && hasFocus() ? CompareColor("barFocus", dark_) : palette().windowText().color());
             painter.drawText(QRect(area.left(), 0, area.width(), area.top()), Qt::AlignCenter, QString::number(numbers_[side]));
-            painter.fillRect(area, palette().base());
+            painter.fillRect(area, CompareColor("barTrack", dark_));
             for (std::size_t begin = 0; begin < bands.size();)
             {
                 auto end = begin + 1; while (end < bands.size() && bands[end] == bands[begin]) ++end;
@@ -97,7 +97,7 @@ namespace hc::compare
             const auto bottom = std::clamp(top + double(std::max<sptr_t>(1, editors_[side]->send(SCI_LINESONSCREEN))) / rows, top, 1.0);
             const auto y = std::min(area.bottom() - 1.0, area.top() + top * area.height());
             const auto end = std::min(double(area.bottom()), std::max(y + 2.0, area.top() + bottom * area.height()));
-            painter.setPen(QPen(palette().windowText().color(), side == active_ && hasFocus() ? 2 : 1));
+            painter.setPen(QPen(CompareColor("barViewport", dark_), side == active_ && hasFocus() ? 2 : 1));
             // Draw viewport brackets outside the change lane. An overlaid box
             // would cover one-pixel BOF/EOF changes with its horizontal edges.
             for (const auto x : {area.left() - 2.0, area.right() + 2.0})

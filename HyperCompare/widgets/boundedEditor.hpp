@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "runtime/controllerMemory.hpp"
+#include "compareCommands.hpp"
 #include <ScintillaEditBase.h>
 #include <QApplication>
 #include <QClipboard>
@@ -96,8 +97,14 @@ namespace hc::compare
         sptr_t sends(unsigned int Message, uptr_t W = 0, const char* Text = nullptr) const override
         { return send(Message, W, reinterpret_cast<sptr_t>(Text)); }
     protected:
+        bool event(QEvent* Event) override
+        {
+            if (Event->type() == QEvent::ShortcutOverride && HandleCompareEditorKey(this, static_cast<QKeyEvent*>(Event), false)) return true;
+            return ScintillaEditBase::event(Event);
+        }
         void keyPressEvent(QKeyEvent* Event) override
         {
+            if (HandleCompareEditorKey(this, Event, true)) return;
             if (!enabled_ || raw(SCI_GETREADONLY)) { ScintillaEditBase::keyPressEvent(Event); return; }
             if (Event->matches(QKeySequence::Copy) || Event->matches(QKeySequence::SelectAll) ||
                 Event->key() == Qt::Key_Left || Event->key() == Qt::Key_Right || Event->key() == Qt::Key_Up || Event->key() == Qt::Key_Down ||

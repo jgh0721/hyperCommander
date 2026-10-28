@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryView.hpp"
+#include "compareCommands.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <QTimer>
 #include "runtime/directoryApply.hpp"
@@ -183,7 +184,7 @@ namespace hc::compare
             auto* tree = new QTreeView(pane); trees_[side] = tree;
             tree->setObjectName(side == 0 ? "directoryLeftTree" : side == 1 ? "directoryRightTree" : "directoryThirdTree");
             tree->setAccessibleName(side == 0 ? tr("왼쪽 폴더 트리") : side == 1 ? tr("오른쪽 폴더 트리") : tr("FILE 3 폴더 트리")); tree->setModel(treeFilter_);
-            auto* renameKey = new QShortcut(QKeySequence(Qt::Key_F2), tree); renameKey->setContext(Qt::WidgetWithChildrenShortcut);
+            auto* renameKey = new QShortcut(QKeySequence{}, tree); renameKey->setContext(Qt::WidgetWithChildrenShortcut); BindCompareCommand(renameKey, "directory.rename");
             connect(renameKey, &QShortcut::activated, this, [this, side] { promptRename(side); });
             tree->setUniformRowHeights(true); tree->setItemDelegate(new TreeDelegate(tree));
             tree->setSelectionMode(QAbstractItemView::SingleSelection); tree->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -395,7 +396,7 @@ namespace hc::compare
             findChild<QAction*>(side == 0 ? "directoryRenameLeft" : side == 1 ? "directoryRenameRight" : "directoryRenameThird")->setEnabled(!Busy() && !streaming_ && comparison_.directoryComplete_ && entry["present"].toBool() && !entry["reparse"].toBool()); }
         if (streaming_) { openButton_->setEnabled(openable(item)); return; }
         openButton_->setEnabled(openable(item));
-        summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이") : tr("표시 %1 / 전체 %2개 · F7 다음 차이 · Shift+F7 이전 차이")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(treeModel_->Entries().size()));
+        summary_->setText((treeMode_ ? tr("일치 %1 / 전체 %2개 · 다음·이전 차이 명령으로 이동") : tr("표시 %1 / 전체 %2개 · 다음·이전 차이 명령으로 이동")).arg(treeMode_ ? treeModel_->VisibleEntries() : filter_->rowCount()).arg(treeModel_->Entries().size()));
     }
     void DirectoryView::OpenCurrent()
     {

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "imageCompareView.hpp"
+#include "comparePalette.hpp"
 #include "core/compare.hpp"
 #include <QColorSpace>
 #include <QComboBox>
@@ -43,7 +44,7 @@ namespace hc::compare
                 painter.drawImage(target, image_);
                 if (!bounds_.isEmpty())
                 {
-                    painter.setPen(QPen(tokens[fm::style::Token::Danger], 2)); painter.setBrush(Qt::NoBrush);
+                    painter.setPen(QPen(CompareColor("imageBorder", CompareIsDark()), 2)); painter.setBrush(Qt::NoBrush);
                     painter.drawRect(QRectF(target.topLeft() + QPointF(bounds_.x() * scale, bounds_.y() * scale), QSizeF(bounds_.width() * scale, bounds_.height() * scale)));
                 }
                 painter.restore();

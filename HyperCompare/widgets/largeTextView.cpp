@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "largeTextView.hpp"
+#include "comparePalette.hpp"
 #include <fmstyle/ThemeManager.h>
 #include "largeTextSyntax.hpp"
 #include "boundedEditor.hpp"
@@ -97,9 +98,6 @@ namespace hc::compare
         searchRegex_->setToolTip(tr("전체 파일 정규식 검색: 여러 줄·Unicode 지원, 실행 시간과 메모리 제한 적용"));
         tool(tr("이전 찾기"), "largeFindPrevious", [this] { find(true); }); tool(tr("다음 찾기"), "largeFindNext", [this] { find(false); });
         connect(query_, &QLineEdit::returnPressed, this, [this] { find(false); });
-        auto* findKey = new QShortcut(QKeySequence::Find, this); connect(findKey, &QShortcut::activated, this, [this] { query_->setFocus(); query_->selectAll(); });
-        auto* nextKey = new QShortcut(QKeySequence::FindNext, this); connect(nextKey, &QShortcut::activated, this, [this] { find(false); });
-        auto* previousKey = new QShortcut(QKeySequence::FindPrevious, this); connect(previousKey, &QShortcut::activated, this, [this] { find(true); });
         auto* panes = new QHBoxLayout(); panes_ = panes; box->addLayout(panes, 1);
         for (int side = 0; side < 2; ++side) {
             auto* paneWidget = new QWidget(this); paneWidgets_[side] = paneWidget; auto* pane = new QVBoxLayout(paneWidget); pane->setContentsMargins(0, 0, 0, 0); panes->addWidget(paneWidget, 1);
@@ -141,6 +139,18 @@ namespace hc::compare
     LargeTextView::~LargeTextView() { if (canceled_) canceled_->store(true); watcher_.waitForFinished(); }
     bool LargeTextView::eventFilter(QObject* Object, QEvent* Event)
     { if (Event->type() == QEvent::FocusIn) for (int side = 0; side < 2; ++side) if (Object == editors_[side]) activeSide_ = side; return ExtensionView::eventFilter(Object, Event); }
+    void LargeTextView::FindCommand(int Direction)
+    { if (Busy()) return; if (!Direction) { query_->setFocus(); query_->selectAll(); } else find(Direction < 0); }
+    void LargeTextView::NavigateDifference(int Direction)
+    {
+        if (Busy() || value_->changes_.empty()) return;
+        const auto navigate = [this, Direction] {
+            change_->setValue(std::clamp(change_->value() + Direction, 1, int(value_->changes_.size())));
+            const auto& edit = value_->changes_[std::size_t(change_->value() - 1)]; pageStart_ = {};
+            lines_[0]->setValue(int(edit.begin_) + 1); lines_[1]->setValue(int(edit.otherBegin_) + 1); load();
+        };
+        if (!deferPages(navigate)) navigate();
+    }
     void LargeTextView::SaveActive() { save(merging() ? 1 : activeSide_); }
     bool LargeTextView::CanUndo(bool Redo) const
     { if (Busy()) return false; return pageDirty_[0] || pageDirty_[1] ? editors_[activeSide_]->send(Redo ? SCI_CANREDO : SCI_CANUNDO) : !(Redo ? redo_ : undo_).empty(); }
@@ -186,10 +196,28 @@ namespace hc::compare
                 paint({SCE_H_TAG, SCE_H_TAGEND}, QColor("#3769a0"), QColor("#92bfdd")); paint({SCE_H_COMMENT}, QColor("#51774c"), QColor("#90b58b"));
                 paint({SCE_H_DOUBLESTRING, SCE_H_SINGLESTRING, SCE_H_CDATA}, QColor("#9b5f28"), QColor("#d7b080")); break;
             }
+        ApplyCompareEditorColors(Editor, Dark);
     }
     void LargeTextView::SetTextFont(const QFont& Font)
     {
-        textFont_ = Font; for (int side = 0; side < 2; ++side) ApplyLargeTextEditorAppearance(editors_[side], Font, dark_, lexerIds_[side]);
+        textFont_ = Font;
+        for (int side = 0; side < 2; ++side)
+        {
+            auto* editor = editors_[side]; editor->send(SCI_MARKERDELETEALL, 11); editor->send(SCI_MARKERDELETEALL, 12);
+            if (merging() && value_->session_->pair_[side] == value_->session_->result_)
+                for (const auto& conflict : value_->session_->conflicts_)
+                {
+                    const bool resolved = conflict.choice_ != Resolution::Unresolved;
+                    if (!resolved && input_.base_.isEmpty()) continue;
+                    const auto begin = std::max(begin_[side], conflict.begin_), end = std::min(end_[side], conflict.end_);
+                    if (begin >= end) continue;
+                    const auto first = editor->send(SCI_LINEFROMPOSITION, begin - begin_[side]);
+                    const auto last = editor->send(SCI_LINEFROMPOSITION, end - begin_[side] - 1);
+                    for (auto row = first; row <= last; ++row) editor->send(SCI_MARKERADD, row, resolved ? 12 : 11);
+                }
+            ApplyLargeTextEditorAppearance(editor, Font, dark_, lexerIds_[side]);
+        }
+        if (gutter_) gutter_->update();
     }
     void LargeTextView::controls()
     {
@@ -249,12 +277,12 @@ namespace hc::compare
                     const auto number = QByteArray::number(qulonglong(first + row + 1));
                     editor->send(SCI_MARGINSETTEXT, row, reinterpret_cast<sptr_t>(number.constData())); editor->send(SCI_MARGINSETSTYLE, row, STYLE_LINENUMBER);
                 }
-                editor->send(SCI_MARKERDELETEALL, 8);
+                ClearCompareMarks(editor);
                 auto at = std::lower_bound(value_->changes_.begin(), value_->changes_.end(), first, [side](const Edit& Edit, std::size_t Line) { return (side ? Edit.otherEnd_ : Edit.end_) < Line; });
                 for (; at != value_->changes_.end(); ++at) {
                     const auto a = side ? at->otherBegin_ : at->begin_, b = side ? at->otherEnd_ : at->end_;
                     if (a > last) break;
-                    for (auto row = std::max(a, first); row < std::min(b, last); ++row) editor->send(SCI_MARKERADD, row - first, 8);
+                    for (auto row = std::max(a, first); row < std::min(b, last); ++row) editor->send(SCI_MARKERADD, row - first, CompareEditMarker(at->begin_, at->end_, at->otherBegin_, at->otherEnd_));
                 }
                 pageStart_[side] = begin_[side]; lines_[side]->setRange(1, std::max(1, int(offsets.size()))); lines_[side]->setValue(int(first) + 1);
                 pageDirty_[side] = false;

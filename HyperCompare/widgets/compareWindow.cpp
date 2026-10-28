@@ -1,5 +1,8 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "comparePalette.hpp"
+#include "compareCommands.hpp"
+#include "compareSettingsDialog.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/qtDialogFrame.hpp"
 #include <fmwidgets/WindowChrome.h>
@@ -97,6 +100,7 @@ namespace hc::compare
     {
         setWindowTitle("HyperCompare"); resize(1280, 800);
         QSettings settings;
+        SetActiveCompareSettings(CompareSettings::Load());
         // The former bool is read once: a saved dark choice stays dark, anything else follows the product.
         themeMode_ = settings.contains("theme/mode") ? settings.value("theme/mode").toString() : settings.value("theme/dark", false).toBool() ? QString("dark") : QString("product");
         if (!request_.theme_.isEmpty()) themeMode_ = request_.theme_;
@@ -173,9 +177,9 @@ namespace hc::compare
         for (auto* action : wholeActions_) action->setEnabled(false);
         addToolBarBreak(); auto* mergeTools = addToolBar(tr("블록 병합")); mergeTools->setObjectName("mergeToolbar");
         mergeTools->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        auto* previous = mergeTools->addAction(tr("이전 차이"), this, [this] { navigateBlock(-1); });
-        auto* next = mergeTools->addAction(tr("다음 차이"), this, [this] { navigateBlock(1); });
-        previous->setShortcut(QKeySequence("Shift+F7")); next->setShortcut(QKeySequence("F7"));
+        auto* previous = mergeTools->addAction(tr("이전 차이"), this, [this] { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->NavigateDifference(-1); else navigateBlock(-1); });
+        auto* next = mergeTools->addAction(tr("다음 차이"), this, [this] { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->NavigateDifference(1); else navigateBlock(1); });
+
         for (const auto& choice : {std::pair{tr("블록 LEFT"), Resolution::Left}, {tr("블록 RIGHT"), Resolution::Right},
             {tr("블록 BASE"), Resolution::Base}, {tr("LEFT → RIGHT"), Resolution::LeftThenRight},
             {tr("RIGHT → LEFT"), Resolution::RightThenLeft}, {tr("블록 제거"), Resolution::Omit}, {tr("블록 수동 완료"), Resolution::Manual}})
@@ -255,18 +259,18 @@ namespace hc::compare
         importDecisions_->setEnabled(false); exportDecisions_->setEnabled(false);
         importDecisions_->setToolTip(tr("CLI 결정 계획을 RESULT에 적용합니다. 실행 취소할 수 있습니다."));
         exportDecisions_->setToolTip(tr("현재 블록 선택을 CLI -decisions용 JSON으로 저장합니다."));
-        saveWork_->setShortcut(QKeySequence("Ctrl+Shift+S")); loadWork_->setShortcut(QKeySequence("Ctrl+Shift+O"));
+
         saveWork_->setEnabled(false); loadWork_->setEnabled(false);
         auto* editMenu = menuBar()->addMenu(tr("편집"));
         undo_ = editMenu->addAction(tr("실행 취소"), this, [this] { inputUndo(false); });
         redo_ = editMenu->addAction(tr("다시 실행"), this, [this] { inputUndo(true); });
-        undo_->setShortcut(QKeySequence::Undo); redo_->setShortcut(QKeySequence::Redo); undo_->setEnabled(false); redo_->setEnabled(false);
+        undo_->setEnabled(false); redo_->setEnabled(false);
         find_ = new FindBar(this); addToolBar(Qt::BottomToolBarArea, find_);
         editMenu->addSeparator();
-        auto* find = editMenu->addAction(tr("찾기"), find_, &FindBar::Open); find->setShortcut(QKeySequence::Find);
-        auto* findNext = editMenu->addAction(tr("다음 찾기"), this, [this] { find_->Find(false); }); findNext->setShortcut(QKeySequence("F3"));
-        auto* findPrevious = editMenu->addAction(tr("이전 찾기"), this, [this] { find_->Find(true); }); findPrevious->setShortcut(QKeySequence("Shift+F3"));
-        auto* findAll = editMenu->addAction(tr("모두 찾기"), find_, &FindBar::FindAll); findAll->setShortcut(QKeySequence("Ctrl+Shift+F"));
+        auto* find = editMenu->addAction(tr("찾기"), this, [this] { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(0); else find_->Open(); });
+        auto* findNext = editMenu->addAction(tr("다음 찾기"), this, [this] { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(1); else find_->Find(false); });
+        auto* findPrevious = editMenu->addAction(tr("이전 찾기"), this, [this] { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(-1); else find_->Find(true); });
+        auto* findAll = editMenu->addAction(tr("모두 찾기"), find_, &FindBar::FindAll);
         findActions_ = {find, findNext, findPrevious, findAll}; for (auto* action : findActions_) action->setEnabled(false);
         auto* closeFind = new QAction(this); closeFind->setShortcut(QKeySequence(Qt::Key_Escape)); closeFind->setEnabled(false); addAction(closeFind);
         connect(closeFind, &QAction::triggered, find_, &FindBar::Close);
@@ -334,12 +338,12 @@ namespace hc::compare
         auto* product = viewMenu->addAction(tr("본체 테마 따르기")); product->setObjectName("productTheme"); product->setCheckable(true);
         auto* dark = viewMenu->addAction(tr("Dark")); dark->setObjectName("darkTheme"); dark->setCheckable(true);
         syncThemeActions();
-        connect(product, &QAction::toggled, this, [this](bool Value) { themeMode_ = Value ? "product" : "light"; syncThemeActions(); applyAppearance(); });
-        connect(dark, &QAction::toggled, this, [this](bool Value) { themeMode_ = Value ? "dark" : "light"; syncThemeActions(); applyAppearance(); });
+        connect(product, &QAction::toggled, this, [this](bool Value) { themeMode_ = Value ? "product" : "light"; syncThemeActions(); applyAppearance(); saveAppearance(); });
+        connect(dark, &QAction::toggled, this, [this](bool Value) { themeMode_ = Value ? "dark" : "light"; syncThemeActions(); applyAppearance(); saveAppearance(); });
         for (const auto& role : {QString("ui"), QString("list"), QString("text")})
             viewMenu->addAction(role.toUpper() + tr(" 글꼴"), this, [this, role] { chooseFont(role); });
         auto* settingsAction = viewMenu->addAction(tr("설정…"), this, &CompareWindow::showSettings);
-        settingsAction->setObjectName("openCompareSettings"); settingsAction->setShortcut(QKeySequence("Ctrl+,"));
+        settingsAction->setObjectName("openCompareSettings");
         tools->addSeparator(); tools->addAction(settingsAction);
         const auto icon = [this](QAction* Action, QStyle::StandardPixmap Symbol) {
             Action->setProperty("compareIcon", int(Symbol));
@@ -469,6 +473,19 @@ namespace hc::compare
         });
         applyAppearance();
         setupInputEditing();
+        for (const auto& binding : {std::pair<QObject*, const char*>{previous, "navigate.previous"}, {next, "navigate.next"},
+            {find, "find.open"}, {findNext, "find.next"}, {findPrevious, "find.previous"}, {findAll, "find.all"},
+            {save_, "file.save"}, {saveWork_, "work.save"}, {loadWork_, "work.open"}, {undo_, "edit.undo"}, {redo_, "edit.redo"},
+            {openFiles_, "file.open"}, {openFolders_, "directory.open"}, {compareAgain, "compare.again"}, {cancel_, "compare.cancel"},
+            {alignAll_, "view.alignAll"}, {alignRows_, "view.alignRows"}, {syncScroll_, "view.sync"},
+            {inlineHighlights_, "view.inline"}, {showOverview_, "view.overview"}, {settingsAction, "app.settings"}})
+            BindCompareCommand(binding.first, binding.second);
+        const char* blockIds[]{"merge.left", "merge.right", "merge.base", "merge.leftRight", "merge.rightLeft", "merge.omit", "merge.manual"};
+        for (int i = 0; i < blockActions_.size(); ++i) BindCompareCommand(blockActions_[i], blockIds[i]);
+        connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, [this] {
+            // A notification observes the process theme; it must not select a competing window's scheme.
+            QTimer::singleShot(0, this, [this] { if (!refreshing_) applyAppearance(false); });
+        });
         // Product title bar above the menu bar, as in HyperCommander's main window. The bar leaves the layout
         // before setMenuWidget, so QMainWindow keeps it; menuBar() must not be called after this point.
         if (!parentWidget()) {
@@ -582,7 +599,7 @@ namespace hc::compare
                 auto* editor = editors_[i]; editor->send(SCI_SETREADONLY, 0);
                 editor->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(result_.inputs_[i].utf8_.constData()));
                 editor->send(SCI_EMPTYUNDOBUFFER); editor->send(SCI_SETSAVEPOINT); editor->send(SCI_SETREADONLY, 1);
-                editor->send(SCI_MARKERDELETEALL, 8);
+                ClearCompareMarks(editor);
             }
             // Rebuild rows before the controller emits changed_ with the new plan.
             applyPairView();
@@ -749,7 +766,7 @@ namespace hc::compare
         semantic_->SetPair(pairIndex_);
         overview_->SetSession(nullptr, nullptr, {});
         if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); delete scroll_; scroll_ = nullptr; }
-        for (auto* editor : editors_) editor->send(SCI_MARKERDELETEALL, 8);
+        for (auto* editor : editors_) ClearCompareMarks(editor);
         const auto* pair = currentPair(); if (!pair) return;
         auto* first = editors_[pair->inputs_[0]]; auto* second = editors_[pair->inputs_[1]];
         const QSignalBlocker blocker(changes_);
@@ -766,8 +783,9 @@ namespace hc::compare
                 auto* item = new QTreeWidgetItem(changes_, {QString::number(i + 1), QString::number(edit.begin_ + 1), QString::number(edit.otherBegin_ + 1)});
                 item->setData(1, Qt::UserRole, qulonglong(edit.begin_)); item->setData(2, Qt::UserRole, qulonglong(edit.otherBegin_));
             }
-            for (auto line = edit.begin_; line < edit.end_; ++line) first->send(SCI_MARKERADD, uptr_t(line), 8);
-            for (auto line = edit.otherBegin_; line < edit.otherEnd_; ++line) second->send(SCI_MARKERADD, uptr_t(line), 8);
+            const auto marker = CompareEditMarker(edit.begin_, edit.end_, edit.otherBegin_, edit.otherEnd_);
+            for (auto line = edit.begin_; line < edit.end_; ++line) first->send(SCI_MARKERADD, uptr_t(line), marker);
+            for (auto line = edit.otherBegin_; line < edit.otherEnd_; ++line) second->send(SCI_MARKERADD, uptr_t(line), marker);
         }
         scroll_ = new ScrollSynchronizer(first, second, pair->alignment_, this);
         scroll_->SetAligned(alignRows_->isChecked()); overview_->SetAligned(alignRows_->isChecked());
@@ -838,6 +856,26 @@ namespace hc::compare
     void CompareWindow::updateGutters()
     {
         const auto* pair = currentPair(); if (!pair || gutters_.isEmpty()) return;
+        if (merge_)
+        {
+            for (auto* editor : editors_) { editor->send(SCI_MARKERDELETEALL, 11); editor->send(SCI_MARKERDELETEALL, 12); }
+            const auto& model = merge_->Model();
+            for (std::size_t i = 0; i < model.State().size(); ++i)
+            {
+                const auto& state = model.State()[i]; const auto& block = model.Plan().blocks_[i];
+                if (!state.mapped_) continue;
+                const bool resolved = state.resolution_ != Resolution::Unresolved;
+                if (!resolved && (!model.Plan().hasBase_ || block.automatic_)) continue;
+                const auto mark = [&](ScintillaEditBase* Editor, std::size_t Begin, std::size_t End) {
+                    if (End <= Begin) return;
+                    const auto first = Editor->send(SCI_LINEFROMPOSITION, Begin), last = Editor->send(SCI_LINEFROMPOSITION, End - 1);
+                    for (auto line = first; line <= last; ++line) Editor->send(SCI_MARKERADD, line, resolved ? 12 : 11);
+                };
+                mark(editors_[0], block.leftBegin_, block.leftBegin_ + block.left_.size());
+                mark(editors_[1], block.rightBegin_, block.rightBegin_ + block.right_.size()); mark(output_, state.begin_, state.end_);
+            }
+            for (auto* editor : editors_) ApplyCompareEditorColors(editor, dark_);
+        }
         for (qsizetype side = 0; side < gutters_.size(); ++side)
         {
             auto* gutter = gutters_[side]; gutter->setEnabled(!busy()); std::vector<GutterChunk> chunks;
@@ -852,7 +890,7 @@ namespace hc::compare
                     const auto begin = side == 0 ? block.leftBegin_ : block.rightBegin_;
                     const auto end = begin + (side == 0 ? block.left_.size() : block.right_.size());
                     chunks.push_back({block.id_, side == 0 ? std::array{begin, state.begin_} : std::array{state.begin_, begin},
-                        side == 0 ? std::array{end, state.end_} : std::array{state.end_, end}, true, state.resolution_ != Resolution::Unresolved});
+                        side == 0 ? std::array{end, state.end_} : std::array{state.end_, end}, true, state.resolution_ != Resolution::Unresolved, model.Plan().hasBase_ && !block.automatic_});
                 }
                 gutter->SetChunks(std::move(chunks), model.Revision());
             }
@@ -943,6 +981,7 @@ namespace hc::compare
         if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy() && !multi_ && currentPair());
         if (multi_) multi_->SetEnabled(syncScroll_->isChecked() && !busy());
         if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) {
+            for (int i = 0; i < 3; ++i) findActions_[i]->setEnabled(!large->Busy());
             exportReport_->setEnabled(large->CanExport()); saveWork_->setEnabled(large->CanExport()); loadWork_->setEnabled(large->CanExport());
             recoverWork_->setEnabled(request_.mode_ == "merge" && large->CanExport()); reintegrate_->setEnabled(false); importDecisions_->setEnabled(false); exportDecisions_->setEnabled(false);
             save_->setVisible(true); save_->setText(request_.mode_ == "merge" ? tr("RESULT 저장") : tr("활성 문서 저장")); save_->setEnabled(large->CanSave());
@@ -1126,8 +1165,8 @@ namespace hc::compare
             editor->send(SCI_SETINDICATORCURRENT, sourceDifferenceIndicator);
             editor->send(SCI_INDICATORCLEARRANGE, 0, editor->send(SCI_GETLENGTH));
             editor->send(SCI_INDICSETSTYLE, sourceDifferenceIndicator, INDIC_ROUNDBOX);
-            editor->send(SCI_INDICSETFORE, sourceDifferenceIndicator, color(fm::style::ThemeManager::instance().colors()[fm::style::Token::Danger]));
-            editor->send(SCI_INDICSETALPHA, sourceDifferenceIndicator, dark_ ? 70 : 50);
+            editor->send(SCI_INDICSETFORE, sourceDifferenceIndicator, color(CompareColor("inline", dark_)));
+            editor->send(SCI_INDICSETALPHA, sourceDifferenceIndicator, CompareAlpha("inlineAlpha", dark_));
             editor->send(SCI_INDICSETOUTLINEALPHA, sourceDifferenceIndicator, 160);
             editor->send(SCI_INDICSETUNDER, sourceDifferenceIndicator, 1);
             editor->send(SCI_SETINDICATORVALUE, 1);
@@ -1140,9 +1179,11 @@ namespace hc::compare
             editor->send(SCI_SETINDICATORCURRENT, uptr_t(current)); editor->send(SCI_SETINDICATORVALUE, uptr_t(value));
         }
     }
-    void CompareWindow::applyAppearance()
+    void CompareWindow::applyAppearance(bool SelectTheme)
     {
-        auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(themeScheme(themeMode_)); dark_ = theme.colors().isDark();
+        auto& theme = fm::style::ThemeManager::instance();
+        if (SelectTheme) theme.setScheme(themeScheme(themeMode_));
+        dark_ = theme.colors().isDark();
         for (auto* action : findChildren<QAction*>()) if (action->property("compareIcon").isValid())
             action->setIcon(style()->standardIcon(QStyle::StandardPixmap(action->property("compareIcon").toInt())));
         qApp->setFont(uiFont_); changes_->setFont(listFont_); find_->SetListFont(listFont_); directory_->SetListFont(listFont_); semantic_->SetListFont(listFont_);
@@ -1172,12 +1213,19 @@ namespace hc::compare
             for (const auto element : {SC_ELEMENT_SELECTION_INACTIVE_BACK, SC_ELEMENT_SELECTION_INACTIVE_ADDITIONAL_BACK})
                 editor->send(SCI_SETELEMENTCOLOUR, element, color(tokens[fm::style::Token::SelIn]) | 0xff000000u);
             editor->send(SCI_MARKERSETBACK, 8, color(tokens[fm::style::Token::WarnBg]));
-            editor->send(SCI_COLOURISE, 0, -1);
+            ApplyCompareEditorColors(editor, dark_);
         }
         applyInlineHighlights(); overview_->SetDark(dark_);
-        // theme/dark stays for older builds that only read the bool.
-        QSettings settings; settings.setValue("theme/mode", themeMode_); settings.setValue("theme/dark", themeMode_ == "dark"); settings.setValue("fonts/ui", uiFont_.toString());
-        settings.setValue("fonts/list", listFont_.toString()); settings.setValue("fonts/text", textFont_.toString());
+        ApplyCompareShortcuts(this); find_->RefreshAppearance();
+        for (auto* gutter : gutters_) gutter->update();
+        if (extensionView_) { extensionView_->update(); for (auto* child : extensionView_->findChildren<QWidget*>()) child->update(); }
+    }
+    void CompareWindow::saveAppearance()
+    {
+        auto settings = ActiveCompareSettings(); settings.theme_ = themeMode_; settings.fonts_ = {uiFont_, listFont_, textFont_};
+        const QList<QAction*> actions{alignAll_, alignRows_, syncScroll_, inlineHighlights_, showOverview_};
+        for (int i = 0; i < 5; ++i) settings.view_[i] = actions[i]->isChecked();
+        QString error; if (settings.Save(error)) SetActiveCompareSettings(settings); else state_->setText(error);
     }
     void CompareWindow::syncThemeActions()
     {
@@ -1186,64 +1234,27 @@ namespace hc::compare
     }
     void CompareWindow::showSettings()
     {
-        QDialog dialog(this); dialog.setObjectName("compareSettingsDialog");
-        dialog.setWindowTitle(tr("HyperCompare 설정")); dialog.resize(560, 460);
-        auto* layout = new QVBoxLayout(&dialog);
-        auto* tabs = new QTabWidget(&dialog); layout->addWidget(tabs);
-        auto* appearance = new QWidget(tabs); auto* form = new QFormLayout(appearance);
-        auto* theme = new QComboBox(appearance); theme->setObjectName("settingsTheme");
-        theme->addItem(tr("본체 따르기"), "product"); theme->addItem(tr("밝게"), "light"); theme->addItem(tr("어둡게"), "dark");
-        theme->setCurrentIndex(std::max(0, theme->findData(themeMode_)));
-        theme->setToolTip(tr("색과 강조색은 HyperCommander 설정을 따릅니다. 밝게·어둡게는 HyperCompare에만 적용합니다."));
-        form->addRow(tr("테마(&T)"), theme);
-        QFont fonts[]{uiFont_, listFont_, textFont_};
-        const QString labels[]{tr("화면 글꼴"), tr("목록 글꼴"), tr("본문 글꼴")};
-        for (int i = 0; i < 3; ++i)
-        {
-            auto* button = new QPushButton(appearance); button->setObjectName(QString("settingsFont%1").arg(i));
-            const auto describe = [button](const QFont& Font) { button->setText(QString("%1 · %2 pt").arg(Font.family()).arg(QFontInfo(Font).pointSizeF())); };
-            describe(fonts[i]); form->addRow(labels[i], button); button->setAccessibleName(labels[i]);
-            connect(button, &QPushButton::clicked, &dialog, [&, i, describe] {
-                bool ok = false; const auto selected = QFontDialog::getFont(&ok, fonts[i], &dialog, labels[i]);
-                if (ok) { fonts[i] = selected; describe(selected); }
-            });
-        }
-        tabs->addTab(appearance, tr("화면과 글꼴"));
-        auto* comparison = new QWidget(tabs); auto* options = new QVBoxLayout(comparison);
+        static QPointer<CompareSettingsDialog> open;
+        if (open) { open->raise(); open->activateWindow(); return; }
+        auto settings = ActiveCompareSettings(); settings.theme_ = themeMode_; settings.fonts_ = {uiFont_, listFont_, textFont_};
         const QList<QAction*> actions{alignAll_, alignRows_, syncScroll_, inlineHighlights_, showOverview_};
-        QList<QCheckBox*> checks;
-        for (qsizetype i = 0; i < actions.size(); ++i)
-        {
-            auto* check = new QCheckBox(actions[i]->text(), comparison); check->setObjectName(QString("settingsView%1").arg(i));
-            check->setChecked(actions[i]->isChecked()); check->setToolTip(actions[i]->toolTip()); options->addWidget(check); checks.append(check);
-        }
-        auto* hint = new QLabel(tr("표시 옵션은 현재 비교에 적용되며 다음에 여는 비교에도 유지됩니다."), comparison);
-        hint->setWordWrap(true); options->addWidget(hint); options->addStretch(); tabs->addTab(comparison, tr("비교 표시"));
-        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply, &dialog);
-        buttons->button(QDialogButtonBox::Ok)->setText(tr("확인")); buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));
-        buttons->button(QDialogButtonBox::Apply)->setText(tr("적용")); layout->addWidget(buttons);
-        hc::ui::ApplyDialogFrame(&dialog, buttons, {{}, tr("화면 테마와 글꼴, 비교 표시 옵션을 바꿉니다."), fm::ui::glyph::App});
-        const auto apply = [&] {
-            // Apply through the existing actions so the menu and rendered view agree.
+        for (int i = 0; i < 5; ++i) settings.view_[i] = actions[i]->isChecked();
+        CompareSettingsDialog dialog(settings, this); open = &dialog;
+        dialog.applied_ = [](const CompareSettings& Settings) {
             for (auto* widget : QApplication::topLevelWidgets()) if (auto* window = dynamic_cast<CompareWindow*>(widget))
             {
-                window->themeMode_ = theme->currentData().toString();
-                window->uiFont_ = fonts[0]; window->listFont_ = fonts[1]; window->textFont_ = fonts[2];
+                window->themeMode_ = Settings.theme_; window->uiFont_ = Settings.fonts_[0]; window->listFont_ = Settings.fonts_[1]; window->textFont_ = Settings.fonts_[2];
                 const QList<QAction*> targets{window->alignAll_, window->alignRows_, window->syncScroll_, window->inlineHighlights_, window->showOverview_};
-                for (qsizetype i = 0; i < targets.size(); ++i) targets[i]->setChecked(checks[i]->isChecked());
-                window->syncThemeActions();
-                window->applyAppearance();
+                for (int i = 0; i < 5; ++i) targets[i]->setChecked(Settings.view_[i]);
+                window->syncThemeActions(); window->applyAppearance();
             }
         };
-        connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, apply);
-        connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] { apply(); dialog.accept(); });
-        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         dialog.exec();
     }
     void CompareWindow::chooseFont(const QString& Role)
     {
         auto& font = Role == "ui" ? uiFont_ : Role == "list" ? listFont_ : textFont_; bool ok = false;
-        const auto selected = QFontDialog::getFont(&ok, font, this, Role.toUpper()); if (ok) { font = selected; applyAppearance(); }
+        const auto selected = QFontDialog::getFont(&ok, font, this, Role.toUpper()); if (ok) { font = selected; applyAppearance(); saveAppearance(); }
     }
     void CompareWindow::BindRequest(std::function<void(int)> Completed)
     {

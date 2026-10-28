@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "comparePalette.hpp"
 #include "largeTextView.hpp"
 #include "boundedEditor.hpp"
 #include "chunkGutter.hpp"
@@ -32,7 +33,6 @@ namespace hc::compare
     {
         bufferTimer_.setSingleShot(true); bufferTimer_.setInterval(120);
         connect(&bufferTimer_, &QTimer::timeout, this, &CompareWindow::compareInputBuffers);
-        save_->setShortcut(QKeySequence::Save);
         auto* menu = menuBar()->actions().front()->menu(); menu->addSeparator();
         for (int i = 0; i < 3; ++i)
         {
@@ -109,7 +109,7 @@ namespace hc::compare
         sourcePending_ = true; inputError_.clear(); inputSaveError_.clear();
         if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); }
         overview_->SetSession(nullptr, nullptr, {});
-        for (auto* editor : editors_) { editor->send(SCI_MARKERDELETEALL, 8); editor->send(SCI_SETINDICATORCURRENT, sourceDifferenceIndicator); editor->send(SCI_INDICATORCLEARRANGE, 0, editor->send(SCI_GETLENGTH)); }
+        for (auto* editor : editors_) { ClearCompareMarks(editor); editor->send(SCI_SETINDICATORCURRENT, sourceDifferenceIndicator); editor->send(SCI_INDICATORCLEARRANGE, 0, editor->send(SCI_GETLENGTH)); }
         for (auto* gutter : gutters_) gutter->SetChunks({}, bufferGeneration_);
         details_->setTabVisible(1, false); bufferTimer_.start(); updateInputState();
     }
@@ -160,7 +160,7 @@ namespace hc::compare
         else if (!inputSaveError_.isEmpty()) state_->setText(inputSaveError_);
         else if (!inputError_.isEmpty()) state_->setText(inputError_);
         else if (sourcePending_) state_->setText(tr("화면에 반영됨 — 차이 다시 계산 중…"));
-        else if (dirty_) state_->setText(tr("수정됨 — FILE별 저장 또는 Ctrl+S로 현재 문서 저장"));
+        else if (dirty_) state_->setText(tr("수정됨 — FILE별 저장 또는 저장 명령으로 현재 문서 저장"));
         else if (result_.textComparison_["encodingOnly"].toBool()) state_->setText(tr("내용 동일 — 인코딩/BOM만 다름"));
         else state_->setText(tr("비교 — %1").arg(result_.outcome_));
     }
