@@ -29,6 +29,37 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
     const annotations=createReadingAnnotations({book,documents});
     const sourcePositions=createSourcePositions(snapshot);
     let result = { serial: 0 }, popup = null, dialog = null, focus = null;
+    let searchResult = { serial: 0 }, searchController;
+    const cancelSearch = () => { searchController?.abort(); searchController = null; };
+    async function search(request) {
+        cancelSearch();
+        const controller = new AbortController(); searchController = controller;
+        const { serial, value } = request;
+        result = searchResult = { serial, busy: true };
+        let completed;
+        try {
+            if(typeof value!=="string" || !value.trim() || value.length>128) throw Error("검색어는 1~128자입니다.");
+            const b=book(); if(!b) throw Error("본문이 준비되지 않았습니다.");
+            const hits=[];let characters=0,limited=false;
+            for(const section of b.spine.spineItems) {
+                if(controller.signal.aborted)return;
+                if(section.index>=512 || characters>=16*1024*1024 || hits.length>=200) {limited=true;break;}
+                // Search owns its document. It must never unload a section that
+                // an asynchronous page turn is currently displaying.
+                const response=await fetch(section.url,{signal:controller.signal});
+                if(!response.ok)throw Error("검색 리소스를 읽지 못했습니다.");
+                const document=new DOMParser().parseFromString(await response.text(),"application/xhtml+xml");
+                if(controller.signal.aborted)return;
+                const found=findText({document,cfiFromRange:range=>section.cfiFromRange(range)},value,200-hits.length);
+                characters+=found.characters;hits.push(...found.hits.map(hit=>({...hit,chapter:section.index})));
+                await new Promise(resolve=>setTimeout(resolve,0));
+            }
+            completed={serial,hits,limited:limited||hits.length>=200};
+        } catch(error) { completed={serial,error:String(error)}; }
+        if(controller.signal.aborted || searchController!==controller)return;
+        searchResult=completed;
+        if(result.serial===serial)result=completed;
+    }
     const hooked = new WeakSet();
     const close = () => { dialog?.remove(); dialog=null; popup=null; if(focus?.isConnected)focus.focus();else window.hcFocusReading?.(); };
     function show(kind, value) {
@@ -79,22 +110,12 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         },true);
     }
     async function action(request) {
+        if(request.action==="search")return search(request);
         const {action,value,serial}=request;result={serial,busy:true};
         try {
             if(["annotations-set","annotation-capture","annotation-resolve"].includes(action)){await annotations.action(request);result={serial,annotation:true};}
             else if(action==="source-position") {const doc=documents()[0];if(!doc)throw Error("본문이 준비되지 않았습니다.");placeSourcePosition(doc,value);sourcePositions.capture(doc);result={serial,located:true};}
-            else if(action==="search") {
-                const b=book();if(!b)throw Error("EPUB.js 검색을 사용할 수 없습니다.");
-                const hits=[];let characters=0,limited=false;
-                for(const section of b.spine.spineItems) {
-                    if(section.index>=512 || characters>=16*1024*1024 || hits.length>=200) {limited=true;break;}
-                    const wasLoaded=!!section.document;
-                    try {await section.load(b.load.bind(b));const found=findText(section,value,200-hits.length);characters+=found.characters;hits.push(...found.hits.map(h=>({...h,chapter:section.index})));}
-                    finally {if(!wasLoaded)section.unload();}
-                    await new Promise(resolve=>setTimeout(resolve,0));
-                }
-                result={serial,hits,limited:limited||hits.length>=200};
-            } else if(["toc","next","previous","back","chapter","next-chapter","previous-chapter"].includes(action)) {annotations.clearSelection();if(popup)close();await navigate(action,value);result={serial,located:true};}
+            else if(["toc","next","previous","back","chapter","next-chapter","previous-chapter"].includes(action)) {annotations.clearSelection();if(popup)close();await navigate(action,value);result={serial,located:true};}
             else if(action==="locate" || action==="preview-location") {if(!validCfi(value))throw Error("잘못된 읽기 위치입니다.");remember();await restore(value);documents().forEach(apply);if(action==="locate")window.hcFocusReading?.();result={serial,located:true};}
             else if(action==="image") {const doc=documents()[0],image=doc?.images[Number(value)||0];if(!image)throw Error("이미지가 없습니다.");const {url}=await resource(image.getAttribute("src"),doc);show("image",{src:url.href,alt:image.alt});result={serial};}
             else if(action==="footnote") {const doc=documents()[0];await footnote(value,doc);result={serial};}
@@ -103,5 +124,5 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         } catch(error) {result={serial,error:String(error)};}
     }
     window.hcDismissPopup = () => {if(!dialog)return false;close();return true;};
-    return {hook,action,cancelAnnotations:annotations.cancel,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),readerAction:result,popup})};
+    return {hook,action,cancelSearch,cancelAnnotations:annotations.cancel,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),readerAction:result,readerSearch:searchResult,popup})};
 }

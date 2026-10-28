@@ -99,7 +99,7 @@ QByteArray imageData(const QJsonObject& Request,QString& Media) {
 struct Package {
     QByteArray source_;Cancellation cancel_;QJsonObject publication_;QDomDocument opf_;QString rootfile_;Archive archive_;
     QMap<QString,QByteArray> replacements_,additions_;QSet<QString> removals_;QMap<QString,QString> media_;QJsonArray toc_;
-    Package(QByteArray Source,QJsonObject Publication,Cancellation Cancel):source_(std::move(Source)),cancel_(std::move(Cancel)),publication_(std::move(Publication)),archive_(source_,cancel_) {
+    Package(QByteArray Source,QJsonObject Publication,Cancellation Cancel):source_(std::move(Source)),cancel_(std::move(Cancel)),publication_(std::move(Publication)),archive_(source_,cancel_,32*1024*1024) {
         rootfile_=publication_["rootfile"].toString();opf_=xml(read(rootfile_),rootfile_);toc_=publication_["navigation"].toArray();
         for(const auto& Value:publication_["resources"].toArray()){const auto Row=Value.toObject();media_[Row["path"].toString()]=Row["mediaType"].toString();}
     }
@@ -246,7 +246,7 @@ void Package::move(const QString& Path,int Delta) {
 QString EditModel::Structure(const QJsonObject& Request,const Cancellation& Cancel) {
     try {
         if(Request["operation"]=="metadata" || Request["operation"]=="image-attributes")return modifyProperties(Request,Cancel);
-        const auto Current=Export({},Cancel);if(!Current)return Current.error_+": "+Current.location_;const auto Prepared=Prepare(Current.bytes_,Cancel);if(!Prepared)return Prepared.error_+": "+Prepared.location_;
+        const auto Current=Export({},Cancel);if(!Current)return Current.error_+": "+Current.location_;const auto Prepared=PublicationSession::Open(Current.bytes_,Cancel)->Index();if(!Prepared)return Prepared.error_+": "+Prepared.location_;
         Package Book(Current.bytes_,Prepared.publication_,Cancel);const auto Action=Request["operation"].toString(),Path=Request["resource"].toString();
         if(Action=="image-add") {
             QString Media;const auto Data=imageData(Request,Media);Book.add(Path,Media,Data);const auto Chapter=Request["chapter"].toString();

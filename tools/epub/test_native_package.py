@@ -50,6 +50,49 @@ def compressed(entries, descriptor=False, legacy=False):
 
 
 class NativePackageTests(unittest.TestCase):
+    def test_session_large_fonts_and_resource_limits(self):
+        entries = publication()
+        entries['EPUB/content.opf'] = entries['EPUB/content.opf'].replace(b'</manifest>',
+            b'<item id="large-font" href="large.ttf" media-type="font/ttf"/>'
+            b'<item id="second-font" href="second.ttf" media-type="font/ttf"/></manifest>')
+        entries['EPUB/large.ttf'] = bytes(17 * 1024 * 1024)
+        entries['EPUB/second.ttf'] = bytes(16 * 1024 * 1024)
+        path = self.root / 'session.epub'
+        def inspect():
+            path.write_bytes(archive(entries))
+            process = subprocess.run([str(EXECUTABLE), '--session', str(path)], capture_output=True, timeout=30)
+            return process.returncode, json.loads(process.stdout)
+        code, result = inspect()
+        self.assertEqual(code, 0, result)
+        self.assertTrue(all('base64' not in item for item in result['resources']))
+        self.assertGreater(sum(item['bytes'] for item in result['resources']), 32 * 1024 * 1024)
+        entries['EPUB/content.opf'] = entries['EPUB/content.opf'].replace(b'media-type="font/ttf"', b'media-type="image/png"')
+        code, result = inspect()
+        self.assertNotEqual(code, 0)
+        self.assertEqual(result['error'], 'decompressed-size-limit')
+
+    def test_empty_directory_streams(self):
+        for descriptor in (False, True):
+            entries = publication()
+            entries['EPUB/Empty/'] = b''
+            self.run_bytes(compressed(entries, descriptor=descriptor))
+        entries = publication()
+        entries['EPUB/Empty/'] = b''
+        self.run_bytes(archive(entries))
+        entries['EPUB/Empty/'] = b'not empty'
+        self.run_bytes(compressed(entries), 'zip-directory-content')
+
+    def test_empty_directory_requires_complete_deflate(self):
+        entries = publication()
+        entries['EPUB/Empty/'] = b''
+        original = compressed(entries)
+        with zipfile.ZipFile(io.BytesIO(original)) as book:
+            info = book.getinfo('EPUB/Empty/')
+            offset = info.header_offset + 30 + len(info.filename.encode())
+        data = bytearray(original)
+        data[offset:offset + info.compress_size] = bytes([255]) * info.compress_size
+        self.run_bytes(bytes(data), 'zip-inflate-size')
+
     def test_hierarchical_navigation_fragments(self):
         entries=publication()
         entries["EPUB/nav.xhtml"]='<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>TOC</title></head><body><nav epub:type="toc"><ol><li><span>Part</span><ol><li><a href="Text/second.xhtml#%EC%84%B8%EB%B6%80%EC%A0%88">Section</a></li></ol></li></ol></nav></body></html>'.encode()

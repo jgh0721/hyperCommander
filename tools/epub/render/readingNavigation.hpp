@@ -33,7 +33,7 @@ private:
     QJsonArray bookmarks_,additions_;QStringList removals_;
     Dispatch send_;QTimer saveTimer_;
     QLineEdit* query_=nullptr;QListWidget *results_=nullptr,*marks_=nullptr;QLabel* status_=nullptr;
-    qint64 serial_=0,seen_=0,restoreSerial_=0;bool started_=false,restoring_=false,readFailed_=false;
+    qint64 serial_=0,seen_=0,restoreSerial_=0,searchSeen_=0;bool started_=false,restoring_=false,readFailed_=false;
     QTreeWidget* toc_=nullptr;
     QJsonArray navigation_;
     bool resume_=true,remember_=true;

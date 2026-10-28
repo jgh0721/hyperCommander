@@ -20,7 +20,7 @@ class EpubProcessView;
 class EpubSourceEditor final:public QWidget {
     Q_OBJECT
 public:
-    EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget* Parent=nullptr);
+    EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget* Parent=nullptr,const QByteArray& SourceHash={});
     ~EpubSourceEditor()override;
     QJsonObject Snapshot()const;
     QJsonObject Execute(const QJsonObject& Request);
@@ -86,9 +86,11 @@ private:
     QTimer sourceSyncTimer_;bool sourceSyncPending_=false;int sourceSyncAttempts_=0;qint64 sourceSelectionSerial_=-1;
     QFutureWatcher<QJsonObject> imageInspection_;QByteArray imageInspectionToken_;
     QJsonObject previewSnapshot()const;
+    epub::EditOutput cachedExport_;QByteArray cachedExportToken_;
     epub::EditModel model_;QFutureWatcher<epub::EditModel> worker_;
     QFutureWatcher<epub::EditOutput> validation_;QByteArray validationToken_,validatedToken_,validatedBytes_;bool saveAfter_=false,nativeValidating_=false;
-    std::shared_ptr<std::atomic_bool> cancel_;
+    std::shared_ptr<std::atomic_bool> cancel_,validationCancel_;
+    qint64 exportRuns_=0,exportJoins_=0;
     QComboBox* resources_=nullptr;QPlainTextEdit* text_=nullptr;QLabel *image_=nullptr,*status_=nullptr;
     QString current_,error_;QStringList protectedPaths_;QList<QByteArray> identities_;QByteArray baseToken_,reference_;
     bool ready_=false,updating_=false,sourceComposing_=false,commitRestore_=false,commitFocus_=false;

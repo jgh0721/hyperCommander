@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QString>
 #include <functional>
+#include <memory>
 
 namespace hc::document::epub
 {
@@ -24,4 +25,24 @@ namespace hc::document::epub
     // The publication identity hashes exactly the immutable bytes inspected here.
     PackageResult Prepare(const QByteArray& Bytes, const Cancellation& Cancel = {});
     PackageResult PrepareFile(const QString& Path, const Cancellation& Cancel = {});
+
+    struct ResourceResult {
+        QByteArray bytes_;
+        QString error_, location_;
+        explicit operator bool() const { return error_.isEmpty(); }
+    };
+    // One immutable publication. Resource reads are independent and thread-safe;
+    // the cancellation callback must own its state and be safe on worker threads.
+    class PublicationSession final {
+    public:
+        static std::shared_ptr<PublicationSession> Open(QByteArray Bytes, const Cancellation& Cancel = {});
+        ~PublicationSession();
+        PackageResult Index() const;
+        ResourceResult ReadValidatedResource(const QString& Path) const;
+        ResourceResult ValidateAll() const;
+    private:
+        struct State;
+        explicit PublicationSession(std::unique_ptr<State> Value);
+        std::unique_ptr<State> state_;
+    };
 }

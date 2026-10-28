@@ -4,6 +4,7 @@
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "ownerMode.hpp"
 #include "inputTransfer.hpp"
+#include "publicationResources.hpp"
 #include "commonLibs/document/epub/epubPackage.hpp"
 #include <QWindow>
 #include <QPointer>
@@ -14,6 +15,7 @@
 #include <QShortcut>
 #include <QFileInfo>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <memory>
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
@@ -69,7 +71,7 @@
 
 namespace
 {
-    struct Asset { QByteArray data; QByteArray mime; };
+    struct Asset { QByteArray data; QByteArray mime; std::shared_ptr<hc::epub::poc::PublicationResources> store; qint64 size=0; };
     using Assets = QHash<QString, Asset>;
     constexpr qint64 MaxSnapshot = 48 * 1024 * 1024;
     QByteArray readBounded(const QString& Path, qint64 Limit)
@@ -93,12 +95,13 @@ namespace
         for(const auto& Part : Path.split('/')) if(Part.isEmpty() || Part == "." || Part == "..") return false;
         return true;
     }
-    Assets loadAssets(QJsonObject& Publication, const QString& Bundle)
+    Assets loadAssets(QJsonObject& Publication, const QString& Bundle, const std::shared_ptr<hc::document::epub::PublicationSession>& Session = {})
     {
         if(Publication["schemaVersion"].toInt() != 1 || Publication["phase"] != "P0-B"
             || Publication["policy"] != "passive-reflowable-v1" || Publication["spine"].toArray().isEmpty())
             throw QString("Unsupported prepared publication");
         Assets Result;
+        const auto Store=Session?std::make_shared<hc::epub::poc::PublicationResources>(Session):nullptr;
         qint64 Total = 0;
         const QSet<QString> Types{"application/xhtml+xml", "application/oebps-package+xml", "application/x-dtbncx+xml",
             "text/css", "image/svg+xml", "image/png", "image/jpeg", "image/gif", "image/webp", "font/ttf", "font/otf", "font/woff", "font/woff2"};
@@ -110,6 +113,11 @@ namespace
             auto Item = Value.toObject();
             const auto Path = Item["path"].toString();
             const auto Type = Item["mediaType"].toString();
+            if(Store) {
+                if(!validPath(Path) || Result.contains("/book/"+Path) || !Types.contains(Type)) throw QString("Invalid resource");
+                Result.insert("/book/"+Path,{{},Type.toLatin1(),Store,Item["bytes"].toInteger(-1)});
+                Metadata.append(Item); continue;
+            }
             const auto Decoded = QByteArray::fromBase64Encoding(Item["base64"].toString().toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
             if(!Decoded || !validPath(Path) || Result.contains("/book/" + Path) || !Types.contains(Type)) throw QString("Invalid resource");
             const auto Data = Decoded.decoded;
@@ -147,7 +155,8 @@ namespace
     class Handler final : public QWebEngineUrlSchemeHandler
     {
     public:
-        explicit Handler(const Assets& Items, QObject* Parent) : QWebEngineUrlSchemeHandler(Parent), items_(Items)
+        explicit Handler(const Assets& Items, QObject* Parent, std::function<void(const QString&)> Failure)
+            : QWebEngineUrlSchemeHandler(Parent), items_(Items), failure_(std::move(Failure))
         { nonce_ = QJsonDocument::fromJson(Items.value("/app/publication.json").data).object()["scriptNonce"].toString().toLatin1(); }
         void requestStarted(QWebEngineUrlRequestJob* Job) override
         {
@@ -162,13 +171,30 @@ namespace
                 "default-src 'none'; script-src " + ScriptPolicy + "; style-src 'unsafe-inline' epub: blob:; img-src epub: data: blob:; "
                 "font-src epub: data:; connect-src epub://app/; frame-src blob: epub:; base-uri epub:; object-src 'none'; form-action 'none'"},
                 {"X-Content-Type-Options", "nosniff"}, {"Cache-Control", "private, max-age=3600, immutable"}});
-            auto* Buffer = new QBuffer(Job);
-            Buffer->setData(Item.data);
-            Buffer->open(QIODevice::ReadOnly);
-            Job->reply(Item.mime, Buffer);
+            using Store=hc::epub::poc::PublicationResources;
+            const auto Reply=[Guard=QPointer<QWebEngineUrlRequestJob>(Job),Mime=Item.mime](const QByteArray& Data,Store::Lease Lease={}) {
+                if(!Guard)return;
+                auto* Buffer=new QBuffer(Guard); Buffer->setData(Data); Buffer->open(QIODevice::ReadOnly);
+                if(Lease) QObject::connect(Buffer,&QObject::destroyed,[Lease]{});
+                Guard->reply(Mime,Buffer);
+            };
+            if(!Item.store) { Reply(Item.data); return; }
+            const auto Resource=Path.mid(6);
+            if(const auto Cached=Item.store->Cached(Resource)) { Reply(Cached->bytes_,Cached); return; }
+            const auto Lease=Item.store->Reserve(Item.size);
+            if(!Lease) { failure_("epub-resource-memory-limit: "+Resource); Job->fail(QWebEngineUrlRequestJob::RequestFailed); return; }
+            auto* Watcher=new QFutureWatcher<Store::Lease>(this);
+            connect(Watcher,&QFutureWatcher<Store::Lease>::finished,this,[this,Watcher,Guard=QPointer<QWebEngineUrlRequestJob>(Job),Resource,Cache=Item.store,Reply] {
+                const auto Data=Watcher->result(); Watcher->deleteLater();
+                if(!Guard)return;
+                if(!Data->error_.isEmpty()) { failure_(Data->error_); Guard->fail(QWebEngineUrlRequestJob::RequestFailed); return; }
+                Cache->Retain(Resource,Data); Reply(Data->bytes_,Data);
+            });
+            Watcher->setFuture(QtConcurrent::run(Store::Pool(),[Session=Item.store->Session(),Resource,Lease] { return Store::Load(Session,Resource,Lease); }));
         }
     private:
         Assets items_;
+        std::function<void(const QString&)> failure_;
         QByteArray nonce_;
     };
 
@@ -234,17 +260,7 @@ namespace
             auto* Central = new QWidget(this);
             setCentralWidget(Central);
             auto* Layout = new QVBoxLayout(Central);
-            auto* Header = new QLabel(Central);Header->setTextFormat(Qt::PlainText);
-            Header->setText(Publication["title"].toString() + tr(" — EPUB 읽기")); Layout->addWidget(Header);
-            const auto Missing = Publication["recovery"].toObject()["missingSpineItems"].toInt();
-            if(Missing > 0) {
-                auto* Notice = new QLabel(tr("읽기 순서 %1개 항목을 제외하고 복구했습니다. 원본 유지.").arg(Missing), Central);
-                Notice->setToolTip(tr("파일에서 찾을 수 없는 읽기 순서 항목을 제외하고 존재하는 본문을 표시합니다. 원본 EPUB은 변경하지 않았습니다."));
-                Notice->setObjectName("epubRecoveryNotice"); Notice->setTextFormat(Qt::PlainText); Notice->setWordWrap(true); Layout->addWidget(Notice);
-            }
-            if(!Publication["recovery"].toObject()["legacyZip"].toArray().isEmpty()) {
-                auto* Notice=new QLabel(tr("비표준 ZIP 구성을 크기·CRC 검사 후 읽었습니다. 원본 유지 · 편집 사본은 표준 ZIP 순서로 저장합니다."),Central);Notice->setObjectName("epubLegacyZipNotice");Notice->setTextFormat(Qt::PlainText);Notice->setWordWrap(true);Layout->addWidget(Notice);
-            }
+            Layout->setContentsMargins(0,0,0,0); Layout->setSpacing(0);
             auto* Splitter = new QSplitter(Central);splitter_=Splitter; Layout->addWidget(Splitter, 1);
             auto* Scroll = new QScrollArea(Splitter); navigationScroll_=Scroll; Scroll->setWidgetResizable(true); Scroll->setMinimumWidth(220);
             auto* Panel = new QWidget; Scroll->setWidget(Panel);
@@ -297,7 +313,7 @@ namespace
             profile_ = new QWebEngineProfile(this); profile_->setHttpCacheType(QWebEngineProfile::MemoryHttpCache);profile_->setHttpCacheMaximumSize(32*1024*1024);
             profile_->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
             filter_ = new Filter(Items, profile_); profile_->setUrlRequestInterceptor(filter_);
-            profile_->installUrlSchemeHandler("epub", new Handler(Items, profile_));
+            profile_->installUrlSchemeHandler("epub", new Handler(Items, profile_,[this](const QString& Error){resourceFailure_=Error;}));
             page_ = new Page(profile_, view_); view_->setPage(page_);page_->settings()->setAttribute(QWebEngineSettings::FocusOnNavigationEnabled,false);
             for(auto Setting : {QWebEngineSettings::LocalContentCanAccessFileUrls, QWebEngineSettings::LocalContentCanAccessRemoteUrls,
                 QWebEngineSettings::JavascriptCanOpenWindows, QWebEngineSettings::JavascriptCanAccessClipboard,
@@ -317,9 +333,15 @@ namespace
             connect(&poll_, &QTimer::timeout, this, [this] {
                 if(pending_) return;
                 pending_ = true;
-                page_->runJavaScript("JSON.stringify({...((window.hcSnapshot && window.hcSnapshot()) || window.hcEvidence), startup: window.hcStartupDiagnostics ? window.hcStartupDiagnostics() : {}, bookFonts: window.hcBookFonts ? window.hcBookFonts() : []})", [this](const QVariant& Value) {
+                const bool Detailed=detailPending_ || !detailClock_.isValid() || detailClock_.elapsed()>=500;
+                if(Detailed){detailPending_=false;detailClock_.restart();}
+                const auto Snapshot=Detailed?QStringLiteral("window.hcSnapshot"):QStringLiteral("window.hcNativeSnapshot || window.hcSnapshot");
+                page_->runJavaScript("JSON.stringify({...(("+Snapshot+")?.() || window.hcEvidence), startup: window.hcStartupDiagnostics ? window.hcStartupDiagnostics() : {}})", [this,Detailed](const QVariant& Value) {
                     pending_ = false; if(finished_) return;
-                    const auto Result = QJsonDocument::fromJson(Value.toString().toUtf8()).object();
+                    auto Result = QJsonDocument::fromJson(Value.toString().toUtf8()).object();
+                    if(!resourceFailure_.isEmpty()) { Result["status"]="error"; Result["message"]=resourceFailure_; }
+                    if(Result["frameId"]!=latest_["frameId"] && !Detailed)detailPending_=true;
+                    if(!Detailed){auto Merged=latest_;for(auto At=Result.begin();At!=Result.end();++At)Merged[At.key()]=At.value();Result=std::move(Merged);}
                     latest_ = Result;
                     const auto Stamp=QFileInfo(settingsPath_).lastModified().toMSecsSinceEpoch();
                     if(Stamp!=settingsStamp_ && !settings_->IsDirty() && !settings_->IsBusy()){settingsStamp_=Stamp;settings_->Execute("reload",{},false);}
@@ -350,7 +372,7 @@ namespace
                     settings_->SetBookFonts(Families);
                     const auto Status = Result["status"].toString();
                     poll_.setInterval(Status=="ready" && !Result["readerBusy"].toBool()?250:33);
-                    statusBar()->showMessage(Status=="ready"?(Fixed?tr("원본 유지 · 고정 레이아웃 · 한 장씩 화면에 맞춤"):Vertical?tr("원본 유지 · 세로쓰기 · 한 단으로 표시합니다."):settings_->Profile()["columns"].toInt()==2 && Result["columnCount"].toInt()==1?tr("원본 유지 · 화면 폭이 좁아 1단으로 표시합니다."):tr("원본 유지")):Status=="loading"?tr("여는 중…"):tr("읽기 상태 확인"));
+                    statusBar()->clearMessage();
                     if(!evidence_.isEmpty() && Status == "ready" && !testing_) {
                         testing_ = true;
                         if(!Families.isEmpty()) {
@@ -393,13 +415,19 @@ namespace
             if(Parse.error != QJsonParseError::NoError || Request["protocolVersion"] != QJsonValue(1)
                 || Request["documentId"] != documentId_ || Request["generation"] != QJsonValue(generation_)) return Fail("epub-control-identity");
             const auto Kind = Request["kind"].toString();
-            if(Kind == "snapshot") {
+            if(Kind == "snapshot" || Kind == "snapshot-delta") {
                 auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = latest_["readerFocused"].toBool();
                 State["escapeRequests"]=escapeRequests_;State["fullscreenRequests"]=fullscreenRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();State["inputEnabled"]=interactive_;
                 State["chromeWindowColor"]=palette().color(QPalette::Window).name();State["toolbarWindowColor"]=findChild<QToolBar*>("epubReadingToolbar")->palette().color(QPalette::Window).name();State["openPanel"]=openPanel();State["toolbarPreviousEnabled"]=findChild<QAction*>("epub.previous")->isEnabled();State["toolbarNextEnabled"]=findChild<QAction*>("epub.next")->isEnabled();State["toolbarAvailabilityChanges"]=toolbarAvailabilityChanges_;
                 State["toolbarColumns"]=columnsChoice_->currentIndex();State["columnsControlEnabled"]=columnsChoice_->isEnabled();
                 State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
-                State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError(); Reply["state"] = State;
+                State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError();
+                if(Kind=="snapshot-delta") {
+                    QJsonObject Delta;QJsonArray Removed;
+                    for(auto At=State.begin();At!=State.end();++At)if(!sentState_.contains(At.key()) || sentState_[At.key()]!=At.value())Delta[At.key()]=At.value();
+                    for(auto At=sentState_.begin();At!=sentState_.end();++At)if(!State.contains(At.key()))Removed.append(At.key());
+                    Reply["stateDelta"]=true;Reply["replaceState"]=sentState_.isEmpty();Reply["removed"]=Removed;Reply["state"]=Delta;sentState_=State;
+                } else Reply["state"]=State;
             }
             else if(Kind=="flush-reading") {
                 if(Request.size()!=4 || !navigation_->Flush())return Fail("epub-reading-save");
@@ -500,7 +528,7 @@ namespace
         }
         void command(const QString& Name, const QJsonValue& Value)
         {
-            if(finished_)return;
+            if(finished_)return;detailPending_=true;
             auto Args = QJsonDocument(QJsonArray{Name, Value}).toJson(QJsonDocument::Compact);
             Args = Args.mid(1, Args.size() - 2);
             page_->runJavaScript("window.hcCommand && window.hcCommand(" + QString::fromUtf8(Args) + ")");
@@ -584,10 +612,11 @@ namespace
         QString evidence_, documentId_, expectedBookFont_;
         qint64 annotationClickSeen_=0;
         qint64 generation_ = 1;
-        QJsonObject latest_{{"status", "loading"}};
+        QJsonObject latest_{{"status", "loading"}},sentState_;
+        QElapsedTimer detailClock_;bool detailPending_=true;
         QJsonObject hostAppearance_;
         hc::epub::poc::ReadingNavigation* navigation_=nullptr;
-        QString settingsPath_,engine_,backgroundAsset_,astError_;
+        QString settingsPath_,engine_,backgroundAsset_,astError_,resourceFailure_;
         quint64 profileSerial_=0;
         qint64 settingsStamp_=0;
         bool shellReady_=false,started_=false,composing_=false,interactive_=true;
@@ -618,7 +647,7 @@ namespace
     public:
         OwnerController(QString Bundle, QWindow* Parent) : bundle_(std::move(Bundle)), nativeParent_(Parent)
         { connect(&timer_, &QTimer::timeout, this, [this] { transfer_.Expire(); }); timer_.start(100); }
-        ~OwnerController() override { delete reader_; }
+        ~OwnerController() override { cancellation_->store(true); delete reader_; }
         std::uintptr_t ReaderWindow() const { return nativeReader_; }
         void Refresh(QSize PhysicalSize)
         {
@@ -652,15 +681,16 @@ namespace
                     || !Path.endsWith("/epub-reading.json") || !hc::document::epubui::ApplyAppearance(Request["appearance"].toObject()))
                     return {{"error", "epub-configuration-invalid"}};
                 settingsPath_ = Path; appearance_ = Request["appearance"].toObject(); initiallyInteractive_=Request["initiallyInteractive"].toBool(true); configured_ = true;
-                return {{"accepted", true}};
+                return {{"accepted", true}, {"epubInputVersion",2}};
             }
             if(Kind.startsWith("input-")) {
                 if(Kind == "input-cancel" && preparing_ && Request.size() == 4 && transfer_.Matches(Request)) {
                     cancelled_ = true;
+                    cancellation_->store(true);
                     return {{"accepted", true}, {"status", "cancelled"}};
                 }
                 auto Reply = transfer_.Handle(Request);
-                if(Kind == "input-commit" && Reply["accepted"].toBool()) {
+                if((Kind == "input-commit" || Kind=="input-map") && Reply["accepted"].toBool()) {
                     auto Input = transfer_.Take();
                     if(!Input) return {{"error", "epub-input-state"}};
                     preparing_ = true;
@@ -672,9 +702,18 @@ namespace
                         if(!Result.error.isEmpty()) { error_ = Result.error; return; }
                         prepared_=Result;preparedEngine_=Engine;preparedGeneration_=Generation;preparing_=true;installPrepared();
                     });
-                    Watcher->setFuture(QtConcurrent::run([Input = std::move(*Input), Bundle = bundle_]() mutable {
+                    Watcher->setFuture(QtConcurrent::run([Input = std::move(*Input), Bundle = bundle_, Cancellation = cancellation_]() mutable {
                         Prepared Result;
                         try {
+                            if(Input.inputVersion==2) {
+                                const auto Session=hc::document::epub::PublicationSession::Open(std::move(Input.bytes),[Cancellation]{return Cancellation->load();});
+                                const auto Index=Session->Index();
+                                if(!Index) throw Index.error_+": "+Index.location_;
+                                Result.publication=Index.publication_;
+                                if(Result.publication["sourceSha256"]!=Input.documentId) throw QString("epub-publication-identity");
+                                Result.assets=loadAssets(Result.publication,Bundle,Session);
+                                return Result;
+                            }
                             QJsonParseError Parse; const auto Doc = QJsonDocument::fromJson(Input.bytes, &Parse);
                             if(Parse.error != QJsonParseError::NoError || !Doc.isObject()) throw QString("epub-publication-json");
                             Result.publication = Doc.object();
@@ -689,7 +728,7 @@ namespace
             }
             if(!transfer_.Matches(Request)) return {{"error", "epub-control-identity"}};
             if(reader_) return QJsonDocument::fromJson(reader_->Control(Bytes)).object();
-            if(Kind != "snapshot") return {{"error", "epub-control-not-ready"}};
+            if(Kind != "snapshot" && Kind != "snapshot-delta") return {{"error", "epub-control-not-ready"}};
             auto State = transfer_.Status();
             if(cancelled_) State["status"] = "cancelled";
             else if(!error_.isEmpty()) { State["status"] = "error"; State["message"] = error_; }
@@ -715,6 +754,7 @@ namespace
         QString bundle_, error_, settingsPath_;
         QJsonObject appearance_;
         bool configured_ = false;
+        std::shared_ptr<std::atomic_bool> cancellation_=std::make_shared<std::atomic_bool>(false);
         hc::epub::poc::InputTransfer transfer_;
         QWindow* nativeParent_ = nullptr;
         std::uintptr_t nativeReader_ = 0;
@@ -782,12 +822,14 @@ int main(int Argc, char** Argv)
 #ifndef HC_EPUB_PRODUCT_HELPER
         if(Parser.isSet("epub") == Parser.isSet("publication")) throw QString("Specify exactly one of --epub or --publication");
         QJsonObject Publication;
+        std::shared_ptr<hc::document::epub::PublicationSession> Session;
         if(Parser.isSet("epub")) {
-            const auto Prepared = hc::document::epub::PrepareFile(Parser.value("epub"));
+            Session=hc::document::epub::PublicationSession::Open(readBounded(Parser.value("epub"),hc::document::epub::InputLimit));
+            const auto Prepared = Session->Index();
             if(!Prepared) throw Prepared.error_ + ": " + Prepared.location_;
             Publication = Prepared.publication_;
         } else Publication = readObject(Parser.value("publication"), MaxSnapshot);
-        const auto Items = loadAssets(Publication, Parser.value("bundle"));
+        const auto Items = loadAssets(Publication, Parser.value("bundle"),Session);
         const auto Evidence = Parser.value("evidence");
         if(!Evidence.isEmpty() && (QDir(Evidence).exists() || !QDir().mkpath(Evidence))) throw QString("Evidence directory must be new");
         if(!Evidence.isEmpty() && Parser.isSet("settings-file")) throw QString("Evidence mode must not write persistent settings");

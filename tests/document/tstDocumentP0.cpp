@@ -90,7 +90,7 @@ class DocumentP0Tests final : public QObject
 private slots:
     void utf8SavePreservesBomEolAndOriginalOnConflict()
     {
-        QTemporaryDir Root; const auto Path = Root.filePath("한글 파일.txt");
+        QTemporaryDir Root(QDir(qEnvironmentVariable("HC_DOCUMENT_SAVE_TEST_ROOT",QDir::tempPath())).filePath("hc-document-save-XXXXXX")); QVERIFY(Root.isValid()); const auto Path = Root.filePath("한글 파일.txt");
         const QByteArray Initial = QByteArray("\xef\xbb\xbf") + QByteArray("one\r\ntwo\r\n"); QVERIFY(Put(Path, Initial));
         auto Opened = Worker([&] { return ReadTextFile(Path); }); QVERIFY(Opened.HasValue());
         const auto Bytes = EncodeText("새 문서\n둘째 줄\n", Opened.Value().bom_, Opened.Value().eol_);

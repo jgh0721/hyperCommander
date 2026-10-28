@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <Sddl.h>
 #include "documentWebProcess.hpp"
+#include <QElapsedTimer>
 #include "epubProductPolicy.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "commonLibs/layout/productLayout.hpp"
@@ -181,6 +182,8 @@ namespace hc::document
         std::uintptr_t childWindow_=0;
         std::uint64_t sequence_=0;
         bool authenticated_=false, closed_=false, retired_=false;
+        bool epub_=false, epubShared_=false;
+        QJsonObject startupMetrics_;
         bool close(std::uint32_t TimeoutMs=5000)
         {
             if(retired_) return true;
@@ -231,6 +234,7 @@ namespace hc::document
         WebProcessLimits Limits,std::uintptr_t ParentWindow,WebProcessError& Error,
         std::unique_ptr<DocumentWebProcess>* PendingRetirement, const std::function<bool()>& Cancelled)
     {
+        QElapsedTimer StartupClock;StartupClock.start();
         startup::Scope StartupSpan("editor.nativeBackendStart");
         Error={};
         auto Runtime = RequestedRuntime;
@@ -245,7 +249,8 @@ namespace hc::document
         }
         { startup::Scope Inventory("runtime.inventory");
           if (Runtime.approvedInventorySha256_ && !ReadApprovedInventory(Runtime, Error.code_)) return {}; }
-        auto S=std::make_unique<State>();
+        auto S=std::make_unique<State>();S->startupMetrics_["inventoryMs"]=StartupClock.elapsed();
+        S->epub_=Runtime.kind_==WebProcessKind::EpubReadOnly || Runtime.kind_==WebProcessKind::EpubPrototype;
         auto Fail=[&](const char* Code) -> std::unique_ptr<DocumentWebProcess> {
             Error={QString::fromLatin1(Code),GetLastError()};
             DWORD Exit = STILL_ACTIVE;
@@ -286,9 +291,10 @@ namespace hc::document
         const auto Root=QFileInfo(Runtime.root_).canonicalFilePath();
         if(Root.isEmpty() || !QFileInfo(Root).isDir() || Runtime.sha256_.isEmpty() || Runtime.sha256_.size()>512
             || !Runtime.sha256_.contains(Executable)) return Fail("web-owner-runtime");
+        const auto VerificationStart=StartupClock.elapsed();
         startup::Scope LeasesAndHash("runtime.leasesAndHash");
         startup::Scope ProviderInit("runtime.shaProviderInitialize");
-        HwpRuntimeSha256 RuntimeHash;
+        HwpRuntimeSha256 RuntimeHash(RuntimeHashBackend::PreferCng,RuntimeSha256Api::System(),S->epub_);
         ProviderInit.End();startup::Data().SetRuntimeHashBackend(RuntimeHash.UsesCng());
         double HashMs = 0; qint64 HashBytes = 0, HashFiles = 0;
         QSet<QString> Seen;
@@ -335,11 +341,15 @@ namespace hc::document
             }
         }
         startup::Scope ProviderCleanup("runtime.shaProviderCleanup");
-        const bool ProviderClosed=RuntimeHash.Close();ProviderCleanup.End();
+        const bool CngBackend=RuntimeHash.UsesCng();const bool ProviderClosed=RuntimeHash.Close();ProviderCleanup.End();
         if(!ProviderClosed) return Fail("web-owner-runtime-hash");
         if(Cancelled && Cancelled()) return Fail("web-owner-runtime-cancelled");
         LeasesAndHash.End(HashBytes,HashFiles);
         startup::Data().Aggregate("runtime.hashReadAndSha256",HashMs,HashBytes,HashFiles);
+        S->startupMetrics_["verificationMs"]=StartupClock.elapsed()-VerificationStart;
+        const auto HashMetrics=RuntimeHash.Metrics();
+        S->startupMetrics_["hashMs"]=HashMetrics.readMs_+HashMetrics.updateMs_;S->startupMetrics_["readMs"]=HashMetrics.readMs_;S->startupMetrics_["shaMs"]=HashMetrics.updateMs_;S->startupMetrics_["cng"]=CngBackend;S->startupMetrics_["hashBytes"]=HashBytes;S->startupMetrics_["hashFiles"]=HashFiles;
+        const auto SetupStart=StartupClock.elapsed();
         startup::Scope Setup("helper.spawnSetup");
         Handle Original, Token;
         if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY|TOKEN_DUPLICATE|TOKEN_ASSIGN_PRIMARY,&Original.value_)) return Fail("web-owner-token");
@@ -392,7 +402,8 @@ namespace hc::document
             CREATE_SUSPENDED|CREATE_NO_WINDOW|CREATE_UNICODE_ENVIRONMENT,Block.data(),reinterpret_cast<LPCWSTR>(WorkingDirectory.utf16()),&Startup,&Process)) return Fail("web-owner-create");
         S->process_.value_=Process.hProcess; S->pid_=Process.dwProcessId; Handle Thread; Thread.value_=Process.hThread;
         if(!AssignProcessToJobObject(S->job_.value_,S->process_.value_)) { const auto Code=GetLastError(); TerminateProcess(S->process_.value_,1); SetLastError(Code); return Fail("web-owner-assign"); }
-        Setup.End();
+        Setup.End();S->startupMetrics_["spawnSetupMs"]=StartupClock.elapsed()-SetupStart;
+        const auto LaunchStart=StartupClock.elapsed();
         startup::Scope Handshake("helper.launchAndHandshake");
         if(ResumeThread(Thread.value_)==DWORD(-1)) return Fail("web-owner-resume");
         const auto Deadline=GetTickCount64()+Limits.startupMs_;
@@ -417,7 +428,7 @@ namespace hc::document
         }
         else if(Ready.window_) return Fail("web-owner-unexpected-window");
         S->childWindow_=static_cast<std::uintptr_t>(Ready.window_);
-        S->authenticated_=true;
+        S->authenticated_=true;S->startupMetrics_["launchHandshakeMs"]=StartupClock.elapsed()-LaunchStart;S->startupMetrics_["totalMs"]=StartupClock.elapsed();
         return std::unique_ptr<DocumentWebProcess>(new DocumentWebProcess(std::move(S)));
     }
     bool DocumentWebProcess::Exchange(const QByteArray& Request,QByteArray& Reply,std::uint32_t TimeoutMs,WebProcessError& Error)
@@ -436,10 +447,32 @@ namespace hc::document
         if(!Ok) { Error={"web-owner-exchange",GetLastError()}; Reply.clear(); S.close(); }
         return Ok;
     }
+    QString DocumentWebProcess::ShareEpubInput(const QByteArray& Bytes, WebProcessError& Error)
+    {
+        std::lock_guard Lock(state_->mutex_); Error={};
+        if(!state_->authenticated_ || state_->closed_ || !state_->epub_ || state_->epubShared_
+            || Bytes.isEmpty() || Bytes.size()>64*1024*1024) { Error.code_="epub-mapping-admission"; return {}; }
+        auto Mapping=std::make_unique<Handle>();
+        Mapping->value_=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,DWORD(Bytes.size()),nullptr);
+        if(!Mapping->Valid()) { Error={"epub-mapping-create",GetLastError()}; return {}; }
+        auto* View=MapViewOfFile(Mapping->value_,FILE_MAP_WRITE,0,0,SIZE_T(Bytes.size()));
+        if(!View) { Error={"epub-mapping-view",GetLastError()}; return {}; }
+        memcpy(View,Bytes.constData(),size_t(Bytes.size())); UnmapViewOfFile(View);
+        // Allocate owner storage before duplication, so no allocation failure
+        // can leave an untracked remote handle in the authenticated child.
+        state_->leases_.push_back(std::move(Mapping));
+        HANDLE Remote=nullptr;
+        if(!DuplicateHandle(GetCurrentProcess(),state_->leases_.back()->value_,state_->process_.value_,&Remote,FILE_MAP_READ,FALSE,0)) {
+            Error={"epub-mapping-duplicate",GetLastError()}; state_->leases_.pop_back(); return {};
+        }
+        state_->epubShared_=true;
+        return QString::number(quintptr(Remote));
+    }
+
     WebProcessSnapshot DocumentWebProcess::Snapshot() const
     {
         auto& S=*state_; std::lock_guard Lock(S.mutex_); WebProcessSnapshot Out; Out.processId_=S.pid_;
-        Out.childWindow_=S.authenticated_?S.childWindow_:0;
+        Out.childWindow_=S.authenticated_?S.childWindow_:0;Out.startupMetrics_=S.startupMetrics_;
         Out.authenticated_=S.authenticated_; Out.running_=S.process_.Valid() && WaitForSingleObject(S.process_.value_,0)==WAIT_TIMEOUT;
         if(S.job_.Valid())
         {

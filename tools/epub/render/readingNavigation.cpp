@@ -96,6 +96,15 @@ void ReadingNavigation::Poll(const QJsonObject& State) {
         else if(Result.contains("hits")) {results_->clear();for(const auto& Hit:Result["hits"].toArray()){const auto H=Hit.toObject();auto* Item=new QListWidgetItem(H["excerpt"].toString(),results_);Item->setData(Qt::UserRole,H["cfi"]);}
             status_->setText(tr("검색 결과 %1개%2").arg(results_->count()).arg(Result["limited"].toBool()?tr(" · 검색 한도에 도달했습니다"):QString{}));}
     }
+    const auto Search=State["readerSearch"].toObject();
+    if(Search["serial"].toInteger()>searchSeen_ && !Search["busy"].toBool()) {
+        searchSeen_=Search["serial"].toInteger();
+        if(Search.contains("error"))status_->setText(Search["error"].toString());
+        else {
+            results_->clear();for(const auto& Value:Search["hits"].toArray()) {const auto Hit=Value.toObject();auto* Item=new QListWidgetItem(Hit["excerpt"].toString(),results_);Item->setData(Qt::UserRole,Hit["cfi"]);}
+            status_->setText(tr("검색 결과 %1개%2").arg(results_->count()).arg(Search["limited"].toBool()?tr(" · 검색 한도에 도달했습니다"):QString{}));
+        }
+    }
     pollAnnotations(State);
 }
 void ReadingNavigation::SetPublication(const QJsonObject& Publication) {

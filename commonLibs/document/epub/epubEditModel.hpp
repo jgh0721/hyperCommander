@@ -2,8 +2,10 @@
 #include "epubPackage.hpp"
 #include <QMap>
 #include <QList>
+#include <memory>
 namespace hc::document::epub {
-struct EditOutput {QByteArray bytes_;QString error_,location_;explicit operator bool()const{return error_.isEmpty() && !bytes_.isEmpty();}};
+class EditModel;
+struct EditOutput {QByteArray bytes_;QString error_,location_;std::shared_ptr<const EditModel> prepared_;explicit operator bool()const{return error_.isEmpty() && !bytes_.isEmpty();}};
 class EditModel final {
 public:
     bool Load(QByteArray Bytes,const Cancellation& Cancel={});
@@ -25,6 +27,7 @@ public:
     QByteArray Fingerprint(const QMap<QString,QByteArray>& Draft={})const;
     EditOutput Export(const QMap<QString,QByteArray>& Draft={},const Cancellation& Cancel={})const;
 private:
+    void accept(QByteArray Bytes,const QJsonObject& Publication);
     QString modifyProperties(const QJsonObject& Request,const Cancellation& Cancel);
     void assign(const QString& Path,const QByteArray& Bytes);
     struct State {QByteArray edition_;QJsonObject publication_;QMap<QString,QString> media_;QMap<QString,QByteArray> changes_;};
@@ -32,6 +35,8 @@ private:
     QByteArray original_,edition_;QString originalHash_;
     QJsonObject publication_;QString error_;QMap<QString,QString> media_;
     QMap<QString,QByteArray> replacements_;
+    mutable QMap<QString,QByteArray> fingerprintChanges_;
+    mutable QString fingerprintEdition_;mutable QByteArray fingerprint_;
     struct Change{State before_,after_;};QList<Change> history_;qsizetype position_=0;
 };
 }

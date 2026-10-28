@@ -375,7 +375,7 @@ namespace hc::document
                 if (auto Tab = active()) Tab->pane_->Focus();
             });
         }
-        auto* EpubMenu=ViewMenu->addMenu(tr("EPUB"));
+        auto* EpubMenu=new QMenu(tr("EPUB"),this);EpubMenu->setObjectName("epubCommands");
         EpubMenu->menuAction()->setProperty("documentIconName","toc-toggle");
         for(const auto& Command:DocumentShortcutRegistry::Commands())if(Command.scope_=="epub") {
             auto* Action=EpubMenu->addAction(Command.label_);Action->setObjectName(Command.id_);addAction(Action);
@@ -1275,7 +1275,12 @@ namespace hc::document
         auto Tab = active();
         if(epubFullscreen_ && (!Tab || !Tab->pane_->IsEpub()))toggleEpubFullscreen();
         if (Tab) {
-            workspace_.Activate(Tab->id_.toStdString());if(!findChild<ImageFullscreen*>("imageFullscreen")->Active())chrome_->SetActive(Tab->pane_->Contribution());
+            workspace_.Activate(Tab->id_.toStdString());
+            if(!findChild<ImageFullscreen*>("imageFullscreen")->Active()) {
+                auto Contribution=Tab->pane_->Contribution();
+                if(Tab->pane_->IsEpub())Contribution.menuActions_=findChild<QMenu*>("epubCommands")->actions();
+                chrome_->SetActive(std::move(Contribution));
+            }
             const auto State = Tab->session_->Snapshot();
             const auto ViewError=Tab->pane_->ViewState()["error"].toString();
             const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : !ViewError.isEmpty()?ViewError:State.error_ ? QString::fromStdString(State.error_->code_) : QString{};

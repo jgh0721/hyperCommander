@@ -58,7 +58,7 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
     connect(previewAutomatic_,&QCheckBox::toggled,this,[this](bool Enabled){if(Enabled)requestPreview();else previewTimer_.stop();});
     connect(previewSynchronize_,&QCheckBox::toggled,this,[this](bool Enabled){if(Enabled)syncPreviewSource(true);});
     connect(this,&EpubSourceEditor::Changed,this,[this]{
-        ++previewEpoch_;previewPending_=previewAutomatic_->isChecked();if(previewCancel_)previewCancel_->store(true);
+        ++previewEpoch_;previewPending_=previewAutomatic_->isChecked();if(previewCancel_ && (!nativeValidating_ || validationToken_!=Token() || previewCancel_!=validationCancel_))previewCancel_->store(true);
         if(previewCandidate_){auto* Old=std::exchange(previewCandidate_,nullptr);retirePreview(Old);}
         if(previewAutomatic_->isChecked() && !previewClosing_)previewTimer_.start();
     });
@@ -68,7 +68,7 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
         const auto Result=previewWorker_.result();if(previewClosing_){RequestPreviewClose();emit StateChanged();return;}
         if(previewWorkEpoch_!=previewEpoch_ || previewWorkToken_!=Token()){if(previewAutomatic_->isChecked() || previewPending_)previewTimer_.start();emit StateChanged();return;}
         if(!Result){previewError_=Result.error_+": "+Result.location_;previewStatus_->setText(tr("소스 검사 실패 · 마지막 정상 미리보기를 유지합니다.\n%1").arg(previewError_));}
-        else {previewError_.clear();showPreview(Result.bytes_);}emit StateChanged();
+        else {cachedExport_=Result;cachedExportToken_=previewWorkToken_;previewError_.clear();showPreview(Result.bytes_);}emit StateChanged();
     });
     // Preview settings and navigation state live in a private directory. No
     // candidate publication can add entries to the user's reading history.
@@ -100,7 +100,11 @@ void EpubSourceEditor::requestPreview(bool Force) {
     if(previewCandidate_ && !Force && previewCandidateToken_==Token())return;
     if(previewCandidate_){auto* Old=std::exchange(previewCandidate_,nullptr);retirePreview(Old);}
     previewPending_=false;previewWorkToken_=Token();previewWorkEpoch_=previewEpoch_;previewError_.clear();previewStatus_->setText(tr("편집 내용을 검사하고 있습니다… 이전 미리보기는 유지됩니다."));
-    auto Model=model_;const auto Draft=draft();previewCancel_=std::make_shared<std::atomic_bool>(false);
+    if(cachedExportToken_==previewWorkToken_ && cachedExport_){showPreview(cachedExport_.bytes_);emit StateChanged();return;}
+    if(nativeValidating_ && validationToken_==previewWorkToken_ && validationCancel_ && !validationCancel_->load()) {
+        previewCancel_=validationCancel_;++exportJoins_;previewWorker_.setFuture(validation_.future());emit StateChanged();return;
+    }
+    ++exportRuns_;auto Model=model_;const auto Draft=draft();previewCancel_=std::make_shared<std::atomic_bool>(false);
     previewWorker_.setFuture(QtConcurrent::run([Model=std::move(Model),Draft,Cancel=previewCancel_]{return Model.Export(Draft,[Cancel]{return Cancel->load();});}));emit StateChanged();
 }
 void EpubSourceEditor::retirePreview(EpubProcessView* View) {
@@ -162,7 +166,7 @@ QJsonObject EpubSourceEditor::previewSnapshot()const {
     return {{"configured",previewRuntime_.has_value()},{"busy",previewWorker_.isRunning()||previewCandidate_!=nullptr},{"waitingForFocus",previewPending_ && !previewOwnerActive()},{"candidate",previewCandidate_?previewCandidate_->ViewState():QJsonObject{}},{"error",previewError_},{"current",previewView_ && previewActiveToken_==Token()},{"ready",previewView_ && previewView_->IsLoaded()},{"token",QString::fromLatin1(previewActiveToken_.toHex())},{"state",previewView_?previewView_->ViewState():QJsonObject{}},{"retiring",previewRetiring_.size()}};
 }
 bool EpubSourceEditor::RequestPreviewClose() {
-    previewClosing_=true;previewTimer_.stop();if(previewCancel_)previewCancel_->store(true);
+    previewClosing_=true;previewTimer_.stop();if(previewCancel_ && (!nativeValidating_ || previewCancel_!=validationCancel_))previewCancel_->store(true);
     if(previewView_){auto* Old=std::exchange(previewView_,nullptr);retirePreview(Old);}if(previewCandidate_){auto* Old=std::exchange(previewCandidate_,nullptr);retirePreview(Old);}
     const bool Closed=IsPreviewClosed();
     if(Closed && previewDirectory_)previewDirectory_->remove();return Closed;

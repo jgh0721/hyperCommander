@@ -17,11 +17,25 @@ int main(int Argc, char** Argv)
     Parser.addPositionalArgument("epub", "Immutable EPUB input");
     Parser.addOption({"cancel-after", "Test cancellation after N checkpoints", "count", "0"});
     Parser.addOption({"metadata", "Inspect native metadata"});
+    Parser.addOption({"session", "Validate the metadata and all resources without a Base64 snapshot"});
     Parser.addOption({"inspect-image", "Inspect image occurrences", "resource"});
     Parser.addOption({"edit-requests", "Apply bounded structural/property JSON requests", "json"});
     Parser.addOption({"output", "Create a new EPUB copy; existing paths are refused", "epub"});
     Parser.process(App);
     if(Parser.positionalArguments().size() != 1) Parser.showHelp(2);
+    if(Parser.isSet("session")) {
+        QFile Input(Parser.positionalArguments().first());
+        if(!Input.open(QIODevice::ReadOnly) || Input.size()>hc::document::epub::InputLimit) return 2;
+        const auto Session=hc::document::epub::PublicationSession::Open(Input.read(hc::document::epub::InputLimit+1));
+        auto Result=Session->Index();
+        if(Result) {
+            const auto Validation=Session->ValidateAll();
+            if(!Validation) Result={{},Validation.error_,Validation.location_};
+        }
+        QFile Output;Output.open(stdout,QIODevice::WriteOnly);
+        Output.write(QJsonDocument(Result?Result.publication_:QJsonObject{{"error",Result.error_},{"location",Result.location_}}).toJson(QJsonDocument::Compact));
+        return Result?0:2;
+    }
     if(Parser.isSet("metadata") || Parser.isSet("inspect-image") || Parser.isSet("edit-requests")) {
         QFile Input(Parser.positionalArguments().first());QJsonObject Report;int Exit=2;
         if(Input.open(QIODevice::ReadOnly) && Input.size()<=64*1024*1024) {

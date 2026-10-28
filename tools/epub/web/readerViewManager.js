@@ -7,7 +7,11 @@ export class ReaderViewManager extends DefaultViewManager {
     // the same Layout object so Rendition's location mapping remains coherent.
     createView(section, forceRight) {
         this.selectSection(section);
-        return super.createView(section, forceRight);
+        const view=super.createView(section, forceRight);
+        // EPUB.js shows a view before its final placement and location settle.
+        // Keep it measurable while the retained old page covers the transition.
+        if(this.transitionDepth)view.element.style.opacity="0";
+        return view;
     }
     selectSection(section) {
         const policy=this.settings.sectionPolicy?.(section);
@@ -113,7 +117,10 @@ export class ReaderViewManager extends DefaultViewManager {
     }
     endTransition() {
         this.transitionDepth = Math.max(0,(this.transitionDepth || 0)-1);
-        if (!this.transitionDepth) this.releaseRetired();
+        if (!this.transitionDepth) {
+            for(const view of this.views?.all() || [])view.element.style.removeProperty("opacity");
+            this.releaseRetired();
+        }
     }
     releaseRetired() {
         for (const view of this.retired || []) { view.destroy(); view.element.remove(); }

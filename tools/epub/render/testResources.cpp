@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/epubResourceLease.hpp"
+#include "publicationResources.hpp"
 #include <Windows.h>
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -34,6 +35,25 @@ int hold(const QString& Domain,bool Cancel) {
 class ResourceTests final:public QObject {
     Q_OBJECT
 private slots:
+    void resourceCachePinsAndReservations() {
+        hc::epub::poc::PublicationResources Cache({});
+        constexpr qint64 Size=32LL*1024*1024;
+        auto First=Cache.Reserve(Size),Second=Cache.Reserve(Size),Third=Cache.Reserve(Size);
+        QVERIFY(First && Second && Third);QVERIFY(!Cache.Reserve(1));
+        First->bytes_="immutable reply";Cache.Retain("first",First);
+        const auto Reply=Cache.Cached("first");QVERIFY(Reply);QCOMPARE(Reply->bytes_,QByteArray("immutable reply"));
+        Second.reset();auto Replacement=Cache.Reserve(Size);QVERIFY(Replacement);
+        // A live QIODevice lease keeps its bytes reserved and readable even
+        // when soft-cache eviction is requested by another resource.
+        QVERIFY(Cache.Cached("first"));QCOMPARE(Reply->bytes_,QByteArray("immutable reply"));
+        QVERIFY(!Cache.Reserve(1));QVERIFY(!Cache.Reserve(Size+1));
+    }
+    void resourceCacheEvictsOnlyUnpinned() {
+        hc::epub::poc::PublicationResources Cache({});
+        auto First=Cache.Reserve(32LL*1024*1024);Cache.Retain("first",First);First.reset();
+        auto Second=Cache.Reserve(32LL*1024*1024);QVERIFY(Second);QVERIFY(!Cache.Cached("first"));
+        QCOMPARE(hc::epub::poc::PublicationResources::Pool()->maxThreadCount(),2);
+    }
     void crossProcessBudgetAndCrash() {
         const auto Domain=QUuid::createUuid().toString(QUuid::Id128);
         Child First({"--hold",Domain}),Second({"--hold",Domain});const auto FirstLine=First.line();QVERIFY(FirstLine.startsWith("ready "));QVERIFY(Second.line().startsWith("ready "));

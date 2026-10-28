@@ -342,7 +342,7 @@ namespace hc::document
                 std::atomic_bool StopPreparation{false};
                 auto Preparation=std::async(std::launch::async,[&]{
                     QElapsedTimer Clock;Clock.start();
-                    auto Package=epub::Prepare(State->bytes_,[&]{return StopPreparation.load()||Cancelled();});
+                    auto Package=epub::PublicationSession::Open(State->bytes_,[&]{return StopPreparation.load()||Cancelled();})->Index();
                     return std::pair{std::move(Package),Clock.elapsed()};
                 });
                 Owner = DocumentWebProcess::Start(Runtime, Limits, State->parent_, Error, &Pending, Cancelled);
@@ -354,7 +354,7 @@ namespace hc::document
                 if(!Package) { Failure = Package.error_; return; }
                 if(Cancelled()) return;
                 Id = Package.publication_["sourceSha256"].toString();
-                Payload = QJsonDocument(Package.publication_).toJson(QJsonDocument::Compact);
+                Payload = State->bytes_;
                 State->snapshot_ = Owner->Snapshot();
                 State->ready_.store(true, std::memory_order_release);
                 while(!State->attached_.load(std::memory_order_acquire) && !Cancelled() && !Deadline.hasExpired())
@@ -367,18 +367,26 @@ namespace hc::document
                     {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_},{"initiallyInteractive",State->initiallyInteractive_}}).toJson(QJsonDocument::Compact);
                 QByteArray ConfigureReply;
                 if(!Owner->Exchange(Configure, ConfigureReply, 5000, Error)
-                    || !QJsonDocument::fromJson(ConfigureReply).object()["accepted"].toBool()) { Failure = "epub-configuration-rejected"; return; }
+                    || !QJsonDocument::fromJson(ConfigureReply).object()["accepted"].toBool()
+                    || QJsonDocument::fromJson(ConfigureReply).object()["epubInputVersion"]!=QJsonValue(2)) { Failure = "epub-configuration-rejected"; return; }
                 const auto TransferAt=Elapsed.elapsed();
-                auto Sent = epub::SendInput(Payload, Id, State->generation_, "epubjs",
-                    [&](const QByteArray& Request, QByteArray& Reply, int Timeout) {
-                        return Owner->Exchange(Request, Reply, Timeout, Error);
-                    }, Cancelled);
-                if(!Sent.accepted_) { Failure = Sent.error_; return; }
+                const auto Shared=Owner->ShareEpubInput(Payload,Error);
+                if(Shared.isEmpty()) { Failure=Error.code_; return; }
+                if(Cancelled()) return;
+                const QJsonObject Open{{"protocolVersion",1},{"kind","input-map"},{"documentId",Id},{"generation",State->generation_},
+                    {"epubInputVersion",2},{"engine","epubjs"},{"byteLength",Payload.size()},{"sha256",Id},{"handle",Shared}};
+                QByteArray OpenReply;
+                if(!Owner->Exchange(QJsonDocument(Open).toJson(QJsonDocument::Compact),OpenReply,5000,Error)) { Failure=Error.code_; return; }
+                const auto Accepted=QJsonDocument::fromJson(OpenReply).object();
+                if(!Accepted["accepted"].toBool() || Accepted["epubInputVersion"]!=QJsonValue(2) || Accepted["documentId"]!=Id
+                    || Accepted["generation"]!=QJsonValue(State->generation_)) { Failure="epub-mapping-rejected"; return; }
+                Metrics["epubInputVersion"]=2; Metrics["inputBytes"]=Payload.size();
                 Metrics["transferMs"]=Elapsed.elapsed()-TransferAt;
                 const auto Request = QJsonDocument(QJsonObject{{"protocolVersion", 1}, {"documentId", Id},
-                    {"generation", State->generation_}, {"kind", "snapshot"}}).toJson(QJsonDocument::Compact);
+                    {"generation", State->generation_}, {"kind", "snapshot-delta"}}).toJson(QJsonDocument::Compact);
                 bool DocumentReady = false;
                 bool FocusAcknowledged = false;
+                qint64 SnapshotBytes=0,SnapshotReplies=0;
                 while(!Cancelled()) {
                     QJsonObject Next;
                     { std::lock_guard Lock(State->mutex_); Next = State->appearance_; }
@@ -414,14 +422,21 @@ namespace hc::document
                         || Reply["generation"] != QJsonValue(State->generation_) || !Reply["state"].isObject() || Reply.contains("error")) {
                         Failure = "epub-view-snapshot-identity"; return;
                     }
+                    SnapshotBytes+=Bytes.size();++SnapshotReplies;Metrics["snapshotReplyBytes"]=SnapshotBytes;Metrics["snapshotReplies"]=SnapshotReplies;
                     auto View = Reply["state"].toObject();
+                    if(Reply.contains("stateDelta")) {
+                        if(Reply["stateDelta"]!=true || !Reply["replaceState"].isBool() || !Reply["removed"].isArray()){Failure="epub-view-delta-shape";return;}
+                        auto Merged=Reply["replaceState"].toBool()?QJsonObject{}:LastReaderState;
+                        for(const auto Key:Reply["removed"].toArray()){if(!Key.isString()){Failure="epub-view-delta-key";return;}Merged.remove(Key.toString());}
+                        for(auto At=View.begin();At!=View.end();++At)Merged[At.key()]=At.value();View=std::move(Merged);
+                    }
                     LastReaderState = View;
                     const auto Status = View["status"].toString();
                     if(Status == "error" || Status == "cancelled") { Failure = View["message"].toString("epub-renderer-failed"); return; }
                     const bool Stable=Status=="ready" && !View["readerBusy"].toBool() && !View["locator"].toString().isEmpty();
                     if(!DocumentReady && Stable) Metrics["readyMs"] = Elapsed.elapsed();
                     DocumentReady = DocumentReady || Stable;
-                    const auto Usage = Owner->Snapshot();
+                    const auto Usage = Owner->Snapshot();Metrics["ownerStartup"]=Usage.startupMetrics_;
                     PeakBytes = qMax(PeakBytes, Usage.peakJobBytes_);
                     PeakProcesses = qMax(PeakProcesses, Usage.activeProcesses_);
                     Metrics["peakJobBytes"] = qint64(PeakBytes);

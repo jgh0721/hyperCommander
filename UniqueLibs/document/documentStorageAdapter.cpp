@@ -23,7 +23,12 @@ namespace hc::document
     namespace
     {
         Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code, {"document"}}; }
-        Locator Local(const QString& Path) { return {LocatorKind::Local, Path.toUtf8().toStdString()}; }
+        Locator nativeLocation(const QString& Path) {
+            auto Native=QDir::toNativeSeparators(Path);
+            if(Native.startsWith("\\\\?\\UNC\\",Qt::CaseInsensitive))Native="\\\\"+Native.mid(8);
+            else if(Native.startsWith("\\\\?\\"))Native=Native.mid(4);
+            return {Native.startsWith("\\\\")?LocatorKind::Smb:LocatorKind::Local,Native.toUtf8().toStdString()};
+        }
         void documentReadRevision(EntrySnapshot& Source,const QString& Path)
         {
             auto Native=QDir::toNativeSeparators(Path);
@@ -66,8 +71,8 @@ namespace hc::document
             return Input;
         }
         const auto Canonical=QFileInfo(Path).canonicalFilePath();if(Canonical.isEmpty())return Error{ErrorCategory::NotFound,"document-file-missing"};
-        auto Reader=MakeNativeReadProvider(LocatorKind::Local);
-        auto Before=Reader->Resolve(Local(Canonical),Context).get();if(!Before.HasValue())return Before.Failure();
+        const auto Location=nativeLocation(Canonical);auto Reader=MakeNativeReadProvider(Location.kind_);
+        auto Before=Reader->Resolve(Location,Context).get();if(!Before.HasValue())return Before.Failure();
         documentReadRevision(Before.Value(),Canonical);
         if(const auto Cached=ImageDecodeCache::Find(Canonical)){
             auto After=Reader->Stat(Before.Value().id_,Context).get();if(!After.HasValue())return After.Failure();
@@ -150,8 +155,8 @@ namespace hc::document
         if (!QFileInfo(Path).isAbsolute()) return Invalid("document-absolute-path-required");
         const auto Canonical = QFileInfo(Path).canonicalFilePath();
         if (Canonical.isEmpty()) return Error{ErrorCategory::NotFound, "document-file-missing"};
-        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
-        auto Before = Reader->Resolve(Local(Canonical), Context).get(); if (!Before.HasValue()) return Before.Failure();
+        const auto Location=nativeLocation(Canonical);auto Reader = MakeNativeReadProvider(Location.kind_);
+        auto Before = Reader->Resolve(Location, Context).get(); if (!Before.HasValue()) return Before.Failure();
         documentReadRevision(Before.Value(),Canonical);
         auto ReadResult = Read(Canonical, Context); if (!ReadResult.HasValue()) return ReadResult.Failure();
         auto After = Reader->Stat(Before.Value().id_, Context).get(); if (!After.HasValue()) return After.Failure();
@@ -196,13 +201,14 @@ namespace hc::document
             if (Hash.result() != ExpectedHash)
                 return Error{ErrorCategory::StaleRevision, "document-external-content-change"};
         }
-        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
-        auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
-        auto Saved = SaveDocumentBytes(*Writer, Local(Path), Expected,
+        const auto Location=nativeLocation(Path);
+        auto Reader = MakeNativeReadProvider(Location.kind_);
+        auto Writer = MakeNativeWritableStorage(Location.kind_, Reader);
+        auto Saved = SaveDocumentBytes(*Writer, Location, Expected,
             std::as_bytes(std::span(Bytes.constData(), std::size_t(Bytes.size()))), Context);
         if (!Saved.HasValue()) return Saved.Failure();
         // A successful commit remains successful even if the post-commit query fails.
-        auto Fresh = Reader->Resolve(Local(Path), Context).get();
+        auto Fresh = Reader->Resolve(Location, Context).get();
         LocalSaveResult Result; Result.receipt_ = std::move(Saved.Value());
         Result.hash_ = QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256);
         if (Fresh.HasValue()) {documentReadRevision(Fresh.Value(),Path);Result.source_ = std::move(Fresh.Value());}

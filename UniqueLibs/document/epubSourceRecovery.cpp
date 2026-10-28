@@ -90,6 +90,7 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
     if(checkerCancel_)checkerCancel_->setEnabled(checkerState_=="running");
     status_->setText(ready_?tr("변경 내용은 사본으로 저장합니다. EPUBCheck 검사는 설정의 Java/JAR를 사용합니다."):error_);
     if(ready_) {
+        if(!Restoring)sourceHashAtOpen_=QByteArray::fromHex(model_.Publication()["sourceSha256"].toString().toLatin1());
         reference_=Restoring?QCryptographicHash::hash(pendingRecovery_->original_,QCryptographicHash::Sha256):model_.Fingerprint();updating_=true;resources_->clear();
         for(const auto& Value:model_.Publication()["resources"].toArray()){const auto Resource=Value.toObject();if(model_.IsEditable(Resource["path"].toString()))resources_->addItem(Resource["path"].toString(),Resource["mediaType"].toString());}
         QStringList SpinePaths;for(const auto& Value:model_.Publication()["spine"].toArray())SpinePaths.append(Value.toObject()["path"].toString());resources_->setProperty("epubEditionHash",model_.Publication()["sourceSha256"].toString());resources_->setProperty("epubSpinePaths",SpinePaths);

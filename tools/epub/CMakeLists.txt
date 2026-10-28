@@ -54,6 +54,7 @@ foreach(HC_EPUB_RENDER_TARGET IN LISTS HC_EPUB_RENDER_TARGETS)
         render/ownerMode.cpp
         render/inputTransfer.hpp
         render/inputTransfer.cpp
+        render/publicationResources.hpp
         "${PROJECT_SOURCE_DIR}/UniqueLibs/document/documentWebPeer.cpp"
         "${PROJECT_SOURCE_DIR}/UniqueLibs/document/documentWebPeer.hpp"
         "${PROJECT_SOURCE_DIR}/UniqueLibs/document/documentThemeAdapter.cpp"

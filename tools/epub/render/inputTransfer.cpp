@@ -4,6 +4,9 @@
 /// Platform/framework headers
 #include <cmath>
 #include <utility>
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
 
 namespace hc::epub::poc
 {
@@ -40,6 +43,29 @@ namespace hc::epub::poc
         Expire();
         if(Request["protocolVersion"] != QJsonValue(1) || !Request["kind"].isString()) return reject("epub-input-schema");
         const auto Kind = Request["kind"].toString();
+        if(Kind=="input-map") {
+            if(state_!=State::Idle) return reject("epub-input-state");
+            const auto Length=Request["byteLength"].toInteger(-1), Generation=Request["generation"].toInteger(-1);
+            bool Valid=false; const auto RawHandle=Request["handle"].toString().toULongLong(&Valid);
+            if(Request.size()!=9 || Request["epubInputVersion"]!=QJsonValue(2) || Request["engine"]!="epubjs"
+                || !hashValid(Request["documentId"].toString()) || Request["sha256"]!=Request["documentId"]
+                || Length<1 || Length>64*1024*1024 || Request["byteLength"].toDouble()!=double(Length)
+                || Generation<1 || Generation>9007199254740991LL || Request["generation"].toDouble()!=double(Generation)
+                || !Valid || !RawHandle || RawHandle>quintptr(-1) || QString::number(RawHandle)!=Request["handle"].toString())
+                return reject("epub-mapping-admission");
+            const auto Mapping=reinterpret_cast<HANDLE>(quintptr(RawHandle));
+            const auto* View=MapViewOfFile(Mapping,FILE_MAP_READ,0,0,SIZE_T(Length));
+            if(!View) { CloseHandle(Mapping); return fail("epub-mapping-view"); }
+            QByteArray Snapshot;
+            try { Snapshot=QByteArray(static_cast<const char*>(View),qsizetype(Length)); }
+            catch(...) { UnmapViewOfFile(View); CloseHandle(Mapping); return fail("epub-mapping-memory"); }
+            UnmapViewOfFile(View); CloseHandle(Mapping);
+            if(QCryptographicHash::hash(Snapshot,QCryptographicHash::Sha256).toHex()!=Request["sha256"].toString().toLatin1())
+                return fail("epub-mapping-integrity");
+            input_={Request["documentId"].toString(),"epubjs",Generation,std::move(Snapshot),2};
+            length_=received_=Length; deadline_=QDeadlineTimer(timeoutMs_,Qt::PreciseTimer); state_=State::Verified;
+            auto Reply=Status(); Reply["accepted"]=true; Reply["epubInputVersion"]=2; return Reply;
+        }
         if(Kind == "input-begin") {
             if(state_ != State::Idle) return reject("epub-input-state");
             const auto Size = Request["byteLength"].toDouble(-1), Generation = Request["generation"].toDouble(-1);
@@ -81,6 +107,6 @@ namespace hc::epub::poc
         Expire(); if(state_ != State::Verified) return {};
         state_ = State::Consumed;
         // Retain identity for stale-request rejection after handing bytes to the parser.
-        return TransferredPublication{input_.documentId, input_.engine, input_.generation, std::exchange(input_.bytes, {})};
+        return TransferredPublication{input_.documentId, input_.engine, input_.generation, std::exchange(input_.bytes, {}), input_.inputVersion};
     }
 }

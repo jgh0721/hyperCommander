@@ -148,10 +148,9 @@ namespace hc::document::epub
 
         struct Resource { QString id_, path_, media_; QStringList properties_; };
 
-        QJsonObject prepare(const QByteArray& Bytes, const Cancellation& Cancel)
+        QJsonObject prepare(const QByteArray& Bytes, const Cancellation& Cancel, Archive& Book, QMap<QString,QByteArray>* Overrides = nullptr)
         {
-            Archive Book(Bytes, Cancel);
-            Book.VerifyAll();
+            if(!Overrides) Book.VerifyAll();
             if(Book.Contains("META-INF/encryption.xml")) Reject("encryption-needs-classification");
             if(Book.Contains("META-INF/signatures.xml")) Reject("signed-publication");
             const Xml Container(Book.Read("META-INF/container.xml"), "META-INF/container.xml", Cancel);
@@ -216,6 +215,11 @@ namespace hc::document::epub
                 Ids.insert(Resource.id_, static_cast<int>(Resources.size())); Paths.insert(Resource.path_); Resources.append(Resource);
             }
             if(Resources.isEmpty() || Resources.size() >= 4096) Reject("manifest-count-limit");
+            if(Overrides) {
+                QSet<QString> Fonts;
+                for(const auto& Resource:Resources) if(Resource.media_.startsWith("font/")) Fonts.insert(Resource.path_);
+                Book.ValidateResourceLimits(Fonts);
+            }
             auto Progression = Package.At(SpineIndex).Attr("page-progression-direction");
             if(Progression.isEmpty()) Progression = "default";
             if(Progression != "default" && Progression != "ltr" && Progression != "rtl") Reject("invalid-reading-progression");
@@ -261,7 +265,7 @@ namespace hc::document::epub
                 auto Linear = Item.Attr("linear"); if(Linear.isEmpty()) Linear = "yes";
                 if(Linear != "yes" && Linear != "no") Reject("invalid-spine-linear", Resource.path_);
                 // Recovery retains available source order and makes all of it
-                // reachable. The reader must explicitly show the missing count.
+                // reachable. Retain the missing count in publication diagnostics.
                 QJsonObject Section{{"id",Id},{"path",Resource.path_},{"linear",MissingSpineItems?"yes":Linear},{"layout",Layout}};
                 if(Layout=="pre-paginated"){const auto Size=FixedViewports[Resource.path_];Section["viewport"]=QJsonObject{{"width",Size.width()},{"height",Size.height()}};}
                 Append(Spine,Section);
@@ -307,13 +311,20 @@ namespace hc::document::epub
             };
             qint64 Total = PackageBytes.size();
             const auto AddResource = [&](const QString& Path, const QString& Media, const QByteArray& Raw) {
-                QJsonObject Record{{"path", Path}, {"mediaType", Media}, {"bytes", Raw.size()}, {"sha256", digest(Raw)}, {"base64", ""}};
-                Account(Record); Record["base64"] = QString::fromLatin1(Raw.toBase64()); Entries.append(Record);
+                QJsonObject Record{{"path", Path}, {"mediaType", Media}, {"bytes", Overrides && Raw.isNull() ? Book.Size(Path) : Raw.size()}};
+                if(!Overrides) { Record["sha256"] = digest(Raw); Record["base64"] = ""; }
+                Account(Record);
+                if(!Overrides) Record["base64"] = QString::fromLatin1(Raw.toBase64());
+                Entries.append(Record);
             };
             for(const auto& Resource : Resources) {
                 Check(Cancel);
-                const auto Raw = Book.Read(Resource.path_); Total += Raw.size();
-                if(Total > SnapshotLimit) Reject("renderer-snapshot-limit");
+                const auto Limit = Overrides && Resource.media_.startsWith("font/") ? 32 * 1024 * 1024 : 16 * 1024 * 1024;
+                if(Book.Size(Resource.path_) > Limit) Reject("decompressed-size-limit", Resource.path_);
+                const bool Markup = Resource.media_ == "application/xhtml+xml" || Resource.media_ == "image/svg+xml";
+                const auto Raw = !Overrides || Markup ? Book.Read(Resource.path_) : QByteArray{};
+                Total += Book.Size(Resource.path_);
+                if(!Overrides && Total > SnapshotLimit) Reject("renderer-snapshot-limit");
                 if(Resource.media_ == "application/xhtml+xml" || Resource.media_ == "image/svg+xml") {
                     const Xml Document(Raw, Resource.path_, Cancel); Document.Passive(Resource.path_);
                     const auto ExpectedRoot = Resource.media_ == "application/xhtml+xml" ? key(Xhtml, "html") : key("http://www.w3.org/2000/svg", "svg");
@@ -368,6 +379,7 @@ namespace hc::document::epub
             }
             if(Navigation.isEmpty()) Reject("missing-navigation");
             AddResource(Rootfile, "application/oebps-package+xml", ReaderPackage);
+            if(Overrides) Overrides->insert(Rootfile, ReaderPackage);
             Check(Cancel);
             return {{"schemaVersion", 1}, {"phase", "P0-B"}, {"policy", "passive-reflowable-v1"}, {"sourceSha256", digest(Bytes)},
                 {"title", Title}, {"languages", Languages}, {"readingProgression", Progression},
@@ -381,8 +393,51 @@ namespace hc::document::epub
 
     PackageResult Prepare(const QByteArray& Bytes, const Cancellation& Cancel)
     {
-        try { return {prepare(Bytes, Cancel), {}, {}}; }
+        try { Archive Book(Bytes, Cancel); return {prepare(Bytes, Cancel, Book), {}, {}}; }
         catch(const detail::Rejected& Error) { return {{}, Error.code_, Error.location_}; }
+        catch(const std::bad_alloc&) { return {{}, "memory-limit", {}}; }
+    }
+
+    struct PublicationSession::State {
+        QByteArray bytes_;
+        Cancellation cancel_;
+        std::unique_ptr<detail::Archive> archive_;
+        QMap<QString,QByteArray> overrides_;
+        QSet<QString> paths_;
+        PackageResult index_;
+    };
+    PublicationSession::PublicationSession(std::unique_ptr<State> Value) : state_(std::move(Value)) {}
+    PublicationSession::~PublicationSession() = default;
+    std::shared_ptr<PublicationSession> PublicationSession::Open(QByteArray Bytes, const Cancellation& Cancel)
+    {
+        auto Value = std::make_unique<State>();
+        Value->bytes_ = std::move(Bytes); Value->cancel_ = Cancel;
+        try {
+            Value->archive_ = std::make_unique<detail::Archive>(Value->bytes_, Cancel, 32 * 1024 * 1024);
+            Value->index_.publication_ = prepare(Value->bytes_, Cancel, *Value->archive_, &Value->overrides_);
+            for(const auto& Resource : Value->index_.publication_["resources"].toArray())
+                Value->paths_.insert(Resource.toObject()["path"].toString());
+        } catch(const detail::Rejected& Error) { Value->index_ = {{}, Error.code_, Error.location_}; }
+        catch(const std::bad_alloc&) { Value->index_ = {{}, "memory-limit", {}}; }
+        return std::shared_ptr<PublicationSession>(new PublicationSession(std::move(Value)));
+    }
+    PackageResult PublicationSession::Index() const { return state_->index_; }
+    ResourceResult PublicationSession::ReadValidatedResource(const QString& Path) const
+    {
+        try {
+            detail::Check(state_->cancel_);
+            if(!state_->index_ || !state_->paths_.contains(Path)) detail::Reject("resource-not-admitted", Path);
+            if(state_->overrides_.contains(Path)) return {state_->overrides_.value(Path), {}, {}};
+            return {state_->archive_->Read(Path), {}, {}};
+        } catch(const detail::Rejected& Error) { return {{}, Error.code_, Error.location_}; }
+        catch(const std::bad_alloc&) { return {{}, "memory-limit", Path}; }
+    }
+    ResourceResult PublicationSession::ValidateAll() const
+    {
+        try {
+            if(!state_->index_) return {{}, state_->index_.error_, state_->index_.location_};
+            state_->archive_->VerifyAll(); return {};
+        } catch(const detail::Rejected& Error) { return {{}, Error.code_, Error.location_}; }
         catch(const std::bad_alloc&) { return {{}, "memory-limit", {}}; }
     }
 

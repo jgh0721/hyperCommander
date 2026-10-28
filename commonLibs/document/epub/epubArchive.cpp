@@ -62,7 +62,7 @@ namespace hc::document::epub::detail
         return Path;
     }
 
-    Archive::Archive(const QByteArray& Bytes, const Cancellation& Cancel) : bytes_(Bytes), cancel_(Cancel)
+    Archive::Archive(const QByteArray& Bytes, const Cancellation& Cancel, qsizetype EntryLimit) : bytes_(Bytes), cancel_(Cancel)
     {
         Check(cancel_);
         if(Bytes.size() > InputLimit) Reject("input-limit");
@@ -137,9 +137,9 @@ namespace hc::document::epub::detail
             Entry Item{Path, u32(Bytes, At + 16), u32(Bytes, At + 20), u32(Bytes, At + 24), u32(Bytes, At + 42), Method, Name.endsWith('/')};
             Item.central_=Bytes.mid(At,Next-At);
             Total += Item.size_;
-            if(Item.size_ > 16 * 1024 * 1024 || Total > 128 * 1024 * 1024) Reject("decompressed-size-limit", Path);
+            if(Item.size_ > EntryLimit || Total > 128 * 1024 * 1024) Reject("decompressed-size-limit", Path);
             if(quint64(Item.size_) > quint64(std::max(1U, Item.compressed_)) * 200) Reject("compression-ratio-limit", Path);
-            if(Item.directory_ && (Item.size_ || Item.compressed_ || Item.crc_)) Reject("zip-directory-content", Path);
+            if(Item.directory_ && (Item.size_ || Item.crc_)) Reject("zip-directory-content", Path);
             if(Kind == 0040000 && !Item.directory_) Reject("zip-directory-name", Path);
             extra(Bytes, At + 46 + NameSize, ExtraSize);
             const qsizetype Local = Item.offset_;
@@ -176,6 +176,9 @@ namespace hc::document::epub::detail
         std::sort(Ranges.begin(), Ranges.end());
         for(qsizetype Index = 1; Index < Ranges.size(); ++Index)
             if(Ranges[Index].first < Ranges[Index - 1].second) Reject("zip-overlap");
+        // A DEFLATE stream representing an empty directory still has compressed
+        // bytes. Validate it exactly like file data, without exposing a resource.
+        for(const auto& Item : entries_) if(Item.directory_) readEntry(Item);
         if(Read("mimetype") != "application/epub+zip") Reject("invalid-mimetype-value");
     }
 
@@ -219,7 +222,13 @@ namespace hc::document::epub::detail
         Check(cancel_);
         const auto Found = entries_.constFind(Path);
         if(Found == entries_.cend() || Found->directory_) Reject("missing-resource", Path);
-        const auto& Item = Found.value();
+        return readEntry(Found.value());
+    }
+
+    QByteArray Archive::readEntry(const Entry& Item) const
+    {
+        const auto& Path = Item.path_;
+        Check(cancel_);
         QByteArray Result;
         if(Item.method_ == 0) {
             if(Item.compressed_ != Item.size_) Reject("zip-stored-size", Path);
@@ -247,6 +256,14 @@ namespace hc::document::epub::detail
         const auto Crc = crc32(0, reinterpret_cast<const Bytef*>(Result.constData()), static_cast<uInt>(Result.size()));
         if(Crc != Item.crc_) Reject("zip-crc", Path);
         return Result;
+    }
+
+    void Archive::ValidateResourceLimits(const QSet<QString>& Fonts) const
+    {
+        for(const auto& Item:entries_) {
+            Check(cancel_);
+            if(Item.size_>quint32(Fonts.contains(Item.path_)?32*1024*1024:16*1024*1024)) Reject("decompressed-size-limit",Item.path_);
+        }
     }
 
     void Archive::VerifyAll() const

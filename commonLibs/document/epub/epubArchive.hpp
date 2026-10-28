@@ -32,19 +32,22 @@ namespace hc::document::epub::detail
         QByteArray central_;
     };
 
-    // Borrows an immutable snapshot for the duration of Prepare().
+    // Implicitly shared immutable bytes and a value-owned cancellation callback.
     class Archive final
     {
     public:
-        Archive(const QByteArray& Bytes, const Cancellation& Cancel);
+        Archive(const QByteArray& Bytes, const Cancellation& Cancel, qsizetype EntryLimit = 16 * 1024 * 1024);
+        qsizetype Size(const QString& Path) const { return entries_.contains(Path) ? entries_.value(Path).size_ : -1; }
         QByteArray Read(const QString& Path) const;
         bool Contains(const QString& Path) const { return entries_.contains(Path); }
         void VerifyAll() const;
+        void ValidateResourceLimits(const QSet<QString>& Fonts) const;
         QStringList CompatibilityWarnings() const { return warnings_; }
         QByteArray Rewrite(const QMap<QString,QByteArray>& Replacements,const QMap<QString,QByteArray>& Additions={},const QSet<QString>& Removals={}) const;
     private:
-        const QByteArray& bytes_;
-        const Cancellation& cancel_;
+        QByteArray readEntry(const Entry& Item) const;
+        QByteArray bytes_;
+        Cancellation cancel_;
         QMap<QString, Entry> entries_;
         QByteArray comment_;
         QStringList warnings_;

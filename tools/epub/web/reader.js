@@ -14,6 +14,7 @@ import { typographyProbe } from "./typographyProbe.js";
 import EpubCFI from "epubjs/src/epubcfi.js";
 import { pageKeyAction } from "./readerKeys.js";
 import { ReaderViewManager } from "./readerViewManager.js";
+import { batchLayout } from "./layoutBatch.js";
 
 // EPUB.js 0.3.93 advances its work queue through animation frames. A hidden
 // native tab can suspend those frames before an iframe exists. Yield through
@@ -37,6 +38,13 @@ EpubRendition.prototype.reportLocation=function() {
 // feeds that zero back into the iframe. Keep a viewport-sized minimum on the
 // engine-owned frame; leave publisher XHTML and its inline styles intact.
 class ReaderIframeView extends EpubIframeView {
+    constructor(section, options) { super(section, options); batchLayout(this.layout); }
+    onLoad(event, promise) {
+        // Apply reader typography before Contents observes or measures the DOM.
+        applyDocument(this.iframe.contentDocument);
+        this.iframe.style.removeProperty("display");
+        super.onLoad(event, promise);
+    }
     destroy() {
         const frame=this.iframe,doc=this.document;
         if(doc){releaseReadingOverrides(doc);releaseBookFonts(doc);profileStyles.delete(doc);appliedProfiles.delete(doc);cssErrors.delete(doc);inputDocuments.delete(doc);}
@@ -49,6 +57,7 @@ class ReaderIframeView extends EpubIframeView {
         if(frame){frame.onload=null;frame.remove();frame.removeAttribute("srcdoc");frame.src="about:blank";}
     }
     setLayout(layout) {
+        batchLayout(layout);
         const key=JSON.stringify([layout.props,this.settings.axis,layout.settings.direction]);
         if(this.contents && this.appliedLayout===key){this.layout=layout;return;}
         super.setLayout(layout);
@@ -56,6 +65,14 @@ class ReaderIframeView extends EpubIframeView {
     }
     create() {
         const result=super.create();this.element.dataset.hcSectionIndex=String(this.section.index);
+        // Give the incoming document a real viewport before srcdoc parsing.
+        // A zero-width frame can lay out an entire chapter one glyph per line
+        // before EPUB.js measures and expands it to its final dimensions.
+        if(!this.contents) {
+            this.iframe.style.display="none";
+            this.iframe.style.width=`${Math.max(1,this.settings.width || this.layout?.width || pane.clientWidth)}px`;
+            this.iframe.style.height=`${Math.max(1,this.settings.height || this.layout?.height || pane.clientHeight)}px`;
+        }
         // A transparent fixed-page canvas uses paper white independently of
         // shell theme. Publisher backgrounds and foregrounds remain untouched.
         this.iframe.style.backgroundColor=publication?.spine[this.section.index]?.layout==="pre-paginated"?"#ffffff":"";
@@ -296,11 +313,12 @@ function bookFonts() {
 }
 window.hcBookFonts = bookFonts;
 
-function currentSnapshot() {
+function currentSnapshot(detail=true) {
     const docs = documents();
-    return { ...tools.state(), ...readingLocation(), contentLayout:rendition?._layout?.name || "reflowable", mixedLayout:!!publication?.mixedLayout, writingModes:docs.map(doc=>getComputedStyle(doc.documentElement).writingMode), recovery: publication?.recovery || {}, engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
+    const location=rendition?.currentLocation();
+    return { ...tools.state(), ...readingLocation(location), contentLayout:rendition?._layout?.name || "reflowable", mixedLayout:!!publication?.mixedLayout, writingModes:docs.map(doc=>getComputedStyle(doc.documentElement).writingMode), recovery: publication?.recovery || {}, engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
         readingProgression: navigator?.readingProgression || book?.packaging?.metadata.direction || "default",
-        text: docs.map(doc => doc.body.textContent).join(" ").trim().slice(0, 2000),
+        ...(detail ? {text: docs.map(doc => doc.body.textContent).join(" ").trim().slice(0, 2000),
         paragraphs: docs.flatMap(doc => [...doc.querySelectorAll("p")].slice(0, 3).map(p => {
             const s = doc.defaultView.getComputedStyle(p);
             return { font: s.fontFamily, size: s.fontSize, weight: s.fontWeight, line: s.lineHeight,
@@ -308,18 +326,18 @@ function currentSnapshot() {
                 indent: s.textIndent, align: s.textAlign, color: s.color };
         })), images: docs.flatMap(doc => [...doc.images].map(img => ({ src: img.getAttribute("src"),
             complete: img.complete, naturalWidth: img.naturalWidth, width: img.getBoundingClientRect().width,
-            alt: img.getAttribute("alt"), filter: doc.defaultView.getComputedStyle(img).filter }))),
+            alt: img.getAttribute("alt"), filter: doc.defaultView.getComputedStyle(img).filter })))} : {}),
         viewportWidth: viewport.clientWidth, paneWidth: pane.clientWidth, paneHeight: pane.clientHeight,
         frameBounds: [...pane.querySelectorAll("iframe")].filter(f => !f.closest("[data-hc-retired]") && getComputedStyle(f).visibility !== "hidden")
             .map(f => ({ width: f.clientWidth, height: f.clientHeight })),
-        ruby:docs.flatMap(doc=>[...doc.querySelectorAll("ruby")].slice(0,4).map(node=>({display:getComputedStyle(node).display,size:getComputedStyle(node).fontSize,annotations:[...node.querySelectorAll("rt")].map(rt=>({display:getComputedStyle(rt).display,size:getComputedStyle(rt).fontSize,text:rt.textContent}))}))),
+        ...(detail ? {ruby:docs.flatMap(doc=>[...doc.querySelectorAll("ruby")].slice(0,4).map(node=>({display:getComputedStyle(node).display,size:getComputedStyle(node).fontSize,annotations:[...node.querySelectorAll("rt")].map(rt=>({display:getComputedStyle(rt).display,size:getComputedStyle(rt).fontSize,text:rt.textContent}))}))),
         pageCanvasColors:docs.map(doc=>getComputedStyle(doc.defaultView.frameElement).backgroundColor),
-        rootZoom: docs.map(doc => doc.defaultView.getComputedStyle(doc.documentElement).zoom),
+        rootZoom: docs.map(doc => doc.defaultView.getComputedStyle(doc.documentElement).zoom)} : {}),
         scrollState:rendition?.manager?.scrollMetrics?.() || null,
         readerHorizontalScrollbar: !!rendition?.manager?.container && getComputedStyle(rendition.manager.container).overflowX !== "hidden" && rendition.manager.container.scrollWidth > rendition.manager.container.clientWidth+1,
         columnCount:rendition?._layout?.divisor || 1,
         frameId:docs[0]?.defaultView.frameElement?.id || "",
-        readerBusy:pendingCommands>0 || resizeQueued, readerFocused:docs.some(doc=>doc.hasFocus()), locator: getLocator(), frameCount: docs.length };
+        readerBusy:pendingCommands>0 || resizeQueued, readerFocused:docs.some(doc=>doc.hasFocus()), locator: rendition ? location?.start?.cfi || null : getLocator(), frameCount: docs.length };
 }
 
 function getLocator() {
@@ -327,8 +345,7 @@ function getLocator() {
     return navigator?.currentLocator?.serialize() || null;
 }
 
-function readingLocation() {
-    const location=rendition?.currentLocation();
+function readingLocation(location=rendition?.currentLocation()) {
     const readiumHref=navigator?.currentLocator?.href;
     const index=location?.start?.index ?? Math.max(0,readiumHref ? publication.spine.findIndex(item=>
         new URL(encodePath(item.path),root).href===new URL(readiumHref,root).href) : 0);
@@ -384,7 +401,7 @@ async function restoreLocator(locator) {
     if (rendition) await rendition.display(locator);
     else await new Promise((resolve, reject) => navigator.go(Locator.deserialize(locator), false,
         ok => ok ? resolve() : reject(Error("Locator restore failed"))));
-    await sleep(350);
+    await settleFrame();
 }
 
 async function goChapter(index) {
@@ -393,12 +410,12 @@ async function goChapter(index) {
     if (rendition) await rendition.display(index);
     else await new Promise((resolve, reject) => navigator.goLink(
         navigator.publication.readingOrder.items[index], false, ok => ok ? resolve() : reject(Error("Navigation failed"))));
-    await sleep(160);
     documents().forEach(applyDocument);
-    await waitFor(() => documents().length && documents().every(doc => [...doc.images].every(img => img.complete && img.naturalWidth > 0)));
+    await settleFrame();
 }
 
 async function start(name) {
+    tools.cancelSearch();
     const startedAt = performance.now();
     startupTimings = {};
     let stageAt = startedAt;
@@ -576,6 +593,7 @@ window.hcValidateCss = source => {
     catch (error) { return { ready: true, ok: false, error: error.message, line: error.line || 1, column: error.column || 1 }; }
 };
 window.hcCommand = (command, value) => {
+    if(command==="read" && value?.action==="search") { void tools.action(value); return; }
     if(command==="read" && value?.action==="annotation-cancel"){tools.cancelAnnotations();return;}
     const pageMove=command==="read" && ["next","previous"].includes(value?.action);
     if(pageMove && pendingPageMoves>=2)return;
@@ -634,6 +652,7 @@ window.hcStartupDiagnostics = () => ({
     }))
 });
 
+window.hcNativeSnapshot = () => window.hcEvidence.status === "ready" ? {status:"ready",...currentSnapshot(false)} : window.hcEvidence;
 window.hcSnapshot = () => window.hcEvidence.status === "ready" ? {...window.hcEvidence,...currentSnapshot()} : window.hcEvidence;
 window.hcFocusReading=()=>{
     if(tools.state().popup)return false;

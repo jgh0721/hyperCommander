@@ -39,18 +39,22 @@ bool imageValid(const QByteArray& Bytes,const QString& Media) {
 }
 
 bool EditModel::Load(QByteArray Bytes,const Cancellation& Cancel) {
-    const auto Prepared=Prepare(Bytes,Cancel);if(!Prepared){error_=Prepared.error_+": "+Prepared.location_;return false;}
-    original_=Bytes;edition_=std::move(Bytes);originalHash_=Prepared.publication_["sourceSha256"].toString();publication_=Prepared.publication_;error_.clear();media_.clear();replacements_.clear();history_.clear();position_=0;
+    const auto Session=PublicationSession::Open(Bytes,Cancel);
+    const auto Prepared=Session->Index();if(!Prepared){error_=Prepared.error_+": "+Prepared.location_;return false;}
+    const auto Validated=Session->ValidateAll();if(!Validated){error_=Validated.error_+": "+Validated.location_;return false;}
+    accept(std::move(Bytes),Prepared.publication_);return true;
+}
+void EditModel::accept(QByteArray Bytes,const QJsonObject& Publication) {
+    original_=Bytes;edition_=std::move(Bytes);originalHash_=Publication["sourceSha256"].toString();publication_=Publication;error_.clear();media_.clear();replacements_.clear();history_.clear();position_=0;
     QJsonArray Metadata;for(const auto& Value:publication_["resources"].toArray()){auto Item=Value.toObject();Item.remove("base64");Metadata.append(Item);}publication_["resources"]=Metadata;
     for(const auto& V:publication_["resources"].toArray()){const auto R=V.toObject();const auto M=R["mediaType"].toString();if(QStringList{"application/xhtml+xml","application/oebps-package+xml","application/x-dtbncx+xml","text/css","image/svg+xml","image/png","image/jpeg","image/gif","image/webp"}.contains(M))media_[R["path"].toString()]=M;}
-    return true;
 }
 QByteArray EditModel::Read(const QString& Path)const {
     if(!media_.contains(Path))return {};if(replacements_.contains(Path))return replacements_[Path];
-    try {const Cancellation Cancel;return detail::Archive(edition_,Cancel).Read(Path);}catch(const detail::Rejected&){return {};}
+    try {const Cancellation Cancel;return detail::Archive(edition_,Cancel,32*1024*1024).Read(Path);}catch(const detail::Rejected&){return {};}
 }
 void EditModel::assign(const QString& Path,const QByteArray& Bytes) {
-    const Cancellation Cancel;const detail::Archive Archive(edition_,Cancel);if(Archive.Read(Path)==Bytes)replacements_.remove(Path);else replacements_[Path]=Bytes;
+    const Cancellation Cancel;const detail::Archive Archive(edition_,Cancel,32*1024*1024);if(Archive.Read(Path)==Bytes)replacements_.remove(Path);else replacements_[Path]=Bytes;
 }
 QString EditModel::Replace(const QString& Path,const QByteArray& Bytes) {
     if(!media_.contains(Path) || Bytes.isEmpty() || Bytes.size()>(media_[Path].startsWith("image/")?8*1024*1024:2*1024*1024))return "epub-edit-resource-budget";
@@ -75,13 +79,17 @@ QString EditModel::RestoreStructuralBytes(const QByteArray& Bytes) {
 QByteArray EditModel::Fingerprint(const QMap<QString,QByteArray>& Draft)const {
     auto Changes=replacements_;for(auto I=Draft.begin();I!=Draft.end();++I)Changes[I.key()]=I.value();
     if(Changes.isEmpty())return QByteArray::fromHex(publication_["sourceSha256"].toString().toLatin1());
-    QCryptographicHash Hash(QCryptographicHash::Sha256);Hash.addData(publication_["sourceSha256"].toString().toLatin1());
-    for(auto I=Changes.begin();I!=Changes.end();++I){Hash.addData(I.key().toUtf8());Hash.addData(QByteArray(1,0));Hash.addData(QCryptographicHash::hash(I.value(),QCryptographicHash::Sha256).toHex());}return Hash.result();
+    const auto Edition=publication_["sourceSha256"].toString();
+    // Content equality includes the immutable edition, resource paths and bytes;
+    // undo, structural edits and drafts cannot inherit another revision's hash.
+    if(fingerprintEdition_==Edition && fingerprintChanges_==Changes)return fingerprint_;
+    QCryptographicHash Hash(QCryptographicHash::Sha256);Hash.addData(Edition.toLatin1());
+    for(auto I=Changes.begin();I!=Changes.end();++I){Hash.addData(I.key().toUtf8());Hash.addData(QByteArray(1,0));Hash.addData(QCryptographicHash::hash(I.value(),QCryptographicHash::Sha256).toHex());}fingerprintEdition_=Edition;fingerprintChanges_=std::move(Changes);fingerprint_=Hash.result();return fingerprint_;
 }
 EditOutput EditModel::Export(const QMap<QString,QByteArray>& Draft,const Cancellation& Cancel)const {
     auto Changes=replacements_;for(auto I=Draft.begin();I!=Draft.end();++I){if(!media_.contains(I.key()) || I.value().isEmpty() || I.value().size()>(media_[I.key()].startsWith("image/")?8*1024*1024:2*1024*1024))return {{},"epub-edit-resource-budget",I.key()};Changes[I.key()]=I.value();}
     try {
-        const detail::Archive Source(edition_,Cancel);
+        const detail::Archive Source(edition_,Cancel,32*1024*1024);
         for(auto I=media_.begin();I!=media_.end();++I) {
             if(Cancel && Cancel())return {{},"cancelled",I.key()};
             const bool XmlMedia=QStringList{"application/xhtml+xml","application/oebps-package+xml","application/x-dtbncx+xml","image/svg+xml"}.contains(I.value());
@@ -93,14 +101,18 @@ EditOutput EditModel::Export(const QMap<QString,QByteArray>& Draft,const Cancell
         }
         if(Changes.isEmpty()) {
             if(publication_["recovery"].toObject()["missingSpineItems"].toInt()>0)return {{},"epub-edit-spine-repair-required",publication_["rootfile"].toString()};
-            return {edition_,{},{}};
+            auto Prepared=std::make_shared<EditModel>();Prepared->accept(edition_,publication_);
+            return {edition_,{},{},std::move(Prepared)};
         }
         for(auto I=Changes.begin();I!=Changes.end();++I)if(!imageValid(I.value(),media_[I.key()]))return {{},"epub-edit-image-invalid-or-over-budget",I.key()};
-        const auto Bytes=Source.Rewrite(Changes);const auto Checked=Prepare(Bytes,Cancel);if(!Checked)return {{},Checked.error_,Checked.location_};
+        const auto Bytes=Source.Rewrite(Changes);const auto Session=PublicationSession::Open(Bytes,Cancel);
+        const auto Checked=Session->Index();if(!Checked)return {{},Checked.error_,Checked.location_};
+        const auto Validated=Session->ValidateAll();if(!Validated)return {{},Validated.error_,Validated.location_};
         if(Checked.publication_["recovery"].toObject()["missingSpineItems"].toInt()>0)return {{},"epub-edit-spine-repair-required",Checked.publication_["rootfile"].toString()};
         for(const auto& Value:Checked.publication_["resources"].toArray()) {const auto Item=Value.toObject();const auto Path=Item["path"].toString(),Media=Item["mediaType"].toString();
-            if(Changes.contains(Path) || media_.value(Path)!=Media) {const auto Raw=QByteArray::fromBase64(Item["base64"].toString().toLatin1());if(!imageValid(Raw,Media))return {{},"epub-edit-image-media-mismatch",Path};}}
-        return {Bytes,{},{}};
+            if(Changes.contains(Path) || media_.value(Path)!=Media) {const auto Raw=Session->ReadValidatedResource(Path);if(!Raw || !imageValid(Raw.bytes_,Media))return {{},"epub-edit-image-media-mismatch",Path};}}
+        auto Prepared=std::make_shared<EditModel>();Prepared->accept(Bytes,Checked.publication_);
+        return {Bytes,{},{},std::move(Prepared)};
     }catch(const detail::Rejected& Error){return {{},Error.code_,Error.location_};}
 }
 }

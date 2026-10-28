@@ -4,6 +4,9 @@
 
 /// Platform/framework headers
 #include <QtTest>
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
 
 using hc::epub::poc::InputTransfer;
 namespace
@@ -23,6 +26,26 @@ class InputTransferTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void mappedArchive() {
+        const QByteArray Bytes("PK immutable archive snapshot");
+        const auto Mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,DWORD(Bytes.size()),nullptr);
+        QVERIFY(Mapping);
+        auto* View=MapViewOfFile(Mapping,FILE_MAP_WRITE,0,0,Bytes.size());QVERIFY(View);
+        memcpy(View,Bytes.constData(),Bytes.size());UnmapViewOfFile(View);
+        HANDLE ReadOnly=nullptr;
+        QVERIFY(DuplicateHandle(GetCurrentProcess(),Mapping,GetCurrentProcess(),&ReadOnly,FILE_MAP_READ,FALSE,0));CloseHandle(Mapping);
+        QVERIFY(!MapViewOfFile(ReadOnly,FILE_MAP_WRITE,0,0,Bytes.size()));
+        const auto Hash=QString::fromLatin1(QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256).toHex());
+        QJsonObject Request{{"protocolVersion",1},{"kind","input-map"},{"documentId",Hash},{"generation",7},
+            {"epubInputVersion",2},{"engine","epubjs"},{"byteLength",Bytes.size()},{"sha256",Hash},{"handle",QString::number(quintptr(ReadOnly))}};
+        InputTransfer Transfer;QVERIFY(Transfer.Handle(Request)["accepted"].toBool());
+        const auto Input=Transfer.Take();QVERIFY(Input);QCOMPARE(Input->bytes,Bytes);QCOMPARE(Input->inputVersion,2);
+        QVERIFY(Transfer.Handle(Request).contains("error"));QVERIFY(!Transfer.Take());
+        InputTransfer Rejected;Request["byteLength"]=65*1024*1024;
+        QCOMPARE(Rejected.Handle(Request)["error"],QJsonValue("epub-mapping-admission"));
+        Request["byteLength"]=Bytes.size();Request["epubInputVersion"]=1;
+        QCOMPARE(Rejected.Handle(Request)["error"],QJsonValue("epub-mapping-admission"));
+    }
     void senderNegotiatesChunkBudget_data() {
         QTest::addColumn<int>("Limit");QTest::addColumn<bool>("Accepted");
         QTest::newRow("legacy")<<0<<true;QTest::newRow("bounded")<<512*1024<<true;

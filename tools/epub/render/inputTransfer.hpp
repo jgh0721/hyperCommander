@@ -12,6 +12,7 @@ namespace hc::epub::poc
         QString documentId, engine;
         qint64 generation = 0;
         QByteArray bytes;
+        int inputVersion = 1;
     };
     // One publication per authenticated native helper. Never accepts filesystem paths.
     class InputTransfer final

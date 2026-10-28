@@ -312,7 +312,7 @@ namespace hc::document
     bool DocumentViewPane::editEpub(const QString& Locator,int Chapter) {
         if(!epubEditingAllowed_ || !epub_ || epubClosing_)return false;
         if(!epubEditor_){
-            epubEditor_=new EpubSourceEditor(epubBytes_,epubPath_,this);layout()->addWidget(epubEditor_);
+            epubEditor_=new EpubSourceEditor(epubBytes_,epubPath_,this,epubSourceHash_);layout()->addWidget(epubEditor_);
             epubEditor_->SetReadingLocator(Locator.isEmpty()?epub_->ViewState()["locator"].toString():Locator);epubEditor_->ConfigurePreview(epubRuntime_,Chapter<0?epub_->ViewState()["chapterIndex"].toInt(-1):Chapter);
             connect(epubEditor_,&EpubSourceEditor::Changed,this,&DocumentViewPane::ContentChanged);
             const auto InitialFocus=std::make_shared<bool>(true);

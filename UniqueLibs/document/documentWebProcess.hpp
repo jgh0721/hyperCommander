@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <QByteArray>
+#include <QJsonObject>
 #include <QMap>
 #include <QString>
 #include <cstdint>
@@ -46,6 +47,7 @@ namespace hc::document
         // Observed at authenticated Ready, not an authority for future UI commands.
         std::uintptr_t childWindow_ = 0;
         bool running_ = false, authenticated_ = false;
+        QJsonObject startupMetrics_;
     };
     // Blocking, serialized worker-side owner. Not a generic plugin capability.
     // UI-restricted callers are rejected rather than escaping their existing Job.
@@ -65,6 +67,9 @@ namespace hc::document
         ~DocumentWebProcess();
         bool Exchange(const QByteArray& Request, QByteArray& Reply, std::uint32_t TimeoutMs, WebProcessError& Error);
         WebProcessSnapshot Snapshot() const;
+        // One read-only EPUB snapshot, duplicated only into this authenticated
+        // child. The returned decimal handle is meaningful only in that child.
+        QString ShareEpubInput(const QByteArray& Bytes, WebProcessError& Error);
         // False retains the Job and runtime leases; retry until retirement is proved.
         bool Close(std::uint32_t TimeoutMs = 5000);
         DocumentWebProcess(const DocumentWebProcess&) = delete;
