@@ -1097,8 +1097,8 @@ void CommandUiBridge::createCommandUi()
         Toolbar->addAction(Action(Tools[Index].first));
     }
     auto* Spacer = new QWidget(Toolbar); Spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred); Toolbar->addWidget(Spacer);
-    auto* Find = new fm::ui::FindBox(Toolbar); Find->setObjectName("hc.mainFind"); Find->setMinimumWidth(120); Find->setMaximumWidth(300);
-    Find->setToolTip(tr("현재 패널 검색 · name:문자 ext:확장자. 탭마다 검색을 유지합니다.")); Toolbar->addWidget(Find);
+    auto* Find = new fm::ui::FindBox(Window); Find->setObjectName("hc.mainFind"); Find->setMinimumWidth(120); Find->setMaximumWidth(300);
+    Find->setToolTip(tr("현재 패널 검색 · name:문자 ext:확장자. 탭마다 검색을 유지합니다."));
     auto* QuickFind = new hc::ui::QuickFindController(Window, Find, [this] { return activePanel_.data(); }, [this](const QString& Path) {
         if (!activePanel_) return;
         const QFileInfo File(Path);
@@ -1149,6 +1149,9 @@ void CommandUiBridge::createCommandUi()
     HeaderLayout->setContentsMargins(0, 0, 0, 0); HeaderLayout->setSpacing(4);
     // Let the surrounding row recalculate both dimensions after font/counter changes.
     HeaderActions->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    // Search must remain visible and focusable when the optional toolbar is hidden,
+    // including the default first-run configuration.
+    HeaderLayout->addWidget(Find);
     auto* AdminIndicator = new QLabel(tr("관리자 권한으로 실행 중"), HeaderActions);
     AdminIndicator->setObjectName("hc.adminIndicator");
     AdminIndicator->setToolTip(tr("HyperCommander 본체가 관리자 권한으로 실행 중입니다."));

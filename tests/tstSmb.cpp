@@ -1642,6 +1642,44 @@ private slots:
         QVERIFY(!Progress->isVisible());
     }
 
+    void todoBugFirstRunSearchUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object();
+        auto* Toolbar = main_->findChild<QToolBar*>("hc.navigationToolbar"); QVERIFY(Toolbar);
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Restore = qScopeGuard([&] { Find->clear(); Settings.Replace(Before); main_->OnColorSchemeChanged(Scheme); });
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        QVERIFY(!General["showMainToolbar"].toBool(false));
+        QVERIFY(Toolbar->isHidden());
+        QVERIFY(Find->isVisible());
+        QVERIFY(!Toolbar->isAncestorOf(Find));
+        auto* Header = main_->findChild<QWidget*>("hc.headerActions"); QVERIFY(Header);
+        QVERIFY(Header->isAncestorOf(Find));
+        main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
+        auto* Panel = panels_.front();
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        for (const bool Visible : {false, true, false}) {
+            General["showMainToolbar"] = Visible;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General));
+            main_->OnColorSchemeChanged(Scheme);
+            QTRY_COMPARE(Toolbar->isVisible(), Visible);
+            QVERIFY(Find->isVisible());
+            View->EnsureKeyboardFocusOnView(); emit Panel->sig_NotifyPanelActivated();
+            QVERIFY(QApplication::focusWidget());
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_F, Qt::ControlModifier);
+            QTRY_VERIFY(Find->hasFocus());
+            QTest::keyClick(Find, Qt::Key_Escape);
+            QTRY_VERIFY(QApplication::focusWidget() && View->isAncestorOf(QApplication::focusWidget()));
+        }
+        const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+        if (!Out.isEmpty()) {
+            QVERIFY(QDir().mkpath(Out));
+            QVERIFY(main_->grab().save(QDir(Out).filePath("first-run-search-" + QString::number(main_->devicePixelRatioF()) + ".png")));
+        }
+    }
+
     void todoBugSearchEscapeFocus()
     {
         auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
@@ -5453,7 +5491,7 @@ private slots:
                 return Image.pixelColor(qRound(Point.x() * Image.devicePixelRatio()), qRound(Point.y() * Image.devicePixelRatio()));
             };
             QTRY_COMPARE(EmptyBackground(), Scheme.FileList_BGColor);
-            QCOMPARE(Model->index(0, 0).data(Qt::FontRole).value<QFont>().pointSize(), 12);
+            QCOMPARE(Model->index(0, 0).data(Qt::FontRole).value<QFont>().pointSize(), 16);
             Repository Restart(QFileInfo(Settings.FileName()).absolutePath());
             QCOMPARE(Restart.Read(Section::Appearance).toObject()["selected"].toString(), Name);
             const auto Applied = QApplication::palette();
