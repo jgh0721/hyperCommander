@@ -4,6 +4,8 @@
 #include "UniqueLibs/document/epubSourceEditor.hpp"
 #include "commonLibs/document/epub/epubDraftStore.hpp"
 #include <QProcess>
+#include <QLayout>
+#include <thread>
 #include <QComboBox>
 #include <QScopeGuard>
 #include <QUuid>
@@ -306,6 +308,46 @@ private slots:
         const auto LegacyRows=LegacyState["diagnostics"].toArray();int Unicode=-1;for(int I=0;I<LegacyRows.size();++I)if(LegacyRows[I].toObject()["resource"].toString().contains(QStringLiteral("첫 장.xhtml")))Unicode=I;QVERIFY(Unicode>=0);QVERIFY(LegacyEditor.Execute({{"action","epub.edit.diagnostic"},{"index",Unicode}})["accepted"].toBool());QVERIFY(LegacyEditor.Snapshot()["current"].toString().contains(QStringLiteral("첫 장.xhtml")));
         const auto Evidence=qEnvironmentVariable("HC_EPUB_VALIDATION_OUTPUT");if(!Evidence.isEmpty()){QDir().mkpath(Evidence);DocumentThemeAdapter::Install(*qApp);LegacyEditor.resize(1100,720);LegacyEditor.show();QTest::qWait(100);QVERIFY(LegacyEditor.grab().save(QDir(Evidence).filePath("standard-diagnostics.png")));}
         QVERIFY(Original.open(QIODevice::ReadOnly));QCOMPARE(Original.readAll(),Bytes);qInfo()<<"Official EPUBCheck validation, CSS diagnostic navigation, cancellation, stale results and strict Save As verified";
+    }
+    void epubEditorWindowResize() {
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));Window.ConfigureEpub(testEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});Window.resize(1000,700);Window.show();
+        const auto Id=Window.Handle({{"action","open"},{"path",qEnvironmentVariable("HC_EPUB_READER_EPUB")}})["documentId"].toString();
+        const auto View=[&]{return document(Window,Id)["view"].toObject();};
+        QTRY_VERIFY_WITH_TIMEOUT(View()["epub"].toObject()["readingStateLoaded"].toBool(),60000);
+        QVERIFY(foreground(Window));QVERIFY(!Window.Handle({{"action","epub.edit.begin"},{"documentId",Id}}).contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(([&]{auto P=View()["epubEditor"].toObject()["preview"].toObject();if(P["waitingForFocus"].toBool())foreground(Window);return P["ready"].toBool()&&!P["busy"].toBool();})(),60000);
+        QVERIFY(foreground(Window));
+        const auto Dpi=SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);const auto RestoreDpi=qScopeGuard([Dpi]{SetThreadDpiAwarenessContext(Dpi);});
+        const auto Root=reinterpret_cast<HWND>(Window.winId());RECT Bounds{};QVERIFY(GetWindowRect(Root,&Bounds));
+        const int Left=Bounds.left+2,Right=Bounds.right-2,Top=Bounds.top+2,Bottom=Bounds.bottom-2,MidX=(Left+Right)/2,MidY=(Top+Bottom)/2;
+        const QList<QPair<QPoint,int>> Edges{{{Left,MidY},HTLEFT},{{Right,MidY},HTRIGHT},{{MidX,Top},HTTOP},{{MidX,Bottom},HTBOTTOM},{{Left,Top},HTTOPLEFT},{{Right,Top},HTTOPRIGHT},{{Left,Bottom},HTBOTTOMLEFT},{{Right,Bottom},HTBOTTOMRIGHT}};
+        for(const auto& Edge:Edges) {
+            POINT Point{Edge.first.x(),Edge.first.y()};const auto Target=WindowFromPoint(Point);DWORD_PTR Hit=0;
+            QCOMPARE(GetAncestor(Target,GA_ROOT),Root);
+            QVERIFY(SendMessageTimeoutW(Target,WM_NCHITTEST,0,MAKELPARAM(Point.x,Point.y),SMTO_ABORTIFHUNG,2000,&Hit));
+            qInfo()<<"Native edge root/target/hit"<<quintptr(Root)<<quintptr(Target)<<Hit;QCOMPARE(int(Hit),Edge.second);
+        }
+        // A real non-client mouse drag exercises the path that QWidget::resize
+        // bypasses. Release the mouse from a worker while Windows runs its modal loop.
+        POINT Cursor{};GetCursorPos(&Cursor);const auto BeforeDrag=Window.size();bool Sent=false;
+        std::thread Drag([&]{
+            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            SetCursorPos(Bounds.right-2,(Bounds.top+Bounds.bottom)/2);Sleep(80);
+            INPUT Mouse{};Mouse.type=INPUT_MOUSE;Mouse.mi.dwFlags=MOUSEEVENTF_LEFTDOWN;const auto Down=SendInput(1,&Mouse,sizeof(Mouse));Sleep(100);
+            SetCursorPos(Bounds.right+118,(Bounds.top+Bounds.bottom)/2);Sleep(150);
+            Mouse.mi.dwFlags=MOUSEEVENTF_LEFTUP;Sent=SendInput(1,&Mouse,sizeof(Mouse))==1 && Down==1;
+        });QTest::qWait(650);Drag.join();SetCursorPos(Cursor.x,Cursor.y);QVERIFY(Sent);
+        qInfo()<<"Native resize drag before/after"<<BeforeDrag<<Window.size();QVERIFY(Window.width()>BeforeDrag.width()+20);
+        qInfo()<<"Edit initial size/min/max/hint"<<Window.size()<<Window.minimumSize()<<Window.maximumSize()<<Window.minimumSizeHint();
+        for(const auto Target:{QSize(1300,900),QSize(900,650),QSize(1100,750),QSize(800,600),QSize(1300,900)}) {
+            Window.resize(Target);QTest::qWait(500);qInfo()<<"Resize target/actual/min"<<Target<<Window.size()<<Window.minimumSize();QCOMPARE(Window.size(),Target);
+        }
+        Window.showMaximized();QTest::qWait(250);QCOMPARE(Window.layout()->contentsMargins(),QMargins{});
+        Window.showNormal();QTest::qWait(250);QCOMPARE(Window.layout()->contentsMargins(),QMargins(6,6,6,6));
+        Window.showFullScreen();QTest::qWait(250);QCOMPARE(Window.layout()->contentsMargins(),QMargins{});
+        Window.showNormal();QTest::qWait(250);QCOMPARE(Window.layout()->contentsMargins(),QMargins(6,6,6,6));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
     }
     void sharedPreviewValidation() {
         const auto Path=qEnvironmentVariable("HC_EPUB_SAVE_BOOK");if(Path.isEmpty())QSKIP("Large save corpus required to overlap exports");

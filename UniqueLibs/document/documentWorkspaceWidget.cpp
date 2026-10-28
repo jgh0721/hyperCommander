@@ -203,6 +203,9 @@ namespace hc::document
         // The standalone editor uses the product title bar; a hosted viewer keeps its host's frame.
         if (!Hosted && !Parent) {
             setWindowFlag(Qt::FramelessWindowHint);
+            // Native editor/foreign preview HWNDs consume edge hit tests before
+            // WindowChrome sees them. Keep its six-DIP resize border host-owned.
+            Layout->setContentsMargins(6, 6, 6, 6);
             auto* Chrome = new fm::ui::WindowChrome(this, this); Chrome->setObjectName("documentWindowChrome"); Layout->addWidget(Chrome);
         }
         Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(status_);
@@ -1374,6 +1377,11 @@ namespace hc::document
     }
     bool DocumentWorkspaceWidget::eventFilter(QObject* Watched, QEvent* Event)
     {
+        if (Watched == this && Event->type() == QEvent::WindowStateChange
+            && !hosted_ && !parentWidget() && layout()) {
+            const int Border = isMaximized() || isFullScreen() ? 0 : 6;
+            layout()->setContentsMargins(Border, Border, Border, Border);
+        }
         if (Event->type() == QEvent::ShortcutOverride || Event->type() == QEvent::KeyPress) {
             auto* Key = static_cast<QKeyEvent*>(Event);
             auto* Widget = qobject_cast<QWidget*>(Watched);
