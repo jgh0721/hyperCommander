@@ -952,6 +952,82 @@ private slots:
         QCOMPARE(Minimum->value(), 50.0); QCOMPARE(Maximum->value(), 100.0);
     }
 
+    void todoBugFailedLocationRecoveryUi()
+    {
+        using namespace hc::storage;
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        { QFile File(Directory.filePath("reachable.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); }
+        auto* Panel = panels_.front();
+        hc::workspace::TabState Tab; Tab.id_ = "failed-location-recovery";
+        Tab.location_ = {LocatorKind::Local, QDir::toNativeSeparators(Directory.filePath("gone/child")).toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->LastNavigationError(), 10000);
+        QVERIFY(Model->HasNavigationFallback()); QCOMPARE(Model->rowCount(), 1);
+        QCOMPARE(Model->GetName(Model->index(0, 0)), QString(".."));
+        QVERIFY(Model->index(0, 0).data().toString().contains(QStringLiteral("오류")));
+        QVERIFY(Model->index(0, 0).data(Qt::ToolTipRole).toString().contains(QStringLiteral("드라이브 목록")));
+        QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
+        QPointer<QMessageBox> Failure = Panel->findChild<QMessageBox*>("hc.navigationError");
+        QTest::keyClick(Failure, Qt::Key_Escape); QTRY_VERIFY(Failure.isNull());
+        QVERIFY(Model->LastNavigationError()); QVERIFY(Model->HasNavigationFallback());
+        QCOMPARE(Panel->CaptureWorkspace().tabs_[0].location_, Tab.location_);
+        Panel->SetSearch("name:nothing-matches");
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QTRY_COMPARE(View->BaseView()->getRowCount(), 1); Panel->SetSearch({});
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); Bridge->Capture();
+        QTRY_VERIFY(!Bridge->Action("hc.file.mkdir")->isEnabled());
+        QVERIFY(Model->RetryFailedNavigation());
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->HasNavigationFallback(), 10000);
+        QCOMPARE(Model->WorkspaceLocation(), Tab.location_);
+        QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
+        Failure = Panel->findChild<QMessageBox*>("hc.navigationError");
+        QTest::keyClick(Failure, Qt::Key_Escape); QTRY_VERIFY(Failure.isNull());
+        const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+        if (!Out.isEmpty()) {
+            QVERIFY(QDir().mkpath(Out));
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest); main_->layout()->activate();
+            QVERIFY(main_->grab().save(QDir(Out).filePath("failed-location-parent-" + QString::number(main_->devicePixelRatioF()) + ".png")));
+        }
+        View->BaseView()->setFocusedRowIndex(0); View->EnsureKeyboardFocusOnView(); emit Panel->sig_NotifyPanelActivated();
+        QTRY_VERIFY(QApplication::focusWidget() && View->isAncestorOf(QApplication::focusWidget()));
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+        QTRY_COMPARE_WITH_TIMEOUT(QDir::fromNativeSeparators(Panel->CurrentPath()), Directory.filePath("gone"), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->HasNavigationFallback(), 10000);
+        QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
+        Failure = Panel->findChild<QMessageBox*>("hc.navigationError");
+        QTest::keyClick(Failure, Qt::Key_Escape); QTRY_VERIFY(Failure.isNull());
+        emit Panel->sig_NotifyPanelActivated(); QVERIFY(Bridge->ExecuteCommand("hc.navigate.parent"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !Model->HasNavigationFallback(), 10000);
+        QVERIFY(!Model->LastNavigationError()); QVERIFY(names(Model).contains("reachable.txt"));
+        QCOMPARE(QDir::fromNativeSeparators(Panel->CurrentPath()), Directory.path());
+        // Simulate an unavailable mapped root without touching any real mapping.
+        Model->SetPlaceholder({LocatorKind::Local, "Z:\\"}, "win32:59");
+        QCOMPARE(Model->rowCount(), 1); QVERIFY(Model->HasNavigationFallback());
+        QVERIFY(Bridge->ExecuteCommand("hc.navigate.parent"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !Model->HasNavigationFallback(), 10000);
+        QCOMPARE(Model->WorkspaceLocation(), (Locator{LocatorKind::Shell, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"}));
+        QVERIFY(Model->rowCount() > 0);
+        // The compatibility listing path must retain the escape row as well.
+        Pane.tabs_[0].location_ = {LocatorKind::Local, Directory.path().toStdString()}; Panel->RestoreWorkspace(Pane);
+        Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading());
+        Model->SetProviderEnabled(false); Panel->ChangeCurrentPath(Directory.filePath("legacy-gone"), {});
+        QVERIFY(Model->HasNavigationFallback()); QCOMPARE(Model->rowCount(), 1);
+        QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
+        Failure = Panel->findChild<QMessageBox*>("hc.navigationError");
+        QTest::keyClick(Failure, Qt::Key_Escape); QTRY_VERIFY(Failure.isNull());
+        QVERIFY(Bridge->ExecuteCommand("hc.navigate.parent"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !Model->HasNavigationFallback(), 10000);
+        QVERIFY(names(Model).contains("reachable.txt"));
+        Model->SetPlaceholder({LocatorKind::Local, "Z:\\"}, "win32:59");
+        QVERIFY(Bridge->ExecuteCommand("hc.navigate.parent"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !Model->HasNavigationFallback(), 10000);
+        QCOMPARE(Model->WorkspaceLocation(), (Locator{LocatorKind::Shell, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"}));
+        QVERIFY(Model->rowCount() > 0);
+    }
+
     void todoBugNavigationPreparation()
     {
         const auto Workspace = main_->CaptureWorkspace();
@@ -6392,7 +6468,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Restart.state() == QProcess::NotRunning, 20000);
         QCOMPARE(Restart.exitStatus(), QProcess::NormalExit); QCOMPARE(Restart.exitCode(), 0);
         auto* Tabs = Panel->findChild<QTabWidget*>("tabWidget"); Tabs->setCurrentIndex(1);
-        Model = static_cast<CFSModel*>(model(Panel)); QVERIFY(Model->HasPlaceholder()); QCOMPARE(Model->rowCount(), 0);
+        Model = static_cast<CFSModel*>(model(Panel)); QVERIFY(Model->HasPlaceholder()); QCOMPARE(Model->rowCount(), 1);
+        QCOMPARE(Model->GetName(Model->index(0, 0)), QString(".."));
         QCOMPARE(Model->WorkspaceLocation(), Saved.tabs_[1].location_);
         QTest::mouseClick(Panel->findChild<QPushButton*>("hc.workspaceRetry"), Qt::LeftButton);
         QVERIFY(Model->HasPlaceholder()); QCOMPARE(Panel->CaptureWorkspace().tabs_[1].provider_, Missing.provider_);
@@ -6729,7 +6806,7 @@ hc.events.unsubscribe(sub)
         CheckColumn();
         auto Missing = Saved; Missing.tabs_[0].location_.root_ += "\\__hc_m7_missing_" + QUuid::createUuid().toString(QUuid::Id128).toStdString();
         Panel->RestoreWorkspace(Missing); Model = static_cast<CFSModel*>(model(Panel));
-        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000); QVERIFY(Model->LastNavigationError()); QCOMPARE(Model->rowCount(), 0);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000); QVERIFY(Model->LastNavigationError()); QCOMPARE(Model->rowCount(), 1);
         QCOMPARE(Model->WorkspaceLocation(), Missing.tabs_[0].location_);
         Panel->RestoreWorkspace(Saved); Model = static_cast<CFSModel*>(model(Panel));
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000); QVERIFY(!Model->LastNavigationError()); QCOMPARE(names(Model), Expected);

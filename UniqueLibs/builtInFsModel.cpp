@@ -5,6 +5,9 @@
 #include "shellDriveSort.hpp"
 #include "fileIconService.hpp"
 #include "quickFindSettings.hpp"
+#include "qtWorkspaceRestore.hpp"
+#include "navigationError.hpp"
+#include "mappedDriveRecovery.hpp"
 #include "everythingSearchSession.hpp"
 #include "directoryRefreshOrder.hpp"
 #include "columnNativeFields.hpp"
@@ -85,17 +88,21 @@ QString CFSModel::GetName( const QModelIndex& Index ) const
     return vecNode_.at( Index.row() )->Name_;
 }
 
-QVector<nsHC::TySpFileSource> CFSModel::GetChildItems( const QString& RootWithPath, bool IncludeDotDot /* = false */ )
+QVector<nsHC::TySpFileSource> CFSModel::GetChildItems( const QString& RootWithPath, bool IncludeDotDot, quint32* FailureCode )
 {
     WIN32_FIND_DATA Wfd = { 0, };
     QVector< nsHC::TySpFileSource > VecRet;
 
-    HANDLE hFind = FindFirstFileExW( ( RootWithPath + "\\*.*" ).toStdWString().c_str(),
-                                     FindExInfoBasic, &Wfd,
-                                     FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH );
+    if (FailureCode) *FailureCode = ERROR_SUCCESS;
+    const auto Pattern = (RootWithPath + (RootWithPath.endsWith('\\') || RootWithPath.endsWith('/') ? "*" : "\\*")).toStdWString();
+    const auto hFind = hc::storage::native::FindFirstCompatible([&](DWORD Flags) {
+        return FindFirstFileExW(Pattern.c_str(), FindExInfoBasic, &Wfd, FindExSearchNameMatch, nullptr, Flags);
+    }, {});
 
-    if( hFind == INVALID_HANDLE_VALUE )
+    if( hFind == INVALID_HANDLE_VALUE ) {
+        if (FailureCode) *FailureCode = GetLastError();
         return {};
+    }
 
     if( IncludeDotDot == true )
     {
@@ -137,6 +144,9 @@ QVector<nsHC::TySpFileSource> CFSModel::GetChildItems( const QString& RootWithPa
 
     } while( FindNextFileW( hFind, &Wfd ) != FALSE );
 
+    const auto EnumerationError = GetLastError();
+    const auto Code = QThread::currentThread()->isInterruptionRequested() ? DWORD(ERROR_OPERATION_ABORTED) : EnumerationError;
+    if (FailureCode && Code != ERROR_NO_MORE_FILES) *FailureCode = Code;
     FindClose( hFind );
     return VecRet;
 }
@@ -284,6 +294,11 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             } break;
             case ColumnStateRole: { RoleWith.setData(int(evaluateColumn(Item, columnView_.VecColumns[Col], false).State())); } break;
             case Qt::ToolTipRole: {
+                if (recoveryLocation_ && navigationError_ && Item->Name_ == "..") {
+                    const auto Text = hc::ui::DescribeNavigationError(*navigationError_, QString::fromStdString(recoveryLocation_->root_));
+                    RoleWith.setData(tr("%1\n%2\n\nEnter 또는 두 번 클릭으로 상위 위치나 드라이브 목록으로 이동합니다.\n%3")
+                        .arg(Text.summary_, Text.recovery_, Text.details_)); break;
+                }
                 const auto Value = evaluateColumn(Item, columnView_.VecColumns[Col], false);
                 if (!Value.Error().isEmpty()) { RoleWith.setData(Value.Error()); break; }
                 if (Item->storageEntry_) {
@@ -295,6 +310,10 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             case Qt::DisplayRole:
             case Qt::EditRole: {
                 if (Col == 0 && Role == Qt::EditRole) { RoleWith.setData(Item->Name_); break; }
+                if (Col == 0 && recoveryLocation_ && Item->Name_ == "..") {
+                    RoleWith.setData(navigationError_ && navigationError_->category_ == hc::storage::ErrorCategory::Cancelled
+                        ? tr("..   [취소]") : tr("..   [오류]")); break;
+                }
                 if (Col == 0 && Role == Qt::DisplayRole && (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && Item->Name_ != "..") {
                     const auto Style = displaySettings_["directoryStyle"].toString();
                     if (Style == "brackets") { RoleWith.setData("[" + Item->Name_ + "]"); break; }
@@ -396,6 +415,10 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 void CFSModel::doRefresh()
 {
     if (searchResults_) { emit SearchRefreshRequested(); return; }
+    if (recoveryLocation_) {
+        if (!providerEnabled_ && GetRoot()) { recoveryLocation_.reset(); failedNavigationRetry_ = {}; }
+        else { if (!RetryFailedNavigation()) emit RetryRequested(); return; }
+    }
     if (placeholder_ && !GetRoot()) { emit RetryRequested(); return; }
     placeholder_.reset();
     if (const auto Root = GetRoot()) Root->RefreshReadProvider();
@@ -404,9 +427,22 @@ void CFSModel::doRefresh()
         refreshProvider();
         return;
     }
+    navigationError_.reset();
+    ++generation_;
     // Root + CurrentPath 의 대상이 압축파일인지 확인
     const auto Root = GetRoot();
     const auto Base = retrieveRootWithPath();
+    const auto Fail = [this, Root, Base](DWORD Code) {
+        using hc::storage::ErrorCategory;
+        const auto Category = Code == ERROR_ACCESS_DENIED || Code == ERROR_LOGON_FAILURE ? ErrorCategory::AccessDenied
+            : Code == ERROR_FILE_NOT_FOUND || Code == ERROR_PATH_NOT_FOUND ? ErrorCategory::NotFound
+            : Code == ERROR_OPERATION_ABORTED ? ErrorCategory::Cancelled : ErrorCategory::Unavailable;
+        navigationError_ = hc::storage::Error{Category, "win32:" + std::to_string(Code), {}, {}, true, "retry", Base.toStdString()};
+        failedNavigationRetry_ = [this] { Refresh(); };
+        publishNavigationFallback(Root->ReadLocation(Base));
+        emit sigNavigationFailed(QString::fromStdString(navigationError_->code_));
+        if (Category != ErrorCategory::Cancelled) emit DirectoryReadFailed(Base, !Root->IsRemote());
+    };
 
     /*!
      * GetFileAttributes 함수
@@ -424,6 +460,13 @@ void CFSModel::doRefresh()
     QVector< nsHC::TySpFileSource > VecItems;
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
     auto Attr = Root->GetCate() == nsHC::FS_CATE_VIRTUAL ? FILE_ATTRIBUTE_VIRTUAL : GetFileAttributesW( Base.toStdWString().c_str() );
+    const auto AttributeError = Attr == INVALID_FILE_ATTRIBUTES ? GetLastError() : DWORD(ERROR_SUCCESS);
+    const bool ServerOnly = Root->GetCate() == nsHC::FS_CATE_REMOTE && Base.startsWith("\\\\") && Base.count('\\') == 2;
+    if (!ServerOnly && !(Root->GetFeatures() & nsHC::FS_FEA_PACK)
+        && (Attr == INVALID_FILE_ATTRIBUTES || !(Attr & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_VIRTUAL)))) {
+        Fail(Attr == INVALID_FILE_ATTRIBUTES ? AttributeError : DWORD(ERROR_DIRECTORY)); return;
+    }
+    quint32 ListingError = ERROR_SUCCESS;
     if( Attr == INVALID_FILE_ATTRIBUTES || FlagOn( Root->GetFeatures(), nsHC::FS_FEA_PACK ) )
         Attr = 0;
     if( Root->GetCate() == nsHC::FS_CATE_REMOTE )
@@ -447,13 +490,13 @@ void CFSModel::doRefresh()
             else
             {
                 if( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) )
-                    VecItems += GetChildItems( Base, true );
+                    VecItems += GetChildItems( Base, true, &ListingError );
             }
         }
         else
         {
             if( FlagOn( Attr, FILE_ATTRIBUTE_DIRECTORY ) )
-                VecItems += GetChildItems( Base, true );
+                VecItems += GetChildItems( Base, true, &ListingError );
             if( FlagOn( Attr, FILE_ATTRIBUTE_VIRTUAL ) && Root->GetCate() == nsHC::FS_CATE_VIRTUAL )
                 VecItems += ( ( nsHC::CFSShell* )Root.get() )->GetChildItems( nullptr, false );
         }
@@ -492,6 +535,13 @@ void CFSModel::doRefresh()
         }
     }
 
+    if (ListingError) {
+        const auto CurrentAttributes = ListingError == ERROR_FILE_NOT_FOUND ? GetFileAttributesW(qUtf16Printable(Base)) : INVALID_FILE_ATTRIBUTES;
+        if (ListingError != ERROR_FILE_NOT_FOUND || CurrentAttributes == INVALID_FILE_ATTRIBUTES || !(CurrentAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        { Fail(ListingError); return; }
+        auto Parent = std::make_shared<nsHC::CFileSourceT>(); Parent->Name_ = ".."; Parent->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+        VecItems = {Parent};
+    }
     VecRowColors.resize( VecItems.count(), qMakePair( colorScheme_.FileList_FGColor, colorScheme_.FileList_BGColor ) );
     createBuiltFsValues( VecItems );
 
@@ -581,6 +631,7 @@ void CFSModel::ApplyRefreshSettings()
 
 hc::storage::Locator CFSModel::WorkspaceLocation() const
 {
+    if (recoveryLocation_) return *recoveryLocation_;
     if (placeholder_) return *placeholder_;
     const auto Root = GetRoot();
     return Root ? Root->ReadLocation(GetCurrentPathWithRoot()) : hc::storage::Locator{};
@@ -622,7 +673,7 @@ void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QStrin
     columnQueries_->Reset();
     beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); fileCount_ = directoryCount_ = 0; totalSize_ = 0;
     vecFs_.clear(); acceptedRoots_.clear(); acceptedProvider_.reset(); path_.clear(); acceptedPath_.clear();
-    placeholder_ = Location; index_.Publish({}); setProperty("hc.snapshotLocation", QString{});
+    placeholder_ = Location; recoveryLocation_.reset(); index_.Publish({}); setProperty("hc.snapshotLocation", QString{});
     pageSource_.reset(); pageView_.reset();
     endResetModel();
     emit PageChanged();
@@ -630,10 +681,47 @@ void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QStrin
     // consume the command correlation before the actual navigation completes.
     if (Pending) { navigationError_.reset(); return; }
     navigationError_ = hc::storage::Error{hc::storage::ErrorCategory::Unavailable, Reason.toStdString(), {}, {}, true, "retry"};
+    publishNavigationFallback(Location);
     emit sigNavigationFailed(Reason); emit sigRefreshCompleted();
 }
 
-void CFSModel::ClearPlaceholder() { placeholder_.reset(); navigationError_.reset(); }
+void CFSModel::ClearPlaceholder() { placeholder_.reset(); recoveryLocation_.reset(); navigationError_.reset(); }
+
+void CFSModel::publishNavigationFallback(const hc::storage::Locator& Location)
+{
+    // A failed first listing still needs a selectable escape route. Keep this
+    // synthetic parent outside the provider snapshot and every file operation.
+    tracker_.SetLocation({}); columnQueries_->Reset();
+    pageSource_.reset(); pageView_.reset(); index_.Publish({});
+    beginResetModel();
+    recoveryLocation_ = Location;
+    auto Parent = std::make_shared<nsHC::CFileSourceT>();
+    Parent->Name_ = ".."; Parent->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+    vecNode_ = {Parent}; vecRowColors_ = {{QColor{}, QColor{}}};
+    fileCount_ = directoryCount_ = 0; totalSize_ = 0;
+    nameSortRanks_.clear(); columnSortRanks_.clear();
+    createBuiltFsValues(vecNode_);
+    endResetModel(); emit PageChanged();
+}
+
+void CFSModel::ChangeDirectory(const QString& Child)
+{
+    if (Child == ".." && recoveryLocation_) {
+        hc::workspace::TabState Target;
+        Target.location_ = hc::workspace::RecoveryParentLocation(*recoveryLocation_);
+        if (!providerEnabled_ && Target.location_.kind_ == hc::storage::LocatorKind::Shell) {
+            // The compatibility reader needs CFSShell's native item enumeration.
+            const bool Desktop = Target.location_.root_ == "::{00021400-0000-0000-C000-000000000046}";
+            ClearPlaceholder(); failedNavigationRetry_ = {};
+            SetRoot(nsHC::TySpFileSystem(new nsHC::CFSShell(Desktop ? FOLDERID_Desktop : FOLDERID_ComputerFolder)));
+            SetCurrentPath("\\"); Refresh();
+            return;
+        }
+        RestoreWorkspaceLocation(this, Target);
+        return;
+    }
+    CFsModelT::ChangeDirectory(Child);
+}
 
 bool CFSModel::PutMetadata(const hc::storage::EntrySnapshot& Entry, const QMap<QString, QString>& Values, quint64 Generation)
 {
@@ -711,6 +799,7 @@ bool CFSModel::RetryFailedNavigation(bool Elevated)
 {
     auto Retry = std::exchange(failedNavigationRetry_, {});
     if (!Retry) return false;
+    recoveryLocation_.reset();
     elevatedDirectoryRequest_ = Elevated;
     Retry();
     return true;
@@ -718,6 +807,9 @@ bool CFSModel::RetryFailedNavigation(bool Elevated)
 
 void CFSModel::DismissNavigationError()
 {
+    // Closing the dialog must not erase the only explanation and retry target
+    // when there has never been a usable listing in this tab.
+    if (recoveryLocation_) { emit sigRefreshCompleted(); return; }
     failedNavigationRetry_ = {};
     navigationError_.reset();
     emit sigRefreshCompleted();
@@ -794,12 +886,15 @@ void CFSModel::refreshProvider()
                 path_ = TargetPath;
                 Refresh();
             };
+            if (acceptedRoots_.isEmpty()) publishNavigationFallback(Location);
             emit sigNavigationFailed(QString::fromStdString(Result.Failure().code_));
             emit sigRefreshCompleted();
             if (Result.Failure().category_ != ErrorCategory::Cancelled)
-                emit DirectoryReadFailed(QString::fromStdString(Location.root_), Location.kind_ == LocatorKind::Local);
+                emit DirectoryReadFailed(QString::fromStdString(Location.root_), Location.kind_ == LocatorKind::Local
+                    && !TargetRoots.isEmpty() && !TargetRoots.back()->IsRemote());
             return;
         }
+        recoveryLocation_.reset();
         vecFs_ = TargetRoots;
         path_ = TargetPath;
         acceptedRoots_ = TargetRoots;
@@ -1102,7 +1197,7 @@ QString LegacyIconBase(const CFSModel* Model)
 
 void CFSModel::StartEverythingSearch(const QString& Query, const QString& Match, int Interval)
 {
-    StopEverythingSearch(); CancelNavigation(); navigationError_.reset();
+    StopEverythingSearch(); CancelNavigation(); recoveryLocation_.reset(); navigationError_.reset();
     searchResults_ = true; everythingQuery_ = Query;
     pageSource_.reset(); pageView_.reset(); index_.Publish({});
     columnQueries_->Reset(); iconStop_.request_stop(); ++iconGeneration_;

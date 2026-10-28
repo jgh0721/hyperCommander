@@ -11,6 +11,7 @@
 #include <QUuid>
 #include <QFileInfo>
 #include <shlwapi.h>
+#include <QLoggingCategory>
 #pragma comment(lib, "shlwapi")
 
 #pragma comment(lib, "netapi32")
@@ -20,6 +21,7 @@ namespace hc::storage
 {
     namespace
     {
+        Q_LOGGING_CATEGORY(directoryLog, "hc.storage.directory")
         std::wstring Wide(const std::string& Value) { return QString::fromUtf8(Value).toStdWString(); }
         std::string Utf8(const wchar_t* Value) { return QString::fromWCharArray(Value).toStdString(); }
         std::string Session() { return QUuid::createUuid().toString(QUuid::Id128).toStdString() + ":"; }
@@ -32,6 +34,17 @@ namespace hc::storage
             else if (Code == ERROR_ACCESS_DENIED || Code == ERROR_LOGON_FAILURE)
                 Category = ErrorCategory::AccessDenied;
             return {Category, "win32:" + std::to_string(Code), Provider, {}, Category == ErrorCategory::Unavailable, "refresh-or-reconnect"};
+        }
+        void LogDirectoryError(DWORD Code, const std::string& Path, const char* Stage, const native::MappedDriveRecovery* Recovery)
+        {
+            qCWarning(directoryLog).noquote() << "stage=" << Stage << "path=" << QString::fromStdString(Path)
+                << "error=" << Code << (Recovery ? Recovery->Diagnostics() : QString{});
+        }
+        Error DirectoryError(DWORD Code, const ProviderId& Provider, const std::string& Path, const char* Stage,
+            const native::MappedDriveRecovery* Recovery = nullptr)
+        {
+            LogDirectoryError(Code, Path, Stage, Recovery);
+            auto Failure = NativeError(Code, Provider); Failure.nativePath_ = Path; return Failure;
         }
         template<class T, class F> Task<T> Run(F Work, bool Inline = false)
         {
@@ -133,17 +146,20 @@ namespace hc::storage
                         if (!started_) {
                             started_ = true;
                             handle_ = recovery_.Invoke([&] {
-                                return FindFirstFileExW((Wide(at_.root_) + L"\\*").c_str(), FindExInfoBasic, &found_, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+                                const auto Pattern = Wide(at_.root_) + (at_.root_.ends_with('\\') || at_.root_.ends_with('/') ? L"*" : L"\\*");
+                                return native::FindFirstCompatible([&](DWORD Flags) {
+                                    return FindFirstFileExW(Pattern.c_str(), FindExInfoBasic, &found_, FindExSearchNameMatch, nullptr, Flags);
+                                }, Context);
                             }, [](HANDLE Value) { return Value == INVALID_HANDLE_VALUE; }, Context);
                             if (handle_ == INVALID_HANDLE_VALUE) {
                                 const auto Code = GetLastError();
                                 if (const auto Failure = Context.Check(provider_)) return *Failure;
-                                if (Code != ERROR_FILE_NOT_FOUND) return NativeError(Code, provider_);
+                                if (Code != ERROR_FILE_NOT_FOUND) return DirectoryError(Code, provider_, at_.root_, "first-entry", &recovery_);
                                 ended_ = true; break;
                             }
                         } else if (!FindNextFileW(handle_, &found_)) {
                             const auto Code = GetLastError();
-                            if (Code != ERROR_NO_MORE_FILES) return NativeError(Code, provider_);
+                            if (Code != ERROR_NO_MORE_FILES) return DirectoryError(Code, provider_, at_.root_, "next-entry", &recovery_);
                             ended_ = true; break;
                         }
                         if (wcscmp(found_.cFileName, L".") == 0 || wcscmp(found_.cFileName, L"..") == 0) continue;
@@ -154,9 +170,11 @@ namespace hc::storage
                         DWORD metadataError = ERROR_SUCCESS;
                         if (!ReadAttributes(Wide(Path), Data, &Revision)) {
                             metadataError = GetLastError();
-                            if (!Context.allowUnavailableChildMetadata_ || (metadataError != ERROR_ACCESS_DENIED && metadataError != ERROR_SHARING_VIOLATION)) {
-                                auto Error = NativeError(metadataError, provider_); Error.nativePath_ = Path; return Error;
-                            }
+                            if (const auto Failure = Context.Check(provider_)) return *Failure;
+                            if (!Context.allowUnavailableChildMetadata_)
+                                return DirectoryError(metadataError, provider_, Path, "child-metadata", &recovery_);
+                            if (!metadataWarning_ && metadataError != ERROR_ACCESS_DENIED && metadataError != ERROR_SHARING_VIOLATION)
+                            { metadataWarning_ = true; LogDirectoryError(metadataError, Path, "child-metadata-fallback", &recovery_); }
                             Data = {found_.dwFileAttributes, found_.ftCreationTime, found_.ftLastAccessTime, found_.ftLastWriteTime, found_.nFileSizeHigh, found_.nFileSizeLow};
                         }
                         auto Item = Entry(provider_, prefix_, {at_.kind_, Path}, Name, Data);
@@ -171,6 +189,7 @@ namespace hc::storage
         private:
             Locator at_; ProviderId provider_; std::string prefix_;
             native::MappedDriveRecovery recovery_;
+            bool metadataWarning_ = false;
             HANDLE handle_ = INVALID_HANDLE_VALUE; WIN32_FIND_DATAW found_{};
             size_t count_ = 0; bool started_ = false, ended_ = false;
         };
@@ -373,24 +392,28 @@ namespace hc::storage
                         if (Attributes == INVALID_FILE_ATTRIBUTES) {
                             const auto Code = GetLastError();
                             if (const auto Failure = Context.Check(Id)) return *Failure;
-                            return NativeError(Code, Id);
+                            return DirectoryError(Code, Id, At.root_, "attributes", &Recovery);
                         }
                         if (!(Attributes & FILE_ATTRIBUTE_DIRECTORY)) return Error{ErrorCategory::InvalidRequest, "not-directory", Id};
                         if (Context.incrementalEnumeration_)
                             return std::unique_ptr<IEntryCursor>(new NativeMutationCursor(std::move(At), Id, Prefix, std::move(Recovery)));
                         WIN32_FIND_DATAW Found{};
                         const auto Handle = Recovery.Invoke([&] {
-                            return FindFirstFileExW((Path + L"\\*").c_str(), FindExInfoBasic, &Found, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+                            const auto Pattern = Path + (Path.ends_with(L'\\') || Path.ends_with(L'/') ? L"*" : L"\\*");
+                            return native::FindFirstCompatible([&](DWORD Flags) {
+                                return FindFirstFileExW(Pattern.c_str(), FindExInfoBasic, &Found, FindExSearchNameMatch, nullptr, Flags);
+                            }, Context);
                         }, [](HANDLE Value) { return Value == INVALID_HANDLE_VALUE; }, Context);
                         if (Handle == INVALID_HANDLE_VALUE)
                         {
                             const auto Code = GetLastError();
                             if (const auto Failure = Context.Check(Id)) return *Failure;
-                            if (Code != ERROR_FILE_NOT_FOUND) return NativeError(Code, Id);
+                            if (Code != ERROR_FILE_NOT_FOUND) return DirectoryError(Code, Id, At.root_, "first-entry", &Recovery);
                         }
                         else
                         {
                             auto Close = qScopeGuard([&] { FindClose(Handle); });
+                            bool MetadataWarning = false;
                             do
                             {
                                 if (const auto Failure = Context.Check(Id)) return *Failure;
@@ -401,29 +424,34 @@ namespace hc::storage
                                 const auto ChildPath = At.root_ + (At.root_.ends_with('\\') ? "" : "\\") + Name;
                                 auto ActualRevision = Revision(Data);
                                 bool HasRevision = true;
+                                DWORD MetadataError = ERROR_SUCCESS;
                                 // NTFS directory enumeration can retain a cached
                                 // mtime after children change. Use the same metadata
                                 // source as Stat so a fresh snapshot is revalidatable.
                                 if (((Data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || Context.freshEnumerationMetadata_)
                                     && !ReadAttributes(Wide(ChildPath), Data, &ActualRevision)) {
                                     const auto Code = GetLastError();
+                                    MetadataError = Code;
+                                    if (const auto Failure = Context.Check(Id)) return *Failure;
                                     // Listing a readable parent must not disappear because
                                     // one child (e.g. System Volume Information) is protected.
                                     // Browsing may use FindFirstFile metadata, without claiming
                                     // a verified revision. Mutation planning still requires it.
                                     if ((Context.freshEnumerationMetadata_ && !Context.allowUnavailableChildMetadata_)
-                                        || (Code != ERROR_ACCESS_DENIED && Code != ERROR_SHARING_VIOLATION))
-                                        return NativeError(Code, Id);
+                                        || (!Context.allowUnavailableChildMetadata_ && Code != ERROR_ACCESS_DENIED && Code != ERROR_SHARING_VIOLATION))
+                                        return DirectoryError(Code, Id, ChildPath, "child-metadata", &Recovery);
+                                    if (!MetadataWarning && Code != ERROR_ACCESS_DENIED && Code != ERROR_SHARING_VIOLATION)
+                                    { MetadataWarning = true; LogDirectoryError(Code, ChildPath, "child-metadata-fallback", &Recovery); }
                                     HasRevision = false;
                                 }
                                 auto Item = Entry(Id, Prefix, {Kind, ChildPath}, Name, Data);
                                 if (HasRevision) Item.id_.revision_ = std::move(ActualRevision);
-                                else Item.id_.revision_.reset();
+                                else { Item.id_.revision_.reset(); Item.hints_["comparisonError"] = "win32:" + std::to_string(MetadataError); }
                                 Item.hints_["reparseTag"] = std::to_string(Found.dwReserved0);
                                 Entries.push_back(std::move(Item));
                             } while (FindNextFileW(Handle, &Found));
                             const auto Code = GetLastError();
-                            if (Code != ERROR_NO_MORE_FILES) return NativeError(Code, Id);
+                            if (Code != ERROR_NO_MORE_FILES) return DirectoryError(Code, Id, At.root_, "next-entry", &Recovery);
                         }
                     }
                     if (const auto Failure = Context.Check(Id)) return *Failure;

@@ -42,6 +42,7 @@ void RecordNavigation(TabState& Tab, const storage::Locator& Location, int Reque
 QJsonObject EncodeLocation(const storage::Locator& Location);
 std::optional<storage::Locator> DecodeLocation(const QJsonObject& Object);
 QString LocationKey(const storage::Locator& Location);
+storage::Locator RecoveryParentLocation(const storage::Locator& Location);
 QString PluginPath(const storage::Locator& Location);
 // Persistent identity survives renames; session identity is never persisted.
 QString SelectionKey(const storage::EntrySnapshot& Entry);

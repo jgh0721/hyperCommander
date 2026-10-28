@@ -21,7 +21,11 @@ namespace hc::ui
         using storage::ErrorCategory;
         NavigationErrorText Text;
         auto NativePath = QDir::toNativeSeparators(Path);
-        const bool Remote = NativePath.startsWith("\\\\");
+        const auto Code = QString::fromStdString(Error.code_);
+        const bool NetworkFailure = Code == "win32:53" || Code == "win32:59" || Code == "win32:64"
+            || Code == "win32:67" || Code == "win32:1201" || Code == "win32:1219" || Code == "win32:1222"
+            || Code == "win32:1231" || Code == "win32:1232" || Code == "win32:1326";
+        const bool Remote = NativePath.startsWith("\\\\") || NetworkFailure;
         const bool Redirected = NativePath.compare("\\\\tsclient", Qt::CaseInsensitive) == 0
             || NativePath.startsWith("\\\\tsclient\\", Qt::CaseInsensitive);
         if (Error.category_ == ErrorCategory::Cancelled) {
@@ -50,8 +54,9 @@ namespace hc::ui
             Text.summary_ = QObject::tr("폴더 목록을 읽지 못했습니다.");
             Text.recovery_ = QObject::tr("드라이브 연결 상태와 폴더 경로를 확인한 뒤 다시 시도하세요.");
         }
-        const auto Code = QString::fromStdString(Error.code_);
         Text.details_ = QObject::tr("경로: %1\n오류 코드: %2").arg(NativePath, Code);
+        if (!Error.nativePath_.empty() && QString::fromStdString(Error.nativePath_) != Path)
+            Text.details_ += QObject::tr("\n실패한 항목: %1").arg(QDir::toNativeSeparators(QString::fromStdString(Error.nativePath_)));
         if (Code.startsWith("win32:")) {
             bool Valid = false;
             const auto NativeCode = Code.mid(6).toULong(&Valid);

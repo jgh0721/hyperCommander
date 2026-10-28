@@ -75,6 +75,30 @@ QString PluginPath(const storage::Locator& Location) {
     for (const auto& Part : Path.split('\\')) if (Part == "." || Part == "..") return {};
     return Path;
 }
+storage::Locator RecoveryParentLocation(const storage::Locator& Location)
+{
+    using storage::LocatorKind;
+    const storage::Locator Drives{LocatorKind::Shell, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
+    if (Location.kind_ == LocatorKind::Shell && Location.root_ == Drives.root_)
+        return {LocatorKind::Shell, "::{00021400-0000-0000-C000-000000000046}"};
+    if (Location.kind_ != LocatorKind::Local && Location.kind_ != LocatorKind::Smb && Location.kind_ != LocatorKind::Archive)
+        return Drives;
+    auto Path = QDir::fromNativeSeparators(QString::fromStdString(Location.root_));
+    if (Path.startsWith("//?/UNC/", Qt::CaseInsensitive)) Path = "//" + Path.mid(8);
+    else if (Path.startsWith("//?/")) Path = Path.mid(4);
+    Path = QDir::cleanPath(Path);
+    while (Path.endsWith('/') && Path.size() > 3) Path.chop(1);
+    const auto Slash = Path.lastIndexOf('/');
+    if (Path.size() >= 3 && Path[0].isLetter() && Path[1] == ':' && Path[2] == '/') {
+        if (Path.size() == 3) return Drives;
+        const auto Parent = Slash == 2 ? Path.left(3) : Path.left(Slash);
+        return {LocatorKind::Local, QDir::toNativeSeparators(Parent).toStdString()};
+    }
+    if (Path.startsWith("//") && Slash > 1)
+        return {LocatorKind::Smb, QDir::toNativeSeparators(Path.left(Slash)).toStdString()};
+    return Drives;
+}
+
 QString SelectionKey(const storage::EntrySnapshot& Entry) {
     if (Entry.locator_.kind_ == storage::LocatorKind::Plugin) {
         auto Location = Entry.locator_; Location.root_ = PluginPath(Location).toStdString();

@@ -618,8 +618,11 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     { closeQuick(); return CommandOutcome{}; }
     auto* Model = findModel(Invocation.context_.tabId_);
     if (!Model) return Error{ErrorCategory::Cancelled, "tab-closed"};
-    if (!Model->GetRoot() && (Invocation.id_.starts_with("hc.file.") || Invocation.id_.starts_with("hc.viewer.")
-        || Invocation.id_ == "hc.navigate.parent" || Invocation.id_ == "hc.navigate.open"))
+    if ((!Model->GetRoot() || Model->HasNavigationFallback())
+        && (Invocation.id_.starts_with("hc.file.") || Invocation.id_.starts_with("hc.viewer.") || Invocation.id_.starts_with("hc.clipboard.")))
+        return Error{ErrorCategory::Unavailable, "tab-not-ready"};
+    if (!Model->GetRoot() && !Model->HasNavigationFallback()
+        && (Invocation.id_ == "hc.navigate.parent" || Invocation.id_ == "hc.navigate.open"))
         return Error{ErrorCategory::Unavailable, "tab-not-ready"};
     auto* Panel = PanelOf(Model);
     if (!Panel || PanelModel(Panel) != Model) return Error{ErrorCategory::Cancelled, "tab-not-active"};
@@ -947,7 +950,7 @@ void CommandUiBridge::refreshActionState()
     if (auto* Forward = Action("hc.navigate.forward")) Forward->setEnabled(activePanel_ && activePanel_->CanNavigateHistory(1));
     const auto* Model = PanelModel(activePanel_);
     if (auto* Compatibility = Action("hc.navigate.compatibility")) Compatibility->setChecked(Model && !Model->ProviderEnabled());
-    const bool Ready = Model && Model->GetRoot() && !Model->IsLoading();
+    const bool Ready = Model && Model->GetRoot() && !Model->HasNavigationFallback() && !Model->IsLoading();
     for (auto It = actions_.cbegin(); It != actions_.cend(); ++It)
         if (It.key().startsWith("hc.selection.") && It.value()) It.value()->setEnabled(Ready);
     if (auto* Command = Action("hc.file.folderSize")) Command->setEnabled(Ready && Model->ProviderEnabled()

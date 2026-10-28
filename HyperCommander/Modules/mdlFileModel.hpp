@@ -79,7 +79,7 @@ public:
     virtual QString                 GetCurrentPathWithRoot() const { return ""; }
     virtual QString                 GetName( const QModelIndex& Index ) const { return ""; }
 
-    void                            ChangeDirectory( const QString& Child );
+    virtual void                    ChangeDirectory( const QString& Child );
     void                            ChangeDirectory( const QModelIndex& Child );
 
     virtual void                    SetColumnView( const ColumnView& CV );

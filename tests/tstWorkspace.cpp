@@ -22,6 +22,31 @@ private:
         return Value;
     }
 private slots:
+    void recoveryParentLocations_data()
+    {
+        using hc::storage::LocatorKind;
+        QTest::addColumn<int>("Kind"); QTest::addColumn<QString>("Path");
+        QTest::addColumn<int>("ParentKind"); QTest::addColumn<QString>("Parent");
+        const auto Drives = QStringLiteral("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}");
+        QTest::newRow("missing-child") << int(LocatorKind::Local) << "Z:\\gone\\child" << int(LocatorKind::Local) << "Z:\\gone";
+        QTest::newRow("drive-parent") << int(LocatorKind::Local) << "Z:/gone/" << int(LocatorKind::Local) << "Z:\\";
+        QTest::newRow("disconnected-root") << int(LocatorKind::Local) << "Z:\\" << int(LocatorKind::Shell) << Drives;
+        QTest::newRow("extended-root") << int(LocatorKind::Local) << "\\\\?\\Z:\\" << int(LocatorKind::Shell) << Drives;
+        QTest::newRow("unc-child") << int(LocatorKind::Smb) << "\\\\server\\share\\gone" << int(LocatorKind::Smb) << "\\\\server\\share";
+        QTest::newRow("unc-share") << int(LocatorKind::Smb) << "\\\\server\\share\\" << int(LocatorKind::Smb) << "\\\\server";
+        QTest::newRow("unc-server") << int(LocatorKind::Smb) << "\\\\server" << int(LocatorKind::Shell) << Drives;
+        QTest::newRow("extended-unc") << int(LocatorKind::Smb) << "\\\\?\\UNC\\server\\share" << int(LocatorKind::Smb) << "\\\\server";
+        QTest::newRow("missing-plugin") << int(LocatorKind::Plugin) << "\\\\plugin\\missing" << int(LocatorKind::Shell) << Drives;
+        QTest::newRow("missing-archive") << int(LocatorKind::Archive) << "C:/gone/archive.zip" << int(LocatorKind::Local) << "C:\\gone";
+    }
+    void recoveryParentLocations()
+    {
+        QFETCH(int, Kind); QFETCH(QString, Path); QFETCH(int, ParentKind); QFETCH(QString, Parent);
+        const auto Value = RecoveryParentLocation({hc::storage::LocatorKind(Kind), Path.toStdString()});
+        QCOMPARE(int(Value.kind_), ParentKind); QCOMPARE(QString::fromStdString(Value.root_), Parent);
+        QVERIFY(Value.nesting_.empty());
+    }
+
     void navigationHistoryBranchesAndRoundTrips() {
         using namespace hc::storage;
         TabState Tab; Tab.id_ = "history";

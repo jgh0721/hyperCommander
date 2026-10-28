@@ -93,6 +93,9 @@ public:
     hc::storage::Locator WorkspaceLocation() const;
     void ClearPlaceholder();
     bool HasPlaceholder() const { return placeholder_.has_value(); }
+    bool HasNavigationFallback() const { return recoveryLocation_.has_value(); }
+    using CFsModelT::ChangeDirectory;
+    void ChangeDirectory(const QString& Child) override;
     quint64 DirectoryGeneration() const { return generation_; }
     std::shared_ptr<hc::storage::IEntryIndex> DirectoryEntries() const;
     quint64 MetadataGeneration() const { return index_.Generation(); }
@@ -117,7 +120,7 @@ public:
     bool RetryFailedNavigation(bool Elevated = false);
     void DismissNavigationError();
 
-    QString                         GetCurrentPathWithRoot() const override { return retrieveRootWithPath(); }
+    QString                         GetCurrentPathWithRoot() const override { return recoveryLocation_ ? QString::fromStdString(recoveryLocation_->root_) : retrieveRootWithPath(); }
     QString                         GetName( const QModelIndex& Index ) const;
     void                            SetColorScheme(const TyColorScheme& Scheme) override;
     void                            ApplyDisplaySettings();
@@ -134,7 +137,7 @@ public:
     ////////////////////////////////////////////////////////////////////////////
     /// 파일 / 디렉토리 조작 
     
-    QVector< nsHC::TySpFileSource > GetChildItems( const QString& RootWithPath, bool IncludeDotDot = false );
+    QVector< nsHC::TySpFileSource > GetChildItems( const QString& RootWithPath, bool IncludeDotDot = false, quint32* FailureCode = nullptr );
     TyOsError                       InsertChildItem( const QString& NewName );
 
     // QString                         GetFileFullPath( const QString& Name ) const;
@@ -179,6 +182,7 @@ private:
     void                            createBuiltFsValues( QVector< nsHC::TySpFileSource >& Items );
     void                            createBuiltFsValues( const nsHC::TySpFileSource& Item, int Column );
     void                            refreshProvider();
+    void publishNavigationFallback(const hc::storage::Locator& Location);
     void requestPage(std::uint64_t Offset, bool Rebuild);
     hc::storage::Result<hc::storage::PagedEntryIndex::Less> pageComparison(const QString& ParentPath = {}, bool NameOnly = false) const;
     struct PreparedFileRow {
@@ -270,6 +274,7 @@ private:
     bool                            autoRefreshRequested_ = false, automaticRefresh_ = false;
     bool                            appendOrder_ = false;
     std::optional<hc::storage::Locator> placeholder_;
+    std::optional<hc::storage::Locator> recoveryLocation_;
     hc::workspace::DirectoryIndex   index_;
     bool                            loading_ = false;
     std::uint64_t                   generation_ = 0;

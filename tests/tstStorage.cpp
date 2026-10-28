@@ -121,6 +121,73 @@ private slots:
         Interrupted.Invoke([&] { ++Probes; SetLastError(ERROR_UNEXP_NET_ERR); return INVALID_FILE_ATTRIBUTES; }, Failed, Context);
         QCOMPARE(Probes, 4); QCOMPARE(Restores, 2);
     }
+    void mappedDriveShellReadRecovery()
+    {
+        int Probes = 0, Restores = 0, ShellReads = 0;
+        std::wstring ShellRoot;
+        native::MappedDriveRecovery Recovery(L"Z:\\folder", [](const auto&) { return true; },
+            [&](const auto&) { ++Restores; }, [&](const auto& Root) -> HRESULT {
+                ++ShellReads; ShellRoot = Root; return S_OK;
+            });
+        const auto Work = [&]() -> DWORD {
+            ++Probes;
+            if (ShellReads) return FILE_ATTRIBUTE_DIRECTORY;
+            SetLastError(ERROR_UNEXP_NET_ERR); return INVALID_FILE_ATTRIBUTES;
+        };
+        const auto Failed = [](DWORD Value) { return Value == INVALID_FILE_ATTRIBUTES; };
+        QCOMPARE(Recovery.Invoke(Work, Failed, {}), DWORD(FILE_ATTRIBUTE_DIRECTORY));
+        QCOMPARE(Probes, 3); QCOMPARE(Restores, 1); QCOMPARE(ShellReads, 1);
+        QCOMPARE(ShellRoot, std::wstring(L"Z:\\"));
+        Recovery.Invoke([] { SetLastError(ERROR_UNEXP_NET_ERR); return INVALID_FILE_ATTRIBUTES; }, Failed, {});
+        QCOMPARE(Restores, 1); QCOMPARE(ShellReads, 1);
+    }
+    void mappedDriveShellFailureAndCancellation()
+    {
+        const auto Failed = [](DWORD Value) { return Value == INVALID_FILE_ATTRIBUTES; };
+        int Probes = 0, ShellReads = 0;
+        const auto Work = [&]() { ++Probes; SetLastError(ERROR_UNEXP_NET_ERR); return INVALID_FILE_ATTRIBUTES; };
+        native::MappedDriveRecovery FailedShell(L"Z:\\", [](const auto&) { return true; }, [](const auto&) {},
+            [&](const auto&) -> HRESULT { ++ShellReads; return HRESULT_FROM_WIN32(ERROR_BAD_NETPATH); });
+        QCOMPARE(FailedShell.Invoke(Work, Failed, {}), INVALID_FILE_ATTRIBUTES);
+        QCOMPARE(GetLastError(), DWORD(ERROR_UNEXP_NET_ERR)); QCOMPARE(Probes, 2); QCOMPARE(ShellReads, 1);
+        std::stop_source Stop; OperationContext Context; Context.stopToken_ = Stop.get_token();
+        native::MappedDriveRecovery Interrupted(L"Z:\\", [](const auto&) { return true; }, [](const auto&) {},
+            [&](const auto&) -> HRESULT { ++ShellReads; Stop.request_stop(); return S_OK; });
+        QCOMPARE(Interrupted.Invoke(Work, Failed, Context), INVALID_FILE_ATTRIBUTES);
+        QCOMPARE(GetLastError(), DWORD(ERROR_UNEXP_NET_ERR)); QCOMPARE(Probes, 4); QCOMPARE(ShellReads, 2);
+    }
+    void compatibleDirectoryReads_data()
+    {
+        QTest::addColumn<quint32>("Code"); QTest::addColumn<bool>("Retry");
+        QTest::newRow("unexpected-network-error") << quint32(ERROR_UNEXP_NET_ERR) << true;
+        QTest::newRow("unsupported-flags") << quint32(ERROR_INVALID_PARAMETER) << true;
+        QTest::newRow("unsupported-provider") << quint32(ERROR_NOT_SUPPORTED) << true;
+        QTest::newRow("empty-directory") << quint32(ERROR_FILE_NOT_FOUND) << false;
+        QTest::newRow("access-denied") << quint32(ERROR_ACCESS_DENIED) << false;
+        QTest::newRow("credentials") << quint32(ERROR_LOGON_FAILURE) << false;
+    }
+    void compatibleDirectoryReads()
+    {
+        QFETCH(quint32, Code); QFETCH(bool, Retry);
+        QVector<DWORD> Flags;
+        const auto Open = reinterpret_cast<HANDLE>(quintptr(1234));
+        const auto Value = native::FindFirstCompatible([&](DWORD Option) -> HANDLE {
+            Flags.append(Option); if (!Option) return Open;
+            SetLastError(Code); return INVALID_HANDLE_VALUE;
+        }, {});
+        QCOMPARE(Value, Retry ? Open : INVALID_HANDLE_VALUE);
+        const auto Expected = Retry ? QVector<DWORD>{FIND_FIRST_EX_LARGE_FETCH, 0} : QVector<DWORD>{FIND_FIRST_EX_LARGE_FETCH};
+        QCOMPARE(Flags, Expected);
+        if (!Retry) QCOMPARE(GetLastError(), DWORD(Code));
+    }
+    void compatibleDirectoryReadCancellation()
+    {
+        std::stop_source Stop; OperationContext Context; Context.stopToken_ = Stop.get_token(); int Probes = 0;
+        const auto Value = native::FindFirstCompatible([&](DWORD) -> HANDLE {
+            ++Probes; Stop.request_stop(); SetLastError(ERROR_UNEXP_NET_ERR); return INVALID_HANDLE_VALUE;
+        }, Context);
+        QCOMPARE(Value, INVALID_HANDLE_VALUE); QCOMPARE(Probes, 1); QCOMPARE(GetLastError(), DWORD(ERROR_UNEXP_NET_ERR));
+    }
     void redirectedClientShares()
     {
         const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
