@@ -884,6 +884,7 @@ void QTextView::setTheme(Theme theme)
     QBaseView::setTheme(theme);
     if (m_editor) {
         m_editor->applyThemeColors(theme == Dark);
+        updateSearchIndicatorColors();
     }
 }
 
@@ -1588,11 +1589,9 @@ void QTextView::performExclude()
     m_excludedRanges.append({matchStart, len});
 
     // Indicator로 시각 마킹 (더 진한 배경 + 박스 + 취소선)
-    m_editor->setIndicatorStyle(kExcludeBackgroundIndicatorId, 8, [] { QColor C = fm::style::ThemeManager::instance().colors()[fm::style::Token::DangerBg]; C.setAlpha(150); return C; }()); // INDIC_STRAIGHTBOX
+    updateSearchIndicatorColors();
     m_editor->applyIndicator(kExcludeBackgroundIndicatorId, matchStart, len);
-    m_editor->setIndicatorStyle(kExcludeBorderIndicatorId, 7, [] { QColor C = fm::style::ThemeManager::instance().colors()[fm::style::Token::DangerLine]; C.setAlpha(170); return C; }()); // INDIC_ROUNDBOX
     m_editor->applyIndicator(kExcludeBorderIndicatorId, matchStart, len);
-    m_editor->setIndicatorStyle(kExcludeStrikeIndicatorId, 5, fm::style::ThemeManager::instance().colors()[fm::style::Token::Fg3]); // INDIC_STRIKE
     m_editor->applyIndicator(kExcludeStrikeIndicatorId, matchStart, len);
     m_searchResumePos = qMin(m_editor->documentLength(), matchStart + len);
     if (!searchInSelection)
@@ -1624,6 +1623,19 @@ void QTextView::updateExcludedCount()
         m_findWidget->setExcludedCount(m_excludedRanges.size());
 }
 
+void QTextView::updateSearchIndicatorColors()
+{
+    if (!m_editor)
+        return;
+    const auto& Colors = fm::style::ThemeManager::instance().colors();
+    const auto Alpha = [](QColor Color, int Value) { Color.setAlpha(Value); return Color; };
+    // Recolor existing ranges on theme changes without repeating the search.
+    m_editor->setIndicatorStyle(kCurrentMatchIndicatorId, 7, Alpha(Colors[fm::style::Token::Warn], 110));
+    m_editor->setIndicatorStyle(kExcludeBackgroundIndicatorId, 8, Alpha(Colors[fm::style::Token::DangerBg], 150));
+    m_editor->setIndicatorStyle(kExcludeBorderIndicatorId, 7, Alpha(Colors[fm::style::Token::DangerLine], 170));
+    m_editor->setIndicatorStyle(kExcludeStrikeIndicatorId, 5, Colors[fm::style::Token::Fg3]);
+}
+
 void QTextView::clearCurrentMatchHighlight()
 {
     if (!m_editor)
@@ -1642,7 +1654,7 @@ void QTextView::setCurrentMatchHighlight(int startPos, int length, bool scrollTo
         return;
 
     clearCurrentMatchHighlight();
-    m_editor->setIndicatorStyle(kCurrentMatchIndicatorId, 7, [] { QColor C = fm::style::ThemeManager::instance().colors()[fm::style::Token::Warn]; C.setAlpha(110); return C; }()); // theme warning tone, like the file list's match marks // INDIC_ROUNDBOX
+    updateSearchIndicatorColors();
     m_editor->applyIndicator(kCurrentMatchIndicatorId, startPos, length);
     m_currentMatchStart = startPos;
     m_currentMatchLength = length;

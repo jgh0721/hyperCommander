@@ -553,6 +553,8 @@ void ScintillaQtDirectBackend::setIndicatorStyle(int indicatorId, int style, con
 	if (!m_editor)
 		return;
 	m_editor->send(sciMessage(SCI_INDICSETSTYLE), indicatorId, style);
+	// Search/exclusion fills must not tint the glyphs drawn above them.
+	m_editor->send(sciMessage(SCI_INDICSETUNDER), indicatorId, 1);
 	const int sciColor = color.red() | (color.green() << 8) | (color.blue() << 16);
 	m_editor->send(sciMessage(SCI_INDICSETFORE), indicatorId, sciColor);
 	m_editor->send(sciMessage(SCI_INDICSETALPHA), indicatorId, color.alpha());
@@ -977,13 +979,23 @@ void ScintillaQtDirectBackend::applyThemeColors(bool dark)
 	m_editor->send(sciMessage(SCI_STYLESETBACK), STYLE_LINENUMBER, colourToSci(marginBg));
 
 	m_editor->send(sciMessage(SCI_SETCARETFORE), colourToSci(caret));
+	m_editor->send(sciMessage(SCI_SETADDITIONALCARETFORE), colourToSci(caret));
 	m_editor->send(sciMessage(SCI_SETCARETLINEVISIBLEALWAYS), 1);
 	m_editor->send(sciMessage(SCI_SETCARETLINEBACK), colourToSci(caretLine));
 
-	m_editor->send(sciMessage(SCI_SETSELBACK), 1, colourToSci(selection));
+	// SCI_SETSELALPHA also switches the layer to OVER_TEXT, which hides text
+	// with opaque theme colors. Element RGBA colors leave the layer unchanged.
+	const auto selectionRgba = colourToSci(selection) | (static_cast<sptr_t>(selection.alpha()) << 24);
+	const auto foregroundRgba = colourToSci(selectionForeground) | (static_cast<sptr_t>(255) << 24);
+	for (int element : {SC_ELEMENT_SELECTION_BACK, SC_ELEMENT_SELECTION_ADDITIONAL_BACK,
+		SC_ELEMENT_SELECTION_SECONDARY_BACK, SC_ELEMENT_SELECTION_INACTIVE_BACK,
+		SC_ELEMENT_SELECTION_INACTIVE_ADDITIONAL_BACK})
+		m_editor->send(sciMessage(SCI_SETELEMENTCOLOUR), element, selectionRgba);
+	for (int element : {SC_ELEMENT_SELECTION_TEXT, SC_ELEMENT_SELECTION_ADDITIONAL_TEXT,
+		SC_ELEMENT_SELECTION_SECONDARY_TEXT, SC_ELEMENT_SELECTION_INACTIVE_TEXT,
+		SC_ELEMENT_SELECTION_INACTIVE_ADDITIONAL_TEXT})
+		m_editor->send(sciMessage(SCI_SETELEMENTCOLOUR), element, foregroundRgba);
 	m_editor->send(sciMessage(SCI_SETSELECTIONLAYER), SC_LAYER_UNDER_TEXT);
-	m_editor->send(sciMessage(SCI_SETSELALPHA), selection.alpha() > 0 ? selection.alpha() : 112);
-	m_editor->send(sciMessage(SCI_SETSELFORE), 0, colourToSci(selectionForeground));
 
 	m_editor->send(sciMessage(SCI_SETFOLDMARGINCOLOUR), 1, colourToSci(bg));
 	m_editor->send(sciMessage(SCI_SETFOLDMARGINHICOLOUR), 1, colourToSci(bg));

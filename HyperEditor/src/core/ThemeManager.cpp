@@ -281,28 +281,30 @@ QHash<QString, QColor> ThemeManager::defaultColors(Theme theme)
     c.insert(QStringLiteral("text.braceMatch"), T[Token::Accent]);
     c.insert(QStringLiteral("text.braceMismatch"), T[Token::Danger]);
 
+    // Keep syntax text at 4.5:1 against both Paper Fluent body/current-line
+    // surfaces. Explicit user syntax overrides are applied separately.
     if (WantDark) {
-        c.insert(QStringLiteral("text.lexer.comment"), QColor(QStringLiteral("#75715E")));
+        c.insert(QStringLiteral("text.lexer.comment"), QColor(QStringLiteral("#93907D")));
         c.insert(QStringLiteral("text.lexer.number"), QColor(QStringLiteral("#AE81FF")));
-        c.insert(QStringLiteral("text.lexer.keyword"), QColor(QStringLiteral("#F92672")));
+        c.insert(QStringLiteral("text.lexer.keyword"), QColor(QStringLiteral("#FF4388")));
         c.insert(QStringLiteral("text.lexer.type"), QColor(QStringLiteral("#66D9EF")));
         c.insert(QStringLiteral("text.lexer.string"), QColor(QStringLiteral("#E6DB74")));
         c.insert(QStringLiteral("text.lexer.preprocessor"), QColor(QStringLiteral("#A6E22E")));
-        c.insert(QStringLiteral("text.lexer.operator"), QColor(QStringLiteral("#F92672")));
+        c.insert(QStringLiteral("text.lexer.operator"), QColor(QStringLiteral("#FF4388")));
         c.insert(QStringLiteral("text.lexer.identifier"), QColor(QStringLiteral("#F8F8F2")));
         c.insert(QStringLiteral("text.lexer.function"), QColor(QStringLiteral("#A6E22E")));
         c.insert(QStringLiteral("text.lexer.variable"), QColor(QStringLiteral("#FD971F")));
     } else {
-        c.insert(QStringLiteral("text.lexer.comment"), QColor(QStringLiteral("#75715E")));
-        c.insert(QStringLiteral("text.lexer.number"), QColor(QStringLiteral("#7C4DFF")));
+        c.insert(QStringLiteral("text.lexer.comment"), QColor(QStringLiteral("#716D5A")));
+        c.insert(QStringLiteral("text.lexer.number"), QColor(QStringLiteral("#7444F5")));
         c.insert(QStringLiteral("text.lexer.keyword"), QColor(QStringLiteral("#D0005F")));
-        c.insert(QStringLiteral("text.lexer.type"), QColor(QStringLiteral("#0078A8")));
-        c.insert(QStringLiteral("text.lexer.string"), QColor(QStringLiteral("#8A6D00")));
-        c.insert(QStringLiteral("text.lexer.preprocessor"), QColor(QStringLiteral("#4E8A00")));
+        c.insert(QStringLiteral("text.lexer.type"), QColor(QStringLiteral("#00749F")));
+        c.insert(QStringLiteral("text.lexer.string"), QColor(QStringLiteral("#856800")));
+        c.insert(QStringLiteral("text.lexer.preprocessor"), QColor(QStringLiteral("#437900")));
         c.insert(QStringLiteral("text.lexer.operator"), QColor(QStringLiteral("#D0005F")));
         c.insert(QStringLiteral("text.lexer.identifier"), QColor(QStringLiteral("#272822")));
         c.insert(QStringLiteral("text.lexer.function"), QColor(QStringLiteral("#3B7D00")));
-        c.insert(QStringLiteral("text.lexer.variable"), QColor(QStringLiteral("#B85C00")));
+        c.insert(QStringLiteral("text.lexer.variable"), QColor(QStringLiteral("#AB5500")));
     }
 
     const QStringList lexerKeys = {

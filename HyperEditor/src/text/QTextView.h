@@ -228,6 +228,7 @@ private:
     void performExclude();
     void clearExcludedRanges();
     void updateExcludedCount();
+    void updateSearchIndicatorColors();
     void clearCurrentMatchHighlight();
     void setCurrentMatchHighlight(int startPos, int length, bool scrollToMatch);
     int currentSearchFlags() const;

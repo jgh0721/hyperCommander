@@ -1,5 +1,6 @@
 ﻿#include "UniqueLibs/settings/appSettings.hpp"
 #include "HyperEditor/editorInstance.hpp"
+#include "UniqueLibs/productTheme.hpp"
 #include <future>
 #include <QUuid>
 #include "UniqueLibs/document/documentSettingsDialog.hpp"
@@ -50,6 +51,97 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void textSelectionRemainsReadable_data()
+    {
+        QTest::addColumn<bool>("Hosted"); QTest::addColumn<QString>("Extension");
+        for (bool Hosted : {true, false}) for (const auto& Extension : {QString("txt"), QString("cmd"), QString("cpp")})
+            QTest::newRow(qPrintable(QString("%1-%2").arg(Hosted ? "viewer" : "editor", Extension))) << Hosted << Extension;
+    }
+    void textSelectionRemainsReadable()
+    {
+        QFETCH(bool, Hosted); QFETCH(QString, Extension);
+        QTemporaryDir Temp; const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        auto& Theme = fm::style::ThemeManager::instance(); const auto OldScheme = Theme.scheme();
+        const auto OldMask = mrst::scintilla::textMaskState().enabled;
+        const auto OldGamma = mrst::scintilla::textMaskState().gamma;
+        const auto OldStrength = mrst::scintilla::textMaskState().strength;
+        const auto Restore = qScopeGuard([&] {
+            Theme.setScheme(OldScheme); qApp->setProperty("documentViewsConfigDir", Previous);
+            mrst::scintilla::setTextMask(OldMask, OldGamma, OldStrength);
+        });
+        const QByteArray Content = QString::fromUtf8("ECHO Approve Subnet Route at Admin Console!!! 한글\n\n// Selected comment MMMM 한글\n").toUtf8();
+        const auto Path = Temp.filePath("selection." + Extension); Write(Path, Content);
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"), Hosted);
+        QVERIFY(!Window.Handle({{"action", "open"}, {"path", Path}}).contains("error")); QTRY_VERIFY(Window.IsIdle());
+        auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text);
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(Text->Backend());
+        auto* Surface = Backend->scrollArea()->viewport();
+        Window.resize(1000, 550); Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
+        qInfo() << "Selection rendering DPR:" << Surface->devicePixelRatioF();
+        Backend->Send(SCI_SETCARETSTYLE, CARETSTYLE_INVISIBLE); Backend->Send(SCI_SETCARETPERIOD, 0);
+        const int ThirdLine = int(Content.indexOf("//"));
+        for (const auto& Mode : {QString("dark"), QString("light"), QString("dark")}) {
+            QVERIFY(Window.ApplyChromeSettings({{"schemaVersion", 1}, {"themeMode", Mode}}));
+            Backend->Send(SCI_SETSEL, 0, Content.indexOf('\n'));
+            Backend->Send(SCI_ADDSELECTION, Content.size() - 1, ThirdLine);
+            auto MatchColor = Theme.colors()[fm::style::Token::Warn]; MatchColor.setAlpha(110);
+            Backend->setIndicatorStyle(21, INDIC_ROUNDBOX, MatchColor);
+            Backend->applyIndicator(21, 0, Content.indexOf('\n'));
+            for (bool Mask : {false, true}) for (bool Focus : {true, false}) {
+                mrst::scintilla::setTextMask(Mask, 1.2, 1.1); Backend->Send(SCI_SETFOCUS, Focus);
+                Surface->update(); QCoreApplication::processEvents();
+                const auto Image = Surface->grab().toImage(); const auto Dpr = Image.devicePixelRatio();
+                const auto Background = ThemeManager::instance().color("text.selection");
+                for (int Start : {0, ThirdLine}) {
+                    const int X = Backend->Send(SCI_POINTXFROMPOSITION, 0, Start);
+                    const int Y = Backend->Send(SCI_POINTYFROMPOSITION, 0, Start);
+                    const int End = Backend->Send(SCI_POINTXFROMPOSITION, 0, Content.indexOf('\n', Start));
+                    const int Height = Backend->Send(SCI_TEXTHEIGHT, Backend->Send(SCI_LINEFROMPOSITION, Start));
+                    const auto Rect = QRect(qCeil((X + 2) * Dpr), qCeil((Y + 2) * Dpr),
+                        qFloor((End - X - 4) * Dpr), qFloor((Height - 4) * Dpr)).intersected(Image.rect());
+                    int Ink = 0;
+                    for (int Row = Rect.top(); Row <= Rect.bottom(); ++Row)
+                        for (int Col = Rect.left(); Col <= Rect.right(); ++Col)
+                            if (fm::style::contrastRatio(Image.pixelColor(Col, Row), Background) >= 4.5) ++Ink;
+                    const auto Capture = qEnvironmentVariable("HC_DOCUMENT_UI_CAPTURE");
+                    if (!Capture.isEmpty()) {
+                        QDir().mkpath(Capture);
+                        QVERIFY(Window.grab().save(Capture + QString("/selection-%1-%2-%3-mask%4-focus%5.png")
+                            .arg(Hosted ? "viewer" : "editor", Extension, Mode).arg(Mask).arg(Focus)));
+                    }
+                    QVERIFY2(Ink > 100, qPrintable(QString("%1 line=%2 mask=%3 focus=%4 readable pixels=%5")
+                        .arg(Mode).arg(Start).arg(Mask).arg(Focus).arg(Ink)));
+                }
+                QCOMPARE(Backend->Send(SCI_GETSELECTIONLAYER), qintptr(SC_LAYER_UNDER_TEXT));
+                QVERIFY(Backend->Send(SCI_INDICGETUNDER, 21));
+                QCOMPARE(Backend->Send(SCI_GETSELECTIONS), qintptr(2));
+                QCOMPARE(Text->Content().toUtf8(), Content); QVERIFY(!Text->isModified());
+            }
+            Text->ReloadPreferences();
+        }
+    }
+    void textThemeColorContrast()
+    {
+        fm::style::ThemeManager::instance().setDesign(hc::theme::ProductDesign);
+        for (const auto Mode : {ThemeManager::Light, ThemeManager::Dark}) {
+            const auto Colors = ThemeManager::defaultColors(Mode);
+            for (const auto& Pair : {qMakePair("text.foreground", "text.background"),
+                    qMakePair("text.foreground", "text.currentLine"), qMakePair("text.selectionForeground", "text.selection"),
+                    qMakePair("text.marginForeground", "text.marginBackground"), qMakePair("text.caret", "text.background")}) {
+                const auto Ratio = fm::style::contrastRatio(Colors[Pair.first], Colors[Pair.second]);
+                QVERIFY2(Ratio >= 4.5, qPrintable(QString("%1 %2/%3=%4").arg(Mode).arg(Pair.first, Pair.second).arg(Ratio)));
+            }
+            for (auto It = Colors.cbegin(); It != Colors.cend(); ++It) {
+                if (!It.key().startsWith("text.lexer.")) continue;
+                for (const auto* Background : {"text.background", "text.currentLine"}) {
+                    const auto Ratio = fm::style::contrastRatio(It.value(), Colors[Background]);
+                    QVERIFY2(Ratio >= 4.5, qPrintable(QString("%1 %2/%3=%4")
+                        .arg(Mode).arg(It.key(), Background).arg(Ratio)));
+                }
+            }
+        }
+    }
     void loadingImagePreviewPreservesDocumentAndClearsOnLoad() {
         DocumentViewPane Pane;TextInput Text;Text.path_="preview.txt";Text.text_="keep me";Text.bytes_="keep me";
         QVERIFY(Pane.Load(Text,false));Pane.SetReadOnly(true);const auto Before=Pane.Content();
@@ -189,11 +281,16 @@ private slots:
         QList<QTextView*> Views;
         for (int Index = 0; Index < 2; ++Index) {
             const auto Path = Temp.filePath(QString("theme-%1.cpp").arg(Index));
-            Write(Path, "// Theme transition\nint main() {\n    return 42;\n}\n");
+            Write(Path, "// Theme transition return\nint main() {\n    return 42;\n}\n");
             QVERIFY(!Window.Handle({{"action", "open"}, {"path", Path}}).contains("error"));
             QTRY_VERIFY(Window.IsIdle());
         }
         Views = Window.findChildren<QTextView*>(); QCOMPARE(Views.size(), 2);
+        for (auto* Text : Views) {
+            Text->showFindBar(false);
+            auto* Search = Text->findChild<FindReplaceWidget*>(); QVERIFY(Search);
+            Search->SetSearchText("return"); Search->findNext(); Search->excludeRequested(); Search->findNext();
+        }
         const auto SciColor = [](QColor Color) { return Color.red() | (Color.green() << 8) | (Color.blue() << 16); };
         for (const auto& Mode : {QString("light"), QString("dark"), QString("light"), QString("dark")}) {
             QVERIFY(Window.ApplyChromeSettings({{"schemaVersion", 1}, {"themeMode", Mode}}));
@@ -226,6 +323,14 @@ private slots:
                     QCOMPARE(Backend->Send(SCI_STYLEGETFORE, STYLE_INDENTGUIDE), SciColor(Colors.color("text.indentGuide")));
                     QCOMPARE(Backend->Send(SCI_STYLEGETFORE, 5), SciColor(Colors.color("text.lexer.keyword")));
                     QCOMPARE(Backend->Send(SCI_GETCARETFORE), SciColor(Colors.color("text.caret")));
+                    QCOMPARE(Backend->Send(SCI_GETADDITIONALCARETFORE), SciColor(Colors.color("text.caret")));
+                    for (const auto& Indicator : {qMakePair(20, fm::style::Token::DangerBg),
+                            qMakePair(21, fm::style::Token::Warn), qMakePair(22, fm::style::Token::Fg3),
+                            qMakePair(23, fm::style::Token::DangerLine)}) {
+                        QCOMPARE(Backend->Send(SCI_INDICGETFORE, Indicator.first), SciColor(Theme.colors()[Indicator.second]));
+                        QVERIFY(Backend->Send(SCI_INDICGETUNDER, Indicator.first));
+                    }
+                    QVERIFY(Backend->Send(SCI_INDICATORVALUEAT, 20, Original.indexOf("return")));
                     QCOMPARE(Text->Content(), Original); QVERIFY(!Text->isModified());
                 };
                 Check(); if (QTest::currentTestFailed()) return;
