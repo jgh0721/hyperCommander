@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "largeTextSyntax.hpp"
+#include "compareSyntax.hpp"
 #include <ILexer.h>
 #include <Lexilla.h>
 #include <QFile>
@@ -12,21 +13,21 @@ namespace hc::compare
     {
     public:
         std::shared_ptr<const LargeTextIndex> index_;
-        QByteArray name_;
+        // C and C++ share the "cpp" module with different keywords, so the cache key is the language.
+        const CompareLanguage* language_;
         bool valid_ = true;
         std::uint64_t styled_ = 0;
         const Budget* limits_ = nullptr;
-        LargeTextSyntax(std::shared_ptr<const LargeTextIndex> Index, QByteArray Name)
-            : index_(std::move(Index)), name_(std::move(Name)), states_(index_->lines_.size() + 1, 0)
+        LargeTextSyntax(std::shared_ptr<const LargeTextIndex> Index, const CompareLanguage& Language)
+            : index_(std::move(Index)), language_(&Language), states_(index_->lines_.size() + 1, 0)
         {
-            lexer_.reset(CreateLexer(name_.constData())); if (!lexer_) throw Failure("LargeTextLexerUnavailable");
+            lexer_.reset(CreateCompareLexer(Language)); if (!lexer_) throw Failure("LargeTextLexerUnavailable");
             const auto& piece = index_->contiguous_;
             if (piece.bytes_) {
                 source_.setFileName(piece.backing_->file_.fileName());
                 if (!source_.open(QIODevice::ReadOnly) || !(text_ = source_.map(qint64(piece.begin_), qint64(piece.bytes_)))) throw Failure("LargeTextSyntaxMapFailed");
                 if (!styles_.open()) throw Failure("LargeTextSyntaxMapFailed");
             }
-            lexer_->WordListSet(0, "auto bool break case catch class const constexpr continue def default delete do else enum explicit extern false float for from if import in int lambda namespace new noexcept nullptr private protected public raise return static struct switch template this throw true try typedef typename using virtual void while with yield");
         }
         ~LargeTextSyntax() { if (text_) source_.unmap(text_); if (style_) styles_.unmap(style_); }
         int SCI_METHOD Version() const override { return Scintilla::dvRelease4; }
@@ -113,15 +114,15 @@ namespace hc::compare
         std::vector<int> states_;
         Sci_Position at_ = 0;
     };
-    QByteArray StyleLargeText(const LargeTextDocument& Document, const QByteArray& Lexer, std::uint64_t Begin, std::uint64_t End,
+    QByteArray StyleLargeText(const LargeTextDocument& Document, const CompareLanguage& Language, std::uint64_t Begin, std::uint64_t End,
         std::shared_ptr<LargeTextSyntax>& Cache, const Budget& Limits)
     {
         Limits.Check(); if (Begin > End || End > Document.bytes_ || End - Begin > largeTextPageMaximum) throw Failure("LargeTextRangeInvalid");
-        if (Lexer == "null") return QByteArray(qsizetype(End - Begin), 0);
-        if (!Cache || !Cache->valid_ || Cache->index_ != Document.index_ || Cache->name_ != Lexer) {
+        if (Language.lexer_ == "null") return QByteArray(qsizetype(End - Begin), 0);
+        if (!Cache || !Cache->valid_ || Cache->index_ != Document.index_ || Cache->language_ != &Language) {
             const auto indexed = IndexLargeText(Document, Limits);
             const auto reservation = Limits.memoryReserve_ ? Limits.memoryReserve_((indexed.index_->lines_.size() + 1) * sizeof(int) + 4 * 1024 * 1024) : std::shared_ptr<void>{};
-            Cache = std::make_shared<LargeTextSyntax>(indexed.index_, Lexer);
+            Cache = std::make_shared<LargeTextSyntax>(indexed.index_, Language);
         }
         return Cache->Styles(Begin, End, Limits);
     }

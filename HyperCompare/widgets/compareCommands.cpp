@@ -32,6 +32,10 @@ namespace hc::compare
         add("view.alignAll", "전체 패널 표시 줄 정렬", "보기·설정"); add("view.alignRows", "왼쪽·오른쪽 표시 줄 정렬", "보기·설정");
         add("view.sync", "왼쪽·오른쪽 스크롤 동기화", "보기·설정"); add("view.inline", "줄 내부 차이 강조", "보기·설정");
         add("view.overview", "차이 개요 막대", "보기·설정"); add("app.settings", "설정", "보기·설정", "Ctrl+,");
+        add("view.syntax.auto", "구문 강조 · 자동", "보기·설정"); add("view.syntax.c", "구문 강조 · C", "보기·설정");
+        add("view.syntax.cpp", "구문 강조 · C++", "보기·설정"); add("view.syntax.python", "구문 강조 · Python", "보기·설정");
+        add("view.syntax.json", "구문 강조 · JSON", "보기·설정"); add("view.syntax.xml", "구문 강조 · XML", "보기·설정");
+        add("view.syntax.none", "구문 강조 · 일반 텍스트", "보기·설정");
         return result;
     }
     QList<QKeySequence> CompareKeys(const QString& Id, const QJsonObject& Overrides)

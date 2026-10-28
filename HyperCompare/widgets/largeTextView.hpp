@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "extensionView.hpp"
 #include "runtime/largeText.hpp"
+#include "runtime/compareLanguage.hpp"
 #include <QFutureWatcher>
 #include <functional>
 #include <QFont>
@@ -15,7 +16,9 @@ class QTimer;
 class QHBoxLayout;
 namespace hc::compare
 {
-    const char* LargeTextLexer(const QString& Path);
+    // Every document of the session takes part in the fallback, so a RESULT
+    // without a known suffix styles like its inputs.
+    CompareLanguageResolver LargeTextLanguages(const LargeTextComparison& Value, const QString& Override);
     void ApplyLargeTextEditorAppearance(ScintillaEditBase* Editor, const QFont& Font, bool Dark, int LexerId);
     class ChunkGutter;
     class LargeTextSyntax;
@@ -30,6 +33,10 @@ namespace hc::compare
         void Cancel() { if (canceled_) canceled_->store(true); }
         void SetTextFont(const QFont& Font) override;
         virtual void SetDark(bool Dark) { dark_ = Dark; }
+        // "auto" or a CompareSyntaxChoices() id; restyles the displayed pages.
+        virtual void SetSyntax(const QString& Override);
+        const CompareLanguage& Language(int Side) const;
+        const QString& Syntax() const { return input_.syntax_; }
         void SaveWork(const QString& Path, bool ReplaceExisting = false);
         void LoadWork(const QString& Path);
         void RecoverWork(const QString& Path);
@@ -50,6 +57,7 @@ namespace hc::compare
             std::optional<LargeTextMatch> match_;
             int side_ = 0;
             QString note_;
+            QString syntaxOverride_;
             Task(std::shared_ptr<LargeTextComparison> Value) : comparison_(std::move(Value)) {}
         };
         struct Response {
@@ -62,6 +70,8 @@ namespace hc::compare
             std::optional<LargeTextMatch> match_;
             int matchSide_ = 0;
             QString note_;
+            // A loaded work file's language, applied after the page is shown.
+            QString syntaxOverride_;
         };
         void load(bool Mutation = false, std::shared_ptr<LargeTextComparison> Value = {});
         void run(std::function<Task(const Budget&)> Work, bool Mutation, int Saved = -1);
@@ -108,6 +118,7 @@ namespace hc::compare
         std::optional<std::array<EditorPosition, 2>> pendingPosition_;
         std::array<std::shared_ptr<LargeTextSyntax>, 2> syntax_;
         std::array<int, 2> lexerIds_{};
+        CompareLanguageResolver languages_;
         QString lastQuery_;
         LargeTextMatch lastMatch_;
         int lastSearchDocument_ = -1;

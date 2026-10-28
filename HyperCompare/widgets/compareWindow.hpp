@@ -2,6 +2,7 @@
 #include "runtime/session.hpp"
 #include "runtime/mergeWork.hpp"
 #include "runtime/inputEditing.hpp"
+#include "runtime/compareLanguage.hpp"
 #include <QTimer>
 #include <QMainWindow>
 #include <QFutureWatcher>
@@ -24,6 +25,9 @@ namespace hc::compare
     // Application-owned indicator; separate from lexer styles, line marker 8,
     // and Scintilla's selection elements. Reserve other IDs for future search.
     inline constexpr int sourceDifferenceIndicator = 20;
+    // Function definition names from structure analysis. Below the changed-line
+    // text indicators (22..26), which therefore keep their glyph color.
+    inline constexpr int functionNameIndicator = 18;
     class MergeController;
     class ChunkGutter;
     class ScrollSynchronizer;
@@ -92,7 +96,15 @@ namespace hc::compare
         void updateMerge();
         void navigateBlock(int Direction);
         void selectBlock();
-        ScintillaEditBase* addPane(const QString& Title, const QString& Path, const QByteArray& Text, bool ReadOnly);
+        ScintillaEditBase* addPane(const QString& Title, const QString& Path, const QByteArray& Text, bool ReadOnly, const CompareLanguage& Language);
+        CompareLanguageResolver paneLanguages() const;
+        void setPaneLanguage(ScintillaEditBase* Editor, const CompareLanguage& Language);
+        void applySyntax(const QString& Override, bool Reanalyze = true);
+        // " · C++ (자동)" for the format label of pane Index.
+        QString syntaxLabel(int Index) const;
+        void applyFunctionMarks();
+        void updateCurrentFunction(ScintillaEditBase* Editor);
+        void syncSyntaxActions();
         Request request_;
         Result result_;
         QFutureWatcher<Result> watcher_;
@@ -115,6 +127,9 @@ namespace hc::compare
         QString workPath_;
         std::optional<storage::DestinationExpectation> workExpected_;
         std::shared_ptr<std::atomic_bool> canceled_ = std::make_shared<std::atomic_bool>(false);
+        // This window's inputs in the resident source worker; requests copied from
+        // another window must not reuse that window's documents.
+        std::shared_ptr<SourceDocuments> sourceDocuments_;
         QVector<ScintillaEditBase*> editors_;
         ScintillaEditBase* output_ = nullptr;
         MergeController* merge_ = nullptr;
@@ -161,7 +176,9 @@ namespace hc::compare
         QVector<QAction*> wholeActions_;
         QVector<QAction*> findActions_;
         QVector<QAction*> encodingActions_;
+        QVector<QAction*> syntaxActions_;
         QVector<QLabel*> formatLabels_;
+        QVector<QLabel*> functionLabels_;
         QVector<ChunkGutter*> gutters_;
         QFont uiFont_, listFont_, textFont_;
         QString themeMode_ = "product";

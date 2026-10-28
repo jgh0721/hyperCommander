@@ -57,10 +57,16 @@ namespace hc::compare
     int WorkerMain()
     {
         QFile input, output; if (!input.open(stdin, QIODevice::ReadOnly) || !output.open(stdout, QIODevice::WriteOnly)) return 2;
-        const auto bytes = input.read(64 * 1024 * 1024 + 1); if (bytes.size() > 64 * 1024 * 1024) return 2;
+        // read(maxSize) reserves maxSize up front: 64 MiB of commit inside the
+        // job limit even for an empty request. Grow with the actual request instead.
+        QByteArray bytes;
+        for (QByteArray chunk; !(chunk = input.read(1024 * 1024)).isEmpty();)
+        { bytes += chunk; if (bytes.size() > 64 * 1024 * 1024) return 2; }
         QJsonParseError error; const auto envelope = QJsonDocument::fromJson(bytes, &error).object();
         const auto nonce = envelope["nonce"].toString(), engine = envelope["engine"].toString(), digest = envelope["digest"].toString();
         const auto payload = envelope["request"].toObject();
+        // The parsed envelope holds the request; keep only one copy while a large source is parsed.
+        bytes = {};
         if (error.error != QJsonParseError::NoError || envelope["schema"].toInt() != 1 || nonce.size() != 36 || digest.size() != 64 ||
             digest != QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(payload).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex())) return 2;
         QJsonObject result;

@@ -18,6 +18,7 @@
 #include <QLineEdit>
 #include <QPainter>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScreen>
 #include <QScrollArea>
 #include <QSettings>
@@ -80,7 +81,23 @@ namespace hc::compare
                     painter.setPen(role.isEmpty() || role == "gap" ? color("foreground") : CompareColor(role + "Fg", dark_, settings_));
                     const auto symbol = role == "added" ? "+ " : role == "removed" ? "− " : role == "conflict" ? "! " : role == "resolved" ? "✓ " : "  ";
                     const auto text = QString::number(i + 1) + " " + symbol + (side ? right[i] : left[i]);
-                    painter.drawText(cell.adjusted(6, 0, -4, 0), Qt::AlignVCenter, fontMetrics().elidedText(text, Qt::ElideRight, pane - 10));
+                    if (role.isEmpty())
+                    {
+                        // Unchanged rows show the syntax colors; changed rows keep their glyph color.
+                        const auto prefix = text.left(text.indexOf(' ') + 1 + 2); int x = cell.left() + 6 + fontMetrics().horizontalAdvance(prefix);
+                        static const QRegularExpression tokens("\\d+|\\w+|\\s+|[^\\w\\s]+");
+                        for (auto it = tokens.globalMatch(text.mid(prefix.size())); it.hasNext();)
+                        {
+                            const auto token = it.next().captured();
+                            const auto ink = QStringList{"struct", "return", "true"}.contains(token) ? CompareColor("syntaxKeyword", dark_, settings_) :
+                                token.front().isDigit() ? CompareColor("syntaxNumber", dark_, settings_) : color("foreground");
+                            painter.setPen(ink); const QRect box(x, cell.top(), fontMetrics().horizontalAdvance(token), row);
+                            if (box.right() < cell.right()) painter.drawText(box, Qt::AlignVCenter, token); x = box.right() + 1;
+                        }
+                        painter.setPen(color("foreground"));
+                        painter.drawText(cell.adjusted(6, 0, -4, 0), Qt::AlignVCenter, prefix);
+                    }
+                    else painter.drawText(cell.adjusted(6, 0, -4, 0), Qt::AlignVCenter, fontMetrics().elidedText(text, Qt::ElideRight, pane - 10));
                     if (i == 1 || i == 2)
                     {
                         const auto at = text.indexOf('=') + 2; const auto number = text.mid(at).chopped(1);
@@ -156,7 +173,7 @@ namespace hc::compare
         connect(resetAll, &QPushButton::clicked, this, [this] { for (const auto& command : CompareCommands()) draft_.shortcuts_.remove(command.id_); fillKeys(); changed(); });
         QWidget* colorPage; scrollPage(tabs_, tr("테마 색상"), colorPage); auto* colorLayout = new QVBoxLayout(colorPage); auto* paletteRow = new QHBoxLayout(); colorLayout->addLayout(paletteRow);
         paletteRow->addWidget(new QLabel(tr("편집할 색상"), colorPage)); colorMode_ = new QComboBox(colorPage); colorMode_->setObjectName("colorMode"); colorMode_->setAccessibleName(tr("편집할 색상")); colorMode_->addItems({tr("밝은 테마"), tr("어두운 테마")}); colorMode_->setCurrentIndex(CompareIsDark() ? 1 : 0); paletteRow->addWidget(colorMode_);
-        colorGroup_ = new QComboBox(colorPage); colorGroup_->setObjectName("colorGroup"); colorGroup_->setAccessibleName(tr("색상 분류")); colorGroup_->addItems({tr("본문·줄 강조"), tr("비교막대"), tr("병합·연결 영역"), tr("고급")}); paletteRow->addWidget(colorGroup_); paletteRow->addStretch();
+        colorGroup_ = new QComboBox(colorPage); colorGroup_->setObjectName("colorGroup"); colorGroup_->setAccessibleName(tr("색상 분류")); colorGroup_->addItems({tr("본문·줄 강조"), tr("비교막대"), tr("병합·연결 영역"), tr("구문 강조"), tr("고급")}); paletteRow->addWidget(colorGroup_); paletteRow->addStretch();
         auto* resetPalette = new QPushButton(tr("이 테마 기본값"), colorPage); resetPalette->setObjectName("colorsReset"); paletteRow->addWidget(resetPalette);
         link_ = new QCheckBox(tr("비교 색상과 연결"), colorPage); link_->setObjectName("linkOverviewColors"); colorLayout->addWidget(link_);
         auto* colorRow = new QHBoxLayout(); colorLayout->addLayout(colorRow, 1); colors_ = new QTableWidget(colorPage); colors_->setObjectName("colorTable"); colors_->setColumnCount(4); colors_->setHorizontalHeaderLabels({tr("항목"), tr("색상"), tr("HEX / 불투명도"), tr("기본값")});
@@ -277,6 +294,15 @@ namespace hc::compare
         QStringList warnings; const bool dark = preview->dark_;
         for (const auto* role : {"modified", "added", "removed", "conflict", "resolved"}) if (CompareContrast(CompareColor(QString(role) + "Fg", dark, draft_), CompareColor(QString(role) + "Bg", dark, draft_)) < 4.5)
             for (const auto& item : CompareColorRoles()) if (item.id_ == QString(role) + "Fg") warnings.append(item.label_);
+        // Syntax glyphs sit on the surface and on every changed-line background. Dimmed
+        // inactive code is held to the large-text minimum (3:1) instead of 4.5:1.
+        for (const auto& item : CompareColorRoles())
+        {
+            if (!item.id_.startsWith("syntax")) continue;
+            const auto ink = CompareColor(item.id_, dark, draft_); const double minimum = item.id_ == "syntaxInactive" ? 3.0 : 4.5;
+            for (const auto* back : {"background", "modifiedBg", "addedBg", "removedBg", "conflictBg"})
+                if (CompareContrast(ink, CompareColor(back, dark, draft_)) < minimum) { warnings.append(item.group_ + " · " + item.label_); break; }
+        }
         contrast_->setText(warnings.isEmpty() ? tr("글자 대비 양호 · 색상과 함께 기호 및 상태 문구를 표시합니다.") : tr("글자 대비가 낮습니다: %1").arg(warnings.join(", ")));
     }
 }

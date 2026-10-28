@@ -3,6 +3,7 @@
 #include "directoryPlan.hpp"
 #include "requestFile.hpp"
 #include "saveRecovery.hpp"
+#include "compareLanguage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include <QCryptographicHash>
@@ -139,7 +140,8 @@ namespace hc::compare
             while (!file.atEnd()) { Limits.Check(); const auto bytes = file.read(64 * 1024); if (bytes.isEmpty()) throw Failure("LargeTextWorkReadFailed"); hash.addData(bytes); }
             files.append(QJsonObject{{"bytes", double(file.size())}, {"sha256", QString::fromLatin1(hash.result().toHex())}});
         }
-        const QJsonObject header{{"kind", "HyperCompareLargeWork"}, {"schemaVersion", 1}, {"documents", documents}, {"titles", QJsonArray::fromStringList(session.titles_)}, {"result", session.result_}, {"pair", QJsonArray{session.pair_[0], session.pair_[1]}}, {"reviewRequired", session.reviewRequired_}, {"conflicts", conflicts}, {"backings", files}};
+        QJsonObject header{{"kind", "HyperCompareLargeWork"}, {"schemaVersion", 1}, {"documents", documents}, {"titles", QJsonArray::fromStringList(session.titles_)}, {"result", session.result_}, {"pair", QJsonArray{session.pair_[0], session.pair_[1]}}, {"reviewRequired", session.reviewRequired_}, {"conflicts", conflicts}, {"backings", files}};
+        if (Input.syntax_ != "auto") header["syntax"] = Input.syntax_;
         const auto json = QJsonDocument(header).toJson(QJsonDocument::Compact); if (json.size() > headerLimit) throw Failure("LargeTextWorkHeaderLimit");
         return writeArtifact(Path, Input, Value, ReplaceExisting, Limits, [&](const auto& Output) {
             Output(magic); const quint64 size = qToLittleEndian(quint64(json.size())); Output(QByteArrayView(reinterpret_cast<const char*>(&size), sizeof(size))); Output(json);
@@ -157,6 +159,7 @@ namespace hc::compare
         const auto json = file.read(qint64(size)); if (json.size() != qint64(size)) throw Failure("LargeTextWorkTruncated"); QJsonParseError error; const auto parsed = QJsonDocument::fromJson(json, &error);
         if (error.error != QJsonParseError::NoError || !parsed.isObject()) throw Failure("LargeTextWorkJson"); const auto header = parsed.object();
         if (header["kind"] != "HyperCompareLargeWork" || header["schemaVersion"] != 1 || header["result"].toInt(-2) != Current.session_->result_ || !header["reviewRequired"].isBool()) throw Failure("LargeTextWorkSchema");
+        if (header.contains("syntax") && !CompareSyntaxChoices().contains(header["syntax"].toString())) throw Failure("LargeTextWorkSchema");
         const auto files = header["backings"].toArray(); if (files.size() > 10000) throw Failure("LargeTextWorkBackingLimit"); std::vector<std::shared_ptr<LargeTextBacking>> backings; std::uint64_t total = 0;
         for (const auto& value : files) {
             Limits.Check(); const auto entry = value.toObject(); const auto bytes = number(entry["bytes"], largeTextMaximum); total += bytes;
@@ -190,7 +193,8 @@ namespace hc::compare
         const auto pair = header["pair"].toArray(); if (pair.size() != 2) throw Failure("LargeTextWorkSchema"); const std::array selected{int(number(pair[0], session.documents_.size() - 1)), int(number(pair[1], session.documents_.size() - 1))};
         if (session.result_ >= 0 && (selected[1] != session.result_ || selected[0] == session.result_)) throw Failure("LargeTextWorkSchema");
         if (RecoverResult) { session.reviewRequired_ = true; session.conflicts_.clear(); }
-        Q_UNUSED(Input); return PairLargeTextSession(std::move(session), selected, Limits);
+        Q_UNUSED(Input); auto loaded = PairLargeTextSession(std::move(session), selected, Limits);
+        if (!RecoverResult) loaded->syntax_ = header["syntax"].toString(); return loaded;
     }
     ReportFile SaveLargeTextReport(const QString& Path, const Request& Input, const LargeTextComparison& Value, bool ReplaceExisting, const Budget& Limits)
     {

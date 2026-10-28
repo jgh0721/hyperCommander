@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
 #include "runtime/requestFile.hpp"
+#include "runtime/compareLanguage.hpp"
 #include <QCommandLineParser>
 #include <QDir>
 #include <QFileInfo>
@@ -47,6 +48,7 @@ namespace hc::compare
         flag("copy-streams", "Directory-merge: preserve and verify named file data streams (ADS).");
         value("theme", "GUI theme: light or dark.");
         value("semantic", "auto (default C/C++ function relations) or off. Syntactic annotations never resolve merge conflicts.");
+        value("syntax", "Language for highlighting and function relations: auto (default; file suffix or first line), c, cpp, python, json, xml or none.");
         value("archive-password1-file", "UTF-8 password file for LEFT; a JSON string array supplies separate nested passwords. Passwords are never command-line values.");
         value("archive-engine", "native (default, ZIP/7z/RAR and rewrite), or zip (legacy strict read-only ZIP decoder).");
         value("archive-password2-file", "UTF-8 password file for RIGHT.");
@@ -112,6 +114,8 @@ namespace hc::compare
         request.takeAll_ = parser.value("takeall"); request.theme_ = parser.value("theme");
         if (parser.isSet("semantic")) request.semantic_ = parser.value("semantic");
         if (request.semantic_ != "auto" && request.semantic_ != "off") return fail("Invalid semantic mode.");
+        if (parser.isSet("syntax")) request.syntax_ = parser.value("syntax");
+        if (request.syntax_ != "auto" && !CompareSyntaxChoices().contains(request.syntax_)) return fail("Invalid syntax language.");
         for (const auto& name : {"include", "exclude"})
         {
             if (!parser.isSet(name)) continue;

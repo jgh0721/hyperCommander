@@ -35,7 +35,7 @@ foreach(name IN ITEMS hc_tree_sitter hc_tree_sitter_c hc_tree_sitter_cpp hc_tree
     file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/$<CONFIG>/Licenses/${name}.txt"
         INPUT "${${name}_SOURCE_DIR}/LICENSE")
 endforeach()
-qt_add_library(hc_compare_semantic_worker STATIC runtime/semanticParser.cpp runtime/workerMain.cpp runtime/pngWorker.cpp)
+qt_add_library(hc_compare_semantic_worker STATIC runtime/semanticParser.cpp runtime/residentWorker.cpp runtime/workerMain.cpp runtime/pngWorker.cpp)
 target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_parser Qt6::Core Qt6::Gui)
 target_include_directories(hc_compare_semantic_worker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(hc_compare_semantic_worker PRIVATE NOMINMAX UNICODE _UNICODE)

@@ -1,10 +1,13 @@
 ﻿#include "stdafx.h"
 #include "semantic.hpp"
 #include "session.hpp"
+#include "compareLanguage.hpp"
+#include "sourceWorkerHost.hpp"
 #include <QHash>
 #include <QMap>
 #include <algorithm>
 #include <array>
+#include <future>
 
 namespace hc::compare
 {
@@ -225,9 +228,26 @@ namespace hc::compare
         if (Value.inputs_.size() < 2) return;
         QJsonArray documents, pairs; bool supported = false, complete = true;
         auto budget = Limits; budget.deadline_ = std::min(Limits.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(6));
-        for (const auto& input : Value.inputs_)
+        QStringList paths; QList<QByteArray> heads;
+        for (const auto& input : Value.inputs_) { paths.append(input.path_); heads.append(input.utf8_); }
+        const auto languages = ResolveCompareLanguages(paths, heads, Input.syntax_);
+        // GUI windows keep their documents in the resident worker, which answers one
+        // request at a time. One-shot workers run side by side within the two shared
+        // worker slots: a 10 MiB C++ input takes about 3.3 s on its own.
+        std::vector<std::future<QJsonObject>> jobs;
+        for (qsizetype i = 0; i < Value.inputs_.size(); ++i)
         {
-            auto document = AnalyzeFunctions(input.path_, input.utf8_, budget);
+            const auto& input = Value.inputs_[i]; const auto& language = languages(input.path_, input.utf8_);
+            if (Input.sourceDocuments_)
+            {
+                std::promise<QJsonObject> done; done.set_value(Input.sourceDocuments_->Analyze(int(i), language, input.utf8_, budget));
+                jobs.push_back(done.get_future());
+            }
+            else jobs.push_back(std::async(std::launch::async, [language = &language, input = &input, &budget] { return AnalyzeFunctionsAs(*language, input->utf8_, budget); }));
+        }
+        for (auto& job : jobs)
+        {
+            const auto document = job.get();
             supported |= document["status"] != "Unsupported"; complete &= document["status"] == "Complete";
             documents.append(document);
         }

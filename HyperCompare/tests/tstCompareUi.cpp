@@ -7,6 +7,8 @@
 #include "widgets/largeTextView.hpp"
 #include "widgets/largeTextMultiView.hpp"
 #include "widgets/largeTextSyntax.hpp"
+#include "runtime/compareLanguage.hpp"
+#include "runtime/sourceWorkerHost.hpp"
 #include <SciLexer.h>
 #include <QSpinBox>
 #include "widgets/guiRequestServer.hpp"
@@ -299,20 +301,21 @@ private slots:
         };
         for (const auto& sample : samples) {
             write(path, sample.second); const auto document = IndexLargeText(ReadLargeText(path, {}, {}), {});
+            const auto& language = CompareLanguageById(QString::fromLatin1(sample.first));
             std::shared_ptr<LargeTextSyntax> whole, paged;
             QByteArray expected;
-            for (std::uint64_t at = 0; at < document.bytes_; at += largeTextPageMaximum) expected += StyleLargeText(document, sample.first, at, std::min(document.bytes_, at + largeTextPageMaximum), whole, {});
+            for (std::uint64_t at = 0; at < document.bytes_; at += largeTextPageMaximum) expected += StyleLargeText(document, language, at, std::min(document.bytes_, at + largeTextPageMaximum), whole, {});
             QByteArray actual;
-            for (std::uint64_t at = 0; at < document.bytes_; at += 997) actual += StyleLargeText(document, sample.first, at, std::min(document.bytes_, at + 997), paged, {});
+            for (std::uint64_t at = 0; at < document.bytes_; at += 997) actual += StyleLargeText(document, language, at, std::min(document.bytes_, at + 997), paged, {});
             QCOMPARE(actual, expected);
-            QCOMPARE(StyleLargeText(document, sample.first, 3, 30, paged, {}), expected.mid(3, 27));
+            QCOMPARE(StyleLargeText(document, language, 3, 30, paged, {}), expected.mid(3, 27));
             if (sample.first == "cpp") QCOMPARE(uchar(actual[2000]), uchar(SCE_C_COMMENT));
             if (sample.first == "python") QCOMPARE(uchar(actual[2000]), uchar(SCE_P_TRIPLEDOUBLE));
             if (sample.first == "xml") QCOMPARE(uchar(actual[2000]), uchar(SCE_H_COMMENT));
             std::shared_ptr<LargeTextSyntax> interrupted; Budget limited; int checks = 0;
             limited.memoryCheck_ = [&] { if (++checks == 5) throw Failure("TestInterruptedSyntax"); };
-            QVERIFY_EXCEPTION_THROWN(StyleLargeText(document, sample.first, 0, std::min(document.bytes_, largeTextPageMaximum), interrupted, limited), Failure);
-            QCOMPARE(StyleLargeText(document, sample.first, 0, 100, interrupted, {}), expected.left(100));
+            QVERIFY_EXCEPTION_THROWN(StyleLargeText(document, language, 0, std::min(document.bytes_, largeTextPageMaximum), interrupted, limited), Failure);
+            QCOMPARE(StyleLargeText(document, language, 0, 100, interrupted, {}), expected.left(100));
         }
     }
     void largeEditsApplyBeforeNavigationSaveAndRegex()
@@ -1070,6 +1073,164 @@ private slots:
             socket.write(data); socket.flush(); QTRY_VERIFY(socket.state() == QLocalSocket::UnconnectedState || socket.canReadLine());
             if (socket.canReadLine()) QCOMPARE(QJsonDocument::fromJson(socket.readLine()).object()["kind"].toString(), QString("error"));
         }
+    }
+    void syntaxStylesPerLanguage()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.py"); request.file2_ = dir.filePath("right.cpp");
+        const QByteArray python = "@staticmethod\ndef run(value):\n    total = int(value) + 42\n    name = 'single'\n    text = f\"{name}!\"\n    return \"\"\"doc\"\"\"\n";
+        const QByteArray cpp = "#include <string>\nint def = 1;\nstd::string s = \"a\\n\";\nreturn 7;\n";
+        write(request.file1_, python); write(request.file2_, cpp);
+        CompareWindow window(request); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 2"), 10000); QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2");
+        left->send(SCI_COLOURISE, 0, -1); right->send(SCI_COLOURISE, 0, -1);
+        const auto style = [](ScintillaEditBase* Editor, const QByteArray& Text, const QByteArray& Token) { return int(Editor->send(SCI_GETSTYLEAT, Text.indexOf(Token))); };
+        // Python keywords and strings were styled as C++ comments before the language table.
+        QCOMPARE(style(left, python, "def"), SCE_P_WORD); QCOMPARE(style(left, python, "return"), SCE_P_WORD);
+        QCOMPARE(style(left, python, "int("), SCE_P_WORD2); QCOMPARE(style(left, python, "42"), SCE_P_NUMBER);
+        QCOMPARE(style(left, python, "'single'"), SCE_P_CHARACTER); QCOMPARE(style(left, python, "f\""), SCE_P_FSTRING);
+        QCOMPARE(style(left, python, "\"\"\"doc"), SCE_P_TRIPLEDOUBLE); QCOMPARE(style(left, python, "@static"), SCE_P_DECORATOR);
+        QCOMPARE(style(left, python, "run"), SCE_P_DEFNAME);
+        QCOMPARE(style(right, cpp, "#include"), SCE_C_PREPROCESSOR); QCOMPARE(style(right, cpp, "int"), SCE_C_WORD);
+        QCOMPARE(style(right, cpp, "def"), SCE_C_IDENTIFIER); QCOMPARE(style(right, cpp, "string s"), SCE_C_WORD2);
+        QCOMPARE(style(right, cpp, "\\n"), SCE_C_ESCAPESEQUENCE); QCOMPARE(style(right, cpp, "7"), SCE_C_NUMBER);
+        QVERIFY(window.findChild<QLabel*>("format_FILE 1")->text().contains(QString::fromUtf8("Python (자동)")));
+        QVERIFY(window.findChild<QLabel*>("format_FILE 2")->text().contains(QString::fromUtf8("C++ (자동)")));
+        window.close();
+    }
+    void syntaxColorsPerRole()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("a.py"); request.file2_ = dir.filePath("b.cpp");
+        write(request.file1_, "x = 1 # c\n"); write(request.file2_, "#if 0\nint x = 1;\n#endif\n");
+        const auto rgb = [](const QColor& Color) { return sptr_t(Color.red() | (Color.green() << 8) | (Color.blue() << 16)); };
+        for (const bool dark : {false, true})
+        {
+            request.theme_ = dark ? "dark" : "light"; CompareWindow window(request); window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 2"), 10000); QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+            auto* python = window.findChild<ScintillaEditBase*>("FILE 1"); auto* cpp = window.findChild<ScintillaEditBase*>("FILE 2");
+            for (const auto& [style, role] : CompareSyntaxStyles(SCLEX_PYTHON)) QCOMPARE(python->send(SCI_STYLEGETFORE, style), rgb(CompareColor(CompareSyntaxRoleId(role), dark)));
+            for (const auto& [style, role] : CompareSyntaxStyles(SCLEX_CPP)) QCOMPARE(cpp->send(SCI_STYLEGETFORE, style), rgb(CompareColor(CompareSyntaxRoleId(role), dark)));
+            QCOMPARE(cpp->send(SCI_STYLEGETFORE, SCE_C_WORD | 0x40), rgb(CompareColor("syntaxInactive", dark)));
+            QVERIFY(python->send(SCI_STYLEGETFORE, SCE_P_NUMBER) != python->send(SCI_STYLEGETFORE, SCE_P_COMMENTLINE));
+            cpp->send(SCI_COLOURISE, 0, -1); QCOMPARE(int(cpp->send(SCI_GETSTYLEAT, 6)), SCE_C_WORD | 0x40);
+            window.close();
+        }
+    }
+    // An editor and the large-text IDocument share lexer configuration, so a file
+    // styles byte-identically at either size.
+    void syntaxNormalLargeParity()
+    {
+        QTemporaryDir dir;
+        const QByteArray cppBlock = "/* block\n comment */\n#include <map>\n#if 0\nint off() { return 0; }\n#endif\nnamespace n {\nstd::string make(const char* p) {\n"
+            "    auto raw = R\"tag(raw \"text\"\n)tag\";\n    return std::string(p) + \"\\t\" + raw; // line\n}\n}\nint value = 0x1F + 3.5e2;\n";
+        const QByteArray pythonBlock = "@decorator\ndef make(value: int) -> str:\n    \"\"\"Doc.\"\"\"\n    name = f\"{value!r:>10}\"\n    return 'x' + name  # note\n\nclass Box:\n    match = 1\n";
+        for (const auto& [name, block] : {std::pair{QString("parity.cpp"), cppBlock}, std::pair{QString("parity.py"), pythonBlock}})
+        {
+            const auto text = block.repeated(200); const auto path = dir.filePath(name); write(path, text);
+            Request request; request.file1_ = path; request.file2_ = path; CompareWindow window(request); window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000); QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+            auto* editor = window.findChild<ScintillaEditBase*>("FILE 1"); editor->send(SCI_COLOURISE, 0, -1);
+            QByteArray normal(text.size(), '\0'); for (qsizetype i = 0; i < text.size(); ++i) normal[i] = char(editor->send(SCI_GETSTYLEAT, i));
+            const auto document = IndexLargeText(ReadLargeText(path, {}, {}), {}); std::shared_ptr<LargeTextSyntax> cache;
+            QCOMPARE(StyleLargeText(document, DetectCompareLanguage(path), 0, document.bytes_, cache, {}), normal);
+            window.close();
+        }
+    }
+    void syntaxColorSettingsAndContrast()
+    {
+        auto& theme = fm::style::ThemeManager::instance(); const auto tone = theme.darkTone();
+        for (const auto value : {fm::style::ThemeManager::DarkTone::Gray, fm::style::ThemeManager::DarkTone::Navy})
+        {
+            theme.setDarkTone(value);
+            for (const bool dark : {false, true}) for (const auto& role : CompareColorRoles())
+            {
+                if (!role.id_.startsWith("syntax")) continue;
+                for (const auto* back : {"background", "modifiedBg", "addedBg", "removedBg", "conflictBg"})
+                {
+                    const auto ratio = CompareContrast(CompareColor(role.id_, dark), CompareColor(back, dark));
+                    QVERIFY2(ratio >= (role.id_ == "syntaxInactive" ? 3.0 : 4.5), qPrintable(QString("%1 on %2 dark=%3 navy=%4: %5").arg(role.id_, back).arg(dark).arg(value == fm::style::ThemeManager::DarkTone::Navy).arg(ratio)));
+                }
+            }
+        }
+        theme.setDarkTone(tone);
+        CompareSettingsDialog dialog(CompareSettings::Load(), nullptr); dialog.show();
+        dialog.findChild<QTabWidget*>("compareSettingsTabs")->setCurrentIndex(3); dialog.findChild<QComboBox*>("colorMode")->setCurrentIndex(0);
+        auto* group = dialog.findChild<QComboBox*>("colorGroup"); group->setCurrentIndex(group->findText(QString::fromUtf8("구문 강조")));
+        auto* comment = dialog.findChild<QLineEdit*>("color_syntaxComment"); QVERIFY(comment); QVERIFY(dialog.findChild<QLineEdit*>("color_syntaxInactive"));
+        QVERIFY(!dialog.findChild<QLabel*>("colorContrast")->text().contains(QString::fromUtf8("주석")));
+        comment->setText("#f4f4f4"); QVERIFY(dialog.findChild<QLabel*>("colorContrast")->text().contains(QString::fromUtf8("주석")));
+        dialog.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Apply)->click();
+        QCOMPARE(CompareSettings::Load().colors_[0]["syntaxComment"].toString(), QString("#f4f4f4"));
+        dialog.reject();
+    }
+    void syntaxManualOverrideAndPersistence()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.txt"); request.file2_ = dir.filePath("right.txt");
+        write(request.file1_, "def value():\n    return 1\n"); write(request.file2_, "def value():\n    return 2\n");
+        {
+            CompareWindow window(request); window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 1"), 10000); QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+            auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); left->send(SCI_COLOURISE, 0, -1); QCOMPARE(int(left->send(SCI_GETSTYLEAT, 0)), 0);
+            QVERIFY(window.findChild<QAction*>("syntax_auto")->isChecked());
+            window.findChild<QAction*>("syntax_python")->trigger();
+            left->send(SCI_COLOURISE, 0, -1); QCOMPARE(int(left->send(SCI_GETSTYLEAT, 0)), SCE_P_WORD);
+            QVERIFY(window.findChild<QLabel*>("format_FILE 1")->text().contains(QString::fromUtf8("Python (지정)")));
+            // Structure analysis follows the chosen language.
+            auto* table = window.findChild<QTableView*>("semanticTable"); QTRY_COMPARE_WITH_TIMEOUT(table->model()->rowCount(), 1, 10000);
+            window.findChild<QAction*>("syntax_auto")->trigger();
+            QVERIFY(window.findChild<QLabel*>("format_FILE 1")->text().contains(QString::fromUtf8("일반 텍스트 (자동)")));
+        }
+        Request merge; merge.mode_ = "merge"; merge.file1_ = request.file1_; merge.file2_ = request.file2_; merge.base_ = dir.filePath("base.txt");
+        merge.output_ = dir.filePath("out.txt"); merge.syntax_ = "python"; write(merge.base_, "def value():\n    return 0\n");
+        const auto work = dir.filePath("work.hcmerge");
+        {
+            CompareWindow first(merge); first.show(); QTRY_VERIFY_WITH_TIMEOUT(first.findChild<ScintillaEditBase*>("RESULT"), 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(!action(first, "취소")->isEnabled(), 10000);
+            first.SaveWork(work); QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(work), 10000); QTRY_VERIFY_WITH_TIMEOUT(!action(first, "취소")->isEnabled(), 10000);
+            QVERIFY(readBytes(work).contains("\"syntax\":\"python\""));
+        }
+        merge.syntax_ = "auto"; CompareWindow second(merge); second.show();
+        QTRY_VERIFY_WITH_TIMEOUT(second.findChild<ScintillaEditBase*>("RESULT"), 10000); QTRY_VERIFY_WITH_TIMEOUT(!action(second, "취소")->isEnabled(), 10000);
+        QVERIFY(second.findChild<QAction*>("syntax_auto")->isChecked());
+        second.LoadWork(work); QTRY_VERIFY_WITH_TIMEOUT(second.findChild<QAction*>("syntax_python")->isChecked(), 10000);
+        auto* result = second.findChild<ScintillaEditBase*>("RESULT"); result->send(SCI_COLOURISE, 0, -1);
+        QCOMPARE(int(result->send(SCI_GETSTYLEAT, 0)), SCE_P_WORD);
+    }
+    void largeSyntaxOverride()
+    {
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("left.txt"); request.file2_ = dir.filePath("right.txt");
+        write(request.file1_, "def value():\n    return 1\n"); write(request.file2_, "def value():\n    return 2\n");
+        LargeTextView view(request, OpenLargeTextSession(request, {}), nullptr); view.resize(1300, 800); view.show(); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        auto* left = view.findChild<ScintillaEditBase*>("largeTextLeft"); QCOMPARE(int(left->send(SCI_GETSTYLEAT, 0)), 0);
+        view.SetSyntax("python"); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        QCOMPARE(int(left->send(SCI_GETSTYLEAT, 0)), SCE_P_WORD); QCOMPARE(view.Language(0).id_, QString("python"));
+        const auto work = dir.filePath("syntax.hclarge"); view.SaveWork(work); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        view.SetSyntax("auto"); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000); QCOMPARE(int(left->send(SCI_GETSTYLEAT, 0)), 0);
+        view.LoadWork(work); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy() && view.Syntax() == "python", 10000); QTRY_VERIFY_WITH_TIMEOUT(!view.Busy(), 10000);
+        QCOMPARE(int(left->send(SCI_GETSTYLEAT, 0)), SCE_P_WORD);
+    }
+    // Edits are analyzed in the resident worker: the edited input sends a range, the
+    // other input is answered from cache. Panes show the function at the caret.
+    void sourceFunctionsLiveEditing()
+    {
+        QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp");
+        const QByteArray a = "int alpha() { return 1; }\n", b = "int beta() { return 2; }\n";
+        write(r.file1_, a + b); write(r.file2_, a + b);
+        CompareWindow window(r); window.resize(1300, 800); window.show(); auto* table = window.findChild<QTableView*>("semanticTable");
+        QTRY_VERIFY_WITH_TIMEOUT(window.findChild<ScintillaEditBase*>("FILE 2"), 10000); QTRY_VERIFY_WITH_TIMEOUT(!action(window, "취소")->isEnabled(), 10000);
+        auto* left = window.findChild<ScintillaEditBase*>("FILE 1"); auto* right = window.findChild<ScintillaEditBase*>("FILE 2");
+        QTRY_VERIFY_WITH_TIMEOUT(left->send(SCI_INDICATORVALUEAT, functionNameIndicator, a.indexOf("alpha")) != 0, 10000);
+        QCOMPARE(left->send(SCI_INDICATORVALUEAT, functionNameIndicator, 0), sptr_t(0));
+        left->setFocus(); left->send(SCI_GOTOPOS, a.size() + 6);
+        QTRY_COMPARE(window.findChild<QLabel*>("function_FILE 1")->text(), QString::fromUtf8("함수 beta"));
+        const auto before = ResidentSourceWorkerStats();
+        right->send(SCI_SETSEL, a.indexOf("1;"), a.indexOf("1;") + 1); right->send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>("5"));
+        QTRY_COMPARE_WITH_TIMEOUT(table->model()->rowCount(), 1, 10000);
+        QCOMPARE(table->model()->data(table->model()->index(0, 1)).toString(), QString::fromUtf8("수정"));
+        const auto after = ResidentSourceWorkerStats();
+        QVERIFY(after.edits_ > before.edits_); QVERIFY(after.cached_ > before.cached_); QCOMPARE(after.opens_, before.opens_);
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/live-functions.png"));
+        right->send(SCI_UNDO); QTRY_COMPARE_WITH_TIMEOUT(table->model()->rowCount(), 0, 10000);
     }
     void initTestCase()
     {

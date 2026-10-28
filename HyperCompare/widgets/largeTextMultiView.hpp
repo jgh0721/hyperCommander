@@ -15,6 +15,7 @@ namespace hc::compare
         void SaveActive() override { if (CanSave()) LargeTextView::SaveActive(); }
         void SetTextFont(const QFont& Font) override;
         void SetDark(bool Dark) override;
+        void SetSyntax(const QString& Override) override;
     protected:
         void find(bool Backwards) override;
     private:

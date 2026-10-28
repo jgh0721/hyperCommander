@@ -45,9 +45,9 @@ namespace hc::compare
             }
             const auto output = object(json, "output"); keys(output, {"path", "overwrite"});
             if (!output.isEmpty()) { args << "-output" << absolute(output["path"]); if (output.contains("overwrite")) { if (!output["overwrite"].isBool()) throw Failure("InvalidRequestBoolean"); if (output["overwrite"].toBool()) args << "-overwrite"; } }
-            const auto policy = object(json, "policy"); keys(policy, {"encoding", "encodingByRole", "semantic", "include", "exclude", "directoryLevel", "directoryPair", "textEquality"});
+            const auto policy = object(json, "policy"); keys(policy, {"encoding", "encodingByRole", "semantic", "syntax", "include", "exclude", "directoryLevel", "directoryPair", "textEquality"});
             if (policy.contains("directoryPair")) args << "-directory-pair" << string(policy["directoryPair"]);
-            for (const auto& pair : {std::pair{"encoding", "encoding"}, {"semantic", "semantic"}, {"directoryLevel", "directory-level"}, {"textEquality", "text-equality"}})
+            for (const auto& pair : {std::pair{"encoding", "encoding"}, {"semantic", "semantic"}, {"syntax", "syntax"}, {"directoryLevel", "directory-level"}, {"textEquality", "text-equality"}})
                 if (policy.contains(pair.first)) args << '-' + QString(pair.second) << string(policy[pair.first]);
             for (const auto& key : {"include", "exclude"}) if (policy.contains(key))
             {

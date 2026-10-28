@@ -16,12 +16,17 @@ namespace hc::compare
 {
     struct LargeTextComparison;
     struct ArchiveSession;
+    class SourceDocuments;
     struct Request
     {
         QString mode_ = "auto", file1_, file2_, file3_, base_, output_, encoding_;
         QString format_ = "text", report_, takeAll_, theme_, planOut_, decisions_;
         storage::CopyOptions directoryCopy_{false, true, false, false};
         QString semantic_ = "auto";
+        // "auto" or a CompareSyntaxChoices() id; also selects the structure-analysis language.
+        QString syntax_ = "auto";
+        // Set by a GUI window: its inputs stay in the resident source worker across recompares.
+        std::shared_ptr<SourceDocuments> sourceDocuments_;
         QString textEquality_ = "content";
         bool headless_ = false, gui_ = false, wait_ = false, overwrite_ = false, dryRun_ = false;
         bool includeContent_ = false;

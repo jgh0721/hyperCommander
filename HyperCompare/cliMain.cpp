@@ -23,6 +23,7 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv); app.setApplicationName("HyperCompare"); app.setOrganizationName("HyperTools"); app.setApplicationVersion("0.1.0");
     if (app.arguments() == QStringList{app.arguments().front(), "-internal-worker"}) return hc::compare::WorkerMain();
+    if (app.arguments() == QStringList{app.arguments().front(), "-internal-worker-resident"}) return hc::compare::ResidentWorkerMain();
     SetConsoleCtrlHandler(control, TRUE);
     if (hc::compare::IsGitToolInvocation(app.arguments()))
     {

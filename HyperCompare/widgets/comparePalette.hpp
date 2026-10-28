@@ -3,6 +3,8 @@
 #include <QColor>
 #include <QList>
 #include <QString>
+#include <utility>
+#include <vector>
 class ScintillaEditBase;
 namespace hc::compare
 {
@@ -16,4 +18,10 @@ namespace hc::compare
     void ClearCompareMarks(ScintillaEditBase* Editor);
     // Markers 8..12: changed, added, removed, unresolved three-way conflict, resolved merge block.
     int CompareEditMarker(std::size_t LeftBegin, std::size_t LeftEnd, std::size_t RightBegin, std::size_t RightEnd);
+    enum class SyntaxRole { Comment, Keyword, Type, String, Number, Preprocessor, Definition, Inactive };
+    QString CompareSyntaxRoleId(SyntaxRole Role);
+    // Lexilla lexer id (SCLEX_*) → its styles that carry a syntax role.
+    const std::vector<std::pair<int, SyntaxRole>>& CompareSyntaxStyles(int LexerId);
+    // Foregrounds only; call after STYLECLEARALL and before ApplyCompareEditorColors.
+    void ApplyCompareSyntaxColors(ScintillaEditBase* Editor, int LexerId, bool Dark);
 }

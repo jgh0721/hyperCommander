@@ -1,7 +1,9 @@
 ﻿#include "stdafx.h"
 #include "comparePalette.hpp"
 #include <ScintillaEditBase.h>
+#include <SciLexer.h>
 #include <fmstyle/ThemeManager.h>
+#include <QHash>
 #include <cmath>
 
 namespace hc::compare
@@ -26,6 +28,9 @@ namespace hc::compare
         add("resolvedBg", "해결된 블록 · 배경", "병합·연결 영역"); add("resolvedFg", "해결된 블록 · 글자", "병합·연결 영역");
         add("connector", "연결 영역", "병합·연결 영역"); add("connectorOutline", "연결 테두리", "병합·연결 영역");
         add("connectorAlpha", "연결 영역 · 불투명도", "병합·연결 영역", true); add("resolvedAlpha", "해결된 연결 · 불투명도", "병합·연결 영역", true);
+        add("syntaxComment", "주석", "구문 강조"); add("syntaxKeyword", "키워드", "구문 강조"); add("syntaxType", "형식·내장 이름", "구문 강조");
+        add("syntaxString", "문자열", "구문 강조"); add("syntaxNumber", "숫자", "구문 강조"); add("syntaxPreprocessor", "전처리·데코레이터", "구문 강조");
+        add("syntaxDefinition", "정의 이름·속성 이름", "구문 강조"); add("syntaxInactive", "비활성 코드 (#if 0)", "구문 강조");
         add("background", "본문 배경", "고급"); add("foreground", "본문 기본 글자", "고급"); add("lineBg", "줄 번호 배경", "고급");
         add("lineFg", "줄 번호 글자", "고급"); add("caret", "캐럿", "고급"); add("selectionBg", "선택 배경", "고급");
         add("selectionFg", "선택 글자", "고급"); add("inactiveSelection", "비활성 선택 배경", "고급");
@@ -58,6 +63,14 @@ namespace hc::compare
         else if (values.contains(Role)) return QColor(values[Role].toString());
         if (bar >= 0) return tokens[std::array{Token::Warn, Token::Ok, Token::Danger, Token::Accent}[bar]];
         if (values.contains(Role)) return QColor(values[Role].toString());
+        // Syntax hues stay fixed per light/dark so a role keeps its meaning across
+        // product tones. Defaults keep 4.5:1 on the surface and changed-line backgrounds.
+        static const QHash<QString, std::pair<const char*, const char*>> syntax{
+            {"syntaxComment", {"#51774c", "#90b58b"}}, {"syntaxKeyword", {"#803da1", "#cb9fda"}},
+            {"syntaxType", {"#1f6f6a", "#7cc9c0"}}, {"syntaxString", {"#9b5f28", "#d7b080"}},
+            {"syntaxNumber", {"#3769a0", "#92bfdd"}}, {"syntaxPreprocessor", {"#a03562", "#e597ba"}},
+            {"syntaxDefinition", {"#7a5a00", "#e0c46c"}}, {"syntaxInactive", {"#73787f", "#8b919c"}}};
+        if (const auto at = syntax.constFind(Role); at != syntax.cend()) return QColor(Dark ? at->second : at->first);
         if (Role.endsWith("Fg") || Role == "foreground" || Role == "caret" || Role == "barViewport" || Role == "connectorOutline") return tokens[Token::Fg];
         if (Role == "modifiedBg" || Role == "addedBg" || Role == "removedBg" || Role == "conflictBg" || Role == "resolvedBg") return tokens[Token::WarnBg];
         if (Role == "lineBg") return tokens[Token::Alt];
@@ -123,5 +136,44 @@ namespace hc::compare
             }
         }
         Editor->send(SCI_SETINDICATORCURRENT, old); Editor->send(SCI_SETINDICATORVALUE, oldValue);
+    }
+    QString CompareSyntaxRoleId(SyntaxRole Role)
+    {
+        static const char* ids[]{"syntaxComment", "syntaxKeyword", "syntaxType", "syntaxString", "syntaxNumber", "syntaxPreprocessor", "syntaxDefinition", "syntaxInactive"};
+        return QString::fromLatin1(ids[int(Role)]);
+    }
+    const std::vector<std::pair<int, SyntaxRole>>& CompareSyntaxStyles(int LexerId)
+    {
+        using R = SyntaxRole;
+        static const std::vector<std::pair<int, SyntaxRole>> cpp{
+            {SCE_C_COMMENT, R::Comment}, {SCE_C_COMMENTLINE, R::Comment}, {SCE_C_COMMENTDOC, R::Comment}, {SCE_C_COMMENTLINEDOC, R::Comment},
+            {SCE_C_COMMENTDOCKEYWORD, R::Comment}, {SCE_C_COMMENTDOCKEYWORDERROR, R::Comment}, {SCE_C_PREPROCESSORCOMMENT, R::Comment},
+            {SCE_C_PREPROCESSORCOMMENTDOC, R::Comment}, {SCE_C_TASKMARKER, R::Comment}, {SCE_C_WORD, R::Keyword}, {SCE_C_WORD2, R::Type},
+            {SCE_C_STRING, R::String}, {SCE_C_CHARACTER, R::String}, {SCE_C_STRINGRAW, R::String}, {SCE_C_VERBATIM, R::String},
+            {SCE_C_STRINGEOL, R::String}, {SCE_C_ESCAPESEQUENCE, R::String}, {SCE_C_NUMBER, R::Number}, {SCE_C_USERLITERAL, R::Number},
+            {SCE_C_PREPROCESSOR, R::Preprocessor}};
+        static const std::vector<std::pair<int, SyntaxRole>> python{
+            {SCE_P_COMMENTLINE, R::Comment}, {SCE_P_COMMENTBLOCK, R::Comment}, {SCE_P_WORD, R::Keyword}, {SCE_P_WORD2, R::Type},
+            {SCE_P_STRING, R::String}, {SCE_P_CHARACTER, R::String}, {SCE_P_TRIPLE, R::String}, {SCE_P_TRIPLEDOUBLE, R::String},
+            {SCE_P_FSTRING, R::String}, {SCE_P_FCHARACTER, R::String}, {SCE_P_FTRIPLE, R::String}, {SCE_P_FTRIPLEDOUBLE, R::String},
+            {SCE_P_STRINGEOL, R::String}, {SCE_P_NUMBER, R::Number}, {SCE_P_DECORATOR, R::Preprocessor},
+            {SCE_P_CLASSNAME, R::Definition}, {SCE_P_DEFNAME, R::Definition}};
+        static const std::vector<std::pair<int, SyntaxRole>> json{
+            {SCE_JSON_LINECOMMENT, R::Comment}, {SCE_JSON_BLOCKCOMMENT, R::Comment}, {SCE_JSON_KEYWORD, R::Keyword}, {SCE_JSON_LDKEYWORD, R::Keyword},
+            {SCE_JSON_STRING, R::String}, {SCE_JSON_STRINGEOL, R::String}, {SCE_JSON_ESCAPESEQUENCE, R::String}, {SCE_JSON_NUMBER, R::Number},
+            {SCE_JSON_PROPERTYNAME, R::Definition}};
+        static const std::vector<std::pair<int, SyntaxRole>> xml{
+            {SCE_H_COMMENT, R::Comment}, {SCE_H_DOUBLESTRING, R::String}, {SCE_H_SINGLESTRING, R::String}, {SCE_H_CDATA, R::String},
+            {SCE_H_TAG, R::Definition}, {SCE_H_TAGEND, R::Definition}};
+        static const std::vector<std::pair<int, SyntaxRole>> none;
+        return LexerId == SCLEX_CPP ? cpp : LexerId == SCLEX_PYTHON ? python : LexerId == SCLEX_JSON ? json : LexerId == SCLEX_XML ? xml : none;
+    }
+    void ApplyCompareSyntaxColors(ScintillaEditBase* Editor, int LexerId, bool Dark)
+    {
+        const auto rgb = [](const QColor& Color) -> sptr_t { return Color.red() | (Color.green() << 8) | (Color.blue() << 16); };
+        for (const auto& [style, role] : CompareSyntaxStyles(LexerId)) Editor->send(SCI_STYLESETFORE, style, rgb(CompareColor(CompareSyntaxRoleId(role), Dark)));
+        // LexCPP marks code excluded by #if with style | 0x40 when it tracks the preprocessor.
+        if (LexerId == SCLEX_CPP)
+            for (int style = SCE_C_DEFAULT; style <= SCE_C_ESCAPESEQUENCE; ++style) Editor->send(SCI_STYLESETFORE, style | 0x40, rgb(CompareColor("syntaxInactive", Dark)));
     }
 }

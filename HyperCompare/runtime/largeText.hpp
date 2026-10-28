@@ -56,6 +56,8 @@ namespace hc::compare
         std::array<std::vector<std::uint64_t>, 2> lines_;
         std::vector<Edit> changes_;
         QJsonArray saveWarnings_, saveRecovery_;
+        // Language override read from a loaded work file; consumed by the view once.
+        QString syntax_;
     };
     constexpr std::uint64_t largeTextMaximum = 1024ull * 1024 * 1024;
     constexpr std::uint64_t largeTextPageMaximum = 1024 * 1024;

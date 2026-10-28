@@ -19,6 +19,10 @@
 #include "runtime/decisionPlan.hpp"
 #include "runtime/mergeWork.hpp"
 #include "runtime/semantic.hpp"
+#include "runtime/compareLanguage.hpp"
+#include "runtime/sourceTree.hpp"
+#include "runtime/sourceWorkerHost.hpp"
+#include "runtime/workerFrames.hpp"
 #include "runtime/engineRegistry.hpp"
 #include "runtime/workerHost.hpp"
 #include "runtime/controllerMemory.hpp"
@@ -39,7 +43,10 @@
 #include <numeric>
 #include <future>
 #include <thread>
+#include <QElapsedTimer>
+#include <QUuid>
 #include <Windows.h>
+#include <psapi.h>
 #include <sddl.h>
 #include <winioctl.h>
 
@@ -1514,6 +1521,203 @@ private slots:
         QProcess malformed; malformed.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-internal-worker"});
         QVERIFY(malformed.waitForStarted()); malformed.write("{invalid}"); malformed.closeWriteChannel(); QVERIFY(malformed.waitForFinished());
         QCOMPARE(malformed.exitCode(), 2); QVERIFY(malformed.readAllStandardOutput().isEmpty());
+    }
+    // One table decides styling, large-text styles and structure-analysis language.
+    void compareLanguageDetection()
+    {
+        const auto id = [](const QString& Path, const QByteArray& Head = {}) { return DetectCompareLanguage(Path, Head).id_; };
+        QCOMPARE(id("a.c"), QString("c")); QCOMPARE(id("a.h"), QString("cpp"));
+        for (const auto* name : {"a.cc", "a.hh", "a.hxx", "a.inl", "a.ipp", "a.tcc", "a.cppm", "a.c++", "a.H"}) QCOMPARE(id(name), QString("cpp"));
+        for (const auto* name : {"a.py", "a.pyw", "a.pyi", "a.py.orig", "a.py~", "a.pyi.bak.tmp"}) QCOMPARE(id(name), QString("python"));
+        QCOMPARE(id("tool", "#!/usr/bin/env python3\nprint(1)\n"), QString("python"));
+        QCOMPARE(id("tool", "#!/bin/sh\npython x\n"), QString("none"));
+        QCOMPARE(id("notes.txt"), QString("none")); QCOMPARE(id(".gitignore"), QString("none"));
+        QVERIFY(!DetectCompareLanguage("a.cs").structure_); QCOMPARE(DetectCompareLanguage("a.cs").lexer_, QByteArray("cpp"));
+        QCOMPARE(CompareLanguageById("bogus").id_, QString("none"));
+        auto resolver = ResolveCompareLanguages({"left.cpp", "MERGED"}, {}, "auto");
+        QCOMPARE(resolver("MERGED").id_, QString("cpp"));
+        resolver = ResolveCompareLanguages({"a.cpp", "b.py", "c"}, {}, "auto"); QCOMPARE(resolver("c").id_, QString("none"));
+        resolver = ResolveCompareLanguages({"a.txt", "b.txt"}, {}, "python"); QCOMPARE(resolver("a.txt").id_, QString("python"));
+        QCOMPARE(AnalyzeFunctions("a.hh", "int f(){return 1;}")["status"].toString(), QString("Complete"));
+        QCOMPARE(AnalyzeFunctions("a.cs", "int f(){return 1;}")["status"].toString(), QString("Unsupported"));
+        QTemporaryDir dir; Request request; request.file1_ = dir.filePath("l.txt"); request.file2_ = dir.filePath("r.txt"); request.headless_ = true;
+        write(request.file1_, "def a():\n    return 1\n"); write(request.file2_, "def a():\n    return 2\n");
+        QCOMPARE(Parse({"hc", "-file1", request.file1_, "-file2", request.file2_, "-syntax", "python"}, true).request_.syntax_, QString("python"));
+        QVERIFY(!Parse({"hc", "-file1", request.file1_, "-file2", request.file2_, "-syntax", "rust"}, true).error_.isEmpty());
+        const auto file = dir.filePath("request.json");
+        write(file, QJsonDocument(QJsonObject{{"schemaVersion", 1}, {"mode", "compare"}, {"inputs", QJsonObject{{"left", QJsonObject{{"path", request.file1_}}},
+            {"right", QJsonObject{{"path", request.file2_}}}}}, {"policy", QJsonObject{{"syntax", "c"}}}}).toJson());
+        QCOMPARE(Parse({"hc", "-request", file}, true).request_.syntax_, QString("c"));
+        // Structure analysis follows the override: two .txt inputs analyzed as Python.
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        QCOMPARE(Execute(request, cancel, false).semantic_["status"].toString(), QString("Unsupported"));
+        request.syntax_ = "python"; const auto python = Execute(request, cancel, false);
+        QCOMPARE(python.semantic_["documents"].toArray()[0].toObject()["language"].toString(), QString("python"));
+        QCOMPARE(python.semantic_["pairs"].toArray()[0].toObject()["modified"].toInt(), 1);
+    }
+    // Node budget, deadline and job memory scale with the input; the fixed limits
+    // failed every 4 MiB input. An empty request no longer commits a 64 MiB buffer.
+    void semanticWorkerLargeInputs()
+    {
+        QByteArray cpp, python;
+        for (int i = 0; cpp.size() < 4 * 1024 * 1024; ++i)
+        {
+            cpp += "int f" + QByteArray::number(i) + "(int x) {\n";
+            for (int j = 0; j < 10; ++j) cpp += "    x = x * 3 + " + QByteArray::number(j) + "; if (x > 100) { x -= 7; }\n";
+            cpp += "    return x;\n}\n";
+        }
+        for (int i = 0; python.size() < 4 * 1024 * 1024; ++i)
+        {
+            python += "def f" + QByteArray::number(i) + "(x):\n";
+            for (int j = 0; j < 10; ++j) python += "    x = x * 3 + " + QByteArray::number(j) + "\n    if x > 100:\n        x -= 7\n";
+            python += "    return x\n";
+        }
+        QElapsedTimer timer; timer.start();
+        const auto a = AnalyzeFunctions("big.cpp", cpp); const auto cppMs = timer.restart();
+        const auto b = AnalyzeFunctions("big.py", python); const auto pythonMs = timer.elapsed();
+        QVERIFY2(a["status"] == "Complete", qPrintable(a["reason"].toString())); QVERIFY2(b["status"] == "Complete", qPrintable(b["reason"].toString()));
+        QVERIFY(a["functions"].toArray().size() > 8000); QVERIFY(b["functions"].toArray().size() > 8000);
+        qInfo("Semantic 4 MiB: C++ %lld ms, Python %lld ms", cppMs, pythonMs);
+        QProcess worker; worker.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-internal-worker"}); QVERIFY(worker.waitForStarted());
+        const auto handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, DWORD(worker.processId())); QVERIFY(handle);
+        worker.closeWriteChannel(); QVERIFY(worker.waitForFinished()); WaitForSingleObject(handle, 5000);
+        PROCESS_MEMORY_COUNTERS counters{}; counters.cb = sizeof(counters); QVERIFY(K32GetProcessMemoryInfo(handle, &counters, sizeof(counters))); CloseHandle(handle);
+        QVERIFY2(counters.PeakPagefileUsage < 32 * 1024 * 1024, qPrintable(QString::number(counters.PeakPagefileUsage)));
+    }
+    // An incremental analysis equals a fresh analysis of the same text after every edit.
+    void sourceTreeIncrementalEquivalence()
+    {
+        const QList<QPair<QString, QByteArray>> samples{
+            {"cpp", "namespace outer {\n// note\ntemplate<class T> T twice(T v) { return v * 2; }\nstruct Box {\n    int value(int x) const { int y = x * 3; y += 4; if (y > 9) { y -= x; } return y; }\n"
+                "    static int count() { return 42; }\n};\n}\n#if 0\nint hidden() { return 0; }\n#endif\nint Box_outside(int a, int b) {\n    const char* s = \"text {\";\n"
+                "    for (int i = 0; i < a; ++i) { b += i * 7; b -= 1; b ^= 3; b += a; b *= 2; b -= i; b += 9; b -= 4; b += 1; }\n    return a + b;\n}\nauto lambda = [](int q) { return q + 1; };\n"},
+            {"c", "#include <stdio.h>\nstatic int add(int a, int b) { return a + b; }\nint main(void) { int x = add(1, 2); /* comment */ printf(\"%d\\n\", x); return 0; }\nvoid empty(void) {}\n"},
+            {"python", "import os\n\nclass Box:\n    @staticmethod\n    def value(x):\n        y = x * 2\n        y += x\n        y -= 1\n        y *= x\n        y += 3\n        y -= x\n        y += 2\n        return y\n\n"
+                "    def __init__(self):\n        self.v = 1\n\ndef plain(a, b):\n    c = a + b * 3\n    for i in range(10):\n        c += i * 2\n        c -= 1j\n    return c\n\ndef other():\n    return \"\"\"text\n    more\"\"\"\n"}};
+        const QList<QByteArray> fragments{"x", " ", "\n", "{", "}", "(", ")", ";", "/*", "*/", "\"", "\"\"\"", "#if 0\n", "#endif\n", "namespace z {", "class W {", "};",
+            "    ", "def g():\n    return 1\n", "int h() { return 3; }\n", "1", "return", "@dec\n", "int", ":"};
+        std::mt19937 random(0x26102801); qsizetype reused = 0; int steps = 0;
+        const auto analyze = [](SourceTree& Tree) {
+            try { return Tree.Analyze(std::chrono::steady_clock::now() + std::chrono::seconds(30)); }
+            catch (const Failure& error) { return QJsonObject{{"failure", QString::fromStdString(error.code_)}}; }
+        };
+        for (const auto& [language, original] : samples)
+        {
+            SourceTree tree(language); tree.Reset(original); auto text = original; analyze(tree);
+            for (int step = 0; step < 3400; ++step, ++steps)
+            {
+                // Long random runs drift into noise; restart from the sample now and then.
+                if (step % 60 == 59) { tree.Edit(0, text.size(), original); text = original; }
+                const auto begin = qsizetype(random() % std::uint32_t(text.size() + 1)), end = std::min(text.size(), begin + qsizetype(random() % 6));
+                const auto bytes = random() % 3 ? fragments[int(random() % std::uint32_t(fragments.size()))] : QByteArray{};
+                text.replace(begin, end - begin, bytes); tree.Edit(begin, end, bytes); QCOMPARE(tree.Text(), text);
+                const auto incremental = analyze(tree); reused += tree.Reused();
+                SourceTree clean(language); clean.Reset(text);
+                if (incremental != analyze(clean)) QFAIL(qPrintable(QString("%1 step %2:\n%3").arg(language).arg(step).arg(QString::fromUtf8(text))));
+            }
+        }
+        // Reused digests show that the comparison exercised the incremental path; random
+        // fragments often unbalance braces or comments, which changes every later function.
+        qInfo("SourceTree equivalence: %d edits, %lld reused digests", steps, qint64(reused)); QVERIFY(reused > steps / 4);
+    }
+    static QByteArray workerFrame(const QJsonObject& Header, const QByteArray& Body = {})
+    {
+        const auto header = QJsonDocument(Header).toJson(QJsonDocument::Compact); QByteArray frame(4, '\0');
+        qToLittleEndian<quint32>(quint32(header.size()), frame.data()); frame += header;
+        QByteArray length(4, '\0'); qToLittleEndian<quint32>(quint32(Body.size()), length.data()); return frame + length + Body;
+    }
+    static QList<QJsonObject> workerHeaders(QByteArray Output)
+    {
+        QList<QJsonObject> headers;
+        while (Output.size() >= 8)
+        {
+            const auto header = qFromLittleEndian<quint32>(Output.constData()); if (Output.size() < 8 + qsizetype(header)) break;
+            const auto body = qFromLittleEndian<quint32>(Output.constData() + 4 + header);
+            headers.append(QJsonDocument::fromJson(Output.mid(4, header)).object()); Output.remove(0, 8 + header + body);
+        }
+        return headers;
+    }
+    void residentWorkerFramesAndBounds()
+    {
+        const auto run = [](const QByteArray& Input) {
+            QProcess worker; worker.start(QCoreApplication::applicationDirPath() + "/HyperCompareCli.exe", {"-internal-worker-resident"});
+            if (!worker.waitForStarted()) return std::pair{-1, QByteArray{}};
+            worker.write(Input); worker.closeWriteChannel(); if (!worker.waitForFinished(10000)) worker.kill();
+            return std::pair{worker.exitCode(), worker.readAllStandardOutput()};
+        };
+        const auto nonce = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        auto [code, output] = run(workerFrame({{"type", "open"}, {"doc", 1}}));
+        QCOMPARE(code, 2); QVERIFY(output.isEmpty());
+        QByteArray oversized(8, '\0'); qToLittleEndian<quint32>(workerFrameHeaderLimit + 1, oversized.data());
+        std::tie(code, output) = run(oversized); QVERIFY(output.isEmpty());
+        const QByteArray text = "int f() { return 1; }\n";
+        const auto digest = QString::fromLatin1(QCryptographicHash::hash(text, QCryptographicHash::Sha256).toHex());
+        std::tie(code, output) = run(workerFrame({{"type", "hello"}, {"schema", 1}, {"nonce", nonce}}) +
+            workerFrame({{"type", "analyze"}, {"requestId", 1}, {"doc", 7}, {"revision", 1}}) +
+            workerFrame({{"type", "open"}, {"doc", 7}, {"revision", 1}, {"language", "cpp"}, {"digest", QString(64, '0')}}, text) +
+            workerFrame({{"type", "analyze"}, {"requestId", 2}, {"doc", 7}, {"revision", 1}}) +
+            workerFrame({{"type", "open"}, {"doc", 7}, {"revision", 1}, {"language", "cpp"}, {"digest", digest}}, text) +
+            workerFrame({{"type", "edit"}, {"doc", 7}, {"baseRevision", 1}, {"revision", 2}, {"begin", 17}, {"end", 18}, {"digest", "bad"}}, "2") +
+            workerFrame({{"type", "analyze"}, {"requestId", 3}, {"doc", 7}, {"revision", 2}}) +
+            workerFrame({{"type", "open"}, {"doc", 7}, {"revision", 3}, {"language", "cpp"}, {"digest", digest}}, text) +
+            workerFrame({{"type", "analyze"}, {"requestId", 4}, {"doc", 7}, {"revision", 3}}) + workerFrame({{"type", "shutdown"}}));
+        QCOMPARE(code, 0); const auto headers = workerHeaders(output); QCOMPARE(headers.size(), 5);
+        QCOMPARE(headers[0]["type"].toString(), QString("ready")); QCOMPARE(headers[0]["nonce"].toString(), nonce);
+        // Unknown document, a wrong open digest and a wrong edit digest all ask the host to resend.
+        for (int i = 1; i <= 3; ++i) { QCOMPARE(headers[i]["type"].toString(), QString("resync")); QCOMPARE(headers[i]["requestId"].toInt(), i); }
+        QCOMPARE(headers[4]["type"].toString(), QString("analyzed")); QCOMPARE(headers[4]["requestId"].toInt(), 4);
+    }
+    // Unchanged inputs are answered from the last result; an edit sends one range and
+    // reuses the digests of the untouched functions.
+    void residentWorkerReusesUnchangedInputs()
+    {
+        QByteArray left; for (int i = 0; i < 400; ++i) left += "int f" + QByteArray::number(i) + "(int x) { int y = x * 3; y += " + QByteArray::number(i) + "; return y; }\n";
+        auto right = left; right.replace("y += 7;", "y += 77;");
+        const auto& cpp = CompareLanguageById("cpp"); const auto reserved = ProcessControllerMemory()->Reserved();
+        auto documents = std::make_unique<SourceDocuments>(); const auto before = ResidentSourceWorkerStats();
+        const auto first = documents->Analyze(0, cpp, left, Budget{}); const auto second = documents->Analyze(1, cpp, right, Budget{});
+        QCOMPARE(first["status"].toString(), QString("Complete")); QCOMPARE(first["functions"], AnalyzeFunctionsAs(cpp, left)["functions"]);
+        const auto opened = ResidentSourceWorkerStats(); QCOMPARE(opened.opens_ - before.opens_, std::uint64_t(2)); QVERIFY(ResidentSourceWorkerRunningForTesting());
+        auto edited = left; edited.insert(edited.indexOf("int f200"), "int added(int z) { return z; }\n");
+        const auto again = documents->Analyze(0, cpp, edited, Budget{}); const auto unchanged = documents->Analyze(1, cpp, right, Budget{});
+        QCOMPARE(again["functions"], AnalyzeFunctionsAs(cpp, edited)["functions"]); QCOMPARE(unchanged, second);
+        const auto after = ResidentSourceWorkerStats();
+        QCOMPARE(after.edits_ - opened.edits_, std::uint64_t(1)); QCOMPARE(after.cached_ - opened.cached_, std::uint64_t(1)); QCOMPARE(after.opens_, opened.opens_);
+        QVERIFY(after.reused_ - opened.reused_ >= 399);
+        // The worker and its memory reservation exist only while a window holds documents.
+        documents.reset(); QTRY_VERIFY(!ResidentSourceWorkerRunningForTesting()); QCOMPARE(ProcessControllerMemory()->Reserved(), reserved);
+    }
+    void residentWorkerRestartAndCrashLimit()
+    {
+        const auto& cpp = CompareLanguageById("cpp"); SourceDocuments documents; QByteArray text = "int a() { return 1; }\n";
+        QCOMPARE(documents.Analyze(0, cpp, text, Budget{})["status"].toString(), QString("Complete"));
+        const auto starts = ResidentSourceWorkerStats().starts_;
+        KillResidentSourceWorkerForTesting(); text += "int b() { return 2; }\n";
+        QCOMPARE(documents.Analyze(0, cpp, text, Budget{})["functions"].toArray().size(), 2);
+        QCOMPARE(ResidentSourceWorkerStats().starts_, starts + 1);
+        // A text that ends the worker twice is not sent a third time.
+        FailResidentSourceRequestsForTesting(2); text += "int c() { return 3; }\n";
+        QCOMPARE(documents.Analyze(0, cpp, text, Budget{})["reason"].toString(), QString("WorkerFailure"));
+        QCOMPARE(documents.Analyze(0, cpp, text, Budget{})["reason"].toString(), QString("WorkerFailure"));
+        QCOMPARE(documents.Analyze(0, cpp, text, Budget{})["reason"].toString(), QString("WorkerCrashRepeated"));
+        text += "int d() { return 4; }\n";
+        QCOMPARE(documents.Analyze(0, cpp, text, Budget{})["functions"].toArray().size(), 4);
+    }
+    void residentWorkerCancelAndDeadline()
+    {
+        QByteArray big;
+        for (int i = 0; big.size() < 6 * 1024 * 1024; ++i)
+        { big += "int f" + QByteArray::number(i) + "(int x) {\n"; for (int j = 0; j < 10; ++j) big += "    x = x * 3 + " + QByteArray::number(j) + "; if (x > 100) { x -= 7; }\n"; big += "    return x;\n}\n"; }
+        const auto& cpp = CompareLanguageById("cpp"); SourceDocuments documents;
+        std::atomic_bool cancel{false}; Budget budget; budget.canceled_ = &cancel; budget.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        std::thread stopper([&] { std::this_thread::sleep_for(std::chrono::milliseconds(300)); cancel = true; });
+        QElapsedTimer timer; timer.start(); const auto canceled = documents.Analyze(0, cpp, big, budget); const auto elapsed = timer.elapsed(); stopper.join();
+        QCOMPARE(canceled["reason"].toString(), QString("Canceled")); qInfo("Resident cancel returned %lld ms after the request (cancel at 300 ms)", elapsed);
+        QVERIFY(elapsed < 1300);
+        // The worker survives a cooperative cancel and answers the next request.
+        QCOMPARE(documents.Analyze(1, cpp, "int z() { return 0; }\n", Budget{})["status"].toString(), QString("Complete"));
+        Budget expired; expired.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+        QCOMPARE(documents.Analyze(0, cpp, big + "int tail() { return 1; }\n", expired)["reason"].toString(), QString("TimeLimit"));
     }
     void overviewTypesAndBoundaries()
     {

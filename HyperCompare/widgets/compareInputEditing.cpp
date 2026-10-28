@@ -56,6 +56,7 @@ namespace hc::compare
                 QVector<std::pair<sptr_t, sptr_t>> views;
                 for (auto* editor : editors_) views.push_back({editor->send(SCI_DOCLINEFROMVISIBLE, editor->send(SCI_GETFIRSTVISIBLELINE)), editor->send(SCI_GETXOFFSET)});
                 semantic_->SetResult(result_.semantic_, !request_.base_.isEmpty()); details_->setTabVisible(1, !result_.semantic_["pairs"].toArray().isEmpty());
+                applyFunctionMarks();
                 applyPairView(); rebuildMultiAlignment(); applyAppearance();
                 if (scroll_) scroll_->SetEnabled(false);
                 for (int i = 0; i < editors_.size(); ++i)
@@ -109,7 +110,12 @@ namespace hc::compare
         sourcePending_ = true; inputError_.clear(); inputSaveError_.clear();
         if (scroll_) { scroll_->SetEnabled(false); scroll_->ClearPadding(); }
         overview_->SetSession(nullptr, nullptr, {});
-        for (auto* editor : editors_) { ClearCompareMarks(editor); editor->send(SCI_SETINDICATORCURRENT, sourceDifferenceIndicator); editor->send(SCI_INDICATORCLEARRANGE, 0, editor->send(SCI_GETLENGTH)); }
+        for (auto* editor : editors_)
+        {
+            ClearCompareMarks(editor);
+            for (const auto indicator : {sourceDifferenceIndicator, functionNameIndicator}) { editor->send(SCI_SETINDICATORCURRENT, indicator); editor->send(SCI_INDICATORCLEARRANGE, 0, editor->send(SCI_GETLENGTH)); }
+        }
+        for (auto* label : functionLabels_) label->clear();
         for (auto* gutter : gutters_) gutter->SetChunks({}, bufferGeneration_);
         details_->setTabVisible(1, false); bufferTimer_.start(); updateInputState();
     }
@@ -144,7 +150,7 @@ namespace hc::compare
             if (i < formatLabels_.size())
             {
                 const auto& input = result_.inputs_[i];
-                formatLabels_[i]->setText(QString("%1 · %2%3").arg(input.encoding_, input.bom_ ? tr("BOM 있음") : tr("BOM 없음"), (input.exists_ ? QString{} : tr(" · 파일 없음 (저장 시 생성)")) + (changed ? tr(" · 수정됨 *") : QString{})));
+                formatLabels_[i]->setText(QString("%1 · %2%3").arg(input.encoding_, input.bom_ ? tr("BOM 있음") : tr("BOM 없음"), (input.exists_ ? QString{} : tr(" · 파일 없음 (저장 시 생성)")) + (changed ? tr(" · 수정됨 *") : QString{}) + syntaxLabel(i)));
             }
         }
         dirty_ = dirty; auto* active = editors_[activeInput_];

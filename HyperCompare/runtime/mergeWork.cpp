@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "mergeWork.hpp"
 #include "decisionPlan.hpp"
+#include "compareLanguage.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
 #include <QCryptographicHash>
 #include <QJsonDocument>
@@ -96,9 +97,11 @@ namespace hc::compare
             blocks.append(QJsonObject{{"id", qint64(Session.plan_->blocks_[i].id_)}, {"begin", qint64(state.mapped_ ? state.begin_ : 0)},
                 {"end", qint64(state.mapped_ ? state.end_ : 0)}, {"resolution", int(state.resolution_)}, {"mapped", state.mapped_}});
         }
-        const QJsonObject object{{"schemaVersion", 1}, {"kind", "text-merge-work"}, {"identity", DecisionIdentity(Input, Session, Limits)},
+        QJsonObject object{{"schemaVersion", 1}, {"kind", "text-merge-work"}, {"identity", DecisionIdentity(Input, Session, Limits)},
             {"takeAll", Input.takeAll_}, {"resultBytes", Work.text_.size()}, {"resultSha256", digest(Work.text_)},
             {"resultChunks", chunks}, {"blocks", blocks}, {"reviewRequired", Work.reviewRequired_}};
+        // Optional, so automatic-language work stays byte-identical to earlier versions.
+        if (Input.syntax_ != "auto") object["syntax"] = Input.syntax_;
         const auto json = QJsonDocument(object).toJson(QJsonDocument::Compact);
         if (json.size() > decisionPlanBytes) throw Failure("WorkSizeLimit"); Limits.Check(); return json;
     }
@@ -106,6 +109,8 @@ namespace hc::compare
     {
         auto object = ReadCompareJson(Json, Limits);
         QStringList keys{"schemaVersion", "kind", "identity", "takeAll", "resultBytes", "resultSha256", "resultChunks", "blocks", "reviewRequired"}; keys.sort();
+        const auto syntax = object.take("syntax");
+        if (!syntax.isUndefined() && !CompareSyntaxChoices().contains(syntax.toString())) throw Failure("InvalidWorkSchema");
         if (object.keys() != keys || object["schemaVersion"] != QJsonValue(1) || object["kind"] != QJsonValue("text-merge-work")) throw Failure("InvalidWorkSchema");
         auto expectedIdentity = DecisionIdentity(Input, Session, Limits); bool legacy = false;
         if (RecoverText)
@@ -144,7 +149,7 @@ namespace hc::compare
         }
         if (object["takeAll"] != QJsonValue(Input.takeAll_)) throw Failure("StaleWork");
         if (!object["reviewRequired"].isBool() || !object["resultChunks"].isArray() || !object["blocks"].isArray()) throw Failure("InvalidWorkSchema");
-        MergeWork work; work.reviewRequired_ = object["reviewRequired"].toBool();
+        MergeWork work; work.reviewRequired_ = object["reviewRequired"].toBool(); work.syntax_ = syntax.toString();
         const auto size = integer(object["resultBytes"], resultLimit); const auto chunks = object["resultChunks"].toArray();
         if (chunks.size() != (size + chunkBytes - 1) / chunkBytes) throw Failure("InvalidWorkChunks");
         work.text_.reserve(size);

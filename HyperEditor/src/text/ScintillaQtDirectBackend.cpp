@@ -3,6 +3,7 @@
 #include "core/ThemeManager.h"
 #include "text/ScintillaEditorSettings.h"
 #include "text/TextLexerRegistry.h"
+#include "commonLibs/document/lexerKeywords.hpp"
 
 #include <QAbstractScrollArea>
 #include <QByteArray>
@@ -1287,61 +1288,18 @@ void ScintillaQtDirectBackend::setKeywordsForLexer(const QString& lexerKey)
 	if (!m_editor)
 		return;
 
+	// C/C++ and Python lists are shared with HyperCompare.
 	if (lexerKey == QStringLiteral("cpp")) {
-		// C/C++ keywords (keyword list 0)
-		static const char cppKeywords[] =
-			"alignas alignof and and_eq asm auto bitand bitor bool break case catch "
-			"char char8_t char16_t char32_t class compl concept const consteval constexpr "
-			"constinit const_cast continue co_await co_return co_yield decltype default "
-			"delete do double dynamic_cast else enum explicit export extern false final "
-			"float for friend goto if import inline int long module mutable namespace new "
-			"noexcept not not_eq nullptr operator or or_eq override private protected public "
-			"register reinterpret_cast requires return short signed sizeof static "
-			"static_assert static_cast struct switch template this thread_local throw true "
-			"try typedef typeid typename union unsigned using virtual void volatile "
-			"wchar_t while xor xor_eq "
-			// Common C keywords
-			"_Alignas _Alignof _Atomic _Bool _Complex _Generic _Imaginary _Noreturn "
-			"_Static_assert _Thread_local restrict "
-			// Common extensions
-			"__attribute__ __declspec __cdecl __stdcall __fastcall __thiscall "
-			"int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t "
-			"size_t ssize_t ptrdiff_t intptr_t uintptr_t";
-
 		m_editor->send(sciMessage(SCI_SETKEYWORDS), 0,
-			reinterpret_cast<sptr_t>(cppKeywords));
-
-		// C++ types/secondary keywords (keyword list 1)
-		static const char cppTypes[] =
-			"string wstring vector map unordered_map set unordered_set list deque queue "
-			"stack array pair tuple optional variant any shared_ptr unique_ptr weak_ptr "
-			"function thread mutex atomic future promise "
-			"QString QStringList QWidget QObject QList QVector QHash QMap QSet "
-			"QPointer QSharedPointer QScopedPointer QByteArray QVariant";
-
+			reinterpret_cast<sptr_t>(hc::lexer::cppKeywords));
 		m_editor->send(sciMessage(SCI_SETKEYWORDS), 1,
-			reinterpret_cast<sptr_t>(cppTypes));
+			reinterpret_cast<sptr_t>(hc::lexer::cppTypes));
 	}
 	else if (lexerKey == QStringLiteral("python")) {
-		static const char pythonKeywords[] =
-			"False None True and as assert async await break class continue def del "
-			"elif else except finally for from global if import in is lambda nonlocal "
-			"not or pass raise return try while with yield";
-
 		m_editor->send(sciMessage(SCI_SETKEYWORDS), 0,
-			reinterpret_cast<sptr_t>(pythonKeywords));
-
-		// Python builtins (keyword list 1)
-		static const char pythonBuiltins[] =
-			"abs all any bin bool bytearray bytes callable chr classmethod compile complex "
-			"delattr dict dir divmod enumerate eval exec filter float format frozenset "
-			"getattr globals hasattr hash help hex id input int isinstance issubclass iter "
-			"len list locals map max memoryview min next object oct open ord pow print "
-			"property range repr reversed round set setattr slice sorted staticmethod str "
-			"sum super tuple type vars zip __import__";
-
+			reinterpret_cast<sptr_t>(hc::lexer::pythonKeywords));
 		m_editor->send(sciMessage(SCI_SETKEYWORDS), 1,
-			reinterpret_cast<sptr_t>(pythonBuiltins));
+			reinterpret_cast<sptr_t>(hc::lexer::pythonBuiltins));
 	}
 	else if (lexerKey == QStringLiteral("sql")) {
 		static const char sqlKeywords[] =

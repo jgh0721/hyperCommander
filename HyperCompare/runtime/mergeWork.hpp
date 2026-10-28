@@ -8,6 +8,8 @@ namespace hc::compare
         QByteArray text_;
         std::vector<BlockState> state_;
         bool reviewRequired_ = false;
+        // Language override saved with the work; empty when the work used automatic detection.
+        QString syntax_;
     };
     struct MergeWorkFile
     {

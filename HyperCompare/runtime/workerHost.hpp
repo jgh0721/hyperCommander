@@ -12,4 +12,6 @@ namespace hc::compare
     };
     QJsonObject RunWorker(const QString& Engine, const QJsonObject& Payload, const Budget& Limits, const WorkerPolicy& Policy = {});
     int WorkerMain();
+    // Long-lived source.tree-sitter worker of one GUI process (sourceWorkerHost.cpp).
+    int ResidentWorkerMain();
 }

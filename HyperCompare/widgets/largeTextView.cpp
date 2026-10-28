@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "largeTextView.hpp"
 #include "comparePalette.hpp"
+#include "compareSyntax.hpp"
 #include <fmstyle/ThemeManager.h>
 #include "largeTextSyntax.hpp"
 #include "boundedEditor.hpp"
@@ -43,16 +44,22 @@ namespace hc::compare
             const auto size = Editor->send(SCI_GETLENGTH); QByteArray result(size + 1, '\0');
             Editor->send(SCI_GETTEXT, result.size(), reinterpret_cast<sptr_t>(result.data())); result.resize(size); return result;
         }
-        const char* lexer(const QString& Path) {
-            const auto ext = QFileInfo(Path).suffix().toLower();
-            if (QStringList{"c", "cpp", "cc", "cxx", "h", "hpp", "cs", "java", "js", "ts"}.contains(ext)) return "cpp";
-            if (QStringList{"py", "pyw", "pyi"}.contains(ext)) return "python";
-            if (ext == "json") return "json"; if (ext == "xml" || ext == "html") return "xml"; return "null";
+        // A merge RESULT page shows the RESULT bytes but styles like the first input.
+        QString stylePath(const LargeTextComparison& Value, int Side) {
+            if (Value.session_ && Value.session_->result_ == Value.session_->pair_[Side]) return Value.session_->documents_[0].original_.path_;
+            return Value.documents_[Side].original_.path_;
         }
     }
-    const char* LargeTextLexer(const QString& Path) { return lexer(Path); }
+    CompareLanguageResolver LargeTextLanguages(const LargeTextComparison& Value, const QString& Override)
+    {
+        QStringList paths;
+        if (Value.session_) for (const auto& document : Value.session_->documents_) paths.append(document.original_.path_);
+        else for (const auto& document : Value.documents_) paths.append(document.original_.path_);
+        return ResolveCompareLanguages(paths, {}, Override);
+    }
     LargeTextView::LargeTextView(Request Input, std::shared_ptr<LargeTextComparison> Value, QWidget* Parent)
-        : ExtensionView(Parent), input_(std::move(Input)), value_(std::move(Value)), saved_(value_->documents_)
+        : ExtensionView(Parent), input_(std::move(Input)), value_(std::move(Value)), saved_(value_->documents_),
+          languages_(LargeTextLanguages(*value_, input_.syntax_))
     {
         setObjectName("largeTextView"); auto* box = new QVBoxLayout(this); auto* actions = new QHBoxLayout(); box->addLayout(actions);
         applyTimer_ = new QTimer(this); applyTimer_->setSingleShot(true); applyTimer_->setInterval(700);
@@ -180,23 +187,16 @@ namespace hc::compare
             Editor->send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_RTEXT); Editor->send(SCI_SETMARGINWIDTHN, 0, 60); Editor->send(SCI_SETMARGINWIDTHN, 1, 0);
             Editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(Tokens[fm::style::Token::Alt]));
             Editor->send(SCI_MARKERDEFINE, 8, SC_MARK_BACKGROUND); Editor->send(SCI_MARKERSETBACK, 8, color(Tokens[fm::style::Token::WarnBg]));
-            const auto paint = [&](std::initializer_list<int> Styles, const QColor& LightColor, const QColor& DarkColor) { for (const auto style : Styles) Editor->send(SCI_STYLESETFORE, style, color(Dark ? DarkColor : LightColor)); };
-            switch (LexerId) {
-            case SCLEX_CPP:
-                paint({SCE_C_COMMENT, SCE_C_COMMENTLINE, SCE_C_COMMENTDOC, SCE_C_COMMENTLINEDOC}, QColor("#51774c"), QColor("#90b58b"));
-                paint({SCE_C_WORD, SCE_C_WORD2}, QColor("#803da1"), QColor("#cb9fda")); paint({SCE_C_STRING, SCE_C_CHARACTER, SCE_C_VERBATIM, SCE_C_STRINGRAW}, QColor("#9b5f28"), QColor("#d7b080"));
-                paint({SCE_C_NUMBER}, QColor("#3769a0"), QColor("#92bfdd")); break;
-            case SCLEX_PYTHON:
-                paint({SCE_P_COMMENTLINE, SCE_P_COMMENTBLOCK}, QColor("#51774c"), QColor("#90b58b")); paint({SCE_P_WORD, SCE_P_WORD2}, QColor("#803da1"), QColor("#cb9fda"));
-                paint({SCE_P_STRING, SCE_P_CHARACTER, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE}, QColor("#9b5f28"), QColor("#d7b080")); paint({SCE_P_DEFNAME, SCE_P_CLASSNAME}, QColor("#3769a0"), QColor("#92bfdd")); break;
-            case SCLEX_JSON:
-                paint({SCE_JSON_STRING}, QColor("#9b5f28"), QColor("#d7b080")); paint({SCE_JSON_PROPERTYNAME}, QColor("#3769a0"), QColor("#92bfdd"));
-                paint({SCE_JSON_KEYWORD}, QColor("#803da1"), QColor("#cb9fda")); paint({SCE_JSON_LINECOMMENT, SCE_JSON_BLOCKCOMMENT}, QColor("#51774c"), QColor("#90b58b")); break;
-            case SCLEX_XML:
-                paint({SCE_H_TAG, SCE_H_TAGEND}, QColor("#3769a0"), QColor("#92bfdd")); paint({SCE_H_COMMENT}, QColor("#51774c"), QColor("#90b58b"));
-                paint({SCE_H_DOUBLESTRING, SCE_H_SINGLESTRING, SCE_H_CDATA}, QColor("#9b5f28"), QColor("#d7b080")); break;
-            }
+            ApplyCompareSyntaxColors(Editor, LexerId, Dark);
         ApplyCompareEditorColors(Editor, Dark);
+    }
+    const CompareLanguage& LargeTextView::Language(int Side) const { return languages_(stylePath(*value_, Side)); }
+    void LargeTextView::SetSyntax(const QString& Override)
+    {
+        input_.syntax_ = Override; languages_ = LargeTextLanguages(*value_, Override);
+        // Cached style files belong to the previous language; the next page job restyles from the start.
+        syntax_ = {};
+        if (!Busy() && !deferPages([this] { load(); })) load();
     }
     void LargeTextView::SetTextFont(const QFont& Font)
     {
@@ -265,8 +265,7 @@ namespace hc::compare
             for (int side = 0; side < 2; ++side) {
                 auto* editor = editors_[side]; editor->send(SCI_SETREADONLY, 0); editor->send(SCI_CLEARALL);
                 editor->send(SCI_ADDTEXT, response.text_[side].size(), reinterpret_cast<sptr_t>(response.text_[side].constData())); editor->send(SCI_EMPTYUNDOBUFFER);
-                auto path = value_->documents_[side].original_.path_; if (merging() && value_->session_->pair_[side] == value_->session_->result_) path = value_->session_->documents_[0].original_.path_;
-                auto* descriptor = CreateLexer(lexer(path)); lexerIds_[side] = descriptor ? descriptor->GetIdentifier() : 0; if (descriptor) descriptor->Release();
+                lexerIds_[side] = CompareLexerId(Language(side));
                 editor->send(SCI_SETILEXER, 0, 0);
                 editor->send(SCI_STARTSTYLING, 0); editor->send(SCI_SETSTYLINGEX, response.styles_[side].size(), reinterpret_cast<sptr_t>(response.styles_[side].constData()));
                 syntax_[side] = response.syntax_[side];
@@ -298,14 +297,17 @@ namespace hc::compare
             }
             if (!response.note_.isEmpty()) status_->setText(response.note_ + " · " + status_->text()); updateGutter();
             deferredContinuation_ = bool(pending);
+            if (!response.syntaxOverride_.isEmpty() && response.syntaxOverride_ != input_.syntax_)
+                QTimer::singleShot(0, this, [this, syntax = response.syntaxOverride_] { SetSyntax(syntax); if (stateChanged_) stateChanged_(); });
             if (stateChanged_) stateChanged_();
             if (pending) QTimer::singleShot(0, this, [this, pending = std::move(pending)] { deferredContinuation_ = false; pending(); });
         });
-        watcher_.setFuture(QtConcurrent::run([work = std::move(Work), starts, pageStart = pageStart_, syntax = syntax_, canceled = canceled_, memory = input_.memoryMiB_] {
+        watcher_.setFuture(QtConcurrent::run([work = std::move(Work), starts, pageStart = pageStart_, syntax = syntax_, languages = languages_, canceled = canceled_, memory = input_.memoryMiB_] {
             Response result; Budget limits; limits.canceled_ = canceled.get(); limits.deadline_ = std::chrono::steady_clock::time_point::max();
             try {
                 ConfigureMemoryBudget(limits, memory);
                 const auto task = work(limits); result.comparison_ = task.comparison_; result.match_ = task.match_; result.matchSide_ = task.side_; result.note_ = task.note_;
+                if (result.comparison_) result.syntaxOverride_ = std::exchange(result.comparison_->syntax_, QString{});
                 result.syntax_ = syntax;
                 for (int side = 0; side < 2; ++side) {
                     const auto& document = result.comparison_->documents_[side]; const auto& lines = result.comparison_->lines_[side];
@@ -319,9 +321,7 @@ namespace hc::compare
                     while (end > begin && continuation(end)) --end;
                     result.begin_[side] = begin; result.end_[side] = end;
                     result.text_[side] = ReadLargeTextRange(document, begin, end, limits);
-                    auto path = document.original_.path_;
-                    if (result.comparison_->session_ && result.comparison_->session_->result_ == result.comparison_->session_->pair_[side]) path = result.comparison_->session_->documents_[0].original_.path_;
-                    result.styles_[side] = StyleLargeText(document, lexer(path), begin, end, result.syntax_[side], limits);
+                    result.styles_[side] = StyleLargeText(document, languages(stylePath(*result.comparison_, side)), begin, end, result.syntax_[side], limits);
                 }
             } catch (const SaveRecoveryFailure& error) { result.error_ = QString::fromUtf8(error.what()); result.recovery_ = error.recovery_; }
             catch (const std::exception& error) { result.error_ = QString::fromUtf8(error.what()); }

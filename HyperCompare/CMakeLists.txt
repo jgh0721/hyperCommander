@@ -27,6 +27,9 @@ qt_add_library(hc_compare_runtime STATIC
     runtime/saveRecovery.cpp runtime/saveRecovery.hpp
     runtime/inputEditing.cpp runtime/inputEditing.hpp
     runtime/semantic.cpp runtime/semantic.hpp
+    runtime/compareLanguage.cpp runtime/compareLanguage.hpp
+    runtime/workerFrames.cpp runtime/workerFrames.hpp
+    runtime/sourceWorkerHost.cpp runtime/sourceWorkerHost.hpp runtime/sourceTree.hpp
     runtime/functionMatch.cpp
     runtime/engineRegistry.cpp runtime/engineRegistry.hpp
     runtime/workerHost.cpp runtime/workerHost.hpp
@@ -59,6 +62,7 @@ qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widget
     widgets/largeTextView.cpp widgets/largeTextView.hpp
     widgets/largeTextMultiView.cpp widgets/largeTextMultiView.hpp
     widgets/largeTextSyntax.cpp widgets/largeTextSyntax.hpp
+    widgets/compareSyntax.cpp widgets/compareSyntax.hpp
     widgets/saveRecoveryDialog.cpp widgets/saveRecoveryDialog.hpp
     widgets/directoryTreeModel.cpp widgets/directoryTreeModel.hpp
     widgets/guiRequestServer.cpp widgets/guiRequestServer.hpp
@@ -90,7 +94,8 @@ hc_enable_qt_deployment(HyperCompareCli PLUGINS)
 if(BUILD_TESTING)
     find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
     qt_add_executable(hc_compare_tests tests/tstCompare.cpp)
-    target_link_libraries(hc_compare_tests PRIVATE hc_compare_runtime hc_compare_zip Qt6::Test Qt6::Gui)
+    # SourceTree equivalence runs in process; workers use the same object code.
+    target_link_libraries(hc_compare_tests PRIVATE hc_compare_runtime hc_compare_semantic_worker hc_compare_parser hc_compare_zip Qt6::Test Qt6::Gui)
     target_compile_definitions(hc_compare_tests PRIVATE NOMINMAX UNICODE _UNICODE)
     target_compile_options(hc_compare_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     add_dependencies(hc_compare_tests HyperCompareCli HyperCompare)

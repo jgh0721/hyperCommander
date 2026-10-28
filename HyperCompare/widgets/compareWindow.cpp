@@ -66,6 +66,8 @@
 #include <Scintilla.h>
 #include <ILexer.h>
 #include <Lexilla.h>
+#include "compareSyntax.hpp"
+#include "runtime/sourceWorkerHost.hpp"
 
 namespace hc::compare
 {
@@ -77,15 +79,6 @@ namespace hc::compare
             QByteArray result(qsizetype(length) + 1, '\0');
             Editor->send(SCI_GETTEXT, uptr_t(result.size()), reinterpret_cast<sptr_t>(result.data()));
             result.resize(qsizetype(length)); return result;
-        }
-        const char* lexer(const QString& Path)
-        {
-            const auto ext = QFileInfo(Path).suffix().toLower();
-            if (QStringList{"c", "cpp", "cc", "cxx", "h", "hpp", "cs", "java", "js", "ts"}.contains(ext)) return "cpp";
-            if (ext == "py") return "python";
-            if (ext == "json") return "json";
-            if (ext == "xml" || ext == "html") return "xml";
-            return "null";
         }
         sptr_t color(const QColor& Color) { return Color.red() | (Color.green() << 8) | (Color.blue() << 16); }
         // "product" follows HyperCommander's general.themeMode (set by main from its settings); light · dark override it.
@@ -325,6 +318,16 @@ namespace hc::compare
         connect(inlineHighlights_, &QAction::toggled, this, [this](bool Enabled) {
             QSettings{}.setValue("view/inlineHighlights", Enabled); applyInlineHighlights();
         });
+        auto* syntaxMenu = viewMenu->addMenu(tr("구문 강조")); syntaxMenu->menuAction()->setObjectName("syntaxMenu");
+        auto* syntaxGroup = new QActionGroup(syntaxMenu);
+        for (const auto& id : QStringList{"auto"} + CompareSyntaxChoices())
+        {
+            auto* action = syntaxMenu->addAction(id == "auto" ? tr("자동 (확장자·첫 줄)") : id == "none" ? tr("일반 텍스트") : CompareLanguageById(id).label_);
+            action->setCheckable(true); action->setObjectName("syntax_" + id); action->setData(id); syntaxGroup->addAction(action); syntaxActions_.push_back(action);
+            connect(action, &QAction::triggered, this, [this, id] { if (busy()) syncSyntaxActions(); else applySyntax(id); });
+        }
+        if (request_.syntax_ != "auto" && !CompareSyntaxChoices().contains(request_.syntax_)) request_.syntax_ = "auto";
+        syncSyntaxActions();
         showOverview_ = viewMenu->addAction(tr("차이 개요 막대")); showOverview_->setCheckable(true);
         showOverview_->setChecked(settings.value("view/overview", true).toBool()); showOverview_->setEnabled(false);
         connect(showOverview_, &QAction::toggled, this, [this](bool Enabled) {
@@ -436,6 +439,9 @@ namespace hc::compare
                 {
                     if (transfer.loading_)
                         merge_->RestoreWork(transfer.file_.work_.text_, transfer.file_.work_.state_, transfer.file_.work_.reviewRequired_);
+                    // Restyle only: recomparing here would replace the restore status and its review state.
+                    if (transfer.loading_ && !transfer.decisions_ && !transfer.file_.work_.syntax_.isEmpty() && transfer.file_.work_.syntax_ != request_.syntax_)
+                        applySyntax(transfer.file_.work_.syntax_, false);
                     if (!transfer.decisions_) { workPath_ = transfer.path_; workExpected_ = transfer.file_.expected_; }
                 }
                 catch (const std::exception& error) { transfer.error_ = QString::fromUtf8(error.what()); }
@@ -482,6 +488,7 @@ namespace hc::compare
             BindCompareCommand(binding.first, binding.second);
         const char* blockIds[]{"merge.left", "merge.right", "merge.base", "merge.leftRight", "merge.rightLeft", "merge.omit", "merge.manual"};
         for (int i = 0; i < blockActions_.size(); ++i) BindCompareCommand(blockActions_[i], blockIds[i]);
+        for (auto* action : syntaxActions_) BindCompareCommand(action, "view.syntax." + action->data().toString());
         connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, [this] {
             // A notification observes the process theme; it must not select a competing window's scheme.
             QTimer::singleShot(0, this, [this] { if (!refreshing_) applyAppearance(false); });
@@ -535,6 +542,8 @@ namespace hc::compare
         if (Preserve && sourceEditing_ && dirty_) { invalidateInputComparison(); return; }
         sourceEditing_ = false; bufferTimer_.stop(); ++bufferGeneration_; if (bufferCanceled_) bufferCanceled_->store(true);
         canceled_ = std::make_shared<std::atomic_bool>(false);
+        if (!sourceDocuments_) sourceDocuments_ = std::make_shared<SourceDocuments>();
+        request_.sourceDocuments_ = sourceDocuments_;
         request_.archivePasswordPrompt_ = [owner = QPointer<CompareWindow>(this)](int Side, int Depth, const Budget& Limits) {
             auto reply = std::make_shared<std::promise<QString>>(); auto future = reply->get_future(); auto aborted = std::make_shared<std::atomic_bool>(false);
             if (!owner) return QString{};
@@ -589,7 +598,7 @@ namespace hc::compare
         auto reintegrated = std::move(Value.reintegratedText_); Value.reintegratedText_.reset(); result_ = std::move(Value);
         updateFormats();
         semantic_->SetResult(result_.semantic_, !request_.base_.isEmpty());
-        details_->setTabVisible(1, !result_.semantic_["pairs"].toArray().isEmpty());
+        details_->setTabVisible(1, !result_.semantic_["pairs"].toArray().isEmpty()); applyFunctionMarks();
         if (changed)
         {
             delete multi_; multi_ = nullptr;
@@ -622,28 +631,105 @@ namespace hc::compare
         }
         if (changes_->topLevelItemCount()) changes_->setCurrentItem(changes_->topLevelItem(0));
     }
-    ScintillaEditBase* CompareWindow::addPane(const QString& Title, const QString& Path, const QByteArray& Text, bool ReadOnly)
+    ScintillaEditBase* CompareWindow::addPane(const QString& Title, const QString& Path, const QByteArray& Text, bool ReadOnly, const CompareLanguage& Language)
     {
         auto* pane = new QWidget(panes_); auto* box = new QVBoxLayout(pane); box->setContentsMargins(2, 2, 2, 2);
         auto* label = new QLabel(Title + " — " + QFileInfo(Path).fileName(), pane); label->setTextFormat(Qt::PlainText); label->setToolTip(Path);
         label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); box->addWidget(label);
+        auto* labels = new QHBoxLayout; labels->setContentsMargins(0, 0, 0, 0); box->addLayout(labels);
         auto* format = new QLabel(pane); format->setObjectName("format_" + Title);
-        format->setTextFormat(Qt::PlainText); box->addWidget(format); formatLabels_.push_back(format);
+        format->setTextFormat(Qt::PlainText); labels->addWidget(format, 1); formatLabels_.push_back(format);
+        auto* function = new QLabel(pane); function->setObjectName("function_" + Title); function->setTextFormat(Qt::PlainText);
+        function->setAlignment(Qt::AlignRight | Qt::AlignVCenter); labels->addWidget(function); functionLabels_.push_back(function);
         auto* editor = new BoundedEditor(pane, request_.memoryMiB_, Title == "RESULT" ? 32 * 1024 * 1024 : 16 * 1024 * 1024); editor->setObjectName(Title); box->addWidget(editor); editors_.push_back(editor);
         panes_->addWidget(pane); pane->setMinimumWidth(120);
         editor->send(SCI_SETCODEPAGE, SC_CP_UTF8); editor->send(SCI_SETWRAPMODE, SC_WRAP_NONE);
         editor->send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_NUMBER); editor->send(SCI_SETMARGINWIDTHN, 0, 56);
         editor->send(SCI_SETTEXT, 0, reinterpret_cast<sptr_t>(Text.constData())); editor->send(SCI_EMPTYUNDOBUFFER);
         editor->send(SCI_SETSAVEPOINT); editor->send(SCI_SETREADONLY, ReadOnly);
-        editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(CreateLexer(lexer(Path))));
-        static constexpr char keywords[] = "alignas auto bool break case catch char class const constexpr continue default delete do double else enum explicit extern false float for friend if inline int long namespace new noexcept nullptr operator private protected public return short signed sizeof static struct switch template this throw true try typedef typename union unsigned using virtual void volatile while";
-        editor->send(SCI_SETKEYWORDS, 0, reinterpret_cast<sptr_t>(keywords));
+        setPaneLanguage(editor, Language);
         editor->send(SCI_MARKERDEFINE, 8, SC_MARK_BACKGROUND);
         editor->EnableProtection();
+        connect(editor, &ScintillaEditBase::updateUi, this, [this, editor](Scintilla::Update Updated) {
+            if (int(Updated) & SC_UPDATE_SELECTION) updateCurrentFunction(editor);
+        });
         editor->blocked_ = [this](const QString& Error) {
             QTimer::singleShot(0, this, [this, Error] { state_->setText(tr("편집 중단 — 내용과 실행 취소 이력 보존: %1").arg(Error)); });
         };
         return editor;
+    }
+    CompareLanguageResolver CompareWindow::paneLanguages() const
+    {
+        QStringList paths; QList<QByteArray> heads;
+        for (const auto& input : result_.inputs_) { paths.append(input.path_); heads.append(input.utf8_); }
+        return ResolveCompareLanguages(paths, heads, request_.syntax_);
+    }
+    void CompareWindow::setPaneLanguage(ScintillaEditBase* Editor, const CompareLanguage& Language)
+    {
+        auto* lexer = CreateCompareLexer(Language);
+        Editor->setProperty("compareLexerId", lexer ? lexer->GetIdentifier() : 0); Editor->setProperty("compareLanguage", Language.id_);
+        Editor->send(SCI_SETILEXER, 0, reinterpret_cast<sptr_t>(lexer));
+    }
+    void CompareWindow::syncSyntaxActions()
+    { for (auto* action : syntaxActions_) { const QSignalBlocker block(action); action->setChecked(action->data().toString() == request_.syntax_); } }
+    void CompareWindow::applySyntax(const QString& Override, bool Reanalyze)
+    {
+        request_.syntax_ = Override; syncSyntaxActions();
+        if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->SetSyntax(Override); return; }
+        if (editors_.isEmpty() || result_.inputs_.isEmpty()) return;
+        const auto languages = paneLanguages();
+        for (qsizetype i = 0; i < editors_.size(); ++i)
+        {
+            if (editors_[i] == output_) setPaneLanguage(output_, languages(request_.output_, result_.output_));
+            else if (i < result_.inputs_.size()) setPaneLanguage(editors_[i], languages(result_.inputs_[i].path_, result_.inputs_[i].utf8_));
+        }
+        applyAppearance(false); updateFormats(); updateInputState();
+        // Structure analysis follows the chosen language. Editable inputs recompare from
+        // their buffers; a merge recompares while preserving RESULT and its Undo.
+        if (!Reanalyze || request_.semantic_ == "off") return;
+        if (sourceEditing_) invalidateInputComparison();
+        else if (merge_) start(true);
+    }
+    void CompareWindow::applyFunctionMarks()
+    {
+        const auto documents = result_.semantic_["documents"].toArray();
+        const auto color = CompareColor("syntaxDefinition", dark_);
+        for (qsizetype i = 0; i < editors_.size(); ++i)
+        {
+            auto* editor = editors_[i];
+            const auto current = editor->send(SCI_GETINDICATORCURRENT), value = editor->send(SCI_GETINDICATORVALUE);
+            editor->send(SCI_SETINDICATORCURRENT, functionNameIndicator); editor->send(SCI_INDICATORCLEARRANGE, 0, editor->send(SCI_GETLENGTH));
+            editor->send(SCI_INDICSETSTYLE, functionNameIndicator, INDIC_TEXTFORE);
+            editor->send(SCI_INDICSETFORE, functionNameIndicator, color.red() | (color.green() << 8) | (color.blue() << 16));
+            // Python names already style as DEFNAME; positions are stale while an edit is pending.
+            const bool python = editor->property("compareLanguage").toString() == "python";
+            if (editor != output_ && i < documents.size() && !python && !sourcePending_)
+            {
+                editor->send(SCI_SETINDICATORVALUE, 1);
+                const auto length = editor->send(SCI_GETLENGTH);
+                for (const auto& item : documents[i].toObject()["functions"].toArray())
+                {
+                    const auto function = item.toObject(); const auto begin = function["nameBegin"].toInteger(-1), end = function["nameEnd"].toInteger(-1);
+                    if (begin >= 0 && begin < end && end <= length) editor->send(SCI_INDICATORFILLRANGE, uptr_t(begin), sptr_t(end - begin));
+                }
+            }
+            editor->send(SCI_SETINDICATORCURRENT, current); editor->send(SCI_SETINDICATORVALUE, value);
+            updateCurrentFunction(editor);
+        }
+    }
+    void CompareWindow::updateCurrentFunction(ScintillaEditBase* Editor)
+    {
+        const auto index = editors_.indexOf(Editor);
+        if (index < 0 || index >= functionLabels_.size()) return;
+        auto* label = functionLabels_[index]; const auto documents = result_.semantic_["documents"].toArray();
+        if (Editor == output_ || index >= documents.size() || sourcePending_) { label->clear(); return; }
+        const auto functions = documents[index].toObject()["functions"].toArray();
+        const auto line = int(Editor->send(SCI_LINEFROMPOSITION, Editor->send(SCI_GETCURRENTPOS)));
+        // Functions are reported in document order and do not nest.
+        const auto at = std::upper_bound(functions.begin(), functions.end(), line, [](int Line, const QJsonValue& Value) { return Line < Value.toObject()["line"].toInt(); });
+        const auto inside = at != functions.begin() && (at - 1)->toObject()["endLine"].toInt() >= line;
+        label->setText(inside ? tr("함수 %1").arg((at - 1)->toObject()["name"].toString()) : QString{});
+        label->setToolTip(label->text());
     }
     void CompareWindow::display()
     {
@@ -677,7 +763,7 @@ namespace hc::compare
         for (auto* gutter : gutters_) delete gutter; gutters_.clear();
         delete multi_; multi_ = nullptr; alignmentStatus_->hide();
         delete scroll_; scroll_ = nullptr;
-        delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); formatLabels_.clear(); changes_->clear();
+        delete merge_; merge_ = nullptr; output_ = nullptr; editors_.clear(); formatLabels_.clear(); functionLabels_.clear(); changes_->clear();
         inlineStatus_->hide(); inlineHighlights_->setEnabled(false);
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽"), tr("해결")});
         while (panes_->count()) delete panes_->widget(0);
@@ -688,7 +774,11 @@ namespace hc::compare
                 ? new LargeTextMultiView(request_, result_.largeText_, centralWidget())
                 : new LargeTextView(request_, result_.largeText_, centralWidget()); extensionView_ = view;
             qobject_cast<QSplitter*>(centralWidget())->addWidget(view); sources_->hide(); details_->hide(); directory_->hide(); view->show();
-            view->stateChanged_ = [this, view, internal = view->stateChanged_] { if (internal) internal(); dirty_ = view->Dirty(); exitCode_ = view->ExitCode(); updateMerge(); if (closing_ && !view->Busy()) QTimer::singleShot(0, this, [this] { close(); }); };
+            view->stateChanged_ = [this, view, internal = view->stateChanged_] {
+                if (internal) internal(); dirty_ = view->Dirty(); exitCode_ = view->ExitCode();
+                if (view->Syntax() != request_.syntax_) { request_.syntax_ = view->Syntax(); syncSyntaxActions(); }
+                updateMerge(); if (closing_ && !view->Busy()) QTimer::singleShot(0, this, [this] { close(); });
+            };
             state_->setText(tr("대용량 텍스트 — 부분 로딩 편집·병합")); applyAppearance(); updateMerge(); return;
         }
         if (!result_.extension_.isEmpty())
@@ -720,18 +810,19 @@ namespace hc::compare
         }
         else
         {
+            const auto languages = paneLanguages();
             for (int i = 0; i < result_.inputs_.size(); ++i)
             {
                 const auto& input = result_.inputs_[i];
                 const auto name = i == 2 && !request_.base_.isEmpty() ? "BASE" : request_.mode_ == "merge" ?
                     QString(i == 0 ? "LEFT" : "RIGHT") : QString("FILE %1").arg(i + 1);
-                addPane(name, input.path_, input.utf8_, true);
+                addPane(name, input.path_, input.utf8_, true, languages(input.path_, input.utf8_));
             }
             applyPairView();
             if (request_.mode_ == "merge")
             {
                 const auto initial = result_.error_ == "DecisionsRequired" ? result_.inputs_[0].utf8_ : result_.output_;
-                output_ = addPane("RESULT", request_.output_, initial, false); save_->setEnabled(true);
+                output_ = addPane("RESULT", request_.output_, initial, false, languages(request_.output_, initial)); save_->setEnabled(true);
                 changes_->clear();
                 merge_ = new MergeController(output_, result_.plan_, this);
                 merge_->changed_ = [this] { updateMerge(); };
@@ -1037,9 +1128,15 @@ namespace hc::compare
             const auto source = output ? (request_.takeAll_ == "right" ? 1 : 0) : i;
             if (source >= result_.inputs_.size()) continue;
             const auto& input = result_.inputs_[source];
-            formatLabels_[i]->setText(QString("%1 · %2%3").arg(input.encoding_, input.bom_ ? tr("BOM 있음") : tr("BOM 없음"),
-                output ? tr(" · 저장 형식 (%1)").arg(source == 0 ? "LEFT" : "RIGHT") : QString{}));
+            formatLabels_[i]->setText(QString("%1 · %2%3%4").arg(input.encoding_, input.bom_ ? tr("BOM 있음") : tr("BOM 없음"),
+                output ? tr(" · 저장 형식 (%1)").arg(source == 0 ? "LEFT" : "RIGHT") : QString{}, syntaxLabel(int(i))));
         }
+    }
+    QString CompareWindow::syntaxLabel(int Index) const
+    {
+        const auto language = Index < editors_.size() ? editors_[Index]->property("compareLanguage").toString() : QString{};
+        if (language.isEmpty()) return {};
+        return " · " + CompareLanguageById(language).label_ + (request_.syntax_ == "auto" ? tr(" (자동)") : tr(" (지정)"));
     }
     void CompareWindow::selectBlock()
     {
@@ -1198,9 +1295,7 @@ namespace hc::compare
             editor->send(SCI_STYLESETFORE, STYLE_DEFAULT, color(foreground)); editor->send(SCI_STYLESETBACK, STYLE_DEFAULT, color(background));
             editor->send(SCI_STYLESETFONT, STYLE_DEFAULT, reinterpret_cast<sptr_t>(family.constData()));
             editor->send(SCI_STYLESETSIZEFRACTIONAL, STYLE_DEFAULT, sptr_t(textFont_.pointSizeF() * 100)); editor->send(SCI_STYLECLEARALL);
-            for (const auto style : {1, 2, 3}) editor->send(SCI_STYLESETFORE, style, color(dark_ ? QColor("#90b58b") : QColor("#51774c")));
-            editor->send(SCI_STYLESETFORE, 5, color(dark_ ? QColor("#a6c7ff") : QColor("#255ba4")));
-            editor->send(SCI_STYLESETFORE, 6, color(dark_ ? QColor("#edc38a") : QColor("#945410")));
+            ApplyCompareSyntaxColors(editor, editor->property("compareLexerId").toInt(), dark_);
             editor->send(SCI_STYLESETBACK, STYLE_LINENUMBER, color(tokens[fm::style::Token::Alt]));
             editor->send(SCI_SETCARETFORE, color(foreground));
             // Search keeps focus in the find bar. Both active and inactive
@@ -1215,7 +1310,7 @@ namespace hc::compare
             editor->send(SCI_MARKERSETBACK, 8, color(tokens[fm::style::Token::WarnBg]));
             ApplyCompareEditorColors(editor, dark_);
         }
-        applyInlineHighlights(); overview_->SetDark(dark_);
+        applyInlineHighlights(); applyFunctionMarks(); overview_->SetDark(dark_);
         ApplyCompareShortcuts(this); find_->RefreshAppearance();
         for (auto* gutter : gutters_) gutter->update();
         if (extensionView_) { extensionView_->update(); for (auto* child : extensionView_->findChildren<QWidget*>()) child->update(); }
