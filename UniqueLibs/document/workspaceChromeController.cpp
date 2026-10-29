@@ -142,5 +142,16 @@ namespace hc::document
     }
     bool WorkspaceChromeController::MenuVisible() const { return visible(true); }
     bool WorkspaceChromeController::ToolbarVisible() const { return visible(false); }
-    void WorkspaceChromeController::apply() { menu_->setVisible(MenuVisible()); toolbar_->setVisible(ToolbarVisible()); }
+    void WorkspaceChromeController::SetSuppressed(bool Suppressed)
+    {
+        suppressed_ = Suppressed;
+        apply();
+    }
+    void WorkspaceChromeController::apply()
+    {
+        // Fullscreen owns the visible controls, even when appearance settings
+        // or the active document change while its overlay is visible.
+        menu_->setVisible(!suppressed_ && MenuVisible());
+        toolbar_->setVisible(!suppressed_ && ToolbarVisible());
+    }
 }

@@ -1,5 +1,6 @@
 ﻿#include "imageBook.hpp"
 #include "imagePartialDecoder.hpp"
+#include "imagePerformance.hpp"
 #include "imageZipRecovery.hpp"
 #include "pluginHost/imageArchiveTransport.hpp"
 #include <QJsonDocument>
@@ -259,8 +260,10 @@ storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, s
     return Book;
 }
 storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook> &Book, int Index,
-                                                storage::OperationContext Context, std::function<void(QImage)> Preview)
+                                                storage::OperationContext Context, std::function<void(QImage)> Preview,
+                                                std::function<void(QSize)> Metadata)
 {
+    ImageTraceSpan PageTrace("comic.readDecode", Book ? Book->path_ + "#" + QString::number(Index) : QString{});
     if (!Context.passwordPrompt_)
         Context.passwordPrompt_ = plugins::PromptArchivePassword;
     if (!Book || Index < 0 || Index >= Book->pages_.size())
@@ -274,7 +277,17 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     QTemporaryDir Temp;
     QByteArray StreamBytes;
     ImagePartialDecoder Progressive;
+    bool SizePublished = false;
     const auto Publish=[&](const QByteArray& Bytes){
+        // Share the entry stream with decoding; metadata probing must not open
+        // a second archive session or decode every page before showing a book.
+        if (Metadata && !SizePublished && Page.subpage_ == 0 && !Context.stopToken_.stop_requested()) {
+            QBuffer Header; Header.setData(Bytes); Header.open(QIODevice::ReadOnly);
+            QImageReader Reader(&Header); Reader.setAutoTransform(true);
+            if (const auto Size = Reader.effectiveSize(); Size.isValid()) {
+                SizePublished = true; Metadata(Size);
+            }
+        }
         if(!Context.stopToken_.stop_requested())Progressive.Update(Bytes,Preview);
     };
     bool Streamed = false;
@@ -288,7 +301,10 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     if (Book->archive_ && !Streamed)
     {
         std::unique_lock<std::timed_mutex> Lock(Book->streamMutex_,std::defer_lock);
-        while(!Lock.try_lock_for(std::chrono::milliseconds(10)))if(auto Stop=Context.Check({"image-book"}))return *Stop;
+        {
+            ImageTraceSpan WaitTrace("comic.streamWait", Book->path_ + "#" + QString::number(Index));
+            while(!Lock.try_lock_for(std::chrono::milliseconds(10)))if(auto Stop=Context.Check({"image-book"}))return *Stop;
+        }
         if (Revision(Book->path_) != Book->revision_)
             return Error("image-book-changed");
         storage::Result<storage::Unit> Session=storage::Unit{};
@@ -301,6 +317,7 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
                 if(Book->pages_[I].entry_.encrypted_ || Book->pages_[I].ordinal_<=Ordinals.back())break;
                 Ordinals.push_back(Book->pages_[I].ordinal_);Book->lastStreamPage_=I;
             }
+            ImageTraceSpan SessionTrace("comic.streamOpen", Book->path_ + "#" + QString::number(Index));
             auto Opened=Book->archive_->OpenReadSession(Book->path_.toUtf8().toStdString(),std::move(Ordinals),Context);
             if(Opened.HasValue()){Book->stream_=std::move(Opened.Value());Book->streamAge_.start();}else Session=Opened.Failure();
         }
@@ -362,7 +379,12 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     Reader.setAutoTransform(true);
     if (Page.subpage_ && !Reader.jumpToImage(Page.subpage_))
         return Error("image-subpage");
-    Content.image_ = Reader.read();
+    if (Metadata && !SizePublished && Reader.effectiveSize().isValid()) Metadata(Reader.effectiveSize());
+    {
+        ImageTraceSpan DecodeTrace("comic.decode", Book->path_ + "#" + QString::number(Index));
+        DecodeTrace.AddBytes(Content.bytes_.size());
+        Content.image_ = Reader.read();
+    }
     Content.format_ = QString::fromLatin1(Reader.format());
     if(Content.bytes_.startsWith(QByteArray("\xff\xd8",2)) && !ImagePartialDecoder::HasCompleteJpeg(Content.bytes_))
         Content.warning_="image-jpeg-incomplete";

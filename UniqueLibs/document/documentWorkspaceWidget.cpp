@@ -307,6 +307,7 @@ namespace hc::document
         }
         auto* ViewMenu = menu_->addMenu(tr("보기(&V)"));
         auto* Fullscreen=new ImageFullscreen(this,[this]()->ImageReadingView*{const auto Tab=active();return Tab?Tab->pane_->findChild<ImageReadingView*>():nullptr;},[this](int Direction){if(auto Tab=active())if(auto* Action=Tab->pane_->findChild<QAction*>(Direction>0?"image.next":"image.previous"))Action->trigger();});Fullscreen->setObjectName("imageFullscreen");
+        connect(Fullscreen, &ImageFullscreen::ActiveChanged, chrome_, &WorkspaceChromeController::SetSuppressed);
         auto* FullscreenAction=ViewMenu->addAction(tr("전체 화면 (F11)"));FullscreenAction->setObjectName("view.fullscreen");connect(FullscreenAction,&QAction::triggered,this,[this,Fullscreen]{if(auto Tab=active();epubFullscreen_ || Tab && Tab->pane_->IsEpub())toggleEpubFullscreen();else Fullscreen->Toggle();});
         auto* Preferences = ViewMenu->addAction(tr("설정(&P)…"));
         Preferences->setObjectName("documentPreferences"); Preferences->setShortcut(QKeySequence("Ctrl+,")); addAction(Preferences);

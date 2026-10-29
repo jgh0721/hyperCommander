@@ -6,8 +6,10 @@
 #include <QJsonObject>
 #include <QSet>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <stop_token>
 
+class QPainter;
 namespace hc::document
 {
 class ImageFramePlayer;
@@ -59,6 +61,7 @@ class ImageReadingView final : public QAbstractScrollArea
   signals:
     void Changed();
     void VolumeChanged(const QString &Path);
+    void FramePresented(int Page);
 
   protected:
     bool event(QEvent *) override;
@@ -77,15 +80,35 @@ class ImageReadingView final : public QAbstractScrollArea
         QRectF rect_;
         QRect crop_;
     };
-    QList<Placement> placements() const;
+    QList<Placement> placements(int Index = -1) const;
+    int groupCount(int Index) const;
+    bool layoutReady(int Index) const;
+    void rememberSize(int Page, QSize Size);
+    void requestSource(int Page);
+    QString renderKey(const Placement &Place, const QRect &Tile) const;
+    QList<QRect> visibleTiles(const Placement &Place) const;
+    bool paintGroup(QPainter &Painter);
+    void beginTransition();
+    void trimSourceWork();
     void rebuild(bool KeepAnchor = true);
     void request(const Placement &Place, const QRect &Tile);
     void prefetch();
     void expandSubpages();
-    bool prefetching_ = false;
-    int prefetchPage_ = -1;
-    QSet<int> prefetched_;
-    std::shared_ptr<std::stop_source> prefetchStop_ = std::make_shared<std::stop_source>();
+    QHash<int, std::shared_ptr<std::stop_source>> sourceStops_;
+    QSet<int> knownSizes_;
+    QHash<int, quint64> contentVersions_;
+    QHash<int, int> previousGroups_;
+    int direction_ = 1;
+    struct PresentedTile { QRectF rect_; QImage image_; };
+    QList<PresentedTile> presentedTiles_;
+    int presentedPage_ = -1, presentedLastPage_ = -1;
+    quint64 presentedGeneration_ = 0;
+    QElapsedTimer transitionClock_;
+    double lastTransitionMs_ = 0;
+    bool transitionPending_ = false;
+    quint64 renderRequests_ = 0, sourceReads_ = 0, presentedFrames_ = 0;
+    QColorSpace displayColor_;
+    QString displayColorKey_;
     void changed();
     void persist();
     void invalidateRenders();
@@ -98,10 +121,7 @@ class ImageReadingView final : public QAbstractScrollArea
     QVector<QSize> sizes_;
     mutable QCache<int, QImage> sources_{384 * 1024};
     QCache<QString, QImage> tiles_{128 * 1024};
-    QCache<QString, QImage> previousTiles_{32 * 1024};
-    bool animationUpdate_ = false;
     QSet<QString> pending_;
-    QSet<int> pendingSourcePages_;
     QHash<int, QString> pageErrors_, pageWarnings_;
     std::shared_ptr<std::stop_source> stop_ = std::make_shared<std::stop_source>();
     std::uint64_t generation_ = 0;

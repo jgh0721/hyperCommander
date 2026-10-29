@@ -181,6 +181,7 @@ void ImageFullscreen::Enter()
         if (Child == top_ || Child == bottom_ || top_->isAncestorOf(Child))
             continue;
         if ((qobject_cast<QMenuBar *>(Child) || qobject_cast<QToolBar *>(Child) || qobject_cast<QTabBar *>(Child) ||
+             Child->objectName() == "documentWindowChrome" || Child->objectName() == "documentStatusRow" ||
              Child->objectName() == "documentStatus") &&
             !Child->isHidden())
         {
@@ -188,6 +189,7 @@ void ImageFullscreen::Enter()
             Child->hide();
         }
     }
+    emit ActiveChanged(true);
     workspace_->showFullScreen();
     workspace_->setScreen(Screen);
     workspace_->setMouseTracking(true);
@@ -225,6 +227,7 @@ void ImageFullscreen::Leave()
         if (Child)
             Child->show();
     hidden_.clear();
+    emit ActiveChanged(false);
     if (maximized_ && !parent_)
         workspace_->showMaximized();
     else
@@ -279,11 +282,12 @@ void ImageFullscreen::UpdateStatus()
     if (auto *Reader = reader_ ? reader_() : nullptr; Reader && Reader->State()["pageCount"].toInt()>0)
     {
         const auto S = Reader->State();
+        const bool Presented = S["mode"].toInt() != ImageReadingView::Webtoon && S["presentedPage"].toInt(-1) >= 0;
         bottom_->setText(QString("%1 · %2 / %3 · %4")
                              .arg(S["book"].toString())
-                             .arg(S["page"].toInt() + 1)
+                             .arg(S[Presented ? "presentedPage" : "page"].toInt() + 1)
                              .arg(S["pageCount"].toInt())
-                             .arg(S["pageName"].toString()));
+                             .arg(S[Presented ? "presentedName" : "pageName"].toString()));
     }
     else if (auto* Status=workspace_->findChild<QLabel*>("documentStatus")) bottom_->setText(Status->text());
 }

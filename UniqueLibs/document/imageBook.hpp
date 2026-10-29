@@ -41,6 +41,7 @@ bool IsImageFile(const QString &Path);
 bool IsImageBook(const QString &Path);
 storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, storage::OperationContext Context = {}, bool ExpandTiff = true);
 storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook> &Book, int Index,
-                                                storage::OperationContext Context = {}, std::function<void(QImage)> Preview = {});
+                                                storage::OperationContext Context = {}, std::function<void(QImage)> Preview = {},
+                                                std::function<void(QSize)> Metadata = {});
 QStringList NextImageBooks(const QString &Path, int Direction = 1, std::stop_token Stop = {});
 } // namespace hc::document

@@ -15,6 +15,7 @@ namespace hc::document
         bool ApplySettings(const QJsonObject& Settings);
         QJsonObject Settings() const { return settings_; }
         void SetActive(ViewUiContribution Contribution);
+        void SetSuppressed(bool Suppressed);
         void SetGlobal(bool Menu, const QString& Mode);
         void SetViewOverride(const QString& ViewId, bool Menu, const QString& Mode);
         bool MenuVisible() const;
@@ -26,6 +27,7 @@ namespace hc::document
         QToolBar* toolbar_;
         QMenu* contributionMenu_ = nullptr;
         ViewUiContribution active_;
+        bool suppressed_ = false;
         QList<QPointer<QAction>> activeActions_;
         QJsonObject settings_{{"schemaVersion", 1}, {"mainMenuMode", "recommended"},
             {"mainToolbarMode", "recommended"}, {"viewOverrides", QJsonObject{}}};

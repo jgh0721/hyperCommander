@@ -13,6 +13,7 @@
 #include <QDataStream>
 #include <QAction>
 #include <QMenu>
+#include <QMenuBar>
 #include <QLocalSocket>
 #include <QtEndian>
 #include <QMouseEvent>
@@ -1029,6 +1030,59 @@ class ImageReadingTests : public QObject
         if (!Artifacts.isEmpty())
             QVERIFY(W.grab().save(Artifacts + "/comic-view.png"));
     }
+    void fullscreenKeepsWorkspaceChromeHidden_data()
+    {
+        QTest::addColumn<bool>("Hosted");
+        QTest::addColumn<bool>("ShowChrome");
+        QTest::newRow("viewer-show") << true << true;
+        QTest::newRow("viewer-hide") << true << false;
+        QTest::newRow("editor-show") << false << true;
+        QTest::newRow("editor-hide") << false << false;
+    }
+    void fullscreenKeepsWorkspaceChromeHidden()
+    {
+        QFETCH(bool, Hosted);
+        QFETCH(bool, ShowChrome);
+        const auto Private = qApp->property("privateReading");
+        qApp->setProperty("privateReading", true);
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("privateReading", Private); });
+        QTemporaryDir Root;
+        Fixture(Root.path(), 2);
+        DocumentWorkspaceWidget W(Root.filePath("recovery"), Hosted);
+        W.resize(1000, 700); W.show(); W.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&W));
+        W.Handle({{"action", "open"}, {"path", Root.filePath("1.png")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"] == "ready", 20000);
+        auto Settings = W.ChromeSettings();
+        Settings["mainMenuMode"] = ShowChrome ? "show" : "hide";
+        Settings["mainToolbarMode"] = ShowChrome ? "show" : "hide";
+        Settings["viewOverrides"] = QJsonObject{};
+        QVERIFY(W.ApplyChromeSettings(Settings));
+        auto* Menu = W.findChild<QMenuBar*>("mainMenu");
+        auto* Toolbar = W.findChild<QToolBar*>("mainToolbar");
+        auto* Fullscreen = W.findChild<ImageFullscreen*>("imageFullscreen");
+        QVERIFY(Menu && Toolbar && Fullscreen);
+        QTest::keyClick(&W, Qt::Key_F11);
+        QTRY_VERIFY(Fullscreen->Active());
+        QTRY_VERIFY(W.isFullScreen());
+        QVERIFY(Menu->isHidden());
+        QVERIFY(Toolbar->isHidden());
+        // Reapplying appearance must not expose normal controls over the overlay.
+        QVERIFY(W.ApplyChromeSettings(Settings));
+        QVERIFY(Menu->isHidden());
+        QVERIFY(Toolbar->isHidden());
+        if (auto* Chrome = W.findChild<QWidget*>("documentWindowChrome"))
+            QVERIFY(Chrome->isHidden());
+        QVERIFY(W.findChild<QWidget*>("documentStatusRow")->isHidden());
+        const auto Artifacts = qEnvironmentVariable("HC_IMAGE_TEST_ARTIFACTS");
+        if (!Artifacts.isEmpty())
+            QVERIFY(W.grab().save(Artifacts + "/fullscreen-" + QTest::currentDataTag() + ".png"));
+        QTest::keyClick(&W, Qt::Key_F11);
+        QTRY_VERIFY(!Fullscreen->Active());
+        QCOMPARE(Menu->isVisible(), ShowChrome);
+        QCOMPARE(Toolbar->isVisible(), ShowChrome);
+        QVERIFY(W.findChild<QWidget*>("documentStatusRow")->isVisible());
+    }
     void fullscreenAutoHideAndEdgeReveal()
     {
         QWidget W;W.setFocusPolicy(Qt::StrongFocus);W.resize(900,600);W.show();W.activateWindow();
@@ -1159,6 +1213,137 @@ class ImageReadingTests : public QObject
         QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),10000);QVERIFY2(View.RenderError().isEmpty(),qPrintable(View.RenderError()));
         QTRY_VERIFY_WITH_TIMEOUT(std::any_of(Paints.begin(),Paints.end(),[](const auto& Row){return Row[0].toBool();}),10000);
         QCOMPARE(View.Content(),Cmyk);
+    }
+    void hiddenComicCanBePresentedByHost()
+    {
+        QTemporaryDir Root; Fixture(Root.path(),2);
+        auto Book=OpenImageBook(Root.path()); QVERIFY(Book.HasValue());
+        ImageReadingView View; View.SetPrivate(true); View.resize(1000,700);
+        View.Load(Book.Value()); View.SetMode(ImageReadingView::Comic);
+        QVERIFY(!View.isVisible()); QVERIFY(!View.IsBusy());
+        QVERIFY(View.State()["transitioning"].toBool());
+        View.show();
+        QTRY_COMPARE_WITH_TIMEOUT(View.State()["presentedPage"].toInt(-1),0,20000);
+        QTRY_VERIFY(!View.IsBusy());
+    }
+    void comicLandscapeAndGroupNavigation()
+    {
+        QTemporaryDir Root;
+        const QList<QSize> Sizes{{80,120},{1470,1095},{1430,1095},{80,120},{120,200},{180,180}};
+        for(int I=0;I<Sizes.size();++I) QVERIFY(Picture(I%2?Qt::red:Qt::blue,Sizes[I]).save(Root.filePath(QString::number(I)+".png")));
+        auto Book=OpenImageBook(Root.path()); QVERIFY(Book.HasValue());
+        ImageReadingView View; View.SetPrivate(true); View.resize(1000,700);
+        View.Load(Book.Value()); View.SetMode(ImageReadingView::Comic); View.SetCover(false); View.show();
+        QTRY_COMPARE_WITH_TIMEOUT(View.State()["presentedPage"].toInt(-1),0,20000);
+        QCOMPARE(View.State()["presentedLastPage"].toInt(),0);
+        for(int Page : {1,2,3}) {
+            View.Move(1);
+            QTRY_COMPARE_WITH_TIMEOUT(View.State()["presentedPage"].toInt(-1),Page,20000);
+            QCOMPARE(View.State()["presentedLastPage"].toInt(),Page==3?4:Page);
+        }
+        View.Move(1); QTRY_COMPARE(View.State()["presentedPage"].toInt(),5);
+        View.Move(-1); QTRY_COMPARE(View.State()["presentedPage"].toInt(),3);
+        View.SetRightToLeft(true);
+        QTRY_VERIFY(!View.IsBusy());
+        const auto Frame=View.viewport()->grab().toImage();
+        QVERIFY(Frame.pixelColor(Frame.width()/4,Frame.height()/2).blue()>200);
+        QVERIFY(Frame.pixelColor(Frame.width()*3/4,Frame.height()/2).red()>200);
+        View.resize(500,800); QTRY_VERIFY(!View.IsBusy());
+        QCOMPARE(View.State()["presentedLastPage"].toInt(),3);
+        View.GoTo(1); QTRY_COMPARE(View.State()["presentedPage"].toInt(),1);
+        View.SetSplit(true); QTRY_VERIFY(!View.IsBusy());
+        View.Move(1); QCOMPARE(View.State()["page"].toInt(),1); QCOMPARE(View.State()["part"].toInt(),1);
+        View.Move(1); QTRY_COMPARE(View.State()["presentedPage"].toInt(),2);
+    }
+    void comicTransitionKeepsCompleteGroupAndReusesRenders()
+    {
+        QTemporaryDir Root;
+        for(int I=0;I<4;++I) QVERIFY(Picture(I<2?Qt::red:Qt::blue,{400,600}).save(Root.filePath(QString::number(I)+".png")));
+        auto Book=OpenImageBook(Root.path()); QVERIFY(Book.HasValue());
+        ImageReadingView View; View.SetPrivate(true); View.resize(1200,800);
+        View.Load(Book.Value()); View.SetMode(ImageReadingView::Comic); View.SetCover(false); View.show();
+        QTRY_COMPARE_WITH_TIMEOUT(View.State()["presentedLastPage"].toInt(-1),1,20000);
+        View.GoTo(2);
+        QElapsedTimer Clock; Clock.start();
+        do {
+            const auto Frame=View.viewport()->grab().toImage();
+            const auto Left=Frame.pixelColor(Frame.width()/4,Frame.height()/2);
+            const auto Right=Frame.pixelColor(Frame.width()*3/4,Frame.height()/2);
+            QVERIFY((Left.red()>200 && Right.red()>200) || (Left.blue()>200 && Right.blue()>200));
+            QTest::qWait(2);
+        } while(View.State()["presentedPage"].toInt()!=2 && Clock.elapsed()<20000);
+        QCOMPARE(View.State()["presentedPage"].toInt(),2);
+        QTRY_COMPARE(View.State()["renderJobs"].toInt(),0);
+        QTRY_COMPARE(View.State()["sourceJobs"].toInt(),0);
+        const auto Renders=View.State()["renderRequests"].toDouble();
+        const auto Reads=View.State()["sourceReads"].toDouble();
+        View.GoTo(0); QTRY_COMPARE(View.State()["presentedPage"].toInt(),0);
+        View.GoTo(2); QTRY_COMPARE(View.State()["presentedPage"].toInt(),2);
+        QCOMPARE(View.State()["renderRequests"].toDouble(),Renders);
+        QCOMPARE(View.State()["sourceReads"].toDouble(),Reads);
+        View.SetAdjustment("invert",1); QTRY_VERIFY(!View.IsBusy());
+        const auto Inverted=View.viewport()->grab().toImage();
+        const auto Pixel=Inverted.pixelColor(Inverted.width()/4,Inverted.height()/2);
+        QVERIFY(Pixel.red()>200 && Pixel.green()>200 && Pixel.blue()<30);
+        QVERIFY(View.State()["renderRequests"].toDouble()>Renders);
+        View.GoTo(0); View.GoTo(2); View.GoTo(0); View.resize(1100,750);
+        QTRY_COMPARE(View.State()["presentedPage"].toInt(),0); QTRY_VERIFY(!View.IsBusy());
+        View.Cancel(); QTRY_VERIFY(!View.IsBusy());
+    }
+    void comicHeaderUsesTransformedDimensions()
+    {
+        QTemporaryDir Root;
+        QByteArray Bytes; QBuffer Buffer(&Bytes); Buffer.open(QIODevice::WriteOnly);
+        QVERIFY(Picture(Qt::red,{80,120}).save(&Buffer,"JPEG")); Buffer.close();
+        Bytes.insert(2,QByteArray::fromHex("ffe1002245786966000049492a0008000000010012010300010000000600000000000000"));
+        QFile File(Root.filePath("rotated.jpg")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Bytes); File.close();
+        auto Book=OpenImageBook(Root.path()); QVERIFY(Book.HasValue());
+        QSize Metadata; auto Page=ReadImagePage(Book.Value(),0,{}, {},[&](QSize Size){Metadata=Size;});
+        QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().image_.size(),QSize(120,80)); QCOMPARE(Metadata,QSize(120,80));
+    }
+    void optionalComicTransitionBenchmark()
+    {
+        const auto Path = qEnvironmentVariable("HC_COMIC_BENCH_PATH");
+        const auto Output = qEnvironmentVariable("HC_COMIC_BENCH_OUTPUT");
+        if (Path.isEmpty() || Output.isEmpty()) QSKIP("Set HC_COMIC_BENCH_PATH and HC_COMIC_BENCH_OUTPUT");
+        qApp->setProperty("privateReading", true);
+        const auto Restore = qScopeGuard([] { qApp->setProperty("privateReading", false); });
+        ImageReadingView View;
+        View.SetPrivate(true);
+        View.resize(qEnvironmentVariableIntValue("HC_COMIC_BENCH_4K") ? QSize(3840, 2160) : QSize(1920, 1080));
+        View.show();
+        QElapsedTimer Open; Open.start();
+        View.OpenPath(Path, {}, ImageReadingView::Comic);
+        QTRY_VERIFY_WITH_TIMEOUT(View.State()["pageCount"].toInt() >= 40, 30000);
+        QJsonArray Rows;
+        const auto Wait = [&](int Page) {
+            QElapsedTimer Clock; Clock.start(); int Blank = 0, Samples = 0, Stable = 0;
+            while (Clock.elapsed() < 30000 && Stable < 3) {
+                QTest::qWait(5);
+                const auto Frame = View.viewport()->grab().toImage();
+                int Bright = 0;
+                for (int Y = Frame.height()/10; Y < Frame.height()*9/10; Y += 47)
+                    for (int X = Frame.width()/10; X < Frame.width()*9/10; X += 47)
+                        if (qGray(Frame.pixel(X,Y)) > 120) ++Bright;
+                if (Bright < 10) ++Blank;
+                ++Samples;
+                const auto S = View.State();
+                Stable = !View.IsBusy() && !View.CurrentImage().isNull()
+                    && (!S.contains("presentedPage") || S["presentedPage"].toInt() == Page) ? Stable + 1 : 0;
+            }
+            return QJsonObject{{"page",Page},{"ms",Clock.nsecsElapsed()/1e6},
+                {"blankSamples",Blank},{"samples",Samples},{"ready",Stable>=3},{"state",View.State()}};
+        };
+        Rows.append(Wait(0));
+        const auto OpenMs = Open.nsecsElapsed()/1e6;
+        for (int Page = 1; Page <= 20; ++Page) { View.GoTo(Page); Rows.append(Wait(Page)); }
+        for (int Page = 19; Page >= 0; --Page) { View.GoTo(Page); Rows.append(Wait(Page)); }
+        for (int I = 0; I < 8; ++I) { const int Page=13+I%2; View.GoTo(Page); Rows.append(Wait(Page)); }
+        QFile Report(Output); QVERIFY(Report.open(QIODevice::WriteOnly));
+        Report.write(QJsonDocument(QJsonObject{{"path",Path},{"openMs",OpenMs},{"rows",Rows},
+            {"dpr",View.devicePixelRatioF()},{"boundary","widget paint; 5ms polling and capture included; OS cache not flushed"}}).toJson());
+        for (const auto& Row : Rows) QVERIFY(Row.toObject()["ready"].toBool());
+        QVERIFY(View.grab().save(Output + ".png"));
     }
     void optionalStorageAndFirstPaintBenchmark()
     {

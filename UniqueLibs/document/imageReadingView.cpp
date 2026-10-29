@@ -5,6 +5,7 @@
 #include "imageResampler.hpp"
 #include "imageDisplayColor.hpp"
 #include "imageFramePlayer.hpp"
+#include "imagePerformance.hpp"
 #include "core/AppSettings.h"
 #include <QApplication>
 #include <QBuffer>
@@ -33,16 +34,7 @@ namespace
 {
 constexpr int ScrollRange = 1000000;
 constexpr int TileHeight = 1024;
-struct ImageProgress { std::mutex mutex_;QImage image_; };
-struct Rendered
-{
-    QImage source_, tile_;
-    QString error_, warning_;
-};
-QString Key(int Page, const QRect &Tile, std::uint64_t Generation)
-{
-    return QString("%1:%2:%3:%4").arg(Generation).arg(Page).arg(Tile.x()).arg(Tile.y());
-}
+struct ImageProgress { std::mutex mutex_; QImage image_; QSize size_; };
 void Adjust(QImage &Image, double Brightness, double Contrast, double Gamma, bool Gray, bool Invert, double Sharp)
 {
     if (!Brightness && Contrast == 1 && Gamma == 1 && !Gray && !Invert && !Sharp)
@@ -87,10 +79,8 @@ ImageReadingView::ImageReadingView(QWidget *Parent) : QAbstractScrollArea(Parent
                     return;
                 currentImage_ = Image;
                 sources_.insert(index_, new QImage(Image), qMax(1, int(Image.sizeInBytes() / 1024)));
-                animationUpdate_ = true;
+                ++contentVersions_[index_];
                 invalidateRenders();
-                animationUpdate_ = false;
-                tiles_.clear();
                 changed();
             });
     connect(animation_, &ImageFramePlayer::Changed, this, &ImageReadingView::Changed);
@@ -124,7 +114,7 @@ ImageReadingView::ImageReadingView(QWidget *Parent) : QAbstractScrollArea(Parent
                 }
                 if (Previous != index_)
                 {
-                    if(prefetchPage_!=index_)prefetchStop_->request_stop();
+                    trimSourceWork();
                     resetAnimation();
                     currentImage_ = {};
                 }
@@ -149,6 +139,7 @@ ImageReadingView::~ImageReadingView()
 void ImageReadingView::OpenPath(const QString &Path, const QString &Entry, int RequestedMode)
 {
     Cancel();
+    volumePending_ = true;
     const auto Generation = bookGeneration_;
     const auto Stop = bookStop_;
     ++workers_;
@@ -162,6 +153,7 @@ void ImageReadingView::OpenPath(const QString &Path, const QString &Entry, int R
                 --workers_;
                 if (Generation != bookGeneration_)
                     return;
+                volumePending_ = false;
                 if (!Result.HasValue())
                 {
                     error_ = QString::fromStdString(Result.Failure().code_);
@@ -203,9 +195,11 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
     book_ = std::move(Book);
     tiles_.clear();
     sources_.clear();
-    pendingSourcePages_.clear();
+    knownSizes_.clear(); contentVersions_.clear(); previousGroups_.clear();
+    presentedTiles_.clear(); presentedPage_ = presentedLastPage_ = -1;
+    renderRequests_ = sourceReads_ = presentedFrames_ = 0;
     pending_.clear();
-    pageErrors_.clear();pageWarnings_.clear();prefetched_.clear();
+    pageErrors_.clear();pageWarnings_.clear();
     error_.clear();
     index_ = Start;
     bookmark_ = {};
@@ -218,6 +212,7 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
     if (!First.isNull() && Start >= 0 && Start < sizes_.size())
     {
         sizes_[Start] = First.size();
+        knownSizes_.insert(Start);
         currentImage_ = First;
         sources_.insert(Start, new QImage(First), qMax(1, int(First.sizeInBytes() / 1024)));
     }
@@ -279,24 +274,38 @@ void ImageReadingView::expandSubpages()
         int Index=0;for(int I=0;I<Result.Value()->pages_.size();++I)if(Result.Value()->pages_[I].name_==Name){Index=I;break;}
         // Replace the immutable catalog; outstanding readers retain the old one.
         Cancel();book_=std::move(Result.Value());index_=Index;currentImage_=Image;
-        sources_.clear();tiles_.clear();pendingSourcePages_.clear();pageErrors_.clear();pageWarnings_.clear();prefetched_.clear();
+        sources_.clear();tiles_.clear();pageErrors_.clear();pageWarnings_.clear();
+        knownSizes_.clear(); contentVersions_.clear(); previousGroups_.clear();
+        presentedTiles_.clear(); presentedPage_ = presentedLastPage_ = -1;
         sizes_.fill(QSize(1000,1400),book_->pages_.size());
-        if(!Image.isNull()){sizes_[Index]=Image.size();sources_.insert(Index,new QImage(Image),qMax(1,int(Image.sizeInBytes()/1024)));}
+        if(!Image.isNull()){knownSizes_.insert(Index);sizes_[Index]=Image.size();sources_.insert(Index,new QImage(Image),qMax(1,int(Image.sizeInBytes()/1024)));}
         rebuild(false);GoTo(Index,Relative);changed();
     });
     Watcher->setFuture(QtConcurrent::run(imagePool_.get(),[Path,Stop]{
         storage::OperationContext C;C.stopToken_=Stop->get_token();return OpenImageBook(Path,C,true);
     }));
 }
+void ImageReadingView::beginTransition()
+{
+    if (!transitionPending_) transitionClock_.start();
+    transitionPending_ = true;
+    QTimer::singleShot(150, this, [this] { if (transitionPending_) viewport()->update(); });
+}
 void ImageReadingView::invalidateRenders()
 {
-    if (!animationUpdate_)
-        previousTiles_.clear();
     stop_->request_stop();
     stop_ = std::make_shared<std::stop_source>();
-    ++generation_;previews_.clear();
-    pending_.clear();
+    ++generation_; previews_.clear(); pending_.clear();
+    // Keep the last complete group and reusable renders while the next group
+    // is prepared. The generation identifies work, not cached pixel identity.
+    beginTransition();
 }
+void ImageReadingView::trimSourceWork()
+{
+    for (auto At = sourceStops_.begin(); At != sourceStops_.end(); ++At)
+        if (At.key() < index_ - 2 || At.key() > index_ + 3) At.value()->request_stop();
+}
+
 void ImageReadingView::RetryPage()
 {
     if(!book_ || index_<0 || index_>=book_->pages_.size())return;
@@ -307,7 +316,8 @@ void ImageReadingView::RetryPage()
 
 void ImageReadingView::Cancel()
 {
-    prefetchStop_->request_stop();
+    for (const auto& Stop : sourceStops_) Stop->request_stop();
+    sourceStops_.clear();
     invalidateRenders();
     bookStop_->request_stop();
     bookStop_ = std::make_shared<std::stop_source>();
@@ -319,7 +329,9 @@ void ImageReadingView::Cancel()
 }
 void ImageReadingView::SetMode(Mode Value)
 {
+    if (mode_ == Value) return;
     mode_ = Value;
+    previousGroups_.clear(); presentedTiles_.clear(); presentedPage_ = -1;
     splitPart_ = 0;
     rebuild();
     changed();
@@ -328,24 +340,26 @@ void ImageReadingView::SetFilter(const QString &Id)
 {
     filter_ = Id == "auto" || ImageFilterRegistry::Resolve(Id, {}).kernel_ ? Id : QString("auto");
     invalidateRenders();
-    tiles_.clear();
     changed();
 }
 void ImageReadingView::SetRightToLeft(bool Enabled)
 {
     rtl_ = Enabled;
+    previousGroups_.clear();
     rebuild();
     changed();
 }
 void ImageReadingView::SetCover(bool Enabled)
 {
     cover_ = Enabled;
+    previousGroups_.clear();
     rebuild();
     changed();
 }
 void ImageReadingView::SetSplit(bool Enabled)
 {
     split_ = Enabled;
+    previousGroups_.clear();
     splitPart_ = 0;
     rebuild();
     changed();
@@ -380,7 +394,6 @@ void ImageReadingView::SetAdjustment(const QString &Name, double Value)
     else
         return;
     invalidateRenders();
-    tiles_.clear();
     changed();
 }
 qreal ImageReadingView::scrollPosition() const
@@ -392,8 +405,32 @@ void ImageReadingView::setScrollPosition(qreal Value)
     const auto Max = qMax(qreal(0), extent_ - viewport()->height());
     verticalScrollBar()->setValue(Max > 0 ? qBound(0, int(Value / Max * ScrollRange), ScrollRange) : 0);
 }
-QList<ImageReadingView::Placement> ImageReadingView::placements() const
+int ImageReadingView::groupCount(int Index) const
 {
+    if (mode_ != Comic || split_ || (cover_ && Index == 0) || viewport()->width() < viewport()->height()
+        || Index < 0 || Index + 1 >= sizes_.size() || !knownSizes_.contains(Index) || !knownSizes_.contains(Index+1)) return 1;
+    const auto Portrait = [this](int Page) { const auto S = sizes_[Page]; return S.width() < S.height(); };
+    return Portrait(Index) && Portrait(Index+1) && !pageErrors_.contains(Index) && !pageErrors_.contains(Index+1) ? 2 : 1;
+}
+bool ImageReadingView::layoutReady(int Index) const
+{
+    if (!book_ || Index < 0 || Index >= sizes_.size()) return false;
+    if (pageErrors_.contains(Index)) return true;
+    if (!knownSizes_.contains(Index)) return false;
+    const auto S = sizes_[Index];
+    return mode_ != Comic || split_ || (cover_ && Index == 0) || viewport()->width() < viewport()->height()
+        || S.width() >= S.height() || Index+1 >= sizes_.size() || knownSizes_.contains(Index+1) || pageErrors_.contains(Index+1);
+}
+void ImageReadingView::rememberSize(int Page, QSize Size)
+{
+    if (!Size.isValid() || Page < 0 || Page >= sizes_.size()) return;
+    const bool ChangedSize = !knownSizes_.contains(Page) || sizes_[Page] != Size;
+    knownSizes_.insert(Page); sizes_[Page] = Size;
+    if (ChangedSize && (mode_ == Webtoon || Page == index_ || Page == index_+1)) rebuild();
+}
+QList<ImageReadingView::Placement> ImageReadingView::placements(int Index) const
+{
+    if (Index < 0) Index = index_;
     QList<Placement> Out;
     if (!book_ || sizes_.isEmpty())
         return Out;
@@ -413,19 +450,15 @@ QList<ImageReadingView::Placement> ImageReadingView::placements() const
         }
         return Out;
     }
-    const auto S = sizes_[index_];
-    const bool Wide = S.width() > S.height() * 1.35;
-    int Count = mode_ == Comic && !split_ && !(cover_ && index_ == 0) && !Wide && index_ + 1 < sizes_.size() ? 2 : 1;
-    if (Count == 2 && sizes_[index_ + 1].width() > sizes_[index_ + 1].height() * 1.35)
-        Count = 1;
+    const auto S = sizes_[Index];
+    const bool Wide = S.width() >= S.height();
+    const int Count = groupCount(Index);
     qreal TotalWidth = 0, MaxHeight = 0;
-    for (int N = 0; N < Count; ++N)
-    {
-        auto Sz = sizes_[index_ + N];
-        if (split_ && Wide)
-            Sz.setWidth(qMax(1, Sz.width() / 2));
-        TotalWidth += Sz.width();
-        MaxHeight = qMax(MaxHeight, qreal(Sz.height()));
+    for (int N = 0; N < Count; ++N) MaxHeight = qMax(MaxHeight, qreal(sizes_[Index + N].height()));
+    for (int N = 0; N < Count; ++N) {
+        const auto Sz = sizes_[Index + N];
+        TotalWidth += (split_ && Wide ? qMax(1, Sz.width()/2) : Sz.width())
+            * (Count == 2 ? MaxHeight / Sz.height() : 1.);
     }
     qreal Scale = fit_ == 0   ? 1.
                   : fit_ == 2 ? W / TotalWidth
@@ -435,16 +468,17 @@ QList<ImageReadingView::Placement> ImageReadingView::placements() const
     qreal X = qMax(qreal(0), (W - TotalWidth * Scale) / 2) - XScroll;
     for (int N = 0; N < Count; ++N)
     {
-        const int I = index_ + (rtl_ ? Count - 1 - N : N);
+        const int I = Index + (rtl_ ? Count - 1 - N : N);
         const auto Size = sizes_[I];
         QRect Crop(QPoint(), Size);
         if (split_ && Wide)
         {
             const int Half = Size.width() / 2;
-            const bool Right = (splitPart_ == 0) == rtl_;
+            const bool Right = ((Index == index_ ? splitPart_ : 0) == 0) == rtl_;
             Crop = QRect(Right ? Half : 0, 0, Right ? Size.width() - Half : Half, Size.height());
         }
-        const qreal Width = Crop.width() * Scale, Height = Crop.height() * Scale;
+        const qreal PageScale = Scale * (Count == 2 ? MaxHeight / Size.height() : 1.);
+        const qreal Width = Crop.width() * PageScale, Height = Crop.height() * PageScale;
         Out << Placement{I, QRectF(X, qMax(qreal(0), (H - Height) / 2) - YScroll, Width, Height), Crop};
         X += Width;
     }
@@ -453,6 +487,8 @@ QList<ImageReadingView::Placement> ImageReadingView::placements() const
 void ImageReadingView::rebuild(bool KeepAnchor)
 {
     const auto Old = State();
+    displayColor_ = ImageDisplayColorSpace(screen());
+    displayColorKey_ = QString::fromLatin1(QCryptographicHash::hash(displayColor_.iccProfile(), QCryptographicHash::Sha256).toHex());
     rebuilding_ = true;
     extent_ = 0;
     width_ = 0;
@@ -481,148 +517,175 @@ void ImageReadingView::rebuild(bool KeepAnchor)
                                                  : ScrollRange);
     rebuilding_ = false;
     invalidateRenders();
-    tiles_.clear();
     if (KeepAnchor)
         GoTo(index_, Old["relative"].toDouble());
     viewport()->update();
 }
+QString ImageReadingView::renderKey(const Placement &P, const QRect &Tile) const
+{
+    const auto Output = (P.rect_.size() * devicePixelRatioF()).toSize();
+    QString Key = QString::number(bookGeneration_) + ':' + QString::number(P.page_) + ':' + QString::number(contentVersions_.value(P.page_));
+    for (const int Value : {P.crop_.x(), P.crop_.y(), P.crop_.width(), P.crop_.height(), Output.width(), Output.height(),
+                           Tile.x(), Tile.y(), Tile.width(), Tile.height()}) Key += ':' + QString::number(Value);
+    for (const double Value : {devicePixelRatioF(), brightness_, contrast_, gamma_, sharpness_}) Key += ':' + QString::number(Value, 'g', 17);
+    return Key + ':' + filter_ + ':' + displayColorKey_ + (grayscale_ ? ":gray" : ":rgb") + (invert_ ? ":invert" : ":normal");
+}
+void ImageReadingView::requestSource(int Page)
+{
+    if (suspended_ || !book_ || Page < 0 || Page >= sizes_.size() || pageErrors_.contains(Page)) return;
+    if (auto* Source = sources_.object(Page)) { rememberSize(Page, Source->size()); return; }
+    if (sourceStops_.contains(Page) || sourceStops_.size() >= 2) return;
+    auto Stop = std::make_shared<std::stop_source>(); sourceStops_.insert(Page, Stop);
+    const auto Book = book_; const auto Generation = bookGeneration_;
+    auto Progress = std::make_shared<ImageProgress>();
+    auto* Watcher = new QFutureWatcher<storage::Result<ImagePageContent>>(this);
+    auto* Timer = new QTimer(Watcher); Timer->setInterval(15);
+    connect(Timer, &QTimer::timeout, this, [this, Progress, Generation, Page] {
+        if (Generation != bookGeneration_) return;
+        QSize Size; QImage Preview;
+        { std::lock_guard Lock(Progress->mutex_); Size = Progress->size_; Preview = std::exchange(Progress->image_, {}); }
+        rememberSize(Page, Size);
+        if (!Preview.isNull()) previews_[Page] = std::move(Preview);
+        viewport()->update();
+    });
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Timer, Generation, Page, Stop] {
+        Timer->stop(); auto Result = Watcher->result(); DeleteCompletedImageWork(Watcher);
+        if (Generation != bookGeneration_) return;
+        sourceStops_.remove(Page); previews_.remove(Page);
+        if (Result.HasValue()) {
+            const auto& Image = Result.Value().image_;
+            if (!Result.Value().warning_.isEmpty()) pageWarnings_[Page] = Result.Value().warning_;
+            sources_.insert(Page, new QImage(Image), qMax(1, int(Image.sizeInBytes()/1024)));
+            if (Page == index_) currentImage_ = Image;
+            rememberSize(Page, Image.size());
+        } else if (!Stop->stop_requested()) pageErrors_[Page] = QString::fromStdString(Result.Failure().code_);
+        viewport()->update(); emit Changed();
+    });
+    ++sourceReads_; Timer->start();
+    Watcher->setFuture(QtConcurrent::run(imagePool_.get(), [Book, Page, Stop, Progress] {
+        storage::OperationContext C; C.stopToken_ = Stop->get_token();
+        return ReadImagePage(Book, Page, C,
+            [Progress](QImage Image) { std::lock_guard Lock(Progress->mutex_); Progress->image_ = std::move(Image); },
+            [Progress](QSize Size) { std::lock_guard Lock(Progress->mutex_); Progress->size_ = Size; });
+    }));
+}
 void ImageReadingView::request(const Placement &P, const QRect &Tile)
 {
-    const auto CacheKey = Key(P.page_, Tile, generation_);
-    if (suspended_ || pending_.contains(CacheKey) || pageErrors_.contains(P.page_) || tiles_.contains(CacheKey) ||
-        workers_ >= 2)
-        return;
+    const auto CacheKey = renderKey(P, Tile);
+    const auto PendingKey = QString::number(generation_) + ':' + CacheKey;
+    if (suspended_ || pending_.contains(PendingKey) || pageErrors_.contains(P.page_) || tiles_.contains(CacheKey)) return;
     const auto Source = P.page_ == index_ && !currentImage_.isNull() ? currentImage_
-                        : sources_.object(P.page_)                   ? *sources_.object(P.page_)
-                                                                     : QImage{};
-    if(Source.isNull()&&pendingSourcePages_.contains(P.page_))return;
-    if(Source.isNull())pendingSourcePages_.insert(P.page_);
-    pending_.insert(CacheKey);
-    ++workers_;
-    const auto Book = book_;
-    const auto Generation = generation_;
-    const auto SourceGeneration = bookGeneration_;
-    const auto Stop = stop_;
-    const auto DisplayColor = ImageDisplayColorSpace(screen());
-    const auto Filter = filter_;
-    const auto Dpr = devicePixelRatioF();
-    const auto Output = (P.rect_.size() * Dpr).toSize();
-    const auto ExpectedSize = sizes_[P.page_];
+        : sources_.object(P.page_) ? *sources_.object(P.page_) : QImage{};
+    if (Source.isNull()) { requestSource(P.page_); return; }
+    if (workers_ >= 2) return;
+    pending_.insert(PendingKey); ++workers_; ++renderRequests_;
+    const auto Book = book_; const auto Generation = generation_, SourceGeneration = bookGeneration_;
+    const auto Stop = stop_; const auto DisplayColor = displayColor_; const auto Filter = filter_;
+    const auto Output = (P.rect_.size() * devicePixelRatioF()).toSize();
     const auto Bright = brightness_, Contrast = contrast_, Gamma = gamma_, Sharp = sharpness_;
     const auto Gray = grayscale_, Invert = invert_;
-    const auto Progress=std::make_shared<ImageProgress>();
-    auto *Watcher = new QFutureWatcher<Rendered>(this);
-    auto* PreviewTimer=new QTimer(Watcher);PreviewTimer->setInterval(50);
-    connect(PreviewTimer,&QTimer::timeout,this,[this,Progress,Generation,Page=P.page_]{
-        if(Generation!=generation_ || Page!=index_)return;
-        QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=std::exchange(Progress->image_,{});}
-        if(!Image.isNull()){previews_.clear();previews_[Page]=std::move(Image);viewport()->update();}
-    });PreviewTimer->start();
-    connect(Watcher, &QFutureWatcherBase::finished, this,
-            [this, Watcher, PreviewTimer, CacheKey, Generation, SourceGeneration, Page = P.page_]
-            {
-                PreviewTimer->stop();
-                auto Result = Watcher->result();
-                DeleteCompletedImageWork(Watcher);
-                --workers_;
-                if(SourceGeneration==bookGeneration_)pendingSourcePages_.remove(Page);
-                if (Generation != generation_)
-                {
-                    viewport()->update();
-                    emit Changed();
-                    return;
-                }
-                pending_.remove(CacheKey);
-                if (!Result.error_.isEmpty())
-                {
-                    pageErrors_[Page] = Result.error_;
-                    viewport()->update();
-                    emit Changed();
-                    return;
-                }
-                if(!Result.warning_.isEmpty())pageWarnings_[Page]=Result.warning_;
-                previews_.remove(Page);
-                const bool Resize = sizes_[Page] != Result.source_.size();
-                sizes_[Page] = Result.source_.size();
-                if (Page == index_)
-                    currentImage_ = Result.source_;
-                sources_.insert(Page, new QImage(Result.source_), qMax(1, int(Result.source_.sizeInBytes() / 1024)));
-                if (Resize)
-                {
-                    rebuild();
-                    changed();
-                    return;
-                }
-                previousTiles_.insert(CacheKey.section(':', 1), new QImage(Result.tile_),
-                                      qMax(1, int(Result.tile_.sizeInBytes() / 1024)));
-                tiles_.insert(CacheKey, new QImage(Result.tile_), qMax(1, int(Result.tile_.sizeInBytes() / 1024)));
-                viewport()->update();
-                emit Changed();
-            });
-    Watcher->setFuture(QtConcurrent::run(imagePool_.get(),
-        [=]
-        {
-            QImage Original = Source;QString Warning;
-            if (Original.isNull())
-            {
-                storage::OperationContext Context;
-                Context.stopToken_ = Stop->get_token();
-                auto Loaded = ReadImagePage(Book, P.page_, Context,[Progress](QImage Image){
-                    std::lock_guard Lock(Progress->mutex_);Progress->image_=std::move(Image);
-                });
-                if (!Loaded.HasValue())
-                    return Rendered{{}, {}, QString::fromStdString(Loaded.Failure().code_)};
-                Original = Loaded.Value().image_;Warning=Loaded.Value().warning_;
-            }
-            if (Original.size() != ExpectedSize)
-                return Rendered{Original, {}, {},Warning};
-            QImage Input = P.crop_.size() == Original.size() ? Original : Original.copy(P.crop_);
-            ImageRenderRequest Request;
-            Request.source_ = Input;
-            Request.traceSource_ = Book->path_+"#"+QString::number(P.page_);
-            Request.targetColor_ = DisplayColor;
-            Request.outputSize_ = Output;
-            Request.tile_ = Sharp > 0 ? Tile.adjusted(-1, -1, 1, 1).intersected(QRect(QPoint(), Output)) : Tile;
-            Request.filter_ = Filter;
-            Request.stop_ = Stop->get_token();
-            Request.sourceToOutput_.scale(double(Output.width()) / Input.width(),
-                                          double(Output.height()) / Input.height());
-            auto Result = ResampleImage(Request);
-            if (Result.error_.isEmpty())
-            {
-                Adjust(Result.image_, Bright, Contrast, Gamma, Gray, Invert, Sharp);
-                if (Request.tile_ != Tile)
-                    Result.image_ = Result.image_.copy(QRect(Tile.topLeft() - Request.tile_.topLeft(), Tile.size()));
-            }
-            return Rendered{Original, Result.image_, Result.error_,Warning};
-        }));
+    auto* Watcher = new QFutureWatcher<ImageRenderResult>(this);
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, CacheKey, PendingKey, Generation, SourceGeneration, Page=P.page_] {
+        auto Result = Watcher->result(); DeleteCompletedImageWork(Watcher); --workers_;
+        if (SourceGeneration != bookGeneration_) return;
+        pending_.remove(PendingKey);
+        if (Result.error_.isEmpty()) tiles_.insert(CacheKey, new QImage(Result.image_), qMax(1, int(Result.image_.sizeInBytes()/1024)));
+        else if (Generation == generation_ && Result.error_ != "image-render-cancelled") pageErrors_[Page] = Result.error_;
+        viewport()->update(); emit Changed();
+    });
+    Watcher->setFuture(QtConcurrent::run(imagePool_.get(), [=] {
+        QImage Input = P.crop_.size() == Source.size() ? Source : Source.copy(P.crop_);
+        ImageRenderRequest R; R.source_ = Input; R.traceSource_ = Book->path_ + "#" + QString::number(P.page_);
+        R.targetColor_ = DisplayColor; R.outputSize_ = Output; R.filter_ = Filter; R.stop_ = Stop->get_token();
+        R.tile_ = Sharp > 0 ? Tile.adjusted(-1,-1,1,1).intersected(QRect(QPoint(), Output)) : Tile;
+        R.sourceToOutput_.scale(double(Output.width())/Input.width(), double(Output.height())/Input.height());
+        auto Result = ResampleImage(R);
+        if (Result.error_.isEmpty()) {
+            Adjust(Result.image_, Bright, Contrast, Gamma, Gray, Invert, Sharp);
+            if (R.tile_ != Tile) Result.image_ = Result.image_.copy(QRect(Tile.topLeft()-R.tile_.topLeft(), Tile.size()));
+        }
+        return Result;
+    }));
+}
+QList<QRect> ImageReadingView::visibleTiles(const Placement &P) const
+{
+    QList<QRect> Tiles;
+    const auto Visible = P.rect_.intersected(QRectF(viewport()->rect()));
+    if (Visible.isEmpty()) return Tiles;
+    const auto Dpr = devicePixelRatioF();
+    const auto Output = (P.rect_.size()*Dpr).toSize();
+    const int FirstX=qMax(0,int((Visible.left()-P.rect_.left())*Dpr)/TileHeight);
+    const int FirstY=qMax(0,int((Visible.top()-P.rect_.top())*Dpr)/TileHeight);
+    const int LastX=qMax(FirstX,int((Visible.right()-P.rect_.left())*Dpr)/TileHeight);
+    const int LastY=qMax(FirstY,int((Visible.bottom()-P.rect_.top())*Dpr)/TileHeight);
+    for(int Y=FirstY;Y<=LastY;++Y) for(int X=FirstX;X<=LastX;++X) {
+        const QRect Tile(X*TileHeight,Y*TileHeight,qMin(TileHeight,Output.width()-X*TileHeight),qMin(TileHeight,Output.height()-Y*TileHeight));
+        if(!Tile.isEmpty()) Tiles.append(Tile);
+    }
+    return Tiles;
+}
+bool ImageReadingView::paintGroup(QPainter &Painter)
+{
+    if (!knownSizes_.contains(index_)) requestSource(index_);
+    if (!layoutReady(index_) && knownSizes_.contains(index_)) requestSource(index_+1);
+    const auto Places = placements();
+    bool Ready = layoutReady(index_); QString Error;
+    QList<PresentedTile> Next;
+    const auto Dpr = devicePixelRatioF();
+    for (const auto& P : Places) {
+        if (pageErrors_.contains(P.page_)) { Error = pageErrors_.value(P.page_); Ready = false; continue; }
+        if (!layoutReady(index_)) continue;
+        for (const auto& Tile : visibleTiles(P)) {
+            if (auto* Image = tiles_.object(renderKey(P,Tile)))
+                Next.append({QRectF(P.rect_.left()+Tile.x()/Dpr,P.rect_.top()+Tile.y()/Dpr,Tile.width()/Dpr,Tile.height()/Dpr),*Image});
+            else { Ready=false; request(P,Tile); }
+        }
+    }
+    if (Ready && !Next.isEmpty()) {
+        const bool NewFrame = presentedGeneration_ != generation_ || presentedPage_ != index_ || transitionPending_;
+        presentedTiles_ = std::move(Next); presentedPage_ = index_; presentedLastPage_ = index_;
+        for (const auto& P : Places) presentedLastPage_ = qMax(presentedLastPage_,P.page_);
+        presentedGeneration_ = generation_; transitionPending_ = false;
+        int Pinned=0; for (const auto& Tile : presentedTiles_) Pinned+=qMax(1,int(Tile.image_.sizeInBytes()/1024));
+        tiles_.setMaxCost(qMax(32*1024,160*1024-Pinned));
+        if (NewFrame) {
+            ++presentedFrames_; lastTransitionMs_=transitionClock_.isValid()?transitionClock_.nsecsElapsed()/1e6:0;
+            const auto Generation=generation_;
+            QTimer::singleShot(0,this,[this,Generation] { if(Generation==generation_){emit FramePresented(presentedPage_);emit Changed();} });
+        }
+    }
+    for (const auto& Tile : presentedTiles_) Painter.drawImage(Tile.rect_,Tile.image_);
+    if (!Error.isEmpty()) {
+        transitionPending_=false;
+        const QRect Banner(0,0,viewport()->width(),64);Painter.fillRect(Banner,palette().brush(QPalette::Base));
+        Painter.setPen(palette().color(QPalette::Text));
+        Painter.drawText(Banner.adjusted(8,2,-8,-2),Qt::AlignLeft|Qt::AlignVCenter|Qt::TextWordWrap,
+            tr("%1 페이지를 읽지 못했습니다. 다시 읽거나 다른 페이지로 이동할 수 있습니다. %2").arg(index_+1).arg(Error));
+    } else if (transitionPending_ && transitionClock_.elapsed() >= 150) {
+        Painter.fillRect(QRect(8,8,200,30),palette().brush(QPalette::Base));Painter.setPen(palette().color(QPalette::Text));
+        Painter.drawText(QRect(16,8,184,30),Qt::AlignVCenter,tr("%1 페이지 불러오는 중…").arg(index_+1));
+    }
+    return Ready;
 }
 void ImageReadingView::prefetch()
 {
-    if(suspended_ || !book_ || prefetching_ || workers_ || CurrentImage().isNull())return;
-    int Page=index_+1;
-    while(Page<book_->pages_.size() && Page<=index_+2 && (sources_.contains(Page)||pageErrors_.contains(Page)||prefetched_.contains(Page)))++Page;
-    if(Page>=book_->pages_.size() || Page>index_+2 || pendingSourcePages_.contains(Page))return;
-    prefetching_=true;prefetchPage_=Page;pendingSourcePages_.insert(Page);prefetched_.insert(Page);
-    prefetchStop_->request_stop();prefetchStop_=std::make_shared<std::stop_source>();
-    const auto Stop=prefetchStop_;const auto Book=book_;const auto Generation=bookGeneration_;
-    auto* Watcher=new QFutureWatcher<storage::Result<ImagePageContent>>(this);
-    connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Page,Generation,Stop]{
-        auto Result=Watcher->result();DeleteCompletedImageWork(Watcher);prefetching_=false;prefetchPage_=-1;
-        if(Generation!=bookGeneration_)return;
-        pendingSourcePages_.remove(Page);
-        if(!Stop->stop_requested() && Result.HasValue()) {
-            if(!Result.Value().warning_.isEmpty())pageWarnings_[Page]=Result.Value().warning_;
-            const auto& Image=Result.Value().image_;
-            sources_.insert(Page,new QImage(Image),qMax(1,int(Image.sizeInBytes()/1024)));
+    if (suspended_ || !book_ || workers_ || !sourceStops_.isEmpty() || animation_->Playing()) return;
+    if (mode_ != Webtoon && (transitionPending_ || presentedPage_ != index_ || pageErrors_.contains(index_))) return;
+    const int Next=index_+groupCount(index_), Previous=previousGroups_.value(index_,index_>=2 && groupCount(index_-2)==2 ? index_-2 : index_-1);
+    const QList<int> Groups = direction_ > 0 ? QList<int>{Next,Previous} : QList<int>{Previous,Next};
+    for (const int Page : Groups) {
+        if (Page < 0 || Page >= sizes_.size() || Page == index_ || pageErrors_.contains(Page)) continue;
+        if (!sources_.contains(Page) && !pageErrors_.contains(Page)) { requestSource(Page); return; }
+        if (!layoutReady(Page)) { requestSource(Page+1); return; }
+        if (mode_ == Webtoon) continue;
+        for (const auto& P : placements(Page)) {
+            if (!sources_.contains(P.page_) && !pageErrors_.contains(P.page_)) { requestSource(P.page_); return; }
+            for (const auto& Tile : visibleTiles(P))
+                if (!tiles_.contains(renderKey(P,Tile))) { request(P,Tile); if(workers_>=2)return; }
         }
-        viewport()->update();
-    });
-    Watcher->setFuture(QtConcurrent::run(imagePool_.get(),[Book,Page,Stop]{
-        storage::OperationContext Context;Context.stopToken_=Stop->get_token();
-        return ReadImagePage(Book,Page,Context);
-    }));
+    }
 }
+
 void ImageReadingView::paintEvent(QPaintEvent *)
 {
     QTimer::singleShot(0,this,&ImageReadingView::prefetch);
@@ -633,6 +696,14 @@ void ImageReadingView::paintEvent(QPaintEvent *)
     {
         Painter.setPen(palette().color(QPalette::Text));
         Painter.drawText(viewport()->rect(), Qt::AlignCenter, error_.isEmpty() ? tr("불러오는 중…") : error_);
+        return;
+    }
+    if (mode_ != Webtoon) {
+        paintGroup(Painter);
+        if (!pageWarnings_.value(index_).isEmpty()) {
+            Painter.setPen(palette().color(QPalette::Text));
+            Painter.drawText(QRect(8,viewport()->height()-32,viewport()->width()-16,28),tr("손상된 파일에서 복구한 이미지입니다."));
+        }
         return;
     }
     const qreal Dpr = devicePixelRatioF();
@@ -653,18 +724,14 @@ void ImageReadingView::paintEvent(QPaintEvent *)
                                  qMin(TileHeight, qRound(P.rect_.height() * Dpr) - Y * TileHeight));
                 if (Tile.isEmpty())
                     continue;
-                const auto CacheKey = Key(P.page_, Tile, generation_);
+                const auto CacheKey = renderKey(P, Tile);
                 if (auto *Image = tiles_.object(CacheKey))
                     Painter.drawImage(QRectF(P.rect_.left() + Tile.x() / Dpr, P.rect_.top() + Tile.y() / Dpr,
                                              Tile.width() / Dpr, Tile.height() / Dpr),
                                       *Image);
                 else
                 {
-                    if (auto *Previous = previousTiles_.object(CacheKey.section(':', 1)))
-                        Painter.drawImage(QRectF(P.rect_.left() + Tile.x() / Dpr, P.rect_.top() + Tile.y() / Dpr,
-                                                 Tile.width() / Dpr, Tile.height() / Dpr),
-                                          *Previous);
-                    else if(previews_.contains(P.page_)){
+                    if(previews_.contains(P.page_)){
                         Painter.save();Painter.setClipRect(Visible);Painter.drawImage(P.rect_,previews_.value(P.page_));Painter.restore();
                     }
                     else
@@ -704,9 +771,11 @@ void ImageReadingView::GoTo(int Index, double Relative)
         resetAnimation();
         currentImage_ = {};
     }
-    if(prefetchPage_!=Index)prefetchStop_->request_stop();
+
     const bool NewPage = index_ != Index;
-    index_ = Index;
+    if (NewPage) { direction_ = Index > index_ ? 1 : -1; transitionClock_.start(); transitionPending_ = false; }
+    index_ = Index; trimSourceWork();
+    if (auto* Source = sources_.object(Index)) { currentImage_ = *Source; knownSizes_.insert(Index); sizes_[Index] = Source->size(); }
     if (NewPage && mode_ != Webtoon)
     {
         splitPart_ = 0;
@@ -740,7 +809,7 @@ void ImageReadingView::Move(int Direction, bool OnePage)
             OpenVolume(1);
         return;
     }
-    if (split_ && sizes_[index_].width() > sizes_[index_].height() * 1.35)
+    if (split_ && knownSizes_.contains(index_) && sizes_[index_].width() >= sizes_[index_].height())
     {
         if (Direction > 0 && splitPart_ == 0)
         {
@@ -767,18 +836,8 @@ void ImageReadingView::Move(int Direction, bool OnePage)
     int Step = 1;
     if (mode_ == Comic && !OnePage && Direction > 0)
         Step = placements().size();
-    if (mode_ == Comic && !OnePage && !split_ && Direction < 0)
-    {
-        int At = 0, Previous = 0;
-        while (At < index_)
-        {
-            Previous = At;
-            const auto S = sizes_[At];
-            At += (cover_ && At == 0) || S.width() > S.height() * 1.35 || At + 1 >= sizes_.size() ||
-                          sizes_[At + 1].width() > sizes_[At + 1].height() * 1.35
-                      ? 1
-                      : 2;
-        }
+    if (mode_ == Comic && !OnePage && !split_ && Direction < 0) {
+        const int Previous = previousGroups_.value(index_, index_ >= 2 && groupCount(index_-2) == 2 ? index_-2 : index_-1);
         Step = index_ - Previous;
     }
     const int Next = index_ + Direction * Step;
@@ -790,12 +849,10 @@ void ImageReadingView::Move(int Direction, bool OnePage)
     }
     if (Next < 0)
         return;
-    resetAnimation();
-    currentImage_ = {};
-    index_ = Next;
-    splitPart_ = Direction < 0 && split_ ? 1 : 0;
-    rebuild(false);
-    GoTo(index_);
+    if (Direction > 0) previousGroups_[Next] = index_;
+    GoTo(Next);
+    if (Direction < 0 && split_) { splitPart_ = 1; rebuild(false); }
+
 }
 void ImageReadingView::OpenVolume(int Direction)
 {
@@ -1013,7 +1070,12 @@ QJsonObject ImageReadingView::State() const
     }
     int LastPage=index_;
     if(mode_!=Webtoon){const auto Places=placements();for(const auto& Place:Places)LastPage=qMax(LastPage,Place.page_);}
-    return {{"lastPage",LastPage},{"page", index_},
+    return {{"presentedPage",presentedPage_},{"presentedLastPage",presentedLastPage_},
+            {"presentedName",book_ && presentedPage_>=0 && presentedPage_<book_->pages_.size()?book_->pages_[presentedPage_].name_:QString{}},
+            {"sourceJobs",sourceStops_.size()},{"renderJobs",workers_},
+            {"transitioning",transitionPending_},{"transitionMs",lastTransitionMs_},
+            {"renderRequests",double(renderRequests_)},{"sourceReads",double(sourceReads_)},{"presentedFrames",double(presentedFrames_)},
+            {"lastPage",LastPage},{"page", index_},
             {"pageCount", book_ ? book_->pages_.size() : 0},
             {"listingWarning",book_?book_->listingWarning_:QString{}},{"discoveringPages",book_&&book_->subpagesPending_},
             {"pageName", CurrentName()},
@@ -1103,7 +1165,11 @@ void ImageReadingView::persist()
 }
 bool ImageReadingView::IsBusy() const
 {
-    return workers_ > 0 || volumePending_ || animationPending_ || animation_->IsBusy();
+    // The isolated host waits for idle before presenting its initially hidden window.
+    // A hidden viewport cannot paint; its pending frame must not block that handshake.
+    return (mode_ == Webtoon && workers_ > 0) || sourceStops_.contains(index_) || (groupCount(index_)==2 && sourceStops_.contains(index_+1))
+        || (!suspended_ && book_ && isVisible() && mode_!=Webtoon && transitionPending_)
+        || volumePending_ || animationPending_ || animation_->IsBusy();
 }
 void ImageReadingView::resetAnimation()
 {

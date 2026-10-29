@@ -28,6 +28,9 @@ class ImageFullscreen final : public QObject
     void Restore();
     QJsonObject State() const;
 
+  signals:
+    void ActiveChanged(bool Active);
+
   protected:
     bool eventFilter(QObject *, QEvent *) override;
 

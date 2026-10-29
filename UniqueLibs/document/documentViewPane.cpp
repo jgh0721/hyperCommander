@@ -507,7 +507,9 @@ namespace hc::document
             Add("format","PDF",false);
         } else if(reading_&&!reading_->isHidden()) {
             const auto State=reading_->State();const bool Webtoon=State["mode"].toInt()==ImageReadingView::Webtoon;
-            const auto First=State["page"].toInt()+1, Last=State["lastPage"].toInt(State["page"].toInt())+1;
+            const bool Presented=!Webtoon && State["presentedPage"].toInt(-1)>=0;
+            const auto First=(Presented?State["presentedPage"].toInt():State["page"].toInt())+1;
+            const auto Last=(Presented?State["presentedLastPage"].toInt():State["lastPage"].toInt(State["page"].toInt()))+1;
             const auto Range=Last>First?QString("%1–%2").arg(First).arg(Last):QString::number(First);
             Add("page",(Webtoon?tr("이미지 %1 / %2"):tr("쪽 %1 / %2")).arg(Range).arg(State["discoveringPages"].toBool()?tr("확인 중"):QString::number(State["pageCount"].toInt())),true,{},{},"status.page");
             if(Webtoon)Add("progress",tr("현재 이미지 %1%").arg(qRound(State["relative"].toDouble()*100)));
@@ -515,7 +517,7 @@ namespace hc::document
             const QStringList Fits{tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤")};
             Add("fit",Fits.value(State["fit"].toInt()),true);
             if(State["private"].toBool())Add("private",tr("읽기 기록 저장 안 함"));
-            Add("pageName",State["pageName"].toString(),false);
+            Add("pageName",State[Presented?"presentedName":"pageName"].toString(),false);
             Add("readingMode",Webtoon?tr("세로 연속"):State["mode"].toInt()==ImageReadingView::Comic?tr("코믹"):tr("한 쪽"),false);
             if(Webtoon)Add("gap",tr("간격 %1 px").arg(State["gap"].toInt()),false);
             if(State["split"].toBool())Add("split",tr("분할 %1").arg(State["part"].toInt()+1),false);

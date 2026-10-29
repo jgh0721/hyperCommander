@@ -695,6 +695,30 @@ void isolatedComicArchiveReading(){
     QVERIFY(!Doc(Surface.Details().documentState_,Id)["dirty"].toBool());
     Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();}));
 }
+void optionalIsolatedComicLandscapeReading(){
+    const auto Path=qEnvironmentVariable("HC_COMIC_BENCH_PATH");
+    if(Path.isEmpty()) QSKIP("Set HC_COMIC_BENCH_PATH for the real archive integration check");
+    auto Live=std::make_shared<std::atomic<int>>(0);
+    QtPluginViewerController Controller(nullptr,[Live]()->Result<std::shared_ptr<IMaterializer>>{
+        auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);});
+    QtPluginViewerSurface Surface(&Controller);Surface.resize(1200,800);Surface.show();
+    Surface.Open(Options(),Content(Path));
+    const auto Close=qScopeGuard([&]{Surface.Close();Wait([&]{return Controller.IsIdle();});});
+    QVERIFY(Wait([&]{return Surface.IsReady() && !Surface.Details().documentState_["activeDocumentId"].toString().isEmpty();},30000));
+    const auto Id=Surface.Details().documentState_["activeDocumentId"].toString();QVERIFY(!Id.isEmpty());
+    const auto Reading=[&]{return Doc(Surface.Details().documentState_,Id)["view"].toObject()["reading"].toObject();};
+    QVERIFY(Wait([&]{return Reading()["pageCount"].toInt()==101;},30000));
+    const auto Present=Surface.SendDocument({{"action","present"}});QVERIFY(Present.HasValue());
+    QVERIFY(Wait([&]{return Surface.Details().commandSequence_>=Present.Value();}));
+    for(const int Page:{13,14,13,14}){
+        const auto Sequence=Surface.SendDocument({{"action","reading.page"},{"page",Page},{"documentId",Id}});
+        QVERIFY(Sequence.HasValue());
+        QVERIFY(Wait([&]{return Reading()["presentedPage"].toInt(-1)==Page && !Reading()["transitioning"].toBool();},30000));
+        QCOMPARE(Reading()["presentedLastPage"].toInt(-1),Page);
+        QVERIFY(!Surface.Details().commandError_);
+    }
+    QVERIFY(!Doc(Surface.Details().documentState_,Id)["dirty"].toBool());
+}
 void isolatedFileDialogsRemainResponsive_data(){
     QTest::addColumn<bool>("SaveAs");QTest::addColumn<bool>("Modal");QTest::addColumn<bool>("CancelHost");QTest::addColumn<bool>("Preview");
     QTest::newRow("open")<<false<<false<<false<<false;QTest::newRow("save-as")<<true<<false<<false<<false;
