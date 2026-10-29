@@ -57,10 +57,7 @@
     { "key": "markdown.toggleToc", "iconName": "toc-toggle", "toolTip": "목차 표시 전환", "checkable": true },
     { "key": "markdown.refresh", "iconName": "refresh", "toolTip": "미리보기 새로고침", "checkable": false },
 
-    { "key": "widget.colorButton", "iconName": "color-picker", "toolTip": "선/도형/텍스트 색상", "checkable": false },
-    { "key": "widget.captureAllow", "iconName": "capture-allow", "toolTip": "캡처 허용", "checkable": true },
-    { "key": "widget.captureMonitor", "iconName": "capture-monitor", "toolTip": "화면 표시만 (WDA_MONITOR)", "checkable": true },
-    { "key": "widget.captureExclude", "iconName": "capture-exclude", "toolTip": "캡처 제외 (WDA_EXCLUDEFROMCAPTURE)", "checkable": true }
+    { "key": "widget.colorButton", "iconName": "color-picker", "toolTip": "선/도형/텍스트 색상", "checkable": false }
   ],
   "sections": [
     {
@@ -94,10 +91,6 @@
         {
           "title": "Auxiliary Button",
           "cards": ["widget.colorButton"]
-        },
-        {
-          "title": "Capture Protection Modes",
-          "cards": ["widget.captureAllow", "widget.captureMonitor", "widget.captureExclude"]
         }
       ]
     },

@@ -531,6 +531,8 @@ void mixedExeAndDllEquivalence(){
         }
         auto Call=[&](QJsonObject Request){return Mode?Dll.Call(Request):Exe.Handle(Request);};
         QVERIFY(Wait([&]{return Call({{"action","state"}})["idle"].toBool();}));
+        for(const auto& Id:Ids)
+            QCOMPARE(Call({{"action","captureProtection"},{"documentId",Id},{"enabled",true}})["error"].toString(), QString("document-view-command-unsupported"));
         QVERIFY(!Call({{"action","text.find"},{"documentId",Ids[0]},{"text","main"}}).contains("error"));
         QVERIFY(!Call({{"action","replaceText"},{"documentId",Ids[0]},{"text","P3 edited\r\n"}}).contains("error"));
         QVERIFY(!Call({{"action","pdf.search"},{"documentId",Ids[1]},{"text","search"}}).contains("error"));

@@ -168,14 +168,6 @@
       "sha256": "8241246439872be027733e8876a1f91319efc2f85c57486ab914f6a8b2a62ef0"
     },
     {
-      "path": "src/utils/ScreenProtect.h",
-      "sha256": "88a7dc8ad73eb1f762845a640aa0ca5849bdc32a15df899fef912063cc328614"
-    },
-    {
-      "path": "src/utils/ScreenProtect.cpp",
-      "sha256": "2ad48c41c305100901574b8a711d9cb8b7654af7d71755ebb720334ad230f88f"
-    },
-    {
       "path": "src/capture/CaptureMarkupDialog.cpp",
       "sha256": "dde5c4d985fcf185e323b5e7b78d1e27d63302da173acff59e2b600c873311b8"
     },
@@ -270,7 +262,7 @@
     {
       "id": "P2-U01",
       "status": "ported",
-      "implementation": "per-pane toolbars, print/ranges/preview, capture/protection and shared waterColor chrome"
+      "implementation": "per-pane toolbars, print/ranges/preview, screen capture and shared waterColor chrome"
     },
     {
       "id": "pdf.forms",

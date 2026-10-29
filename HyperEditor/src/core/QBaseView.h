@@ -7,8 +7,6 @@
 #include <QPainter>
 #include <QEventLoop>
 
-#include "utils/ScreenProtect.h"
-
 #include <memory>
 
 class QBaseView : public QWidget
@@ -63,12 +61,6 @@ public:
     bool isShuttingDown() const;
     bool isLoading() const;
 
-    // ── 화면 보호 ──
-    void setScreenCaptureProtectionMode(ScreenProtect::ProtectionMode mode);
-    ScreenProtect::ProtectionMode screenCaptureProtectionMode() const;
-    void setScreenCaptureProtection(bool on);
-    bool isScreenCaptureProtected() const;
-
     // ── 도구모음 ──
     virtual QToolBar* createToolBar();
     virtual QToolBar* createAuxiliaryToolBar();
@@ -92,7 +84,6 @@ signals:
     void fileClosed();
     void modifiedChanged(bool modified);
     void titleChanged(const QString& title);
-    void screenCaptureProtectionChanged(ScreenProtect::ProtectionMode mode);
     void copyAvailabilityChanged(bool available);
     void loadingStateChanged(bool active, const QString& message, int value, int maximum);
 
@@ -122,7 +113,6 @@ protected:
     Theme           m_theme         = Light;
     bool            m_toolBarVisible= true;
     bool            m_tabEnabled    = true;
-    ScreenProtect::ProtectionMode m_captureProtectionMode = ScreenProtect::ProtectionMode::Off;
     bool            m_lastCopyAvailability = false;
     bool            m_loadingActive = false;
     QString         m_loadingMessage;

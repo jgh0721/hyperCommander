@@ -300,6 +300,12 @@ private slots:
         Widget.Handle({{"action","focus"}}); QCOMPARE(Widget.focusProxy(),Input);
         QVERIFY(Pane->ViewState()["inputFocused"].toBool());
         auto* Bar=Widget.findChild<QMenuBar*>("mainMenu"); QVERIFY(Bar);
+        QVERIFY(!Widget.findChild<QAction*>("documentCaptureProtection"));
+        QVERIFY(Widget.findChild<QAction*>("captureScreen"));
+        QCOMPARE(Pane->Execute({{"action","captureProtection"},{"enabled",true}})["error"].toString(), QString("document-view-command-unsupported"));
+        DWORD Affinity = ~DWORD(0);
+        QVERIFY(GetWindowDisplayAffinity(reinterpret_cast<HWND>(Widget.winId()), &Affinity));
+        QCOMPARE(Affinity, DWORD(WDA_NONE));
         auto* Menu=Bar->actions().last()->menu(); QVERIFY(Menu);
         auto* Toolbar=Pane->findChild<QToolBar*>("viewToolbar"); QVERIFY(Toolbar);
         QPointer<QMenu> Stable=Menu; QAction* Lock=nullptr; QAction* MenuLock=nullptr;

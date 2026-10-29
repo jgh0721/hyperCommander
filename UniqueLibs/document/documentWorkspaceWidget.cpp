@@ -145,7 +145,7 @@ namespace hc::document
                 {"editHwpDocument", "annotation-freetext"},
                 {"undoDocument", "undo"}, {"redoDocument", "redo"}, {"documentPreferences", "toc-toggle"},
                 {"workspaceDisplayOptions", "view-preview"},
-                {"documentCaptureProtection", "capture-exclude"}, {"documentRecovery", "refresh"},
+                {"documentRecovery", "refresh"},
                 {"tab.next", "chevron-right"}, {"tab.previous", "chevron-left"}, {"view.fullscreen", "fullscreen"},
                 {"edit.cut", "cut"}, {"edit.copy", "copy"}, {"edit.paste", "paste"}, {"edit.selectAll", "select-all"},
                 {"text.find", "search-next"}, {"text.findNext", "search-next"}, {"text.findPrev", "search-prev"},
@@ -332,7 +332,6 @@ namespace hc::document
                 });
             }
         }
-        auto* Protection=ViewMenu->addAction(tr("화면 캡처 보호"));Protection->setCheckable(true);connect(Protection,&QAction::toggled,this,[this](bool Enabled){if(auto Tab=active()){auto Reply=Tab->pane_->Execute({{"action","captureProtection"},{"enabled",Enabled}});if(Reply.contains("error"))ShowShellError(tr("이 호스트에서는 화면 캡처 보호를 적용할 수 없습니다."));}});
         auto* Themes = ViewMenu->addMenu(tr("테마"));
         Themes->menuAction()->setProperty("documentIconName", "theme-toggle");
         for (const auto& Mode : {QString("product"), QString("system"), QString("light"), QString("dark")}) {
@@ -348,7 +347,7 @@ namespace hc::document
         connect(EpubRestore,&QAction::triggered,this,&DocumentWorkspaceWidget::showEpubRecovery);
         auto* EpubReopen=FileMenu->addAction(tr("EPUB 저장본 다시 열기"));EpubReopen->setObjectName("epubReopenDocument");EpubReopen->setProperty("documentIconName","open");EpubReopen->setVisible(false);
         connect(EpubReopen,&QAction::triggered,this,[this]{if(auto Tab=active())if(auto* Reopen=Tab->pane_->findChild<QAction*>("epubReopen"))Reopen->trigger();});
-        Restore->setObjectName("documentRecovery"); Protection->setObjectName("documentCaptureProtection");
+        Restore->setObjectName("documentRecovery");
         connect(Restore, &QAction::triggered, this, [this] {
             auto* Watcher = new QFutureWatcher<storage::Result<std::vector<RecoverySnapshot>>>(this); ++recoveryWorkers_;
             connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher] {

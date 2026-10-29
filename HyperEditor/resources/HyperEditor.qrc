@@ -10,9 +10,6 @@
         <file>icons/toolbar/annotation-strikeout.svg</file>
         <file>icons/toolbar/annotation-toggle.svg</file>
         <file>icons/toolbar/annotation-underline.svg</file>
-        <file>icons/toolbar/capture-allow.svg</file>
-        <file>icons/toolbar/capture-exclude.svg</file>
-        <file>icons/toolbar/capture-monitor.svg</file>
         <file>icons/toolbar/chevron-left.svg</file>
         <file>icons/toolbar/chevron-right.svg</file>
         <file>icons/toolbar/code-folding.svg</file>

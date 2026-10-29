@@ -214,35 +214,6 @@ void QBaseView::updateCopyAvailability()
 bool QBaseView::isShuttingDown() const { return m_shuttingDown; }
 
 // ═══════════════════════════════════════════════════════════
-// 화면 캡처 방지
-// ═══════════════════════════════════════════════════════════
-void QBaseView::setScreenCaptureProtectionMode(ScreenProtect::ProtectionMode mode)
-{
-    if (m_captureProtectionMode == mode)
-        return;
-
-    m_captureProtectionMode = mode;
-    emit screenCaptureProtectionChanged(mode);
-}
-
-ScreenProtect::ProtectionMode QBaseView::screenCaptureProtectionMode() const
-{
-    return m_captureProtectionMode;
-}
-
-void QBaseView::setScreenCaptureProtection(bool on)
-{
-    setScreenCaptureProtectionMode(on
-        ? ScreenProtect::ProtectionMode::ExcludeFromCapture
-        : ScreenProtect::ProtectionMode::Off);
-}
-
-bool QBaseView::isScreenCaptureProtected() const
-{
-    return m_captureProtectionMode != ScreenProtect::ProtectionMode::Off;
-}
-
-// ═══════════════════════════════════════════════════════════
 // 도구모음
 // ═══════════════════════════════════════════════════════════
 QToolBar* QBaseView::createToolBar()
