@@ -6,7 +6,8 @@
   ],
   "vendorCertificates": {
     "Everything64.dll": [
-      "fc351cc1ed83511f34cdb83efb574764799aa7bd6e025f5a66928213255e8589"
+      "fc351cc1ed83511f34cdb83efb574764799aa7bd6e025f5a66928213255e8589",
+      "48788c4430343fedf4cfe91edc468386d96e10a417b8866211fd38f9f2b51756"
     ]
   },
   "requireTimestamp": true,

@@ -1,4 +1,6 @@
 ﻿#include "searchIndexPath.hpp"
+#include "everythingQuery.hpp"
+#include "UniqueLibs/quickFindSettings.hpp"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -14,9 +16,9 @@ int main(int Argc, char** Argv)
     QCoreApplication App(Argc, Argv);
     const auto Args = App.arguments();
     if (Args.size() == 4 && Args[1] == "--quick-find-stream") {
-        const auto Term = Args[2].normalized(QString::NormalizationForm_C), Match = Args[3];
+        const auto Term = Args[2], Match = Args[3];
         if (Term.isEmpty() || Term.size() > 4096 || Term.contains(QChar::Null)
-            || (Match != "starts" && Match != "contains" && Match != "ends")) return 2;
+            || (hc::quickfind::MatchKind(Match) != "starts" && hc::quickfind::MatchKind(Match) != "contains" && hc::quickfind::MatchKind(Match) != "ends")) return 2;
         QFile Output, Input;
         if (!Output.open(stdout, QIODevice::WriteOnly) || !Input.open(stdin, QIODevice::ReadOnly)) return 6;
         quint64 Sequence = 0;
@@ -26,15 +28,10 @@ int main(int Argc, char** Argv)
             return Output.write(Bytes) == Bytes.size() && Output.flush();
         };
         if (!Send({{"type", "started"}})) return 6;
-        if (!Everything_IsDBLoaded()) return 3;
-        Everything_Reset();
-        const auto Pattern = ((Match == "starts" ? "^" : "") + QRegularExpression::escape(Term) + (Match == "ends" ? "$" : "")).toStdWString();
-        Everything_SetRegex(TRUE); Everything_SetMatchPath(FALSE); Everything_SetMatchCase(FALSE);
-        Everything_SetSearchW(Pattern.c_str()); Everything_SetMax(MAXDWORD);
-        Everything_SetSort(EVERYTHING_SORT_NAME_ASCENDING);
-        if (!Everything_QueryW(TRUE)) return 4;
-        const auto Count = Everything_GetNumResults();
-        if (!Send({{"type", "snapshot"}, {"total", QString::number(Everything_GetTotResults())}})) return 6;
+        EverythingQuery Query;
+        if (!Query.Start(hc::quickfind::SearchPattern(Term, Match))) return 4;
+        const auto Count = Query.Total();
+        if (!Send({{"type", "snapshot"}, {"total", QString::number(Count)}, {"sdk", Query.UsesSdk3() ? 3 : 2}})) return 6;
         QJsonArray Paths; qsizetype Bytes = 0;
         // Each transport frame is acknowledged, bounding both pipe buffering
         // and native preparation queues. This never performs another query.
@@ -46,24 +43,29 @@ int main(int Argc, char** Argv)
             const auto Ack = QJsonDocument::fromJson(Input.readLine(1024)).object();
             return Ack["v"] == 1 && Ack["type"] == "ack" && Ack["seq"].toDouble(-1) == double(Sent);
         };
-        for (DWORD Row = 0; Row < Count; ++Row) {
-            std::wstring Buffer(32768, L'\0');
-            const auto Size = Everything_GetResultFullPathNameW(Row, Buffer.data(), DWORD(Buffer.size()));
-            if (!Size || Size >= Buffer.size()) return 5;
-            const auto Path = QString::fromWCharArray(Buffer.data(), int(Size));
-            const auto Length = QJsonDocument(QJsonArray{Path}).toJson(QJsonDocument::Compact).size();
-            if (Bytes + Length > 240 * 1024 && !Flush()) return 6;
-            Paths.append(Path); Bytes += Length;
-            if ((Row == 0 || Paths.size() >= 64) && !Flush()) return 6;
+        quint64 Row = 0;
+        while (Row < Count) {
+            QStringList Page;
+            if (!Query.Next(Page)) {
+                Send({{"type", "error"}, {"reason", "results-changed"}});
+                return 5;
+            }
+            for (const auto& Path : Page) {
+                const auto Length = QJsonDocument(QJsonArray{Path}).toJson(QJsonDocument::Compact).size();
+                if (Bytes + Length > 240 * 1024 && !Flush()) return 6;
+                Paths.append(Path); Bytes += Length;
+                if ((Row++ == 0 || Paths.size() >= 64) && !Flush()) return 6;
+            }
         }
         if (!Flush()) return 6;
+        if (!Query.Stable()) { Send({{"type", "error"}, {"reason", "results-changed"}}); return 5; }
         return Send({{"type", "end"}, {"emitted", QString::number(Count)}, {"complete", true}}) ? 0 : 6;
     }
     if (Args.size() == 4 && Args[1] == "--quick-find") {
         const auto Term = Args[2].normalized(QString::NormalizationForm_C);
         const auto Match = Args[3];
         if (Term.isEmpty() || Term.size() > 4096 || Term.contains(QChar::Null) ||
-            (Match != "starts" && Match != "contains" && Match != "ends")) return 2;
+            (hc::quickfind::MatchKind(Match) != "starts" && hc::quickfind::MatchKind(Match) != "contains" && hc::quickfind::MatchKind(Match) != "ends")) return 2;
         if (!Everything_IsDBLoaded()) return 3;
         const auto Pattern = ((Match == "starts" ? "^" : "") + QRegularExpression::escape(Term) + (Match == "ends" ? "$" : "")).toStdWString();
         Everything_SetRegex(TRUE); Everything_SetMatchPath(FALSE); Everything_SetMatchCase(FALSE);

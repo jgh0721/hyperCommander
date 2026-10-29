@@ -13,6 +13,15 @@ inline QList<QPair<int, int>> HighlightRanges(const QString& Text, const QString
 {
     QList<QPair<int, int>> Ranges;
     if (Query.isEmpty()) return Ranges;
+    if (Match.startsWith("korean:")) {
+        const QRegularExpression Pattern(SearchPattern(Query, Match), QRegularExpression::CaseInsensitiveOption);
+        auto Matches = Pattern.globalMatch(Text);
+        while (Matches.hasNext()) {
+            const auto Hit = Matches.next();
+            if (Hit.capturedLength()) Ranges.append({int(Hit.capturedStart()), int(Hit.capturedLength())});
+        }
+        return Ranges;
+    }
     QString Folded; QList<QPair<int, int>> Positions;
     QTextBoundaryFinder Boundary(QTextBoundaryFinder::Grapheme, Text);
     int Begin = 0;
@@ -38,11 +47,11 @@ inline QList<QPair<int, int>> HighlightRanges(const QString& Text, const QString
 inline QColor HighlightBackground() { return fm::style::ThemeManager::instance().colors()[fm::style::Token::WarnLine]; }
 inline QColor HighlightForeground() { return fm::style::ThemeManager::instance().colors()[fm::style::Token::Fg]; }
 inline void PaintHighlightedText(QPainter* Painter, const QRect& Rect, const QString& Text,
-    const QString& Query, Qt::Alignment Alignment = Qt::AlignLeft)
+    const QString& Query, Qt::Alignment Alignment = Qt::AlignLeft, const QString& Match = "contains")
 {
     QTextLayout Layout(Text, Painter->font());
     QList<QTextLayout::FormatRange> Formats;
-    for (const auto& Range : HighlightRanges(Text, Query)) {
+    for (const auto& Range : HighlightRanges(Text, Query, Match)) {
         QTextLayout::FormatRange Format; Format.start = Range.first; Format.length = Range.second;
         Format.format.setBackground(HighlightBackground()); Format.format.setForeground(HighlightForeground()); Formats.append(Format);
     }

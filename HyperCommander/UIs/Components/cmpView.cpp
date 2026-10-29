@@ -182,7 +182,7 @@ public:
             const auto Query = owner_->property("hc.quickFind.text").toString();
             if (owner_->property("hc.quickFind.highlight").toBool() && !Query.isEmpty() &&
                 hc::quickfind::Matches(Cell.data(Qt::EditRole).toString(), Query, owner_->property("hc.quickFind.match").toString()))
-                hc::quickfind::PaintHighlightedText(Painter, Rect, Shown, Query);
+                hc::quickfind::PaintHighlightedText(Painter, Rect, Shown, Query, Qt::AlignLeft, owner_->property("hc.quickFind.match").toString());
             else Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Shown);
         } else {
             if (Effects["dim"].toBool()) Painter->setOpacity(0.55);

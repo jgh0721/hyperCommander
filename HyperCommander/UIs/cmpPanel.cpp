@@ -236,7 +236,7 @@ void CmpPanel::materializeTab(int Index)
     connect(Model, &CFSModel::SearchRefreshRequested, this, [this, Model] {
         if (retrieveFocusState() && retrieveFocusState()->Model == Model) {
             const auto Config = hc::quickfind::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["quickFind"].toObject());
-            StartEverythingSearch(Model->EverythingQuery(), Config.match_, Config.everythingDisplayIntervalMs_);
+            StartEverythingSearch(Model->EverythingQuery(), Config.everythingKorean_ ? "korean:" + Config.match_ : Config.match_, Config.everythingDisplayIntervalMs_);
         }
     });
     connect(Model, &CFSModel::sigChangedDirectory, this, &CmpPanel::OnChangedDirectory);

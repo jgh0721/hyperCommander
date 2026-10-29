@@ -1,5 +1,6 @@
 ﻿#include "commonLibs/storage/search.hpp"
 #include "UniqueLibs/qtSearch.hpp"
+#include "UniqueLibs/koreanSearchPattern.hpp"
 #include "UniqueLibs/everythingSearchSession.hpp"
 #include "everythingStreamFixture.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -23,8 +24,47 @@ using namespace hc::storage;
 class SearchTests : public QObject {
     Q_OBJECT
 private slots:
+    void koreanPatternRanges() {
+        using namespace hc::quickfind;
+        const QString Initials = QStringLiteral("ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ");
+        for (int Cho = 0; Cho < Initials.size(); ++Cho) {
+            QCOMPARE(ChoseongIndex(Initials[Cho]), Cho);
+            QRegularExpression Re("\\A" + ChoseongAtom(Cho) + "\\z"); QVERIFY(Re.isValid());
+            QVERIFY(Re.match(QString(Initials[Cho])).hasMatch());
+            for (int Offset = 0; Offset < 588; ++Offset) {
+                const QString Syllable(QChar(ushort(0xac00 + Cho * 588 + Offset)));
+                QVERIFY(Re.match(Syllable).hasMatch());
+                QVERIFY(Re.match(Syllable.normalized(QString::NormalizationForm_D)).hasMatch());
+            }
+            if (Cho) QVERIFY(!Re.match(QString(QChar(ushort(0xac00 + Cho * 588 - 1)))).hasMatch());
+            if (Cho < 18) QVERIFY(!Re.match(QString(QChar(ushort(0xac00 + (Cho + 1) * 588)))).hasMatch());
+        }
+    }
+    void koreanPatternCompositionAndLiteral() {
+        using namespace hc::quickfind;
+        const auto Matches = [](const QString& Query, const QString& Name, int Composition = -1) {
+            return QRegularExpression(KoreanSearchPattern(Query, "starts", Composition)).match(Name).hasMatch();
+        };
+        QVERIFY(Matches("ㅎㄱ", "한글.txt"));
+        QVERIFY(Matches("ㅎ글", QStringLiteral("한글.txt").normalized(QString::NormalizationForm_D)));
+        QVERIFY(!Matches("하", "한"));
+        QVERIFY(!Matches("하", QStringLiteral("한").normalized(QString::NormalizationForm_D)));
+        QVERIFY(Matches("하", "한", 0));
+        QVERIFY(Matches("한", "하나", 0)); QVERIFY(!Matches("한", "하나"));
+        QVERIFY(Matches("닭", "달기", 0));
+        QVERIFY(Matches("a.[ㅎ]", "a.[한]")); QVERIFY(!Matches("a.[ㅎ]", "ax한"));
+        QVERIFY(!QRegularExpression(KoreanSearchPattern("ㅎㄱ", "ends")).match("보고서_한글.txt").hasMatch());
+        QVERIFY(QRegularExpression(KoreanSearchPattern("ㅎㄱ", "ends")).match("보고서_한글").hasMatch());
+    }
+private slots:
     void everythingDisplayIntervalSettings() {
         using hc::quickfind::Settings;
+        QVERIFY(Settings::FromJson({}).everythingKorean_);
+        QVERIFY(!Settings::FromJson({{"everythingKorean", false}}).everythingKorean_);
+        QVERIFY(hc::quickfind::Matches("한글.txt", "ㅎㄱ", "korean:starts"));
+        QVERIFY(!hc::quickfind::Matches("한글.txt", "ㅎㄱ", "starts"));
+        QVERIFY(hc::quickfind::Matches("하나.txt", "한", "korean:starts:0"));
+        QVERIFY(!hc::quickfind::Matches("하나.txt", "한", "korean:starts"));
         QCOMPARE(Settings::FromJson({}).everythingDisplayIntervalMs_, 500);
         for (const auto Value : {QJsonValue(0), QJsonValue(-1), QJsonValue(49), QJsonValue(5001), QJsonValue(500.5), QJsonValue("1000"), QJsonValue(true)})
             QCOMPARE(Settings::FromJson({{"everythingDisplayIntervalMs", Value}}).everythingDisplayIntervalMs_, 500);
@@ -36,7 +76,7 @@ private slots:
     }
     void everythingStreamAllResultsAndCancellation() {
         QTemporaryDir Dir; QVERIFY(Dir.isValid()); QJsonArray Paths;
-        for (int I = 0; I < 4101; ++I) {
+        for (int I = 0; I < 10001; ++I) {
             const auto Path = Dir.filePath(QStringLiteral("검색-%1.txt").arg(I));
             QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("test"); Paths.append(Path);
         }
@@ -49,10 +89,10 @@ private slots:
         Session.append_ = [&](auto Entries) { ++Calls; for (const auto& Entry : Entries) { QVERIFY(Entry.id_.revision_); QVERIFY(Entry.hints_.contains("filesystemPath")); Seen.insert(Entry.locator_.root_); } };
         Session.status_ = [&](const QString& Text) { Status = Text; };
         Session.Start("검색", "contains", 5000, QCoreApplication::applicationFilePath());
-        QTRY_VERIFY_WITH_TIMEOUT(!Seen.empty(), 5000); QVERIFY(Seen.size() < 4101);
+        QTRY_VERIFY_WITH_TIMEOUT(!Seen.empty(), 5000); QVERIFY(Seen.size() < 10001);
         Session.SetDisplayInterval(50);
         QTRY_VERIFY_WITH_TIMEOUT(!Session.Running(), 30000);
-        QCOMPARE(Seen.size(), size_t(4101)); QVERIFY(Calls > 1); QVERIFY(!Status.contains("부분"));
+        QCOMPARE(Seen.size(), size_t(10001)); QVERIFY(Calls > 1); QVERIFY(!Status.contains("부분"));
         hc::search::EverythingSession Cancelled(nullptr, MakeNativeReadProvider(LocatorKind::Local), MakeNativeReadProvider(LocatorKind::Smb));
         int Appended = 0; Cancelled.append_ = [&](auto Entries) { Appended += int(Entries.size()); };
         Cancelled.Start("검색", "starts", 50, QCoreApplication::applicationFilePath());

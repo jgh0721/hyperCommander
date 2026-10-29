@@ -1738,6 +1738,19 @@ private slots:
             if (hc::workspace::SelectionKey(*Entry->storageEntry_) == AnchorKey) QCOMPARE(Index.data(Qt::ForegroundRole), OriginalColor);
         }
         QCOMPARE(Actual.size(), 302); QCOMPARE(Same, 2); QVERIFY(!main_->findChild<QWidget*>("hc.quickFind.matches"));
+        auto* Mode = Find->findChild<QToolButton*>("hc.quickFind.mode"); QVERIFY(Mode); QVERIFY(Mode->isVisible());
+        QTest::keyClick(Find, Qt::Key_S, Qt::ControlModifier); QVERIFY(Find->text().isEmpty());
+        Find->setText("hc-everything-same"); QTRY_COMPARE(View->BaseView()->getRowCount(), 302);
+        QTest::mouseClick(Mode, Qt::LeftButton); QTRY_COMPARE(View->BaseView()->getRowCount(), 2);
+        QCOMPARE(Model->rowCount(), 302); QCOMPARE(Model->EverythingQuery(), QString("hc-everything"));
+        QCOMPARE(AppendResets.size(), 0); QCOMPARE(Find->text(), QString("hc-everything-same"));
+        emit panels_.back()->sig_NotifyPanelActivated();
+        emit Panel->sig_NotifyPanelActivated();
+        QCOMPARE(Find->text(), QString("hc-everything-same")); QTRY_COMPARE(View->BaseView()->getRowCount(), 2);
+        if (!Capture.isEmpty()) QVERIFY(Find->grab().save(QDir(Capture).filePath("everything-within-filter.png")));
+        QTest::keyClick(Find, Qt::Key_S, Qt::ControlModifier); QTRY_COMPARE(View->BaseView()->getRowCount(), 302);
+        QTest::keyClick(Find, Qt::Key_Escape); QCOMPARE(Find->text(), QString("hc-everything"));
+        QVERIFY(Model->IsSearchResults()); QCOMPARE(AppendResets.size(), 0);
         // A source in another folder must never resolve against the origin.
         const auto Wanted = QDir::toNativeSeparators(Dir.filePath("b/hc-everything-same.txt"));
         QModelIndex SourceIndex;
@@ -1770,6 +1783,14 @@ private slots:
         Find->setText("hc-everything"); QTRY_VERIFY(Model->IsSearchResults());
         QTRY_VERIFY(Progress->isVisible());
         QCOMPARE(Settings.CommittedObject()["general"].toObject()["quickFind"].toObject()["scope"].toString(), QString("panel"));
+        Find->clear();
+        QInputMethodEvent Initial(QStringLiteral("ㅎ"), {}); QApplication::sendEvent(Find, &Initial);
+        QTRY_COMPARE(Model->EverythingQuery(), QStringLiteral("ㅎ")); QVERIFY(Find->text().isEmpty());
+        QInputMethodEvent Syllable(QStringLiteral("한"), {}); QApplication::sendEvent(Find, &Syllable);
+        QTRY_COMPARE(Model->EverythingQuery(), QStringLiteral("한"));
+        QCOMPARE(View->property("hc.quickFind.match").toString(), QString("korean:starts:0"));
+        QInputMethodEvent Commit; Commit.setCommitString(QStringLiteral("한")); QApplication::sendEvent(Find, &Commit);
+        QTRY_COMPARE(View->property("hc.quickFind.match").toString(), QString("korean:starts"));
         QTest::keyClick(Find, Qt::Key_Escape); QTRY_VERIFY(!Model->IsSearchResults() && !Model->IsLoading()); QTest::qWait(250);
         QCOMPARE(Model->rowCount(), 2);
         QVERIFY(!Progress->isVisible());

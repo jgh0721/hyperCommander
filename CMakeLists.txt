@@ -138,10 +138,15 @@ if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND HC_RHWP_APPROVED_INVENTORY_SHA256)
         target_compile_definitions(hc_document_open PRIVATE HC_RHWP_F4_RUNTIME=1)
     endif()
 endif()
-qt_add_executable(hc-search-index tools/searchIndexMain.cpp)
+qt_add_executable(hc-search-index tools/searchIndexMain.cpp externalLibs/Everything/sdk3/src/Everything3.c)
+target_compile_definitions(hc-search-index PRIVATE EVERYTHING3_LIB)
+target_link_libraries(hc-search-index PRIVATE ole32)
 target_link_libraries(hc-search-index PRIVATE Qt6::Core "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/lib/Everything64.lib")
 target_compile_options(hc-search-index PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_custom_command(TARGET hc-search-index POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:hc-search-index>/Licenses/EverythingSDK3"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/externalLibs/Everything/sdk3/License.txt" "$<TARGET_FILE_DIR:hc-search-index>/Licenses/EverythingSDK3/License.txt"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll" "$<TARGET_FILE_DIR:hc-search-index>"
     VERBATIM

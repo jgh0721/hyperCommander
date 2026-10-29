@@ -47,7 +47,7 @@ public:
         });
         connect(process_, &QProcess::finished, this, [this](int Code, QProcess::ExitStatus Exit) {
             receive();
-            if (!cancelled_ && (Code || Exit != QProcess::NormalExit || !ended_ || !buffer_.isEmpty()))
+            if (!cancelled_ && failure_.isEmpty() && (Code || Exit != QProcess::NormalExit || !ended_ || !buffer_.isEmpty()))
                 fail(tr("Everything 검색 응답이 완료되지 않았습니다. Everything 실행 상태를 확인하십시오."));
             inputDone_ = true; pump(); schedule(); updateStatus();
         });
@@ -119,6 +119,8 @@ private:
                     if (!seen_.contains(Path)) { seen_.insert(Path); pending_.push_back(Path); pendingBytes_ += Path.size() * 2; }
                 }
                 acknowledgements_.push_back(sequence_ - 1);
+            } else if (Type == "error" && snapshot_) {
+                fail(tr("결과 수신 중 Everything 목록이 변경되었거나 페이지를 읽지 못했습니다. 검색을 다시 실행하십시오.")); return;
             } else if (Type == "end" && snapshot_) {
                 bool Ok = false; const auto Count = Value["emitted"].toString().toULongLong(&Ok);
                 if (!Ok || Count != received_ || Count != total_ || !Value["complete"].toBool()) { fail(tr("검색 결과의 종료 개수가 일치하지 않습니다.")); return; }
