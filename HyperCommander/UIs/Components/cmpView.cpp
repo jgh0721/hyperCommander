@@ -19,12 +19,17 @@
 #include "qtitanColumnAdapter.hpp"
 #include "qtViewerHost.hpp"
 #include "Modules/mdlFileModel.hpp"
+#include "UIs/cmpPanel.hpp"
 
 #include <QtitanGrid.h>
 #include <QtnGridViewGraphics.h>
 #include <QtnGridEditors.h>
 #include <QScopeGuard>
 #include <QDrag>
+#include <QDragEnterEvent>
+#include <QContextMenuEvent>
+#include <QWidgetAction>
+#include <fmstyle/Glyphs.h>
 #include <QMimeData>
 #include <QUrl>
 #include <limits>
@@ -40,6 +45,15 @@
 namespace {
 using namespace fm::filelist;
 using namespace fm::filelist::detail;
+QString FilePanelDragToken(QWidget* View)
+{
+    QObject* Owner = View;
+    for (auto* Parent = View; Parent; Parent = Parent->parentWidget())
+        if (auto* Panel = qobject_cast<CmpPanel*>(Parent)) { Owner = Panel; break; }
+    auto Token = Owner->property("hc.filePanelDragToken").toString();
+    if (Token.isEmpty()) { Token = QUuid::createUuid().toString(QUuid::WithoutBraces); Owner->setProperty("hc.filePanelDragToken", Token); }
+    return Token;
+}
 bool ProductHasIcon(const QVariant& Value)
 {
     return Value.metaType() == QMetaType::fromType<QPixmap>() ? !Value.value<QPixmap>().isNull() : !Value.value<QIcon>().isNull();
@@ -256,6 +270,8 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
 
     grid_->installEventFilter( this );
     grid_->viewport()->installEventFilter(this);
+    grid_->setAcceptDrops(true);
+    grid_->viewport()->setAcceptDrops(true);
     viewClickTimer_.setSingleShot(true);
     connect(&viewClickTimer_, &QTimer::timeout, this, [this] {
         const QModelIndex Index = mouseRenameIndex_; mouseRenameIndex_ = QPersistentModelIndex{};
@@ -416,6 +432,9 @@ void CGridView::ensureThumbnails()
     auto* Tiles = thumbnails_->listView(); Tiles->setItemDelegate(new ProductThumbnailDelegate(Tiles->itemDelegate(), this, Tiles));
     thumbnails_->listView()->installEventFilter(this);
     thumbnails_->listView()->viewport()->installEventFilter(this);
+    thumbnails_->listView()->setDragEnabled(false);
+    thumbnails_->listView()->setAcceptDrops(true);
+    thumbnails_->listView()->viewport()->setAcceptDrops(true);
     presentationStack_->addWidget(thumbnails_);
     connect(thumbnails_, &fm::filelist::ThumbnailView::paneActivated, this, &CViewT::sig_NotifyViewActivated);
     connect(thumbnails_, &fm::filelist::ThumbnailView::cursorRowChanged, this, [this](int Row) {
@@ -448,6 +467,7 @@ void CGridView::ensureThumbnails()
     });
     thumbnails_->listView()->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(thumbnails_->listView(), &QWidget::customContextMenuRequested, this, [this](const QPoint& Point) {
+        if (suppressMouseContextMenu_) return;
         const auto Tile = thumbnails_->listView()->indexAt(Point);
         if (Tile.isValid()) thumbnails_->setCursorRow(Tile.row());
         ShowShellMenu(Tile.isValid() ? thumbnailModel_->SourceIndex(Tile.row()) : QModelIndex{}, true);
@@ -1704,6 +1724,54 @@ QStringList CGridView::DragPaths(const QModelIndex& Index) const
     return ShellMenuPaths(Source, IsSourceSelected(Source));
 }
 
+QString CGridView::FileDropDirectory(const QModelIndex& Index, bool SameView) const
+{
+    const auto* Native = qobject_cast<CFSModel*>(model_);
+    if (!Native || Native->IsLoading() || IsEditing()) return {};
+    const auto Kind = Native->WorkspaceLocation().kind_;
+    if (!Native->IsSearchResults() && Kind != hc::storage::LocatorKind::Local && Kind != hc::storage::LocatorKind::Smb) return {};
+    auto Source = Index;
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+    if (Source.isValid()) {
+        if (Source.model() != model_) return {};
+        const auto Item = model_->GetFileInfo(Source);
+        if (Item && (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY))
+            return QDir::cleanPath(QDir::fromNativeSeparators(Native->GetFileFullPath(Source)));
+    }
+    // Search results have no background destination; same-view drops require a folder.
+    if (SameView || Native->IsSearchResults()) return {};
+    return QDir::cleanPath(QDir::fromNativeSeparators(Native->GetCurrentPathWithRoot()));
+}
+
+Qt::DropAction CGridView::ChooseFileDropAction(int Count, const QString& Destination, Qt::DropActions Allowed, const QPoint& Position)
+{
+    QMenu Menu(this); Menu.setObjectName("hc.fileDropMenu");
+    auto* Header = new QWidget(&Menu);
+    auto* Layout = new QVBoxLayout(Header); Layout->setContentsMargins(28, 8, 16, 8); Layout->setSpacing(4);
+    auto* CountLabel = new QLabel(tr("%1개 항목").arg(Count), Header);
+    auto* TargetLabel = new QLabel(Header); TargetLabel->setObjectName("hc.fileDropDestination");
+    const auto Target = QDir::toNativeSeparators(Destination);
+    // Bound long UNC paths without hiding their full value from hover/assistive tools.
+    const auto Available = screen() ? screen()->availableGeometry().width() : 800;
+    TargetLabel->setText(TargetLabel->fontMetrics().elidedText(tr("대상  %1").arg(Target), Qt::ElideMiddle, qMin(440, Available - 100)));
+    TargetLabel->setToolTip(Target); TargetLabel->setAccessibleName(tr("대상  %1").arg(Target));
+    auto Palette = TargetLabel->palette(); Palette.setColor(QPalette::WindowText, recordColors_[fm::style::Token::Fg3]); TargetLabel->setPalette(Palette);
+    Layout->addWidget(CountLabel); Layout->addWidget(TargetLabel);
+    auto* HeaderAction = new QWidgetAction(&Menu); HeaderAction->setDefaultWidget(Header); Menu.addAction(HeaderAction);
+    Menu.addSeparator();
+    const auto Add = [&](const QString& Text, fm::style::Glyph Glyph, Qt::DropAction Action) {
+        auto* Item = Menu.addAction(fm::style::themedGlyphIcon(Glyph, &Menu), Text);
+        Item->setData(int(Action)); Item->setEnabled(Allowed.testFlag(Action)); return Item;
+    };
+    auto* Copy = Add(tr("여기에 복사"), fm::style::Glyph::Copy, Qt::CopyAction);
+    Add(tr("여기로 이동"), fm::style::Glyph::Move, Qt::MoveAction);
+    Add(tr("여기에 바로 가기 만들기"), fm::style::Glyph::ReturnArrow, Qt::LinkAction);
+    Menu.addSeparator(); auto* Cancel = Menu.addAction(tr("취소")); Cancel->setData(int(Qt::IgnoreAction));
+    Menu.setDefaultAction(Copy); Menu.setActiveAction(Copy->isEnabled() ? Copy : Cancel);
+    const auto* Chosen = Menu.exec(Position);
+    return Chosen && Chosen->data().isValid() ? Qt::DropAction(Chosen->data().toInt()) : Qt::IgnoreAction;
+}
+
 QStringList CGridView::ShellMenuPaths(const QModelIndex& Index, bool UseSelection) const
 {
     const auto* Native = qobject_cast<CFSModel*>(model_);
@@ -1744,9 +1812,9 @@ bool CGridView::ShowShellMenu(const QModelIndex& Index, bool AtCursor)
     if (Paths.isEmpty()) return false;
     if (AtCursor && !Index.isValid()) Paths = {model_->GetCurrentPathWithRoot()};
     POINT Position{};
-    if (AtCursor) {
-        if (!GetCursorPos(&Position)) return false;
-    } else {
+    // Remote/input desktops can deny GetCursorPos even while the file panel
+    // receives mouse events. Keep the menu usable at the focused row instead.
+    if (!AtCursor || !GetCursorPos(&Position)) {
         auto* Viewport = grid_->viewport();
         QPoint Anchor(8, 8);
         if (IsThumbnailMode()) {
@@ -1785,6 +1853,7 @@ CFsModelT* CGridView::BaseModel() const
 
 void CGridView::oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args )
 {
+    if (suppressMouseContextMenu_ || rightPressActive_) { Args->setHandled(true); return; }
     const auto Info = Args->hitInfo();
     const auto Type = Info.info();
     if (Type == GridHitInfo::Column || Type == GridHitInfo::GroupRow || Type == GridHitInfo::GroupBranchButton) { showGroupingMenu(Args); return; }
@@ -1958,11 +2027,25 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
     }
     const bool GridViewport = Watched == grid_->viewport();
     const bool TileViewport = thumbnails_ && Watched == thumbnails_->listView()->viewport();
+    const bool FileSurface = GridViewport || TileViewport || Watched == grid_ || (thumbnails_ && Watched == thumbnails_->listView());
+    if (FileSurface && Event->type() == QEvent::ContextMenu) {
+        const auto* Context = static_cast<QContextMenuEvent*>(Event);
+        if (Context->reason() == QContextMenuEvent::Keyboard) suppressMouseContextMenu_ = false;
+        else if (suppressMouseContextMenu_ || rightPressActive_) { Event->accept(); return true; }
+    }
+    if (FileSurface && Event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(Event)->key() == Qt::Key_Escape && rightPressActive_) {
+        rightPressActive_ = false; suppressMouseContextMenu_ = true; dragPaths_.clear();
+    }
     if (GridViewport || TileViewport) {
         if (Event->type() == QEvent::MouseButtonPress) {
             dragPaths_.clear();
             const auto* Mouse = static_cast<QMouseEvent*>(Event);
-            if (Mouse->button() == Qt::LeftButton && !IsEditing()) {
+            dragButton_ = Mouse->button();
+            if (dragButton_ == Qt::RightButton) {
+                rightPressGlobalPosition_ = Mouse->globalPosition();
+                rightPressActive_ = true; suppressMouseContextMenu_ = false;
+            }
+            if ((dragButton_ == Qt::LeftButton || dragButton_ == Qt::RightButton) && !IsEditing()) {
                 dragPressPosition_ = Mouse->position().toPoint();
                 QModelIndex Index;
                 if (TileViewport) {
@@ -1976,15 +2059,24 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
             }
         } else if (Event->type() == QEvent::MouseButtonRelease || Event->type() == QEvent::MouseButtonDblClick) {
             dragPaths_.clear();
-        } else if (Event->type() == QEvent::MouseMove && !dragPaths_.isEmpty()) {
             const auto* Mouse = static_cast<QMouseEvent*>(Event);
-            if (!Mouse->buttons().testFlag(Qt::LeftButton)) dragPaths_.clear();
-            else if ((Mouse->position().toPoint() - dragPressPosition_).manhattanLength() >= QApplication::startDragDistance()) {
+            if (Mouse->button() == Qt::RightButton && rightPressActive_) {
+                suppressMouseContextMenu_ |= Mouse->globalPosition() != rightPressGlobalPosition_;
+                rightPressActive_ = false;
+            }
+        } else if (Event->type() == QEvent::MouseMove) {
+            const auto* Mouse = static_cast<QMouseEvent*>(Event);
+            if (rightPressActive_ && Mouse->buttons().testFlag(Qt::RightButton))
+                suppressMouseContextMenu_ |= Mouse->globalPosition() != rightPressGlobalPosition_;
+            if (!Mouse->buttons().testFlag(dragButton_)) dragPaths_.clear();
+            else if (!dragPaths_.isEmpty() && (Mouse->position().toPoint() - dragPressPosition_).manhattanLength() >= QApplication::startDragDistance()) {
                 const auto Paths = std::exchange(dragPaths_, {});
+                const auto Button = dragButton_;
+                suppressMouseContextMenu_ = true; rightPressActive_ = false;
                 plainLeftClick_ = false; resetRenameClicks();
                 // End the view's pressed state before entering the native OLE drag loop.
                 QMouseEvent Release(QEvent::MouseButtonRelease, Mouse->position(), Mouse->globalPosition(),
-                    Qt::LeftButton, Qt::NoButton, Mouse->modifiers());
+                    Button, Qt::NoButton, Mouse->modifiers());
                 QCoreApplication::sendEvent(Watched, &Release);
                 resetRenameClicks();
                 auto* Mime = new QMimeData;
@@ -1992,7 +2084,10 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
                 for (const auto& Path : Paths) Urls.append(QUrl::fromLocalFile(Path));
                 Mime->setUrls(Urls); // Qt's Windows platform exports these as CF_HDROP.
                 auto* Drag = new QDrag(this); Drag->setMimeData(Mime);
-                Drag->exec(Qt::CopyAction | Qt::MoveAction | Qt::LinkAction, Qt::CopyAction);
+                Mime->setData("application/x-hypercommander-drag-button", Button == Qt::RightButton ? "right" : "left");
+                Mime->setData("application/x-hypercommander-source-panel", FilePanelDragToken(this).toUtf8());
+                // Explorer must copy a left drag even on the same volume.
+                Drag->exec(Button == Qt::RightButton ? Qt::CopyAction | Qt::MoveAction | Qt::LinkAction : Qt::CopyAction, Qt::CopyAction);
                 Drag->deleteLater();
                 // The shell target performs a move; never remove source files here.
                 return true;
@@ -2068,10 +2163,66 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
             return true;
         }
     }
-    if ((Event->type() == QEvent::DragMove || Event->type() == QEvent::Drop) && (Watched == grid_ || Watched == grid_->viewport())) {
-        const auto* Drop = static_cast<QDropEvent*>(Event);
-        const auto Info = grid_->hitInfo(grid_->viewport()->mapFrom(static_cast<QWidget*>(Watched), Drop->position().toPoint())).info();
-        if (Info == Qtitan::GridHitInfo::GroupRow || Info == Qtitan::GridHitInfo::GroupBranchButton) { Event->ignore(); return true; }
+    if (FileSurface && Event->type() == QEvent::DragLeave) { rightDrop_ = false; Event->accept(); return true; }
+    if (FileSurface && (Event->type() == QEvent::DragEnter || Event->type() == QEvent::DragMove || Event->type() == QEvent::Drop)) {
+        auto* Drop = static_cast<QDropEvent*>(Event);
+        if (Event->type() == QEvent::DragEnter) rightDrop_ = false;
+        rightDrop_ |= Drop->buttons().testFlag(Qt::RightButton)
+            || Drop->mimeData()->data("application/x-hypercommander-drag-button") == "right";
+        if (rightDrop_) { suppressMouseContextMenu_ = true; rightPressActive_ = false; }
+        QStringList Paths;
+        for (const auto& Url : Drop->mimeData()->urls()) {
+            if (!Url.isLocalFile() || Url.toLocalFile().contains(QChar::Null) || !QDir::isAbsolutePath(Url.toLocalFile())) { Drop->ignore(); return true; }
+            Paths.append(QDir::cleanPath(QDir::fromNativeSeparators(Url.toLocalFile())));
+        }
+        Paths.removeDuplicates();
+        auto Allowed = Drop->possibleActions() & (Qt::CopyAction | Qt::MoveAction | Qt::LinkAction);
+        if (!rightDrop_) Allowed &= Qt::CopyAction;
+        const auto Reject = [&] {
+            Drop->setDropAction(Qt::IgnoreAction);
+            // Keep a valid payload's entry accepted so later DragMove events
+            // can reach folders, while reporting a forbidden cursor here.
+            if (Event->type() == QEvent::DragEnter && !Paths.isEmpty() && Allowed) Drop->accept();
+            else Drop->ignore();
+        };
+        QModelIndex Index;
+        if (TileViewport || (thumbnails_ && Watched == thumbnails_->listView())) {
+            const auto Point = thumbnails_->listView()->viewport()->mapFrom(static_cast<QWidget*>(Watched), Drop->position().toPoint());
+            const auto Tile = thumbnails_->listView()->indexAt(Point);
+            if (Tile.isValid()) Index = thumbnailModel_->SourceIndex(Tile.row());
+        } else {
+            const auto Point = grid_->viewport()->mapFrom(static_cast<QWidget*>(Watched), Drop->position().toPoint());
+            const auto Hit = grid_->hitInfo(Point);
+            if (Hit.info() == Qtitan::GridHitInfo::Cell) Index = Hit.modelIndex();
+            else if (Hit.info() != Qtitan::GridHitInfo::Rows) { Reject(); return true; }
+        }
+        const auto PanelFor = [](const QWidget* Widget) {
+            for (; Widget; Widget = Widget->parentWidget()) if (const auto* Panel = qobject_cast<const CmpPanel*>(Widget)) return Panel;
+            return static_cast<const CmpPanel*>(nullptr);
+        };
+        const auto* Source = qobject_cast<const CGridView*>(Drop->source());
+        const auto SourcePanel = Drop->mimeData()->data("application/x-hypercommander-source-panel");
+        const bool SamePanel = (!SourcePanel.isEmpty() && SourcePanel == FilePanelDragToken(this).toUtf8())
+            || (Source && (Source == this || (PanelFor(Source) && PanelFor(Source) == PanelFor(this))));
+        const auto Destination = FileDropDirectory(Index, SamePanel);
+        const bool Recursive = std::any_of(Paths.begin(), Paths.end(), [&](const auto& Path) {
+            return Destination.compare(Path, Qt::CaseInsensitive) == 0 || Destination.startsWith(Path + '/', Qt::CaseInsensitive);
+        });
+        if (Paths.isEmpty() || Destination.isEmpty() || Recursive || !Allowed) { Reject(); return true; }
+        auto Action = Allowed.testFlag(Qt::CopyAction) ? Qt::CopyAction : Allowed.testFlag(Qt::MoveAction) ? Qt::MoveAction : Qt::LinkAction;
+        if (Event->type() == QEvent::Drop) {
+            const bool Right = std::exchange(rightDrop_, false);
+            QPointer<CGridView> Alive(this);
+            if (Right) Action = ChooseFileDropAction(Paths.size(), Destination, Allowed, static_cast<QWidget*>(Watched)->mapToGlobal(Drop->position().toPoint()));
+            if (!Alive || Action == Qt::IgnoreAction) { Drop->ignore(); return true; }
+            auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+            if (!Bridge) { Drop->ignore(); return true; }
+            Bridge->DropFiles(Paths, Destination, Action);
+            // HC owns source removal in its asynchronous move job. The source
+            // application must not delete it again when the OLE loop returns.
+            if (Action == Qt::MoveAction) Action = Qt::TargetMoveAction;
+        }
+        Drop->setDropAction(Action); Drop->accept(); return true;
     }
     if (Watched == grid_->viewport() && (Event->type() == QEvent::Paint || Event->type() == QEvent::Resize)) {
         if (Event->type() == QEvent::Resize) startupPaints_.clear();

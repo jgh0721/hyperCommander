@@ -105,6 +105,8 @@ public:
     nsHC::TySpFileSource            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown, bool& IsSelected );
     void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
     QStringList DragPaths(const QModelIndex& Index) const;
+    QString FileDropDirectory(const QModelIndex& Index, bool SameView) const;
+    Qt::DropAction ChooseFileDropAction(int Count, const QString& Destination, Qt::DropActions Allowed, const QPoint& Position);
     QStringList ShellMenuPaths(const QModelIndex& Index = {}, bool UseSelection = true) const;
     bool ShowShellMenu(const QModelIndex& Index = {}, bool AtCursor = false);
 
@@ -264,6 +266,11 @@ private:
     QElapsedTimer                   lastNameClickTime_;
     QPoint                          dragPressPosition_;
     QStringList                     dragPaths_;
+    Qt::MouseButton                 dragButton_ = Qt::NoButton;
+    QPointF                         rightPressGlobalPosition_;
+    bool                            rightPressActive_ = false;
+    bool                            suppressMouseContextMenu_ = false;
+    bool                            rightDrop_ = false;
     QPoint                          renamePressPosition_;
     bool                            plainLeftClick_ = false;
     QTimer                          columnSortTimer_;

@@ -46,6 +46,7 @@ public:
     bool ReloadMenu();
     void RefreshFunctionBar();
     bool CancelClipboard();
+    void DropFiles(const QStringList& Paths, const QString& Destination, Qt::DropAction Action);
     bool HasFileClipboard() const { return clipboard_.has_value() || clipboardImporting_; }
     FileJobUi* FileJobs() const { return fileJobs_; }
     std::shared_ptr<hc::commands::EventHub> Events() const { return events_; }

@@ -44,6 +44,8 @@
 #include <fmwidgets/Button.h>
 #include "stdafx.h"
 #include <QDrag>
+#include <QDragEnterEvent>
+#include <QContextMenuEvent>
 #include "UniqueLibs/shellDriveSort.hpp"
 #include <QMimeData>
 #include <QClipboard>
@@ -162,6 +164,9 @@ public:
     ~NativeDragProbe() { KillTimer(nullptr, timer_); active_ = nullptr; }
     bool seen_ = false;
     QStringList paths_;
+    Qt::DropActions allowed_;
+    QByteArray button_;
+    QByteArray panel_;
 private:
     static void CALLBACK tick(HWND, UINT, UINT_PTR, DWORD)
     {
@@ -169,7 +174,10 @@ private:
         if (const auto* Drag = active_->owner_->findChild<QDrag*>()) {
             if (!active_->seen_) {
                 active_->seen_ = true;
+                active_->allowed_ = Drag->supportedActions();
+                active_->button_ = Drag->mimeData()->data("application/x-hypercommander-drag-button");
                 for (const auto& Url : Drag->mimeData()->urls()) active_->paths_.append(Url.toLocalFile());
+                active_->panel_ = Drag->mimeData()->data("application/x-hypercommander-source-panel");
             }
             QDrag::cancel();
             if (const auto Capture = GetCapture()) PostMessageW(Capture, WM_MOUSEMOVE, 0, 0);
@@ -293,6 +301,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "driveListOrderUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "fileDropUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "firstRunProductDefaultsUi"
@@ -4955,22 +4964,203 @@ private slots:
             }
         }
         QVERIFY(Press.x() >= 0);
-        QTest::mousePress(Grid->viewport(), Qt::LeftButton, Qt::NoModifier, Press);
-        NativeDragProbe Probe(View);
-        const QPoint Moved = Press + QPoint(QApplication::startDragDistance() + 5, 0);
-        QMouseEvent Move(QEvent::MouseMove, Moved, Grid->viewport()->mapToGlobal(Moved), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(Grid->viewport(), &Move);
-        // A synthetic press can make OLE cancel immediately on a headless desktop.
-        // The drag object still records the exact native payload until deleteLater.
-        if (!Probe.seen_) {
-            if (const auto* Drag = View->findChild<QDrag*>()) {
-                Probe.seen_ = true;
-                for (const auto& Url : Drag->mimeData()->urls()) Probe.paths_.append(Url.toLocalFile());
+        for (const auto Button : {Qt::LeftButton, Qt::RightButton}) {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            ShellMenuProbe MenuProbe;
+            NativeDragProbe Probe(View);
+            QTest::mousePress(Grid->viewport(), Button, Qt::NoModifier, Press);
+            const QPoint Moved = Press + QPoint(QApplication::startDragDistance() + 5, 0);
+            QMouseEvent Move(QEvent::MouseMove, Moved, Grid->viewport()->mapToGlobal(Moved), Qt::NoButton, Button, Qt::NoModifier);
+            // Qt's Windows pre-drag loop waits for a native mouse message on
+            // the focused/captured HWND before OLE starts. Synthetic QTest
+            // input supplies no such message; queue a release to cancel it.
+            if (const auto Focus = GetFocus()) PostMessageW(Focus, WM_MOUSEMOVE, 0, 0);
+            if (const auto Capture = GetCapture()) PostMessageW(Capture, WM_MOUSEMOVE, 0, 0);
+            QApplication::sendEvent(Grid->viewport(), &Move);
+            // Synthetic input may make OLE cancel immediately on a headless desktop.
+            if (!Probe.seen_) {
+                if (const auto* Drag = View->findChild<QDrag*>()) {
+                    Probe.seen_ = true; Probe.allowed_ = Drag->supportedActions();
+                    Probe.button_ = Drag->mimeData()->data("application/x-hypercommander-drag-button");
+                    Probe.panel_ = Drag->mimeData()->data("application/x-hypercommander-source-panel");
+                    for (const auto& Url : Drag->mimeData()->urls()) Probe.paths_.append(Url.toLocalFile());
+                }
             }
+            QVERIFY(Probe.seen_); Probe.paths_.sort(); QCOMPARE(Probe.paths_, Expected);
+            QCOMPARE(Probe.allowed_, Button == Qt::LeftButton ? Qt::DropActions(Qt::CopyAction) : Qt::CopyAction | Qt::MoveAction | Qt::LinkAction);
+            QCOMPARE(Probe.button_, Button == Qt::RightButton ? QByteArray("right") : QByteArray("left"));
+            QVERIFY(!Probe.panel_.isEmpty()); QCOMPARE(Probe.panel_, Panel->property("hc.filePanelDragToken").toString().toUtf8());
+            QTest::mouseRelease(Grid->viewport(), Button, Qt::NoModifier, Moved);
+            QContextMenuEvent Context(QContextMenuEvent::Mouse, Moved, Grid->viewport()->mapToGlobal(Moved));
+            QApplication::sendEvent(Grid->viewport(), &Context); QVERIFY(!MenuProbe.opened_);
         }
-        QVERIFY(Probe.seen_); Probe.paths_.sort(); QCOMPARE(Probe.paths_, Expected);
         QVERIFY(QFile::exists(Expected.front())); QVERIFY(QFile::exists(Expected.back()));
         QVERIFY(!View->IsEditing());
+    }
+
+    void fileDropUi()
+    {
+        using namespace hc::operations;
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Source, Destination; QVERIFY(Source.isValid() && Destination.isValid());
+        QVERIFY(QDir().mkpath(Destination.filePath("Archive")));
+        QVERIFY(QDir().mkpath(Source.filePath("source-folder")));
+        { QFile File(Destination.filePath("marker.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("keep"); }
+        auto* Panel = panels_.front();
+        Panel->setProperty("hc.filePanelDragToken", QUuid::createUuid().toString(QUuid::WithoutBraces));
+        hc::workspace::TabState Tab; Tab.id_ = "file-drop"; Tab.location_ = {hc::storage::LocatorKind::Local, Destination.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        auto* Model = model(Panel); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 3);
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View);
+        auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile()));
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge);
+        auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        const auto IndexFor = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        const auto Idle = [&] { for (const auto& Job : Scheduler.Snapshots()) if (!IsTerminal(Job.state_)) return false; return true; };
+        QVERIFY(Idle());
+        QCOMPARE(View->FileDropDirectory(IndexFor("Archive"), true), Destination.filePath("Archive"));
+        QCOMPARE(View->FileDropDirectory(IndexFor("Archive"), false), Destination.filePath("Archive"));
+        // A file hit in the source panel is forbidden; only another panel's
+        // file hit may resolve to its current directory.
+        QVERIFY(View->FileDropDirectory(IndexFor("marker.txt"), true).isEmpty());
+        QVERIFY(View->FileDropDirectory({}, true).isEmpty());
+        QCOMPARE(View->FileDropDirectory(IndexFor("marker.txt"), false), Destination.path());
+        QCOMPARE(View->FileDropDirectory({}, false), Destination.path());
+        QCOMPARE(View->FileDropDirectory(IndexFor(".."), true), QFileInfo(Destination.path()).absolutePath());
+        int Serial = 0;
+        for (const auto& Mode : {"one-line", "two-line", "thumbnails"}) {
+            QVERIFY(View->SetListMode(Mode)); QTest::qWait(150);
+            QWidget* Surface = Grid->viewport();
+            QListView* Tiles = nullptr;
+            if (View->IsThumbnailMode()) { Tiles = View->findChild<QListView*>("hc.thumbnailTiles"); QVERIFY(Tiles); Surface = Tiles->viewport(); }
+            const auto PointFor = [&](const QString& Name) {
+                if (Tiles) {
+                    for (int Row = 0; Row < Tiles->model()->rowCount(); ++Row) {
+                        const auto Index = Tiles->model()->index(Row, 0);
+                        if (Index.data().toString() == Name) return Tiles->visualRect(Index).center();
+                    }
+                } else for (const auto& Hit : Grid->hitInfoAll()) {
+                    if (Hit.info() != Qtitan::GridHitInfo::Cell || Hit.modelIndex().column() != 0) continue;
+                    auto Index = Hit.modelIndex();
+                    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                    if (Model->GetName(Index) == Name) return Hit.rect().center();
+                }
+                return QPoint(-1, -1);
+            };
+            // Use the same panel identity exported by native HC drags, including
+            // cases where the Windows bridge supplies no QObject source.
+            QMimeData Internal; Internal.setUrls({QUrl::fromLocalFile(Source.filePath("source-folder"))});
+            Internal.setData("application/x-hypercommander-source-panel", Panel->property("hc.filePanelDragToken").toString().toUtf8());
+            QTRY_VERIFY(PointFor("marker.txt").x() >= 0);
+            const auto FilePoint = PointFor("marker.txt");
+            QDragEnterEvent FileEnter(FilePoint, Qt::CopyAction, &Internal, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(Surface, &FileEnter); QCOMPARE(FileEnter.dropAction(), Qt::IgnoreAction);
+            QDragMoveEvent FileMove(FilePoint, Qt::CopyAction, &Internal, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(Surface, &FileMove); QVERIFY(!FileMove.isAccepted());
+            const auto BeforeRejected = Scheduler.Snapshots().size();
+            QDropEvent FileDrop(FilePoint, Qt::CopyAction, &Internal, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(Surface, &FileDrop); QVERIFY(!FileDrop.isAccepted()); QCOMPARE(Scheduler.Snapshots().size(), BeforeRejected);
+            const auto FolderPoint = PointFor("Archive"); QVERIFY(FolderPoint.x() >= 0);
+            QDragEnterEvent FolderEnter(FolderPoint, Qt::CopyAction, &Internal, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(Surface, &FolderEnter); QCOMPARE(FolderEnter.dropAction(), Qt::CopyAction);
+            QDragMoveEvent FolderMove(FolderPoint, Qt::CopyAction, &Internal, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(Surface, &FolderMove); QVERIFY(FolderMove.isAccepted());
+            QDragLeaveEvent Leave; QApplication::sendEvent(Surface, &Leave);
+            Internal.setData("application/x-hypercommander-source-panel", QUuid::createUuid().toByteArray());
+            QDragEnterEvent OtherPanelFile(FilePoint, Qt::CopyAction, &Internal, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(Surface, &OtherPanelFile); QCOMPARE(OtherPanelFile.dropAction(), Qt::CopyAction);
+            QApplication::sendEvent(Surface, &Leave);
+            for (const bool Folder : {true, false}) for (const auto Action : {Qt::CopyAction, Qt::MoveAction, Qt::LinkAction, Qt::IgnoreAction}) {
+                const auto Name = QString("drop-%1.txt").arg(++Serial);
+                const auto Path = Source.filePath(Name);
+                { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Name.toUtf8()); }
+                const auto Target = Folder ? Destination.filePath("Archive") : Destination.path();
+                const auto TargetName = Folder ? "Archive" : "marker.txt";
+                if (Tiles) {
+                    for (int Row = 0; Row < Tiles->model()->rowCount(); ++Row) if (Tiles->model()->index(Row, 0).data().toString() == TargetName) Tiles->scrollTo(Tiles->model()->index(Row, 0));
+                } else {
+                    for (int Row = 0; Row < View->BaseView()->getRowCount(); ++Row) {
+                        const auto Visible = View->BaseView()->getRow(Row).modelIndex(0); auto Index = Visible;
+                        while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                        if (Index.isValid() && Model->GetName(Index) == TargetName) { View->BaseView()->scrollToIndex(Visible, false); break; }
+                    }
+                }
+                QTRY_VERIFY_WITH_TIMEOUT(PointFor(TargetName).x() >= 0, 5000);
+                const auto Point = PointFor(TargetName);
+                QMimeData Mime; Mime.setUrls({QUrl::fromLocalFile(Path)});
+                const auto Button = Action == Qt::CopyAction ? Qt::LeftButton : Qt::RightButton;
+                const auto Before = Scheduler.Snapshots().size();
+                QDragEnterEvent Enter(Point, Qt::CopyAction | Qt::MoveAction | Qt::LinkAction, &Mime, Button, Qt::NoModifier);
+                QApplication::sendEvent(Surface, &Enter); QVERIFY(Enter.isAccepted()); QCOMPARE(Enter.dropAction(), Qt::CopyAction);
+                bool MenuSeen = false, HeaderMatches = false, HeaderCountMatches = false;
+                if (Button == Qt::RightButton) QTimer::singleShot(0, View, [&] {
+                    auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                    if (!Menu) return;
+                    MenuSeen = Menu->objectName() == "hc.fileDropMenu";
+                    const auto* Label = Menu->findChild<QLabel*>("hc.fileDropDestination");
+                    HeaderMatches = Label && Label->toolTip() == QDir::toNativeSeparators(Target);
+                    for (const auto* Text : Menu->findChildren<QLabel*>()) HeaderCountMatches |= Text->text() == QStringLiteral("1개 항목");
+                    if (Serial == 2) Menu->grab().save(QDir(QCoreApplication::applicationDirPath()).filePath("file-drop-menu.png"));
+                    for (auto* Item : Menu->actions()) if (Item->data().isValid() && Item->data().toInt() == int(Action)) {
+                        Menu->setActiveAction(Item); QTest::keyClick(Menu, Qt::Key_Return); return;
+                    }
+                    Menu->close();
+                });
+                // Windows reports no pressed buttons in Drop after the release.
+                QDropEvent Drop(Point, Qt::CopyAction | Qt::MoveAction | Qt::LinkAction, &Mime, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(Surface, &Drop);
+                if (Button == Qt::RightButton) { QVERIFY(MenuSeen); QVERIFY(HeaderMatches); QVERIFY(HeaderCountMatches); }
+                if (Action == Qt::IgnoreAction) {
+                    QVERIFY(!Drop.isAccepted()); QCOMPARE(Scheduler.Snapshots().size(), Before); QVERIFY(QFile::exists(Path));
+                } else {
+                    QVERIFY(Drop.isAccepted());
+                    QCOMPARE(Drop.dropAction(), Action == Qt::MoveAction ? Qt::TargetMoveAction : Action);
+                    const auto Output = QDir(Target).filePath(Name + (Action == Qt::LinkAction ? ".lnk" : ""));
+                    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(Output), 15000); QTRY_VERIFY_WITH_TIMEOUT(Idle(), 15000);
+                    QCOMPARE(Scheduler.Snapshots().size(), Before + 1);
+                    if (Action == Qt::LinkAction) QCOMPARE(QDir::fromNativeSeparators(QFileInfo(Output).symLinkTarget()), Path);
+                    else { QFile File(Output); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), Name.toUtf8()); }
+                    QCOMPARE(QFile::exists(Path), Action != Qt::MoveAction);
+                }
+                QTRY_VERIFY(!Model->IsLoading());
+            }
+        }
+        // Folder shortcuts and duplicate names must leave existing output intact.
+        Bridge->DropFiles({Source.filePath("source-folder")}, Destination.path(), Qt::LinkAction);
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(Destination.filePath("source-folder.lnk")) && Idle(), 15000);
+        const auto FirstLinkHash = [&] { QFile File(Destination.filePath("source-folder.lnk")); if (!File.open(QIODevice::ReadOnly)) return QByteArray{}; return QCryptographicHash::hash(File.readAll(), QCryptographicHash::Sha256); }();
+        Bridge->DropFiles({Source.filePath("source-folder")}, Destination.path(), Qt::LinkAction);
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(Destination.filePath("source-folder (2).lnk")) && Idle(), 15000);
+        { QFile File(Destination.filePath("source-folder.lnk")); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(QCryptographicHash::hash(File.readAll(), QCryptographicHash::Sha256), FirstLinkHash); }
+        QCOMPARE(QDir::fromNativeSeparators(QFileInfo(Destination.filePath("source-folder.lnk")).symLinkTarget()), Source.filePath("source-folder"));
+        QVERIFY(View->SetListMode("one-line")); QTest::qWait(150);
+        QPoint Press(-1, -1);
+        for (const auto& Hit : Grid->hitInfoAll()) if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.modelIndex().data().toString() == "marker.txt") { Press = Hit.rect().center(); break; }
+        QVERIFY(Press.x() >= 0);
+        QTRY_VERIFY(!Model->IsLoading()); Panel->sig_NotifyPanelActivated(); Grid->setFocus(); QCoreApplication::processEvents();
+        for (const int Gesture : {0, 1, 2}) {
+            ShellMenuProbe Probe;
+            const auto Global = Grid->viewport()->mapToGlobal(Press);
+            QMouseEvent Down(QEvent::MouseButtonPress, Press, Global, Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+            QApplication::sendEvent(Grid->viewport(), &Down);
+            if (Gesture == 1) {
+                const auto Moved = Press + QPoint(1, 0);
+                QMouseEvent Move(QEvent::MouseMove, Moved, Grid->viewport()->mapToGlobal(Moved), Qt::NoButton, Qt::RightButton, Qt::NoModifier);
+                QApplication::sendEvent(Grid->viewport(), &Move);
+                // Returning to the starting point must not restore click eligibility.
+            } else if (Gesture == 2) QTest::keyClick(Grid, Qt::Key_Escape);
+            QMouseEvent Up(QEvent::MouseButtonRelease, Press, Global, Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(Grid->viewport(), &Up);
+            QContextMenuEvent Context(QContextMenuEvent::Mouse, Press, Grid->viewport()->mapToGlobal(Press));
+            QApplication::sendEvent(Grid->viewport(), &Context);
+            if (Gesture == 0 && !Probe.opened_) qInfo() << "Stationary context diagnostics:" << Model->IsLoading() << View->IsEditing() << View->ShellMenuPaths(IndexFor("marker.txt"), false) << View->window()->objectName();
+            QCOMPARE(Probe.opened_, Gesture == 0);
+        }
     }
 
     void shellMenuUi()

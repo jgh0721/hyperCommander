@@ -26,6 +26,7 @@
 #include <QClipboard>
 #include <QMimeData>
 #include <QFutureWatcher>
+#include <QTemporaryDir>
 #include <QCryptographicHash>
 #include <QStatusBar>
 #include <QHBoxLayout>
@@ -75,6 +76,75 @@ using namespace hc::storage;
 
 namespace
 {
+    Result<hc::operations::FileOperationRequest> NativeFileRequest(const QList<QUrl>& Urls, bool Move, OperationContext Context)
+    {
+        hc::operations::FileOperationRequest Request;
+        Request.operation_ = Move ? hc::operations::FileOperation::Move : hc::operations::FileOperation::Copy;
+        std::set<std::string> Seen;
+        std::map<LocatorKind, std::shared_ptr<IStorageProvider>> Readers;
+        for (const auto& Url : Urls) {
+            if (Context.stopToken_.stop_requested()) return Error{ErrorCategory::Cancelled, "file-import-cancelled"};
+            if (!Url.isLocalFile()) return Error{ErrorCategory::InvalidRequest, "absolute-source-required"};
+            const auto Path = QDir::toNativeSeparators(QDir::cleanPath(Url.toLocalFile()));
+            if (!QDir::isAbsolutePath(Path) || Path.contains(QChar::Null)) return Error{ErrorCategory::InvalidRequest, "absolute-source-required"};
+            Locator Location{Path.startsWith("\\\\") && !Path.startsWith("\\\\?\\") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
+            if (Path.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive)) Location.kind_ = LocatorKind::Smb;
+            if (!Seen.insert(Path.toCaseFolded().toStdString()).second) continue;
+            auto& Reader = Readers[Location.kind_];
+            if (!Reader) Reader = MakeNativeReadProvider(Location.kind_);
+            auto Entry = Reader->Resolve(Location, Context).get();
+            if (!Entry.HasValue()) return Entry.Failure();
+            Request.sources_.push_back({std::move(Entry.Value()), Reader, MakeNativeWritableStorage(Location.kind_, Reader)});
+        }
+        if (Request.sources_.empty()) return Error{ErrorCategory::InvalidRequest, "file-selection-empty"};
+        return Request;
+    }
+
+    class ShortcutDropTask final : public hc::operations::IJobTask
+    {
+    public:
+        ShortcutDropTask(QStringList Paths, QString Destination) : paths_(std::move(Paths)), destination_(std::move(Destination)) {}
+        hc::operations::JobStep Advance(hc::operations::JobStepContext Context) override
+        {
+            using namespace hc::operations;
+            JobStep Step;
+            const auto Fail = [&](const QString& Message) {
+                Step.next_ = JobState::Failed; Step.error_ = Error{ErrorCategory::Unavailable, Message.toStdString()}; return Step;
+            };
+            if (Context.operation_.stopToken_.stop_requested()) { Step.next_ = JobState::Cancelled; return Step; }
+            if (next_ >= paths_.size()) { Step.next_ = JobState::Completed; return Step; }
+            const auto Path = paths_[next_];
+            const auto Name = QFileInfo(Path).fileName();
+            if (!QDir::isAbsolutePath(Path) || Path.contains(QChar::Null) || Name.isEmpty()) return Fail(QObject::tr("바로 가기 원본 경로가 올바르지 않습니다: %1").arg(Path));
+            // Publish a complete .lnk with a non-replacing rename. Existing
+            // shortcuts and files remain untouched, including concurrent creates.
+            QTemporaryDir Staging(QDir(destination_).filePath(".hc-shortcuts-XXXXXX"));
+            if (!Staging.isValid()) return Fail(QObject::tr("바로 가기를 만들 폴더에 쓸 수 없습니다: %1").arg(destination_));
+            QFile Source(Path);
+            const auto Temporary = Staging.filePath("shortcut.lnk");
+            if (!Source.link(Temporary)) return Fail(QObject::tr("바로 가기를 만들 수 없습니다: %1\n%2").arg(Path, Source.errorString()));
+            QFile Shortcut(Temporary);
+            bool Created = false;
+            for (int Suffix = 1; Suffix <= 10000; ++Suffix) {
+                const auto Target = QDir(destination_).filePath(Name + (Suffix == 1 ? QString{} : QString(" (%1)").arg(Suffix)) + ".lnk");
+                if (Shortcut.rename(Target)) { Created = true; break; }
+                const QFileInfo Existing(Target);
+                if (!Existing.exists() && !Existing.isSymbolicLink()) return Fail(QObject::tr("바로 가기를 저장할 수 없습니다: %1\n%2").arg(Target, Shortcut.errorString()));
+            }
+            if (!Created) return Fail(QObject::tr("사용 가능한 바로 가기 이름을 찾을 수 없습니다: %1").arg(Name));
+            ++next_;
+            Step.item_ = ItemOutcome{Path.toStdString(), ItemOutcome::Status::Completed, {}, true, false};
+            JobProgress Progress; Progress.currentItem_ = Path.toStdString(); Progress.source_ = Path.toStdString();
+            Progress.destination_ = destination_.toStdString(); Progress.itemsDone_ = next_; Progress.plannedItems_ = paths_.size(); Step.progress_ = std::move(Progress);
+            return Step;
+        }
+        std::vector<Error> Finalize(hc::operations::JobState) override { return {}; }
+    private:
+        QStringList paths_;
+        QString destination_;
+        qsizetype next_ = 0;
+    };
+
     QByteArray NativeClipboardToken(const QMimeData* Mime)
     {
         if (!Mime || !Mime->hasUrls()) return {};
@@ -1982,25 +2052,51 @@ void CommandUiBridge::updateClipboard()
     // Resolve the native clipboard's immutable URL list away from the GUI thread.
     // A generation and stop token prevent a replaced/cancelled import from returning.
     Watcher->setFuture(QtConcurrent::run([Urls, Cut, Context]() -> ClipboardResult {
-        hc::operations::FileOperationRequest Request;
-        Request.operation_ = Cut ? hc::operations::FileOperation::Move : hc::operations::FileOperation::Copy;
-        std::set<std::string> Seen;
-        std::map<LocatorKind, std::shared_ptr<IStorageProvider>> Readers;
-        for (const auto& Url : Urls) {
-            if (Context.stopToken_.stop_requested()) return Error{ErrorCategory::Cancelled, "clipboard-import-cancelled"};
-            const auto Path = QDir::toNativeSeparators(QDir::cleanPath(Url.toLocalFile()));
-            if (!QDir::isAbsolutePath(Path) || Path.contains(QChar::Null)) return Error{ErrorCategory::InvalidRequest, "absolute-source-required"};
-            Locator Location{Path.startsWith("\\\\") && !Path.startsWith("\\\\?\\") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
-            if (Path.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive)) Location.kind_ = LocatorKind::Smb;
-            if (!Seen.insert(Path.toCaseFolded().toStdString()).second) continue;
-            auto& Reader = Readers[Location.kind_];
-            if (!Reader) Reader = MakeNativeReadProvider(Location.kind_);
-            auto Entry = Reader->Resolve(Location, Context).get();
-            if (!Entry.HasValue()) return Entry.Failure();
-            Request.sources_.push_back({std::move(Entry.Value()), Reader, MakeNativeWritableStorage(Location.kind_, Reader)});
-        }
-        return Request;
+        return NativeFileRequest(Urls, Cut, Context);
     }));
+}
+
+void CommandUiBridge::DropFiles(const QStringList& Paths, const QString& Destination, Qt::DropAction Action)
+{
+    using namespace hc::operations;
+    if (Paths.isEmpty() || Destination.contains(QChar::Null) || !QDir::isAbsolutePath(Destination)
+        || (Action != Qt::CopyAction && Action != Qt::MoveAction && Action != Qt::LinkAction)) return;
+    const auto Target = QDir::toNativeSeparators(QDir::cleanPath(Destination));
+    const auto Kind = Target.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive) || (Target.startsWith("\\\\") && !Target.startsWith("\\\\?\\"))
+        ? LocatorKind::Smb : LocatorKind::Local;
+    const Locator At{Kind, Target.toStdString()};
+    if (Action == Qt::LinkAction) {
+        PreparedJob Job; Job.request_.maxRetries_ = 0; Job.request_.resourceLanes_ = {FileOperationLane(At)};
+        Job.request_.metadata_.source_ = Paths.front().toStdString(); Job.request_.metadata_.destination_ = At.root_;
+        Job.task_ = std::make_unique<ShortcutDropTask>(Paths, Target);
+        auto Started = fileJobs_->Submit(std::move(Job), tr("바로 가기 만들기"));
+        if (Started.HasValue()) affectedLocations_[Started.Value().id_] = {At};
+        else hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), QString::fromStdString(Started.Failure().code_));
+        return;
+    }
+    const auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
+    QList<QUrl> Urls; for (const auto& Path : Paths) Urls.append(QUrl::fromLocalFile(Path));
+    using ImportResult = Result<FileOperationRequest>;
+    auto* Watcher = new QFutureWatcher<ImportResult>(this);
+    connect(Watcher, &QFutureWatcher<ImportResult>::finished, this, [this, Watcher, At, Options] {
+        auto Loaded = Watcher->result(); Watcher->deleteLater();
+        if (!Loaded.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), tr("파일을 확인할 수 없습니다: %1").arg(QString::fromStdString(Loaded.Failure().code_))); return; }
+        auto Request = std::move(Loaded.Value()); Request.destination_ = At;
+        Request.destinationWriter_ = MakeNativeWritableStorage(At.kind_, MakeNativeReadProvider(At.kind_));
+        Request.copyOptions_.metadata_ = Options["copyMetadata"].toBool(true); Request.copyOptions_.verify_ = Options["copyVerify"].toBool(false);
+        Request.copyOptions_.acl_ = Options["copyAcl"].toBool(false); Request.copyOptions_.streams_ = Options["copyStreams"].toBool(false);
+        Request.bytesPerSecondLimit_ = quint64(qBound(0, Options["copySpeedMiB"].toInt(0), 1048576)) * 1024 * 1024;
+        std::vector<Locator> Affected{At};
+        for (const auto& Source : Request.sources_) {
+            auto Parent = Source.entry_.locator_; Parent.root_ = QFileInfo(QString::fromStdString(Parent.root_)).absolutePath().toStdString(); Affected.push_back(std::move(Parent));
+        }
+        auto Started = fileJobs_->Submit(std::move(Request), OperationContext{});
+        if (Started.HasValue()) affectedLocations_[Started.Value().id_] = std::move(Affected);
+        else hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), QString::fromStdString(Started.Failure().code_));
+    });
+    // Resolve immutable source paths away from the GUI thread; navigation and
+    // clipboard changes during import must not redirect this drop.
+    Watcher->setFuture(QtConcurrent::run([Urls, Action] { return NativeFileRequest(Urls, Action == Qt::MoveAction, {}); }));
 }
 
 void CommandUiBridge::refreshClipboardVisuals()
