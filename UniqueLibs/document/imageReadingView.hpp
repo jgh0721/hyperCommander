@@ -41,6 +41,8 @@ class ImageReadingView final : public QAbstractScrollArea
     void Move(int Direction, bool OnePage = false);
     void GoTo(int Index, double Relative = 0);
     void OpenVolume(int Direction);
+    // Registered navigation commands; the key handling below keeps the same defaults.
+    bool RunCommand(const QString& Id);
     void Cancel();
     void RetryPage();
     QJsonObject State() const;

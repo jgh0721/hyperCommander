@@ -63,8 +63,6 @@ target_include_directories(hc_epub_package PUBLIC "${PROJECT_SOURCE_DIR}")
 target_link_libraries(hc_epub_package PUBLIC Qt6::Core PRIVATE Qt6::Gui Qt6::Xml Qt6::ZlibPrivate)
 target_compile_options(hc_epub_package PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 qt_add_library(hc_epub_host STATIC
-    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/epubResourceLease.cpp"
-    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/epubResourceLease.hpp"
     "${PROJECT_SOURCE_DIR}/UniqueLibs/document/epubProcessView.cpp"
     "${PROJECT_SOURCE_DIR}/UniqueLibs/document/epubProcessView.hpp")
 target_precompile_headers(hc_epub_host PRIVATE "${PROJECT_SOURCE_DIR}/tools/epub/render/stdafx.h")
@@ -96,6 +94,10 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/epubSourceNavigation.cpp
     ../UniqueLibs/document/epubSourceEditing.cpp
     ../UniqueLibs/document/epubSourceProperties.cpp
+    ../UniqueLibs/document/epubSourceLayout.cpp
+    ../UniqueLibs/document/epubSourceMenus.cpp
+    ../UniqueLibs/document/epubSourceTools.cpp
+    ../UniqueLibs/document/epubResourceTree.cpp ../UniqueLibs/document/epubResourceTree.hpp
     ../UniqueLibs/document/imageBook.cpp ../UniqueLibs/document/imageBook.hpp
     ../UniqueLibs/document/imageFramePlayer.cpp ../UniqueLibs/document/imageFramePlayer.hpp
     ../UniqueLibs/document/imageReadingView.cpp ../UniqueLibs/document/imageReadingView.hpp

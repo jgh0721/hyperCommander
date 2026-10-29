@@ -208,7 +208,11 @@ namespace hc::document
             Layout->setContentsMargins(6, 6, 6, 6);
             auto* Chrome = new fm::ui::WindowChrome(this, this); Chrome->setObjectName("documentWindowChrome"); Layout->addWidget(Chrome);
         }
-        Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(status_);
+        // A view may contribute its own status strip next to the workspace status.
+        auto* StatusRow = new QWidget(this); StatusRow->setObjectName("documentStatusRow"); auto* StatusLayout = new QHBoxLayout(StatusRow); StatusLayout->setContentsMargins(0, 0, 8, 0); StatusLayout->setSpacing(0);
+        statusSlot_ = new QWidget(StatusRow); statusSlot_->setObjectName("documentStatusSlot"); auto* SlotLayout = new QHBoxLayout(statusSlot_); SlotLayout->setContentsMargins(8, 2, 0, 2);
+        status_->setParent(StatusRow); StatusLayout->addWidget(status_, 1); StatusLayout->addWidget(statusSlot_, 100); statusSlot_->hide();
+        Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(StatusRow);
         chrome_ = new WorkspaceChromeController(menu_, toolbar_, this);
         auto* FileMenu = menu_->addMenu(tr("파일(&F)"));
         auto Add = [&](const QString& Label, const QKeySequence& Key, const char* Id, auto Callback) {
@@ -342,6 +346,8 @@ namespace hc::document
         auto* Restore = FileMenu->addAction(tr("복구 목록"));
         auto* EpubRestore=FileMenu->addAction(tr("EPUB 편집 초안 복구…"));EpubRestore->setObjectName("epubDraftRecovery");EpubRestore->setProperty("documentIconName","refresh");EpubRestore->setVisible(!hosted_);
         connect(EpubRestore,&QAction::triggered,this,&DocumentWorkspaceWidget::showEpubRecovery);
+        auto* EpubReopen=FileMenu->addAction(tr("EPUB 저장본 다시 열기"));EpubReopen->setObjectName("epubReopenDocument");EpubReopen->setProperty("documentIconName","open");EpubReopen->setVisible(false);
+        connect(EpubReopen,&QAction::triggered,this,[this]{if(auto Tab=active())if(auto* Reopen=Tab->pane_->findChild<QAction*>("epubReopen"))Reopen->trigger();});
         Restore->setObjectName("documentRecovery"); Protection->setObjectName("documentCaptureProtection");
         connect(Restore, &QAction::triggered, this, [this] {
             auto* Watcher = new QFutureWatcher<storage::Result<std::vector<RecoverySnapshot>>>(this); ++recoveryWorkers_;
@@ -416,6 +422,12 @@ namespace hc::document
             connect(viewerEscape_, &QShortcut::activated, this, &DocumentWorkspaceWidget::escapeViewer);
         }
         shortcutRouter_ = new DocumentShortcutRouter(this);
+        // EPUB editing, image and PDF commands reach the active pane through window-level actions.
+        for (const auto& Command : DocumentShortcutRegistry::Commands()) {
+            if (!QStringList{"epub-edit", "epub-edit.tree", "epub-edit.source", "image", "pdf"}.contains(Command.scope_)) continue;
+            auto* Action = new QAction(Command.label_, this); Action->setObjectName(Command.id_); addAction(Action);
+            connect(Action, &QAction::triggered, this, [this, Id = Command.id_] { if (auto Tab = active(); Tab && !Tab->loading_) Tab->pane_->RunViewCommand(Id); });
+        }
         for (const auto& Command : DocumentShortcutRegistry::Commands()) {
             const auto Name = Commands.key(Command.id_, Command.id_);
             if (auto* Action = findChild<QAction*>(Name)) {
@@ -423,14 +435,23 @@ namespace hc::document
                 shortcutRouter_->Register(Command.id_, Action);
             }
         }
+        // Scopes follow the focused widget; DocumentShortcutRegistry::FocusContexts names the combinations.
         shortcutRouter_->SetEligibility([this](const QString& Id, QWidget* Focus) {
-            auto Tab = active();
-            if(Id.startsWith("epub."))return Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing() && !qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus);
-            if (Id.startsWith("text.")) return Tab && !Tab->loading_ && Tab->pane_->ViewId() == "text";
-            if (Id.startsWith("edit.")) {
+            auto Tab = active(); const auto Scope = DocumentShortcutRegistry::ScopeOf(Id);
+            const auto Within = [Focus](const auto& Test) { for (auto* Widget = Focus; Widget; Widget = Widget->parentWidget()) if (Test(Widget)) return true; return false; };
+            const bool InText = Within([](QWidget* Widget) { return qobject_cast<QTextView*>(Widget) != nullptr; });
+            const bool EpubEditing = Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing() && Tab->pane_->isAncestorOf(Focus);
+            if (Scope == "epub") return Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing() && !qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus);
+            if (Scope == "text") return Tab && !Tab->loading_ && (Tab->pane_->ViewId() == "text" || (EpubEditing && InText));
+            if (Scope == "edit") {
                 auto* Input = Tab ? Tab->pane_->InputWidget() : nullptr;
                 return Input && !Tab->loading_ && (Focus == Input || Input->isAncestorOf(Focus));
             }
+            if (Scope == "epub-edit") return EpubEditing;
+            if (Scope == "epub-edit.tree") return EpubEditing && Within([](QWidget* Widget) { return Widget->objectName() == "epubResourceTree"; });
+            if (Scope == "epub-edit.source") return EpubEditing && InText;
+            if (Scope == "image" || Scope == "pdf") return Tab && !Tab->loading_ && Tab->pane_->isAncestorOf(Focus) && !qobject_cast<QLineEdit*>(Focus)
+                && !qobject_cast<QAbstractSpinBox*>(Focus) && !qobject_cast<QComboBox*>(Focus) && Tab->pane_->CanRunViewCommand(Id);
             return true;
         });
         const auto Override = qApp->property("documentViewsConfigDir");
@@ -514,7 +535,9 @@ namespace hc::document
         closeViewerOnEscape_ = Root["documentViews"].toObject()["common"].toObject()["closeViewerOnEscape"].toBool(true);
         if (viewerEscape_) viewerEscape_->setEnabled(closeViewerOnEscape_);
         const auto Chrome = Root["appearance"].toObject()["documentWorkspace"].toObject();
-        const QJsonObject Relevant{{"documentViews", Root.value("documentViews")}, {"chrome", Chrome}};
+        // The EPUB editor's saved panel layout changes while dragging and never needs a reload.
+        auto Views = Root.value("documentViews").toObject(); auto EpubEditor = Views["epubEditor"].toObject(); EpubEditor.remove("layout"); Views["epubEditor"] = EpubEditor;
+        const QJsonObject Relevant{{"documentViews", Views}, {"chrome", Chrome}};
         if (Relevant == appliedPreferences_) return;
         appliedPreferences_ = Relevant;
         if (externalWatcher_) externalWatcher_->reloadSettings();
@@ -525,6 +548,7 @@ namespace hc::document
         const auto Bindings = Root["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
         const auto ShortcutError = shortcutRouter_->Apply(Bindings);
         for(auto* Epub:findChildren<EpubProcessView*>())Epub->ReaderAction("bindings",Bindings);
+        for(const auto& Tab:documents_)Tab->pane_->SetShortcutBindings(shortcutRouter_->Bindings());
         if (!ShortcutError.isEmpty()) ShowShellError(tr("단축키 설정 오류 · 기본값을 사용합니다: %1").arg(ShortcutError));
         else if (const auto Unknown = DocumentShortcutRegistry::Unknown(Bindings); !Unknown.isEmpty())
             ShowShellError(tr("지원하지 않는 단축키 항목을 보존했습니다: %1").arg(Unknown.join(", ")));
@@ -660,6 +684,7 @@ namespace hc::document
         Tab->originalAuthority_ = !HostSlot && !Broker && SourceToken.isEmpty() && !Tab->recovered_; Tab->originalSave_ = Tab->originalAuthority_;
         auto* Pane = new DocumentViewPane(tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_);
         Pane->SetUnlimitedBytes(hosted_);
+        Pane->SetShortcutBindings(shortcutRouter_->Bindings());
         Tab->pane_ = Pane;
         connect(Pane, &DocumentViewPane::ClipboardRequested, this, [this, Tab](const QString& Mode) { clipboard(Tab, Mode); });
         connect(Pane,&DocumentViewPane::ContentChanged,this,[this,Tab] {
@@ -1281,7 +1306,7 @@ namespace hc::document
             workspace_.Activate(Tab->id_.toStdString());
             if(!findChild<ImageFullscreen*>("imageFullscreen")->Active()) {
                 auto Contribution=Tab->pane_->Contribution();
-                if(Tab->pane_->IsEpub())Contribution.menuActions_=findChild<QMenu*>("epubCommands")->actions();
+                if(Tab->pane_->IsEpub())Contribution.menuActions_=Tab->pane_->IsEpubEditing() && Tab->pane_->EpubEditor()?Tab->pane_->EpubEditor()->MenuActions():findChild<QMenu*>("epubCommands")->actions();
                 chrome_->SetActive(std::move(Contribution));
             }
             const auto State = Tab->session_->Snapshot();
@@ -1310,16 +1335,25 @@ namespace hc::document
         }
         if(Tab&&Tab->pane_->IsEpub()){
             findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(!hosted_ && !Tab->loading_ && !Tab->pane_->IsBusy() && Tab->pane_->CanEditEpub());
-            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(Tab->pane_->IsEpubEditing()?tr("EPUB · 편집 중 · 다른 이름으로 저장 · 원본 유지"):tr("EPUB · 읽기 전용 · 원본 유지"));
+            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(Tab->pane_->IsEpubEditing()?QString{}:tr("EPUB · 읽기 전용 · 원본 유지"));
         }
+        if(auto* Reopen=findChild<QAction*>("epubReopenDocument"))Reopen->setVisible(Tab && Tab->pane_->IsEpub() && Tab->pane_->findChild<QAction*>("epubReopen"));
+        // The active view's strip replaces the plain status text unless the workspace reports an error or work.
+        QWidget* Strip=Tab?Tab->pane_->Contribution().statusWidget_.data():nullptr;
+        for(auto* Child:statusSlot_->findChildren<QWidget*>(Qt::FindDirectChildrenOnly))if(Child!=Strip)Child->hide();
+        if(Strip){if(Strip->parentWidget()!=statusSlot_){Strip->setParent(statusSlot_);statusSlot_->layout()->addWidget(Strip);}Strip->show();}
+        statusSlot_->setVisible(Strip);
         findChild<QAction*>("printDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
         findChild<QAction*>("previewDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
         for (auto* Action : findChildren<QAction*>()) {
             const auto Id = Action->property("documentCommandId").toString();
-            if(Id.startsWith("epub."))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing());
+            const auto Scope=DocumentShortcutRegistry::ScopeOf(Id);
+            if(Scope=="epub")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing());
+            if(Scope.startsWith("epub-edit"))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing());
+            if(Scope=="image" || Scope=="pdf")Action->setEnabled(Tab && !Tab->loading_);
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
-                Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->ViewId() == "text"
-                    && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->pane_->IsReadOnly()));
+                Action->setEnabled(Tab && !Tab->loading_ && ((Tab->pane_->ViewId() == "text"
+                    && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->pane_->IsReadOnly())) || Tab->pane_->IsEpubEditing()));
             if (Id == "file.new") Action->setEnabled((hosted_ || documents_.size() < 16) && (tabbed_ || documents_.empty()));
             if (Id == "tab.next" || Id == "tab.previous") Action->setEnabled(tabbed_ && tabs_->count() > 1);
         }
@@ -1327,6 +1361,7 @@ namespace hc::document
             qBound(1, appliedPreferences_["documentViews"].toObject()["textView"].toObject()["largeFileMB"].toInt(1), 16) * 1024 * 1024)
             status_->setText(tr("대용량 문서 · 편집·검색에 시간이 걸릴 수 있습니다. ") + status_->text());
         if (Tab && !shellError_.isEmpty()) status_->setText(shellError_ + " · " + status_->text());
+        status_->setVisible(!Strip || !status_->text().isEmpty());
         findChild<ImageFullscreen*>("imageFullscreen")->UpdateStatus();
         emit StateChanged();
     }

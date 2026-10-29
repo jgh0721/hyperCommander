@@ -543,6 +543,12 @@ void QImageView::startSlideshow(int ms)
     emit slideshowStateChanged(true);
 }
 void QImageView::stopSlideshow()         { m_slideshowTimer->stop(); emit slideshowStateChanged(false); }
+bool QImageView::StepImage(int Direction)
+{
+    if (m_compositeMode || pendingEdit_) return false;
+    if (Direction > 0) nextImage(); else previousImage();
+    return true;
+}
 void QImageView::nextImage()
 {
     if(m_dirFiles.isEmpty()&&directoryLoading_){pendingDirectorySteps_=std::clamp(pendingDirectorySteps_+1,-1000000,1000000);return;}

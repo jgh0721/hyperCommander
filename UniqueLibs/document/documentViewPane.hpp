@@ -60,6 +60,11 @@ namespace hc::document
         void ApplyClipboard(const QString& Mode,const QString& Text,const QJsonObject& Selection);
         QWidget* InputWidget() const;
         QBaseView* View() const { return view_; }
+        EpubSourceEditor* EpubEditor() const { return epubEditor_; }
+        // Image, PDF and EPUB editing commands dispatched by the workspace shortcut router.
+        bool RunViewCommand(const QString& Id);
+        bool CanRunViewCommand(const QString& Id) const;
+        void SetShortcutBindings(const QJsonObject& Bindings);
     signals:
         void ContentChanged();
         void ViewStateChanged();
@@ -95,7 +100,8 @@ namespace hc::document
         EpubProcessView* epub_ = nullptr;
         QWidget* epubFailure_=nullptr;
         bool epubClosing_ = false,epubEditingAllowed_=false;
-        EpubSourceEditor* epubEditor_=nullptr;QByteArray epubBytes_;QString epubPath_;
+        EpubSourceEditor* epubEditor_=nullptr;QByteArray epubBytes_;QString epubPath_;QJsonObject shortcutBindings_;
+        void updateEpubMode();
         QByteArray epubSourceHash_;
         QString viewId_ = "text", encoding_ = "UTF-8", eol_ = "LF";
         bool bom_ = false, syncing_ = false;

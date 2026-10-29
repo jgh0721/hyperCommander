@@ -92,6 +92,8 @@ public:
     void stopSlideshow();
     void nextImage();
     void previousImage();
+    // Folder stepping for the workspace shortcut router; false while composing or editing.
+    bool StepImage(int Direction);
     QSize originalImageSize() const;
     qreal displayScalePercent() const;
     QString imageFormatName() const;

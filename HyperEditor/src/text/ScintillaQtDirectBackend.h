@@ -28,6 +28,8 @@ public:
 	void applySettings(const ScintillaEditorSettings& settings) override;
 	void setText(const QString& text) override;
     void SetTextUtf8(const QByteArray& Bytes);
+    // Shows another Scintilla document in this view; the caller owns its reference.
+    void AttachDocument(qintptr Document);
 	QString text() const override;
 	void clear() override;
     int CharacterCount() const override;

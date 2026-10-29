@@ -30,6 +30,8 @@ public:
             It.value()->setShortcut(QKeySequence::fromString(bindings_[It.key()].toString(), QKeySequence::PortableText));
         return Error;
     }
+    // Effective bindings after validation; defaults until the first Apply.
+    QJsonObject Bindings() const { return bindings_.isEmpty() ? DocumentShortcutRegistry::Bindings({}) : bindings_; }
 protected:
     bool eventFilter(QObject* Watched, QEvent* Event) override
     {
@@ -39,9 +41,7 @@ protected:
             || QApplication::activeModalWidget() || QApplication::activePopupWidget()) return false;
         auto* Key = static_cast<QKeyEvent*>(Event);
         if (Key->key() == Qt::Key_Control || Key->key() == Qt::Key_Shift || Key->key() == Qt::Key_Alt || Key->key() == Qt::Key_Meta) return false;
-        auto Combination = Key->keyCombination();
-        if(Combination.key()==Qt::Key_PageUp || Combination.key()==Qt::Key_PageDown)
-            Combination=QKeyCombination(Combination.keyboardModifiers() & ~Qt::KeypadModifier,Combination.key());
+        auto Combination = DocumentShortcutRegistry::NormalizeKey(Key->keyCombination());
         if (Combination.key() == Qt::Key_Backtab) Combination = QKeyCombination(Combination.keyboardModifiers() | Qt::ShiftModifier, Qt::Key_Tab);
         const auto Sequence = pending_.isEmpty() ? QKeySequence(Combination) : QKeySequence(pending_[0], Combination);
         QAction* Exact = nullptr; bool Partial = false, Owned = false;
@@ -53,7 +53,7 @@ protected:
             if (Match == QKeySequence::PartialMatch) Partial = true;
             // An unbound or rebound command must not fall through to Scintilla's
             // control-character aliases or QTabWidget's built-in tab switching.
-            if (pending_.isEmpty() && Sequence == QKeySequence(Item.key_)) Owned = true;
+            if (pending_.isEmpty() && Sequence == DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence(Item.key_))) Owned = true;
             const QMap<QString, QString> Aliases{{"edit.redo", "Ctrl+Shift+Z"}, {"edit.copy", "Ctrl+Insert"}, {"edit.cut", "Shift+Delete"}, {"edit.paste", "Shift+Insert"}};
             if (pending_.isEmpty() && Aliases.contains(Item.id_) && Sequence == QKeySequence(Aliases[Item.id_])) {
                 Owned = true; if (Binding == QKeySequence(Item.key_)) Exact = actions_.value(Item.id_);

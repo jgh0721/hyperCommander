@@ -370,8 +370,7 @@ namespace hc::document
             PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,1,HostPayloadLimit,HostPayloadLimit,0,&Security);
         LocalFree(Descriptor); if(!S->pipe_.Valid()) return Fail("web-owner-pipe");
         const auto Nonce=QUuid::createUuid().toRfc4122(); std::memcpy(S->connection_.data(),Nonce.constData(),16);
-        S->job_.value_=CreateJobObjectW(nullptr,Limits.jobName_.isEmpty()?nullptr:reinterpret_cast<LPCWSTR>(Limits.jobName_.utf16()));
-        const auto JobError=GetLastError();if(!S->job_.Valid() || (!Limits.jobName_.isEmpty() && JobError==ERROR_ALREADY_EXISTS)) return Fail("web-owner-job");
+        S->job_.value_=CreateJobObjectW(nullptr,nullptr);if(!S->job_.Valid()) return Fail("web-owner-job");
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION Job{};
         Job.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE|JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
         if(Limits.processes_)Job.BasicLimitInformation.LimitFlags|=JOB_OBJECT_LIMIT_ACTIVE_PROCESS;

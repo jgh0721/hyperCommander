@@ -520,6 +520,25 @@ private slots:
         QCOMPARE(Values["file.new"].toString(), QString("Ctrl+Alt+N"));
         QCOMPARE(Values["future.command"].toString(), QString("F10"));
     }
+    void shortcutScopes()
+    {
+        // Scopes that never share a focus position may reuse a key; those that do may not.
+        QVERIFY(DocumentShortcutRegistry::CoActive("epub-edit", "text")); QVERIFY(!DocumentShortcutRegistry::CoActive("epub", "text"));
+        QVERIFY(!DocumentShortcutRegistry::CoActive("epub-edit.tree", "epub-edit.source")); QVERIFY(!DocumentShortcutRegistry::CoActive("image", "pdf"));
+        QVERIFY(DocumentShortcutRegistry::Validate({{"epubTree.rename", "Ctrl+Shift+R"}, {"epubSource.openLink", "Ctrl+Shift+R"}}).isEmpty());
+        QVERIFY(DocumentShortcutRegistry::Validate({{"text.find", "Ctrl+K"}, {"epub.focus-search", "Ctrl+K"}}).isEmpty());
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"epubEdit.apply", "Ctrl+F"}}).isEmpty());
+        const auto Issues = DocumentShortcutRegistry::Issues({{"epubEdit.filter", "Ctrl+P"}});
+        QCOMPARE(Issues.size(), 1); QCOMPARE(Issues.first().id_, QString("epubEdit.filter")); QCOMPARE(Issues.first().other_, QString("file.print"));
+        // Input scopes keep editing keys and an unmodified Enter; a modified Enter is free. Trees and viewers may use movement keys.
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"epubEdit.apply", "Delete"}}).isEmpty());
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"epubSource.quickFix", "Return"}}).isEmpty());
+        QVERIFY(DocumentShortcutRegistry::Validate({{"epubSource.quickFix", "Ctrl+Alt+Return"}}).isEmpty());
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"epubTree.rename", "Return"}}).isEmpty());
+        QVERIFY(DocumentShortcutRegistry::Validate({{"image.next", "N"}, {"pdf.pageNext", "N"}}).isEmpty());
+        QCOMPARE(DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence("Ctrl+Return")), QKeySequence("Ctrl+Enter"));
+        for (const auto& Command : DocumentShortcutRegistry::Commands()) QVERIFY2(!DocumentShortcutRegistry::ScopeLabel(Command.scope_).isEmpty(), qPrintable(Command.id_));
+    }
     void shortcutsRouteAcrossViewsAndSearchFields()
     {
         QTemporaryDir Temp; qApp->setProperty("documentViewsConfigDir", Temp.path());

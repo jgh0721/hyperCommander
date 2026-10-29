@@ -22,6 +22,8 @@ public:
     void LoadContent(const QString& Text, const QString& Path, const QString& Encoding, const QByteArray& Utf8 = {}, const QString& Eol = {});
     QString Content() const;
     ITextEditorBackend* Backend() const;
+    // Switches to an externally owned Scintilla document and resets view-only search state.
+    void AttachDocument(qintptr Document, const QString& Language);
     void ReplaceContent(const QString& Text);
     void CommitContent();
     void ReloadPreferences();

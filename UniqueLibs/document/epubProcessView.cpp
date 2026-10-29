@@ -1,6 +1,5 @@
 ﻿#include "stdafx.h"
 #include "epubProcessView.hpp"
-#include "epubResourceLease.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/settings/unifiedConfig.hpp"
@@ -266,7 +265,7 @@ namespace hc::document
         return QWidget::event(Event);
     }
     bool EpubProcessView::ReaderAction(const QString& Action,const QJsonValue& Value) {
-        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"toggle-notes","focus-notes","annotation-select","annotation-link","annotation-add","annotation-update","annotation-remove","annotation-go","annotation-reload","annotations-import","annotation-transfer-cancel","annotations-transient","toggle-toc","toggle-search","toggle-bookmarks","toggle-settings","fullscreen","focus-bookmarks","bindings","focus-settings","cycle-focus","next","previous","back","chapter","next-chapter","previous-chapter","toc","focus-toc","search","locate","preview-location","source-position","enable-input","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search"}.contains(Action)
+        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"toggle-notes","focus-notes","annotation-select","annotation-link","annotation-add","annotation-update","annotation-remove","annotation-go","annotation-reload","annotations-import","annotation-transfer-cancel","annotations-transient","toggle-toc","toggle-search","toggle-bookmarks","toggle-settings","fullscreen","focus-bookmarks","bindings","focus-settings","cycle-focus","next","previous","back","chapter","next-chapter","previous-chapter","toc","focus-toc","search","locate","preview-location","source-position","enable-input","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search","context-menu","preview-width"}.contains(Action)
             || QJsonDocument(QJsonArray{Value}).toJson(QJsonDocument::Compact).size()>16384)return false;
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
         work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value.isUndefined()?QJsonValue(QJsonValue::Null):Value}});work_->wake_.notify_one();return true;
@@ -317,7 +316,6 @@ namespace hc::document
     }
     void EpubProcessView::run(const std::shared_ptr<Work>& State, WebProcessRuntime Runtime, WebProcessLimits Limits)
     {
-        EpubResourceLease Lease;
         std::unique_ptr<DocumentWebProcess> Owner, Pending;
         WebProcessError Error;
         QString Failure;
@@ -331,10 +329,6 @@ namespace hc::document
         const auto Cancelled = [&] { return State->cancel_.load(); };
         try {
             const auto Process = [&] {
-                if(!Lease.Acquire(Cancelled,[&]{State->Update({{"status","queued"},{"message","EPUB 실행 자원을 기다리고 있습니다."}});})) {Failure=Lease.Error();return;}
-                Metrics["queueMs"]=Elapsed.elapsed();Metrics["aggregateActiveLimit"]=int(EpubResourceLease::ActiveLimit);Metrics["aggregateTotalLimit"]=int(EpubResourceLease::TotalLimit);
-                Limits.jobName_=Lease.JobName();Limits.processes_=Limits.processes_?qMin(Limits.processes_,12u):12u;
-                Limits.memoryBytes_=Limits.memoryBytes_?qMin(Limits.memoryBytes_,std::uint64_t(1024ULL*1024*1024)):1024ULL*1024*1024;
                 State->Update({{"status","loading"}});
                 QDeadlineTimer Deadline(60000);
                 // Package validation and runtime verification are independent.

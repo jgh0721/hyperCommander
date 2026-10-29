@@ -146,7 +146,7 @@ namespace
         Result.insert("/app/index.html", {QByteArrayLiteral(
             "<!doctype html><html lang='ko'><head><meta charset='utf-8'><title>EPUB 본문</title>"
             "<style>html,body{margin:0;height:100%;overflow:hidden}#viewport{height:100%;margin:auto;max-width:100%}"
-            "#reader{position:relative;width:100%;height:100%;margin:auto;max-width:100%}"
+            "#reader{position:relative;width:100%;height:100%;margin:auto;max-width:100%}body.hc-preview-width #viewport{max-width:var(--hc-preview-width);outline:1px solid rgba(128,128,128,.45)}"
             ".readium-navigator-iframe{border:0;inset:0;width:100%;height:100%}</style>"
             "</head><body><main id='viewport' aria-label='EPUB 본문'><div id='reader'></div></main><script src='reader.js'></script></body></html>"), "text/html"});
         return Result;

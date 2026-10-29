@@ -37,7 +37,6 @@ namespace hc::document
         std::uint32_t processes_ = 0;
         std::uint64_t memoryBytes_ = 0;
         std::uint32_t startupMs_ = 5000;
-        QString jobName_; // Trusted aggregate scheduler lease; empty keeps isolated unnamed jobs.
     };
     struct WebProcessError { QString code_; std::uint32_t native_ = 0; std::optional<std::uint32_t> childExitCode_; };
     struct WebProcessSnapshot

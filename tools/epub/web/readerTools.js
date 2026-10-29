@@ -29,6 +29,20 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
     const annotations=createReadingAnnotations({book,documents});
     const sourcePositions=createSourcePositions(snapshot);
     let result = { serial: 0 }, popup = null, dialog = null, focus = null;
+    // Editing previews report right clicks; the host process shows the menu.
+    let contextMenus = false, contextRequest = { serial: 0 }, contextSerial = 0;
+    function requestContext(event, doc) {
+        if(!contextMenus)return;event.preventDefault();event.stopImmediatePropagation();
+        const frame=doc.defaultView?.frameElement, offset=frame?frame.getBoundingClientRect():{left:0,top:0};
+        const keyboard=event.type==="keydown", target=keyboard?doc.getSelection()?.anchorNode?.parentElement||doc.body:event.target;
+        const rect=keyboard?target?.getBoundingClientRect?.()||{left:0,top:0,height:0}:null;
+        const x=Math.round(offset.left+(keyboard?rect.left:event.clientX)), y=Math.round(offset.top+(keyboard?rect.top+rect.height:event.clientY));
+        const selection=doc.getSelection()?.toString().slice(0,4096)||"";const image=target?.closest?.("img");
+        if(!keyboard && target && !doc.getSelection()?.containsNode(target,true)) {const range=doc.caretRangeFromPoint?.(event.clientX,event.clientY);if(range && !selection){const s=doc.getSelection();s.removeAllRanges();s.addRange(range);}}
+        sourcePositions.capture(doc);const anchor=sourcePositions.state();
+        let path="";if(image){try{const url=new URL(image.getAttribute("src"),doc.baseURI);if(url.protocol==="epub:" && url.pathname.startsWith("/book/"))path=decodeURIComponent(url.pathname.slice(6));}catch{}}
+        contextRequest={serial:++contextSerial,x,y,selection,anchor,target:image?{kind:"image",path}:{kind:"text"}};
+    }
     let searchResult = { serial: 0 }, searchController;
     const cancelSearch = () => { searchController?.abort(); searchController = null; };
     async function search(request) {
@@ -98,7 +112,9 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
     function hook(doc) {
         if(hooked.has(doc))return;hooked.add(doc);annotations.hook(doc);sourcePositions.hook(doc);
         for(const image of doc.images){image.tabIndex=0;image.setAttribute("role","button");image.setAttribute("aria-label",image.alt||"책 이미지 확대");}
-        doc.addEventListener("keydown",event=>{if(!event.isComposing && event.target.matches?.("img") && ["Enter"," "].includes(event.key)){event.preventDefault();event.target.click();}});
+        doc.addEventListener("keydown",event=>{if(!event.isComposing && event.target.matches?.("img") && ["Enter"," "].includes(event.key)){event.preventDefault();event.target.click();}
+            else if(contextMenus && (event.key==="ContextMenu" || (event.key==="F10" && event.shiftKey)))requestContext(event,doc);});
+        doc.addEventListener("contextmenu",event=>requestContext(event,doc),true);
         doc.addEventListener("click",e=>{
             const anchor=e.target.closest?.("a"), image=e.target.closest?.("img");
             if(anchor)remember();
@@ -120,9 +136,11 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
             else if(action==="image") {const doc=documents()[0],image=doc?.images[Number(value)||0];if(!image)throw Error("이미지가 없습니다.");const {url}=await resource(image.getAttribute("src"),doc);show("image",{src:url.href,alt:image.alt});result={serial};}
             else if(action==="footnote") {const doc=documents()[0];await footnote(value,doc);result={serial};}
             else if(action==="close-popup") {close();result={serial};}
+            else if(action==="context-menu") {contextMenus=value===true;result={serial};}
+            else if(action==="preview-width") {const width=Math.max(0,Math.min(4096,Number(value)||0));const root=document.documentElement;root.style.setProperty("--hc-preview-width",width?`${width}px`:"none");document.body.classList.toggle("hc-preview-width",width>0);window.dispatchEvent(new Event("resize"));result={serial};}
             else throw Error("지원하지 않는 읽기 명령입니다.");
         } catch(error) {result={serial,error:String(error)};}
     }
     window.hcDismissPopup = () => {if(!dialog)return false;close();return true;};
-    return {hook,action,cancelSearch,cancelAnnotations:annotations.cancel,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),readerAction:result,readerSearch:searchResult,popup})};
+    return {hook,action,cancelSearch,cancelAnnotations:annotations.cancel,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),readerAction:result,readerSearch:searchResult,popup,contextRequest})};
 }

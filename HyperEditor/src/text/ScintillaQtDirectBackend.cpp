@@ -304,6 +304,20 @@ void ScintillaQtDirectBackend::SetTextUtf8(const QByteArray& utf8)
 	m_forcedModified = false;
 }
 
+void ScintillaQtDirectBackend::AttachDocument(qintptr Document)
+{
+	if (!m_editor || !Document)
+		return;
+
+	m_editor->send(sciMessage(SCI_SETDOCPOINTER), 0, Document);
+	// Code page and the cached counts belong to the document that was replaced.
+	m_editor->send(sciMessage(SCI_SETCODEPAGE), Scintilla::CpUtf8);
+	characterCount_ = -1;
+	m_forcedModified = m_editor->send(sciMessage(SCI_GETMODIFY)) != 0;
+	syncLineCountState(false);
+	updateBraceHighlight();
+}
+
 QString ScintillaQtDirectBackend::text() const
 {
 	if (!m_editor)

@@ -111,6 +111,7 @@ namespace hc::document
         QToolBar* toolbar_;
         QTabWidget* tabs_;
         QLabel* status_;
+        QWidget* statusSlot_ = nullptr;
         std::vector<std::shared_ptr<Tab>> documents_;
     };
 }

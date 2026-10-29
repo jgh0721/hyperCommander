@@ -168,45 +168,81 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     MaskSpin("gamma", tr("글자 마스크 감마"), 3.0, 1.2); MaskSpin("strength", tr("글자 마스크 강도"), 2.0, 1.1);
     Text->addStretch();
     Q_UNUSED(Actions);
-    auto* ShortcutPage = Page(tr("단축키"), tr("편집기 명령의 단축키를 찾아 바꿉니다. 분류와 변경 여부로 목록을 좁힐 수 있습니다."));
+    auto* ShortcutPage = Page(tr("단축키"), tr("명령이 동작하는 범위별로 단축키를 바꿉니다. 함께 동작할 수 있는 범위끼리만 충돌을 검사합니다."));
     auto* Diagnostics = new QLabel(this); Diagnostics->setObjectName("shortcutDiagnostics"); Diagnostics->setWordWrap(true); ShortcutPage->addWidget(Diagnostics);
     auto* FilterRow = new QHBoxLayout; FilterRow->setSpacing(8); ShortcutPage->addLayout(FilterRow);
-    auto* Search = new QLineEdit(this); Search->setObjectName("shortcutSearch"); Search->setClearButtonEnabled(true); Search->setPlaceholderText(tr("명령 또는 단축키 검색…")); FilterRow->addWidget(Search, 1);
-    auto* Scope = new QComboBox(this); Scope->addItem(tr("전체"), ""); Scope->addItem(tr("공통"), "common"); Scope->addItem(tr("텍스트·편집"), "text"); Scope->addItem(tr("EPUB"),"epub");
-    auto* ScopeLabel = new QLabel(tr("분류"), this); ScopeLabel->setBuddy(Scope); FilterRow->addWidget(ScopeLabel); FilterRow->addWidget(Scope);
-    auto* ChangedOnly = new QCheckBox(tr("변경한 항목만"), this); FilterRow->addWidget(ChangedOnly);
-    auto* Shortcuts = Card(ShortcutPage, tr("명령"));
+    auto* Search = new QLineEdit(this); Search->setObjectName("shortcutSearch"); Search->setClearButtonEnabled(true); Search->setPlaceholderText(tr("모든 범위에서 명령 또는 단축키 검색…")); FilterRow->addWidget(Search, 1);
+    auto* ChangedOnly = new QCheckBox(tr("변경한 항목만"), this); ChangedOnly->setObjectName("shortcutChangedOnly"); FilterRow->addWidget(ChangedOnly);
+    // Scope list at the left, the selected scope's commands at the right.
+    auto* ShortcutBody = new QHBoxLayout; ShortcutBody->setSpacing(12); ShortcutPage->addLayout(ShortcutBody);
+    auto* Scopes = new QListWidget(this); Scopes->setObjectName("shortcutScopes"); Scopes->setAccessibleName(tr("단축키 범위")); Scopes->setFixedWidth(184); Scopes->setProperty(fm::style::props::kSoftSelection, true); Scopes->setFrameShape(QFrame::NoFrame);
+    for (const auto& Item : DocumentShortcutRegistry::Scopes()) { auto* Entry = new QListWidgetItem(Scopes); Entry->setData(Qt::UserRole, Item.id_); Entry->setData(Qt::UserRole + 1, QString(Item.depth_ * 2, ' ') + Item.label_); Entry->setSizeHint(QSize(0, 28)); }
+    ShortcutBody->addWidget(Scopes, 0, Qt::AlignTop);
+    auto* Commands = new QGroupBox(this); Commands->setObjectName("shortcutCommands"); auto* Column = new QVBoxLayout(Commands); Column->setSpacing(4); ShortcutBody->addWidget(Commands, 1);
+    auto* Header = new QHBoxLayout; auto* Title = new QLabel(Commands); Title->setObjectName("shortcutScopeTitle"); auto TitleFont = Title->font(); TitleFont.setWeight(QFont::DemiBold); TitleFont.setPointSizeF(TitleFont.pointSizeF() * 1.1); Title->setFont(TitleFont); Header->addWidget(Title, 1);
+    auto* ScopeReset = new QPushButton(tr("이 범위 기본값으로"), Commands); ScopeReset->setObjectName("shortcutScopeReset"); fm::style::setSmall(ScopeReset); Header->addWidget(ScopeReset); Column->addLayout(Header);
+    auto* Description = new QLabel(Commands); Description->setObjectName("shortcutScopeDescription"); Description->setWordWrap(true); Description->setForegroundRole(QPalette::PlaceholderText); Column->addWidget(Description);
+    auto* Related = new QLabel(Commands); Related->setObjectName("shortcutScopeRelated"); Related->setWordWrap(true); Related->setForegroundRole(QPalette::PlaceholderText); Column->addWidget(Related);
+    auto* Overlap = new QLabel(tr("검색한 키는 함께 동작하지 않는 범위에서만 겹치므로 충돌이 아닙니다."), Commands); Overlap->setObjectName("shortcutOverlapNote"); Overlap->setWordWrap(true); Overlap->hide(); Column->addWidget(Overlap);
     QList<QPair<DocumentShortcut, QWidget*>> Rows;
-    // One line per command: name with its scope and default key underneath, then the key field and its two resets.
+    // One block per command: name with its default key, the key field and its two resets, then any problem.
     for (const auto& Command : DocumentShortcutRegistry::Commands()) {
-        auto* Row = new QWidget(this); auto* RowLayout = new QHBoxLayout(Row); RowLayout->setContentsMargins(0, 2, 0, 2); RowLayout->setSpacing(8);
+        auto* Block = new QWidget(Commands); Block->setObjectName("shortcutRow/" + Command.id_); auto* BlockLayout = new QVBoxLayout(Block); BlockLayout->setContentsMargins(0, 2, 0, 2); BlockLayout->setSpacing(2);
+        auto* RowLayout = new QHBoxLayout; RowLayout->setSpacing(8); BlockLayout->addLayout(RowLayout);
         auto* Names = new QVBoxLayout; Names->setSpacing(0); RowLayout->addLayout(Names, 1);
-        auto* Name = new QLabel(Command.label_, Row); Name->setWordWrap(true); Names->addWidget(Name);
-        auto* Meta = new QLabel(tr("%1 · 기본값 %2").arg(Command.scope_ == "common" ? tr("공통") : Command.scope_=="epub"?tr("EPUB"):tr("텍스트·편집"), Command.key_.isEmpty() ? tr("없음") : Command.key_), Row);
+        auto* Name = new QLabel(Command.label_, Block); Name->setWordWrap(true); Names->addWidget(Name);
+        auto* Meta = new QLabel(tr("기본값 %1").arg(Command.key_.isEmpty() ? tr("없음") : QKeySequence(Command.key_).toString(QKeySequence::NativeText)), Block); Meta->setObjectName("shortcutMeta"); Meta->setProperty("scopeLabel", DocumentShortcutRegistry::ScopeLabel(Command.scope_));
         Meta->setForegroundRole(QPalette::PlaceholderText); Names->addWidget(Meta);
-        auto* Field = new QKeySequenceEdit(Row); Field->setClearButtonEnabled(true); Field->setMaximumSequenceLength(2); Field->setMinimumWidth(140);
+        auto* Field = new QKeySequenceEdit(Block); Field->setClearButtonEnabled(true); Field->setMaximumSequenceLength(2); Field->setMinimumWidth(140);
         const auto Key = "documentViews/shortcuts/bindings/" + Command.id_;
-        Field->setObjectName(Key); Field->setProperty("defaultValue", Command.key_); Field->setAccessibleName(Command.label_); Name->setBuddy(Field);
+        Field->setObjectName(Key); Field->setProperty("defaultValue", Command.key_); Field->setProperty("shortcutScope", Command.scope_); Field->setAccessibleName(Command.label_); Name->setBuddy(Field);
         controls_[Key] = Field; RowLayout->addWidget(Field);
-        auto* Reset = new QPushButton(tr("기본값"), Row); fm::style::setSmall(Reset); RowLayout->addWidget(Reset);
-        auto* Previous = new QPushButton(tr("이전 값"), Row); fm::style::setSmall(Previous); RowLayout->addWidget(Previous);
+        auto* Reset = new QPushButton(tr("기본값"), Block); fm::style::setSmall(Reset); RowLayout->addWidget(Reset);
+        auto* Previous = new QPushButton(tr("이전 값"), Block); fm::style::setSmall(Previous); RowLayout->addWidget(Previous);
+        auto* Issue = new QHBoxLayout; auto* Problem = new QLabel(Block); Problem->setObjectName("shortcutIssue/" + Command.id_); Problem->setWordWrap(true); Problem->setTextFormat(Qt::PlainText); Problem->hide(); Issue->addWidget(Problem, 1);
+        auto* Jump = new QPushButton(Block); Jump->setObjectName("shortcutIssueJump/" + Command.id_); Jump->setFlat(true); fm::style::setSmall(Jump); Jump->hide(); Issue->addWidget(Jump); BlockLayout->addLayout(Issue);
         connect(Reset, &QPushButton::clicked, this, [Field, Default = Command.key_] { Field->setKeySequence(QKeySequence(Default)); });
         connect(Previous, &QPushButton::clicked, this, [this, Field, Key] { Field->setKeySequence(QKeySequence(settings::UnifiedConfig::Value(initial_, Key.split('/')).toString())); });
-        Shortcuts->addRow(Row); Rows.append({Command, Row});
+        Column->addWidget(Block); Rows.append({Command, Block});
     }
-    auto Filter = [Search, Scope, ChangedOnly, Rows, Shortcuts] {
+    auto* Footnote = new QLabel(tr("빈 값은 단축키 해제입니다. 최대 두 번의 키 조합을 사용할 수 있습니다. 입력 범위의 이동·선택 기본키와 입력기 키, Esc · Tab · F6, 트리 · 목록의 Enter는 유지됩니다."), Commands); Footnote->setWordWrap(true); Footnote->setForegroundRole(QPalette::PlaceholderText); Column->addWidget(Footnote);
+    auto Filter = [Search, Scopes, ChangedOnly, Rows, Title, Description, Related, Overlap, ScopeReset] {
+        const auto Text = Search->text().trimmed(); const auto Selected = Scopes->currentItem() ? Scopes->currentItem()->data(Qt::UserRole).toString() : QStringLiteral("common");
+        QMap<QString, int> Matches; QMap<QString, QStringList> Keys; int Visible = 0;
         for (const auto& Row : Rows) {
             auto* Field = Row.second->findChild<QKeySequenceEdit*>();
             const auto Current = Field->keySequence().toString(QKeySequence::NativeText);
-            const bool Match = (Row.first.label_ + " " + Row.first.id_ + " " + Current + " " + Row.first.key_).contains(Search->text(), Qt::CaseInsensitive);
-            const auto ScopeId=Scope->currentData().toString();
-            const bool Category = ScopeId.isEmpty() || (ScopeId=="text"?(Row.first.scope_=="text" || Row.first.scope_=="edit"):Row.first.scope_==ScopeId);
-            Shortcuts->setRowVisible(Row.second, Match && Category && (!ChangedOnly->isChecked() || Field->keySequence() != QKeySequence(Row.first.key_)));
+            const bool Match = !Text.isEmpty() && (Row.first.label_ + " " + Row.first.id_ + " " + Current + " " + QKeySequence(Row.first.key_).toString(QKeySequence::NativeText)).contains(Text, Qt::CaseInsensitive);
+            const bool Changed = !ChangedOnly->isChecked() || Field->keySequence() != QKeySequence(Row.first.key_);
+            if (Match && Changed) { ++Matches[Row.first.scope_]; if (!Current.isEmpty()) Keys[Current].append(Row.first.scope_); }
+            const bool Show = (Text.isEmpty() ? Row.first.scope_ == Selected : Match) && Changed; Row.second->setVisible(Show); Visible += Show;
+            auto* Meta = Row.second->findChild<QLabel*>("shortcutMeta"); const auto Base = Meta->text().section(" · ", -1);
+            Meta->setText(Text.isEmpty() ? Base : Meta->property("scopeLabel").toString() + " · " + Base);
         }
+        bool Allowed = false; for (auto I = Keys.begin(); I != Keys.end(); ++I) for (const auto& A : I.value()) for (const auto& B : I.value()) Allowed |= A != B && !DocumentShortcutRegistry::CoActive(A, B);
+        for (int Index = 0; Index < Scopes->count(); ++Index) {
+            auto* Entry = Scopes->item(Index); const auto Id = Entry->data(Qt::UserRole).toString(); int Count = 0; for (const auto& Row : Rows) Count += Row.first.scope_ == Id;
+            const int Problems = Entry->data(Qt::UserRole + 2).toInt();
+            Entry->setText(Entry->data(Qt::UserRole + 1).toString() + QStringLiteral("  ") + (Text.isEmpty() ? QString::number(Count) : QString::number(Matches.value(Id))) + (Problems ? QObject::tr("  ⚠ %1").arg(Problems) : QString{}));
+            Entry->setForeground(!Text.isEmpty() && !Matches.value(Id) ? Scopes->palette().color(QPalette::PlaceholderText) : Scopes->palette().color(QPalette::Text));
+        }
+        if (Text.isEmpty()) {
+            for (const auto& Item : DocumentShortcutRegistry::Scopes()) if (Item.id_ == Selected) { Title->setText(Item.label_); Description->setText(Item.description_); }
+            QStringList Names; for (const auto& Scope : DocumentShortcutRegistry::ConflictScopes(Selected)) Names.append(DocumentShortcutRegistry::ScopeLabel(Scope));
+            Related->setText(QObject::tr("충돌 검사 대상: %1").arg(Names.join(" · ")));
+        } else { Title->setText(QObject::tr("'%1' 검색 결과 %2건").arg(Text).arg(Visible)); Description->setText(QObject::tr("모든 범위")); Related->clear(); }
+        Related->setVisible(Text.isEmpty()); ScopeReset->setVisible(Text.isEmpty()); Overlap->setVisible(!Text.isEmpty() && Allowed);
     };
-    connect(Search, &QLineEdit::textChanged, this, Filter); connect(Scope, &QComboBox::currentIndexChanged, this, Filter); connect(ChangedOnly, &QCheckBox::toggled, this, Filter);
+    connect(Search, &QLineEdit::textChanged, this, Filter); connect(Scopes, &QListWidget::currentRowChanged, this, Filter); connect(ChangedOnly, &QCheckBox::toggled, this, Filter);
     for (const auto& Row : Rows) connect(Row.second->findChild<QKeySequenceEdit*>(), &QKeySequenceEdit::keySequenceChanged, this, Filter);
-    Note(Shortcuts, tr("빈 값은 단축키 해제입니다. 최대 두 번의 키 조합을 사용할 수 있습니다. 이동·선택 기본키와 입력기 키는 유지됩니다."));
+    connect(this, &DocumentSettingsDialog::ShortcutsValidated, this, Filter);
+    connect(ScopeReset, &QPushButton::clicked, this, [Scopes, Rows] { const auto Selected = Scopes->currentItem() ? Scopes->currentItem()->data(Qt::UserRole).toString() : QString{};
+        for (const auto& Row : Rows) if (Row.first.scope_ == Selected) Row.second->findChild<QKeySequenceEdit*>()->setKeySequence(QKeySequence(Row.first.key_)); });
+    for (const auto& Row : Rows) connect(Row.second->findChild<QPushButton*>("shortcutIssueJump/" + Row.first.id_), &QPushButton::clicked, this, [Search, Scopes, Rows, Row] {
+        const auto Other = Row.second->findChild<QPushButton*>("shortcutIssueJump/" + Row.first.id_)->property("otherId").toString();
+        for (const auto& Target : Rows) if (Target.first.id_ == Other) { Search->clear(); for (int I = 0; I < Scopes->count(); ++I) if (Scopes->item(I)->data(Qt::UserRole) == Target.first.scope_) Scopes->setCurrentRow(I); Target.second->findChild<QKeySequenceEdit*>()->setFocus(); }
+    });
+    Scopes->setCurrentRow(0);
     ShortcutPage->addStretch();
     auto* EpubPage = Page(tr("EPUB"), tr("편집 초안 복구와 EPUBCheck 검사, 모든 책에 쓰는 읽기 기본값을 설정합니다."));
     auto* Drafts = Card(EpubPage, tr("편집 초안"));
@@ -302,10 +338,23 @@ QJsonObject DocumentSettingsDialog::values() const
 void DocumentSettingsDialog::validateShortcuts()
 {
     if (!valid_) return;
-    const auto Problem = DocumentShortcutRegistry::Validate(settings::UnifiedConfig::Value(values(), {"documentViews", "shortcuts", "bindings"}).toObject());
-    error_->setText(Problem);
+    const auto Problems = DocumentShortcutRegistry::Issues(settings::UnifiedConfig::Value(values(), {"documentViews", "shortcuts", "bindings"}).toObject());
+    // Each problem sits under its row; the footer only counts them and names the first.
+    QMap<QString, DocumentShortcutIssue> ById; QMap<QString, int> PerScope;
+    for (const auto& Item : Problems) if (!ById.contains(Item.id_)) { ById[Item.id_] = Item; ++PerScope[DocumentShortcutRegistry::ScopeOf(Item.id_)]; }
+    for (const auto& Command : DocumentShortcutRegistry::Commands()) {
+        auto* Label = findChild<QLabel*>("shortcutIssue/" + Command.id_); auto* Jump = findChild<QPushButton*>("shortcutIssueJump/" + Command.id_); if (!Label || !Jump) continue;
+        const auto Item = ById.value(Command.id_); Label->setText(Item.message_.isEmpty() ? QString{} : QStringLiteral("⚠ ") + Item.message_); Label->setVisible(!Item.message_.isEmpty());
+        Jump->setProperty("otherId", Item.other_); Jump->setVisible(!Item.other_.isEmpty());
+        if (!Item.other_.isEmpty()) for (const auto& Other : DocumentShortcutRegistry::Commands()) if (Other.id_ == Item.other_) Jump->setText(tr("%1 보기").arg(Other.label_));
+    }
+    if (auto* Scopes = findChild<QListWidget*>("shortcutScopes")) for (int Index = 0; Index < Scopes->count(); ++Index) Scopes->item(Index)->setData(Qt::UserRole + 2, PerScope.value(Scopes->item(Index)->data(Qt::UserRole).toString()));
+    if (Problems.isEmpty()) error_->clear();
+    else { const auto& First = Problems.first(); QString Label; for (const auto& Command : DocumentShortcutRegistry::Commands()) if (Command.id_ == First.id_) Label = Command.label_;
+        error_->setText(tr("단축키 문제 %1건 · %2 › %3").arg(ById.size()).arg(DocumentShortcutRegistry::ScopeLabel(DocumentShortcutRegistry::ScopeOf(First.id_)), Label)); error_->setToolTip(First.message_); }
     auto* Buttons = findChild<QDialogButtonBox*>("settingsButtons");
-    Buttons->button(QDialogButtonBox::Ok)->setEnabled(Problem.isEmpty()); Buttons->button(QDialogButtonBox::Apply)->setEnabled(Problem.isEmpty());
+    Buttons->button(QDialogButtonBox::Ok)->setEnabled(Problems.isEmpty()); Buttons->button(QDialogButtonBox::Apply)->setEnabled(Problems.isEmpty());
+    emit ShortcutsValidated();
 }
 bool DocumentSettingsDialog::Apply(bool ResolveConflicts)
 {

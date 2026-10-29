@@ -261,6 +261,20 @@ QString EditModel::Structure(const QJsonObject& Request,const Cancellation& Canc
         else if(Action=="chapter-add")Book.chapter(Path,Request["title"].toString(),Request["after"].toInt(-1));
         else if(Action=="chapter-move")Book.move(Path,Request["delta"].toInt());
         else if(Action=="toc")Book.toc(Request["entries"].toArray());
+        else if(Action=="duplicate") {
+            // A copy stays in its folder so its relative references keep resolving.
+            const auto Target=Request["destination"].toString();const auto Media=Book.media_.value(Path);
+            if(Path==Book.rootfile_ || Media.isEmpty() || Media.startsWith("image/") || Media=="application/x-dtbncx+xml" || tokens(Book.item(Path).attribute("properties")).contains("nav"))Reject("edit-duplicate-resource",Path);
+            if(QFileInfo(Target).path()!=QFileInfo(Path).path())Reject("edit-duplicate-folder",Target);
+            Book.add(Target,Media,Book.read(Path));const auto Id=Book.item(Path).attribute("id");
+            for(auto Ref=Book.spine().firstChildElement();!Ref.isNull();Ref=Ref.nextSiblingElement())if(Ref.localName()=="itemref" && Ref.attribute("idref")==Id){auto Copy=element(Book.opf_,Opf,"itemref");Copy.setAttribute("idref",Book.item(Target).attribute("id"));Book.spine().insertAfter(Copy,Ref);break;}
+        } else if(Action=="resource-add") {
+            const auto Media=Request["mediaType"].toString();if(!QStringList{"text/css","font/ttf","font/otf","font/woff","font/woff2"}.contains(Media))Reject("edit-resource-media",Media);
+            const auto Encoded=Request["base64"].toString().toLatin1();const auto Decoded=QByteArray::fromBase64Encoding(Encoded,QByteArray::AbortOnBase64DecodingErrors);
+            if(!Decoded || Decoded.decoded.isEmpty() || Decoded.decoded.size()>(Media=="text/css"?2*1024*1024:16*1024*1024))Reject("edit-resource-budget",Path);
+            if(Media=="text/css"){const auto Text=QString::fromUtf8(Decoded.decoded);if(Text.toUtf8()!=Decoded.decoded)Reject("edit-resource-encoding",Path);cssReferences(Text,[](const QString& Value){return Value;});}
+            Book.add(Path,Media,Decoded.decoded);
+        }
         else if(Action=="image-convert") {
             if(!QStringList{"image/png","image/jpeg","image/gif","image/webp"}.contains(Book.media_.value(Path)))Reject("edit-image-convert-format",Path);
             const auto Format=Request["format"].toString();if(Format!="png" && Format!="jpeg")Reject("edit-image-convert-format");QBuffer Input;Input.setData(Book.read(Path));Input.open(QIODevice::ReadOnly);QImageReader Reader(&Input);Reader.setAutoTransform(true);const auto Size=Reader.size();

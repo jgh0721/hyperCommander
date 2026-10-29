@@ -887,6 +887,23 @@ void ImageReadingView::wheelEvent(QWheelEvent *Event)
         Move(Delta.y() < 0 ? 1 : -1);
     Event->accept();
 }
+bool ImageReadingView::RunCommand(const QString& Id)
+{
+    if (Id == "image.scrollDown") setScrollPosition(scrollPosition() + 40);
+    else if (Id == "image.scrollUp") setScrollPosition(scrollPosition() - 40);
+    else if (Id == "image.next" || Id == "image.pageNext") Move(1);
+    else if (Id == "image.previous" || Id == "image.pagePrevious") Move(-1);
+    else if (Id == "image.pageNextSingle") Move(1, true);
+    else if (Id == "image.pagePreviousSingle") Move(-1, true);
+    else if (Id == "image.first") GoTo(0);
+    else if (Id == "image.last" && book_) GoTo(book_->pages_.size() - 1);
+    else if (Id == "image.volumeNext") OpenVolume(1);
+    else if (Id == "image.volumePrevious") OpenVolume(-1);
+    else if (Id == "image.right") Move(rtl_ ? -1 : 1);
+    else if (Id == "image.left") Move(rtl_ ? 1 : -1);
+    else return false;
+    return true;
+}
 void ImageReadingView::keyPressEvent(QKeyEvent *E)
 {
     if (E->key() == Qt::Key_Down)

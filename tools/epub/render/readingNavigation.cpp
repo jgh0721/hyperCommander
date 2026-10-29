@@ -76,6 +76,9 @@ bool ReadingNavigation::Execute(const QString& Action,const QJsonValue& Value) {
     }
     if(Action=="bookmark-remove") {for(qsizetype I=0;I<bookmarks_.size();++I)if(bookmarks_[I].toObject()["id"]==Value){removals_.append(Value.toString());bookmarks_.removeAt(I);saveTimer_.start();refresh();return true;}return false;}
     if(Action=="source-position"){if(!Value.isObject() || !Value.toObject()["path"].isArray() || Value.toObject()["path"].toArray().size()>128)return false;send(Action,Value);return true;}
+    // Editing previews: the host shows the context menu and may narrow the reading column.
+    if(Action=="context-menu"){if(!Value.isBool())return false;send(Action,Value);return true;}
+    if(Action=="preview-width"){if(!Value.isDouble() || Value.toInt(-1)<0 || Value.toInt()>4096)return false;send(Action,Value);return true;}
     if((Action=="locate" || Action=="preview-location") && !cfi(Value.toString()))return false;
     if(QStringList{"locate","preview-location","image","footnote","close-popup"}.contains(Action)){send(Action,Value);return true;}
     return false;

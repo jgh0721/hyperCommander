@@ -14,6 +14,7 @@ public:
     bool Apply(bool ResolveConflicts = false);
 signals:
     void PreferencesSaved();
+    void ShortcutsValidated();
 private:
     void loadControls();
     void validateShortcuts();

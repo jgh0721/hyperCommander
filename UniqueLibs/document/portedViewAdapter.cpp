@@ -38,6 +38,13 @@ void QTextView::ReplaceContent(const QString& Text)
     m_editor->setSelectionByPos(0,m_editor->documentLength());m_editor->replace(Text);
 }
 void QTextView::CommitContent() { if(m_editor)m_editor->setModified(false); }
+void QTextView::AttachDocument(qintptr Document, const QString& Language)
+{
+    auto* Direct=dynamic_cast<ScintillaQtDirectBackend*>(m_editor.data());if(!Direct || !Document)return;
+    clearCurrentMatchHighlight();clearExcludedRanges();Direct->AttachDocument(Document);
+    // Document-level settings (read-only, end of line, history) do not travel with the view.
+    applyEditorSettings();setLanguage(Language);updateMetrics();emit statusChanged();
+}
 bool QPDFView::LoadContent(const QByteArray& Bytes, const QString& Path)
 {
     hc::document::ImageTraceSpan LoadTrace("pdf.open",Path);

@@ -20,6 +20,8 @@
 #include "core/ToolbarIcons.h"
 #include "core/PrintManager.h"
 #include <fmstyle/ThemeManager.h>
+#include <fmstyle/StyleProps.h>
+#include <QToolButton>
 #include <QApplication>
 #include <QPainter>
 #include <QResizeEvent>
@@ -121,17 +123,22 @@ namespace hc::document
         if(IsEpub()) {
             epubSourceHash_=Input.hash_;epubBytes_=Input.bytes_;epubPath_=Input.path_;
             {
-                auto* Bar=new QToolBar(tr("EPUB"),this);Bar->setObjectName("epubEditToolbar");Bar->setAccessibleName(tr("EPUB 도구모음"));layout()->addWidget(Bar);
-                auto* Edit=Bar->addAction(tr("편집"));Edit->setObjectName("epubEdit");Edit->setCheckable(epubEditingAllowed_);Edit->setToolTip(epubEditingAllowed_?tr("읽기 전용 리더와 EPUB 편집 모드 전환"):tr("HyperEditor에서 EPUB 편집"));
+                auto* Bar=new QToolBar(tr("EPUB"),this);Bar->setObjectName("epubEditToolbar");Bar->setAccessibleName(tr("EPUB 도구모음"));Bar->setToolButtonStyle(Qt::ToolButtonTextOnly);layout()->addWidget(Bar);
+                auto* Edit=new QAction(tr("편집"),Bar);Edit->setObjectName("epubEdit");Edit->setCheckable(epubEditingAllowed_);Edit->setToolTip(epubEditingAllowed_?tr("읽기 전용 리더와 EPUB 편집 모드 전환"):tr("HyperEditor에서 EPUB 편집"));
                 if(epubEditingAllowed_) {
+                    // 읽기 | 편집 segment; 편집 stays the toggle that the workspace drives.
+                    auto* Read=new QAction(tr("읽기"),Bar);Read->setObjectName("epubRead");Read->setCheckable(true);Read->setChecked(true);Bar->addAction(Read);Bar->addAction(Edit);
+                    fm::style::setSegments({qobject_cast<QAbstractButton*>(Bar->widgetForAction(Read)),qobject_cast<QAbstractButton*>(Bar->widgetForAction(Edit))});
                     connect(Edit,&QAction::toggled,this,[this,Edit](bool Checked){
-                        if(Checked && !editEpub()){const QSignalBlocker Block(Edit);Edit->setChecked(false);return;}
-                        if(epubEditor_){epubEditor_->SetSourceVisible(Checked);const bool UsePreview=Checked || epubEditor_->PreviewView();epubEditor_->setVisible(UsePreview);epub_->setVisible(!UsePreview);}else epub_->show();emit ViewStateChanged();
+                        if(Checked && !editEpub()){const QSignalBlocker Block(Edit);Edit->setChecked(false);updateEpubMode();return;}
+                        if(epubEditor_){epubEditor_->SetSourceVisible(Checked);const bool UsePreview=Checked || epubEditor_->PreviewView();epubEditor_->setVisible(UsePreview);epub_->setVisible(!UsePreview);}else epub_->show();updateEpubMode();emit ViewStateChanged();
                     });
-                    auto* Reopen=Bar->addAction(tr("저장본 다시 열기"));Reopen->setObjectName("epubReopen");connect(Reopen,&QAction::triggered,this,[this]{if(epubEditor_ && !epubEditor_->Snapshot()["validating"].toBool())emit OpenRequested(epubPath_);});
-                }else {Edit->setEnabled(false);connect(Edit,&QAction::triggered,this,&DocumentViewPane::EditEpubRequested);}
+                    connect(Read,&QAction::triggered,this,[Read,Edit]{Read->setChecked(true);if(Edit->isChecked())Edit->setChecked(false);});
+                    auto* Reopen=new QAction(tr("저장본 다시 열기"),Bar);Reopen->setObjectName("epubReopen");connect(Reopen,&QAction::triggered,this,[this]{if(epubEditor_ && !epubEditor_->Snapshot()["validating"].toBool())emit OpenRequested(epubPath_);});
+                }else {Bar->addAction(Edit);Edit->setEnabled(false);connect(Edit,&QAction::triggered,this,&DocumentViewPane::EditEpubRequested);}
             }
-            epub_=new EpubProcessView(epubRuntime_, {12, 1024ULL*1024*1024, 20000}, this);
+            // Readers, previews and their Chromium children are not counted or capped; the Job only ends them with their owner.
+            epub_=new EpubProcessView(epubRuntime_, {0, 0, 20000}, this);
             layout()->addWidget(epub_);epub_->show();
             epubFailure_=new QWidget(this);epubFailure_->setObjectName("epubFailure");epubFailure_->setAccessibleName(tr("EPUB 읽기 오류"));
             auto* FailureLayout=new QVBoxLayout(epubFailure_);auto* FailureText=new QLabel(epubFailure_);FailureText->setTextFormat(Qt::PlainText);FailureText->setWordWrap(true);FailureLayout->addWidget(FailureText);
@@ -193,7 +200,8 @@ namespace hc::document
         toolbar_->setObjectName("viewToolbar");layout()->addWidget(toolbar_);
         connect(view_, &QBaseView::ClipboardRequested, this, &DocumentViewPane::ClipboardRequested);
         if(pdf_) {auto* Auxiliary=view_->createAuxiliaryToolBar();if(Auxiliary){layout()->addWidget(Auxiliary);pdf_->ShowAnnotationToolBar(true);}}
-        layout()->addWidget(view_);
+        // A pane that is already visible would only queue the show, so commands sent at "ready" could miss the view.
+        layout()->addWidget(view_);view_->show();
         contribution_.viewId_=viewId_;contribution_.menuTitle_=viewId_=="pdf"?tr("PDF"):viewId_=="image"?tr("이미지"):tr("텍스트");
         contribution_.menuActions_=toolbar_->actions();
         if(text_) {
@@ -302,6 +310,25 @@ namespace hc::document
         connect(view_,&QBaseView::SaveRequested,this,&DocumentViewPane::SaveRequested);
         contribution_.menuActions_=toolbar_->actions();applyTheme();return true;
     }
+    void DocumentViewPane::updateEpubMode() {
+        auto* Bar=findChild<QToolBar*>("epubEditToolbar");if(!Bar)return;const bool Editing=IsEpubEditing();
+        if(auto* Read=Bar->findChild<QAction*>("epubRead")){const QSignalBlocker Block(Read);Read->setChecked(!Editing);}
+        bool After=false;for(auto* Item:Bar->actions()){if(Item->objectName()=="epubEditSeparator")After=true;if(After)Item->setVisible(Editing);}
+        contribution_.statusWidget_=Editing && epubEditor_?epubEditor_->StatusStrip():nullptr;
+    }
+    bool DocumentViewPane::CanRunViewCommand(const QString& Id)const {
+        if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return IsEpubEditing() && epubEditor_->CanRunCommand(Id);
+        // Every image pane owns a reading view; a single image steps through its folder while it is hidden.
+        if(Id.startsWith("image."))return image_ && reading_ && (!reading_->isHidden() || ((Id=="image.next" || Id=="image.previous") && !image_->IsEditing()));
+        return Id.startsWith("pdf.") && pdf_ && QStringList{"pdf.pageNext","pdf.pagePrevious","pdf.first","pdf.last"}.contains(Id);
+    }
+    bool DocumentViewPane::RunViewCommand(const QString& Id) {
+        if(!CanRunViewCommand(Id))return false;
+        if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return epubEditor_->RunCommand(Id);
+        if(Id.startsWith("image."))return reading_ && !reading_->isHidden()?reading_->RunCommand(Id):image_->StepImage(Id=="image.next"?1:-1);
+        if(Id=="pdf.pageNext")pdf_->nextPage();else if(Id=="pdf.pagePrevious")pdf_->previousPage();else if(Id=="pdf.first")pdf_->goToPage(0);else pdf_->goToPage(pdf_->totalPageCount()-1);return true;
+    }
+    void DocumentViewPane::SetShortcutBindings(const QJsonObject& Bindings){shortcutBindings_=Bindings;if(epubEditor_)epubEditor_->SetShortcutBindings(Bindings);}
     void DocumentViewPane::DiscardEpubRecovery(){if(epubEditor_)epubEditor_->DiscardRecovery();}
     void DocumentViewPane::SetEpubRecoveryEnabled(bool Enabled){if(epubEditor_)epubEditor_->SetRecoveryEnabled(Enabled);}
     void DocumentViewPane::CheckpointEpub(){if(epubEditor_)epubEditor_->Checkpoint();}
@@ -325,6 +352,16 @@ namespace hc::document
             });
             connect(epubEditor_,&EpubSourceEditor::SaveRequested,this,&DocumentViewPane::SaveRequested);connect(epubEditor_,&EpubSourceEditor::PreviewCommitted,this,[this]{epubEditor_->show();epub_->hide();epub_->RequestClose();});
             connect(epubEditor_,&EpubSourceEditor::EscapeRequested,this,&DocumentViewPane::EscapeRequested);connect(epubEditor_,&EpubSourceEditor::FullscreenRequested,this,&DocumentViewPane::FullscreenRequested);
+            // Editing commands join the EPUB toolbar after a marker; reader mode hides them.
+            if(auto* Bar=findChild<QToolBar*>("epubEditToolbar")) {
+                Bar->addSeparator()->setObjectName("epubEditSeparator");bool Spaced=false;
+                for(auto* Item:epubEditor_->ToolbarActions()) {
+                    if(Item->isSeparator() && !Spaced){auto* Spacer=new QWidget(Bar);Spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);Bar->addWidget(Spacer);Spaced=true;continue;}
+                    Bar->addAction(Item);auto* Button=qobject_cast<QToolButton*>(Bar->widgetForAction(Item));if(!Button)continue;
+                    if(Item->menu())Button->setPopupMode(QToolButton::InstantPopup);if(Item->objectName()=="epubSaveCopy")fm::style::setButtonRole(Button,fm::style::ButtonRole::Primary);
+                }
+            }
+            epubEditor_->SetShortcutBindings(shortcutBindings_);
         }
         if(auto* Action=findChild<QAction*>("epubEdit")){const QSignalBlocker Block(Action);Action->setChecked(true);}
         // Normalize native activation before hiding a focused foreign reader.
@@ -332,7 +369,7 @@ namespace hc::document
         const auto Root=GetAncestor(reinterpret_cast<HWND>(window()->winId()),GA_ROOT);
         const bool WasActive=GetAncestor(GetForegroundWindow(),GA_ROOT)==Root;
         if(WasActive){QApplication::setActiveWindow(window());SetActiveWindow(Root);SetFocus(Root);}
-        epub_->hide();epubEditor_->show();epubEditor_->SetSourceVisible(true);
+        epub_->hide();epubEditor_->show();epubEditor_->SetSourceVisible(true);updateEpubMode();
         if(WasActive && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root)Focus();return true;
     }
     QByteArray DocumentViewPane::Content() const
@@ -399,7 +436,7 @@ namespace hc::document
             if(QApplication::activeWindow()!=window())QApplication::setActiveWindow(window());
             SetActiveWindow(GetAncestor(Native,GA_ROOT));
         }
-        if(IsEpubEditing()){if(auto* Source=epubEditor_->findChild<QPlainTextEdit*>())Source->setFocus();}else if(epub_)currentEpub()->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
+        if(IsEpubEditing())epubEditor_->SourceInput()->isVisible()?epubEditor_->SourceInput()->setFocus():epubEditor_->setFocus();else if(epub_)currentEpub()->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
     }
     void DocumentViewPane::SetReadOnly(bool Enabled){readOnly_=Enabled;if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
