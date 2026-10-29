@@ -11,6 +11,11 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QPixmap>
+#include <QLabel>
+#include <QLocale>
+#include <QProgressBar>
+#include <QKeyEvent>
+#include <QTemporaryDir>
 #include <QProgressDialog>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -95,6 +100,54 @@ public:
         bool Saved = true;
         Controller.showProgress(QString::fromUtf8("새 버전과 서명을 확인하고 있습니다…")); QCoreApplication::processEvents();
         Saved &= Controller.progress_->grab().save(QDir(Directory).filePath("02-update-checking.png")); Controller.progress_->hide();
+        Controller.showProgress(QString::fromUtf8("Portable ZIP을 다운로드하고 있습니다…"));
+        auto* Progress = Controller.progress_.data();
+        auto* File = Progress->findChild<QLabel*>("hc.update.file");
+        auto* Amount = Progress->findChild<QLabel*>("hc.update.amount");
+        auto* Percent = Progress->findChild<QLabel*>("hc.update.percent");
+        auto* Bar = Progress->findChild<QProgressBar*>("hc.update.bar");
+        const QString Name = "HyperCommander-2026.10.29.1-windows-x64-portable.zip";
+        const QLocale Locale;
+        const std::uint64_t Total = 192382226;
+        for (const auto Count : {std::uint64_t(0), Total / 2, Total}) {
+            Progress->SetDownloadProgress(Name, Count, Total); QCoreApplication::processEvents();
+            if (!File || !Amount || !Percent || !Bar || File->text() != Name || !File->isVisible()
+                || Amount->text() != Locale.formattedDataSize(qint64(Count), 1, QLocale::DataSizeIecFormat) + " / " + Locale.formattedDataSize(qint64(Total), 1, QLocale::DataSizeIecFormat)
+                || Percent->text() != Locale.toString(double(Count) * 100.0 / double(Total), 'f', 1) + '%'
+                || Bar->maximum() != 1000 || Bar->value() != int(Count * 1000 / Total) || Progress->width() > 420)
+                throw std::runtime_error("download-progress-content-or-width");
+            Saved &= Progress->grab().save(QDir(Directory).filePath("download-" + QString::number(Bar->value()) + ".png"));
+        }
+        Progress->SetDownloadProgress(Name, Total / 2, 0); QCoreApplication::processEvents();
+        if (Bar->maximum() != 0 || Percent->isVisible() || Amount->text().isEmpty()) throw std::runtime_error("unknown-download-total");
+        Controller.showProgress(QString::fromUtf8("ZIP·파일 해시·코드 서명을 검증하고 있습니다…")); QCoreApplication::processEvents();
+        if (File->isVisible() || Amount->isVisible() || Percent->isVisible() || Bar->maximum() != 0) throw std::runtime_error("stale-download-details");
+        Saved &= Progress->grab().save(QDir(Directory).filePath("download-verifying.png"));
+        // Exercise the real archive transfer, including an interrupted Range resume.
+        QTemporaryDir Transfer(QDir(Directory).filePath("transfer-XXXXXX"));
+        if (!Transfer.isValid()) throw std::runtime_error("progress-transfer-directory");
+        QFile Archive(Transfer.filePath(Name));
+        if (!Archive.open(QIODevice::WriteOnly) || Archive.write(QByteArray(262144, 'x')) != 262144) throw std::runtime_error("progress-transfer-fixture");
+        Archive.close();
+        delete Controller.network_; auto* Network = new FixtureNetwork(Transfer.path(), "resume", &Controller); Controller.network_ = Network;
+        Controller.showProgress(QString::fromUtf8("Portable ZIP을 다운로드하고 있습니다…"));
+        Controller.transferStarted_ = QDateTime::currentMSecsSinceEpoch(); Controller.busy_ = true;
+        const auto Url = "https://github.com/jgh0721/hyperCommander/releases/download/v2026.10.29.1/" + Name;
+        bool Downloaded = false;
+        Controller.fetchArchive(Url, Url, Transfer.filePath("portable.part"), 262144, [&] { Downloaded = true; });
+        const auto Start = GetTickCount64();
+        while (!Downloaded && GetTickCount64() - Start < 10000) QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        if (!Downloaded || Network->ranges_.size() != 2 || !Network->ranges_[0].isEmpty() || Network->ranges_[1] != "bytes=131072-"
+            || File->text() != Name || Bar->value() != 1000 || Percent->text() != Locale.toString(100.0, 'f', 1) + '%')
+            throw std::runtime_error("download-resume-progress");
+        Controller.busy_ = false;
+        QKeyEvent Escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier); QCoreApplication::sendEvent(Progress, &Escape);
+        if (!Progress->wasCanceled() || Progress->isVisible() || !Controller.stop_.stop_requested()) throw std::runtime_error("progress-escape-cancel");
+        Controller.stop_ = std::stop_source{}; Controller.showProgress("cancel");
+        Progress->findChild<QPushButton*>()->click();
+        if (!Progress->wasCanceled() || !Controller.stop_.stop_requested()) throw std::runtime_error("progress-button-cancel");
+        Controller.stop_ = std::stop_source{}; Controller.showProgress("close"); Progress->close();
+        if (!Progress->wasCanceled() || !Controller.stop_.stop_requested()) throw std::runtime_error("progress-close-cancel");
         Controller.release_.version_ = "2026.10.18.4"; Controller.release_.zipBytes_ = 192382226;
         Controller.release_.notes_ = "https://github.com/jgh0721/hyperCommander/releases/tag/v2026.10.18.4";
         for (const bool Ready : {false, true}) {
@@ -110,7 +163,7 @@ public:
             Controller.offer();
         }
         if (!Saved) throw std::runtime_error("capture-save");
-        std::cout << "Production update dialogs captured with a simulated release; no network or installation performed.\n";
+        std::cout << "Progress content, compact width, resumed transfer and cancellation: PASS. Production dialogs captured; no external network or installation performed.\n";
         return 0;
     }
     static int Run(const QString& Root, const QString& Package, const QString& Mode) {

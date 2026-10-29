@@ -22,6 +22,7 @@ public:
     void setLabelText(const QString& Text);
     void setRange(int Minimum, int Maximum);
     void setValue(int Value);
+    void SetDownloadProgress(const QString& FileName, std::uint64_t Received, std::uint64_t Total);
     bool wasCanceled() const { return canceled_; }
     void reject() override;
     std::function<void()> Canceled;
@@ -29,6 +30,9 @@ protected:
     void showEvent(QShowEvent* Event) override;
 private:
     QLabel* label_ = nullptr;
+    QLabel* file_ = nullptr;
+    QLabel* amount_ = nullptr;
+    QLabel* percent_ = nullptr;
     QProgressBar* bar_ = nullptr;
     bool canceled_ = false;
 };

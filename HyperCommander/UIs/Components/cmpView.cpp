@@ -928,15 +928,27 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         }
         resetPath_.clear(); resetSelection_.clear(); resetFocus_.clear(); resetFocusFallback_.clear();
         const auto Previous = model_->property("hc.parentFocusName").toString();
+        const auto PreviousRoot = model_->property("hc.parentFocusPath").toString();
         const bool ParentNavigation = model_->property("hc.parentNavigation").toBool();
+        model_->setProperty("hc.parentFocusPath", QVariant{});
         model_->setProperty("hc.parentFocusName", QVariant{}); model_->setProperty("hc.parentNavigation", false);
         const auto Native = qobject_cast<CFSModel*>(model_);
         if (!ParentNavigation || (Native && Native->LastNavigationError())) return;
         if (view_->getRowCount()) view_->setFocusedRowIndex(0);
         if (!hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["focusPreviousDirectory"].toBool(true)) return;
-        for (int Index = 0; !Previous.isEmpty() && Index < model_->rowCount(); ++Index) {
+        for (int Index = 0; (!Previous.isEmpty() || !PreviousRoot.isEmpty()) && Index < model_->rowCount(); ++Index) {
             const auto Source = model_->index(Index, 0);
-            if (model_->GetName(Source) != Previous) continue;
+            if (!PreviousRoot.isEmpty()) {
+                // Shell drive labels are localized; match their filesystem identity.
+                const auto Item = model_->GetFileInfo(Source);
+                QString Path = model_->GetName(Source);
+                if (Item && Item->storageEntry_) {
+                    const auto It = Item->storageEntry_->hints_.find("filesystemPath");
+                    if (It != Item->storageEntry_->hints_.end()) Path = QString::fromStdString(It->second);
+                }
+                if (QDir::cleanPath(QDir::fromNativeSeparators(Path)).compare(
+                    QDir::cleanPath(QDir::fromNativeSeparators(PreviousRoot)), Qt::CaseInsensitive) != 0) continue;
+            } else if (model_->GetName(Source) != Previous) continue;
             const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
             if (!Visible.isValid()) break;
             const auto Row = view_->getRow(Visible);

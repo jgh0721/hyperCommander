@@ -23,6 +23,7 @@
 #include <QNetworkRequest>
 #include <QProcess>
 #include <QLabel>
+#include <QLocale>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -88,13 +89,38 @@ UpdateProgressDialog::UpdateProgressDialog(const QString& Label, QWidget* Parent
 {
     setObjectName("hc.update.progress"); setWindowTitle(QObject::tr("HyperCommander 업데이트"));
     auto* Layout = new QVBoxLayout(this);
-    label_ = new QLabel(Label, this); label_->setWordWrap(true); label_->setMinimumWidth(360); Layout->addWidget(label_);
-    bar_ = new QProgressBar(this); bar_->setRange(0, 0); bar_->setTextVisible(false); Layout->addWidget(bar_);
+    label_ = new QLabel(Label, this); label_->setWordWrap(true); label_->setTextFormat(Qt::PlainText); Layout->addWidget(label_);
+    file_ = new QLabel(this); file_->setObjectName("hc.update.file"); file_->setTextFormat(Qt::PlainText);
+    file_->setWordWrap(true); file_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); file_->hide(); Layout->addWidget(file_);
+    bar_ = new QProgressBar(this); bar_->setObjectName("hc.update.bar"); bar_->setRange(0, 0); bar_->setTextVisible(false); Layout->addWidget(bar_);
+    auto* Details = new QHBoxLayout;
+    amount_ = new QLabel(this); amount_->setObjectName("hc.update.amount"); amount_->hide(); Details->addWidget(amount_, 1);
+    percent_ = new QLabel(this); percent_->setObjectName("hc.update.percent"); percent_->hide(); Details->addWidget(percent_);
+    Layout->addLayout(Details);
     auto* Footer = hc::ui::ApplyDialogFrame(this, {{}, {}, fm::ui::glyph::Refresh});
     auto* Cancel = new QPushButton(QObject::tr("취소"), this); hc::ui::MoveToFooter(Footer, Cancel);
     connect(Cancel, &QPushButton::clicked, this, &UpdateProgressDialog::reject);
+    // Override the shared header's preferred width for this compact progress window.
+    resize(420, sizeHint().height());
 }
-void UpdateProgressDialog::setLabelText(const QString& Text) { label_->setText(Text); }
+void UpdateProgressDialog::setLabelText(const QString& Text) {
+    label_->setText(Text); file_->clear(); amount_->clear(); percent_->clear();
+    file_->hide(); amount_->hide(); percent_->hide();
+}
+void UpdateProgressDialog::SetDownloadProgress(const QString& FileName, std::uint64_t Received, std::uint64_t Total) {
+    const auto Count = Total ? std::min(Received, Total) : Received;
+    file_->setText(FileName); file_->setToolTip(FileName); file_->show();
+    const QLocale Locale;
+    const auto Bytes = [&](std::uint64_t Value) { return Locale.formattedDataSize(qint64(Value), 1, QLocale::DataSizeIecFormat); };
+    amount_->setText(Total ? QObject::tr("%1 / %2").arg(Bytes(Count), Bytes(Total)) : QObject::tr("%1 받음").arg(Bytes(Count)));
+    amount_->show();
+    if (Total) {
+        bar_->setRange(0, 1000); bar_->setValue(int(Count * 1000 / Total));
+        percent_->setText(Locale.toString(double(Count) * 100.0 / double(Total), 'f', 1) + '%'); percent_->show();
+    } else {
+        bar_->setRange(0, 0); percent_->clear(); percent_->hide();
+    }
+}
 void UpdateProgressDialog::setRange(int Minimum, int Maximum) { bar_->setRange(Minimum, Maximum); }
 void UpdateProgressDialog::setValue(int Value) { bar_->setValue(Value); }
 // Like QProgressDialog::cancel: remember the request, hide, then tell the owner once per showing.
@@ -186,6 +212,8 @@ void UpdateController::fetchArchive(const QString& Origin, const QString& Addres
     if (!File->open(QIODevice::ReadWrite)) { fail("update-download-write: " + File->errorString()); return; }
     auto Base = std::make_shared<std::uint64_t>(std::uint64_t(File->size()));
     if (*Base > Limit) { File->resize(0); *Base = 0; }
+    const auto FileName = QUrl(Origin).fileName();
+    if (progress_) progress_->SetDownloadProgress(FileName, *Base, Limit);
     if (*Base == Limit) { File->close(); Done(); return; }
     File->seek(qint64(*Base));
     QNetworkRequest Request(Url); Request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
@@ -210,14 +238,15 @@ void UpdateController::fetchArchive(const QString& Origin, const QString& Addres
         *Count += Data.size();
         if (File->write(Data) != Data.size()) { *Error = "update-download-write"; Reply->abort(); }
     };
-    connect(Reply, &QNetworkReply::readyRead, this, [this, Reply, Read, Limit, Base, Count] {
+    connect(Reply, &QNetworkReply::readyRead, this, [this, Reply, Read, Limit, Base, Count, FileName] {
         while (Reply->bytesAvailable() > 0 && Reply->isOpen()) { const auto Before = Reply->bytesAvailable(); Read(); if (Reply->bytesAvailable() >= Before) break; }
-        if (progress_) { progress_->setRange(0, 1000); progress_->setValue(int((*Base + *Count) * 1000 / Limit)); }
+        if (progress_) progress_->SetDownloadProgress(FileName, *Base + *Count, Limit);
     });
-    connect(Reply, &QNetworkReply::finished, this, [this, Reply, File, Base, Count, Error, Limit, Done = std::move(Done), Origin, Partial, Redirects, Attempt, Read] {
+    connect(Reply, &QNetworkReply::finished, this, [this, Reply, File, Base, Count, Error, Limit, Done = std::move(Done), Origin, Partial, Redirects, Attempt, Read, FileName] {
         while (Reply->bytesAvailable() > 0 && Reply->isOpen()) { const auto Before = Reply->bytesAvailable(); Read(); if (Reply->bytesAvailable() >= Before) break; }
         Reply->deleteLater(); if (reply_ == Reply) reply_.clear();
         const bool Flushed = File->flush(); File->close();
+        if (progress_) progress_->SetDownloadProgress(FileName, *Base + *Count, Limit);
         if (stop_.stop_requested()) { busy_ = false; if (progress_) progress_->hide(); return; }
         const auto Status = Reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (Status >= 300 && Status <= 399 && Error->isEmpty()) {
@@ -293,6 +322,7 @@ void UpdateController::offer() {
 void UpdateController::download() {
     stop_ = std::stop_source{}; const auto Root = root_, Tx = tx_; const auto Release = release_; const auto Current = currentVersion_;
     showProgress(tr("Portable ZIP을 다운로드하고 있습니다…"));
+    progress_->SetDownloadProgress(QUrl(Text(Release.url_)).fileName(), 0, Release.zipBytes_);
     // The partial download is named by the archive hash, so it survives later checks
     // and is never mistaken for another release.
     const auto Partial = QDir(Root).filePath(".update/download/" + Text(Release.zipHash_) + ".part");

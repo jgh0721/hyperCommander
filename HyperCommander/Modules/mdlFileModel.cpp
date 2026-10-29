@@ -108,14 +108,16 @@ void CFsModelT::ChangeDirectory( const QString& Child )
 {
     QString Notify; bool IsEscape = false;
     const auto Root = GetRoot();
-    QString PreviousDirectory;
+    QString PreviousDirectory, PreviousRoot;
     if (Child == "..") {
         auto PreviousPath = QDir::fromNativeSeparators(GetCurrentPath());
         if (IsRoot() && Root && (Root->GetFeatures() & nsHC::FS_FEA_PACK)) PreviousPath = QDir::fromNativeSeparators(Root->GetRoot());
         while (PreviousPath.endsWith('/') && PreviousPath.size() > 1) PreviousPath.chop(1);
         PreviousDirectory = PreviousPath.section('/', -1);
+        if (IsRoot() && Root && !(Root->GetFeatures() & nsHC::FS_FEA_PACK)) PreviousRoot = GetCurrentPathWithRoot();
     }
     setProperty("hc.parentFocusName", PreviousDirectory);
+    setProperty("hc.parentFocusPath", PreviousRoot);
     setProperty("hc.parentNavigation", Child == "..");
 
     if( Child.startsWith( '/' ) == true || Child.startsWith( '\\' ) == true )

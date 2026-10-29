@@ -4832,8 +4832,9 @@ private slots:
 
     void driveRootNavigationUi()
     {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
         const auto Workspace = main_->CaptureWorkspace();
-        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Original); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         const auto Letter = Directory.path().front().toUpper();
         const auto Root = QString(Letter) + ":/";
@@ -4862,6 +4863,28 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading()
                 && QDir::fromNativeSeparators(Panel->CurrentPath()) == Root, 10000);
             QCOMPARE(Other->CurrentPath(), OtherPath);
+        }
+        QStringList Roots{Root, QDir::fromNativeSeparators(QCoreApplication::applicationDirPath()).left(3)};
+        Roots.removeDuplicates();
+        for (const bool Enabled : {true, false}) {
+            auto General = Settings.Read(hc::settings::Section::General).toObject(); General["focusPreviousDirectory"] = Enabled;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General));
+            for (auto* Panel : panels_) for (const auto& DriveRoot : Roots) {
+                auto* Model = static_cast<CFSModel*>(model(Panel));
+                auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+                Panel->ChangeCurrentPath(DriveRoot, {});
+                QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && QDir::fromNativeSeparators(Panel->CurrentPath()) == DriveRoot, 10000);
+                Model->ChangeDirectory("..");
+                QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && hc::ui::IsDriveList(Model->WorkspaceLocation()) && Model->rowCount() > 0, 10000);
+                const auto FocusedDrive = [&] {
+                    auto Index = View->BaseView()->focusedRow().modelIndex(0);
+                    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                    const auto Item = Model->GetFileInfo(Index);
+                    return Item && Item->storageEntry_ ? hc::ui::DriveLetterSortKey(*Item->storageEntry_) : 26;
+                };
+                if (Enabled) QTRY_COMPARE(FocusedDrive(), DriveRoot.front().toUpper().unicode() - 'A');
+                else QTRY_COMPARE(View->BaseView()->focusedRowIndex(), 0);
+            }
         }
     }
 
