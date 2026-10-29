@@ -293,6 +293,7 @@ if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOUR
     endforeach()
 endif()
 if(TARGET hc_smb_tests)
+    target_link_libraries(hc_smb_tests PRIVATE msi)
     add_dependencies(hc_smb_tests hc_wlx_fixture hc_tc_data_fixture hc_dopus_fixture)
 endif()
 qt_add_executable(hc_hosted_wlx_tests tstHostedWlx.cpp)
@@ -366,7 +367,7 @@ add_custom_command(OUTPUT "${HC_SEVENZIP_CORPUS}"
         -OutputDirectory "${HC_SEVENZIP_CORPUS_DIR}" -ToolsDirectory "${CMAKE_BINARY_DIR}/sevenzip-tools"
     VERBATIM)
 add_custom_target(hc_sevenzip_corpus DEPENDS "${HC_SEVENZIP_CORPUS}")
-qt_add_executable(hc_sevenzip_tests tstSevenZip.cpp ${HC_WCX_TEST_SOURCES})
+qt_add_executable(hc_sevenzip_tests tstSevenZip.cpp msiBrowseFixture.hpp ../UniqueLibs/archiveExtractJob.cpp ${HC_WCX_TEST_SOURCES})
 target_include_directories(hc_sevenzip_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
 target_link_libraries(hc_sevenzip_tests PRIVATE hc_builtin_sevenzip hc_sevenzip_backend hc_wcx_backend Qt6::Test)
 target_compile_options(hc_sevenzip_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

@@ -176,7 +176,7 @@ struct QPluginManagementPage::State {
         entries_.clear();
         // Product catalog identity does not depend on an external plugin list or
         // file existence. Missing package components remain diagnosable rows.
-        addBuiltin("builtin.sevenzip", "7-Zip", 1, hc::plugins::BuiltinExtensions("builtin.sevenzip"), "7z · zip · zipx · rar · 분할 압축", "열기 · 해제 · 생성(7z/ZIP)", QString(hc::layout::SevenZipPackage) + "/7z.dll");
+        addBuiltin("builtin.sevenzip", "7-Zip", 1, hc::plugins::BuiltinExtensions("builtin.sevenzip"), "7z · zip · zipx · rar · msi · cab · 분할 압축", "열기 · 해제 · 생성(7z/ZIP)", QString(hc::layout::SevenZipPackage) + "/7z.dll");
         addBuiltin("builtin.iso", "ISO 이미지", 1, {"iso"}, "iso", "디스크 이미지 열기 · 생성", QString(hc::layout::IsoImagePackage) + "/hc_isoimage_wcx.wcx64");
         addBuiltin("builtin.alzegg", "ALZ · EGG", 1, {"alz", "egg"}, "alz · egg", "압축 열기 · 압축 해제", QString(hc::layout::AlzEggPackage) + "/UnEGG64.dll");
         const auto Documents = hc::plugins::BuiltinExtensions("builtin.hyperviewer");

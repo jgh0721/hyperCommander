@@ -31,6 +31,11 @@ public:
         }
         if (pinned_ < request_.archives_.size()) {
             const auto& Source = request_.archives_[pinned_];
+            if (Source.entry_.hints_.contains("virtualArchiveRoot")) {
+                if (!Source.reader_) return failed({ErrorCategory::InvalidRequest, "extract-reader-required"});
+                auto Fresh = Source.reader_->Stat(Source.entry_.id_, Context.operation_).get(); if (!Fresh.HasValue()) return failed(Fresh.Failure());
+                ++pinned_; return JobStep{JobState::Preparing};
+            }
             if (Source.entry_.directory_ || (Source.entry_.locator_.kind_ != LocatorKind::Local && Source.entry_.locator_.kind_ != LocatorKind::Smb) || !Source.reader_)
                 return failed({ErrorCategory::Unsupported, "extract-native-archive-file-required"});
             if (request_.readers_(Source.entry_).empty()) return failed({ErrorCategory::Unsupported, "extract-no-configured-plugin: " + Source.entry_.name_});
@@ -62,7 +67,7 @@ public:
             const auto Candidates = request_.readers_(Source.entry_);
             if (Candidates.empty()) return failed({ErrorCategory::Unsupported, "extract-no-configured-plugin: " + Source.entry_.name_});
             Error Last{ErrorCategory::Unsupported, "extract-cannot-open"};
-            root_ = {LocatorKind::Archive, Source.entry_.locator_.root_, {{"wcx", "/"}}};
+            root_ = Source.entry_.hints_.contains("virtualArchiveRoot") ? Source.entry_.locator_ : Locator{LocatorKind::Archive, Source.entry_.locator_.root_, {{"wcx", "/"}}};
             for (const auto& Candidate : Candidates) {
                 auto Opened = Candidate->Enumerate(root_, Context.operation_).get();
                 if (Opened.HasValue()) { reader_ = Candidate; cursor_ = std::move(Opened.Value()); break; }
@@ -82,7 +87,8 @@ public:
             auto Page = cursor_->Next(256, Context.operation_).get(); if (!Page.HasValue()) return failed(Page.Failure());
             if (entries_.size() + Page.Value().entries_.size() > Context.operation_.EnumerationLimit()) return failed({ErrorCategory::BudgetExceeded, "extract-entry-budget"});
             if (Page.Value().entries_.empty() && !Page.Value().end_) return failed({ErrorCategory::Unavailable, "extract-list-no-progress"});
-            for (const auto& Entry : Page.Value().entries_) entries_.push_back({Entry, reader_, {}});
+            for (const auto& Entry : Page.Value().entries_)
+                if (!Entry.hints_.contains("virtualArchiveRoot")) entries_.push_back({Entry, reader_, {}});
             listed_ = Page.Value().end_; return JobStep{JobState::Preparing};
         }
         if (entries_.empty()) inner_ = std::make_unique<DirectoryPreparation>(target_, request_.writer_, std::make_unique<EmptyExtract>());

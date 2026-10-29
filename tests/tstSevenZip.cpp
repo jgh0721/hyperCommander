@@ -16,6 +16,10 @@
 #include <set>
 #include <algorithm>
 #include <atomic>
+#include "msiBrowseFixture.hpp"
+#include "UniqueLibs/archiveExtractJob.hpp"
+#include "UniqueLibs/nativeWritableStorage.hpp"
+#include "commonLibs/plugins/archiveSelectionDigest.hpp"
 
 using namespace hc::storage;
 using namespace hc::plugins;
@@ -68,6 +72,90 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void msiBrowse_data() {
+        QTest::addColumn<bool>("External"); QTest::addColumn<bool>("Loose");
+        QTest::newRow("embedded") << false << false;
+        QTest::newRow("external") << true << false;
+        QTest::newRow("loose") << false << true;
+    }
+    void msiBrowse() {
+        QFETCH(bool, External); QFETCH(bool, Loose); QTemporaryDir Input, Output, Cache;
+        const auto Path = Input.filePath("sample.msi"); QCOMPARE(msiFixture::Create(Path, External, Loose), UINT(ERROR_SUCCESS));
+        if (Loose) { QVERIFY(QDir().mkpath(Input.filePath("source/plugins"))); QVERIFY(Put(Input.filePath("source/MyApplication.exe"), "application\n")); QVERIFY(Put(Input.filePath("source/plugins/image.dll"), "plugin\n")); }
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        auto Listing = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY2(Listing.HasValue(), Listing.HasValue() ? "" : Listing.Failure().code_.c_str());
+        std::vector<ArchiveHeader> Headers;
+        for (;;) { auto Page = Listing.Value()->Next(1, {}); QVERIFY(Page.HasValue()); for (const auto& H : Page.Value().entries_) Headers.push_back(H); if (Page.Value().end_) break; }
+        Listing.Value().reset();
+        std::vector<uint32_t> Selected; size_t Raw = 0;
+        for (uint32_t I = 0; I < Headers.size(); ++I) {
+            const auto& H = Headers[I];
+            if (H.virtualRoot_) { Raw = I; QCOMPARE(H.name_, "<Browse>"); QVERIFY2(H.virtualError_.empty(), H.virtualError_.c_str()); QVERIFY(H.directory_); }
+            else if (!H.directory_ && H.name_.starts_with("<Browse>/")) Selected.push_back(I);
+        }
+        QVERIFY(Raw > 3); QCOMPARE(Selected.size(), size_t(2));
+        QCOMPARE(Headers[Selected[0]].name_, "<Browse>/MyApplication/MyApplication.exe");
+        QCOMPARE(Headers[Selected[1]].name_, "<Browse>/MyApplication/plugins/image.dll");
+        auto Batch = Backend->ExtractSelected(Path.toStdString(), Output.path().toStdString(), Selected, {});
+        QVERIFY2(Batch.HasValue(), Batch.HasValue() ? "" : Batch.Failure().code_.c_str());
+        QCOMPARE(Read(Output.filePath(QString::number(Selected[0]) + ".bin")), QByteArray("application\n"));
+        QCOMPARE(Read(Output.filePath(QString::number(Selected[1]) + ".bin")), QByteArray("plugin\n"));
+        ArchiveSelectionDigest Digest; for (auto I : Selected) Digest.Add(I, Headers[I]); QCOMPARE(Read(Output.filePath("selection.sha256")), Digest.Result());
+        auto Extracted = Backend->Extract(Path.toStdString(), Headers[Selected[1]], Output.filePath("single.dll").toStdString(), {});
+        QVERIFY2(Extracted.HasValue(), Extracted.HasValue() ? "" : Extracted.Failure().code_.c_str()); QCOMPARE(Read(Output.filePath("single.dll")), QByteArray("plugin\n"));
+        // The original Compound stream remains extractable under its original ordinal.
+        if (!External && !Loose) {
+            auto Cab = std::find_if(Headers.begin(), Headers.begin() + Raw, [](const auto& H) { return H.name_ == "payload.cab"; }); QVERIFY(Cab != Headers.begin() + Raw);
+            QVERIFY(Backend->Extract(Path.toStdString(), *Cab, Output.filePath("raw.cab").toStdString(), {}).HasValue()); QCOMPARE(Read(Output.filePath("raw.cab")), msiFixture::Cabinet());
+        }
+        Locator Root{LocatorKind::Archive, Path.toStdString(), {{"wcx", "/"}}};
+        auto Provider = MakeWcxReadProvider({}, Root, Cache.path().toStdString(), Backend);
+        auto RootList = Provider->Enumerate(Root, {}).get(); QVERIFY(RootList.HasValue()); auto RootPage = RootList.Value()->Next(128, {}).get(); QVERIFY(RootPage.HasValue());
+        auto Browse = std::find_if(RootPage.Value().entries_.begin(), RootPage.Value().entries_.end(), [](const auto& E) { return E.hints_.contains("virtualArchiveRoot"); }); QVERIFY(Browse != RootPage.Value().entries_.end());
+        QCOMPARE(Browse->name_, "Browse"); QCOMPARE(Browse->hints_.at("displayName"), "<Browse>");
+        QCOMPARE(Browse->locator_.nesting_.back().entry_, "/" + Browse->name_);
+        auto Logical = Provider->Enumerate(Browse->locator_, {}).get(); QVERIFY(Logical.HasValue()); auto Page = Logical.Value()->Next(128, {}).get(); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), size_t(1)); QCOMPARE(Page.Value().entries_[0].name_, "MyApplication");
+        auto At = Root; At.nesting_.back().entry_ = "/Browse/MyApplication/plugins/image.dll";
+        auto Entry = Provider->Resolve(At, {}).get(); QVERIFY(Entry.HasValue());
+        auto Stream = Provider->OpenRead(Entry.Value().id_, {}).get(); QVERIFY2(Stream.HasValue(), Stream.HasValue() ? "" : Stream.Failure().code_.c_str());
+        auto Bytes = Stream.Value()->Read(128, {}).get(); QVERIFY(Bytes.HasValue()); QCOMPARE(QByteArray(reinterpret_cast<const char*>(Bytes.Value().bytes_.data()), Bytes.Value().bytes_.size()), QByteArray("plugin\n")); Stream.Value().reset();
+        // Selecting Browse has the same extraction coordinator semantics as an archive.
+        for (bool Separate : {false, true}) {
+            QTemporaryDir Destination; hc::operations::ExtractRequest Request; Request.archives_ = {{*Browse, Provider, {}}}; Request.sourceRoot_ = Root;
+            Request.destination_ = {LocatorKind::Local, Destination.path().toStdString()}; Request.writer_ = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
+            Request.separateFolders_ = Separate; Request.readers_ = [Provider](const auto&) { return std::vector<std::shared_ptr<IStorageProvider>>{Provider}; };
+            auto Prepared = hc::operations::PrepareExtract(std::move(Request)); QVERIFY(Prepared.HasValue());
+            hc::operations::JobStepContext Context; hc::operations::JobState State = hc::operations::JobState::Preparing;
+            for (int I = 0; I < 10000; ++I) {
+                auto Step = Prepared.Value().task_->Advance(Context); State = Step.next_;
+                QVERIFY2(State != hc::operations::JobState::Failed, Step.error_ ? Step.error_->code_.c_str() : "extract failed");
+                QVERIFY(State != hc::operations::JobState::WaitingForUser);
+                Context.committing_ = State == hc::operations::JobState::Committing;
+                if (State == hc::operations::JobState::Completed) break;
+                QTest::qWait(1); // Allow the asynchronous provider worker to finish.
+            }
+            QCOMPARE(State, hc::operations::JobState::Completed); QVERIFY(Prepared.Value().task_->Finalize(State).empty());
+            const auto Prefix = Separate ? "Browse/" : "";
+            QCOMPARE(Read(Destination.filePath(QString(Prefix) + "MyApplication/plugins/image.dll")), QByteArray("plugin\n"));
+            QVERIFY(QFileInfo(Destination.filePath(QString(Prefix) + "MyApplication/empty")).isDir());
+            QVERIFY(!QFileInfo::exists(Destination.filePath("<Browse>")));
+        }
+        if (External) {
+            QVERIFY(QFile::remove(Input.filePath("payload.cab")));
+            QVERIFY(Backend->Enumerate(Path.toStdString(), false, {}).HasValue());
+            auto Missing = Backend->Extract(Path.toStdString(), Headers[Selected[0]], Output.filePath("missing").toStdString(), {}); QVERIFY(!Missing.HasValue()); QVERIFY(Missing.Failure().code_.starts_with("msi-source-missing:"));
+        }
+    }
+    void msiInvalidLogicalTree() {
+        for (bool Cycle : {false, true}) {
+            QTemporaryDir Input; const auto Path = Input.filePath("invalid.msi"); QCOMPARE(msiFixture::Create(Path, false, false, !Cycle, Cycle), UINT(ERROR_SUCCESS));
+            auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); auto Listing = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(Listing.HasValue());
+            bool Marker = false; for (;;) { auto Page = Listing.Value()->Next(128, {}); QVERIFY(Page.HasValue()); for (const auto& H : Page.Value().entries_) if (H.virtualRoot_) { Marker = true; QVERIFY(!H.virtualError_.empty()); } if (Page.Value().end_) break; } QVERIFY(Marker);
+            Locator Root{LocatorKind::Archive, Path.toStdString(), {{"wcx", "/"}}}; auto Provider = MakeWcxReadProvider({}, Root, {}, Backend); QVERIFY(Provider->Enumerate(Root, {}).get().HasValue());
+            Root.nesting_.back().entry_ = "/Browse"; auto Failed = Provider->Enumerate(Root, {}).get(); QVERIFY(!Failed.HasValue()); QVERIFY(Failed.Failure().code_.starts_with("msi-"));
+        }
+    }
+
     void splitVolumesRead_data() {
         QTest::addColumn<QJsonObject>("Case"); QTest::addColumn<QString>("Name"); QTest::addColumn<bool>("Upper"); QTest::addColumn<bool>("Padded");
         const auto Cases = SplitFixtures(); QCOMPARE(Cases.size(), 6);

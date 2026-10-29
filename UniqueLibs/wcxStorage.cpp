@@ -143,6 +143,8 @@ namespace hc::storage
                     if (!Self.validLocation(At)) return Error{ErrorCategory::InvalidRequest, "archive-location"};
                     const auto& Path = At.nesting_.back().entry_;
                     if (Path != "/" && (!Self.entries_.contains(Path) || !Self.entries_.at(Path).directory_)) return Error{ErrorCategory::NotFound, "archive-directory-not-found"};
+                    if (Path != "/" && Self.entries_.at(Path).hints_.contains("virtualArchiveError"))
+                        return Error{ErrorCategory::Unavailable, Self.entries_.at(Path).hints_.at("virtualArchiveError"), {"wcx"}};
                     std::vector<EntrySnapshot> Items;
                     const auto Prefix = Path == "/" ? std::string("/") : Path + "/";
                     for (auto It=Self.entries_.lower_bound(Prefix); It!=Self.entries_.end() && It->first.starts_with(Prefix); ++It)
@@ -405,10 +407,24 @@ namespace hc::storage
                     if (!Lease.HasValue()) return Lease.Failure(); containerLease_ = std::move(Lease.Value()); archivePath_ = containerLease_->LocalPath();
                 }
                 entries_.clear(); unpackedBytes_.reset(); std::uint64_t Ordinal=0, Unpacked=0; bool SizeKnown=true;
-                const auto Scanned = scan(Context, [&](const hc::plugins::ArchiveHeader& Header, const std::string& Path) -> Result<bool> {
+                std::string VirtualSource, VirtualRoot;
+                const auto Scanned = scan(Context, [&](const hc::plugins::ArchiveHeader& Header, const std::string& ListedPath) -> Result<bool> {
+                    auto Path = ListedPath;
+                    if (Header.virtualRoot_) {
+                        // Keep the display token out of storage locators: generic
+                        // selection/copy contracts require name == locator leaf.
+                        // Raw Compound streams retain their names, even if an MSI
+                        // happens to contain a stream named Browse.
+                        VirtualSource = ListedPath; VirtualRoot = "/Browse";
+                        unsigned Suffix = 1;
+                        while (std::any_of(entries_.begin(), entries_.end(), [&](const auto& E) {
+                            return QString::fromStdString(E.first).compare(QString::fromStdString(VirtualRoot), Qt::CaseInsensitive) == 0;
+                        })) VirtualRoot = "/Browse (" + std::to_string(++Suffix) + ")";
+                        Path = VirtualRoot;
+                    } else if (!VirtualSource.empty() && Path.starts_with(VirtualSource + '/')) Path = VirtualRoot + Path.substr(VirtualSource.size());
                     if (entries_.size() >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "archive-entry-budget"};
                     const bool Directory = Header.directory_;
-                    if (!Directory && SizeKnown) {
+                    if (!Directory && SizeKnown && VirtualSource.empty()) {
                         if (Header.size_ > std::numeric_limits<std::uint64_t>::max() - Unpacked) SizeKnown = false;
                         else Unpacked += Header.size_;
                     }
@@ -420,6 +436,8 @@ namespace hc::storage
                     Entry.hints_["packedSize"] = std::to_string(Header.packedSize_);
                     Entry.hints_["crc"] = std::to_string(Header.crc_);
                     if (Header.encrypted_) Entry.hints_["encrypted"] = "1";
+                    if (Header.virtualRoot_) { Entry.hints_["displayName"] = "<Browse>"; Entry.hints_["virtualArchiveRoot"] = "1"; }
+                    if (!Header.virtualError_.empty()) Entry.hints_["virtualArchiveError"] = Header.virtualError_;
                     if (Header.metadataRename_) Entry.hints_["metadataRename"] = "1";
                     if (Header.rebuildEncrypted_) Entry.hints_["rebuildEncrypted"] = "1";
                     // Deletion must use the plugin's exact directory marker:

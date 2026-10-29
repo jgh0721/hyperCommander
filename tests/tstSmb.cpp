@@ -1,5 +1,6 @@
 ﻿#include "UniqueLibs/wcxStorage.hpp"
 #include "UniqueLibs/archiveExtractJob.hpp"
+#include "msiBrowseFixture.hpp"
 #include "UniqueLibs/qtJobJournal.hpp"
 #include "UniqueLibs/operationMetrics.hpp"
 #include "UniqueLibs/fileIconService.hpp"
@@ -8346,6 +8347,46 @@ private slots:
         Choices = TyStPlugInMgr::GetInstance()->RetrieveWCXByExts("ZX03", "sample.ZX03"); QCOMPARE(Choices.size(), 2);
         QCOMPARE(Choices.front().FileFullPath, QString("user-priority.wcx64")); QCOMPARE(Choices.back().FileFullPath, Options.binaryPath_);
         hc::settings::AppSettings().SetPlugins("wcx", {}); TyStPlugInMgr::GetInstance()->Refresh();
+        // Verify MSI navigation and extraction through the real command/UI path.
+        {
+            QTemporaryDir Directory, Output; const auto Path = Directory.filePath("sample.msi");
+            QCOMPARE(msiFixture::Create(Path), UINT(ERROR_SUCCESS));
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+            const auto Find = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
+            QVERIFY(Find("sample.msi").isValid()); Model->ChangeDirectory(Find("sample.msi")); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+            QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
+            QVERIFY(names(Model).contains("payload.cab")); QVERIFY(Find("<Browse>").isValid());
+            QCOMPARE(Model->data(Find("<Browse>"), Qt::DisplayRole).toString(), QString("<Browse>"));
+            Model->ChangeDirectory(Find("<Browse>")); QTRY_VERIFY(!Model->IsLoading()); QVERIFY(names(Model).contains("MyApplication"));
+            Model->ChangeDirectory(Find("MyApplication")); QTRY_VERIFY(!Model->IsLoading()); QVERIFY(names(Model).contains("MyApplication.exe")); QVERIFY(names(Model).contains("plugins"));
+            Model->ChangeDirectory(Find("..")); QTRY_VERIFY(!Model->IsLoading()); Model->ChangeDirectory(Find("..")); QTRY_VERIFY(!Model->IsLoading());
+            auto Selected = Find("<Browse>"); QVERIFY(Selected.isValid());
+            auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); auto& Scheduler = Bridge->FileJobs()->Scheduler();
+            auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid); Grid->BaseView()->deselectAll();
+            bool Focused = false;
+            for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
+                Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Model->GetName(Index) == "<Browse>") { Focused = true; QCOMPARE(Row, 1); break; }
+            }
+            QVERIFY(Focused); Grid->EnsureKeyboardFocusOnView(); emit Panel->sig_NotifyPanelActivated();
+            main_->grab().save(QFileInfo(QFINDTESTDATA("tstSmb.cpp")).dir().filePath(QString("../_build/msi-ui-%1.png").arg(main_->devicePixelRatioF())));
+            QSet<QString> Previous; for (const auto& Job : Scheduler.Snapshots()) Previous.insert(QString::fromStdString(Job.id_));
+            bool Seen = false; QTimer Answer; Answer.setInterval(10);
+            connect(&Answer, &QTimer::timeout, main_, [&] {
+                auto* Dialog = static_cast<hc::ui::ArchiveExtractDialog*>(main_->findChild<QDialog*>("hc.archive.extract")); if (!Dialog) return;
+                Seen = true; Answer.stop(); Dialog->findChild<QLineEdit*>("hc.archive.extract.path")->setText(Output.path());
+                auto* Separate = Dialog->findChild<QCheckBox*>("hc.archive.extract.separate"); QVERIFY(Separate->isEnabled()); Separate->setChecked(false);
+                Dialog->findChild<QCheckBox*>("hc.archive.extract.queued")->setChecked(false);
+                QTest::keyClick(Dialog->findChild<QLineEdit*>("hc.archive.extract.path"), Qt::Key_Return);
+            });
+            QTRY_VERIFY(Bridge->Action("hc.archive.extract")->isEnabled()); Answer.start(); QVERIFY(Bridge->ExecuteCommand("hc.archive.extract", Selected)); Answer.stop(); QVERIFY(Seen);
+            std::string Job; for (const auto& Item : Scheduler.Snapshots()) if (!Previous.contains(QString::fromStdString(Item.id_))) Job = Item.id_;
+            QVERIFY(!Job.empty()); QTRY_VERIFY_WITH_TIMEOUT(Scheduler.Snapshot(Job).HasValue() && hc::operations::IsTerminal(Scheduler.Snapshot(Job).Value().state_), 30000);
+            const auto Final = Scheduler.Snapshot(Job); QVERIFY2(Final.Value().state_ == hc::operations::JobState::Completed, Final.Value().error_ ? Final.Value().error_->code_.c_str() : "extract failed");
+            QFile File(Output.filePath("MyApplication/plugins/image.dll")); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), QByteArray("plugin\n"));
+            Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
+        }
         for (const auto* Name : {"plain.7z", "plain.zip", "plain.zipx", "test_read_format_rar5_compressed.rar"}) {
             QTemporaryDir Directory; QVERIFY(QFile::copy(QDir(Root).filePath(QString(Name) == "plain.zipx" ? "plain.zip" : Name), Directory.filePath(Name)));
             Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());

@@ -1214,13 +1214,19 @@ void CommandUiBridge::extractArchive() {
     for (auto* Other : main_->findChildren<CmpPanel*>()) if (Other != PanelOf(Model)) if (auto* Target = PanelModel(Other); Target && Target->GetRoot() && !Target->IsSearchResults()) {
         const auto Location = Target->WorkspaceLocation(); if (Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb) Destination = QString::fromStdString(Location.root_);
     }
-    hc::ui::ArchiveExtractDialog Dialog(Names, Destination, Inside, main_, RelativeBase); if (Dialog.exec() != QDialog::Accepted) return;
+    const bool BrowseRoot = Inside && !Context.selectionManifest_ && Sources.size() == 1 && Sources.front().entry_.hints_.contains("virtualArchiveRoot");
+    hc::ui::ArchiveExtractDialog Dialog(Names, Destination, Inside && !BrowseRoot, main_, RelativeBase); if (Dialog.exec() != QDialog::Accepted) return;
     const auto Path = Dialog.Destination(); Locator Target{(Path.startsWith("//") && (!Path.startsWith("//?/") || Path.startsWith("//?/UNC/", Qt::CaseInsensitive))) ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
     auto Native = MakeNativeReadProvider(Target.kind_); auto Writer = MakeNativeWritableStorage(Target.kind_, Native);
     const auto Conflict = Dialog.Conflict() == "replace" ? hc::operations::ConflictPolicy::Replace : Dialog.Conflict() == "skip" ? hc::operations::ConflictPolicy::Skip : hc::operations::ConflictPolicy::Ask;
     OperationContext Operation; Operation.passwordPrompt_ = hc::plugins::AskArchivePassword;
     Result<hc::operations::PreparedJob> Prepared = Error{ErrorCategory::Internal, "extract-prepare"};
-    if (Inside) {
+    if (BrowseRoot) {
+        hc::operations::ExtractRequest Request; Request.archives_ = Sources; Request.sourceRoot_ = Context.location_;
+        Request.destination_ = Target; Request.writer_ = Writer; Request.conflict_ = Conflict; Request.separateFolders_ = Dialog.SeparateFolders(); Request.elevation_ = fileJobs_->ElevationService();
+        Request.readers_ = [Reader = Sources.front().reader_](const EntrySnapshot&) { return std::vector<std::shared_ptr<IStorageProvider>>{Reader}; };
+        Prepared = hc::operations::PrepareExtract(std::move(Request), Operation);
+    } else if (Inside) {
         hc::operations::FileOperationRequest Copy; Copy.sources_ = std::move(Sources); Copy.selection_ = Context.selectionManifest_; Copy.selectionRoot_ = Context.location_;
         Copy.destination_ = Target; Copy.destinationWriter_ = Writer; Copy.conflict_ = Conflict; Copy.createParents_ = true; Copy.elevation_ = fileJobs_->ElevationService();
         Prepared = hc::operations::PrepareFileOperation(std::move(Copy), Operation);

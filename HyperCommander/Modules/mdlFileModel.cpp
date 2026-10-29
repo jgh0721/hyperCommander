@@ -285,7 +285,8 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
             }
         }
 
-        ChangeDirectory( Node->Name_ );
+        ChangeDirectory(Node->storageEntry_ && Node->storageEntry_->hints_.contains("virtualArchiveRoot")
+            ? QString::fromStdString(Node->storageEntry_->name_) : Node->Name_);
     }
 }
 

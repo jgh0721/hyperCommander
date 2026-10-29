@@ -8,7 +8,7 @@ namespace hc::plugins {
 // Display catalog only: document handlers still detect content dynamically.
 inline QStringList BuiltinExtensions(const QString& Id)
 {
-    if (Id == "builtin.sevenzip") return {"7z", "zip", "zipx", "rar", "001"};
+    if (Id == "builtin.sevenzip") return {"7z", "zip", "zipx", "rar", "001", "msi", "cab"};
     if (Id == "builtin.iso") return {"iso"};
     if (Id == "builtin.alzegg") return {"alz", "egg"};
     if (Id == "builtin.rhwp") return {"hwp", "hwpx"};

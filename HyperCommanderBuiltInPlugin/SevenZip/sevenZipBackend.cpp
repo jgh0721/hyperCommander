@@ -20,6 +20,8 @@
 #include <mutex>
 #include <condition_variable>
 #include <deque>
+#include <msi.h>
+#include <msiquery.h>
 #include <thread>
 
 namespace hc::plugins {
@@ -377,7 +379,7 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
     const UInt64 StartOnly = 0;
     for (unsigned Scan = 0; Scan < 2; ++Scan) for (UInt32 Index = 0; Index < Count; ++Index) {
         Property Name, Id; if (Get(Index, NArchive::NHandlerPropID::kName, &Name) != S_OK || Get(Index, NArchive::NHandlerPropID::kClassID, &Id) != S_OK) return Failure("7zip-format-property");
-        if (!QStringList{"7z", "zip", "Rar", "Rar5"}.contains(Name.Text(), Qt::CaseInsensitive)) continue;
+        if (!QStringList{"7z", "zip", "Rar", "Rar5", "Compound", "Cab"}.contains(Name.Text(), Qt::CaseInsensitive)) continue;
         if (Id.vt != VT_BSTR || SysStringByteLen(Id.bstrVal) != sizeof(GUID)) return Failure("7zip-format-guid");
         auto Value = std::make_unique<Archive>(); Value->format_ = Name.Text().toLower(); Value->state_->context_ = Context; Value->state_->archive_ = Path;
         Value->state_->volumeSet_ = Volume.kind_ != ArchiveVolumeKind::None; Value->state_->attempts_ = FirstAttempt;
@@ -583,7 +585,8 @@ public:
 private:
     HMODULE module_;
 };
+#include "sevenZipMsi.inl"
 #undef HC_COM_REFS
 }
-std::shared_ptr<IArchiveBackend> MakeSevenZipBackend(HMODULE Module) { return std::make_shared<Backend>(Module); }
+std::shared_ptr<IArchiveBackend> MakeSevenZipBackend(HMODULE Module) { return std::make_shared<msiBrowse::Adapter>(Module); }
 }

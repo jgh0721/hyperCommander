@@ -16,6 +16,9 @@ namespace hc::plugins
         bool rebuildEncrypted_ = false;
         // This adapter can reuse the stored payload when only its name changes.
         bool metadataRename_ = false;
+        // Synthetic container, never a physical output directory name.
+        bool virtualRoot_ = false;
+        std::string virtualError_;
     };
     struct ArchivePage { std::vector<ArchiveHeader> entries_; bool end_ = false; };
     class IArchiveListing

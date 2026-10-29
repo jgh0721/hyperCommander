@@ -314,6 +314,9 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                     RoleWith.setData(navigationError_ && navigationError_->category_ == hc::storage::ErrorCategory::Cancelled
                         ? tr("..   [취소]") : tr("..   [오류]")); break;
                 }
+                if (Col == 0 && Role == Qt::DisplayRole && Item->storageEntry_ && Item->storageEntry_->hints_.contains("virtualArchiveRoot")) {
+                    RoleWith.setData(QString::fromStdString(Item->storageEntry_->hints_.at("displayName"))); break;
+                }
                 if (Col == 0 && Role == Qt::DisplayRole && (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && Item->Name_ != "..") {
                     const auto Style = displaySettings_["directoryStyle"].toString();
                     if (Style == "brackets") { RoleWith.setData("[" + Item->Name_ + "]"); break; }
@@ -991,6 +994,7 @@ hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison
         // Name sorting needs no display object, template evaluation or identity
         // encoding except on a tie. Keep the exact shared text comparison rules.
         return hc::storage::PagedEntryIndex::Less([TextOrder, Direction](const auto& A, const auto& B) {
+            if (A.hints_.contains("virtualArchiveRoot") != B.hints_.contains("virtualArchiveRoot")) return A.hints_.contains("virtualArchiveRoot");
             if (A.directory_ != B.directory_) return A.directory_;
             const auto Order = TextOrder(QString::fromStdString(A.name_), QString::fromStdString(B.name_));
             if (Order) return Direction == Qt::AscendingOrder ? Order < 0 : Order > 0;
@@ -1019,7 +1023,9 @@ hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison
         }
         return Row;
     };
-    return hc::storage::PagedEntryIndex::Less([Compare, MakeRow](const auto& A, const auto& B) { return Compare(MakeRow(A), MakeRow(B)); });
+    return hc::storage::PagedEntryIndex::Less([Compare, MakeRow](const auto& A, const auto& B) {
+        if (A.hints_.contains("virtualArchiveRoot") != B.hints_.contains("virtualArchiveRoot")) return A.hints_.contains("virtualArchiveRoot");
+        return Compare(MakeRow(A), MakeRow(B)); });
 }
 
 void CFSModel::SetPageFilter(const QString& Query, bool ShowHidden, const QString& Match)
@@ -1257,7 +1263,7 @@ std::shared_ptr<hc::storage::IEntryIndex> CFSModel::DirectoryEntries() const
 nsHC::TySpFileSource CFSModel::makeDisplayItem(hc::storage::EntrySnapshot Entry, const QPixmap& FolderIcon, const QPixmap& FileIcon) const
 {
     nsHC::TySpFileSource Item(new nsHC::CFileSourceT, [](nsHC::CFileSourceT* Value) { if (Value->PIDL) CoTaskMemFree(Value->PIDL); delete Value; });
-    Item->Name_ = QString::fromStdString(Entry.name_); Item->Ext_ = nsCmn::nsCmnPath::GetFileExtension(Item->Name_);
+    Item->Name_ = QString::fromStdString(Entry.hints_.contains("virtualArchiveRoot") ? Entry.hints_.at("displayName") : Entry.name_); Item->Ext_ = nsCmn::nsCmnPath::GetFileExtension(Item->Name_);
     Item->Attributes_ = Entry.attributes_; Item->Size_ = qint64(Entry.size_);
     if (Entry.createdUtcMs_) Item->Created_ = QDateTime::fromMSecsSinceEpoch(Entry.createdUtcMs_);
     if (Entry.modifiedUtcMs_) Item->Modified_ = QDateTime::fromMSecsSinceEpoch(Entry.modifiedUtcMs_);
@@ -1298,7 +1304,7 @@ void CFSModel::appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entri
 
 CFSModel::PreparedFileRow CFSModel::prepareFileRow(const hc::storage::EntrySnapshot& Entry)
 {
-    PreparedFileRow Row; Row.name_ = QString::fromStdString(Entry.name_);
+    PreparedFileRow Row; Row.name_ = QString::fromStdString(Entry.hints_.contains("virtualArchiveRoot") ? Entry.hints_.at("displayName") : Entry.name_);
     Row.extension_ = nsCmn::nsCmnPath::GetFileExtension(Row.name_);
     if (Entry.createdUtcMs_) Row.created_ = QDateTime::fromMSecsSinceEpoch(Entry.createdUtcMs_);
     if (Entry.modifiedUtcMs_) Row.modified_ = QDateTime::fromMSecsSinceEpoch(Entry.modifiedUtcMs_);
@@ -1647,7 +1653,8 @@ void CFSModel::refreshNameSortRanks(int First)
             const int LeftKey = DriveKey(Left), RightKey = DriveKey(Right);
             if (LeftKey != RightKey) return LeftKey < RightKey;
         }
-        const auto Group = [&](int Row) { return vecNode_[Row]->Name_ == ".." ? 0 : (vecNode_[Row]->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 2; };
+        const auto Group = [&](int Row) { const auto& Item = vecNode_[Row];
+            return Item->Name_ == ".." ? 0 : Item->storageEntry_ && Item->storageEntry_->hints_.contains("virtualArchiveRoot") ? 1 : (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 3; };
         if (Group(Left) != Group(Right)) return Group(Left) < Group(Right);
         const auto Name = [&](int Row) { const auto& Item = vecNode_[Row];
             return Item->columnValues_.isEmpty() ? Item->Name_ : Item->columnValues_.front().Raw().toString(); };
@@ -2453,6 +2460,14 @@ void CFSModel::refreshColumnSortRanks(int First)
         searchSortRows_ = std::move(Rows); searchSortOrder_ = std::move(Order); searchSorts_ = columnSorts_;
     } else columnSortRanks_ = SortRanks(Rows, Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
         displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
+    // Synthetic archive entry stays immediately after the parent row for every
+    // column sort; it is an alternate view, not a member ordered by file metadata.
+    const int FirstEntry = std::count_if(vecNode_.begin(), vecNode_.end(), [](const auto& Item) { return Item->Name_ == ".."; });
+    for (int Row = 0; Row < vecNode_.size(); ++Row) if (vecNode_[Row]->storageEntry_ && vecNode_[Row]->storageEntry_->hints_.contains("virtualArchiveRoot")) {
+        const auto Old = columnSortRanks_[Row];
+        for (auto& Rank : columnSortRanks_) if (Rank >= FirstEntry && Rank < Old) ++Rank;
+        columnSortRanks_[Row] = FirstEntry;
+    }
     columnQueries_->EndSnapshot();
     completedSorts_ = columnSorts_; emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{});
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GridSortRole});
