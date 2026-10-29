@@ -199,7 +199,6 @@ namespace hc::document
         toolbar_->setToolButtonStyle(Qt::ToolButtonIconOnly); toolbar_->setIconSize(QSize(24, 24));
         tabs_ = new QTabWidget(this); tabs_->setObjectName("documentTabs"); tabs_->setTabsClosable(true);
         singlePane_ = new QStackedWidget(this); singlePane_->setObjectName("singleDocument"); singlePane_->hide();
-        status_ = new QLabel(tr("PDF·텍스트·이미지를 열어 편집할 수 있습니다."), this); status_->setObjectName("documentStatus");status_->setTextFormat(Qt::PlainText);status_->setContentsMargins(8, 4, 8, 4);
         // The standalone editor uses the product title bar; a hosted viewer keeps its host's frame.
         if (!Hosted && !Parent) {
             setWindowFlag(Qt::FramelessWindowHint);
@@ -208,10 +207,15 @@ namespace hc::document
             Layout->setContentsMargins(6, 6, 6, 6);
             auto* Chrome = new fm::ui::WindowChrome(this, this); Chrome->setObjectName("documentWindowChrome"); Layout->addWidget(Chrome);
         }
-        // A view may contribute its own status strip next to the workspace status.
+        // One measured status row owns the active view fields and session state.
         auto* StatusRow = new QWidget(this); StatusRow->setObjectName("documentStatusRow"); auto* StatusLayout = new QHBoxLayout(StatusRow); StatusLayout->setContentsMargins(0, 0, 8, 0); StatusLayout->setSpacing(0);
         statusSlot_ = new QWidget(StatusRow); statusSlot_->setObjectName("documentStatusSlot"); auto* SlotLayout = new QHBoxLayout(statusSlot_); SlotLayout->setContentsMargins(8, 2, 0, 2);
-        status_->setParent(StatusRow); StatusLayout->addWidget(status_, 1); StatusLayout->addWidget(statusSlot_, 100); statusSlot_->hide();
+        StatusLayout->addWidget(statusSlot_, 1);
+        statusBar_ = new DocumentStatusBar(statusSlot_); SlotLayout->addWidget(statusBar_);
+        statusBar_->activated_ = [this](const QString& Id) { if(auto Tab=active())Tab->pane_->RunStatusCommand(Id); };
+        statusBar_->returnFocus_ = [this] { if(auto Tab=active())Tab->pane_->Focus(); };
+        auto* StatusRefresh = new QTimer(this); StatusRefresh->setObjectName("documentStatusRefresh");StatusRefresh->setSingleShot(true);StatusRefresh->setInterval(50);
+        connect(StatusRefresh,&QTimer::timeout,this,[this]{update();tryFinishClose();});
         Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(StatusRow);
         chrome_ = new WorkspaceChromeController(menu_, toolbar_, this);
         auto* FileMenu = menu_->addMenu(tr("파일(&F)"));
@@ -699,7 +703,7 @@ namespace hc::document
             if(!Result.HasValue())Tab->error_=QString::fromStdString(Result.Failure().code_);else Tab->error_.clear();
             Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo());update();
         });
-        connect(Pane,&DocumentViewPane::ViewStateChanged,this,[this,Tab]{if(!Tab->closed_&&!Tab->loading_){update();tryFinishClose();}});
+        connect(Pane,&DocumentViewPane::ViewStateChanged,this,[this,Tab]{if(!Tab->closed_&&!Tab->loading_){auto* Timer=findChild<QTimer*>("documentStatusRefresh");if(!Timer->isActive())Timer->start();}});
         connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_){if(epubFullscreen_)toggleEpubFullscreen();else escapeViewer();}});
         connect(Pane,&DocumentViewPane::FullscreenRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_)toggleEpubFullscreen();});
         connect(Pane,&DocumentViewPane::RetryRequested,this,[this,Tab]{if(!Tab->closed_){activate(Tab);findChild<QAction*>("reloadDocument")->trigger();}});
@@ -1308,14 +1312,8 @@ namespace hc::document
                 if(Tab->pane_->IsEpub())Contribution.menuActions_=Tab->pane_->IsEpubEditing() && Tab->pane_->EpubEditor()?Tab->pane_->EpubEditor()->MenuActions():findChild<QMenu*>("epubCommands")->actions();
                 chrome_->SetActive(std::move(Contribution));
             }
-            const auto State = Tab->session_->Snapshot();
-            const auto ViewError=Tab->pane_->ViewState()["error"].toString();
-            const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : !ViewError.isEmpty()?ViewError:State.error_ ? QString::fromStdString(State.error_->code_) : QString{};
-            status_->setToolTip(Code); status_->setText(!Code.isEmpty() ? Tab->pane_->IsEpub()?tr("EPUB 읽기 실패 · %1 · 다시 열기 또는 진단 정보를 확인하십시오.").arg(Code.section('\n',0,0).left(120)):Message(Code) : Tab->loading_ || Tab->navigating_ ? tr("여는 중…") : Tab->saving_ || !Tab->pendingToken_.isEmpty() ? tr("저장 중…") :
-                Tab->pane_->IsBusy()?tr("표시 또는 편집 작업 처리 중…") : Tab->pane_->ViewId().toUpper()+(Tab->broker_?tr(" · 원본 공급자에 저장"):Tab->originalSave_?tr(" · 로컬 파일"):tr(" · 사본 · 다른 이름 저장")));
-            const auto Reading=Tab->pane_->ViewState()["reading"].toObject();if(Reading["pageCount"].toInt()>0)status_->setText(QString("%1 · %2 / %3 · %4").arg(Reading["book"].toString()).arg(Reading["page"].toInt()+1).arg(Reading["pageCount"].toInt()).arg(Reading["error"].toString().isEmpty()?Reading["pageName"].toString():Reading["error"].toString()));
         }
-        else { chrome_->SetActive({}); status_->setText(shellError_.isEmpty() ? tr("PDF·텍스트·이미지를 열어 편집할 수 있습니다.") : shellError_); }
+        else chrome_->SetActive({});
         auto Capability = Tab ? Tab->session_->Capabilities() : DocumentCapabilities{};
         if(Tab && Tab->pane_->IsProcessDocument()){Capability.save_=false;Capability.saveAs_=Tab->pane_->CanEditEpub();Capability.undo_=Tab->pane_->CanUndo();Capability.redo_=Tab->pane_->CanRedo();}
         for (const auto& Item : {std::pair{"saveDocument", Capability.save_ || Capability.saveAs_},
@@ -1330,18 +1328,11 @@ namespace hc::document
         EditHwp->setEnabled(Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy()&&Tab->pane_->ViewState()["ready"].toBool()&&editRequest_.isEmpty());
         if(Hwp){
             findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(false);
-            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(tr("%1 · 읽기 전용 · 편집 버튼으로 HyperEditor 열기").arg(Tab->pane_->ViewId().toUpper()));
         }
         if(Tab&&Tab->pane_->IsEpub()){
             findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(!hosted_ && !Tab->loading_ && !Tab->pane_->IsBusy() && Tab->pane_->CanEditEpub());
-            if(Tab->error_.isEmpty()&&Tab->pane_->ViewState()["error"].toString().isEmpty())status_->setText(Tab->pane_->IsEpubEditing()?QString{}:tr("EPUB · 읽기 전용 · 원본 유지"));
         }
         if(auto* Reopen=findChild<QAction*>("epubReopenDocument"))Reopen->setVisible(Tab && Tab->pane_->IsEpub() && Tab->pane_->findChild<QAction*>("epubReopen"));
-        // The active view's strip replaces the plain status text unless the workspace reports an error or work.
-        QWidget* Strip=Tab?Tab->pane_->Contribution().statusWidget_.data():nullptr;
-        for(auto* Child:statusSlot_->findChildren<QWidget*>(Qt::FindDirectChildrenOnly))if(Child!=Strip)Child->hide();
-        if(Strip){if(Strip->parentWidget()!=statusSlot_){Strip->setParent(statusSlot_);statusSlot_->layout()->addWidget(Strip);}Strip->show();}
-        statusSlot_->setVisible(Strip);
         findChild<QAction*>("printDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
         findChild<QAction*>("previewDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
         for (auto* Action : findChildren<QAction*>()) {
@@ -1356,11 +1347,31 @@ namespace hc::document
             if (Id == "file.new") Action->setEnabled((hosted_ || documents_.size() < 16) && (tabbed_ || documents_.empty()));
             if (Id == "tab.next" || Id == "tab.previous") Action->setEnabled(tabbed_ && tabs_->count() > 1);
         }
-        if (Tab && Tab->pane_->ViewId() == "text" && Tab->input_.bytes_.size() >=
-            qBound(1, appliedPreferences_["documentViews"].toObject()["textView"].toObject()["largeFileMB"].toInt(1), 16) * 1024 * 1024)
-            status_->setText(tr("대용량 문서 · 편집·검색에 시간이 걸릴 수 있습니다. ") + status_->text());
-        if (Tab && !shellError_.isEmpty()) status_->setText(shellError_ + " · " + status_->text());
-        status_->setVisible(!Strip || !status_->text().isEmpty());
+        QList<DocumentStatusField> Fields;
+        if(Tab) {
+            if(!Tab->loading_)Fields=Tab->pane_->StatusFields();
+            const auto State=Tab->session_->Snapshot();const auto View=Tab->pane_->ViewState();
+            const bool Reading=View.contains("reading") || (Tab->pane_->IsProcessDocument()&&!Tab->pane_->IsEpubEditing());
+            const bool ReadOnly=Reading || (Tab->pane_->ViewId()=="text"?View["readOnly"].toBool():!(Capability.save_||Capability.saveAs_));
+            QString Mode=ReadOnly?tr("읽기 전용"):Tab->pane_->ViewId()=="pdf"?tr("주석 편집"):tr("편집");
+            const auto Destination=Tab->pane_->IsEpub()?tr("원본 유지 · 다른 이름으로 저장"):Tab->broker_?tr("원본 공급자에 저장"):Tab->originalSave_?tr("로컬 파일"):tr("사본 · 다른 이름으로 저장");
+            if(!Tab->loading_ && !Tab->input_.bytes_.isEmpty())Fields.append(DocumentStatusField{"fileSize",QLocale().formattedDataSize(Tab->input_.bytes_.size()),{},tr("열 때의 파일 크기"),{},false});
+            Fields.append(DocumentStatusField{"destination",Destination,{},{},{},false});
+            if(Tab->pane_->ViewId()=="text"&&Tab->input_.bytes_.size()>=qBound(1,appliedPreferences_["documentViews"].toObject()["textView"].toObject()["largeFileMB"].toInt(1),16)*1024*1024)
+                Fields.append(DocumentStatusField{"largeFile",tr("대용량 문서"),{},tr("편집·검색에 시간이 걸릴 수 있습니다."),{},false});
+            Fields.append(DocumentStatusField{"mode",Mode,{},{},{},true,true});
+            QString MessageText,Detail;
+            const auto Code=!Tab->error_.isEmpty()?Tab->error_:!View["error"].toString().isEmpty()?View["error"].toString():State.error_?QString::fromStdString(State.error_->code_):QString{};
+            if(!shellError_.isEmpty()){MessageText=tr("⚠ 작업 오류");Detail=shellError_;}
+            else if(State.saveState_==DocumentSaveState::Conflict){MessageText=tr("⚠ 원본 변경 충돌");Detail=Message("external-changed");}
+            else if(!Code.isEmpty()){MessageText=State.saveState_==DocumentSaveState::Failed?tr("⚠ 저장 실패"):tr("⚠ 문서 오류");Detail=Message(Code)+"\n"+Code;}
+            else if(Tab->loading_||Tab->navigating_)MessageText=tr("여는 중…");
+            else if(Tab->saving_||!Tab->pendingToken_.isEmpty())MessageText=tr("저장 중…");
+            else if(Tab->pane_->IsBusy())MessageText=tr("처리 중…");
+            if(Tab->Dirty())MessageText+=(MessageText.isEmpty()?QString{}:QString(" · "))+(Tab->pane_->IsEpubEditing()?tr("사본 미저장"):tr("미저장"));
+            if(!MessageText.isEmpty())Fields.append(DocumentStatusField{"state",MessageText,{},Detail,{},true,true});
+        } else Fields.append(DocumentStatusField{"empty",shellError_.isEmpty()?tr("파일을 열어 주세요."):shellError_});
+        statusBar_->SetFields(Fields);statusSlot_->show();
         findChild<ImageFullscreen*>("imageFullscreen")->UpdateStatus();
         emit StateChanged();
     }

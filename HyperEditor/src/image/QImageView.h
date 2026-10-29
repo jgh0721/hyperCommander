@@ -96,6 +96,7 @@ public:
     bool StepImage(int Direction);
     QSize originalImageSize() const;
     qreal displayScalePercent() const;
+    QSize SelectionSize() const;
     QString imageFormatName() const;
     QString imageColorDescription() const;
     QPointF imageDpi() const;

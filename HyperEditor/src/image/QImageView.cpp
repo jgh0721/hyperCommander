@@ -572,13 +572,19 @@ qreal QImageView::displayScalePercent() const
     if (m_fitMode == OriginalSize)
         return m_zoomLevel;
 
-    const QImage scaled = scaledImage();
-    if (scaled.isNull() || m_displayImage.width() <= 0)
-        return 100.0;
-
-    return (static_cast<qreal>(scaled.width()) / m_displayImage.width()) * 100.0;
+    // Match 100% original-size pixel mapping without depending on a pending preview.
+    if(!m_scrollArea)return 100.0;
+    return double(renderRequest().outputSize_.width()) / m_displayImage.width() * 100.0;
 }
 
+QSize QImageView::SelectionSize() const
+{
+    if(!m_rubberBand || !m_rubberBand->isVisible() || m_displayImage.isNull())return {};
+    const auto Rect=m_rubberBand->geometry();
+    const auto First=toImageCoord(m_imageLabel->mapFrom(m_scrollArea->viewport(),Rect.topLeft()));
+    const auto Last=toImageCoord(m_imageLabel->mapFrom(m_scrollArea->viewport(),Rect.bottomRight()));
+    return QRect(First,Last).normalized().intersected(m_displayImage.rect()).size();
+}
 QString QImageView::imageFormatName() const
 {
     if (!m_imageFormat.isEmpty())
@@ -1323,6 +1329,7 @@ bool QImageView::eventFilter(QObject* obj, QEvent* event)
                 m_imageLabel->mapToGlobal(m_dragStart));
             QPoint vpCur = m_scrollArea->viewport()->mapFromGlobal(me->globalPosition().toPoint());
             m_rubberBand->setGeometry(QRect(vpStart, vpCur).normalized());
+            emit viewStateChanged();
             return true;
         }
         if (m_editTool == FreeDraw) {

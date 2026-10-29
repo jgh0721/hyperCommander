@@ -835,6 +835,7 @@ private slots:
         QVERIFY(Window.Open()); Port->Finish(); QTRY_VERIFY(!Window.IsBusy());
         emit Port->ModelChanged(Port->binding_, ExternalModelRevision{1, 1, "changed"});
         QTRY_VERIFY(Window.Snapshot().dirty_);
+        auto* Status=Window.findChild<QLabel*>("status.state");QVERIFY(Status);QVERIFY(Status->text().contains(QString::fromUtf8("미저장")));
         Window.RequestClose(); QVERIFY(!Window.IsClosing()); QCOMPARE(Port->stops_, 0);
         QSignalSpy Failure(&Window, &HwpSdiWindow::SaveFailed);
         QVERIFY(Window.Save({SaveDisposition::SaveAs, "new.hwp"}, "hwp")); QVERIFY(Window.IsBusy());

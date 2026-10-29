@@ -1,5 +1,7 @@
 ﻿#include "hwpSdiWindow.hpp"
 #include <QCloseEvent>
+#include "documentStatusBar.hpp"
+#include <QFileInfo>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <fmwidgets/WindowChrome.h>
@@ -62,6 +64,10 @@ namespace hc::document
         status_->setWordWrap(true);
         Content->addWidget(status_);
         Content->addWidget(backend_, 1);
+        if(Editable) {
+            auto* Bar=new DocumentStatusBar(this);Layout->addWidget(Bar);
+            Bar->returnFocus_=[this]{backend_->setFocus();};
+        }
         Backend.release(); // QWidget parent now owns the GUI port.
         setFocusProxy(backend_);
         resize(960, 720);
@@ -421,6 +427,22 @@ namespace hc::document
             : State.lifecycle_ == DocumentLifecycle::Failed ? tr("Unable to open document.")
             : tr("Opening document…"));
         setWindowTitle(tr("HWP Viewer"));
+        // Editable RHWP uses a separate window, but shares the status layout.
+        for(auto* Child:findChildren<QWidget*>("documentStatusBar",Qt::FindDirectChildrenOnly)) {
+            auto* Bar=static_cast<DocumentStatusBar*>(Child);
+            QList<DocumentStatusField> Fields;
+            const auto Format=QFileInfo(QString::fromStdString(State.source_.localPath_)).suffix().toUpper();
+            Fields.append(DocumentStatusField{"format",Format=="HWP"||Format=="HWPX"?Format:QString("HWP/HWPX")});
+            Fields.append(DocumentStatusField{"mode",tr("편집"),{},{},{},true,true});
+            QString Message;
+            if(State.saveState_==DocumentSaveState::Conflict)Message=tr("⚠ 원본 변경 충돌");
+            else if(State.error_||stopped_)Message=tr("⚠ 문서 작업 실패");
+            else if(State.saveState_==DocumentSaveState::Saving||State.saveState_==DocumentSaveState::Exporting)Message=tr("저장 중…");
+            else if(!Ready)Message=closing_?tr("닫는 중…"):tr("여는 중…");
+            if(State.dirty_)Message+=(Message.isEmpty()?QString{}:QString(" · "))+tr("미저장");
+            if(!Message.isEmpty())Fields.append(DocumentStatusField{"state",Message,{},State.error_?QString::fromStdString(State.error_->code_):QString{}, {},true,true});
+            Bar->SetFields(Fields);
+        }
         emit StateChanged();
     }
 }

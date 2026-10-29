@@ -1011,7 +1011,9 @@ QJsonObject ImageReadingView::State() const
                              : extent_;
         Relative = Height > 0 ? qBound(0., (scrollPosition() - Y) / Height, 1.) : 0;
     }
-    return {{"page", index_},
+    int LastPage=index_;
+    if(mode_!=Webtoon){const auto Places=placements();for(const auto& Place:Places)LastPage=qMax(LastPage,Place.page_);}
+    return {{"lastPage",LastPage},{"page", index_},
             {"pageCount", book_ ? book_->pages_.size() : 0},
             {"listingWarning",book_?book_->listingWarning_:QString{}},{"discoveringPages",book_&&book_->subpagesPending_},
             {"pageName", CurrentName()},

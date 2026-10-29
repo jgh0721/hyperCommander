@@ -39,6 +39,7 @@
 #include <QSignalBlocker>
 #include <QScopedValueRollback>
 #include <QFileInfo>
+#include <QLocale>
 #include <QMessageBox>
 #include <QMenu>
 #include <QToolButton>
@@ -105,7 +106,7 @@ namespace hc::document
             if(!Last["profile"].toObject()["privateReading"].toBool() && Last["profile"].toObject()["resume"].toBool(true))RetryLocator=Last["locator"].toString();
         }
         const QSignalBlocker Block(this);
-        viewId_=Input.viewId_;encoding_=Input.encoding_;bom_=Input.bom_;eol_=Input.eol_;
+        viewId_=Input.viewId_;encoding_=Input.encoding_;bom_=Input.bom_;eol_=Input.eol_;statusEol_=Input.eol_;
         originalImageBytes_ = viewId_ == "image" ? Input.bytes_ : QByteArray{};
         originalImageHash_ = viewId_ == "image" ? Input.hash_ : QByteArray{};
         originalImagePath_ = viewId_ == "image" ? Input.path_ : QString{};
@@ -342,6 +343,7 @@ namespace hc::document
             epubEditor_=new EpubSourceEditor(epubBytes_,epubPath_,this,epubSourceHash_);layout()->addWidget(epubEditor_);
             epubEditor_->SetReadingLocator(Locator.isEmpty()?epub_->ViewState()["locator"].toString():Locator);epubEditor_->ConfigurePreview(epubRuntime_,Chapter<0?epub_->ViewState()["chapterIndex"].toInt(-1):Chapter);
             connect(epubEditor_,&EpubSourceEditor::Changed,this,&DocumentViewPane::ContentChanged);
+            connect(epubEditor_,&EpubSourceEditor::StatusChanged,this,&DocumentViewPane::ViewStateChanged);
             const auto InitialFocus=std::make_shared<bool>(true);
             connect(epubEditor_,&EpubSourceEditor::StateChanged,this,[this,InitialFocus]{
                 if(*InitialFocus && epubEditor_->IsReady()){
@@ -374,7 +376,14 @@ namespace hc::document
     }
     QByteArray DocumentViewPane::Content() const
     {
-        if(text_){auto Bytes=EncodeDocumentText(text_->Content(),encoding_,bom_);return Bytes.HasValue()?Bytes.Value():text_->Content().toUtf8();}
+        if(text_){
+            const auto Text=text_->Content();
+            // Reuse the serialization snapshot; cursor-only status updates never scan the document.
+            bool CrLf=false,Cr=false,Lf=false;
+            for(qsizetype I=0;I<Text.size();++I){if(Text[I]=='\r'){if(I+1<Text.size()&&Text[I+1]=='\n'){CrLf=true;++I;}else Cr=true;}else if(Text[I]=='\n')Lf=true;if(int(CrLf)+int(Cr)+int(Lf)>1)break;}
+            statusEol_=int(CrLf)+int(Cr)+int(Lf)>1?"MIXED":CrLf?"CRLF":Cr?"CR":Lf?"LF":text_->detectedLineEnding()==QTextView::CRLF?"CRLF":text_->detectedLineEnding()==QTextView::CR?"CR":"LF";
+            auto Bytes=EncodeDocumentText(Text,encoding_,bom_);return Bytes.HasValue()?Bytes.Value():Text.toUtf8();
+        }
         return pdf_?pdf_->SerializeContent():image_?(image_->isModified()?image_->SerializeContent():originalImageBytes_):QByteArray{};
 }
     QByteArray DocumentViewPane::SessionContent() const
@@ -462,6 +471,106 @@ namespace hc::document
         // normal/off glyphs too; a Light icon otherwise disappears on Dark.
         for(auto* Action:findChildren<QAction*>())ToolbarIcons::refreshAction(Action);
         if(text_){auto Font=QFontDatabase::systemFont(QFontDatabase::FixedFont);if(!Theme.monoFontFamily().isEmpty())Font.setFamily(Theme.monoFontFamily());Font.setPixelSize(Theme.monoFontPx());text_->setEditorFont(Font);text_->ReloadPreferences();}
+    }
+    QList<DocumentStatusField> DocumentViewPane::StatusFields() const
+    {
+        QList<DocumentStatusField> Fields;
+        const auto Add = [&](QString Id, QString Text, bool Essential = true, QString Compact = {}, QString Detail = {}, QString Command = {}) {
+            if(!Text.isEmpty())Fields.append(DocumentStatusField{Id,Text,Compact,Detail,Command,Essential});
+        };
+        const auto Number = [](int Value) { return QLocale().toString(Value); };
+        if(text_) {
+            auto* Backend=static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+            const auto Position=Backend->Send(SCI_GETCURRENTPOS);
+            const int Line=int(Backend->Send(SCI_LINEFROMPOSITION,Position))+1, Column=int(Backend->Send(SCI_GETCOLUMN,Position))+1;
+            const auto Total=text_->isContentTruncated()?tr("부분"):Number(int(Backend->Send(SCI_GETLINECOUNT)));
+            Add("position",tr("줄 %1 / %2 · 열 %3").arg(Line).arg(Total).arg(Column),true,QString("%1:%2 / %3").arg(Line).arg(Column).arg(Total),{},"text.goToLine");
+            int Selected=0;for(int I=0;I<int(Backend->Send(SCI_GETSELECTIONS));++I)Selected+=int(Backend->Send(SCI_COUNTCODEUNITS,Backend->Send(SCI_GETSELECTIONNSTART,I),Backend->Send(SCI_GETSELECTIONNEND,I)));
+            if(Selected)Add("selection",tr("선택 %1자").arg(Number(Selected)),true,{},tr("선택 문자 수 · UTF-16 코드 단위"));
+            Add("encoding",encoding_+(bom_?tr(" (BOM)"):encoding_=="UTF-8"?tr(" (BOM 없음)"):QString{}),true,encoding_+(bom_?" BOM":""));
+            Add("eol",statusEol_=="MIXED"?tr("혼합 개행"):statusEol_);
+            if(text_->isContentTruncated()||text_->isLimitedPreviewMode())Add("partial",tr("부분 로드"));
+            Add("language",text_->currentLanguage(),false);
+            Add("indent",text_->useTabs()?tr("탭 %1").arg(text_->tabWidth()):tr("공백 %1").arg(text_->tabWidth()),false);
+            if(!text_->isReadOnly())Add("insert",Backend->Send(SCI_GETOVERTYPE)?tr("덮어쓰기"):tr("삽입"),false);
+            Add("wrap",text_->isWordWrapEnabled()?tr("줄 바꿈 켜짐"):tr("줄 바꿈 꺼짐"),false,{},{},"status.wrap");
+            Add("characters",tr("전체 %1자").arg(Number(text_->characterCount())),false,{},tr("현재 로드된 문자 수 · UTF-16 코드 단위"));
+        } else if(pdf_) {
+            Add("page",tr("쪽 %1 / %2").arg(pdf_->currentPage()+1).arg(pdf_->totalPageCount()),true,{}, {},"status.page");
+            if(pdf_->totalSearchResultCount()>0)Add("search",tr("찾기 %1 / %2").arg(pdf_->currentSearchResultIndex()+1).arg(pdf_->totalSearchResultCount()));
+            Add("zoom",QString::number(pdf_->zoomLevel(),'f',0)+"%",true,{},{},"status.zoom");
+            const auto Fit=pdf_->zoomMode();
+            Add("fit",Fit==QPDFView::FitWidth?tr("너비 맞춤"):Fit==QPDFView::FitHeight?tr("높이 맞춤"):Fit==QPDFView::FitPage?tr("쪽 맞춤"):tr("사용자 배율"),false);
+            Add("rotation",tr("회전 %1°").arg(int(pdf_->rotationAngle())),false);
+            const auto PageSize=pdf_->CurrentPageSize();
+            if(PageSize.isValid())Add("pageSize",QString("%1 × %2 mm").arg(PageSize.width()*25.4/72,0,'f',1).arg(PageSize.height()*25.4/72,0,'f',1),false);
+            Add("format","PDF",false);
+        } else if(reading_&&!reading_->isHidden()) {
+            const auto State=reading_->State();const bool Webtoon=State["mode"].toInt()==ImageReadingView::Webtoon;
+            const auto First=State["page"].toInt()+1, Last=State["lastPage"].toInt(State["page"].toInt())+1;
+            const auto Range=Last>First?QString("%1–%2").arg(First).arg(Last):QString::number(First);
+            Add("page",(Webtoon?tr("이미지 %1 / %2"):tr("쪽 %1 / %2")).arg(Range).arg(State["discoveringPages"].toBool()?tr("확인 중"):QString::number(State["pageCount"].toInt())),true,{},{},"status.page");
+            if(Webtoon)Add("progress",tr("현재 이미지 %1%").arg(qRound(State["relative"].toDouble()*100)));
+            else Add("direction",State["rtl"].toBool()?tr("오른쪽 → 왼쪽"):tr("왼쪽 → 오른쪽"),true,State["rtl"].toBool()?tr("← 읽기"):tr("→ 읽기"));
+            const QStringList Fits{tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤")};
+            Add("fit",Fits.value(State["fit"].toInt()),true);
+            if(State["private"].toBool())Add("private",tr("읽기 기록 저장 안 함"));
+            Add("pageName",State["pageName"].toString(),false);
+            Add("readingMode",Webtoon?tr("세로 연속"):State["mode"].toInt()==ImageReadingView::Comic?tr("코믹"):tr("한 쪽"),false);
+            if(Webtoon)Add("gap",tr("간격 %1 px").arg(State["gap"].toInt()),false);
+            if(State["split"].toBool())Add("split",tr("분할 %1").arg(State["part"].toInt()+1),false);
+            Add("bookmark",State["bookmark"].toObject().isEmpty()?tr("책갈피 없음"):tr("책갈피 있음"),false);
+            const auto Error=State["pageError"].toString().isEmpty()?State["error"].toString():State["pageError"].toString();
+            if(!Error.isEmpty())Add("viewError",tr("⚠ 현재 이미지 표시 실패"),true,{},Error);
+            else if(!State["pageWarning"].toString().isEmpty()||!State["listingWarning"].toString().isEmpty())
+                Add("viewWarning",tr("⚠ 이미지 읽기 경고"),true,{},State["pageWarning"].toString()+"\n"+State["listingWarning"].toString());
+        } else if(image_) {
+            const auto Size=image_->Content().size();
+            if(Size.isValid())Add("dimensions",QString("%1 × %2 px").arg(Size.width()).arg(Size.height()),true,QString("%1×%2").arg(Size.width()).arg(Size.height()));
+            Add("zoom",QString::number(image_->displayScalePercent(),'f',0)+"%",true,{},{},"status.zoom");
+            if(animation_&&animation_->Supported()) {
+                Add("playing",animation_->Playing()?tr("재생 중"):tr("일시정지"),true,{},{},"status.play");
+                if(animation_->CurrentFrame()>=0)Add("frame",animation_->FrameCount()>0?tr("프레임 %1 / %2").arg(animation_->CurrentFrame()+1).arg(animation_->FrameCount()):tr("프레임 %1").arg(animation_->CurrentFrame()+1));
+            }
+            const auto Selection=image_->SelectionSize();
+            if(!Selection.isEmpty())Add("selection",tr("선택 %1 × %2 px").arg(Selection.width()).arg(Selection.height()),true,QString("%1×%2 px").arg(Selection.width()).arg(Selection.height()));
+            Add("format",image_->imageFormatName(),false);
+            const QStringList Fits{tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤"),tr("늘림")};
+            Add("fit",Fits.value(int(image_->fitMode())),false);
+            Add("color",image_->imageColorDescription(),false);
+            if(!image_->RenderError().isEmpty())Add("viewError",tr("⚠ 이미지 표시 실패"),true,{},image_->RenderError());
+        } else if(IsEpubEditing()&&epubEditor_) return epubEditor_->StatusFields();
+        else if(epub_) {
+            const auto State=currentEpub()->ViewState(); const auto Profile=State["profile"].toObject();
+            if(State["chapterCount"].toInt()>0)Add("chapter",tr("%1장 / %2장").arg(State["chapterIndex"].toInt()+1).arg(State["chapterCount"].toInt()));
+            if(State["readerBusy"].toBool())Add("layout",tr("쪽 계산 중…"));
+            else if(State["chapterPages"].toInt()>0&&Profile["layout"]!="scroll")Add("page",tr("장내 %1 / %2쪽").arg(State["chapterPage"].toInt()).arg(State["chapterPages"].toInt()),true,{},tr("현재 글꼴과 창 크기에 따른 장내 쪽 번호"));
+            if(State.contains("progress"))Add("progress",tr("책 약 %1%").arg(qRound(State["progress"].toDouble()*100)),true,{},tr("장 위치를 기준으로 추정한 읽기 진행률"));
+            if(Profile["size"].toDouble()>0)Add("font",tr("글자 %1 px").arg(Profile["size"].toDouble()));
+            Add("chapterTitle",State["chapterTitle"].toString(),false);
+            Add("layoutMode",Profile["layout"]=="scroll"?tr("세로 연속"):tr("쪽 넘김"),false);
+            Add("format","EPUB",false);
+        } else if(hwp_) Add("format",viewId_.toUpper());
+        return Fields;
+    }
+    void DocumentViewPane::RunStatusCommand(const QString& Id)
+    {
+        if(Id=="epub.status.problems"&&epubEditor_){epubEditor_->Execute({{"action","epub.edit.layout"},{"problems",true}});return;}
+        if(Id=="text.goToLine"&&IsEpubEditing()) {if(auto* Action=epubEditor_->SourceView()->findChild<QAction*>("text.goToLine"))Action->trigger();return;}
+        if(Id=="text.goToLine"){RunViewCommand(Id);return;}
+        if(Id=="status.wrap"&&text_){text_->setWordWrap(!text_->isWordWrapEnabled());emit ViewStateChanged();return;}
+        if(Id=="status.play"&&animation_){animation_->Play(!animation_->Playing());return;}
+        bool Accepted=false;
+        if(Id=="status.page") {
+            const auto State=reading_&&!reading_->isHidden()?reading_->State():QJsonObject{};
+            const int Count=pdf_?pdf_->totalPageCount():State["pageCount"].toInt();if(Count<1)return;
+            const auto Page=QInputDialog::getInt(this,tr("쪽 이동"),tr("쪽 번호"),(pdf_?pdf_->currentPage():State["page"].toInt())+1,1,Count,1,&Accepted);
+            if(Accepted){if(pdf_)pdf_->goToPage(Page-1);else reading_->GoTo(Page-1);}
+        } else if(Id=="status.zoom"&&(pdf_||image_)) {
+            const auto Zoom=QInputDialog::getInt(this,tr("확대율"),tr("배율 (%)"),qRound(pdf_?pdf_->zoomLevel():image_->displayScalePercent()),10,1600,10,&Accepted);
+            if(Accepted){if(pdf_)pdf_->setZoomLevel(Zoom);else image_->setZoomLevel(Zoom);}
+        }
+        Focus();
     }
     QJsonObject DocumentViewPane::ViewState() const
     {

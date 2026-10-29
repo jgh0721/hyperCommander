@@ -21,6 +21,7 @@ class QShortcut;
 namespace mrst { class ExternalChangeWatcher; }
 namespace hc::document
 {
+    class DocumentStatusBar;
     class DocumentShortcutRouter;
     class DocumentSettingsDialog;
     class DocumentWorkspaceWidget : public QWidget
@@ -110,7 +111,7 @@ namespace hc::document
         QMenuBar* menu_;
         QToolBar* toolbar_;
         QTabWidget* tabs_;
-        QLabel* status_;
+        DocumentStatusBar* statusBar_ = nullptr;
         QWidget* statusSlot_ = nullptr;
         std::vector<std::shared_ptr<Tab>> documents_;
     };

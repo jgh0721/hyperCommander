@@ -27,6 +27,8 @@ class ImageFramePlayer final : public QObject
     {
         return supported_;
     }
+    int CurrentFrame() const { return index_; }
+    int FrameCount() const { return frameCount_; }
   signals:
     void Frame(const QImage &Image);
     void Changed();
@@ -38,6 +40,7 @@ class ImageFramePlayer final : public QObject
     QTimer timer_;
     bool playing_ = false, busy_ = false, supported_ = false;
     int index_ = -1, loops_ = 0;
+    int frameCount_ = 0;
     quint64 generation_ = 0;
 };
 } // namespace hc::document

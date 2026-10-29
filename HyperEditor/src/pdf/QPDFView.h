@@ -78,6 +78,7 @@ public:
     void  setZoomLevel(qreal percentage);
     ZoomMode zoomMode() const;
     qreal zoomLevel() const;
+    QSizeF CurrentPageSize() const { return rotatedPageSize(m_currentPage); }
 
     // ── 사이드바 ──
     void       setSidebarPosition(SidebarPos pos);

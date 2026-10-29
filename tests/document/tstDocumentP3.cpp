@@ -43,6 +43,7 @@
 #include <atomic>
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
+#include "UniqueLibs/document/epubSourceEditor.hpp"
 #include "UniqueLibs/document/documentHostBroker.hpp"
 #include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include "UniqueLibs/qtPluginViewerSurface.hpp"
@@ -125,6 +126,56 @@ PluginViewerOptions Options(){PluginViewerOptions Result;Result.executable_=QCor
 class DocumentP3Tests final:public QObject{
     Q_OBJECT
 private slots:
+void statusBarMeasuredLayout(){
+    DocumentStatusBar Bar;Bar.resize(1400,32);Bar.show();
+    QList<DocumentStatusField> Fields{{"position",QString::fromUtf8("줄 88 / 109 · 열 6"),"88:6 / 109",{},"text.goToLine"},{"encoding","UTF-8 (BOM)","UTF-8 BOM"},{"eol","CRLF"}};
+    for(int I=0;I<8;++I)Fields.append(DocumentStatusField{QString("extra%1").arg(I),QString("metadata %1 with long text").arg(I),{},{},{},false});
+    Fields.append(DocumentStatusField{"mode",QString::fromUtf8("편집"),{},{},{},true,true});
+    Fields.append(DocumentStatusField{"state",QString::fromUtf8("저장 실패 · 미저장"),{},{},{},true,true});
+    Bar.SetFields(Fields);QCoreApplication::processEvents();
+    auto VisibleExtras=[&]{int Count=0;for(int I=0;I<8;++I)if(!Bar.findChild<QWidget*>(QString("status.extra%1").arg(I))->isHidden())++Count;return Count;};
+    const auto Wide=VisibleExtras();QVERIFY(Wide>0);
+    Bar.resize(640,Bar.height());QCoreApplication::processEvents();QVERIFY(VisibleExtras()<Wide);
+    for(const auto& Field:Fields)if(Field.essential_){auto* Item=Bar.findChild<QWidget*>("status."+Field.id_);QVERIFY(!Item->isHidden());QVERIFY(Bar.rect().contains(Item->geometry()));}
+    QString Command;Bar.activated_=[&](const QString& Id){Command=Id;};Bar.findChild<QToolButton*>("status.position")->click();QCOMPARE(Command,QString("text.goToLine"));
+    Bar.resize(1400,Bar.height());QCoreApplication::processEvents();QCOMPARE(VisibleExtras(),Wide);
+    Bar.grab().save(QCoreApplication::applicationDirPath()+"/statusbar-layout.png");
+}
+void statusBarWorkspace(){
+    QTemporaryDir Root;const auto Path=Root.filePath("status.py");QVERIFY(Put(Path,QByteArray::fromHex("efbbbf")+"alpha\r\nbeta\r\n"));
+    DocumentWorkspaceWidget Viewer(Root.filePath("recovery"));Viewer.resize(960,600);Viewer.show();
+    Viewer.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
+    const auto Id=Viewer.Handle({{"action","open"},{"path",Path}})["documentId"].toString();
+    QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Id)["lifecycle"]=="ready";}));
+    auto* Bar=static_cast<DocumentStatusBar*>(Viewer.findChild<QWidget*>("documentStatusBar"));QVERIFY(Bar);
+    auto Text=[&](const QString& Key){for(const auto& Field:Bar->Fields())if(Field.id_==Key)return Field.text_;return QString{};};
+    QTRY_VERIFY(Text("encoding").contains("BOM"));QCOMPARE(Text("eol"),QString("CRLF"));
+    auto* Pane=Viewer.findChild<DocumentViewPane*>();QVERIFY(Pane);auto* Input=Pane->findChild<QTextView*>();QVERIFY(Input);
+    Input->goToPosition(2,3);QTRY_VERIFY(Text("position").contains(QString::fromUtf8("줄 2")));
+    Pane->Execute({{"action","replaceText"},{"text","changed\r\n"}});QTRY_VERIFY(Text("state").contains(QString::fromUtf8("미저장")));
+    Input->setLineEnding(QTextView::LF);QTRY_COMPARE(Text("eol"),QString("LF"));
+    QTRY_VERIFY(Text("position").contains("/ 2"));
+    Viewer.ShowShellError("status-test-error");QTRY_VERIFY(Text("state").contains(QString::fromUtf8("오류")));QVERIFY(Text("state").contains(QString::fromUtf8("미저장")));QVERIFY(!Text("position").isEmpty());
+    Viewer.grab().save(QCoreApplication::applicationDirPath()+"/statusbar-workspace.png");
+    Viewer.RequestClose();QVERIFY(Wait([&]{return Viewer.Snapshot()["documents"].toArray().isEmpty();}));
+}
+void statusBarEpubSource(){
+    const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("EPUB fixture required");QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));
+    QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());EpubSourceEditor Editor(File.readAll(),Path);Editor.SetRecoveryEnabled(false);Editor.resize(960,640);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+    QString Chapter;for(const auto& Value:Editor.Snapshot()["resources"].toArray()){const auto Row=Value.toObject();if(Row["mediaType"]=="application/xhtml+xml"){Chapter=Row["path"].toString();break;}}
+    QVERIFY(!Chapter.isEmpty());QVERIFY(Editor.Execute({{"action","epub.edit.select"},{"resource",Chapter}})["accepted"].toBool());Editor.SetSourceVisible(true);
+    QSignalSpy Changed(&Editor,&EpubSourceEditor::StatusChanged);QVERIFY(Editor.Execute({{"action","epub.edit.cursor"},{"position",0},{"anchor",0}})["accepted"].toBool());QVERIFY(Changed.count()>0);
+    auto Fields=Editor.StatusFields();auto Find=[&](const QString& Id){for(const auto& Field:Fields)if(Field.id_==Id)return Field.text_;return QString{};};
+    QVERIFY(Find("position").contains(QString::fromUtf8("줄 1")));QCOMPARE(Find("encoding"),QString("UTF-8"));QCOMPARE(Find("resource"),Chapter);QVERIFY(!Find("validation").isEmpty());
+    Editor.SetSourceVisible(false);Fields=Editor.StatusFields();QVERIFY(Find("position").isEmpty());QVERIFY(!Find("problems").isEmpty());
+}
+void statusBarPdfAndImage(){
+    auto Pdf=ReadDocumentFile(Fixture("basic.pdf"));QVERIFY(Pdf.HasValue());DocumentViewPane Pane;QVERIFY(Pane.Load(Pdf.Value(),false));
+    auto Fields=Pane.StatusFields();auto Text=[&](const QString& Key){for(const auto& Field:Fields)if(Field.id_==Key)return Field.text_;return QString{};};
+    QVERIFY(Text("page").contains("1 / 2"));Pane.Execute({{"action","pdf.page"},{"page",1}});Fields=Pane.StatusFields();QVERIFY(Text("page").contains("2 / 2"));
+    TextInput Input;Input.viewId_="image";Input.path_="sample.png";Input.image_=QImage(320,200,QImage::Format_ARGB32);Input.image_.fill(Qt::blue);DocumentViewPane Image;QVERIFY(Image.Load(Input,false));Fields=Image.StatusFields();QVERIFY(Text("dimensions").contains("320"));QVERIFY(!Text("zoom").isEmpty());
+}
+
 void workspaceReactivation_data(){
     QTest::addColumn<bool>("Hosted");QTest::addColumn<QString>("Kind");QTest::addColumn<bool>("Minimize");
     for(bool Hosted:{false,true})for(const auto& Kind:{QString("text"),QString("pdf"),QString("image"),QString("hwp"),QString("hwpx")})for(bool Minimize:{false,true})

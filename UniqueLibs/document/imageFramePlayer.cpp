@@ -30,7 +30,7 @@ namespace
 struct FrameResult
 {
     QImage image_;
-    int delay_ = 100, loops_ = 0;
+    int delay_ = 100, loops_ = 0, count_ = 0;
     bool supported_ = false, end_ = false;
 };
 } // namespace
@@ -51,6 +51,7 @@ void ImageFramePlayer::Load(QByteArray Bytes)
     decoder_ = std::make_shared<Decoder>(std::move(Bytes));
     index_ = -1;
     supported_ = false;
+    frameCount_ = 0;
     loops_ = 0;
     ++generation_;
     decode(0);
@@ -101,6 +102,7 @@ void ImageFramePlayer::decode(int Index)
                     return;
                 }
                 supported_ = Result.supported_;
+                frameCount_ = Result.count_;
                 if (Result.end_)
                 {
                     if (playing_ && (Result.loops_ < 0 || loops_ < Result.loops_))
@@ -129,6 +131,7 @@ void ImageFramePlayer::decode(int Index)
                 Decoder->reset();
             FrameResult Result;
             Result.supported_ = Decoder->reader_->supportsAnimation();
+            Result.count_ = Decoder->reader_->imageCount();
             Result.loops_ = Decoder->reader_->loopCount();
             while (Decoder->index_ < Index)
             {

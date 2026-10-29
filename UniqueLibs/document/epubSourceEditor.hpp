@@ -4,6 +4,7 @@
 #include "commonLibs/storage/storage.hpp"
 #include "documentWebProcess.hpp"
 #include "epubLineShifts.hpp"
+#include "documentStatusBar.hpp"
 #include <QWidget>
 #include <QFutureWatcher>
 #include <QTimer>
@@ -50,10 +51,11 @@ public:
     QList<QAction*> ToolbarActions()const;
     QList<QAction*> MenuActions()const;
     QWidget* StatusStrip()const;
+    QList<DocumentStatusField> StatusFields()const;
     bool RunCommand(const QString& Id);
     bool CanRunCommand(const QString& Id)const;
     void SetShortcutBindings(const QJsonObject& Bindings);
-signals:void Changed();void StateChanged();void SaveRequested();void PreviewCommitted();void EscapeRequested();void FullscreenRequested();
+signals:void StatusChanged();void Changed();void StateChanged();void SaveRequested();void PreviewCommitted();void EscapeRequested();void FullscreenRequested();
 protected:bool eventFilter(QObject* Object,QEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();

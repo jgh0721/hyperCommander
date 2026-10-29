@@ -220,6 +220,24 @@ QAction* EpubSourceEditor::action(const QString& Id)const{return actions_.value(
 QList<QAction*> EpubSourceEditor::ToolbarActions()const{return toolbarActions_;}
 QList<QAction*> EpubSourceEditor::MenuActions()const{return menuActions_;}
 QWidget* EpubSourceEditor::StatusStrip()const{return statusStrip_;}
+QList<DocumentStatusField> EpubSourceEditor::StatusFields()const {
+    QList<DocumentStatusField> Fields;
+    if(IsSourceVisible() && sourceShown()) {
+        Fields.append(DocumentStatusField{"position",tr("줄 %1 · 열 %2").arg(text_->currentLine()).arg(text_->currentColumn()),QString("%1:%2").arg(text_->currentLine()).arg(text_->currentColumn()),{},"text.goToLine"});
+        const auto Eol=static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_GETEOLMODE);
+        Fields.append(DocumentStatusField{"encoding","UTF-8"});Fields.append(DocumentStatusField{"eol",Eol==SC_EOL_CRLF?"CRLF":Eol==SC_EOL_CR?"CR":"LF"});
+    }
+    Fields.append(DocumentStatusField{"validation",statusValidation_->text()});
+    Fields.append(DocumentStatusField{"problems",statusProblems_->text(),{},{},"epub.status.problems"});
+    Fields.append(DocumentStatusField{"resource",current_,{},current_,{},false});
+    if(IsSourceVisible() && sourceShown())Fields.append(DocumentStatusField{"language",text_->currentLanguage(),{},{},{},false});
+    Fields.append(DocumentStatusField{"draft",statusDraft_->text(),{},draftMessage_,{},false});
+    if(!statusMessage_->toolTip().isEmpty()) {
+        const bool Failure=!error_.isEmpty()||!previewError_.isEmpty();
+        Fields.append(DocumentStatusField{"epubMessage",Failure?tr("⚠ EPUB 작업 오류"):statusMessage_->toolTip(),{},statusMessage_->toolTip(),{},Failure});
+    }
+    return Fields;
+}
 bool EpubSourceEditor::CanRunCommand(const QString& Id)const{auto* Item=action(commandActions().value(Id));return Item && Item->isEnabled();}
 bool EpubSourceEditor::RunCommand(const QString& Id) {
     auto* Item=action(commandActions().value(Id));if(!Item || !Item->isEnabled())return false;
@@ -263,6 +281,7 @@ void EpubSourceEditor::updateStatus() {
         const auto State=Preview["state"].toObject();const int Chapter=State["chapterIndex"].toInt(-1);const int Count=model_.Publication()["spine"].toArray().size();previewChapterLabel_->setText(Chapter>=0 && Count>0?tr("%1 / %2장").arg(Chapter+1).arg(Count):QString{});
     }
     if(treeSummary_ && resourceModel_){int Changed=0,Problem=0;for(const auto& Value:model_.Publication()["resources"].toArray()){const auto Path=Value.toObject()["path"].toString();Changed+=touchedResources_.contains(Path) || model_.Changes().contains(Path);}for(const auto& Value:diagnosticRows_)Problem+=!Value.toObject()["resource"].toString().isEmpty();treeSummary_->setText(tr("%1개 리소스 · 수정 %2 · 문제 %3").arg(resourceModel_->ResourceCount()).arg(Changed).arg(Problem));}
+    emit StatusChanged();
 }
 QString EpubSourceEditor::treeResource()const {
     if(tree_ && tree_->hasFocus()){const auto Path=tree_->currentIndex().data(EpubResourceModel::PathRole).toString();if(!Path.isEmpty())return Path;}

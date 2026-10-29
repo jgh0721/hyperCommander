@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "viewUiContribution.hpp"
+#include "documentStatusBar.hpp"
 #include "documentStorageAdapter.hpp"
 #include "hwpOpenWindow.hpp"
 #include <QWidget>
@@ -56,6 +57,8 @@ namespace hc::document
         void SetReadOnly(bool Enabled);
         void SetClipboardBroker(bool Enabled);
         QJsonObject ViewState() const;
+        QList<DocumentStatusField> StatusFields() const;
+        void RunStatusCommand(const QString& Id);
         QJsonObject CaptureSelection() const;
         void ApplyClipboard(const QString& Mode,const QString& Text,const QJsonObject& Selection);
         QWidget* InputWidget() const;
@@ -105,6 +108,7 @@ namespace hc::document
         QByteArray epubSourceHash_;
         QString viewId_ = "text", encoding_ = "UTF-8", eol_ = "LF";
         bool bom_ = false, syncing_ = false;
+        mutable QString statusEol_;
         bool unlimitedBytes_ = false;
         int quality_ = -1;
         QByteArray originalImageBytes_, originalImageHash_;
