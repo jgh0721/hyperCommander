@@ -40,6 +40,12 @@ public:
         else Value->bytes_=Result.bytes_;
         return Value;
     }
+    // Source line annotation enlarges a loaded payload; the reservation follows or the original is kept.
+    static bool Grow(const Lease& Value, qint64 Bytes) {
+        if(Bytes<=0)return true;
+        if(Value->used_->fetch_add(Bytes)+Bytes>HardLimit){Value->used_->fetch_sub(Bytes);return false;}
+        Value->reserved_+=Bytes;return true;
+    }
     auto Session() const { return session_; }
     static QThreadPool* Pool() {
         static QThreadPool Pool;

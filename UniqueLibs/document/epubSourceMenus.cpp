@@ -100,7 +100,7 @@ void EpubSourceEditor::previewContextRequest(EpubProcessView* View) {
     Menu.addAction(tr("선택한 텍스트를 소스에서 찾기"),this,[this,Anchor,Selection,&SourceFocus]{if(!Anchor.isEmpty())selectPreviewSource(Anchor);findSelectionInSource(Selection);SourceFocus=true;})->setEnabled(!Selection.trimmed().isEmpty() && IsSourceVisible());
     Menu.addAction(tr("복사"),QKeySequence::Copy,this,[Selection]{QApplication::clipboard()->setText(Selection);})->setEnabled(!Selection.isEmpty());
     if(Target["kind"]=="image"){const auto Path=Target["path"].toString();Menu.addAction(tr("이미지 리소스 열기"),this,[this,Path,&SourceFocus]{if(openResource(Path))SourceFocus=true;})->setEnabled(model_.IsEditable(Path));}
-    Menu.addSeparator();Menu.addAction(action("epubPreviewRefresh"));Menu.addAction(action("epubAutoPreview"));Menu.addAction(action("epubPreviewSync"));Menu.addSeparator();
+    Menu.addSeparator();Menu.addAction(action("epubPreviewRefresh"));Menu.addAction(action("epubAutoPreview"));Menu.addAction(action("epubPreviewSync"));Menu.addAction(action("epubPreviewScrollSync"));Menu.addSeparator();
     Menu.addAction(tr("이전 장"),this,[View]{View->ReaderAction("previous-chapter");});Menu.addAction(tr("다음 장"),this,[View]{View->ReaderAction("next-chapter");});Menu.addAction(tr("목차"),this,[View]{View->ReaderAction("toggle-toc");});Menu.addSeparator();
     auto* Width=Menu.addMenu(tr("표시 폭"));
     for(const auto& [Pixels,Label]:{std::pair{360,tr("휴대폰 · 360px")},std::pair{768,tr("태블릿 · 768px")},std::pair{0,tr("창에 맞춤")}}){auto* Item=Width->addAction(Label,this,[this,Pixels]{previewWidth_=Pixels;if(previewView_)previewView_->ReaderAction("preview-width",Pixels);});Item->setCheckable(true);Item->setChecked(previewWidth_==Pixels);}

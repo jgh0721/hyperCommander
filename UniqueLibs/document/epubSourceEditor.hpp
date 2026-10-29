@@ -3,6 +3,7 @@
 #include "commonLibs/document/epub/epubDraftStore.hpp"
 #include "commonLibs/storage/storage.hpp"
 #include "documentWebProcess.hpp"
+#include "epubLineShifts.hpp"
 #include <QWidget>
 #include <QFutureWatcher>
 #include <QTimer>
@@ -97,6 +98,8 @@ private:
     void removeRecovery(const QString& Path);
     void protectSourcePath(const QString& Path);
     bool previewOwnerActive()const;
+    // No preview exists or is being made. The first one is shown even when live preview is off.
+    bool previewMissing()const{return !previewView_ && !previewCandidate_ && !previewWorker_.isRunning();}
     void suspendInactivePreview();
     void requestPreview(bool Force=false);
     void showPreview(const QByteArray& Bytes);
@@ -106,13 +109,20 @@ private:
     void previewContextRequest(EpubProcessView* View);
     void saveSourceState();void activateSource(const QByteArray& Data,const QString& Media);void releaseSource(const QString& Path);
     void locateSource();bool selectPreviewSource(const QJsonObject& Anchor={});
+    // Scroll synchronisation (epubSourceScroll.cpp): the line at half the editor height stays at half the preview height.
+    void setupScrollSync();bool scrollSyncActive()const;void syncPreviewScroll();void previewScrolled(const QJsonObject& Report);
+    QJsonObject sourceScrollTarget(bool Revision)const;void placeSourceLine(int Position,double Ratio);int spineIndex(const QString& Path)const;
+    double toPreviewLine(double Line)const;double fromPreviewLine(double Line)const;void clearLineShifts();
+    QTimer scrollRetryTimer_;qint64 previewDrivenIgnoreUntil_=0,suppressSyncUntil_=0,previewScrollSeen_=-1,sourceScrollSerial_=0,previewCandidateScrollSerial_=-1;
+    double lastScrollLine_=-1;int lastScrollChapter_=-1;bool lastScrollEnd_=false,scrollSyncPending_=false;QElapsedTimer previewCandidateScrollClock_;
     void editMetadata();void inspectImage(const QString& Path);void editImageProperties(const QJsonObject& Inspection);
     // Context menus and source tools.
     void showTreeMenu(const QPoint& Position);void showSourceMenu(const QPoint& Position);void showTabMenu(const QPoint& Position);void showProblemMenu(const QPoint& Position);
     void quickFix();QJsonObject quickFixAt(int Position)const;QString linkAt(int Position)const;bool openLink();void wrapSelection(const QString& Tag);
     void findInResources(const QString& Text);void findSelectionInSource(const QString& Text);void copyPath(const QString& Path,bool Relative);
     void insertImageReference(const QString& Path);void exportResource(const QString& Path);void duplicateResource(const QString& Path);void importResources();
-    struct SourceState {qintptr document_=0;QByteArray applied_;int position_=0,anchor_=0,line_=0,offset_=0;quint64 serial_=0;};
+    // shifts_: line changes since the shown preview was built, so scroll positions map onto it.
+    struct SourceState {qintptr document_=0;QByteArray applied_;int position_=0,anchor_=0,line_=0,offset_=0;quint64 serial_=0;QList<LineShift> shifts_;bool shiftsOverflow_=false;};
     QMap<QString,SourceState> sourceBuffers_;QString bufferResource_;quint64 bufferSerial_=0;
     QTimer sourceSyncTimer_;bool sourceSyncPending_=false;int sourceSyncAttempts_=0;qint64 sourceSelectionSerial_=-1;qint64 contextRequestSerial_=-1;
     QFutureWatcher<QJsonObject> imageInspection_;QByteArray imageInspectionToken_;

@@ -93,6 +93,9 @@ public:
 
 	int firstVisibleLine() const override;
 	void restoreViewState(int caretPosition, int firstVisibleLine) override;
+	double fractionalLineAtViewportRatio(double ratio) const override;
+	void scrollFractionalLineToViewportRatio(double fractionalLine, double ratio) override;
+	bool isScrolledToEnd() const override;
 	int textHeight(int line) const override;
 	int leftMarginWidth() const override;
 	int changeHistoryFlags() const override;
@@ -100,8 +103,12 @@ public:
 	bool applyLanguage(const QString& displayName) override;
 	void applyThemeColors(bool dark) override;
 
+protected:
+	bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     mutable int characterCount_ = -1;
+	int visibleAnchorLine(int line) const;
 	void configureCodeFolding(bool enabled);
 	void configureBraceHighlightIndicators();
 	void syncLineCountState(bool emitSignal);

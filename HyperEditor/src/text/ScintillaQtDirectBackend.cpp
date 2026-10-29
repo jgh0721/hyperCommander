@@ -7,6 +7,7 @@
 
 #include <QAbstractScrollArea>
 #include <QByteArray>
+#include <QEvent>
 #include <QFile>
 #include <QFontMetrics>
 #include <QTextStream>
@@ -182,8 +183,8 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 			});
     // Folding, markers and styling are view changes, not document edits.
     connect(m_editor, &ScintillaEditBase::modified, this,
-        [this](Scintilla::ModificationFlags Type, Scintilla::Position, Scintilla::Position,
-               Scintilla::Position, const QByteArray& ChangedText, Scintilla::Position,
+        [this](Scintilla::ModificationFlags Type, Scintilla::Position Position, Scintilla::Position,
+               Scintilla::Position LinesAdded, const QByteArray& ChangedText, Scintilla::Position,
                Scintilla::FoldLevel, Scintilla::FoldLevel) {
             const bool Inserted = (static_cast<int>(Type) & SC_MOD_INSERTTEXT) != 0;
             const bool Deleted = (static_cast<int>(Type) & SC_MOD_DELETETEXT) != 0;
@@ -194,12 +195,16 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
                 if (characterCount_ < 0) characterCount_ = -1;
             }
             syncLineCountState(true);
+            // Undo and redo arrive here too, so line maps kept by hosts stay in step.
+            if (LinesAdded != 0) emit linesShifted(static_cast<int>(Send(SCI_LINEFROMPOSITION, Position)), static_cast<int>(LinesAdded));
             emit textChanged();
         });
 	connect(m_editor, &ScintillaEditBase::updateUi,
-			this, [this](Scintilla::Update) {
+			this, [this](Scintilla::Update Updated) {
 				updateBraceHighlight();
 				emitCursorAndSelectionState();
+				if ((static_cast<int>(Updated) & static_cast<int>(Scintilla::Update::VScroll)) != 0)
+					emit viewportScrolled();
 			});
 	connect(m_editor, &ScintillaEditBase::marginClicked,
 			this, [this](Scintilla::Position position, Scintilla::KeyMod, int margin) {
@@ -207,7 +212,11 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 					return;
 				const auto line = static_cast<sptr_t>(m_editor->send(sciMessage(SCI_LINEFROMPOSITION), position));
 				m_editor->send(sciMessage(SCI_TOGGLEFOLD), line);
+				// Folding moves the text below without a VScroll update.
+				emit viewportScrolled();
 			});
+	// A new height moves the line at any fixed height ratio.
+	m_editor->installEventFilter(this);
 	m_lastKnownLineCount = lineCount();
 }
 
@@ -242,8 +251,10 @@ void ScintillaQtDirectBackend::applySettings(const ScintillaEditorSettings& sett
 	m_editor->send(sciMessage(SCI_SETTABINDENTS), settings.autoIndent ? 1 : 0);
 	m_editor->send(sciMessage(SCI_SETBACKSPACEUNINDENTS), settings.autoIndent ? 1 : 0);
 	m_editor->send(sciMessage(SCI_SETREADONLY), settings.readOnly ? 1 : 0);
+	const bool WrapChanged = m_editor->send(sciMessage(SCI_GETWRAPMODE)) != static_cast<sptr_t>(settings.wrapMode);
 	m_editor->send(sciMessage(SCI_SETWRAPMODE),
         static_cast<sptr_t>(settings.wrapMode));
+	if (WrapChanged) emit viewportScrolled();
     m_editor->send(sciMessage(SCI_SETWRAPVISUALFLAGS), settings.wrapVisualFlags & ScintillaEditorSettings::WrapFlagMask);
     m_editor->send(sciMessage(SCI_SETWRAPINDENTMODE), static_cast<sptr_t>(settings.wrapIndentMode));
 	m_codeFoldingEnabled = settings.showCodeFolding;
@@ -716,6 +727,78 @@ void ScintillaQtDirectBackend::restoreViewState(int caretPosition, int firstVisi
 	m_editor->send(sciMessage(SCI_LINESCROLL), 0, qMax(0, firstVisibleLine) - currentFirstVisibleLine);
 	updateBraceHighlight();
 	emitCursorAndSelectionState();
+}
+
+double ScintillaQtDirectBackend::fractionalLineAtViewportRatio(double ratio) const
+{
+	if (!m_editor)
+		return 1.0;
+	// SCI_POSITIONFROMPOINT takes pixels, so wrapping and folding are already applied.
+	const int Height = qMax(1, m_editor->viewport()->height());
+	const sptr_t Y = static_cast<sptr_t>(Height * qBound(0.0, ratio, 1.0));
+	const sptr_t Position = Send(SCI_POSITIONFROMPOINT, 0, Y);
+	if (Position < 0)
+		return static_cast<double>(Send(SCI_DOCLINEFROMVISIBLE, Send(SCI_GETFIRSTVISIBLELINE)) + 1);
+	const int Line = static_cast<int>(Send(SCI_LINEFROMPOSITION, Position));
+	const sptr_t Top = Send(SCI_POINTYFROMPOSITION, 0, Send(SCI_POSITIONFROMLINE, Line));
+	const int Row = qMax(1, textHeight(Line));
+	const int Rows = qMax(1, static_cast<int>(Send(SCI_WRAPCOUNT, Line)));
+	return Line + 1 + qBound(0.0, static_cast<double>(Y - Top) / (Rows * Row), 0.999);
+}
+
+void ScintillaQtDirectBackend::scrollFractionalLineToViewportRatio(double fractionalLine, double ratio)
+{
+	if (!m_editor)
+		return;
+	const int Total = qMax(1, lineCount());
+	const double Clamped = qBound(1.0, fractionalLine, static_cast<double>(Total));
+	const int Requested = qBound(0, static_cast<int>(Clamped) - 1, Total - 1);
+	double Fraction = qBound(0.0, Clamped - static_cast<int>(Clamped), 0.999);
+	const int Line = visibleAnchorLine(Requested);
+	if (Line != Requested)
+		Fraction = 0.0;
+	const int Height = qMax(1, m_editor->viewport()->height());
+	const int Row = qMax(1, textHeight(Line));
+	const int Rows = qMax(1, static_cast<int>(Send(SCI_WRAPCOUNT, Line)));
+	// The line's top sits Fraction of its rows above the target height.
+	const double Desired = Height * qBound(0.0, ratio, 1.0) - Fraction * Rows * Row;
+	// SCI_LINESCROLL counts display rows, wrapped sub-rows included. Rows between here and the target can differ
+	// in height, so the landing is measured again; the scroll limits end the loop when the target is out of reach.
+	for (int Pass = 0; Pass < 3; ++Pass) {
+		const sptr_t Top = Send(SCI_POINTYFROMPOSITION, 0, Send(SCI_POSITIONFROMLINE, Line));
+		const int Delta = static_cast<int>(qRound((Top - Desired) / Row));
+		if (Delta == 0)
+			break;
+		Send(SCI_LINESCROLL, 0, Delta);
+	}
+}
+
+bool ScintillaQtDirectBackend::isScrolledToEnd() const
+{
+	if (!m_editor)
+		return true;
+	const sptr_t Last = qMax(0, lineCount() - 1);
+	const sptr_t Bottom = Send(SCI_VISIBLEFROMDOCLINE, Last) + qMax<sptr_t>(1, Send(SCI_WRAPCOUNT, Last));
+	return Send(SCI_GETFIRSTVISIBLELINE) + Send(SCI_LINESONSCREEN) >= Bottom;
+}
+
+int ScintillaQtDirectBackend::visibleAnchorLine(int line) const
+{
+	// A line hidden by a fold has no screen position; use the header that hides it.
+	for (int Depth = 0; Depth < 128 && line > 0 && !Send(SCI_GETLINEVISIBLE, line); ++Depth) {
+		const int Parent = static_cast<int>(Send(SCI_GETFOLDPARENT, line));
+		if (Parent < 0 || Parent >= line)
+			break;
+		line = Parent;
+	}
+	return line;
+}
+
+bool ScintillaQtDirectBackend::eventFilter(QObject* watched, QEvent* event)
+{
+	if (watched == m_editor.data() && event->type() == QEvent::Resize)
+		emit viewportScrolled();
+	return ITextEditorBackend::eventFilter(watched, event);
 }
 
 int ScintillaQtDirectBackend::textHeight(int line) const
@@ -1368,5 +1451,6 @@ void ScintillaQtDirectBackend::FoldAll(bool Contract)
     if (m_editor && m_codeFoldingEnabled) {
         Send(SCI_COLOURISE, 0, -1);
         Send(SCI_FOLDALL, Contract ? SC_FOLDACTION_CONTRACT : SC_FOLDACTION_EXPAND);
+        emit viewportScrolled();
     }
 }

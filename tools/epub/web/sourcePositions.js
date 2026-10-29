@@ -24,14 +24,24 @@ export function placeSourcePosition(doc, anchor) {
         range.setStart(node, anchor.offset); range.collapse(true);
     } else { range.selectNodeContents(element); range.collapse(true); }
     const selection = doc.defaultView.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-    element.scrollIntoView({block:"center", inline:"nearest"});
+    // With scroll synchronisation the preview is already aligned; only a target out of view moves it.
+    element.scrollIntoView({block:anchor.reveal === "nearest" ? "nearest" : "center", inline:"nearest"});
 }
-export function createSourcePositions(snapshot) {
+// container(): the scrolling element; a click's height ratio in it lets the editor put the line at the same height.
+export function createSourcePositions(snapshot, container = () => null) {
     let selection = {}, serial = 0;
     const capture = doc => {
         const selected = doc.defaultView.getSelection();
         const point = sourcePositionForNode(doc, selected?.anchorNode, selected?.anchorOffset || 0);
-        if (point) selection = {...point, chapter:snapshot().chapterIndex, serial:++serial};
+        if (!point) return;
+        let ratio;
+        const host = container(), node = selected.anchorNode, owner = node?.nodeType === 1 ? node : node?.parentElement;
+        const box = (selected.rangeCount ? selected.getRangeAt(0).getClientRects()[0] : null) || owner?.getBoundingClientRect();
+        if (host && box && host.clientHeight > 0) {
+            const frame = doc.defaultView.frameElement, top = box.top + (frame ? frame.getBoundingClientRect().top : 0) - host.getBoundingClientRect().top;
+            ratio = Math.min(0.9, Math.max(0, top / host.clientHeight));
+        }
+        selection = {...point, chapter:snapshot().chapterIndex, serial:++serial, ...(ratio === undefined ? {} : {ratio})};
     };
     return {
         capture,

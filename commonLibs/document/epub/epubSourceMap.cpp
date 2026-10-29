@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubSourceMap.hpp"
 #include "epubArchive.hpp"
+#include "epubSourceLines.hpp"
 #include <QJsonArray>
 #include <QXmlStreamReader>
 #include <algorithm>
@@ -24,22 +25,23 @@ bool SourceMap::Load(const QString& Source) {
         }
         Value.offsets_.append(End);spans_.append(std::move(Value));
     };
-    for(int I=0;I<Source.size();) {
-        if(spans_.size()>32768 || Stack.size()>128){spans_.clear();return false;}
-        if(Source[I]!='<'){int End=Source.indexOf('<',I);if(End<0)End=Source.size();Text(I,End,false);I=End;continue;}
-        if(Source.mid(I,4)=="<!--"){const int End=Source.indexOf("-->",I+4);if(End<0)return false;if(!Stack.isEmpty())++Stack.last().children_;I=End+3;continue;}
-        if(Source.mid(I,9)=="<![CDATA["){const int End=Source.indexOf("]]>",I+9);if(End<0)return false;Text(I+9,End,true);I=End+3;continue;}
-        int End=I+1,Brackets=0;QChar Quote;
-        for(;End<Source.size();++End){const auto C=Source[End];if(!Quote.isNull()){if(C==Quote)Quote={};}else if(C=='\'' || C=='"')Quote=C;else if(C=='[')++Brackets;else if(C==']')--Brackets;else if(C=='>' && !Brackets)break;}
-        if(End>=Source.size())return false;
-        if(Source[I+1]=='/'){if(Stack.isEmpty())return false;spans_[Stack.takeLast().span_].end_=End+1;}
-        else if(Source[I+1]!='!' && Source[I+1]!='?') {
-            Span Value;Value.begin_=I;Value.end_=End+1;
-            if(!Stack.isEmpty()){Value.path_=spans_[Stack.last().span_].path_;Value.path_.append(Stack.last().elements_++);++Stack.last().children_;}
-            spans_.append(std::move(Value));if(Source[End-1]!='/')Stack.append({int(spans_.size()-1)});
-        }else if(Source[I+1]=='?' && !Stack.isEmpty())++Stack.last().children_;
-        I=End+1;
-    }
+    // Tag boundaries come from the scanner that also annotates preview chapters with source lines.
+    const bool Scanned=detail::ScanMarkup(Source.constData(),Source.size(),[&](const detail::MarkupToken& Token){
+        if(spans_.size()>32768 || Stack.size()>128)return false;
+        const int Begin=int(Token.begin_),End=int(Token.end_);
+        switch(Token.kind_) {
+        case detail::MarkupToken::Text:Text(Begin,End,false);return true;
+        case detail::MarkupToken::CData:Text(Begin,End,true);return true;
+        case detail::MarkupToken::Comment:if(!Stack.isEmpty())++Stack.last().children_;return true;
+        case detail::MarkupToken::Other:if(Source[Begin+1]=='?' && !Stack.isEmpty())++Stack.last().children_;return true;
+        case detail::MarkupToken::End:if(Stack.isEmpty())return false;spans_[Stack.takeLast().span_].end_=End;return true;
+        default:break;
+        }
+        Span Value;Value.begin_=Begin;Value.end_=End;
+        if(!Stack.isEmpty()){Value.path_=spans_[Stack.last().span_].path_;Value.path_.append(Stack.last().elements_++);++Stack.last().children_;}
+        spans_.append(std::move(Value));if(Token.kind_==detail::MarkupToken::Start)Stack.append({int(spans_.size()-1)});
+        return true;});
+    if(!Scanned){spans_.clear();return false;}
     return Stack.isEmpty() && !spans_.isEmpty();
 }
 QJsonObject SourceMap::Anchor(int Position) const {

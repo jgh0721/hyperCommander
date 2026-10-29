@@ -22,12 +22,14 @@
 #include <QTimer>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
 #include <system_error>
 #include <thread>
 #include <future>
+#include <optional>
 #include <vector>
 
 namespace hc::document
@@ -47,8 +49,9 @@ namespace hc::document
         QJsonObject metrics_;
         QJsonObject appearance_;
         QString settingsPath_;
-        bool initiallyInteractive_=true;
+        bool initiallyInteractive_=true,sourceLines_=false;
         std::deque<QJsonObject> settingsRequests_;
+        std::optional<QJsonObject> sourceScroll_;
         QJsonObject settingsResult_;
         void Metrics(QJsonObject Value) { std::lock_guard Lock(mutex_); metrics_ = std::move(Value); }
         std::thread worker_;
@@ -270,6 +273,14 @@ namespace hc::document
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
         work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value.isUndefined()?QJsonValue(QJsonValue::Null):Value}});work_->wake_.notify_one();return true;
     }
+    bool EpubProcessView::RequestSourceScroll(const QJsonObject& Value) {
+        const double Line=Value["line"].toDouble(-1),Ratio=Value["ratio"].toDouble(-1);
+        if(!work_ || closed_ || failed_ || !bound_ || Value.size()!=5 || Value["chapter"].toInt(-1)<0 || !std::isfinite(Line) || Line<1
+            || Ratio<0 || Ratio>1 || !Value["end"].isBool() || !Value["serial"].isDouble())return false;
+        // Only the newest target matters; an unsent older one is replaced rather than queued behind reader commands.
+        std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready")return false;
+        work_->sourceScroll_=Value;work_->wake_.notify_one();return true;
+    }
     QJsonObject EpubProcessView::ViewState() const
     {
         if(!work_) return {{"status", "idle"}};
@@ -281,13 +292,13 @@ namespace hc::document
         Result["retired"] = native_ ? native_->retired_ : work_->done_.load();
         return Result;
     }
-    bool EpubProcessView::Load(QByteArray Bytes, qint64 Generation,const QString& SettingsDirectory,bool InitiallyInteractive)
+    bool EpubProcessView::Load(QByteArray Bytes, qint64 Generation,const QString& SettingsDirectory,bool InitiallyInteractive,bool SourceLines)
     {
         if(bound_) return false;
         bound_ = true;
         timer_->start();
         work_ = std::make_shared<Work>();
-        work_->initiallyInteractive_=InitiallyInteractive;
+        work_->initiallyInteractive_=InitiallyInteractive;work_->sourceLines_=SourceLines;
         work_->appearance_ = epubui::Appearance();
         auto Config = qApp->property("documentViewsConfigDir").toString();
         if(Config.isEmpty()) Config = hc::settings::DocumentPaths().directory_;
@@ -358,7 +369,7 @@ namespace hc::document
                 QJsonObject Applied;
                 { std::lock_guard Lock(State->mutex_); Applied = State->appearance_; }
                 const auto Configure = QJsonDocument(QJsonObject{{"protocolVersion", 1}, {"documentId", Id},
-                    {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_},{"initiallyInteractive",State->initiallyInteractive_}}).toJson(QJsonDocument::Compact);
+                    {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_},{"initiallyInteractive",State->initiallyInteractive_},{"sourceLines",State->sourceLines_}}).toJson(QJsonDocument::Compact);
                 QByteArray ConfigureReply;
                 if(!Owner->Exchange(Configure, ConfigureReply, 5000, Error)
                     || !QJsonDocument::fromJson(ConfigureReply).object()["accepted"].toBool()
@@ -380,10 +391,19 @@ namespace hc::document
                     {"generation", State->generation_}, {"kind", "snapshot-delta"}}).toJson(QJsonDocument::Compact);
                 bool DocumentReady = false;
                 bool FocusAcknowledged = false;
-                qint64 SnapshotBytes=0,SnapshotReplies=0;
+                qint64 SnapshotBytes=0,SnapshotReplies=0,ScrollSerial=-1;
+                // While either side scrolls, the preview state is collected at 33 ms instead of 100 ms.
+                QElapsedTimer ScrollActive;
                 while(!Cancelled()) {
                     QJsonObject Next;
                     { std::lock_guard Lock(State->mutex_); Next = State->appearance_; }
+                    QJsonObject Scroll;
+                    {std::lock_guard Lock(State->mutex_);if(DocumentReady && State->sourceScroll_){Scroll=std::move(*State->sourceScroll_);State->sourceScroll_.reset();}}
+                    if(!Scroll.isEmpty()) {
+                        const auto Message=QJsonDocument(QJsonObject{{"protocolVersion",1},{"documentId",Id},{"generation",State->generation_},{"kind","source-scroll"},{"value",Scroll}}).toJson(QJsonDocument::Compact);
+                        QByteArray Reply;if(!Owner->Exchange(Message,Reply,5000,Error)){Failure=Error.code_;return;}
+                        ScrollActive.restart();
+                    }
                     if(Next != Applied) {
                         const auto ThemeRequest = QJsonDocument(QJsonObject{{"protocolVersion", 1}, {"documentId", Id},
                             {"generation", State->generation_}, {"kind", "appearance"}, {"appearance", Next}}).toJson(QJsonDocument::Compact);
@@ -425,6 +445,7 @@ namespace hc::document
                         for(auto At=View.begin();At!=View.end();++At)Merged[At.key()]=At.value();View=std::move(Merged);
                     }
                     LastReaderState = View;
+                    const auto Reported=View["previewScroll"].toObject()["serial"].toInteger(-1);if(Reported!=ScrollSerial){ScrollSerial=Reported;ScrollActive.restart();}
                     const auto Status = View["status"].toString();
                     if(Status == "error" || Status == "cancelled") { Failure = View["message"].toString("epub-renderer-failed"); return; }
                     const bool Stable=Status=="ready" && !View["readerBusy"].toBool() && !View["locator"].toString().isEmpty();
@@ -457,8 +478,9 @@ namespace hc::document
                     State->Update(std::move(View));
                     if(!DocumentReady && Deadline.hasExpired()) { Failure = "epub-view-load-timeout"; return; }
                     std::unique_lock Lock(State->mutex_);
-                    State->wake_.wait_for(Lock,std::chrono::milliseconds(DocumentReady?100:20),[&]{
-                        return Cancelled() || State->appearance_!=Applied || (DocumentReady && (!State->settingsRequests_.empty()
+                    const bool Scrolling=ScrollActive.isValid() && ScrollActive.elapsed()<500;
+                    State->wake_.wait_for(Lock,std::chrono::milliseconds(!DocumentReady || Scrolling?(DocumentReady?33:20):100),[&]{
+                        return Cancelled() || State->appearance_!=Applied || (DocumentReady && (!State->settingsRequests_.empty() || State->sourceScroll_.has_value()
                             || (State->focusRequested_.load() && IsWindowVisible(reinterpret_cast<HWND>(State->parent_)))));
                     });
                 }

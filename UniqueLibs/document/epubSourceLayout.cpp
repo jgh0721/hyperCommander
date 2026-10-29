@@ -54,13 +54,15 @@ private:
 namespace {
 const QMap<QString,QString>& commandActions() {
     static const QMap<QString,QString> Map{{"epubEdit.apply","epubApplyResource"},{"epubEdit.validate","epubBasicValidation"},{"epubEdit.epubcheck","epubStandardValidation"},{"epubEdit.filter","epubResourceFilter"},
-        {"epubEdit.previewRefresh","epubPreviewRefresh"},{"epubEdit.closeTab","epubCloseTab"},{"epubEdit.toc","epubEditNavigation"},{"epubEdit.metadata","epubMetadataAction"},{"epubEdit.toggleTree","epubToggleTree"},
+        {"epubEdit.previewRefresh","epubPreviewRefresh"},{"epubEdit.scrollSync","epubPreviewScrollSync"},{"epubEdit.closeTab","epubCloseTab"},{"epubEdit.toc","epubEditNavigation"},{"epubEdit.metadata","epubMetadataAction"},{"epubEdit.toggleTree","epubToggleTree"},
         {"epubEdit.togglePreview","epubTogglePreview"},{"epubEdit.toggleProblems","epubToggleProblems"},{"epubEdit.orientation","epubToggleOrientation"},{"epubEdit.recover","epubRecoverDraft"},
         {"epubTree.rename","epubRenameResource"},{"epubTree.delete","epubRemoveResource"},{"epubTree.moveUp","epubChapterUp"},{"epubTree.moveDown","epubChapterDown"},{"epubTree.copyPath","epubCopyPath"},
         {"epubSource.quickFix","epubQuickFix"},{"epubSource.openLink","epubOpenLink"},{"epubSource.findAll","epubFindAll"},{"epubSource.locate","epubLocateSource"},{"epubSource.wrapEm","epubWrap_em"},
         {"epubSource.wrapStrong","epubWrap_strong"},{"epubSource.wrapSpan","epubWrap_span"},{"epubSource.wrapLink","epubWrap_a"},{"epubSource.wrapRuby","epubWrap_ruby"}};
     return Map;
 }
+// Saved preview toggles: settings key under epubEditor/layout and the action they restore.
+QList<std::pair<const char*,const char*>> previewToggles(){return {{"autoPreview","epubAutoPreview"},{"positionSync","epubPreviewSync"},{"scrollSync","epubPreviewScrollSync"}};}
 QLabel* statusLabel(QWidget* Parent,const QString& Name){auto* Label=new QLabel(Parent);Label->setObjectName(Name);Label->setTextFormat(Qt::PlainText);return Label;}
 }
 void EpubSourceEditor::setupLayout() {
@@ -78,6 +80,8 @@ void EpubSourceEditor::setupLayout() {
     recoveryBar_->hide();Source->addWidget(recoveryBar_);
     sourceStack_=new QStackedWidget(sourcePanel_);Source->addWidget(sourceStack_,1);
     text_=new QTextView(sourceStack_);text_->setObjectName("epubEditSource");text_->setAccessibleName(tr("EPUB 리소스 소스"));text_->setHotExitEnabled(false);sourceStack_->addWidget(text_);
+    // A new view reads only its display settings; the text editor font arrives with the full reload.
+    text_->ReloadPreferences();
     SourceInput()->setObjectName("epubEditSourceInput");SourceInput()->setAccessibleName(tr("EPUB 리소스 소스"));SourceInput()->installEventFilter(this);SourceInput()->setAttribute(Qt::WA_NativeWindow);SourceInput()->setContextMenuPolicy(Qt::CustomContextMenu);
     static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_USEPOPUP,SC_POPUP_NEVER);setFocusProxy(SourceInput());
     image_=new QLabel(sourceStack_);image_->setObjectName("epubImagePreview");image_->setAlignment(Qt::AlignCenter);image_->setMinimumHeight(100);sourceStack_->addWidget(image_);
@@ -180,13 +184,16 @@ void EpubSourceEditor::setupActions() {
     Make("epubToggleOrientation",tr("좌우 · 상하 배치 전환"),[this]{applyOrientation(previewSplitter_->orientation()==Qt::Horizontal?Qt::Vertical:Qt::Horizontal);});
     auto* Horizontal=Make("epubLayoutHorizontal",tr("좌우 배치"),[this]{applyOrientation(Qt::Horizontal);},true);auto* Vertical=Make("epubLayoutVertical",tr("상하 배치"),[this]{applyOrientation(Qt::Vertical);},true);
     auto* Orientation=new QActionGroup(this);Orientation->addAction(Horizontal);Orientation->addAction(Vertical);Horizontal->setChecked(true);
-    Make("epubAutoPreview",tr("실시간 미리보기"),[this](bool On){if(On)requestPreview();else previewTimer_.stop();},true);
-    Make("epubPreviewSync",tr("소스·본문 위치 연결"),[this](bool On){if(On)syncPreviewSource(true);},true);
+    Make("epubAutoPreview",tr("실시간 미리보기"),[this](bool On){if(On)requestPreview();else previewTimer_.stop();if(layoutRestored_)layoutTimer_.start();},true);
+    Make("epubPreviewSync",tr("소스·본문 위치 동기화"),[this](bool On){
+        // Scroll sync rides on the chapter following of position sync; it keeps its own state while disabled.
+        action("epubPreviewScrollSync")->setEnabled(On);if(On){syncPreviewSource(true);scrollSyncPending_=true;lastScrollLine_=-1;}if(layoutRestored_)layoutTimer_.start();},true);
+    Make("epubPreviewScrollSync",tr("소스·본문 스크롤 동기화"),[this](bool On){if(On){scrollSyncPending_=true;lastScrollLine_=-1;syncPreviewScroll();}if(layoutRestored_)layoutTimer_.start();},true);
     // Initial states are set quietly: their handlers expect every panel and command to exist.
-    for(const auto& Name:{"epubToggleTree","epubTogglePreview","epubToggleProblems","epubAutoPreview","epubPreviewSync"}){const QSignalBlocker Block(action(Name));action(Name)->setChecked(true);}
+    for(const auto& Name:{"epubToggleTree","epubTogglePreview","epubToggleProblems","epubAutoPreview","epubPreviewSync","epubPreviewScrollSync"}){const QSignalBlocker Block(action(Name));action(Name)->setChecked(true);}
     Make("epubPreviewRefresh",tr("미리보기 갱신"),[this]{requestPreview(true);});
     // The preview header shows the short labels; menus keep the full ones.
-    action("epubAutoPreview")->setIconText(tr("실시간"));action("epubPreviewSync")->setIconText(tr("위치 연결"));action("epubPreviewRefresh")->setIconText(tr("갱신"));
+    action("epubAutoPreview")->setIconText(tr("실시간"));action("epubPreviewSync")->setIconText(tr("위치 동기화"));action("epubPreviewScrollSync")->setIconText(tr("스크롤 동기화"));action("epubPreviewRefresh")->setIconText(tr("갱신"));
     Make("epubRecoverDraft",tr("초안 복원"),[this]{if(!recoveryEntries_.isEmpty())restoreRecovery(recoveryEntries_.first().second);});
     Make("epubAutoRecovery",tr("자동 복구"),[this](bool On){AppSettings Settings;Settings.setValue("textView/recoveryEnabled",On);SetRecoveryEnabled(On);},true);
     for(const auto& Name:{"epubFindInSource","epubPreviewCopy","epubPreviewPreviousChapter","epubPreviewNextChapter","epubPreviewToc"}){auto* Item=new QAction(this);Item->setObjectName(Name);actions_[Name]=Item;}
@@ -247,7 +254,12 @@ void EpubSourceEditor::updateStatus() {
     problems_->setTabText(0,diagnosticRows_.isEmpty()?tr("문제"):tr("문제 %1").arg(diagnosticRows_.size()));
     if(previewChip_) {
         const auto Preview=previewSnapshot();const bool Busy=Preview["busy"].toBool(),Current=Preview["current"].toBool();
-        previewChip_->setText(!previewError_.isEmpty()?tr("⚠ 검사 실패 · 마지막 정상 화면"):Preview["waitingForFocus"].toBool()?tr("창이 활성화되면 갱신"):Busy || !Current?tr("갱신 대기"):tr("✓ 최신 · %1").arg(QDateTime::currentDateTime().toString("HH:mm")));previewChip_->setToolTip(previewMessage_);
+        previewChip_->setText(!previewError_.isEmpty()?tr("⚠ 검사 실패 · 마지막 정상 화면"):Preview["waitingForFocus"].toBool()?tr("창이 활성화되면 갱신"):Busy || !Current?tr("갱신 대기"):tr("✓ 최신 · %1").arg(QDateTime::currentDateTime().toString("HH:mm")));
+        // Saved toggles survive restarts, so the chip says which ones are off.
+        QStringList Notes{previewMessage_};if(!action("epubAutoPreview")->isChecked())Notes.append(tr("실시간 꺼짐 · 편집 뒤에는 [갱신]을 누르세요"));if(!action("epubPreviewSync")->isChecked())Notes.append(tr("위치 동기화 꺼짐"));
+        else if(!action("epubPreviewScrollSync")->isChecked())Notes.append(tr("스크롤 동기화 꺼짐"));
+        if(sourceBuffers_.value(current_).shiftsOverflow_)Notes.append(tr("이전 판 기준 · 스크롤 위치가 조금 어긋날 수 있습니다"));
+        previewChip_->setToolTip(Notes.join('\n'));
         const auto State=Preview["state"].toObject();const int Chapter=State["chapterIndex"].toInt(-1);const int Count=model_.Publication()["spine"].toArray().size();previewChapterLabel_->setText(Chapter>=0 && Count>0?tr("%1 / %2장").arg(Chapter+1).arg(Count):QString{});
     }
     if(treeSummary_ && resourceModel_){int Changed=0,Problem=0;for(const auto& Value:model_.Publication()["resources"].toArray()){const auto Path=Value.toObject()["path"].toString();Changed+=touchedResources_.contains(Path) || model_.Changes().contains(Path);}for(const auto& Value:diagnosticRows_)Problem+=!Value.toObject()["resource"].toString().isEmpty();treeSummary_->setText(tr("%1개 리소스 · 수정 %2 · 문제 %3").arg(resourceModel_->ResourceCount()).arg(Changed).arg(Problem));}
@@ -272,6 +284,7 @@ void EpubSourceEditor::updateActions() {
     action("epubCloseTab")->setEnabled(tabs_->count()>0);action("epubCloseOtherTabs")->setEnabled(tabs_->count()>1);action("epubCloseRightTabs")->setEnabled(tabs_->currentIndex()+1<tabs_->count());action("epubRevertResource")->setEnabled(Editable && sourceShown() && sourceModified());
     action("epubQuickFix")->setEnabled(Editable && sourceShown() && !quickFixAt(sourcePosition()).isEmpty());action("epubOpenLink")->setEnabled(Idle && sourceShown() && !linkAt(sourcePosition()).isEmpty());
     action("epubLocateSource")->setEnabled(Idle && sourceShown() && previewView_);action("epubPreviewRefresh")->setEnabled(Idle && previewRuntime_.has_value());
+    action("epubPreviewScrollSync")->setEnabled(action("epubPreviewSync")->isChecked());
     for(const auto& Tag:{"em","strong","span","a","ruby","custom"})action(QString("epubWrap_")+Tag)->setEnabled(Editable && Selection && mediaOf(current_)=="application/xhtml+xml");
     action("epubRecoverDraft")->setEnabled(Idle && !recoveryEntries_.isEmpty());action("epubDraftMenuAction")->setEnabled(true);action("epubValidateMenuAction")->setEnabled(ready_);action("epubStructureMenuAction")->setEnabled(ready_);
     action("epubLayoutHorizontal")->setChecked(previewSplitter_->orientation()==Qt::Horizontal);action("epubLayoutVertical")->setChecked(previewSplitter_->orientation()==Qt::Vertical);
@@ -279,6 +292,9 @@ void EpubSourceEditor::updateActions() {
 }
 void EpubSourceEditor::restoreLayout() {
     AppSettings Settings;const auto Orientation=Settings.value("epubEditor/layout/orientation").toString();
+    // Restored quietly: a saved toggle alone must not request or move the preview.
+    for(const auto& [Key,Name]:previewToggles()){const auto Value=Settings.value(QString("epubEditor/layout/")+Key);if(!Value.isValid())continue;const QSignalBlocker Block(action(Name));action(Name)->setChecked(Value.toBool());}
+    action("epubPreviewScrollSync")->setEnabled(action("epubPreviewSync")->isChecked());
     applyOrientation(Orientation=="vertical"?Qt::Vertical:Orientation=="horizontal"?Qt::Horizontal:window()->width()<980?Qt::Vertical:Qt::Horizontal,false);
     for(const auto& [Key,Splitter]:{std::pair{QString("outer"),static_cast<QSplitter*>(outerSplitter_)},std::pair{QString("work"),static_cast<QSplitter*>(workSplitter_)},std::pair{QString("main"),static_cast<QSplitter*>(previewSplitter_)}}){const auto State=QByteArray::fromBase64(Settings.value("epubEditor/layout/"+Key).toString().toLatin1());if(!State.isEmpty())Splitter->restoreState(State);}
     for(const auto& Panel:{QString("tree"),QString("preview"),QString("problems")}){const auto Value=Settings.value("epubEditor/layout/"+Panel);if(Value.isValid())setPanelVisible(Panel,Value.toBool());}
@@ -289,6 +305,7 @@ void EpubSourceEditor::saveLayout() {
     Settings.setValue("epubEditor/layout/orientation",previewSplitter_->orientation()==Qt::Horizontal?"horizontal":"vertical");
     for(const auto& [Key,Splitter]:{std::pair{QString("outer"),static_cast<QSplitter*>(outerSplitter_)},std::pair{QString("work"),static_cast<QSplitter*>(workSplitter_)},std::pair{QString("main"),static_cast<QSplitter*>(previewSplitter_)}})Settings.setValue("epubEditor/layout/"+Key,QString::fromLatin1(Splitter->saveState().toBase64()));
     for(const auto& [Panel,Name]:{std::pair{"tree","epubToggleTree"},std::pair{"preview","epubTogglePreview"},std::pair{"problems","epubToggleProblems"}})Settings.setValue(QString("epubEditor/layout/")+Panel,action(Name)->isChecked());
+    for(const auto& [Key,Name]:previewToggles())Settings.setValue(QString("epubEditor/layout/")+Key,action(Name)->isChecked());
 }
 void EpubSourceEditor::applyOrientation(Qt::Orientation Value,bool Save) {
     if(previewSplitter_->orientation()!=Value){previewSplitter_->setOrientation(Value);const int Total=Value==Qt::Horizontal?previewSplitter_->width():previewSplitter_->height();previewSplitter_->setSizes({Total*55/100,Total*45/100});}
@@ -301,7 +318,7 @@ void EpubSourceEditor::setPanelVisible(const QString& Panel,bool Visible) {
     // Reader mode keeps only the preview. A hidden preview stays alive and only pauses automatic refresh.
     treePanel_->setVisible(Source && action("epubToggleTree")->isChecked());problemsPanel_->setVisible(Source && action("epubToggleProblems")->isChecked());
     previewPanel_->setVisible(previewRuntime_.has_value() && (!Source || action("epubTogglePreview")->isChecked()));
-    if(previewPanel_->isHidden())previewTimer_.stop();else if(!WasPreview && action("epubAutoPreview")->isChecked() && previewActiveToken_!=Token())previewTimer_.start();
+    if(previewPanel_->isHidden())previewTimer_.stop();else if(!WasPreview && (action("epubAutoPreview")->isChecked() || previewMissing()) && previewActiveToken_!=Token())previewTimer_.start();
     for(auto* Widget:{treePanel_,problemsPanel_,previewPanel_})if(Widget->isHidden() && Widget->isAncestorOf(QApplication::focusWidget()))focusSource();
     updateStatus();if(layoutRestored_)layoutTimer_.start();
 }

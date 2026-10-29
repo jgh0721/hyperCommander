@@ -39,7 +39,7 @@ def main():
     query=build/".cmake/api/v1/query/codemodel-v2";query.parent.mkdir(parents=True,exist_ok=True);query.touch()
     common=[cmake,"--preset","vc2026-qt612","-DHC_BUILD_EPUB_PRODUCT=ON","-DHC_BUILD_EPUB_POC=ON","-DBUILD_TESTING=ON",f"-DHC_EPUB_PYTHON_EXECUTABLE={Path(sys.executable).resolve().as_posix()}",*a.configure_arg]
     run("npm-ci",[npm,"ci","--ignore-scripts","--no-audit","--no-fund","--cache",output/"npm-cache"],web)
-    for name in ["testFontSources.mjs","testCustomCss.mjs","testReaderTools.mjs"]:run(name,[node,web/name])
+    for name in ["testFontSources.mjs","testCustomCss.mjs","testReaderTools.mjs","testPreviewScroll.mjs"]:run(name,[node,web/name])
     run("bundle",[node,web/"build.mjs",output/"bundle"])
     run("configure-helper",[*common,"-DHC_EPUB_PRODUCT_RUNTIME_DIRECTORY=","-DHC_EPUB_APPROVED_INVENTORY_SHA256="])
     run("helper",[cmake,"--build","--preset","vc2026-release","--target","HyperEpubWeb"])

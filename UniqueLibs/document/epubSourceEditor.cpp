@@ -38,7 +38,7 @@ void EpubSourceEditor::protectSourcePath(const QString& Path){protectedPaths_.ap
 EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget* Parent,const QByteArray& SourceHash):QWidget(Parent) {
     protectSourcePath(Path);
     baseToken_=SourceHash.isEmpty()?QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256):SourceHash;sourceHashAtOpen_=baseToken_;sourcePath_=Path;
-    setupLayout();setupActions();setupStatus();
+    setupLayout();setupActions();setupStatus();setupScrollSync();
     sourceSyncTimer_.setSingleShot(true);sourceSyncTimer_.setInterval(180);connect(&sourceSyncTimer_,&QTimer::timeout,this,&EpubSourceEditor::locateSource);
     connect(text_->Backend(),&ITextEditorBackend::cursorPositionChanged,this,[this]{if(!updating_ && SourceInput()->hasFocus() && action("epubPreviewSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}updateStatus();});
     connect(text_->Backend(),&ITextEditorBackend::selectionChanged,this,&EpubSourceEditor::updateActions);
@@ -97,6 +97,8 @@ void EpubSourceEditor::select() {
     if(Raster){QBuffer Buffer;Buffer.setData(Data);Buffer.open(QIODevice::ReadOnly);QImageReader Reader(&Buffer);Reader.setAutoTransform(true);const auto Size=Reader.size();const auto Image=Size.isValid() && Size.width()<=4096 && Size.height()<=4096 && qint64(Size.width())*Size.height()<=4194304?Reader.read():QImage{};image_->setPixmap(QPixmap::fromImage(Image.scaled(640,420,Qt::KeepAspectRatio,Qt::SmoothTransformation)));image_->setAccessibleName(tr("이미지 미리보기: %1").arg(current_));}
     else activateSource(Data,Media);updating_=false;
     if(!openResources_.contains(current_))openResources_.append(current_);
+    // A newly shown resource is aligned once its chapter is in the preview.
+    scrollSyncPending_=true;lastScrollLine_=-1;
     refreshTabs();selectResource(current_);markDiagnostics();updateActions();updateStatus();
 }
 void EpubSourceEditor::importImage() {
@@ -121,7 +123,7 @@ QJsonObject EpubSourceEditor::Snapshot()const {
     const QJsonObject Source{{"resource",current_},{"buffer",QString::number(State.serial_)},{"shown",sourceShown()},{"modified",ready_ && sourceShown() && sourceModified()},{"readOnly",sourceReadOnly_},{"language",text_->currentLanguage()}};
     const QJsonObject Layout{{"orientation",previewSplitter_->orientation()==Qt::Horizontal?"horizontal":"vertical"},{"tree",!treePanel_->isHidden()},{"preview",!previewPanel_->isHidden()},{"problems",!problemsPanel_->isHidden()}};
     const QJsonObject Status{{"message",message_},{"draft",draftMessage_},{"preview",previewMessage_},{"validation",statusValidation_->text()}};
-    return {{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",true},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
+    return {{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",true},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
 }
 QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
     const auto Action=Request["action"].toString();

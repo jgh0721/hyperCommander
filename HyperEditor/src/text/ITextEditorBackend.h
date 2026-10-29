@@ -92,6 +92,10 @@ public:
 
 	virtual int firstVisibleLine() const = 0;
 	virtual void restoreViewState(int caretPosition, int firstVisibleLine) = 0;
+	// 1-based document line plus the position inside its wrapped display rows, at a height ratio of the view.
+	virtual double fractionalLineAtViewportRatio(double ratio) const = 0;
+	virtual void scrollFractionalLineToViewportRatio(double fractionalLine, double ratio) = 0;
+	virtual bool isScrolledToEnd() const = 0;
 	virtual int textHeight(int line) const = 0;
 	virtual int leftMarginWidth() const = 0;
 	virtual int changeHistoryFlags() const = 0;
@@ -105,6 +109,10 @@ signals:
 	void linesChanged();
 	void textChanged();
 	void selectionChanged();
+	// Vertical position of the view changed: scrolling, folding, wrapping or a new height.
+	void viewportScrolled();
+	// 0-based line of an edit and the lines it added (negative when removed).
+	void linesShifted(int line, int delta);
 };
 
 

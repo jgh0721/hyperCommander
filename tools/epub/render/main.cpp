@@ -6,6 +6,8 @@
 #include "inputTransfer.hpp"
 #include "publicationResources.hpp"
 #include "commonLibs/document/epub/epubPackage.hpp"
+#include "commonLibs/document/epub/epubSourceLines.hpp"
+#include <cmath>
 #include <QWindow>
 #include <QPointer>
 #include <QInputMethodEvent>
@@ -155,8 +157,9 @@ namespace
     class Handler final : public QWebEngineUrlSchemeHandler
     {
     public:
-        explicit Handler(const Assets& Items, QObject* Parent, std::function<void(const QString&)> Failure)
-            : QWebEngineUrlSchemeHandler(Parent), items_(Items), failure_(std::move(Failure))
+        // SourceLines: chapter paths that editing previews annotate with source lines; empty for readers.
+        explicit Handler(const Assets& Items, QObject* Parent, std::function<void(const QString&)> Failure, QSet<QString> SourceLines = {})
+            : QWebEngineUrlSchemeHandler(Parent), items_(Items), failure_(std::move(Failure)), sourceLines_(std::move(SourceLines))
         { nonce_ = QJsonDocument::fromJson(Items.value("/app/publication.json").data).object()["scriptNonce"].toString().toLatin1(); }
         void requestStarted(QWebEngineUrlRequestJob* Job) override
         {
@@ -190,11 +193,21 @@ namespace
                 if(!Data->error_.isEmpty()) { failure_(Data->error_); Guard->fail(QWebEngineUrlRequestJob::RequestFailed); return; }
                 Cache->Retain(Resource,Data); Reply(Data->bytes_,Data);
             });
-            Watcher->setFuture(QtConcurrent::run(Store::Pool(),[Session=Item.store->Session(),Resource,Lease] { return Store::Load(Session,Resource,Lease); }));
+            const bool Annotate=sourceLines_.contains(Resource) && Item.mime=="application/xhtml+xml";
+            Watcher->setFuture(QtConcurrent::run(Store::Pool(),[Session=Item.store->Session(),Resource,Lease,Annotate] {
+                auto Value=Store::Load(Session,Resource,Lease);
+                // The cache keeps the annotated bytes, so each chapter is annotated once. Failures serve the original.
+                if(Annotate && Value->error_.isEmpty()) {
+                    auto Lines=hc::document::epub::AnnotateSourceLines(Value->bytes_);
+                    if(Lines.skipped_.isEmpty() && Store::Grow(Value,Lines.bytes_.size()-Value->bytes_.size()))Value->bytes_=std::move(Lines.bytes_);
+                }
+                return Value;
+            }));
         }
     private:
         Assets items_;
         std::function<void(const QString&)> failure_;
+        QSet<QString> sourceLines_;
         QByteArray nonce_;
     };
 
@@ -246,7 +259,7 @@ namespace
     class Window final : public QMainWindow
     {
     public:
-        Window(const Assets& Items, const QJsonObject& Publication, const QString& Engine, const QString& Theme, const QString& Evidence, const QString& SettingsPath, qint64 Generation = 1,bool InitiallyInteractive=true)
+        Window(const Assets& Items, const QJsonObject& Publication, const QString& Engine, const QString& Theme, const QString& Evidence, const QString& SettingsPath, qint64 Generation = 1,bool InitiallyInteractive=true,bool SourceLines=false)
             : QMainWindow(nullptr,InitiallyInteractive?Qt::WindowFlags{}:Qt::WindowFlags(Qt::WindowDoesNotAcceptFocus)), evidence_(Evidence), documentId_(Publication["sourceSha256"].toString()), generation_(Generation)
         {
             setAttribute(Qt::WA_ShowWithoutActivating);engine_=Engine;interactive_=InitiallyInteractive;
@@ -313,7 +326,9 @@ namespace
             profile_ = new QWebEngineProfile(this); profile_->setHttpCacheType(QWebEngineProfile::MemoryHttpCache);profile_->setHttpCacheMaximumSize(32*1024*1024);
             profile_->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
             filter_ = new Filter(Items, profile_); profile_->setUrlRequestInterceptor(filter_);
-            profile_->installUrlSchemeHandler("epub", new Handler(Items, profile_,[this](const QString& Error){resourceFailure_=Error;}));
+            // Editing previews read source lines from their chapters; readers keep the publisher bytes.
+            QSet<QString> Chapters;if(SourceLines)for(const auto& Value:Publication["spine"].toArray())Chapters.insert(Value.toObject()["path"].toString());
+            profile_->installUrlSchemeHandler("epub", new Handler(Items, profile_,[this](const QString& Error){resourceFailure_=Error;},std::move(Chapters)));
             page_ = new Page(profile_, view_); view_->setPage(page_);page_->settings()->setAttribute(QWebEngineSettings::FocusOnNavigationEnabled,false);
             for(auto Setting : {QWebEngineSettings::LocalContentCanAccessFileUrls, QWebEngineSettings::LocalContentCanAccessRemoteUrls,
                 QWebEngineSettings::JavascriptCanOpenWindows, QWebEngineSettings::JavascriptCanAccessClipboard,
@@ -333,8 +348,10 @@ namespace
             connect(&poll_, &QTimer::timeout, this, [this] {
                 if(pending_) return;
                 pending_ = true;
-                const bool Detailed=detailPending_ || !detailClock_.isValid() || detailClock_.elapsed()>=500;
-                if(Detailed){detailPending_=false;detailClock_.restart();}
+                // While the preview scrolls, the periodic detailed snapshot waits; only commands still ask for one.
+                const bool Scrolling=scrollActive_.isValid() && scrollActive_.elapsed()<500;
+                const bool Detailed=detailPending_ || !detailClock_.isValid() || (!Scrolling && detailClock_.elapsed()>=500);
+                if(Detailed){detailPending_=false;detailClock_.restart();++detailSnapshots_;}
                 const auto Snapshot=Detailed?QStringLiteral("window.hcSnapshot"):QStringLiteral("window.hcNativeSnapshot || window.hcSnapshot");
                 page_->runJavaScript("JSON.stringify({...(("+Snapshot+")?.() || window.hcEvidence), startup: window.hcStartupDiagnostics ? window.hcStartupDiagnostics() : {}})", [this,Detailed](const QVariant& Value) {
                     pending_ = false; if(finished_) return;
@@ -343,6 +360,8 @@ namespace
                     if(Result["frameId"]!=latest_["frameId"] && !Detailed)detailPending_=true;
                     if(!Detailed){auto Merged=latest_;for(auto At=Result.begin();At!=Result.end();++At)Merged[At.key()]=At.value();Result=std::move(Merged);}
                     latest_ = Result;
+                    const auto ScrollSerial=Result["previewScroll"].toObject()["serial"].toInteger(-1);
+                    if(ScrollSerial!=scrollSerialSeen_){scrollSerialSeen_=ScrollSerial;scrollActive_.restart();}
                     const auto Stamp=QFileInfo(settingsPath_).lastModified().toMSecsSinceEpoch();
                     if(Stamp!=settingsStamp_ && !settings_->IsDirty() && !settings_->IsBusy()){settingsStamp_=Stamp;settings_->Execute("reload",{},false);}
                     if(!Result["readerBusy"].toBool()) {
@@ -371,7 +390,8 @@ namespace
                     for(const auto& Family : Result["bookFonts"].toArray()) if(Family.isString()) Families.append(Family.toString());
                     settings_->SetBookFonts(Families);
                     const auto Status = Result["status"].toString();
-                    poll_.setInterval(Status=="ready" && !Result["readerBusy"].toBool()?250:33);
+                    // A scrolling preview reports every 33 ms for half a second, then falls back to the idle rate.
+                    poll_.setInterval(Status=="ready" && !Result["readerBusy"].toBool() && !(scrollActive_.isValid() && scrollActive_.elapsed()<500)?250:33);
                     statusBar()->clearMessage();
                     if(!evidence_.isEmpty() && Status == "ready" && !testing_) {
                         testing_ = true;
@@ -420,7 +440,7 @@ namespace
                 State["escapeRequests"]=escapeRequests_;State["fullscreenRequests"]=fullscreenRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();State["inputEnabled"]=interactive_;
                 State["chromeWindowColor"]=palette().color(QPalette::Window).name();State["toolbarWindowColor"]=findChild<QToolBar*>("epubReadingToolbar")->palette().color(QPalette::Window).name();State["openPanel"]=openPanel();State["toolbarPreviousEnabled"]=findChild<QAction*>("epub.previous")->isEnabled();State["toolbarNextEnabled"]=findChild<QAction*>("epub.next")->isEnabled();State["toolbarAvailabilityChanges"]=toolbarAvailabilityChanges_;
                 State["toolbarColumns"]=columnsChoice_->currentIndex();State["columnsControlEnabled"]=columnsChoice_->isEnabled();
-                State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();
+                State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();State["detailSnapshots"]=detailSnapshots_;
                 State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError();
                 if(Kind=="snapshot-delta") {
                     QJsonObject Delta;QJsonArray Removed;
@@ -457,6 +477,10 @@ namespace
                 const bool Visible = IsWindowVisible(reinterpret_cast<HWND>(winId()));
                 if(Visible && interactive_) focusReading();
                 Reply["focusRequested"] = Visible && interactive_;
+            }
+            else if(Kind == "source-scroll") {
+                // Scrolling bypasses the reader command queue: no busy state and no detailed snapshot.
+                if(Request.size()!=5 || !sourceScroll(Request["value"]))return Fail("epub-source-scroll-invalid");
             }
             else return Fail("epub-control-command");
             Reply["accepted"] = true;
@@ -500,6 +524,13 @@ namespace
         void focusReading() {
             if(!interactive_)return;activateWindow();view_->setFocus(Qt::OtherFocusReason);
             page_->runJavaScript("window.hcFocusReading && window.hcFocusReading()");
+        }
+        bool sourceScroll(const QJsonValue& Value) {
+            const auto Request=Value.toObject();const double Line=Request["line"].toDouble(-1),Ratio=Request["ratio"].toDouble(-1);
+            if(!started_ || !Value.isObject() || Request.size()!=5 || Request["chapter"].toInt(-1)<0 || !std::isfinite(Line) || Line<1 || Ratio<0 || Ratio>1
+                || !Request["end"].isBool() || !Request["serial"].isDouble())return false;
+            page_->runJavaScript("window.hcSourceScroll && window.hcSourceScroll("+QString::fromUtf8(QJsonDocument(Request).toJson(QJsonDocument::Compact))+")");
+            scrollActive_.restart();if(poll_.interval()>33)poll_.start(33);return true;
         }
         bool readAction(const QString& Action,const QJsonValue& Value) {
             if(Action=="enable-input"){if(!Value.isBool() || !windowHandle())return false;interactive_=Value.toBool();view_->setFocusPolicy(interactive_?Qt::StrongFocus:Qt::NoFocus);windowHandle()->setFlag(Qt::WindowDoesNotAcceptFocus,!interactive_);return true;}
@@ -613,7 +644,7 @@ namespace
         qint64 annotationClickSeen_=0;
         qint64 generation_ = 1;
         QJsonObject latest_{{"status", "loading"}},sentState_;
-        QElapsedTimer detailClock_;bool detailPending_=true;
+        QElapsedTimer detailClock_,scrollActive_;bool detailPending_=true;qint64 scrollSerialSeen_=-1;int detailSnapshots_=0;
         QJsonObject hostAppearance_;
         hc::epub::poc::ReadingNavigation* navigation_=nullptr;
         QString settingsPath_,engine_,backgroundAsset_,astError_,resourceFailure_;
@@ -677,10 +708,11 @@ namespace
 #endif
             if(Kind == "configure") {
                 const auto Path = Request["settingsPath"].toString();
-                if(configured_ || preparing_ || reader_ || (Request.size() != 6 && Request.size()!=7) || (Request.contains("initiallyInteractive") && !Request["initiallyInteractive"].isBool()) || !QFileInfo(Path).isAbsolute()
+                if(configured_ || preparing_ || reader_ || Request.size()<6 || Request.size()>8 || Request.size()!=6+Request.contains("initiallyInteractive")+Request.contains("sourceLines")
+                    || (Request.contains("initiallyInteractive") && !Request["initiallyInteractive"].isBool()) || (Request.contains("sourceLines") && !Request["sourceLines"].isBool()) || !QFileInfo(Path).isAbsolute()
                     || !Path.endsWith("/epub-reading.json") || !hc::document::epubui::ApplyAppearance(Request["appearance"].toObject()))
                     return {{"error", "epub-configuration-invalid"}};
-                settingsPath_ = Path; appearance_ = Request["appearance"].toObject(); initiallyInteractive_=Request["initiallyInteractive"].toBool(true); configured_ = true;
+                settingsPath_ = Path; appearance_ = Request["appearance"].toObject(); initiallyInteractive_=Request["initiallyInteractive"].toBool(true); sourceLines_=Request["sourceLines"].toBool(false); configured_ = true;
                 return {{"accepted", true}, {"epubInputVersion",2}};
             }
             if(Kind.startsWith("input-")) {
@@ -744,7 +776,7 @@ namespace
             if(!initiallyInteractive_ && (!IsWindowVisible(Parent)
                 || GetAncestor(GetForegroundWindow(),GA_ROOT)!=GetAncestor(Parent,GA_ROOT)))return;
             auto Result=std::move(*prepared_);prepared_.reset();
-            reader_ = new Window(Result.assets,Result.publication,preparedEngine_,"light",{},settingsPath_,preparedGeneration_,initiallyInteractive_);
+            reader_ = new Window(Result.assets,Result.publication,preparedEngine_,"light",{},settingsPath_,preparedGeneration_,initiallyInteractive_,sourceLines_);
             if(!appearance_.isEmpty())reader_->Appearance(appearance_);
             reader_->setWindowFlags(Qt::Window | Qt::FramelessWindowHint | (initiallyInteractive_?Qt::WindowFlags{}:Qt::WindowFlags(Qt::WindowDoesNotAcceptFocus)));
             reader_->winId();reader_->windowHandle()->setParent(nativeParent_);reader_->setAttribute(Qt::WA_ShowWithoutActivating);
@@ -760,7 +792,7 @@ namespace
         std::uintptr_t nativeReader_ = 0;
         Window* reader_ = nullptr;
         QTimer timer_;
-        bool preparing_ = false, cancelled_ = false,initiallyInteractive_=true;
+        bool preparing_ = false, cancelled_ = false,initiallyInteractive_=true,sourceLines_=false;
     };
 }
 

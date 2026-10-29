@@ -23,10 +23,11 @@ namespace hc::document {
 void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Chapter) {
     if(previewRuntime_)return;previewRuntime_=Runtime;previewPreferredChapter_=previewRestoreChapter_=Chapter;
     auto* Panel=previewPanel_;auto* Layout=new QVBoxLayout(Panel);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
-    auto* Header=new QWidget(Panel);Header->setObjectName("epubPreviewHeader");auto* Controls=new QHBoxLayout(Header);Controls->setContentsMargins(10,2,6,2);Controls->setSpacing(6);
-    auto* Title=new QLabel(tr("미리보기"),Header);auto Font=Title->font();Font.setWeight(QFont::DemiBold);Title->setFont(Font);Controls->addWidget(Title);
+    auto* Header=new QWidget(Panel);Header->setObjectName("epubPreviewHeader");auto* Controls=new QHBoxLayout(Header);Controls->setContentsMargins(8,2,4,2);Controls->setSpacing(4);
+    // The header's minimum width bounds the editor window's; in a narrow window the title gives way before the toggles.
+    auto* Title=new QLabel(tr("미리보기"),Header);auto Font=Title->font();Font.setWeight(QFont::DemiBold);Title->setFont(Font);Title->setMinimumWidth(1);Controls->addWidget(Title);
     previewChip_=new QLabel(Header);previewChip_->setObjectName("epubPreviewState");previewChip_->setTextFormat(Qt::PlainText);previewChip_->setAccessibleName(tr("EPUB 미리보기 상태"));previewChip_->setMinimumWidth(24);Controls->addWidget(previewChip_);Controls->addStretch();
-    for(const auto& Name:{"epubAutoPreview","epubPreviewSync","epubPreviewRefresh"}){auto* Button=new QToolButton(Header);Button->setDefaultAction(action(Name));Button->setAutoRaise(true);Button->setToolButtonStyle(Qt::ToolButtonTextOnly);Controls->addWidget(Button);}
+    for(const auto& Name:{"epubAutoPreview","epubPreviewSync","epubPreviewScrollSync","epubPreviewRefresh"}){auto* Button=new QToolButton(Header);Button->setDefaultAction(action(Name));Button->setAutoRaise(true);Button->setToolButtonStyle(Qt::ToolButtonTextOnly);Controls->addWidget(Button);}
     previewChapterLabel_=new QLabel(Header);previewChapterLabel_->setObjectName("epubPreviewChapter");previewChapterLabel_->setForegroundRole(QPalette::PlaceholderText);previewChapterLabel_->setMinimumWidth(1);Controls->addWidget(previewChapterLabel_);Layout->addWidget(Header);
     auto* Frame=new QWidget(Panel);Frame->setMinimumSize(200,140);Frame->setObjectName("epubPreviewFrame");previewStack_=new QStackedLayout(Frame);previewStack_->setContentsMargins(0,0,0,0);previewStack_->setStackingMode(QStackedLayout::StackAll);Layout->addWidget(Frame,1);
     reportPreview(tr("저장 전 미리보기 · 원문 스타일 · 사용자 읽기 설정과 기록은 유지됩니다."));
@@ -60,10 +61,10 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
         if(previewCandidate_){auto* Old=std::exchange(previewCandidate_,nullptr);retirePreview(Old);}
         if(action("epubAutoPreview")->isChecked() && !previewClosing_ && !previewPanel_->isHidden())previewTimer_.start();updateStatus();
     });
-    connect(&worker_,&QFutureWatcherBase::finished,this,[this]{if(action("epubAutoPreview")->isChecked() && !previewClosing_)previewTimer_.start();});
+    connect(&worker_,&QFutureWatcherBase::finished,this,[this]{if((action("epubAutoPreview")->isChecked() || previewMissing()) && !previewClosing_)previewTimer_.start();});
     connect(&previewWorker_,&QFutureWatcherBase::finished,this,[this]{
         const auto Result=previewWorker_.result();if(previewClosing_){RequestPreviewClose();emit StateChanged();return;}
-        if(previewWorkEpoch_!=previewEpoch_ || previewWorkToken_!=Token()){if(action("epubAutoPreview")->isChecked() || previewPending_)previewTimer_.start();emit StateChanged();return;}
+        if(previewWorkEpoch_!=previewEpoch_ || previewWorkToken_!=Token()){if(action("epubAutoPreview")->isChecked() || previewPending_ || previewMissing())previewTimer_.start();emit StateChanged();return;}
         if(!Result){previewError_=Result.error_+": "+Result.location_;reportPreview(tr("소스 검사 실패 · 마지막 정상 미리보기를 유지합니다. %1").arg(previewError_));}
         else {cachedExport_=Result;cachedExportToken_=previewWorkToken_;previewError_.clear();showPreview(Result.bytes_);}emit StateChanged();
     });
@@ -110,11 +111,14 @@ void EpubSourceEditor::retirePreview(EpubProcessView* View) {
 void EpubSourceEditor::showPreview(const QByteArray& Bytes) {
     if(previewClosing_)return;if(sourceComposing_){previewPending_=true;previewTimer_.start();return;}
     auto* Candidate=new EpubProcessView(*previewRuntime_,{0,0,20000},previewStack_->parentWidget());Candidate->setObjectName("epubDraftPreview");
-    previewCandidate_=Candidate;previewCandidateToken_=previewWorkToken_;previewCandidateEpoch_=previewWorkEpoch_;previewCandidateSerial_=-2;previewCandidateInputRequested_=false;previewStack_->addWidget(Candidate);
+    previewCandidate_=Candidate;previewCandidateToken_=previewWorkToken_;previewCandidateEpoch_=previewWorkEpoch_;previewCandidateSerial_=-2;previewCandidateInputRequested_=false;previewCandidateScrollSerial_=-1;previewStack_->addWidget(Candidate);
     if(previewView_)previewStack_->setCurrentWidget(previewView_);else previewStack_->setCurrentWidget(Candidate);
     Candidate->show();reportPreview(tr("새 본문·내장 글꼴·이미지를 준비하고 있습니다…"));
     connect(Candidate,&EpubProcessView::EscapeRequested,this,&EpubSourceEditor::EscapeRequested);connect(Candidate,&EpubProcessView::FullscreenRequested,this,&EpubSourceEditor::FullscreenRequested);
-    connect(Candidate,&EpubProcessView::ViewStateChanged,this,[this,Candidate]{if(Candidate==previewCandidate_)admitPreview(Candidate);if(Candidate==previewView_){syncPreviewSource();previewContextRequest(Candidate);}emit StateChanged();});
+    connect(Candidate,&EpubProcessView::ViewStateChanged,this,[this,Candidate]{
+        if(Candidate==previewCandidate_)admitPreview(Candidate);
+        if(Candidate==previewView_){syncPreviewSource();previewContextRequest(Candidate);previewScrolled(Candidate->ViewState()["previewScroll"].toObject());if(scrollSyncPending_)syncPreviewScroll();}
+        emit StateChanged();});
     connect(Candidate,&EpubProcessView::Closed,this,[this,Candidate]{
         // A shown or pending preview that ends on its own would leave the panel empty; ask for a new one.
         const bool Lost=!previewClosing_ && (previewView_==Candidate || previewCandidate_==Candidate);
@@ -127,11 +131,11 @@ void EpubSourceEditor::showPreview(const QByteArray& Bytes) {
         if(Candidate==previewCandidate_ || Candidate==previewView_){if(Candidate==previewCandidate_)previewCandidate_=nullptr;else previewView_=nullptr;previewError_=Error;reportPreview(tr("미리보기를 표시하지 못했습니다: %1 · 소스와 남아 있는 정상 화면을 유지합니다.").arg(Error));retirePreview(Candidate);}emit StateChanged();
     });
     connect(Candidate,&EpubProcessView::Loaded,this,[this,Candidate]{admitPreview(Candidate);});
-    if(!Candidate->Load(Bytes,qint64(previewCandidateEpoch_+1),previewSettings_,false)){previewCandidate_=nullptr;previewError_="epub-preview-start";retirePreview(Candidate);}
+    if(!Candidate->Load(Bytes,qint64(previewCandidateEpoch_+1),previewSettings_,false,true)){previewCandidate_=nullptr;previewError_="epub-preview-start";retirePreview(Candidate);}
 }
 void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
     if(sourceComposing_ || Candidate!=previewCandidate_ || !Candidate->IsLoaded())return;
-    if(previewClosing_ || previewCandidateEpoch_!=previewEpoch_ || previewCandidateToken_!=Token()){previewCandidate_=nullptr;retirePreview(Candidate);if(!previewClosing_ && action("epubAutoPreview")->isChecked())previewTimer_.start();return;}
+    if(previewClosing_ || previewCandidateEpoch_!=previewEpoch_ || previewCandidateToken_!=Token()){previewCandidate_=nullptr;retirePreview(Candidate);if(!previewClosing_ && (action("epubAutoPreview")->isChecked() || previewMissing()))previewTimer_.start();return;}
     const auto State=Candidate->ViewState();if(State["status"]!="ready" || State["readerBusy"].toBool() || State["settingsBusy"].toBool() || !State["readingStateLoaded"].toBool() || !State["readingProfile"].toObject()["privateReading"].toBool())return;
     if(!State["annotationsTransient"].toBool()) {if(!Candidate->property("epubTransientRequested").toBool())Candidate->setProperty("epubTransientRequested",Candidate->ReaderAction("annotations-transient",true));return;}
     // Editing previews own their context menu and width; readers keep the defaults.
@@ -145,8 +149,21 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
     }
     if(previewCandidateSerial_>=0 && State["readerAction"].toObject()["serial"].toInteger()<previewCandidateSerial_)return;
     if(!State["inputEnabled"].toBool()) {if(!previewCandidateInputRequested_)previewCandidateInputRequested_=Candidate->ReaderAction("enable-input",true);return;}
-    auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;sourceSelectionSerial_=-1;contextRequestSerial_=State["contextRequest"].toObject()["serial"].toInteger(-1);if((sourceSyncPending_ || SourceInput()->hasFocus()) && action("epubPreviewSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();
+    // A replacement is aligned with the editor while it is still behind the shown preview, so the swap does not jump.
+    // It shows the current text, so no line shifts apply. 0 means aligned or skipped.
+    if(previewCandidateScrollSerial_!=0 && scrollSyncActive() && sourceShown() && State["chapterIndex"].toInt(-1)==spineIndex(current_) && State["previewScroll"].toObject()["supported"].toBool()) {
+        if(previewCandidateScrollSerial_<0) {
+            auto Target=sourceScrollTarget(false);previewCandidateScrollSerial_=++sourceScrollSerial_;Target["serial"]=previewCandidateScrollSerial_;
+            if(Candidate->RequestSourceScroll(Target)){previewCandidateScrollClock_.start();QTimer::singleShot(300,this,[this,Guard=QPointer<EpubProcessView>(Candidate)]{if(Guard)admitPreview(Guard);});return;}
+            previewCandidateScrollSerial_=0;
+        }
+        else if(State["previewScroll"].toObject()["applied"].toInteger()<previewCandidateScrollSerial_ && previewCandidateScrollClock_.elapsed()<300)return;
+    }
+    auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;sourceSelectionSerial_=-1;
+    // The new preview shows the current text: earlier line shifts no longer apply and the first report is new.
+    clearLineShifts();previewScrollSeen_=-1;lastScrollLine_=-1;lastScrollChapter_=-1;scrollSyncPending_=true;contextRequestSerial_=State["contextRequest"].toObject()["serial"].toInteger(-1);if((sourceSyncPending_ || SourceInput()->hasFocus()) && action("epubPreviewSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();
     if(Old)retirePreview(Old);
+    syncPreviewScroll();
     const auto LocationError=State["readerAction"].toObject()["error"].toString();
     reportPreview(LocationError.isEmpty()?tr("저장 전 미리보기 · 원문 스타일 · 표시된 내용은 아직 파일에 저장되지 않았습니다."):tr("미리보기를 갱신했습니다. 이전 읽기 위치를 복원하지 못해 장 위치를 확인해 주세요."));emit PreviewCommitted();emit StateChanged();
 }
@@ -178,7 +195,7 @@ bool EpubSourceEditor::IsPreviewClosed()const{return previewClosing_ && !preview
 void EpubSourceEditor::SetSourceVisible(bool Visible) {
     if(!Visible && sourceComposing_)return;sourcePanel_->setVisible(Visible);setPanelVisible("tree",action("epubToggleTree")->isChecked());
     setFocusProxy(Visible?SourceInput():static_cast<QWidget*>(previewView_));
-    if(Visible){focusSource();if(action("epubAutoPreview")->isChecked())previewTimer_.start();}else if(previewView_)previewView_->FocusInput();updateActions();emit StateChanged();
+    if(Visible){focusSource();if(action("epubAutoPreview")->isChecked() || previewMissing())previewTimer_.start();}else if(previewView_)previewView_->FocusInput();updateActions();emit StateChanged();
 }
 bool EpubSourceEditor::IsSourceVisible()const{return sourcePanel_ && !sourcePanel_->isHidden();}
 }

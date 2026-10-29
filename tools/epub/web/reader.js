@@ -93,7 +93,9 @@ const viewport = document.getElementById("viewport");
 let publication, engine, book, rendition, navigator;
 let selectedToc=-1;
 let fontCatalog;
-const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument,navigate,remember});
+const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument,navigate,remember,
+    scroll:{container:()=>rendition?.manager?.container,chapter:()=>rendition?.manager?.views?.first()?.section?.index ?? -1,
+        layout:()=>({paginated:!!rendition?.manager?.isPaginated,fixed:rendition?._layout?.name==="pre-paginated"})}});
 const history=[];
 function remember() {const locator=getLocator();if(locator && history.at(-1)!==locator){history.push(locator);if(history.length>64)history.shift();}}
 let profile = { theme: "light", font: "Malgun Gothic", size: 19, weight: 400,
@@ -564,6 +566,16 @@ async function selfTest() {
         let rejected=false;try{placeSourcePosition(mappingDoc,{path:[-1],child:0,offset:0});}catch{rejected=true;}
         sourcePositionChecks.invalidPositionRejected=rejected && selection.anchorNode===mappingNode;
     }else sourcePositionChecks.rangeRoundTrip=false;
+    // Source scroll table: temporary line attributes on the chapter's blocks, as an editing preview receives them.
+    const previewScrollChecks = {}, scrollBlocks=[...(documents()[0]?.body.children || [])];
+    if(scrollBlocks.length>=2 && rendition?.manager?.container && !rendition.manager.isPaginated) {
+        scrollBlocks.forEach((element,index)=>element.setAttribute("data-hc-l",String(index*3+2)));
+        const scroll=tools.previewScroll.test;scroll.invalidate();const table=scroll.anchorTable();
+        previewScrollChecks.tableBuilt=table.length>=2;
+        previewScrollChecks.monotonic=table.every((point,index)=>!index || (point.y>table[index-1].y && point.line>table[index-1].line));
+        previewScrollChecks.roundTrip=table.length<2 || [0.25,0.5,0.75].every(fraction=>{const line=table[0].line+(table.at(-1).line-table[0].line)*fraction;return Math.abs(scroll.lineForY(scroll.yForLine(line))-line)<0.01;});
+        scrollBlocks.forEach(element=>element.removeAttribute("data-hc-l"));scroll.invalidate();
+    }else previewScrollChecks.tableBuilt=false;
     const doc = documents()[0];
     const script = doc.createElement("script"); script.textContent = "window.hcUntrustedExecuted=1";
     doc.body.append(script);
@@ -582,8 +594,8 @@ async function selfTest() {
     checks.fileBlocked = !(await fetch("file:///C:/hc-epub-denied.txt").then(() => true, () => false));
     await goChapter(0);
     await applyProfile(initialProfile);
-    window.hcEvidence = { status: Object.values(checks).every(Boolean) && Object.values(sourcePositionChecks).every(Boolean) ? "passed" : "failed", phase: "P0-B",
-        engine, checks, sourcePositionChecks, initial, typography, publisher, final: currentSnapshot(), sourceSha256: publication.sourceSha256,
+    window.hcEvidence = { status: Object.values(checks).every(Boolean) && Object.values(sourcePositionChecks).every(Boolean) && Object.values(previewScrollChecks).every(Boolean) ? "passed" : "failed", phase: "P0-B",
+        engine, checks, sourcePositionChecks, previewScrollChecks, initial, typography, publisher, final: currentSnapshot(), sourceSha256: publication.sourceSha256,
         locatorScope: "same-session chapter restore; durable cross-edit locator unverified" };
 }
 
@@ -629,8 +641,14 @@ window.hcCommand = (command, value) => {
         if(needsFrame)await settleFrame();
         if (window.hcEvidence.status === "ready") window.hcEvidence = { ...window.hcEvidence, ...currentSnapshot() };
         } finally {manager?.endTransition?.();}
-    }).catch(fail).finally(()=>{activeCommand="";--pendingCommands;if(pageMove)--pendingPageMoves;});
+    }).catch(fail).finally(()=>{activeCommand="";--pendingCommands;if(pageMove)--pendingPageMoves;
+        // Commands change layout or chapter; the scroll position measured before them is stale.
+        tools.previewScroll.invalidate();if(pendingScroll){const value=pendingScroll;pendingScroll=null;tools.previewScroll.apply(value);}});
 };
+// Source scroll requests bypass the command queue: queued, they would mark the reader busy and
+// stall the host's position synchronisation. During a command only the newest one waits.
+let pendingScroll=null;
+window.hcSourceScroll = value => { if(activeCommand)pendingScroll=value; else tools.previewScroll.apply(value); };
 window.addEventListener("error", event => fail(event.error || event.message));
 window.addEventListener("unhandledrejection", event => fail(event.reason));
 

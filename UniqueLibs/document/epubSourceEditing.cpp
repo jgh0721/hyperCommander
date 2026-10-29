@@ -67,7 +67,10 @@ void EpubSourceEditor::locateSource() {
     const auto State=previewView_->ViewState();if(State["readerBusy"].toBool()){sourceSyncTimer_.start();return;}
     int Chapter=-1;const auto Spine=model_.Publication()["spine"].toArray();for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Chapter=I;if(Chapter<0){sourceSyncPending_=false;return;}
     if(State["chapterIndex"].toInt(-1)!=Chapter){previewView_->ReaderAction("chapter",Chapter);sourceSyncTimer_.start();return;}
-    epub::SourceMap Map;sourceSyncPending_=false;if(!Map.Load(sourceText()))return;const auto Anchor=Map.Anchor(sourcePosition());if(!Anchor.isEmpty())previewView_->ReaderAction("source-position",Anchor);
+    epub::SourceMap Map;sourceSyncPending_=false;if(!Map.Load(sourceText()))return;auto Anchor=Map.Anchor(sourcePosition());if(Anchor.isEmpty())return;
+    // With scroll sync the preview is already aligned; the selection moves the view only when out of sight.
+    if(scrollSyncActive())Anchor["reveal"]="nearest";
+    previewView_->ReaderAction("source-position",Anchor);
 }
 bool EpubSourceEditor::selectPreviewSource(const QJsonObject& Requested) {
     if(sourceComposing_ || !ready_ || !previewView_ || previewActiveToken_!=Token())return false;
@@ -76,6 +79,8 @@ bool EpubSourceEditor::selectPreviewSource(const QJsonObject& Requested) {
     const auto Spine=model_.Publication()["spine"].toArray();const int Chapter=Anchor["chapter"].toInt(-1);if(Chapter<0 || Chapter>=Spine.size())return false;const auto Path=Spine[Chapter].toObject()["path"].toString();
     if(current_!=Path){previewSyncing_=true;const bool Opened=openResource(Path);previewSyncing_=false;if(!Opened)return false;}if(!sourceShown())return false;
     epub::SourceMap Map;if(!Map.Load(sourceText()))return false;const int Position=Map.Position(Anchor);if(Position<0)return false;
-    updating_=true;setSourceSelection(Position,Position);updating_=false;return true;
+    // A preview click with scroll sync puts the line at the click's height instead of merely revealing it.
+    const double Ratio=Anchor["ratio"].toDouble(-1);const bool Place=Ratio>=0 && scrollSyncActive();
+    updating_=true;setSourceSelection(Position,Position,!Place);if(Place)placeSourceLine(Position,Ratio);updating_=false;return true;
 }
 }

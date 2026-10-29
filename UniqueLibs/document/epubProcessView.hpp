@@ -13,12 +13,15 @@ namespace hc::document
     public:
         EpubProcessView(WebProcessRuntime Runtime, WebProcessLimits Limits, QWidget* Parent = nullptr);
         ~EpubProcessView() override;
-        bool Load(QByteArray Bytes, qint64 Generation = 1,const QString& SettingsDirectory = {},bool InitiallyInteractive=true);
+        // SourceLines: chapters carry source line attributes for scroll synchronisation (editing previews only).
+        bool Load(QByteArray Bytes, qint64 Generation = 1,const QString& SettingsDirectory = {},bool InitiallyInteractive=true,bool SourceLines=false);
         void RequestClose();
         // Explicit activation request; hidden/closing views reject it.
         bool FocusInput();
         bool ChangeReadingSettings(const QString& Action, const QJsonObject& Profile = {}, bool Global = false);
         bool ReaderAction(const QString& Action,const QJsonValue& Value={});
+        // Latest-wins scroll target {chapter, line, ratio, end, serial}; a newer request replaces one not yet sent.
+        bool RequestSourceScroll(const QJsonObject& Value);
         QJsonObject ViewState() const;
         bool IsLoaded() const { return loaded_; }
         static void InitializeLifecycle();

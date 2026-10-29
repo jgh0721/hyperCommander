@@ -52,6 +52,8 @@ qt_add_library(hc_epub_package STATIC
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubEditStructure.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubSourceMap.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubSourceMap.hpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubSourceLines.cpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubSourceLines.hpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubDraftStore.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubDraftStore.hpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubArchive.hpp"
@@ -89,6 +91,7 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/epubSourceEditor.cpp ../UniqueLibs/document/epubSourceEditor.hpp
     ../UniqueLibs/document/epubSourceRecovery.cpp
     ../UniqueLibs/document/epubSourcePreview.cpp
+    ../UniqueLibs/document/epubSourceScroll.cpp ../UniqueLibs/document/epubLineShifts.hpp
     ../UniqueLibs/document/epubSourceValidation.cpp
     ../UniqueLibs/document/epubSourceStructure.cpp
     ../UniqueLibs/document/epubSourceNavigation.cpp

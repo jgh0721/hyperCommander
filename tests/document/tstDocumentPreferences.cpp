@@ -8,6 +8,8 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "text/QTextView.h"
 #include "UniqueLibs/document/documentViewPane.hpp"
+#include "UniqueLibs/document/epubSourceEditor.hpp"
+#include "UniqueLibs/document/epubLineShifts.hpp"
 #include "text/ColumnRulerWidget.h"
 #include <QClipboard>
 #include <QSaveFile>
@@ -184,6 +186,68 @@ private slots:
             QVERIFY(Panel->Execute("preview",{{"line",2.4},{"layout","paginated"}},true));QVERIFY(Dialog.Apply());
             QVERIFY(Panel->Execute("preview",{{"line",2.8}},true));Dialog.reject();}
         const auto Stored=ReadingStore::Load(Temp.filePath("epub-reading.json"),QString(64,'a'));QVERIFY(Stored.error.isEmpty());QCOMPARE(Stored.global["line"].toDouble(),2.4);QVERIFY(Stored.book.isEmpty());
+    }
+    void epubSourceStartsWithTextFont() {
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([]{qApp->setProperty("documentViewsConfigDir",QVariant());});
+        {::AppSettings Settings;Settings.setValue("textView/fontFamily","Consolas");Settings.setValue("textView/fontSize",19);}
+        // The editor opens before any settings Apply, so only its own construction can deliver the font.
+        EpubSourceEditor Editor({},Temp.filePath("book.epub"));Editor.SetRecoveryEnabled(false);
+        const auto Font=Editor.SourceView()->editorFont();QCOMPARE(Font.family(),QString("Consolas"));QCOMPARE(Font.pointSize(),19);
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend());QCOMPARE(Backend->Send(SCI_STYLEGETSIZE,STYLE_DEFAULT),qintptr(19));
+    }
+    void fractionalViewportRoundTrip_data() {
+        QTest::addColumn<int>("Wrap");QTest::addColumn<int>("Extra");QTest::addColumn<bool>("Fold");
+        for(int Wrap:{0,1})for(int Extra:{0,8})QTest::newRow(qPrintable(QString("wrap%1-extra%2").arg(Wrap).arg(Extra)))<<Wrap<<Extra<<false;
+        QTest::newRow("folded")<<0<<0<<true;
+    }
+    void fractionalViewportRoundTrip() {
+        QFETCH(int,Wrap);QFETCH(int,Extra);QFETCH(bool,Fold);
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([]{qApp->setProperty("documentViewsConfigDir",QVariant());});
+        // 30 groups of ten lines; every third paragraph wraps into several rows when wrapping is on.
+        QString Text="<doc>\n";for(int G=0;G<30;++G){Text+=QString("<g n=\"%1\">\n").arg(G);for(int P=0;P<8;++P)Text+="<p>"+QString(P%3==0?400:40,QChar('a'+P))+"</p>\n";Text+="</g>\n";}Text+="</doc>\n";
+        QTextView View;View.LoadContent(Text,Temp.filePath("rows.xml"),"UTF-8");View.resize(600,400);View.show();QVERIFY(QTest::qWaitForWindowExposed(&View));
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(View.Backend());
+        // Earlier tests can leave a tiny application font; a fixed editor font keeps every target reachable.
+        QFont Font("Consolas");Font.setPointSize(12);Backend->setEditorFont(Font);
+        View.SetWordWrapMode(Wrap);Backend->Send(SCI_SETEXTRAASCENT,Extra);Backend->Send(SCI_SETEXTRADESCENT,Extra);
+        // XML tags fold only with fold.html; the product leaves it off, the fold geometry is what matters here.
+        if(Fold){Backend->Send(SCI_SETPROPERTY,reinterpret_cast<quintptr>("fold.html"),reinterpret_cast<qintptr>("1"));Backend->Send(SCI_COLOURISE,0,-1);Backend->Send(SCI_FOLDLINE,121,SC_FOLDACTION_CONTRACT);QVERIFY(!Backend->Send(SCI_GETLINEVISIBLE,125));}
+        // Styling and layout continue at idle after loading; measure the settled view.
+        QTest::qWait(300);
+        for(const double Line:Fold?QList<double>{126.3}:QList<double>{37.0,120.25,180.6})for(const double Ratio:{0.25,0.5}) {
+            Backend->scrollFractionalLineToViewportRatio(Line,Ratio);QCoreApplication::processEvents();
+            // SCI_LINESCROLL moves whole display rows, so a line's fraction lands within half a row.
+            const int Target=Fold?122:int(Line);const auto Rows=qMax<qintptr>(1,Backend->Send(SCI_WRAPCOUNT,Target-1));
+            const double Expected=Fold?122.0:Line,Read=Backend->fractionalLineAtViewportRatio(Ratio);
+            QVERIFY2(qAbs(Read-Expected)<=0.5/Rows+0.02,qPrintable(QString("line %1 ratio %2 rows %3 read %4 viewport %5 row %6 first %7 onscreen %8 lines %9")
+                .arg(Line).arg(Ratio).arg(Rows).arg(Read).arg(Backend->scrollArea()->viewport()->height()).arg(Backend->textHeight(Target-1)).arg(Backend->Send(SCI_GETFIRSTVISIBLELINE)).arg(Backend->Send(SCI_LINESONSCREEN)).arg(Backend->lineCount())));
+        }
+    }
+    void lineShiftMapping() {
+        // Three lines inserted after 0-based line 9 (editor lines 11-13 are new), then two removed after line 19.
+        const QList<LineShift> Shifts{{9,3},{19,-2}};
+        QCOMPARE(ToRevisionLine(5.5,Shifts),5.5);QCOMPARE(ToRevisionLine(12.0,Shifts),10.0);
+        QCOMPARE(ToRevisionLine(15.25,Shifts),12.25);QCOMPARE(ToRevisionLine(25.5,Shifts),24.5);
+        for(const double Line:{5.5,15.25,25.5,40.0})QCOMPARE(FromRevisionLine(ToRevisionLine(Line,Shifts),Shifts),Line);
+        // A removed line lands on the line that absorbed it.
+        QCOMPARE(FromRevisionLine(22.0,{{19,-2}}),20.0);QCOMPARE(ToRevisionLine(7.0,{}),7.0);
+    }
+    void viewportAndLineShiftSignals() {
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([]{qApp->setProperty("documentViewsConfigDir",QVariant());});
+        QString Text;for(int I=1;I<=200;++I)Text+=QString("line %1\n").arg(I);
+        QTextView View;View.LoadContent(Text,Temp.filePath("lines.txt"),"UTF-8");View.resize(600,400);View.show();QVERIFY(QTest::qWaitForWindowExposed(&View));
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(View.Backend());
+        QSignalSpy Scrolled(Backend,&ITextEditorBackend::viewportScrolled),Shifted(Backend,&ITextEditorBackend::linesShifted);
+        Backend->Send(SCI_LINESCROLL,0,20);QTRY_VERIFY(Scrolled.count()>0);
+        Scrolled.clear();View.resize(600,300);QTRY_VERIFY(Scrolled.count()>0);
+        Scrolled.clear();View.SetWordWrapMode(View.WordWrapMode()?0:1);QTRY_VERIFY(Scrolled.count()>0);
+        Scrolled.clear();Backend->FoldAll(true);QVERIFY(Scrolled.count()>0);
+        Backend->Send(SCI_INSERTTEXT,Backend->Send(SCI_POSITIONFROMLINE,9),reinterpret_cast<qintptr>("a\nb\n"));
+        QCOMPARE(Shifted.count(),1);QCOMPARE(Shifted.last().at(0).toInt(),9);QCOMPARE(Shifted.last().at(1).toInt(),2);
+        Backend->Send(SCI_UNDO);QCOMPARE(Shifted.count(),2);QCOMPARE(Shifted.last().at(0).toInt(),9);QCOMPARE(Shifted.last().at(1).toInt(),-2);
     }
     void epubShortcutScope() {
         QCOMPARE(DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence("Num+PgUp")),QKeySequence("PgUp"));

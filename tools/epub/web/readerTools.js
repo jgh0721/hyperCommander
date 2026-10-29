@@ -1,5 +1,6 @@
 import { createSourcePositions, placeSourcePosition } from "./sourcePositions.js";
 import { createReadingAnnotations } from "./readingAnnotations.js";
+import { createPreviewScroll } from "./previewScroll.js";
 
 // Trusted reader controls; all publication markup remains passive.
 export function findText(section, query, limit = 200) {
@@ -25,9 +26,11 @@ export function findText(section, query, limit = 200) {
     return { hits, characters: text.length };
 }
 export function validCfi(value) { return typeof value === "string" && value.length <= 8192 && /^epubcfi\([^\u0000-\u001f\u007f-\u009f\u2028\u2029]+\)$/u.test(value); }
-export function createReaderTools({ publication, documents, snapshot, restore, book, apply, navigate, remember=()=>{} }) {
+// scroll: {container, chapter, layout} for source scroll synchronisation (previewScroll.js).
+export function createReaderTools({ publication, documents, snapshot, restore, book, apply, navigate, remember=()=>{}, scroll }) {
     const annotations=createReadingAnnotations({book,documents});
-    const sourcePositions=createSourcePositions(snapshot);
+    const sourcePositions=createSourcePositions(snapshot,scroll.container);
+    const previewScroll=createPreviewScroll({documents,...scroll});
     let result = { serial: 0 }, popup = null, dialog = null, focus = null;
     // Editing previews report right clicks; the host process shows the menu.
     let contextMenus = false, contextRequest = { serial: 0 }, contextSerial = 0;
@@ -110,7 +113,7 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         show("footnote",{text:target.textContent.trim().slice(0,8192)});
     }
     function hook(doc) {
-        if(hooked.has(doc))return;hooked.add(doc);annotations.hook(doc);sourcePositions.hook(doc);
+        if(hooked.has(doc))return;hooked.add(doc);annotations.hook(doc);sourcePositions.hook(doc);previewScroll.hook(doc);
         for(const image of doc.images){image.tabIndex=0;image.setAttribute("role","button");image.setAttribute("aria-label",image.alt||"책 이미지 확대");}
         doc.addEventListener("keydown",event=>{if(!event.isComposing && event.target.matches?.("img") && ["Enter"," "].includes(event.key)){event.preventDefault();event.target.click();}
             else if(contextMenus && (event.key==="ContextMenu" || (event.key==="F10" && event.shiftKey)))requestContext(event,doc);});
@@ -131,7 +134,10 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         try {
             if(["annotations-set","annotation-capture","annotation-resolve"].includes(action)){await annotations.action(request);result={serial,annotation:true};}
             else if(action==="source-position") {const doc=documents()[0];if(!doc)throw Error("본문이 준비되지 않았습니다.");placeSourcePosition(doc,value);sourcePositions.capture(doc);result={serial,located:true};}
-            else if(["toc","next","previous","back","chapter","next-chapter","previous-chapter"].includes(action)) {annotations.clearSelection();if(popup)close();await navigate(action,value);result={serial,located:true};}
+            else if(["toc","next","previous","back","chapter","next-chapter","previous-chapter"].includes(action)) {
+                // Toolbar and key page moves are the user's scroll; DOM input listeners never see Qt buttons.
+                if(["next","previous","back"].includes(action))previewScroll.markIntent();
+                annotations.clearSelection();if(popup)close();await navigate(action,value);result={serial,located:true};}
             else if(action==="locate" || action==="preview-location") {if(!validCfi(value))throw Error("잘못된 읽기 위치입니다.");remember();await restore(value);documents().forEach(apply);if(action==="locate")window.hcFocusReading?.();result={serial,located:true};}
             else if(action==="image") {const doc=documents()[0],image=doc?.images[Number(value)||0];if(!image)throw Error("이미지가 없습니다.");const {url}=await resource(image.getAttribute("src"),doc);show("image",{src:url.href,alt:image.alt});result={serial};}
             else if(action==="footnote") {const doc=documents()[0];await footnote(value,doc);result={serial};}
@@ -142,5 +148,5 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         } catch(error) {result={serial,error:String(error)};}
     }
     window.hcDismissPopup = () => {if(!dialog)return false;close();return true;};
-    return {hook,action,cancelSearch,cancelAnnotations:annotations.cancel,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),readerAction:result,readerSearch:searchResult,popup,contextRequest})};
+    return {hook,action,cancelSearch,cancelAnnotations:annotations.cancel,previewScroll,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),previewScroll:previewScroll.state(),readerAction:result,readerSearch:searchResult,popup,contextRequest})};
 }

@@ -118,6 +118,7 @@ public:
             {"epubEdit.epubcheck", QObject::tr("EPUBCheck 검사"), "Shift+F7", "epub-edit"},
             {"epubEdit.filter", QObject::tr("리소스 필터"), "Ctrl+E", "epub-edit"},
             {"epubEdit.previewRefresh", QObject::tr("미리보기 갱신"), "F5", "epub-edit"},
+            {"epubEdit.scrollSync", QObject::tr("스크롤 동기화"), "", "epub-edit"},
             {"epubEdit.closeTab", QObject::tr("편집기 탭 닫기"), "Ctrl+F4", "epub-edit"},
             {"epubEdit.toc", QObject::tr("목차 편집…"), "", "epub-edit"},
             {"epubEdit.metadata", QObject::tr("서지정보 편집…"), "", "epub-edit"},
