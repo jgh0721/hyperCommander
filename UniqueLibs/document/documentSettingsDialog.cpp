@@ -29,6 +29,19 @@
 #include <QVBoxLayout>
 #include <QFrame>
 #include <QGroupBox>
+#include <QTabWidget>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QColorDialog>
+#include <QJsonDocument>
+#include <QSignalBlocker>
+#include <QRegularExpression>
+#include <QSet>
+#include "text/TextLexerRegistry.h"
+#include "text/ScintillaQtDirectBackend.h"
+#include "text/ScintillaEditorSettings.h"
+#include "core/ThemeManager.h"
+#include <Scintilla.h>
 #include <fmstyle/StyleProps.h>
 #include <fmwidgets/DialogHeader.h>
 
@@ -55,7 +68,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
     auto* Body = new QHBoxLayout; Body->setContentsMargins(12, 12, 4, 12); Body->setSpacing(12);
     auto* List = new QListWidget(this); List->setObjectName("settingsCategories");
-    List->addItems({tr("공통"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB")}); List->setFixedWidth(180);
+    List->addItems({tr("공통"), tr("텍스트 뷰어"), tr("단축키"),tr("EPUB")}); List->setFixedWidth(180);
     List->setProperty(fm::style::props::kSoftSelection, true); List->setFrameShape(QFrame::NoFrame);
     for (int Row = 0; Row < List->count(); ++Row) List->item(Row)->setSizeHint(QSize(0, 30));
     auto* Pages = new QStackedWidget(this); Body->addWidget(List); Body->addWidget(Pages, 1); Layout->addLayout(Body, 1);
@@ -115,7 +128,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
         for (auto It = Profile.begin(); It != Profile.end(); ++It) base_[It.key()] = It.value();
         loadControls(); base_ = Original; error_->clear();
     });
-    auto* Text = Page(tr("텍스트 편집기"), tr("글꼴과 편집 화면, 들여쓰기·줄바꿈, 새 문서 저장과 외부 파일 변경 처리를 설정합니다."));
+    auto* Text = Page(tr("텍스트 뷰어"), tr("글꼴과 편집 화면, 들여쓰기·줄바꿈, 새 문서 저장과 외부 파일 변경 처리를 설정합니다."));
     auto* Fonts = Card(Text, tr("글꼴"));
     FontField(Fonts, "fontFamily", tr("글꼴"));
     Spin(Fonts, "fontSize", tr("글꼴 크기 (pt)"), 6, 72, 16);
@@ -167,6 +180,10 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     };
     MaskSpin("gamma", tr("글자 마스크 감마"), 3.0, 1.2); MaskSpin("strength", tr("글자 마스크 강도"), 2.0, 1.1);
     Text->addStretch();
+    auto* TextCommon = Pages->widget(1); Pages->removeWidget(TextCommon);
+    auto* TextTabs = new QTabWidget(Pages); TextTabs->setObjectName("textViewerTabs");
+    TextTabs->addTab(TextCommon, tr("공통")); TextTabs->addTab(createTextColorPage(), tr("색상"));
+    Pages->insertWidget(1, TextTabs);
     Q_UNUSED(Actions);
     auto* ShortcutPage = Page(tr("단축키"), tr("명령이 동작하는 범위별로 단축키를 바꿉니다. 함께 동작할 수 있는 범위끼리만 충돌을 검사합니다."));
     auto* Diagnostics = new QLabel(this); Diagnostics->setObjectName("shortcutDiagnostics"); Diagnostics->setWordWrap(true); ShortcutPage->addWidget(Diagnostics);
@@ -278,6 +295,13 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(Buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { Apply(); });
     connect(Buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, [this, List] {
+        if (List->currentRow() == 1 && findChild<QTabWidget*>("textViewerTabs")->currentIndex() == 1) {
+            auto Mode = colorTheme_->currentData().toString(); auto Colors = textColors_[Mode].toObject();
+            for (const auto& Key : Colors.keys()) Colors[Key] = QJsonValue::Null;
+            const auto Legacy = legacyTextColors_[Mode].toObject();
+            for (const auto& Key : Legacy.keys()) if (Key.startsWith("text.lexer.")) Colors[Key] = QJsonValue::Null;
+            textColors_[Mode] = Colors; refreshTextColorRows(); return;
+        }
         if(List->currentRow()==3){epubSettings_->ResetDraft();for(auto I=controls_.begin();I!=controls_.end();++I)if(I.key().startsWith("documentViews/epubEditor/")){if(auto* Field=qobject_cast<QLineEdit*>(I.value()))Field->clear();else if(auto* Check=qobject_cast<QCheckBox*>(I.value()))Check->setChecked(false);}return;}
         if (List->currentRow() == 2) { for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control)) Field->setKeySequence(QKeySequence(Field->property("defaultValue").toString())); return; }
         imported_ = {}; const auto Original = base_; base_ = {{"schemaVersion", 2}}; loadControls(); base_ = Original;
@@ -291,8 +315,165 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
         connect(Field, &QKeySequenceEdit::keySequenceChanged, this, &DocumentSettingsDialog::validateShortcuts);
     validateShortcuts();
 }
+QWidget* DocumentSettingsDialog::createTextColorPage()
+{
+    auto* Page = new QWidget(this); auto* Layout = new QVBoxLayout(Page);
+    Layout->setContentsMargins(0, 12, 8, 0); Layout->setSpacing(8);
+    auto* Form = new QFormLayout; Layout->addLayout(Form);
+    colorTheme_ = new QComboBox(Page); colorTheme_->setObjectName("textColorTheme");
+    colorTheme_->addItem(tr("밝은 테마"), "light"); colorTheme_->addItem(tr("어두운 테마"), "dark");
+    colorTheme_->setCurrentIndex(ThemeManager::instance().currentTheme() == ThemeManager::Dark ? 1 : 0);
+    Form->addRow(tr("테마"), colorTheme_);
+    colorLanguage_ = new QComboBox(Page); colorLanguage_->setObjectName("textColorLanguage");
+    colorLanguage_->addItem(tr("공통 색상"), QString{});
+    const auto& Registry = TextLexerRegistry::instance();
+    for (const auto& Name : Registry.displayNames()) if (Registry.lexerKeyForDisplayName(Name) != "none") colorLanguage_->addItem(Name, Name);
+    colorLanguage_->setMaxVisibleItems(20); Form->addRow(tr("언어 / 렉서"), colorLanguage_);
+    auto* Help = new QLabel(tr("테마별로 저장됩니다. 언어 색상을 비워 두면 공통 구문 색상을 따릅니다."), Page); Help->setWordWrap(true); Layout->addWidget(Help);
+    colorTable_ = new QTableWidget(Page); colorTable_->setObjectName("textColorTable"); colorTable_->setColumnCount(2);
+    colorTable_->setHorizontalHeaderLabels({tr("항목"), tr("색상")}); colorTable_->verticalHeader()->hide();
+    colorTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    colorTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    colorTable_->setSelectionMode(QAbstractItemView::NoSelection); colorTable_->setMinimumHeight(180);
+    Layout->addWidget(colorTable_, 1);
+    auto* PreviewLabel = new QLabel(tr("미리보기"), Page); Layout->addWidget(PreviewLabel);
+    colorPreview_ = new ScintillaQtDirectBackend(Page, Page); colorPreview_->widget()->setObjectName("textColorPreview");
+    colorPreview_->setEditorFont(QFont("Consolas", 11));
+    auto PreviewSettings = ScintillaEditorSettings::standard(); PreviewSettings.lineNumberMarginDigits = 2;
+    PreviewSettings.showCodeFolding = false; colorPreview_->applySettings(PreviewSettings);
+    colorPreview_->widget()->setMinimumHeight(120); colorPreview_->widget()->setMaximumHeight(170);
+    colorPreview_->setReadOnly(true); Layout->addWidget(colorPreview_->widget());
+    connect(colorTheme_, &QComboBox::currentIndexChanged, this, &DocumentSettingsDialog::refreshTextColorRows);
+    connect(colorLanguage_, &QComboBox::currentIndexChanged, this, &DocumentSettingsDialog::refreshTextColorRows);
+    return Page;
+}
+
+void DocumentSettingsDialog::loadTextColors()
+{
+    textColors_ = settings::UnifiedConfig::Value(base_, {"documentViews", "textView", "colors"}).toObject();
+    const auto Legacy = settings::UnifiedConfig::Decode(settings::UnifiedConfig::Value(base_, {"documentViews", "theme", "colorOverridesJson"})).toByteArray();
+    legacyTextColors_ = QJsonDocument::fromJson(Legacy).object();
+    refreshTextColorRows();
+}
+
+QColor DocumentSettingsDialog::textDraftColor(const QString& Key) const
+{
+    const auto Mode = colorTheme_->currentData().toString();
+    const auto Colors = textColors_[Mode].toObject();
+    const auto Value = Colors.value(Key);
+    if (Value.isString() && QColor(Value.toString()).isValid()) return QColor(Value.toString());
+    if (Value.isUndefined() && Key.startsWith("text.lexer.")) {
+        const QColor Legacy(legacyTextColors_[Mode].toObject()[Key].toString()); if (Legacy.isValid()) return Legacy;
+    }
+    if (Key.startsWith("text.lexer.") && Key.count('.') > 2) {
+        const auto* Profile = TextLexerRegistry::instance().profileForDisplayName(colorLanguage_->currentData().toString());
+        if (Profile && Profile->languageId != Profile->lexerKey) {
+            const auto SharedKey = QStringLiteral("text.lexer.%1.%2").arg(Profile->lexerKey, Key.section('.', -1));
+            const auto Shared = Colors.value(SharedKey);
+            if (Shared.isString() && QColor(Shared.toString()).isValid()) return QColor(Shared.toString());
+            if (Shared.isUndefined()) { const QColor Legacy(legacyTextColors_[Mode].toObject()[SharedKey].toString()); if (Legacy.isValid()) return Legacy; }
+        }
+        return textDraftColor("text.lexer." + Key.section('.', -1));
+    }
+    return ThemeManager::defaultColors(Mode == "dark" ? ThemeManager::Dark : ThemeManager::Light).value(Key);
+}
+
+void DocumentSettingsDialog::refreshTextColorRows()
+{
+    if (!colorTable_) return;
+    const auto Mode = colorTheme_->currentData().toString();
+    const auto Language = colorLanguage_->currentData().toString();
+    const auto* Profile = Language.isEmpty() ? nullptr : TextLexerRegistry::instance().profileForDisplayName(Language);
+    QList<QPair<QString, QString>> Rows;
+    if (!Profile) {
+        for (const auto& Entry : ThemeManager::editableColorEntries())
+            if (Entry.key.startsWith("text.") && Entry.key.count('.') <= 2) Rows.append({Entry.key, QString(Entry.label).remove("Text ").replace("편집기 배경", tr("본문 배경")).replace("Lexer ", tr("구문 · "))});
+    } else {
+        QSet<QString> Tokens; for (const auto& Token : Profile->styles) Tokens.insert(Token);
+        for (const auto& Entry : ThemeManager::editableColorEntries()) if (Entry.key.startsWith("text.lexer.") && Entry.key.count('.') == 2) {
+            const auto Token = Entry.key.section('.', -1);
+            if (Tokens.isEmpty() || Tokens.contains(Token)) Rows.append({QStringLiteral("text.lexer.%1.%2").arg(Profile->languageId, Token), QString(Entry.label).remove("Lexer ")});
+        }
+    }
+    // QTableWidget defers widget destruction; names must identify the current
+    // fields even when the theme/language changes before the next event loop.
+    for (auto* Edit : colorTable_->findChildren<QLineEdit*>()) Edit->setObjectName({});
+    colorTable_->setRowCount(0); colorTable_->setRowCount(Rows.size());
+    for (int Row = 0; Row < Rows.size(); ++Row) {
+        const auto [Key, Label] = Rows[Row];
+        auto* Item = new QTableWidgetItem(Label); Item->setFlags(Qt::ItemIsEnabled); colorTable_->setItem(Row, 0, Item);
+        auto* Cell = new QWidget(colorTable_); auto* Line = new QHBoxLayout(Cell); Line->setContentsMargins(4, 2, 4, 2); Line->setSpacing(6);
+        auto* Edit = new QLineEdit(Cell); Edit->setObjectName("textColor/" + Key); Edit->setAccessibleName(Label); Edit->setMaxLength(9); Edit->setClearButtonEnabled(true);
+        const auto Value = textColors_[Mode].toObject().value(Key);
+        if (Value.isString()) Edit->setText(Value.toString());
+        else if (Value.isUndefined() && Key.startsWith("text.lexer.")) Edit->setText(legacyTextColors_[Mode].toObject()[Key].toString());
+        Edit->setPlaceholderText(tr("기본값 %1").arg(textDraftColor(Key).name(QColor::HexRgb)));
+        auto* Pick = new QPushButton(tr("선택…"), Cell); Pick->setAccessibleName(tr("%1 색상 선택").arg(Label));
+        auto* Reset = new QPushButton(tr("기본값"), Cell); Reset->setAccessibleName(tr("%1 기본값").arg(Label));
+        auto RefreshSwatch = [this, Key, Pick] {
+            QPixmap Swatch(20, 16); Swatch.fill(textDraftColor(Key)); Pick->setIcon(QIcon(Swatch));
+        };
+        RefreshSwatch();
+        connect(Edit, &QLineEdit::textChanged, this, [this, Edit, Key, Mode, RefreshSwatch] {
+            auto Colors = textColors_[Mode].toObject(); const auto Value = Edit->text().trimmed();
+            Colors[Key] = Value.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(Value);
+            textColors_[Mode] = Colors; RefreshSwatch(); refreshTextColorPreview();
+        });
+        connect(Pick, &QPushButton::clicked, this, [this, Key, Edit, Label] {
+            const auto Color = QColorDialog::getColor(textDraftColor(Key), this, Label);
+            if (Color.isValid()) Edit->setText(Color.name(QColor::HexRgb));
+        });
+        connect(Reset, &QPushButton::clicked, Edit, &QLineEdit::clear);
+        Line->addWidget(Edit, 1); Line->addWidget(Pick); Line->addWidget(Reset);
+        colorTable_->setCellWidget(Row, 1, Cell); colorTable_->setRowHeight(Row, qMax(36, Cell->sizeHint().height()));
+    }
+    refreshTextColorPreview();
+}
+
+void DocumentSettingsDialog::refreshTextColorPreview()
+{
+    if (!colorPreview_) return;
+    const auto Language = colorLanguage_->currentData().toString();
+    const auto* Profile = Language.isEmpty() ? nullptr : TextLexerRegistry::instance().profileForDisplayName(Language);
+    const auto PreviewLanguage = Profile ? Language : QStringLiteral("Batch");
+    const auto* PreviewProfile = TextLexerRegistry::instance().profileForDisplayName(PreviewLanguage);
+    const auto Lexer = PreviewProfile ? PreviewProfile->lexerKey : QString{};
+    QString Sample = "// comment\nconst value = \"sample\";\nreturn value + 42;\n";
+    if (Lexer == "batch") Sample = "@echo off\nrem Build script\nSET Tools=%~dp0Tools\nif exist \"%Tools%\" echo Ready\n";
+    else if (Lexer == "python") Sample = "# comment\ndef example(value=42):\n    return \"sample\", value\n";
+    else if (Lexer == "xml" || Lexer == "hypertext") Sample = "<!-- comment -->\n<book title=\"sample\">\n  <chapter>Text</chapter>\n</book>\n";
+    else if (Lexer == "json") Sample = "{\n  \"name\": \"sample\",\n  \"count\": 42, \"ready\": true\n}\n";
+    else if (Lexer == "yaml") Sample = "# comment\nname: sample\ncount: 42\nready: true\n";
+    colorPreview_->setReadOnly(false); colorPreview_->setText(Sample); colorPreview_->applyLanguage(PreviewLanguage);
+    const auto TextSettings = settings::UnifiedConfig::Value(base_, {"documentViews", "textView"}).toObject();
+    colorPreview_->setEditorFont(QFont(TextSettings["fontFamily"].toString("Consolas"), qBound(9, TextSettings["fontSize"].toInt(11), 16)));
+    const auto SciColor = [](const QColor& C) { return qintptr(C.red() | (C.green() << 8) | (C.blue() << 16)); };
+    colorPreview_->Send(SCI_STYLESETFORE, STYLE_DEFAULT, SciColor(textDraftColor("text.foreground")));
+    colorPreview_->Send(SCI_STYLESETBACK, STYLE_DEFAULT, SciColor(textDraftColor("text.background")));
+    colorPreview_->Send(SCI_STYLECLEARALL);
+    if (PreviewProfile) for (auto It = PreviewProfile->styles.begin(); It != PreviewProfile->styles.end(); ++It) {
+        const auto Key = Profile ? QStringLiteral("text.lexer.%1.%2").arg(Profile->languageId, It.value()) : "text.lexer." + It.value();
+        colorPreview_->Send(SCI_STYLESETFORE, It.key(), SciColor(textDraftColor(Key)));
+    }
+    colorPreview_->Send(SCI_STYLESETFORE, STYLE_LINENUMBER, SciColor(textDraftColor("text.marginForeground")));
+    colorPreview_->Send(SCI_STYLESETBACK, STYLE_LINENUMBER, SciColor(textDraftColor("text.marginBackground")));
+    colorPreview_->Send(SCI_STYLESETFORE, STYLE_INDENTGUIDE, SciColor(textDraftColor("text.indentGuide")));
+    colorPreview_->Send(SCI_SETFOLDMARGINCOLOUR, 1, SciColor(textDraftColor("text.marginBackground")));
+    colorPreview_->Send(SCI_SETFOLDMARGINHICOLOUR, 1, SciColor(textDraftColor("text.marginBackground")));
+    for (int Element : {SC_ELEMENT_SELECTION_BACK, SC_ELEMENT_SELECTION_INACTIVE_BACK}) {
+        const auto Color = textDraftColor("text.selection");
+        colorPreview_->Send(SCI_SETELEMENTCOLOUR, Element, SciColor(Color) | (qintptr(Color.alpha()) << 24));
+    }
+    for (int Element : {SC_ELEMENT_SELECTION_TEXT, SC_ELEMENT_SELECTION_INACTIVE_TEXT})
+        colorPreview_->Send(SCI_SETELEMENTCOLOUR, Element, SciColor(textDraftColor("text.selectionForeground")) | (qintptr(255) << 24));
+    colorPreview_->Send(SCI_SETCARETFORE, SciColor(textDraftColor("text.caret")));
+    colorPreview_->Send(SCI_SETCARETLINEBACK, SciColor(textDraftColor("text.currentLine")));
+    colorPreview_->Send(SCI_COLOURISE, 0, -1); colorPreview_->setReadOnly(true);
+}
+
 void DocumentSettingsDialog::loadControls()
 {
+    loadTextColors();
     const auto Stored = settings::UnifiedConfig::Value(base_, {"documentViews", "shortcuts", "bindings"}).toObject();
     const auto Unknown = DocumentShortcutRegistry::Unknown(Stored);
     if (auto* Diagnostics = findChild<QLabel*>("shortcutDiagnostics"))
@@ -321,6 +502,7 @@ void DocumentSettingsDialog::loadControls()
 QJsonObject DocumentSettingsDialog::values() const
 {
     auto Result = base_;
+    settings::UnifiedConfig::Set(Result, {"documentViews", "textView", "colors"}, textColors_);
     for (auto It = controls_.begin(); It != controls_.end(); ++It) {
         QVariant Value;
         if (auto* Field = qobject_cast<QFontComboBox*>(It.value())) Value = Field->currentFont().family();
@@ -359,6 +541,13 @@ void DocumentSettingsDialog::validateShortcuts()
 bool DocumentSettingsDialog::Apply(bool ResolveConflicts)
 {
     if (!valid_) return false;
+    const QRegularExpression ColorPattern(QStringLiteral("^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"));
+    for (const auto& Mode : {QString("light"), QString("dark")}) {
+        const auto Colors = textColors_[Mode].toObject();
+        for (auto It = Colors.begin(); It != Colors.end(); ++It) if (!It.value().isNull() && !ColorPattern.match(It.value().toString()).hasMatch()) {
+            error_->setText(tr("색상은 #RRGGBB 또는 #AARRGGBB 형식으로 입력하세요. 비워 두면 기본 색상을 사용합니다.")); return false;
+        }
+    }
     if(epubSettings_->IsBusy() && epubSettings_->IsDirty()){error_->setText(tr("EPUB 설정을 불러오고 있습니다."));return false;}
     auto Next = values();
     const auto EpubEditor=Next["documentViews"].toObject()["epubEditor"].toObject();

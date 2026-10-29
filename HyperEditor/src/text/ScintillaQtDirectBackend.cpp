@@ -856,6 +856,9 @@ bool ScintillaQtDirectBackend::applyLanguage(const QString& displayName)
 			reinterpret_cast<uptr_t>("fold"),
 			reinterpret_cast<sptr_t>("0"));
 		writeLexerTrace(displayName, lexerKey, true);
+		configureCodeFolding(false);
+		applyThemeColors(m_darkTheme);
+		m_editor->send(sciMessage(SCI_CLEARDOCUMENTSTYLE));
 		return true;
 	}
 
@@ -884,8 +887,9 @@ bool ScintillaQtDirectBackend::applyLanguage(const QString& displayName)
 	configureCodeFolding(m_codeFoldingEnabled);
 
 	m_currentLexerKey = lexerKey;
-	setKeywordsForLexer(lexerKey);
-	applySyntaxStyles(m_darkTheme);
+    m_currentLanguageName = displayName;
+	setKeywordsForLexer(displayName);
+	applyThemeColors(m_darkTheme);
 
 	// Lexer replacement invalidates styling. Paint the visible range first;
 	// SC_IDLESTYLING_ALL completes the rest without a synchronous full pass.
@@ -1043,6 +1047,7 @@ void ScintillaQtDirectBackend::clearLexer()
 		m_editor->send(sciMessage(SCI_SETILEXER), 0, 0);
 	m_currentLexer = nullptr;
 	m_currentLexerKey.clear();
+    m_currentLanguageName.clear();
 }
 
 void ScintillaQtDirectBackend::applyThemeColors(bool dark)
@@ -1304,6 +1309,10 @@ void ScintillaQtDirectBackend::applySyntaxStyles(bool dark)
 			return genericKey;
 
 		const QString token = genericKey.mid(prefix.size());
+        if (const auto* Profile = TextLexerRegistry::instance().profileForDisplayName(m_currentLanguageName)) {
+            const auto Specific = QStringLiteral("text.lexer.%1.%2").arg(Profile->languageId, token);
+            if (ThemeManager::instance().hasColorOverride(Specific)) return Specific;
+        }
 		const QString lexerSpecific = QStringLiteral("text.lexer.%1.%2").arg(m_currentLexerKey, token);
 		if (ThemeManager::instance().hasColorOverride(lexerSpecific))
 			return lexerSpecific;
@@ -1323,6 +1332,34 @@ void ScintillaQtDirectBackend::applySyntaxStyles(bool dark)
 	auto setStyleFore = [this, &themeColor](int style, const QString& key) {
 		m_editor->send(sciMessage(SCI_STYLESETFORE), style, themeColor(key));
 	};
+
+    // Legacy function lexers do not expose style tags. The registry contains
+    // their semantic roles from LexicalStyles.iface; live metadata also covers
+    // lexers added by a later Lexilla build.
+    const auto* Profile = TextLexerRegistry::instance().profileForDisplayName(m_currentLanguageName);
+    auto SetToken = [this, Profile, &setStyleFore](int Style, const QString& Token) {
+        if (Token.isEmpty()) return;
+        auto Key = QStringLiteral("text.lexer.%1").arg(Token);
+        if (Profile) {
+            const auto Specific = QStringLiteral("text.lexer.%1.%2").arg(Profile->languageId, Token);
+            if (ThemeManager::instance().hasColorOverride(Specific)) Key = Specific;
+        }
+        setStyleFore(Style, Key);
+    };
+    if (m_currentLexer) for (int Style = 0; Style < m_currentLexer->NamedStyles(); ++Style) {
+        const auto Tags = QString::fromLatin1(m_currentLexer->TagsOfStyle(Style)).split(' ', Qt::SkipEmptyParts);
+        QString Token;
+        if (Tags.contains("comment")) Token = "comment";
+        else if (Tags.contains("string") || Tags.contains("character")) Token = "string";
+        else if (Tags.contains("numeric")) Token = "number";
+        else if (Tags.contains("preprocessor")) Token = "preprocessor";
+        else if (Tags.contains("keyword")) Token = "keyword";
+        else if (Tags.contains("operator")) Token = "operator";
+        else if (Tags.contains("label")) Token = "function";
+        else if (Tags.contains("identifier")) Token = "identifier";
+        SetToken(Style, Token);
+    }
+    if (Profile) for (auto It = Profile->styles.begin(); It != Profile->styles.end(); ++It) SetToken(It.key(), It.value());
 
 	if (m_currentLexerKey == QStringLiteral("cpp")) {
 		for (int style : {1, 2, 3, 15}) setStyleFore(style, QStringLiteral("text.lexer.comment"));
@@ -1380,13 +1417,20 @@ void ScintillaQtDirectBackend::applySyntaxStyles(bool dark)
 	}
 }
 
-void ScintillaQtDirectBackend::setKeywordsForLexer(const QString& lexerKey)
+void ScintillaQtDirectBackend::setKeywordsForLexer(const QString& displayName)
 {
 	if (!m_editor)
 		return;
 
-	// C/C++ and Python lists are shared with HyperCompare.
-	if (lexerKey == QStringLiteral("cpp")) {
+    const auto* Profile = TextLexerRegistry::instance().profileForDisplayName(displayName);
+    const auto lexerKey = Profile ? Profile->lexerKey : QString{};
+    for (int Index = 0; Index < 9; ++Index) {
+        const auto Words = Profile ? Profile->keywords.value(Index).toUtf8() : QByteArray{};
+        m_editor->sends(sciMessage(SCI_SETKEYWORDS), Index, Words.constData());
+    }
+	// Preserve the shared modern C++/Python lists. Other cpp dialects use
+    // their own keywords rather than inheriting the C++ reserved words.
+	if (Profile && Profile->languageId == QStringLiteral("cpp")) {
 		m_editor->send(sciMessage(SCI_SETKEYWORDS), 0,
 			reinterpret_cast<sptr_t>(hc::lexer::cppKeywords));
 		m_editor->send(sciMessage(SCI_SETKEYWORDS), 1,

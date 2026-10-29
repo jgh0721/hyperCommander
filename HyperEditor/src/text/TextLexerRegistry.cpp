@@ -1,6 +1,7 @@
 ﻿#include "text/TextLexerRegistry.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -8,6 +9,9 @@
 #include <QDebug>
 
 #include <utility>
+#include <algorithm>
+#include <ILexer.h>
+#include <Lexilla.h>
 
 namespace {
 
@@ -33,8 +37,17 @@ const TextLexerRegistry& TextLexerRegistry::instance()
 
 QString TextLexerRegistry::languageForExtension(const QString& extension) const
 {
-    const QString normalized = extension.trimmed().toLower();
+    QString normalized = extension.trimmed().toLower();
+    if (normalized.startsWith('.')) normalized.remove(0, 1);
     return m_languageByExtension.value(normalized, QStringLiteral("None"));
+}
+
+QString TextLexerRegistry::languageForFileName(const QString& fileName) const
+{
+    const QFileInfo Info(fileName);
+    const auto Name = Info.fileName().toLower();
+    const auto Found = m_languageByFileName.constFind(Name);
+    return Found != m_languageByFileName.cend() ? Found.value() : languageForExtension(Info.suffix());
 }
 
 QString TextLexerRegistry::lexerKeyForDisplayName(const QString& displayName) const
@@ -99,18 +112,24 @@ TextLexerRegistry TextLexerRegistry::load()
                     extensions.append(extension);
             }
 
-            loadedProfiles.append(TextLexerProfile{
+            TextLexerProfile Profile{
                 object.value(QStringLiteral("languageId")).toString(displayName.toLower()),
                 displayName,
                 lexerKey,
                 extensions
-            });
+            };
+            for (const auto& Name : object.value("fileNames").toArray()) Profile.fileNames.append(Name.toString().toLower());
+            for (const auto& Words : object.value("keywords").toArray()) Profile.keywords.append(Words.toString());
+            const auto Styles = object.value("styles").toObject();
+            for (auto It = Styles.begin(); It != Styles.end(); ++It) Profile.styles.insert(It.key().toInt(), It.value().toString());
+            loadedProfiles.append(std::move(Profile));
         }
 
         if (!loadedProfiles.isEmpty()) {
             registry.m_profiles = std::move(loadedProfiles);
             registry.m_loadedFromJson = true;
             registry.m_sourceDescription = lexerRegistryResourcePath();
+            registry.addAvailableLexers();
             registry.buildIndexes();
             return registry;
         }
@@ -125,6 +144,7 @@ TextLexerRegistry TextLexerRegistry::load()
     registry.m_profiles = fallbackProfiles();
     registry.m_loadedFromJson = false;
     registry.m_sourceDescription = QStringLiteral("built-in fallback");
+    registry.addAvailableLexers();
     registry.buildIndexes();
     return registry;
 }
@@ -133,9 +153,7 @@ QVector<TextLexerProfile> TextLexerRegistry::fallbackProfiles()
 {
     return {
         {QStringLiteral("none"), QStringLiteral("None"), QStringLiteral("none"),
-            {QStringLiteral("txt"), QStringLiteral("log"), QStringLiteral("ini"), QStringLiteral("cfg"),
-             QStringLiteral("toml"), QStringLiteral("php"), QStringLiteral("rb"), QStringLiteral("go"),
-             QStringLiteral("rs")}},
+            {QStringLiteral("txt"), QStringLiteral("log")}},
         {QStringLiteral("cpp"), QStringLiteral("C++"), QStringLiteral("cpp"),
             {QStringLiteral("cpp"), QStringLiteral("c"), QStringLiteral("h"), QStringLiteral("hpp"), QStringLiteral("cxx")}},
         {QStringLiteral("python"), QStringLiteral("Python"), QStringLiteral("python"), {QStringLiteral("py")}},
@@ -146,17 +164,42 @@ QVector<TextLexerProfile> TextLexerRegistry::fallbackProfiles()
         {QStringLiteral("xml"), QStringLiteral("XML"), QStringLiteral("xml"), {QStringLiteral("xml")}},
         {QStringLiteral("json"), QStringLiteral("JSON"), QStringLiteral("json"), {QStringLiteral("json")}},
         {QStringLiteral("bash"), QStringLiteral("Bash"), QStringLiteral("bash"), {QStringLiteral("sh")}},
-        {QStringLiteral("batch"), QStringLiteral("Batch"), QStringLiteral("batch"), {QStringLiteral("bat")}},
+        {QStringLiteral("batch"), QStringLiteral("Batch"), QStringLiteral("batch"), {QStringLiteral("bat"), QStringLiteral("cmd")}},
         {QStringLiteral("yaml"), QStringLiteral("YAML"), QStringLiteral("yaml"), {QStringLiteral("yaml"), QStringLiteral("yml")}},
         {QStringLiteral("sql"), QStringLiteral("SQL"), QStringLiteral("sql"), {QStringLiteral("sql")}},
-        {QStringLiteral("markdown"), QStringLiteral("Markdown"), QStringLiteral("markdown"), {}}
+        {QStringLiteral("markdown"), QStringLiteral("Markdown"), QStringLiteral("markdown"), {QStringLiteral("md"), QStringLiteral("markdown")}}
     };
+}
+
+void TextLexerRegistry::addAvailableLexers()
+{
+    QSet<QString> Available, Registered;
+    for (int Index = 0; Index < GetLexerCount(); ++Index) {
+        char Name[128]{};
+        GetLexerName(Index, Name, sizeof(Name));
+        Available.insert(QString::fromLatin1(Name));
+    }
+    m_profiles.erase(std::remove_if(m_profiles.begin(), m_profiles.end(), [&Available](const auto& Profile) {
+        return Profile.lexerKey != "none" && !Available.contains(Profile.lexerKey);
+    }), m_profiles.end());
+    for (const auto& Profile : std::as_const(m_profiles)) Registered.insert(Profile.lexerKey);
+    for (const auto& Key : Available) {
+        // None is the UI representation of Lexilla's null lexer.
+        if (Key == "null" || Registered.contains(Key)) continue;
+        auto Name = Key; if (!Name.isEmpty()) Name[0] = Name[0].toUpper();
+        m_profiles.append({Key, Name, Key, {}});
+    }
+    std::stable_sort(m_profiles.begin(), m_profiles.end(), [](const auto& A, const auto& B) {
+        if (A.lexerKey == "none" || B.lexerKey == "none") return A.lexerKey == "none" && B.lexerKey != "none";
+        return A.displayName.compare(B.displayName, Qt::CaseInsensitive) < 0;
+    });
 }
 
 void TextLexerRegistry::buildIndexes()
 {
     m_profileIndexByName.clear();
     m_languageByExtension.clear();
+    m_languageByFileName.clear();
 
     for (qsizetype i = 0; i < m_profiles.size(); ++i) {
         const TextLexerProfile& profile = m_profiles[i];
@@ -168,6 +211,10 @@ void TextLexerRegistry::buildIndexes()
             const QString normalized = extension.trimmed().toLower();
             if (!normalized.isEmpty() && !m_languageByExtension.contains(normalized))
                 m_languageByExtension.insert(normalized, displayName);
+        }
+        for (const auto& Name : profile.fileNames) {
+            const auto Normalized = Name.trimmed().toLower();
+            if (!Normalized.isEmpty() && !m_languageByFileName.contains(Normalized)) m_languageByFileName.insert(Normalized, displayName);
         }
     }
 

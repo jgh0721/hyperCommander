@@ -35,6 +35,7 @@ public:
     void resetColorOverrides(Theme theme);
     QHash<QString, QColor> colorOverrides(Theme theme) const;
     QHash<QString, QColor> effectiveColors(Theme theme) const;
+    void ReloadColorOverrides();
 
     static QList<ColorEntry> editableColorEntries();
     static QHash<QString, QColor> defaultColors(Theme theme);

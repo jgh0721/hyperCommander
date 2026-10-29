@@ -4,10 +4,12 @@
 #include <Scintilla.h>
 #include <QScopeGuard>
 #include <QSignalBlocker>
+#include <QCompleter>
 #include "text/ColumnRulerWidget.h"
 #include "text/FindReplaceWidget.h"
 #include "text/TextSaveDialog.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 #include "thirdparty/scintilla-qt/PlatQtTextRendering.hpp"
 #include "core/ToolbarIcons.h"
 #include "text/ITextEditorBackend.h"
@@ -391,7 +393,7 @@ QString QTextView::currentLanguage() const { return m_document.language(); }
 
 void QTextView::autoDetectLanguage()
 {
-    setLanguage(TextLexerRegistry::instance().languageForExtension(QFileInfo(m_filePath).suffix()));
+    setLanguage(TextLexerRegistry::instance().languageForFileName(m_filePath));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -910,9 +912,19 @@ QToolBar* QTextView::createToolBar()
 
     // 언어 선택
     auto* langCombo = new QComboBox(tb);
+    langCombo->setObjectName("textLanguage");
+    langCombo->setMaxVisibleItems(24);
+    langCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    langCombo->setMinimumContentsLength(12);
+    langCombo->setEditable(true);
+    langCombo->setInsertPolicy(QComboBox::NoInsert);
+    langCombo->completer()->setCaseSensitivity(Qt::CaseInsensitive);
     langCombo->addItems(TextLexerRegistry::instance().displayNames());
     langCombo->setCurrentText(m_document.language());
-    connect(langCombo, &QComboBox::currentTextChanged, this, &QTextView::setLanguage);
+    connect(langCombo, &QComboBox::activated, this, [this, langCombo] { setLanguage(langCombo->currentText()); });
+    connect(this, &QTextView::languageChanged, langCombo, [langCombo](const QString& Language) {
+        const QSignalBlocker Block(langCombo); langCombo->setCurrentText(Language);
+    });
     tb->addWidget(new QLabel(tr(" 언어: "), tb));
     tb->addWidget(langCombo);
 
@@ -1100,6 +1112,7 @@ void QTextView::loadPersistedEditorPreferences()
 void QTextView::ReloadPreferences()
 {
     if (!m_editor) return;
+    ThemeManager::instance().ReloadColorOverrides();
     const bool ReadOnly = m_editorSettings.readOnly;
     applyPersistedEditorPreferences(m_editorSettings);
     m_editorSettings.readOnly = ReadOnly;

@@ -66,8 +66,7 @@ QColor ThemeManager::color(const QString& key) const
 {
     const auto defaults = defaultColors(m_theme);
     const auto& overrides = (m_theme == Dark) ? m_darkOverrides : m_lightOverrides;
-    // Screen colors follow the product tokens; legacy overrides only tune the syntax palette.
-    if (key.startsWith(QStringLiteral("text.lexer.")) && overrides.contains(key)) return overrides.value(key);
+    if (key.startsWith(QStringLiteral("text.")) && overrides.contains(key)) return overrides.value(key);
     return defaults.value(key);
 }
 
@@ -429,14 +428,12 @@ void ThemeManager::loadOverrides()
     AppSettings settings;
     const int schemaVersion = settings.value(QString::fromLatin1(kThemeOverridesSchemaVersionKey), 1).toInt();
     const QJsonDocument document = QJsonDocument::fromJson(settings.value(QString::fromLatin1(kThemeOverridesKey)).toByteArray());
-    if (!document.isObject())
-        return;
 
     const QJsonObject root = document.object();
     m_lightOverrides = jsonToColorMap(root.value(QStringLiteral("light")).toObject());
     m_darkOverrides = jsonToColorMap(root.value(QStringLiteral("dark")).toObject());
 
-    if (schemaVersion < kThemeOverridesSchemaVersion) {
+    if (document.isObject() && schemaVersion < kThemeOverridesSchemaVersion) {
         const auto legacyMonokaiDefaults = defaultColors(Dark);
         const auto keys = m_lightOverrides.keys();
         for (const QString& key : keys) {
@@ -469,6 +466,27 @@ void ThemeManager::loadOverrides()
         }
         saveOverrides();
     }
+    // Older screen overrides were ignored; only explicit choices in the text
+    // color page replace product tokens. Null means inherit, including when
+    // suppressing a legacy syntax override.
+    for (const auto Theme : {Light, Dark}) {
+        auto& Overrides = Theme == Dark ? m_darkOverrides : m_lightOverrides;
+        for (const auto& Key : Overrides.keys()) if (!Key.startsWith("text.lexer.")) Overrides.remove(Key);
+        const auto Colors = settings.value(QStringLiteral("textView/colors/%1").arg(Theme == Dark ? "dark" : "light")).toMap();
+        for (auto It = Colors.begin(); It != Colors.end(); ++It) {
+            if (!It.key().startsWith("text.")) continue;
+            const QColor Color(It.value().toString());
+            if (Color.isValid()) Overrides.insert(It.key(), Color);
+            else Overrides.remove(It.key());
+        }
+    }
+}
+
+void ThemeManager::ReloadColorOverrides()
+{
+    const auto LightBefore = m_lightOverrides, DarkBefore = m_darkOverrides;
+    loadOverrides();
+    if (LightBefore != m_lightOverrides || DarkBefore != m_darkOverrides) emit themeChanged(m_theme);
 }
 
 void ThemeManager::saveOverrides() const

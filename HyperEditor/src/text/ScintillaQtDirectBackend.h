@@ -123,6 +123,7 @@ private:
 	Scintilla::ILexer5*         m_currentLexer = nullptr; // Non-owning after SCI_SETILEXER while the editor is alive; cleared when the editor dies.
 	QFont               m_editorFont;
 	QString             m_currentLexerKey;
+    QString             m_currentLanguageName;
 	bool                m_darkTheme = false;
 	bool                m_codeFoldingEnabled = true;
 	bool                m_braceMatchingEnabled = true;

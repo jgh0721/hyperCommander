@@ -37,7 +37,15 @@
 #include <QMessageBox>
 #include <QAction>
 #include "text/ScintillaQtDirectBackend.h"
+#include "text/TextLexerRegistry.h"
 #include <Scintilla.h>
+#include <SciLexer.h>
+#include <ILexer.h>
+#include <Lexilla.h>
+#include <QJsonDocument>
+#include <QTableWidget>
+#include <QLineEdit>
+#include <QSet>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFontComboBox>
@@ -53,6 +61,107 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void completeLexerCatalogAndDetection()
+    {
+        const auto& Registry = TextLexerRegistry::instance();
+        QVERIFY(Registry.loadedFromJson()); QSet<QString> Keys;
+        for (const auto& Name : Registry.displayNames()) Keys.insert(Registry.lexerKeyForDisplayName(Name));
+        for (int Index = 0; Index < GetLexerCount(); ++Index) {
+            char Name[128]{}; GetLexerName(Index, Name, sizeof(Name));
+            QVERIFY2(Keys.contains(QString::fromLatin1(Name)) || QByteArray(Name) == "null", Name);
+        }
+        QWidget Host; ScintillaQtDirectBackend Backend(&Host);
+        for (const auto& Name : Registry.displayNames()) QVERIFY2(Backend.applyLanguage(Name), qPrintable(Name));
+        const QList<QPair<QString, QString>> Samples{
+            {"build.CMD", "batch"}, {"build.bat", "batch"}, {"test.pyw", "python"}, {"test.rs", "rust"},
+            {"app.go", "cpp"}, {"site.php", "phpscript"}, {"Gemfile", "ruby"}, {"settings.ini", "props"},
+            {"settings.toml", "toml"}, {"test.md", "markdown"}, {"test.ps1", "powershell"}, {"test.nim", "nim"},
+            {"CMakeLists.txt", "cmake"}, {"Makefile", "makefile"}, {".bashrc", "bash"}, {"test.vcxproj", "xml"},
+            {"test.zig", "zig"}, {"test.unknown-extension", "none"}
+        };
+        for (const auto& [Path, Lexer] : Samples)
+            QCOMPARE(Registry.lexerKeyForDisplayName(Registry.languageForFileName(Path)), Lexer);
+        qInfo() << "Lexilla catalog:" << GetLexerCount() << "lexers," << Registry.displayNames().size() << "language entries";
+    }
+    void additionalLexerStyles_data()
+    {
+        QTest::addColumn<QString>("Language"); QTest::addColumn<QByteArray>("Source"); QTest::addColumn<QByteArray>("Keyword"); QTest::addColumn<int>("Style");
+        QTest::newRow("yaml") << QString("YAML") << QByteArray("ready: true\n") << QByteArray("true") << SCE_YAML_KEYWORD;
+        QTest::newRow("powershell") << QString("Powershell") << QByteArray("function Example { return 42 }\n") << QByteArray("function") << SCE_POWERSHELL_KEYWORD;
+        QTest::newRow("rust") << QString("Rust") << QByteArray("fn main() { let x = 42; }\n") << QByteArray("fn") << SCE_RUST_WORD;
+        QTest::newRow("php") << QString("PHP") << QByteArray("echo \"sample\";\n") << QByteArray("echo") << SCE_HPHP_WORD;
+        QTest::newRow("lua") << QString("Lua") << QByteArray("local answer = 42\n") << QByteArray("local") << SCE_LUA_WORD;
+    }
+    void additionalLexerStyles()
+    {
+        QFETCH(QString, Language); QFETCH(QByteArray, Source); QFETCH(QByteArray, Keyword); QFETCH(int, Style);
+        QWidget Host; ScintillaQtDirectBackend Backend(&Host); Backend.setText(QString::fromUtf8(Source));
+        QVERIFY(Backend.applyLanguage(Language)); Backend.Send(SCI_COLOURISE, 0, -1);
+        QCOMPARE(Backend.Send(SCI_GETSTYLEAT, Source.indexOf(Keyword)), qintptr(Style));
+        QVERIFY(Backend.Send(SCI_STYLEGETFORE, Style) != Backend.Send(SCI_STYLEGETFORE, STYLE_DEFAULT));
+    }
+    void batchHighlightingAndLanguageSwitch()
+    {
+        QWidget Host; ScintillaQtDirectBackend Backend(&Host);
+        const QByteArray Source("@echo off\r\nrem Build script\r\nSET Tools=%~dp0Tools\r\nif exist \"%Tools%\" echo Ready\r\n");
+        Backend.setText(QString::fromUtf8(Source)); QVERIFY(Backend.applyLanguage("Batch")); Backend.Send(SCI_COLOURISE, 0, -1);
+        QCOMPARE(Backend.Send(SCI_GETLEXER), qintptr(SCLEX_BATCH));
+        QCOMPARE(Backend.Send(SCI_GETSTYLEAT, Source.indexOf("SET")), qintptr(SCE_BAT_WORD));
+        QCOMPARE(Backend.Send(SCI_GETSTYLEAT, Source.indexOf("rem")), qintptr(SCE_BAT_COMMENT));
+        QCOMPARE(Backend.Send(SCI_GETSTYLEAT, Source.indexOf("%~dp0")), qintptr(SCE_BAT_IDENTIFIER));
+        const auto Fore = Backend.Send(SCI_STYLEGETFORE, STYLE_DEFAULT);
+        QVERIFY(Backend.Send(SCI_STYLEGETFORE, SCE_BAT_WORD) != Fore);
+        QVERIFY(Backend.Send(SCI_STYLEGETFORE, SCE_BAT_COMMENT) != Fore);
+        QVERIFY(Backend.Send(SCI_STYLEGETFORE, SCE_BAT_IDENTIFIER) != Fore);
+        QVERIFY(Backend.applyLanguage("C++")); QVERIFY(Backend.applyLanguage("Batch"));
+        QVERIFY(Backend.Send(SCI_STYLEGETFORE, SCE_BAT_COMMENT) != Fore);
+        QVERIFY(Backend.applyLanguage("None"));
+        QCOMPARE(Backend.Send(SCI_STYLEGETFORE, SCE_BAT_WORD), Backend.Send(SCI_STYLEGETFORE, STYLE_DEFAULT));
+        QCOMPARE(Backend.Send(SCI_GETSTYLEAT, Source.indexOf("SET")), qintptr(0));
+        QTextView Text; auto* Toolbar = Text.createToolBar();
+        Text.LoadContent(QString::fromUtf8(Source), "compile.CMD", "UTF-8");
+        QCOMPARE(Text.currentLanguage(), QString("Batch"));
+        QCOMPARE(Toolbar->findChild<QComboBox*>("textLanguage")->currentText(), QString("Batch"));
+        Text.setLanguage("Python"); QCOMPARE(Toolbar->findChild<QComboBox*>("textLanguage")->currentText(), QString("Python"));
+    }
+    void textColorTabsAndPersistence()
+    {
+        QTemporaryDir Temp; const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); ThemeManager::instance().ReloadColorOverrides(); });
+        const auto Path = UnifiedConfig::FileName(Temp.path());
+        Write(Path, QJsonDocument(QJsonObject{{"schemaVersion", 2}}).toJson()); const auto Before = Read(Path);
+        DocumentSettingsDialog Dialog(Path, {});
+        auto* Tabs = Dialog.findChild<QTabWidget*>("textViewerTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 2);
+        QCOMPARE(Tabs->tabText(0), QString::fromUtf8("공통")); QCOMPARE(Tabs->tabText(1), QString::fromUtf8("색상"));
+        Dialog.findChild<QListWidget*>("settingsCategories")->setCurrentRow(1); Tabs->setCurrentIndex(1);
+        auto* Mode = Dialog.findChild<QComboBox*>("textColorTheme"); auto* Language = Dialog.findChild<QComboBox*>("textColorLanguage");
+        Mode->setCurrentIndex(Mode->findData("dark")); Language->setCurrentIndex(Language->findData("Batch"));
+        auto* Keyword = Dialog.findChild<QLineEdit*>("textColor/text.lexer.batch.keyword"); QVERIFY(Keyword); Keyword->setText("#123456");
+        Language->setCurrentIndex(0);
+        auto* Background = Dialog.findChild<QLineEdit*>("textColor/text.background"); QVERIFY(Background); Background->setText("#101820");
+        QCOMPARE(Read(Path), Before); QVERIFY(Dialog.Apply());
+        const auto Config = QJsonDocument::fromJson(Read(Path)).object();
+        QCOMPARE(UnifiedConfig::Value(Config, {"documentViews", "textView", "colors", "dark", "text.lexer.batch.keyword"}).toString(), QString("#123456"));
+        QVERIFY(UnifiedConfig::Value(Config, {"documentViews", "textView", "colors", "light", "text.lexer.batch.keyword"}).isUndefined());
+        ThemeManager::instance().ReloadColorOverrides(); const auto OldTheme = ThemeManager::instance().currentTheme();
+        const auto ThemeRestore = qScopeGuard([&] { ThemeManager::instance().setTheme(OldTheme); });
+        ThemeManager::instance().setTheme(ThemeManager::Dark);
+        QCOMPARE(ThemeManager::instance().color("text.background"), QColor("#101820"));
+        QWidget Host; ScintillaQtDirectBackend Backend(&Host); QVERIFY(Backend.applyLanguage("Batch"));
+        QCOMPARE(Backend.Send(SCI_STYLEGETFORE, SCE_BAT_WORD), qintptr(0x563412));
+        const auto Capture = qEnvironmentVariable("HC_TEXT_COLORS_CAPTURE");
+        if (!Capture.isEmpty()) {
+            Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QDir().mkpath(Capture);
+            QVERIFY(Dialog.grab().save(Capture + "/text-colors-common.png"));
+            Language->setCurrentIndex(Language->findData("Batch")); QCoreApplication::processEvents();
+            QVERIFY(Dialog.grab().save(Capture + "/text-colors-batch.png"));
+        }
+        Mode->setCurrentIndex(Mode->findData("dark")); Language->setCurrentIndex(Language->findData("Batch"));
+        Dialog.findChild<QLineEdit*>("textColor/text.lexer.batch.keyword")->clear(); QVERIFY(Dialog.Apply());
+        ThemeManager::instance().ReloadColorOverrides(); QVERIFY(!ThemeManager::instance().hasColorOverride("text.lexer.batch.keyword"));
+        Language->setCurrentIndex(0); Dialog.findChild<QLineEdit*>("textColor/text.background")->setText("#zzzzzz"); QVERIFY(!Dialog.Apply());
+    }
     void textSelectionRemainsReadable_data()
     {
         QTest::addColumn<bool>("Hosted"); QTest::addColumn<QString>("Extension");
