@@ -109,3 +109,6 @@ if(BUILD_TESTING)
     set_tests_properties(hypercompare.ui PROPERTIES TIMEOUT 300)
     hc_enable_qt_deployment(hc_compare_ui_tests TEST PLUGINS)
 endif()
+
+hc_add_version_resource(HyperCompare "HyperCompare" ICON "${PROJECT_SOURCE_DIR}/resources/app-icons/compare.ico")
+hc_add_version_resource(HyperCompareCli "HyperCompare CLI" ICON "${PROJECT_SOURCE_DIR}/resources/app-icons/compare.ico")

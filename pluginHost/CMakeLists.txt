@@ -66,3 +66,6 @@ qt_add_library(hc_image_archive_broker STATIC imageArchiveBroker.cpp imageArchiv
 target_link_libraries(hc_image_archive_broker PUBLIC hc_image_archive_transport PRIVATE hc_builtin_sevenzip hc_passwords Qt6::Widgets)
 target_compile_options(hc_image_archive_broker PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 target_link_libraries(hc_plugin_viewer_sessions PRIVATE hc_image_archive_broker)
+
+hc_add_version_resource(hc-plugin-inspect "HyperCommander Plugin Inspector")
+hc_add_version_resource(hc-plugin-host-x64 "HyperCommander Plugin Host")

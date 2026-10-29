@@ -147,6 +147,7 @@ add_custom_command(TARGET hc-search-index POST_BUILD
     VERBATIM
 )
 hc_enable_qt_deployment(hc-search-index)
+hc_add_version_resource(hc-search-index "HyperCommander Search Helper")
 qt_add_library(hc_file_locks STATIC
     UniqueLibs/nativeFileLocks.cpp
     UniqueLibs/nativeFileLocks.hpp
