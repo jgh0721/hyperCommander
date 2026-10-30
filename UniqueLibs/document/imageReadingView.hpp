@@ -49,6 +49,7 @@ class ImageReadingView final : public QAbstractScrollArea
     void RetryPage();
     QJsonObject State() const;
     QImage CurrentImage() const;
+    bool HasPresentationImage() const { return !CurrentImage().isNull() || !previews_.value(index_).isNull(); }
     QString CurrentName() const;
     bool IsBusy() const;
     void SetGap(int Value);

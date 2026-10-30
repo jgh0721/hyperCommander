@@ -122,12 +122,17 @@ namespace hc::document
             if(!Size.isEmpty()) {
                 // Qt and the OS report allocation failure; image dimensions are not a product quota.
                 QImageReader::setAllocationLimit(0);
+                if(Preview){auto Image=ImagePartialDecoder::DecodeCompletePreview(Input.bytes_);if(!Image.isNull())Preview(std::move(Image));}
+                if(auto Stop=Context.Check({"document"}))return *Stop;
                 ImageReader.setAutoTransform(true);{ImageTraceSpan DecodeTrace("image.decode",Path);Input.image_=ImageReader.read();}
                 const bool IncompleteJpeg=Input.bytes_.startsWith(QByteArray("\xff\xd8",2))&&!ImagePartialDecoder::HasCompleteJpeg(Input.bytes_);
                 if(Input.image_.isNull() || IncompleteJpeg){
                     if(Preview){auto Partial=ImagePartialDecoder::Decode(Input.bytes_);if(!Partial.isNull())Preview(std::move(Partial));}
                     return Invalid("document-image-incomplete");
                 }
+                if(auto Stop=Context.Check({"document"}))return *Stop;
+                if(Preview)Preview(Input.image_.width()>1024 || Input.image_.height()>1024
+                    ? Input.image_.scaled(QSize(1024,1024),Qt::KeepAspectRatio,Qt::SmoothTransformation) : Input.image_);
                 if(auto Stop=Context.Check({"document"}))return *Stop;
                 ImageDecodeCache::Remember(Canonical,{Input.bytes_,Input.hash_,Revision,Input.image_});
                 Input.viewId_="image";return Input;

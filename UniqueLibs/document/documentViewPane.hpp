@@ -45,6 +45,8 @@ namespace hc::document
         QJsonObject Execute(const QJsonObject& Request);
         QString ViewId() const { return viewId_; }
         bool IsBusy() const;
+        bool HasLoadingPreview() const;
+        bool ImagePresentationReady() const;
         bool IsEditing() const;
         bool IsEpubEditing() const;
         void DiscardEpubRecovery();

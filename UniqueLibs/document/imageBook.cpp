@@ -383,6 +383,8 @@ storage::Result<ImagePageContent> ReadImagePage(const std::shared_ptr<ImageBook>
     {
         ImageTraceSpan DecodeTrace("comic.decode", Book->path_ + "#" + QString::number(Index));
         DecodeTrace.AddBytes(Content.bytes_.size());
+        if(Preview && Page.subpage_==0){auto Image=ImagePartialDecoder::DecodeCompletePreview(Content.bytes_);if(!Image.isNull())Preview(std::move(Image));}
+        if(auto Stop=Context.Check({"image-book"}))return *Stop;
         Content.image_ = Reader.read();
     }
     Content.format_ = QString::fromLatin1(Reader.format());

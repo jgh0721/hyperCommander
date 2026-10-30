@@ -337,6 +337,15 @@ namespace hc::plugins
         auto Variables = hc::win::RestrictedEnvironment(qEnvironmentVariable("SystemRoot") + "/System32");
         if (S.helpers_ && Inspected.Value().manifest_.compatibility_ == "hyperviewer-v1")
             Variables << "HC_DOCUMENT_CONFIG_DIR=" + hc::settings::DocumentPaths().directory_;
+        if(S.documentViewer_ && Inspected.Value().manifest_.id_=="builtin.hyperviewer") {
+            // Opt-in stage timing must cross the isolated built-in viewer boundary.
+            // Keep the restricted environment unchanged for third-party plugins.
+            for(const auto* Name:{"HC_DOCUMENT_TRACE","HC_IMAGE_TRACE"}) {
+                const auto Trace=qEnvironmentVariable(Name);
+                if(!Trace.isEmpty() && QDir::isAbsolutePath(Trace) && !Trace.contains(QChar::Null))
+                    Variables << QString::fromLatin1(Name)+'='+Trace;
+            }
+        }
         if(!ImageArchiveEndpoint.isEmpty()){
             if(!S.documentViewer_)return HostError("image-archive-viewer-required");
             Variables << "HC_IMAGE_ARCHIVE_BROKER="+QString::fromLatin1(QJsonDocument(ImageArchiveEndpoint).toJson(QJsonDocument::Compact).toBase64());

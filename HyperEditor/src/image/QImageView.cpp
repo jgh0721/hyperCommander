@@ -643,6 +643,9 @@ void QImageView::updateDisplay()
     hc::document::ImageTraceSpan DisplayTrace("view.publish");
     auto Request=renderRequest();Request.targetColor_=hc::document::ImageDisplayColorSpace(screen());const auto Key=hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());
     Request.traceSource_=m_filePath;
+    // A hidden host can initially have a tiny viewport. A failed render belongs
+    // to that size/transform, and must not suppress rendering after presentation.
+    if(!rendering_ && !renderedKey_.isEmpty() && Key!=renderedKey_)renderError_.clear();
     auto PreviewRequest=Request;PreviewRequest.filter_="preview";
     const auto PreviewKey=hc::document::ImageCacheKey(contentRevision_,PreviewRequest,devicePixelRatioF());
     if(previewing_&&PreviewKey!=previewRunningKey_)previewStop_->request_stop();

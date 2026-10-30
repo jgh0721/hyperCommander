@@ -4,6 +4,8 @@
 #include <QCoreApplication>
 #include <QLibrary>
 #include <QImageReader>
+#include <QElapsedTimer>
+#include "imagePerformance.hpp"
 #include <functional>
 
 namespace hc::document
@@ -12,6 +14,19 @@ namespace hc::document
     class ImagePartialDecoder
     {
     public:
+        static QImage DecodeCompletePreview(const QByteArray& Bytes, QSize Bounds=QSize(1024,1024))
+        {
+            QBuffer Input;Input.setData(Bytes);Input.open(QIODevice::ReadOnly);
+            QImageReader Reader(&Input);Reader.setAutoTransform(true);
+            const auto Size=Reader.size();
+            // Ask the codec, not the filename. Codecs without native scaled
+            // decoding use the single full decode below, never a second full decode.
+            if(!Size.isValid() || (Size.width()<=Bounds.width() && Size.height()<=Bounds.height())
+                || !Reader.supportsOption(QImageIOHandler::ScaledSize))return {};
+            ImageTraceSpan Trace("image.decode-preview");
+            Reader.setScaledSize(Size.scaled(Bounds,Qt::KeepAspectRatio));
+            return Reader.read();
+        }
         static bool HasCompleteJpeg(const QByteArray& Bytes)
         {
             if (!Bytes.startsWith(QByteArray("\xff\xd8", 2))) return false;
@@ -66,11 +81,17 @@ namespace hc::document
         }
         void Update(const QByteArray& Bytes,const std::function<void(QImage)>& Publish)
         {
+            if(!elapsed_.isValid())elapsed_.start();
+            // Fast local reads should reach EOF once; repeated partial decodes
+            // at 512 KiB/1 MiB/... otherwise delay every supported codec.
+            if(elapsed_.elapsed()<100)return;
             if(!Publish || Bytes.size()<next_ || next_>32*1024*1024)return;
             next_=qMax(next_*2,Bytes.size()*2);
+            elapsed_.restart();
             auto Image=Decode(Bytes);if(!Image.isNull())Publish(std::move(Image));
         }
     private:
+        QElapsedTimer elapsed_;
         qsizetype next_=512*1024;
     };
 }

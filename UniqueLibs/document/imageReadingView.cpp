@@ -654,6 +654,16 @@ bool ImageReadingView::paintGroup(QPainter &Painter)
             QTimer::singleShot(0,this,[this,Generation] { if(Generation==generation_){emit FramePresented(presentedPage_);emit Changed();} });
         }
     }
+    // On the initial open there is no previous group to preserve. Show the
+    // available pixels while high-quality tiles are prepared, for every codec.
+    // Page turns still keep the previous complete group until atomic replacement.
+    if(presentedTiles_.isEmpty() && layoutReady(index_)) {
+        for(const auto& P:Places) {
+            auto Preview=previews_.value(P.page_);
+            if(Preview.isNull())Preview=P.page_==index_?CurrentImage():sources_.object(P.page_)?*sources_.object(P.page_):QImage{};
+            if(!Preview.isNull())Painter.drawImage(P.rect_,Preview);
+        }
+    }
     for (const auto& Tile : presentedTiles_) Painter.drawImage(Tile.rect_,Tile.image_);
     if (!Error.isEmpty()) {
         transitionPending_=false;

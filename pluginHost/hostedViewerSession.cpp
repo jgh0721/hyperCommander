@@ -2,8 +2,10 @@
 #include "documentViewerClient.hpp"
 #include "imageArchiveBroker.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
+#include "commonLibs/document/documentFormatSupport.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
+#include "UniqueLibs/document/imagePerformance.hpp"
 #include <QFile>
 #include <QCryptographicHash>
 #include <QJsonArray>
@@ -35,14 +37,21 @@ namespace hc::plugins
             return (Entry.locator_.kind_==LocatorKind::Local || Entry.locator_.kind_==LocatorKind::Smb) && !Entry.directory_
                 && QStringList{"zip","cbz","rar","cbr","7z","cb7"}.contains(QFileInfo(QString::fromUtf8(Entry.locator_.root_)).suffix().toLower());
         }
+        bool IsDirectImage(const EntrySnapshot& Entry)
+        {
+            if(Entry.locator_.kind_!=LocatorKind::Local || Entry.directory_ || (Entry.attributes_&FILE_ATTRIBUTE_REPARSE_POINT))return false;
+            const auto Path=QString::fromUtf8(Entry.locator_.root_);
+            const auto Extension=QFileInfo(Path).suffix().toLower().toStdString();
+            return QFileInfo(Path).isAbsolute() && std::ranges::find(hc::document::ImageDocumentExtensions,Extension)!=hc::document::ImageDocumentExtensions.end();
+        }
         // Only the approved built-in reader may borrow the original archive.
         // Keep a read-only handle without write/delete sharing for the complete
         // viewer lifetime; neither a copy nor a full archive hash is needed.
-        class BookLease final : public IMaterializedFileLease
+        class SourceLease final : public IMaterializedFileLease
         {
         public:
-            BookLease(EntrySnapshot Entry,HANDLE Pin):entry_(std::move(Entry)),pin_(Pin){}
-            ~BookLease()override{CloseHandle(pin_);}
+            SourceLease(EntrySnapshot Entry,HANDLE Pin):entry_(std::move(Entry)),pin_(Pin){}
+            ~SourceLease()override{CloseHandle(pin_);}
             std::string LocalPath()const override{return entry_.locator_.root_;}
             EntrySnapshot Describe()const override{return entry_;}
             std::size_t Depth()const override{return 0;}
@@ -55,8 +64,23 @@ namespace hc::plugins
             if(!IsDirectBook(Entry)||!QFileInfo(Path).isAbsolute())return Invalid("viewer-book-path");
             const auto Pin=CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
             if(Pin==INVALID_HANDLE_VALUE)return Error{ErrorCategory::Unavailable,"viewer-book-pin:"+std::to_string(GetLastError())};
-            std::shared_ptr<IMaterializedFileLease> Lease=std::make_shared<BookLease>(Entry,Pin);
+            std::shared_ptr<IMaterializedFileLease> Lease=std::make_shared<SourceLease>(Entry,Pin);
             auto Verified=Source->Verify(Context).get();if(!Verified.HasValue())return Verified.Failure();
+            return Lease;
+        }
+        Result<std::shared_ptr<IMaterializedFileLease>> BorrowImage(const std::shared_ptr<IContentSource>& Source,OperationContext Context)
+        {
+            hc::document::ImageTraceSpan Trace("viewer.direct-image",QString::fromUtf8(Source->Describe().locator_.root_));
+            const auto Entry=Source->Describe();if(!IsDirectImage(Entry))return Invalid("viewer-image-path");
+            const auto Path=QString::fromUtf8(Entry.locator_.root_);
+            // The built-in image reader owns a verified byte snapshot after load.
+            // Preserve external edits/renames, like a direct HyperEditor open;
+            // ReadDocumentFile checks changes during reading and saves check SHA-256.
+            const auto Pin=CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()),GENERIC_READ,
+                FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+            if(Pin==INVALID_HANDLE_VALUE)return Error{ErrorCategory::Unavailable,"viewer-image-open:"+std::to_string(GetLastError())};
+            std::shared_ptr<IMaterializedFileLease> Lease=std::make_shared<SourceLease>(Entry,Pin);
+            const auto Verified=Source->Verify(Context).get();if(!Verified.HasValue())return Verified.Failure();
             return Lease;
         }
         Result<QByteArray> ExtensionBytes(const EntrySnapshot& Entry)
@@ -248,7 +272,7 @@ namespace hc::plugins
         std::unique_ptr<PluginProcess> Host;
         std::unique_ptr<DocumentViewerClient> Document;
         bool NoMatch = false;
-        bool DirectBookAllowed=false;
+        bool DirectInputAllowed=false;
         const auto CloseHost = [&] {
             if (!Host) { ArchiveBroker.reset(); return; }
             Host->Close(); ArchiveBroker.reset(); Document.reset(); const auto Final = Host->Snapshot();
@@ -265,12 +289,17 @@ namespace hc::plugins
             std::optional<EntrySnapshot> Entry;
             WlxDetectionInput Detection; bool PrefixReady = false, ExtensionReady = false, FatalContent = false;
             const auto Materialize = [&]() -> Result<Unit> {
+                hc::document::ImageTraceSpan Trace("viewer.prepare-input",QString::fromUtf8(Source->Describe().locator_.root_));
                 if (Lease) return Unit{};
-                if(DirectBookAllowed && IsDirectBook(Source->Describe())){
+                if(DirectInputAllowed && IsDirectBook(Source->Describe())){
                     auto Borrowed=BorrowBook(Source,Context);if(!Borrowed.HasValue())return Borrowed.Failure();
                     Lease=std::move(Borrowed.Value());
                     if(ArchiveBroker)ArchiveBroker->Allow(QString::fromStdString(Lease->LocalPath()));
                     return Unit{};
+                }
+                if(DirectInputAllowed && IsDirectImage(Source->Describe())){
+                    auto Borrowed=BorrowImage(Source,Context);if(!Borrowed.HasValue())return Borrowed.Failure();
+                    Lease=std::move(Borrowed.Value());return Unit{};
                 }
                 auto Created = Factory(); if (!Created.HasValue()) return Created.Failure(); Materializer = std::move(Created.Value());
                 if (!Materializer) return Invalid("viewer-materializer-required");
@@ -281,6 +310,7 @@ namespace hc::plugins
                 return Unit{};
             };
             const auto Attempt = [&](PluginViewerOptions& Options, std::size_t Index) -> Result<bool> {
+                hc::document::ImageTraceSpan Trace("viewer.open",QString::fromUtf8(Source->Describe().locator_.root_));
                 if (const auto Stop = Context.Check({"wlx"})) return *Stop;
                 if (!Options.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
                 auto Inspected = InspectManifestFile(Options.manifestPath_, Context); if (!Inspected.HasValue()) return Inspected.Failure();
@@ -315,8 +345,8 @@ namespace hc::plugins
                 auto Applies = Application.Value().Matches(QString::fromStdString(Entry->name_), Entry->size_, ApplicationPrefix);
                 if (!Applies.HasValue()) return Applies.Failure();
                 if (!Applies.Value()) return false;
-                DirectBookAllowed=Inspected.Value().manifest_.compatibility_=="hyperviewer-v1" && Inspected.Value().manifest_.id_=="builtin.hyperviewer";
-                if(!DirectBookAllowed && dynamic_cast<BookLease*>(Lease.get()))Lease.reset();
+                DirectInputAllowed=Inspected.Value().manifest_.compatibility_=="hyperviewer-v1" && Inspected.Value().manifest_.id_=="builtin.hyperviewer";
+                if(!DirectInputAllowed && dynamic_cast<SourceLease*>(Lease.get()))Lease.reset();
                 if (!Policy)
                 {
                     auto Prepared = Materialize(); if (!Prepared.HasValue()) return Prepared.Failure();
@@ -325,11 +355,11 @@ namespace hc::plugins
                     auto Broker=ImageArchiveBroker::Start();if(!Broker.HasValue())return Broker.Failure();ArchiveBroker=std::move(Broker.Value());
                     const auto Origin=ReadingSource(*Entry);if(!Origin.isEmpty())ArchiveBroker->Allow(Origin["path"].toString());if(Lease)ArchiveBroker->Allow(QString::fromStdString(Lease->LocalPath()));
                 }
-                auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_,ArchiveBroker?ArchiveBroker->Endpoint():QJsonObject{});
+                auto Started = [&]{hc::document::ImageTraceSpan Stage("viewer.host-start");return PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_,ArchiveBroker?ArchiveBroker->Endpoint():QJsonObject{});}();
                 if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
                 const auto StartedState = Host->Snapshot();if(ArchiveBroker)ArchiveBroker->BindClient(StartedState.processId_);
                 { std::lock_guard Lock(State->mutex_); State->details_.host_ = StartedState; }
-                auto Probe = Host->Probe(Context); if (!Probe.HasValue()) return Probe.Failure();
+                auto Probe = [&]{hc::document::ImageTraceSpan Stage("viewer.plugin-probe");return Host->Probe(Context);}(); if (!Probe.HasValue()) return Probe.Failure();
                 if ((Policy || Options.detectionOverride_) && !Dopus)
                 {
                     if (Probe.Value()["ansiCodePage"].toInt(-1) != static_cast<int>(GetACP()))
@@ -387,6 +417,7 @@ namespace hc::plugins
                     // Ready negotiates the channel; the asynchronous SDK Load
                     // can still be parsing. Bind only after its slot is stable.
                     const auto Deadline = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(15));
+                    auto WaitTrace=std::make_unique<hc::document::ImageTraceSpan>("viewer.initial-content");
                     for (;;) {
                         auto Current = Document->Call("DocumentState", {}, {}, {}, Context); if (!Current.HasValue()) return Current.Failure();
                         const auto Slots = Current.Value()["documents"].toArray();
@@ -402,14 +433,17 @@ namespace hc::plugins
                                 // Its immutable input and matching hash are stable before rendering.
                                 const bool EpubSource = Slot["view"].toObject()["viewId"] == "epub" && Slot["sourceReady"].toBool()
                                     && !Slot["canSave"].toBool() && !Slot["canSaveAs"].toBool();
-                                if (EpubSource || (Current.Value()["idle"].toBool() && !Slot["loading"].toBool() && Slot["lifecycle"].toString() == "ready")) break;
+                                const bool ImageSource=Slot["imagePresentationReady"].toBool() && !Slot["loading"].toBool()
+                                    && Slot["lifecycle"].toString()=="ready";
+                                if (EpubSource || ImageSource || (Current.Value()["idle"].toBool() && !Slot["loading"].toBool() && Slot["lifecycle"].toString() == "ready")) break;
                             }
                         }
                         if (auto Stop = Context.Check({"document"})) return *Stop;
                         if (std::chrono::steady_clock::now() >= Deadline) return Error{ErrorCategory::Unavailable, "document-initial-slot-timeout"};
                         std::this_thread::sleep_for(std::chrono::milliseconds(20));
                     }
-                    const bool DirectBook=DirectBookAllowed && IsDirectBook(*Entry);
+                    WaitTrace.reset();
+                    const bool DirectBook=DirectInputAllowed && IsDirectBook(*Entry);
                     auto Writer = DirectBook?std::shared_ptr<IWritableStorage>{}:Options.writer_;
                     if (!DirectBook && !Writer && Entry->locator_.kind_ == LocatorKind::Local && !(Entry->attributes_ & 1u))
                         Writer = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
@@ -479,8 +513,10 @@ namespace hc::plugins
                         QJsonArray Inputs;
                         for (const auto& Input : Command->inputs_) {
                             const bool DirectBook=bool(ArchiveBroker) && IsDirectBook(Input.source_->Describe());
-                            if(!DirectBook && !Materializer){auto Created=Factory();if(!Created.HasValue()){Result=Created.Failure();break;}Materializer=std::move(Created.Value());}
-                            auto Materialized = DirectBook?BorrowBook(Input.source_,Calls):Materializer->Materialize({Input.source_, {}, {}}, Calls).get();
+                            const bool DirectImage=bool(ArchiveBroker) && IsDirectImage(Input.source_->Describe());
+                            if(!DirectBook && !DirectImage && !Materializer){auto Created=Factory();if(!Created.HasValue()){Result=Created.Failure();break;}Materializer=std::move(Created.Value());}
+                            hc::document::ImageTraceSpan PrepareTrace("viewer.prepare-input",QString::fromUtf8(Input.source_->Describe().locator_.root_));
+                            auto Materialized = DirectBook?BorrowBook(Input.source_,Calls):DirectImage?BorrowImage(Input.source_,Calls):Materializer->Materialize({Input.source_, {}, {}}, Calls).get();
                             if (!Materialized.HasValue()) { Result = Materialized.Failure(); break; }
                             const auto Entry = Input.source_->Describe();
                             if(ArchiveBroker){ArchiveBroker->Allow(QString::fromStdString(Materialized.Value()->LocalPath()));const auto Origin=ReadingSource(Entry);if(!Origin.isEmpty())ArchiveBroker->Allow(Origin["path"].toString());}

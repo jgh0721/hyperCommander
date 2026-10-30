@@ -411,6 +411,54 @@ class ImageReadingTests : public QObject
         QCOMPARE(View.State()["page"].toInt(), 8);
         View.Cancel();
     }
+    void imagePresentationDoesNotWaitForRefinement()
+    {
+        DocumentViewPane Pane;Pane.resize(900,600);
+        TextInput Input;Input.viewId_="image";Input.path_="presentation.png";
+        Input.image_=Picture(Qt::blue,QSize(3500,2400));
+        QVERIFY(Pane.Load(Input,false,false));
+        QVERIFY(Pane.IsBusy());
+        Pane.ShowLoadingPreview(Picture(Qt::red));
+        QVERIFY(Pane.HasLoadingPreview());QVERIFY(Pane.ImagePresentationReady());QVERIFY(Pane.IsBusy());
+        Pane.ShowLoadingPreview({});QVERIFY(!Pane.HasLoadingPreview());
+        // The host keeps the pane hidden until this state is published.
+        QTRY_VERIFY_WITH_TIMEOUT(Pane.ImagePresentationReady(),10000);
+        QCOMPARE(Pane.findChild<QImageView*>()->Content(),Input.image_);
+    }
+    void failedInitialSizeRetriesAfterResize()
+    {
+        QImageView View;View.resize(30,30);
+        View.LoadContent(Picture(Qt::blue,QSize(5000,7000)),"large.png",false);
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),10000);
+        QVERIFY(!View.RenderError().isEmpty());
+        View.resize(1000,700);View.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering() && View.RenderError().isEmpty(),10000);
+        QVERIFY(View.HasDisplayImage());
+    }
+    void commonCodecPreviewPreservesFullInput_data()
+    {
+        QTest::addColumn<QByteArray>("Format");
+        for(const auto& Format:QList<QByteArray>{"PNG","JPEG","BMP","TIFF","WEBP"})
+            QTest::newRow(Format.constData())<<Format;
+    }
+    void commonCodecPreviewPreservesFullInput()
+    {
+        QFETCH(QByteArray,Format);QTemporaryDir Root;
+        const auto Path=Root.filePath("image."+QString::fromLatin1(Format).toLower());
+        QImage Original=Picture(Qt::cyan,QSize(2400,1800));
+        if(!Original.save(Path,Format.constData()))QSKIP("Optional codec writer unavailable");
+        QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));const auto Bytes=File.readAll();File.close();
+        ImageDecodeCache::Clear();int Previews=0;
+        const auto Input=ReadDocumentFile(Path,{},false,[&](QImage Image){
+            ++Previews;QVERIFY(!Image.isNull());QVERIFY(Image.width()<=1024);QVERIFY(Image.height()<=1024);
+        });
+        QVERIFY(Input.HasValue());QVERIFY(Previews>0);QCOMPARE(Input.Value().image_.size(),Original.size());
+        QCOMPARE(Input.Value().bytes_,Bytes);QCOMPARE(Input.Value().hash_,QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256));
+        ImageDecodeCache::Clear();std::stop_source Stop;hc::storage::OperationContext Context;Context.stopToken_=Stop.get_token();
+        const auto Cancelled=ReadDocumentFile(Path,Context,false,[&](QImage){Stop.request_stop();});
+        QVERIFY(!Cancelled.HasValue());QCOMPARE(Cancelled.Failure().category_,hc::storage::ErrorCategory::Cancelled);
+        QVERIFY(!ImageDecodeCache::Find(Path).has_value());
+    }
     void jpegPublishesBoundedPreviewBeforeCompletion()
     {
         QTemporaryDir Root;QImage Image(1400,1400,QImage::Format_RGB32);quint32 Seed=1;
@@ -1344,6 +1392,29 @@ class ImageReadingTests : public QObject
             {"dpr",View.devicePixelRatioF()},{"boundary","widget paint; 5ms polling and capture included; OS cache not flushed"}}).toJson());
         for (const auto& Row : Rows) QVERIFY(Row.toObject()["ready"].toBool());
         QVERIFY(View.grab().save(Output + ".png"));
+    }
+    void optionalWorkspacePresentationBenchmark()
+    {
+        const auto Root=qEnvironmentVariable("HC_IMAGE_BENCH_ROOT");if(Root.isEmpty())QSKIP("Set HC_IMAGE_BENCH_ROOT");
+        QJsonArray Rows;
+        for(const auto& Name:QStringList{"decode.jpg","decode.png","decode.webp","gray16.png","example.heic","example.avif","progressive.jpg","cmyk.jpg"}){
+            const auto Path=Root+"/corpus/"+Name;if(!QFileInfo::exists(Path))continue;
+            for(int Run=0;Run<3;++Run){
+                ImageDecodeCache::Clear();QTemporaryDir Recovery;DocumentWorkspaceWidget Workspace(Recovery.path());Workspace.resize(1200,800);Workspace.show();
+                QElapsedTimer Clock;Clock.start();double Presented=-1;double MaxGap=0,LastTick=0;
+                QTimer Timer;connect(&Timer,&QTimer::timeout,this,[&]{const auto Now=Clock.nsecsElapsed()/1e6;MaxGap=std::max(MaxGap,Now-LastTick);LastTick=Now;});Timer.start(1);
+                const auto Opened=Workspace.Handle({{"action","open"},{"path",Path}});QVERIFY(!Opened.contains("error"));
+                const auto State=[&]{return Workspace.Snapshot()["documents"].toArray().first().toObject();};
+                QTRY_VERIFY_WITH_TIMEOUT(State()["imagePresentationReady"].toBool() || !State()["error"].toString().isEmpty(),30000);
+                QVERIFY2(State()["error"].toString().isEmpty(),qPrintable(State()["error"].toString()));Presented=Clock.nsecsElapsed()/1e6;
+                const bool BusyAtPresentation=!Workspace.IsIdle();
+                QTRY_VERIFY_WITH_TIMEOUT(Workspace.IsIdle(),30000);
+                QVERIFY2(State()["view"].toObject()["renderError"].toString().isEmpty(),qPrintable(State()["view"].toObject()["renderError"].toString()));
+                Rows.append(QJsonObject{{"file",Name},{"run",Run},{"presentation_ms",Presented},{"idle_ms",Clock.nsecsElapsed()/1e6},
+                    {"busy_at_presentation",BusyAtPresentation},{"max_heartbeat_gap_ms",MaxGap}});
+            }
+        }
+        QFile Output(Root+"/workspace-presentation.json");QVERIFY(Output.open(QIODevice::WriteOnly));Output.write(QJsonDocument(Rows).toJson());
     }
     void optionalStorageAndFirstPaintBenchmark()
     {

@@ -2,6 +2,9 @@
 #include "pipeChannel.hpp"
 #include "hostedViewerSession.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
+#include "UniqueLibs/storageProviders.hpp"
+#include "pluginHost/manifestFile.hpp"
+#include <QJsonArray>
 #include "memoryStorage.hpp"
 #include "UniqueLibs/qtPluginViewerSurface.hpp"
 #include "UniqueLibs/qtViewerHost.hpp"
@@ -118,6 +121,33 @@ private:
         Options.limits_.requestMs_ = 500; Options.limits_.heartbeatMs_ = 200; return Options;
     }
 private slots:
+    void builtinImageDirectInputAndPresentation()
+    {
+        const auto Package=QCoreApplication::applicationDirPath()+"/Addons/WLX/HyperViewer/hyperviewer.json";
+        if(!QFileInfo::exists(Package))QSKIP("Build hc_hyperviewer_package for the built-in image integration test");
+        auto Inspected=Worker([&]{return InspectManifestFile(Package);});QVERIFY(Inspected.HasValue());
+        QTemporaryDir Root;const auto Path=Root.filePath("direct.png");QImage Image(2400,1800,QImage::Format_RGB32);Image.fill(Qt::cyan);QVERIFY(Image.save(Path));
+        auto Provider=MakeNativeReadProvider(LocatorKind::Local);
+        auto Entry=Worker([&]{return Provider->Resolve({LocatorKind::Local,Path.toUtf8().toStdString()},{}).get();});QVERIFY(Entry.HasValue());
+        auto Source=std::make_shared<ProviderContentSource>(Provider,Entry.Value());
+        std::atomic<int> Copies=0;QWidget Main;Main.resize(900,600);auto* Layout=new QVBoxLayout(&Main);
+        QtPluginViewerController Controller(&Main,[&]{++Copies;return MakeNativeMaterializer(Root.path().toStdString());});
+        auto* Surface=new QtPluginViewerSurface(&Controller,&Main);Layout->addWidget(Surface);Main.show();
+        const auto Drain=qScopeGuard([&]{Surface->Close();while(!Controller.IsIdle())QTest::qWait(10);});
+        PluginViewerOptions Options;Options.executable_=host_;Options.manifestPath_=Package;Options.binaryPath_=Inspected.Value().binaryPath_;
+        Options.approval_={Inspected.Value().manifest_,true,false,Inspected.Value().manifest_.permissions_};Options.defaultIniPath_=Root.filePath("plugin.ini");
+        Surface->Open(Options,Source);
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().status_==hc::viewer::ViewerStatus::Failed,20000);
+        QVERIFY2(Surface->IsReady(),Surface->Snapshot().error_?Surface->Snapshot().error_->code_.c_str():"image not presented");
+        QCOMPARE(Copies.load(),0);QVERIFY(Leases(Root.path()).isEmpty());
+        const auto Documents=Surface->Details().documentState_["documents"].toArray();QCOMPARE(Documents.size(),1);
+        QVERIFY(Documents[0].toObject()["imagePresentationReady"].toBool());
+        // Borrowing a local image must not lock out external editors.
+        QFile Writable(Path);QVERIFY(Writable.open(QIODevice::ReadWrite));Writable.close();
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->Details().documentState_["idle"].toBool(),10000);
+        QVERIFY(Surface->OpenPrepared({{Source,{}}}));QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(),20000);
+        QCOMPARE(Copies.load(),0);
+    }
     void changedPackageRecovery()
     {
         QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));

@@ -424,6 +424,18 @@ namespace hc::document
         if(Bytes.isEmpty())return storage::Error{storage::ErrorCategory::InvalidRequest,"document-serialization-or-format"};
         return Bytes;
     }
+    bool DocumentViewPane::HasLoadingPreview() const {
+        return loadingPreview_ && !loadingPreview_->isHidden()
+            && !static_cast<LoadingImagePreview*>(loadingPreview_)->image_.isNull();
+    }
+    bool DocumentViewPane::ImagePresentationReady() const {
+        // Presentation is independent of editing, prefetch and refinement work.
+        // Do not wait for a paint event: the host is still hiding this surface.
+        if(HasLoadingPreview())return true;
+        if(viewId_!="image")return false;
+        if(reading_&&!reading_->isHidden())return reading_->HasPresentationImage();
+        return image_ && image_->HasDisplayImage();
+    }
     bool DocumentViewPane::IsBusy() const {
         if(epub_){const auto State=currentEpub()->ViewState();if(epubEditor_ && epubEditor_->Snapshot()["recoveryBusy"].toBool())return true;if(CanEditEpub())return epubEditor_->Snapshot()["validating"].toBool() || (epubClosing_ && !epubEditor_->IsPreviewClosed());return !State["retired"].toBool()&&(epubClosing_||State["status"]!="ready");}
         if(hwp_&&!hwp_->IsClosed()) {

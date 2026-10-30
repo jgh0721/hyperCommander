@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QScrollArea>
 #include <QLabel>
+#include <QPixmap>
 #include <QRubberBand>
 
 class QImageView : public QBaseView
@@ -28,6 +29,7 @@ public:
     void CommitContent();
     bool IsEditing() const { return pendingEdit_; }
     bool IsRendering() const { return rendering_ || previewing_ || pendingEdit_; }
+    bool HasDisplayImage() const { return m_imageLabel && !m_imageLabel->pixmap().isNull(); }
     void CancelWork() { renderStop_->request_stop();previewStop_->request_stop();editStop_->request_stop(); }
     QString RenderError() const { return renderError_; }
     void SetDisplayFilter(const QString& Filter);

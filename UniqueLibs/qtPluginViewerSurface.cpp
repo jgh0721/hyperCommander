@@ -119,6 +119,7 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
 {
     Close();
     if (!controller_) { status_->setText(tr("뷰어를 사용할 수 없습니다.")); emit Failed("viewer-host-unavailable"); return; }
+    presentationTrace_=std::make_unique<hc::document::ImageTraceSpan>("viewer.prepare-to-present",QString::fromUtf8(Source->Describe().locator_.root_));
     status_->setText(tr("파일을 준비하는 중…")); status_->show();
     auto* Anchor = new WlxAnchor(this); anchor_ = Anchor; anchor_->setObjectName("hc.wlx.native-parent");
     Anchor->closeRequested_ = [this](quintptr Child) {
@@ -147,6 +148,7 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
 }
 void QtPluginViewerSurface::Close()
 {
+    presentationTrace_.reset();
     lastSearch_.clear(); clipboardToken_.clear();
     timer_->stop(); ready_ = false; preparedSequence_ = 0;
     if (anchor_)
@@ -161,6 +163,7 @@ void QtPluginViewerSurface::Close()
 bool QtPluginViewerSurface::OpenPrepared(std::vector<HostedViewerSession::DocumentInput> Inputs)
 {
     if (!session_ || !ready_) return false;
+    presentationTrace_=std::make_unique<hc::document::ImageTraceSpan>("viewer.prepare-to-present");
     auto Queued = session_->OpenDocuments(std::move(Inputs), true);
     if (!Queued.HasValue()) return false;
     preparedSequence_ = Queued.Value(); ready_ = false; timer_->start();
@@ -238,12 +241,13 @@ void QtPluginViewerSurface::poll()
             const auto Record=Item.toObject();
             const bool EpubSource=Record["view"].toObject()["viewId"]=="epub" && Record["sourceReady"].toBool()
                 && !Record["canSave"].toBool() && !Record["canSaveAs"].toBool();
-            ContentReady &= !Record["sourceToken"].toString().isEmpty() && (EpubSource ||
+            ContentReady &= !Record["sourceToken"].toString().isEmpty() && (EpubSource || Record["imagePresentationReady"].toBool() ||
                 (Details.documentState_["idle"].toBool() && !Record["loading"].toBool() && Record["lifecycle"].toString()=="ready"));
         }
     }
     if (ContentReady && !ready_)
     {
+        presentationTrace_.reset();
         ready_ = true;static_cast<QStackedLayout*>(layout())->setCurrentWidget(anchor_);layout()->activate(); resizeNative();
         // Focus may arrive while content is still being materialized; replay
         // the current Qt focus after the worker publishes the native window.
