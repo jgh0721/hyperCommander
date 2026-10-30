@@ -14,6 +14,7 @@ class QImageView;
 namespace hc::document
 {
     class EpubProcessView;
+    class MarkdownDocumentView;
     class EpubSourceEditor;
     class ImageReadingView;
     class ImageFramePlayer;
@@ -31,6 +32,8 @@ namespace hc::document
         void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
         void ConfigureEpub(WebProcessRuntime Runtime,bool Editing=false) { epubRuntime_ = std::move(Runtime);epubEditingAllowed_=Editing; }
         bool CanEditEpub()const;bool CanSaveEpub()const;bool PrepareEpubSave();
+        bool IsMarkdown() const { return markdown_ != nullptr; }
+        bool MarkdownSourceVisible() const;
         bool IsEpub() const { return viewId_ == "epub"; }
         bool IsProcessDocument() const { return IsHwp() || IsEpub(); }
         bool IsHwp() const { return viewId_ == "hwp" || viewId_ == "hwpx"; }
@@ -93,6 +96,7 @@ namespace hc::document
         QToolBar* toolbar_ = nullptr;
         QBaseView* view_ = nullptr;
         QTextView* text_ = nullptr;
+        MarkdownDocumentView* markdown_ = nullptr;
         QPDFView* pdf_ = nullptr;
         QImageView* image_ = nullptr;
         ImageReadingView* reading_ = nullptr;

@@ -41,6 +41,9 @@ foreach(FOLDER IN ITEMS Libs/platforms Libs/imageformats Libs/iconengines Libs/s
     endif()
     list(APPEND FILES ${INPUTS})
 endforeach()
+file(GLOB_RECURSE MARKDOWN_FILES LIST_DIRECTORIES FALSE RELATIVE "${SOURCE}" "${SOURCE}/Libs/Markdown/*")
+list(FILTER MARKDOWN_FILES EXCLUDE REGEX "(^|/)[.]|[.]log$|[.]pdb$|[.]ilk$|/vc_redist[^/]*[.]exe$")
+list(APPEND FILES ${MARKDOWN_FILES})
 include("${CMAKE_CURRENT_LIST_DIR}/ProductLayout.cmake")
 # Every notice and source archive, including the archive plugins', lives under Licenses/<component>.
 file(GLOB_RECURSE INPUTS LIST_DIRECTORIES FALSE RELATIVE "${SOURCE}" "${SOURCE}/${HC_LAYOUT_Licenses}/*")

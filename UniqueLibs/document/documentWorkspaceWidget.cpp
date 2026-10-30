@@ -21,6 +21,7 @@
 #include "documentShortcutRouter.hpp"
 #include "epubProcessView.hpp"
 #include "epubSourceEditor.hpp"
+#include "markdownDocumentView.hpp"
 #include <QLineEdit>
 #include "text/ScintillaQtDirectBackend.h"
 #include <Scintilla.h>
@@ -400,6 +401,7 @@ namespace hc::document
             auto* Action = EditMenu->addAction(Command.label_); Action->setObjectName(Command.id_); addAction(Action);
             connect(Action, &QAction::triggered, this, [this, Id = Command.id_] {
                 auto Tab = active(); if (!Tab || Tab->loading_) return;
+                if(auto* Markdown=Tab->pane_->findChild<MarkdownDocumentView*>();Markdown&&Markdown->RunPreviewCommand(Id))return;
                 auto* Text = Tab->pane_->findChild<QTextView*>(); if (!Text) return;
                 if (Id == "text.wordWrap") { Text->setWordWrap(!Text->isWordWrapEnabled()); return; }
                 if (Id == "text.foldAll" || Id == "text.unfoldAll") { Text->FoldAll(Id == "text.foldAll"); return; }
@@ -428,7 +430,7 @@ namespace hc::document
         shortcutRouter_ = new DocumentShortcutRouter(this);
         // EPUB editing, image and PDF commands reach the active pane through window-level actions.
         for (const auto& Command : DocumentShortcutRegistry::Commands()) {
-            if (!QStringList{"epub-edit", "epub-edit.tree", "epub-edit.source", "image", "pdf"}.contains(Command.scope_)) continue;
+            if (!QStringList{"epub-edit", "epub-edit.tree", "epub-edit.source", "image", "pdf", "markdown"}.contains(Command.scope_)) continue;
             auto* Action = new QAction(Command.label_, this); Action->setObjectName(Command.id_); addAction(Action);
             connect(Action, &QAction::triggered, this, [this, Id = Command.id_] { if (auto Tab = active(); Tab && !Tab->loading_) Tab->pane_->RunViewCommand(Id); });
         }
@@ -446,6 +448,8 @@ namespace hc::document
             const bool InText = Within([](QWidget* Widget) { return qobject_cast<QTextView*>(Widget) != nullptr; });
             const bool EpubEditing = Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing() && Tab->pane_->isAncestorOf(Focus);
             if (Scope == "epub") return Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing() && !qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus);
+            if(Scope=="markdown")return Tab && !Tab->loading_ && Tab->pane_->IsMarkdown() && Tab->pane_->CanRunViewCommand(Id);
+            if (Scope == "text" && Tab && Tab->pane_->IsMarkdown())return !Tab->loading_ && Tab->pane_->MarkdownSourceVisible() && InText;
             if (Scope == "text") return Tab && !Tab->loading_ && (Tab->pane_->ViewId() == "text" || (EpubEditing && InText));
             if (Scope == "edit") {
                 auto* Input = Tab ? Tab->pane_->InputWidget() : nullptr;
@@ -547,6 +551,7 @@ namespace hc::document
         if (externalWatcher_) externalWatcher_->reloadSettings();
         if (!Chrome.isEmpty() && !ApplyChromeSettings(Chrome)) ShowShellError(tr("문서 표시 설정이 올바르지 않습니다."));
         for (auto* View : findChildren<QTextView*>()) View->ReloadPreferences();
+        for(auto* Markdown:findChildren<MarkdownDocumentView*>())Markdown->ReloadPreferences();
         for(auto* Source:findChildren<EpubSourceEditor*>())Source->ReloadValidationSettings();
         for(const auto& Tab:documents_)Tab->pane_->SetEpubRecoveryEnabled(Root["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(true));
         const auto Bindings = Root["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
@@ -1334,11 +1339,12 @@ namespace hc::document
             findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(!hosted_ && !Tab->loading_ && !Tab->pane_->IsBusy() && Tab->pane_->CanEditEpub());
         }
         if(auto* Reopen=findChild<QAction*>("epubReopenDocument"))Reopen->setVisible(Tab && Tab->pane_->IsEpub() && Tab->pane_->findChild<QAction*>("epubReopen"));
-        findChild<QAction*>("printDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
-        findChild<QAction*>("previewDocument")->setEnabled(Tab&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
+        findChild<QAction*>("printDocument")->setEnabled(Tab&&(!Tab->pane_->IsMarkdown()||Tab->pane_->MarkdownSourceVisible())&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
+        findChild<QAction*>("previewDocument")->setEnabled(Tab&&(!Tab->pane_->IsMarkdown()||Tab->pane_->MarkdownSourceVisible())&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
         for (auto* Action : findChildren<QAction*>()) {
             const auto Id = Action->property("documentCommandId").toString();
             const auto Scope=DocumentShortcutRegistry::ScopeOf(Id);
+            if(Scope=="markdown")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->CanRunViewCommand(Id));
             if(Scope=="epub")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing());
             if(Scope.startsWith("epub-edit"))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing());
             if(Scope=="image" || Scope=="pdf")Action->setEnabled(Tab && !Tab->loading_);
@@ -1346,6 +1352,7 @@ namespace hc::document
                 Action->setEnabled(Tab && !Tab->loading_ && ((Tab->pane_->ViewId() == "text"
                     && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->pane_->IsReadOnly())) || Tab->pane_->IsEpubEditing()));
             if (Id == "file.new") Action->setEnabled((hosted_ || documents_.size() < 16) && (tabbed_ || documents_.empty()));
+            if(Tab&&Tab->pane_->IsMarkdown()&&!Tab->pane_->MarkdownSourceVisible()&&(Id.startsWith("text.")||Id.startsWith("edit.")))Action->setEnabled(Id=="text.find"||Id=="edit.copy"||Id=="edit.selectAll");
             if (Id == "tab.next" || Id == "tab.previous") Action->setEnabled(tabbed_ && tabs_->count() > 1);
         }
         QList<DocumentStatusField> Fields;
@@ -1353,7 +1360,7 @@ namespace hc::document
             if(!Tab->loading_)Fields=Tab->pane_->StatusFields();
             const auto State=Tab->session_->Snapshot();const auto View=Tab->pane_->ViewState();
             const bool Reading=View.contains("reading") || (Tab->pane_->IsProcessDocument()&&!Tab->pane_->IsEpubEditing());
-            const bool ReadOnly=Reading || (Tab->pane_->ViewId()=="text"?View["readOnly"].toBool():!(Capability.save_||Capability.saveAs_));
+            const bool ReadOnly=(Tab->pane_->IsMarkdown()&&!Tab->pane_->MarkdownSourceVisible()) || Reading || (Tab->pane_->ViewId()=="text"?View["readOnly"].toBool():!(Capability.save_||Capability.saveAs_));
             QString Mode=ReadOnly?tr("읽기 전용"):Tab->pane_->ViewId()=="pdf"?tr("주석 편집"):tr("편집");
             const auto Destination=Tab->pane_->IsEpub()?tr("원본 유지 · 다른 이름으로 저장"):Tab->broker_?tr("원본 공급자에 저장"):Tab->originalSave_?tr("로컬 파일"):tr("사본 · 다른 이름으로 저장");
             if(!Tab->loading_ && !Tab->input_.bytes_.isEmpty())Fields.append(DocumentStatusField{"fileSize",QLocale().formattedDataSize(Tab->input_.bytes_.size()),{},tr("열 때의 파일 크기"),{},false});

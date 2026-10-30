@@ -3,6 +3,8 @@
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentViewPane.hpp"
 #include "epubProcessView.hpp"
+#include "markdownDocumentView.hpp"
+#include "documentShortcutRegistry.hpp"
 #include "epubSourceEditor.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "documentThemeAdapter.hpp"
@@ -115,6 +117,7 @@ namespace hc::document
         if(auto* EditBar=findChild<QToolBar*>("imageEditToolbar"))delete EditBar;
         if(animation_){delete animation_;animation_=nullptr;}
         if(reading_){delete reading_;reading_=nullptr;}
+        if(markdown_){delete markdown_;markdown_=nullptr;view_=nullptr;text_=nullptr;}
         if(view_) {delete view_;view_=nullptr;text_=nullptr;pdf_=nullptr;image_=nullptr;}
         if(toolbar_) {delete toolbar_;toolbar_=nullptr;}
         if(hwp_){delete hwp_;hwp_=nullptr;}
@@ -309,6 +312,14 @@ namespace hc::document
         }
         connect(view_,&QBaseView::OpenRequested,this,&DocumentViewPane::OpenRequested);
         connect(view_,&QBaseView::SaveRequested,this,&DocumentViewPane::SaveRequested);
+        if(text_ && QStringList{"md","markdown"}.contains(QFileInfo(Input.path_).suffix().toLower())) {
+            auto* SourceBar=toolbar_;layout()->removeWidget(SourceBar);SourceBar->hide();
+            layout()->removeWidget(text_);markdown_=new MarkdownDocumentView(text_,Input.path_,ImageEditing,this);
+            toolbar_=markdown_->Toolbar();static_cast<QVBoxLayout*>(layout())->insertWidget(0,toolbar_);layout()->addWidget(markdown_);
+            markdown_->SetSourceTools(SourceBar);markdown_->SetShortcutBindings(DocumentShortcutRegistry::Bindings(shortcutBindings_));connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::ViewStateChanged);
+            connect(markdown_,&MarkdownDocumentView::OpenRequested,this,&DocumentViewPane::OpenRequested);
+            contribution_.menuTitle_=tr("마크다운");
+        }
         contribution_.menuActions_=toolbar_->actions();applyTheme();return true;
     }
     void DocumentViewPane::updateEpubMode() {
@@ -317,7 +328,9 @@ namespace hc::document
         bool After=false;for(auto* Item:Bar->actions()){if(Item->objectName()=="epubEditSeparator")After=true;if(After)Item->setVisible(Editing);}
         contribution_.statusWidget_=Editing && epubEditor_?epubEditor_->StatusStrip():nullptr;
     }
+    bool DocumentViewPane::MarkdownSourceVisible()const{return markdown_ && markdown_->SourceVisible();}
     bool DocumentViewPane::CanRunViewCommand(const QString& Id)const {
+        if(Id.startsWith("markdown."))return markdown_ && markdown_->CanRun(Id);
         if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return IsEpubEditing() && epubEditor_->CanRunCommand(Id);
         // Every image pane owns a reading view; a single image steps through its folder while it is hidden.
         if(Id.startsWith("image."))return image_ && reading_ && (!reading_->isHidden() || ((Id=="image.next" || Id=="image.previous") && !image_->IsEditing()));
@@ -325,11 +338,12 @@ namespace hc::document
     }
     bool DocumentViewPane::RunViewCommand(const QString& Id) {
         if(!CanRunViewCommand(Id))return false;
+        if(Id.startsWith("markdown.")){auto* Action=markdown_->Toolbar()->findChild<QAction*>(Id);if(Action && Action->isCheckable())Action->trigger();else markdown_->Run(Id);return true;}
         if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return epubEditor_->RunCommand(Id);
         if(Id.startsWith("image."))return reading_ && !reading_->isHidden()?reading_->RunCommand(Id):image_->StepImage(Id=="image.next"?1:-1);
         if(Id=="pdf.pageNext")pdf_->nextPage();else if(Id=="pdf.pagePrevious")pdf_->previousPage();else if(Id=="pdf.first")pdf_->goToPage(0);else pdf_->goToPage(pdf_->totalPageCount()-1);return true;
     }
-    void DocumentViewPane::SetShortcutBindings(const QJsonObject& Bindings){shortcutBindings_=Bindings;if(epubEditor_)epubEditor_->SetShortcutBindings(Bindings);}
+    void DocumentViewPane::SetShortcutBindings(const QJsonObject& Bindings){shortcutBindings_=Bindings;if(markdown_)markdown_->SetShortcutBindings(Bindings);if(epubEditor_)epubEditor_->SetShortcutBindings(Bindings);}
     void DocumentViewPane::DiscardEpubRecovery(){if(epubEditor_)epubEditor_->DiscardRecovery();}
     void DocumentViewPane::SetEpubRecoveryEnabled(bool Enabled){if(epubEditor_)epubEditor_->SetRecoveryEnabled(Enabled);}
     void DocumentViewPane::CheckpointEpub(){if(epubEditor_)epubEditor_->Checkpoint();}
@@ -429,6 +443,7 @@ namespace hc::document
     void DocumentViewPane::Commit(const QString& Path, const QByteArray& Bytes)
     {
         if(epubEditor_){epubEditor_->Commit(Path,Bytes);epubBytes_=Bytes;epubPath_=Path;}
+        if(markdown_)markdown_->SetPath(Path);
         if(text_)text_->CommitContent();if(pdf_)pdf_->CommitContent();
         if(image_) {
             if (!Path.isEmpty() && !Bytes.isEmpty()) {
@@ -445,9 +460,10 @@ namespace hc::document
             if(QApplication::activeWindow()!=window())QApplication::setActiveWindow(window());
             SetActiveWindow(GetAncestor(Native,GA_ROOT));
         }
+        if(markdown_){markdown_->Focus();return;}
         if(IsEpubEditing())epubEditor_->SourceInput()->isVisible()?epubEditor_->SourceInput()->setFocus():epubEditor_->setFocus();else if(epub_)currentEpub()->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
     }
-    void DocumentViewPane::SetReadOnly(bool Enabled){readOnly_=Enabled;if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
+    void DocumentViewPane::SetReadOnly(bool Enabled){readOnly_=Enabled;if(markdown_)markdown_->SetReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
     {
         if(view_)view_->RestrictClipboard(Enabled);
@@ -466,6 +482,7 @@ namespace hc::document
         // inactive tabs. Resolve from the new theme before updating child views.
         setPalette(Theme.colors().toPalette());
         const auto Dark=fm::style::isDarkVariant(Theme.effectiveVariant());
+        if(markdown_)markdown_->ReloadPreferences();
         ThemeManager::instance().setTheme(Dark?ThemeManager::Dark:ThemeManager::Light);view_->setTheme(Dark?QBaseView::Dark:QBaseView::Light);
         // Actions are created before the workspace applies its palette. Refresh
         // normal/off glyphs too; a Light icon otherwise disappears on Dark.
@@ -474,6 +491,7 @@ namespace hc::document
     }
     QList<DocumentStatusField> DocumentViewPane::StatusFields() const
     {
+        if(markdown_&&!markdown_->SourceVisible())return markdown_->StatusFields();
         QList<DocumentStatusField> Fields;
         const auto Add = [&](QString Id, QString Text, bool Essential = true, QString Compact = {}, QString Detail = {}, QString Command = {}) {
             if(!Text.isEmpty())Fields.append(DocumentStatusField{Id,Text,Compact,Detail,Command,Essential});
@@ -553,10 +571,12 @@ namespace hc::document
             Add("layoutMode",Profile["layout"]=="scroll"?tr("세로 연속"):tr("쪽 넘김"),false);
             Add("format","EPUB",false);
         } else if(hwp_) Add("format",viewId_.toUpper());
+        if(markdown_)Fields.append(markdown_->StatusFields());
         return Fields;
     }
     void DocumentViewPane::RunStatusCommand(const QString& Id)
     {
+        if(Id.startsWith("markdown.")){RunViewCommand(Id);return;}
         if(Id=="epub.status.problems"&&epubEditor_){epubEditor_->Execute({{"action","epub.edit.layout"},{"problems",true}});return;}
         if(Id=="text.goToLine"&&IsEpubEditing()) {if(auto* Action=epubEditor_->SourceView()->findChild<QAction*>("text.goToLine"))Action->trigger();return;}
         if(Id=="text.goToLine"){RunViewCommand(Id);return;}
@@ -579,6 +599,7 @@ namespace hc::document
         auto* Input=InputWidget();
         QJsonObject State{{"viewId",viewId_},{"canUndo",CanUndo()},{"canRedo",CanRedo()},
             {"inputFocused",Input&&(Input->hasFocus()||Input->isAncestorOf(QApplication::focusWidget()))}};
+        if(markdown_)State["markdown"]=markdown_->State();
         if(text_){State["encoding"]=encoding_;State["bom"]=bom_;State["language"]=text_->currentLanguage();State["readOnly"]=text_->isReadOnly();State["lineCount"]=text_->lineCount();}
         if(pdf_){State["page"]=pdf_->currentPage();State["pageCount"]=pdf_->totalPageCount();State["formsSupported"]=false;State["searchCount"]=pdf_->totalSearchResultCount();}
         if(image_){State["filter"]=image_->DisplayFilter();State["width"]=image_->Content().width();State["height"]=image_->Content().height();State["rendering"]=image_->IsRendering();State["renderError"]=image_->RenderError();}
@@ -633,6 +654,9 @@ namespace hc::document
         if(text_&&text_->isReadOnly()&&(Action=="replaceText"||Action=="text.replaceAll"))return Error("document-edit-unavailable");
         if(Action=="replaceText"&&text_){auto Text=Request["text"].toString();if(eol_=="CRLF")Text.replace("\r\n","\n").replace("\n","\r\n");text_->ReplaceContent(Text);return {{"accepted",true}};}
         if(Action=="selectAll"&&text_){static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_SELECTALL);return {{"accepted",true}};}
+        if(markdown_&&!markdown_->SourceVisible() && (Action=="print"||Action=="printToPdf"||Action=="printPreview"))return Error("markdown-source-print-only");
+        if(Action.startsWith("markdown."))return RunViewCommand(Action)?QJsonObject{{"accepted",true}}:Error("markdown-command-unavailable");
+        if(Action=="text.find"&&markdown_&&!markdown_->SourceVisible()){markdown_->Run("markdown.find");return {{"accepted",true}};}
         if(Action=="text.find"&&text_)text_->findText(Request["text"].toString(),Request["regex"].toBool(),Request["caseSensitive"].toBool(),Request["wholeWords"].toBool());
         else if(Action=="text.replaceAll"&&text_)text_->replaceAll(Request["text"].toString(),Request["replacement"].toString(),Request["regex"].toBool(),Request["caseSensitive"].toBool(),Request["wholeWords"].toBool());
         else if(Action=="text.encoding"&&text_) {
@@ -671,7 +695,7 @@ namespace hc::document
 }
 
 namespace hc::document {
-QWidget* DocumentViewPane::InputWidget() const {return IsEpubEditing()?static_cast<QWidget*>(epubEditor_):epub_?static_cast<QWidget*>(currentEpub()):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
+QWidget* DocumentViewPane::InputWidget() const {if(markdown_)return markdown_->InputWidget();return IsEpubEditing()?static_cast<QWidget*>(epubEditor_):epub_?static_cast<QWidget*>(currentEpub()):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
 QJsonObject DocumentViewPane::CaptureSelection() const
 {
     if (pdf_) return pdf_->ClipboardContent();

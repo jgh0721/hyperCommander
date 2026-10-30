@@ -20,6 +20,7 @@
 #include <QHBoxLayout>
 #include <QKeySequenceEdit>
 #include <QLabel>
+#include <QTimer>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
@@ -68,7 +69,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
     auto* Body = new QHBoxLayout; Body->setContentsMargins(12, 12, 4, 12); Body->setSpacing(12);
     auto* List = new QListWidget(this); List->setObjectName("settingsCategories");
-    List->addItems({tr("공통"), tr("텍스트 뷰어"), tr("단축키"),tr("EPUB")}); List->setFixedWidth(180);
+    List->addItems({tr("공통"), tr("텍스트 뷰어"), tr("단축키"),tr("EPUB"),tr("마크다운")}); List->setFixedWidth(180);
     List->setProperty(fm::style::props::kSoftSelection, true); List->setFrameShape(QFrame::NoFrame);
     for (int Row = 0; Row < List->count(); ++Row) List->item(Row)->setSizeHint(QSize(0, 30));
     auto* Pages = new QStackedWidget(this); Body->addWidget(List); Body->addWidget(Pages, 1); Layout->addLayout(Body, 1);
@@ -284,6 +285,50 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     epubSettings_=new hc::epub::poc::ReadingSettings(QDir(QFileInfo(path_).absolutePath()).filePath("epub-reading.json"),QString(64,'0'),"light",this);
     epubSettings_->setObjectName("epubGlobalSettings");epubSettings_->SetGlobalOnly();Reading->addRow(epubSettings_);
     EpubPage->addStretch();
+    auto* Markdown=Page(tr("마크다운"),tr("미리보기 글꼴과 문법, 개요 및 소스·본문 동기화를 설정합니다."));
+    auto* MdFonts=Card(Markdown,tr("미리보기 글꼴 (.MD)"));
+    const QString MdPrefix="documentViews/markdown/",FontPrefix=MdPrefix+"previewFonts/";
+    Check(MdFonts,FontPrefix+"enabled",tr("글꼴 사용자 설정 사용"),false);
+    Combo(MdFonts,FontPrefix+"mode",tr("글꼴 적용"),{tr("문서 글꼴 (없으면 웹뷰 기본)"),tr("웹뷰 기본"),tr("사용자 글꼴")},{"document","web","user"});
+    auto MdSpin=[&](QFormLayout* Form,const QString& Key,const QString& Label,int Low,int High,int Default){auto* Field=new QSpinBox(this);Field->setRange(Low,High);Field->setObjectName(Key);Field->setProperty("defaultValue",Default);controls_[Key]=Field;Form->addRow(Label,Field);};
+    for(const auto& Pair:{std::pair{"bodyFamily",tr("본문 글꼴")},std::pair{"codeFamily",tr("코드 글꼴")}}){auto* Field=new QFontComboBox(this);const QString Key=FontPrefix+Pair.first;Field->setObjectName(Key);Field->setProperty("defaultValue",QString(Pair.first)=="bodyFamily"?"맑은 고딕":"Consolas");Field->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);Field->setMinimumContentsLength(12);controls_[Key]=Field;MdFonts->addRow(Pair.second,Field);}
+    MdSpin(MdFonts,FontPrefix+"bodySizePt",tr("본문 크기 (pt)"),8,72,11);MdSpin(MdFonts,FontPrefix+"codeSizePt",tr("코드 크기 (pt)"),8,72,10);
+    auto* MdSpacing=new QDoubleSpinBox(this);MdSpacing->setRange(1.,3.);MdSpacing->setSingleStep(.1);MdSpacing->setDecimals(2);MdSpacing->setObjectName(FontPrefix+"lineHeight");MdSpacing->setProperty("defaultValue",1.7);controls_[MdSpacing->objectName()]=MdSpacing;MdFonts->addRow(tr("본문 행간"),MdSpacing);
+    Check(MdFonts,FontPrefix+"headings",tr("제목에도 선택한 글꼴 적용"),true);
+    Note(MdFonts,tr("미리보기에만 적용합니다. 문서 글꼴을 선택하거나 사용자 설정을 끄면 원래 문서 스타일로 돌아갑니다. 수식·아이콘 글꼴은 유지합니다."));
+    auto* MdSample=new QLabel(this);MdSample->setObjectName("markdownFontSample");MdSample->setWordWrap(true);MdSample->setMargin(16);MdSample->setFrameShape(QFrame::StyledPanel);MdFonts->addRow(tr("적용 견본"),MdSample);
+    auto UpdateFonts=[this,FontPrefix,MdSample]{
+        const bool Enabled=qobject_cast<QCheckBox*>(controls_[FontPrefix+"enabled"])->isChecked();
+        auto* Mode=qobject_cast<QComboBox*>(controls_[FontPrefix+"mode"]);Mode->setEnabled(Enabled);const bool Custom=Enabled&&Mode->currentData()=="user",Override=Enabled&&Mode->currentData()!="document";
+        for(const auto& Key:{"bodyFamily","codeFamily","bodySizePt","codeSizePt"})controls_[FontPrefix+Key]->setEnabled(Custom);
+        for(const auto& Key:{"lineHeight","headings"})controls_[FontPrefix+Key]->setEnabled(Override);
+        const auto Family=qobject_cast<QFontComboBox*>(controls_[FontPrefix+"bodyFamily"])->currentFont().family().toHtmlEscaped();
+        const auto CodeFamily=qobject_cast<QFontComboBox*>(controls_[FontPrefix+"codeFamily"])->currentFont().family().toHtmlEscaped();
+        const int Size=qobject_cast<QSpinBox*>(controls_[FontPrefix+"bodySizePt"])->value(),CodeSize=qobject_cast<QSpinBox*>(controls_[FontPrefix+"codeSizePt"])->value();
+        const auto Body=Custom?QString("font-family:'%1';font-size:%2pt;").arg(Family).arg(Size):QString();
+        const auto Code=Custom?QString("font-family:'%1';font-size:%2pt;").arg(CodeFamily).arg(CodeSize):QString("font-family:Consolas;");
+        const auto Heading=Custom&&qobject_cast<QCheckBox*>(controls_[FontPrefix+"headings"])->isChecked()?QString("font-family:'%1';").arg(Family):QString();
+        const auto Spacing=Override?qobject_cast<QDoubleSpinBox*>(controls_[FontPrefix+"lineHeight"])->value():1.7;
+        MdSample->setText(QString("<h3 style=\"%3\">문서에 맞는 읽기 환경</h3><p style=\"%1;line-height:%4%;\">미리보기 본문의 글꼴을 확인합니다.<br>행간 설정을 함께 확인합니다.</p><p style=\"%2\">const auto view = &quot;preview&quot;;</p><p style=\"font-family:Cambria\">E = mc<sup>2</sup></p>").arg(Body,Code,Heading).arg(qRound(Spacing*100)));
+    };
+    for(const auto& Key:{"enabled","headings"})connect(qobject_cast<QCheckBox*>(controls_[FontPrefix+Key]),&QCheckBox::toggled,this,UpdateFonts);
+    for(const auto& Key:{"mode","bodyFamily","codeFamily"})connect(qobject_cast<QComboBox*>(controls_[FontPrefix+Key]),&QComboBox::currentIndexChanged,this,UpdateFonts);
+    for(const auto& Key:{"bodySizePt","codeSizePt"})connect(qobject_cast<QSpinBox*>(controls_[FontPrefix+Key]),&QSpinBox::valueChanged,this,UpdateFonts);
+    connect(MdSpacing,&QDoubleSpinBox::valueChanged,this,UpdateFonts);
+    auto* MdView=Card(Markdown,tr("보기·개요"));
+    Combo(MdView,MdPrefix+"viewerMode",tr("HyperViewer 기본 보기"),{tr("미리보기"),tr("소스")},{"preview","source"});
+    Combo(MdView,MdPrefix+"editorMode",tr("HyperEditor 기본 보기"),{tr("나란히 보기"),tr("소스"),tr("미리보기")},{"split","source","preview"});
+    Check(MdView,MdPrefix+"viewerOutline",tr("HyperViewer에서 개요 표시"),false);Check(MdView,MdPrefix+"editorOutline",tr("HyperEditor에서 개요 표시"),true);
+    MdSpin(MdView,MdPrefix+"outlineDepth",tr("개요 최대 깊이"),1,6,6);
+    Check(MdView,MdPrefix+"positionSync",tr("소스·본문 위치 동기화"),true);Check(MdView,MdPrefix+"scrollSync",tr("소스·본문 스크롤 동기화"),true);
+    auto UpdateSync=[this,MdPrefix]{controls_[MdPrefix+"scrollSync"]->setEnabled(qobject_cast<QCheckBox*>(controls_[MdPrefix+"positionSync"])->isChecked());};
+    connect(qobject_cast<QCheckBox*>(controls_[MdPrefix+"positionSync"]),&QCheckBox::toggled,this,UpdateSync);
+    Note(MdView,tr("위치 동기화는 캐럿·본문 클릭 위치를, 스크롤 동기화는 화면 이동을 연결합니다. 위치 동기화를 끄면 스크롤 동기화는 비활성화되며 체크 상태를 유지합니다."));
+    auto* MdRender=Card(Markdown,tr("문법·렌더링"));
+    for(const auto& Pair:{std::pair{"math",tr("수식 표시 (KaTeX)")},std::pair{"inlineDollar",tr("인라인 $…$ 수식")},std::pair{"mermaid",tr("Mermaid 다이어그램")},std::pair{"codeHighlight",tr("코드 블록 구문강조")},std::pair{"autoPreview",tr("입력 후 미리보기 자동 갱신")}})Check(MdRender,MdPrefix+Pair.first,Pair.second,true);
+    MdSpin(MdRender,MdPrefix+"debounceMs",tr("입력 후 갱신 지연 (ms)"),100,3000,250);Check(MdRender,MdPrefix+"remoteImages",tr("외부 이미지 자동 다운로드"),false);
+    Note(MdRender,tr("수식·다이어그램 렌더러와 글꼴은 내장되어 오프라인에서도 표시합니다. 원문 HTML은 텍스트로 표시하며 스크립트는 실행하지 않습니다."));
+    Markdown->addStretch();QTimer::singleShot(0,this,[UpdateFonts,UpdateSync]{UpdateFonts();UpdateSync();});
     auto* Footer = new QFrame(this); Footer->setObjectName("settingsFooter"); Footer->setFrameShape(QFrame::StyledPanel); fm::style::setFooter(Footer);
     auto* FooterRow = new QHBoxLayout(Footer); FooterRow->setContentsMargins(16, 8, 16, 8); FooterRow->setSpacing(8); Layout->addWidget(Footer);
     error_ = new QLabel(Footer); error_->setObjectName("settingsError"); error_->setWordWrap(true); error_->setTextInteractionFlags(Qt::TextSelectableByMouse); FooterRow->addWidget(error_, 1);
@@ -303,6 +348,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
             textColors_[Mode] = Colors; refreshTextColorRows(); return;
         }
         if(List->currentRow()==3){epubSettings_->ResetDraft();for(auto I=controls_.begin();I!=controls_.end();++I)if(I.key().startsWith("documentViews/epubEditor/")){if(auto* Field=qobject_cast<QLineEdit*>(I.value()))Field->clear();else if(auto* Check=qobject_cast<QCheckBox*>(I.value()))Check->setChecked(false);}return;}
+        if(List->currentRow()==4){const auto Original=base_;base_=values();settings::UnifiedConfig::Set(base_,{"documentViews","markdown"},QJsonObject{});loadControls();base_=Original;return;}
         if (List->currentRow() == 2) { for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control)) Field->setKeySequence(QKeySequence(Field->property("defaultValue").toString())); return; }
         imported_ = {}; const auto Original = base_; base_ = {{"schemaVersion", 2}}; loadControls(); base_ = Original;
     });

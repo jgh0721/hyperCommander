@@ -20,6 +20,14 @@ foreach ($Folder in @('Libs/platforms','Libs/imageformats','Libs/iconengines','L
         if (Test-UpdatePe $File.FullName) { [void]$Names.Add($Folder + '/' + $File.Name) }
     }
 }
+$MarkdownRoot = Join-Path $Root 'Libs/Markdown'
+if (Test-Path -LiteralPath $MarkdownRoot) {
+    foreach ($File in Get-ChildItem -LiteralPath $MarkdownRoot -Recurse -File) {
+        if ($File.Name -like "vc_redist*.exe") { continue }
+        Assert-UpdatePlainPath $File.FullName
+        if (Test-UpdatePe $File.FullName) { [void]$Names.Add($File.FullName.Substring($Root.Length + 1).Replace('\','/')) }
+    }
+}
 $Records = @()
 foreach ($Name in ($Names | Sort-Object)) {
     $Record = Set-UpdateProductSignature (Join-Path $Root $Name) $Name $CacheRoot

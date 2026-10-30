@@ -83,7 +83,10 @@ qt_add_library(hc_document_sdi STATIC
 target_link_libraries(hc_document_sdi PUBLIC hc_document_core Qt6::Widgets PRIVATE hc_document_broker Qt6::Concurrent Qt6::PrintSupport Fm::widgets)
 target_compile_options(hc_document_sdi PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
+add_subdirectory("${PROJECT_SOURCE_DIR}/tools/markdown" "${CMAKE_BINARY_DIR}/markdown")
 qt_add_library(hc_document_widgets STATIC
+    ../UniqueLibs/document/markdownDocumentView.cpp ../UniqueLibs/document/markdownDocumentView.hpp
+    ../UniqueLibs/document/markdownProcessView.cpp ../UniqueLibs/document/markdownProcessView.hpp
     ../tools/epub/render/readingSettings.cpp ../tools/epub/render/readingSettings.hpp
     ../tools/epub/render/readingStore.cpp ../tools/epub/render/readingAssets.cpp
     ../tools/epub/render/readingProfiles.cpp ../tools/epub/render/readingProfiles.hpp
@@ -125,6 +128,8 @@ target_include_directories(hc_document_widgets PRIVATE
     ${PROJECT_SOURCE_DIR}/commonLibs
     ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include
 )
+add_dependencies(hc_document_widgets hc-markdown-render)
+target_link_libraries(hc_document_widgets PRIVATE Qt6::Network)
 target_link_libraries(hc_document_widgets PUBLIC hc_document_core hc_document_broker hc_document_sdi hc_hypereditor Qt6::Widgets fmstyle PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
 target_link_libraries(hc_document_widgets PRIVATE Qt6::ZlibPrivate hc_epub_host hc_builtin_sevenzip hc_image_archive_transport hc_passwords Fm::widgets)
 target_compile_options(hc_document_widgets PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
@@ -185,4 +190,16 @@ if(HC_ENABLE_RHWP)
     # Build staging only: tools/rhwp/stage-runtime.mjs seals this output into the pinned
     # runtime that the product inventory places in ROOT (Libs/ layout, embedded qt.conf).
     hc_enable_qt_deployment(HyperEditorWeb PLUGINS)
+endif()
+
+option(HC_BUILD_MARKDOWN_TESTS "Build focused Markdown integration tests" OFF)
+if(HC_BUILD_MARKDOWN_TESTS)
+    find_package(Qt6 6.12.0 REQUIRED COMPONENTS Test)
+    qt_add_executable(hc_markdown_tests "${PROJECT_SOURCE_DIR}/tests/document/tstMarkdown.cpp")
+    target_include_directories(hc_markdown_tests BEFORE PRIVATE "${PROJECT_SOURCE_DIR}/tools/markdown/render" "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/HyperCommander")
+    target_link_libraries(hc_markdown_tests PRIVATE hc_document_widgets Qt6::Test)
+    target_compile_options(hc_markdown_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+    hc_enable_qt_deployment(hc_markdown_tests TEST PLUGINS)
+    add_test(NAME hc.markdown COMMAND hc_markdown_tests)
+    set_tests_properties(hc.markdown PROPERTIES TIMEOUT 120)
 endif()

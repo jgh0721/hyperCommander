@@ -1,0 +1,1 @@
+{"name":"hypercommander-markdown","private":true,"version":"1.0.0","type":"module","dependencies":{"markdown-it":"15.0.0","markdown-it-footnote":"4.0.0","markdown-it-task-lists":"2.1.1","katex":"0.18.4","mermaid":"11.12.1","highlight.js":"11.11.1"},"devDependencies":{"esbuild":"0.25.12"},"scripts":{"build":"node build.mjs"}}

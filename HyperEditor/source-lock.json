@@ -271,8 +271,8 @@
     },
     {
       "id": "markdown.webPreview",
-      "status": "not-selected-optional",
-      "implementation": "Markdown source uses text view; no new WebEngine runtime"
+      "status": "implemented",
+      "implementation": "Scintilla source with isolated Qt WebEngine preview helper; pinned offline markdown-it, KaTeX, Mermaid and highlight.js assets in tools/markdown"
     }
   ],
   "textEditorPlatformPatch": {
@@ -389,7 +389,7 @@
       },
       {
         "path": "src/text/ScintillaQtDirectBackend.cpp",
-        "sha256": "a9ee5a943b22e326706172ad238d38a4ac59a6bbc4214830429839c2d3d29f3c"
+        "sha256": "b3f85a598537f09f38fca1de4dd6f4d81b3e269c7a9049d765e3b8f27eb47672"
       },
       {
         "path": "src/text/ScintillaEditorSettings.h",

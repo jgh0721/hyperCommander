@@ -1,0 +1,7 @@
+# Preserve pinned offline asset hashes in every checkout.
+web/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# Vendor notices retain their original whitespace.
+licenses/** -text -whitespace
+# Generated bundle includes whitespace inside upstream template literals.
+web/bundle.js -whitespace
+web/bundle.js.LEGAL.txt -whitespace

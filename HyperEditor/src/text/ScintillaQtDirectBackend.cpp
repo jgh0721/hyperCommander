@@ -862,6 +862,7 @@ bool ScintillaQtDirectBackend::applyLanguage(const QString& displayName)
 		return true;
 	}
 
+	if(lexerKey==QStringLiteral("markdown"))m_editor->send(sciMessage(SCI_SETPROPERTY),reinterpret_cast<uptr_t>("lexer.markdown.header.eolfill"),reinterpret_cast<sptr_t>("1"));
 	const QByteArray lexerName = lexerKey.toUtf8();
 
 	#if defined(MV_DIRECT_SCINTILLA_HAS_LEXILLA_LEXERS)
@@ -1395,7 +1396,14 @@ void ScintillaQtDirectBackend::applySyntaxStyles(bool dark)
 		for (int style : {6, 7}) setStyleFore(style, QStringLiteral("text.lexer.string"));
 		setStyleFore(9, QStringLiteral("text.lexer.comment"));
 		setStyleFore(17, QStringLiteral("text.lexer.identifier"));
-	} else if (m_currentLexerKey == QStringLiteral("css")) {
+	} else if (m_currentLexerKey == QStringLiteral("markdown")) {
+        for(int Style=6;Style<=11;++Style){setStyleFore(Style,QStringLiteral("text.lexer.keyword"));m_editor->send(sciMessage(SCI_STYLESETBOLD),Style,Style<9);}
+        for(int Style:{2,3}){setStyleFore(Style,QStringLiteral("text.lexer.keyword"));m_editor->send(sciMessage(SCI_STYLESETBOLD),Style,1);}
+        for(int Style:{4,5})m_editor->send(sciMessage(SCI_STYLESETITALIC),Style,1);
+        for(int Style:{13,14,15,16,17})setStyleFore(Style,QStringLiteral("text.lexer.operator"));
+        for(int Style:{19,20,21})setStyleFore(Style,QStringLiteral("text.lexer.string"));
+        setStyleFore(18,QStringLiteral("text.lexer.keyword"));m_editor->send(sciMessage(SCI_STYLESETUNDERLINE),18,1);
+    } else if (m_currentLexerKey == QStringLiteral("css")) {
 		for (int style : {1, 2, 5}) setStyleFore(style, QStringLiteral("text.lexer.keyword"));
 		setStyleFore(8, QStringLiteral("text.lexer.preprocessor"));
 		setStyleFore(13, QStringLiteral("text.lexer.string"));
