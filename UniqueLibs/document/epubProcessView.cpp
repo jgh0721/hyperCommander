@@ -48,7 +48,7 @@ namespace hc::document
         QJsonObject state_{{"status", "opening"}};
         QJsonObject metrics_;
         QJsonObject appearance_;
-        QString settingsPath_;
+        QString settingsPath_, globalSettingsPath_;
         bool initiallyInteractive_=true,sourceLines_=false;
         std::deque<QJsonObject> settingsRequests_;
         std::optional<QJsonObject> sourceScroll_;
@@ -302,6 +302,7 @@ namespace hc::document
         work_->appearance_ = epubui::Appearance();
         auto Config = qApp->property("documentViewsConfigDir").toString();
         if(Config.isEmpty()) Config = hc::settings::DocumentPaths().directory_;
+        work_->globalSettingsPath_ = QDir(Config).absoluteFilePath("epub-reading.json");
         work_->settingsPath_ = QDir(SettingsDirectory.isEmpty()?Config:SettingsDirectory).absoluteFilePath("epub-reading.json");
         QJsonObject Preferences;QString PreferencesError;
         if(hc::settings::UnifiedConfig::Load(hc::settings::UnifiedConfig::FileName(Config),Preferences,PreferencesError))
@@ -369,7 +370,7 @@ namespace hc::document
                 QJsonObject Applied;
                 { std::lock_guard Lock(State->mutex_); Applied = State->appearance_; }
                 const auto Configure = QJsonDocument(QJsonObject{{"protocolVersion", 1}, {"documentId", Id},
-                    {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_},{"initiallyInteractive",State->initiallyInteractive_},{"sourceLines",State->sourceLines_}}).toJson(QJsonDocument::Compact);
+                    {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_},{"initiallyInteractive",State->initiallyInteractive_},{"sourceLines",State->sourceLines_},{"globalSettingsPath",State->globalSettingsPath_}}).toJson(QJsonDocument::Compact);
                 QByteArray ConfigureReply;
                 if(!Owner->Exchange(Configure, ConfigureReply, 5000, Error)
                     || !QJsonDocument::fromJson(ConfigureReply).object()["accepted"].toBool()

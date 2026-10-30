@@ -259,17 +259,17 @@ namespace
     class Window final : public QMainWindow
     {
     public:
-        Window(const Assets& Items, const QJsonObject& Publication, const QString& Engine, const QString& Theme, const QString& Evidence, const QString& SettingsPath, qint64 Generation = 1,bool InitiallyInteractive=true,bool SourceLines=false)
+        Window(const Assets& Items, const QJsonObject& Publication, const QString& Engine, const QString& Theme, const QString& Evidence, const QString& SettingsPath, qint64 Generation = 1,bool InitiallyInteractive=true,bool SourceLines=false,const QString& GlobalSettingsPath={})
             : QMainWindow(nullptr,InitiallyInteractive?Qt::WindowFlags{}:Qt::WindowFlags(Qt::WindowDoesNotAcceptFocus)), evidence_(Evidence), documentId_(Publication["sourceSha256"].toString()), generation_(Generation)
         {
-            setAttribute(Qt::WA_ShowWithoutActivating);engine_=Engine;interactive_=InitiallyInteractive;
+            setAttribute(Qt::WA_ShowWithoutActivating);engine_=Engine;interactive_=InitiallyInteractive;editingPreview_=SourceLines;
 #ifdef HC_EPUB_PRODUCT_HELPER
             setWindowTitle(tr("EPUB 읽기"));
 #else
             setWindowTitle(tr("EPUB · Watercolor 읽기 설정 · P0 엔진 비교"));
 #endif
             resize(QSize(1280,900).boundedTo(QGuiApplication::primaryScreen()->availableGeometry().size()-QSize(40,60)));
-            settingsPath_ = SettingsPath;
+            settingsPath_ = SourceLines && !GlobalSettingsPath.isEmpty()?GlobalSettingsPath:SettingsPath;
             auto* Central = new QWidget(this);
             setCentralWidget(Central);
             auto* Layout = new QVBoxLayout(Central);
@@ -285,7 +285,8 @@ namespace
 #ifdef HC_EPUB_PRODUCT_HELPER
             Form->setRowVisible(EngineBox,false); EngineBox->setEnabled(false);
 #endif
-            settings_ = new hc::epub::poc::ReadingSettings(SettingsPath, Publication["sourceSha256"].toString(), Theme, Panel);
+            settings_ = new hc::epub::poc::ReadingSettings(settingsPath_, Publication["sourceSha256"].toString(), Theme, Panel);
+            if(SourceLines)settings_->SetEditingPreview();
             navigation_=new hc::epub::poc::ReadingNavigation(SettingsPath,documentId_,[this](const QJsonObject& Request){command("read",Request);},Panel);
             navigation_->SetPublication(Publication);
             auto* ReadingBar=addToolBar(tr("독서"));ReadingBar->setObjectName("epubReadingToolbar");ReadingBar->setMovable(false);
@@ -301,11 +302,12 @@ namespace
             view_ = new QWebEngineView(Splitter);view_->setFocusPolicy(InitiallyInteractive?Qt::StrongFocus:Qt::NoFocus); Splitter->setSizes({260,360,880});
             navigationScroll_->hide();settingsScroll_->hide();
             for(const auto& Entry:QList<QPair<QString,QString>>{{"focus-toc",tr("목차")},{"focus-search",tr("검색")},{"focus-bookmarks",tr("책갈피")},{"focus-notes",tr("형광펜·메모")},{"focus-settings",tr("Aa · 읽기 설정")}}) {
+                if(SourceLines && Entry.first=="focus-settings")continue;
                 auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
                 Action->setCheckable(true);
                 connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{readAction("toggle-"+Name.mid(6),{});});
             }
-            layoutChoice_=new QComboBox(ReadingBar);layoutChoice_->setAccessibleName(tr("읽기 방식"));layoutChoice_->addItems({tr("세로 스크롤"),tr("가로 페이지")});ReadingBar->addWidget(layoutChoice_);
+            layoutChoice_=new QComboBox(ReadingBar);layoutChoice_->setAccessibleName(tr("읽기 방식"));layoutChoice_->addItems({tr("세로 스크롤"),tr("가로 페이지")});ReadingBar->addWidget(layoutChoice_)->setVisible(!SourceLines);
             connect(layoutChoice_,&QComboBox::currentIndexChanged,this,[this](int Index){
                 const bool Dirty=settings_->IsDirty();
                 if(settings_->Execute("preview",{{"layout",Index==1?"paginated":"scroll"}},false)) {
@@ -314,7 +316,7 @@ namespace
                 focusReading();
             });
             columnsChoice_=new QComboBox(ReadingBar);columnsChoice_->setObjectName("epubColumns");columnsChoice_->setAccessibleName(tr("페이지 단 수"));
-            columnsChoice_->addItems({tr("자동 단 수"),tr("1단"),tr("2단")});ReadingBar->addWidget(columnsChoice_);
+            columnsChoice_->addItems({tr("자동 단 수"),tr("1단"),tr("2단")});ReadingBar->addWidget(columnsChoice_)->setVisible(!SourceLines);
             columnsChoice_->setToolTip(tr("가로 페이지에서 단 수를 선택합니다. 화면이 좁으면 1단으로 표시합니다."));
             connect(columnsChoice_,&QComboBox::currentIndexChanged,this,[this](int Index){
                 const bool Dirty=settings_->IsDirty();
@@ -440,7 +442,7 @@ namespace
                 State["escapeRequests"]=escapeRequests_;State["fullscreenRequests"]=fullscreenRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();State["inputEnabled"]=interactive_;
                 State["chromeWindowColor"]=palette().color(QPalette::Window).name();State["toolbarWindowColor"]=findChild<QToolBar*>("epubReadingToolbar")->palette().color(QPalette::Window).name();State["openPanel"]=openPanel();State["toolbarPreviousEnabled"]=findChild<QAction*>("epub.previous")->isEnabled();State["toolbarNextEnabled"]=findChild<QAction*>("epub.next")->isEnabled();State["toolbarAvailabilityChanges"]=toolbarAvailabilityChanges_;
                 State["toolbarColumns"]=columnsChoice_->currentIndex();State["columnsControlEnabled"]=columnsChoice_->isEnabled();
-                State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();State["detailSnapshots"]=detailSnapshots_;
+                State["readingSettingsAvailable"] = !editingPreview_;State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();State["detailSnapshots"]=detailSnapshots_;
                 State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError();
                 if(Kind=="snapshot-delta") {
                     QJsonObject Delta;QJsonArray Removed;
@@ -545,9 +547,10 @@ namespace
             }
             if(Action=="cycle-focus") {
                 if(view_->hasFocus() || view_->isAncestorOf(QApplication::focusWidget()))return readAction("focus-toc",{});
-                if(navigation_->isAncestorOf(QApplication::focusWidget()))return readAction("focus-settings",{});
+                if(!editingPreview_ && navigation_->isAncestorOf(QApplication::focusWidget()))return readAction("focus-settings",{});
                 focusReading();return true;
             }
+            if(Action=="focus-settings" && editingPreview_)return false;
             if(Action=="focus-settings"){navigationScroll_->hide();settingsScroll_->show();updatePanelActions();settings_->findChild<QTabWidget*>()->setFocus(Qt::ShortcutFocusReason);return true;}
             if(Action=="annotation-select"){settingsScroll_->hide();navigationScroll_->show();navigation_->Execute("focus-notes");}
             if(Action=="focus-search" || Action=="focus-toc" || Action=="focus-bookmarks" || Action=="focus-notes"){settingsScroll_->hide();navigationScroll_->show();}
@@ -649,6 +652,7 @@ namespace
         hc::epub::poc::ReadingNavigation* navigation_=nullptr;
         QString settingsPath_,engine_,backgroundAsset_,astError_,resourceFailure_;
         quint64 profileSerial_=0;
+        bool editingPreview_=false;
         qint64 settingsStamp_=0;
         bool shellReady_=false,started_=false,composing_=false,interactive_=true;
         int toolbarAvailabilityChanges_=0;
@@ -708,11 +712,12 @@ namespace
 #endif
             if(Kind == "configure") {
                 const auto Path = Request["settingsPath"].toString();
-                if(configured_ || preparing_ || reader_ || Request.size()<6 || Request.size()>8 || Request.size()!=6+Request.contains("initiallyInteractive")+Request.contains("sourceLines")
+                if(configured_ || preparing_ || reader_ || Request.size()<6 || Request.size()>9 || Request.size()!=6+Request.contains("initiallyInteractive")+Request.contains("sourceLines")+Request.contains("globalSettingsPath")
                     || (Request.contains("initiallyInteractive") && !Request["initiallyInteractive"].isBool()) || (Request.contains("sourceLines") && !Request["sourceLines"].isBool()) || !QFileInfo(Path).isAbsolute()
+                    || (Request.contains("globalSettingsPath") && (!QFileInfo(Request["globalSettingsPath"].toString()).isAbsolute() || !Request["globalSettingsPath"].toString().endsWith("/epub-reading.json")))
                     || !Path.endsWith("/epub-reading.json") || !hc::document::epubui::ApplyAppearance(Request["appearance"].toObject()))
                     return {{"error", "epub-configuration-invalid"}};
-                settingsPath_ = Path; appearance_ = Request["appearance"].toObject(); initiallyInteractive_=Request["initiallyInteractive"].toBool(true); sourceLines_=Request["sourceLines"].toBool(false); configured_ = true;
+                globalSettingsPath_=Request["globalSettingsPath"].toString();settingsPath_ = Path; appearance_ = Request["appearance"].toObject(); initiallyInteractive_=Request["initiallyInteractive"].toBool(true); sourceLines_=Request["sourceLines"].toBool(false); configured_ = true;
                 return {{"accepted", true}, {"epubInputVersion",2}};
             }
             if(Kind.startsWith("input-")) {
@@ -776,14 +781,14 @@ namespace
             if(!initiallyInteractive_ && (!IsWindowVisible(Parent)
                 || GetAncestor(GetForegroundWindow(),GA_ROOT)!=GetAncestor(Parent,GA_ROOT)))return;
             auto Result=std::move(*prepared_);prepared_.reset();
-            reader_ = new Window(Result.assets,Result.publication,preparedEngine_,"light",{},settingsPath_,preparedGeneration_,initiallyInteractive_,sourceLines_);
+            reader_ = new Window(Result.assets,Result.publication,preparedEngine_,"light",{},settingsPath_,preparedGeneration_,initiallyInteractive_,sourceLines_,globalSettingsPath_);
             if(!appearance_.isEmpty())reader_->Appearance(appearance_);
             reader_->setWindowFlags(Qt::Window | Qt::FramelessWindowHint | (initiallyInteractive_?Qt::WindowFlags{}:Qt::WindowFlags(Qt::WindowDoesNotAcceptFocus)));
             reader_->winId();reader_->windowHandle()->setParent(nativeParent_);reader_->setAttribute(Qt::WA_ShowWithoutActivating);
             nativeReader_=static_cast<std::uintptr_t>(reader_->winId());reader_->show();preparing_=false;
         }
         std::optional<Prepared> prepared_;QString preparedEngine_;qint64 preparedGeneration_=1;
-        QString bundle_, error_, settingsPath_;
+        QString bundle_, error_, settingsPath_, globalSettingsPath_;
         QJsonObject appearance_;
         bool configured_ = false;
         std::shared_ptr<std::atomic_bool> cancellation_=std::make_shared<std::atomic_bool>(false);

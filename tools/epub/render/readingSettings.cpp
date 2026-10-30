@@ -144,7 +144,10 @@ namespace hc::epub::poc
         font_->setToolTip(tr("책 글꼴 목록은 화면 조건에 따라 달라집니다. 사용할 수 없거나 글자가 없으면 대체 글꼴로 표시됩니다."));
     }
     QJsonObject ReadingSettings::Profile() const
-    { return scope_->currentIndex() == 1 ? ReadingStore::Resolve(draft_, {}) : ReadingStore::Resolve(snapshot_.global, draft_); }
+    {
+        if(editingPreview_) {auto Values=ReadingStore::Resolve(snapshot_.global,{});Values["privateReading"]=true;Values["resume"]=false;return Values;}
+        return scope_->currentIndex() == 1 ? ReadingStore::Resolve(draft_, {}) : ReadingStore::Resolve(snapshot_.global, draft_);
+    }
     void ReadingSettings::addField(QFormLayout* Form, const QString& Key, const QString& Label, QWidget* Editor)
     {
         Editor->setObjectName(Key); Editor->setAccessibleName(Label);
@@ -165,7 +168,9 @@ namespace hc::epub::poc
     void ReadingSettings::edit(const QString& Key, const QJsonValue& Value)
     {
         if(updating_ || IsBusy()) return;
-        draft_[Key] = Value; refresh(); emit ProfileChanged(Profile());
+        draft_[Key] = Value;
+        if(QStringList{"font","size","weight","line","letter","word","before","after","indent","align"}.contains(Key))draft_["override"]=true;
+        refresh(); emit ProfileChanged(Profile());
     }
     void ReadingSettings::refresh()
     {
@@ -308,6 +313,9 @@ void ReadingSettings::importBackground() {
 }
 
 namespace hc::epub::poc {
+void ReadingSettings::SetEditingPreview() {
+    editingPreview_=true;refresh();emit ProfileChanged(Profile());
+}
 void ReadingSettings::SetGlobalOnly() {
     globalOnly_=true;scope_->setCurrentIndex(1);scope_->hide();
     if(auto* ScopeForm=qobject_cast<QFormLayout*>(layout()->itemAt(0)->layout()))if(auto* Label=ScopeForm->labelForField(scope_))Label->hide();
@@ -341,7 +349,7 @@ bool ReadingSettings::CommitGlobal(QString& Error) {
 }
 void ReadingSettings::ResetDraft(){draft_={};refresh();emit ProfileChanged(Profile());}
 bool ReadingSettings::Execute(const QString& Action,const QJsonObject& Patch,bool Global) {
-    if(IsBusy() || loadFailed_)return false;
+    if(IsBusy() || loadFailed_ || (editingPreview_ && Action!="reload"))return false;
     if(Action=="preview") {
         if(scope_->currentIndex()!=(Global?1:0)) {if(IsDirty())return false;scope_->setCurrentIndex(Global?1:0);}
         auto Next=draft_;for(auto I=Patch.begin();I!=Patch.end();++I) {if(I.value().isNull())Next.remove(I.key());else Next[I.key()]=I.value();}

@@ -5,7 +5,6 @@
 #include "epubProcessView.hpp"
 #include "core/AppSettings.h"
 #include "text/QTextView.h"
-#include "tools/epub/render/readingSettings.hpp"
 #include <QAction>
 #include <QDir>
 #include <QHBoxLayout>
@@ -30,7 +29,7 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
     for(const auto& Name:{"epubAutoPreview","epubPreviewSync","epubPreviewScrollSync","epubPreviewRefresh"}){auto* Button=new QToolButton(Header);Button->setDefaultAction(action(Name));Button->setAutoRaise(true);Button->setToolButtonStyle(Qt::ToolButtonTextOnly);Controls->addWidget(Button);}
     previewChapterLabel_=new QLabel(Header);previewChapterLabel_->setObjectName("epubPreviewChapter");previewChapterLabel_->setForegroundRole(QPalette::PlaceholderText);previewChapterLabel_->setMinimumWidth(1);Controls->addWidget(previewChapterLabel_);Layout->addWidget(Header);
     auto* Frame=new QWidget(Panel);Frame->setMinimumSize(200,140);Frame->setObjectName("epubPreviewFrame");previewStack_=new QStackedLayout(Frame);previewStack_->setContentsMargins(0,0,0,0);previewStack_->setStackingMode(QStackedLayout::StackAll);Layout->addWidget(Frame,1);
-    reportPreview(tr("저장 전 미리보기 · 원문 스타일 · 사용자 읽기 설정과 기록은 유지됩니다."));
+    reportPreview(tr("저장 전 미리보기 · 공통 읽기 설정 · 사용자 읽기 설정과 기록은 유지됩니다."));
     {AppSettings Settings;setPanelVisible("preview",Settings.value("epubEditor/layout/preview",true).toBool());}
     previewTimer_.setSingleShot(true);previewTimer_.setInterval(650);
     // Foreign Qt windows can receive activation while their HWND is reparented,
@@ -68,13 +67,12 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
         if(!Result){previewError_=Result.error_+": "+Result.location_;reportPreview(tr("소스 검사 실패 · 마지막 정상 미리보기를 유지합니다. %1").arg(previewError_));}
         else {cachedExport_=Result;cachedExportToken_=previewWorkToken_;previewError_.clear();showPreview(Result.bytes_);}emit StateChanged();
     });
-    // Preview settings and navigation state live in a private directory. No
+    // Preview navigation state lives in a private directory. Reading appearance
+    // follows the global settings through the helper configuration. No
     // candidate publication can add entries to the user's reading history.
     previewDirectory_=std::make_unique<QTemporaryDir>(QDir::tempPath()+"/HyperCommander-epub-preview-XXXXXX");previewDirectory_->setAutoRemove(false);
     if(!previewDirectory_->isValid()){previewError_="epub-preview-directory";reportPreview(tr("미리보기 임시 폴더를 만들지 못했습니다. 소스 편집은 계속할 수 있습니다."));return;}
-    previewSettings_=previewDirectory_->path();auto Profile=hc::epub::poc::ReadingStore::Defaults();Profile["override"]=false;Profile["theme"]="light";Profile["privateReading"]=true;Profile["resume"]=false;
-    const auto Saved=hc::epub::poc::ReadingStore::Save(QDir(previewSettings_).filePath("epub-reading.json"),QString(64,'0'),true,{},Profile);
-    if(!Saved.error.isEmpty()){previewError_=Saved.error;previewSettings_.clear();reportPreview(tr("미리보기 설정을 준비하지 못했습니다: %1").arg(previewError_));return;}
+    previewSettings_=previewDirectory_->path();
     if(ready_)requestPreview();
 }
 bool EpubSourceEditor::previewOwnerActive()const {
@@ -165,7 +163,7 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
     if(Old)retirePreview(Old);
     syncPreviewScroll();
     const auto LocationError=State["readerAction"].toObject()["error"].toString();
-    reportPreview(LocationError.isEmpty()?tr("저장 전 미리보기 · 원문 스타일 · 표시된 내용은 아직 파일에 저장되지 않았습니다."):tr("미리보기를 갱신했습니다. 이전 읽기 위치를 복원하지 못해 장 위치를 확인해 주세요."));emit PreviewCommitted();emit StateChanged();
+    reportPreview(LocationError.isEmpty()?tr("저장 전 미리보기 · 공통 읽기 설정 · 표시된 내용은 아직 파일에 저장되지 않았습니다."):tr("미리보기를 갱신했습니다. 이전 읽기 위치를 복원하지 못해 장 위치를 확인해 주세요."));emit PreviewCommitted();emit StateChanged();
 }
 void EpubSourceEditor::syncPreviewSource(bool Force) {
     if(!previewView_ || !ready_ || previewClosing_)return;const auto State=previewView_->ViewState();

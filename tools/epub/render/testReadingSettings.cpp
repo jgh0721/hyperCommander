@@ -34,6 +34,25 @@ private:
     const QString book = QString(64, 'a'), otherBook = QString(64, 'b');
     QByteArray bytes(const QString& Path) { QFile F(Path); if(!F.open(QIODevice::ReadOnly)) return {}; return F.readAll(); }
 private slots:
+    void editingPreviewUsesGlobalSettings() {
+        QTemporaryDir Temp;const auto Path=Temp.filePath("epub-reading.json");
+        QVERIFY(ReadingStore::Save(Path,book,true,{},{{"size",24},{"theme","dark"},{"override",true}}).error.isEmpty());
+        QVERIFY(ReadingStore::Save(Path,book,false,{},{{"size",16}}).error.isEmpty());
+        ReadingSettings Panel(Path,book,"light");Panel.SetEditingPreview();
+        QTRY_VERIFY(!Panel.IsBusy());QCOMPARE(Panel.Profile()["size"].toInt(),24);
+        QVERIFY(Panel.Profile()["privateReading"].toBool());QVERIFY(!Panel.Profile()["resume"].toBool());
+        const auto Before=bytes(Path);QVERIFY(!Panel.Execute("preview",{{"size",18}},false));QCOMPARE(bytes(Path),Before);
+        auto Saved=ReadingStore::Load(Path,book);auto Next=Saved.global;Next["size"]=28;
+        QVERIFY(ReadingStore::Save(Path,book,true,Saved.global,Next).error.isEmpty());
+        QVERIFY(Panel.Execute("reload",{},false));QTRY_VERIFY(!Panel.IsBusy());QCOMPARE(Panel.Profile()["size"].toInt(),28);
+        QVERIFY(Panel.Profile()["privateReading"].toBool());QVERIFY(!Panel.IsDirty());
+    }
+    void typographyEnablesUserStyle() {
+        ReadingSettings Panel({},book,"light");
+        QVERIFY(Panel.Execute("preview",{{"override",false}},true));
+        Panel.findChild<QDoubleSpinBox*>("size")->setValue(27);
+        QVERIFY(Panel.Profile()["override"].toBool());
+    }
     void annotationBudgetsAndDuplicateRanges() {
         using hc::epub::poc::ReadingNavigation;QTemporaryDir Temp;QJsonObject Request;ReadingNavigation Reader(Temp.filePath("reading.json"),book,[&](const QJsonObject& Value){Request=Value;});Reader.ConfigureProfile({{"privateReading",true}});Reader.Poll({{"status","ready"}});
         for(int I=0;I<32;++I){const auto Before=Reader.Snapshot()["annotations"].toArray().size();if(!Reader.Execute("annotation-add",QJsonObject{{"note",QString(2048,QChar(0xd55c))},{"color","#ffde59"}}))break;const QJsonValue Serial=Request["serial"];Reader.Poll({{"status","ready"},{"annotationAction",QJsonObject{{"serial",Serial},{"selection",QJsonObject{{"locator",QString("epubcfi(/6/2!/4/2,/1:%1,/1:%2)").arg(I).arg(I+1)},{"quote",QString(512,QChar(0xd55c))},{"prefix",QString(128,QChar(0xd55c))},{"suffix",QString(128,QChar(0xd55c))}}}}}});if(Reader.Snapshot()["annotations"].toArray().size()==Before)break;}

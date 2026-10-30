@@ -54,6 +54,7 @@ namespace hc::epub::poc
         bool IsBusy() const { return busy_ || profilesBusy_; }
         bool IsDirty() const { return draft_ != base_; }
         void SetGlobalOnly();
+        void SetEditingPreview();
         void SetFixedLayout(bool Fixed);void SetVerticalWriting(bool Vertical);
         bool CommitGlobal(QString& Error);
         void ResetDraft();
@@ -95,6 +96,7 @@ namespace hc::epub::poc
         QWidget* editors_ = nullptr;
         QFutureWatcher<ReadingSnapshot> worker_;
         bool busy_ = false, updating_ = false, loadFailed_ = false;
+        bool editingPreview_=false;
         bool globalOnly_=false,fixedLayout_=false,verticalWriting_=false;
         QLabel* fixedNote_=nullptr;
         QPushButton* clearPositions_=nullptr;
