@@ -55,11 +55,11 @@ namespace hc::ui
             Text.summary_ = QObject::tr("폴더 목록을 읽지 못했습니다.");
             Text.recovery_ = QObject::tr("드라이브 연결 상태와 폴더 경로를 확인한 뒤 다시 시도하세요.");
         }
-        Text.details_ = QObject::tr("경로: %1\n오류 코드: %2").arg(NativePath, Code);
+        Text.details_ = QObject::tr("경로: %1").arg(NativePath);
         if (!Error.nativePath_.empty() && QString::fromStdString(Error.nativePath_) != Path)
             Text.details_ += QObject::tr("\n실패한 항목: %1").arg(QDir::toNativeSeparators(QString::fromStdString(Error.nativePath_)));
         const auto Presented = DescribeError(Error);
-        Text.details_ += '\n' + Presented.Summary();
+        Text.details_ += '\n' + Presented.Text();
         return Text;
     }
 }
