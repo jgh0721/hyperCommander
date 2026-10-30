@@ -316,7 +316,10 @@ void UpdateController::offer() {
                 hc::ui::MessageDialog(QMessageBox::Information, tr("업데이트"), tr("파일 작업·명령 실행을 마치고 다른 HyperCommander·편집기·플러그인 창을 닫으십시오.\n업데이트는 아직 적용되지 않았습니다. 정보창에서 ‘업데이트 확인’을 다시 선택하십시오."), QMessageBox::Ok, window_).exec(); return;
             }
         } catch (const std::exception& Error) { fail(Error.what()); return; }
-        restartRequested_ = true; if (!window_->close()) restartRequested_ = false;
+        restartRequested_ = true;
+        // The viewer host retries close after its background work drains. That
+        // retry must still reach LaunchPending instead of becoming a normal exit.
+        if (!window_->close() && !window_->property("hc.viewer.closePending").toBool()) restartRequested_ = false;
     } else if (Skip && Box.clickedButton() == Skip) { if (!SaveOption("skippedVersion", Text(release_.version_))) fail(tr("건너뛰기 설정을 저장하지 못했습니다.")); }
 }
 void UpdateController::download() {

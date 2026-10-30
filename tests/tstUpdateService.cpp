@@ -93,6 +93,50 @@ private:
 namespace hc::update {
 class UpdateControllerTest {
 public:
+    static int CloseRetry() {
+        // The viewer host ignores close while draining, then retries it.
+        for (const bool Deferred : {false, true}) {
+            RestartWindow Window;
+            UpdateController Controller(&Window, [] { return true; });
+            Controller.root_ = QDir::tempPath() + "/hc-unused-close-retry-root";
+            Controller.ready_ = true;
+            Controller.release_.version_ = "2026.10.29.1";
+            int Closes = 0; bool RetryRequested = false;
+            Window.launch_ = [&] {
+                ++Closes;
+                if (Closes == 1) {
+                    if (Deferred) {
+                        Window.setProperty("hc.viewer.closePending", true);
+                        QTimer::singleShot(0, &Window, [&] {
+                            Window.setProperty("hc.viewer.closePending", false);
+                            Window.close();
+                        });
+                    }
+                    return false;
+                }
+                RetryRequested = Controller.RestartRequested();
+                return true;
+            };
+            Window.show();
+            QTimer Click;
+            QObject::connect(&Click, &QTimer::timeout, &Window, [&] {
+                for (auto* Widget : QApplication::topLevelWidgets())
+                    if (auto* Message = qobject_cast<QMessageBox*>(Widget); Message && Message->isVisible())
+                        for (auto* Button : Message->buttons())
+                            if (Message->buttonRole(Button) == QMessageBox::AcceptRole) { Button->click(); break; }
+            });
+            Click.start(5); Controller.offer(); Click.stop();
+            if (Deferred) {
+                const auto Until = GetTickCount64() + 2000;
+                while (Closes < 2 && GetTickCount64() < Until) QCoreApplication::processEvents();
+                if (Closes != 2 || !RetryRequested || Window.isVisible())
+                    throw std::runtime_error("deferred-close-lost-update-restart");
+            } else if (Closes != 1 || Controller.RestartRequested() || !Window.isVisible())
+                throw std::runtime_error("rejected-close-kept-update-restart");
+        }
+        std::cout << "Close retry: 2 passed (deferred restart, rejected close)\n";
+        return 0;
+    }
     static int CaptureUi(const QString& Directory) {
         if (!QDir().mkpath(Directory)) throw std::runtime_error("capture-directory");
         QWidget Window; Window.resize(800, 480); Window.setWindowTitle("HyperCommander");
@@ -294,6 +338,7 @@ public:
 int main(int Count, char** Args) {
     QStandardPaths::setTestModeEnabled(true); QApplication App(Count, Args); const auto Arguments = App.arguments();
     try {
+        if (Arguments.size() == 2 && Arguments[1] == "--close-retry") return hc::update::UpdateControllerTest::CloseRetry();
         if (Arguments.size() == 5 && Arguments[1] == "--capture-ui" && Arguments[3] == "--config-dir")
             return hc::update::UpdateControllerTest::CaptureUi(Arguments[2]);
         if (Arguments.size() != 6 || Arguments[4] != "--config-dir") throw std::runtime_error("service-test-arguments");

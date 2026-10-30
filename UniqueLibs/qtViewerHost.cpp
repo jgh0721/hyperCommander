@@ -96,7 +96,11 @@ QtViewerHost::QtViewerHost(QWidget* Main, hc::plugins::PluginViewerService::Mate
     connect(closeTimer_, &QTimer::timeout, this, [this] {
         service_->Collect();
         if (!IsIdle()) return;
-        closeTimer_->stop(); if (main_) main_->close();
+        closeTimer_->stop();
+        if (main_) {
+            main_->setProperty("hc.viewer.closePending", false);
+            main_->close();
+        }
     });
 }
 QtViewerHost::~QtViewerHost()
@@ -374,7 +378,12 @@ bool QtViewerHost::eventFilter(QObject* Object, QEvent* Event)
     {
         CloseAll();
         if (!IsIdle())
-        { static_cast<QCloseEvent*>(Event)->ignore(); closeTimer_->start(); return true; }
+        {
+            // The updater must retain its restart request across this deferred
+            // close, while still cancelling it for a genuine close rejection.
+            main_->setProperty("hc.viewer.closePending", true);
+            static_cast<QCloseEvent*>(Event)->ignore(); closeTimer_->start(); return true;
+        }
     }
     return QObject::eventFilter(Object, Event);
 }

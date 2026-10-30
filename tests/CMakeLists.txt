@@ -12,6 +12,8 @@ qt_add_executable(hc_update_service_tests tstUpdateService.cpp)
 target_sources(hc_update_service_tests PRIVATE "${PROJECT_SOURCE_DIR}/cmake/updateLongPaths.manifest")
 target_link_libraries(hc_update_service_tests PRIVATE hc_update_qt Qt6::Network)
 target_compile_options(hc_update_service_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+add_test(NAME hc.update.close_retry COMMAND hc_update_service_tests --close-retry)
+set_tests_properties(hc.update.close_retry PROPERTIES TIMEOUT 15 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 hc_enable_qt_deployment(hc_update_service_tests TEST PLUGINS)
 
 find_package(Qt6 6.12 REQUIRED COMPONENTS Test)

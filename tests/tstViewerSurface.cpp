@@ -81,7 +81,9 @@ private slots:
         auto Source = std::make_shared<GatedSource>(); Surface->Open(Source); QTRY_VERIFY_WITH_TIMEOUT(Source->entered_.load(), 3000);
         QTimer::singleShot(30, this, [Source] { Source->release_ = true; });
         QElapsedTimer Elapsed; Elapsed.start(); Main.close(); QVERIFY(Elapsed.elapsed() < 100); QVERIFY(Main.isVisible());
+        QVERIFY(Main.property("hc.viewer.closePending").toBool());
         QTRY_VERIFY_WITH_TIMEOUT(!Main.isVisible() && Host->IsIdle(), 3000); QVERIFY(!Surface->IsReady());
+        QVERIFY(!Main.property("hc.viewer.closePending").toBool());
     }
     void fullAndEmbeddedHost()
     {
