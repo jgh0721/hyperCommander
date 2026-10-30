@@ -707,6 +707,8 @@ hc_enable_qt_deployment(hc_command_ui_tests TEST PLUGINS)
 add_dependencies(hc_check hc_command_ui_tests)
 
 qt_add_executable(hc_dialog_foundation_tests
+    ../UniqueLibs/nativeFileElevation.cpp ../UniqueLibs/nativeWritableStorage.cpp
+    ../UniqueLibs/storageProviders.cpp ../commonLibs/operations/fileOperation.cpp
     ../HyperCommander/UIs/renameHistoryDialog.cpp
     tstDialogFoundation.cpp
     ../HyperCommander/UIs/fileToolsDialogs.cpp

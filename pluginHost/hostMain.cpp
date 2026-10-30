@@ -1,4 +1,5 @@
 ﻿#include "pipeChannel.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "manifestFile.hpp"
 #include "wcxHostService.hpp"
 #include "HyperCommanderBuiltInPlugin/SevenZip/sevenZipBackend.hpp"
@@ -100,12 +101,12 @@ namespace
             auto Directory = QFileInfo(PackageFile).absolutePath();
             for (;;)
             {
-                WinHandle Lock(CreateFileW(reinterpret_cast<LPCWSTR>(Directory.utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                WinHandle Lock(CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Directory).utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
                 if (!Lock.Valid()) return HostError("host-package-lock", GetLastError()); locks_.push_back(std::move(Lock));
                 const auto Parent = QFileInfo(Directory).absolutePath(); if (Parent == Directory) break; Directory = Parent;
             }
-            WinHandle File(CreateFileW(reinterpret_cast<LPCWSTR>(PackageFile.utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+            WinHandle File(CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(PackageFile).utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
             if (!File.Valid()) return HostError("host-binary-lock", GetLastError()); locks_.push_back(std::move(File));
             }
             Inspected = InspectManifestFile(Path, Deadline(5000)); if (!Inspected.HasValue()) return Inspected.Failure();
@@ -291,7 +292,7 @@ int main(int Argc, char** Argv)
     } else Parent.Reset(OpenProcess(SYNCHRONIZE, FALSE, ParentId));
     if (!Parent.Valid()) return 3;
     const auto PipeName = App.arguments()[1];
-    WinHandle Pipe(CreateFileW(reinterpret_cast<LPCWSTR>(PipeName.utf16()), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr));
+    WinHandle Pipe(CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(PipeName).utf16()), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr));
     if (!Pipe.Valid()) return 4;
     ULONG Server = 0; if (!GetNamedPipeServerProcessId(Pipe.Get(), &Server) || Server != ParentId) return 5;
     LoadedPlugin Plugin; std::unique_ptr<HostSession> Session; bool Ready = false, LastWasSession = false; std::uint64_t LastSequence = 0;

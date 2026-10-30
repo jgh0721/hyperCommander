@@ -55,7 +55,7 @@ inline DWORD Validate(const QJsonObject& R) {
     return ERROR_SUCCESS;
 }
 // Called only by the single-request helper (after token validation) and isolated
-// fixture tests. The immutable command line replaces a writable request file/IPC.
+// fixture tests. The helper authenticates the parent before receiving requests.
 inline DWORD Execute(const QJsonObject& R) {
     if (const auto Code = Validate(R)) return Code;
     const auto Folder = R["folder"].toString(), P = filetools::NativePath(Folder);
@@ -96,19 +96,7 @@ inline DWORD Execute(const QJsonObject& R) {
     return filetools::RenameHandle(File.value_, Destination);
 }
 struct LaunchResult { DWORD code_ = ERROR_SUCCESS; bool started_ = false; };
-inline LaunchResult Launch(QJsonObject Request) {
-    Request["utc"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
-    if (const auto Code = Validate(Request)) return {Code, false};
-    const auto Payload = QJsonDocument(Request).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-    if (Payload.size() > 16000) return {ERROR_BUFFER_OVERFLOW, false};
-    const auto Exe = QDir::toNativeSeparators(HelperPath()), Arguments = "--request " + QString::fromLatin1(Payload);
-    SHELLEXECUTEINFOW Info{}; Info.cbSize = sizeof(Info); Info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-    Info.lpVerb = L"runas"; Info.lpFile = reinterpret_cast<LPCWSTR>(Exe.utf16()); Info.lpParameters = reinterpret_cast<LPCWSTR>(Arguments.utf16()); Info.nShow = SW_HIDE;
-    if (!ShellExecuteExW(&Info)) return {GetLastError(), false};
-    if (!Info.hProcess) return {ERROR_INVALID_HANDLE, true};
-    filetools::Handle Process(Info.hProcess); WaitForSingleObject(Process.value_, INFINITE); DWORD Code = ERROR_GEN_FAILURE;
-    GetExitCodeProcess(Process.value_, &Code); return {Code, true};
-}
+LaunchResult Launch(QJsonObject Request);
 inline QString ResultText(LaunchResult R) {
     if (!R.code_) return QObject::tr("요청한 작업을 완료했습니다. 도우미는 종료되었습니다.");
     if (R.code_ == ERROR_CANCELLED && !R.started_) return QObject::tr("UAC 요청이 취소되었습니다. 도우미가 시작되지 않아 작업을 실행하지 않았습니다.");

@@ -1,4 +1,5 @@
 ﻿#include "sevenZipJob.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "builtinSevenZip.hpp"
 
 #include "UniqueLibs/nativeWritableStorage.hpp"
@@ -70,7 +71,7 @@ public:
                     }
                     if (Relative.isEmpty()) return failed({ErrorCategory::Internal, "sevenzip-directory-source-mapping"});
                     const auto Path = QDir::toNativeSeparators(QDir(temp_->filePath("input")).filePath(Relative));
-                    const auto Handle = CreateFileW(reinterpret_cast<const wchar_t*>(Path.utf16()), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                    const auto Handle = CreateFileW(reinterpret_cast<const wchar_t*>(hc::storage::native::FilePath(Path).utf16()), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
                     if (Handle == INVALID_HANDLE_VALUE) return failed({ErrorCategory::Unavailable, "sevenzip-directory-metadata-open"});
                     const auto Ticks = uint64_t(Entry.modifiedUtcMs_ + 11644473600000LL) * 10000; FILETIME Time{DWORD(Ticks), DWORD(Ticks >> 32)};
                     const bool Saved = SetFileTime(Handle, nullptr, nullptr, &Time); CloseHandle(Handle);

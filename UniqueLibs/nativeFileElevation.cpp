@@ -66,6 +66,24 @@ std::optional<QJsonObject> Receive(HANDLE Pipe,const QString& Nonce,DWORD Timeou
     if(E.error!=QJsonParseError::NoError||!Doc.isObject()||Doc.object()["nonce"].toString()!=Nonce)return {};
     return Doc.object();
 }
+// The command line carries only the authenticated channel identity. Full paths
+// travel in the same bounded, nonce-checked pipe as subsequent control messages.
+QJsonObject RequestBootstrap(const QJsonObject& Request) {
+    QJsonObject Bootstrap{{"transport", "pipe-request-v1"}};
+    for (const auto Key : {"version", "id", "utc", "pid", "created", "callerSid", "pipe"})
+        if (Request.contains(Key)) Bootstrap[Key] = Request[Key];
+    return Bootstrap;
+}
+std::optional<QJsonObject> ReceiveRequest(HANDLE Pipe, const QJsonObject& Bootstrap) {
+    if (!Bootstrap.contains("transport")) return Bootstrap; // Existing small requests remain compatible.
+    if (Bootstrap["transport"] != "pipe-request-v1") return {};
+    const auto Frame = Receive(Pipe, Bootstrap["id"].toString(), 30000);
+    if (!Frame || (*Frame)["kind"] != "request" || !(*Frame)["request"].isObject()) return {};
+    const auto Request = (*Frame)["request"].toObject();
+    for (const auto Key : {"version", "id", "utc", "pid", "created", "callerSid", "pipe"})
+        if (Request[Key] != Bootstrap[Key]) return {};
+    return Request;
+}
 QJsonObject Recovery(const WriteRecoveryRecord& R) {
     return {{"transaction",Text(R.transaction_)},{"destination",Path(Text(R.destination_.root_))},{"stage",Text(R.stage_.root_)},
         {"backup",Text(R.backup_.root_)},{"stageId",Text(R.stageIdentity_)},{"originalId",Text(R.originalIdentity_)},{"phase",int(R.phase_)}};
@@ -98,7 +116,7 @@ void Complete(const std::shared_ptr<SessionState>& S,Error E) {
     std::lock_guard Lock(S->mutex_);S->status_.finished_=true;S->status_.error_=std::move(E);S->done_=true;S->changed_.notify_all();
 }
 void Run(const std::shared_ptr<SessionState>& S) {
-    const auto Payload=QJsonDocument(S->request_).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding|QByteArray::OmitTrailingEquals);
+    const auto Payload=QJsonDocument(RequestBootstrap(S->request_)).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding|QByteArray::OmitTrailingEquals);
     if(Payload.size()>24000){Complete(S,Failure(ERROR_BUFFER_OVERFLOW,"elevation-payload"));return;}
     const auto Arguments="--elevated-job "+QString::fromLatin1(Payload);
     SHELLEXECUTEINFOW Info{};Info.cbSize=sizeof(Info);Info.fMask=SEE_MASK_NOCLOSEPROCESS|SEE_MASK_FLAG_NO_UI;
@@ -119,6 +137,7 @@ void Run(const std::shared_ptr<SessionState>& S) {
         Complete(S,Failure(S->cancelled_?ERROR_CANCELLED:ExitCode!=STILL_ACTIVE?ExitCode:ERROR_TIMEOUT,"elevation-connect"));return;}
     ULONG Peer=0;if(!GetNamedPipeClientProcessId(S->pipe_,&Peer)||Peer!=GetProcessId(Process.value_)){Complete(S,Failure(ERROR_ACCESS_DENIED,"elevation-peer"));return;}
     DWORD Mode=PIPE_READMODE_MESSAGE;SetNamedPipeHandleState(S->pipe_,&Mode,nullptr,nullptr);
+    if(!Send(S->pipe_, {{"kind","request"},{"request",S->request_}}, S->nonce_, 30000)) {Complete(S,Failure(ERROR_BROKEN_PIPE,"elevation-request"));return;}
     std::shared_ptr<IReadStream> Input;bool NeedsData=false,Eof=false,CommitChecked=false;
     std::uint64_t ReadBytes=0;const auto ReadStarted=std::chrono::steady_clock::now();
     bool Unknown=false;const auto End=std::chrono::steady_clock::now()+std::chrono::minutes(15);
@@ -296,20 +315,26 @@ private:FileElevationLauncher launcher_;
 };
 } // namespace
 std::shared_ptr<IFileElevationService> MakeFileElevationService(FileElevationLauncher Launcher){return std::make_shared<Service>(std::move(Launcher));}
-DWORD ExecuteFileElevation(const QJsonObject& R) {
+DWORD ExecuteFileElevation(const QJsonObject& Bootstrap) {
+    auto R = Bootstrap;
     const auto Nonce=R["id"].toString(),PipeName=R["pipe"].toString();const auto Time=QDateTime::fromString(R["utc"].toString(),Qt::ISODateWithMs);
     const auto Age=Time.msecsTo(QDateTime::currentDateTimeUtc());
-    if(R["version"].toInt()!=2||QUuid(Nonce).isNull()||R["jobId"].toString().isEmpty()||!Time.isValid()
-        ||PipeName!="\\\\.\\pipe\\HyperCommander-"+Nonce||!Local(R["destination"].toString()))return ERROR_INVALID_PARAMETER;
+    if(R["version"].toInt()!=2||QUuid(Nonce).isNull()||!Time.isValid()
+        ||PipeName!="\\\\.\\pipe\\HyperCommander-"+Nonce)return ERROR_INVALID_PARAMETER;
     if(Age< -5000||Age>120000)return ERROR_TIMEOUT;
-    const int ActionValue=R["action"].toInt(-1);if(ActionValue<0||ActionValue>int(FileElevationAction::Metadata))return ERROR_NOT_SUPPORTED;
-    const auto Action=FileElevationAction(ActionValue);filetools::Handle Parent(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,DWORD(R["pid"].toInt())));
+    filetools::Handle Parent(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,DWORD(R["pid"].toInt())));
     if(!Parent.value_||ProcessCreated(Parent.value_)!=R["created"].toString())return ERROR_INVALID_OWNER;
-    if((Action==FileElevationAction::SecurityChange||Action==FileElevationAction::SecurityRestore)&&R["callerSid"].toString()!=Sid(Parent.value_))return ERROR_INVALID_OWNER;
     if(!WaitNamedPipeW(reinterpret_cast<LPCWSTR>(PipeName.utf16()),5000)&&GetLastError()!=ERROR_SEM_TIMEOUT)return GetLastError();
     filetools::Handle Pipe(CreateFileW(reinterpret_cast<LPCWSTR>(PipeName.utf16()),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,FILE_FLAG_OVERLAPPED,nullptr));
     if(Pipe.value_==INVALID_HANDLE_VALUE)return GetLastError();ULONG Peer=0;if(!GetNamedPipeServerProcessId(Pipe.value_,&Peer)||Peer!=DWORD(R["pid"].toInt()))return ERROR_ACCESS_DENIED;
     DWORD Mode=PIPE_READMODE_MESSAGE;SetNamedPipeHandleState(Pipe.value_,&Mode,nullptr,nullptr);
+    const auto FullRequest = ReceiveRequest(Pipe.value_, Bootstrap);
+    if (!FullRequest) return ERROR_INVALID_DATA;
+    R = *FullRequest;
+    if (!Local(R["destination"].toString()) || R["jobId"].toString().isEmpty()) return ERROR_INVALID_PARAMETER;
+    const int ActionValue=R["action"].toInt(-1);if(ActionValue<0||ActionValue>int(FileElevationAction::Metadata))return ERROR_NOT_SUPPORTED;
+    const auto Action=FileElevationAction(ActionValue);
+    if((Action==FileElevationAction::SecurityChange||Action==FileElevationAction::SecurityRestore)&&R["callerSid"].toString()!=Sid(Parent.value_))return ERROR_INVALID_OWNER;
     FileElevationStatus Status;std::vector<std::unique_ptr<filetools::Handle>> Pins;DWORD PinError=0;
     for(const auto& Value:R["parents"].toArray()) {
         const auto P=Value.toObject();if(!Local(P["path"].toString())){PinError=ERROR_INVALID_PARAMETER;break;}
@@ -422,6 +447,90 @@ DWORD ExecuteFileElevation(const QJsonObject& R) {
         if(!Send(Pipe.value_,Frame,Nonce))break;if(Status.finished_)return Status.error_?ERROR_GEN_FAILURE:ERROR_SUCCESS;
     }
     Stop.request_stop();if(Task)Task->Finalize(JobState::Cancelled);return ERROR_TIMEOUT;
+}
+LaunchResult LaunchPermissionRequest(QJsonObject Request, FileElevationLauncher Launcher) {
+    Request["utc"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    if (const auto Code = Validate(Request)) return {Code, false};
+    const auto Nonce = Request["id"].toString(), Owner = Sid();
+    if (Owner.isEmpty()) return {ERROR_ACCESS_DENIED, false};
+    const auto PipeName = "\\\\.\\pipe\\HyperCommander-" + Nonce;
+    const QJsonObject Full{{"version", 3}, {"id", Nonce}, {"pipe", PipeName}, {"callerSid", Owner},
+        {"pid", int(GetCurrentProcessId())}, {"created", ProcessCreated(GetCurrentProcess())},
+        {"utc", Request["utc"]}, {"legacy", Request}};
+    const auto Sddl = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;" + Owner + ")";
+    PSECURITY_DESCRIPTOR Descriptor = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(reinterpret_cast<LPCWSTR>(Sddl.utf16()), SDDL_REVISION_1, &Descriptor, nullptr))
+        return {GetLastError(), false};
+    SECURITY_ATTRIBUTES Attributes{sizeof(Attributes), Descriptor, FALSE};
+    filetools::Handle Pipe(CreateNamedPipeW(reinterpret_cast<LPCWSTR>(PipeName.utf16()),
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, frameLimit, frameLimit, 5000, &Attributes));
+    LocalFree(Descriptor);
+    if (Pipe.value_ == INVALID_HANDLE_VALUE) return {GetLastError(), false};
+    const auto Payload = QJsonDocument(RequestBootstrap(Full)).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    const auto Arguments = "--permission-job " + QString::fromLatin1(Payload), Helper = QDir::toNativeSeparators(HelperPath());
+    filetools::Handle Process(INVALID_HANDLE_VALUE);
+    if (Launcher) {
+        auto Started = Launcher(Helper, Arguments); if (!Started.HasValue()) return {ERROR_PROCESS_ABORTED, false};
+        Process.value_ = Started.Value();
+    } else {
+        const auto Com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        SHELLEXECUTEINFOW Info{}; Info.cbSize = sizeof(Info); Info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+        Info.lpVerb = L"runas"; Info.lpFile = reinterpret_cast<LPCWSTR>(Helper.utf16());
+        Info.lpParameters = reinterpret_cast<LPCWSTR>(Arguments.utf16()); Info.nShow = SW_HIDE;
+        const auto Started = ShellExecuteExW(&Info); const auto Code = GetLastError();
+        if (SUCCEEDED(Com)) CoUninitialize();
+        if (!Started) return {Code, false};
+        Process.value_ = Info.hProcess;
+    }
+    if (!Process.value_ || Process.value_ == INVALID_HANDLE_VALUE) return {ERROR_INVALID_HANDLE, true};
+    filetools::Handle Event(CreateEventW(nullptr, TRUE, FALSE, nullptr)); OVERLAPPED Ov{}; Ov.hEvent = Event.value_;
+    bool Connected = ConnectNamedPipe(Pipe.value_, &Ov) != FALSE;
+    const auto Code = Connected ? ERROR_SUCCESS : GetLastError();
+    if (Code == ERROR_PIPE_CONNECTED) Connected = true;
+    const auto Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(125);
+    if (Code == ERROR_IO_PENDING) while (!Connected && std::chrono::steady_clock::now() < Deadline) {
+        if (WaitForSingleObject(Event.value_, 50) == WAIT_OBJECT_0) { DWORD Count = 0; Connected = GetOverlappedResult(Pipe.value_, &Ov, &Count, FALSE) != FALSE; break; }
+        if (WaitForSingleObject(Process.value_, 0) == WAIT_OBJECT_0) break;
+    }
+    if (!Connected) {
+        CancelIoEx(Pipe.value_, &Ov); DWORD Count = 0;
+        if (Code == ERROR_IO_PENDING) GetOverlappedResult(Pipe.value_, &Ov, &Count, TRUE);
+        return {ERROR_TIMEOUT, true};
+    }
+    ULONG Peer = 0;
+    if (!GetNamedPipeClientProcessId(Pipe.value_, &Peer) || Peer != GetProcessId(Process.value_)) return {ERROR_ACCESS_DENIED, true};
+    if (!Send(Pipe.value_, {{"kind", "request"}, {"request", Full}}, Nonce, 30000)) return {ERROR_BROKEN_PIPE, true};
+    const auto Reply = Receive(Pipe.value_, Nonce, 300000);
+    if (!Reply || (*Reply)["kind"] != "permission-result" || !(*Reply)["code"].isDouble()) return {ERROR_BROKEN_PIPE, true};
+    const auto ResultCode = (*Reply)["code"].toDouble();
+    if (ResultCode < 0 || ResultCode > double(MAXDWORD) || ResultCode != double(DWORD(ResultCode))) return {ERROR_INVALID_DATA, true};
+    return {DWORD(ResultCode), true};
+}
+LaunchResult Launch(QJsonObject Request) { return LaunchPermissionRequest(std::move(Request)); }
+DWORD ExecutePermissionElevation(const QJsonObject& Bootstrap) {
+    const auto Nonce = Bootstrap["id"].toString(), PipeName = Bootstrap["pipe"].toString();
+    const auto Time = QDateTime::fromString(Bootstrap["utc"].toString(), Qt::ISODateWithMs);
+    const auto Age = Time.msecsTo(QDateTime::currentDateTimeUtc());
+    if (Bootstrap["version"].toInt() != 3 || QUuid(Nonce).isNull() || !Time.isValid()
+        || Bootstrap["transport"] != "pipe-request-v1" || PipeName != "\\\\.\\pipe\\HyperCommander-" + Nonce) return ERROR_INVALID_PARAMETER;
+    if (Age < -5000 || Age > 120000) return ERROR_TIMEOUT;
+    filetools::Handle Parent(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, DWORD(Bootstrap["pid"].toInt())));
+    if (!Parent.value_ || ProcessCreated(Parent.value_) != Bootstrap["created"].toString()
+        || Sid(Parent.value_) != Bootstrap["callerSid"].toString()) return ERROR_INVALID_OWNER;
+    if (!WaitNamedPipeW(reinterpret_cast<LPCWSTR>(PipeName.utf16()), 5000) && GetLastError() != ERROR_SEM_TIMEOUT) return GetLastError();
+    filetools::Handle Pipe(CreateFileW(reinterpret_cast<LPCWSTR>(PipeName.utf16()), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr));
+    if (Pipe.value_ == INVALID_HANDLE_VALUE) return GetLastError();
+    ULONG Peer = 0;
+    if (!GetNamedPipeServerProcessId(Pipe.value_, &Peer) || Peer != DWORD(Bootstrap["pid"].toInt())) return ERROR_ACCESS_DENIED;
+    DWORD Mode = PIPE_READMODE_MESSAGE; SetNamedPipeHandleState(Pipe.value_, &Mode, nullptr, nullptr);
+    const auto Full = ReceiveRequest(Pipe.value_, Bootstrap);
+    if (!Full || !(*Full)["legacy"].isObject()) return ERROR_INVALID_DATA;
+    const auto Request = (*Full)["legacy"].toObject();
+    if (Request["id"] != Bootstrap["id"] || Request["utc"] != Bootstrap["utc"]) return ERROR_INVALID_DATA;
+    const auto Code = Execute(Request);
+    Send(Pipe.value_, {{"kind", "permission-result"}, {"code", double(Code)}}, Nonce);
+    return Code;
 }
 namespace {
 QJsonObject ListingEntry(const EntrySnapshot& E)
@@ -545,7 +654,7 @@ Result<std::shared_ptr<DirectoryElevationSession>> OpenElevatedDirectorySession(
     if (Cursor->pipe_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), "directory-pipe");
     const QJsonObject Request{{"version", 1}, {"id", Cursor->nonce_}, {"pipe", PipeName}, {"path", Target}, {"callerSid", Owner},
         {"pid", int(GetCurrentProcessId())}, {"created", ProcessCreated(GetCurrentProcess())}, {"utc", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
-    const auto Payload = QJsonDocument(Request).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    const auto Payload = QJsonDocument(RequestBootstrap(Request)).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
     if (Payload.size() > 24000) return Failure(ERROR_BUFFER_OVERFLOW, "directory-payload");
     const auto Arguments = "--elevated-list " + QString::fromLatin1(Payload);
     const auto Helper = QDir::toNativeSeparators(HelperPath());
@@ -578,6 +687,7 @@ Result<std::shared_ptr<DirectoryElevationSession>> OpenElevatedDirectorySession(
     }
     ULONG Peer = 0;
     if (!GetNamedPipeClientProcessId(Cursor->pipe_, &Peer) || Peer != GetProcessId(Cursor->process_)) return Failure(ERROR_ACCESS_DENIED, "directory-peer");
+    if (!Send(Cursor->pipe_, {{"kind", "request"}, {"request", Request}}, Cursor->nonce_, 30000)) return Failure(ERROR_BROKEN_PIPE, "directory-request");
     return std::shared_ptr<DirectoryElevationSession>(std::move(Cursor));
 }
 
@@ -588,12 +698,13 @@ Result<std::unique_ptr<IEntryCursor>> EnumerateElevatedDirectory(const QString& 
     return Session.Value()->Enumerate(Target, Context, std::move(Reader));
 }
 
-DWORD ExecuteDirectoryElevation(const QJsonObject& R)
+DWORD ExecuteDirectoryElevation(const QJsonObject& Bootstrap)
 {
-    const auto Nonce = R["id"].toString(), PipeName = R["pipe"].toString(), Target = R["path"].toString();
+    auto R = Bootstrap;
+    const auto Nonce = R["id"].toString(), PipeName = R["pipe"].toString();
     const auto Time = QDateTime::fromString(R["utc"].toString(), Qt::ISODateWithMs);
     const auto Age = Time.msecsTo(QDateTime::currentDateTimeUtc());
-    if (R["version"].toInt() != 1 || QUuid(Nonce).isNull() || !Time.isValid() || !Local(Target) || Target.contains(QChar::Null)
+    if (R["version"].toInt() != 1 || QUuid(Nonce).isNull() || !Time.isValid()
         || PipeName != "\\\\.\\pipe\\HyperCommander-" + Nonce) return ERROR_INVALID_PARAMETER;
     if (Age < -5000 || Age > 120000) return ERROR_TIMEOUT;
     filetools::Handle Parent(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, DWORD(R["pid"].toInt())));
@@ -603,6 +714,11 @@ DWORD ExecuteDirectoryElevation(const QJsonObject& R)
     if (Pipe.value_ == INVALID_HANDLE_VALUE) return GetLastError(); ULONG Peer = 0;
     if (!GetNamedPipeServerProcessId(Pipe.value_, &Peer) || Peer != DWORD(R["pid"].toInt())) return ERROR_ACCESS_DENIED;
     DWORD Mode = PIPE_READMODE_MESSAGE; SetNamedPipeHandleState(Pipe.value_, &Mode, nullptr, nullptr);
+    const auto FullRequest = ReceiveRequest(Pipe.value_, Bootstrap);
+    if (!FullRequest) return ERROR_INVALID_DATA;
+    R = *FullRequest;
+    const auto Target = R["path"].toString();
+    if (!Local(Target) || Target.contains(QChar::Null)) return ERROR_INVALID_PARAMETER;
     OperationContext Context; Context.freshEnumerationMetadata_ = true; Context.allowUnavailableChildMetadata_ = true;
     std::stop_source Stop; Context.stopToken_ = Stop.get_token();
     // The pipe is the tab's lease: disconnect or parent death ends the session,

@@ -64,6 +64,23 @@ private slots:
         auto Tested = Headers(*Backend, Path, true, Context); QVERIFY2(Tested.HasValue(), Tested.HasValue() ? "" : Tested.Failure().code_.c_str());
         QVERIFY(!Backend->Update({}, {}).HasValue()); QVERIFY(!GetModuleHandleW(L"UnEGG64.dll"));
     }
+    void longInputAndOutputPaths() {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto Deep = Directory.path(); while (Deep.size() < 340) Deep += '/' + QString(45, QChar(0xAC00));
+        QVERIFY(QDir().mkpath(Deep)); const auto Path = Deep + "/input.egg";
+        QVERIFY(QFile::copy(QDir(root_).filePath("defaults.egg"), Path));
+        auto Backend = MakeApprovedWcxBackend(BuiltinUnEggOptions());
+        auto Listed = Headers(*Backend, Path); QVERIFY2(Listed.HasValue(), Listed.HasValue() ? "" : Listed.Failure().code_.c_str());
+        bool Extracted = false;
+        for (const auto& Header : Listed.Value()) {
+            if (Header.directory_) continue;
+            const auto Output = Deep + "/result.bin";
+            const auto Done = Backend->Extract(Path.toStdString(), Header, Output.toStdString(), {});
+            QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+            QCOMPARE(uint64_t(Read(Output).size()), Header.size_); Extracted = true; break;
+        }
+        QVERIFY(Extracted);
+    }
     void errorsAndPolicy() {
         auto Backend = MakeApprovedWcxBackend(BuiltinUnEggOptions()); const auto Path = QDir(root_).filePath("lorem_long_aes256.egg"); QTemporaryDir Output;
         auto Listed = Headers(*Backend, Path); QVERIFY(Listed.HasValue()); const auto Header = Listed.Value().front(); QVERIFY(Header.encrypted_);

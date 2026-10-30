@@ -318,7 +318,7 @@ static OperationContext ElevationContext() {
 static hc::permissions::FileElevationLauncher FixtureLauncher(std::function<void()> Before={},bool ExitEarly=false) {
     return [Before=std::move(Before),ExitEarly](const QString&,const QString& Arguments)->Result<HANDLE>{
         if(Before)Before();const auto Exe=QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
-        const auto Mode = Arguments.startsWith("--elevated-list ") ? "--directory-fixture " : "--elevation-fixture ";
+        const auto Mode = Arguments.startsWith("--elevated-list ") ? "--directory-fixture " : Arguments.startsWith("--permission-job ") ? "--permission-fixture " : "--elevation-fixture ";
         const auto Command='"'+Exe+"\" "+(ExitEarly?QString("--elevation-fixture-exit"):QString(Mode)+Arguments.section(' ',1));
         std::wstring Writable=Command.toStdWString();STARTUPINFOW Startup{};Startup.cb=sizeof(Startup);PROCESS_INFORMATION Process{};
         if(!CreateProcessW(reinterpret_cast<LPCWSTR>(Exe.utf16()),Writable.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&Startup,&Process))return Error{ErrorCategory::Unavailable,"fixture-launch:"+std::to_string(GetLastError())};
@@ -1229,6 +1229,36 @@ private slots:
         QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(8))==std::future_status::ready);QCOMPARE(Job.Value().completion_.get().snapshot_.state_,JobState::Failed);
         QCOMPARE(read("r10-journal-dst.txt"),QByteArray("existing target"));QCOMPARE(read("r10-journal-src.txt"),QByteArray("new bytes"));QVERIFY(artifacts().isEmpty());
     }
+    void longPathElevationTransport() {
+        if (kind_ != LocatorKind::Local) QSKIP("Local owned fixture required.");
+        QString Name = "long-pipe";
+        for (int I = 0; I < 80; ++I) Name += '/' + QString(80, QChar(0xAC00)) + QString::number(I);
+        const auto Folder = root_->filePath(Name);
+        QVERIFY(QDir().mkpath(Folder));
+        qsizetype MaxArguments = 0;
+        auto Launch = [&, Fixture = FixtureLauncher()](const QString& Exe, const QString& Args) -> Result<HANDLE> {
+            MaxArguments = std::max(MaxArguments, Args.size());
+            return Fixture(Exe, Args);
+        };
+        const auto Legacy = hc::permissions::Request("mkdir", Folder, "legacy-child");
+        QVERIFY(QJsonDocument(Legacy).toJson(QJsonDocument::Compact).toBase64().size() > 24000);
+        const auto Created = hc::permissions::LaunchPermissionRequest(Legacy, Launch);
+        QVERIFY(Created.started_); QCOMPARE(Created.code_, DWORD(ERROR_SUCCESS));
+        QVERIFY(QFileInfo(Folder + "/legacy-child").isDir());
+        auto Cursor = hc::permissions::EnumerateElevatedDirectory(Folder, {}, Launch);
+        QVERIFY(Cursor.HasValue());
+        FileElevationRequest Request; Request.action_ = FileElevationAction::MakeDirectory;
+        Request.destination_ = at(Name + "/async-child");
+        JobRequest Options; Options.operation_ = ElevationContext();
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Job = Scheduler.Submit(Options, std::make_unique<FileElevationJob>(Request, hc::permissions::MakeFileElevationService(Launch)));
+        QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+        const auto Result = Job.Value().completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "not complete");
+        QVERIFY(QFileInfo(Folder + "/async-child").isDir());
+        QVERIFY(MaxArguments < 2048);
+    }
     void r10NativeOtherActions_data() {
         QTest::addColumn<int>("Action");for(auto A:{FileElevationAction::MakeDirectory,FileElevationAction::CreateContent,FileElevationAction::Rename,FileElevationAction::Remove})QTest::newRow(std::to_string(int(A)).c_str())<<int(A);
     }
@@ -2002,6 +2032,61 @@ private slots:
         QCOMPARE(Last.discoveredItems_.value_or(99), 5ull); QCOMPARE(Last.plannedItems_.value_or(99), 5ull);
         QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty()); QCOMPARE(Probe->alive_, 0);
     }
+    void deleteLongPathAndSkipFailures_data()
+    {
+        QTest::addColumn<bool>("Streaming");
+        QTest::newRow("prescan") << false; QTest::newRow("streaming") << true;
+    }
+    void deleteLongPathAndSkipFailures()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local long path and failure fixture.");
+        QFETCH(bool, Streaming);
+        for (const int Failure : {0, 1, 2}) {
+            const auto Base = QString("delete-recovery-%1-%2").arg(Streaming).arg(Failure);
+            QVERIFY(writer_->MakeDirectory(at(Base), {}).HasValue());
+            auto Deep = Base;
+            for (int I = 0; I < 5; ++I) {
+                Deep += "/" + QString(55, QChar('a' + I));
+                QVERIFY(writer_->MakeDirectory(at(Deep), {}).HasValue());
+            }
+            QVERIFY(write(Deep + "/payload.txt", "long path"));
+            QVERIFY(write(Base + "/remaining.txt", "remove me"));
+            QVERIFY(write(Base + "/problem.txt", "keep me"));
+            auto Problem = writer_->Inspect(at(Base + "/problem.txt"), {});
+            auto Good = writer_->Inspect(at(Base), {});
+            QVERIFY(Problem.HasValue() && Problem.Value()); QVERIFY(Good.HasValue() && Good.Value());
+            FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete;
+            Request.confirmDelete_ = false; Request.deleteWhileListing_ = Streaming; Request.fileLockInteractions_ = true;
+            if (Failure) Request.sources_.push_back({*Problem.Value(), reader_, Failure == 1 ? std::make_shared<FailedRemoveWriter>(writer_) : writer_});
+            // Use a separate healthy tree: overlapping source selection is rejected.
+            if (Failure) {
+                auto Long = writer_->Inspect(at(Base + "/" + QString(55, 'a')), {}); QVERIFY(Long.HasValue() && Long.Value());
+                Request.sources_.push_back({*Long.Value(), reader_, writer_});
+                auto Remaining = writer_->Inspect(at(Base + "/remaining.txt"), {}); QVERIFY(Remaining.HasValue() && Remaining.Value());
+                Request.sources_.push_back({*Remaining.Value(), reader_, writer_});
+            } else Request.sources_ = {{*Good.Value(), reader_, writer_}};
+            auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
+            if (Failure == 2) QVERIFY(writer_->Remove(*Problem.Value(), {}).HasValue());
+            JobStepContext Context; Context.committing_ = true; Context.operation_.maxPageItems_ = 2;
+            bool Completed = false; int Questions = 0, Skipped = 0;
+            for (int I = 0; I < 1000 && !Completed; ++I) {
+                const auto Step = Prepared.Value().task_->Advance(Context); Context.answer_.reset();
+                QVERIFY2(Step.next_ != JobState::Failed, Step.error_ ? Step.error_->code_.c_str() : "delete failed");
+                if (Step.interaction_) {
+                    ++Questions; QCOMPARE(Step.interaction_->kind_, InteractionKind::RetryFailure);
+                    QVERIFY(std::ranges::find(Step.interaction_->choices_, InteractionChoice::SkipAll) != Step.interaction_->choices_.end());
+                    Context.answer_ = InteractionAnswer{"", InteractionChoice::SkipAll};
+                }
+                if (Step.item_ && Step.item_->status_ == ItemOutcome::Status::Skipped) ++Skipped;
+                Completed = Step.next_ == JobState::Completed;
+            }
+            QVERIFY(Completed); QCOMPARE(Questions, Failure ? 1 : 0); QCOMPARE(Skipped, Failure ? 1 : 0);
+            auto Payload = writer_->Inspect(at(Deep + "/payload.txt"), {}); QVERIFY(Payload.HasValue() && !Payload.Value());
+            QVERIFY(!QFileInfo::exists(root_->filePath(Base + "/remaining.txt")));
+            QCOMPARE(QFileInfo::exists(root_->filePath(Base + "/problem.txt")), Failure == 1);
+            QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty());
+        }
+    }
     void deleteDirectoryAfterCreationTimeChange_data()
     {
         QTest::addColumn<bool>("Streaming");
@@ -2538,6 +2623,10 @@ int main(int Argc,char** Argv) {
     std::vector<char*> Raw;for(auto& A:Args)Raw.push_back(A.data());int AppArgc=int(Raw.size());Raw.push_back(nullptr);
     QCoreApplication App(AppArgc,Raw.data());QStandardPaths::setTestModeEnabled(true);
     if(Argc==2&&QString::fromLocal8Bit(Argv[1])=="--elevation-fixture-exit")return 0;
+    if (Argc == 3 && QString::fromLocal8Bit(Argv[1]) == "--permission-fixture") {
+        const auto Bytes = QByteArray::fromBase64(QByteArray(Argv[2]), QByteArray::Base64UrlEncoding);
+        return int(hc::permissions::ExecutePermissionElevation(QJsonDocument::fromJson(Bytes).object()));
+    }
     if(Argc==3&&QString::fromLocal8Bit(Argv[1])=="--directory-fixture") {
         const auto Bytes = QByteArray::fromBase64(QByteArray(Argv[2]), QByteArray::Base64UrlEncoding);
         return int(hc::permissions::ExecuteDirectoryElevation(QJsonDocument::fromJson(Bytes).object()));

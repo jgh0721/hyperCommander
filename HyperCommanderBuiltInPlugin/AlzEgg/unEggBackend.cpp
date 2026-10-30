@@ -1,4 +1,5 @@
 ﻿#include "unEggBackend.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "unEggAbi.hpp"
 #include <QDir>
 #include <QFile>
@@ -146,7 +147,7 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
     if (const auto Stop = Context.Check({"unegg"})) return *Stop;
     auto Value = std::make_unique<Archive>(Module); Value->context_ = Context; Value->path_ = Path;
     if (!Value->api_.Valid()) return Failure("unegg-exports", ErrorCategory::Unsupported);
-    const auto Name = QDir::toNativeSeparators(QString::fromStdString(Path));
+    const auto Name = hc::storage::native::FilePath(QString::fromStdString(Path));
     if (!QFileInfo(Name).isAbsolute() || Name.contains(QChar::Null)) return Failure("unegg-absolute-path", ErrorCategory::InvalidRequest);
     Value->pinned_ = CreateFileW(reinterpret_cast<const wchar_t*>(Name.utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (Value->pinned_ == INVALID_HANDLE_VALUE) return Failure("unegg-input-open", ErrorCategory::NotFound);
@@ -203,9 +204,9 @@ public:
         if (!Archive.selected_) return Failure("unegg-entry-missing", ErrorCategory::NotFound);
         const auto Destination = QString::fromStdString(Output);
         if (!QFileInfo(Destination).isAbsolute() || Destination.contains(QChar::Null)) return Failure("unegg-output-path", ErrorCategory::InvalidRequest);
-        // Keep staging under the caller's output lease so host termination also
-        // reclaims it. The SDK receives this short name, never archive entry paths.
-        QTemporaryDir Directory(QFileInfo(Destination).dir().filePath(".egg-XXXXXX"));
+        // The SDK has a MAX_PATH output buffer. Stage independently of the
+        // destination depth, then publish through QSaveFile; RAII removes staging.
+        QTemporaryDir Directory(QDir::tempPath() + "/hc-egg-XXXXXX");
         if (!Directory.isValid()) return Failure("unegg-staging-directory");
         Archive.output_ = QDir::toNativeSeparators(Directory.filePath("payload")); Archive.expected_ = Expected.size_; Archive.extracting_ = true;
         if (Archive.output_.size() >= MAX_PATH) return Failure("unegg-output-path-limit", ErrorCategory::Unsupported);

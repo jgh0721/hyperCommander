@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "epubResourceTree.hpp"
 #include "text/QTextView.h"
 #include "text/ITextEditorBackend.h"
@@ -29,7 +30,7 @@ namespace hc::document {
 namespace {
 QByteArray identity(const QString& Path) {
     const auto Native=QDir::toNativeSeparators(QFileInfo(Path).absoluteFilePath());
-    const auto Handle=CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,nullptr);
+    const auto Handle=CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Native).utf16()),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS,nullptr);
     if(Handle==INVALID_HANDLE_VALUE)return {};FILE_ID_INFO Info{};const bool Ok=GetFileInformationByHandleEx(Handle,FileIdInfo,&Info,sizeof(Info));CloseHandle(Handle);return Ok?QByteArray(reinterpret_cast<const char*>(&Info),sizeof(Info)):QByteArray{};
 }
 bool raster(const QString& Media){return QStringList{"image/png","image/jpeg","image/gif","image/webp"}.contains(Media);}

@@ -1,4 +1,5 @@
 ﻿#include "hostedViewerSession.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "documentViewerClient.hpp"
 #include "imageArchiveBroker.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
@@ -62,7 +63,7 @@ namespace hc::plugins
         {
             const auto Entry=Source->Describe();const auto Path=QString::fromUtf8(Entry.locator_.root_);
             if(!IsDirectBook(Entry)||!QFileInfo(Path).isAbsolute())return Invalid("viewer-book-path");
-            const auto Pin=CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+            const auto Pin=CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Path).utf16()),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
             if(Pin==INVALID_HANDLE_VALUE)return Error{ErrorCategory::Unavailable,"viewer-book-pin:"+std::to_string(GetLastError())};
             std::shared_ptr<IMaterializedFileLease> Lease=std::make_shared<SourceLease>(Entry,Pin);
             auto Verified=Source->Verify(Context).get();if(!Verified.HasValue())return Verified.Failure();
@@ -76,7 +77,7 @@ namespace hc::plugins
             // The built-in image reader owns a verified byte snapshot after load.
             // Preserve external edits/renames, like a direct HyperEditor open;
             // ReadDocumentFile checks changes during reading and saves check SHA-256.
-            const auto Pin=CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()),GENERIC_READ,
+            const auto Pin=CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Path).utf16()),GENERIC_READ,
                 FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
             if(Pin==INVALID_HANDLE_VALUE)return Error{ErrorCategory::Unavailable,"viewer-image-open:"+std::to_string(GetLastError())};
             std::shared_ptr<IMaterializedFileLease> Lease=std::make_shared<SourceLease>(Entry,Pin);

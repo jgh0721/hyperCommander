@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "creationJob.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "creationSettings.hpp"
 
 #include "UniqueLibs/nativeWritableStorage.hpp"
@@ -98,7 +99,7 @@ public:
             while (index_) {
                 const auto& Entry = Plan.entries_[--index_]; if (!Entry.source_.entry_.directory_) continue;
                 const auto Path = QDir::toNativeSeparators(QDir(temp_->filePath("input")).filePath(Entry.member_));
-                const auto Handle = CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                const auto Handle = CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Path).utf16()), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
                 if (Handle == INVALID_HANDLE_VALUE) return failed({ErrorCategory::Unavailable, "archive-create-directory-metadata-open"});
                 const auto Ticks = uint64_t(Entry.source_.entry_.modifiedUtcMs_ + 11644473600000LL) * 10000; FILETIME Time{DWORD(Ticks), DWORD(Ticks >> 32)};
                 const bool Saved = SetFileTime(Handle, nullptr, nullptr, &Time); CloseHandle(Handle);

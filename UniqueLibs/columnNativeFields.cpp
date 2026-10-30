@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "columnNativeFields.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include <QBuffer>
 #include <QFile>
 #include <QImageReader>
@@ -18,7 +19,7 @@ namespace hc::columns
             return Result;
         };
         if (Stop.stop_requested()) return Result;
-        const auto Native = QDir::toNativeSeparators(Path).toStdWString();
+        const auto Native = hc::storage::native::FilePath(Path).toStdWString();
         if (Family == "allocation" || Family == "link") {
             const QString Key = Family == "allocation" ? "file.allocatedSize" : "file.linkTarget";
             const auto Attributes = GetFileAttributesW(Native.c_str());

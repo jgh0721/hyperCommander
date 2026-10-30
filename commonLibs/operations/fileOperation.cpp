@@ -177,6 +177,7 @@ namespace hc::operations
                 Context.operation_.workerRead_ = true;
                 jobId_ = Context.jobId_;
                 if (const auto Error = Context.operation_.Check({})) return failed(*Error);
+                if (phase_ == Phase::PreparationPrompt) return preparationQuestion(Context);
                 if (phase_ == Phase::LockPrompt) return lockQuestion(Context);
                 if (phase_ == Phase::ElevationPrompt) return permission(Context);
                 if (phase_ == Phase::ElevationRun) return elevated(Context);
@@ -603,7 +604,7 @@ namespace hc::operations
                 std::size_t next_ = 0;
                 bool ended_ = false;
             };
-            enum class Phase { Preparing, Confirm, ReadOnly, Begin, Conflict, AutomaticName, PreserveDestination, OpenRead, Produce, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun, LockPrompt };
+            enum class Phase { Preparing, PreparationPrompt, Confirm, ReadOnly, Begin, Conflict, AutomaticName, PreserveDestination, OpenRead, Produce, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun, LockPrompt };
             PlannedItem& current() { return items_[index_]; }
             std::string itemLocator()
             { return Serialize(current().source_.entry_.locator_.root_.empty() ? current().destination_ : current().source_.entry_.locator_); }
@@ -650,10 +651,17 @@ namespace hc::operations
                     if (Error.nativePath_.empty() && index_ < items_.size()) Error.nativePath_ = current().destination_.root_;
                     return terminalFailure(std::move(Error));
                 }
+                // A job-wide skip decision also applies before offering elevation.
+                if (request_.operation_ == FileOperation::Delete && skipDeleteErrors_ && index_ < items_.size()
+                    && (phase_ == Phase::Begin || phase_ == Phase::Remove)
+                    && Error.category_ != ErrorCategory::Cancelled && Error.category_ != ErrorCategory::Internal
+                    && Error.category_ != ErrorCategory::InvalidRequest && Error.category_ != ErrorCategory::BudgetExceeded)
+                    return done(ItemOutcome::Status::Skipped);
                 if (request_.fileLockInteractions_ && index_ < items_.size()
                     && (phase_ == Phase::Rename || phase_ == Phase::Remove)
                     && current().source_.entry_.locator_.kind_ == LocatorKind::Local
                     && (Error.code_ == "win32:32" || Error.code_ == "win32:33")) {
+                    if (request_.operation_ == FileOperation::Delete && skipDeleteErrors_) return done(ItemOutcome::Status::Skipped);
                     lockError_ = Error; resumePhase_ = phase_; phase_ = Phase::LockPrompt;
                     return progress();
                 }
@@ -679,18 +687,27 @@ namespace hc::operations
                         return Step;
                     }
                 }
+                if (request_.operation_ == FileOperation::Delete && request_.fileLockInteractions_
+                    && index_ < items_.size() && (phase_ == Phase::Begin || phase_ == Phase::Remove)
+                    && Error.category_ != ErrorCategory::Cancelled && Error.category_ != ErrorCategory::Internal
+                    && Error.category_ != ErrorCategory::InvalidRequest && Error.category_ != ErrorCategory::BudgetExceeded) {
+                    if (skipDeleteErrors_) return done(ItemOutcome::Status::Skipped);
+                    lockError_ = Error; resumePhase_ = phase_; phase_ = Phase::LockPrompt; return progress();
+                }
                 return terminalFailure(std::move(Error));
             }
             JobStep lockQuestion(const JobStepContext& Context)
             {
                 if (!Context.answer_) {
                     auto Step = progress(); Step.next_ = JobState::WaitingForUser;
-                    Step.interaction_ = InteractionRequest{"", InteractionKind::RetryFailure, "file-in-use:" + lockError_.code_,
+                    Step.interaction_ = InteractionRequest{"", InteractionKind::RetryFailure, (request_.operation_ == FileOperation::Delete && lockError_.code_ != "win32:32" && lockError_.code_ != "win32:33" ? "delete-failure:" : "file-in-use:") + lockError_.code_,
                         {InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::Cancel}, current().source_.entry_.id_,
                         lockError_.nativePath_.empty() ? current().source_.entry_.locator_.root_ : lockError_.nativePath_, current().destination_.root_};
+                    if (request_.operation_ == FileOperation::Delete) Step.interaction_->choices_.insert(Step.interaction_->choices_.end() - 1, InteractionChoice::SkipAll);
                     return Step;
                 }
-                if (Context.answer_->choice_ == InteractionChoice::Skip) return done(ItemOutcome::Status::Skipped, destinationCommitted_);
+                if (Context.answer_->choice_ == InteractionChoice::SkipAll && request_.operation_ == FileOperation::Delete) skipDeleteErrors_ = true;
+                if (Context.answer_->choice_ == InteractionChoice::Skip || skipDeleteErrors_) return done(ItemOutcome::Status::Skipped, destinationCommitted_);
                 if (Context.answer_->choice_ == InteractionChoice::Cancel) { auto Step = terminalFailure({ErrorCategory::Cancelled,"file-in-use-cancelled"}); Step.next_ = JobState::Cancelled; return Step; }
                 if (Context.answer_->choice_ != InteractionChoice::Retry) return terminalFailure({ErrorCategory::InvalidRequest,"file-in-use-answer"});
                 if (destinationCommitted_ && request_.operation_ == FileOperation::Move && !current().removeDirectory_) {
@@ -843,6 +860,7 @@ namespace hc::operations
             {
                 Context.freshEnumerationMetadata_ = true;
                 Context.incrementalEnumeration_ = request_.operation_ == FileOperation::Delete;
+                if (request_.operation_ == FileOperation::Delete) Context.allowUnavailableChildMetadata_ = true;
                 if (incrementalDelete_ && !enumerations_.empty()) return prepareIncremental(Context);
                 if (incrementalDelete_ && request_.deleteMode_ == DeleteMode::Recycle && index_ < items_.size()) {
                     // Recycle a selected directory as one unit, after its own
@@ -862,7 +880,7 @@ namespace hc::operations
                 if (cursor_)
                 {
                     auto Page = cursor_->Next(Context.maxPageItems_, Context).get();
-                    if (!Page.HasValue()) return failed(Page.Failure());
+                    if (!Page.HasValue()) return enumerationFailure(Page.Failure());
                     if (Page.Value().entries_.empty() && !Page.Value().end_) return failed({ErrorCategory::Internal, "cursor-no-progress"});
                     if (pending_.size() + seen_.size() + Page.Value().entries_.size() > request_.maxEntries_)
                         return failed({ErrorCategory::BudgetExceeded, "operation-entry-budget"});
@@ -932,7 +950,7 @@ namespace hc::operations
                 }
                 if (Frame.ended_) { enumerations_.pop_back(); return progress(); }
                 auto Page = Frame.cursor_->Next(Context.maxPageItems_, Context).get();
-                if (!Page.HasValue()) return failed(Page.Failure());
+                if (!Page.HasValue()) return enumerationFailure(Page.Failure());
                 if (Page.Value().entries_.empty() && !Page.Value().end_) return failed({ErrorCategory::Internal, "cursor-no-progress"});
                 if (Page.Value().entries_.size() > request_.maxEntries_ - seen_.size()) return failed({ErrorCategory::BudgetExceeded, "operation-entry-budget"});
                 for (const auto& Entry : Page.Value().entries_) {
@@ -944,8 +962,56 @@ namespace hc::operations
                 Frame.entries_ = std::move(Page.Value().entries_); Frame.next_ = 0; Frame.ended_ = Page.Value().end_;
                 return progress();
             }
-            JobStep preparationFailure(PlannedItem Item, Error Error)
+            JobStep enumerationFailure(Error Error)
             {
+                if (incrementalDelete_ && !enumerations_.empty()) {
+                    auto Item = enumerations_.back().parent_; enumerations_.pop_back();
+                    return preparationFailure(std::move(Item), std::move(Error), false);
+                }
+                if (cursor_ && request_.operation_ == FileOperation::Delete) {
+                    cursor_.reset(); return preparationFailure(enumerating_, std::move(Error), false);
+                }
+                return failed(std::move(Error));
+            }
+            JobStep skipPreparation()
+            {
+                skippedSources_.push_back(preparationItem_.source_.entry_.locator_);
+                phase_ = Phase::Preparing;
+                auto Step = progress();
+                Step.item_ = ItemOutcome{Serialize(preparationItem_.source_.entry_.locator_), ItemOutcome::Status::Skipped,
+                    lockError_, false, false, preparationItem_.source_.entry_};
+                ++outcomeIndex_; return Step;
+            }
+            JobStep preparationQuestion(const JobStepContext& Context)
+            {
+                if (!Context.answer_) {
+                    auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                    Step.interaction_ = InteractionRequest{"", InteractionKind::RetryFailure, "delete-failure:" + lockError_.code_,
+                        {InteractionChoice::Skip, InteractionChoice::SkipAll, InteractionChoice::Cancel}, preparationItem_.source_.entry_.id_,
+                        lockError_.nativePath_.empty() ? preparationItem_.source_.entry_.locator_.root_ : lockError_.nativePath_};
+                    if (preparationRetry_) Step.interaction_->choices_.insert(Step.interaction_->choices_.begin(), InteractionChoice::Retry);
+                    return Step;
+                }
+                const auto Choice = Context.answer_->choice_;
+                if (Choice == InteractionChoice::SkipAll) skipDeleteErrors_ = true;
+                if (Choice == InteractionChoice::Skip || Choice == InteractionChoice::SkipAll) return skipPreparation();
+                if (Choice == InteractionChoice::Retry && preparationRetry_) {
+                    seen_.erase(Serialize(preparationItem_.source_.entry_.locator_));
+                    pending_.push_front(std::move(preparationItem_));
+                    phase_ = Phase::Preparing; return progress();
+                }
+                JobStep Step{JobState::Cancelled}; Step.error_ = lockError_; return Step;
+            }
+            JobStep preparationFailure(PlannedItem Item, Error Error, bool Retry = true)
+            {
+                if (request_.operation_ == FileOperation::Delete && request_.fileLockInteractions_
+                    && Error.category_ != ErrorCategory::Cancelled && Error.category_ != ErrorCategory::Internal
+                    && Error.category_ != ErrorCategory::InvalidRequest && Error.category_ != ErrorCategory::BudgetExceeded) {
+                    preparationItem_ = std::move(Item); lockError_ = std::move(Error); preparationRetry_ = Retry;
+                    phase_ = Phase::PreparationPrompt;
+                    if (skipDeleteErrors_) return skipPreparation();
+                    return progress();
+                }
                 if (!request_.continueSelectedFiles_) return failed(std::move(Error));
                 Item.preparationError_ = std::make_shared<const storage::Error>(std::move(Error));
                 items_.push_back(std::move(Item)); return progress();
@@ -981,7 +1047,8 @@ namespace hc::operations
                     if (request_.operation_ == FileOperation::Move || (request_.operation_ == FileOperation::Delete && !Recycling))
                     { auto Removed = Item; Removed.removeDirectory_ = true; directories_.push_back(std::move(Removed)); }
                     auto Cursor = Item.source_.reader_->Enumerate(Item.source_.entry_.locator_, Context).get();
-                    if (!Cursor.HasValue()) return failed(Cursor.Failure());
+                    if (!Cursor.HasValue()) return request_.operation_ == FileOperation::Delete
+                        ? preparationFailure(std::move(Item), Cursor.Failure(), false) : failed(Cursor.Failure());
                     if (incrementalDelete_) enumerations_.push_back({std::move(Item), std::move(Cursor.Value())});
                     else { cursor_ = std::move(Cursor.Value()); enumerating_ = std::move(Item); }
                 }
@@ -1239,6 +1306,8 @@ namespace hc::operations
             Phase phase_ = Phase::Preparing;
             Phase resumePhase_ = Phase::Remove;
             Error lockError_;
+            PlannedItem preparationItem_;
+            bool preparationRetry_ = false, skipDeleteErrors_ = false;
             std::deque<PlannedItem> pending_;
             std::vector<PlannedItem> items_, directories_;
             std::vector<std::shared_ptr<IStorageProvider>> batchReaders_;

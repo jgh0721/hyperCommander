@@ -25,7 +25,7 @@ namespace hc::plugins
         { return Value.isDouble() && Value.toDouble() == Value.toInt(Minimum - 1) && Value.toInt() >= Minimum && Value.toInt() <= Maximum; }
         bool Path(QString Value, bool Remote)
         {
-            if (Value.isEmpty() || Value.size() > 1023 || Value.contains(QChar::Null)) return false;
+            if (Value.isEmpty() || Value.size() > (Remote ? 1023 : 32767) || Value.contains(QChar::Null)) return false;
             if (!Remote) return QDir::isAbsolutePath(Value);
             if (!Value.startsWith('\\') || Value.startsWith("\\\\") || Value.contains('/')) return false;
             for (const auto& Part : Value.split('\\')) if (Part == "." || Part == "..") return false;
@@ -174,7 +174,7 @@ namespace hc::plugins
         if (Request.size() != 5 || Request["action"] != "value" || !Path(Request["path"].toString(), false)
             || !Integer(Request["field"], 0, 255) || !Integer(Request["unit"], 0, INT_MAX) || !Request["defer"].isBool()) return Invalid("host-wdx-request");
         alignas(16) std::array<std::byte, 65536> Bytes{};
-        auto Name = Buffer(QDir::toNativeSeparators(Request["path"].toString()));
+        auto Name = QDir::toNativeSeparators(Request["path"].toString()).toStdWString();
         const auto Wide = Export<int(__stdcall*)(wchar_t*, int, int, void*, int, int)>(module_, "ContentGetValueW");
         int Type;
         if (Wide) Type = Wide(Name.data(), Request["field"].toInt(), Request["unit"].toInt(), Bytes.data(), int(Bytes.size()), Request["defer"].toBool() ? 1 : 0);

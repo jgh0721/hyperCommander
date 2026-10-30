@@ -84,6 +84,8 @@ function(hc_finalize_qt_deployment)
         return()
     endif()
     hc_embed_qt_conf()
+    include("${PROJECT_SOURCE_DIR}/cmake/WindowsLongPaths.cmake")
+    cmake_language(DEFER DIRECTORY "${PROJECT_SOURCE_DIR}" CALL hc_finalize_windows_long_paths)
     get_property(HC_TARGETS GLOBAL PROPERTY HC_DEPLOY_TARGETS)
     # Refresh runtime files even when an ordinary ALL build does not relink.
     add_custom_target(hc_deploy ALL DEPENDS ${HC_TARGETS})

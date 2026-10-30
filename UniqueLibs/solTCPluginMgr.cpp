@@ -890,8 +890,7 @@ quint32 CTCPlugInMgr::ConstructWLXMenu( QMenu* Menu, const QString& FileFullPath
         return 0;
 
     CDetectParser DetectParser;
-    wchar_t Buffer[ MAX_PATH ] = { 0, };
-    GetEnvironmentVariableW( L"COMMANDER_PATH", Buffer, MAX_PATH );
+    const auto CommanderPath = QCoreApplication::applicationDirPath();
 
     for( auto& Item : vecWLX )
     {
@@ -900,7 +899,7 @@ quint32 CTCPlugInMgr::ConstructWLXMenu( QMenu* Menu, const QString& FileFullPath
         const auto Rule = hc::plugins::PluginApplicationRule::Parse(Item.applicationRule_);
         if (!Rule.HasValue() || !Rule.Value().NameOnly()) continue;
         auto Match = Rule.Value().Matches(FileFullPath); if (!Match.HasValue() || !Match.Value()) continue;
-        const auto File = QString( Item.FileFullPath ).replace( "%COMMANDER_PATH%", QString::fromWCharArray( Buffer ) );
+        const auto File = QString( Item.FileFullPath ).replace( "%COMMANDER_PATH%", CommanderPath );
 
         if( File.endsWith( "64" ) == false )
         {

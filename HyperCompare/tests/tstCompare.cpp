@@ -3019,6 +3019,27 @@ private slots:
         QVERIFY2(parsed.error_.isEmpty(), qPrintable(parsed.error_)); QVERIFY(parsed.request_.directoryCopy_.metadata_); QVERIFY(parsed.request_.directoryCopy_.acl_); QVERIFY(parsed.request_.directoryCopy_.streams_);
         QVERIFY(!Parse({"app", "-mode", "compare", "-file1", "D:/a", "-file2", "D:/b", "-copy-streams"}, true).error_.isEmpty());
     }
+    void directoryLongPathAclAndStreams()
+    {
+        QTemporaryDir dir; QVERIFY(dir.isValid());
+        auto deep = dir.path();
+        while (deep.size() < 340) deep += '/' + QString(45, QChar(0xAC00));
+        Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left";
+        r.file1_ = deep + "/left"; r.file2_ = deep + "/right"; r.output_ = deep + "/out";
+        r.planOut_ = dir.filePath("plan.json"); r.directoryCopy_ = {true, true, true, true};
+        QVERIFY(QDir().mkpath(r.file1_)); QVERIFY(QDir().mkpath(r.file2_));
+        write(r.file1_ + "/data", "payload"); write(r.file1_ + "/data:info", "alternate stream");
+        auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto planned = Execute(r, cancel, true);
+        QVERIFY2(planned.error_.isEmpty(), qPrintable(planned.error_)); QCOMPARE(planned.exitCode_, 0);
+        Request apply; apply.mode_ = "apply"; apply.headless_ = true; apply.applyPlan_ = r.planOut_;
+        const auto applied = Execute(apply, cancel, true);
+        QVERIFY2(applied.error_.isEmpty(), qPrintable(applied.error_)); QCOMPARE(applied.exitCode_, 0);
+        QCOMPARE(read(r.output_ + "/data"), QByteArray("payload"));
+        QCOMPARE(read(r.output_ + "/data:info"), QByteArray("alternate stream"));
+        const auto source = CaptureDirectory(r.file1_, {}, {}), output = CaptureDirectory(r.output_, {}, {});
+        QCOMPARE(DirectoryCopyEvidence(source.Expand(source.entries_["data"]), {}, r.directoryCopy_), DirectoryCopyEvidence(output.Expand(output.entries_["data"]), {}, r.directoryCopy_));
+    }
     void directoryCopyOptionsRejectChangedSource()
     {
         QTemporaryDir dir; Request r; r.mode_ = "directory-merge"; r.headless_ = true; r.takeAll_ = "left"; r.directoryCopy_.streams_ = true;

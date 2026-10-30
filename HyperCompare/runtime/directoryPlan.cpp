@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryPlan.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "saveRecovery.hpp"
 #include "requestFile.hpp"
 #include "directoryText.hpp"
@@ -43,7 +44,7 @@ namespace hc::compare
             QHash<QString, QString> result; auto at = Path; QString suffix; const auto root = pathRoot(Path);
             for (;;)
             {
-                const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(at).utf16()),
+                const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(hc::storage::native::FilePath(at).utf16()),
                     FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
                 if (handle != INVALID_HANDLE_VALUE)
@@ -95,7 +96,7 @@ namespace hc::compare
         auto checked = QDir::cleanPath(native); auto at = checked;
         for (;;)
         {
-            const auto attributes = GetFileAttributesW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(at).utf16()));
+            const auto attributes = GetFileAttributesW(reinterpret_cast<const wchar_t*>(hc::storage::native::FilePath(at).utf16()));
             if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) throw Failure("ReparseDirectoryUnsupported");
             if (attributes == INVALID_FILE_ATTRIBUTES && GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND)
                 throw Failure("DirectoryPathUnavailable");
@@ -147,7 +148,7 @@ namespace hc::compare
         const auto bound = require(provider->Resolve(Entry.locator_, ctx).get());
         if (bound.id_.revision_ != Entry.id_.revision_) throw Failure("DirectorySourceChanged");
         const auto pin = require(provider->OpenRead(bound.id_, ctx).get());
-        const auto path = QDir::toNativeSeparators(QString::fromStdString(Entry.locator_.root_));
+        const auto path = hc::storage::native::FilePath(QString::fromStdString(Entry.locator_.root_));
         QJsonObject result;
         if (Copy.metadata_) { result["modified"] = QString::number(bound.modifiedUtcMs_); result["attributes"] = QString::number(bound.attributes_ & 0x27u); }
         if (Copy.acl_)

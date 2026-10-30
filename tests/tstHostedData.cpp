@@ -194,14 +194,19 @@ private slots:
         auto Reply = Process.Value()->DataCall(WireKind::StorageMutate, {{"action", "delete"}, {"path", "\\hello.txt"}});
         QVERIFY(!Reply.HasValue()); QCOMPARE(Reply.Failure().category_, ErrorCategory::AccessDenied);
     }
+    void metadata_data() { QTest::addColumn<bool>("LongPath"); QTest::newRow("short") << false; QTest::newRow("over-1024") << true; }
     void metadata()
     {
+        QFETCH(bool, LongPath);
         QTemporaryDir Directory, Cache; auto Process = start(Directory, PluginFormat::Wdx); QVERIFY2(Process.HasValue(), Process.HasValue() ? "" : Process.Failure().code_.c_str());
         auto Materializer = MakeNativeMaterializer(Cache.path().toStdString()); QVERIFY(Materializer.HasValue());
         auto Provider = MakeHostedWdxProvider(Process.Value(), Materializer.Value()); QVERIFY(Provider.HasValue());
         auto Fields = Provider.Value()->Fields({}).get(); QVERIFY(Fields.HasValue()); QCOMPARE(Fields.Value().size(), 10u);
         QCOMPARE(Fields.Value()[1].units_.size(), 2u); QVERIFY(Fields.Value()[7].units_.empty()); QCOMPARE(Fields.Value()[7].choices_.size(), 2u);
-        QFile File(Directory.filePath("source.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("metadata"); File.close();
+        auto SourceFolder = Directory.path();
+        if (LongPath) while (SourceFolder.size() < 1200) SourceFolder += '/' + QString(60, QChar(0xAC00));
+        QVERIFY(QDir().mkpath(SourceFolder));
+        QFile File(SourceFolder + "/source.txt"); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("metadata"); File.close();
         auto Storage = MakeNativeReadProvider(LocatorKind::Local); auto Entry = Storage->Resolve({LocatorKind::Local, File.fileName().toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
         auto Source = std::make_shared<ProviderContentSource>(Storage, Entry.Value());
         auto Value = Provider.Value()->Query(Source, {0}, {}).get(); QVERIFY2(Value.HasValue(), Value.HasValue() ? "" : Value.Failure().code_.c_str()); QCOMPARE(std::get<std::int64_t>(Value.Value().value_), 9007199254740993LL);

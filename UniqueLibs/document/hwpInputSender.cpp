@@ -1,4 +1,5 @@
 ﻿#include "hwpStartupTrace.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "hwpInputSender.hpp"
 #include "hwpInputInspection.hpp"
 #include "commonLibs/storage/materializedContent.hpp"
@@ -83,7 +84,7 @@ namespace hc::document
             || Path.size() < 4 || !((Path[0] >= 'A' && Path[0] <= 'Z') || (Path[0] >= 'a' && Path[0] <= 'z'))
             || Path[1] != ':' || Path[2] != '/' || Path.mid(2).contains(':')
             || Path.contains(QChar(0)) || QDir::cleanPath(Path) != Path) return {};
-        const auto Native = QDir::toNativeSeparators(Path);
+        const auto Native = hc::storage::native::FilePath(Path);
         Error = "rhwp-input-open";
         const auto Handle = CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()), GENERIC_READ,
             FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);

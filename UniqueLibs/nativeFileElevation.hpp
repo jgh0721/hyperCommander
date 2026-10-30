@@ -9,6 +9,9 @@ using FileElevationLauncher=std::function<storage::Result<HANDLE>(const QString&
 std::shared_ptr<operations::IFileElevationService> MakeFileElevationService(FileElevationLauncher Launcher={});
 // Called by the administrator executable only after checking its elevated token.
 DWORD ExecuteFileElevation(const QJsonObject& Request);
+struct LaunchResult;
+LaunchResult LaunchPermissionRequest(QJsonObject Request, FileElevationLauncher Launcher = {});
+DWORD ExecutePermissionElevation(const QJsonObject& Bootstrap);
 // A tab owns this read-only session while browsing the approved local subtree.
 class DirectoryElevationSession {
 public:

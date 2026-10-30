@@ -1,4 +1,5 @@
 ﻿// HyperCommander ISO WCX adapter. The LGPL engine is a replaceable shared DLL.
+#include "commonLibs/storage/nativePath.hpp"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
@@ -58,7 +59,7 @@ struct FileInput {
     std::mutex mutex_;
     ~FileInput() { if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_); }
     bool Verify() const {
-        const auto Current = CreateFileW(path_.c_str(), FILE_READ_ATTRIBUTES,
+        const auto Current = CreateFileW(hc::storage::native::ExtendedPath(path_.wstring()).c_str(), FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
         if (Current == INVALID_HANDLE_VALUE) return false;
         BY_HANDLE_FILE_INFORMATION Info{};
@@ -88,7 +89,7 @@ using ImagePtr = std::unique_ptr<HcIsoImage, ImageDeleter>;
 ImagePtr Open(const fs::path& Path)
 {
     auto Input = std::make_shared<FileInput>(); Input->path_ = Path;
-    Input->file_ = CreateFileW(Path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+    Input->file_ = CreateFileW(hc::storage::native::ExtendedPath(Path.wstring()).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
         OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     Require(Input->file_ != INVALID_HANDLE_VALUE, E_EOPEN);
     Require(GetFileInformationByHandle(Input->file_, &Input->identity_)
@@ -175,7 +176,7 @@ void Update(const wchar_t* Archive, const wchar_t* SubPath, const wchar_t* Sourc
         if (Delete) { std::erase_if(Items, [&](const auto& Pair) { return Pair.first == Key || Pair.first.starts_with(Key + L'/'); }); continue; }
         const auto Disk = fs::path(Source) / fs::path(Input); const auto Status = fs::symlink_status(Disk);
         Require(!fs::is_symlink(Status) && (fs::is_regular_file(Status) || fs::is_directory(Status)), E_EREAD);
-        Require((GetFileAttributesW(Disk.c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0, E_NOT_SUPPORTED);
+        Require((GetFileAttributesW(hc::storage::native::ExtendedPath(Disk.wstring()).c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0, E_NOT_SUPPORTED);
         Items[Key] = Item{Utf8(Key), Utf8(Disk.wstring()), fs::is_directory(Status)};
     }
     if (!Exists && !DefaultIni.empty()) {

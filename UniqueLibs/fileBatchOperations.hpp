@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/nativeFilePath.hpp"
 #include <QtCore>
 #include "commonLibs/operations/fileOperation.hpp"
 #include "commonLibs/storage/writableStorage.hpp"
@@ -12,9 +13,7 @@
 
 namespace hc::filetools {
 inline QString NativePath(const QString& Path) {
-    auto P = QDir::toNativeSeparators(QDir::cleanPath(Path));
-    if (P.startsWith("\\\\?\\")) return P;
-    return P.startsWith("\\\\") ? "\\\\?\\UNC\\" + P.mid(2) : "\\\\?\\" + P;
+    return storage::native::FilePath(Path);
 }
 inline QString NameError(const QString& Name) {
     if (Name.isEmpty() || Name.size() > 255 || Name == "." || Name == ".." || Name.endsWith('.') || Name.endsWith(' ')) return QObject::tr("이름이 비었거나 끝 문자·길이가 올바르지 않습니다.");

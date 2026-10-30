@@ -135,9 +135,9 @@ namespace nsHC
             }
 
             if( stricmp( FsName, L"NTFS" ) == 0 )
-                Ret = new nsHC::CFSNtfs( RootPath.left(2) );
+                Ret = new nsHC::CFSNtfs( DriveRoot );
             else
-                Ret = new nsHC::CFSLocal( RootPath.left(2) );
+                Ret = new nsHC::CFSLocal( DriveRoot );
         }
 
         return Ret;

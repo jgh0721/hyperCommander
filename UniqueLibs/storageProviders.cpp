@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "storageProviders.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "operationMetrics.hpp"
 #include <thread>
 #include <atomic>
@@ -23,6 +24,10 @@ namespace hc::storage
     {
         Q_LOGGING_CATEGORY(directoryLog, "hc.storage.directory")
         std::wstring Wide(const std::string& Value) { return QString::fromUtf8(Value).toStdWString(); }
+        std::wstring FilePath(const std::string& Value)
+        {
+            return native::FilePath(QString::fromUtf8(Value)).toStdWString();
+        }
         std::string Utf8(const wchar_t* Value) { return QString::fromWCharArray(Value).toStdString(); }
         std::string Session() { return QUuid::createUuid().toString(QUuid::Id128).toStdString() + ":"; }
         Error NativeError(DWORD Code, const ProviderId& Provider)
@@ -146,7 +151,7 @@ namespace hc::storage
                         if (!started_) {
                             started_ = true;
                             handle_ = recovery_.Invoke([&] {
-                                const auto Pattern = Wide(at_.root_) + (at_.root_.ends_with('\\') || at_.root_.ends_with('/') ? L"*" : L"\\*");
+                                const auto Pattern = FilePath(at_.root_) + (at_.root_.ends_with('\\') || at_.root_.ends_with('/') ? L"*" : L"\\*");
                                 return native::FindFirstCompatible([&](DWORD Flags) {
                                     return FindFirstFileExW(Pattern.c_str(), FindExInfoBasic, &found_, FindExSearchNameMatch, nullptr, Flags);
                                 }, Context);
@@ -168,7 +173,7 @@ namespace hc::storage
                         const auto Path = at_.root_ + (at_.root_.ends_with('\\') ? "" : "\\") + Name;
                         WIN32_FILE_ATTRIBUTE_DATA Data{}; ResourceRevision Revision;
                         DWORD metadataError = ERROR_SUCCESS;
-                        if (!ReadAttributes(Wide(Path), Data, &Revision)) {
+                        if (!ReadAttributes(FilePath(Path), Data, &Revision)) {
                             metadataError = GetLastError();
                             if (const auto Failure = Context.Check(provider_)) return *Failure;
                             if (!Context.allowUnavailableChildMetadata_)
@@ -284,7 +289,7 @@ namespace hc::storage
                     WIN32_FILE_ATTRIBUTE_DATA Data{};
                     ResourceRevision ActualRevision;
                     DWORD ReparseTag = 0;
-                    if (!ReadAttributes(Wide(At.root_), Data, &ActualRevision, nullptr, &ReparseTag)) return NativeError(GetLastError(), Id);
+                    if (!ReadAttributes(FilePath(At.root_), Data, &ActualRevision, nullptr, &ReparseTag)) return NativeError(GetLastError(), Id);
                     const auto Separator = At.root_.find_last_of("\\/");
                     auto Value = Entry(Id, Prefix, At, At.root_.substr(Separator == std::string::npos ? 0 : Separator + 1), Data);
                     Value.id_.revision_ = std::move(ActualRevision);
@@ -310,7 +315,7 @@ namespace hc::storage
                         if (!Items.HasValue()) return Items.Failure();
                         return std::unique_ptr<IEntryCursor>(new SnapshotCursor(std::move(Items.Value()), Id));
                     }
-                    auto Path = Wide(At.root_);
+                    auto Path = FilePath(At.root_);
                     auto Server = QDir::toNativeSeparators(QString::fromStdString(At.root_));
                     while (Server.size() > 2 && Server.endsWith('\\')) Server.chop(1);
                     std::vector<EntrySnapshot> Entries;
@@ -368,7 +373,7 @@ namespace hc::storage
                             if (const auto Failure = Context.Check(Id)) return *Failure;
                             BYTE* Buffer = nullptr;
                             DWORD Read = 0, Total = 0;
-                            Status = NetShareEnum(Path.data(), 1, &Buffer, 64 * 1024, &Read, &Total, &Resume);
+                            Status = NetShareEnum(Wide(At.root_).data(), 1, &Buffer, 64 * 1024, &Read, &Total, &Resume);
                             auto Free = qScopeGuard([&] { if (Buffer) NetApiBufferFree(Buffer); });
                             if (Status != NERR_Success && Status != ERROR_MORE_DATA) return NativeError(Status, Id);
                             const auto Shares = reinterpret_cast<SHARE_INFO_1*>(Buffer);
@@ -429,7 +434,7 @@ namespace hc::storage
                                 // mtime after children change. Use the same metadata
                                 // source as Stat so a fresh snapshot is revalidatable.
                                 if (((Data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || Context.freshEnumerationMetadata_)
-                                    && !ReadAttributes(Wide(ChildPath), Data, &ActualRevision)) {
+                                    && !ReadAttributes(FilePath(ChildPath), Data, &ActualRevision)) {
                                     const auto Code = GetLastError();
                                     MetadataError = Code;
                                     if (const auto Failure = Context.Check(Id)) return *Failure;
@@ -469,7 +474,7 @@ namespace hc::storage
                     WIN32_FILE_ATTRIBUTE_DATA Data{};
                     ResourceRevision ActualRevision;
                     BY_HANDLE_FILE_INFORMATION Info{};
-                    if (!ReadAttributes(Wide(At.Value().root_), Data, &ActualRevision, &Info)) return NativeError(GetLastError(), Id);
+                    if (!ReadAttributes(FilePath(At.Value().root_), Data, &ActualRevision, &Info)) return NativeError(GetLastError(), Id);
                     auto Value = Entry(Id, Prefix, At.Value(), QFileInfo(QString::fromUtf8(At.Value().root_)).fileName().toStdString(), Data);
                     Value.id_.revision_ = std::move(ActualRevision);
                     if (Resource.revision_ && !native::MatchesRevision(*Resource.revision_, Info)) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource, false, "refresh"};
@@ -499,7 +504,7 @@ namespace hc::storage
                 Context.denyConcurrentMutation_ = true;
                 auto Pin = OpenRead(Resource, Context).get(); if (!Pin.HasValue()) return Ready<Prepared>(Pin.Failure());
                 ContentProducer Producer;
-                Producer.produce_ = [Pin = std::move(Pin.Value()), Path = Wide(Entry.Value().locator_.root_), Id = id_, Revision = *Resource.revision_]
+                Producer.produce_ = [Pin = std::move(Pin.Value()), Path = FilePath(Entry.Value().locator_.root_), Id = id_, Revision = *Resource.revision_]
                     (const std::string& Output, OperationContext Context) -> Result<Unit> {
                     if (const auto Stop = Context.Check(Id)) return *Stop;
                     COPYFILE2_EXTENDED_PARAMETERS Parameters{}; Parameters.dwSize = sizeof(Parameters);
@@ -528,7 +533,7 @@ namespace hc::storage
                             return COPYFILE2_PROGRESS_CONTINUE;
                         } catch (...) { return COPYFILE2_PROGRESS_CANCEL; }
                     };
-                    const auto Code = CopyFile2(Path.c_str(), Wide(Output).c_str(), &Parameters);
+                    const auto Code = CopyFile2(Path.c_str(), FilePath(Output).c_str(), &Parameters);
                     if (const auto Stop = Context.Check(Id)) return *Stop;
                     if (Callback.changed_) return Error{ErrorCategory::StaleRevision, "native-copy-source-changed", Id};
                     if (FAILED(Code)) return NativeError(HRESULT_CODE(Code), Id);
@@ -547,7 +552,7 @@ namespace hc::storage
                     auto State = std::make_shared<FileState>();
                     State->provider_ = Id;
                     const DWORD Share = Context.denyConcurrentMutation_ ? FILE_SHARE_READ : FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-                    State->handle_ = CreateFileW(Wide(At.Value().root_).c_str(), GENERIC_READ, Share,
+                    State->handle_ = CreateFileW(FilePath(At.Value().root_).c_str(), GENERIC_READ, Share,
                         nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
                     if (State->handle_ == INVALID_HANDLE_VALUE) return NativeError(GetLastError(), Id);
                     BY_HANDLE_FILE_INFORMATION Info{};

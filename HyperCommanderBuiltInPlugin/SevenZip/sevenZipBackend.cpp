@@ -1,4 +1,5 @@
 ﻿#include "sevenZipBackend.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "Common/MyInitGuid.h"
 #include "commonLibs/plugins/archiveSelectionDigest.hpp"
 #include <thread>
@@ -99,7 +100,7 @@ public:
         const auto Width = QFileInfo(Path).suffix().size();
         do {
             if (state_->Check() != S_OK) return false;
-            const auto Handle = CreateFileW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Name).utf16()), GENERIC_READ, FILE_SHARE_READ,
+            const auto Handle = CreateFileW(reinterpret_cast<const wchar_t*>(hc::storage::native::FilePath(Name).utf16()), GENERIC_READ, FILE_SHARE_READ,
                 nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
             if (Handle == INVALID_HANDLE_VALUE) return parts_.size() >= RequiredPart && GetLastError() == ERROR_FILE_NOT_FOUND;
             BY_HANDLE_FILE_INFORMATION Info{};
@@ -520,7 +521,7 @@ public:
         const auto To = QString::fromStdString(Directory); const QFileInfo Info(To);
         if (!Info.isAbsolute() || !Info.isDir() || Info.isSymLink() || !QDir(To).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System).isEmpty())
             return Failure("7zip-batch-private-directory", ErrorCategory::InvalidRequest);
-        const auto NativeDirectory=QDir::toNativeSeparators(To);
+        const auto NativeDirectory=hc::storage::native::FilePath(To);
         const auto DirectoryPin=CreateFileW(reinterpret_cast<LPCWSTR>(NativeDirectory.utf16()),FILE_READ_ATTRIBUTES|FILE_LIST_DIRECTORY,
             FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
         if(DirectoryPin==INVALID_HANDLE_VALUE)return Failure("7zip-batch-directory-pin");

@@ -1,4 +1,5 @@
 ﻿#define WIN32_LEAN_AND_MEAN
+#include "UniqueLibs/nativeFilePath.hpp"
 #define NOMINMAX
 #include "hwpStartupTrace.hpp"
 #include "hwpRuntimeSha256.hpp"
@@ -311,12 +312,13 @@ namespace hc::document
             for(int I=-1;I<Parts.size();++I)
             {
                 if(I>=0) Current+='/'+Parts[I];
-                const auto Attributes=GetFileAttributesW(reinterpret_cast<LPCWSTR>(Current.utf16()));
-                if(Attributes==INVALID_FILE_ATTRIBUTES || (Attributes&FILE_ATTRIBUTE_REPARSE_POINT)) return Fail("web-owner-runtime-reparse");
+                const auto Attributes=GetFileAttributesW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Current).utf16()));
+                if(Attributes==INVALID_FILE_ATTRIBUTES) return Fail("web-owner-runtime-attributes");
+                if(Attributes&FILE_ATTRIBUTE_REPARSE_POINT) return Fail("web-owner-runtime-reparse");
                 auto Lease=std::make_unique<Handle>();
                 const bool Directory=(Attributes&FILE_ATTRIBUTE_DIRECTORY)!=0;
                 if(Directory!=(I<Parts.size()-1)) return Fail("web-owner-runtime-kind");
-                Lease->value_=CreateFileW(reinterpret_cast<LPCWSTR>(Current.utf16()),Directory?FILE_READ_ATTRIBUTES:GENERIC_READ,
+                Lease->value_=CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Current).utf16()),Directory?FILE_READ_ATTRIBUTES:GENERIC_READ,
                     Directory?(FILE_SHARE_READ|FILE_SHARE_WRITE):FILE_SHARE_READ,nullptr,OPEN_EXISTING,
                     (Directory?FILE_FLAG_BACKUP_SEMANTICS:FILE_FLAG_SEQUENTIAL_SCAN)|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
                 if(!Lease->Valid()) return Fail("web-owner-runtime-lease");

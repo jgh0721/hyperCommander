@@ -1,4 +1,5 @@
 ﻿#include "nativeIsoRuntime.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "builtinIso.hpp"
 #include <QCryptographicHash>
 #include <QFileInfo>
@@ -33,7 +34,7 @@ Result<std::shared_ptr<Runtime>> LoadRuntime(const OperationContext& Context)
     const auto Path = QFileInfo(Options.binaryPath_).absolutePath() + "/hc_iso_core.dll";
     auto Directory = QFileInfo(Path).absolutePath();
     for (;;) {
-        const auto Pin = CreateFileW(reinterpret_cast<LPCWSTR>(Directory.utf16()), FILE_READ_ATTRIBUTES,
+        const auto Pin = CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Directory).utf16()), FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
         if (Pin == INVALID_HANDLE_VALUE) return Error{ErrorCategory::Unavailable, "iso-core-directory-pin", {"iso"}};
         Value->pins_.push_back(Pin);
@@ -41,7 +42,7 @@ Result<std::shared_ptr<Runtime>> LoadRuntime(const OperationContext& Context)
         if (Parent == Directory) break;
         Directory = Parent;
     }
-    const auto File = CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()), GENERIC_READ, FILE_SHARE_READ,
+    const auto File = CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Path).utf16()), GENERIC_READ, FILE_SHARE_READ,
         nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (File == INVALID_HANDLE_VALUE) return Error{ErrorCategory::Unavailable, "iso-core-file-pin", {"iso"}};
     Value->pins_.push_back(File);

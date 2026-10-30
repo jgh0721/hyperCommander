@@ -1,4 +1,5 @@
 ﻿#include "isoProvider.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "nativeIsoRuntime.hpp"
 #include <QString>
 #include <QUuid>
@@ -51,7 +52,7 @@ struct Session {
     {
         if (auto Error = Context.Check({"iso"})) return *Error;
         const auto Path = QString::fromStdString(root_.root_);
-        const auto Current = CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()), FILE_READ_ATTRIBUTES,
+        const auto Current = CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Path).utf16()), FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (Current == INVALID_HANDLE_VALUE) return Stale();
         const auto Close = qScopeGuard([&] { CloseHandle(Current); });
@@ -73,7 +74,7 @@ struct Session {
         // Deny in-place writes so a read cannot mix old/new extents before the
         // writer closes (Windows may defer mtime). Allow atomic replacement;
         // Verify detects the new file identity without blocking publication.
-        file_ = CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()), GENERIC_READ,
+        file_ = CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Path).utf16()), GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file_ == INVALID_HANDLE_VALUE) return Error{ErrorCategory::Unavailable, "iso-source-open", {"iso"}};
         bool Success = false;

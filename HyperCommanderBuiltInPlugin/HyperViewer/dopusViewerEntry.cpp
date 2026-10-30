@@ -1,4 +1,5 @@
 ﻿#define WIN32_LEAN_AND_MEAN
+#include "commonLibs/storage/nativePath.hpp"
 #define NOMINMAX
 #include <Windows.h>
 #include <commctrl.h>
@@ -52,7 +53,7 @@ namespace
     bool LooksLikeText(const wchar_t* Path, HANDLE Abort)
     {
         if (Abort && WaitForSingleObject(Abort, 0) == WAIT_OBJECT_0) return false;
-        HANDLE File = CreateFileW(Path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        HANDLE File = CreateFileW(hc::storage::native::ExtendedPath(Path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (File == INVALID_HANDLE_VALUE) return false;
         std::vector<char> Sample(64 * 1024); DWORD Count = 0;

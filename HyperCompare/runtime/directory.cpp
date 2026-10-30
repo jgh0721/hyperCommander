@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directory.hpp"
+#include "UniqueLibs/nativeFilePath.hpp"
 #include "session.hpp"
 #include "controllerMemory.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -35,7 +36,7 @@ namespace hc::compare
         { return Error.code_.starts_with("win32:") || Error.code_ == "ChangedDuringRead"; }
         void readLink(DirectoryEntry& Entry, const QString& Path)
         {
-            const auto native = QDir::toNativeSeparators(Path);
+            const auto native = hc::storage::native::FilePath(Path);
             const auto handle = CreateFileW(reinterpret_cast<const wchar_t*>(native.utf16()), 0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                 FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);

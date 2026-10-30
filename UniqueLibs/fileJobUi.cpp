@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileJobUi.hpp"
+#include "fileOperationErrorText.hpp"
 #include "fileJobInteraction.hpp"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
 #include "qtMessageDialog.hpp"
@@ -78,7 +79,7 @@ namespace
             return QObject::tr("파일 내용은 복사되었지만 대상의 파일 속성이 원본과 다릅니다. 대상의 속성 지원 및 정책을 확인하세요. 이동 작업의 원본은 유지됩니다.");
         if (Value.code_ == "revision-changed")
             return QObject::tr("항목의 식별 정보가 작업 시작 이후 달라져 작업을 중단했습니다. 폴더를 새로 고친 뒤 남은 항목을 확인하고 다시 시도하세요. (revision-changed)");
-        return QString::fromStdString(Value.code_);
+        return hc::ui::FileOperationErrorText(Value.code_);
     }
     QString JobStatusText(const JobSnapshot& Snapshot)
     {
