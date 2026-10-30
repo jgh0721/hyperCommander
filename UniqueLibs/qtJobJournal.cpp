@@ -256,16 +256,23 @@ namespace hc::operations
             {
                 if (!Id(JobId)) return Failure("job-journal-id"); std::lock_guard Lock(mutex_);
                 const auto Path = QDir(directory_).filePath(S(JobId) + ".json");
-                stores_.erase(JobId); stores_.erase(JobId + "-writes"); policies_.erase(JobId);
-                if (!QDir(directory_).exists()) return Unit{};
+                const auto Release = [&] {
+                    stores_.erase(JobId); stores_.erase(JobId + "-writes"); policies_.erase(JobId);
+                    if (const auto Cached=checkpoints_.find(JobId); Cached!=checkpoints_.end()) { cachedSize_-=Cached->second.bytes_.size(); checkpoints_.erase(Cached); }
+                };
+                // Session-only jobs have no durable files. Preserve captured policies
+                // on deletion failure, including jobs created before a settings change.
+                const auto Policy = policies_.find(JobId);
+                if ((Policy != policies_.end() && !Policy->second.enableRecovery_) || !QDir(directory_).exists()) {
+                    Release(); return Unit{};
+                }
                 QLockFile Guard(QDir(directory_).filePath("writer.lock")); if (!Guard.tryLock(1000)) return Failure("job-journal-busy");
                 if (QFile::exists(Path) && !QFile::remove(Path)) return Failure("job-journal-remove");
                 const auto Items = QDir(directory_).filePath(S(JobId) + ".items");
                 if (QFile::exists(Items) && !QFile::remove(Items)) return Failure("job-outcomes-remove");
                 const auto Writes = QDir(directory_).filePath(S(JobId) + "-writes.items");
                 if (QFile::exists(Writes) && !QFile::remove(Writes)) return Failure("job-writes-remove");
-                stores_.erase(JobId); stores_.erase(JobId + "-writes"); policies_.erase(JobId);
-                if (const auto Cached=checkpoints_.find(JobId); Cached!=checkpoints_.end()) { cachedSize_-=Cached->second.bytes_.size(); checkpoints_.erase(Cached); }
+                Release();
                 return Unit{};
             }
         private:

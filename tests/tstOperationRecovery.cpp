@@ -116,6 +116,42 @@ private slots:
         }
         QCOMPARE(Read(Directory.filePath("legacy.items")),Read(Directory.filePath("buffered.items")));
     }
+    void sessionOutcomeStorageLifetime()
+    {
+        QTemporaryDir Parent; QVERIFY(Parent.isValid());
+        std::shared_ptr<IItemOutcomeStore> Reader;
+        {
+            auto Store = PagedItemOutcomeStore::Create(Parent.path()); QVERIFY(Store.HasValue());
+            ItemOutcome Item; Item.item_ = "session-result"; QVERIFY(Store.Value()->Append(Item).HasValue());
+            Reader = Store.Value();
+            QCOMPARE(QDir(Parent.path()).entryList(QDir::Dirs | QDir::NoDotAndDotDot).size(), 1);
+        }
+        QVERIFY(Reader->Read(0, 1).HasValue());
+        Reader.reset();
+        QVERIFY(QDir(Parent.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
+    }
+    void forgetSessionHistoryIgnoresDurableLock()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto Journal = MakeFileJobJournal(Directory.path(), false, true, false);
+        const std::string Id = "hc-job-session-forget";
+        auto Items = Journal->OpenItems(Id); QVERIFY(Items.HasValue() && Items.Value());
+        std::weak_ptr<IItemOutcomeStore> Weak = Items.Value();
+        QLockFile Lock(Directory.filePath("writer.lock")); QVERIFY(Lock.tryLock());
+        SetFileJobPersistence(Journal, true, true);
+        QVERIFY(Journal->Forget(Id).HasValue());
+        Items.Value().reset(); QVERIFY(Weak.expired());
+        Lock.unlock();
+        // A failed durable deletion must retain its original policy for retry.
+        JobResult Durable; Durable.snapshot_.id_ = "hc-job-durable-forget";
+        QVERIFY(Journal->Checkpoint(Durable).HasValue()); QVERIFY(Lock.tryLock());
+        SetFileJobPersistence(Journal, false, false);
+        QVERIFY(!Journal->Forget(Durable.snapshot_.id_).HasValue());
+        Lock.unlock();
+        QVERIFY(Journal->OpenWrites(Durable.snapshot_.id_).Value());
+        QVERIFY(Journal->Forget(Durable.snapshot_.id_).HasValue());
+        QVERIFY(!QFile::exists(Directory.filePath("hc-job-durable-forget.json")));
+    }
     void optionalRecoveryPersistence()
     {
         QTemporaryDir Directory; const auto JournalPath=Directory.filePath("journal");
