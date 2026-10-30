@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Executable,
     [Parameter(Mandatory = $true)][ValidateSet('1','1.5','2')][string]$Dpr,
-    [Parameter(Mandatory = $true)][string]$Log
+    [Parameter(Mandatory = $true)][string]$Log,
+    [ValidatePattern('^[A-Za-z0-9_,]*$')][string]$TestFunctions
 )
 $ErrorActionPreference = 'Stop'
 foreach ($Name in @('QT_SCALE_FACTOR','QT_SCREEN_SCALE_FACTORS','QT_AUTO_SCREEN_SCALE_FACTOR',
@@ -16,7 +17,9 @@ if ($NativeDpr -le 0 -or $NativeDpr -gt 16) { throw "Invalid native DPR: $Native
 $env:QT_SCALE_FACTOR = ([double]::Parse($Dpr,$Culture)/$NativeDpr).ToString('R',$Culture)
 $env:QT_SCALE_FACTOR_ROUNDING_POLICY = 'PassThrough'
 $env:HC_DOCUMENT_EXPECT_DPR = $Dpr
-& $Executable -o ($Log + ',txt')
+$SelectedFunctions = @()
+if ($TestFunctions -and $TestFunctions -ne 'all') { $SelectedFunctions = $TestFunctions.Split(',') }
+& $Executable @SelectedFunctions -o ($Log + ',txt')
 $Result = $LASTEXITCODE
 Get-Content -LiteralPath $Log
 exit $Result

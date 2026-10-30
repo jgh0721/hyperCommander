@@ -7,35 +7,8 @@
   },
   "configurePresets": [
     {
-      "name": "vc2026-validation-noncommercial",
-      "displayName": "VC2026 archive validation (personal/noncommercial UnEGG)",
-      "inherits": "vc2026-qt612",
-      "cacheVariables": {
-        "BUILD_TESTING": "ON",
-        "HC_BUILD_SMB_TESTS": "ON",
-        "HC_ENABLE_LOCAL_TEST_TOOLS": "ON",
-        "HC_UNEGG_USE": "NONCOMMERCIAL"
-      }
-    },
-    {
-      "name": "vc2026-readiness-p2",
-      "displayName": "JSON settings validation",
-      "inherits": "vc2026-qt612",
-      "binaryDir": "${sourceDir}/_build/readiness-p2",
-      "cacheVariables": {
-        "HC_BUILD_SMB_TESTS": "ON"
-      }
-    },
-    {
-      "hidden": true,
-      "name": "Qt",
-      "cacheVariables": {
-        "CMAKE_PREFIX_PATH": "$env{QTDIR}"
-      }
-    },
-    {
       "name": "vc2026-qt612",
-      "displayName": "VC2026 x64 / Qt 6.12.0",
+      "displayName": "HyperCommander product / VC2026 / Qt 6.12.0",
       "inherits": "Qt",
       "generator": "Visual Studio 18 2026",
       "architecture": "x64",
@@ -45,7 +18,42 @@
         "QTDIR": "D:/Qt/Qt-6.12.0-VC2026-X64-H-MD-2026-10-10"
       },
       "cacheVariables": {
-        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+        "BUILD_TESTING": "OFF",
+        "HC_BUILD_SMB_TESTS": "OFF",
+        "HC_ENABLE_LOCAL_TEST_TOOLS": "OFF",
+        "HC_BUILD_EPUB_POC": "OFF"
+      }
+    },
+    {
+      "name": "vc2026-validation-noncommercial",
+      "displayName": "VC2026 archive validation (personal/noncommercial UnEGG)",
+      "inherits": "vc2026-qt612",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "HC_BUILD_SMB_TESTS": "ON",
+        "HC_ENABLE_LOCAL_TEST_TOOLS": "ON",
+        "HC_UNEGG_USE": "NONCOMMERCIAL"
+      },
+      "binaryDir": "${sourceDir}/_build/validation-noncommercial"
+    },
+    {
+      "name": "vc2026-readiness-p2",
+      "displayName": "JSON settings validation",
+      "inherits": "vc2026-qt612",
+      "binaryDir": "${sourceDir}/_build/readiness-p2",
+      "cacheVariables": {
+        "HC_BUILD_SMB_TESTS": "ON",
+        "BUILD_TESTING": "ON",
+        "HC_ENABLE_LOCAL_TEST_TOOLS": "ON"
+      }
+    },
+    {
+      "hidden": true,
+      "name": "Qt",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}",
+        "CMAKE_TOOLCHAIN_FILE": "$env{QTDIR}/lib/cmake/Qt6/qt.toolchain.cmake"
       }
     },
     {
@@ -55,8 +63,43 @@
       "binaryDir": "${sourceDir}/_build/hypercompare",
       "cacheVariables": {
         "HC_BUILD_HYPERCOMPARE_ONLY": "ON",
+        "BUILD_TESTING": "OFF"
+      }
+    },
+    {
+      "name": "vc2026-validation",
+      "displayName": "Product validation (isolated)",
+      "inherits": "vc2026-qt612",
+      "binaryDir": "${sourceDir}/_build/validation",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "HC_BUILD_SMB_TESTS": "ON",
+        "HC_ENABLE_LOCAL_TEST_TOOLS": "ON"
+      }
+    },
+    {
+      "name": "vc2026-validation-epub",
+      "displayName": "EPUB P0 validation (set HC_EPUB_PYTHON_EXECUTABLE)",
+      "inherits": "vc2026-validation",
+      "binaryDir": "${sourceDir}/_build/validation-epub",
+      "cacheVariables": {
+        "HC_BUILD_EPUB_POC": "ON"
+      }
+    },
+    {
+      "name": "vc2026-hypercompare-validation",
+      "displayName": "HyperCompare validation (isolated)",
+      "inherits": "vc2026-hypercompare",
+      "binaryDir": "${sourceDir}/_build/hypercompare-validation",
+      "cacheVariables": {
         "BUILD_TESTING": "ON"
       }
+    },
+    {
+      "name": "vc2026-clion",
+      "displayName": "CLion product (isolated)",
+      "inherits": "vc2026-qt612",
+      "binaryDir": "${sourceDir}/_build/clion-product"
     }
   ],
   "buildPresets": [
@@ -100,6 +143,96 @@
       "name": "vc2026-hypercompare-release",
       "configurePreset": "vc2026-hypercompare",
       "configuration": "Release"
+    },
+    {
+      "name": "vc2026-validation-release",
+      "configurePreset": "vc2026-validation",
+      "configuration": "Release"
+    },
+    {
+      "name": "vc2026-validation-noncommercial-release",
+      "configurePreset": "vc2026-validation-noncommercial",
+      "configuration": "Release"
+    },
+    {
+      "name": "vc2026-hypercompare-validation-release",
+      "configurePreset": "vc2026-hypercompare-validation",
+      "configuration": "Release"
+    },
+    {
+      "name": "vc2026-clion-release",
+      "configurePreset": "vc2026-clion",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "vc2026-test-fast",
+      "configurePreset": "vc2026-validation",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "fast"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "vc2026-test-desktop",
+      "configurePreset": "vc2026-validation",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "desktop"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "vc2026-test-extended",
+      "configurePreset": "vc2026-validation",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "extended"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "vc2026-test-release",
+      "configurePreset": "vc2026-validation",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "release"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1,
+        "noTestsAction": "error"
+      }
     }
   ]
 }

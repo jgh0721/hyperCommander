@@ -163,8 +163,17 @@ private slots:
         QCOMPARE(advanceToStop(Job,Context).next_,JobState::WaitingForUser);
         Owner.process_.write("release\n");Owner.process_.waitForBytesWritten(1000);QVERIFY(Owner.process_.waitForFinished(5000));
         QVERIFY(QFile::rename(Path,Path+".original"));write(Path);
-        Context.answer_=InteractionAnswer{"",InteractionChoice::Retry,{}};const auto Step=advanceToStop(Job,Context);
-        QCOMPARE(Step.next_,JobState::Failed);QVERIFY(Step.error_);QCOMPARE(Step.error_->category_,ErrorCategory::StaleRevision);QVERIFY(QFile::exists(Path));
+        for (int Attempt = 0; Attempt < 2; ++Attempt) {
+            Context.answer_=InteractionAnswer{"",InteractionChoice::Retry,{}};
+            const auto Step=advanceToStop(Job,Context);
+            QCOMPARE(Step.next_,JobState::WaitingForUser);QVERIFY(Step.interaction_);
+            QCOMPARE(Step.interaction_->kind_,InteractionKind::RetryFailure);
+            QCOMPARE(Step.interaction_->reason_,std::string("delete-failure:revision-changed"));
+            QVERIFY(QFile::exists(Path));QVERIFY(QFile::exists(Path+".original"));
+        }
+        Context.answer_=InteractionAnswer{"",InteractionChoice::Skip,{}};
+        QCOMPARE(advanceToStop(Job,Context).next_,JobState::Completed);
+        QVERIFY(QFile::exists(Path));QVERIFY(QFile::exists(Path+".original"));
     }
     void waitingSkipAndCancel_data() {
         QTest::addColumn<bool>("Move");QTest::addColumn<bool>("Skip");

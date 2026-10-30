@@ -1,6 +1,7 @@
 ﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <QtTest>
+#include "../nativeTestInput.hpp"
 #include "text/QTextView.h"
 #include "commonLibs/layout/productLayout.hpp"
 #include <QJsonArray>
@@ -262,8 +263,10 @@ private slots:
         QCOMPARE(Reloaded.Read(hc::settings::Section::Appearance).toObject()["documentWorkspace"].toObject(), Settings);
         auto& Theme = fm::style::ThemeManager::instance(); auto Scheme = Theme.scheme(); auto Family = Theme.monoFontFamily(); auto Size = Theme.monoFontPx();
         auto Restore = qScopeGuard([&] { Theme.setScheme(Scheme); Theme.setMonoFont(Family, Size); });
+        const auto EditorFont = Pane->findChild<QTextView*>()->editorFont();
         Theme.setScheme(fm::style::ThemeManager::Scheme::Dark); Theme.setMonoFont("Consolas", 15);
-        QCOMPARE(Pane->findChild<QTextView*>()->editorFont().family(), QString("Consolas")); QCOMPARE(Pane->Content(), QByteArray("keyboard content")); QVERIFY(!Document(Widget, Id)["dirty"].toBool());
+        // Document font preferences take precedence over the application theme.
+        QCOMPARE(Pane->findChild<QTextView*>()->editorFont().family(), EditorFont.family()); QCOMPARE(Pane->Content(), QByteArray("keyboard content")); QVERIFY(!Document(Widget, Id)["dirty"].toBool());
         QVERIFY(Pane->findChildren<QPlainTextEdit*>().isEmpty());
         QVERIFY(!Widget.Handle({{"action", "open"}, {"path", Root.filePath("other.txt")}})["documentId"].isString());
     }
@@ -400,9 +403,7 @@ private slots:
         QTemporaryDir Root; auto Path = Root.filePath("helper.txt"); QVERIFY(Put(Path, "base\n"));
         QWidget Parent; Parent.resize(800, 500); Parent.show();
         QVERIFY(QTest::qWaitForWindowExposed(&Parent));
-        Parent.raise();Parent.activateWindow();SetForegroundWindow(reinterpret_cast<HWND>(Parent.winId()));
-        if(!QTest::qWaitFor([&]{return GetForegroundWindow()==reinterpret_cast<HWND>(Parent.winId());},2000))
-            QSKIP("Interactive foreground activation unavailable before viewer creation; run native keyboard coverage on an active desktop");
+        QVERIFY2(ActivateTestWindow(reinterpret_cast<HWND>(Parent.winId())), "An active input desktop is required for native keyboard coverage");
         auto Dll = QCoreApplication::applicationDirPath() + '/' + hc::layout::HyperViewerPackage + "/HyperViewer.dll";
         auto Module = LoadLibraryExW(reinterpret_cast<LPCWSTR>(Dll.utf16()), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS); QVERIFY(Module);
         using Create = HWND (*)(HWND, LPRECT, DWORD);
@@ -419,7 +420,7 @@ private slots:
         QVERIFY(Presented["accepted"].toBool());
         auto Helper=reinterpret_cast<HWND>(Presented["nativeWindow"].toString().toULongLong(nullptr,16));
         QVERIFY(Helper); QVERIFY(IsWindowVisible(Helper)); QVERIFY(!GetWindow(Viewer,GW_CHILD));
-        SetForegroundWindow(Helper); QTRY_COMPARE(GetForegroundWindow(),Helper);
+        QVERIFY(ActivateTestWindow(Helper)); QTRY_COMPARE(GetForegroundWindow(),Helper);
         SendMessageW(Viewer,WM_SETFOCUS,0,0);
         QTRY_VERIFY(Native(Viewer,Module,{{"action","state"}})["documents"].toArray()[0].toObject()["view"].toObject()["inputFocused"].toBool());
         INPUT Keys[2]{}; Keys[0].type=Keys[1].type=INPUT_KEYBOARD;

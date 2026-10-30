@@ -5,6 +5,18 @@ get_filename_component(HC_OUTPUT "${HC_DEPLOY_EXE}" DIRECTORY)
 # Multiple test/application targets share one configuration directory. Serialize
 # deployment across MSBuild processes to avoid concurrently replacing Qt DLLs.
 file(LOCK "${HC_OUTPUT}/.hc-qt-deploy.lock" GUARD PROCESS TIMEOUT 180)
+include("${CMAKE_CURRENT_LIST_DIR}/DeployQtCache.cmake")
+get_filename_component(HC_NAME "${HC_DEPLOY_EXE}" NAME_WE)
+set(HC_RECEIPT "${HC_OUTPUT}/.hc-qt-deploy-cache/${HC_NAME}.txt")
+hc_deploy_fingerprint(HC_CURRENT_FINGERPRINT)
+if(NOT HC_FORCE_QT_DEPLOY AND EXISTS "${HC_RECEIPT}")
+    file(READ "${HC_RECEIPT}" HC_PREVIOUS_FINGERPRINT)
+    if(HC_CURRENT_FINGERPRINT STREQUAL HC_PREVIOUS_FINGERPRINT)
+        message(STATUS "Qt runtime unchanged: ${HC_NAME} (${HC_CONFIG})")
+        return()
+    endif()
+endif()
+
 if(HC_CONFIG STREQUAL "Debug")
     set(HC_MODE --debug)
     set(HC_TEST_DLL Qt6Testd.dll)
@@ -95,3 +107,6 @@ foreach(HC_OLD IN ITEMS platforms imageformats iconengines styles generic networ
 endforeach()
 file(REMOVE "${HC_OUTPUT}/qt.conf")
 message(STATUS "Qt runtime deployed: ${HC_NAME} (${HC_CONFIG})")
+
+hc_deploy_fingerprint(HC_CURRENT_FINGERPRINT)
+file(WRITE "${HC_RECEIPT}" "${HC_CURRENT_FINGERPRINT}")

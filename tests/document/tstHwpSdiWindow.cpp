@@ -1,5 +1,6 @@
 ﻿#include "UniqueLibs/document/hwpSdiWindow.hpp"
 #include <QtTest>
+#include <QLineEdit>
 #include "UniqueLibs/document/hwpOpenWindow.hpp"
 #include "UniqueLibs/document/hwpPrintBridge.hpp"
 #include "UniqueLibs/document/hwpHostSession.hpp"
@@ -632,7 +633,7 @@ private slots:
         for (const auto& Name : {QString("new.hwp"), QString("existing.hwp")}) {
             const auto Target = Dir.filePath(Name);
             if (Name == "existing.hwp") { QFile File(Target); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("old destination"); }
-            bool Chosen = false; QTimer Choose; Choose.setInterval(20);
+            bool Chosen = false; QString ChosenPath; QTimer Choose; Choose.setInterval(20);
             connect(&Choose, &QTimer::timeout, this, [&] {
                 if (auto* Dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget())) {
                     if (!Chosen) {
@@ -640,12 +641,18 @@ private slots:
                         // Menu/shortcut actions can arrive while the native dialog
                         // pumps events. They must neither nest a dialog nor export.
                         Window.Save(true); Window.Save();
-                        Dialog->selectFile(Target); QMetaObject::invokeMethod(Dialog, "accept", Qt::QueuedConnection);
+                        Dialog->selectFile(Target);
+                        auto* FileName = Dialog->findChild<QLineEdit*>("fileNameEdit");
+                        if (!FileName) { Dialog->reject(); return; }
+                        FileName->setText(QDir::toNativeSeparators(Target));
+                        ChosenPath = Dialog->selectedFiles().value(0);
+                        QMetaObject::invokeMethod(Dialog, "accept", Qt::QueuedConnection);
                     }
                 } else if (auto* Box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
                     if (auto* Yes = Box->button(QMessageBox::Yes)) Yes->click();
                 }
             }); Choose.start(); Window.Save(true); Choose.stop(); QVERIFY(Chosen);
+            QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(ChosenPath)), Target);
             QTRY_COMPARE(Port->command_["type"].toString(), QString("DocumentEditorExport")); Feed();
             QTRY_VERIFY_WITH_TIMEOUT(!Window.Document()->IsBusy() && Port->command_["type"] == "DocumentEditorSaved", 10000);
             { QFile File(Target); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), Bytes); }

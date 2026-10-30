@@ -306,7 +306,7 @@ add_dependencies(HyperCommander hc-plugin-host-x64 hc_hyperviewer_package HyperC
 # Opt-in live integration tests compile the same UI/model sources with a test entry
 # point. They must never run implicitly on developer or CI machines without a NAS.
 option(HC_BUILD_SMB_TESTS "Build the live SMB application integration tests" OFF)
-if(HC_BUILD_SMB_TESTS)
+if(BUILD_TESTING AND HC_BUILD_SMB_TESTS)
     find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
     qt_add_library(hc_wcx_fixture SHARED ../tests/wcxFixture.cpp)
     target_include_directories(hc_wcx_fixture PRIVATE ${PROJECT_SOURCE_DIR})

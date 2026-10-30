@@ -1,5 +1,6 @@
 ﻿#define NOMINMAX
 #include <QtTest>
+#include <QScrollArea>
 #include <QBuffer>
 #include <QComboBox>
 #include <QJsonArray>
@@ -428,9 +429,14 @@ class ImageReadingTests : public QObject
     void failedInitialSizeRetriesAfterResize()
     {
         QImageView View;View.resize(30,30);
+        auto* Scroll=View.findChild<QScrollArea*>();QVERIFY(Scroll);
+        // Keep the initial physical target tiny at every desktop DPR.
+        Scroll->viewport()->setFixedSize(1,1);
         View.LoadContent(Picture(Qt::blue,QSize(5000,7000)),"large.png",false);
         QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),10000);
-        QVERIFY(!View.RenderError().isEmpty());
+        QCOMPARE(View.RenderError(),QString("image-render-footprint-budget"));
+        Scroll->viewport()->setMinimumSize(0,0);
+        Scroll->viewport()->setMaximumSize(QWIDGETSIZE_MAX,QWIDGETSIZE_MAX);
         View.resize(1000,700);View.show();
         QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering() && View.RenderError().isEmpty(),10000);
         QVERIFY(View.HasDisplayImage());

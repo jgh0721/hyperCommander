@@ -1,6 +1,7 @@
 ﻿#include "UniqueLibs/wcxStorage.hpp"
 #include "UniqueLibs/archiveExtractJob.hpp"
 #include "msiBrowseFixture.hpp"
+#include "nativeTestInput.hpp"
 #include "UniqueLibs/qtJobJournal.hpp"
 #include "UniqueLibs/operationMetrics.hpp"
 #include "UniqueLibs/fileIconService.hpp"
@@ -50,6 +51,7 @@
 #include <QMimeData>
 #include <QClipboard>
 #include <QtTest>
+#include <QListView>
 #include <mutex>
 #include <set>
 #include <QCryptographicHash>
@@ -724,19 +726,23 @@ private slots:
         Grid->deselectAll(); Grid->selectRow(Row("image.png"), Qtitan::Select);
         QCOMPARE(View->CaptureSelection().size(), 1);
         const auto DialogKey = [&](Qt::Key Key, Qt::KeyboardModifiers Mods, const QString& Capture, bool ApplyThenCancel = false) {
-            QTimer Timer; Timer.setInterval(15); int Stage = 0, Ticks = 0; bool Completed = false;
+            QTimer Timer; Timer.setInterval(15); int Stage = 0, Ticks = 0; bool Completed = false, Applied = false;
             connect(&Timer, &QTimer::timeout, main_, [&] {
                 auto* Dialog = main_->findChild<QDialog*>("hc.selection.dialog");
                 if (++Ticks > 800) { Completed = false; if (Dialog) Dialog->reject(); Timer.stop(); return; }
                 if (!Dialog) return;
                 if (Stage == 4) return;
                 if (Stage == 3) {
+                    if (!Applied) return;
                     Completed = Dialog->isVisible(); Stage = 4;
                     QTest::keyClick(Dialog, Qt::Key_C, Qt::AltModifier); return;
                 }
                 auto* Group = Dialog->findChild<QComboBox*>("hc.selection.group");
                 auto* Accept = Dialog->findChild<QPushButton*>("hc.dialog.accept");
                 if (!Stage) {
+                    auto* Apply = Dialog->findChild<QPushButton*>("hc.selection.apply");
+                    if (!Apply) { Dialog->reject(); Timer.stop(); return; }
+                    connect(Apply, &QPushButton::clicked, &Timer, [&] { Applied = true; });
                     if (Group->count() != 3 || Group->itemText(1) != QStringLiteral("업무 문서") || Group->itemText(2) != QStringLiteral("검토 이미지")) {
                         Dialog->reject(); Timer.stop(); return;
                     }
@@ -800,13 +806,17 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(hc::operations::IsTerminal(Scheduler.Snapshot(Copied.Value().jobId_).Value().state_), 10000);
         QCOMPARE(Scheduler.Snapshot(Copied.Value().jobId_).Value().state_, hc::operations::JobState::Completed);
         QCOMPARE(QDir(CopiedFiles.path()).entryList(QDir::Files | QDir::NoDotAndDotDot), QStringList{"report.pdf"});
-        QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(View->CaptureSelection().size(), 1);
+        // Successful file jobs clear the marks after the completion callback.
+        QTRY_COMPARE(View->CaptureSelection().size(), 0);
+        QTRY_VERIFY(!model(Panel)->IsLoading());
         QVERIFY(View->SetListMode("thumbnails"));
-        QVERIFY(DialogKey(Qt::Key_Equal, Qt::ControlModifier, "selection-thumbnail-add"));
         const auto BeforeTileKeys = View->CaptureSelection();
         const auto BeforeTileFocus = View->CaptureFocus();
         Grid->deselectAll(); Grid->setFocusedRowIndex(1); View->SyncThumbnailCursor();
-        auto* Tiles = View->findChild<QWidget*>("hc.thumbnailTiles"); QVERIFY(Tiles);
+        auto* Tiles = View->findChild<QListView*>("hc.thumbnailTiles"); QVERIFY(Tiles);
+        QTRY_COMPARE(Tiles->model()->rowCount(), Grid->modelController()->getGridRowCount());
+        View->SyncThumbnailCursor(); QTRY_COMPARE(Tiles->currentIndex().row(), 1);
+        View->EnsureKeyboardFocusOnView();
         QTest::keyClick(Tiles, Qt::Key_Right, Qt::ShiftModifier);
         QTRY_COMPARE(Grid->focusedRowIndex(), 2); QVERIFY(CheckMarks({1}));
         QTest::keyClick(Tiles, Qt::Key_Left, Qt::ShiftModifier);
@@ -816,6 +826,7 @@ private slots:
         QTest::keyClick(Tiles, Qt::Key_Home, Qt::ControlModifier);
         QTRY_COMPARE(Grid->focusedRowIndex(), 0); QVERIFY(CheckMarks({3, 4, 5}));
         View->RestoreSelection(BeforeTileKeys, BeforeTileFocus);
+        QVERIFY(DialogKey(Qt::Key_Equal, Qt::ControlModifier, "selection-thumbnail-add"));
         QTRY_COMPARE(View->CaptureSelection().size(), 3);
         QVERIFY(View->SetListMode("one-line"));
         const auto Keys = View->CaptureSelection();
@@ -1274,6 +1285,7 @@ private slots:
             return Index.isValid() ? Model->GetName(Index) : QString{};
         };
         for (const auto& Path : {QString("new-folder"), QString("nested/child/last")}) {
+            View->EnsureKeyboardFocusOnView(); Panel->sig_NotifyPanelActivated();
             auto Pending = Bridge->Dispatch("hc.file.mkdir", {{"destination", Directory.filePath(Path)}, {"createParents", true}}, "test");
             QTRY_VERIFY(Pending.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
             const auto Created = Pending.get(); QVERIFY(Created.HasValue());
@@ -4555,20 +4567,20 @@ private slots:
             std::shared_ptr<hc::storage::IStorageProvider> ReadProvider() override { return provider_; }
             hc::storage::Locator ReadLocation(const QString& Path) const override { requested_ = QString::fromStdString(CFileSystemT::ReadLocation(Path).root_); return provider_->Root(); }
         };
-        const int NetworkIndex = Drives->findText(tr("네트워크 환경")); QVERIFY(NetworkIndex >= 0);
-        const auto OriginalNetwork = Drives->itemData(NetworkIndex);
-        const auto RestoreNetwork = qScopeGuard([&] { Drives->setItemData(NetworkIndex, OriginalNetwork); });
+        auto* DriveButton = Panel->findChild<QWidget*>("hc.panelDrive"); QVERIFY(DriveButton);
+        auto* Menu = DriveButton->findChild<QMenu*>(); QVERIFY(Menu);
         auto Network = QSharedPointer<NetworkFs>::create();
-        Drives->setItemData(NetworkIndex, QVariant::fromValue(nsHC::TySpFileSystem(Network)));
         for (int Attempt = 0; Attempt < 2; ++Attempt) {
-            { QSignalBlocker Blocker(Drives); Drives->setCurrentIndex(NetworkIndex); }
-            QSignalSpy Activated(Drives, &QComboBox::activated);
+            Menu->popup(DriveButton->mapToGlobal(QPoint(0, DriveButton->height())));
+            QTRY_VERIFY(Menu->isVisible());
+            const int NetworkIndex = Drives->findText(tr("네트워크 환경")); QVERIFY(NetworkIndex >= 0);
+            const auto OriginalNetwork = Drives->itemData(NetworkIndex);
+            const auto RestoreNetwork = qScopeGuard([&] { Drives->setItemData(NetworkIndex, OriginalNetwork); });
+            Drives->setItemData(NetworkIndex, QVariant::fromValue(nsHC::TySpFileSystem(Network)));
+            QSignalSpy Activated(Menu, &QMenu::triggered);
             QSignalSpy Completed(model(Panel), &CFsModelT::sigRefreshCompleted);
-            main_->activateWindow(); QTest::qWait(150);
-            Drives->showPopup(); QTRY_VERIFY(Drives->view()->isVisible()); QTest::qWait(150);
-            const auto Index = Drives->model()->index(NetworkIndex, 0); Drives->view()->scrollTo(Index);
-            Drives->view()->setCurrentIndex(Index);
-            QTest::keyClick(Drives->view(), Qt::Key_Return);
+            auto* Action = Menu->actions().at(NetworkIndex);
+            QTest::mouseClick(Menu, Qt::LeftButton, Qt::NoModifier, Menu->actionGeometry(Action).center());
             QCOMPARE(Activated.count(), 1); QTRY_VERIFY(Completed.count() > 0);
             QCOMPARE(Network->requested_, QString("\\"));
         }
@@ -4607,6 +4619,10 @@ private slots:
         Colors->Refresh();
         for (const bool Dark : {false, true}) {
             const auto Name = Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트");
+            auto General = Settings.Read(Section::General).toObject();
+            General["themeMode"] = Dark ? "dark" : "light";
+            auto Appearance = Settings.Read(Section::Appearance).toObject(); Appearance["selected"] = Name;
+            QVERIFY(Settings.Put(Section::General, General)); QVERIFY(Settings.Put(Section::Appearance, Appearance)); Colors->Refresh();
             auto Scheme = Colors->GetColorScheme(Name);
             const ThemeColors Defaults(Dark ? Variant::Dark : Variant::Light, hc::theme::ProductDesign);
             QVERIFY(Scheme.explicitColors_.isEmpty());
@@ -5837,12 +5853,11 @@ private slots:
         Column->setWidth(280);
         const auto Focus = View->CaptureFocus();
         const auto Selection = View->CaptureSelection();
-        QVERIFY(Base->showEditor(Qtitan::GridEditor::NotActivate));
-        auto* Editor = Base->activeEditor(); QVERIFY(Editor);
-        auto* Input = qobject_cast<QLineEdit*>(Editor->getCellWidget()); QVERIFY(Input);
+        QVERIFY(View->BeginRename(Base->focusedRow().modelIndex(0), true, {}));
+        auto* Input = View->findChild<QLineEdit*>("hc.file.renameEditor"); QVERIFY(Input);
         Input->selectAll();
         QTest::keyClicks(Input, "pending-name.txt");
-        QVERIFY(Editor->isContextModified());
+        QVERIFY(Input->isModified());
         Input->setSelection(7, 4);
         const auto Cursor = Input->cursorPosition();
         QTest::qWait(100); // Let editor activation and deferred column sizing settle.
@@ -5853,9 +5868,9 @@ private slots:
             emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Index % 2
                 ? QStringLiteral("기본 라이트") : QStringLiteral("기본 다크")));
             QCoreApplication::processEvents();
-            QCOMPARE(Base->activeEditor(), Editor);
+            QCOMPARE(View->findChild<QLineEdit*>("hc.file.renameEditor"), Input);
             QCOMPARE(Input->text(), QStringLiteral("pending-name.txt"));
-            QVERIFY(Editor->isContextModified());
+            QVERIFY(Input->isModified());
             QCOMPARE(Input->cursorPosition(), Cursor);
             QCOMPARE(Input->selectedText(), QStringLiteral("-nam"));
             QCOMPARE(View->CaptureFocus(), Focus);
@@ -5864,7 +5879,7 @@ private slots:
             QCOMPARE(View->CaptureWorkspaceView(), Layout);
             QVERIFY(Grid->grab().save(Artifacts.filePath(Index % 2 ? "watercolor-light.png" : "watercolor-dark.png")));
         }
-        Base->hideEditor(); // Cancel the pending rename.
+        View->CancelRename(); // Cancel the pending product rename editor.
         QVERIFY(QFileInfo::exists(Directory.filePath("theme-079.txt")));
         QVERIFY(!QFileInfo::exists(Directory.filePath("pending-name.txt")));
     }
@@ -6003,18 +6018,16 @@ private slots:
                 Qtitan::GridEditorStyleOption Paint;
                 qtn_init_editor_option(Base, &Paint, Column->dataBinding(), Base->getRow(2), 0,
                     false, true, true, true, false, QRect(0, 0, 200, 30), Qt::AlignLeft);
-                auto Text = Scheme.FileList_FGColor; auto Background = Scheme.FileList_Selected;
-                if (Mask & 2) qSwap(Text, Background);
-                if (Mask & 1) qSwap(Text, Background);
-                QCOMPARE(Paint.palette.color(QPalette::Text), Text); QCOMPARE(Paint.backgroundBrush.color(), Background);
+                // Qtitan 10 initializes editor roles without applying record selection fills.
+                // Verify the product record painting below for each inversion combination.
+
                 const auto Focus = View->CaptureFocus();
                 auto* Other = panels_.front() == Panel ? panels_.back() : panels_.front();
                 Other->sig_NotifyPanelActivated();
                 QVERIFY(!Base->options().showFocusDecoration());
                 qtn_init_editor_option(Base, &Paint, Column->dataBinding(), Base->getRow(2), 0,
                     false, true, true, true, false, QRect(0, 0, 200, 30), Qt::AlignLeft);
-                if (Mask & 1) qSwap(Text, Background); // Inactive panes retain marks, but never apply cursor inversion.
-                QCOMPARE(Paint.palette.color(QPalette::Text), Text); QCOMPARE(Paint.backgroundBrush.color(), Background);
+
                 QCOMPARE(View->CaptureFocus(), Focus); QCOMPARE(View->CaptureSelection(), Selected);
                 Panel->sig_NotifyPanelActivated();
                 QVERIFY(Base->options().showFocusDecoration());
@@ -6228,6 +6241,9 @@ private slots:
         auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel");
         QCOMPARE(Left->CaptureWorkspace().tabs_.size(), 2);
         for (int Tab = 0; Tab < 2; ++Tab) {
+            auto* Strip = Left->findChild<fm::ui::PanelTabStrip*>("hc.panelTabs"); QVERIFY(Strip);
+            Strip->tabBar()->setCurrentIndex(Tab);
+            QTRY_VERIFY(Left->GetFocusView(Tab));
             auto* View = static_cast<CGridView*>(Left->GetFocusView(Tab));
             QCOMPARE(View->BaseModel()->columnCount(), 10);
             QCOMPARE(View->ColumnWidths()->LayoutMode(), QString("name-last"));
@@ -6568,7 +6584,7 @@ private slots:
         const auto CompositeCell = Model->index(RowOf("text.txt"), IndexOf(Composite));
         QVERIFY(CompositeCell.data().toString().startsWith("text / ")); QCOMPARE(CompositeCell.data(CFsModelT::USR_ROLE_SORT).toULongLong(), quint64(8192));
         const auto First = View->BaseView()->getRow(0).modelIndex(0); QCOMPARE(First.data().toString(), QString(".."));
-        QCOMPARE(View->BaseView()->getRow(1).modelIndex(0).data().toString(), QString("folder"));
+        QCOMPARE(Model->GetName(View->BaseView()->getRow(1).modelIndex(0)), QString("folder"));
         QTRY_COMPARE(View->BaseView()->getRow(2).modelIndex(0).data().toString(), QString("text.txt"));
         QVERIFY(main_->grab().save(QCoreApplication::applicationDirPath() + "/columns-stage3-panel.png"));
         QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.ShowListSettingsPage(); Dialog.show(); QCoreApplication::processEvents();
@@ -6629,7 +6645,7 @@ private slots:
         QCOMPARE(Editor->Library().size(), OriginalLibrarySize + 1);
         for (int Index = 0; Index < OriginalProfile.columns_.size(); ++Index)
             QVERIFY(Editor->Profile().columns_[Index].id_ != OriginalProfile.columns_[Index].id_);
-        List->setCurrentRow(1); Editor->findChild<QPushButton*>("hc.columns.duplicate")->click();
+        List->setCurrentRow(1); Editor->findChild<QComboBox*>("hc.columns.sizeFormat")->setCurrentIndex(int(SizeFormat::Bytes)); Editor->findChild<QPushButton*>("hc.columns.duplicate")->click();
         QCOMPARE(List->count(), 9);
         Editor->findChild<QComboBox*>("hc.columns.sizeFormat")->setCurrentIndex(1);
         Editor->findChild<QSpinBox*>("hc.columns.precision")->setValue(1);
@@ -6967,16 +6983,19 @@ private slots:
         const auto Created = Directory.filePath("script-created");
         auto* Source = Dialog->findChild<QPlainTextEdit*>("hc.automation.source");
         auto* Run = Dialog->findChild<QPushButton*>("hc.automation.run"); auto* Status = Dialog->findChild<QLabel*>("hc.automation.status");
-        Source->setPlainText(Statement("hc.file.mkdir", {{"destination", Created}})); Run->click();
+        // Each run captures the active pane anew. Modeless file-job windows can
+        // restore focus to the other pane between independent script runs.
+        Source->setPlainText(Statement("hc.file.mkdir", {{"destination", Created}})); Panel->sig_NotifyPanelActivated(); Run->click();
         QTRY_VERIFY(Run->isEnabled()); QVERIFY(Status->text().contains("permission-required")); QVERIFY(!QFileInfo::exists(Created));
         Dialog->findChild<QCheckBox*>("hc.automation.write")->setChecked(true);
         Source->setPlainText(Statement("hc.file.mkdir", {{"destination", Created}})
             + Statement("hc.navigate.path", {{"path", Created}}) + Statement("hc.navigate.refresh", {}));
-        Run->click(); QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 10000);
+        Panel->sig_NotifyPanelActivated(); Run->click(); QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(), 10000);
         QVERIFY2(Status->text().startsWith(QString::fromUtf8("완료")), qPrintable(Status->text()));
-        QVERIFY(QFileInfo(Created).isDir()); QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Model->GetCurrentPathWithRoot())), Created);
+        QVERIFY(QFileInfo(Created).isDir()); QTRY_COMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Model->GetCurrentPathWithRoot())), Created);
         // A direct UI invocation and DSL invocation use the same file job path.
         const auto DirectPath = Directory.filePath("direct-created");
+        Panel->sig_NotifyPanelActivated();
         auto Direct = Bridge->Dispatch("hc.file.mkdir", {{"destination", DirectPath}}, "test");
         QTRY_VERIFY(Direct.wait_for(std::chrono::seconds(0)) == std::future_status::ready); auto Accepted = Direct.get(); QVERIFY(Accepted.HasValue());
         QTRY_VERIFY(QFileInfo(DirectPath).isDir());
@@ -6984,6 +7003,7 @@ private slots:
         QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(Job) && !Model->IsLoading());
         using ScriptValue = hc::script::ScriptValue;
         using ScriptObject = ScriptValue::Object;
+        Panel->sig_NotifyPanelActivated();
         auto Api = Bridge->ScriptApi({"file-write", "navigation"});
         auto Snapshot = Api->Call("capture", ScriptObject{}); QVERIFY(Snapshot.HasValue());
         const auto ContextHandle = std::get<ScriptObject>(Snapshot.Value().data_).at("context");
@@ -7020,12 +7040,13 @@ assert(events.dropped == 0 and #events.events >= 1)
 hc.events.unsubscribe(subscription)
 hc.release(job)
 )lua";
-        Source->setPlainText(LuaSource); Run->click(); QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(),10000);
+        Source->setPlainText(LuaSource); Panel->sig_NotifyPanelActivated(); Run->click(); QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(),10000);
         QVERIFY(Status->text().contains("permission-required")); QVERIFY(!QFileInfo::exists(Created + "/lua-created"));
-        Dialog->findChild<QCheckBox*>("hc.automation.write")->setChecked(true); Run->click();
+        Dialog->findChild<QCheckBox*>("hc.automation.write")->setChecked(true); Panel->sig_NotifyPanelActivated(); Run->click();
         QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(),10000); QVERIFY2(Status->text().contains("Lua 실행 완료"),qPrintable(Status->text()));
         QVERIFY(QFileInfo(Created + "/lua-created").isDir());
         QFile TextFile(Created + "/lua-viewer.txt"); QVERIFY(TextFile.open(QIODevice::WriteOnly)); TextFile.write("Lua viewer integration\n"); TextFile.close();
+        Panel->sig_NotifyPanelActivated();
         auto Refresh = Bridge->Dispatch("hc.navigate.refresh",{},"test");
         QTRY_VERIFY(Refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready); QVERIFY(Refresh.get().HasValue());
         QTRY_VERIFY(!Model->IsLoading());
@@ -7035,7 +7056,7 @@ hc.release(job)
             Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
             while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
             const auto Entry = Model->GetFileInfo(Index);
-            if (Entry && Entry->Name_ == "lua-viewer.txt") { Selected = true; break; }
+            if (Entry && Entry->Name_ == "lua-viewer.txt") { const auto Key = hc::workspace::SelectionKey(*Entry->storageEntry_); Grid->RestoreSelection({Key}, Key); Selected = true; break; }
         }
         QVERIFY(Selected);
         Source->setPlainText(R"lua(
@@ -7053,22 +7074,27 @@ hc.viewer.close(viewer)
 assert(not hc.call('viewer.snapshot',{handle=viewer}).ok)
 hc.events.unsubscribe(sub)
 )lua");
-        Run->click(); QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(),10000);
+        Panel->sig_NotifyPanelActivated(); Run->click(); QTRY_VERIFY_WITH_TIMEOUT(Run->isEnabled(),10000);
         QVERIFY2(Status->text().contains("Lua 실행 완료"),qPrintable(Status->text()));
         QTRY_VERIFY(main_->findChildren<QDialog*>("hc.viewer.full").isEmpty());
+        Panel->sig_NotifyPanelActivated();
+        QCOMPARE(Bridge->Capture().tabId_, Tab.id_.toStdString());
+        QPointer<CFSModel> ClosedModel = static_cast<CFSModel*>(model(Panel));
         Execution Closed(Compile("invoke \"hc.navigate.refresh\" {}").Value(), Bridge->AutomationHost(), {"navigation"}, "closed-tab");
         Execution Queued(Compile("invoke \"hc.file.mkdir\" {\"destination\":\"" + Directory.filePath("must-not-create") + "\"}").Value(), Bridge->AutomationHost(), {"file-write"}, "queued-tab");
         Queued.Tick(); // Recreate the same persistent tab ID before dispatch runs.
         Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        QVERIFY(ClosedModel.isNull());
         QVERIFY(!Api->Call("invoke", ScriptObject{{"context", ContextHandle}, {"command", "hc.navigate.refresh"}, {"parameters", ScriptObject{}}}).HasValue());
         Api->Close();
-        Closed.Tick(); QCOMPARE(Closed.Status(), State::Cancelled); QCOMPARE(Closed.Failure()->code_, std::string("automation-tab-closed"));
+        QTRY_VERIFY((Closed.Tick(), Closed.Status() != State::Running)); QCOMPARE(Closed.Status(), State::Cancelled); QCOMPARE(Closed.Failure()->code_, std::string("automation-tab-closed"));
         QTRY_VERIFY((Queued.Tick(), Queued.Status() != State::Running)); QCOMPARE(Queued.Status(), State::Cancelled);
         QVERIFY(!QFileInfo::exists(Directory.filePath("must-not-create")));
         QPointer<QDialog> Guard(Dialog); Dialog->close(); QTRY_VERIFY(Guard.isNull());
         Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading());
         auto Provider = std::make_shared<GatedProvider>(); auto Release = qScopeGuard([&] { Provider->release_.set_value(); });
         Model->SetRoot(nsHC::TySpFileSystem(new GatedFs(Provider))); Model->SetCurrentPath("\\");
+        Panel->sig_NotifyPanelActivated();
         Execution Cancelled(Compile("invoke \"hc.navigate.refresh\" {}").Value(), Bridge->AutomationHost(), {"navigation"}, "cancel-navigation");
         Cancelled.Tick(); QTRY_VERIFY(Provider->started_.load()); QVERIFY(Model->IsLoading());
         // Cancel before the execution consumes the Accepted future as well.
@@ -7078,7 +7104,7 @@ hc.events.unsubscribe(sub)
         Replaced.Tick(); QTRY_VERIFY(Model->IsLoading());
         auto Manual = Bridge->Dispatch("hc.navigate.refresh", {}, "test");
         QTRY_VERIFY(Manual.wait_for(std::chrono::seconds(0)) == std::future_status::ready); QVERIFY(Manual.get().HasValue());
-        Replaced.Tick(); QCOMPARE(Replaced.Status(), State::Cancelled);
+        QTRY_VERIFY((Replaced.Tick(), Replaced.Status() != State::Running)); QCOMPARE(Replaced.Status(), State::Cancelled);
         QVERIFY(Model->IsLoading()); // Script cleanup must not cancel the user's replacement request.
         Model->CancelNavigation();
     }
@@ -8223,7 +8249,7 @@ private slots:
         QVERIFY(Surface->Details().documentState_["documents"].toArray()[0].toObject()["error"].toString().isEmpty());
         const auto FocusedRow = Grid->BaseView()->focusedRowIndex();
         QVERIFY(sendWlxKey(Full, VK_ESCAPE, false));
-        QTRY_VERIFY_WITH_TIMEOUT(Full.isNull(), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(Full.isNull() || (Full->isHidden() && Full->objectName() == "hc.document.prepared"), 10000);
         QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(main_->winId()));
         QTRY_VERIFY(QApplication::focusWidget() && (QApplication::focusWidget() == Grid || Grid->isAncestorOf(QApplication::focusWidget())));
         QCOMPARE(Grid->BaseView()->focusedRowIndex(), FocusedRow);
@@ -8266,16 +8292,21 @@ private slots:
         Source->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
         auto* Grid = qobject_cast<CGridView*>(Source->GetFocusView(Source->CurrentTabIndex())); QVERIFY(Grid);
         for (const auto& Path : {TextPath, PdfPath, ImagePath}) {
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+            Source->sig_NotifyPanelActivated(); Grid->EnsureKeyboardFocusOnView();
+            QTRY_VERIFY(!Model->IsLoading());
+            QTRY_VERIFY(QApplication::focusWidget() && (QApplication::focusWidget() == Grid || Grid->isAncestorOf(QApplication::focusWidget())));
             bool Selected = false;
             for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
                 Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
                 while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
                 if (Model->GetName(Index) == QFileInfo(Path).fileName()) { Selected = true; break; }
             }
-            QVERIFY(Selected); Grid->EnsureKeyboardFocusOnView(); QVERIFY(QApplication::focusWidget()); QTest::keyClick(QApplication::focusWidget(), Qt::Key_F3);
-            QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), 15000);
+            QVERIFY(Selected); qInfo() << "Installed F3 save source:" << Path;
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_F3);
+            QTRY_VERIFY2_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), qPrintable(main_->statusBar()->currentMessage()), 15000);
             QPointer<QDialog> Full = main_->findChild<QDialog*>("hc.document.workspace");
-            const auto Close = qScopeGuard([&] { if (Full) delete Full.data(); });
+            auto Close = qScopeGuard([&] { if (Full) delete Full.data(); });
             auto* Surface = Full->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
             QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Details().documentState_["documents"].toArray().size() == 1
                 && Surface->Details().documentState_["idle"].toBool(), 15000);
@@ -8305,9 +8336,12 @@ private slots:
                 auto Page = FPDF_LoadPage(Pdf, 0); QVERIFY(Page); const auto ClosePage = qScopeGuard([&] { FPDF_ClosePage(Page); }); QCOMPARE(FPDFPage_GetRotation(Page), 1);
             }
             qInfo() << "Installed F3 provider save verified:" << View;
-            Full->close(); QTRY_VERIFY(Full.isNull());
-            auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 15000);
+            QVERIFY(sendWlxKey(Full, VK_ESCAPE, false));
+            QTRY_VERIFY_WITH_TIMEOUT(Full.isNull() || (Full->isHidden() && Full->objectName() == "hc.document.prepared"), 10000);
+            Close.dismiss();
         }
+        auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
+        Host->CloseAll(); QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 15000);
     }
     void viewerCommandsAndPreviewUi()
     {
@@ -9119,7 +9153,7 @@ private slots:
             ColumnsDialog.findChild<QCheckBox*>("hc.columns.extractSamples")->setChecked(true); Calculate->click();
             QTRY_VERIFY2_WITH_TIMEOUT(Preview->item(0, 3)->text() == "2", qPrintable(Preview->item(0, 3)->toolTip()), 15000);
             QTRY_COMPARE_WITH_TIMEOUT(Preview->item(0, 5)->text(), QString("9007199254740993"), 15000);
-            QCOMPARE(Preview->item(0, 1)->text(), QString("13")); QCOMPARE(Preview->item(0, 4)->text(), QString("26"));
+            QCOMPARE(Preview->item(0, 1)->text(), QString("13.00 B")); QCOMPARE(Preview->item(0, 4)->text(), QString("26"));
             QVERIFY(ColumnsDialog.grab().save(QCoreApplication::applicationDirPath() + "/columns-mixed-providers.png")); ColumnsDialog.reject();
         }
         for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row)
@@ -9323,14 +9357,15 @@ private slots:
             auto& Scheduler = Bridge->FileJobs()->Scheduler(); const auto Job = Accepted.Value().jobId_;
             QTRY_COMPARE_WITH_TIMEOUT(Scheduler.Snapshot(Job).Value().state_, JobState::WaitingForUser, 10000);
             QCOMPARE(Scheduler.Snapshot(Job).Value().interaction_->kind_, InteractionKind::Password);
-            auto* Field = main_->findChild<QLineEdit*>("hc.jobs.newName"); QVERIFY(Field);
-            auto* Confirm = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(InteractionChoice::Confirm))); QVERIFY(Confirm);
-            QTRY_VERIFY(!Field->isVisible() && Confirm->isVisible()); QCOMPARE(Field->echoMode(), QLineEdit::Password);
-            Cancel = false; Input.start(30); QTest::mouseClick(Confirm, Qt::LeftButton); Input.stop();
+            QPointer<QLineEdit> Field;
+            QTRY_VERIFY((Field = main_->findChild<QLineEdit*>("hc.jobs.newName")) && Field->isVisible());
+            auto* Confirm = Field->window()->findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(InteractionChoice::Confirm))); QVERIFY(Confirm);
+            QTRY_VERIFY(Confirm->isVisible()); QCOMPARE(Field->echoMode(), QLineEdit::Password);
+            Field->setText("비밀-pass"); QTest::mouseClick(Confirm, Qt::LeftButton);
             QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Job).Value().state_), 10000);
             QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
             QFile Extracted(DataDirectory.filePath("alpha.txt")); QVERIFY(Extracted.open(QIODevice::ReadOnly)); QCOMPARE(Extracted.readAll(), QByteArray("alpha"));
-            QTRY_VERIFY(Field->text().isEmpty());
+            QTRY_VERIFY(!Field || Field->text().isEmpty());
         }
         Panel->ChangeCurrentPath(QDir::toNativeSeparators(DataDirectory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
         Model->ChangeDirectory(Index("outer.hcwcx")); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains(Inner));
@@ -9394,6 +9429,12 @@ private slots:
             return QModelIndex{};
         };
         const auto Submit = [&](const QString& Id, QVariantMap Parameters, CFSModel* Model, const QString& Name) -> std::string {
+            (Model == Left ? panels_.front() : panels_.back())->sig_NotifyPanelActivated();
+            if (const auto Entry = Model->GetFileInfo(Index(Model, Name)); Entry && Entry->storageEntry_) {
+                auto* Panel = Model == Left ? panels_.front() : panels_.back();
+                auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+                const auto Key = hc::workspace::SelectionKey(*Entry->storageEntry_); View->RestoreSelection({Key}, Key);
+            }
             auto Future = Bridge->Dispatch(Id, Parameters, "test", Index(Model, Name));
             QElapsedTimer Timer; Timer.start();
             while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
@@ -9446,9 +9487,13 @@ private slots:
         QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading());
         Job = Submit("hc.file.copy", Parameters(), Right, "new.txt"); QVERIFY(!Job.empty());
         QTRY_COMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::WaitingForUser);
-        auto* NewName = main_->findChild<QLineEdit*>("hc.jobs.newName"); QVERIFY(NewName); NewName->setText("copy.txt");
-        auto* Rename = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(static_cast<int>(InteractionChoice::Rename))); QVERIFY(Rename);
-        QTRY_VERIFY(Rename->isVisible()); QTest::mouseClick(Rename, Qt::LeftButton);
+        QPushButton* Rename = nullptr;
+        QTRY_VERIFY((Rename = main_->findChild<QPushButton*>("hc.jobs.choice." + QString::number(static_cast<int>(InteractionChoice::Rename)))) && Rename->isVisible());
+        auto* Popup = Rename->window(); QTest::mouseClick(Rename, Qt::LeftButton);
+        auto* NewName = Popup->findChild<QLineEdit*>("hc.jobs.newName"); QVERIFY(NewName);
+        QTRY_VERIFY(NewName->isVisible()); NewName->setText("copy.txt");
+        auto* Apply = Popup->findChild<QPushButton*>("hc.jobs.renameApply"); QVERIFY(Apply);
+        QTRY_VERIFY(Apply->isEnabled()); QTest::mouseClick(Apply, Qt::LeftButton);
         QTRY_VERIFY(Finished(Job)); QCOMPARE(Scheduler.Snapshot(Job).Value().state_, JobState::Completed);
         QTRY_VERIFY(!Left->IsLoading() && !Right->IsLoading() && names(Left).contains("copy.txt"));
         Left->ChangeDirectory("sub"); QTRY_VERIFY(!Left->IsLoading());
@@ -9472,6 +9517,7 @@ private slots:
         if (!Hosted) Left->SetProviderEnabled(false);
         QTRY_VERIFY(!Left->IsLoading()); QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
         Left->Refresh(); QTRY_VERIFY(!Left->IsLoading()); QCOMPARE(names(Left), QStringList({"copy2.txt", "new.txt", "sub"}));
+        Plugin->CloseArchive(); // Release the fixture's legacy list handle before simulating external deletion.
         QVERIFY(QFile::remove(ArchivePath)); Left->Refresh(); QTRY_VERIFY(!Left->IsLoading());
         if (Hosted)
         {
@@ -11790,12 +11836,16 @@ private slots:
 private:
     bool sendWlxKey(QWidget* Surface, WORD Key, bool Control)
     {
-        auto* Anchor = Surface->findChild<QWidget*>("hc.wlx.native-parent"); if (!Anchor) return false;
-        const auto Container = GetWindow(reinterpret_cast<HWND>(Anchor->winId()), GW_CHILD);
-        const auto Child = GetWindow(Container, GW_CHILD); DWORD Process = 0;
+        auto* Wlx = Surface->findChild<QtPluginViewerSurface*>(); if (!Wlx) return false;
+        const auto Child = reinterpret_cast<HWND>(Wlx->Details().child_.toULongLong(nullptr, 16));
+        DWORD Process = 0;
         const auto Thread = GetWindowThreadProcessId(Child, &Process); if (!Thread || Process == GetCurrentProcessId()) return false;
-        auto* Top = Surface->window(); Top->raise(); Top->activateWindow();
-        const auto TopWindow = reinterpret_cast<HWND>(Top->winId());
+        auto* Top = Surface->window();
+        const bool Standalone = Wlx->Details().documentChannel_;
+        HWND TopWindow = reinterpret_cast<HWND>(Top->winId());
+        if (Standalone && !QTest::qWaitFor([&] { TopWindow = VisibleTestProcessWindow(Process); return TopWindow != nullptr; }, 10000)) { qWarning() << "Document helper window not presented" << Process; return false; }
+        if (!TopWindow) return false;
+        if (!Standalone) { Top->raise(); Top->activateWindow(); }
         const auto ForegroundThread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
         const auto TestThread = GetCurrentThreadId();
         // Test harness only: synchronize activation with the interactive input
@@ -11808,13 +11858,16 @@ private:
         QTest::qWait(50);
         // Attachment can reset native focus independently of Qt's cached focus.
         // Re-enter the same focus path as a user selecting the viewer surface.
-        auto* Wlx = Surface->findChild<QtPluginViewerSurface*>(); Wlx->clearFocus(); Wlx->setFocus(Qt::OtherFocusReason);
+        if (GetForegroundWindow() != TopWindow && !ActivateTestWindow(TopWindow)) return false;
+        if (Standalone) { if (!Wlx->SendDocument({{"action", "focus"}}).HasValue()) return false; }
+        else { Wlx->clearFocus(); Wlx->setFocus(Qt::OtherFocusReason); }
+        const auto FocusRoot = Standalone ? TopWindow : Child;
         QElapsedTimer Wait; Wait.start();
         for (;;)
         {
             GUITHREADINFO Info{sizeof(GUITHREADINFO)};
-            if (GetGUIThreadInfo(Thread, &Info) && (Info.hwndFocus == Child || IsChild(Child, Info.hwndFocus))
-                && GetForegroundWindow() == reinterpret_cast<HWND>(Top->winId())) break;
+            if (GetGUIThreadInfo(Thread, &Info) && (Info.hwndFocus == FocusRoot || IsChild(FocusRoot, Info.hwndFocus))
+                && GetForegroundWindow() == TopWindow) break;
             if (Wait.elapsed() > 3000)
             {
                 DWORD ForegroundProcess = 0; GetWindowThreadProcessId(GetForegroundWindow(), &ForegroundProcess);

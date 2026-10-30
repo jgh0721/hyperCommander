@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include "commonLibs/layout/productLayout.hpp"
 #include <QtTest>
+#include "../nativeTestInput.hpp"
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QFile>
@@ -344,7 +345,7 @@ void mixedPdfHwpTabs(){
         const auto Id=Viewer.Handle({{"action","open"},{"path",Path}})["documentId"].toString();QVERIFY(!Id.isEmpty());Ids<<Id;
         QVERIFY2(Wait([&]{return Doc(Viewer.Snapshot(),Id)["lifecycle"]!="opening";},45000),"RHWP load timed out");
         const auto State=Doc(Viewer.Snapshot(),Id);QVERIFY2(State["lifecycle"]=="ready",QJsonDocument(State).toJson().constData());
-        QCOMPARE(Tabs->count(),int(Ids.size()+1));QVERIFY(Edit->isVisible());QVERIFY(Edit->isEnabled());
+        QCOMPARE(Tabs->count(),int(Ids.size()+1));QVERIFY(Edit->isVisible());QTRY_VERIFY(Edit->isEnabled());
         QVERIFY(Viewer.findChild<QToolBar*>("mainToolbar")->actions().contains(Edit));
         QVERIFY(!State["canSave"].toBool());QVERIFY(!State["canSaveAs"].toBool());
         auto* Window=Tabs->currentWidget()->findChild<HwpOpenWindow*>();QVERIFY(Window);QVERIFY(!Window->isWindow());
@@ -806,18 +807,26 @@ void isolatedFileDialogsRemainResponsive(){
         const auto Document=Item.toObject();if(Document["path"].toString()==Selected&&Document["lifecycle"]=="ready"&&!Document["loading"].toBool())return true;}return false;}));
     QVERIFY(!QImage(Selected).isNull());
 }
+void isolatedImageSiblingKeyboardNavigation_data(){
+    QTest::addColumn<bool>("Direct");
+    QTest::newRow("local-direct")<<true;QTest::newRow("materialized")<<false;
+}
 void isolatedImageSiblingKeyboardNavigation(){
-    QTemporaryDir Root;
+    QFETCH(bool,Direct);QTemporaryDir Root;
     QImage Page(40,60,QImage::Format_RGB32);Page.fill(Qt::green);
     for(int I=1;I<=3;++I)QVERIFY(Page.save(Root.filePath(QString::number(I)+".png")));
     const auto Private=Root.filePath("private");QVERIFY(QDir().mkpath(Private));
     QWidget Main;Main.resize(900,650);Main.show();Main.activateWindow();QVERIFY(QTest::qWaitForWindowActive(&Main));
+    QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Main.winId())));
     auto Live=std::make_shared<std::atomic<int>>(0);
     QtViewerHost Host(&Main,[Live,Private]()->Result<std::shared_ptr<IMaterializer>>{
         auto Item=std::make_shared<Materializer>();Item->live_=Live;Item->copyRoot_=Private;return std::shared_ptr<IMaterializer>(Item);});
     const auto Drain=qScopeGuard([&]{Host.CloseAll();Wait([&]{return Host.IsIdle();});});
     bool Finished=false,Success=false;QString Failure;
-    auto* Window=Host.OpenPlugin(Options(),{{Content(Root.filePath("2.png")),{}}},"Image keys",
+    auto Source=Content(Root.filePath("2.png"));QVERIFY(Source);
+    // A locally backed SMB descriptor exercises the non-direct materializer path.
+    if(!Direct)Source->entry_.locator_.kind_=LocatorKind::Smb;
+    auto* Window=Host.OpenPlugin(Options(),{{Source,{}}},"Image keys",
         [&](bool Ready,const QString& Error){Finished=true;Success=Ready;Failure=Error;});
     QVERIFY(Window);QVERIFY(Wait([&]{return Finished;},30000));QVERIFY2(Success,qPrintable(Failure));
     auto* Surface=Window->findChild<QtPluginViewerSurface*>();QVERIFY(Surface);
@@ -826,8 +835,15 @@ void isolatedImageSiblingKeyboardNavigation(){
     const auto Viewer=GetForegroundWindow();
     const auto Current=[&]{const auto State=Surface->Details().documentState_;return Doc(State,State["activeDocumentId"].toString());};
     const auto Id=Current()["documentId"].toString();
-    QCOMPARE(Current()["path"].toString(),Private+"/2.png");
+    QCOMPARE(Current()["path"].toString(),Direct?Root.filePath("2.png"):Private+"/2.png");
+    QCOMPARE(Live->load(),Direct?0:1);
     QVERIFY(!Current()["sourceToken"].toString().isEmpty());
+    QVERIFY(Wait([&]{return Current()["lifecycle"]=="ready"&&!Current()["loading"].toBool();}));
+    QVERIFY(Surface->SendDocument({{"action","focus"}}).HasValue());
+    const auto ViewerThread=GetWindowThreadProcessId(Viewer,nullptr);
+    QVERIFY(Wait([&]{GUITHREADINFO Info{sizeof(Info)};
+        return GetGUIThreadInfo(ViewerThread,&Info)&&GetForegroundWindow()==Viewer
+            &&(Info.hwndFocus==Viewer||IsChild(Viewer,Info.hwndFocus));}));
     const auto Press=[&](WORD Key){INPUT Keys[2]{};Keys[0].type=Keys[1].type=INPUT_KEYBOARD;Keys[0].ki.wVk=Keys[1].ki.wVk=Key;Keys[1].ki.dwFlags=KEYEVENTF_KEYUP;return SendInput(2,Keys,sizeof(INPUT));};
     QCOMPARE(Press(VK_SPACE),UINT(2));
     QVERIFY(Wait([&]{return Current()["path"].toString()==Root.filePath("3.png")&&Current()["lifecycle"]=="ready";},20000));
@@ -1048,7 +1064,12 @@ void twoF3WindowsSwitchKeyboardInput(){
     FirstSurface->Close();SecondSurface->Close();
     QVERIFY(Wait([&]{return Controller.IsIdle();}));
 }
+void hcSurfaceBrokerSaveClipboardAndPerTabLeases_data(){
+    QTest::addColumn<bool>("Direct");
+    QTest::newRow("local-direct")<<true;QTest::newRow("materialized")<<false;
+}
 void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
+    QFETCH(bool,Direct);
     QTemporaryDir Root;const auto Large=Root.filePath("large.txt");QByteArray Bytes(2*1024*1024,'x');Bytes.replace(0,3,"old");QVERIFY(Put(Large,Bytes));
     auto Live=std::make_shared<std::atomic<int>>(0);QtPluginViewerController Controller(nullptr,[Live]()->Result<std::shared_ptr<IMaterializer>>{auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);});
     QtPluginViewerSurface Surface(&Controller);Surface.setWindowTitle("F3 input verification");Surface.resize(1000,700);Surface.show();Surface.Open(Options(),Content(Large));
@@ -1074,9 +1095,11 @@ void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
     QVERIFY(Wait([&]{return Surface.Details().documentState_["clipboard"].toObject().isEmpty();}));
     QVERIFY(Send({{"action","save"},{"documentId",Id}}));QVERIFY(Wait([&]{return !Doc(Surface.Details().documentState_,Id)["dirty"].toBool()&&!Doc(Surface.Details().documentState_,Id)["saving"].toBool();}));QCOMPARE(Read(Large),QByteArray("pasted text"));
     const auto Pdf=Root.filePath("doc.pdf"),Image=Root.filePath("image.png");QVERIFY(QFile::copy(Fixture("basic.pdf"),Pdf));QVERIFY(QFile::copy(Fixture("alpha.png"),Image));
-    auto Added=Surface.OpenDocuments({{Content(Pdf),{}},{Content(Image),{}}});QVERIFY(Added.HasValue());
+    auto ImageSource=Content(Image);QVERIFY(ImageSource);
+    if(!Direct)ImageSource->entry_.locator_.kind_=LocatorKind::Smb;
+    auto Added=Surface.OpenDocuments({{Content(Pdf),{}},{ImageSource,{}}});QVERIFY(Added.HasValue());
     QVERIFY(Wait([&]{return Surface.Details().documentState_["documents"].toArray().size()==3&&Surface.Details().documentState_["idle"].toBool();}));
-    QCOMPARE(Live->load(),3);
+    QCOMPARE(Live->load(),Direct?2:3);
     for(const auto& Item:Surface.Details().documentState_["documents"].toArray()) {
         const auto Record=Item.toObject();const auto View=Record["view"].toObject()["viewId"].toString();
         if(View=="pdf")QCOMPARE(Record["displayName"].toString(),QString("doc.pdf"));

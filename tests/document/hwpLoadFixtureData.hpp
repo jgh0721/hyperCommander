@@ -34,7 +34,8 @@ new QWebChannel(qt.webChannelTransport, channel => {
     // Test-only pins; package integrity receipt is tools/rhwp/engine-lock.json.
     inline const QByteArray EngineJsSha("70cde06a369fa7fd4fc8bc8f3d6acaee158596ba1a116a2c72159002b0b5654e");
     inline const QByteArray EngineWasmSha("54cf95014312e605c51b98eb9021247ea79ef2bbd0a7080e11c011d0246e3989");
-    inline const QByteArray AdapterSha("9a53ffcaee570e35a9b571ac8255921cf09ea80debd0f700d069525e3dd29d30");
+    // Local adapter updated by 34539d6 (tabbed HWP viewer); upstream engine pins stay unchanged.
+    inline const QByteArray AdapterSha("ebf883b5f6ac9d40c2ee43803cda8adc70cc0499cc538470be17b7f10043214a");
     inline const QByteArray EnginePage("<!doctype html><script type='module' src='app.js'></script>");
     inline const QByteArray EngineScript(R"JS(
 import * as Engine from './rhwp.js';

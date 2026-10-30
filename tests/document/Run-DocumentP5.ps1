@@ -26,7 +26,11 @@ function Assert-Inventory([string]$Directory) {
     # The viewer manifest sits in Addons/WLX/HyperViewer; its binary, helper and dependencies are ROOT-relative.
     $Manifest = Get-Content -LiteralPath (Join-Path $Directory 'Addons/WLX/HyperViewer/hyperviewer.json') -Raw | ConvertFrom-Json
     $Pinned = @{$Manifest.binary=$Manifest.sha256}
-    foreach ($Property in @($Manifest.helpers.PSObject.Properties) + @($Manifest.dependencies.PSObject.Properties)) { $Pinned[$Property.Name] = $Property.Value }
+    foreach ($Section in @('helpers', 'dependencies')) {
+        $Values = $Manifest.$Section
+        if ($null -eq $Values) { continue }
+        foreach ($Property in $Values.PSObject.Properties) { $Pinned[$Property.Name] = $Property.Value }
+    }
     foreach ($Name in $Pinned.Keys) {
         if ((Get-FileHash -LiteralPath (Join-Path $Directory $Name)).Hash -ne $Pinned[$Name]) { throw "Package hash mismatch: $Name" }
     }

@@ -16,11 +16,18 @@ if(MSVC)
 endif()
 # qt_add_executable applies the selected kit's Hybrid CRT policy.
 
+option(BUILD_TESTING "Build product validation targets" OFF)
+option(HC_ENABLE_LOCAL_TEST_TOOLS "Register tests using local PowerShell tools" OFF)
+include(CTest)
+if(NOT BUILD_TESTING)
+    # Retire the root test traversal left by an older validation configure.
+    file(WRITE "${CMAKE_BINARY_DIR}/CTestTestfile.cmake" "# Product configuration: testing is disabled.\n")
+endif()
+
 option(HC_BUILD_HYPERCOMPARE_ONLY "Configure only the standalone compare utility" OFF)
 if(HC_BUILD_HYPERCOMPARE_ONLY)
     find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Widgets Svg Concurrent Network)
     qt_standard_project_setup(REQUIRES 6.12)
-    include(CTest)
     set(FMSTYLE_WITH_QTITAN OFF CACHE BOOL "" FORCE)
     foreach(Option IN ITEMS DEMO LABS GALLERY DESIGNER_PLUGIN EXAMPLES TESTS)
         set(FMSTYLE_BUILD_${Option} OFF CACHE BOOL "" FORCE)
@@ -178,7 +185,6 @@ if(TARGET hc_smb_tests)
     add_dependencies(hc_smb_tests hc-search-index)
 endif()
 
-include(CTest)
 option(HC_BUILD_EPUB_POC "Build developer-only EPUB P0 validation tools" OFF)
 option(HC_BUILD_EPUB_PRODUCT "Build authenticated EPUB product helper candidate" OFF)
 if(HC_BUILD_EPUB_POC OR HC_BUILD_EPUB_PRODUCT)
@@ -188,6 +194,10 @@ if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 add_subdirectory(HyperCompare)
+if(BUILD_TESTING)
+    include(cmake/TestGroups.cmake)
+    hc_finalize_test_groups()
+endif()
 hc_finalize_qt_deployment()
 add_dependencies(hc_deploy hc_iso_package hc_hyperviewer_package)
 
@@ -225,6 +235,9 @@ add_custom_target(hc_product_inventory ALL
         ${HC_PACKAGE_SIGN_ARGS}
         -P "${PROJECT_SOURCE_DIR}/cmake/GenerateProductInventory.cmake"
     DEPENDS hc_deploy VERBATIM)
+if(TARGET hc_check)
+    add_dependencies(hc_check hc_product_inventory)
+endif()
 configure_file(cmake/InstallProductInventory.cmake.in "${CMAKE_BINARY_DIR}/InstallProductInventory.cmake" @ONLY)
 install(SCRIPT "${CMAKE_BINARY_DIR}/InstallProductInventory.cmake" COMPONENT Runtime)
 add_custom_target(hc_portable_package

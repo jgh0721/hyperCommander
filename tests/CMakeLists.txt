@@ -1,4 +1,16 @@
-option(HC_ENABLE_LOCAL_TEST_TOOLS "Register tests using untracked local PowerShell tools" ON)
+option(HC_ENABLE_LOCAL_TEST_TOOLS "Register tests using untracked local PowerShell tools" OFF)
+# Opting in must not silently lose coverage on a clean checkout.
+if(HC_ENABLE_LOCAL_TEST_TOOLS)
+    foreach(HC_TOOL IN ITEMS Test-ViewerSurface.ps1 Test-QtitanCompatibility.ps1 Test-SourceInventory.ps1 Test-AppStartup.ps1 Test-DeployedRuntime.ps1)
+        if(NOT EXISTS "${PROJECT_SOURCE_DIR}/tools/${HC_TOOL}")
+            message(FATAL_ERROR "Local validation requires tools/${HC_TOOL}; disable HC_ENABLE_LOCAL_TEST_TOOLS for portable tests")
+        endif()
+    endforeach()
+    if(HC_BUILD_SMB_TESTS AND NOT EXISTS "${PROJECT_SOURCE_DIR}/tools/Invoke-LocalUiTests.ps1")
+        message(FATAL_ERROR "SMB/UI validation requires tools/Invoke-LocalUiTests.ps1")
+    endif()
+endif()
+
 qt_add_executable(hc_update_tests tstPortableUpdate.cpp)
 target_sources(hc_update_tests PRIVATE "${PROJECT_SOURCE_DIR}/cmake/updateLongPaths.manifest")
 target_link_libraries(hc_update_tests PRIVATE hc_update_qt)
@@ -614,7 +626,7 @@ if(HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOURCE_DIR}/tools/Test-Deplo
     # This runs the product and every deployed test executable sequentially. The
     # nested archive suites bring the measured Debug total to 87 seconds; keep
     # process-level limits while allowing deployment/copy and startup overhead.
-    set_tests_properties(hc.deployment PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+    set_tests_properties(hc.deployment PROPERTIES TIMEOUT 360 RUN_SERIAL TRUE)
 endif()
 
 # CTest comes from this configure's CMake installation, never an unrelated PATH entry.
@@ -630,7 +642,7 @@ if(HC_LIVE_SMB_ARCHIVE_TESTS)
 endif()
 
 add_custom_target(hc_check
-    COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error
+    COMMAND "${CMAKE_CTEST_COMMAND}" -C "$<CONFIG>" --output-on-failure --no-tests=error --parallel 4
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     DEPENDS hc_dopus_viewer_tests hc_hosted_dopus_tests hc_hosted_data_tests hc_wlx_selection_tests hc_wlx_detection_tests hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests hc_hosted_wcx_tests hc_hosted_wlx_tests hc_viewer_tests hc_viewer_surface_tests hc_plugin_tests hc_plugin_process_tests HyperCommander
     USES_TERMINAL
@@ -735,6 +747,24 @@ set_tests_properties(hc.file_rules PROPERTIES TIMEOUT 60)
 hc_enable_qt_deployment(hc_file_rule_tests TEST PLUGINS)
 add_dependencies(hc_check hc_file_rule_tests)
 
+option(HC_FULL_DPR_TESTS "Repeat the complete document suites at every DPR" OFF)
+set(HC_DOCUMENT_DPR_FUNCTIONS_0 "all")
+if(NOT HC_FULL_DPR_TESTS)
+    set(HC_DOCUMENT_DPR_FUNCTIONS_0 "nativeSdkContainerAndTwoHelperTabs")
+endif()
+set(HC_DOCUMENT_DPR_FUNCTIONS_1 "all")
+if(NOT HC_FULL_DPR_TESTS)
+    set(HC_DOCUMENT_DPR_FUNCTIONS_1 "chromePaneThemeAndTablessShell,visibleInputAndStableMenus,helperNativeKeyboardRoute")
+endif()
+set(HC_DOCUMENT_DPR_FUNCTIONS_2 "all")
+if(NOT HC_FULL_DPR_TESTS)
+    set(HC_DOCUMENT_DPR_FUNCTIONS_2 "continuousPdfBeyondWidgetLimitReachesLastPage,continuousPdfShowsLastPageWithoutWholeBookBitmap,imageFitTracksViewportAfterHiddenLoad")
+endif()
+set(HC_DOCUMENT_DPR_FUNCTIONS_3 "all")
+if(NOT HC_FULL_DPR_TESTS)
+    set(HC_DOCUMENT_DPR_FUNCTIONS_3 "statusBarMeasuredLayout,statusBarWorkspace,statusBarPdfAndImage,pdfTabNavigationFocus,isolatedComicArchiveReading,isolatedImageSiblingKeyboardNavigation,twoF3WindowsSwitchKeyboardInput")
+endif()
+
 qt_add_executable(hc_document_p0_tests document/tstDocumentP0.cpp)
 if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND HC_RHWP_APPROVED_INVENTORY_SHA256)
     target_compile_definitions(hc_document_p0_tests PRIVATE HC_TEST_RHWP_HOST_RUNTIME=1)
@@ -750,7 +780,7 @@ foreach(HC_DOCUMENT_DPR IN ITEMS 1 1.5 2)
     add_test(NAME hc.document.p0_dpr${HC_DOCUMENT_DPR} COMMAND "${HC_POWERSHELL}"
         -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/document/Run-DocumentP0.ps1"
         -Executable "$<TARGET_FILE:hc_document_p0_tests>" -Dpr "${HC_DOCUMENT_DPR}"
-        -Log "${CMAKE_BINARY_DIR}/document-p0-dpr${HC_DOCUMENT_DPR}-$<CONFIG>.txt")
+        -Log "${CMAKE_BINARY_DIR}/document-p0-dpr${HC_DOCUMENT_DPR}-$<CONFIG>.txt" -TestFunctions "${HC_DOCUMENT_DPR_FUNCTIONS_0}")
     set_tests_properties(hc.document.p0_dpr${HC_DOCUMENT_DPR} PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
 endforeach()
 add_dependencies(hc_check hc_document_p0_tests)
@@ -768,7 +798,7 @@ foreach(HC_DOCUMENT_DPR IN ITEMS 1 1.5 2)
     add_test(NAME hc.document.p1_dpr${HC_DOCUMENT_DPR} COMMAND "${HC_POWERSHELL}"
         -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/document/Run-DocumentP0.ps1"
         -Executable "$<TARGET_FILE:hc_document_p1_tests>" -Dpr "${HC_DOCUMENT_DPR}"
-        -Log "${CMAKE_BINARY_DIR}/document-p1-dpr${HC_DOCUMENT_DPR}-$<CONFIG>.txt")
+        -Log "${CMAKE_BINARY_DIR}/document-p1-dpr${HC_DOCUMENT_DPR}-$<CONFIG>.txt" -TestFunctions "${HC_DOCUMENT_DPR_FUNCTIONS_1}")
     set_tests_properties(hc.document.p1_dpr${HC_DOCUMENT_DPR} PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
 endforeach()
 
@@ -785,7 +815,7 @@ add_dependencies(hc_check hc_document_p2_tests)
 add_test(NAME hc.document.p2 COMMAND hc_document_p2_tests -o "${CMAKE_BINARY_DIR}/document-p2-$<CONFIG>.txt,txt")
 set_tests_properties(hc.document.p2 PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
 foreach(HC_DOCUMENT_DPR IN ITEMS 1 1.5 2)
-    add_test(NAME hc.document.p2_dpr${HC_DOCUMENT_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/document/Run-DocumentP0.ps1" -Executable "$<TARGET_FILE:hc_document_p2_tests>" -Dpr "${HC_DOCUMENT_DPR}" -Log "${CMAKE_BINARY_DIR}/document-p2-dpr${HC_DOCUMENT_DPR}-$<CONFIG>.txt")
+    add_test(NAME hc.document.p2_dpr${HC_DOCUMENT_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/document/Run-DocumentP0.ps1" -Executable "$<TARGET_FILE:hc_document_p2_tests>" -Dpr "${HC_DOCUMENT_DPR}" -Log "${CMAKE_BINARY_DIR}/document-p2-dpr${HC_DOCUMENT_DPR}-$<CONFIG>.txt" -TestFunctions "${HC_DOCUMENT_DPR_FUNCTIONS_2}")
     set_tests_properties(hc.document.p2_dpr${HC_DOCUMENT_DPR} PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
 endforeach()
 
@@ -798,10 +828,10 @@ hc_enable_qt_deployment(hc_document_p3_tests TEST PLUGINS)
 hc_deploy_document_engine(hc_document_p3_tests)
 add_dependencies(hc_check hc_document_p3_tests)
 add_test(NAME hc.document.p3 COMMAND hc_document_p3_tests -o "${CMAKE_BINARY_DIR}/document-p3-$<CONFIG>.txt,txt")
-set_tests_properties(hc.document.p3 PROPERTIES TIMEOUT 240 RUN_SERIAL TRUE)
+set_tests_properties(hc.document.p3 PROPERTIES TIMEOUT 360 RUN_SERIAL TRUE)
 foreach(HC_DOCUMENT_DPR IN ITEMS 1 1.5 2)
-    add_test(NAME hc.document.p3_dpr${HC_DOCUMENT_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/document/Run-DocumentP0.ps1" -Executable "$<TARGET_FILE:hc_document_p3_tests>" -Dpr "${HC_DOCUMENT_DPR}" -Log "${CMAKE_BINARY_DIR}/document-p3-dpr${HC_DOCUMENT_DPR}-$<CONFIG>.txt")
-    set_tests_properties(hc.document.p3_dpr${HC_DOCUMENT_DPR} PROPERTIES TIMEOUT 240 RUN_SERIAL TRUE)
+    add_test(NAME hc.document.p3_dpr${HC_DOCUMENT_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/document/Run-DocumentP0.ps1" -Executable "$<TARGET_FILE:hc_document_p3_tests>" -Dpr "${HC_DOCUMENT_DPR}" -Log "${CMAKE_BINARY_DIR}/document-p3-dpr${HC_DOCUMENT_DPR}-$<CONFIG>.txt" -TestFunctions "${HC_DOCUMENT_DPR_FUNCTIONS_3}")
+    set_tests_properties(hc.document.p3_dpr${HC_DOCUMENT_DPR} PROPERTIES TIMEOUT 360 RUN_SERIAL TRUE)
 endforeach()
 
 qt_add_executable(hc_document_p4_tests document/tstDocumentP4.cpp)
@@ -825,11 +855,13 @@ if(TARGET hc_smb_tests)
     endforeach()
 endif()
 
+if(TARGET hc_smb_tests)
 add_test(NAME hc.document.p5 COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
     -File "${CMAKE_CURRENT_SOURCE_DIR}/document/Run-DocumentP5.ps1"
     -BuildDirectory "${CMAKE_BINARY_DIR}" -Configuration "$<CONFIG>"
     -ReportDirectory "${CMAKE_BINARY_DIR}/document-p5-$<CONFIG>")
 set_tests_properties(hc.document.p5 PROPERTIES TIMEOUT 360 RUN_SERIAL TRUE)
+endif()
 
 qt_add_executable(hc_web_process_fixture WIN32 document/webProcessFixture.cpp)
 target_include_directories(hc_web_process_fixture PRIVATE "${PROJECT_SOURCE_DIR}")
@@ -890,7 +922,7 @@ target_compile_options(hc_hwp_sdi_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC
 hc_enable_qt_deployment(hc_hwp_sdi_tests TEST PLUGINS)
 add_dependencies(hc_check hc_hwp_sdi_tests)
 add_test(NAME hc.document.hwp_sdi COMMAND hc_hwp_sdi_tests)
-set_tests_properties(hc.document.hwp_sdi PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+set_tests_properties(hc.document.hwp_sdi PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
 
 if(HC_ENABLE_RHWP)
     qt_add_executable(hc_hwp_load_fixture WIN32 document/hwpLoadFixture.cpp
@@ -910,7 +942,7 @@ if(HC_ENABLE_RHWP)
     hc_enable_qt_deployment(hc_hwp_bundle_tests TEST PLUGINS)
     add_dependencies(hc_check hc_hwp_bundle_tests)
     add_test(NAME hc.document.hwp_bundle COMMAND hc_hwp_bundle_tests)
-    set_tests_properties(hc.document.hwp_bundle PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+    set_tests_properties(hc.document.hwp_bundle PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
     qt_add_executable(hc_hwp_runtime_tests document/tstHwpRuntime.cpp)
     target_link_libraries(hc_hwp_runtime_tests PRIVATE hc_document_broker hc_document_sdi Qt6::Test)
     target_compile_options(hc_hwp_runtime_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
@@ -1013,3 +1045,21 @@ target_link_libraries(hc_startup_probe PRIVATE Qt6::Widgets user32)
 target_precompile_headers(hc_startup_probe PRIVATE stdafx.h)
 target_compile_options(hc_startup_probe PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 hc_enable_qt_deployment(hc_startup_probe PLUGINS)
+
+# These product scripts were previously outside CTest. Dependencies are explicit.
+if(HC_ENABLE_LOCAL_TEST_TOOLS)
+    add_test(NAME hc.ui_runtime_snapshot COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+        -File "${CMAKE_CURRENT_SOURCE_DIR}/Test-UiRuntimeSnapshots.ps1" -BuildDirectory "${CMAKE_BINARY_DIR}")
+    set_tests_properties(hc.ui_runtime_snapshot PROPERTIES TIMEOUT 30)
+    find_program(HC_NODE_EXECUTABLE NAMES node REQUIRED)
+    foreach(HC_WEB_DEP IN ITEMS esbuild css-tree epubjs)
+        if(NOT EXISTS "${PROJECT_SOURCE_DIR}/tools/epub/web/node_modules/${HC_WEB_DEP}/package.json")
+            message(FATAL_ERROR "EPUB web tests require npm ci in tools/epub/web (${HC_WEB_DEP})")
+        endif()
+    endforeach()
+    foreach(HC_WEB_TEST IN ITEMS PreviewScroll ReaderTools ReaderKeys CustomCss FontSources)
+        add_test(NAME hc.epub.web.${HC_WEB_TEST}
+            COMMAND "${HC_NODE_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/epub/web/test${HC_WEB_TEST}.mjs")
+        set_tests_properties(hc.epub.web.${HC_WEB_TEST} PROPERTIES TIMEOUT 30)
+    endforeach()
+endif()

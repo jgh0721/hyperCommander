@@ -56,7 +56,8 @@ void continuousPdfBeyondWidgetLimitReachesLastPage(){
     View.show();QVERIFY(QTest::qWaitForWindowExposed(&View));
     View.goToPage(1799);QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),15000);QCOMPARE(View.currentPage(),1799);
     auto* Scroll=View.findChild<QScrollArea*>();QVERIFY(Scroll);QVERIFY(Scroll->widget()->height()<=QWIDGETSIZE_MAX);
-    QTRY_VERIFY(Scroll->viewport()->grab().toImage().pixelColor(Scroll->viewport()->rect().center()).lightness()>230);
+    // A grabbed image uses device pixels; the viewport rectangle is logical.
+    QTRY_VERIFY(([&]{const auto Frame=Scroll->viewport()->grab().toImage();return !Frame.isNull()&&Frame.pixelColor(Frame.rect().center()).lightness()>230;})());
     Scroll->verticalScrollBar()->setValue(0);QTRY_COMPARE(View.currentPage(),0);
     Scroll->verticalScrollBar()->setValue(Scroll->verticalScrollBar()->maximum());QTRY_COMPARE(View.currentPage(),1799);
     View.goToPage(900);QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),15000);QCOMPARE(View.currentPage(),900);

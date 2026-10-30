@@ -664,7 +664,7 @@ private slots:
         QSignalSpy Accepted(&Delete, &QDialog::accepted);
         Delete.AcceptButton()->click(); QCOMPARE(Accepted.count(), 0);
         Delete.findChild<QRadioButton*>("hc.operation.permanent")->setChecked(true);
-        QVERIFY(Delete.AcceptButton()->isEnabled());
+        QTRY_VERIFY(Delete.AcceptButton()->isEnabled());
         QCOMPARE(Delete.AcceptButton()->role(), fm::ui::Button::Danger);
         Delete.reject(); QCOMPARE(Accepted.count(), 0);
         hc::ui::FileOperationDialog Folder({"hc.file.mkdir", "D:/source", "new", {}, true});
