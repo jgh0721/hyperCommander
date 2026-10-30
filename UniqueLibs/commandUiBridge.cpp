@@ -2481,6 +2481,18 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
     rememberJobSelection(Started.Value().id_, Invocation.context_);
     if (Flag("openCreated") && Invocation.id_ == "hc.file.mkdir" && NativeTarget)
         createdFolderNavigation_[Started.Value().id_] = {Invocation.context_.tabId_, Invocation.context_.location_, FullTarget, Model};
+    else if (Invocation.id_ == "hc.file.mkdir") {
+        const auto& Source = Invocation.context_.location_;
+        const bool ArchiveTarget = FullTarget.kind_ == LocatorKind::Archive && SameArchiveContainer(FullTarget, Source);
+        if ((NativeTarget && FullTarget.kind_ == Source.kind_) || ArchiveTarget) {
+            const auto SourcePath = QString::fromStdString(ArchiveTarget ? Source.nesting_.back().entry_ : Source.root_);
+            const auto TargetPath = QString::fromStdString(ArchiveTarget ? FullTarget.nesting_.back().entry_ : FullTarget.root_);
+            const auto Relative = QDir::fromNativeSeparators(QDir(SourcePath).relativeFilePath(TargetPath));
+            // Nested creation focuses the child visible in the original panel.
+            if (!QDir::isAbsolutePath(Relative) && Relative != "." && Relative != ".." && !Relative.startsWith("../"))
+                createdFileFocus_[Started.Value().id_] = {Invocation.context_.tabId_, Source, Model, Relative.section('/', 0, 0), false};
+        }
+    }
     if (Remember && !hc::ui::FileOperationDialog::RememberTarget(QString::fromStdString(RecentProvider), QString::fromStdString(RecentTarget.root_)))
         if (auto* Window = qobject_cast<QMainWindow*>(main_.data())) Window->statusBar()->showMessage(tr("작업을 제출했으나 최근 대상 경로를 저장하지 못했습니다."), 6000);
     return CommandOutcome{CommandOutcome::Status::Accepted, Started.Value().id_};
