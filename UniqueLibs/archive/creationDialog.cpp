@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "creationDialog.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -162,7 +163,7 @@ void CreationDialog::configure()
         if (!value_) { if (format_ == "iso") value_ = IsoCreateSettings{}; else { SevenZipCreateSettings V; if (format_ == "zip") V.solid_ = ArchiveSolidMode::Off; value_ = V; } }
         auto Draft = *value_; if (EditBuiltinCreationSettings(this, format_, Draft)) { value_ = std::move(Draft); WriteCreatorSettings(preferences_, catalog_[creator_], format_, *value_); }
     } else {
-        auto Result = ConfigureCreator(this, catalog_[creator_]); if (!Result.HasValue() && Result.Failure().category_ != ErrorCategory::Cancelled) hc::ui::MessageDialog::warning(this, tr("플러그인 설정"), QString::fromStdString(Result.Failure().code_));
+        auto Result = ConfigureCreator(this, catalog_[creator_]); if (!Result.HasValue() && Result.Failure().category_ != ErrorCategory::Cancelled) hc::ui::MessageDialog::warning(this, tr("플러그인 설정"), hc::ui::ErrorText(Result.Failure()));
     }
     validate();
 }

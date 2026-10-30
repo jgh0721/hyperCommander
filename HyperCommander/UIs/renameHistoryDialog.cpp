@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileToolsDialogs.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include <QtConcurrent>
 #include <fmwidgets/Button.h>
 #include <fmwidgets/RenameComparisonView.h>
@@ -82,7 +83,7 @@ void RenameHistoryDialog::reload() {
     using Result = storage::Result<QList<filetools::RenameRecord>>; auto* Watcher = new QFutureWatcher<Result>(this);
     connect(Watcher, &QFutureWatcher<Result>::finished, this, [this, Watcher, Selected] {
         const auto Result = Watcher->result(); Watcher->deleteLater(); loading_ = false; refresh_->setEnabled(true);
-        if (!Result.HasValue()) { SetMessage(QString::fromStdString(Result.Failure().code_), true); return; }
+        if (!Result.HasValue()) { SetMessage(hc::ui::ErrorText(Result.Failure()), true); return; }
         records_ = Result.Value(); QSignalBlocker Block(list_); list_->clear(); QTreeWidgetItem* Selection = nullptr;
         for (const auto& Record : records_) {
             auto* Item = new QTreeWidgetItem(list_, {QDateTime::fromMSecsSinceEpoch(Record.createdUtcMs_).toString("yyyy-MM-dd HH:mm:ss"),
@@ -101,7 +102,7 @@ void RenameHistoryDialog::select() {
     using Result = storage::Result<filetools::RenameRecord>; auto* Watcher = new QFutureWatcher<Result>(this);
     connect(Watcher, &QFutureWatcher<Result>::finished, this, [this, Watcher, Generation] {
         const auto Result = Watcher->result(); Watcher->deleteLater(); if (Generation != generation_ || loading_) return;
-        if (!Result.HasValue()) { SetMessage(QString::fromStdString(Result.Failure().code_), true); return; }
+        if (!Result.HasValue()) { SetMessage(hc::ui::ErrorText(Result.Failure()), true); return; }
         const auto& Record = Result.Value(); const auto Active = activeJob(Record.id_); QList<fm::ui::RenameComparisonView::Row> Rows;
         for (int I = 0; I < qMin(256, Record.count_); ++I) Rows.append({QFileInfo(Record.rows_[I].source_.path_).fileName(), QFileInfo(Record.rows_[I].target_).fileName(), RenameStateText(Record.state_, Active), false});
         comparison_->SetRows(Rows);
@@ -119,7 +120,7 @@ void RenameHistoryDialog::select() {
         SetMessage(Active ? Status + tr(" · 작업 관리자에서 제어하세요. 실행 중인 기록은 복구를 중복 접수하지 않습니다.")
             : ChildActive ? tr("이 기록을 되돌리는 작업이 실행 중입니다. 작업 관리자에서 제어하세요.")
             : Superseded ? tr("이미 되돌린 기록입니다. 최신 실행 취소·다시 실행 기록을 선택하세요.")
-            : !Record.error_.isEmpty() ? Record.error_ : tr("%1개 · %2").arg(Record.count_).arg(Status), !Active && !Record.error_.isEmpty());
+            : !Record.error_.isEmpty() ? hc::ui::ErrorText(Record.error_) : tr("%1개 · %2").arg(Record.count_).arg(Status), !Active && !Record.error_.isEmpty());
     });
     Watcher->setFuture(QtConcurrent::run([Id] { return filetools::ReadRenameRecord(filetools::RenameJournalDirectory(), Id); }));
 }
@@ -131,10 +132,10 @@ void RenameHistoryDialog::submit(int Action) {
     using Result = storage::Result<operations::PreparedJob>; auto* Watcher = new QFutureWatcher<Result>(this);
     connect(Watcher, &QFutureWatcher<Result>::finished, this, [this, Watcher, Action] {
         auto Prepared = Watcher->future().takeResult(); Watcher->deleteLater(); loading_ = false; refresh_->setEnabled(true);
-        if (!Prepared.HasValue() || !jobOwner_) { SetMessage(Prepared.HasValue() ? tr("작업 관리자가 종료되었습니다.") : QString::fromStdString(Prepared.Failure().code_), true); return; }
+        if (!Prepared.HasValue() || !jobOwner_) { SetMessage(Prepared.HasValue() ? tr("작업 관리자가 종료되었습니다.") : hc::ui::ErrorText(Prepared.Failure()), true); return; }
         Prepared.Value().request_.deferred_ = queued_->isChecked();
         auto Started = jobs_->SubmitRename(std::move(Prepared.Value()), Action == 0 ? tr("이름 변경 실행 취소·다시 실행") : Action == 1 ? tr("중단된 이름 변경 이어 실행") : tr("중단된 이름 변경 원래 이름 복구"));
-        if (!Started.HasValue()) { SetMessage(QString::fromStdString(Started.Failure().code_), true); return; }
+        if (!Started.HasValue()) { SetMessage(hc::ui::ErrorText(Started.Failure()), true); return; }
         const auto Handle = Started.Value(); auto* Timer = new QTimer(this);
         connect(Timer, &QTimer::timeout, this, [this, Timer, Handle] {
             if (Handle.completion_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;

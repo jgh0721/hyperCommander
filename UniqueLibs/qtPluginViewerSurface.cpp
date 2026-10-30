@@ -1,4 +1,5 @@
 ﻿#include "qtPluginViewerSurface.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include <QEvent>
 #include <qt_windows.h>
@@ -231,7 +232,7 @@ void QtPluginViewerSurface::poll()
             if (Failure.isEmpty() && Record["lifecycle"].toString() != "failed") continue;
             preparedSequence_ = 0; timer_->stop();
             const auto Reason = Failure.isEmpty() ? tr("문서 읽기 실패") : Failure;
-            status_->setText(tr("문서를 열 수 없습니다: %1").arg(Reason));
+            status_->setText(tr("문서를 열 수 없습니다: %1").arg(hc::ui::ErrorText(Reason)));
             emit Failed(Reason); return;
         }
     }
@@ -309,7 +310,7 @@ void QtPluginViewerSurface::Search(const QString& Text, bool Backward)
     }
     const auto Result = session_->Search(Text, (Backward ? 8 : 0) | (Text != lastSearch_ ? 1 : 0));
     if (Result.HasValue()) lastSearch_ = Text;
-    if (!Result.HasValue()) status_->setText(QString::fromStdString(Result.Failure().code_));
+    if (!Result.HasValue()) status_->setText(hc::ui::ErrorText(Result.Failure()));
 }
 
 Result<std::uint64_t> QtPluginViewerSurface::SendDocument(QJsonObject Request)

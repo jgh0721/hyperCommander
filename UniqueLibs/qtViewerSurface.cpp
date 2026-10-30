@@ -1,4 +1,5 @@
 ﻿#include "qtViewerSurface.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include <QAction>
 #include "qtViewerProvider.hpp"
 #include <QBuffer>
@@ -433,7 +434,7 @@ void QtViewerSurface::finishPresentation()
 void QtViewerSurface::fail(const QString& Code)
 {
     auto& S = *state_; S.timer_->stop(); S.ready_ = S.inserting_ = false; S.stop_->setEnabled(false);
-    S.status_->setText(tr("파일을 표시할 수 없습니다. 보기 메뉴에서 텍스트 또는 인코딩을 선택할 수 있습니다.\n%1").arg(Code)); emit Failed(Code);
+    S.status_->setText(tr("파일을 표시할 수 없습니다. 보기 메뉴에서 텍스트 또는 인코딩을 선택할 수 있습니다.\n%1").arg(hc::ui::ErrorText(Code))); emit Failed(Code);
 }
 void QtViewerSurface::updateImage()
 {

@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/errorPresentation.hpp"
 
 #include "commonLibs/storage/storage.hpp"
 #include <QDir>
@@ -57,14 +58,8 @@ namespace hc::ui
         Text.details_ = QObject::tr("경로: %1\n오류 코드: %2").arg(NativePath, Code);
         if (!Error.nativePath_.empty() && QString::fromStdString(Error.nativePath_) != Path)
             Text.details_ += QObject::tr("\n실패한 항목: %1").arg(QDir::toNativeSeparators(QString::fromStdString(Error.nativePath_)));
-        if (Code.startsWith("win32:")) {
-            bool Valid = false;
-            const auto NativeCode = Code.mid(6).toULong(&Valid);
-            wchar_t Message[2048]{};
-            if (Valid && FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                nullptr, NativeCode, 0, Message, DWORD(std::size(Message)), nullptr))
-                Text.details_ += QObject::tr("\nWindows 오류: %1").arg(QString::fromWCharArray(Message).trimmed());
-        }
+        const auto Presented = DescribeError(Error);
+        Text.details_ += '\n' + Presented.Summary();
         return Text;
     }
 }

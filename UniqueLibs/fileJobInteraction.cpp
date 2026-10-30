@@ -130,7 +130,7 @@ namespace hc::ui
             : Password ? Request.passwordAttempt_ > 1 ? tr("암호가 맞지 않습니다. 다시 입력하거나 저장된 암호를 선택하세요.") : tr("입력한 암호는 작업 기록에 표시하지 않습니다.")
             : Kind == InteractionKind::RetryFailure && Request.reason_.starts_with("file-in-use:") ? tr("다른 프로그램에서 항목을 사용하고 있습니다. 파일을 닫은 뒤 다시 시도하세요.")
             : Kind == InteractionKind::RetryFailure && Request.reason_.starts_with("delete-failure:") ? FileOperationErrorText(Request.reason_.substr(15)) + tr("\n건너뛰면 해당 항목을 남겨두고 나머지 삭제를 계속합니다. 모두 건너뛰기는 현재 삭제 작업의 후속 오류에도 적용됩니다.")
-            : Kind == InteractionKind::Elevation ? tr("허용된 방법으로 다시 시도하거나 작업을 취소하세요.") : QString::fromStdString(Request.reason_);
+            : Kind == InteractionKind::Elevation ? tr("허용된 방법으로 다시 시도하거나 작업을 취소하세요.") : hc::ui::ErrorText(Request.reason_);
         setWindowTitle(Operation + (Kind == InteractionKind::Overwrite || Kind == InteractionKind::Rename ? tr(" · 이름 충돌") : Password ? tr(" · 암호 입력") : tr(" · 응답 필요")));
         auto* Layout = new QVBoxLayout(this); Layout->setSpacing(16); Layout->setAlignment(Qt::AlignTop);
         heading_ = new QLabel(headingText_, this); heading_->setObjectName("hc.jobs.interaction.heading"); heading_->setWordWrap(true); heading_->setTextFormat(Qt::PlainText);

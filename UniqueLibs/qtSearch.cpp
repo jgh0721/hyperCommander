@@ -1,4 +1,5 @@
 ﻿#include <QCoreApplication>
+#include "UniqueLibs/errorPresentation.hpp"
 #include <QDir>
 #include <QFileInfo>
 #include "qtSearch.hpp"
@@ -178,10 +179,10 @@ private:
     void start() {
         if (busy_) return;
         cancel(); auto Matcher = Compile(query_->text(), metadata_);
-        if (!Matcher.HasValue()) { status_->setText(QString::fromStdString(Matcher.Failure().code_)); return; }
+        if (!Matcher.HasValue()) { status_->setText(hc::ui::ErrorText(Matcher.Failure())); return; }
         auto Provider = engine_->currentIndex() == 0 ? MakeEnumeratingSearch(provider_) : MakeEverythingSearch(QCoreApplication::applicationDirPath() + "/hc-search-index.exe", provider_);
         auto Open = Provider->Search({root_, recursive_->isChecked()}, Matcher.Value());
-        if (!Open.HasValue()) { status_->setText(QString::fromStdString(Open.Failure().code_)); return; }
+        if (!Open.HasValue()) { status_->setText(hc::ui::ErrorText(Open.Failure())); return; }
         cursor_ = std::move(Open.Value()); stop_ = std::stop_source(); entries_.clear(); results_->clear();
         deadline_ = std::chrono::steady_clock::now() + std::chrono::minutes(5); next();
     }
@@ -190,7 +191,7 @@ private:
         auto* Watcher = new QFutureWatcher<Result<SearchPage>>(this); const auto Generation = generation_;
         connect(Watcher, &QFutureWatcher<Result<SearchPage>>::finished, this, [this, Watcher, Generation] {
             auto Result = Watcher->result(); Watcher->deleteLater(); busy_ = false; start_->setEnabled(true); if (Generation != generation_) return;
-            if (!Result.HasValue()) { status_->setText(tr("검색 실패: %1").arg(QString::fromStdString(Result.Failure().code_))); cursor_.reset(); return; }
+            if (!Result.HasValue()) { status_->setText(tr("검색 실패: %1").arg(hc::ui::ErrorText(Result.Failure()))); cursor_.reset(); return; }
             const auto& Page = Result.Value();
             for (const auto& Entry : Page.matches_) {
                 auto Path = QString::fromStdString(Entry.locator_.root_); for (const auto& Hop : Entry.locator_.nesting_) Path += " / " + QString::fromStdString(Hop.entry_);
@@ -200,7 +201,7 @@ private:
                 .arg(Page.end_ ? tr("완료") : tr("다음 결과를 요청할 수 있습니다"))
                 .arg(Page.partial_ ? tr(" · 일부 경로 또는 범위 생략") : QString())
                 .arg(Page.freshness_ == SearchFreshness::IndexUnverified ? tr(" · 인덱스 누락 가능, 반환 항목은 파일 시스템에서 확인") : tr(" · 열거 시점 결과")));
-            if (!Page.warnings_.empty()) status_->setToolTip(QString::fromStdString(Page.warnings_.front().code_));
+            if (!Page.warnings_.empty()) status_->setToolTip(hc::ui::ErrorText(Page.warnings_.front()));
             next_->setEnabled(!Page.end_); if (Page.end_) cursor_.reset();
         });
         OperationContext Context; Context.stopToken_ = stop_.get_token(); Context.deadline_ = deadline_; Context.freshEnumerationMetadata_ = true;

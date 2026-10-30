@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "documentWorkspaceWidget.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "imageAsync.hpp"
 #include "documentFocusRestore.hpp"
@@ -76,20 +77,7 @@ namespace hc::document
     namespace
     {
         QJsonObject Error(const QString& Code) { return {{"error", Code}}; }
-        QString Message(const QString& Code)
-        {
-            if (Code.contains("external") || Code.contains("stale") || Code.contains("changed"))
-                return QObject::tr("원본이 변경되었습니다. 다시 읽거나 다른 이름으로 저장하십시오.");
-            if (Code.contains("cancel")) return QObject::tr("작업을 취소했습니다.");
-            if (Code.contains("missing") || Code.contains("not-found")) return QObject::tr("파일을 찾을 수 없습니다.");
-            if (Code.contains("denied") || Code.contains("access")) return QObject::tr("파일에 접근할 권한이 없습니다.");
-            if (Code.contains("budget") || Code.contains("byte-limit")) return QObject::tr("텍스트는 16 MiB, 문서 입력은 64 MiB 이하를 지원합니다.");
-            if (Code.contains("utf8") || Code.contains("eol")) return QObject::tr("문자의 인코딩과 파일 형식을 확인하십시오.");
-            if (Code.contains("recovery")) return QObject::tr("복구 사본 작업에 실패했습니다. 기존 사본을 유지합니다.");
-            if (Code.contains("original-save")) return QObject::tr("원본 저장 연결이 없습니다. 다른 이름으로 저장하십시오.");
-            if (Code.contains("cleanup")) return QObject::tr("저장은 완료했으며 정리 작업을 다시 확인해야 합니다.");
-            return QObject::tr("작업을 완료하지 못했습니다. 다시 시도하거나 다른 이름으로 저장하십시오.");
-        }
+        QString Message(const QString& Code) { return hc::ui::DescribeDocumentError(Code).Summary(); }
         QString Life(DocumentLifecycle Value)
         {
             switch (Value) { case DocumentLifecycle::Opening: return "opening"; case DocumentLifecycle::Ready: return "ready";

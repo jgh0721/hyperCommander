@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/errorPresentation.hpp"
 #include "nativeFileElevation.hpp"
 #include "nativeWritableStorage.hpp"
 #include "commonLibs/storage/entryIndex.hpp"
@@ -77,7 +78,7 @@ namespace hc::attributes
                 }
                 if (!Found) { Result.issues_.push_back({Entry, "제외", "관리자 조회에서 파일 신원을 확인하지 못했습니다. 하위 항목도 제외합니다."}); continue; }
             } else if (Fresh.Failure().category_ != ErrorCategory::AccessDenied || !Strong(Entry)) {
-                Result.issues_.push_back({Entry, "실패", QString::fromStdString(Fresh.Failure().code_)}); continue;
+                Result.issues_.push_back({Entry, "실패", hc::ui::ErrorText(Fresh.Failure())}); continue;
             }
             if (Entry.attributes_ & 0x400) { Result.issues_.push_back({Entry, "제외", "링크 항목은 변경하지 않습니다."}); continue; }
             Result.entries_.push_back(Entry);
@@ -99,11 +100,11 @@ namespace hc::attributes
             }
             if (!Cursor.HasValue()) {
                 if (Cursor.Failure().category_ == ErrorCategory::Cancelled) { Result.cancelled_ = true; break; }
-                Result.issues_.push_back({Entry, "하위 제외", QString::fromStdString(Cursor.Failure().code_) + " · 하위 개수 미확인"}); continue;
+                Result.issues_.push_back({Entry, "하위 제외", hc::ui::ErrorText(Cursor.Failure()) + " · 하위 개수 미확인"}); continue;
             }
             while (true) {
                 auto Page = Cursor.Value()->Next(256, Context).get();
-                if (!Page.HasValue()) { Result.blocked_ = true; Result.issues_.push_back({Entry, "실패", QString::fromStdString(Page.Failure().code_)}); break; }
+                if (!Page.HasValue()) { Result.blocked_ = true; Result.issues_.push_back({Entry, "실패", hc::ui::ErrorText(Page.Failure())}); break; }
                 if (Seen.size() + Roots.size() + Page.Value().entries_.size() > Limit) { Result.blocked_ = true; Result.issues_.push_back({Entry, "실패", "대상 수집 한도를 초과했습니다."}); break; }
                 for (auto& Child : Page.Value().entries_) Roots.push_back(std::move(Child));
                 if (Page.Value().end_) break;
@@ -169,7 +170,7 @@ namespace hc::attributes
             else {
                 const auto& E = Changed.Failure(); ++Result.failed_;
                 const bool Ambiguous = E.code_.find("unknown") != std::string::npos || E.code_.find("applied") != std::string::npos;
-                Result.items_.push_back({Entry, "실패", QString::fromStdString(E.code_), !Ambiguous && E.category_ != ErrorCategory::StaleRevision});
+                Result.items_.push_back({Entry, "실패", hc::ui::ErrorText(E), !Ambiguous && E.category_ != ErrorCategory::StaleRevision});
                 if (E.category_ == ErrorCategory::Cancelled || Ambiguous) break;
             }
         }

@@ -3,6 +3,9 @@
 #include "UniqueLibs/storageProviders.hpp"
 #include "commonLibs/operations/fileOperation.hpp"
 #include <QtTest>
+#include "UniqueLibs/errorPresentation.hpp"
+#include "UniqueLibs/navigationError.hpp"
+#include "UniqueLibs/fileOperationErrorText.hpp"
 #include "UniqueLibs/nativeFileElevation.hpp"
 #include "UniqueLibs/permissionService.hpp"
 #include "UniqueLibs/fileSecurityRecovery.hpp"
@@ -350,6 +353,65 @@ private:
     QStringList artifacts()
     { return QDir(root_->path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden | QDir::System); }
 private slots:
+    void errorPresentation_data() {
+        using namespace hc::ui;
+        QTest::addColumn<QString>("Code"); QTest::addColumn<int>("Domain"); QTest::addColumn<int>("Kind");
+        const auto Row = [](const char* Code, ErrorDomain Domain, ErrorKind Kind) {
+            QTest::newRow(Code) << QString::fromLatin1(Code) << int(Domain) << int(Kind);
+        };
+        Row("win32:5", ErrorDomain::Win32, ErrorKind::AccessDenied);
+        Row("win32:32", ErrorDomain::Win32, ErrorKind::InUse);
+        Row("win32:112", ErrorDomain::Win32, ErrorKind::DiskFull);
+        Row("win32:2", ErrorDomain::Win32, ErrorKind::NotFound);
+        Row("win32:1223", ErrorDomain::Win32, ErrorKind::Cancelled);
+        Row("elevation-launch:5", ErrorDomain::Win32, ErrorKind::AccessDenied);
+        Row("directory-peer:5", ErrorDomain::Win32, ErrorKind::AccessDenied);
+        Row("delete-failure:win32:5", ErrorDomain::Win32, ErrorKind::AccessDenied);
+        Row("file-in-use:win32:32", ErrorDomain::Win32, ErrorKind::InUse);
+        Row("automatic-name-failed:win32:5", ErrorDomain::Win32, ErrorKind::AccessDenied);
+        Row("native-recycle-recycle-failed-2147942405", ErrorDomain::HResult, ErrorKind::AccessDenied);
+        Row("hresult:0x80070005", ErrorDomain::HResult, ErrorKind::AccessDenied);
+        Row("hresult:0x80004005", ErrorDomain::HResult, ErrorKind::Unknown);
+        Row("job-journal-busy", ErrorDomain::Application, ErrorKind::InUse);
+        Row("archive-create-output-inside-input", ErrorDomain::Application, ErrorKind::InvalidInput);
+        Row("plugin-review-required", ErrorDomain::Application, ErrorKind::AccessDenied);
+        Row("future-error:5", ErrorDomain::Application, ErrorKind::Unknown);
+        Row("unegg-result:5", ErrorDomain::Application, ErrorKind::Unknown);
+        Row("win32:4294967296", ErrorDomain::Application, ErrorKind::Unknown);
+        Row("win32:5junk", ErrorDomain::Application, ErrorKind::Unknown);
+        Row("win32:4294967295", ErrorDomain::Win32, ErrorKind::Unknown);
+    }
+    void errorPresentation() {
+        QFETCH(QString, Code); QFETCH(int, Domain); QFETCH(int, Kind);
+        const auto P = hc::ui::DescribeError(Code);
+        QCOMPARE(P.code_, Code); QCOMPARE(int(P.domain_), Domain); QCOMPARE(int(P.kind_), Kind);
+        QVERIFY(!P.description_.isEmpty()); QVERIFY(P.description_ != Code); QVERIFY(!P.KindText().isEmpty());
+        QVERIFY(P.Details().contains(Code)); QVERIFY(P.Text().contains(P.description_));
+        QCOMPARE(hc::ui::FileOperationErrorText(Code.toStdString()), P.Text());
+    }
+    void errorPresentationContext() {
+        using namespace hc::ui;
+        Error E{ErrorCategory::AccessDenied, "future-provider-error", {"fixture"}}; E.nativePath_ = "D:/owned/file.txt";
+        auto P = DescribeError(E, "copy"); QCOMPARE(P.kind_, ErrorKind::AccessDenied);
+        QCOMPARE(P.path_, QString::fromStdString(E.nativePath_)); QCOMPARE(P.provider_, QString("fixture"));
+        QVERIFY(P.Details().contains("copy")); QCOMPARE(E.code_, std::string("future-provider-error"));
+        P = DescribeWin32Error(5); QCOMPARE(P.nativeCode_.value(), quint32(5)); QCOMPARE(P.kind_, ErrorKind::AccessDenied);
+        const auto H = DescribeHResult(0x80070005u); QCOMPARE(H.description_, P.description_); QCOMPARE(H.domain_, ErrorDomain::HResult);
+        const auto RenameCode = QString("rename-failed: Windows 5 ")+QChar(0xb7)+" D:/owned/file.txt";
+        P = DescribeError(RenameCode); QCOMPARE(P.kind_, ErrorKind::AccessDenied); QCOMPARE(P.path_, QString("D:/owned/file.txt"));
+        const auto Uncertain = DescribeError(QString("elevation-outcome-unknown")); QVERIFY(!Uncertain.recovery_.isEmpty());
+        QVERIFY(DescribeError(QString()).Text().isEmpty());
+        const auto Notice = DescribeError(QString("recovery-artifact-preserved"));
+        QCOMPARE(Notice.severity_, ErrorSeverity::Information); QCOMPARE(Notice.Text(), Notice.Summary());
+        Error Native{ErrorCategory::AccessDenied, "win32:5"};
+        const auto Navigation = DescribeNavigationError(Native, "D:/owned");
+        QVERIFY(Navigation.details_.contains(DescribeError(Native).description_)); QVERIFY(!Navigation.recovery_.isEmpty());
+        QCOMPARE(DescribeDocumentError("win32:5").kind_, ErrorKind::AccessDenied);
+        QCOMPARE(DescribeDocumentError("external-changed").kind_, ErrorKind::Changed);
+        QCOMPARE(DescribeDocumentError("byte-limit").kind_, ErrorKind::LimitExceeded);
+        SetLastError(1234); DescribeWin32Error(5); QCOMPARE(GetLastError(), DWORD(1234));
+    }
+
     void conflictResponses_data()
     {
         QTest::addColumn<int>("Mode");

@@ -1,4 +1,5 @@
 ﻿#include "qtPluginHostSettings.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include "pluginHost/manifestFile.hpp"
 #include "qtMessageDialog.hpp"
 #include "archive/creationSettings.hpp"
@@ -186,7 +187,7 @@ void QPluginHostSettings::verifyCreation()
     QJsonObject Record{{"path", Row.path_}, {"hostManifest", Row.manifest_}, {"hostReviewed", hc::settings::JsonObject(Row.reviewed_)}, {"hostEnabled", true}};
     auto Creator = hc::archive::ExternalCreator(Record, format_, settingsDirectory_);
     const auto Result = hc::archive::RunArchiveWorker(this, tr("압축 생성 지원 확인"), [Creator, Formats](hc::storage::OperationContext Context) { return hc::archive::VerifyCreationFormats(Creator, Formats, Context); });
-    if (!Result.HasValue()) { if (Result.Failure().category_ != hc::storage::ErrorCategory::Cancelled) hc::ui::MessageDialog::warning(this, tr("압축 생성 지원 확인"), QString::fromStdString(Result.Failure().code_)); return; }
+    if (!Result.HasValue()) { if (Result.Failure().category_ != hc::storage::ErrorCategory::Cancelled) hc::ui::MessageDialog::warning(this, tr("압축 생성 지원 확인"), hc::ui::ErrorText(Result.Failure())); return; }
     rows_[At].creation_ = Result.Value(); updateState(At);
     QStringList Verified; for (const auto& Format : Result.Value()["formats"].toArray()) Verified << Format.toString().toUpper();
     hc::ui::MessageDialog::information(this, tr("압축 생성 지원 확인"), tr("생성 가능한 형식: %1").arg(Verified.join(", ")));
@@ -242,12 +243,12 @@ void QPluginHostSettings::review()
     connect(Watcher, &QFutureWatcher<Result<InspectedPlugin>>::finished, this, [this, Watcher, At, Generation, Old, Binary] {
         const auto Checked = Watcher->result(); Watcher->deleteLater(); if (Generation != generation_) return;
         const auto Reset = [this] { review_->setEnabled(true); review_->setText(tr("검사·재승인…")); };
-        if (!Checked.HasValue()) { Reset(); hc::ui::MessageDialog::warning(this, tr("플러그인 검사 실패"), tr("플러그인 파일을 검사하지 못했습니다. 파일과 함께 설치한 DLL을 확인하세요.\n%1").arg(QString::fromStdString(Checked.Failure().code_))); return; }
+        if (!Checked.HasValue()) { Reset(); hc::ui::MessageDialog::warning(this, tr("플러그인 검사 실패"), tr("플러그인 파일을 검사하지 못했습니다. 파일과 함께 설치한 DLL을 확인하세요.\n%1").arg(hc::ui::ErrorText(Checked.Failure()))); return; }
         auto Plugin = Checked.Value(); const auto& Manifest = Plugin.manifest_;
         PluginApproval Approval{Manifest, true, false, Manifest.permissions_};
         HostProfile Profile; Profile.formats_ = {format_}; Profile.supportsIsolation_ = true; Profile.extensions_ = Manifest.extensions_;
         const auto Admitted = Admit(Manifest, Approval, Profile);
-        if (!Admitted.HasValue()) { Reset(); hc::ui::MessageDialog::warning(this, tr("플러그인 검사 실패"), QString::fromStdString(Admitted.Failure().code_)); return; }
+        if (!Admitted.HasValue()) { Reset(); hc::ui::MessageDialog::warning(this, tr("플러그인 검사 실패"), hc::ui::ErrorText(Admitted.Failure())); return; }
         const bool Changed = Old.HasValue() && Old.Value() != Manifest;
         QStringList Permissions{tr("파일 읽기")};
         if (Manifest.permissions_.contains(Permission::WriteContent)) Permissions << tr("파일 변경");
@@ -282,7 +283,7 @@ void QPluginHostSettings::review()
         auto* Save = new QFutureWatcher<Result<QString>>(this);
         connect(Save, &QFutureWatcher<Result<QString>>::finished, this, [this, Save, Plugin, At, Generation, Reset] {
             const auto Saved = Save->result(); Save->deleteLater(); if (Generation != generation_) return; Reset();
-            if (!Saved.HasValue()) { hc::ui::MessageDialog::warning(this, tr("승인 저장 실패"), tr("검사 중 파일이 바뀌었거나 승인 정보를 저장할 수 없습니다. 다시 검사해 주세요.\n%1").arg(QString::fromStdString(Saved.Failure().code_))); return; }
+            if (!Saved.HasValue()) { hc::ui::MessageDialog::warning(this, tr("승인 저장 실패"), tr("검사 중 파일이 바뀌었거나 승인 정보를 저장할 수 없습니다. 다시 검사해 주세요.\n%1").arg(hc::ui::ErrorText(Saved.Failure()))); return; }
             rows_[At].manifest_ = Saved.Value(); rows_[At].reviewed_ = EncodeManifest(Plugin.manifest_); rows_[At].verification_ = tr("승인됨 · 파일 확인 완료");
             table_->item(At, 2)->setCheckState(Qt::Checked); updateState(At); checkFiles();
         });

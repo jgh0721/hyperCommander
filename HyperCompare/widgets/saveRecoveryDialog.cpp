@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "saveRecoveryDialog.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include "runtime/saveRecovery.hpp"
 #include "UniqueLibs/qtDialogFrame.hpp"
 #include <QtConcurrent/QtConcurrentRun>
@@ -74,7 +75,7 @@ namespace hc::compare
                     item->setData(0, Qt::UserRole, path); item->setToolTip(0, path); item->setToolTip(1, path);
                 }
                 journals_->sortItems(1, Qt::AscendingOrder);
-                state_->setText(last_.error_.isEmpty() ? (last_.recovery_.isEmpty() ? tr("저장 복구 기록이 없습니다.") : tr("기록 %1개 — 검토할 기록을 선택하세요.").arg(last_.recovery_.size())) : tr("목록 조회 중단: %1").arg(last_.error_));
+                state_->setText(last_.error_.isEmpty() ? (last_.recovery_.isEmpty() ? tr("저장 복구 기록이 없습니다.") : tr("기록 %1개 — 검토할 기록을 선택하세요.").arg(last_.recovery_.size())) : tr("목록 조회 중단: %1").arg(hc::ui::ErrorText(last_.error_)));
                 details_->setPlainText(tr("기록 폴더: %1").arg(last_.saveRecovery_["directory"].toString()));
             }
             else
@@ -144,14 +145,14 @@ namespace hc::compare
         const QMap<QString, QString> phases{{"writing", tr("임시 파일 기록")}, {"prepared", tr("게시 준비")}, {"backedUp", tr("원본 백업")}, {"published", tr("결과 게시")}, {"finished", tr("저장 완료")}, {"aborted", tr("저장 중단")}};
         phase_->setText(phases.value(info["phase"].toString(), info["phase"].toString()));
         if (!last_.error_.isEmpty())
-            state_->setText(last_.error_ == "SaveRecoveryPreviewChanged" ? tr("확인 후 복구 기록이 변경되었습니다. ‘기록 다시 확인’으로 경로를 검토하세요.") : tr("복구 처리 중단: %1").arg(last_.error_));
+            state_->setText(last_.error_ == "SaveRecoveryPreviewChanged" ? tr("확인 후 복구 기록이 변경되었습니다. ‘기록 다시 확인’으로 경로를 검토하세요.") : tr("복구 처리 중단: %1").arg(hc::ui::ErrorText(last_.error_)));
         else if (task_ == Task::Preview) state_->setText(tr("기록 확인 완료. 실제 대상·백업·임시 파일의 식별자는 복구 실행 시 검사합니다."));
         else if (info["identitiesVerified"].toBool())
             state_->setText(last_.completion_ != "Complete" ? tr("복구 검사가 일부 완료되었습니다. 아래 오류와 보존 파일을 확인하세요.") :
                 last_.commit_ == "Committed" ? tr("복구 검사 완료 — 이미 저장된 결과 파일을 유지했습니다.") :
                 info["destinationPresent"].toBool() ? tr("복구 검사 완료 — 대상 파일이 존재합니다. 아래 보존 경로를 검토하세요.") : tr("대상 파일이 없습니다. 보존된 임시 파일을 별도로 검토하세요."));
         QStringList lines{tr("기록: %1").arg(selectedPath_)};
-        if (!last_.error_.isEmpty()) lines << tr("오류: %1").arg(last_.error_);
+        if (!last_.error_.isEmpty()) lines << tr("오류: %1").arg(hc::ui::ErrorText(last_.error_));
         for (const auto& warning : last_.warnings_) lines << tr("알림: %1").arg(warning.toString());
         if (task_ == Task::Recover) { lines << tr("보존된 경로:"); for (const auto& path : last_.recovery_) lines << path.toString(); }
         details_->setPlainText(lines.join('\n'));

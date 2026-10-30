@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileToolsDialogs.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include "permissionDialogs.hpp"
 #include <fmwidgets/WrapLayout.h>
 #include <QtConcurrent>
@@ -78,16 +79,16 @@ void NewFileDialog::accept() {
     if (busy_ || !AcceptButton()->isEnabled()) return;
     if (submit_) {
         auto Prepared = filetools::PrepareCreate(writer_, location_, name_->text(), type_, bom_->isChecked(), {}, {}, true);
-        if (!Prepared.HasValue()) { SetMessage(QString::fromStdString(Prepared.Failure().code_), true); return; }
+        if (!Prepared.HasValue()) { SetMessage(hc::ui::ErrorText(Prepared.Failure()), true); return; }
         auto Submitted = submit_(std::move(Prepared.Value()));
-        if (!Submitted.HasValue()) { SetMessage(QString::fromStdString(Submitted.Failure().code_), true); return; }
+        if (!Submitted.HasValue()) { SetMessage(hc::ui::ErrorText(Submitted.Failure()), true); return; }
         busy_ = true; controls_->setEnabled(false); SetAcceptEnabled(false); CancelButton()->setEnabled(true); SetMessage(tr("작업 관리자를 통해 파일을 만들고 있습니다…"));
         const auto Handle = Submitted.Value(); jobId_ = Handle.id_; const auto Name = name_->text(); auto* Timer = new QTimer(this);
         connect(Timer, &QTimer::timeout, this, [this, Timer, Handle, Name] {
             if (Handle.completion_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
             const auto Result = Handle.completion_.get(); Timer->stop(); Timer->deleteLater(); busy_ = false; jobId_.clear(); controls_->setEnabled(true);
             if (Result.snapshot_.state_ == operations::JobState::Completed) { createdPath_ = QDir(folder_).filePath(Name); QDialog::accept(); }
-            else { validate(); SetMessage(Result.snapshot_.error_ ? QString::fromStdString(Result.snapshot_.error_->code_) : tr("생성을 취소했습니다."), true); }
+            else { validate(); SetMessage(Result.snapshot_.error_ ? hc::ui::ErrorText(*Result.snapshot_.error_) : tr("생성을 취소했습니다."), true); }
         }); Timer->start(50); return;
     }
     busy_ = true; controls_->setEnabled(false); SetAcceptEnabled(false); CancelButton()->setEnabled(false); SetMessage(tr("파일을 만들고 있습니다…"));
@@ -206,7 +207,7 @@ BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, Q
             for (std::uint64_t Offset = 0; Offset < Count;) {
                 if (Stop.stop_requested()) return S;
                 auto Page = Selection->Read(Offset, std::size_t((std::min)(std::uint64_t(256), Count-Offset)), Context);
-                if (!Page.HasValue()) { S.error_ = QString::fromStdString(Page.Failure().code_); return S; }
+                if (!Page.HasValue()) { S.error_ = hc::ui::ErrorText(Page.Failure()); return S; }
                 if (Page.Value().entries_.empty() || Page.Value().entries_.size() > Count-Offset || Page.Value().entries_.size() > 256) { S.error_ = QObject::tr("선택 목록이 변경되었거나 페이지가 누락되었습니다."); return S; }
                 for (const auto& Entry : Page.Value().entries_) {
                     if (Entry.locator_.kind_ != storage::LocatorKind::Local && Entry.locator_.kind_ != storage::LocatorKind::Smb) { S.error_ = QObject::tr("선택 항목의 공급자를 지원하지 않습니다."); return S; }
@@ -304,12 +305,12 @@ void BatchRenameDialog::run(bool Undo) {
         if (!Prepared.HasValue() || !jobOwner_) {
             busy_ = false; controls_->setEnabled(true); queued_->setEnabled(true); preview();
             undoButton_->setEnabled(!undo_.isEmpty() && !undone_); redoButton_->setEnabled(!undo_.isEmpty() && undone_);
-            SetMessage(Prepared.HasValue() ? tr("작업 관리자가 종료되었습니다.") : QString::fromStdString(Prepared.Failure().code_), true); return;
+            SetMessage(Prepared.HasValue() ? tr("작업 관리자가 종료되었습니다.") : hc::ui::ErrorText(Prepared.Failure()), true); return;
         }
         pendingRecordId_ = QString::fromStdString(Prepared.Value().request_.metadata_.options_).mid(14);
         Prepared.Value().request_.deferred_ = queued_->isChecked() || cancelWhenReady_;
         auto Started = jobs_->SubmitRename(std::move(Prepared.Value()), Undo ? undone_ ? tr("이름 변경 다시 실행") : tr("이름 변경 실행 취소") : tr("다중 이름 변경"));
-        if (!Started.HasValue()) { busy_ = false; controls_->setEnabled(true); queued_->setEnabled(true); preview(); SetMessage(QString::fromStdString(Started.Failure().code_), true); return; }
+        if (!Started.HasValue()) { busy_ = false; controls_->setEnabled(true); queued_->setEnabled(true); preview(); SetMessage(hc::ui::ErrorText(Started.Failure()), true); return; }
         const auto Handle = Started.Value(); jobId_ = Handle.id_;
         if (cancelWhenReady_) jobs_->RenameScheduler().Cancel(jobId_);
         else if (queued_->isChecked()) { QDialog::accept(); return; }
@@ -336,7 +337,7 @@ void BatchRenameDialog::run(bool Undo) {
                     }
                     Result.current_.append(Entry);
                 }
-                if (!Result.complete_) Result.error_ = JobResult.snapshot_.error_ ? QString::fromStdString(JobResult.snapshot_.error_->code_) : QObject::tr("작업을 취소하고 원래 이름으로 복구했습니다.");
+                if (!Result.complete_) Result.error_ = JobResult.snapshot_.error_ ? hc::ui::ErrorText(*JobResult.snapshot_.error_) : QObject::tr("작업을 취소하고 원래 이름으로 복구했습니다.");
                 return Result;
             }));
         }); Timer->start(50);

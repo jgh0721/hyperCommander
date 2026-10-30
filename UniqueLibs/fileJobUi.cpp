@@ -62,25 +62,6 @@ namespace
         }
         return {};
     }
-    QString ErrorText(const Error& Value)
-    {
-        if(Value.code_.starts_with("elevation-outcome-unknown"))return QObject::tr("도우미와 연결이 끊겨 변경 결과를 확정하지 못했습니다. 대상·원본과 작업 기록을 확인하세요. 자동 재실행하지 않습니다.");
-        if(Value.code_=="elevation-cleanup-pending")return QObject::tr("도우미의 임시 파일 정리 완료를 아직 확인하지 못했습니다. 작업 기록과 보존 파일을 확인하세요.");
-        if(Value.code_.starts_with("security-status-save-failed"))return QObject::tr("보안 작업 결과 기록을 저장하지 못했습니다. 원래 권한 백업은 유지됩니다. 현재 권한과 복구 결과를 확인하세요.");
-        if(Value.code_.starts_with("permission-history-save-failed"))return QObject::tr("권한 작업은 처리했지만 요청 이력을 저장하지 못했습니다. 작업 결과와 보안 백업을 확인하세요.");
-        if (Value.code_ == "recovery-committed-checkpoints") return QObject::tr("중단 전 목적지 저장 완료 기록(건):");
-        if (Value.code_ == "recovery-artifact-preserved") return QObject::tr("확인을 위해 보존한 파일:");
-        if (Value.code_ == "conflict-destination-preserved") return QObject::tr("이름을 변경하여 보관한 기존 대상 파일:");
-        if (Value.code_.starts_with("automatic-name-failed:")) return QObject::tr("자동 이름 변경을 완료하지 못해 해당 항목을 중단했습니다. 기존 대상을 덮어쓰지 않습니다. (%1)").arg(QString::fromStdString(Value.code_.substr(22)));
-        if (Value.code_ == "write-recovery-original-missing") return QObject::tr("원본 위치와 백업을 찾을 수 없습니다. 보존된 파일을 확인하세요.");
-        if (Value.code_ == "destination-added-hidden-attribute")
-            return QObject::tr("파일 내용은 복사되었지만 대상에서 숨김 속성이 추가되었습니다. 대상 서버의 숨김 파일 정책을 확인하세요. 이동 작업의 원본은 유지됩니다.");
-        if (Value.code_ == "destination-attributes-mismatch")
-            return QObject::tr("파일 내용은 복사되었지만 대상의 파일 속성이 원본과 다릅니다. 대상의 속성 지원 및 정책을 확인하세요. 이동 작업의 원본은 유지됩니다.");
-        if (Value.code_ == "revision-changed")
-            return QObject::tr("항목의 식별 정보가 작업 시작 이후 달라져 작업을 중단했습니다. 폴더를 새로 고친 뒤 남은 항목을 확인하고 다시 시도하세요. (revision-changed)");
-        return hc::ui::FileOperationErrorText(Value.code_);
-    }
     QString JobStatusText(const JobSnapshot& Snapshot)
     {
         if (Snapshot.error_ && Snapshot.error_->code_ == "job-interrupted") return QObject::tr("중단 · 확인 필요");
@@ -397,7 +378,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     managerRetry_->setToolTip(tr("현재 세션의 일반 파일 복사·이동에서 목적지 저장 전 실패한 항목을 재검증합니다. 중단 기록·폴더·압축·삭제는 상세 결과를 확인하세요."));
     connect(managerStart_, &QPushButton::clicked, this, [this] {
         auto Result = scheduler_.Control({selectedId()}, JobControl::Start);
-        if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("대기열 시작 실패"), ErrorText(Result.Failure()));
+        if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("대기열 시작 실패"), hc::ui::ErrorText(Result.Failure()));
         updateManager(); updateSelection();
     });
     connect(managerRetry_, &QPushButton::clicked, this, [this] { retrySelected(); });
@@ -459,7 +440,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
                 const auto Row = jobs_->findData(QString::fromStdString(Id)); if (Row >= 0) jobs_->removeItem(Row);
             }
             updateSelection(); updateManager();
-            if (Result.second) hc::ui::MessageDialog::warning(dialog_, tr("이력 삭제 실패"), QString::fromStdString(Result.second->code_));
+            if (Result.second) hc::ui::MessageDialog::warning(dialog_, tr("이력 삭제 실패"), hc::ui::ErrorText(*Result.second));
         });
         Watcher->setFuture(QtConcurrent::run([Journal = journal_, Ids = std::move(Ids)]() -> EraseResult {
             EraseResult Result;
@@ -541,7 +522,7 @@ QString FileJobUi::SubmitSecurityJob(const QString& Path,bool Grant,const QJsonO
     Job.request_.metadata_.source_=Path.toStdString();Job.request_.metadata_.destination_=Path.toStdString();Job.request_.metadata_.options_=Restore.isEmpty()?"security-backup-before-change":"security-identity-and-digest-restore";
     Job.request_.metadata_.kind_ = Restore.isEmpty() ? JobKind::SecurityChange : JobKind::SecurityRestore;
     Job.task_=std::make_unique<FileElevationJob>(std::move(Request),std::move(Service));auto Started=Submit(std::move(Job),Restore.isEmpty()?tr("소유권·권한 변경"):tr("원래 권한 복원"));
-    return Started.HasValue()?QString():QString::fromStdString(Started.Failure().code_);
+    return Started.HasValue()?QString():hc::ui::ErrorText(Started.Failure());
 }
 
 Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationContext Context, bool Deferred)
@@ -718,7 +699,7 @@ void FileJobUi::controlSelected(bool Pause)
     const auto Current = scheduler_.Snapshot(Id);
     if (!Current.HasValue()) return;
     const auto Result = Pause ? scheduler_.Pause(Id, !Current.Value().pauseRequested_) : scheduler_.Cancel(Id);
-    if (!Result.HasValue()) hc::ui::MessageDialog::warning(dialog_->isVisible() ? dialog_ : manager_, tr("작업 제어 실패"), ErrorText(Result.Failure()));
+    if (!Result.HasValue()) hc::ui::MessageDialog::warning(dialog_->isVisible() ? dialog_ : manager_, tr("작업 제어 실패"), hc::ui::ErrorText(Result.Failure()));
     updateSelection(); updateManager();
 }
 std::string FileJobUi::selectedId() const { return jobs_->currentData().toString().toStdString(); }
@@ -730,7 +711,7 @@ void FileJobUi::controlAll(JobControl Control)
         if (acceptsControl(Snapshot, Control)) Ids.push_back(Snapshot.id_);
     if (Ids.empty()) return;
     auto Result = scheduler_.Control(Ids, Control);
-    if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("일괄 제어 실패"), tr("작업 상태가 변경되었습니다. 목록을 확인하고 다시 실행하세요: %1").arg(ErrorText(Result.Failure())));
+    if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("일괄 제어 실패"), tr("작업 상태가 변경되었습니다. 목록을 확인하고 다시 실행하세요: %1").arg(hc::ui::ErrorText(Result.Failure())));
     updateManager(); updateSelection();
 }
 void FileJobUi::reorderSelected(int Direction)
@@ -745,7 +726,7 @@ void FileJobUi::reorderSelected(int Direction)
     std::swap(Values[Index], Values[Next]); std::vector<std::string> Ids;
     for (const auto& Snapshot : Values) Ids.push_back(Snapshot.id_);
     auto Result = scheduler_.ReorderQueued(Ids);
-    if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("순서 변경 실패"), ErrorText(Result.Failure()));
+    if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("순서 변경 실패"), hc::ui::ErrorText(Result.Failure()));
     updateManager(); updateSelection();
 }
 bool FileJobUi::canRetry(const std::string& Id) const
@@ -765,11 +746,11 @@ void FileJobUi::retrySelected()
         auto Record = preparedRetries_.at(Id); auto Context = retryContexts_.at(Id); const auto Original = results_.at(Id);
         Context.stopToken_ = {}; Context.deadline_ = std::chrono::steady_clock::time_point::max();
         auto Prepared = Record.build_(Original, Context);
-        if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), ErrorText(Prepared.Failure())); return; }
+        if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), hc::ui::ErrorText(Prepared.Failure())); return; }
         Prepared.Value().request_.metadata_ = Original.snapshot_.metadata_; Prepared.Value().request_.metadata_.retryOf_ = Id;
         const auto Label = QString::fromStdString(Original.snapshot_.metadata_.label_);
         auto Submitted = Submit(std::move(Prepared.Value()), Label, Record.build_, Record.submitted_);
-        if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), ErrorText(Submitted.Failure())); return; }
+        if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), hc::ui::ErrorText(Submitted.Failure())); return; }
         if (Record.submitted_) Record.submitted_(Submitted.Value().id_);
         preparedRetries_.erase(Id); retryContexts_.erase(Id); updateManager(); updateSelection(); return;
     }
@@ -786,15 +767,15 @@ void FileJobUi::retrySelected()
     connect(Watcher, &QFutureWatcher<RetryResult>::finished, this, [this, Watcher, Id, Context] {
         auto Candidate = Watcher->result(); Watcher->deleteLater();
         preparingRetry_.clear();
-        if (!Candidate.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 검증 실패"), ErrorText(Candidate.Failure())); updateSelection(); return; }
+        if (!Candidate.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 검증 실패"), hc::ui::ErrorText(Candidate.Failure())); updateSelection(); return; }
         if (closing_) return;
         const auto Parent = scheduler_.Snapshot(Id); if (!Parent.HasValue() || !canRetry(Id)) { updateSelection(); return; }
         const auto Request = Candidate.Value(); auto Prepared = PrepareFileOperation(Request, Context);
-        if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), ErrorText(Prepared.Failure())); updateSelection(); return; }
+        if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), hc::ui::ErrorText(Prepared.Failure())); updateSelection(); return; }
         Prepared.Value().request_.metadata_ = Parent.Value().metadata_;
         Prepared.Value().request_.metadata_.retryOf_ = Id; Prepared.Value().request_.metadata_.options_ = tr("충돌: 다시 확인 · 재시도: 저장 전 실패한 항목만").toStdString();
         auto Submitted = track(scheduler_.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)), Request.operation_, Request.sources_.front().entry_.name_);
-        if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), ErrorText(Submitted.Failure())); updateSelection(); return; }
+        if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), hc::ui::ErrorText(Submitted.Failure())); updateSelection(); return; }
         const auto NewId = Submitted.Value().id_; retryRequests_[NewId] = Request; retryContexts_[NewId] = Context; endpoints_[NewId] = endpoints_[Id];
         if (onResubmitted_) onResubmitted_(NewId, Request);
         updateManager(); updateSelection();
@@ -920,13 +901,13 @@ void FileJobUi::updateJobs()
             QString Information;
             if (Snapshot.error_) {
                 const auto& Error = *Snapshot.error_;
-                Information = ErrorText(Error);
+                Information = hc::ui::ErrorText(Error);
                 if (!Error.nativePath_.empty()) Information += "\n" + DisplayPath(Error.nativePath_);
             }
             if (!Snapshot.metadata_.source_.empty()) Information += tr("\n원본: %1").arg(DisplayPath(Snapshot.metadata_.source_));
             if (!Snapshot.metadata_.destination_.empty()) Information += tr("\n대상: %1").arg(DisplayPath(Snapshot.metadata_.destination_));
             for (const auto& Error : Stored->second.cleanupErrors_) {
-                Information += "\n" + ErrorText(Error);
+                Information += "\n" + hc::ui::ErrorText(Error);
                 if (!Error.nativePath_.empty()) Information += "\n" + DisplayPath(Error.nativePath_);
             }
             Message->setInformativeText(Information.trimmed());
@@ -975,7 +956,7 @@ void FileJobUi::updateSelection()
     pagesBlock_->setVisible(ShowRecords);
     previousPage_->setVisible(ShowRecords); nextPage_->setVisible(ShowRecords);
     QString Notice;
-    if (Snapshot.error_) Notice = ErrorText(*Snapshot.error_);
+    if (Snapshot.error_) Notice = hc::ui::ErrorText(*Snapshot.error_);
     if (Snapshot.interaction_) Notice = Password ? tr("응답 대기 · 암호 입력 창에서 응답하세요.") : tr("응답 대기 · 안내 창에서 처리 방법을 선택하세요.");
     notice_->setText(Notice); notice_->setVisible(Valid && !Notice.isEmpty());
     if (!Valid) {
@@ -995,7 +976,7 @@ void FileJobUi::updateSelection()
             : Snapshot.interaction_->kind_ == InteractionKind::ReadOnlyRemoval ? tr("읽기 전용 항목의 삭제를 허용할지 선택하세요. 모두 허용은 이 작업 안에서만 적용됩니다.")
             : Snapshot.interaction_->kind_==InteractionKind::Elevation ? tr("작업에 필요한 권한을 얻지 못했습니다. 권한 오류 자세히에서 지원 가능한 응답을 확인하세요.")
             : Snapshot.interaction_->kind_==InteractionKind::RetryFailure ? tr("작업 실패 후 재시도 또는 취소 응답을 기다립니다.") : tr("목적지에 같은 이름의 항목이 있습니다. 처리 방법을 선택하세요.");
-    if (Snapshot.error_) Details += "\n" + ErrorText(*Snapshot.error_);
+    if (Snapshot.error_) Details += "\n" + hc::ui::ErrorText(*Snapshot.error_);
     if (const auto It = results_.find(Snapshot.id_); It != results_.end())
     {
         loadResultPage(Snapshot.id_);
@@ -1011,10 +992,10 @@ void FileJobUi::updateSelection()
                 if(!Backup["backupPath"].toString().isEmpty())Details+=tr("\n원래 권한 백업: %1").arg(Backup["backupPath"].toString());
                 if(Backup["rollbackCode"].toInt())Details+=tr("\n원래 권한 복구 실패: Windows 오류 %1").arg(Backup["rollbackCode"].toInt());
             }
-            if (Item.error_) Details += ": " + ErrorText(*Item.error_);
+            if (Item.error_) Details += ": " + hc::ui::ErrorText(*Item.error_);
             if (Item.destinationCommitted_ && !Item.sourceRemoved_) Details += tr(" (목적지 저장됨, 원본 유지)");
         }
-        for (const auto& Error : It->second.cleanupErrors_) Details += tr("\n완료 후 확인: %1 %2 %3").arg(ErrorText(Error), QString::fromStdString(Error.userAction_), DisplayPath(Error.nativePath_));
+        for (const auto& Error : It->second.cleanupErrors_) Details += tr("\n완료 후 확인: %1 %2 %3").arg(hc::ui::ErrorText(Error), QString::fromStdString(Error.userAction_), DisplayPath(Error.nativePath_));
     }
     Details = Details.trimmed();
     if (details_->toPlainText() != Details) details_->setPlainText(Details);
@@ -1409,7 +1390,7 @@ void FileJobUi::replyInteraction(const std::string& Id, const std::string& Reque
     if (Choice != InteractionChoice::Cancel && std::ranges::find(Now.Value().interaction_->choices_, Choice) == Now.Value().interaction_->choices_.end()) return;
     const auto Replied = Choice == InteractionChoice::Cancel ? scheduler_.Cancel(Id)
         : scheduler_.Reply(Id, {Request, Choice, Value.toStdString()});
-    if (!Replied.HasValue()) { if (interaction_) interaction_->SetError(tr("응답을 적용할 수 없습니다: %1").arg(QString::fromStdString(Replied.Failure().code_))); return; }
+    if (!Replied.HasValue()) { if (interaction_) interaction_->SetError(tr("응답을 적용할 수 없습니다: %1").arg(hc::ui::ErrorText(Replied.Failure()))); return; }
     if (Choice == InteractionChoice::Confirm && Now.Value().interaction_->kind_ == InteractionKind::Password) {
         hc::storage::OperationContext Context; Context.stopToken_ = passwordScopes_[Id].get_token();
         hc::passwords::RememberArchivePasswordForJob(Now.Value().interaction_->source_, Value, Context);

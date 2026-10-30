@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "qtPluginManagementPage.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include <fmwidgets/DialogHeader.h>
 #include "qtPluginHostSettings.hpp"
 #include "qtMessageDialog.hpp"
@@ -145,7 +146,7 @@ struct QPluginManagementPage::State {
             if (Found == entries_.cend() || record(*Found)["hostReviewed"] != Record["hostReviewed"]) return;
             const bool Selected = row_ >= 0 && entries_[row_].id_ == Value.id_;
             if (!Result.HasValue()) {
-                if (Selected) ruleStatus_->setText(QStringLiteral("탐지식을 읽지 못했습니다: ") + QString::fromStdString(Result.Failure().code_));
+                if (Selected) ruleStatus_->setText(QStringLiteral("탐지식을 읽지 못했습니다: ") + hc::ui::ErrorText(Result.Failure()));
             } else {
                 auto Updated = record(*Found);
                 const bool LegacyOverride = !Updated.contains("detectOverride") && !Updated["detect"].toString().isEmpty() && Updated["detect"].toString() != Result.Value();
@@ -333,7 +334,7 @@ bool QPluginManagementPage::State::validate(bool Show) {
         const auto& Value = entries_[row_]; const auto Record = record(Value);
         auto Parsed = PluginApplicationRule::Parse(Record.value("application"));
         // Unknown original schemas are read-only and may be retained on Apply.
-        if (editable_->isEnabled() && !Parsed.HasValue()) Message = QStringLiteral("적용 조건을 확인하세요: ") + QString::fromStdString(Parsed.Failure().code_);
+        if (editable_->isEnabled() && !Parsed.HasValue()) Message = QStringLiteral("적용 조건을 확인하세요: ") + hc::ui::ErrorText(Parsed.Failure());
         if (Parsed.HasValue() && !Parsed.Value().NameOnly() && ((Value.role_ != 2 && Value.role_ != 4) || !hosted_->isChecked())) Message = QStringLiteral("이 종류는 파일명 조건만 지원합니다. EXT 조건 또는 파일명 패턴을 사용하세요.");
         auto Exts = PluginApplicationRule::Parse(ruleObject(true, "extensions", strings(Record.value("extensions")), {}));
         if (!Exts.HasValue()) Message = QStringLiteral("등록 형식은 확장자를 ; 로 구분해 입력하세요.");
@@ -383,7 +384,7 @@ bool QPluginManagementPage::State::addTc(const QString& Source, bool Review) {
         auto Installed = installPackage(owner_, Path, root_);
         if (!Installed.HasValue()) {
             if (Installed.Failure().category_ != hc::storage::ErrorCategory::Cancelled)
-                hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 설치 실패"), QStringLiteral("ZIP에서 설치할 64비트 토탈 커맨더 플러그인을 확인하지 못했거나 설치 경로에 쓸 수 없습니다.\n%1").arg(QString::fromStdString(Installed.Failure().code_)));
+                hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 설치 실패"), QStringLiteral("ZIP에서 설치할 64비트 토탈 커맨더 플러그인을 확인하지 못했거나 설치 경로에 쓸 수 없습니다.\n%1").arg(hc::ui::ErrorText(Installed.Failure())));
             return false;
         }
         Path = Installed.Value().binary_; Group = Installed.Value().group_; Extensions = Installed.Value().extensions_;

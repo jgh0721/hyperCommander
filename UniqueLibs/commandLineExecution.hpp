@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/errorPresentation.hpp"
 
 #include <QDir>
 #include <QFileInfo>
@@ -87,9 +88,7 @@ inline QString Launch(const LaunchPlan& Plan, const QString& Directory)
     if (!CreateProcessW(Program.c_str(), Command.data(), nullptr, nullptr, FALSE,
         CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT, nullptr, Cwd.c_str(), &Startup, &Process)) {
         const auto Error = GetLastError();
-        wchar_t Message[1024]{};
-        FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, Error, 0, Message, 1024, nullptr);
-        return QObject::tr("명령 시작 실패 (%1): %2").arg(Error).arg(QString::fromWCharArray(Message).trimmed());
+        return hc::ui::DescribeWin32Error(Error, QObject::tr("명령 시작")).Text();
     }
     CloseHandle(Process.hThread); CloseHandle(Process.hProcess);
     return {};

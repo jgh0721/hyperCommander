@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "solTypeDefs_Ver.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include "qtMessageDialog.hpp"
 #include "builtinPluginCatalog.hpp"
 #include "HyperCommander/UIs/dialogShell.hpp"
@@ -167,7 +168,7 @@ namespace
     QString MetadataText(const Result<hc::plugins::MetadataValue>& Value)
     {
         using namespace hc::plugins;
-        if (!Value.HasValue()) return QString::fromStdString(Value.Failure().code_);
+        if (!Value.HasValue()) return hc::ui::ErrorText(Value.Failure());
         if (Value.Value().status_ == MetadataStatus::Delayed) return QObject::tr("계산 지연");
         if (Value.Value().status_ == MetadataStatus::OnDemand) return QObject::tr("요청 시 계산");
         QString Text;
@@ -286,7 +287,7 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     });
     connect(documents_, &hc::document::DocumentOpenController::Finished, this, [this](const QString&, const QString& Status, const QString& Reason) {
         if (auto* Window = qobject_cast<QMainWindow*>(main_.data())) {
-            if (Status == "failed" || Status == "rejected") Window->statusBar()->showMessage(tr("문서를 열 수 없습니다: %1").arg(Reason), 8000);
+            if (Status == "failed" || Status == "rejected") Window->statusBar()->showMessage(tr("문서를 열 수 없습니다: %1").arg(hc::ui::DescribeError(Reason).Summary()), 8000);
             else if (Status == "cancelled") Window->statusBar()->showMessage(tr("문서 열기를 취소했습니다."), 3000);
             else Window->statusBar()->showMessage(Status == "ready" ? tr("문서를 열었습니다.") : Status == "started" ? tr("편집기를 실행했습니다.") : tr("문서를 준비하고 있습니다…"), 3000);
         }
@@ -479,7 +480,7 @@ Task<CommandOutcome> CommandUiBridge::Dispatch(const QString& Id, const QVariant
         auto Token = captureDocument(Invocation, findModel(Invocation.context_.tabId_));
         if (!Token.HasValue()) {
             if (auto* Window = qobject_cast<QMainWindow*>(main_.data()))
-                Window->statusBar()->showMessage(tr("문서를 열 수 없습니다: %1").arg(QString::fromStdString(Token.Failure().code_)), 8000);
+                Window->statusBar()->showMessage(tr("문서를 열 수 없습니다: %1").arg(hc::ui::ErrorText(Token.Failure())), 8000);
             return Ready<CommandOutcome>(Token.Failure());
         }
         Invocation.parameters_["requestToken"] = Token.Value();
@@ -1339,12 +1340,12 @@ void CommandUiBridge::extractArchive() {
         };
         Prepared = hc::operations::PrepareExtract(std::move(Request), Operation);
     }
-    if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), QString::fromStdString(Prepared.Failure().code_)); return; }
+    if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), hc::ui::ErrorText(Prepared.Failure())); return; }
     Prepared.Value().request_.deferred_ = Dialog.Queued();
     Prepared.Value().request_.metadata_.source_ = Context.location_.root_; Prepared.Value().request_.metadata_.destination_ = Target.root_;
     Prepared.Value().request_.metadata_.kind_ = hc::operations::JobKind::Extract;
     auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("파일 압축 해제"));
-    if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), QString::fromStdString(Submitted.Failure().code_)); return; }
+    if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), hc::ui::ErrorText(Submitted.Failure())); return; }
     auto Parent = Target; Parent.root_ = QFileInfo(Path).absolutePath().toStdString();
     affectedLocations_[Submitted.Value().id_] = {Target, Parent};
     rememberJobSelection(Submitted.Value().id_, Context);
@@ -1378,10 +1379,10 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
     Request.sources_ = std::move(Sources); Request.selection_ = Context.selectionManifest_;
     for (const auto& Source : Request.sources_) Request.value_.sources_.push_back(Source.entry_);
     const auto Saved = Dialog.SavePreferences();
-    if (!Saved.HasValue()) hc::ui::MessageDialog::warning(main_, tr("압축 설정 저장"), QString::fromStdString(Saved.Failure().code_));
+    if (!Saved.HasValue()) hc::ui::MessageDialog::warning(main_, tr("압축 설정 저장"), hc::ui::ErrorText(Saved.Failure()));
     OperationContext Operation; Operation.passwordPrompt_ = hc::plugins::AskArchivePassword;
     auto Prepared = hc::archive::PrepareCreation(Request, Operation);
-    if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축"), QString::fromStdString(Prepared.Failure().code_)); return; }
+    if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축"), hc::ui::ErrorText(Prepared.Failure())); return; }
     auto Affected = Request.value_.output_; const auto Path = QString::fromStdString(Affected.root_);
     if (!Request.value_.composition_.separateArchives_) Affected.root_ = QFileInfo(Path).absolutePath().toStdString();
     const auto Label = Request.value_.composition_.separateArchives_ ? tr("압축 파일 개별 생성") : tr("압축 파일 생성 · %1").arg(QFileInfo(Path).fileName());
@@ -1390,7 +1391,7 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
             Request = hc::archive::RetryCreation(std::move(Request), Result);
             return hc::archive::PrepareCreation(Request, std::move(RetryContext));
         }, [Guard = QPointer<CommandUiBridge>(this), Affected](const std::string& Id) { if (Guard) Guard->affectedLocations_[Id] = {Affected}; });
-    if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축"), QString::fromStdString(Submitted.Failure().code_)); return; }
+    if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축"), hc::ui::ErrorText(Submitted.Failure())); return; }
     affectedLocations_[Submitted.Value().id_] = {Affected};
     rememberJobSelection(Submitted.Value().id_, Context);
 }
@@ -1428,7 +1429,7 @@ void CommandUiBridge::openIso(bool Inspect)
             auto* Watcher = new QFutureWatcher<Inspection>(Dialog);
             connect(Watcher, &QFutureWatcher<Inspection>::finished, Dialog, [Watcher, Table, Status, ReadAll, Full] {
                 const auto Result = Watcher->result(); Watcher->deleteLater(); ReadAll->setEnabled(true);
-                if (!Result.HasValue()) { Status->setText(QObject::tr("확인하지 못했습니다: %1").arg(QString::fromStdString(Result.Failure().code_))); return; }
+                if (!Result.HasValue()) { Status->setText(QObject::tr("확인하지 못했습니다: %1").arg(hc::ui::ErrorText(Result.Failure()))); return; }
                 const auto& Value = Result.Value();
                 auto Text = QObject::tr("%1 · 볼륨 %2\n%3\n파일 %4개 · 폴더 %5개 · %6바이트")
                     .arg(Full ? QObject::tr("전체 읽기 검사 완료") : QObject::tr("구조 확인 완료"), Value.volumeLabel_, Value.namespaces_.join(" + "))
@@ -1517,7 +1518,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
     connect(Watcher, &QFutureWatcher<Result<OpenResult>>::finished, Dialog, [this, Watcher, Dialog, Status, Table, Panel, Metadata, Source, Stop, Model, MetadataGeneration, Options, NativeRoot] {
         const auto Result = Watcher->result(); Watcher->deleteLater();
         if (!Result.HasValue()) {
-            const auto Code = QString::fromStdString(Result.Failure().code_); Status->setText(tr("연결 실패: %1").arg(Code));
+            const auto Code = QString::fromStdString(Result.Failure().code_); Status->setText(tr("연결 실패: %1").arg(hc::ui::ErrorText(Result.Failure())));
             hc::plugins::OfferPluginReview(main_, Code, Options.binaryPath_, viewers_->reviewPlugin_); return;
         }
         if (Metadata)
@@ -1994,7 +1995,7 @@ void CommandUiBridge::submitInlineRename(const QModelIndex& Index, const QString
         auto Result = Future->get(); Poll->stop(); Poll->deleteLater();
         if (!Result.HasValue()) {
             if (auto* Window = qobject_cast<QMainWindow*>(main_.data()))
-                Window->statusBar()->showMessage(tr("이름을 변경할 수 없습니다: %1").arg(QString::fromStdString(Result.Failure().code_)), 8000);
+                Window->statusBar()->showMessage(tr("이름을 변경할 수 없습니다: %1").arg(hc::ui::ErrorText(Result.Failure())), 8000);
         }
         if (!Result.HasValue() || Result.Value().jobId_.empty()) {
             if (auto It = inlineRenameCompletions_.find(Correlation); It != inlineRenameCompletions_.end()) {
@@ -2038,7 +2039,7 @@ void CommandUiBridge::updateClipboard()
         if (!Loaded.HasValue()) {
             clipboardToken_.clear(); clipboardExternal_ = false;
             if (auto* Window = qobject_cast<QMainWindow*>(main_.data()))
-                Window->statusBar()->showMessage(tr("클립보드 파일을 확인할 수 없습니다: %1").arg(QString::fromStdString(Loaded.Failure().code_)), 6000);
+                Window->statusBar()->showMessage(tr("클립보드 파일을 확인할 수 없습니다: %1").arg(hc::ui::ErrorText(Loaded.Failure())), 6000);
             refreshActionState(); return;
         }
         clipboard_ = std::move(Loaded.Value());
@@ -2071,7 +2072,7 @@ void CommandUiBridge::DropFiles(const QStringList& Paths, const QString& Destina
         Job.task_ = std::make_unique<ShortcutDropTask>(Paths, Target);
         auto Started = fileJobs_->Submit(std::move(Job), tr("바로 가기 만들기"));
         if (Started.HasValue()) affectedLocations_[Started.Value().id_] = {At};
-        else hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), QString::fromStdString(Started.Failure().code_));
+        else hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), hc::ui::ErrorText(Started.Failure()));
         return;
     }
     const auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
@@ -2080,7 +2081,7 @@ void CommandUiBridge::DropFiles(const QStringList& Paths, const QString& Destina
     auto* Watcher = new QFutureWatcher<ImportResult>(this);
     connect(Watcher, &QFutureWatcher<ImportResult>::finished, this, [this, Watcher, At, Options] {
         auto Loaded = Watcher->result(); Watcher->deleteLater();
-        if (!Loaded.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), tr("파일을 확인할 수 없습니다: %1").arg(QString::fromStdString(Loaded.Failure().code_))); return; }
+        if (!Loaded.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), tr("파일을 확인할 수 없습니다: %1").arg(hc::ui::ErrorText(Loaded.Failure()))); return; }
         auto Request = std::move(Loaded.Value()); Request.destination_ = At;
         Request.destinationWriter_ = MakeNativeWritableStorage(At.kind_, MakeNativeReadProvider(At.kind_));
         Request.copyOptions_.metadata_ = Options["copyMetadata"].toBool(true); Request.copyOptions_.verify_ = Options["copyVerify"].toBool(false);
@@ -2092,7 +2093,7 @@ void CommandUiBridge::DropFiles(const QStringList& Paths, const QString& Destina
         }
         auto Started = fileJobs_->Submit(std::move(Request), OperationContext{});
         if (Started.HasValue()) affectedLocations_[Started.Value().id_] = std::move(Affected);
-        else hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), QString::fromStdString(Started.Failure().code_));
+        else hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), hc::ui::ErrorText(Started.Failure()));
     });
     // Resolve immutable source paths away from the GUI thread; navigation and
     // clipboard changes during import must not redirect this drop.

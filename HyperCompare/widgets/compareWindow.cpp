@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include "comparePalette.hpp"
 #include "compareCommands.hpp"
 #include "compareSettingsDialog.hpp"
@@ -165,7 +166,7 @@ namespace hc::compare
         wholeActions_.push_back(tools->addAction(tr("전체 수동 완료"), this, [this] {
             if (!merge_ || busy()) return;
             try { merge_->ChooseAll(Resolution::Manual); }
-            catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
+            catch (const Failure& error) { state_->setText(hc::ui::ErrorText(error.code_)); }
         }));
         for (auto* action : wholeActions_) action->setEnabled(false);
         addToolBarBreak(); auto* mergeTools = addToolBar(tr("블록 병합")); mergeTools->setObjectName("mergeToolbar");
@@ -417,7 +418,7 @@ namespace hc::compare
                     state_->setText(result_.warnings_.isEmpty() && result_.recovery_.isEmpty() ? tr("저장 완료") : tr("저장 완료 — 임시 파일 정리 확인 필요"));
                     state_->setToolTip(QString::fromUtf8(QJsonDocument(result_.Json()).toJson()));
                 }
-                else { exitCode_ = 2; state_->setText(tr("저장 실패: ") + result_.error_); }
+                else { exitCode_ = 2; state_->setText(tr("저장 실패: ") + hc::ui::ErrorText(result_.error_)); }
                 state_->setToolTip(QString::fromUtf8(QJsonDocument(result_.Json()).toJson()));
                 if (closing_) close();
                 return;
@@ -426,7 +427,7 @@ namespace hc::compare
             try { display(); }
             catch (const std::exception& error) {
                 result_.error_ = QString::fromUtf8(error.what()); exitCode_ = 2;
-                state_->setText(tr("화면 구성 중단 — 입력은 보존됨: %1").arg(result_.error_));
+                state_->setText(tr("화면 구성 중단 — 입력은 보존됨: %1").arg(hc::ui::ErrorText(result_.error_)));
             }
         });
         connect(&workWatcher_, &QFutureWatcher<WorkTransfer>::finished, this, [this] {
@@ -447,7 +448,7 @@ namespace hc::compare
                 catch (const std::exception& error) { transfer.error_ = QString::fromUtf8(error.what()); }
             }
             updateMerge();
-            if (!transfer.error_.isEmpty()) state_->setText(tr("작업 파일 처리 중단: ") + transfer.error_);
+            if (!transfer.error_.isEmpty()) state_->setText(tr("작업 파일 처리 중단: ") + hc::ui::ErrorText(transfer.error_));
             else if (transfer.loading_) state_->setText(transfer.file_.work_.reviewRequired_ ? tr("작업 복원 완료 — 전체 재검토 필요 · 실행 취소로 이전 RESULT 복원 가능") : tr("작업 복원 완료 — 실행 취소로 이전 RESULT 복원 가능"));
             else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ?
                 tr("작업 파일 저장 완료 — RESULT 저장 상태 유지") : tr("작업 파일 저장 완료 — 정리·파일 변경 확인 필요"));
@@ -456,7 +457,7 @@ namespace hc::compare
                 if (transfer.error_ == "DecisionWorkNotRepresentable" || transfer.error_ == "DecisionStringLimit")
                     state_->setText(tr("결정 계획으로 보존할 수 없는 편집 내용이 있습니다. 작업 저장을 사용하십시오."));
                 else if (transfer.error_ == "DecisionWorkReviewRequired") state_->setText(tr("전체 재검토를 완료한 뒤 결정 계획을 내보내십시오. 현재 내용은 작업 저장으로 보존할 수 있습니다."));
-                else if (!transfer.error_.isEmpty()) state_->setText(tr("결정 계획 처리 중단: ") + transfer.error_);
+                else if (!transfer.error_.isEmpty()) state_->setText(tr("결정 계획 처리 중단: ") + hc::ui::ErrorText(transfer.error_));
                 else if (transfer.loading_) state_->setText(tr("결정 계획 적용 완료 — 실행 취소 가능 · RESULT 저장 필요"));
                 else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ?
                     tr("결정 계획 내보내기 완료 — RESULT 저장 상태 유지") : tr("결정 계획 저장 완료 — 정리·파일 변경 확인 필요"));
@@ -467,7 +468,7 @@ namespace hc::compare
         });
         connect(&reportWatcher_, &QFutureWatcher<ReportTransfer>::finished, this, [this] {
             cancel_->setEnabled(false); const auto transfer = reportWatcher_.result(); updateMerge();
-            if (!transfer.error_.isEmpty()) state_->setText(tr("보고서 저장 중단: ") + transfer.error_);
+            if (!transfer.error_.isEmpty()) state_->setText(tr("보고서 저장 중단: ") + hc::ui::ErrorText(transfer.error_));
             else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ? tr("비교 보고서 저장 완료") : tr("보고서 저장 완료 — 정리 확인 필요"));
             state_->setToolTip(transfer.path_ + '\n' + QString::fromUtf8(QJsonDocument(QJsonObject{
                 {"warnings", transfer.file_.warnings_}, {"recovery", transfer.file_.recovery_}}).toJson()));
@@ -575,7 +576,7 @@ namespace hc::compare
         output_->send(SCI_SETREADONLY, 0);
         if (Value.completion_ != "Complete")
         {
-            updateMerge(); state_->setText(Value.error_ == "ReintegrationRequiresBase" ? tr("재통합 보류 — BASE 없는 비교에서 새 좌우 내용이 다릅니다. 현재 RESULT를 보존했습니다.") : Value.error_ == "ReintegrationConflict" ? tr("재통합 보류 — 수동 수정과 원본 변경이 겹칩니다. 현재 RESULT와 실행 취소 이력을 보존했습니다.") : tr("재비교 중단 — RESULT 보존: ") + Value.error_); return;
+            updateMerge(); state_->setText(Value.error_ == "ReintegrationRequiresBase" ? tr("재통합 보류 — BASE 없는 비교에서 새 좌우 내용이 다릅니다. 현재 RESULT를 보존했습니다.") : Value.error_ == "ReintegrationConflict" ? tr("재통합 보류 — 수동 수정과 원본 변경이 겹칩니다. 현재 RESULT와 실행 취소 이력을 보존했습니다.") : tr("재비교 중단 — RESULT 보존: ") + hc::ui::ErrorText(Value.error_)); return;
         }
         const bool changed = Value.inputsChanged_ || Value.reintegratedText_.has_value();
         std::vector<std::shared_ptr<void>> editorAdmissions;
@@ -768,7 +769,7 @@ namespace hc::compare
         changes_->setHeaderLabels({tr("차이 / 경로"), tr("왼쪽"), tr("오른쪽"), tr("해결")});
         while (panes_->count()) delete panes_->widget(0);
         exitCode_ = result_.exitCode_; unresolved_ = !result_.merged_.conflicts_.empty() || result_.error_ == "DecisionsRequired";
-        if (result_.completion_ != "Complete") { directory_->EndProgress(); updateMerge(); state_->setText(result_.error_); return; }
+        if (result_.completion_ != "Complete") { directory_->EndProgress(); updateMerge(); state_->setText(hc::ui::ErrorText(result_.error_)); return; }
         if (result_.largeText_) {
             LargeTextView* view = result_.largeText_->session_->documents_.size() >= 3
                 ? new LargeTextMultiView(request_, result_.largeText_, centralWidget())
@@ -1020,11 +1021,11 @@ namespace hc::compare
                 if (Id && Id <= std::uint64_t(changes_->topLevelItemCount())) changes_->setCurrentItem(changes_->topLevelItem(int(Id - 1)));
                 selectBlock();
             }
-            catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
+            catch (const Failure& error) { state_->setText(hc::ui::ErrorText(error.code_)); }
             return;
         }
         try { applyInputChunk(Id, Revision, Choice); }
-        catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
+        catch (const Failure& error) { state_->setText(hc::ui::ErrorText(error.code_)); }
     }
     void CompareWindow::chooseBlock(Resolution Choice)
     {
@@ -1035,13 +1036,13 @@ namespace hc::compare
             merge_->Choose(item->data(0, Qt::UserRole).toULongLong(), item->data(3, Qt::UserRole).toULongLong(), Choice);
             selectBlock();
         }
-        catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
+        catch (const Failure& error) { state_->setText(hc::ui::ErrorText(error.code_)); }
     }
     void CompareWindow::chooseSide(int Index)
     {
         if (!merge_ || busy() || result_.inputs_.size() <= Index) return;
         try { merge_->ChooseAll(Index == 0 ? Resolution::Left : Resolution::Right, result_.inputs_[Index].utf8_); }
-        catch (const Failure& error) { state_->setText(QString::fromStdString(error.code_)); }
+        catch (const Failure& error) { state_->setText(hc::ui::ErrorText(error.code_)); }
     }
     void CompareWindow::updateMerge()
     {

@@ -1,4 +1,5 @@
 ﻿#include "qtAutomation.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include <QCheckBox>
 #include "commandUiConfig.hpp"
 #include <QDynamicPropertyChangeEvent>
@@ -62,7 +63,7 @@ public:
             auto* Remove = new QPushButton(tr("삭제"), library_); Remove->setObjectName("hc.automation.remove"); Form->addRow(Save, Remove);
             connect(choices_, &QComboBox::currentIndexChanged, this, [this](int Index) { select(Index); });
             connect(Save, &QPushButton::clicked, this, [this] { save(false); }); connect(Remove, &QPushButton::clicked, this, [this] { save(true); });
-            if (!Loaded.HasValue()) { library_->setEnabled(false); status_->setText(QString::fromStdString(Loaded.Failure().code_)); }
+            if (!Loaded.HasValue()) { library_->setEnabled(false); status_->setText(hc::ui::ErrorText(Loaded.Failure())); }
             else { libraryWritable_ = true; scripts_ = std::move(Loaded.Value()); refill(Id); }
         }
         // The note becomes the header subtitle; status · run · stop · close share the footer band.
@@ -102,7 +103,7 @@ private:
             Script.language_ = language_->currentData().toString();
             if (Existing == Scripts.end()) Scripts.append(std::move(Script)); else *Existing = std::move(Script);
         }
-        auto Saved = store_->Save(Scripts); if (!Saved.HasValue()) { status_->setText(QString::fromStdString(Saved.Failure().code_)); return; }
+        auto Saved = store_->Save(Scripts); if (!Saved.HasValue()) { status_->setText(hc::ui::ErrorText(Saved.Failure())); return; }
         scripts_ = std::move(Scripts); refill(Id); status_->setText(Remove ? tr("삭제했습니다.") : tr("저장했습니다. 파일 변경 권한은 실행마다 선택합니다.")); if (changed_) changed_();
     }
     void run() {
@@ -127,7 +128,7 @@ private:
     bool checkSource() {
         if (language_->currentData() == "lua") {
             auto Valid = script::CheckLuaSyntax(source_->toPlainText().toUtf8().toStdString());
-            if (!Valid.HasValue()) status_->setText(QString::fromStdString(Valid.Failure().code_));
+            if (!Valid.HasValue()) status_->setText(hc::ui::ErrorText(Valid.Failure()));
             return Valid.HasValue();
         }
         auto Host = makeHost_(); Diagnostic Details; auto Parsed = Compile(source_->toPlainText(), &Details, Host.schema_);
@@ -144,16 +145,16 @@ private:
             if (lua_->IsRunning()) { status_->setText(tr("Lua 실행 중")); return; }
             lua_->Tick(); timer_->stop(); setRunning(false); write_->setChecked(false);
             const auto Outcome = lua_->Outcome();
-            status_->setText(Outcome && Outcome->HasValue() ? tr("Lua 실행 완료") : tr("Lua 중단: %1").arg(Outcome ? QString::fromStdString(Outcome->Failure().code_) : tr("결과 없음")));
+            status_->setText(Outcome && Outcome->HasValue() ? tr("Lua 실행 완료") : tr("Lua 중단: %1").arg(Outcome ? hc::ui::ErrorText(Outcome->Failure()) : tr("결과 없음")));
             return;
         }
         if (!execution_) return;
         if (execution_->Status() == State::Running) { status_->setText(tr("%1개 명령 완료 · %2행 실행 중").arg(execution_->CompletedSteps()).arg(execution_->Line())); return; }
         timer_->stop(); setRunning(false); write_->setChecked(false);
         if (library_) library_->setEnabled(libraryWritable_);
-        if (execution_->Status() == State::CompletedWithErrors) { status_->setText(tr("일부 오류로 완료 · 성공 %1개, 오류 %2개\n%3행: %4").arg(execution_->CompletedSteps()).arg(execution_->Errors().size()).arg(execution_->Errors().front().line_).arg(QString::fromStdString(execution_->Errors().front().error_.code_))); return; }
+        if (execution_->Status() == State::CompletedWithErrors) { status_->setText(tr("일부 오류로 완료 · 성공 %1개, 오류 %2개\n%3행: %4").arg(execution_->CompletedSteps()).arg(execution_->Errors().size()).arg(execution_->Errors().front().line_).arg(hc::ui::ErrorText(execution_->Errors().front().error_))); return; }
         status_->setText(execution_->Status() == State::Completed ? tr("완료 · %1개 명령").arg(execution_->CompletedSteps())
-            : tr("%1행에서 중단: %2").arg(execution_->Line()).arg(QString::fromStdString(execution_->Failure()->code_)));
+            : tr("%1행에서 중단: %2").arg(execution_->Line()).arg(hc::ui::ErrorText(*execution_->Failure())));
     }
     std::function<Host()> makeHost_;
     std::unique_ptr<Execution> execution_;
@@ -202,7 +203,7 @@ private:
     }
     void reload() {
         qDeleteAll(actions_); actions_.clear(); if (!settings_) return; LibraryStore Store(*settings_); auto Loaded = Store.Load();
-        if (!Loaded.HasValue()) { menu_->setToolTip(QString::fromStdString(Loaded.Failure().code_)); toolbar_->hide(); return; }
+        if (!Loaded.HasValue()) { menu_->setToolTip(hc::ui::ErrorText(Loaded.Failure())); toolbar_->hide(); return; }
         for (const auto& Script : Loaded.Value()) {
             auto* Action = new QAction(Script.title_,this); Action->setObjectName("hc.script." + Script.id_); Action->setProperty("hc.scriptId",Script.id_);
             const QKeySequence Shortcut(Script.shortcut_,QKeySequence::PortableText); bool Conflict=false;

@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/errorPresentation.hpp"
 #include "fileBatchOperations.hpp"
 #include "settings/appSettings.hpp"
 #include <Shellapi.h>
@@ -25,7 +26,7 @@ inline Inspection Inspect(const QString& Path) {
     const auto P = filetools::NativePath(Path);
     filetools::Handle File(CreateFileW(reinterpret_cast<LPCWSTR>(P.utf16()), READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-    if (File.value_ == INVALID_HANDLE_VALUE) { I.error_ = QObject::tr("소유자 조회 실패: %1").arg(GetLastError()); return I; }
+    if (File.value_ == INVALID_HANDLE_VALUE) { const auto Code = GetLastError(); I.error_ = hc::ui::DescribeWin32Error(Code, QObject::tr("소유자 조회"), Path).Text(); return I; }
     PSECURITY_DESCRIPTOR Descriptor = nullptr; PSID Owner = nullptr;
     const auto Code = GetSecurityInfo(File.value_, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &Owner, nullptr, nullptr, nullptr, &Descriptor);
     if (!Code) {
@@ -33,7 +34,7 @@ inline Inspection Inspect(const QString& Path) {
         if (LookupAccountSidW(nullptr, Owner, Name, &N, Domain, &D, &Use)) I.owner_ = QString::fromWCharArray(Domain) + '\\' + QString::fromWCharArray(Name);
         else { LPWSTR Sid = nullptr; if (ConvertSidToStringSidW(Owner, &Sid)) { I.owner_ = QString::fromWCharArray(Sid); LocalFree(Sid); } }
         LocalFree(Descriptor);
-    } else I.error_ = QObject::tr("소유자 조회 실패: %1").arg(Code);
+    } else I.error_ = hc::ui::DescribeWin32Error(Code, QObject::tr("소유자 조회"), Path).Text();
     return I;
 }
 inline QString HelperPath() { return QDir(QCoreApplication::applicationDirPath()).filePath("HyperCommanderAdmin.exe"); }
@@ -100,8 +101,7 @@ LaunchResult Launch(QJsonObject Request);
 inline QString ResultText(LaunchResult R) {
     if (!R.code_) return QObject::tr("요청한 작업을 완료했습니다. 도우미는 종료되었습니다.");
     if (R.code_ == ERROR_CANCELLED && !R.started_) return QObject::tr("UAC 요청이 취소되었습니다. 도우미가 시작되지 않아 작업을 실행하지 않았습니다.");
-    if (R.code_ == ERROR_TIMEOUT) return QObject::tr("요청 유효 시간이 지났습니다. 작업을 실행하지 않았습니다.");
-    return QObject::tr("도우미 오류 %1 · %2").arg(R.code_).arg(R.started_ ? QObject::tr("결과 위치를 확인하세요. 자동 재실행하지 않습니다.") : QObject::tr("작업을 시작하지 못했습니다."));
+    return QObject::tr("%1\n%2").arg(hc::ui::DescribeWin32Error(R.code_).Text()).arg(R.started_ ? QObject::tr("결과 위치를 확인하세요. 자동 재실행하지 않습니다.") : QObject::tr("작업을 시작하지 못했습니다."));
 }
 inline QString HistoryPath() { return QDir(settings::Paths().directory_).filePath("permission-history.json"); }
 inline std::mutex& HistoryMutex(){static std::mutex Mutex;return Mutex;}

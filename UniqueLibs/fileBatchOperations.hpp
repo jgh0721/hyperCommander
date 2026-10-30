@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "UniqueLibs/nativeFilePath.hpp"
+#include "errorPresentation.hpp"
 #include <QtCore>
 #include "commonLibs/operations/fileOperation.hpp"
 #include "commonLibs/storage/writableStorage.hpp"
@@ -86,7 +87,7 @@ inline QString PinNativeParents(const QString& Folder, std::vector<std::unique_p
         const auto Native = NativePath(Parent);
         auto Pin = std::make_unique<Handle>(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE,
             nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
-        if (Pin->value_ == INVALID_HANDLE_VALUE) return QObject::tr("폴더 잠금 실패: Windows 오류 %1 · %2").arg(GetLastError()).arg(Parent);
+        if (Pin->value_ == INVALID_HANDLE_VALUE) { const auto Code = GetLastError(); return hc::ui::DescribeWin32Error(Code, QObject::tr("폴더 잠금"), Parent).Text(); }
         BY_HANDLE_FILE_INFORMATION Info{};
         if (!GetFileInformationByHandle(Pin->value_, &Info) || !(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return QObject::tr("링크 폴더 또는 폴더 확인 실패: %1").arg(Parent);
         Pins.push_back(std::move(Pin));
@@ -113,13 +114,14 @@ inline QString Create(const QString& Folder, const QString& Name, int Type, bool
     if (const auto Error = PinNativeParents(Folder, ParentPins); !Error.isEmpty()) return Error;
     const auto Destination = NativePath(QDir(Folder).filePath(Name));
     Handle File(CreateFileW(reinterpret_cast<LPCWSTR>(Destination.utf16()), GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
-    if (File.value_ == INVALID_HANDLE_VALUE) return QObject::tr("생성 실패: 기존 파일·권한을 확인하세요. Windows 오류 %1").arg(GetLastError());
+    if (File.value_ == INVALID_HANDLE_VALUE) { const auto Code = GetLastError(); return hc::ui::DescribeWin32Error(Code, QObject::tr("파일 생성"), QDir(Folder).filePath(Name)).Text(); }
     const auto Data = (Bom && Type != 0 ? QByteArray::fromHex("efbbbf") : QByteArray()) + Templates()[Type].text_.toUtf8();
     DWORD Written = 0;
     if (!WriteFile(File.value_, Data.constData(), DWORD(Data.size()), &Written, nullptr) || Written != Data.size() || !FlushFileBuffers(File.value_)) {
         const auto Code = GetLastError(); FILE_DISPOSITION_INFO Delete{TRUE};
         const bool Cleaned = SetFileInformationByHandle(File.value_, FileDispositionInfo, &Delete, sizeof(Delete));
-        return QObject::tr("쓰기 실패: Windows 오류 %1. %2").arg(Code).arg(Cleaned ? QObject::tr("미완성 파일 정리됨") : QObject::tr("미완성 파일이 남아 있습니다"));
+        return hc::ui::DescribeWin32Error(Code, QObject::tr("파일 쓰기"), QDir(Folder).filePath(Name)).Text()
+            + '\n' + (Cleaned ? QObject::tr("미완성 파일 정리됨") : QObject::tr("미완성 파일이 남아 있습니다"));
     }
     return {};
 }
@@ -397,7 +399,7 @@ inline BatchResult Execute(const QList<RenameRow>& Rows, const std::function<boo
     const auto Move = [&](int I, const QString& Path, bool Interruptible) {
         if (Interruptible && Stop && Stop(Step++)) { Result.error_ = QObject::tr("작업 중지 요청"); return false; }
         const auto Error = RenameHandle(Handles[I]->value_, Path);
-        if (Error) { Result.error_ = QObject::tr("이름 변경 실패: Windows 오류 %1 · %2").arg(Error).arg(Path); return false; }
+        if (Error) { Result.error_ = hc::ui::DescribeWin32Error(Error, QObject::tr("이름 변경"), Path).Text(); return false; }
         Result.current_[I].path_ = Path; return true;
     };
     bool Success = true;
