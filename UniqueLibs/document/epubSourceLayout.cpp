@@ -293,7 +293,7 @@ void EpubSourceEditor::updateActions() {
     const bool Package=Target==Publication["rootfile"].toString() || Media=="application/x-dtbncx+xml";const auto Spine=Publication["spine"].toArray();int Chapter=-1;for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==Target)Chapter=I;
     const bool Raster=QStringList{"image/png","image/jpeg","image/gif","image/webp"}.contains(Media),Image=Media.startsWith("image/");
     const bool Selection=sourceShown() && !text_->Backend()->selectedText().isEmpty();
-    for(const auto& Name:{"epubApplyResource","epubSaveCopy","epubBasicValidation","epubStandardValidation","epubAddChapter","epubAddImage","epubImportResource","epubMetadataAction","epubEditNavigation","epubFindAll"})action(Name)->setEnabled(Idle);
+    for(const auto& Name:{"epubSaveCopy","epubBasicValidation","epubStandardValidation","epubAddChapter","epubAddImage","epubImportResource","epubMetadataAction","epubEditNavigation","epubFindAll"})action(Name)->setEnabled(Idle);
     action("epubApplyResource")->setEnabled(Idle && sourceShown() && sourceModified());action("epubValidationCancel")->setEnabled(checkerState_=="running");action("epubStructureCancel")->setEnabled(structuring_);
     action("epubRenameResource")->setEnabled(Idle && !Package && !Target.isEmpty());action("epubRemoveResource")->setEnabled(Idle && !Package && !Target.isEmpty() && !(Chapter>=0 && Spine.size()<=1));
     action("epubDuplicateResource")->setEnabled(Idle && !Package && model_.IsEditable(Target) && !Image);action("epubReplaceImage")->setEnabled(Idle && Raster);action("epubConvertImage")->setEnabled(Idle && Raster);action("epubCoverImage")->setEnabled(Idle && Image);

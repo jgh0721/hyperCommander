@@ -346,6 +346,11 @@ private slots:
     }
     void sourceResourceState() {
         const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());EpubSourceEditor Editor(File.readAll(),Path);Editor.SetRecoveryEnabled(false);Editor.resize(800,600);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+        auto* Apply=Editor.findChild<QAction*>("epubApplyResource");QVERIFY(Apply);QVERIFY(!Apply->isEnabled());
+        int ApplyChanges=0;connect(Apply,&QAction::changed,&Editor,[&]{++ApplyChanges;});
+        // Repeated state refreshes must not briefly enable an unchanged resource.
+        for(int I=0;I<10;++I)Editor.Execute({{"action","epub.edit.layout"},{"orientation","horizontal"}});
+        QCOMPARE(ApplyChanges,0);QVERIFY(!Apply->isEnabled());
         QStringList Chapters;for(const auto& Value:Editor.Snapshot()["resources"].toArray()){const auto Row=Value.toObject();if(Row["mediaType"]=="application/xhtml+xml")Chapters.append(Row["path"].toString());}QVERIFY(Chapters.size()>=2);
         const auto Select=[&](const QString& Resource){return selectResource(Editor,Resource);};QVERIFY(Select(Chapters[0]));const auto First=sourceState(Editor)["buffer"].toString();const auto Original=sourceText(Editor);const int Position=Original.indexOf("</body>");QVERIFY(Position>0);QVERIFY(setSourceCursor(Editor,Position));QVERIFY(insertSource(Editor,"<p>첫 리소스 입력</p>"));const auto Edited=sourceText(Editor);const int Caret=sourceState(Editor)["position"].toInt();
         QVERIFY(Select(Chapters[1]));QVERIFY(setSourceCursor(Editor,sourceText(Editor).indexOf("</body>")));QVERIFY(insertSource(Editor,"<p>다른 리소스 입력</p>"));QVERIFY(Select(Chapters[0]));QCOMPARE(sourceState(Editor)["buffer"].toString(),First);QCOMPARE(sourceText(Editor),Edited);QCOMPARE(sourceState(Editor)["position"].toInt(),Caret);QVERIFY(Editor.CanUndo());Editor.Undo();QCOMPARE(sourceText(Editor),Original);Editor.Redo();QCOMPARE(sourceText(Editor),Edited);QTRY_VERIFY(sourceState(Editor)["styled"].toBool());
