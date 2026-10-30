@@ -689,7 +689,39 @@ private slots:
             }
             return -1;
         };
-        QVERIFY(Row("image.png") >= 0); Grid->deselectAll(); Grid->selectRow(Row("image.png"), Qtitan::Select);
+        QVERIFY(Row("image.png") >= 0);
+        auto* KeyTarget = View->findChild<Qtitan::Grid*>(); QVERIFY(KeyTarget);
+        Grid->deselectAll(); Grid->setFocusedRowIndex(1);
+        const auto CheckMarks = [&](const QList<int>& Expected) {
+            for (int I = 0; I < Grid->getRowCount(); ++I)
+                if (Grid->modelController()->isRowSelected(Grid->getRow(I)) != Expected.contains(I)) return false;
+            return View->CaptureSelection().size() == Expected.size();
+        };
+        QTest::keyClick(KeyTarget, Qt::Key_Down, Qt::ShiftModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 2); QVERIFY(CheckMarks({1}));
+        QTest::keyClick(KeyTarget, Qt::Key_Up, Qt::ShiftModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 1); QVERIFY(CheckMarks({1, 2}));
+        QTest::keyClick(KeyTarget, Qt::Key_Home, Qt::ShiftModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 0); QVERIFY(CheckMarks({2}));
+        QTest::keyClick(KeyTarget, Qt::Key_Home, Qt::ShiftModifier);
+        QVERIFY(CheckMarks({2}));
+        QTest::keyClick(KeyTarget, Qt::Key_End, Qt::ShiftModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 6); QVERIFY(CheckMarks({1, 3, 4, 5}));
+        QTest::keyClick(KeyTarget, Qt::Key_PageUp, Qt::ShiftModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 0); QVERIFY(CheckMarks({2, 6}));
+        QTest::keyClick(KeyTarget, Qt::Key_PageDown, Qt::ShiftModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 6); QVERIFY(CheckMarks({1, 3, 4, 5, 6}));
+        QTest::keyClick(KeyTarget, Qt::Key_Home);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 0); QVERIFY(CheckMarks({1, 3, 4, 5, 6}));
+        QTest::keyClick(KeyTarget, Qt::Key_End, Qt::ControlModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 6); QVERIFY(CheckMarks({1, 3, 4, 5, 6}));
+        QTest::keyClick(KeyTarget, Qt::Key_Home, Qt::ControlModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 0); QVERIFY(CheckMarks({1, 3, 4, 5, 6}));
+        QTest::keyClick(KeyTarget, Qt::Key_End, Qt::ShiftModifier | Qt::ControlModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 6); QVERIFY(CheckMarks({2, 6}));
+        QTest::keyClick(KeyTarget, Qt::Key_Home, Qt::ShiftModifier | Qt::ControlModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 0); QVERIFY(CheckMarks({1, 3, 4, 5}));
+        Grid->deselectAll(); Grid->selectRow(Row("image.png"), Qtitan::Select);
         QCOMPARE(View->CaptureSelection().size(), 1);
         const auto DialogKey = [&](Qt::Key Key, Qt::KeyboardModifiers Mods, const QString& Capture, bool ApplyThenCancel = false) {
             QTimer Timer; Timer.setInterval(15); int Stage = 0, Ticks = 0; bool Completed = false;
@@ -771,6 +803,19 @@ private slots:
         QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(View->CaptureSelection().size(), 1);
         QVERIFY(View->SetListMode("thumbnails"));
         QVERIFY(DialogKey(Qt::Key_Equal, Qt::ControlModifier, "selection-thumbnail-add"));
+        const auto BeforeTileKeys = View->CaptureSelection();
+        const auto BeforeTileFocus = View->CaptureFocus();
+        Grid->deselectAll(); Grid->setFocusedRowIndex(1); View->SyncThumbnailCursor();
+        auto* Tiles = View->findChild<QWidget*>("hc.thumbnailTiles"); QVERIFY(Tiles);
+        QTest::keyClick(Tiles, Qt::Key_Right, Qt::ShiftModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 2); QVERIFY(CheckMarks({1}));
+        QTest::keyClick(Tiles, Qt::Key_Left, Qt::ShiftModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 1); QVERIFY(CheckMarks({1, 2}));
+        QTest::keyClick(Tiles, Qt::Key_End, Qt::ShiftModifier | Qt::ControlModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 6); QVERIFY(CheckMarks({3, 4, 5}));
+        QTest::keyClick(Tiles, Qt::Key_Home, Qt::ControlModifier);
+        QTRY_COMPARE(Grid->focusedRowIndex(), 0); QVERIFY(CheckMarks({3, 4, 5}));
+        View->RestoreSelection(BeforeTileKeys, BeforeTileFocus);
         QTRY_COMPARE(View->CaptureSelection().size(), 3);
         QVERIFY(View->SetListMode("one-line"));
         const auto Keys = View->CaptureSelection();

@@ -182,6 +182,8 @@ private:
     QTimer groupingTimer_, groupingDateTimer_, groupInteractionTimer_;
     void queueSelectionKey(QKeyCombination Key);
     void drainSelectionKeys();
+    bool invertSelectionAlongNavigation(QKeyCombination Key);
+    bool forwardingSelectionNavigation_ = false;
     void finishSelectionInput();
     void syncSelectionInputActivity();
     QList<QKeyCombination> pendingSelectionKeys_;

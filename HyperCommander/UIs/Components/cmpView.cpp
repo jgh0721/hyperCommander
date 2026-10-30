@@ -1657,6 +1657,69 @@ nsHC::TySpFileSource CGridView::SelectRowOnCurrentTab( const QModelIndex& SrcInd
     return Info;
 }
 
+bool CGridView::invertSelectionAlongNavigation(QKeyCombination Key)
+{
+    const auto Modifiers = Key.keyboardModifiers() & ~Qt::KeypadModifier;
+    const bool ControlBoundary = (Key.key() == Qt::Key_Home || Key.key() == Qt::Key_End)
+        && Modifiers == (Qt::ShiftModifier | Qt::ControlModifier);
+    if (Modifiers != Qt::ShiftModifier && !ControlBoundary) return false;
+    switch (Key.key()) {
+    case Qt::Key_Up: case Qt::Key_Down: case Qt::Key_Left: case Qt::Key_Right:
+    case Qt::Key_Home: case Qt::Key_End: case Qt::Key_PageUp: case Qt::Key_PageDown: break;
+    default: return false;
+    }
+    const bool Tiles = IsThumbnailMode();
+    const int Before = Tiles ? thumbnails_->listView()->currentIndex().row() : view_->focusedRowIndex();
+    if (Before < 0) return true;
+    if (Tiles) {
+        QScopedValueRollback Guard(forwardingSelectionNavigation_, true);
+        QKeyEvent Move(QEvent::KeyPress, Key.key(), Qt::NoModifier);
+        QApplication::sendEvent(thumbnails_->listView(), &Move);
+    } else {
+        switch (Key.key()) {
+        case Qt::Key_Up: view_->navigateUp(Qt::ControlModifier); break;
+        case Qt::Key_Down: view_->navigateDown(Qt::ControlModifier); break;
+        case Qt::Key_Left: view_->navigateLeft(Qt::ControlModifier); break;
+        case Qt::Key_Right: view_->navigateRight(Qt::ControlModifier); break;
+        case Qt::Key_Home: view_->setFocusedRowIndex(0, Qt::ControlModifier); break;
+        case Qt::Key_End: view_->setFocusedRowIndex(view_->getRowCount() - 1, Qt::ControlModifier); break;
+        case Qt::Key_PageUp: view_->navigatePageUp(Qt::ControlModifier); break;
+        case Qt::Key_PageDown: view_->navigatePageDown(Qt::ControlModifier); break;
+        default: break;
+        }
+    }
+    const int After = Tiles ? thumbnails_->listView()->currentIndex().row() : view_->focusedRowIndex();
+    if (After < 0 || Before == After) return true;
+    // Toggle departed rows only, so repeats do not toggle a shared endpoint twice.
+    const int Step = After > Before ? 1 : -1;
+    const auto* FirstColumn = view_->getFirstColumn();
+    const auto* LastColumn = view_->getLastColumn();
+    int Start = -1, Last = -1;
+    const auto Flush = [&] {
+        if (Start < 0) return;
+        view_->selectRange(qMin(Start, Last), qMax(Start, Last),
+            FirstColumn ? FirstColumn->index() : -1, LastColumn ? LastColumn->index() : -1, Qtitan::Invert);
+        Start = Last = -1;
+    };
+    view_->beginUpdate();
+    for (int I = Before; I != After; I += Step) {
+        const auto Row = Tiles ? view_->getRow(thumbnailModel_->SourceIndex(I)) : view_->getRow(I);
+        if (!Row.isValid() || Row.type() != Qtitan::GridRow::DataRow) { Flush(); continue; }
+        const auto Index = Row.modelIndex(0);
+        const auto Source = proxy_ ? proxy_->mapToSource(Index) : Index;
+        const auto Info = model_->GetFileInfo(Source);
+        if (!Info || Info->Name_ == "..") { Flush(); continue; }
+        if (Start >= 0 && Row.rowIndex() != Last + Step) Flush();
+        if (Start < 0) Start = Row.rowIndex();
+        Last = Row.rowIndex();
+    }
+    Flush();
+    view_->endUpdate();
+    model_->setProperty("hc.selectAllEntries", false);
+    selectionSummaryTimer_.start(0);
+    return true;
+}
+
 void CGridView::queueSelectionKey(QKeyCombination Key)
 {
     if (!model_) return;
@@ -1690,7 +1753,8 @@ void CGridView::drainSelectionKeys()
         }
         const auto Key = pendingSelectionKeys_.takeFirst();
         QKeyEvent Event(QEvent::KeyPress, Key.key(), Key.keyboardModifiers());
-        TyStCommandMgr::GetInstance()->ProcessKeyPressEvent(&Event, retrieveCursorIndex());
+        if (!TyStCommandMgr::GetInstance()->ProcessKeyPressEvent(&Event, retrieveCursorIndex()))
+            invertSelectionAlongNavigation(Key);
         if (!Alive) return;
     }
     selectionKeyTimer_.stop();
@@ -2019,6 +2083,7 @@ void CGridView::syncViewportBackground()
 
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    if (forwardingSelectionNavigation_) return false;
     if(hc::startup::Enabled()&&Event->type()==QEvent::KeyPress){
         const auto* Key=static_cast<QKeyEvent*>(Event);
         if(hc::startup::Data().ready_&&!startupInput_&&(Key->key()==Qt::Key_Down||Key->key()==Qt::Key_Up)){
@@ -2104,13 +2169,20 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
             Event->accept(); return true;
         }
     }
-    if (Event->type() == QEvent::KeyRelease && (Watched == grid_ || Watched == grid_->viewport())) {
+    if (Event->type() == QEvent::KeyRelease && FileSurface) {
         const auto* Key = static_cast<QKeyEvent*>(Event);
         if (!Key->isAutoRepeat() && Key->key() == selectionHeldKey_) finishSelectionInput();
     }
-    if (Event->type() == QEvent::KeyPress && (Watched == grid_ || Watched == grid_->viewport()) && !IsEditing()) {
+    if (Event->type() == QEvent::KeyPress && FileSurface && !IsEditing()) {
         const auto* Key = static_cast<QKeyEvent*>(Event);
-        if (hc::ui::CommandId(TyStCommandMgr::GetInstance()->Retrieve().value(Key->keyCombination())) == "hc.selection.invert") {
+        const auto Modifiers = Key->modifiers() & ~Qt::KeypadModifier;
+        const bool ControlBoundary = (Key->key() == Qt::Key_Home || Key->key() == Qt::Key_End)
+            && Modifiers == (Qt::ShiftModifier | Qt::ControlModifier);
+        const bool ShiftNavigation = ((Modifiers == Qt::ShiftModifier)
+            && (Key->key() == Qt::Key_Up || Key->key() == Qt::Key_Down || Key->key() == Qt::Key_Left || Key->key() == Qt::Key_Right
+                || Key->key() == Qt::Key_Home || Key->key() == Qt::Key_End || Key->key() == Qt::Key_PageUp || Key->key() == Qt::Key_PageDown))
+            || ControlBoundary;
+        if (ShiftNavigation || hc::ui::CommandId(TyStCommandMgr::GetInstance()->Retrieve().value(Key->keyCombination())) == "hc.selection.invert") {
             Event->accept(); resetRenameClicks();
             if (!Key->isAutoRepeat()) selectionHeldKey_ = Key->key();
             queueSelectionKey(Key->keyCombination()); return true;
