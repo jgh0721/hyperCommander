@@ -242,7 +242,7 @@ public:
         QJsonObject Object{{"version",2},{"id",QUuid::createUuid().toString(QUuid::WithoutBraces)},{"jobId",Text(R.jobId_)},{"utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
             {"pid",int(GetCurrentProcessId())},{"created",ProcessCreated(GetCurrentProcess())},{"action",int(R.action_)},{"destination",Path(Text(R.destination_.root_))},
             {"expectedExists",R.expected_.exists_},{"expectedRevision",R.expected_.revision_?Text(R.expected_.revision_->token_):QString()},
-            {"readOnly",R.allowReadOnlyRemoval_},{"flushFileContents",Context.flushFileContents_},{"requirePublished",R.requiresPublishedDestination_},{"bytesLimit",QString::number(R.maxBytes_)},{"rate",QString::number(R.bytesPerSecondLimit_)},
+            {"writeCheckpoints",bool(Context.writeCheckpoint_)},{"readOnly",R.allowReadOnlyRemoval_},{"flushFileContents",Context.flushFileContents_},{"requirePublished",R.requiresPublishedDestination_},{"bytesLimit",QString::number(R.maxBytes_)},{"rate",QString::number(R.bytesPerSecondLimit_)},
             {"metadata",R.copyOptions_.metadata_},{"verify",R.copyOptions_.verify_},{"acl",R.copyOptions_.acl_},{"streams",R.copyOptions_.streams_},
             {"content",QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(R.content_.data()),qsizetype(R.content_.size())).toBase64())}};
         const bool Streamed=R.source_&&(R.source_->locator_.kind_!=LocatorKind::Local||!Local(Text(R.source_->locator_.root_)));
@@ -335,7 +335,8 @@ DWORD ExecuteFileElevation(const QJsonObject& R) {
     if(!Required.isEmpty())PinError=ERROR_INVALID_PARAMETER;
     auto Reader=MakeNativeReadProvider(LocatorKind::Local);auto Writer=MakeNativeWritableStorage(LocatorKind::Local,Reader);OperationContext Context;
     Context.allowReadOnlyRemoval_=R["readOnly"].toBool();Context.flushFileContents_=R["flushFileContents"].toBool(true);std::stop_source Stop;Context.stopToken_=Stop.get_token();
-    Context.writeCheckpoint_=[&](const WriteRecoveryRecord& Record,std::optional<std::uint64_t> Sequence)->Result<std::uint64_t>{
+    // Follow the caller persistence policy; absent fields retain legacy protocol behavior.
+    if(R["writeCheckpoints"].toBool(true))Context.writeCheckpoint_=[&](const WriteRecoveryRecord& Record,std::optional<std::uint64_t> Sequence)->Result<std::uint64_t>{
         QJsonObject Frame{{"kind","checkpoint"},{"record",Recovery(Record)}};if(Sequence)Frame["sequence"]=QString::number(*Sequence);
         if(!Send(Pipe.value_,Frame,Nonce))return Failure(ERROR_BROKEN_PIPE,"elevation-checkpoint");auto Reply=Receive(Pipe.value_,Nonce,30000);
         if(!Reply||(*Reply)["kind"]!="checkpointAck")return Failure(ERROR_BROKEN_PIPE,"elevation-checkpoint");

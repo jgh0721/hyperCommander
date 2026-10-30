@@ -1135,11 +1135,13 @@ private slots:
         QCOMPARE(Service->Requests().size(),1u);QVERIFY(Scheduler.Cancel(Second.Value().id_).HasValue());
     }
     void r10NativeHelperCopyAndProviderStreams_data() {
-        QTest::addColumn<int>("Kind");QTest::newRow("local")<<int(LocatorKind::Local);QTest::newRow("smb-reader")<<int(LocatorKind::Smb);QTest::newRow("plugin-reader")<<int(LocatorKind::Plugin);
+        QTest::addColumn<int>("Kind");QTest::addColumn<bool>("Recovery");
+        for(bool Recovery:{false,true})for(auto Kind:{LocatorKind::Local,LocatorKind::Smb,LocatorKind::Plugin})
+            QTest::newRow(qPrintable(QString("%1-recovery-%2").arg(int(Kind)).arg(Recovery)))<<int(Kind)<<Recovery;
     }
     void r10NativeHelperCopyAndProviderStreams() {
-        if(kind_!=LocatorKind::Local)QSKIP("Local fixture required.");QFETCH(int,Kind);
-        const auto Suffix=QString::number(Kind);const auto Name="r10-native-"+Suffix+".bin",Folder="r10-native-dst-"+Suffix;
+        if(kind_!=LocatorKind::Local)QSKIP("Local fixture required.");QFETCH(int,Kind);QFETCH(bool,Recovery);
+        const auto Suffix=QString::number(Kind)+"-"+QString::number(Recovery);const auto Name="r10-native-"+Suffix+".bin",Folder="r10-native-dst-"+Suffix;
         QByteArray Data(2*1024*1024+17,'x');Data[8]='\0';QVERIFY(write(Name,Data));QVERIFY(writer_->MakeDirectory(at(Folder),{}).HasValue());
         auto Source=writer_->Inspect(at(Name),{});QVERIFY(Source.HasValue()&&Source.Value());
         std::shared_ptr<IStorageProvider> Input=reader_;auto Entry=*Source.Value();
@@ -1166,7 +1168,8 @@ private slots:
         }
         auto Service=hc::permissions::MakeFileElevationService(RealUac?hc::permissions::FileElevationLauncher{}:FixtureLauncher());
         FileOperationRequest Request;Request.sources_={{Entry,Input,{}}};Request.destination_=at(Folder);Request.destinationWriter_=RealUac?writer_:std::make_shared<DeniedContentWriter>(writer_);Request.copyOptions_.verify_=true;Request.elevation_=Service;
-        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());auto Job=SubmitFileOperation(Scheduler,Request,ElevationContext());QVERIFY(Job.HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());auto Context=ElevationContext();if(!Recovery)Context.writeCheckpoint_={};
+        auto Job=SubmitFileOperation(Scheduler,Request,Context);QVERIFY(Job.HasValue());
         QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().state_,JobState::WaitingForUser);
         const auto Question=Scheduler.Snapshot(Job.Value().id_).Value().interaction_;QVERIFY(Question);
         QVERIFY(Scheduler.Reply(Job.Value().id_,{Question->id_,InteractionChoice::Elevate,{}}).HasValue());
