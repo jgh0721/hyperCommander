@@ -311,7 +311,7 @@ namespace hc::plugins
                 return Unit{};
             };
             const auto Attempt = [&](PluginViewerOptions& Options, std::size_t Index) -> Result<bool> {
-                hc::document::ImageTraceSpan Trace("viewer.open",QString::fromUtf8(Source->Describe().locator_.root_));
+                hc::document::ImageTraceSpan Trace("viewer.open");
                 if (const auto Stop = Context.Check({"wlx"})) return *Stop;
                 if (!Options.approval_.approved_) return Error{ErrorCategory::AccessDenied, "plugin-review-required", {"wlx"}};
                 auto Inspected = InspectManifestFile(Options.manifestPath_, Context); if (!Inspected.HasValue()) return Inspected.Failure();

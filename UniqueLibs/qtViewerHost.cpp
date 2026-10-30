@@ -35,7 +35,7 @@ public:
     void done(int Result) override { returnFocus([&] { QDialog::done(Result); }); }
     // Hide without QDialog::done(): since Qt 6.3 it closes the window, which destroys
     // the HWND together with the helper's foreign child windows a warm viewer keeps.
-    void Dismiss() { returnFocus([&] { hide(); }); }
+    void Dismiss(bool Restore = true) { returnFocus([&] { hide(); }, Restore); }
     // Connections of one use (warm or document). Replacing it disconnects them.
     QObject* NewPhase() { delete phase_.data(); phase_ = new QObject(this); return phase_; }
 protected:
@@ -47,12 +47,12 @@ protected:
         QDialog::keyPressEvent(Event);
     }
 private:
-    void returnFocus(const std::function<void()>& Hide) {
+    void returnFocus(const std::function<void()>& Hide, bool Authorized = true) {
         const auto Root = reinterpret_cast<HWND>(winId());
         const auto Foreground = GetForegroundWindow();
         // A separate viewer may already have returned activation to its owner
         // before its close notification arrives. Restore native input focus too.
-        const bool Restore = Foreground == Root || Foreground == previousWindow_ || (Foreground && IsChild(Root, Foreground));
+        const bool Restore = Authorized && (Foreground == Root || Foreground == previousWindow_ || (Foreground && IsChild(Root, Foreground)));
         const auto Previous = previousWindow_;
         const auto Focus = previousFocus_;
         auto* Owner = parentWidget();
@@ -63,7 +63,7 @@ private:
         auto* Timer = new QTimer(Owner); Timer->setInterval(25);
         QObject::connect(Timer, &QTimer::timeout, Timer, [Timer, Previous, Focus, Root, Attempts = 0]() mutable {
             const auto Current = GetForegroundWindow();
-            if (!IsWindow(Previous) || ++Attempts > 40 || (Attempts > 1 && Current != Previous && Current != Root)) {
+            if (!IsWindow(Previous) || ++Attempts > 40 || (Current != Previous && Current != Root)) {
                 Timer->stop(); Timer->deleteLater(); return;
             }
             SetForegroundWindow(Previous);
@@ -71,7 +71,12 @@ private:
             if (Focus && Focus->isVisible() && Focus->isEnabled()) {
                 QApplication::setActiveWindow(Focus->window());
                 Focus->clearFocus(); Focus->setFocus(Qt::OtherFocusReason);
-                SetFocus(reinterpret_cast<HWND>(Focus->winId()));
+                // Keep alien Qt widgets on their existing native ancestor.
+                // Creating an HWND here changes the input hierarchy during close.
+                const auto NativeFocus = reinterpret_cast<HWND>(Focus->effectiveWinId());
+                if (GetForegroundWindow() != Previous) return;
+                if (NativeFocus) SetFocus(NativeFocus);
+                if (!Focus->hasFocus() || !NativeFocus || GetFocus() != NativeFocus) return;
             }
             Timer->stop(); Timer->deleteLater();
         });
@@ -230,6 +235,8 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
     // adopt it now and open the documents on its first Ready.
     const bool Pending = !Prepared && (Warm == hc::viewer::ViewerStatus::Loading || Warm == hc::viewer::ViewerStatus::Ready);
     auto* Window = Prepared || Pending ? static_cast<ViewerDialog*>(preparedWindow_.data()) : new ViewerDialog(main_);
+    // Capture the caller before opening/presenting can change activation.
+    Window->RememberPreviousWindow();
     auto* Surface = Prepared || Pending ? preparedSurface_.data() : nullptr;
     if (Prepared || Pending) { preparedWindow_ = nullptr; preparedSurface_ = nullptr; Window->setAttribute(Qt::WA_ShowWithoutActivating, false); }
     // Closing goes through retirePlugin, which may keep the window as the next warm viewer.
@@ -248,8 +255,11 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
     if (Prepared || Pending) Inputs.clear();
     // Any other close destroyed the HWND, so only the helper's accepted close can recycle.
     connect(Window, &QDialog::finished, Phase, [this, Window, Surface] { retirePlugin(Window, Surface, false); });
-    connect(Surface, &QtPluginViewerSurface::CloseRequested, Phase, [this, Window, Surface, Recyclable] {
-        Window->Dismiss(); retirePlugin(Window, Surface, Recyclable);
+    connect(Surface, &QtPluginViewerSurface::CloseRequested, Phase, [this, Window, Surface, Recyclable, Standalone] {
+        // The standalone helper snapshots ownership before hiding. A background
+        // close must not restore an old input widget over the user's new focus.
+        Window->Dismiss(!Standalone || Surface->Details().documentState_["closeForeground"].toBool());
+        retirePlugin(Window, Surface, Recyclable);
     });
     connect(Surface, &QtPluginViewerSurface::Failed, Phase, [this, Window, Completion, EpubStandalone, Binary = Options.binaryPath_](const QString& Code) {
         Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Code)); if (Completion) Completion(false, Code);
@@ -356,7 +366,6 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
         if (!Surface->OpenPrepared(std::move(PreparedInputs))) { Window->deleteLater(); return nullptr; }
     } else if (!Pending) Surface->Open(std::move(Options), std::move(First));
     if (!EpubStandalone && preparedOptions_ && !preparedWindow_) QTimer::singleShot(500, this, [this] { if (preparedOptions_ && !closing_) PreparePlugin(*preparedOptions_); });
-    Window->RememberPreviousWindow();
     // EPUB presents its own top-level window as soon as the source is bound.
     // Keep the transport dialog hidden so opening one book does not replace a
     // visible loading window with another window midway through startup.

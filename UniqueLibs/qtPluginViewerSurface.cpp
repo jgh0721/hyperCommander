@@ -120,7 +120,7 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
 {
     Close();
     if (!controller_) { status_->setText(tr("뷰어를 사용할 수 없습니다.")); emit Failed("viewer-host-unavailable"); return; }
-    presentationTrace_=std::make_unique<hc::document::ImageTraceSpan>("viewer.prepare-to-present",QString::fromUtf8(Source->Describe().locator_.root_));
+    presentationTrace_=std::make_unique<hc::document::ImageTraceSpan>("viewer.prepare-to-present");
     status_->setText(tr("파일을 준비하는 중…")); status_->show();
     auto* Anchor = new WlxAnchor(this); anchor_ = Anchor; anchor_->setObjectName("hc.wlx.native-parent");
     Anchor->closeRequested_ = [this](quintptr Child) {

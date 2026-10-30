@@ -12,6 +12,7 @@
 #include <QLineEdit>
 #include <QVBoxLayout>
 #include <qt_windows.h>
+#include "../nativeTestInput.hpp"
 #include "UniqueLibs/qtViewerHost.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "UniqueLibs/storageProviders.hpp"
@@ -203,13 +204,24 @@ private slots:
     }
     void singleAndMultipleMenuExecution() {
         QWidget Window; auto A = Handler("a"); A.kind_ = HandlerKind::Plugin; auto B = A; B.stableId_ = "b";
+        Window.resize(640,480); Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window.winId())));
         auto Candidates = Catalog({A}); int Launches = 0; std::string Selected;
         DocumentOpenController Controller(&Window, [&] { return Candidates; }, [&](const auto& Target, auto Inputs, auto Completion) { ++Launches; Selected = Target.descriptor_.stableId_; QTimer::singleShot(0, &Window, [Completion] { Completion(true, {}); }); return Inputs.size() == 1; }); QSignalSpy Finished(&Controller, &DocumentOpenController::Finished);
         auto Input = Source(); DocumentOpenRequest Request{DocumentIntent::View, {{Input, {}}}, [] { return true; }};
         QVERIFY(Controller.Open(Controller.Capture(Request))); QTRY_COMPARE(Launches, 1); QTRY_COMPARE(Finished.back()[1].toString(), QString("ready"));
         for (auto Intent : {DocumentIntent::View, DocumentIntent::Edit}) {
             Candidates = Catalog({A, B}); Candidates.defaultView_ = "b"; Candidates.defaultEdit_ = "b"; Request.intent_ = Intent;
-            QTimer::singleShot(30, [] { auto* Popup = Menu(); if (Popup) { auto* Action = Popup->findChild<QAction*>("hc.document.handler.b"); if (Action) { QCOMPARE(Popup->activeAction(), Action); QTest::keyClick(Popup, Qt::Key_Return); } } });
+            QTimer::singleShot(30, [] {
+                QPointer<QMenu> Popup = Menu(); QVERIFY(Popup);
+                const auto Close = qScopeGuard([&] { if (Popup) Popup->close(); });
+                auto* Action = Popup->findChild<QAction*>("hc.document.handler.b"); QVERIFY(Action);
+                QCOMPARE(Popup->defaultAction(), Action);
+                // Menu placement depends on the screen edge and current pointer.
+                // Select the advertised default explicitly, then exercise Enter.
+                QTest::mouseMove(Popup, Popup->actionGeometry(Action).center());
+                QTRY_COMPARE(Popup->activeAction(), Action); QTest::keyClick(Popup, Qt::Key_Return);
+            });
             QVERIFY(Controller.Open(Controller.Capture(Request))); QTRY_COMPARE(Selected, std::string("b")); Selected.clear();
         }
     }
@@ -240,6 +252,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(),15000);QVERIFY(Prepared->isHidden());QVERIFY(GetActiveWindow()==Active||!GetActiveWindow());
         const auto Pid=Surface->Details().host_.processId_;
         const auto InitialToken=Surface->Details().documentState_["documents"].toArray()[0].toObject()["sourceToken"].toString();
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Main.winId()))); Input.setFocus();
         bool Completed=false;QElapsedTimer Timer;Timer.start();
         auto* Opened=Host.OpenPlugin(Options,{{Source,{}}},"Prepared F3",[&](bool Ok,const QString&){Completed=Ok;});
         QCOMPARE(Opened,Prepared);QTRY_VERIFY_WITH_TIMEOUT(Completed,30000);
@@ -268,8 +281,19 @@ private slots:
             QVERIFY(Evidence.open(QIODevice::WriteOnly));Evidence.write(QJsonDocument(QJsonObject{{"keyboardAndSave",true},{"bytes",Saved.size()}}).toJson());Evidence.close();
         }
         QPointer<QDialog> Closing=Opened;
-        SetForegroundWindow(reinterpret_cast<HWND>(Opened->winId()));
-        QTest::keyClick(Opened,Qt::Key_Escape);
+        const auto ViewerWindow = VisibleTestProcessWindow(static_cast<DWORD>(Pid)); QVERIFY(ViewerWindow);
+        QVERIFY(ActivateTestWindow(ViewerWindow));
+        QVERIFY(Surface->SendDocument({{"action", "focus"}}).HasValue());
+        const auto ViewerThread = GetWindowThreadProcessId(ViewerWindow, nullptr);
+        const auto HasViewerFocus = [&] {
+            GUITHREADINFO Info{sizeof(Info)};
+            return GetGUIThreadInfo(ViewerThread, &Info) && GetForegroundWindow() == ViewerWindow
+                && (Info.hwndFocus == ViewerWindow || IsChild(ViewerWindow, Info.hwndFocus));
+        };
+        QTRY_VERIFY(HasViewerFocus());
+        INPUT Escape[2]{}; Escape[0].type = Escape[1].type = INPUT_KEYBOARD;
+        Escape[0].ki.wVk = Escape[1].ki.wVk = VK_ESCAPE; Escape[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        QCOMPARE(SendInput(2, Escape, sizeof(INPUT)), UINT(2));
         // ESC either disposes the viewer or keeps it hidden as the next warm viewer.
         QTRY_VERIFY_WITH_TIMEOUT(Closing.isNull()||(Closing->isHidden()&&Closing->objectName()=="hc.document.prepared"),10000);
         QTRY_COMPARE(GetForegroundWindow(),reinterpret_cast<HWND>(Main.winId()));
@@ -282,6 +306,19 @@ private slots:
             Keys[1].ki.dwFlags|=KEYEVENTF_KEYUP;QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2));
         }
         QTRY_COMPARE(Input.text(),QString("returned"));
+        // A background close must leave the user's newly activated window alone.
+        Completed = false;
+        QPointer<QDialog> Background = Host.OpenPlugin(Options, {{Source,{}}}, "Background F3", [&](bool Ok,const QString&){Completed=Ok;});
+        QVERIFY(Background); QTRY_VERIFY_WITH_TIMEOUT(Completed,30000);
+        auto* BackgroundSurface = Background->findChild<QtPluginViewerSurface*>(); QVERIFY(BackgroundSurface);
+        QProcess Other; Other.start(QCoreApplication::applicationFilePath(), {"--p4-focus-sentinel"});
+        const auto StopOther = qScopeGuard([&] { Other.kill(); Other.waitForFinished(); });
+        QVERIFY(Other.waitForStarted()); HWND OtherWindow = nullptr;
+        QTRY_VERIFY((OtherWindow = VisibleTestProcessWindow(DWORD(Other.processId()))) != nullptr);
+        QVERIFY(ActivateTestWindow(OtherWindow));
+        QVERIFY(BackgroundSurface->SendDocument({{"action","escape"}}).HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Background.isNull() || (Background->isHidden() && Background->objectName()=="hc.document.prepared"),10000);
+        QTest::qWait(150); QCOMPARE(GetForegroundWindow(),OtherWindow);
         Host.CloseAll();QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(),15000);
     }
     void closedViewerBecomesWarm() {
@@ -410,6 +447,11 @@ private slots:
     }
 };
 int main(int Argc, char** Argv) {
+    if (Argc > 1 && QByteArray(Argv[1]) == "--p4-focus-sentinel") {
+        QApplication App(Argc, Argv); QWidget Window;
+        Window.setWindowTitle("Background-close focus sentinel"); Window.resize(480,240); Window.show();
+        QTimer::singleShot(30000, &App, &QCoreApplication::quit); return App.exec();
+    }
     if (Argc > 2 && QByteArray(Argv[1]) == "--p4-child") {
         QCoreApplication App(Argc, Argv); QJsonArray Values; for (const auto& Arg : App.arguments()) Values.append(Arg);
         QFile File(QString::fromLocal8Bit(Argv[2])); if (!File.open(QIODevice::WriteOnly)) return 2; File.write(QJsonDocument(Values).toJson()); File.close(); QThread::msleep(700); return 0;

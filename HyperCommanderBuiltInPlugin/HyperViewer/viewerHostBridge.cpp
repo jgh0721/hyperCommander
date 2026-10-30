@@ -36,10 +36,12 @@ namespace hc::document
         std::unique_ptr<HwpHostSession> rhwp_;
         HANDLE abort_ = nullptr;
         QTimer* abortTimer_ = nullptr;
+        HWND container_ = nullptr;
+        bool closeHandled_ = false, closeForeground_ = false;
         bool failed_ = false;
     };
 
-    ViewerHostBridge::ViewerHostBridge(HWND) : state_(std::make_unique<State>()) {}
+    ViewerHostBridge::ViewerHostBridge(HWND Container) : state_(std::make_unique<State>()) { state_->container_ = Container; }
     ViewerHostBridge::~ViewerHostBridge() { Stop(); }
 
     void ViewerHostBridge::Start()
@@ -58,7 +60,27 @@ namespace hc::document
         state_->window_->winId();
         QObject::connect(state_->window_.get(), &DocumentWorkspaceWidget::StateChanged,
             state_->window_.get(), [this] {
-                if (state_->window_->Snapshot()["closeRequested"].toBool()) state_->window_->hide();
+                if (!state_->window_->Snapshot()["closeRequested"].toBool()) {
+                    state_->closeHandled_ = state_->closeForeground_ = false;
+                    return;
+                }
+                if (state_->closeHandled_) return;
+                state_->closeHandled_ = true;
+                const auto Native = reinterpret_cast<HWND>(state_->window_->winId());
+                state_->closeForeground_ = GetForegroundWindow() == Native;
+                // Transfer activation while this process still owns the foreground.
+                // After hide(), Windows may activate an unrelated application and
+                // Commander can no longer distinguish that from a user switch.
+                const auto Caller = GetAncestor(state_->container_, GA_ROOT);
+                const auto Owner = GetWindow(Caller, GW_OWNER);
+                DWORD CallerPid = 0, OwnerPid = 0;
+                GetWindowThreadProcessId(Caller, &CallerPid);
+                GetWindowThreadProcessId(Owner, &OwnerPid);
+                const auto Return = Owner && CallerPid && OwnerPid == CallerPid ? Owner : Caller;
+                if (state_->closeForeground_ && Return && Return != Native && IsWindowVisible(Return)
+                    && IsWindowEnabled(Return) && !IsIconic(Return) && GetForegroundWindow() == Native)
+                    SetForegroundWindow(Return);
+                state_->window_->hide();
             });
         const auto Config = ConfigDirectory.isEmpty() ? hc::settings::DocumentPaths()
             : hc::settings::ConfigPaths::Resolve({"HyperViewer", "--config-dir", ConfigDirectory},
@@ -154,17 +176,18 @@ namespace hc::document
                 QTimer::singleShot(0, state_->window_.get(), [this] { Focus(); });
             } else if (Action == "conceal") state_->window_->hide();
             auto Reply = Command.contains("messageType") ? state_->window_->HandleMessage(Command) : state_->window_->Handle(Command);
-            if (Action == "present") {
-                const auto NativeWindow = QString::number(static_cast<quintptr>(state_->window_->winId()), 16);
-                if (Command.contains("messageType")) {
-                    auto Body = Reply["payload"].toObject();
-                    if (Body["accepted"].toBool()) {
-                        Body.insert("nativeWindow", NativeWindow);
-                        Reply.insert("payload", Body);
-                        Reply.insert("payloadLength", QJsonDocument(Body).toJson(QJsonDocument::Compact).size());
-                    }
-                } else if (Reply["accepted"].toBool()) Reply.insert("nativeWindow", NativeWindow);
-            }
+            const auto AddWindowState = [this, &Action](QJsonObject Body) {
+                if (Action == "present" && Body["accepted"].toBool())
+                    Body.insert("nativeWindow", QString::number(static_cast<quintptr>(state_->window_->winId()), 16));
+                if (Body.contains("closeRequested"))
+                    Body.insert("closeForeground", state_->closeHandled_ && state_->closeForeground_);
+                return Body;
+            };
+            if (Command.contains("messageType")) {
+                const auto Body = AddWindowState(Reply["payload"].toObject());
+                Reply.insert("payload", Body);
+                Reply.insert("payloadLength", QJsonDocument(Body).toJson(QJsonDocument::Compact).size());
+            } else Reply = AddWindowState(Reply);
             return Reply;
         };
         // Explicit diagnostic RHWP commands retain their versioned endpoint;
