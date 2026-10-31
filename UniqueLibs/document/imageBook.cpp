@@ -1,4 +1,7 @@
-﻿#include "imageBook.hpp"
+﻿#include "stdafx.h"
+#include "imageBook.hpp"
+#include "core/AppSettings.h"
+#include <QSet>
 #include "imagePartialDecoder.hpp"
 #include "imagePerformance.hpp"
 #include "imageZipRecovery.hpp"
@@ -423,3 +426,113 @@ QStringList NextImageBooks(const QString &Path, int Direction, std::stop_token S
     return Result;
 }
 } // namespace hc::document
+
+namespace hc::document {
+void AnalyzeImageBook(const std::shared_ptr<ImageBook>& Book, storage::OperationContext Context)
+{
+    if(!Book || Book->pages_.size()<8 || Context.stopToken_.stop_requested())return;
+    ImageTraceSpan Trace("comic.classify",Book->path_);QElapsedTimer Clock;Clock.start();
+    QCryptographicHash Hash(QCryptographicHash::Sha256);Hash.addData(Book->revision_.toUtf8());
+    if(!Book->archive_)for(const auto& Page:Book->pages_)Hash.addData(Page.id_.toUtf8());
+    const auto Identity=QString::fromLatin1(Hash.result().toHex());
+    // Cache is persisted by the reader with its normal history transaction.
+    AppSettings Settings;QFile History(QFileInfo(Settings.fileName()).absolutePath()+"/HyperViewer-reading.json");
+    if(History.open(QIODevice::ReadOnly) && History.size()<=16*1024*1024){
+        const auto Cached=QJsonDocument::fromJson(History.readAll()).object()[Book->path_].toObject()["readingAnalysis"].toObject();
+        if(Cached["version"].toInt()==ImageReadingAnalysis::Version && Cached["revision"].toString()==Identity
+            && (Cached["mode"].toInt(-1)==1 || Cached["mode"].toInt(-1)==2)){
+            auto& A=Book->readingAnalysis_;A.mode_=Cached["mode"].toInt();A.samples_=Cached["samples"].toInt();
+            A.longPages_=Cached["longPages"].toInt();A.joinedEdges_=Cached["joinedEdges"].toInt();A.confidence_=Cached["confidence"].toDouble();
+            A.longFlowShare_=Cached["longFlowShare"].toDouble();A.reason_=Cached["reason"].toString();A.revision_=Identity;A.cached_=true;A.elapsedMs_=Clock.elapsed();return;
+        }
+    }
+    // Do not repeatedly seek/decompress solid archives or recover damaged members
+    // just to guess a display mode. Normal page acquisition still supports them.
+    if(Book->archive_ && !QStringList{"zip","cbz"}.contains(QFileInfo(Book->path_).suffix().toLower()))return;
+    Context.passwordPrompt_={};Context.interactionPrompt_={};Context.interactionStart_={};
+    const auto OriginalDeadline=Context.deadline_;
+    Context.deadline_=qMin(Context.deadline_,std::chrono::steady_clock::now()+std::chrono::milliseconds(1800));
+    constexpr qint64 Budget=8*1024*1024; qint64 Bytes=0;
+    struct Probe {QByteArray bytes_;bool complete_=false;};
+    QMap<int,Probe> Headers;std::unique_ptr<plugins::IArchiveReadSession> MetadataStream;QSet<std::uint32_t> BatchOrdinals;
+    const auto Read=[&](int Index,int Limit)->Probe {
+        if(Context.Check({"image-classification"}))return {};
+        if(Limit>64*1024 && Headers.contains(Index) && Headers[Index].complete_)return Headers[Index];
+        if(Bytes+Limit>Budget)return {};
+        const auto& Page=Book->pages_[Index];Probe Result;
+        if(Page.subpage_ || Page.recoveredMethod_>=0 || Page.entry_.encrypted_)return {};
+        if(Book->archive_){
+            std::unique_ptr<plugins::IArchiveReadSession> OwnStream;auto* Stream=MetadataStream.get();
+            if(Limit!=64*1024 || !BatchOrdinals.contains(Page.ordinal_)){
+                auto Opened=Book->archive_->OpenReadSession(Book->path_.toUtf8().toStdString(),{Page.ordinal_},Context);
+                if(!Opened.HasValue())return {};OwnStream=std::move(Opened.Value());Stream=OwnStream.get();
+            }
+            while(Result.bytes_.size()<Limit){
+                auto Chunk=Stream->Read(Page.ordinal_,qMin(64*1024,Limit-int(Result.bytes_.size())),Context);
+                if(!Chunk.HasValue() || Chunk.Value().bytes_.empty())break;
+                const auto& Data=Chunk.Value().bytes_;Bytes+=Data.size();
+                if(Data.size()>std::size_t(Limit-Result.bytes_.size()))return {};
+                Result.bytes_.append(reinterpret_cast<const char*>(Data.data()),Data.size());
+                if(Chunk.Value().eof_){Result.complete_=true;break;}
+                if(Context.Check({"image-classification"}))break;
+            }
+        }else{
+            QFile File(Page.file_);if(!File.open(QIODevice::ReadOnly) || Revision(Page.file_)!=Page.sourceRevision_)return {};
+            Result.bytes_=File.read(Limit);Bytes+=Result.bytes_.size();Result.complete_=File.atEnd() && File.error()==QFileDevice::NoError;
+        }
+        return Result;
+    };
+    QSet<int> Indices;const int Count=Book->pages_.size();
+    for(int I=0;I<qMin(12,Count);++I)Indices.insert(I);
+    for(int I=0;I<24;++I)Indices.insert(int(qint64(Count-1)*I/23));
+    auto Sorted=Indices.values();std::sort(Sorted.begin(),Sorted.end());QList<ImageReadingSample> Samples;
+    const auto AnalysisDeadline=Context.deadline_;Context.deadline_=qMin(AnalysisDeadline,std::chrono::steady_clock::now()+std::chrono::milliseconds(900));
+    auto ReadOrder=Sorted;
+    if(Book->archive_){
+        std::vector<std::uint32_t> Ordinals;qint64 Expanded=0;
+        for(const int Index:Sorted){const auto& Page=Book->pages_[Index];
+            if(!Page.entry_.encrypted_ && Page.recoveredMethod_<0 && Page.entry_.size_<=512*1024 && Expanded+qint64(Page.entry_.size_)<=4*1024*1024){
+                Ordinals.push_back(Page.ordinal_);Expanded+=Page.entry_.size_;
+            }
+        }
+        std::sort(Ordinals.begin(),Ordinals.end());Ordinals.erase(std::unique(Ordinals.begin(),Ordinals.end()),Ordinals.end());
+        if(!Ordinals.empty()){
+            auto Opened=Book->archive_->OpenReadSession(Book->path_.toUtf8().toStdString(),Ordinals,Context);
+            if(Opened.HasValue()){MetadataStream=std::move(Opened.Value());for(const auto Ordinal:Ordinals)BatchOrdinals.insert(Ordinal);}
+        }
+        std::sort(ReadOrder.begin(),ReadOrder.end(),[&](int A,int B){return Book->pages_[A].ordinal_<Book->pages_[B].ordinal_;});
+    }
+    for(const int Index:ReadOrder){
+        if(Context.Check({"image-classification"}))break;
+        auto Probe=Read(Index,64*1024);Headers[Index]=Probe;QBuffer Buffer(&Probe.bytes_);Buffer.open(QIODevice::ReadOnly);
+        QImageReader Reader(&Buffer);Reader.setAutoTransform(true);const auto Size=Reader.effectiveSize();
+        if(Size.isValid())Samples.append({Index,Size,{}});
+    }
+    MetadataStream.reset();
+    std::sort(Samples.begin(),Samples.end(),[](const auto& A,const auto& B){return A.page_<B.page_;});
+    Context.deadline_=AnalysisDeadline;
+    auto Analysis=ImageReadingClassifier::Classify(Samples);
+    if(Analysis.mode_!=2 && Analysis.reason_!="landscape-pages" && Samples.size()>=8){
+        // Separate runs provide independent informative joins. Decode only
+        // bounded complete members; partial/corrupt content never supplies edges.
+        QSet<int> Runs;for(const int Start:{2,Count/6,Count/3,Count/2,2*Count/3,5*Count/6})for(int I=Start;I<qMin(Start+4,Count);++I)Runs.insert(I);
+        for(const int Index:Runs){
+            if(Context.Check({"image-classification"}))break;
+            auto Probe=Read(Index,1024*1024);if(!Probe.complete_)continue;
+            QBuffer Buffer(&Probe.bytes_);Buffer.open(QIODevice::ReadOnly);QImageReader Reader(&Buffer);Reader.setAutoTransform(true);
+            const auto Size=Reader.effectiveSize();if(!Size.isValid() || qint64(Size.width())*Size.height()>32*1024*1024)continue;
+            const int Height=qRound(128.*Size.height()/Size.width());if(Height<8 || Height>4096)continue;
+            Reader.setScaledSize(QSize(128,Height));auto Image=Reader.read();if(Image.isNull())continue;
+            Image=Image.scaled(128,Height,Qt::IgnoreAspectRatio,Qt::SmoothTransformation);
+            bool Found=false;for(auto& Sample:Samples)if(Sample.page_==Index){Sample.preview_=Image;Found=true;break;}
+            if(!Found)Samples.append({Index,Size,Image,true});
+        }
+        std::sort(Samples.begin(),Samples.end(),[](const auto& A,const auto& B){return A.page_<B.page_;});
+        Analysis=ImageReadingClassifier::Classify(Samples);
+    }
+    // Cancellation and source replacement never publish a confident result.
+    if(Context.stopToken_.stop_requested() || std::chrono::steady_clock::now()>=OriginalDeadline || Revision(Book->path_)!=Book->revision_)return;
+    Analysis.revision_=Identity;Analysis.bytes_=Bytes;Analysis.elapsedMs_=Clock.elapsed();Book->readingAnalysis_=Analysis;
+    Trace.AddBytes(Bytes);
+}
+}

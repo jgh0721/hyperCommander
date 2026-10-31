@@ -128,6 +128,80 @@ class ImageReadingTests : public QObject
                                                   qEnvironmentVariable("TEMP") + "/image-reading-config");
         QDir().mkpath(qEnvironmentVariable("TEMP") + "/image-reading-config");
     }
+    void contentModeDistributionsAndShortCuts()
+    {
+        QList<ImageReadingSample> Mixed,Scan;
+        for(int I=0;I<35;++I){Mixed.append({I,{600,I<15?2300:900},{}});Scan.append({I,{1280,986},{}});}
+        QCOMPARE(ImageReadingClassifier::Classify(Mixed).mode_,2);QCOMPARE(ImageReadingClassifier::Classify(Scan).mode_,1);
+        QList<ImageReadingSample> Cuts,White,Repeating;
+        for(int I=0;I<10;++I){
+            QImage Image(128,180,QImage::Format_RGB32),Pattern(128,180,QImage::Format_RGB32);Pattern.fill(Qt::white);
+            for(int Y=0;Y<180;++Y)for(int X=0;X<128;++X){
+                const int Value=qRound(127+110*std::sin(X*.12+(I*180+Y)*.007));Image.setPixelColor(X,Y,QColor(Value,Value,Value));
+                Pattern.setPixelColor(X,Y,X%16<8?Qt::black:Qt::white);
+            }
+            Cuts.append({I,{512,720},Image});White.append({I,{512,720},Picture(Qt::white,{128,180})});Repeating.append({I,{512,720},Pattern});
+        }
+        const auto Joined=ImageReadingClassifier::Classify(Cuts);QCOMPARE(Joined.mode_,2);QCOMPARE(Joined.reason_,QString("continuous-image-edges"));
+        QCOMPARE(ImageReadingClassifier::Classify(White).mode_,1);QCOMPARE(ImageReadingClassifier::Classify(Repeating).mode_,1);
+        QCOMPARE(ImageReadingClassifier::Classify(Cuts.mid(0,3)).mode_,-1);
+        QList<ImageReadingSample> Variable;
+        for(int I=0;I<35;++I)Variable.append({I,{512,I==5 || I==15 || I==25?5120:720},{}});
+        QVERIFY(ImageReadingClassifier::Classify(Variable).mode_!=2);
+        Variable[20].preview_=Cuts[2].preview_;Variable[21].preview_=Cuts[3].preview_;
+        const auto Combined=ImageReadingClassifier::Classify(Variable);QCOMPARE(Combined.mode_,2);QCOMPARE(Combined.reason_,QString("mixed-long-and-cut-pages"));
+    }
+    void contentModeOpeningAndHistory_data()
+    {
+        QTest::addColumn<bool>("Hosted");QTest::newRow("editor")<<false;QTest::newRow("viewer")<<true;
+    }
+    void contentModeOpeningAndHistory()
+    {
+        QFETCH(bool,Hosted);QTemporaryDir Root;const auto Old=qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir",Root.path());const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",Old);});
+        const auto Path=Root.filePath("no-tag.zip");
+        {QZipWriter Zip(Path);for(int I=0;I<16;++I){QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);Picture(Qt::white,{200,600}).save(&Buffer,"PNG");Zip.addFile(QString("%1.png").arg(I,3,10,QChar('0')),Bytes);}Zip.close();}
+        auto Book=OpenImageBook(Path);QVERIFY(Book.HasValue());
+        const QJsonObject Legacy{{Path,QJsonObject{{"revision",Book.Value()->revision_},{"pageId",Book.Value()->pages_[1].id_},{"mode",1}}}};
+        {QFile File(Root.filePath("HyperViewer-reading.json"));QVERIFY(File.open(QIODevice::WriteOnly));File.write(QJsonDocument(Legacy).toJson());}
+        {
+            DocumentWorkspaceWidget W(Root.filePath("recovery"),Hosted);W.resize(800,600);W.show();W.Handle({{"action","open"},{"path",Path}});
+            QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"]=="ready",20000);
+            auto* Pane=W.findChild<DocumentViewPane*>();QVERIFY(Pane);auto* Reader=Pane->findChild<ImageReadingView*>();QVERIFY(Reader);
+            QCOMPARE(Reader->State()["mode"].toInt(),2);QCOMPARE(Pane->findChild<QComboBox*>("imageReadingMode")->currentIndex(),2);
+            QCOMPARE(Reader->State()["modeOrigin"].toString(),QString("auto"));QCOMPARE(Reader->State()["page"].toInt(),1);
+            QVERIFY(!Pane->Execute({{"action","reading.mode"},{"mode",1}}).contains("error"));
+            QCOMPARE(Reader->State()["modeOrigin"].toString(),QString("user"));QTRY_VERIFY_WITH_TIMEOUT(W.RequestClose(),20000);
+        }
+        {
+            DocumentWorkspaceWidget W(Root.filePath("recovery"),Hosted);W.show();W.Handle({{"action","open"},{"path",Path}});
+            QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"]=="ready",20000);auto* Reader=W.findChild<ImageReadingView*>();QVERIFY(Reader);
+            QCOMPARE(Reader->State()["mode"].toInt(),1);QCOMPARE(Reader->State()["modeOrigin"].toString(),QString("user"));
+            QVERIFY(Reader->State()["readingAnalysis"].toObject()["cached"].toBool());QTRY_VERIFY_WITH_TIMEOUT(W.RequestClose(),20000);
+        }
+        // No filename tag is consulted, including an intentionally misleading one.
+        const auto Scans=Root.filePath(QString::fromUtf8("[웹툰] scan"));Fixture(Scans,12);
+        auto Pages=OpenImageBook(Scans);QVERIFY(Pages.HasValue());AnalyzeImageBook(Pages.Value());QVERIFY(Pages.Value()->readingAnalysis_.mode_!=2);
+        auto Fresh=OpenImageBook(Path);QVERIFY(Fresh.HasValue());std::stop_source Stop;Stop.request_stop();hc::storage::OperationContext Context;Context.stopToken_=Stop.get_token();
+        AnalyzeImageBook(Fresh.Value(),Context);QCOMPARE(Fresh.Value()->readingAnalysis_.mode_,-1);
+        {QFile File(Path);QVERIFY(File.open(QIODevice::Append));File.write("cache revision change");}
+        auto Changed=OpenImageBook(Path);QVERIFY(Changed.HasValue());AnalyzeImageBook(Changed.Value());QVERIFY(!Changed.Value()->readingAnalysis_.cached_);QCOMPARE(Changed.Value()->readingAnalysis_.mode_,2);
+    }
+    void contentModeNetworkCorpus()
+    {
+        const auto Root=qEnvironmentVariable("HC_WEBTOON_CORPUS");if(Root.isEmpty())QSKIP("Optional read-only comic corpus");
+        const auto Old=qApp->property("documentViewsConfigDir");QTemporaryDir Config;qApp->setProperty("documentViewsConfigDir",Config.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",Old);});int Tested=0;bool All=true;
+        for(const auto& File:QDir(Root).entryInfoList({"*.zip"},QDir::Files)){
+            int Expected=-1;
+            for(const auto* Name:{"유치원의 하루","쌉니다 천리마마트","쓰레기 머학생","열무와 알타리","선천적 얼간이들"})if(File.fileName().contains(QString::fromUtf8(Name)))Expected=2;
+            for(const auto* Name:{"우리들이 있었다","연기와 꿀","판도라 하츠","더 페이블 2부"})if(File.fileName().contains(QString::fromUtf8(Name)))Expected=1;
+            if(Expected<0)continue;auto Book=OpenImageBook(File.absoluteFilePath(),{},false);QVERIFY(Book.HasValue());AnalyzeImageBook(Book.Value());
+            const auto A=Book.Value()->readingAnalysis_;qInfo().noquote()<<File.fileName()<<QJsonDocument(A.Json()).toJson(QJsonDocument::Compact);
+            All &= A.mode_==Expected;QVERIFY(A.bytes_<=8*1024*1024);++Tested;
+        }
+        QCOMPARE(Tested,9);QVERIFY(All);
+    }
     void addedKernelsAndIdentity()
     {
         const auto Filters = ImageFilterRegistry::Filters();

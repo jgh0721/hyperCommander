@@ -28,7 +28,7 @@ class ImageReadingView final : public QAbstractScrollArea
     ~ImageReadingView() override;
     void Load(std::shared_ptr<ImageBook> Book, const QImage &First = {}, int Start = 0);
     void OpenPath(const QString &Path, const QString &Entry = {}, int RequestedMode = -1);
-    void SetMode(Mode Value);
+    void SetMode(Mode Value, bool UserSelected = true);
     void SetFilter(const QString &Id);
     void SetRightToLeft(bool Enabled);
     void SetCover(bool Enabled);
@@ -131,6 +131,7 @@ class ImageReadingView final : public QAbstractScrollArea
     int workers_ = 0, index_ = 0, fit_ = 1;
     int splitPart_ = 0, gap_ = 0;
     Mode mode_ = Single;
+    QString modeOrigin_ = "legacy";
     QString filter_ = "auto", error_;
     bool rtl_ = false, cover_ = true, split_ = false, automaticNext_ = true, volumePending_ = false,
          rebuilding_ = false;

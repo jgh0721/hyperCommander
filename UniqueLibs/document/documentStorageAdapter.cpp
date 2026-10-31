@@ -63,6 +63,7 @@ namespace hc::document
         if(!QFileInfo(Path).isAbsolute())return Invalid("document-absolute-path-required");
         if(IsImageBook(Path)||QFileInfo(Path).isDir()) {
             auto Book=OpenImageBook(Path,Context,false);if(!Book.HasValue())return Book.Failure();
+            AnalyzeImageBook(Book.Value(),Context);
             if(auto Stop=Context.Check({"image-book"}))return *Stop;
             TextInput Input;Input.path_=QFileInfo(Path).absoluteFilePath();Input.viewId_="image";Input.book_=Book.Value();
             // Books are read-only page sources. A content hash of the complete

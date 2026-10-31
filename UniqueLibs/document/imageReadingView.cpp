@@ -173,6 +173,7 @@ void ImageReadingView::OpenPath(const QString &Path, const QString &Entry, int R
             auto Book = OpenImageBook(Path, Context, false);
             if (!Book.HasValue())
                 return Book.Failure();
+            AnalyzeImageBook(Book.Value(),Context);
             int Index = 0;
             for (int I = 0; I < Book.Value()->pages_.size(); ++I)
                 if (Book.Value()->pages_[I].file_.compare(Path, Qt::CaseInsensitive) == 0 ||
@@ -256,6 +257,9 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
                                                                                                  : QString("auto");
         mode_ = Mode(qBound(0, Entry["mode"].toInt(int(mode_)), 2));
     }
+    modeOrigin_=Entry["modeOrigin"].toString()=="user"?"user":"legacy";
+    if(modeOrigin_=="user")mode_=Mode(qBound(0,Entry["mode"].toInt(int(mode_)),2));
+    else if(book_->readingAnalysis_.mode_>=0){mode_=Mode(book_->readingAnalysis_.mode_);modeOrigin_="auto";}
     cover_ = AppSettings().value("imageView/comic/coverAlone", true).toBool();
     if (index_ != Start)
         currentImage_ = {};
@@ -275,6 +279,7 @@ void ImageReadingView::expandSubpages()
         const auto Name=CurrentName();const auto Image=CurrentImage();const auto Relative=State()["relative"].toDouble();
         int Index=0;for(int I=0;I<Result.Value()->pages_.size();++I)if(Result.Value()->pages_[I].name_==Name){Index=I;break;}
         // Replace the immutable catalog; outstanding readers retain the old one.
+        Result.Value()->readingAnalysis_=book_->readingAnalysis_;
         Cancel();book_=std::move(Result.Value());index_=Index;currentImage_=Image;
         sources_.clear();tiles_.clear();pageErrors_.clear();pageWarnings_.clear();
         knownSizes_.clear(); contentVersions_.clear(); previousGroups_.clear();
@@ -313,7 +318,7 @@ void ImageReadingView::RetryPage()
     if(!book_ || index_<0 || index_>=book_->pages_.size())return;
     // Re-enumerate on an explicit retry so repaired files get a fresh revision;
     // a transient failure never silently discards the rest of the book.
-    OpenPath(book_->path_,book_->pages_[index_].name_,int(mode_));
+    OpenPath(book_->path_,book_->pages_[index_].name_);
 }
 
 void ImageReadingView::Cancel()
@@ -329,9 +334,10 @@ void ImageReadingView::Cancel()
     animationPending_ = false;
     suspended_ = true;
 }
-void ImageReadingView::SetMode(Mode Value)
+void ImageReadingView::SetMode(Mode Value, bool UserSelected)
 {
-    if (mode_ == Value) return;
+    if(UserSelected)modeOrigin_="user";
+    if (mode_ == Value) {if(UserSelected)changed();return;}
     mode_ = Value;
     previousGroups_.clear(); presentedTiles_.clear(); presentedPage_ = -1;
     splitPart_ = 0;
@@ -944,7 +950,7 @@ void ImageReadingView::openVolumePath(const QString &Path)
         {
             storage::OperationContext Context;
             Context.stopToken_ = Stop->get_token();
-            return OpenImageBook(Path, Context);
+            auto Book=OpenImageBook(Path,Context);if(Book.HasValue())AnalyzeImageBook(Book.Value(),Context);return Book;
         }));
 }
 void ImageReadingView::wheelEvent(QWheelEvent *Event)
@@ -1106,6 +1112,7 @@ QJsonObject ImageReadingView::State() const
             {"pageWarning",pageWarnings_.value(index_)},{"pageError",pageErrors_.value(index_)},{"failedPages",pageErrors_.size()},
             {"book", book_ ? book_->path_ : QString{}},
             {"mode", int(mode_)},
+            {"modeOrigin",modeOrigin_},{"readingAnalysis",book_?book_->readingAnalysis_.Json():QJsonObject{}},
             {"relative", mode_ == Webtoon ? relative_ : Relative},
             {"rtl", rtl_},
             {"cover", cover_},

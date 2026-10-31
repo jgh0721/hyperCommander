@@ -96,7 +96,7 @@ namespace hc::document
         readingPath_=Path;readingEntry_=Entry;
         if(image_&&Entry.isEmpty())image_->SetNavigationSource(Path);
         if(reading_&&!reading_->isHidden()&&reading_->State()["pageCount"].toInt()>0&&!Path.isEmpty()&&reading_->State()["book"].toString()!=Path)
-            reading_->OpenPath(Path,Entry,reading_->State()["mode"].toInt());
+            reading_->OpenPath(Path,Entry);
     }
     bool DocumentViewPane::Load(const TextInput& Input,bool Traverse,bool ImageEditing)
     {
@@ -249,7 +249,7 @@ namespace hc::document
                     if(Book)reading_->Load(Book,First);
                     else reading_->OpenPath(readingPath_.isEmpty()?Path:readingPath_,readingEntry_,Value);
                 }
-                animation_->Clear();image_->setEditTool(QImageView::None);image_->hide();EditBar->hide();Edit->setEnabled(false);reading_->show();Fit->removeItem(4);reading_->SetMode(Value==2?ImageReadingView::Webtoon:Value==1?ImageReadingView::Comic:ImageReadingView::Single);reading_->setFocus();emit ViewStateChanged();
+                animation_->Clear();image_->setEditTool(QImageView::None);image_->hide();EditBar->hide();Edit->setEnabled(false);reading_->show();Fit->removeItem(4);reading_->SetMode(Value==2?ImageReadingView::Webtoon:Value==1?ImageReadingView::Comic:ImageReadingView::Single,!Mode->property("automaticSelection").toBool());reading_->setFocus();emit ViewStateChanged();
             });
             connect(reading_,&ImageReadingView::VolumeChanged,this,[this](const QString& Path){readingPath_=Path;readingEntry_.clear();emit ReadingVolumeChanged(Path);});
             connect(reading_,&ImageReadingView::Changed,this,[this]{if(!reading_->isHidden())emit ReadingSelected();emit ViewStateChanged();});
@@ -310,7 +310,7 @@ namespace hc::document
                 const QSignalBlocker B1(Mode),B2(Rtl),B3(Cover),B4(Split),B5(Auto),B6(Filters),B7(Fit);
                 Mode->setCurrentIndex(S["mode"].toInt());Rtl->setChecked(S["rtl"].toBool());Cover->setChecked(S["cover"].toBool());Split->setChecked(S["split"].toBool());Auto->setChecked(S["automaticNext"].toBool());Filters->setCurrentIndex(Filters->findData(S["filter"].toString()));Fit->setCurrentIndex(S["fit"].toInt());
             });
-            if(Book){reading_->Load(Book,First);const int Value=reading_->property("readingHistoryRestored").toBool()?reading_->State()["mode"].toInt():1;Mode->setCurrentIndex(Value);emit Mode->activated(Value);EditToolbar->hide();if(!readingPath_.isEmpty()&&readingPath_!=Book->path_)reading_->OpenPath(readingPath_,readingEntry_,Value);}
+            if(Book){reading_->Load(Book,First);const auto State=reading_->State();const int Value=reading_->property("readingHistoryRestored").toBool() || State["modeOrigin"].toString()!="legacy"?State["mode"].toInt():1;Mode->setCurrentIndex(Value);Mode->setProperty("automaticSelection",true);emit Mode->activated(Value);Mode->setProperty("automaticSelection",false);EditToolbar->hide();if(!readingPath_.isEmpty()&&readingPath_!=Book->path_)reading_->OpenPath(readingPath_,readingEntry_);}
         }
         connect(view_,&QBaseView::OpenRequested,this,&DocumentViewPane::OpenRequested);
         connect(view_,&QBaseView::SaveRequested,this,&DocumentViewPane::SaveRequested);
