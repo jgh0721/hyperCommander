@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "HyperCommander/UIs/dialogShell.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/settingsDraft.hpp"
 #include "UniqueLibs/settings/fileColorRules.hpp"
@@ -34,6 +35,87 @@ class DialogFoundationTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void dialogButtonLetters_data()
+    {
+        QTest::addColumn<int>("Key"); QTest::addColumn<int>("Modifiers");
+        for (const auto Key : {Qt::Key_S, Qt::Key_K, Qt::Key_C, Qt::Key_O})
+            for (const auto Modifiers : {Qt::NoModifier, Qt::AltModifier, Qt::ShiftModifier})
+                QTest::newRow(qPrintable(QString("%1-%2").arg(int(Key)).arg(int(Modifiers)))) << int(Key) << int(Modifiers);
+    }
+    void dialogButtonLetters()
+    {
+        QFETCH(int, Key); QFETCH(int, Modifiers);
+        hc::ui::DialogShell Dialog("mnemonics");
+        auto* Skip = new QPushButton("건너뛰기(&S)", &Dialog); auto* SkipAll = new QPushButton("모두 건너뛰기(&K)", &Dialog);
+        Dialog.BodyLayout()->addWidget(Skip); Dialog.BodyLayout()->addWidget(SkipAll);
+        int Skipped = 0, SkippedAll = 0;
+        connect(Skip, &QPushButton::clicked, &Dialog, [&] { ++Skipped; });
+        connect(SkipAll, &QPushButton::clicked, &Dialog, [&] { ++SkippedAll; });
+        QSignalSpy Accepted(&Dialog, &QDialog::accepted), Rejected(&Dialog, &QDialog::rejected);
+        Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QApplication::setActiveWindow(&Dialog);
+        Dialog.AcceptButton()->setFocus();
+        QTest::keyClick(Dialog.focusWidget(), Qt::Key(Key), Qt::KeyboardModifiers(Modifiers));
+        QTRY_COMPARE(Skipped, Key == Qt::Key_S ? 1 : 0); QTRY_COMPARE(SkippedAll, Key == Qt::Key_K ? 1 : 0);
+        QTRY_COMPARE(Accepted.count(), Key == Qt::Key_O ? 1 : 0); QTRY_COMPARE(Rejected.count(), Key == Qt::Key_C ? 1 : 0);
+    }
+    void dialogLettersPreserveInputAndValidation()
+    {
+        hc::ui::DialogShell Dialog("input");
+        auto* Edit = new QLineEdit(&Dialog); Dialog.BodyLayout()->addWidget(Edit); Dialog.SetInitialInput(Edit);
+        auto* Choices = new QComboBox(&Dialog); Choices->addItems({"Alpha", "Charlie"}); Dialog.BodyLayout()->addWidget(Choices);
+        auto* Skip = new QPushButton("건너뛰기(&S)", &Dialog); Dialog.BodyLayout()->addWidget(Skip);
+        int Skipped = 0; connect(Skip, &QPushButton::clicked, &Dialog, [&] { ++Skipped; });
+        QSignalSpy Accepted(&Dialog, &QDialog::accepted), Rejected(&Dialog, &QDialog::rejected);
+        Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QApplication::setActiveWindow(&Dialog);
+        Edit->setFocus(); QTest::keyClicks(Edit, "SCOD"); QCOMPARE(Edit->text(), QString("SCOD"));
+        QCOMPARE(Accepted.count(), 0); QCOMPARE(Rejected.count(), 0); QCOMPARE(Skipped, 0);
+        Choices->setFocus(); QTest::keyClick(Choices, Qt::Key_C); QCOMPARE(Choices->currentIndex(), 1); QCOMPARE(Rejected.count(), 0);
+        Dialog.AcceptButton()->setFocus(); Dialog.SetAcceptEnabled(false); Skip->setEnabled(false);
+        QTest::keyClick(&Dialog, Qt::Key_O); QTest::keyClick(&Dialog, Qt::Key_S); QCOMPARE(Accepted.count(), 0); QCOMPARE(Skipped, 0);
+        Skip->setEnabled(true); Skip->hide(); QTest::keyClick(&Dialog, Qt::Key_S); QCOMPARE(Skipped, 0);
+        Skip->show(); QTest::qWait(5); Skip->setFocus();
+        QKeyEvent Repeat(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier, "s", true); QApplication::sendEvent(Skip, &Repeat); QCOMPARE(Skipped, 0);
+        QTest::keyClick(Skip, Qt::Key_S, Qt::ControlModifier); QCOMPARE(Skipped, 0);
+        auto* Duplicate = new QPushButton("다른 동작(&S)", &Dialog); Dialog.BodyLayout()->addWidget(Duplicate); Duplicate->show();
+        QTest::keyClick(Skip, Qt::Key_S); QCOMPARE(Skipped, 0);
+        Duplicate->hide(); QTest::keyClick(Skip, Qt::Key_S); QCOMPARE(Skipped, 1);
+        Edit->setFocus(); QTest::keyClick(Edit, Qt::Key_C, Qt::AltModifier); QTRY_COMPARE(Rejected.count(), 1);
+    }
+    void fileOperationLetters()
+    {
+        QTemporaryDir Temp; QVERIFY(Temp.isValid()); QVERIFY(QDir().mkdir(Temp.filePath("target")));
+        { QFile File(Temp.filePath("sample.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("fixture"); }
+        for (const auto* Id : {"hc.file.copy", "hc.file.move"}) for (const auto Key : {Qt::Key_C, Qt::Key_O}) {
+            hc::ui::FileOperationDialogRequest Request; Request.command_ = Id; Request.source_ = Temp.path();
+            Request.initialValue_ = Temp.filePath("target"); Request.relativeBase_ = Temp.path(); Request.names_ = {"sample.txt"};
+            Request.nativeSource_ = Request.nativeDestination_ = true;
+            hc::ui::FileOperationDialog Dialog(Request);
+            Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QApplication::setActiveWindow(&Dialog);
+            QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); QCOMPARE(Dialog.CancelButton()->text(), QString("취소(&C)"));
+            Dialog.AcceptButton()->setFocus(); QTest::keyClick(Dialog.AcceptButton(), Key);
+            QCOMPARE(Dialog.result(), int(Key == Qt::Key_C ? QDialog::Rejected : QDialog::Accepted)); QVERIFY(!Dialog.isVisible());
+        }
+        for (const auto Key : {Qt::Key_C, Qt::Key_S}) {
+            hc::ui::ArchiveExtractDialog Dialog({"sample.zip"}, Temp.filePath("target"), false);
+            Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QApplication::setActiveWindow(&Dialog);
+            QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); Dialog.AcceptButton()->setFocus(); QTest::keyClick(Dialog.AcceptButton(), Key);
+            QCOMPARE(Dialog.result(), int(Key == Qt::Key_C ? QDialog::Rejected : QDialog::Accepted)); QVERIFY(!Dialog.isVisible());
+        }
+        QVERIFY(QFileInfo::exists(Temp.filePath("sample.txt")));
+    }
+    void standardMessageLetters()
+    {
+        for (const auto Key : {Qt::Key_Y, Qt::Key_N, Qt::Key_C}) {
+            hc::ui::MessageDialog Dialog(QMessageBox::Question, "question", "response", QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+            QMessageBox::StandardButton Clicked = QMessageBox::NoButton;
+            connect(&Dialog, &QMessageBox::buttonClicked, &Dialog, [&](QAbstractButton* Button) { Clicked = Dialog.standardButton(Button); });
+            Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QApplication::setActiveWindow(&Dialog);
+            QVERIFY(!QKeySequence::mnemonic(Dialog.button(QMessageBox::Cancel)->text()).isEmpty());
+            QTest::keyClick(Dialog.focusWidget() ? Dialog.focusWidget() : &Dialog, Key);
+            QCOMPARE(Clicked, Key == Qt::Key_Y ? QMessageBox::Yes : Key == Qt::Key_N ? QMessageBox::No : QMessageBox::Cancel);
+        }
+    }
+
     void footerMessagesKeepGeometry_data()
     {
         QTest::addColumn<bool>("Dark"); QTest::addColumn<int>("Points");
@@ -602,9 +684,15 @@ private slots:
             QTest::newRow(qPrintable(QString(Mode) + "-return")) << QString(Mode) << int(Qt::Key_Return);
             QTest::newRow(qPrintable(QString(Mode) + "-keypad-enter")) << QString(Mode) << int(Qt::Key_Enter);
             QTest::newRow(qPrintable(QString(Mode) + "-escape")) << QString(Mode) << int(Qt::Key_Escape);
+            QTest::newRow(qPrintable(QString(Mode) + "-delete-letter")) << QString(Mode) << int(Qt::Key_D);
+            QTest::newRow(qPrintable(QString(Mode) + "-cancel-letter")) << QString(Mode) << int(Qt::Key_C);
+            QTest::newRow(qPrintable(QString(Mode) + "-alt-delete")) << QString(Mode) << int(Qt::ALT | Qt::Key_D);
+            QTest::newRow(qPrintable(QString(Mode) + "-alt-cancel")) << QString(Mode) << int(Qt::ALT | Qt::Key_C);
         }
         QTest::newRow("unavailable-return") << QString("unavailable") << int(Qt::Key_Return);
         QTest::newRow("unavailable-keypad-enter") << QString("unavailable") << int(Qt::Key_Enter);
+        QTest::newRow("unavailable-delete-letter") << QString("unavailable") << int(Qt::Key_D);
+        QTest::newRow("unavailable-cancel-letter") << QString("unavailable") << int(Qt::Key_C);
     }
     void deleteConfirmationKeyboard()
     {
@@ -627,11 +715,14 @@ private slots:
         if (Available) QTRY_VERIFY(Dialog.AcceptButton()->isEnabled());
         else QVERIFY(!Dialog.AcceptButton()->isEnabled());
         // Exercise the initial keyboard focus, without clicking the action button.
-        QTest::keyClick(Dialog.focusWidget() ? Dialog.focusWidget() : &Dialog, Qt::Key(Key),
-            Key == Qt::Key_Enter ? Qt::KeypadModifier : Qt::NoModifier);
-        QCOMPARE(Accepted.count(), Available && Key != Qt::Key_Escape ? 1 : 0);
-        QCOMPARE(Rejected.count(), Key == Qt::Key_Escape ? 1 : 0);
-        if (!Available) {
+        const auto Stroke = QKeyCombination::fromCombined(Key); const auto Code = Stroke.key();
+        const bool Cancelling = Code == Qt::Key_Escape || Code == Qt::Key_C;
+        QCOMPARE(Dialog.CancelButton()->text(), QString("취소(&C)"));
+        QTest::keyClick(Dialog.focusWidget() ? Dialog.focusWidget() : &Dialog, Code,
+            Code == Qt::Key_Enter ? Qt::KeypadModifier : Stroke.keyboardModifiers());
+        QTRY_COMPARE(Accepted.count(), Available && !Cancelling ? 1 : 0);
+        QTRY_COMPARE(Rejected.count(), Cancelling ? 1 : 0);
+        if (!Available && !Cancelling) {
             QVERIFY(Dialog.isVisible());
             QTest::keyClick(&Dialog, Qt::Key_Escape);
             QCOMPARE(Rejected.count(), 1);

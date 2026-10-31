@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "qtDialogMnemonics.hpp"
 #include <QAbstractNativeEventFilter>
 #include <QApplication>
 #include <QDialog>
@@ -38,6 +39,7 @@ public:
     static DialogCaption* Attach( QDialog* Dialog, QWidget* Band )
     {
         if( !Dialog || !Band ) return nullptr;
+        DialogMnemonics::Install(Dialog);
         if( !Dialog->windowFlags().testFlag( Qt::FramelessWindowHint ) ) {
             if( Dialog->testAttribute( Qt::WA_WState_Created ) ) return nullptr;
             Dialog->setWindowFlag( Qt::FramelessWindowHint );

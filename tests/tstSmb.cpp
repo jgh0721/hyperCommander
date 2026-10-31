@@ -1,5 +1,7 @@
 ﻿#include "UniqueLibs/wcxStorage.hpp"
 #include "UniqueLibs/archiveExtractJob.hpp"
+#include "UniqueLibs/fileJobInteraction.hpp"
+#include "UniqueLibs/archive/creationDialog.hpp"
 #include "msiBrowseFixture.hpp"
 #include "nativeTestInput.hpp"
 #include "UniqueLibs/qtJobJournal.hpp"
@@ -2922,6 +2924,48 @@ private slots:
         QVERIFY(List->MoveRow(0, 1)); Page->findChild<QLineEdit*>("hc.rules.name")->setText("취소할 편집");
         Dialog.reject();
         QCOMPARE(Settings.Read(Section::Options).toObject()["fileColorRules"].toObject()["groups"].toArray(), Groups);
+    }
+
+    void todoBugDialogLettersUi()
+    {
+        using namespace hc::operations;
+        QTemporaryDir Directory(QDir(unc_).filePath("hc-dialog-letters-XXXXXX")); QVERIFY(Directory.isValid());
+        const auto Source = Directory.filePath("sample.txt");
+        { QFile File(Source); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("mnemonic fixture"); }
+        for (const auto Modifiers : {Qt::NoModifier, Qt::AltModifier}) for (const auto Key : {Qt::Key_S, Qt::Key_K, Qt::Key_C}) {
+            JobSnapshot Snapshot; Snapshot.id_ = "mnemonic-test"; Snapshot.state_ = JobState::WaitingForUser; Snapshot.metadata_.kind_ = JobKind::Delete;
+            InteractionRequest Request; Request.id_ = "response"; Request.kind_ = InteractionKind::RetryFailure; Request.source_ = Source.toStdString();
+            Request.reason_ = "win32:5"; Request.choices_ = {InteractionChoice::Skip, InteractionChoice::SkipAll, InteractionChoice::Cancel}; Snapshot.interaction_ = Request;
+            int Replies = 0; auto Choice = InteractionChoice::Retry;
+            hc::ui::FileJobInteraction Dialog(Snapshot, "영구 삭제", [&](InteractionChoice Answer, const QString&) { ++Replies; Choice = Answer; }, {}, {}, main_);
+            Dialog.setAttribute(Qt::WA_DeleteOnClose, false); Dialog.show(); Dialog.activateWindow();
+            QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QApplication::setActiveWindow(&Dialog); QTest::qWait(5);
+            QTest::keyClick(Dialog.focusWidget() ? Dialog.focusWidget() : &Dialog, Key, Modifiers);
+            QTRY_COMPARE(Replies, 1); QCOMPARE(Choice, Key == Qt::Key_S ? InteractionChoice::Skip : Key == Qt::Key_K ? InteractionChoice::SkipAll : InteractionChoice::Cancel);
+            Dialog.Dismiss();
+        }
+        {
+            JobSnapshot Snapshot; Snapshot.id_ = "password-test"; Snapshot.state_ = JobState::WaitingForUser; Snapshot.metadata_.kind_ = JobKind::Extract;
+            InteractionRequest Request; Request.id_ = "password"; Request.kind_ = InteractionKind::Password; Request.source_ = Source.toStdString();
+            Request.choices_ = {InteractionChoice::Confirm, InteractionChoice::Cancel}; Snapshot.interaction_ = Request;
+            int Replies = 0; auto Choice = InteractionChoice::Confirm;
+            hc::ui::FileJobInteraction Dialog(Snapshot, "압축 해제", [&](InteractionChoice Answer, const QString&) { ++Replies; Choice = Answer; }, {}, {}, main_);
+            Dialog.setAttribute(Qt::WA_DeleteOnClose, false); Dialog.show(); Dialog.activateWindow();
+            QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QApplication::setActiveWindow(&Dialog); QTest::qWait(5);
+            auto* Editor = Dialog.findChild<QLineEdit*>("hc.jobs.newName"); QVERIFY(Editor); Editor->setFocus();
+            QTest::keyClicks(Editor, "SCKO"); QCOMPARE(Editor->text(), QString("SCKO")); QCOMPARE(Replies, 0);
+            QTest::keyClick(Editor, Qt::Key_C, Qt::AltModifier); QTRY_COMPARE(Replies, 1); QCOMPARE(Choice, InteractionChoice::Cancel); Dialog.Dismiss();
+        }
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Before); });
+        for (const auto Key : {Qt::Key_C, Qt::Key_S}) {
+            hc::archive::CreationDialog Dialog(Settings, {hc::storage::LocatorKind::Local, Directory.path().toStdString()}, Directory.path(), 1, main_, "zip");
+            Dialog.show(); Dialog.activateWindow(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QApplication::setActiveWindow(&Dialog);
+            auto* Create = Dialog.findChild<QPushButton*>("hc.archive.create.submit"); QVERIFY(Create);
+            QTRY_VERIFY_WITH_TIMEOUT(Create->isEnabled(), 15000); Create->setFocus();
+            QTest::keyClick(Create, Key); QCOMPARE(Dialog.result(), int(Key == Qt::Key_C ? QDialog::Rejected : QDialog::Accepted)); QVERIFY(!Dialog.isVisible());
+        }
+        QVERIFY(QFileInfo::exists(Source));
     }
 
     void fileJobInteractionUi_data()

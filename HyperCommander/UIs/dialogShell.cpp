@@ -360,7 +360,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
 {
     setObjectName(QStringLiteral("hc.dialog.fileOperation"));
     resize(640, Request.command_.endsWith("copy") || Request.command_.endsWith("move") ? 760 : 560);
-    CancelButton()->setText(tr("취소"));
+    CancelButton()->setText(tr("취소(&C)"));
     const bool Delete = Request.command_.endsWith("delete");
     const bool Mkdir = Request.command_.endsWith("mkdir");
     const bool Rename = Request.command_.endsWith("rename");
@@ -567,7 +567,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
             plan_->setPlan(Nodes);
         }
     });
-    AcceptButton()->setText(Copy ? tr("복사(&C)") : Mkdir ? tr("만들기(&O)") : tr("확인(&O)"));
+    AcceptButton()->setText(Copy ? tr("복사(&O)") : Mkdir ? tr("만들기(&O)") : tr("확인(&O)"));
     BodyLayout()->addStretch();
     connect(input_, &fm::ui::PathEdit::pathChanged, this, [this] { inspectedTarget_.clear(); targetKind_.clear(); validateInput(); });
     input_->lineEdit()->selectAll();

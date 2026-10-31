@@ -58,7 +58,7 @@ CreationDialog::CreationDialog(settings::Repository& Settings, Locator SourceRoo
     queue_ = new QPushButton(tr("대기열에 추가(&Q)"), this); queue_->setObjectName("hc.archive.create.queue"); queue_->setAutoDefault(false); Footer->addWidget(queue_);
     error_ = new hc::qt::ElidedLabel(this); error_->setObjectName("hc.archive.create.error"); Footer->addWidget(error_, 1);
     auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this); Footer->addWidget(Buttons);
-    create_ = Buttons->button(QDialogButtonBox::Ok); create_->setObjectName("hc.archive.create.submit"); create_->setText(tr("생성(&S)")); create_->setDefault(true); Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));
+    create_ = Buttons->button(QDialogButtonBox::Ok); create_->setObjectName("hc.archive.create.submit"); create_->setText(tr("생성(&S)")); create_->setDefault(true); Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소(&C)"));
     // Header band carries the selection summary; queue · status · create · cancel share the footer band.
     Selection->hide();
     auto* Band = hc::ui::ApplyDialogFrame(this, {{}, Selection->text(), fm::ui::glyph::File});
