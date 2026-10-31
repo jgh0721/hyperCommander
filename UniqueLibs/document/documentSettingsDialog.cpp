@@ -69,7 +69,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
     auto* Body = new QHBoxLayout; Body->setContentsMargins(12, 12, 4, 12); Body->setSpacing(12);
     auto* List = new QListWidget(this); List->setObjectName("settingsCategories");
-    List->addItems({tr("공통"), tr("텍스트 뷰어"), tr("단축키"),tr("EPUB"),tr("마크다운")}); List->setFixedWidth(180);
+    List->addItems({tr("공통"), tr("텍스트 뷰어"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("이미지 뷰어")}); List->setFixedWidth(180);
     List->setProperty(fm::style::props::kSoftSelection, true); List->setFrameShape(QFrame::NoFrame);
     for (int Row = 0; Row < List->count(); ++Row) List->item(Row)->setSizeHint(QSize(0, 30));
     auto* Pages = new QStackedWidget(this); Body->addWidget(List); Body->addWidget(Pages, 1); Layout->addLayout(Body, 1);
@@ -329,6 +329,14 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     MdSpin(MdRender,MdPrefix+"debounceMs",tr("입력 후 갱신 지연 (ms)"),100,3000,250);Check(MdRender,MdPrefix+"remoteImages",tr("외부 이미지 자동 다운로드"),false);
     Note(MdRender,tr("수식·다이어그램 렌더러와 글꼴은 내장되어 오프라인에서도 표시합니다. 원문 HTML은 텍스트로 표시하며 스크립트는 실행하지 않습니다."));
     Markdown->addStretch();QTimer::singleShot(0,this,[UpdateFonts,UpdateSync]{UpdateFonts();UpdateSync();});
+    auto* ImagePage = Page(tr("이미지 뷰어"), tr("이미지와 코믹 읽기 설정을 관리합니다."));
+    auto* ComicCard = Card(ImagePage, tr("읽기 설정"));
+    Check(ComicCard, "documentViews/imageView/comic/coverAlone", tr("표지 단독"), true);
+    Note(ComicCard, tr("코믹 보기에서 첫 쪽을 단독으로 표시합니다. 읽기 설정 메뉴에서 바꾼 값도 함께 저장됩니다."));
+    ImagePage->addStretch();
+    auto* ImageContent = Pages->widget(Pages->count()-1); Pages->removeWidget(ImageContent);
+    auto* ImageTabs = new QTabWidget(Pages); ImageTabs->setObjectName("imageViewerTabs");
+    ImageTabs->addTab(ImageContent, tr("코믹")); Pages->addWidget(ImageTabs);
     auto* Footer = new QFrame(this); Footer->setObjectName("settingsFooter"); Footer->setFrameShape(QFrame::StyledPanel); fm::style::setFooter(Footer);
     auto* FooterRow = new QHBoxLayout(Footer); FooterRow->setContentsMargins(16, 8, 16, 8); FooterRow->setSpacing(8); Layout->addWidget(Footer);
     error_ = new QLabel(Footer); error_->setObjectName("settingsError"); error_->setWordWrap(true); error_->setTextInteractionFlags(Qt::TextSelectableByMouse); FooterRow->addWidget(error_, 1);
@@ -348,6 +356,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
             textColors_[Mode] = Colors; refreshTextColorRows(); return;
         }
         if(List->currentRow()==3){epubSettings_->ResetDraft();for(auto I=controls_.begin();I!=controls_.end();++I)if(I.key().startsWith("documentViews/epubEditor/")){if(auto* Field=qobject_cast<QLineEdit*>(I.value()))Field->clear();else if(auto* Check=qobject_cast<QCheckBox*>(I.value()))Check->setChecked(false);}return;}
+        if(List->currentRow()==5){qobject_cast<QCheckBox*>(controls_["documentViews/imageView/comic/coverAlone"])->setChecked(true);return;}
         if(List->currentRow()==4){const auto Original=base_;base_=values();settings::UnifiedConfig::Set(base_,{"documentViews","markdown"},QJsonObject{});loadControls();base_=Original;return;}
         if (List->currentRow() == 2) { for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control)) Field->setKeySequence(QKeySequence(Field->property("defaultValue").toString())); return; }
         imported_ = {}; const auto Original = base_; base_ = {{"schemaVersion", 2}}; loadControls(); base_ = Original;

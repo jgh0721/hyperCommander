@@ -82,6 +82,7 @@ namespace hc::document
         void ClipboardRequested(const QString& Mode);
         void EditImageRequested(const QImage& Image);
         void ReadingSelected();
+        void ReadingVolumeChanged(const QString& Path);
         void EscapeRequested();
         void FullscreenRequested();
         void RetryRequested();

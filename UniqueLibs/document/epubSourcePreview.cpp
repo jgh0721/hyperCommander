@@ -20,7 +20,7 @@
 #include <algorithm>
 namespace hc::document {
 void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Chapter) {
-    if(previewRuntime_)return;previewRuntime_=Runtime;previewPreferredChapter_=previewRestoreChapter_=Chapter;
+    if(previewRuntime_)return;if(workspaceRestored_)Chapter=spineIndex(current_);previewRuntime_=Runtime;previewPreferredChapter_=previewRestoreChapter_=Chapter;
     auto* Panel=previewPanel_;auto* Layout=new QVBoxLayout(Panel);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
     auto* Header=new QWidget(Panel);Header->setObjectName("epubPreviewHeader");auto* Controls=new QHBoxLayout(Header);Controls->setContentsMargins(8,2,4,2);Controls->setSpacing(4);
     // The header's minimum width bounds the editor window's; in a narrow window the title gives way before the toggles.

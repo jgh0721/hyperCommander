@@ -1,4 +1,5 @@
-﻿#include "imageReadingView.hpp"
+﻿#include "stdafx.h"
+#include "imageReadingView.hpp"
 #include <QAction>
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "imageAsync.hpp"
@@ -236,7 +237,7 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
                 break;
             }
         rtl_ = Entry["rtl"].toBool();
-        cover_ = Entry["cover"].toBool(true);
+
         split_ = Entry["split"].toBool();
         splitPart_ = Entry["part"].toInt();
         bookmark_ = Entry["bookmark"].toObject();
@@ -255,6 +256,7 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
                                                                                                  : QString("auto");
         mode_ = Mode(qBound(0, Entry["mode"].toInt(int(mode_)), 2));
     }
+    cover_ = AppSettings().value("imageView/comic/coverAlone", true).toBool();
     if (index_ != Start)
         currentImage_ = {};
     rebuild(false);
@@ -352,6 +354,7 @@ void ImageReadingView::SetRightToLeft(bool Enabled)
 void ImageReadingView::SetCover(bool Enabled)
 {
     cover_ = Enabled;
+    AppSettings Settings; Settings.setValue("imageView/comic/coverAlone", Enabled);
     previousGroups_.clear();
     rebuild();
     changed();
@@ -444,8 +447,15 @@ QList<ImageReadingView::Placement> ImageReadingView::placements(int Index) const
             const auto S = sizes_[I];
             const qreal Width = W * zoom_, Height = Width * S.height() / qMax(1, S.width());
             if (Y + Height >= YScroll - H && Y <= YScroll + 3 * H)
-                Out << Placement{I, QRectF(qMax(qreal(0), (W - Width) / 2) - XScroll, Y - YScroll, Width, Height),
-                                 QRect(QPoint(), S)};
+            {
+                // Round shared document edges before scrolling. Adjacent images
+                // then share one physical pixel boundary and scrolling never
+                // changes the render size/cache key by a pixel.
+                const qreal Dpr=devicePixelRatioF();
+                const auto Top=qRound64(Y*Dpr),Bottom=qRound64((Y+Height)*Dpr),Scroll=qRound64(YScroll*Dpr);
+                const auto Left=qRound64((qMax(qreal(0),(W-Width)/2)-XScroll)*Dpr);
+                Out << Placement{I,QRectF(Left/Dpr,(Top-Scroll)/Dpr,qRound64(Width*Dpr)/Dpr,(Bottom-Top)/Dpr),QRect(QPoint(),S)};
+            }
             Y += Height + gap_;
         }
         return Out;
@@ -722,6 +732,13 @@ void ImageReadingView::paintEvent(QPaintEvent *)
         const auto Visible = P.rect_.intersected(QRectF(viewport()->rect()));
         if (Visible.isEmpty())
             continue;
+        // Paint one continuous base before any finished tiles. A missing tile
+        // must not repaint the whole page over tiles already drawn this frame.
+        auto Preview=previews_.value(P.page_);
+        if(Preview.isNull())if(auto* Source=sources_.object(P.page_))Preview=*Source;
+        if(!Preview.isNull()) {
+            Painter.save();Painter.setClipRect(Visible);Painter.drawImage(P.rect_,Preview);Painter.restore();
+        }
         const int FirstY = qMax(0, int((Visible.top() - P.rect_.top()) * Dpr) / TileHeight);
         const int LastY = qMax(FirstY, int((Visible.bottom() - P.rect_.top()) * Dpr) / TileHeight);
         const int FirstX = qMax(0, int((Visible.left() - P.rect_.left()) * Dpr) / TileHeight);
@@ -741,10 +758,7 @@ void ImageReadingView::paintEvent(QPaintEvent *)
                                       *Image);
                 else
                 {
-                    if(previews_.contains(P.page_)){
-                        Painter.save();Painter.setClipRect(Visible);Painter.drawImage(P.rect_,previews_.value(P.page_));Painter.restore();
-                    }
-                    else
+                    if(Preview.isNull())
                     {
                         Painter.setPen(palette().color(QPalette::Text));
                         Painter.drawText(Visible, Qt::AlignCenter, pageErrors_.contains(P.page_)?tr("이 페이지를 읽지 못했습니다.\n다른 페이지로 이동하거나 마우스 오른쪽 메뉴에서 다시 읽을 수 있습니다.\n%1").arg(pageErrors_.value(P.page_)):tr("불러오는 중…"));
@@ -959,7 +973,7 @@ bool ImageReadingView::RunCommand(const QString& Id)
     if (Id == "image.scrollDown") setScrollPosition(scrollPosition() + 40);
     else if (Id == "image.scrollUp") setScrollPosition(scrollPosition() - 40);
     else if (Id == "image.next" || Id == "image.pageNext") Move(1);
-    else if (Id == "image.previous" || Id == "image.pagePrevious") Move(-1);
+    else if (Id == "image.previous" || Id == "image.previousSpace" || Id == "image.pagePrevious") Move(-1);
     else if (Id == "image.pageNextSingle") Move(1, true);
     else if (Id == "image.pagePreviousSingle") Move(-1, true);
     else if (Id == "image.first") GoTo(0);

@@ -1,4 +1,5 @@
-﻿#include "imageFullscreen.hpp"
+﻿#include "stdafx.h"
+#include "imageFullscreen.hpp"
 #include "imageReadingView.hpp"
 #include "core/AppSettings.h"
 #include <QApplication>
@@ -23,7 +24,7 @@ ImageFullscreen::ImageFullscreen(QWidget *Workspace, std::function<ImageReadingV
     top_ = new QToolBar(Workspace);
     top_->setObjectName("imageFullscreenControls");
     top_->hide();
-    auto *Exit = top_->addAction(tr("전체 화면 해제 (F11)"));
+    auto *Exit = top_->addAction(tr("전체 화면 해제"));
     connect(Exit, &QAction::triggered, this, &ImageFullscreen::Leave);
     auto *Previous = top_->addAction(tr("이전"));
     connect(Previous, &QAction::triggered, this,
@@ -88,6 +89,7 @@ ImageFullscreen::ImageFullscreen(QWidget *Workspace, std::function<ImageReadingV
     bottom_->setAutoFillBackground(true);
     bottom_->hide();
     auto *ToggleKey = new QShortcut(QKeySequence(Qt::Key_F11), Workspace);
+    ToggleKey->setObjectName("imageFullscreenFallback");
     ToggleKey->setAutoRepeat(false);
     connect(ToggleKey, &QShortcut::activated, this, &ImageFullscreen::Toggle);
     idle_.setSingleShot(true);

@@ -45,13 +45,14 @@ public:
             {"epub-edit.tree", QObject::tr("책 구조"), QObject::tr("EPUB 편집의 책 구조 트리에 포커스가 있을 때 동작합니다."), 1},
             {"epub-edit.source", QObject::tr("소스 편집기"), QObject::tr("EPUB 소스 편집기에 포커스가 있을 때 동작합니다."), 1},
             {"image", QObject::tr("이미지 뷰어"), QObject::tr("이미지 문서와 만화·웹툰 보기, 이미지 전체 화면에서 동작합니다.")},
+            {"image.comic", QObject::tr("코믹"), QObject::tr("코믹·웹툰 읽기 화면에서 동작합니다."), 1},
             {"pdf", QObject::tr("PDF 뷰어"), QObject::tr("PDF 문서에서 동작합니다.")}};
     }
     // Scopes active together for one focus position. Validation and routing share this table.
     static QList<QStringList> FocusContexts()
     {
         return {{"common","edit","text","markdown"},{"common","edit","markdown"},{"common","edit","text"},{"common","edit","epub"},{"common","edit","epub-edit","epub-edit.tree"},
-            {"common","edit","text","epub-edit","epub-edit.source"},{"common","edit","epub-edit"},{"common","edit","image"},{"common","edit","pdf"}};
+            {"common","edit","text","epub-edit","epub-edit.source"},{"common","edit","epub-edit"},{"common","edit","image","image.comic"},{"common","edit","pdf"}};
     }
     static bool CoActive(const QString& A, const QString& B)
     {
@@ -154,20 +155,23 @@ public:
             {"epubSource.wrapSpan", QObject::tr("태그로 감싸기 · span"), "", "epub-edit.source"},
             {"epubSource.wrapLink", QObject::tr("태그로 감싸기 · a"), "", "epub-edit.source"},
             {"epubSource.wrapRuby", QObject::tr("태그로 감싸기 · ruby"), "", "epub-edit.source"},
+            {"image.fullscreen", QObject::tr("전체 화면 전환"), "F11", "image"},
+            {"image.animation", QObject::tr("재생/정지"), "Alt+Pause", "image"},
+            {"image.previousSpace", QObject::tr("이전 쪽 (Shift+Space)"), "Shift+Space", "image.comic"},
             {"image.next", QObject::tr("다음 이미지 · 다음 쪽"), "Space", "image"},
             {"image.previous", QObject::tr("이전 이미지 · 이전 쪽"), "Backspace", "image"},
-            {"image.scrollDown", QObject::tr("아래로 스크롤"), "Down", "image"},
-            {"image.scrollUp", QObject::tr("위로 스크롤"), "Up", "image"},
-            {"image.pageNext", QObject::tr("다음 화면"), "PgDown", "image"},
-            {"image.pagePrevious", QObject::tr("이전 화면"), "PgUp", "image"},
-            {"image.pageNextSingle", QObject::tr("한 쪽 앞으로"), "Shift+PgDown", "image"},
-            {"image.pagePreviousSingle", QObject::tr("한 쪽 뒤로"), "Shift+PgUp", "image"},
-            {"image.first", QObject::tr("첫 쪽"), "Home", "image"},
-            {"image.last", QObject::tr("마지막 쪽"), "End", "image"},
-            {"image.volumeNext", QObject::tr("다음 권"), "]", "image"},
-            {"image.volumePrevious", QObject::tr("이전 권"), "[", "image"},
-            {"image.right", QObject::tr("오른쪽 쪽"), "Right", "image"},
-            {"image.left", QObject::tr("왼쪽 쪽"), "Left", "image"},
+            {"image.scrollDown", QObject::tr("아래로 스크롤"), "Down", "image.comic"},
+            {"image.scrollUp", QObject::tr("위로 스크롤"), "Up", "image.comic"},
+            {"image.pageNext", QObject::tr("다음 화면"), "PgDown", "image.comic"},
+            {"image.pagePrevious", QObject::tr("이전 화면"), "PgUp", "image.comic"},
+            {"image.pageNextSingle", QObject::tr("한 쪽 앞으로"), "Shift+PgDown", "image.comic"},
+            {"image.pagePreviousSingle", QObject::tr("한 쪽 뒤로"), "Shift+PgUp", "image.comic"},
+            {"image.first", QObject::tr("첫 쪽"), "Home", "image.comic"},
+            {"image.last", QObject::tr("마지막 쪽"), "End", "image.comic"},
+            {"image.volumeNext", QObject::tr("다음 권"), "]", "image.comic"},
+            {"image.volumePrevious", QObject::tr("이전 권"), "[", "image.comic"},
+            {"image.right", QObject::tr("오른쪽 쪽"), "Right", "image.comic"},
+            {"image.left", QObject::tr("왼쪽 쪽"), "Left", "image.comic"},
             {"pdf.pageNext", QObject::tr("다음 쪽"), "PgDown", "pdf"},
             {"pdf.pagePrevious", QObject::tr("이전 쪽"), "PgUp", "pdf"},
             {"pdf.first", QObject::tr("첫 쪽"), "Home", "pdf"},
@@ -221,7 +225,7 @@ public:
             if (!Known) { Result.append({Item.id_, {}, QObject::tr("%1: 인식할 수 없는 키입니다.").arg(Item.label_)}); continue; }
             const auto First = Key[0]; const auto Mods = First.keyboardModifiers() & ~Qt::KeypadModifier;
             const bool Modified = Mods & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
-            const bool Input = InputScope(Item.scope_), Printable = Item.scope_ == "image" || Item.scope_ == "pdf";
+            const bool Input = InputScope(Item.scope_), Printable = Item.scope_ == "image" || Item.scope_ == "image.comic" || Item.scope_ == "pdf";
             const bool Tab = (First.key() == Qt::Key_Tab || First.key() == Qt::Key_Backtab)
                 && (Mods == Qt::ControlModifier || Mods == (Qt::ControlModifier | Qt::ShiftModifier));
             // An input scope keeps its typing, movement and selection keys; only a modified Enter is free.

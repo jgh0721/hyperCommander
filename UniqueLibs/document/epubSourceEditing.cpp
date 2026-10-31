@@ -5,6 +5,15 @@
 #include "text/ScintillaQtDirectBackend.h"
 #include "commonLibs/document/epub/epubSourceMap.hpp"
 #include <QJsonArray>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QLockFile>
+#include <QSaveFile>
+#include <QDateTime>
+#include <QLabel>
 #include <QStackedWidget>
 #include <Scintilla.h>
 
@@ -56,6 +65,12 @@ void EpubSourceEditor::activateSource(const QByteArray& Data,const QString& Medi
             if(!Fresh)State.serial_=++bufferSerial_;
         }
     }
+    if(Fresh && workspacePositions_.contains(current_)){
+        const auto Saved=workspacePositions_.take(current_).toObject();const int Length=QString::fromUtf8(Data).size();
+        State.position_=qBound(0,Saved["position"].toInt(),Length);State.anchor_=qBound(0,Saved["anchor"].toInt(State.position_),Length);
+        State.line_=qBound(0,Saved["firstVisibleLine"].toInt(),int(direct(text_)->Send(SCI_GETLINECOUNT))-1);
+        State.offset_=qBound(0,Saved["horizontalOffset"].toInt(),1000000);
+    }
     text_->setReadOnly(sourceReadOnly_);setSourceSelection(State.anchor_,State.position_,false);setScroll(State.line_,State.offset_);
     const auto Resource=current_;const int Line=State.line_,Offset=State.offset_;
     QTimer::singleShot(0,this,[this,Resource,Line,Offset]{if(bufferResource_==Resource && sourceStack_->currentWidget()==text_)setScroll(Line,Offset);});
@@ -82,5 +97,78 @@ bool EpubSourceEditor::selectPreviewSource(const QJsonObject& Requested) {
     // A preview click with scroll sync puts the line at the click's height instead of merely revealing it.
     const double Ratio=Anchor["ratio"].toDouble(-1);const bool Place=Ratio>=0 && scrollSyncActive();
     updating_=true;setSourceSelection(Position,Position,!Place);if(Place)placeSourceLine(Position,Ratio);updating_=false;return true;
+}
+}
+
+namespace hc::document {
+namespace {
+QString workspaceFile() {
+    const auto Override=QCoreApplication::instance()->property("epubWorkspaceDirectory");
+    return QDir(Override.isValid()?Override.toString():QCoreApplication::applicationDirPath()).filePath("HyperEditor.epub-workspace.json");
+}
+QString workspaceKey(const QString& Path) {
+    const QFileInfo Info(Path);const auto Canonical=Info.canonicalFilePath();
+    return QDir::fromNativeSeparators(Canonical.isEmpty()?Info.absoluteFilePath():Canonical).toCaseFolded();
+}
+bool readWorkspace(const QString& Path,QJsonObject& Root,QString& Error) {
+    Root={{"schemaVersion",1},{"documents",QJsonObject{}}};
+    QFile File(Path);if(!File.exists())return true;
+    if(!File.open(QIODevice::ReadOnly) || File.size()>8*1024*1024){Error="workspace-read-failed";return false;}
+    QJsonParseError Parse;const auto Json=QJsonDocument::fromJson(File.readAll(),&Parse);
+    if(File.error()!=QFileDevice::NoError || Parse.error!=QJsonParseError::NoError || !Json.isObject()
+        || Json.object()["schemaVersion"].toInt()!=1 || !Json.object()["documents"].isObject()){
+        Error="workspace-invalid-json";return false;
+    }
+    Root=Json.object();return true;
+}
+}
+void EpubSourceEditor::scheduleWorkspace() {
+    if(ready_ && !updating_ && !workspaceRestoring_ && !sourcePath_.isEmpty())workspaceTimer_.start();
+}
+void EpubSourceEditor::saveWorkspace() {
+    workspaceTimer_.stop();if(!ready_ || workspaceRestoring_ || sourcePath_.isEmpty())return;
+    saveSourceState();QJsonArray Tabs;
+    for(const auto& Path:openResources_){
+        auto Saved=workspacePositions_[Path].toObject();
+        if(sourceBuffers_.contains(Path)){
+            const auto State=sourceBuffers_.value(Path);const auto Text=Path==current_ && sourceShown()?sourceText():QString::fromUtf8(State.applied_);
+            const auto Prefix=Text.left(State.position_);const int Break=Prefix.lastIndexOf('\n');
+            Saved={{"position",State.position_},{"anchor",State.anchor_},{"line",Prefix.count('\n')+1},
+                {"column",Prefix.size()-Break},{"firstVisibleLine",State.line_},{"horizontalOffset",State.offset_}};
+        }
+        Saved["resource"]=Path;Tabs.append(Saved);
+    }
+    const auto FilePath=workspaceFile();QString Error;
+    if(!QDir().mkpath(QFileInfo(FilePath).absolutePath()))Error="workspace-create-directory-failed";
+    QLockFile Lock(FilePath+".lock");Lock.setStaleLockTime(30000);
+    if(Error.isEmpty() && !Lock.tryLock(0)){workspaceTimer_.start(1000);return;}
+    QJsonObject Root;
+    if(Error.isEmpty() && readWorkspace(FilePath,Root,Error)){
+        auto Documents=Root["documents"].toObject();
+        Documents[workspaceKey(sourcePath_)]=QJsonObject{{"path",sourcePath_},{"activeResource",current_},{"tabs",Tabs},
+            {"sourceSha256",QString::fromLatin1(sourceHashAtOpen_.toHex())},{"savedAtUtc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+        Root["documents"]=Documents;const auto Bytes=QJsonDocument(Root).toJson();QSaveFile File(FilePath);
+        if(Bytes.size()>8*1024*1024 || !File.open(QIODevice::WriteOnly) || File.write(Bytes)!=Bytes.size() || !File.commit())Error="workspace-write-failed";
+    }
+    if(!Error.isEmpty() && workspaceError_!=Error)report(tr("EPUB 워크스페이스 저장 실패: %1 (%2)").arg(FilePath,Error));
+    workspaceError_=Error;
+}
+bool EpubSourceEditor::restoreWorkspace() {
+    QJsonObject Root;QString Error;
+    if(!readWorkspace(workspaceFile(),Root,Error)){workspaceError_=Error;report(tr("EPUB 워크스페이스를 읽지 못했습니다: %1").arg(workspaceFile()));return false;}
+    const auto Saved=Root["documents"].toObject()[workspaceKey(sourcePath_)].toObject();
+    if(!Saved["tabs"].isArray())return false;
+    workspaceRestoring_=true;openResources_.clear();workspacePositions_={};
+    for(const auto& Value:Saved["tabs"].toArray()){
+        const auto Tab=Value.toObject();const auto Path=Tab["resource"].toString();
+        if(openResources_.size()>=256)break;
+        if(model_.IsEditable(Path) && !openResources_.contains(Path)){openResources_.append(Path);workspacePositions_[Path]=Tab;}
+    }
+    current_=Saved["activeResource"].toString();if(!openResources_.contains(current_))current_=openResources_.value(0);
+    // If all formerly open resources were removed externally, use the normal initial chapter.
+    if(openResources_.isEmpty() && !Saved["tabs"].toArray().isEmpty()){workspaceRestoring_=false;return false;}
+    if(!current_.isEmpty())select();
+    else {bufferResource_.clear();sourceStack_->setCurrentWidget(sourceStack_->findChild<QLabel*>("epubSourceEmpty"));refreshTabs();}
+    workspaceRestoring_=false;workspaceRestored_=true;previewPreferredChapter_=spineIndex(current_);return true;
 }
 }

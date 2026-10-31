@@ -418,9 +418,9 @@ namespace hc::document
         shortcutRouter_ = new DocumentShortcutRouter(this);
         // EPUB editing, image and PDF commands reach the active pane through window-level actions.
         for (const auto& Command : DocumentShortcutRegistry::Commands()) {
-            if (!QStringList{"epub-edit", "epub-edit.tree", "epub-edit.source", "image", "pdf", "markdown"}.contains(Command.scope_)) continue;
+            if (!QStringList{"epub-edit", "epub-edit.tree", "epub-edit.source", "image", "image.comic", "pdf", "markdown"}.contains(Command.scope_)) continue;
             auto* Action = new QAction(Command.label_, this); Action->setObjectName(Command.id_); addAction(Action);
-            connect(Action, &QAction::triggered, this, [this, Id = Command.id_] { if (auto Tab = active(); Tab && !Tab->loading_) Tab->pane_->RunViewCommand(Id); });
+            connect(Action, &QAction::triggered, this, [this, Id = Command.id_] { if (auto Tab = active(); Tab && !Tab->loading_) {if(Id=="image.fullscreen")findChild<ImageFullscreen*>("imageFullscreen")->Toggle();else Tab->pane_->RunViewCommand(Id);} });
         }
         for (const auto& Command : DocumentShortcutRegistry::Commands()) {
             const auto Name = Commands.key(Command.id_, Command.id_);
@@ -429,6 +429,7 @@ namespace hc::document
                 shortcutRouter_->Register(Command.id_, Action);
             }
         }
+        if(auto* Fallback=findChild<QShortcut*>("imageFullscreenFallback"))Fallback->setEnabled(false);
         // Scopes follow the focused widget; DocumentShortcutRegistry::FocusContexts names the combinations.
         shortcutRouter_->SetEligibility([this](const QString& Id, QWidget* Focus) {
             auto Tab = active(); const auto Scope = DocumentShortcutRegistry::ScopeOf(Id);
@@ -446,7 +447,7 @@ namespace hc::document
             if (Scope == "epub-edit") return EpubEditing;
             if (Scope == "epub-edit.tree") return EpubEditing && Within([](QWidget* Widget) { return Widget->objectName() == "epubResourceTree"; });
             if (Scope == "epub-edit.source") return EpubEditing && InText;
-            if (Scope == "image" || Scope == "pdf") return Tab && !Tab->loading_ && Tab->pane_->isAncestorOf(Focus) && !qobject_cast<QLineEdit*>(Focus)
+            if (Scope == "image" || Scope == "image.comic" || Scope == "pdf") return Tab && !Tab->loading_ && Tab->pane_->isAncestorOf(Focus) && !qobject_cast<QLineEdit*>(Focus)
                 && !qobject_cast<QAbstractSpinBox*>(Focus) && !qobject_cast<QComboBox*>(Focus) && Tab->pane_->CanRunViewCommand(Id);
             return true;
         });
@@ -538,6 +539,8 @@ namespace hc::document
         appliedPreferences_ = Relevant;
         if (externalWatcher_) externalWatcher_->reloadSettings();
         if (!Chrome.isEmpty() && !ApplyChromeSettings(Chrome)) ShowShellError(tr("문서 표시 설정이 올바르지 않습니다."));
+        const bool Cover = Views["imageView"].toObject()["comic"].toObject()["coverAlone"].toBool(true);
+        for(auto* Reader:findChildren<ImageReadingView*>())if(Reader->State()["cover"].toBool()!=Cover)Reader->SetCover(Cover);
         for (auto* View : findChildren<QTextView*>()) View->ReloadPreferences();
         for(auto* Markdown:findChildren<MarkdownDocumentView*>())Markdown->ReloadPreferences();
         for(auto* Source:findChildren<EpubSourceEditor*>())Source->ReloadValidationSettings();
@@ -701,6 +704,18 @@ namespace hc::document
         connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_){if(epubFullscreen_)toggleEpubFullscreen();else escapeViewer();}});
         connect(Pane,&DocumentViewPane::FullscreenRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_)toggleEpubFullscreen();});
         connect(Pane,&DocumentViewPane::RetryRequested,this,[this,Tab]{if(!Tab->closed_){activate(Tab);findChild<QAction*>("reloadDocument")->trigger();}});
+        connect(Pane,&DocumentViewPane::ReadingVolumeChanged,this,[this,Tab](const QString& Path){
+            if(Tab->closed_ || Tab->loading_)return;
+            Tab->path_=Path;Tab->input_.path_=Path;Tab->readingPath_=Path;Tab->readingEntry_.clear();
+            Tab->displayName_.clear();Tab->recoveredName_.clear();Tab->sourceToken_.clear();
+            Tab->originalAuthority_=false;Tab->originalSave_=false;Tab->broker_=false;Tab->hostSlot_=false;
+            const auto Started=Tab->session_->BeginOpen(true);
+            if(Started.HasValue()){
+                SourceIdentity Source{{},{},Path.toUtf8().toStdString(),{},false};
+                Tab->session_->CompleteOpen(Started.Value(),OpenedDocument{std::move(Source),{}});
+            }
+            update();
+        });
         connect(Pane,&DocumentViewPane::ReadingSelected,this,[this,Tab]{Tab->originalSave_=false;Tab->broker_=false;});
         connect(Pane,&DocumentViewPane::OpenRequested,this,[this,Tab](const QString& Path) {
             if(Tab->closed_)return;
@@ -1339,7 +1354,7 @@ namespace hc::document
             if(Scope=="markdown")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->CanRunViewCommand(Id));
             if(Scope=="epub")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing());
             if(Scope.startsWith("epub-edit"))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing());
-            if(Scope=="image" || Scope=="pdf")Action->setEnabled(Tab && !Tab->loading_);
+            if(Scope=="image" || Scope=="image.comic" || Scope=="pdf")Action->setEnabled(Tab && !Tab->loading_);
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
                 Action->setEnabled(Tab && !Tab->loading_ && ((Tab->pane_->ViewId() == "text"
                     && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->pane_->IsReadOnly())) || Tab->pane_->IsEpubEditing()));

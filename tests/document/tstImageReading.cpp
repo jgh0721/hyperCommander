@@ -34,6 +34,9 @@
 #include "UniqueLibs/document/imageReadingView.hpp"
 #include "UniqueLibs/document/imageFullscreen.hpp"
 #include "UniqueLibs/document/imageFramePlayer.hpp"
+#include "core/AppSettings.h"
+#include <QTabWidget>
+#include <QScopeGuard>
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/imageResampler.hpp"
 #include "UniqueLibs/nativeStorageRevision.hpp"
@@ -887,6 +890,63 @@ class ImageReadingTests : public QObject
             QCOMPARE(Open.last().at(0).toString(), Root.filePath("original/1.png"));
             Fullscreen.Leave();
         }
+    }
+    void webtoonHasNoBackgroundSeamsWhileScrolling()
+    {
+        QTemporaryDir Root;const QImage White=Picture(Qt::white,{91,137});
+        for(int I=1;I<=3;++I)QVERIFY(White.save(Root.filePath(QString("%1.png").arg(I))));
+        auto Book=OpenImageBook(Root.path());QVERIFY(Book.HasValue());
+        ImageReadingView View;View.SetPrivate(true);View.resize(703,587);
+        auto Palette=View.palette();Palette.setColor(QPalette::Base,Qt::black);View.setPalette(Palette);
+        View.Load(Book.Value(),White);View.SetMode(ImageReadingView::Webtoon);View.show();
+        // Discover every page size, then keep a join in view while scrolling
+        // through fractional device-pixel offsets and newly requested tiles.
+        for(int I=0;I<3;++I){View.GoTo(I);QTRY_VERIFY_WITH_TIMEOUT(!View.CurrentImage().isNull(),10000);}
+        View.GoTo(0,.7);QTRY_VERIFY_WITH_TIMEOUT(!View.IsBusy(),10000);
+        const int Start=View.verticalScrollBar()->value();
+        for(int Offset:{0,11,47,133,301,503,797,1201}){
+            View.verticalScrollBar()->setValue(Start+Offset);
+            const auto Capture=View.viewport()->grab().toImage();
+            const int X=Capture.width()/2;
+            for(int Y=0;Y<Capture.height();++Y)
+                QVERIFY2(Capture.pixelColor(X,Y).red()>245,qPrintable(QString("background seam at %1, offset %2, DPR %3").arg(Y).arg(Offset).arg(View.devicePixelRatioF())));
+        }
+        View.Cancel();
+    }
+    void comicVolumeUpdatesTabAndPersistsCover_data()
+    {
+        QTest::addColumn<bool>("Hosted");QTest::newRow("editor")<<false;QTest::newRow("viewer")<<true;
+    }
+    void comicVolumeUpdatesTabAndPersistsCover()
+    {
+        QFETCH(bool,Hosted);QTemporaryDir Root;
+        const auto OldConfig=qApp->property("documentViewsConfigDir");qApp->setProperty("documentViewsConfigDir",Root.filePath("config"));
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        for(int V:{1,2}){QZipWriter Zip(Root.filePath(QString("comic %1.cbz").arg(V)));Zip.addFile("1.png",Png());Zip.addFile("2.png",Png(Qt::blue));Zip.close();}
+        DocumentWorkspaceWidget W(Root.filePath("recovery"),Hosted);W.resize(800,600);W.show();
+        W.Handle({{"action","open"},{"path",Root.filePath("comic 1.cbz")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"]=="ready",20000);
+        auto* Pane=W.findChild<DocumentViewPane*>();QVERIFY(Pane);auto* Reader=Pane->findChild<ImageReadingView*>();QVERIFY(Reader);
+        auto* Cover=Pane->findChild<QAction*>("imageCover");QVERIFY(Cover);Cover->setChecked(false);
+        QCOMPARE(AppSettings().value("imageView/comic/coverAlone",true).toBool(),false);
+        const auto Id=Document(W)["documentId"].toString();
+        Pane->Focus();QTest::keyClick(Reader,Qt::Key_BracketRight);
+        QTRY_COMPARE_WITH_TIMEOUT(Document(W)["path"].toString(),Root.filePath("comic 2.cbz"),20000);
+        QCOMPARE(Document(W)["documentId"].toString(),Id);QVERIFY(!Reader->State()["cover"].toBool());
+        auto* Tabs=W.findChild<QTabWidget*>();if(Tabs)QCOMPARE(Tabs->tabText(Tabs->currentIndex()),QString("comic 2.cbz"));
+        QTest::keyClick(Reader,Qt::Key_BracketLeft);
+        QTRY_COMPARE_WITH_TIMEOUT(Document(W)["path"].toString(),Root.filePath("comic 1.cbz"),20000);
+        if(Tabs)QCOMPARE(Tabs->tabText(Tabs->currentIndex()),QString("comic 1.cbz"));
+        ImageReadingView Reopened;auto Book=OpenImageBook(Root.filePath("comic 1.cbz"));QVERIFY(Book.HasValue());Reopened.Load(Book.Value());
+        QVERIFY(!Reopened.State()["cover"].toBool());
+        {AppSettings Settings;Settings.setValue("shortcuts/bindings/image.volumeNext","Ctrl+Alt+N");Settings.sync();}
+        auto* Next=W.findChild<QAction*>("image.volumeNext");QVERIFY(Next);
+        QTRY_COMPARE(Next->shortcut(),QKeySequence("Ctrl+Alt+N"));
+        Pane->Focus();QTest::keyClick(Reader,Qt::Key_BracketRight);
+        QCOMPARE(Document(W)["path"].toString(),Root.filePath("comic 1.cbz"));
+        QTest::keyClick(Reader,Qt::Key_N,Qt::ControlModifier|Qt::AltModifier);
+        QTRY_COMPARE_WITH_TIMEOUT(Document(W)["path"].toString(),Root.filePath("comic 2.cbz"),20000);
+        Reopened.Cancel();QTRY_VERIFY_WITH_TIMEOUT(W.RequestClose(),20000);
     }
     void imageKeysOpenSiblingAndReturnToPrevious()
     {

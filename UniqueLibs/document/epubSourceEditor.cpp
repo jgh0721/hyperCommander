@@ -48,6 +48,13 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
         if(text_->Backend()->documentLength()>2*1024*1024){const QSignalBlocker Block(text_);static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_UNDO);report(tr("소스 편집은 리소스당 2 MiB까지 지원합니다."));}
         refreshTabs();emit Changed();
     });
+    workspaceTimer_.setSingleShot(true);workspaceTimer_.setInterval(700);
+    connect(&workspaceTimer_,&QTimer::timeout,this,&EpubSourceEditor::saveWorkspace);
+    connect(text_->Backend(),&ITextEditorBackend::cursorPositionChanged,this,&EpubSourceEditor::scheduleWorkspace);
+    connect(text_->Backend(),&ITextEditorBackend::selectionChanged,this,&EpubSourceEditor::scheduleWorkspace);
+    connect(text_->Backend(),&ITextEditorBackend::viewportScrolled,this,&EpubSourceEditor::scheduleWorkspace);
+    connect(this,&EpubSourceEditor::StateChanged,this,&EpubSourceEditor::scheduleWorkspace);
+    connect(this,&EpubSourceEditor::Changed,this,&EpubSourceEditor::scheduleWorkspace);
     setupRecovery();setupValidation();setupStructure();
     connect(this,&EpubSourceEditor::Changed,this,[this]{if(validationCancel_ && validationToken_!=Token())validationCancel_->store(true);});
     connect(this,&EpubSourceEditor::StateChanged,this,[this]{updateActions();updateStatus();});
@@ -63,7 +70,7 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
 }
 EpubSourceEditor::~EpubSourceEditor(){
     if(validationCancel_)validationCancel_->store(true);if(previewCancel_)previewCancel_->store(true);if(structureCancel_)structureCancel_->store(true);stopEpubCheck();RequestPreviewClose();if(ready_ && !discardedRecovery_ && recoveryEnabled_)Checkpoint();if(cancel_)cancel_->store(true);
-    saveLayout();for(const auto& Path:sourceBuffers_.keys())releaseSource(Path);
+    saveWorkspace();saveLayout();for(const auto& Path:sourceBuffers_.keys())releaseSource(Path);
     // The workspace may have adopted the strip into its status row.
     if(statusStrip_ && statusStrip_->parent()!=this)delete statusStrip_;
 }
@@ -100,7 +107,7 @@ void EpubSourceEditor::select() {
     if(!openResources_.contains(current_))openResources_.append(current_);
     // A newly shown resource is aligned once its chapter is in the preview.
     scrollSyncPending_=true;lastScrollLine_=-1;
-    refreshTabs();selectResource(current_);markDiagnostics();updateActions();updateStatus();
+    refreshTabs();selectResource(current_);markDiagnostics();updateActions();updateStatus();scheduleWorkspace();
 }
 void EpubSourceEditor::importImage() {
     if(structuring_)return;
@@ -124,7 +131,7 @@ QJsonObject EpubSourceEditor::Snapshot()const {
     const QJsonObject Source{{"resource",current_},{"buffer",QString::number(State.serial_)},{"shown",sourceShown()},{"modified",ready_ && sourceShown() && sourceModified()},{"readOnly",sourceReadOnly_},{"language",text_->currentLanguage()}};
     const QJsonObject Layout{{"orientation",previewSplitter_->orientation()==Qt::Horizontal?"horizontal":"vertical"},{"tree",!treePanel_->isHidden()},{"preview",!previewPanel_->isHidden()},{"problems",!problemsPanel_->isHidden()}};
     const QJsonObject Status{{"message",message_},{"draft",draftMessage_},{"preview",previewMessage_},{"validation",statusValidation_->text()}};
-    return {{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",true},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
+    return {{"workspaceError",workspaceError_},{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",true},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
 }
 QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
     const auto Action=Request["action"].toString();
@@ -202,7 +209,7 @@ bool EpubSourceEditor::eventFilter(QObject* Object,QEvent* Event) {
     if(Object==SourceInput() && Event->type()==QEvent::FocusIn)updateActions();
     return QWidget::eventFilter(Object,Event);
 }
-void EpubSourceEditor::Commit(const QString& Path,const QByteArray& Bytes){commitRestore_=true;commitResource_=current_;commitPosition_=sourcePosition();commitAnchor_=sourceAnchor();commitVertical_=firstVisibleLine();commitHorizontal_=horizontalOffset();commitFocus_=SourceInput()->hasFocus();DiscardRecovery();resetRecoverySession();sourcePath_=Path;baseToken_=Token();protectSourcePath(Path);touchedResources_.clear();
+void EpubSourceEditor::Commit(const QString& Path,const QByteArray& Bytes){saveWorkspace();commitRestore_=true;commitResource_=current_;commitPosition_=sourcePosition();commitAnchor_=sourceAnchor();commitVertical_=firstVisibleLine();commitHorizontal_=horizontalOffset();commitFocus_=SourceInput()->hasFocus();DiscardRecovery();resetRecoverySession();sourcePath_=Path;baseToken_=Token();protectSourcePath(Path);touchedResources_.clear();
     // Only the immutable model produced by validation of these exact bytes may
     // bypass loading. Saving a stale revision still follows the normal load path.
     const auto Prepared=cachedExport_.prepared_;

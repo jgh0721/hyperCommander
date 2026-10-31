@@ -53,6 +53,7 @@
 #include <QListWidget>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QScopeGuard>
 #include <QtTest>
 using namespace hc::settings;
 using namespace hc::document;
@@ -680,6 +681,61 @@ private slots:
         QCOMPARE(ConfigPaths::Resolve({"app", "--", "--config-dir=D:/other"}, "D:/bin", {}, true).directory_, QString("D:/bin"));
         QVERIFY(!ConfigPaths::Resolve({"app", "--config-dir="}, "D:/bin").error_.isEmpty());
         QVERIFY(!ConfigPaths::Resolve({"app", "--config-dir", "D:/a", "--config-dir=D:/b"}, "D:/bin").error_.isEmpty());
+    }
+    void epubEditingWorkspaceRoundTrip()
+    {
+        QFile Fixture(qEnvironmentVariable("HC_EPUB_READER_EPUB"));if(Fixture.fileName().isEmpty())QSKIP("EPUB fixture required");
+        QVERIFY(Fixture.open(QIODevice::ReadOnly));const auto Bytes=Fixture.readAll();QTemporaryDir Temp;
+        const auto OldWorkspace=qApp->property("epubWorkspaceDirectory"),OldConfig=qApp->property("documentViewsConfigDir");
+        qApp->setProperty("epubWorkspaceDirectory",Temp.path());qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        const auto Path=Temp.filePath("book.epub"),Json=Temp.filePath("HyperEditor.epub-workspace.json");Write(Path,Bytes);
+        QStringList Tabs;QString Current;int Position=0,Anchor=0,Scroll=0,FirstPosition=0,FirstAnchor=0;
+        {
+            EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);Editor.resize(850,650);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+            const auto Select=[&](const QString& Resource){return Editor.Execute({{"action","epub.edit.select"},{"resource",Resource}})["accepted"].toBool();};
+            QVERIFY(Select("EPUB/one.xhtml"));QCoreApplication::processEvents();auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend());
+            FirstAnchor=int(Backend->Send(SCI_POSITIONFROMLINE,20))+3;FirstPosition=FirstAnchor+5;Backend->Send(SCI_SETSEL,FirstAnchor,FirstPosition);Backend->Send(SCI_SETFIRSTVISIBLELINE,4);
+            QVERIFY(Select("EPUB/two.xhtml"));QCoreApplication::processEvents();Anchor=int(Backend->Send(SCI_POSITIONFROMLINE,30))+3;Position=Anchor+5;Backend->Send(SCI_SETSEL,Anchor,Position);Backend->Send(SCI_SETFIRSTVISIBLELINE,8);
+            Scroll=int(Backend->Send(SCI_GETFIRSTVISIBLELINE));
+            for(const auto& Value:Editor.Snapshot()["tabs"].toArray())Tabs.append(Value.toString());Current=Editor.Snapshot()["current"].toString();
+            QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(Json),5000);
+        }
+        const auto Saved=QJsonDocument::fromJson(Read(Json)).object();QCOMPARE(Saved["documents"].toObject().size(),1);
+        {
+            EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);Editor.resize(850,650);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+            QCOMPARE(Editor.Snapshot()["current"].toString(),Current);QCOMPARE(Editor.Snapshot()["tabs"].toArray(),QJsonArray::fromStringList(Tabs));
+            auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend());
+            QCOMPARE(Backend->Send(SCI_GETCURRENTPOS),qintptr(Position));QCOMPARE(Backend->Send(SCI_GETANCHOR),qintptr(Anchor));
+            QTRY_COMPARE(Backend->Send(SCI_GETFIRSTVISIBLELINE),qintptr(Scroll));
+            QVERIFY(Editor.Execute({{"action","epub.edit.select"},{"resource","EPUB/one.xhtml"}})["accepted"].toBool());
+            QCOMPARE(Backend->Send(SCI_GETCURRENTPOS),qintptr(FirstPosition));QCOMPARE(Backend->Send(SCI_GETANCHOR),qintptr(FirstAnchor));
+        }
+        const auto Other=Temp.filePath("other.epub");Write(Other,Bytes);
+        {EpubSourceEditor Editor(Bytes,Other);Editor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);}
+        QCOMPARE(QJsonDocument::fromJson(Read(Json)).object()["documents"].toObject().size(),2);
+        Write(Json,"{broken");
+        {EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);QVERIFY(!Editor.Snapshot()["workspaceError"].toString().isEmpty());}
+        QCOMPARE(Read(Json),QByteArray("{broken"));
+    }
+    void comicSettingsAndShortcutCatalog()
+    {
+        QTemporaryDir Temp; const auto Path=Temp.filePath("HyperEditor.json");
+        const QString Key="documentViews/imageView/comic/coverAlone";
+        {DocumentSettingsDialog Dialog(Path,{});
+            auto* Tabs=Dialog.findChild<QTabWidget*>("imageViewerTabs");QVERIFY(Tabs);QCOMPARE(Tabs->tabText(0),QString::fromUtf8("코믹"));
+            auto* Cover=Dialog.findChild<QCheckBox*>(Key);QVERIFY(Cover);QVERIFY(Cover->isChecked());
+            Cover->setChecked(false);QVERIFY(Dialog.Apply());}
+        const auto Saved=Read(Path);
+        {DocumentSettingsDialog Dialog(Path,{});auto* Cover=Dialog.findChild<QCheckBox*>(Key);QVERIFY(!Cover->isChecked());Cover->setChecked(true);Dialog.reject();}
+        QCOMPARE(Read(Path),Saved);
+        DocumentSettingsDialog Dialog(Path,{});
+        for(const auto* Id:{"image.volumePrevious","image.volumeNext","image.fullscreen","image.animation","image.previousSpace"})
+            QVERIFY(Dialog.findChild<QKeySequenceEdit*>("documentViews/shortcuts/bindings/"+QString(Id)));
+        QCOMPARE(DocumentShortcutRegistry::ScopeOf("image.volumeNext"),QString("image.comic"));
+        QVERIFY(DocumentShortcutRegistry::CoActive("image","image.comic"));
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"image.volumeNext","Space"}}).isEmpty());
+        QVERIFY(DocumentShortcutRegistry::Validate({{"image.volumeNext","Ctrl+Alt+N"}}).isEmpty());
     }
     void shortcutValidationAndAliases()
     {

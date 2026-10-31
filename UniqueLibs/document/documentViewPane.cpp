@@ -19,6 +19,7 @@
 #include "pdf/QPDFView.h"
 #include "image/QImageView.h"
 #include "core/ThemeManager.h"
+#include "core/AppSettings.h"
 #include "core/ToolbarIcons.h"
 #include "core/PrintManager.h"
 #include <fmstyle/ThemeManager.h>
@@ -232,7 +233,7 @@ namespace hc::document
             reading_=new ImageReadingView(this);reading_->hide();layout()->addWidget(reading_);
             animation_=new ImageFramePlayer(this);connect(animation_,&ImageFramePlayer::Frame,image_,&QImageView::DisplayAnimationFrame);
             connect(image_,&QImageView::ContentChanged,animation_,[this]{animation_->Play(false);});
-            auto* Play=toolbar_->addAction(tr("재생/정지"));Play->setShortcut(QKeySequence("Alt+Pause"));Play->setShortcutContext(Qt::WidgetWithChildrenShortcut);addAction(Play);
+            auto* Play=toolbar_->addAction(tr("재생/정지"));Play->setObjectName("imageAnimation");Play->setShortcutContext(Qt::WidgetWithChildrenShortcut);addAction(Play);
             connect(Play,&QAction::triggered,animation_,[this]{if(!reading_->isHidden())reading_->ToggleAnimation();else animation_->Play(!animation_->Playing());});
             for(int Direction:{-1,1}){auto* Step=toolbar_->addAction(Direction<0?tr("이전 프레임"):tr("다음 프레임"));Step->setObjectName(Direction<0?"imageFramePrevious":"imageFrameNext");connect(Step,&QAction::triggered,animation_,[this,Direction]{if(!reading_->isHidden())reading_->StepAnimation(Direction);else animation_->Step(Direction);});}
             if(Input.bytes_.startsWith("GIF")||(Input.bytes_.startsWith("RIFF")&&Input.bytes_.mid(8,4)=="WEBP"))animation_->Load(Input.bytes_);
@@ -250,10 +251,11 @@ namespace hc::document
                 }
                 animation_->Clear();image_->setEditTool(QImageView::None);image_->hide();EditBar->hide();Edit->setEnabled(false);reading_->show();Fit->removeItem(4);reading_->SetMode(Value==2?ImageReadingView::Webtoon:Value==1?ImageReadingView::Comic:ImageReadingView::Single);reading_->setFocus();emit ViewStateChanged();
             });
+            connect(reading_,&ImageReadingView::VolumeChanged,this,[this](const QString& Path){readingPath_=Path;readingEntry_.clear();emit ReadingVolumeChanged(Path);});
             connect(reading_,&ImageReadingView::Changed,this,[this]{if(!reading_->isHidden())emit ReadingSelected();emit ViewStateChanged();});
             const auto ReadingOptionsStart=toolbar_->actions().size();
             auto* Rtl=toolbar_->addAction(tr("우→좌"));Rtl->setCheckable(true);Rtl->setObjectName("imageRightToLeft");connect(Rtl,&QAction::toggled,reading_,&ImageReadingView::SetRightToLeft);
-            auto* Cover=toolbar_->addAction(tr("표지 단독"));Cover->setObjectName("imageCover");Cover->setCheckable(true);Cover->setChecked(true);connect(Cover,&QAction::toggled,reading_,&ImageReadingView::SetCover);
+            auto* Cover=toolbar_->addAction(tr("표지 단독"));Cover->setObjectName("imageCover");Cover->setCheckable(true);Cover->setChecked(AppSettings().value("imageView/comic/coverAlone",true).toBool());connect(Cover,&QAction::toggled,reading_,&ImageReadingView::SetCover);
             auto* Split=toolbar_->addAction(tr("펼침면 분할"));Split->setObjectName("imageSplit");Split->setCheckable(true);connect(Split,&QAction::toggled,reading_,&ImageReadingView::SetSplit);
             auto* Auto=toolbar_->addAction(tr("다음 권 자동"));Auto->setObjectName("imageAutoNext");Auto->setCheckable(true);Auto->setChecked(true);connect(Auto,&QAction::toggled,reading_,&ImageReadingView::SetAutomaticNext);
             auto* NextVolume=toolbar_->addAction(tr("다음 권"));connect(NextVolume,&QAction::triggered,reading_,[this]{reading_->OpenVolume(1);});
@@ -333,6 +335,7 @@ namespace hc::document
         if(Id.startsWith("markdown."))return markdown_ && markdown_->CanRun(Id);
         if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return IsEpubEditing() && epubEditor_->CanRunCommand(Id);
         // Every image pane owns a reading view; a single image steps through its folder while it is hidden.
+        if(Id=="image.fullscreen" || Id=="image.animation")return image_ != nullptr;
         if(Id.startsWith("image."))return image_ && reading_ && (!reading_->isHidden() || ((Id=="image.next" || Id=="image.previous") && !image_->IsEditing()));
         return Id.startsWith("pdf.") && pdf_ && QStringList{"pdf.pageNext","pdf.pagePrevious","pdf.first","pdf.last"}.contains(Id);
     }
@@ -340,6 +343,7 @@ namespace hc::document
         if(!CanRunViewCommand(Id))return false;
         if(Id.startsWith("markdown.")){auto* Action=markdown_->Toolbar()->findChild<QAction*>(Id);if(Action && Action->isCheckable())Action->trigger();else markdown_->Run(Id);return true;}
         if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return epubEditor_->RunCommand(Id);
+        if(Id=="image.animation"){if(auto* Play=findChild<QAction*>("imageAnimation"))Play->trigger();return true;}
         if(Id.startsWith("image."))return reading_ && !reading_->isHidden()?reading_->RunCommand(Id):image_->StepImage(Id=="image.next"?1:-1);
         if(Id=="pdf.pageNext")pdf_->nextPage();else if(Id=="pdf.pagePrevious")pdf_->previousPage();else if(Id=="pdf.first")pdf_->goToPage(0);else pdf_->goToPage(pdf_->totalPageCount()-1);return true;
     }

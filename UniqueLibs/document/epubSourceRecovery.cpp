@@ -99,7 +99,7 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
         refreshTree();if(First || !layoutRestored_)restoreLayout();
         // The first editable resource in reading order opens first.
         QString Initial=current_;if(!model_.IsEditable(Initial)){Initial.clear();for(const auto& Path:SpinePaths)if(model_.IsEditable(Path)){Initial=Path;break;}if(Initial.isEmpty())for(const auto& Value:model_.Publication()["resources"].toArray())if(model_.IsEditable(Value.toObject()["path"].toString())){Initial=Value.toObject()["path"].toString();break;}}
-        current_=Initial;select();
+        if(!(First && !Restoring && !commitRestore_ && restoreWorkspace())){current_=Initial;select();}
         if(Restoring) {
             const auto Snapshot=std::exchange(pendingRecovery_,std::nullopt).value();baseToken_=QCryptographicHash::hash(Snapshot.original_,QCryptographicHash::Sha256);
             // The draft is written into the shown document, which stays locked until unlocked here.
