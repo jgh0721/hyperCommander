@@ -1507,7 +1507,7 @@ private slots:
         const auto Result = Started.Value().completion_.get(); QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "copy incomplete");
         QCOMPARE(read("r8-extras-target/r8-extras.txt"), QByteArray("main content")); QCOMPARE(read("r8-extras-target/r8-extras.txt:notes"), QByteArray(8193, 'a')); QCOMPARE(read("r8-extras-target/r8-extras.txt:한글"), QByteArray("unicode stream"));
         QCOMPARE(DaclText(QDir::toNativeSeparators(root_->filePath("r8-extras-target/r8-extras.txt")).toStdWString()), ExpectedDacl);
-        QCOMPARE(Result.snapshot_.progress_.bytesDone_, uint64_t(12 + 8193 + 14)); QVERIFY(!Result.snapshot_.progress_.bytesTotal_);
+        QCOMPARE(Result.snapshot_.progress_.bytesDone_, uint64_t(12 + 8193 + 14)); QCOMPARE(Result.snapshot_.progress_.bytesTotal_.value_or(0), uint64_t(12 + 8193 + 14));
     }
     void r8CopyPolicyValidationAndMetadata()
     {
@@ -2421,6 +2421,8 @@ private slots:
         QVERIFY(!QFileInfo::exists(root_->filePath("move-streams.txt")));
         QCOMPARE(read("move-streams-target/move-streams.txt"), QByteArray("main"));
         QCOMPARE(read("move-streams-target/move-streams.txt:notes"), QByteArray("alternate"));
+        QCOMPARE(Result.snapshot_.progress_.bytesDone_, uint64_t(4 + 9));
+        QCOMPARE(Result.snapshot_.progress_.bytesTotal_.value_or(0), uint64_t(4 + 9));
     }
     void coordinatorCopyMoveAndConfirmedDeleteTree_data()
     {

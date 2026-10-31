@@ -357,7 +357,7 @@ namespace hc::operations
                     if (request_.bytesPerSecondLimit_) ExtraContext.maxReadBytes_ = std::min<std::size_t>(ExtraContext.maxReadBytes_, std::max<std::uint64_t>(1, request_.bytesPerSecondLimit_ / 10));
                     auto Extra = session_->AdvanceCopyExtras(request_.maxBytes_ - bytesDone_, ExtraContext);
                     if (!Extra.HasValue()) return failed(Extra.Failure());
-                    bytesDone_ += Extra.Value().bytes_;
+                    bytesDone_ += Extra.Value().bytes_; extraBytes_ += Extra.Value().bytes_;
                     if (Extra.Value().done_) phase_ = request_.copyOptions_.verify_ ? Phase::Verify : Phase::ReadyCommit;
                     return paced(Extra.Value().bytes_);
                 }
@@ -611,8 +611,11 @@ namespace hc::operations
             JobStep progress()
             {
                 JobStep Step{phase_ == Phase::Preparing ? JobState::Preparing : JobState::Running};
-                Step.progress_ = JobProgress{bytesDone_, bytesTotal_, index_ < items_.size() ? current().source_.entry_.name_ : std::string{}};
-                if (phase_ == Phase::Preparing || request_.copyOptions_.streams_ || !request_.calculateSizeBefore_) Step.progress_->bytesTotal_.reset();
+                // Alternate stream sizes are unknown until each file is copied.
+                // They join the total as they join the done count, so enabling
+                // stream copy never hides the planned total.
+                Step.progress_ = JobProgress{bytesDone_, bytesTotal_ + extraBytes_, index_ < items_.size() ? current().source_.entry_.name_ : std::string{}};
+                if (phase_ == Phase::Preparing || !request_.calculateSizeBefore_) Step.progress_->bytesTotal_.reset();
                 if (planningFinished_ || request_.operation_ == FileOperation::MakeDirectory) Step.progress_->plannedItems_ = request_.operation_ == FileOperation::Move
                     ? std::ranges::count_if(items_, [](const auto& Item) { return !Item.source_.entry_.directory_ || Item.removeDirectory_; }) : items_.size();
                 if (request_.operation_ == FileOperation::Delete) {
@@ -1336,7 +1339,7 @@ namespace hc::operations
             std::uint64_t verifiedItems_ = 0, discoveredFiles_ = 0, deletedFiles_ = 0;
             std::size_t index_ = 0;
             std::uint32_t sourceRemoveRetries_ = 0;
-            std::uint64_t bytesTotal_ = 0, bytesDone_ = 0, itemBytes_ = 0;
+            std::uint64_t bytesTotal_ = 0, bytesDone_ = 0, itemBytes_ = 0, extraBytes_ = 0;
             bool replaceAllowed_ = false, destinationCommitted_ = false;
             std::optional<EntrySnapshot> conflictEntry_;
             Locator automaticOriginal_, automaticTarget_;
