@@ -13,17 +13,30 @@ namespace
 {
     Error DiskError(const char* Code) { return {ErrorCategory::Unavailable, Code, {}, {}, true, "retry"}; }
     Error Invalid(const char* Code) { return {ErrorCategory::InvalidRequest, Code}; }
+    std::shared_ptr<QTemporaryDir> IndexSession()
+    {
+        // Watching TEMP must not observe the indexes used to enumerate TEMP.
+        // Keep per-process records below two stable directories; native panel
+        // watchers are non-recursive. The session lease outlives every store.
+        static const auto Session = [] {
+            const auto Parent = QDir(QDir::tempPath()).filePath("HyperCommander/TransientIndexes");
+            if (!QDir().mkpath(Parent)) return std::shared_ptr<QTemporaryDir>{};
+            return std::make_shared<QTemporaryDir>(QDir(Parent).filePath("session-XXXXXX"));
+        }();
+        return Session;
+    }
     void WriteString(QDataStream& Out, const std::string& Value) { Out << QByteArray::fromStdString(Value); }
     void ReadString(QDataStream& In, std::string& Value) { QByteArray Bytes; In >> Bytes; Value = Bytes.toStdString(); }
 }
 struct DiskRecords::State
 {
+    std::shared_ptr<QTemporaryDir> session_;
     QTemporaryDir directory_;
     mutable QFile data_, offsets_;
     mutable std::mutex mutex_;
     std::uint64_t count_ = 0;
     qint64 end_ = 0;
-    explicit State(const QString& Parent) : directory_(QDir(Parent.isEmpty() ? QDir::tempPath() : Parent).filePath("hc-index-XXXXXX")),
+    State(const QString& Parent, std::shared_ptr<QTemporaryDir> Session) : session_(std::move(Session)), directory_(QDir(Parent).filePath("hc-index-XXXXXX")),
         data_(directory_.filePath("records")), offsets_(directory_.filePath("offsets")) {}
     Result<Unit> write(std::uint64_t Row, const QByteArray& Bytes)
     {
@@ -44,7 +57,9 @@ DiskRecords::DiskRecords(std::unique_ptr<State> Value) : state_(std::move(Value)
 DiskRecords::~DiskRecords() = default;
 Result<std::shared_ptr<DiskRecords>> DiskRecords::Create(const QString& Parent)
 {
-    auto Value = std::make_unique<State>(Parent);
+    auto Session = Parent.isEmpty() ? IndexSession() : nullptr;
+    if (Parent.isEmpty() && (!Session || !Session->isValid())) return DiskError("index-create-failed");
+    auto Value = std::make_unique<State>(Parent.isEmpty() ? Session->path() : Parent, Session);
     if (!Value->directory_.isValid() || !Value->data_.open(QIODevice::ReadWrite) || !Value->offsets_.open(QIODevice::ReadWrite))
         return DiskError("index-create-failed");
     return std::shared_ptr<DiskRecords>(new DiskRecords(std::move(Value)));

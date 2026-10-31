@@ -1218,7 +1218,7 @@ bool CGridView::BeginRename(const QModelIndex& Index, bool SelectExtension, Rena
         return true;
     }
     auto* Native = qobject_cast<CFSModel*>(model_);
-    if (!Native || Native->IsLoading() || !Native->ProviderEnabled() || IsThumbnailMode()) return false;
+    if (!Native || !Native->CanUseSnapshot() || !Native->ProviderEnabled() || IsThumbnailMode()) return false;
     auto Source = Index.isValid() ? Index : retrieveCursorIndex();
     while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
     if (!Source.isValid() || Source.model() != model_) return false;
@@ -1551,6 +1551,7 @@ void CGridView::RestoreSelection(const QStringList& Selection, const QString& Fo
     view_->beginUpdate(); view_->deselectAll();
     if (GroupingActive()) groupedSelection_.clear();
     int FocusRow = -1; QModelIndex FocusIndex;
+    QVector<int> SelectedRows;
     for (const auto& Source : SelectionCandidates()) {
         const auto Key = sourceSelectionKey(Source);
         const bool Selected = !Key.isEmpty() && Keys.contains(Key);
@@ -1558,11 +1559,18 @@ void CGridView::RestoreSelection(const QStringList& Selection, const QString& Fo
         const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
         if (Selected && GroupingActive()) groupedSelection_.insert(Key);
         const auto Row = view_->getRow(Visible); if (!Row.isValid()) continue;
-        if (Selected && Row.type() == Qtitan::GridRow::DataRow) view_->selectRow(Row.rowIndex(), Qtitan::Select);
+        if (Selected && Row.type() == Qtitan::GridRow::DataRow) SelectedRows.append(Row.rowIndex());
         if (!Key.isEmpty() && Key == Focus) { FocusRow = Row.rowIndex(); FocusIndex = Visible; }
     }
     if (Focus.startsWith("@group:")) for (const auto& Group : view_->modelController()->groupRows())
         if (Group._groupValue.toString() == Focus.mid(7)) { FocusRow = Group.rowIndex; break; }
+    std::sort(SelectedRows.begin(), SelectedRows.end());
+    const auto* First = view_->getFirstColumn(); const auto* Last = view_->getLastColumn();
+    for (int At = 0; At < SelectedRows.size();) {
+        const int Start = SelectedRows[At]; int End = Start;
+        while (++At < SelectedRows.size() && SelectedRows[At] == End + 1) End = SelectedRows[At];
+        view_->selectRange(Start, End, First ? First->index() : -1, Last ? Last->index() : -1, Qtitan::Select);
+    }
     view_->endUpdate();
     if (FocusIndex.isValid()) FocusRow = view_->getRow(FocusIndex).rowIndex();
     if (FocusRow >= 0) view_->setFocusedRowIndex(FocusRow);
@@ -1748,7 +1756,7 @@ void CGridView::drainSelectionKeys()
         }
         const auto* Native = qobject_cast<CFSModel*>(model_);
         if (groupingProjection_ || groupingReset_ || groupingUpdateDepth_ || groupInteractionPending_
-            || (Native && Native->IsLoading())) {
+            || (Native && !Native->CanUseSnapshot())) {
             selectionKeyTimer_.start(); return;
         }
         const auto Key = pendingSelectionKeys_.takeFirst();
@@ -1791,7 +1799,7 @@ QStringList CGridView::DragPaths(const QModelIndex& Index) const
 QString CGridView::FileDropDirectory(const QModelIndex& Index, bool SameView) const
 {
     const auto* Native = qobject_cast<CFSModel*>(model_);
-    if (!Native || Native->IsLoading() || IsEditing()) return {};
+    if (!Native || !Native->CanUseSnapshot() || IsEditing()) return {};
     const auto Kind = Native->WorkspaceLocation().kind_;
     if (!Native->IsSearchResults() && Kind != hc::storage::LocatorKind::Local && Kind != hc::storage::LocatorKind::Smb) return {};
     auto Source = Index;
@@ -1839,7 +1847,7 @@ Qt::DropAction CGridView::ChooseFileDropAction(int Count, const QString& Destina
 QStringList CGridView::ShellMenuPaths(const QModelIndex& Index, bool UseSelection) const
 {
     const auto* Native = qobject_cast<CFSModel*>(model_);
-    if (!Native || Native->IsLoading() || !view_) return {};
+    if (!Native || !Native->CanUseSnapshot() || !view_) return {};
     const auto Kind = Native->WorkspaceLocation().kind_;
     if (!Native->IsSearchResults() && Kind != hc::storage::LocatorKind::Local && Kind != hc::storage::LocatorKind::Smb) return {};
     const auto SourceIndex = [](QModelIndex At) {

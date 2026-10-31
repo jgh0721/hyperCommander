@@ -57,6 +57,29 @@ class PagedStorageTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void defaultIndexWatcherIsolation()
+    {
+        auto Lease = DiskRecords::Create(); QVERIFY(Lease.HasValue());
+        const auto First = Lease.Value()->Directory();
+        QDir WatchRoot(First);
+        QVERIFY(WatchRoot.cdUp()); const auto Session = WatchRoot.path();
+        QVERIFY(WatchRoot.cdUp()); QCOMPARE(WatchRoot.dirName(), QString("TransientIndexes"));
+        QVERIFY(WatchRoot.cdUp()); QCOMPARE(WatchRoot.dirName(), QString("HyperCommander"));
+        QCOMPARE(QDir::cleanPath(WatchRoot.absolutePath()), QDir::cleanPath(QDir(QDir::tempPath()).filePath("HyperCommander")));
+        const auto Native = QDir::toNativeSeparators(WatchRoot.path());
+        const auto Watch = FindFirstChangeNotificationW(reinterpret_cast<LPCWSTR>(Native.utf16()), FALSE,
+            FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE);
+        QVERIFY(Watch != INVALID_HANDLE_VALUE);
+        const auto Close = qScopeGuard([&] { FindCloseChangeNotification(Watch); });
+        for (int I = 0; I < 8; ++I) {
+            auto Store = DiskRecords::Create(); QVERIFY(Store.HasValue());
+            QCOMPARE(QFileInfo(Store.Value()->Directory()).absolutePath(), Session);
+            QVERIFY(Store.Value()->Directory() != First);
+            QVERIFY(Store.Value()->Append("directory listing").HasValue()); QVERIFY(Store.Value()->Flush().HasValue());
+        }
+        QCOMPARE(WaitForSingleObject(Watch, 100), DWORD(WAIT_TIMEOUT));
+    }
+
     void codecAndRecords()
     {
         EntrySnapshot Entry; Entry.id_ = {{"p"}, "opaque\0id"s, IdentityScope::Persistent, ResourceRevision{"r"}};

@@ -6,7 +6,7 @@
 namespace hc::ui {
 inline void SetFunctionCaption(fm::ui::FunctionKeyButton* Button, QAction* Action, const QString& Caption)
 {
-    Button->setText(Caption);
+    if (Button->text() != Caption) Button->setText(Caption);
     const auto Full = Action ? Action->property("hc.baseLabel").toString() : QString{};
     Button->setAccessibleName(Caption + (Full.isEmpty() || Full == Caption ? QString{} : " · " + Full) +
         (Button->keys().isEmpty() ? QString{} : " " + Button->keys()));
@@ -17,7 +17,8 @@ inline void BindFunctionButton(fm::ui::FunctionKeyButton* Button, QAction* Actio
     Button->setFocusPolicy(Qt::NoFocus);
     const auto Sync = [Button, Command] {
         if (!Command) { Button->setEnabled(false); return; }
-        Button->setKeys(Command->property("hc.keyLabel").toString());
+        const auto Keys = Command->property("hc.keyLabel").toString();
+        if (Button->keys() != Keys) Button->setKeys(Keys);
         SetFunctionCaption(Button, Command, Button->text());
         Button->setToolTip(Command->toolTip()); Button->setEnabled(Command->isEnabled());
     };

@@ -92,6 +92,7 @@ private:
     QProgressBar* currentProgress_ = nullptr;
     QWidget *sourceBlock_ = nullptr, *destinationBlock_ = nullptr, *currentBlock_ = nullptr;
     QWidget* phaseBlock_ = nullptr;
+    bool progressResizePending_ = false;
     QWidget *axisBlock_ = nullptr, *pagesBlock_ = nullptr;
     QLabel *sourcePath_ = nullptr, *sourceName_ = nullptr, *destinationPath_ = nullptr, *destinationName_ = nullptr;
     QLabel *currentTitle_ = nullptr, *currentPercent_ = nullptr, *currentMetrics_ = nullptr;

@@ -204,8 +204,9 @@ struct ItemSelectionController::State {
         return Native ? workspace::LocationKey(Native->WorkspaceLocation()) : location();
     }
     bool loading() const {
-        if (!view_ || !model_ || view_->BaseModel() != model_ || model_->IsLoading()) return true;
-        const auto* Native = qobject_cast<CFSModel*>(model_.data()); return Native && Native->IsPageLoading();
+        if (!view_ || !model_ || view_->BaseModel() != model_) return true;
+        const auto* Native = qobject_cast<CFSModel*>(model_.data());
+        return Native ? !Native->CanUseSnapshot() || Native->IsPageLoading() : model_->IsLoading();
     }
     bool valid(const std::shared_ptr<Scan>& Scan) const {
         return scan_ == Scan && view_ && !loading() && Scan->generation_ == generation_ && Scan->selection_ == selection_

@@ -212,6 +212,24 @@ namespace
         const auto View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
         return View ? qobject_cast<CFSModel*>(View->BaseModel()) : nullptr;
     }
+    QVector<QModelIndex> SelectedEntries(CFSModel* Model, const CommandContext& Context)
+    {
+        QSet<QString> Pending;
+        for (const auto& Id : Context.selection_) Pending.insert(QString::fromStdString(Serialize(Id)));
+        QHash<QString, QModelIndex> Found;
+        // Resolve the captured identities once, retaining invocation order and
+        // invalid indexes for entries which disappeared while a dialog was open.
+        for (int Row = 0; Row < Model->rowCount() && !Pending.isEmpty(); ++Row) {
+            const auto Index = Model->index(Row, 0); const auto Item = Model->GetFileInfo(Index);
+            if (!Item || Item->Name_ == "..") continue;
+            const auto Key = QString::fromStdString(Serialize(Item->storageEntry_ ? Item->storageEntry_->id_
+                : ResourceId{{"legacy"}, Item->Name_.toStdString(), IdentityScope::NavigationSession, {}}));
+            if (Pending.remove(Key)) Found.insert(Key, Index);
+        }
+        QVector<QModelIndex> Result; Result.reserve(Context.selection_.size());
+        for (const auto& Id : Context.selection_) Result.append(Found.value(QString::fromStdString(Serialize(Id))));
+        return Result;
+    }
 }
 
 std::shared_ptr<IExecutor> MakeQtExecutor(QObject* Owner) { return std::make_shared<QtExecutor>(Owner); }
@@ -545,7 +563,7 @@ hc::automation::Host CommandUiBridge::AutomationHost()
         if (!Model || Model != Lifetime->model_ || Model->WorkspaceLocation() != Context.location_)
             return Error{ErrorCategory::StaleRevision, "script-context-changed"};
         auto Reader = Model->SnapshotProvider();
-        if (Model->IsLoading() || !Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unavailable, "script-viewer-source"};
+        if (!Model->CanUseSnapshot() || !Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unavailable, "script-viewer-source"};
         std::optional<EntrySnapshot> Selected;
         for (int Row = 0; Row < Model->rowCount(); ++Row) {
             const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
@@ -1021,7 +1039,7 @@ void CommandUiBridge::refreshActionState()
     if (auto* Forward = Action("hc.navigate.forward")) Forward->setEnabled(activePanel_ && activePanel_->CanNavigateHistory(1));
     const auto* Model = PanelModel(activePanel_);
     if (auto* Compatibility = Action("hc.navigate.compatibility")) Compatibility->setChecked(Model && !Model->ProviderEnabled());
-    const bool Ready = Model && Model->GetRoot() && !Model->HasNavigationFallback() && !Model->IsLoading();
+    const bool Ready = Model && Model->GetRoot() && !Model->HasNavigationFallback() && Model->CanUseSnapshot();
     for (auto It = actions_.cbegin(); It != actions_.cend(); ++It)
         if (It.key().startsWith("hc.selection.") && It.value()) It.value()->setEnabled(Ready);
     if (auto* Command = Action("hc.file.folderSize")) Command->setEnabled(Ready && Model->ProviderEnabled()
@@ -1264,15 +1282,15 @@ void CommandUiBridge::PromptArchive(bool Extract, const QModelIndex& Index) {
 }
 void CommandUiBridge::extractArchive() {
     const auto Context = captureFiles(commandIndex(), false); auto* Model = findModel(Context.tabId_);
-    if (!Model || !Model->GetRoot() || !Model->ProviderEnabled() || Model->IsLoading()) return;
+    if (!Model || !Model->GetRoot() || !Model->ProviderEnabled() || !Model->CanUseSnapshot()) return;
     const bool Inside = !Model->IsSearchResults() && Context.location_.kind_ == LocatorKind::Archive;
     if (!Model->IsSearchResults() && !Inside && Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) {
         hc::ui::MessageDialog::information(main_, tr("파일 압축 해제"), tr("로컬·SMB의 압축 파일 또는 열린 압축 파일 안의 항목을 선택하세요.")); return;
     }
     std::vector<hc::operations::OperationSource> Sources; QStringList Names; auto Reader = Model->SnapshotProvider();
-    if (!Context.selectionManifest_) for (int Row = 0; Row < Model->rowCount(); ++Row) {
-        const auto Item = Model->GetFileInfo(Model->index(Row,0));
-        if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end()) {
+    if (!Context.selectionManifest_) for (const auto& At : SelectedEntries(Model, Context)) {
+        const auto Item = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+        if (Item && Item->storageEntry_) {
             if (!Inside && Item->storageEntry_->directory_) { hc::ui::MessageDialog::information(main_, tr("파일 압축 해제"), tr("압축 파일만 선택하세요.")); return; }
             Sources.push_back({*Item->storageEntry_, Model->ProviderFor(*Item->storageEntry_), {}}); Names.append(Item->Name_);
         }
@@ -1355,12 +1373,12 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
 {
     const auto Context = captureFiles(commandIndex(), false);
     auto* Model = findModel(Context.tabId_);
-    if (!Model || !Model->ProviderEnabled() || Model->IsLoading()) return;
+    if (!Model || !Model->ProviderEnabled() || !Model->CanUseSnapshot()) return;
     auto Reader = Model->SnapshotProvider();
     std::vector<hc::operations::OperationSource> Sources;
-    if (!Context.selectionManifest_) for (int Row = 0; Row < Model->rowCount(); ++Row) {
-        const auto Item = Model->GetFileInfo(Model->index(Row, 0));
-        if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end())
+    if (!Context.selectionManifest_) for (const auto& At : SelectedEntries(Model, Context)) {
+        const auto Item = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+        if (Item && Item->storageEntry_)
             Sources.push_back({*Item->storageEntry_, Model->ProviderFor(*Item->storageEntry_), {}});
     }
     const auto Count = Context.selectionManifest_ ? Context.selectionManifest_->Count() : Sources.size();
@@ -1401,12 +1419,12 @@ void CommandUiBridge::openIso(bool Inspect)
     if (!Inspect) { openArchive("iso"); return; }
     const auto Context = captureFiles({}, false);
     auto* Model = findModel(Context.tabId_);
-    if (!Model || !Model->ProviderEnabled() || Model->IsLoading()) return;
+    if (!Model || !Model->ProviderEnabled() || !Model->CanUseSnapshot()) return;
     auto Reader = Model->SnapshotProvider();
     std::vector<hc::operations::OperationSource> Sources;
-    for (int Row = 0; Row < Model->rowCount(); ++Row) {
-        const auto Item = Model->GetFileInfo(Model->index(Row, 0));
-        if (Item && Item->storageEntry_ && std::find(Context.selection_.begin(), Context.selection_.end(), Item->storageEntry_->id_) != Context.selection_.end())
+    for (const auto& At : SelectedEntries(Model, Context)) {
+        const auto Item = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+        if (Item && Item->storageEntry_)
             Sources.push_back({*Item->storageEntry_, Model->ProviderFor(*Item->storageEntry_), {}});
     }
     const auto CurrentDirectory = Context.location_.kind_ == LocatorKind::Archive ? QFileInfo(QString::fromStdString(Context.location_.root_)).absolutePath() : QString::fromStdString(Context.location_.root_);
@@ -1449,7 +1467,7 @@ void CommandUiBridge::openIso(bool Inspect)
 void CommandUiBridge::openSearch()
 {
     auto* Model = PanelModel(activePanel_);
-    if (!Model || Model->IsLoading() || !Model->SnapshotProvider()) return;
+    if (!Model || !Model->CanUseSnapshot() || !Model->SnapshotProvider()) return;
     hc::workspace::TabState State; State.location_ = Model->WorkspaceLocation();
     State.provider_ = Model->property("hc.workspaceProvider").toString(); State.nativeRoot_ = Model->property("hc.workspaceNativeRoot").toString();
     hc::search::Show(main_, WorkerOwned(Model->SnapshotProvider()), State.location_, Model->SearchMetadata(),
@@ -1476,7 +1494,7 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
     std::shared_ptr<IContentSource> Source;
     if (Metadata)
     {
-        if (!Model || Model->IsLoading() || !Model->ProviderEnabled() || !Model->SnapshotProvider() || Context.selection_.size() != 1) return;
+        if (!Model || !Model->CanUseSnapshot() || !Model->ProviderEnabled() || !Model->SnapshotProvider() || Context.selection_.size() != 1) return;
         for (int Row = 0; Row < Model->rowCount(); ++Row)
         {
             const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
@@ -1624,7 +1642,7 @@ void CommandUiBridge::refreshPreview()
     if (quickPanel_->GetFocusView(quickPanel_->CurrentTabIndex()) != quick_) return;
     auto* Model = PanelModel(quickSource_);
     auto* View = qobject_cast<CGridView*>(quickSource_->GetFocusView(quickSource_->CurrentTabIndex()));
-    if (!Model || !View || Model->IsLoading() || !Model->ProviderEnabled())
+    if (!Model || !View || !Model->CanUseSnapshot() || !Model->ProviderEnabled())
     { quick_->CloseView(); quickKey_.clear(); return; }
     const auto Focused = View->BaseView()->focusedRow();
     const auto Index = Focused.isValid() && Focused.type() == Qtitan::GridRow::DataRow ? SourceIndex(Focused.modelIndex(0)) : QModelIndex{};
@@ -1639,7 +1657,7 @@ void CommandUiBridge::refreshPreview()
 
 Result<std::string> CommandUiBridge::captureDocument(const CommandInvocation& Invocation, CFSModel* Model)
 {
-    if (!Model || Model->IsLoading()) return Error{ErrorCategory::Unavailable, "document-navigation-in-progress"};
+    if (!Model || !Model->CanUseSnapshot()) return Error{ErrorCategory::Unavailable, "document-navigation-in-progress"};
     auto Reader = Model->SnapshotProvider();
     if (!Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unsupported, "document-provider-unsupported"};
     if (Invocation.context_.selectionManifest_ || Invocation.context_.selection_.size() > 16)
@@ -1664,7 +1682,7 @@ Result<std::string> CommandUiBridge::captureDocument(const CommandInvocation& In
     const auto Context = Invocation.context_;
     Request.stillCurrent_ = [Guard = QPointer<CFSModel>(Model), Context, Reader] {
         const auto Panel = Guard ? PanelOf(Guard) : nullptr;
-        return Guard && !Guard->IsLoading() && Panel && PanelModel(Panel) == Guard
+        return Guard && Guard->CanUseSnapshot() && Panel && PanelModel(Panel) == Guard
             && Guard->property("hc.tabId").toString().toStdString() == Context.tabId_
             && Guard->WorkspaceLocation() == Context.location_ && Guard->SnapshotProvider() == Reader;
     };
@@ -1680,7 +1698,7 @@ Result<CommandOutcome> CommandUiBridge::executeDocument(const CommandInvocation&
 }
 Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& Invocation, CFSModel* Model)
 {
-    if (Model->IsLoading()) return Error{ErrorCategory::Unavailable, "navigation-in-progress"};
+    if (!Model->CanUseSnapshot()) return Error{ErrorCategory::Unavailable, "navigation-in-progress"};
     auto Reader = Model->SnapshotProvider();
     if (!Model->ProviderEnabled() || !Reader) return Error{ErrorCategory::Unsupported, "provider-snapshot-required"};
     if (Invocation.context_.selection_.size() != 1) return Error{ErrorCategory::InvalidRequest, "single-selection-required"};
@@ -1730,7 +1748,7 @@ Result<QStringList> CommandUiBridge::compareArguments(const CommandContext& Cont
 {
     struct Item { QString path_; bool directory_; };
     const auto Collect = [](const CommandContext& Captured, CFSModel* Source) -> Result<QList<Item>> {
-        if (!Source || !Source->GetRoot() || Source->IsLoading() || !(Captured.location_ == Source->WorkspaceLocation()))
+        if (!Source || !Source->GetRoot() || !Source->CanUseSnapshot() || !(Captured.location_ == Source->WorkspaceLocation()))
             return Error{ErrorCategory::Unavailable, "compare-panel-not-ready"};
         if (Captured.selectionManifest_ || Captured.selection_.empty() || Captured.selection_.size() > 3)
             return Error{ErrorCategory::InvalidRequest, "compare-select-two-or-three-files"};
@@ -1861,16 +1879,13 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     DialogRequest.manifestSelection_ = bool(Invocation.context_.selectionManifest_);
     DialogRequest.nativeSource_ = Invocation.context_.location_.kind_ == LocatorKind::Local || Invocation.context_.location_.kind_ == LocatorKind::Smb;
     if (Model->IsSearchResults()) DialogRequest.nativeSource_ = true;
-    for (const auto& Selected : Invocation.context_.selection_)
-        for (int Row = 0; Row < Model->rowCount(); ++Row) {
-            const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
-            if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Selected) {
-                if (Model->IsSearchResults() && DialogRequest.names_.isEmpty())
-                    DialogRequest.source_ = QFileInfo(QString::fromStdString(Entry->storageEntry_->locator_.root_)).absolutePath();
-                DialogRequest.names_.append(Model->IsSearchResults() && Id != "hc.file.rename"
-                    ? Model->GetFileFullPath(Model->index(Row, 0)) : Entry->Name_); break;
-            }
-        }
+    for (const auto& At : SelectedEntries(Model, Invocation.context_)) {
+        const auto Entry = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+        if (!Entry || !Entry->storageEntry_) continue;
+        if (Model->IsSearchResults() && DialogRequest.names_.isEmpty())
+            DialogRequest.source_ = QFileInfo(QString::fromStdString(Entry->storageEntry_->locator_.root_)).absolutePath();
+        DialogRequest.names_.append(Model->IsSearchResults() && Id != "hc.file.rename" ? Model->GetFileFullPath(At) : Entry->Name_);
+    }
     if (Id == "hc.file.delete") {
         hc::ui::FileOperationDialog Dialog(DialogRequest, main_);
         if (Dialog.exec() != QDialog::Accepted) return;
@@ -1965,7 +1980,21 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
             }
         }
     }
-    DispatchInvocation(std::move(Invocation));
+    // Submission itself can fail before a job/progress window exists. Keep the
+    // result visible after the confirmation dialog has closed.
+    auto Future = std::make_shared<Task<CommandOutcome>>(DispatchInvocation(std::move(Invocation)));
+    auto* Poll = new QTimer(this); Poll->setInterval(15);
+    connect(Poll, &QTimer::timeout, this, [this, Poll, Future, Id] {
+        if (Future->wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        const auto Result = Future->get(); Poll->stop(); Poll->deleteLater();
+        if (!Result.HasValue() && main_) {
+            auto* Error = new hc::ui::MessageDialog(QMessageBox::Warning, tr("파일 작업을 시작할 수 없습니다"),
+                hc::ui::ErrorText(Result.Failure()), QMessageBox::Ok, main_);
+            Error->setObjectName("hc.operation.submitError"); Error->setAttribute(Qt::WA_DeleteOnClose);
+            Error->setDetailedText(Id); Error->open();
+        }
+    });
+    Poll->start();
 }
 
 void CommandUiBridge::submitInlineRename(const QModelIndex& Index, const QString& Name, std::function<void(bool)> Completion)
@@ -2120,7 +2149,7 @@ bool CommandUiBridge::CancelClipboard()
 Result<CommandOutcome> CommandUiBridge::executeClipboard(const CommandInvocation& Invocation, CFSModel* Model)
 {
     using namespace hc::operations;
-    if (Model->IsLoading() || !Model->ProviderEnabled() || !Model->SnapshotProvider())
+    if (!Model->CanUseSnapshot() || !Model->ProviderEnabled() || !Model->SnapshotProvider())
         return Error{ErrorCategory::Unavailable, "clipboard-provider-not-ready"};
     if (Invocation.context_.location_ != Model->WorkspaceLocation())
         return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
@@ -2220,7 +2249,7 @@ Result<CommandOutcome> CommandUiBridge::executeClipboard(const CommandInvocation
 Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Invocation, CFSModel* Model)
 {
     using namespace hc::operations;
-    if (Model->IsLoading()) return Error{ErrorCategory::InvalidRequest, "navigation-in-progress"};
+    if (!Model->CanUseSnapshot()) return Error{ErrorCategory::InvalidRequest, "navigation-in-progress"};
     if (Model->IsSearchResults() && (Invocation.id_ == "hc.file.new" || Invocation.id_ == "hc.file.mkdir"))
         return Error{ErrorCategory::InvalidRequest, "search-results-have-no-destination"};
     if (Invocation.id_ == "hc.file.new") {
@@ -2282,20 +2311,13 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         Request.selection_ = Invocation.context_.selectionManifest_; Request.selectionRoot_ = Invocation.context_.location_; Request.selectionWriter_ = Writer;
     }
     if (Request.operation_ != hc::operations::FileOperation::MakeDirectory)
-        for (const auto& Selected : Invocation.context_.selection_)
+        for (const auto& At : SelectedEntries(Model, Invocation.context_))
         {
-            bool Found = false;
-            for (int Row = 0; Row < Model->rowCount(); ++Row)
-            {
-                const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
-                if (Entry && Entry->storageEntry_ && Entry->storageEntry_->id_ == Selected)
-                {
-                    auto EntryReader = Model->ProviderFor(*Entry->storageEntry_);
-                    auto EntryWriter = Model->IsSearchResults() ? MakeNativeWritableStorage(Entry->storageEntry_->locator_.kind_, EntryReader) : Writer;
-                    Request.sources_.push_back({*Entry->storageEntry_, EntryReader, EntryWriter}); Found = true; break;
-                }
-            }
-            if (!Found) return Error{ErrorCategory::StaleRevision, "selection-changed-or-provider-disabled"};
+            const auto Entry = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+            if (!Entry || !Entry->storageEntry_) return Error{ErrorCategory::StaleRevision, "selection-changed-or-provider-disabled"};
+            auto EntryReader = Model->ProviderFor(*Entry->storageEntry_);
+            auto EntryWriter = Model->IsSearchResults() ? MakeNativeWritableStorage(Entry->storageEntry_->locator_.kind_, EntryReader) : Writer;
+            Request.sources_.push_back({*Entry->storageEntry_, EntryReader, EntryWriter});
         }
     if (Request.operation_ != hc::operations::FileOperation::Delete)
     {
@@ -2353,7 +2375,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         Affected.push_back(std::move(Destination));
     }
     const auto Endpoint = [](CFSModel* ArchiveModel) -> Result<ArchiveMoveEndpoint> {
-        if (!ArchiveModel || !ArchiveModel->ProviderEnabled() || ArchiveModel->IsLoading() || !ArchiveModel->SnapshotProvider() || !ArchiveModel->GetRoot())
+        if (!ArchiveModel || !ArchiveModel->ProviderEnabled() || !ArchiveModel->CanUseSnapshot() || !ArchiveModel->SnapshotProvider() || !ArchiveModel->GetRoot())
             return Error{ErrorCategory::Unsupported, "archive-destination-not-open"};
         const auto Pack = dynamic_cast<nsHC::CFSPack*>(ArchiveModel->GetRoot().get());
         if (!Pack || !Pack->GetWCX()) return Error{ErrorCategory::Unsupported, "archive-plugin-required"};
@@ -2374,7 +2396,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         if (Invocation.parameters_.contains("destinationTab"))
         {
             Target = findModel(std::get<std::string>(Invocation.parameters_.at("destinationTab")));
-            if (!Target || PanelModel(PanelOf(Target)) != Target || Target->IsLoading() || !Target->GetRoot())
+            if (!Target || PanelModel(PanelOf(Target)) != Target || !Target->CanUseSnapshot() || !Target->GetRoot())
                 return Error{ErrorCategory::StaleRevision, "archive-destination-tab-changed"};
             const auto Current = Target->GetRoot()->ReadLocation(Target->GetCurrentPathWithRoot());
             if (Invocation.parameters_.contains("destinationLocation"))
@@ -2400,7 +2422,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
                 auto* Target = Model;
                 if (Invocation.parameters_.contains("destinationTab"))
                     Target = findModel(std::get<std::string>(Invocation.parameters_.at("destinationTab")));
-                if (!Target || PanelModel(PanelOf(Target)) != Target || Target->IsLoading() || !Target->ProviderEnabled() || !Target->GetRoot()) return Error{ErrorCategory::StaleRevision, "plugin-destination-tab-changed"};
+                if (!Target || PanelModel(PanelOf(Target)) != Target || !Target->CanUseSnapshot() || !Target->ProviderEnabled() || !Target->GetRoot()) return Error{ErrorCategory::StaleRevision, "plugin-destination-tab-changed"};
                 const auto Current = Target->GetRoot()->ReadLocation(Target->GetCurrentPathWithRoot());
                 if (Invocation.parameters_.contains("destinationLocation") && Serialize(Current) != std::get<std::string>(Invocation.parameters_.at("destinationLocation")))
                     return Error{ErrorCategory::StaleRevision, "plugin-destination-location-changed"};
@@ -2504,7 +2526,7 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
 {
     const auto Context = captureFiles(Index, false);
     auto* Model = findModel(Context.tabId_);
-    if (!Model || !Model->GetRoot() || Model->IsLoading()) return;
+    if (!Model || !Model->GetRoot() || !Model->CanUseSnapshot()) return;
     if (!Rename && Model->IsSearchResults()) return;
     const auto Folder = QString::fromStdString(Context.location_.root_);
     const bool Supported = Model->IsSearchResults() || Context.location_.kind_ == LocatorKind::Local || Context.location_.kind_ == LocatorKind::Smb;
@@ -2537,11 +2559,7 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
         return;
     }
     QStringList Paths;
-    for (int Row = 0; Row < Model->rowCount(); ++Row) {
-        const auto E = Model->GetFileInfo(Model->index(Row, 0)); if (!E || E->Name_ == "..") continue;
-        const auto Id = E->storageEntry_ ? E->storageEntry_->id_ : ResourceId{{"legacy"}, E->Name_.toStdString(), IdentityScope::NavigationSession, {}};
-        if (std::find(Context.selection_.begin(), Context.selection_.end(), Id) != Context.selection_.end()) Paths.append(Model->GetFileFullPath(Model->index(Row, 0)));
-    }
+    for (const auto& At : SelectedEntries(Model, Context)) if (At.isValid()) Paths.append(Model->GetFileFullPath(At));
     hc::ui::BatchRenameDialog Dialog(Paths, Supported, main_, Context.selectionManifest_, fileJobs_); Dialog.onChanged_ = Refresh; Dialog.exec();
 }
 
@@ -2549,15 +2567,14 @@ void CommandUiBridge::PromptFileAttributes(const QModelIndex& Index)
 {
     const auto Context = captureFiles(Index, false);
     auto* Model = findModel(Context.tabId_);
-    if (!Model || !Model->GetRoot() || Model->IsLoading()) return;
+    if (!Model || !Model->GetRoot() || !Model->CanUseSnapshot()) return;
     if (!Model->IsSearchResults() && Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb) {
         hc::ui::MessageDialog::information(main_, tr("속성 변경"), tr("이 저장소에서는 속성 변경을 지원하지 않습니다.")); return;
     }
     std::vector<EntrySnapshot> Entries;
-    if (!Context.selectionManifest_) for (int Row = 0; Row < Model->rowCount(); ++Row) {
-        const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
-        if (!Entry || !Entry->storageEntry_ || Entry->Name_ == "..") continue;
-        if (std::find(Context.selection_.begin(), Context.selection_.end(), Entry->storageEntry_->id_) != Context.selection_.end()) Entries.push_back(*Entry->storageEntry_);
+    if (!Context.selectionManifest_) for (const auto& At : SelectedEntries(Model, Context)) {
+        const auto Entry = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+        if (Entry && Entry->storageEntry_ && Entry->Name_ != "..") Entries.push_back(*Entry->storageEntry_);
     }
     if (Entries.empty() && !Context.selectionManifest_) { hc::ui::MessageDialog::information(main_, tr("속성 변경"), tr("변경할 파일이나 폴더를 선택하세요.")); return; }
     auto Reader = Model->SnapshotProvider(); if (!Reader) Reader = MakeNativeReadProvider(Context.location_.kind_);

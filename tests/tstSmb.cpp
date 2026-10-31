@@ -656,6 +656,256 @@ private slots:
         QTRY_COMPARE(FocusName(), QString("entry070.txt"));
     }
 
+    void todoBugLargeFolderFileOperationsUi()
+    {
+        using namespace hc::storage;
+        using namespace hc::operations;
+        const auto Workspace = main_->CaptureWorkspace();
+        auto& Settings = hc::settings::AppSettings(); const auto Saved = Settings.Object();
+        auto SavedClipboard = std::make_unique<QMimeData>();
+        if (const auto* Mime = QApplication::clipboard()->mimeData())
+            for (const auto& Format : Mime->formats()) SavedClipboard->setData(Format, Mime->data(Format));
+        const auto Restore = qScopeGuard([&] {
+            TyStCommandMgr::GetInstance()->Bridge()->CancelClipboard();
+            QApplication::clipboard()->setMimeData(SavedClipboard.release());
+            Settings.Replace(Saved); main_->RestoreWorkspace(Workspace);
+            TyStCommandMgr::GetInstance()->Bridge()->RefreshFunctionBar();
+        });
+        auto General = Settings.Read(hc::settings::Section::General).toObject(); General["showFunctionBar"] = true;
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); Bridge->RefreshFunctionBar();
+        QTemporaryDir Source(QDir(unc_).filePath("hc-large-source-XXXXXX")), Target(QDir(unc_).filePath("hc-large-target-XXXXXX"));
+        QVERIFY(Source.isValid() && Target.isValid());
+        constexpr int Count = 6000, SelectedCount = 2000;
+        for (int I = 0; I < Count; ++I) {
+            QFile File(Source.filePath(QString("entry%1.txt").arg(I, 5, 10, QChar('0'))));
+            QVERIFY(File.open(QIODevice::WriteOnly)); File.write("large-folder fixture");
+        }
+        class RefreshProvider final : public IStorageProvider {
+        public:
+            std::shared_ptr<IStorageProvider> inner_ = MakeNativeReadProvider(LocatorKind::Local);
+            std::atomic<bool> hold_{false}, entered_{false};
+            ProviderId Id() const override { return inner_->Id(); }
+            ProviderCapabilities Capabilities() const override { return inner_->Capabilities(); }
+            Task<SupportDecision> Supports(Operation Op, OperationContext Ctx) override { return inner_->Supports(Op, Ctx); }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Ctx) override {
+                if (hold_) {
+                    entered_ = true;
+                    while (hold_) {
+                        if (const auto Error = Ctx.Check(Id())) return Ready<std::unique_ptr<IEntryCursor>>(*Error);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    }
+                }
+                return inner_->Enumerate(At, Ctx);
+            }
+            Task<EntrySnapshot> Resolve(Locator At, OperationContext Ctx) override { return inner_->Resolve(At, Ctx); }
+            Task<EntrySnapshot> Stat(ResourceId Id, OperationContext Ctx) override { return inner_->Stat(Id, Ctx); }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext Ctx) override { return inner_->OpenRead(Id, Ctx); }
+        };
+        class RefreshFs final : public nsHC::CFileSystemT {
+        public:
+            RefreshFs(const QString& Drive, std::shared_ptr<IStorageProvider> Provider) : CFileSystemT(Drive), provider_(std::move(Provider)) {}
+            std::shared_ptr<IStorageProvider> ReadProvider() override { return provider_; }
+        private:
+            std::shared_ptr<IStorageProvider> provider_;
+        };
+        auto Provider = std::make_shared<RefreshProvider>();
+        const auto Release = qScopeGuard([&] { Provider->hold_ = false; });
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        Panel->SetSearch({}); QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile())); QVERIFY(View->SetListMode("one-line"));
+        const auto Native = QDir::toNativeSeparators(Source.path());
+        Model->SetRoot(nsHC::TySpFileSystem(new RefreshFs(Native.left(2), Provider)));
+        Model->SetCurrentPath(Native.mid(2)); Model->Refresh();
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == Count + 1, 30000);
+        QVERIFY(Model->UsesIndexedOrder()); Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+        QStringList Keys;
+        for (int Row = 1; Row <= SelectedCount; ++Row) Keys.append(hc::workspace::SelectionKey(*Model->GetFileInfo(Model->index(Row, 0))->storageEntry_));
+        QElapsedTimer Clock; Clock.start(); View->RestoreSelection(Keys, Keys.front());
+        QCOMPARE(View->CaptureSelection().size(), SelectedCount); const auto SelectMs = Clock.elapsed();
+        QVERIFY2(SelectMs < 2000, qPrintable(QString("Selecting %1 of %2 took %3 ms").arg(SelectedCount).arg(Count).arg(SelectMs)));
+        // A real watcher rescan remains in flight across the confirmation dialog
+        // and every operation, so the old blanket IsLoading guard is exercised.
+        Provider->hold_ = true;
+        { QFile Trigger(Source.filePath("watch-trigger.txt")); QVERIFY(Trigger.open(QIODevice::WriteOnly)); Trigger.write("watch"); }
+        QTRY_VERIFY_WITH_TIMEOUT(Model->IsLoading() && Model->IsAutomaticRefresh() && Provider->entered_, 10000);
+        QVERIFY(Model->CanUseSnapshot());
+        auto* Bar = main_->findChild<fm::ui::FunctionKeyBar*>("hc.functionBar"); QVERIFY(Bar && Bar->isVisible());
+        class ButtonEvents final : public QObject {
+        public: int enabledChanges_ = 0, paints_ = 0;
+            bool eventFilter(QObject*, QEvent* Event) override {
+                if (Event->type() == QEvent::EnabledChange) ++enabledChanges_;
+                if (Event->type() == QEvent::Paint) ++paints_;
+                return false;
+            }
+        } Probe;
+        QTest::qWait(300);
+        for (auto* Button : Bar->buttons()) Button->installEventFilter(&Probe);
+        QTest::qWait(800);
+        QCOMPARE(Probe.enabledChanges_, 0); QVERIFY2(Probe.paints_ < Bar->buttons().size() * 3, "Idle function buttons keep repainting");
+        for (auto* Button : Bar->buttons()) Button->removeEventFilter(&Probe);
+        for (const auto* Id : {"hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete", "hc.file.new"}) QVERIFY(Bridge->Action(Id)->isEnabled());
+        bool Confirmed = false; QElapsedTimer PromptClock; PromptClock.start(); qint64 PromptMs = -1;
+        QTimer Confirm; Confirm.setInterval(10);
+        connect(&Confirm, &QTimer::timeout, main_, [&] {
+            for (auto* Widget : QApplication::topLevelWidgets()) {
+                auto* Dialog = dynamic_cast<hc::ui::FileOperationDialog*>(Widget); if (!Dialog || !Dialog->isVisible()) continue;
+                if (PromptMs < 0) PromptMs = PromptClock.elapsed();
+                auto* Editor = Dialog->findChild<QLineEdit*>("hc.operation.editor"); if (!Editor) continue;
+                Editor->setText(Target.path());
+                if (Dialog->AcceptButton()->isEnabled()) { Confirmed = true; Confirm.stop(); Dialog->AcceptButton()->click(); }
+            }
+            if (PromptClock.elapsed() > 15000) {
+                Confirm.stop(); for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Dialog = dynamic_cast<hc::ui::FileOperationDialog*>(Widget)) Dialog->reject();
+            }
+        });
+        std::set<std::string> CopyPrior; for (const auto& Job : Bridge->FileJobs()->Scheduler().Snapshots()) CopyPrior.insert(Job.id_);
+        Confirm.start(); Bridge->PromptFileOperation("hc.file.copy", "large-folder-test"); Confirm.stop();
+        QVERIFY(Confirmed); QVERIFY2(PromptMs >= 0 && PromptMs < 2000, qPrintable(QString("Copy prompt took %1 ms").arg(PromptMs)));
+        std::string Copied;
+        QTRY_VERIFY(([&] { for (const auto& Job : Bridge->FileJobs()->Scheduler().Snapshots()) if (!CopyPrior.contains(Job.id_)) { Copied = Job.id_; return true; } return false; })());
+        QVERIFY(QTest::qWaitFor([&] { return IsTerminal(Bridge->FileJobs()->Scheduler().Snapshot(Copied).Value().state_); }, 60000));
+        QCOMPARE(Bridge->FileJobs()->Scheduler().Snapshot(Copied).Value().state_, JobState::Completed);
+        QCOMPARE(QDir(Target.path()).entryList(QDir::Files).size(), SelectedCount);
+        QTRY_VERIFY_WITH_TIMEOUT(View->CaptureSelection().isEmpty(), 10000);
+        const auto Run = [&](const QString& Id, const QVariantMap& Params, int Row) -> bool {
+            View->RestoreSelection({}, hc::workspace::SelectionKey(*Model->GetFileInfo(Model->index(Row, 0))->storageEntry_));
+            auto Pending = Bridge->Dispatch(Id, Params, "large-folder-test", Model->index(Row, 0));
+            QElapsedTimer Wait; Wait.start();
+            while (Pending.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready && Wait.elapsed() < 10000) QTest::qWait(10);
+            if (Pending.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return false;
+            auto Outcome = Pending.get();
+            if (!Outcome.HasValue()) { qWarning() << Id << QString::fromStdString(Outcome.Failure().code_); return false; }
+            if (Outcome.Value().jobId_.empty()) return true;
+            while (Wait.elapsed() < 60000) {
+                const auto Job = Bridge->FileJobs()->Scheduler().Snapshot(Outcome.Value().jobId_);
+                if (Job.HasValue() && IsTerminal(Job.Value().state_)) {
+                    if (Job.Value().state_ != JobState::Completed) qWarning() << Id << (Job.Value().error_ ? QString::fromStdString(Job.Value().error_->code_) : "incomplete");
+                    return Job.Value().state_ == JobState::Completed && !Job.Value().failedItems_ && !Job.Value().skippedItems_;
+                }
+                QTest::qWait(10);
+            }
+            return false;
+        };
+        QVERIFY(Run("hc.file.move", {{"destination", Target.filePath("moved.txt")}, {"targetIsName", true}}, 2101));
+        QVERIFY(QFileInfo::exists(Target.filePath("moved.txt"))); QVERIFY(!QFileInfo::exists(Source.filePath("entry02100.txt")));
+        QVERIFY(Run("hc.file.rename", {{"destination", Source.filePath("renamed.txt")}}, 2102));
+        QVERIFY(QFileInfo::exists(Source.filePath("renamed.txt"))); QVERIFY(!QFileInfo::exists(Source.filePath("entry02101.txt")));
+        QVERIFY(Run("hc.file.mkdir", {{"destination", Source.filePath("created-folder")}}, 2103));
+        QVERIFY(QFileInfo(Source.filePath("created-folder")).isDir());
+        QVERIFY(Run("hc.file.new", {{"name", "created-file.txt"}}, 2103)); QVERIFY(QFileInfo::exists(Source.filePath("created-file.txt")));
+        QVERIFY(Run("hc.file.delete", {{"deleteMode", "permanent"}, {"confirmed", true}}, 2104));
+        QVERIFY(!QFileInfo::exists(Source.filePath("entry02103.txt")));
+        QVERIFY(Run("hc.clipboard.copy", {}, 2105));
+        // Change only the clipboard destination's model, retaining the source rescan.
+        auto* Other = panels_.back(); QVERIFY(Other != Panel); Other->ChangeCurrentPath(Target.path(), {});
+        QTRY_VERIFY(!model(Other)->IsLoading()); Other->sig_NotifyPanelActivated();
+        auto Paste = Bridge->Dispatch("hc.clipboard.paste", {}, "large-folder-test");
+        QTRY_VERIFY(Paste.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto Pasted = Paste.get(); QVERIFY(Pasted.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Bridge->FileJobs()->Scheduler().Snapshot(Pasted.Value().jobId_).Value().state_), 10000);
+        QCOMPARE(Bridge->FileJobs()->Scheduler().Snapshot(Pasted.Value().jobId_).Value().state_, JobState::Completed);
+        QVERIFY(QFileInfo::exists(Target.filePath("entry02104.txt"))); Bridge->CancelClipboard();
+        Panel->sig_NotifyPanelActivated();
+        // The same entries remain selected for a bulk permanent deletion.
+        View->RestoreSelection(Keys, Keys.front());
+        std::set<std::string> Prior; for (const auto& Job : Bridge->FileJobs()->Scheduler().Snapshots()) Prior.insert(Job.id_);
+        bool DeleteConfirmed = false; QTimer DeleteConfirm; DeleteConfirm.setInterval(10); Clock.restart();
+        connect(&DeleteConfirm, &QTimer::timeout, main_, [&] {
+            auto* Dialog = main_->findChild<QDialog*>("hc.dialog.fileOperation"); if (!Dialog) return;
+            if (Clock.elapsed() > 15000) { DeleteConfirm.stop(); Dialog->reject(); return; }
+            auto* Permanent = Dialog->findChild<QRadioButton*>("hc.operation.permanent"); if (!Permanent) return;
+            Permanent->setChecked(true); auto* Accept = Dialog->findChild<QPushButton*>("hc.dialog.accept");
+            if (Accept && Accept->isEnabled()) { DeleteConfirmed = true; DeleteConfirm.stop(); Accept->click(); }
+        });
+        View->EnsureKeyboardFocusOnView(); DeleteConfirm.start();
+        QTest::keyClick(View->findChild<Qtitan::Grid*>(), Qt::Key_Delete); DeleteConfirm.stop(); QVERIFY(DeleteConfirmed);
+        std::string Deleted;
+        QTRY_VERIFY(([&] { for (const auto& Job : Bridge->FileJobs()->Scheduler().Snapshots()) if (!Prior.contains(Job.id_)) { Deleted = Job.id_; return true; } return false; })());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Bridge->FileJobs()->Scheduler().Snapshot(Deleted).Value().state_), 60000);
+        QCOMPARE(Bridge->FileJobs()->Scheduler().Snapshot(Deleted).Value().state_, JobState::Completed);
+        QCOMPARE(QDir(Source.path()).entryList({"entry0*.txt"}, QDir::Files).size(), Count - SelectedCount - 3);
+        QVERIFY(QFileInfo::exists(Source.filePath("entry05999.txt")));
+        qInfo() << "Large-folder operations:" << Count << "entries," << SelectedCount << "selected; select" << SelectMs << "ms, prompt" << PromptMs
+            << "ms; copy/move/rename/mkdir/new/delete/clipboard and stable function bar passed during watcher refresh";
+        Provider->hold_ = false; QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 30000);
+        Model->SetWatchEnabled(false);
+        // Explicit navigation must still reject operations on retained old rows.
+        Provider->hold_ = true; Model->Refresh(); QVERIFY(Model->IsLoading()); QVERIFY(!Model->CanUseSnapshot());
+        auto Rejected = Bridge->Dispatch("hc.file.delete", {{"deleteMode", "permanent"}, {"confirmed", true}}, "navigation-test", Model->index(1, 0));
+        QTRY_VERIFY(Rejected.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        QVERIFY(!Rejected.get().HasValue());
+        Provider->hold_ = false; QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 30000);
+    }
+
+    void todoBugActualTempFolderDeleteUi()
+    {
+        using namespace hc::operations;
+        const auto Names = qEnvironmentVariable("HC_TEST_ACTUAL_TEMP_DELETE_NAMES").split(';', Qt::SkipEmptyParts);
+        if (Names.isEmpty()) QSKIP("Explicit existing hc temp folder names are required");
+        QCOMPARE(Names.size(), 3); QCOMPARE(QSet<QString>(Names.begin(), Names.end()).size(), 3);
+        const auto Root = QDir::tempPath();
+        const auto Available = [&](const QString& Name) {
+            if (!Name.startsWith("hc") || Name.contains('/') || Name.contains('\\') || Name.contains(':')) return false;
+            const auto Path = QDir::toNativeSeparators(QDir(Root).filePath(Name));
+            const auto Attr = GetFileAttributesW(reinterpret_cast<LPCWSTR>(Path.utf16()));
+            if (Attr == INVALID_FILE_ATTRIBUTES || !(Attr & FILE_ATTRIBUTE_DIRECTORY) || (Attr & FILE_ATTRIBUTE_REPARSE_POINT)
+                || !QDir(Path).isEmpty()) return false;
+            const auto Handle = CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()), GENERIC_READ | DELETE, 0, nullptr,
+                OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            if (Handle == INVALID_HANDLE_VALUE) return false;
+            CloseHandle(Handle); return true;
+        };
+        for (const auto& Name : Names) QVERIFY2(Available(Name), qPrintable("Not an empty, unlocked hc folder: " + Name));
+        const auto Workspace = main_->CaptureWorkspace(); const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        auto* Panel = panels_.front(); Panel->SetSearch({}); Panel->ChangeCurrentPath(Root, {}); Panel->sig_NotifyPanelActivated();
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 120000);
+        QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile())); QVERIFY(View->SetListMode("one-line"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsPageLoading(), 120000);
+        auto* Grid = View->BaseView(); auto* Target = View->findChild<Qtitan::Grid*>(); QVERIFY(Target);
+        Grid->deselectAll(); View->EnsureKeyboardFocusOnView();
+        QElapsedTimer Clock; Clock.start(); int Marked = 0;
+        for (const auto& Name : Names) {
+            QModelIndex Source;
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) { Source = Model->index(Row, 0); break; }
+            QVERIFY(Source.isValid());
+            const auto* Proxy = qobject_cast<QAbstractProxyModel*>(Grid->model());
+            const auto Visible = Proxy ? Proxy->mapFromSource(Source) : Source;
+            Grid->setFocusedRowIndex(Grid->getRow(Visible).rowIndex());
+            QTest::keyClick(Target, Qt::Key_Space); ++Marked;
+            QTRY_COMPARE_WITH_TIMEOUT(View->CaptureSelection().size(), Marked, 5000);
+        }
+        const auto SelectMs = Clock.elapsed();
+        const auto SelectedNames = [&] {
+            QSet<QString> Result;
+            for (const auto& Index : View->SelectedSourceIndexes()) Result.insert(Model->GetName(Index));
+            return Result;
+        };
+        const QSet<QString> Expected(Names.begin(), Names.end()); QCOMPARE(SelectedNames(), Expected);
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        std::set<std::string> Prior; for (const auto& Job : Scheduler.Snapshots()) Prior.insert(Job.id_);
+        bool Confirmed = false, Safe = true; QTimer Confirm; Confirm.setInterval(10); Clock.restart();
+        connect(&Confirm, &QTimer::timeout, main_, [&] {
+            auto* Dialog = main_->findChild<QDialog*>("hc.dialog.fileOperation"); if (!Dialog) return;
+            Safe = SelectedNames() == Expected;
+            for (const auto& Name : Names) Safe = Safe && Available(Name);
+            if (!Safe || Clock.elapsed() > 15000) { Confirm.stop(); Dialog->reject(); return; }
+            auto* Permanent = Dialog->findChild<QRadioButton*>("hc.operation.permanent"); if (!Permanent) return;
+            Permanent->setChecked(true); auto* Accept = Dialog->findChild<QPushButton*>("hc.dialog.accept");
+            if (Accept && Accept->isEnabled()) { Confirmed = true; Confirm.stop(); Accept->click(); }
+        });
+        Confirm.start(); QTest::keyClick(Target, Qt::Key_Delete); Confirm.stop(); QVERIFY(Safe && Confirmed);
+        std::string JobId;
+        QTRY_VERIFY(([&] { for (const auto& Job : Scheduler.Snapshots()) if (!Prior.contains(Job.id_)) { JobId = Job.id_; return true; } return false; })());
+        QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(JobId).Value().state_), 30000);
+        const auto Done = Scheduler.Snapshot(JobId).Value(); QCOMPARE(Done.state_, JobState::Completed);
+        QCOMPARE(Done.failedItems_, 0ULL); QCOMPARE(Done.skippedItems_, 0ULL);
+        for (const auto& Name : Names) QVERIFY2(!QFileInfo::exists(QDir(Root).filePath(Name)), qPrintable(Name));
+        qInfo() << "Actual TEMP deletion:" << Root << Names << "selection" << SelectMs << "ms, Delete/confirm/completion" << Clock.elapsed() << "ms;" << Model->rowCount() << "rows";
+    }
+
     void itemSelectionUi()
     {
         auto& Settings = hc::settings::AppSettings();

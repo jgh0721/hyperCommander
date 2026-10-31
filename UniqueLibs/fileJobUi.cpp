@@ -1471,8 +1471,17 @@ bool FileJobUi::eventFilter(QObject* Object, QEvent* Event)
     if (Object == dialog_ && Event->type() == QEvent::Hide && interaction_ && !passwordDialogOpen_) { interaction_->Dismiss(); interaction_.clear(); }
     if (Object == dialog_ && Event->type() == QEvent::Resize && progressFooter_ && metricsLayout_) {
         layoutProgressFooter();
-        const auto Snapshot = scheduler_.Snapshot(selectedId());
-        if (Snapshot.HasValue()) updateProgressView(Snapshot.Value());
+        // A queued child show can resize the dialog while that child's
+        // QWidget::setVisible is still on the stack. Rebuilding phase labels
+        // here would delete the widget currently being shown.
+        if (!progressResizePending_) {
+            progressResizePending_ = true;
+            QTimer::singleShot(0, this, [this] {
+                progressResizePending_ = false;
+                const auto Snapshot = scheduler_.Snapshot(selectedId());
+                if (Snapshot.HasValue() && dialog_->isVisible()) updateProgressView(Snapshot.Value());
+            });
+        }
     }
     if (Object == main_ && Event->type() == QEvent::Close && !pending_.empty())
     {

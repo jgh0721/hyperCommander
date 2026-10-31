@@ -88,6 +88,8 @@ public:
     void SetSelectionInputActive(bool Active);
     void ApplyRefreshSettings();
     bool IsAutomaticRefresh() const { return automaticRefresh_; }
+    // An automatic rescan retains the published location and entry snapshot.
+    bool CanUseSnapshot() const { return !loading_ || automaticRefresh_; }
     void NotifyNetworkChange();
     void SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason, bool Pending = false);
     hc::storage::Locator WorkspaceLocation() const;
