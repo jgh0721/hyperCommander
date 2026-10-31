@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 4.2)
-set(HC_PRODUCT_VERSION "2026.10.29.1")
+set(HC_PRODUCT_VERSION "2026.10.31.1")
 project(HyperCommander VERSION ${HC_PRODUCT_VERSION} LANGUAGES CXX RC)
 
 include(cmake/build.version.cmake)
