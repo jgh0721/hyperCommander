@@ -934,7 +934,7 @@ private slots:
         QTRY_VERIFY(Window.IsIdle()); auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text);
         Window.Handle({{"action", "replaceText"}, {"documentId", Id}, {"text", "edited\r\ntext\r\n"}});
         const auto Content = Text->Content(); const auto Before = Read(Path);
-        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 5);
+        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 6);
           Dialog.findChild<QSpinBox*>("documentViews/textView/tabWidth")->setValue(7); Dialog.reject(); }
         QCOMPARE(Read(Path), Before);
         DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>());
