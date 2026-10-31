@@ -1655,7 +1655,7 @@ nsHC::TySpFileSource CGridView::SelectRowOnCurrentTab( const QModelIndex& SrcInd
         view_->selectRow(Row.rowIndex(), Qtitan::Invert);
         IsSelected = view_->modelController()->isRowSelected(Row);
     }
-    if (IsSelected && Info && Info->Name_ != ".." && (Info->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)
+    if (IsSelected && Info && Info->Name_ != ".." && (Info->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && !Info->directorySize_.has_value()
         && hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeOnSpace"].toBool(true))
         if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->RequestDirectorySizes({ModelIndex});
     

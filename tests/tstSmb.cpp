@@ -5692,8 +5692,8 @@ private slots:
         auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View); auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
         const auto IndexFor = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
         const auto Item = [&](const QString& Name) { return Model->GetFileInfo(IndexFor(Name)); };
-        const auto Focus = [&] {
-            View->RestoreSelection({}, hc::workspace::SelectionKey(*Item("alpha")->storageEntry_));
+        const auto Focus = [&](const QString& Name = "alpha") {
+            View->RestoreSelection({}, hc::workspace::SelectionKey(*Item(Name)->storageEntry_));
             main_->activateWindow(); SetForegroundWindow(reinterpret_cast<HWND>(main_->winId()));
             Panel->sig_NotifyPanelActivated(); Grid->setFocus(); QCoreApplication::processEvents();
         };
@@ -5709,6 +5709,18 @@ private slots:
         QTest::keyClick(Grid, Qt::Key_Return, Qt::AltModifier | Qt::ShiftModifier);
         QTRY_VERIFY_WITH_TIMEOUT(Item("empty")->directorySize_.has_value() && Item("beta")->directorySize_.has_value(), 10000);
         QCOMPARE(*Item("empty")->directorySize_, 0u); QCOMPARE(*Item("beta")->directorySize_, 13u); QCOMPARE(Model->GetTotalSize(), 21u);
+        // Space marks reuse a measured value, including a measured zero. They
+        // must neither clear totals nor publish a new calculation result.
+        for (const auto& Name : {QString("alpha"), QString("empty")}) {
+            Focus(Name); const auto Bytes = *Item(Name)->directorySize_; const auto Total = Model->GetTotalSize();
+            QSignalSpy Recalculated(Model, &CFSModel::DirectorySizesChanged);
+            QTest::keyClick(Grid, Qt::Key_Space);
+            QVERIFY(View->CaptureSelection().contains(hc::workspace::SelectionKey(*Item(Name)->storageEntry_)));
+            QCOMPARE(Model->PendingDirectorySizes(), 0); QVERIFY(Item(Name)->directorySize_.has_value());
+            QCOMPARE(*Item(Name)->directorySize_, Bytes); QCOMPARE(Model->GetTotalSize(), Total);
+            QTest::qWait(80); QCOMPARE(Recalculated.count(), 0); QCOMPARE(Model->PendingDirectorySizes(), 0);
+        }
+        Focus();
         { QFile File(Directory.filePath("beta/three")); QVERIFY(File.open(QIODevice::WriteOnly | QIODevice::Truncate)); QCOMPARE(File.write("12345678901234"), 14); }
         QTest::keyClick(Grid, Qt::Key_Return, Qt::AltModifier | Qt::ShiftModifier);
         QTRY_VERIFY(Item("beta")->directorySize_ && *Item("beta")->directorySize_ == 14u); QCOMPARE(Model->GetTotalSize(), 22u);
