@@ -414,6 +414,7 @@ DEFINE_HC_COMMAND( QMainUI, NavigateFavorites )
     QWidget* Anchor = Pane->GetFocusView(Pane->CurrentTabIndex());
     if (!Anchor) Anchor = Pane;
 
+    const QPointer<QWidget> PreviousInput = QApplication::focusWidget();
     QMenu Menu(this);
     Menu.setObjectName("hc.directoryHotList");
     StFavoriteDirMgr->ConstructDirMenu(&Menu);
@@ -425,7 +426,8 @@ DEFINE_HC_COMMAND( QMainUI, NavigateFavorites )
     Position.setX(std::clamp(Position.x(), Available.left(), std::max(Available.left(), Available.right() - Size.width() + 1)));
     Position.setY(std::clamp(Position.y(), Available.top(), std::max(Available.top(), Available.bottom() - Size.height() + 1)));
     QTimer::singleShot(0, &Menu, [&Menu] {
-        Menu.setFocus();
+        // Keep the file grid's logical keyboard target while the popup owns input.
+        Menu.setFocus(Qt::PopupFocusReason);
         for (auto* Action : Menu.actions()) {
             if (Action->isVisible() && Action->isEnabled() && !Action->isSeparator()) {
                 Menu.setActiveAction(Action);
@@ -433,7 +435,19 @@ DEFINE_HC_COMMAND( QMainUI, NavigateFavorites )
             }
         }
     });
-    Menu.exec(Position);
+    if (!Menu.exec(Position)) {
+        // Qt restores its focus widget on Escape, but the native receiver can
+        // remain on the main HWND. Wait until the popup has been destroyed.
+        QTimer::singleShot(0, this, [this, PreviousInput] {
+            if (!PreviousInput || !PreviousInput->isVisible() || !PreviousInput->isEnabled()
+                || QApplication::activeModalWidget() || QApplication::activePopupWidget()
+                || GetForegroundWindow() != reinterpret_cast<HWND>(winId())) return;
+            const auto Current = QApplication::focusWidget();
+            if (Current && Current != PreviousInput) return; // Preserve input chosen by an outside click.
+            PreviousInput->setFocus(Qt::PopupFocusReason);
+            SetFocus(reinterpret_cast<HWND>(PreviousInput->effectiveWinId()));
+        });
+    }
 }
 
 DEFINE_HC_COMMAND_EX( QMainUI, NavigateDrive )

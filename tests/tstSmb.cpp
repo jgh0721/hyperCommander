@@ -299,7 +299,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"createdFolderFocusUi", "fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"createdFolderFocusUi", "fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -4789,6 +4789,68 @@ private slots:
                 QVERIFY(TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand(
                     Attempt ? "cm_DirectoryHotList" : "hc.navigate.favorites"));
                 QTRY_VERIFY(Seen);
+            }
+        }
+    }
+    void directoryHotListFocusUi()
+    {
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto* Name : {"first.txt", "second.txt", "third.txt"}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly));
+        }
+        const auto Root = reinterpret_cast<HWND>(main_->winId());
+        const auto SendKey = [](WORD Key) {
+            INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
+            Keys[0].ki.wVk = Keys[1].ki.wVk = Key;
+            // Navigation keys use the extended-key flag, otherwise Qt sees a keypad shortcut.
+            Keys[0].ki.dwFlags = Key == VK_DOWN ? KEYEVENTF_EXTENDEDKEY : 0;
+            Keys[1].ki.dwFlags = Keys[0].ki.dwFlags | KEYEVENTF_KEYUP;
+            return SendInput(2, Keys, sizeof(INPUT)) == 2;
+        };
+        for (auto* Panel : panels_) {
+            hc::workspace::TabState Tab; Tab.id_ = "favorites-focus";
+            Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+            hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+            auto* Model = model(Panel); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 4, 10000);
+            auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+            main_->activateWindow(); QVERIFY(ActivateTestWindow(Root));
+            Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+            QPointer<QWidget> Input = QApplication::focusWidget(); QVERIFY(Input);
+            QVERIFY(View->isAncestorOf(Input));
+            for (int Cycle = 0; Cycle < 2; ++Cycle) {
+                View->BaseView()->setFocusedRowIndex(0);
+                const auto Focus = View->CaptureFocus(); const auto Selection = View->CaptureSelection();
+                bool Cancelled = false;
+                QTimer Cancel; Cancel.setInterval(20);
+                connect(&Cancel, &QTimer::timeout, main_, [&] {
+                    auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                    if (!Menu || Menu->objectName() != "hc.directoryHotList") return;
+                    Cancel.stop(); Cancelled = true;
+                    QVERIFY(SendKey(VK_ESCAPE));
+                });
+                QTimer Timeout; Timeout.setSingleShot(true);
+                connect(&Timeout, &QTimer::timeout, main_, [] {
+                    if (auto* Popup = QApplication::activePopupWidget()) Popup->close();
+                });
+                Cancel.start(); Timeout.start(3000);
+                // Native input exercises the same shortcut route as the keyboard.
+                INPUT Open[4]{};
+                for (auto& Key : Open) Key.type = INPUT_KEYBOARD;
+                Open[0].ki.wVk = Open[3].ki.wVk = VK_CONTROL;
+                Open[1].ki.wVk = Open[2].ki.wVk = 'G';
+                Open[2].ki.dwFlags = Open[3].ki.dwFlags = KEYEVENTF_KEYUP;
+                QCOMPARE(SendInput(4, Open, sizeof(INPUT)), UINT(4));
+                QTRY_VERIFY_WITH_TIMEOUT(Cancelled, 4000);
+                Cancel.stop(); Timeout.stop();
+                QTRY_VERIFY(!QApplication::activePopupWidget());
+                QTRY_COMPARE(QApplication::focusWidget(), Input.data());
+                QTRY_COMPARE(GetFocus(), reinterpret_cast<HWND>(Input->effectiveWinId()));
+                QCOMPARE(View->CaptureFocus(), Focus); QCOMPARE(View->CaptureSelection(), Selection);
+                QCOMPARE(GetForegroundWindow(), Root);
+                QVERIFY(SendKey(VK_DOWN));
+                QTRY_COMPARE(View->BaseView()->focusedRowIndex(), 1);
             }
         }
     }
