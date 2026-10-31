@@ -107,6 +107,7 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/imageBook.cpp ../UniqueLibs/document/imageBook.hpp
     ../UniqueLibs/document/imageFramePlayer.cpp ../UniqueLibs/document/imageFramePlayer.hpp
     ../UniqueLibs/document/imageReadingView.cpp ../UniqueLibs/document/imageReadingView.hpp
+    ../UniqueLibs/document/imageReadingNavigator.cpp ../UniqueLibs/document/imageReadingNavigator.hpp
     ../UniqueLibs/document/imageFullscreen.cpp ../UniqueLibs/document/imageFullscreen.hpp
     ../UniqueLibs/document/documentTextCodec.cpp ../UniqueLibs/document/documentTextCodec.hpp
     ../UniqueLibs/document/documentViewPane.cpp ../UniqueLibs/document/documentViewPane.hpp

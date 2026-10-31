@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "imageReadingView.hpp"
+#include "imageReadingNavigator.hpp"
 #include <QAction>
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "imageAsync.hpp"
@@ -131,9 +132,11 @@ ImageReadingView::ImageReadingView(QWidget *Parent) : QAbstractScrollArea(Parent
     saveTimer_.setSingleShot(true);
     saveTimer_.setInterval(600);
     connect(&saveTimer_, &QTimer::timeout, this, &ImageReadingView::persist);
+    navigator_ = new ImageReadingNavigator(this);
 }
 ImageReadingView::~ImageReadingView()
 {
+    delete navigator_;
     SavePosition();
     Cancel();
 }
@@ -827,6 +830,20 @@ void ImageReadingView::GoTo(int Index, double Relative)
         setScrollPosition(qBound(0., Relative, 1.) * extent_);
     changed();
 }
+void ImageReadingView::SeekProgress(int Value)
+{
+    if (!book_ || book_->pages_.isEmpty() || volumePending_) return;
+    if (mode_ == Webtoon)
+        verticalScrollBar()->setValue(qBound(0, Value, verticalScrollBar()->maximum()));
+    else
+        GoTo(qBound(0, Value, int(book_->pages_.size()) - 1));
+}
+QStringList ImageReadingView::PageNames() const
+{
+    QStringList Names;
+    if (book_) for (const auto &Page : book_->pages_) Names << Page.name_;
+    return Names;
+}
 void ImageReadingView::Move(int Direction, bool OnePage)
 {
     if (!book_ || volumePending_)
@@ -889,12 +906,13 @@ void ImageReadingView::OpenVolume(int Direction)
     if (!book_ || volumePending_)
         return;
     volumePending_ = true;
+    emit Changed();
     const auto Path = book_->path_;
     const auto Generation = bookGeneration_;
     const auto Stop = bookStop_;
     auto *Watcher = new QFutureWatcher<QStringList>(this);
     connect(Watcher, &QFutureWatcherBase::finished, this,
-            [this, Watcher, Generation]
+            [this, Watcher, Generation, Direction]
             {
                 auto Candidates = Watcher->result();
                 DeleteCompletedImageWork(Watcher);
@@ -911,10 +929,9 @@ void ImageReadingView::OpenVolume(int Direction)
                 if (Candidates.size() > 1)
                 {
                     bool Ok = false;
-                    Path = hc::ui::InputDialog::getItem(this, tr("다음 권 선택"), tr("같은 권의 후보가 여러 개입니다."),
+                    Path = hc::ui::InputDialog::getItem(this, Direction > 0 ? tr("다음 권 선택") : tr("이전 권 선택"), tr("같은 권의 후보가 여러 개입니다."),
                                                  Candidates, 0, false, &Ok);
-                    if (!Ok)
-                        return;
+                    if (!Ok) { emit Changed(); return; }
                 }
                 openVolumePath(Path);
             });
@@ -1121,6 +1138,7 @@ QJsonObject ImageReadingView::State() const
             {"filter", filter_},
             {"zoom", zoom_},
             {"automaticNext", automaticNext_},
+            {"openingVolume", volumePending_},
             {"fit", fit_},
             {"gap", gap_},
             {"brightness", brightness_},

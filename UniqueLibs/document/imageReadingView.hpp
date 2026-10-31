@@ -13,6 +13,7 @@ class QPainter;
 namespace hc::document
 {
 class ImageFramePlayer;
+class ImageReadingNavigator;
 class ImageReadingView final : public QAbstractScrollArea
 {
     Q_OBJECT
@@ -43,6 +44,8 @@ class ImageReadingView final : public QAbstractScrollArea
     void Move(int Direction, bool OnePage = false);
     void GoTo(int Index, double Relative = 0);
     void OpenVolume(int Direction);
+    void SeekProgress(int Value);
+    QStringList PageNames() const;
     // Registered navigation commands; the key handling below keeps the same defaults.
     bool RunCommand(const QString& Id);
     void Cancel();
@@ -142,6 +145,7 @@ class ImageReadingView final : public QAbstractScrollArea
     double relative_ = 0;
     QTimer saveTimer_;
     ImageFramePlayer *animation_ = nullptr;
+    ImageReadingNavigator *navigator_ = nullptr;
     int animationPage_ = -1;
     bool animationPending_ = false;
     std::uint64_t animationGeneration_ = 0;

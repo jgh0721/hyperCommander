@@ -9,6 +9,7 @@
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "documentThemeAdapter.hpp"
 #include "imageReadingView.hpp"
+#include "imageReadingNavigator.hpp"
 #include "imageFramePlayer.hpp"
 #include "documentTextCodec.hpp"
 #include "text/QTextView.h"
@@ -263,6 +264,12 @@ namespace hc::document
             for(const auto& Item:{std::pair{"grayscale",tr("회색조")},std::pair{"invert",tr("색 반전")}}){auto* A=toolbar_->addAction(Item.second);A->setCheckable(true);connect(A,&QAction::toggled,reading_,[this,Name=QString(Item.first)](bool On){reading_->SetAdjustment(Name,On?1:0);});}
             for(const auto& Item:{std::pair{"brightness",tr("밝기")},std::pair{"contrast",tr("대비")},std::pair{"gamma",tr("감마")},std::pair{"sharpness",tr("선명화")}}){auto* A=toolbar_->addAction(Item.second);connect(A,&QAction::triggered,reading_,[this,Name=QString(Item.first),Label=Item.second]{bool Ok=false;const double V=hc::ui::InputDialog::getDouble(this,Label,Label,Name=="contrast"||Name=="gamma"?1:0,Name=="brightness"?-1:Name=="gamma"||Name=="contrast"?.1:0,Name=="gamma"?5:3,2,&Ok);if(Ok)reading_->SetAdjustment(Name,V);});}
             auto* ReadingOptions=new QMenu(tr("읽기 설정"),toolbar_);ReadingOptions->setObjectName("imageReadingOptions");
+            auto* Navigator=reading_->findChild<ImageReadingNavigator*>();
+            Navigator->SetOptionsMenu(ReadingOptions);
+            connect(reading_,&ImageReadingView::Changed,this,[this,Mode]{
+                const QSignalBlocker ModeBlock(Mode);Mode->setCurrentIndex(reading_->State()["mode"].toInt());
+                if(auto* Fit=findChild<QComboBox*>("imageReadingFit")){const QSignalBlocker FitBlock(Fit);Fit->setCurrentIndex(reading_->State()["fit"].toInt());}
+            });
             for(auto* A:toolbar_->actions())if(A->objectName().startsWith("imageFrame")){toolbar_->removeAction(A);ReadingOptions->addAction(A);}
             const auto AllActions=toolbar_->actions();for(int I=int(ReadingOptionsStart)-2;I<AllActions.size();++I){toolbar_->removeAction(AllActions[I]);ReadingOptions->addAction(AllActions[I]);}
             auto* OptionsButton=new QToolButton(toolbar_);OptionsButton->setText(tr("읽기 설정"));OptionsButton->setPopupMode(QToolButton::InstantPopup);OptionsButton->setMenu(ReadingOptions);toolbar_->addWidget(OptionsButton);

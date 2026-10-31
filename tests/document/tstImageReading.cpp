@@ -9,6 +9,12 @@
 #include <QTemporaryDir>
 #include <QToolBar>
 #include <QToolButton>
+#include <QSlider>
+#include <QLabel>
+#include <QListWidget>
+#include <QVBoxLayout>
+#include <QScreen>
+#include <iostream>
 #include <QScrollBar>
 #include <QImageReader>
 #include <QDataStream>
@@ -32,6 +38,7 @@
 #include "UniqueLibs/document/imageZipRecovery.hpp"
 #include "UniqueLibs/document/imagePartialDecoder.hpp"
 #include "UniqueLibs/document/imageReadingView.hpp"
+#include "UniqueLibs/document/imageReadingNavigator.hpp"
 #include "UniqueLibs/document/imageFullscreen.hpp"
 #include "UniqueLibs/document/imageFramePlayer.hpp"
 #include "core/AppSettings.h"
@@ -121,12 +128,16 @@ QJsonObject Document(const DocumentWorkspaceWidget &W)
 class ImageReadingTests : public QObject
 {
     Q_OBJECT
+    QTemporaryDir settings_;
   private slots:
     void initTestCase()
     {
+        const auto ExpectedDpr = qEnvironmentVariable("HC_UI_EXPECT_DPR");
+        if (!ExpectedDpr.isEmpty()) QCOMPARE(qApp->primaryScreen()->devicePixelRatio(), ExpectedDpr.toDouble());
+        qInfo() << "Image navigator UI DPR:" << qApp->primaryScreen()->devicePixelRatio();
         QCoreApplication::instance()->setProperty("documentViewsConfigDir",
-                                                  qEnvironmentVariable("TEMP") + "/image-reading-config");
-        QDir().mkpath(qEnvironmentVariable("TEMP") + "/image-reading-config");
+                                                  settings_.path());
+        QVERIFY(settings_.isValid());
     }
     void contentModeDistributionsAndShortCuts()
     {
@@ -980,6 +991,8 @@ class ImageReadingTests : public QObject
         const int Start=View.verticalScrollBar()->value();
         for(int Offset:{0,11,47,133,301,503,797,1201}){
             View.verticalScrollBar()->setValue(Start+Offset);
+            // This test checks image tile seams, independently of reading controls.
+            View.findChild<ImageReadingNavigator*>()->hide();
             const auto Capture=View.viewport()->grab().toImage();
             const int X=Capture.width()/2;
             for(int Y=0;Y<Capture.height();++Y)
@@ -1217,6 +1230,109 @@ class ImageReadingTests : public QObject
         const auto Artifacts = qEnvironmentVariable("HC_IMAGE_TEST_ARTIFACTS");
         if (!Artifacts.isEmpty())
             QVERIFY(W.grab().save(Artifacts + "/comic-view.png"));
+    }
+    void readingNavigatorInWindowAndFullscreen_data()
+    {
+        QTest::addColumn<bool>("Fullscreen"); QTest::addColumn<bool>("Webtoon");
+        QTest::newRow("comic-window") << false << false;
+        QTest::newRow("comic-fullscreen") << true << false;
+        QTest::newRow("webtoon-window") << false << true;
+        QTest::newRow("webtoon-fullscreen") << true << true;
+    }
+    void readingNavigatorInWindowAndFullscreen()
+    {
+        QFETCH(bool, Fullscreen); QFETCH(bool, Webtoon);
+        const auto Private = qApp->property("privateReading"); qApp->setProperty("privateReading", true);
+        const auto Cursor = QCursor::pos();
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("privateReading", Private); QCursor::setPos(Cursor); });
+        QTemporaryDir Root; Fixture(Root.filePath("book 1"), 6); Fixture(Root.filePath("book 2"), 4);
+        auto Book = OpenImageBook(Root.filePath("book 1")); QVERIFY(Book.HasValue());
+        QWidget W; auto *Layout = new QVBoxLayout(&W); Layout->setContentsMargins(0, 0, 0, 0);
+        auto *Reader = new ImageReadingView(&W); Layout->addWidget(Reader); Reader->SetPrivate(true);
+        Reader->Load(Book.Value(), Picture()); Reader->SetCover(false); Reader->SetAutomaticNext(false);
+        Reader->SetMode(Webtoon ? ImageReadingView::Webtoon : ImageReadingView::Comic);
+        W.resize(1000, 700); W.show(); W.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&W));
+        ImageFullscreen F(&W, [Reader] { return Reader; }); if (Fullscreen) F.Enter();
+        auto *Nav = Reader->findChild<ImageReadingNavigator *>(); QVERIFY(Nav); QTRY_VERIFY(Nav->isVisible());
+        auto *Slider = Nav->findChild<QSlider *>("imageNavigatorProgress"); QVERIFY(Slider);
+        auto *Pin = Nav->findChild<QToolButton *>("imageNavigatorPin"); QVERIFY(Pin); Pin->setChecked(true);
+        for (const auto *Name : {"imageNavigatorPreviousVolume", "imageNavigatorPrevious", "imageNavigatorNext", "imageNavigatorNextVolume"}) {
+            auto *Button = Nav->findChild<QToolButton *>(Name); QVERIFY(Button); QVERIFY(Button->isVisible());
+            QVERIFY(Button->text().isEmpty()); QVERIFY(!Button->icon().isNull()); QVERIFY(!Button->accessibleName().isEmpty());
+        }
+        QVERIFY(Reader->viewport()->rect().contains(Nav->geometry()));
+        QTest::keyClick(Slider, Qt::Key_End);
+        if (Webtoon) QTRY_COMPARE(Reader->verticalScrollBar()->value(), Reader->verticalScrollBar()->maximum());
+        else QTRY_COMPARE(Reader->State()["page"].toInt(), 5);
+        QTest::keyClick(Slider, Qt::Key_Home); QTRY_COMPARE(Reader->State()["page"].toInt(), 0);
+        QTest::mouseClick(Nav->findChild<QToolButton *>("imageNavigatorNext"), Qt::LeftButton);
+        if (Webtoon) QVERIFY(Reader->verticalScrollBar()->value() > 0);
+        else QTRY_VERIFY(Reader->State()["page"].toInt() > 0);
+        QTest::mouseClick(Nav->findChild<QToolButton *>("imageNavigatorPrevious"), Qt::LeftButton);
+        QTRY_COMPARE(Reader->State()["page"].toInt(), 0);
+        QTest::mouseClick(Nav->findChild<QToolButton *>("imageNavigatorNextVolume"), Qt::LeftButton);
+        QTRY_COMPARE_WITH_TIMEOUT(Reader->State()["book"].toString(), Root.filePath("book 2"), 15000);
+        QTRY_VERIFY(!Reader->State()["openingVolume"].toBool());
+        QTest::mouseClick(Nav->findChild<QToolButton *>("imageNavigatorPreviousVolume"), Qt::LeftButton);
+        QTRY_COMPARE_WITH_TIMEOUT(Reader->State()["book"].toString(), Root.filePath("book 1"), 15000);
+        QTRY_VERIFY(!Reader->State()["openingVolume"].toBool());
+        QTest::mouseClick(Nav->findChild<QToolButton *>("imageNavigatorPreviousVolume"), Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!Nav->findChild<QLabel *>("imageNavigatorPosition")->toolTip().isEmpty(), 15000);
+        Reader->GoTo(0);
+        auto *Modes = Nav->findChild<QComboBox *>("imageNavigatorMode"); QVERIFY(Modes);
+        Modes->setCurrentIndex(Webtoon ? 0 : 1); emit Modes->activated(Modes->currentIndex());
+        QCOMPARE(Reader->State()["mode"].toInt(), Webtoon ? int(ImageReadingView::Comic) : int(ImageReadingView::Webtoon));
+        Reader->SetMode(Webtoon ? ImageReadingView::Webtoon : ImageReadingView::Comic);
+        Reader->setFocus(); QCursor::setPos(Reader->viewport()->mapToGlobal(QPoint(30, 30)));
+        Pin->setChecked(false); Reader->setFocus();
+        QTRY_VERIFY_WITH_TIMEOUT(!Nav->isVisible(), 5000);
+        QTest::keyClick(Reader, Qt::Key_F6); QTRY_VERIFY(Nav->isVisible()); QTRY_VERIFY(Slider->hasFocus());
+        const auto Artifacts = qEnvironmentVariable("HC_IMAGE_TEST_ARTIFACTS");
+        if (!Artifacts.isEmpty()) QVERIFY(W.grab().save(Artifacts + "/navigator-" + QTest::currentDataTag() + ".png"));
+        QTest::keyClick(Slider, Qt::Key_Escape); QTRY_VERIFY(Reader->hasFocus());
+        if (Fullscreen) { F.Leave(); QTRY_VERIFY(Nav->isVisible()); }
+        if (!Fullscreen) {
+            W.resize(360, 500); QTRY_VERIFY(Reader->viewport()->rect().contains(Nav->geometry()));
+            for (const auto *Name : {"imageNavigatorPreviousVolume", "imageNavigatorPrevious", "imageNavigatorNext", "imageNavigatorNextVolume"}) {
+                auto *Button = Nav->findChild<QToolButton *>(Name); QVERIFY(Nav->rect().contains(Button->geometry()));
+            }
+            if (!Artifacts.isEmpty()) QVERIFY(W.grab().save(Artifacts + "/navigator-narrow-" + QTest::currentDataTag() + ".png"));
+        }
+        Reader->SetMode(ImageReadingView::Single); QTRY_VERIFY(!Nav->isVisible());
+    }
+    void readingNavigatorPaneControls()
+    {
+        const auto Private = qApp->property("privateReading"); qApp->setProperty("privateReading", true);
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("privateReading", Private); });
+        QTemporaryDir Root; Fixture(Root.filePath("book"), 4);
+        DocumentWorkspaceWidget W(Root.filePath("recovery")); W.resize(1000, 700); W.show(); W.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&W));
+        W.Handle({{"action", "open"}, {"path", Root.filePath("book")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"] == "ready", 20000);
+        auto *Pane = W.findChild<DocumentViewPane *>(); QVERIFY(Pane);
+        auto *Reader = Pane->findChild<ImageReadingView *>(); QVERIFY(Reader);
+        auto *Nav = Reader->findChild<ImageReadingNavigator *>(); QVERIFY(Nav); QTRY_VERIFY(Nav->isVisible());
+        Nav->findChild<QToolButton *>("imageNavigatorPin")->setChecked(true);
+        auto *Modes = Nav->findChild<QComboBox *>("imageNavigatorMode");
+        Modes->setCurrentIndex(1); emit Modes->activated(1);
+        QCOMPARE(Reader->State()["mode"].toInt(), int(ImageReadingView::Webtoon));
+        QCOMPARE(Pane->findChild<QComboBox *>("imageReadingMode")->currentIndex(), 2);
+        Modes->setCurrentIndex(0); emit Modes->activated(0);
+        auto *Fit = Nav->findChild<QComboBox *>("imageNavigatorFit"); Fit->setCurrentIndex(3); emit Fit->activated(3);
+        QCOMPARE(Reader->State()["fit"].toInt(), 3);
+        QCOMPARE(Pane->findChild<QComboBox *>("imageReadingFit")->currentIndex(), 3);
+        QTest::mouseClick(Nav->findChild<QToolButton *>("imageNavigatorZoomIn"), Qt::LeftButton);
+        QVERIFY(Reader->State()["zoom"].toDouble() > 1);
+        QCOMPARE(Nav->findChild<QToolButton *>("imageNavigatorMore")->menu(), Pane->findChild<QMenu *>("imageReadingOptions"));
+        bool Selected = false;
+        QTimer::singleShot(100, &W, [&] {
+            auto *Popup = QApplication::activePopupWidget();
+            auto *List = Popup ? Popup->findChild<QListWidget *>() : nullptr;
+            if (List) { List->setCurrentRow(2); emit List->itemActivated(List->currentItem()); Selected = true; }
+            else if (Popup) Popup->close();
+        });
+        QTest::mouseClick(Nav->findChild<QToolButton *>("imageNavigatorPages"), Qt::LeftButton);
+        QVERIFY(Selected); QTRY_COMPARE(Reader->State()["page"].toInt(), 2);
     }
     void fullscreenKeepsWorkspaceChromeHidden_data()
     {
@@ -1620,5 +1736,12 @@ class ImageReadingTests : public QObject
         W.Handle({{"action", "cancel"}, {"documentId", Id}});
     }
 };
-QTEST_MAIN(ImageReadingTests)
+int main(int Argc, char **Argv)
+{
+    QApplication App(Argc, Argv);
+    if (App.arguments().contains("--probe-dpr")) {
+        std::cout << App.primaryScreen()->devicePixelRatio() << std::endl; return 0;
+    }
+    ImageReadingTests Tests; return QTest::qExec(&Tests, Argc, Argv);
+}
 #include "tstImageReading.moc"

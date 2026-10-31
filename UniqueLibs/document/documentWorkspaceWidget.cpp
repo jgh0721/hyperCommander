@@ -447,6 +447,7 @@ namespace hc::document
             if (Scope == "epub-edit") return EpubEditing;
             if (Scope == "epub-edit.tree") return EpubEditing && Within([](QWidget* Widget) { return Widget->objectName() == "epubResourceTree"; });
             if (Scope == "epub-edit.source") return EpubEditing && InText;
+            if (Id == "image.fullscreen") return Tab && !Tab->loading_ && Tab->pane_->ViewId() == "image";
             if (Scope == "image" || Scope == "image.comic" || Scope == "pdf") return Tab && !Tab->loading_ && Tab->pane_->isAncestorOf(Focus) && !qobject_cast<QLineEdit*>(Focus)
                 && !qobject_cast<QAbstractSpinBox*>(Focus) && !qobject_cast<QComboBox*>(Focus) && Tab->pane_->CanRunViewCommand(Id);
             return true;

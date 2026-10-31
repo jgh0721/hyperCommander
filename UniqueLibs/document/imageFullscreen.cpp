@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "imageFullscreen.hpp"
 #include "imageReadingView.hpp"
+#include "imageReadingNavigator.hpp"
 #include "core/AppSettings.h"
 #include <QApplication>
 #include <QAction>
@@ -299,6 +300,16 @@ void ImageFullscreen::timeout()
         return;
     auto *Focus = QApplication::focusWidget();
     auto *Hover = QApplication::widgetAt(QCursor::pos());
+    auto *Reader = reader_ ? reader_() : nullptr;
+    auto *Navigator = Reader ? Reader->findChild<QWidget *>("imageReadingNavigator") : nullptr;
+    if (Navigator && Navigator->isVisible() &&
+        ((Focus && (Focus == Navigator || Navigator->isAncestorOf(Focus))) ||
+         (Hover && (Hover == Navigator || Navigator->isAncestorOf(Hover)))))
+    {
+        workspace_->unsetCursor();
+        idle_.start();
+        return;
+    }
     if (QApplication::activePopupWidget() || QApplication::activeModalWidget() ||
         QApplication::mouseButtons() != Qt::NoButton || (Focus && (Focus == top_ || top_->isAncestorOf(Focus))) ||
         (Hover && (Hover == top_ || top_->isAncestorOf(Hover) || Hover == bottom_)))
@@ -330,6 +341,11 @@ bool ImageFullscreen::eventFilter(QObject *Object, QEvent *Event)
     if (Event->type() == QEvent::KeyPress)
     {
         auto *Key = static_cast<QKeyEvent *>(Event);
+        auto *Reader = reader_ ? reader_() : nullptr;
+        auto *Navigator = Reader ? Reader->findChild<ImageReadingNavigator *>() : nullptr;
+        // Escape first returns keyboard focus from the navigator to the page.
+        if (Key->key() == Qt::Key_Escape && Navigator && Navigator->isAncestorOf(Widget))
+            return false;
         if (Key->key() == Qt::Key_Escape && !Key->isAutoRepeat() && !QApplication::activePopupWidget() &&
             !QApplication::activeModalWidget())
         {
@@ -338,6 +354,16 @@ bool ImageFullscreen::eventFilter(QObject *Object, QEvent *Event)
         }
         if (Key->key() == Qt::Key_F6 || Key->key() == Qt::Key_Tab)
         {
+            if (Key->key() == Qt::Key_F6)
+                if (auto *Reader = reader_ ? reader_() : nullptr; Reader && Reader->isVisible())
+                    if (auto *Navigator = Reader->findChild<ImageReadingNavigator *>();
+                        Navigator && Reader->State()["mode"].toInt() != ImageReadingView::Single)
+                    {
+                        Navigator->Reveal();
+                        if (auto *Progress = Navigator->findChild<QWidget *>("imageNavigatorProgress"))
+                            Progress->setFocus(Qt::ShortcutFocusReason);
+                        return true;
+                    }
             reveal(true, true);
             if (Key->key() == Qt::Key_F6)
             {
