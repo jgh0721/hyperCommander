@@ -1,5 +1,6 @@
 ﻿#include "qtPluginHostSettings.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
+#include <QDir>
 #include "pluginHost/manifestFile.hpp"
 #include "qtMessageDialog.hpp"
 #include "archive/creationSettings.hpp"
@@ -80,7 +81,7 @@ QPluginHostSettings::QPluginHostSettings(hc::plugins::PluginFormat Format, QWidg
             if (Binary.isEmpty()) return;
             ++generation_; const QSignalBlocker Block(table_); const auto At = table_->rowCount();
             rows_.push_back({At, Binary, {}, {}}); table_->insertRow(At);
-            table_->setItem(At, 0, new QTableWidgetItem(QFileInfo(Binary).fileName())); table_->item(At, 0)->setToolTip(Binary);
+            table_->setItem(At, 0, new QTableWidgetItem(QFileInfo(Binary).fileName())); table_->item(At, 0)->setToolTip(QDir::toNativeSeparators(Binary));
             table_->setItem(At, 1, new QTableWidgetItem);
             auto* Enabled = new QTableWidgetItem; Enabled->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable); Enabled->setCheckState(Qt::Checked); table_->setItem(At, 2, Enabled);
             table_->setItem(At, 3, new QTableWidgetItem); updateState(At); table_->selectRow(At);
@@ -125,7 +126,7 @@ void QPluginHostSettings::LoadPlugins(const QJsonObject& Plugins)
             Record["hostManifest"].toString(), hc::settings::JsonBytes(Record["hostReviewed"])};
         Item.creation_ = Record["archiveCreation"].toObject();
         const auto At = table_->rowCount(); rows_.push_back(Item); table_->insertRow(At);
-        auto* Path = new QTableWidgetItem(QFileInfo(Item.path_).fileName()); Path->setToolTip(Item.path_); table_->setItem(At, 0, Path);
+        auto* Path = new QTableWidgetItem(QFileInfo(Item.path_).fileName()); Path->setToolTip(QDir::toNativeSeparators(Item.path_)); table_->setItem(At, 0, Path);
         table_->setItem(At, 1, new QTableWidgetItem(format_ == hc::plugins::PluginFormat::Wlx ? Record["detect"].toString() : hc::settings::Strings(Record["extensions"]).join('|')));
         auto* Enabled = new QTableWidgetItem; Enabled->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         Enabled->setCheckState(Record["hostEnabled"].toBool() ? Qt::Checked : Qt::Unchecked); table_->setItem(At, 2, Enabled);
@@ -160,7 +161,7 @@ void QPluginHostSettings::updateState(int Row)
     table_->item(Row, 3)->setText(table_->item(Row, 2)->checkState() != Qt::Checked ? (StandaloneList(format_) ? tr("사용 안 함") : tr("기존 방식"))
         : !hc::plugins::ParseManifest(rows_[Row].reviewed_).HasValue() ? tr("실행 승인 필요")
         : rows_[Row].verification_.isEmpty() ? tr("검사 중…") : rows_[Row].verification_);
-    table_->item(Row, 3)->setToolTip(rows_[Row].manifest_);
+    table_->item(Row, 3)->setToolTip(QDir::toNativeSeparators(rows_[Row].manifest_));
     if (!loading_ && onChanged_) onChanged_();
 }
 void QPluginHostSettings::revoke()

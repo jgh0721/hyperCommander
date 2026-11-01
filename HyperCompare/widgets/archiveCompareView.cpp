@@ -2,6 +2,7 @@
 #include "archiveCompareView.hpp"
 #include "runtime/controllerMemory.hpp"
 #include "runtime/saveRecovery.hpp"
+#include <QDir>
 #include <QComboBox>
 #include <QHeaderView>
 #include <QLabel>
@@ -27,7 +28,7 @@ namespace hc::compare
         {
         public:
             using QSortFilterProxyModel::QSortFilterProxyModel;
-            void SetQuery(QString Query, bool Different) { beginFilterChange(); query_ = std::move(Query); different_ = Different; endFilterChange(Direction::Rows); }
+            void SetQuery(QString Query, bool Different) { beginFilterChange(); query_ = QDir::fromNativeSeparators(Query); different_ = Different; endFilterChange(Direction::Rows); }
         protected:
             bool filterAcceptsRow(int Row, const QModelIndex& Parent) const override
             {
@@ -50,9 +51,9 @@ namespace hc::compare
             const auto entry = item[Index.column() == 2 ? "left" : "right"].toObject();
             return entry.isEmpty() ? qint64(-2) : entry["directory"].toBool() ? qint64(-1) : entry["size"].toString().toLongLong();
         }
-        if (Role == Qt::ToolTipRole) return item["path"].toString();
+        if (Role == Qt::ToolTipRole) return QDir::toNativeSeparators(item["path"].toString());
         if (Role != Qt::DisplayRole && Role != Qt::AccessibleTextRole) return {};
-        if (Index.column() == 0) return item["path"].toString();
+        if (Index.column() == 0) return QDir::toNativeSeparators(item["path"].toString());
         if (Index.column() == 1)
         {
             const auto state = item["state"].toString();
@@ -69,7 +70,7 @@ namespace hc::compare
     ArchiveCompareView::ArchiveCompareView(const QJsonObject& Comparison, const QStringList& Paths, QWidget* Parent) : ExtensionView(Parent)
     {
         setObjectName("archiveCompareView"); auto* layout = new QVBoxLayout(this);
-        auto* roots = new QLabel(Paths.join("\n"), this); roots->setTextFormat(Qt::PlainText); roots->setWordWrap(true); layout->addWidget(roots);
+        auto* roots = new QLabel(QDir::toNativeSeparators(Paths.join("\n")), this); roots->setTextFormat(Qt::PlainText); roots->setWordWrap(true); layout->addWidget(roots);
         auto* summary = new QLabel((Comparison["contentsEqual"].toBool() ? (Comparison["rawEqual"].toBool() ? tr("파일·내부 항목 동일") : tr("내부 항목 동일 · 압축 파일 바이트 다름")) : tr("내부 항목 내용 또는 구성 다름")) + tr(" · 읽기 전용"), this);
         summary->setObjectName("archiveSummary"); layout->addWidget(summary);
         auto* row = new QHBoxLayout; auto* search = new QLineEdit(this); search->setObjectName("archiveQuery"); search->setPlaceholderText(tr("내부 경로 검색")); search->setAccessibleName(tr("압축 내부 경로 검색"));
@@ -187,7 +188,7 @@ namespace hc::compare
             auto files = std::make_shared<QTemporaryDir>(); if (!files->isValid()) throw Failure("ArchiveTemporaryWriteFailed"); Request child; child.mode_ = "compare"; child.theme_ = input.theme_; child.memoryMiB_ = input.memoryMiB_; child.readOnlyInputs_ = true; child.resourceLifetime_ = files;
             const auto suffix = QFileInfo(row["path"].toString()).suffix();
             for (int side = 0; side < 2; ++side) { const auto path = files->filePath(QString(side ? "RIGHT." : "LEFT.") + suffix); QFile file(path); if (!file.open(QIODevice::WriteOnly) || file.write(bytes[side]) != bytes[side].size()) throw Failure("ArchiveTemporaryWriteFailed"); if (side) child.file2_ = path; else child.file1_ = path; child.protectedInputs_.append(path); }
-            Response result{next}; result.open_ = std::move(child); result.title_ = tr("HyperCompare — 압축 항목(읽기 전용): %1").arg(row["path"].toString()); return result;
+            Response result{next}; result.open_ = std::move(child); result.title_ = tr("HyperCompare — 압축 항목(읽기 전용): %1").arg(QDir::toNativeSeparators(row["path"].toString())); return result;
         });
     }
     void ArchiveCompareView::ExportReport(const QString& Path, bool ReplaceExisting)

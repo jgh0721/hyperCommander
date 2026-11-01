@@ -11,6 +11,7 @@
 #include <fmstyle/ThemeManager.h>
 #include <fmwidgets/Card.h>
 #include <fmwidgets/WindowChrome.h>
+#include <QDir>
 #include <QFileDialog>
 #include <QStyledItemDelegate>
 
@@ -314,5 +315,5 @@ void QFavoriteDirConfigure::refreshItem( const QString& Name )
     const auto Item = items_.value( ui.lstDir->currentRow() );
 
     ui.edtCommand->setText( Item.Command );
-    ui.edtPath->setText( Item.Path );
+    ui.edtPath->setText( QDir::toNativeSeparators(Item.Path) );
 }

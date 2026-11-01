@@ -9,6 +9,7 @@
 #include <fmwidgets/DialogCards.h>
 
 /// Platform headers
+#include <QDir>
 #include <QTreeWidget>
 #include <QApplication>
 #include <QHBoxLayout>
@@ -123,7 +124,7 @@ void FileLockDialog::query(bool Elevated) {
             if(!Group){Group=new QTreeWidgetItem(table_,{Row["name"].toString(),QString::number(Row["pid"].toInt()),Row["user"].toString(),tr("프로세스"),tr("사용 중")});
                 Group->setData(0,Qt::UserRole,-1);Group->setData(0,Qt::UserRole+1,I);Groups.insert(Key,Group);}
             auto* Leaf=new QTreeWidgetItem(Group,{QFileInfo(Row["path"].toString()).fileName(),{}, {},referenceName(Row["kind"].toString()),Row["kind"]=="handle"?"0x"+Row["handle"].toString():tr("상세 미확인")});
-            Leaf->setData(0,Qt::UserRole,I);Leaf->setData(0,Qt::UserRole+1,I);Leaf->setToolTip(0,Row["path"].toString());Group->setExpanded(true);
+            Leaf->setData(0,Qt::UserRole,I);Leaf->setData(0,Qt::UserRole+1,I);Leaf->setToolTip(0,QDir::toNativeSeparators(Row["path"].toString()));Group->setExpanded(true);
         }
         requiresRefresh_=Result["outcome"]!="Completed";
         queried_ = QDateTime::currentDateTimeUtc();
@@ -145,7 +146,7 @@ void FileLockDialog::updateDetails() {
     details_->clear();
     if(!Row.isEmpty()){
         details_->addRow(tr("프로그램"),Row["name"].toString(),fm::ui::KeyValueCard::Strong);
-        details_->addRow(tr("대상 파일"),Row["path"].toString(),fm::ui::KeyValueCard::Mono);
+        details_->addRow(tr("대상 파일"),QDir::toNativeSeparators(Row["path"].toString()),fm::ui::KeyValueCard::Mono);
         if(Item->data(0,Qt::UserRole).toInt()>=0&&Row["kind"]=="handle")details_->addRow(tr("핸들"),"0x"+Row["handle"].toString(),fm::ui::KeyValueCard::Mono);
         details_->addRow(tr("차단 여부"),tr("미확인"));
     }
@@ -168,7 +169,7 @@ void FileLockDialog::act(const QString& Action) {
     Confirm.SetSummary(tr("%1 · PID %2").arg(Row["name"].toString()).arg(Row["pid"].toInt()));
     Confirm.SetMessage(Action=="close"?tr("프로그램은 계속 실행되지만 읽기·쓰기 오류나 저장하지 않은 내용의 손실이 발생할 수 있습니다. 이 동작은 되돌릴 수 없습니다.")
         :tr("해당 프로그램 전체를 종료합니다. 다른 파일의 작업과 저장하지 않은 내용도 손실될 수 있습니다."),true);
-    Confirm.BodyLayout()->addWidget(label(Row["path"].toString(),&Confirm));
+    Confirm.BodyLayout()->addWidget(label(QDir::toNativeSeparators(Row["path"].toString()),&Confirm));
     if(Action=="close")Confirm.BodyLayout()->addWidget(label(tr("선택 핸들: 0x%1").arg(Row["handle"].toString()),&Confirm));
     auto* Consent=new QCheckBox(tr("저장하지 않은 내용이 손실될 수 있음을 확인했습니다."),&Confirm);Consent->setObjectName("hc.fileLocks.riskConsent");
     Confirm.BodyLayout()->addWidget(Consent);

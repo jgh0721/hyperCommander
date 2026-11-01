@@ -12,6 +12,7 @@
 #include <fmwidgets/PanelStatusBar.h>
 #include <fmwidgets/ProgressBar.h>
 #include <fmstyle/ThemeManager.h>
+#include <QDir>
 #include <QtConcurrent>
 #include <QGridLayout>
 #include "UniqueLibs/qtitanColumnAdapter.hpp"
@@ -464,7 +465,7 @@ void CmpPanel::updateWorkspaceStatus()
     }
     if (ui.cbxVolume->currentIndex() != Volume) {
         QSignalBlocker Blocker(ui.cbxVolume); ui.cbxVolume->setCurrentIndex(Volume);
-        ui.lblVolumeStatus->setText(Model->GetRoot() ? Model->GetRoot()->GetRoot() : QString{});
+        ui.lblVolumeStatus->setText(Model->GetRoot() ? QDir::toNativeSeparators(Model->GetRoot()->GetRoot()) : QString{});
     }
     const auto Error = Model->LastNavigationError();
     const auto ErrorText = Error ? hc::ui::DescribeNavigationError(*Error, QString::fromStdString(Model->WorkspaceLocation().root_)) : hc::ui::NavigationErrorText{};
@@ -920,12 +921,12 @@ void CmpPanel::OnChangedDirectory(const QString& CurrentPath)
         if (!Retained.contains(Key)) State->workspace_.historyConnections_.remove(Key);
     // Labels are lexical: no existence/volume probe on the UI thread.
     auto Label = QDir::fromNativeSeparators(CurrentPath).section('/', -1);
-    ui.tabWidget->setTabText(Index, Label.isEmpty() ? CurrentPath : Label); ui.tabWidget->setTabToolTip(Index, CurrentPath);
+    ui.tabWidget->setTabText(Index, Label.isEmpty() ? QDir::toNativeSeparators(CurrentPath) : Label); ui.tabWidget->setTabToolTip(Index, QDir::toNativeSeparators(CurrentPath));
     syncPanelChrome();
     if (Index != ui.tabWidget->currentIndex()) return;
     if (history_) {
         QSignalBlocker Blocker(history_); history_->clear();
-        for (const auto& Item : State->workspace_.history_) history_->addItem(QString::fromStdString(Item.root_));
+        for (const auto& Item : State->workspace_.history_) history_->addItem(QDir::toNativeSeparators(QString::fromStdString(Item.root_)));
         history_->setCurrentIndex(State->workspace_.historyIndex_);
     }
     processPanelStatusText(); updateWorkspaceStatus(); syncPanelChrome(); emit sig_NotifyCurrentDirectory(CurrentPath);
@@ -982,7 +983,7 @@ void CmpPanel::on_tabWidget_currentChanged(int Index)
     if (search_) { QSignalBlocker Blocker(search_); search_->setText(State->ProxyModel->Search()); }
     if (history_) {
         QSignalBlocker Blocker(history_); history_->clear();
-        for (const auto& Location : State->workspace_.history_) history_->addItem(QString::fromStdString(Location.root_));
+        for (const auto& Location : State->workspace_.history_) history_->addItem(QDir::toNativeSeparators(QString::fromStdString(Location.root_)));
         history_->setCurrentIndex(State->workspace_.historyIndex_);
     }
     updateWorkspaceStatus();
@@ -1260,13 +1261,13 @@ void CmpPanel::syncPanelChrome()
     const auto Kind = SearchModel->WorkspaceLocation().kind_;
     path_->SetBreadcrumbsEnabled(!SearchModel->IsSearchResults()
         && (Kind == hc::storage::LocatorKind::Local || Kind == hc::storage::LocatorKind::Smb));
-    path_->setFullPath(SearchModel->IsSearchResults() ? tr("Everything · %1").arg(SearchModel->EverythingQuery()) : CurrentPath());
+    path_->setFullPath(SearchModel->IsSearchResults() ? tr("Everything · %1").arg(SearchModel->EverythingQuery()) : CurrentPath(), !SearchModel->IsSearchResults());
     { QSignalBlocker ViewBlocker(viewMode_);
       auto* View = static_cast<CGridView*>(retrieveFocusState()->View);
       viewMode_->setCurrentIndex(QStringList{"one-line", "two-line", "auto", "thumbnails"}.indexOf(View->ListMode()));
       viewMode_->button(2)->setToolTip(tr("자동 → %1 · 패널 폭과 잘린 이름 비율 기준").arg(View->IsTwoLine() ? tr("2줄") : tr("1줄"))); }
     const auto Fs = ui.cbxVolume->currentData().value<nsHC::TySpFileSystem>();
-    drive_->setText(Fs ? Fs->GetRoot() : tr("위치"));
+    drive_->setText(Fs ? QDir::toNativeSeparators(Fs->GetRoot()) : tr("위치"));
     historyButton_->setEnabled(!retrieveFocusState()->workspace_.history_.isEmpty());
     emit sigNavigationStateChanged();
 }
@@ -1486,7 +1487,7 @@ void CmpPanel::processVolumeStatusText(const nsHC::TySpFileSystem& SpFileSystem)
         }));
         return;
     }
-    if (Cate != nsHC::FS_CATE_LOCAL && Cate != nsHC::FS_CATE_REMOTE) { ui.lblVolumeStatus->setText(Root); return; }
+    if (Cate != nsHC::FS_CATE_LOCAL && Cate != nsHC::FS_CATE_REMOTE) { ui.lblVolumeStatus->setText(QDir::toNativeSeparators(Root)); return; }
     const auto State = retrieveFocusState();
     const auto* Model = State ? static_cast<CFSModel*>(State->Model) : nullptr;
     const auto Directory = QDir::toNativeSeparators(CurrentPath());

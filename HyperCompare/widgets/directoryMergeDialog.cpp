@@ -97,7 +97,7 @@ namespace hc::compare
         }
         if (Role == Qt::EditRole && Index.column() == 1) return choices_[Index.row()];
         if (Role != Qt::DisplayRole && Role != Qt::AccessibleTextRole) return {};
-        if (Index.column() == 0) return action["path"].toString();
+        if (Index.column() == 0) return QDir::toNativeSeparators(action["path"].toString());
         if (Index.column() == 1) return choiceLabel(choices_[Index.row()]);
         return DirectoryStatusName(action["reason"].toString());
     }
@@ -124,11 +124,11 @@ namespace hc::compare
         auto* box = new QVBoxLayout(this); auto* introduction = new QLabel(tr("출력 디렉터리를 지정하고 계획을 검토하십시오. 입력은 보존하며, ‘계획 실행’에서 출력 파일을 변경합니다."), this);
         introduction->setObjectName("directoryPlanIntroduction"); introduction->setWordWrap(true); box->addWidget(introduction);
         const std::array roots{input_.file1_, input_.file2_, input_.file3_}; const auto selected = input_.file3_.isEmpty() ? std::array{0, 1} : input_.directoryPair_;
-        auto* inputs = new QLabel(tr("LEFT  %1\nRIGHT  %2%3").arg(roots[selected[0]], roots[selected[1]], input_.base_.isEmpty() ? QString{} : "\nBASE  " + input_.base_), this);
+        auto* inputs = new QLabel(tr("LEFT  %1\nRIGHT  %2%3").arg(QDir::toNativeSeparators(roots[selected[0]]), QDir::toNativeSeparators(roots[selected[1]]), input_.base_.isEmpty() ? QString{} : "\nBASE  " + QDir::toNativeSeparators(input_.base_)), this);
         inputs->setTextFormat(Qt::PlainText); inputs->setWordWrap(true); inputs->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard); box->addWidget(inputs);
         auto* destination = new QHBoxLayout(); output_ = new QLineEdit(this); output_->setObjectName("directoryOutput"); output_->setPlaceholderText(tr("출력 디렉터리")); output_->setAccessibleName(tr("병합 출력 디렉터리"));
         auto* browse = new QPushButton(tr("찾아보기…"), this); browse->setObjectName("directoryOutputBrowse"); destination->addWidget(output_, 1); destination->addWidget(browse); box->addLayout(destination);
-        connect(browse, &QPushButton::clicked, this, [this] { if (Busy()) return; const auto path = QFileDialog::getExistingDirectory(this, tr("출력 디렉터리")); if (!path.isEmpty()) output_->setText(path); });
+        connect(browse, &QPushButton::clicked, this, [this] { if (Busy()) return; const auto path = QFileDialog::getExistingDirectory(this, tr("출력 디렉터리")); if (!path.isEmpty()) output_->setText(QDir::toNativeSeparators(path)); });
         auto* options = new QHBoxLayout(); overwrite_ = new QCheckBox(tr("기존 출력 파일 교체 허용"), this); mirror_ = new QCheckBox(tr("출력에만 있는 항목 제거 계획 포함"), this);
         options->addWidget(overwrite_); options->addWidget(mirror_); options->addStretch(); prepare_ = new QPushButton(tr("계획 만들기"), this); options->addWidget(prepare_); box->addLayout(options);
         connect(prepare_, &QPushButton::clicked, this, [this] {
@@ -184,9 +184,9 @@ namespace hc::compare
             active_ = false; last_ = watcher_.result();
             if (last_.error_.isEmpty())
             {
-                if (kind_ == "prepare") { model_->SetPlan(last_.directoryPlan_); output_->setText(model_->Output()); }
-                if (kind_ == "save") { planPath_ = last_.planWritten_; state_->setText(tr("계획 저장 완료: %1").arg(planPath_)); }
-                if (kind_ == "apply") state_->setText(tr("적용 완료 — %1").arg(planPath_));
+                if (kind_ == "prepare") { model_->SetPlan(last_.directoryPlan_); output_->setText(QDir::toNativeSeparators(model_->Output())); }
+                if (kind_ == "save") { planPath_ = last_.planWritten_; state_->setText(tr("계획 저장 완료: %1").arg(QDir::toNativeSeparators(planPath_))); }
+                if (kind_ == "apply") state_->setText(tr("적용 완료 — %1").arg(QDir::toNativeSeparators(planPath_)));
             }
             else state_->setText(tr("%1 · 적용 상태: %2\n%3").arg(last_.error_, last_.commit_, last_.recovery_.isEmpty() ? QString{} : QString::fromUtf8(QJsonDocument(last_.recovery_).toJson())));
             updateControls(); if (statusChanged_) statusChanged_(kind_ == "apply" || !last_.error_.isEmpty() ? last_.exitCode_ : 3); if (closing_) close();
@@ -214,8 +214,8 @@ namespace hc::compare
     {
         if (Busy() || Source < 0 || Source > 1) return;
         const std::array roots{input_.file1_, input_.file2_, input_.file3_}; const auto selected = input_.file3_.isEmpty() ? std::array{0, 1} : input_.directoryPair_;
-        transfer_ = true; transferSource_ = Source; transferPath_ = Path; model_->SetPlan({}); output_->setText(roots[selected[1 - Source]]); mirror_->setChecked(false); overwrite_->setChecked(true);
-        findChild<QLabel*>("directoryPlanIntroduction")->setText(tr("선택 항목을 반대편 폴더로 복사합니다. LEFT는 복사 원본이며, ‘대상 유지’ 항목은 변경하지 않습니다. 하위 폴더에는 현재 포함/제외 필터가 적용됩니다. 계획을 검토·저장한 뒤 실행하십시오.\n복사 원본: %1").arg(roots[selected[Source]]));
+        transfer_ = true; transferSource_ = Source; transferPath_ = Path; model_->SetPlan({}); output_->setText(QDir::toNativeSeparators(roots[selected[1 - Source]])); mirror_->setChecked(false); overwrite_->setChecked(true);
+        findChild<QLabel*>("directoryPlanIntroduction")->setText(tr("선택 항목을 반대편 폴더로 복사합니다. LEFT는 복사 원본이며, ‘대상 유지’ 항목은 변경하지 않습니다. 하위 폴더에는 현재 포함/제외 필터가 적용됩니다. 계획을 검토·저장한 뒤 실행하십시오.\n복사 원본: %1").arg(QDir::toNativeSeparators(roots[selected[Source]])));
         findChild<QPushButton*>("directoryOutputBrowse")->setEnabled(false);
         auto input = input_; input.directoryCopy_ = copyOptions();
         run("prepare", [input, comparison = comparison_, Source, Path, cancel = canceled_] {

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "largeTextView.hpp"
+#include <QDir>
 #include "comparePalette.hpp"
 #include "compareSyntax.hpp"
 #include <fmstyle/ThemeManager.h>
@@ -108,7 +109,7 @@ namespace hc::compare
         auto* panes = new QHBoxLayout(); panes_ = panes; box->addLayout(panes, 1);
         for (int side = 0; side < 2; ++side) {
             auto* paneWidget = new QWidget(this); paneWidgets_[side] = paneWidget; auto* pane = new QVBoxLayout(paneWidget); pane->setContentsMargins(0, 0, 0, 0); panes->addWidget(paneWidget, 1);
-            auto* label = new QLabel(value_->documents_[side].original_.path_, this); titles_[side] = label; label->setTextFormat(Qt::PlainText); label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); pane->addWidget(label);
+            auto* label = new QLabel(QDir::toNativeSeparators(value_->documents_[side].original_.path_), this); titles_[side] = label; label->setTextFormat(Qt::PlainText); label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); pane->addWidget(label);
             auto* row = new QHBoxLayout(); pane->addLayout(row); row->addWidget(new QLabel(tr("시작 줄"), this));
             lines_[side] = new QSpinBox(this); lines_[side]->setObjectName(side ? "largeLineRight" : "largeLineLeft"); row->addWidget(lines_[side]);
             auto* previous = new QPushButton(tr("이전"), this); auto* next = new QPushButton(tr("다음"), this); auto* go = new QPushButton(tr("이동"), this);
@@ -225,7 +226,7 @@ namespace hc::compare
         for (int side = 0; side < 2; ++side) {
             const bool source = merging() && value_->session_->pair_[side] != value_->session_->result_;
             lines_[side]->setRange(1, std::max(1, int(value_->lines_[side].size()))); lines_[side]->setEnabled(!Busy()); editors_[side]->send(SCI_SETREADONLY, Busy() || source || displayReadOnly_);
-            titles_[side]->setText((value_->session_ ? value_->session_->titles_[value_->session_->pair_[side]] + " — " : QString{}) + value_->documents_[side].original_.path_ + "\n" + value_->documents_[side].original_.encoding_ + (value_->documents_[side].original_.bom_ ? tr(" · BOM 있음") : tr(" · BOM 없음")));
+            titles_[side]->setText((value_->session_ ? value_->session_->titles_[value_->session_->pair_[side]] + " — " : QString{}) + QDir::toNativeSeparators(value_->documents_[side].original_.path_) + "\n" + value_->documents_[side].original_.encoding_ + (value_->documents_[side].original_.bom_ ? tr(" · BOM 있음") : tr(" · BOM 없음")));
             findChild<QPushButton*>(side ? "largeSaveRight" : "largeSaveLeft")->setEnabled(!Busy() && !source && !displayReadOnly_);
             findChild<QPushButton*>(side ? "largeMergeRight" : "largeMergeLeft")->setEnabled(!Busy() && !source && !displayReadOnly_);
         }

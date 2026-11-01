@@ -71,12 +71,13 @@ PanelPathBar::PanelPathBar(QWidget* Parent) : BreadcrumbBar(Parent)
 
 PanelPathBar::~PanelPathBar() { menuStop_.request_stop(); }
 
-void PanelPathBar::setFullPath(const QString& Path)
+void PanelPathBar::setFullPath(const QString& Path, bool NativePath)
 {
-    BreadcrumbBar::setFullPath(Path);
-    if (fullPath_ == Path) return;
+    const auto Display = NativePath ? QDir::toNativeSeparators(Path) : Path;
+    BreadcrumbBar::setFullPath(Display);
+    if (fullPath_ == Display) return;
     clickTimer_.stop(); dismissMenu();
-    fullPath_ = Path; crumbs_.clear();
+    fullPath_ = Display; crumbs_.clear();
     auto Normal = QDir::fromNativeSeparators(Path);
     int Start = 0;
     const int DriveStart = Normal.startsWith("//?/") ? 4 : 0;

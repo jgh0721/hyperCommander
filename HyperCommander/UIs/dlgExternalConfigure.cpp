@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "dlgExternalConfigure.hpp"
+#include <QDir>
 
 #include "UIs/dlgExternalConfigure_Item.hpp"
 
@@ -62,7 +63,7 @@ void CExternalConfigure::Refresh()
             }
         }
         ui.tblEditor->setItem( Row, COL_NAME,       new QTableWidgetItem( Item.Name ) );
-        ui.tblEditor->setItem( Row, COL_PROGRAM,    new QTableWidgetItem( Item.FilePath ) );
+        ui.tblEditor->setItem( Row, COL_PROGRAM,    new QTableWidgetItem( QDir::toNativeSeparators(Item.FilePath) ) );
         ui.tblEditor->setItem( Row, COL_CMDLINE,    new QTableWidgetItem( Item.CMDLine ) );
         ui.tblEditor->setItem( Row, COL_DETECT,     new QTableWidgetItem( Item.Detect ) );
         ui.tblEditor->setItem( Row, COL_EXTS,       new QTableWidgetItem( Item.VecExtensions.toList().join( '|' ) ) );

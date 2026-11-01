@@ -2,6 +2,7 @@
 #include "fileAttributesDialog.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
+#include <QDir>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QGridLayout>
 #include <QMessageBox>
@@ -84,7 +85,7 @@ namespace hc::ui
         const auto FirstPath = QDir::toNativeSeparators(QString::fromStdString(Entries.front().locator_.root_));
         if (Count == 1) {
             SetSummary(tr("%1 · %2 1개").arg(QFileInfo(FirstPath).fileName(), Entries.front().directory_ ? tr("폴더") : tr("파일")));
-            targetPath_->setText(FirstPath);
+            targetPath_->setText(QDir::toNativeSeparators(FirstPath));
         } else {
             const auto Folders = std::count_if(Entries.begin(), Entries.end(), [](const auto& E) { return E.directory_; });
             SetSummary(Count == Entries.size() ? tr("%1개 항목 선택 · 파일 %2개, 폴더 %3개").arg(Count).arg(Entries.size() - Folders).arg(Folders)
@@ -93,7 +94,7 @@ namespace hc::ui
             const bool SameParent = std::all_of(Entries.begin(), Entries.end(), [&](const auto& E) {
                 return QFileInfo(QString::fromStdString(E.locator_.root_)).absolutePath().compare(Parent, Qt::CaseInsensitive) == 0;
             });
-            targetPath_->setText(SameParent ? QDir::toNativeSeparators(Parent) : tr("여러 위치 · 첫 번째 대상: %1").arg(FirstPath));
+            targetPath_->setText(SameParent ? QDir::toNativeSeparators(Parent) : tr("여러 위치 · 첫 번째 대상: %1").arg(QDir::toNativeSeparators(FirstPath)));
         }
         targetPath_->setToolTip(targetPath_->text());
     }
@@ -118,7 +119,7 @@ namespace hc::ui
         asking_ = true;
         hc::ui::MessageDialog Box(QMessageBox::Question, tr("관리자 권한 필요"),
             tr("%1\n\n%2\n관리자 도우미를 사용하시겠습니까? 권한·소유자는 변경하지 않습니다. Windows UAC 확인이 표시될 수 있습니다.")
-                .arg(QString::fromStdString(Question->first.locator_.root_), Question->second ? tr("하위 항목을 조회할 권한이 없습니다.") : tr("이 항목의 속성을 변경할 권한이 없습니다.")), QMessageBox::NoButton, this);
+                .arg(QDir::toNativeSeparators(QString::fromStdString(Question->first.locator_.root_)), Question->second ? tr("하위 항목을 조회할 권한이 없습니다.") : tr("이 항목의 속성을 변경할 권한이 없습니다.")), QMessageBox::NoButton, this);
         Box.setTextFormat(Qt::PlainText);
         auto* Elevate = Box.addButton(tr("관리자로 계속"), QMessageBox::AcceptRole);
         auto* Skip = Box.addButton(tr("건너뛰기"), QMessageBox::RejectRole);
@@ -178,7 +179,7 @@ namespace hc::ui
             storage::OperationContext Context; Context.stopToken_ = StateValue->stop_.get_token();
             auto Writer = storage::MakeNativeWritableStorage(StateValue->plan_.entries_.front().locator_.kind_, Reader);
             StateValue->outcome_ = attributes::Apply(StateValue->plan_, Patch, Writer, permissions::MakeFileElevationService(), Context, approval(StateValue),
-                [StateValue](std::size_t Done, const auto& Entry) { std::lock_guard Lock(StateValue->mutex_); StateValue->progress_ = QObject::tr("변경 중 %1 / %2 · %3").arg(Done).arg(StateValue->plan_.entries_.size()).arg(QString::fromStdString(Entry.locator_.root_)); });
+                [StateValue](std::size_t Done, const auto& Entry) { std::lock_guard Lock(StateValue->mutex_); StateValue->progress_ = QObject::tr("변경 중 %1 / %2 · %3").arg(Done).arg(StateValue->plan_.entries_.size()).arg(QDir::toNativeSeparators(QString::fromStdString(Entry.locator_.root_))); });
         }));
     }
     void FileAttributesDialog::complete()

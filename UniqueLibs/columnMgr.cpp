@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "columnMgr.hpp"
+#include <QDir>
 #include "builtInFsModel.hpp"
 #include "cmnHCUtils.hpp"
 
@@ -62,5 +63,8 @@ QString CColumnMgr::FormatValue(const hc::columns::ColumnDefinition& Column, con
         return GetFormattedAttrText(static_cast<DWORD>(Value.Raw().toULongLong()), false);
     if (Info && Column.fieldId_ == "file.size" && Value.State() == hc::columns::ValueState::OnDemand)
         return Info->Attributes_ & FILE_ATTRIBUTE_REPARSE_POINT ? QObject::tr("<링크>") : QObject::tr("<폴더>");
-    return hc::columns::Format(Value, Column.format_);
+    const auto Text = hc::columns::Format(Value, Column.format_);
+    if (Column.template_.isEmpty() && (Column.fieldId_ == "file.path" || Column.fieldId_ == "file.parentPath"))
+        return QDir::toNativeSeparators(Text);
+    return Text;
 }

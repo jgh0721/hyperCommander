@@ -9,6 +9,7 @@
 #include "keyboardSettingsPage.hpp"
 #include "legacySettingsPage.hpp"
 #include "UniqueLibs/passwords/passwordUi.hpp"
+#include <QDir>
 #include <QStyleHints>
 #include <QTabWidget>
 #include "commonLibs/operations/fileOperation.hpp"
@@ -605,7 +606,7 @@ void QMainOpts::RefreshPluginList()
     {
         const auto Row = ui.tblWLX->rowCount();
         ui.tblWLX->setRowCount( Row + 1 );
-        ui.tblWLX->setItem( Row, 0, new QTableWidgetItem( StPlugInMgr->GetWLXFilePath( Idx ) ) );
+        ui.tblWLX->setItem( Row, 0, new QTableWidgetItem( QDir::toNativeSeparators(StPlugInMgr->GetWLXFilePath( Idx )) ) );
         ui.tblWLX->setItem( Row, 1, new QTableWidgetItem( StPlugInMgr->GetWLXDetect( Idx ) ) );
     }
 }

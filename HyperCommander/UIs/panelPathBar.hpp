@@ -18,7 +18,7 @@ class PanelPathBar final : public fm::ui::BreadcrumbBar {
 public:
     explicit PanelPathBar(QWidget* Parent = nullptr);
     ~PanelPathBar() override;
-    void setFullPath(const QString& Path);
+    void setFullPath(const QString& Path, bool NativePath = true);
     void SetBreadcrumbsEnabled(bool Enabled);
     void EditPath();
 

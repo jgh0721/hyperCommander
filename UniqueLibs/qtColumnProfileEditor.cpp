@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "columnAutoSelection.hpp"
+#include <QDir>
 #include <fmwidgets/DialogHeader.h>
 #include <fmwidgets/Card.h>
 #include <fmstyle/StyleProps.h>
@@ -979,7 +980,7 @@ void QtColumnProfileEditor::appendAutoRule(const QJsonObject& Rule)
     auto* Profile = new QComboBox(autoRules_); autoRules_->setCellWidget(Row, 1, Profile);
     const auto Profiles = Library(); for (auto It = Profiles.begin(); It != Profiles.end(); ++It) if (const auto Value = DecodeProfile(It.value().toObject())) Profile->addItem(Value->title_, It.key());
     if (Profile->findData(Rule["profile"].toString()) < 0) Profile->addItem(tr("사용할 수 없는 열 세트"), Rule["profile"].toString()); Profile->setCurrentIndex(Profile->findData(Rule["profile"].toString()));
-    auto* Path = new QLineEdit(Rule["path"].toString(), autoRules_); Path->setMaxLength(4096); Path->setAccessibleName(tr("폴더 경로 조건")); autoRules_->setCellWidget(Row, 2, Path);
+    auto* Path = new QLineEdit(QDir::toNativeSeparators(Rule["path"].toString()), autoRules_); Path->setMaxLength(4096); Path->setAccessibleName(tr("폴더 경로 조건")); autoRules_->setCellWidget(Row, 2, Path);
     auto* Group = new QComboBox(autoRules_); Group->addItem(tr("사용 안 함"), ""); autoRules_->setCellWidget(Row, 3, Group);
     for (const auto& Value : autoColors_["groups"].toArray()) if (Value.toObject()["enabled"].toBool(true)) Group->addItem(Value.toObject()["name"].toString(), Value.toObject()["id"].toString());
     if (Group->findData(Rule["group"].toString()) < 0) Group->addItem(tr("사용할 수 없는 파일 그룹"), Rule["group"].toString()); Group->setCurrentIndex(Group->findData(Rule["group"].toString()));

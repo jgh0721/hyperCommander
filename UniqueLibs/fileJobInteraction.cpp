@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileJobInteraction.hpp"
+#include <QDir>
 #include "fileOperationErrorText.hpp"
 
 /// UIs
@@ -81,7 +82,7 @@ namespace hc::ui
             if (!At.HasValue()) return QString::fromStdString(Value);
             auto Result = QString::fromStdString(At.Value().root_);
             for (const auto& Hop : At.Value().nesting_) Result += " > " + QString::fromStdString(Hop.entry_);
-            return Result;
+            return QDir::toNativeSeparators(Result);
         }
         QString Native(const std::string& Value)
         {

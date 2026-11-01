@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "directoryTreeModel.hpp"
 #include "directoryView.hpp"
+#include <QDir>
 #include <QApplication>
 #include <QStyle>
 #include <QFont>
@@ -215,7 +216,7 @@ namespace hc::compare
         }
         const auto status = entry.Status();
         if (Role == Qt::ToolTipRole)
-            return n->path_ + '\n' + DirectoryStatusName(status) +
+            return QDir::toNativeSeparators(n->path_) + '\n' + DirectoryStatusName(status) +
                 tr("\n1↔2: %1 · 1↔3/BASE: %2 · 2↔3/BASE: %3").arg(entry.Status(1), entry.Status(2), entry.Status(3)) + (side.link_ ? tr("\n링크 대상(탐색하지 않음): ") + side.link_->target_ : QString{}) + '\n' + QString::fromUtf8(QJsonDocument(entry.errors_).toJson(QJsonDocument::Compact));
         if (!column)
         {
@@ -254,7 +255,7 @@ namespace hc::compare
     }
     void DirectoryTreeFilter::SetQuery(const QString& Query, int Status)
     {
-        beginFilterChange(); static_cast<DirectoryTreeModel*>(sourceModel())->SetFilter(Query, Status);
+        beginFilterChange(); static_cast<DirectoryTreeModel*>(sourceModel())->SetFilter(QDir::fromNativeSeparators(Query), Status);
         endFilterChange(Direction::Rows);
     }
     bool DirectoryTreeFilter::filterAcceptsRow(int Row, const QModelIndex& Parent) const

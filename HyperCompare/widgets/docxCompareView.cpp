@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "docxCompareView.hpp"
 #include "archiveCompareView.hpp"
+#include <QDir>
 #include <QAbstractTableModel>
 #include <QHeaderView>
 #include <QLabel>
@@ -55,7 +56,7 @@ namespace hc::compare
     DocxCompareView::DocxCompareView(const QJsonObject& Comparison, const QStringList& Paths, QWidget* Parent) : ExtensionView(Parent)
     {
         setObjectName("docxCompareView"); auto* layout = new QVBoxLayout(this);
-        auto* roots = new QLabel(Paths.join("\n"), this); roots->setTextFormat(Qt::PlainText); roots->setWordWrap(true); layout->addWidget(roots);
+        auto* roots = new QLabel(QDir::toNativeSeparators(Paths.join("\n")), this); roots->setTextFormat(Qt::PlainText); roots->setWordWrap(true); layout->addWidget(roots);
         auto* scope = new QLabel(tr("DOCX 본문 문단 텍스트 · 읽기 전용\n서식·페이지 배치·머리글·각주·그림·삭제 이력은 텍스트 비교 범위에서 제외됩니다. 내부 파일 탭에서 모든 구성 파일의 바이트 차이를 확인할 수 있습니다."), this);
         scope->setObjectName("docxCoverage"); scope->setWordWrap(true); layout->addWidget(scope);
         auto* summary = new QLabel(Comparison["textEqual"].toBool() ? (Comparison["rawEqual"].toBool() ? tr("파일과 본문 텍스트 동일") : tr("본문 텍스트 동일 · 패키지 바이트 다름")) : tr("본문 텍스트 다름"), this);

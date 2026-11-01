@@ -2,6 +2,7 @@
 #include "imageCompareView.hpp"
 #include "comparePalette.hpp"
 #include "core/compare.hpp"
+#include <QDir>
 #include <QColorSpace>
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -75,7 +76,7 @@ namespace hc::compare
             images_[side] = QImage(reinterpret_cast<const uchar*>(decoded.decoded.constData()), width, height, width * 4, QImage::Format_RGBA8888).copy();
             if (images_[side].isNull()) throw Failure("ImageViewPayload"); images_[side].setColorSpace(QColorSpace::SRgb);
             auto* pane = new QWidget(split); auto* column = new QVBoxLayout(pane); column->setContentsMargins(0, 0, 0, 0);
-            auto* title = new QLabel(tr("%1 · %2 × %3").arg(Paths.value(side)).arg(width).arg(height), pane); title->setWordWrap(true); column->addWidget(title);
+            auto* title = new QLabel(tr("%1 · %2 × %3").arg(QDir::toNativeSeparators(Paths.value(side))).arg(width).arg(height), pane); title->setWordWrap(true); column->addWidget(title);
             areas[side] = new QScrollArea(pane); areas[side]->setObjectName(QString("imageArea%1").arg(side)); areas[side]->setWidgetResizable(true);
             canvases[side] = new ImageCanvas(images_[side], bounds.intersected(QRect(0, 0, width, height)), areas[side]); areas[side]->setWidget(canvases[side]); column->addWidget(areas[side], 1);
         }

@@ -116,7 +116,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* WindowCard = Card(General, tr("창"));
     Check(WindowCard, "documentViews/common/closeViewerOnEscape", tr("ESC 키를 눌러 창 닫기 (HyperViewer 전용)"), true);
     auto* Files = Card(General, tr("설정 파일"));
-    auto* Location = new QLabel(tr("설정 파일: %1").arg(path_), this); Location->setWordWrap(true); Location->setTextInteractionFlags(Qt::TextSelectableByMouse); Files->addRow(Location);
+    auto* Location = new QLabel(tr("설정 파일: %1").arg(QDir::toNativeSeparators(path_)), this); Location->setWordWrap(true); Location->setTextInteractionFlags(Qt::TextSelectableByMouse); Files->addRow(Location);
     auto* Import = new QPushButton(tr("기존 설정 가져오기…"), this); auto* ImportRow = new QHBoxLayout; ImportRow->addWidget(Import); ImportRow->addStretch(); Files->addRow(ImportRow);
     General->addStretch();
     connect(Import, &QPushButton::clicked, this, [this] {
@@ -124,7 +124,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
         if (Directory.isEmpty()) return;
         const auto Source = settings::UnifiedConfig::FileName(Directory); QJsonObject Profile; QString Error;
         if (!settings::UnifiedConfig::Load(Source, Profile, Error, false) || Profile.size() <= 1) { error_->setText(tr("가져올 설정을 읽을 수 없습니다.\n%1\n%2").arg(Source, Error)); return; }
-        if (hc::ui::MessageDialog::question(this, tr("기존 설정 가져오기"), tr("%1의 설정을 현재 설정에 가져옵니다. 적용 또는 확인을 누르면 저장됩니다. 원본 파일은 유지됩니다.").arg(Directory)) != QMessageBox::Yes) return;
+        if (hc::ui::MessageDialog::question(this, tr("기존 설정 가져오기"), tr("%1의 설정을 현재 설정에 가져옵니다. 적용 또는 확인을 누르면 저장됩니다. 원본 파일은 유지됩니다.").arg(QDir::toNativeSeparators(Directory))) != QMessageBox::Yes) return;
         imported_ = Profile; const auto Original = base_;
         for (auto It = Profile.begin(); It != Profile.end(); ++It) base_[It.key()] = It.value();
         loadControls(); base_ = Original; error_->clear();
@@ -362,7 +362,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
         imported_ = {}; const auto Original = base_; base_ = {{"schemaVersion", 2}}; loadControls(); base_ = Original;
     });
     QString Error; valid_ = settings::UnifiedConfig::Load(path_, base_, Error);
-    if (!valid_) error_->setText(tr("설정을 읽을 수 없습니다.\n%1\n%2").arg(path_, Error));
+    if (!valid_) error_->setText(tr("설정을 읽을 수 없습니다.\n%1\n%2").arg(QDir::toNativeSeparators(path_), Error));
     Buttons->button(QDialogButtonBox::Ok)->setEnabled(valid_); Buttons->button(QDialogButtonBox::Apply)->setEnabled(valid_);
     loadControls();
     initial_ = values();
@@ -632,7 +632,7 @@ bool DocumentSettingsDialog::Apply(bool ResolveConflicts)
         if (!Object.isEmpty() && !Object.contains("schemaVersion")) { Object["schemaVersion"] = 1; settings::UnifiedConfig::Set(Changed, Path, Object); }
     }
     if (!settings::UnifiedConfig::Save(path_, base_, Changed, Saved, Error, ResolveConflicts)) {
-        error_->setText(tr("설정을 저장하지 못했습니다.\n%1\n%2").arg(path_, Error));
+        error_->setText(tr("설정을 저장하지 못했습니다.\n%1\n%2").arg(QDir::toNativeSeparators(path_), Error));
         if (!ResolveConflicts && Error.startsWith("conflict:")) {
             hc::ui::MessageDialog Dialog(QMessageBox::Warning, tr("설정 변경 충돌"), tr("다른 창에서 같은 설정을 변경했습니다."), QMessageBox::Cancel, this);
             auto* Reload = Dialog.addButton(tr("다시 읽기"), QMessageBox::ResetRole);

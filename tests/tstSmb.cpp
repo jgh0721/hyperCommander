@@ -1,5 +1,6 @@
 ﻿#include "UniqueLibs/wcxStorage.hpp"
 #include "UniqueLibs/archiveExtractJob.hpp"
+#include <QDir>
 #include "UniqueLibs/fileJobInteraction.hpp"
 #include "UniqueLibs/archive/creationDialog.hpp"
 #include "msiBrowseFixture.hpp"
@@ -2654,7 +2655,7 @@ private slots:
         PanelPathBar Bar(&Window); Bar.setGeometry(10, 10, 1050, 26);
         QLineEdit Other(&Window); Other.setGeometry(10, 50, 300, 25);
         Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
-        Bar.setFullPath("D:\\Clouds\\QSync");
+        Bar.setFullPath("D:/Clouds\\QSync");
         QSignalSpy Navigated(&Bar, &fm::ui::BreadcrumbBar::pathEntered);
         QSignalSpy Activated(&Bar, &PanelPathBar::activated);
         const auto Root = QPoint(12, Bar.height() / 2);
@@ -2719,7 +2720,7 @@ private slots:
 
         // An old menu cannot publish into a replacement location.
         Bar.setFocus(); QTest::keyClick(&Bar, Qt::Key_Down);
-        Bar.setFullPath("D:\\Clouds\\QSync"); QTest::qWait(50);
+        Bar.setFullPath("D:/Clouds\\QSync"); QTest::qWait(50);
         for (auto* Menu : Bar.findChildren<QMenu*>("hc.panelPath.folders")) QVERIFY(!Menu->isVisible());
         Bar.SetBreadcrumbsEnabled(false);
         QTest::mouseClick(&Bar, Qt::LeftButton, Qt::NoModifier, Root);

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileJobUi.hpp"
+#include <QDir>
 #include "fileOperationErrorText.hpp"
 #include "fileJobInteraction.hpp"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
@@ -80,7 +81,7 @@ namespace
         if (!At.HasValue()) return QString::fromStdString(Value);
         auto Path = QString::fromStdString(At.Value().root_);
         for (const auto& Hop : At.Value().nesting_) Path += " > " + QString::fromStdString(Hop.entry_);
-        return Path;
+        return QDir::toNativeSeparators(Path);
     }
     QString OperationText(JobKind Kind)
     {

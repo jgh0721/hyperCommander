@@ -350,7 +350,7 @@ namespace hc::document
                 if (!Result.HasValue()) { ShowShellError(Message(QString::fromStdString(Result.Failure().code_))); return; }
                 QStringList Labels, Paths;
                 for (const auto& Record : Result.Value()) {
-                    Labels.append(QString::fromStdString(Record.document_.source_.localPath_) + " · " + QString::number(Record.document_.revision_) + " · " + QString::fromStdString(Record.document_.id_).left(8));
+                    Labels.append(QDir::toNativeSeparators(QString::fromStdString(Record.document_.source_.localPath_)) + " · " + QString::number(Record.document_.revision_) + " · " + QString::fromStdString(Record.document_.id_).left(8));
                     Paths.append(QString::fromStdString(Record.snapshotPath_));
                 }
                 if (Paths.isEmpty()) { hc::ui::MessageDialog::information(this, tr("복구 목록"), tr("복구할 문서가 없습니다.")); return; }
@@ -529,7 +529,7 @@ namespace hc::document
         // The watcher sees HyperCommander.json in the same folder, so product theme edits reach open windows.
         DocumentThemeAdapter::LoadProductTheme(QFileInfo(settingsPath_).absolutePath());
         QJsonObject Root; QString Error;
-        if (!hc::settings::UnifiedConfig::Load(settingsPath_, Root, Error)) { ShowShellError(tr("설정을 읽지 못했습니다: %1\n%2").arg(settingsPath_, Error)); return; }
+        if (!hc::settings::UnifiedConfig::Load(settingsPath_, Root, Error)) { ShowShellError(tr("설정을 읽지 못했습니다: %1\n%2").arg(QDir::toNativeSeparators(settingsPath_), Error)); return; }
         closeViewerOnEscape_ = Root["documentViews"].toObject()["common"].toObject()["closeViewerOnEscape"].toBool(true);
         if (viewerEscape_) viewerEscape_->setEnabled(closeViewerOnEscape_);
         const auto Chrome = Root["appearance"].toObject()["documentWorkspace"].toObject();

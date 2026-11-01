@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "imageFullscreen.hpp"
+#include <QDir>
 #include "imageReadingView.hpp"
 #include "imageReadingNavigator.hpp"
 #include "core/AppSettings.h"
@@ -287,10 +288,10 @@ void ImageFullscreen::UpdateStatus()
         const auto S = Reader->State();
         const bool Presented = S["mode"].toInt() != ImageReadingView::Webtoon && S["presentedPage"].toInt(-1) >= 0;
         bottom_->setText(QString("%1 · %2 / %3 · %4")
-                             .arg(S["book"].toString())
+                             .arg(QDir::toNativeSeparators(S["book"].toString()))
                              .arg(S[Presented ? "presentedPage" : "page"].toInt() + 1)
                              .arg(S["pageCount"].toInt())
-                             .arg(S[Presented ? "presentedName" : "pageName"].toString()));
+                             .arg(QDir::toNativeSeparators(S[Presented ? "presentedName" : "pageName"].toString())));
     }
     else if (auto* Status=workspace_->findChild<QLabel*>("documentStatus")) bottom_->setText(Status->text());
 }

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "qtPluginManagementPage.hpp"
+#include <QDir>
 #include "UniqueLibs/errorPresentation.hpp"
 #include <fmwidgets/DialogHeader.h>
 #include "qtPluginHostSettings.hpp"
@@ -224,7 +225,7 @@ struct QPluginManagementPage::State {
             auto*& Group = Value.builtin_ ? Builtin : External;
             if (!Group) { Group = new QTreeWidgetItem(list_, {Value.builtin_ ? QStringLiteral("제품 내장") : QStringLiteral("추가한 플러그인")}); Group->setFlags(Qt::ItemIsEnabled); auto Font = Group->font(0); Font.setBold(true); Group->setFont(0, Font); }
             auto* Item = new QTreeWidgetItem(Group, {Value.name_ + "\n" + Value.support_ + "\n적용: " + PluginApplicationRule::Describe(Value.builtin_ ? hc::plugins::BuiltinApplication(plugins_, Value.id_) : record(Value).value("application")), Value.actions_}); Item->setData(0, Qt::UserRole, Index); Item->setData(0, Qt::UserRole + 1, Value.id_);
-            Item->setToolTip(0, Value.path_ + '\n' + stateText(Value));
+            Item->setToolTip(0, QDir::toNativeSeparators(Value.path_) + '\n' + stateText(Value));
             Item->setIcon(0, owner_->style()->standardIcon(Value.role_ == 1 ? QStyle::SP_DriveHDIcon : QStyle::SP_FileIcon));
             if (Value.id_ == (Select.isEmpty() ? selectedId_ : Select)) Selected = Item;
         }
@@ -255,7 +256,7 @@ void QPluginManagementPage::State::loadItem() {
     down_->setEnabled(!Value.builtin_ && Value.index_ + 1 < plugins_.value(Value.group_).toArray().size());
     heading_->setText(Value.name_); support_->setText(QStringLiteral("지원 형식: ") + Value.support_); support_->setToolTip(Value.support_);
     actions_->setText(QStringLiteral("지원 작업: ") + Value.actions_); status_->setText(QStringLiteral("상태: ") + stateText(Value));
-    info_->setText(QStringLiteral("%1\n\n%2\n\n%3").arg(Value.builtin_ ? QStringLiteral("제품 내장 구성 요소") : QString::fromLatin1(Formats[Value.format_].token_), Value.path_ + "\n\n지원 형식: " + (Value.extensions_.isEmpty() ? Value.support_ : Value.extensions_.join("; ")),
+    info_->setText(QStringLiteral("%1\n\n%2\n\n%3").arg(Value.builtin_ ? QStringLiteral("제품 내장 구성 요소") : QString::fromLatin1(Formats[Value.format_].token_), QDir::toNativeSeparators(Value.path_) + "\n\n지원 형식: " + (Value.extensions_.isEmpty() ? Value.support_ : Value.extensions_.join("; ")),
         Value.builtin_ ? QStringLiteral("제품에 포함된 처리기입니다. 별도 플러그인을 등록하지 않아도 표시됩니다. 지원 형식은 제품 구성에 따릅니다.") : QStringLiteral("등록 형식은 설정에 기재한 지원 범위입니다. 실제 지원 여부는 플러그인의 감지·열기 결과로 확인합니다.")));
     auto Rule = Record.value("application").toObject(); const auto Parsed = PluginApplicationRule::Parse(Value.builtin_ ? hc::plugins::BuiltinApplication(plugins_, Value.id_) : Record.value("application"));
     enabled_->setChecked(Rule.value("enabled").toBool(true));

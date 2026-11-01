@@ -3,6 +3,7 @@
 #include "widgets/compareSettingsDialog.hpp"
 #include "widgets/compareCommands.hpp"
 #include "widgets/comparePalette.hpp"
+#include <QDir>
 #include <QTableWidget>
 #include "widgets/largeTextView.hpp"
 #include "widgets/largeTextMultiView.hpp"
@@ -1721,7 +1722,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000); auto* apply = dialog->findChild<QPushButton*>("recoveryApply"); QVERIFY(!apply->isEnabled());
         dialog->OpenJournal(journal); QVERIFY(dialog->Busy()); QVERIFY(!apply->isEnabled()); QTRY_VERIFY_WITH_TIMEOUT(!dialog->Busy(), 10000);
         QCOMPARE(dialog->LastResult().outcome_, QString("RecoveryPreview")); QVERIFY(apply->isEnabled()); QVERIFY(!QFileInfo::exists(dir.filePath("destination.txt")));
-        QCOMPARE(dialog->findChild<QLineEdit*>("recoveryDestination")->text(), dir.filePath("destination.txt"));
+        QCOMPARE(dialog->findChild<QLineEdit*>("recoveryDestination")->text(), QDir::toNativeSeparators(dir.filePath("destination.txt")));
         const auto stage = dialog->LastResult().saveRecovery_["stage"].toString(); QVERIFY(QFileInfo::exists(stage));
         QTest::qWait(40); QVERIFY(dialog->grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/recovery-light.png"));
         action(window, "Dark")->setChecked(true); QTest::qWait(40); QVERIFY(dialog->grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/recovery-dark.png"));
@@ -1820,7 +1821,7 @@ private slots:
         view->NavigateDifference(1); QCOMPARE(left->currentIndex().data().toString(), QString("file099.cpp"));
         QVERIFY(left->isExpanded(left->currentIndex().parent())); QVERIFY(right->isExpanded(right->currentIndex().parent()));
         auto* mode = window.findChild<QComboBox*>("directoryViewMode"); mode->setCurrentIndex(1);
-        auto* table = window.findChild<QTableView*>("directoryTable"); QCOMPARE(table->currentIndex().data().toString(), QString("src/nested/file099.cpp"));
+        auto* table = window.findChild<QTableView*>("directoryTable"); QCOMPARE(table->currentIndex().data().toString(), QString("src\\nested\\file099.cpp"));
         mode->setCurrentIndex(0); QCOMPARE(left->currentIndex().data().toString(), QString("file099.cpp"));
         query->clear(); status->setCurrentIndex(0); left->collapse(model->index(0, 0, model->index(0, 0))); left->verticalScrollBar()->setValue(0);
         QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-tree-light.png"));
@@ -2127,6 +2128,27 @@ private slots:
         view.SetComparison({}, {}); QCOMPARE(left->model()->rowCount(), 0); QVERIFY(!left->currentIndex().isValid());
         view.close();
     }
+    void displayPathsKeepCanonicalData()
+    {
+        const auto Path = QString::fromUtf8("src/한글/file.txt");
+        const auto Display = QDir::toNativeSeparators(Path);
+        const QJsonObject Entry{{"path", Path}, {"status", "Different"}};
+        DirectoryModel Flat; Flat.SetEntries(QJsonArray{Entry});
+        QCOMPARE(Flat.index(0, 0).data().toString(), Display);
+        QVERIFY(Flat.index(0, 0).data(Qt::ToolTipRole).toString().startsWith(Display + '\n'));
+        QCOMPARE(Flat.index(0, 0).data(Qt::UserRole).toJsonObject()["path"].toString(), Path);
+        DirectoryTreeModel Tree; Tree.SetEntries(QJsonArray{Entry});
+        const auto Leaf = Tree.ForPath(Path); QVERIFY(Leaf.isValid());
+        QCOMPARE(Leaf.data(DirectoryTreeModel::PathRole).toString(), Path);
+        QVERIFY(Leaf.data(Qt::ToolTipRole).toString().startsWith(Display + '\n'));
+        ArchiveModel Archive(QJsonArray{Entry}, nullptr);
+        QCOMPARE(Archive.index(0, 0).data().toString(), Display);
+        QCOMPARE(Archive.index(0, 0).data(Qt::ToolTipRole).toString(), Display);
+        QCOMPARE(Archive.index(0, 0).data(Qt::UserRole).toJsonObject()["path"].toString(), Path);
+        DirectoryPlanModel Plan(nullptr); Plan.SetPlan({{"actions", QJsonArray{Entry}}});
+        QCOMPARE(Plan.index(0, 0).data().toString(), Display);
+        QCOMPARE(Plan.Plan()["actions"].toArray()[0].toObject()["path"].toString(), Path);
+    }
     void directoryVirtualModelAndNavigation()
     {
         DirectoryModel model; QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::QtTest);
@@ -2139,7 +2161,7 @@ private slots:
         auto* table = view.findChild<QTableView*>("directoryTable"); auto* filter = view.findChild<QComboBox*>("directoryStatusFilter");
         auto* query = view.findChild<QLineEdit*>("directoryQuery"); QCOMPARE(table->model()->rowCount(), 100000);
         filter->setCurrentIndex(2); QCOMPARE(table->model()->rowCount(), 1);
-        view.NavigateDifference(1); QCOMPARE(table->currentIndex().data().toString(), QString("src/file099999.cpp"));
+        view.NavigateDifference(1); QCOMPARE(table->currentIndex().data().toString(), QString("src\\file099999.cpp"));
         query->setText("does-not-exist"); QCOMPARE(table->model()->rowCount(), 0); view.NavigateDifference(-1);
         filter->setCurrentIndex(0); query->setText("FILE09999"); QCOMPARE(table->model()->rowCount(), 10);
         model.SetEntries({}); QCOMPARE(model.rowCount(), 0);

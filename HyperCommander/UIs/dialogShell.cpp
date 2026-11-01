@@ -262,7 +262,7 @@ FileInputDialog::FileInputDialog(const FileDialogRequest& Request, QWidget* Pare
     input_->setHistoryVisible(false);
     // A native folder chooser cannot represent archive or plugin destinations.
     input_->setBrowseVisible(Request.localFolder_);
-    input_->setPath(Request.initialValue_);
+    input_->setPath(QDir::toNativeSeparators(Request.initialValue_));
     input_->lineEdit()->setAccessibleName(Request.label_);
     input_->lineEdit()->setObjectName(QStringLiteral("hc.dialog.input.editor"));
     Label->setBuddy(input_->lineEdit());
@@ -368,7 +368,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
     const bool Transfer = Copy || Request.command_.endsWith("move");
     const auto Defaults = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
     SetSummary((Mkdir ? tr("위치: ") : Request.manifestSelection_ ? tr("선택 목록 전체 · ")
-        : tr("%1개 항목 · ").arg(Request.names_.size())) + Request.source_);
+        : tr("%1개 항목 · ").arg(Request.names_.size())) + QDir::toNativeSeparators(Request.source_));
     const auto Label = [this](const QString& Text) {
         auto* Item = new QLabel(Text, this);
         Item->setTextFormat(Qt::PlainText); Item->setWordWrap(true);
@@ -433,7 +433,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
     input_->setBrowseVisible(Request.nativeDestination_ && !Mkdir && !Rename);
     input_->setHistoryVisible(!Mkdir && !Rename && Request.nativeDestination_);
     input_->setHistory(Request.nativeDestination_ ? RecentTargets(Request.providerKey_) : QStringList{});
-    input_->setPath(Request.initialValue_);
+    input_->setPath(QDir::toNativeSeparators(Request.initialValue_));
     BodyLayout()->addWidget(input_);
     preview_ = new hc::qt::ElidedLabel(this); BodyLayout()->addWidget(preview_);
     preview_->setObjectName(QStringLiteral("hc.operation.preview"));
@@ -442,7 +442,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
         auto* Recent = new fm::ui::RecentTargetsBar(this);
         Recent->setTargets(Request.nativeDestination_ ? RecentTargets(Request.providerKey_).mid(0, 3) : QStringList{});
         BodyLayout()->addWidget(Recent);
-        connect(Recent, &fm::ui::RecentTargetsBar::targetActivated, this, [this](int, const QString& Path) { input_->setPath(Path); });
+        connect(Recent, &fm::ui::RecentTargetsBar::targetActivated, this, [this](int, const QString& Path) { input_->setPath(QDir::toNativeSeparators(Path)); });
         targetMode_ = new QComboBox(this); targetMode_->setObjectName("hc.operation.targetMode");
         targetMode_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); targetMode_->setMinimumContentsLength(12);
         targetMode_->setAccessibleName(tr("대상 경로 해석 방식"));
@@ -620,7 +620,7 @@ void FileOperationDialog::arrangeCompactOperation()
     const auto Targets = RecentTargets(request_.providerKey_).mid(0, 3);
     for (int Index = 0; request_.nativeDestination_ && Index < Targets.size(); ++Index) {
         auto* Shortcut = new QShortcut(QKeySequence(QString("Alt+%1").arg(Index + 1)), this);
-        connect(Shortcut, &QShortcut::activated, this, [this, Target = Targets[Index]] { input_->setPath(Target); });
+        connect(Shortcut, &QShortcut::activated, this, [this, Target = Targets[Index]] { input_->setPath(QDir::toNativeSeparators(Target)); });
     }
     advancedToggle_ = new fm::ui::Button(tr("고급 옵션(&G) ▾"), this); advancedToggle_->setObjectName("hc.operation.advanced"); advancedToggle_->setAutoDefault(false);
     optionSummary_ = new hc::qt::ElidedLabel(this); optionSummary_->setObjectName("hc.operation.optionSummary");
@@ -773,20 +773,20 @@ void FileOperationDialog::validateInput(bool RefreshProbe)
     }
     const bool MovingName = Rename && request_.nativeDestination_ && QDir::cleanPath(QFileInfo(Target).absolutePath()).compare(QDir::cleanPath(QDir::fromNativeSeparators(request_.source_)), Qt::CaseInsensitive) != 0;
     if (Rename) {
-        preview_->setText(MovingName ? tr("이동 위치: %1").arg(Target) : tr("%1 → %2").arg(request_.initialValue_, Value));
+        preview_->setText(MovingName ? tr("이동 위치: %1").arg(QDir::toNativeSeparators(Target)) : tr("%1 → %2").arg(request_.initialValue_, Value));
         if (parents_) parents_->setVisible(MovingName);
         if (targetSummary_) targetSummary_->setVisible(MovingName);
     } else if (!Mkdir && advanced_) {
         if (NativeTransfer) {
             const bool Move = request_.command_.endsWith("move");
             const auto Actual = TargetIsName() || request_.names_.size() != 1 || request_.manifestSelection_ ? Target : QDir::toNativeSeparators(QDir(Target).filePath(request_.names_.front()));
-            preview_->setText(Pending ? tr("대상 종류 확인 중: %1").arg(Target)
+            preview_->setText(Pending ? tr("대상 종류 확인 중: %1").arg(QDir::toNativeSeparators(Target))
                 : TargetIsName() ? (Move ? tr("새 이름으로 이동: %1 → %2\n저장 위치: %3") : tr("새 이름으로 복사: %1 → %2\n저장 위치: %3")).arg(request_.names_.value(0), QFileInfo(Target).fileName(), Actual)
                 : Inspected && targetKind_ == "missing" && CreateParents() ? (Move ? tr("새 폴더 생성 후 이동: %1") : tr("새 폴더 생성 후 복사: %1")).arg(Actual)
                 : (Move ? tr("폴더로 이동: %1") : tr("폴더로 복사: %1")).arg(Actual));
-        } else preview_->setText(tr("대상: %1").arg(Target));
+        } else preview_->setText(tr("대상: %1").arg(QDir::toNativeSeparators(Target)));
         preview_->show();
-    } else preview_->setText(tr("대상: %1\n존재 여부·권한·충돌은 실행 시 다시 확인합니다.").arg(Target));
+    } else preview_->setText(tr("대상: %1\n존재 여부·권한·충돌은 실행 시 다시 확인합니다.").arg(QDir::toNativeSeparators(Target)));
     preview_->setToolTip(preview_->text());
     if (plan_) {
         QList<fm::ui::FolderPlanView::Node> Nodes{{request_.source_, fm::ui::FolderPlanView::Node::Current}};
@@ -826,10 +826,10 @@ void FileOperationDialog::probeTarget()
         const QStorageInfo Volume(Existing), SourceVolume(Source);
         if (Volume.isValid() && Volume.isReady()) {
             Result["compactText"] = QObject::tr("%1 · 사용 가능 %2 · %3")
-                .arg(Volume.rootPath(), QLocale().formattedDataSize(Volume.bytesAvailable()),
+                .arg(QDir::toNativeSeparators(Volume.rootPath()), QLocale().formattedDataSize(Volume.bytesAvailable()),
                     SourceVolume.isValid() && SourceVolume.device() == Volume.device() ? QObject::tr("같은 볼륨") : QObject::tr("다른 볼륨 또는 원본 미확인"));
             Result["text"] = QObject::tr("볼륨: %1 · %2\n사용 가능: %3 · %4\n조회 시점의 참고 정보입니다. 쓰기 시 공간을 다시 확인합니다.")
-                .arg(Volume.rootPath(), QString::fromUtf8(Volume.fileSystemType()), QLocale().formattedDataSize(Volume.bytesAvailable()),
+                .arg(QDir::toNativeSeparators(Volume.rootPath()), QString::fromUtf8(Volume.fileSystemType()), QLocale().formattedDataSize(Volume.bytesAvailable()),
                     SourceVolume.isValid() && SourceVolume.device() == Volume.device() ? QObject::tr("같은 볼륨") : QObject::tr("다른 볼륨 또는 원본 볼륨 미확인"));
         } else { Result["text"] = QObject::tr("대상 볼륨·사용 가능 공간을 조회하지 못했습니다. 실행 시 검사합니다."); Result["compactText"] = Result["text"]; }
         if (Mkdir) {
@@ -887,15 +887,15 @@ ArchiveExtractDialog::ArchiveExtractDialog(const QStringList& Names, const QStri
     SetSummary(InsideArchive ? tr("압축 파일 안에서 선택한 항목을 꺼냅니다.") : tr("선택한 압축 파일을 대상 폴더에 풉니다."));
     auto* Card = new QWidget(this); auto* Form = new QFormLayout(Card); Form->setContentsMargins(0,0,0,0); Form->setRowWrapPolicy(QFormLayout::WrapLongRows); BodyLayout()->addWidget(Card);
     auto* Sources = new QLabel(Names.mid(0,3).join("\n") + (Names.size()>3 ? tr("\n외 %1개").arg(Names.size()-3) : QString{}), Card); Sources->setTextFormat(Qt::PlainText); Sources->setWordWrap(true); Sources->setToolTip(Names.join("\n")); Sources->setObjectName("hc.archive.extract.sources"); Form->addRow(tr("원본"), Sources);
-    auto* PathRow = new QHBoxLayout; destination_ = new QLineEdit(Destination, Card); destination_->setObjectName("hc.archive.extract.path"); destination_->setAccessibleName(tr("압축 해제 대상 폴더")); PathRow->addWidget(destination_, 1);
+    auto* PathRow = new QHBoxLayout; destination_ = new QLineEdit(QDir::toNativeSeparators(Destination), Card); destination_->setObjectName("hc.archive.extract.path"); destination_->setAccessibleName(tr("압축 해제 대상 폴더")); PathRow->addWidget(destination_, 1);
     auto* Browse = new fm::ui::Button(tr("찾아보기(&B)"), Card); Browse->setAutoDefault(false); PathRow->addWidget(Browse);
     auto* DestinationLabel = new QLabel(tr("대상 폴더(&D)"), Card); DestinationLabel->setBuddy(destination_); Form->addRow(DestinationLabel, PathRow);
-    connect(Browse, &QPushButton::clicked, this, [this] { const auto Path = QFileDialog::getExistingDirectory(this, tr("압축 해제 대상 폴더"), this->Destination()); if (!Path.isEmpty()) destination_->setText(Path); });
+    connect(Browse, &QPushButton::clicked, this, [this] { const auto Path = QFileDialog::getExistingDirectory(this, tr("압축 해제 대상 폴더"), this->Destination()); if (!Path.isEmpty()) destination_->setText(QDir::toNativeSeparators(Path)); });
     separate_ = new QCheckBox(tr("압축 파일 이름으로 각각 하위 폴더 만들기(&F)"), Card); separate_->setObjectName("hc.archive.extract.separate"); separate_->setChecked(!InsideArchive); separate_->setEnabled(!InsideArchive); Form->addRow(separate_);
     conflict_ = new QComboBox(Card); conflict_->setObjectName("hc.archive.extract.conflict"); conflict_->addItem(tr("묻기"), "ask"); conflict_->addItem(tr("덮어쓰기"), "replace"); conflict_->addItem(tr("건너뛰기"), "skip"); Form->addRow(tr("같은 이름의 파일"), conflict_);
     queued_ = new QCheckBox(tr("대기열에 추가(&Q)"), Card); queued_->setObjectName("hc.archive.extract.queued"); Form->addRow(queued_);
     auto* Resolved = new hc::qt::ElidedLabel(this); Resolved->setObjectName("hc.archive.extract.resolved"); BodyLayout()->addWidget(Resolved);
-    const auto UpdateResolved = [this, Resolved] { Resolved->SetText(tr("대상: %1").arg(this->Destination())); Resolved->setToolTip(tr("상대경로 기준: %1\n해석된 대상: %2").arg(baseDirectory_,this->Destination())); };
+    const auto UpdateResolved = [this, Resolved] { Resolved->SetText(tr("대상: %1").arg(QDir::toNativeSeparators(this->Destination()))); Resolved->setToolTip(tr("상대경로 기준: %1\n해석된 대상: %2").arg(QDir::toNativeSeparators(baseDirectory_),QDir::toNativeSeparators(this->Destination()))); };
     connect(destination_, &QLineEdit::textChanged, this, UpdateResolved); UpdateResolved();
     auto* Note = new QLabel(tr("원본은 유지하고 하위 폴더 구조를 보존합니다. 암호가 필요하면 작업 중 입력을 요청합니다."), this); Note->setWordWrap(true); BodyLayout()->addWidget(Note); BodyLayout()->addStretch();
     AcceptButton()->setText(tr("압축 해제(&S)")); connect(destination_, &QLineEdit::textChanged, this, [this] { validate(); });

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "dlgExternalConfigure_Item.hpp"
+#include <QDir>
 
 #include "UniqueLibs/qtDialogFrame.hpp"
 
@@ -25,9 +26,9 @@ void CExternalConfigureItem::SetItem( const TyExternalEditor& Item )
     else
         setProgramIcon( ui.lblIcon, Item.IconPath );
 
-    ui.edtIconPath->setText( Item.IconPath );
+    ui.edtIconPath->setText( QDir::toNativeSeparators(Item.IconPath) );
     ui.edtName->setText( Item.Name );
-    ui.edtFilePath->setText( Item.FilePath );
+    ui.edtFilePath->setText( QDir::toNativeSeparators(Item.FilePath) );
     ui.edtCMDLine->setText( Item.CMDLine );
     ui.edtDetect->setText( Item.Detect );
     ui.edtExts->setText( Item.VecExtensions.toList().join( '|' ) );
@@ -60,7 +61,7 @@ void CExternalConfigureItem::on_btnBrowseIcon_clicked( bool checked )
     do
     {
         const auto FilePath = QFileDialog::getOpenFileName( this, tr( "아이콘 선택" ), qApp->applicationDirPath(), "아이콘(*.ico *.exe)" );
-        ui.edtIconPath->setText( FilePath );
+        ui.edtIconPath->setText( QDir::toNativeSeparators(FilePath) );
         setProgramIcon( ui.lblIcon, FilePath );
 
     } while( false );
@@ -75,7 +76,7 @@ void CExternalConfigureItem::on_btnBrowseFile_clicked( bool checked )
     do
     {
         const auto FilePath = QFileDialog::getOpenFileName( this, tr( "실행파일 선택" ), qApp->applicationDirPath(), "*.exe"  );
-        ui.edtFilePath->setText( FilePath );
+        ui.edtFilePath->setText( QDir::toNativeSeparators(FilePath) );
 
         if( ui.edtName->text().isEmpty() == true )
             ui.edtName->setText( QFileInfo( FilePath ).baseName() );
@@ -83,7 +84,7 @@ void CExternalConfigureItem::on_btnBrowseFile_clicked( bool checked )
         if( ui.edtIconPath->text().isEmpty() == true && ui.lblIcon->pixmap().isNull() == true )
         {
             if( setProgramIcon( ui.lblIcon, FilePath ) == true )
-                ui.edtIconPath->setText( FilePath );
+                ui.edtIconPath->setText( QDir::toNativeSeparators(FilePath) );
         }
 
     } while( false );

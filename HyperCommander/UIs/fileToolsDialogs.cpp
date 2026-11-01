@@ -3,6 +3,7 @@
 #include "UniqueLibs/errorPresentation.hpp"
 #include "permissionDialogs.hpp"
 #include <fmwidgets/WrapLayout.h>
+#include <QDir>
 #include <QtConcurrent>
 #include <fmwidgets/Button.h>
 #include <fmwidgets/Card.h>
@@ -112,7 +113,7 @@ void NewFileDialog::closeEvent(QCloseEvent* Event) { if (busy_) { reject(); Even
 
 BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, QWidget* Parent, std::shared_ptr<storage::ISelectionManifest> Selection, filetools::RenameJobController* Jobs)
     : DialogShell(tr("다중 이름 변경"), Parent), jobs_(Jobs ? Jobs : dynamic_cast<filetools::RenameJobController*>(permissions::Controller())), jobOwner_(jobs_ ? jobs_->RenameOwner() : nullptr) {
-    setObjectName("hc.batchRename"); resize(1150, 820); SetSummary(tr("%1개 · %2").arg(Selection ? Selection->Count() : Paths.size()).arg(Paths.isEmpty() ? QString() : QFileInfo(Paths.first()).absolutePath()));
+    setObjectName("hc.batchRename"); resize(1150, 820); SetSummary(tr("%1개 · %2").arg(Selection ? Selection->Count() : Paths.size()).arg(Paths.isEmpty() ? QString() : QDir::toNativeSeparators(QFileInfo(Paths.first()).absolutePath())));
     RestoreToolGeometry(this, "batchRenameGeometry");
     previewTimer_ = new QTimer(this); previewTimer_->setSingleShot(true); previewTimer_->setInterval(80);
     controls_ = new QWidget(this); auto* Cards = new QGridLayout(controls_); Cards->setContentsMargins(0,0,0,0); BodyLayout()->addWidget(controls_);
@@ -226,7 +227,7 @@ BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, Q
             const auto Parent = QFileInfo(Path).absolutePath(); if (Folder.isEmpty()) Folder = Parent;
             if (Parent.compare(Folder, Qt::CaseInsensitive) || Unique.contains(Path.toCaseFolded())) { S.error_ = QObject::tr("동일 폴더의 중복 없는 선택이 필요합니다."); return S; }
             Unique.insert(Path.toCaseFolded()); auto Entry = filetools::Inspect(Path);
-            if (Entry.identity_.isEmpty()) { S.error_ = QObject::tr("원본 확인 실패 또는 링크 미지원: %1").arg(Path); return S; }
+            if (Entry.identity_.isEmpty()) { S.error_ = QObject::tr("원본 확인 실패 또는 링크 미지원: %1").arg(QDir::toNativeSeparators(Path)); return S; }
             S.entries_.append(Entry);
         }
         QDirIterator Names(Folder, QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
@@ -357,7 +358,7 @@ void BatchRenameDialog::finish(const filetools::BatchResult& Result, const QList
         bool Restored = true; for (int I = 0; I < Plan.size(); ++I) if (Result.current_[I].path_ != Plan[I].source_.path_ || Result.current_[I].identity_.isEmpty()) Restored = false;
         sources_ = Result.current_; preview(); SetMessage(Result.error_, true);
         if (!Restored) { undo_.clear(); ready_ = false; controls_->setEnabled(false); SetAcceptEnabled(false);
-            QList<fm::ui::RenameComparisonView::Row> Rows; for (int I = 0; I < Plan.size(); ++I) Rows.append({Plan[I].source_.path_, Result.current_[I].path_, tr("복구 결과 · 실제 경로"), true}); comparison_->SetRows(Rows); }
+            QList<fm::ui::RenameComparisonView::Row> Rows; for (int I = 0; I < Plan.size(); ++I) Rows.append({QDir::toNativeSeparators(Plan[I].source_.path_), QDir::toNativeSeparators(Result.current_[I].path_), tr("복구 결과 · 실제 경로"), true}); comparison_->SetRows(Rows); }
     }
     undoButton_->setEnabled(!undo_.isEmpty() && !undone_); redoButton_->setEnabled(!undo_.isEmpty() && undone_); if (onChanged_) onChanged_();
 }

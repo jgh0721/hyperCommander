@@ -88,10 +88,10 @@ namespace hc::compare
         const auto& row = entries_.at(Index.row());
         if (Role == Qt::UserRole) return row.toObject();
         if (Role == Qt::ToolTipRole)
-            return row.path_ + '\n' + statusName(row.Status()) + '\n' +
+            return QDir::toNativeSeparators(row.path_) + '\n' + statusName(row.Status()) + '\n' +
                 tr("LEFT↔RIGHT: %1 · LEFT↔BASE: %2 · RIGHT↔BASE: %3").arg(row.Status(1), row.Status(2), row.Status(3)) + '\n' + QString::fromUtf8(QJsonDocument(row.errors_).toJson(QJsonDocument::Compact));
         if (Role != Qt::DisplayRole && Role != Qt::AccessibleTextRole) return {};
-        if (Index.column() == 0) return row.path_;
+        if (Index.column() == 0) return QDir::toNativeSeparators(row.path_);
         if (Index.column() == 1) return statusName(row.Status());
         const auto& side = row.sides_[Index.column() - 2];
         if (!side.present_) return row.Status() == "Error" ? tr("확인 불가") : tr("없음");
@@ -104,7 +104,7 @@ namespace hc::compare
         return Section >= 0 && Section < 5 ? QStringList{tr("경로"), tr("상태"), "LEFT", "RIGHT", property("independentThird").toBool() ? "FILE 3" : "BASE"}[Section] : QVariant{};
     }
     void DirectoryFilter::SetQuery(QString Query, int Status)
-    { beginFilterChange(); query_ = std::move(Query); status_ = Status; endFilterChange(Direction::Rows); }
+    { beginFilterChange(); query_ = QDir::fromNativeSeparators(Query); status_ = Status; endFilterChange(Direction::Rows); }
     bool DirectoryFilter::filterAcceptsRow(int Row, const QModelIndex& Parent) const
     {
         Q_UNUSED(Parent);
@@ -313,7 +313,7 @@ namespace hc::compare
         treeFilter_->SetQuery(findChild<QLineEdit*>("directoryQuery")->text(), findChild<QComboBox*>("directoryStatusFilter")->currentIndex());
         for (int side = 0; side < 3; ++side)
         {
-            const auto path = rootPath(Input, side);
+            const auto path = QDir::toNativeSeparators(rootPath(Input, side));
             trees_[side]->parentWidget()->setVisible(side < 2 || independent);
             treeRoots_[side]->setText((independent ? QString("FILE %1  ").arg(side + 1) : side ? tr("RIGHT  ") : tr("LEFT  ")) + path); treeRoots_[side]->setToolTip(path);
             if (!wasStreaming && side < activeSides()) trees_[side]->expandToDepth(0);
@@ -332,9 +332,9 @@ namespace hc::compare
     void DirectoryView::updateRoots()
     {
         QStringList lines;
-        if (!treeMode_) lines << tr("LEFT  %1").arg(request_.file1_) << tr("RIGHT  %1").arg(request_.file2_);
-        if (!request_.base_.isEmpty()) lines << tr("BASE  %1").arg(request_.base_);
-        if (!treeMode_ && !request_.file3_.isEmpty()) lines << tr("FILE 3  %1").arg(request_.file3_);
+        if (!treeMode_) lines << tr("LEFT  %1").arg(QDir::toNativeSeparators(request_.file1_)) << tr("RIGHT  %1").arg(QDir::toNativeSeparators(request_.file2_));
+        if (!request_.base_.isEmpty()) lines << tr("BASE  %1").arg(QDir::toNativeSeparators(request_.base_));
+        if (!treeMode_ && !request_.file3_.isEmpty()) lines << tr("FILE 3  %1").arg(QDir::toNativeSeparators(request_.file3_));
         if (!request_.file3_.isEmpty()) lines << tr("독립 3폴더 비교 · 세 번째 폴더를 BASE로 해석하지 않음 · 선택한 비교 쌍으로 병합");
         lines << tr("링크·정션은 링크 자체만 비교하며 대상을 탐색하지 않습니다. 병합 전에 링크를 제외 필터로 제거하십시오.");
         lines << ((comparison_.directoryLevel_ == "metadata" ? tr("메타데이터 비교 — 크기·수정 시각만 검사, 내용 동일을 보장하지 않음") : comparison_.directoryLevel_ == "text" ? tr("텍스트 내용 비교 · 인코딩/BOM 차이 구분 · 바이너리/16 MiB 초과는 바이트 비교") : tr("바이트 비교")) +
@@ -344,7 +344,7 @@ namespace hc::compare
         for (const auto& warning : comparison_.warnings_)
         {
             const auto item = warning.toObject();
-            if (issues.size() < 32 && item.contains("root")) issues << QDir(item["root"].toString()).filePath(item["path"].toString()) + " — " + item["error"].toString();
+            if (issues.size() < 32 && item.contains("root")) issues << QDir::toNativeSeparators(QDir(item["root"].toString()).filePath(item["path"].toString())) + " — " + item["error"].toString();
         }
         roots_->setToolTip(issues.join('\n'));
         roots_->setText(lines.join('\n'));
@@ -390,7 +390,7 @@ namespace hc::compare
             const auto source = independent ? request_.directoryPair_[side] : side, target = independent ? request_.directoryPair_[1 - side] : 1 - side; const auto entry = item[sideKeys[source]].toObject();
             button->setEnabled(!streaming_ && comparison_.directoryComplete_ && request_.base_.isEmpty() && entry["present"].toBool() && !entry["reparse"].toBool());
             button->setText(independent ? QString("FILE %1 → FILE %2").arg(source + 1).arg(target + 1) : side == 0 ? tr("선택 →") : tr("← 선택"));
-            button->setToolTip(tr("선택한 항목을 복사하는 계획 검토: %1 → %2").arg(rootPath(request_, source), rootPath(request_, target)));
+            button->setToolTip(tr("선택한 항목을 복사하는 계획 검토: %1 → %2").arg(QDir::toNativeSeparators(rootPath(request_, source)), QDir::toNativeSeparators(rootPath(request_, target))));
         }
         for (int side = 0; side < 3; ++side) { const auto entry = item[sideKeys[side]].toObject();
             findChild<QAction*>(side == 0 ? "directoryRenameLeft" : side == 1 ? "directoryRenameRight" : "directoryRenameThird")->setEnabled(!Busy() && !streaming_ && comparison_.directoryComplete_ && entry["present"].toBool() && !entry["reparse"].toBool()); }

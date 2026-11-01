@@ -1,5 +1,6 @@
 ﻿#include "core/ThemeManager.h"
 
+#include <QDir>
 #include "core/AppSettings.h"
 #include <fmstyle/ThemeManager.h>
 
@@ -335,7 +336,7 @@ bool ThemeManager::importThemeFile(const QString& filePath, QString* errorMessag
 {
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
-        if (errorMessage) *errorMessage = tr("테마 파일을 열 수 없습니다: %1").arg(filePath);
+        if (errorMessage) *errorMessage = tr("테마 파일을 열 수 없습니다: %1").arg(QDir::toNativeSeparators(filePath));
         return false;
     }
 
@@ -369,7 +370,7 @@ bool ThemeManager::exportThemeFile(const QString& filePath, QString* errorMessag
 {
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        if (errorMessage) *errorMessage = tr("테마 파일을 저장할 수 없습니다: %1").arg(filePath);
+        if (errorMessage) *errorMessage = tr("테마 파일을 저장할 수 없습니다: %1").arg(QDir::toNativeSeparators(filePath));
         return false;
     }
 

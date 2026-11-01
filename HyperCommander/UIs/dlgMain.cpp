@@ -12,6 +12,7 @@
 #include <fmstyle/ThemeManager.h>
 #include <fmstyle/StylePaint.h>
 #include <fmstyle/WatercolorChrome.h>
+#include <QDir>
 #include <QEvent>
 #include <QFocusEvent>
 #include <QLineEdit>
@@ -558,7 +559,7 @@ void QMainUI::oo_notifyCurrentDirectory( const QString& CurrentPath )
     const auto* Panel = qobject_cast<CmpPanel*>(sender());
     if (Panel && Panel != retrieveSrcPanel()) return;
     updateCommandLinePrompt(CurrentPath);
-    setWindowTitle(CurrentPath.isEmpty() ? QCoreApplication::applicationName() : CurrentPath + " — " + QCoreApplication::applicationName());
+    setWindowTitle(CurrentPath.isEmpty() ? QCoreApplication::applicationName() : QDir::toNativeSeparators(CurrentPath) + " — " + QCoreApplication::applicationName());
 }
 
 void QMainUI::setActivePanel(int Index)
@@ -568,7 +569,7 @@ void QMainUI::setActivePanel(int Index)
     ui.cmpRightPanel->setActivePanel(currentPanelIndex == 1);
     auto* Panel = currentPanelIndex ? ui.cmpRightPanel : ui.cmpLeftPanel;
     updateCommandLinePrompt(Panel->CurrentPath());
-    setWindowTitle(Panel->CurrentPath().isEmpty() ? QCoreApplication::applicationName() : Panel->CurrentPath() + " — " + QCoreApplication::applicationName());
+    setWindowTitle(Panel->CurrentPath().isEmpty() ? QCoreApplication::applicationName() : QDir::toNativeSeparators(Panel->CurrentPath()) + " — " + QCoreApplication::applicationName());
     emit sigActivePanelChanged(Panel);
 }
 
@@ -831,11 +832,11 @@ void QMainUI::executeCommandLine(const QString& Command, bool KeepOpen)
         Panel->ChangeCurrentPath(Path, {}); return;
     }
     if (Location.kind_ != hc::storage::LocatorKind::Local && Location.kind_ != hc::storage::LocatorKind::Smb) {
-        statusBar()->showMessage(tr("외부 명령은 로컬 폴더에서 실행할 수 있습니다. 현재 위치: %1").arg(Panel->CurrentPath())); return;
+        statusBar()->showMessage(tr("외부 명령은 로컬 폴더에서 실행할 수 있습니다. 현재 위치: %1").arg(QDir::toNativeSeparators(Panel->CurrentPath()))); return;
     }
     const auto Directory = Panel->CurrentPath();
     const auto Error = hc::ui::commandLine::Launch(hc::ui::commandLine::Plan(Command, Directory, KeepOpen), Directory);
-    statusBar()->showMessage(Error.isEmpty() ? tr("외부 실행 · %1 · %2").arg(Directory, Command) : Error, 10000);
+    statusBar()->showMessage(Error.isEmpty() ? tr("외부 실행 · %1 · %2").arg(QDir::toNativeSeparators(Directory), Command) : Error, 10000);
 }
 
 // Launching a second process opens folders; it never executes arbitrary commands.

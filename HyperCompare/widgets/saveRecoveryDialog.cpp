@@ -71,12 +71,12 @@ namespace hc::compare
                 const QSignalBlocker block(journals_); journals_->clear();
                 for (const auto& value : last_.recovery_)
                 {
-                    const auto path = value.toString(); auto* item = new QTreeWidgetItem(journals_, {QFileInfo(path).fileName(), path});
-                    item->setData(0, Qt::UserRole, path); item->setToolTip(0, path); item->setToolTip(1, path);
+                    const auto path = value.toString(); auto* item = new QTreeWidgetItem(journals_, {QFileInfo(path).fileName(), QDir::toNativeSeparators(path)});
+                    item->setData(0, Qt::UserRole, path); item->setToolTip(0, QDir::toNativeSeparators(path)); item->setToolTip(1, QDir::toNativeSeparators(path));
                 }
                 journals_->sortItems(1, Qt::AscendingOrder);
                 state_->setText(last_.error_.isEmpty() ? (last_.recovery_.isEmpty() ? tr("저장 복구 기록이 없습니다.") : tr("기록 %1개 — 검토할 기록을 선택하세요.").arg(last_.recovery_.size())) : tr("목록 조회 중단: %1").arg(hc::ui::ErrorText(last_.error_)));
-                details_->setPlainText(tr("기록 폴더: %1").arg(last_.saveRecovery_["directory"].toString()));
+                details_->setPlainText(tr("기록 폴더: %1").arg(QDir::toNativeSeparators(last_.saveRecovery_["directory"].toString())));
             }
             else
             {
@@ -110,8 +110,8 @@ namespace hc::compare
                 if (journals_->topLevelItem(i)->data(0, Qt::UserRole).toString() == selectedPath_) selected = journals_->topLevelItem(i);
             if (!selected)
             {
-                selected = new QTreeWidgetItem(journals_, {QFileInfo(selectedPath_).fileName(), selectedPath_}); selected->setData(0, Qt::UserRole, selectedPath_);
-                selected->setToolTip(0, selectedPath_); selected->setToolTip(1, selectedPath_);
+                selected = new QTreeWidgetItem(journals_, {QFileInfo(selectedPath_).fileName(), QDir::toNativeSeparators(selectedPath_)}); selected->setData(0, Qt::UserRole, selectedPath_);
+                selected->setToolTip(0, QDir::toNativeSeparators(selectedPath_)); selected->setToolTip(1, QDir::toNativeSeparators(selectedPath_));
             }
             journals_->setCurrentItem(selected); journals_->scrollToItem(selected);
         }
@@ -141,7 +141,7 @@ namespace hc::compare
     {
         const auto& info = last_.saveRecovery_;
         for (const auto& pair : {std::pair{destination_, "destination"}, {backup_, "backup"}, {stage_, "stage"}})
-        { pair.first->setText(info[pair.second].toString()); pair.first->setCursorPosition(0); }
+        { pair.first->setText(QDir::toNativeSeparators(info[pair.second].toString())); pair.first->setCursorPosition(0); }
         const QMap<QString, QString> phases{{"writing", tr("임시 파일 기록")}, {"prepared", tr("게시 준비")}, {"backedUp", tr("원본 백업")}, {"published", tr("결과 게시")}, {"finished", tr("저장 완료")}, {"aborted", tr("저장 중단")}};
         phase_->setText(phases.value(info["phase"].toString(), info["phase"].toString()));
         if (!last_.error_.isEmpty())
@@ -151,10 +151,10 @@ namespace hc::compare
             state_->setText(last_.completion_ != "Complete" ? tr("복구 검사가 일부 완료되었습니다. 아래 오류와 보존 파일을 확인하세요.") :
                 last_.commit_ == "Committed" ? tr("복구 검사 완료 — 이미 저장된 결과 파일을 유지했습니다.") :
                 info["destinationPresent"].toBool() ? tr("복구 검사 완료 — 대상 파일이 존재합니다. 아래 보존 경로를 검토하세요.") : tr("대상 파일이 없습니다. 보존된 임시 파일을 별도로 검토하세요."));
-        QStringList lines{tr("기록: %1").arg(selectedPath_)};
+        QStringList lines{tr("기록: %1").arg(QDir::toNativeSeparators(selectedPath_))};
         if (!last_.error_.isEmpty()) lines << tr("오류: %1").arg(hc::ui::ErrorText(last_.error_));
         for (const auto& warning : last_.warnings_) lines << tr("알림: %1").arg(warning.toString());
-        if (task_ == Task::Recover) { lines << tr("보존된 경로:"); for (const auto& path : last_.recovery_) lines << path.toString(); }
+        if (task_ == Task::Recover) { lines << tr("보존된 경로:"); for (const auto& path : last_.recovery_) lines << QDir::toNativeSeparators(path.toString()); }
         details_->setPlainText(lines.join('\n'));
     }
     void SaveRecoveryDialog::updateControls()

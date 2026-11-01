@@ -73,7 +73,7 @@ bool TextShadowBackupStore::saveSnapshot(const Snapshot& snapshot, QString* erro
 
     QDir backupDir(backupDirectoryPath());
     if (!backupDir.exists() && !backupDir.mkpath(QStringLiteral("."))) {
-        setError(errorMessage, QObject::tr("핫 엑시트 백업 폴더를 만들 수 없습니다: %1").arg(backupDir.absolutePath()));
+        setError(errorMessage, QObject::tr("핫 엑시트 백업 폴더를 만들 수 없습니다: %1").arg(QDir::toNativeSeparators(backupDir.absolutePath())));
         return false;
     }
 
@@ -89,7 +89,7 @@ bool TextShadowBackupStore::saveSnapshot(const Snapshot& snapshot, QString* erro
         : backupPathForFile(effective.originalFilePath);
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
-        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 열 수 없습니다: %1").arg(path));
+        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 열 수 없습니다: %1").arg(QDir::toNativeSeparators(path)));
         return false;
     }
 
@@ -112,12 +112,12 @@ bool TextShadowBackupStore::saveSnapshot(const Snapshot& snapshot, QString* erro
         << effective.text;
 
     if (out.status() != QDataStream::Ok) {
-        setError(errorMessage, QObject::tr("핫 엑시트 백업 직렬화에 실패했습니다: %1").arg(path));
+        setError(errorMessage, QObject::tr("핫 엑시트 백업 직렬화에 실패했습니다: %1").arg(QDir::toNativeSeparators(path)));
         return false;
     }
 
     if (!file.commit()) {
-        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 저장할 수 없습니다: %1").arg(path));
+        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 저장할 수 없습니다: %1").arg(QDir::toNativeSeparators(path)));
         return false;
     }
 
@@ -198,7 +198,7 @@ bool TextShadowBackupStore::loadSnapshotFile(const QString& backupFilePath, Snap
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 열 수 없습니다: %1").arg(path));
+        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 열 수 없습니다: %1").arg(QDir::toNativeSeparators(path)));
         return false;
     }
 
@@ -215,7 +215,7 @@ bool TextShadowBackupStore::loadSnapshotFile(const QString& backupFilePath, Snap
        >> version;
 
     if (magic != kMagic || (version != 1 && version != kVersion)) {
-        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일 형식이 올바르지 않습니다: %1").arg(path));
+        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일 형식이 올바르지 않습니다: %1").arg(QDir::toNativeSeparators(path)));
         return false;
     }
 
@@ -239,7 +239,7 @@ bool TextShadowBackupStore::loadSnapshotFile(const QString& backupFilePath, Snap
         in >> loaded.text;
 
     if (in.status() != QDataStream::Ok) {
-        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일 형식이 올바르지 않습니다: %1").arg(path));
+        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일 형식이 올바르지 않습니다: %1").arg(QDir::toNativeSeparators(path)));
         return false;
     }
 
@@ -265,7 +265,7 @@ bool TextShadowBackupStore::deleteSnapshot(const QString& originalFilePath, QStr
         return true;
 
     if (!QFile::remove(path)) {
-        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 삭제할 수 없습니다: %1").arg(path));
+        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 삭제할 수 없습니다: %1").arg(QDir::toNativeSeparators(path)));
         return false;
     }
 
@@ -279,7 +279,7 @@ bool TextShadowBackupStore::deleteUntitledSnapshot(const QString& untitledId, QS
         return true;
 
     if (!QFile::remove(path)) {
-        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 삭제할 수 없습니다: %1").arg(path));
+        setError(errorMessage, QObject::tr("핫 엑시트 백업 파일을 삭제할 수 없습니다: %1").arg(QDir::toNativeSeparators(path)));
         return false;
     }
 
@@ -300,7 +300,7 @@ bool TextShadowBackupStore::deleteAllBackups(QString* errorMessage)
     }
 
     if (!ok)
-        setError(errorMessage, QObject::tr("일부 핫 엑시트 백업 파일을 삭제할 수 없습니다: %1").arg(backupDir.absolutePath()));
+        setError(errorMessage, QObject::tr("일부 핫 엑시트 백업 파일을 삭제할 수 없습니다: %1").arg(QDir::toNativeSeparators(backupDir.absolutePath())));
 
     return ok;
 }

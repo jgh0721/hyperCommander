@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/imagePerformance.hpp"
+#include <QDir>
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentViewPane.hpp"
 #include "epubProcessView.hpp"
@@ -558,7 +559,7 @@ namespace hc::document
             const QStringList Fits{tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤")};
             Add("fit",Fits.value(State["fit"].toInt()),true);
             if(State["private"].toBool())Add("private",tr("읽기 기록 저장 안 함"));
-            Add("pageName",State[Presented?"presentedName":"pageName"].toString(),false);
+            Add("pageName",QDir::toNativeSeparators(State[Presented?"presentedName":"pageName"].toString()),false);
             Add("readingMode",Webtoon?tr("세로 연속"):State["mode"].toInt()==ImageReadingView::Comic?tr("코믹"):tr("한 쪽"),false);
             if(Webtoon)Add("gap",tr("간격 %1 px").arg(State["gap"].toInt()),false);
             if(State["split"].toBool())Add("split",tr("분할 %1").arg(State["part"].toInt()+1),false);

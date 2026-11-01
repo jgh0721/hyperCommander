@@ -13,6 +13,7 @@
 #include "saveRecoveryDialog.hpp"
 #include "runtime/saveRecovery.hpp"
 #include "runtime/gitTool.hpp"
+#include <QDir>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QPlainTextEdit>
@@ -462,7 +463,7 @@ namespace hc::compare
                 else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ?
                     tr("결정 계획 내보내기 완료 — RESULT 저장 상태 유지") : tr("결정 계획 저장 완료 — 정리·파일 변경 확인 필요"));
             }
-            state_->setToolTip(transfer.path_ + '\n' + QString::fromUtf8(QJsonDocument(QJsonObject{
+            state_->setToolTip(QDir::toNativeSeparators(transfer.path_) + '\n' + QString::fromUtf8(QJsonDocument(QJsonObject{
                 {"warnings", transfer.file_.warnings_}, {"recovery", transfer.file_.recovery_}}).toJson()));
             if (closing_) close();
         });
@@ -470,7 +471,7 @@ namespace hc::compare
             cancel_->setEnabled(false); const auto transfer = reportWatcher_.result(); updateMerge();
             if (!transfer.error_.isEmpty()) state_->setText(tr("보고서 저장 중단: ") + hc::ui::ErrorText(transfer.error_));
             else state_->setText(transfer.file_.warnings_.isEmpty() && transfer.file_.recovery_.isEmpty() ? tr("비교 보고서 저장 완료") : tr("보고서 저장 완료 — 정리 확인 필요"));
-            state_->setToolTip(transfer.path_ + '\n' + QString::fromUtf8(QJsonDocument(QJsonObject{
+            state_->setToolTip(QDir::toNativeSeparators(transfer.path_) + '\n' + QString::fromUtf8(QJsonDocument(QJsonObject{
                 {"warnings", transfer.file_.warnings_}, {"recovery", transfer.file_.recovery_}}).toJson()));
             if (closing_) close();
         });
@@ -635,7 +636,7 @@ namespace hc::compare
     ScintillaEditBase* CompareWindow::addPane(const QString& Title, const QString& Path, const QByteArray& Text, bool ReadOnly, const CompareLanguage& Language)
     {
         auto* pane = new QWidget(panes_); auto* box = new QVBoxLayout(pane); box->setContentsMargins(2, 2, 2, 2);
-        auto* label = new QLabel(Title + " — " + QFileInfo(Path).fileName(), pane); label->setTextFormat(Qt::PlainText); label->setToolTip(Path);
+        auto* label = new QLabel(Title + " — " + QFileInfo(Path).fileName(), pane); label->setTextFormat(Qt::PlainText); label->setToolTip(QDir::toNativeSeparators(Path));
         label->setMinimumWidth(0); label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); box->addWidget(label);
         auto* labels = new QHBoxLayout; labels->setContentsMargins(0, 0, 0, 0); box->addLayout(labels);
         auto* format = new QLabel(pane); format->setObjectName("format_" + Title);
