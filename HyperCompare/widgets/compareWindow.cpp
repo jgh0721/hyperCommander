@@ -107,7 +107,7 @@ namespace hc::compare
         auto* layout = new QSplitter(Qt::Vertical, this);
         auto* sources = new QWidget(layout); sources_ = sources; auto* row = new QHBoxLayout(sources); row->setContentsMargins(0, 0, 0, 0); row->setSpacing(0);
         panes_ = new QSplitter(Qt::Horizontal, sources); overview_ = new OverviewBar(sources);
-        row->addWidget(panes_, 1); row->addWidget(overview_);
+        row->addWidget(overview_); row->addWidget(panes_, 1);
         details_ = new QTabWidget(layout); details_->setObjectName("comparisonDetails");
         changes_ = new QTreeWidget(details_); semantic_ = new SemanticView(details_);
         details_->addTab(changes_, tr("줄 차이")); details_->addTab(semantic_, tr("함수 변경")); details_->setTabVisible(1, false);
@@ -884,6 +884,7 @@ namespace hc::compare
         scroll_->SetAligned(alignRows_->isChecked()); overview_->SetAligned(alignRows_->isChecked());
         overview_->SetSourceNumbers(unsigned(pair->inputs_[0] + 1), unsigned(pair->inputs_[1] + 1));
         overview_->SetSession(first, second, pair->alignment_);
+        overview_->SetDocuments(pair->overview_);
         // Include initial insertion gaps without changing caret/selection bytes.
         first->send(SCI_SETFIRSTVISIBLELINE, 0); second->send(SCI_SETFIRSTVISIBLELINE, 0);
         syncScroll_->setToolTip(tr("%1 / %2의 대응 줄과 가로 위치를 함께 이동합니다.").arg(first->objectName(), second->objectName()));
@@ -917,6 +918,7 @@ namespace hc::compare
         auto* left = editors_[pair->inputs_[0]]; auto* right = editors_[pair->inputs_[1]];
         const auto map = multi_ ? multi_->Pair(left, right) : pair->alignment_;
         overview_->SetSession(left, right, map ? map : pair->alignment_);
+        overview_->SetDocuments(pair->overview_);
         overview_->SetAligned(multi_ ? multi_->Ready() : alignRows_->isChecked());
         alignmentStatus_->setVisible(multi_ && !multi_->Ready());
         if (multi_)

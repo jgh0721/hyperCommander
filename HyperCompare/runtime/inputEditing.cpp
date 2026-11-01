@@ -50,6 +50,14 @@ namespace hc::compare
                     decoration.steps_ -= pair->alignment_->SimilarityWork();
                 }
                 pair->inline_ = BuildInlineDiff(view(Texts[a]), view(Texts[b]), edits, decoration, pair->alignment_.get());
+                try
+                {
+                    auto SummaryLimits = Limits;
+                    SummaryLimits.deadline_ = std::min(Limits.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(100));
+                    pair->overview_[0] = BuildOverviewDocument(view(Texts[a]), SummaryLimits);
+                    pair->overview_[1] = BuildOverviewDocument(view(Texts[b]), SummaryLimits);
+                }
+                catch (const Failure&) { }
                 Previous.pairViews_[slot] = std::move(pair); equal &= Texts[a] == Texts[b];
                 if (!slot) Previous.edits_ = edits;
                 Previous.comparisons_.append(QJsonObject{{"fromFile", a + 1}, {"toFile", b + 1}, {"changeCount", qint64(edits.size())}});

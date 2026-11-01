@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QPointer>
 #include <QVector>
+#include <QPixmap>
 #include <memory>
 
 class ScintillaEditBase;
@@ -17,9 +18,12 @@ namespace hc::compare
         void SetAligned(bool Aligned);
         void SetDark(bool Dark);
         void SetSourceNumbers(unsigned First, unsigned Second);
+        void SetDocuments(const std::array<OverviewDocument, 2>& Documents);
         void FocusSource();
         QSize sizeHint() const override;
     protected:
+        bool event(QEvent* Event) override;
+        bool eventFilter(QObject* Object, QEvent* Event) override;
         void paintEvent(QPaintEvent* Event) override;
         void resizeEvent(QResizeEvent* Event) override;
         void changeEvent(QEvent* Event) override;
@@ -30,13 +34,21 @@ namespace hc::compare
         void focusOutEvent(QFocusEvent* Event) override;
     private:
         QRect track(unsigned Side) const;
+        int headerHeight() const;
         void rebuild();
+        void renderMap();
+        QString describe(unsigned Side, std::intptr_t Row) const;
+        void updateDescription();
+        std::intptr_t rowAt(unsigned Side, int Y) const;
         void navigate(int Y);
         void scrollTo(std::intptr_t Row);
         std::array<QPointer<ScintillaEditBase>, 2> editors_;
         QVector<QMetaObject::Connection> connections_;
         std::shared_ptr<const AlignmentMap> map_;
         OverviewRaster raster_;
+        std::array<OverviewDocument, 2> documents_;
+        QPixmap image_;
+        int cachedTop_ = -1;
         unsigned active_ = 0;
         std::array<unsigned, 2> numbers_{1, 2};
         bool aligned_ = false, dark_ = false;

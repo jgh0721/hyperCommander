@@ -67,6 +67,8 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QInputDialog>
+#include <QScreen>
+#include <cstdio>
 #include <QInputDialog>
 #include <QUuid>
 #include <fmstyle/ThemeManager.h>
@@ -2243,9 +2245,9 @@ private slots:
         QCOMPARE(editors[2]->send(SCI_GETFIRSTVISIBLELINE), thirdTop);
         action(window, "왼쪽·오른쪽 스크롤 동기화")->setChecked(true);
         editors[1]->send(SCI_SETFIRSTVISIBLELINE, 25); QTRY_VERIFY(editors[2]->send(SCI_GETFIRSTVISIBLELINE) < 40);
-        QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/three-pair-light.png"));
+        QTest::qWait(40); QVERIFY(window.grab().save(dir.filePath("three-pair-light.png")));
         action(window, "Dark")->setChecked(true); QTest::qWait(40);
-        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/three-pair-dark.png"));
+        QVERIFY(window.grab().save(dir.filePath("three-pair-dark.png")));
         // Recompare adopts new disk snapshots and retains the selected pair.
         write(r.file1_, "same"); write(r.file2_, "different"); write(r.file3_, "same");
         QPointer<ScintillaEditBase> previous = editors[0]; action(window, "다시 비교")->trigger(); QVERIFY(!selector->isEnabled());
@@ -2274,6 +2276,40 @@ private slots:
         action(merge, "왼쪽 전체 선택")->trigger(); action(merge, "결과 저장")->trigger();
         QTRY_COMPARE_WITH_TIMEOUT(merge.ExitCode(), 0, 10000); merge.close();
     }
+    void overviewMinimapGeometryAndInvalidation()
+    {
+        QSettings{}.setValue("view/alignSourceRows", true);
+        QTemporaryDir Dir; Request Input; Input.file1_ = Dir.filePath("first.cpp"); Input.file2_ = Dir.filePath("second.cpp"); Input.theme_ = "dark";
+        QByteArray Source;
+        for (int Line = 0; Line < 400; ++Line) Source += QByteArray(Line % 12, ' ') + "int value" + QByteArray::number(Line) + " = 123;\r\n";
+        write(Input.file1_, Source); write(Input.file2_, Source);
+        CompareWindow Window(Input); Window.show(); Window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(Window.findChild<ScintillaEditBase*>("FILE 1"), 10000);
+        auto* Left = Window.findChild<ScintillaEditBase*>("FILE 1"); auto* Bar = Window.findChild<OverviewBar*>();
+        QTRY_VERIFY(Bar->isVisible()); QTest::qWait(60);
+        QVERIFY(Bar->width() >= 72); QVERIFY(Bar->mapToGlobal(QPoint()).x() + Bar->width() <= Left->mapToGlobal(QPoint()).x());
+        const auto Top = Bar->mapFromGlobal(Left->mapToGlobal(QPoint())).y();
+        QVERIFY(Top > Bar->fontMetrics().height());
+        const auto Dpr = Bar->devicePixelRatioF();
+        qInfo("Minimap UI DPR: %.2f", Dpr);
+        const QRect Interior(qRound(10 * Dpr), qRound(Top * Dpr), qRound(16 * Dpr), qRound((Bar->height() - Top - 5) * Dpr));
+        const auto Before = Bar->grab().toImage().copy(Interior);
+        const auto Track = CompareColor("barTrack", true); int Ink = 0;
+        for (int Y = 0; Y < Before.height(); ++Y) for (int X = 0; X < Before.width(); ++X) Ink += Before.pixelColor(X, Y) != Track;
+        QVERIFY(Ink > 30); // Identical documents still have a visible document silhouette.
+        Bar->setFocus(); QTest::keyClick(Bar, Qt::Key_PageDown); QTest::qWait(30);
+        QVERIFY(Left->send(SCI_GETFIRSTVISIBLELINE) > 0);
+        QCOMPARE(Bar->grab().toImage().copy(Interior), Before); // Scrolling moves only the external viewport brackets.
+        QVERIFY(Bar->accessibleDescription().contains(QString::number(Left->send(SCI_GETFIRSTVISIBLELINE) + 1)));
+        QTest::keyClick(Bar, Qt::Key_Escape); QTRY_VERIFY(Left->hasFocus());
+        Left->send(SCI_SETSEL, 0, Left->send(SCI_GETLENGTH));
+        Left->send(SCI_REPLACESEL, 0, reinterpret_cast<sptr_t>("short\r\n"));
+        QTRY_COMPARE_WITH_TIMEOUT(Window.findChild<QTreeWidget*>("compareChanges")->topLevelItemCount(), 1, 10000);
+        Bar->setFocus(); QTest::keyClick(Bar, Qt::Key_Home);
+        QVERIFY(Bar->grab().toImage().copy(Interior) != Before);
+        QCOMPARE(contents(Left), QByteArray("short\r\n")); QVERIFY(Left->send(SCI_CANUNDO));
+        Left->send(SCI_SETSAVEPOINT); Left->setFocus(); QTest::qWait(30); Window.close();
+    }
     void overviewNavigationAndAppearance()
     {
         QSettings{}.setValue("view/alignSourceRows", true);
@@ -2291,7 +2327,9 @@ private slots:
         QTest::qWait(30); const auto initial = bar->grab().toImage();
         // A one-bin insertion at BOF remains visible under the viewport marker.
         const auto scale = initial.devicePixelRatio();
-        QCOMPARE(initial.pixelColor(qRound(bar->width() * 0.75 * scale), qCeil((bar->fontMetrics().height() + 8) * scale)), fm::style::themeColorsFor(bar)[fm::style::Token::Ok]);   // insertions use the theme's Ok token
+        const auto top = bar->mapFromGlobal(left->mapToGlobal(QPoint())).y();
+        const auto lane = (bar->width() - 20) / 2;
+        QCOMPARE(initial.pixelColor(qRound((6 + lane + 8 + lane - 2) * scale), qCeil(top * scale)), fm::style::themeColorsFor(bar)[fm::style::Token::Ok]);
         QCOMPARE(left->send(SCI_GETANCHOR), sptr_t(2));
         QTest::mouseClick(bar, Qt::LeftButton, Qt::NoModifier, QPoint(bar->width() / 4, bar->height() / 2));
         QTRY_VERIFY(left->send(SCI_GETFIRSTVISIBLELINE) > 400 && left->send(SCI_GETFIRSTVISIBLELINE) < 600);
@@ -2329,9 +2367,11 @@ private slots:
         for (auto* editor : {left, right}) { QCOMPARE(editor->send(SCI_GETMODIFY), sptr_t(0)); QCOMPARE(editor->send(SCI_CANUNDO), sptr_t(0)); }
         QCOMPARE(contents(left), a); QCOMPARE(contents(right), b);
         left->send(SCI_SETFIRSTVISIBLELINE, 170); right->send(SCI_SETFIRSTVISIBLELINE, 171);
-        QTest::qWait(40); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/overview-light.png"));
+        const auto Evidence = qEnvironmentVariable("HC_MINIMAP_EVIDENCE_DIR", dir.path()); QDir{}.mkpath(Evidence);
+        const auto DprSuffix = QString::number(bar->devicePixelRatioF());
+        QTest::qWait(40); QVERIFY(window.grab().save(Evidence + "/overview-light-" + DprSuffix + ".png"));
         action(window, "Dark")->setChecked(true); QTest::qWait(40);
-        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/overview-dark.png")); window.close();
+        QVERIFY(window.grab().save(Evidence + "/overview-dark-" + DprSuffix + ".png")); window.close();
     }
     void overviewRecompareAndMergePreservation()
     {
@@ -3271,5 +3311,14 @@ private slots:
         save->trigger(); QTRY_COMPARE_WITH_TIMEOUT(window.ExitCode(), 0, 10000); window.close();
     }
 };
-QTEST_MAIN(CompareUiTests)
+int main(int Argc, char** Argv)
+{
+    QApplication App(Argc, Argv);
+    // The standard local UI harness probes native DPI before applying a target DPR.
+    if (App.arguments().contains("--probe-dpr"))
+    {
+        std::printf("%.12g", App.primaryScreen()->devicePixelRatio()); return 0;
+    }
+    CompareUiTests Tests; return QTest::qExec(&Tests, Argc, Argv);
+}
 #include "tstCompareUi.moc"

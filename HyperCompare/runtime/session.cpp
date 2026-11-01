@@ -355,6 +355,15 @@ namespace hc::compare
                     views[i]->inline_ = BuildInlineDiff(view(result.inputs_[views[i]->inputs_[0]].utf8_),
                         view(result.inputs_[views[i]->inputs_[1]].utf8_), ranges, decoration, views[i]->alignment_.get());
                     decoration.steps_ -= views[i]->inline_.cells_;
+                    // Optional worker-built geometry. A deadline fallback keeps the change raster usable.
+                    try
+                    {
+                        auto SummaryLimits = limits;
+                        SummaryLimits.deadline_ = std::min(limits.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(100));
+                        for (unsigned Side = 0; Side < 2; ++Side)
+                            views[i]->overview_[Side] = BuildOverviewDocument(view(result.inputs_[views[i]->inputs_[Side]].utf8_), SummaryLimits);
+                    }
+                    catch (const Failure&) { }
                     result.pairViews_[i] = std::move(views[i]);
                 }
             }

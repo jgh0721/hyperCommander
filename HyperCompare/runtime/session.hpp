@@ -4,6 +4,7 @@
 #include "core/mergeModel.hpp"
 #include "core/alignmentMap.hpp"
 #include "core/inlineDiff.hpp"
+#include "core/overviewMap.hpp"
 #include "commonLibs/storage/storage.hpp"
 #include "commonLibs/storage/writableStorage.hpp"
 #include <QByteArray>
@@ -76,6 +77,7 @@ namespace hc::compare
         std::vector<PairChange> changes_;
         std::shared_ptr<const AlignmentMap> alignment_;
         InlineDiff inline_;
+        std::array<OverviewDocument, 2> overview_;
     };
     struct Result
     {

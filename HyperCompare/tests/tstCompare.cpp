@@ -1719,6 +1719,27 @@ private slots:
         Budget expired; expired.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
         QCOMPARE(documents.Analyze(0, cpp, big + "int tail() { return 1; }\n", expired)["reason"].toString(), QString("TimeLimit"));
     }
+    void overviewDocumentGeometryAndLimits()
+    {
+        const auto Document = BuildOverviewDocument("  abc\r\n\t한글e\xcc\x81\rblank\n  \nend");
+        QCOMPARE(Document.lines_, std::size_t(5));
+        QCOMPARE(Document.At(0), (OverviewStroke{2, 5}));
+        QCOMPARE(Document.At(1), (OverviewStroke{8, 13}));
+        QCOMPARE(Document.At(2), (OverviewStroke{0, 5}));
+        QCOMPARE(Document.At(3), OverviewStroke{});
+        QCOMPARE(Document.At(4), (OverviewStroke{0, 3}));
+        QCOMPARE(Document.At(5), OverviewStroke{});
+        QVERIFY(BuildOverviewDocument("").strokes_.empty());
+        QCOMPARE(BuildOverviewDocument(std::string(10000, 'x')).At(0).end_, std::uint16_t(128));
+        std::string Large; Large.reserve(8'000'000);
+        for (int Line = 0; Line < 100000; ++Line) Large += "    target_link_libraries(HyperCompare PRIVATE Qt6::Widgets)\r\n";
+        QElapsedTimer Timer; Timer.start(); const auto Summary = BuildOverviewDocument(Large);
+        QCOMPARE(Summary.lines_, std::size_t(100000)); QCOMPARE(Summary.strokes_.size(), std::size_t(4096));
+        QCOMPARE(Summary.At(99999).indent_, std::uint16_t(4));
+        qInfo("Minimap 100000 source lines: %lld us, %zu geometry bytes", Timer.nsecsElapsed() / 1000, Summary.strokes_.size() * sizeof(OverviewStroke));
+        std::atomic_bool Canceled{true}; Budget Limits; Limits.canceled_ = &Canceled;
+        QVERIFY_EXCEPTION_THROWN(BuildOverviewDocument(Large, Limits), Failure);
+    }
     void overviewTypesAndBoundaries()
     {
         const auto insertion = AlignmentMap::Build(0, 3, {{0, 0, 0, 3, {}}});
