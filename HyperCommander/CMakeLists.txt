@@ -91,6 +91,11 @@ set(PROJECT_UI_SRC
         UIs/dlgOpts.cpp
         UIs/dlgOpts.hpp
         UIs/dlgOpts.ui
+        UIs/audioTitleWidget.cpp
+        UIs/audioTitleWidget.hpp
+        UIs/audioPopover.cpp
+        UIs/audioPopover.hpp
+        UIs/audioSettingsPage.hpp
         UniqueLibs/uiComboBoxWidget.cpp
         UniqueLibs/uiComboBoxWidget.hpp
 )
@@ -219,6 +224,11 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/solMultiLang_Defs.hpp
         ../UniqueLibs/solTCPluginMgr.cpp
         ../UniqueLibs/solTCPluginMgr.hpp
+        ../UniqueLibs/audio/audioQueue.hpp
+        ../UniqueLibs/audio/audioEngine.cpp
+        ../UniqueLibs/audio/audioEngine.hpp
+        ../UniqueLibs/audio/audioSession.cpp
+        ../UniqueLibs/audio/audioSession.hpp
 )
 qt_add_executable(HyperCommander
         ${PROJECT_SOURCES}
@@ -280,6 +290,7 @@ target_link_libraries(HyperCommander
         Qt::UiTools
         Qt::PrintSupport
         Qt::Widgets
+        Qt::Multimedia
         Qt6::CorePrivate
         Qt6::GuiPrivate
         Qt6::WidgetsPrivate

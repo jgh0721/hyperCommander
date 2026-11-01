@@ -84,6 +84,9 @@ public:
     void StartupPaintCompleted();
     bool IsTwoLine() const;
     bool IsThumbnailMode() const;
+    // 제목표시줄 미리 듣기가 재생 중일 때 재생 행의 막대를 움직인다.
+    void SetNowPlayingAnimated(bool On);
+    bool NowPlayingAnimating() const;
     QPoint ListContentTopLeft() const;
     using RenameCompletion = std::function<void(bool)>;
     using RenameHandler = std::function<void(const QModelIndex&, const QString&, RenameCompletion)>;
@@ -263,6 +266,7 @@ private:
     
     // DataGrid 의 클릭 상태 추적을 위한 타이머
     QTimer                          viewClickTimer_;
+    QTimer                          nowPlayingTimer_;
     QPersistentModelIndex           mouseRenameIndex_;
     QPersistentModelIndex           lastNameClickIndex_;
     QElapsedTimer                   lastNameClickTime_;

@@ -239,6 +239,22 @@ void CFSModel::SetClipboardCut(const QSet<QString>& Keys, const QString& Root)
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {ClipboardCutRole});
 }
 
+void CFSModel::SetNowPlaying(const QString& Key, int State)
+{
+    if (nowPlayingKey_ == Key && nowPlayingState_ == State) return;
+    // 이전 곡과 새 곡의 행만 다시 그린다. 키 비교는 SelectionKey로 한다.
+    const auto Old = nowPlayingKey_;
+    nowPlayingKey_ = Key; nowPlayingState_ = State;
+    if (!rowCount() || !columnCount()) return;
+    for (int Row = 0; Row < rowCount(); ++Row) {
+        const auto Item = GetFileInfo(index(Row, 0));
+        if (!Item || !Item->storageEntry_) continue;
+        const auto RowKey = hc::workspace::SelectionKey(*Item->storageEntry_);
+        if ((!Old.isEmpty() && RowKey == Old) || (!Key.isEmpty() && RowKey == Key))
+            emit dataChanged(index(Row, 0), index(Row, columnCount() - 1), {NowPlayingRole});
+    }
+}
+
 void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataSpan ) const
 {
     if( index.isValid() == false )
@@ -410,6 +426,10 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                 RoleWith.setData(Item->Name_ != ".." && Item->storageEntry_
                     && ((!clipboardCutKeys_.isEmpty() && clipboardCutKeys_.contains(hc::workspace::SelectionKey(*Item->storageEntry_)))
                         || (!clipboardCutRoot_.isEmpty() && clipboardCutRoot_ == hc::workspace::LocationKey(WorkspaceLocation()))));
+            } break;
+            case NowPlayingRole: {
+                RoleWith.setData(!nowPlayingKey_.isEmpty() && Item->storageEntry_
+                    && hc::workspace::SelectionKey(*Item->storageEntry_) == nowPlayingKey_ ? nowPlayingState_ : 0);
             } break;
         }
     }

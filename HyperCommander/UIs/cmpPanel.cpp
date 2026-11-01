@@ -31,6 +31,8 @@
 #include "UniqueLibs/solTCPluginMgr.hpp"
 #include "UniqueLibs/colorSchemeMgr.hpp"
 #include "UniqueLibs/cmnHCUtils.hpp"
+#include "UniqueLibs/commandUiBridge.hpp"
+#include "UniqueLibs/audio/audioSession.hpp"
 #include "HyperCommanderBuiltInPlugin/IsoImage/builtinIso.hpp"
 
 #include <shtypes.h>
@@ -694,6 +696,11 @@ void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
             return;
         }
 
+        // 오디오는 옵션이 켜져 있으면 제목표시줄에서 재생한다. 엔진을 쓸 수 없으면 아래 실행으로 넘어간다.
+        if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); Bridge && Bridge->Audio() && Bridge->Audio()->OpenInternally()
+            && hc::audio::IsPlayable(EntryInfo->Name_, Bridge->Audio()->Extensions()) && Bridge->StartAudioPreview(this, ModelIndex))
+            return;
+
         // TODO: 해당 항목이 내부 진입이 가능한 파일인지 확인한 후 아닐 때 실행한다.
         // NOTE: 토탈 커맨더의 경우 .DLL 등 명시적인 실행파일이 아닌 경우 레지스트리를 뒤져 실행가능하지 않다면 ShellExecuteExW 를 호출하지 않고, 오류창을 표시한다. 
         CoInitializeEx( NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE );
@@ -1203,6 +1210,19 @@ void CmpPanel::StopEverythingSearch(bool Restore)
     if (Restore) { State->restoreSearchGroups_ = true; State->restoreSelection_ = true; restoreTab(CurrentTabIndex()); }
     else { State->searchScroll_ = {}; State->searchGroups_ = {}; State->restoreSearchGroups_ = false; }
     syncPanelChrome();
+}
+
+void CmpPanel::RevealItem( const QString& Folder, const QString& Key )
+{
+    const auto State = retrieveFocusState(); if (!State || !State->Model || Folder.trimmed().isEmpty()) return;
+    auto* View = static_cast<CGridView*>(State->View);
+    // 이미 그 폴더면 이동하지 않고 커서만 옮긴다. ChangeCurrentPath는 같은 경로에서 바로 돌아온다.
+    if (!static_cast<CFSModel*>(State->Model)->IsSearchResults()
+        && QDir::cleanPath(Folder).compare(QDir::cleanPath(CurrentPath()), Qt::CaseInsensitive) == 0) {
+        View->RestoreSelection(View->CaptureSelection(), Key); return;
+    }
+    ChangeCurrentPath(Folder, {});
+    State->workspace_.selection_ = {}; State->workspace_.focus_ = Key; State->restoreSelection_ = true;
 }
 
 void CmpPanel::OpenSearchLocation()

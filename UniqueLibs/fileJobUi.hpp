@@ -40,6 +40,8 @@ public:
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::MoveOperationRequest Request,
         hc::storage::OperationContext Context, bool Deferred = false);
     std::shared_ptr<hc::operations::IFileElevationService> ElevationService() const;
+    // 삭제·이동·이름 변경 직전에 원본 경로를 알린다. 미리 듣기가 그 파일을 놓도록 쓴다.
+    void SetBeforeMutation(std::function<void(const QStringList&)> Hook) { beforeMutation_ = std::move(Hook); }
     QString SubmitSecurityJob(const QString& Path,bool Grant,const QJsonObject& Restore={}) override;
     QObject* RenameOwner() override { return this; }
     hc::operations::JobScheduler& RenameScheduler() override { return scheduler_; }
@@ -134,6 +136,7 @@ private:
     std::map<std::string, hc::storage::OperationContext> retryContexts_;
     QPushButton* managerOpen_ = nullptr;
     QPushButton* indicator_ = nullptr;
+    std::function<void(const QStringList&)> beforeMutation_;
     QCheckBox* autoClose_ = nullptr;
     bool detailed_ = false;
     bool appliedShowRecords_ = false;

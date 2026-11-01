@@ -324,6 +324,24 @@ protected:
             }
             General["refresh"] = Refresh;
         }
+        if (General.contains("audioPreview")) {
+            auto Audio = General["audioPreview"].toObject();
+            const auto Whole = [&](const char* Key, int Low, int High, int Fallback) {
+                const auto Value = Audio[Key].toDouble(-1);
+                if (!Audio[Key].isDouble() || Value < Low || Value > High || Value != double(qint64(Value))) { Audio[Key] = Fallback; Report(QString("general.audioPreview.") + Key); }
+            };
+            Whole("volume", 0, 100, 70); Whole("materializeLimitMiB", 16, 8192, 1024);
+            for (const auto* Key : {"muted", "autoNext", "shuffle"})
+                if (!Audio[Key].isBool()) { Audio[Key] = QString(Key) == "autoNext"; Report(QString("general.audioPreview.") + Key); }
+            // 나중에 더한 값이라 없으면 기본(켬)을 쓴다.
+            if (Audio.contains("animateNowPlaying") && !Audio["animateNowPlaying"].isBool()) { Audio["animateNowPlaying"] = true; Report("general.audioPreview.animateNowPlaying"); }
+            if (!QStringList{"off", "folder", "one"}.contains(Audio["repeat"].toString())) { Audio["repeat"] = "off"; Report("general.audioPreview.repeat"); }
+            if (!Audio["extensions"].isString() || Audio["extensions"].toString().size() > 1024) {
+                Audio["extensions"] = hc::defaults::AudioPreview()["extensions"]; Report("general.audioPreview.extensions");
+            }
+            General["audioPreview"] = Audio;
+        }
+        if (General.contains("menuMigrations") && !General["menuMigrations"].isArray()) { General["menuMigrations"] = QJsonArray{}; Report("general.menuMigrations"); }
         auto Update = General.value("update").toObject();
         if (Update.contains("checkIntervalDays") && Update["checkIntervalDays"] != QJsonValue(UpdateCheckIntervalDays(Update))) {
             Update["checkIntervalDays"] = UpdateCheckIntervalDays(Update);
@@ -336,7 +354,7 @@ protected:
         if (Copy.contains("folderSizeMode") && !QStringList{"manual", "local", "all", "everything"}.contains(Copy["folderSizeMode"].toString())) {
             Copy["folderSizeMode"] = "everything"; Report("options.folderSizeMode");
         }
-        for (const auto* Key : {"copyMetadata", "copyVerify", "copyAcl", "copyStreams", "saveJobProgress", "showJobDetails", "enableJobRecovery", "jobCloseOnSuccess", "delayedFileWrites", "renameInDialog", "renameSelectExtension", "renameOnSlowClick"}) if (Copy.contains(Key) && !Copy[Key].isBool()) {
+        for (const auto* Key : {"copyMetadata", "copyVerify", "copyAcl", "copyStreams", "saveJobProgress", "showJobDetails", "enableJobRecovery", "jobCloseOnSuccess", "delayedFileWrites", "renameInDialog", "renameSelectExtension", "renameOnSlowClick", "audioOpenInternally"}) if (Copy.contains(Key) && !Copy[Key].isBool()) {
             Copy[Key] = QString(Key) == "copyMetadata" || QString(Key) == "jobCloseOnSuccess" || QString(Key) == "delayedFileWrites" || QString(Key) == "renameInDialog" || QString(Key) == "renameOnSlowClick"; Report(QString("options.") + Key);
         }
         if (Copy.contains("copyPattern")) {

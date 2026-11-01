@@ -11,7 +11,7 @@ foreach ($Name in @('HyperCommander.exe','HyperCommanderAdmin.exe','HyperEditor.
 foreach ($File in Get-ChildItem -LiteralPath $Root -File) {
     if ($File.Name -match '^(Qt6|vcruntime|msvcp|concrt|d3dcompiler_|opengl32sw|pdfium)[A-Za-z0-9_.]*\.dll$' -and $File.Name -notmatch '^Qt6Test') { [void]$Names.Add($File.Name) }
 }
-foreach ($Folder in @('Libs/platforms','Libs/imageformats','Libs/iconengines','Libs/styles','Libs/generic','Libs/networkinformation','Libs/tls','Libs/sqldrivers','Libs/printsupport','Addons/WCX/IsoImage','Addons/WLX/HyperViewer','Third-Party/SevenZip','Third-Party/AlzEgg')) {
+foreach ($Folder in @('Libs/platforms','Libs/imageformats','Libs/iconengines','Libs/styles','Libs/generic','Libs/networkinformation','Libs/tls','Libs/sqldrivers','Libs/printsupport','Libs/multimedia','Libs/ffmpeg','Addons/WCX/IsoImage','Addons/WLX/HyperViewer','Third-Party/SevenZip','Third-Party/AlzEgg')) {
     $Directory = Join-Path $Root $Folder
     if (-not (Test-Path -LiteralPath $Directory)) { continue }
     Assert-UpdatePlainPath $Directory

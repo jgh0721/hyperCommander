@@ -254,6 +254,26 @@ DECLARE_CMD( BuiltInCMD_App_About,                QObject::tr( "기타" ),    "h
 DECLARE_CMD( BuiltInCMD_App_Update,               QObject::tr( "기타" ),    "hc.app.update",
              Qt::Key_unknown,                                           QObject::tr( "업데이트 확인" ) );
 
+// 제목표시줄 오디오 미리 듣기. 미리 듣기만 기본 키(Ctrl+Enter)를 두고 나머지는 사용자가 지정한다.
+DECLARE_CMD( BuiltInCMD_Audio_Preview,            QObject::tr( "오디오" ),  "hc.audio.preview",
+             Qt::ControlModifier | Qt::Key_Return,                      QObject::tr( "오디오 미리 듣기" ) );
+DECLARE_CMD( BuiltInCMD_Audio_PreviewKeypad,      QObject::tr( "오디오" ),  "hc.audio.preview",
+             Qt::ControlModifier | Qt::KeypadModifier | Qt::Key_Enter,  QObject::tr( "오디오 미리 듣기" ) );
+DECLARE_CMD( BuiltInCMD_Audio_PlayPause,          QObject::tr( "오디오" ),  "hc.audio.playPause",
+             Qt::Key_unknown,                                           QObject::tr( "재생/일시정지" ) );
+DECLARE_CMD( BuiltInCMD_Audio_Stop,               QObject::tr( "오디오" ),  "hc.audio.stop",
+             Qt::Key_unknown,                                           QObject::tr( "정지" ) );
+DECLARE_CMD( BuiltInCMD_Audio_Next,               QObject::tr( "오디오" ),  "hc.audio.next",
+             Qt::Key_unknown,                                           QObject::tr( "다음 곡" ) );
+DECLARE_CMD( BuiltInCMD_Audio_Prev,               QObject::tr( "오디오" ),  "hc.audio.prev",
+             Qt::Key_unknown,                                           QObject::tr( "이전 곡" ) );
+DECLARE_CMD( BuiltInCMD_Audio_SeekForward,        QObject::tr( "오디오" ),  "hc.audio.seekForward",
+             Qt::Key_unknown,                                           QObject::tr( "5초 앞으로" ) );
+DECLARE_CMD( BuiltInCMD_Audio_SeekBack,           QObject::tr( "오디오" ),  "hc.audio.seekBack",
+             Qt::Key_unknown,                                           QObject::tr( "5초 뒤로" ) );
+DECLARE_CMD( BuiltInCMD_Audio_Locate,             QObject::tr( "오디오" ),  "hc.audio.locate",
+             Qt::Key_unknown,                                           QObject::tr( "재생 중인 파일 위치 보기" ) );
+
 // 해당 벡터를 순서대로 순회하며 환경설정 대화상자에 표시한다.
 inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_Tab_New,
@@ -360,6 +380,15 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_App_Exit,
     BuiltInCMD_App_About,
     BuiltInCMD_App_Update,
+    BuiltInCMD_Audio_Preview,
+    BuiltInCMD_Audio_PreviewKeypad,
+    BuiltInCMD_Audio_PlayPause,
+    BuiltInCMD_Audio_Stop,
+    BuiltInCMD_Audio_Next,
+    BuiltInCMD_Audio_Prev,
+    BuiltInCMD_Audio_SeekForward,
+    BuiltInCMD_Audio_SeekBack,
+    BuiltInCMD_Audio_Locate,
 };
 
 namespace hc::defaults
@@ -959,6 +988,19 @@ namespace hc::defaults
                  { "badges",                  true },   { "method", 2 },         { "targets", 15 },    { "threads", 2 }, { "cacheMb", 16 },
                  { "skipSlow",                true }, { "autoSwitch", false }, { "autoPercent", 70 } };
     }
+    // 제목표시줄 오디오 미리 듣기. 확장자 목록은 audioQueue.hpp의 기본값과 같다.
+    inline QJsonObject AudioPreview()
+    {
+        return { { "version", 1 },
+                 { "extensions",              "mp3,m4a,aac,flac,wav,ogg,oga,opus,wma,ape,wv,aif,aiff,mka,mp2,ac3,dts,amr,caf,mpc,dsf,dff" },
+                 { "volume",                  70 },
+                 { "muted",                   false },
+                 { "autoNext",                true },
+                 { "repeat",                  "off" },
+                 { "shuffle",                 false },
+                 { "animateNowPlaying",       true },
+                 { "materializeLimitMiB",     1024 } };
+    }
     inline QJsonObject General( bool ExistingInstallation )
     {
         return { { "sizeInHeader", "adaptive2" },
@@ -991,7 +1033,10 @@ namespace hc::defaults
                  { "functionCommands",        QJsonArray::fromStringList( FunctionCommands() ) },
                  { "functionCaptions",        QJsonArray{} },
                  { "filePanel",               FilePanel() },
-                 { "thumbnails",              Thumbnails() } };
+                 { "thumbnails",              Thumbnails() },
+                 { "audioPreview",            AudioPreview() },
+                 // 한 번만 적용하는 사용자 메뉴 파일 이관 표식
+                 { "menuMigrations",          QJsonArray{} } };
     }
     inline QJsonObject Options( bool ExistingInstallation = false )
     {
@@ -1000,6 +1045,8 @@ namespace hc::defaults
                  { "renameInDialog",          ExistingInstallation },
                  { "renameSelectExtension",   false },
                  { "renameOnSlowClick",       true },
+                 // 켜면 Enter·두 번 클릭으로 오디오를 제목표시줄에서 재생한다. 모든 설치에서 기본으로 끈다.
+                 { "audioOpenInternally",     false },
                  { "folderSizeOnSpace",       true },
                  { "folderSizeBeforeOperations", true },
                  { "folderSizeUseEverything", true },

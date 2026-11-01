@@ -528,6 +528,13 @@ QString FileJobUi::SubmitSecurityJob(const QString& Path,bool Grant,const QJsonO
 
 Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationContext Context, bool Deferred)
 {
+    if (beforeMutation_ && (Request.operation_ == hc::operations::FileOperation::Move || Request.operation_ == hc::operations::FileOperation::Delete || Request.operation_ == hc::operations::FileOperation::Rename)) {
+        QStringList Paths;
+        for (const auto& Source : Request.sources_) Paths.append(QString::fromStdString(Source.entry_.locator_.root_));
+        // 큰 선택은 목록 대신 선택 기준 폴더만 들고 온다. 그 아래의 재생 파일도 놓는다.
+        if (Request.selection_) Paths.append(QString::fromStdString(Request.selectionRoot_.root_));
+        beforeMutation_(Paths);
+    }
     Request.fileLockInteractions_ = true;
     Request.calculateSizeBefore_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeBeforeOperations"].toBool(true);
     if ((Request.selection_ && hc::folders::IsNetwork(Request.selectionRoot_))
@@ -601,6 +608,11 @@ Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationCo
 
 Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationContext Context, bool Deferred)
 {
+    if (beforeMutation_) {
+        QStringList Paths;
+        for (const auto& Source : Request.sources_) Paths.append(QString::fromStdString(Source.locator_.root_));
+        beforeMutation_(Paths);
+    }
     Context.providerInteractions_ = true;
     Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};

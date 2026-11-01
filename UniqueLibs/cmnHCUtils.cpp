@@ -201,7 +201,7 @@ private:
 };
 }
 
-bool OpenShellContextMenuForObjects(const QStringList& Paths, int X, int Y, void* ParentWindow)
+bool OpenShellContextMenuForObjects(const QStringList& Paths, int X, int Y, void* ParentWindow, const ShellMenuExtras& Extras)
 {
     const auto Owner = static_cast<HWND>(ParentWindow);
     if (Paths.isEmpty() || !IsWindow(Owner) || !qApp || QThread::currentThread() != qApp->thread()) return false;
@@ -237,12 +237,17 @@ bool OpenShellContextMenuForObjects(const QStringList& Paths, int X, int Y, void
     ShellMenuMessages Messages(Owner, Context.Get());
     const UINT QueryFlags = CMF_NORMAL | ((GetKeyState(VK_SHIFT) & 0x8000) ? CMF_EXTENDEDVERBS : 0);
     if (FAILED(Context->QueryContextMenu(Popup, 0, 1, 0x7FFF, QueryFlags)) || GetMenuItemCount(Popup) <= 0) return false;
+    // Product items go on top with ids above the shell's 1..0x7FFF range.
+    for (qsizetype Index = Extras.size() - 1; Index >= 0; --Index)
+        InsertMenuW(Popup, 0, MF_BYPOSITION | MF_STRING, 0x8000 + UINT(Index), reinterpret_cast<LPCWSTR>(Extras[Index].first.utf16()));
+    if (!Extras.isEmpty()) InsertMenuW(Popup, UINT(Extras.size()), MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
     // TPM_NONOTIFY also suppresses initialization/owner-draw messages required
     // by IContextMenu2/3. TPM_RETURNCMD alone avoids WM_COMMAND dispatch.
     const UINT Flags = TPM_RETURNCMD | TPM_RIGHTBUTTON
         | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : TPM_LEFTALIGN);
     const auto Command = TrackPopupMenuEx(Popup, Flags, X, Y, Owner, nullptr);
     if (!Command) return true; // Closing the menu without invoking a verb is successful.
+    if (Command >= 0x8000 && Command < 0x8000 + UINT(Extras.size())) { if (Extras[Command - 0x8000].second) Extras[Command - 0x8000].second(); return true; }
     if (!IsWindow(Owner)) return false;
     CMINVOKECOMMANDINFOEX Info = {};
     Info.cbSize = sizeof(Info); Info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;

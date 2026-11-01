@@ -277,6 +277,61 @@
         {
           "id": "automation",
           "section": "automation"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "id": "audio",
+          "label": "오디오 미리 듣기",
+          "items": [
+            {
+              "id": "audioPreview",
+              "command": "hc.audio.preview",
+              "label": "미리 듣기"
+            },
+            {
+              "id": "audioPlayPause",
+              "command": "hc.audio.playPause",
+              "label": "재생/일시정지"
+            },
+            {
+              "id": "audioStop",
+              "command": "hc.audio.stop",
+              "label": "정지"
+            },
+            {
+              "type": "separator"
+            },
+            {
+              "id": "audioPrev",
+              "command": "hc.audio.prev",
+              "label": "이전 곡"
+            },
+            {
+              "id": "audioNext",
+              "command": "hc.audio.next",
+              "label": "다음 곡"
+            },
+            {
+              "id": "audioSeekBack",
+              "command": "hc.audio.seekBack",
+              "label": "5초 뒤로"
+            },
+            {
+              "id": "audioSeekForward",
+              "command": "hc.audio.seekForward",
+              "label": "5초 앞으로"
+            },
+            {
+              "type": "separator"
+            },
+            {
+              "id": "audioLocate",
+              "command": "hc.audio.locate",
+              "label": "재생 중인 파일 위치 보기"
+            }
+          ]
         }
       ]
     },

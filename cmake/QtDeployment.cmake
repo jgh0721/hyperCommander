@@ -5,7 +5,9 @@ if(WIN32)
     set(HC_PLUGIN_MANIFEST "set(HC_PLUGIN_FILES\n")
     foreach(HC_IMPORTED_TARGET IN LISTS HC_IMPORTED_TARGETS)
         get_target_property(HC_PLUGIN_TYPE ${HC_IMPORTED_TARGET} QT_PLUGIN_TYPE)
-        if(HC_PLUGIN_TYPE MATCHES "^(platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport)$")
+        # Multimedia ships only the FFmpeg backend; the deprecated WMF backend shares its MF dependency.
+        if(HC_PLUGIN_TYPE MATCHES "^(platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport)$"
+            OR (HC_PLUGIN_TYPE STREQUAL "multimedia" AND HC_IMPORTED_TARGET MATCHES "FFmpegMediaPlugin$"))
             string(APPEND HC_PLUGIN_MANIFEST "    \"$<TARGET_FILE:${HC_IMPORTED_TARGET}>\"\n")
         endif()
     endforeach()

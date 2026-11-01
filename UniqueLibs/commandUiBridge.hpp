@@ -20,6 +20,8 @@ class QtViewerHost;
 class CQuickView;
 class QAction;
 namespace hc::document { class DocumentOpenController; }
+namespace hc::audio { class AudioSession; }
+namespace hc::ui { class AudioPopover; }
 namespace hc::ui { class UserMenu; }
 
 std::shared_ptr<hc::commands::IExecutor> MakeQtExecutor(QObject* Owner);
@@ -49,6 +51,14 @@ public:
     void DropFiles(const QStringList& Paths, const QString& Destination, Qt::DropAction Action);
     bool HasFileClipboard() const { return clipboard_.has_value() || clipboardImporting_; }
     FileJobUi* FileJobs() const { return fileJobs_; }
+    hc::audio::AudioSession* Audio() const { return audio_; }
+    // 패널 화면 순서로 같은 폴더의 오디오를 모아 Index 항목부터 재생한다. 엔진을 쓸 수 없거나
+    // 대상이 아니면 false(호출자는 기존처럼 연결 프로그램을 연다).
+    bool StartAudioPreview(CmpPanel* Panel, const QModelIndex& Index);
+    void LocateAudio();
+    // 파일 목록의 Esc 로 미리 듣기를 끝낸다(재생·일시정지·오류 표시 모두). 끝낼 것이 없으면 false.
+    bool CancelAudioPreview();
+    bool HasAudioPreview() const;
     std::shared_ptr<hc::commands::EventHub> Events() const { return events_; }
     hc::automation::Host AutomationHost();
     std::shared_ptr<hc::script::IScriptHostApi> ScriptApi(std::set<std::string> Permissions);
@@ -99,6 +109,11 @@ private:
     hc::commands::EventSubscription errorSubscription_;
     FileJobUi* fileJobs_ = nullptr;
     QtViewerHost* viewers_ = nullptr;
+    hc::audio::AudioSession* audio_ = nullptr;
+    QPointer<hc::ui::AudioPopover> audioPopover_;
+    void createAudioUi(QWidget* Window);
+    void refreshAudioActions();
+    void refreshNowPlayingAnimation();
     hc::document::DocumentOpenController* documents_ = nullptr;
     QPointer<CmpPanel> quickSource_, quickPanel_;
     QPointer<CQuickView> quick_;

@@ -61,6 +61,9 @@ public:
     void SetClipboardCut(const QSet<QString>& Keys, const QString& Root);
     static constexpr int ClipboardCutRole = Qt::UserRole + 73;
     static constexpr int FileEffectsRole = Qt::UserRole + 74;
+    // 제목표시줄 미리 듣기의 현재 곡: 0 없음, 1 재생, 2 일시정지.
+    void SetNowPlaying(const QString& Key, int State);
+    static constexpr int NowPlayingRole = Qt::UserRole + 75;
     void SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts);
     const QVector<hc::columns::SortDefinition>& ColumnSorts() const { return columnSorts_; }
     void SetGrouping(const hc::columns::GroupingState& State);
@@ -262,6 +265,8 @@ private:
     bool                            iconViewportBound_ = false, iconViewportEnabled_ = true;
     QSet<QString> clipboardCutKeys_;
     QString clipboardCutRoot_;
+    QString nowPlayingKey_;
+    int nowPlayingState_ = 0;
     bool                            forceIconRefresh_ = false;
     QString                         forceIconLocation_;
     std::stop_source                directorySizeStop_;

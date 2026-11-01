@@ -21,4 +21,7 @@ namespace hc::layout
     // Root files the oldest supported updater does not own travel here in packages and
     // inventories; the product copies them to ROOT (tools/update/update-contract.json).
     inline constexpr auto RootCarrier        = "Libs/RootFiles";
+    // FFmpeg DLLs of the Qt Multimedia backend. Every updater since v2026.10.18.3 owns Libs/,
+    // so they never raise minimumFromVersion; the app preloads them by full path.
+    inline constexpr auto FfmpegLibraries    = "Libs/ffmpeg";
 }

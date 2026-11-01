@@ -1,5 +1,11 @@
 ﻿#pragma once
 
+#include <QList>
+#include <QPair>
+#include <QString>
+#include <QStringList>
+#include <functional>
+
 enum TyEnSizeStyle {
     HC_SIZE_STYLE_BYTES,
     HC_SIZE_STYLE_KBYTES,
@@ -23,7 +29,9 @@ QVariant                                ShowMSGBoxWithDetail( QWidget* parent, Q
 
 void                                    SetTitleIcon( QLabel* Widget );
 bool                                    OpenShellContextMenuForObject( const std::wstring& path, int xPos, int yPos, void* parentWindow );
-bool OpenShellContextMenuForObjects(const QStringList& Paths, int X, int Y, void* ParentWindow);
+// Product items placed above the shell verbs: label and action.
+using ShellMenuExtras = QList<QPair<QString, std::function<void()>>>;
+bool OpenShellContextMenuForObjects(const QStringList& Paths, int X, int Y, void* ParentWindow, const ShellMenuExtras& Extras = {});
 
 QString                                 ConvertSTRRETTo( STRRET* Str );
 

@@ -54,6 +54,10 @@
 #include "archiveExtractJob.hpp"
 #include "commonLibs/operations/providerInteractionTask.hpp"
 #include "qtViewerHost.hpp"
+#include "audio/audioSession.hpp"
+#include "HyperCommander/UIs/audioPopover.hpp"
+#include "HyperCommander/UIs/audioTitleWidget.hpp"
+#include <fmwidgets/WindowChrome.h>
 #include <QStandardPaths>
 #include "document/documentOpenController.hpp"
 #include "HyperCommanderUpdater/updateController.hpp"
@@ -196,6 +200,42 @@ namespace
     private:
         QPointer<QObject> owner_;
     };
+    // 기존 사용자의 menu-bar.json 도구 메뉴 끝에 오디오 하위 메뉴를 한 번만 넣는다.
+    // 표식(general.menuMigrations)이 있으면 사용자가 지웠어도 다시 넣지 않는다.
+    void MigrateAudioMenu(const QString& Path, const QByteArray& BuiltIn)
+    {
+        auto& Settings = hc::settings::AppSettings();
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        auto Done = General.value("menuMigrations").toArray();
+        if (Done.contains(QJsonValue("audio-1"))) return;
+        const auto Mark = [&] { Done.append("audio-1"); General["menuMigrations"] = Done; Settings.Put(hc::settings::Section::General, General); };
+        QFile File(Path);
+        // 첫 실행은 오디오 메뉴가 든 기본 파일을 그대로 복사한다.
+        if (!File.exists()) { Mark(); return; }
+        if (File.size() > 1024 * 1024 || !File.open(QIODevice::ReadOnly)) return;
+        const auto Bytes = File.readAll(); File.close();
+        auto Root = QJsonDocument::fromJson(Bytes).object(); auto Menus = Root["menus"].toArray();
+        if (Menus.isEmpty()) return;
+        QJsonObject Stock;
+        for (const auto& Menu : QJsonDocument::fromJson(BuiltIn).object()["menus"].toArray())
+            if (Menu.toObject()["id"] == "tools")
+                for (const auto& Item : Menu.toObject()["items"].toArray()) if (Item.toObject()["id"] == "audio") Stock = Item.toObject();
+        // 이미 오디오 명령을 쓰거나 같은 id가 있으면 사용자 구성을 존중한다.
+        if (Stock.isEmpty() || Bytes.contains("hc.audio.") || Bytes.contains("\"audio")) { Mark(); return; }
+        bool Inserted = false;
+        for (qsizetype Index = 0; Index < Menus.size() && !Inserted; ++Index) {
+            auto Menu = Menus[Index].toObject();
+            if (Menu["id"] != "tools") continue;
+            auto Items = Menu["items"].toArray(); Items.append(QJsonObject{{"type", "separator"}}); Items.append(Stock);
+            Menu["items"] = Items; Menus[Index] = Menu; Inserted = true;
+        }
+        if (!Inserted) { Mark(); return; }
+        Root["menus"] = Menus;
+        const auto Next = QJsonDocument(Root).toJson();
+        QSaveFile Save(Path); Save.setDirectWriteFallback(false);
+        if (Save.open(QIODevice::WriteOnly) && Save.write(Next) == Next.size() && Save.commit()) Mark();
+        else qWarning().noquote() << "audio menu migration failed:" << Path << Save.errorString();
+    }
     QModelIndex SourceIndex(QModelIndex Index)
     {
         while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
@@ -269,6 +309,19 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     });
     errorSubscription_ = std::move(Subscription.Value());
     fileJobs_ = new FileJobUi(Main, events_);
+    audio_ = new hc::audio::AudioSession(this);
+    connect(audio_, &hc::audio::AudioSession::sigNowPlayingChanged, this, [this](const QString& Key, int State) {
+        if (!main_) return;
+        for (auto* Model : main_->findChildren<CFSModel*>()) Model->SetNowPlaying(Key, State);
+        refreshNowPlayingAnimation();
+    });
+    connect(audio_, &hc::audio::AudioSession::sigStateChanged, this, &CommandUiBridge::refreshAudioActions);
+    // 환경 설정을 다시 읽으면(ReloadSettings) 막대 움직임 설정도 바로 따른다.
+    connect(audio_, &hc::audio::AudioSession::sigModeChanged, this, &CommandUiBridge::refreshNowPlayingAnimation);
+    // 재생 중인 파일은 엔진이 열고 있어 삭제·이동·이름 변경이 공유 위반으로 실패한다(실측). 작업 전에 놓는다.
+    fileJobs_->SetBeforeMutation([Session = QPointer<hc::audio::AudioSession>(audio_)](const QStringList& Paths) { if (Session) Session->ReleaseIfTarget(Paths); });
+    // 강제 종료로 남은 미리 듣기 임시 파일은 시작이 끝난 뒤 정리한다(계획 D20).
+    QTimer::singleShot(3000, audio_, [Session = audio_] { Session->RecoverTemporaryFiles(); });
     viewers_ = new QtViewerHost(Main, [] {
         const auto Base=QDir::tempPath()+"/hc-viewer-content";QDir().mkpath(Base);
         MaterializationLimits Limits;Limits.maxActiveFiles_=std::numeric_limits<std::size_t>::max();
@@ -423,9 +476,12 @@ void CommandUiBridge::rememberJobSelection(const std::string& Id, const CommandC
 void CommandUiBridge::bindModels()
 {
     if (!main_) return;
+    // 새 탭의 목록도 재생 중 행 애니메이션을 따른다.
+    refreshNowPlayingAnimation();
     for (auto* Model : main_->findChildren<CFSModel*>())
     {
         Model->SetClipboardCut(cutKeys_, cutRoot_);
+        if (audio_) Model->SetNowPlaying(audio_->IsActive() && audio_->Current() ? audio_->Current()->key_ : QString(), audio_->NowPlayingState());
         if (Model->property("hc.tabId").isNull()) Model->setProperty("hc.tabId", QUuid::createUuid().toString(QUuid::Id128));
         if (Model->property("hc.commandSignals").toBool()) continue;
         Model->setProperty("hc.commandSignals", true);
@@ -923,6 +979,95 @@ QModelIndex CommandUiBridge::commandIndex() const
     return Row.isValid() && Row.type() == Qtitan::GridRow::DataRow ? Row.modelIndex(0) : QModelIndex{};
 }
 
+bool CommandUiBridge::StartAudioPreview(CmpPanel* Panel, const QModelIndex& Index)
+{
+    if (!audio_ || !Panel) return false;
+    auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+    auto* Model = View ? qobject_cast<CFSModel*>(View->BaseModel()) : nullptr;
+    if (!Model || !View->BaseView() || !Model->CanUseSnapshot()) return false;
+    const auto Start = SourceIndex(Index);
+    if (!Start.isValid()) return false;
+    const auto Extensions = audio_->Extensions();
+    // 패널 화면 순서(그룹·정렬·필터 반영)의 스냅샷이 대기열이 된다(계획 D08).
+    std::vector<hc::audio::AudioTrack> Tracks; qsizetype StartAt = -1;
+    auto* Native = View->BaseView();
+    for (int Row = 0; Row < Native->getRowCount(); ++Row) {
+        const auto GridRow = Native->getRow(Row);
+        if (GridRow.type() != Qtitan::GridRow::DataRow) continue;
+        const auto Source = SourceIndex(GridRow.modelIndex(0));
+        const auto Item = Model->GetFileInfo(Source);
+        if (!Item || !Item->storageEntry_ || (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) || !hc::audio::IsPlayable(Item->Name_, Extensions)) continue;
+        const auto& Entry = *Item->storageEntry_;
+        hc::audio::AudioTrack Track;
+        Track.name_ = Item->Name_; Track.path_ = Model->GetFileFullPath(Source); Track.key_ = hc::workspace::SelectionKey(Entry);
+        Track.size_ = Entry.size_;
+        const auto Cut = std::max(Track.path_.lastIndexOf('\\'), Track.path_.lastIndexOf('/'));
+        Track.folder_ = Cut > 0 ? Track.path_.left(Cut) : Model->GetCurrentPathWithRoot();
+        if (Entry.locator_.kind_ == LocatorKind::Local || Entry.locator_.kind_ == LocatorKind::Smb) Track.localPath_ = QString::fromStdString(Entry.locator_.root_);
+        else Track.source_ = std::make_shared<ProviderContentSource>(Model->ProviderFor(Entry), Entry);
+        if (Source.row() == Start.row()) StartAt = qsizetype(Tracks.size());
+        Tracks.push_back(std::move(Track));
+    }
+    if (StartAt < 0) return false;
+    if (!audio_->IsAvailable()) {
+        if (auto* Window = qobject_cast<QMainWindow*>(main_.data())) Window->statusBar()->showMessage(audio_->UnavailableText(), 8000);
+        return false;
+    }
+    audio_->Start(std::move(Tracks), StartAt);
+    return true;
+}
+
+void CommandUiBridge::LocateAudio()
+{
+    const auto* Track = audio_ ? audio_->Current() : nullptr;
+    if (!Track || !activePanel_) return;
+    activePanel_->RevealItem(Track->folder_, Track->key_);
+    activePanel_->SetFocusView(activePanel_->CurrentTabIndex());
+}
+
+bool CommandUiBridge::HasAudioPreview() const
+{
+    return audio_ && audio_->IsActive();
+}
+
+bool CommandUiBridge::CancelAudioPreview()
+{
+    if (!HasAudioPreview()) return false;
+    audio_->Stop();
+    return true;
+}
+
+void CommandUiBridge::refreshNowPlayingAnimation()
+{
+    if (!main_ || !audio_) return;
+    const bool Animate = audio_->NowPlayingState() == 1 && audio_->AnimateNowPlaying();
+    for (auto* View : main_->findChildren<CGridView*>()) View->SetNowPlayingAnimated(Animate);
+}
+
+void CommandUiBridge::refreshAudioActions()
+{
+    const bool Active = audio_ && audio_->IsActive();
+    for (const auto* Id : {"hc.audio.playPause", "hc.audio.stop", "hc.audio.next", "hc.audio.prev", "hc.audio.seekForward", "hc.audio.seekBack", "hc.audio.locate"})
+        if (auto* Command = Action(Id)) Command->setEnabled(Active);
+}
+
+void CommandUiBridge::createAudioUi(QWidget* Window)
+{
+    // 제목표시줄 부속 위젯(A안). 재생 중이 아닐 때는 숨어 있어 제목 폭을 차지하지 않는다.
+    auto* Chrome = Window ? Window->findChild<fm::ui::WindowChrome*>() : nullptr;
+    if (!Chrome || Chrome->accessoryWidget()) { refreshAudioActions(); return; }
+    auto* Widget = new hc::ui::AudioTitleWidget(audio_, Chrome);
+    Chrome->setAccessoryWidget(Widget);
+    connect(Widget, &hc::ui::AudioTitleWidget::sigPopoverRequested, this, [this, Window, Widget] {
+        if (!audioPopover_) {
+            audioPopover_ = new hc::ui::AudioPopover(audio_, Window);
+            connect(audioPopover_, &hc::ui::AudioPopover::sigLocateRequested, this, &CommandUiBridge::LocateAudio);
+        }
+        audioPopover_->ShowBelow(Widget->TrackButton()->isVisible() ? static_cast<QWidget*>(Widget->TrackButton()) : Widget);
+    });
+    refreshAudioActions();
+}
+
 bool CommandUiBridge::ExecuteCommand(const QString& Id, const QModelIndex& Index)
 {
     const QScopedValueRollback<QModelIndex> Context(commandIndex_, Index);
@@ -1070,6 +1215,13 @@ void CommandUiBridge::refreshActionState()
             || Model->WorkspaceLocation().kind_ == LocatorKind::Smb
             || (Model->WorkspaceLocation().kind_ == LocatorKind::Plugin && Model->GetRoot()->WriteProvider())));
     if (auto* Command = Action("hc.search.openLocation")) Command->setEnabled(Ready && Model->IsSearchResults());
+    if (auto* Command = Action("hc.audio.preview")) {
+        bool Playable = false;
+        if (Ready && audio_)
+            if (const auto Item = Model->GetFileInfo(SourceIndex(commandIndex())))
+                Playable = Item->storageEntry_ && !(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && hc::audio::IsPlayable(Item->Name_, audio_->Extensions());
+        Command->setEnabled(Playable);
+    }
     if (auto* Command = Action("hc.file.attributes")) {
         const bool Native = Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb);
         Command->setEnabled(Native);
@@ -1144,6 +1296,16 @@ void CommandUiBridge::createCommandUi()
     Add("hc.commandLine.keepOpen", tr("명령행 실행 후 창 유지"), [Window] {
         QMetaObject::invokeMethod(Window, "SubmitCommandLine", Qt::DirectConnection, Q_ARG(bool, true));
     });
+    // 오디오 미리 듣기. 목록 루프의 기본 처리(InvokeCommand)로 빠지지 않도록 먼저 만든다.
+    Add("hc.audio.preview", tr("오디오 미리 듣기"), [this] { StartAudioPreview(activePanel_, commandIndex()); });
+    Add("hc.audio.playPause", tr("재생/일시정지"), [this] { audio_->PlayPause(); });
+    Add("hc.audio.stop", tr("정지"), [this] { audio_->Stop(); });
+    Add("hc.audio.next", tr("다음 곡"), [this] { audio_->Next(); });
+    Add("hc.audio.prev", tr("이전 곡"), [this] { audio_->Previous(); });
+    Add("hc.audio.seekForward", tr("5초 앞으로"), [this] { audio_->SeekBy(5000); });
+    Add("hc.audio.seekBack", tr("5초 뒤로"), [this] { audio_->SeekBy(-5000); });
+    Add("hc.audio.locate", tr("재생 중인 파일 위치 보기"), [this] { LocateAudio(); });
+    createAudioUi(Window);
     for (const auto& Command : GlobalBuiltInCMDs) {
         const auto Id = hc::ui::CommandId(Command.Name);
         if (actions_.contains(Id)) continue;
@@ -1211,7 +1373,9 @@ void CommandUiBridge::createCommandUi()
     Add("hc.search.focus", tr("설정 범위에서 찾기"), [QuickFind] { QuickFind->FocusStandard(); });
     Add("hc.search.everything", tr("Everything에서 찾기"), [QuickFind] { QuickFind->FocusEverything(); });
     Add("hc.search.openLocation", tr("검색 결과의 원본 위치 열기"), [this] { if (activePanel_) activePanel_->OpenSearchLocation(); });
-    for (const auto* Id : {"hc.search.focus", "hc.search.everything", "hc.navigate.back", "hc.navigate.forward", "hc.commandLine.activate"}) {
+    // 오디오 조작은 명령행·팝오버에 포커스가 있어도 동작한다. 미리 듣기는 패널 커서 대상이라 넣지 않는다.
+    for (const auto* Id : {"hc.search.focus", "hc.search.everything", "hc.navigate.back", "hc.navigate.forward", "hc.commandLine.activate",
+                           "hc.audio.playPause", "hc.audio.stop", "hc.audio.next", "hc.audio.prev", "hc.audio.seekForward", "hc.audio.seekBack", "hc.audio.locate"}) {
         auto* Key = new QShortcut(Window); Key->setContext(Qt::WindowShortcut);
         const auto Update = [Key, Id] { Key->setKeys(hc::ui::CommandKeys(TyStCommandMgr::GetInstance()->Retrieve(), Id)); };
         Update(); connect(TyStCommandMgr::GetInstance(), &CCommandMgr::ShortcutsChanged, Key, Update);
@@ -1231,7 +1395,10 @@ void CommandUiBridge::createCommandUi()
     RefreshShortcutLabels();
     QFile Default(":/HyperCommander/menu-bar.json");
     if (!Default.open(QIODevice::ReadOnly)) return;
-    userMenu_ = new hc::ui::UserMenu(Window->findChild<QMenuBar*>("menubar"), QDir(hc::settings::Paths().directory_).filePath("menu-bar.json"), Default.readAll(), actions_, Sections,
+    const auto BuiltInMenu = Default.readAll();
+    const auto MenuPath = QDir(hc::settings::Paths().directory_).filePath("menu-bar.json");
+    MigrateAudioMenu(MenuPath, BuiltInMenu);
+    userMenu_ = new hc::ui::UserMenu(Window->findChild<QMenuBar*>("menubar"), MenuPath, BuiltInMenu, actions_, Sections,
         [Window](const QString& Diagnostic) { Window->statusBar()->showMessage(Diagnostic); qWarning().noquote() << Diagnostic; },
         [this] { refreshActionState(); });
     userMenu_->Reload();

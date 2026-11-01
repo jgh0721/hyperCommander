@@ -54,6 +54,8 @@ find_package(Qt6 6.12 REQUIRED COMPONENTS
     PrintSupport
     Widgets
     WidgetsPrivate
+    # 오디오 미리 듣기. QtDeployment.cmake가 이 디렉터리의 IMPORTED_TARGETS에서 FFmpeg 플러그인을 찾는다.
+    Multimedia
 )
 qt_standard_project_setup(REQUIRES 6.12)
 

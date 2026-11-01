@@ -4,6 +4,9 @@
 #include "UniqueLibs/settings/updateSettings.hpp"
 #include <fmfilelist/RecordPreview.h>
 #include "thumbnailSettingsPage.hpp"
+#include "audioSettingsPage.hpp"
+#include "UniqueLibs/commandUiBridge.hpp"
+#include "UniqueLibs/audio/audioSession.hpp"
 #include "menuBarSettingsPage.hpp"
 #include "themeSettingsPage.hpp"
 #include "keyboardSettingsPage.hpp"
@@ -277,6 +280,8 @@ void QMainOpts::LoadSettings()
     const auto SelectedScheme = StColorSchemeMgr->GetCurrentColorScheme();
     RefreshColorScheme(SelectedScheme);
     thumbnailSettings_->Load(General.value("thumbnails").toObject());
+    audioSettings_->Load(General.value("audioPreview").toObject(),
+        hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject().value("audioOpenInternally").toBool(false));
     const auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
     themeSettings_->LoadLibrary(Appearance["watercolorPresets"].toObject());
     themeSettings_->Load(Appearance["watercolorTheme"].toObject());
@@ -376,6 +381,7 @@ bool QMainOpts::SaveSettings()
     Options["renameInDialog"] = findChild<QCheckBox*>("hc.settings.renameInDialog")->isChecked();
     Options["renameSelectExtension"] = findChild<QCheckBox*>("hc.settings.renameSelectExtension")->isChecked();
     Options["renameOnSlowClick"] = findChild<QCheckBox*>("hc.settings.renameOnSlowClick")->isChecked();
+    Options["audioOpenInternally"] = audioSettings_->OpenInternally();
     for (const auto* Key : {"folderSizeOnSpace", "folderSizeBeforeOperations", "folderSizeUseEverything"})
         Options[Key] = findChild<QCheckBox*>(QString("hc.settings.") + Key)->isChecked();
     Options["folderSizeMode"] = QStringList{"manual", "local", "all", "everything"}.value(findChild<QComboBox*>("hc.settings.folderSizeMode")->currentIndex(), "everything");
@@ -473,6 +479,7 @@ bool QMainOpts::SaveSettings()
     General["newTabPosition"] = QStringList{"last", "right", "left", "first"}.value(findChild<QComboBox*>("hc.settings.newTabPosition")->currentIndex(), "last");
     General["monoFontFamily"] = findChild<QFontComboBox*>("hc.settings.monoFont")->currentFont().family(); General["monoFontPx"] = findChild<QSpinBox*>("hc.settings.monoSize")->value();
     General["thumbnails"] = thumbnailSettings_->Save();
+    General["audioPreview"] = audioSettings_->Save(General.value("audioPreview").toObject());
     hc::settings::AppSettings().Put(hc::settings::Section::General, General);
     SaveSettings_ColorScheme();
     auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject(); Appearance["watercolorTheme"] = themeSettings_->Save(); Appearance["watercolorPresets"] = themeSettings_->SaveLibrary(); hc::settings::AppSettings().Put(hc::settings::Section::Appearance, Appearance);
@@ -499,6 +506,8 @@ bool QMainOpts::SaveSettings()
         if (Message.clickedButton() == Reload) { hc::settings::AppSettings().Reload(); committedSettings_ = hc::settings::AppSettings().Object(); hc::settings::AppSettings().BeginEdit(); SetListView(listView_); LoadSettings(); }
         return false;
     }
+    // 미리 듣기 세션은 대상 확장자·꺼내기 상한을 캐시하므로 저장 직후 다시 읽힌다.
+    if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); Bridge && Bridge->Audio()) Bridge->Audio()->ReloadSettings();
     if (passwordSettings_ && !passwordSettings_->Apply()) {
         if (!hc::settings::AppSettings().Replace(PreviousSettings) || !hc::settings::AppSettings().Commit())
             hc::ui::MessageDialog::warning(this, tr("설정 복구 실패"), tr("비밀번호 저장 실패 후 기존 설정을 복구하지 못했습니다. 디스크에서 다시 읽어 주세요."));
@@ -1132,6 +1141,8 @@ void QMainOpts::initializeDesignPages()
     keyboardSettings_ = new hc::ui::KeyboardSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(keyboardSettings_);
     // Resolve page indices from widgets so removing a page cannot retarget navigation.
     menuSettings_ = new hc::ui::MenuBarSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(menuSettings_);
+    audioSettings_ = new hc::ui::AudioSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(audioSettings_);
+    audioSettings_->SetChanged([this] { ui.btnApply->setEnabled(true); });
     auto* Permissions=hc::ui::PermissionSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(Permissions);
     legacySettings_ = new hc::ui::LegacySettingsPage(ui.stkOpts); ui.stkOpts->addWidget(legacySettings_);
     passwordSettings_ = new hc::passwords::SettingsPage(ui.stkOpts); ui.stkOpts->addWidget(passwordSettings_);
@@ -1139,7 +1150,7 @@ void QMainOpts::initializeDesignPages()
     const QSignalBlocker Block(ui.lstOptCate); ui.lstOptCate->clear();
     const QList<QPair<QString, int>> Pages{{tr("일반 · 모양"), ui.stkOpts->indexOf(General)}, {tr("테마 색상"), ui.stkOpts->indexOf(themeSettings_)}, {tr("파일 패널"), ui.stkOpts->indexOf(ui.pgDisplay)},
         {tr("썸네일 보기"), ui.stkOpts->indexOf(Thumbnails)}, {tr("파일 그룹 · 색상"), ui.stkOpts->indexOf(FileColorsScroll)}, {tr("열 · 사용자 정의 열"), ui.stkOpts->indexOf(ui.pgCustomColumns)},
-        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("비밀번호 관리"), ui.stkOpts->indexOf(passwordSettings_)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}, {tr("레거시"), ui.stkOpts->indexOf(legacySettings_)}};
+        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("비밀번호 관리"), ui.stkOpts->indexOf(passwordSettings_)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("오디오 미리 듣기"), ui.stkOpts->indexOf(audioSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}, {tr("레거시"), ui.stkOpts->indexOf(legacySettings_)}};
     for (const auto& Entry : Pages) { auto* Item = new QListWidgetItem(Entry.first, ui.lstOptCate); Item->setData(Qt::UserRole, Entry.second); }
     // One footer row: state dot + status at the left, OK · Cancel · Apply at the right; the file path is a tooltip.
     auto* SaveStatus = new SettingsStatusLabel(ui.frmFooter); SaveStatus->setObjectName("hc.settings.saveStatus"); SaveStatus->setTextFormat(Qt::PlainText);

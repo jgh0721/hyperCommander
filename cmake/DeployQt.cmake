@@ -96,13 +96,42 @@ endif()
 if(HC_RUNTIME_FILE)
     file(COPY "${HC_RUNTIME_FILE}" DESTINATION "${HC_OUTPUT}")
 endif()
+# The FFmpeg backend's DLLs live in Libs/ffmpeg, never beside the exe: every updater since
+# v2026.10.18.3 owns Libs/, so they cannot raise minimumFromVersion. The app preloads them.
+if(HC_WITH_PLUGINS AND EXISTS "${HC_PLUGIN_ROOT}/multimedia")
+    include("${CMAKE_CURRENT_LIST_DIR}/ProductLayout.cmake")
+    file(GLOB HC_FFMPEG_DLLS "${HC_QT_BIN}/avcodec-*.dll" "${HC_QT_BIN}/avformat-*.dll" "${HC_QT_BIN}/avutil-*.dll"
+        "${HC_QT_BIN}/swresample-*.dll" "${HC_QT_BIN}/swscale-*.dll")
+    file(MAKE_DIRECTORY "${HC_OUTPUT}/${HC_LAYOUT_FfmpegLibraries}")
+    foreach(HC_FFMPEG_DLL IN LISTS HC_FFMPEG_DLLS)
+        get_filename_component(HC_FFMPEG_NAME "${HC_FFMPEG_DLL}" NAME)
+        file(COPY_FILE "${HC_FFMPEG_DLL}" "${HC_OUTPUT}/${HC_LAYOUT_FfmpegLibraries}/${HC_FFMPEG_NAME}" ONLY_IF_DIFFERENT)
+        file(REMOVE "${HC_OUTPUT}/${HC_FFMPEG_NAME}")
+    endforeach()
+    # LGPL 2.1 notice: the kit's attribution page carries the license text; the README records this build.
+    set(HC_FFMPEG_LICENSES "${HC_OUTPUT}/Licenses/FFmpeg")
+    file(MAKE_DIRECTORY "${HC_FFMPEG_LICENSES}")
+    get_filename_component(HC_QT_ROOT "${HC_QT_BIN}" DIRECTORY)
+    if(EXISTS "${HC_QT_ROOT}/doc/qtmultimedia/qtmultimedia-attribution-ffmpeg.html")
+        file(COPY_FILE "${HC_QT_ROOT}/doc/qtmultimedia/qtmultimedia-attribution-ffmpeg.html" "${HC_FFMPEG_LICENSES}/LICENSE.html" ONLY_IF_DIFFERENT)
+    endif()
+    list(TRANSFORM HC_FFMPEG_DLLS REPLACE "^.*/" "")
+    list(JOIN HC_FFMPEG_DLLS ", " HC_FFMPEG_NAMES)
+    file(WRITE "${HC_FFMPEG_LICENSES}/README.txt"
+        "FFmpeg libraries used by the Qt Multimedia FFmpeg backend for audio preview.\r\n"
+        "Files: ${HC_LAYOUT_FfmpegLibraries}/{${HC_FFMPEG_NAMES}}\r\n"
+        "Build: FFmpeg 8.1.x shared libraries of the Qt 6.12 kit, LGPL 2.1 or later (configured without --enable-gpl and --enable-nonfree).\r\n"
+        "License: GNU Lesser General Public License version 2.1 or later. The full text is in LICENSE.html.\r\n"
+        "Source: https://ffmpeg.org/releases/ (the release matching the DLL major versions above).\r\n"
+        "The libraries are dynamically linked and may be replaced by a compatible build of the same major version.\r\n")
+endif()
 # windeployqt always writes WebEngine data under --dir; the embedded qt.conf reads Data=Libs.
 if(IS_DIRECTORY "${HC_OUTPUT}/resources")
     file(COPY "${HC_OUTPUT}/resources" DESTINATION "${HC_PLUGIN_ROOT}")
     file(REMOVE_RECURSE "${HC_OUTPUT}/resources")
 endif()
 # Qt always searches applicationDirPath() too: drop the old flat layout so it cannot shadow Libs/.
-foreach(HC_OLD IN ITEMS platforms imageformats iconengines styles generic networkinformation tls sqldrivers printsupport translations qml)
+foreach(HC_OLD IN ITEMS platforms imageformats iconengines styles generic networkinformation tls sqldrivers printsupport multimedia translations qml)
     file(REMOVE_RECURSE "${HC_OUTPUT}/${HC_OLD}")
 endforeach()
 file(REMOVE "${HC_OUTPUT}/qt.conf")

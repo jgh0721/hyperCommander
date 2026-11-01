@@ -16,6 +16,7 @@
 #include "cmnHCUtils.hpp"
 #include "commandMgr.hpp"
 #include "commandUiBridge.hpp"
+#include "audio/audioSession.hpp"
 #include "qtitanColumnAdapter.hpp"
 #include "qtViewerHost.hpp"
 #include "Modules/mdlFileModel.hpp"
@@ -73,6 +74,27 @@ void PaintListIcon(QPainter* Painter, const QVariant& Value, const QRect& Rect)
     if (Value.metaType() != QMetaType::fromType<QPixmap>()) { Value.value<QIcon>().paint(Painter, Rect); return; }
     Painter->save(); Painter->setRenderHint(QPainter::SmoothPixmapTransform);
     Painter->drawPixmap(Rect, Value.value<QPixmap>()); Painter->restore();
+}
+// 제목표시줄에서 재생 중인 파일: 아이콘 자리에 막대 셋(재생) 또는 둘(일시정지)을 그린다.
+// Animate면 막대가 0.9초 주기로 오르내린다(시안 B안). 뷰의 타이머가 그 칸만 다시 그린다.
+void PaintNowPlaying(QPainter* Painter, const QRect& Rect, bool Playing, const QColor& Color, bool Animate)
+{
+    Painter->save(); Painter->setRenderHint(QPainter::Antialiasing); Painter->setPen(Qt::NoPen); Painter->setBrush(Color);
+    const qreal Unit = Rect.width() / 14.0, Bottom = Rect.top() + 12 * Unit;
+    if (Playing) {
+        qreal Heights[] = {6, 9, 4.5};
+        if (Animate) {
+            static QElapsedTimer Clock; if (!Clock.isValid()) Clock.start();
+            const auto Cycle = (Clock.elapsed() % 900) / 900.0;
+            for (int Bar = 0; Bar < 3; ++Bar)
+                Heights[Bar] = 9 * (0.35 + 0.65 * (0.5 - 0.5 * std::cos(qDegreesToRadians(360.0 * (Cycle + Bar / 3.0)))));
+        }
+        for (int Bar = 0; Bar < 3; ++Bar)
+            Painter->drawRoundedRect(QRectF(Rect.left() + (2 + Bar * 3.8) * Unit, Bottom - Heights[Bar] * Unit, 2.4 * Unit, Heights[Bar] * Unit), 0.6 * Unit, 0.6 * Unit);
+    } else {
+        for (const qreal X : {3.6, 8.0}) Painter->drawRoundedRect(QRectF(Rect.left() + X * Unit, Rect.top() + 3 * Unit, 2.4 * Unit, 8 * Unit), 0.6 * Unit, 0.6 * Unit);
+    }
+    Painter->restore();
 }
 RecordState ProductRecordState(CGridView* Owner, int Row)
 {
@@ -152,6 +174,8 @@ public:
         const bool Name = Cell.column() == 0;
         if (!Name) Font = fm::style::pixelFont(Font, std::max(8, Appearance.fontPx - 1), Font.weight());
         if (Text.bold && Name) Font.setBold(true);
+        const int NowPlaying = Name ? Cell.data(CFSModel::NowPlayingRole).toInt() : 0;
+        if (NowPlaying) Font.setBold(true);
         QColor Foreground = Name ? Text.name : Text.meta;
         if (Cell.siblingAtColumn(0).data(CFSModel::FileColorOverrideRole).toBool() && !State.marked)
             Foreground = Cell.data(Qt::ForegroundRole).value<QColor>();
@@ -165,10 +189,14 @@ public:
             if (!Geometry.twoLine && HasIcon) {
                 const int Size = owner_->ListIconSize();
                 const auto Block = Geometry.block(Option.rect);
-                Painter->setOpacity(std::min({Cell.data(CFSModel::ClipboardCutRole).toBool() ? 0.5 : 1.0,
-                    State.hidden ? 0.6 : 1.0, Effects["dim"].toBool() ? 0.55 : 1.0}));
-                PaintListIcon(Painter, Icon, QRect(Rect.left(), qRound(Block.center().y() - Size / 2.0), Size, Size));
-                Painter->setOpacity(1.0);
+                const QRect IconRect(Rect.left(), qRound(Block.center().y() - Size / 2.0), Size, Size);
+                if (NowPlaying) PaintNowPlaying(Painter, IconRect, NowPlaying == 1, Foreground, owner_->NowPlayingAnimating());
+                else {
+                    Painter->setOpacity(std::min({Cell.data(CFSModel::ClipboardCutRole).toBool() ? 0.5 : 1.0,
+                        State.hidden ? 0.6 : 1.0, Effects["dim"].toBool() ? 0.55 : 1.0}));
+                    PaintListIcon(Painter, Icon, IconRect);
+                    Painter->setOpacity(1.0);
+                }
             }
             Rect = ProductNameTextRect(owner_, Option.rect, HasIcon);
             const bool Directory = (Cell.data(CFsModelT::USR_ROLE_ATTRIBUTE).toUInt() & FILE_ATTRIBUTE_DIRECTORY) != 0;
@@ -272,6 +300,15 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     grid_->viewport()->installEventFilter(this);
     grid_->setAcceptDrops(true);
     grid_->viewport()->setAcceptDrops(true);
+    // 재생 중 행의 막대 애니메이션. 보이는 재생 행의 이름 칸 하나만 다시 그린다.
+    nowPlayingTimer_.setInterval(100);
+    connect(&nowPlayingTimer_, &QTimer::timeout, this, [this] {
+        if (!NowPlayingAnimating() || IsThumbnailMode() || IsTwoLine()) return;
+        for (const auto& Hit : grid_->hitInfoAll())
+            if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.modelIndex().column() == 0 && Hit.modelIndex().data(CFSModel::NowPlayingRole).toInt() == 1) {
+                grid_->viewport()->update(Hit.rect()); break;
+            }
+    });
     viewClickTimer_.setSingleShot(true);
     connect(&viewClickTimer_, &QTimer::timeout, this, [this] {
         const QModelIndex Index = mouseRenameIndex_; mouseRenameIndex_ = QPersistentModelIndex{};
@@ -537,6 +574,19 @@ void CGridView::MoveQuickFindCursor(const QString& Query, const QString& Match, 
 }
 
 bool CGridView::IsThumbnailMode() const { return thumbnails_ && presentationStack_ && presentationStack_->currentWidget() == thumbnails_; }
+void CGridView::SetNowPlayingAnimated(bool On)
+{
+    // Windows의 "애니메이션 효과"는 따르지 않는다. 원격 데스크톱 세션은 사용자 선택과 무관하게 이를 꺼서
+    // 시안 B안이 정지 막대로 보였다. 움직임을 원하지 않으면 오디오 설정의 확인란으로 끈다(On=false).
+    if (On) { if (!nowPlayingTimer_.isActive()) nowPlayingTimer_.start(); }
+    else if (nowPlayingTimer_.isActive()) { nowPlayingTimer_.stop(); grid_->viewport()->update(); }
+}
+bool CGridView::NowPlayingAnimating() const
+{
+    // 창이 비활성·최소화이면 정지된 막대로 그린다.
+    const auto* Window = window();
+    return nowPlayingTimer_.isActive() && isVisible() && Window && Window->isActiveWindow() && !Window->isMinimized();
+}
 QPoint CGridView::ListContentTopLeft() const
 {
     if (IsThumbnailMode()) return thumbnails_->listView()->viewport()->mapToGlobal(QPoint());
@@ -1907,7 +1957,19 @@ bool CGridView::ShowShellMenu(const QModelIndex& Index, bool AtCursor)
         if (!ClientToScreen(reinterpret_cast<HWND>(Viewport->winId()), &Position)) return false;
     }
     viewClickTimer_.stop();
-    return OpenShellContextMenuForObjects(Paths, Position.x, Position.y, reinterpret_cast<void*>(window()->winId()));
+    // 오디오 파일 하나면 셸 메뉴 맨 위에 "미리 듣기"를 둔다.
+    ShellMenuExtras Extras;
+    auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+    if (Bridge && Bridge->Audio() && Paths.size() == 1 && Source.isValid())
+        if (const auto Item = model_->GetFileInfo(Source); Item && !(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)
+            && hc::audio::IsPlayable(Item->Name_, Bridge->Audio()->Extensions())) {
+            CmpPanel* Panel = nullptr;
+            for (auto* Parent = parent(); Parent && !Panel; Parent = Parent->parent()) Panel = qobject_cast<CmpPanel*>(Parent);
+            if (Panel) Extras.append({tr("미리 듣기"), [Bridge = QPointer<CommandUiBridge>(Bridge), Panel = QPointer<CmpPanel>(Panel), Source = QPersistentModelIndex(Source)] {
+                if (Bridge && Panel && Source.isValid()) Bridge->StartAudioPreview(Panel, Source);
+            }});
+        }
+    return OpenShellContextMenuForObjects(Paths, Position.x, Position.y, reinterpret_cast<void*>(window()->winId()), Extras);
 }
 
 Qtitan::GridViewBase* CGridView::BaseView() const
@@ -2173,7 +2235,8 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
         const auto Id = hc::ui::ShortcutCommand(*Key, TyStCommandMgr::GetInstance()->Retrieve());
         const auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
         if (Id == "hc.navigate.enterFile" || Id.startsWith("hc.clipboard.")
-            || (Key->key() == Qt::Key_Escape && Key->modifiers() == Qt::NoModifier && Bridge && Bridge->HasFileClipboard())) {
+            || (Key->key() == Qt::Key_Escape && Key->modifiers() == Qt::NoModifier && Bridge
+                && (Bridge->HasFileClipboard() || Bridge->HasAudioPreview()))) {
             Event->accept(); return true;
         }
     }

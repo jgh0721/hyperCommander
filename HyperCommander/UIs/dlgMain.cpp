@@ -5,6 +5,7 @@
 
 #include "colorSchemeMgr.hpp"
 #include "UniqueLibs/commandUiBridge.hpp"
+#include "UniqueLibs/audio/audioSession.hpp"
 #include "UniqueLibs/fileJobUi.hpp"
 #include "HyperCommanderUpdater/updateController.hpp"
 #include <fmwidgets/WindowChrome.h>
@@ -149,13 +150,31 @@ void QMainUI::restoreInputFocus()
     } else if (auto* Panel = retrieveSrcPanel()) Panel->SetFocusView(Panel->CurrentTabIndex());
 }
 
-bool QMainUI::nativeEventFilter(const QByteArray& Type, void* Message, qintptr*)
+bool QMainUI::nativeEventFilter(const QByteArray& Type, void* Message, qintptr* Result)
 {
     if (Type != "windows_generic_MSG") return false;
     const auto* Native = static_cast<MSG*>(Message);
     const auto Root = reinterpret_cast<HWND>(internalWinId());
     if (Root && (Native->hwnd == Root || IsChild(Root, Native->hwnd))
         && (Native->message == WM_SETFOCUS || Native->message == WM_KILLFOCUS)) requestInputFocusRestore();
+    // 키보드 미디어 키. 미리 듣기 중일 때만 받고, 아니면 다른 재생 앱이 받도록 넘긴다.
+    if (Native->message == WM_APPCOMMAND && Root && (Native->hwnd == Root || IsChild(Root, Native->hwnd))) {
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        auto* Audio = Bridge ? Bridge->Audio() : nullptr;
+        if (!Audio || !Audio->IsActive()) return false;
+        using hc::audio::SessionState;
+        switch (GET_APPCOMMAND_LPARAM(Native->lParam)) {
+        case APPCOMMAND_MEDIA_PLAY_PAUSE: Audio->PlayPause(); break;
+        case APPCOMMAND_MEDIA_PLAY: if (Audio->State() == SessionState::Paused) Audio->PlayPause(); break;
+        case APPCOMMAND_MEDIA_PAUSE: if (Audio->State() == SessionState::Playing) Audio->PlayPause(); break;
+        case APPCOMMAND_MEDIA_STOP: Audio->Stop(); break;
+        case APPCOMMAND_MEDIA_NEXTTRACK: Audio->Next(); break;
+        case APPCOMMAND_MEDIA_PREVIOUSTRACK: Audio->Previous(); break;
+        default: return false;
+        }
+        if (Result) *Result = TRUE;
+        return true;
+    }
     return false;
 }
 

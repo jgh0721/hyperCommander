@@ -94,6 +94,8 @@ public:
     void StartEverythingSearch(const QString& Query, const QString& Match, int Interval);
     void StopEverythingSearch(bool Restore = true);
     void OpenSearchLocation();
+    // Folder로 이동해 선택 키 Key 항목에 커서를 둔다. 이미 그 폴더면 커서만 옮긴다.
+    void RevealItem( const QString& Folder, const QString& Key );
     void                            NavigateHistory(int Offset);
     bool                            CanNavigateHistory(int Offset) const;
     void                            PrevTab();

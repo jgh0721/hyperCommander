@@ -74,6 +74,8 @@
 #include "UIs/cmpPanel.hpp"
 #include "memoryStorage.hpp"
 #include "commandMgr.hpp"
+#include "UniqueLibs/commandUiBridge.hpp"
+#include "UniqueLibs/audio/audioSession.hpp"
 #include "qtitanColumnAdapter.hpp"
 #include "columnMgr.hpp"
 #include "qtColumnProfileEditor.hpp"
@@ -300,7 +302,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"createdFolderFocusUi", "fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -593,6 +595,184 @@ private slots:
             };
             QTRY_VERIFY_WITH_TIMEOUT(Launched(), 15000);
         }
+    }
+
+    void audioPreviewUi()
+    {
+        // 제목표시줄 오디오 미리 듣기(계획 T07·T08·T12·T14·T15·T26·T27).
+        using hc::audio::SessionState;
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge && Bridge->Audio());
+        auto* Audio = Bridge->Audio();
+        auto* Widget = main_->findChild<QWidget*>("hc.audio.titleWidget"); QVERIFY(Widget);
+        auto* Chrome = main_->findChild<fm::ui::WindowChrome*>(); QVERIFY(Chrome && Chrome->accessoryWidget() == Widget);
+        QVERIFY(Widget->isHidden());
+        if (!Audio->IsAvailable()) QSKIP("No audio backend on this machine");
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        auto SavedClipboard = std::make_unique<QMimeData>();
+        if (const auto* Mime = QApplication::clipboard()->mimeData())
+            for (const auto& Format : Mime->formats()) SavedClipboard->setData(Format, Mime->data(Format));
+        const auto Restore = qScopeGuard([&] {
+            Audio->Stop(); Settings.Replace(Before); Audio->ReloadSettings();
+            // Esc 시험이 시스템 클립보드를 비우므로 항상 원래 내용으로 되돌린다.
+            Bridge->CancelClipboard(); QApplication::clipboard()->setMimeData(SavedClipboard.release());
+            main_->RestoreWorkspace(Workspace);
+        });
+        const auto Wave = [](int Ms) {
+            const quint32 Rate = 44100, Bytes = Rate * 4 * quint32(Ms) / 1000;
+            QByteArray Data; QDataStream Out(&Data, QIODevice::WriteOnly); Out.setByteOrder(QDataStream::LittleEndian);
+            Out.writeRawData("RIFF", 4); Out << quint32(36 + Bytes); Out.writeRawData("WAVEfmt ", 8);
+            Out << quint32(16) << quint16(1) << quint16(2) << Rate << quint32(Rate * 4) << quint16(4) << quint16(16);
+            Out.writeRawData("data", 4); Out << Bytes;
+            Data.append(QByteArray(int(Bytes), '\0')); return Data;
+        };
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const QStringList Names{"01 first.wav", "02 second.wav", "03 third.wav"};
+        for (const auto& Name : Names) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Wave(4000)); }
+        { QFile Text(Directory.filePath("notes.txt")); QVERIFY(Text.open(QIODevice::WriteOnly)); Text.write("not audio"); }
+        const auto Probe = Directory.filePath("00 probe.wav");
+        { QFile File(Probe); QVERIFY(File.open(QIODevice::WriteOnly)); File.write(Wave(500)); }
+        auto* Panel = panels_.front(); Panel->SetSearch({});
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); Panel->sig_NotifyPanelActivated();
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QTRY_VERIFY(!Model->IsLoading()); QTRY_COMPARE(Model->rowCount(), 6);
+        // 패널 자체는 재생하지 않은 오디오 파일을 잡고 있지 않다.
+        QVERIFY2(QTest::qWaitFor([&] { return QFile::remove(Probe); }, 3000), "the panel holds an unplayed audio file");
+        QTRY_COMPARE(Model->rowCount(), 5);
+        const auto IndexOf = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row)
+                if (const auto Item = Model->GetFileInfo(Model->index(Row, 0)); Item && Item->Name_ == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        const auto Visible = [&](const QString& Name) {
+            for (int Row = 0; Row < View->BaseView()->getRowCount(); ++Row) {
+                const auto Index = View->BaseView()->getRow(Row).modelIndex(0); auto Source = Index;
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+                if (Source == IndexOf(Name)) return Index;
+            }
+            return QModelIndex{};
+        };
+        QVERIFY(!Audio->OpenInternally());
+        // Ctrl+Enter·도구 메뉴·탐색기 메뉴가 쓰는 시작 경로. 같은 폴더의 오디오만 화면 순서로 모은다.
+        QVERIFY(Bridge->StartAudioPreview(Panel, IndexOf(Names[1])));
+        QCOMPARE(Audio->Queue().Size(), qsizetype(3));
+        QCOMPARE(Audio->Queue().CurrentIndex(), qsizetype(1));
+        QTRY_VERIFY(Audio->State() == SessionState::Playing);
+        QTRY_VERIFY(Widget->isVisible());
+        QTRY_VERIFY(Audio->Position() > 0);
+        QTRY_COMPARE(IndexOf(Names[1]).data(CFSModel::NowPlayingRole).toInt(), 1);
+        QCOMPARE(IndexOf(Names[0]).data(CFSModel::NowPlayingRole).toInt(), 0);
+        // 재생 중 행의 막대는 창이 활성일 때 움직인다(B안). Windows 애니메이션 효과와 무관하다(원격 세션은 이를
+        // 끈다). 상태값이 아니라 그린 픽셀이 시간에 따라 바뀌고, 타이머가 실제로 다시 그리게 하는지 본다.
+        main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
+        QTRY_VERIFY(View->NowPlayingAnimating());
+        auto* GridWidget = View->findChild<Qtitan::Grid*>(); QVERIFY(GridWidget);
+        const auto PlayingCell = [&] {
+            for (const auto& Hit : GridWidget->hitInfoAll())
+                if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.modelIndex().column() == 0 && Hit.modelIndex().data(CFSModel::NowPlayingRole).toInt() == 1) return Hit.rect();
+            return QRect{};
+        };
+        QTRY_VERIFY(PlayingCell().isValid());
+        const auto Frames = [&](int Count) {
+            QSet<QByteArray> Distinct;
+            for (int Frame = 0; Frame < Count; ++Frame) {
+                const auto Image = GridWidget->viewport()->grab(PlayingCell()).toImage();
+                Distinct.insert(QByteArray(reinterpret_cast<const char*>(Image.constBits()), int(Image.sizeInBytes())));
+                QTest::qWait(130);
+            }
+            return Distinct.size();
+        };
+        QVERIFY2(Frames(6) >= 3, "the now-playing bars do not move");
+        struct PaintCounter final : QObject {
+            int count_ = 0;
+            bool eventFilter(QObject*, QEvent* Event) override { if (Event->type() == QEvent::Paint) ++count_; return false; }
+        } Paints;
+        GridWidget->viewport()->installEventFilter(&Paints); QTest::qWait(600); GridWidget->viewport()->removeEventFilter(&Paints);
+        QVERIFY2(Paints.count_ >= 3, qPrintable(QString("the animation timer repainted %1 times in 600 ms").arg(Paints.count_)));
+        // 오디오 설정에서 끄면 정지된 막대로 그리고, 다시 켜면 바로 움직인다.
+        const auto SetAnimate = [&](bool On) {
+            auto General = Settings.Read(hc::settings::Section::General).toObject(); auto Preview = General["audioPreview"].toObject();
+            Preview["animateNowPlaying"] = On; General["audioPreview"] = Preview;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General)); Audio->ReloadSettings();
+        };
+        SetAnimate(false);
+        QTRY_VERIFY(!View->NowPlayingAnimating());
+        QCOMPARE(Frames(4), 1);
+        SetAnimate(true);
+        QTRY_VERIFY(View->NowPlayingAnimating());
+        // 위젯을 눌러도 패널 입력 포커스는 그대로다.
+        View->EnsureKeyboardFocusOnView(); const QPointer<QWidget> Focus = QApplication::focusWidget(); QVERIFY(Focus);
+        auto* Play = Widget->findChild<QToolButton*>("hc.audio.playPause"); QVERIFY(Play && Play->isVisible());
+        QTest::mouseClick(Play, Qt::LeftButton);
+        QTRY_VERIFY(Audio->State() == SessionState::Paused);
+        QCOMPARE(QApplication::focusWidget(), Focus.data());
+        QTRY_COMPARE(IndexOf(Names[1]).data(CFSModel::NowPlayingRole).toInt(), 2);
+        QTRY_VERIFY(!View->NowPlayingAnimating());
+        // 다음 곡으로 넘어가면 재생 중 표시도 옮겨 간다.
+        Audio->Next();
+        QTRY_COMPARE(Audio->Queue().CurrentIndex(), qsizetype(2));
+        QTRY_COMPARE(IndexOf(Names[2]).data(CFSModel::NowPlayingRole).toInt(), 1);
+        QCOMPARE(IndexOf(Names[1]).data(CFSModel::NowPlayingRole).toInt(), 0);
+        // 파일 작업 전 해제(D05): 엔진이 파일을 놓은 뒤에는 지울 수 있다.
+        const auto Playing = QDir::toNativeSeparators(Directory.filePath(Names[2]));
+        QVERIFY(Audio->ReleaseIfTarget({Playing}));
+        QCOMPARE(Audio->State(), SessionState::Idle);
+        QTRY_VERIFY(Widget->isHidden());
+        if (!QTest::qWaitFor([&] { return QFile::remove(Playing); }, 3000)) {
+            const auto Error = GetLastError();
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(QDir::tempPath()), {}); QTRY_VERIFY(!Model->IsLoading());
+            const bool AfterLeave = QTest::qWaitFor([&] { return QFile::remove(Playing); }, 3000);
+            QFAIL(qPrintable(QString("released file is still locked (error %1); after leaving the folder: %2").arg(Error).arg(AfterLeave)));
+        }
+        // Enter 옵션을 켜면 Enter 처리가 연결 프로그램 대신 내장 재생을 시작한다.
+        auto Options = Settings.Read(hc::settings::Section::Options).toObject(); Options["audioOpenInternally"] = true;
+        QVERIFY(Settings.Put(hc::settings::Section::Options, Options));
+        QTRY_VERIFY(Visible(Names[0]).isValid());
+        Panel->ReturnOnCurrentTab(Visible(Names[0]));
+        QTRY_VERIFY(Audio->State() == SessionState::Playing);
+        QCOMPARE(Audio->Current()->name_, Names[0]);
+        // 파일 목록의 Esc 는 미리 듣기를 끝낸다. 클립보드 표시가 함께 있으면 첫 Esc 가 미리 듣기, 다음 Esc 가 클립보드다.
+        auto* Grid = View->BaseView(); Grid->deselectAll();
+        for (int Row = 0; Row < Grid->getRowCount(); ++Row) if (Grid->getRow(Row).modelIndex(0) == Visible(Names[1])) Grid->setFocusedRowIndex(Row);
+        Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_C, Qt::ControlModifier | Qt::AltModifier);
+        QTRY_VERIFY(Bridge->HasFileClipboard());
+        QVERIFY(Audio->State() == SessionState::Playing);
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Escape);
+        QTRY_VERIFY(Audio->State() == SessionState::Idle); QTRY_VERIFY(Widget->isHidden());
+        QVERIFY(Bridge->HasFileClipboard());
+        QTRY_COMPARE(IndexOf(Names[0]).data(CFSModel::NowPlayingRole).toInt(), 0);
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Escape);
+        QTRY_VERIFY(!Bridge->HasFileClipboard());
+        QVERIFY(!Bridge->CancelAudioPreview());
+        // 실체화한 임시 파일은 다음 곡·정지 때 바로 지운다(D20).
+        auto Provider = std::make_shared<hc::storage::test::MemoryProvider>();
+        const auto Bytes = Wave(3000); std::vector<std::byte> Data(size_t(Bytes.size())); std::memcpy(Data.data(), Bytes.constData(), Data.size());
+        const auto Id = Provider->Add(Provider->Root(), "archived.wav", std::move(Data));
+        hc::audio::AudioTrack Archived; Archived.name_ = "archived.wav"; Archived.path_ = "memory:archived.wav"; Archived.folder_ = Directory.path();
+        Archived.size_ = std::uint64_t(Bytes.size());
+        Archived.source_ = std::make_shared<hc::storage::ProviderContentSource>(Provider, Provider->Stat(Id, {}).get().Value());
+        const QDir Store(QDir(QDir::tempPath()).filePath("hc-audio-preview/hc-materialized-v1"));
+        const auto Leases = [&] { return Store.entryList({"hc-lease-v1-*"}, QDir::Dirs | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).size(); };
+        Audio->Start({Archived, Archived}, 0);
+        QTRY_VERIFY(Audio->State() == SessionState::Playing);
+        const auto Existing = Leases() - 1;
+        QVERIFY(Existing >= 0);
+        Audio->Next();
+        QTRY_VERIFY(Audio->State() == SessionState::Playing && Audio->Queue().CurrentIndex() == 1);
+        QTRY_COMPARE(Leases(), Existing + 1);
+        Audio->Stop();
+        QTRY_COMPARE(Leases(), Existing);
+        // 비정상 종료로 남은 임대(잠금 없음)는 다음 시작의 정리가 지운다.
+        const auto Name = "hc-lease-v1-" + QUuid::createUuid().toString(QUuid::Id128);
+        const auto Stale = Store.filePath(Name);
+        QVERIFY(QDir().mkpath(Stale));
+        { QFile Owner(Stale + "/owner.lock"); QVERIFY(Owner.open(QIODevice::WriteOnly));
+          Owner.write(QJsonDocument(QJsonObject{{"schema", 1}, {"directory", Name}, {"file", "content.wav"}}).toJson(QJsonDocument::Compact)); }
+        { QFile Content(Stale + "/content.wav"); QVERIFY(Content.open(QIODevice::WriteOnly)); Content.write(Wave(100)); }
+        Audio->RecoverTemporaryFiles();
+        QTRY_VERIFY(!QFileInfo::exists(Stale));
     }
 
     void fileDeleteCursorUi()
@@ -2873,7 +3053,7 @@ private slots:
         auto Fixture = FileColorRules::Empty(); Fixture["groups"] = QJsonArray{MakeGroup("one", "실행파일", "#D00000"), MakeGroup("two", "도구", "#008577"), MakeGroup("three", "기타 실행파일", "#0055CC")};
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(80); Dialog.LoadSettings();
         auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
-        QCOMPARE(Categories->count(), 14);
+        QCOMPARE(Categories->count(), 16);
         for (int Row = 0; Row < Categories->count(); ++Row) {
             QVERIFY(!Categories->item(Row)->text().contains("기존 파일집합"));
             Categories->setCurrentRow(Row); QCoreApplication::processEvents();
