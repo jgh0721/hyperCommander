@@ -71,6 +71,9 @@ if (Test-Path -LiteralPath $HostInventory) {
     $HostManifest = Get-Content -LiteralPath $HostInventory -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($HostManifest.product -ne 'HyperCommander') { throw 'Unexpected host product identity.' }
     foreach ($Entry in $HostManifest.files) { $HostFiles[[string]$Entry.path] = [string]$Entry.sha256 }
+    # The host lists HyperCompare under its root carrier; its ROOT copy is the same host file.
+    $Floor = Get-UpdateFloor
+    foreach ($Name in $Floor.carried) { if ($HostFiles.ContainsKey($Floor.carrier + $Name)) { $HostFiles[$Name] = $HostFiles[$Floor.carrier + $Name] } }
 }
 $Files = @($Manifest.files) + @([pscustomobject]@{path=$ManifestName;sha256=(Get-FileHash -LiteralPath (Join-Path $SourceDirectory $ManifestName) -Algorithm SHA256).Hash})
 # Validate every destination before the first write. Unowned/modified files are preserved.

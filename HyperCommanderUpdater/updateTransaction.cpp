@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "updateTransaction.hpp"
 #include "updateOwnershipPolicy.hpp"
+#include "commonLibs/layout/productLayout.hpp"
 
 #include <TlHelp32.h>
 #include <algorithm>
@@ -8,17 +9,6 @@
 namespace hc::update {
 namespace {
 void Require(bool Value, const char* Error) { if (!Value) throw std::runtime_error(Error); }
-// Antivirus and indexing scanners briefly open new files without sharing them.
-// Retry those errors for a few seconds before the transaction rolls back.
-template <class Action> bool Retried(Action&& Attempt) {
-    const auto Until = GetTickCount64() + 5000; DWORD Delay = 50;
-    for (;;) {
-        if (Attempt()) return true;
-        const auto Error = GetLastError();
-        if ((Error != ERROR_SHARING_VIOLATION && Error != ERROR_LOCK_VIOLATION && Error != ERROR_ACCESS_DENIED) || GetTickCount64() >= Until) { SetLastError(Error); return false; }
-        Sleep(Delay); Delay = std::min<DWORD>(Delay * 2, 500);
-    }
-}
 [[noreturn]] void FailFile(const char* Code, const Path& File) {
     const auto Error = GetLastError();
     throw std::runtime_error(std::string(Code) + ": " + Utf8(File.wstring()) + " (win32=" + std::to_string(Error) + ")");
@@ -63,8 +53,8 @@ Path Active(const Path& Root) {
 }
 // Cleanup, health checks and the helper take the same lock for a short time.
 // Wait for it instead of failing an apply because cleanup happened to run.
-Handle Lock(const Path& Root, DWORD WaitMs = 10000) {
-    CheckInstallRoot(Root); std::filesystem::create_directories(Root / L".update"); CheckPlainPath(Root / L".update/lock");
+Handle LockFile(const Path& Root, DWORD WaitMs = 10000) {
+    std::filesystem::create_directories(Root / L".update"); CheckPlainPath(Root / L".update/lock");
     const auto Until = GetTickCount64() + WaitMs;
     for (;;) {
         Handle Result; Result.value_ = CreateFileW((Root / L".update/lock").c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
@@ -73,8 +63,12 @@ Handle Lock(const Path& Root, DWORD WaitMs = 10000) {
         Sleep(50);
     }
 }
+Handle Lock(const Path& Root, DWORD WaitMs = 10000) { CheckInstallRoot(Root); return LockFile(Root, WaitMs); }
 struct Entry { std::string name_, original_, replacement_; std::uint64_t size_ = 0; bool existed_ = false; };
-struct Journal { std::string state_; std::vector<Entry> files_; };
+// promoted_ holds ROOT copies the product placed while this transaction awaited its
+// health check at paths the journal does not list. Earlier updaters ignore the key
+// and leave those copies as unlisted files; this rollback deletes them.
+struct Journal { std::string state_; std::vector<Entry> files_; std::vector<RootCopy> promoted_; };
 void Save(const Path& Tx, const Journal& Value) {
     std::string Bytes = "{\"schema\":1,\"state\":" + QuoteJson(Value.state_) + ",\"files\":[";
     for (const auto& Entry : Value.files_) {
@@ -82,7 +76,16 @@ void Save(const Path& Tx, const Journal& Value) {
         Bytes += "{\"path\":" + QuoteJson(Entry.name_) + ",\"existed\":" + (Entry.existed_ ? "true" : "false")
             + ",\"original\":" + QuoteJson(Entry.original_) + ",\"replacement\":" + QuoteJson(Entry.replacement_) + ",\"size\":" + std::to_string(Entry.size_) + '}';
     }
-    Bytes += "]}"; ParseJson(Bytes); DurableWrite(Tx / L"journal.json", Bytes);
+    Bytes += ']';
+    if (!Value.promoted_.empty()) {
+        Bytes += ",\"promoted\":[";
+        for (const auto& Copy : Value.promoted_) {
+            if (Bytes.back() != '[') Bytes += ',';
+            Bytes += "{\"path\":" + QuoteJson(Copy.name_) + ",\"sha256\":" + QuoteJson(Copy.hash_) + '}';
+        }
+        Bytes += ']';
+    }
+    Bytes += '}'; ParseJson(Bytes); DurableWrite(Tx / L"journal.json", Bytes);
 }
 bool ValidHash(std::string_view Text) {
     if (Text.size() != 64) return false;
@@ -102,7 +105,16 @@ Journal Load(const Path& Tx) {
             && (Entry.replacement_.empty() || ValidHash(Entry.replacement_)), "update-journal-entry");
         Result.files_.push_back(std::move(Entry));
     }
-    Require(!Result.files_.empty() && Result.files_.back().name_ == "product-inventory.json", "update-journal-inventory"); return Result;
+    Require(!Result.files_.empty() && Result.files_.back().name_ == "product-inventory.json", "update-journal-inventory");
+    if (Value.object_.contains("promoted")) {
+        for (const auto& Item : Value.At("promoted", Json::Kind::Array).array_) {
+            RootCopy Copy{Item.At("path", Json::Kind::String).text_, Item.At("sha256", Json::Kind::String).text_};
+            CheckProductRelative(Copy.name_); auto Name = Wide(Copy.name_); CharLowerBuffW(Name.data(), DWORD(Name.size()));
+            Require(Result.promoted_.size() < 64 && Copy.name_.find('/') == std::string::npos && ValidHash(Copy.hash_) && Seen.insert(Name).second, "update-journal-promoted");
+            Result.promoted_.push_back(std::move(Copy));
+        }
+    }
+    return Result;
 }
 void Move(const Path& From, const Path& To, bool Replace = false) {
     CheckPlainPath(From); CheckPlainPath(To); std::filesystem::create_directories(To.parent_path()); CheckPlainPath(To);
@@ -114,6 +126,12 @@ void Move(const Path& From, const Path& To, bool Replace = false) {
 }
 void Rollback(const Path& Root, const Path& Tx, Journal& Journal) {
     Journal.state_ = "rollingBack"; Save(Tx, Journal);
+    // A recorded ROOT copy the product placed is removed; a changed file is the user's.
+    for (const auto& Copy : Journal.promoted_) {
+        const auto Destination = Root / Wide(Copy.name_); CheckPlainPath(Destination);
+        if (std::filesystem::exists(Destination) && HashFile(Destination) == Copy.hash_
+            && !Retried([&] { return DeleteFileW(Destination.c_str()) != FALSE; })) FailFile("update-rollback-delete", Destination);
+    }
     for (std::size_t Count = Journal.files_.size(); Count; --Count) {
         const auto Index = Count - 1; const auto& Entry = Journal.files_[Index];
         const auto Destination = Root / Wide(Entry.name_), Backup = Tx / L"backup" / std::to_wstring(Index);
@@ -254,6 +272,17 @@ void DiscardUnapplied(const Path& Tx, std::optional<std::filesystem::file_time_t
     std::filesystem::remove(Tx);
 }
 }
+// Antivirus and indexing scanners briefly open new files without sharing them.
+// Retry those errors for a few seconds before the transaction rolls back.
+bool Retried(const std::function<bool()>& Attempt) {
+    const auto Until = GetTickCount64() + 5000; DWORD Delay = 50;
+    for (;;) {
+        if (Attempt()) return true;
+        const auto Error = GetLastError();
+        if ((Error != ERROR_SHARING_VIOLATION && Error != ERROR_LOCK_VIOLATION && Error != ERROR_ACCESS_DENIED) || GetTickCount64() >= Until) { SetLastError(Error); return false; }
+        Sleep(Delay); Delay = std::min<DWORD>(Delay * 2, 500);
+    }
+}
 void CheckProductRelative(std::string_view Relative) {
     CheckRelative(Relative);
     // A client accepts only the paths its own build owned. Extend ownership in
@@ -325,6 +354,48 @@ bool OtherProductProcesses(const Path& Root, unsigned IgnorePid, ProductProcessC
         else if (Same(Entry.szExeFile, L"HyperCommander.exe") || Same(Entry.szExeFile, L"HyperCommanderAdmin.exe") || Same(Entry.szExeFile, L"HyperEditor.exe")) return true;
     } while (Process32NextW(Snapshot.value_, &Entry)); return false;
 }
+bool ImageRunning(const Path& File) {
+    Handle Snapshot; Snapshot.value_ = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); Require(Snapshot.value_ != INVALID_HANDLE_VALUE, "update-process-list");
+    const auto Expected = File.lexically_normal().wstring(), Base = File.filename().wstring();
+    PROCESSENTRY32W Entry{sizeof(Entry)};
+    if (!Process32FirstW(Snapshot.value_, &Entry)) return false;
+    do {
+        Handle Process; Process.value_ = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Entry.th32ProcessID);
+        wchar_t Name[32768]{}; DWORD Size = DWORD(std::size(Name));
+        if (Process.value_ && QueryFullProcessImageNameW(Process.value_, 0, Name, &Size)) {
+            if (Same(Path(LongName(std::wstring(Name, Size))).lexically_normal().wstring(), Expected)) return true;
+        }
+        // An image another account runs cannot be queried; its name decides.
+        else if (Same(Entry.szExeFile, Base)) return true;
+    } while (Process32NextW(Snapshot.value_, &Entry)); return false;
+}
+bool PlaceWithinTransaction(const Path& Root, const std::vector<RootCopy>& Copies, const std::function<void()>& Place) {
+    // No install-root check: the copy runs without one when nothing is active, and the
+    // apply that created the transaction already proved the root updatable.
+    auto RootLock = LockFile(Root); CheckPlainPath(Root / L".update/active.json");
+    if (!std::filesystem::exists(Root / L".update/active.json")) return false;
+    const auto Tx = Active(Root); auto Journal = Load(Tx);
+    Require(Journal.state_ == "installed", "update-promotion-pending");
+    // A listed name gets the copy as its replacement, so every helper's rollback,
+    // including v2026.10.27.1 and later, accepts and restores it. Earlier helpers
+    // reject unlisted names in a journal, so those go to promoted_ instead.
+    bool Changed = false;
+    for (const auto& Copy : Copies) {
+        const auto Listed = std::ranges::find_if(Journal.files_, [&](const Entry& Item) { return Same(Wide(Item.name_), Wide(Copy.name_)); });
+        if (Listed != Journal.files_.end()) {
+            if (Listed->replacement_ == Copy.hash_) continue;
+            Require(Listed->replacement_.empty(), "update-promotion-pending");
+            Listed->replacement_ = Copy.hash_; Changed = true;
+        } else if (std::ranges::none_of(Journal.promoted_, [&](const RootCopy& Item) { return Same(Wide(Item.name_), Wide(Copy.name_)) && Item.hash_ == Copy.hash_; })) {
+            std::erase_if(Journal.promoted_, [&](const RootCopy& Item) { return Same(Wide(Item.name_), Wide(Copy.name_)); });
+            Journal.promoted_.push_back(Copy); Changed = true;
+        }
+    }
+    // The journal is durable before any ROOT file changes. A rollback that finds the
+    // copy missing still restores the original from the backup.
+    if (Changed) Save(Tx, Journal);
+    Place(); return true;
+}
 void ApplyTransaction(const Path& InputRoot, const Path& InputTx, unsigned ParentPid, std::uint64_t ParentCreated, std::wstring_view Handoff, bool* HandoffReady) {
     if (HandoffReady) *HandoffReady = false;
     const auto Root = Canonical(InputRoot), Tx = Canonical(InputTx); CheckTransaction(Root, Tx); auto RootLock = Lock(Root);
@@ -339,6 +410,21 @@ void ApplyTransaction(const Path& InputRoot, const Path& InputTx, unsigned Paren
     Originals.emplace("product-inventory.json", ProductFile{"product-inventory.json", HashBytes(OriginalBytes), OriginalBytes.size()});
     const auto NextBytes = ReadBounded(Tx / L"staging/product-inventory.json", 1048576);
     Replacements.emplace("product-inventory.json", ProductFile{"product-inventory.json", Manifest.inventoryHash_, NextBytes.size()});
+    // The ROOT copy of each carried file this updater knows changes and rolls back with
+    // the runtime it was built with. A product-signed copy the old inventory does not
+    // list is an original; any other copy is a user file and stays, as do unknown names.
+    std::map<std::string, Path> Carriers;
+    for (const auto Known : policy::CarriedRootFiles) {
+        const std::string Name(Known); const auto Carried = Replacements.find(std::string(layout::RootCarrier) + '/' + Name);
+        if (Carried == Replacements.end()) continue;
+        const auto Copy = Root / Wide(Name); CheckPlainPath(Copy);
+        if (!Originals.contains(Name) && std::filesystem::exists(Copy)) {
+            try { VerifyProductSignature(Copy, Name); } catch (const std::exception&) { continue; }
+            Originals.emplace(Name, ProductFile{Name, HashFile(Copy), std::filesystem::file_size(Copy)});
+        }
+        Replacements.emplace(Name, ProductFile{Name, Carried->second.hash_, Carried->second.size_});
+        Carriers.emplace(Name, Tx / L"staging" / Wide(Carried->first));
+    }
     WaitParent(Root, ParentPid, ParentCreated, Handoff, HandoffReady); WaitProductExit(Root);
     std::map<std::string, int> Names;
     for (const auto& [Name, File] : Originals) Names.emplace(Name, 0);
@@ -363,7 +449,8 @@ void ApplyTransaction(const Path& InputRoot, const Path& InputTx, unsigned Paren
             if (Entry.existed_) { Require(HashFile(Destination) == Entry.original_, "update-product-changed"); Move(Destination, Tx / L"backup" / std::to_wstring(Index)); }
             if (!Entry.replacement_.empty()) {
                 const auto& File = Replacements.at(Entry.name_); const auto Temp = Tx / L"replacement.tmp"; CheckPlainPath(Temp);
-                const auto Source = Tx / L"staging" / Wide(Entry.name_);
+                const auto Carrier = Carriers.find(Entry.name_);
+                const auto Source = Carrier != Carriers.end() ? Carrier->second : Tx / L"staging" / Wide(Entry.name_);
                 if (!Retried([&] { return CopyFileW(Source.c_str(), Temp.c_str(), FALSE) != FALSE; })) FailFile("update-copy-failed", Source);
                 VerifyProductFile(Temp, Entry.name_, File.hash_, File.size_);
                 Handle Flush; Flush.value_ = CreateFileW(Temp.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -371,7 +458,9 @@ void ApplyTransaction(const Path& InputRoot, const Path& InputTx, unsigned Paren
                 CloseHandle(Flush.value_); Flush.value_ = INVALID_HANDLE_VALUE; Move(Temp, Destination);
             }
         }
-        VerifyTree(Root, Manifest, false); Journal.state_ = "installed"; Save(Tx, Journal);
+        VerifyTree(Root, Manifest, false);
+        for (const auto& [Name, Carrier] : Carriers) { const auto& File = Replacements.at(Name); VerifyProductFile(Root / Wide(Name), Name, File.hash_, File.size_); }
+        Journal.state_ = "installed"; Save(Tx, Journal);
     } catch (...) { const auto Error = std::current_exception(); Rollback(Root, Tx, Journal); std::rethrow_exception(Error); }
 }
 void RecoverTransaction(const Path& InputRoot) {

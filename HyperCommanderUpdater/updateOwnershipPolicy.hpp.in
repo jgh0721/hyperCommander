@@ -1,8 +1,13 @@
 ﻿@HC_HEADER_BOM@#pragma once
+#include <array>
 #include <string_view>
 // Generated from tools/update/update-contract.json: the union of all ownership entries.
 namespace hc::update::policy {
 inline constexpr std::string_view OwnedRootFiles[] = { @HC_OWNED_rootFiles_CPP@ };
 inline constexpr std::string_view OwnedRootDllPrefixes[] = { @HC_OWNED_rootDllPrefixes_CPP@ };
 inline constexpr std::string_view OwnedDirectories[] = { @HC_OWNED_directories_CPP@ };
+// Root files the updater floor does not own. Packages carry them under
+// layout::RootCarrier; the installed product copies them to ROOT.
+// The contract lists each program before its worker.
+inline constexpr std::array<std::string_view, @HC_CARRIED_ROOT_FILES_COUNT@> CarriedRootFiles{ { @HC_CARRIED_ROOT_FILES_CPP@ } };
 }

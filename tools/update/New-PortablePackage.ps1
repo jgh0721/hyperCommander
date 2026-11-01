@@ -14,6 +14,9 @@ if ($Inventory.schemaVersion -ne 1 -or $Inventory.configuration -ne 'Release' -o
 # and only after downloading it. Clients before this version get the manual install notice.
 $MinimumFromVersion=Get-UpdateMinimumFromVersion $Inventory
 if ([version]$Version -lt [version]$MinimumFromVersion) { throw 'Package version predates its updater ownership requirements.' }
+# Raising the oldest accepted client strands every older installation; the contract floor must change first.
+$UpdaterFloor=(Get-UpdateFloor).version
+if ([version]$MinimumFromVersion -gt [version]$UpdaterFloor) { throw "minimumFromVersion $MinimumFromVersion is newer than the updater floor $UpdaterFloor." }
 & (Join-Path $PSScriptRoot 'Test-ProductSignatures.ps1') -Root $Root
 $Contract=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'update-contract.json') -Raw -Encoding UTF8|ConvertFrom-Json
 [IO.Directory]::CreateDirectory($OutputRoot)|Out-Null

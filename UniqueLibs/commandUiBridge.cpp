@@ -56,6 +56,7 @@
 #include "qtViewerHost.hpp"
 #include <QStandardPaths>
 #include "document/documentOpenController.hpp"
+#include "HyperCommanderUpdater/updateController.hpp"
 #include "HyperCommander/UIs/dlgExternalConfigure.hpp"
 #include "externalEditorMgr.hpp"
 #include "qtPluginHostSettings.hpp"
@@ -260,6 +261,8 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         if (auto* Window = qobject_cast<QMainWindow*>(Guard.data()))
             Window->statusBar()->showMessage(std::get<std::string>(Event.payload_.at("command")).starts_with("hc.navigate.")
                 ? QObject::tr("폴더 이동을 완료하지 못했습니다. 경로와 연결 상태를 확인하세요.")
+                : std::get<std::string>(Event.payload_.at("command")) == "hc.file.compare" && std::get<std::string>(Event.payload_.at("code")).starts_with("compare-program-")
+                ? QObject::tr("HyperCompare를 실행하지 못했습니다. 오류: %1").arg(QString::fromStdString(std::get<std::string>(Event.payload_.at("code"))))
                 : std::get<std::string>(Event.payload_.at("command")) == "hc.file.compare"
                 ? QObject::tr("비교할 파일 2~3개 또는 폴더 2개를 선택하세요. 양쪽 패널에서는 각각 1개를 선택할 수 있습니다. 오류: %1").arg(QString::fromStdString(std::get<std::string>(Event.payload_.at("code"))))
                 : QObject::tr("명령을 실행할 수 없습니다: %1").arg(QString::fromStdString(std::get<std::string>(Event.payload_.at("code")))), 6000);
@@ -738,7 +741,9 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
         if (!Arguments.HasValue()) return Arguments.Failure();
         const auto Root = QCoreApplication::applicationDirPath();
         const auto Program = QDir(Root).filePath("HyperCompare.exe");
-        if (!QFileInfo::exists(Program)) return Error{ErrorCategory::NotFound, "compare-program-not-installed"};
+        // Packages carry HyperCompare under Libs/RootFiles for older updaters; place the
+        // ROOT copy now when the start-up copy has not run or could not finish.
+        if (!hc::update::PrepareRootFiles(Program, main_)) return Error{ErrorCategory::NotFound, "compare-program-not-installed"};
         if (!QProcess::startDetached(Program, Arguments.Value(), Root)) return Error{ErrorCategory::Unavailable, "compare-launch-failed"};
         return CommandOutcome{};
     }

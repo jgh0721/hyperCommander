@@ -22,8 +22,21 @@ if(HC_SIGNING_SCRIPT AND CONFIG STREQUAL "Release")
         message(FATAL_ERROR "Signed HyperViewer manifest generation failed")
     endif()
 endif()
-set(FILES HyperCommander.exe HyperCommanderAdmin.exe HyperEditor.exe HyperCompare.exe HyperCompareCli.exe
-    hc-plugin-host-x64.exe hc-plugin-inspect.exe hc-search-index.exe Everything64.dll Libs/Fonts/D2Coding.rcc)
+set(FILES HyperCommander.exe HyperCommanderAdmin.exe HyperEditor.exe
+    hc-plugin-host-x64.exe hc-plugin-inspect.exe hc-search-index.exe Libs/Fonts/D2Coding.rcc)
+# Root files the oldest supported updater does not own (HyperCompare) are listed
+# only as signed copies under the root carrier. The product copies them to ROOT;
+# the build directory keeps its originals for development runs.
+include("${CMAKE_CURRENT_LIST_DIR}/UpdateOwnershipPolicy.cmake")
+hc_read_update_ownership()
+foreach(NAME IN LISTS HC_CARRIED_ROOT_FILES)
+    if(NOT EXISTS "${SOURCE}/${NAME}")
+        message(FATAL_ERROR "Missing carried root file: ${NAME}")
+    endif()
+    file(MAKE_DIRECTORY "${SOURCE}/${HC_ROOT_CARRIER}")
+    file(COPY_FILE "${SOURCE}/${NAME}" "${SOURCE}/${HC_ROOT_CARRIER}${NAME}" ONLY_IF_DIFFERENT)
+    list(APPEND FILES "${HC_ROOT_CARRIER}${NAME}")
+endforeach()
 if(EXISTS "${SOURCE}/HyperCommanderUpdater.exe")
     list(APPEND FILES HyperCommanderUpdater.exe)
 endif()
@@ -97,9 +110,16 @@ foreach(GROUP IN ITEMS helpers dependencies)
     endforeach()
 endforeach()
 foreach(REQUIRED IN ITEMS pdfium.dll Licenses/Scintilla/License.txt Licenses/Lexilla/License.txt Licenses/PDFium/LICENSE Licenses/waterColorStyle/LICENSE
-        Licenses/Lua/ThirdPartyNotices.txt Licenses/IsoImage/COPYING Licenses/SevenZip/License.txt)
+        Licenses/Lua/ThirdPartyNotices.txt Licenses/IsoImage/COPYING Licenses/SevenZip/License.txt
+        Licenses/EverythingSDK2/License.txt Licenses/EverythingSDK3/License.txt)
     if(NOT REQUIRED IN_LIST FILES)
         message(FATAL_ERROR "Required runtime/license is absent: ${REQUIRED}")
+    endif()
+endforeach()
+# A carried name at ROOT would need an updater newer than the floor.
+foreach(NAME IN LISTS HC_CARRIED_ROOT_FILES)
+    if(NAME IN_LIST FILES)
+        message(FATAL_ERROR "Carried root file listed at ROOT: ${NAME}")
     endif()
 endforeach()
 if(CONFIG STREQUAL "Debug")

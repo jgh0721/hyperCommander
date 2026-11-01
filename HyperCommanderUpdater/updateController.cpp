@@ -3,6 +3,7 @@
 
 #include "updateArchive.hpp"
 #include "updateMessages.hpp"
+#include "updatePromotion.hpp"
 #include "updateTransaction.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/settings/updateSettings.hpp"
@@ -24,6 +25,7 @@
 #include <QProcess>
 #include <QLabel>
 #include <QLocale>
+#include <QLoggingCategory>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -33,6 +35,7 @@
 #include <QTimer>
 #include <QUuid>
 #include <QtConcurrent/QtConcurrentRun>
+#include <shellapi.h>
 
 namespace hc::update {
 namespace {
@@ -58,6 +61,70 @@ void Eligible(const Manifest& Release, std::string_view Version) {
     const auto Current = ParseVersion(Version);
     Require(ParseVersion(Release.version_) > Current && Current >= ParseVersion(Release.minimum_), "update-version-order");
 }
+Q_LOGGING_CATEGORY(promoteLog, "hc.update.promote")
+// Set once a promotion in this process found every ROOT copy current.
+std::atomic<bool> RootFilesCurrent = false;
+PromotionResult Promote(const Path& Root) {
+    auto Result = PromoteRootFiles(Root);
+    if (Result.status_ == PromotionStatus::Done) {
+        RootFilesCurrent = true;
+        for (const auto& Name : Result.promoted_) qCInfo(promoteLog) << "copied to the installation root:" << Text(Name);
+    } else qCWarning(promoteLog) << PromotionStatusName(Result.status_) << Text(Result.error_);
+    return Result;
+}
+// Runs the installed updater elevated for --promote and waits without blocking the window.
+PromotionResult PromoteElevated(const Path& Root, QWidget* Parent) {
+    PromotionResult Result{PromotionStatus::Failed};
+    const auto Helper = Root / L"HyperCommanderUpdater.exe";
+    try { VerifyProductSignature(Helper); } catch (const std::exception& Error) { Result.error_ = Error.what(); return Result; }
+    // A trailing backslash (drive root) must not escape the closing quote.
+    auto Folder = Root.wstring(); if (Folder.ends_with(L'\\')) Folder += L'\\';
+    const auto Parameters = L"--promote \"" + Folder + L"\"";
+    SHELLEXECUTEINFOW Info{sizeof(Info)}; Info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+    Info.hwnd = Parent ? HWND(Parent->window()->winId()) : nullptr; Info.lpVerb = L"runas";
+    Info.lpFile = Helper.c_str(); Info.lpParameters = Parameters.c_str(); Info.lpDirectory = Root.c_str(); Info.nShow = SW_HIDE;
+    if (!ShellExecuteExW(&Info) || !Info.hProcess) {
+        Result.win32_ = GetLastError(); Result.error_ = Result.win32_ == ERROR_CANCELLED ? "update-promote-elevation-cancelled" : "update-promote-elevation"; return Result;
+    }
+    const auto Close = qScopeGuard([&] { CloseHandle(Info.hProcess); });
+    QEventLoop Loop; QTimer Poll; QElapsedTimer Elapsed; Elapsed.start();
+    QObject::connect(&Poll, &QTimer::timeout, &Loop, [&] { if (WaitForSingleObject(Info.hProcess, 0) != WAIT_TIMEOUT || Elapsed.elapsed() >= 120000) Loop.quit(); });
+    Poll.start(50); Loop.exec(QEventLoop::ExcludeUserInputEvents);
+    DWORD Code = STILL_ACTIVE;
+    if (!GetExitCodeProcess(Info.hProcess, &Code) || Code == STILL_ACTIVE) { Result.error_ = "update-promote-elevation-timeout"; return Result; }
+    if (Code == 0) { Result.status_ = PromotionStatus::Done; return Result; }
+    if (Code >= 11 && Code <= 14) Result.status_ = PromotionStatus(Code - 10);
+    Result.error_ = "update-promote-elevated: exit=" + std::to_string(Code);
+    return Result;
+}
+}
+bool PrepareRootFiles(const QString& Program, QWidget* Parent) {
+    if (RootFilesCurrent && QFileInfo::exists(Program)) return true;
+    const auto Root = InstallRoot(Native(QCoreApplication::applicationDirPath()));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    auto Result = Promote(Root);
+    QApplication::restoreOverrideCursor();
+    if (Result.status_ == PromotionStatus::Failed && Result.win32_ == ERROR_ACCESS_DENIED
+        && hc::ui::MessageDialog::question(Parent, QObject::tr("HyperCompare"), QObject::tr("설치 폴더에 쓸 권한이 없어 HyperCompare를 설치 폴더로 옮기지 못했습니다.\n"
+            "관리자 권한으로 HyperCommanderUpdater를 실행해 옮기시겠습니까?")) == QMessageBox::Yes) {
+        Result = PromoteElevated(Root, Parent);
+        // The non-elevated check confirms the result and records it for later launches.
+        if (Result.status_ == PromotionStatus::Done) Result = Promote(Root);
+    }
+    if (Result.status_ == PromotionStatus::Done) return true;
+    // An existing copy still runs; the next start or update replaces it.
+    if (QFileInfo::exists(Program)) { qCWarning(promoteLog) << "running the existing copy"; return true; }
+    QString Reason;
+    switch (Result.status_) {
+    case PromotionStatus::Pending: Reason = QObject::tr("업데이트 설치 확인이 진행 중입니다. 잠시 후 다시 시도하십시오."); break;
+    case PromotionStatus::Busy: Reason = QObject::tr("다른 HyperCommander 창이 HyperCompare를 준비하고 있습니다. 잠시 후 다시 시도하십시오."); break;
+    case PromotionStatus::Foreign: Reason = QObject::tr("설치 폴더의 HyperCompare.exe 또는 HyperCompareCli.exe가 제품 파일이 아니어서 바꾸지 않았습니다. "
+        "그 파일을 옮긴 뒤 다시 시도하거나 Libs\\RootFiles의 두 파일을 설치 폴더로 복사하십시오."); break;
+    default: Reason = QObject::tr("HyperCompare를 설치 폴더로 옮기지 못했습니다. Libs\\RootFiles의 HyperCompare.exe와 HyperCompareCli.exe를 "
+        "설치 폴더로 복사하십시오.\n\n%1").arg(Text(Result.error_)); break;
+    }
+    hc::ui::MessageDialog::warning(Parent, QObject::tr("HyperCompare"), Reason);
+    return false;
 }
 UpdateController::UpdateController(QWidget* Window, std::function<bool()> CanRestart)
     : QObject(Window), window_(Window), canRestart_(std::move(CanRestart)), network_(new QNetworkAccessManager(this))
@@ -67,6 +134,14 @@ UpdateController::UpdateController(QWidget* Window, std::function<bool()> CanRes
     connect(CheckAction, &QAction::triggered, this, &UpdateController::Check);
     if (QStandardPaths::isTestModeEnabled()) return;
     QTimer::singleShot(1500, this, &UpdateController::restore);
+    // Older updaters deliver HyperCompare under Libs/RootFiles. Copy it to ROOT right after
+    // start, also while this update still awaits its health check.
+    QTimer::singleShot(1500, this, [this] {
+        const auto Root = root_;
+        auto* Watcher = new QFutureWatcher<void>(this);
+        connect(Watcher, &QFutureWatcher<void>::finished, Watcher, &QObject::deleteLater);
+        Watcher->setFuture(QtConcurrent::run([Root] { Promote(Native(Root)); }));
+    });
     QTimer::singleShot(10000, this, &UpdateController::checkAutomatically);
     auto* Automatic = new QTimer(this); Automatic->setObjectName("hc.update.schedule");
     Automatic->setInterval(60000); connect(Automatic, &QTimer::timeout, this, &UpdateController::checkAutomatically); Automatic->start();
@@ -78,7 +153,8 @@ UpdateController::UpdateController(QWidget* Window, std::function<bool()> CanRes
         connect(Watcher, &QFutureWatcher<void>::finished, Watcher, &QObject::deleteLater);
         Watcher->setFuture(QtConcurrent::run([Root] {
             // The update stays active on failure. The next check retries it and shows the reason.
-            try { AcknowledgeTransaction(Native(Root)); }
+            // A copy that was busy at start is retried once the update is final.
+            try { AcknowledgeTransaction(Native(Root)); Promote(Native(Root)); }
             catch (const std::exception& Error) {
                 try { DurableWrite(Native(Root) / L".update/last-error.json", "{\"error\":" + QuoteJson(std::string("update-health-check-failed: ") + Error.what()) + "}"); } catch (...) {}
             } catch (...) {}
@@ -276,6 +352,7 @@ void UpdateController::check(bool Automatic) {
         if (std::filesystem::exists(Native(Root) / L".update/active.json")) {
             try { AcknowledgeTransaction(Native(Root)); }
             catch (const std::exception& Error) { throw std::runtime_error(std::string("update-health-check-failed: ") + Error.what()); }
+            Promote(Native(Root));
         }
         Require(StartupAllowed(Native(Root)) && !std::filesystem::exists(Native(Root) / L".update/active.json"), "update-recovery-or-health-check-pending");
         const auto Inventory = ParseInventory(ReadBounded(Native(Root) / L"product-inventory.json", 1048576));

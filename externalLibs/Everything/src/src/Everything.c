@@ -31,7 +31,10 @@
 // disable warnings
 #pragma warning(disable : 4996) // deprecation
 
+// HyperCommander: hc-search-index links this source statically and defines EVERYTHINGUSERAPI empty.
+#ifndef EVERYTHINGUSERAPI
 #define EVERYTHINGUSERAPI __declspec(dllexport)
+#endif
 
 // include
 #include "../include/Everything.h"

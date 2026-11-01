@@ -177,6 +177,13 @@ if(Test-Path -LiteralPath (Join-Path $Root '.update/active.json')){throw 'Health
 if(Test-Path -LiteralPath (Join-Path $Tx 'staging')){throw 'Verified staging was not reclaimed after health acknowledgement.'}
 if((Get-FileHash -LiteralPath $Sentinel -Algorithm SHA256).Hash -ne $SentinelHash -or (Get-FileHash -LiteralPath $Plugin -Algorithm SHA256).Hash -ne $PluginHash){throw 'User settings/plugins changed.'}
 Proof 'baseline-to-candidate-and-health' 'All candidate hashes/signatures match; user settings and plugin preserved; original-file backup retained'
+# Root files the baseline updater may not own arrive under the carrier folder; the new product copies them to ROOT.
+$Floor=Get-UpdateFloor;$Carried=@($Floor.carried|Where-Object{Test-Path -LiteralPath (Join-Path $Root ($Floor.carrier+$_))})
+if($Carried.Count){
+    $null=Invoke-Probe @('promote',$Root);$null=Invoke-Probe @('promote',$Root)
+    foreach($Name in $Carried){if((Get-FileHash -LiteralPath (Join-Path $Root $Name)).Hash -ne (Get-FileHash -LiteralPath (Join-Path $Root ($Floor.carrier+$Name))).Hash){throw "Root copy differs from its carried file: $Name"}}
+    Proof 'carried-root-files' ("Promoted and current: "+($Carried -join ', '))
+}
 $Parent.Dispose()
 if(-not (Test-Path -LiteralPath (Join-Path $Root 'HyperCommanderUpdater.exe')) -or (Test-Path -LiteralPath (Join-Path $Root 'hc-updater.exe'))){throw 'Updater executable name migration failed.'}
 $ServiceRoot=New-Installation 'service'

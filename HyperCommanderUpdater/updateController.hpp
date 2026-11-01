@@ -14,6 +14,10 @@ class QLabel;
 class QProgressBar;
 namespace hc::update {
 class UpdateControllerTest;
+/// Before HyperCompare runs: makes the ROOT copies of the carried files current, asking to
+/// run the updater elevated when the installation folder is not writable. Returns true when
+/// Program can be launched, otherwise tells the user why and returns false.
+bool PrepareRootFiles(const QString& Program, QWidget* Parent);
 /// Update progress in the product dialog frame: header band, message and bar, footer band with Cancel.
 /// It keeps the QProgressDialog names the controller calls; Cancel, Esc and the close box all cancel.
 class UpdateProgressDialog final : public QDialog {

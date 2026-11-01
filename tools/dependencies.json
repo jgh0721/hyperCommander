@@ -34,8 +34,8 @@
       "license": "MIT",
       "source": "https://www.voidtools.com/support/everything/sdk/",
       "root": "externalLibs/Everything",
-      "inputs": ["src/include/Everything.h", "src/lib/Everything64.lib", "src/dll/Everything64.dll"],
-      "note": "License statement in Everything.h. Everything64.lib imports Everything64.dll; SDK version requires confirmation."
+      "inputs": ["src/include/Everything.h", "src/ipc/everything_ipc.h", "src/src/Everything.c", "src/License.txt", "sdk3/include/Everything3.h", "sdk3/src/Everything3.c", "sdk3/License.txt"],
+      "note": "SDK2 and SDK3 sources are built into hc-search-index; no Everything DLL ships. Everything.c lets the build predefine EVERYTHINGUSERAPI. src/License.txt repeats the source headers' MIT notice. SDK2 version requires confirmation."
     },
     {
       "name": "Total Commander plugin headers",

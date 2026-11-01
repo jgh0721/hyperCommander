@@ -5,9 +5,7 @@ set(EXTERNAL_SRC "")
 # Everything SDK
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/Everything/src/include )
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/Everything/src/ipc )
-
-link_directories( ${CMAKE_CURRENT_LIST_DIR}/Everything/src/lib )
-link_libraries( Everything64 )
+# Only hc-search-index uses the SDK, built from source there; nothing links Everything64.dll.
 
 # QDirectoryEdit
 set( EXTERNAL_SRC ${EXTERNAL_SRC}

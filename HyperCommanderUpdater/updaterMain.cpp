@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "updateMessages.hpp"
+#include "updatePromotion.hpp"
 #include "updateTransaction.hpp"
 
 #include <shellapi.h>
@@ -34,8 +35,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     Path Root, Tx, Self; std::string Error; std::wstring Handoff; unsigned ParentPid = 0; bool HandoffReady = false;
     const bool Quiet = Arguments && Count > 1 && std::wstring_view(Arguments[1]) == L"--ack";
     const bool Applying = Arguments && Count > 1 && std::wstring_view(Arguments[1]) == L"--apply";
+    const bool Promoting = Arguments && Count > 1 && std::wstring_view(Arguments[1]) == L"--promote"; int PromoteExit = 0;
     try {
-        if (!Arguments || Count < 3) throw std::runtime_error("Usage: HyperCommanderUpdater.exe --recover|--ack ROOT; --apply ROOT TRANSACTION PID CREATED");
+        if (!Arguments || Count < 3) throw std::runtime_error("Usage: HyperCommanderUpdater.exe --recover|--ack|--promote ROOT; --apply ROOT TRANSACTION PID CREATED");
         // Keep startup failures diagnosable even when self-verification fails.
         Root = Path(Arguments[2]);
         if (Applying && (Count == 6 || Count == 7)) {
@@ -49,9 +51,17 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             ApplyTransaction(Root, Tx, ParentPid, std::stoull(Arguments[5]), Handoff, &HandoffReady); Launch(Root, Tx);
         } else if (Mode == L"--recover" && Count == 3) { RecoverTransaction(Root); Launch(Root, {}); }
         else if (Mode == L"--ack" && Count == 3) AcknowledgeTransaction(Root);
+        // HyperCommander runs this elevated when the installation folder is not writable. It
+        // copies only verified carried files to ROOT and never changes a transaction.
+        else if (Mode == L"--promote" && Count == 3) {
+            const auto Result = PromoteRootFiles(Root);
+            PromoteExit = Result.status_ == PromotionStatus::Done ? 0 : 10 + int(Result.status_);
+        }
         else throw std::runtime_error("update-helper-arguments");
     } catch (const std::exception& Failure) { Error = Failure.what(); }
     if (Arguments) LocalFree(Arguments);
+    // Promotion answers with its exit code only; last-error.json stays for update failures.
+    if (Promoting) return Error.empty() ? PromoteExit : 2;
     if (Error.empty()) return 0;
     if (!Root.empty()) {
         try { DurableWrite(Root / L".update/last-error.json", "{\"error\":" + QuoteJson(Error) + ",\"handoff\":" + QuoteJson(Utf8(Handoff)) + "}"); } catch (...) {}

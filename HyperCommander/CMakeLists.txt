@@ -300,7 +300,7 @@ add_custom_command(TARGET HyperCommander POST_BUILD
         "${PROJECT_SOURCE_DIR}/commonLibs/scripting/ThirdPartyNotices.txt"
         "$<TARGET_FILE_DIR:HyperCommander>/Licenses/Lua/ThirdPartyNotices.txt"
     VERBATIM)
-hc_enable_qt_deployment(HyperCommander PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
+hc_enable_qt_deployment(HyperCommander PLUGINS)
 add_dependencies(HyperCommander hc-plugin-host-x64 hc_hyperviewer_package HyperCommanderUpdater)
 
 # Opt-in live integration tests compile the same UI/model sources with a test entry
@@ -330,7 +330,7 @@ if(BUILD_TESTING AND HC_BUILD_SMB_TESTS)
     get_target_property(HC_PRODUCT_LIBRARIES HyperCommander LINK_LIBRARIES)
     target_link_libraries(hc_smb_tests PRIVATE ${HC_PRODUCT_LIBRARIES} Qt6::Test)
     add_dependencies(hc_smb_tests hc_wcx_fixture hc-plugin-host-x64)
-    hc_enable_qt_deployment(hc_smb_tests TEST PLUGINS RUNTIME_FILE "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/dll/Everything64.dll")
+    hc_enable_qt_deployment(hc_smb_tests TEST PLUGINS)
 endif()
 
 add_custom_command(TARGET HyperCommander POST_BUILD

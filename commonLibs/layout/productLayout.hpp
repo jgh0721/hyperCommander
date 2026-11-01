@@ -18,4 +18,7 @@ namespace hc::layout
     // inventory-pinned bundle relative to that root.
     inline constexpr auto RhwpRuntime        = ".";
     inline constexpr auto RhwpBundle         = "Libs/bundle";
+    // Root files the oldest supported updater does not own travel here in packages and
+    // inventories; the product copies them to ROOT (tools/update/update-contract.json).
+    inline constexpr auto RootCarrier        = "Libs/RootFiles";
 }

@@ -5,6 +5,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path $PSScriptRoot -Parent
+Import-Module (Join-Path $PSScriptRoot 'update/ProductSigning.psm1') -Force -DisableNameChecking
+# Root files the oldest supported updater does not own ship under the carrier folder.
+$Floor = Get-UpdateFloor
 $Kit = 'D:\Qt\Qt-6.12.0-VC2026-X64-H-MD-2026-10-10\bin\qt-cmake.bat'
 if (-not $SkipBuild) {
     Push-Location $Root
@@ -52,7 +55,7 @@ $Hashes = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]:
 foreach ($Entry in $Product.files) {
     $Relative = [string]$Entry.path
     if ($Relative -match '(^/|^[A-Za-z]:|(^|/)\.\.(/|$))' -or $Relative.Contains('\') -or
-        ($Relative -notmatch '^(HyperCommander(?:Admin|Updater)?\.exe|HyperEditor\.exe|HyperCompare(?:Cli)?\.exe|hc-(?:plugin-host-x64|plugin-inspect|search-index)\.exe|Everything64\.dll|(?:Qt6|vcruntime|msvcp|concrt|d3dcompiler_|opengl32sw|pdfium)[A-Za-z0-9_.]*\.dll|Libs/(?:platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport)/[A-Za-z0-9_.-]+\.dll|Libs/translations/[A-Za-z0-9_.-]+\.qm|Libs/Markdown/[^:]+|Libs/Fonts/D2Coding\.rcc|Licenses/[^:]+|Addons/WCX/IsoImage/[^:]+|Addons/WLX/HyperViewer/[^:]+|Third-Party/(?:SevenZip|AlzEgg)/[^:]+)$' -and -not $RhwpPins.ContainsKey($Relative) -and -not $EpubPins.ContainsKey($Relative)) -or
+        ($Relative -notmatch '^(HyperCommander(?:Admin|Updater)?\.exe|HyperEditor\.exe|Libs/RootFiles/HyperCompare(?:Cli)?\.exe|hc-(?:plugin-host-x64|plugin-inspect|search-index)\.exe|(?:Qt6|vcruntime|msvcp|concrt|d3dcompiler_|opengl32sw|pdfium)[A-Za-z0-9_.]*\.dll|Libs/(?:platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport)/[A-Za-z0-9_.-]+\.dll|Libs/translations/[A-Za-z0-9_.-]+\.qm|Libs/Markdown/[^:]+|Libs/Fonts/D2Coding\.rcc|Licenses/[^:]+|Addons/WCX/IsoImage/[^:]+|Addons/WLX/HyperViewer/[^:]+|Third-Party/(?:SevenZip|AlzEgg)/[^:]+)$' -and -not $RhwpPins.ContainsKey($Relative) -and -not $EpubPins.ContainsKey($Relative)) -or
         $Relative -match '(^|/)Qt6Test' -or $Entry.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or $Hashes.ContainsKey($Relative)) {
         throw "Invalid product inventory entry: $Relative"
     }
@@ -63,7 +66,8 @@ foreach ($Entry in $Product.files) {
     $Files.Add($Relative); $Hashes.Add($Relative, $Entry.sha256)
 }
 $ViewerPackage = 'Addons/WLX/HyperViewer/'
-foreach ($Required in @('HyperCommander.exe','HyperEditor.exe','HyperCompare.exe','HyperCompareCli.exe','Libs/platforms/qwindows.dll','pdfium.dll',($ViewerPackage + 'hyperviewer.json'),($ViewerPackage + 'source-lock.json'))) {
+foreach ($Required in @(@('HyperCommander.exe','HyperEditor.exe','Libs/platforms/qwindows.dll','pdfium.dll',($ViewerPackage + 'hyperviewer.json'),($ViewerPackage + 'source-lock.json')) +
+        @($Floor.carried | ForEach-Object { $Floor.carrier + $_ }))) {
     if (-not $Hashes.ContainsKey($Required)) { throw "Required product input is absent: $Required" }
 }
 foreach ($Name in $RhwpPins.Keys) {
@@ -91,6 +95,7 @@ $Evidence = Join-Path $Root ('_build/install/' + [Guid]::NewGuid().ToString('N')
 [IO.Directory]::CreateDirectory($Evidence) | Out-Null
 $Changed = [Collections.Generic.List[object]]::new()
 $Inventory = [Collections.Generic.List[object]]::new()
+$Promoted = [Collections.Generic.List[string]]::new()
 try {
     foreach ($Relative in $Files) {
         $InputFile = Join-Path $Source $Relative
@@ -111,6 +116,33 @@ try {
         if ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash -ne $Hash) { throw "Installed hash mismatch: $Relative" }
         $Inventory.Add(@{path=$Relative; sha256=$Hash})
     }
+    # Copy the carried files to ROOT with the product's rule (updatePromotion.cpp): replace a
+    # missing or product-signed copy, never a user file. A program and its worker change
+    # together; the contract lists the worker last, and it is replaced first.
+    $Bundle = @($Floor.carried | Where-Object { $Hashes.ContainsKey($Floor.carrier + $_) }); [array]::Reverse($Bundle)
+    $Foreign = @($Bundle | Where-Object {
+        $Target = Join-Path $Destination $_
+        (Test-Path -LiteralPath $Target) -and (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash -ne $Hashes[$Floor.carrier + $_] -and
+            -not $(try { $null = Assert-UpdateSignature $Target $_; $true } catch { $false })
+    })
+    if ($Foreign.Count) { Write-Warning "Kept non-product files; HyperCompare was not copied to the installation root: $($Foreign -join ', ')" }
+    else {
+        foreach ($Name in $Bundle) {
+            $Target = Join-Path $Destination $Name; $Hash = $Hashes[$Floor.carrier + $Name]
+            $Existed = Test-Path -LiteralPath $Target
+            if (-not $Existed -or (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash -ne $Hash) {
+                $Backup = Join-Path $Evidence ('previous/' + $Name)
+                if ($Existed) {
+                    [IO.Directory]::CreateDirectory((Split-Path $Backup -Parent)) | Out-Null
+                    Copy-Item -LiteralPath $Target -Destination $Backup
+                }
+                $Changed.Add(@{target=$Target; backup=$Backup; existed=$Existed})
+                Copy-Item -LiteralPath (Join-Path $Destination ($Floor.carrier + $Name)) -Destination $Target -Force
+            }
+            if ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash -ne $Hash) { throw "Promoted hash mismatch: $Name" }
+            $Promoted.Add($Name)
+        }
+    }
 } catch {
     foreach ($Change in $Changed) {
         if ($Change.existed) { Copy-Item -LiteralPath $Change.backup -Destination $Change.target -Force }
@@ -125,7 +157,8 @@ if ($Previous -and $Previous.files) {
     $Folders = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($Entry in $Previous.files) {
         $Relative = [string]$Entry.path
-        if ($Hashes.ContainsKey($Relative) -or $Relative -match '(^/|^[A-Za-z]:|(^|/)\.\.(/|$))' -or $Relative.Contains('\')) { continue }
+        # Earlier inventories listed HyperCompare at ROOT; that copy now comes from the carrier.
+        if ($Hashes.ContainsKey($Relative) -or $Floor.carried -contains $Relative -or $Relative -match '(^/|^[A-Za-z]:|(^|/)\.\.(/|$))' -or $Relative.Contains('\')) { continue }
         $Target = Join-Path $Destination $Relative
         if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) { continue }
         if ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash -ne $Entry.sha256) { Write-Warning "Kept modified file: $Relative"; continue }
@@ -144,8 +177,9 @@ if ($Previous -and $Previous.files) {
         if ((Test-Path -LiteralPath $Path) -and -not (Get-ChildItem -LiteralPath $Path -Force)) { Remove-Item -LiteralPath $Path }
     }
 }
-$Report = @{destination=$Destination; configuration='Release'; utc=[DateTime]::UtcNow.ToString('o'); files=$Inventory.ToArray(); removed=$Removed.ToArray()}
+$Report = @{destination=$Destination; configuration='Release'; utc=[DateTime]::UtcNow.ToString('o'); files=$Inventory.ToArray(); promoted=$Promoted.ToArray(); removed=$Removed.ToArray()}
 [IO.File]::WriteAllText((Join-Path $Evidence 'installed.json'), (($Report | ConvertTo-Json -Depth 5) -replace "`r?`n", "`r`n"), [Text.UTF8Encoding]::new($false))
 Write-Output "Installed $($Files.Count) product files: $Destination"
+if ($Promoted.Count) { Write-Output "Installation root copies match their carried files: $($Promoted -join ', ')" }
 if ($Removed.Count) { Write-Output "Removed $($Removed.Count) files the previous installation shipped" }
 Write-Output "Verified SHA256 inventory and overwritten-file backups: $Evidence"
