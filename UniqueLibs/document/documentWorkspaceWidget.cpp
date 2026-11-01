@@ -24,6 +24,7 @@
 #include "epubSourceEditor.hpp"
 #include "markdownDocumentView.hpp"
 #include <QLineEdit>
+#include <QScopedValueRollback>
 #include "text/ScintillaQtDirectBackend.h"
 #include <Scintilla.h>
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -168,6 +169,7 @@ namespace hc::document
         bool navigating_ = false, closeRequested_ = false, choosingSavePath_ = false;
         bool reloadAfterClose_ = false;
         bool originalAuthority_ = false, originalSave_ = true, closed_ = false, checkpointing_ = false, closeAfterSave_ = false, recovered_ = false;
+        QJsonObject preparation_;
         QByteArray pendingBytes_;
         bool Dirty() const { return session_->Snapshot().dirty_; }
         std::uint64_t Revision() const { return session_->Snapshot().revision_; }
@@ -810,23 +812,24 @@ namespace hc::document
         Tab->loading_ = true; Tab->pane_->SetReadOnly(true);Tab->pane_->ShowLoadingPreview({}); Tab->error_.clear();
         const auto Generation = Started.Value(); auto Cancellation = Tab->cancellation_; const auto Path = Tab->path_;
         auto* Watcher = new QFutureWatcher<storage::Result<TextInput>>(this);
-        struct PreviewState {std::mutex mutex_;QImage image_;};
+        struct PreviewState {std::mutex mutex_;QImage image_;QJsonObject preparation_;};
+        Tab->preparation_={};
         const auto Progress=std::make_shared<PreviewState>();
         auto* PreviewTimer=new QTimer(Watcher);PreviewTimer->setInterval(50);
         connect(PreviewTimer,&QTimer::timeout,this,[Tab,Generation,Cancellation,Progress]{
             if(Tab->closed_ || !Tab->loading_ || Cancellation->stop_requested() || Generation!=Tab->session_->Snapshot().generation_)return;
-            QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;}
+            QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;Tab->preparation_=Progress->preparation_;}
             if(!Image.isNull())Tab->pane_->ShowLoadingPreview(Image);
         });PreviewTimer->start();
         connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, PreviewTimer, Progress, Generation] {
-            PreviewTimer->stop();
+            PreviewTimer->stop(); Tab->preparation_={};
             auto Result = Watcher->result();
             if(Result.HasValue()&&Result.Value().viewId_=="image")DeleteCompletedImageWork(Watcher);else Watcher->deleteLater();
             if (Tab->closed_ || Generation != Tab->session_->Snapshot().generation_) return;
             Tab->loading_ = false;Tab->pane_->ShowLoadingPreview({});
             if (!Result.HasValue()) {
                 if(Result.Failure().category_!=storage::ErrorCategory::Cancelled){
-                    QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;}
+                    QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;Tab->preparation_=Progress->preparation_;}
                     Tab->pane_->ShowLoadingPreview(Image,true);
                 }
                 Tab->session_->CompleteOpen(Generation, Result.Failure()); Tab->error_ = QString::fromStdString(Result.Failure().code_);
@@ -872,6 +875,11 @@ namespace hc::document
         const QSize PreviewBounds=(Tab->pane_->size()*Tab->pane_->devicePixelRatioF()).expandedTo(QSize(256,256));
         Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, PreviewBounds, Unlimited=hosted_] {
             storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            Context.reportProgress_=[Progress](const storage::OperationContext::Progress& P){
+                QJsonObject State{{"bytesDone",qint64(P.bytesDone_)},{"itemsDone",qint64(P.itemsDone_)},{"itemsTotal",qint64(P.itemsTotal_)}};
+                if(P.bytesTotal_)State["bytesTotal"]=qint64(*P.bytesTotal_);
+                std::lock_guard Lock(Progress->mutex_);Progress->preparation_=State;
+            };
             if (!RecoveryPath.isEmpty()) {
                 auto Record = Recovery->Read(RecoveryPath.toStdString()); if (!Record.HasValue()) return storage::Result<TextInput>{Record.Failure()};
                 if (auto Stop = Context.Check({"document"})) return storage::Result<TextInput>{*Stop};
@@ -969,6 +977,7 @@ namespace hc::document
         const bool Image = Tab->pane_->ViewId() == "image";
         Watcher->setFuture(QtConcurrent::run([Destination, Bytes, Expected, Hash, Cancellation, Original, Overwrite, Image, Unlimited=hosted_] {
             storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+
             auto Expectation = Expected; auto ContentHash = Hash;
             if (Overwrite && QFileInfo::exists(Destination)) {
                 auto Existing = ReadDocumentFile(Destination, Context, Unlimited); if (!Existing.HasValue()) return storage::Result<LocalSaveResult>{Existing.Failure()};
@@ -1047,7 +1056,7 @@ namespace hc::document
                 {"savedRevision", QString::number(State.savedRevision_)}, {"generation", QString::number(State.generation_)},
                 {"lifecycle", Life(State.lifecycle_)}, {"saveState", SaveState(State.saveState_)}, {"error", Code},
                 {"errorCategory", State.error_ ? int(State.error_->category_) : -1}, {"cleanupWarnings", Cleanup},
-                {"sourceToken", Tab->sourceToken_}, {"canSave", Capability.save_}, {"canSaveAs", Capability.saveAs_}, {"hostSlot", Tab->hostSlot_}, {"view",Tab->pane_->ViewState()}});
+                {"preparation",Tab->preparation_}, {"sourceToken", Tab->sourceToken_}, {"canSave", Capability.save_}, {"canSaveAs", Capability.saveAs_}, {"hostSlot", Tab->hostSlot_}, {"view",Tab->pane_->ViewState()}});
             if (!Tab->pendingToken_.isEmpty()) Pending.append(QJsonObject{{"documentId", Tab->id_}, {"sourceToken", Tab->sourceToken_},
                 {"saveToken", Tab->pendingToken_}, {"generation", QString::number(Tab->pending_->generation_)},
                 {"revision", QString::number(Tab->pending_->revision_)}, {"byteLength", QString::number(Tab->pendingBytes_.size())},
@@ -1355,7 +1364,8 @@ namespace hc::document
             const auto Scope=DocumentShortcutRegistry::ScopeOf(Id);
             if(Scope=="markdown")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->CanRunViewCommand(Id));
             if(Scope=="epub")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing());
-            if(Scope.startsWith("epub-edit"))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing());
+            // Editor-owned actions retain their resource/selection eligibility during status polling.
+            if(Scope.startsWith("epub-edit") && Action->parent()==this)Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing());
             if(Scope=="image" || Scope=="image.comic" || Scope=="pdf")Action->setEnabled(Tab && !Tab->loading_);
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
                 Action->setEnabled(Tab && !Tab->loading_ && ((Tab->pane_->ViewId() == "text"
@@ -1406,7 +1416,7 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::closeTab(int Index)
     {
-        if (Index < 0 || Index >= int(documents_.size())) return;
+        if (closePromptActive_ || Index < 0 || Index >= int(documents_.size())) return;
         auto Target = documents_[Index];
         Target->closeRequested_ = true;
         if(Target->pane_->IsProcessDocument()&&!Target->pane_->CanEditEpub()&&!Target->pane_->RequestClose())return;
@@ -1414,6 +1424,8 @@ namespace hc::document
             || (Target->pane_->ViewId() != "image" && Target->pane_->IsBusy())) return;
         Target->closeRequested_ = false;
         if (Target->Dirty()) {
+            // The modal prompt pumps events; preview reports can request another close meanwhile.
+            const QScopedValueRollback PromptGuard(closePromptActive_,true);
             const int Choice = closePrompt_ ? closePrompt_(Target->id_) : int(hc::ui::MessageDialog::question(this, tr("변경 내용 저장"),
                 tr("변경 내용을 저장하시겠습니까?"), QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel));
             if (Choice != QMessageBox::Save && Choice != QMessageBox::Discard) { closingWorkspace_ = false; return; }

@@ -304,7 +304,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -9859,6 +9859,80 @@ private slots:
         }
         else QVERIFY(Settings.Plugins(Group)[0].toObject()["hostReviewed"].toObject().isEmpty());
         if (RevokeDuringConfirmation) QVERIFY(Settings.Plugins(Group)[0].toObject()["hostEnabled"].toBool());
+    }
+    void viewerPreparationBanner()
+    {
+        using namespace hc::plugins;
+        using namespace hc::storage;
+        struct Source final : IContentSource {
+            EntrySnapshot entry_;
+            EntrySnapshot Describe() const override { return entry_; }
+            Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext) override {
+                return Ready<std::shared_ptr<IReadStream>>(Error{ErrorCategory::Unavailable, "test-only"});
+            }
+        };
+        struct Materializer final : IMaterializer {
+            std::atomic<int> percent_{0};
+            std::atomic<bool> finish_{false};
+            Task<std::shared_ptr<IMaterializedFileLease>> Materialize(MaterializationRequest, OperationContext Context) override {
+                while (!finish_ && !Context.stopToken_.stop_requested()) {
+                    if (Context.reportProgress_) {
+                        const auto Percent = percent_.load();
+                        Context.reportProgress_({std::uint64_t(std::max(0, Percent)), 0, 0,
+                            Percent < 0 ? std::optional<std::uint64_t>{} : std::optional<std::uint64_t>{100}, {}});
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                return Ready<std::shared_ptr<IMaterializedFileLease>>(Error{ErrorCategory::Cancelled, "test-complete"});
+            }
+            MaterializationCleanup Recover() override { return {}; }
+            MaterializationCleanup DrainCleanup() override { return {}; }
+        };
+        QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(configureWlx(Options, Package));
+        auto Material = std::make_shared<Materializer>();
+        QWidget Window;
+        QtPluginViewerController Controller(&Window, [Material]() -> Result<std::shared_ptr<IMaterializer>> { return std::shared_ptr<IMaterializer>(Material); });
+        QtPluginViewerSurface Surface(&Controller, &Window);
+        Surface.resize(600, 300); Window.resize(600, 300); Window.show();
+        const auto Cleanup = qScopeGuard([&] { Material->finish_ = true; Surface.Close(); while (!Controller.IsIdle()) QTest::qWait(10); });
+        for (const auto& Extension : {"zip", "pdf", "epub"}) {
+            auto Input = std::make_shared<Source>(); Input->entry_.name_ = std::string("<book>&.") + Extension;
+            Material->finish_ = false; Material->percent_ = 25;
+            Surface.Open(Options, Input);
+            auto* Label = Surface.findChild<QLabel*>("viewerPreparationStatus");
+            auto* Bar = Surface.findChild<QProgressBar*>("viewerPreparationProgress");
+            QVERIFY(Label && Bar); QCOMPARE(Label->textFormat(), Qt::PlainText);
+            QVERIFY(Label->text().contains(QString::fromStdString(Input->entry_.name_)));
+            QVERIFY(Bar->isHidden()); QTest::qWait(200); QVERIFY(Bar->isHidden());
+            QTRY_VERIFY_WITH_TIMEOUT(!Bar->isHidden(), 2000); QCOMPARE(Bar->value(), 25);
+            Material->percent_ = 75; QTRY_COMPARE(Bar->value(), 75);
+            auto* Detail=Surface.findChild<QLabel*>("viewerPreparationDetail");QVERIFY(Detail);
+            QTRY_VERIFY(Detail->text().contains("75%"));
+            QVERIFY(Detail->text().contains(QStringLiteral("복사")));
+            Material->percent_ = -1; QTRY_COMPARE(Bar->maximum(), 0);
+            QTRY_VERIFY(Detail->text().contains(QStringLiteral("진행률 계산 중")));
+            const auto First=Bar->grab().toImage();bool Animated=false;
+            for(int Frame=0;Frame<5;++Frame){QTest::qWait(120);if(Bar->grab().toImage()!=First){Animated=true;break;}}
+            QVERIFY2(Animated,"Indeterminate progress must visibly animate under the product theme");
+            const auto Evidence=qEnvironmentVariable("HC_PREPARATION_EVIDENCE");
+            if(!Evidence.isEmpty() && QString::fromLatin1(Extension)=="zip") {
+                QDir().mkpath(Evidence);Surface.grab().save(QDir(Evidence).filePath("busy-a.png"));
+                QTest::qWait(250);Surface.grab().save(QDir(Evidence).filePath("busy-b.png"));
+            }
+            Material->finish_ = true; QTRY_VERIFY(Controller.IsIdle()); QTRY_VERIFY(Bar->isHidden());
+            Surface.Close();
+        }
+        Material->finish_ = false;
+        auto CancelInput = std::make_shared<Source>(); CancelInput->entry_.name_ = "cancel.pdf";
+        Surface.Open(Options, CancelInput);
+        QTRY_VERIFY(!Surface.findChild<QProgressBar*>("viewerPreparationProgress")->isHidden());
+        Surface.Close(); QVERIFY(Surface.findChild<QProgressBar*>("viewerPreparationProgress")->isHidden());
+        QTRY_VERIFY(Controller.IsIdle());
+        // A quick failure must never leave a delayed indicator behind.
+        auto Input = std::make_shared<Source>(); Input->entry_.name_ = "quick.pdf";
+        Material->finish_ = true; Surface.Open(Options, Input);
+        QTRY_VERIFY(Controller.IsIdle()); QTest::qWait(600);
+        QVERIFY(Surface.findChild<QProgressBar*>("viewerPreparationProgress")->isHidden());
     }
     void wlxViewerCommandsUi_data()
     {

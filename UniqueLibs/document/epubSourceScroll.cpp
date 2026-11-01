@@ -39,7 +39,7 @@ QJsonObject EpubSourceEditor::sourceScrollTarget(bool Revision)const {
     return {{"chapter",spineIndex(current_)},{"line",Top || !Revision?Line:toPreviewLine(Line)},{"ratio",AnchorRatio},{"end",!Top && Backend->isScrolledToEnd()}};
 }
 void EpubSourceEditor::syncPreviewScroll() {
-    if(!scrollSyncActive() || updating_ || sourceComposing_ || !ready_ || !sourceShown() || !previewView_ || previewClosing_ || previewPanel_->isHidden())return;
+    if(!scrollSyncActive() || previewPatchPending_ || updating_ || sourceComposing_ || !ready_ || !sourceShown() || !previewView_ || previewClosing_ || previewPanel_->isHidden())return;
     const int Chapter=spineIndex(current_);if(Chapter<0)return;
     // Position sync brings the preview to this chapter first; while a sync is pending its state changes call back here.
     const auto State=previewView_->ViewState();

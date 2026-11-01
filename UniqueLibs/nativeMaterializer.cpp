@@ -460,6 +460,8 @@ namespace hc::storage
                     static_cast<DWORD>(Chunk.Value().bytes_.size()), &Written, nullptr) || Written != Chunk.Value().bytes_.size()))
                     return fail(WinError(item_->content_));
                 written_ += Written;
+                if (Context.operation_.reportProgress_)
+                    Context.operation_.reportProgress_({written_, 0, 0, entry_.size_, entry_.name_});
                 operations::JobStep Step{JobState::Running}; Step.progress_ = operations::JobProgress{written_, entry_.size_, entry_.name_};
                 if (!Chunk.Value().eof_) return Step;
                 if (written_ != entry_.size_) return fail({ErrorCategory::StaleRevision, "materialization-content-size"});

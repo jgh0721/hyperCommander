@@ -6,6 +6,8 @@
 #include "pluginHost/wlxWindowMessage.hpp"
 #include <QFocusEvent>
 #include <QLabel>
+#include <QProgressBar>
+#include <fmwidgets/ProgressBar.h>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QStackedLayout>
@@ -106,7 +108,33 @@ QtPluginViewerSurface::QtPluginViewerSurface(QtPluginViewerController* Controlle
     connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::fontsChanged, this, [this] { appearancePending_ = true; });
     setObjectName("hc.viewer.wlx"); setFocusPolicy(Qt::StrongFocus);
     auto* Layout = new QStackedLayout(this); Layout->setContentsMargins(0, 0, 0, 0);
-    status_ = new QLabel(tr("뷰어를 닫았습니다."), this); status_->setWordWrap(true);status_->setAlignment(Qt::AlignCenter);status_->setAutoFillBackground(true);Layout->addWidget(status_);
+    preparation_ = new QWidget(this);
+    preparation_->setAutoFillBackground(true);
+    auto* PreparationLayout = new QVBoxLayout(preparation_);
+    PreparationLayout->addStretch();
+    status_ = new QLabel(preparation_);
+    status_->setObjectName("viewerPreparationStatus");
+    status_->setTextFormat(Qt::PlainText);
+    status_->setWordWrap(true);
+    status_->setAlignment(Qt::AlignCenter);
+    PreparationLayout->addWidget(status_);
+    preparationDetail_ = new QLabel(preparation_);
+    preparationDetail_->setObjectName("viewerPreparationDetail");
+    preparationDetail_->setTextFormat(Qt::PlainText);
+    preparationDetail_->setAlignment(Qt::AlignCenter);
+    preparationDetail_->setWordWrap(true);
+    PreparationLayout->addWidget(preparationDetail_);
+    progress_ = new fm::ui::ProgressBar(preparation_);
+    progress_->setMinimumWidth(260);
+    progress_->setObjectName("viewerPreparationProgress");
+    progress_->setMaximumWidth(420);
+    auto ProgressPolicy = progress_->sizePolicy();
+    ProgressPolicy.setRetainSizeWhenHidden(true);
+    progress_->setSizePolicy(ProgressPolicy);
+    PreparationLayout->addWidget(progress_, 0, Qt::AlignHCenter);
+    progress_->hide();
+    PreparationLayout->addStretch();
+    Layout->addWidget(preparation_);
     timer_ = new QTimer(this); timer_->setInterval(16); connect(timer_, &QTimer::timeout, this, &QtPluginViewerSurface::poll);
 }
 QtPluginViewerSurface::~QtPluginViewerSurface() { Close(); }
@@ -121,7 +149,7 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
     Close();
     if (!controller_) { status_->setText(tr("뷰어를 사용할 수 없습니다.")); emit Failed("viewer-host-unavailable"); return; }
     presentationTrace_=std::make_unique<hc::document::ImageTraceSpan>("viewer.prepare-to-present");
-    status_->setText(tr("파일을 준비하는 중…")); status_->show();
+    beginPreparation(Source ? QString::fromStdString(Source->Describe().name_) : QString{});
     auto* Anchor = new WlxAnchor(this); anchor_ = Anchor; anchor_->setObjectName("hc.wlx.native-parent");
     Anchor->closeRequested_ = [this](quintptr Child) {
         if (!session_ || !ready_ || session_->Details().child_ != QString::number(Child, 16)) return;
@@ -137,7 +165,7 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
     anchor_->setAttribute(Qt::WA_DontCreateNativeAncestors); anchor_->setAttribute(Qt::WA_NativeWindow);
     anchor_->setFocusPolicy(Qt::StrongFocus); anchor_->installEventFilter(this);
     layout()->addWidget(anchor_);anchor_->setGeometry(rect());anchor_->hide();
-    static_cast<QStackedLayout*>(layout())->setCurrentWidget(status_);layout()->activate();
+    static_cast<QStackedLayout*>(layout())->setCurrentWidget(preparation_);layout()->activate();
     auto Opened = Policy ? controller_->OpenAutomatic(anchor_, std::move(Candidates), std::move(Source), std::move(*Policy))
         : controller_->Open(anchor_, std::move(Candidates.front()), std::move(Source));
     if (!Opened.HasValue())
@@ -152,6 +180,7 @@ void QtPluginViewerSurface::Close()
     presentationTrace_.reset();
     lastSearch_.clear(); clipboardToken_.clear();
     timer_->stop(); ready_ = false; preparedSequence_ = 0;
+    preparationElapsed_.invalidate(); progress_->hide(); preparationDetail_->clear();
     if (anchor_)
     {
         static_cast<WlxAnchor*>(anchor_.data())->closeRequested_ = {};
@@ -159,17 +188,18 @@ void QtPluginViewerSurface::Close()
     }
     if (controller_) controller_->Retire(anchor_, session_);
     else if (session_) session_->Close();
-    anchor_ = nullptr; session_.reset(); status_->setText(tr("뷰어를 닫았습니다.")); static_cast<QStackedLayout*>(layout())->setCurrentWidget(status_);
+    anchor_ = nullptr; session_.reset(); status_->setText(tr("뷰어를 닫았습니다.")); static_cast<QStackedLayout*>(layout())->setCurrentWidget(preparation_);
 }
 bool QtPluginViewerSurface::OpenPrepared(std::vector<HostedViewerSession::DocumentInput> Inputs)
 {
     if (!session_ || !ready_) return false;
     presentationTrace_=std::make_unique<hc::document::ImageTraceSpan>("viewer.prepare-to-present");
+    const auto Name = Inputs.empty() || !Inputs.front().source_ ? QString{} : QString::fromStdString(Inputs.front().source_->Describe().name_);
     auto Queued = session_->OpenDocuments(std::move(Inputs), true);
     if (!Queued.HasValue()) return false;
     preparedSequence_ = Queued.Value(); ready_ = false; timer_->start();
-    status_->setText(tr("파일을 준비하는 중…"));
-    static_cast<QStackedLayout*>(layout())->setCurrentWidget(status_);
+    beginPreparation(Name);
+    static_cast<QStackedLayout*>(layout())->setCurrentWidget(preparation_);
     return true;
 }
 bool QtPluginViewerSurface::IsReady() const { return ready_; }
@@ -178,10 +208,57 @@ ViewerSnapshot QtPluginViewerSurface::Snapshot() const
     if (session_) return session_->Snapshot();
     ViewerSnapshot Result; Result.status_ = ViewerStatus::Closed; return Result;
 }
+void QtPluginViewerSurface::beginPreparation(const QString& Name)
+{
+    status_->setText(tr("파일을 준비하는 중…\n%1").arg(Name));
+    progress_->hide();
+    progress_->setRange(0, 0);
+    preparationDetail_->setText(tr("파일 확인 중"));
+    preparationElapsed_.start();
+}
 void QtPluginViewerSurface::poll()
 {
     if (!session_) return;
     const auto Details = session_->Details();
+    if (!ready_ && preparationElapsed_.isValid()) {
+        QString Stage;
+        const auto Phase=Details.preparationStage_;
+        if(Phase=="materialize")Stage=tr("파일 복사·압축 해제 중");
+        else if(Phase=="host")Stage=tr("뷰어 시작 중");
+        else if(Phase=="content")Stage=tr("문서 내용 읽는 중");
+        else if(Phase=="verify")Stage=tr("파일 검증 중");
+        else Stage=tr("파일 확인 중");
+        auto Progress=Details.preparationProgress_;
+        if(Phase!="verify")for(const auto& Value:Details.documentState_["documents"].toArray()) {
+            const auto Document=Value.toObject(), Preparation=Document["preparation"].toObject();
+            if(Document["loading"].toBool()) {
+                Stage=Document["path"].toString().endsWith(".zip",Qt::CaseInsensitive) || Document["path"].toString().endsWith(".cbz",Qt::CaseInsensitive)
+                    ? tr("압축파일 목록·이미지 확인 중") : tr("문서 내용 읽는 중");
+                if(!Preparation.isEmpty()) {
+                    OperationContext::Progress P;P.bytesDone_=Preparation["bytesDone"].toInteger();
+                    if(Preparation.contains("bytesTotal"))P.bytesTotal_=Preparation["bytesTotal"].toInteger();
+                    P.itemsDone_=Preparation["itemsDone"].toInteger();P.itemsTotal_=Preparation["itemsTotal"].toInteger();Progress=P;
+                    if(P.itemsTotal_)Stage=tr("이미지 구성 분석 중");
+                }
+            } else Stage=tr("첫 화면 그리는 중");
+            break;
+        }
+        QString Amount=tr("진행률 계산 중");
+        const auto Total=Progress ? (Progress->itemsTotal_ ? Progress->itemsTotal_ : Progress->bytesTotal_.value_or(0)) : 0;
+        const auto Done=Progress ? (Progress->itemsTotal_ ? Progress->itemsDone_ : Progress->bytesDone_) : 0;
+        if(Total) {
+            const auto Percent=int(100.0L * std::min(Done,Total) / Total);
+            progress_->setRange(0,100);progress_->setValue(Percent);
+            Amount=tr("%1%").arg(Percent);
+            if(Progress->itemsTotal_)Amount+=tr(" (%1/%2)").arg(Done).arg(Total);
+        } else {
+            progress_->setRange(0,0);
+            if(Progress && Progress->itemsDone_)Amount=tr("%1개 확인 · 전체 개수 확인 중").arg(Progress->itemsDone_);
+        }
+        const bool Show=preparationElapsed_.elapsed()>=500;
+        preparationDetail_->setText(Show ? tr("%1 · %2 · %3초").arg(Stage,Amount).arg(preparationElapsed_.elapsed()/1000) : Stage);
+        progress_->setVisible(Show);
+    }
     if(appearancePending_ && Details.documentChannel_ && Details.viewer_.status_ == ViewerStatus::Ready) {
         if(session_->SendDocument({{"action", "setDocumentAppearance"}, {"appearance", hc::document::epubui::Appearance()}}).HasValue()) appearancePending_ = false;
     }
@@ -222,7 +299,7 @@ void QtPluginViewerSurface::poll()
     }
     bool ContentReady=Details.viewer_.status_==ViewerStatus::Ready && Details.commandSequence_ >= preparedSequence_;
     if (preparedSequence_ && Details.commandSequence_ >= preparedSequence_ && Details.commandError_) {
-        preparedSequence_ = 0; timer_->stop(); status_->setText(tr("문서를 열 수 없습니다."));
+        preparedSequence_ = 0; timer_->stop(); progress_->hide(); preparationDetail_->clear(); status_->setText(tr("문서를 열 수 없습니다."));
         emit Failed(QString::fromStdString(Details.commandError_->code_)); return;
     }
     if (Details.documentChannel_ && Details.commandSequence_ >= preparedSequence_) {
@@ -230,7 +307,7 @@ void QtPluginViewerSurface::poll()
             const auto Record = Item.toObject();
             const auto Failure = Record["error"].toString();
             if (Failure.isEmpty() && Record["lifecycle"].toString() != "failed") continue;
-            preparedSequence_ = 0; timer_->stop();
+            preparedSequence_ = 0; timer_->stop(); progress_->hide(); preparationDetail_->clear();
             const auto Reason = Failure.isEmpty() ? tr("문서 읽기 실패") : Failure;
             status_->setText(tr("문서를 열 수 없습니다: %1").arg(hc::ui::ErrorText(Reason)));
             emit Failed(Reason); return;
@@ -256,7 +333,7 @@ void QtPluginViewerSurface::poll()
         emit Ready(QString::fromStdString(Details.viewer_.id_)); return;
     }
     if (!Details.idle_) return;
-    timer_->stop(); ready_ = false;static_cast<QStackedLayout*>(layout())->setCurrentWidget(status_);
+    timer_->stop(); progress_->hide(); preparationDetail_->clear(); ready_ = false;static_cast<QStackedLayout*>(layout())->setCurrentWidget(preparation_);
     // NoMatch is published after host/lease cleanup. Failure and cancellation
     // must never initiate another read through the builtin fallback.
     if (Details.noMatch_) { emit NoMatch(); return; }

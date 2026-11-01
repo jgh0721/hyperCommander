@@ -3,8 +3,10 @@
 #include "document/imagePerformance.hpp"
 #include <QPointer>
 #include <QWidget>
+#include <QElapsedTimer>
 
 class QLabel;
+class QProgressBar;
 class QTimer;
 class QtPluginViewerController final : public QObject
 {
@@ -59,11 +61,16 @@ protected:
 private:
     void open(std::vector<hc::plugins::PluginViewerOptions> Candidates,
         std::shared_ptr<hc::storage::IContentSource> Source, std::optional<hc::plugins::PluginViewerSelectionPolicy> Policy);
+    void beginPreparation(const QString& Name);
     void poll();
     void resizeNative();
     QPointer<QtPluginViewerController> controller_;
     QPointer<QWidget> anchor_;
+    QWidget* preparation_ = nullptr;
     QLabel* status_ = nullptr;
+    QLabel* preparationDetail_ = nullptr;
+    QProgressBar* progress_ = nullptr;
+    QElapsedTimer preparationElapsed_;
     QTimer* timer_ = nullptr;
     std::shared_ptr<hc::plugins::HostedViewerSession> session_;
     std::unique_ptr<hc::document::ImageTraceSpan> presentationTrace_;

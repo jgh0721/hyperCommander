@@ -163,6 +163,35 @@ class ImageReadingTests : public QObject
         Variable[20].preview_=Cuts[2].preview_;Variable[21].preview_=Cuts[3].preview_;
         const auto Combined=ImageReadingClassifier::Classify(Variable);QCOMPARE(Combined.mode_,2);QCOMPARE(Combined.reason_,QString("mixed-long-and-cut-pages"));
     }
+    void preparationNetworkBook()
+    {
+        const auto Path=qEnvironmentVariable("HC_PREPARATION_BOOK");if(Path.isEmpty())QSKIP("Optional read-only reported archive");
+        const QFileInfo Before(Path);QVERIFY(Before.isFile());const auto Size=Before.size();const auto Modified=Before.lastModified();
+        int Listing=0,Measured=0;hc::storage::OperationContext Context;
+        Context.deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(90);
+        Context.reportProgress_=[&](const hc::storage::OperationContext::Progress& P){
+            if(P.itemsTotal_){++Measured;QVERIFY(P.itemsDone_<=P.itemsTotal_);}else ++Listing;
+        };
+        auto Book=OpenImageBook(Path,Context,false);QVERIFY2(Book.HasValue(),Book.HasValue()?"":Book.Failure().code_.c_str());
+        QVERIFY(Listing>0);AnalyzeImageBook(Book.Value(),Context);
+        qInfo()<<"Reported archive pages"<<Book.Value()->pages_.size()<<"listing updates"<<Listing<<"analysis updates"<<Measured;
+        QVERIFY(!Book.Value()->pages_.isEmpty());QVERIFY(Measured>0);
+        QCOMPARE(QFileInfo(Path).size(),Size);QCOMPARE(QFileInfo(Path).lastModified(),Modified);
+    }
+    void preparationProgress()
+    {
+        QTemporaryDir Root;QVERIFY(Root.isValid());const auto Path=Root.filePath("progress.zip");
+        {QZipWriter Zip(Path);for(int I=0;I<16;++I){QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);Picture(Qt::white,{200,600}).save(&Buffer,"PNG");Zip.addFile(QString("%1.png").arg(I,3,10,QChar('0')),Bytes);}Zip.close();}
+        int ListingReports=0,MeasuredReports=0;std::uint64_t LastDone=0;
+        hc::storage::OperationContext Context;
+        Context.reportProgress_=[&](const hc::storage::OperationContext::Progress& Progress){
+            if(!Progress.itemsTotal_)++ListingReports;
+            else {++MeasuredReports;QVERIFY(Progress.itemsDone_<=Progress.itemsTotal_);LastDone=qMax(LastDone,Progress.itemsDone_);}
+        };
+        auto Book=OpenImageBook(Path,Context,false);QVERIFY(Book.HasValue());QCOMPARE(Book.Value()->pages_.size(),16);
+        QVERIFY(ListingReports>0);AnalyzeImageBook(Book.Value(),Context);
+        QVERIFY(MeasuredReports>1);QVERIFY(LastDone>0);
+    }
     void contentModeOpeningAndHistory_data()
     {
         QTest::addColumn<bool>("Hosted");QTest::newRow("editor")<<false;QTest::newRow("viewer")<<true;

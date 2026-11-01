@@ -8,6 +8,7 @@ import hljs from 'highlight.js/lib/common';
 // Only the fixed application shell owns the bridge. Document HTML is disabled.
 let revision = 0, options = {}, bridge, suppression = 0, serial = 0;
 const root = document.getElementById('content');
+root.classList.add('markdown-content');
 const report = value => bridge?.report(JSON.stringify({ ...value, revision }));
 const escaped = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function math(source, display) {
@@ -63,12 +64,12 @@ function emitPosition() {
     const headings=[...root.querySelectorAll('h1,h2,h3,h4,h5,h6')];const h=headings.filter(x=>x.getBoundingClientRect().top<100).at(-1)||headings[0];
     report({type:'scroll',line:Number(e.dataset.line),ratio:e.getBoundingClientRect().top/innerHeight,user:Date.now()>suppression,progress:document.documentElement.scrollHeight<=innerHeight?100:Math.round(scrollY/(document.documentElement.scrollHeight-innerHeight)*100),heading:h?.textContent||'',headingLine:Number(h?.dataset.line||0)});
 }
-function fonts(f={}) {
-    root.style.fontFamily=f.enabled&&f.mode==='user'?f.bodyFamily:'';
-    root.style.fontSize=f.enabled&&f.mode==='user'?`${f.bodySizePt||11}pt`:'';
-    root.style.lineHeight=f.enabled&&f.mode!=='document'?String(f.lineHeight||1.7):'';
-    document.querySelectorAll('#content h1,#content h2,#content h3,#content h4,#content h5,#content h6').forEach(e=>e.style.fontFamily=f.enabled&&f.mode!=='document'&&f.headings?root.style.fontFamily:'Segoe UI, Malgun Gothic, sans-serif');
-    root.querySelectorAll('pre:not(.mermaid) code, p>code, li>code').forEach(e=>{e.style.fontFamily=f.enabled&&f.mode==='user'?f.codeFamily:'';e.style.fontSize=f.enabled&&f.mode==='user'?`${f.codeSizePt||10}pt`:''});
+function fonts(f={},target=root) {
+    target.style.fontFamily=f.enabled&&f.mode==='user'?f.bodyFamily:'';
+    target.style.fontSize=f.enabled&&f.mode==='user'?`${f.bodySizePt||11}pt`:'';
+    target.style.lineHeight=f.enabled&&f.mode!=='document'?String(f.lineHeight||1.7):'';
+    target.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(e=>e.style.fontFamily=f.enabled&&f.mode!=='document'&&f.headings?target.style.fontFamily:'Segoe UI, Malgun Gothic, sans-serif');
+    target.querySelectorAll('pre:not(.mermaid) code, p>code, li>code').forEach(e=>{e.style.fontFamily=f.enabled&&f.mode==='user'?f.codeFamily:'';e.style.fontSize=f.enabled&&f.mode==='user'?`${f.codeSizePt||10}pt`:''});
 }
 async function render(request) {
     const generation=++serial;revision=request.revision;options=request.options||{};
@@ -77,14 +78,38 @@ async function render(request) {
     document.getElementById('base').href=request.baseUrl||'qrc:/markdown/';
     const md=parser(),tokens=md.parse(request.text,{}),headings=[],slugs=new Map();
     for(let i=0;i<tokens.length;i++){const t=tokens[i];if(t.map){t.attrSet('data-line',String(t.map[0]+1));t.attrSet('data-end',String(t.map[1]+1))}if(t.type==='heading_open'){const title=(tokens[i+1].children||[]).filter(x=>['text','code_inline'].includes(x.type)).map(x=>x.content).join('');const slug=title.trim().toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu,'').replace(/\s+/g,'-')||'heading';const count=slugs.get(slug)||0;slugs.set(slug,count+1);const id=slug+(count?'-'+count:'');t.attrSet('id',id);headings.push({text:title,level:Number(t.tag[1]),line:t.map[0]+1,id});}}
-    root.innerHTML=md.renderer.render(tokens,md.options,{});
-    root.querySelectorAll('blockquote').forEach(e=>{const p=e.firstElementChild,m=p?.textContent.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/);if(m){e.classList.add('alert');e.dataset.kind=m[1];}});
-    fonts(options.previewFonts);
-    mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:options.dark?'dark':'default',maxTextSize:50000,maxEdges:500,secure:['securityLevel','maxTextSize','maxEdges','startOnLoad']});
-    for(const e of root.querySelectorAll('.mermaid')){if(generation!==serial)return;try{const result=await mermaid.render(`diagram-${generation}-${e.dataset.line}`,e.textContent);if(generation!==serial)return;e.innerHTML=result.svg;}catch(error){if(generation!==serial)return;e.classList.add('problem');e.title=String(error);}}
-    await document.fonts.ready;if(generation!==serial)return;
-    if(position)scrollToLine(position.line,position.ratio);
-    const details=[...root.querySelectorAll('.problem')].map(e=>({kind:e.classList.contains('mermaid')?'Mermaid':'KaTeX',line:Number(e.closest('[data-line]')?.dataset.line||1),message:e.title||e.textContent}));report({type:'rendered',headings,problems:details.length,details});emitPosition();
+    // Keep the displayed document intact while asynchronous diagrams and resources settle.
+    const next=document.createElement('main');next.className='markdown-content';next.dataset.previewStaging='true';
+    const bounds=root.getBoundingClientRect();
+    Object.assign(next.style,{position:'fixed',left:`${bounds.left}px`,top:'0',width:`${bounds.width}px`,visibility:'hidden',pointerEvents:'none'});
+    next.innerHTML=md.renderer.render(tokens,md.options,{});document.body.append(next);
+    const deadline=promise=>Promise.race([promise,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Preview resources did not settle')),10000);promise.finally(()=>clearTimeout(timer)).catch(()=>{});})]);
+    try {
+        next.querySelectorAll('blockquote').forEach(e=>{const p=e.firstElementChild,m=p?.textContent.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/);if(m){e.classList.add('alert');e.dataset.kind=m[1];}});
+        fonts(options.previewFonts,next);
+        mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:options.dark?'dark':'default',maxTextSize:50000,maxEdges:500,secure:['securityLevel','maxTextSize','maxEdges','startOnLoad']});
+        for(const e of next.querySelectorAll('.mermaid')) {
+            if(generation!==serial)return;
+            const source=e.textContent;const kept=[...root.querySelectorAll('.mermaid')].find(n=>n.dataset.source===source && n.dataset.dark===String(!!options.dark) && n.querySelector('svg'));
+            e.dataset.source=source;e.dataset.dark=String(!!options.dark);
+            if(kept){e.innerHTML=kept.innerHTML;continue;}
+            try{const result=await mermaid.render(`diagram-${generation}-${e.dataset.line}`,source);if(generation!==serial)return;e.innerHTML=result.svg;}
+            catch(error){if(generation!==serial)return;e.classList.add('problem');e.title=String(error);}
+        }
+        await deadline(Promise.all([...next.querySelectorAll('img')].map(img=>img.decode().catch(()=>{}))));
+        next.getBoundingClientRect(); // Start font loads before observing FontFaceSet.ready.
+        await deadline(document.fonts.ready);if(generation!==serial)return;
+        // Chromium can suspend animation callbacks in an occluded native preview.
+        await new Promise(resolve=>{const timer=setTimeout(resolve,100);requestAnimationFrame(()=>requestAnimationFrame(()=>{clearTimeout(timer);resolve();}));});
+        if(generation!==serial)return;
+        // Reuse unchanged top-level nodes, including already rendered diagrams and loaded images.
+        const available=[...root.childNodes];const children=[...next.childNodes].map(node=>{const at=available.findIndex(old=>old.isEqualNode(node));return at<0?node:available.splice(at,1)[0];});
+        suppression=Date.now()+300;
+        root.replaceChildren(...children);fonts(options.previewFonts);
+        if(position)scrollToLine(position.line,position.ratio);
+        const details=[...root.querySelectorAll('.problem')].map(e=>({kind:e.classList.contains('mermaid')?'Mermaid':'KaTeX',line:Number(e.closest('[data-line]')?.dataset.line||1),message:e.title||e.textContent}));
+        report({type:'rendered',headings,problems:details.length,details});emitPosition();
+    } catch(error) {if(generation===serial)throw error;} finally {next.remove();}
 }
 function scrollToLine(line,ratio=0.2){const all=[...root.querySelectorAll('[data-line]')];const e=all.filter(e=>Number(e.dataset.line)<=line).at(-1)||all[0];if(e){suppression=Date.now()+300;scrollTo(0,scrollY+e.getBoundingClientRect().top-innerHeight*ratio);}}
 window.hcMarkdown={render,scrollToLine};

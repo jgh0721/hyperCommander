@@ -267,6 +267,23 @@ namespace hc::plugins
     {
         std::stop_callback External(Context.stopToken_, [&] { State->stop(false); });
         Context.stopToken_ = State->stop_.get_token();
+        const auto PreparationStage=[State](const QString& Stage){std::lock_guard Lock(State->mutex_);State->details_.preparationStage_=Stage;State->details_.preparationProgress_.reset();};
+        // Progress belongs to one input preparation, never to renderer startup.
+        const auto PreparationContext = [State](OperationContext Calls, const EntrySnapshot& Entry) {
+            Calls.progress_ = [State, Entry, Observer = Calls.progress_](std::uint64_t Done) {
+                { std::lock_guard Lock(State->mutex_);
+                  State->details_.preparationProgress_ = OperationContext::Progress{Done, 0, 0, Entry.size_, Entry.name_}; }
+                if (Observer) Observer(Done);
+            };
+            Calls.reportProgress_ = [State, Observer = Calls.reportProgress_](const OperationContext::Progress& Progress) {
+                { std::lock_guard Lock(State->mutex_); State->details_.preparationProgress_ = Progress; }
+                if (Observer) Observer(Progress);
+            };
+            return Calls;
+        };
+        const auto ClearPreparation = [State] {
+            std::lock_guard Lock(State->mutex_); State->details_.preparationProgress_.reset();
+        };
         std::shared_ptr<IMaterializer> Materializer;
         std::shared_ptr<IMaterializedFileLease> Lease;
         std::unique_ptr<ImageArchiveBroker> ArchiveBroker;
@@ -292,6 +309,7 @@ namespace hc::plugins
             const auto Materialize = [&]() -> Result<Unit> {
                 hc::document::ImageTraceSpan Trace("viewer.prepare-input",QString::fromUtf8(Source->Describe().locator_.root_));
                 if (Lease) return Unit{};
+                PreparationStage("materialize");
                 if(DirectInputAllowed && IsDirectBook(Source->Describe())){
                     auto Borrowed=BorrowBook(Source,Context);if(!Borrowed.HasValue())return Borrowed.Failure();
                     Lease=std::move(Borrowed.Value());
@@ -304,7 +322,8 @@ namespace hc::plugins
                 }
                 auto Created = Factory(); if (!Created.HasValue()) return Created.Failure(); Materializer = std::move(Created.Value());
                 if (!Materializer) return Invalid("viewer-materializer-required");
-                auto Materialized = Materializer->Materialize({Source, {}, {}}, Context).get();
+                auto Materialized = Materializer->Materialize({Source, {}, {}}, PreparationContext(Context, Source->Describe())).get();
+                ClearPreparation();
                 if (!Materialized.HasValue()) return Materialized.Failure(); Lease = std::move(Materialized.Value());
                 if (!Lease) return Invalid("viewer-content-lease-required");
                 if(ArchiveBroker)ArchiveBroker->Allow(QString::fromStdString(Lease->LocalPath()));
@@ -356,6 +375,7 @@ namespace hc::plugins
                     auto Broker=ImageArchiveBroker::Start();if(!Broker.HasValue())return Broker.Failure();ArchiveBroker=std::move(Broker.Value());
                     const auto Origin=ReadingSource(*Entry);if(!Origin.isEmpty())ArchiveBroker->Allow(Origin["path"].toString());if(Lease)ArchiveBroker->Allow(QString::fromStdString(Lease->LocalPath()));
                 }
+                PreparationStage("host");
                 auto Started = [&]{hc::document::ImageTraceSpan Stage("viewer.host-start");return PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_,ArchiveBroker?ArchiveBroker->Endpoint():QJsonObject{});}();
                 if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
                 const auto StartedState = Host->Snapshot();if(ArchiveBroker)ArchiveBroker->BindClient(StartedState.processId_);
@@ -405,6 +425,7 @@ namespace hc::plugins
                 }
                 std::pair<std::uint32_t, std::uint32_t> Size;
                 { std::lock_guard Lock(State->mutex_); Size = *State->size_; }
+                PreparationStage("content");
                 auto Opened = Host->ViewerCall(WireKind::ViewerOpen, {{"parent", ParentWindow}, {"file", QString::fromStdString(Lease->LocalPath())},
                     {"width", static_cast<int>(Size.first)}, {"height", static_cast<int>(Size.second)}, {"flags", Options.flags_}, {"preview", Options.purpose_ == ViewerPurpose::QuickPreview}}, Context);
                 if (!Opened.HasValue())
@@ -421,6 +442,7 @@ namespace hc::plugins
                     auto WaitTrace=std::make_unique<hc::document::ImageTraceSpan>("viewer.initial-content");
                     for (;;) {
                         auto Current = Document->Call("DocumentState", {}, {}, {}, Context); if (!Current.HasValue()) return Current.Failure();
+                        { std::lock_guard Lock(State->mutex_); State->details_.documentState_=Current.Value(); }
                         const auto Slots = Current.Value()["documents"].toArray();
                         // An empty helper is idle before the queued SDK load starts.
                         // Wait for that specific slot, otherwise its delayed load can
@@ -448,6 +470,7 @@ namespace hc::plugins
                     auto Writer = DirectBook?std::shared_ptr<IWritableStorage>{}:Options.writer_;
                     if (!DirectBook && !Writer && Entry->locator_.kind_ == LocatorKind::Local && !(Entry->attributes_ & 1u))
                         Writer = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
+                    PreparationStage("verify");
                     QFile Input(QString::fromStdString(Lease->LocalPath())); QByteArray Hash;
                     if (!DirectBook && Input.open(QIODevice::ReadOnly)) { QCryptographicHash Digest(QCryptographicHash::Sha256); if (Digest.addData(&Input)) Hash = Digest.result(); }
                     const auto Token = Document->Bind(*Entry, Writer, Lease, Hash);
@@ -513,11 +536,13 @@ namespace hc::plugins
                     else {
                         QJsonArray Inputs;
                         for (const auto& Input : Command->inputs_) {
+                            PreparationStage("materialize");
                             const bool DirectBook=bool(ArchiveBroker) && IsDirectBook(Input.source_->Describe());
                             const bool DirectImage=bool(ArchiveBroker) && IsDirectImage(Input.source_->Describe());
                             if(!DirectBook && !DirectImage && !Materializer){auto Created=Factory();if(!Created.HasValue()){Result=Created.Failure();break;}Materializer=std::move(Created.Value());}
                             hc::document::ImageTraceSpan PrepareTrace("viewer.prepare-input",QString::fromUtf8(Input.source_->Describe().locator_.root_));
-                            auto Materialized = DirectBook?BorrowBook(Input.source_,Calls):DirectImage?BorrowImage(Input.source_,Calls):Materializer->Materialize({Input.source_, {}, {}}, Calls).get();
+                            auto Materialized = DirectBook?BorrowBook(Input.source_,Calls):DirectImage?BorrowImage(Input.source_,Calls):Materializer->Materialize({Input.source_, {}, {}}, PreparationContext(Calls, Input.source_->Describe())).get();
+                            ClearPreparation();
                             if (!Materialized.HasValue()) { Result = Materialized.Failure(); break; }
                             const auto Entry = Input.source_->Describe();
                             if(ArchiveBroker){ArchiveBroker->Allow(QString::fromStdString(Materialized.Value()->LocalPath()));const auto Origin=ReadingSource(Entry);if(!Origin.isEmpty())ArchiveBroker->Allow(Origin["path"].toString());}
@@ -537,6 +562,7 @@ namespace hc::plugins
                                 if (!Closed.HasValue()) { Result = Closed.Failure(); break; }
                             }
                         }
+                        PreparationStage("content");
                         if (Result.HasValue()) Result = Document->Call("OpenDocuments", {{"documents", Inputs}}, {}, {}, Calls);
                         if (Result.HasValue() && Command->parameter_ == 1) {
                             std::lock_guard Lock(State->mutex_);

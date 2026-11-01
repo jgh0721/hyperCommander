@@ -13,6 +13,8 @@
 #include <QListWidget>
 #include <QFontComboBox>
 #include <QScreen>
+#include <QJsonDocument>
+#include <iostream>
 #include "UniqueLibs/document/documentShortcutRegistry.hpp"
 #include "core/AppSettings.h"
 using namespace hc::document;
@@ -47,7 +49,8 @@ class MarkdownTests final : public QObject
         auto *Md = Pane.findChild<MarkdownDocumentView *>();
         QVERIFY(Md);
         QVERIFY(!Md->SourceVisible());
-        QTRY_VERIFY_WITH_TIMEOUT(Md->State()["renderedRevision"].toInteger(-2) == Md->State()["revision"].toInteger(-1),
+        QTRY_VERIFY2_WITH_TIMEOUT(Md->State()["renderedRevision"].toInteger(-2) == Md->State()["revision"].toInteger(-1),
+                                 qPrintable(QString::fromUtf8(QJsonDocument(Md->State()).toJson(QJsonDocument::Compact))),
                                  15000);
         QCOMPARE(Md->State()["problems"].toInt(), 0);
         auto *Tree = Md->findChild<QTreeWidget *>();
@@ -82,7 +85,8 @@ class MarkdownTests final : public QObject
         QVERIFY(Md->CanRun("markdown.syncScroll"));
         QVERIFY(Pane.RunViewCommand("markdown.syncScroll"));
         QVERIFY(!Md->State()["scrollSync"].toBool());
-        QTRY_VERIFY_WITH_TIMEOUT(Md->State()["renderedRevision"].toInteger(-2) == Md->State()["revision"].toInteger(-1),
+        QTRY_VERIFY2_WITH_TIMEOUT(Md->State()["renderedRevision"].toInteger(-2) == Md->State()["revision"].toInteger(-1),
+                                 qPrintable(QString::fromUtf8(QJsonDocument(Md->State()).toJson(QJsonDocument::Compact))),
                                  30000);
         Pane.raise();
         Pane.activateWindow();
@@ -94,7 +98,8 @@ class MarkdownTests final : public QObject
         QVERIFY(Text);
         const auto Original = Pane.Content();
         Text->ReplaceContent("# 수정\n\n$$invalid\\unknown$$\n");
-        QTRY_VERIFY_WITH_TIMEOUT(Md->State()["renderedRevision"].toInteger(-2) == Md->State()["revision"].toInteger(-1),
+        QTRY_VERIFY2_WITH_TIMEOUT(Md->State()["renderedRevision"].toInteger(-2) == Md->State()["revision"].toInteger(-1),
+                                 qPrintable(QString::fromUtf8(QJsonDocument(Md->State()).toJson(QJsonDocument::Compact))),
                                  30000);
         QVERIFY(Md->State()["problems"].toInt() > 0);
         QVERIFY(Pane.Content() != Original);
@@ -148,5 +153,9 @@ class MarkdownTests final : public QObject
         QVERIFY(AfterCancel.value("markdown/previewFonts/enabled").toBool());
     }
 };
-QTEST_MAIN(MarkdownTests)
+int main(int Argc,char** Argv) {
+    QApplication App(Argc,Argv);
+    if(App.arguments().contains("--probe-dpr")){std::cout<<App.primaryScreen()->devicePixelRatio()<<std::endl;return 0;}
+    MarkdownTests Tests;return QTest::qExec(&Tests,Argc,Argv);
+}
 #include "tstMarkdown.moc"

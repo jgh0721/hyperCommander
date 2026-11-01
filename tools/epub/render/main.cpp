@@ -538,7 +538,7 @@ namespace
             if(Action=="preview-chapter") {
                 const auto Patch=Value.toObject();const auto Path=Patch["path"].toString();
                 const auto Asset=previewAssets_.value("/book/"+Path);
-                if(!editingPreview_ || patchBusy_ || !started_ || Patch.size()!=4
+                if(!editingPreview_ || patchBusy_ || !started_ || Patch.size()!=5 || !Patch["scroll"].isObject()
                     || !Patch["text"].isString() || Patch["text"].toString().size()>64*1024
                     || Patch["serial"].toInteger(-1)<1 || Patch["chapter"].toInt(-1)<0
                     || !Asset.store || Asset.mime!="application/xhtml+xml")return false;

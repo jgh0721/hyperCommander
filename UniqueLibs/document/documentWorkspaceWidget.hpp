@@ -104,6 +104,7 @@ namespace hc::document
         bool epubFullscreen_=false,epubWasMaximized_=false;
         QRect epubWindowGeometry_;
         bool closingWorkspace_ = false;
+        bool closePromptActive_ = false;
         bool pendingActionsScheduled_ = false;
         bool closeViewerOnEscape_ = true, viewerCloseRequested_ = false;
         QShortcut* viewerEscape_ = nullptr;

@@ -156,6 +156,11 @@ async function patchChapter(value) {
         }catch {}
         rendition.reportLocation();
         await settleFrame();
+        // Align the new source revision while the last good frame still covers it.
+        if(value.scroll?.serial) {
+            tools.previewScroll.invalidate();tools.previewScroll.apply(value.scroll);pendingScroll=null;
+            await settleFrame();
+        }
         previewPatch={serial:value.serial,ms:performance.now()-started};
     } catch(error) {
         if(old===undefined)previewChapters.delete(url);else previewChapters.set(url,old);
@@ -182,14 +187,23 @@ async function settleFrame() {
     if(!rendition)return;
     await rendition.q.enqueue(() => {});
     await waitFor(() => documents().length && documents().every(doc => [...doc.images].every(img => img.complete && img.naturalWidth > 0)));
+    documents().forEach(doc=>doc.body.getBoundingClientRect()); // Resolve newly applied font styles first.
     await Promise.all(documents().map(doc => doc.fonts.ready));
+    await Promise.all(documents().flatMap(doc=>[...doc.images].map(img=>img.decode().catch(()=>{}))));
     // Annotation rectangles follow the final font metrics and iframe placement.
     // Do not rebuild publication frames merely to update these SVG overlays.
     for(const view of rendition.manager.views.all())try{view.pane?.render();}catch{}
-    await new Promise(resolve => {
-        const timer=setTimeout(resolve,80);
-        requestAnimationFrame(()=>requestAnimationFrame(()=>{clearTimeout(timer);resolve();}));
-    });
+    // Font readiness alone does not include the iframe resize scheduled by EPUB.js.
+    let previous="",stable=0;
+    for(let attempt=0;attempt<24 && stable<3;++attempt) {
+        await new Promise(resolve=>{const timer=setTimeout(resolve,80);requestAnimationFrame(()=>{clearTimeout(timer);resolve();});});
+        const geometry=JSON.stringify(rendition.manager.views.all().map(view=>{
+            const rect=view.element.getBoundingClientRect(),doc=view.contents?.document;
+            return [rect.width,rect.height,doc?.documentElement.scrollWidth,doc?.documentElement.scrollHeight];
+        }));
+        const fontsReady=documents().every(doc=>doc.fonts.status==="loaded");
+        stable=fontsReady && geometry===previous?stable+1:0;previous=geometry;
+    }
 }
 new ResizeObserver(() => {
     if (!rendition || engine !== "epubjs" || resizeQueued) return;
@@ -537,7 +551,9 @@ async function start(name) {
         // again merely to apply the same profile and navigate back to chapter 0.
         await resizeRendition();
         documents().forEach(applyDocument);
-        await Promise.all(documents().map(doc => doc.fonts.ready));
+        documents().forEach(doc=>doc.body.getBoundingClientRect()); // Resolve newly applied font styles first.
+    await Promise.all(documents().map(doc => doc.fonts.ready));
+    await Promise.all(documents().flatMap(doc=>[...doc.images].map(img=>img.decode().catch(()=>{}))));
         await waitFor(() => documents().length && documents().every(doc => [...doc.images].every(img => img.complete && img.naturalWidth > 0)));
     } else {
         await applyProfile();

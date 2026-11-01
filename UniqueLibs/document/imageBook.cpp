@@ -172,6 +172,7 @@ storage::Result<std::shared_ptr<ImageBook>> OpenImageBook(const QString &Path, s
         std::uint32_t Ordinal = 0;
         for (;;)
         {
+            if(Context.reportProgress_)Context.reportProgress_({0,std::uint64_t(Ordinal),0,{},Book->path_.toStdString()});
             auto Batch = Listing.Value()->Next(128, Context);
             if (!Batch.HasValue()) {
                 if(auto Stop=Context.Check({"image-book"}))return *Stop;
@@ -502,7 +503,9 @@ void AnalyzeImageBook(const std::shared_ptr<ImageBook>& Book, storage::Operation
         }
         std::sort(ReadOrder.begin(),ReadOrder.end(),[&](int A,int B){return Book->pages_[A].ordinal_<Book->pages_[B].ordinal_;});
     }
+    int Inspected=0;
     for(const int Index:ReadOrder){
+        if(Context.reportProgress_)Context.reportProgress_({0,std::uint64_t(Inspected++),std::uint64_t(ReadOrder.size()),{},Book->path_.toStdString()});
         if(Context.Check({"image-classification"}))break;
         auto Probe=Read(Index,64*1024);Headers[Index]=Probe;QBuffer Buffer(&Probe.bytes_);Buffer.open(QIODevice::ReadOnly);
         QImageReader Reader(&Buffer);Reader.setAutoTransform(true);const auto Size=Reader.effectiveSize();
@@ -516,7 +519,9 @@ void AnalyzeImageBook(const std::shared_ptr<ImageBook>& Book, storage::Operation
         // Separate runs provide independent informative joins. Decode only
         // bounded complete members; partial/corrupt content never supplies edges.
         QSet<int> Runs;for(const int Start:{2,Count/6,Count/3,Count/2,2*Count/3,5*Count/6})for(int I=Start;I<qMin(Start+4,Count);++I)Runs.insert(I);
+        Inspected=0;
         for(const int Index:Runs){
+            if(Context.reportProgress_)Context.reportProgress_({0,std::uint64_t(Inspected++),std::uint64_t(Runs.size()),{},Book->path_.toStdString()});
             if(Context.Check({"image-classification"}))break;
             auto Probe=Read(Index,1024*1024);if(!Probe.complete_)continue;
             QBuffer Buffer(&Probe.bytes_);Buffer.open(QIODevice::ReadOnly);QImageReader Reader(&Buffer);Reader.setAutoTransform(true);

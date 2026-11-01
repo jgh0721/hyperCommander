@@ -103,7 +103,9 @@ bool EpubSourceEditor::patchPreview() {
     const auto Bytes=Changes.contains(current_)?Changes.value(current_):model_.Read(current_);
     if(Bytes.isEmpty() || Bytes.size()>64*1024)return false;
     previewPatchToken_=Token();
-    const QJsonObject Patch{{"serial",++previewPatchSerial_},{"chapter",Chapter},{"path",current_},{"text",QString::fromUtf8(Bytes)}};
+    auto Scroll=scrollSyncActive()?sourceScrollTarget(false):QJsonObject{};
+    if(!Scroll.isEmpty())Scroll["serial"]=++sourceScrollSerial_;
+    const QJsonObject Patch{{"serial",++previewPatchSerial_},{"chapter",Chapter},{"path",current_},{"text",QString::fromUtf8(Bytes)},{"scroll",Scroll}};
     if(!previewView_->ReaderAction("preview-chapter",Patch))return false;
     previewPatchShiftCounts_.clear();for(auto At=sourceBuffers_.cbegin();At!=sourceBuffers_.cend();++At)previewPatchShiftCounts_[At.key()]=At->shifts_.size();
     previewPatchChanges_=std::move(Changes);previewPatchPending_=true;previewPatchClock_.start();++previewPatchRuns_;
@@ -202,10 +204,16 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
     if(previewCandidateScrollSerial_!=0 && scrollSyncActive() && sourceShown() && State["chapterIndex"].toInt(-1)==spineIndex(current_) && State["previewScroll"].toObject()["supported"].toBool()) {
         if(previewCandidateScrollSerial_<0) {
             auto Target=sourceScrollTarget(false);previewCandidateScrollSerial_=++sourceScrollSerial_;Target["serial"]=previewCandidateScrollSerial_;
-            if(Candidate->RequestSourceScroll(Target)){previewCandidateScrollClock_.start();QTimer::singleShot(300,this,[this,Guard=QPointer<EpubProcessView>(Candidate)]{if(Guard)admitPreview(Guard);});return;}
+            if(Candidate->RequestSourceScroll(Target)){previewCandidateScrollClock_.start();QTimer::singleShot(5000,this,[this,Guard=QPointer<EpubProcessView>(Candidate)]{if(Guard)admitPreview(Guard);});return;}
             previewCandidateScrollSerial_=0;
         }
-        else if(State["previewScroll"].toObject()["applied"].toInteger()<previewCandidateScrollSerial_ && previewCandidateScrollClock_.elapsed()<300)return;
+        else if(State["previewScroll"].toObject()["applied"].toInteger()<previewCandidateScrollSerial_) {
+            // Never expose a frame whose editor position has not been restored.
+            if(previewCandidateScrollClock_.elapsed()<5000)return;
+            previewCandidate_=nullptr;previewError_="epub-preview-scroll-timeout";
+            reportPreview(tr("미리보기 위치를 복원하지 못해 이전 화면을 유지합니다. 갱신을 다시 실행해 주세요."));
+            retirePreview(Candidate);emit StateChanged();return;
+        }
     }
     previewChanges_=previewCandidateChanges_;previewEdition_=previewCandidateEdition_;previewReadyMs_=previewBuildClock_.isValid()?previewBuildClock_.elapsed():0;
     auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;sourceSelectionSerial_=-1;

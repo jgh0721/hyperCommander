@@ -153,6 +153,7 @@ EpubSourceEditor* beginEditing(DocumentWorkspaceWidget& Window,const QString& Id
     EpubSourceEditor* Editor=nullptr;if(!QTest::qWaitFor([&]{Editor=Window.findChild<EpubSourceEditor*>();return Editor && Editor->IsReady();},15000))return nullptr;
     foreground(Window);QApplication::setActiveWindow(&Window);Editor->SourceInput()->setFocus();
     const bool Shown=QTest::qWaitFor([&]{const auto Preview=Editor->Snapshot()["preview"].toObject();if(Preview["waitingForFocus"].toBool())foreground(Window);return Preview["current"].toBool() && !Preview["busy"].toBool();},60000);
+    if(!Shown)qWarning().noquote()<<QJsonDocument(Editor->Snapshot()).toJson(QJsonDocument::Compact)<<"SOURCE"<<Editor->SourceView()->Content().left(200);
     return Shown?Editor:nullptr;
 }
 QJsonObject previewPage(EpubSourceEditor& Editor){return Editor.Snapshot()["preview"].toObject()["state"].toObject();}
@@ -421,6 +422,24 @@ private slots:
             if(!Evidence.isEmpty()){QDir().mkpath(Evidence);Editor.grab().save(QDir(Evidence).filePath(Scheme==fm::style::ThemeManager::Scheme::Dark?"source-dark.png":"source-light.png"));}
         }
         Editor.Undo();QCOMPARE(sourceText(Editor),Original);Editor.Redo();QCOMPARE(sourceText(Editor),Changed);
+    }
+    void workspaceApplyState() {
+        const auto Book=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Book.isEmpty())QSKIP("Owned EPUB corpus required");
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));QString Id;QVERIFY(openReading(Window,Book,Id));
+        const auto Close=qScopeGuard([&]{QElapsedTimer Clock;Clock.start();while(!Window.RequestClose() && Clock.elapsed()<30000)QTest::qWait(50);});
+        auto* Editor=beginEditing(Window,Id);QVERIFY(Editor);Editor->SetRecoveryEnabled(false);
+        auto* Apply=Editor->findChild<QAction*>("epubApplyResource");QVERIFY(Apply);
+        int Transitions=0;connect(Apply,&QAction::enabledChanged,&Window,[&]{++Transitions;});
+        const auto Stable=[&](bool Enabled){Transitions=0;for(int I=0;I<20;++I){Editor->StateChanged();QTest::qWait(75);}return Apply->isEnabled()==Enabled && Transitions==0;};
+        QVERIFY(!Apply->isEnabled());QVERIFY(Stable(false));
+        QVERIFY(setSourceCursor(*Editor,sourceText(*Editor).indexOf("</body>")));QVERIFY(insertSource(*Editor,"<p>apply state</p>"));
+        QVERIFY(Apply->isEnabled());QVERIFY(Stable(true));
+        Editor->Undo();QVERIFY(!Apply->isEnabled());QVERIFY(Stable(false));
+        Editor->Redo();QVERIFY(Apply->isEnabled());Apply->trigger();QVERIFY(!Apply->isEnabled());QVERIFY(Stable(false));
+        int Prompts=0;Window.SetClosePrompt([&](const QString&){if(++Prompts==1)Window.RequestClose();return int(QMessageBox::Cancel);});
+        QVERIFY(!Window.RequestClose());QCOMPARE(Prompts,1);
+        Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
     }
     void sourceResourceState() {
         const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());EpubSourceEditor Editor(File.readAll(),Path);Editor.SetRecoveryEnabled(false);Editor.resize(800,600);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);

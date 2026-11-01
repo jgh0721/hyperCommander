@@ -31,6 +31,8 @@ namespace hc::plugins
         std::vector<CandidateFailure> candidateFailures_;
         std::uint64_t commandSequence_ = 0;
         std::optional<storage::Error> commandError_;
+        QString preparationStage_ = "check";
+        std::optional<storage::OperationContext::Progress> preparationProgress_;
         bool documentChannel_ = false;
         QJsonObject documentState_, documentReply_;
     };
