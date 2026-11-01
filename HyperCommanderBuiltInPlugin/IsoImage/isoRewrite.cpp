@@ -21,10 +21,15 @@ Task<std::shared_ptr<PreparedImage>> PrepareRewrite(RewriteRequest Request, Oper
         if (Request.volumeLabel_.find('\0') != std::string::npos)
             return Error{ErrorCategory::InvalidRequest, "iso-label-nul", {"iso"}};
         const HcIsoOptions Options{sizeof(HcIsoOptions), Request.profile_, Request.volumeLabel_.c_str(), Request.maxImageBytes_, Request.timestampUtc_,
-            [](void* Opaque, uint64_t Completed, uint64_t) -> int {
+            [](void* Opaque, uint64_t Completed, uint64_t Total) -> int {
                 const auto& Context = *static_cast<OperationContext*>(Opaque);
                 if (Context.Check({"iso"})) return 0;
                 if (Context.progress_) Context.progress_(Completed);
+                if (Context.reportProgress_) {
+                    OperationContext::Progress Progress; Progress.bytesDone_ = Completed;
+                    if (Total) Progress.bytesTotal_ = Total;
+                    Context.reportProgress_(Progress);
+                }
                 return Context.Check({"iso"}) ? 0 : 1;
             }, &Context};
         const auto Path = Prepared->Path().toUtf8();

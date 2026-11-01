@@ -45,6 +45,7 @@ namespace hc::plugins
         std::optional<ProviderInteractionRequest> prompt_;
         std::optional<Result<ProviderInteractionReply>> answer_;
         std::uint64_t progress_ = 0, promptSerial_ = 0;
+        std::optional<OperationContext::Progress> detail_;
         std::function<Result<QByteArray>()> invoke_;
     };
     HostSession::HostSession(Handler Dispatch) : epoch_(QUuid::createUuid().toString(QUuid::Id128)), dispatch_(std::move(Dispatch)), worker_([this](std::stop_token Stop) { work(Stop); }) {}
@@ -71,6 +72,7 @@ namespace hc::plugins
             auto Context = Job->context_; Context.stopToken_ = Job->stop_.get_token();
             Context.pauseRequested_ = [Job] { return Job->paused_.load(); };
             Context.progress_ = [Job](std::uint64_t Value) { std::lock_guard Lock(Job->mutex_); Job->progress_ = std::max(Job->progress_, Value); };
+            Context.reportProgress_ = [Job](const OperationContext::Progress& Value) { std::lock_guard Lock(Job->mutex_); Job->detail_ = Value; };
             Context.interactionPrompt_ = [Job](const ProviderInteractionRequest& Request, const OperationContext& Operation) -> Result<ProviderInteractionReply> {
                 std::unique_lock Lock(Job->mutex_);
                 if (Job->prompt_) return HostError("session-interaction-busy");
@@ -124,12 +126,14 @@ namespace hc::plugins
         {
             std::optional<ProviderInteractionRequest> Prompt;
             std::uint64_t Progress = 0;
+            std::optional<OperationContext::Progress> Detail;
             { std::lock_guard Lock(Job->mutex_);
                 if (Job->result_) {
                     if (!Job->result_->HasValue()) return Fail(Job->result_->Failure());
                     return Send(Kind == WireKind::StreamRead ? WireKind::StreamData : WireKind::Response, Job->result_->Value());
                 }
                 Prompt = Job->prompt_; Progress = Job->progress_;
+                Detail = Job->detail_;
             }
             if (Prompt && QString::fromStdString(Prompt->id_) != SentPrompt)
             {
@@ -140,7 +144,14 @@ namespace hc::plugins
             const auto Now = std::chrono::steady_clock::now();
             if (LastProgress == std::chrono::steady_clock::time_point::min() || Now - LastProgress >= std::chrono::milliseconds(50))
             {
-                auto Sent = Send(WireKind::SessionProgress, Json({{"completed", QString::number(Progress)}, {"waiting", bool(Prompt)}}));
+                QJsonObject Event{{"completed", QString::number(Progress)}, {"waiting", bool(Prompt)}};
+                if (Detail) {
+                    QJsonObject Value{{"bytes", QString::number(Detail->bytesDone_)}, {"items", QString::number(Detail->itemsDone_)},
+                        {"count", QString::number(Detail->itemsTotal_)}, {"current", QString::fromStdString(Detail->currentItem_)}, {"verifying", Detail->verifying_}};
+                    if (Detail->bytesTotal_) Value["total"] = QString::number(*Detail->bytesTotal_);
+                    Event["detail"] = Value;
+                }
+                auto Sent = Send(WireKind::SessionProgress, Json(Event));
                 if (!Sent.HasValue()) { Job->stop_.request_stop(); return Sent; } LastProgress = Now;
             }
             DWORD Available = 0;

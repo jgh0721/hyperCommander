@@ -77,7 +77,20 @@ namespace hc::plugins
             if (Type == WireKind::SessionProgress)
             {
                 auto Value = WireUnsigned(Object["completed"]);
-                if (Object.size() != 2 || !Value.HasValue() || !Object["waiting"].isBool() || Value.Value() < Completed) return HostError("session-progress-envelope");
+                if (Object.size() != (Object.contains("detail") ? 3 : 2) || !Value.HasValue() || !Object["waiting"].isBool() || Value.Value() < Completed) return HostError("session-progress-envelope");
+                if (Object.contains("detail")) {
+                    if (!Object["detail"].isObject()) return HostError("session-progress-detail");
+                    const auto Detail = Object["detail"].toObject();
+                    auto Bytes = WireUnsigned(Detail["bytes"]), Items = WireUnsigned(Detail["items"]), Count = WireUnsigned(Detail["count"]);
+                    if (Detail.size() != (Detail.contains("total") ? 6 : 5) || !Detail["verifying"].isBool() || !Bytes.HasValue() || !Items.HasValue() || !Count.HasValue()
+                        || Items.Value() > Count.Value() || !Detail["current"].isString() || Detail["current"].toString().size() > 32768
+                        || Detail["current"].toString().contains(QChar::Null)) return HostError("session-progress-detail");
+                    OperationContext::Progress Report; Report.bytesDone_ = Bytes.Value(); Report.itemsDone_ = Items.Value(); Report.itemsTotal_ = Count.Value();
+                    Report.currentItem_ = Detail["current"].toString().toStdString();
+                    Report.verifying_ = Detail["verifying"].toBool();
+                    if (Detail.contains("total")) { auto Total = WireUnsigned(Detail["total"]); if (!Total.HasValue()) return HostError("session-progress-detail"); Report.bytesTotal_ = Total.Value(); }
+                    if (Context.reportProgress_) { try { Context.reportProgress_(Report); } catch (...) { return HostError("session-progress-callback"); } }
+                }
                 if (Value.Value() > Completed) {
                     Completed = Value.Value(); LastProgress = Now;
                     if (Context.progress_) { try { Context.progress_(Completed); } catch (...) { return HostError("session-progress-callback"); } }

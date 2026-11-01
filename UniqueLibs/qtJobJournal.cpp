@@ -57,6 +57,8 @@ namespace hc::operations
             if (Snapshot.progress_.itemsDone_) Out.insert("itemsDone", QString::number(*Snapshot.progress_.itemsDone_));
             if (Snapshot.progress_.outputIndex_) Out.insert("outputIndex", QString::number(*Snapshot.progress_.outputIndex_));
             if (Snapshot.progress_.outputCount_) Out.insert("outputCount", QString::number(*Snapshot.progress_.outputCount_));
+            if (Snapshot.progress_.phaseItemsDone_) Out.insert("phaseItemsDone", QString::number(*Snapshot.progress_.phaseItemsDone_));
+            if (Snapshot.progress_.phaseItemsTotal_) Out.insert("phaseItemsTotal", QString::number(*Snapshot.progress_.phaseItemsTotal_));
             Out.insert("deferred", Snapshot.deferred_); Out.insert("order", QString::number(Snapshot.queueOrder_));
             Out.insert("submittedUtcMs", QString::number(Snapshot.submittedUtcMs_)); Out.insert("retriedAs", S(Snapshot.retriedAs_));
             Out.insert("samplePolicy", "recent-600-at-500ms; rate-window-2000ms; samples-session-only");
@@ -70,7 +72,7 @@ namespace hc::operations
             if (Snapshot.error_) Out.insert("error", EncodeError(*Snapshot.error_));
             Out.insert("saveProgress", SaveProgress);
             if (!SaveProgress && !IsTerminal(Snapshot.state_)) {
-                for (const auto* Key : {"current", "bytes", "total", "planned", "currentBytes", "currentTotal", "discoveredItems", "discoveredFiles", "deletedFiles", "currentSource", "currentDestination", "phase", "activeFiles", "itemsDone", "outputIndex", "outputCount"}) Out.remove(Key);
+                for (const auto* Key : {"current", "bytes", "total", "planned", "currentBytes", "currentTotal", "discoveredItems", "discoveredFiles", "deletedFiles", "currentSource", "currentDestination", "phase", "activeFiles", "itemsDone", "outputIndex", "outputCount", "phaseItemsDone", "phaseItemsTotal"}) Out.remove(Key);
                 // Version 2 reconstructs counts from the durable outcome ledger.
                 // Version 1 embeds outcomes and must retain their matching counts.
                 if (Result.outcomes_) for (const auto* Key : {"completed", "skipped", "failed"}) Out.remove(Key);
@@ -97,6 +99,8 @@ namespace hc::operations
             if (Object.contains("itemsDone")) Snapshot.progress_.itemsDone_ = Object["itemsDone"].toString().toULongLong();
             if (Object.contains("outputIndex")) Snapshot.progress_.outputIndex_ = Object["outputIndex"].toString().toULongLong();
             if (Object.contains("outputCount")) Snapshot.progress_.outputCount_ = Object["outputCount"].toString().toULongLong();
+            if (Object.contains("phaseItemsDone")) Snapshot.progress_.phaseItemsDone_ = Object["phaseItemsDone"].toString().toULongLong();
+            if (Object.contains("phaseItemsTotal")) Snapshot.progress_.phaseItemsTotal_ = Object["phaseItemsTotal"].toString().toULongLong();
             Snapshot.deferred_ = Object["deferred"].toBool(); Snapshot.queueOrder_ = Object["order"].toString().toULongLong();
             Snapshot.submittedUtcMs_ = Object["submittedUtcMs"].toString().toLongLong(); Snapshot.retriedAs_ = Object["retriedAs"].toString().toStdString();
             if (Object.contains("total")) Snapshot.progress_.bytesTotal_ = Object["total"].toString().toULongLong();

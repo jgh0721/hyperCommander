@@ -205,6 +205,39 @@ private slots:
         QVERIFY(!IsSafeArchiveName("CON.txt")); QVERIFY(!IsSafeArchiveName("../bad"));
         QCOMPARE(ArchivePathKey(QString::fromUtf8("가")), ArchivePathKey(QString::fromUtf8("가")));
     }
+    void nativeCreationLiveProgress()
+    {
+        QTemporaryDir Dir; hc::settings::Repository Settings(Dir.filePath("settings"));
+        QVERIFY(QDir().mkpath(Dir.filePath("Qt/selected-kit"))); QVERIFY(QDir().mkdir(Dir.filePath("out")));
+        QByteArray Data(16 * 1024 * 1024, Qt::Uninitialized); uint32_t Random = 123456789;
+        for (auto& Byte : Data) { Random ^= Random << 13; Random ^= Random >> 17; Random ^= Random << 5; Byte = char(Random); }
+        QVERIFY(Put(Dir.filePath("Qt/selected-kit/large.bin"), Data));
+        QVERIFY(Put(Dir.filePath("Qt/selected-kit/empty.txt"), {}));
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        const auto Selected = Source(Reader, Dir.filePath("Qt/selected-kit"));
+        auto R = Request(Settings, {Selected}, Dir.filePath("out"), "7z");
+        R.value_.sourceRoot_ = {LocatorKind::Local, Dir.filePath("Qt").toStdString()};
+        R.value_.composition_.separateArchives_ = true;
+        OperationContext C; C.providerInteractions_ = true;
+        auto Prepared = PrepareCreation(R, C); QVERIFY(Prepared.HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Job = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Job.HasValue());
+        bool Partial = false, CorrectSource = false, InputCounts = false;
+        const auto Until = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (Job.Value().completion_.wait_for(std::chrono::milliseconds(10)) != std::future_status::ready && std::chrono::steady_clock::now() < Until) {
+            const auto S = Scheduler.Snapshot(Job.Value().id_).Value(); const auto& P = S.progress_;
+            if (P.phase_ != JobPhase::BuildingArchive) continue;
+            if (P.bytesTotal_ && P.bytesDone_ > 0 && P.bytesDone_ < *P.bytesTotal_) Partial = true;
+            CorrectSource |= P.source_ == Serialize(Selected.entry_.locator_);
+            InputCounts |= P.phaseItemsTotal_.value_or(0) >= 2 && P.outputCount_ == std::optional<uint64_t>(1);
+        }
+        if (Job.Value().completion_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) Scheduler.Cancel(Job.Value().id_);
+        const auto Result = Job.Value().completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "creation did not finish");
+        QVERIFY2(Partial, "No partial SDK byte progress reached the scheduler while compression was running");
+        QVERIFY(CorrectSource); QVERIFY(InputCounts);
+        QVERIFY(QFileInfo::exists(Dir.filePath("out/selected-kit.7z")));
+    }
     void nativeCreation_data() { QTest::addColumn<QString>("Format"); for (const auto F : {"7z", "zip", "iso"}) QTest::newRow(F) << QString(F); }
     void nativeCreation()
     {

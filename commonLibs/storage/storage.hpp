@@ -198,6 +198,15 @@ namespace hc::storage
         bool providerInteractions_ = false;
         // Progress is monotonic work completed, distinct from host liveness.
         std::function<void(std::uint64_t)> progress_;
+        struct Progress
+        {
+            std::uint64_t bytesDone_ = 0, itemsDone_ = 0, itemsTotal_ = 0;
+            std::optional<std::uint64_t> bytesTotal_;
+            std::string currentItem_;
+            bool verifying_ = false;
+        };
+        // Structured work progress for providers that know their input totals.
+        std::function<void(const Progress&)> reportProgress_;
         std::size_t EnumerationLimit() const
         {
             return workload_.IsAutomatic() ? std::min(maxEnumerationEntries_,

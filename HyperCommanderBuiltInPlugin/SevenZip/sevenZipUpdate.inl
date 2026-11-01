@@ -54,7 +54,12 @@ private:
 class UpdateCallback final : public IArchiveUpdateCallback, public ICryptoGetTextPassword2, public ICryptoGetTextPassword {
 public:
     UpdateCallback(std::vector<UpdateItem>& Items, std::shared_ptr<State> State, bool Encrypt, bool Zip, IInArchive* Original)
-        : items_(Items), state_(std::move(State)), encrypt_(Encrypt), zip_(Zip), original_(Original) {}
+        : items_(Items), state_(std::move(State)), encrypt_(Encrypt), zip_(Zip), original_(Original) {
+        // The SDK does not request data streams for these metadata-only entries.
+        progress_.itemsDone_ = std::count_if(items_.begin(), items_.end(), [Zip](const UpdateItem& Item) {
+            return Item.directory_ || Item.old_ != UINT32_MAX || (!Zip && !Item.size_);
+        });
+    }
     HC_COM_REFS;
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID Id, void** Value) noexcept override {
         *Value = nullptr;
@@ -63,8 +68,10 @@ public:
         else if (Id == IID_ICryptoGetTextPassword) *Value = static_cast<ICryptoGetTextPassword*>(this);
         if (!*Value) return E_NOINTERFACE; AddRef(); return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetTotal(UInt64) noexcept override { return state_->Check(); }
-    HRESULT STDMETHODCALLTYPE SetCompleted(const UInt64* Done) noexcept override { return state_->Check(Done ? *Done : 0); }
+    HRESULT STDMETHODCALLTYPE SetTotal(UInt64 Total) noexcept override { return report([&] { progress_.bytesTotal_ = Total; }); }
+    HRESULT STDMETHODCALLTYPE SetCompleted(const UInt64* Done) noexcept override {
+        return report([&] { if (Done) progress_.bytesDone_ = std::max(progress_.bytesDone_, *Done); });
+    }
     HRESULT STDMETHODCALLTYPE CryptoGetTextPassword(BSTR* Value) noexcept override { return state_->Password(Value); }
     HRESULT STDMETHODCALLTYPE CryptoGetTextPassword2(Int32* Defined, BSTR* Value) noexcept override {
         *Defined = encrypt_ ? 1 : 0; *Value = nullptr; if (!encrypt_) return S_OK;
@@ -96,10 +103,22 @@ public:
     HRESULT STDMETHODCALLTYPE GetStream(UInt32 Index, ISequentialInStream** Stream) noexcept override {
         *Stream = nullptr; if (Index >= items_.size()) return E_INVALIDARG; const auto& Item = items_[Index];
         if (Item.input_) { if (Item.input_->Seek(0, 0, nullptr) != S_OK) return E_FAIL; Item.input_->AddRef(); *Stream = Item.input_.get(); }
-        return state_->Check();
+        return report([&] { progress_.currentItem_ = Item.name_.toStdString(); });
     }
-    HRESULT STDMETHODCALLTYPE SetOperationResult(Int32 Code) noexcept override { return Code == 0 ? state_->Check() : state_->Fail(Failure("7zip-update-result:" + std::to_string(Code))); }
+    HRESULT STDMETHODCALLTYPE SetOperationResult(Int32 Code) noexcept override {
+        if (Code) return state_->Fail(Failure("7zip-update-result:" + std::to_string(Code)));
+        return report([&] { progress_.itemsDone_ = std::min<uint64_t>(items_.size(), progress_.itemsDone_ + 1); });
+    }
 private:
+    template<class Update> HRESULT report(Update Change) noexcept {
+        try {
+            { std::lock_guard Lock(progressMutex_); Change(); progress_.itemsTotal_ = items_.size();
+                if (state_->context_.reportProgress_) state_->context_.reportProgress_(progress_); }
+            return state_->Check();
+        } catch (...) { return E_ABORT; }
+    }
+    std::mutex progressMutex_;
+    OperationContext::Progress progress_;
     std::vector<UpdateItem>& items_; std::shared_ptr<State> state_; bool encrypt_, zip_;
     IInArchive* original_;
 };
@@ -126,15 +145,17 @@ public:
         else if (Id == IID_ICryptoGetTextPassword) *Value = static_cast<ICryptoGetTextPassword*>(this);
         if (!*Value) return E_NOINTERFACE; AddRef(); return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetTotal(UInt64) noexcept override { return state_->Check(); }
-    HRESULT STDMETHODCALLTYPE SetCompleted(const UInt64* Done) noexcept override { return state_->Check(Done ? *Done : 0); }
+    HRESULT STDMETHODCALLTYPE SetTotal(UInt64 Total) noexcept override { return report([&] { progress_.bytesTotal_ = Total; }); }
+    HRESULT STDMETHODCALLTYPE SetCompleted(const UInt64* Done) noexcept override {
+        return report([&] { if (Done) progress_.bytesDone_ = std::max(progress_.bytesDone_, *Done); });
+    }
     HRESULT STDMETHODCALLTYPE CryptoGetTextPassword(BSTR* Value) noexcept override { return state_->Password(Value); }
     HRESULT STDMETHODCALLTYPE GetStream(UInt32 Index, ISequentialOutStream** Stream, Int32 Mode) noexcept override {
         *Stream = nullptr; if (output_) { output_->Release(); output_ = nullptr; } item_ = nullptr;
         if (Mode == NArchive::NExtract::NAskMode::kExtract && items_.contains(Index)) {
             item_ = items_.at(Index); output_ = new Output(nullptr, item_->size_, state_, true); output_->AddRef(); *Stream = output_;
         }
-        return state_->Check();
+        return report([&] { if (item_) progress_.currentItem_ = item_->name_.toStdString(); });
     }
     HRESULT STDMETHODCALLTYPE PrepareOperation(Int32) noexcept override { return state_->Check(); }
     HRESULT STDMETHODCALLTYPE SetOperationResult(Int32 Code) noexcept override {
@@ -143,10 +164,19 @@ public:
             if (output_->written_ != item_->size_ || output_->hash_.result() != item_->digest_) return state_->Fail(Failure("7zip-input-output-digest"));
             ++verified_;
         }
-        return state_->Check();
+        return report([&] { progress_.itemsDone_ = verified_; });
     }
     size_t verified_ = 0;
 private:
+    template<class Update> HRESULT report(Update Change) noexcept {
+        try {
+            { std::lock_guard Lock(progressMutex_); Change(); progress_.itemsTotal_ = items_.size(); progress_.verifying_ = true;
+                if (state_->context_.reportProgress_) state_->context_.reportProgress_(progress_); }
+            return state_->Check();
+        } catch (...) { return E_ABORT; }
+    }
+    std::mutex progressMutex_;
+    OperationContext::Progress progress_;
     std::shared_ptr<State> state_; const std::map<UInt32, const UpdateItem*>& items_; const UpdateItem* item_ = nullptr; Output* output_ = nullptr;
 };
 #include "sevenZipMetadata.inl"

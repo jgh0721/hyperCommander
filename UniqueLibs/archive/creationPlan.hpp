@@ -11,6 +11,7 @@ struct OutputPlan {
     std::vector<PlannedEntry> entries_;
     std::vector<operations::OperationSource> directories_;
     bool skippedEmpty_ = false;
+    storage::Locator source_;
 };
 struct PlanRequest {
     std::vector<operations::OperationSource> sources_;

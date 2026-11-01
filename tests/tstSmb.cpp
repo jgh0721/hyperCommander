@@ -310,6 +310,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "firstRunProductDefaultsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobInteractionUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationProgressUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileClipboardUi"
@@ -3160,9 +3161,9 @@ private slots:
             {"delete", JobKind::Delete, JobPhase::Preparing, true, false, false, true},
             {"recycle", JobKind::Recycle, JobPhase::Preparing, true, false, false, true},
             {"extract", JobKind::Extract, JobPhase::Copying, true, true, true, true},
-            {"archive-create", JobKind::ArchiveCreate, JobPhase::BuildingArchive, true, true, false, false},
+            {"archive-create", JobKind::ArchiveCreate, JobPhase::BuildingArchive, true, true, false, true},
             {"archive-separate", JobKind::ArchiveSeparate, JobPhase::SavingOutput, true, true, true, true},
-            {"iso-create", JobKind::IsoCreate, JobPhase::BuildingArchive, true, true, false, false},
+            {"iso-create", JobKind::IsoCreate, JobPhase::BuildingArchive, true, true, false, true},
             {"archive-add", JobKind::ArchiveAdd, JobPhase::RewritingArchive, true, true, false, false},
             {"archive-move", JobKind::ArchiveMove, JobPhase::RewritingArchive, true, true, false, false},
             {"archive-delete", JobKind::ArchiveDelete, JobPhase::RewritingArchive, true, false, false, false},
@@ -3238,6 +3239,58 @@ private slots:
             QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_)); QTRY_COMPARE(Dialog->isVisible(), CleanupFailure);
             if (CleanupFailure) { Dialog->findChild<QPushButton*>("hc.jobs.cancel")->click(); QTRY_VERIFY(!Dialog->isVisible()); }
         }
+    }
+
+    void archiveCreationProgressUi()
+    {
+        using namespace hc::operations; using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); });
+        auto Options = Settings.Read(Section::Options).toObject(); Options["jobDetailed"] = false; Options["jobCloseOnSuccess"] = false;
+        QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit());
+        class Task final : public IJobTask {
+            uint64_t done_ = 0;
+            std::shared_ptr<std::atomic<bool>> totals_;
+        public:
+            explicit Task(std::shared_ptr<std::atomic<bool>> Totals) : totals_(std::move(Totals)) {}
+            JobStep Advance(JobStepContext) override {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                JobStep Step{JobState::Running}; Step.progress_ = JobProgress{++done_ * 1024 * 1024, uint64_t(1024 * 1024 * 1024), "large.bin"};
+                auto& P = *Step.progress_; P.phase_ = JobPhase::BuildingArchive;
+                P.source_ = "D:/Qt/selected-kit"; P.destination_ = "D:/Qt/selected-kit.7z";
+                P.outputIndex_ = 0; P.outputCount_ = 1; P.plannedItems_ = 1;
+                if (*totals_) { P.phaseItemsDone_ = 3; P.phaseItemsTotal_ = 20; }
+                else P.bytesTotal_.reset();
+                return Step;
+            }
+            std::vector<hc::storage::Error> Finalize(JobState) override { return {}; }
+        };
+        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false);
+        FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        PreparedJob Work; Work.request_.metadata_ = {"archive", "D:/Qt", "D:/Qt", {}, {}, JobKind::ArchiveSeparate};
+        auto Totals = std::make_shared<std::atomic<bool>>(false);
+        Work.task_ = std::make_unique<Task>(Totals); const auto Started = Jobs.Submit(std::move(Work), QStringLiteral("archive")); QVERIFY(Started.HasValue());
+        auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Dialog);
+        auto* Bar = Dialog->findChild<QProgressBar*>("hc.jobs.overallProgress"); QVERIFY(Bar);
+        QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.phase_, JobPhase::BuildingArchive);
+        QTRY_COMPARE(Bar->maximum(), 0);
+        *Totals = true;
+        QTRY_VERIFY(Bar->maximum() == 1000 && Bar->value() > 0 && Bar->value() < 1000);
+        QCOMPARE(Dialog->findChild<QLabel*>("hc.jobs.source.path")->text(), QStringLiteral("압축   D:/Qt"));
+        QCOMPARE(Dialog->findChild<QLabel*>("hc.jobs.source.name")->text(), QStringLiteral("selected-kit"));
+        auto* Overall = Dialog->findChild<QLabel*>("hc.jobs.overallMetrics");
+        QVERIFY(Overall->text().contains(QStringLiteral("생성 완료 0 / 1개"))); QVERIFY(Overall->text().contains(QStringLiteral("입력 항목 3 / 20개")));
+        auto* Metrics = Dialog->findChild<QLabel*>("hc.jobs.metrics"); QVERIFY(Metrics);
+        QTRY_VERIFY_WITH_TIMEOUT(Metrics->text().contains(QStringLiteral("현재 단계 남은 시간 약")), 6000);
+        QVERIFY(SaveR9Dialog(*Dialog, "archive-create-progress"));
+        Dialog->resize(520, Dialog->sizeHint().height()); QTest::qWait(50);
+        for (const auto Name : {"hc.jobs.pause", "hc.jobs.cancel", "hc.jobs.closeOnSuccess"}) {
+            auto* Child = Dialog->findChild<QWidget*>(Name); QVERIFY(Child);
+            QVERIFY(Dialog->rect().contains(QRect(Child->mapTo(Dialog, QPoint()), Child->size())));
+        }
+        QVERIFY(SaveR9Dialog(*Dialog, "archive-create-progress-narrow"));
+        QVERIFY(Jobs.Scheduler().Cancel(Started.Value().id_).HasValue());
+        QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_));
     }
 
     void r21TransferProgressUi()

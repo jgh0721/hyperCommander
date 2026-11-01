@@ -15,6 +15,7 @@ namespace hc::operations
             std::optional<storage::ProviderInteractionRequest> prompt_;
             std::optional<std::promise<storage::Result<storage::ProviderInteractionReply>>> answer_;
             std::optional<JobStep> result_;
+            std::optional<JobProgress> progress_;
             std::optional<JobStepContext> work_;
             bool busy_ = false;
         };
@@ -45,6 +46,10 @@ namespace hc::operations
             if (!pending_->busy_ && !pending_->result_)
             {
                 auto Shared = pending_;
+                Context.publishProgress_ = [Shared](const JobProgress& Progress) {
+                    std::lock_guard Guard(Shared->mutex_);
+                    Shared->progress_ = Progress; Shared->changed_.notify_all();
+                };
                 Context.operation_.interactionStart_ = [Shared, Stop = closing_.get_token(), Committing = Context.committing_](const storage::ProviderInteractionRequest& Request, const storage::OperationContext&) {
                     if (Stop.stop_requested()) return storage::Ready<storage::ProviderInteractionReply>(storage::Error{storage::ErrorCategory::Cancelled, "cancelled"});
                     if (Committing || Request.kind_ != storage::ProviderInteractionKind::Password)
@@ -79,14 +84,22 @@ namespace hc::operations
                 });
                 pending_->changed_.notify_all();
             }
-            if (!pending_->changed_.wait_for(Lock, std::chrono::milliseconds(100), [&] { return pending_->result_.has_value() || pending_->prompt_.has_value(); })) {
+            if (!pending_->changed_.wait_for(Lock, std::chrono::milliseconds(100), [&] { return pending_->result_.has_value() || pending_->prompt_.has_value() || pending_->progress_.has_value(); })) {
                 JobStep Step{Context.committing_ ? JobState::Committing : JobState::Running};
                 if (!Context.committing_) Step.deferFor_=std::chrono::milliseconds(100);
-                if (!activity_.empty()) { Step.progress_=lastProgress_.value_or(JobProgress{}); Step.progress_->currentItem_=activity_; Step.progress_->currentBytes_=0; Step.progress_->currentTotal_.reset(); }
+                if (lastProgress_) Step.progress_ = lastProgress_;
+                else if (!activity_.empty()) { Step.progress_ = JobProgress{}; Step.progress_->currentItem_ = activity_; }
                 return Step;
             }
             if (pending_->result_) {
-                auto Result = std::move(*pending_->result_); pending_->result_.reset(); if (Result.progress_) lastProgress_=Result.progress_; return Result;
+                auto Result = std::move(*pending_->result_); pending_->result_.reset(); pending_->progress_.reset(); if (Result.progress_) lastProgress_=Result.progress_; return Result;
+            }
+            if (pending_->prompt_) return question();
+            if (pending_->progress_) {
+                JobStep Step{Context.committing_ ? JobState::Committing : JobState::Running};
+                Step.progress_ = std::move(pending_->progress_); pending_->progress_.reset(); lastProgress_ = Step.progress_;
+                if (!Context.committing_) Step.deferFor_ = std::chrono::milliseconds(100);
+                return Step;
             }
             return question();
         }

@@ -200,6 +200,27 @@ private slots:
         const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Cancelled);
         QVERIFY(Done.snapshot_.error_); QCOMPARE(Done.snapshot_.error_->category_, ErrorCategory::Cancelled); QCOMPARE(Probe->finalizedAs_.load(), JobState::Cancelled);
     }
+    void providerProgressArrivesBeforeAdvanceReturns()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        std::atomic<bool> Release = false;
+        JobRequest Request; Request.operation_.providerInteractions_ = true;
+        auto Job = Scheduler.Submit(Request, std::make_unique<ScriptTask>(std::make_shared<Probe>(), [&](JobStepContext Context) {
+            JobProgress Progress{512, 1024, "input.bin"}; Progress.phase_ = JobPhase::BuildingArchive;
+            Progress.phaseItemsDone_ = 1; Progress.phaseItemsTotal_ = 3;
+            Context.publishProgress_(Progress);
+            while (!Release && !Context.operation_.stopToken_.stop_requested()) std::this_thread::sleep_for(1ms);
+            return JobStep{JobState::Completed};
+        }));
+        QVERIFY(Job.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().progress_.bytesDone_, uint64_t(512));
+        const auto Progress = Scheduler.Snapshot(Job.Value().id_).Value().progress_;
+        QCOMPARE(Progress.bytesTotal_, std::optional<uint64_t>(1024));
+        QCOMPARE(Progress.phaseItemsTotal_, std::optional<uint64_t>(3));
+        QVERIFY(Job.Value().completion_.wait_for(0ms) != std::future_status::ready);
+        Release = true; QVERIFY(Ready(Job.Value()));
+        QCOMPARE(Job.Value().completion_.get().snapshot_.state_, JobState::Completed);
+    }
     void providerContinuationKeepsWorkerState()
     {
         auto Events = std::make_shared<hc::commands::EventHub>(); JobScheduler Scheduler(Events, 1);

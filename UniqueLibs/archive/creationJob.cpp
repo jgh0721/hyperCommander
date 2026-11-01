@@ -17,17 +17,41 @@ public:
     {
         auto Step = advance(std::move(Context));
         if (!Step.progress_) Step.progress_ = JobProgress{};
-        auto& Progress = *Step.progress_;
+        present(*Step.progress_);
+        if (Step.next_ == JobState::Completed) {
+            Step.progress_->phase_ = JobPhase::Committing;
+            Step.progress_->phaseItemsDone_.reset(); Step.progress_->phaseItemsTotal_.reset();
+            if (!outputs_.empty()) {
+                Step.progress_->source_ = Serialize(outputs_.back().source_);
+                Step.progress_->destination_ = Serialize(outputs_.back().destination_);
+            }
+        }
+        return Step;
+    }
+    void present(JobProgress& Progress) const
+    {
         Progress.phase_ = phase_ == Phase::Build ? JobPhase::BuildingArchive : phase_ == Phase::Save ? JobPhase::SavingOutput
             : phase_ == Phase::Recheck ? JobPhase::Verifying : phase_ == Phase::Commit ? JobPhase::Committing : JobPhase::PreparingInputs;
         if (!outputs_.empty()) { Progress.outputIndex_ = group_; Progress.outputCount_ = outputs_.size(); }
         if (!outputs_.empty()) Progress.plannedItems_ = outputs_.size();
-        if (Progress.source_.empty() && !request_.value_.sourceRoot_.root_.empty()) Progress.source_ = Serialize(request_.value_.sourceRoot_);
-        if (group_ < outputs_.size()) Progress.destination_ = Serialize(outputs_[group_].destination_);
+        if (group_ < outputs_.size()) {
+            const auto& Plan = outputs_[group_];
+            if (!Plan.source_.root_.empty()) Progress.source_ = Serialize(Plan.source_);
+            Progress.destination_ = Serialize(Plan.destination_);
+            if (phase_ == Phase::PrepareInputs || phase_ == Phase::DirectoryMetadata) {
+                const auto Done = phase_ == Phase::DirectoryMetadata ? Plan.entries_.size() : std::min(index_, Plan.entries_.size());
+                Progress.phaseItemsDone_ = Done; Progress.phaseItemsTotal_ = Plan.entries_.size();
+                if (inputBytes_.size() == Plan.entries_.size() + 1) {
+                    Progress.bytesDone_ = inputBytes_[Done] + (copy_ ? Progress.currentBytes_ : 0);
+                    Progress.bytesTotal_ = inputBytes_.back();
+                }
+            } else if (phase_ == Phase::Recheck) {
+                Progress.phaseItemsDone_ = index_; Progress.phaseItemsTotal_ = Plan.entries_.size() + Plan.directories_.size();
+            }
+        }
         if (Progress.phase_ == JobPhase::SavingOutput && Progress.bytesTotal_) {
             Progress.currentBytes_ = Progress.bytesDone_; Progress.currentTotal_ = Progress.bytesTotal_;
         }
-        return Step;
     }
     JobStep advance(JobStepContext Context)
     {
@@ -67,6 +91,8 @@ public:
         if (phase_ == Phase::CreateStage) {
             temp_ = std::make_unique<QTemporaryDir>(QDir::tempPath() + "/hc-archive-create-XXXXXX");
             if (!temp_->isValid() || !QDir().mkdir(temp_->filePath("input"))) return failed({ErrorCategory::Unavailable, "archive-create-staging-directory"});
+            inputBytes_ = {0};
+            for (const auto& Entry : Plan.entries_) inputBytes_.push_back(inputBytes_.back() + (Entry.source_.entry_.directory_ ? 0 : Entry.source_.entry_.size_));
             index_ = 0; phase_ = Phase::PrepareInputs; return progress("입력 파일 준비");
         }
         if (phase_ == Phase::PrepareInputs) {
@@ -112,6 +138,16 @@ public:
         if (phase_ == Phase::Build) {
             auto Checked = RevalidateCreator(request_.creator_, Context.operation_); if (!Checked.HasValue()) return failed(Checked.Failure());
             auto Operation = Context.operation_;
+            Operation.reportProgress_ = [this, Publish = Context.publishProgress_, Previous = Operation.reportProgress_](const OperationContext::Progress& Value) {
+                if (Previous) Previous(Value);
+                if (!Publish) return;
+                JobProgress Progress;
+                Progress.bytesDone_ = Value.bytesDone_; Progress.bytesTotal_ = Value.bytesTotal_;
+                if (Value.itemsTotal_) { Progress.phaseItemsDone_ = Value.itemsDone_; Progress.phaseItemsTotal_ = Value.itemsTotal_; }
+                Progress.currentItem_ = Value.currentItem_; present(Progress);
+                if (Value.verifying_) Progress.phase_ = JobPhase::Verifying;
+                Publish(Progress);
+            };
             if (Operation.passwordPrompt_) Operation.passwordPrompt_ = [Prompt = Operation.passwordPrompt_, Target = Plan.destination_.root_](const std::string&, unsigned Attempt, const OperationContext& C) { return Prompt(Target, Attempt, C); };
             if (Operation.interactionStart_) Operation.interactionStart_ = [Prompt = Operation.interactionStart_, Target = Plan.destination_.root_](ProviderInteractionRequest R, const OperationContext& C) { R.subject_ = Target; return Prompt(R, C); };
             if (Operation.interactionPrompt_) Operation.interactionPrompt_ = [Prompt = Operation.interactionPrompt_, Target = Plan.destination_.root_](ProviderInteractionRequest R, const OperationContext& C) { R.subject_ = Target; return Prompt(R, C); };
@@ -172,6 +208,7 @@ private:
     std::unique_ptr<QTemporaryDir> temp_; std::unique_ptr<IJobTask> copy_; bool innerCommitting_ = false;
     DestinationExpectation expected_; std::shared_ptr<IWritableStorage> writer_; std::unique_ptr<IWriteSession> output_;
     PreparedArchiveOutput prepared_; std::unique_ptr<QFile> file_; std::vector<Error> cleanup_;
+    std::vector<uint64_t> inputBytes_;
 };
 }
 Result<PreparedJob> PrepareCreation(CreateJobRequest Request, OperationContext Context)
@@ -193,7 +230,7 @@ Result<PreparedJob> PrepareCreation(CreateJobRequest Request, OperationContext C
     Job.deferred_ = Request.value_.schedule_ == plugins::ArchiveCreateSchedule::Queued;
     Job.resourceLanes_ = {FileOperationLane(Request.value_.output_), "archive-creator:" + Request.value_.creator_.id_};
     Job.metadata_.destination_ = Request.value_.output_.root_; Job.metadata_.options_ = Request.value_.format_ + " · " + Request.value_.creator_.displayName_;
-    Job.metadata_.source_ = Request.value_.sourceRoot_.root_;
+    Job.metadata_.source_ = Request.sources_.size() == 1 ? Serialize(Request.sources_.front().entry_.locator_) : Request.value_.sourceRoot_.root_;
     Job.metadata_.kind_ = Request.value_.composition_.separateArchives_ ? JobKind::ArchiveSeparate
         : Request.value_.format_ == "iso" ? JobKind::IsoCreate : JobKind::ArchiveCreate;
     return PreparedJob{std::move(Job), std::make_unique<CreateTask>(std::move(Request))};

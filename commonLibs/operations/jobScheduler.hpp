@@ -51,6 +51,7 @@ namespace hc::operations
         JobPhase phase_ = JobPhase::None;
         std::optional<std::uint64_t> itemsDone_, outputIndex_, outputCount_;
         std::uint32_t activeFiles_ = 0;
+        std::optional<std::uint64_t> phaseItemsDone_, phaseItemsTotal_;
     };
     struct ItemOutcome
     {
@@ -128,6 +129,8 @@ namespace hc::operations
         std::optional<InteractionAnswer> answer_;
         std::uint32_t retryAttempt_ = 0;
         bool committing_ = false;
+        // Publish while a provider call is still running on its continuation.
+        std::function<void(const JobProgress&)> publishProgress_;
     };
     struct JobStep
     {

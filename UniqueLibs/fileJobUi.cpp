@@ -139,7 +139,7 @@ namespace
         switch (Kind) {
         case JobKind::Move: return {JobPhase::Copying, JobPhase::Verifying, JobPhase::RemovingSource};
         case JobKind::ArchiveCreate: case JobKind::ArchiveSeparate: case JobKind::IsoCreate:
-            return {JobPhase::PreparingInputs, JobPhase::BuildingArchive, JobPhase::SavingOutput, JobPhase::Committing};
+            return {JobPhase::PreparingInputs, JobPhase::BuildingArchive, JobPhase::Verifying, JobPhase::SavingOutput, JobPhase::Committing};
         case JobKind::ArchiveAdd: case JobKind::ArchiveMove: case JobKind::ArchiveDelete:
         case JobKind::ArchiveRename: case JobKind::ArchiveMakeDirectory:
             return {JobPhase::Preparing, JobPhase::RewritingArchive, JobPhase::Committing};
@@ -165,7 +165,7 @@ namespace
             || Kind == JobKind::RenameUndo || Kind == JobKind::RenameRedo || Kind == JobKind::RenameResume || Kind == JobKind::RenameRestore)
             return RateMode::Items;
         if (Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate || Kind == JobKind::IsoCreate)
-            return Progress.phase_ == JobPhase::SavingOutput ? RateMode::Bytes : RateMode::None;
+            return Progress.phase_ == JobPhase::SavingOutput || Progress.bytesTotal_ ? RateMode::Bytes : RateMode::None;
         if (Kind == JobKind::Copy || Kind == JobKind::Extract || Kind == JobKind::Unknown) return RateMode::Bytes;
         if (Kind == JobKind::Move) {
             if (Progress.phase_ == JobPhase::RemovingSource) return RateMode::None;
@@ -1048,6 +1048,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
         || Kind == JobKind::RenameUndo || Kind == JobKind::RenameRedo || Kind == JobKind::RenameResume || Kind == JobKind::RenameRestore;
     const bool Create = Kind == JobKind::MakeFile || Kind == JobKind::MakeDirectory || Kind == JobKind::ArchiveMakeDirectory;
     const bool Security = Kind == JobKind::SecurityChange || Kind == JobKind::SecurityRestore;
+    const bool ArchiveCreation = Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate || Kind == JobKind::IsoCreate;
     auto Operation = OperationText(Kind);
     if (Operation.isEmpty()) Operation = jobs_->currentText().section(QStringLiteral(" · "), 0, 0);
     if (Operation.isEmpty()) Operation = tr("파일 작업");
@@ -1125,32 +1126,39 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
             Bar->setRange(0, Suspended ? 1000 : 0); Bar->setValue(0); Percent->setText(QStringLiteral("—"));
         } else {
             Bar->setRange(0, 1000);
-            const auto Value = Total && *Total ? int(std::min(1000.0, 1000.0 * Done / *Total)) : Snapshot.state_ == JobState::Completed ? 1000 : 0;
-            Bar->setValue(Value); Percent->setText(Total ? QString::number(Value / 10) + '%' : QStringLiteral("—"));
+            const auto Value = Snapshot.state_ == JobState::Completed ? 1000 : Total && *Total ? int(std::min(1000.0, 1000.0 * Done / *Total)) : 0;
+            Bar->setValue(Value); Percent->setText(Total || Snapshot.state_ == JobState::Completed ? QString::number(Value / 10) + '%' : QStringLiteral("—"));
         }
         Bar->setFormat({});
     };
     if (Current) {
-        currentTitle_->setText(Kind == JobKind::ArchiveSeparate ? tr("현재 출력 저장") : tr("현재 파일"));
+        currentTitle_->setText(Kind == JobKind::ArchiveSeparate && Progress.phase_ == JobPhase::SavingOutput ? tr("현재 출력 저장") : tr("현재 파일"));
         SetBar(currentProgress_, currentPercent_, Progress.currentBytes_, Progress.currentTotal_);
         auto Text = tr("현재 파일 %1 / %2").arg(SizeText(Progress.currentBytes_), SizeText(*Progress.currentTotal_));
         if (Progress.activeFiles_ > 1) Text += tr(" · 병렬 처리 %1개").arg(Progress.activeFiles_);
         if (Kind == JobKind::ArchiveSeparate && Progress.outputIndex_ && Progress.outputCount_) Text += tr(" · %1 / %2번째 출력").arg(*Progress.outputIndex_ + 1).arg(*Progress.outputCount_);
         currentMetrics_->setText(Text);
     }
-    const bool OutputCount = Kind == JobKind::ArchiveSeparate;
-    const auto Total = OutputCount ? Progress.outputCount_ : Bytes ? Progress.bytesTotal_ : Mode == RateMode::None ? std::optional<uint64_t>{} : Progress.plannedItems_;
-    const auto Done = OutputCount ? Progress.outputIndex_.value_or(Snapshot.completedItems_ + Snapshot.skippedItems_)
-        : Bytes ? Progress.bytesDone_ : ProcessedItems(Snapshot);
-    SetBar(progress_, overallPercent_, Done, Total);
-    const bool PhaseTotal = Kind == JobKind::ArchiveCreate || Kind == JobKind::IsoCreate || (Mode == RateMode::None && !Total);
+    const auto Total = Bytes ? Progress.bytesTotal_ : Mode == RateMode::None ? std::optional<uint64_t>{} : Progress.plannedItems_;
+    const auto Done = Bytes ? Progress.bytesDone_ : ProcessedItems(Snapshot);
+    if (ArchiveCreation && Progress.phaseItemsTotal_ && (!Bytes || (Total && !*Total)))
+        SetBar(progress_, overallPercent_, Progress.phaseItemsDone_.value_or(0), Progress.phaseItemsTotal_);
+    else SetBar(progress_, overallPercent_, Done, Total);
+    const bool PhaseTotal = ArchiveCreation || (Mode == RateMode::None && !Total);
     overallTitle_->setText(PhaseTotal ? tr("현재 단계 · %1").arg(PhaseText(Progress.phase_).isEmpty() ? JobStatusText(Snapshot) : PhaseText(Progress.phase_)) : tr("전체 진행"));
     QString Overall;
-    if (OutputCount) Overall = tr("생성 완료 %1 / %2개").arg(Done).arg(Total.value_or(0));
-    else if (Bytes) Overall = Total ? tr("처리량 %1 / %2").arg(SizeText(Done), SizeText(*Total))
+    if (Bytes) Overall = Total ? tr("처리량 %1 / %2").arg(SizeText(Done), SizeText(*Total))
         : tr("처리량 %1 · 전체 크기 집계 중").arg(SizeText(Done));
     else if (Total) Overall = tr("처리 항목 %1 / %2개").arg(Done).arg(*Total);
     else Overall = PhaseText(Progress.phase_).isEmpty() ? tr("전체 집계 중") : PhaseText(Progress.phase_) + tr(" 중입니다.");
+    if (ArchiveCreation) {
+        Overall = tr("생성 완료 %1 / %2개").arg(Snapshot.completedItems_).arg(Progress.outputCount_.value_or(0));
+        if (Progress.outputIndex_ && Progress.outputCount_ && *Progress.outputIndex_ < *Progress.outputCount_)
+            Overall += tr(" · %1번째 출력").arg(*Progress.outputIndex_ + 1);
+        if (Progress.phaseItemsTotal_) Overall += tr(" · 입력 항목 %1 / %2개").arg(Progress.phaseItemsDone_.value_or(0)).arg(*Progress.phaseItemsTotal_);
+        if (Bytes && Progress.bytesTotal_) Overall += tr(" · %1 / %2").arg(SizeText(Progress.bytesDone_), SizeText(*Progress.bytesTotal_));
+        if (Snapshot.skippedItems_) Overall += tr(" · 건너뜀 %1개").arg(Snapshot.skippedItems_);
+    }
     if (Delete && Progress.deletedFiles_) Overall += tr(" · 삭제한 파일 %1개").arg(*Progress.deletedFiles_);
     if (Delete && Progress.discoveredItems_ && !Progress.plannedItems_) Overall += tr(" · 확인한 항목 %1개 · 전체 집계 중").arg(*Progress.discoveredItems_);
     overallMetrics_->setText(Overall);
@@ -1162,7 +1170,8 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const auto Now = IsTerminal(Snapshot.state_) ? Snapshot.updated_ : std::chrono::steady_clock::now();
     const auto Elapsed = Snapshot.submitted_ == std::chrono::steady_clock::time_point{} ? 0LL : std::chrono::duration_cast<std::chrono::seconds>(Now - Snapshot.submitted_).count();
     const auto RateText = Bytes ? fm::ui::TransferGraph::formatRate(Rate) : QLocale().toString(Rate, 'f', 1) + (Mode == RateMode::Files ? tr(" 파일/초") : tr(" 항목/초"));
-    metrics_->setText((Mode == RateMode::None ? QString{} : tr("속도 %1   ").arg(RateText)) + tr("남은 시간 %1   경과 %2초").arg(Remaining).arg(Elapsed));
+    metrics_->setText((Mode == RateMode::None ? QString{} : tr("속도 %1   ").arg(RateText))
+        + (ArchiveCreation ? tr("현재 단계 남은 시간 %1   경과 %2초") : tr("남은 시간 %1   경과 %2초")).arg(Remaining).arg(Elapsed));
     const bool WrapMetrics = overallMetrics_->fontMetrics().horizontalAdvance(Overall) + metrics_->fontMetrics().horizontalAdvance(metrics_->text()) + 12 > dialog_->width() - 40;
     metrics_->setWordWrap(WrapMetrics && metrics_->fontMetrics().horizontalAdvance(metrics_->text()) > dialog_->width() - 40);
     metricsLayout_->setDirection(WrapMetrics ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);

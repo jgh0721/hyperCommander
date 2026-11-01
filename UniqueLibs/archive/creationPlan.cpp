@@ -94,7 +94,9 @@ struct CreationPlanner::State {
     explicit State(PlanRequest Request) : request_(std::move(Request)) {}
     JobStep progress() const {
         JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{0, {}, "압축 파일 목록 확인"};
-        Step.progress_->discoveredItems_ = discovered_; return Step;
+        Step.progress_->discoveredItems_ = discovered_;
+        if (request_.sources_.size() == 1) Step.progress_->source_ = Serialize(request_.sources_.front().entry_.locator_);
+        return Step;
     }
     JobStep conflict() const {
         auto Step = progress(); Step.next_ = JobState::WaitingForUser;
@@ -141,7 +143,9 @@ JobStep CreationPlanner::Advance(JobStepContext Context)
                 Output.root_ = QDir(QString::fromStdString(Output.root_)).filePath(FileName).toStdString();
                 if (R.completedOutputs_.contains(Serialize(Output))) continue;
                 Group = S.outputs_.size(); S.outputs_.push_back({Output});
+                S.outputs_.back().source_ = Source.entry_.locator_;
             } else if (R.completedOutputs_.contains(Serialize(R.destination_))) continue;
+            else S.outputs_[0].source_ = R.sources_.size() == 1 ? Source.entry_.locator_ : R.sourceRoot_;
             const auto Member = Source.entry_.directory_ && (!R.composition_.preservePaths_ || R.composition_.OmitSelectedFolderRoot()) ? QString{} : Name;
             S.pending_.push_back({Source, Member, Group, 0});
         }
