@@ -698,7 +698,14 @@ bool ImageReadingView::paintGroup(QPainter &Painter)
 }
 void ImageReadingView::prefetch()
 {
-    if (suspended_ || !book_ || workers_ || !sourceStops_.isEmpty() || animation_->Playing()) return;
+    if (suspended_ || !book_ || animation_->Playing()) return;
+    // Network reads must not wait for CPU tile refinement. Start nearby pages
+    // before they enter the viewport; requestSource still limits I/O to two jobs.
+    if (mode_ == Webtoon) {
+        for (const auto& P : placements()) requestSource(P.page_);
+        return;
+    }
+    if (workers_ || !sourceStops_.isEmpty()) return;
     if (mode_ != Webtoon && (transitionPending_ || presentedPage_ != index_ || pageErrors_.contains(index_))) return;
     const int Next=index_+groupCount(index_), Previous=previousGroups_.value(index_,index_>=2 && groupCount(index_-2)==2 ? index_-2 : index_-1);
     const QList<int> Groups = direction_ > 0 ? QList<int>{Next,Previous} : QList<int>{Previous,Next};
@@ -736,50 +743,52 @@ void ImageReadingView::paintEvent(QPaintEvent *)
         return;
     }
     const qreal Dpr = devicePixelRatioF();
+    QList<PresentedTile> Next;
+    bool Ready = true;
+    QList<Placement> Errors;
     for (const auto &P : placements())
     {
         const auto Visible = P.rect_.intersected(QRectF(viewport()->rect()));
-        if (Visible.isEmpty())
-            continue;
-        // Paint one continuous base before any finished tiles. A missing tile
-        // must not repaint the whole page over tiles already drawn this frame.
-        auto Preview=previews_.value(P.page_);
-        if(Preview.isNull())if(auto* Source=sources_.object(P.page_))Preview=*Source;
-        if(!Preview.isNull()) {
-            Painter.save();Painter.setClipRect(Visible);Painter.drawImage(P.rect_,Preview);Painter.restore();
-        }
-        const int FirstY = qMax(0, int((Visible.top() - P.rect_.top()) * Dpr) / TileHeight);
-        const int LastY = qMax(FirstY, int((Visible.bottom() - P.rect_.top()) * Dpr) / TileHeight);
-        const int FirstX = qMax(0, int((Visible.left() - P.rect_.left()) * Dpr) / TileHeight);
-        const int LastX = qMax(FirstX, int((Visible.right() - P.rect_.left()) * Dpr) / TileHeight);
-        for (int Y = FirstY; Y <= LastY; ++Y)
-            for (int X = FirstX; X <= LastX; ++X)
+        if (Visible.isEmpty()) continue;
+        if (pageErrors_.contains(P.page_)) { Errors.append(P); continue; }
+        auto Preview = previews_.value(P.page_);
+        if (Preview.isNull()) if (auto* Source = sources_.object(P.page_)) Preview = *Source;
+        if (!Preview.isNull()) Next.append({P.rect_, Preview});
+        for (const auto &Tile : visibleTiles(P))
+        {
+            if (auto *Image = tiles_.object(renderKey(P, Tile)))
+                Next.append({QRectF(P.rect_.left() + Tile.x() / Dpr, P.rect_.top() + Tile.y() / Dpr,
+                                   Tile.width() / Dpr, Tile.height() / Dpr), *Image});
+            else
             {
-                const QRect Tile(X * TileHeight, Y * TileHeight,
-                                 qMin(TileHeight, qRound(P.rect_.width() * Dpr) - X * TileHeight),
-                                 qMin(TileHeight, qRound(P.rect_.height() * Dpr) - Y * TileHeight));
-                if (Tile.isEmpty())
-                    continue;
-                const auto CacheKey = renderKey(P, Tile);
-                if (auto *Image = tiles_.object(CacheKey))
-                    Painter.drawImage(QRectF(P.rect_.left() + Tile.x() / Dpr, P.rect_.top() + Tile.y() / Dpr,
-                                             Tile.width() / Dpr, Tile.height() / Dpr),
-                                      *Image);
-                else
-                {
-                    if(Preview.isNull())
-                    {
-                        Painter.setPen(palette().color(QPalette::Text));
-                        Painter.drawText(Visible, Qt::AlignCenter, pageErrors_.contains(P.page_)?tr("이 페이지를 읽지 못했습니다.\n다른 페이지로 이동하거나 마우스 오른쪽 메뉴에서 다시 읽을 수 있습니다.\n%1").arg(pageErrors_.value(P.page_)):tr("불러오는 중…"));
-                    }
-                    request(P, Tile);
-                }
+                if (Preview.isNull()) Ready = false;
+                request(P, Tile);
             }
+        }
     }
-    if(!previews_.isEmpty() || !book_->listingWarning_.isEmpty() || !pageWarnings_.value(index_).isEmpty()){
+    // A wheel step may expose a page whose network read has not completed.
+    // Keep the last complete viewport until all visible pages have pixels,
+    // rather than flashing the background between consecutive scroll frames.
+    if (Ready || presentedTiles_.isEmpty()) {
+        presentedTiles_ = std::move(Next);
+        if (Ready) { presentedPage_ = index_; transitionPending_ = false; }
+    }
+    for (const auto &Tile : presentedTiles_) Painter.drawImage(Tile.rect_, Tile.image_);
+    if (Ready) for (const auto &P : Errors) {
+        Painter.setPen(palette().color(QPalette::Text));
+        Painter.drawText(P.rect_.intersected(QRectF(viewport()->rect())), Qt::AlignCenter,
+            tr("이 페이지를 읽지 못했습니다.\n다른 페이지로 이동하거나 마우스 오른쪽 메뉴에서 다시 읽을 수 있습니다.\n%1").arg(pageErrors_.value(P.page_)));
+    }
+    if (presentedTiles_.isEmpty() && Errors.isEmpty()) {
+        Painter.setPen(palette().color(QPalette::Text));
+        Painter.drawText(viewport()->rect(), Qt::AlignCenter, tr("불러오는 중…"));
+    }
+    // Per-page previews are normal while scrolling; a transient top banner
+    // would itself flash each time a nearby source starts or completes.
+    if(!book_->listingWarning_.isEmpty() || !pageWarnings_.value(index_).isEmpty()){
         const QRect Banner(0,0,viewport()->width(),44);Painter.fillRect(Banner,palette().brush(QPalette::Base));
         Painter.setPen(palette().color(QPalette::Text));Painter.drawText(Banner.adjusted(8,2,-8,-2),Qt::AlignLeft|Qt::AlignVCenter|Qt::TextWordWrap,
-            !previews_.isEmpty()?tr("파일을 읽는 중입니다. 임시 미리보기를 표시합니다."):tr("손상되거나 불완전한 파일에서 읽을 수 있는 내용만 표시하고 있습니다."));
+            tr("손상되거나 불완전한 파일에서 읽을 수 있는 내용만 표시하고 있습니다."));
     }
 }
 bool ImageReadingView::event(QEvent *E)

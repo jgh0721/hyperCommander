@@ -28,9 +28,9 @@ public:
     QByteArray SerializeContent(const QByteArray& Format = "PNG", int Quality = -1) const;
     void CommitContent();
     bool IsEditing() const { return pendingEdit_; }
-    bool IsRendering() const { return rendering_ || previewing_ || pendingEdit_; }
+    bool IsRendering() const { return rendering_ || previewing_ || pendingEdit_ || renderTimer_.isActive() || fitUpdatePending_; }
     bool HasDisplayImage() const { return m_imageLabel && !m_imageLabel->pixmap().isNull(); }
-    void CancelWork() { renderStop_->request_stop();previewStop_->request_stop();editStop_->request_stop(); }
+    void CancelWork() { renderTimer_.stop();renderStop_->request_stop();previewStop_->request_stop();editStop_->request_stop(); }
     QString RenderError() const { return renderError_; }
     void SetDisplayFilter(const QString& Filter);
     QString DisplayFilter() const { return filter_; }
@@ -128,6 +128,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
+    QTimer renderTimer_;
     hc::document::ImageRenderRequest renderRequest() const;
     bool startImageEdit(hc::document::ImageRenderRequest Request,const QString& Label);
     bool rendering_ = false, previewing_ = false, pendingEdit_ = false, displayFinal_ = false;

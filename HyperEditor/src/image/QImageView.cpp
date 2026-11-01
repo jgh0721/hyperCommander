@@ -17,6 +17,7 @@
 #include <QBuffer>
 #include <QClipboard>
 #include <QPainter>
+#include <QPaintEvent>
 #include <QActionGroup>
 #include <QDir>
 #include <QFile>
@@ -59,12 +60,25 @@ class ImageCanvasLabel final : public QLabel
 public:
     using QLabel::QLabel;
     std::function<void()> presented_;
+    QSize canvasSize_;
+    QPointF tileOrigin_;
+    QImage source_;
 protected:
     void paintEvent(QPaintEvent* Event) override
     {
         if(pixmap().isNull()){QLabel::paintEvent(Event);return;}
         hc::document::ImageTraceSpan Trace("view.paint",property("imageSource").toString());
-        QLabel::paintEvent(Event);
+        if(canvasSize_.isEmpty()) QLabel::paintEvent(Event);
+        else {
+            QPainter Painter(this);
+            const auto Missing=Event->region().subtracted(QRegion(QRectF(tileOrigin_,pixmap().deviceIndependentSize()).toAlignedRect()));
+            if(!Missing.isEmpty()) {
+                Painter.save();Painter.setClipRegion(Missing);
+                Painter.drawImage(QRectF(QPointF(),QSizeF(canvasSize_)),source_);
+                Painter.restore();
+            }
+            Painter.drawPixmap(tileOrigin_,pixmap());
+        }
         if(presented_)presented_();
     }
 };
@@ -133,6 +147,8 @@ QImageView::QImageView(QWidget* parent)
     , m_compositeDragStartRotation(0.0)
 {
     setFocusPolicy(Qt::StrongFocus);
+    renderTimer_.setSingleShot(true);renderTimer_.setInterval(16);
+    connect(&renderTimer_,&QTimer::timeout,this,&QImageView::updateDisplay);
     m_undoStack = new QUndoStack(this);
     m_undoStack->setUndoLimit(2);
     m_slideshowTimer = new QTimer(this);
@@ -150,6 +166,12 @@ QImageView::QImageView(QWidget* parent)
     m_scrollArea->setWidgetResizable(true);
     m_scrollArea->setAlignment(Qt::AlignCenter);
     m_scrollArea->viewport()->installEventFilter(this);  // 스크롤 영역 이벤트도 처리
+    for(auto* Bar:{m_scrollArea->horizontalScrollBar(),m_scrollArea->verticalScrollBar()})
+        connect(Bar,&QScrollBar::valueChanged,this,[this]{
+            if(fitUpdatePending_)return;
+            fitUpdatePending_=true;
+            QTimer::singleShot(0,this,[this]{fitUpdatePending_=false;updateDisplay();});
+        });
 
 
     layout()->addWidget(m_scrollArea);
@@ -245,6 +267,9 @@ void QImageView::closeFile()
     m_dirFiles.clear();
     m_dirIndex = 0;
     m_undoStack->clear(); m_imageLabel->clear();
+    auto* Canvas=static_cast<ImageCanvasLabel*>(m_imageLabel);
+    Canvas->source_={};Canvas->canvasSize_={};Canvas->tileOrigin_={};
+    renderTimer_.stop();
     stopSlideshow();
     emit fileClosed();
     updateCopyAvailability();
@@ -269,9 +294,9 @@ void QImageView::setTheme(Theme theme)
 
 // ═══════════════════════════════════════════════════════════
 // 줌/맞춤
-void QImageView::setFitMode(FitMode mode) { m_fitMode = mode; updateDisplay(); emit viewStateChanged(); }
+void QImageView::setFitMode(FitMode mode) { m_fitMode = mode; renderTimer_.start(); emit viewStateChanged(); }
 QImageView::FitMode QImageView::fitMode() const { return m_fitMode; }
-void QImageView::setZoomLevel(qreal pct)  { m_zoomLevel = qBound(10.0, pct, 1600.0); m_fitMode = OriginalSize; updateDisplay(); emit viewStateChanged(); }
+void QImageView::setZoomLevel(qreal pct)  { m_zoomLevel = qBound(10.0, pct, 1600.0); m_fitMode = OriginalSize; renderTimer_.start(); emit viewStateChanged(); }
 qreal QImageView::zoomLevel() const       { return m_zoomLevel; }
 
 bool QImageView::canCopy() const
@@ -349,6 +374,7 @@ void QImageView::setEditTool(EditTool tool)
         m_imageLabel->setCursor(Qt::ArrowCursor);
     // Crop 선택 해제
     if (m_rubberBand) m_rubberBand->hide();
+    updateDisplay();
     emit viewStateChanged();
 }
 
@@ -406,7 +432,8 @@ QPoint QImageView::toImageCoord(const QPoint& labelPos) const
         return labelPos;
 
     const QSize labelSz = m_imageLabel->size();
-    const QSize pmSz    = pm.size() / pm.devicePixelRatio();
+    const auto* Canvas=static_cast<const ImageCanvasLabel*>(m_imageLabel);
+    const QSize pmSz = Canvas->canvasSize_.isEmpty()?pm.size()/pm.devicePixelRatio():Canvas->canvasSize_;
 
     const int offsetX = (labelSz.width()  - pmSz.width())  / 2;
     const int offsetY = (labelSz.height() - pmSz.height()) / 2;
@@ -428,7 +455,8 @@ QPointF QImageView::toImageCoord(const QPointF& labelPos) const
         return labelPos;
 
     const QSize labelSz = m_imageLabel->size();
-    const QSize pmSz    = pm.size() / pm.devicePixelRatio();
+    const auto* Canvas=static_cast<const ImageCanvasLabel*>(m_imageLabel);
+    const QSize pmSz = Canvas->canvasSize_.isEmpty()?pm.size()/pm.devicePixelRatio():Canvas->canvasSize_;
 
     const int offsetX = (labelSz.width()  - pmSz.width())  / 2;
     const int offsetY = (labelSz.height() - pmSz.height()) / 2;
@@ -449,7 +477,8 @@ QPoint QImageView::toWidgetCoord(const QPoint& imagePos) const
         return imagePos;
 
     const QSize labelSz = m_imageLabel->size();
-    const QSize pmSz    = pm.size() / pm.devicePixelRatio();
+    const auto* Canvas=static_cast<const ImageCanvasLabel*>(m_imageLabel);
+    const QSize pmSz = Canvas->canvasSize_.isEmpty()?pm.size()/pm.devicePixelRatio():Canvas->canvasSize_;
 
     const int offsetX = (labelSz.width()  - pmSz.width())  / 2;
     const int offsetY = (labelSz.height() - pmSz.height()) / 2;
@@ -468,7 +497,8 @@ QPointF QImageView::toWidgetCoord(const QPointF& imagePos) const
         return imagePos;
 
     const QSize labelSz = m_imageLabel->size();
-    const QSize pmSz    = pm.size() / pm.devicePixelRatio();
+    const auto* Canvas=static_cast<const ImageCanvasLabel*>(m_imageLabel);
+    const QSize pmSz = Canvas->canvasSize_.isEmpty()?pm.size()/pm.devicePixelRatio():Canvas->canvasSize_;
 
     const int offsetX = (labelSz.width()  - pmSz.width())  / 2;
     const int offsetY = (labelSz.height() - pmSz.height()) / 2;
@@ -643,6 +673,7 @@ void QImageView::updateDisplay()
     hc::document::ImageTraceSpan DisplayTrace("view.publish");
     auto Request=renderRequest();Request.targetColor_=hc::document::ImageDisplayColorSpace(screen());const auto Key=hc::document::ImageCacheKey(contentRevision_,Request,devicePixelRatioF());
     Request.traceSource_=m_filePath;
+    displayFinal_=Key==renderedKey_&&!renderedImage_.isNull();
     // A hidden host can initially have a tiny viewport. A failed render belongs
     // to that size/transform, and must not suppress rendering after presentation.
     if(!rendering_ && !renderedKey_.isEmpty() && Key!=renderedKey_)renderError_.clear();
@@ -650,7 +681,9 @@ void QImageView::updateDisplay()
     const auto PreviewKey=hc::document::ImageCacheKey(contentRevision_,PreviewRequest,devicePixelRatioF());
     if(previewing_&&PreviewKey!=previewRunningKey_)previewStop_->request_stop();
     if(rendering_&&Key!=renderRunningKey_)renderStop_->request_stop();
-    if(PreviewKey!=previewKey_&&!previewing_){
+    const bool NeedsPreview=!Request.sourceToOutput_.isIdentity()
+        && qint64(Request.source_.width())*Request.source_.height()>1024*1024;
+    if(NeedsPreview&&PreviewKey!=previewKey_&&!previewing_){
         previewing_=true;previewRunningKey_=PreviewKey;previewStop_=std::make_shared<std::stop_source>();
         const auto Stop=previewStop_;auto* Watcher=new QFutureWatcher<QImage>(this);
         connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,PreviewKey]{
@@ -665,12 +698,21 @@ void QImageView::updateDisplay()
         Watcher->setFuture(QtConcurrent::run(imagePool_.get(),[PreviewRequest,Stop]{
             hc::document::ImageTraceSpan Trace("image.preview",PreviewRequest.traceSource_);
             if(Stop->stop_requested())return QImage{};
-            auto Image=hc::document::ImageColorSource(PreviewRequest.source_.scaled(PreviewRequest.outputSize_,Qt::IgnoreAspectRatio,Qt::SmoothTransformation));
+            QImage Image;
+            if(PreviewRequest.tile_.isEmpty())Image=PreviewRequest.source_.scaled(PreviewRequest.outputSize_,Qt::IgnoreAspectRatio,Qt::SmoothTransformation);
+            else {
+                Image=QImage(PreviewRequest.tile_.size(),QImage::Format_ARGB32_Premultiplied);
+                Image.fill(Qt::transparent);
+                QPainter Painter(&Image);Painter.setRenderHint(QPainter::SmoothPixmapTransform);
+                Painter.drawImage(QRect(-PreviewRequest.tile_.topLeft(),PreviewRequest.outputSize_),PreviewRequest.source_);
+                Painter.end();Image.setColorSpace(PreviewRequest.source_.colorSpace());
+            }
+            Image=hc::document::ImageColorSource(Image);
             Image=Image.convertedToColorSpace(PreviewRequest.targetColor_,QImage::Format_RGBA8888);
             return Stop->stop_requested()?QImage{}:Image;
         }));
     }
-    if(!rendering_&&PreviewKey==previewKey_&&Key!=renderedKey_&&renderError_.isEmpty()) {
+    if(!rendering_&&(!NeedsPreview||PreviewKey==previewKey_)&&Key!=renderedKey_&&renderError_.isEmpty()) {
         renderRunningKey_=Key;
         rendering_=true;renderStop_=std::make_shared<std::stop_source>();auto Work=Request;Work.targetColor_=hc::document::ImageDisplayColorSpace(screen());Work.stop_=renderStop_->get_token();
         auto* Watcher=new QFutureWatcher<hc::document::ImageRenderResult>(this);
@@ -702,12 +744,23 @@ void QImageView::updateDisplay()
         return;
     }
 
-    if (m_fitMode == OriginalSize) {
+    auto* Canvas=static_cast<ImageCanvasLabel*>(m_imageLabel);
+    Canvas->canvasSize_={};Canvas->tileOrigin_={};Canvas->source_={};
+    if(!Request.tile_.isEmpty()) {
+        Canvas->canvasSize_=Request.outputSize_/devicePixelRatioF();
+        Canvas->tileOrigin_=QPointF(Request.tile_.topLeft())/devicePixelRatioF();
+        Canvas->source_=m_displayImage;
+        m_scrollArea->setWidgetResizable(false);
+        m_imageLabel->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Fixed);
+        m_imageLabel->setPixmap(pixmap);
+        m_imageLabel->resize(Canvas->canvasSize_);
+        m_imageLabel->update();
+    } else if (m_fitMode == OriginalSize) {
         // 원본/줌 — 스크롤 가능하도록 라벨 크기 = 이미지 크기
         m_scrollArea->setWidgetResizable(false);
         m_imageLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         m_imageLabel->setPixmap(pixmap);
-        m_imageLabel->resize(img.size());
+        m_imageLabel->resize(img.deviceIndependentSize().toSize());
     } else {
         // 맞춤 모드 — 라벨이 viewport를 채우고 중앙 정렬
         m_scrollArea->setWidgetResizable(true);
@@ -1476,6 +1529,13 @@ hc::document::ImageRenderRequest QImageView::renderRequest() const
     }
     Request.outputSize_=(m_fitMode==OriginalSize?m_displayImage.size()*(m_zoomLevel/100):(Logical*devicePixelRatioF())).expandedTo(QSize(1,1));
     Request.sourceToOutput_.scale(double(Request.outputSize_.width())/m_displayImage.width(),double(Request.outputSize_.height())/m_displayImage.height());
+    const auto Visible=(Viewport*devicePixelRatioF()).expandedTo(QSize(1,1));
+    if(m_editTool==None&&!m_compositeMode
+        && (Request.outputSize_.width()>Visible.width()||Request.outputSize_.height()>Visible.height())) {
+        const QPoint Origin(qBound(0,qRound(m_scrollArea->horizontalScrollBar()->value()*devicePixelRatioF()),qMax(0,Request.outputSize_.width()-Visible.width())),
+                            qBound(0,qRound(m_scrollArea->verticalScrollBar()->value()*devicePixelRatioF()),qMax(0,Request.outputSize_.height()-Visible.height())));
+        Request.tile_=QRect(Origin,Visible).adjusted(-64,-64,64,64).intersected(QRect(QPoint(),Request.outputSize_));
+    }
     return Request;
 }
 

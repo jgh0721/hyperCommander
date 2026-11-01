@@ -869,7 +869,8 @@ namespace hc::document
             update(); tryFinishClose();
         });
         auto Recovery = recovery_;
-        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, Unlimited=hosted_] {
+        const QSize PreviewBounds=(Tab->pane_->size()*Tab->pane_->devicePixelRatioF()).expandedTo(QSize(256,256));
+        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, PreviewBounds, Unlimited=hosted_] {
             storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
             if (!RecoveryPath.isEmpty()) {
                 auto Record = Recovery->Read(RecoveryPath.toStdString()); if (!Record.HasValue()) return storage::Result<TextInput>{Record.Failure()};
@@ -880,7 +881,7 @@ namespace hc::document
             }
             return ReadDocumentFile(Path, Context, Unlimited,[Progress](QImage Image){
                 std::lock_guard Lock(Progress->mutex_);Progress->image_=std::move(Image);
-            });
+            },PreviewBounds);
         })); update();
     }
     QJsonObject DocumentWorkspaceWidget::prepareSave(const std::shared_ptr<Tab>& Tab)

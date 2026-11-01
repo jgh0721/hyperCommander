@@ -57,9 +57,11 @@ namespace hc::document
             return Bytes;
         }
     }
-    Result<TextInput> ReadDocumentFile(const QString& Path, OperationContext Context, bool Unlimited, std::function<void(QImage)> Preview)
+    Result<TextInput> ReadDocumentFile(const QString& Path, OperationContext Context, bool Unlimited, std::function<void(QImage)> Preview, QSize PreviewBounds)
     {
         ImageTraceSpan Trace("document.read",Path);
+        if(PreviewBounds.isEmpty())PreviewBounds=QSize(1024,1024);
+        PreviewBounds=PreviewBounds.boundedTo(QSize(4096,4096));
         if(!QFileInfo(Path).isAbsolute())return Invalid("document-absolute-path-required");
         if(IsImageBook(Path)||QFileInfo(Path).isDir()) {
             auto Book=OpenImageBook(Path,Context,false);if(!Book.HasValue())return Book.Failure();
@@ -123,7 +125,8 @@ namespace hc::document
             if(!Size.isEmpty()) {
                 // Qt and the OS report allocation failure; image dimensions are not a product quota.
                 QImageReader::setAllocationLimit(0);
-                if(Preview){auto Image=ImagePartialDecoder::DecodeCompletePreview(Input.bytes_);if(!Image.isNull())Preview(std::move(Image));}
+                bool PreviewPublished=false;
+                if(Preview){auto Image=ImagePartialDecoder::DecodeCompletePreview(Input.bytes_,PreviewBounds);if(!Image.isNull()){Preview(std::move(Image));PreviewPublished=true;}}
                 if(auto Stop=Context.Check({"document"}))return *Stop;
                 ImageReader.setAutoTransform(true);{ImageTraceSpan DecodeTrace("image.decode",Path);Input.image_=ImageReader.read();}
                 const bool IncompleteJpeg=Input.bytes_.startsWith(QByteArray("\xff\xd8",2))&&!ImagePartialDecoder::HasCompleteJpeg(Input.bytes_);
@@ -132,8 +135,10 @@ namespace hc::document
                     return Invalid("document-image-incomplete");
                 }
                 if(auto Stop=Context.Check({"document"}))return *Stop;
-                if(Preview)Preview(Input.image_.width()>1024 || Input.image_.height()>1024
-                    ? Input.image_.scaled(QSize(1024,1024),Qt::KeepAspectRatio,Qt::SmoothTransformation) : Input.image_);
+                // The native scaled decode already supplied presentation pixels.
+                // Keep the original for editing without resizing it a second time.
+                if(Preview&&!PreviewPublished)Preview(Input.image_.width()>PreviewBounds.width() || Input.image_.height()>PreviewBounds.height()
+                    ? Input.image_.scaled(PreviewBounds,Qt::KeepAspectRatio,Qt::SmoothTransformation) : Input.image_);
                 if(auto Stop=Context.Check({"document"}))return *Stop;
                 ImageDecodeCache::Remember(Canonical,{Input.bytes_,Input.hash_,Revision,Input.image_});
                 Input.viewId_="image";return Input;

@@ -7,6 +7,7 @@
 #include <QElapsedTimer>
 #include "imagePerformance.hpp"
 #include <functional>
+#include <algorithm>
 
 namespace hc::document
 {
@@ -21,10 +22,13 @@ namespace hc::document
             const auto Size=Reader.size();
             // Ask the codec, not the filename. Codecs without native scaled
             // decoding use the single full decode below, never a second full decode.
-            if(!Size.isValid() || (Size.width()<=Bounds.width() && Size.height()<=Bounds.height())
-                || !Reader.supportsOption(QImageIOHandler::ScaledSize))return {};
+            if(!Size.isValid()||Bounds.isEmpty()||!Reader.supportsOption(QImageIOHandler::ScaledSize))return {};
+            const auto Effective=Reader.effectiveSize();
+            const auto DisplaySize=Effective.isValid()?Effective:Size;
+            if(DisplaySize.width()<=Bounds.width()&&DisplaySize.height()<=Bounds.height())return {};
             ImageTraceSpan Trace("image.decode-preview");
-            Reader.setScaledSize(Size.scaled(Bounds,Qt::KeepAspectRatio));
+            const double Scale=std::min(double(Bounds.width())/DisplaySize.width(),double(Bounds.height())/DisplaySize.height());
+            Reader.setScaledSize((Size*std::min(1.,Scale)).expandedTo(QSize(1,1)));
             return Reader.read();
         }
         static bool HasCompleteJpeg(const QByteArray& Bytes)

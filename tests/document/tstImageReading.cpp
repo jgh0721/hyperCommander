@@ -24,6 +24,7 @@
 #include <QLocalSocket>
 #include <QtEndian>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QScopeGuard>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -807,6 +808,60 @@ class ImageReadingTests : public QObject
             QCOMPARE(Tile.image_, Whole.image_.copy(R.tile_));
         }
     }
+    void ordinaryImageViewportRendering()
+    {
+        QImageView View;View.resize(640,480);View.show();
+        auto Source=Picture(Qt::red,{800,600});
+        {QPainter Painter(&Source);Painter.fillRect(400,300,400,300,Qt::blue);}
+        View.LoadContent(Source,QString(),false);
+        View.setZoomLevel(400);
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering()&&View.HasDisplayImage(),20000);
+        auto* Scroll=View.findChild<QScrollArea*>("canvasScrollArea");QVERIFY(Scroll);
+        auto* Canvas=qobject_cast<QLabel*>(Scroll->widget());QVERIFY(Canvas);
+        const auto CheckBound=[&]{const auto Limit=Scroll->viewport()->size()*View.devicePixelRatioF()+QSize(128,128);
+            return Canvas->pixmap().width()<=Limit.width()&&Canvas->pixmap().height()<=Limit.height();};
+        QVERIFY(CheckBound());QCOMPARE(View.Content(),Source);
+        Scroll->horizontalScrollBar()->setValue(Scroll->horizontalScrollBar()->maximum());
+        Scroll->verticalScrollBar()->setValue(Scroll->verticalScrollBar()->maximum());
+        QTRY_VERIFY_WITH_TIMEOUT(Canvas->pixmap().toImage().pixelColor(Canvas->pixmap().width()/2,Canvas->pixmap().height()/2).blue()>240,20000);
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),20000);QVERIFY(CheckBound());
+        const auto Capture=Scroll->viewport()->grab().toImage();
+        QVERIFY(Capture.pixelColor(Capture.width()/2,Capture.height()/2).blue()>240);
+        for(int Zoom=100;Zoom<=800;Zoom+=100)View.setZoomLevel(Zoom);
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),20000);QVERIFY(CheckBound());
+        QCOMPARE(View.Content(),Source);
+        View.setFitMode(QImageView::FitToWindow);
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),20000);
+        QCOMPARE(View.Content(),Source);QVERIFY(View.RenderError().isEmpty());
+        View.setZoomLevel(100);QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),20000);
+        View.setEditTool(QImageView::Crop);QTRY_VERIFY_WITH_TIMEOUT(!View.IsRendering(),20000);
+        QCOMPARE(Canvas->pixmap().size(),Source.size());QCOMPARE(View.Content(),Source);
+    }
+    void viewportDecodeKeepsOriginal()
+    {
+        QTemporaryDir Directory;QVERIFY(Directory.isValid());
+        const auto Path=Directory.filePath("large.jpg");
+        QVERIFY(Picture(Qt::green,{2400,1600}).save(Path,"JPEG"));
+        QList<QImage> Previews;
+        const auto Result=ReadDocumentFile(Path,{},false,[&](QImage Image){Previews.append(Image);},{600,400});
+        QVERIFY(Result.HasValue());QCOMPARE(Result.Value().image_.size(),QSize(2400,1600));
+        QCOMPARE(Previews.size(),1);QCOMPARE(Previews.front().size(),QSize(600,400));
+        QCOMPARE(Result.Value().image_,QImage(Path));
+    }
+    void separableBandsMatchTiles()
+    {
+        auto Source=Picture(Qt::red,{193,277});
+        for(int Y=0;Y<Source.height();++Y)for(int X=0;X<Source.width();++X)
+            Source.setPixelColor(X,Y,QColor(X%256,Y%256,(X+Y)%256,(X*Y)%256));
+        for(const auto& Filter:ImageFilterRegistry::Filters()) {
+            if(Filter.elliptical_)continue;
+            ImageRenderRequest Request;Request.source_=Source;Request.outputSize_={113,149};
+            Request.sourceToOutput_.scale(113./193,149./277);Request.filter_=Filter.id_;
+            const auto Whole=ResampleImage(Request);QVERIFY(Whole.error_.isEmpty());
+            Request.tile_={13,17,71,119};const auto Tile=ResampleImage(Request);
+            QVERIFY(Tile.error_.isEmpty());QCOMPARE(Tile.image_,Whole.image_.copy(Request.tile_));
+        }
+    }
     void animationClearRejectsPendingFrames()
     {
         const auto Bytes =
@@ -975,6 +1030,30 @@ class ImageReadingTests : public QObject
             QCOMPARE(Open.last().at(0).toString(), Root.filePath("original/1.png"));
             Fullscreen.Leave();
         }
+    }
+    void webtoonKeepsFrameWhileNextPageLoads()
+    {
+        QTemporaryDir Root;
+        for(int I=0;I<20;++I)QVERIFY(Picture(I<10?Qt::white:Qt::blue,{320,1800}).save(Root.filePath(QString("%1.png").arg(I,2,10,QChar('0')))));
+        auto Book=OpenImageBook(Root.path());QVERIFY(Book.HasValue());
+        ImageReadingView View;View.SetPrivate(true);View.resize(703,587);
+        auto Palette=View.palette();Palette.setColor(QPalette::Base,Qt::black);View.setPalette(Palette);
+        View.Load(Book.Value(),Picture(Qt::white,{320,1800}));View.SetMode(ImageReadingView::Webtoon);View.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsBusy(),10000);
+        View.findChild<ImageReadingNavigator*>()->hide();
+        const auto Before=View.viewport()->grab().toImage();
+        QVERIFY(Before.pixelColor(Before.width()/2,Before.height()/2).red()>245);
+        View.GoTo(12,.1);
+        // No event pumping: the destination's asynchronous read cannot have
+        // published pixels yet. The previous complete screen must survive.
+        View.findChild<ImageReadingNavigator*>()->hide();
+        QCOMPARE(View.viewport()->grab().toImage(),Before);
+        QTRY_VERIFY_WITH_TIMEOUT(!View.CurrentImage().isNull() && View.CurrentImage().pixelColor(0,0).blue()>245 && View.CurrentImage().pixelColor(0,0).red()<10,10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsBusy(),10000);
+        View.findChild<ImageReadingNavigator*>()->hide();
+        const auto After=View.viewport()->grab().toImage();
+        QCOMPARE(After.pixelColor(After.width()/2,After.height()/2),QColor(Qt::blue));
+        View.Cancel();
     }
     void webtoonHasNoBackgroundSeamsWhileScrolling()
     {
@@ -1604,6 +1683,29 @@ class ImageReadingTests : public QObject
         auto Book=OpenImageBook(Root.path()); QVERIFY(Book.HasValue());
         QSize Metadata; auto Page=ReadImagePage(Book.Value(),0,{}, {},[&](QSize Size){Metadata=Size;});
         QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().image_.size(),QSize(120,80)); QCOMPARE(Metadata,QSize(120,80));
+    }
+    void optionalWebtoonScrollProbe()
+    {
+        const auto Path=qEnvironmentVariable("HC_WEBTOON_SCROLL_PATH");
+        const auto Output=qEnvironmentVariable("HC_WEBTOON_SCROLL_OUTPUT");
+        if(Path.isEmpty() || Output.isEmpty())QSKIP("Optional read-only webtoon scroll probe");
+        ImageReadingView View;View.SetPrivate(true);View.resize(1100,900);View.show();
+        View.OpenPath(Path,{},ImageReadingView::Webtoon);
+        QTRY_VERIFY_WITH_TIMEOUT(View.State()["pageCount"].toInt()>0,60000);
+        QTRY_VERIFY_WITH_TIMEOUT(!View.IsBusy(),60000);
+        QJsonArray Rows;
+        for(int I=0;I<180;++I){
+            QWheelEvent Wheel(QPointF(300,300),QPointF(View.viewport()->mapToGlobal(QPoint(300,300))),QPoint(),QPoint(0,I<90?-120:120),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);
+            QApplication::sendEvent(View.viewport(),&Wheel);QTest::qWait(20);
+            View.findChild<ImageReadingNavigator*>()->hide();
+            const auto Frame=View.viewport()->grab().toImage();
+            int Bright=0,Count=0,Background=0;
+            for(int Y=50;Y<Frame.height()-50;Y+=17)for(int X=50;X<Frame.width()-50;X+=17){++Count;if(qGray(Frame.pixel(X,Y))>120)++Bright;if(Frame.pixelColor(X,Y)==View.palette().color(QPalette::Base))++Background;}
+            auto Row=View.State();Row["step"]=I;Row["bright"]=double(Bright)/Count;Row["background"]=double(Background)/Count;Rows.append(Row);
+            if(I%15==0 || double(Bright)/Count<.3)QVERIFY(Frame.save(Output+QString("-%1.png").arg(I)));
+        }
+        QFile Report(Output);QVERIFY(Report.open(QIODevice::WriteOnly));Report.write(QJsonDocument(Rows).toJson());
+        View.Cancel();
     }
     void optionalComicTransitionBenchmark()
     {

@@ -57,6 +57,19 @@ namespace hc::document
             Run();for(auto& Thread:Threads)Thread.join();return !Failed;
         }
         struct AxisWeights { std::vector<int> positions_;std::vector<double> values_;double total_=0; };
+        QImage SourceRegion(const QImage& Source,const QRect& Rect)
+        {
+            if(Source.depth()<32||Source.depth()%32!=0
+                || (Rect.x()>0&&Rect.bottom()==Source.height()-1))return Source.copy(Rect);
+            // Read-only view: Request retains the source until every band joins.
+            // Color conversion allocates its destination, so copying the encoded
+            // input strip first only consumes memory bandwidth. Writes to this
+            // external const buffer would detach rather than alter the original.
+            QImage View(Source.constScanLine(Rect.y())+qsizetype(Rect.x())*(Source.depth()/8),
+                Rect.width(),Rect.height(),Source.bytesPerLine(),Source.format());
+            View.setColorSpace(Source.colorSpace());
+            return View;
+        }
         std::vector<AxisWeights> Weights(int Begin,int Count,double InverseScale,double Offset,double Radius,double Scale,
             const ImageFilter& Filter)
         {
@@ -82,13 +95,18 @@ namespace hc::document
             auto* OutputBits=Output.bits();const auto OutputStride=Output.bytesPerLine();
             // Bound temporary floating-point storage by strips, even when fitting
             // a multi-megapixel original into a much smaller viewport.
-            constexpr int Strip=16;std::atomic<bool> Invalid{false};
+            // Amortize halo conversion while limiting scratch for wide inputs.
+            // Horizontal bounds depend on X only, not on the current band.
+            int Left=Request.source_.width()-1,Right=0;
+            for(const auto& W:X)for(int P:W.positions_){Left=std::min(Left,std::clamp(P,0,Request.source_.width()-1));Right=std::max(Right,std::clamp(P,0,Request.source_.width()-1));}
+            const double BytesPerRow=double(Right-Left+1)*16+double(Tile.width())*32;
+            const int Strip=std::clamp(int((8*1024*1024)/std::max(1.,BytesPerRow*SY)),16,64);
+            std::atomic<bool> Invalid{false};
             const bool Success=ParallelBands((Tile.height()-1)/Strip+1,Request.stop_,[&](int Band){
                 const int Start=Band*Strip,End=Start+std::min(Strip,Tile.height()-Start);
-                int Left=Request.source_.width()-1,Right=0,Top=Request.source_.height()-1,Bottom=0;
-                for(const auto& W:X)for(int P:W.positions_){Left=std::min(Left,std::clamp(P,0,Request.source_.width()-1));Right=std::max(Right,std::clamp(P,0,Request.source_.width()-1));}
+                int Top=Request.source_.height()-1,Bottom=0;
                 for(int I=Start;I<End;++I)for(int P:Y[I].positions_){Top=std::min(Top,std::clamp(P,0,Request.source_.height()-1));Bottom=std::max(Bottom,std::clamp(P,0,Request.source_.height()-1));}
-                QImage Source=ImageColorSource(Request.source_.copy(QRect(QPoint(Left,Top),QPoint(Right,Bottom))));
+                QImage Source=ImageColorSource(SourceRegion(Request.source_,QRect(QPoint(Left,Top),QPoint(Right,Bottom))));
                 Source=Source.convertedToColorSpace(Linear,QImage::Format_RGBA32FPx4);
                 if(Source.isNull()){Invalid=true;return;}
                 std::vector<std::array<double,4>> Horizontal(size_t(Source.height())*Tile.width());
@@ -96,7 +114,8 @@ namespace hc::document
                     for(int Col=0;Col<Tile.width();++Col){auto& Sum=Horizontal[size_t(Row)*Tile.width()+Col];const auto& W=X[Col];
                         for(size_t K=0;K<W.positions_.size();++K){const int P=W.positions_[K];if(Request.transparentBoundary_&&(P<0||P>=Request.source_.width()))continue;
                             const auto* V=Pixels+4*(std::clamp(P,0,Request.source_.width()-1)-Left);const double Weight=W.values_[K];
-                            for(int C=0;C<3;++C)Sum[C]+=Weight*V[C]*V[3];Sum[3]+=Weight*V[3];}}
+                            const double AlphaWeight=Weight*V[3];
+                            for(int C=0;C<3;++C)Sum[C]+=AlphaWeight*V[C];Sum[3]+=AlphaWeight;}}
                 }
                 QImage Rows(Tile.width(),End-Start,QImage::Format_RGBA32FPx4);if(Rows.isNull()){Invalid=true;return;}Rows.setColorSpace(Linear);
                 for(int Row=Start;Row<End;++Row){if(Request.stop_.stop_requested())return;auto* Pixels=reinterpret_cast<float*>(Rows.scanLine(Row-Start));const auto& W=Y[Row];
@@ -227,7 +246,7 @@ namespace hc::document
             const int Top=int(std::clamp(std::floor(Bounds.top()),0.,double(OriginalSize.height()-1)));
             const int Right=int(std::clamp(std::ceil(Bounds.right()),double(Left),double(OriginalSize.width()-1)));
             const int Bottom=int(std::clamp(std::ceil(Bounds.bottom()),double(Top),double(OriginalSize.height()-1)));
-            QImage Source=ImageColorSource(Request.source_.copy(QRect(QPoint(Left,Top),QPoint(Right,Bottom))));
+            QImage Source=ImageColorSource(SourceRegion(Request.source_,QRect(QPoint(Left,Top),QPoint(Right,Bottom))));
             Source=Source.convertedToColorSpace(LinearProfile,QImage::Format_RGBA32FPx4);
             if(Source.isNull()){Invalid=true;return;}
             QImage LinearRows(Tile.width(),Last-First,QImage::Format_RGBA32FPx4);LinearRows.setColorSpace(LinearProfile);
