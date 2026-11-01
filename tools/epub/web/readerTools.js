@@ -27,7 +27,7 @@ export function findText(section, query, limit = 200) {
 }
 export function validCfi(value) { return typeof value === "string" && value.length <= 8192 && /^epubcfi\([^\u0000-\u001f\u007f-\u009f\u2028\u2029]+\)$/u.test(value); }
 // scroll: {container, chapter, layout} for source scroll synchronisation (previewScroll.js).
-export function createReaderTools({ publication, documents, snapshot, restore, book, apply, navigate, remember=()=>{}, scroll }) {
+export function createReaderTools({ publication, documents, snapshot, restore, book, apply, navigate, remember=()=>{}, scroll, readResourceText=async(url,options)=>{const response=await fetch(url,options);if(!response.ok)throw Error("Resource unavailable");return response.text();} }) {
     const annotations=createReadingAnnotations({book,documents});
     const sourcePositions=createSourcePositions(snapshot,scroll.container);
     const previewScroll=createPreviewScroll({documents,...scroll});
@@ -63,9 +63,8 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
                 if(section.index>=512 || characters>=16*1024*1024 || hits.length>=200) {limited=true;break;}
                 // Search owns its document. It must never unload a section that
                 // an asynchronous page turn is currently displaying.
-                const response=await fetch(section.url,{signal:controller.signal});
-                if(!response.ok)throw Error("검색 리소스를 읽지 못했습니다.");
-                const document=new DOMParser().parseFromString(await response.text(),"application/xhtml+xml");
+                const text=await readResourceText(section.url,{signal:controller.signal});
+                const document=new DOMParser().parseFromString(text,"application/xhtml+xml");
                 if(controller.signal.aborted)return;
                 const found=findText({document,cfiFromRange:range=>section.cfiFromRange(range)},value,200-hits.length);
                 characters+=found.characters;hits.push(...found.hits.map(hit=>({...hit,chapter:section.index})));
@@ -107,7 +106,7 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
     }
     async function footnote(href, doc) {
         const {url,item}=await resource(href,doc);if(item.mediaType!=="application/xhtml+xml" || !url.hash)throw Error("각주 대상이 올바르지 않습니다.");
-        const html=await fetch(url.href.split("#")[0]).then(r=>r.text());
+        const html=await readResourceText(url.href.split("#")[0]);
         const parsed=new DOMParser().parseFromString(html,"application/xhtml+xml");
         const target=parsed.getElementById(decodeURIComponent(url.hash.slice(1)));if(!target)throw Error("각주를 찾을 수 없습니다.");
         show("footnote",{text:target.textContent.trim().slice(0,8192)});

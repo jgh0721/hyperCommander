@@ -432,6 +432,42 @@ namespace hc::document::epub
         } catch(const detail::Rejected& Error) { return {{}, Error.code_, Error.location_}; }
         catch(const std::bad_alloc&) { return {{}, "memory-limit", Path}; }
     }
+    ResourceResult PublicationSession::PreviewChapter(const QString& Path,const QByteArray& Bytes) const
+    {
+        try {
+            if(Bytes.isEmpty() || Bytes.size()>64*1024) detail::Reject("preview-full-required",Path);
+            bool Reflow=false;
+            for(const auto& Item:state_->index_.publication_["spine"].toArray())
+                if(Item.toObject()["path"]==Path && Item.toObject()["layout"]=="reflowable")Reflow=true;
+            if(!Reflow)detail::Reject("preview-full-required",Path);
+            const auto Original=ReadValidatedResource(Path);
+            if(!Original)return Original;
+            const auto Before=detail::Utf8(Original.bytes_,Path),After=detail::Utf8(Bytes,Path);
+            const QRegularExpression Body("<body(?:\\s[^>]*)?>",QRegularExpression::CaseInsensitiveOption);
+            const auto A=Body.match(Before),B=Body.match(After);
+            const int BeforeEnd=Before.lastIndexOf("</body>"),AfterEnd=After.lastIndexOf("</body>");
+            if(!A.hasMatch() || !B.hasMatch() || Before.left(A.capturedEnd())!=After.left(B.capturedEnd())
+                || Before.left(A.capturedEnd()).contains("<!--") || Before.left(A.capturedEnd()).contains("<![CDATA[")
+                || BeforeEnd<0 || AfterEnd<0 || Before.mid(BeforeEnd)!=After.mid(AfterEnd))
+                detail::Reject("preview-full-required",Path);
+            const Xml Baseline(Original.bytes_,Path,state_->cancel_);
+            if(!Baseline.Descendants(0,Xhtml,"nav").isEmpty())detail::Reject("preview-full-required",Path);
+            const Xml Document(Bytes,Path,state_->cancel_);Document.Passive(Path);
+            if(Document.At(0).tag_!=key(Xhtml,"html"))detail::Reject("invalid-document-root",Path);
+            const int BodyIndex=Document.One(0,Xhtml,"body","invalid-document-body");
+            // Navigation/font/style discovery is publication-wide, outside a body-only update.
+            if(!Document.Descendants(0,Xhtml,"nav").isEmpty()
+                || !Document.Descendants(BodyIndex,Xhtml,"style").isEmpty()
+                || !Document.Descendants(BodyIndex,Xhtml,"link").isEmpty())
+                detail::Reject("preview-full-required",Path);
+            for(const auto Index:Document.Descendants(0,Xhtml,"img")) {
+                const auto Target=resolve(Path,Document.At(Index).Attr("src"));
+                if(!state_->paths_.contains(Target))detail::Reject("missing-image-manifest-reference",Target);
+            }
+            return {Bytes,{},{}};
+        } catch(const detail::Rejected& Error){return {{},Error.code_,Error.location_};}
+        catch(const std::bad_alloc&){return {{},"memory-limit",Path};}
+    }
     ResourceResult PublicationSession::ValidateAll() const
     {
         try {

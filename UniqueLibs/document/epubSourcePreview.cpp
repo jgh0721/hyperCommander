@@ -62,6 +62,7 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
     });
     connect(&worker_,&QFutureWatcherBase::finished,this,[this]{if((action("epubAutoPreview")->isChecked() || previewMissing()) && !previewClosing_)previewTimer_.start();});
     connect(&previewWorker_,&QFutureWatcherBase::finished,this,[this]{
+        previewExportMs_=previewBuildClock_.isValid()?previewBuildClock_.elapsed():0;
         const auto Result=previewWorker_.result();if(previewClosing_){RequestPreviewClose();emit StateChanged();return;}
         if(previewWorkEpoch_!=previewEpoch_ || previewWorkToken_!=Token()){if(action("epubAutoPreview")->isChecked() || previewPending_ || previewMissing())previewTimer_.start();emit StateChanged();return;}
         if(!Result){previewError_=Result.error_+": "+Result.location_;reportPreview(tr("소스 검사 실패 · 마지막 정상 미리보기를 유지합니다. %1").arg(previewError_));}
@@ -86,15 +87,63 @@ void EpubSourceEditor::suspendInactivePreview() {
     if(ForegroundPid==previewCandidate_->ViewState()["processId"].toInteger())return;
     auto* Old=std::exchange(previewCandidate_,nullptr);retirePreview(Old);previewPending_=true;previewTimer_.start();
 }
+QMap<QString,QByteArray> EpubSourceEditor::previewChanges()const {
+    auto Changes=model_.Changes();const auto Draft=draft();
+    for(auto At=Draft.begin();At!=Draft.end();++At)Changes[At.key()]=At.value();
+    return Changes;
+}
+bool EpubSourceEditor::patchPreview() {
+    if(!previewView_ || previewCandidate_ || previewPatchRejected_==Token()
+        || previewEdition_!=model_.Publication()["sourceSha256"].toString())return false;
+    const auto State=previewView_->ViewState();const int Chapter=spineIndex(current_);
+    if(Chapter<0 || State["readerBusy"].toBool() || State["chapterIndex"].toInt(-1)!=Chapter
+        || mediaOf(current_)!="application/xhtml+xml")return false;
+    auto Changes=previewChanges();auto Before=previewChanges_,After=Changes;
+    Before.remove(current_);After.remove(current_);if(Before!=After)return false;
+    const auto Bytes=Changes.contains(current_)?Changes.value(current_):model_.Read(current_);
+    if(Bytes.isEmpty() || Bytes.size()>64*1024)return false;
+    previewPatchToken_=Token();
+    const QJsonObject Patch{{"serial",++previewPatchSerial_},{"chapter",Chapter},{"path",current_},{"text",QString::fromUtf8(Bytes)}};
+    if(!previewView_->ReaderAction("preview-chapter",Patch))return false;
+    previewPatchShiftCounts_.clear();for(auto At=sourceBuffers_.cbegin();At!=sourceBuffers_.cend();++At)previewPatchShiftCounts_[At.key()]=At->shifts_.size();
+    previewPatchChanges_=std::move(Changes);previewPatchPending_=true;previewPatchClock_.start();++previewPatchRuns_;
+    QTimer::singleShot(15000,this,[this]{finishPreviewPatch();});
+    return true;
+}
+void EpubSourceEditor::finishPreviewPatch() {
+    if(!previewPatchPending_ || previewClosing_)return;
+    const auto Result=previewView_?previewView_->ViewState()["previewPatch"].toObject():QJsonObject{};
+    if(Result["serial"].toInteger(-1)!=previewPatchSerial_) {
+        if(previewPatchClock_.elapsed()<15000)return;
+        previewPatchRejected_=previewPatchToken_;
+    } else if(Result.contains("error"))previewPatchRejected_=previewPatchToken_;
+    else {
+        previewActiveToken_=previewPatchToken_;previewChanges_=previewPatchChanges_;
+        previewReadyMs_=previewPatchClock_.elapsed();previewExportMs_=0;previewError_.clear();
+        // Keep line shifts from edits typed while this asynchronous update was in flight.
+        for(auto At=sourceBuffers_.begin();At!=sourceBuffers_.end();++At) {
+            At->shifts_.remove(0,qMin(previewPatchShiftCounts_.value(At.key()),At->shifts_.size()));
+            if(previewActiveToken_==Token())At->shiftsOverflow_=false;
+        }
+        lastScrollLine_=-1;previewScrollSeen_=-1;sourceSelectionSerial_=-1;
+        syncPreviewScroll();emit PreviewCommitted();
+    }
+    previewPatchPending_=false;
+    if(previewActiveToken_!=Token())previewTimer_.start();
+    emit StateChanged();
+}
 void EpubSourceEditor::requestPreview(bool Force) {
     if(sourceComposing_){previewPending_=true;previewTimer_.start();return;}
     previewTimer_.stop();if(!previewRuntime_ || previewSettings_.isEmpty() || !ready_ || previewClosing_)return;
     if(!previewOwnerActive()){suspendInactivePreview();previewPending_=true;previewTimer_.start();return;}
     if(previewPreferredChapter_>=0){if(!(sourceShown() && sourceModified()) && recoveredFrom_.isEmpty()){const auto Spine=model_.Publication()["spine"].toArray();if(previewPreferredChapter_<Spine.size()){const auto Path=Spine[previewPreferredChapter_].toObject()["path"].toString();if(model_.IsEditable(Path) && Path!=current_){current_=Path;select();}}}previewPreferredChapter_=-1;}
+    if(previewPatchPending_){finishPreviewPatch();if(previewPatchPending_)return;}
     if(previewWorker_.isRunning()){previewPending_=true;return;}
     if(!Force && previewView_ && previewActiveToken_==Token()){syncPreviewSource(true);return;}
     if(previewCandidate_ && !Force && previewCandidateToken_==Token())return;
     if(previewCandidate_){auto* Old=std::exchange(previewCandidate_,nullptr);retirePreview(Old);}
+    if(!Force && patchPreview())return;
+    previewWorkChanges_=previewChanges();previewWorkEdition_=model_.Publication()["sourceSha256"].toString();previewBuildClock_.start();
     previewPending_=false;previewWorkToken_=Token();previewWorkEpoch_=previewEpoch_;previewError_.clear();reportPreview(tr("편집 내용을 검사하고 있습니다… 이전 미리보기는 유지됩니다."));
     if(cachedExportToken_==previewWorkToken_ && cachedExport_){showPreview(cachedExport_.bytes_);emit StateChanged();return;}
     if(nativeValidating_ && validationToken_==previewWorkToken_ && validationCancel_ && !validationCancel_->load()) {
@@ -109,13 +158,14 @@ void EpubSourceEditor::retirePreview(EpubProcessView* View) {
 void EpubSourceEditor::showPreview(const QByteArray& Bytes) {
     if(previewClosing_)return;if(sourceComposing_){previewPending_=true;previewTimer_.start();return;}
     auto* Candidate=new EpubProcessView(*previewRuntime_,{0,0,20000},previewStack_->parentWidget());Candidate->setObjectName("epubDraftPreview");
+    previewCandidateChanges_=previewWorkChanges_;previewCandidateEdition_=previewWorkEdition_;
     previewCandidate_=Candidate;previewCandidateToken_=previewWorkToken_;previewCandidateEpoch_=previewWorkEpoch_;previewCandidateSerial_=-2;previewCandidateInputRequested_=false;previewCandidateScrollSerial_=-1;previewStack_->addWidget(Candidate);
     if(previewView_)previewStack_->setCurrentWidget(previewView_);else previewStack_->setCurrentWidget(Candidate);
     Candidate->show();reportPreview(tr("새 본문·내장 글꼴·이미지를 준비하고 있습니다…"));
     connect(Candidate,&EpubProcessView::EscapeRequested,this,&EpubSourceEditor::EscapeRequested);connect(Candidate,&EpubProcessView::FullscreenRequested,this,&EpubSourceEditor::FullscreenRequested);
     connect(Candidate,&EpubProcessView::ViewStateChanged,this,[this,Candidate]{
         if(Candidate==previewCandidate_)admitPreview(Candidate);
-        if(Candidate==previewView_){syncPreviewSource();previewContextRequest(Candidate);previewScrolled(Candidate->ViewState()["previewScroll"].toObject());if(scrollSyncPending_)syncPreviewScroll();}
+        if(Candidate==previewView_){finishPreviewPatch();syncPreviewSource();previewContextRequest(Candidate);previewScrolled(Candidate->ViewState()["previewScroll"].toObject());if(scrollSyncPending_)syncPreviewScroll();}
         emit StateChanged();});
     connect(Candidate,&EpubProcessView::Closed,this,[this,Candidate]{
         // A shown or pending preview that ends on its own would leave the panel empty; ask for a new one.
@@ -157,6 +207,7 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
         }
         else if(State["previewScroll"].toObject()["applied"].toInteger()<previewCandidateScrollSerial_ && previewCandidateScrollClock_.elapsed()<300)return;
     }
+    previewChanges_=previewCandidateChanges_;previewEdition_=previewCandidateEdition_;previewReadyMs_=previewBuildClock_.isValid()?previewBuildClock_.elapsed():0;
     auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;sourceSelectionSerial_=-1;
     // The new preview shows the current text: earlier line shifts no longer apply and the first report is new.
     clearLineShifts();previewScrollSeen_=-1;lastScrollLine_=-1;lastScrollChapter_=-1;scrollSyncPending_=true;contextRequestSerial_=State["contextRequest"].toObject()["serial"].toInteger(-1);if((sourceSyncPending_ || SourceInput()->hasFocus()) && action("epubPreviewSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();
@@ -181,10 +232,10 @@ void EpubSourceEditor::syncPreviewSource(bool Force) {
     previewSyncing_=true;openResource(Path);previewSyncing_=false;
 }
 QJsonObject EpubSourceEditor::previewSnapshot()const {
-    return {{"configured",previewRuntime_.has_value()},{"busy",previewWorker_.isRunning()||previewCandidate_!=nullptr},{"waitingForFocus",previewPending_ && !previewOwnerActive()},{"candidate",previewCandidate_?previewCandidate_->ViewState():QJsonObject{}},{"error",previewError_},{"current",previewView_ && previewActiveToken_==Token()},{"ready",previewView_ && previewView_->IsLoaded()},{"token",QString::fromLatin1(previewActiveToken_.toHex())},{"state",previewView_?previewView_->ViewState():QJsonObject{}},{"retiring",previewRetiring_.size()},{"hidden",previewPanel_->isHidden()},{"width",previewWidth_}};
+    return {{"configured",previewRuntime_.has_value()},{"busy",previewPatchPending_||previewWorker_.isRunning()||previewCandidate_!=nullptr},{"performance",QJsonObject{{"patchRuns",previewPatchRuns_},{"exportMs",previewExportMs_},{"readyMs",previewReadyMs_}}},{"waitingForFocus",previewPending_ && !previewOwnerActive()},{"candidate",previewCandidate_?previewCandidate_->ViewState():QJsonObject{}},{"error",previewError_},{"current",previewView_ && previewActiveToken_==Token()},{"ready",previewView_ && previewView_->IsLoaded()},{"token",QString::fromLatin1(previewActiveToken_.toHex())},{"state",previewView_?previewView_->ViewState():QJsonObject{}},{"retiring",previewRetiring_.size()},{"hidden",previewPanel_->isHidden()},{"width",previewWidth_}};
 }
 bool EpubSourceEditor::RequestPreviewClose() {
-    previewClosing_=true;previewTimer_.stop();if(previewCancel_ && (!nativeValidating_ || previewCancel_!=validationCancel_))previewCancel_->store(true);
+    previewClosing_=true;previewPatchPending_=false;previewTimer_.stop();if(previewCancel_ && (!nativeValidating_ || previewCancel_!=validationCancel_))previewCancel_->store(true);
     if(previewView_){auto* Old=std::exchange(previewView_,nullptr);retirePreview(Old);}if(previewCandidate_){auto* Old=std::exchange(previewCandidate_,nullptr);retirePreview(Old);}
     const bool Closed=IsPreviewClosed();
     if(Closed && previewDirectory_)previewDirectory_->remove();return Closed;

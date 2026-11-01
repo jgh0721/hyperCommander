@@ -93,7 +93,7 @@ const viewport = document.getElementById("viewport");
 let publication, engine, book, rendition, navigator;
 let selectedToc=-1;
 let fontCatalog;
-const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument,navigate,remember,
+const tools = createReaderTools({publication:()=>publication,documents,snapshot:currentSnapshot,restore:restoreLocator,book:()=>book,apply:applyDocument,navigate,remember,readResourceText,
     scroll:{container:()=>rendition?.manager?.container,chapter:()=>rendition?.manager?.views?.first()?.section?.index ?? -1,
         layout:()=>({paginated:!!rendition?.manager?.isPaginated,fixed:rendition?._layout?.name==="pre-paginated"})}});
 const history=[];
@@ -116,6 +116,54 @@ let generation = 0;
 let renditionSize = null;
 let resizeQueued = false;
 let startupTimings = {};
+let pageTurn = {};
+let previewPatch={serial:0};
+const previewChapters=new Map();
+async function readResourceText(url,options) {
+    const key=new URL(url,root).href.split("#")[0];
+    if(previewChapters.has(key))return previewChapters.get(key);
+    const response=await fetch(url,options);
+    if(!response.ok)throw Error("Resource unavailable");
+    return response.text();
+}
+async function patchChapter(value) {
+    const started=performance.now();
+    const section=book?.spine.get(value.chapter),manager=rendition?.manager;
+    if(value.error){previewPatch={serial:value.serial,error:value.error};return;}
+    if(!section || publication.spine[value.chapter]?.path!==value.path || !manager
+        || readingLocation().chapterIndex!==value.chapter){previewPatch={serial:value.serial,error:"preview-full-required"};return;}
+    const url=new URL(section.url,root).href;
+    const old=previewChapters.get(url),oldDocument=section.document,oldContents=section.contents,locator=getLocator();
+    const total=[...previewChapters].reduce((n,[key,text])=>n+(key===url?0:text.length*2),value.text.length*2);
+    if(total>4*1024*1024){previewPatch={serial:value.serial,error:"preview-full-required"};return;}
+    try {
+        const doc=new DOMParser().parseFromString(value.text,"application/xhtml+xml");
+        if(doc.querySelector("parsererror"))throw Error("invalid-xml");
+        await section.hooks.content.trigger(doc,section);
+        // Validation and parsing finish before the last good frame is retired.
+        previewChapters.set(url,value.text);section.document=doc;section.contents=doc.documentElement;
+        manager.clear();
+        // A CFI can disappear when its element was edited away. Render the
+        // section first, then restore only if the old locator still resolves.
+        await new Promise((resolve,reject)=>{
+            const failed=error=>{rendition.displaying?.resolve();rendition.displaying=undefined;reject(error);};
+            rendition.once("displayerror",failed);
+            rendition.display(value.chapter).then(resolve,reject).finally(()=>rendition.off("displayerror",failed));
+        });
+        if(locator)try {
+            const view=manager.views.first();
+            manager.moveTo(view.locationOf(locator),view.width());
+        }catch {}
+        rendition.reportLocation();
+        await settleFrame();
+        previewPatch={serial:value.serial,ms:performance.now()-started};
+    } catch(error) {
+        if(old===undefined)previewChapters.delete(url);else previewChapters.set(url,old);
+        section.document=oldDocument;section.contents=oldContents;
+        manager.rollbackTransition();
+        previewPatch={serial:value.serial,error:String(error)};
+    }
+}
 // EPUB.js clears in-flight iframe views on automatic window resize. Fixed pixel
 // dimensions disable that path; all reflow is serialized with display/navigation.
 async function resizeRendition() {
@@ -318,7 +366,7 @@ window.hcBookFonts = bookFonts;
 function currentSnapshot(detail=true) {
     const docs = documents();
     const location=rendition?.currentLocation();
-    return { ...tools.state(), ...readingLocation(location), contentLayout:rendition?._layout?.name || "reflowable", mixedLayout:!!publication?.mixedLayout, writingModes:docs.map(doc=>getComputedStyle(doc.documentElement).writingMode), recovery: publication?.recovery || {}, engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
+    return { ...tools.state(), pageTurn, previewPatch, ...readingLocation(location), contentLayout:rendition?._layout?.name || "reflowable", mixedLayout:!!publication?.mixedLayout, writingModes:docs.map(doc=>getComputedStyle(doc.documentElement).writingMode), recovery: publication?.recovery || {}, engine, profile, cssError: docs.map(doc => cssErrors.get(doc)).find(Boolean) || "", backgroundKind: profile.background, backgroundImageApplied: document.body.style.backgroundImage !== "none", canvasColor: getComputedStyle(document.body).backgroundColor, bookFonts: bookFonts(), fontCatalogWarnings: fontCatalog?.warnings || [], languages: navigator?.publication.metadata.languages || [book?.packaging?.metadata.language].filter(Boolean),
         readingProgression: navigator?.readingProgression || book?.packaging?.metadata.direction || "default",
         ...(detail ? {text: docs.map(doc => doc.body.textContent).join(" ").trim().slice(0, 2000),
         paragraphs: docs.flatMap(doc => [...doc.querySelectorAll("p")].slice(0, 3).map(p => {
@@ -381,7 +429,8 @@ async function navigate(action,value) {
     if(action==="next" || action==="previous") {
         if(rendition)await rendition[action==="next"?"next":"prev"]();
         else await new Promise(resolve=>navigator[action==="next"?"goForward":"goBackward"](false,resolve));
-        documents().forEach(applyDocument);window.hcFocusReading?.();return;
+        // New frames receive the profile in the content hook. Page moves keep it.
+        window.hcFocusReading?.();return;
     }
     if(action==="next-chapter" || action==="previous-chapter") {
         const index=readingLocation().chapterIndex+(action==="next-chapter"?1:-1);
@@ -423,6 +472,7 @@ async function start(name) {
     let stageAt = startedAt;
     const measured = name => { const now = performance.now(); startupTimings[name] = Math.round(now - stageAt); stageAt = now; };
     const mine = ++generation;
+    previewChapters.clear();previewPatch={serial:0};
     selectedToc=-1;
     window.hcEvidence = { status: "loading", phase: "P0-B", engine: name, checks: {} };
     if (navigator) { await navigator.destroy(); navigator = null; }
@@ -441,13 +491,17 @@ async function start(name) {
         book.on("openFailed", error => { if (mine === generation) fail(error); });
         window.hcEvidence.stage = "book-ready";
         await book.ready;
+        const request=book.request.bind(book);
+        book.request=(url,...args)=>previewChapters.has(new URL(url,root).href)
+            ?Promise.resolve(new DOMParser().parseFromString(previewChapters.get(new URL(url,root).href),"application/xhtml+xml"))
+            :request(url,...args);
         measured("bookReadyMs");
         renditionSize = { width: Math.max(1, pane.clientWidth), height: Math.max(1, pane.clientHeight) };
         rendition = book.renderTo(pane, { ...renditionSize, resizeOnOrientationChange: false, flow: profile.layout==="paginated"?"paginated":"scrolled-doc",
             manager: ReaderViewManager, sectionPolicy,
             view: ReaderIframeView, spread: profile.layout==="scroll" || profile.columns===1?"none":"auto", minSpreadWidth:profile.columns===2?600:900,
             allowScriptedContent: false, allowPopups: false });
-        rendition.on("displayerror", error => { if (mine === generation) fail(error); });
+        rendition.on("displayerror", error => { if (mine === generation && activeCommand!=="preview-chapter") fail(error); });
         rendition.hooks.content.register(content => applyDocument(content.document));
         window.hcEvidence.stage = "first-display";
         await rendition.display();
@@ -609,10 +663,13 @@ window.hcCommand = (command, value) => {
     if(command==="read" && value?.action==="annotation-cancel"){tools.cancelAnnotations();return;}
     const pageMove=command==="read" && ["next","previous"].includes(value?.action);
     if(pageMove && pendingPageMoves>=2)return;
+    const queuedAt=performance.now();
     if(pageMove)++pendingPageMoves;
     ++pendingCommands;
     sequence = sequence.then(async () => {
         activeCommand=command;let needsFrame=command!=="bindings";
+        const turnStart=performance.now(),beforeViews=pageMove?rendition?.manager?.views?.all().slice():null;
+        const beforeChapter=pageMove?readingLocation().chapterIndex:-1;
         const manager=rendition?.manager;manager?.beginTransition?.();
         try {
         if (command === "start") await start(value);
@@ -633,13 +690,27 @@ window.hcCommand = (command, value) => {
                 const image = new Image(); image.src = value.data; await image.decode(); backgroundImage = value;
             }
         }
+        else if (command === "preview-chapter") {await patchChapter(value);needsFrame=false;}
         else if (command === "bindings") readerBindings=value;
         else if (command === "read") await tools.action(value);
         else if (command === "chapter") await goChapter(value);
         else if (command === "test") await selfTest();
         else throw Error("Unknown command");
+        const engineEnd=performance.now();
+        // Existing views need neither resource readiness nor two animation frames.
+        // Compare view identities, including both pages of fixed-layout spreads.
+        const afterViews=pageMove?rendition?.manager?.views?.all():null;
+        const sameViews=!!beforeViews?.length && beforeViews.length===afterViews?.length
+            && beforeViews.every((view,index)=>view===afterViews[index]);
+        if(pageMove && sameViews)needsFrame=false;
         if(needsFrame)await settleFrame();
-        if (window.hcEvidence.status === "ready") window.hcEvidence = { ...window.hcEvidence, ...currentSnapshot() };
+        const settleEnd=performance.now();
+        if(pageMove)pageTurn={serial:value.serial,action:value.action,sameViews,beforeChapter,
+            chapter:readingLocation().chapterIndex,queueMs:turnStart-queuedAt,
+            engineMs:engineEnd-turnStart,settleMs:settleEnd-engineEnd};
+        // The diagnostic poll collects text/image geometry outside the key path.
+        if (window.hcEvidence.status === "ready") window.hcEvidence = { ...window.hcEvidence, ...currentSnapshot(!pageMove) };
+        if(pageMove){pageTurn.snapshotMs=performance.now()-settleEnd;pageTurn.totalMs=performance.now()-queuedAt;}
         } finally {manager?.endTransition?.();}
     }).catch(fail).finally(()=>{activeCommand="";--pendingCommands;if(pageMove)--pendingPageMoves;
         // Commands change layout or chapter; the scroll position measured before them is stale.

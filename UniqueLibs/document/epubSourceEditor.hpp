@@ -4,6 +4,7 @@
 #include "commonLibs/storage/storage.hpp"
 #include "documentWebProcess.hpp"
 #include "epubLineShifts.hpp"
+#include "commonLibs/document/epub/epubSourceMap.hpp"
 #include "documentStatusBar.hpp"
 #include <QWidget>
 #include <QFutureWatcher>
@@ -73,6 +74,12 @@ private:
     QStringList openResources_;QSet<QString> touchedResources_;
     // Scintilla position helpers: model and draft positions stay UTF-16 offsets.
     int toUtf16(qintptr Position)const;qintptr fromUtf16(int Offset)const;
+    void invalidateSourceCache();
+    const epub::SourceMap* sourceMap()const;
+    mutable QByteArray sourceBytesCache_;mutable QString sourceTextCache_;
+    mutable epub::SourceMap sourceMapCache_;
+    mutable bool sourceBytesCached_=false,sourceTextCached_=false,sourceMapCached_=false,sourceMapValid_=false;
+    mutable qint64 sourceReads_=0,sourceMapBuilds_=0;
     QByteArray sourceBytes()const;QString sourceText()const;bool sourceModified()const;bool sourceShown()const;
     int sourcePosition()const;int sourceAnchor()const;void setSourceSelection(int Anchor,int Position,bool Reveal=true);
     int firstVisibleLine()const;int horizontalOffset()const;void setScroll(int Line,int Offset);void setSourceReadOnly(bool ReadOnly);
@@ -105,6 +112,15 @@ private:
     // No preview exists or is being made. The first one is shown even when live preview is off.
     bool previewMissing()const{return !previewView_ && !previewCandidate_ && !previewWorker_.isRunning();}
     void suspendInactivePreview();
+    QMap<QString,QByteArray> previewChanges()const;
+    bool patchPreview();void finishPreviewPatch();
+    QMap<QString,QByteArray> previewChanges_,previewWorkChanges_,previewCandidateChanges_,previewPatchChanges_;
+    QString previewEdition_,previewWorkEdition_,previewCandidateEdition_;
+    QByteArray previewPatchToken_,previewPatchRejected_;
+    QMap<QString,qsizetype> previewPatchShiftCounts_;
+    qint64 previewPatchSerial_=0,previewPatchRuns_=0;bool previewPatchPending_=false;
+    QElapsedTimer previewPatchClock_,previewBuildClock_;
+    qint64 previewExportMs_=0,previewReadyMs_=0;
     void requestPreview(bool Force=false);
     void showPreview(const QByteArray& Bytes);
     void admitPreview(EpubProcessView* Candidate);

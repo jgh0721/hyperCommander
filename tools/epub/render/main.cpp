@@ -262,7 +262,7 @@ namespace
         Window(const Assets& Items, const QJsonObject& Publication, const QString& Engine, const QString& Theme, const QString& Evidence, const QString& SettingsPath, qint64 Generation = 1,bool InitiallyInteractive=true,bool SourceLines=false,const QString& GlobalSettingsPath={})
             : QMainWindow(nullptr,InitiallyInteractive?Qt::WindowFlags{}:Qt::WindowFlags(Qt::WindowDoesNotAcceptFocus)), evidence_(Evidence), documentId_(Publication["sourceSha256"].toString()), generation_(Generation)
         {
-            setAttribute(Qt::WA_ShowWithoutActivating);engine_=Engine;interactive_=InitiallyInteractive;editingPreview_=SourceLines;
+            setAttribute(Qt::WA_ShowWithoutActivating);previewAssets_=Items;engine_=Engine;interactive_=InitiallyInteractive;editingPreview_=SourceLines;
 #ifdef HC_EPUB_PRODUCT_HELPER
             setWindowTitle(tr("EPUB 읽기"));
 #else
@@ -535,6 +535,31 @@ namespace
             scrollActive_.restart();if(poll_.interval()>33)poll_.start(33);return true;
         }
         bool readAction(const QString& Action,const QJsonValue& Value) {
+            if(Action=="preview-chapter") {
+                const auto Patch=Value.toObject();const auto Path=Patch["path"].toString();
+                const auto Asset=previewAssets_.value("/book/"+Path);
+                if(!editingPreview_ || patchBusy_ || !started_ || Patch.size()!=4
+                    || !Patch["text"].isString() || Patch["text"].toString().size()>64*1024
+                    || Patch["serial"].toInteger(-1)<1 || Patch["chapter"].toInt(-1)<0
+                    || !Asset.store || Asset.mime!="application/xhtml+xml")return false;
+                patchBusy_=true;
+                auto* Watcher=new QFutureWatcher<hc::document::epub::ResourceResult>(this);
+                connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Patch]() mutable {
+                    const auto Result=Watcher->result();Watcher->deleteLater();patchBusy_=false;
+                    auto Message=Patch;Message.remove("text");
+                    if(!Result)Message["error"]=Result.error_;
+                    else Message["text"]=QString::fromUtf8(Result.bytes_);
+                    command("preview-chapter",Message);
+                });
+                Watcher->setFuture(QtConcurrent::run([Session=Asset.store->Session(),Path,Bytes=Patch["text"].toString().toUtf8()] {
+                    auto Result=Session->PreviewChapter(Path,Bytes);
+                    if(Result){const auto Lines=hc::document::epub::AnnotateSourceLines(Result.bytes_);
+                        if(!Lines.skipped_.isEmpty() || Lines.bytes_.size()>128*1024)return hc::document::epub::ResourceResult{{},"preview-full-required",Path};
+                        Result.bytes_=Lines.bytes_;}
+                    return Result;
+                }));
+                return true;
+            }
             if(Action=="enable-input"){if(!Value.isBool() || !windowHandle())return false;interactive_=Value.toBool();view_->setFocusPolicy(interactive_?Qt::StrongFocus:Qt::NoFocus);windowHandle()->setFlag(Qt::WindowDoesNotAcceptFocus,!interactive_);return true;}
             if(Action=="fullscreen"){++fullscreenRequests_;return true;}
             if(Action=="bindings") {
@@ -562,7 +587,9 @@ namespace
         }
         void command(const QString& Name, const QJsonValue& Value)
         {
-            if(finished_)return;detailPending_=true;
+            if(finished_)return;
+            const bool PageMove=Name=="read" && QStringList{"next","previous"}.contains(Value.toObject()["action"].toString());
+            if(!PageMove)detailPending_=true;
             auto Args = QJsonDocument(QJsonArray{Name, Value}).toJson(QJsonDocument::Compact);
             Args = Args.mid(1, Args.size() - 2);
             page_->runJavaScript("window.hcCommand && window.hcCommand(" + QString::fromUtf8(Args) + ")");
@@ -670,6 +697,7 @@ namespace
         QWebEngineProfile* profile_ = nullptr;
         Page* page_ = nullptr;
         Filter* filter_ = nullptr;
+        Assets previewAssets_;bool patchBusy_=false;
         QJsonArray pendingBookmarks_;
         QTimer debounce_, poll_;
         bool pending_ = false, testing_ = false, finished_ = false;

@@ -40,6 +40,8 @@ namespace hc::document::epub
         PackageResult Index() const;
         ResourceResult ReadValidatedResource(const QString& Path) const;
         ResourceResult ValidateAll() const;
+        // Preview-only body replacement. Package/head/layout changes still need Export.
+        ResourceResult PreviewChapter(const QString& Path,const QByteArray& Bytes) const;
     private:
         struct State;
         explicit PublicationSession(std::unique_ptr<State> Value);

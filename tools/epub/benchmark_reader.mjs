@@ -57,6 +57,7 @@ for(const row of selected.filter(r=>(ids.length?ids.includes(r.id):true))) {
       await operation(`chapter1-${repeat}`,'chapter',Math.min(1,info.spine.length-1));
       await operation(`largest-${repeat}`,'chapter',largestIndex);
       await operation(`page-next-${repeat}`,'read',{action:'next',serial:100+repeat});
+      await operation(`page-previous-${repeat}`,'read',{action:'previous',serial:150+repeat});
       await operation(`image-chapter-${repeat}`,'chapter',imageIndex);
       await operation(`next-chapter-${repeat}`,'read',{action:'next-chapter',serial:200+repeat});
     }
@@ -72,7 +73,10 @@ for(const row of selected.filter(r=>(ids.length?ids.includes(r.id):true))) {
     if(Math.max(...imageCounts)>0){await operation('image-popup','read',{action:'image',value:0,serial:301});record.popup=await evaluate(`(async()=>{const t=performance.now();const images=[...document.querySelectorAll('dialog img')];await Promise.all(images.map(i=>i.decode()));return {decodeWaitMs:performance.now()-t,images:images.map(i=>({w:i.naturalWidth,h:i.naturalHeight}))};})()`);await operation('image-close','read',{action:'close-popup',serial:302});}
     await operation('paginated','profile',{layout:'paginated',columns:1});
     await operation('paginated-largest','chapter',largestIndex);
-    for(let i=0;i<3;i++)await operation(`paginated-next-${i}`,'read',{action:'next',serial:400+i});
+    for(let i=0;i<3;i++){
+      await operation(`paginated-next-${i}`,'read',{action:'next',serial:400+i});
+      await operation(`paginated-previous-${i}`,'read',{action:'previous',serial:450+i});
+    }
     await operation('search-no-match','read',{action:'search',value:'HC_PERF_NONEXISTENT_20261028',serial:500});
     record.snapshotCost=await evaluate(`(()=>{const samples=[];for(let i=0;i<30;i++){const t=performance.now();JSON.stringify(window.hcSnapshot());samples.push(performance.now()-t);}return samples;})()`);
     record.nativeSnapshotCost=await evaluate(`(()=>{if(!window.hcNativeSnapshot)return null;const samples=[];for(let i=0;i<30;i++){const t=performance.now();JSON.stringify(window.hcNativeSnapshot());samples.push(performance.now()-t);}return {samples,fullBytes:JSON.stringify(window.hcSnapshot()).length,compactBytes:JSON.stringify(window.hcNativeSnapshot()).length};})()`);

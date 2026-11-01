@@ -25,10 +25,18 @@ QString languageOf(const QString& Media){return Media=="application/xhtml+xml"?Q
 // Drafts, the source map and diagnostics count UTF-16 code units; Scintilla counts UTF-8 bytes.
 int EpubSourceEditor::toUtf16(qintptr Position)const{return int(direct(text_)->Send(SCI_COUNTCODEUNITS,0,qBound<qintptr>(0,Position,direct(text_)->Send(SCI_GETLENGTH))));}
 qintptr EpubSourceEditor::fromUtf16(int Offset)const{return direct(text_)->Send(SCI_POSITIONRELATIVECODEUNITS,0,qMax(0,Offset));}
-QByteArray EpubSourceEditor::sourceBytes()const {
-    const auto Length=direct(text_)->Send(SCI_GETLENGTH);QByteArray Bytes(Length+1,Qt::Uninitialized);direct(text_)->Send(SCI_GETTEXT,quintptr(Length+1),reinterpret_cast<qintptr>(Bytes.data()));Bytes.resize(Length);return Bytes;
+void EpubSourceEditor::invalidateSourceCache() {
+    sourceBytesCached_=sourceTextCached_=sourceMapCached_=sourceMapValid_=false;
 }
-QString EpubSourceEditor::sourceText()const{return QString::fromUtf8(sourceBytes());}
+const epub::SourceMap* EpubSourceEditor::sourceMap()const {
+    if(!sourceMapCached_){sourceMapValid_=sourceMapCache_.Load(sourceText());sourceMapCached_=true;++sourceMapBuilds_;}
+    return sourceMapValid_?&sourceMapCache_:nullptr;
+}
+QByteArray EpubSourceEditor::sourceBytes()const {
+    if(sourceBytesCached_)return sourceBytesCache_;
+    const auto Length=direct(text_)->Send(SCI_GETLENGTH);QByteArray Bytes(Length+1,Qt::Uninitialized);direct(text_)->Send(SCI_GETTEXT,quintptr(Length+1),reinterpret_cast<qintptr>(Bytes.data()));Bytes.resize(Length);sourceBytesCache_=std::move(Bytes);sourceBytesCached_=true;++sourceReads_;return sourceBytesCache_;
+}
+QString EpubSourceEditor::sourceText()const{if(!sourceTextCached_){sourceTextCache_=QString::fromUtf8(sourceBytes());sourceTextCached_=true;}return sourceTextCache_;}
 bool EpubSourceEditor::sourceModified()const{return direct(text_)->Send(SCI_GETMODIFY)!=0;}
 bool EpubSourceEditor::sourceShown()const{return sourceStack_ && sourceStack_->currentWidget()==text_ && !bufferResource_.isEmpty() && bufferResource_==current_;}
 int EpubSourceEditor::sourcePosition()const{return toUtf16(direct(text_)->Send(SCI_GETCURRENTPOS));}
@@ -53,6 +61,7 @@ void EpubSourceEditor::releaseSource(const QString& Path) {
     if(State.document_)direct(text_)->Send(SCI_RELEASEDOCUMENT,0,State.document_);
 }
 void EpubSourceEditor::activateSource(const QByteArray& Data,const QString& Media) {
+    invalidateSourceCache();
     auto& State=sourceBuffers_[current_];bool Fresh=false;
     if(!State.document_){State.document_=direct(text_)->Send(SCI_CREATEDOCUMENT,0,SC_DOCUMENTOPTION_DEFAULT);State.serial_=++bufferSerial_;Fresh=true;}
     text_->AttachDocument(State.document_,languageOf(Media));bufferResource_=current_;
@@ -60,7 +69,7 @@ void EpubSourceEditor::activateSource(const QByteArray& Data,const QString& Medi
     if(Fresh || State.applied_!=Data) {text_->setReadOnly(false);
         if(!Fresh && sourceBytes()==Data){State.applied_=Data;text_->CommitContent();}
         else {
-            direct(text_)->SetTextUtf8(Data);State.applied_=Data;
+            direct(text_)->SetTextUtf8(Data);invalidateSourceCache();State.applied_=Data;
             direct(text_)->Send(SCI_SETEOLMODE,Data.contains("\r\n")?SC_EOL_CRLF:Data.contains('\r')?SC_EOL_CR:SC_EOL_LF);
             if(!Fresh)State.serial_=++bufferSerial_;
         }
@@ -82,7 +91,7 @@ void EpubSourceEditor::locateSource() {
     const auto State=previewView_->ViewState();if(State["readerBusy"].toBool()){sourceSyncTimer_.start();return;}
     int Chapter=-1;const auto Spine=model_.Publication()["spine"].toArray();for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Chapter=I;if(Chapter<0){sourceSyncPending_=false;return;}
     if(State["chapterIndex"].toInt(-1)!=Chapter){previewView_->ReaderAction("chapter",Chapter);sourceSyncTimer_.start();return;}
-    epub::SourceMap Map;sourceSyncPending_=false;if(!Map.Load(sourceText()))return;auto Anchor=Map.Anchor(sourcePosition());if(Anchor.isEmpty())return;
+    const auto* Map=sourceMap();sourceSyncPending_=false;if(!Map)return;auto Anchor=Map->Anchor(sourcePosition());if(Anchor.isEmpty())return;
     // With scroll sync the preview is already aligned; the selection moves the view only when out of sight.
     if(scrollSyncActive())Anchor["reveal"]="nearest";
     previewView_->ReaderAction("source-position",Anchor);
@@ -93,7 +102,7 @@ bool EpubSourceEditor::selectPreviewSource(const QJsonObject& Requested) {
     if(Anchor.isEmpty()){const auto State=previewView_->ViewState();Anchor=State["sourceSelection"].toObject();const auto Serial=Anchor["serial"].toInteger();if(Serial<=sourceSelectionSerial_)return false;sourceSelectionSerial_=Serial;}
     const auto Spine=model_.Publication()["spine"].toArray();const int Chapter=Anchor["chapter"].toInt(-1);if(Chapter<0 || Chapter>=Spine.size())return false;const auto Path=Spine[Chapter].toObject()["path"].toString();
     if(current_!=Path){previewSyncing_=true;const bool Opened=openResource(Path);previewSyncing_=false;if(!Opened)return false;}if(!sourceShown())return false;
-    epub::SourceMap Map;if(!Map.Load(sourceText()))return false;const int Position=Map.Position(Anchor);if(Position<0)return false;
+    const auto* Map=sourceMap();if(!Map)return false;const int Position=Map->Position(Anchor);if(Position<0)return false;
     // A preview click with scroll sync puts the line at the click's height instead of merely revealing it.
     const double Ratio=Anchor["ratio"].toDouble(-1);const bool Place=Ratio>=0 && scrollSyncActive();
     updating_=true;setSourceSelection(Position,Position,!Place);if(Place)placeSourceLine(Position,Ratio);updating_=false;return true;

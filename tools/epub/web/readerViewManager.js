@@ -78,7 +78,9 @@ export class ReaderViewManager extends DefaultViewManager {
             for(const view of this.views.all()){view.destroy();view.element.remove();}
             this.views._views=[];this.views.length=0;this.scrollTo(0,0,true);return;
         }
+        this.retiredScroll={left:this.container.scrollLeft,top:this.container.scrollTop};
         for (const view of this.views.all()) {
+            view.retiredStyle=view.element.style.cssText;
             const element = view.element, rect = element.getBoundingClientRect();
             if (!view.displayed || rect.width <= 0 || rect.height <= 0) { view.destroy(); element.remove(); continue; }
             const inset = [bounds.top-rect.top, rect.right-bounds.right, rect.bottom-bounds.bottom, bounds.left-rect.left].map(n => `${Math.max(0,n)}px`);
@@ -114,6 +116,14 @@ export class ReaderViewManager extends DefaultViewManager {
             location.pages=[];for(let page=first+1;page<=last;++page)location.pages.push(page);
         }
         return locations;
+    }
+    rollbackTransition() {
+        if(!this.retired?.length)return;
+        for(const view of this.views.all()){view.destroy();view.element.remove();}
+        this.views._views=this.retired;this.views.length=this.retired.length;
+        for(const view of this.retired){view.element.style.cssText=view.retiredStyle;delete view.element.dataset.hcRetired;}
+        this.retired=[];
+        this.scrollTo(this.retiredScroll.left,this.retiredScroll.top,true);
     }
     endTransition() {
         this.transitionDepth = Math.max(0,(this.transitionDepth || 0)-1);

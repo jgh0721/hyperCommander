@@ -3,6 +3,8 @@
 #include "epubResourceTree.hpp"
 #include "epubProcessView.hpp"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
+#include <fmstyle/ThemeManager.h>
 #include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
 #include "UniqueLibs/document/documentShortcutRegistry.hpp"
@@ -82,6 +84,16 @@ void EpubSourceEditor::setupLayout() {
     text_=new QTextView(sourceStack_);text_->setObjectName("epubEditSource");text_->setAccessibleName(tr("EPUB 리소스 소스"));text_->setHotExitEnabled(false);sourceStack_->addWidget(text_);
     // A new view reads only its display settings; the text editor font arrives with the full reload.
     text_->ReloadPreferences();
+    // Scintilla paints its own surface; inheriting the widget palette is insufficient.
+    const auto ApplyTheme=[this] {
+        const auto& Theme=fm::style::ThemeManager::instance();
+        setPalette(Theme.colors().toPalette());
+        const auto Dark=fm::style::isDarkVariant(Theme.effectiveVariant());
+        ThemeManager::instance().setTheme(Dark?ThemeManager::Dark:ThemeManager::Light);
+        text_->setTheme(Dark?QBaseView::Dark:QBaseView::Light);
+    };
+    connect(&fm::style::ThemeManager::instance(),&fm::style::ThemeManager::changed,this,ApplyTheme);
+    ApplyTheme();
     SourceInput()->setObjectName("epubEditSourceInput");SourceInput()->setAccessibleName(tr("EPUB 리소스 소스"));SourceInput()->installEventFilter(this);SourceInput()->setAttribute(Qt::WA_NativeWindow);SourceInput()->setContextMenuPolicy(Qt::CustomContextMenu);
     static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_USEPOPUP,SC_POPUP_NEVER);setFocusProxy(SourceInput());
     image_=new QLabel(sourceStack_);image_->setObjectName("epubImagePreview");image_->setAlignment(Qt::AlignCenter);image_->setMinimumHeight(100);sourceStack_->addWidget(image_);
