@@ -460,6 +460,16 @@ add_test(NAME hc.file_locks COMMAND hc_file_lock_tests)
 set_tests_properties(hc.file_locks PROPERTIES TIMEOUT 180)
 hc_enable_qt_deployment(hc_file_lock_tests TEST)
 
+# Process/service collection, actions and the admin system-session protocol.
+qt_add_executable(hc_system_tests tstSystemCore.cpp)
+target_include_directories(hc_system_tests PRIVATE
+    ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_link_libraries(hc_system_tests PRIVATE hc_file_locks hc_system Qt6::Test advapi32 shell32 ole32)
+target_compile_options(hc_system_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_test(NAME hc.system COMMAND hc_system_tests)
+set_tests_properties(hc.system PROPERTIES TIMEOUT 120)
+hc_enable_qt_deployment(hc_system_tests TEST)
+
 qt_add_executable(hc_write_tests
     tstWrites.cpp
     ../UniqueLibs/nativeFileElevation.cpp
@@ -655,6 +665,7 @@ add_dependencies(hc_check hc_iso_engine_tests hc_iso_provider_tests hc_iso_wcx_t
 add_dependencies(hc_check hc_archive_creation_tests hc_plugin_management_tests)
 add_dependencies(hc_check hc_operation_recovery_tests)
 add_dependencies(hc_check hc_file_lock_tests)
+add_dependencies(hc_check hc_system_tests)
 qt_add_executable(hc_file_lock_ui_tests tstFileLockUi.cpp
     ../HyperCommander/UIs/fileLockDialog.cpp
     ../HyperCommander/UIs/dialogShell.cpp

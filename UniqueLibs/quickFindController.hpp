@@ -292,11 +292,19 @@ protected:
 private:
     quickfind::Settings configuration() const
     { return quickfind::Settings::FromJson(settings::AppSettings().Read(settings::Section::General).toObject()["quickFind"].toObject()); }
-    CGridView* listView(QWidget* Widget) const
+    static bool systemView(const QObject* Object)
+    {
+        const auto* View = qobject_cast<const CViewT*>(Object);
+        return View && View->GetViewMode() == CViewT::VM_SYSTEM;
+    }
+    CViewT* listView(QWidget* Widget) const
     {
         if (!Widget || Widget->window() != window_ || qobject_cast<QLineEdit*>(Widget) || QApplication::activeModalWidget()) return nullptr;
-        for (auto* Parent = Widget; Parent; Parent = Parent->parentWidget())
+        for (auto* Parent = Widget; Parent; Parent = Parent->parentWidget()) {
             if (auto* View = qobject_cast<CGridView*>(Parent)) return View->IsEditing() ? nullptr : View;
+            // 프로세스·서비스 보기도 글자 입력으로 빠른 찾기를 시작한다.
+            if (systemView(Parent)) return static_cast<CViewT*>(Parent);
+        }
         return nullptr;
     }
     void begin(const quickfind::Settings& Config)
@@ -305,6 +313,8 @@ private:
         within_ = false; baseQuery_.clear(); preedit_.clear();
         if (scope_ == "everything") cursor_ = false;
         if (auto* Panel = panel_()) { source_ = Panel->GetFocusView(Panel->CurrentTabIndex()); sourcePath_ = Panel->CurrentPath(); }
+        // 시스템 보기는 목록을 거르기만 한다(커서 이동·Everything 검색은 파일 목록 기능).
+        if (systemView(source_)) { scope_ = "panel"; cursor_ = false; }
         observeSearchProgress();
         find_->setPlaceholderText(scope_ == "everything" ? tr("Everything 빠른 찾기") : tr("현재 목록 빠른 찾기"));
         updateModeHint();
@@ -355,6 +365,7 @@ private:
         } else {
             cancel(); cursor_ = !quick_ || !cursor_; quick_ = true; scope_ = "panel";
             if (auto* Panel = panel_()) { source_ = Panel->GetFocusView(Panel->CurrentTabIndex()); sourcePath_ = Panel->CurrentPath(); }
+            if (systemView(source_)) cursor_ = false;
         }
         updateModeHint(); if (!composing_) apply();
     }

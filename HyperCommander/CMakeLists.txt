@@ -39,6 +39,11 @@ set(PROJECT_UI_SRC
         UIs/Components/cmpView.cpp
         UIs/Components/cmpViewGrouping.cpp
         UIs/Components/cmpView.hpp
+        UIs/Components/cmpSystemView.cpp
+        UIs/Components/cmpSystemView.hpp
+        UIs/systemDialogs.cpp
+        UIs/systemDialogs.hpp
+        UIs/processServiceSettingsPage.hpp
         UIs/Components/thumbnailModel.cpp
         UIs/Components/thumbnailModel.hpp
         UIs/Components/thumbnailSettings.hpp
@@ -229,6 +234,14 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/audio/audioEngine.hpp
         ../UniqueLibs/audio/audioSession.cpp
         ../UniqueLibs/audio/audioSession.hpp
+        ../UniqueLibs/system/systemSupport.cpp
+        ../UniqueLibs/system/systemSupport.hpp
+        ../UniqueLibs/system/processModel.cpp
+        ../UniqueLibs/system/processModel.hpp
+        ../UniqueLibs/system/serviceModel.cpp
+        ../UniqueLibs/system/serviceModel.hpp
+        ../UniqueLibs/system/systemCommands.cpp
+        ../UniqueLibs/system/systemCommands.hpp
 )
 qt_add_executable(HyperCommander
         ${PROJECT_SOURCES}

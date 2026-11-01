@@ -166,17 +166,43 @@ add_custom_command(TARGET hc-search-index POST_BUILD
 )
 hc_enable_qt_deployment(hc-search-index)
 hc_add_version_resource(hc-search-index "HyperCommander Search Helper")
+# Process/service collection and control. Qt-free; Windows 10 APIs are allowed here
+# because UniqueLibs/HyperCommander still build with the Windows 7 SDK target.
+qt_add_library(hc_system STATIC
+    commonLibs/system/ntApi.cpp
+    commonLibs/system/ntApi.hpp
+    commonLibs/system/processSnapshot.cpp
+    commonLibs/system/processSnapshot.hpp
+    commonLibs/system/processInfo.cpp
+    commonLibs/system/processInfo.hpp
+    commonLibs/system/processActions.cpp
+    commonLibs/system/processActions.hpp
+    commonLibs/system/imageInfo.cpp
+    commonLibs/system/imageInfo.hpp
+    commonLibs/system/serviceControl.cpp
+    commonLibs/system/serviceControl.hpp
+)
+set_target_properties(hc_system PROPERTIES AUTOMOC OFF AUTOUIC OFF)
+target_include_directories(hc_system PUBLIC ${PROJECT_SOURCE_DIR})
+target_compile_definitions(hc_system PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
+    _WIN32_WINNT=0x0A00 WINVER=0x0A00 NTDDI_VERSION=0x0A000006)
+target_link_libraries(hc_system PUBLIC advapi32 wintrust crypt32 version user32 shell32)
+target_compile_options(hc_system PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 qt_add_library(hc_file_locks STATIC
     UniqueLibs/nativeFileLocks.cpp
     UniqueLibs/nativeFileLocks.hpp
     UniqueLibs/fileLockService.cpp
     UniqueLibs/fileLockService.hpp
+    UniqueLibs/adminChannel.cpp
+    UniqueLibs/adminChannel.hpp
+    UniqueLibs/systemSessionService.cpp
+    UniqueLibs/systemSessionService.hpp
 )
 target_include_directories(hc_file_locks PRIVATE
     ${PROJECT_SOURCE_DIR}/HyperCommanderAdmin
     ${PROJECT_SOURCE_DIR}/commonLibs
 )
-target_link_libraries(hc_file_locks PUBLIC Qt6::Core PRIVATE advapi32 shell32 rstrtmgr)
+target_link_libraries(hc_file_locks PUBLIC Qt6::Core hc_system PRIVATE advapi32 shell32 rstrtmgr)
 target_compile_definitions(hc_file_locks PRIVATE NOMINMAX UNICODE _UNICODE)
 target_compile_options(hc_file_locks PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_subdirectory(HyperCommanderAdmin)

@@ -332,6 +332,43 @@
               "label": "재생 중인 파일 위치 보기"
             }
           ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "id": "system",
+          "label": "프로세스·서비스",
+          "items": [
+            {
+              "id": "systemProcesses",
+              "command": "hc.system.processes.open",
+              "label": "프로세스 보기"
+            },
+            {
+              "id": "systemServices",
+              "command": "hc.system.services.open",
+              "label": "서비스 보기"
+            },
+            {
+              "type": "separator"
+            },
+            {
+              "id": "systemRun",
+              "command": "hc.process.run",
+              "label": "새 작업 실행…"
+            },
+            {
+              "id": "systemFollow",
+              "command": "hc.system.followLocation",
+              "label": "실행 파일 위치 따라가기"
+            },
+            {
+              "id": "systemHelper",
+              "command": "hc.system.startAdminHelper",
+              "label": "관리자 도우미 미리 시작"
+            }
+          ]
         }
       ]
     },

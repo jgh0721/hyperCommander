@@ -38,6 +38,100 @@ inline TyMapShortcutToCMDStr DefaultCommandLineShortcuts()
     return Values;
 }
 
+// 입력 범위. 명령행 입력처럼 포커스가 있는 보기의 키 맵을 전역 맵보다 먼저 찾는다.
+// 범위 키 맵은 settings의 shortcuts 객체 안에 범위 이름으로 둔다. 이름은 키로 해석되지 않아야 한다.
+enum class InputScope { Global, CommandLine, ProcessView, ServiceView };
+
+inline QString ScopeKey(InputScope Scope)
+{
+    switch (Scope) {
+    case InputScope::CommandLine: return QStringLiteral("commandLine");
+    case InputScope::ProcessView: return QStringLiteral("processView");
+    case InputScope::ServiceView: return QStringLiteral("serviceView");
+    default: return {};
+    }
+}
+
+inline InputScope ScopeFromKey(const QString& Key)
+{
+    if (Key == "commandLine") return InputScope::CommandLine;
+    if (Key == "processView") return InputScope::ProcessView;
+    if (Key == "serviceView") return InputScope::ServiceView;
+    return InputScope::Global;
+}
+
+// 두 보기 범위가 함께 쓰는 명령. 키는 범위마다 따로 저장한다.
+inline bool IsSharedViewCommand(const QString& Id)
+{
+    const auto Command = CommandId(Id);
+    return Command == "hc.system.refreshPause" || Command == "hc.system.followLocation";
+}
+
+// 키를 보기 범위에만 두는 명령. hc.process.run은 전역에서도 실행할 수 있어 제외한다.
+inline bool IsViewScopedCommand(const QString& Id)
+{
+    const auto Command = CommandId(Id);
+    return (Command.startsWith("hc.process.") && Command != "hc.process.run") || Command.startsWith("hc.service.") || IsSharedViewCommand(Command);
+}
+
+// 프로세스·서비스 보기에서도 그대로 실행하는 전역 명령. 나머지(파일 작업)는 덮인 파일 목록에 닿지 않도록
+// 보기가 키를 삼키고, 메뉴·도구 모음에서는 비활성으로 보인다.
+inline bool IsSystemViewGlobalCommand(const QString& Id)
+{
+    const auto Command = CommandId(Id);
+    static const QStringList Prefixes{"hc.tab.", "hc.system.", "hc.service.", "hc.process.", "hc.audio.", "hc.panel.",
+                                      "hc.navigate.gotoDrive", "hc.commandLine.", "hc.app.", "hc.menu."};
+    for (const auto& Prefix : Prefixes)
+        if (Command.startsWith(Prefix)) return true;
+    static const QStringList Exact{"hc.navigate.refresh", "hc.navigate.forceRefresh", "hc.navigate.back", "hc.navigate.forward",
+                                   "hc.navigate.path", "hc.navigate.favorites", "hc.search.focus", "hc.search.everything",
+                                   "hc.viewer.quick", "hc.viewer.close", "hc.settings.show", "hc.jobs.show", "hc.automation.show"};
+    return Exact.contains(Command);
+}
+
+inline bool ScopeAccepts(InputScope Scope, const QString& Id)
+{
+    const auto Command = CommandId(Id);
+    switch (Scope) {
+    case InputScope::CommandLine: return IsCommandLineShortcut(Command);
+    case InputScope::ProcessView: return Command.startsWith("hc.process.") || IsSharedViewCommand(Command);
+    case InputScope::ServiceView: return Command.startsWith("hc.service.") || IsSharedViewCommand(Command);
+    default: return !IsCommandLineShortcut(Command) && !IsViewScopedCommand(Command);
+    }
+}
+
+inline InputScope HomeScope(const QString& Id)
+{
+    const auto Command = CommandId(Id);
+    if (IsCommandLineShortcut(Command)) return InputScope::CommandLine;
+    if (Command.startsWith("hc.service.")) return InputScope::ServiceView;
+    if (IsViewScopedCommand(Command)) return InputScope::ProcessView;
+    return InputScope::Global;
+}
+
+// 패널 전환·탭·검색·탐색 키는 보기 범위에서 다시 정의할 수 없다.
+inline bool IsProtectedScopeKey(QKeyCombination Key)
+{
+    const auto Modifiers = Key.keyboardModifiers() & ~Qt::KeypadModifier;
+    const auto Code = Key.key();
+    if (Modifiers == Qt::NoModifier && (Code == Qt::Key_Tab || Code == Qt::Key_Escape || Code == Qt::Key_F12)) return true;
+    if (Modifiers == Qt::ControlModifier && (Code == Qt::Key_Tab || Code == Qt::Key_F || Code == Qt::Key_Q)) return true;
+    if (Modifiers == (Qt::ControlModifier | Qt::ShiftModifier) && Code == Qt::Key_Tab) return true;
+    if (Modifiers == Qt::AltModifier && (Code == Qt::Key_F1 || Code == Qt::Key_F2 || Code == Qt::Key_Left || Code == Qt::Key_Right)) return true;
+    return false;
+}
+
+inline TyMapShortcutToCMDStr DefaultScopeShortcuts(InputScope Scope)
+{
+    if (Scope == InputScope::CommandLine) return DefaultCommandLineShortcuts();
+    TyMapShortcutToCMDStr Values;
+    for (const auto& [Key, Id] : hc::defaults::ScopeShortcutDefaults(ScopeKey(Scope))) {
+        const auto Command = FindCommand(Id);
+        if (!Command.Name.isEmpty()) Values[Key] = Command.Name;
+    }
+    return Values;
+}
+
 inline QJsonObject CommandLineShortcutOverrides(const QJsonObject& Overrides)
 {
     auto Scoped = Overrides["commandLine"].toObject();
@@ -63,12 +157,28 @@ inline TyMapShortcutToCMDStr EffectiveCommandLineShortcuts(const QJsonObject& Ov
     return Values;
 }
 
+// 보기 범위의 실제 키 맵: 기본값 위에 사용자 지정(null은 해제)을 적용한다.
+inline TyMapShortcutToCMDStr EffectiveScopeShortcuts(const QJsonObject& Overrides, InputScope Scope)
+{
+    if (Scope == InputScope::CommandLine) return EffectiveCommandLineShortcuts(Overrides);
+    auto Values = DefaultScopeShortcuts(Scope);
+    const auto Scoped = Overrides[ScopeKey(Scope)].toObject();
+    for (auto It = Scoped.begin(); It != Scoped.end(); ++It) {
+        const auto Key = QKeySequence::fromString(It.key(), QKeySequence::PortableText);
+        if (Key.count() != 1 || Key[0].key() == Qt::Key_unknown) continue;
+        if (It.value().isNull()) { Values.remove(Key[0]); continue; }
+        const auto Command = FindCommand(It.value().toString());
+        if (!Command.Name.isEmpty() && ScopeAccepts(Scope, Command.Name) && !IsProtectedScopeKey(Key[0])) Values[Key[0]] = Command.Name;
+    }
+    return Values;
+}
+
 inline TyMapShortcutToCMDStr DefaultShortcuts(const QJsonObject& General)
 {
     TyMapShortcutToCMDStr Values;
     if (!General["useBuiltInShortcuts"].toBool(true)) return Values;
     for (const auto& Command : hc::defaults::Commands())
-        if (Command.Default.key() != Qt::Key_unknown && !IsCommandLineShortcut(Command.Name)) Values[Command.Default] = Command.Name;
+        if (Command.Default.key() != Qt::Key_unknown && !IsCommandLineShortcut(Command.Name) && !IsViewScopedCommand(Command.Name)) Values[Command.Default] = Command.Name;
     const auto Changes = hc::defaults::ShortcutPresetChanges(General["shortcutPreset"].toString(hc::defaults::ExistingShortcutPreset));
     for (auto It = Changes.cbegin(); It != Changes.cend(); ++It) {
         if (It.value().isEmpty()) Values.remove(It.key());
@@ -88,9 +198,17 @@ inline TyMapShortcutToCMDStr EffectiveShortcuts(const QJsonObject& General, cons
         if (Key.count() != 1 || Key[0].key() == Qt::Key_unknown) continue;
         if (It.value().isNull()) { Values.remove(Key[0]); continue; }
         const auto Command = FindCommand(It.value().toString());
-        if (!Command.Name.isEmpty() && !IsCommandLineShortcut(Command.Name)) Values[Key[0]] = Command.Name;
+        if (!Command.Name.isEmpty() && !IsCommandLineShortcut(Command.Name) && !IsViewScopedCommand(Command.Name)) Values[Key[0]] = Command.Name;
     }
     return Values;
+}
+
+// 기능 키 막대의 보기 종류. 파일 패널은 기존 functionCommands·functionCaptions를 쓴다.
+enum class FunctionBarKind { File, ProcessView, ServiceView };
+
+inline QString FunctionBarKey(FunctionBarKind Kind)
+{
+    return Kind == FunctionBarKind::ProcessView ? QStringLiteral("processView") : Kind == FunctionBarKind::ServiceView ? QStringLiteral("serviceView") : QString{};
 }
 
 inline QStringList FunctionCommands(const QJsonObject& General) {
@@ -102,6 +220,30 @@ inline QStringList FunctionCommands(const QJsonObject& General) {
 inline QString FunctionCaption(const QJsonObject& General, int Slot, const QString& Id, const QString& Fallback)
 {
     const auto Captions = General["functionCaptions"].toArray();
+    if (Slot >= 0 && Slot < Captions.size() && Captions[Slot].isString() && !Captions[Slot].toString().trimmed().isEmpty())
+        return Captions[Slot].toString();
+    static const auto Labels = hc::defaults::FunctionCaptions();
+    return Labels.value(CommandId(Id), Fallback);
+}
+
+inline QStringList FunctionCommandsFor(const QJsonObject& General, FunctionBarKind Kind)
+{
+    if (Kind == FunctionBarKind::File) return FunctionCommands(General);
+    const auto Defaults = Kind == FunctionBarKind::ProcessView ? hc::defaults::ProcessFunctionCommands() : hc::defaults::ServiceFunctionCommands();
+    const auto Items = General["functionBars"].toObject()[FunctionBarKey(Kind)].toObject()["commands"].toArray();
+    if (Items.size() != 9) return Defaults;
+    QStringList Result;
+    for (const auto Item : Items) {
+        if (!Item.isString() || FindCommand(Item.toString()).Name.isEmpty()) return Defaults;
+        Result.append(CommandId(Item.toString()));
+    }
+    return Result;
+}
+
+inline QString FunctionCaptionFor(const QJsonObject& General, FunctionBarKind Kind, int Slot, const QString& Id, const QString& Fallback)
+{
+    if (Kind == FunctionBarKind::File) return FunctionCaption(General, Slot, Id, Fallback);
+    const auto Captions = General["functionBars"].toObject()[FunctionBarKey(Kind)].toObject()["captions"].toArray();
     if (Slot >= 0 && Slot < Captions.size() && Captions[Slot].isString() && !Captions[Slot].toString().trimmed().isEmpty())
         return Captions[Slot].toString();
     static const auto Labels = hc::defaults::FunctionCaptions();
@@ -148,6 +290,12 @@ inline bool InvokeShortcut(const QKeyEvent& Event, const TyMapShortcutToCMDStr& 
 {
     const auto Command = ShortcutCommand(Event, Values);
     return !Command.isEmpty() && Invoke(Command);
+}
+
+// 보기 입력 범위의 키만 해석한다. 찾지 못하면 빈 문자열(호출자가 전역 맵으로 넘어간다).
+inline QString ScopeShortcut(const QKeyEvent& Event, const QJsonObject& Overrides, InputScope Scope)
+{
+    return ShortcutCommand(Event, EffectiveScopeShortcuts(Overrides, Scope));
 }
 
 // Resolve only the command input's scope; panel shortcuts may use the same key.

@@ -5,6 +5,9 @@
 #include <fmfilelist/RecordPreview.h>
 #include "thumbnailSettingsPage.hpp"
 #include "audioSettingsPage.hpp"
+#include "processServiceSettingsPage.hpp"
+#include "Components/cmpSystemView.hpp"
+#include "UniqueLibs/systemSessionService.hpp"
 #include "UniqueLibs/commandUiBridge.hpp"
 #include "UniqueLibs/audio/audioSession.hpp"
 #include "menuBarSettingsPage.hpp"
@@ -280,6 +283,7 @@ void QMainOpts::LoadSettings()
     const auto SelectedScheme = StColorSchemeMgr->GetCurrentColorScheme();
     RefreshColorScheme(SelectedScheme);
     thumbnailSettings_->Load(General.value("thumbnails").toObject());
+    processServiceSettings_->Load(General.value("processService").toObject());
     audioSettings_->Load(General.value("audioPreview").toObject(),
         hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject().value("audioOpenInternally").toBool(false));
     const auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
@@ -480,7 +484,11 @@ bool QMainOpts::SaveSettings()
     General["monoFontFamily"] = findChild<QFontComboBox*>("hc.settings.monoFont")->currentFont().family(); General["monoFontPx"] = findChild<QSpinBox*>("hc.settings.monoSize")->value();
     General["thumbnails"] = thumbnailSettings_->Save();
     General["audioPreview"] = audioSettings_->Save(General.value("audioPreview").toObject());
+    General["processService"] = processServiceSettings_->Save(General.value("processService").toObject());
     hc::settings::AppSettings().Put(hc::settings::Section::General, General);
+    // 열린 프로세스·서비스 보기에 새 설정을 바로 반영한다.
+    hc::sys::AdminSession().SetIdleTimeout(hc::sys::Settings::Load().helperIdleMinutes * 60000);
+    if (auto* Main = parentWidget()) for (auto* View : Main->findChildren<CSystemView*>()) View->ApplySettings();
     SaveSettings_ColorScheme();
     auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject(); Appearance["watercolorTheme"] = themeSettings_->Save(); Appearance["watercolorPresets"] = themeSettings_->SaveLibrary(); hc::settings::AppSettings().Put(hc::settings::Section::Appearance, Appearance);
     TyStColorSchemeMgr::GetInstance()->Refresh();
@@ -1143,6 +1151,8 @@ void QMainOpts::initializeDesignPages()
     menuSettings_ = new hc::ui::MenuBarSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(menuSettings_);
     audioSettings_ = new hc::ui::AudioSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(audioSettings_);
     audioSettings_->SetChanged([this] { ui.btnApply->setEnabled(true); });
+    processServiceSettings_ = new hc::ui::ProcessServiceSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(processServiceSettings_);
+    processServiceSettings_->SetChanged([this] { ui.btnApply->setEnabled(true); });
     auto* Permissions=hc::ui::PermissionSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(Permissions);
     legacySettings_ = new hc::ui::LegacySettingsPage(ui.stkOpts); ui.stkOpts->addWidget(legacySettings_);
     passwordSettings_ = new hc::passwords::SettingsPage(ui.stkOpts); ui.stkOpts->addWidget(passwordSettings_);
@@ -1150,7 +1160,7 @@ void QMainOpts::initializeDesignPages()
     const QSignalBlocker Block(ui.lstOptCate); ui.lstOptCate->clear();
     const QList<QPair<QString, int>> Pages{{tr("일반 · 모양"), ui.stkOpts->indexOf(General)}, {tr("테마 색상"), ui.stkOpts->indexOf(themeSettings_)}, {tr("파일 패널"), ui.stkOpts->indexOf(ui.pgDisplay)},
         {tr("썸네일 보기"), ui.stkOpts->indexOf(Thumbnails)}, {tr("파일 그룹 · 색상"), ui.stkOpts->indexOf(FileColorsScroll)}, {tr("열 · 사용자 정의 열"), ui.stkOpts->indexOf(ui.pgCustomColumns)},
-        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("비밀번호 관리"), ui.stkOpts->indexOf(passwordSettings_)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("오디오 미리 듣기"), ui.stkOpts->indexOf(audioSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}, {tr("레거시"), ui.stkOpts->indexOf(legacySettings_)}};
+        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("비밀번호 관리"), ui.stkOpts->indexOf(passwordSettings_)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("오디오 미리 듣기"), ui.stkOpts->indexOf(audioSettings_)}, {tr("프로세스 · 서비스"), ui.stkOpts->indexOf(processServiceSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}, {tr("레거시"), ui.stkOpts->indexOf(legacySettings_)}};
     for (const auto& Entry : Pages) { auto* Item = new QListWidgetItem(Entry.first, ui.lstOptCate); Item->setData(Qt::UserRole, Entry.second); }
     // One footer row: state dot + status at the left, OK · Cancel · Apply at the right; the file path is a tooltip.
     auto* SaveStatus = new SettingsStatusLabel(ui.frmFooter); SaveStatus->setObjectName("hc.settings.saveStatus"); SaveStatus->setTextFormat(Qt::PlainText);

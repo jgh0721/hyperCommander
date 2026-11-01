@@ -55,6 +55,7 @@
 #include "commonLibs/operations/providerInteractionTask.hpp"
 #include "qtViewerHost.hpp"
 #include "audio/audioSession.hpp"
+#include "system/systemCommands.hpp"
 #include "HyperCommander/UIs/audioPopover.hpp"
 #include "HyperCommander/UIs/audioTitleWidget.hpp"
 #include <fmwidgets/WindowChrome.h>
@@ -202,15 +203,16 @@ namespace
     };
     // 기존 사용자의 menu-bar.json 도구 메뉴 끝에 오디오 하위 메뉴를 한 번만 넣는다.
     // 표식(general.menuMigrations)이 있으면 사용자가 지웠어도 다시 넣지 않는다.
-    void MigrateAudioMenu(const QString& Path, const QByteArray& BuiltIn)
+    // Marker: 마이그레이션 표식, ItemId: 기본 메뉴의 도구 항목 id, Needle: 이미 쓰고 있으면 넣지 않을 명령 접두사.
+    void MigrateToolsMenu(const QString& Path, const QByteArray& BuiltIn, const QString& Marker, const QString& ItemId, const QByteArray& Needle)
     {
         auto& Settings = hc::settings::AppSettings();
         auto General = Settings.Read(hc::settings::Section::General).toObject();
         auto Done = General.value("menuMigrations").toArray();
-        if (Done.contains(QJsonValue("audio-1"))) return;
-        const auto Mark = [&] { Done.append("audio-1"); General["menuMigrations"] = Done; Settings.Put(hc::settings::Section::General, General); };
+        if (Done.contains(QJsonValue(Marker))) return;
+        const auto Mark = [&] { Done.append(Marker); General["menuMigrations"] = Done; Settings.Put(hc::settings::Section::General, General); };
         QFile File(Path);
-        // 첫 실행은 오디오 메뉴가 든 기본 파일을 그대로 복사한다.
+        // 첫 실행은 새 메뉴가 든 기본 파일을 그대로 복사한다.
         if (!File.exists()) { Mark(); return; }
         if (File.size() > 1024 * 1024 || !File.open(QIODevice::ReadOnly)) return;
         const auto Bytes = File.readAll(); File.close();
@@ -219,9 +221,9 @@ namespace
         QJsonObject Stock;
         for (const auto& Menu : QJsonDocument::fromJson(BuiltIn).object()["menus"].toArray())
             if (Menu.toObject()["id"] == "tools")
-                for (const auto& Item : Menu.toObject()["items"].toArray()) if (Item.toObject()["id"] == "audio") Stock = Item.toObject();
-        // 이미 오디오 명령을 쓰거나 같은 id가 있으면 사용자 구성을 존중한다.
-        if (Stock.isEmpty() || Bytes.contains("hc.audio.") || Bytes.contains("\"audio")) { Mark(); return; }
+                for (const auto& Item : Menu.toObject()["items"].toArray()) if (Item.toObject()["id"] == ItemId) Stock = Item.toObject();
+        // 이미 그 명령을 쓰거나 같은 id가 있으면 사용자 구성을 존중한다.
+        if (Stock.isEmpty() || Bytes.contains(Needle) || Bytes.contains("\"" + ItemId.toUtf8() + "\"")) { Mark(); return; }
         bool Inserted = false;
         for (qsizetype Index = 0; Index < Menus.size() && !Inserted; ++Index) {
             auto Menu = Menus[Index].toObject();
@@ -234,7 +236,7 @@ namespace
         const auto Next = QJsonDocument(Root).toJson();
         QSaveFile Save(Path); Save.setDirectWriteFallback(false);
         if (Save.open(QIODevice::WriteOnly) && Save.write(Next) == Next.size() && Save.commit()) Mark();
-        else qWarning().noquote() << "audio menu migration failed:" << Path << Save.errorString();
+        else qWarning().noquote() << "menu migration failed:" << Marker << Path << Save.errorString();
     }
     QModelIndex SourceIndex(QModelIndex Index)
     {
@@ -885,6 +887,9 @@ void CommandUiBridge::createActions()
             Action->setObjectName("hc.menu." + Id);
             Menu->addAction(Action); Toolbar->addAction(Action);
             connect(Action, &QAction::triggered, this, [this, Id] {
+                // 시스템 보기의 새로 고침은 프로세스·서비스 목록을 다시 읽는다.
+                if ((Id == "hc.navigate.refresh" || Id == "hc.navigate.forceRefresh") && activePanel_ && activePanel_->SystemView())
+                { activePanel_->RefreshSource(activePanel_->CurrentTabIndex()); return; }
                 QVariantMap Parameters;
                 if (Id == "hc.navigate.path")
                 {
@@ -915,7 +920,12 @@ void CommandUiBridge::createActions()
         {"hc.viewer.open", tr("문서 보기 · 프로그램 선택")}, {"hc.file.edit", tr("문서 편집 · 프로그램 선택")}, {"hc.viewer.quick", tr("반대 패널 미리 보기")}, {"hc.viewer.close", tr("미리 보기 닫기")}})
     {
         auto* Action = Viewers->addAction(Item.second); Action->setObjectName("hc.menu." + Item.first);
-        connect(Action, &QAction::triggered, this, [this, Id = Item.first] { Dispatch(Id, {}, "ui", commandIndex()); });
+        connect(Action, &QAction::triggered, this, [this, Id = Item.first] {
+            // 시스템 보기에서 Ctrl+Q는 반대 패널 상세 보기를 열고 닫는다.
+            if (system_ && Id == "hc.viewer.quick" && (system_->DetailOpen() || system_->ActiveKind() >= 0)) { system_->ToggleDetail(); return; }
+            if (system_ && Id == "hc.viewer.close" && system_->CloseDetail()) return;
+            Dispatch(Id, {}, "ui", commandIndex());
+        });
     }
     const std::vector<std::pair<QString, QString>> FileActions{
         {"hc.file.copy", tr("복사")}, {"hc.file.move", tr("이동")}, {"hc.file.rename", tr("이름 변경")},
@@ -1078,6 +1088,11 @@ bool CommandUiBridge::ExecuteCommand(const QString& Id, const QModelIndex& Index
     return false;
 }
 
+bool CommandUiBridge::ExecuteSystemCommand(const QString& Id, const QVariant& Argument, QObject* Source)
+{
+    return system_ && system_->Execute(Id, Argument, Source);
+}
+
 void CommandUiBridge::ShowShellMenu(const QModelIndex& Index)
 {
     const auto Context = Capture(Index);
@@ -1094,13 +1109,16 @@ void CommandUiBridge::RefreshFunctionBar() {
     auto* Layout = qobject_cast<QVBoxLayout*>(Window->centralWidget()->layout()); if (!Layout) return;
     auto* Old = Window->findChild<fm::ui::FunctionKeyBar*>("hc.functionBar");
     const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
-    const auto Desired = hc::ui::FunctionCommands(General); QStringList Current;
+    // 활성 패널이 프로세스·서비스 보기면 그 보기의 기능 키 막대를 보인다.
+    functionBarKind_ = system_ ? system_->ActiveKind() : -1;
+    const auto Kind = functionBarKind_ == 0 ? hc::ui::FunctionBarKind::ProcessView : functionBarKind_ == 1 ? hc::ui::FunctionBarKind::ServiceView : hc::ui::FunctionBarKind::File;
+    const auto Desired = hc::ui::FunctionCommandsFor(General, Kind); QStringList Current;
     if (Old) for (auto* Button : Old->buttons()) Current.append(Button->property("hc.commandId").toString());
     if (Old && Current == Desired) {
         for (int Slot = 0; Slot < Desired.size(); ++Slot) {
             auto* Command = Action(Desired[Slot]);
             const auto Label = Command ? Command->property("hc.baseLabel").toString() : Desired[Slot];
-            hc::ui::SetFunctionCaption(Old->buttons()[Slot], Command, hc::ui::FunctionCaption(General, Slot, Desired[Slot], Label));
+            hc::ui::SetFunctionCaption(Old->buttons()[Slot], Command, hc::ui::FunctionCaptionFor(General, Kind, Slot, Desired[Slot], Label));
         }
         Old->setVisible(General["showFunctionBar"].toBool(true)); return;
     }
@@ -1109,7 +1127,7 @@ void CommandUiBridge::RefreshFunctionBar() {
     for (int Slot = 0; Slot < Desired.size(); ++Slot) {
         const auto& Id = Desired[Slot];
         auto* Command = Action(Id); const auto Label = Command ? Command->property("hc.baseLabel").toString() : Id;
-        auto* Button = Bar->addKey({}, hc::ui::FunctionCaption(General, Slot, Id, Label)); Button->setObjectName("hc.function." + Id); Button->setProperty("hc.commandId", Id);
+        auto* Button = Bar->addKey({}, hc::ui::FunctionCaptionFor(General, Kind, Slot, Id, Label)); Button->setObjectName("hc.function." + Id); Button->setProperty("hc.commandId", Id);
         if (Command) hc::ui::BindFunctionButton(Button, Command); else Button->setEnabled(false);
     }
     Layout->addWidget(Bar); Bar->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showFunctionBar"].toBool(true));
@@ -1123,7 +1141,7 @@ void CommandUiBridge::RefreshShortcutLabels()
     for (auto It = actions_.begin(); It != actions_.end(); ++It) {
         if (!It.value()) continue;
         auto* Command = It.value().data();
-        const auto Keys = hc::ui::CommandKeys(hc::ui::IsCommandLineShortcut(It.key())
+        const auto Keys = hc::ui::CommandKeys(hc::ui::IsCommandLineShortcut(It.key()) || hc::ui::IsViewScopedCommand(It.key())
             ? TyStCommandMgr::GetInstance()->RetrieveForCommand(It.key()) : Values, It.key());
         QStringList Labels;
         for (const auto& Key : Keys) Labels.append(Key.toString(QKeySequence::NativeText));
@@ -1185,6 +1203,11 @@ void CommandUiBridge::refreshActionState()
 {
     finishCreatedFolderNavigation();
     finishCreatedFileFocus();
+    // 시스템 보기를 떠났을 때만 껐던 명령을 되돌린다. 아래 규칙이 파일 보기 기준으로 다시 정한다.
+    // 시스템 보기에 머무는 동안에는 켰다 끄기를 반복하지 않는다(QAction::changed가 메뉴·기능 키 막대를 매번 다시 그린다).
+    const int SystemKind = system_ ? system_->ActiveKind() : -1;
+    if (SystemKind < 0)
+        for (const auto& Id : std::exchange(systemDisabled_, {})) if (auto* Command = Action(Id)) Command->setEnabled(true);
     if (auto* Back = Action("hc.navigate.back")) Back->setEnabled(activePanel_ && activePanel_->CanNavigateHistory(-1));
     if (auto* Forward = Action("hc.navigate.forward")) Forward->setEnabled(activePanel_ && activePanel_->CanNavigateHistory(1));
     const auto* Model = PanelModel(activePanel_);
@@ -1227,6 +1250,17 @@ void CommandUiBridge::refreshActionState()
         Command->setEnabled(Native);
         Command->setToolTip(Native ? tr("선택한 파일·폴더의 속성과 수정 시각을 변경합니다.") : tr("로컬 또는 SMB 파일·폴더에서 사용할 수 있습니다."));
     }
+    if (!system_) return;
+    system_->RefreshState();
+    const int Kind = SystemKind;
+    // Ctrl+Q는 시스템 보기에서 반대 패널 상세 보기를 연다.
+    if (auto* Command = Action("hc.viewer.quick")) Command->setEnabled(Ready || Kind >= 0 || system_->DetailOpen());
+    if (Kind >= 0) {
+        // 덮인 파일 목록에 닿는 명령은 메뉴·도구 모음에서도 끈다.
+        for (auto It = actions_.cbegin(); It != actions_.cend(); ++It)
+            if (It.value() && It.value()->isEnabled() && !hc::ui::IsSystemViewGlobalCommand(It.key())) { It.value()->setEnabled(false); systemDisabled_.insert(It.key()); }
+    }
+    if (Kind != functionBarKind_) RefreshFunctionBar();
 }
 
 void CommandUiBridge::createCommandUi()
@@ -1306,10 +1340,16 @@ void CommandUiBridge::createCommandUi()
     Add("hc.audio.seekBack", tr("5초 뒤로"), [this] { audio_->SeekBy(-5000); });
     Add("hc.audio.locate", tr("재생 중인 파일 위치 보기"), [this] { LocateAudio(); });
     createAudioUi(Window);
+    system_ = new hc::sys::SystemCommands(Window, this, [this] { return activePanel_.data(); });
     for (const auto& Command : GlobalBuiltInCMDs) {
         const auto Id = hc::ui::CommandId(Command.Name);
         if (actions_.contains(Id)) continue;
         Add(Id, Command.Desc, [this, Id] {
+            if (hc::sys::SystemCommands::Handles(Id)) { system_->Execute(Id); return; }
+            // 시스템 보기에서 Ctrl+Q는 반대 패널 상세 보기를 열고 닫는다.
+            if (Id == "hc.viewer.quick" && (system_->DetailOpen() || system_->ActiveKind() >= 0)) { system_->ToggleDetail(); return; }
+            if (Id == "hc.viewer.close" && system_->CloseDetail()) return;
+            if (Id.startsWith("hc.navigate.gotoDrive") && activePanel_ && activePanel_->SystemView()) activePanel_->HideSystemView();
             if (Id.startsWith("hc.clipboard.")) { Dispatch(Id, {}, "ui", commandIndex()); return; }
             if (Id.startsWith("hc.selection.") && Id != "hc.selection.invert") {
                 auto* Panel = activePanel_.data();
@@ -1397,7 +1437,8 @@ void CommandUiBridge::createCommandUi()
     if (!Default.open(QIODevice::ReadOnly)) return;
     const auto BuiltInMenu = Default.readAll();
     const auto MenuPath = QDir(hc::settings::Paths().directory_).filePath("menu-bar.json");
-    MigrateAudioMenu(MenuPath, BuiltInMenu);
+    MigrateToolsMenu(MenuPath, BuiltInMenu, "audio-1", "audio", "hc.audio.");
+    MigrateToolsMenu(MenuPath, BuiltInMenu, "system-1", "system", "hc.system.");
     userMenu_ = new hc::ui::UserMenu(Window->findChild<QMenuBar*>("menubar"), MenuPath, BuiltInMenu, actions_, Sections,
         [Window](const QString& Diagnostic) { Window->statusBar()->showMessage(Diagnostic); qWarning().noquote() << Diagnostic; },
         [this] { refreshActionState(); });

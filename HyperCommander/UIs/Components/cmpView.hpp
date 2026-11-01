@@ -27,7 +27,7 @@ class CViewT : public QWidget
 {
     Q_OBJECT
 public:
-    enum TyEnViewMode { VM_NONE, VM_GRID, VM_QUICK, VM_LISTER };
+    enum TyEnViewMode { VM_NONE, VM_GRID, VM_QUICK, VM_LISTER, VM_SYSTEM, VM_DETAIL };
     CViewT( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
     TyEnViewMode                    GetViewMode() const { return viewMode_; }

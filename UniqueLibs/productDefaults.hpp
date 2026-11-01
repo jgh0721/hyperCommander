@@ -274,6 +274,79 @@ DECLARE_CMD( BuiltInCMD_Audio_SeekBack,           QObject::tr( "오디오" ),  "
 DECLARE_CMD( BuiltInCMD_Audio_Locate,             QObject::tr( "오디오" ),  "hc.audio.locate",
              Qt::Key_unknown,                                           QObject::tr( "재생 중인 파일 위치 보기" ) );
 
+// 프로세스·서비스 보기. hc.process.*·hc.service.*의 기본 키는 전역 맵이 아니라 보기 입력 범위
+// (processView·serviceView)에 둔다. 범위별 기본 키는 hc::defaults::ScopeShortcutDefaults()다.
+DECLARE_CMD( BuiltInCMD_System_Processes,         QObject::tr( "시스템" ),  "hc.system.processes.open",
+             Qt::Key_unknown,                                           QObject::tr( "프로세스 보기 열기" ) );
+DECLARE_CMD( BuiltInCMD_System_Services,          QObject::tr( "시스템" ),  "hc.system.services.open",
+             Qt::Key_unknown,                                           QObject::tr( "서비스 보기 열기" ) );
+DECLARE_CMD( BuiltInCMD_System_AdminHelper,       QObject::tr( "시스템" ),  "hc.system.startAdminHelper",
+             Qt::Key_unknown,                                           QObject::tr( "관리자 도우미 미리 시작" ) );
+DECLARE_CMD( BuiltInCMD_Panel_LocationLeft,       QObject::tr( "탐색" ),    "hc.panel.locationMenuLeft",
+             Qt::AltModifier | Qt::Key_F1,                              QObject::tr( "왼쪽 패널 위치 메뉴" ) );
+DECLARE_CMD( BuiltInCMD_Panel_LocationRight,      QObject::tr( "탐색" ),    "hc.panel.locationMenuRight",
+             Qt::AltModifier | Qt::Key_F2,                              QObject::tr( "오른쪽 패널 위치 메뉴" ) );
+DECLARE_CMD( BuiltInCMD_System_RefreshPause,      QObject::tr( "시스템" ),  "hc.system.refreshPause",
+             Qt::Key_unknown,                                           QObject::tr( "갱신 일시 정지·재개" ) );
+DECLARE_CMD( BuiltInCMD_System_Follow,            QObject::tr( "시스템" ),  "hc.system.followLocation",
+             Qt::Key_unknown,                                           QObject::tr( "파일 위치 따라가기" ) );
+DECLARE_CMD( BuiltInCMD_Process_Properties,       QObject::tr( "프로세스" ), "hc.process.properties",
+             Qt::Key_unknown,                                           QObject::tr( "프로세스 속성" ) );
+DECLARE_CMD( BuiltInCMD_Process_Location,         QObject::tr( "프로세스" ), "hc.process.openLocation",
+             Qt::Key_unknown,                                           QObject::tr( "파일 위치 열기(반대 패널)" ) );
+DECLARE_CMD( BuiltInCMD_Process_LocationTab,      QObject::tr( "프로세스" ), "hc.process.openLocationNewTab",
+             Qt::Key_unknown,                                           QObject::tr( "새 탭에서 파일 위치 열기" ) );
+DECLARE_CMD( BuiltInCMD_Process_Window,           QObject::tr( "프로세스" ), "hc.process.switchToWindow",
+             Qt::Key_unknown,                                           QObject::tr( "창으로 전환" ) );
+DECLARE_CMD( BuiltInCMD_Process_Suspend,          QObject::tr( "프로세스" ), "hc.process.suspendToggle",
+             Qt::Key_unknown,                                           QObject::tr( "일시 중단·재개" ) );
+DECLARE_CMD( BuiltInCMD_Process_Priority,         QObject::tr( "프로세스" ), "hc.process.priority",
+             Qt::Key_unknown,                                           QObject::tr( "우선순위 메뉴" ) );
+DECLARE_CMD( BuiltInCMD_Process_Efficiency,       QObject::tr( "프로세스" ), "hc.process.efficiencyMode",
+             Qt::Key_unknown,                                           QObject::tr( "효율 모드 전환" ) );
+DECLARE_CMD( BuiltInCMD_Process_Run,              QObject::tr( "프로세스" ), "hc.process.run",
+             Qt::Key_unknown,                                           QObject::tr( "새 작업 실행" ) );
+DECLARE_CMD( BuiltInCMD_Process_Terminate,        QObject::tr( "프로세스" ), "hc.process.terminate",
+             Qt::Key_unknown,                                           QObject::tr( "프로세스 끝내기" ) );
+DECLARE_CMD( BuiltInCMD_Process_TerminateTree,    QObject::tr( "프로세스" ), "hc.process.terminateTree",
+             Qt::Key_unknown,                                           QObject::tr( "프로세스 트리 끝내기" ) );
+DECLARE_CMD( BuiltInCMD_Process_Restart,          QObject::tr( "프로세스" ), "hc.process.restart",
+             Qt::Key_unknown,                                           QObject::tr( "다시 실행" ) );
+DECLARE_CMD( BuiltInCMD_Process_Copy,             QObject::tr( "프로세스" ), "hc.process.copy",
+             Qt::Key_unknown,                                           QObject::tr( "프로세스 정보 복사" ) );
+DECLARE_CMD( BuiltInCMD_Process_Search,           QObject::tr( "프로세스" ), "hc.process.searchOnline",
+             Qt::Key_unknown,                                           QObject::tr( "온라인에서 검색" ) );
+DECLARE_CMD( BuiltInCMD_Process_Menu,             QObject::tr( "프로세스" ), "hc.process.contextMenu",
+             Qt::Key_unknown,                                           QObject::tr( "프로세스 바로 가기 메뉴" ) );
+DECLARE_CMD( BuiltInCMD_Process_ViewMode,         QObject::tr( "프로세스" ), "hc.process.viewMode",
+             Qt::Key_unknown,                                           QObject::tr( "트리·목록 전환" ) );
+DECLARE_CMD( BuiltInCMD_Process_Services,         QObject::tr( "프로세스" ), "hc.process.showServices",
+             Qt::Key_unknown,                                           QObject::tr( "관련 서비스 보기" ) );
+DECLARE_CMD( BuiltInCMD_Service_Properties,       QObject::tr( "서비스" ),  "hc.service.properties",
+             Qt::Key_unknown,                                           QObject::tr( "서비스 속성" ) );
+DECLARE_CMD( BuiltInCMD_Service_Location,         QObject::tr( "서비스" ),  "hc.service.openLocation",
+             Qt::Key_unknown,                                           QObject::tr( "실행 파일 위치(반대 패널)" ) );
+DECLARE_CMD( BuiltInCMD_Service_LocationTab,      QObject::tr( "서비스" ),  "hc.service.openLocationNewTab",
+             Qt::Key_unknown,                                           QObject::tr( "새 탭에서 실행 파일 위치 열기" ) );
+DECLARE_CMD( BuiltInCMD_Service_Start,            QObject::tr( "서비스" ),  "hc.service.start",
+             Qt::Key_unknown,                                           QObject::tr( "서비스 시작" ) );
+DECLARE_CMD( BuiltInCMD_Service_Stop,             QObject::tr( "서비스" ),  "hc.service.stop",
+             Qt::Key_unknown,                                           QObject::tr( "서비스 중지" ) );
+DECLARE_CMD( BuiltInCMD_Service_Restart,          QObject::tr( "서비스" ),  "hc.service.restart",
+             Qt::Key_unknown,                                           QObject::tr( "서비스 다시 시작" ) );
+DECLARE_CMD( BuiltInCMD_Service_Pause,            QObject::tr( "서비스" ),  "hc.service.pauseToggle",
+             Qt::Key_unknown,                                           QObject::tr( "서비스 일시 중지·계속" ) );
+DECLARE_CMD( BuiltInCMD_Service_StartType,        QObject::tr( "서비스" ),  "hc.service.startType",
+             Qt::Key_unknown,                                           QObject::tr( "시작 유형 메뉴" ) );
+DECLARE_CMD( BuiltInCMD_Service_Process,          QObject::tr( "서비스" ),  "hc.service.showProcess",
+             Qt::Key_unknown,                                           QObject::tr( "프로세스 보기로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Service_Drivers,          QObject::tr( "서비스" ),  "hc.service.toggleDrivers",
+             Qt::Key_unknown,                                           QObject::tr( "드라이버 포함 전환" ) );
+DECLARE_CMD( BuiltInCMD_Service_Copy,             QObject::tr( "서비스" ),  "hc.service.copy",
+             Qt::Key_unknown,                                           QObject::tr( "서비스 정보 복사" ) );
+DECLARE_CMD( BuiltInCMD_Service_Menu,             QObject::tr( "서비스" ),  "hc.service.contextMenu",
+             Qt::Key_unknown,                                           QObject::tr( "서비스 바로 가기 메뉴" ) );
+
 // 해당 벡터를 순서대로 순회하며 환경설정 대화상자에 표시한다.
 inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_Tab_New,
@@ -389,6 +462,41 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_Audio_SeekForward,
     BuiltInCMD_Audio_SeekBack,
     BuiltInCMD_Audio_Locate,
+    BuiltInCMD_System_Processes,
+    BuiltInCMD_System_Services,
+    BuiltInCMD_System_AdminHelper,
+    BuiltInCMD_Panel_LocationLeft,
+    BuiltInCMD_Panel_LocationRight,
+    BuiltInCMD_System_RefreshPause,
+    BuiltInCMD_System_Follow,
+    BuiltInCMD_Process_Properties,
+    BuiltInCMD_Process_Location,
+    BuiltInCMD_Process_LocationTab,
+    BuiltInCMD_Process_Window,
+    BuiltInCMD_Process_Suspend,
+    BuiltInCMD_Process_Priority,
+    BuiltInCMD_Process_Efficiency,
+    BuiltInCMD_Process_Run,
+    BuiltInCMD_Process_Terminate,
+    BuiltInCMD_Process_TerminateTree,
+    BuiltInCMD_Process_Restart,
+    BuiltInCMD_Process_Copy,
+    BuiltInCMD_Process_Search,
+    BuiltInCMD_Process_Menu,
+    BuiltInCMD_Process_ViewMode,
+    BuiltInCMD_Process_Services,
+    BuiltInCMD_Service_Properties,
+    BuiltInCMD_Service_Location,
+    BuiltInCMD_Service_LocationTab,
+    BuiltInCMD_Service_Start,
+    BuiltInCMD_Service_Stop,
+    BuiltInCMD_Service_Restart,
+    BuiltInCMD_Service_Pause,
+    BuiltInCMD_Service_StartType,
+    BuiltInCMD_Service_Process,
+    BuiltInCMD_Service_Drivers,
+    BuiltInCMD_Service_Copy,
+    BuiltInCMD_Service_Menu,
 };
 
 namespace hc::defaults
@@ -612,7 +720,95 @@ namespace hc::defaults
                  { "hc.file.mkdir",           QObject::tr( "새 폴더" ) },
                  { "hc.file.delete",          QObject::tr( "삭제" ) },
                  { "hc.file.new",             QObject::tr( "새 파일" ) },
-                 { "hc.file.batchRename",     QObject::tr( "다중 이름 변경" ) } };
+                 { "hc.file.batchRename",     QObject::tr( "다중 이름 변경" ) },
+                 { "hc.navigate.refresh",     QObject::tr( "새로 고침" ) },
+                 { "hc.viewer.quick",         QObject::tr( "빠른 보기" ) },
+                 { "hc.process.properties",   QObject::tr( "속성" ) },
+                 { "hc.process.openLocation", QObject::tr( "파일 위치" ) },
+                 { "hc.process.priority",     QObject::tr( "우선순위" ) },
+                 { "hc.process.run",          QObject::tr( "새 작업" ) },
+                 { "hc.process.terminate",    QObject::tr( "끝내기" ) },
+                 { "hc.process.terminateTree", QObject::tr( "트리 끝내기" ) },
+                 { "hc.process.suspendToggle", QObject::tr( "일시 중단" ) },
+                 { "hc.service.properties",   QObject::tr( "속성" ) },
+                 { "hc.service.openLocation", QObject::tr( "파일 위치" ) },
+                 { "hc.service.restart",      QObject::tr( "다시 시작" ) },
+                 { "hc.service.start",        QObject::tr( "시작" ) },
+                 { "hc.service.stop",         QObject::tr( "중지" ) },
+                 { "hc.service.pauseToggle",  QObject::tr( "일시 중지" ) },
+                 { "hc.service.startType",    QObject::tr( "시작 유형" ) } };
+    }
+
+    // 보기별 기능 키 막대. 키 표시는 해당 입력 범위의 키 맵을 따른다.
+    inline QStringList ProcessFunctionCommands()
+    {
+        return { "hc.process.properties", "hc.process.openLocation", "hc.navigate.refresh", "hc.process.priority", "hc.process.run",
+                 "hc.process.terminate", "hc.process.terminateTree", "hc.process.suspendToggle", "hc.viewer.quick" };
+    }
+    inline QStringList ServiceFunctionCommands()
+    {
+        return { "hc.service.properties", "hc.service.openLocation", "hc.navigate.refresh", "hc.service.restart", "hc.service.start",
+                 "hc.service.stop", "hc.service.pauseToggle", "hc.service.startType", "hc.viewer.quick" };
+    }
+
+    // 보기 입력 범위의 기본 키(설계 7.5). F5는 제품 전체의 새로 고침이므로 범위에서 덮지 않는다.
+    inline QList<QPair<QKeyCombination, QString>> ScopeShortcutDefaults( const QString& Scope )
+    {
+        using K = QKeyCombination;
+        if( Scope == "processView" )
+            return { { K( Qt::Key_F3 ), "hc.process.properties" },
+                     { K( Qt::Key_F4 ), "hc.process.openLocation" },
+                     { K( Qt::Key_F6 ), "hc.process.priority" },
+                     { K( Qt::Key_F7 ), "hc.process.run" },
+                     { K( Qt::Key_F8 ), "hc.process.terminate" },
+                     { K( Qt::Key_Delete ), "hc.process.terminate" },
+                     { K( Qt::KeypadModifier, Qt::Key_Delete ), "hc.process.terminate" },
+                     { K( Qt::ShiftModifier, Qt::Key_F8 ), "hc.process.terminateTree" },
+                     { K( Qt::ShiftModifier, Qt::Key_Delete ), "hc.process.terminateTree" },
+                     { K( Qt::Key_F9 ), "hc.process.suspendToggle" },
+                     { K( Qt::ShiftModifier, Qt::Key_Return ), "hc.process.contextMenu" },
+                     { K( Qt::ControlModifier, Qt::Key_Return ), "hc.process.switchToWindow" },
+                     { K( Qt::Key_Pause ), "hc.system.refreshPause" } };
+        if( Scope == "serviceView" )
+            return { { K( Qt::Key_F3 ), "hc.service.properties" },
+                     { K( Qt::Key_F4 ), "hc.service.openLocation" },
+                     { K( Qt::Key_F6 ), "hc.service.restart" },
+                     { K( Qt::Key_F7 ), "hc.service.start" },
+                     { K( Qt::Key_F8 ), "hc.service.stop" },
+                     { K( Qt::Key_Delete ), "hc.service.stop" },
+                     { K( Qt::KeypadModifier, Qt::Key_Delete ), "hc.service.stop" },
+                     { K( Qt::Key_F9 ), "hc.service.pauseToggle" },
+                     { K( Qt::ShiftModifier, Qt::Key_F4 ), "hc.service.startType" },
+                     { K( Qt::ShiftModifier, Qt::Key_Return ), "hc.service.contextMenu" },
+                     { K( Qt::ControlModifier, Qt::Key_Return ), "hc.service.showProcess" },
+                     { K( Qt::Key_Pause ), "hc.system.refreshPause" } };
+        return {};
+    }
+
+    // 프로세스·서비스 보기 설정(설계 6.5, 7.9)
+    inline QJsonObject ProcessService()
+    {
+        return { { "version",                       1 },
+                 { "refreshMs",                     1000 },
+                 { "pauseWhenHidden",               true },
+                 { "highlightCycles",               2 },
+                 { "confirmSingleTerminate",        true },
+                 { "gracefulClose",                 true },
+                 { "gracefulWaitSec",               5 },
+                 { "cpuMethod",                     "auto" },
+                 { "showInterrupts",                true },
+                 { "treeLines",                     true },
+                 { "followDebounceMs",              300 },
+                 { "serviceProblemExcludesDelayed", true },
+                 { "helperIdleMinutes",             10 },
+                 { "autoStartHelper",               true },
+                 { "allUsers",                      true },
+                 { "colors",                        QJsonObject{} } };
+    }
+    inline QJsonObject FunctionBars()
+    {
+        return { { "processView", QJsonObject{ { "commands", QJsonArray::fromStringList( ProcessFunctionCommands() ) }, { "captions", QJsonArray{} } } },
+                 { "serviceView", QJsonObject{ { "commands", QJsonArray::fromStringList( ServiceFunctionCommands() ) }, { "captions", QJsonArray{} } } } };
     }
 
     // 아래 예제 팔레트는 설정의 '기본 예제 그룹 추가'에서 사용한다.
@@ -1035,6 +1231,8 @@ namespace hc::defaults
                  { "filePanel",               FilePanel() },
                  { "thumbnails",              Thumbnails() },
                  { "audioPreview",            AudioPreview() },
+                 { "functionBars",            FunctionBars() },
+                 { "processService",          ProcessService() },
                  // 한 번만 적용하는 사용자 메뉴 파일 이관 표식
                  { "menuMigrations",          QJsonArray{} } };
     }

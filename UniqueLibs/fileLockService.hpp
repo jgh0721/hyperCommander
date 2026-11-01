@@ -7,6 +7,8 @@
 #include <memory>
 #include <mutex>
 
+namespace hc::admin { class ChannelClient; }
+
 namespace hc::filelocks {
 // Blocking I/O is called only from a UI-owned background task. Cancel is safe
 // from the UI thread; destruction belongs to the last background owner.
@@ -19,15 +21,11 @@ public:
     QJsonObject Act(const QString& Capability, const QString& Generation, const QString& Action, const QString& RequestId);
     void Cancel();
 private:
-    bool start();
     QJsonObject exchange(QJsonObject Message, unsigned long Timeout);
     QStringList paths_;
-    bool elevated_ = false;
-    QString helper_, nonce_;
-    Launcher launcher_;
-    void* pipe_ = nullptr;
-    void* process_ = nullptr;
-    std::atomic_bool cancelled_{false};
+    bool valid_ = false;
+    // The shared admin channel owns the pipe, helper process and verification.
+    std::unique_ptr<hc::admin::ChannelClient> channel_;
     std::mutex mutex_;
 };
 // ExpectedCaller is fixed by the product entry point. Test fixtures explicitly

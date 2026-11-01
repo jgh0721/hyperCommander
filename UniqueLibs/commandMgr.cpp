@@ -40,9 +40,14 @@ void CCommandMgr::Refresh()
 void CCommandMgr::SaveSettings()
 {
     QJsonObject Overrides;
-    const auto Scoped = hc::ui::CommandLineShortcutOverrides(
-        hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject());
+    const auto Current = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+    const auto Scoped = hc::ui::CommandLineShortcutOverrides(Current);
     if (!Scoped.isEmpty()) Overrides["commandLine"] = Scoped;
+    // 보기 입력 범위의 사용자 지정은 전역 맵과 따로 저장되어 있다. 다시 만들 때 그대로 둔다.
+    for (const auto Scope : {hc::ui::InputScope::ProcessView, hc::ui::InputScope::ServiceView}) {
+        const auto View = Current[hc::ui::ScopeKey(Scope)].toObject();
+        if (!View.isEmpty()) Overrides[hc::ui::ScopeKey(Scope)] = View;
+    }
     const auto Values = Retrieve();
     const auto Defaults = hc::ui::DefaultShortcuts(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject());
     for (auto It = Defaults.cbegin(); It != Defaults.cend(); ++It)
@@ -64,14 +69,62 @@ TyHC_COMMAND CCommandMgr::GetDefaultCMD( const QString& Command )
 
 TyMapShortcutToCMDStr CCommandMgr::RetrieveForCommand(const QString& Id) const
 {
+    if (hc::ui::IsViewScopedCommand(Id)) return RetrieveForScope(hc::ui::HomeScope(Id));
     return hc::ui::IsCommandLineShortcut(Id)
         ? hc::ui::EffectiveCommandLineShortcuts(hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject())
         : Retrieve();
 }
 
+TyMapShortcutToCMDStr CCommandMgr::RetrieveForScope(hc::ui::InputScope Scope) const
+{
+    if (Scope == hc::ui::InputScope::Global) return Retrieve();
+    return hc::ui::EffectiveScopeShortcuts(hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject(), Scope);
+}
+
+void CCommandMgr::SetShortcutInScope(QKeyCombination Key, const QString& CMD, hc::ui::InputScope Scope)
+{
+    if (Scope == hc::ui::InputScope::Global || Scope == hc::ui::InputScope::CommandLine) { SetShortcutWithCMD(Key, CMD); return; }
+    if (GetDefaultCMD(CMD).Name.isEmpty() || !hc::ui::ScopeAccepts(Scope, CMD) || hc::ui::IsProtectedScopeKey(Key)) return;
+    auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+    auto Scoped = Overrides[hc::ui::ScopeKey(Scope)].toObject();
+    Scoped[QKeySequence(Key).toString(QKeySequence::PortableText)] = hc::ui::CommandId(CMD);
+    Overrides[hc::ui::ScopeKey(Scope)] = Scoped;
+    hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides);
+    emit ShortcutsChanged();
+}
+
+void CCommandMgr::DelShortcutInScope(QKeyCombination Key, const QString& Id, hc::ui::InputScope Scope)
+{
+    if (Scope == hc::ui::InputScope::Global || Scope == hc::ui::InputScope::CommandLine) { DelShortcut(Key, Id); return; }
+    auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+    auto Scoped = Overrides[hc::ui::ScopeKey(Scope)].toObject();
+    // 기본 키를 지우는 경우를 포함해 null로 표시한다. 기본값에 없는 키의 null은 효과가 없다.
+    Scoped[QKeySequence(Key).toString(QKeySequence::PortableText)] = QJsonValue::Null;
+    Overrides[hc::ui::ScopeKey(Scope)] = Scoped;
+    hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides);
+    emit ShortcutsChanged();
+}
+
+void CCommandMgr::ResetScope(hc::ui::InputScope Scope)
+{
+    auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+    Overrides.remove(hc::ui::ScopeKey(Scope));
+    hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides);
+    emit ShortcutsChanged();
+}
+
+bool CCommandMgr::ProcessScopedKeyPress(QKeyEvent* KeyEvent, hc::ui::InputScope Scope, const QModelIndex& CursorIndex)
+{
+    const auto Id = hc::ui::ScopeShortcut(*KeyEvent, hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject(), Scope);
+    if (Id.isEmpty() || !bridge_) return false;
+    if (bridge_->ExecuteCommand(Id, CursorIndex)) { KeyEvent->accept(); return true; }
+    return false;
+}
+
 void CCommandMgr::SetShortcutWithCMD( QKeyCombination Key, const QString& CMD )
 {
     if (GetDefaultCMD(CMD).Name.isEmpty()) return;
+    if (hc::ui::IsViewScopedCommand(CMD)) { SetShortcutInScope(Key, CMD, hc::ui::HomeScope(CMD)); return; }
     if (hc::ui::IsCommandLineShortcut(CMD)) {
         auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
         auto Scoped = hc::ui::CommandLineShortcutOverrides(Overrides);
@@ -85,6 +138,7 @@ void CCommandMgr::SetShortcutWithCMD( QKeyCombination Key, const QString& CMD )
 
 void CCommandMgr::DelShortcut( QKeyCombination Key, const QString& Id )
 {
+    if (hc::ui::IsViewScopedCommand(Id)) { DelShortcutInScope(Key, Id, hc::ui::HomeScope(Id)); return; }
     if (hc::ui::IsCommandLineShortcut(Id)) {
         auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
         auto Scoped = hc::ui::CommandLineShortcutOverrides(Overrides);

@@ -11,7 +11,7 @@ class QPluginManagementPage;
 class CGridView;
 class QtColumnProfileEditor;
 namespace hc::passwords { class SettingsPage; }
-namespace hc::ui { class AudioSettingsPage; class FileColorRulesPage; class ThumbnailSettingsPage; class MenuBarSettingsPage; class ThemeSettingsPage; class KeyboardSettingsPage; class LegacySettingsPage; }
+namespace hc::ui { class ProcessServiceSettingsPage; class AudioSettingsPage; class FileColorRulesPage; class ThumbnailSettingsPage; class MenuBarSettingsPage; class ThemeSettingsPage; class KeyboardSettingsPage; class LegacySettingsPage; }
 
 
 class QMainOpts : public nsHC::QBaseUI
@@ -79,6 +79,7 @@ private:
     hc::ui::MenuBarSettingsPage* menuSettings_ = nullptr;
     hc::ui::ThumbnailSettingsPage* thumbnailSettings_ = nullptr;
     hc::ui::AudioSettingsPage* audioSettings_ = nullptr;
+    hc::ui::ProcessServiceSettingsPage* processServiceSettings_ = nullptr;
     hc::ui::FileColorRulesPage* fileColors_ = nullptr;
     QComboBox* defaultConflict_ = nullptr;
     QCheckBox* defaultDetailed_ = nullptr;

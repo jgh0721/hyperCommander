@@ -15,6 +15,7 @@ class QMainUI;
 class CFSProxyModel;
 class CFSModel;
 class CViewT;
+class CSystemView;
 namespace hc::ui { class PanelPathBar; }
 
 namespace Qtitan
@@ -53,6 +54,9 @@ class CmpPanel : public QWidget
         int                         Index = -1;
         CViewT*                     View = nullptr;
         CViewT*                     QuickView = nullptr;
+        // 프로세스·서비스 보기. 파일 보기(View)와 모델은 숨긴 채 유지하고 탭 페이지만 덮는다.
+        CViewT*                     SystemView = nullptr;
+        QString                     revealName_;
         CFsModelT*                  Model = nullptr;
         CFSProxyModel*              ProxyModel = nullptr;
         QString                    navigationStatus_, navigationTarget_;
@@ -69,7 +73,7 @@ class CmpPanel : public QWidget
         bool restoreSearchGroups_ = false;
         bool                       pending_ = false, restoreSelection_ = false;
 
-        CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : View ? View->GetViewMode() : CViewT::VM_GRID; }
+        CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : SystemView ? SystemView->GetViewMode() : View ? View->GetViewMode() : CViewT::VM_GRID; }
         QModelIndex                 ConvertToSrcIndex( const QModelIndex& Index ) const { if( ProxyModel != nullptr ) return ProxyModel->mapToSource( Index ); return Index; }
 
 // QVector< QModelIndex >      SelectedRowIndex;      // 데이터를 획득하려면 ProxyModel 을 통해 SourceIndex 로 변환해야한다.
@@ -107,6 +111,18 @@ public:
 
     void                            OpenQuickView( int TabIndex, const QString& FilePath );
     void                            CloseQuickView( int TabIndex );
+    // 반대 패널의 시스템 보기를 따라가는 상세 보기를 빠른 보기 자리에 연다.
+    void                            OpenDetailView( int TabIndex, CSystemView* Source );
+
+    // 현재 탭을 프로세스(0)·서비스(1) 보기로 덮는다. 이미 같은 보기면 그대로 돌려준다.
+    CSystemView*                    ShowSystemView( int Kind );
+    void                            HideSystemView( int TabIndex = -1 );
+    CSystemView*                    SystemView( int TabIndex = -1 ) const;
+    int                             FindSystemTab( int Kind ) const;
+    // 위치 메뉴(드라이브·시스템 보기)를 드라이브 단추 아래에 연다.
+    void                            ShowLocationMenu();
+    // 파일이 있는 폴더로 이동해 그 파일에 커서를 둔다. 시스템 보기는 걷는다.
+    void                            RevealFile( const QString& Path );
 
     void                            RefreshSource( int TabIndex );
     void                            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
@@ -148,6 +164,12 @@ private:
     void                            updateNavigationProgress();
 
     CViewT*                         createGridView();
+    // 탭 페이지 위젯을 바꾼다(제목·도움말 유지, 현재 탭 유지).
+    void                            replacePage( int Index, QWidget* Page );
+    void                            applySystemTitle( int Index );
+    void                            restoreFileTitle( int Index );
+    void                            restoreSystemView( int Index );
+    void                            finishReveal( const TySpTabState& State );
     int                             retrieveCurrentIndex() const;
     TySpTabState                    retrieveFocusState();
     CViewT*                         retrieveFocusView() const;
@@ -180,6 +202,9 @@ private:
     QLabel*                        activeIndicator_ = nullptr;
     bool                           activePanel_ = false;
     bool                           darkTheme_ = false;
+    // 위치 메뉴의 드라이브 여유 / 전체 용량(루트별 마지막 값). 메뉴를 열 때 먼저 보이고 백그라운드로 다시 잰다.
+    QHash<QString, QString>        capacityText_;
+    bool                           restoringSystem_ = false;   // 작업공간 복원 중에는 패널 활성화를 바꾸지 않는다
 };
 
 //class CmpPanel : public QWidget

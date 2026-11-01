@@ -4,6 +4,7 @@
 
 #include "commandMgr_Defs.hpp"
 #include "commandUiBridge.hpp"
+#include "commandUiConfig.hpp"
 
 #include <memory>
 
@@ -26,6 +27,14 @@ class CCommandMgr : public QObject
 
     void SetShortcutWithCMD( QKeyCombination Key, const QString& CMD );
     void DelShortcut( QKeyCombination Key, const QString& Id = {} );
+
+    // 보기 입력 범위(processView·serviceView). 전역·명령행 범위는 기존 함수로 넘긴다.
+    TyMapShortcutToCMDStr RetrieveForScope( hc::ui::InputScope Scope ) const;
+    void SetShortcutInScope( QKeyCombination Key, const QString& CMD, hc::ui::InputScope Scope );
+    void DelShortcutInScope( QKeyCombination Key, const QString& Id, hc::ui::InputScope Scope );
+    void ResetScope( hc::ui::InputScope Scope );
+    // 보기 범위 키만 처리한다. 처리하지 않았으면 false(호출자가 전역 키로 넘어간다).
+    bool ProcessScopedKeyPress( QKeyEvent* KeyEvent, hc::ui::InputScope Scope, const QModelIndex& CursorIndex = {} );
 
     QWidget*         GetMainUI() const;
     void             SetMainUI( QWidget* MainUI );

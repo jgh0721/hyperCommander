@@ -76,6 +76,8 @@
 #include "commandMgr.hpp"
 #include "UniqueLibs/commandUiBridge.hpp"
 #include "UniqueLibs/audio/audioSession.hpp"
+#include "UniqueLibs/system/systemCommands.hpp"
+#include "HyperCommander/UIs/Components/cmpSystemView.hpp"
 #include "qtitanColumnAdapter.hpp"
 #include "columnMgr.hpp"
 #include "qtColumnProfileEditor.hpp"
@@ -302,7 +304,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -595,6 +597,187 @@ private slots:
             };
             QTRY_VERIFY_WITH_TIMEOUT(Launched(), 15000);
         }
+    }
+
+    void systemViewUi()
+    {
+        // 프로세스·서비스 보기(구현 계획 T1·T2): 탭 덮기, 명령 활성 상태, 범위 키, 기능 키 막대, 상세 보기, 파일 위치, 작업공간.
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge && Bridge->System());
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel"); QVERIFY(Left && Right);
+        const auto Restore = qScopeGuard([&] {
+            Bridge->System()->CloseDetail(); Left->HideSystemView(); Right->HideSystemView();
+            Settings.Replace(Before); TyStCommandMgr::GetInstance()->Refresh(); main_->RestoreWorkspace(Workspace);
+        });
+        // 시험에서는 관리자 도우미를 자동으로 띄우지 않는다(UAC 확인 창).
+        {
+            auto General = Settings.Read(hc::settings::Section::General).toObject();
+            auto Process = General["processService"].toObject(); Process["autoStartHelper"] = false; General["processService"] = Process;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        }
+        Left->SetSearch({}); emit Left->sig_NotifyPanelActivated();
+        QVERIFY(qobject_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex())));
+        QTRY_VERIFY(Bridge->Action("hc.system.processes.open")->isEnabled());
+        QVERIFY(Bridge->ExecuteSystemCommand("hc.system.processes.open"));
+        auto* View = Left->SystemView(); QVERIFY(View); QCOMPARE(View->ViewKind(), CSystemView::Kind::Processes);
+        QCOMPARE(Left->GetFocusView(Left->CurrentTabIndex()), static_cast<CViewT*>(View));
+        QTRY_VERIFY_WITH_TIMEOUT(View->Processes()->HasPid(GetCurrentProcessId()), 10000);
+        QVERIFY(View->Processes()->ProcessCount() > 10);
+        const QDir Artifacts(qEnvironmentVariable("HC_UI_ARTIFACT_DIR"));
+        const bool Capture = !qEnvironmentVariableIsEmpty("HC_UI_ARTIFACT_DIR");
+        // 표본을 받는 동안에도 UI가 응답한다: 10 ms 타이머가 3초 동안 거의 빠짐없이 돈다.
+        {
+            int Ticks = 0; QTimer Probe; Probe.setTimerType(Qt::PreciseTimer); Probe.setInterval(10);
+            connect(&Probe, &QTimer::timeout, &Probe, [&] { ++Ticks; }); Probe.start();
+            QElapsedTimer Clock; Clock.start(); QTest::qWait(3000);
+            qInfo("process view UI ticks: %d in %lld ms", Ticks, qlonglong(Clock.elapsed()));
+            QVERIFY2(Ticks >= 150, qPrintable(QString::number(Ticks)));
+        }
+        // 시스템 보기에 머무는 동안 파일 명령을 켰다 끄기를 반복하지 않는다(메뉴·기능 키 막대가 매번 다시 그려진다).
+        QTRY_VERIFY(!Bridge->Action("hc.navigate.parent")->isEnabled());
+        {
+            int Changes = 0;
+            const auto Count = connect(Bridge->Action("hc.navigate.parent"), &QAction::changed, this, [&] { ++Changes; });
+            QTest::qWait(1200); disconnect(Count);
+            QCOMPARE(Changes, 0);
+        }
+        // 트리 연결선은 설정으로 끄고 켠다. 갱신을 멈춰 같은 화면에서 비교한다.
+        {
+            View->TogglePause(); QTRY_VERIFY(View->Paused());
+            // 시험 프로세스는 셸 아래 깊은 곳에 있으므로 그 행 둘레에는 연결선이 있다.
+            View->SelectProcess(GetCurrentProcessId());
+            QTRY_VERIFY(View->CurrentProcess() && View->CurrentProcess()->key.pid == GetCurrentProcessId()); QTest::qWait(300);
+            auto* GridWidget = View->findChild<QWidget*>("hc.system.grid"); QVERIFY(GridWidget);
+            const auto Strip = [&] { return GridWidget->grab(QRect(0, 0, 160, GridWidget->height())).toImage(); };
+            const auto With = Strip();
+            if (Capture) QVERIFY(View->grab().save(Artifacts.filePath("system-processes.png")));
+            auto General = Settings.Read(hc::settings::Section::General).toObject();
+            auto Process = General["processService"].toObject(); Process["treeLines"] = false; General["processService"] = Process;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General)); View->ApplySettings(); QTest::qWait(100);
+            const auto Without = Strip();
+            if (Capture) QVERIFY(View->grab().save(Artifacts.filePath("system-processes-nolines.png")));
+            Process["treeLines"] = true; General["processService"] = Process;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General)); View->ApplySettings(); QTest::qWait(100);
+            QVERIFY(With != Without); QCOMPARE(Strip(), With);
+            View->TogglePause(); QTRY_VERIFY(!View->Paused());
+        }
+        // 위치 메뉴: 드라이브·시스템 묶음 이름, 드라이브 용량, 안내 줄
+        {
+            auto* Drive = Left->findChild<QPushButton*>("hc.panelDrive"); QVERIFY(Drive && Drive->menu());
+            auto* Menu = Drive->menu(); emit Menu->aboutToShow();
+            QStringList Headers; for (auto* Item : Menu->actions()) if (Item->objectName() == "hc.location.header") Headers << Item->text();
+            QCOMPARE(Headers, QStringList({QStringLiteral("드라이브"), QStringLiteral("시스템")}));
+            // actions()는 값을 돌려주므로 한 목록에서 반복자를 얻는다.
+            const auto Has = [Menu](const auto& Test) { const auto Items = Menu->actions(); return std::any_of(Items.begin(), Items.end(), Test); };
+            QVERIFY(Has([](QAction* A) { return A->objectName() == "hc.location.hint" && !A->isEnabled(); }));
+            const auto SystemDrive = QDir::toNativeSeparators(QDir::rootPath()).left(2);
+            QTRY_VERIFY_WITH_TIMEOUT(Has([&](QAction* A) { return A->text().startsWith(SystemDrive, Qt::CaseInsensitive) && A->text().contains('\t'); }), 5000);
+            for (auto* Item : Menu->actions())
+                if (Item->objectName() == "hc.location.hc.system.processes.open") QVERIFY(Item->isChecked() && Item->text().contains('\t'));
+            if (Capture) { QTest::qWait(2000); Menu->adjustSize(); QVERIFY(Menu->grab().save(Artifacts.filePath("location-menu.png"))); }
+        }
+        // 덮인 파일 목록에 닿는 명령은 꺼지고, 탭·새로 고침·시스템 명령은 켜져 있다.
+        QTRY_VERIFY(!Bridge->Action("hc.file.copy")->isEnabled());
+        QVERIFY(Bridge->Action("hc.process.terminate")->isEnabled()); QVERIFY(!Bridge->Action("hc.service.stop")->isEnabled());
+        QVERIFY(Bridge->Action("hc.navigate.refresh")->isEnabled()); QVERIFY(Bridge->Action("hc.tab.new")->isEnabled());
+        QTRY_VERIFY(main_->findChild<QWidget*>("hc.function.hc.process.terminate"));
+        // 같은 찾기 상자가 프로세스를 거른다.
+        const auto Self = QFileInfo(QCoreApplication::applicationFilePath());
+        Left->SetSearch(Self.completeBaseName()); QCOMPARE(Left->Search(), Self.completeBaseName());
+        View->SelectProcess(GetCurrentProcessId());
+        QTRY_VERIFY(View->CurrentProcess() && View->CurrentProcess()->key.pid == GetCurrentProcessId());
+        // 보기 범위 키: Pause는 갱신 일시 정지·재개
+        QTRY_VERIFY(Bridge->Action("hc.system.refreshPause")->isEnabled());
+        View->EnsureKeyboardFocusOnView(); QTRY_VERIFY(QApplication::focusWidget());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Pause); QTRY_VERIFY(View->Paused());
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Pause); QTRY_VERIFY(!View->Paused());
+        // 트리 키: ← 부모로, - 접기, + 펼치기, ← 접기, → 펼치기, → 첫 자식으로. 커서가 어느 열에 있어도 같다.
+        {
+            View->TogglePause(); QTRY_VERIFY(View->Paused());
+            Left->SetSearch({}); View->SelectProcess(GetCurrentProcessId());
+            QTRY_VERIFY(View->CurrentProcess() && View->CurrentProcess()->key.pid == GetCurrentProcessId());
+            const auto ParentPid = View->CurrentProcess()->parentPid;
+            View->EnsureKeyboardFocusOnView(); auto* Keys = QApplication::focusWidget(); QVERIFY(Keys);
+            // 자기 프로세스에 자식이 있으면 먼저 접어야 ←가 부모로 간다.
+            QTest::keyClick(Keys, Qt::Key_Minus); QTest::keyClick(Keys, Qt::Key_Left); QTRY_COMPARE(View->CurrentProcess()->key.pid, ParentPid);
+            QVERIFY(View->CursorExpanded());
+            QTest::keyClick(Keys, Qt::Key_Minus); QTRY_VERIFY(!View->CursorExpanded());
+            QTest::keyClick(Keys, Qt::Key_Plus, Qt::ShiftModifier); QTRY_VERIFY(View->CursorExpanded());
+            QTest::keyClick(Keys, Qt::Key_Left); QTRY_VERIFY(!View->CursorExpanded()); QCOMPARE(View->CurrentProcess()->key.pid, ParentPid);
+            QTest::keyClick(Keys, Qt::Key_Right); QTRY_VERIFY(View->CursorExpanded());
+            QTest::keyClick(Keys, Qt::Key_Right); QTRY_COMPARE(View->CurrentProcess()->parentPid, ParentPid);
+            QTest::keyClick(Keys, Qt::Key_Minus, Qt::KeypadModifier); QTest::keyClick(Keys, Qt::Key_Left); QTRY_COMPARE(View->CurrentProcess()->key.pid, ParentPid);
+            View->TogglePause(); QTRY_VERIFY(!View->Paused());
+        }
+        // 빠른 찾기(글자 입력): 프로세스 보기에서 글자를 치면 찾기가 시작되고, 표가 갱신·정렬되는 동안에도
+        // 찾기 상자가 키보드 포커스를 지킨다. 시스템 보기는 설정이 '커서 이동'·'Everything'이어도 거른다.
+        {
+            auto General = Settings.Read(hc::settings::Section::General).toObject();
+            General["quickFind"] = QJsonObject{{"enabled", true}, {"activation", "typing"}, {"scope", "everything"}, {"result", "cursor"}};
+            QVERIFY(Settings.Put(hc::settings::Section::General, General));
+            auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+            Left->SetSearch({}); View->EnsureKeyboardFocusOnView();
+            QTRY_VERIFY(QApplication::focusWidget() && View->isAncestorOf(QApplication::focusWidget()));
+            const auto Name = Self.completeBaseName();
+            for (const auto Ch : Name) {
+                // 받는 쪽은 그때그때 포커스를 가진 위젯이다. 포커스를 잃으면 글자가 찾기 상자에 들어가지 않는다.
+                QTest::keyClick(QApplication::focusWidget(), Ch.toLatin1()); QTest::qWait(150);
+            }
+            QTRY_COMPARE(Find->text(), Name); QVERIFY(Find->hasFocus());
+            QTRY_COMPARE(Left->Search(), Name);
+            QTRY_VERIFY(View->VisibleRowCount() > 0 && View->VisibleRowCount() < View->Processes()->ProcessCount());
+            QTest::keyClick(Find, Qt::Key_Escape);
+            QTRY_VERIFY(Left->Search().isEmpty());
+            QTRY_VERIFY(QApplication::focusWidget() && View->isAncestorOf(QApplication::focusWidget()));
+            Left->SetSearch(Self.completeBaseName()); View->SelectProcess(GetCurrentProcessId());
+            QTRY_VERIFY(View->CurrentProcess() && View->CurrentProcess()->key.pid == GetCurrentProcessId());
+        }
+        // Ctrl+Q: 반대 패널 상세 보기
+        Bridge->System()->ToggleDetail();
+        QVERIFY(qobject_cast<CSystemDetailView*>(Right->GetFocusView(Right->CurrentTabIndex())));
+        QVERIFY(Bridge->System()->CloseDetail());
+        QVERIFY(qobject_cast<CGridView*>(Right->GetFocusView(Right->CurrentTabIndex())));
+        // 작업공간에 시스템 보기 상태가 남는다.
+        const auto Captured = Left->CaptureWorkspace();
+        QCOMPARE(Captured.tabs_[Captured.active_].view_["system"].toObject()["kind"].toString(), QString("processes"));
+        // F4: 반대 패널이 실행 파일 폴더로 가고 그 파일에 커서를 둔다.
+        QVERIFY(Bridge->ExecuteSystemCommand("hc.process.openLocation", {}, View));
+        QTRY_COMPARE_WITH_TIMEOUT(QDir::cleanPath(QDir::fromNativeSeparators(Right->CurrentPath())).toLower(), QDir::cleanPath(Self.absolutePath()).toLower(), 15000);
+        // 서비스 보기로 바꾸면 기능 키 막대도 바뀐다.
+        emit Left->sig_NotifyPanelActivated(); Left->SetFocusView(Left->CurrentTabIndex());
+        QVERIFY(Bridge->ExecuteSystemCommand("hc.system.services.open"));
+        auto* Services = Left->SystemView(); QVERIFY(Services && Services->ViewKind() == CSystemView::Kind::Services);
+        QTRY_VERIFY_WITH_TIMEOUT(Services->Services()->rowCount() > 20, 15000);
+        Services->SelectService("EventLog"); QTRY_COMPARE(Services->CurrentService().toLower(), QString("eventlog"));
+        QTRY_VERIFY(main_->findChild<QWidget*>("hc.function.hc.service.stop"));
+        // 뒤로는 덮기 전 파일 목록으로 돌아간다.
+        Left->NavigateHistory(-1);
+        QVERIFY(!Left->SystemView()); QVERIFY(qobject_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex())));
+        QTRY_VERIFY(!main_->findChild<QWidget*>("hc.function.hc.service.stop"));
+        // 파일 목록에서 위치 메뉴의 '서비스'를 고르면(사용자 경로) 표에 서비스가 나타나고 UI가 응답한다.
+        // 서비스 상태 알림은 실제로 바뀔 때만 온다(현재 상태까지 걸면 알림이 끝없이 되풀이되었다).
+        {
+            auto* Menu = Left->findChild<QPushButton*>("hc.panelDrive")->menu(); emit Menu->aboutToShow();
+            QAction* Pick = nullptr; for (auto* Item : Menu->actions()) if (Item->objectName() == "hc.location.hc.system.services.open") Pick = Item;
+            QVERIFY(Pick); Pick->trigger();
+            auto* Listed = Left->SystemView(); QVERIFY(Listed && Listed->ViewKind() == CSystemView::Kind::Services);
+            QTRY_VERIFY_WITH_TIMEOUT(Listed->Services()->rowCount() > 20 && Listed->VisibleRowCount() > 20, 15000);
+            QSignalSpy Updates(const_cast<hc::sys::ServiceListModel*>(Listed->Services()), &hc::sys::ServiceListModel::sigCountsChanged);
+            int Ticks = 0; QTimer Probe; Probe.setTimerType(Qt::PreciseTimer); Probe.setInterval(10);
+            connect(&Probe, &QTimer::timeout, &Probe, [&] { ++Ticks; }); Probe.start();
+            QTest::qWait(3000);
+            qInfo("service view UI ticks: %d, model updates: %d", Ticks, int(Updates.count()));
+            QVERIFY2(Ticks >= 150, qPrintable(QString::number(Ticks)));
+            QVERIFY2(Updates.count() <= 4, qPrintable(QString::number(Updates.count())));
+            if (Capture) QVERIFY(Listed->grab().save(Artifacts.filePath("system-services.png")));
+            Left->HideSystemView();
+        }
+        // 작업공간 복원은 저장된 시스템 보기를 다시 연다.
+        auto State = main_->CaptureWorkspace();
+        State.left_.tabs_[State.left_.active_].view_["system"] = QJsonObject{{"kind", "services"}, {"stateFilter", 1}};
+        main_->RestoreWorkspace(State);
+        QTRY_VERIFY(Left->SystemView() && Left->SystemView()->ViewKind() == CSystemView::Kind::Services);
     }
 
     void audioPreviewUi()

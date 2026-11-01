@@ -23,6 +23,7 @@ namespace hc::document { class DocumentOpenController; }
 namespace hc::audio { class AudioSession; }
 namespace hc::ui { class AudioPopover; }
 namespace hc::ui { class UserMenu; }
+namespace hc::sys { class SystemCommands; }
 
 std::shared_ptr<hc::commands::IExecutor> MakeQtExecutor(QObject* Owner);
 
@@ -59,6 +60,9 @@ public:
     // 파일 목록의 Esc 로 미리 듣기를 끝낸다(재생·일시정지·오류 표시 모두). 끝낼 것이 없으면 false.
     bool CancelAudioPreview();
     bool HasAudioPreview() const;
+    // 프로세스·서비스 명령. Source는 명령을 부른 시스템 보기나 상세 보기(없으면 활성 패널).
+    bool ExecuteSystemCommand(const QString& Id, const QVariant& Argument = {}, QObject* Source = nullptr);
+    hc::sys::SystemCommands* System() const { return system_; }
     std::shared_ptr<hc::commands::EventHub> Events() const { return events_; }
     hc::automation::Host AutomationHost();
     std::shared_ptr<hc::script::IScriptHostApi> ScriptApi(std::set<std::string> Permissions);
@@ -120,6 +124,9 @@ private:
     QString quickKey_;
     QHash<QString, QPointer<QAction>> actions_;
     hc::ui::UserMenu* userMenu_ = nullptr;
+    hc::sys::SystemCommands* system_ = nullptr;
+    int functionBarKind_ = -2;              // 기능 키 막대가 보이는 보기 종류(-1 파일, 0 프로세스, 1 서비스)
+    QSet<QString> systemDisabled_;          // 시스템 보기 때문에 끈 명령. 파일 보기로 돌아오면 다시 켠다
     QModelIndex commandIndex_;
     std::map<std::string, std::vector<hc::storage::Locator>> affectedLocations_;
     struct JobSelection { QPointer<CGridView> view_; QPointer<CFSModel> model_; QString location_; QStringList keys_; };

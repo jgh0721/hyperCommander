@@ -1,16 +1,22 @@
 ﻿#include "UniqueLibs/permissionService.hpp"
 #include "UniqueLibs/nativeFileElevation.hpp"
 #include "UniqueLibs/fileLockService.hpp"
+#include "UniqueLibs/systemSessionService.hpp"
 #include "HyperCommanderUpdater/updateTransaction.hpp"
 int main(int Argc, char** Argv) {
     if (!hc::update::StartupAllowed(hc::update::ExecutableRoot())) return ERROR_BUSY;
     QCoreApplication App(Argc, Argv);
     const auto Args = App.arguments();
-    if (Args.size() != 3 || (Args[1] != "--request" && Args[1] != "--elevated-job" && Args[1] != "--elevated-list" && Args[1] != "--file-lock-session" && Args[1] != "--permission-job") || Args[2].size() > 24000) return ERROR_INVALID_PARAMETER;
+    if (Args.size() != 3 || (Args[1] != "--request" && Args[1] != "--elevated-job" && Args[1] != "--elevated-list" && Args[1] != "--file-lock-session" && Args[1] != "--permission-job" && Args[1] != "--system-session") || Args[2].size() > 24000) return ERROR_INVALID_PARAMETER;
     const auto Bytes = QByteArray::fromBase64(Args[2].toLatin1(), QByteArray::Base64UrlEncoding | QByteArray::AbortOnBase64DecodingErrors);
     QJsonParseError Error; const auto Document = QJsonDocument::fromJson(Bytes, &Error);
     if (Error.error != QJsonParseError::NoError || !Document.isObject()) return ERROR_INVALID_PARAMETER;
     if (Args[1] == "--file-lock-session") return hc::filelocks::ExecuteFileLockSession(Document.object());
+    // The session verifies its own elevation and the caller before accepting requests.
+    if (Args[1] == "--system-session") {
+        if (!hc::permissions::Elevated()) return ERROR_ELEVATION_REQUIRED;
+        return hc::admin::ExecuteSystemSession(Document.object());
+    }
     if (Args[1] == "--permission-job") {
         if (!hc::permissions::Elevated()) return ERROR_ELEVATION_REQUIRED;
         return hc::permissions::ExecutePermissionElevation(Document.object());

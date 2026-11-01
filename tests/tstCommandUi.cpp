@@ -611,6 +611,63 @@ private slots:
         Button->click(); QCOMPARE(Executions, 3);
         QLineEdit Input; QTest::keyClicks(&Input, "copy"); QCOMPARE(Input.text(), "copy"); QCOMPARE(Executions, 3);
     }
+    void processServiceScopes()
+    {
+        // 보기 범위 명령은 전역 키 맵에 들어가지 않는다. hc.process.run만 전역에서도 쓸 수 있다.
+        const auto Global = DefaultShortcuts(QJsonObject{{"useBuiltInShortcuts", true}});
+        for (auto It = Global.begin(); It != Global.end(); ++It) QVERIFY2(!IsViewScopedCommand(CommandId(It.value())), qPrintable(It.value()));
+        QVERIFY(IsViewScopedCommand("hc.process.terminate")); QVERIFY(IsViewScopedCommand("hc.service.stop"));
+        QVERIFY(IsViewScopedCommand("hc.system.refreshPause")); QVERIFY(!IsViewScopedCommand("hc.process.run"));
+        QCOMPARE(HomeScope("hc.service.stop"), InputScope::ServiceView); QCOMPARE(HomeScope("hc.process.copy"), InputScope::ProcessView);
+        QCOMPARE(HomeScope("hc.process.run"), InputScope::Global); QCOMPARE(HomeScope("hc.file.copy"), InputScope::Global);
+        QVERIFY(ScopeAccepts(InputScope::ProcessView, "hc.process.run")); QVERIFY(!ScopeAccepts(InputScope::ServiceView, "hc.process.terminate"));
+        QVERIFY(ScopeAccepts(InputScope::ServiceView, "hc.system.refreshPause")); QVERIFY(!ScopeAccepts(InputScope::Global, "hc.service.start"));
+
+        // 같은 F8이 범위마다 다른 명령을 부른다. 사용자 지정은 범위 안에서만 적용되고 null은 해제다.
+        QKeyEvent F8(QEvent::KeyPress, Qt::Key_F8, Qt::NoModifier), ShiftF8(QEvent::KeyPress, Qt::Key_F8, Qt::ShiftModifier), CtrlK(QEvent::KeyPress, Qt::Key_K, Qt::ControlModifier);
+        QCOMPARE(ScopeShortcut(F8, {}, InputScope::ProcessView), QString("hc.process.terminate"));
+        QCOMPARE(ScopeShortcut(ShiftF8, {}, InputScope::ProcessView), QString("hc.process.terminateTree"));
+        QCOMPARE(ScopeShortcut(F8, {}, InputScope::ServiceView), QString("hc.service.stop"));
+        const QJsonObject Overrides{{"processView", QJsonObject{{"F8", QJsonValue::Null}, {"Ctrl+K", "hc.process.terminate"}}}};
+        QVERIFY(ScopeShortcut(F8, Overrides, InputScope::ProcessView).isEmpty());
+        QCOMPARE(ScopeShortcut(CtrlK, Overrides, InputScope::ProcessView), QString("hc.process.terminate"));
+        QCOMPARE(ScopeShortcut(F8, Overrides, InputScope::ServiceView), QString("hc.service.stop"));
+        // 다른 범위의 명령은 사용자 지정으로도 들어오지 않는다.
+        QVERIFY(ScopeShortcut(CtrlK, QJsonObject{{"serviceView", QJsonObject{{"Ctrl+K", "hc.process.terminate"}}}}, InputScope::ServiceView).isEmpty());
+
+        // 패널 전환·탭·찾기 키는 보기 범위에서 다시 정의할 수 없다.
+        QVERIFY(IsProtectedScopeKey(QKeyCombination(Qt::Key_Tab))); QVERIFY(IsProtectedScopeKey(QKeyCombination(Qt::AltModifier, Qt::Key_F1)));
+        QVERIFY(!IsProtectedScopeKey(QKeyCombination(Qt::Key_F8)));
+
+        // 시스템 보기에서 살아 있는 전역 명령과 막히는 파일 명령
+        for (const auto* Id : {"hc.tab.new", "hc.navigate.refresh", "hc.search.focus", "hc.panel.switch", "hc.navigate.back", "hc.process.run", "hc.panel.locationMenuLeft"})
+            QVERIFY2(IsSystemViewGlobalCommand(Id), Id);
+        for (const auto* Id : {"hc.file.copy", "hc.file.delete", "hc.selection.all", "hc.clipboard.paste", "hc.navigate.parent"})
+            QVERIFY2(!IsSystemViewGlobalCommand(Id), Id);
+
+        // 보기별 기능 키 막대
+        const auto Processes = FunctionCommandsFor({}, FunctionBarKind::ProcessView), Services = FunctionCommandsFor({}, FunctionBarKind::ServiceView);
+        QCOMPARE(Processes.size(), 9); QCOMPARE(Services.size(), 9);
+        QVERIFY(Processes.contains("hc.process.terminate")); QVERIFY(Services.contains("hc.service.stop"));
+        QCOMPARE(FunctionCommandsFor({}, FunctionBarKind::File), FunctionCommands({}));
+        auto Custom = Processes; Custom[0] = "hc.process.copy";
+        const QJsonObject General{{"functionBars", QJsonObject{{"processView", QJsonObject{{"commands", QJsonArray::fromStringList(Custom)}, {"captions", QJsonArray{"복사하기"}}}}}}};
+        QCOMPARE(FunctionCommandsFor(General, FunctionBarKind::ProcessView).value(0), QString("hc.process.copy"));
+        QCOMPARE(FunctionCaptionFor(General, FunctionBarKind::ProcessView, 0, "hc.process.copy", "x"), QString("복사하기"));
+        QCOMPARE(FunctionCommandsFor(General, FunctionBarKind::ServiceView), Services);
+    }
+    void systemMenuResource()
+    {
+        QFile File(":/HyperCommander/menu-bar.json"); QVERIFY(File.open(QIODevice::ReadOnly));
+        QStringList Commands;
+        for (const auto& Menu : QJsonDocument::fromJson(File.readAll()).object()["menus"].toArray())
+            if (Menu.toObject()["id"] == "tools")
+                for (const auto& Item : Menu.toObject()["items"].toArray())
+                    if (Item.toObject()["id"] == "system")
+                        for (const auto& Child : Item.toObject()["items"].toArray()) if (Child.toObject().contains("command")) Commands.append(Child.toObject()["command"].toString());
+        QVERIFY(Commands.contains("hc.system.processes.open")); QVERIFY(Commands.contains("hc.system.services.open"));
+        for (const auto& Id : Commands) QVERIFY2(!FindCommand(Id).Name.isEmpty(), qPrintable(Id));
+    }
     void defaultResource()
     {
         QFile File(":/HyperCommander/menu-bar.json"); QVERIFY(File.open(QIODevice::ReadOnly));
