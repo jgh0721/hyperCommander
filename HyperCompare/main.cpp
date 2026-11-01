@@ -28,7 +28,7 @@ namespace
 }
 int main(int argc, char** argv)
 {
-    QCoreApplication::setApplicationName("HyperCompare"); QCoreApplication::setOrganizationName("HyperTools");
+    QCoreApplication::setApplicationName("HyperCompare"); QCoreApplication::setOrganizationName("HyperCommander");
     QCoreApplication::setApplicationVersion("0.1.0");
     int count = 0; auto** wide = CommandLineToArgvW(GetCommandLineW(), &count); QStringList arguments;
     if (!wide) return 2;

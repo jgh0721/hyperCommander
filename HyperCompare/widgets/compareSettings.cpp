@@ -5,22 +5,106 @@
 #include <QColor>
 #include <QJsonDocument>
 #include <QSettings>
+#include <QMainWindow>
+#include <QStatusBar>
+#include <QDebug>
+#include "UniqueLibs/settings/appSettings.hpp"
 
 namespace hc::compare
 {
-    namespace { CompareSettings activeSettings; }
+    namespace
+    {
+        CompareSettings activeSettings;
+        QJsonValue PreferenceJson(const QString& Key, const QVariant& Value)
+        {
+            // Keep shortcut/color customization readable JSON instead of a base64 byte array.
+            if (Key == "compare/customizationV1" && Value.metaType().id() == QMetaType::QByteArray) {
+                const auto Document = QJsonDocument::fromJson(Value.toByteArray());
+                if (Document.isObject()) return Document.object();
+            }
+            return hc::settings::UnifiedConfig::Encode(Value);
+        }
+    }
+    QString Preferences::FileName()
+    {
+        const auto Override = qApp->property("compareSettingsDirectory");
+        return QDir(Override.isValid() ? Override.toString() : QCoreApplication::applicationDirPath()).filePath("HyperCompare.json");
+    }
+    Preferences::Preferences() : store_(std::make_unique<hc::settings::JsonStore>(FileName())) { reload(); }
+    Preferences::~Preferences() = default;
+    bool Preferences::finish(bool Success, const QString& Error)
+    {
+        error_ = Success ? QString{} : Error;
+        if (!Success) {
+            qWarning().noquote() << error_;
+            for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Window = qobject_cast<QMainWindow*>(Widget))
+                Window->statusBar()->showMessage(QObject::tr("설정을 저장하거나 읽지 못했습니다: %1").arg(error_));
+        }
+        return Success;
+    }
+    bool Preferences::reload()
+    {
+        if (!store_->Reload()) return finish(false, store_->Error());
+        // The old registry is only an import source. Never write or remove its values.
+        if (!store_->Exists() && !qApp->property("compareSettingsDirectory").isValid()) {
+            QSettings Legacy(QSettings::NativeFormat, QSettings::UserScope, "HyperTools", "HyperCompare");
+            Legacy.setFallbacksEnabled(false);
+            return ImportLegacy(Legacy);
+        }
+        return finish(true);
+    }
+    bool Preferences::ImportLegacy(QSettings& Legacy)
+    {
+        if (!store_->Writable()) return finish(false, store_->Error());
+        if (store_->Exists()) return finish(true);
+        auto Document = store_->Object();
+        const auto Keys = Legacy.allKeys();
+        for (const auto& Key : Keys)
+            hc::settings::UnifiedConfig::Set(Document, Key.split('/'), PreferenceJson(Key, Legacy.value(Key)));
+        if (Legacy.status() != QSettings::NoError) return finish(false, QObject::tr("기존 Compare 설정을 읽지 못했습니다."));
+        if (Keys.isEmpty()) return finish(true);
+        const auto Saved = store_->Replace(Document);
+        return finish(Saved, store_->Error());
+    }
+    QVariant Preferences::Value(const QString& Key, const QVariant& Default)
+    {
+        // A settings object may outlive another window's save (including Apply/Cancel dialogs).
+        if (!reload()) return Default;
+        const auto Value = hc::settings::UnifiedConfig::Value(store_->Object(), Key.split('/'));
+        if (Value.isUndefined()) return Default;
+        if (Key == "compare/customizationV1" && Value.isObject() && !Value.toObject().contains("$type"))
+            return QJsonDocument(Value.toObject()).toJson(QJsonDocument::Compact);
+        return hc::settings::UnifiedConfig::Decode(Value);
+    }
+    bool Preferences::Contains(const QString& Key)
+    { return reload() && !hc::settings::UnifiedConfig::Value(store_->Object(), Key.split('/')).isUndefined(); }
+    bool Preferences::SetValue(const QString& Key, const QVariant& Value) { return Apply({{Key, Value}}); }
+    bool Preferences::Remove(const QString& Key) { return Apply({}, {Key}); }
+    bool Preferences::Apply(const QMap<QString, QVariant>& Values, const QStringList& Removed)
+    {
+        // Refresh before each transaction so another window/process's unrelated settings survive.
+        if (!reload()) return false;
+        auto Document = store_->Object();
+        for (auto It = Values.cbegin(); It != Values.cend(); ++It)
+            hc::settings::UnifiedConfig::Set(Document, It.key().split('/'), PreferenceJson(It.key(), It.value()));
+        for (const auto& Key : Removed)
+            hc::settings::UnifiedConfig::Set(Document, Key.split('/'), QJsonValue::Undefined);
+        const auto Saved = store_->Replace(Document);
+        return finish(Saved, store_->Error());
+    }
     const CompareSettings& ActiveCompareSettings() { return activeSettings; }
     void SetActiveCompareSettings(const CompareSettings& Settings) { activeSettings = Settings; }
     CompareSettings CompareSettings::Load()
     {
-        CompareSettings result; QSettings settings;
-        result.theme_ = settings.value("theme/mode", settings.value("theme/dark", false).toBool() ? "dark" : "product").toString();
+        CompareSettings result; Preferences settings;
+        if (!settings.Error().isEmpty()) result.warnings_.append(settings.Error());
+        result.theme_ = settings.Value("theme/mode", settings.Value("theme/dark", false).toBool() ? "dark" : "product").toString();
         if (result.theme_ != "dark" && result.theme_ != "light") result.theme_ = "product";
         result.fonts_ = {qApp->font(), QFont("D2Coding", 12), QFont("D2Coding ligature", 14)};
         const char* fonts[]{"fonts/ui", "fonts/list", "fonts/text"};
-        for (int i = 0; i < 3; ++i) result.fonts_[i].fromString(settings.value(fonts[i], result.fonts_[i].toString()).toString());
-        for (int i = 0; i < 5; ++i) result.view_[i] = settings.value(compareViewKeys[i], true).toBool();
-        const auto data = settings.value("compare/customizationV1").toByteArray();
+        for (int i = 0; i < 3; ++i) result.fonts_[i].fromString(settings.Value(fonts[i], result.fonts_[i].toString()).toString());
+        for (int i = 0; i < 5; ++i) result.view_[i] = settings.Value(compareViewKeys[i], true).toBool();
+        const auto data = settings.Value("compare/customizationV1").toByteArray();
         if (!data.isEmpty())
         {
             QJsonParseError error; const auto document = QJsonDocument::fromJson(data, &error);
@@ -79,18 +163,9 @@ namespace hc::compare
             {"theme/mode", theme_}, {"theme/dark", theme_ == "dark"}, {"fonts/ui", fonts_[0].toString()},
             {"fonts/list", fonts_[1].toString()}, {"fonts/text", fonts_[2].toString()}};
         for (int i = 0; i < 5; ++i) values[compareViewKeys[i]] = view_[i];
-        QSettings settings; QMap<QString, QVariant> previous; QStringList absent;
-        for (auto it = values.cbegin(); it != values.cend(); ++it)
-        {
-            if (settings.contains(it.key())) previous[it.key()] = settings.value(it.key()); else absent.append(it.key());
-            settings.setValue(it.key(), it.value());
-        }
-        settings.sync();
-        if (settings.status() == QSettings::NoError) return true;
-        // QSettings does not promise a transaction across legacy keys. Restore the prior snapshot on failure.
-        for (auto it = previous.cbegin(); it != previous.cend(); ++it) settings.setValue(it.key(), it.value());
-        for (const auto& key : absent) settings.remove(key); settings.sync();
-        Error = QObject::tr("설정을 저장하지 못했습니다. 저장 위치의 쓰기 권한을 확인하십시오. 변경 내용은 이 창에 유지됩니다.");
+        Preferences Settings;
+        if (Settings.Apply(values)) return true;
+        Error = QObject::tr("설정을 저장하지 못했습니다. 변경 내용은 이 창에 유지됩니다.\n%1").arg(Settings.Error());
         return false;
     }
     bool CompareSettings::operator==(const CompareSettings& Other) const

@@ -18,7 +18,7 @@
 #include <QDir>
 #include <QCloseEvent>
 #include <QSignalBlocker>
-#include <QSettings>
+#include "compareSettings.hpp"
 
 namespace hc::compare
 {
@@ -86,9 +86,9 @@ namespace hc::compare
             }
             updateControls(); if (activityChanged_) activityChanged_(); if (closing_) close();
         });
-        QSettings settings; QFont listFont("D2Coding", 12), textFont("D2Coding ligature", 14);
-        listFont.fromString(settings.value("fonts/list", listFont.toString()).toString());
-        textFont.fromString(settings.value("fonts/text", textFont.toString()).toString());
+        Preferences settings; QFont listFont("D2Coding", 12), textFont("D2Coding ligature", 14);
+        listFont.fromString(settings.Value("fonts/list", listFont.toString()).toString());
+        textFont.fromString(settings.Value("fonts/text", textFont.toString()).toString());
         journals_->setFont(listFont); details_->setFont(textFont);
         Refresh();
     }

@@ -12,7 +12,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
-#include <QSettings>
+#include "compareSettings.hpp"
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QTimer>
@@ -48,8 +48,8 @@ namespace hc::compare
         regex_ = new QCheckBox(tr("정규식"), controls_); regex_->setObjectName("compareFindRegex"); layout->addWidget(regex_);
         connect(regex_, &QCheckBox::toggled, this, &FindBar::clearFeedback);
         word_ = new QCheckBox(tr("단어 단위"), controls_); word_->setObjectName("compareFindWord"); layout->addWidget(word_);
-        QSettings settings; case_->setChecked(settings.value("find/caseSensitive", false).toBool());
-        word_->setChecked(settings.value("find/wholeWord", false).toBool());
+        Preferences settings; case_->setChecked(settings.Value("find/caseSensitive", false).toBool());
+        word_->setChecked(settings.Value("find/wholeWord", false).toBool());
         feedback_ = new QLabel(controls_); feedback_->setObjectName("compareFindFeedback");
         feedback_->setTextFormat(Qt::PlainText); feedback_->setMinimumWidth(120); layout->addWidget(feedback_);
         auto* close = button(tr("닫기"), "compareFindClose"); close->setToolTip(tr("찾기 닫기 (Esc)"));
@@ -61,8 +61,8 @@ namespace hc::compare
         connect(query_, &QLineEdit::returnPressed, this, [this] { Find(false); });
         connect(query_, &QLineEdit::textChanged, this, &FindBar::clearFeedback);
         connect(scope_, &QComboBox::currentIndexChanged, this, &FindBar::clearFeedback);
-        connect(case_, &QCheckBox::toggled, this, [this](bool Value) { QSettings{}.setValue("find/caseSensitive", Value); clearFeedback(); });
-        connect(word_, &QCheckBox::toggled, this, [this](bool Value) { QSettings{}.setValue("find/wholeWord", Value); clearFeedback(); });
+        connect(case_, &QCheckBox::toggled, this, [this](bool Value) { Preferences{}.SetValue("find/caseSensitive", Value); clearFeedback(); });
+        connect(word_, &QCheckBox::toggled, this, [this](bool Value) { Preferences{}.SetValue("find/wholeWord", Value); clearFeedback(); });
         if (auto* main = qobject_cast<QMainWindow*>(Parent))
         {
             resultsDock_ = new QDockWidget(tr("검색 결과"), main); resultsDock_->setObjectName("compareFindResultsDock");

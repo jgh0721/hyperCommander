@@ -183,6 +183,15 @@ private slots:
         QCOMPARE(GitToolExitCode(true, -1), 2); QCOMPARE(GitToolExitCode(false, 4), 2);
     }
     void initTestCase() { QStandardPaths::setTestModeEnabled(true); }
+    void saveRecoveryUsesProductNamespace()
+    {
+        const auto Organization = QCoreApplication::organizationName(), Application = QCoreApplication::applicationName();
+        const auto Restore = qScopeGuard([Organization, Application] {
+            QCoreApplication::setOrganizationName(Organization); QCoreApplication::setApplicationName(Application);
+        });
+        QCoreApplication::setOrganizationName("HyperCommander"); QCoreApplication::setApplicationName("HyperCompare");
+        QCOMPARE(SaveRecoveryDirectory(), QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/HyperCommander/HyperCompare/recovery");
+    }
     void boundedLineScanning()
     {
         const auto failure = [](auto Operation) {

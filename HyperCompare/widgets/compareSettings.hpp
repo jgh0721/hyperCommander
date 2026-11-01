@@ -3,9 +3,35 @@
 #include <QJsonObject>
 #include <QStringList>
 #include <array>
+#include <QMap>
+#include <QVariant>
+#include <memory>
+
+class QSettings;
+namespace hc::settings { class JsonStore; }
 
 namespace hc::compare
 {
+    // All Compare settings use the same atomic JSON file beside the executable.
+    class Preferences
+    {
+    public:
+        Preferences();
+        ~Preferences();
+        static QString FileName();
+        QVariant Value(const QString& Key, const QVariant& Default = {});
+        bool Contains(const QString& Key);
+        bool SetValue(const QString& Key, const QVariant& Value);
+        bool Remove(const QString& Key);
+        bool Apply(const QMap<QString, QVariant>& Values, const QStringList& Removed = {});
+        bool ImportLegacy(QSettings& Legacy);
+        const QString& Error() const { return error_; }
+    private:
+        bool reload();
+        bool finish(bool Success, const QString& Error = {});
+        std::unique_ptr<hc::settings::JsonStore> store_;
+        QString error_;
+    };
     struct CompareSettings
     {
         QString theme_ = "product";

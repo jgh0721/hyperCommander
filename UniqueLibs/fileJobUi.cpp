@@ -198,7 +198,7 @@ namespace
 
 FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Events)
     : QObject(Main), journal_(MakeFileJobJournal(QDir(QStandardPaths::isTestModeEnabled()
-          ? QCoreApplication::applicationDirPath() : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath("operation-journal"),false,true,false)),
+          ? QCoreApplication::applicationDirPath() : QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath("HyperCommander")).filePath("operation-journal"),false,true,false)),
       scheduler_(std::move(Events), 2, 1024, journal_), main_(Main)
 {
     previousPermissionController_=QCoreApplication::instance()->property("hc.permission.controller").value<QObject*>();

@@ -51,6 +51,7 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QSettings>
+#include <QLockFile>
 #include <QDialogButtonBox>
 #include <QToolBar>
 #include <QWidgetAction>
@@ -394,7 +395,7 @@ private slots:
     }
     void allPaneAlignmentPreservesEditingAndUndo()
     {
-        QSettings{}.setValue("view/alignAllPanes", true);
+        Preferences{}.SetValue("view/alignAllPanes", true);
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right"); r.base_ = dir.filePath("base"); r.output_ = dir.filePath("out");
         write(r.base_, "a\ncommon\nz\n"); write(r.file1_, "left\na\ncommon\nz\n"); write(r.file2_, "a\ncommon\nright\nz\n");
         CompareWindow window(r); window.show(); QTRY_VERIFY(window.findChild<MultiPaneAlignment*>());
@@ -427,7 +428,7 @@ private slots:
     }
     void allPaneAlignmentSwitchesComparePair()
     {
-        QSettings{}.setValue("view/alignAllPanes", true);
+        Preferences{}.SetValue("view/alignAllPanes", true);
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("first"); r.file2_ = dir.filePath("second"); r.file3_ = dir.filePath("third");
         write(r.file1_, "common"); write(r.file2_, "prefix\ncommon"); write(r.file3_, "common\nsuffix\n");
         CompareWindow window(r); window.show();
@@ -478,7 +479,7 @@ private slots:
     }
     void concurrentWindowsMemoryAndCancellation()
     {
-        QSettings{}.setValue("view/alignAllPanes", true);
+        Preferences{}.SetValue("view/alignAllPanes", true);
         QTemporaryDir dir; const auto left = dir.filePath("left.txt"), right = dir.filePath("right.txt"), third = dir.filePath("third.txt");
         const auto original = lines(0, 8000); auto modified = original; modified.replace("common4000", "edited4000");
         write(left, original); write(right, modified); write(third, original);
@@ -517,7 +518,7 @@ private slots:
     void largeConcurrentWindowsAdmission()
     {
         QFETCH(int, memoryMiB);
-        QSettings{}.setValue("view/alignAllPanes", true);
+        Preferences{}.SetValue("view/alignAllPanes", true);
         QTemporaryDir dir; const auto left = dir.filePath("left.txt"), right = dir.filePath("right.txt");
         const auto original = lines(0, 80000); auto modified = original; modified.replace("common40000", "edited40000");
         write(left, original); write(right, modified);
@@ -772,7 +773,7 @@ private slots:
     }
     void compareGutterAppliesInPlaceAndSavesEachFile()
     {
-        QSettings{}.setValue("view/alignSourceRows", true);
+        Preferences{}.SetValue("view/alignSourceRows", true);
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left"); r.file2_ = dir.filePath("right");
         write(r.file1_, "A\nkeep\nleft\n"); write(r.file2_, "B\nkeep\nright\n");
         CompareWindow window(r); window.show(); QTRY_VERIFY(window.findChild<ChunkGutter*>());
@@ -834,7 +835,7 @@ private slots:
     }
     void similarLineSelectionPreservesTargetInsertions()
     {
-        QSettings{}.setValue("view/alignSourceRows", true);
+        Preferences{}.SetValue("view/alignSourceRows", true);
         const QByteArray a = "head\nalpha_value = 1;\nomega_counter = 2;\ntail\n";
         const QByteArray b = "head\n// new log\nalpha_value = 9;\n// keep inserted\nomega_counter = 8;\ntail\n";
         for (bool reverse : {false, true}) for (int selection = 0; selection < 3; ++selection)
@@ -869,7 +870,7 @@ private slots:
     }
     void threeFileSelectedRangeUsesSharedRows()
     {
-        QSettings{}.setValue("view/alignAllPanes", true);
+        Preferences{}.SetValue("view/alignAllPanes", true);
         const QByteArray a = "head\nalpha_value = 1;\nomega_counter = 2;\ntail\n";
         const QByteArray b = "head\n// new log\nalpha_value = 9;\n// keep inserted\nomega_counter = 8;\ntail\n";
         const std::array<std::array<int, 2>, 3> pairs{{{0, 1}, {0, 2}, {1, 2}}};
@@ -933,7 +934,7 @@ private slots:
     }
     void selectedResultRangesPreserveInsertionsAndHistory()
     {
-        QSettings{}.setValue("view/alignAllPanes", true);
+        Preferences{}.SetValue("view/alignAllPanes", true);
         for (int side : {0, 1})
         {
             const QByteArray a = "alpha_value = 1;\nomega_counter = 2;\n";
@@ -1008,7 +1009,7 @@ private slots:
     }
     void compareThreeFileEditingKeepsPairAndBuffers()
     {
-        QSettings{}.setValue("view/alignAllPanes", true);
+        Preferences{}.SetValue("view/alignAllPanes", true);
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("a"); r.file2_ = dir.filePath("b"); r.file3_ = dir.filePath("c");
         write(r.file1_, "a\n"); write(r.file2_, "b\n"); write(r.file3_, "c\n"); CompareWindow window(r); window.show();
         QTRY_COMPARE(window.findChildren<ScintillaEditBase*>().size(), 3);
@@ -1239,18 +1240,66 @@ private slots:
     {
         QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
         QCoreApplication::setOrganizationName("HyperCompareTests"); QCoreApplication::setApplicationName("UI");
-        QSettings::setDefaultFormat(QSettings::IniFormat); QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settings_.path());
+        qApp->setProperty("compareSettingsDirectory", settings_.path());
         auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(hc::theme::ProductDesign); theme.install(*qApp);
     }
     void init()
     {
-        QSettings{}.remove("compare/customizationV1");
+        Preferences{}.Remove("compare/customizationV1");
         SetActiveCompareSettings(CompareSettings::Load());
-        QSettings settings; settings.setValue("view/alignSourceRows", false);
-        settings.setValue("view/alignAllPanes", false);
-        settings.setValue("view/inlineHighlights", true);
-        settings.setValue("view/overview", true); settings.setValue("view/synchronizeSources", true);
-        settings.setValue("find/caseSensitive", false); settings.setValue("find/wholeWord", false);
+        Preferences settings; settings.SetValue("view/alignSourceRows", false);
+        settings.SetValue("view/alignAllPanes", false);
+        settings.SetValue("view/inlineHighlights", true);
+        settings.SetValue("view/overview", true); settings.SetValue("view/synchronizeSources", true);
+        settings.SetValue("find/caseSensitive", false); settings.SetValue("find/wholeWord", false);
+    }
+    void jsonPreferencesMigrationAndIsolation()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Previous = qApp->property("compareSettingsDirectory");
+        const auto Restore = qScopeGuard([Previous] { qApp->setProperty("compareSettingsDirectory", Previous); });
+        qApp->setProperty("compareSettingsDirectory", QVariant{});
+        QCOMPARE(Preferences::FileName(), QDir(QCoreApplication::applicationDirPath()).filePath("HyperCompare.json"));
+        qApp->setProperty("compareSettingsDirectory", Directory.path());
+        QSettings Legacy(Directory.filePath("legacy.ini"), QSettings::IniFormat);
+        const auto Customization = QJsonDocument(QJsonObject{{"version", 1}, {"shortcuts", QJsonObject{{"navigate.next", "Ctrl+F8"}}}}).toJson(QJsonDocument::Compact);
+        Legacy.setValue("theme/mode", "light"); Legacy.setValue("find/wholeWord", true);
+        Legacy.setValue("compare/customizationV1", Customization); Legacy.setValue("future/option", 42); Legacy.sync();
+        const auto Original = readBytes(Legacy.fileName());
+        Preferences Imported; QVERIFY2(Imported.ImportLegacy(Legacy), qPrintable(Imported.Error()));
+        const auto Json = QJsonDocument::fromJson(readBytes(Preferences::FileName())).object();
+        QCOMPARE(Json["schemaVersion"].toInt(), 1);
+        QCOMPARE(Json["theme"].toObject()["mode"].toString(), QString("light"));
+        QVERIFY(Json["find"].toObject()["wholeWord"].toBool());
+        QVERIFY(Json["compare"].toObject()["customizationV1"].isObject());
+        QCOMPARE(CompareSettings::Load().shortcuts_["navigate.next"].toString(), QString("Ctrl+F8"));
+        Preferences Other;
+        QVERIFY(Imported.SetValue("theme/mode", "dark")); QVERIFY(Other.SetValue("directory/level", "binary"));
+        QCOMPARE(Imported.Value("directory/level").toString(), QString("binary"));
+        QCOMPARE(Other.Value("theme/mode").toString(), QString("dark"));
+        QCOMPARE(Preferences{}.Value("theme/mode").toString(), QString("dark"));
+        QCOMPARE(Preferences{}.Value("directory/level").toString(), QString("binary"));
+        QCOMPARE(Preferences{}.Value("future/option").toInt(), 42);
+        QVERIFY(Imported.ImportLegacy(Legacy)); // An existing JSON file always wins over the old settings.
+        QCOMPARE(Preferences{}.Value("theme/mode").toString(), QString("dark"));
+        QCOMPARE(readBytes(Legacy.fileName()), Original);
+    }
+    void jsonPreferencesFailurePreservesSource()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Previous = qApp->property("compareSettingsDirectory");
+        const auto Restore = qScopeGuard([Previous] { qApp->setProperty("compareSettingsDirectory", Previous); });
+        qApp->setProperty("compareSettingsDirectory", Directory.path());
+        const auto Path = Preferences::FileName();
+        { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("{broken"), 7); }
+        auto Settings = CompareSettings::Load(); QVERIFY(!Settings.warnings_.isEmpty());
+        Settings.theme_ = "dark"; QString Error; QVERIFY(!Settings.Save(Error)); QVERIFY(Error.contains("invalid-json"));
+        QCOMPARE(readBytes(Path), QByteArray("{broken"));
+        QVERIFY(QFile::remove(Path)); QVERIFY(Preferences{}.SetValue("theme/mode", "light"));
+        const auto Before = readBytes(Path);
+        QLockFile Lock(Path + ".lock"); QVERIFY(Lock.tryLock(0));
+        Preferences Blocked; QVERIFY(!Blocked.SetValue("theme/mode", "dark")); QVERIFY(Blocked.Error().contains("file-locked"));
+        QCOMPARE(readBytes(Path), Before);
     }
     void customizationPersistenceAndValidation()
     {
@@ -1272,9 +1321,9 @@ private slots:
         QVERIFY(loaded.Save(error)); loaded = CompareSettings::Load();
         QVERIFY(!loaded.colors_[1].contains("modifiedBg")); QVERIFY(!loaded.warnings_.isEmpty());
         QCOMPARE(loaded.shortcuts_["navigate.next"].toString(), QString("Ctrl+F8"));
-        auto malformed = QJsonDocument::fromJson(QSettings{}.value("compare/customizationV1").toByteArray()).object();
+        auto malformed = QJsonDocument::fromJson(Preferences{}.Value("compare/customizationV1").toByteArray()).object();
         auto keys = malformed["shortcuts"].toObject(); keys["navigate.next"] = "F3"; keys["file.open"] = "Ctrl+9"; malformed["shortcuts"] = keys;
-        QSettings{}.setValue("compare/customizationV1", QJsonDocument(malformed).toJson(QJsonDocument::Compact));
+        Preferences{}.SetValue("compare/customizationV1", QJsonDocument(malformed).toJson(QJsonDocument::Compact));
         loaded = CompareSettings::Load(); QVERIFY(!loaded.shortcuts_.contains("navigate.next"));
         QCOMPARE(loaded.shortcuts_["file.open"].toString(), QString("Ctrl+9")); QCOMPARE(loaded.shortcuts_["future.command"].toString(), QString("Alt+F10"));
     }
@@ -1360,7 +1409,7 @@ private slots:
     }
     void settingsApplyCancelAndIcons()
     {
-        QSettings settings; settings.setValue("theme/dark", false); settings.remove("theme/mode");
+        Preferences settings; settings.SetValue("theme/dark", false); settings.Remove("theme/mode");
         CompareWindow window(Request{}); window.show();
         CompareWindow other(Request{});
         auto* open = window.findChild<QAction*>("openCompareSettings"); QVERIFY(open); QVERIFY(!open->icon().isNull());
@@ -1386,7 +1435,7 @@ private slots:
             dialog->reject();
         });
         open->trigger(); QVERIFY(canceled);
-        QVERIFY(!settings.value("theme/dark").toBool()); QVERIFY(settings.value("view/inlineHighlights").toBool());
+        QVERIFY(!settings.Value("theme/dark").toBool()); QVERIFY(settings.Value("view/inlineHighlights").toBool());
         bool applied = false;
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = window.findChild<QDialog*>("compareSettingsDialog"); if (!dialog) return;
@@ -1397,7 +1446,7 @@ private slots:
             {
                 theme->setCurrentIndex(theme->findData("dark")); highlight->setChecked(false);
                 buttons->button(QDialogButtonBox::Apply)->click();
-                applied = settings.value("theme/dark").toBool() && !settings.value("view/inlineHighlights").toBool()
+                applied = settings.Value("theme/dark").toBool() && !settings.Value("view/inlineHighlights").toBool()
                     && other.findChild<QAction*>("darkTheme")->isChecked();
                 QTest::qWait(150);
                 const auto capture = qEnvironmentVariable("HC_COMPARE_SETTINGS_CAPTURE");
@@ -1406,7 +1455,7 @@ private slots:
             }
             dialog->reject();
         });
-        open->trigger(); QVERIFY(applied); QVERIFY(settings.value("theme/dark").toBool()); QVERIFY(!settings.value("view/inlineHighlights").toBool());
+        open->trigger(); QVERIFY(applied); QVERIFY(settings.Value("theme/dark").toBool()); QVERIFY(!settings.Value("view/inlineHighlights").toBool());
         CompareWindow restored(Request{}); QVERIFY(restored.findChild<QAction*>("darkTheme")->isChecked());
         bool accepted = false;
         QTimer::singleShot(0, &window, [&] {
@@ -1415,12 +1464,12 @@ private slots:
             if (theme && buttons) { theme->setCurrentIndex(0); accepted = true; buttons->button(QDialogButtonBox::Ok)->click(); }
             else dialog->reject();
         });
-        open->trigger(); QVERIFY(accepted); QVERIFY(!settings.value("theme/dark").toBool());
+        open->trigger(); QVERIFY(accepted); QVERIFY(!settings.Value("theme/dark").toBool());
         QVERIFY(!other.findChild<QAction*>("darkTheme")->isChecked());
     }
     void largeEmptySourceAlignment()
     {
-        QSettings{}.setValue("view/alignSourceRows", true);
+        Preferences{}.SetValue("view/alignSourceRows", true);
         QTemporaryDir dir; Request request; request.file1_ = dir.filePath("empty.txt"); request.file2_ = dir.filePath("large.txt");
         QByteArray text; for (int i = 0; i < 20000; ++i) text += "inserted-" + QByteArray::number(i) + '\n';
         write(request.file1_, {}); write(request.file2_, text); QElapsedTimer elapsed; elapsed.start(); CompareWindow window(request); window.show();
@@ -2194,7 +2243,7 @@ private slots:
     }
     void threeFilePairSelectionAndSnapshots()
     {
-        QSettings{}.setValue("view/alignSourceRows", true);
+        Preferences{}.SetValue("view/alignSourceRows", true);
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("one.cpp"); r.file2_ = dir.filePath("two.cpp"); r.file3_ = dir.filePath("three.cpp"); r.theme_ = "light";
         const auto a = lines(0, 120), b = lines(0, 30) + QString::fromUtf8("value B 한글😀\r\n").toUtf8() + lines(31, 120);
         const auto c = QByteArray("prefix\r\nsecond\r\n") + lines(0, 30) + QString::fromUtf8("value C 한굴😃\r\n").toUtf8() + lines(31, 120) + "tail\r\n";
@@ -2278,7 +2327,7 @@ private slots:
     }
     void overviewMinimapGeometryAndInvalidation()
     {
-        QSettings{}.setValue("view/alignSourceRows", true);
+        Preferences{}.SetValue("view/alignSourceRows", true);
         QTemporaryDir Dir; Request Input; Input.file1_ = Dir.filePath("first.cpp"); Input.file2_ = Dir.filePath("second.cpp"); Input.theme_ = "dark";
         QByteArray Source;
         for (int Line = 0; Line < 400; ++Line) Source += QByteArray(Line % 12, ' ') + "int value" + QByteArray::number(Line) + " = 123;\r\n";
@@ -2312,7 +2361,7 @@ private slots:
     }
     void overviewNavigationAndAppearance()
     {
-        QSettings{}.setValue("view/alignSourceRows", true);
+        Preferences{}.SetValue("view/alignSourceRows", true);
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp"); r.theme_ = "light";
         const auto a = lines(0, 1000);
         const auto b = QByteArray("inserted\r\n") + lines(0, 180) + lines(180, 240, "changed") + lines(240, 600) + lines(640, 1000) + "tail\r\n";
@@ -2428,7 +2477,7 @@ private slots:
     }
     void inlineHighlightsThemeSearchAndToggle()
     {
-        QSettings{}.setValue("view/alignSourceRows", true);
+        Preferences{}.SetValue("view/alignSourceRows", true);
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp"); r.theme_ = "light";
         const QByteArray a = QString::fromUtf8("int count = 10;\r\n// 한글😀 keep\r\nreturn count;\r\n").toUtf8();
         const QByteArray b = QString::fromUtf8("int count = 20;\r\n// 한굴😃 keep\r\nreturn count;\r\n").toUtf8();
@@ -2700,7 +2749,7 @@ private slots:
     }
     void findNavigationOptionsAndUnicode()
     {
-        QSettings{}.setValue("view/alignSourceRows", true);
+        Preferences{}.SetValue("view/alignSourceRows", true);
         QTemporaryDir dir; Request r; r.file1_ = dir.filePath("left.cpp"); r.file2_ = dir.filePath("right.cpp"); r.theme_ = "light";
         const QByteArray text = QString::fromUtf8("Alpha alphabet alpha\r\n한글😀 Straße\r\nalpha .*").toUtf8();
         write(r.file1_, text); write(r.file2_, "prefix\n" + text);
@@ -2891,7 +2940,7 @@ private slots:
     }
     void alignedWindowRecompareAndSave()
     {
-        QSettings{}.remove("view/alignSourceRows"); // Product default: enabled.
+        Preferences{}.Remove("view/alignSourceRows"); // Product default: enabled.
         QTemporaryDir dir; Request r; r.mode_ = "merge"; r.file1_ = dir.filePath("left.cpp");
         r.file2_ = dir.filePath("right.cpp"); r.output_ = dir.filePath("out.cpp"); r.theme_ = "light";
         const auto text = lines(0, 120); write(r.file1_, text);

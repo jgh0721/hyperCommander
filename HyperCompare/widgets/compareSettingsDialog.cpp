@@ -21,7 +21,7 @@
 #include <QRegularExpression>
 #include <QScreen>
 #include <QScrollArea>
-#include <QSettings>
+#include "compareSettings.hpp"
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QTabWidget>
@@ -197,8 +197,8 @@ namespace hc::compare
         connect(buttons_, &QDialogButtonBox::accepted, this, [this] { if (apply()) accept(); }); connect(buttons_, &QDialogButtonBox::rejected, this, &QDialog::reject);
         hc::ui::ApplyDialogFrame(this, buttons_, {{}, tr("화면·단축키·비교 색상을 설정합니다."), fm::ui::glyph::App});
         fillKeys(); fillColors(); changed(); if (!draft_.warnings_.isEmpty()) status_->setText(draft_.warnings_.join('\n'));
-        tabs_->setCurrentIndex(std::clamp(QSettings{}.value("settings/lastTab", 0).toInt(), 0, 3));
-        connect(tabs_, &QTabWidget::currentChanged, this, [](int Index) { QSettings{}.setValue("settings/lastTab", Index); });
+        tabs_->setCurrentIndex(std::clamp(Preferences{}.Value("settings/lastTab", 0).toInt(), 0, 3));
+        connect(tabs_, &QTabWidget::currentChanged, this, [](int Index) { Preferences{}.SetValue("settings/lastTab", Index); });
         const auto available = screen()->availableGeometry().size() - QSize(40, 60); resize(QSize(1120, 780).boundedTo(available));
     }
     void CompareSettingsDialog::changed()
