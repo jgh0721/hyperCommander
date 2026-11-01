@@ -208,6 +208,23 @@ void CFsModelT::ChangeDirectory( const QModelIndex& Child )
         return;
     }
 
+    // A native file shown by Everything can belong to another directory or
+    // provider than the origin tab. Rebase before testing ParentPack, otherwise
+    // an external archive is mistaken for a nested entry of the old archive.
+    if (Node->storageEntry_ && Node->storageEntry_->hints_.contains("filesystemPath")
+        && (Node->storageEntry_->locator_.kind_ == hc::storage::LocatorKind::Local
+            || Node->storageEntry_->locator_.kind_ == hc::storage::LocatorKind::Smb)
+        && !(Node->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)) {
+        const auto Parent = QFileInfo(QString::fromStdString(Node->storageEntry_->hints_.at("filesystemPath"))).absolutePath();
+        const auto Root = GetRoot();
+        if (!Root || Root->ReadLocation(GetCurrentPathWithRoot()).kind_ != Node->storageEntry_->locator_.kind_
+            || QDir::cleanPath(QDir::fromNativeSeparators(GetCurrentPathWithRoot())).compare(Parent, Qt::CaseInsensitive) != 0) {
+            const auto Fs = nsHC::TySpFileSystem(nsHC::CFileSystemT::MakeFileSystem(Parent));
+            if (!Fs) return;
+            SetRoot(Fs); SetCurrentPath(QDir::toNativeSeparators(Parent).mid(Fs->GetRoot().size()));
+        }
+    }
+
     if( FlagOn( Node->Flags_, nsHC::CFileSourceT::FS_FLAG_DRIVE ) )
     {
         TyOsError Err;

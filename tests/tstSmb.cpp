@@ -325,6 +325,7 @@ private slots:
                 || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "everythingViewerUi"
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("filePanelGrouping"), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -2369,6 +2370,215 @@ private slots:
         TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.search.focus"); QTest::keyClicks(Find, "ext:log"); QTRY_COMPARE(View->BaseView()->getRowCount(), 2); QVERIFY(Panel->SearchMatch().isEmpty());
     }
 
+    void everythingViewerUi_data()
+    {
+        QTest::addColumn<int>("OriginKind"); QTest::addColumn<int>("Action");
+        for (const auto Kind : {hc::storage::LocatorKind::Local, hc::storage::LocatorKind::Smb,
+            hc::storage::LocatorKind::Plugin, hc::storage::LocatorKind::Archive})
+            for (int Action = 0; Action < 5; ++Action)
+                QTest::newRow(qPrintable(QString("origin-%1-%2").arg(int(Kind)).arg(
+                    QStringList{"f3", "f4", "ctrl-pgdn", "keypad-ctrl-pgdn", "enter"}[Action]))) << int(Kind) << Action;
+    }
+    void everythingViewerUi()
+    {
+        QFETCH(int, OriginKind); QFETCH(int, Action);
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
+        QTemporaryDir Directory(QDir(qEnvironmentVariable("HC_UI_LOCAL_ROOT", QDir::tempPath())).filePath("everything-viewer-XXXXXX")); QVERIFY(Directory.isValid());
+        QPointer<QProcess> Editor;
+        const auto Restore = qScopeGuard([&] {
+            if (Editor && Editor->state() != QProcess::NotRunning) { Editor->kill(); Editor->waitForFinished(); }
+            for (auto* Window : main_->findChildren<QDialog*>("hc.document.workspace")) Window->close();
+            for (auto* Panel : panels_) Panel->StopEverythingSearch(false);
+            Find->clear();
+            qunsetenv("HC_EVERYTHING_TEST_INPUT"); qunsetenv("HC_EVERYTHING_TEST_MODE");
+            Settings.Replace(Before); Settings.Commit(); main_->RestoreWorkspace(Workspace);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); QThreadPool::globalInstance()->waitForDone();
+        });
+        QVERIFY(Settings.Put(hc::settings::Section::Editors, QJsonArray{}));
+        QVERIFY(Settings.SetPlugins("wlx", {})); QVERIFY(Settings.SetPlugins("dopusViewer", {}));
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        General["quickFind"] = QJsonObject{{"enabled", false}, {"scope", "panel"}, {"everythingDisplayIntervalMs", 50}};
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); QVERIFY(Settings.Commit());
+        QDir Root(Directory.path());
+        QVERIFY(Root.mkpath("origin")); QVERIFY(Root.mkpath("result"));
+        const auto PicturePath = Directory.filePath("result/검색 결과.jpg");
+        QImage Picture(160, 90, QImage::Format_RGB32); Picture.fill(QColor(40 + OriginKind * 20, 100 + Action * 20, 180)); QVERIFY(Picture.save(PicturePath));
+        const auto MakeArchive = [&](const QString& Archive) {
+            hc::plugins::ArchiveUpdate Create{Archive.toStdString(), Directory.filePath("result").toStdString(), {"검색 결과.jpg"}};
+            Create.creation_ = hc::plugins::ArchiveCreationOptions{1, false};
+            return hc::plugins::MakeApprovedWcxBackend(hc::plugins::BuiltinSevenZipOptions())->Update(Create, {});
+        };
+        const auto Path = Action < 2 ? PicturePath : Directory.filePath("result/검색 결과.zip");
+        if (Action >= 2) { const auto Made = MakeArchive(Path); QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str()); }
+        QFile Fixture(Directory.filePath("input.json")); QVERIFY(Fixture.open(QIODevice::WriteOnly));
+        Fixture.write(QJsonDocument(QJsonArray{Path}).toJson()); Fixture.close();
+        qputenv("HC_EVERYTHING_TEST_INPUT", Fixture.fileName().toUtf8());
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(Directory.filePath("origin"), {});
+        auto* Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY(!Model->IsLoading());
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        const auto Focus = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) {
+                const auto Entry = Model->GetFileInfo(Model->index(Row, 0));
+                if (Entry && Entry->storageEntry_ && Entry->Name_ == Name) {
+                    const auto Key = hc::workspace::SelectionKey(*Entry->storageEntry_);
+                    View->RestoreSelection({Key}, Key);
+                    if (!QTest::qWaitFor([&] { return View->CaptureFocus() == Key; }, 2000)) return false;
+                    View->EnsureKeyboardFocusOnView(); return true;
+                }
+            }
+            return false;
+        };
+        const auto Press = [&](WORD Key, bool Control = false, bool Extended = false) {
+            if (!ActivateTestWindow(reinterpret_cast<HWND>(main_->winId()))) return false;
+            View->EnsureKeyboardFocusOnView(); QTest::qWait(30);
+            if ((GetAsyncKeyState(VK_SHIFT) | GetAsyncKeyState(VK_CONTROL) | GetAsyncKeyState(VK_MENU)) & 0x8000) return false;
+            std::vector<INPUT> Keys(Control ? 4 : 2);
+            for (auto& Input : Keys) Input.type = INPUT_KEYBOARD;
+            const int At = Control ? 1 : 0;
+            if (Control) { Keys[0].ki.wVk = Keys[3].ki.wVk = VK_CONTROL; Keys[3].ki.dwFlags = KEYEVENTF_KEYUP; }
+            Keys[At].ki.wVk = Keys[At + 1].ki.wVk = Key;
+            Keys[At].ki.dwFlags = Extended ? KEYEVENTF_EXTENDEDKEY : 0;
+            Keys[At + 1].ki.dwFlags = Keys[At].ki.dwFlags | KEYEVENTF_KEYUP;
+            return SendInput(UINT(Keys.size()), Keys.data(), sizeof(INPUT)) == Keys.size();
+        };
+        if (OriginKind == int(hc::storage::LocatorKind::Archive)) {
+            const auto Origin = Directory.filePath("origin/원래 압축.zip"); const auto Made = MakeArchive(Origin);
+            QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str());
+            Model->Refresh(); QTRY_VERIFY(!Model->IsLoading()); QTRY_VERIFY(Focus("원래 압축.zip"));
+            QVERIFY(Press(VK_NEXT, true, true));
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->WorkspaceLocation().kind_ == hc::storage::LocatorKind::Archive, 15000);
+        } else if (OriginKind == int(hc::storage::LocatorKind::Smb)) {
+            // The origin only supplies provenance; no live SMB I/O is required.
+            Model->SetRoot(nsHC::TySpFileSystem(new nsHC::CFSSmb("\\")));
+        } else if (OriginKind == int(hc::storage::LocatorKind::Plugin)) {
+            using namespace hc::plugins;
+            const auto Binary = Directory.filePath("data.dll");
+            QVERIFY(QFile::copy(QCoreApplication::applicationDirPath() + "/hc_tc_data_fixture.dll", Binary));
+            QFile Dll(Binary); QVERIFY(Dll.open(QIODevice::ReadOnly));
+            PluginManifest Manifest; Manifest.id_ = "hc.test.everything-origin"; Manifest.version_ = "1";
+            Manifest.binary_ = "data.dll"; Manifest.sha256_ = QCryptographicHash::hash(Dll.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); Dll.close();
+            Manifest.format_ = PluginFormat::Wfx; Manifest.extensions_ = {Extension::StorageRead, Extension::StorageWrite};
+            Manifest.permissions_ = {Permission::ReadContent, Permission::WriteContent};
+            const auto ManifestPath = Directory.filePath("wfx.json"); QFile Json(ManifestPath); QVERIFY(Json.open(QIODevice::WriteOnly));
+            Json.write(EncodeManifest(Manifest)); Json.close();
+            QVERIFY(Settings.SetPlugins("wfx", QJsonArray{QJsonObject{{"path", Binary}, {"hostEnabled", true}, {"hostManifest", ManifestPath},
+                {"hostReviewed", hc::settings::JsonObject(EncodeManifest(Manifest))}}}));
+            emit Panel->sig_NotifyPanelActivated();
+            QTimer::singleShot(0, main_, [] {
+                for (auto* Widget : QApplication::topLevelWidgets())
+                    if (auto* Input = qobject_cast<QInputDialog*>(Widget)) Input->accept();
+            });
+            auto* Open = main_->findChild<QAction*>("hc.menu.wfx.open"); QVERIFY(Open); emit Panel->sig_NotifyPanelActivated(); Open->trigger();
+            QTRY_VERIFY_WITH_TIMEOUT(static_cast<CFSModel*>(model(Panel))->WorkspaceLocation().kind_ == hc::storage::LocatorKind::Plugin, 10000);
+            Model = static_cast<CFSModel*>(model(Panel)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+            View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+            QVERIFY(Focus("hello.txt"));
+            if (Action == 0) {
+                QVERIFY(Press(VK_F3)); QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), 15000);
+                QPointer<QDialog> Window = main_->findChild<QDialog*>("hc.document.workspace");
+                auto* Surface = Window->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().error_, 15000);
+                QVERIFY2(Surface->IsReady(), Surface->Snapshot().error_ ? Surface->Snapshot().error_->code_.c_str() : "viewer-ready-timeout");
+                const auto Documents = [&] { return Surface->Details().documentState_["documents"].toArray(); };
+                QTRY_COMPARE_WITH_TIMEOUT(Documents().size(), 1, 15000); QTRY_VERIFY_WITH_TIMEOUT(!Documents()[0].toObject()["loading"].toBool(), 15000);
+                QVERIFY(Documents()[0].toObject()["error"].toString().isEmpty()); QVERIFY(sendWlxKey(Window, VK_ESCAPE, false));
+                QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || Window->isHidden(), 10000); QTest::qWait(100);
+            } else if (Action == 1) {
+                QVERIFY(Press(VK_F4)); QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), 15000);
+                QPointer<QDialog> Window = main_->findChild<QDialog*>("hc.document.workspace"); QCOMPARE(Window->windowTitle(), QString("HyperEditor"));
+                auto* Surface = Window->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
+                QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().error_, 15000);
+                QVERIFY2(Surface->IsReady(), Surface->Snapshot().error_ ? Surface->Snapshot().error_->code_.c_str() : "viewer-ready-timeout");
+                const auto Documents = [&] { return Surface->Details().documentState_["documents"].toArray(); };
+                QTRY_COMPARE_WITH_TIMEOUT(Documents().size(), 1, 15000); QTRY_VERIFY_WITH_TIMEOUT(!Documents()[0].toObject()["loading"].toBool(), 15000);
+                QVERIFY(Documents()[0].toObject()["error"].toString().isEmpty());
+                QVERIFY(!Documents()[0].toObject()["sourceToken"].toString().isEmpty());
+                QFile Materialized(Documents()[0].toObject()["path"].toString()); QVERIFY(Materialized.open(QIODevice::ReadOnly));
+                QCOMPARE(Materialized.readAll(), QByteArray("hello from WFX")); Materialized.close();
+                QVERIFY(sendWlxKey(Window, VK_ESCAPE, false)); QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || Window->isHidden(), 10000);
+            }
+        }
+        Model->setProperty("hc.search.helper", QCoreApplication::applicationFilePath());
+        main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
+        View->EnsureKeyboardFocusOnView(); emit Panel->sig_NotifyPanelActivated();
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_F, Qt::ControlModifier | Qt::AltModifier);
+        QTRY_VERIFY(Find->hasFocus()); Find->setText(Action < 2 ? "ext:jpg" : "ext:zip");
+        QTRY_VERIFY(Model->IsSearchResults()); QTRY_COMPARE_WITH_TIMEOUT(Model->rowCount(), 1, 10000);
+        QTRY_VERIFY(!Model->IsEverythingRunning()); QCOMPARE(int(Model->WorkspaceLocation().kind_), OriginKind);
+        const auto Entry = Model->GetFileInfo(Model->index(0, 0)); QVERIFY(Entry && Entry->storageEntry_);
+        QCOMPARE(Model->ProviderFor(*Entry->storageEntry_)->Id().value_, std::string("local"));
+        QCOMPARE(QDir::fromNativeSeparators(Model->GetFileFullPath(Model->index(0, 0))), Path);
+        QVERIFY(Focus(QFileInfo(Path).fileName()));
+        if (Action < 2) {
+            auto Rejection = TyStCommandMgr::GetInstance()->Bridge()->Dispatch("hc.navigate.enterFile", {}, "everything-test", Model->index(0, 0));
+            QTRY_VERIFY(Rejection.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+            const auto Rejected = Rejection.get();
+            QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().code_, std::string("file-container-not-supported"));
+            QVERIFY(Model->IsSearchResults()); QCOMPARE(Model->rowCount(), 1);
+        }
+        if (Action == 1) {
+            QVERIFY(Press(VK_F4));
+            auto* Controller = main_->findChild<QObject*>("hc.document.openController"); QVERIFY(Controller);
+            QTRY_VERIFY_WITH_TIMEOUT(Controller->findChild<QProcess*>(), 15000); Editor = Controller->findChild<QProcess*>();
+            QTRY_COMPARE(Editor->state(), QProcess::Running); QVERIFY(Editor->program().endsWith("/HyperEditor.exe"));
+            QCOMPARE(Editor->arguments().back(), QDir::toNativeSeparators(Path));
+            QTRY_VERIFY_WITH_TIMEOUT(VisibleTestProcessWindow(DWORD(Editor->processId())), 15000);
+            Editor->kill(); Editor->waitForFinished(); QTRY_VERIFY(Editor.isNull());
+        } else if (Action >= 2) {
+            QVERIFY(Action == 4 ? Press(VK_RETURN) : Press(VK_NEXT, true, Action == 2));
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsSearchResults() && !Model->IsLoading() && Model->WorkspaceLocation().kind_ == hc::storage::LocatorKind::Archive, 15000);
+            QVERIFY(!Model->IsSearchResults()); const auto Location = Model->WorkspaceLocation();
+            QCOMPARE(QDir::fromNativeSeparators(QString::fromStdString(Location.root_)), Path);
+            QCOMPARE(Location.nesting_.size(), std::size_t(1)); QTRY_VERIFY(Focus("검색 결과.jpg"));
+            if (Action == 2) {
+                QVERIFY(Press(VK_F3)); QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), 15000);
+                QPointer<QDialog> Window = main_->findChild<QDialog*>("hc.document.workspace");
+                auto* Surface = Window->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().error_, 15000);
+                QVERIFY2(Surface->IsReady(), Surface->Snapshot().error_ ? Surface->Snapshot().error_->code_.c_str() : "viewer-ready-timeout");
+                const auto Documents = [&] { return Surface->Details().documentState_["documents"].toArray(); };
+                QTRY_COMPARE_WITH_TIMEOUT(Documents().size(), 1, 15000); QTRY_VERIFY_WITH_TIMEOUT(!Documents()[0].toObject()["loading"].toBool(), 15000);
+                QVERIFY(Documents()[0].toObject()["error"].toString().isEmpty());
+                QVERIFY(!Documents()[0].toObject()["sourceToken"].toString().isEmpty());
+                QVERIFY(sendWlxKey(Window, VK_ESCAPE, false)); QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || Window->isHidden(), 10000); QTest::qWait(100);
+            } else if (Action == 3) {
+                QVERIFY(Press(VK_F4)); QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), 15000);
+                QPointer<QDialog> Window = main_->findChild<QDialog*>("hc.document.workspace"); QCOMPARE(Window->windowTitle(), QString("HyperEditor"));
+                auto* Surface = Window->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
+                QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().error_, 15000);
+                QVERIFY2(Surface->IsReady(), Surface->Snapshot().error_ ? Surface->Snapshot().error_->code_.c_str() : "viewer-ready-timeout");
+                const auto Documents = [&] { return Surface->Details().documentState_["documents"].toArray(); };
+                QTRY_COMPARE_WITH_TIMEOUT(Documents().size(), 1, 15000); QTRY_VERIFY_WITH_TIMEOUT(!Documents()[0].toObject()["loading"].toBool(), 15000);
+                QVERIFY(Documents()[0].toObject()["error"].toString().isEmpty());
+                QVERIFY(!Documents()[0].toObject()["sourceToken"].toString().isEmpty());
+                QCOMPARE(QImage(Documents()[0].toObject()["path"].toString()).size(), Picture.size());
+                QVERIFY(sendWlxKey(Window, VK_ESCAPE, false)); QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || Window->isHidden(), 10000);
+            }
+            QVERIFY(TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.navigate.parent"));
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->WorkspaceLocation().kind_ == hc::storage::LocatorKind::Local, 15000);
+            QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Panel->CurrentPath())), Directory.filePath("result"));
+        } else {
+            const auto Key = View->CaptureFocus(); QVERIFY(Press(VK_F3));
+            QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), 15000);
+            QPointer<QDialog> Window = main_->findChild<QDialog*>("hc.document.workspace");
+            auto* Surface = Window->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
+            QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().error_, 15000);
+                QVERIFY2(Surface->IsReady(), Surface->Snapshot().error_ ? Surface->Snapshot().error_->code_.c_str() : "viewer-ready-timeout");
+            const auto Documents = [&] { return Surface->Details().documentState_["documents"].toArray(); };
+            QTRY_COMPARE_WITH_TIMEOUT(Documents().size(), 1, 15000);
+            QTRY_VERIFY_WITH_TIMEOUT(!Documents()[0].toObject()["loading"].toBool(), 15000);
+            QVERIFY2(Documents()[0].toObject()["error"].toString().isEmpty(), qPrintable(Documents()[0].toObject()["error"].toString()));
+            QFile Delivered(Documents()[0].toObject()["path"].toString()), Expected(Path);
+            QVERIFY(Delivered.open(QIODevice::ReadOnly)); QVERIFY(Expected.open(QIODevice::ReadOnly));
+            QCOMPARE(QCryptographicHash::hash(Delivered.readAll(), QCryptographicHash::Sha256), QCryptographicHash::hash(Expected.readAll(), QCryptographicHash::Sha256));
+            Delivered.close(); Expected.close();
+            QVERIFY(sendWlxKey(Window, VK_ESCAPE, false));
+            QTRY_VERIFY_WITH_TIMEOUT(Window.isNull() || Window->isHidden(), 10000); QTest::qWait(100);
+            QVERIFY(Model->IsSearchResults()); QCOMPARE(View->CaptureFocus(), Key);
+        }
+        // The shared viewer service must stay usable by subsequent data rows.
+    }
     void everythingPanelStreamingUi()
     {
         auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();

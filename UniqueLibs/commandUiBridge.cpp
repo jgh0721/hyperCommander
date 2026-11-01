@@ -791,7 +791,8 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     }
     if (!NavigateToPath && !(Invocation.context_.location_ == Model->WorkspaceLocation()))
         return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
-    if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.refresh" && Id != "hc.navigate.forceRefresh" && Id != "hc.navigate.cancel" && Model->IsSearchResults())
+    if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.refresh" && Id != "hc.navigate.forceRefresh"
+        && Id != "hc.navigate.cancel" && Id != "hc.navigate.open" && Id != "hc.navigate.enterFile" && Model->IsSearchResults())
         Panel->StopEverythingSearch(false);
     if (Id == "hc.viewer.open" || Id == "hc.file.edit") return executeDocument(Invocation, Model);
     if (Id == "hc.file.compare") {
@@ -848,6 +849,8 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
             }
         }
         if (!Target.isValid()) return Error{ErrorCategory::StaleRevision, "selection-changed"};
+        // Unsupported entries must keep their search snapshot and providers.
+        if (Model->IsSearchResults()) Panel->StopEverythingSearch(false);
         Model->ChangeDirectory(Target);
     }
     else if (Id == "hc.tab.new") { Panel->AddTab(); bindModels(); return CommandOutcome{}; }
@@ -1877,9 +1880,14 @@ Result<std::string> CommandUiBridge::captureDocument(const CommandInvocation& In
         return Error{ErrorCategory::BudgetExceeded, "document-selection-limit-16"};
     hc::document::DocumentOpenRequest Request;
     Request.intent_ = Invocation.id_ == "hc.file.edit" ? hc::document::DocumentIntent::Edit : hc::document::DocumentIntent::View;
-    const auto Kind = Invocation.context_.location_.kind_;
-    auto Writer = Kind == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider()
-        : Kind == LocatorKind::Local || Kind == LocatorKind::Smb ? MakeNativeWritableStorage(Kind, Reader) : nullptr;
+    // Everything results can span providers. The origin tab's location does not
+    // describe SnapshotProvider(); select the writer per result below instead.
+    std::shared_ptr<IWritableStorage> Writer;
+    if (!Model->IsSearchResults()) {
+        const auto Kind = Invocation.context_.location_.kind_;
+        Writer = Kind == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider()
+            : Kind == LocatorKind::Local || Kind == LocatorKind::Smb ? MakeNativeWritableStorage(Kind, Reader) : nullptr;
+    }
     for (const auto& Id : Invocation.context_.selection_) {
         bool Found = false;
         for (int Row = 0; Row < Model->rowCount(); ++Row) {
