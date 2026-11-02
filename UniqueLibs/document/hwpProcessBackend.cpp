@@ -53,7 +53,7 @@ namespace hc::document
         QPointer<HwpProcessBackend> host_;
         HWND hostWindow_ = nullptr, proxy_ = nullptr;
         std::shared_ptr<Work> work_;
-        bool valid_ = true, retired_ = false, attached_ = false;
+        bool valid_ = true, retired_ = false, attached_ = false, geometryApplied_ = false;
     };
     class HwpProcessBackend::Registry final : public QObject
     {
@@ -108,6 +108,30 @@ namespace hc::document
             for(const auto& Entry : entries_) Invalidate(Entry);
         }
         bool Drained() const { return entries_.empty(); }
+        void Resize(const std::shared_ptr<BindingState>& Entry)
+        {
+            if(!Entry || !Entry->valid_ || !Entry->attached_) return;
+            if(!Current(Entry, Entry->token_) || Entry->work_->cancel_.load()) { Invalidate(Entry); return; }
+            RECT Host{}, Proxy{};
+            if(!GetClientRect(Entry->hostWindow_, &Host) || !GetClientRect(Entry->proxy_, &Proxy)) {
+                Invalidate(Entry); return;
+            }
+            // SetWindowPos dispatches native layout/paint messages even at rest.
+            // Resize only on a real size change, including the first attachment.
+            if(Entry->geometryApplied_ && Host.right == Proxy.right && Host.bottom == Proxy.bottom) return;
+            if(!SetWindowPos(Entry->proxy_, nullptr, 0, 0, Host.right, Host.bottom, SWP_NOACTIVATE | SWP_NOZORDER)) {
+                Invalidate(Entry); return;
+            }
+            Entry->geometryApplied_ = true;
+            const auto& Snapshot = Entry->work_->snapshot_;
+            const auto Child = reinterpret_cast<HWND>(Snapshot.childWindow_);
+            DWORD Pid = 0; GetWindowThreadProcessId(Child, &Pid);
+            if(Pid != Snapshot.processId_ || GetParent(Child) != Entry->proxy_) { Invalidate(Entry); return; }
+            // Never synchronously enter the WebEngine/helper thread during a
+            // host resize. Existing polling remains a fallback if posting fails.
+            static const auto Message = RegisterWindowMessageW(WebSurfaceResizeMessage);
+            if(Message) PostMessageW(Child, Message, 0, 0);
+        }
         ~Registry() override
         {
             // QApplication::exit()/destruction without a drained event loop is a
@@ -156,12 +180,7 @@ namespace hc::document
                         Entry->attached_ = true; Entry->work_->attached_.store(true, std::memory_order_release);
                     }
                 }
-                if(Entry->valid_ && Entry->attached_) {
-                    RECT Rect{};
-                    if(!GetClientRect(Entry->hostWindow_, &Rect)
-                        || !SetWindowPos(Entry->proxy_, nullptr, 0, 0, Rect.right, Rect.bottom, SWP_NOACTIVATE | SWP_NOZORDER))
-                        Invalidate(Entry);
-                }
+                Resize(Entry);
                 if(!Entry->work_->done_.load(std::memory_order_acquire)) { ++At; continue; }
                 auto& Worker = Entry->work_->worker_;
                 if(Worker.joinable()) {
@@ -210,7 +229,9 @@ namespace hc::document
     {
         if(native_ && (Event->type() == QEvent::ParentAboutToChange || Event->type() == QEvent::WinIdChange))
             Registry::Instance().Invalidate(native_);
-        return HwpSdiBackend::event(Event);
+        const auto Result = HwpSdiBackend::event(Event);
+        if(native_ && Event->type() == QEvent::Resize) Registry::Instance().Resize(native_);
+        return Result;
     }
     void HwpProcessBackend::Load(quint64 Binding, DocumentOperationTicket Ticket, SourceIdentity Source)
     {

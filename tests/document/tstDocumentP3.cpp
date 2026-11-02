@@ -495,6 +495,85 @@ void viewerTabEmbedding(){
     Surface.Close(); QVERIFY(Wait([&] { return Controller.IsIdle(); }, 30000));
     for (const auto& Kind : Kinds) QCOMPARE(Read(Paths[Kind]), Originals[Kind]);
 }
+void hwpResizeLatency_data(){
+    QTest::addColumn<QString>("Name"); QTest::addColumn<bool>("Editable");
+    for (const auto& Name : {QString("hwp"), QString("hwpx")})
+        for (bool Edit : {false, true}) QTest::newRow(qPrintable(Name + (Edit ? "-f4" : "-f3"))) << Name << Edit;
+}
+void hwpResizeLatency(){
+    if (!qEnvironmentVariableIsSet("HC_HWP_RESIZE_BENCHMARK")) QSKIP("Explicit resize measurement required");
+    QFETCH(QString, Name); QFETCH(bool, Editable);
+    const auto Path = qEnvironmentVariable(Name == "hwp" ? "HC_VIEWER_EXTRA_HWP" : "HC_VIEWER_EXTRA_HWPX");
+    QVERIFY(QFile::exists(Path)); const auto Original = Read(Path);
+    QTemporaryDir Root;
+    QtPluginViewerController Controller(nullptr, [] { return MakeNativeMaterializer(QDir::tempPath().toStdString()); });
+    QtPluginViewerSurface Surface(&Controller); QProcess Editor; HWND Viewer = nullptr;
+    DWORD Pid = 0;
+    const auto Close = qScopeGuard([&] {
+        if (Editable) { if (Viewer && IsWindow(Viewer)) PostMessageW(Viewer, WM_CLOSE, 0, 0); Editor.waitForFinished(30000); }
+        else { Surface.Close(); Wait([&] { return Controller.IsIdle(); }, 30000); }
+    });
+    if (Editable) {
+        Editor.start(QCoreApplication::applicationDirPath() + "/HyperEditor.exe", {"--rhwp-edit", "--config-dir", Root.path(), "--", Path});
+        QVERIFY(Editor.waitForStarted(5000)); Pid = DWORD(Editor.processId());
+    } else {
+        Surface.show(); Surface.Open(Options(), Content(Path));
+        QVERIFY(Wait([&] { return Surface.IsReady(); }, 45000));
+        const auto Presented = Surface.SendDocument({{"action", "present"}}); QVERIFY(Presented.HasValue());
+        QVERIFY(Wait([&] { return Surface.Details().commandSequence_ >= Presented.Value(); }));
+        Pid = Surface.Details().host_.processId_;
+    }
+    QVERIFY(Wait([&] {
+        struct Search { DWORD pid_; bool editable_; HWND window_ = nullptr; } Found{Pid, Editable};
+        EnumWindows([](HWND Window, LPARAM Data) -> BOOL {
+            auto* Found = reinterpret_cast<Search*>(Data); DWORD Pid = 0; GetWindowThreadProcessId(Window, &Pid);
+            wchar_t Title[1024]{}; GetWindowTextW(Window, Title, 1024); const auto Text = QString::fromWCharArray(Title);
+            if (Pid == Found->pid_ && IsWindowVisible(Window)
+                && (Found->editable_ ? Text.contains(QString::fromUtf8("한글 문서 편집")) : Text.startsWith("HyperViewer"))) {
+                Found->window_ = Window; return FALSE;
+            }
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&Found)); Viewer = Found.window_; return Viewer != nullptr;
+    }, 45000));
+    if (!Editable) QVERIFY(Wait([&] {
+        const auto State = Surface.Details().documentState_;
+        return Doc(State, State["activeDocumentId"].toString())["lifecycle"] == "ready";
+    }, 45000));
+    struct Windows { HWND proxy_ = nullptr, cold_ = nullptr; } Windows;
+    QVERIFY(Wait([&] {
+        EnumChildWindows(Viewer, [](HWND Window, LPARAM Data) -> BOOL {
+            auto* Found = reinterpret_cast<struct Windows*>(Data);
+            if (GetPropW(Window, L"HyperCommander.RhwpProxyOwner")) Found->proxy_ = Window;
+            wchar_t Class[256]{}; GetClassNameW(Window, Class, 256);
+            if (QString::fromWCharArray(Class) == "HyperCommander.RhwpColdSurface") Found->cold_ = Window;
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&Windows)); return Windows.proxy_ && Windows.cold_;
+    }));
+    const auto Parent = GetParent(Windows.proxy_); const auto Renderer = GetWindow(Windows.cold_, GW_CHILD); QVERIFY(Renderer);
+    QJsonArray Samples;
+    for (int Index = 0; Index < 10; ++Index) {
+        RECT Before{}; QVERIFY(GetClientRect(Parent, &Before));
+        const auto Scale = Surface.devicePixelRatioF();
+        const auto Width = qRound((Index % 2 ? 1120 : 920) * Scale);
+        const auto Height = qRound((Index % 2 ? 850 : 700) * Scale);
+        QElapsedTimer Timer; Timer.start();
+        QVERIFY(SetWindowPos(Viewer, nullptr, 60, 60, Width, Height, SWP_NOZORDER | SWP_NOACTIVATE));
+        const auto CallMs = Timer.nsecsElapsed() / 1000000.0;
+        RECT Expected{}, Proxy{}, Cold{}, Final{};
+        QVERIFY(Wait([&] {
+            if (!GetClientRect(Parent, &Expected) || (Expected.right == Before.right && Expected.bottom == Before.bottom)) return false;
+            if (!GetClientRect(Windows.proxy_, &Proxy) || !GetClientRect(Windows.cold_, &Cold) || !GetClientRect(Renderer, &Final)) return false;
+            const auto Same = [&](const RECT& Actual) { return qAbs(Actual.right - Expected.right) <= 1 && qAbs(Actual.bottom - Expected.bottom) <= 1; };
+            return Same(Proxy) && Same(Cold) && Same(Final);
+        }, 3000));
+        Samples.append(QJsonObject{{"callMs", CallMs}, {"settleMs", Timer.nsecsElapsed() / 1000000.0}});
+        QTest::qWait(35);
+    }
+    const auto Evidence = qEnvironmentVariable("HC_HWP_RESIZE_EVIDENCE"); QVERIFY(!Evidence.isEmpty());
+    const auto Record = QJsonDocument(QJsonObject{{"case", QString::fromLatin1(QTest::currentDataTag())}, {"dpr", Surface.devicePixelRatioF()}, {"samples", Samples}}).toJson();
+    QVERIFY(Put(Evidence + '/' + QString::fromLatin1(QTest::currentDataTag()) + ".json", Record));
+    QCOMPARE(Read(Path), Original);
+}
 void hostedHwpEditLaunch(){
     const auto Corpus=qEnvironmentVariable("HC_RHWP_TEST_CORPUS");if(Corpus.isEmpty())QSKIP("Pinned RHWP corpus required");
     QTemporaryDir Root;const auto Name="edit-"+QUuid::createUuid().toString(QUuid::Id128)+".hwp";const auto Path=Root.filePath(Name);

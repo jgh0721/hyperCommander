@@ -10,6 +10,9 @@
 
 namespace hc::document
 {
+    // Best-effort geometry wake only. The helper reads its authenticated parent's
+    // current client rectangle; message arguments never supply sizes or authority.
+    inline constexpr wchar_t WebSurfaceResizeMessage[] = L"HyperCommander.DocumentWebSurface.Resize.v1";
     enum class WebProcessKind { Rhwp, EpubPrototype, EpubReadOnly };
     struct WebProcessRuntime
     {

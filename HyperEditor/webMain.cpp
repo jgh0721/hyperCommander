@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <shellapi.h>
 #include "UniqueLibs/document/documentWebPeer.hpp"
+#include "UniqueLibs/document/documentWebProcess.hpp"
 #include "UniqueLibs/document/hwpPackageAdmission.hpp"
 #include "commonLibs/layout/productLayout.hpp"
 #include "hwpRuntimePolicy.hpp"
@@ -15,6 +16,8 @@
 #include <QFile>
 #include <QCryptographicHash>
 #include <QJsonArray>
+#include <functional>
+#include <utility>
 
 namespace
 {
@@ -77,6 +80,7 @@ namespace
             return Refresh();
         }
         HWND Window() const { return window_; }
+        void SetResizeHandler(std::function<void()> Handler) { resizeHandler_ = std::move(Handler); }
         bool Refresh()
         {
             DWORD Pid = 0; GetWindowThreadProcessId(parent_, &Pid);
@@ -97,12 +101,21 @@ namespace
                 Surface->window_ = Window;
                 SetWindowLongPtrW(Window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(Surface));
             }
+            static const auto ResizeMessage = RegisterWindowMessageW(hc::document::WebSurfaceResizeMessage);
+            if(Surface && ResizeMessage && Message == ResizeMessage) {
+                if(!Surface->Refresh()) QCoreApplication::quit();
+                return 0;
+            }
+            // Refresh changes this native surface first. Propagate the actual
+            // WM_SIZE to the Qt document immediately instead of waiting 100 ms.
+            if(Surface && Message == WM_SIZE && Surface->resizeHandler_) Surface->resizeHandler_();
             if(Message == WM_NCDESTROY && Surface) {
                 // Never accept a later recycled HWND as the original surface.
                 Surface->window_ = nullptr; SetWindowLongPtrW(Window, GWLP_USERDATA, 0);
             }
             return DefWindowProcW(Window, Message, WParam, LParam);
         }
+        std::function<void()> resizeHandler_;
         HWND window_ = nullptr, parent_ = nullptr;
         DWORD ownerPid_ = 0;
     };
@@ -188,6 +201,7 @@ int main(int Argc, char** Argv)
     const auto EditPolicy = Bundle ? QJsonDocument::fromJson(Bundle->Bytes(QUrl("rhwp://bundle/editor/policy.json"))).object() : QJsonObject{};
     const bool AllowEdit = EditPolicy.size() == 2 && EditPolicy["schemaVersion"] == QJsonValue(1) && EditPolicy["edit"] == QJsonValue(true);
     HwpHelperDocument Document(Bundle, reinterpret_cast<std::uintptr_t>(Surface.Window()), 30000, AllowEdit);
+    Surface.SetResizeHandler([&] { Document.Refresh(); });
     QTimer InputTimer; InputTimer.setInterval(100);
     QObject::connect(&InputTimer, &QTimer::timeout, &App, [&] { Document.Refresh(); });
     InputTimer.start();
@@ -221,5 +235,7 @@ int main(int Argc, char** Argv)
         return Reply({{"error", "rhwp-command-unavailable"}});
     }, [&] { App.quit(); })) return 4;
     startup::Data().EndNamed("helper.entryToTransportReady");
-    return App.exec();
+    const auto Result = App.exec();
+    Surface.SetResizeHandler({}); // Document dies before the native surface.
+    return Result;
 }
