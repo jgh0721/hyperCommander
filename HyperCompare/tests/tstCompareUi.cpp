@@ -1839,6 +1839,107 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!dialog.Busy(), 10000); QTRY_VERIFY(!dialog.isVisible());
         QVERIFY(!QFileInfo::exists(dir.filePath("destination.txt"))); QVERIFY(QFileInfo::exists(journal));
     }
+    void directoryFolderStatusIcons()
+    {
+        DirectoryTreeModel Model; QAbstractItemModelTester Tester(&Model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        const QJsonObject Folder{{"present", true}, {"directory", true}};
+        const QJsonObject File{{"present", true}, {"directory", false}};
+        QJsonArray Entries;
+        for (const auto& Status : {"Equal", "Different", "LeftOnly", "RightOnly", "Error", "Pending", "Conflict", ""})
+            Entries.append(QJsonObject{{"path", QString::number(Entries.size())}, {"status", Status},
+                {"left", QString(Status) == "RightOnly" ? QJsonObject{} : Folder},
+                {"right", QString(Status) == "LeftOnly" ? QJsonObject{} : Folder}});
+        Entries.append(QJsonObject{{"path", "type"}, {"status", "TypeConflict"}, {"left", Folder}, {"right", File}});
+        Entries.append(QJsonObject{{"path", "base"}, {"status", "BothDeleted"}, {"base", Folder}});
+        Model.SetEntries(Entries);
+        QList<QImage> Images;
+        for (int I = 0; I < 7; ++I)
+        {
+            const auto Index = Model.ForEntry(I).siblingAtColumn(I == 3 ? 3 : 0);
+            const auto Icon = qvariant_cast<QIcon>(Index.data(Qt::DecorationRole)); QVERIFY(!Icon.isNull());
+            const auto Image = Icon.pixmap(QSize(16, 16), 1.0).toImage();
+            QVERIFY(!Images.contains(Image)); Images.append(Image);
+            for (const qreal Dpr : {1.0, 1.5, 2.0}) for (const int Size : {16, 24})
+            {
+                const auto Pixmap = Icon.pixmap(QSize(Size, Size), Dpr);
+                QCOMPARE(Pixmap.size(), QSize(qRound(Size * Dpr), qRound(Size * Dpr)));
+                QCOMPARE(Pixmap.devicePixelRatio(), Dpr);
+                QCOMPARE(Icon.pixmap(QSize(Size, Size), Dpr, QIcon::Selected).toImage(), Pixmap.toImage());
+            }
+        }
+        QVERIFY(!Model.ForEntry(2).siblingAtColumn(3).data(Qt::DecorationRole).isValid());
+        QVERIFY(!Model.ForEntry(3).data(Qt::DecorationRole).isValid());
+        QVERIFY(!Model.ForEntry(0).siblingAtColumn(1).data(Qt::DecorationRole).isValid());
+        QVERIFY(Model.ForEntry(8).data(Qt::DecorationRole).value<QIcon>().pixmap(16).toImage() !=
+            Model.ForEntry(8).siblingAtColumn(3).data(Qt::DecorationRole).value<QIcon>().pixmap(16).toImage());
+        QVERIFY(!Model.ForEntry(9).data(Qt::DecorationRole).isValid());
+        QVERIFY(!Model.ForEntry(9).siblingAtColumn(6).data(Qt::DecorationRole).value<QIcon>().isNull());
+    }
+    void directoryFolderStatusPropagation()
+    {
+        DirectoryTreeModel Model; QAbstractItemModelTester Tester(&Model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        const auto Row = [](const QString& Path, const QString& Status, bool Folder) {
+            const QJsonObject Side{{"present", true}, {"directory", Folder}};
+            return QJsonObject{{"path", Path}, {"status", Status}, {"left", Side}, {"right", Side}};
+        };
+        const auto Label = [&] { return Model.ForPath("root").siblingAtColumn(1).data().toString(); };
+        Model.SetEntries(QJsonArray{Row("root/sub/file", "Different", false), Row("root", "Equal", true), Row("root/sub", "Equal", true)});
+        QCOMPARE(Label(), QString("하위 항목 차이"));
+        QVERIFY(Model.ForPath("root").data(Qt::ToolTipRole).toString().contains(Label()));
+        const auto ChangedIcon = Model.ForPath("root").data(Qt::DecorationRole).value<QIcon>().cacheKey();
+        DirectoryProgress Batch; Batch.rows_.append(Row("root/sub/file", "Error", false)); Model.ApplyProgress(Batch);
+        QCOMPARE(Label(), QString("하위 항목 비교 불가"));
+        // Late arrival of the parent's own Equal result must not erase child errors.
+        Batch.rows_.clear(); Batch.rows_.append(Row("root", "Equal", true)); Model.ApplyProgress(Batch);
+        QCOMPARE(Label(), QString("하위 항목 비교 불가"));
+        QVERIFY(Model.ForPath("root").data(Qt::DecorationRole).value<QIcon>().cacheKey() != ChangedIcon);
+        Batch.rows_.clear(); Batch.rows_.append(Row("root", "Pending", true)); Model.ApplyProgress(Batch);
+        QCOMPARE(Label(), QString("하위 항목 비교 불가"));
+        Batch.rows_.clear(); Batch.rows_.append(Row("root", "Equal", true)); Model.ApplyProgress(Batch);
+        Batch.rows_.clear(); Batch.rows_.append(Row("root/sub/file", "Pending", false)); Model.ApplyProgress(Batch);
+        QCOMPARE(Label(), QString("비교 대기"));
+        Batch.rows_.clear(); Batch.rows_.append(Row("root/sub/file", "Equal", false)); Model.ApplyProgress(Batch);
+        QCOMPARE(Label(), QString("비교 대기")); // Traversal has not completed yet.
+        QSignalSpy Changed(&Model, &QAbstractItemModel::dataChanged); Model.FinishProgress();
+        QCOMPARE(Label(), QString("동일"));
+        QVERIFY(!Model.ForPath("root").data(Qt::FontRole).value<QFont>().bold());
+        bool IconNotified = false;
+        for (const auto& Signal : Changed) IconNotified |= Signal[2].value<QList<int>>().contains(Qt::DecorationRole);
+        QVERIFY(IconNotified);
+        Batch.rows_.clear(); Batch.rows_.append(Row("root/sub/file", "Conflict", false)); Model.ApplyProgress(Batch); Model.FinishProgress();
+        QCOMPARE(Label(), QString("하위 항목 충돌"));
+        Model.SetEntries(QJsonArray{Row("root", "Equal", true)}); QCOMPARE(Label(), QString("동일"));
+    }
+    void directoryFolderStatusPreview()
+    {
+        QTemporaryDir Temporary; const auto Evidence = qEnvironmentVariable("HC_FOLDER_ICON_EVIDENCE_DIR", Temporary.path());
+        QVERIFY(QDir{}.mkpath(Evidence));
+        Result Comparison; Comparison.directoryComplete_ = true; Comparison.completion_ = "Complete";
+        const auto Add = [&](const QString& Path, const QString& Status, bool Left = true, bool Right = true, bool Directory = true) {
+            const QJsonObject Side{{"present", true}, {"directory", Directory}};
+            Comparison.entries_.append(QJsonObject{{"path", Path}, {"status", Status},
+                {"left", Left ? Side : QJsonObject{}}, {"right", Right ? Side : QJsonObject{}}});
+        };
+        Add("01-common", "Equal"); Add("02-src", "Equal"); Add("02-src/widgets", "Equal");
+        Add("02-src/widgets/theme.cpp", "Different", true, true, false);
+        Add("03-plugins-local", "LeftOnly", true, false); Add("04-plugins-remote", "RightOnly", false, true);
+        Add("05-restricted", "Error"); Add("06-pending", "Pending"); Add("07-conflict", "TypeConflict");
+        Add("08-parent-error", "Equal"); Add("08-parent-error/locked", "Error");
+        DirectoryView View; View.resize(1320, 600); Request Input; Input.file1_ = "D:/Work/ProjectA"; Input.file2_ = "D:/Work/ProjectB";
+        View.SetComparison(Input, Comparison); View.show();
+        auto* Tree = View.findChild<QTreeView*>("directoryRightTree"); QVERIFY(Tree);
+        Tree->setCurrentIndex(Tree->model()->index(1, 3)); Tree->setFocus();
+        const auto Dpr = View.devicePixelRatioF();
+        const auto Expected = qEnvironmentVariable("HC_UI_EXPECT_DPR"); if (!Expected.isEmpty()) QCOMPARE(Dpr, Expected.toDouble());
+        auto& Theme = fm::style::ThemeManager::instance();
+        for (const bool Dark : {false, true})
+        {
+            Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
+            QTest::qWait(60);
+            QVERIFY(View.grab().save(Evidence + QString("/folders-%1-%2.png").arg(Dark ? "dark" : "light").arg(Dpr)));
+        }
+        View.close();
+    }
     void directoryTreeModelContractsAndFiltering()
     {
         DirectoryTreeModel model; QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::QtTest);
@@ -2049,7 +2150,7 @@ private slots:
         qInfo("Streaming completion reusing 32768 entries: %lld ms", finish.elapsed()); QCOMPARE(resets.size(), 0); QVERIFY(selected.isValid()); QCOMPARE(tree->currentIndex(), QModelIndex(selected));
         auto* table = view.findChild<QTableView*>("directoryTable"); QCOMPARE(table->model()->rowCount(), 0);
         view.findChild<QComboBox*>("directoryViewMode")->setCurrentIndex(1); QCOMPARE(table->model()->rowCount(), 32768);
-        QCOMPARE(table->currentIndex().data().toString(), selectedPath); view.findChild<QComboBox*>("directoryViewMode")->setCurrentIndex(0);
+        QCOMPARE(table->currentIndex().data().toString(), QDir::toNativeSeparators(selectedPath)); view.findChild<QComboBox*>("directoryViewMode")->setCurrentIndex(0);
         QCOMPARE(tree->currentIndex().data(DirectoryTreeModel::PathRole).toString(), selectedPath); view.close();
     }
     void directoryLargeWorkspaceAcceptance()

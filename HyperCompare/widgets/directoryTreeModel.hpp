@@ -43,6 +43,8 @@ namespace hc::compare
             std::vector<Node*> children_;
             int row_ = 0, entry_ = -1, order_ = -1;
             bool visible_ = true, matched_ = true, different_ = false, folder_ = false;
+            // Counts include this node and descendants: error, conflict, pending, difference.
+            std::array<int, 4> issues_{};
         };
         Node* node(const QModelIndex& Index) const;
         QModelIndex indexFor(const Node* Item) const;
@@ -55,7 +57,7 @@ namespace hc::compare
         bool streaming_ = false;
         mutable QPointer<QStyle> iconStyle_;
         mutable qint64 iconPalette_ = 0;
-        mutable QIcon folderIcon_, fileIcon_;
+        mutable QIcon fileIcon_;
     };
     class DirectoryTreeFilter final : public QSortFilterProxyModel
     {
