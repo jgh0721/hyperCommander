@@ -53,6 +53,9 @@ namespace hc::storage
         // Exclusive producer worker; the coordinator joins before any other call.
         virtual Result<Unit> ProduceContent(ContentProducer, OperationContext)
         { return Error{ErrorCategory::Unsupported, "produced-content-unavailable"}; }
+        // Adopt a validated result on the destination volume without copying its payload.
+        virtual Result<Unit> AdoptContent(ProducedContent, OperationContext)
+        { return Error{ErrorCategory::Unsupported, "content-adoption-unavailable"}; }
         virtual Result<Unit> SetMetadata(FileMetadata Metadata, OperationContext Context) = 0;
         // Source identity is immutable. Each extra/verification advance is bounded.
         virtual Result<Unit> ConfigureCopy(EntrySnapshot, CopyOptions Options, OperationContext)

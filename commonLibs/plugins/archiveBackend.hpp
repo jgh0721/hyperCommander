@@ -35,7 +35,8 @@ namespace hc::plugins
     };
     struct ArchiveUpdate
     {
-        // Prepared copies only. The operation coordinator owns final commit.
+        // The operation coordinator owns final commit. Creation can map archive
+        // names to native input paths without duplicating their file contents.
         std::string archive_, inputDirectory_;
         std::vector<std::string> add_, remove_;
         std::uint64_t maxOutputBytes_ = std::numeric_limits<std::uint64_t>::max();
@@ -52,6 +53,7 @@ namespace hc::plugins
         std::vector<bool> reuseData_;
         // Dedicated NEW capability path; never relaxes mutation requirements.
         bool createNew_ = false;
+        std::vector<std::string> sourcePaths_;
     };
     // Forward-only, bounded memory output. EOF is returned only after the SDK
     // has validated the selected member. Calls follow increasing listing ordinals.

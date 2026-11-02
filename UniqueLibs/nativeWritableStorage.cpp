@@ -349,6 +349,57 @@ namespace hc::storage
                 if (Security != ERROR_SUCCESS) { failed_ = true; return Failure(Security, id_); }
                 return Unit{};
             }
+            Result<Unit> AdoptContent(ProducedContent Content, OperationContext Context) override
+            {
+                if (closed_ || failed_ || productionStarted_ || !expectedBytes_ || !Content.lifetime_ || sourceHash_)
+                    return Error{ErrorCategory::InvalidRequest, "adopt-content-state", id_};
+                if (const auto Stop = Context.Check(id_)) return *Stop;
+                const auto Kind = Content.path_.starts_with("//") || Content.path_.starts_with("\\\\") ? LocatorKind::Smb : LocatorKind::Local;
+                auto Candidate = Normalize({Kind, Content.path_}, destination_.kind_, id_);
+                if (!Candidate.HasValue()) return Candidate.Failure();
+                auto Parents = PinParents(Candidate.Value(), id_); if (!Parents.HasValue()) return Parents.Failure();
+                const auto Parent = std::filesystem::path(stagePath_).parent_path().wstring() + L"\\";
+                if (Candidate.Value().path_.size() <= Parent.size()
+                    || _wcsnicmp(Candidate.Value().path_.c_str(), Parent.c_str(), Parent.size()))
+                    return Error{ErrorCategory::InvalidRequest, "adopt-content-outside-destination", id_};
+                const bool Redirected = native::IsRedirectedPath(path_.path_);
+                DWORD VolumeFlags=0;
+                const bool HaveVolumeFlags=GetVolumeInformationByHandleW(Parents.Value().back().value_,nullptr,0,nullptr,nullptr,&VolumeFlags,nullptr,0);
+                const bool PreserveAcl=!Redirected&&(!HaveVolumeFlags||(VolumeFlags&FILE_PERSISTENT_ACLS));
+                const bool RecoveryRead = Context.writeCheckpoint_ && native::NeedsContentIdentity(Parents.Value().back().value_, path_.path_);
+                const DWORD Access = GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE | (PreserveAcl ? WRITE_DAC : 0) | (RecoveryRead ? GENERIC_READ : 0);
+                Handle File(CreateFileW(Candidate.Value().path_.c_str(), Access,
+                    FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+                BY_HANDLE_FILE_INFORMATION Info{};
+                if (File.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_);
+                if (!GetFileInformationByHandle(File.value_, &Info) || (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+                    || Info.nNumberOfLinks > 1 || ((uint64_t(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow) != *expectedBytes_)
+                    return Error{ErrorCategory::StaleRevision, "adopt-content-size-or-type", id_};
+                if (PreserveAcl) {
+                    PACL Dacl = nullptr; PSECURITY_DESCRIPTOR Descriptor = nullptr;
+                    auto Security = GetSecurityInfo(file_.value_, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &Dacl, nullptr, &Descriptor);
+                    if (Security != ERROR_SUCCESS) return Failure(Security, id_);
+                    const auto FreeDescriptor = qScopeGuard([&] { LocalFree(Descriptor); });
+                    SECURITY_DESCRIPTOR_CONTROL Control{}; DWORD Revision = 0;
+                    Security = GetSecurityDescriptorControl(Descriptor, &Control, &Revision)
+                        ? SetSecurityInfo(File.value_, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION
+                            | (Control & SE_DACL_PROTECTED ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION),
+                            nullptr, nullptr, Dacl, nullptr) : GetLastError();
+                    if (Security != ERROR_SUCCESS) return Failure(Security, id_);
+                }
+                auto Removed = DeleteHandle(file_.value_, id_); if (!Removed.HasValue()) return Removed;
+                file_.Close();
+                auto Renamed = RenameHandle(File.value_, stagePath_, id_); if (!Renamed.HasValue()) { failed_ = true; return Renamed; }
+                const auto Refreshed = native::RefreshRenamedHandle(File.value_, stagePath_, Access, Info);
+                if (Refreshed) {
+                    failed_ = true; auto Error = Failure(Refreshed, id_, Utf8(stagePath_));
+                    Error.userAction_ = "preserved-stage:" + Utf8(stagePath_); return Error;
+                }
+                file_ = std::move(File); productionStarted_ = true;
+                record_.stageIdentity_ = checkpoint_ && native::NeedsContentIdentity(file_.value_, path_.path_)
+                    ? "content:writing" : native::PersistentIdentity(file_.value_, Info);
+                return checkpoint(WritePhase::Writing);
+            }
             Result<Unit> SetMetadata(FileMetadata Metadata, OperationContext Context) override
             {
                 if (const auto Error = Context.Check(id_)) return *Error;

@@ -333,6 +333,7 @@ namespace hc::plugins
             }
             Result<Unit> Update(ArchiveUpdate Request, OperationContext Context) override
             {
+                if (!Request.sourcePaths_.empty()) return Error{ErrorCategory::Unsupported, "wcx-input-path-mapping-unavailable", {"wcx"}};
                 if (std::ranges::any_of(Request.reuseData_, [](bool Flag) { return Flag; })) return Error{ErrorCategory::Unsupported, "wcx-metadata-rename-unsupported", {"wcx"}};
                 auto Gate = Enter(Context); if (!Gate.HasValue()) return Gate.Failure();
                 if (!Absolute(Request.archive_) || !Absolute(Request.inputDirectory_) || !Request.maxOutputBytes_) return Invalid("invalid-archive-update");

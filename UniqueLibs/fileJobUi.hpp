@@ -47,6 +47,7 @@ public:
     hc::operations::JobScheduler& RenameScheduler() override { return scheduler_; }
     hc::storage::Result<hc::operations::JobHandle> SubmitRename(hc::operations::PreparedJob Job, const QString& Label) override { return Submit(std::move(Job), Label); }
     void Show();
+    void Background();
     void ApplyDefaults();
     std::function<void(const std::string&, const hc::operations::FileOperationRequest&)> onResubmitted_;
     std::function<void(const hc::operations::JobResult&)> onFinished_;

@@ -31,6 +31,13 @@ bool SameLocation(Locator Left, Locator Right)
 }
 }
 QString ArchivePathKey(QString Path) { return Path.normalized(QString::NormalizationForm_C).toCaseFolded(); }
+QString SuggestedArchiveName(const EntrySnapshot& Entry, const QString& Format)
+{
+    auto Name = QString::fromStdString(Entry.name_);
+    const auto Dot = Name.lastIndexOf('.');
+    if (!Entry.directory_ && Dot > 0) Name.truncate(Dot);
+    return Name + '.' + Format;
+}
 QString ResolveArchiveDestination(QString Input, QString BaseDirectory)
 {
     const auto Normalize = [](QString Path) {
@@ -84,6 +91,7 @@ struct CreationPlanner::State {
     bool selected_ = false, initialized_ = false, done_ = false;
     uint64_t selectionOffset_ = 0, discovered_ = 0;
     std::deque<Pending> pending_;
+    std::string currentPath_;
     std::optional<Pending> collision_;
     Pending directory_;
     std::unique_ptr<IEntryCursor> cursor_;
@@ -93,7 +101,7 @@ struct CreationPlanner::State {
     std::set<std::tuple<size_t, std::string, std::string>> visitedDirectories_;
     explicit State(PlanRequest Request) : request_(std::move(Request)) {}
     JobStep progress() const {
-        JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{0, {}, "압축 파일 목록 확인"};
+        JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{0, {}, currentPath_};
         Step.progress_->discoveredItems_ = discovered_;
         if (request_.sources_.size() == 1) Step.progress_->source_ = Serialize(request_.sources_.front().entry_.locator_);
         return Step;
@@ -138,8 +146,17 @@ JobStep CreationPlanner::Advance(JobStepContext Context)
             const auto Name = QString::fromStdString(Source.entry_.name_); if (!IsSafeArchiveName(Name)) return Failed(Invalid("archive-create-invalid-name"));
             size_t Group = 0;
             if (R.composition_.separateArchives_) {
-                auto Output = R.destination_; const auto FileName = Name + '.' + QString::fromStdString(R.format_);
-                if (!S.outputNames_.insert(ArchivePathKey(FileName)).second) return Failed(Invalid("archive-create-output-name-collision"));
+                auto Output = R.destination_; auto FileName = SuggestedArchiveName(Source.entry_, QString::fromStdString(R.format_));
+                const auto Custom = R.outputNames_.find(Serialize(Source.entry_.id_));
+                if (Custom != R.outputNames_.end()) FileName = QString::fromStdString(Custom->second);
+                if (!IsSafeArchiveName(FileName) || QFileInfo(FileName).suffix().compare(QString::fromStdString(R.format_), Qt::CaseInsensitive))
+                    return Failed(Invalid("archive-create-invalid-output-name"));
+                const auto Base = FileName.left(FileName.size() - R.format_.size() - 1);
+                unsigned Suffix = 2;
+                while (!S.outputNames_.insert(ArchivePathKey(FileName)).second) {
+                    if (Custom != R.outputNames_.end()) return Failed(Invalid("archive-create-output-name-collision"));
+                    FileName = Base + QString(" (%1).").arg(Suffix++) + QString::fromStdString(R.format_);
+                }
                 Output.root_ = QDir(QString::fromStdString(Output.root_)).filePath(FileName).toStdString();
                 if (R.completedOutputs_.contains(Serialize(Output))) continue;
                 Group = S.outputs_.size(); S.outputs_.push_back({Output});
@@ -153,6 +170,7 @@ JobStep CreationPlanner::Advance(JobStepContext Context)
         S.names_.resize(S.outputs_.size()); S.initialized_ = true; return S.progress();
     }
     if (S.cursor_) {
+        S.currentPath_ = Serialize(S.directory_.source_.entry_.locator_);
         auto Page = S.cursor_->Next(128, Context.operation_).get(); if (!Page.HasValue()) return Failed(Page.Failure());
         if (Page.Value().entries_.empty() && !Page.Value().end_) return Failed(Invalid("archive-create-enumeration-no-progress"));
         for (auto& Entry : Page.Value().entries_) {
@@ -182,6 +200,7 @@ JobStep CreationPlanner::Advance(JobStepContext Context)
         Next = std::move(S.pending_.front()); S.pending_.pop_front();
         if (++S.discovered_ > Context.operation_.EnumerationLimit()) return Failed({ErrorCategory::BudgetExceeded, "archive-create-item-count"});
     }
+    S.currentPath_ = Serialize(Next.source_.entry_.locator_);
     if (Next.source_.entry_.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) return Failed({ErrorCategory::Unsupported, "archive-create-source-link"});
     auto Fresh = Next.source_.reader_->Stat(Next.source_.entry_.id_, Context.operation_).get(); if (!Fresh.HasValue()) return Failed(Fresh.Failure());
     // Stat validates the supplied revision. Native listing revisions may be

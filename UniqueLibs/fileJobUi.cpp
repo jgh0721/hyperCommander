@@ -79,7 +79,7 @@ namespace
     {
         if (Value == Serialize(Locator{})) return {};
         const auto At = ParseLocator(Value);
-        if (!At.HasValue()) return QString::fromStdString(Value);
+        if (!At.HasValue()) return QDir::toNativeSeparators(QString::fromStdString(Value));
         auto Path = QString::fromStdString(At.Value().root_);
         for (const auto& Hop : At.Value().nesting_) Path += " > " + QString::fromStdString(Hop.entry_);
         return QDir::toNativeSeparators(Path);
@@ -120,7 +120,7 @@ namespace
         case JobPhase::Copying: return QObject::tr("대상에 복사");
         case JobPhase::Verifying: return QObject::tr("결과 확인");
         case JobPhase::RemovingSource: return QObject::tr("원본 제거");
-        case JobPhase::PreparingInputs: return QObject::tr("입력 준비");
+        case JobPhase::PreparingInputs: return QObject::tr("파일 목록 확인");
         case JobPhase::BuildingArchive: return QObject::tr("압축 생성");
         case JobPhase::SavingOutput: return QObject::tr("대상 저장");
         case JobPhase::RewritingArchive: return QObject::tr("압축 재작성");
@@ -244,8 +244,8 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     currentBlock_ = new QWidget(dialog_); currentBlock_->setObjectName("hc.jobs.current");
     auto* CurrentLayout = new QVBoxLayout(currentBlock_); CurrentLayout->setContentsMargins(0, 0, 0, 0); CurrentLayout->setSpacing(7);
     auto* CurrentTop = new QHBoxLayout;
-    currentTitle_ = new QLabel(tr("현재 파일"), currentBlock_); currentPercent_ = new QLabel(currentBlock_);
-    currentPercent_->setObjectName("hc.jobs.currentPercent"); CurrentTop->addWidget(currentTitle_); CurrentTop->addStretch(); CurrentTop->addWidget(currentPercent_);
+    currentTitle_ = new QLabel(tr("현재 파일"), currentBlock_); currentTitle_->setObjectName("hc.jobs.currentTitle"); currentPercent_ = new QLabel(currentBlock_);
+    currentPercent_->setObjectName("hc.jobs.currentPercent"); CurrentTop->addWidget(currentTitle_, 1); CurrentTop->addWidget(currentPercent_);
     CurrentLayout->addLayout(CurrentTop);
     currentProgress_ = new fm::ui::ProgressBar(currentBlock_); currentProgress_->setObjectName("hc.jobs.currentProgress");
     currentProgress_->setTextVisible(false); currentProgress_->setFixedHeight(9); currentProgress_->setAccessibleName(tr("현재 파일 진행률"));
@@ -288,7 +288,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     autoClose_->setToolTip(tr("정상 완료 또는 사용자 취소의 정리가 끝나면 창을 닫습니다. 실패·정리 오류가 있으면 결과를 유지합니다."));
     pause_ = new fm::ui::Button(tr("일시 정지"), dialog_); pause_->setObjectName("hc.jobs.pause");
     cancel_ = new fm::ui::Button(tr("취소(&C)"), dialog_); cancel_->setObjectName("hc.jobs.cancel");
-    auto* Hide = new fm::ui::Button(tr("백그라운드로(&B)"), dialog_); Hide->setObjectName("hc.jobs.background");
+    auto* Hide = new fm::ui::Button(tr("백그라운드로(%1)").arg(QKeySequence(hc::defaults::AuxiliaryShortcut("background")).toString(QKeySequence::NativeText)), dialog_); Hide->setShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("background"))); Hide->setObjectName("hc.jobs.background");
     {
         hc::ui::DialogFrameOptions Frame; Frame.header_ = false; Frame.outline_ = true;
         auto* Footer = hc::ui::ApplyDialogFrame(dialog_, Frame);
@@ -701,6 +701,7 @@ void FileJobUi::ApplyDefaults()
     }
 }
 
+void FileJobUi::Background() { dialog_->hide(); }
 void FileJobUi::Show() { updateManager(); manager_->show(); manager_->raise(); manager_->activateWindow(); updateSelection(); }
 void FileJobUi::showProgress() { updateSelection(); fitProgressDialog(); dialog_->show(); dialog_->raise(); dialog_->activateWindow(); updateSelection(); }
 void FileJobUi::controlSelected(bool Pause)
@@ -1070,6 +1071,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const bool Create = Kind == JobKind::MakeFile || Kind == JobKind::MakeDirectory || Kind == JobKind::ArchiveMakeDirectory;
     const bool Security = Kind == JobKind::SecurityChange || Kind == JobKind::SecurityRestore;
     const bool ArchiveCreation = Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate || Kind == JobKind::IsoCreate;
+    const auto ActivePhase=ArchiveCreation&&Progress.phase_==JobPhase::PreparingInputs&&Progress.currentTotal_?tr("입력 파일 준비"):PhaseText(Progress.phase_);
     auto Operation = OperationText(Kind);
     if (Operation.isEmpty()) Operation = jobs_->currentText().section(QStringLiteral(" · "), 0, 0);
     if (Operation.isEmpty()) Operation = tr("파일 작업");
@@ -1104,8 +1106,17 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
             }
         } else if (Name.contains('/') || Name.contains('\\')) Name = Name.mid(std::max(Name.lastIndexOf('/'), Name.lastIndexOf('\\')) + 1);
         if (Name.isEmpty()) Name = QString::fromStdString(Snapshot.metadata_.label_);
+        auto* Row=qobject_cast<QBoxLayout*>(PathLabel->parentWidget()->layout());
+        Row->setDirection(ArchiveCreation?QBoxLayout::LeftToRight:QBoxLayout::TopToBottom);Row->setSpacing(ArchiveCreation?0:6);
+        NameLabel->setWordWrap(!ArchiveCreation);Row->setAlignment(PathLabel,ArchiveCreation?Qt::AlignVCenter:Qt::Alignment{});
+        auto PathPolicy=PathLabel->sizePolicy();PathPolicy.setHorizontalPolicy(QSizePolicy::Preferred);PathLabel->setSizePolicy(PathPolicy);
+        PathLabel->setMaximumWidth(ArchiveCreation?std::max(120,dialog_->width()/2):QWIDGETSIZE_MAX);
+        auto NamePolicy=NameLabel->sizePolicy();NamePolicy.setHorizontalPolicy(ArchiveCreation?QSizePolicy::Expanding:QSizePolicy::Ignored);NameLabel->setSizePolicy(NamePolicy);Row->setStretch(0,0);Row->setStretch(1,ArchiveCreation?1:0);
+        if(ArchiveCreation&&!Path.isEmpty()&&!Path.endsWith('\\')&&!Path.endsWith('/'))Path+='\\';
         PathLabel->setText(Label + (Path.isEmpty() ? QString{} : QStringLiteral("   ") + Path));
-        PathLabel->setToolTip(Path); NameLabel->setText(Name); NameLabel->setToolTip(Name);
+        const auto Full=Path+Name;PathLabel->setToolTip(Full);
+        NameLabel->setText(ArchiveCreation?NameLabel->fontMetrics().elidedText(Name,Qt::ElideMiddle,std::max(120,dialog_->width()-std::min(PathLabel->sizeHint().width(),PathLabel->maximumWidth())-60)):Name);
+        NameLabel->setToolTip(ArchiveCreation?Full:Name);
     };
     const bool HasSource = !Create && (!Progress.source_.empty() || !Snapshot.metadata_.source_.empty() || !Progress.currentItem_.empty());
     const bool HasDestination = !Delete && !Security && (!Progress.destination_.empty() || !Snapshot.metadata_.destination_.empty());
@@ -1115,9 +1126,9 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     if (HasSource) Endpoint(sourcePath_, sourceName_, Security ? (Kind == JobKind::SecurityRestore ? tr("복원 경로") : tr("적용 경로"))
         : RestoreNames || ResumeNames ? tr("현재 이름") : Rename ? tr("변경 전") : Delete ? tr("삭제")
         : Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate ? tr("압축") : Operation, Progress.source_, Snapshot.metadata_.source_, !Rename && !Security);
-    if (HasDestination) Endpoint(destinationPath_, destinationName_, RestoreNames ? tr("복원 이름") : ResumeNames ? tr("최종 이름") : Rename ? tr("변경 후") : Create ? tr("생성 위치") : tr("대상"),
+    if (HasDestination) Endpoint(destinationPath_, destinationName_, RestoreNames ? tr("복원 이름") : ResumeNames ? tr("최종 이름") : Rename ? tr("변경 후") : Create ? tr("생성 위치") : ArchiveCreation ? tr("생성") : tr("대상"),
         Progress.destination_, Snapshot.metadata_.destination_, !Rename && !Create && Kind != JobKind::ArchiveCreate && Kind != JobKind::ArchiveSeparate && Kind != JobKind::IsoCreate);
-    const auto Phases = Kind == JobKind::Move && Progress.phase_ == JobPhase::ApplyingNames ? std::vector<JobPhase>{} : JobPhases(Kind);
+    const auto Phases = ArchiveCreation || (Kind == JobKind::Move && Progress.phase_ == JobPhase::ApplyingNames) ? std::vector<JobPhase>{} : JobPhases(Kind);
     phaseBlock_->setVisible(!Phases.empty());
     const auto PhaseKey = QString::number(int(Kind)) + ':' + QString::number(int(Progress.phase_)) + ':' + QString::number(int(Snapshot.state_));
     if (phaseBlock_->property("hc.jobs.phaseKey").toString() != PhaseKey) {
@@ -1139,7 +1150,8 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const auto SizeText = [&](uint64_t Bytes) { return hc::columns::Format(hc::columns::CellValue::Ready(quint64(Bytes)), SizeFormat); };
     const auto Mode = ProgressRate(Snapshot);
     const bool Bytes = Mode == RateMode::Bytes;
-    const bool Current = Bytes && Progress.currentTotal_.has_value() && Kind != JobKind::ArchiveCreate && Kind != JobKind::IsoCreate;
+    const bool CurrentBytes = Bytes && Progress.currentTotal_.has_value();
+    const bool Current = ArchiveCreation || (CurrentBytes && Kind != JobKind::ArchiveCreate && Kind != JobKind::IsoCreate);
     currentBlock_->setVisible(Current);
     const auto State = Snapshot.state_ == JobState::Paused || Snapshot.state_ == JobState::WaitingForUser || Snapshot.deferred_
         ? fm::ui::ProgressBar::Paused : Snapshot.state_ == JobState::Failed ? fm::ui::ProgressBar::Error : fm::ui::ProgressBar::Normal;
@@ -1157,12 +1169,18 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
         Bar->setFormat({});
     };
     if (Current) {
-        currentTitle_->setText(Kind == JobKind::ArchiveSeparate && Progress.phase_ == JobPhase::SavingOutput ? tr("현재 출력 저장") : tr("현재 파일"));
-        SetBar(currentProgress_, currentPercent_, Progress.currentBytes_, Progress.currentTotal_);
-        auto Text = tr("현재 파일 %1 / %2").arg(SizeText(Progress.currentBytes_), SizeText(*Progress.currentTotal_));
-        if (Progress.activeFiles_ > 1) Text += tr(" · 병렬 처리 %1개").arg(Progress.activeFiles_);
-        if (Kind == JobKind::ArchiveSeparate && Progress.outputIndex_ && Progress.outputCount_) Text += tr(" · %1 / %2번째 출력").arg(*Progress.outputIndex_ + 1).arg(*Progress.outputCount_);
-        currentMetrics_->setText(Text);
+        const auto CurrentPath=DisplayPath(Progress.currentItem_);
+        auto CurrentName=CurrentPath.mid(std::max(CurrentPath.lastIndexOf('/'),CurrentPath.lastIndexOf('\\'))+1);
+        if(CurrentName.isEmpty())CurrentName=Progress.phase_==JobPhase::PreparingInputs?tr("목록 확인 중"):tr("확인할 수 없음");
+        const auto CurrentTitle=ArchiveCreation?tr("현재 파일 (%1)").arg(CurrentName):tr("현재 파일");
+        currentTitle_->setText(currentTitle_->fontMetrics().elidedText(CurrentTitle,Qt::ElideMiddle,std::max(120,dialog_->width()-100)));
+        currentTitle_->setToolTip(CurrentPath);currentTitle_->setWordWrap(false);
+        currentProgress_->setVisible(CurrentBytes);currentPercent_->setVisible(CurrentBytes);
+        if(CurrentBytes)SetBar(currentProgress_, currentPercent_, Progress.currentBytes_, Progress.currentTotal_);
+        auto Text=ArchiveCreation?CurrentPath:QString{};
+        if(CurrentBytes)Text+=(Text.isEmpty()?QString{}:QStringLiteral("\n"))+tr("%1 / %2").arg(SizeText(Progress.currentBytes_),SizeText(*Progress.currentTotal_));
+        if(Progress.activeFiles_>1)Text+=tr(" · 병렬 처리 %1개").arg(Progress.activeFiles_);
+        currentMetrics_->setWordWrap(true);currentMetrics_->setText(Text);currentMetrics_->setToolTip(CurrentPath);
     }
     const auto Total = Bytes ? Progress.bytesTotal_ : Mode == RateMode::None ? std::optional<uint64_t>{} : Progress.plannedItems_;
     const auto Done = Bytes ? Progress.bytesDone_ : ProcessedItems(Snapshot);
@@ -1170,7 +1188,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
         SetBar(progress_, overallPercent_, Progress.phaseItemsDone_.value_or(0), Progress.phaseItemsTotal_);
     else SetBar(progress_, overallPercent_, Done, Total);
     const bool PhaseTotal = ArchiveCreation || (Mode == RateMode::None && !Total);
-    overallTitle_->setText(PhaseTotal ? tr("현재 단계 · %1").arg(PhaseText(Progress.phase_).isEmpty() ? JobStatusText(Snapshot) : PhaseText(Progress.phase_)) : tr("전체 진행"));
+    overallTitle_->setText(PhaseTotal ? tr("현재 단계 · %1").arg(ActivePhase.isEmpty() ? JobStatusText(Snapshot) : ActivePhase) : tr("전체 진행"));
     QString Overall;
     if (Bytes) Overall = Total ? tr("처리량 %1 / %2").arg(SizeText(Done), SizeText(*Total))
         : tr("처리량 %1 · 전체 크기 집계 중").arg(SizeText(Done));
@@ -1178,8 +1196,8 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     else Overall = PhaseText(Progress.phase_).isEmpty() ? tr("전체 집계 중") : PhaseText(Progress.phase_) + tr(" 중입니다.");
     if (ArchiveCreation) {
         Overall = tr("생성 완료 %1 / %2개").arg(Snapshot.completedItems_).arg(Progress.outputCount_.value_or(0));
-        if (Progress.outputIndex_ && Progress.outputCount_ && *Progress.outputIndex_ < *Progress.outputCount_)
-            Overall += tr(" · %1번째 출력").arg(*Progress.outputIndex_ + 1);
+        if (Progress.outputIndex_ && Progress.outputCount_ && *Progress.outputCount_ > 1 && *Progress.outputIndex_ < *Progress.outputCount_)
+            Overall += tr(" · 압축 파일 %1 / %2개").arg(*Progress.outputIndex_ + 1).arg(*Progress.outputCount_);
         if (Progress.phaseItemsTotal_) Overall += tr(" · 입력 항목 %1 / %2개").arg(Progress.phaseItemsDone_.value_or(0)).arg(*Progress.phaseItemsTotal_);
         if (Bytes && Progress.bytesTotal_) Overall += tr(" · %1 / %2").arg(SizeText(Progress.bytesDone_), SizeText(*Progress.bytesTotal_));
         if (Snapshot.skippedItems_) Overall += tr(" · 건너뜀 %1개").arg(Snapshot.skippedItems_);
@@ -1191,10 +1209,10 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const auto RateTotal = Mode == RateMode::Files ? (Progress.plannedItems_ ? Progress.discoveredFiles_ : std::optional<uint64_t>{})
         : Mode == RateMode::Items ? Progress.plannedItems_ : Progress.bytesTotal_;
     const auto RateDone = RateValue(Snapshot);
-    const auto Remaining = Active && Rate > 0 && RateTotal && *RateTotal > RateDone ? tr("약 %1초").arg((*RateTotal - RateDone) / Rate, 0, 'f', 0) : QStringLiteral("—");
+    const auto Remaining = Active && Snapshot.state_ != JobState::Paused && Rate > 0 && RateTotal && *RateTotal > RateDone ? tr("약 %1초").arg((*RateTotal - RateDone) / Rate, 0, 'f', 0) : QStringLiteral("—");
     const auto Now = IsTerminal(Snapshot.state_) ? Snapshot.updated_ : std::chrono::steady_clock::now();
     const auto Elapsed = Snapshot.submitted_ == std::chrono::steady_clock::time_point{} ? 0LL : std::chrono::duration_cast<std::chrono::seconds>(Now - Snapshot.submitted_).count();
-    const auto RateText = Bytes ? fm::ui::TransferGraph::formatRate(Rate) : QLocale().toString(Rate, 'f', 1) + (Mode == RateMode::Files ? tr(" 파일/초") : tr(" 항목/초"));
+    const auto RateText = ArchiveCreation&&Snapshot.state_==JobState::Paused?tr("일시 정지"):Bytes ? fm::ui::TransferGraph::formatRate(Rate) : QLocale().toString(Rate, 'f', 1) + (Mode == RateMode::Files ? tr(" 파일/초") : tr(" 항목/초"));
     metrics_->setText((Mode == RateMode::None ? QString{} : tr("속도 %1   ").arg(RateText))
         + (ArchiveCreation ? tr("현재 단계 남은 시간 %1   경과 %2초") : tr("남은 시간 %1   경과 %2초")).arg(Remaining).arg(Elapsed));
     const bool WrapMetrics = overallMetrics_->fontMetrics().horizontalAdvance(Overall) + metrics_->fontMetrics().horizontalAdvance(metrics_->text()) + 12 > dialog_->width() - 40;

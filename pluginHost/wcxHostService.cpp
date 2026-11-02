@@ -87,10 +87,13 @@ namespace hc::plugins
                 auto Added = WireUnsigned(Request["added"]), Removed = WireUnsigned(Request["removed"]);
                 auto Origins = WireUnsigned(Request.contains("origins") ? Request["origins"] : QJsonValue("0"));
                 auto Reused = WireUnsigned(Request.contains("reused") ? Request["reused"] : QJsonValue("0"));
-                if (Request.size() != 4 + Request.contains("origins") + Request.contains("reused") || !Header.HasValue() || !Added.HasValue() || !Removed.HasValue() || !Origins.HasValue() || !Reused.HasValue()
+                auto Sources = WireUnsigned(Request.contains("sources") ? Request["sources"] : QJsonValue("0"));
+                if (Request.size() != 4 + Request.contains("origins") + Request.contains("reused") + Request.contains("sources") || !Header.HasValue() || !Added.HasValue() || !Removed.HasValue() || !Origins.HasValue() || !Reused.HasValue() || !Sources.HasValue()
                     || (Origins.Value() && Origins.Value() != Added.Value()) || (Reused.Value() && Reused.Value() != Added.Value())
-                    || !Header.Value().add_.empty() || !Header.Value().remove_.empty() || !Header.Value().metadataOrigins_.empty() || !Header.Value().reuseData_.empty()) return Invalid();
+                    || (Sources.Value() && Sources.Value() != Added.Value())
+                    || !Header.Value().add_.empty() || !Header.Value().remove_.empty() || !Header.Value().metadataOrigins_.empty() || !Header.Value().reuseData_.empty() || !Header.Value().sourcePaths_.empty()) return Invalid();
                 streamed_ = std::move(Header.Value()); added_ = Added.Value(); removed_ = Removed.Value(); origins_ = Origins.Value(); reused_ = Reused.Value(); received_ = 0;
+                sources_ = Sources.Value();
                 upload_ = ++serial_; return QJsonObject{{"upload", QString::number(upload_)}};
             }
             auto Size = WireUnsigned(Request["size"]);
@@ -111,7 +114,7 @@ namespace hc::plugins
         }
         if (Kind != WireKind::ArchiveUpdateApply || Request.size() != 2) return Invalid();
         if (streamed_) {
-            if (streamed_->add_.size() != added_ || streamed_->remove_.size() != removed_ || streamed_->metadataOrigins_.size() != origins_ || streamed_->reuseData_.size() != reused_) return Invalid("host-archive-update-count");
+            if (streamed_->add_.size() != added_ || streamed_->remove_.size() != removed_ || streamed_->metadataOrigins_.size() != origins_ || streamed_->reuseData_.size() != reused_ || streamed_->sourcePaths_.size() != sources_) return Invalid("host-archive-update-count");
             auto Update = std::move(*streamed_); streamed_.reset(); upload_ = 0;
             auto Applied = backend_->Update(std::move(Update), Context.Value()); if (!Applied.HasValue()) return Applied.Failure();
             return QJsonObject{{"complete", true}};
@@ -132,8 +135,8 @@ namespace hc::plugins
             if (!write_ || Request.size() != 2 || !Id.HasValue() || Id.Value() != upload_ || !Offset.HasValue() || Offset.Value() != received_
                 || Bytes.isEmpty() || Bytes.size() > WirePayloadLimit / 2) return Invalid();
             const auto Page = QJsonDocument::fromJson(Bytes);
-            if (!Page.isObject() || Page.object().size() != 2 + bool(origins_) + bool(reused_) || !Page["add"].isArray() || !Page["remove"].isArray()) return Invalid();
-            std::vector<std::string> Added, Removed, Origins;
+            if (!Page.isObject() || Page.object().size() != 2 + bool(origins_) + bool(reused_) + bool(sources_) || !Page["add"].isArray() || !Page["remove"].isArray()) return Invalid();
+            std::vector<std::string> Added, Removed, Origins, Sources;
             for (const auto& [Key, Names] : {std::pair{"add", &Added}, {"remove", &Removed}})
                 for (const auto& Name : Page[Key].toArray()) {
                     if (!Name.isString() || Name.toString().isEmpty() || Name.toString().size() > 4096 || Name.toString().contains(QChar::Null)) return Invalid();
@@ -152,6 +155,14 @@ namespace hc::plugins
                 for (const auto Flag : Page["reused"].toArray()) { if (!Flag.isBool()) return Invalid(); Reused.push_back(Flag.toBool()); }
             }
             if (Reused.size() > reused_ - streamed_->reuseData_.size()) return Invalid();
+            if (sources_) {
+                if (!Page["sources"].isArray() || Page["sources"].toArray().size() != qsizetype(Added.size())) return Invalid();
+                for (const auto Path : Page["sources"].toArray()) {
+                    if (!Path.isString() || Path.toString().isEmpty() || Path.toString().size() > 32768 || Path.toString().contains(QChar::Null)) return Invalid();
+                    Sources.push_back(Path.toString().toStdString());
+                }
+                if (Sources.size() > sources_ - streamed_->sourcePaths_.size()) return Invalid();
+            }
             if (Added.size() > added_ - streamed_->add_.size() || Removed.size() > removed_ - streamed_->remove_.size()
                 || Origins.size() > origins_ - streamed_->metadataOrigins_.size()
                 || uint64_t(Bytes.size()) > UINT64_MAX - received_) return Invalid();
@@ -159,6 +170,7 @@ namespace hc::plugins
             streamed_->remove_.insert(streamed_->remove_.end(), std::make_move_iterator(Removed.begin()), std::make_move_iterator(Removed.end()));
             streamed_->metadataOrigins_.insert(streamed_->metadataOrigins_.end(), std::make_move_iterator(Origins.begin()), std::make_move_iterator(Origins.end()));
             streamed_->reuseData_.insert(streamed_->reuseData_.end(), Reused.begin(), Reused.end());
+            streamed_->sourcePaths_.insert(streamed_->sourcePaths_.end(), std::make_move_iterator(Sources.begin()), std::make_move_iterator(Sources.end()));
             received_ += Bytes.size(); return QJsonObject{{"received", QString::number(received_)}};
         }
         if (!write_ || Request.size() != 2 || !Id.HasValue() || !Offset.HasValue() || !upload_ || Id.Value() != upload_

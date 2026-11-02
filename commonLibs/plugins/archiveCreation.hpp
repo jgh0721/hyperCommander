@@ -142,6 +142,7 @@ namespace hc::plugins
         ArchiveCreateSettings settings_ = ExternalArchiveCreateSettings{};
         ArchiveCreateSchedule schedule_ = ArchiveCreateSchedule::Immediate;
         std::string correlationId_;
+        std::map<std::string, std::string> outputNames_;
     };
 
     inline storage::Result<storage::Unit> ValidateArchiveCreator(const ArchiveCreatorDescriptor& Creator)

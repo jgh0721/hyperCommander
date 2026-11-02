@@ -12,6 +12,8 @@ struct OutputPlan {
     std::vector<operations::OperationSource> directories_;
     bool skippedEmpty_ = false;
     storage::Locator source_;
+    std::vector<QString> inputPaths_;
+    QString inputDirectory_;
 };
 struct PlanRequest {
     std::vector<operations::OperationSource> sources_;
@@ -20,8 +22,10 @@ struct PlanRequest {
     std::string format_;
     plugins::ArchiveCompositionOptions composition_;
     std::set<std::string> completedOutputs_;
+    std::map<std::string, std::string> outputNames_;
 };
 QString ArchivePathKey(QString Path);
+QString SuggestedArchiveName(const storage::EntrySnapshot& Entry, const QString& Format);
 QString ResolveArchiveDestination(QString Input, QString BaseDirectory);
 bool IsSafeArchiveName(const QString& Name);
 storage::Result<storage::Unit> ValidateOutputLocation(const storage::Locator& Output,

@@ -1606,7 +1606,10 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
         SourceLocation = Sources.front().entry_.locator_;
         Directory = QFileInfo(QString::fromStdString(SourceLocation.root_)).absolutePath(); SourceLocation.root_ = Directory.toStdString();
     }
-    hc::archive::CreationDialog Dialog(hc::settings::AppSettings(), SourceLocation, Directory, Count, main_, InitialFormat);
+    std::vector<EntrySnapshot> Preview;
+    for(const auto& Source:Sources){if(Preview.size()==128)break;Preview.push_back(Source.entry_);}
+    if(Context.selectionManifest_){auto Page=Context.selectionManifest_->Read(0,std::min<uint64_t>(Count,128),{});if(Page.HasValue())Preview=std::move(Page.Value().entries_);}
+    hc::archive::CreationDialog Dialog(hc::settings::AppSettings(), SourceLocation, Directory, Count, main_, InitialFormat, std::move(Preview));
     if (Dialog.exec() != QDialog::Accepted) return;
     hc::archive::CreateJobRequest Request; Request.value_ = Dialog.Request(); Request.creator_ = Dialog.Creator();
     Request.sources_ = std::move(Sources); Request.selection_ = Context.selectionManifest_;
@@ -1627,6 +1630,7 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
     if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축"), hc::ui::ErrorText(Submitted.Failure())); return; }
     affectedLocations_[Submitted.Value().id_] = {Affected};
     rememberJobSelection(Submitted.Value().id_, Context);
+    if(Dialog.Background())fileJobs_->Background();
 }
 
 void CommandUiBridge::openIso(bool Inspect)

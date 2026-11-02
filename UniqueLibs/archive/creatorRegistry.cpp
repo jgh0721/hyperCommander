@@ -166,7 +166,11 @@ Result<PreparedArchiveOutput> CreatePreparedArchive(const CreatorRuntime& Creato
         Request.profile_ = uint32_t(Value.profile_); Request.volumeLabel_ = Value.volumeLabel_; Request.maxImageBytes_ = Value.maxImageBytes_;
         Request.shareDuplicateContents_ = Value.shareDuplicateContents_; Request.timestampUtc_ = Value.timestampUtc_; Request.explicitTimestamp_ = true;
         Request.temporaryBase_ = Temporary;
-        for (const auto& Entry : Plan.entries_) Request.sources_.push_back({QDir(Input).filePath(Entry.member_).toStdString(), Entry.member_.toStdString(), Entry.source_.entry_.directory_});
+        for (size_t Index = 0; Index < Plan.entries_.size(); ++Index) {
+            const auto& Entry = Plan.entries_[Index];
+            const auto Path = Plan.inputPaths_.empty() ? QDir(Input).filePath(Entry.member_) : Plan.inputPaths_[Index];
+            Request.sources_.push_back({Path.toStdString(), Entry.member_.toStdString(), Entry.source_.entry_.directory_});
+        }
         auto Prepared = iso::PrepareRewrite(std::move(Request), Context).get(); if (!Prepared.HasValue()) return Prepared.Failure();
         return PreparedArchiveOutput{Prepared.Value()->Path(), Prepared.Value()};
     }
@@ -174,18 +178,22 @@ Result<PreparedArchiveOutput> CreatePreparedArchive(const CreatorRuntime& Creato
     if (Creator.descriptor_.kind_ == ArchiveCreatorKind::DopusVfs) {
         auto Started = PluginProcess::Start(Creator.options_.executable_, Creator.options_.manifestPath_, Creator.options_.approval_, Creator.options_.limits_, Context, Creator.options_.defaultIniPath_); if (!Started.HasValue()) return Started.Failure();
         auto Process = std::shared_ptr<PluginProcess>(std::move(Started.Value())); QJsonArray Names;
-        for (const auto& Name : QDir(Input).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)) Names.append(Name);
-        auto Written = Process->DataCall(WireKind::StorageMutate, {{"action", "create-archive"}, {"archive", Target}, {"input", Input}, {"names", Names}}, Context); if (!Written.HasValue()) return Written.Failure();
-        auto Verified = VerifyDopus(Process, Target, Plan, Input, Temporary, Context); if (!Verified.HasValue()) return Verified.Failure();
+        const auto SourceDirectory = Plan.inputDirectory_.isEmpty() ? Input : Plan.inputDirectory_;
+        std::set<QString> Selected;
+        for (const auto& Entry : Plan.entries_) Selected.insert(Entry.member_.section('/', 0, 0));
+        for (const auto& Name : Selected) Names.append(Name);
+        auto Written = Process->DataCall(WireKind::StorageMutate, {{"action", "create-archive"}, {"archive", Target}, {"input", SourceDirectory}, {"names", Names}}, Context); if (!Written.HasValue()) return Written.Failure();
+        auto Verified = VerifyDopus(Process, Target, Plan, SourceDirectory, Temporary, Context); if (!Verified.HasValue()) return Verified.Failure();
     } else {
-        ArchiveUpdate Update; Update.archive_ = Target.toStdString(); Update.inputDirectory_ = Input.toStdString();
+        ArchiveUpdate Update; Update.archive_ = Target.toStdString(); Update.inputDirectory_ = (Plan.inputDirectory_.isEmpty() ? Input : Plan.inputDirectory_).toStdString();
         for (const auto& Entry : Plan.entries_) Update.add_.push_back(Entry.member_.toStdString() + (Entry.source_.entry_.directory_ ? "/" : ""));
         if (Creator.descriptor_.kind_ == ArchiveCreatorKind::BuiltinSevenZip) {
+            for (const auto& Path : Plan.inputPaths_) Update.sourcePaths_.push_back(Path.toStdString());
             const auto& Value = std::get<SevenZipCreateSettings>(Settings); Update.encrypt_ = Value.encrypt_;
             Update.creation_ = ArchiveCreationOptions{Value.level_, Value.solid_ != ArchiveSolidMode::Off, Value};
         } else Update.createNew_ = true;
         auto Backend = MakeApprovedWcxBackend(Creator.options_); auto Written = Backend->Update(std::move(Update), Context); if (!Written.HasValue()) return Written.Failure();
-        if (Creator.descriptor_.kind_ == ArchiveCreatorKind::Wcx) { auto Verified = VerifyWcx(Backend, Target, Plan, Input, Temporary, Context); if (!Verified.HasValue()) return Verified.Failure(); }
+        if (Creator.descriptor_.kind_ == ArchiveCreatorKind::Wcx) { auto Verified = VerifyWcx(Backend, Target, Plan, Plan.inputDirectory_.isEmpty() ? Input : Plan.inputDirectory_, Temporary, Context); if (!Verified.HasValue()) return Verified.Failure(); }
     }
     return PreparedArchiveOutput{Target, {}};
 }

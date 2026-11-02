@@ -43,7 +43,7 @@ public:
                 Progress.phaseItemsDone_ = Done; Progress.phaseItemsTotal_ = Plan.entries_.size();
                 if (inputBytes_.size() == Plan.entries_.size() + 1) {
                     Progress.bytesDone_ = inputBytes_[Done] + (copy_ ? Progress.currentBytes_ : 0);
-                    Progress.bytesTotal_ = inputBytes_.back();
+                    if(inputBytes_.back())Progress.bytesTotal_=inputBytes_.back();else Progress.bytesTotal_.reset();
                 }
             } else if (phase_ == Phase::Recheck) {
                 Progress.phaseItemsDone_ = index_; Progress.phaseItemsTotal_ = Plan.entries_.size() + Plan.directories_.size();
@@ -59,7 +59,7 @@ public:
         if (phase_ == Phase::Admission) {
             auto Checked = RevalidateCreator(request_.creator_, Context.operation_); if (!Checked.HasValue()) return failed(Checked.Failure());
             PlanRequest Plan{request_.sources_, request_.selection_, request_.value_.sourceRoot_, request_.value_.output_,
-                request_.value_.format_, request_.value_.composition_, request_.completedOutputs_};
+                request_.value_.format_, request_.value_.composition_, request_.completedOutputs_, request_.value_.outputNames_};
             planner_ = std::make_unique<CreationPlanner>(std::move(Plan)); phase_ = Phase::Plan;
         }
         if (phase_ == Phase::Plan) {
@@ -89,10 +89,39 @@ public:
             phase_ = Phase::CreateStage;
         }
         if (phase_ == Phase::CreateStage) {
-            temp_ = std::make_unique<QTemporaryDir>(QDir::tempPath() + "/hc-archive-create-XXXXXX");
+            const auto DestinationParent = QFileInfo(QString::fromStdString(Plan.destination_.root_)).absolutePath();
+            temp_ = std::make_shared<QTemporaryDir>(QDir(DestinationParent).filePath(".hc-archive-XXXXXX"));
             if (!temp_->isValid() || !QDir().mkdir(temp_->filePath("input"))) return failed({ErrorCategory::Unavailable, "archive-create-staging-directory"});
+            Plan.inputPaths_.clear(); Plan.inputDirectory_.clear(); currentPaths_.clear(); activeInput_.clear();
+            const auto Builtin = request_.creator_.descriptor_.kind_ == plugins::ArchiveCreatorKind::BuiltinSevenZip
+                || request_.creator_.descriptor_.kind_ == plugins::ArchiveCreatorKind::BuiltinIso;
+            QString CommonRoot; bool NativeTree = request_.value_.composition_.includeSubdirectories_;
+            for (const auto& Entry : Plan.entries_) {
+                const auto& At = Entry.source_.entry_.locator_;
+                const bool Native = At.nesting_.empty() && (At.kind_ == LocatorKind::Local || At.kind_ == LocatorKind::Smb);
+                const auto Path = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromStdString(At.root_)));
+                auto Root = Path;
+                const auto Tail = '/' + Entry.member_;
+                if (!Native || !Path.endsWith(Tail, Qt::CaseInsensitive)) NativeTree = false;
+                else {
+                    Root.chop(Tail.size()); if (Root.endsWith(':')) Root += '/';
+                    if (CommonRoot.isEmpty()) CommonRoot = Root;
+                    else if (CommonRoot.compare(Root, Qt::CaseInsensitive)) NativeTree = false;
+                }
+                Plan.inputPaths_.push_back(Builtin && Native ? Path : QDir(temp_->filePath("input")).filePath(Entry.member_));
+                currentPaths_[Entry.member_.toStdString()] = Native ? At.root_ : Serialize(At);
+            }
+            if (!Builtin && NativeTree && !CommonRoot.isEmpty()) {
+                Plan.inputDirectory_ = CommonRoot;
+                for (size_t Index = 0; Index < Plan.entries_.size(); ++Index)
+                    Plan.inputPaths_[Index] = QDir::fromNativeSeparators(QString::fromStdString(Plan.entries_[Index].source_.entry_.locator_.root_));
+            }
             inputBytes_ = {0};
-            for (const auto& Entry : Plan.entries_) inputBytes_.push_back(inputBytes_.back() + (Entry.source_.entry_.directory_ ? 0 : Entry.source_.entry_.size_));
+            for (size_t Index=0;Index<Plan.entries_.size();++Index){
+                const auto& Entry=Plan.entries_[Index];
+                const bool CopyInput=Plan.inputPaths_[Index]==QDir(temp_->filePath("input")).filePath(Entry.member_);
+                inputBytes_.push_back(inputBytes_.back()+(CopyInput&&!Entry.source_.entry_.directory_?Entry.source_.entry_.size_:0));
+            }
             index_ = 0; phase_ = Phase::PrepareInputs; return progress("입력 파일 준비");
         }
         if (phase_ == Phase::PrepareInputs) {
@@ -105,16 +134,17 @@ public:
                 }
                 if (Step.next_ == JobState::Failed || Step.next_ == JobState::Cancelled) return Step;
                 if (Step.next_ == JobState::Committing) Step.next_ = JobState::Running;
-                if (Step.progress_) Step.progress_->currentItem_ = "입력 준비: " + Step.progress_->currentItem_; return Step;
+                if (Step.progress_ && index_ < Plan.entries_.size()) Step.progress_->currentItem_ = currentPaths_[Plan.entries_[index_].member_.toStdString()]; return Step;
             }
-            if (index_ < Plan.entries_.size()) {
+            while (index_ < Plan.entries_.size()) {
                 const auto& Entry = Plan.entries_[index_]; const auto Path = QDir(temp_->filePath("input")).filePath(Entry.member_);
+                if (Plan.inputPaths_[index_] != Path) { ++index_; continue; }
                 if (Entry.source_.entry_.directory_) {
                     if (!QDir().mkpath(Path)) return failed({ErrorCategory::Unavailable, "archive-create-staging-mkdir"}); ++index_; return progress("입력 파일 준비");
                 }
                 FileOperationRequest Copy; Copy.sources_ = {Entry.source_};
-                Copy.destination_ = {LocatorKind::Local, QFileInfo(Path).absolutePath().toStdString()}; Copy.destinationName_ = QFileInfo(Path).fileName().toStdString();
-                Copy.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
+                Copy.destination_ = {Plan.destination_.kind_, QFileInfo(Path).absolutePath().toStdString()}; Copy.destinationName_ = QFileInfo(Path).fileName().toStdString();
+                Copy.destinationWriter_ = MakeNativeWritableStorage(Plan.destination_.kind_, MakeNativeReadProvider(Plan.destination_.kind_));
                 Copy.createParents_ = true; Copy.maxDepth_ = 1;
                 auto Prepared = PrepareFileOperation(std::move(Copy), Context.operation_); if (!Prepared.HasValue()) return failed(Prepared.Failure());
                 copy_ = std::move(Prepared.Value().task_); innerCommitting_ = false; return progress("입력 파일 준비");
@@ -124,6 +154,7 @@ public:
         if (phase_ == Phase::DirectoryMetadata) {
             while (index_) {
                 const auto& Entry = Plan.entries_[--index_]; if (!Entry.source_.entry_.directory_) continue;
+                if (Plan.inputPaths_[index_] != QDir(temp_->filePath("input")).filePath(Entry.member_)) continue;
                 const auto Path = QDir::toNativeSeparators(QDir(temp_->filePath("input")).filePath(Entry.member_));
                 const auto Handle = CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Path).utf16()), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
                 if (Handle == INVALID_HANDLE_VALUE) return failed({ErrorCategory::Unavailable, "archive-create-directory-metadata-open"});
@@ -144,7 +175,11 @@ public:
                 JobProgress Progress;
                 Progress.bytesDone_ = Value.bytesDone_; Progress.bytesTotal_ = Value.bytesTotal_;
                 if (Value.itemsTotal_) { Progress.phaseItemsDone_ = Value.itemsDone_; Progress.phaseItemsTotal_ = Value.itemsTotal_; }
-                Progress.currentItem_ = Value.currentItem_; present(Progress);
+                if (!Value.currentItem_.empty()) {
+                    const auto Found = currentPaths_.find(Value.currentItem_);
+                    activeInput_ = Found == currentPaths_.end() ? Value.currentItem_ : Found->second;
+                }
+                Progress.currentItem_ = activeInput_; present(Progress);
                 if (Value.verifying_) Progress.phase_ = JobPhase::Verifying;
                 Publish(Progress);
             };
@@ -154,10 +189,12 @@ public:
             auto Prepared = CreatePreparedArchive(request_.creator_, request_.value_.settings_, request_.value_.format_, Plan, temp_->filePath("input"), temp_->path(), Operation);
             if (!Prepared.HasValue()) return failed(Prepared.Failure()); prepared_ = std::move(Prepared.Value());
             auto WriteContext = Context.operation_; WriteContext.expectedWriteBytes_ = uint64_t(QFileInfo(prepared_.path_).size());
+            WriteContext.producingContent_ = true;
             auto Session = writer_->BeginWrite(Plan.destination_, expected_, WriteContext); if (!Session.HasValue()) return failed(Session.Failure());
-            output_ = std::move(Session.Value()); file_ = std::make_unique<QFile>(prepared_.path_);
-            if (!file_->open(QIODevice::ReadOnly)) return failed({ErrorCategory::Unavailable, "archive-create-prepared-open"});
-            phase_ = Phase::Save; return progress("대상 볼륨에 저장");
+            output_ = std::move(Session.Value());
+            auto Adopted = output_->AdoptContent({prepared_.path_.toStdString(), temp_}, WriteContext);
+            if (!Adopted.HasValue()) return failed(Adopted.Failure());
+            index_ = 0; phase_ = Phase::Recheck; return progress("입력 변경 여부 확인");
         }
         if (phase_ == Phase::Save) {
             const auto Bytes = file_->read(1024 * 1024);
@@ -199,13 +236,22 @@ public:
 private:
     enum class Phase { Admission, Plan, Initialize, Conflict, CreateStage, PrepareInputs, DirectoryMetadata, Build, Save, Recheck, Commit };
     JobStep failed(Error Error) { JobStep Step{JobState::Failed}; Step.error_ = std::move(Error); return Step; }
-    JobStep progress(const char* Message) const {
-        JobStep Step{JobState::Running}; const auto Name = group_ < outputs_.size() ? QFileInfo(QString::fromStdString(outputs_[group_].destination_.root_)).fileName().toStdString() : std::string{};
-        Step.progress_ = JobProgress{0, {}, std::to_string(group_) + "/" + std::to_string(outputs_.size()) + " · " + Name + " · " + Message}; return Step;
+    JobStep progress(const char*) const {
+        JobStep Step{JobState::Running};
+        Step.progress_ = JobProgress{};
+        if(group_<outputs_.size()){
+            const auto& Plan=outputs_[group_];
+            if(phase_==Phase::Build)Step.progress_->currentItem_=activeInput_;
+            else if(phase_==Phase::Commit||phase_==Phase::Save)Step.progress_->currentItem_=Plan.destination_.root_;
+            else if(phase_==Phase::Recheck&&index_&&index_<=Plan.entries_.size())Step.progress_->currentItem_=currentPaths_.at(Plan.entries_[index_-1].member_.toStdString());
+            else if(index_<Plan.entries_.size())Step.progress_->currentItem_=currentPaths_.at(Plan.entries_[index_].member_.toStdString());
+        }
+        return Step;
     }
     CreateJobRequest request_; Phase phase_ = Phase::Admission;
     std::unique_ptr<CreationPlanner> planner_; std::vector<OutputPlan> outputs_; size_t group_ = 0, index_ = 0;
-    std::unique_ptr<QTemporaryDir> temp_; std::unique_ptr<IJobTask> copy_; bool innerCommitting_ = false;
+    std::shared_ptr<QTemporaryDir> temp_; std::unique_ptr<IJobTask> copy_; bool innerCommitting_ = false;
+    std::map<std::string, std::string> currentPaths_; std::string activeInput_;
     DestinationExpectation expected_; std::shared_ptr<IWritableStorage> writer_; std::unique_ptr<IWriteSession> output_;
     PreparedArchiveOutput prepared_; std::unique_ptr<QFile> file_; std::vector<Error> cleanup_;
     std::vector<uint64_t> inputBytes_;

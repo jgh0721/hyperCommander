@@ -75,11 +75,12 @@ namespace hc::plugins
         if (!Update.metadataOrigins_.empty()) { QJsonArray Origins; for (const auto& Name : Update.metadataOrigins_) Origins.append(Text(Name)); Object["metadataOrigins"] = Origins; }
         if (!Update.reuseData_.empty()) { QJsonArray Flags; for (bool Flag : Update.reuseData_) Flags.append(Flag); Object["reuseData"] = Flags; }
         if (Update.createNew_) Object["createNew"] = true;
+        if (!Update.sourcePaths_.empty()) { QJsonArray Paths; for (const auto& Path : Update.sourcePaths_) Paths.append(Text(Path)); Object["sourcePaths"] = Paths; }
         return Object;
     }
     Result<ArchiveUpdate> DecodeArchiveUpdate(const QJsonObject& Object)
     {
-        if (Object.size() != 6 + Object.contains("creation") + Object.contains("metadataOrigins") + Object.contains("reuseData") + Object.contains("createNew") || !Object["encrypt"].isBool() || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
+        if (Object.size() != 6 + Object.contains("creation") + Object.contains("metadataOrigins") + Object.contains("reuseData") + Object.contains("createNew") + Object.contains("sourcePaths") || !Object["encrypt"].isBool() || !String(Object["archive"], 32768) || !String(Object["inputDirectory"], 32768) || !Object["add"].isArray() || !Object["remove"].isArray()) return Invalid();
         auto Limit = WireUnsigned(Object["maxOutputBytes"]); if (!Limit.HasValue() || !Limit.Value()) return Invalid();
         ArchiveUpdate Out; Out.archive_ = Object["archive"].toString().toStdString(); Out.inputDirectory_ = Object["inputDirectory"].toString().toStdString(); Out.maxOutputBytes_ = Limit.Value();
         Out.encrypt_ = Object["encrypt"].toBool();
@@ -110,6 +111,10 @@ namespace hc::plugins
         if (Object.contains("reuseData")) {
             if (!Object["reuseData"].isArray() || Object["reuseData"].toArray().size() != qsizetype(Out.add_.size())) return Invalid();
             for (const auto Flag : Object["reuseData"].toArray()) { if (!Flag.isBool()) return Invalid(); Out.reuseData_.push_back(Flag.toBool()); }
+        }
+        if (Object.contains("sourcePaths")) {
+            if (!Object["sourcePaths"].isArray() || Object["sourcePaths"].toArray().size() != qsizetype(Out.add_.size())) return Invalid();
+            for (const auto Path : Object["sourcePaths"].toArray()) { if (!String(Path, 32768)) return Invalid(); Out.sourcePaths_.push_back(Path.toString().toStdString()); }
         }
         return Out;
     }

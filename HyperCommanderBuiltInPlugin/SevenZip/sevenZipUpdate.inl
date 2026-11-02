@@ -189,6 +189,9 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         || (Request.add_.empty() && Request.remove_.empty()) || !Request.maxOutputBytes_)
         return Failure("7zip-invalid-update", ErrorCategory::InvalidRequest);
     const bool Existing = QFileInfo::exists(Target);
+    if (!Request.sourcePaths_.empty() && (Request.sourcePaths_.size() != Request.add_.size() || Existing || !Request.creation_
+        || !Request.remove_.empty() || !Request.metadataOrigins_.empty() || !Request.reuseData_.empty()))
+        return Failure("7zip-invalid-source-mapping", ErrorCategory::InvalidRequest);
     std::unique_ptr<Archive> Original;
     auto Shared = std::make_shared<State>(); Shared->context_ = Context; Shared->archive_ = Request.archive_;
     QString Format = QFileInfo(Target).suffix().toLower(), Method, Encryption;
@@ -311,11 +314,20 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         if (Code != S_OK || Shared->error_) return Shared->Result(Code);
     }
     Names.clear(); for (const auto& Item : Items) Names.insert(Item.name_.toCaseFolded());
+    size_t SourceIndex = 0;
     for (const auto& Raw : Request.add_) {
         if (const auto Stop = Context.Check({"7zip"})) return *Stop;
         const auto Name = EntryKey(QString::fromStdString(Raw));
         if (!SafeUpdateName(Name) || !Names.insert(Name.toCaseFolded()).second) return Failure("7zip-add-name-collision", ErrorCategory::InvalidRequest);
         UpdateItem Item; Item.name_ = Name; Item.path_ = QDir(Root).filePath(Name); Item.directory_ = Raw.ends_with('/') || Raw.ends_with('\\');
+        auto InputRoot = Root;
+        if (!Request.sourcePaths_.empty()) {
+            Item.path_ = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromStdString(Request.sourcePaths_[SourceIndex])));
+            if (!QFileInfo(Item.path_).isAbsolute() || Item.path_.contains(QChar::Null)) return Failure("7zip-invalid-source-path", ErrorCategory::InvalidRequest);
+            InputRoot = Item.path_.startsWith("//") ? Item.path_.section('/', 0, 3) : Item.path_.left(3);
+        }
+        ++SourceIndex;
+        if (Context.reportProgress_) { OperationContext::Progress Progress; Progress.currentItem_ = Name.toStdString(); Context.reportProgress_(Progress); }
         if (Reused.contains(Name)) {
             Item.old_ = Item.metadata_ = OldNames.at(Origins.at(Name)); Item.reuseData_ = Item.renamed_ = true;
             auto H = Original->Header(Item.old_); if (!H.HasValue()) return H.Failure();
@@ -329,8 +341,8 @@ Result<Unit> UpdatePlainArchive(HMODULE Module, ArchiveUpdate Request, Operation
         for (auto Path = Item.path_;; Path = QFileInfo(Path).absolutePath()) {
             const auto Attr = GetFileAttributesW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Path).utf16()));
             if (Attr == INVALID_FILE_ATTRIBUTES || (Attr & FILE_ATTRIBUTE_REPARSE_POINT)) return Failure("7zip-input-link-or-missing", ErrorCategory::Unsupported);
-            if (Path == Root) break;
-            if (!Path.startsWith(Root.endsWith('/') ? Root : Root + '/', Qt::CaseInsensitive)) return Failure("7zip-input-outside-root", ErrorCategory::InvalidRequest);
+            if (Path == InputRoot) break;
+            if (!Path.startsWith(InputRoot.endsWith('/') ? InputRoot : InputRoot + '/', Qt::CaseInsensitive)) return Failure("7zip-input-outside-root", ErrorCategory::InvalidRequest);
         }
         WIN32_FILE_ATTRIBUTE_DATA Info{};
         if (!GetFileAttributesExW(reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(Item.path_).utf16()), GetFileExInfoStandard, &Info)

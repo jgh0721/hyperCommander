@@ -5,7 +5,9 @@
 #include "UniqueLibs/archive/creationDialog.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/storageProviders.hpp"
+#include "UniqueLibs/nativeWritableStorage.hpp"
 #include <QtTest>
+#include <QKeyEvent>
 #include <QtWidgets>
 #include <QtWidgets>
 #include <atomic>
@@ -19,6 +21,7 @@ bool Put(const QString& Path, const QByteArray& Data) { QFile File(Path); return
 class ProbeProvider final : public IStorageProvider {
 public:
     std::shared_ptr<IStorageProvider> inner_ = MakeNativeReadProvider(LocatorKind::Local);
+    std::atomic<unsigned> opens_{0};
     std::atomic<unsigned> calls_{0}; bool failOnce_ = false; QString marker_, failKey_;
     ProviderId Id() const override { return inner_->Id(); }
     ProviderCapabilities Capabilities() const override { return inner_->Capabilities(); }
@@ -29,7 +32,7 @@ public:
         if (failOnce_ && QString::fromStdString(Id.key_) == failKey_ && QFileInfo::exists(marker_)) { failOnce_ = false; return Ready<EntrySnapshot>(Error{ErrorCategory::Unavailable, "injected-second-output-failure"}); }
         return inner_->Stat(Id, C);
     }
-    Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext C) override { ++calls_; return inner_->OpenRead(Id, C); }
+    Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext C) override { ++opens_; ++calls_; return inner_->OpenRead(Id, C); }
     Task<EntrySnapshot> Resolve(Locator At, OperationContext C) override { ++calls_; return inner_->Resolve(At, C); }
 };
 OperationSource Source(const std::shared_ptr<IStorageProvider>& Reader, const QString& Path)
@@ -82,7 +85,7 @@ private slots:
         Dialog.show(); auto* Create = Dialog.findChild<QPushButton*>("hc.archive.create.submit");
         auto* Queue = Dialog.findChild<QPushButton*>("hc.archive.create.queue");
         QTRY_VERIFY_WITH_TIMEOUT(Create->isEnabled(), 15000); QVERIFY(Queue->isEnabled());
-        QVERIFY(!Dialog.findChild<QWidget*>("hc.archive.create.preview")); QVERIFY(!Dialog.findChild<QWidget*>("hc.archive.create.level"));
+        QVERIFY(Dialog.findChild<QWidget*>("hc.archive.create.preview")); QVERIFY(!Dialog.findChild<QWidget*>("hc.archive.create.level"));
         QVERIFY(!Dialog.findChild<QCheckBox*>("hc.archive.create.queued"));
         const auto* Format = Dialog.findChild<QComboBox*>("hc.archive.create.format");
         const auto* Creator = Dialog.findChild<QComboBox*>("hc.archive.create.creator");
@@ -106,7 +109,7 @@ private slots:
         Dialog.findChild<QPushButton*>("hc.archive.create.settings")->click(); QCOMPARE(Dialog.Request().settings_, Before);
         const auto Capture = qEnvironmentVariable("HC_ARCHIVE_CAPTURE_ROOT");
         for (int Width : {720, 390}) { Dialog.resize(Width, 540); QTest::qWait(50); QVERIFY(Dialog.width() <= Width); QVERIFY(Dialog.rect().contains(Queue->geometry())); if (!Capture.isEmpty()) QVERIFY(Dialog.grab().save(Capture + QString("/create-%1.png").arg(Width))); }
-        Queue->click(); QCOMPARE(Dialog.result(), int(QDialog::Accepted)); QCOMPARE(Dialog.Request().schedule_, ArchiveCreateSchedule::Queued);
+        Queue->click(); QCOMPARE(Dialog.result(), int(QDialog::Accepted)); QCOMPARE(Dialog.Request().schedule_, ArchiveCreateSchedule::Immediate); QVERIFY(Dialog.Background());
     }
     void nativeSettingsCapabilities()
     {
@@ -190,7 +193,7 @@ private slots:
         QVERIFY(Members.contains(Prefix + "summary.txt")); QVERIFY(Members.contains("memo.txt"));
         QCOMPARE(Members.contains(Prefix + (Paths ? "sub/" : "") + "reference.txt"), Recursive);
         QCOMPARE(Members.contains(Prefix + "empty"), Paths && Recursive);
-        if (Separate) { QCOMPARE(QFileInfo(QString::fromStdString(Outputs[0].destination_.root_)).fileName(), "report.7z"); QCOMPARE(QFileInfo(QString::fromStdString(Outputs[1].destination_.root_)).fileName(), "memo.txt.7z"); }
+        if (Separate) { QCOMPARE(QFileInfo(QString::fromStdString(Outputs[0].destination_.root_)).fileName(), "report.7z"); QCOMPARE(QFileInfo(QString::fromStdString(Outputs[1].destination_.root_)).fileName(), "memo.7z"); }
     }
     void collisionsAndOutputGuards()
     {
@@ -204,6 +207,66 @@ private slots:
         QVERIFY(ValidateOutputLocation({LocatorKind::Smb, "//server/share/input-other/out.7z"}, {At}).HasValue());
         QVERIFY(!IsSafeArchiveName("CON.txt")); QVERIFY(!IsSafeArchiveName("../bad"));
         QCOMPARE(ArchivePathKey(QString::fromUtf8("가")), ArchivePathKey(QString::fromUtf8("가")));
+    }
+    void recommendedNamesAndImmediateBackground()
+    {
+        QTemporaryDir Dir; hc::settings::Repository Settings(Dir.filePath("settings"));
+        QVERIFY(Put(Dir.filePath("report.pdf"),"pdf"));QVERIFY(Put(Dir.filePath("report.docx"),"docx"));
+        auto Reader=MakeNativeReadProvider(LocatorKind::Local);
+        std::vector<EntrySnapshot> Entries{Source(Reader,Dir.filePath("report.pdf")).entry_,Source(Reader,Dir.filePath("report.docx")).entry_};
+        CreationDialog Dialog(Settings,{LocatorKind::Local,Dir.path().toStdString()},Dir.path(),2,nullptr,{},Entries);
+        Dialog.show();auto* Create=Dialog.findChild<QPushButton*>("hc.archive.create.submit");QTRY_VERIFY_WITH_TIMEOUT(Create->isEnabled(),15000);
+        auto* Name=Dialog.findChild<QLineEdit*>("hc.archive.create.filename");QCOMPARE(Name->text(),QString("report.7z"));
+        auto* Individual=Dialog.findChild<QCheckBox*>("hc.archive.create.individual");Individual->setChecked(true);
+        auto* Files=Dialog.findChild<QTableWidget*>("hc.archive.create.files");QCOMPARE(Files->rowCount(),2);
+        QCOMPARE(Files->item(0,1)->text(),QString("report.7z"));QCOMPARE(Files->item(1,1)->text(),QString("report (2).7z"));
+        Files->item(1,1)->setText("custom.7z");QCOMPARE(Dialog.Request().outputNames_.at(Serialize(Entries[1].id_)),std::string("custom.7z"));
+        Individual->setChecked(false);Name->setText("backup.7z");auto* Format=Dialog.findChild<QComboBox*>("hc.archive.create.format");Format->setCurrentIndex(Format->findData("zip"));
+        QCOMPARE(Name->text(),QString("backup.zip"));QTRY_VERIFY(Create->isEnabled());
+        Dialog.activateWindow();Name->setFocus();QCoreApplication::processEvents();QTest::keyClick(Name,Qt::Key_F2);QCOMPARE(Dialog.result(),int(QDialog::Accepted));QVERIFY(Dialog.Background());QCOMPARE(Dialog.Request().schedule_,ArchiveCreateSchedule::Immediate);
+    }
+    void backgroundFromOutputList()
+    {
+        QTemporaryDir Dir;hc::settings::Repository Settings(Dir.filePath("settings"));QVERIFY(Put(Dir.filePath("one.txt"),"one"));QVERIFY(Put(Dir.filePath("two.txt"),"two"));
+        auto Reader=MakeNativeReadProvider(LocatorKind::Local);std::vector<EntrySnapshot> Entries{Source(Reader,Dir.filePath("one.txt")).entry_,Source(Reader,Dir.filePath("two.txt")).entry_};
+        CreationDialog Dialog(Settings,{LocatorKind::Local,Dir.path().toStdString()},Dir.path(),2,nullptr,{},Entries);Dialog.show();
+        auto* Create=Dialog.findChild<QPushButton*>("hc.archive.create.submit");QTRY_VERIFY_WITH_TIMEOUT(Create->isEnabled(),15000);
+        Dialog.findChild<QCheckBox*>("hc.archive.create.individual")->setChecked(true);auto* Files=Dialog.findChild<QTableWidget*>("hc.archive.create.files");Dialog.findChild<QPushButton*>("hc.archive.create.filesToggle")->click();Files->setCurrentCell(0,1);Files->setFocus();Dialog.activateWindow();QCoreApplication::processEvents();
+        Files->editItem(Files->item(0,1));auto* Editor=Files->findChild<QLineEdit*>();QVERIFY(Editor);Editor->setText("edited.7z");
+        QKeyEvent Press(QEvent::KeyPress,Qt::Key_F2,Qt::NoModifier);QApplication::sendEvent(Editor,&Press);
+        QCOMPARE(Dialog.result(),int(QDialog::Accepted));QVERIFY(Dialog.Background());QCOMPARE(Dialog.Request().schedule_,ArchiveCreateSchedule::Immediate);
+        QCOMPARE(Dialog.Request().outputNames_.at(Serialize(Entries[0].id_)),std::string("edited.7z"));
+    }
+    void directInputsAndOutputAdoption_data(){nativeCreation_data();}
+    void directInputsAndOutputAdoption()
+    {
+        QFETCH(QString,Format);QTemporaryDir Dir;hc::settings::Repository Settings(Dir.filePath("settings"));
+        QVERIFY(QDir().mkdir(Dir.filePath("one")));QVERIFY(QDir().mkdir(Dir.filePath("two")));
+        QVERIFY(Put(Dir.filePath("one/a.txt"),QByteArray(8192,'a')));QVERIFY(Put(Dir.filePath("two/b.txt"),QByteArray(8192,'b')));
+        auto Reader=std::make_shared<ProbeProvider>();const auto Target=Dir.filePath("result."+Format);
+        auto R=Request(Settings,{Source(Reader,Dir.filePath("one/a.txt")),Source(Reader,Dir.filePath("two/b.txt"))},Target,Format.toStdString());
+        R.value_.composition_.preservePaths_=false;Reader->opens_=0;bool Staged=false;
+        OperationContext C;C.reportProgress_=[&](const auto&){
+            for(const auto& Folder:QDir(Dir.path()).entryList({".hc-archive-*"},QDir::Dirs|QDir::Hidden|QDir::NoDotAndDotDot))
+                Staged|=!QDir(Dir.filePath(Folder+"/input")).entryList(QDir::Files|QDir::Hidden|QDir::NoDotAndDotDot).isEmpty();
+        };
+        auto Prepared=PrepareCreation(R,C);QVERIFY(Prepared.HasValue());const auto Result=Run(std::move(Prepared.Value()));
+        QVERIFY2(Result.snapshot_.state_==JobState::Completed,Result.snapshot_.error_?Result.snapshot_.error_->code_.c_str():"direct creation failed");
+        QCOMPARE(Reader->opens_.load(),0u);QVERIFY(!Staged);QVERIFY(QFileInfo(Target).size()>0);
+        QVERIFY(QDir(Dir.path()).entryList({".hc-archive-*"},QDir::Dirs|QDir::Hidden|QDir::NoDotAndDotDot).isEmpty());
+    }
+    void adoptionRejectsOutsideAndChangedPayload()
+    {
+        QTemporaryDir Dir,Other;const auto Target=Dir.filePath("existing.7z");
+        QVERIFY(Put(Target,"old"));QVERIFY(Put(Other.filePath("outside"),"new"));QVERIFY(Put(Dir.filePath("changed"),"longer"));
+        auto Writer=MakeNativeWritableStorage(LocatorKind::Local,MakeNativeReadProvider(LocatorKind::Local));
+        const Locator At{LocatorKind::Local,Target.toStdString()};auto Existing=Writer->Inspect(At,{});QVERIFY(Existing.HasValue()&&Existing.Value());
+        OperationContext C;C.expectedWriteBytes_=3;C.producingContent_=true;auto Session=Writer->BeginWrite(At,{true,Existing.Value()->id_.revision_},C);QVERIFY(Session.HasValue());
+        const auto Lease=std::make_shared<int>(1);
+        QVERIFY(!Session.Value()->AdoptContent({Other.filePath("outside").toStdString(),Lease},C).HasValue());
+        QVERIFY(!Session.Value()->AdoptContent({Dir.filePath("changed").toStdString(),Lease},C).HasValue());
+        QVERIFY(Session.Value()->Abort().HasValue());QFile File(Target);QVERIFY(File.open(QIODevice::ReadOnly));QCOMPARE(File.readAll(),QByteArray("old"));
+        QVERIFY(QFileInfo::exists(Other.filePath("outside")));QVERIFY(QFileInfo::exists(Dir.filePath("changed")));
     }
     void nativeCreationLiveProgress()
     {
