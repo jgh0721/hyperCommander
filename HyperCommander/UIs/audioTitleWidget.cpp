@@ -206,17 +206,19 @@ namespace hc::ui
         setObjectName( "hc.audio.titleWidget" ); setAccessibleName( tr( "오디오 재생" ) );
         setAttribute( Qt::WA_StyledBackground, false );
         auto* Layout = new QHBoxLayout( this );
-        Layout->setContentsMargins( 16 + 4, 0, 8 + 4, 0 ); Layout->setSpacing( 2 );
+        Layout->setContentsMargins( 12, 0, 8, 0 ); Layout->setSpacing( 2 );
+        // 남는 제목표시줄 공간이 단추 사이로 퍼지지 않도록 보이는 내용에 폭을 맞춘다.
+        Layout->setSizeConstraint( QLayout::SetFixedSize );
         prev_ = button( "hc.audio.prev", tr( "이전 곡" ) );
         play_ = button( "hc.audio.playPause", tr( "재생" ) );
         next_ = button( "hc.audio.next", tr( "다음 곡" ) );
         auto* AfterTransport = separator();
         track_ = button( "hc.audio.track", tr( "재생 정보" ) );
-        track_->setToolButtonStyle( Qt::ToolButtonTextBesideIcon ); track_->setMinimumWidth( 0 ); track_->setMaximumWidth( 230 );
-        track_->setFixedWidth( 230 ); track_->setSizePolicy( QSizePolicy::Fixed, QSizePolicy::Fixed );
+        track_->setToolButtonStyle( Qt::ToolButtonTextBesideIcon ); track_->setMinimumWidth( 0 ); track_->setMaximumWidth( 210 );
+        track_->setFixedWidth( 210 ); track_->setSizePolicy( QSizePolicy::Fixed, QSizePolicy::Fixed );
         auto* AfterTrack = separator();
         position_ = new QLabel( this ); position_->setObjectName( "hc.audio.position" ); position_->setFixedWidth( 36 ); position_->setAlignment( Qt::AlignRight | Qt::AlignVCenter );
-        seek_ = new AudioSeekBar( this ); seek_->setFixedWidth( 150 + 16 );
+        seek_ = new AudioSeekBar( this ); seek_->setFixedWidth( 144 );
         duration_ = new QLabel( this ); duration_->setObjectName( "hc.audio.duration" ); duration_->setFixedWidth( 36 );
         ring_ = new QWidget( this ); ring_->setObjectName( "hc.audio.ring" ); ring_->setFixedWidth( 22 ); ring_->setAttribute( Qt::WA_TransparentForMouseEvents );
         remaining_ = new QLabel( this ); remaining_->setObjectName( "hc.audio.remaining" ); remaining_->setFixedWidth( 44 );
@@ -265,13 +267,13 @@ namespace hc::ui
         Button->setObjectName( Name ); Button->setAccessibleName( Text ); Button->setToolTip( Text );
         // 캡션 단추와 같다: 클릭은 패널 입력을 그대로 두고 Tab으로만 닿는다.
         Button->setFocusPolicy( Qt::TabFocus ); Button->setAutoRaise( true );
-        Button->setFixedSize( 26, 20 ); Button->setIconSize( QSize( 12, 12 ) );
+        Button->setFixedSize( 32, 20 ); Button->setIconSize( QSize( 12, 12 ) );
         return Button;
     }
 
     QWidget* AudioTitleWidget::separator()
     {
-        auto* Item = new QWidget( this ); Item->setFixedWidth( 9 ); Item->setAttribute( Qt::WA_TransparentForMouseEvents );
+        auto* Item = new QWidget( this ); Item->setFixedWidth( 7 ); Item->setAttribute( Qt::WA_TransparentForMouseEvents );
         separators_.append( Item ); return Item;
     }
 
@@ -300,8 +302,8 @@ namespace hc::ui
                                 "QToolButton:hover{background:%2;}QToolButton:pressed{background:%3;}QToolButton:focus{border:1px solid %4;}"
                                 "QLabel{color:%1;background:transparent;}" )
                            .arg( Fg.name(), Rgba( Fg, 40 ), Rgba( Fg, 66 ), Rgba( Fg, 170 ) ) );
-        for( auto* Button : { prev_, play_, next_, volume_, close_, external_ } ) Button->setFixedHeight( wellHeight_ - 4 );
-        track_->setFixedHeight( wellHeight_ - 4 );
+        for( auto* Button : { prev_, play_, next_, volume_, close_, external_ } ) Button->setFixedHeight( wellHeight_ );
+        track_->setFixedHeight( wellHeight_ );
         prev_->setIcon( MediaIcon( MediaGlyph::Previous, Fg ) ); next_->setIcon( MediaIcon( MediaGlyph::Next, Fg ) );
         close_->setIcon( MediaIcon( MediaGlyph::Close, Fg, 10 ) ); track_->setIcon( MediaIcon( MediaGlyph::Note, Fg ) );
         refreshVolume();
@@ -347,7 +349,7 @@ namespace hc::ui
         if( !Meta.title_.isEmpty() ) Tip = Meta.title_ + ( Meta.artist_.isEmpty() ? QString() : QStringLiteral( " — " ) + Meta.artist_ ) + '\n' + Tip;
         track_->setToolTip( Tip + '\n' + tr( "눌러서 재생 정보 · 대기열 열기" ) );
         track_->setAccessibleName( tr( "%1 · 재생 정보 열기" ).arg( Base ) );
-        track_->setText( track_->fontMetrics().elidedText( trackText_, Qt::ElideRight, 230 - 34 ) );
+        track_->setText( track_->fontMetrics().elidedText( trackText_, Qt::ElideRight, track_->width() - 34 ) );
         refreshPosition();
     }
 
@@ -365,12 +367,16 @@ namespace hc::ui
 
     int AudioTitleWidget::tierWidth( Tier Value ) const
     {
-        const int Button = 26 + 2, Separator = 9 + 2, Outer = 16 + 8 + 8;
-        const int Track = std::min( 230, track_->sizeHint().width() ) + 2;
-        const int Middle = Outer + 3 * Button + Separator + ( 36 + 2 ) + ( 166 + 2 ) + ( 36 + 2 ) + Separator + 2 * Button;
+        const auto Margins = layout()->contentsMargins();
+        const int Spacing = layout()->spacing();
+        const int Button = prev_->width() + Spacing, Separator = separators_.front()->width() + Spacing;
+        const int Outer = Margins.left() + Margins.right() - Spacing;
+        const int Track = track_->width() + Spacing;
+        const int Middle = Outer + 3 * Button + Separator + position_->width() + Spacing
+                           + seek_->width() + Spacing + duration_->width() + Spacing + Separator + 2 * Button;
         if( Value == Tier::Full ) return Middle + Track + Separator;
         if( Value == Tier::Middle ) return Middle;
-        return Outer + Button + ( 22 + 2 ) + ( 44 + 2 ) + Button;
+        return Outer + Button + ring_->width() + Spacing + remaining_->width() + Spacing + Button;
     }
 
     void AudioTitleWidget::updateTier()
@@ -407,7 +413,8 @@ namespace hc::ui
     void AudioTitleWidget::paintEvent( QPaintEvent* )
     {
         QPainter Painter( this ); Painter.setRenderHint( QPainter::Antialiasing );
-        const QRectF Well = QRectF( rect() ).adjusted( 16.5, 0.5, -8.5, -0.5 );
+        // 버튼 배치 영역 둘레에 같은 여백을 두어 첫·끝 버튼의 호버도 홈 안에 들어오게 한다.
+        const QRectF Well = QRectF( layout()->contentsRect() ).adjusted( -3.5, 0.5, 3.5, -0.5 );
         Painter.setPen( QPen( wellLine_, 1 ) ); Painter.setBrush( well_ );
         Painter.drawRoundedRect( Well, wellHeight_ == 24 ? 6 : 4, wellHeight_ == 24 ? 6 : 4 );
         auto Line = foreground_; Line.setAlpha( 62 ); Painter.setPen( QPen( Line, 1 ) );
