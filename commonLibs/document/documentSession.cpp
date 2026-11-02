@@ -78,12 +78,19 @@ namespace hc::document
     }
     Result<SaveTicket> DocumentSession::Save(SaveRequest Request)
     {
+        return SaveSnapshot(std::move(Request), snapshot_.revision_, text_);
+    }
+    Result<SaveTicket> DocumentSession::SaveSnapshot(SaveRequest Request, std::uint64_t Revision, std::string Text)
+    {
         if (snapshot_.contentMode_ != DocumentContentMode::InlineBytes) return Invalid("document-export-required");
+        if (Revision > snapshot_.revision_ || Revision < snapshot_.savedRevision_
+            || (!unlimitedBytes_ && Text.size() > (binary_ ? DocumentByteLimit : TextByteLimit))
+            || (!binary_ && !ValidText(Text))) return Invalid("document-stale-revision");
         const auto Capability = Capabilities();
         if (Request.destination_.empty() || !(Request.disposition_ == SaveDisposition::Original ? Capability.save_ : Capability.saveAs_))
             return Invalid("document-save-unavailable");
-        SaveTicket Ticket{snapshot_.id_, snapshot_.generation_, ++nextSave_, snapshot_.revision_,
-            text_, std::move(Request.destination_), Request.disposition_, snapshot_.source_};
+        SaveTicket Ticket{snapshot_.id_, snapshot_.generation_, ++nextSave_, Revision,
+            std::move(Text), std::move(Request.destination_), Request.disposition_, snapshot_.source_};
         saving_ = Ticket; snapshot_.saveState_ = DocumentSaveState::Saving;
         snapshot_.cancelRequested_ = false; snapshot_.error_.reset(); snapshot_.cleanupErrors_.clear(); return Ticket;
     }

@@ -422,6 +422,38 @@ namespace hc::document
         const auto Bytes = image_->SerializeContent();
         return Bytes.isEmpty() ? QByteArray{} : "image:" + QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex();
     }
+    DocumentEncoder DocumentViewPane::CaptureSave(const QString& Destination,bool SaveEpubOriginal) const
+    {
+        if(epubEditor_)return epubEditor_->CaptureSave(Destination,SaveEpubOriginal);
+        if(text_)return [Text=text_->Content(),Encoding=encoding_,Bom=bom_](storage::OperationContext Context)->storage::Result<QByteArray>{
+            if(auto Stop=Context.Check({"document"}))return *Stop;
+            return EncodeDocumentText(Text,Encoding,Bom);
+        };
+        if(image_ || (reading_ && !reading_->isHidden())) {
+            const bool KeepOriginal=image_ && !image_->isModified() && quality_<0 && QFileInfo(Destination).suffix().compare(QFileInfo(originalImagePath_).suffix(),Qt::CaseInsensitive)==0;
+            return [Image=image_?image_->Content():reading_->CurrentImage(),Format=QFileInfo(Destination).suffix().toLatin1(),Quality=quality_,
+                    Original=KeepOriginal?originalImageBytes_:QByteArray{}](storage::OperationContext Context)->storage::Result<QByteArray>{
+                if(auto Stop=Context.Check({"document"}))return *Stop;
+                if(!Original.isEmpty())return Original;
+                QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);
+                if(Image.isNull() || !Image.save(&Buffer,Format.constData(),Quality))return storage::Error{storage::ErrorCategory::Unsupported,"document-serialization-or-format"};
+                return Bytes;
+            };
+        }
+        // PDF's adapter owns a GUI-bound document; detach its serialized bytes here.
+        const auto Result=Export(Destination,SaveEpubOriginal);
+        return [Result](storage::OperationContext){return Result;};
+    }
+    void DocumentViewPane::CommitSaved(const QString& Path,const QByteArray& Bytes,const QByteArray& Content,const QByteArray& Hash)
+    {
+        if(epubEditor_){epubEditor_->CommitSaved(Path,Content,Hash);epubBytes_=Bytes;epubPath_=Path;return;}
+        if(markdown_)markdown_->SetPath(Path);
+        if(SessionContent()==Content)Commit(Path,Bytes);
+    }
+    void DocumentViewPane::ReportSaveFailure(const QByteArray& Content,const QString& Error)
+    {
+        if(epubEditor_)epubEditor_->ReportSaveFailure(Content,Error);
+    }
     storage::Result<QByteArray> DocumentViewPane::Export(const QString& Destination,bool SaveEpubOriginal) const
     {
         if(epub_)return epubEditor_?epubEditor_->Export(Destination,SaveEpubOriginal):storage::Result<QByteArray>{storage::Error{storage::ErrorCategory::Unsupported,"epub-read-only"}};

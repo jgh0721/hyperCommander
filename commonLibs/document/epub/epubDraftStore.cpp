@@ -44,6 +44,7 @@ QJsonObject header(QFile& File,QByteArray& Prefix,QString& Error) {
         || !Object["sourcePath"].isString() || !text(Object["sourcePath"].toString()) || !QFileInfo(Object["sourcePath"].toString()).isAbsolute()
         || QFileInfo(Object["sourcePath"].toString()).suffix().compare("epub",Qt::CaseInsensitive)!=0
         || !QRegularExpression("^[a-f0-9]{64}$").match(Object["sourceSha256"].toString()).hasMatch()
+        || Object.contains("diskSha256") && !QRegularExpression("^[a-f0-9]{64}$").match(Object["diskSha256"].toString()).hasMatch()
         || size(Object["originalBytes"],OriginalLimit)<=0 || !Object["entries"].isArray() || Object["entries"].toArray().size()>1024
         || !Object["hasCurrentDraft"].isBool() || !Object["currentResource"].isString() || !text(Object["currentResource"].toString(),2048)
         || size(Object["currentBytes"],2*1024*1024)<0 || (!Object["hasCurrentDraft"].toBool() && Object["currentBytes"].toInteger()!=0)
@@ -71,6 +72,7 @@ DraftWrite DraftStore::Write(const QString& Root,const QString& Session,const Dr
     auto Metadata=QJsonObject{{"schemaVersion",Structural?2:1},{"sourcePath",Snapshot.sourcePath_},{"sourceSha256",QString::fromLatin1(QCryptographicHash::hash(Snapshot.original_,QCryptographicHash::Sha256).toHex())},
         {"originalBytes",Snapshot.original_.size()},{"entries",Entries},{"currentResource",Snapshot.currentResource_},{"hasCurrentDraft",Snapshot.hasCurrentDraft_},{"currentBytes",Snapshot.currentDraft_.size()},
         {"cursor",Snapshot.cursor_},{"scroll",Snapshot.scroll_},{"readingChapter",Snapshot.readingChapter_},{"locator",Snapshot.locator_},{"utcMs",QDateTime::currentMSecsSinceEpoch()}};
+    if(!Snapshot.diskHash_.isEmpty())Metadata["diskSha256"]=QString::fromLatin1(Snapshot.diskHash_.toHex());
     if(Structural){Metadata["editionBytes"]=Snapshot.structuralBytes_.size();Metadata["editionSha256"]=QString::fromLatin1(QCryptographicHash::hash(Snapshot.structuralBytes_,QCryptographicHash::Sha256).toHex());}
     const auto Json=QJsonDocument(Metadata).toJson(QJsonDocument::Compact);
     if(Json.size()>64*1024)return {{},"epub-draft-header-budget"};
@@ -91,6 +93,7 @@ DraftRead DraftStore::Read(const QString& Root,const QString& Path) {
     QFile File(Path);if(!File.open(QIODevice::ReadOnly))return {{},"epub-draft-open"};
     QByteArray Prefix;QString Error;const auto Header=header(File,Prefix,Error);if(!Error.isEmpty())return {{},Error};
     QCryptographicHash Hash(QCryptographicHash::Sha256);Hash.addData(Prefix);DraftSnapshot Snapshot;
+    Snapshot.diskHash_=QByteArray::fromHex(Header.value("diskSha256").toString(Header["sourceSha256"].toString()).toLatin1());
     const auto Read=[&](qint64 Length){const auto Bytes=File.read(Length);Hash.addData(Bytes);return Bytes;};
     const auto OriginalBytes=size(Header["originalBytes"],OriginalLimit);Snapshot.original_=Read(OriginalBytes);
     if(Snapshot.original_.size()!=OriginalBytes || QCryptographicHash::hash(Snapshot.original_,QCryptographicHash::Sha256).toHex()!=Header["sourceSha256"].toString().toLatin1())return {{},"epub-draft-original-hash"};
@@ -117,7 +120,7 @@ QList<DraftInfo> DraftStore::List(const QString& Root,const QString& SourcePath,
     for(const auto& Name:Names) {
         if(Result.size()>=128 || ++Scanned>2048)break;const auto Path=QDir(Root).filePath(Name);if(!path(Root,Path))continue;
         QFile File(Path);if(!File.open(QIODevice::ReadOnly))continue;QByteArray Prefix;QString Error;const auto Header=header(File,Prefix,Error);
-        const auto StoredPath=Header["sourcePath"].toString();const auto Hash=Header["sourceSha256"].toString().toLatin1();
+        const auto StoredPath=Header["sourcePath"].toString();const auto Hash=Header.value("diskSha256").toString(Header["sourceSha256"].toString()).toLatin1();
         if(!Error.isEmpty() || SourcePath.isEmpty() && SourceHash.isEmpty() || Hash==SourceHash || QDir::cleanPath(StoredPath).compare(QDir::cleanPath(SourcePath),Qt::CaseInsensitive)==0)
             Result.append({Path,StoredPath,Error,Hash,Header["utcMs"].toInteger()});
     }

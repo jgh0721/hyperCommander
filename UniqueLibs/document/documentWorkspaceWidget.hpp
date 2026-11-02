@@ -68,11 +68,13 @@ namespace hc::document
         QJsonObject appliedPreferences_;
         QFileSystemWatcher* settingsWatcher_ = nullptr;
         struct Tab;
+        struct LocalSave;
         std::shared_ptr<Tab> active() const;
         std::shared_ptr<Tab> find(const QString& Id) const;
         QJsonObject open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
             const QString& RecoveryPath = {}, const QString& DisplayName = {});
         void save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite = false, bool SaveEpubOriginal = false);
+        void startSave(const std::shared_ptr<Tab>& Tab, std::shared_ptr<LocalSave> Request);
         void load(const std::shared_ptr<Tab>& Tab, bool Discard = false, const QString& RecoveryPath = {});
         void navigateImage(const std::shared_ptr<Tab>& Tab, const QString& Path);
         void retire(std::shared_ptr<Tab> Tab, bool Discard, bool PreserveRecovery = false);

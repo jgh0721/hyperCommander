@@ -26,6 +26,8 @@ namespace hc::document
         DocumentCapabilities Capabilities() const override;
         storage::Result<storage::Unit> Execute(std::string_view Command, std::string Text) override;
         storage::Result<SaveTicket> Save(SaveRequest Request) override;
+        // The owner captured this content/revision while another save was running.
+        storage::Result<SaveTicket> SaveSnapshot(SaveRequest Request, std::uint64_t Revision, std::string Text);
         void Cancel() override;
         bool Cancel(const DocumentOperationTicket& Ticket);
         bool Cancel(const SaveTicket& Ticket);

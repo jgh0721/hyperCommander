@@ -7,6 +7,7 @@
 #include "epubLineShifts.hpp"
 #include "commonLibs/document/epub/epubSourceMap.hpp"
 #include "documentStatusBar.hpp"
+#include "documentStorageAdapter.hpp"
 #include <QWidget>
 #include <QFutureWatcher>
 #include <QTimer>
@@ -31,12 +32,15 @@ public:
     storage::Result<QByteArray> Export(const QString& Destination,bool SaveOriginal=false)const;
     bool CanUndo()const;bool CanRedo()const;void Undo();void Redo();
     bool IsReady()const{return ready_;}
-    bool IsModified()const{return ready_ && Token()!=baseToken_;}
+    bool IsModified()const{return ready_ && Token()!=(savedToken_.isEmpty()?baseToken_:savedToken_);}
     bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !nativeValidating_ && !structuring_ && validatedToken_==Token() && !validatedBytes_.isEmpty() && checkerState_!="running" && standardValidationAccepted();}
     static QString RecoveryDirectory();
     void Commit(const QString& Path,const QByteArray& Bytes);
     bool PrepareSave(bool SaveAs);
-    bool CanPrepareSave()const{return ready_ && !sourceComposing_ && !structuring_ && !nativeValidating_ && checkerState_!="running" && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty();}
+    DocumentEncoder CaptureSave(const QString& Destination, bool SaveOriginal);
+    void CommitSaved(const QString& Path, const QByteArray& Content, const QByteArray& Hash);
+    void ReportSaveFailure(const QByteArray& Content, const QString& Error);
+    bool CanPrepareSave()const{return ready_ && !structuring_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty();}
     void ReloadValidationSettings();
     void Checkpoint();
     void DiscardRecovery();
@@ -151,6 +155,7 @@ private:
     QFutureWatcher<QJsonObject> imageInspection_;QByteArray imageInspectionToken_;
     QJsonObject previewSnapshot()const;
     epub::EditOutput cachedExport_;QByteArray cachedExportToken_;
+    QByteArray savedToken_;
     epub::EditModel model_;QFutureWatcher<epub::EditModel> worker_;
     QFutureWatcher<epub::EditOutput> validation_;QByteArray validationToken_,validatedToken_,validatedBytes_;bool saveAfter_=false,saveAsAfter_=true,nativeValidating_=false;
     std::shared_ptr<std::atomic_bool> cancel_,validationCancel_;

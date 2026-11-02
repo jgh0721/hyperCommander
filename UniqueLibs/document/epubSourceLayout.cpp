@@ -148,7 +148,7 @@ void EpubSourceEditor::setupActions() {
     };
     const auto Target=[this]{return treeResource();};
     Make("epubApplyResource",tr("변경 반영"),[this]{flush();});
-    Make("epubSaveCopy",tr("검증 후 다른 이름으로 저장…"),[this]{if(PrepareSave(true))emit SaveRequested(true);})->setToolTip(tr("검사를 통과한 편집본을 원본과 다른 파일로 저장합니다. 원본 EPUB은 변경하지 않습니다."));
+    Make("epubSaveCopy",tr("검증 후 다른 이름으로 저장…"),[this]{emit SaveRequested(true);})->setToolTip(tr("검사를 통과한 편집본을 원본과 다른 파일로 저장합니다. 원본 EPUB은 변경하지 않습니다."));
     Make("epubBasicValidation",tr("기본 검사"),[this]{validate(false);});
     Make("epubStandardValidation",tr("EPUBCheck 검사"),[this]{validate(false,true);});
     Make("epubValidationCancel",tr("검사 취소"),[this]{cancelEpubCheck("cancelled");});

@@ -208,6 +208,9 @@ namespace hc::ui
     {
         auto P = DescribeError(Code);
         if (P.domain_ != ErrorDomain::Application || Code.isEmpty()) return P;
+        if(Code=="document-save-target-busy") {P.description_=QObject::tr("현재 저장을 마친 뒤 다른 대상에 저장하십시오.");P.recovery_.clear();return P;}
+        if(Code=="document-save-worker-failed") {P.description_=QObject::tr("저장을 완료하지 못했습니다. 편집 내용은 유지됩니다. 다시 저장하거나 다른 이름으로 저장하십시오.");P.recovery_.clear();return P;}
+        if(Code.startsWith("epubcheck-")) {P.description_=QObject::tr("EPUBCheck를 통과하지 못했습니다. 기본 검사·EPUBCheck 진단과 설정의 Java·JAR 경로를 확인한 뒤 다시 저장하십시오.");P.recovery_.clear();return P;}
         if (Code.contains("external") || Code.contains("stale") || Code.contains("changed"))
             { P.kind_ = ErrorKind::Changed; P.description_ = QObject::tr("원본이 변경되었습니다. 다시 읽거나 다른 이름으로 저장하십시오."); P.recovery_.clear(); return P; }
         if (Code.contains("cancel")) { P.kind_ = ErrorKind::Cancelled; P.description_ = QObject::tr("작업을 취소했습니다."); P.recovery_.clear(); return P; }

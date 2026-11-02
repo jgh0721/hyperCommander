@@ -138,11 +138,12 @@ void EpubSourceEditor::refreshRecovery() {
 }
 void EpubSourceEditor::Checkpoint() {
     draftTimer_.stop();if(!ready_ || !recoveryEnabled_ || discardedRecovery_ || draftWriter_.isRunning() || pendingRecovery_ || draftReader_.isRunning())return;
-    if(Token()==baseToken_) {if(!recoveryPath_.isEmpty()){DiscardRecovery();resetRecoverySession();}return;}
+    if(!IsModified()) {if(!recoveryPath_.isEmpty()){DiscardRecovery();resetRecoverySession();}return;}
     if(draftWrittenToken_==Token())return;
     epub::DraftSnapshot Snapshot;Snapshot.sourcePath_=sourcePath_;Snapshot.original_=model_.OriginalBytes();Snapshot.structuralBytes_=model_.StructuralBytes();Snapshot.changes_=model_.Changes();Snapshot.currentResource_=current_;Snapshot.locator_=recoveryLocator_;Snapshot.readingChapter_=previewRecoveryPosition_?previewRestoreChapter_:previewSnapshot()["state"].toObject()["chapterIndex"].toInt(previewRestoreChapter_);
     // Draft positions stay UTF-16 offsets and first lines so earlier drafts restore unchanged.
     const auto Current=draft();Snapshot.hasCurrentDraft_=Current.contains(current_);Snapshot.currentDraft_=Current.value(current_);Snapshot.cursor_=sourceShown()?sourcePosition():0;Snapshot.scroll_=sourceShown()?firstVisibleLine():0;
+    Snapshot.diskHash_=sourceHashAtOpen_;
     draftWritingToken_=Token();reportDraft(tr("편집 초안을 자동 복구용으로 보관하고 있습니다…"));
     draftWriter_.setFuture(QtConcurrent::run([Root=recoveryRoot_,Session=recoverySession_,Snapshot=std::move(Snapshot),State=draftSession_]{
         auto Result=epub::DraftStore::Write(Root,Session,Snapshot,[State]{return State->cancelled_.load();});
@@ -159,13 +160,13 @@ void EpubSourceEditor::DiscardRecovery() {
 void EpubSourceEditor::SetRecoveryEnabled(bool Enabled) {
     if(recoveryEnabled_==Enabled)return;recoveryEnabled_=Enabled;
     if(!Enabled){draftTimer_.stop();draftSession_->cancelled_.store(true);reportDraft(tr("자동 복구가 꺼져 있습니다. 기존 초안 파일은 유지합니다."));}
-    else {draftSession_=std::make_shared<DraftSession>();if(ready_ && Token()!=baseToken_)draftTimer_.start();reportDraft(tr("편집 초안 자동 복구가 켜져 있습니다."));}
+    else {draftSession_=std::make_shared<DraftSession>();if(IsModified())draftTimer_.start();reportDraft(tr("편집 초안 자동 복구가 켜져 있습니다."));}
     emit StateChanged();
 }
 void EpubSourceEditor::restoreRecovery(const QString& Path) {
     if(structuring_){report(tr("구조 작업이 끝난 뒤 초안을 복원해 주세요."));return;}
     if(Path.isEmpty() || pendingRecovery_ || draftReader_.isRunning() || worker_.isRunning() || validation_.isRunning())return;
-    if(ready_ && Token()!=baseToken_ && draftWrittenToken_!=Token()) {
+    if(IsModified() && draftWrittenToken_!=Token()) {
         if(!recoveryEnabled_){reportDraft(tr("현재 편집 내용이 있습니다. 사본을 저장하거나 자동 복구를 켠 뒤 복원하세요."));report(draftMessage_);return;}
         pendingRecoveryPath_=Path;setSourceReadOnly(true);if(!draftWriter_.isRunning())Checkpoint();return;
     }
@@ -175,7 +176,7 @@ void EpubSourceEditor::beginRecoveryRead(const QString& Path) {
     readingRecoveryPath_=Path;setSourceReadOnly(true);reportDraft(tr("보관된 초안을 검사하고 있습니다…"));recoveryDismissed_=true;recoveryBar_->hide();
     draftReader_.setFuture(QtConcurrent::run([Root=recoveryRoot_,Path,Source=sourcePath_,AtOpen=sourceHashAtOpen_]{
         auto Result=epub::DraftStore::Read(Root,Path);if(!Result)return Result;
-        const auto SavedHash=QCryptographicHash::hash(Result.snapshot_.original_,QCryptographicHash::Sha256);
+        const auto SavedHash=Result.snapshot_.diskHash_.isEmpty()?QCryptographicHash::hash(Result.snapshot_.original_,QCryptographicHash::Sha256):Result.snapshot_.diskHash_;
         if(SavedHash!=AtOpen && QDir::cleanPath(Source).compare(QDir::cleanPath(Result.snapshot_.sourcePath_),Qt::CaseInsensitive)!=0)return epub::DraftRead{{},"epub-draft-book-mismatch"};
         QFile Current(Result.snapshot_.sourcePath_);
         Result.sourceChanged_=!Current.open(QIODevice::ReadOnly) || Current.size()>64LL*1024*1024 || QCryptographicHash::hash(Current.read(64LL*1024*1024+1),QCryptographicHash::Sha256)!=SavedHash;

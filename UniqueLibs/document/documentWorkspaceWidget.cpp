@@ -115,7 +115,12 @@ namespace hc::document
                 const auto Match=QRegularExpression("\\*\\.([a-z0-9]+)").match(Filter);if(Match.hasMatch())Dialog->setDefaultSuffix(Match.captured(1));
             });
             QObject::connect(Dialog,&QDialog::finished,Parent,[Dialog,Completion=std::move(Completion)](int Result){
-                Completion(Result==QDialog::Accepted?Dialog->selectedFiles().value(0):QString{});
+                const auto Path=Result==QDialog::Accepted?Dialog->selectedFiles().value(0):QString{};
+                // Re-enable save only after the old modal window is retired.
+                // Otherwise a second shortcut can be swallowed by its teardown.
+                QObject::connect(Dialog,&QObject::destroyed,Dialog->parent(),[Parent=Dialog->parent(),Completion,Path]{
+                    QTimer::singleShot(0,Parent,[Completion,Path]{Completion(Path);});
+                });
             });
             OpenFileDialog(Dialog);
         }
@@ -151,6 +156,14 @@ namespace hc::document
             }
         }
     }
+    struct DocumentWorkspaceWidget::LocalSave
+    {
+        QString destination_;
+        std::string content_;
+        std::uint64_t revision_ = 0;
+        DocumentEncoder encoder_;
+        bool original_ = false, overwrite_ = false;
+    };
     struct DocumentWorkspaceWidget::Tab
     {
         QString id_ = QUuid::createUuid().toString(QUuid::Id128), path_, error_;
@@ -158,6 +171,8 @@ namespace hc::document
         QString readingPath_,readingEntry_;
         QString navigationAfterSave_;
         QByteArray pendingHash_;
+        std::shared_ptr<LocalSave> activeSave_, queuedSave_;
+        bool composingSave_ = false;
         std::uint64_t checkpointedRevision_ = std::numeric_limits<std::uint64_t>::max();
         std::shared_ptr<DocumentSession> session_ = std::make_shared<DocumentSession>(id_.toStdString());
         std::optional<SaveTicket> pending_;
@@ -230,7 +245,7 @@ namespace hc::document
         Add(tr("저장(&S)"), "saveDocument", [this] {
             auto Tab = active(); if (!Tab) return;
             if (Tab->choosingSavePath_) return;
-            if(Tab->pane_->CanEditEpub() && !Tab->pane_->PrepareEpubSave(false))return;
+            if(Tab->activeSave_){save(Tab,Tab->activeSave_->destination_,Tab->activeSave_->overwrite_,Tab->activeSave_->original_ && Tab->pane_->CanEditEpub());return;}
             if (Tab->broker_) { auto Result = prepareSave(Tab); if (Result.contains("error")) Tab->error_ = Result["error"].toString(); update(); }
             else if (Tab->originalSave_) save(Tab, Tab->path_, false, Tab->pane_->CanEditEpub());
             else {
@@ -245,8 +260,7 @@ namespace hc::document
         });
         Add(tr("다른 이름 저장"), "saveDocumentAs", [this] {
             auto Tab = active(); if (!Tab) return;
-            if (Tab->choosingSavePath_) return;
-            if(Tab->pane_->CanEditEpub() && !Tab->pane_->PrepareEpubSave(true))return;
+            if (Tab->choosingSavePath_ || Tab->saving_) return;
             Tab->choosingSavePath_ = true;
             ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
                 Tab->choosingSavePath_ = false;
@@ -267,7 +281,7 @@ namespace hc::document
             auto* Reload = Dialog.addButton(tr("편집 폐기 후 다시 읽기"), QMessageBox::DestructiveRole);
             auto* SaveAs = Dialog.addButton(tr("다른 이름 저장"), QMessageBox::ActionRole);
             Dialog.exec();
-            if (Dialog.clickedButton() == Overwrite) save(Tab, Tab->path_, true);
+            if (Dialog.clickedButton() == Overwrite) save(Tab, Tab->path_, true, Tab->pane_->CanEditEpub());
             else if (Dialog.clickedButton() == Reload) load(Tab, true);
             else if (Dialog.clickedButton() == SaveAs) findChild<QAction*>("saveDocumentAs")->trigger();
         });
@@ -275,7 +289,7 @@ namespace hc::document
             auto Tab = active(); if (Tab) closeTab(int(std::distance(documents_.begin(), std::find(documents_.begin(), documents_.end(), Tab))));
         });
         Add(tr("작업 취소"), "cancelDocument", [this] {
-            if (auto Tab = active()) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); }
+            if (auto Tab = active()) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->queuedSave_.reset();Tab->composingSave_=false;Tab->pane_->Cancel(); }
         });
         Add(tr("인쇄"), "printDocument",[this]{if(auto Tab=active())Tab->pane_->Execute({{"action","print"}});});
         auto* EditHwp=Add(tr("편집"), "editHwpDocument",[this]{editHwp(active());});
@@ -656,7 +670,7 @@ namespace hc::document
     bool DocumentWorkspaceWidget::IsIdle() const
     {
         return !recoveryWorkers_ && std::none_of(documents_.begin(), documents_.end(), [](const auto& Tab) {
-            return Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
+            return Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
         });
     }
     QJsonObject DocumentWorkspaceWidget::open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
@@ -903,7 +917,7 @@ namespace hc::document
     QJsonObject DocumentWorkspaceWidget::prepareSave(const std::shared_ptr<Tab>& Tab)
     {
         if(Tab&&Tab->pane_->IsProcessDocument())return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
-        if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return Error("document-save-busy-or-unavailable");
+        if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || !Tab->pendingToken_.isEmpty()) return Error("document-save-busy-or-unavailable");
         if (!Tab->broker_ || Tab->sourceToken_.isEmpty()) return Error("document-source-token-required");
         auto Started = Tab->session_->Save({SaveDisposition::Original, Tab->path_.toUtf8().toStdString()});
         if (!Started.HasValue()) return Error(QString::fromStdString(Started.Failure().code_));
@@ -926,73 +940,114 @@ namespace hc::document
     void DocumentWorkspaceWidget::save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite, bool SaveEpubOriginal)
     {
         if(Tab&&Tab->pane_->IsProcessDocument()&&!Tab->pane_->CanEditEpub()){Tab->error_=Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor";update();return;}
-        if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return;
-        const auto TargetCanonical = QFileInfo(Destination).canonicalFilePath();
-        const bool Original = QFileInfo(Destination).absoluteFilePath() == QFileInfo(Tab->path_).absoluteFilePath()
-            || (!TargetCanonical.isEmpty() && TargetCanonical == QFileInfo(Tab->path_).canonicalFilePath());
-        if (Original && ((Tab->pane_->IsEpub() && (!SaveEpubOriginal || hosted_)) || !Tab->originalSave_ || Tab->broker_ || Tab->recovered_)) { Tab->error_ = "document-original-save-unavailable"; update(); return; }
-        if(Tab->pane_->ViewState().contains("reading")){
-            // Export is detached from the live book and its provider lease.
-            const auto Encoded=Tab->pane_->Export(Destination);if(!Encoded.HasValue()){Tab->error_=QString::fromStdString(Encoded.Failure().code_);update();return;}
-            const auto Bytes=Encoded.Value();Tab->saving_=true;Tab->error_.clear();Tab->cancellation_=std::make_shared<std::stop_source>();const auto Cancellation=Tab->cancellation_;
-            externalWatcher_->beginSelfWrite(Destination);auto* Watcher=new QFutureWatcher<storage::Result<LocalSaveResult>>(this);
-            connect(Watcher,&QFutureWatcherBase::finished,this,[this,Tab,Watcher,Destination]{auto Result=Watcher->result();Watcher->deleteLater();Tab->saving_=false;externalWatcher_->endSelfWrite(Destination,Result.HasValue()&&Result.Value().receipt_.destinationCommitted_);
-                if(Tab->closed_)return;if(!Result.HasValue())Tab->error_=QString::fromStdString(Result.Failure().code_);else if(!Result.Value().receipt_.cleanupErrors_.empty())Tab->error_="document-saved-cleanup-warning";update();tryFinishClose();});
-            Watcher->setFuture(QtConcurrent::run([Destination,Bytes,Cancellation,Overwrite]()->storage::Result<LocalSaveResult>{
-                storage::OperationContext Context;Context.stopToken_=Cancellation->get_token();Context.deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(30);
-                storage::DestinationExpectation Expected;QByteArray Hash;
-                if(Overwrite&&QFileInfo::exists(Destination)){auto Existing=ReadDocumentFile(Destination,Context);if(!Existing.HasValue())return Existing.Failure();Expected={true,Existing.Value().source_.id_.revision_};Hash=Existing.Value().hash_;}
-                return SaveTextFile(Destination,Bytes,Expected,Hash,Context,true);
-            }));update();return;
+        if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || !Tab->pendingToken_.isEmpty() || Destination.isEmpty()) return;
+        if(Tab->pane_->InputWidget() && Tab->pane_->InputWidget()->property("epubSourceComposing").toBool()) {
+            if(!Tab->composingSave_) {
+                Tab->composingSave_=true;const auto Generation=Tab->session_->Snapshot().generation_;
+                QTimer::singleShot(30,this,[this,Tab,Destination,Overwrite,SaveEpubOriginal,Generation]{
+                    if(!Tab->composingSave_ || Tab->closed_ || Tab->session_->Snapshot().generation_!=Generation)return;
+                    Tab->composingSave_=false;save(Tab,Destination,Overwrite,SaveEpubOriginal);
+                });
+            }
+            return;
         }
-        auto Started = Tab->session_->Save({Original ? SaveDisposition::Original : SaveDisposition::SaveAs, Destination.toUtf8().toStdString()});
-        if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
-        const auto Ticket = Started.Value();const auto Encoded=Tab->pane_->Export(Destination,Original && SaveEpubOriginal);
-        if(!Encoded.HasValue()){Tab->session_->CompleteSave(Ticket,{false,{},Encoded.Failure()});Tab->error_=QString::fromStdString(Encoded.Failure().code_);update();return;}
-        const auto Bytes=Encoded.Value();
-        const auto Expected = Original ? storage::DestinationExpectation{true, Tab->input_.source_.id_.revision_} : storage::DestinationExpectation{};
-        const auto Hash = Original ? Tab->input_.hash_ : QByteArray{};
+        // absoluteFilePath is lexical. Canonical/identity probes may block on SMB
+        // or redirected drives and are performed by the captured encoder/writer.
+        const bool Original=QFileInfo(Destination).absoluteFilePath().compare(QFileInfo(Tab->path_).absoluteFilePath(),Qt::CaseInsensitive)==0;
+        if (Original && ((Tab->pane_->IsEpub() && (!SaveEpubOriginal || hosted_)) || !Tab->originalSave_ || Tab->broker_ || Tab->recovered_)) { Tab->error_ = "document-original-save-unavailable"; update(); return; }
+        const auto Target=QFileInfo(Destination).absoluteFilePath().toCaseFolded();
+        for(const auto& Other:documents_)if(Other!=Tab && Other->activeSave_ && QFileInfo(Other->activeSave_->destination_).absoluteFilePath().toCaseFolded()==Target){
+            Tab->error_="document-save-target-busy";update();return;
+        }
+        auto Request=std::make_shared<LocalSave>();Request->destination_=Destination;Request->original_=Original;Request->overwrite_=Overwrite;
+        Request->content_=Tab->session_->Text();Request->revision_=Tab->Revision();
+        if(Tab->saving_) {
+            if(!Tab->activeSave_ || Tab->activeSave_->destination_!=Destination || Tab->activeSave_->overwrite_!=Overwrite){Tab->error_="document-save-target-busy";update();return;}
+            // A repeated request supersedes the single queued snapshot, including
+            // an undo back to the in-flight content. No unrequested typing is saved.
+            if(Request->content_==Tab->activeSave_->content_)Tab->queuedSave_.reset();
+            else {Request->encoder_=Tab->pane_->CaptureSave(Destination,Original && SaveEpubOriginal);Tab->queuedSave_=std::move(Request);}
+            update();return;
+        }
+        Request->encoder_=Tab->pane_->CaptureSave(Destination,Original && SaveEpubOriginal);
+        startSave(Tab,std::move(Request));
+    }
+    void DocumentWorkspaceWidget::startSave(const std::shared_ptr<Tab>& Tab,std::shared_ptr<LocalSave> Request)
+    {
+        const auto Destination=Request->destination_;
+        const bool ExportOnly=Tab->pane_->ViewState().contains("reading");
+        std::optional<SaveTicket> Ticket;
+        if(!ExportOnly) {
+            auto Started=Tab->session_->SaveSnapshot({Request->original_?SaveDisposition::Original:SaveDisposition::SaveAs,Destination.toUtf8().toStdString()},Request->revision_,Request->content_);
+            if(!Started.HasValue()){Tab->error_=QString::fromStdString(Started.Failure().code_);update();return;}
+            Ticket=Started.Value();
+        }
+        const auto Expected=Request->original_?storage::DestinationExpectation{true,Tab->input_.source_.id_.revision_}:storage::DestinationExpectation{};
+        const auto Hash=Request->original_?Tab->input_.hash_:QByteArray{};
         externalWatcher_->beginSelfWrite(Destination);
-        Tab->saving_ = true; Tab->error_.clear(); Tab->cancellation_ = std::make_shared<std::stop_source>();
-        auto* Watcher = new QFutureWatcher<storage::Result<LocalSaveResult>>(this);
-        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, Destination, Ticket, Bytes] {
-            auto Result = Watcher->result(); Watcher->deleteLater(); Tab->saving_ = false;
-            externalWatcher_->endSelfWrite(Destination, Result.HasValue() && Result.Value().receipt_.destinationCommitted_);
-            if (Tab->closed_) return;
-            DocumentSaveResult Completion;
-            if (!Result.HasValue()) Completion.error_ = Result.Failure();
-            else {
-                Completion.committed_ = Result.Value().receipt_.destinationCommitted_; Completion.cleanupErrors_ = Result.Value().receipt_.cleanupErrors_;
-                Completion.source_ = SourceIdentity{Result.Value().source_, {}, Destination.toUtf8().toStdString(), {}, Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u)};
+        Tab->activeSave_=Request;Tab->saving_=true;Tab->error_.clear();Tab->cancellation_=std::make_shared<std::stop_source>();
+        struct Output {storage::Result<LocalSaveResult> result_;QByteArray bytes_;mrst::ExternalChangeWatcher::Fingerprint fingerprint_;};
+        auto* Watcher=new QFutureWatcher<Output>(this);
+        connect(Watcher,&QFutureWatcherBase::finished,this,[this,Tab,Watcher,Request,Ticket,Destination,ExportOnly]{
+            auto Output=Watcher->result();auto& Result=Output.result_;Watcher->deleteLater();Tab->saving_=false;Tab->activeSave_.reset();
+            const bool Committed=Result.HasValue() && Result.Value().receipt_.destinationCommitted_;
+            if(Committed && !ExportOnly)externalWatcher_->endSelfWrite(Destination,Output.fingerprint_);
+            else externalWatcher_->endSelfWrite(Destination,false);
+            if(Tab->closed_)return;
+            if(Ticket) {
+                DocumentSaveResult Completion;
+                if(!Result.HasValue())Completion.error_=Result.Failure();
+                else {
+                    Completion.committed_=Committed;Completion.cleanupErrors_=Result.Value().receipt_.cleanupErrors_;
+                    Completion.source_=SourceIdentity{Result.Value().source_,{},Destination.toUtf8().toStdString(),{},Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u)};
+                }
+                if(!Tab->session_->CompleteSave(*Ticket,std::move(Completion)))return;
             }
-            if (!Tab->session_->CompleteSave(Ticket, std::move(Completion))) return;
-            if (!Result.HasValue()) { Tab->error_ = QString::fromStdString(Result.Failure().code_); Tab->closeAfterSave_ = false; closingWorkspace_ = false; }
-            else {
-                if(!Tab->Dirty())Tab->pane_->Commit(Destination, Bytes);
-                Tab->path_ = Destination; Tab->displayName_.clear(); Tab->input_.source_ = Result.Value().source_; Tab->input_.hash_ = Result.Value().hash_;
-                Tab->originalAuthority_ = true;
-                Tab->originalSave_ = Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u); Tab->recovered_ = false; Tab->recoveredName_.clear();
-                Tab->checkpointedRevision_ = std::numeric_limits<std::uint64_t>::max();
-                Tab->broker_ = false; Tab->sourceToken_.clear();
-                if (!Result.Value().receipt_.cleanupErrors_.empty()) Tab->error_ = "document-saved-cleanup-warning";
-                cleanupRecovery(Tab, Ticket.revision_);
-                if (Tab->closeAfterSave_ && !Tab->Dirty()) retire(Tab, true);
-                else Tab->closeAfterSave_ = false;
+            if(!Committed) {
+                Tab->error_=Result.HasValue()?"document-not-committed":QString::fromStdString(Result.Failure().code_);
+                Tab->pane_->ReportSaveFailure(QByteArray::fromStdString(Request->content_),Tab->error_);
+                // A failed/conflicting write never starts a queued write blindly.
+                Tab->queuedSave_.reset();Tab->closeAfterSave_=false;closingWorkspace_=false;
+            } else if(!ExportOnly) {
+                Tab->error_.clear();
+                Tab->pane_->CommitSaved(Destination,Output.bytes_,QByteArray::fromStdString(Request->content_),Result.Value().hash_);
+                Tab->path_=Destination;Tab->displayName_.clear();Tab->input_.source_=Result.Value().source_;Tab->input_.hash_=Result.Value().hash_;
+                Tab->originalAuthority_=true;Tab->originalSave_=Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u);
+                Tab->recovered_=false;Tab->recoveredName_.clear();Tab->broker_=false;Tab->sourceToken_.clear();
+                Tab->checkpointedRevision_=std::numeric_limits<std::uint64_t>::max();
+                cleanupRecovery(Tab,Ticket->revision_);
             }
-            update(); tryFinishClose();
+            if(Committed && !Result.Value().receipt_.cleanupErrors_.empty())Tab->error_="document-saved-cleanup-warning";
+            if(Committed && Tab->queuedSave_) {
+                auto Next=std::exchange(Tab->queuedSave_,{});
+                // Save As has adopted its destination; the next write must use the
+                // just-committed identity/hash, never overwrite a newly changed file.
+                Next->original_=true;Next->overwrite_=false;
+                if(Tab->originalSave_ && Tab->error_.isEmpty()){startSave(Tab,std::move(Next));return;}
+                Tab->closeAfterSave_=false;closingWorkspace_=false;
+            }
+            if(Committed && Tab->closeAfterSave_ && !Tab->Dirty())retire(Tab,true);
+            else Tab->closeAfterSave_=false;
+            update();tryFinishClose();
         });
-        auto Cancellation = Tab->cancellation_;
-        const bool Image = Tab->pane_->ViewId() == "image";
-        Watcher->setFuture(QtConcurrent::run([Destination, Bytes, Expected, Hash, Cancellation, Original, Overwrite, Image, Unlimited=hosted_] {
-            storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-
-            auto Expectation = Expected; auto ContentHash = Hash;
-            if (Overwrite && QFileInfo::exists(Destination)) {
-                auto Existing = ReadDocumentFile(Destination, Context, Unlimited); if (!Existing.HasValue()) return storage::Result<LocalSaveResult>{Existing.Failure()};
-                Expectation = {true, Existing.Value().source_.id_.revision_}; ContentHash = Existing.Value().hash_;
-            }
-            return SaveTextFile(Destination, Bytes, Expectation, ContentHash, Context, Image, Unlimited);
-        })); update();
+        const bool Image=Tab->pane_->ViewId()=="image";
+        const auto Cancellation=Tab->cancellation_;
+        Watcher->setFuture(QtConcurrent::run([Request,Expected,Hash,Cancellation,Image,Unlimited=hosted_]() mutable ->Output {
+            try {
+                storage::OperationContext Context;Context.stopToken_=Cancellation->get_token();Context.deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(150);
+                auto Encoded=Request->encoder_(Context);if(!Encoded.HasValue())return {Encoded.Failure(),{}};
+                auto Bytes=std::move(Encoded.Value());
+                if(auto Stop=Context.Check({"document"}))return {*Stop,{}};
+                auto Expectation=Expected;auto ContentHash=Hash;
+                if(Request->overwrite_ && QFileInfo::exists(Request->destination_)) {
+                    auto Existing=ReadDocumentFile(Request->destination_,Context,Unlimited);if(!Existing.HasValue())return {Existing.Failure(),{}};
+                    Expectation={true,Existing.Value().source_.id_.revision_};ContentHash=Existing.Value().hash_;
+                }
+                auto Result=SaveTextFile(Request->destination_,Bytes,Expectation,ContentHash,Context,Image,Unlimited);
+                const auto Fingerprint=Result.HasValue()?mrst::ExternalChangeWatcher::fingerprintOf(Request->destination_):mrst::ExternalChangeWatcher::Fingerprint{};
+                return {std::move(Result),std::move(Bytes),Fingerprint};
+            } catch(const std::exception&) {return {storage::Error{storage::ErrorCategory::Unavailable,"document-save-worker-failed"},{}};}
+        }));update();
     }
     void DocumentWorkspaceWidget::cleanupRecovery(const std::shared_ptr<Tab>& Tab, std::uint64_t ThroughRevision)
     {
@@ -1026,8 +1081,11 @@ namespace hc::document
             auto* Watcher = new QFutureWatcher<storage::Result<RecoverySnapshot>>(this);
             connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, Revision, SavedRevision = Record.document_.savedRevision_, SourcePath = Record.document_.source_.localPath_] {
                 const bool Stored = Watcher->result().HasValue(); Watcher->deleteLater(); Tab->checkpointing_ = false;
-                if (!Stored) Tab->error_ = "document-recovery-write-failed";
-                else Tab->checkpointedRevision_ = SavedRevision == Tab->session_->Snapshot().savedRevision_ && SourcePath == Tab->session_->Snapshot().source_.localPath_
+                const bool CurrentBaseline=SavedRevision==Tab->session_->Snapshot().savedRevision_ && SourcePath==Tab->session_->Snapshot().source_.localPath_;
+                // A completed save retires older checkpoints. A store rejected by
+                // that retirement is not a failure of the current dirty revision.
+                if (!Stored && CurrentBaseline) Tab->error_ = "document-recovery-write-failed";
+                else Tab->checkpointedRevision_ = Stored && CurrentBaseline
                     ? Revision : std::numeric_limits<std::uint64_t>::max();
                 if (Tab->hostSlot_ && !pendingHostOpen_.isEmpty()) {
                     if (Stored && !Tab->closed_) Checkpoint();
@@ -1060,7 +1118,7 @@ namespace hc::document
                 {"imagePresentationReady", !Tab->closeRequested_ && !closingWorkspace_ && Code.isEmpty()
                     && (Tab->loading_ || Tab->navigating_ ? Tab->pane_->HasLoadingPreview() : Tab->pane_->ImagePresentationReady())},
                 {"dirty", State.dirty_}, {"loading", Tab->loading_ || Tab->navigating_ || (Tab->pane_->IsProcessDocument()&&State.lifecycle_==DocumentLifecycle::Opening)},
-                {"saving", Tab->saving_ || !Tab->pendingToken_.isEmpty()}, {"revision", QString::number(State.revision_)},
+                {"saving", Tab->saving_ || !Tab->pendingToken_.isEmpty()}, {"saveQueued", bool(Tab->queuedSave_)}, {"revision", QString::number(State.revision_)},
                 {"savedRevision", QString::number(State.savedRevision_)}, {"generation", QString::number(State.generation_)},
                 {"lifecycle", Life(State.lifecycle_)}, {"saveState", SaveState(State.saveState_)}, {"error", Code},
                 {"errorCategory", State.error_ ? int(State.error_->category_) : -1}, {"cleanupWarnings", Cleanup},
@@ -1197,7 +1255,7 @@ namespace hc::document
         }
         if (Action == "open" || Action == "openHost") return open(Request["path"].toString(), Action == "openHost", Request["sourceToken"].toString(), Request["broker"].toBool());
         if (Action == "chrome") { if (!ApplyChromeSettings(Request["settings"].toObject())) return Error("document-chrome-settings"); emit ChromeSettingsChanged(chrome_->Settings()); return {{"accepted", true}}; }
-        if (Action == "cancelHost") { for (const auto& Tab : documents_) if (Tab->hostSlot_) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); } return {{"accepted", true}}; }
+        if (Action == "cancelHost") { for (const auto& Tab : documents_) if (Tab->hostSlot_) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->queuedSave_.reset();Tab->composingSave_=false;Tab->pane_->Cancel(); } return {{"accepted", true}}; }
         if (Action == "checkpoint") { Checkpoint(); return {{"accepted", true}}; }
         if(Action=="editResult"){
             if(editRequest_.isEmpty()||Request["token"]!=editRequest_["token"])return Error("document-edit-token");
@@ -1240,11 +1298,11 @@ namespace hc::document
         auto Tab = find(Request["documentId"].toString()); if (!Tab) return Error("document-stale-id");
         if (Request.contains("generation") && Request["generation"].toString() != QString::number(Tab->session_->Snapshot().generation_)) return Error("document-stale-generation");
         if (Request.contains("revision") && Action != "commitSave" && Action != "saveRead" && Request["revision"].toString() != QString::number(Tab->Revision())) return Error("document-stale-revision");
-        if (Action == "cancel") { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); return {{"accepted", true}}; }
+        if (Action == "cancel") { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->queuedSave_.reset();Tab->composingSave_=false;Tab->pane_->Cancel(); return {{"accepted", true}}; }
         if (Action == "reload") { if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-reload-dirty"); load(Tab, Request["discard"].toBool()); return {{"accepted", true}}; }
         if(Tab->pane_->IsProcessDocument()&& !(Tab->pane_->CanEditEpub() && (Action=="saveAs" || Action=="save")) && (Action=="save"||Action=="saveAs"||Action=="prepareSave"))return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
         if (Action == "close") {
-            if (Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
+            if (Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
             if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-close-dirty");
             retire(Tab, Request["discard"].toBool()); update(); return {{"accepted", true}};
         }
@@ -1263,7 +1321,11 @@ namespace hc::document
         else if (Action == "selectAll") Tab->pane_->Execute(Request);
         else if (Action == "undo") Tab->pane_->Undo();
         else if (Action == "redo") Tab->pane_->Redo();
-        else if (Action == "save") { if (Tab->broker_) return prepareSave(Tab); save(Tab, Tab->path_, Tab->pane_->IsEpub()?false:Request["overwrite"].toBool(), Tab->pane_->CanEditEpub()); }
+        else if (Action == "save") {
+            if (Tab->broker_) return prepareSave(Tab);
+            if(Tab->activeSave_)save(Tab,Tab->activeSave_->destination_,Tab->activeSave_->overwrite_,Tab->activeSave_->original_ && Tab->pane_->CanEditEpub());
+            else save(Tab,Tab->path_,Tab->pane_->IsEpub()?false:Request["overwrite"].toBool(),Tab->pane_->CanEditEpub());
+        }
         else if (Action == "saveAs") save(Tab, Request["path"].toString(), Request["overwrite"].toBool());
         else if (Action == "prepareSave") return prepareSave(Tab);
         else if (Action == "saveRead") {
@@ -1351,10 +1413,11 @@ namespace hc::document
         for (const auto& Item : {std::pair{"saveDocument", Capability.save_ || Capability.saveAs_},
             std::pair{"saveDocumentAs", Capability.saveAs_}, std::pair{"undoDocument", Capability.undo_}, std::pair{"redoDocument", Capability.redo_},
             std::pair{"closeDocument", Capability.close_ && Tab && !Tab->checkpointing_},
-            std::pair{"resolveDocumentConflict", Tab && Capability.view_ && Tab->session_->Snapshot().saveState_ == DocumentSaveState::Conflict}, std::pair{"cancelDocument", Capability.cancel_ || (Tab && Tab->pane_->IsBusy())},
+            std::pair{"resolveDocumentConflict", Tab && Capability.view_ && Tab->session_->Snapshot().saveState_ == DocumentSaveState::Conflict}, std::pair{"cancelDocument", Capability.cancel_ || (Tab && (Tab->composingSave_ || Tab->pane_->IsBusy()))},
             std::pair{"reloadDocument", Tab && !Tab->saving_ && Tab->pendingToken_.isEmpty()}}) {
             if (auto* Action = findChild<QAction*>(Item.first)) Action->setEnabled(Item.second);
         }
+        if(Tab && Tab->activeSave_)findChild<QAction*>("saveDocument")->setEnabled(true);
         const bool Hwp=Tab&&Tab->pane_->IsHwp();
         auto* EditHwp=findChild<QAction*>("editHwpDocument");EditHwp->setVisible(Hwp);
         EditHwp->setEnabled(Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy()&&Tab->pane_->ViewState()["ready"].toBool()&&editRequest_.isEmpty());
@@ -1365,7 +1428,7 @@ namespace hc::document
             // Both commands apply and validate; only an authoritative local source permits original Save.
             // Draft writes and discovery do not mutate the live source and may overlap a save.
             const bool CanSave = !hosted_ && !Tab->loading_ && !Tab->saving_ && !Tab->choosingSavePath_ && Tab->pendingToken_.isEmpty() && Tab->pane_->CanPrepareEpubSave();
-            findChild<QAction*>("saveDocument")->setEnabled(CanSave && Tab->originalSave_);findChild<QAction*>("saveDocumentAs")->setEnabled(CanSave);
+            findChild<QAction*>("saveDocument")->setEnabled(CanSave && Tab->originalSave_ || bool(Tab->activeSave_));findChild<QAction*>("saveDocumentAs")->setEnabled(CanSave);
         }
         if(auto* Reopen=findChild<QAction*>("epubReopenDocument"))Reopen->setVisible(Tab && Tab->pane_->IsEpub() && Tab->pane_->findChild<QAction*>("epubReopen"));
         findChild<QAction*>("printDocument")->setEnabled(Tab&&(!Tab->pane_->IsMarkdown()||Tab->pane_->MarkdownSourceVisible())&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
@@ -1404,7 +1467,8 @@ namespace hc::document
             else if(State.saveState_==DocumentSaveState::Conflict){MessageText=tr("⚠ 원본 변경 충돌");Detail=Message("external-changed");}
             else if(!Code.isEmpty()){MessageText=State.saveState_==DocumentSaveState::Failed?tr("⚠ 저장 실패"):tr("⚠ 문서 오류");Detail=Message(Code)+"\n"+Code;}
             else if(Tab->loading_||Tab->navigating_)MessageText=tr("여는 중…");
-            else if(Tab->saving_||!Tab->pendingToken_.isEmpty())MessageText=tr("저장 중…");
+            else if(Tab->composingSave_)MessageText=tr("한글 조합 완료 후 저장…");
+            else if(Tab->saving_||!Tab->pendingToken_.isEmpty())MessageText=Tab->queuedSave_?tr("저장 중 · 다음 저장 예약됨…"):tr("저장 중…");
             else if(Tab->pane_->IsBusy())MessageText=tr("처리 중…");
             if(Tab->Dirty())MessageText+=(MessageText.isEmpty()?QString{}:QString(" · "))+tr("미저장");
             if(!MessageText.isEmpty())Fields.append(DocumentStatusField{"state",MessageText,{},Detail,{},true,true});
@@ -1431,7 +1495,7 @@ namespace hc::document
         auto Target = documents_[Index];
         Target->closeRequested_ = true;
         if(Target->pane_->IsProcessDocument()&&!Target->pane_->CanEditEpub()&&!Target->pane_->RequestClose())return;
-        if (Target->choosingSavePath_ || Target->saving_ || !Target->pendingToken_.isEmpty() || Target->checkpointing_ || Target->pane_->IsEditing()
+        if (Target->choosingSavePath_ || Target->saving_ || Target->composingSave_ || !Target->pendingToken_.isEmpty() || Target->checkpointing_ || Target->pane_->IsEditing()
             || (Target->pane_->ViewId() != "image" && Target->pane_->IsBusy())) return;
         Target->closeRequested_ = false;
         if (Target->Dirty()) {

@@ -207,7 +207,7 @@ void ExternalChangeWatcher::setWatchedFiles( const QStringList& filePaths )
 
         Entry entry;
         entry.path     = it.value();
-        entry.baseline = fingerprintOf( entry.path );
+        entry.baseline = savedFingerprints_.contains(it.key()) ? savedFingerprints_.take(it.key()) : fingerprintOf( entry.path );
         entries_.insert( it.key(), entry );
         if( isEnabled() && detection_ == Detection::Notify )
             attachOsWatch( entries_[ it.key() ] );
@@ -267,6 +267,18 @@ void ExternalChangeWatcher::endSelfWrite( const QString& filePath, bool synchron
         if( synchronized ) markSynchronized( it->path );
         else scheduleProbe( key ); // Failed/conflicting saves must not hide another writer's change.
     }
+}
+
+void ExternalChangeWatcher::endSelfWrite(const QString& filePath,const Fingerprint& fingerprint)
+{
+    const auto Key=keyFor(filePath);
+    auto It=entries_.find(Key);
+    if(It==entries_.end()){savedFingerprints_.insert(Key,fingerprint);return;}
+    if(It->selfWrites>0)--It->selfWrites;
+    if(It->selfWrites==0){It->baseline=fingerprint;It->probing=false;pending_.remove(Key);}
+    // The directory watch survives replacement. Polling is the fallback if the
+    // replaced file's notification was lost; setup runs outside save completion.
+    It->pollFallback=true;updatePollTimerState();
 }
 
 void ExternalChangeWatcher::recheckAll()

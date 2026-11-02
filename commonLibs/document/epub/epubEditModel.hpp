@@ -36,6 +36,8 @@ private:
     QJsonObject publication_;QString error_;QMap<QString,QString> media_;
     QMap<QString,QByteArray> replacements_;
     mutable QMap<QString,QByteArray> fingerprintChanges_;
+    mutable QMap<QString,QByteArray> fingerprintDraft_,resourceHashes_;
+    mutable QString resourceHashEdition_;
     mutable QString fingerprintEdition_;mutable QByteArray fingerprint_;
     struct Change{State before_,after_;};QList<Change> history_;qsizetype position_=0;
 };

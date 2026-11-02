@@ -51,7 +51,10 @@ void EditModel::accept(QByteArray Bytes,const QJsonObject& Publication) {
 }
 QByteArray EditModel::Read(const QString& Path)const {
     if(!media_.contains(Path))return {};if(replacements_.contains(Path))return replacements_[Path];
-    try {const Cancellation Cancel;return detail::Archive(edition_,Cancel,32*1024*1024).Read(Path);}catch(const detail::Rejected&){return {};}
+    try {const Cancellation Cancel;const auto Bytes=detail::Archive(edition_,Cancel,32*1024*1024).Read(Path);
+        const auto Edition=publication_["sourceSha256"].toString();if(resourceHashEdition_!=Edition){resourceHashes_.clear();resourceHashEdition_=Edition;}
+        resourceHashes_[Path]=QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256);return Bytes;
+    }catch(const detail::Rejected&){return {};}
 }
 void EditModel::assign(const QString& Path,const QByteArray& Bytes) {
     const Cancellation Cancel;const detail::Archive Archive(edition_,Cancel,32*1024*1024);if(Archive.Read(Path)==Bytes)replacements_.remove(Path);else replacements_[Path]=Bytes;
@@ -77,14 +80,22 @@ QString EditModel::RestoreStructuralBytes(const QByteArray& Bytes) {
     edition_=Bytes;publication_=Candidate.publication_;media_=Candidate.media_;replacements_.clear();return {};
 }
 QByteArray EditModel::Fingerprint(const QMap<QString,QByteArray>& Draft)const {
-    auto Changes=replacements_;for(auto I=Draft.begin();I!=Draft.end();++I)Changes[I.key()]=I.value();
-    if(Changes.isEmpty())return QByteArray::fromHex(publication_["sourceSha256"].toString().toLatin1());
     const auto Edition=publication_["sourceSha256"].toString();
+    if(fingerprintEdition_==Edition && fingerprintChanges_==replacements_ && fingerprintDraft_==Draft)return fingerprint_;
+    auto Changes=replacements_;
+    for(auto I=Draft.begin();I!=Draft.end();++I) {
+        // Applying a saved draft back to the original resource must not change
+        // its content identity. Read cached this small digest while opening it;
+        // fingerprinting never reopens/decompresses the book on the GUI thread.
+        if(resourceHashEdition_==Edition && resourceHashes_.contains(I.key()) && resourceHashes_[I.key()]==QCryptographicHash::hash(I.value(),QCryptographicHash::Sha256))Changes.remove(I.key());
+        else Changes[I.key()]=I.value();
+    }
     // Content equality includes the immutable edition, resource paths and bytes;
     // undo, structural edits and drafts cannot inherit another revision's hash.
-    if(fingerprintEdition_==Edition && fingerprintChanges_==Changes)return fingerprint_;
+    fingerprintEdition_=Edition;fingerprintChanges_=replacements_;fingerprintDraft_=Draft;
+    if(Changes.isEmpty()){fingerprint_=QByteArray::fromHex(Edition.toLatin1());return fingerprint_;}
     QCryptographicHash Hash(QCryptographicHash::Sha256);Hash.addData(Edition.toLatin1());
-    for(auto I=Changes.begin();I!=Changes.end();++I){Hash.addData(I.key().toUtf8());Hash.addData(QByteArray(1,0));Hash.addData(QCryptographicHash::hash(I.value(),QCryptographicHash::Sha256).toHex());}fingerprintEdition_=Edition;fingerprintChanges_=std::move(Changes);fingerprint_=Hash.result();return fingerprint_;
+    for(auto I=Changes.begin();I!=Changes.end();++I){Hash.addData(I.key().toUtf8());Hash.addData(QByteArray(1,0));Hash.addData(QCryptographicHash::hash(I.value(),QCryptographicHash::Sha256).toHex());}fingerprint_=Hash.result();return fingerprint_;
 }
 EditOutput EditModel::Export(const QMap<QString,QByteArray>& Draft,const Cancellation& Cancel)const {
     auto Changes=replacements_;for(auto I=Draft.begin();I!=Draft.end();++I){if(!media_.contains(I.key()) || I.value().isEmpty() || I.value().size()>(media_[I.key()].startsWith("image/")?8*1024*1024:2*1024*1024))return {{},"epub-edit-resource-budget",I.key()};Changes[I.key()]=I.value();}

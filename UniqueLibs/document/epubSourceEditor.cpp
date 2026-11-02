@@ -17,6 +17,10 @@
 #include <QImageReader>
 #include <QInputMethodEvent>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QProcess>
+#include <QSaveFile>
+#include <QStandardPaths>
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -84,7 +88,12 @@ void EpubSourceEditor::reportDraft(const QString& Text){draftMessage_=Text;updat
 void EpubSourceEditor::reportPreview(const QString& Text){previewMessage_=Text;updateStatus();}
 QWidget* EpubSourceEditor::SourceInput()const{return text_->Backend()->widget();}
 QString EpubSourceEditor::mediaOf(const QString& Path)const{for(const auto& Value:model_.Publication()["resources"].toArray())if(Value.toObject()["path"]==Path)return Value.toObject()["mediaType"].toString();return {};}
-QMap<QString,QByteArray> EpubSourceEditor::draft()const {if(ready_ && !current_.isEmpty() && sourceShown() && sourceModified())return {{current_,sourceBytes()}};return {};}
+QMap<QString,QByteArray> EpubSourceEditor::draft()const {
+    // A disk savepoint does not apply/reload the live model. Keep its source overlay
+    // even after Scintilla's savepoint moves, until flush applies it to the model.
+    if(ready_ && !current_.isEmpty() && sourceShown() && sourceBytes()!=sourceBuffers_.value(current_).applied_)return {{current_,sourceBytes()}};
+    return {};
+}
 QByteArray EpubSourceEditor::Token()const {if(!ready_)return baseToken_;const auto Value=model_.Fingerprint(draft());return Value==reference_?baseToken_:Value;}
 bool EpubSourceEditor::flush(){
     if(!ready_ || sourceComposing_)return false;const auto Draft=draft();saveSourceState();
@@ -196,6 +205,75 @@ bool EpubSourceEditor::PrepareSave(bool SaveAs) {
     else validate(true);
     return false;
 }
+DocumentEncoder EpubSourceEditor::CaptureSave(const QString& Destination,bool SaveOriginal) {
+    ReloadValidationSettings();
+    const bool Available=ready_ && !sourceComposing_ && !structuring_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty();
+    return [Model=model_,Draft=draft(),Destination,SaveOriginal,Available,Paths=protectedPaths_,Ids=identities_,Source=sourcePath_,Settings=checkerSettings_,
+            Required=standardValidationRequired(),Cached=cachedExportToken_==Token()?cachedExport_:epub::EditOutput{},
+            Checked=checkerVerifiedToken_==Token()](storage::OperationContext Context)->storage::Result<QByteArray> {
+        using namespace storage;
+        if(!Available)return Error{ErrorCategory::InvalidRequest,"epub-edit-save-busy"};
+        if(QFileInfo(Destination).suffix().compare("epub",Qt::CaseInsensitive)!=0)return Error{ErrorCategory::Unsupported,"epub-edit-save-as-epub-required"};
+        if(auto Stop=Context.Check({"document"}))return *Stop;
+        // Network identity probes belong to the worker, including hard-link aliases.
+        if(!SaveOriginal && (Paths.contains(QFileInfo(Destination).absoluteFilePath().toCaseFolded()) || Ids.contains(identity(Destination)) || (!identity(Source).isEmpty() && identity(Source)==identity(Destination))))
+            return Error{ErrorCategory::AccessDenied,"epub-edit-source-overwrite-denied"};
+        const auto Output=Cached?Cached:Model.Export(Draft,[Context]{return Context.Check({"document"}).has_value();});
+        if(auto Stop=Context.Check({"document"}))return *Stop;
+        if(!Output)return Error{ErrorCategory::InvalidRequest,(Output.error_+": "+Output.location_).toStdString()};
+        if(Required && !Checked) {
+            auto Java=Settings["javaPath"].toString().trimmed();if(Java.isEmpty())Java=QStandardPaths::findExecutable("java");
+            const auto Jar=Settings["epubcheckJar"].toString().trimmed();
+            if(!QFileInfo(Java).isAbsolute() || !QFileInfo(Java).isFile() || !QFileInfo(Jar).isAbsolute() || !QFileInfo(Jar).isFile()
+                || QFileInfo(Jar).suffix().compare("jar",Qt::CaseInsensitive)!=0)return Error{ErrorCategory::InvalidRequest,"epubcheck-configure-java-and-epubcheck"};
+            QTemporaryDir Directory;if(!Directory.isValid())return Error{ErrorCategory::Unavailable,"epubcheck-temporary-directory"};
+            const auto Candidate=Directory.filePath("candidate.epub");QSaveFile File(Candidate);File.setDirectWriteFallback(false);
+            if(!File.open(QIODevice::WriteOnly) || File.write(Output.bytes_)!=Output.bytes_.size() || !File.commit())return Error{ErrorCategory::Unavailable,"epubcheck-temporary-publication"};
+            QProcess Checker;Checker.setProcessChannelMode(QProcess::MergedChannels);
+            Checker.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* Args){Args->flags|=CREATE_NO_WINDOW;});
+            Checker.setWorkingDirectory(Directory.path());Checker.start(Java,{"-Xmx256m","-Djava.awt.headless=true","-jar",Jar,Candidate,"--json",Directory.filePath("report.json"),"--locale","en"});
+            if(!Checker.waitForStarted(5000))return Error{ErrorCategory::Unavailable,"epubcheck-start-failed"};
+            QByteArray Log;
+            while(Checker.state()!=QProcess::NotRunning) {
+                Checker.waitForFinished(50);Log+=Checker.readAll();
+                const auto Stop=Context.Check({"document"});
+                if(Stop || Log.size()>128*1024 || QFileInfo(Directory.filePath("report.json")).size()>8*1024*1024) {
+                    Checker.kill();Checker.waitForFinished(1000);
+                    if(Stop)return *Stop;
+                    return Error{ErrorCategory::BudgetExceeded,"epubcheck-output-limit"};
+                }
+            }
+            QFile Report(Directory.filePath("report.json"));
+            if(Checker.exitStatus()!=QProcess::NormalExit || Checker.exitCode()!=0 || Report.size()<=0 || Report.size()>8*1024*1024 || !Report.open(QIODevice::ReadOnly))
+                return Error{ErrorCategory::InvalidRequest,"epubcheck-failed-or-invalid-report"};
+            QJsonParseError Parse;const auto Json=QJsonDocument::fromJson(Report.readAll(),&Parse);const auto Root=Json.object(),Summary=Root["checker"].toObject();
+            if(Parse.error!=QJsonParseError::NoError || !Json.isObject() || !Root["messages"].isArray() || Root["messages"].toArray().size()>2000
+                || Summary["checkerVersion"].toString().isEmpty() || Summary["nError"].toInt(-1)!=0 || Summary["nFatal"].toInt(-1)!=0)
+                return Error{ErrorCategory::InvalidRequest,"epubcheck-failed-or-invalid-report"};
+            for(const auto& Item:Root["messages"].toArray()) {
+                const auto Row=Item.toObject();const auto Severity=Row["severity"].toString();
+                if(Severity.isEmpty() || !Row["ID"].isString() || !Row["message"].isString() || Severity=="ERROR" || Severity=="FATAL")
+                    return Error{ErrorCategory::InvalidRequest,"epubcheck-failed-or-invalid-report"};
+            }
+        }
+        return Output.bytes_;
+    };
+}
+void EpubSourceEditor::CommitSaved(const QString& Path,const QByteArray& Content,const QByteArray& Hash) {
+    savedToken_=QByteArray::fromHex(Content.mid(5));sourcePath_=Path;sourceHashAtOpen_=Hash;
+    const auto Target=QFileInfo(Path).absoluteFilePath().toCaseFolded();if(!protectedPaths_.contains(Target))protectedPaths_.append(Target);
+    // Never reload the model/documents or move focus on save completion. A newer
+    // draft and its recovery record remain owned by the current editor.
+    if(!IsModified()){error_.clear();if(sourceShown())text_->CommitContent();DiscardRecovery();resetRecoverySession();}
+    else {draftWrittenToken_.clear();draftTimer_.start();}
+    report(IsModified()?tr("저장 완료 · 추가 변경 있음"):tr("저장 완료"));emit StateChanged();
+}
+void EpubSourceEditor::ReportSaveFailure(const QByteArray& Content,const QString& Error) {
+    // The failing snapshot can be older than the displayed source. Do not mark
+    // the newer source invalid, but retain a visible failure for this request.
+    if(Content=="epub:"+Token().toHex())error_=Error;
+    report(tr("저장 실패: %1 · 편집 내용은 유지됩니다. 소스와 검사 설정을 확인한 뒤 다시 저장하십시오.").arg(Error));emit StateChanged();
+}
 storage::Result<QByteArray> EpubSourceEditor::Export(const QString& Destination,bool SaveOriginal)const {
     if(!ready_ || QFileInfo(Destination).suffix().compare("epub",Qt::CaseInsensitive)!=0)return storage::Error{storage::ErrorCategory::Unsupported,"epub-edit-save-as-epub-required"};
     const auto Target=QFileInfo(Destination).absoluteFilePath().toCaseFolded();
@@ -219,7 +297,7 @@ bool EpubSourceEditor::eventFilter(QObject* Object,QEvent* Event) {
        (Event->type()==QEvent::Move || Event->type()==QEvent::Resize || Event->type()==QEvent::Show || Event->type()==QEvent::LayoutRequest))
         QTimer::singleShot(0,this,&EpubSourceEditor::alignPreview);
     if(Object==SourceInput() && Event->type()==QEvent::InputMethod) {
-        sourceComposing_=!static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();text_->setProperty("epubSourceComposing",sourceComposing_);
+        sourceComposing_=!static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();text_->setProperty("epubSourceComposing",sourceComposing_);setProperty("epubSourceComposing",sourceComposing_);
         if(!sourceComposing_)QTimer::singleShot(0,this,[this]{if(sourceComposing_)return;if(previewCandidate_)admitPreview(previewCandidate_);if(action("epubAutoPreview")->isChecked())previewTimer_.start();});
     }
     if(Object==SourceInput() && Event->type()==QEvent::FocusIn)updateActions();

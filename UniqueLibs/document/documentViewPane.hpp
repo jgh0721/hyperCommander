@@ -42,6 +42,9 @@ namespace hc::document
         QByteArray Content() const;
         QByteArray SessionContent() const;
         storage::Result<QByteArray> Export(const QString& Destination,bool SaveEpubOriginal=false) const;
+        DocumentEncoder CaptureSave(const QString& Destination, bool SaveEpubOriginal = false) const;
+        void CommitSaved(const QString& Path, const QByteArray& Bytes, const QByteArray& Content, const QByteArray& Hash);
+        void ReportSaveFailure(const QByteArray& Content, const QString& Error);
         QJsonObject Execute(const QJsonObject& Request);
         QString ViewId() const { return viewId_; }
         bool IsBusy() const;

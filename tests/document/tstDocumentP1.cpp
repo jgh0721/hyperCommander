@@ -1,6 +1,10 @@
 ﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <QtTest>
+#include <QtConcurrentRun>
+#include <QSemaphore>
+#include <QThreadPool>
+#include <atomic>
 #include "../nativeTestInput.hpp"
 #include "text/QTextView.h"
 #include "commonLibs/layout/productLayout.hpp"
@@ -154,6 +158,62 @@ private slots:
         QVERIFY(QFile::exists(QString::fromStdString(First.Value().snapshotPath_)));
         QVERIFY(Store.Remove(Record.document_.id_, 3).HasValue());
         QVERIFY(!QFile::exists(QString::fromStdString(First.Value().snapshotPath_)));
+    }
+    void queuedSaveSnapshots_data()
+    {
+        QTest::addColumn<QString>("RootPath");
+        QTest::newRow("local") << QDir::tempPath();
+        QTest::newRow("smb") << qEnvironmentVariable("HC_SAVE_SMB_ROOT", "//DEVTESTER-QTS/Public");
+        QTest::newRow("tsclient") << qEnvironmentVariable("HC_SAVE_TSCLIENT_ROOT", "//tsclient/C");
+    }
+    void queuedSaveSnapshots()
+    {
+        QFETCH(QString,RootPath);
+        if(!QDir(RootPath).exists())QSKIP(qPrintable("Unavailable test root: "+RootPath));
+        QTemporaryDir Root(QDir(RootPath).filePath("hc-async-save-XXXXXX"));QVERIFY2(Root.isValid(),qPrintable(RootPath));
+        QTemporaryDir Config;const auto Path=Root.filePath("owned.txt");QVERIFY(Put(Path,"base\r\n"));
+        DocumentWorkspaceWidget Widget(Config.filePath("recovery"));Widget.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});Widget.show();
+        const auto Id=Widget.Handle({{"action","open"},{"path",Path}})["documentId"].toString();QTRY_VERIFY_WITH_TIMEOUT(Ready(Widget,Id),30000);
+        const auto Replace=[&](const QString& Text){return !Widget.Handle({{"action","replaceText"},{"documentId",Id},{"text",Text}}).contains("error");};
+        QVERIFY(Replace("first\n"));
+        auto* Pool=QThreadPool::globalInstance();const auto Threads=Pool->maxThreadCount();Pool->setMaxThreadCount(1);
+        const auto Gate=std::make_shared<QSemaphore>();const auto Entered=std::make_shared<std::atomic_bool>(false);
+        auto Blocker=QtConcurrent::run([Gate,Entered]{Entered->store(true);Gate->acquire();});
+        const auto Restore=qScopeGuard([&]{Gate->release();Blocker.waitForFinished();Pool->setMaxThreadCount(Threads);});
+        QTRY_VERIFY(Entered->load());
+        Widget.Handle({{"action","save"},{"documentId",Id}});QVERIFY(Document(Widget,Id)["saving"].toBool());
+        QVERIFY(Widget.findChild<QAction*>("saveDocument")->isEnabled());
+        Widget.Handle({{"action","save"},{"documentId",Id}});QVERIFY(!Document(Widget,Id)["saveQueued"].toBool());
+        QVERIFY(Replace("second\n"));Widget.Handle({{"action","save"},{"documentId",Id}});QVERIFY(Document(Widget,Id)["saveQueued"].toBool());
+        QVERIFY(Replace("third\n"));Widget.Handle({{"action","save"},{"documentId",Id}});const QJsonValue SavedRevision=Document(Widget,Id)["revision"];
+        QVERIFY(Replace("third\nunsaved typing\n"));
+        Gate->release();QTRY_VERIFY_WITH_TIMEOUT(!Document(Widget,Id)["saving"].toBool(),60000);
+        QVERIFY2(Document(Widget,Id)["error"].toString().isEmpty(),qPrintable(Document(Widget,Id)["error"].toString()));
+        QCOMPARE(Bytes(Path),QByteArray("third\r\n"));QVERIFY(Document(Widget,Id)["dirty"].toBool());QCOMPARE(Document(Widget,Id)["savedRevision"],SavedRevision);
+        QVERIFY(!Document(Widget,Id)["saveQueued"].toBool());
+        // A conflicting first write discards its queued follow-up and preserves disk.
+        const auto Gate2=std::make_shared<QSemaphore>();const auto Entered2=std::make_shared<std::atomic_bool>(false);
+        auto Blocker2=QtConcurrent::run([Gate2,Entered2]{Entered2->store(true);Gate2->acquire();});
+        const auto Release2=qScopeGuard([&]{Gate2->release();Blocker2.waitForFinished();});QTRY_VERIFY(Entered2->load());
+        Widget.Handle({{"action","save"},{"documentId",Id}});QVERIFY(Replace("queued after conflict\n"));Widget.Handle({{"action","save"},{"documentId",Id}});
+        QVERIFY(Put(Path,"external\r\n"));Gate2->release();QTRY_VERIFY_WITH_TIMEOUT(!Document(Widget,Id)["saving"].toBool(),60000);
+        QCOMPARE(Document(Widget,Id)["saveState"].toString(),QString("conflict"));QVERIFY(!Document(Widget,Id)["saveQueued"].toBool());QCOMPARE(Bytes(Path),QByteArray("external\r\n"));
+        const auto Gate3=std::make_shared<QSemaphore>();const auto Entered3=std::make_shared<std::atomic_bool>(false);
+        auto Blocker3=QtConcurrent::run([Gate3,Entered3]{Entered3->store(true);Gate3->acquire();});
+        const auto Release3=qScopeGuard([&]{Gate3->release();Blocker3.waitForFinished();});QTRY_VERIFY(Entered3->load());
+        Widget.Handle({{"action","save"},{"documentId",Id},{"overwrite",true}});QVERIFY(Replace("cancelled request typing\n"));
+        Widget.Handle({{"action","save"},{"documentId",Id},{"overwrite",true}});QVERIFY(Document(Widget,Id)["saveQueued"].toBool());
+        Widget.findChild<QAction*>("cancelDocument")->trigger();QVERIFY(!Document(Widget,Id)["saveQueued"].toBool());
+        Gate3->release();QTRY_VERIFY_WITH_TIMEOUT(!Document(Widget,Id)["saving"].toBool(),30000);
+        QCOMPARE(Bytes(Path),QByteArray("external\r\n"));QVERIFY(Document(Widget,Id)["dirty"].toBool());
+        const auto Gate4=std::make_shared<QSemaphore>();const auto Entered4=std::make_shared<std::atomic_bool>(false);
+        auto Blocker4=QtConcurrent::run([Gate4,Entered4]{Entered4->store(true);Gate4->acquire();});
+        const auto Release4=qScopeGuard([&]{Gate4->release();Blocker4.waitForFinished();});QTRY_VERIFY(Entered4->load());
+        const auto Copy=Root.filePath("retry.txt");Widget.Handle({{"action","saveAs"},{"documentId",Id},{"path",Copy}});
+        QVERIFY(Replace("save queued during Save As\n"));Widget.Handle({{"action","save"},{"documentId",Id}});QVERIFY(Document(Widget,Id)["saveQueued"].toBool());
+        Gate4->release();QTRY_VERIFY_WITH_TIMEOUT(!Document(Widget,Id)["saving"].toBool(),30000);
+        QVERIFY(!Document(Widget,Id)["dirty"].toBool());QCOMPARE(Bytes(Copy),QByteArray("save queued during Save As\r\n"));QCOMPARE(Bytes(Path),QByteArray("external\r\n"));
+        QTRY_VERIFY_WITH_TIMEOUT(Widget.RequestClose(),30000);
     }
     void localSaveConflictSaveAsRetryAndReopen()
     {

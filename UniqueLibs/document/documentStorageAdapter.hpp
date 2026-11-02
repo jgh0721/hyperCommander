@@ -7,6 +7,8 @@
 
 namespace hc::document
 {
+    // Captured on the GUI owner; called only by a worker, without live widgets.
+    using DocumentEncoder = std::function<storage::Result<QByteArray>(storage::OperationContext)>;
     struct ImageBook;
     struct TextInput
     {

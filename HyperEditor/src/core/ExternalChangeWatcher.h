@@ -109,6 +109,9 @@ public:
     /// 우리가 이 파일을 쓰기 시작한다 / 다 썼다. 사이에 온 알림은 버린다.
     void beginSelfWrite( const QString& filePath );
     void endSelfWrite( const QString& filePath, bool synchronized = true );
+    // The save worker already sampled this version; do not probe network paths
+    // or reattach watches synchronously in the save completion callback.
+    void endSelfWrite( const QString& filePath, const Fingerprint& fingerprint );
 
     /// 전부 다시 확인한다. 창이 다시 활성화될 때 부른다 — 알림이 오지 않는
     /// 경로(네트워크 드라이브, 가상 파일 시스템)에서 마지막 그물이 된다.
@@ -125,6 +128,7 @@ signals:
     void sigFileVanished( const QString& filePath );
 
 private:
+    QHash<QString, Fingerprint> savedFingerprints_;
     struct Entry
     {
         QString     path;               ///< 신호에 실어 보낼 표기 (절대 경로)
