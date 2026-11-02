@@ -47,7 +47,8 @@ public:
     QLabel* PathLabel() const { return path_; }
     QLabel* NameLabel() const { return name_; }
     void SetParts(QString Directory, const QString& Name, const QString& Role = {}) {
-        if (!Directory.isEmpty() && !Name.isEmpty() && !Directory.endsWith('\\') && !Directory.endsWith('/'))
+        if (!Directory.isEmpty() && !Name.isEmpty() && !Directory.endsWith('\\') && !Directory.endsWith('/')
+            && !Directory.endsWith(QStringLiteral(" > ")))
             Directory += '\\';
         const auto FullPath = Directory + Name;
         const auto Prefix = Role + (Role.isEmpty() || Directory.isEmpty() ? QString{} : QStringLiteral("   ")) + Directory;

@@ -82,7 +82,11 @@ namespace
         const auto At = ParseLocator(Value);
         if (!At.HasValue()) return QDir::toNativeSeparators(QString::fromStdString(Value));
         auto Path = QString::fromStdString(At.Value().root_);
-        for (const auto& Hop : At.Value().nesting_) Path += " > " + QString::fromStdString(Hop.entry_);
+        for (const auto& Hop : At.Value().nesting_) {
+            const auto Entry = QString::fromStdString(Hop.entry_);
+            // The archive boundary already separates a root item from its container.
+            Path += " > " + (Entry == "/" || Entry == "\\" ? QString{} : Entry);
+        }
         return QDir::toNativeSeparators(Path);
     }
     QString OperationText(JobKind Kind)
