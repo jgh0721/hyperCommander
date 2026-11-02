@@ -45,6 +45,20 @@ private:
 class BatchRenameTests : public QObject {
     Q_OBJECT
 private slots:
+    void redirectedRenameCycle() {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE to opt in to an owned RDP rename fixture.");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir Data(QString("//tsclient/%1/hc-rdp-rename-XXXXXX").arg(Share)), Journal;
+        QVERIFY(Data.isValid() && Journal.isValid());
+        const auto Rows = Fixture(QDir::toNativeSeparators(Data.path()), true); QCOMPARE(Rows.size(), 3);
+        auto Prepared = PrepareBatchRename(Journal.path(), Rows); QVERIFY(Prepared.HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        const auto Result = Run(Scheduler, std::move(Prepared.Value()));
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "RDP batch rename failed");
+        for (int I = 0; I < Rows.size(); ++I) QVERIFY(Contents(Rows[I].target_, I));
+        QVERIFY(Data.remove());
+    }
     void sharingViolationWaitsBeforeAnyRename() {
         QTemporaryDir Data, Journal; const auto Rows = Fixture(Data.path()); QCOMPARE(Rows.size(),3);
         const auto Path = NativePath(Rows[1].source_.path_);

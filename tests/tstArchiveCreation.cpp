@@ -238,6 +238,32 @@ private slots:
         QVERIFY(CorrectSource); QVERIFY(InputCounts);
         QVERIFY(QFileInfo::exists(Dir.filePath("out/selected-kit.7z")));
     }
+    void redirectedCreationAndOverwrite()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE to opt in to owned RDP archive creation.");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir Remote(QString("//tsclient/%1/hc-rdp-create-XXXXXX").arg(Share)), Local;
+        QVERIFY(Remote.isValid() && Local.isValid());
+        hc::settings::Repository Settings(Local.filePath("settings"));
+        const auto Input = QDir::toNativeSeparators(Remote.filePath("input.txt")); QVERIFY(Put(Input, "RDP archive input"));
+        auto Reader = MakeNativeReadProvider(LocatorKind::Smb);
+        auto Entry = Reader->Resolve({LocatorKind::Smb, Input.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+        for (const auto Format : {"7z", "zip", "iso"}) for (int Attempt = 0; Attempt < 2; ++Attempt) {
+            const auto Target = QDir::toNativeSeparators(Remote.filePath(QString("result.") + Format));
+            auto R = Request(Settings, {{Entry.Value(), Reader, {}}}, Target, Format);
+            R.value_.output_.kind_ = LocatorKind::Smb;
+            auto Prepared = PrepareCreation(std::move(R)); QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str());
+            const auto Result = Run(std::move(Prepared.Value()));
+            const auto Diagnostic=QString("format=%1 attempt=%2 error=%3 path=%4 action=%5").arg(Format).arg(Attempt)
+                .arg(Result.snapshot_.error_?QString::fromStdString(Result.snapshot_.error_->code_):QString{},
+                    Result.snapshot_.error_?QString::fromStdString(Result.snapshot_.error_->nativePath_):QString{},
+                    Result.snapshot_.error_?QString::fromStdString(Result.snapshot_.error_->userAction_):QString{}).toUtf8();
+            QVERIFY2(Result.snapshot_.state_ == JobState::Completed,Diagnostic.constData());
+            QVERIFY(Result.cleanupErrors_.empty()); QVERIFY(QFileInfo(Target).size() > 0);
+        }
+        Reader.reset(); QVERIFY(Remote.remove());
+    }
     void nativeCreation_data() { QTest::addColumn<QString>("Format"); for (const auto F : {"7z", "zip", "iso"}) QTest::newRow(F) << QString(F); }
     void nativeCreation()
     {

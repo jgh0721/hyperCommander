@@ -2,6 +2,7 @@
 #include "commonLibs/storage/materializedContent.hpp"
 #include "memoryStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
+#include "UniqueLibs/nativeStorageRevision.hpp"
 #include "UniqueLibs/mappedDriveRecovery.hpp"
 #include "UniqueLibs/shellDriveSort.hpp"
 #include <algorithm>
@@ -355,6 +356,29 @@ private slots:
         QCOMPARE(Stale.Failure().category_, ErrorCategory::StaleRevision);
         auto StaleRead = Provider->OpenRead(Id, {}).get(); QVERIFY(!StaleRead.HasValue());
         QCOMPARE(StaleRead.Failure().category_, ErrorCategory::StaleRevision);
+    }
+    void redirectedRevisionIgnoresHandleIdsButRejectsContentChanges()
+    {
+        BY_HANDLE_FILE_INFORMATION Before{}; Before.ftCreationTime.dwLowDateTime = 100;
+        Before.ftLastWriteTime.dwLowDateTime = 200; Before.nFileSizeLow = 32; Before.nFileIndexLow = 1;
+        auto After = Before; After.nFileIndexLow = 2;
+        QCOMPARE(native::RedirectedRevision(Before), native::RedirectedRevision(After));
+        QVERIFY(native::HandleRevision(Before) != native::HandleRevision(After));
+        ++After.ftLastWriteTime.dwLowDateTime;
+        QVERIFY(native::RedirectedRevision(Before) != native::RedirectedRevision(After));
+        After = Before; ++After.nFileSizeLow;
+        QVERIFY(native::RedirectedRevision(Before) != native::RedirectedRevision(After));
+        After = Before; ++After.ftCreationTime.dwLowDateTime;
+        QVERIFY(native::RedirectedRevision(Before) != native::RedirectedRevision(After));
+        Before.dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY; After = Before;
+        ++After.nFileIndexLow; ++After.ftLastWriteTime.dwLowDateTime;
+        QCOMPARE(native::RedirectedRevision(Before), native::RedirectedRevision(After));
+        ++After.ftCreationTime.dwLowDateTime;
+        QVERIFY(native::RedirectedRevision(Before) != native::RedirectedRevision(After));
+        QVERIFY(native::IsRedirectedPath(L"\\\\TSCLIENT\\E\\file"));
+        QVERIFY(native::IsRedirectedPath(L"\\\\?\\UNC\\tsclient\\e\\file"));
+        QVERIFY(!native::IsRedirectedPath(L"\\\\tsclient-other\\share\\file"));
+        QVERIFY(!native::IsRedirectedPath(L"\\\\server\\tsclient\\file"));
     }
     void nativeDirectoryCreationTimeIsNotIdentity()
     {

@@ -912,10 +912,17 @@ void FileJobUi::updateJobs()
             Message->setTextFormat(Qt::PlainText);
             auto MessageFont = Message->font(); MessageFont.setPointSizeF(12); Message->setFont(MessageFont); Message->setMinimumWidth(480);
             QString Information;
+            const auto PartialCopies = std::count_if(Stored->second.items_.begin(), Stored->second.items_.end(), [](const auto& Item) {
+                return Item.status_ != ItemOutcome::Status::Completed && Item.destinationCommitted_ && !Item.sourceRemoved_;
+            });
             if (Snapshot.error_) {
                 const auto& Error = *Snapshot.error_;
                 Information = hc::ui::ErrorText(Error);
                 if (!Error.nativePath_.empty()) Information += "\n" + DisplayPath(Error.nativePath_);
+            }
+            if (PartialCopies) {
+                Information += tr("\n복사 완료, 후처리 실패: 확인된 %1개 항목은 대상에 저장되었습니다.").arg(PartialCopies);
+                if (Snapshot.metadata_.kind_ == JobKind::Move) Information += tr("\n이동 원본은 유지되었습니다. 원본과 대상을 확인하세요.");
             }
             if (!Snapshot.metadata_.source_.empty()) Information += tr("\n원본: %1").arg(DisplayPath(Snapshot.metadata_.source_));
             if (!Snapshot.metadata_.destination_.empty()) Information += tr("\n대상: %1").arg(DisplayPath(Snapshot.metadata_.destination_));
@@ -1070,7 +1077,11 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const auto Counts = tr("예정 %1 / 완료 %2 / 건너뜀 %3 / 실패 %4")
         .arg(Planned ? tr("%1개").arg(*Planned) : tr("집계 중"))
         .arg(Snapshot.completedItems_).arg(Snapshot.skippedItems_).arg(Snapshot.failedItems_);
-    const auto Title = Operation + QStringLiteral(" - ") + JobStatusText(Snapshot) + QStringLiteral(" · ") + Counts;
+    auto Title = Operation + QStringLiteral(" - ") + JobStatusText(Snapshot) + QStringLiteral(" · ") + Counts;
+    if (const auto Result = results_.find(Snapshot.id_); Result != results_.end()
+        && std::any_of(Result->second.items_.begin(), Result->second.items_.end(), [](const auto& Item) {
+            return Item.status_ != ItemOutcome::Status::Completed && Item.destinationCommitted_ && !Item.sourceRemoved_;
+        })) Title += tr(" · 복사 완료, 후처리 실패");
     status_->setText(Title); dialog_->setWindowTitle(Title);
     const auto Endpoint = [&](QLabel* PathLabel, QLabel* NameLabel, const QString& Label,
         const std::string& CurrentPath, const std::string& Root, bool FolderFallback) {

@@ -2,6 +2,7 @@
 #include "UniqueLibs/fileBatchOperations.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeStorageRevision.hpp"
+#include "UniqueLibs/nativeStorageRevision.hpp"
 #include "commonLibs/operations/fileOperation.hpp"
 #include <QtTest>
 #include "UniqueLibs/errorPresentation.hpp"
@@ -1071,7 +1072,8 @@ private slots:
         if (!Remote.isEmpty())
         {
             QVERIFY(Remote.compare("\\\\DEVTESTER-QTS\\Public", Qt::CaseInsensitive) == 0
-                || Remote.compare("\\\\DEVTESTER-QTB4\\Pubs", Qt::CaseInsensitive) == 0);
+                || Remote.compare("\\\\DEVTESTER-QTB4\\Pubs", Qt::CaseInsensitive) == 0
+                || native::IsRedirectedPath(Remote.toStdWString()));
             kind_ = LocatorKind::Smb;
             root_ = std::make_unique<QTemporaryDir>(QDir(Remote).filePath("hc-write-test-XXXXXX"));
         }
@@ -1080,6 +1082,99 @@ private slots:
         reader_ = MakeNativeReadProvider(kind_);
         writer_ = MakeNativeWritableStorage(kind_, reader_);
         qInfo().noquote() << "Owned mutation fixture:" << root_->path();
+    }
+    void redirectedOperationsAndRecovery()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE to opt in to owned RDP mutation fixtures.");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir Remote(QString("//tsclient/%1/hc-rdp-fileops-XXXXXX").arg(Share)), Local;
+        QVERIFY(Remote.isValid() && Local.isValid());
+        auto Reader = MakeNativeReadProvider(LocatorKind::Smb);
+        auto Writer = MakeNativeWritableStorage(LocatorKind::Smb, Reader);
+        auto LocalReader = MakeNativeReadProvider(LocatorKind::Local);
+        auto LocalWriter = MakeNativeWritableStorage(LocatorKind::Local, LocalReader);
+        const auto At = [&](const char* Name) { return Locator{LocatorKind::Smb, QDir::toNativeSeparators(Remote.filePath(Name)).toStdString()}; };
+        const auto LocalAt = [&](const char* Name) { return Locator{LocatorKind::Local, QDir::toNativeSeparators(Local.filePath(Name)).toStdString()}; };
+        const QByteArray Payload(2 * 1024 * 1024 + 17, 'R');
+        QFile Source(Local.filePath("source.bin")); QVERIFY(Source.open(QIODevice::WriteOnly));
+        QCOMPARE(Source.write(Payload), Payload.size()); Source.close();
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        const auto Run = [&](hc::operations::FileOperation Operation, const EntrySnapshot& Entry,
+            std::shared_ptr<IStorageProvider> Input, std::shared_ptr<IWritableStorage> InputWriter,
+            const Locator& Target, std::shared_ptr<IWritableStorage> Output) -> JobResult {
+            FileOperationRequest Request; Request.operation_ = Operation; Request.sources_ = {{Entry, Input, InputWriter}};
+            Request.destination_ = Target; Request.destinationWriter_ = Output; Request.conflict_ = ConflictPolicy::Replace;
+            Request.confirmDelete_ = false; Request.copyOptions_.verify_ = true;
+            auto Started = SubmitFileOperation(Scheduler, std::move(Request));
+            if (!Started.HasValue()) { JobResult Result; Result.snapshot_.state_ = JobState::Failed; Result.snapshot_.error_ = Started.Failure(); return Result; }
+            return Started.Value().completion_.get();
+        };
+        auto Original = LocalReader->Resolve(LocalAt("source.bin"), {}).get(); QVERIFY(Original.HasValue());
+        for (int Attempt = 0; Attempt < 2; ++Attempt) {
+            const auto Copied = Run(hc::operations::FileOperation::Copy, Original.Value(), LocalReader, LocalWriter, At(""), Writer);
+            QVERIFY2(Copied.snapshot_.state_ == JobState::Completed, Copied.snapshot_.error_ ? Copied.snapshot_.error_->code_.c_str() : "copy failed");
+            QVERIFY(Copied.cleanupErrors_.empty());
+            QFile Result(Remote.filePath("source.bin")); QVERIFY(Result.open(QIODevice::ReadOnly)); QCOMPARE(Result.readAll(), Payload);
+        }
+        auto Snapshot = Reader->Resolve(At("source.bin"), {}).get(); QVERIFY(Snapshot.HasValue());
+        for (int Attempt = 0; Attempt < 4; ++Attempt) { auto Fresh = Reader->Stat(Snapshot.Value().id_, {}).get(); QVERIFY(Fresh.HasValue()); QCOMPARE(Fresh.Value().id_, Snapshot.Value().id_); }
+        MetadataPatch Patch; Patch.setMask_ = FILE_ATTRIBUTE_HIDDEN;
+        QVERIFY(Writer->PatchMetadata(Snapshot.Value(), Patch, {}).HasValue());
+        Snapshot = Reader->Resolve(At("source.bin"), {}).get(); QVERIFY(Snapshot.HasValue());
+        Patch.setMask_ = 0; Patch.clearMask_ = FILE_ATTRIBUTE_HIDDEN;
+        QVERIFY(Writer->PatchMetadata(Snapshot.Value(), Patch, {}).HasValue());
+        Snapshot = Reader->Resolve(At("source.bin"), {}).get(); QVERIFY(Snapshot.HasValue());
+        QVERIFY(Writer->Rename(Snapshot.Value(), At("renamed-with-longer-name.bin"), {}).HasValue());
+        auto Renamed = Reader->Resolve(At("renamed-with-longer-name.bin"), {}).get(); QVERIFY(Renamed.HasValue());
+        const auto Returned = Run(hc::operations::FileOperation::Copy, Renamed.Value(), Reader, Writer, LocalAt(""), LocalWriter);
+        QCOMPARE(Returned.snapshot_.state_, JobState::Completed);
+        QVERIFY(Writer->Remove(Renamed.Value(), {}).HasValue());
+        const auto Moved = Run(hc::operations::FileOperation::Move, Original.Value(), LocalReader, LocalWriter, At(""), Writer);
+        QVERIFY2(Moved.snapshot_.state_ == JobState::Completed, Moved.snapshot_.error_ ? Moved.snapshot_.error_->code_.c_str() : "move failed");
+        QVERIFY(!QFileInfo::exists(Local.filePath("source.bin")));
+        auto RemoteSource = Reader->Resolve(At("source.bin"), {}).get(); QVERIFY(RemoteSource.HasValue());
+        const auto Back = Run(hc::operations::FileOperation::Move, RemoteSource.Value(), Reader, Writer, LocalAt(""), LocalWriter);
+        QCOMPARE(Back.snapshot_.state_, JobState::Completed); QVERIFY(!QFileInfo::exists(Remote.filePath("source.bin")));
+        WriteRecoveryRecord Record;
+        OperationContext Context; Context.expectedWriteBytes_ = 7;
+        Context.writeCheckpoint_ = [&](const WriteRecoveryRecord& Value, std::optional<uint64_t>) -> Result<uint64_t> { Record = Value; return uint64_t(0); };
+        auto Session = Writer->BeginWrite(At("recovered.bin"), {}, Context); QVERIFY(Session.HasValue());
+        const QByteArray Bytes("recover");
+        QVERIFY(Session.Value()->Append({reinterpret_cast<const std::byte*>(Bytes.data()), size_t(Bytes.size())}, Context).HasValue());
+        auto Receipt = Session.Value()->Commit(Context); QVERIFY(Receipt.HasValue()); QVERIFY(Receipt.Value().cleanupErrors_.empty()); Session.Value().reset();
+        QVERIFY(Record.stageIdentity_.starts_with("sha256:"));
+        auto Recovered = RecoverNativeWrite(Record); QVERIFY2(Recovered.HasValue(), Recovered.HasValue() ? "" : Recovered.Failure().code_.c_str());
+        QVERIFY(Recovered.Value().destinationCommitted_);
+        auto Legacy = Record; Legacy.stageIdentity_ = "synthetic-old-handle";
+        auto RejectedLegacy = RecoverNativeWrite(Legacy); QVERIFY(!RejectedLegacy.HasValue());
+        QCOMPARE(RejectedLegacy.Failure().code_, std::string("write-recovery-unstable-legacy-identity"));
+        auto Existing = Writer->Inspect(At("recovered.bin"), {}); QVERIFY(Existing.HasValue() && Existing.Value());
+        auto Interrupted = Context;
+        Interrupted.writeCheckpoint_ = [&](const WriteRecoveryRecord& Value, std::optional<uint64_t>) -> Result<uint64_t> {
+            Record = Value;
+            if (Value.phase_ == WritePhase::BackedUp) return Error{ErrorCategory::Unavailable, "injected-rdp-checkpoint"};
+            return uint64_t(0);
+        };
+        auto Replacement = Writer->BeginWrite(At("recovered.bin"), {true, Existing.Value()->id_.revision_}, Interrupted); QVERIFY(Replacement.HasValue());
+        const QByteArray NewBytes("replace");
+        QVERIFY(Replacement.Value()->Append({reinterpret_cast<const std::byte*>(NewBytes.data()), size_t(NewBytes.size())}, Interrupted).HasValue());
+        const auto InterruptedCommit = Replacement.Value()->Commit(Interrupted); QVERIFY(!InterruptedCommit.HasValue());
+        QCOMPARE(InterruptedCommit.Failure().code_, std::string("injected-rdp-checkpoint"));
+        QVERIFY(Record.originalIdentity_.starts_with("sha256:"));
+        const auto Aborted = Replacement.Value()->Abort();
+        QVERIFY2(Aborted.HasValue(), Aborted.HasValue() ? "" : (Aborted.Failure().code_ + ":" + Aborted.Failure().userAction_).c_str()); Replacement.Value().reset();
+        QFile Restored(Remote.filePath("recovered.bin")); QVERIFY(Restored.open(QIODevice::ReadOnly)); QCOMPARE(Restored.readAll(), Bytes); Restored.close();
+        Recovered = RecoverNativeWrite(Record); QVERIFY(Recovered.HasValue()); QVERIFY(!Recovered.Value().destinationCommitted_);
+        Existing = Writer->Inspect(At("recovered.bin"), {}); QVERIFY(Existing.HasValue() && Existing.Value());
+        Replacement = Writer->BeginWrite(At("recovered.bin"), {true, Existing.Value()->id_.revision_}, Context); QVERIFY(Replacement.HasValue());
+        QVERIFY(Replacement.Value()->Append({reinterpret_cast<const std::byte*>(NewBytes.data()), size_t(NewBytes.size())}, Context).HasValue());
+        Receipt = Replacement.Value()->Commit(Context); QVERIFY(Receipt.HasValue()); QVERIFY(Receipt.Value().cleanupErrors_.empty()); Replacement.Value().reset();
+        Recovered = RecoverNativeWrite(Record); QVERIFY(Recovered.HasValue()); QVERIFY(Recovered.Value().destinationCommitted_);
+        QFile Changed(Remote.filePath("recovered.bin")); QVERIFY(Changed.open(QIODevice::WriteOnly | QIODevice::Truncate)); QCOMPARE(Changed.write("changed"), 7); Changed.close();
+        QVERIFY(!RecoverNativeWrite(Record).HasValue());
+        auto ToDelete = Reader->Resolve(At("recovered.bin"), {}).get(); QVERIFY(ToDelete.HasValue()); QVERIFY(Writer->Remove(ToDelete.Value(), {}).HasValue());
+        QVERIFY(Remote.remove());
     }
     void smbReadSourceCopiesToLocal_data()
     {

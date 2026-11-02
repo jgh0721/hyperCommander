@@ -147,6 +147,30 @@ class WcxTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void redirectedArchiveReadAndMutation()
+    {
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE to opt in to an owned RDP archive fixture.");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir Remote(QString("//tsclient/%1/hc-rdp-wcx-XXXXXX").arg(Share)), Stage;
+        QVERIFY(Remote.isValid() && Stage.isValid());
+        const auto Path = QDir::toNativeSeparators(Remote.filePath("sample.hct")); QVERIFY(Put(Path, "HCWCX01"));
+        auto Reader = MakeWcxReadProvider(Fixture().toStdString(), Location(Path), Stage.path().toStdString());
+        auto Entry = Reader->Resolve(Location(Path, "/alpha.txt"), {}).get();
+        QVERIFY2(Entry.HasValue(), Entry.HasValue() ? "" : Entry.Failure().code_.c_str());
+        auto Stream = Reader->OpenRead(Entry.Value().id_, {}).get(); QVERIFY(Stream.HasValue());
+        auto Chunk = Stream.Value()->Read(1024, {}).get(); QVERIFY(Chunk.HasValue()); QVERIFY(!Chunk.Value().bytes_.empty()); Stream.Value().reset();
+        auto Mutation = BeginWcxMutation(Fixture().toStdString(), Location(Path), Reader, Stage.path().toStdString());
+        QVERIFY2(Mutation.HasValue(), Mutation.HasValue() ? "" : Mutation.Failure().code_.c_str());
+        auto Prepared = Mutation.Value()->Prepare({{ArchiveChangeKind::Remove, "/alpha.txt", {}, {}, Entry.Value().id_}}, {});
+        QVERIFY2(Prepared.HasValue(), Prepared.HasValue() ? "" : Prepared.Failure().code_.c_str());
+        auto Committed = Mutation.Value()->Commit({}); QVERIFY2(Committed.HasValue(), Committed.HasValue() ? "" : Committed.Failure().code_.c_str());
+        Mutation.Value().reset(); Reader.reset();
+        Reader = MakeWcxReadProvider(Fixture().toStdString(), Location(Path), Stage.path().toStdString());
+        QVERIFY(!Reader->Resolve(Location(Path, "/alpha.txt"), {}).get().HasValue());
+        QVERIFY(Reader->Resolve(Location(Path, "/sub/한글.txt"), {}).get().HasValue()); Reader.reset();
+        QVERIFY(Remote.remove());
+    }
     void containerSizeMetadata()
     {
         using namespace hc::plugins;

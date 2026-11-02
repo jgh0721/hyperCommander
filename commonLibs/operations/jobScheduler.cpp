@@ -602,7 +602,7 @@ namespace hc::operations
                     { std::lock_guard Lock(Shared->mutex_); Checkpoint = Value->result_; }
                     Checkpoint.snapshot_.state_ = Cleanup.empty() ? Terminal : JobState::Failed;
                     Checkpoint.cleanupErrors_ = Cleanup;
-                    if (!Cleanup.empty()) Checkpoint.snapshot_.error_ = Error{ErrorCategory::Unavailable, "cleanup-incomplete"};
+                    if (!Cleanup.empty() && !Checkpoint.snapshot_.error_) Checkpoint.snapshot_.error_ = Error{ErrorCategory::Unavailable, "cleanup-incomplete"};
                     try { auto Saved = Shared->journal_->Checkpoint(Checkpoint); if (!Saved.HasValue()) Cleanup.push_back(Saved.Failure()); }
                     catch (...) { Cleanup.push_back({ErrorCategory::Unavailable, "job-journal-exception"}); }
                 }
@@ -610,7 +610,7 @@ namespace hc::operations
                     std::lock_guard Lock(Shared->mutex_);
                     Value->result_.cleanupErrors_ = std::move(Cleanup);
                     if (!Value->result_.cleanupErrors_.empty())
-                    { Terminal = JobState::Failed; Value->result_.snapshot_.error_ = Error{ErrorCategory::Unavailable, "cleanup-incomplete"}; }
+                    { Terminal = JobState::Failed; if (!Value->result_.snapshot_.error_) Value->result_.snapshot_.error_ = Error{ErrorCategory::Unavailable, "cleanup-incomplete"}; }
                     Value->result_.snapshot_.interaction_.reset();
                     Value->result_.snapshot_.deferred_ = false;
                     Shared->release(*Value);

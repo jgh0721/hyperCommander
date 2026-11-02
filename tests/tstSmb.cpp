@@ -12363,8 +12363,15 @@ private slots:
         QVERIFY(Summary->text().contains(Directory.path()) || Summary->text().contains(QDir::toNativeSeparators(Directory.path())));
         QVERIFY(QFileInfo::exists(Directory.filePath("renamed.txt"))); QVERIFY(SaveR9Dialog(History, "rename-history-live-completed"));
     }
+    void todoBugFailedJobErrorUi_data()
+    {
+        QTest::addColumn<bool>("PartialCopy");
+        QTest::newRow("unchanged-source") << false;
+        QTest::newRow("committed-copy") << true;
+    }
     void todoBugFailedJobErrorUi()
     {
+        QFETCH(bool, PartialCopy);
         using namespace hc::operations; using namespace hc::storage;
         auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); });
@@ -12374,24 +12381,36 @@ private slots:
         QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false);
         FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
         class Task final : public IJobTask {
+        public:
+            explicit Task(bool Partial) : partial_(Partial) {}
+        private:
             JobStep Advance(JobStepContext) override {
                 JobStep Step{JobState::Failed};
                 Step.error_ = Error{ErrorCategory::StaleRevision, "revision-changed"};
-                Step.item_ = ItemOutcome{"S01", ItemOutcome::Status::Failed, Step.error_}; return Step;
+                Step.item_ = ItemOutcome{"S01", ItemOutcome::Status::Failed, Step.error_, partial_, false}; return Step;
             }
             std::vector<Error> Finalize(JobState) override { return {}; }
+            bool partial_;
         };
-        PreparedJob Prepared; Prepared.task_ = std::make_unique<Task>();
+        PreparedJob Prepared; Prepared.task_ = std::make_unique<Task>(PartialCopy);
+        Prepared.request_.metadata_.kind_ = PartialCopy ? JobKind::Move : JobKind::Delete;
         Prepared.request_.metadata_.source_ = R"(\\server\share\<S01>)";
+        if (PartialCopy) {
+            Prepared.request_.metadata_.source_ = R"(D:\Downloads\<S01>_QtitanDataGridInstaller10.0.0_PySide6_Qt6.12.0MacOS_x64.dmg)";
+            Prepared.request_.metadata_.destination_ = R"(\\tsclient\E\QtitanDataGridInstaller10.0.0_PySide6_Qt6.12.0MacOS_x64.dmg)";
+        }
         auto Started = Jobs.Submit(std::move(Prepared), QStringLiteral("삭제 오류 시험")); QVERIFY(Started.HasValue());
         QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_));
         auto* Message = Window.findChild<QMessageBox*>("hc.jobs.failure"); QVERIFY(Message); QVERIFY(Message->isVisible());
         QCOMPARE(Message->property("hc.jobs.id").toString(), QString::fromStdString(Started.Value().id_));
         QCOMPARE(Message->textFormat(), Qt::PlainText); QCOMPARE(Message->windowModality(), Qt::NonModal);
         QVERIFY(Message->informativeText().contains("revision-changed"));
-        QVERIFY(Message->informativeText().contains(QStringLiteral("다시 시도")));
+        QVERIFY(Message->informativeText().contains(QStringLiteral("현재 상태를 확인")));
         QVERIFY(Message->informativeText().contains("<S01>"));
+        QCOMPARE(Message->informativeText().contains(QStringLiteral("복사 완료, 후처리 실패")), PartialCopy);
+        QCOMPARE(Message->informativeText().contains(QStringLiteral("이동 원본은 유지되었습니다")), PartialCopy);
         const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+        QTest::qWait(50);
         if (!Artifacts.isEmpty()) QVERIFY(Message->grab().save(QDir(Artifacts).filePath("smb-delete-failure.png")));
         Message->accept(); QTRY_VERIFY(Window.findChildren<QMessageBox*>("hc.jobs.failure").isEmpty());
         Jobs.Show(); QTest::qWait(250); QVERIFY(Window.findChildren<QMessageBox*>("hc.jobs.failure").isEmpty());

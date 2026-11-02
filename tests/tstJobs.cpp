@@ -550,6 +550,19 @@ private slots:
             QCOMPARE(A->finalizations_.load(), 1);
         }
     }
+    void cleanupPreservesTheOriginalFailure()
+    {
+        auto State = std::make_shared<Probe>();
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Started = Scheduler.Submit({}, std::make_unique<ScriptTask>(State, [](auto) {
+            JobStep Step{JobState::Failed}; Step.error_ = Error{ErrorCategory::StaleRevision, "revision-changed"}; return Step;
+        }, std::vector<Error>{{ErrorCategory::NotFound, "win32:2"}}));
+        QVERIFY(Started.HasValue() && Ready(Started.Value()));
+        const auto& Result = Started.Value().completion_.get();
+        QCOMPARE(Result.snapshot_.state_, JobState::Failed);
+        QCOMPARE(Result.snapshot_.error_->code_, std::string("revision-changed"));
+        QCOMPARE(Result.cleanupErrors_.at(0).code_, std::string("win32:2"));
+    }
     void partialOutcomesAndCleanupFailureRemainVisible()
     {
         auto A = std::make_shared<Probe>();

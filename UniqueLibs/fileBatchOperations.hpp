@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "UniqueLibs/nativeFilePath.hpp"
+#include "UniqueLibs/nativeStorageRevision.hpp"
 #include "errorPresentation.hpp"
 #include <QtCore>
 #include "commonLibs/operations/fileOperation.hpp"
@@ -49,15 +50,19 @@ struct Handle {
 inline QByteArray Identity(HANDLE File) {
     BY_HANDLE_FILE_INFORMATION Info{};
     if (!GetFileInformationByHandle(File, &Info)) return {};
+    if (storage::native::IsRedirectedHandle(File)) return QByteArray::fromStdString(storage::native::RedirectedRevision(Info).token_);
     return QByteArray::number(Info.dwVolumeSerialNumber) + ':' + QByteArray::number(Info.nFileIndexHigh) + ':' + QByteArray::number(Info.nFileIndexLow);
 }
-inline DWORD RenameHandle(HANDLE File, const QString& Destination) {
+inline DWORD RenameHandle(HANDLE& File, const QString& Destination) {
     const auto Path = NativePath(Destination); const auto Bytes = Path.size() * sizeof(wchar_t);
+    BY_HANDLE_FILE_INFORMATION Before{};
+    if (storage::native::IsRedirectedPath(Path.toStdWString()) && !GetFileInformationByHandle(File, &Before)) return GetLastError();
     std::vector<unsigned char> Buffer(sizeof(FILE_RENAME_INFO) + Bytes);
     auto* Info = reinterpret_cast<FILE_RENAME_INFO*>(Buffer.data());
     Info->ReplaceIfExists = FALSE; Info->RootDirectory = nullptr; Info->FileNameLength = DWORD(Bytes);
     memcpy(Info->FileName, Path.utf16(), Bytes);
-    return SetFileInformationByHandle(File, FileRenameInfo, Info, DWORD(Buffer.size())) ? ERROR_SUCCESS : GetLastError();
+    if (!SetFileInformationByHandle(File, FileRenameInfo, Info, DWORD(Buffer.size()))) return GetLastError();
+    return storage::native::RefreshRenamedHandle(File, Path.toStdWString(), DELETE | FILE_READ_ATTRIBUTES, Before);
 }
 struct Entry { QString path_; QByteArray identity_; QDateTime modified_; bool directory_ = false; quint64 size_ = 0; QDateTime captured_; };
 inline Entry Inspect(const QString& Path) {

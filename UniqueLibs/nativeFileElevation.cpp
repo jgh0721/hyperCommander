@@ -297,7 +297,7 @@ public:
                 if(!Fresh.HasValue())return Fresh.Failure();if(!Fresh.Value())return Failure(ERROR_FILE_NOT_FOUND,"elevation-source");
                 const auto Native=filetools::NativePath(Text(R.source_->locator_.root_));filetools::Handle H(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
                 BY_HANDLE_FILE_INFORMATION Info{};if(H.value_==INVALID_HANDLE_VALUE||!GetFileInformationByHandle(H.value_,&Info))return Failure(GetLastError(),"elevation-source");
-                if((!R.source_->id_.revision_ || !native::MatchesRevision(*R.source_->id_.revision_,Info)))return Failure(ERROR_FILE_INVALID,"elevation-source-changed");
+                if((!R.source_->id_.revision_ || !native::MatchesRevision(*R.source_->id_.revision_,Info,H.value_,Native.toStdWString())))return Failure(ERROR_FILE_INVALID,"elevation-source-changed");
                 Object["source"]=Snapshot(*Fresh.Value());Object["sourceIdentity"]=QString::fromLatin1(filetools::Identity(H.value_));
             }
         }
@@ -429,7 +429,7 @@ DWORD ExecuteFileElevation(const QJsonObject& Bootstrap) {
                             PublishedLock=std::make_unique<filetools::Handle>(CreateFileW(reinterpret_cast<LPCWSTR>(P.utf16()),FILE_READ_ATTRIBUTES,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
                             BY_HANDLE_FILE_INFORMATION Info{};
                             if(PublishedLock->value_==INVALID_HANDLE_VALUE||!GetFileInformationByHandle(PublishedLock->value_,&Info))Status.error_=Failure(GetLastError(),"elevation-published-lock");
-                            else if(!Checked.Value().id_.revision_||!native::MatchesRevision(*Checked.Value().id_.revision_,Info))Status.error_=Failure(ERROR_FILE_INVALID,"elevation-published-changed");
+                            else if(!Checked.Value().id_.revision_||!native::MatchesRevision(*Checked.Value().id_.revision_,Info,PublishedLock->value_,P.toStdWString()))Status.error_=Failure(ERROR_FILE_INVALID,"elevation-published-changed");
                         }
                     }
                     if(!Status.error_&&Source){auto Checked=Verify(R["source"].toObject(),Reader,Context);if(!Checked.HasValue())Status.error_=Checked.Failure();}

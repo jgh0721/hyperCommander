@@ -93,10 +93,10 @@ namespace hc::storage
                 *ReparseTag = Success && (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
                     && GetFileInformationByHandleEx(Handle, FileAttributeTagInfo, &Tag, sizeof(Tag)) ? Tag.ReparseTag : 0;
             }
+            if (Success && ActualRevision) *ActualRevision = native::HandleRevision(Handle, Info, Path);
             CloseHandle(Handle);
             if (!Success) { SetLastError(Code); return false; }
             Data = {Info.dwFileAttributes, Info.ftCreationTime, Info.ftLastAccessTime, Info.ftLastWriteTime, Info.nFileSizeHigh, Info.nFileSizeLow};
-            if (ActualRevision) *ActualRevision = native::HandleRevision(Info);
             if (ActualInfo) *ActualInfo = Info;
             return true;
         }
@@ -477,7 +477,8 @@ namespace hc::storage
                     if (!ReadAttributes(FilePath(At.Value().root_), Data, &ActualRevision, &Info)) return NativeError(GetLastError(), Id);
                     auto Value = Entry(Id, Prefix, At.Value(), QFileInfo(QString::fromUtf8(At.Value().root_)).fileName().toStdString(), Data);
                     Value.id_.revision_ = std::move(ActualRevision);
-                    if (Resource.revision_ && !native::MatchesRevision(*Resource.revision_, Info)) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource, false, "refresh"};
+                    if (Resource.revision_ && *Resource.revision_ != *Value.id_.revision_
+                        && !native::MatchesRevision(*Resource.revision_, Info)) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource, false, "refresh"};
                     return Value;
                 }, Context.workerRead_ && kind_ == LocatorKind::Local);
             }
@@ -519,7 +520,7 @@ namespace hc::storage
                             if (Message->Type == COPYFILE2_CALLBACK_STREAM_STARTED) {
                                 BY_HANDLE_FILE_INFORMATION Info{};
                                 if (!GetFileInformationByHandle(Message->Info.StreamStarted.hSourceFile, &Info)
-                                    || !native::MatchesRevision(*Callback.revision_, Info)) {
+                                    || !native::MatchesRevision(*Callback.revision_, Info, Message->Info.StreamStarted.hSourceFile)) {
                                     Callback.changed_ = true; return COPYFILE2_PROGRESS_CANCEL;
                                 }
                             }
@@ -557,7 +558,7 @@ namespace hc::storage
                     if (State->handle_ == INVALID_HANDLE_VALUE) return NativeError(GetLastError(), Id);
                     BY_HANDLE_FILE_INFORMATION Info{};
                     if (!GetFileInformationByHandle(State->handle_, &Info)) return NativeError(GetLastError(), Id);
-                    if (Resource.revision_ && !native::MatchesRevision(*Resource.revision_, Info)) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource};
+                    if (Resource.revision_ && !native::MatchesRevision(*Resource.revision_, Info, State->handle_, FilePath(At.Value().root_))) return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Resource};
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     return std::shared_ptr<IReadStream>(new FileStream(std::move(State)));
                 }, Context.workerRead_ && kind_ == LocatorKind::Local);

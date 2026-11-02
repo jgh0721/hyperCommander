@@ -1,4 +1,5 @@
-﻿#include "nativeWritableStorage.hpp"
+﻿#include "stdafx.h"
+#include "nativeWritableStorage.hpp"
 #include "operationMetrics.hpp"
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -157,10 +158,37 @@ namespace hc::storage
             BY_HANDLE_FILE_INFORMATION Info{};
             if (!GetFileInformationByHandle(File, &Info)) return Failure(GetLastError(), Id);
             if (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return Error{ErrorCategory::Unsupported, "reparse-entry-denied", Id};
-            if (Expected.id_.providerId_ != Id || !Expected.id_.revision_ || !native::MatchesRevision(*Expected.id_.revision_, Info)
+            if (Expected.id_.providerId_ != Id || !Expected.id_.revision_
+                || !native::MatchesRevision(*Expected.id_.revision_, Info, File, std::filesystem::u8path(Expected.locator_.root_).wstring())
                 || Expected.directory_ != bool(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
                 return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Expected.id_, false, "refresh"};
             return Unit{};
+        }
+        Result<std::string> RecoveryIdentity(HANDLE File, const std::wstring& Path, bool Content)
+        {
+            BY_HANDLE_FILE_INFORMATION Info{};
+            if (!GetFileInformationByHandle(File, &Info)) return Failure(GetLastError(), {"write-recovery"}, Utf8(Path));
+            if (!Content) return native::PersistentIdentity(File, Info);
+            // The caller pins the object against writes/deletion. Content binds
+            // recovery across reopen/rename when the transport has no stable ID.
+            // Read through the already pinned handle. A second RDP read handle
+            // can keep a cached file object alive and block subsequent cleanup.
+            LARGE_INTEGER Position{};
+            if (!SetFilePointerEx(File, {}, &Position, FILE_CURRENT)) return Failure(GetLastError(), {"write-recovery"}, Utf8(Path));
+            const auto Restore = qScopeGuard([&] { SetFilePointerEx(File, Position, nullptr, FILE_BEGIN); });
+            if (!SetFilePointerEx(File, {}, nullptr, FILE_BEGIN)) return Failure(GetLastError(), {"write-recovery"}, Utf8(Path));
+            QCryptographicHash Hash(QCryptographicHash::Sha256);
+            std::vector<char> Buffer(1024 * 1024);
+            std::uint64_t Bytes = 0;
+            for (;;) {
+                DWORD Count = 0;
+                if (!ReadFile(File, Buffer.data(), DWORD(Buffer.size()), &Count, nullptr)) return Failure(GetLastError(), {"write-recovery"}, Utf8(Path));
+                if (!Count) break;
+                Hash.addData(QByteArrayView(Buffer.data(), Count)); Bytes += Count;
+            }
+            if (Bytes != ((uint64_t(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow))
+                return Error{ErrorCategory::StaleRevision, "write-recovery-content-changed"};
+            return "sha256:" + std::to_string(Bytes) + ":" + Hash.result().toHex().toStdString();
         }
         std::wstring TemporaryName(const std::wstring& Parent, const wchar_t* Kind)
         {
@@ -213,7 +241,8 @@ namespace hc::storage
                 initialTimes_.CreationTime.QuadPart = Time(Info.ftCreationTime);
                 initialTimes_.LastAccessTime.QuadPart = Time(Info.ftLastAccessTime);
                 initialTimes_.LastWriteTime.QuadPart = Time(Info.ftLastWriteTime);
-                record_.stageIdentity_ = Identity(Info);
+                record_.stageIdentity_ = native::PersistentIdentity(file_.value_, Info);
+                if (checkpoint_ && native::NeedsContentIdentity(file_.value_, path_.path_)) record_.stageIdentity_ = "content:writing";
                 if (Context.expectedWriteBytes_) {
                     if (*Context.expectedWriteBytes_ > uint64_t(INT64_MAX)) return Error{ErrorCategory::Unsupported, "native-file-size-range", id_};
                     FILE_ALLOCATION_INFO Allocation{}; Allocation.AllocationSize.QuadPart = LONGLONG(*Context.expectedWriteBytes_);
@@ -239,7 +268,7 @@ namespace hc::storage
             bool CanProduceContent(OperationContext Context) const override
             {
                 // Path-based producers cannot journal their creation atomically.
-                return destination_.kind_ == LocatorKind::Local && expectedBytes_.has_value()
+                return destination_.kind_ == LocatorKind::Local && !native::IsRedirectedPath(path_.path_) && expectedBytes_.has_value()
                     && !sourceHash_ && !checkpoint_ && !Context.writeCheckpoint_;
             }
             Result<Unit> ProduceContent(ContentProducer Producer, OperationContext Context) override
@@ -309,7 +338,7 @@ namespace hc::storage
                 file_.Close();
                 const auto Renamed = RenameHandle(File.value_, stagePath_, id_);
                 if (!Renamed.HasValue()) { failed_ = true; return Renamed; }
-                file_ = std::move(File); record_.stageIdentity_ = Identity(Info);
+                file_ = std::move(File); record_.stageIdentity_ = native::PersistentIdentity(file_.value_, Info);
                 // Recompute inheritance under the actual destination parent,
                 // not the producer's extra directory (NO_PROPAGATE differs).
                 SECURITY_DESCRIPTOR_CONTROL Control{}; DWORD Revision = 0;
@@ -464,24 +493,35 @@ namespace hc::storage
                 Basic.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
                 if (!Basic.FileAttributes) Basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
                 if (!SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) return Failure(GetLastError(), id_);
+                BY_HANDLE_FILE_INFORMATION StageInfo{};
+                if (!GetFileInformationByHandle(file_.value_, &StageInfo)) return Failure(GetLastError(), id_, Utf8(stagePath_));
+                const bool ContentIdentity = checkpoint_ && native::NeedsContentIdentity(file_.value_, path_.path_);
+                auto StageIdentity = RecoveryIdentity(file_.value_, stagePath_, ContentIdentity);
+                if (!StageIdentity.HasValue()) return StageIdentity.Failure();
+                record_.stageIdentity_ = std::move(StageIdentity.Value());
                 if (expected_.exists_)
                 {
                     if (!expected_.revision_) return Error{ErrorCategory::InvalidRequest, "expected-revision-required", id_};
-                    backup_ = Handle(CreateFileW(path_.path_.c_str(), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
+                    backup_ = Handle(CreateFileW(path_.path_.c_str(), DELETE | FILE_READ_ATTRIBUTES | (ContentIdentity ? GENERIC_READ : 0), FILE_SHARE_READ, nullptr,
                         OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
                     if (backup_.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_);
                     EntrySnapshot Expected;
                     Expected.id_ = {id_, {}, IdentityScope::NavigationSession, expected_.revision_};
+                    Expected.locator_ = destination_;
                     const auto Valid = CheckEntry(backup_.value_, Expected, id_);
                     if (!Valid.HasValue()) { backup_.Close(); return Valid.Failure(); }
                     BY_HANDLE_FILE_INFORMATION Original{};
                     if (!GetFileInformationByHandle(backup_.value_, &Original)) return Failure(GetLastError(), id_);
-                    record_.originalIdentity_ = Identity(Original);
+                    auto OriginalIdentity = RecoveryIdentity(backup_.value_, path_.path_, ContentIdentity);
+                    if (!OriginalIdentity.HasValue()) return OriginalIdentity.Failure();
+                    record_.originalIdentity_ = std::move(OriginalIdentity.Value());
                     auto Saved = checkpoint(WritePhase::Prepared); if (!Saved.HasValue()) return Saved.Failure();
                     const auto BackupPath = Normalize(record_.backup_, destination_.kind_, id_).Value().path_;
                     const auto Rename = RenameHandle(backup_.value_, BackupPath, id_);
                     if (!Rename.HasValue()) { backup_.Close(); return Rename.Failure(); }
                     backupPath_ = BackupPath;
+                    const auto Reopened = native::RefreshRenamedHandle(backup_.value_, BackupPath, DELETE | FILE_READ_ATTRIBUTES, Original);
+                    if (Reopened) return Failure(Reopened, id_, Utf8(BackupPath));
                     Saved = checkpoint(WritePhase::BackedUp);
                     if (!Saved.HasValue()) return Saved.Failure();
                 }
@@ -497,6 +537,14 @@ namespace hc::storage
                 committed_ = true;
                 WriteReceipt Receipt{destination_};
                 Receipt.transaction_ = record_.transaction_; Receipt.destinationIdentity_ = record_.stageIdentity_;
+                const auto Reopened = native::RefreshRenamedHandle(file_.value_, path_.path_,
+                    GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, StageInfo);
+                if (Reopened) {
+                    auto Error = Failure(Reopened, id_, destination_.root_); Error.userAction_ = "published-file-reopen";
+                    Receipt.cleanupErrors_.push_back(std::move(Error));
+                    if (!backupPath_.empty()) Receipt.preservedArtifacts_.push_back(record_.backup_);
+                    backup_.Close(); parents_.clear(); return Receipt;
+                }
                 auto Published = checkpoint(WritePhase::Published);
                 if (!Published.HasValue()) {
                     Receipt.cleanupErrors_.push_back(Published.Failure());
@@ -504,7 +552,10 @@ namespace hc::storage
                     file_.Close(); backup_.Close(); parents_.clear(); return Receipt;
                 }
                 Basic.FileAttributes = FinalAttributes;
-                if (!SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) Receipt.cleanupErrors_.push_back(Failure(GetLastError(), id_));
+                if (!SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) {
+                    auto Error = Failure(GetLastError(), id_, destination_.root_); Error.userAction_ = "published-file-metadata";
+                    Receipt.cleanupErrors_.push_back(std::move(Error));
+                }
                 else if (metadata_.attributes_)
                 {
                     // SMB servers can acknowledge the update yet derive HIDDEN from
@@ -517,7 +568,7 @@ namespace hc::storage
                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
                     FILE_BASIC_INFO Actual{};
                     if (Final.value_ == INVALID_HANDLE_VALUE || !GetFileInformationByHandleEx(Final.value_, FileBasicInfo, &Actual, sizeof(Actual)))
-                        Receipt.cleanupErrors_.push_back(Failure(GetLastError(), id_));
+                        Receipt.cleanupErrors_.push_back(Failure(GetLastError(), id_, destination_.root_));
                     else
                     {
                         constexpr DWORD Mask = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY;
@@ -734,6 +785,7 @@ namespace hc::storage
                 if (const auto Error = Context.Check(id_)) return *Error;
                 if (Patch.Empty()) return Unit{};
                 if (!Entry.id_.revision_ || (!Entry.id_.revision_->token_.starts_with("directory:")
+                    && !Entry.id_.revision_->token_.starts_with("rdp:")
                     && Entry.id_.revision_->token_.find(":identity:") == std::string::npos))
                     return Error{ErrorCategory::StaleRevision, "metadata-identity-required", id_};
                 auto Path = Normalize(Entry.locator_, kind_, id_);
@@ -778,7 +830,8 @@ namespace hc::storage
                 auto Parents = PinParents(Path.Value(), id_);
                 if (!Parents.HasValue()) return Parents.Failure();
                 const auto Temp = TemporaryName(std::filesystem::path(Path.Value().path_).parent_path().wstring(), L"stage");
-                Handle File(CreateFileW(Temp.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | READ_CONTROL | DELETE | (Options.verify_ ? GENERIC_READ : 0) | (Options.acl_ ? WRITE_DAC : 0), FILE_SHARE_READ, nullptr,
+                const bool RecoveryRead = Context.writeCheckpoint_ && native::NeedsContentIdentity(Parents.Value().back().value_, Path.Value().path_);
+                Handle File(CreateFileW(Temp.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | READ_CONTROL | DELETE | ((Options.verify_ || RecoveryRead) ? GENERIC_READ : 0) | (Options.acl_ ? WRITE_DAC : 0), FILE_SHARE_READ, nullptr,
                     CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
                 if (File.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_);
                 auto Session = std::make_unique<NativeWriteSession>(id_, At, std::move(Path.Value()), std::move(Expected),
@@ -903,7 +956,8 @@ namespace hc::storage
         auto Parents = PinParents(Destination.Value(), Id); if (!Parents.HasValue()) return Parents.Failure();
         struct Observed { Handle handle_; std::string identity_; };
         const auto Observe = [&](const NativePath& Path) -> Result<Observed> {
-            Handle File(CreateFileW(Path.path_.c_str(), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
+            const bool Content = Record.stageIdentity_.starts_with("sha256:") || Record.stageIdentity_ == "content:writing";
+            Handle File(CreateFileW(Path.path_.c_str(), DELETE | FILE_READ_ATTRIBUTES | (Content ? GENERIC_READ : 0), FILE_SHARE_READ, nullptr,
                 OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
             if (File.value_ == INVALID_HANDLE_VALUE) {
                 const auto Code = GetLastError();
@@ -914,12 +968,27 @@ namespace hc::storage
             if (!GetFileInformationByHandle(File.value_, &Info)) return Failure(GetLastError(), Id);
             if ((Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) || Info.nNumberOfLinks != 1)
                 return Error{ErrorCategory::Unsupported, "write-recovery-file-type"};
-            return Observed{std::move(File), Identity(Info)};
+            if (!Content && native::NeedsContentIdentity(File.value_, Path.path_))
+                return Error{ErrorCategory::StaleRevision, "write-recovery-unstable-legacy-identity", Id, {}, false, "inspect-preserved-files"};
+            auto Token = RecoveryIdentity(File.value_, Path.path_, Content);
+            if (!Token.HasValue()) return Token.Failure();
+            // Keep pre-128-bit journals readable without weakening new tokens.
+            if (!Content && !Record.stageIdentity_.starts_with("id128:")) Token = Identity(Info);
+            return Observed{std::move(File), std::move(Token.Value())};
         };
         auto Current = Observe(Destination.Value()), Pending = Observe(Stage.Value()), Original = Observe(Backup.Value());
         if (!Current.HasValue()) return Current.Failure();
         if (!Pending.HasValue()) return Pending.Failure();
         if (!Original.HasValue()) return Original.Failure();
+        if (Record.stageIdentity_ == "content:writing") {
+            // No destructive operation has started. Incomplete bytes cannot be
+            // authenticated; preserve them rather than guessing their identity.
+            WriteReceipt Receipt{Record.destination_}; Receipt.transaction_ = Record.transaction_;
+            Receipt.destinationCommitted_ = false;
+            if (!Pending.Value().identity_.empty()) Receipt.preservedArtifacts_.push_back(Record.stage_);
+            if (!Original.Value().identity_.empty()) Receipt.preservedArtifacts_.push_back(Record.backup_);
+            return Receipt;
+        }
         if ((!Pending.Value().identity_.empty() && Pending.Value().identity_ != Record.stageIdentity_)
             || (!Original.Value().identity_.empty() && Original.Value().identity_ != Record.originalIdentity_))
             return Error{ErrorCategory::StaleRevision, "write-recovery-artifact-changed", Id, {}, false, "inspect-preserved-files"};
