@@ -215,6 +215,9 @@ void EpubSourceEditor::validate(bool SaveAfter,bool Standard) {
     if(!Cached)++exportRuns_;nativeValidating_=true;validation_.setFuture(QtConcurrent::run([Model=std::move(Model),Draft,Cancel,Cached]{if(Cancel->load())return epub::EditOutput{{},"cancelled",{}};return Cached?Cached:Model.Export(Draft,[Cancel]{return Cancel->load();});}));emit StateChanged();
 }
 bool EpubSourceEditor::eventFilter(QObject* Object,QEvent* Event) {
+    if((Object==SourceInput() || Object==sourcePanel_) &&
+       (Event->type()==QEvent::Move || Event->type()==QEvent::Resize || Event->type()==QEvent::Show || Event->type()==QEvent::LayoutRequest))
+        QTimer::singleShot(0,this,&EpubSourceEditor::alignPreview);
     if(Object==SourceInput() && Event->type()==QEvent::InputMethod) {
         sourceComposing_=!static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();text_->setProperty("epubSourceComposing",sourceComposing_);
         if(!sourceComposing_)QTimer::singleShot(0,this,[this]{if(sourceComposing_)return;if(previewCandidate_)admitPreview(previewCandidate_);if(action("epubAutoPreview")->isChecked())previewTimer_.start();});

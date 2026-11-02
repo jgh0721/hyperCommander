@@ -3,6 +3,7 @@
 #include "UniqueLibs/document/markdownDocumentView.hpp"
 #include "UniqueLibs/document/documentSettingsDialog.hpp"
 #include "text/QTextView.h"
+#include "text/ScintillaQtDirectBackend.h"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QTreeWidget>
@@ -70,6 +71,23 @@ class MarkdownTests final : public QObject
         Pane.screen()
             ->grabWindow(0, Pane.mapToGlobal(QPoint()).x(), Pane.mapToGlobal(QPoint()).y(), Pane.width(), Pane.height())
             .save(QDir::currentPath() + "/_build/markdown-implementation/viewer.png");
+    }
+    void previewAlignment()
+    {
+        DocumentViewPane Pane;
+        Pane.resize(1100, 700);
+        QVERIFY(Pane.Load(input(), true, true));
+        Pane.show();
+        auto *Text = Pane.findChild<QTextView *>();
+        auto *Preview = Pane.findChild<QWidget *>("markdownPreview");
+        QVERIFY(Text && Preview);
+        for (const bool Ruler : {true, false, true})
+        {
+            Text->setRulerVisible(Ruler);
+            QTRY_COMPARE(Preview->mapToGlobal(QPoint{}).y(), Text->Backend()->widget()->mapToGlobal(QPoint{}).y());
+        }
+        QVERIFY(Pane.RunViewCommand("markdown.preview"));
+        QTRY_COMPARE(Preview->geometry().top(), 0);
     }
     void splitAndSync()
     {

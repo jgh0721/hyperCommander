@@ -107,6 +107,7 @@ void EpubSourceEditor::setupLayout() {
     connect(tabs_,&QTabBar::currentChanged,this,[this](int Index){if(updating_ || Index<0)return;const auto Path=tabs_->tabData(Index).toString();if(Path!=current_)openResource(Path);});
     connect(tabs_,&QTabBar::tabCloseRequested,this,&EpubSourceEditor::closeTab);
     connect(tabs_,&QTabBar::customContextMenuRequested,this,&EpubSourceEditor::showTabMenu);
+    sourcePanel_->installEventFilter(this);
     connect(SourceInput(),&QWidget::customContextMenuRequested,this,&EpubSourceEditor::showSourceMenu);
 }
 void EpubSourceEditor::setupResources(QWidget* Panel) {
@@ -339,6 +340,7 @@ void EpubSourceEditor::saveLayout() {
     for(const auto& [Key,Name]:previewToggles())Settings.setValue(QString("epubEditor/layout/")+Key,action(Name)->isChecked());
 }
 void EpubSourceEditor::applyOrientation(Qt::Orientation Value,bool Save) {
+    QTimer::singleShot(0,this,&EpubSourceEditor::alignPreview);
     if(previewSplitter_->orientation()!=Value){previewSplitter_->setOrientation(Value);const int Total=Value==Qt::Horizontal?previewSplitter_->width():previewSplitter_->height();previewSplitter_->setSizes({Total*55/100,Total*45/100});}
     updateActions();if(Save && layoutRestored_)layoutTimer_.start();
 }

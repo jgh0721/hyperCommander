@@ -665,6 +665,24 @@ private slots:
         QJsonObject Current;for(const auto& Use:Model.InspectImage(Image)["occurrences"].toArray())if(Use.toObject()["document"]==First["document"] && Use.toObject()["alt"]==Request["alt"])Current=Use.toObject();QCOMPARE(Current["width"].toString(),QString("320"));QCOMPARE(Current["height"].toString(),QString("180"));auto SizeRequest=Request;SizeRequest["elementPath"]=Current["elementPath"];SizeRequest["expectedSha256"]=Current["sha256"];SizeRequest["width"]="20px";QVERIFY(!Model.Structure(SizeRequest).isEmpty());QCOMPARE(Model.Fingerprint(),After);SizeRequest["width"]="";SizeRequest["height"]="";QVERIFY(Model.Structure(SizeRequest).isEmpty());QVERIFY(Model.Fingerprint()!=After);Model.Undo();QCOMPARE(Model.Fingerprint(),After);
         const auto Metadata=Model.Metadata();const auto Identifier=Metadata["values"].toObject()["identifier"];QVERIFY(Model.Structure({{"operation","metadata"},{"expectedSha256",Metadata["sha256"]},{"values",QJsonObject{{"title",QStringLiteral("새 제목 & <보존>")},{"creator",QStringLiteral("테스트 저자")},{"language","ko-KR"}}}}).isEmpty());const auto Copy=Model.Export();QVERIFY(Copy);const auto Prepared=epub::Prepare(Copy.bytes_);QVERIFY(Prepared);QCOMPARE(Prepared.publication_["title"].toString(),QStringLiteral("새 제목 & <보존>"));QCOMPARE(Model.Metadata()["values"].toObject()["identifier"],Identifier);const auto Token=Model.Fingerprint();QVERIFY(!Model.Structure({{"operation","metadata"},{"expectedSha256",Model.Metadata()["sha256"]},{"values",QJsonObject{{"language","bad language"}}}}).isEmpty());QCOMPARE(Model.Fingerprint(),Token);
     }
+    void previewAlignment() {
+        const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");
+        QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));QTemporaryDir Temp;
+        qApp->setProperty("documentViewsConfigDir",Temp.path());
+        EpubSourceEditor Editor(File.readAll(),Path);Editor.SetRecoveryEnabled(false);Editor.resize(1300,850);Editor.show();QVERIFY(foreground(Editor));
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+        Editor.ConfigurePreview(testEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));
+        QVERIFY(!Editor.Execute({{"action","epub.edit.layout"},{"orientation","horizontal"},{"preview",true}}).contains("error"));
+        auto* Text=Editor.findChild<QTextView*>();auto* Frame=Editor.findChild<QWidget*>("epubPreviewFrame");
+        QVERIFY(Text && Frame);
+        for(const bool Ruler:{true,false,true}) {
+            Text->setRulerVisible(Ruler);
+            QTRY_COMPARE(Frame->mapToGlobal(QPoint{}).y(),Editor.SourceInput()->mapToGlobal(QPoint{}).y());
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.PreviewView() && Editor.Snapshot()["preview"].toObject()["current"].toBool(),60000);
+        QTRY_VERIFY(Editor.PreviewView()->ViewState().contains("readingToolbarVisible"));
+        QVERIFY(!Editor.PreviewView()->ViewState()["readingToolbarVisible"].toBool());
+    }
     void editorScaleLayout() {
         const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());EpubSourceEditor Editor(File.readAll(),Path);Editor.SetRecoveryEnabled(false);Editor.resize(QSize(680,520).boundedTo(Editor.screen()->availableGeometry().size()-QSize(40,80)));Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);auto* Save=Editor.findChild<QAction*>("epubSaveCopy");QVERIFY(Save && Save->isEnabled() && Editor.ToolbarActions().contains(Save));QVERIFY(!Editor.findChild<QScrollArea*>("epubSourceScroll"));
         // The source fills its area: no scrolling column, and at least half of the editor height.

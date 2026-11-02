@@ -68,6 +68,7 @@ private:
     void setupLayout();void setupActions();void setupStatus();void setupProblems(QWidget* Panel);void setupResources(QWidget* Panel);
     void saveWorkspace();bool restoreWorkspace();void scheduleWorkspace();
     QTimer workspaceTimer_;QJsonObject workspacePositions_;QString workspaceError_;bool workspaceRestoring_=false,workspaceRestored_=false;
+    void alignPreview();
     void restoreLayout();void saveLayout();void applyOrientation(Qt::Orientation Value,bool Save=true);void setPanelVisible(const QString& Panel,bool Visible);
     QAction* action(const QString& Id)const;void updateActions();void updateStatus();
     // Resource tree, editor tabs and the source buffers.

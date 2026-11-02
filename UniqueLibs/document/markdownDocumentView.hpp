@@ -54,6 +54,7 @@ class MarkdownDocumentView final : public QWidget
 
   private:
     void mode(const QString &Mode);
+    void alignPreview();
     void report(const QJsonObject &Value);
     void sampleSource();
     void syncControls();
@@ -65,6 +66,7 @@ class MarkdownDocumentView final : public QWidget
     QToolBar *toolbar_;
     QToolBar *sourceTools_ = nullptr;
     QWidget *outlinePanel_;
+    QWidget *previewPanel_;
     QTreeWidget *outline_;
     QSplitter *splitter_;
     MarkdownProcessView *preview_;

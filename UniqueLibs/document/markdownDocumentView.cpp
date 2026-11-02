@@ -99,8 +99,13 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
             Visit(Visit, outline_->topLevelItem(I));
     });
     splitter_->addWidget(source_);
-    preview_ = new MarkdownProcessView(splitter_);
-    splitter_->addWidget(preview_);
+    previewPanel_ = new QWidget(splitter_);
+    auto *PreviewLayout = new QVBoxLayout(previewPanel_);
+    PreviewLayout->setContentsMargins(0, 0, 0, 0);
+    PreviewLayout->setSpacing(0);
+    preview_ = new MarkdownProcessView(previewPanel_);
+    PreviewLayout->addWidget(preview_);
+    splitter_->addWidget(previewPanel_);
     Layout->addWidget(splitter_);
     splitter_->setStretchFactor(0, 0);
     splitter_->setStretchFactor(1, 1);
@@ -189,7 +194,9 @@ void MarkdownDocumentView::mode(const QString &Value)
     source_->setVisible(SourceVisible());
     if (sourceTools_)
         sourceTools_->setVisible(SourceVisible());
+    previewPanel_->setVisible(mode_ != "source");
     preview_->setVisible(mode_ != "source");
+    QTimer::singleShot(0, this, &MarkdownDocumentView::alignPreview);
     for (const auto &Id : {"source", "preview", "split"})
         actions_["markdown." + QString(Id)]->setChecked(mode_ == Id);
     syncControls();
@@ -513,8 +520,16 @@ void MarkdownDocumentView::sampleSource()
             sendPosition(int(B->Send(SCI_DOCLINEFROMVISIBLE, Top)) + 1, true, 0);
     }
 }
+void MarkdownDocumentView::alignPreview()
+{
+    const int Top = mode_ == "split" ? source_->Backend()->widget()->mapTo(source_, QPoint{}).y() : 0;
+    if (previewPanel_->layout()->contentsMargins().top() != Top)
+        previewPanel_->layout()->setContentsMargins(0, Top, 0, 0);
+}
 bool MarkdownDocumentView::eventFilter(QObject *, QEvent *Event)
 {
+    if (Event->type() == QEvent::Move || Event->type() == QEvent::Resize || Event->type() == QEvent::Show)
+        QTimer::singleShot(0, this, &MarkdownDocumentView::alignPreview);
     if (Event->type() == QEvent::InputMethod)
         composing_ = !static_cast<QInputMethodEvent *>(Event)->preeditString().isEmpty();
     return false;
