@@ -7,6 +7,9 @@
 #include <QTreeWidget>
 #include <QPushButton>
 #include <QCheckBox>
+#include <QLabel>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QScopeGuard>
@@ -28,9 +31,17 @@ private slots:
         const auto Cleanup=qScopeGuard([&]{Holder.write("release\n");Holder.waitForBytesWritten(1000);if(!Holder.waitForFinished(5000)){Holder.kill();Holder.waitForFinished(5000);}});
         QVERIFY(QJsonDocument::fromJson(Holder.readLine()).object()["ready"].toBool());
         bool Current=true;
-        hc::ui::FileLockDialogRequest Request;Request.source_=Path;Request.reason_="win32:32";Request.current_=[&]{return Current;};
+        hc::ui::FileLockDialogRequest Request;Request.source_=Path;Request.destination_=Root.filePath("destination/owned-file.txt");Request.reason_="win32:32";Request.current_=[&]{return Current;};
         hc::ui::FileLockDialog Dialog(Request,nullptr,[](const QStringList& Paths,bool){return std::make_shared<hc::filelocks::FileLockClient>(Paths,false,QCoreApplication::applicationFilePath());});
         Dialog.show();
+        for (const auto* Side : {"source", "destination"}) {
+            const auto Prefix = QString("hc.fileLocks.%1").arg(Side);
+            auto* Parent = Dialog.findChild<QLabel*>(Prefix + ".path"); auto* Name = Dialog.findChild<QLabel*>(Prefix + ".name");
+            QVERIFY(Parent && Name); QCOMPARE(Name->text(), QStringLiteral("owned-file.txt"));
+            QVERIFY(!Name->wordWrap()); QVERIFY(Name->font().weight() >= QFont::DemiBold);
+            QTRY_VERIFY(qAbs(Parent->geometry().center().y() - Name->geometry().center().y()) <= 1);
+            QCOMPARE(Name->toolTip(), QDir::toNativeSeparators(Side == QStringLiteral("source") ? Request.source_ : Request.destination_));
+        }
         auto* Table=Dialog.findChild<QTreeWidget*>("hc.fileLocks.references");QVERIFY(Table);
         auto* Close=Dialog.findChild<QPushButton*>("hc.fileLocks.closeHandle");QVERIFY(Close);
         QTRY_VERIFY_WITH_TIMEOUT(Table->topLevelItemCount()>0,35000);
@@ -39,6 +50,7 @@ private slots:
         for(int I=0;I<Table->topLevelItemCount();++I){auto* Group=Table->topLevelItem(I);if(Group->text(1).toLongLong()!=Holder.processId())continue;
             for(int J=0;J<Group->childCount();++J)if(Group->child(J)->text(3)==QString::fromUtf8("파일 핸들 확인"))Handle=Group->child(J);}
         QVERIFY(Handle);Table->setCurrentItem(Handle);QTRY_VERIFY(Close->isEnabled());
+        auto* Scroll = Dialog.findChild<QScrollArea*>(); QVERIFY(Scroll); QTRY_COMPARE(Scroll->verticalScrollBar()->maximum(),0);
         bool Checked=false,Cancelled=false;
         QTimer::singleShot(0,&Dialog,[&]{
             auto* Confirm=static_cast<hc::ui::DialogShell*>(Dialog.findChild<QDialog*>("hc.fileLocks.confirm"));

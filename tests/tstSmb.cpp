@@ -316,6 +316,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "firstRunProductDefaultsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobInteractionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationProgressUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationLayoutUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileClipboardUi"
@@ -3626,6 +3627,14 @@ private slots:
         auto Started = Jobs.Submit(std::move(Work), QStringLiteral("응답 팝업 시험")); QVERIFY(Started.HasValue());
         QTRY_VERIFY(Window.findChild<QDialog*>("hc.jobs.interaction") && Window.findChild<QDialog*>("hc.jobs.interaction")->isVisible());
         QPointer<QDialog> Popup = Window.findChild<QDialog*>("hc.jobs.interaction"); auto* Progress = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Popup && Progress && Popup != Progress);
+        for (const auto* Side : {"source", "destination"}) {
+            const auto Prefix = QString("hc.jobs.interaction.%1.endpoint").arg(Side);
+            auto* Path = Popup->findChild<QLabel*>(Prefix + ".path"); auto* Name = Popup->findChild<QLabel*>(Prefix + ".name");
+            QVERIFY(Path && Name); QCOMPARE(Name->text(), QStringLiteral("image.png"));
+            QVERIFY(!Name->wordWrap()); QVERIFY(Name->font().weight() >= QFont::DemiBold);
+            QCOMPARE(Name->toolTip(), QDir::toNativeSeparators(QString::fromStdString(Side == QStringLiteral("source") ? Request.source_ : Request.destination_)));
+            QTRY_VERIFY(qAbs(Path->geometry().center().y() - Name->geometry().center().y()) <= 1);
+        }
         auto* Editor = Popup->findChild<QLineEdit*>("hc.jobs.newName"); QVERIFY(Editor); QCOMPARE(Editor->window(), Popup.data());
         const auto ChoiceButton = [&](InteractionChoice Choice) { return Popup->findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(Choice))); };
         QVERIFY(Popup->findChild<QWidget*>("hc.dialog.outline")); QVERIFY(Progress->findChild<QWidget*>("hc.dialog.outline"));
@@ -3777,7 +3786,7 @@ private slots:
         private:
             std::shared_ptr<Control> control_; JobProgress progress_;
         };
-        struct Case { const char* name_; JobKind kind_; JobPhase phase_; bool source_, destination_, current_, graph_; };
+        struct Case { const char* name_; JobKind kind_; JobPhase phase_; bool source_, destination_, current_, graph_; bool measured_ = true; };
         const Case Cases[] = {
             {"copy", JobKind::Copy, JobPhase::Copying, true, true, true, true},
             {"move-copy", JobKind::Move, JobPhase::Copying, true, true, true, true},
@@ -3788,6 +3797,9 @@ private slots:
             {"archive-create", JobKind::ArchiveCreate, JobPhase::BuildingArchive, true, true, true, true},
             {"archive-separate", JobKind::ArchiveSeparate, JobPhase::SavingOutput, true, true, true, true},
             {"iso-create", JobKind::IsoCreate, JobPhase::BuildingArchive, true, true, true, true},
+            {"archive-create-unmeasured", JobKind::ArchiveCreate, JobPhase::BuildingArchive, true, true, true, true, false},
+            {"archive-separate-unmeasured", JobKind::ArchiveSeparate, JobPhase::BuildingArchive, true, true, true, true, false},
+            {"iso-create-unmeasured", JobKind::IsoCreate, JobPhase::BuildingArchive, true, true, true, true, false},
             {"archive-add", JobKind::ArchiveAdd, JobPhase::RewritingArchive, true, true, false, false},
             {"archive-move", JobKind::ArchiveMove, JobPhase::RewritingArchive, true, true, false, false},
             {"archive-delete", JobKind::ArchiveDelete, JobPhase::RewritingArchive, true, false, false, false},
@@ -3808,6 +3820,7 @@ private slots:
             QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false);
             FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
             auto Control = std::make_shared<struct Control>(); JobProgress Progress{512, 1024, "sample.bin", 256, 512, 10};
+            if (!Case.measured_) { Progress.bytesTotal_.reset(); Progress.currentTotal_.reset(); Progress.bytesDone_ = 0; Progress.currentBytes_ = 0; }
             Progress.source_ = "D:/source/sample.bin"; Progress.destination_ = "E:/destination/sample.bin";
             const bool ArchiveSource = Case.kind_ == JobKind::Extract || Case.kind_ == JobKind::ArchiveMove
                 || Case.kind_ == JobKind::ArchiveDelete || Case.kind_ == JobKind::ArchiveRename;
@@ -3832,8 +3845,15 @@ private slots:
             if(Case.kind_==JobKind::ArchiveCreate||Case.kind_==JobKind::ArchiveSeparate||Case.kind_==JobKind::IsoCreate){
                 QVERIFY(Dialog->findChild<QLabel*>("hc.jobs.currentTitle")->text().contains("sample.bin"));
                 QVERIFY(!Dialog->findChild<QWidget*>("hc.jobs.phases")->isVisibleTo(Dialog));
-                QCOMPARE(qobject_cast<QBoxLayout*>(Dialog->findChild<QWidget*>("hc.jobs.source")->layout())->direction(),QBoxLayout::LeftToRight);
-                QCOMPARE(qobject_cast<QBoxLayout*>(Dialog->findChild<QWidget*>("hc.jobs.destination")->layout())->direction(),QBoxLayout::LeftToRight);
+            }
+            for (const auto* Side : {"source", "destination"}) {
+                const auto Prefix = QString("hc.jobs.%1").arg(Side);
+                auto* Block = Dialog->findChild<QWidget*>(Prefix);
+                if (!Block->isVisibleTo(Dialog)) continue;
+                auto* Path = Block->findChild<QLabel*>(Prefix + ".path"); auto* Name = Block->findChild<QLabel*>(Prefix + ".name");
+                QVERIFY(Path && Name); QVERIFY(!Name->wordWrap()); QVERIFY(Name->font().weight() >= QFont::DemiBold);
+                QTRY_VERIFY(qAbs(Path->geometry().center().y() - Name->geometry().center().y()) <= 1);
+                QVERIFY(Block->rect().contains(Name->geometry()));
             }
             QCOMPARE(Dialog->findChild<QWidget*>("hc.jobs.source")->isVisibleTo(Dialog), Case.source_);
             QCOMPARE(Dialog->findChild<QWidget*>("hc.jobs.destination")->isVisibleTo(Dialog), Case.destination_);
@@ -3871,6 +3891,32 @@ private slots:
         }
     }
 
+    void archiveCreationLayoutUi()
+    {
+        QTemporaryDir Root; QVERIFY(Root.isValid());
+        hc::settings::Repository Settings(Root.filePath("settings"));
+        for (const auto Count : {1, 3}) {
+            std::vector<hc::storage::EntrySnapshot> Entries;
+            for (int Index = 0; Index < Count; ++Index) {
+                hc::storage::EntrySnapshot Entry; Entry.name_ = "selected-folder-" + std::to_string(Index); Entry.directory_ = true;
+                Entries.push_back(Entry);
+            }
+            hc::archive::CreationDialog Dialog(Settings, {hc::storage::LocatorKind::Local, Root.path().toStdString()}, Root.path(), Count, main_, "7z", Entries);
+            Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog));
+            auto* Scroll = Dialog.findChild<QScrollArea*>(); QVERIFY(Scroll);
+            auto* Individual = Dialog.findChild<QCheckBox*>("hc.archive.create.individual");
+            auto* Toggle = Dialog.findChild<QPushButton*>("hc.archive.create.filesToggle");
+            for (const auto Width : {760, 520}) for (int Mode = 0; Mode < (Count > 1 ? 3 : 2); ++Mode) {
+                Individual->setChecked(Mode > 0); Toggle->setChecked(Mode == 2); Dialog.resize(Width, Dialog.height());
+                QTest::qWait(50); QTRY_COMPARE(Scroll->verticalScrollBar()->maximum(), 0);
+                const auto* Preview = Dialog.findChild<QLabel*>("hc.archive.create.preview");
+                QVERIFY(Scroll->viewport()->rect().contains(QRect(Preview->mapTo(Scroll->viewport(), QPoint{}), Preview->size())));
+                QVERIFY(!Preview->wordWrap());
+                QVERIFY(Dialog.screen()->availableGeometry().contains(Dialog.frameGeometry()));
+                QVERIFY(SaveR9Dialog(Dialog, QString("archive-create-layout-%1-%2-%3").arg(Count).arg(Width).arg(Mode)));
+            }
+        }
+    }
     void archiveCreationProgressUi()
     {
         using namespace hc::operations; using namespace hc::settings;

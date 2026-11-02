@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "HyperCommander/UIs/dialogShell.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
+#include "UniqueLibs/qtPathRow.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/settingsDraft.hpp"
 #include "UniqueLibs/settings/fileColorRules.hpp"
@@ -35,6 +36,33 @@ class DialogFoundationTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void compactPathRows_data()
+    {
+        QTest::addColumn<QString>("Path"); QTest::addColumn<QString>("Name");
+        QTest::newRow("local") << QStringLiteral("D:/자료/선택한 <원본>&.txt") << QStringLiteral("선택한 <원본>&.txt");
+        QTest::newRow("unc-long") << QStringLiteral("//server/share/") + QString(180, 'p') + '/' + QString(120, 'n') + ".txt"
+            << QString(120, 'n') + ".txt";
+        QTest::newRow("archive") << QStringLiteral("D:/archive.zip > /nested/항목.txt") << QStringLiteral("항목.txt");
+        QTest::newRow("root") << QStringLiteral("D:/") << QStringLiteral("D:\\");
+    }
+    void compactPathRows()
+    {
+        QFETCH(QString, Path); QFETCH(QString, Name);
+        hc::ui::PathRow Row("compactPath"); Row.SetPath(Path); Row.show();
+        auto* Parent = Row.PathLabel(); auto* Item = Row.NameLabel();
+        for (const auto Width : {240, 840, 360}) {
+            Row.resize(Width, Row.sizeHint().height()); QTest::qWait(10);
+            QCOMPARE(Item->text(), Name); QCOMPARE(Item->textFormat(), Qt::PlainText);
+            QVERIFY(!Item->wordWrap()); QVERIFY(Item->font().weight() >= QFont::DemiBold);
+            QCOMPARE(Parent->toolTip(), QDir::toNativeSeparators(Path)); QCOMPARE(Item->toolTip(), Parent->toolTip());
+            QVERIFY(Row.rect().contains(Item->geometry()));
+            if (Parent->isVisible()) {
+                QVERIFY(Row.rect().contains(Parent->geometry()));
+                QVERIFY(qAbs(Parent->geometry().center().y() - Item->geometry().center().y()) <= 1);
+                QVERIFY(Parent->width() <= Width / 2);
+            }
+        }
+    }
     void dialogButtonLetters_data()
     {
         QTest::addColumn<int>("Key"); QTest::addColumn<int>("Modifiers");

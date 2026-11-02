@@ -2,7 +2,7 @@
 #include "creationSettings.hpp"
 #include <QDialog>
 
-class QComboBox; class QLineEdit; class QCheckBox; class QLabel; class QPushButton; class QTableWidget;
+class QComboBox; class QLineEdit; class QCheckBox; class QLabel; class QPushButton; class QTableWidget; class QScrollArea;
 namespace hc::archive {
 class CreationDialog final : public QDialog {
 public:
@@ -17,7 +17,10 @@ protected:
     bool eventFilter(QObject* Object,QEvent* Event) override;
     bool event(QEvent* Event) override;
     void keyPressEvent(QKeyEvent* Event) override;
+    void showEvent(QShowEvent* Event) override;
 private:
+    void scheduleFit();
+    void fitToContents();
     void formatChanged();
     void creatorChanged();
     void validate();
@@ -38,7 +41,8 @@ private:
     std::string format_;
     int creator_ = -1;
     std::optional<plugins::ArchiveCreateSettings> value_;
-    bool separate_ = false, queued_ = false, settingsUnsupported_ = false;
+    bool separate_ = false, queued_ = false, settingsUnsupported_ = false, fitPending_ = false;
+    QScrollArea* bodyScroll_ = nullptr;
     QComboBox *formats_, *creators_;
     QLineEdit *output_, *filename_;
     QTableWidget* files_;

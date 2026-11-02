@@ -10,6 +10,8 @@
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QKeyEvent>
+#include <QScreen>
+#include <QShowEvent>
 
 namespace hc::archive {
 using namespace plugins;
@@ -34,15 +36,16 @@ CreationDialog::CreationDialog(settings::Repository& Settings, Locator SourceRoo
     auto* Layout = new QVBoxLayout(this);
     auto* Selection = new QLabel(tr("선택한 %1개 파일·폴더로 압축 파일 또는 ISO 이미지를 생성합니다.").arg(QLocale().toString(SelectionCount)), this);
     Selection->hide(); Layout->addWidget(Selection);
-    auto* Scroll = new QScrollArea(this); Scroll->setWidgetResizable(true); Scroll->setFrameShape(QFrame::NoFrame); Layout->addWidget(Scroll, 1);
-    auto* Content = new QWidget(Scroll); Scroll->setWidget(Content);
-    auto* Rows = new QVBoxLayout(Content); auto* Form = new QFormLayout; Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Rows->addLayout(Form);
+    auto* Scroll = bodyScroll_ = new QScrollArea(this); Scroll->setWidgetResizable(true); Scroll->setFrameShape(QFrame::NoFrame); Scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); Layout->addWidget(Scroll, 1);
+    auto* Content = new QWidget(Scroll); Scroll->setWidget(Content); Content->installEventFilter(this);
+    auto* Rows = new QVBoxLayout(Content); Rows->setContentsMargins(0,0,0,0); Rows->setSpacing(8);
+    auto* Form = new QFormLayout; Form->setHorizontalSpacing(12); Form->setVerticalSpacing(6); Form->setRowWrapPolicy(QFormLayout::WrapLongRows); Rows->addLayout(Form);
     auto* OutputRow = new QWidget(Content); auto* OutputLayout = new QHBoxLayout(OutputRow); OutputLayout->setContentsMargins(0, 0, 0, 0);
     output_ = new QLineEdit(QDir::toNativeSeparators(directory_), OutputRow); output_->setObjectName("hc.archive.create.path"); output_->setAccessibleName(tr("저장 폴더")); OutputLayout->addWidget(output_, 1);
     auto* Browse = new QPushButton(tr("찾아보기…"), OutputRow); Browse->setAutoDefault(false); OutputLayout->addWidget(Browse);
     outputLabel_ = new QLabel(tr("저장 폴더(&P)"), Content); outputLabel_->setBuddy(output_); Form->addRow(outputLabel_, OutputRow);
-    auto* NameRow = new QWidget(Content); auto* NameLayout = new QVBoxLayout(NameRow); NameLayout->setContentsMargins(0,0,0,0);
-    filename_ = new QLineEdit(NameRow); filename_->setObjectName("hc.archive.create.filename"); filename_->setAccessibleName(tr("생성 파일명")); NameLayout->addWidget(filename_);
+    auto* NameRow = new QWidget(Content); auto* NameLayout = new QHBoxLayout(NameRow); NameLayout->setContentsMargins(0,0,0,0); NameLayout->setSpacing(8);
+    filename_ = new QLineEdit(NameRow); filename_->setObjectName("hc.archive.create.filename"); filename_->setAccessibleName(tr("생성 파일명")); NameLayout->addWidget(filename_,1);
     auto* Restore = new QPushButton(tr("추천 이름 적용"), NameRow); Restore->setAutoDefault(false); Restore->setObjectName("hc.archive.create.recommend"); NameLayout->addWidget(Restore,0,Qt::AlignLeft);
     filenameLabel_ = new QLabel(tr("파일명(&M)"), Content); filenameLabel_->setBuddy(filename_); Form->addRow(filenameLabel_,NameRow);
     formats_ = new QComboBox(Content); formats_->setObjectName("hc.archive.create.format");
@@ -54,18 +57,20 @@ CreationDialog::CreationDialog(settings::Repository& Settings, Locator SourceRoo
     configure_ = new QPushButton(tr("플러그인 설정…(&G)"),CreatorRow); configure_->setObjectName("hc.archive.create.settings"); configure_->setAutoDefault(false); CreatorLayout->addWidget(configure_); Form->addRow(tr("플러그인(&I)"),CreatorRow);
     summary_ = new QLabel(Content); summary_->setObjectName("hc.archive.create.summary"); summary_->setTextFormat(Qt::PlainText); summary_->setWordWrap(true); summary_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred); Form->addRow(tr("현재 설정"),summary_);
     notice_ = new QLabel(Content); notice_->setWordWrap(true); Rows->addWidget(notice_);
+    auto* OptionsWidget = new QWidget(Content); auto* OptionRows = new QVBoxLayout(OptionsWidget);
+    OptionRows->setContentsMargins(0,0,0,0); OptionRows->setSpacing(4); Rows->addWidget(OptionsWidget);
     const auto Options = ReadComposition(preferences_);
     const auto AddOption = [&](const QString& Text,const char* Name,bool Checked) {
         auto* Row = new QWidget(Content); auto* Line = new QHBoxLayout(Row); Line->setContentsMargins(0,0,0,0); Line->setSpacing(8);
         auto* Check = new QCheckBox(Row); Check->setObjectName(Name); Check->setChecked(Checked); Check->setAccessibleName(Text);
         auto* Label = new OptionLabel(Text,Check,Row); Label->setWordWrap(true); Label->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);
-        Line->addWidget(Check,0,Qt::AlignVCenter); Line->addWidget(Label,1); Rows->addWidget(Row); return Check;
+        Line->addWidget(Check,0,Qt::AlignVCenter); Line->addWidget(Label,1); OptionRows->addWidget(Row); return Check;
     };
     paths_ = AddOption(tr("경로명 압축 · 폴더 구조 보존(&N)"),"hc.archive.create.paths",Options.preservePaths_);
     recursive_ = AddOption(tr("하위 폴더 재귀 압축(&R)"),"hc.archive.create.recursive",Options.includeSubdirectories_);
     individual_ = AddOption(tr("선택한 파일·폴더를 각각의 압축 파일로 만들기(&A)"),"hc.archive.create.individual",Options.separateArchives_);
     omitRoot_ = AddOption(tr("폴더 압축 시 기본 폴더 빼기(&B)"),"hc.archive.create.omitRoot",Options.omitSelectedFolderRoot_);
-    preview_ = new QLabel(Content); preview_->setObjectName("hc.archive.create.preview"); preview_->setTextFormat(Qt::PlainText); preview_->setWordWrap(true); preview_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred); Rows->addWidget(preview_);
+    preview_ = new hc::qt::ElidedLabel(Content); preview_->setObjectName("hc.archive.create.preview"); Rows->addWidget(preview_);
     filesToggle_ = new QPushButton(tr("생성 파일명 확인 · 이름 수정"),Content); filesToggle_->setObjectName("hc.archive.create.filesToggle"); filesToggle_->setCheckable(true); filesToggle_->setAutoDefault(false); Rows->addWidget(filesToggle_,0,Qt::AlignLeft);
     files_ = new QTableWidget(Content); files_->setObjectName("hc.archive.create.files"); files_->setColumnCount(2); files_->setHorizontalHeaderLabels({tr("선택 항목"),tr("생성 파일명")});
     files_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch); files_->setMaximumHeight(170); files_->hide(); Rows->addWidget(files_); Rows->addStretch();
@@ -100,6 +105,7 @@ CreationDialog::CreationDialog(settings::Repository& Settings, Locator SourceRoo
 CreationDialog::~CreationDialog() { stop_->request_stop(); }
 bool CreationDialog::eventFilter(QObject* Object,QEvent* Event)
 {
+    if (Object == bodyScroll_->widget() && Event->type() == QEvent::LayoutRequest) scheduleFit();
     if(Event->type()==QEvent::KeyPress||Event->type()==QEvent::ShortcutOverride){
         const auto* Key=static_cast<QKeyEvent*>(Event);auto* Widget=qobject_cast<QWidget*>(Object);
         if(Widget&&Widget->window()==this&&isVisible()&&Key->key()==Qt::Key_F2&&Key->modifiers()==Qt::NoModifier){
@@ -114,7 +120,50 @@ bool CreationDialog::event(QEvent* Event)
         const auto* Key=static_cast<QKeyEvent*>(Event);
         if(Key->keyCombination()==hc::defaults::AuxiliaryShortcut("background")){Event->accept();return true;}
     }
-    return QDialog::event(Event);
+    const auto Result = QDialog::event(Event);
+    if (Event->type() == QEvent::LayoutRequest || Event->type() == QEvent::Resize) scheduleFit();
+    return Result;
+}
+void CreationDialog::scheduleFit()
+{
+    if (!isVisible() || fitPending_) return;
+    fitPending_ = true;
+    QTimer::singleShot(0, this, [this] { fitPending_ = false; fitToContents(); });
+}
+void CreationDialog::showEvent(QShowEvent* Event)
+{
+    QDialog::showEvent(Event); fitToContents();
+}
+void CreationDialog::fitToContents()
+{
+    // Use the actual content height after wrapping and visibility changes. A
+    // scroll area is only a fallback when the work area cannot fit the controls.
+    const auto Available = screen()->availableGeometry();
+    const auto Width = qMin(width(), Available.width() - 40);
+    if (width() != Width) resize(Width, height());
+    layout()->activate();
+    auto* ContentLayout = bodyScroll_->widget()->layout(); ContentLayout->activate();
+    const auto ContentWidth = qMax(1, Width - 40);
+    const auto MeasureContent = [&] { return qMax(ContentLayout->minimumSize().height(), ContentLayout->hasHeightForWidth()
+        ? ContentLayout->totalHeightForWidth(ContentWidth) : ContentLayout->sizeHint().height()); };
+    auto ContentHeight = MeasureContent();
+    const auto FrameHeight = layout()->hasHeightForWidth()
+        ? layout()->totalHeightForWidth(Width) : layout()->totalSizeHint().height();
+    const auto Chrome = FrameHeight - bodyScroll_->sizeHint().height();
+    if (files_->isVisible()) {
+        // Keep the list's own scrolling for many entries, rather than scrolling
+        // the entire form when the optional name editor is expanded.
+        const auto TableHeight = qMin(files_->sizeHint().height(), files_->maximumHeight());
+        const auto Limit = qBound(files_->minimumSizeHint().height(),
+            Available.height() - 42 - Chrome - (ContentHeight - TableHeight), 170);
+        if (files_->maximumHeight() != Limit) {
+            files_->setMaximumHeight(Limit); ContentLayout->activate(); ContentHeight = MeasureContent();
+        }
+    }
+    const auto Height = qMin(ContentHeight + Chrome + 2, Available.height() - 40);
+    setMinimumHeight(Height); resize(Width, Height);
+    move(std::clamp(x(), Available.left() + 20, Available.right() - width() - 19),
+        std::clamp(y(), Available.top() + 20, Available.bottom() - height() - 19));
 }
 void CreationDialog::keyPressEvent(QKeyEvent* Event)
 {
@@ -145,6 +194,7 @@ void CreationDialog::formatChanged()
         if (Last == QString::fromStdString(C.descriptor_.id_)) Choice = creators_->count() - 1;
     }
     notice_->setText(!Last.isEmpty() && Choice < 0 ? tr("이전에 선택한 플러그인을 사용할 수 없어 다른 처리기를 선택했습니다.") : QString{});
+    notice_->setVisible(!notice_->text().isEmpty());
     creators_->setCurrentIndex(Choice >= 0 ? Choice : 0); creators_->blockSignals(false); creator_ = -1; value_.reset(); creatorChanged();
 }
 void CreationDialog::creatorChanged()
@@ -236,7 +286,7 @@ void CreationDialog::refreshPreview()
     if(Multiple)Name=files_->rowCount()?files_->item(0,1)->text():tr("선택 항목 이름별 압축 파일");
     const auto Folder=ResolveArchiveDestination(output_->text(),directory_);
     auto Path=QDir::toNativeSeparators(QDir(Folder).filePath(Name));if(Multiple)Path+=tr(" 외 %1개").arg(selectionCount_-1);
-    preview_->setText(tr("생성 파일 %1개\n%2").arg(individual_->isChecked()?selectionCount_:1).arg(Path));preview_->setToolTip(Path);
+    preview_->setText(tr("생성 파일 %1개 · %2").arg(individual_->isChecked()?selectionCount_:1).arg(Path));preview_->setToolTip(Path);
 }
 CreatorRuntime CreationDialog::Creator() const { return catalog_[creator_]; }
 Result<Unit> CreationDialog::SavePreferences() { remember(); return SaveCreationPreferences(settingsRepository_, preferences_); }

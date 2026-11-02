@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "fileLockDialog.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
+#include "UniqueLibs/qtPathRow.hpp"
 
 /// Project headers
 #include "UniqueLibs/permissionService.hpp"
@@ -13,6 +14,7 @@
 #include <QTreeWidget>
 #include <QApplication>
 #include <QHBoxLayout>
+#include <QFormLayout>
 #include <QVBoxLayout>
 #include <QTimer>
 #include <QHeaderView>
@@ -39,14 +41,18 @@ QLabel* label(const QString& Text, QWidget* Parent) {
 FileLockDialog::FileLockDialog(FileLockDialogRequest Request, QWidget* Parent, ClientFactory Factory)
     : DialogShell(tr("파일 사용 정보"), Parent), request_(std::move(Request)), factory_(std::move(Factory)) {
     setObjectName("hc.fileLocks.dialog");
-    SetSummary(request_.source_); EnableCompactLayout(1000); setMinimumWidth(720); setMinimumHeight(580); resize(1000,740);
+    SetSummary(QDir::toNativeSeparators(request_.source_)); EnableCompactLayout(1000); setMinimumWidth(720); setMinimumHeight(580); resize(1000,740);
     if (!factory_) factory_ = [](const QStringList& Paths, bool Elevated) { return std::make_shared<filelocks::FileLockClient>(Paths, Elevated); };
-    auto* Body = BodyLayout();
-    auto* Context = new fm::ui::KeyValueCard(this);
-    Context->addRow(tr("대상 파일"), QFileInfo(request_.source_).fileName(), fm::ui::KeyValueCard::Strong);
-    Context->addRow(tr("현재 위치"), QDir::toNativeSeparators(QFileInfo(request_.source_).absolutePath()), fm::ui::KeyValueCard::Mono);
-    if (!request_.destination_.isEmpty()) Context->addRow(tr("작업 대상"), QDir::toNativeSeparators(request_.destination_), fm::ui::KeyValueCard::Mono);
-    Context->addRow(tr("작업 오류"), request_.reason_); Body->addWidget(Context);
+    auto* Body = BodyLayout(); Body->setSpacing(6);
+    auto* Context = new fm::ui::Card(this); auto* Form = new QFormLayout(Context);
+    Form->setContentsMargins(14, 12, 14, 12); Form->setHorizontalSpacing(12); Form->setVerticalSpacing(6);
+    auto* Source = new PathRow("hc.fileLocks.source", Context); Source->SetPath(request_.source_);
+    Form->addRow(tr("대상 파일"), Source);
+    if (!request_.destination_.isEmpty()) {
+        auto* Destination = new PathRow("hc.fileLocks.destination", Context); Destination->SetPath(request_.destination_);
+        Form->addRow(tr("작업 대상"), Destination);
+    }
+    Form->addRow(tr("작업 오류"), label(request_.reason_, Context)); Body->addWidget(Context);
     banner_ = new fm::ui::Banner(this); banner_->setObjectName("hc.fileLocks.banner"); Body->addWidget(banner_);
     auto* Toolbar = new QHBoxLayout;
     summary_ = label({},this); Toolbar->addWidget(summary_,1);
@@ -54,12 +60,15 @@ FileLockDialog::FileLockDialog(FileLockDialogRequest Request, QWidget* Parent, C
     elevate_ = new fm::ui::Button(tr("관리자 권한으로 다시 조회(&A)"),this); elevate_->setObjectName("hc.fileLocks.elevate");
     static_cast<fm::ui::Button*>(elevate_)->setGlyph(fm::ui::glyph::Shield); Toolbar->addWidget(elevate_);
     stop_ = new fm::ui::Button(tr("조회 취소"),this); stop_->setObjectName("hc.fileLocks.stop"); Toolbar->addWidget(stop_); Body->addLayout(Toolbar);
-    table_ = new QTreeWidget(this); table_->setObjectName("hc.fileLocks.references");
+    auto* References = new QWidget(this); auto* Columns = new QHBoxLayout(References);
+    Columns->setContentsMargins(0,0,0,0); Columns->setSpacing(12); Body->addWidget(References,1);
+    table_ = new QTreeWidget(References); table_->setObjectName("hc.fileLocks.references");
     table_->setHeaderLabels({tr("프로그램 / 참조"),tr("PID"),tr("사용자"),tr("확인 범위"),tr("상태")});
     table_->setSelectionMode(QAbstractItemView::SingleSelection); table_->setAlternatingRowColors(true); table_->setMinimumHeight(145);
     table_->setColumnWidth(0,300); table_->setColumnWidth(1,80); table_->setColumnWidth(2,170); table_->setColumnWidth(3,150);
-    table_->header()->setStretchLastSection(true); Body->addWidget(table_,1);
-    details_ = new fm::ui::KeyValueCard(this); details_->setObjectName("hc.fileLocks.details"); Body->addWidget(details_);
+    table_->header()->setStretchLastSection(true); Columns->addWidget(table_,2);
+    details_ = new fm::ui::KeyValueCard(References); details_->setObjectName("hc.fileLocks.details"); details_->setMinimumWidth(240);
+    Columns->addWidget(details_,1,Qt::AlignTop);
     restriction_ = label(tr("사용 중이라는 정보만으로 삭제·이름 변경 차단 여부를 확정할 수 없습니다."),this);
     restriction_->setObjectName("hc.fileLocks.restriction"); Body->addWidget(restriction_);
     auto* Actions = new QHBoxLayout;

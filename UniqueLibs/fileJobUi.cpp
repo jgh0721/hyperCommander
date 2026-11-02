@@ -6,6 +6,7 @@
 #include "fileJobInteraction.hpp"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
 #include "qtMessageDialog.hpp"
+#include "qtPathRow.hpp"
 #include "UniqueLibs/qtArchivePassword.hpp"
 #include "folderSize.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
@@ -167,7 +168,7 @@ namespace
             || Kind == JobKind::RenameUndo || Kind == JobKind::RenameRedo || Kind == JobKind::RenameResume || Kind == JobKind::RenameRestore)
             return RateMode::Items;
         if (Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate || Kind == JobKind::IsoCreate)
-            return Progress.phase_ == JobPhase::SavingOutput || Progress.bytesTotal_ ? RateMode::Bytes : RateMode::None;
+            return Progress.phase_ == JobPhase::SavingOutput || Progress.bytesTotal_ || Progress.bytesDone_ > 0 ? RateMode::Bytes : RateMode::None;
         if (Kind == JobKind::Copy || Kind == JobKind::Extract || Kind == JobKind::Unknown) return RateMode::Bytes;
         if (Kind == JobKind::Move) {
             if (Progress.phase_ == JobPhase::RemovingSource) return RateMode::None;
@@ -226,15 +227,8 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     status_ = new QLabel(dialog_); status_->setObjectName("hc.jobs.status"); status_->setWordWrap(true);
     status_->setTextFormat(Qt::PlainText);
     const auto AddEndpoint = [&](const char* Prefix, QWidget*& Block, QLabel*& Path, QLabel*& Name) {
-        Block = new QWidget(dialog_); Block->setObjectName(QString::fromLatin1(Prefix));
-        auto* Row = new QVBoxLayout(Block); Row->setContentsMargins(0, 0, 0, 0); Row->setSpacing(6);
-        auto* Elided = new fm::ui::Label(Block); Elided->setTextRole(fm::ui::Label::Meta); Elided->setElideMode(Qt::ElideMiddle);
-        Path = Elided; Path->setObjectName(QString::fromLatin1(Prefix) + ".path"); Path->setTextFormat(Qt::PlainText);
-        Name = new QLabel(Block); Name->setObjectName(QString::fromLatin1(Prefix) + ".name");
-        Name->setTextFormat(Qt::PlainText); Name->setWordWrap(true); Name->setMinimumWidth(0);
-        auto Policy = Name->sizePolicy(); Policy.setHorizontalPolicy(QSizePolicy::Ignored); Name->setSizePolicy(Policy);
-        auto Font = Name->font(); Font.setWeight(QFont::DemiBold); Name->setFont(Font);
-        Row->addWidget(Path); Row->addWidget(Name); Layout->addWidget(Block);
+        auto* Row = new hc::ui::PathRow(QString::fromLatin1(Prefix), dialog_);
+        Block = Row; Path = Row->PathLabel(); Name = Row->NameLabel(); Layout->addWidget(Block);
     };
     AddEndpoint("hc.jobs.source", sourceBlock_, sourcePath_, sourceName_);
     AddEndpoint("hc.jobs.destination", destinationBlock_, destinationPath_, destinationName_);
@@ -1086,7 +1080,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
             return Item.status_ != ItemOutcome::Status::Completed && Item.destinationCommitted_ && !Item.sourceRemoved_;
         })) Title += tr(" · 복사 완료, 후처리 실패");
     status_->setText(Title); dialog_->setWindowTitle(Title);
-    const auto Endpoint = [&](QLabel* PathLabel, QLabel* NameLabel, const QString& Label,
+    const auto Endpoint = [&](QLabel* PathLabel, const QString& Label,
         const std::string& CurrentPath, const std::string& Root, bool FolderFallback) {
         auto Path = DisplayPath(CurrentPath.empty() ? Root : CurrentPath);
         auto Name = QString::fromStdString(Progress.currentItem_);
@@ -1106,27 +1100,17 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
             }
         } else if (Name.contains('/') || Name.contains('\\')) Name = Name.mid(std::max(Name.lastIndexOf('/'), Name.lastIndexOf('\\')) + 1);
         if (Name.isEmpty()) Name = QString::fromStdString(Snapshot.metadata_.label_);
-        auto* Row=qobject_cast<QBoxLayout*>(PathLabel->parentWidget()->layout());
-        Row->setDirection(ArchiveCreation?QBoxLayout::LeftToRight:QBoxLayout::TopToBottom);Row->setSpacing(ArchiveCreation?0:6);
-        NameLabel->setWordWrap(!ArchiveCreation);Row->setAlignment(PathLabel,ArchiveCreation?Qt::AlignVCenter:Qt::Alignment{});
-        auto PathPolicy=PathLabel->sizePolicy();PathPolicy.setHorizontalPolicy(QSizePolicy::Preferred);PathLabel->setSizePolicy(PathPolicy);
-        PathLabel->setMaximumWidth(ArchiveCreation?std::max(120,dialog_->width()/2):QWIDGETSIZE_MAX);
-        auto NamePolicy=NameLabel->sizePolicy();NamePolicy.setHorizontalPolicy(ArchiveCreation?QSizePolicy::Expanding:QSizePolicy::Ignored);NameLabel->setSizePolicy(NamePolicy);Row->setStretch(0,0);Row->setStretch(1,ArchiveCreation?1:0);
-        if(ArchiveCreation&&!Path.isEmpty()&&!Path.endsWith('\\')&&!Path.endsWith('/'))Path+='\\';
-        PathLabel->setText(Label + (Path.isEmpty() ? QString{} : QStringLiteral("   ") + Path));
-        const auto Full=Path+Name;PathLabel->setToolTip(Full);
-        NameLabel->setText(ArchiveCreation?NameLabel->fontMetrics().elidedText(Name,Qt::ElideMiddle,std::max(120,dialog_->width()-std::min(PathLabel->sizeHint().width(),PathLabel->maximumWidth())-60)):Name);
-        NameLabel->setToolTip(ArchiveCreation?Full:Name);
+        static_cast<hc::ui::PathRow*>(PathLabel->parentWidget())->SetParts(Path, Name, Label);
     };
     const bool HasSource = !Create && (!Progress.source_.empty() || !Snapshot.metadata_.source_.empty() || !Progress.currentItem_.empty());
     const bool HasDestination = !Delete && !Security && (!Progress.destination_.empty() || !Snapshot.metadata_.destination_.empty());
     sourceBlock_->setVisible(HasSource); destinationBlock_->setVisible(HasDestination);
     const bool RestoreNames = Kind == JobKind::RenameUndo || Kind == JobKind::RenameRestore;
     const bool ResumeNames = Kind == JobKind::RenameResume;
-    if (HasSource) Endpoint(sourcePath_, sourceName_, Security ? (Kind == JobKind::SecurityRestore ? tr("복원 경로") : tr("적용 경로"))
+    if (HasSource) Endpoint(sourcePath_, Security ? (Kind == JobKind::SecurityRestore ? tr("복원 경로") : tr("적용 경로"))
         : RestoreNames || ResumeNames ? tr("현재 이름") : Rename ? tr("변경 전") : Delete ? tr("삭제")
         : Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate ? tr("압축") : Operation, Progress.source_, Snapshot.metadata_.source_, !Rename && !Security);
-    if (HasDestination) Endpoint(destinationPath_, destinationName_, RestoreNames ? tr("복원 이름") : ResumeNames ? tr("최종 이름") : Rename ? tr("변경 후") : Create ? tr("생성 위치") : ArchiveCreation ? tr("생성") : tr("대상"),
+    if (HasDestination) Endpoint(destinationPath_, RestoreNames ? tr("복원 이름") : ResumeNames ? tr("최종 이름") : Rename ? tr("변경 후") : Create ? tr("생성 위치") : ArchiveCreation ? tr("생성") : tr("대상"),
         Progress.destination_, Snapshot.metadata_.destination_, !Rename && !Create && Kind != JobKind::ArchiveCreate && Kind != JobKind::ArchiveSeparate && Kind != JobKind::IsoCreate);
     const auto Phases = ArchiveCreation || (Kind == JobKind::Move && Progress.phase_ == JobPhase::ApplyingNames) ? std::vector<JobPhase>{} : JobPhases(Kind);
     phaseBlock_->setVisible(!Phases.empty());
@@ -1219,13 +1203,14 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     metrics_->setWordWrap(WrapMetrics && metrics_->fontMetrics().horizontalAdvance(metrics_->text()) > dialog_->width() - 40);
     metricsLayout_->setDirection(WrapMetrics ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     metricsLayout_->setAlignment(metrics_, Qt::AlignRight);
-    graphToggle_->setVisible(Mode != RateMode::None);
+    const bool HasGraph = ArchiveCreation || Mode != RateMode::None;
+    graphToggle_->setVisible(HasGraph);
     graphToggle_->setText(detailed_ ? tr("그래프 숨김(&D)") : tr("그래프 표시(&D)"));
-    graph_->setVisible(detailed_ && Mode != RateMode::None); graphAxis_->setVisible(detailed_ && Mode != RateMode::None); axisBlock_->setVisible(detailed_ && Mode != RateMode::None);
-    if (Mode != RateMode::None) updateGraph(Snapshot);
+    graph_->setVisible(detailed_ && HasGraph); graphAxis_->setVisible(detailed_ && HasGraph); axisBlock_->setVisible(detailed_ && HasGraph);
+    if (HasGraph) updateGraph(Snapshot);
     layoutProgressFooter();
     const auto Shape = QString::number(HasSource) + QString::number(HasDestination) + QString::number(Current)
-        + QString::number(!Phases.empty()) + QString::number(detailed_ && Mode != RateMode::None);
+        + QString::number(!Phases.empty()) + QString::number(detailed_ && HasGraph);
     if (dialog_->property("hc.jobs.presentationShape").toString() != Shape) {
         dialog_->setProperty("hc.jobs.presentationShape", Shape);
         if (dialog_->isVisible()) QTimer::singleShot(0, this, [this] { fitProgressDialog(); });
@@ -1258,9 +1243,9 @@ void FileJobUi::recordSamples()
 void FileJobUi::updateGraph(const JobSnapshot& Snapshot)
 {
     const auto Mode = ProgressRate(Snapshot);
-    graph_->setUnit(Mode == RateMode::Bytes ? fm::ui::TransferGraph::Bytes : fm::ui::TransferGraph::Count);
+    graph_->setUnit(Mode == RateMode::Bytes || Mode == RateMode::None ? fm::ui::TransferGraph::Bytes : fm::ui::TransferGraph::Count);
     graph_->setCountSuffix(Mode == RateMode::Files ? tr(" 파일/초") : tr(" 항목/초"));
-    graph_->setTitle(Mode == RateMode::Bytes ? tr("처리 속도 · 실제 관측값") : Mode == RateMode::Files ? tr("처리 속도 · 파일 수") : tr("처리 속도 · 항목 수"));
+    graph_->setTitle(Mode == RateMode::None ? tr("처리 속도 · 측정 대기") : Mode == RateMode::Bytes ? tr("처리 속도 · 실제 관측값") : Mode == RateMode::Files ? tr("처리 속도 · 파일 수") : tr("처리 속도 · 항목 수"));
     const auto Count = Mode == RateMode::Files ? (Snapshot.progress_.plannedItems_ ? Snapshot.progress_.discoveredFiles_.value_or(0) : 0)
         : Mode == RateMode::Items ? Snapshot.progress_.plannedItems_.value_or(0) : Snapshot.progress_.bytesTotal_.value_or(0);
     const auto Total = static_cast<qint64>(std::min<uint64_t>(Count, INT64_MAX));

@@ -5,6 +5,12 @@
 #include <QStyle>
 
 namespace hc::qt {
+inline void PaintElidedLabel(QLabel& Label, Qt::TextElideMode Mode) {
+    QPainter Painter(&Label);
+    const auto Text = Label.fontMetrics().elidedText(QString(Label.text()).replace('\n', ' '), Mode, qMax(0, Label.contentsRect().width()));
+    Label.style()->drawItemText(&Painter, Label.contentsRect(), QStyle::visualAlignment(Label.layoutDirection(), Label.alignment()),
+        Label.palette(), Label.isEnabled(), Text, QPalette::WindowText);
+}
 // A single text row whose contents never change the surrounding layout.
 // QLabel retains the full plain text for accessibility; the tooltip exposes it
 // to mouse users when the available width requires an ellipsis.
@@ -16,6 +22,7 @@ public:
         setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     }
     void SetText(const QString& Text) { setText(Text); setToolTip(Text); }
+    void SetElideMode(Qt::TextElideMode Mode) { elideMode_ = Mode; update(); }
     QSize sizeHint() const override {
         const auto Margins = contentsMargins();
         return {0, fontMetrics().height() + Margins.top() + Margins.bottom()};
@@ -23,9 +30,9 @@ public:
     QSize minimumSizeHint() const override { return sizeHint(); }
 protected:
     void paintEvent(QPaintEvent*) override {
-        QPainter Painter(this);
-        const auto Text = fontMetrics().elidedText(QString(text()).replace('\n', ' '), Qt::ElideRight, qMax(0, contentsRect().width()));
-        style()->drawItemText(&Painter, contentsRect(), QStyle::visualAlignment(layoutDirection(), alignment()), palette(), isEnabled(), Text, QPalette::WindowText);
+        PaintElidedLabel(*this, elideMode_);
     }
+private:
+    Qt::TextElideMode elideMode_ = Qt::ElideRight;
 };
 }

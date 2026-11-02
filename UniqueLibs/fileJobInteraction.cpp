@@ -6,6 +6,7 @@
 
 /// UIs
 #include "qtDialogFrame.hpp"
+#include "qtPathRow.hpp"
 
 /// 고유 라이브러리
 #include "fileIconService.hpp"
@@ -180,8 +181,8 @@ namespace hc::ui
         auto* Text = new QWidget(Block); auto* Lines = new QVBoxLayout(Text); Lines->setContentsMargins(0, 0, 0, 0); Lines->setSpacing(3);
         const auto Add = [&](const QString& Value) { auto* Label = new QLabel(Value, Text); Label->setTextFormat(Qt::PlainText); Label->setWordWrap(true); Label->setMinimumWidth(0); Label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); Label->setToolTip(Path); Lines->addWidget(Label); return Label; };
         auto* RoleLabel = new QLabel(Role, Block); RoleLabel->setFixedWidth(64); RoleLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft); RoleLabel->setWordWrap(true); Row->addWidget(RoleLabel);
-        auto* File = Add(QFileInfo(Path).fileName().isEmpty() ? Path : QFileInfo(Path).fileName()); auto Font = File->font(); Font.setWeight(QFont::DemiBold); File->setFont(Font);
-        Add(QDir::toNativeSeparators(QFileInfo(Path).path())); auto* Facts = Add(NativePath.isEmpty() ? tr("가상 경로 · 크기와 수정 시각 확인 불가") : tr("크기와 수정 시각 확인 중..."));
+        auto* Endpoint = new PathRow(Block->objectName() + ".endpoint", Text); Endpoint->SetPath(Path); Lines->addWidget(Endpoint);
+        auto* Facts = Add(NativePath.isEmpty() ? tr("가상 경로 · 크기와 수정 시각 확인 불가") : tr("크기와 수정 시각 확인 중..."));
         Row->addWidget(Text, 1);
         auto* Icon = new QLabel(Block); Icon->setObjectName(Block->objectName() + ".preview"); Icon->setFixedSize(104, 78); Icon->setAlignment(Qt::AlignCenter); Row->addWidget(Icon);
         auto& Icons = icons::FileIconService::Instance();
