@@ -146,15 +146,14 @@ void ImageFullscreen::Restore()
         ScreenPresent |= Screen->name() == SavedScreen;
     if (Geometry.size() == 4 && !workspace_->parentWidget())
     {
-        QRect Rect(Geometry[0].toInt(), Geometry[1].toInt(), Geometry[2].toInt(), Geometry[3].toInt());
+        // Window size belongs to the viewer/editor window settings, regardless of document type.
+        QRect Rect(QPoint(Geometry[0].toInt(), Geometry[1].toInt()), workspace_->size());
         bool OnScreen = false;
         for (auto *Screen : QGuiApplication::screens())
             OnScreen |= Screen->availableGeometry().contains(Rect.center());
-        if (!OnScreen || !ScreenPresent)
-            Rect = QRect(workspace_->screen()->availableGeometry().topLeft(), QSize(1000, 700));
         const auto Area = workspace_->screen()->availableGeometry();
         Rect.setSize(Rect.size().boundedTo(Area.size()).expandedTo(QSize(320, 240)));
-        if (!OnScreen)
+        if (!OnScreen || !ScreenPresent)
             Rect.moveTopLeft(Area.topLeft());
         workspace_->setGeometry(Rect);
         if (S.value("imageView/normalMaximized").toBool())
@@ -225,7 +224,7 @@ void ImageFullscreen::Leave()
     for (auto *Screen : QGuiApplication::screens())
         Found |= Screen->availableGeometry().intersects(Rect);
     if (!Found)
-        Rect = QRect(workspace_->screen()->availableGeometry().topLeft(), QSize(1000, 700))
+        Rect = QRect(workspace_->screen()->availableGeometry().topLeft(), hc::defaults::edit::WindowSize)
                    .intersected(workspace_->screen()->availableGeometry());
     workspace_->setGeometry(Rect);
     for (const auto &Child : hidden_)

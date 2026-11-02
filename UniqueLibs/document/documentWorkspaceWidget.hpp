@@ -24,6 +24,7 @@ namespace hc::document
     class DocumentStatusBar;
     class DocumentShortcutRouter;
     class DocumentSettingsDialog;
+    class DocumentWindowSize;
     class DocumentWorkspaceWidget : public QWidget
     {
         Q_OBJECT
@@ -46,12 +47,14 @@ namespace hc::document
         void SetClipboardBroker(bool Enabled);
         void ConfigureEpub(WebProcessRuntime Runtime) { epubRuntime_ = std::move(Runtime); }
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
+        void RestoreWindowSize();
     protected:
         bool eventFilter(QObject* Watched, QEvent* Event) override;
     signals:
         void StateChanged();
         void ChromeSettingsChanged(const QJsonObject& Settings);
     private:
+        std::unique_ptr<DocumentWindowSize> windowSize_;
         void refreshPreferences();
         void externalChange(const QString& Path, bool Missing);
         mrst::ExternalChangeWatcher* externalWatcher_ = nullptr;

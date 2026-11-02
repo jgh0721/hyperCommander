@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* 뷰어·편집기: 기본 창 크기를 1000×900으로 조정. 사용자가 조절한 일반 창 크기를 HyperViewer.json·HyperEditor.json에 각각 저장하고 다음 창에서 복원.
+
 * 탐색: 현재 패널의 프로세스·서비스 화면으로 전환하는 hc.navigate.systemProcesses·hc.navigate.systemServices 명령 추가. 기본 단축키 Ctrl+Alt+P·Ctrl+Alt+S 제공.
 
 * EPUB 편집: Ctrl+S로 현재 파일 저장, Ctrl+Shift+S로 검증 후 다른 이름 저장 지원. 저장 전에 소스 변경을 자동 반영하고, 변경 반영·저장 중 소스 커서·선택 영역·스크롤 위치 유지.

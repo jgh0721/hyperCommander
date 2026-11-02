@@ -8,6 +8,7 @@ class QPrinter;
 class QPrintDialog;
 namespace hc::document
 {
+    class DocumentWindowSize;
     // Both installed entry points select the same fixed product runtime. No
     // environment override, parent search or package-local runtime fallback.
     WebProcessRuntime MakeProductHwpRuntime(const QString& ApplicationDirectory,
@@ -43,6 +44,7 @@ namespace hc::document
         void closeEvent(QCloseEvent* Event) override;
         bool eventFilter(QObject* Object, QEvent* Event) override;
     private:
+        std::unique_ptr<DocumentWindowSize> windowSize_;
         struct PrintJob;
         struct Prepared;
         std::shared_ptr<PrintJob> printJob_;

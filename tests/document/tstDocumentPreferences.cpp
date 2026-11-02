@@ -3,10 +3,12 @@
 #include "HyperEditor/editorInstance.hpp"
 #include "UniqueLibs/productTheme.hpp"
 #include <future>
+#include <iostream>
 #include <QUuid>
 #include "UniqueLibs/document/documentSettingsDialog.hpp"
 #include "tools/epub/render/readingSettings.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "UniqueLibs/document/imageFullscreen.hpp"
 #include "text/QTextView.h"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
@@ -64,6 +66,110 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void windowSizePersistence_data()
+    {
+        QTest::addColumn<bool>("Hosted");
+        QTest::newRow("viewer") << true;
+        QTest::newRow("editor") << false;
+    }
+    void windowSizePersistence()
+    {
+        QFETCH(bool, Hosted);
+        QTemporaryDir Temp; const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        const auto Path = Temp.filePath(Hosted ? "HyperViewer.json" : "HyperEditor.json");
+        Write(Path, R"({"schemaVersion":2,"sentinel":"keep","window":{"other":"keep"}})");
+        JsonStore Stale(Path, hc::defaults::edit::DefaultDocument(), nullptr,
+            Hosted ? JsonStore::Scope::Standalone : JsonStore::Scope::Product);
+        QSize Changed;
+        {
+            DocumentWorkspaceWidget Window(Temp.filePath("recovery"), Hosted);
+            const auto ExpectedDpr = qEnvironmentVariable("HC_UI_EXPECT_DPR");
+            if (!ExpectedDpr.isEmpty()) QCOMPARE(Window.devicePixelRatioF(), ExpectedDpr.toDouble());
+            QCOMPARE(hc::defaults::edit::WindowSize, QSize(1000, 900));
+            QCOMPARE(Window.size(), hc::defaults::edit::WindowSize.boundedTo(Window.screen()->availableGeometry().size()));
+            Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
+            Window.resize(760, 520); Changed = Window.size();
+            const auto SavedSize = [&] {
+                const auto Saved = QJsonDocument::fromJson(Read(Path)).object()["window"].toObject();
+                return QSize(Saved["width"].toInt(), Saved["height"].toInt());
+            };
+            QTRY_COMPARE(SavedSize(), Changed);
+            if (!Hosted) {
+                auto Root = Stale.Object(); Root["appearance"] = QJsonObject{{"sentinel", "new"}};
+                QVERIFY(Stale.Replace(Root)); QCOMPARE(SavedSize(), Changed);
+            }
+            Window.showMaximized(); QTest::qWait(400); QCOMPARE(SavedSize(), Changed);
+            Window.showFullScreen(); QTest::qWait(400); QCOMPARE(SavedSize(), Changed);
+            Window.showNormal(); QTRY_COMPARE(Window.size(), Changed);
+            // Legacy image geometry must not replace the common remembered window size.
+            ::AppSettings Settings; Settings.setValue("imageView/normalGeometry", QVariantList{0, 0, 500, 400});
+            Settings.setValue("imageView/normalMaximized", false); Settings.setValue("imageView/fullscreen", false);
+            Window.findChild<ImageFullscreen*>("imageFullscreen")->Restore(); QCOMPARE(Window.size(), Changed);
+            Window.resize(740, 500); Changed = Window.size(); Window.hide();
+            QCOMPARE(SavedSize(), Changed); // Closing before the debounce expires still saves.
+            if (Hosted) {
+                auto Root = QJsonDocument::fromJson(Read(Path)).object(); auto Geometry = Root["window"].toObject();
+                Geometry["width"] = 720; Root["window"] = Geometry;
+                Write(Path, QJsonDocument(Root).toJson());
+                Window.RestoreWindowSize(); Changed = QSize(720, Changed.height());
+                QCOMPARE(Window.size(), Changed); // A prepared viewer reads the newest saved size.
+            }
+        }
+        const auto Saved = QJsonDocument::fromJson(Read(Path)).object();
+        QCOMPARE(Saved["sentinel"].toString(), QString("keep"));
+        QCOMPARE(Saved["window"].toObject()["other"].toString(), QString("keep"));
+        DocumentWorkspaceWidget Reopened(Temp.filePath("recovery"), Hosted);
+        QCOMPARE(Reopened.size(), Changed);
+        if (Hosted) QVERIFY(!QJsonDocument::fromJson(Read(Temp.filePath("HyperEditor.json"))).object().contains("window"));
+        else QVERIFY(!QFileInfo::exists(Temp.filePath("HyperViewer.json")));
+    }
+    void invalidWindowSize_data()
+    {
+        QTest::addColumn<QByteArray>("Saved");
+        QTest::newRow("negative") << QByteArray(R"({"width":-1,"height":700})");
+        QTest::newRow("zero") << QByteArray(R"({"width":1000,"height":0})");
+        QTest::newRow("wrong-type") << QByteArray(R"({"width":"1000","height":900})");
+        QTest::newRow("missing-height") << QByteArray(R"({"width":1000})");
+        QTest::newRow("oversized") << QByteArray(R"({"width":100000,"height":100000})");
+    }
+    void hwpEditorWindowSize()
+    {
+        QTemporaryDir Temp; const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        const auto Path = Temp.filePath("HyperEditor.json");
+        QSize Changed;
+        {
+            HwpOpenWindow Window(Temp.filePath("sample.hwp"), Temp.filePath("cache"), {}, {}, true);
+            QCOMPARE(Window.size(), hc::defaults::edit::WindowSize.boundedTo(Window.screen()->availableGeometry().size()));
+            QVERIFY(!QFileInfo::exists(Path));
+            Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
+            Window.resize(760, 520); Changed = Window.size(); Window.hide();
+            const auto Saved = QJsonDocument::fromJson(Read(Path)).object()["window"].toObject();
+            QCOMPARE(QSize(Saved["width"].toInt(), Saved["height"].toInt()), Changed);
+        }
+        HwpOpenWindow Reopened(Temp.filePath("sample.hwp"), Temp.filePath("cache"), {}, {}, true);
+        QCOMPARE(Reopened.size(), Changed);
+        QVERIFY(!QFileInfo::exists(Temp.filePath("HyperViewer.json")));
+    }
+    void invalidWindowSize()
+    {
+        QFETCH(QByteArray, Saved);
+        QTemporaryDir Temp; const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        for (const bool Hosted : {false, true}) {
+            const auto Path = Temp.filePath(Hosted ? "HyperViewer.json" : "HyperEditor.json");
+            const auto Bytes = QByteArray("{\"schemaVersion\":2,\"window\":") + Saved + "}";
+            Write(Path, Bytes);
+            DocumentWorkspaceWidget Window(Temp.filePath("recovery"), Hosted);
+            const auto Available = Window.screen()->availableGeometry().size();
+            QCOMPARE(Window.size(), Saved.contains("100000") ? Available : hc::defaults::edit::WindowSize.boundedTo(Available));
+            QCOMPARE(Read(Path), Bytes);
+        }
+    }
     void screenLineHome_data()
     {
         QTest::addColumn<int>("WrapMode");
@@ -1101,5 +1207,12 @@ private slots:
         }
     }
 };
-QTEST_MAIN(DocumentPreferencesTests)
+int main(int Argc, char** Argv)
+{
+    QApplication App(Argc, Argv); App.setAttribute(Qt::AA_Use96Dpi, true);
+    if (App.arguments().contains("--probe-dpr")) {
+        std::cout << App.primaryScreen()->devicePixelRatio() << std::endl; return 0;
+    }
+    DocumentPreferencesTests Tests; return QTest::qExec(&Tests, Argc, Argv);
+}
 #include "tstDocumentPreferences.moc"

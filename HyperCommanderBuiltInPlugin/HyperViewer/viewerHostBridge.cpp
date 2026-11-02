@@ -168,6 +168,8 @@ namespace hc::document
         const auto Dispatch = [this](const QJsonObject& Command) {
             const auto Action = (Command.contains("messageType") ? Command["payload"].toObject() : Command)["action"].toString();
             if (Action == "present") {
+                // A warm viewer may predate a resize in another viewer window.
+                if (!state_->window_->isVisible()) state_->window_->RestoreWindowSize();
                 state_->window_->show();
                 // The isolated host starts with STARTF_USESHOWWINDOW/SW_HIDE.
                 // The first native show consumes that startup state.

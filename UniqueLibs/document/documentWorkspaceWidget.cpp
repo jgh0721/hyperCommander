@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "documentWorkspaceWidget.hpp"
+#include "documentWindowSize.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "imageAsync.hpp"
@@ -183,7 +184,7 @@ namespace hc::document
         InitializePortedViewResources();
         setWindowIcon(QIcon(Hosted ? ":/icons/app/hyperviewer.svg" : ":/icons/app/hypereditor.svg"));
         recovery_ = std::make_shared<DocumentRecoveryStore>(recoveryRoot_);
-        setObjectName("documentWorkspace"); setWindowTitle(Hosted ? "HyperViewer" : "HyperEditor"); resize(1000, 700);
+        setObjectName("documentWorkspace"); setWindowTitle(Hosted ? "HyperViewer" : "HyperEditor"); resize(hc::defaults::edit::WindowSize);
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
         menu_ = new QMenuBar(this); toolbar_ = new QToolBar(tr("공통 도구모음"), this);
         menu_->setObjectName("mainMenu"); toolbar_->setObjectName("mainToolbar");
@@ -469,15 +470,21 @@ namespace hc::document
             this, [this] { RefreshWorkspaceIcons(*this); });
         refreshPreferences();
         RefreshWorkspaceIcons(*this);
+        windowSize_ = std::make_unique<DocumentWindowSize>(this, hosted_, [this](const QString& Error) { ShowShellError(Error); });
     }
     DocumentWorkspaceWidget::~DocumentWorkspaceWidget()
     {
+        windowSize_->Save();
         delete preferences_.data();
         // Children can emit modified/history signals while their PDF or image
         // resources are closed. Disconnect before members start destruction.
         for(const auto& Tab:documents_){Tab->closed_=true;Tab->cancellation_->request_stop();}
         for(auto* Child:findChildren<QObject*>())QObject::disconnect(Child,nullptr,this,nullptr);
         DocumentThemeAdapter::ReleaseLocal(*this);
+    }
+    void DocumentWorkspaceWidget::RestoreWindowSize()
+    {
+        windowSize_->Restore();
     }
     void DocumentWorkspaceWidget::showPreferences()
     {

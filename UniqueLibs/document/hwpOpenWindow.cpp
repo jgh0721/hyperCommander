@@ -1,6 +1,7 @@
 ﻿#include "hwpStartupTrace.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "hwpOpenWindow.hpp"
+#include "documentWindowSize.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentFocusRestore.hpp"
 #include "hwpInputSender.hpp"
@@ -76,7 +77,7 @@ namespace hc::document
         if(editable_)new DocumentFocusRestore(this,[this]()->QWidget*{return document_&&!closing_?document_:nullptr;},[this]{
             if(document_)if(auto* Backend=dynamic_cast<HwpProcessBackend*>(document_->focusProxy()))Backend->FocusInput();
         });
-        setWindowTitle(QFileInfo(path_).fileName() + tr(" — 불러오는 중")); resize(1000, 760);
+        setWindowTitle(QFileInfo(path_).fileName() + tr(" — 불러오는 중")); resize(hc::defaults::edit::WindowSize);
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0);
         // Same title bar as the product windows when this is a top-level window.
         if (!parentWidget()) { setWindowFlag(Qt::FramelessWindowHint); Layout->setSpacing(0); Layout->addWidget(new fm::ui::WindowChrome(this, this)); }
@@ -144,9 +145,11 @@ namespace hc::document
         addAction(PrintAction);connect(PrintAction,&QAction::triggered,this,&HwpOpenWindow::Print);
         setContextMenuPolicy(Qt::ActionsContextMenu);
         qApp->installEventFilter(this);
+        windowSize_ = std::make_unique<DocumentWindowSize>(this, !editable_, [this](const QString& Error) { status_->setText(Error); status_->show(); });
     }
     HwpOpenWindow::~HwpOpenWindow()
     {
+        windowSize_->Save();
         qApp->removeEventFilter(this); stop_.request_stop();
         if(printJob_)printJob_->cancel_=true;
         // Drop all GUI-owned source references while resources_ still retains

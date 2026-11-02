@@ -188,6 +188,8 @@ namespace hc::defaults::edit
         }
         return {};
     }
+    inline constexpr QSize WindowSize{1000, 900};
+    inline constexpr auto ViewerConfigFileName = "HyperViewer.json";
     inline constexpr auto ConfigFileName = "HyperEditor.json";
     inline constexpr auto LegacySettingsFileName = "settings.json";
     inline constexpr auto LegacyWorkspaceFileName = "workspace.json";
