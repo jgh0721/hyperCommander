@@ -41,7 +41,7 @@ namespace hc::document
     {
         Q_OBJECT
     public:
-        HwpSdiWindow(DocumentId Id, SourceIdentity Source, std::unique_ptr<HwpSdiBackend> Backend, bool Editable = false);
+        HwpSdiWindow(DocumentId Id, SourceIdentity Source, std::unique_ptr<HwpSdiBackend> Backend, bool Editable = false, QWidget* Parent = nullptr);
         bool Open();
         bool Checkpoint(const QString& Format, const QByteArray& BundleSha256);
         bool SetRecovery(RecoverySnapshot Snapshot, const QByteArray& BundleSha256, const QString& Format);

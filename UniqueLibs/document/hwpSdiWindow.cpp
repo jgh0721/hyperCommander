@@ -21,8 +21,8 @@ namespace hc::document
     {
         std::atomic<quint64> NextBinding{0};
     }
-    HwpSdiWindow::HwpSdiWindow(DocumentId Id, SourceIdentity Source, std::unique_ptr<HwpSdiBackend> Backend, bool Editable)
-        : QWidget(nullptr, Qt::Window), session_(std::move(Id), std::move(Source), DocumentContentMode::ExternalModel, ExternalModelPolicy{Editable, Editable, Editable, Editable, ExportRevisionPolicy::StrictCurrentRevision, true}),
+    HwpSdiWindow::HwpSdiWindow(DocumentId Id, SourceIdentity Source, std::unique_ptr<HwpSdiBackend> Backend, bool Editable, QWidget* Parent)
+        : QWidget(Parent, Parent ? Qt::Widget : Qt::Window), session_(std::move(Id), std::move(Source), DocumentContentMode::ExternalModel, ExternalModelPolicy{Editable, Editable, Editable, Editable, ExportRevisionPolicy::StrictCurrentRevision, true}),
           backend_(Backend.get()), status_(new QLabel(this)), binding_(++NextBinding)
     {
         if (!backend_) throw std::invalid_argument("RHWP backend is required");
@@ -54,11 +54,14 @@ namespace hc::document
             if (export_ && export_->CurrentState() == HwpExportTransfer::State::Failed) failExport(export_->Error());
         }); Deadline->start();
         auto* Layout = new QVBoxLayout(this);
-        // Product title bar; the content keeps its margins below it.
-        setWindowFlag(Qt::FramelessWindowHint);
-        Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0); { auto* Chrome = new fm::ui::WindowChrome(this, this); Chrome->setObjectName("hwpWindowChrome"); Layout->addWidget(Chrome); }
-        auto* Content = new QVBoxLayout; Content->setContentsMargins(9, 9, 9, 9); Layout->addLayout(Content, 1);
-        Layout->setContentsMargins(0, 0, 0, 0);
+        Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
+        if (isWindow()) {
+            auto* Chrome = new fm::ui::WindowChrome(this, this);
+            Chrome->setObjectName("hwpWindowChrome"); Layout->addWidget(Chrome);
+        }
+        auto* Content = new QVBoxLayout;
+        const auto Margin = isWindow() ? 9 : 0;
+        Content->setContentsMargins(Margin, Margin, Margin, Margin); Layout->addLayout(Content, 1);
         status_->setAlignment(Qt::AlignCenter);
         status_->setTextFormat(Qt::PlainText);
         status_->setWordWrap(true);

@@ -23,7 +23,7 @@ namespace hc::document
         using PrintDialogFactory = std::function<bool(QPrinter&, QWidget*)>;
         using BackendFactory = std::function<std::unique_ptr<HwpSdiBackend>()>;
         HwpOpenWindow(QString Path, QString CacheRoot, WebProcessRuntime Runtime,
-            BackendFactory Factory = {}, bool Editable = false, bool OriginalWritable = true, PrintDialogFactory PrintDialog = {});
+            BackendFactory Factory = {}, bool Editable = false, bool OriginalWritable = true, PrintDialogFactory PrintDialog = {}, QWidget* Parent = nullptr);
         ~HwpOpenWindow() override;
         void Open();
         bool SetRecovery(RecoverySnapshot Snapshot);

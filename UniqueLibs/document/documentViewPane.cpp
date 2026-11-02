@@ -1,9 +1,9 @@
 ﻿#include "stdafx.h"
+#include "documentViewPane.hpp"
 #include "UniqueLibs/document/imagePerformance.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include <QDir>
 #include "UniqueLibs/qtMessageDialog.hpp"
-#include "documentViewPane.hpp"
 #include "epubProcessView.hpp"
 #include "markdownDocumentView.hpp"
 #include "documentShortcutRegistry.hpp"
@@ -181,8 +181,8 @@ namespace hc::document
         }
         if(IsHwp()) {
             hwpFocusPending_=true;
-            hwp_=new HwpOpenWindow(Input.path_,hc::defaults::edit::HwpCacheDirectory(),hwpRuntime_);
-            hwp_->setParent(this,Qt::Widget);hwp_->setAttribute(Qt::WA_QuitOnClose,false);
+            hwp_=new HwpOpenWindow(Input.path_,hc::defaults::edit::HwpCacheDirectory(),hwpRuntime_,{},false,true,{},this);
+            hwp_->setAttribute(Qt::WA_QuitOnClose,false);
             // The workspace owns the print command and its shortcut.
             if(auto* Print=hwp_->findChild<QAction*>("rhwp.nativePrint")){Print->setShortcut({});hwp_->removeAction(Print);}
             hwp_->setContextMenuPolicy(Qt::NoContextMenu);

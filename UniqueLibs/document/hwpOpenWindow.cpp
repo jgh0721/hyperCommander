@@ -68,8 +68,8 @@ namespace hc::document
         SourceIdentity source_;
         QString error_;
     };
-    HwpOpenWindow::HwpOpenWindow(QString Path, QString CacheRoot, WebProcessRuntime Runtime, BackendFactory Factory, bool Editable, bool OriginalWritable, PrintDialogFactory PrintDialog)
-        : path_(std::move(Path)), cacheRoot_(std::move(CacheRoot)), runtime_(std::move(Runtime)), factory_(std::move(Factory)), editable_(Editable), originalWritable_(Editable && OriginalWritable), printDialogFactory_(std::move(PrintDialog))
+    HwpOpenWindow::HwpOpenWindow(QString Path, QString CacheRoot, WebProcessRuntime Runtime, BackendFactory Factory, bool Editable, bool OriginalWritable, PrintDialogFactory PrintDialog, QWidget* Parent)
+        : QWidget(Parent), path_(std::move(Path)), cacheRoot_(std::move(CacheRoot)), runtime_(std::move(Runtime)), factory_(std::move(Factory)), editable_(Editable), originalWritable_(Editable && OriginalWritable), printDialogFactory_(std::move(PrintDialog))
     {
         // Install the retirement filter before any owner decision filter.
         HwpProcessBackend::InitializeLifecycle();
@@ -78,9 +78,10 @@ namespace hc::document
             if(document_)if(auto* Backend=dynamic_cast<HwpProcessBackend*>(document_->focusProxy()))Backend->FocusInput();
         });
         setWindowTitle(QFileInfo(path_).fileName() + tr(" — 불러오는 중")); resize(hc::defaults::edit::WindowSize);
-        auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0);
-        // Same title bar as the product windows when this is a top-level window.
-        if (!parentWidget()) { setWindowFlag(Qt::FramelessWindowHint); Layout->setSpacing(0); Layout->addWidget(new fm::ui::WindowChrome(this, this)); }
+        auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
+        // Embedded views must never install top-level chrome: its native event filter
+        // adds resize/system-menu styles even after a later reparent or hide.
+        if (isWindow()) { setWindowFlag(Qt::FramelessWindowHint); Layout->setSpacing(0); Layout->addWidget(new fm::ui::WindowChrome(this, this)); }
         status_ = new QLabel(tr("문서를 준비하고 있습니다…"), this);
         status_->setAlignment(Qt::AlignCenter); status_->setWordWrap(true); Layout->addWidget(status_);
         connect(&preparation_, &QFutureWatcherBase::finished, this, &HwpOpenWindow::prepared);
@@ -243,16 +244,14 @@ namespace hc::document
         if (closing_) { cleanup(); return; }
         if (!Backend) { fail("rhwp-backend-unavailable"); if (Guard) cleanup(); return; }
         const auto Id = recovery_ ? recovery_->document_.id_ : QUuid::createUuid().toString(QUuid::Id128).toStdString();
-        document_ = new HwpSdiWindow(Id, resources_->source_, std::move(Backend), editable_);
+        document_ = new HwpSdiWindow(Id, resources_->source_, std::move(Backend), editable_, this);
         if (recovery_ && !document_->SetRecovery(std::move(*recovery_), *runtime_.approvedInventorySha256_, QFileInfo(path_).suffix().toLower())) {
             recovery_.reset(); delete document_; document_ = nullptr;
             fail("rhwp-recovery-incompatible"); if (Guard) cleanup(); return;
         }
         recovery_.reset();
         const bool HadFocus=hasFocus();
-        document_->setParent(this); layout()->addWidget(document_); status_->hide();
-        // Embedded in this window, which already has the title bar.
-        if (auto* Chrome = document_->findChild<QWidget*>("hwpWindowChrome", Qt::FindDirectChildrenOnly)) Chrome->hide();
+        layout()->addWidget(document_); status_->hide();
         document_->show();
         if(!editable_){setFocusProxy(document_);if(HadFocus)document_->setFocus(Qt::OtherFocusReason);}
         connect(document_, &HwpSdiWindow::StateChanged, this, &HwpOpenWindow::StateChanged);

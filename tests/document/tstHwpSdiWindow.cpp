@@ -24,6 +24,12 @@
 #include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include <QCryptographicHash>
 #include <QJsonArray>
+#include <QVBoxLayout>
+#include <QScreen>
+#include <iostream>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 using namespace hc::document;
 
 class FakeBackend final : public HwpSdiBackend
@@ -66,6 +72,53 @@ class HwpSdiTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void embeddedWindowHasNoFrame_data()
+    {
+        QTest::addColumn<QString>("Extension");
+        QTest::newRow("hwp") << QString("hwp");
+        QTest::newRow("hwpx") << QString("hwpx");
+    }
+    void embeddedWindowHasNoFrame()
+    {
+        QFETCH(QString, Extension);
+        QTemporaryDir Dir; const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Dir.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        const auto Path = Dir.filePath("source." + Extension);
+        { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("source bytes"), qint64{12}); }
+        WebProcessRuntime Runtime; Runtime.approvedInventorySha256_ = QByteArray(64, 'a');
+        QPointer<FakeBackend> Port;
+        QWidget Host; Host.resize(800, 600);
+        auto* Layout = new QVBoxLayout(&Host); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
+        auto* View = new HwpOpenWindow(Path, Dir.filePath("cache"), Runtime, [&]() -> std::unique_ptr<HwpSdiBackend> {
+            auto Backend = std::make_unique<FakeBackend>(); Port = Backend.get(); return Backend;
+        }, false, true, {}, &Host);
+        Layout->addWidget(View);
+        Host.show(); QVERIFY(QTest::qWaitForWindowExposed(&Host)); View->Open();
+        QTRY_VERIFY(View->Document()); QTRY_VERIFY(Port && Port->loads_ == 1);
+        Port->Finish(); QTRY_COMPARE(View->Document()->Snapshot().lifecycle_, DocumentLifecycle::Ready);
+        const auto CheckEmbedded = [&](QWidget* Widget) {
+            QVERIFY(!Widget->isWindow());
+            QVERIFY(!Widget->findChild<QWidget*>("fm.window.minimize"));
+#ifdef Q_OS_WIN
+            const auto Handle = reinterpret_cast<HWND>(Widget->winId());
+            const auto Style = GetWindowLongPtrW(Handle, GWL_STYLE);
+            QVERIFY(Style & WS_CHILD);
+            QVERIFY(!(Style & (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)));
+            const auto Origin = Widget->mapToGlobal(QPoint());
+            const auto Hit = SendMessageW(Handle, WM_NCHITTEST, 0, MAKELPARAM(Origin.x() + 1, Origin.y() + 1));
+            QVERIFY(Hit != HTCAPTION && Hit != HTTOPLEFT && Hit != HTLEFT && Hit != HTTOP);
+#endif
+        };
+        CheckEmbedded(View); CheckEmbedded(View->Document());
+        Host.resize(900, 650); QCoreApplication::processEvents();
+        QCOMPARE(View->geometry(), Host.rect());
+        QCOMPARE(View->Document()->geometry(), View->rect());
+        Host.hide(); Host.show(); QCoreApplication::processEvents();
+        CheckEmbedded(View); CheckEmbedded(View->Document());
+        QVERIFY(!QFile::exists(Dir.filePath("HyperViewer.json")));
+        View->RequestClose(); QTRY_VERIFY(Port && Port->stops_ == 1); Port->AckStop(); QTRY_VERIFY(View->IsClosed());
+    }
     void hostSessionRetiresBeforeReuse()
     {
         QTemporaryDir Dir; const auto Path = Dir.filePath("source.hwp");
@@ -945,5 +998,12 @@ private slots:
         Port->Finish(); Window.reset(); QCoreApplication::processEvents();
     }
 };
-QTEST_MAIN(HwpSdiTests)
+int main(int Argc, char** Argv)
+{
+    QApplication App(Argc, Argv);
+    if (App.arguments().contains("--probe-dpr")) {
+        std::cout << App.primaryScreen()->devicePixelRatio() << std::endl; return 0;
+    }
+    HwpSdiTests Tests; return QTest::qExec(&Tests, Argc, Argv);
+}
 #include "tstHwpSdiWindow.moc"

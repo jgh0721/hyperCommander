@@ -349,6 +349,17 @@ void mixedPdfHwpTabs(){
         QVERIFY(Viewer.findChild<QToolBar*>("mainToolbar")->actions().contains(Edit));
         QVERIFY(!State["canSave"].toBool());QVERIFY(!State["canSaveAs"].toBool());
         auto* Window=Tabs->currentWidget()->findChild<HwpOpenWindow*>();QVERIFY(Window);QVERIFY(!Window->isWindow());
+        QVERIFY(Window->Document());
+        for (auto* Embedded : {static_cast<QWidget*>(Window), static_cast<QWidget*>(Window->Document())}) {
+            QVERIFY(!Embedded->isWindow());
+            QVERIFY(!Embedded->findChild<QWidget*>("fm.window.minimize"));
+            const auto Handle = reinterpret_cast<HWND>(Embedded->winId());
+            const auto Style = GetWindowLongPtrW(Handle, GWL_STYLE);
+            QVERIFY(Style & WS_CHILD);
+            QVERIFY(!(Style & (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)));
+        }
+        Viewer.resize(920, 780); QCoreApplication::processEvents();
+        QCOMPARE(Window->Document()->geometry(), Window->rect());
         int Prints=0;Window->SetPrintDialogFactory([&](QPrinter&,QWidget*){++Prints;return false;});
         Viewer.findChild<QAction*>("printDocument")->trigger();QTRY_COMPARE(Prints,1);QVERIFY(!Doc(Viewer.Snapshot(),Id)["dirty"].toBool());
         Edit->trigger();const auto Request=Viewer.Snapshot()["editRequest"].toObject();QCOMPARE(Request["documentId"].toString(),Id);
@@ -380,6 +391,82 @@ void hostedMixedHwpTabs(){
     }
     QCOMPARE(Surface.Details().documentState_["documents"].toArray().size(),3);
     Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();},30000));
+}
+void viewerTabEmbedding_data(){
+    QTest::addColumn<QStringList>("Kinds");
+    for (const auto* Kind : {"hwp", "hwpx", "epub", "image", "animated", "pdf", "text", "markdown"})
+        QTest::newRow(Kind) << QStringList{QString::fromLatin1(Kind)};
+    if (!qEnvironmentVariable("HC_VIEWER_EXTRA_HWP").isEmpty()) QTest::newRow("user-hwp") << QStringList{"user-hwp"};
+    if (!qEnvironmentVariable("HC_VIEWER_EXTRA_HWPX").isEmpty()) {
+        QTest::newRow("user-hwpx") << QStringList{"user-hwpx"};
+        QTest::newRow("mixed-user-hwpx") << QStringList{"user-hwpx", "epub", "image", "pdf", "text", "markdown"};
+    }
+    QTest::newRow("mixed-hwp-first") << QStringList{"hwp", "epub", "image", "pdf", "hwpx", "text", "animated", "markdown"};
+    QTest::newRow("mixed-epub-first") << QStringList{"epub", "image", "hwpx", "pdf", "text", "hwp", "markdown", "animated"};
+}
+void viewerTabEmbedding(){
+    QFETCH(QStringList, Kinds);
+    const auto Corpus = qEnvironmentVariable("HC_RHWP_TEST_CORPUS");
+    const auto Epub = qEnvironmentVariable("HC_EPUB_READER_EPUB");
+    QVERIFY2(!Corpus.isEmpty() && !Epub.isEmpty(), "HWP and EPUB fixtures required");
+    QTemporaryDir Root;
+    const auto Markdown = Root.filePath("sample.md"); QVERIFY(Put(Markdown, "# Viewer tab\n\nMixed documents.\n"));
+    const QMap<QString, QString> Paths{{"hwp", Corpus + "/c02.hwp"}, {"hwpx", Corpus + "/c05.hwpx"},
+        {"epub", Epub}, {"image", Fixture("photo.jpg")}, {"animated", Fixture("animated-colors.webp")},
+        {"pdf", Fixture("basic.pdf")}, {"text", Fixture("sample.cpp")}, {"markdown", Markdown},
+        {"user-hwp", qEnvironmentVariable("HC_VIEWER_EXTRA_HWP")}, {"user-hwpx", qEnvironmentVariable("HC_VIEWER_EXTRA_HWPX")}};
+    QMap<QString, QByteArray> Originals;
+    for (const auto& Kind : Kinds) { Originals[Kind] = Read(Paths[Kind]); QVERIFY(!Originals[Kind].isEmpty()); }
+    QtPluginViewerController Controller(nullptr, [] { return MakeNativeMaterializer(QDir::tempPath().toStdString()); });
+    QtPluginViewerSurface Surface(&Controller); Surface.resize(1000, 760); Surface.show();
+    const auto Send = [&](QJsonObject Request) {
+        const auto Sent = Surface.SendDocument(std::move(Request));
+        return Sent.HasValue() && Wait([&] { return Surface.Details().commandSequence_ >= Sent.Value(); }, 10000)
+            && !Surface.Details().commandError_;
+    };
+    QStringList Ids;
+    for (qsizetype Index = 0; Index < Kinds.size(); ++Index) {
+        const auto Path = Paths[Kinds[Index]];
+        if (Index == 0) {
+            Surface.Open(Options(), Content(Path));
+            QVERIFY2(Wait([&] { return Surface.IsReady(); }, 45000), "F3 viewer did not become ready");
+        } else QVERIFY(Send({{"action", "open"}, {"path", Path}}));
+        QVERIFY(Wait([&] {
+            const auto State = Surface.Details().documentState_;
+            return Doc(State, State["activeDocumentId"].toString())["lifecycle"] == "ready";
+        }, 45000));
+        const auto State = Surface.Details().documentState_; Ids << State["activeDocumentId"].toString();
+        QCOMPARE(State["documents"].toArray().size(), Index + 1);
+    }
+    for (const auto& Size : {QSize(900, 650), QSize(1180, 850)}) {
+        Surface.resize(Size); QCoreApplication::processEvents();
+        for (const auto& Id : Ids) {
+            QVERIFY(Send({{"action", "activate"}, {"documentId", Id}}));
+            QCOMPARE(Surface.Details().documentState_["activeDocumentId"].toString(), Id);
+            QCOMPARE(Doc(Surface.Details().documentState_, Id)["lifecycle"].toString(), QString("ready"));
+            bool FramedHwp = false;
+            EnumChildWindows(reinterpret_cast<HWND>(Surface.winId()), [](HWND Child, LPARAM Data) -> BOOL {
+                wchar_t Class[256]{}; GetClassNameW(Child, Class, 256);
+                const auto Name = QString::fromWCharArray(Class);
+                if (Name.contains("HwpOpenWindow") || Name.contains("HwpSdiWindow")) {
+                    const auto Style = GetWindowLongPtrW(Child, GWL_STYLE);
+                    if (!(Style & WS_CHILD) || (Style & (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU)))
+                        *reinterpret_cast<bool*>(Data) = true;
+                }
+                return TRUE;
+            }, reinterpret_cast<LPARAM>(&FramedHwp));
+            QVERIFY(!FramedHwp);
+            const auto Evidence = qEnvironmentVariable("HC_RHWP_TEST_EVIDENCE");
+            if (!Evidence.isEmpty() && Size.width() == 1180) {
+                Surface.raise(); Surface.activateWindow(); QTest::qWait(100);
+                const auto Top = Surface.mapToGlobal(QPoint());
+                const auto Name = QString::fromLatin1(QTest::currentDataTag()) + "-" + Kinds[Ids.indexOf(Id)] + ".png";
+                QVERIFY(Surface.screen()->grabWindow(0, Top.x(), Top.y(), Surface.width(), Surface.height()).save(Evidence + '/' + Name));
+            }
+        }
+    }
+    Surface.Close(); QVERIFY(Wait([&] { return Controller.IsIdle(); }, 30000));
+    for (const auto& Kind : Kinds) QCOMPARE(Read(Paths[Kind]), Originals[Kind]);
 }
 void hostedHwpEditLaunch(){
     const auto Corpus=qEnvironmentVariable("HC_RHWP_TEST_CORPUS");if(Corpus.isEmpty())QSKIP("Pinned RHWP corpus required");
