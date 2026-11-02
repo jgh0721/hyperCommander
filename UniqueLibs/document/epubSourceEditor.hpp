@@ -28,14 +28,15 @@ public:
     QJsonObject Snapshot()const;
     QJsonObject Execute(const QJsonObject& Request);
     QByteArray Token()const;
-    storage::Result<QByteArray> Export(const QString& Destination)const;
+    storage::Result<QByteArray> Export(const QString& Destination,bool SaveOriginal=false)const;
     bool CanUndo()const;bool CanRedo()const;void Undo();void Redo();
     bool IsReady()const{return ready_;}
     bool IsModified()const{return ready_ && Token()!=baseToken_;}
     bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !nativeValidating_ && !structuring_ && validatedToken_==Token() && !validatedBytes_.isEmpty() && checkerState_!="running" && standardValidationAccepted();}
     static QString RecoveryDirectory();
     void Commit(const QString& Path,const QByteArray& Bytes);
-    void RequestSave(){validate(true);}
+    bool PrepareSave(bool SaveAs);
+    bool CanPrepareSave()const{return ready_ && !sourceComposing_ && !structuring_ && !nativeValidating_ && checkerState_!="running" && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty();}
     void ReloadValidationSettings();
     void Checkpoint();
     void DiscardRecovery();
@@ -57,7 +58,7 @@ public:
     bool RunCommand(const QString& Id);
     bool CanRunCommand(const QString& Id)const;
     void SetShortcutBindings(const QJsonObject& Bindings);
-signals:void StatusChanged();void Changed();void StateChanged();void SaveRequested();void PreviewCommitted();void EscapeRequested();void FullscreenRequested();
+signals:void StatusChanged();void Changed();void StateChanged();void SaveRequested(bool SaveAs);void PreviewCommitted();void EscapeRequested();void FullscreenRequested();
 protected:bool eventFilter(QObject* Object,QEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();
@@ -150,7 +151,7 @@ private:
     QJsonObject previewSnapshot()const;
     epub::EditOutput cachedExport_;QByteArray cachedExportToken_;
     epub::EditModel model_;QFutureWatcher<epub::EditModel> worker_;
-    QFutureWatcher<epub::EditOutput> validation_;QByteArray validationToken_,validatedToken_,validatedBytes_;bool saveAfter_=false,nativeValidating_=false;
+    QFutureWatcher<epub::EditOutput> validation_;QByteArray validationToken_,validatedToken_,validatedBytes_;bool saveAfter_=false,saveAsAfter_=true,nativeValidating_=false;
     std::shared_ptr<std::atomic_bool> cancel_,validationCancel_;
     qint64 exportRuns_=0,exportJoins_=0;
     QTextView* text_=nullptr;QLabel* image_=nullptr;QStackedWidget* sourceStack_=nullptr;QWidget* sourcePanel_=nullptr;QWidget* recoveryBar_=nullptr;QLabel* recoveryText_=nullptr;

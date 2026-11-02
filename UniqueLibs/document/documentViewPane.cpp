@@ -361,8 +361,9 @@ namespace hc::document
     void DocumentViewPane::SetEpubRecoveryEnabled(bool Enabled){if(epubEditor_)epubEditor_->SetRecoveryEnabled(Enabled);}
     void DocumentViewPane::CheckpointEpub(){if(epubEditor_)epubEditor_->Checkpoint();}
     bool DocumentViewPane::CanEditEpub()const{return epubEditingAllowed_ && epubEditor_ && epubEditor_->IsReady();}
-    bool DocumentViewPane::PrepareEpubSave(){if(CanEditEpub() && !CanSaveEpub()){epubEditor_->RequestSave();return false;}return true;}
+    bool DocumentViewPane::PrepareEpubSave(bool SaveAs){return !CanEditEpub() || epubEditor_->PrepareSave(SaveAs);}
     bool DocumentViewPane::CanSaveEpub()const{return CanEditEpub() && epubEditor_->IsValidated();}
+    bool DocumentViewPane::CanPrepareEpubSave()const{return CanEditEpub() && epubEditor_->CanPrepareSave();}
     EpubProcessView* DocumentViewPane::currentEpub()const{return epubEditor_ && epubEditor_->PreviewView()?epubEditor_->PreviewView():epub_;}
     bool DocumentViewPane::editEpub(const QString& Locator,int Chapter) {
         if(!epubEditingAllowed_ || !epub_ || epubClosing_)return false;
@@ -379,7 +380,7 @@ namespace hc::document
                 }
                 emit ViewStateChanged();
             });
-            connect(epubEditor_,&EpubSourceEditor::SaveRequested,this,&DocumentViewPane::SaveRequested);connect(epubEditor_,&EpubSourceEditor::PreviewCommitted,this,[this]{epubEditor_->show();epub_->hide();epub_->RequestClose();});
+            connect(epubEditor_,&EpubSourceEditor::SaveRequested,this,&DocumentViewPane::EpubSaveRequested);connect(epubEditor_,&EpubSourceEditor::PreviewCommitted,this,[this]{epubEditor_->show();epub_->hide();epub_->RequestClose();});
             connect(epubEditor_,&EpubSourceEditor::EscapeRequested,this,&DocumentViewPane::EscapeRequested);connect(epubEditor_,&EpubSourceEditor::FullscreenRequested,this,&DocumentViewPane::FullscreenRequested);
             // Editing commands join the EPUB toolbar after a marker; reader mode hides them.
             if(auto* Bar=findChild<QToolBar*>("epubEditToolbar")) {
@@ -421,9 +422,9 @@ namespace hc::document
         const auto Bytes = image_->SerializeContent();
         return Bytes.isEmpty() ? QByteArray{} : "image:" + QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex();
     }
-    storage::Result<QByteArray> DocumentViewPane::Export(const QString& Destination) const
+    storage::Result<QByteArray> DocumentViewPane::Export(const QString& Destination,bool SaveEpubOriginal) const
     {
-        if(epub_)return epubEditor_?epubEditor_->Export(Destination):storage::Result<QByteArray>{storage::Error{storage::ErrorCategory::Unsupported,"epub-read-only"}};
+        if(epub_)return epubEditor_?epubEditor_->Export(Destination,SaveEpubOriginal):storage::Result<QByteArray>{storage::Error{storage::ErrorCategory::Unsupported,"epub-read-only"}};
         if(reading_&&!reading_->isHidden()){
             const auto Image=reading_->CurrentImage();if(Image.isNull())return storage::Error{storage::ErrorCategory::Unavailable,"image-page-not-ready"};
             QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);

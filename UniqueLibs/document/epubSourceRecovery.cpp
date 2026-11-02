@@ -92,7 +92,7 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
     }
     const bool First=model_.Publication().isEmpty();
     model_=std::move(Model);ready_=!model_.Publication().isEmpty();error_=model_.Error();setEnabled(true);
-    report(ready_?tr("변경 내용은 사본으로 저장합니다. EPUBCheck 검사는 설정의 Java/JAR를 사용합니다."):error_);
+    report(ready_?tr("저장은 현재 EPUB을 갱신합니다. 다른 이름 저장으로 사본을 만들 수 있습니다. EPUBCheck 검사는 설정의 Java/JAR를 사용합니다."):error_);
     if(ready_) {
         if(!Restoring)sourceHashAtOpen_=QByteArray::fromHex(model_.Publication()["sourceSha256"].toString().toLatin1());
         reference_=Restoring?QCryptographicHash::hash(pendingRecovery_->original_,QCryptographicHash::Sha256):model_.Fingerprint();
@@ -100,7 +100,11 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
         refreshTree();if(First || !layoutRestored_)restoreLayout();
         // The first editable resource in reading order opens first.
         QString Initial=current_;if(!model_.IsEditable(Initial)){Initial.clear();for(const auto& Path:SpinePaths)if(model_.IsEditable(Path)){Initial=Path;break;}if(Initial.isEmpty())for(const auto& Value:model_.Publication()["resources"].toArray())if(model_.IsEditable(Value.toObject()["path"].toString())){Initial=Value.toObject()["path"].toString();break;}}
-        if(!(First && !Restoring && !commitRestore_ && restoreWorkspace())){current_=Initial;select();}
+        // A validated save leaves the displayed source bytes intact. Reattaching its
+        // document would reapply layout settings and briefly scroll to the caret.
+        const bool KeepSource=commitRestore_ && !Restoring && Initial==current_ && sourceShown() && sourceBytes()==model_.Read(Initial);
+        if(KeepSource){refreshTabs();markDiagnostics();}
+        else if(!(First && !Restoring && !commitRestore_ && restoreWorkspace())){current_=Initial;select();}
         if(Restoring) {
             const auto Snapshot=std::exchange(pendingRecovery_,std::nullopt).value();baseToken_=QCryptographicHash::hash(Snapshot.original_,QCryptographicHash::Sha256);
             // The draft is written into the shown document, which stays locked until unlocked here.
@@ -123,7 +127,8 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
     if(ready_ && commitRestore_ && !Restoring) {
         if(model_.IsEditable(commitResource_) && commitResource_!=current_){current_=commitResource_;select();}
         if(sourceShown())setSourceSelection(commitAnchor_,commitPosition_,false);
-        QTimer::singleShot(0,this,[this]{if(sourceShown())setScroll(commitVertical_,commitHorizontal_);if(commitFocus_ && previewOwnerActive())focusSource();});
+        if(commitFocus_ && previewOwnerActive())focusSource();
+        if(sourceShown())setScroll(commitVertical_,commitHorizontal_);
     }
     commitRestore_=false;refreshRecovery();updateActions();emit StateChanged();
 }

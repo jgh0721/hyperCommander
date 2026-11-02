@@ -229,9 +229,9 @@ namespace hc::document
         Add(tr("저장(&S)"), "saveDocument", [this] {
             auto Tab = active(); if (!Tab) return;
             if (Tab->choosingSavePath_) return;
-            if(Tab->pane_->CanEditEpub() && !Tab->pane_->PrepareEpubSave())return;
+            if(Tab->pane_->CanEditEpub() && !Tab->pane_->PrepareEpubSave(false))return;
             if (Tab->broker_) { auto Result = prepareSave(Tab); if (Result.contains("error")) Tab->error_ = Result["error"].toString(); update(); }
-            else if (Tab->originalSave_) save(Tab, Tab->path_);
+            else if (Tab->originalSave_) save(Tab, Tab->path_, false, Tab->pane_->CanEditEpub());
             else {
                 Tab->choosingSavePath_ = true;
                 ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
@@ -245,7 +245,7 @@ namespace hc::document
         Add(tr("다른 이름 저장"), "saveDocumentAs", [this] {
             auto Tab = active(); if (!Tab) return;
             if (Tab->choosingSavePath_) return;
-            if(Tab->pane_->CanEditEpub() && !Tab->pane_->PrepareEpubSave())return;
+            if(Tab->pane_->CanEditEpub() && !Tab->pane_->PrepareEpubSave(true))return;
             Tab->choosingSavePath_ = true;
             ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
                 Tab->choosingSavePath_ = false;
@@ -729,6 +729,7 @@ namespace hc::document
             else open(Path,false,{},false);
         });
         connect(Pane,&DocumentViewPane::SaveRequested,this,[this,Tab] {activate(Tab);findChild<QAction*>("saveDocumentAs")->trigger();});
+        connect(Pane,&DocumentViewPane::EpubSaveRequested,this,[this,Tab](bool SaveAs) {if(Tab->closed_)return;activate(Tab);findChild<QAction*>(SaveAs?"saveDocumentAs":"saveDocument")->trigger();});
         connect(Pane,&DocumentViewPane::EditEpubRequested,this,[this,Tab]{const auto Result=editEpub(Tab);if(Result.contains("error")){Tab->error_=Result["error"].toString();update();}});
         connect(Pane,&DocumentViewPane::EditImageRequested,this,[this](const QImage& Image){
             const auto Path=recoveryRoot_+"/image-copy-"+QUuid::createUuid().toString(QUuid::Id128)+".png";
@@ -844,9 +845,9 @@ namespace hc::document
                     Tab->input_.bom_ = Tab->input_.encoding_ != "CP949" && (Bom == 1 || (Bom == 0 && Tab->input_.encoding_.startsWith("UTF-16")));
                 }
                 if (Tab->input_.recoveryOrigin_) Tab->recoveredName_ = tr("복구 · ") + QFileInfo(QString::fromStdString(Tab->input_.recoveryOrigin_->localPath_)).fileName();
-                const bool Hwp=Tab->input_.viewId_=="hwp"||Tab->input_.viewId_=="hwpx"||Tab->input_.viewId_=="epub";
+                const bool Hwp=Tab->input_.viewId_=="hwp"||Tab->input_.viewId_=="hwpx";
                 Tab->originalSave_ = !Hwp && Tab->originalAuthority_ && !Tab->input_.book_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
-                if(Hwp)Tab->broker_=false;
+                if(Hwp || Tab->input_.viewId_=="epub")Tab->broker_=false;
                 if (Tab->input_.book_) Tab->broker_ = false;
                 SourceIdentity Source{Tab->input_.source_, {}, Tab->path_.toUtf8().toStdString(), Tab->sourceToken_.toStdString(),
                     (Tab->originalSave_ || Tab->broker_) && !Tab->recovered_};
@@ -915,14 +916,14 @@ namespace hc::document
         if (Tab->pendingBytes_.size() <= HostChunkLimit) Result["bytes"] = QString::fromLatin1(Tab->pendingBytes_.toBase64());
         return Result;
     }
-    void DocumentWorkspaceWidget::save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite)
+    void DocumentWorkspaceWidget::save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite, bool SaveEpubOriginal)
     {
         if(Tab&&Tab->pane_->IsProcessDocument()&&!Tab->pane_->CanEditEpub()){Tab->error_=Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor";update();return;}
         if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty()) return;
         const auto TargetCanonical = QFileInfo(Destination).canonicalFilePath();
         const bool Original = QFileInfo(Destination).absoluteFilePath() == QFileInfo(Tab->path_).absoluteFilePath()
             || (!TargetCanonical.isEmpty() && TargetCanonical == QFileInfo(Tab->path_).canonicalFilePath());
-        if (Original && (Tab->pane_->IsEpub() || !Tab->originalSave_ || Tab->broker_ || Tab->recovered_)) { Tab->error_ = "document-original-save-unavailable"; update(); return; }
+        if (Original && ((Tab->pane_->IsEpub() && (!SaveEpubOriginal || hosted_)) || !Tab->originalSave_ || Tab->broker_ || Tab->recovered_)) { Tab->error_ = "document-original-save-unavailable"; update(); return; }
         if(Tab->pane_->ViewState().contains("reading")){
             // Export is detached from the live book and its provider lease.
             const auto Encoded=Tab->pane_->Export(Destination);if(!Encoded.HasValue()){Tab->error_=QString::fromStdString(Encoded.Failure().code_);update();return;}
@@ -939,7 +940,7 @@ namespace hc::document
         }
         auto Started = Tab->session_->Save({Original ? SaveDisposition::Original : SaveDisposition::SaveAs, Destination.toUtf8().toStdString()});
         if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
-        const auto Ticket = Started.Value();const auto Encoded=Tab->pane_->Export(Destination);
+        const auto Ticket = Started.Value();const auto Encoded=Tab->pane_->Export(Destination,Original && SaveEpubOriginal);
         if(!Encoded.HasValue()){Tab->session_->CompleteSave(Ticket,{false,{},Encoded.Failure()});Tab->error_=QString::fromStdString(Encoded.Failure().code_);update();return;}
         const auto Bytes=Encoded.Value();
         const auto Expected = Original ? storage::DestinationExpectation{true, Tab->input_.source_.id_.revision_} : storage::DestinationExpectation{};
@@ -963,7 +964,7 @@ namespace hc::document
                 if(!Tab->Dirty())Tab->pane_->Commit(Destination, Bytes);
                 Tab->path_ = Destination; Tab->displayName_.clear(); Tab->input_.source_ = Result.Value().source_; Tab->input_.hash_ = Result.Value().hash_;
                 Tab->originalAuthority_ = true;
-                Tab->originalSave_ = !Tab->pane_->IsEpub() && Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u); Tab->recovered_ = false; Tab->recoveredName_.clear();
+                Tab->originalSave_ = Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u); Tab->recovered_ = false; Tab->recoveredName_.clear();
                 Tab->checkpointedRevision_ = std::numeric_limits<std::uint64_t>::max();
                 Tab->broker_ = false; Tab->sourceToken_.clear();
                 if (!Result.Value().receipt_.cleanupErrors_.empty()) Tab->error_ = "document-saved-cleanup-warning";
@@ -1039,7 +1040,7 @@ namespace hc::document
         for (const auto& Tab : documents_) {
             auto State = Tab->session_->Snapshot(); auto Capability = Tab->session_->Capabilities();
             if(Tab->pane_->IsProcessDocument()){
-                const auto View=Tab->pane_->ViewState();Capability.save_=false;Capability.saveAs_=Tab->pane_->CanEditEpub();
+                const auto View=Tab->pane_->ViewState();Capability.save_=Tab->originalSave_ && Tab->pane_->CanEditEpub();Capability.saveAs_=Tab->pane_->CanEditEpub();
                 if(!View["error"].toString().isEmpty())State.error_=storage::Error{storage::ErrorCategory::Unavailable,View["error"].toString().toStdString()};
                 if(State.error_)State.lifecycle_=DocumentLifecycle::Failed;
                 else if(!View["ready"].toBool())State.lifecycle_=DocumentLifecycle::Opening;
@@ -1234,7 +1235,7 @@ namespace hc::document
         if (Request.contains("revision") && Action != "commitSave" && Action != "saveRead" && Request["revision"].toString() != QString::number(Tab->Revision())) return Error("document-stale-revision");
         if (Action == "cancel") { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); return {{"accepted", true}}; }
         if (Action == "reload") { if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-reload-dirty"); load(Tab, Request["discard"].toBool()); return {{"accepted", true}}; }
-        if(Tab->pane_->IsProcessDocument()&& !(Tab->pane_->CanEditEpub() && Action=="saveAs") && (Action=="save"||Action=="saveAs"||Action=="prepareSave"))return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
+        if(Tab->pane_->IsProcessDocument()&& !(Tab->pane_->CanEditEpub() && (Action=="saveAs" || Action=="save")) && (Action=="save"||Action=="saveAs"||Action=="prepareSave"))return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
         if (Action == "close") {
             if (Tab->choosingSavePath_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
             if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-close-dirty");
@@ -1255,7 +1256,7 @@ namespace hc::document
         else if (Action == "selectAll") Tab->pane_->Execute(Request);
         else if (Action == "undo") Tab->pane_->Undo();
         else if (Action == "redo") Tab->pane_->Redo();
-        else if (Action == "save") { if (Tab->broker_) return prepareSave(Tab); save(Tab, Tab->path_, Request["overwrite"].toBool()); }
+        else if (Action == "save") { if (Tab->broker_) return prepareSave(Tab); save(Tab, Tab->path_, Tab->pane_->IsEpub()?false:Request["overwrite"].toBool(), Tab->pane_->CanEditEpub()); }
         else if (Action == "saveAs") save(Tab, Request["path"].toString(), Request["overwrite"].toBool());
         else if (Action == "prepareSave") return prepareSave(Tab);
         else if (Action == "saveRead") {
@@ -1339,7 +1340,7 @@ namespace hc::document
         }
         else chrome_->SetActive({});
         auto Capability = Tab ? Tab->session_->Capabilities() : DocumentCapabilities{};
-        if(Tab && Tab->pane_->IsProcessDocument()){Capability.save_=false;Capability.saveAs_=Tab->pane_->CanEditEpub();Capability.undo_=Tab->pane_->CanUndo();Capability.redo_=Tab->pane_->CanRedo();}
+        if(Tab && Tab->pane_->IsProcessDocument()){Capability.save_=Tab->originalSave_ && Tab->pane_->CanEditEpub();Capability.saveAs_=Tab->pane_->CanEditEpub();Capability.undo_=Tab->pane_->CanUndo();Capability.redo_=Tab->pane_->CanRedo();}
         for (const auto& Item : {std::pair{"saveDocument", Capability.save_ || Capability.saveAs_},
             std::pair{"saveDocumentAs", Capability.saveAs_}, std::pair{"undoDocument", Capability.undo_}, std::pair{"redoDocument", Capability.redo_},
             std::pair{"closeDocument", Capability.close_ && Tab && !Tab->checkpointing_},
@@ -1354,7 +1355,10 @@ namespace hc::document
             findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(false);
         }
         if(Tab&&Tab->pane_->IsEpub()){
-            findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(!hosted_ && !Tab->loading_ && !Tab->pane_->IsBusy() && Tab->pane_->CanEditEpub());
+            // Both commands apply and validate; only an authoritative local source permits original Save.
+            // Draft writes and discovery do not mutate the live source and may overlap a save.
+            const bool CanSave = !hosted_ && !Tab->loading_ && !Tab->saving_ && !Tab->choosingSavePath_ && Tab->pendingToken_.isEmpty() && Tab->pane_->CanPrepareEpubSave();
+            findChild<QAction*>("saveDocument")->setEnabled(CanSave && Tab->originalSave_);findChild<QAction*>("saveDocumentAs")->setEnabled(CanSave);
         }
         if(auto* Reopen=findChild<QAction*>("epubReopenDocument"))Reopen->setVisible(Tab && Tab->pane_->IsEpub() && Tab->pane_->findChild<QAction*>("epubReopen"));
         findChild<QAction*>("printDocument")->setEnabled(Tab&&(!Tab->pane_->IsMarkdown()||Tab->pane_->MarkdownSourceVisible())&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
@@ -1381,7 +1385,7 @@ namespace hc::document
             const bool Reading=View.contains("reading") || (Tab->pane_->IsProcessDocument()&&!Tab->pane_->IsEpubEditing());
             const bool ReadOnly=(Tab->pane_->IsMarkdown()&&!Tab->pane_->MarkdownSourceVisible()) || Reading || (Tab->pane_->ViewId()=="text"?View["readOnly"].toBool():!(Capability.save_||Capability.saveAs_));
             QString Mode=ReadOnly?tr("읽기 전용"):Tab->pane_->ViewId()=="pdf"?tr("주석 편집"):tr("편집");
-            const auto Destination=Tab->pane_->IsEpub()?tr("원본 유지 · 다른 이름으로 저장"):Tab->broker_?tr("원본 공급자에 저장"):Tab->originalSave_?tr("로컬 파일"):tr("사본 · 다른 이름으로 저장");
+            const auto Destination=Tab->pane_->IsEpub()?(Tab->originalSave_?tr("현재 EPUB에 저장"):tr("사본 · 다른 이름으로 저장")):Tab->broker_?tr("원본 공급자에 저장"):Tab->originalSave_?tr("로컬 파일"):tr("사본 · 다른 이름으로 저장");
             if(!Tab->loading_ && !Tab->input_.bytes_.isEmpty())Fields.append(DocumentStatusField{"fileSize",QLocale().formattedDataSize(Tab->input_.bytes_.size()),{},tr("열 때의 파일 크기"),{},false});
             Fields.append(DocumentStatusField{"destination",Destination,{},{},{},false});
             if(Tab->pane_->ViewId()=="text"&&Tab->input_.bytes_.size()>=qBound(1,appliedPreferences_["documentViews"].toObject()["textView"].toObject()["largeFileMB"].toInt(hc::defaults::edit::ViewValue("textView/largeFileMB").toInt()),16)*1024*1024)
@@ -1395,7 +1399,7 @@ namespace hc::document
             else if(Tab->loading_||Tab->navigating_)MessageText=tr("여는 중…");
             else if(Tab->saving_||!Tab->pendingToken_.isEmpty())MessageText=tr("저장 중…");
             else if(Tab->pane_->IsBusy())MessageText=tr("처리 중…");
-            if(Tab->Dirty())MessageText+=(MessageText.isEmpty()?QString{}:QString(" · "))+(Tab->pane_->IsEpubEditing()?tr("사본 미저장"):tr("미저장"));
+            if(Tab->Dirty())MessageText+=(MessageText.isEmpty()?QString{}:QString(" · "))+tr("미저장");
             if(!MessageText.isEmpty())Fields.append(DocumentStatusField{"state",MessageText,{},Detail,{},true,true});
         } else Fields.append(DocumentStatusField{"empty",shellError_.isEmpty()?tr("파일을 열어 주세요."):shellError_});
         statusBar_->SetFields(Fields);statusSlot_->show();
@@ -1430,7 +1434,7 @@ namespace hc::document
                 tr("변경 내용을 저장하시겠습니까?"), QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel));
             if (Choice != QMessageBox::Save && Choice != QMessageBox::Discard) { closingWorkspace_ = false; return; }
             if (Choice == QMessageBox::Save) {
-                activate(Target); Target->closeAfterSave_ = true; findChild<QAction*>("saveDocument")->trigger(); return;
+                activate(Target); Target->closeAfterSave_ = true; findChild<QAction*>(Target->pane_->CanEditEpub() && !Target->originalSave_?"saveDocumentAs":"saveDocument")->trigger(); return;
             }
         }
         retire(Target, true); update();

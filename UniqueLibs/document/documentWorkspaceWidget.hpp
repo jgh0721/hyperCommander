@@ -69,7 +69,7 @@ namespace hc::document
         std::shared_ptr<Tab> find(const QString& Id) const;
         QJsonObject open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
             const QString& RecoveryPath = {}, const QString& DisplayName = {});
-        void save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite = false);
+        void save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite = false, bool SaveEpubOriginal = false);
         void load(const std::shared_ptr<Tab>& Tab, bool Discard = false, const QString& RecoveryPath = {});
         void navigateImage(const std::shared_ptr<Tab>& Tab, const QString& Path);
         void retire(std::shared_ptr<Tab> Tab, bool Discard, bool PreserveRecovery = false);

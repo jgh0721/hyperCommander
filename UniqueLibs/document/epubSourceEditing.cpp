@@ -43,7 +43,8 @@ bool EpubSourceEditor::sourceShown()const{return sourceStack_ && sourceStack_->c
 int EpubSourceEditor::sourcePosition()const{return toUtf16(direct(text_)->Send(SCI_GETCURRENTPOS));}
 int EpubSourceEditor::sourceAnchor()const{return toUtf16(direct(text_)->Send(SCI_GETANCHOR));}
 void EpubSourceEditor::setSourceSelection(int Anchor,int Position,bool Reveal) {
-    direct(text_)->Send(SCI_SETSEL,quintptr(fromUtf16(Anchor)),fromUtf16(Position));if(Reveal)direct(text_)->Send(SCI_SCROLLCARET);
+    // SCI_SETSELECTION restores direction without SCI_SETSEL's implicit caret scroll.
+    direct(text_)->Send(SCI_SETSELECTION,quintptr(fromUtf16(Position)),fromUtf16(Anchor));if(Reveal)direct(text_)->Send(SCI_SCROLLCARET);
 }
 int EpubSourceEditor::firstVisibleLine()const{return int(direct(text_)->Send(SCI_GETFIRSTVISIBLELINE));}
 int EpubSourceEditor::horizontalOffset()const{return int(direct(text_)->Send(SCI_GETXOFFSET));}

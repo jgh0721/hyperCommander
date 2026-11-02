@@ -157,7 +157,7 @@ void EpubSourceEditor::finishEpubCheck(int Code,bool Normal) {
         if(!HasErrors && Code==0)checkerVerifiedToken_=checkerWorkToken_;
         report(HasErrors?tr("EPUBCheck %1 · 오류가 있습니다. 문제 패널의 항목을 두 번 누르면 해당 소스로 이동합니다.").arg(Version):tr("EPUBCheck %1 · 오류 없음 · 진단 %2개 (경고 포함)").arg(Version).arg(Rows.size()));
     }
-    checkerVersion_=Version;emit StateChanged();if(!Stale && IsValidated() && saveAfter_)emit SaveRequested();saveAfter_=false;
+    checkerVersion_=Version;emit StateChanged();if(!Stale && IsValidated() && saveAfter_)emit SaveRequested(saveAsAfter_);saveAfter_=false;
 }
 QJsonObject EpubSourceEditor::validationSnapshot()const {
     return {{"required",standardValidationRequired()},{"state",checkerState_},{"version",checkerVersion_},{"reason",checkerReason_},{"current",!checkerVerifiedToken_.isEmpty() && checkerVerifiedToken_==Token()},{"diagnostics",diagnosticRows_}};

@@ -66,7 +66,7 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
         if(!Result){error_=Result.error_+": "+Result.location_;report(Result.error_=="epub-edit-spine-repair-required"?tr("읽기 순서에 누락된 참조가 있어 저장할 수 없습니다. OPF에서 해당 참조를 수정한 후 다시 검사해 주세요. 원본은 변경하지 않았습니다."):tr("소스 검사를 통과하지 못했습니다. %1").arg(error_));validatedBytes_.clear();}
         else {cachedExport_=Result;cachedExportToken_=validationToken_;error_.clear();validatedToken_=validationToken_;validatedBytes_=Result.bytes_;report(tr("기본 구조·XML·CSS 괄호 검사 통과 · EPUBCheck 검사로 표준 오류를 확인할 수 있습니다."));}
         if(Result && checkerRequested_){startEpubCheck();return;}
-        emit StateChanged();if(Result && IsValidated() && saveAfter_)emit SaveRequested();saveAfter_=false;
+        emit StateChanged();if(Result && IsValidated() && saveAfter_)emit SaveRequested(saveAsAfter_);saveAfter_=false;
     });load(std::move(Bytes));
 }
 EpubSourceEditor::~EpubSourceEditor(){
@@ -87,7 +87,7 @@ QString EpubSourceEditor::mediaOf(const QString& Path)const{for(const auto& Valu
 QMap<QString,QByteArray> EpubSourceEditor::draft()const {if(ready_ && !current_.isEmpty() && sourceShown() && sourceModified())return {{current_,sourceBytes()}};return {};}
 QByteArray EpubSourceEditor::Token()const {if(!ready_)return baseToken_;const auto Value=model_.Fingerprint(draft());return Value==reference_?baseToken_:Value;}
 bool EpubSourceEditor::flush(){
-    if(!ready_ || sourceComposing_)return false;const auto Draft=draft();
+    if(!ready_ || sourceComposing_)return false;const auto Draft=draft();saveSourceState();
     for(auto I=Draft.begin();I!=Draft.end();++I){const auto Error=model_.Replace(I.key(),I.value());if(!Error.isEmpty()){report(Error);return false;}if(sourceBuffers_.contains(I.key()))sourceBuffers_[I.key()].applied_=I.value();touchedResources_.insert(I.key());}
     if(!Draft.isEmpty()){text_->CommitContent();refreshTabs();if(resourceModel_)resourceModel_->Refresh();emit Changed();}return true;
 }
@@ -132,7 +132,7 @@ QJsonObject EpubSourceEditor::Snapshot()const {
     const QJsonObject Source{{"resource",current_},{"buffer",QString::number(State.serial_)},{"shown",sourceShown()},{"modified",ready_ && sourceShown() && sourceModified()},{"readOnly",sourceReadOnly_},{"language",text_->currentLanguage()}};
     const QJsonObject Layout{{"orientation",previewSplitter_->orientation()==Qt::Horizontal?"horizontal":"vertical"},{"tree",!treePanel_->isHidden()},{"preview",!previewPanel_->isHidden()},{"problems",!problemsPanel_->isHidden()}};
     const QJsonObject Status{{"message",message_},{"draft",draftMessage_},{"preview",previewMessage_},{"validation",statusValidation_->text()}};
-    return {{"sourceCache",QJsonObject{{"reads",sourceReads_},{"maps",sourceMapBuilds_}}},{"workspaceError",workspaceError_},{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",true},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
+    return {{"sourceCache",QJsonObject{{"reads",sourceReads_},{"maps",sourceMapBuilds_}}},{"workspaceError",workspaceError_},{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",false},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
 }
 QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
     const auto Action=Request["action"].toString();
@@ -187,9 +187,21 @@ QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
     }
     return {{"error","epub-edit-action"}};
 }
-storage::Result<QByteArray> EpubSourceEditor::Export(const QString& Destination)const {
+bool EpubSourceEditor::PrepareSave(bool SaveAs) {
+    // Applying source edits is shared by both save commands, before validation.
+    if(!flush())return false;
+    if(IsValidated())return true;
+    saveAsAfter_=SaveAs;
+    if((nativeValidating_ || checkerState_=="running") && validationToken_==Token())saveAfter_=true;
+    else validate(true);
+    return false;
+}
+storage::Result<QByteArray> EpubSourceEditor::Export(const QString& Destination,bool SaveOriginal)const {
     if(!ready_ || QFileInfo(Destination).suffix().compare("epub",Qt::CaseInsensitive)!=0)return storage::Error{storage::ErrorCategory::Unsupported,"epub-edit-save-as-epub-required"};
-    if(protectedPaths_.contains(QFileInfo(Destination).absoluteFilePath().toCaseFolded()) || (!identity(Destination).isEmpty() && identities_.contains(identity(Destination))))return storage::Error{storage::ErrorCategory::AccessDenied,"epub-edit-source-overwrite-denied"};
+    const auto Target=QFileInfo(Destination).absoluteFilePath().toCaseFolded();
+    // The workspace establishes the current target and original-write authority.
+    // A Save As that finishes during further typing has already adopted its new path.
+    if(!SaveOriginal && (protectedPaths_.contains(Target) || (!identity(Destination).isEmpty() && identities_.contains(identity(Destination)))))return storage::Error{storage::ErrorCategory::AccessDenied,"epub-edit-source-overwrite-denied"};
     if(!IsValidated())return storage::Error{storage::ErrorCategory::InvalidRequest,"epub-edit-validation-required"};return validatedBytes_;
 }
 void EpubSourceEditor::validate(bool SaveAfter,bool Standard) {

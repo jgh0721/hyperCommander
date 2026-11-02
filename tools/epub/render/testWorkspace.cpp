@@ -14,6 +14,10 @@
 #include <QScopeGuard>
 #include <QUuid>
 #include <QFile>
+#include <QFileDialog>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <Windows.h>
 #include <QTemporaryDir>
 #include <QJsonArray>
@@ -172,6 +176,64 @@ QString resourceOf(EpubSourceEditor& Editor,const QString& Media){for(const auto
 class EpubWorkspaceTests final : public QObject {
     Q_OBJECT
 private slots:
+    void editorSaveShortcut_data() {
+        QTest::addColumn<bool>("Wrapped");QTest::newRow("no-wrap")<<false;QTest::newRow("wrapped")<<true;
+    }
+    void editorSaveShortcut() {
+        QFETCH(bool,Wrapped);const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Owned EPUB corpus required");
+        const bool NativeDialogsDisabled=QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);QApplication::setAttribute(Qt::AA_DontUseNativeDialogs,true);
+        const auto RestoreDialogs=qScopeGuard([NativeDialogsDisabled]{QApplication::setAttribute(Qt::AA_DontUseNativeDialogs,NativeDialogsDisabled);});
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());const auto SourcePath=Temp.filePath("original.epub");QString Resource;
+        const auto Original=scrollBook(Corpus,Resource,160);QVERIFY(!Original.isEmpty());QVERIFY(writeBook(SourcePath,Original));
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));QString Id;QVERIFY(openReading(Window,SourcePath,Id));
+        auto* Save=Window.findChild<QAction*>("saveDocument");auto* SaveAs=Window.findChild<QAction*>("saveDocumentAs");QVERIFY(Save && SaveAs);
+        QVERIFY(!Save->isEnabled());QVERIFY(!SaveAs->isEnabled());QCOMPARE(Save->shortcut(),QKeySequence("Ctrl+S"));QCOMPARE(SaveAs->shortcut(),QKeySequence("Ctrl+Shift+S"));
+        auto* Editor=beginEditing(Window,Id);QVERIFY(Editor);QVERIFY(selectResource(*Editor,Resource));auto* Backend=sourceBackend(*Editor);
+        Backend->Send(SCI_SETWRAPMODE,Wrapped?SC_WRAP_WORD:SC_WRAP_NONE);QTest::qWait(100);
+        auto Edited=sourceText(*Editor);const auto Append=[&](const QString& Text){const bool Ok=setSourceCursor(*Editor,int(sourceText(*Editor).size())) && insertSource(*Editor,Text);if(Ok)Edited+=Text;return Ok;};QVERIFY(Append("\n<!-- applied source -->\n"));
+        const auto PlaceView=[&]{
+            const auto Position=Backend->Send(SCI_POSITIONFROMLINE,20);Backend->Send(SCI_SETSELECTION,Position+8,Position);
+            Backend->Send(SCI_SETFIRSTVISIBLELINE,80);Backend->Send(SCI_SETXOFFSET,Wrapped?0:60);
+        };
+        const auto Viewport=[&]{return QList<qintptr>{Backend->Send(SCI_GETCURRENTPOS),Backend->Send(SCI_GETANCHOR),Backend->Send(SCI_GETFIRSTVISIBLELINE),Backend->Send(SCI_GETXOFFSET),Backend->Send(SCI_GETDOCPOINTER)};};
+        bool Monitoring=false,ViewportMoved=false;QList<qintptr> Expected;
+        connect(Editor->SourceView()->Backend(),&ITextEditorBackend::viewportScrolled,&Window,[&]{if(Monitoring && Viewport()!=Expected)ViewportMoved=true;});
+        const auto WatchView=[&]{QTest::qWait(200);PlaceView();QTest::qWait(50);Expected=Viewport();ViewportMoved=false;Monitoring=true;};
+        const auto CheckView=[&]{Monitoring=false;const bool Same=!ViewportMoved && Viewport()==Expected;if(!Same)qWarning()<<"Save viewport expected"<<Expected<<"actual"<<Viewport()<<"transient movement"<<ViewportMoved;return Same;};
+        const auto PressSave=[&](bool As){
+            if(!foreground(Window))return false;QApplication::setActiveWindow(&Window);Editor->SourceInput()->setFocus();QTest::qWait(100);
+            if(!Editor->SourceInput()->hasFocus() || GetAncestor(GetFocus(),GA_ROOT)!=GetAncestor(reinterpret_cast<HWND>(Window.winId()),GA_ROOT))return false;
+            INPUT Keys[6]{};int Count=0;const auto Key=[&](WORD Code,bool Up){auto& Input=Keys[Count++];Input.type=INPUT_KEYBOARD;Input.ki.wVk=Code;Input.ki.dwFlags=Up?KEYEVENTF_KEYUP:0;};
+            Key(VK_CONTROL,false);if(As)Key(VK_SHIFT,false);Key('S',false);Key('S',true);if(As)Key(VK_SHIFT,true);Key(VK_CONTROL,true);
+            return SendInput(Count,Keys,sizeof(INPUT))==UINT(Count);
+        };
+        const auto SaveDialog=[&]()->QFileDialog*{for(auto* Dialog:Window.findChildren<QFileDialog*>())if(Dialog->isVisible())return Dialog;return nullptr;};
+        const auto Read=[&](const QString& Path){QFile File(Path);return File.open(QIODevice::ReadOnly)?File.readAll():QByteArray{};};
+        const auto ReadText=[&](const QString& Path){epub::EditModel Model;return Model.Load(Read(Path))?QString::fromUtf8(Model.Read(Resource)):QString{};};
+        WatchView();auto* Apply=Window.findChild<QAction*>("epubApplyResource");QVERIFY(Apply && Apply->isEnabled());Apply->trigger();QTest::qWait(150);
+        QVERIFY(CheckView());QVERIFY(!Apply->isEnabled());QCOMPARE(Read(SourcePath),Original);
+        QVERIFY(Append("<!-- Ctrl+S automatically applied -->\n"));QTRY_VERIFY_WITH_TIMEOUT(Save->isEnabled(),30000);
+        WatchView();QVERIFY(PressSave(false));QTRY_VERIFY_WITH_TIMEOUT(!document(Window,Id)["dirty"].toBool(),30000);
+        QTRY_VERIFY_WITH_TIMEOUT(Editor->Snapshot()["preview"].toObject()["current"].toBool() && !Editor->Snapshot()["preview"].toObject()["busy"].toBool(),30000);
+        QVERIFY(!SaveDialog());QVERIFY(CheckView());QVERIFY(!Apply->isEnabled());QCOMPARE(ReadText(SourcePath),Edited);const auto FirstSaved=Read(SourcePath);QVERIFY(FirstSaved!=Original);
+        // Save As applies first even if the user later cancels the file dialog.
+        QVERIFY(Append("<!-- Ctrl+Shift+S automatically applied -->\n"));QTRY_VERIFY_WITH_TIMEOUT(SaveAs->isEnabled(),30000);
+        WatchView();QVERIFY(PressSave(true));QTRY_VERIFY_WITH_TIMEOUT(SaveDialog(),30000);QVERIFY(!Apply->isEnabled());QVERIFY(Editor->IsValidated());SaveDialog()->reject();
+        QTRY_VERIFY_WITH_TIMEOUT(!SaveDialog(),5000);QVERIFY(document(Window,Id)["dirty"].toBool());QCOMPARE(Read(SourcePath),FirstSaved);QTest::qWait(150);QVERIFY(CheckView());
+        QTRY_VERIFY_WITH_TIMEOUT(SaveAs->isEnabled(),10000);WatchView();QVERIFY(PressSave(true));QTRY_VERIFY_WITH_TIMEOUT(SaveDialog(),30000);
+        const auto Output=SaveDialog()->selectedFiles().value(0);QCOMPARE(Output,Temp.filePath("original-edited.epub"));QVERIFY(QMetaObject::invokeMethod(SaveDialog(),"accept",Qt::DirectConnection));QTRY_VERIFY_WITH_TIMEOUT(!SaveDialog(),5000);
+        const bool SavedCopy=QTest::qWaitFor([&]{return QFile::exists(Output) && !document(Window,Id)["dirty"].toBool();},15000);if(!SavedCopy){const auto Doc=document(Window,Id);qWarning()<<"Save As diagnostic"<<Doc["error"]<<Doc["saveState"]<<Doc["dirty"]<<Doc["path"]<<QDir(Temp.path()).entryList({"*.epub"},QDir::Files);}QVERIFY(SavedCopy);QTest::qWait(150);QVERIFY(CheckView());
+        QCOMPARE(document(Window,Id)["path"].toString(),Output);QCOMPARE(ReadText(Output),Edited);QCOMPARE(Read(SourcePath),FirstSaved);
+        // Subsequent Ctrl+S updates the current Save As file, without another dialog.
+        QVERIFY(Append("<!-- save current copy -->\n"));QTRY_VERIFY_WITH_TIMEOUT(Save->isEnabled(),30000);
+        WatchView();QVERIFY(PressSave(false));QTRY_VERIFY_WITH_TIMEOUT(!document(Window,Id)["dirty"].toBool(),30000);QTest::qWait(150);QVERIFY(CheckView());
+        QVERIFY(!SaveDialog());QCOMPARE(ReadText(Output),Edited);QCOMPARE(Read(SourcePath),FirstSaved);
+        // Invalid source is applied but must never replace the last valid EPUB.
+        const auto BeforeInvalid=Read(Output);QVERIFY(replaceSource(*Editor,"<html>"));QTRY_VERIFY_WITH_TIMEOUT(Save->isEnabled(),30000);QVERIFY(PressSave(false));
+        QTRY_VERIFY_WITH_TIMEOUT(!Editor->Snapshot()["validating"].toBool() && !Editor->Snapshot()["error"].toString().isEmpty(),30000);
+        QVERIFY(document(Window,Id)["dirty"].toBool());QCOMPARE(Read(Output),BeforeInvalid);QVERIFY(!SaveDialog());
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
     void propertyDialogsPreserveLongValues() {
         const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));epub::EditModel Model;QVERIFY(Model.Load(File.readAll()));const auto Root=Model.Publication()["rootfile"].toString();auto Opf=QString::fromUtf8(Model.Read(Root));QVERIFY(Opf.contains("</metadata>"));const QString Creator(1500,QChar('z')),Alt(3000,QChar('x'));Opf.replace("</metadata>","<dc:creator>"+Creator+"</dc:creator></metadata>");QVERIFY(Model.Replace(Root,Opf.toUtf8()).isEmpty());const auto Uses=Model.InspectImage("EPUB/Images/street.svg")["occurrences"].toArray();QVERIFY(!Uses.isEmpty());const auto Row=Uses.first().toObject();auto Html=QString::fromUtf8(Model.Read(Row["document"].toString()));const auto Previous="alt=\""+Row["alt"].toString()+"\"";QVERIFY(Html.contains(Previous));Html.replace(Previous,"alt=\""+Alt+"\" width=\"100%\" height=\"1234567\"");QVERIFY(Model.Replace(Row["document"].toString(),Html.toUtf8()).isEmpty());const auto Input=Model.Export();QVERIFY(Input);
         QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());EpubSourceEditor Editor(Input.bytes_,Temp.filePath("source.epub"));Editor.SetRecoveryEnabled(false);Editor.resize(800,600);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);bool CreatorReadOnly=false,AltReadOnly=false,ImageDone=false;QTimer Poll;Poll.setInterval(30);connect(&Poll,&QTimer::timeout,&Editor,[&]{auto* Dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());if(!Dialog)return;if(Dialog->objectName()=="epubMetadataDialog"){const auto* Author=Dialog->findChild<QLineEdit*>("epubMetadata_creator");CreatorReadOnly=Author->isReadOnly() && Author->text()==Creator;Dialog->findChild<QLineEdit*>("epubMetadata_title")->setText(QStringLiteral("긴 값 보존 검증"));Dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();}else if(Dialog->objectName()=="epubImagePropertiesDialog"){auto* Text=Dialog->findChild<QLineEdit*>("epubImageAlt");AltReadOnly=!Text->isEnabled();auto* Caption=Dialog->findChild<QPlainTextEdit*>("epubImageCaption");if(Caption->isEnabled())Caption->setPlainText(QStringLiteral("긴 대체 텍스트를 보존한 캡션"));ImageDone=true;Dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();}});Poll.start();Editor.findChild<QAction*>("epubMetadataAction")->trigger();QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["structuring"].toBool(),15000);QVERIFY(CreatorReadOnly);QCOMPARE(Editor.Execute({{"action","epub.edit.metadata-inspect"}})["values"].toObject()["creator"].toString(),Creator);
@@ -245,7 +307,7 @@ private slots:
             QCOMPARE(Editor.findChild<QAction*>("epubPreviewSync")->iconText(),QStringLiteral("위치 동기화"));QCOMPARE(Editor.findChild<QAction*>("epubPreviewScrollSync")->iconText(),QStringLiteral("스크롤 동기화"));
             for(const auto& Name:Names){auto* Item=Editor.findChild<QAction*>(Name);QVERIFY(Item && Item->isChecked());Item->trigger();QVERIFY(!Item->isChecked());}
         }
-        {::AppSettings Settings;for(const auto* Key:{"autoPreview","positionSync","scrollSync"})QCOMPARE(Settings.value(QString("epubEditor/layout/")+Key,true).toBool(),false);}
+        {::AppSettings Settings;for(const auto* Key:{"autoPreview","positionSync","scrollSync"})QCOMPARE(Settings.value(QString("epubEditor/layout/")+Key).toBool(),false);}
         EpubSourceEditor Next(Bytes,Path);Next.SetRecoveryEnabled(false);Next.resize(1100,760);Next.show();QTRY_VERIFY_WITH_TIMEOUT(Next.IsReady(),15000);
         for(const auto& Name:Names)QVERIFY(!Next.findChild<QAction*>(Name)->isChecked());
         // Scroll sync follows position sync: disabled with it, keeping its own state, and enabled again with it.

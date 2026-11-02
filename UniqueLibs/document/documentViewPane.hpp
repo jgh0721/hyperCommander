@@ -31,7 +31,7 @@ namespace hc::document
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
         void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
         void ConfigureEpub(WebProcessRuntime Runtime,bool Editing=false) { epubRuntime_ = std::move(Runtime);epubEditingAllowed_=Editing; }
-        bool CanEditEpub()const;bool CanSaveEpub()const;bool PrepareEpubSave();
+        bool CanEditEpub()const;bool CanSaveEpub()const;bool CanPrepareEpubSave()const;bool PrepareEpubSave(bool SaveAs);
         bool IsMarkdown() const { return markdown_ != nullptr; }
         bool MarkdownSourceVisible() const;
         bool IsEpub() const { return viewId_ == "epub"; }
@@ -41,7 +41,7 @@ namespace hc::document
         void SetReadingSource(const QString& Path,const QString& Entry);
         QByteArray Content() const;
         QByteArray SessionContent() const;
-        storage::Result<QByteArray> Export(const QString& Destination) const;
+        storage::Result<QByteArray> Export(const QString& Destination,bool SaveEpubOriginal=false) const;
         QJsonObject Execute(const QJsonObject& Request);
         QString ViewId() const { return viewId_; }
         bool IsBusy() const;
@@ -78,6 +78,7 @@ namespace hc::document
         void ViewStateChanged();
         void OpenRequested(const QString& Path);
         void SaveRequested();
+        void EpubSaveRequested(bool SaveAs);
         void EncodingRequested(const QString& Encoding);
         void ClipboardRequested(const QString& Mode);
         void EditImageRequested(const QImage& Image);

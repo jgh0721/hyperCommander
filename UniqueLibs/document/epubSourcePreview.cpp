@@ -127,7 +127,7 @@ void EpubSourceEditor::finishPreviewPatch() {
             At->shifts_.remove(0,qMin(previewPatchShiftCounts_.value(At.key()),At->shifts_.size()));
             if(previewActiveToken_==Token())At->shiftsOverflow_=false;
         }
-        lastScrollLine_=-1;previewScrollSeen_=-1;sourceSelectionSerial_=-1;
+        lastScrollLine_=-1;previewScrollSeen_=-1;
         syncPreviewScroll();emit PreviewCommitted();
     }
     previewPatchPending_=false;
@@ -216,7 +216,7 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
         }
     }
     previewChanges_=previewCandidateChanges_;previewEdition_=previewCandidateEdition_;previewReadyMs_=previewBuildClock_.isValid()?previewBuildClock_.elapsed():0;
-    auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;sourceSelectionSerial_=-1;
+    auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;sourceSelectionSerial_=State["sourceSelection"].toObject()["serial"].toInteger(-1);
     // The new preview shows the current text: earlier line shifts no longer apply and the first report is new.
     clearLineShifts();previewScrollSeen_=-1;lastScrollLine_=-1;lastScrollChapter_=-1;scrollSyncPending_=true;contextRequestSerial_=State["contextRequest"].toObject()["serial"].toInteger(-1);if((sourceSyncPending_ || SourceInput()->hasFocus()) && action("epubPreviewSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();
     if(Old)retirePreview(Old);
@@ -231,7 +231,15 @@ void EpubSourceEditor::syncPreviewSource(bool Force) {
     const auto Spine=model_.Publication()["spine"].toArray();const int Chapter=State["chapterIndex"].toInt(-1);if(Chapter<0 || Chapter>=Spine.size())return;
     if(previewActiveToken_==Token())recoveryLocator_=State["locator"].toString();
     if(!action("epubPreviewSync")->isChecked())return;
-    if(!Force && !SourceInput()->hasFocus() && selectPreviewSource())return;
+    if(!Force && !SourceInput()->hasFocus()) {
+        // Dialogs and toolbar clicks do not authorize an old preview selection
+        // to move the source. Embedded WebEngine input has a different Win32 owner.
+        GUITHREADINFO Input{sizeof(GUITHREADINFO)};DWORD FocusPid=0;
+        if(!GetGUIThreadInfo(0,&Input) || !Input.hwndFocus)return;
+        GetWindowThreadProcessId(Input.hwndFocus,&FocusPid);
+        if(FocusPid!=State["processId"].toInteger())return;
+        if(selectPreviewSource())return;
+    }
     if(Force){int Index=-1;for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Index=I;
         if(Index>=0 && Index!=Chapter && previewView_->ReaderAction("chapter",Index))previewNavigationSerial_=State["readerAction"].toObject()["serial"].toInteger()+1;return;}
     if(Chapter==previewChapter_)return;previewChapter_=Chapter;

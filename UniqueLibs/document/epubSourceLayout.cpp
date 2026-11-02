@@ -147,7 +147,7 @@ void EpubSourceEditor::setupActions() {
     };
     const auto Target=[this]{return treeResource();};
     Make("epubApplyResource",tr("변경 반영"),[this]{flush();});
-    Make("epubSaveCopy",tr("검증 후 다른 이름으로 저장…"),[this]{validate(true);})->setToolTip(tr("검사를 통과한 편집본을 원본과 다른 파일로 저장합니다. 원본 EPUB은 변경하지 않습니다."));
+    Make("epubSaveCopy",tr("검증 후 다른 이름으로 저장…"),[this]{if(PrepareSave(true))emit SaveRequested(true);})->setToolTip(tr("검사를 통과한 편집본을 원본과 다른 파일로 저장합니다. 원본 EPUB은 변경하지 않습니다."));
     Make("epubBasicValidation",tr("기본 검사"),[this]{validate(false);});
     Make("epubStandardValidation",tr("EPUBCheck 검사"),[this]{validate(false,true);});
     Make("epubValidationCancel",tr("검사 취소"),[this]{cancelEpubCheck("cancelled");});
@@ -266,7 +266,7 @@ void EpubSourceEditor::setupStatus() {
     statusMessage_=statusLabel(statusStrip_,"epubStatusMessage");statusMessage_->setMinimumWidth(80);statusMessage_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);Row->addWidget(statusMessage_,1);
     statusDraft_=statusLabel(statusStrip_,"epubStatusDraft");statusDraft_->setForegroundRole(QPalette::PlaceholderText);Row->addWidget(statusDraft_);
     statusCaret_=statusLabel(statusStrip_,"epubStatusCaret");Row->addWidget(statusCaret_);statusFormat_=statusLabel(statusStrip_,"epubStatusFormat");Row->addWidget(statusFormat_);
-    auto* Original=statusLabel(statusStrip_,"epubStatusOriginal");Original->setText(tr("원본 유지 · 다른 이름으로 저장"));Original->setForegroundRole(QPalette::PlaceholderText);Original->setToolTip(tr("편집본은 검사를 통과한 뒤 다른 이름으로만 저장합니다. 원본 EPUB은 변경하지 않습니다."));Row->addWidget(Original);
+    auto* Original=statusLabel(statusStrip_,"epubStatusOriginal");Original->setText(tr("저장 · 현재 파일 / 다른 이름 저장 · 사본"));Original->setForegroundRole(QPalette::PlaceholderText);Original->setToolTip(tr("변경 내용을 먼저 반영하고 검사합니다. 저장은 현재 EPUB을 갱신하고, 다른 이름 저장은 사본을 만듭니다."));Row->addWidget(Original);
 }
 void EpubSourceEditor::updateStatus() {
     if(!statusStrip_)return;
