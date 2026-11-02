@@ -209,7 +209,11 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 	connect(m_editor, &ScintillaEditBase::updateUi,
 			this, [this](Scintilla::Update Updated) {
 				updateBraceHighlight();
-				emitCursorAndSelectionState();
+				// A viewport-only update keeps the caret and selection unchanged. Reporting it
+				// as a cursor move makes EPUB position sync reveal the old caret after scroll
+				// sync has aligned the preview, producing large jumps around tall images.
+				if ((static_cast<int>(Updated) & (SC_UPDATE_CONTENT | SC_UPDATE_SELECTION)) != 0)
+					emitCursorAndSelectionState();
 				if ((static_cast<int>(Updated) & static_cast<int>(Scintilla::Update::VScroll)) != 0)
 					emit viewportScrolled();
 			});

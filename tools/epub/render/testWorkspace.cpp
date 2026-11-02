@@ -133,10 +133,18 @@ QStringList sourceLineStructure(const QByteArray& Xhtml) {
 }
 bool writeBook(const QString& Path,const QByteArray& Bytes){QFile File(Path);return File.open(QIODevice::WriteOnly) && File.write(Bytes)==Bytes.size();}
 // The corpus with its first chapter replaced by a long one spread over many source lines; some paragraphs span three lines.
-QByteArray scrollBook(const QString& Corpus,QString& Chapter,int Paragraphs=240) {
+QByteArray scrollBook(const QString& Corpus,QString& Chapter,int Paragraphs=240,bool TallImage=false) {
     QFile File(Corpus);if(!File.open(QIODevice::ReadOnly))return {};epub::EditModel Model;if(!Model.Load(File.readAll()))return {};
-    Chapter=Model.Publication()["spine"].toArray().first().toObject()["path"].toString();QString Body;
+    Chapter=Model.Publication()["spine"].toArray().first().toObject()["path"].toString();QString Body,Image;
+    if(TallImage) {
+        for(const auto& Value:Model.Publication()["resources"].toArray())if(Value.toObject()["mediaType"]=="image/png"){Image=Value.toObject()["path"].toString();break;}
+        if(Image.isEmpty())return {};
+        QImage Picture(420,1400,QImage::Format_RGB32);Picture.fill(QColor("#6688aa"));QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);
+        if(!Picture.save(&Buffer,"PNG") || !Model.Replace(Image,Bytes).isEmpty())return {};
+        Image=QDir("/"+QFileInfo(Chapter).path()).relativeFilePath("/"+Image);
+    }
     for(int I=0;I<Paragraphs;++I) {
+        if(TallImage && I==Paragraphs/2)Body+=QString("<div id=\"scroll-image\"><img src=\"%1\" alt=\"Tall scroll fixture\" style=\"width:420px;height:1400px;max-height:none\"/></div>\n").arg(Image);
         if(I%20==0)Body+=QString("<h2 id=\"s%1\">Section %1</h2>\n").arg(I/20);
         const auto Words=QString("scroll sync evidence %1 ").arg(I).repeated(4+I%9*3);
         Body+=I%15==7?QString("<p>%1\n%1\n%1</p>\n").arg(Words):QString("<p>%1</p>\n").arg(Words);
@@ -370,6 +378,69 @@ private slots:
         QCOMPARE(Backend->firstVisibleLine(),First);QVERIFY2(qAbs(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-Offset)<2,qPrintable(QString::number(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-Offset)));
         // A preview that moves by itself (a reflow here) never moves the editor.
         for(const int Width:{360,0}){QVERIFY(Editor->PreviewView()->ReaderAction("preview-width",Width));QTest::qWait(1500);QCOMPARE(Backend->firstVisibleLine(),First);}
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
+    void scrollbarFollowsReadingBackground() {
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Owned EPUB corpus required");QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        QString Chapter;const auto Bytes=scrollBook(Corpus,Chapter);QVERIFY(!Bytes.isEmpty());const auto Book=Temp.filePath("scrollbar.epub");QVERIFY(writeBook(Book,Bytes));
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));QString Id;QVERIFY(openReading(Window,Book,Id));
+        for(const bool Editing:{false,true}) {
+            auto* Editor=Editing?beginEditing(Window,Id):nullptr;if(Editing)QVERIFY(Editor);
+            auto* View=Editing?Editor->PreviewView():Window.findChild<EpubProcessView*>();QVERIFY(View);
+            const auto State=[&]{return View->ViewState();};
+            for(const auto& Theme:QStringList{"dark","light","dark"}) {
+                QVERIFY(writeBook(Temp.filePath("epub-reading.json"),QJsonDocument(QJsonObject{{"schemaVersion",1},{"global",QJsonObject{{"theme",Theme}}},{"books",QJsonObject{}}}).toJson()));
+                QVERIFY(View->ChangeReadingSettings("reload"));
+                QTRY_VERIFY_WITH_TIMEOUT(State()["profile"].toObject()["theme"].toString()==Theme && !State()["readerBusy"].toBool(),15000);
+                QCOMPARE(State()["scrollbarColorScheme"].toString(),Theme);
+                QVERIFY(State()["scrollState"].toObject()["extent"].toDouble()>50);
+            }
+            // A custom white reading canvas also needs a light native scrollbar.
+            QVERIFY(writeBook(Temp.filePath("epub-reading.json"),QJsonDocument(QJsonObject{{"schemaVersion",1},{"global",QJsonObject{{"theme","dark"},{"backgroundColor","#ffffff"}}},{"books",QJsonObject{}}}).toJson()));
+            QVERIFY(View->ChangeReadingSettings("reload"));
+            QTRY_COMPARE_WITH_TIMEOUT(State()["scrollbarColorScheme"].toString(),QString("light"),15000);
+            QVERIFY(writeBook(Temp.filePath("epub-reading.json"),QJsonDocument(QJsonObject{{"schemaVersion",1},{"global",QJsonObject{{"theme","dark"}}},{"books",QJsonObject{}}}).toJson()));
+            QVERIFY(View->ChangeReadingSettings("reload"));QTRY_COMPARE_WITH_TIMEOUT(State()["scrollbarColorScheme"].toString(),QString("dark"),15000);
+            const auto Evidence=qEnvironmentVariable("HC_EPUB_ACCEPTANCE_EVIDENCE");if(!Evidence.isEmpty()){QDir().mkpath(Evidence);QVERIFY(foreground(Window));const auto Point=Window.mapToGlobal(QPoint{});QVERIFY(Window.screen()->grabWindow(0,Point.x(),Point.y(),Window.width(),Window.height()).save(QDir(Evidence).filePath(Editing?"scrollbar-editor.png":"scrollbar-viewer.png")));}
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
+    void scrollSyncTallImageKeys() {
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Owned EPUB corpus required");QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        QString Chapter;const auto Bytes=scrollBook(Corpus,Chapter,240,true);QVERIFY(!Bytes.isEmpty());const auto Book=Temp.filePath("image-scroll.epub");QVERIFY(writeBook(Book,Bytes));
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));QString Id;QVERIFY(openReading(Window,Book,Id));auto* Editor=beginEditing(Window,Id);QVERIFY(Editor);QVERIFY(selectResource(*Editor,Chapter));
+        QTRY_VERIFY_WITH_TIMEOUT(previewPage(*Editor)["chapterIndex"].toInt()==0 && previewScroll(*Editor)["supported"].toBool(),15000);
+        auto* Backend=sourceBackend(*Editor);const auto Text=sourceText(*Editor);const int ImagePosition=Text.indexOf("<div id=\"scroll-image\"");QVERIFY(ImagePosition>0);
+        const int ImageLine=Text.left(ImagePosition).count('\n');Backend->Send(SCI_GOTOLINE,ImageLine-15);QTest::qWait(600);
+        Backend->scrollFractionalLineToViewportRatio(ImageLine+1,0.5);
+        const auto Applied=[&]{return previewScroll(*Editor)["applied"].toInteger()==scrollRequests(*Editor);};
+        QTRY_VERIFY_WITH_TIMEOUT(Applied(),5000);QTest::qWait(600);
+        QVERIFY(foreground(Window));QApplication::setActiveWindow(&Window);auto* Input=Editor->SourceInput();Input->setFocus();
+        const auto Position=Backend->Send(SCI_GETCURRENTPOS),Anchor=Backend->Send(SCI_GETANCHOR);QSignalSpy Cursor(Backend,&ITextEditorBackend::cursorPositionChanged);
+        // The old caret lies above the tall image. A scroll must never queue a delayed reveal of it.
+        const auto ActionSerial=previewPage(*Editor)["readerAction"].toObject()["serial"].toInteger();
+        for(const WORD Key:{WORD(VK_DOWN),WORD(VK_UP)})for(int Step=0;Step<8;++Step) {
+            const auto BeforeRequests=scrollRequests(*Editor);const int BeforeLine=Backend->firstVisibleLine();const double Before=previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble();
+            INPUT Keys[4]{};for(auto& Event:Keys)Event.type=INPUT_KEYBOARD;
+            Keys[0].ki.wVk=VK_CONTROL;Keys[1].ki.wVk=Key;Keys[1].ki.dwFlags=KEYEVENTF_EXTENDEDKEY;
+            Keys[2].ki.wVk=Key;Keys[2].ki.dwFlags=KEYEVENTF_EXTENDEDKEY|KEYEVENTF_KEYUP;Keys[3].ki.wVk=VK_CONTROL;Keys[3].ki.dwFlags=KEYEVENTF_KEYUP;
+            QCOMPARE(SendInput(4,Keys,sizeof(INPUT)),UINT(4));QTRY_VERIFY_WITH_TIMEOUT(Backend->firstVisibleLine()!=BeforeLine,3000);
+            QTRY_VERIFY_WITH_TIMEOUT(scrollRequests(*Editor)>BeforeRequests && Applied(),5000);
+            const double Landed=previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble();
+            QVERIFY2(Key==VK_DOWN?Landed>=Before-2:Landed<=Before+2,qPrintable(QString("key %1 before %2 landed %3").arg(Key).arg(Before).arg(Landed)));
+            // Sample past the position-sync debounce and the scroll feedback guard.
+            for(int Sample=0;Sample<8;++Sample){QTest::qWait(50);QVERIFY2(qAbs(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-Landed)<2,qPrintable(QString("Preview bounced: key %1 step %2 sample %3 before %4 landed %5 now %6 cursorSignals %7 action %8 -> %9 source %10 -> %11").arg(Key).arg(Step).arg(Sample).arg(Before).arg(Landed).arg(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()).arg(Cursor.count()).arg(ActionSerial).arg(previewPage(*Editor)["readerAction"].toObject()["serial"].toInteger()).arg(Position).arg(Backend->Send(SCI_GETCURRENTPOS))));}
+            QVERIFY(Backend->Send(SCI_GETCURRENTPOS)>=0);
+        }
+        const int Before=Backend->firstVisibleLine();QVERIFY(wheelOver(Window,Input,2));QTRY_VERIFY_WITH_TIMEOUT(Backend->firstVisibleLine()>Before && Applied(),5000);
+        QTest::qWait(600);
+        const double Scrolled=previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble();
+        const int FirstParagraph=Text.indexOf("scroll sync evidence");QVERIFY(FirstParagraph>0);
+        Backend->Send(SCI_SETSELECTIONNCARET,0,FirstParagraph);Backend->Send(SCI_SETSELECTIONNANCHOR,0,FirstParagraph);QTest::qWait(600);
+        QVERIFY(qAbs(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-Scrolled)<2);
+        auto* Locate=Editor->findChild<QAction*>("epubLocateSource");QVERIFY(Locate);Locate->trigger();
+        QTRY_VERIFY2_WITH_TIMEOUT(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()<Scrolled-10,qPrintable(QString::fromUtf8(QJsonDocument(previewPage(*Editor)["readerAction"].toObject()).toJson(QJsonDocument::Compact))),5000);
+        qInfo()<<"Tall image scroll stable: 8 Ctrl+Down, 8 Ctrl+Up and source wheel; DPR"<<Window.devicePixelRatioF();
         QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
     }
     void scrollSyncScopeAndToggles() {

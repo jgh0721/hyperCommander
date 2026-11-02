@@ -40,7 +40,7 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
     protectSourcePath(Path);
     baseToken_=SourceHash.isEmpty()?QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256):SourceHash;sourceHashAtOpen_=baseToken_;sourcePath_=Path;
     setupLayout();setupActions();setupStatus();setupScrollSync();
-    sourceSyncTimer_.setSingleShot(true);sourceSyncTimer_.setInterval(180);connect(&sourceSyncTimer_,&QTimer::timeout,this,&EpubSourceEditor::locateSource);
+    sourceSyncTimer_.setSingleShot(true);sourceSyncTimer_.setInterval(180);connect(&sourceSyncTimer_,&QTimer::timeout,this,[this]{locateSource();});
     connect(text_->Backend(),&ITextEditorBackend::cursorPositionChanged,this,[this]{if(!updating_ && SourceInput()->hasFocus() && action("epubPreviewSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}updateStatus();});
     connect(text_->Backend(),&ITextEditorBackend::selectionChanged,this,&EpubSourceEditor::updateActions);
     connect(text_,&QTextView::ContentChanged,this,[this]{
@@ -172,7 +172,7 @@ QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
     if(Action=="epub.edit.metadata-inspect"){if(!flush())return {{"error","epub-edit-draft-invalid"}};return model_.Metadata();}
     if(Action=="epub.edit.image-inspect"){if(!flush())return {{"error","epub-edit-draft-invalid"}};return model_.InspectImage(Request["resource"].toString());}
     if(Action=="epub.edit.preview-source")return {{"accepted",selectPreviewSource()}};
-    if(Action=="epub.edit.source-locate"){sourceSyncPending_=true;sourceSyncAttempts_=0;locateSource();return {{"accepted",true}};}
+    if(Action=="epub.edit.source-locate"){sourceSyncPending_=true;sourceSyncAttempts_=0;locateSource(true);return {{"accepted",true}};}
     if(Action=="epub.edit.structure")return structure(Request)?QJsonObject{{"accepted",true}}:QJsonObject{{"error","epub-edit-structure-not-ready"}};
     if(Action=="epub.edit.checkpoint"){Checkpoint();return {{"accepted",true}};}
     if(Action=="epub.edit.recovery-list"){QJsonArray Entries;for(const auto& Entry:recoveryEntries_)Entries.append(QJsonObject{{"path",Entry.second},{"label",Entry.first}});return {{"entries",Entries}};}

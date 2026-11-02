@@ -187,7 +187,7 @@ void EpubSourceEditor::setupActions() {
     Make("epubQuickFix",tr("빠른 수정"),[this]{quickFix();});
     Make("epubOpenLink",tr("링크된 리소스 열기"),[this]{openLink();});
     Make("epubFindAll",tr("모든 리소스에서 찾기"),[this]{const auto Selected=text_->Backend()->selectedText();findInResources(Selected.isEmpty()?text_->Backend()->WordAtCaret():Selected);});
-    Make("epubLocateSource",tr("미리보기에서 이 위치 보기"),[this]{sourceSyncPending_=true;sourceSyncAttempts_=0;locateSource();});
+    Make("epubLocateSource",tr("미리보기에서 이 위치 보기"),[this]{sourceSyncPending_=true;sourceSyncAttempts_=0;locateSource(true);});
     for(const auto& Tag:{QString("em"),QString("strong"),QString("span"),QString("a"),QString("ruby")})Make("epubWrap_"+Tag,Tag=="em"?tr("<em> 기울임"):Tag=="strong"?tr("<strong> 굵게"):Tag=="span"?tr("<span class=\"…\">…"):Tag=="a"?tr("<a href=\"…\"> 링크…"):tr("<ruby> 읽기 표기…"),[this,Tag]{wrapSelection(Tag);});
     Make("epubWrap_custom",tr("사용자 지정 태그…"),[this]{wrapSelection({});});
     Make("epubToggleTree",tr("책 구조 패널"),[this](bool On){setPanelVisible("tree",On);},true);

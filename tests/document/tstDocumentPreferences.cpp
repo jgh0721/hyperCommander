@@ -593,6 +593,25 @@ private slots:
         QCOMPARE(Shifted.count(),1);QCOMPARE(Shifted.last().at(0).toInt(),9);QCOMPARE(Shifted.last().at(1).toInt(),2);
         Backend->Send(SCI_UNDO);QCOMPARE(Shifted.count(),2);QCOMPARE(Shifted.last().at(0).toInt(),9);QCOMPARE(Shifted.last().at(1).toInt(),-2);
     }
+    void scrollingKeepsCursorAndSelectionSignalsQuiet() {
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([]{qApp->setProperty("documentViewsConfigDir",QVariant());});
+        QString Text;for(int I=1;I<=200;++I)Text+=QString("line %1\n").arg(I);
+        QTextView View;View.LoadContent(Text,Temp.filePath("scroll.txt"),"UTF-8");View.resize(600,400);View.show();QVERIFY(QTest::qWaitForWindowExposed(&View));
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(View.Backend());auto* Input=Backend->widget();
+        Backend->Send(SCI_GOTOLINE,80);Backend->Send(SCI_SETFIRSTVISIBLELINE,70);Input->setFocus();QTest::qWait(300);
+        const auto Position=Backend->Send(SCI_GETCURRENTPOS),Anchor=Backend->Send(SCI_GETANCHOR);
+        QSignalSpy Cursor(Backend,&ITextEditorBackend::cursorPositionChanged),Selection(Backend,&ITextEditorBackend::selectionChanged),Scrolled(Backend,&ITextEditorBackend::viewportScrolled);
+        for(const auto Key:{Qt::Key_Down,Qt::Key_Down,Qt::Key_Up}) {
+            const int Before=Backend->firstVisibleLine();QTest::keyClick(Input,Key,Qt::ControlModifier);
+            QTRY_VERIFY(Backend->firstVisibleLine()!=Before);QTest::qWait(80);
+            QCOMPARE(Backend->Send(SCI_GETCURRENTPOS),Position);QCOMPARE(Backend->Send(SCI_GETANCHOR),Anchor);
+            QCOMPARE(Cursor.count(),0);QCOMPARE(Selection.count(),0);
+        }
+        QVERIFY(Scrolled.count()>0);
+        // Actual caret/selection changes still notify position-sync and selection consumers.
+        QTest::keyClick(Input,Qt::Key_Right,Qt::ShiftModifier);QTRY_VERIFY(Cursor.count()>0);QTRY_VERIFY(Selection.count()>0);
+    }
     void epubShortcutScope() {
         QCOMPARE(DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence("Num+PgUp")),QKeySequence("PgUp"));
         QCOMPARE(DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence("Num+PgDown")),QKeySequence("PgDown"));

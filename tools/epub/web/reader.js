@@ -318,6 +318,10 @@ async function applyProfile(next = {}) {
     profile = candidate;
     const [themeBackground, themeForeground] = colors[profile.theme];
     const background = profile.backgroundColor || themeBackground, foreground = profile.textColor || themeForeground;
+    // The EPUB container scrolls in this outer document. A dark body alone leaves
+    // Chromium's native scrollbar in its default light scheme, including previews.
+    const rgb=background.slice(1).match(/../g).map(value=>parseInt(value,16));
+    document.documentElement.style.colorScheme=rgb[0]*0.2126+rgb[1]*0.7152+rgb[2]*0.0722<128?"dark":"light";
     document.body.style.backgroundColor = background;
     document.body.style.color = foreground;document.body.style.fontFamily=profile.font;document.body.style.fontSize=`${profile.size}px`;
     document.body.style.backgroundImage = profile.background === "paper" ? "radial-gradient(rgba(127,97,48,.10) .6px,transparent .7px)"
@@ -396,6 +400,7 @@ function currentSnapshot(detail=true) {
             .map(f => ({ width: f.clientWidth, height: f.clientHeight })),
         ...(detail ? {ruby:docs.flatMap(doc=>[...doc.querySelectorAll("ruby")].slice(0,4).map(node=>({display:getComputedStyle(node).display,size:getComputedStyle(node).fontSize,annotations:[...node.querySelectorAll("rt")].map(rt=>({display:getComputedStyle(rt).display,size:getComputedStyle(rt).fontSize,text:rt.textContent}))}))),
         pageCanvasColors:docs.map(doc=>getComputedStyle(doc.defaultView.frameElement).backgroundColor),
+        scrollbarColorScheme:getComputedStyle(rendition?.manager?.container || document.documentElement).colorScheme,
         rootZoom: docs.map(doc => doc.defaultView.getComputedStyle(doc.documentElement).zoom)} : {}),
         scrollState:rendition?.manager?.scrollMetrics?.() || null,
         readerHorizontalScrollbar: !!rendition?.manager?.container && getComputedStyle(rendition.manager.container).overflowX !== "hidden" && rendition.manager.container.scrollWidth > rendition.manager.container.clientWidth+1,

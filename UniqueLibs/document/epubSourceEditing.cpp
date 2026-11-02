@@ -87,15 +87,19 @@ void EpubSourceEditor::activateSource(const QByteArray& Data,const QString& Medi
     QTimer::singleShot(0,this,[this,Resource,Line,Offset]{if(bufferResource_==Resource && sourceStack_->currentWidget()==text_)setScroll(Line,Offset);});
     for(const auto& Path:sourceBuffers_.keys())if(Path!=current_ && !model_.IsEditable(Path))releaseSource(Path);
 }
-void EpubSourceEditor::locateSource() {
+void EpubSourceEditor::locateSource(bool Reveal) {
+    sourceSyncReveal_|=Reveal;
     if(!sourceSyncPending_ || sourceComposing_ || !previewView_ || !ready_ || previewClosing_ || !sourceShown())return;
-    if(previewActiveToken_!=Token() || ++sourceSyncAttempts_>30){sourceSyncPending_=false;return;}
+    if(previewActiveToken_!=Token() || ++sourceSyncAttempts_>30){sourceSyncPending_=false;sourceSyncReveal_=false;return;}
     const auto State=previewView_->ViewState();if(State["readerBusy"].toBool()){sourceSyncTimer_.start();return;}
     int Chapter=-1;const auto Spine=model_.Publication()["spine"].toArray();for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Chapter=I;if(Chapter<0){sourceSyncPending_=false;return;}
     if(State["chapterIndex"].toInt(-1)!=Chapter){previewView_->ReaderAction("chapter",Chapter);sourceSyncTimer_.start();return;}
+    const bool ShouldReveal=std::exchange(sourceSyncReveal_,false);
     const auto* Map=sourceMap();sourceSyncPending_=false;if(!Map)return;auto Anchor=Map->Anchor(sourcePosition());if(Anchor.isEmpty())return;
-    // With scroll sync the preview is already aligned; the selection moves the view only when out of sight.
-    if(scrollSyncActive())Anchor["reveal"]="nearest";
+    // Ctrl+Up/Down can bring an offscreen caret back inside the source viewport.
+    // That automatic caret move must not override the viewport anchor, especially
+    // when a one-line image occupies most of the preview. Explicit Locate still reveals it.
+    if(scrollSyncActive())Anchor["reveal"]=!ShouldReveal && State["previewScroll"].toObject()["supported"].toBool()?"none":"nearest";
     previewView_->ReaderAction("source-position",Anchor);
 }
 bool EpubSourceEditor::selectPreviewSource(const QJsonObject& Requested) {

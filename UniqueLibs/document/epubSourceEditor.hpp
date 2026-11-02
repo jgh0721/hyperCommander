@@ -130,7 +130,7 @@ private:
     void syncPreviewSource(bool Force=false);
     void previewContextRequest(EpubProcessView* View);
     void saveSourceState();void activateSource(const QByteArray& Data,const QString& Media);void releaseSource(const QString& Path);
-    void locateSource();bool selectPreviewSource(const QJsonObject& Anchor={});
+    void locateSource(bool Reveal=false);bool selectPreviewSource(const QJsonObject& Anchor={});
     // Scroll synchronisation (epubSourceScroll.cpp): the line at half the editor height stays at half the preview height.
     void setupScrollSync();bool scrollSyncActive()const;void syncPreviewScroll();void previewScrolled(const QJsonObject& Report);
     QJsonObject sourceScrollTarget(bool Revision)const;void placeSourceLine(int Position,double Ratio);int spineIndex(const QString& Path)const;
@@ -146,7 +146,7 @@ private:
     // shifts_: line changes since the shown preview was built, so scroll positions map onto it.
     struct SourceState {qintptr document_=0;QByteArray applied_;int position_=0,anchor_=0,line_=0,offset_=0;quint64 serial_=0;QList<LineShift> shifts_;bool shiftsOverflow_=false;};
     QMap<QString,SourceState> sourceBuffers_;QString bufferResource_;quint64 bufferSerial_=0;
-    QTimer sourceSyncTimer_;bool sourceSyncPending_=false;int sourceSyncAttempts_=0;qint64 sourceSelectionSerial_=-1;qint64 contextRequestSerial_=-1;
+    QTimer sourceSyncTimer_;bool sourceSyncPending_=false,sourceSyncReveal_=false;int sourceSyncAttempts_=0;qint64 sourceSelectionSerial_=-1;qint64 contextRequestSerial_=-1;
     QFutureWatcher<QJsonObject> imageInspection_;QByteArray imageInspectionToken_;
     QJsonObject previewSnapshot()const;
     epub::EditOutput cachedExport_;QByteArray cachedExportToken_;

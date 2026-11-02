@@ -24,8 +24,9 @@ export function placeSourcePosition(doc, anchor) {
         range.setStart(node, anchor.offset); range.collapse(true);
     } else { range.selectNodeContents(element); range.collapse(true); }
     const selection = doc.defaultView.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-    // With scroll synchronisation the preview is already aligned; only a target out of view moves it.
-    element.scrollIntoView({block:anchor.reveal === "nearest" ? "nearest" : "center", inline:"nearest"});
+    // Scroll sync owns the viewport during automatic caret updates. A tall image
+    // can put that caret out of view even though both viewport anchors are aligned.
+    if (anchor.reveal !== "none") element.scrollIntoView({block:anchor.reveal === "nearest" ? "nearest" : "center", inline:"nearest"});
 }
 // container(): the scrolling element; a click's height ratio in it lets the editor put the line at the same height.
 export function createSourcePositions(snapshot, container = () => null) {
