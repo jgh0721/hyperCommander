@@ -33,6 +33,19 @@ set(HC_TRANSLATION_ARGS)
 # Plugins, translations and WebEngine data live under Libs/; Qt DLLs stay beside the exe.
 # Each exe finds them through its embedded qt.conf (cmake/productQtConf/qt.conf).
 set(HC_PLUGIN_ROOT "${HC_OUTPUT}/Libs")
+# The Hybrid CRT kit's SQLite plugin imports the separately built SQLite DLL.
+# Store it beside the plugin; the document search engine preloads this exact path.
+if(HC_CONFIG STREQUAL "Debug")
+    set(HC_SQLITE_DLL "sqlite3d.dll")
+else()
+    set(HC_SQLITE_DLL "sqlite3.dll")
+endif()
+if(EXISTS "${HC_QT_BIN}/${HC_SQLITE_DLL}")
+    file(MAKE_DIRECTORY "${HC_PLUGIN_ROOT}/sqldrivers")
+    file(COPY_FILE "${HC_QT_BIN}/${HC_SQLITE_DLL}" "${HC_PLUGIN_ROOT}/sqldrivers/${HC_SQLITE_DLL}" ONLY_IF_DIFFERENT)
+else()
+    message(FATAL_ERROR "The configured Qt kit is missing ${HC_SQLITE_DLL}")
+endif()
 if(HC_IMAGE_CODEC_PREFIX)
     file(GLOB HC_CODEC_DLLS "${HC_IMAGE_CODEC_PREFIX}/bin/*.dll")
     foreach(HC_CODEC_DLL IN LISTS HC_CODEC_DLLS)

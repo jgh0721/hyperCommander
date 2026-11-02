@@ -18,9 +18,12 @@ class QLabel;
 class QStackedWidget;
 class QFileSystemWatcher;
 class QShortcut;
+class QMainWindow;
+class QDockWidget;
 namespace mrst { class ExternalChangeWatcher; }
 namespace hc::document
 {
+    namespace search { class Panel; }
     class DocumentStatusBar;
     class DocumentShortcutRouter;
     class DocumentSettingsDialog;
@@ -48,12 +51,21 @@ namespace hc::document
         void ConfigureEpub(WebProcessRuntime Runtime) { epubRuntime_ = std::move(Runtime); }
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
         void RestoreWindowSize();
+        void OpenSearchContext(const QJsonObject& Context);
     protected:
         bool eventFilter(QObject* Watched, QEvent* Event) override;
     signals:
         void StateChanged();
         void ChromeSettingsChanged(const QJsonObject& Settings);
     private:
+        void openSearch(bool Replace);
+        void placeSearch(const QString& Location);
+        QJsonArray searchSources() const;
+        void navigateSearch(const QJsonObject& Row);
+        search::Panel* searchPanel_ = nullptr;
+        QMainWindow* searchHost_ = nullptr;
+        QDockWidget* searchDock_ = nullptr;
+        QString searchDocument_, searchPlacement_;
         std::unique_ptr<DocumentWindowSize> windowSize_;
         void refreshPreferences();
         void externalChange(const QString& Path, bool Missing);

@@ -59,7 +59,7 @@ const QMap<QString,QString>& commandActions() {
         {"epubEdit.previewRefresh","epubPreviewRefresh"},{"epubEdit.scrollSync","epubPreviewScrollSync"},{"epubEdit.closeTab","epubCloseTab"},{"epubEdit.toc","epubEditNavigation"},{"epubEdit.metadata","epubMetadataAction"},{"epubEdit.toggleTree","epubToggleTree"},
         {"epubEdit.togglePreview","epubTogglePreview"},{"epubEdit.toggleProblems","epubToggleProblems"},{"epubEdit.orientation","epubToggleOrientation"},{"epubEdit.recover","epubRecoverDraft"},
         {"epubTree.rename","epubRenameResource"},{"epubTree.delete","epubRemoveResource"},{"epubTree.moveUp","epubChapterUp"},{"epubTree.moveDown","epubChapterDown"},{"epubTree.copyPath","epubCopyPath"},
-        {"epubSource.quickFix","epubQuickFix"},{"epubSource.openLink","epubOpenLink"},{"epubSource.findAll","epubFindAll"},{"epubSource.locate","epubLocateSource"},{"epubSource.wrapEm","epubWrap_em"},
+        {"epubSource.quickFix","epubQuickFix"},{"epubSource.openLink","epubOpenLink"},{"document.findInFiles","epubFindAll"},{"epubSource.locate","epubLocateSource"},{"epubSource.wrapEm","epubWrap_em"},
         {"epubSource.wrapStrong","epubWrap_strong"},{"epubSource.wrapSpan","epubWrap_span"},{"epubSource.wrapLink","epubWrap_a"},{"epubSource.wrapRuby","epubWrap_ruby"}};
     return Map;
 }

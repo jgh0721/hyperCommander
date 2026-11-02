@@ -110,7 +110,8 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/imageReadingView.cpp ../UniqueLibs/document/imageReadingView.hpp
     ../UniqueLibs/document/imageReadingNavigator.cpp ../UniqueLibs/document/imageReadingNavigator.hpp
     ../UniqueLibs/document/imageFullscreen.cpp ../UniqueLibs/document/imageFullscreen.hpp
-    ../UniqueLibs/document/documentTextCodec.cpp ../UniqueLibs/document/documentTextCodec.hpp
+    ../UniqueLibs/document/documentTextCodec.hpp
+    ../UniqueLibs/document/search/documentSearchPanel.cpp ../UniqueLibs/document/search/documentSearchPanel.hpp
     ../UniqueLibs/document/documentViewPane.cpp ../UniqueLibs/document/documentViewPane.hpp
     ../UniqueLibs/document/viewUiContribution.hpp
     ../UniqueLibs/document/workspaceChromeController.cpp ../UniqueLibs/document/workspaceChromeController.hpp
@@ -131,7 +132,7 @@ target_include_directories(hc_document_widgets PRIVATE
     ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include
 )
 add_dependencies(hc_document_widgets hc-markdown-render)
-target_link_libraries(hc_document_widgets PRIVATE Qt6::Network)
+target_link_libraries(hc_document_widgets PRIVATE Qt6::Network hc_document_search_core)
 target_link_libraries(hc_document_widgets PUBLIC hc_document_core hc_document_broker hc_document_sdi hc_hypereditor Qt6::Widgets fmstyle PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
 target_link_libraries(hc_document_widgets PRIVATE Qt6::ZlibPrivate hc_epub_host hc_builtin_sevenzip hc_image_archive_transport hc_passwords Fm::widgets)
 target_compile_options(hc_document_widgets PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

@@ -65,6 +65,15 @@ QString EditModel::Replace(const QString& Path,const QByteArray& Bytes) {
     qint64 Total=Bytes.size();for(auto I=replacements_.begin();I!=replacements_.end();++I)if(I.key()!=Path)Total+=I.value().size();if(Total>32*1024*1024)return "epub-edit-overlay-budget";
     if(Read(Path)==Bytes)return {};auto Before=state();assign(Path,Bytes);record(std::move(Before));return {};
 }
+QString EditModel::ReplaceBatch(const QMap<QString, QByteArray>& Changes, const QByteArray& Expected) {
+    if (Fingerprint() != Expected) return "epub-edit-revision-changed";
+    auto Candidate = *this; Candidate.history_.clear(); Candidate.position_ = 0;
+    for (auto It = Changes.begin(); It != Changes.end(); ++It) {
+        const auto Error = Candidate.Replace(It.key(), It.value()); if (!Error.isEmpty()) return Error;
+    }
+    if (Candidate.Fingerprint() == Fingerprint()) return {};
+    auto Before = state(); restore(Candidate.state()); record(std::move(Before)); return {};
+}
 EditModel::State EditModel::state()const{return {edition_,publication_,media_,replacements_};}
 void EditModel::restore(const State& Value){edition_=Value.edition_;publication_=Value.publication_;media_=Value.media_;replacements_=Value.changes_;}
 void EditModel::record(State Before) {

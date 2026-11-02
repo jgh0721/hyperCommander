@@ -40,6 +40,10 @@ namespace hc::document
         bool RequestClose();
         void SetReadingSource(const QString& Path,const QString& Entry);
         QByteArray Content() const;
+        QString SearchText() const;
+        std::function<QJsonArray()> CaptureBookSearchSources(const QString& Document) const;
+        bool ApplySearchText(const QString& Expected, const QString& Replacement);
+        void SelectSearchRange(qint64 Start, qint64 Length);
         QByteArray SessionContent() const;
         storage::Result<QByteArray> Export(const QString& Destination,bool SaveEpubOriginal=false) const;
         DocumentEncoder CaptureSave(const QString& Destination, bool SaveEpubOriginal = false) const;
@@ -78,6 +82,7 @@ namespace hc::document
         void SetShortcutBindings(const QJsonObject& Bindings);
     signals:
         void ContentChanged();
+        void SearchRequested(const QString& Query);
         void ViewStateChanged();
         void OpenRequested(const QString& Path);
         void SaveRequested();

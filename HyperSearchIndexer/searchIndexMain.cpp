@@ -1,4 +1,6 @@
-﻿#include "searchIndexPath.hpp"
+﻿#include "stdafx.h"
+#include "searchIndexPath.hpp"
+#include "documentSearchMode.hpp"
 #include "everythingQuery.hpp"
 #include "UniqueLibs/quickFindSettings.hpp"
 #include <QCoreApplication>
@@ -15,6 +17,7 @@ int main(int Argc, char** Argv)
 {
     QCoreApplication App(Argc, Argv);
     const auto Args = App.arguments();
+    if (Args.size() == 2 && Args[1] == "--document-search") return hc::document::search::RunDocumentSearch();
     if (Args.size() == 4 && Args[1] == "--quick-find-stream") {
         const auto Term = Args[2], Match = Args[3];
         if (Term.isEmpty() || Term.size() > 4096 || Term.contains(QChar::Null)

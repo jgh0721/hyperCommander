@@ -6,7 +6,7 @@
 #include "UniqueLibs/storageProviders.hpp"
 #include "memoryStorage.hpp"
 #include "UniqueLibs/folderSize.hpp"
-#include "tools/searchIndexPath.hpp"
+#include "HyperSearchIndexer/searchIndexPath.hpp"
 #include <QTemporaryDir>
 #include <QScopeGuard>
 #include <QtTest>

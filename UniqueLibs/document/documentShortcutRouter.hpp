@@ -21,6 +21,7 @@ public:
     void Register(const QString& Id, QAction* Action)
     { actions_[Id] = Action; Action->setShortcutContext(Qt::WidgetShortcut); }
     void SetEligibility(std::function<bool(const QString&, QWidget*)> Predicate) { eligible_ = std::move(Predicate); }
+    void AddScope(QWidget* Scope) { extraScopes_.append(Scope); }
     QString Apply(const QJsonObject& Stored)
     {
         pending_ = {}; timeout_.stop();
@@ -37,7 +38,9 @@ protected:
     {
         if (Event->type() != QEvent::ShortcutOverride && Event->type() != QEvent::KeyPress) return false;
         auto* Widget = qobject_cast<QWidget*>(Watched);
-        if (!Widget || !scope_->isVisible() || (Widget != scope_ && !scope_->isAncestorOf(Widget))
+        bool InScope = Widget && (Widget == scope_ || scope_->isAncestorOf(Widget));
+        for (const auto& Extra : extraScopes_) if (Extra && Widget && (Extra == Widget || Extra->isAncestorOf(Widget))) InScope = true;
+        if (!Widget || !scope_->isVisible() || !InScope
             || QApplication::activeModalWidget() || QApplication::activePopupWidget()) return false;
         auto* Key = static_cast<QKeyEvent*>(Event);
         if (Key->key() == Qt::Key_Control || Key->key() == Qt::Key_Shift || Key->key() == Qt::Key_Alt || Key->key() == Qt::Key_Meta) return false;
@@ -67,6 +70,7 @@ protected:
     }
 private:
     QWidget* scope_;
+    QList<QPointer<QWidget>> extraScopes_;
     QMap<QString, QPointer<QAction>> actions_;
     QJsonObject bindings_;
     QKeySequence pending_;

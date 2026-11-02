@@ -8,6 +8,12 @@ function(hc_deploy_fingerprint Result)
         "${CMAKE_CURRENT_LIST_DIR}/DeployQt.cmake" "${CMAKE_CURRENT_LIST_DIR}/DeployQtCache.cmake"
         "${CMAKE_CURRENT_LIST_DIR}/../tools/Build-ImageCodecs.ps1"
         "${CMAKE_CURRENT_LIST_DIR}/ImageCodecDav1d.cmake")
+    # A manifest path can stay unchanged while a project-built plugin is rebuilt.
+    # Track the actual plugin inputs, including qhcmodern, before reusing a runtime.
+    if(HC_WITH_PLUGINS AND EXISTS "${HC_PLUGIN_MANIFEST}")
+        include("${HC_PLUGIN_MANIFEST}")
+        list(APPEND Inputs ${HC_PLUGIN_FILES})
+    endif()
     if(HC_RUNTIME_FILE)
         list(APPEND Inputs "${HC_RUNTIME_FILE}")
     endif()

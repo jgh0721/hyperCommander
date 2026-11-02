@@ -29,6 +29,10 @@ public:
     QJsonObject Snapshot()const;
     QJsonObject Execute(const QJsonObject& Request);
     QByteArray Token()const;
+    std::function<QJsonArray()> CaptureSearchSources(const QString& Document) const;
+    static QJsonArray BuildSearchSources(const epub::EditModel& Model, const QMap<QString, QByteArray>& Draft, const QString& Document);
+    QString ApplySearchBatch(const QJsonArray& Changes);
+    void SelectSearchRange(const QString& Resource, qint64 Start, qint64 Length);
     storage::Result<QByteArray> Export(const QString& Destination,bool SaveOriginal=false)const;
     bool CanUndo()const;bool CanRedo()const;void Undo();void Redo();
     bool IsReady()const{return ready_;}
@@ -62,7 +66,7 @@ public:
     bool RunCommand(const QString& Id);
     bool CanRunCommand(const QString& Id)const;
     void SetShortcutBindings(const QJsonObject& Bindings);
-signals:void StatusChanged();void Changed();void StateChanged();void SaveRequested(bool SaveAs);void PreviewCommitted();void EscapeRequested();void FullscreenRequested();
+signals:void StatusChanged();void Changed();void StateChanged();void SaveRequested(bool SaveAs);void PreviewCommitted();void EscapeRequested();void FullscreenRequested();void SearchRequested(const QString& Query);
 protected:bool eventFilter(QObject* Object,QEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();

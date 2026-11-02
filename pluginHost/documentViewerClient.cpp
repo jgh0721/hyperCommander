@@ -75,21 +75,31 @@ namespace hc::plugins
         const auto Edit=state_["editRequest"].toObject();
         if(!Edit.isEmpty()){
             const bool Epub=Edit["format"]=="epub";
+            const bool Search=Edit["format"]=="search";
             std::optional<document::DocumentHostBroker::EditorInput> Input;
             for(const auto& Item:state_["documents"].toArray()){
                 const auto Tab=Item.toObject();const auto View=Tab["view"].toObject();
                 if(Tab["documentId"]!=Edit["documentId"]||Tab["generation"]!=Edit["generation"]
                     ||Tab["lifecycle"]!="ready"||Tab["loading"].toBool()||!View["ready"].toBool()
-                    ||(Epub?View["viewId"]!="epub":(View["viewId"]!="hwp"&&View["viewId"]!="hwpx")))continue;
+                    ||(Search?!QStringList{"text","epub"}.contains(View["viewId"].toString()):Epub?View["viewId"]!="epub":(View["viewId"]!="hwp"&&View["viewId"]!="hwpx")))continue;
                 const auto SourceToken=Tab["sourceToken"].toString();
                 if(!SourceToken.isEmpty())Input=broker_.ResolveEditorInput(SourceToken);
                 else if(!Tab["hostSlot"].toBool())Input=document::DocumentHostBroker::EditorInput{Tab["path"].toString(),true,{}};
                 break;
             }
             bool Started=false;
-            if(Input&&QFileInfo(Input->path_).isAbsolute()&&(Epub?QFileInfo(Input->path_).suffix().compare("epub",Qt::CaseInsensitive)==0:QStringList{"hwp","hwpx"}.contains(QFileInfo(Input->path_).suffix().toLower()))){
+            if(Input&&QFileInfo(Input->path_).isAbsolute()&&(Search|| (Epub?QFileInfo(Input->path_).suffix().compare("epub",Qt::CaseInsensitive)==0:QStringList{"hwp","hwpx"}.contains(QFileInfo(Input->path_).suffix().toLower())))){
                 const auto Program=QCoreApplication::applicationDirPath()+"/HyperEditor.exe";
-                QStringList Args{Epub?"--epub-edit":Input->original_?"--rhwp-edit":"--rhwp-edit-copy","--config-dir",hc::settings::DocumentPaths().directory_};
+                QStringList Args{"--config-dir",hc::settings::DocumentPaths().directory_};
+                bool ArgumentsValid=true;
+                if(Search) {
+                    auto SearchContext=Edit["search"].toObject();
+                    if(!Input->original_) { SearchContext["root"]=QFileInfo(Input->path_).absolutePath(); Args<<"--document-copy"; }
+                    const auto Encoded=QJsonDocument(SearchContext).toJson(QJsonDocument::Compact).toBase64();
+                    ArgumentsValid=Encoded.size()<=16384;
+                    Args<<"--find-in-files"<<QString::fromLatin1(Encoded);
+                    if(QFileInfo(Input->path_).suffix().compare("epub",Qt::CaseInsensitive)==0)Args<<"--epub-edit";
+                } else Args<<(Epub?"--epub-edit":Input->original_?"--rhwp-edit":"--rhwp-edit-copy");
                 if(Epub) {
                     const auto Locator=Edit["locator"].toString();const auto Chapter=Edit["chapter"].toInt(-1);
                     if(Locator.size()<=4096 && Locator.startsWith("epubcfi(") && Locator.endsWith(')') && !Locator.contains(QChar::Null))Args<<"--epub-locator"<<Locator;
@@ -98,6 +108,7 @@ namespace hc::plugins
                     if(!Edit["appearance"].toObject().isEmpty() && Appearance.size()<=16384)Args<<"--document-appearance"<<QString::fromLatin1(Appearance);
                 }
                 Args<<"--"<<Input->path_;
+                if(ArgumentsValid){
                 auto Start=std::make_shared<std::promise<bool>>();auto Result=Start->get_future();
                 // Run outside the restricted viewer Job. Retain provider input
                 // until the independent editor exits, even after the tab closes.
@@ -106,6 +117,7 @@ namespace hc::plugins
                     Start->set_value(Started);if(Started)Process.waitForFinished(-1);
                 }).detach();
                 Started=Result.get();
+                }
             }
             auto Completed=Call("Execute",{{"action","editResult"},{"token",Edit["token"]},{"accepted",Started}},{},{},Context);
             // Closing the originating tab can retire its token while the

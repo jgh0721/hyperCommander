@@ -88,7 +88,7 @@ public:
     }
     static QStringList Unknown(const QJsonObject& Stored)
     {
-        QStringList Known{"file.open", "file.close", "view.capture", "text.new"}, Result;
+        QStringList Known = hc::defaults::edit::CommandAliases().keys(), Result;
         for (const auto& Item : Commands()) Known.append(Item.id_);
         for (auto It = Stored.begin(); It != Stored.end(); ++It) if (!Known.contains(It.key())) Result.append(It.key());
         return Result;

@@ -70,7 +70,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
     auto* Body = new QHBoxLayout; Body->setContentsMargins(12, 12, 4, 12); Body->setSpacing(12);
     auto* List = new QListWidget(this); List->setObjectName("settingsCategories");
-    List->addItems({tr("공통"), tr("텍스트 뷰어"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("이미지 뷰어")}); List->setFixedWidth(180);
+    List->addItems({tr("공통"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("이미지 뷰어")}); List->setFixedWidth(180);
     List->setProperty(fm::style::props::kSoftSelection, true); List->setFrameShape(QFrame::NoFrame);
     for (int Row = 0; Row < List->count(); ++Row) List->item(Row)->setSizeHint(QSize(0, 30));
     auto* Pages = new QStackedWidget(this); Body->addWidget(List); Body->addWidget(Pages, 1); Layout->addLayout(Body, 1);
@@ -130,7 +130,9 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
         for (auto It = Profile.begin(); It != Profile.end(); ++It) base_[It.key()] = It.value();
         loadControls(); base_ = Original; error_->clear();
     });
-    auto* Text = Page(tr("텍스트 뷰어"), tr("글꼴과 편집 화면, 들여쓰기·줄바꿈, 새 문서 저장과 외부 파일 변경 처리를 설정합니다."));
+    auto* Text = Page(tr("텍스트 편집기"), tr("글꼴과 편집 화면, 들여쓰기·줄바꿈, 새 문서 저장과 외부 파일 변경 처리를 설정합니다."));
+    auto* FileSearch = Card(Text, tr("파일에서 찾기·바꾸기"));
+    Combo(FileSearch, "documentViews/textView/findInFiles/openLocation", tr("열기 위치(&L)"), {tr("하단 패널 (기본)"), tr("콘텐츠 탭")}, {"bottom", "tab"});
     auto* Fonts = Card(Text, tr("글꼴"));
     FontField(Fonts, "fontFamily", tr("글꼴"));
     Spin(Fonts, "fontSize", tr("글꼴 크기 (pt)"), 6, 72);

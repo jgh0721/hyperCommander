@@ -371,12 +371,14 @@ namespace hc::document
             epubEditor_=new EpubSourceEditor(epubBytes_,epubPath_,this,epubSourceHash_);layout()->addWidget(epubEditor_);
             epubEditor_->SetReadingLocator(Locator.isEmpty()?epub_->ViewState()["locator"].toString():Locator);epubEditor_->ConfigurePreview(epubRuntime_,Chapter<0?epub_->ViewState()["chapterIndex"].toInt(-1):Chapter);
             connect(epubEditor_,&EpubSourceEditor::Changed,this,&DocumentViewPane::ContentChanged);
+            connect(epubEditor_,&EpubSourceEditor::SearchRequested,this,&DocumentViewPane::SearchRequested);
             connect(epubEditor_,&EpubSourceEditor::StatusChanged,this,&DocumentViewPane::ViewStateChanged);
             const auto InitialFocus=std::make_shared<bool>(true);
             connect(epubEditor_,&EpubSourceEditor::StateChanged,this,[this,InitialFocus]{
                 if(*InitialFocus && epubEditor_->IsReady()){
                     *InitialFocus=false;const auto Root=GetAncestor(reinterpret_cast<HWND>(window()->winId()),GA_ROOT);
-                    if(IsEpubEditing() && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root && !QApplication::activePopupWidget() && !QApplication::activeModalWidget())Focus();
+                    bool SearchFocus=false;for(auto* Widget=QApplication::focusWidget();Widget;Widget=Widget->parentWidget())if(Widget->objectName()=="documentSearchPanel"){SearchFocus=true;break;}
+                    if(!SearchFocus && IsEpubEditing() && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root && !QApplication::activePopupWidget() && !QApplication::activeModalWidget())Focus();
                 }
                 emit ViewStateChanged();
             });
@@ -754,6 +756,31 @@ namespace hc::document
 }
 
 namespace hc::document {
+QString DocumentViewPane::SearchText() const { return text_ ? text_->Content() : QString{}; }
+std::function<QJsonArray()> DocumentViewPane::CaptureBookSearchSources(const QString& Document) const {
+    if (epubEditor_ && epubEditor_->IsReady()) return epubEditor_->CaptureSearchSources(Document);
+    const auto Bytes = epubBytes_;
+    return [Bytes, Document] {
+        epub::EditModel Model; if (!Model.Load(Bytes)) return QJsonArray{QJsonObject{{"error",Model.Error()}}};
+        return EpubSourceEditor::BuildSearchSources(Model, {}, Document);
+    };
+}
+bool DocumentViewPane::ApplySearchText(const QString& Expected, const QString& Replacement) {
+    if (!text_ || text_->isReadOnly() || text_->Content() != Expected) return false;
+    const auto Bytes = Replacement.toUtf8();
+    auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+    Backend->Send(SCI_BEGINUNDOACTION); Backend->Send(SCI_SETTARGETSTART, 0); Backend->Send(SCI_SETTARGETEND, Backend->documentLength());
+    Backend->Send(SCI_REPLACETARGET, Bytes.size(), reinterpret_cast<qintptr>(Bytes.constData())); Backend->Send(SCI_ENDUNDOACTION);
+    return true;
+}
+void DocumentViewPane::SelectSearchRange(qint64 Start, qint64 Length) {
+    if (!text_) return; const auto Text = text_->Content();
+    if (Start < 0 || Length < 0 || Start > Text.size() || Length > Text.size() - Start) return;
+    if (markdown_) markdown_->Run("markdown.source");
+    auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+    const auto Begin = Text.left(Start).toUtf8().size(), End = Begin + Text.mid(Start, Length).toUtf8().size();
+    Backend->Send(SCI_SETSEL, Begin, End); Backend->Send(SCI_SCROLLCARET); text_->setFocus();
+}
 QWidget* DocumentViewPane::InputWidget() const {if(markdown_)return markdown_->InputWidget();return IsEpubEditing()?static_cast<QWidget*>(epubEditor_):epub_?static_cast<QWidget*>(currentEpub()):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
 QJsonObject DocumentViewPane::CaptureSelection() const
 {

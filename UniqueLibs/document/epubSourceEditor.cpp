@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "documentTextCodec.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
 #include "epubResourceTree.hpp"
 #include "text/QTextView.h"
@@ -95,6 +96,47 @@ QMap<QString,QByteArray> EpubSourceEditor::draft()const {
     return {};
 }
 QByteArray EpubSourceEditor::Token()const {if(!ready_)return baseToken_;const auto Value=model_.Fingerprint(draft());return Value==reference_?baseToken_:Value;}
+std::function<QJsonArray()> EpubSourceEditor::CaptureSearchSources(const QString& Document) const {
+    const auto Model = model_; const auto Draft = draft();
+    return [Model, Draft, Document] { return BuildSearchSources(Model, Draft, Document); };
+}
+QJsonArray EpubSourceEditor::BuildSearchSources(const epub::EditModel& Model, const QMap<QString, QByteArray>& Draft, const QString& Document) {
+        QJsonArray Result;
+        for (const auto& Item : Model.Publication()["resources"].toArray()) {
+            const auto Resource = Item.toObject(); const auto Path = Resource["path"].toString();
+            const auto Media = Resource["mediaType"].toString();
+            if (!Model.IsEditable(Path) || (Media.startsWith("image/") && Media != "image/svg+xml")) continue;
+            const auto Bytes = Draft.contains(Path) ? Draft[Path] : Model.Read(Path);
+            const auto Decoded = DecodeDocumentText(Bytes); if (!Decoded.HasValue()) continue;
+            int Chapter=-1;const auto Spine=Model.Publication()["spine"].toArray();
+            for(int Index=0;Index<Spine.size();++Index)if(Spine[Index].toObject()["path"]==Path){Chapter=Index;break;}
+            Result.append(QJsonObject{{"path", Path}, {"resource", Path}, {"chapter",Chapter}, {"document", Document}, {"text", Decoded.Value().text_}, {"encoding", Decoded.Value().encoding_}, {"bom", Decoded.Value().bom_}});
+        }
+        return Result;
+}
+QString EpubSourceEditor::ApplySearchBatch(const QJsonArray& Changes) {
+    if (!ready_ || structuring_ || sourceComposing_) return tr("책을 지금 편집할 수 없습니다.");
+    const auto Draft = draft(); QMap<QString, QByteArray> Replacements;
+    for (const auto& Value : Changes) {
+        const auto Change = Value.toObject(); const auto Source = Change["source"].toObject(); const auto Path = Source["resource"].toString();
+        const auto Current = DecodeDocumentText(Draft.contains(Path) ? Draft[Path] : model_.Read(Path), Source["encoding"].toString());
+        if (!Current.HasValue()) return tr("리소스를 읽을 수 없습니다: %1").arg(Path);
+        if (Source["undo"].toBool() && Current.Value().text_ == Change["after"].toString()) continue;
+        if (Current.Value().text_ != Change["before"].toString()) return tr("검색 후 리소스가 변경되었습니다: %1").arg(Path);
+        const auto Encoded = EncodeDocumentText(Change["after"].toString(), Current.Value().encoding_, Current.Value().bom_);
+        if (!Encoded.HasValue()) return tr("리소스의 원래 인코딩으로 바꿀 수 없습니다: %1").arg(Path);
+        Replacements.insert(Path, Encoded.Value());
+    }
+    if (!flush()) return tr("현재 소스의 편집 내용을 반영하지 못했습니다.");
+    const auto Error = model_.ReplaceBatch(Replacements, model_.Fingerprint()); if (!Error.isEmpty()) return Error;
+    bookUndoPriority_ = true; bookRedoPriority_ = false; refreshResources(current_); emit Changed(); return {};
+}
+void EpubSourceEditor::SelectSearchRange(const QString& Resource, qint64 Start, qint64 Length) {
+    SetSourceVisible(true); if (!openResource(Resource)) return;
+    const auto Text = sourceText(); if (Start < 0 || Length < 0 || Start > Text.size() || Length > Text.size() - Start) return;
+    auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+    Backend->Send(SCI_SETSEL, fromUtf16(int(Start)), fromUtf16(int(Start + Length))); Backend->Send(SCI_SCROLLCARET); focusSource();
+}
 bool EpubSourceEditor::flush(){
     if(!ready_ || sourceComposing_)return false;const auto Draft=draft();saveSourceState();
     for(auto I=Draft.begin();I!=Draft.end();++I){const auto Error=model_.Replace(I.key(),I.value());if(!Error.isEmpty()){report(Error);return false;}if(sourceBuffers_.contains(I.key()))sourceBuffers_[I.key()].applied_=I.value();touchedResources_.insert(I.key());}
@@ -174,7 +216,7 @@ QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
         return closeResource(Path,false)?QJsonObject{{"accepted",true}}:QJsonObject{{"error","epub-edit-resource"}};
     }
     if(Action=="epub.edit.command")return RunCommand(Request["command"].toString())?QJsonObject{{"accepted",true}}:QJsonObject{{"error","epub-edit-command"}};
-    if(Action=="epub.edit.find-all"){findInResources(Request["text"].toString());return {{"accepted",true},{"results",searchResults_->topLevelItemCount()}};}
+    if(Action=="epub.edit.find-all"){findInResources(Request["text"].toString());return {{"accepted",true},{"pending",true}};}
     if(Action=="epub.edit.wrap"){if(!sourceShown() || text_->Backend()->selectedText().isEmpty())return {{"error","epub-edit-selection"}};wrapSelection(Request["tag"].toString());return {{"accepted",true}};}
     if(Action=="epub.edit.quick-fix"){const auto Fix=quickFixAt(sourcePosition());if(Fix.isEmpty())return {{"error","epub-edit-quick-fix"}};quickFix();return {{"accepted",true}};}
     if(Action=="epub.edit.open-link")return openLink()?QJsonObject{{"accepted",true}}:QJsonObject{{"error","epub-edit-link"}};

@@ -54,6 +54,8 @@ namespace hc::defaults::edit
             {"edit.paste", QObject::tr("붙여넣기"), "Ctrl+V", "edit"},
             {"edit.selectAll", QObject::tr("전체 선택"), "Ctrl+A", "edit"},
             {"text.find", QObject::tr("찾기"), "Ctrl+F", "text"},
+            {"document.findInFiles", QObject::tr("파일에서 찾기"), "Ctrl+Shift+F", "common"},
+            {"document.replaceInFiles", QObject::tr("파일에서 바꾸기"), "Ctrl+Shift+H", "common"},
             {"text.replace", QObject::tr("바꾸기"), "Ctrl+H", "text"},
             {"text.findNext", QObject::tr("다음 찾기"), "F3", "text"},
             {"text.findPrev", QObject::tr("이전 찾기"), "Shift+F3", "text"},
@@ -93,7 +95,6 @@ namespace hc::defaults::edit
             {"epubTree.copyPath", QObject::tr("경로 복사"), "Ctrl+Shift+C", "epub-edit.tree"},
             {"epubSource.quickFix", QObject::tr("빠른 수정"), "Alt+Enter", "epub-edit.source"},
             {"epubSource.openLink", QObject::tr("링크된 리소스 열기"), "F12", "epub-edit.source"},
-            {"epubSource.findAll", QObject::tr("모든 리소스에서 찾기"), "Ctrl+Shift+F", "epub-edit.source"},
             {"epubSource.locate", QObject::tr("미리보기에서 이 위치 보기"), "", "epub-edit.source"},
             {"epubSource.wrapEm", QObject::tr("태그로 감싸기 · em"), "", "epub-edit.source"},
             {"epubSource.wrapStrong", QObject::tr("태그로 감싸기 · strong"), "", "epub-edit.source"},
@@ -140,6 +141,7 @@ namespace hc::defaults::edit
             {"textView/wrapVisualFlags", 1}, {"textView/wrapIndentMode", 1},
             {"textView/showRuler", true}, {"textView/rulerFontFamily", "Consolas"},
             {"textView/rulerFontSize", 8}, {"textView/defaultLineEnding", "CRLF"},
+            {"textView/findInFiles/openLocation", "bottom"},
             {"textView/saveEncoding", "UTF-8"}, {"textView/saveBomMode", 1},
             {"textView/recoveryEnabled", true}, {"textView/hotExitEnabled", true},
             {"textView/largeFileMB", 1}, {"textView/externalChangeAction", 1},
@@ -374,7 +376,7 @@ namespace hc::defaults::edit
     inline QMap<QString, QString> ShortcutAliases() { return {{"edit.redo", "Ctrl+Shift+Z"}, {"edit.copy", "Ctrl+Insert"}, {"edit.cut", "Shift+Delete"}, {"edit.paste", "Shift+Insert"}}; }
 
     inline QMap<QString, QString> CommandAliases() { return {{"file.open", "file.openWorkspace"}, {"file.close", "tab.close"},
-            {"view.capture", "capture.screen"}, {"text.new", "file.new"}}; }
+            {"view.capture", "capture.screen"}, {"text.new", "file.new"}, {"epubSource.findAll", "document.findInFiles"}}; }
 
     inline QStringList ReservedShortcuts() { return {"Ctrl+Space", "Ctrl+Shift+Space", "Ctrl+L", "Ctrl+Shift+L", "Ctrl+T", "Ctrl+Shift+T",
             "Ctrl+D", "Ctrl+U", "Ctrl+Shift+U", "Ctrl+[", "Ctrl+Shift+[", "Ctrl+]", "Ctrl+Shift+]",

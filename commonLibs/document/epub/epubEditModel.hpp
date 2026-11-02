@@ -21,6 +21,7 @@ public:
     QMap<QString,QByteArray> Changes()const{return replacements_;}
     bool IsEditable(const QString& Path)const{return media_.contains(Path);}
     QString Replace(const QString& Path,const QByteArray& Bytes);
+    QString ReplaceBatch(const QMap<QString, QByteArray>& Changes, const QByteArray& Expected);
     bool CanUndo()const{return position_>0;}
     bool CanRedo()const{return position_<history_.size();}
     void Undo();void Redo();

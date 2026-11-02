@@ -81,19 +81,7 @@ void EpubSourceEditor::wrapSelection(const QString& Tag) {
     else {Open="<"+Tag+">";Close="</"+Tag+">";}
     const auto Bytes=(Open+Selected+Close).toUtf8();direct(text_)->Send(SCI_BEGINUNDOACTION);direct(text_)->Send(SCI_REPLACESEL,0,reinterpret_cast<qintptr>(Bytes.constData()));direct(text_)->Send(SCI_ENDUNDOACTION);
 }
-void EpubSourceEditor::findInResources(const QString& Requested) {
-    auto Needle=Requested.trimmed();bool Ok=true;
-    if(Needle.isEmpty())Needle=hc::ui::InputDialog::getText(this,tr("모든 리소스에서 찾기"),tr("찾을 문자열"),QLineEdit::Normal,{},&Ok).trimmed();if(!Ok || Needle.isEmpty())return;
-    searchResults_->clear();int Count=0;
-    for(const auto& Value:model_.Publication()["resources"].toArray()) {
-        const auto Path=Value.toObject()["path"].toString();const auto Media=Value.toObject()["mediaType"].toString();if(!model_.IsEditable(Path) || Media.startsWith("image/") && Media!="image/svg+xml")continue;
-        const auto Text=Path==current_ && sourceShown()?sourceText():QString::fromUtf8(model_.Read(Path));const auto Lines=Text.split('\n');
-        for(int Line=0;Line<Lines.size() && Count<2000;++Line){int Column=Lines[Line].indexOf(Needle,0,Qt::CaseInsensitive);if(Column<0)continue;
-            auto* Item=new QTreeWidgetItem(searchResults_,{Path,QString::number(Line+1),Lines[Line].trimmed().left(200)});Item->setData(0,Qt::UserRole,Path);Item->setData(1,Qt::UserRole,Line+1);Item->setData(2,Qt::UserRole,Column+1);++Count;}
-    }
-    problems_->setTabText(2,tr("검색 결과 %1").arg(Count));setPanelVisible("problems",true);problems_->setCurrentWidget(searchResults_);
-    report(Count>=2000?tr("'%1' 결과가 많아 처음 2,000개만 표시합니다.").arg(Needle):tr("'%1' 결과 %2개").arg(Needle).arg(Count));
-}
+void EpubSourceEditor::findInResources(const QString& Requested) { emit SearchRequested(Requested); }
 void EpubSourceEditor::findSelectionInSource(const QString& Text) {
     if(Text.trimmed().isEmpty() || !sourceShown())return;
     // Rendered text loses markup and entities; search for its longest plain line from the caret.

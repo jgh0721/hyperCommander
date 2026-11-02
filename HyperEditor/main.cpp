@@ -59,6 +59,8 @@ int main(int Argc, char** Argv)
     Parser.addOption(QCommandLineOption("rhwp-edit-copy", "Edit a provider copy with Save As only"));
     Parser.addOption(QCommandLineOption("rhwp-view", "Open one HWP/HWPX in the isolated read-only viewer"));
     Parser.addOption(QCommandLineOption("epub-edit", "Open one DRM-free EPUB in edit mode"));
+    Parser.addOption(QCommandLineOption("find-in-files", "Restore a find/replace session without applying changes", "base64"));
+    Parser.addOption(QCommandLineOption("document-copy", "Open a provider copy with Save As only"));
     Parser.addOption(QCommandLineOption("epub-locator", "Initial EPUB reading position", "cfi"));
     Parser.addOption(QCommandLineOption("epub-chapter", "Initial EPUB spine index", "index"));
     Parser.addOption(QCommandLineOption("document-appearance", "Initial Watercolor appearance supplied by Commander", "base64"));
@@ -84,6 +86,13 @@ int main(int Argc, char** Argv)
     if (Parser.isSet("verify-runtime")) return VerifyDocumentRuntime();
     const bool RhwpEdit = Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy");
     const bool EpubEdit=Parser.isSet("epub-edit");
+    QJsonObject SearchContext;
+    if(Parser.isSet("find-in-files")) {
+        const auto Encoded=Parser.value("find-in-files").toLatin1();
+        if(Encoded.size()>16384 || Parser.positionalArguments().size()!=1)return 9;
+        const auto Json=QJsonDocument::fromJson(QByteArray::fromBase64(Encoded,QByteArray::AbortOnBase64DecodingErrors));
+        if(!Json.isObject())return 9; SearchContext=Json.object();
+    }
     const auto EpubLocator=Parser.value("epub-locator");bool ChapterValid=true;
     const int EpubChapter=Parser.isSet("epub-chapter")?Parser.value("epub-chapter").toInt(&ChapterValid):-1;
     if((!EpubEdit && (Parser.isSet("epub-locator") || Parser.isSet("epub-chapter"))) || (EpubEdit &&
@@ -121,7 +130,7 @@ int main(int Argc, char** Argv)
         return App.exec();
     }
     EditorInstance Instance;
-    if(!EpubEdit){
+    if(!EpubEdit && !Parser.isSet("find-in-files") && !Parser.isSet("document-copy")){
         const auto Canonical=[](const QString& Path){const QFileInfo Info(Path);const auto Name=Info.canonicalFilePath();return (Name.isEmpty()?Info.absoluteFilePath():Name).toCaseFolded();};
         const auto Scope=QJsonDocument(QJsonArray{Canonical(QCoreApplication::applicationFilePath()),Canonical(Config.directory_),Parser.value("theme"),Parser.value("document-appearance")}).toJson(QJsonDocument::Compact);
         const auto Started=Instance.Start(Scope,Parser.positionalArguments());
@@ -154,6 +163,15 @@ int main(int Argc, char** Argv)
                 else Current->ShowShellError({});
             });
         const auto EditPending=std::make_shared<bool>(EpubEdit);
+        if(Parser.isSet("find-in-files")) {
+            auto* SearchWait=new QTimer(Current); SearchWait->setInterval(50);
+            QObject::connect(SearchWait,&QTimer::timeout,Current,[Current,SearchWait,SearchContext] {
+                const auto Documents=Current->Snapshot()["documents"].toArray(); if(Documents.isEmpty())return;
+                const auto Record=Documents.first().toObject(); if(Record["loading"].toBool() || !Current->IsIdle())return;
+                SearchWait->stop();SearchWait->deleteLater();
+                if(Record["error"].toString().isEmpty())Current->OpenSearchContext(SearchContext);
+            }); SearchWait->start();
+        }
         QObject::connect(Current, &hc::document::DocumentWorkspaceWidget::StateChanged, Current, [Current,EditPending,EpubLocator,EpubChapter] {
             const auto Documents = Current->Snapshot()["documents"].toArray();
             for(const auto& Item : Documents) {
@@ -178,7 +196,7 @@ int main(int Argc, char** Argv)
             std::erase_if(Windows,[Current](const auto& Window){return Window.get()==Current;});
         });};
         Current->show();Current->raise();Current->activateWindow();
-        if (!File.isEmpty() && Current->Handle({{"action", "open"}, {"path", QFileInfo(File).absoluteFilePath()}}).contains("error"))
+        if (!File.isEmpty() && Current->Handle({{"action", "open"}, {"path", QFileInfo(File).absoluteFilePath()},{"copyOnly",Parser.isSet("document-copy")}}).contains("error"))
             Current->ShowShellError(QObject::tr("문서 한도 때문에 파일을 열지 못했습니다: %1").arg(File));
         Windows.push_back(std::move(Window));
     }

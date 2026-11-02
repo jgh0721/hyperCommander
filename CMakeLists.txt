@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 4.2)
-set(HC_PRODUCT_VERSION "2026.11.02.2")
+set(HC_PRODUCT_VERSION "2026.11.03.1")
 project(HyperCommander VERSION ${HC_PRODUCT_VERSION} LANGUAGES CXX RC)
 
 include(cmake/build.version.cmake)
@@ -147,25 +147,7 @@ if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND HC_RHWP_APPROVED_INVENTORY_SHA256)
         target_compile_definitions(hc_document_open PRIVATE HC_RHWP_F4_RUNTIME=1)
     endif()
 endif()
-# Both Everything SDK clients are built from source. No third-party signed DLL
-# ships, so a vendor certificate change cannot strand older updaters.
-qt_add_executable(hc-search-index tools/searchIndexMain.cpp externalLibs/Everything/sdk3/src/Everything3.c
-    externalLibs/Everything/src/src/Everything.c)
-target_compile_definitions(hc-search-index PRIVATE EVERYTHING3_LIB EVERYTHINGUSERAPI=)
-target_link_libraries(hc-search-index PRIVATE ole32 user32)
-target_link_libraries(hc-search-index PRIVATE Qt6::Core)
-target_compile_options(hc-search-index PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-add_custom_command(TARGET hc-search-index POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:hc-search-index>/Licenses/EverythingSDK3"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-        "${PROJECT_SOURCE_DIR}/externalLibs/Everything/sdk3/License.txt" "$<TARGET_FILE_DIR:hc-search-index>/Licenses/EverythingSDK3/License.txt"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:hc-search-index>/Licenses/EverythingSDK2"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-        "${PROJECT_SOURCE_DIR}/externalLibs/Everything/src/License.txt" "$<TARGET_FILE_DIR:hc-search-index>/Licenses/EverythingSDK2/License.txt"
-    VERBATIM
-)
-hc_enable_qt_deployment(hc-search-index)
-hc_add_version_resource(hc-search-index "HyperCommander Search Helper")
+add_subdirectory(HyperSearchIndexer)
 # Process/service collection and control. Qt-free; Windows 10 APIs are allowed here
 # because UniqueLibs/HyperCommander still build with the Windows 7 SDK target.
 qt_add_library(hc_system STATIC

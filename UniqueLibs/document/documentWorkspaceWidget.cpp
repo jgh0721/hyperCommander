@@ -14,6 +14,9 @@
 #include <QJsonDocument>
 #include <QMap>
 #include "documentViewPane.hpp"
+#include "search/documentSearchPanel.hpp"
+#include <QMainWindow>
+#include <QDockWidget>
 #include "imageFullscreen.hpp"
 #include "imageReadingView.hpp"
 #include "documentThemeAdapter.hpp"
@@ -304,6 +307,10 @@ namespace hc::document
             auto Reply=open(Path,false,{},false);if(auto Tab=find(Reply["documentId"].toString())){Tab->originalAuthority_=false;Tab->temporarySource_=Path;}
         });
         auto* EditMenu = menu_->addMenu(tr("편집(&E)"));
+        for (const auto& Command : DocumentShortcutRegistry::Commands()) if (Command.id_ == "document.findInFiles" || Command.id_ == "document.replaceInFiles") {
+            auto* Action = EditMenu->addAction(Command.label_); Action->setObjectName(Command.id_); addAction(Action);
+            connect(Action, &QAction::triggered, this, [this, Replace = Command.id_ == "document.replaceInFiles"] { openSearch(Replace); });
+        }
         for (const auto& Item : {std::pair{tr("실행 취소"), QKeySequence::Undo}, std::pair{tr("다시 실행"), QKeySequence::Redo}}) {
             auto* Action = EditMenu->addAction(Item.first); toolbar_->addAction(Action); addAction(Action);
             Action->setObjectName(Item.second == QKeySequence::Undo ? "undoDocument" : "redoDocument");
@@ -377,6 +384,7 @@ namespace hc::document
             auto Recovery = recovery_; Watcher->setFuture(QtConcurrent::run([Recovery] { return Recovery->List(); }));
         });
         connect(tabs_, &QTabWidget::tabCloseRequested, this, [this](int Index) {
+            if (searchPanel_ && tabs_->widget(Index) == searchPanel_) { tabs_->removeTab(Index); searchPanel_->hide(); return; }
             auto* Pane = tabs_->widget(Index); for (std::size_t At = 0; At < documents_.size(); ++At) if (documents_[At]->pane_ == Pane) { closeTab(int(At)); break; }
         });
         connect(tabs_, &QTabWidget::currentChanged, this, [this] {
@@ -426,7 +434,7 @@ namespace hc::document
             {"printDocument", "file.print"}, {"previewDocument", "file.printPreview"}, {"cancelDocument", "file.cancel"},
             {"captureScreen", "capture.screen"}, {"workspaceDisplayOptions", "view.displayOptions"}, {"documentPreferences", "app.settings"}};
         qApp->installEventFilter(this);
-        new DocumentFocusRestore(this,[this]()->QWidget*{auto Tab=active();return Tab&&!Tab->loading_?Tab->pane_->InputWidget():nullptr;});
+        new DocumentFocusRestore(this,[this]()->QWidget*{auto* Focus=QApplication::focusWidget();if(searchPanel_&&Focus&&(Focus==searchPanel_||searchPanel_->isAncestorOf(Focus)))return Focus;auto Tab=active();return Tab&&!Tab->loading_?Tab->pane_->InputWidget():nullptr;});
         if (hosted_) {
             viewerEscape_ = new QShortcut(QKeySequence(hc::defaults::edit::AuxiliaryShortcut("viewer.close")), this);
             viewerEscape_->setAutoRepeat(false);
@@ -561,6 +569,10 @@ namespace hc::document
         const QJsonObject Relevant{{"documentViews", Views}, {"chrome", Chrome}};
         if (Relevant == appliedPreferences_) return;
         appliedPreferences_ = Relevant;
+        if (searchPanel_) {
+            const auto Location = Views["textView"].toObject()["findInFiles"].toObject()["openLocation"].toString("bottom");
+            if (searchPanel_->property("configuredLocation").toString() != Location) { searchPanel_->setProperty("configuredLocation", Location); placeSearch(Location); }
+        }
         if (externalWatcher_) externalWatcher_->reloadSettings();
         if (!Chrome.isEmpty() && !ApplyChromeSettings(Chrome)) ShowShellError(tr("문서 표시 설정이 올바르지 않습니다."));
         const bool Cover = Views["imageView"].toObject()["comic"].toObject()["coverAlone"].toBool(hc::defaults::edit::ViewValue("imageView/comic/coverAlone").toBool());
@@ -635,13 +647,14 @@ namespace hc::document
         } else QFile::remove(Path);
         return Reply;
     }
-    QWidget* DocumentWorkspaceWidget::currentPane() const { return tabbed_ ? tabs_->currentWidget() : singlePane_->currentWidget(); }
+    QWidget* DocumentWorkspaceWidget::currentPane() const { if (searchPanel_ && tabs_->isVisible() && tabs_->currentWidget() == searchPanel_) return nullptr; return tabbed_ ? tabs_->currentWidget() : singlePane_->currentWidget(); }
     std::shared_ptr<DocumentWorkspaceWidget::Tab> DocumentWorkspaceWidget::active() const
     { for (const auto& Tab : documents_) if (Tab->pane_ == currentPane()) return Tab; return {}; }
     std::shared_ptr<DocumentWorkspaceWidget::Tab> DocumentWorkspaceWidget::find(const QString& Id) const
     { for (const auto& Tab : documents_) if (Tab->id_ == Id && !Tab->closed_) return Tab; return {}; }
     void DocumentWorkspaceWidget::activate(const std::shared_ptr<Tab>& Tab)
     {
+        if (!tabbed_ && tabs_->indexOf(singlePane_) >= 0) tabs_->setCurrentWidget(singlePane_);
         if (tabbed_) tabs_->setCurrentWidget(Tab->pane_); else singlePane_->setCurrentWidget(Tab->pane_);
         workspace_.Activate(Tab->id_.toStdString()); update();
     }
@@ -669,7 +682,7 @@ namespace hc::document
     void DocumentWorkspaceWidget::ShowShellError(const QString& Message) { shellError_ = Message; update(); }
     bool DocumentWorkspaceWidget::IsIdle() const
     {
-        return !recoveryWorkers_ && std::none_of(documents_.begin(), documents_.end(), [](const auto& Tab) {
+        return (!searchPanel_ || !searchPanel_->Busy()) && !recoveryWorkers_ && std::none_of(documents_.begin(), documents_.end(), [](const auto& Tab) {
             return Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
         });
     }
@@ -710,6 +723,7 @@ namespace hc::document
         Pane->SetUnlimitedBytes(hosted_);
         Pane->SetShortcutBindings(shortcutRouter_->Bindings());
         Tab->pane_ = Pane;
+        connect(Pane,&DocumentViewPane::SearchRequested,this,[this,Tab](const QString& Query){if(Tab->closed_)return;activate(Tab);openSearch(false);if(searchPanel_)searchPanel_->SetQuery(Query);});
         connect(Pane, &DocumentViewPane::ClipboardRequested, this, [this, Tab](const QString& Mode) { clipboard(Tab, Mode); });
         connect(Pane,&DocumentViewPane::ContentChanged,this,[this,Tab] {
             if(Tab->loading_||Tab->closed_)return;
@@ -723,6 +737,7 @@ namespace hc::document
             auto Result=Tab->session_->Execute("document.setText",Bytes.toStdString());
             if(!Result.HasValue())Tab->error_=QString::fromStdString(Result.Failure().code_);else Tab->error_.clear();
             Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo());update();
+            if(searchPanel_)searchPanel_->SourcesChanged();
         });
         connect(Pane,&DocumentViewPane::ViewStateChanged,this,[this,Tab]{if(!Tab->closed_&&!Tab->loading_){auto* Timer=findChild<QTimer*>("documentStatusRefresh");if(!Timer->isActive())Timer->start();}});
         connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_){if(epubFullscreen_)toggleEpubFullscreen();else escapeViewer();}});
@@ -1253,7 +1268,11 @@ namespace hc::document
             }
             return {{"accepted",true}};
         }
-        if (Action == "open" || Action == "openHost") return open(Request["path"].toString(), Action == "openHost", Request["sourceToken"].toString(), Request["broker"].toBool());
+        if (Action == "open" || Action == "openHost") {
+            const auto Reply=open(Request["path"].toString(), Action == "openHost", Request["sourceToken"].toString(), Request["broker"].toBool());
+            if(!hosted_ && Request["copyOnly"].toBool())if(auto Tab=find(Reply["documentId"].toString())){Tab->originalAuthority_=false;Tab->originalSave_=false;}
+            return Reply;
+        }
         if (Action == "chrome") { if (!ApplyChromeSettings(Request["settings"].toObject())) return Error("document-chrome-settings"); emit ChromeSettingsChanged(chrome_->Settings()); return {{"accepted", true}}; }
         if (Action == "cancelHost") { for (const auto& Tab : documents_) if (Tab->hostSlot_) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->queuedSave_.reset();Tab->composingSave_=false;Tab->pane_->Cancel(); } return {{"accepted", true}}; }
         if (Action == "checkpoint") { Checkpoint(); return {{"accepted", true}}; }
@@ -1563,6 +1582,7 @@ namespace hc::document
     }
     bool DocumentWorkspaceWidget::RequestClose()
     {
+        if (searchPanel_ && searchPanel_->Busy()) { ShowShellError(tr("파일 바꾸기가 진행 중입니다. 완료하거나 중지한 뒤 닫으십시오.")); return false; }
         closingWorkspace_ = true;
         while (!documents_.empty()) {
             const auto Count = documents_.size(); closeTab(int(Count - 1));
@@ -1620,4 +1640,101 @@ namespace hc::document
         closingWorkspace_ = false;
         emit StateChanged();
     }
+}
+
+namespace hc::document {
+QJsonArray DocumentWorkspaceWidget::searchSources() const {
+    QJsonArray Sources;
+    for (const auto& Tab : documents_) {
+        if (Tab->loading_ || Tab->closed_ || (Tab->pane_->ViewId() != "text" && !Tab->pane_->IsMarkdown())) continue;
+        Sources.append(QJsonObject{{"path", Tab->path_}, {"document", Tab->id_}, {"text", Tab->pane_->SearchText()},
+            {"revision", QString::number(Tab->Revision())}, {"encoding", Tab->input_.encoding_}, {"bom", Tab->input_.bom_}, {"readOnly", Tab->pane_->IsReadOnly()}});
+    }
+    return Sources;
+}
+void DocumentWorkspaceWidget::openSearch(bool Replace) {
+    auto Tab = active(); if (!Tab) Tab = find(searchDocument_);
+    if (!Tab || Tab->loading_) return;
+    if (Tab->pane_->ViewId() != "text" && !Tab->pane_->IsMarkdown() && !Tab->pane_->IsEpub()) return;
+    if(Replace && !hosted_ && Tab->pane_->IsEpub() && !Tab->pane_->EpubEditor())Tab->pane_->Execute({{"action","epub.edit.begin"}});
+    const bool ChangedBook=Tab->pane_->IsEpub() && searchDocument_!=Tab->id_;searchDocument_ = Tab->id_;
+    if (!searchPanel_) {
+        auto* Layout = qobject_cast<QVBoxLayout*>(layout()); auto* Content = tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_;
+        const auto Position = Layout->indexOf(Content); Layout->removeWidget(Content);
+        searchHost_ = new QMainWindow(this,Qt::Widget); searchHost_->setWindowFlags(Qt::Widget); searchHost_->setObjectName("documentSearchHost"); searchHost_->setDockOptions({}); searchHost_->setCentralWidget(Content); Layout->insertWidget(Position, searchHost_, 1);searchHost_->show();Content->show();
+        searchDock_ = new QDockWidget(tr("파일에서 찾기 / 바꾸기"), searchHost_); searchDock_->setObjectName("documentSearchDock"); searchDock_->setAllowedAreas(Qt::BottomDockWidgetArea); searchHost_->addDockWidget(Qt::BottomDockWidgetArea, searchDock_);
+        searchPanel_ = new search::Panel(searchDock_); searchDock_->setWidget(searchPanel_); shortcutRouter_->AddScope(searchDock_);
+        searchPanel_->SetSources([this] { return searchSources(); });
+        searchPanel_->SetBookSources([this] { const auto Target = find(searchDocument_); return Target ? Target->pane_->CaptureBookSearchSources(Target->id_) : std::function<QJsonArray()>{}; });
+        connect(searchPanel_, &search::Panel::Navigate, this, &DocumentWorkspaceWidget::navigateSearch);
+        connect(searchPanel_, &search::Panel::EditorRequested, this, [this](const QJsonObject& Context) {
+            const auto Target=find(searchDocument_); if(!hosted_||!Target||Target->loading_||!editRequest_.isEmpty())return;
+            editRequest_={{"token",QUuid::createUuid().toString(QUuid::Id128)},{"documentId",Target->id_},
+                {"generation",QString::number(Target->session_->Snapshot().generation_)},{"format","search"},{"search",Context}};update();
+        });
+        connect(searchPanel_, &search::Panel::ApplyBuffer, this, [this](quint64 Ticket, const QJsonObject& Source, const QString& Expected, const QString& Replacement) {
+            auto Target = find(Source["document"].toString()); QString Error;
+            if (!Target || Target->loading_ || Target->saving_ || Target->pane_->IsReadOnly()) Error = tr("문서가 닫혔거나 지금 편집할 수 없습니다.");
+            else if (Source.contains("bookBatch")) {
+                auto* Editor = Target->pane_->EpubEditor();
+                if (!Editor || !Editor->IsReady()) Error = tr("책의 편집 모드를 연 뒤 다시 검색하여 바꾸십시오.");
+                else Error = Editor->ApplySearchBatch(Source["bookBatch"].toArray());
+            }
+            else if (Source["undo"].toBool() && Target->pane_->SearchText() == Replacement) { /* already undone */ }
+            else if (!Target->pane_->ApplySearchText(Expected, Replacement)) Error = tr("문서가 검색/치환 후 변경되었습니다.");
+            searchPanel_->FinishBuffer(Ticket, Error);
+        });
+        connect(searchPanel_, &search::Panel::PlacementRequested, this, &DocumentWorkspaceWidget::placeSearch);
+        connect(searchPanel_, &search::Panel::CloseRequested, this, [this] {
+            const auto Index = tabs_->indexOf(searchPanel_); if (Index >= 0) tabs_->removeTab(Index);
+            searchDock_->hide(); searchPanel_->hide();
+        });
+    }
+    const auto Location = appliedPreferences_["documentViews"].toObject()["textView"].toObject()["findInFiles"].toObject()["openLocation"].toString("bottom");
+    searchPanel_->setProperty("configuredLocation", Location);
+    if (searchPlacement_.isEmpty() || !searchPanel_->isVisible()) placeSearch(Location);
+    searchPanel_->SetReadOnly(hosted_);
+    searchPanel_->Open(Replace, Tab->pane_->IsEpub() ? Tab->path_ : QFileInfo(Tab->path_).absolutePath(), Tab->pane_->IsEpub(), searchSources());
+    if(ChangedBook)searchPanel_->SourcesChanged();
+}
+void DocumentWorkspaceWidget::placeSearch(const QString& Location) {
+    if (!searchPanel_) return;
+    searchPlacement_ = Location;
+    const auto Index = tabs_->indexOf(searchPanel_); if (Index >= 0) tabs_->removeTab(Index);
+    if(searchDock_->widget()==searchPanel_)searchDock_->setWidget(nullptr);
+    searchPanel_->setParent(this);
+    if (Location == "tab") {
+        searchDock_->hide();
+        if (!tabbed_ && tabs_->indexOf(singlePane_) < 0) {
+            searchHost_->takeCentralWidget(); tabs_->addTab(singlePane_, tr("문서")); searchHost_->setCentralWidget(tabs_); tabs_->show(); singlePane_->show();
+        }
+        tabs_->addTab(searchPanel_, tr("파일에서 찾기 / 바꾸기")); tabs_->setCurrentWidget(searchPanel_);
+    } else {
+        if (!tabbed_ && tabs_->indexOf(singlePane_) >= 0) { tabs_->removeTab(tabs_->indexOf(singlePane_)); searchHost_->takeCentralWidget(); tabs_->setParent(this); tabs_->hide(); searchHost_->setCentralWidget(singlePane_); singlePane_->show(); }
+        searchDock_->setWidget(searchPanel_); searchDock_->setFloating(false);searchHost_->addDockWidget(Qt::BottomDockWidgetArea,searchDock_);searchDock_->setFloating(Location == "floating"); searchDock_->show();
+        if (Location == "floating") searchDock_->resize(1000, 600);
+        else searchHost_->resizeDocks({searchDock_}, {qBound(360,height()*55/100,560)}, Qt::Vertical);
+    }
+    searchPanel_->show();
+}
+void DocumentWorkspaceWidget::OpenSearchContext(const QJsonObject& Context) {
+    openSearch(true); if(searchPanel_)searchPanel_->RestoreContext(Context);
+}
+void DocumentWorkspaceWidget::navigateSearch(const QJsonObject& Row) {
+    auto Tab = find(Row["document"].toString());
+    if (!Tab) { const auto Reply = open(Row["path"].toString(), false, {}, false); Tab = find(Reply["documentId"].toString()); }
+    if (!Tab) return; activate(Tab);
+    if(!hosted_ && !Row["resource"].toString().isEmpty() && !Tab->pane_->EpubEditor())Tab->pane_->Execute({{"action","epub.edit.begin"}});
+    auto* Wait = new QTimer(this); Wait->setInterval(30); auto Attempts = std::make_shared<int>(0);
+    connect(Wait, &QTimer::timeout, this, [this, Wait, Id = Tab->id_, Row, Attempts] {
+        auto Current = find(Id); if (!Current || ++*Attempts > 1000) { Wait->deleteLater(); return; }
+        if (Current->loading_) return;
+        if (!Row["resource"].toString().isEmpty()) {
+            auto* Editor = Current->pane_->EpubEditor();
+            if(Editor && !Editor->IsReady())return;
+            if (Editor && Editor->IsReady()) Editor->SelectSearchRange(Row["resource"].toString(), Row["start"].toInteger(), Row["length"].toInteger());
+            else if(Row["chapter"].toInt(-1)>=0)Current->pane_->Execute({{"action","epub.reader.chapter"},{"value",Row["chapter"]}});
+        } else Current->pane_->SelectSearchRange(Row["start"].toInteger(), Row["length"].toInteger()); Wait->deleteLater();
+    }); Wait->start();
+}
 }
