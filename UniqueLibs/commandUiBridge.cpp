@@ -291,6 +291,7 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         const auto Registered = registry_->Register(Descriptor, {
             [Guard = QPointer<CommandUiBridge>(this)](const CommandInvocation& Invocation) {
                 const bool Available = Guard && (Guard->findModel(Invocation.context_.tabId_)
+                    || ((Invocation.id_ == "hc.navigate.systemProcesses" || Invocation.id_ == "hc.navigate.systemServices") && Guard->activePanel_)
                     || Invocation.id_ == "hc.viewer.close" || (Invocation.id_ == "hc.viewer.quick" && Guard->quick_));
                 return SupportDecision{Available ? Availability::Supported : Availability::Unsupported, Available ? "tab-available" : "tab-closed"};
             },
@@ -765,6 +766,13 @@ CFSModel* CommandUiBridge::findModel(const std::string& TabId) const
 Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocation)
 {
     Q_ASSERT(QThread::currentThread() == thread());
+    if (Invocation.id_ == "hc.navigate.systemProcesses" || Invocation.id_ == "hc.navigate.systemServices")
+    {
+        if (!activePanel_) return Error{ErrorCategory::Cancelled, "panel-closed"};
+        // 시스템 보기에는 파일 모델이 없다. 현재 패널의 현재 탭을 직접 전환한다.
+        activePanel_->ShowSystemView(Invocation.id_ == "hc.navigate.systemServices" ? 1 : 0);
+        return CommandOutcome{};
+    }
     if (Invocation.id_ == "hc.viewer.close" || (Invocation.id_ == "hc.viewer.quick" && quick_))
     { closeQuick(); return CommandOutcome{}; }
     auto* Model = findModel(Invocation.context_.tabId_);
@@ -1349,6 +1357,7 @@ void CommandUiBridge::createCommandUi()
         const auto Id = hc::ui::CommandId(Command.Name);
         if (actions_.contains(Id)) continue;
         Add(Id, Command.Desc, [this, Id] {
+            if (Id == "hc.navigate.systemProcesses" || Id == "hc.navigate.systemServices") { Dispatch(Id, {}, "ui"); return; }
             if (hc::sys::SystemCommands::Handles(Id)) { system_->Execute(Id); return; }
             // 시스템 보기에서 Ctrl+Q는 반대 패널 상세 보기를 열고 닫는다.
             if (Id == "hc.viewer.quick" && (system_->DetailOpen() || system_->ActiveKind() >= 0)) { system_->ToggleDetail(); return; }

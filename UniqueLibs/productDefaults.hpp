@@ -173,6 +173,11 @@ DECLARE_CMD( BuiltInCMD_Nav_FavoriteDir,          QObject::tr( "탐색" ),    "h
 DECLARE_CMD( BuiltInCMD_Nav_GotoDrive,            QObject::tr( "탐색" ),    "hc.navigate.path",
              Qt::Key_F12,                                               QObject::tr( "드라이브 전환" ) );
 
+DECLARE_CMD( BuiltInCMD_Nav_SystemProcesses,      QObject::tr( "탐색" ),    "hc.navigate.systemProcesses",
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_P,           QObject::tr( "시스템 도구: 프로세스로 이동" ) );
+DECLARE_CMD( BuiltInCMD_Nav_SystemServices,       QObject::tr( "탐색" ),    "hc.navigate.systemServices",
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_S,           QObject::tr( "시스템 도구: 서비스로 이동" ) );
+
 DECLARE_CMD( BuiltInCMD_Nav_GotoDriveA, QObject::tr( "탐색" ), "hc.navigate.gotoDriveA",
              Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_A, QObject::tr( "A 드라이브 루트로 이동" ) );
 DECLARE_CMD( BuiltInCMD_Nav_GotoDriveB, QObject::tr( "탐색" ), "hc.navigate.gotoDriveB",
@@ -431,6 +436,8 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
 
     BuiltInCMD_Nav_FavoriteDir,
     BuiltInCMD_Nav_GotoDrive,
+    BuiltInCMD_Nav_SystemProcesses,
+    BuiltInCMD_Nav_SystemServices,
     BuiltInCMD_Nav_GotoDriveA,
     BuiltInCMD_Nav_GotoDriveB,
     BuiltInCMD_Nav_GotoDriveC,
@@ -637,6 +644,8 @@ namespace hc::defaults
                  { "hc.navigate.cancel" },
                  { "hc.navigate.open" },
                  { "hc.navigate.enterFile" },
+                 { "hc.navigate.systemProcesses" },
+                 { "hc.navigate.systemServices" },
                  { "hc.navigate.provider",    1, { { "enabled", { ParameterType::Boolean } } } },
                  { "hc.tab.new" },
                  { "hc.tab.close" },

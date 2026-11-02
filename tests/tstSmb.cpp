@@ -619,6 +619,47 @@ private slots:
         }
         Left->SetSearch({}); emit Left->sig_NotifyPanelActivated();
         QVERIFY(qobject_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex())));
+        // 기본 키와 기본 키 사용을 끈 사용자 지정 키 모두 현재 패널만 전환한다.
+        for (auto* Panel : {Left, Right}) {
+            auto General = Settings.Read(hc::settings::Section::General).toObject(); General["useBuiltInShortcuts"] = Panel == Left;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General));
+            if (Panel == Right) {
+                auto Keys = Settings.Read(hc::settings::Section::Shortcuts).toObject();
+                Keys["Ctrl+Alt+P"] = "hc.navigate.systemProcesses"; Keys["Ctrl+Alt+S"] = "hc.navigate.systemServices";
+                QVERIFY(Settings.Put(hc::settings::Section::Shortcuts, Keys));
+            }
+            TyStCommandMgr::GetInstance()->Refresh();
+            auto* Other = Panel == Left ? Right : Left;
+            auto* OtherView = Other->GetFocusView(Other->CurrentTabIndex());
+            auto* Tabs = Panel->findChild<QTabWidget*>("tabWidget"); QVERIFY(Tabs);
+            const int Tab = Panel->CurrentTabIndex(), Count = Tabs->count();
+            emit Panel->sig_NotifyPanelActivated();
+            for (const auto* Id : {"hc.navigate.systemProcesses", "hc.navigate.systemServices", "hc.navigate.systemServices", "hc.navigate.systemProcesses"}) {
+                auto* Action = Bridge->Action(Id); QVERIFY(Action);
+                QTRY_VERIFY(Action->isEnabled());
+                const bool Services = QString(Id).endsWith("Services");
+                const auto Key = Services ? Qt::Key_S : Qt::Key_P;
+                QTRY_COMPARE(Action->property("hc.keyLabel").toString(), QKeySequence(Qt::ControlModifier | Qt::AltModifier | Key).toString(QKeySequence::NativeText));
+                Panel->SetFocusView(Panel->CurrentTabIndex()); main_->raise(); main_->activateWindow();
+                const auto Window = reinterpret_cast<HWND>(main_->winId()); QVERIFY(ActivateTestWindow(Window));
+                GUITHREADINFO Focus{sizeof(GUITHREADINFO)}; QVERIFY(GetGUIThreadInfo(GetCurrentThreadId(), &Focus));
+                QVERIFY(Focus.hwndFocus == Window || IsChild(Window, Focus.hwndFocus));
+                INPUT Inputs[6]{}; const WORD Keys[]{VK_CONTROL, VK_MENU, WORD(Key), WORD(Key), VK_MENU, VK_CONTROL};
+                for (int Index = 0; Index < 6; ++Index) { Inputs[Index].type = INPUT_KEYBOARD; Inputs[Index].ki.wVk = Keys[Index]; if (Index >= 3) Inputs[Index].ki.dwFlags = KEYEVENTF_KEYUP; }
+                QCOMPARE(SendInput(6, Inputs, sizeof(INPUT)), UINT(6));
+                const auto Kind = Services ? CSystemView::Kind::Services : CSystemView::Kind::Processes;
+                QTRY_VERIFY(Panel->SystemView() && Panel->SystemView()->ViewKind() == Kind);
+                QCOMPARE(Panel->CurrentTabIndex(), Tab); QCOMPARE(Tabs->count(), Count);
+                QCOMPARE(Panel->GetFocusView(Tab), static_cast<CViewT*>(Panel->SystemView()));
+                QCOMPARE(Other->GetFocusView(Other->CurrentTabIndex()), OtherView);
+            }
+            Panel->HideSystemView();
+        }
+        {
+            auto General = Settings.Read(hc::settings::Section::General).toObject(); General["useBuiltInShortcuts"] = true;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General)); TyStCommandMgr::GetInstance()->Refresh();
+        }
+        emit Left->sig_NotifyPanelActivated(); Left->SetFocusView(Left->CurrentTabIndex());
         QTRY_VERIFY(Bridge->Action("hc.system.processes.open")->isEnabled());
         QVERIFY(Bridge->ExecuteSystemCommand("hc.system.processes.open"));
         auto* View = Left->SystemView(); QVERIFY(View); QCOMPARE(View->ViewKind(), CSystemView::Kind::Processes);

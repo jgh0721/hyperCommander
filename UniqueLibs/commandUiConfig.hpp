@@ -84,7 +84,8 @@ inline bool IsSystemViewGlobalCommand(const QString& Id)
                                       "hc.navigate.gotoDrive", "hc.commandLine.", "hc.app.", "hc.menu."};
     for (const auto& Prefix : Prefixes)
         if (Command.startsWith(Prefix)) return true;
-    static const QStringList Exact{"hc.navigate.refresh", "hc.navigate.forceRefresh", "hc.navigate.back", "hc.navigate.forward",
+    static const QStringList Exact{"hc.navigate.systemProcesses", "hc.navigate.systemServices",
+                                   "hc.navigate.refresh", "hc.navigate.forceRefresh", "hc.navigate.back", "hc.navigate.forward",
                                    "hc.navigate.path", "hc.navigate.favorites", "hc.search.focus", "hc.search.everything",
                                    "hc.viewer.quick", "hc.viewer.close", "hc.settings.show", "hc.jobs.show", "hc.automation.show"};
     return Exact.contains(Command);
