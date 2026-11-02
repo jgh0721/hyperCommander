@@ -95,8 +95,11 @@ WriteRecoveryRecord Recovery(const QJsonObject& R) {
 Result<EntrySnapshot> Verify(const QJsonObject& E,std::shared_ptr<IStorageProvider> Reader,OperationContext Context) {
     const auto Path=E["path"].toString();if(!Local(Path)||E["revision"].toString().isEmpty())return Failure(ERROR_INVALID_PARAMETER,"elevation-source");
     auto Resolved=Reader->Resolve({LocatorKind::Local,Path.toStdString()},Context).get();if(!Resolved.HasValue())return Resolved.Failure();
-    auto Actual=Reader->Stat(Resolved.Value().id_,Context).get();if(!Actual.HasValue())return Actual.Failure();
-    if((!Actual.Value().id_.revision_ || Actual.Value().id_.revision_->token_!=String(E["revision"]))||Actual.Value().directory_!=E["directory"].toBool())return Failure(ERROR_FILE_INVALID,"elevation-source-changed");
+    // Stat verifies a listing revision against the opened file and upgrades it
+    // to its file identity, even when only the elevated token can read it.
+    auto Resource = Resolved.Value().id_; Resource.revision_ = ResourceRevision{String(E["revision"])};
+    auto Actual=Reader->Stat(Resource,Context).get();if(!Actual.HasValue())return Actual.Failure();
+    if(Actual.Value().directory_!=E["directory"].toBool())return Failure(ERROR_FILE_INVALID,"elevation-source-changed");
     if(Actual.Value().attributes_&FILE_ATTRIBUTE_REPARSE_POINT)return Failure(ERROR_FILE_INVALID,"elevation-reparse");
     return Actual.Value();
 }
@@ -282,11 +285,21 @@ public:
         if(R.source_&&!Streamed && R.action_ != FileElevationAction::Metadata) {
             // Stat verifies the caller's revision and upgrades cheap listings to
             // a file-ID revision before the user sees UAC.
-            auto Fresh=Writer->Inspect(R.source_->locator_,Context);if(!Fresh.HasValue())return Fresh.Failure();if(!Fresh.Value())return Failure(ERROR_FILE_NOT_FOUND,"elevation-source");
-            const auto Native=filetools::NativePath(Text(R.source_->locator_.root_));filetools::Handle H(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
-            BY_HANDLE_FILE_INFORMATION Info{};if(H.value_==INVALID_HANDLE_VALUE||!GetFileInformationByHandle(H.value_,&Info))return Failure(GetLastError(),"elevation-source");
-            if((!R.source_->id_.revision_ || !native::MatchesRevision(*R.source_->id_.revision_,Info)))return Failure(ERROR_FILE_INVALID,"elevation-source-changed");
-            Object["source"]=Snapshot(*Fresh.Value());Object["sourceIdentity"]=QString::fromLatin1(filetools::Identity(H.value_));
+            auto Fresh=Writer->Inspect(R.source_->locator_,Context);
+            const bool ProtectedRemoval = !Fresh.HasValue() && Fresh.Failure().category_ == ErrorCategory::AccessDenied
+                && (R.action_ == FileElevationAction::Remove || R.action_ == FileElevationAction::Recycle)
+                && !R.source_->directory_ && !(R.source_->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) && R.source_->id_.revision_;
+            if (ProtectedRemoval) {
+                // An unprivileged Inspect must not prevent the requested UAC.
+                // The helper verifies this revision and pins parents before commit.
+                Object["source"] = Snapshot(*R.source_);
+            } else {
+                if(!Fresh.HasValue())return Fresh.Failure();if(!Fresh.Value())return Failure(ERROR_FILE_NOT_FOUND,"elevation-source");
+                const auto Native=filetools::NativePath(Text(R.source_->locator_.root_));filetools::Handle H(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
+                BY_HANDLE_FILE_INFORMATION Info{};if(H.value_==INVALID_HANDLE_VALUE||!GetFileInformationByHandle(H.value_,&Info))return Failure(GetLastError(),"elevation-source");
+                if((!R.source_->id_.revision_ || !native::MatchesRevision(*R.source_->id_.revision_,Info)))return Failure(ERROR_FILE_INVALID,"elevation-source-changed");
+                Object["source"]=Snapshot(*Fresh.Value());Object["sourceIdentity"]=QString::fromLatin1(filetools::Identity(H.value_));
+            }
         }
         const auto BackupFolder=QDir(settings::Paths().directory_).filePath("security-backups");
         if(R.action_==FileElevationAction::SecurityChange||R.action_==FileElevationAction::SecurityRestore) {

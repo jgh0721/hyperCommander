@@ -783,6 +783,10 @@ namespace hc::operations
                 else Request.action_ = FileElevationAction::Copy;
                 if(request_.operation_==FileOperation::Delete||Item.removeDirectory_)Request.destination_=Item.source_.entry_.locator_;
                 if(Request.action_==FileElevationAction::MakeDirectory)Request.source_.reset();
+                if (request_.operation_ == FileOperation::Delete && Request.source_ && !Request.source_->id_.revision_) {
+                    const auto Listing = Request.source_->hints_.find("nativeListingRevision");
+                    if (Listing != Request.source_->hints_.end()) Request.source_->id_.revision_ = ResourceRevision{Listing->second};
+                }
                 return Request;
             }
             std::string approvalScope() const
@@ -857,6 +861,7 @@ namespace hc::operations
                     publishedDestination_ = Status.Value().destination_;
                     phase_ = Phase::Remove; auto Next = progress(); Next.next_ = JobState::Committing; return Next;
                 }
+                if (current().preparationError_ && Status.Value().sourceRemoved_) ++verifiedItems_;
                 return done(ItemOutcome::Status::Completed, destinationCommitted_, Status.Value().sourceRemoved_);
             }
             JobStep prepare(OperationContext Context)
@@ -1007,6 +1012,20 @@ namespace hc::operations
             }
             JobStep preparationFailure(PlannedItem Item, Error Error, bool Retry = true)
             {
+                // Protected files can fail Stat before reaching Remove. Keep the
+                // captured listing so the elevated helper can verify it itself.
+                if (request_.operation_ == FileOperation::Delete && request_.elevation_ && !skipDeleteErrors_
+                    && Error.category_ == ErrorCategory::AccessDenied && !Item.source_.entry_.directory_
+                    && Item.source_.entry_.locator_.kind_ == LocatorKind::Local && !(Item.source_.entry_.attributes_ & 0x400)) {
+                    Item.preparationError_ = std::make_shared<const storage::Error>(std::move(Error));
+                    Item.readOnly_ = (Item.source_.entry_.attributes_ & 1) != 0;
+                    ++discoveredFiles_; ++rootFiles_[Item.root_];
+                    if (Item.source_.entry_.size_ > request_.maxBytes_ - bytesTotal_) return failed({ErrorCategory::BudgetExceeded, "operation-byte-budget"});
+                    bytesTotal_ += Item.source_.entry_.size_;
+                    items_.push_back(std::move(Item));
+                    if (streaming_) phase_ = Phase::Begin;
+                    return progress();
+                }
                 if (request_.operation_ == FileOperation::Delete && request_.fileLockInteractions_
                     && Error.category_ != ErrorCategory::Cancelled && Error.category_ != ErrorCategory::Internal
                     && Error.category_ != ErrorCategory::InvalidRequest && Error.category_ != ErrorCategory::BudgetExceeded) {
@@ -1066,7 +1085,8 @@ namespace hc::operations
             JobStep begin(OperationContext Context)
             {
                 if (index_ == items_.size()) return JobStep{JobState::Completed};
-                if (current().preparationError_) return terminalFailure(*current().preparationError_);
+                if (current().preparationError_ && (request_.operation_ != FileOperation::Delete || !request_.elevation_
+                    || current().preparationError_->category_ != ErrorCategory::AccessDenied)) return terminalFailure(*current().preparationError_);
                 if (current().excluded_) return done(ItemOutcome::Status::Skipped);
                 expected_ = {};
                 destinationCommitted_ = request_.operation_ == FileOperation::Move && current().removeDirectory_;
@@ -1084,6 +1104,23 @@ namespace hc::operations
                         if (request_.readOnly_ == ReadOnlyPolicy::Skip) return done(ItemOutcome::Status::Skipped, destinationCommitted_);
                         phase_ = Phase::ReadOnly; return readOnlyQuestion();
                     }
+                }
+                if (current().preparationError_) {
+                    // Retry queries again instead of replaying a cached error.
+                    auto Resource = current().source_.entry_.id_;
+                    if (!Resource.revision_) {
+                        const auto Listing = current().source_.entry_.hints_.find("nativeListingRevision");
+                        if (Listing != current().source_.entry_.hints_.end()) Resource.revision_ = ResourceRevision{Listing->second};
+                    }
+                    auto Fresh = current().source_.reader_->Stat(Resource, Context).get();
+                    if (!Fresh.HasValue()) return failed(Fresh.Failure());
+                    if (Fresh.Value().locator_ != current().source_.entry_.locator_ || Fresh.Value().id_.providerId_ != current().source_.reader_->Id()
+                        || Fresh.Value().id_.key_ != current().source_.entry_.id_.key_ || !SafeName(Fresh.Value().name_))
+                        return failed({ErrorCategory::Internal, "provider-returned-different-entry"});
+                    if (Fresh.Value().attributes_ & 0x400) return failed({ErrorCategory::Unsupported, "reparse-entry-denied"});
+                    current().source_.entry_ = std::move(Fresh.Value()); current().readOnly_ = (current().source_.entry_.attributes_ & 1) != 0;
+                    current().preparationError_.reset(); ++verifiedItems_;
+                    return progress();
                 }
                 const auto Kind = Removing ? request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Recycle ? Mutation::Recycle : Mutation::Remove : Renaming ? Mutation::Rename
                     : request_.operation_ == FileOperation::MakeDirectory || current().source_.entry_.directory_ ? Mutation::MakeDirectory : Mutation::CreateContent;

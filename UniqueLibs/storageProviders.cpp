@@ -183,7 +183,7 @@ namespace hc::storage
                             Data = {found_.dwFileAttributes, found_.ftCreationTime, found_.ftLastAccessTime, found_.ftLastWriteTime, found_.nFileSizeHigh, found_.nFileSizeLow};
                         }
                         auto Item = Entry(provider_, prefix_, {at_.kind_, Path}, Name, Data);
-                        if (metadataError) { Item.id_.revision_.reset(); Item.hints_["comparisonError"] = "win32:" + std::to_string(metadataError); }
+                        if (metadataError) { Item.hints_["nativeListingRevision"] = Item.id_.revision_->token_; Item.id_.revision_.reset(); Item.hints_["comparisonError"] = "win32:" + std::to_string(metadataError); }
                         else Item.id_.revision_ = std::move(Revision); Item.hints_["reparseTag"] = std::to_string(found_.dwReserved0);
                         Page.entries_.push_back(std::move(Item)); ++count_;
                     }
@@ -451,7 +451,7 @@ namespace hc::storage
                                 }
                                 auto Item = Entry(Id, Prefix, {Kind, ChildPath}, Name, Data);
                                 if (HasRevision) Item.id_.revision_ = std::move(ActualRevision);
-                                else { Item.id_.revision_.reset(); Item.hints_["comparisonError"] = "win32:" + std::to_string(MetadataError); }
+                                else { Item.hints_["nativeListingRevision"] = Item.id_.revision_->token_; Item.id_.revision_.reset(); Item.hints_["comparisonError"] = "win32:" + std::to_string(MetadataError); }
                                 Item.hints_["reparseTag"] = std::to_string(Found.dwReserved0);
                                 Entries.push_back(std::move(Item));
                             } while (FindNextFileW(Handle, &Found));

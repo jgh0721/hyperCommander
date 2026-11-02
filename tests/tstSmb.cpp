@@ -3546,7 +3546,7 @@ private slots:
     void fileJobInteractionUi_data()
     {
         QTest::addColumn<int>("Mode");
-        for (int Mode = 0; Mode != 11; ++Mode) QTest::newRow(qPrintable(QString("interaction-%1").arg(Mode))) << Mode;
+        for (int Mode = 0; Mode != 13; ++Mode) QTest::newRow(qPrintable(QString("interaction-%1").arg(Mode))) << Mode;
     }
     void fileJobInteractionUi()
     {
@@ -3567,20 +3567,21 @@ private slots:
         const auto Source = Files.filePath("from/image.png"), Destination = Files.filePath("to/image.png");
         QImage Image(160, 90, QImage::Format_RGB32); Image.fill(QColor(60, 120, 180)); QVERIFY(Image.save(Source)); Image.fill(QColor(180, 120, 60)); QVERIFY(Image.save(Destination));
         const auto Kind = Mode == 1 ? InteractionKind::Rename : Mode == 2 ? InteractionKind::Password : Mode == 3 ? InteractionKind::DeleteConfirmation
-            : Mode == 4 ? InteractionKind::ReadOnlyRemoval : Mode == 5 ? InteractionKind::Elevation : Mode == 6 || Mode == 7 || Mode >= 9 ? InteractionKind::RetryFailure : InteractionKind::Overwrite;
+            : Mode == 4 ? InteractionKind::ReadOnlyRemoval : Mode == 5 || Mode >= 11 ? InteractionKind::Elevation : Mode == 6 || Mode == 7 || Mode >= 9 ? InteractionKind::RetryFailure : InteractionKind::Overwrite;
         InteractionRequest Request; Request.kind_ = Kind; Request.source_ = Source.toStdString(); Request.destination_ = Destination.toStdString();
-        Request.reason_ = Kind == InteractionKind::DeleteConfirmation ? "confirm-permanent-delete" : Kind == InteractionKind::RetryFailure ? "file-in-use:win32:32" : "destination-exists";
+        Request.reason_ = Kind == InteractionKind::DeleteConfirmation ? "confirm-permanent-delete" : Kind == InteractionKind::RetryFailure ? "file-in-use:win32:32" : Mode >= 11 ? "win32:5" : "destination-exists";
         Request.choices_ = Kind == InteractionKind::Overwrite ? std::vector{InteractionChoice::Replace, InteractionChoice::ReplaceAll, InteractionChoice::Skip, InteractionChoice::SkipAll, InteractionChoice::Rename, InteractionChoice::RenameIncoming, InteractionChoice::RenameExisting, InteractionChoice::Cancel}
             : Kind == InteractionKind::Rename ? std::vector{InteractionChoice::Rename, InteractionChoice::Cancel}
             : Kind == InteractionKind::Password || Kind == InteractionKind::DeleteConfirmation ? std::vector{InteractionChoice::Confirm, InteractionChoice::Cancel}
             : Kind == InteractionKind::ReadOnlyRemoval ? std::vector{InteractionChoice::Confirm, InteractionChoice::ConfirmAll, InteractionChoice::Skip, InteractionChoice::Cancel}
+            : Mode >= 11 ? std::vector{InteractionChoice::Elevate, InteractionChoice::ElevateAll, InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::SkipAll, InteractionChoice::Cancel}
             : Kind == InteractionKind::Elevation ? std::vector{InteractionChoice::Elevate, InteractionChoice::Retry, InteractionChoice::CopyOnly, InteractionChoice::Cancel}
             : Mode == 7 ? std::vector{InteractionChoice::Retry, InteractionChoice::Cancel} : std::vector{InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::Cancel};
         QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); Window.show();
         FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
         auto Reply = std::make_shared<ReplyState>(); PreparedJob Work; Work.task_ = std::make_unique<PromptTask>(Request, Reply);
         Work.request_.metadata_.source_ = Source.toStdString(); Work.request_.metadata_.destination_ = Destination.toStdString();
-        Work.request_.metadata_.kind_ = Mode == 3 || Mode == 4 ? JobKind::Delete : Mode == 5 ? JobKind::Move : Mode == 2 ? JobKind::Extract : Mode == 7 ? JobKind::BatchRename : JobKind::Copy;
+        Work.request_.metadata_.kind_ = Mode == 3 || Mode == 4 || Mode >= 11 ? JobKind::Delete : Mode == 5 ? JobKind::Move : Mode == 2 ? JobKind::Extract : Mode == 7 ? JobKind::BatchRename : JobKind::Copy;
         auto Started = Jobs.Submit(std::move(Work), QStringLiteral("응답 팝업 시험")); QVERIFY(Started.HasValue());
         QTRY_VERIFY(Window.findChild<QDialog*>("hc.jobs.interaction") && Window.findChild<QDialog*>("hc.jobs.interaction")->isVisible());
         QPointer<QDialog> Popup = Window.findChild<QDialog*>("hc.jobs.interaction"); auto* Progress = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Popup && Progress && Popup != Progress);
@@ -3618,7 +3619,7 @@ private slots:
             QVERIFY(Jobs.Scheduler().Cancel(Started.Value().id_).HasValue());
             QTRY_VERIFY(!Popup || !Popup->isVisible()); QCOMPARE(Reply->choice_.load(), -1); return;
         }
-        if (Mode == 7 || Mode >= 9) {
+        if (Mode == 7 || Mode == 9 || Mode == 10) {
             if (Mode == 7) Popup->findChild<QPushButton*>("hc.jobs.interaction.cancel")->click();
             else if (Mode == 9) QTest::keyClick(Popup, Qt::Key_Escape);
             else Popup->close();
@@ -3637,6 +3638,14 @@ private slots:
         else if (Mode == 3) ChoiceButton(InteractionChoice::Confirm)->click();
         else if (Mode == 4) { ChoiceButton(InteractionChoice::ConfirmAll)->click(); Expected = InteractionChoice::ConfirmAll; }
         else if (Mode == 5) { ChoiceButton(InteractionChoice::CopyOnly)->click(); Expected = InteractionChoice::CopyOnly; }
+        else if (Mode >= 11) {
+            auto* Elevate = ChoiceButton(InteractionChoice::Elevate); auto* All = ChoiceButton(InteractionChoice::ElevateAll);
+            QVERIFY(Elevate && All && Elevate->isVisibleTo(Popup) && All->isVisibleTo(Popup));
+            QVERIFY(Elevate->text().contains(QStringLiteral("재시도"))); QVERIFY(All->text().contains(QStringLiteral("모두")));
+            // Both accelerators must return the corresponding backend choice.
+            Expected = Mode == 11 ? InteractionChoice::Elevate : InteractionChoice::ElevateAll;
+            QTest::keyClick(Popup, Mode == 11 ? Qt::Key_E : Qt::Key_A, Qt::AltModifier);
+        }
         else {
             QTest::keyClick(Popup->focusWidget(), Qt::Key_Left); QCOMPARE(Popup->focusWidget(), ChoiceButton(InteractionChoice::Retry));
             QTest::keyClick(Popup->focusWidget(), Qt::Key_Return); Expected = InteractionChoice::Retry;

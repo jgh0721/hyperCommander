@@ -1,6 +1,7 @@
 ﻿#include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/fileBatchOperations.hpp"
 #include "UniqueLibs/storageProviders.hpp"
+#include "UniqueLibs/nativeStorageRevision.hpp"
 #include "commonLibs/operations/fileOperation.hpp"
 #include <QtTest>
 #include "UniqueLibs/errorPresentation.hpp"
@@ -1120,6 +1121,143 @@ private slots:
         QCOMPARE(std::uint64_t(QFileInfo(Destination.filePath(QString::fromStdString(Source.Value().name_))).size()), Source.Value().size_);
         QVERIFY(QDir(Destination.path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden | QDir::System).isEmpty());
         qInfo() << "Read-only SMB source copied to owned local output:" << SourcePath << "bytes:" << Source.Value().size_ << "SHA-256:" << Verify;
+    }
+    void deletePreparationElevation_data()
+    {
+        QTest::addColumn<bool>("Streaming"); QTest::addColumn<bool>("ListingOnly"); QTest::addColumn<int>("Choice");
+        for (bool Streaming : {false, true}) for (bool ListingOnly : {false, true}) for (int Choice = 0; Choice < 4; ++Choice)
+            QTest::newRow(qPrintable(QString("stream-%1-listing-%2-choice-%3").arg(Streaming).arg(ListingOnly).arg(Choice))) << Streaming << ListingOnly << Choice;
+    }
+    void deletePreparationElevation()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local elevation fixture.");
+        QFETCH(bool, Streaming); QFETCH(bool, ListingOnly); QFETCH(int, Choice);
+        class DeniedReader final : public IStorageProvider {
+        public:
+            explicit DeniedReader(std::shared_ptr<IStorageProvider> Inner) : inner_(std::move(Inner)) {}
+            ProviderId Id() const override { return inner_->Id(); }
+            Task<SupportDecision> Supports(Operation Op, OperationContext C) override { return inner_->Supports(Op, C); }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext C) override { return inner_->Enumerate(At, C); }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext C) override { return inner_->OpenRead(Id, C); }
+            Task<EntrySnapshot> Stat(ResourceId Id, OperationContext C) override {
+                if (deny_ && (Id.key_.ends_with("b.txt") || Id.key_.ends_with("c.txt"))) return Ready<EntrySnapshot>(Error{ErrorCategory::AccessDenied, "win32:5"});
+                return inner_->Stat(Id, C);
+            }
+            bool deny_ = true;
+        private: std::shared_ptr<IStorageProvider> inner_;
+        };
+        const auto Folder = QString("delete-elevation-%1-%2-%3").arg(Streaming).arg(ListingOnly).arg(Choice);
+        QVERIFY(writer_->MakeDirectory(at(Folder), {}).HasValue());
+        auto Denied = std::make_shared<DeniedReader>(reader_); auto Service = std::make_shared<FixtureElevationService>(reader_, writer_);
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.elevation_ = Service;
+        Request.deleteWhileListing_ = Streaming; Request.confirmDelete_ = true; Request.fileLockInteractions_ = true;
+        for (const auto* Name : {"a.txt", "b.txt", "c.txt", "d.txt"}) {
+            QVERIFY(write(Folder + '/' + Name, "owned payload"));
+            auto Source = writer_->Inspect(at(Folder + '/' + Name), {}); QVERIFY(Source.HasValue() && Source.Value());
+            auto Entry = *Source.Value();
+            if (ListingOnly) {
+                WIN32_FILE_ATTRIBUTE_DATA Data{}; const auto Native = hc::filetools::NativePath(QString::fromStdString(Entry.locator_.root_));
+                QVERIFY(GetFileAttributesExW(reinterpret_cast<LPCWSTR>(Native.utf16()), GetFileExInfoStandard, &Data));
+                Entry.hints_["nativeListingRevision"] = native::ListingRevision(Data).token_; Entry.id_.revision_.reset();
+            }
+            Request.sources_.push_back({Entry, Denied, writer_});
+        }
+        auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
+        JobStepContext Context; Context.jobId_ = "delete-preparation-elevation"; Context.committing_ = true;
+        int Questions = 0, Confirmations = 0, Outcomes = 0; bool Completed = false;
+        for (int I = 0; I < 1000 && !Completed; ++I) {
+            const auto Step = Prepared.Value().task_->Advance(Context); Context.answer_.reset();
+            QVERIFY2(Step.next_ != JobState::Failed, Step.error_ ? Step.error_->code_.c_str() : "delete failed");
+            if (Step.interaction_) {
+                auto Answer = InteractionChoice::Confirm;
+                if (Step.interaction_->kind_ == InteractionKind::DeleteConfirmation) ++Confirmations;
+                else {
+                    QCOMPARE(Step.interaction_->kind_, InteractionKind::Elevation); ++Questions;
+                    for (const auto Expected : {InteractionChoice::Elevate, InteractionChoice::ElevateAll, InteractionChoice::Retry, InteractionChoice::SkipAll})
+                        QVERIFY(std::ranges::find(Step.interaction_->choices_, Expected) != Step.interaction_->choices_.end());
+                    Answer = Choice == 0 ? InteractionChoice::Elevate : Choice == 1 ? InteractionChoice::ElevateAll : Choice == 2 ? InteractionChoice::Retry : InteractionChoice::SkipAll;
+                    if (Choice == 2) Denied->deny_ = false;
+                }
+                Context.answer_ = InteractionAnswer{"", Answer};
+            }
+            if (Step.item_) ++Outcomes;
+            Completed = Step.next_ == JobState::Completed;
+        }
+        QVERIFY(Completed); QCOMPARE(Confirmations, 1); QCOMPARE(Questions, Choice == 0 ? 2 : 1); QCOMPARE(Outcomes, 4);
+        const auto Requests = Service->Requests(); QCOMPARE(Requests.size(), Choice <= 1 ? 2u : 0u);
+        for (const auto& Elevated : Requests) { QCOMPARE(Elevated.action_, FileElevationAction::Remove); QVERIFY(Elevated.source_->id_.revision_); }
+        for (const auto* Name : {"a.txt", "b.txt", "c.txt", "d.txt"})
+            QCOMPARE(QFileInfo::exists(root_->filePath(Folder + '/' + Name)), Choice == 3 && (QString(Name) == "b.txt" || QString(Name) == "c.txt"));
+        QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty());
+    }
+    void deleteProtectedMetadataHelper_data()
+    {
+        QTest::addColumn<bool>("Change"); QTest::newRow("unchanged") << false; QTest::newRow("changed-during-uac") << true;
+    }
+    void deleteProtectedMetadataHelper()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local protected fixture.");
+        QFETCH(bool, Change);
+        // The validation shell may enable backup privilege. Disable it in this
+        // test process so FILE_READ_ATTRIBUTES really observes the owned ACL.
+        HANDLE TokenRaw = nullptr; QVERIFY(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &TokenRaw));
+        hc::filetools::Handle Token(TokenRaw); TOKEN_PRIVILEGES Disabled{}, Previous{}; DWORD PreviousSize = sizeof(Previous);
+        Disabled.PrivilegeCount = 1; QVERIFY(LookupPrivilegeValueW(nullptr, SE_BACKUP_NAME, &Disabled.Privileges[0].Luid));
+        QVERIFY(AdjustTokenPrivileges(Token.value_, FALSE, &Disabled, sizeof(Previous), &Previous, &PreviousSize));
+        const auto RestorePrivilege = qScopeGuard([&] { AdjustTokenPrivileges(Token.value_, FALSE, &Previous, 0, nullptr, nullptr); });
+        const auto Name = QString("delete-protected-%1.txt").arg(Change); QVERIFY(write(Name, "owned source"));
+        auto Source = writer_->Inspect(at(Name), {}); QVERIFY(Source.HasValue() && Source.Value()); auto Entry = *Source.Value();
+        const auto Native = hc::filetools::NativePath(root_->filePath(Name)); WIN32_FILE_ATTRIBUTE_DATA Data{};
+        QVERIFY(GetFileAttributesExW(reinterpret_cast<LPCWSTR>(Native.utf16()), GetFileExInfoStandard, &Data));
+        Entry.id_.revision_ = native::ListingRevision(Data);
+        hc::filetools::Handle Protected(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()), READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr));
+        QVERIFY(Protected.value_ != INVALID_HANDLE_VALUE); DWORD Code = 0;
+        const auto Original = hc::permissions::security::Descriptor(Protected.value_, Code); QCOMPARE(Code, DWORD(ERROR_SUCCESS));
+        const auto Restore = qScopeGuard([&] { if (Protected.value_ != INVALID_HANDLE_VALUE) hc::permissions::security::Restore(Protected.value_, Original); });
+        PSECURITY_DESCRIPTOR Sd = nullptr;
+        QVERIFY(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(D;;FA;;;WD)", SDDL_REVISION_1, &Sd, nullptr));
+        const auto Free = qScopeGuard([&] { LocalFree(Sd); }); PACL Dacl = nullptr; BOOL Present = FALSE, Default = FALSE;
+        QVERIFY(GetSecurityDescriptorDacl(Sd, &Present, &Dacl, &Default));
+        QCOMPARE(SetSecurityInfo(Protected.value_, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, Dacl, nullptr), DWORD(ERROR_SUCCESS));
+        auto Denied = writer_->Inspect(at(Name), {});
+        if (Denied.HasValue()) {
+            DWORD AclCode = 0; qInfo() << "Protected ACL:" << hc::permissions::security::Descriptor(Protected.value_, AclCode) << "code:" << AclCode;
+            hc::filetools::Handle Probe(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+            qInfo() << "Direct metadata open succeeded:" << (Probe.value_ != INVALID_HANDLE_VALUE) << "error:" << GetLastError();
+            // Attribute access can be granted by the parent/validation token
+            // despite this owned file ACL. Keep a provider/native discrepancy
+            // as a failure, but do not claim to test denial when Win32 allows it.
+            if (Probe.value_ != INVALID_HANDLE_VALUE) QSKIP("Owned ACL does not deny FILE_READ_ATTRIBUTES for this filesystem/token.");
+        }
+        QVERIFY(!Denied.HasValue()); QCOMPARE(Denied.Failure().category_, ErrorCategory::AccessDenied);
+        OperationContext ListingContext; ListingContext.freshEnumerationMetadata_ = true;
+        ListingContext.allowUnavailableChildMetadata_ = true; ListingContext.incrementalEnumeration_ = true;
+        auto Cursor = reader_->Enumerate(at(""), ListingContext).get(); QVERIFY(Cursor.HasValue()); bool Found = false;
+        for (bool End = false; !End;) {
+            auto Page = Cursor.Value()->Next(16, ListingContext).get(); QVERIFY(Page.HasValue()); End = Page.Value().end_;
+            for (const auto& Listed : Page.Value().entries_) if (Listed.name_ == Name.toStdString()) { Entry = Listed; Found = true; }
+        }
+        Cursor.Value().reset(); QVERIFY(Found); QVERIFY(!Entry.id_.revision_); QVERIFY(Entry.hints_.contains("nativeListingRevision"));
+        int Launches = 0; DWORD RestoreCode = ERROR_SUCCESS;
+        auto Launch = FixtureLauncher([&] {
+            ++Launches; RestoreCode = hc::permissions::security::Restore(Protected.value_, Original);
+            if (Change) write(Name, "changed while awaiting UAC");
+        });
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.sources_ = {{Entry, reader_, writer_}};
+        Request.confirmDelete_ = false; Request.fileLockInteractions_ = true; Request.elevation_ = hc::permissions::MakeFileElevationService(Launch);
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().state_, JobState::WaitingForUser);
+        const auto Question = Scheduler.Snapshot(Job.Value().id_).Value().interaction_; QVERIFY(Question); QCOMPARE(Question->kind_, InteractionKind::Elevation);
+        QVERIFY(Scheduler.Reply(Job.Value().id_, {Question->id_, InteractionChoice::ElevateAll, {}}).HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+        const auto& Result = Job.Value().completion_.get(); QCOMPARE(Launches, 1); QCOMPARE(RestoreCode, DWORD(ERROR_SUCCESS));
+        QVERIFY2(Result.snapshot_.state_ == (Change ? JobState::Failed : JobState::Completed), Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "unexpected helper result");
+        // The fixture's ACL handle also shares delete; release it so Windows
+        // can complete an already successful delete disposition.
+        CloseHandle(Protected.value_); Protected.value_ = INVALID_HANDLE_VALUE;
+        QCOMPARE(QFileInfo::exists(root_->filePath(Name)), Change); QVERIFY(Result.cleanupErrors_.empty());
     }
     void r10CopyElevationPreservesCompletedItems()
     {
