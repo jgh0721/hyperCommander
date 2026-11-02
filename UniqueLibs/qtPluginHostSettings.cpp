@@ -1,4 +1,5 @@
 ﻿#include "qtPluginHostSettings.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include <QDir>
 #include "pluginHost/manifestFile.hpp"
@@ -117,7 +118,7 @@ void QPluginHostSettings::Load(hc::settings::Repository& Settings)
 void QPluginHostSettings::LoadPlugins(const QJsonObject& Plugins)
 {
     loading_ = true;
-    if (selection_) selection_->setCurrentIndex(qMax(0, selection_->findData(Plugins.value("viewerSelection").toString("manual"))));
+    if (selection_) selection_->setCurrentIndex(qMax(0, selection_->findData(Plugins.value("viewerSelection").toString(hc::defaults::DefaultValue("plugins/viewerSelection").toString()))));
     ++generation_; review_->setEnabled(true); review_->setText(tr("검사·실행 승인…")); const QSignalBlocker Block(table_); rows_.clear(); table_->setRowCount(0);
     const auto Items = Plugins.value(group_).toArray(); const auto Count = qMin(Items.size(), qsizetype(1000));
     for (unsigned Index = 0; Index < Count; ++Index)
@@ -129,7 +130,7 @@ void QPluginHostSettings::LoadPlugins(const QJsonObject& Plugins)
         auto* Path = new QTableWidgetItem(QFileInfo(Item.path_).fileName()); Path->setToolTip(QDir::toNativeSeparators(Item.path_)); table_->setItem(At, 0, Path);
         table_->setItem(At, 1, new QTableWidgetItem(format_ == hc::plugins::PluginFormat::Wlx ? Record["detect"].toString() : hc::settings::Strings(Record["extensions"]).join('|')));
         auto* Enabled = new QTableWidgetItem; Enabled->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-        Enabled->setCheckState(Record["hostEnabled"].toBool() ? Qt::Checked : Qt::Unchecked); table_->setItem(At, 2, Enabled);
+        Enabled->setCheckState(Record["hostEnabled"].toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool()) ? Qt::Checked : Qt::Unchecked); table_->setItem(At, 2, Enabled);
         table_->setItem(At, 3, new QTableWidgetItem); updateState(At);
     }
     if (Count) table_->selectRow(0);
@@ -298,7 +299,7 @@ void QPluginHostSettings::review()
 }
 QtViewerSurface::PluginViewerSelectionMode QPluginHostSettings::ViewerSelection(hc::settings::Repository& Settings)
 {
-    const auto Mode = Settings.Read(hc::settings::Section::Plugins).toObject()["viewerSelection"].toString("manual");
+    const auto Mode = Settings.Read(hc::settings::Section::Plugins).toObject()["viewerSelection"].toString(hc::defaults::DefaultValue("plugins/viewerSelection").toString());
     if (Mode == "automatic") return QtViewerSurface::PluginViewerSelectionMode::Automatic;
     if (Mode == "force") return QtViewerSurface::PluginViewerSelectionMode::Force;
     return QtViewerSurface::PluginViewerSelectionMode::Manual;
@@ -312,7 +313,7 @@ std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::ViewerChoi
     {
         const auto Record = Items[Index].toObject();
         const auto Rule = PluginApplicationRule::Parse(Record.value("application"));
-        if (!Rule.HasValue() || !Rule.Value().Enabled() || !Record["hostEnabled"].toBool()) continue;
+        if (!Rule.HasValue() || !Rule.Value().Enabled() || !Record["hostEnabled"].toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool())) continue;
         QtViewerSurface::PluginViewerChoice Choice; Choice.id_ = QString::number(Index);
         Choice.extensions_ = hc::settings::Strings(Record.value("extensions"));
         auto& Options = Choice.options_; Options.binaryPath_ = Record["path"].toString(); Options.applicationRule_ = Record.value("application");
@@ -323,7 +324,7 @@ std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::ViewerChoi
         if (Options.binaryPath_.endsWith(".wlx", Qt::CaseInsensitive)) Options.binaryPath_ += "64";
         if (QDir::isRelativePath(Options.binaryPath_)) Options.binaryPath_ = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(Options.binaryPath_);
         Options.executable_ = QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe";
-        Options.defaultIniPath_ = QDir(QFileInfo(Settings.FileName()).absolutePath()).filePath("lsplugin.ini");
+        Options.defaultIniPath_ = hc::defaults::PluginIniFile(QFileInfo(Settings.FileName()).absolutePath(), "wlx");
         Options.manifestPath_ = Record["hostManifest"].toString();
         const auto Reviewed = ParseManifest(hc::settings::JsonBytes(Record["hostReviewed"]));
         if (Reviewed.HasValue() && Reviewed.Value().format_ == PluginFormat::Wlx)
@@ -351,8 +352,8 @@ std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::DataChoice
     {
         const auto Record = Items[Index].toObject();
         const auto Rule = PluginApplicationRule::Parse(Record.value("application"));
-        if (!Rule.HasValue() || !Rule.Value().Enabled() || !Record["hostEnabled"].toBool()) continue;
-        if ((Format == PluginFormat::Wfx || Format == PluginFormat::DopusVfs) && Record.value("application").toObject().value("mode").toString("all") != "all") continue;
+        if (!Rule.HasValue() || !Rule.Value().Enabled() || !Record["hostEnabled"].toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool())) continue;
+        if ((Format == PluginFormat::Wfx || Format == PluginFormat::DopusVfs) && Record.value("application").toObject().value("mode").toString(hc::defaults::DefaultValue("builtinApplication/mode").toString()) != "all") continue;
         QtViewerSurface::PluginViewerChoice Choice; Choice.id_ = QString::number(Index);
         Choice.extensions_ = hc::settings::Strings(Record.value("extensions"));
         auto& Options = Choice.options_; Options.binaryPath_ = Record["path"].toString(); Options.applicationRule_ = Record.value("application");
@@ -361,7 +362,7 @@ std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::DataChoice
         if ((Format == PluginFormat::Wfx || Format == PluginFormat::Wdx) && Options.binaryPath_.endsWith((Format == PluginFormat::Wfx ? ".wfx" : ".wdx"), Qt::CaseInsensitive)) Options.binaryPath_ += "64";
         if (QDir::isRelativePath(Options.binaryPath_)) Options.binaryPath_ = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(Options.binaryPath_);
         Options.executable_ = QCoreApplication::applicationDirPath() + "/hc-plugin-host-x64.exe";
-        Options.defaultIniPath_ = QDir(QFileInfo(Settings.FileName()).absolutePath()).filePath((Format == PluginFormat::Wfx ? "fsplugin.ini" : "contentplugin.ini"));
+        Options.defaultIniPath_ = hc::defaults::PluginIniFile(QFileInfo(Settings.FileName()).absolutePath(), Format == PluginFormat::Wfx ? "wfx" : "wdx");
         Options.manifestPath_ = Record["hostManifest"].toString();
         const auto Reviewed = ParseManifest(hc::settings::JsonBytes(Record["hostReviewed"]));
         if (Reviewed.HasValue() && Reviewed.Value().format_ == Format)

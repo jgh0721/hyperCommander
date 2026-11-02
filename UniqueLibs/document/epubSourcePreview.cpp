@@ -30,7 +30,7 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
     previewChapterLabel_=new QLabel(Header);previewChapterLabel_->setObjectName("epubPreviewChapter");previewChapterLabel_->setForegroundRole(QPalette::PlaceholderText);previewChapterLabel_->setMinimumWidth(1);Controls->addWidget(previewChapterLabel_);Layout->addWidget(Header);
     auto* Frame=new QWidget(Panel);Frame->setMinimumSize(200,140);Frame->setObjectName("epubPreviewFrame");previewStack_=new QStackedLayout(Frame);previewStack_->setContentsMargins(0,0,0,0);previewStack_->setStackingMode(QStackedLayout::StackAll);Layout->addWidget(Frame,1);
     reportPreview(tr("저장 전 미리보기 · 공통 읽기 설정 · 사용자 읽기 설정과 기록은 유지됩니다."));
-    {AppSettings Settings;setPanelVisible("preview",Settings.value("epubEditor/layout/preview",true).toBool());}
+    {AppSettings Settings;setPanelVisible("preview",Settings.value("epubEditor/layout/preview").toBool());}
     previewTimer_.setSingleShot(true);previewTimer_.setInterval(650);
     // Foreign Qt windows can receive activation while their HWND is reparented,
     // even with WS_EX_NOACTIVATE. Repair only a focus loss caused by our passive

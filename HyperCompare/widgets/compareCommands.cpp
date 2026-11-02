@@ -11,33 +11,9 @@ namespace hc::compare
 {
     QList<CompareCommand> CompareCommands()
     {
-        const auto tr = [](const char* Text) { return QObject::tr(Text); };
-        QList<CompareCommand> result;
-        const auto add = [&](const char* Id, const char* Label, const char* Category, const char* Key = "", const char* Scope = "비교창") {
-            result.append({QString::fromLatin1(Id), tr(Label), tr(Category), tr(Scope), *Key ? QList<QKeySequence>{QKeySequence(QString::fromLatin1(Key))} : QList<QKeySequence>{}});
-        };
-        add("navigate.next", "다음 차이", "비교·이동", "F7"); add("navigate.previous", "이전 차이", "비교·이동", "Shift+F7");
-        add("find.open", "찾기", "찾기", "Ctrl+F"); add("find.next", "다음 찾기", "찾기", "F3");
-        add("find.previous", "이전 찾기", "찾기", "Shift+F3"); add("find.all", "모두 찾기", "찾기", "Ctrl+Shift+F");
-        add("file.save", "결과 저장", "파일·작업", "Ctrl+S"); add("work.save", "병합 작업 저장", "파일·작업", "Ctrl+Shift+S");
-        add("work.open", "병합 작업 열기", "파일·작업", "Ctrl+Shift+O");
-        add("edit.undo", "실행 취소", "편집"); result.last().defaults_ = QKeySequence::keyBindings(QKeySequence::Undo);
-        add("edit.redo", "다시 실행", "편집"); result.last().defaults_ = QKeySequence::keyBindings(QKeySequence::Redo);
-        add("directory.rename", "디렉터리 이름 변경", "파일·작업", "F2", "디렉터리 트리");
-        add("file.open", "파일 열기", "파일·작업"); add("directory.open", "디렉터리 열기", "파일·작업");
-        add("compare.again", "다시 비교", "비교·이동"); add("compare.cancel", "비교 취소", "비교·이동");
-        add("merge.left", "블록 LEFT", "병합"); add("merge.right", "블록 RIGHT", "병합"); add("merge.base", "블록 BASE", "병합");
-        add("merge.leftRight", "LEFT → RIGHT", "병합"); add("merge.rightLeft", "RIGHT → LEFT", "병합");
-        add("merge.omit", "블록 제거", "병합"); add("merge.manual", "블록 수동 완료", "병합");
-        add("view.alignAll", "전체 패널 표시 줄 정렬", "보기·설정"); add("view.alignRows", "왼쪽·오른쪽 표시 줄 정렬", "보기·설정");
-        add("view.sync", "왼쪽·오른쪽 스크롤 동기화", "보기·설정"); add("view.inline", "줄 내부 차이 강조", "보기·설정");
-        add("view.overview", "차이 개요 막대", "보기·설정"); add("app.settings", "설정", "보기·설정", "Ctrl+,");
-        add("view.syntax.auto", "구문 강조 · 자동", "보기·설정"); add("view.syntax.c", "구문 강조 · C", "보기·설정");
-        add("view.syntax.cpp", "구문 강조 · C++", "보기·설정"); add("view.syntax.python", "구문 강조 · Python", "보기·설정");
-        add("view.syntax.json", "구문 강조 · JSON", "보기·설정"); add("view.syntax.xml", "구문 강조 · XML", "보기·설정");
-        add("view.syntax.none", "구문 강조 · 일반 텍스트", "보기·설정");
-        return result;
+        return hc::defaults::compare::Commands();
     }
+
     QList<QKeySequence> CompareKeys(const QString& Id, const QJsonObject& Overrides)
     {
         if (Overrides.contains(Id)) { const auto value = Overrides[Id].toString(); return value.isEmpty() ? QList<QKeySequence>{} : QList<QKeySequence>{QKeySequence::fromString(value, QKeySequence::PortableText)}; }
@@ -56,8 +32,7 @@ namespace hc::compare
             (key == Qt::Key_F4 && modifiers.testFlag(Qt::AltModifier)) || (key == Qt::Key_Space && modifiers.testFlag(Qt::AltModifier)) ||
             (!(modifiers & (Qt::ControlModifier | Qt::AltModifier)) && !(key >= Qt::Key_F1 && key <= Qt::Key_F35)))
             return QObject::tr("입력·탐색 또는 운영체제 예약 키입니다. 다른 조합을 사용하십시오.");
-        for (const auto standard : {QKeySequence::Copy, QKeySequence::Cut, QKeySequence::Paste, QKeySequence::SelectAll})
-            if (QKeySequence::keyBindings(standard).contains(Key)) return QObject::tr("기본 편집에 사용하는 키입니다.");
+        if (hc::defaults::compare::ReservedEditingShortcuts().contains(Key)) return QObject::tr("기본 편집에 사용하는 키입니다.");
         return {};
     }
     QString ValidateCompareShortcuts(const QJsonObject& Overrides)

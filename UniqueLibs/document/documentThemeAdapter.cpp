@@ -1,4 +1,6 @@
 ﻿#include "documentThemeAdapter.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include <QApplication>
 #include <QPlainTextEdit>
 #include <QWidget>
@@ -68,8 +70,8 @@ namespace hc::document
     }
     namespace
     {
-        QString& RequestedMode() { static QString Mode = QStringLiteral("product"); return Mode; }
-        QString& ProductMode() { static QString Mode = QStringLiteral("system"); return Mode; }
+        QString& RequestedMode() { static QString Mode = hc::defaults::edit::WorkspaceValue("themeMode").toString(); return Mode; }
+        QString& ProductMode() { static QString Mode = hc::defaults::edit::ProductThemeFallback; return Mode; }
         QJsonObject& AppliedProduct() { static QJsonObject Value; return Value; }
         void ApplyScheme(const QString& Mode)
         {
@@ -84,21 +86,21 @@ namespace hc::document
     }
     bool DocumentThemeAdapter::LoadProductTheme(const QString& Directory)
     {
-        auto Root = ReadRoot(QDir(Directory).filePath(QStringLiteral("HyperCommander.json")));
-        if (Root.isEmpty()) Root = ReadRoot(QDir(Directory).filePath(QStringLiteral("HyperEditor.json")));
+        auto Root = ReadRoot(hc::defaults::SettingsFile(Directory));
+        if (Root.isEmpty()) Root = ReadRoot(hc::defaults::edit::SettingsFile(Directory));
         if (Root.isEmpty()) return false;
         const auto Appearance = Root["appearance"].toObject(); const auto General = Root["general"].toObject();
         const QJsonObject Product{{"scheme", Appearance["watercolorTheme"]}, {"mode", General["themeMode"]}, {"mono", General["monoFontFamily"]},
             {"monoPx", General["monoFontPx"]}, {"darkTitle", General["darkTitleBar"]}};
         if (Product == AppliedProduct()) return true;
         AppliedProduct() = Product;
-        const auto Mode = General["themeMode"].toString();
-        ProductMode() = Mode == "light" || Mode == "dark" ? Mode : QStringLiteral("system");
+        const auto Mode = General["themeMode"].toString(hc::defaults::DefaultValue("general/themeMode").toString());
+        ProductMode() = Mode == "light" || Mode == "dark" ? Mode : QString(hc::defaults::edit::ProductThemeFallback);
         auto& Theme = fm::style::ThemeManager::instance();
         fm::style::ThemeManager::Batch Batch(Theme);
         Theme.setColorScheme(hc::theme::ReadProductScheme(Appearance["watercolorTheme"].toObject()));
-        Theme.setMonoFont(General["monoFontFamily"].toString("Cascadia Mono"), General["monoFontPx"].toInt(12));
-        Theme.setDarkTitleBar(General["darkTitleBar"].toBool(true));
+        Theme.setMonoFont(General["monoFontFamily"].toString(hc::defaults::DefaultValue("general/monoFontFamily").toString()), General["monoFontPx"].toInt(hc::defaults::DefaultValue("general/monoFontPx").toInt()));
+        Theme.setDarkTitleBar(General["darkTitleBar"].toBool(hc::defaults::DefaultValue("general/darkTitleBar").toBool()));
         if (RequestedMode() == "product") ApplyScheme(ProductMode());
         return true;
     }

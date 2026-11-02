@@ -100,20 +100,20 @@ public:
     {
         const auto Value = hc::sys::Settings::Normalize(Stored);
         const QSignalBlocker A(interval_), B(pauseHidden_), C(cpu_), D(interrupts_), E(allUsers_), E2(treeLines_), F(highlight_), G(confirm_), H(graceful_), I(wait_), J(follow_), K(helper_), K2(autoHelper_), L(delayed_);
-        interval_->setCurrentIndex(std::max(0, interval_->findData(Value["refreshMs"].toInt())));
-        pauseHidden_->setChecked(Value["pauseWhenHidden"].toBool());
-        cpu_->setCurrentIndex(std::max(0, cpu_->findData(Value["cpuMethod"].toString())));
-        interrupts_->setChecked(Value["showInterrupts"].toBool());
-        allUsers_->setChecked(Value["allUsers"].toBool());
-        treeLines_->setChecked(Value["treeLines"].toBool(true));
-        highlight_->setValue(Value["highlightCycles"].toInt());
-        confirm_->setChecked(Value["confirmSingleTerminate"].toBool());
-        graceful_->setChecked(Value["gracefulClose"].toBool()); wait_->setEnabled(graceful_->isChecked());
-        wait_->setValue(Value["gracefulWaitSec"].toInt());
-        follow_->setValue(Value["followDebounceMs"].toInt());
-        helper_->setValue(Value["helperIdleMinutes"].toInt());
-        autoHelper_->setChecked(Value["autoStartHelper"].toBool(true));
-        delayed_->setChecked(Value["serviceProblemExcludesDelayed"].toBool());
+        interval_->setCurrentIndex(std::max(0, interval_->findData(Value["refreshMs"].toInt(hc::defaults::DefaultValue("general/processService/refreshMs").toInt()))));
+        pauseHidden_->setChecked(Value["pauseWhenHidden"].toBool(hc::defaults::DefaultValue("general/processService/pauseWhenHidden").toBool()));
+        cpu_->setCurrentIndex(std::max(0, cpu_->findData(Value["cpuMethod"].toString(hc::defaults::DefaultValue("general/processService/cpuMethod").toString()))));
+        interrupts_->setChecked(Value["showInterrupts"].toBool(hc::defaults::DefaultValue("general/processService/showInterrupts").toBool()));
+        allUsers_->setChecked(Value["allUsers"].toBool(hc::defaults::DefaultValue("general/processService/allUsers").toBool()));
+        treeLines_->setChecked(Value["treeLines"].toBool(hc::defaults::DefaultValue("general/processService/treeLines").toBool()));
+        highlight_->setValue(Value["highlightCycles"].toInt(hc::defaults::DefaultValue("general/processService/highlightCycles").toInt()));
+        confirm_->setChecked(Value["confirmSingleTerminate"].toBool(hc::defaults::DefaultValue("general/processService/confirmSingleTerminate").toBool()));
+        graceful_->setChecked(Value["gracefulClose"].toBool(hc::defaults::DefaultValue("general/processService/gracefulClose").toBool())); wait_->setEnabled(graceful_->isChecked());
+        wait_->setValue(Value["gracefulWaitSec"].toInt(hc::defaults::DefaultValue("general/processService/gracefulWaitSec").toInt()));
+        follow_->setValue(Value["followDebounceMs"].toInt(hc::defaults::DefaultValue("general/processService/followDebounceMs").toInt()));
+        helper_->setValue(Value["helperIdleMinutes"].toInt(hc::defaults::DefaultValue("general/processService/helperIdleMinutes").toInt()));
+        autoHelper_->setChecked(Value["autoStartHelper"].toBool(hc::defaults::DefaultValue("general/processService/autoStartHelper").toBool()));
+        delayed_->setChecked(Value["serviceProblemExcludesDelayed"].toBool(hc::defaults::DefaultValue("general/processService/serviceProblemExcludesDelayed").toBool()));
         colors_ = Value["colors"].toObject(); refreshColors();
     }
     QJsonObject Save(QJsonObject Stored) const

@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/ProductDefaults_Compare.hpp"
 #include <QFont>
 #include <QJsonObject>
 #include <QStringList>
@@ -19,7 +20,7 @@ namespace hc::compare
         Preferences();
         ~Preferences();
         static QString FileName();
-        QVariant Value(const QString& Key, const QVariant& Default = {});
+        QVariant Value(const QString& Key);
         bool Contains(const QString& Key);
         bool SetValue(const QString& Key, const QVariant& Value);
         bool Remove(const QString& Key);
@@ -34,12 +35,12 @@ namespace hc::compare
     };
     struct CompareSettings
     {
-        QString theme_ = "product";
+        QString theme_ = hc::defaults::compare::Theme;
         std::array<QFont, 3> fonts_;
-        std::array<bool, 5> view_{true, true, true, true, true};
+        std::array<bool, 5> view_ = hc::defaults::compare::ViewOptions;
         QJsonObject shortcuts_;
         std::array<QJsonObject, 2> colors_;
-        std::array<bool, 2> linked_{true, true};
+        std::array<bool, 2> linked_{hc::defaults::compare::LinkColors, hc::defaults::compare::LinkColors};
         QStringList warnings_;
         static CompareSettings Load();
         bool Save(QString& Error) const;
@@ -47,6 +48,5 @@ namespace hc::compare
     };
     const CompareSettings& ActiveCompareSettings();
     void SetActiveCompareSettings(const CompareSettings& Settings);
-    inline constexpr const char* compareViewKeys[]{"view/alignAllPanes", "view/alignSourceRows",
-        "view/synchronizeSources", "view/inlineHighlights", "view/overview"};
+    inline constexpr auto& compareViewKeys = hc::defaults::compare::ViewKeys;
 }

@@ -1,4 +1,5 @@
 ﻿#include "qtViewerSurface.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include <QAction>
 #include "qtViewerProvider.hpp"
@@ -175,14 +176,14 @@ QtViewerSurface::QtViewerSurface(ViewerService& Service, QWidget* Parent)
     auto& S = *state_; setObjectName("hc.viewer.surface"); setMinimumSize(240, 180);
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(4, 4, 4, 4); Layout->setSpacing(4);
     auto* Toolbar = new QToolBar(this); Toolbar->setObjectName("hc.viewer.toolbar"); Toolbar->setIconSize(QSize(20, 20)); Layout->addWidget(Toolbar);
-    const auto Action = [&](const QString& Text, const QString& Command, const QKeySequence& Shortcut = {}) {
+    const auto Action = [&](const QString& Text, const QString& Command) {
         auto* Value = Toolbar->addAction(Text); Value->setObjectName("hc.viewer." + Command);
-        Value->setShortcut(Shortcut); Value->setShortcutContext(Qt::WidgetWithChildrenShortcut); addAction(Value);
+        Value->setShortcut(hc::defaults::ViewerSurfaceShortcut<QKeySequence>(Command)); Value->setShortcutContext(Qt::WidgetWithChildrenShortcut); addAction(Value);
         connect(Value, &QAction::triggered, this, [this, Command] { Execute(Command); }); return Value;
     };
-    Action(tr("찾기"), "find", QKeySequence::Find);
-    Action(tr("−"), "zoom-out", QKeySequence::ZoomOut)->setToolTip(tr("축소"));
-    Action(tr("+"), "zoom-in", QKeySequence::ZoomIn)->setToolTip(tr("확대"));
+    Action(tr("찾기"), "find");
+    Action(tr("−"), "zoom-out")->setToolTip(tr("축소"));
+    Action(tr("+"), "zoom-in")->setToolTip(tr("확대"));
     S.fit_ = Action(tr("맞춤"), "fit");
     S.stop_ = Action(tr("중지"), "cancel");
     S.previousPart_ = Action(tr("이전 구간"), "previous-part"); S.previousPart_->setVisible(false);

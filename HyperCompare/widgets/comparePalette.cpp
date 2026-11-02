@@ -61,32 +61,12 @@ namespace hc::compare
             }
         }
         else if (values.contains(Role)) return QColor(values[Role].toString());
-        if (bar >= 0) return tokens[std::array{Token::Warn, Token::Ok, Token::Danger, Token::Accent}[bar]];
-        if (values.contains(Role)) return QColor(values[Role].toString());
-        // Syntax hues stay fixed per light/dark so a role keeps its meaning across
-        // product tones. Defaults keep 4.5:1 on the surface and changed-line backgrounds.
-        static const QHash<QString, std::pair<const char*, const char*>> syntax{
-            {"syntaxComment", {"#51774c", "#90b58b"}}, {"syntaxKeyword", {"#803da1", "#cb9fda"}},
-            {"syntaxType", {"#1f6f6a", "#7cc9c0"}}, {"syntaxString", {"#9b5f28", "#d7b080"}},
-            {"syntaxNumber", {"#3769a0", "#92bfdd"}}, {"syntaxPreprocessor", {"#a03562", "#e597ba"}},
-            {"syntaxDefinition", {"#7a5a00", "#e0c46c"}}, {"syntaxInactive", {"#73787f", "#8b919c"}}};
-        if (const auto at = syntax.constFind(Role); at != syntax.cend()) return QColor(Dark ? at->second : at->first);
-        if (Role.endsWith("Fg") || Role == "foreground" || Role == "caret" || Role == "barViewport" || Role == "connectorOutline") return tokens[Token::Fg];
-        if (Role == "modifiedBg" || Role == "addedBg" || Role == "removedBg" || Role == "conflictBg" || Role == "resolvedBg") return tokens[Token::WarnBg];
-        if (Role == "lineBg") return tokens[Token::Alt];
-        if (Role == "selectionBg") return tokens[Token::AccentSoft];
-        if (Role == "inactiveSelection") return tokens[Token::SelIn];
-        if (Role == "inline" || Role == "imageBorder") return tokens[Token::Danger];
-        if (Role == "connector" || Role == "search" || Role == "barFocus") return tokens[Token::Accent];
-        return tokens[Token::Surface];
+        return hc::defaults::compare::Color<Token>(Role, Dark, tokens);
     }
     int CompareAlpha(const QString& Role, bool Dark, const CompareSettings& Settings)
     {
         const auto value = Settings.colors_[Dark ? 1 : 0][Role]; if (value.isDouble()) return std::clamp(value.toInt(), 0, 255);
-        if (Role == "inlineAlpha") return Dark ? 70 : 50;
-        if (Role == "searchAlpha") return 55;
-        if (Role == "resolvedAlpha") return 25;
-        return 65;
+        return hc::defaults::compare::Alpha(Role, Dark);
     }
     double CompareContrast(const QColor& Foreground, const QColor& Background)
     {

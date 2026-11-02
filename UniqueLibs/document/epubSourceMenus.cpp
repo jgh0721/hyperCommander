@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "documentShortcutRegistry.hpp"
+#include "core/AppSettings.h"
 #include "epubResourceTree.hpp"
 #include "epubProcessView.hpp"
 #include "text/QTextView.h"
@@ -17,6 +19,13 @@
 #include <Scintilla.h>
 namespace hc::document {
 namespace {
+QKeySequence documentMenuShortcut(const QString& Id)
+{
+    AppSettings Settings;
+    const auto Stored = Settings.value("shortcuts/bindings").toJsonObject();
+    const auto Bindings = DocumentShortcutRegistry::Bindings(DocumentShortcutRegistry::Validate(Stored).isEmpty() ? Stored : QJsonObject{});
+    return QKeySequence::fromString(Bindings[Id].toString(), QKeySequence::PortableText);
+}
 // The default item of a menu is the double click / Enter action and is shown in bold.
 QAction* emphasize(QAction* Item){auto Font=Item->font();Font.setBold(true);Item->setFont(Font);return Item;}
 }
@@ -49,13 +58,13 @@ void EpubSourceEditor::showSourceMenu(const QPoint& Position) {
     if(!Link.isEmpty()){Menu.addAction(tr("%1 열기").arg(QFileInfo(Link).fileName()),action("epubOpenLink")->shortcut(),this,[this]{openLink();});if(mediaOf(Link).startsWith("image/"))Menu.addAction(tr("이미지 속성…"),this,[this,Link]{inspectImage(Link);});}
     if(Selection){auto* Wrap=Menu.addMenu(tr("태그로 감싸기"));for(const auto& Tag:{"em","strong","span","a","ruby"})Wrap->addAction(action(QString("epubWrap_")+Tag));Wrap->addSeparator();Wrap->addAction(action("epubWrap_custom"));Wrap->setEnabled(action("epubWrap_em")->isEnabled());}
     Menu.addAction(action("epubLocateSource"));if(Selection)Menu.addAction(action("epubFindAll"));Menu.addSeparator();
-    Menu.addAction(tr("실행 취소"),QKeySequence::Undo,this,&EpubSourceEditor::Undo)->setEnabled(CanUndo());Menu.addAction(tr("다시 실행"),QKeySequence::Redo,this,&EpubSourceEditor::Redo)->setEnabled(CanRedo());Menu.addSeparator();
+    Menu.addAction(tr("실행 취소"),documentMenuShortcut("edit.undo"),this,&EpubSourceEditor::Undo)->setEnabled(CanUndo());Menu.addAction(tr("다시 실행"),documentMenuShortcut("edit.redo"),this,&EpubSourceEditor::Redo)->setEnabled(CanRedo());Menu.addSeparator();
     const bool Writable=!sourceReadOnly_;
-    Menu.addAction(tr("잘라내기"),QKeySequence::Cut,this,[Backend]{Backend->Send(SCI_CUT);})->setEnabled(Writable && Selection);
-    Menu.addAction(tr("복사"),QKeySequence::Copy,this,[Backend]{Backend->Send(SCI_COPY);})->setEnabled(Selection);
-    Menu.addAction(tr("붙여넣기"),QKeySequence::Paste,this,[Backend]{Backend->Send(SCI_PASTE);})->setEnabled(Writable && Backend->Send(SCI_CANPASTE));
+    Menu.addAction(tr("잘라내기"),documentMenuShortcut("edit.cut"),this,[Backend]{Backend->Send(SCI_CUT);})->setEnabled(Writable && Selection);
+    Menu.addAction(tr("복사"),documentMenuShortcut("edit.copy"),this,[Backend]{Backend->Send(SCI_COPY);})->setEnabled(Selection);
+    Menu.addAction(tr("붙여넣기"),documentMenuShortcut("edit.paste"),this,[Backend]{Backend->Send(SCI_PASTE);})->setEnabled(Writable && Backend->Send(SCI_CANPASTE));
     Menu.addAction(tr("삭제"),this,[Backend]{Backend->Send(SCI_CLEAR);})->setEnabled(Writable && Selection);
-    Menu.addAction(tr("모두 선택"),QKeySequence::SelectAll,this,[Backend]{Backend->Send(SCI_SELECTALL);});Menu.addSeparator();
+    Menu.addAction(tr("모두 선택"),documentMenuShortcut("edit.selectAll"),this,[Backend]{Backend->Send(SCI_SELECTALL);});Menu.addSeparator();
     Menu.addAction(tr("찾기…"),this,[this]{text_->showFindBar(false);});Menu.addAction(tr("바꾸기…"),this,[this]{text_->showFindBar(true);})->setEnabled(Writable);
     Menu.addAction(tr("줄로 이동…"),this,[this]{if(auto* Go=text_->findChild<QAction*>("text.goToLine"))Go->trigger();});Menu.addSeparator();
     auto* Fold=Menu.addMenu(tr("접기"));Fold->addAction(tr("전체 접기"),this,[this]{text_->FoldAll(true);});Fold->addAction(tr("전체 펼치기"),this,[this]{text_->FoldAll(false);});
@@ -80,7 +89,7 @@ void EpubSourceEditor::showProblemMenu(const QPoint& Position) {
         emphasize(Menu.addAction(tr("해당 줄로 이동"),this,[this,Row]{selectDiagnostic(Row);}));
         const auto Diagnostic=diagnosticRows_[Row].toObject();const bool Alt=Diagnostic["message"].toString().contains("alt",Qt::CaseInsensitive) && mediaOf(Diagnostic["resource"].toString())=="application/xhtml+xml";
         Menu.addAction(tr("빠른 수정: alt 속성 추가"),this,[this,Row]{if(selectDiagnostic(Row))quickFix();})->setEnabled(Alt && ready_ && !structuring_);Menu.addSeparator();
-        Menu.addAction(tr("메시지 복사"),QKeySequence::Copy,this,[Item]{QApplication::clipboard()->setText(Item->text(1)+(Item->text(2)!="—"?":"+Item->text(2):QString{})+" "+Item->text(3));});
+        Menu.addAction(tr("메시지 복사"),documentMenuShortcut("edit.copy"),this,[Item]{QApplication::clipboard()->setText(Item->text(1)+(Item->text(2)!="—"?":"+Item->text(2):QString{})+" "+Item->text(3));});
     }
     Menu.addAction(tr("모든 진단 복사"),this,[this]{QStringList Lines;for(const auto& Value:diagnosticRows_){const auto Row=Value.toObject();Lines.append(QString("%1\t%2:%3\t%4 · %5").arg(Row["severity"].toString(),Row["resource"].toString()).arg(Row["line"].toInt()).arg(Row["code"].toString(),Row["message"].toString()));}QApplication::clipboard()->setText(Lines.join('\n'));})->setEnabled(!diagnosticRows_.isEmpty());
     Menu.addSeparator();
@@ -98,7 +107,7 @@ void EpubSourceEditor::previewContextRequest(EpubProcessView* View) {
     QMenu Menu(this);bool SourceFocus=false;
     emphasize(Menu.addAction(tr("소스에서 이 위치 보기"),this,[this,Anchor,&SourceFocus]{if(selectPreviewSource(Anchor)){focusSource();SourceFocus=true;}}))->setEnabled(!Anchor.isEmpty() && IsSourceVisible());
     Menu.addAction(tr("선택한 텍스트를 소스에서 찾기"),this,[this,Anchor,Selection,&SourceFocus]{if(!Anchor.isEmpty())selectPreviewSource(Anchor);findSelectionInSource(Selection);SourceFocus=true;})->setEnabled(!Selection.trimmed().isEmpty() && IsSourceVisible());
-    Menu.addAction(tr("복사"),QKeySequence::Copy,this,[Selection]{QApplication::clipboard()->setText(Selection);})->setEnabled(!Selection.isEmpty());
+    Menu.addAction(tr("복사"),documentMenuShortcut("edit.copy"),this,[Selection]{QApplication::clipboard()->setText(Selection);})->setEnabled(!Selection.isEmpty());
     if(Target["kind"]=="image"){const auto Path=Target["path"].toString();Menu.addAction(tr("이미지 리소스 열기"),this,[this,Path,&SourceFocus]{if(openResource(Path))SourceFocus=true;})->setEnabled(model_.IsEditable(Path));}
     Menu.addSeparator();Menu.addAction(action("epubPreviewRefresh"));Menu.addAction(action("epubAutoPreview"));Menu.addAction(action("epubPreviewSync"));Menu.addAction(action("epubPreviewScrollSync"));Menu.addSeparator();
     Menu.addAction(tr("이전 장"),this,[View]{View->ReaderAction("previous-chapter");});Menu.addAction(tr("다음 장"),this,[View]{View->ReaderAction("next-chapter");});Menu.addAction(tr("목차"),this,[View]{View->ReaderAction("toggle-toc");});Menu.addSeparator();

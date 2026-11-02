@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "externalEditorMgr.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 
 #include "UIs/dlgExternalConfigure.hpp"
 
@@ -64,7 +65,7 @@ void CExternalEditorMgr::ConstructExternalMenu( QMenu* Menu, const QString& File
         ac->setText( Item.Name );
         ac->setIcon( Item.Icon );
         ac->setData( QVariant::fromValue( Item ) );
-        ac->setShortcut( Qt::ControlModifier | Qt::Key_1 | idx++ );
+        ac->setShortcut( QKeySequence(hc::defaults::AuxiliaryShortcut("externalEditor", idx++)) );
         if( idx >= 9 )
             idx = 0;
         ac->setShortcutContext( Qt::WidgetWithChildrenShortcut );

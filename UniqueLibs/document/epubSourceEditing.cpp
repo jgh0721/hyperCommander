@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "epubProcessView.hpp"
 #include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
@@ -113,7 +114,7 @@ namespace hc::document {
 namespace {
 QString workspaceFile() {
     const auto Override=QCoreApplication::instance()->property("epubWorkspaceDirectory");
-    return QDir(Override.isValid()?Override.toString():QCoreApplication::applicationDirPath()).filePath("HyperEditor.epub-workspace.json");
+    return hc::defaults::edit::EpubWorkspaceFile(Override.isValid()?Override.toString():hc::defaults::edit::ConfigDirectory(QCoreApplication::applicationDirPath()));
 }
 QString workspaceKey(const QString& Path) {
     const QFileInfo Info(Path);const auto Canonical=Info.canonicalFilePath();

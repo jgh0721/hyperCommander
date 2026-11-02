@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpPanel.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "startupTrace.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "panelPathBar.hpp"
@@ -182,7 +183,7 @@ void CmpPanel::AddTab(bool Navigate)
         }
     }
     if (Navigate) {
-        const auto Position = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["newTabPosition"].toString("last");
+        const auto Position = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["newTabPosition"].toString(hc::defaults::DefaultValue("general/newTabPosition").toString());
         const int Last = int(vecTabStates.size()) - 1;
         const int Target = Position == "first" ? 0 : Position == "left" ? PreviousIndex : Position == "right" ? PreviousIndex + 1 : Last;
         if (Target >= 0 && Target < Last) {
@@ -273,7 +274,7 @@ void CmpPanel::materializeTab(int Index)
         Dialog->setDefaultButton(QMessageBox::Cancel);
         QPushButton* Elevate = nullptr;
         if (Denied && Local && !hc::permissions::Elevated()
-            && hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["allowElevation"].toBool(true)) {
+            && hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["allowElevation"].toBool(hc::defaults::DefaultValue("options/allowElevation").toBool())) {
             Elevate = Dialog->addButton(tr("관리자 권한으로 재시도"), QMessageBox::ActionRole);
             Elevate->setObjectName("hc.navigationElevate");
             Dialog->setInformativeText(Dialog->informativeText() + tr("\nUAC 승인 후 이 탭에서 현재 폴더와 하위 폴더의 목록을 관리자 권한으로 조회합니다. 해당 범위를 벗어나거나 탭을 닫으면 조회 권한을 종료합니다."));

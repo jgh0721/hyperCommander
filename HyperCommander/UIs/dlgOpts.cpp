@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "dlgOpts.hpp"
+#include "UniqueLibs/productDefaults.hpp"
+#include "UniqueLibs/quickFindSettings.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/settings/updateSettings.hpp"
 #include <fmfilelist/RecordPreview.h>
@@ -198,29 +200,29 @@ void QMainOpts::LoadSettings()
         const auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
         fileColors_->Load(Options["fileColorRules"].toObject());
         if (columnEditor_) columnEditor_->SetAutoColors(fileColors_->Document());
-        if (auto* Allow=findChild<QCheckBox*>("hc.permissions.allow")) Allow->setChecked(Options["allowElevation"].toBool(true));
-        defaultConflict_->setCurrentIndex(qMax(0, QStringList{"ask", "replace", "skip"}.indexOf(Options["fileConflict"].toString("ask"))));
-        findChild<QCheckBox*>("hc.settings.renameInDialog")->setChecked(Options["renameInDialog"].toBool(true));
-        findChild<QCheckBox*>("hc.settings.renameSelectExtension")->setChecked(Options["renameSelectExtension"].toBool(false));
-        findChild<QCheckBox*>("hc.settings.renameOnSlowClick")->setChecked(Options["renameOnSlowClick"].toBool(true));
-        findChild<QCheckBox*>("hc.settings.folderSizeOnSpace")->setChecked(Options["folderSizeOnSpace"].toBool(true));
-        findChild<QCheckBox*>("hc.settings.folderSizeBeforeOperations")->setChecked(Options["folderSizeBeforeOperations"].toBool(true));
-        findChild<QCheckBox*>("hc.settings.folderSizeUseEverything")->setChecked(Options["folderSizeUseEverything"].toBool(true));
-        findChild<QComboBox*>("hc.settings.folderSizeMode")->setCurrentIndex(qMax(0, QStringList{"manual", "local", "all", "everything"}.indexOf(Options["folderSizeMode"].toString("everything"))));
-        defaultMetadata_->setChecked(Options["copyMetadata"].toBool(true)); defaultVerify_->setChecked(Options["copyVerify"].toBool(false));
-        defaultAcl_->setChecked(Options["copyAcl"].toBool(false)); defaultStreams_->setChecked(Options["copyStreams"].toBool(false));
-        findChild<QCheckBox*>("hc.settings.delayedFileWrites")->setChecked(Options["delayedFileWrites"].toBool(true));
-        defaultPattern_->setText(Options["copyPattern"].toString("*")); defaultSpeed_->setValue(Options["copySpeedMiB"].toInt(0));
-        defaultDetailed_->setChecked(Options["jobDetailed"].toBool(false)); defaultClose_->setChecked(Options["jobCloseOnSuccess"].toBool(true));
-        findChild<QCheckBox*>("hc.settings.recycleDefault")->setChecked(Options["deleteToRecycle"].toBool(true));
-        findChild<QCheckBox*>("hc.settings.deleteWhileListing")->setChecked(Options["deleteWhileListing"].toBool(true));
-        findChild<QComboBox*>("hc.settings.jobNotification")->setCurrentIndex(qMax(0, QStringList{"none", "status", "attention", "sound"}.indexOf(Options["jobNotification"].toString("attention"))));
+        if (auto* Allow=findChild<QCheckBox*>("hc.permissions.allow")) Allow->setChecked(Options["allowElevation"].toBool(hc::defaults::DefaultValue("options/allowElevation").toBool()));
+        defaultConflict_->setCurrentIndex(qMax(0, QStringList{"ask", "replace", "skip"}.indexOf(Options["fileConflict"].toString(hc::defaults::DefaultValue("options/fileConflict").toString()))));
+        findChild<QCheckBox*>("hc.settings.renameInDialog")->setChecked(Options["renameInDialog"].toBool(hc::defaults::DefaultValue("options/renameInDialog").toBool()));
+        findChild<QCheckBox*>("hc.settings.renameSelectExtension")->setChecked(Options["renameSelectExtension"].toBool(hc::defaults::DefaultValue("options/renameSelectExtension").toBool()));
+        findChild<QCheckBox*>("hc.settings.renameOnSlowClick")->setChecked(Options["renameOnSlowClick"].toBool(hc::defaults::DefaultValue("options/renameOnSlowClick").toBool()));
+        findChild<QCheckBox*>("hc.settings.folderSizeOnSpace")->setChecked(Options["folderSizeOnSpace"].toBool(hc::defaults::DefaultValue("options/folderSizeOnSpace").toBool()));
+        findChild<QCheckBox*>("hc.settings.folderSizeBeforeOperations")->setChecked(Options["folderSizeBeforeOperations"].toBool(hc::defaults::DefaultValue("options/folderSizeBeforeOperations").toBool()));
+        findChild<QCheckBox*>("hc.settings.folderSizeUseEverything")->setChecked(Options["folderSizeUseEverything"].toBool(hc::defaults::DefaultValue("options/folderSizeUseEverything").toBool()));
+        findChild<QComboBox*>("hc.settings.folderSizeMode")->setCurrentIndex(qMax(0, QStringList{"manual", "local", "all", "everything"}.indexOf(Options["folderSizeMode"].toString(hc::defaults::DefaultValue("options/folderSizeMode").toString()))));
+        defaultMetadata_->setChecked(Options["copyMetadata"].toBool(hc::defaults::DefaultValue("options/copyMetadata").toBool())); defaultVerify_->setChecked(Options["copyVerify"].toBool(hc::defaults::DefaultValue("options/copyVerify").toBool()));
+        defaultAcl_->setChecked(Options["copyAcl"].toBool(hc::defaults::DefaultValue("options/copyAcl").toBool())); defaultStreams_->setChecked(Options["copyStreams"].toBool(hc::defaults::DefaultValue("options/copyStreams").toBool()));
+        findChild<QCheckBox*>("hc.settings.delayedFileWrites")->setChecked(Options["delayedFileWrites"].toBool(hc::defaults::DefaultValue("options/delayedFileWrites").toBool()));
+        defaultPattern_->setText(Options["copyPattern"].toString(hc::defaults::DefaultValue("options/copyPattern").toString())); defaultSpeed_->setValue(Options["copySpeedMiB"].toInt(hc::defaults::DefaultValue("options/copySpeedMiB").toInt()));
+        defaultDetailed_->setChecked(Options["jobDetailed"].toBool(hc::defaults::DefaultValue("options/jobDetailed").toBool())); defaultClose_->setChecked(Options["jobCloseOnSuccess"].toBool(hc::defaults::DefaultValue("options/jobCloseOnSuccess").toBool()));
+        findChild<QCheckBox*>("hc.settings.recycleDefault")->setChecked(Options["deleteToRecycle"].toBool(hc::defaults::DefaultValue("options/deleteToRecycle").toBool()));
+        findChild<QCheckBox*>("hc.settings.deleteWhileListing")->setChecked(Options["deleteWhileListing"].toBool(hc::defaults::DefaultValue("options/deleteWhileListing").toBool()));
+        findChild<QComboBox*>("hc.settings.jobNotification")->setCurrentIndex(qMax(0, QStringList{"none", "status", "attention", "sound"}.indexOf(Options["jobNotification"].toString(hc::defaults::DefaultValue("options/jobNotification").toString()))));
         findChild<QComboBox*>("hc.settings.queueOrder")->setCurrentIndex(Options["queueInsertion"] == "first" ? 1 : 0);
-        findChild<QSpinBox*>("hc.settings.jobConcurrency")->setValue(Options["jobConcurrency"].toInt(2));
-        findChild<QCheckBox*>("hc.settings.enableJobRecovery")->setChecked(Options["enableJobRecovery"].toBool(false));
-        findChild<QCheckBox*>("hc.settings.saveJobProgress")->setEnabled(Options["enableJobRecovery"].toBool(false));
-        findChild<QCheckBox*>("hc.settings.saveJobProgress")->setChecked(Options["saveJobProgress"].toBool(false));
-        findChild<QCheckBox*>("hc.settings.showJobDetails")->setChecked(Options["showJobDetails"].toBool(false));
+        findChild<QSpinBox*>("hc.settings.jobConcurrency")->setValue(Options["jobConcurrency"].toInt(hc::defaults::DefaultValue("options/jobConcurrency").toInt()));
+        findChild<QCheckBox*>("hc.settings.enableJobRecovery")->setChecked(Options["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()));
+        findChild<QCheckBox*>("hc.settings.saveJobProgress")->setEnabled(Options["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()));
+        findChild<QCheckBox*>("hc.settings.saveJobProgress")->setChecked(Options["saveJobProgress"].toBool(hc::defaults::DefaultValue("options/saveJobProgress").toBool()));
+        findChild<QCheckBox*>("hc.settings.showJobDetails")->setChecked(Options["showJobDetails"].toBool(hc::defaults::DefaultValue("options/showJobDetails").toBool()));
     }
 
 
@@ -250,16 +252,16 @@ void QMainOpts::LoadSettings()
     listAutoWidth_->setValue(Presentation.appearance_.autoWidth);
     listAutoPercent_->setValue(Presentation.appearance_.autoPercent);
     resetListModeDraft_ = false;
-    iconModes_->button(qMax(0, QStringList{"all", "associated", "standard", "none"}.indexOf(General["iconMode"].toString())))->setChecked(true);
-    directoryStyles_->button(qMax(0, QStringList{"plain", "brackets", "suffix"}.indexOf(General["directoryStyle"].toString())))->setChecked(true);
-    specialFolderIcons_->setChecked(General["specialFolderIcons"].toBool(true));
-    virtualFolderIcons_->setChecked(General["virtualFolderIcons"].toBool(true));
-    explorerDefaultIcons_->setChecked(General["explorerDefaultIcons"].toBool(true));
-    iconOverlays_->setChecked(General["iconOverlays"].toBool(true));
-    ui.chkSortCaseSensitive->setChecked(General["sortCaseSensitive"].toBool());
-    ui.chkSortLocaleAware->setChecked(General["sortLocaleAware"].toBool(true));
-    ui.chkSortNumericAware->setChecked(General["sortNumericAware"].toBool(true));
-    focusPreviousDirectory_->setChecked(General["focusPreviousDirectory"].toBool(true));
+    iconModes_->button(qMax(0, QStringList{"all", "associated", "standard", "none"}.indexOf(General["iconMode"].toString(hc::defaults::DefaultValue("general/iconMode").toString()))))->setChecked(true);
+    directoryStyles_->button(qMax(0, QStringList{"plain", "brackets", "suffix"}.indexOf(General["directoryStyle"].toString(hc::defaults::DefaultValue("general/directoryStyle").toString()))))->setChecked(true);
+    specialFolderIcons_->setChecked(General["specialFolderIcons"].toBool(hc::defaults::DefaultValue("general/specialFolderIcons").toBool()));
+    virtualFolderIcons_->setChecked(General["virtualFolderIcons"].toBool(hc::defaults::DefaultValue("general/virtualFolderIcons").toBool()));
+    explorerDefaultIcons_->setChecked(General["explorerDefaultIcons"].toBool(hc::defaults::DefaultValue("general/explorerDefaultIcons").toBool()));
+    iconOverlays_->setChecked(General["iconOverlays"].toBool(hc::defaults::DefaultValue("general/iconOverlays").toBool()));
+    ui.chkSortCaseSensitive->setChecked(General["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()));
+    ui.chkSortLocaleAware->setChecked(General["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()));
+    ui.chkSortNumericAware->setChecked(General["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()));
+    focusPreviousDirectory_->setChecked(General["focusPreviousDirectory"].toBool(hc::defaults::DefaultValue("general/focusPreviousDirectory").toBool()));
     const auto QuickFind = hc::quickfind::Settings::FromJson(General["quickFind"].toObject()).ToJson();
     for (auto It = QuickFind.begin(); It != QuickFind.end(); ++It) {
         const auto Name = "hc.navigation.quickFind." + It.key();
@@ -275,7 +277,7 @@ void QMainOpts::LoadSettings()
         else if (auto* Text = findChild<QLineEdit*>(Name)) Text->setText(It.value().toString());
     }
     if (auto* Preset = findChild<QComboBox*>("hc.settings.shortcutPreset")) {
-        const QSignalBlocker Block(Preset); Preset->setCurrentIndex(qMax(0, hc::defaults::ShortcutPresetIds().indexOf(General["shortcutPreset"].toString("legacy"))));
+        const QSignalBlocker Block(Preset); Preset->setCurrentIndex(qMax(0, hc::defaults::ShortcutPresetIds().indexOf(General["shortcutPreset"].toString(hc::defaults::DefaultValue("general/shortcutPreset").toString()))));
     }
     StColorSchemeMgr->Refresh();
     TyStFileSetMgr::GetInstance()->Refresh();
@@ -285,7 +287,7 @@ void QMainOpts::LoadSettings()
     thumbnailSettings_->Load(General.value("thumbnails").toObject());
     processServiceSettings_->Load(General.value("processService").toObject());
     audioSettings_->Load(General.value("audioPreview").toObject(),
-        hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject().value("audioOpenInternally").toBool(false));
+        hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject().value("audioOpenInternally").toBool(hc::defaults::DefaultValue("options/audioOpenInternally").toBool()));
     const auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
     themeSettings_->LoadLibrary(Appearance["watercolorPresets"].toObject());
     themeSettings_->Load(Appearance["watercolorTheme"].toObject());
@@ -294,17 +296,17 @@ void QMainOpts::LoadSettings()
     findChild<QCheckBox*>("hc.settings.systemAccent")->setEnabled(themeSettings_->isEnabled());
     findChild<fm::ui::AccentPicker*>("hc.settings.accent")->setCurrent(themeSettings_->Scheme().seeds.accent);
     { const QSignalBlocker Block(findChild<QCheckBox*>("hc.settings.systemAccent")); findChild<QCheckBox*>("hc.settings.systemAccent")->setChecked(themeSettings_->Scheme().seeds.useSystemAccent); }
-    findChild<QCheckBox*>("hc.settings.darkTitle")->setChecked(General["darkTitleBar"].toBool(true));
-    findChild<QCheckBox*>("hc.settings.showMainToolbar")->setChecked(General["showMainToolbar"].toBool(false));
-    findChild<QCheckBox*>("hc.settings.showCommandLine")->setChecked(General["showCommandLine"].toBool(true));
-    findChild<QCheckBox*>("hc.settings.showFunctionBar")->setChecked(General["showFunctionBar"].toBool(true));
-    findChild<QComboBox*>("hc.settings.startup")->setCurrentIndex(General["restoreWorkspace"].toBool(true) ? 0 : 1);
-    findChild<QCheckBox*>("hc.settings.singleInstance")->setChecked(General["singleInstance"].toBool(false));
+    findChild<QCheckBox*>("hc.settings.darkTitle")->setChecked(General["darkTitleBar"].toBool(hc::defaults::DefaultValue("general/darkTitleBar").toBool()));
+    findChild<QCheckBox*>("hc.settings.showMainToolbar")->setChecked(General["showMainToolbar"].toBool(hc::defaults::DefaultValue("general/showMainToolbar").toBool()));
+    findChild<QCheckBox*>("hc.settings.showCommandLine")->setChecked(General["showCommandLine"].toBool(hc::defaults::DefaultValue("general/showCommandLine").toBool()));
+    findChild<QCheckBox*>("hc.settings.showFunctionBar")->setChecked(General["showFunctionBar"].toBool(hc::defaults::DefaultValue("general/showFunctionBar").toBool()));
+    findChild<QComboBox*>("hc.settings.startup")->setCurrentIndex(General["restoreWorkspace"].toBool(hc::defaults::DefaultValue("general/restoreWorkspace").toBool()) ? 0 : 1);
+    findChild<QCheckBox*>("hc.settings.singleInstance")->setChecked(General["singleInstance"].toBool(hc::defaults::DefaultValue("general/singleInstance").toBool()));
     auto* UpdateInterval = findChild<QComboBox*>("hc.settings.updateCheckInterval");
     UpdateInterval->setCurrentIndex(UpdateInterval->findData(hc::settings::UpdateCheckIntervalDays(General["update"].toObject())));
-    findChild<QComboBox*>("hc.settings.newTabPosition")->setCurrentIndex(qMax(0, QStringList{"last", "right", "left", "first"}.indexOf(General["newTabPosition"].toString("last"))));
-    findChild<QFontComboBox*>("hc.settings.monoFont")->setCurrentFont(QFont(General["monoFontFamily"].toString("Cascadia Mono")));
-    findChild<QSpinBox*>("hc.settings.monoSize")->setValue(General["monoFontPx"].toInt(12));
+    findChild<QComboBox*>("hc.settings.newTabPosition")->setCurrentIndex(qMax(0, QStringList{"last", "right", "left", "first"}.indexOf(General["newTabPosition"].toString(hc::defaults::DefaultValue("general/newTabPosition").toString()))));
+    findChild<QFontComboBox*>("hc.settings.monoFont")->setCurrentFont(QFont(General["monoFontFamily"].toString(hc::defaults::DefaultValue("general/monoFontFamily").toString())));
+    findChild<QSpinBox*>("hc.settings.monoSize")->setValue(General["monoFontPx"].toInt(hc::defaults::DefaultValue("general/monoFontPx").toInt()));
 
 
     RefreshPluginList();
@@ -559,7 +561,7 @@ bool QMainOpts::SaveSettings()
     if (PreviousSettings["general"].toObject()["useBuiltInShortcuts"] != committedSettings_["general"].toObject()["useBuiltInShortcuts"] && keyboardSettings_) keyboardSettings_->Load();
     if (auto* Theme = findChild<QComboBox*>("hc.settings.theme")) {
         const QSignalBlocker Block(Theme);
-        const auto Mode = committedSettings_["general"].toObject()["themeMode"].toString();
+        const auto Mode = committedSettings_["general"].toObject()["themeMode"].toString(hc::defaults::DefaultValue("general/themeMode").toString());
         const int Index = Mode == "system" ? 2 : Scheme.IsDarkMode ? 1 : 0;
         Theme->setCurrentIndex(Index);
         if (auto* Card = findChild<fm::ui::ThemeModeCard*>("hc.settings.themeCard" + QString::number(Index))) Card->setChecked(true);
@@ -1181,7 +1183,7 @@ void QMainOpts::initializeDesignPages()
     delete ui.horizontalLayout_2->replaceWidget(ui.lstOptCate, Sidebar);
     ui.horizontalLayout_2->setStretch(0, 0); ui.horizontalLayout_2->setStretch(1, 1);
     auto* Search = new QLineEdit(Sidebar); Search->setObjectName("hc.settings.search"); Search->setClearButtonEnabled(true); Search->setPlaceholderText(tr("설정 찾기 · Ctrl+F")); Search->setAccessibleName(tr("설정 페이지 찾기")); SidebarLayout->addWidget(Search); SidebarLayout->addWidget(ui.lstOptCate, 1);
-    auto* Find = new QShortcut(QKeySequence::Find, this); connect(Find, &QShortcut::activated, Search, qOverload<>(&QWidget::setFocus));
+    auto* Find = new QShortcut(hc::defaults::SettingsFindShortcut<QKeySequence>(), this); connect(Find, &QShortcut::activated, Search, qOverload<>(&QWidget::setFocus));
     connect(Search, &QLineEdit::textChanged, this, [this](const QString& Text) { for (int Row = 0; Row < ui.lstOptCate->count(); ++Row) {
         auto* Item = ui.lstOptCate->item(Row); auto* Page = ui.stkOpts->widget(Item->data(Qt::UserRole).toInt()); QString Content = Item->text();
         for (auto* Label : Page->findChildren<QLabel*>()) Content += " " + Label->text(); for (auto* Button : Page->findChildren<QAbstractButton*>()) Content += " " + Button->text();

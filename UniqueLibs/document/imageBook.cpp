@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "imageBook.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "core/AppSettings.h"
 #include <QSet>
 #include "imagePartialDecoder.hpp"
@@ -437,7 +438,7 @@ void AnalyzeImageBook(const std::shared_ptr<ImageBook>& Book, storage::Operation
     if(!Book->archive_)for(const auto& Page:Book->pages_)Hash.addData(Page.id_.toUtf8());
     const auto Identity=QString::fromLatin1(Hash.result().toHex());
     // Cache is persisted by the reader with its normal history transaction.
-    AppSettings Settings;QFile History(QFileInfo(Settings.fileName()).absolutePath()+"/HyperViewer-reading.json");
+    AppSettings Settings;QFile History(hc::defaults::edit::ImageReadingFile(QFileInfo(Settings.fileName()).absolutePath()));
     if(History.open(QIODevice::ReadOnly) && History.size()<=16*1024*1024){
         const auto Cached=QJsonDocument::fromJson(History.readAll()).object()[Book->path_].toObject()["readingAnalysis"].toObject();
         if(Cached["version"].toInt()==ImageReadingAnalysis::Version && Cached["revision"].toString()==Identity

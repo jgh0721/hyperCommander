@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "commonLibs/document/epub/epubEditModel.hpp"
 #include "commonLibs/document/epub/epubDraftStore.hpp"
 #include "commonLibs/storage/storage.hpp"
@@ -170,7 +171,7 @@ private:
     QString recoveryRoot_,sourcePath_,recoverySession_,recoveryPath_,recoveryLocator_,recoveryError_,pendingRecoveryPath_,readingRecoveryPath_,recoveredFrom_;
     QByteArray sourceHashAtOpen_,draftWrittenToken_,draftWritingToken_;QList<QPair<QString,QString>> recoveryEntries_;qint64 draftSavedAt_=0;
     std::optional<epub::DraftSnapshot> pendingRecovery_;
-    bool recoveryEnabled_=true,recoverySourceChanged_=false,recoveryReadingSourceChanged_=false,discardedRecovery_=false;
+    bool recoveryEnabled_=hc::defaults::edit::ViewValue("textView/recoveryEnabled").toBool(),recoverySourceChanged_=false,recoveryReadingSourceChanged_=false,discardedRecovery_=false;
     QStackedLayout* previewStack_=nullptr;QLabel *previewChip_=nullptr,*previewChapterLabel_=nullptr;
     std::optional<WebProcessRuntime> previewRuntime_;std::unique_ptr<QTemporaryDir> previewDirectory_;
     QFutureWatcher<epub::EditOutput> previewWorker_;QTimer previewTimer_;

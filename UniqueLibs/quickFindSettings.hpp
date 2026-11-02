@@ -1,29 +1,33 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include <QJsonObject>
 #include "koreanSearchPattern.hpp"
 #include <QString>
 
 namespace hc::quickfind {
 struct Settings {
-    bool enabled_ = true;
-    bool highlight_ = true;
-    bool everythingKorean_ = true;
+    bool enabled_ = hc::defaults::DefaultValue("general/quickFind/enabled").toBool();
+    bool highlight_ = hc::defaults::DefaultValue("general/quickFind/highlight").toBool();
+    bool everythingKorean_ = hc::defaults::DefaultValue("general/quickFind/everythingKorean").toBool();
     static constexpr int MinimumDisplayInterval = 50, MaximumDisplayInterval = 5000;
-    int everythingDisplayIntervalMs_ = 500;
-    QString activation_ = "ctrl-alt", scope_ = "panel", match_ = "starts", result_ = "cursor";
+    int everythingDisplayIntervalMs_ = hc::defaults::DefaultValue("general/quickFind/everythingDisplayIntervalMs").toInt();
+    QString activation_ = hc::defaults::DefaultValue("general/quickFind/activation").toString();
+    QString scope_ = hc::defaults::DefaultValue("general/quickFind/scope").toString();
+    QString match_ = hc::defaults::DefaultValue("general/quickFind/match").toString();
+    QString result_ = hc::defaults::DefaultValue("general/quickFind/result").toString();
     static Settings FromJson(const QJsonObject& Json)
     {
         Settings Value;
         Value.enabled_ = Json["enabled"].toBool(Value.enabled_);
         Value.highlight_ = Json["highlight"].toBool(Value.highlight_);
-        Value.everythingKorean_ = Json["everythingKorean"].toBool(Value.everythingKorean_);
+        Value.everythingKorean_ = Json["everythingKorean"].toBool(hc::defaults::DefaultValue("general/quickFind/everythingKorean").toBool());
         const auto Interval = Json["everythingDisplayIntervalMs"];
         if (Interval.isDouble() && Interval.toDouble() >= MinimumDisplayInterval && Interval.toDouble() <= MaximumDisplayInterval
             && Interval.toDouble() == double(Interval.toInt())) Value.everythingDisplayIntervalMs_ = Interval.toInt();
-        if (Json["activation"] == "typing") Value.activation_ = "typing";
-        if (Json["scope"] == "everything") Value.scope_ = "everything";
-        if (Json["match"] == "contains" || Json["match"] == "ends") Value.match_ = Json["match"].toString();
-        if (Json["result"] == "filter") Value.result_ = "filter";
+        if (QStringList{"typing", "ctrl-alt"}.contains(Json["activation"].toString())) Value.activation_ = Json["activation"].toString();
+        if (QStringList{"panel", "everything"}.contains(Json["scope"].toString())) Value.scope_ = Json["scope"].toString();
+        if (QStringList{"starts", "contains", "ends"}.contains(Json["match"].toString())) Value.match_ = Json["match"].toString();
+        if (QStringList{"cursor", "filter"}.contains(Json["result"].toString())) Value.result_ = Json["result"].toString();
         return Value;
     }
     QJsonObject ToJson() const

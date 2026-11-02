@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingSettings.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 
 /// Platform/framework headers
 #include <QDir>
@@ -81,11 +82,7 @@ namespace hc::epub::poc
     bool ReadingStore::Valid(const QJsonObject& Profile) { try {validateProfile(Profile);return true;} catch(const QString&) {return false;} }
     QJsonObject ReadingStore::Defaults()
     {
-        return {{"theme", "system"}, {"font", "Malgun Gothic"}, {"size", 19}, {"weight", 400},
-            {"letter", 0}, {"word", 0}, {"line", 1.8}, {"before", 0}, {"after", 0.8}, {"indent", 0},
-            {"background","theme"},{"backgroundColor",""},{"textColor",""},{"backgroundAsset",""},{"customCss",""},{"cssEnabled",false},{"cssForce",true},
-            {"resume",true},{"privateReading",false},{"historyEpoch",0},{"backgroundFit","cover"},{"backgroundOpacity",1},
-            {"layout","scroll"},{"columns",0},{"align", "left"}, {"margin", 28}, {"width", 760}, {"override", true}};
+        return hc::defaults::edit::EpubReading();
     }
     QJsonObject ReadingStore::Resolve(const QJsonObject& Global, const QJsonObject& Book)
     {
@@ -104,7 +101,7 @@ namespace hc::epub::poc
         catch(const QString& Error) { return {{}, {}, Error}; }
     }
     QString ReadingStore::ClearPositions(const QString& Path) {
-        const QDir Directory(QDir(QFileInfo(Path).absolutePath()).filePath("epub-state"));
+        const QDir Directory(hc::defaults::edit::EpubStateDirectory(QFileInfo(Path).absolutePath()));
         if(QFileInfo(Directory.absolutePath()).isSymLink())return QStringLiteral("기록 폴더의 연결 경로는 변경하지 않습니다.");
         for(const auto& Name:Directory.entryList({"*.json"},QDir::Files)) {
             if(!QRegularExpression("^[a-f0-9]{64}\\.json$").match(Name).hasMatch())continue;

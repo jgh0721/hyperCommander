@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/settings/fileColorRules.hpp"
 #include "UniqueLibs/fileRulePaint.hpp"
 #include <QtWidgets>
@@ -109,7 +110,7 @@ public:
             connect(Item, &QPushButton::clicked, this, Action); return Item;
         };
         auto* NewGroup = Button(tr("추가"), Actions, [this] { addGroup(false); }); NewGroup->setAccessibleName(tr("새 그룹")); NewGroup->setObjectName("hc.rules.add");
-        auto* AddShortcut = new QShortcut(QKeySequence("Alt+W"), this); connect(AddShortcut, &QShortcut::activated, this, [this] { addGroup(false); });
+        auto* AddShortcut = new QShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("fileColorGroup.add")), this); connect(AddShortcut, &QShortcut::activated, this, [this] { addGroup(false); });
         NewGroup->setToolTip(tr("새 그룹 · Alt+W"));
         Button(tr("복제"), Actions, [this] { addGroup(true); })->setObjectName("hc.rules.copy");
         Button(tr("삭제"), Actions, [this] { auto Groups = document_["groups"].toArray(); const int Row = list_->currentRow(); if (Row < 0) return; Groups.removeAt(Row); document_["groups"] = Groups; refreshList(qMin(Row, int(Groups.size()) - 1)); })->setObjectName("hc.rules.delete");
@@ -359,7 +360,7 @@ private:
     }
     void refreshList(int Row) {
         loading_ = true; list_->clear(); mode_->button(document_["mode"] == "merge" ? 1 : 0)->setChecked(true);
-        for (const auto V : document_["groups"].toArray()) { auto* Item = new QListWidgetItem(V.toObject()["name"].toString(), list_); Item->setData(Qt::UserRole, V.toObject()["id"].toString()); Item->setCheckState(V.toObject()["enabled"].toBool(true) ? Qt::Checked : Qt::Unchecked); }
+        for (const auto V : document_["groups"].toArray()) { auto* Item = new QListWidgetItem(V.toObject()["name"].toString(), list_); Item->setData(Qt::UserRole, V.toObject()["id"].toString()); Item->setCheckState(V.toObject()["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool()) ? Qt::Checked : Qt::Unchecked); }
         updateGroupItems(); list_->setCurrentRow(Row); loading_ = false; loadForm();
     }
     void loadForm() {

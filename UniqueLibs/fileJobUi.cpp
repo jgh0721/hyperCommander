@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileJobUi.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include <QDir>
 #include "fileOperationErrorText.hpp"
 #include "fileJobInteraction.hpp"
@@ -205,8 +206,8 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     QCoreApplication::instance()->setProperty("hc.permission.controller",QVariant::fromValue<QObject*>(this));
     Main->installEventFilter(this);
     const auto Defaults = hc::settings::AppSettings().CommittedObject()["options"].toObject();
-    SetFileJobPersistence(journal_, Defaults["enableJobRecovery"].toBool(false), Defaults["saveJobProgress"].toBool(false));
-    appliedConcurrency_ = Defaults["jobConcurrency"].toInt(2);
+    SetFileJobPersistence(journal_, Defaults["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()), Defaults["saveJobProgress"].toBool(hc::defaults::DefaultValue("options/saveJobProgress").toBool()));
+    appliedConcurrency_ = Defaults["jobConcurrency"].toInt(hc::defaults::DefaultValue("options/jobConcurrency").toInt());
     scheduler_.SetConcurrencyLimit(appliedConcurrency_);
     dialog_ = new QDialog(Main);
     dialog_->setObjectName("hc.fileJobs");
@@ -509,7 +510,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
 FileJobUi::~FileJobUi() { if (interaction_) interaction_->Dismiss(); timer_->stop(); scheduler_.Shutdown(); if(hc::permissions::Controller()==this)QCoreApplication::instance()->setProperty("hc.permission.controller",QVariant::fromValue<QObject*>(previousPermissionController_.data())); }
 
 std::shared_ptr<IFileElevationService> FileJobUi::ElevationService() const {
-    if(!hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["allowElevation"].toBool(true))return {};
+    if(!hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["allowElevation"].toBool(hc::defaults::DefaultValue("options/allowElevation").toBool()))return {};
     return hc::permissions::MakeFileElevationService();
 }
 QString FileJobUi::SubmitSecurityJob(const QString& Path,bool Grant,const QJsonObject& Restore) {
@@ -536,17 +537,17 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
         beforeMutation_(Paths);
     }
     Request.fileLockInteractions_ = true;
-    Request.calculateSizeBefore_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeBeforeOperations"].toBool(true);
+    Request.calculateSizeBefore_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeBeforeOperations"].toBool(hc::defaults::DefaultValue("options/folderSizeBeforeOperations").toBool());
     if ((Request.selection_ && hc::folders::IsNetwork(Request.selectionRoot_))
         || std::any_of(Request.sources_.begin(), Request.sources_.end(), [](const auto& Source) { return hc::folders::IsNetwork(Source.entry_.locator_); }))
         Request.calculateSizeBefore_ = false;
-    Request.deleteWhileListing_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["deleteWhileListing"].toBool(true);
+    Request.deleteWhileListing_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["deleteWhileListing"].toBool(hc::defaults::DefaultValue("options/deleteWhileListing").toBool());
     Context.providerInteractions_ = true;
     if (Request.operation_ == hc::operations::FileOperation::Copy && Request.selection_ && Request.calculateSizeBefore_
         && Request.selectionRoot_.kind_ == LocatorKind::Local && Request.destination_.kind_ == LocatorKind::Local
-        && !hc::settings::AppSettings().CommittedObject()["options"].toObject()["enableJobRecovery"].toBool(false))
+        && !hc::settings::AppSettings().CommittedObject()["options"].toObject()["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()))
         Context.fileCopyWorkers_ = 0;
-    Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);
+    Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(hc::defaults::DefaultValue("options/delayedFileWrites").toBool());
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.root_ : Request.sources_.front().entry_.name_;
     const auto Operation = Request.operation_;
@@ -588,7 +589,7 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
 Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationContext Context, bool Deferred)
 {
     Context.providerInteractions_ = true;
-    Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);
+    Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(hc::defaults::DefaultValue("options/delayedFileWrites").toBool());
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.nesting_.empty() ? Request.destination_.root_ : Request.destination_.nesting_.back().entry_ : Request.sources_.front().entry_.name_;
     const auto Operation = Request.operation_;
@@ -614,7 +615,7 @@ Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationConte
         beforeMutation_(Paths);
     }
     Context.providerInteractions_ = true;
-    Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);
+    Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(hc::defaults::DefaultValue("options/delayedFileWrites").toBool());
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.root_ : Request.sources_.front().name_;
     const auto Destination = DisplayPath(Serialize(Request.destination_));
@@ -631,7 +632,7 @@ Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationConte
 Result<JobHandle> FileJobUi::Submit(PreparedJob Job, const QString& Label, PreparedRetry Retry, std::function<void(const std::string&)> Resubmitted)
 {
     Job.request_.operation_.providerInteractions_ = true;
-    Job.request_.operation_.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);
+    Job.request_.operation_.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(hc::defaults::DefaultValue("options/delayedFileWrites").toBool());
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     Job.request_.metadata_.label_ = Label.toStdString();
     const auto Presentation = Job.request_.metadata_.kind_;
@@ -662,7 +663,7 @@ Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::
     jobs_->setItemData(jobs_->count() - 1, static_cast<int>(Operation), Qt::UserRole + 1);
     jobs_->setCurrentIndex(jobs_->count() - 1);
     const auto Defaults = hc::settings::AppSettings().CommittedObject()["options"].toObject();
-    notifications_[Handle.id_] = Defaults["jobNotification"].toString("attention");
+    notifications_[Handle.id_] = Defaults["jobNotification"].toString(hc::defaults::DefaultValue("options/jobNotification").toString());
     const auto Snapshot = scheduler_.Snapshot(Handle.id_);
     if (Defaults["queueInsertion"] == "first" && Snapshot.HasValue() && Snapshot.Value().deferred_) {
         auto Queue = scheduler_.Snapshots();
@@ -677,8 +678,8 @@ Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::
             if (!Reordered.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("대기열 순서 변경 실패"), tr("작업은 접수되었습니다. 대기열이 변경되어 기본 순서를 적용하지 못했습니다. 현재 순서를 확인하세요."));
         }
     }
-    autoClose_->setChecked(Defaults["jobCloseOnSuccess"].toBool(true));
-    if (detailed_ != Defaults["jobDetailed"].toBool(false)) dialog_->findChild<QPushButton*>("hc.jobs.toggleDetails")->click();
+    autoClose_->setChecked(Defaults["jobCloseOnSuccess"].toBool(hc::defaults::DefaultValue("options/jobCloseOnSuccess").toBool()));
+    if (detailed_ != Defaults["jobDetailed"].toBool(hc::defaults::DefaultValue("options/jobDetailed").toBool())) dialog_->findChild<QPushButton*>("hc.jobs.toggleDetails")->click();
     if (Snapshot.HasValue() && Snapshot.Value().deferred_) Show(); else showProgress();
     return Handle;
 }
@@ -686,13 +687,13 @@ Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::
 void FileJobUi::ApplyDefaults()
 {
     const auto Options = hc::settings::AppSettings().CommittedObject()["options"].toObject();
-    SetFileJobPersistence(journal_, Options["enableJobRecovery"].toBool(false), Options["saveJobProgress"].toBool(false));
-    const bool ShowRecords = Options["showJobDetails"].toBool(false);
+    SetFileJobPersistence(journal_, Options["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()), Options["saveJobProgress"].toBool(hc::defaults::DefaultValue("options/saveJobProgress").toBool()));
+    const bool ShowRecords = Options["showJobDetails"].toBool(hc::defaults::DefaultValue("options/showJobDetails").toBool());
     if (ShowRecords != appliedShowRecords_) {
         appliedShowRecords_ = ShowRecords;
         updateSelection(); dialog_->resize(dialog_->width(),std::min(dialog_->sizeHint().height(),dialog_->screen()->availableGeometry().height()-80));
     }
-    const auto Limit = Options["jobConcurrency"].toInt(2);
+    const auto Limit = Options["jobConcurrency"].toInt(hc::defaults::DefaultValue("options/jobConcurrency").toInt());
     if (Limit == appliedConcurrency_) return; // Preserve a session override until the stored default changes.
     if (scheduler_.SetConcurrencyLimit(Limit).HasValue()) {
         appliedConcurrency_ = Limit;
@@ -771,7 +772,7 @@ void FileJobUi::retrySelected()
     // A new user action gets a fresh cancellation/deadline, with the original
     // immutable source identity. Destination conflicts are asked again.
     Context.stopToken_ = {}; Context.deadline_ = std::chrono::steady_clock::time_point::max();
-    Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(true);
+    Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(hc::defaults::DefaultValue("options/delayedFileWrites").toBool());
     Request.conflict_ = ConflictPolicy::Ask; Request.correlationId_.clear();
     managerRetry_->setEnabled(false);
     preparingRetry_ = Id; updateManagerSelection(&Original.snapshot_);
@@ -971,7 +972,7 @@ void FileJobUi::updateSelection()
     const bool Password = Active && Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::Password;
     const bool FileInUse = Active && Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::RetryFailure
         && Snapshot.interaction_->reason_.starts_with("file-in-use:");
-    const bool ShowRecords = hc::settings::AppSettings().CommittedObject()["options"].toObject()["showJobDetails"].toBool(false);
+    const bool ShowRecords = hc::settings::AppSettings().CommittedObject()["options"].toObject()["showJobDetails"].toBool(hc::defaults::DefaultValue("options/showJobDetails").toBool());
     details_->setVisible(ShowRecords);
     pagesBlock_->setVisible(ShowRecords);
     previousPage_->setVisible(ShowRecords); nextPage_->setVisible(ShowRecords);
@@ -1133,7 +1134,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     }
     hc::columns::FormatOptions SizeFormat; SizeFormat.size_ = hc::columns::SizeFormat::Adaptive; SizeFormat.precision_ = 2;
     if (const auto It = sizeFormats_.find(Snapshot.id_); It != sizeFormats_.end()) {
-        SizeFormat.size_ = hc::columns::SizeFormat(It->second["size"].toInt()); SizeFormat.precision_ = It->second["precision"].toInt(1); SizeFormat.grouping_ = It->second["grouping"].toBool();
+        SizeFormat.size_ = hc::columns::SizeFormat(It->second["size"].toInt()); SizeFormat.precision_ = It->second["precision"].toInt(hc::defaults::DefaultValue("columnPresentation/precision").toInt()); SizeFormat.grouping_ = It->second["grouping"].toBool();
     }
     const auto SizeText = [&](uint64_t Bytes) { return hc::columns::Format(hc::columns::CellValue::Ready(quint64(Bytes)), SizeFormat); };
     const auto Mode = ProgressRate(Snapshot);

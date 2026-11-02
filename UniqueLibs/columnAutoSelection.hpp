@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include <QDir>
 #include <QJsonDocument>
 #include "commonLibs/columns/columnProfileStorage.hpp"
@@ -8,18 +9,18 @@
 
 namespace hc::columns {
 inline constexpr auto AutoSelectionKey = "ColumnsV2/AutoSelection";
-inline QJsonObject EmptyAutoSelection() { return {{"version", 1}, {"enabled", false}, {"rules", QJsonArray{}}}; }
+inline QJsonObject EmptyAutoSelection() { return hc::defaults::DefaultValue("columnAutoSelection").toObject(); }
 inline QString ValidateAutoSelection(const QJsonObject& Policy, const QJsonObject& Library, const QJsonObject& Colors) {
     if (Policy["version"] != QJsonValue(1) || !Policy["enabled"].isBool() || !Policy["rules"].isArray()) return QObject::tr("자동 선택의 설정 형식을 확인하세요.");
     if (Policy["rules"].toArray().size() > 128) return QObject::tr("자동 조건은 최대 128개입니다.");
-    if (!Policy["enabled"].toBool()) return {}; // Allow disabling a policy whose referenced group was removed.
+    if (!Policy["enabled"].toBool(hc::defaults::DefaultValue("columnAutoSelection/enabled").toBool())) return {}; // Allow disabling a policy whose referenced group was removed.
     QSet<QString> Groups;
-    for (const auto& Value : Colors["groups"].toArray()) if (Value.toObject()["enabled"].toBool(true)) Groups.insert(Value.toObject()["id"].toString());
+    for (const auto& Value : Colors["groups"].toArray()) if (Value.toObject()["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool())) Groups.insert(Value.toObject()["id"].toString());
     for (const auto& Value : Policy["rules"].toArray()) {
         const auto Rule = Value.toObject();
         if (!Value.isObject() || !Rule["enabled"].isBool() || !Rule["profile"].isString()
             || !Rule["path"].isString() || !Rule["group"].isString() || !Rule["percent"].isDouble()) return QObject::tr("자동 조건의 형식을 확인하세요.");
-        if (!Rule["enabled"].toBool()) continue;
+        if (!Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool())) continue;
         const auto Profile = DecodeProfile(Library[Rule["profile"].toString()].toObject());
         if (!Profile || !IsSupportedProfile(*Profile)) return QObject::tr("자동 조건에서 사용할 열 세트를 선택하세요.");
         const auto Path = Rule["path"].toString().trimmed(), Group = Rule["group"].toString();
@@ -35,13 +36,13 @@ inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(
     const QJsonObject& Library, const QJsonObject& Colors, QString Path,
     const std::shared_ptr<hc::storage::IEntryIndex>& Index, const hc::storage::OperationContext& Context = {}) {
     using namespace hc::storage;
-    if (!Policy["enabled"].toBool()) return std::optional<ColumnProfile>{};
+    if (!Policy["enabled"].toBool(hc::defaults::DefaultValue("columnAutoSelection/enabled").toBool())) return std::optional<ColumnProfile>{};
     if (!ValidateAutoSelection(Policy, Library, Colors).isEmpty()) return Error{ErrorCategory::InvalidRequest, "invalid-auto-column-policy"};
     Path = QDir::fromNativeSeparators(Path); QMap<QString, hc::settings::FileColorRules> Groups;
     const auto Rules = Policy["rules"].toArray();
     for (const auto& Value : Rules) {
         const auto Rule = Value.toObject(); const auto Group = Rule["group"].toString();
-        if (!Rule["enabled"].toBool() || Group.isEmpty()) continue;
+        if (!Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool()) || Group.isEmpty()) continue;
         for (const auto& G : Colors["groups"].toArray()) if (G.toObject()["id"] == QJsonValue(Group)) {
             auto Document = hc::settings::FileColorRules::Empty(); Document["groups"] = QJsonArray{G};
             Document["version"] = Colors["version"];
@@ -74,7 +75,7 @@ inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(
         }
     }
     for (const auto& Value : Rules) {
-        const auto Rule = Value.toObject(); if (!Rule["enabled"].toBool()) continue;
+        const auto Rule = Value.toObject(); if (!Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool())) continue;
         const auto Pattern = QDir::fromNativeSeparators(Rule["path"].toString().trimmed());
         if (!Pattern.isEmpty() && !QRegularExpression(QRegularExpression::wildcardToRegularExpression(Pattern, QRegularExpression::NonPathWildcardConversion), QRegularExpression::CaseInsensitiveOption).match(Path).hasMatch()) continue;
         const auto Group = Rule["group"].toString();

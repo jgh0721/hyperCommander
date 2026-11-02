@@ -32,20 +32,20 @@ Settings Settings::Load()
 {
     const auto Object = Normalize( hc::settings::AppSettings().Read( hc::settings::Section::General ).toObject()["processService"].toObject() );
     Settings Value;
-    Value.refreshMs = Object["refreshMs"].toInt();
-    Value.pauseWhenHidden = Object["pauseWhenHidden"].toBool();
-    Value.highlightCycles = Object["highlightCycles"].toInt();
-    Value.confirmSingleTerminate = Object["confirmSingleTerminate"].toBool();
-    Value.gracefulClose = Object["gracefulClose"].toBool();
-    Value.gracefulWaitSec = Object["gracefulWaitSec"].toInt();
-    Value.cycleCpu = Object["cpuMethod"].toString() != "time";
-    Value.showInterrupts = Object["showInterrupts"].toBool();
-    Value.treeLines = Object["treeLines"].toBool();
-    Value.followDebounceMs = Object["followDebounceMs"].toInt();
-    Value.problemExcludesDelayed = Object["serviceProblemExcludesDelayed"].toBool();
-    Value.helperIdleMinutes = Object["helperIdleMinutes"].toInt();
-    Value.autoStartHelper = Object["autoStartHelper"].toBool();
-    Value.allUsers = Object["allUsers"].toBool();
+    Value.refreshMs = Object["refreshMs"].toInt(hc::defaults::DefaultValue("general/processService/refreshMs").toInt());
+    Value.pauseWhenHidden = Object["pauseWhenHidden"].toBool(hc::defaults::DefaultValue("general/processService/pauseWhenHidden").toBool());
+    Value.highlightCycles = Object["highlightCycles"].toInt(hc::defaults::DefaultValue("general/processService/highlightCycles").toInt());
+    Value.confirmSingleTerminate = Object["confirmSingleTerminate"].toBool(hc::defaults::DefaultValue("general/processService/confirmSingleTerminate").toBool());
+    Value.gracefulClose = Object["gracefulClose"].toBool(hc::defaults::DefaultValue("general/processService/gracefulClose").toBool());
+    Value.gracefulWaitSec = Object["gracefulWaitSec"].toInt(hc::defaults::DefaultValue("general/processService/gracefulWaitSec").toInt());
+    Value.cycleCpu = Object["cpuMethod"].toString(hc::defaults::DefaultValue("general/processService/cpuMethod").toString()) != "time";
+    Value.showInterrupts = Object["showInterrupts"].toBool(hc::defaults::DefaultValue("general/processService/showInterrupts").toBool());
+    Value.treeLines = Object["treeLines"].toBool(hc::defaults::DefaultValue("general/processService/treeLines").toBool());
+    Value.followDebounceMs = Object["followDebounceMs"].toInt(hc::defaults::DefaultValue("general/processService/followDebounceMs").toInt());
+    Value.problemExcludesDelayed = Object["serviceProblemExcludesDelayed"].toBool(hc::defaults::DefaultValue("general/processService/serviceProblemExcludesDelayed").toBool());
+    Value.helperIdleMinutes = Object["helperIdleMinutes"].toInt(hc::defaults::DefaultValue("general/processService/helperIdleMinutes").toInt());
+    Value.autoStartHelper = Object["autoStartHelper"].toBool(hc::defaults::DefaultValue("general/processService/autoStartHelper").toBool());
+    Value.allUsers = Object["allUsers"].toBool(hc::defaults::DefaultValue("general/processService/allUsers").toBool());
     Value.colors = Object["colors"].toObject();
     return Value;
 }
@@ -57,12 +57,12 @@ QJsonObject Settings::Normalize( const QJsonObject& Value )
         if( Result.contains( It.key() ) && Result[It.key()].type() == It.value().type() )
             Result[It.key()] = It.value();
     static const QList<int> Intervals{ 500, 1000, 2000, 5000 };
-    if( !Intervals.contains( Result["refreshMs"].toInt() ) ) Result["refreshMs"] = 1000;
-    Result["highlightCycles"] = std::clamp( Result["highlightCycles"].toInt(), 0, 10 );
-    Result["gracefulWaitSec"] = std::clamp( Result["gracefulWaitSec"].toInt(), 1, 60 );
-    Result["followDebounceMs"] = std::clamp( Result["followDebounceMs"].toInt(), 100, 3000 );
-    Result["helperIdleMinutes"] = std::clamp( Result["helperIdleMinutes"].toInt(), 1, 120 );
-    if( Result["cpuMethod"].toString() != "time" ) Result["cpuMethod"] = "auto";
+    if( !Intervals.contains( Result["refreshMs"].toInt(hc::defaults::DefaultValue("general/processService/refreshMs").toInt()) ) ) Result["refreshMs"] = 1000;
+    Result["highlightCycles"] = std::clamp( Result["highlightCycles"].toInt(hc::defaults::DefaultValue("general/processService/highlightCycles").toInt()), 0, 10 );
+    Result["gracefulWaitSec"] = std::clamp( Result["gracefulWaitSec"].toInt(hc::defaults::DefaultValue("general/processService/gracefulWaitSec").toInt()), 1, 60 );
+    Result["followDebounceMs"] = std::clamp( Result["followDebounceMs"].toInt(hc::defaults::DefaultValue("general/processService/followDebounceMs").toInt()), 100, 3000 );
+    Result["helperIdleMinutes"] = std::clamp( Result["helperIdleMinutes"].toInt(hc::defaults::DefaultValue("general/processService/helperIdleMinutes").toInt()), 1, 120 );
+    if( Result["cpuMethod"].toString(hc::defaults::DefaultValue("general/processService/cpuMethod").toString()) != "time" ) Result["cpuMethod"] = "auto";
     return Result;
 }
 

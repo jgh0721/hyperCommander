@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/settings/singleInstance.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/bundledFonts.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <QStandardPaths>
@@ -73,8 +74,8 @@ public:
             const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
             const auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
             Manager.setColorScheme(hc::theme::ReadProductScheme(Appearance["watercolorTheme"].toObject()));
-            Manager.setDarkTitleBar(General["darkTitleBar"].toBool(true));
-            Manager.setMonoFont(General["monoFontFamily"].toString("Cascadia Mono"), General["monoFontPx"].toInt(12));
+            Manager.setDarkTitleBar(General["darkTitleBar"].toBool(hc::defaults::DefaultValue("general/darkTitleBar").toBool()));
+            Manager.setMonoFont(General["monoFontFamily"].toString(hc::defaults::DefaultValue("general/monoFontFamily").toString()), General["monoFontPx"].toInt(hc::defaults::DefaultValue("general/monoFontPx").toInt()));
             const auto VariantValue = Scheme.IsDarkMode ? Variant::Dark : Variant::Light;
             if (Scheme.explicitColors_.contains("dialogText"))
                 Manager.setOverride(VariantValue, Token::Fg, Scheme.Dialog_FGColor);
@@ -189,7 +190,7 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
         QTimer::singleShot(0, this, [this, Error] { hc::ui::MessageDialog::warning(mainUI, tr("설정 저장 실패"), Error); });
     });
     const auto StartupPaths = hc::settings::SingleInstance::Paths(QCoreApplication::arguments());
-    if (!QStandardPaths::isTestModeEnabled() && Settings.Read(hc::settings::Section::General).toObject()["singleInstance"].toBool(false)) {
+    if (!QStandardPaths::isTestModeEnabled() && Settings.Read(hc::settings::Section::General).toObject()["singleInstance"].toBool(hc::defaults::DefaultValue("general/singleInstance").toBool())) {
         singleInstance_ = new hc::settings::SingleInstance(this);
         const auto Result = singleInstance_->Start(Config.directory_, StartupPaths, [this](const QJsonArray& Paths) {
             return mainUI && mainUI->OpenStartupPaths(Paths);

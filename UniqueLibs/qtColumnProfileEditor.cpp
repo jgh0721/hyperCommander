@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "columnAutoSelection.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include <QDir>
 #include <fmwidgets/DialogHeader.h>
 #include <fmwidgets/Card.h>
@@ -976,15 +977,15 @@ QJsonObject QtColumnProfileEditor::AutoSelection() const
 void QtColumnProfileEditor::appendAutoRule(const QJsonObject& Rule)
 {
     const int Row = autoRules_->rowCount(); autoRules_->insertRow(Row);
-    auto* Enabled = new QTableWidgetItem; Enabled->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable); Enabled->setCheckState(Rule["enabled"].toBool(true) ? Qt::Checked : Qt::Unchecked); Enabled->setData(Qt::UserRole, Rule); autoRules_->setItem(Row, 0, Enabled);
+    auto* Enabled = new QTableWidgetItem; Enabled->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable); Enabled->setCheckState(Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool()) ? Qt::Checked : Qt::Unchecked); Enabled->setData(Qt::UserRole, Rule); autoRules_->setItem(Row, 0, Enabled);
     auto* Profile = new QComboBox(autoRules_); autoRules_->setCellWidget(Row, 1, Profile);
     const auto Profiles = Library(); for (auto It = Profiles.begin(); It != Profiles.end(); ++It) if (const auto Value = DecodeProfile(It.value().toObject())) Profile->addItem(Value->title_, It.key());
     if (Profile->findData(Rule["profile"].toString()) < 0) Profile->addItem(tr("사용할 수 없는 열 세트"), Rule["profile"].toString()); Profile->setCurrentIndex(Profile->findData(Rule["profile"].toString()));
     auto* Path = new QLineEdit(QDir::toNativeSeparators(Rule["path"].toString()), autoRules_); Path->setMaxLength(4096); Path->setAccessibleName(tr("폴더 경로 조건")); autoRules_->setCellWidget(Row, 2, Path);
     auto* Group = new QComboBox(autoRules_); Group->addItem(tr("사용 안 함"), ""); autoRules_->setCellWidget(Row, 3, Group);
-    for (const auto& Value : autoColors_["groups"].toArray()) if (Value.toObject()["enabled"].toBool(true)) Group->addItem(Value.toObject()["name"].toString(), Value.toObject()["id"].toString());
+    for (const auto& Value : autoColors_["groups"].toArray()) if (Value.toObject()["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool())) Group->addItem(Value.toObject()["name"].toString(), Value.toObject()["id"].toString());
     if (Group->findData(Rule["group"].toString()) < 0) Group->addItem(tr("사용할 수 없는 파일 그룹"), Rule["group"].toString()); Group->setCurrentIndex(Group->findData(Rule["group"].toString()));
-    auto* Percent = new QSpinBox(autoRules_); Percent->setRange(1, 100); Percent->setSuffix("%"); Percent->setValue(Rule["percent"].toInt(50)); Percent->setAccessibleName(tr("파일 그룹 최소 비율")); autoRules_->setCellWidget(Row, 4, Percent);
+    auto* Percent = new QSpinBox(autoRules_); Percent->setRange(1, 100); Percent->setSuffix("%"); Percent->setValue(Rule["percent"].toInt(hc::defaults::DefaultValue("columnAutoRule/percent").toInt())); Percent->setAccessibleName(tr("파일 그룹 최소 비율")); autoRules_->setCellWidget(Row, 4, Percent);
     connect(Profile, &QComboBox::currentIndexChanged, this, [this] { if (!loading_) dirty_ = true; }); connect(Path, &QLineEdit::textChanged, this, [this] { if (!loading_) dirty_ = true; }); connect(Group, &QComboBox::currentIndexChanged, this, [this] { if (!loading_) dirty_ = true; }); connect(Percent, &QSpinBox::valueChanged, this, [this] { if (!loading_) dirty_ = true; });
     if (!autoRules_->property("hc.connected").toBool()) {
         autoRules_->setProperty("hc.connected", true); connect(autoRules_, &QTableWidget::itemChanged, this, [this] { if (!loading_) dirty_ = true; });
@@ -998,7 +999,7 @@ void QtColumnProfileEditor::SetAutoColors(const QJsonObject& Colors)
         auto* Group = qobject_cast<QComboBox*>(autoRules_->cellWidget(Row, 3));
         const auto Selected = Group->currentData().toString(); const QSignalBlocker Block(Group);
         Group->clear(); Group->addItem(tr("사용 안 함"), "");
-        for (const auto& Value : Colors["groups"].toArray()) if (Value.toObject()["enabled"].toBool(true)) Group->addItem(Value.toObject()["name"].toString(), Value.toObject()["id"].toString());
+        for (const auto& Value : Colors["groups"].toArray()) if (Value.toObject()["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool())) Group->addItem(Value.toObject()["name"].toString(), Value.toObject()["id"].toString());
         if (Group->findData(Selected) < 0) Group->addItem(tr("사용할 수 없는 파일 그룹"), Selected);
         Group->setCurrentIndex(Group->findData(Selected));
     }

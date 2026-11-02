@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "qtPluginManagementPage.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include <QDir>
 #include "UniqueLibs/errorPresentation.hpp"
 #include <fmwidgets/DialogHeader.h>
@@ -126,7 +127,7 @@ struct QPluginManagementPage::State {
     void requestDetection(bool Reset = false) {
         if (loading_ || detectionBusy_ || row_ < 0 || entries_[row_].builtin_ || entries_[row_].group_ != "wlx") return;
         const auto Value = entries_[row_]; const auto Record = record(Value);
-        if (!Reset && !Record["hostEnabled"].toBool()) return;
+        if (!Reset && !Record["hostEnabled"].toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool())) return;
         const auto Reviewed = hc::plugins::ParseManifest(hc::settings::JsonBytes(Record["hostReviewed"]));
         if (!Reviewed.HasValue() || Record["hostManifest"].toString().isEmpty()) {
             if (Reset) hosts_[Value.format_]->ReviewPlugin(Value.index_);
@@ -138,7 +139,7 @@ struct QPluginManagementPage::State {
         detectionAttempts_.insert(Key); detectionBusy_ = true; readDetection_->setEnabled(false);
         hc::plugins::PluginViewerOptions Options; Options.binaryPath_ = Value.path_;
         Options.executable_ = QDir(root_).filePath("hc-plugin-host-x64.exe"); Options.manifestPath_ = Record["hostManifest"].toString();
-        Options.defaultIniPath_ = QDir(settingsDirectory_.isEmpty() ? root_ : settingsDirectory_).filePath("lsplugin.ini");
+        Options.defaultIniPath_ = hc::defaults::PluginIniFile(settingsDirectory_.isEmpty() ? root_ : settingsDirectory_, "wlx");
         Options.approval_ = {Reviewed.Value(), true, false, Reviewed.Value().permissions_};
         auto* Watcher = new QFutureWatcher<hc::storage::Result<QString>>(owner_);
         QObject::connect(Watcher, &QFutureWatcherBase::finished, owner_, [this, Watcher, Value, Record, Hash, Reset] {
@@ -212,7 +213,7 @@ struct QPluginManagementPage::State {
         if (!QFileInfo::exists(Value.path_)) return QStringLiteral("구성 파일 없음");
         if (Value.builtin_) return QStringLiteral("제품 구성 · 실행 시 검증");
         const auto Record = record(Value);
-        if (!Record.value("hostEnabled").toBool()) return QStringLiteral("기존 실행 방식");
+        if (!Record.value("hostEnabled").toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool())) return QStringLiteral("기존 실행 방식");
         return hosts_[Value.format_]->VerificationState(Value.index_);
     }
     void rebuild(const QString& Select = {}) {
@@ -259,8 +260,8 @@ void QPluginManagementPage::State::loadItem() {
     info_->setText(QStringLiteral("%1\n\n%2\n\n%3").arg(Value.builtin_ ? QStringLiteral("제품 내장 구성 요소") : QString::fromLatin1(Formats[Value.format_].token_), QDir::toNativeSeparators(Value.path_) + "\n\n지원 형식: " + (Value.extensions_.isEmpty() ? Value.support_ : Value.extensions_.join("; ")),
         Value.builtin_ ? QStringLiteral("제품에 포함된 처리기입니다. 별도 플러그인을 등록하지 않아도 표시됩니다. 지원 형식은 제품 구성에 따릅니다.") : QStringLiteral("등록 형식은 설정에 기재한 지원 범위입니다. 실제 지원 여부는 플러그인의 감지·열기 결과로 확인합니다.")));
     auto Rule = Record.value("application").toObject(); const auto Parsed = PluginApplicationRule::Parse(Value.builtin_ ? hc::plugins::BuiltinApplication(plugins_, Value.id_) : Record.value("application"));
-    enabled_->setChecked(Rule.value("enabled").toBool(true));
-    auto Mode = Rule.value("mode").toString("all"); mode_->setCurrentIndex(Mode == "extensions" ? 1 : Mode == "tc" || Mode == "pattern" ? 2 : 0);
+    enabled_->setChecked(Rule.value("enabled").toBool(hc::defaults::DefaultValue("builtinApplication/enabled").toBool()));
+    auto Mode = Rule.value("mode").toString(hc::defaults::DefaultValue("builtinApplication/mode").toString()); mode_->setCurrentIndex(Mode == "extensions" ? 1 : Mode == "tc" || Mode == "pattern" ? 2 : 0);
     dialect_->setCurrentIndex(Mode == "pattern" ? 1 : 0); expression_->setPlainText(Rule.value("expression").toString());
     registered_->setText(Value.extensions_.join("; ")); native_->setPlainText(Record.value("detect").toString());
     native_->setPlaceholderText(Record.contains("nativeDetect") && Record["nativeDetect"].toString().isEmpty()
@@ -290,7 +291,7 @@ void QPluginManagementPage::State::loadItem() {
     readDetection_->setVisible(!Value.builtin_ && Value.group_ == "wlx");
     nativeLabel_->setVisible(!Value.builtin_ && Value.group_ == "wlx");
     ruleStatus_->setText(!Parsed.HasValue() ? QStringLiteral("지원하지 않는 조건입니다. 기존 값을 보존하며 실행 대상에서 제외합니다.") : Value.builtin_ ? QStringLiteral("목록은 알려진 지원 형식입니다. 체크 해제한 확장자는 감지 전에 제외하고 다른 처리기 후보를 사용합니다. 그 외 확장자는 기존 동적 감지를 유지합니다.") : Value.role_ == 3 ? QStringLiteral("파일 시스템은 연결 대상으로 선택합니다. 파일명 조건은 사용하지 않습니다.") : QStringLiteral("사용자 조건과 플러그인 고유 감지를 모두 통과해야 적용됩니다."));
-    hosted_->setChecked(Record.value("hostEnabled").toBool()); hosted_->setEnabled(!Value.builtin_);
+    hosted_->setChecked(Record.value("hostEnabled").toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool())); hosted_->setEnabled(!Value.builtin_);
     hostPages_->setCurrentIndex(Value.builtin_ ? 0 : Value.format_ + 1);
     if (!Value.builtin_) hosts_[Value.format_]->SelectPlugin(Value.index_);
     loading_ = false;
@@ -508,7 +509,7 @@ QPluginManagementPage::QPluginManagementPage(QWidget* Parent, QString ProductDir
     connect(S.roles_, &QListWidget::currentRowChanged, this, [this](int) { auto& S = *state_; if (S.loading_) return; if (!S.validate()) { const QSignalBlocker Block(S.roles_); S.roles_->setCurrentRow(S.role_); return; } S.storeHosts(); S.rebuild(); });
     connect(S.search_, &QLineEdit::textChanged, this, [this] { auto& S = *state_; if (S.loading_ || !S.validate(false)) return; S.storeHosts(); S.rebuild(); });
     connect(S.hosted_, &QCheckBox::toggled, this, [this](bool Checked) { auto& S = *state_; if (!S.loading_ && S.row_ >= 0 && !S.entries_[S.row_].builtin_) S.hosts_[S.entries_[S.row_].format_]->SetHostEnabled(S.entries_[S.row_].index_, Checked); });
-    for (auto* Host : S.hosts_) Host->onChanged_ = [this] { auto& S = *state_; if (S.loading_ || S.row_ < 0 || S.entries_[S.row_].builtin_) return; S.storeHosts(); const QSignalBlocker Block(S.hosted_); S.hosted_->setChecked(S.record(S.entries_[S.row_]).value("hostEnabled").toBool()); S.status_->setText(S.stateText(S.entries_[S.row_])); QTimer::singleShot(0, this, [this] { state_->requestDetection(); }); };
+    for (auto* Host : S.hosts_) Host->onChanged_ = [this] { auto& S = *state_; if (S.loading_ || S.row_ < 0 || S.entries_[S.row_].builtin_) return; S.storeHosts(); const QSignalBlocker Block(S.hosted_); S.hosted_->setChecked(S.record(S.entries_[S.row_]).value("hostEnabled").toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool())); S.status_->setText(S.stateText(S.entries_[S.row_])); QTimer::singleShot(0, this, [this] { state_->requestDetection(); }); };
     connect(S.mode_, &QComboBox::currentIndexChanged, S.conditionPages_, &QStackedWidget::setCurrentIndex);
     connect(S.registered_, &QLineEdit::editingFinished, this, [this] { auto& S = *state_; if (S.loading_) return; S.storeItem(); if (S.validate(false)) S.loadItem(); });
     connect(Add, &QPushButton::clicked, this, [this] { state_->add(); }); connect(S.remove_, &QPushButton::clicked, this, [this] { state_->remove(); }); connect(S.up_, &QPushButton::clicked, this, [this] { state_->move(-1); }); connect(S.down_, &QPushButton::clicked, this, [this] { state_->move(1); }); connect(S.test_, &QPushButton::clicked, this, [this] { state_->testFiles(); });
@@ -526,7 +527,7 @@ void QPluginManagementPage::Load(hc::settings::Repository& Settings) {
     for (auto* Host : state_->hosts_) Host->Load(Settings);
 }
 void QPluginManagementPage::LoadDocument(const QJsonObject& Plugins) {
-    auto& S = *state_; S.loading_ = true; S.plugins_ = Plugins; S.loadHosts(); const auto At = S.selection_->findData(Plugins.value("viewerSelection").toString("manual")); S.selection_->setCurrentIndex(qMax(At, 0)); S.rebuild(); S.loading_ = false;
+    auto& S = *state_; S.loading_ = true; S.plugins_ = Plugins; S.loadHosts(); const auto At = S.selection_->findData(Plugins.value("viewerSelection").toString(hc::defaults::DefaultValue("plugins/viewerSelection").toString())); S.selection_->setCurrentIndex(qMax(At, 0)); S.rebuild(); S.loading_ = false;
 }
 bool QPluginManagementPage::Validate() { return state_->validate(); }
 bool QPluginManagementPage::AddTotalCommanderPlugin(const QString& Path, bool Review) { return state_->addTc(Path, Review); }

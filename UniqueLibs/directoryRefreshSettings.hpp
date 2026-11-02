@@ -1,19 +1,20 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include <QDir>
 #include <QJsonObject>
 #include <QRegularExpression>
 
 namespace hc::refresh {
 struct Settings {
-    bool names = true;
-    bool metadata = true;
-    bool appendNewEntries = false;
-    bool pauseInBackground = true;
-    bool updateFooter = true;
-    bool updateHeader = true;
-    QString excludedDrives;
-    bool fallbackEnabled = false;
-    int fallbackSeconds = 15;
+    bool names = hc::defaults::DefaultValue("general/refresh/names").toBool();
+    bool metadata = hc::defaults::DefaultValue("general/refresh/metadata").toBool();
+    bool appendNewEntries = hc::defaults::DefaultValue("general/refresh/appendNewEntries").toBool();
+    bool pauseInBackground = hc::defaults::DefaultValue("general/refresh/pauseInBackground").toBool();
+    bool updateFooter = hc::defaults::DefaultValue("general/refresh/updateFooter").toBool();
+    bool updateHeader = hc::defaults::DefaultValue("general/refresh/updateHeader").toBool();
+    QString excludedDrives = hc::defaults::DefaultValue("general/refresh/excludedDrives").toString();
+    bool fallbackEnabled = hc::defaults::DefaultValue("general/refresh/fallbackEnabled").toBool();
+    int fallbackSeconds = hc::defaults::DefaultValue("general/refresh/fallbackSeconds").toInt();
 
     QJsonObject ToJson() const {
         return {{"names", names}, {"metadata", metadata}, {"appendNewEntries", appendNewEntries},
@@ -22,13 +23,13 @@ struct Settings {
     }
     static Settings FromJson(const QJsonObject& Object) {
         Settings Value;
-        Value.names = Object["names"].toBool(true); Value.metadata = Object["metadata"].toBool(true);
-        Value.appendNewEntries = Object["appendNewEntries"].toBool();
-        Value.pauseInBackground = Object["pauseInBackground"].toBool(true);
-        Value.updateFooter = Object["updateFooter"].toBool(true); Value.updateHeader = Object["updateHeader"].toBool(true);
-        Value.excludedDrives = Object["excludedDrives"].toString();
-        Value.fallbackEnabled = Object["fallbackEnabled"].toBool();
-        Value.fallbackSeconds = qBound(1, Object["fallbackSeconds"].toInt(15), 86400);
+        Value.names = Object["names"].toBool(hc::defaults::DefaultValue("general/refresh/names").toBool()); Value.metadata = Object["metadata"].toBool(hc::defaults::DefaultValue("general/refresh/metadata").toBool());
+        Value.appendNewEntries = Object["appendNewEntries"].toBool(hc::defaults::DefaultValue("general/refresh/appendNewEntries").toBool());
+        Value.pauseInBackground = Object["pauseInBackground"].toBool(hc::defaults::DefaultValue("general/refresh/pauseInBackground").toBool());
+        Value.updateFooter = Object["updateFooter"].toBool(hc::defaults::DefaultValue("general/refresh/updateFooter").toBool()); Value.updateHeader = Object["updateHeader"].toBool(hc::defaults::DefaultValue("general/refresh/updateHeader").toBool());
+        Value.excludedDrives = Object["excludedDrives"].toString(hc::defaults::DefaultValue("general/refresh/excludedDrives").toString());
+        Value.fallbackEnabled = Object["fallbackEnabled"].toBool(hc::defaults::DefaultValue("general/refresh/fallbackEnabled").toBool());
+        Value.fallbackSeconds = qBound(1, Object["fallbackSeconds"].toInt(hc::defaults::DefaultValue("general/refresh/fallbackSeconds").toInt()), 86400);
         return Value;
     }
     bool Excludes(QString Path) const {

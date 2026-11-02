@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "dialogShell.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "nativePathCompletion.hpp"
 #include "commonLibs/Qt/elidedLabel.hpp"
 #include <fmstyle/Glyphs.h>
@@ -388,7 +389,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
     if (Delete) {
         auto* Recycle = new QRadioButton(tr("휴지통으로 이동(&R)"), this);
         recycle_ = Recycle; Recycle->setObjectName("hc.operation.recycle");
-        Recycle->setChecked(hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["deleteToRecycle"].toBool(true)); Recycle->setEnabled(false);
+        Recycle->setChecked(hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["deleteToRecycle"].toBool(hc::defaults::DefaultValue("options/deleteToRecycle").toBool())); Recycle->setEnabled(false);
         Recycle->setToolTip(tr("고정 로컬 볼륨 여부를 확인하고 있습니다."));
         BodyLayout()->addWidget(Recycle);
         auto* Permanent = new QRadioButton(tr("영구 삭제(&P)"), this);
@@ -468,7 +469,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
         ConflictLabel->setBuddy(conflict_);
         ConflictFields->addWidget(ConflictLabel); ConflictFields->addWidget(conflict_); Fields->addWidget(ConflictGroup);
         auto* FilterLabel = new QLabel(tr("포함할 파일(&F)"), this);
-        auto* Filter = new QLineEdit(Request.copyEngine_ ? Defaults["copyPattern"].toString("*") : "*", this); filter_ = Filter;
+        auto* Filter = new QLineEdit(Request.copyEngine_ ? Defaults["copyPattern"].toString(hc::defaults::DefaultValue("options/copyPattern").toString()) : "*", this); filter_ = Filter;
         Filter->setObjectName("hc.operation.filter"); Filter->setAccessibleName(tr("포함할 파일")); Filter->setEnabled(Request.copyEngine_);
         Filter->setToolTip(tr("파일명에 *와 ?를 사용합니다. 여러 패턴은 ;로 구분합니다. 폴더는 모두 탐색하며 빈 폴더도 포함합니다."));
         connect(Filter, &QLineEdit::textChanged, this, [this] { validateInput(); });
@@ -498,7 +499,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
         BodyLayout()->addLayout(Options);
         auto* Rate = new QHBoxLayout; auto* RateLabel = new QLabel(tr("전송 속도 제한(&T)"), this);
         speed_ = new QSpinBox(this); speed_->setObjectName("hc.operation.speed"); speed_->setRange(0, 1048576); speed_->setSuffix(" MiB/s"); speed_->setSpecialValueText(tr("제한 없음"));
-        speed_->setValue(Request.copyEngine_ ? Defaults["copySpeedMiB"].toInt(0) : 0); speed_->setEnabled(Request.copyEngine_); RateLabel->setBuddy(speed_);
+        speed_->setValue(Request.copyEngine_ ? Defaults["copySpeedMiB"].toInt(hc::defaults::DefaultValue("options/copySpeedMiB").toInt()) : 0); speed_->setEnabled(Request.copyEngine_); RateLabel->setBuddy(speed_);
         Rate->addWidget(RateLabel); Rate->addWidget(speed_); Rate->addStretch(); BodyLayout()->addLayout(Rate);
         auto* Completion = Label({}); Completion->setObjectName("hc.operation.completion");
         const auto UpdateCompletion = [this, Completion, Engine = Request.copyEngine_] {
@@ -572,7 +573,7 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
     connect(input_, &fm::ui::PathEdit::pathChanged, this, [this] { inspectedTarget_.clear(); targetKind_.clear(); validateInput(); });
     input_->lineEdit()->selectAll();
     if (Rename) {
-        hc::ui::SelectRenameText(input_->lineEdit(), hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["renameSelectExtension"].toBool(false));
+        hc::ui::SelectRenameText(input_->lineEdit(), hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["renameSelectExtension"].toBool(hc::defaults::DefaultValue("options/renameSelectExtension").toBool()));
     }
     SetInitialInput(input_->lineEdit());
     if (Request.nativeDestination_)
@@ -619,7 +620,7 @@ void FileOperationDialog::arrangeCompactOperation()
     for (const auto& Recent : findChildren<fm::ui::RecentTargetsBar*>()) Recent->hide();
     const auto Targets = RecentTargets(request_.providerKey_).mid(0, 3);
     for (int Index = 0; request_.nativeDestination_ && Index < Targets.size(); ++Index) {
-        auto* Shortcut = new QShortcut(QKeySequence(QString("Alt+%1").arg(Index + 1)), this);
+        auto* Shortcut = new QShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("indexedChoice", Index)), this);
         connect(Shortcut, &QShortcut::activated, this, [this, Target = Targets[Index]] { input_->setPath(QDir::toNativeSeparators(Target)); });
     }
     advancedToggle_ = new fm::ui::Button(tr("고급 옵션(&G) ▾"), this); advancedToggle_->setObjectName("hc.operation.advanced"); advancedToggle_->setAutoDefault(false);

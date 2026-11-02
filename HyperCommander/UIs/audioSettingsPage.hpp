@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 
 /// 고유 라이브러리
 #include "UniqueLibs/audio/audioQueue.hpp"
@@ -58,10 +59,10 @@ public:
     {
         const QSignalBlocker A(openInternally_), B(autoNext_), C(extensions_), D(limit_), E(animate_);
         openInternally_->setChecked(OpenInternally);
-        autoNext_->setChecked(Audio.value("autoNext").toBool(true));
-        animate_->setChecked(Audio.value("animateNowPlaying").toBool(true));
-        extensions_->setText(hc::audio::ParseExtensions(Audio.value("extensions").toString()).join(", "));
-        limit_->setValue(Audio.value("materializeLimitMiB").toInt(1024));
+        autoNext_->setChecked(Audio.value("autoNext").toBool(hc::defaults::DefaultValue("general/audioPreview/autoNext").toBool()));
+        animate_->setChecked(Audio.value("animateNowPlaying").toBool(hc::defaults::DefaultValue("general/audioPreview/animateNowPlaying").toBool()));
+        extensions_->setText(hc::audio::ParseExtensions(Audio.value("extensions").toString(hc::defaults::DefaultValue("general/audioPreview/extensions").toString())).join(", "));
+        limit_->setValue(Audio.value("materializeLimitMiB").toInt(hc::defaults::DefaultValue("general/audioPreview/materializeLimitMiB").toInt()));
     }
     // 재생 중에 세션이 저장한 볼륨·반복 등은 그대로 둔다.
     QJsonObject Save(QJsonObject Audio) const

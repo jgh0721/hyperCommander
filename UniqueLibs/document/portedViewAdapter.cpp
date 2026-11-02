@@ -25,7 +25,7 @@ void QTextView::LoadContent(const QString& Text, const QString& Path, const QStr
     m_document.setPreviewOnly(false);m_document.setTruncated(false);
     auto Ending = Eol=="CRLF"?CRLF:Eol=="CR"?CR:Eol=="LF"?LF:detectLineEnding(Text);
     if (!Text.contains('\r') && !Text.contains('\n')) {
-        const auto Default = AppSettings().value("textView/defaultLineEnding", "CRLF").toString();
+        const auto Default = AppSettings().value("textView/defaultLineEnding").toString();
         Ending = Default == "LF" ? LineEnding::LF : Default == "CR" ? LineEnding::CR : LineEnding::CRLF;
     }
     m_document.setLineEnding(toDocumentLineEnding(Ending));

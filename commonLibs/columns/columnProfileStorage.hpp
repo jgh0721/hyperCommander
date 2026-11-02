@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include <QJsonArray>
 #include "columnContracts.hpp"
 #include "commonLibs/view/columnWidthCodec.hpp"
@@ -46,7 +47,7 @@ namespace hc::columns
         Profile.primaryNameId_ = QUuid(Object.value("primaryName").toString());
         Profile.mode_ = *Mode;
         if (Object.contains("splitNameExtension") && !Object["splitNameExtension"].isBool()) return {};
-        Profile.splitNameExtension_ = Object["splitNameExtension"].toBool(false);
+        Profile.splitNameExtension_ = Object["splitNameExtension"].toBool(hc::defaults::DefaultValue("columnPresentation/splitNameExtension").toBool());
         for (const auto& Value : Object.value("columns").toArray()) {
             if (!Value.isObject()) return {};
             const auto Item = Value.toObject();
@@ -67,7 +68,7 @@ namespace hc::columns
             Column.format_ = {static_cast<SizeFormat>(Size.toInt()), Precision.toInt(), Format.value("date").toString()};
             for (const auto* Key : {"grouping", "plus", "utc", "providerDisplay"}) if (Format.contains(Key) && !Format[Key].isBool()) return {};
             Column.format_.grouping_ = Format["grouping"].toBool(); Column.format_.plusSign_ = Format["plus"].toBool();
-            Column.format_.utc_ = Format["utc"].toBool(); Column.format_.providerDisplay_ = Format["providerDisplay"].toBool(true);
+            Column.format_.utc_ = Format["utc"].toBool(); Column.format_.providerDisplay_ = Format["providerDisplay"].toBool(hc::defaults::DefaultValue("columnPresentation/providerDisplay").toBool());
             const auto Widths = Item.value("widths").toObject();
             if (Widths.size() != 3) return {};
             for (int Index = 0; Index < 3; ++Index) {

@@ -100,14 +100,14 @@ void moveCursorToSearchBoundary(ITextEditorBackend* editor, bool forward)
 QString preferredSaveEncoding()
 {
     AppSettings settings;
-    const QString encoding = settings.value("textView/saveEncoding", QStringLiteral("UTF-8")).toString().trimmed();
-    return encoding.isEmpty() ? QStringLiteral("UTF-8") : encoding;
+    const QString encoding = settings.value("textView/saveEncoding").toString().trimmed();
+    return encoding.isEmpty() ? hc::defaults::edit::ViewValue("textView/saveEncoding").toString() : encoding;
 }
 
 TextSaveDialog::BomMode preferredSaveBomMode()
 {
     AppSettings settings;
-    const int mode = qBound(0, settings.value("textView/saveBomMode", 1).toInt(), 2);
+    const int mode = qBound(0, settings.value("textView/saveBomMode").toInt(), 2);
     return static_cast<TextSaveDialog::BomMode>(mode);
 }
 
@@ -134,7 +134,7 @@ QTextView::QTextView(QWidget* parent)
 
     // 설정 파일에서 눈금자 표시 여부 읽기 (기본: on)
     AppSettings settings;
-    const bool rulerVisible = settings.value("textView/showRuler", true).toBool();
+    const bool rulerVisible = settings.value("textView/showRuler").toBool();
     m_ruler->setVisible(rulerVisible);
     m_hotExitUntitledId = newHotExitUntitledId();
     applyHotExitSettingsFromPreferences();
@@ -1105,7 +1105,7 @@ void QTextView::loadPersistedEditorPreferences()
     // Freeze the migrated/default mode before any other preference creates a
     // textView section, so a new profile does not later resemble a legacy one.
     AppSettings Settings;
-    if (!Settings.value("textView/wordWrapMode").isValid())
+    if (!Settings.contains("textView/wordWrapMode"))
         Settings.setValue("textView/wordWrapMode", int(m_editorSettings.wrapMode));
 }
 
@@ -1123,15 +1123,15 @@ void QTextView::ReloadPreferences()
     }
     AppSettings Settings;
     auto Font = editorFont();
-    const auto Family = Settings.value("textView/fontFamily", "D2Coding ligature").toString();
+    const auto Family = Settings.value("textView/fontFamily").toString();
     if (!Family.isEmpty()) Font.setFamily(Family);
-    const int Size = Settings.value("textView/fontSize", 16).toInt();
+    const int Size = Settings.value("textView/fontSize").toInt();
     if (Size >= 6 && Size <= 72) Font.setPointSize(Size);
     m_editor->setEditorFont(Font);
     applyEditorSettings();
     if (m_ruler) {
         m_ruler->setEditorFont(Font);
-        m_ruler->setVisible(Settings.value("textView/showRuler", true).toBool());
+        m_ruler->setVisible(Settings.value("textView/showRuler").toBool());
     }
     emit statusChanged();
 }
@@ -1139,36 +1139,33 @@ void QTextView::ReloadPreferences()
 void QTextView::applyPersistedEditorPreferences(ScintillaEditorSettings& settings) const
 {
     AppSettings persisted;
-    settings.showLineNumbers = persisted.value("textView/showLineNumbers", true).toBool();
-    settings.highlightCurrentLine = persisted.value("textView/highlightCurrentLine", true).toBool();
-    settings.autoIndent = persisted.value("textView/autoIndent", true).toBool();
-    const auto Legacy = persisted.value("textView/wordWrap");
-    const int Fallback = Legacy.isValid() ? (Legacy.toBool() ? 1 : 0) : (persisted.value("textView").isValid() ? 0 : 2);
-    settings.wrapMode = static_cast<ScintillaEditorSettings::WrapMode>(qBound(0, persisted.value("textView/wordWrapMode", Fallback).toInt(), 3));
-    settings.wrapVisualFlags = persisted.value("textView/wrapVisualFlags", 1).toInt() & ScintillaEditorSettings::WrapFlagMask;
-    settings.wrapIndentMode = static_cast<ScintillaEditorSettings::WrapIndentMode>(qBound(0, persisted.value("textView/wrapIndentMode", 1).toInt(), 3));
-    settings.tabWidth = qBound(1, persisted.value("textView/tabWidth", 4).toInt(), 16);
-    settings.useTabs = persisted.value("textView/useTabs", true).toBool();
-    settings.showIndentationGuides = persisted.value("textView/showIndentationGuides", true).toBool();
-    const int indentGuideValue = persisted.value("textView/indentGuideStyle",
-                                                 static_cast<int>(ScintillaEditorSettings::IndentGuideReal)).toInt();
+    settings.showLineNumbers = persisted.value("textView/showLineNumbers").toBool();
+    settings.highlightCurrentLine = persisted.value("textView/highlightCurrentLine").toBool();
+    settings.autoIndent = persisted.value("textView/autoIndent").toBool();
+    const auto Text = persisted.value("textView").toJsonObject();
+    settings.wrapMode = static_cast<ScintillaEditorSettings::WrapMode>(
+        qBound(0, hc::defaults::edit::TextWrapMode(Text, persisted.contains("textView")), 3));
+    settings.wrapVisualFlags = persisted.value("textView/wrapVisualFlags").toInt() & ScintillaEditorSettings::WrapFlagMask;
+    settings.wrapIndentMode = static_cast<ScintillaEditorSettings::WrapIndentMode>(qBound(0, persisted.value("textView/wrapIndentMode").toInt(), 3));
+    settings.tabWidth = qBound(1, persisted.value("textView/tabWidth").toInt(), 16);
+    settings.useTabs = persisted.value("textView/useTabs").toBool();
+    settings.showIndentationGuides = persisted.value("textView/showIndentationGuides").toBool();
+    const int indentGuideValue = persisted.value("textView/indentGuideStyle").toInt();
     settings.indentGuideStyle = static_cast<ScintillaEditorSettings::IndentGuideStyle>(
         qBound(static_cast<int>(ScintillaEditorSettings::IndentGuideReal),
                indentGuideValue,
                static_cast<int>(ScintillaEditorSettings::IndentGuideLookBoth)));
-    settings.showWhitespace = persisted.value("textView/showWhitespace", false).toBool();
-    settings.showCodeFolding = persisted.value("textView/showCodeFolding", true).toBool();
-    settings.braceMatching = persisted.value("textView/braceHighlight", true).toBool();
-    settings.lineSpacingScale = qBound(1.0, persisted.value("textView/lineSpacing", 1.1).toDouble(), 3.0);
-    const int fontRenderingValue = persisted.value("textView/fontRendering",
-                                                   static_cast<int>(ScintillaEditorSettings::Antialiased)).toInt();
+    settings.showWhitespace = persisted.value("textView/showWhitespace").toBool();
+    settings.showCodeFolding = persisted.value("textView/showCodeFolding").toBool();
+    settings.braceMatching = persisted.value("textView/braceHighlight").toBool();
+    settings.lineSpacingScale = qBound(1.0, persisted.value("textView/lineSpacing").toDouble(), 3.0);
+    const int fontRenderingValue = persisted.value("textView/fontRendering").toInt();
     settings.fontRendering = static_cast<ScintillaEditorSettings::FontRenderingMode>(
         qBound(static_cast<int>(ScintillaEditorSettings::Default),
                fontRenderingValue,
                static_cast<int>(ScintillaEditorSettings::LcdOptimized)));
 
-    const int changeHistoryValue = persisted.value("textView/changeHistoryMode",
-                                                   static_cast<int>(ScintillaEditorSettings::ChangeHistoryBoth)).toInt();
+    const int changeHistoryValue = persisted.value("textView/changeHistoryMode").toInt();
     settings.changeHistoryMode = static_cast<ScintillaEditorSettings::ChangeHistoryMode>(
         qBound(static_cast<int>(ScintillaEditorSettings::ChangeHistoryOff),
                changeHistoryValue,
@@ -1178,19 +1175,20 @@ void QTextView::applyPersistedEditorPreferences(ScintillaEditorSettings& setting
 void QTextView::applyEditorSettings()
 {
     AppSettings Settings;
-    const auto RenderingValue = [&Settings](const char* Key, double Default, double Minimum, double Maximum) {
-        bool Valid = false; const double Value = Settings.value(Key, Default).toDouble(&Valid);
+    const auto RenderingValue = [&Settings](const char* Key, double Minimum, double Maximum) {
+        const double Default = hc::defaults::edit::ViewValue(Key).toDouble();
+        bool Valid = false; const double Value = Settings.value(Key).toDouble(&Valid);
         return Valid && std::isfinite(Value) && Value >= Minimum && Value <= Maximum ? Value : Default;
     };
-    mrst::scintilla::setTextMask(Settings.value("textView/mask/enabled", false).toBool(),
-        RenderingValue("textView/mask/gamma", 1.2, .5, 3.0), RenderingValue("textView/mask/strength", 1.1, .5, 2.0));
+    mrst::scintilla::setTextMask(Settings.value("textView/mask/enabled").toBool(),
+        RenderingValue("textView/mask/gamma", .5, 3.0), RenderingValue("textView/mask/strength", .5, 2.0));
     if (m_editor) m_editor->widget()->update();
     lastWrapMode_ = m_editorSettings.wrapMode != ScintillaEditorSettings::WrapNone ? int(m_editorSettings.wrapMode)
-        : qBound(1, Settings.value("textView/wordWrapLastMode", 2).toInt(), 3);
+        : qBound(1, Settings.value("textView/wordWrapLastMode").toInt(), 3);
     if (auto* Wrap = findChild<QComboBox*>("wordWrapMode")) { const QSignalBlocker Block(Wrap); Wrap->setCurrentIndex(WordWrapMode()); }
     if (m_ruler) {
-        QFont RulerFont(Settings.value("textView/rulerFontFamily", "Consolas").toString());
-        RulerFont.setPointSize(qBound(6, Settings.value("textView/rulerFontSize", 8).toInt(), 36));
+        QFont RulerFont(Settings.value("textView/rulerFontFamily").toString());
+        RulerFont.setPointSize(qBound(6, Settings.value("textView/rulerFontSize").toInt(), 36));
         m_ruler->SetLabelFont(RulerFont);
     }
     if (m_editor)

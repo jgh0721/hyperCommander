@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "solTypeDefs_Ver.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include "qtMessageDialog.hpp"
 #include "builtinPluginCatalog.hpp"
@@ -878,7 +879,7 @@ void CommandUiBridge::createActions()
     Toolbar->setObjectName("hc.navigationToolbar");
     Toolbar->setMovable(false); Toolbar->setFloatable(false); Toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
     Toolbar->setIconSize(QSize(16, 16));
-    Toolbar->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showMainToolbar"].toBool(false));
+    Toolbar->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showMainToolbar"].toBool(hc::defaults::DefaultValue("general/showMainToolbar").toBool()));
     const std::vector<std::pair<QString, QString>> Actions{
         {"hc.navigate.path", tr("경로 이동")}, {"hc.navigate.parent", tr("상위 폴더")},
         {"hc.navigate.forceRefresh", tr("강제 새로 고침")}, {"hc.navigate.refresh", tr("새로 고침")}, {"hc.navigate.cancel", tr("중지")},
@@ -1123,7 +1124,7 @@ void CommandUiBridge::RefreshFunctionBar() {
             const auto Label = Command ? Command->property("hc.baseLabel").toString() : Desired[Slot];
             hc::ui::SetFunctionCaption(Old->buttons()[Slot], Command, hc::ui::FunctionCaptionFor(General, Kind, Slot, Desired[Slot], Label));
         }
-        Old->setVisible(General["showFunctionBar"].toBool(true)); return;
+        Old->setVisible(General["showFunctionBar"].toBool(hc::defaults::DefaultValue("general/showFunctionBar").toBool())); return;
     }
     if (Old) { Layout->removeWidget(Old); delete Old; }
     auto* Bar = new fm::ui::FunctionKeyBar(Window->centralWidget()); Bar->setObjectName("hc.functionBar");
@@ -1133,7 +1134,7 @@ void CommandUiBridge::RefreshFunctionBar() {
         auto* Button = Bar->addKey({}, hc::ui::FunctionCaptionFor(General, Kind, Slot, Id, Label)); Button->setObjectName("hc.function." + Id); Button->setProperty("hc.commandId", Id);
         if (Command) hc::ui::BindFunctionButton(Button, Command); else Button->setEnabled(false);
     }
-    Layout->addWidget(Bar); Bar->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showFunctionBar"].toBool(true));
+    Layout->addWidget(Bar); Bar->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showFunctionBar"].toBool(hc::defaults::DefaultValue("general/showFunctionBar").toBool()));
 }
 
 bool CommandUiBridge::ReloadMenu() { return !userMenu_ || userMenu_->Reload(); }
@@ -1436,10 +1437,8 @@ void CommandUiBridge::createCommandUi()
         }
     }
     RefreshShortcutLabels();
-    QFile Default(":/HyperCommander/menu-bar.json");
-    if (!Default.open(QIODevice::ReadOnly)) return;
-    const auto BuiltInMenu = Default.readAll();
-    const auto MenuPath = QDir(hc::settings::Paths().directory_).filePath("menu-bar.json");
+    const auto BuiltInMenu = hc::defaults::MenuBarDefaults();
+    const auto MenuPath = hc::defaults::MenuBarFile(hc::settings::Paths().directory_);
     MigrateToolsMenu(MenuPath, BuiltInMenu, "audio-1", "audio", "hc.audio.");
     MigrateToolsMenu(MenuPath, BuiltInMenu, "system-1", "system", "hc.system.");
     userMenu_ = new hc::ui::UserMenu(Window->findChild<QMenuBar*>("menubar"), MenuPath, BuiltInMenu, actions_, Sections,
@@ -2082,11 +2081,11 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     }
     if (Id == "hc.file.rename") {
         const auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
-        if (Source == "cell-click" && !Options["renameOnSlowClick"].toBool(true)) return;
+        if (Source == "cell-click" && !Options["renameOnSlowClick"].toBool(hc::defaults::DefaultValue("options/renameOnSlowClick").toBool())) return;
         const auto Panel = PanelOf(Model);
         const auto View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
-        if (!Model->IsSearchResults() && (Source == "cell-click" || !Options["renameInDialog"].toBool(true)) && View && !View->IsThumbnailMode()) {
-            View->BeginRename(Index, Options["renameSelectExtension"].toBool(false),
+        if (!Model->IsSearchResults() && (Source == "cell-click" || !Options["renameInDialog"].toBool(hc::defaults::DefaultValue("options/renameInDialog").toBool())) && View && !View->IsThumbnailMode()) {
+            View->BeginRename(Index, Options["renameSelectExtension"].toBool(hc::defaults::DefaultValue("options/renameSelectExtension").toBool()),
                 [Guard = QPointer<CommandUiBridge>(this)](const QModelIndex& At, const QString& Name, CGridView::RenameCompletion Completion) {
                     if (Guard) Guard->submitInlineRename(At, Name, std::move(Completion));
                     else Completion(false);
@@ -2142,7 +2141,7 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
         DialogRequest.providerKey_ = Destination.kind_ == LocatorKind::Local ? "local" : Destination.kind_ == LocatorKind::Smb ? "smb" : "";
         hc::ui::FileOperationDialog Dialog(DialogRequest, main_);
         if (auto* Policy = Dialog.findChild<QComboBox*>("hc.operation.conflict")) {
-            const auto DefaultPolicy = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["fileConflict"].toString("ask");
+            const auto DefaultPolicy = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["fileConflict"].toString(hc::defaults::DefaultValue("options/fileConflict").toString());
             Policy->setCurrentIndex(qMax(0, Policy->findData(DefaultPolicy)));
         }
         if (Dialog.exec() != QDialog::Accepted) return;
@@ -2334,9 +2333,9 @@ void CommandUiBridge::DropFiles(const QStringList& Paths, const QString& Destina
         if (!Loaded.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), tr("파일을 확인할 수 없습니다: %1").arg(hc::ui::ErrorText(Loaded.Failure()))); return; }
         auto Request = std::move(Loaded.Value()); Request.destination_ = At;
         Request.destinationWriter_ = MakeNativeWritableStorage(At.kind_, MakeNativeReadProvider(At.kind_));
-        Request.copyOptions_.metadata_ = Options["copyMetadata"].toBool(true); Request.copyOptions_.verify_ = Options["copyVerify"].toBool(false);
-        Request.copyOptions_.acl_ = Options["copyAcl"].toBool(false); Request.copyOptions_.streams_ = Options["copyStreams"].toBool(false);
-        Request.bytesPerSecondLimit_ = quint64(qBound(0, Options["copySpeedMiB"].toInt(0), 1048576)) * 1024 * 1024;
+        Request.copyOptions_.metadata_ = Options["copyMetadata"].toBool(hc::defaults::DefaultValue("options/copyMetadata").toBool()); Request.copyOptions_.verify_ = Options["copyVerify"].toBool(hc::defaults::DefaultValue("options/copyVerify").toBool());
+        Request.copyOptions_.acl_ = Options["copyAcl"].toBool(hc::defaults::DefaultValue("options/copyAcl").toBool()); Request.copyOptions_.streams_ = Options["copyStreams"].toBool(hc::defaults::DefaultValue("options/copyStreams").toBool());
+        Request.bytesPerSecondLimit_ = quint64(qBound(0, Options["copySpeedMiB"].toInt(hc::defaults::DefaultValue("options/copySpeedMiB").toInt()), 1048576)) * 1024 * 1024;
         std::vector<Locator> Affected{At};
         for (const auto& Source : Request.sources_) {
             auto Parent = Source.entry_.locator_; Parent.root_ = QFileInfo(QString::fromStdString(Parent.root_)).absolutePath().toStdString(); Affected.push_back(std::move(Parent));
@@ -2389,11 +2388,11 @@ Result<CommandOutcome> CommandUiBridge::executeClipboard(const CommandInvocation
         if (!Request.destinationWriter_) return Error{ErrorCategory::Unsupported, "clipboard-destination-not-writable"};
         Request.correlationId_ = Invocation.correlationId_;
         const auto Options = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject();
-        Request.copyOptions_.metadata_ = Options["copyMetadata"].toBool(true);
-        Request.copyOptions_.verify_ = Options["copyVerify"].toBool(false);
-        Request.copyOptions_.acl_ = Options["copyAcl"].toBool(false);
-        Request.copyOptions_.streams_ = Options["copyStreams"].toBool(false);
-        Request.bytesPerSecondLimit_ = quint64(qBound(0, Options["copySpeedMiB"].toInt(0), 1048576)) * 1024 * 1024;
+        Request.copyOptions_.metadata_ = Options["copyMetadata"].toBool(hc::defaults::DefaultValue("options/copyMetadata").toBool());
+        Request.copyOptions_.verify_ = Options["copyVerify"].toBool(hc::defaults::DefaultValue("options/copyVerify").toBool());
+        Request.copyOptions_.acl_ = Options["copyAcl"].toBool(hc::defaults::DefaultValue("options/copyAcl").toBool());
+        Request.copyOptions_.streams_ = Options["copyStreams"].toBool(hc::defaults::DefaultValue("options/copyStreams").toBool());
+        Request.bytesPerSecondLimit_ = quint64(qBound(0, Options["copySpeedMiB"].toInt(hc::defaults::DefaultValue("options/copySpeedMiB").toInt()), 1048576)) * 1024 * 1024;
         auto Started = fileJobs_->Submit(std::move(Request), Invocation.operation_);
         if (!Started.HasValue()) return Started.Failure();
         auto Affected = clipboardLocations_; Affected.push_back(Invocation.context_.location_);

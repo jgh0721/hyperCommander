@@ -1,4 +1,5 @@
 ﻿#include "image/QImageView.h"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 
 #include "core/ThemeManager.h"
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -177,12 +178,12 @@ QImageView::QImageView(QWidget* parent)
     layout()->addWidget(m_scrollArea);
 
     connect(m_slideshowTimer, &QTimer::timeout, this, &QImageView::nextImage);
-    for (const auto Key : {Qt::Key_Space, Qt::Key_Backspace}) {
-        auto* Shortcut = new QShortcut(QKeySequence(Key), this);
+    for (const auto& Direction : {std::pair{"image.next", true}, std::pair{"image.previous", false}}) {
+        auto* Shortcut = new QShortcut(QKeySequence(hc::defaults::edit::Shortcut(Direction.first)), this);
         Shortcut->setContext(Qt::WidgetWithChildrenShortcut);
-        connect(Shortcut, &QShortcut::activated, this, [this, Key] {
+        connect(Shortcut, &QShortcut::activated, this, [this, Next = Direction.second] {
             if (m_compositeMode || pendingEdit_) return;
-            if (Key == Qt::Key_Space) nextImage();
+            if (Next) nextImage();
             else previousImage();
         });
     }

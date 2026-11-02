@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingNavigation.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "readingAnnotations.hpp"
 #include <QDir>
 #include <QFile>
@@ -36,7 +37,7 @@ ReadingNavigation::ReadingNavigation(const QString& Settings,const QString& Book
     if(!Settings.isEmpty()) {
         const auto Directory=QDir(QFileInfo(Settings).absolutePath()).filePath("epub-state");
         if(QFileInfo(Directory).isSymLink() || !QDir().mkpath(Directory)) {error_=tr("읽기 기록 폴더를 만들 수 없습니다.");readFailed_=true;}
-        else {path_=QDir(Directory).filePath(Book+".json");try {const auto Root=read(path_);restore_=saved_=Root["locator"].toString();bookmarks_=Root["bookmarks"].toArray();annotations_=Root["annotations"].toArray();for(const auto& Value:annotations_)annotationBases_.insert(Value.toObject()["id"].toString(),Value.toObject());}catch(const QString& Error){error_=Error;readFailed_=true;}}
+        else {path_=hc::defaults::edit::BookStateFile(Directory, Book);try {const auto Root=read(path_);restore_=saved_=Root["locator"].toString();bookmarks_=Root["bookmarks"].toArray();annotations_=Root["annotations"].toArray();for(const auto& Value:annotations_)annotationBases_.insert(Value.toObject()["id"].toString(),Value.toObject());}catch(const QString& Error){error_=Error;readFailed_=true;}}
     }
     auto* Layout=new QVBoxLayout(this);Layout->setContentsMargins(0,0,0,0);auto* Tabs=new QTabWidget(this);Layout->addWidget(Tabs);
     toc_=new QTreeWidget(Tabs);toc_->setObjectName("epubToc");toc_->setAccessibleName(tr("목차"));toc_->setHeaderHidden(true);
@@ -123,7 +124,7 @@ void ReadingNavigation::SetPublication(const QJsonObject& Publication) {
     toc_->expandToDepth(0);
 }
 void ReadingNavigation::ConfigureProfile(const QJsonObject& Profile) {
-    resume_=Profile["resume"].toBool(true);remember_=!Profile["privateReading"].toBool();
+    resume_=Profile["resume"].toBool(hc::defaults::edit::EpubReading()["resume"].toBool());remember_=!Profile["privateReading"].toBool();
     const auto Epoch=Profile["historyEpoch"].toInteger();
     if(historyEpoch_>=0 && historyEpoch_!=Epoch){restore_.clear();saved_=locator_;saveTimer_.stop();}
     historyEpoch_=Epoch;

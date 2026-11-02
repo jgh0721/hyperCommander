@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "saveRecovery.hpp"
+#include "UniqueLibs/ProductDefaults_Compare.hpp"
 #include "requestFile.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include <QDir>
@@ -58,8 +59,8 @@ namespace hc::compare
     }
     QString SaveRecoveryDirectory()
     {
-        const auto base = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-        if (base.isEmpty()) throw Failure("SaveRecoveryDirectory"); return base + "/recovery";
+        const auto Path = hc::defaults::compare::RecoveryDirectory();
+        if (Path.isEmpty()) throw Failure("SaveRecoveryDirectory"); return Path;
     }
     SaveRecoveryJournal::SaveRecoveryJournal(const QString& Directory)
     {

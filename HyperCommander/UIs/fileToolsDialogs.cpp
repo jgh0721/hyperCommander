@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileToolsDialogs.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include "permissionDialogs.hpp"
 #include <fmwidgets/WrapLayout.h>
@@ -37,7 +38,7 @@ NewFileDialog::NewFileDialog(const QString& Folder, bool Supported, QWidget* Par
     for (int I = 0; I < Templates.size(); ++I) {
         const auto Detail = !Templates[I].fixedName_.isEmpty() ? Templates[I].fixedName_ : Templates[I].extension_.isEmpty() ? tr("확장자 없음") : '.' + Templates[I].extension_;
         Type->addItem(Templates[I].label_ + " · " + Detail);
-        auto* Shortcut = new QShortcut(QKeySequence("Alt+" + QString::number(I+1)), controls_);
+        auto* Shortcut = new QShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("indexedChoice", I)), controls_);
         Shortcut->setAutoRepeat(false); connect(Shortcut, &QShortcut::activated, this, [Type,I] { Type->setCurrentIndex(I); });
     }
     open_ = new QCheckBox(tr("만든 후 텍스트 편집기로 열기(&O)"), controls_); open_->setObjectName("hc.newFile.open"); Layout->addWidget(open_);
@@ -154,9 +155,9 @@ BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, Q
     });
     connect(Load, &QPushButton::clicked, this, [this] {
         const auto P = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["renamePresets"].toObject()[preset_->currentText()].toObject(); if (P.isEmpty()) return;
-        ready_ = false; mask_->setText(P["name"].toString("[N]")); extension_->setText(P["extension"].toString("[E]")); find_->setText(P["find"].toString()); replace_->setText(P["replace"].toString());
-        regex_->setChecked(P["regex"].toBool()); sensitive_->setChecked(P["sensitive"].toBool()); nameCase_->setCurrentIndex(P["nameCase"].toInt()); extensionCase_->setCurrentIndex(P["extensionCase"].toInt());
-        start_->setValue(P["start"].toInt(1)); step_->setValue(P["step"].toInt(1)); digits_->setValue(P["digits"].toInt(3)); date_->setText(P["date"].toString("yyyy-MM-dd")); includeExtension_->setChecked(P["includeExtension"].toBool()); dateOffset_->setValue(P["dateOffset"].toInt()); dateSource_->setCurrentIndex(P["dateSource"].toInt()); ready_ = true; loadDates();
+        ready_ = false; mask_->setText(P["name"].toString(hc::defaults::DefaultValue("rename/name").toString())); extension_->setText(P["extension"].toString(hc::defaults::DefaultValue("rename/extension").toString())); find_->setText(P["find"].toString(hc::defaults::DefaultValue("rename/find").toString())); replace_->setText(P["replace"].toString(hc::defaults::DefaultValue("rename/replace").toString()));
+        regex_->setChecked(P["regex"].toBool(hc::defaults::DefaultValue("rename/regex").toBool())); sensitive_->setChecked(P["sensitive"].toBool(hc::defaults::DefaultValue("rename/sensitive").toBool())); nameCase_->setCurrentIndex(P["nameCase"].toInt(hc::defaults::DefaultValue("rename/nameCase").toInt())); extensionCase_->setCurrentIndex(P["extensionCase"].toInt(hc::defaults::DefaultValue("rename/extensionCase").toInt()));
+        start_->setValue(P["start"].toInt(hc::defaults::DefaultValue("rename/start").toInt())); step_->setValue(P["step"].toInt(hc::defaults::DefaultValue("rename/step").toInt())); digits_->setValue(P["digits"].toInt(hc::defaults::DefaultValue("rename/digits").toInt())); date_->setText(P["date"].toString(hc::defaults::DefaultValue("rename/date").toString())); includeExtension_->setChecked(P["includeExtension"].toBool(hc::defaults::DefaultValue("rename/includeExtension").toBool())); dateOffset_->setValue(P["dateOffset"].toInt(hc::defaults::DefaultValue("rename/dateOffset").toInt())); dateSource_->setCurrentIndex(P["dateSource"].toInt(hc::defaults::DefaultValue("rename/dateSource").toInt())); ready_ = true; loadDates();
     });
     connect(Delete, &QPushButton::clicked, this, [this] {
         auto& Store = hc::settings::AppSettings(); if (Store.Editing()) { SetMessage(tr("설정 편집을 닫은 뒤 삭제하세요."), true); return; }

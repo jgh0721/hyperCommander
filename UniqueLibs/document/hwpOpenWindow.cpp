@@ -1,4 +1,5 @@
 ﻿#include "hwpStartupTrace.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "hwpOpenWindow.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentFocusRestore.hpp"
@@ -139,7 +140,7 @@ namespace hc::document
         });
         auto* PrintAction=new QAction(tr("인쇄"),this);PrintAction->setObjectName("rhwp.nativePrint");
         // Web content owns Ctrl+P when embedded; native action serves read-only/native focus.
-        PrintAction->setShortcut(QKeySequence::Print);PrintAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        PrintAction->setShortcut(QKeySequence(hc::defaults::edit::Shortcut("file.print")));PrintAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
         addAction(PrintAction);connect(PrintAction,&QAction::triggered,this,&HwpOpenWindow::Print);
         setContextMenuPolicy(Qt::ActionsContextMenu);
         qApp->installEventFilter(this);

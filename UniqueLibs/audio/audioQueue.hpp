@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 
 /// 플랫폼/프레임워크 헤더파일( Windows, Boost, Qt, ... )
 #include <QRegularExpression>
@@ -33,7 +34,7 @@ namespace hc::audio
     // MIDI·트래커는 디코더가 없어 넣지 않는다.
     inline QString DefaultExtensionText()
     {
-        return QStringLiteral( "mp3,m4a,aac,flac,wav,ogg,oga,opus,wma,ape,wv,aif,aiff,mka,mp2,ac3,dts,amr,caf,mpc,dsf,dff" );
+        return hc::defaults::AudioPreview()["extensions"].toString();
     }
     inline QStringList ParseExtensions( const QString& Text )
     {

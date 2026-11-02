@@ -189,7 +189,7 @@ namespace hc::compare
             if (!Value) for (const auto* role : {"barModified", "barAdded", "barRemoved", "barGap"}) if (!draft_.colors_[mode].contains(role)) draft_.colors_[mode][role] = CompareColor(role, mode == 1, draft_).name();
             draft_.linked_[mode] = Value; fillColors(); changed();
         });
-        connect(resetPalette, &QPushButton::clicked, this, [this] { const auto mode = colorMode_->currentIndex(); draft_.colors_[mode] = {}; draft_.linked_[mode] = true; fillColors(); changed(); });
+        connect(resetPalette, &QPushButton::clicked, this, [this] { const auto mode = colorMode_->currentIndex(); draft_.colors_[mode] = {}; draft_.linked_[mode] = hc::defaults::compare::LinkColors; fillColors(); changed(); });
         status_ = new QLabel(this); status_->setObjectName("settingsStatus"); status_->setWordWrap(true); layout->addWidget(status_);
         buttons_ = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Apply, this); layout->addWidget(buttons_);
         buttons_->button(QDialogButtonBox::Ok)->setText(tr("확인")); buttons_->button(QDialogButtonBox::Cancel)->setText(tr("취소")); buttons_->button(QDialogButtonBox::Apply)->setText(tr("적용"));
@@ -197,7 +197,7 @@ namespace hc::compare
         connect(buttons_, &QDialogButtonBox::accepted, this, [this] { if (apply()) accept(); }); connect(buttons_, &QDialogButtonBox::rejected, this, &QDialog::reject);
         hc::ui::ApplyDialogFrame(this, buttons_, {{}, tr("화면·단축키·비교 색상을 설정합니다."), fm::ui::glyph::App});
         fillKeys(); fillColors(); changed(); if (!draft_.warnings_.isEmpty()) status_->setText(draft_.warnings_.join('\n'));
-        tabs_->setCurrentIndex(std::clamp(Preferences{}.Value("settings/lastTab", 0).toInt(), 0, 3));
+        tabs_->setCurrentIndex(std::clamp(Preferences{}.Value("settings/lastTab").toInt(), 0, 3));
         connect(tabs_, &QTabWidget::currentChanged, this, [](int Index) { Preferences{}.SetValue("settings/lastTab", Index); });
         const auto available = screen()->availableGeometry().size() - QSize(40, 60); resize(QSize(1120, 780).boundedTo(available));
     }

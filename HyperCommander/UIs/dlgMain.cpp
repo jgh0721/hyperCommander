@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "dlgMain.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "startupTrace.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 
@@ -59,7 +60,7 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     ui.frame_2->hide();
     commandLine_ = new fm::ui::CommandLine(ui.centralwidget); commandLine_->setObjectName("hc.commandLine");
     ui.verticalLayout->addWidget(commandLine_);
-    commandLine_->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showCommandLine"].toBool(true));
+    commandLine_->setVisible(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["showCommandLine"].toBool(hc::defaults::DefaultValue("general/showCommandLine").toBool()));
     connect(commandLine_, &fm::ui::CommandLine::commandEntered, this, [this](const QString& Command) { executeCommandLine(Command, false); });
     const auto RefreshCommandHelp = [this] {
         const auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
@@ -209,9 +210,9 @@ void QMainUI::OnColorSchemeChanged( const TyColorScheme& ColorScheme )
     ui.menubar->setFont(ColorScheme.Menu_Font);
 
     const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
-    if (auto* Toolbar = findChild<QToolBar*>("hc.navigationToolbar")) Toolbar->setVisible(General["showMainToolbar"].toBool(false));
-    commandLine_->setVisible(General["showCommandLine"].toBool(true));
-    if (auto* Bar = findChild<QWidget*>("hc.functionBar")) Bar->setVisible(General["showFunctionBar"].toBool(true));
+    if (auto* Toolbar = findChild<QToolBar*>("hc.navigationToolbar")) Toolbar->setVisible(General["showMainToolbar"].toBool(hc::defaults::DefaultValue("general/showMainToolbar").toBool()));
+    commandLine_->setVisible(General["showCommandLine"].toBool(hc::defaults::DefaultValue("general/showCommandLine").toBool()));
+    if (auto* Bar = findChild<QWidget*>("hc.functionBar")) Bar->setVisible(General["showFunctionBar"].toBool(hc::defaults::DefaultValue("general/showFunctionBar").toBool()));
     ui.cmpLeftPanel->OnColorSchemeChanged( ColorScheme );
     ui.cmpRightPanel->OnColorSchemeChanged( ColorScheme );
 }
@@ -729,7 +730,7 @@ void QMainUI::initialize()
     setActivePanel(currentPanelIndex);
 
     workspace_ = hc::workspace::Load(hc::settings::WorkspaceSettings()); workspaceLoaded_ = true;
-    if (workspace_.exists_ && workspace_.writable_ && hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["restoreWorkspace"].toBool(true)) RestoreWorkspace(workspace_.state_);
+    if (workspace_.exists_ && workspace_.writable_ && hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["restoreWorkspace"].toBool(hc::defaults::DefaultValue("general/restoreWorkspace").toBool())) RestoreWorkspace(workspace_.state_);
     else {
         hc::workspace::State Initial;
         hc::workspace::TabState Home; Home.id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);

@@ -26,7 +26,7 @@ struct ConfigPaths {
     // 이전 기본 위치. 설정 파일이 없을 때 이행 원본으로만 사용한다.
     QStringList legacy_;
     static ConfigPaths Resolve(const QStringList& Arguments, const QString& ExecutableDirectory,
-        const QString& UserDirectory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation), bool Document = false)
+        const QString& UserDirectory = hc::defaults::UserConfigDirectory(), bool Document = false)
     {
         QString Explicit; bool Portable = false, Seen = false;
         for (int Index = 1; Index < Arguments.size(); ++Index) {
@@ -44,11 +44,11 @@ struct ConfigPaths {
             }
         }
         // --config-dir가 없으면 실행 파일 폴더를 사용한다. --portable은 호환을 위해서만 받는다.
-        const auto Path = Seen ? Explicit : ExecutableDirectory;
+        const auto Path = Seen ? Explicit : Document ? hc::defaults::edit::ConfigDirectory(ExecutableDirectory) : hc::defaults::ConfigDirectory(ExecutableDirectory);
         if (Path.isEmpty()) return {{}, "unavailable-config-dir"};
         QStringList Legacy;
         if (!Seen && !Document) {
-            const auto Adjacent = QDir(ExecutableDirectory).filePath("config");
+            const auto Adjacent = hc::defaults::LegacyConfigDirectory(ExecutableDirectory);
             for (const auto& Candidate : Portable ? QStringList{Adjacent, UserDirectory} : QStringList{UserDirectory, Adjacent})
                 if (!Candidate.isEmpty()) Legacy.append(QDir::cleanPath(QFileInfo(Candidate).absoluteFilePath()));
         }
@@ -109,7 +109,7 @@ public:
         bool Shared() const { return !keys_.isEmpty(); }
         bool Owns(const QString& Key) const { return Key == "schemaVersion" || keys_.contains(Key) == only_; }
     };
-    explicit JsonStore(QString FileName, QJsonObject Defaults = {{"schemaVersion", 1}}, QObject* Parent = nullptr, Scope Domain = Scope::Standalone,
+    explicit JsonStore(QString FileName, QJsonObject Defaults = hc::defaults::StoreDefaults(), QObject* Parent = nullptr, Scope Domain = Scope::Standalone,
         Partition Part = {})
         : QObject(Parent), path_(QFileInfo(FileName).absoluteFilePath()), defaults_(std::move(Defaults)), scope_(Domain), partition_(std::move(Part)) { Reload(); }
     const QString& FileName() const { return path_; }
@@ -307,35 +307,35 @@ protected:
     {
         const auto Report = [&](const QString& Path) { if (!Issues.contains(Path)) Issues.append(Path); };
         auto General = Document["general"].toObject();
-        if (!hc::defaults::ShortcutPresetIds().contains(General["shortcutPreset"].toString())) { General["shortcutPreset"] = "legacy"; Report("general.shortcutPreset"); }
+        if (!hc::defaults::ShortcutPresetIds().contains(General["shortcutPreset"].toString())) { General["shortcutPreset"] = hc::defaults::DefaultValue("general/shortcutPreset"); Report("general.shortcutPreset"); }
         for (const auto* Key : {"sizeInHeader", "sizeInFooter"})
-            if (!SizeFormats().contains(General[Key].toString())) { General[Key] = "bytes"; Report(QString("general.") + Key); }
-        if (!QStringList{"all", "associated", "standard", "none"}.contains(General["iconMode"].toString())) { General["iconMode"] = "standard"; Report("general.iconMode"); }
+            if (!SizeFormats().contains(General[Key].toString())) { General[Key] = hc::defaults::DefaultValue("general/" + QString(Key)); Report(QString("general.") + Key); }
+        if (!QStringList{"all", "associated", "standard", "none"}.contains(General["iconMode"].toString())) { General["iconMode"] = hc::defaults::DefaultValue("general/iconMode"); Report("general.iconMode"); }
         for (const auto* Key : {"specialFolderIcons", "virtualFolderIcons", "explorerDefaultIcons", "iconOverlays"})
-            if (General.contains(Key) && !General[Key].isBool()) { General[Key] = true; Report(QString("general.") + Key); }
-        if (!QStringList{"plain", "brackets", "suffix"}.contains(General["directoryStyle"].toString())) { General["directoryStyle"] = "plain"; Report("general.directoryStyle"); }
-        if (General.contains("singleInstance") && !General["singleInstance"].isBool()) { General["singleInstance"] = false; Report("general.singleInstance"); }
-        if (General.contains("newTabPosition") && !QStringList{"last", "right", "left", "first"}.contains(General["newTabPosition"].toString())) { General["newTabPosition"] = "last"; Report("general.newTabPosition"); }
+            if (General.contains(Key) && !General[Key].isBool()) { General[Key] = hc::defaults::DefaultValue("general/" + QString(Key)); Report(QString("general.") + Key); }
+        if (!QStringList{"plain", "brackets", "suffix"}.contains(General["directoryStyle"].toString())) { General["directoryStyle"] = hc::defaults::DefaultValue("general/directoryStyle"); Report("general.directoryStyle"); }
+        if (General.contains("singleInstance") && !General["singleInstance"].isBool()) { General["singleInstance"] = hc::defaults::DefaultValue("general/singleInstance"); Report("general.singleInstance"); }
+        if (General.contains("newTabPosition") && !QStringList{"last", "right", "left", "first"}.contains(General["newTabPosition"].toString())) { General["newTabPosition"] = hc::defaults::DefaultValue("general/newTabPosition"); Report("general.newTabPosition"); }
         if (General.contains("refresh")) {
             auto Refresh = General["refresh"].toObject();
             const auto Seconds = Refresh["fallbackSeconds"].toDouble(-1);
             if (!Refresh["fallbackSeconds"].isDouble() || Seconds < 1 || Seconds > 86400 || Seconds != double(qint64(Seconds))) {
-                Refresh["fallbackSeconds"] = 15; Report("general.refresh.fallbackSeconds");
+                Refresh["fallbackSeconds"] = hc::defaults::DefaultValue("general/refresh/fallbackSeconds"); Report("general.refresh.fallbackSeconds");
             }
             General["refresh"] = Refresh;
         }
         if (General.contains("audioPreview")) {
             auto Audio = General["audioPreview"].toObject();
-            const auto Whole = [&](const char* Key, int Low, int High, int Fallback) {
+            const auto Whole = [&](const char* Key, int Low, int High) {
                 const auto Value = Audio[Key].toDouble(-1);
-                if (!Audio[Key].isDouble() || Value < Low || Value > High || Value != double(qint64(Value))) { Audio[Key] = Fallback; Report(QString("general.audioPreview.") + Key); }
+                if (!Audio[Key].isDouble() || Value < Low || Value > High || Value != double(qint64(Value))) { Audio[Key] = hc::defaults::DefaultValue("general/audioPreview/" + QString(Key)); Report(QString("general.audioPreview.") + Key); }
             };
-            Whole("volume", 0, 100, 70); Whole("materializeLimitMiB", 16, 8192, 1024);
+            Whole("volume", 0, 100); Whole("materializeLimitMiB", 16, 8192);
             for (const auto* Key : {"muted", "autoNext", "shuffle"})
-                if (!Audio[Key].isBool()) { Audio[Key] = QString(Key) == "autoNext"; Report(QString("general.audioPreview.") + Key); }
+                if (!Audio[Key].isBool()) { Audio[Key] = hc::defaults::DefaultValue("general/audioPreview/" + QString(Key)); Report(QString("general.audioPreview.") + Key); }
             // 나중에 더한 값이라 없으면 기본(켬)을 쓴다.
-            if (Audio.contains("animateNowPlaying") && !Audio["animateNowPlaying"].isBool()) { Audio["animateNowPlaying"] = true; Report("general.audioPreview.animateNowPlaying"); }
-            if (!QStringList{"off", "folder", "one"}.contains(Audio["repeat"].toString())) { Audio["repeat"] = "off"; Report("general.audioPreview.repeat"); }
+            if (Audio.contains("animateNowPlaying") && !Audio["animateNowPlaying"].isBool()) { Audio["animateNowPlaying"] = hc::defaults::DefaultValue("general/audioPreview/animateNowPlaying"); Report("general.audioPreview.animateNowPlaying"); }
+            if (!QStringList{"off", "folder", "one"}.contains(Audio["repeat"].toString())) { Audio["repeat"] = hc::defaults::DefaultValue("general/audioPreview/repeat"); Report("general.audioPreview.repeat"); }
             if (!Audio["extensions"].isString() || Audio["extensions"].toString().size() > 1024) {
                 Audio["extensions"] = hc::defaults::AudioPreview()["extensions"]; Report("general.audioPreview.extensions");
             }
@@ -350,40 +350,40 @@ protected:
         Document["general"] = General;
         auto Copy = Document["options"].toObject();
         for (const auto* Key : {"folderSizeOnSpace", "folderSizeBeforeOperations", "folderSizeUseEverything"})
-            if (Copy.contains(Key) && !Copy[Key].isBool()) { Copy[Key] = true; Report(QString("options.") + Key); }
+            if (Copy.contains(Key) && !Copy[Key].isBool()) { Copy[Key] = hc::defaults::DefaultValue("options/" + QString(Key)); Report(QString("options.") + Key); }
         if (Copy.contains("folderSizeMode") && !QStringList{"manual", "local", "all", "everything"}.contains(Copy["folderSizeMode"].toString())) {
-            Copy["folderSizeMode"] = "everything"; Report("options.folderSizeMode");
+            Copy["folderSizeMode"] = hc::defaults::DefaultValue("options/folderSizeMode"); Report("options.folderSizeMode");
         }
         for (const auto* Key : {"copyMetadata", "copyVerify", "copyAcl", "copyStreams", "saveJobProgress", "showJobDetails", "enableJobRecovery", "jobCloseOnSuccess", "delayedFileWrites", "renameInDialog", "renameSelectExtension", "renameOnSlowClick", "audioOpenInternally"}) if (Copy.contains(Key) && !Copy[Key].isBool()) {
-            Copy[Key] = QString(Key) == "copyMetadata" || QString(Key) == "jobCloseOnSuccess" || QString(Key) == "delayedFileWrites" || QString(Key) == "renameInDialog" || QString(Key) == "renameOnSlowClick"; Report(QString("options.") + Key);
+            Copy[Key] = hc::defaults::DefaultValue("options/" + QString(Key)); Report(QString("options.") + Key);
         }
         if (Copy.contains("copyPattern")) {
             const auto Pattern = Copy["copyPattern"].toString(); bool Valid = Copy["copyPattern"].isString() && !Pattern.trimmed().isEmpty() && Pattern.toUtf8().size() <= 4096;
             for (const auto Ch : Pattern) if (Ch.unicode() < 32 || QStringLiteral("/\\:").contains(Ch)) Valid = false;
             for (const auto& Part : Pattern.split(';')) if (Part.trimmed().isEmpty()) Valid = false;
-            if (!Valid) { Copy["copyPattern"] = "*"; Report("options.copyPattern"); }
+            if (!Valid) { Copy["copyPattern"] = hc::defaults::DefaultValue("options/copyPattern"); Report("options.copyPattern"); }
         }
         if (Copy.contains("copySpeedMiB")) {
             const auto Speed = Copy["copySpeedMiB"].toDouble(-1);
-            if (!Copy["copySpeedMiB"].isDouble() || Speed < 0 || Speed > 1048576 || Speed != double(qint64(Speed))) { Copy["copySpeedMiB"] = 0; Report("options.copySpeedMiB"); }
+            if (!Copy["copySpeedMiB"].isDouble() || Speed < 0 || Speed > 1048576 || Speed != double(qint64(Speed))) { Copy["copySpeedMiB"] = hc::defaults::DefaultValue("options/copySpeedMiB"); Report("options.copySpeedMiB"); }
         }
-        if (Copy.contains("deleteToRecycle") && !Copy["deleteToRecycle"].isBool()) { Copy["deleteToRecycle"] = true; Report("options.deleteToRecycle"); }
-        if (Copy.contains("jobNotification") && !QStringList{"none", "status", "attention", "sound"}.contains(Copy["jobNotification"].toString())) { Copy["jobNotification"] = "attention"; Report("options.jobNotification"); }
-        if (Copy.contains("queueInsertion") && !QStringList{"first", "last"}.contains(Copy["queueInsertion"].toString())) { Copy["queueInsertion"] = "last"; Report("options.queueInsertion"); }
-        if (Copy.contains("jobConcurrency") && (!Copy["jobConcurrency"].isDouble() || (Copy["jobConcurrency"].toDouble() != 1 && Copy["jobConcurrency"].toDouble() != 2))) { Copy["jobConcurrency"] = 2; Report("options.jobConcurrency"); }
+        if (Copy.contains("deleteToRecycle") && !Copy["deleteToRecycle"].isBool()) { Copy["deleteToRecycle"] = hc::defaults::DefaultValue("options/deleteToRecycle"); Report("options.deleteToRecycle"); }
+        if (Copy.contains("jobNotification") && !QStringList{"none", "status", "attention", "sound"}.contains(Copy["jobNotification"].toString())) { Copy["jobNotification"] = hc::defaults::DefaultValue("options/jobNotification"); Report("options.jobNotification"); }
+        if (Copy.contains("queueInsertion") && !QStringList{"first", "last"}.contains(Copy["queueInsertion"].toString())) { Copy["queueInsertion"] = hc::defaults::DefaultValue("options/queueInsertion"); Report("options.queueInsertion"); }
+        if (Copy.contains("jobConcurrency") && (!Copy["jobConcurrency"].isDouble() || (Copy["jobConcurrency"].toDouble() != 1 && Copy["jobConcurrency"].toDouble() != 2))) { Copy["jobConcurrency"] = hc::defaults::DefaultValue("options/jobConcurrency"); Report("options.jobConcurrency"); }
         Document["options"] = Copy;
         auto Favorites = Document["favorites"].toObject();
-        if (!QStringList{"none","top","bottom"}.contains(Favorites["drivesOn"].toString())) { Favorites["drivesOn"] = "none"; Report("favorites.drivesOn"); }
+        if (!QStringList{"none","top","bottom"}.contains(Favorites["drivesOn"].toString())) { Favorites["drivesOn"] = hc::defaults::DefaultValue("favorites/drivesOn"); Report("favorites.drivesOn"); }
         Document["favorites"] = Favorites;
         auto Plugins = Document["plugins"].toObject();
-        if (!QStringList{"manual", "automatic", "force"}.contains(Plugins["viewerSelection"].toString())) { Plugins["viewerSelection"] = "manual"; Report("plugins.viewerSelection"); }
+        if (!QStringList{"manual", "automatic", "force"}.contains(Plugins["viewerSelection"].toString())) { Plugins["viewerSelection"] = hc::defaults::DefaultValue("plugins/viewerSelection"); Report("plugins.viewerSelection"); }
         for (const auto* Format : {"wlx","wcx","wfx","wdx","dopusVfs","dopusViewer"}) {
             const auto Entries = Plugins[Format].toArray(); QJsonArray Valid;
             for (const auto& Entry : Entries) {
                 auto Record = Entry.toObject();
                 if (!Entry.isObject() || !Record["path"].isString() || Record["path"].toString().isEmpty() || Valid.size() >= 1000) { Report(QString("plugins.") + Format); continue; }
                 // A malformed approval never becomes an in-process execution request.
-                if (Record.contains("hostEnabled") && !Record["hostEnabled"].isBool()) { Record["hostEnabled"] = true; Record["hostReviewed"] = QJsonObject{}; Report(QString("plugins.") + Format + ".hostEnabled"); }
+                if (Record.contains("hostEnabled") && !Record["hostEnabled"].isBool()) { Record["hostEnabled"] = hc::defaults::DefaultValue("pluginRecord/invalidHostEnabled"); Record["hostReviewed"] = QJsonObject{}; Report(QString("plugins.") + Format + ".hostEnabled"); }
                 if (Record.contains("hostReviewed") && !Record["hostReviewed"].isObject()) { Record["hostReviewed"] = QJsonObject{}; Report(QString("plugins.") + Format + ".hostReviewed"); }
                 Valid.append(Record);
             }
@@ -398,16 +398,16 @@ protected:
             auto Fonts = Record.value("fonts").toObject();
             for (auto Font = Fonts.begin(); Font != Fonts.end(); ++Font) {
                 auto Value = Font.value().toObject();
-                if (!Value["family"].isString() || Value["family"].toString().isEmpty()) { Value["family"] = Font.key() == "list" ? "D2Coding ligature" : "Malgun Gothic"; Report(Prefix + ".fonts." + Font.key() + ".family"); }
+                if (!Value["family"].isString() || Value["family"].toString().isEmpty()) { Value["family"] = hc::defaults::FontDefaults(Font.key(), true)["family"]; Report(Prefix + ".fonts." + Font.key() + ".family"); }
                 const auto Size = Value["pointSize"].toDouble(-1);
-                if (Size < 6 || Size > 72 || Size != int(Size)) { Value["pointSize"] = Font.key() == "list" ? 16 : 9; Report(Prefix + ".fonts." + Font.key() + ".pointSize"); }
+                if (Size < 6 || Size > 72 || Size != int(Size)) { Value["pointSize"] = hc::defaults::FontDefaults(Font.key(), true)["pointSize"]; Report(Prefix + ".fonts." + Font.key() + ".pointSize"); }
                 Font.value() = Value;
             }
             if (Record.contains("fonts")) Record["fonts"] = Fonts;
             auto Colors = Record.value("colors").toObject();
             for (auto Entry = Colors.begin(); Entry != Colors.end(); ++Entry)
                 if (!Entry.value().isString() || !Color.match(Entry.value().toString()).hasMatch()) {
-                    Entry.value() = Entry.key().contains("Background") ? "#FFFFFF" : "#202020"; Report(Prefix + ".colors." + Entry.key());
+                    Entry.value() = hc::defaults::InvalidColor(Entry.key()); Report(Prefix + ".colors." + Entry.key());
                 }
             if (Record.contains("colors")) Record["colors"] = Colors;
             It.value() = Record;
@@ -420,7 +420,7 @@ inline Repository& AppSettings() { static Repository Instance(Paths().directory_
 // 작업공간은 설정과 같은 HyperCommander.json의 "workspace" 키에 저장한다.
 inline JsonStore& WorkspaceSettings()
 {
-    static JsonStore Instance(ProfileConfig::FileName(Paths().directory_), {{"schemaVersion", 1}}, nullptr, JsonStore::Scope::Standalone,
+    static JsonStore Instance(ProfileConfig::FileName(Paths().directory_), hc::defaults::StoreDefaults(), nullptr, JsonStore::Scope::Standalone,
         ProfilePartition(true, Paths().directory_, Paths().legacy_));
     return Instance;
 }

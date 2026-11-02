@@ -56,6 +56,7 @@ target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
     widgets/compareSettings.cpp widgets/compareSettings.hpp
+    ../UniqueLibs/ProductDefaults_Compare.hpp
     widgets/compareCommands.cpp widgets/compareCommands.hpp
     widgets/comparePalette.cpp widgets/comparePalette.hpp
     widgets/compareSettingsDialog.cpp widgets/compareSettingsDialog.hpp

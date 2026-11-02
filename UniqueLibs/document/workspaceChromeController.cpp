@@ -135,9 +135,9 @@ namespace hc::document
     bool WorkspaceChromeController::visible(bool Menu) const
     {
         const auto Key = Menu ? "mainMenuMode" : "mainToolbarMode";
-        const auto Override = settings_["viewOverrides"].toObject()[active_.viewId_].toObject()[Key].toString("inherit");
+        const auto Override = settings_["viewOverrides"].toObject()[active_.viewId_].toObject()[Key].toString(hc::defaults::edit::WorkspaceValue("viewOverrideMode").toString());
         if (Override != "inherit") return Override == "show";
-        const auto Global = settings_[Key].toString("recommended");
+        const auto Global = settings_[Key].toString(hc::defaults::edit::WorkspaceValue(Key).toString());
         return Global == "recommended" ? (Menu ? active_.mainMenuRecommended_ : active_.mainToolbarRecommended_) : Global == "show";
     }
     bool WorkspaceChromeController::MenuVisible() const { return visible(true); }

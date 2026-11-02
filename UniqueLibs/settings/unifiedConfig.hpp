@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDir>
@@ -17,7 +18,7 @@ namespace hc::settings {
 class UnifiedConfig {
 public:
     static constexpr qint64 MaxBytes = 16 * 1024 * 1024;
-    static QString FileName(const QString& Directory) { return QDir(Directory).filePath("HyperEditor.json"); }
+    static QString FileName(const QString& Directory) { return hc::defaults::edit::SettingsFile(Directory); }
     static QJsonValue Encode(const QVariant& Value)
     {
         if (Value.metaType().id() == QMetaType::QByteArray)
@@ -59,28 +60,28 @@ public:
         if (QFileInfo::exists(Path)) return read(Path, 2, Object, Error);
         const QDir Directory(QFileInfo(Path).absolutePath());
         bool Legacy = false;
-        for (const auto* Name : {"settings.json", "workspace.json", "document-views.ini"}) Legacy |= QFileInfo::exists(Directory.filePath(Name));
-        Object = {{"schemaVersion", 2}};
+        for (const auto* Name : {hc::defaults::edit::LegacySettingsFileName, hc::defaults::edit::LegacyWorkspaceFileName, hc::defaults::edit::LegacyViewsFileName}) Legacy |= QFileInfo::exists(Directory.filePath(Name));
+        Object = hc::defaults::edit::DefaultDocument();
         if (!Legacy) return true;
         QLockFile Lock(Path + ".lock"); Lock.setStaleLockTime(0);
         if (PersistMigration && !Lock.tryLock(0)) { Error = "file-locked"; return false; }
         if (QFileInfo::exists(Path)) return read(Path, 2, Object, Error);
         QJsonObject Sources;
-        for (const auto* Name : {"settings.json", "workspace.json", "document-views.ini"}) {
+        for (const auto* Name : {hc::defaults::edit::LegacySettingsFileName, hc::defaults::edit::LegacyWorkspaceFileName, hc::defaults::edit::LegacyViewsFileName}) {
             const auto Source = Directory.filePath(Name); if (!QFileInfo::exists(Source)) continue;
             QFile File(Source);
             if (!File.open(QIODevice::ReadOnly) || File.size() > MaxBytes) { Error = Source + ": read-failed"; return false; }
             const auto Bytes = File.readAll();
             if (File.error() != QFileDevice::NoError) { Error = Source + ": read-failed"; return false; }
             Sources[Name] = QJsonObject{{"path", Source}, {"sha256", QString::fromLatin1(QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex())}};
-            if (QString(Name) == "document-views.ini") {
+            if (QString(Name) == hc::defaults::edit::LegacyViewsFileName) {
                 QSettings Ini(Source, QSettings::IniFormat); QJsonObject Views;
                 for (const auto& Key : Ini.allKeys()) Set(Views, Key.split('/'), Encode(Ini.value(Key)));
                 if (Ini.status() != QSettings::NoError) { Error = Source + ": invalid-ini"; return false; }
                 Object["documentViews"] = Views;
             } else {
                 QJsonObject Old; if (!read(Source, 1, Old, Error)) return false;
-                if (QString(Name) == "settings.json") {
+                if (QString(Name) == hc::defaults::edit::LegacySettingsFileName) {
                     for (auto It = Old.begin(); It != Old.end(); ++It) if (It.key() != "schemaVersion") Object[It.key()] = It.value();
                 } else {
                     if (Old.contains("workspace")) Object["workspace"] = Old["workspace"];
@@ -100,7 +101,7 @@ public:
         if (!QDir().mkpath(QFileInfo(Path).absolutePath())) { Error = "create-directory-failed"; return false; }
         QLockFile Lock(Path + ".lock"); Lock.setStaleLockTime(0);
         if (!Lock.tryLock(0)) { Error = "file-locked"; return false; }
-        QJsonObject Disk{{"schemaVersion", 2}};
+        QJsonObject Disk = hc::defaults::edit::DefaultDocument();
         if (QFileInfo::exists(Path) && !read(Path, 2, Disk, Error)) return false;
         QStringList Conflicts;
         Result = merge(Base, Desired, Disk, {}, Conflicts, ResolveConflicts).toObject();

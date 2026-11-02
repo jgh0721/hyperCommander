@@ -54,7 +54,7 @@ protected:
             // An unbound or rebound command must not fall through to Scintilla's
             // control-character aliases or QTabWidget's built-in tab switching.
             if (pending_.isEmpty() && Sequence == DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence(Item.key_))) Owned = true;
-            const QMap<QString, QString> Aliases{{"edit.redo", "Ctrl+Shift+Z"}, {"edit.copy", "Ctrl+Insert"}, {"edit.cut", "Shift+Delete"}, {"edit.paste", "Shift+Insert"}};
+            const auto Aliases = hc::defaults::edit::ShortcutAliases();
             if (pending_.isEmpty() && Aliases.contains(Item.id_) && Sequence == QKeySequence(Aliases[Item.id_])) {
                 Owned = true; if (Binding == QKeySequence(Item.key_)) Exact = actions_.value(Item.id_);
             }

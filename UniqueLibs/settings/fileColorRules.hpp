@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include <QColor>
 #include <QFont>
 #include <QJsonArray>
@@ -90,7 +91,7 @@ public:
         const auto Dot = Name.lastIndexOf(u'.');
         return Dot < 0 || Dot < Name.lastIndexOf(u'/') || Dot < Name.lastIndexOf(u'\\') ? QStringView{} : Name.sliced(Dot + 1);
     }
-    static QJsonObject Empty() { return {{"version", 1}, {"mode", "first"}, {"groups", QJsonArray{}}}; }
+    static QJsonObject Empty() { return hc::defaults::DefaultValue("fileColorRules").toObject(); }
     static bool Supported(const QJsonObject& Document) { return Document["version"] == QJsonValue(1) || Document["version"] == QJsonValue(2) || Document["version"] == QJsonValue(3); }
     static QString Syntax(const QJsonObject& C, int Version = 3) {
         return Version >= 3 && C.contains("syntax") ? C["syntax"].toString()
@@ -111,7 +112,7 @@ public:
     // Derived colors are never persisted over the user's manual dark palette.
     // Keep hue, saturation and alpha; bound inverted lightness for dark surfaces.
     static QJsonObject Colors(const QJsonObject& Group, bool Dark) {
-        if (!Dark || !Group["autoDark"].toBool()) return Group[Dark ? "dark" : "light"].toObject();
+        if (!Dark || !Group["autoDark"].toBool(hc::defaults::DefaultValue("fileColorGroup/autoDark").toBool())) return Group[Dark ? "dark" : "light"].toObject();
         QJsonObject Result;
         const auto Light = Group["light"].toObject();
         for (const auto* Key : {"foreground", "background"}) {
@@ -257,7 +258,7 @@ public:
         const int Version = Document["version"].toInt();
         for (const auto Value : Document["groups"].toArray()) {
             const auto Object = Value.toObject();
-            if (!Object["enabled"].toBool(true)) {
+            if (!Object["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool())) {
                 // Disabled groups still have to round-trip as valid settings.
                 auto Disabled = Document; Disabled["groups"] = QJsonArray{Object};
                 const auto Failure = Validate(Disabled); if (!Failure.isEmpty()) { groups_.clear(); return Failure; }

@@ -77,7 +77,7 @@ CreationDialog::CreationDialog(settings::Repository& Settings, Locator SourceRoo
             : QFileDialog::getSaveFileName(this, tr("압축 파일 저장 위치"), outputPath(), QString::fromStdString(format_) + " (*." + QString::fromStdString(format_) + ')', nullptr, QFileDialog::DontConfirmOverwrite);
         if (!Path.isEmpty()) output_->setText(QDir::toNativeSeparators(Path));
     });
-    const auto Initial = InitialFormat.empty() ? preferences_["lastFormat"].toString("7z") : QString::fromStdString(InitialFormat);
+    const auto Initial = InitialFormat.empty() ? preferences_["lastFormat"].toString(hc::defaults::DefaultValue("archiveCreation/lastFormat").toString()) : QString::fromStdString(InitialFormat);
     auto Index = formats_->findData(Initial); if (Index < 0) Index = 0;
     formats_->blockSignals(true); formats_->setCurrentIndex(Index); formats_->blockSignals(false);
     combinedPath_ = QDir(directory_).filePath((Initial == "iso" ? "image." : "archive.") + formats_->currentData().toString()); folderPath_ = directory_;
@@ -160,7 +160,7 @@ void CreationDialog::configure()
 {
     if (creator_ < 0) return;
     if (catalog_[creator_].descriptor_.configuration_ == ArchiveConfigurationKind::BuiltinDialog) {
-        if (!value_) { if (format_ == "iso") value_ = IsoCreateSettings{}; else { SevenZipCreateSettings V; if (format_ == "zip") V.solid_ = ArchiveSolidMode::Off; value_ = V; } }
+        if (!value_) { if (format_ == "iso") value_ = hc::defaults::IsoCreation<IsoCreateSettings>(); else { auto V = hc::defaults::SevenZipCreation<SevenZipCreateSettings>(format_ == "zip"); value_ = V; } }
         auto Draft = *value_; if (EditBuiltinCreationSettings(this, format_, Draft)) { value_ = std::move(Draft); WriteCreatorSettings(preferences_, catalog_[creator_], format_, *value_); }
     } else {
         auto Result = ConfigureCreator(this, catalog_[creator_]); if (!Result.HasValue() && Result.Failure().category_ != ErrorCategory::Cancelled) hc::ui::MessageDialog::warning(this, tr("플러그인 설정"), hc::ui::ErrorText(Result.Failure()));

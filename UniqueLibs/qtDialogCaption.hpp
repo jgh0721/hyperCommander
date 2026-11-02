@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 
 #include "qtDialogMnemonics.hpp"
 #include <QAbstractNativeEventFilter>
@@ -100,7 +101,7 @@ private:
         QObject::connect( close_, &QToolButton::clicked, Dialog, &QWidget::close );
         Dialog->installEventFilter( this ); Band->installEventFilter( this );
         qApp->installNativeEventFilter( this );
-        auto* MenuKey = new QShortcut( QKeySequence( Qt::ALT | Qt::Key_Space ), Dialog );
+        auto* MenuKey = new QShortcut( QKeySequence(hc::defaults::AuxiliaryShortcut("window.systemMenu")), Dialog );
         QObject::connect( MenuKey, &QShortcut::activated, this, [ this ] { if( band_ ) systemMenu( band_->mapToGlobal( QPoint( 0, band_->height() ) ) ); } );
         QObject::connect( &fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, [ this ] { refresh(); } );
         refresh(); place();

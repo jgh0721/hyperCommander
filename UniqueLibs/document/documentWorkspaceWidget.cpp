@@ -210,12 +210,12 @@ namespace hc::document
         Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(StatusRow);
         chrome_ = new WorkspaceChromeController(menu_, toolbar_, this);
         auto* FileMenu = menu_->addMenu(tr("파일(&F)"));
-        auto Add = [&](const QString& Label, const QKeySequence& Key, const char* Id, auto Callback) {
-            auto* Action = FileMenu->addAction(Label); Action->setShortcut(Key); Action->setObjectName(Id); toolbar_->addAction(Action); addAction(Action);
+        auto Add = [&](const QString& Label, const char* Id, auto Callback) {
+            auto* Action = FileMenu->addAction(Label); Action->setObjectName(Id); toolbar_->addAction(Action); addAction(Action);
             connect(Action, &QAction::triggered, this, Callback); return Action;
         };
-        Add(tr("새 문서(&N)"), QKeySequence("Ctrl+N"), "newDocument", [this] { newDocument(); });
-        Add(tr("열기(&O)"), QKeySequence::Open, "openDocument", [this] {
+        Add(tr("새 문서(&N)"), "newDocument", [this] { newDocument(); });
+        Add(tr("열기(&O)"), "openDocument", [this] {
             auto* Dialog = new QFileDialog(this, tr("문서 열기"));
             Dialog->setFileMode(QFileDialog::ExistingFiles);
             connect(Dialog, &QFileDialog::filesSelected, this, [this](const QStringList& Paths) {
@@ -226,7 +226,7 @@ namespace hc::document
             });
             OpenFileDialog(Dialog);
         });
-        Add(tr("저장(&S)"), QKeySequence::Save, "saveDocument", [this] {
+        Add(tr("저장(&S)"), "saveDocument", [this] {
             auto Tab = active(); if (!Tab) return;
             if (Tab->choosingSavePath_) return;
             if(Tab->pane_->CanEditEpub() && !Tab->pane_->PrepareEpubSave())return;
@@ -242,7 +242,7 @@ namespace hc::document
                 });
             }
         });
-        Add(tr("다른 이름 저장"), QKeySequence::SaveAs, "saveDocumentAs", [this] {
+        Add(tr("다른 이름 저장"), "saveDocumentAs", [this] {
             auto Tab = active(); if (!Tab) return;
             if (Tab->choosingSavePath_) return;
             if(Tab->pane_->CanEditEpub() && !Tab->pane_->PrepareEpubSave())return;
@@ -253,13 +253,13 @@ namespace hc::document
                 else if (!Tab->closed_) { Tab->closeRequested_ = Tab->closeAfterSave_ = false; closingWorkspace_ = false; }
             });
         });
-        Add(tr("다시 읽기"), QKeySequence("Ctrl+R"), "reloadDocument", [this] {
+        Add(tr("다시 읽기"), "reloadDocument", [this] {
             auto Tab = active(); if (!Tab) return;
             if (Tab->Dirty() && hc::ui::MessageDialog::question(this, tr("다시 읽기"), tr("편집 내용을 폐기하고 원본을 다시 읽으시겠습니까?"),
                 QMessageBox::Discard | QMessageBox::Cancel) != QMessageBox::Discard) return;
             load(Tab, true);
         });
-        Add(tr("저장 충돌 처리"), {}, "resolveDocumentConflict", [this] {
+        Add(tr("저장 충돌 처리"), "resolveDocumentConflict", [this] {
             auto Tab = active(); if (!Tab) return;
             hc::ui::MessageDialog Dialog(QMessageBox::Warning, tr("원본 변경"), tr("원본이 변경되었습니다. 처리 방법을 선택하십시오."), QMessageBox::Cancel, this);
             auto* Overwrite = Dialog.addButton(tr("현재 내용으로 덮어쓰기"), QMessageBox::AcceptRole);
@@ -270,18 +270,18 @@ namespace hc::document
             else if (Dialog.clickedButton() == Reload) load(Tab, true);
             else if (Dialog.clickedButton() == SaveAs) findChild<QAction*>("saveDocumentAs")->trigger();
         });
-        Add(tr("닫기(&W)"), QKeySequence::Close, "closeDocument", [this] {
+        Add(tr("닫기(&W)"), "closeDocument", [this] {
             auto Tab = active(); if (Tab) closeTab(int(std::distance(documents_.begin(), std::find(documents_.begin(), documents_.end(), Tab))));
         });
-        Add(tr("작업 취소"), QKeySequence("Ctrl+."), "cancelDocument", [this] {
+        Add(tr("작업 취소"), "cancelDocument", [this] {
             if (auto Tab = active()) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->pane_->Cancel(); }
         });
-        Add(tr("인쇄"),QKeySequence::Print,"printDocument",[this]{if(auto Tab=active())Tab->pane_->Execute({{"action","print"}});});
-        auto* EditHwp=Add(tr("편집"),{},"editHwpDocument",[this]{editHwp(active());});
+        Add(tr("인쇄"), "printDocument",[this]{if(auto Tab=active())Tab->pane_->Execute({{"action","print"}});});
+        auto* EditHwp=Add(tr("편집"), "editHwpDocument",[this]{editHwp(active());});
         EditHwp->setVisible(false);EditHwp->setToolTip(tr("HyperEditor에서 한글 문서 편집"));
         if(auto* Button=qobject_cast<QToolButton*>(toolbar_->widgetForAction(EditHwp)))Button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        Add(tr("인쇄 미리보기"),{},"previewDocument",[this]{if(auto Tab=active())Tab->pane_->Execute({{"action","printPreview"}});});
-        Add(tr("화면 캡처"),QKeySequence("Alt+Shift+S"),"captureScreen",[this]{
+        Add(tr("인쇄 미리보기"), "previewDocument",[this]{if(auto Tab=active())Tab->pane_->Execute({{"action","printPreview"}});});
+        Add(tr("화면 캡처"), "captureScreen",[this]{
             if(clipboardBroker_)return;const auto Captured=Capture::CaptureOverlay::run(this);if(!Captured.accepted||Captured.image.isNull())return;
             QDir().mkpath(recoveryRoot_);const auto Path=recoveryRoot_+"/capture-"+QUuid::createUuid().toString(QUuid::Id128)+".png";
             QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);
@@ -290,7 +290,7 @@ namespace hc::document
         });
         auto* EditMenu = menu_->addMenu(tr("편집(&E)"));
         for (const auto& Item : {std::pair{tr("실행 취소"), QKeySequence::Undo}, std::pair{tr("다시 실행"), QKeySequence::Redo}}) {
-            auto* Action = EditMenu->addAction(Item.first); Action->setShortcut(Item.second); toolbar_->addAction(Action); addAction(Action);
+            auto* Action = EditMenu->addAction(Item.first); toolbar_->addAction(Action); addAction(Action);
             Action->setObjectName(Item.second == QKeySequence::Undo ? "undoDocument" : "redoDocument");
             connect(Action, &QAction::triggered, this, [this, Key = Item.second] {
                 if (auto Tab = active()) { if (Key == QKeySequence::Undo) Tab->pane_->Undo(); else Tab->pane_->Redo(); }
@@ -301,10 +301,10 @@ namespace hc::document
         connect(Fullscreen, &ImageFullscreen::ActiveChanged, chrome_, &WorkspaceChromeController::SetSuppressed);
         auto* FullscreenAction=ViewMenu->addAction(tr("전체 화면 (F11)"));FullscreenAction->setObjectName("view.fullscreen");connect(FullscreenAction,&QAction::triggered,this,[this,Fullscreen]{if(auto Tab=active();epubFullscreen_ || Tab && Tab->pane_->IsEpub())toggleEpubFullscreen();else Fullscreen->Toggle();});
         auto* Preferences = ViewMenu->addAction(tr("설정(&P)…"));
-        Preferences->setObjectName("documentPreferences"); Preferences->setShortcut(QKeySequence("Ctrl+,")); addAction(Preferences);
+        Preferences->setObjectName("documentPreferences"); addAction(Preferences);
         connect(Preferences, &QAction::triggered, this, &DocumentWorkspaceWidget::showPreferences);
         auto* Options = new QAction(tr("표시 옵션"), this); Options->setObjectName("workspaceDisplayOptions");
-        Options->setShortcut(QKeySequence("Ctrl+Shift+M")); addAction(Options);
+        addAction(Options);
         connect(Options, &QAction::triggered, this, [this, ViewMenu] { ViewMenu->popup(mapToGlobal(QPoint(8, 8))); });
         setContextMenuPolicy(Qt::ActionsContextMenu); addAction(Options);
         for (const bool Menu : {true, false}) {
@@ -413,7 +413,7 @@ namespace hc::document
         qApp->installEventFilter(this);
         new DocumentFocusRestore(this,[this]()->QWidget*{auto Tab=active();return Tab&&!Tab->loading_?Tab->pane_->InputWidget():nullptr;});
         if (hosted_) {
-            viewerEscape_ = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+            viewerEscape_ = new QShortcut(QKeySequence(hc::defaults::edit::AuxiliaryShortcut("viewer.close")), this);
             viewerEscape_->setAutoRepeat(false);
             connect(viewerEscape_, &QShortcut::activated, this, &DocumentWorkspaceWidget::escapeViewer);
         }
@@ -532,7 +532,7 @@ namespace hc::document
         DocumentThemeAdapter::LoadProductTheme(QFileInfo(settingsPath_).absolutePath());
         QJsonObject Root; QString Error;
         if (!hc::settings::UnifiedConfig::Load(settingsPath_, Root, Error)) { ShowShellError(tr("설정을 읽지 못했습니다: %1\n%2").arg(QDir::toNativeSeparators(settingsPath_), Error)); return; }
-        closeViewerOnEscape_ = Root["documentViews"].toObject()["common"].toObject()["closeViewerOnEscape"].toBool(true);
+        closeViewerOnEscape_ = Root["documentViews"].toObject()["common"].toObject()["closeViewerOnEscape"].toBool(hc::defaults::edit::ViewValue("common/closeViewerOnEscape").toBool());
         if (viewerEscape_) viewerEscape_->setEnabled(closeViewerOnEscape_);
         const auto Chrome = Root["appearance"].toObject()["documentWorkspace"].toObject();
         // The EPUB editor's saved panel layout changes while dragging and never needs a reload.
@@ -542,12 +542,12 @@ namespace hc::document
         appliedPreferences_ = Relevant;
         if (externalWatcher_) externalWatcher_->reloadSettings();
         if (!Chrome.isEmpty() && !ApplyChromeSettings(Chrome)) ShowShellError(tr("문서 표시 설정이 올바르지 않습니다."));
-        const bool Cover = Views["imageView"].toObject()["comic"].toObject()["coverAlone"].toBool(true);
+        const bool Cover = Views["imageView"].toObject()["comic"].toObject()["coverAlone"].toBool(hc::defaults::edit::ViewValue("imageView/comic/coverAlone").toBool());
         for(auto* Reader:findChildren<ImageReadingView*>())if(Reader->State()["cover"].toBool()!=Cover)Reader->SetCover(Cover);
         for (auto* View : findChildren<QTextView*>()) View->ReloadPreferences();
         for(auto* Markdown:findChildren<MarkdownDocumentView*>())Markdown->ReloadPreferences();
         for(auto* Source:findChildren<EpubSourceEditor*>())Source->ReloadValidationSettings();
-        for(const auto& Tab:documents_)Tab->pane_->SetEpubRecoveryEnabled(Root["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(true));
+        for(const auto& Tab:documents_)Tab->pane_->SetEpubRecoveryEnabled(Root["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(hc::defaults::edit::ViewValue("textView/recoveryEnabled").toBool()));
         const auto Bindings = Root["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
         const auto ShortcutError = shortcutRouter_->Apply(Bindings);
         for(auto* Epub:findChildren<EpubProcessView*>())Epub->ReaderAction("bindings",Bindings);
@@ -838,9 +838,9 @@ namespace hc::document
                 Tab->input_ = std::move(Result.Value()); Tab->path_ = Tab->input_.path_;
                 if (!Tab->temporarySource_.isEmpty() && !Tab->originalAuthority_ && Tab->input_.viewId_ == "text") {
                     AppSettings Settings;
-                    const auto Encoding = Settings.value("textView/saveEncoding", "UTF-8").toString();
+                    const auto Encoding = Settings.value("textView/saveEncoding").toString();
                     Tab->input_.encoding_ = QStringList{"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}.contains(Encoding) ? Encoding : "UTF-8";
-                    const int Bom = Settings.value("textView/saveBomMode", 1).toInt();
+                    const int Bom = Settings.value("textView/saveBomMode").toInt();
                     Tab->input_.bom_ = Tab->input_.encoding_ != "CP949" && (Bom == 1 || (Bom == 0 && Tab->input_.encoding_.startsWith("UTF-16")));
                 }
                 if (Tab->input_.recoveryOrigin_) Tab->recoveredName_ = tr("복구 · ") + QFileInfo(QString::fromStdString(Tab->input_.recoveryOrigin_->localPath_)).fileName();
@@ -1006,7 +1006,7 @@ namespace hc::document
             }
         }
         // A host-slot replacement must preserve dirty content even when periodic recovery is disabled.
-        if (pendingHostOpen_.isEmpty() && !appliedPreferences_["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(true)) return;
+        if (pendingHostOpen_.isEmpty() && !appliedPreferences_["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(hc::defaults::edit::ViewValue("textView/recoveryEnabled").toBool())) return;
         for (const auto& Tab : documents_) {
             // EPUB source drafts are tokens, not a recovery archive. Never persist them as EPUB bytes.
             if(Tab->pane_->IsEpub()){Tab->pane_->CheckpointEpub();continue;}
@@ -1384,7 +1384,7 @@ namespace hc::document
             const auto Destination=Tab->pane_->IsEpub()?tr("원본 유지 · 다른 이름으로 저장"):Tab->broker_?tr("원본 공급자에 저장"):Tab->originalSave_?tr("로컬 파일"):tr("사본 · 다른 이름으로 저장");
             if(!Tab->loading_ && !Tab->input_.bytes_.isEmpty())Fields.append(DocumentStatusField{"fileSize",QLocale().formattedDataSize(Tab->input_.bytes_.size()),{},tr("열 때의 파일 크기"),{},false});
             Fields.append(DocumentStatusField{"destination",Destination,{},{},{},false});
-            if(Tab->pane_->ViewId()=="text"&&Tab->input_.bytes_.size()>=qBound(1,appliedPreferences_["documentViews"].toObject()["textView"].toObject()["largeFileMB"].toInt(1),16)*1024*1024)
+            if(Tab->pane_->ViewId()=="text"&&Tab->input_.bytes_.size()>=qBound(1,appliedPreferences_["documentViews"].toObject()["textView"].toObject()["largeFileMB"].toInt(hc::defaults::edit::ViewValue("textView/largeFileMB").toInt()),16)*1024*1024)
                 Fields.append(DocumentStatusField{"largeFile",tr("대용량 문서"),{},tr("편집·검색에 시간이 걸릴 수 있습니다."),{},false});
             Fields.append(DocumentStatusField{"mode",Mode,{},{},{},true,true});
             QString MessageText,Detail;

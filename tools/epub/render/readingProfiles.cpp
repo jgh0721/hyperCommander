@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingProfiles.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "readingSettings.hpp"
 #include <QCryptographicHash>
 #include <QDir>
@@ -14,7 +15,7 @@ namespace {
 constexpr qint64 LibraryLimit=2*1024*1024,TransferLimit=12*1024*1024;
 QString libraryPath(const QString& Settings) {
     if(Settings.isEmpty())throw QStringLiteral("설정 경로가 없어 프로필을 보관할 수 없습니다.");
-    return QDir(QFileInfo(Settings).absolutePath()).filePath("epub-profiles.json");
+    return hc::defaults::edit::EpubProfilesFile(QFileInfo(Settings).absolutePath());
 }
 QString name(const QString& Value) {
     const auto Name=Value.trimmed();if(Name.isEmpty() || Name.size()>80)throw QStringLiteral("프로필 이름은 1~80자로 입력하세요.");

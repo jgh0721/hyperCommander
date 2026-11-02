@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpSystemView.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 
 /// UIs
 #include "UIs/cmpPanel.hpp"
@@ -1001,7 +1002,7 @@ void CSystemView::RestoreState( const QJsonObject& State )
     {
         if( State.contains( "flat" ) ) SetFlat( State["flat"].toBool() );
         if( State.contains( "searchScopes" ) ) searchScope_->setCurrentIndex( std::max( 0, searchScope_->findData( State["searchScopes"].toInt() ) ) );
-        if( State.contains( "keepAncestors" ) ) keepAncestors_->setChecked( State["keepAncestors"].toBool( true ) );
+        if( State.contains( "keepAncestors" ) ) keepAncestors_->setChecked( State["keepAncestors"].toBool(hc::defaults::DefaultValue("workspace/keepAncestors").toBool()) );
     }
     else
     {
@@ -1015,7 +1016,7 @@ void CSystemView::RestoreState( const QJsonObject& State )
         auto* Column = static_cast<Qtitan::GridTableColumn*>( view_->getColumnByModelColumn( Item["column"].toInt( -1 ) ) );
         if( !Column ) continue;
         if( Item["width"].toInt() >= 24 ) Column->setWidth( std::min( Item["width"].toInt(), 2000 ) );
-        Column->setVisible( Item["visible"].toBool( true ) );
+        Column->setVisible( Item["visible"].toBool(hc::defaults::DefaultValue("workspace/columnVisible").toBool()) );
         const int Sort = Item["sort"].toInt();
         if( Sort >= 0 && Sort <= 2 ) Column->setSortOrder( Qtitan::SortOrder( Sort ) );
     }

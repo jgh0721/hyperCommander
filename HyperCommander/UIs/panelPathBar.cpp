@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "panelPathBar.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 
 /// Unique libraries
 #include "UniqueLibs/storageProviders.hpp"
@@ -298,7 +299,7 @@ void PanelPathBar::focusOutEvent(QFocusEvent* Event)
 void PanelPathBar::keyPressEvent(QKeyEvent* Event)
 {
     clickTimer_.stop();
-    if (Event->key() == Qt::Key_F2 || (Event->key() == Qt::Key_L && Event->modifiers() == Qt::ControlModifier)) { EditPath(); return; }
+    if (Event->key() == hc::defaults::AuxiliaryShortcut("path.edit").key() || Event->keyCombination() == hc::defaults::AuxiliaryShortcut("path.editAlternate")) { EditPath(); return; }
     if (!enabled_ || crumbs_.isEmpty()) { BreadcrumbBar::keyPressEvent(Event); return; }
     if (Event->key() == Qt::Key_Escape) { dismissMenu(); revealed_ = false; update(); return; }
     if (Event->key() == Qt::Key_Left || Event->key() == Qt::Key_Right) {

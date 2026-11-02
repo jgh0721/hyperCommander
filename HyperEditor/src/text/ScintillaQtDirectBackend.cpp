@@ -132,11 +132,6 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 {
 	m_editorFont = m_editor->font();
 
-    // Home follows the display row, including a caret at its wrapped end.
-    m_editor->send(sciMessage(SCI_ASSIGNCMDKEY), SCK_HOME, SCI_HOMEDISPLAY);
-    m_editor->send(sciMessage(SCI_ASSIGNCMDKEY), SCK_HOME | (SCMOD_SHIFT << 16),
-        SCI_HOMEDISPLAYEXTEND);
-
 	// 리사이즈 시 깜빡임 방지: 시스템 배경 지움 비활성화
 	// Scintilla paints the viewport only. The scroll area must still erase
 	// exposed edges and the corner between its two scroll bars.
@@ -160,9 +155,16 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
     m_editor->send(sciMessage(SCI_SETMULTIPLESELECTION), 1);
     m_editor->send(sciMessage(SCI_SETADDITIONALSELECTIONTYPING), 1);
     m_editor->send(sciMessage(SCI_SETMULTIPASTE), SC_MULTIPASTE_EACH);
-    // End and Shift+End stop at the current wrapped display line.
-    m_editor->send(sciMessage(SCI_ASSIGNCMDKEY), SCK_END, SCI_LINEENDDISPLAY);
-    m_editor->send(sciMessage(SCI_ASSIGNCMDKEY), SCK_END | (SCMOD_SHIFT << 16), SCI_LINEENDDISPLAYEXTEND);
+    // Home/End and their selection variants follow the current wrapped display line.
+    static_assert(hc::defaults::edit::NativeKeyHome == SCK_HOME);
+    static_assert(hc::defaults::edit::NativeHomeDisplay == SCI_HOMEDISPLAY);
+    static_assert(hc::defaults::edit::NativeHomeDisplayExtend == SCI_HOMEDISPLAYEXTEND);
+    static_assert(hc::defaults::edit::NativeKeyEnd == SCK_END);
+    static_assert(hc::defaults::edit::NativeShift == (SCMOD_SHIFT << 16));
+    static_assert(hc::defaults::edit::NativeLineEndDisplay == SCI_LINEENDDISPLAY);
+    static_assert(hc::defaults::edit::NativeLineEndDisplayExtend == SCI_LINEENDDISPLAYEXTEND);
+    for (const auto& [Key, Command] : hc::defaults::edit::NativeTextBindings)
+        m_editor->send(sciMessage(SCI_ASSIGNCMDKEY), Key, Command);
 	// 사각형 선택 활성화
 	m_editor->send(sciMessage(SCI_SETVIRTUALSPACEOPTIONS), SCVS_RECTANGULARSELECTION);
 

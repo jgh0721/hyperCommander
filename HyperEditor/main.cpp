@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "runtimeVerification.hpp"
 #include "UniqueLibs/bundledFonts.hpp"
@@ -100,7 +101,7 @@ int main(int Argc, char** Argv)
         auto Runtime = hc::document::MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),
             QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256));
         if(!RhwpEdit){
-            Workspace Window(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recovery/viewer",true);
+            Workspace Window(hc::defaults::edit::RecoveryDirectory(true),true);
             Window.ConfigureHwp(std::move(Runtime));
             QObject::connect(&Window,&hc::document::DocumentWorkspaceWidget::StateChanged,&Window,[&Window]{
                 if(Window.Snapshot()["closeRequested"].toBool())Window.close();
@@ -109,7 +110,7 @@ int main(int Argc, char** Argv)
             Window.Handle({{"action","open"},{"path",Path}});return App.exec();
         }
         hc::document::HwpOpenWindow Window(Path,
-            QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/rhwp", std::move(Runtime), {}, RhwpEdit, !Parser.isSet("rhwp-edit-copy"));
+            hc::defaults::edit::HwpCacheDirectory(), std::move(Runtime), {}, RhwpEdit, !Parser.isSet("rhwp-edit-copy"));
         QObject::connect(&Window, &hc::document::HwpOpenWindow::Closed, &App, &QCoreApplication::quit);
         QObject::connect(&App,&QCoreApplication::aboutToQuit,&App,[] {
             // The Ready observation has completed; all owners drain before normal quit.
@@ -127,12 +128,12 @@ int main(int Argc, char** Argv)
         if(Started==EditorInstance::Forwarded)return 0;
         if(Started==EditorInstance::Failed){hc::ui::MessageDialog::warning(nullptr,QObject::tr("문서 열기"),QObject::tr("기존 HyperEditor에 열기 요청을 전달하지 못했습니다. 잠시 후 다시 시도하십시오."));return 12;}
     }
-    const auto RecoveryRoot = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recovery/editor";
+    const auto RecoveryRoot = hc::defaults::edit::RecoveryDirectory(false);
     hc::settings::JsonStore Settings(hc::settings::UnifiedConfig::FileName(Config.directory_),
         {{"schemaVersion", 2}}, nullptr, hc::settings::JsonStore::Scope::Product);
     const auto Appearance = Settings.Object()["appearance"].toObject();
     // Light/dark follows the product unless the editor's own setting overrides it.
-    hc::document::DocumentThemeAdapter::SetMode(Appearance["documentWorkspace"].toObject()["themeMode"].toString("product"));
+    hc::document::DocumentThemeAdapter::SetMode(Appearance["documentWorkspace"].toObject()["themeMode"].toString(hc::defaults::edit::WorkspaceValue("themeMode").toString()));
     if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
     std::vector<std::unique_ptr<Workspace>> Windows;
     const auto OpenFiles=[&](QStringList Files){

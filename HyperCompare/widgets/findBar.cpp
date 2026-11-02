@@ -48,8 +48,8 @@ namespace hc::compare
         regex_ = new QCheckBox(tr("정규식"), controls_); regex_->setObjectName("compareFindRegex"); layout->addWidget(regex_);
         connect(regex_, &QCheckBox::toggled, this, &FindBar::clearFeedback);
         word_ = new QCheckBox(tr("단어 단위"), controls_); word_->setObjectName("compareFindWord"); layout->addWidget(word_);
-        Preferences settings; case_->setChecked(settings.Value("find/caseSensitive", false).toBool());
-        word_->setChecked(settings.Value("find/wholeWord", false).toBool());
+        Preferences settings; case_->setChecked(settings.Value("find/caseSensitive").toBool());
+        word_->setChecked(settings.Value("find/wholeWord").toBool());
         feedback_ = new QLabel(controls_); feedback_->setObjectName("compareFindFeedback");
         feedback_->setTextFormat(Qt::PlainText); feedback_->setMinimumWidth(120); layout->addWidget(feedback_);
         auto* close = button(tr("닫기"), "compareFindClose"); close->setToolTip(tr("찾기 닫기 (Esc)"));

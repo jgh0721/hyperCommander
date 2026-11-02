@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/userMenu.hpp"
 #include "commandSelector.hpp"
 #include <fmwidgets/Card.h>
@@ -56,7 +57,7 @@ public:
         Reload();
     }
     void Reload() {
-        CancelPrepared(); path_ = QDir(settings::Paths().directory_).filePath("menu-bar.json"); pathLabel_->setText(path_);
+        CancelPrepared(); path_ = hc::defaults::MenuBarFile(settings::Paths().directory_); pathLabel_->setText(path_);
         exists_ = QFileInfo::exists(path_); QFile File(path_); original_ = {};
         if (exists_ && (!File.open(QIODevice::ReadOnly) || File.size() > 1024 * 1024)) { editable_ = false; tree_->clear(); status_->setText(tr("원본을 읽을 수 없습니다. 가져오기 또는 기본값 복원으로 초안을 만들 수 있습니다.")); return; }
         if (exists_) original_ = File.readAll();
@@ -110,7 +111,7 @@ public:
     }
     void CancelPrepared() { prepared_.reset(); lock_.reset(); }
 private:
-    static QByteArray defaults() { QFile File(":/HyperCommander/menu-bar.json"); return File.open(QIODevice::ReadOnly) ? File.readAll() : QByteArray{}; }
+    static QByteArray defaults() { return hc::defaults::MenuBarDefaults(); }
     bool fail(const QString& Text) { status_->setText(Text); CancelPrepared(); return false; }
     void setItemText(QTreeWidgetItem* Item) {
         const auto O = Item->data(0, Qt::UserRole).toJsonObject();

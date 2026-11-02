@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "documentSettingsDialog.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentShortcutRegistry.hpp"
 #include "tools/epub/render/readingSettings.hpp"
@@ -90,20 +91,20 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     };
     auto Combo = [&](QFormLayout* Form, const QString& Key, const QString& Label, const QStringList& Labels, const QVariantList& Values) {
         auto* Field = new QComboBox(this); for (int Index = 0; Index < Labels.size(); ++Index) Field->addItem(Labels[Index], Values[Index]);
-        Field->setObjectName(Key); controls_[Key] = Field; Form->addRow(Label, Field);
+        Field->setObjectName(Key); Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); controls_[Key] = Field; Form->addRow(Label, Field);
     };
-    auto Check = [&](QFormLayout* Form, const QString& Key, const QString& Label, bool Default) {
-        auto* Field = new QCheckBox(Label, this); Field->setProperty("defaultValue", Default); Field->setObjectName(Key);
+    auto Check = [&](QFormLayout* Form, const QString& Key, const QString& Label) {
+        auto* Field = new QCheckBox(Label, this); Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); Field->setObjectName(Key);
         controls_[Key] = Field; Form->addRow(SwitchRow(Field, Form->parentWidget()));
     };
-    auto Spin = [&](QFormLayout* Form, const QString& Key, const QString& Label, int Minimum, int Maximum, int Default) {
-        auto* Field = new QSpinBox(this); Field->setRange(Minimum, Maximum); Field->setProperty("defaultValue", Default);
+    auto Spin = [&](QFormLayout* Form, const QString& Key, const QString& Label, int Minimum, int Maximum) {
+        auto* Field = new QSpinBox(this); Field->setRange(Minimum, Maximum); Field->setProperty("defaultValue", hc::defaults::edit::ViewValue("textView/" + Key));
         Field->setObjectName("documentViews/textView/" + Key); controls_[Field->objectName()] = Field; Form->addRow(Label, Field);
     };
     // Font names must not widen the card past the page; the list still shows full names.
     auto FontField = [&](QFormLayout* Form, const QString& Key, const QString& Label) {
         auto* Field = new QFontComboBox(this); Field->setObjectName("documentViews/textView/" + Key);
-        if (Key == "fontFamily") Field->setProperty("defaultValue", "D2Coding ligature");
+        Field->setProperty("defaultValue", hc::defaults::edit::ViewValue("textView/" + Key));
         Field->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); Field->setMinimumContentsLength(12);
         controls_[Field->objectName()] = Field; Form->addRow(Label, Field);
     };
@@ -114,7 +115,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     for (const auto& Key : {QString("mainMenuMode"), QString("mainToolbarMode")})
         Combo(Display, "appearance/documentWorkspace/" + Key, Key == "mainMenuMode" ? tr("메뉴 표시") : tr("도구모음 표시"), {tr("뷰 권장값"), tr("표시"), tr("숨기기")}, {"recommended", "show", "hide"});
     auto* WindowCard = Card(General, tr("창"));
-    Check(WindowCard, "documentViews/common/closeViewerOnEscape", tr("ESC 키를 눌러 창 닫기 (HyperViewer 전용)"), true);
+    Check(WindowCard, "documentViews/common/closeViewerOnEscape", tr("ESC 키를 눌러 창 닫기 (HyperViewer 전용)"));
     auto* Files = Card(General, tr("설정 파일"));
     auto* Location = new QLabel(tr("설정 파일: %1").arg(QDir::toNativeSeparators(path_)), this); Location->setWordWrap(true); Location->setTextInteractionFlags(Qt::TextSelectableByMouse); Files->addRow(Location);
     auto* Import = new QPushButton(tr("기존 설정 가져오기…"), this); auto* ImportRow = new QHBoxLayout; ImportRow->addWidget(Import); ImportRow->addStretch(); Files->addRow(ImportRow);
@@ -132,54 +133,50 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Text = Page(tr("텍스트 뷰어"), tr("글꼴과 편집 화면, 들여쓰기·줄바꿈, 새 문서 저장과 외부 파일 변경 처리를 설정합니다."));
     auto* Fonts = Card(Text, tr("글꼴"));
     FontField(Fonts, "fontFamily", tr("글꼴"));
-    Spin(Fonts, "fontSize", tr("글꼴 크기 (pt)"), 6, 72, 16);
-    auto* Spacing = new QDoubleSpinBox(this); Spacing->setRange(1.0, 3.0); Spacing->setSingleStep(.1); Spacing->setDecimals(2); Spacing->setProperty("defaultValue", 1.1);
+    Spin(Fonts, "fontSize", tr("글꼴 크기 (pt)"), 6, 72);
+    auto* Spacing = new QDoubleSpinBox(this); Spacing->setRange(1.0, 3.0); Spacing->setSingleStep(.1); Spacing->setDecimals(2); Spacing->setProperty("defaultValue", hc::defaults::edit::ViewValue("textView/lineSpacing"));
     Spacing->setObjectName("documentViews/textView/lineSpacing"); controls_[Spacing->objectName()] = Spacing; Fonts->addRow(tr("줄 간격"), Spacing);
     Combo(Fonts, "documentViews/textView/fontRendering", tr("글꼴 렌더링"), {tr("기본"), tr("안티앨리어싱 없음"), tr("회색조"), tr("ClearType")}, {0, 1, 2, 3});
     auto* View = Card(Text, tr("편집 화면"));
     const QList<QPair<QString, QString>> ViewChecks{{"showLineNumbers", tr("줄 번호")}, {"highlightCurrentLine", tr("현재 줄 강조")},
         {"braceHighlight", tr("괄호 강조")}, {"showCodeFolding", tr("코드 접기")}, {"showWhitespace", tr("공백·줄끝 표시")}, {"showIndentationGuides", tr("들여쓰기 안내선")}};
-    for (const auto& Item : ViewChecks) Check(View, "documentViews/textView/" + Item.first, Item.second, Item.first != "showWhitespace");
+    for (const auto& Item : ViewChecks) Check(View, "documentViews/textView/" + Item.first, Item.second);
     Combo(View, "documentViews/textView/indentGuideStyle", tr("들여쓰기 안내선 모드"), {tr("실제 들여쓰기"), tr("다음 줄 참조"), tr("앞뒤 줄 참조")}, {1, 2, 3});
     Combo(View, "documentViews/textView/changeHistoryMode", tr("변경 이력 표시"), {tr("끄기"), tr("여백 표시"), tr("본문 표시"), tr("모두")}, {0, 1, 2, 3});
     auto* Indent = Card(Text, tr("들여쓰기 · 줄바꿈"));
-    Spin(Indent, "tabWidth", tr("탭 너비"), 1, 16, 4);
-    Check(Indent, "documentViews/textView/autoIndent", tr("자동 들여쓰기"), true);
-    Check(Indent, "documentViews/textView/useTabs", tr("들여쓰기에 탭 사용"), true);
+    Spin(Indent, "tabWidth", tr("탭 너비"), 1, 16);
+    Check(Indent, "documentViews/textView/autoIndent", tr("자동 들여쓰기"));
+    Check(Indent, "documentViews/textView/useTabs", tr("들여쓰기에 탭 사용"));
     Combo(Indent, "documentViews/textView/wordWrapMode", tr("자동 줄바꿈"), {tr("없음"), tr("단어 단위"), tr("문자 단위"), tr("공백 단위")}, {0, 1, 2, 3});
     Combo(Indent, "documentViews/textView/wrapVisualFlags", tr("줄바꿈 이어짐 표시"),
         {tr("없음"), tr("줄 끝"), tr("줄 시작"), tr("줄 끝·시작"), tr("여백"), tr("줄 끝·여백"), tr("줄 시작·여백"), tr("모두")}, {0, 1, 2, 3, 4, 5, 6, 7});
-    controls_["documentViews/textView/wrapVisualFlags"]->setProperty("defaultValue", 1);
     Combo(Indent, "documentViews/textView/wrapIndentMode", tr("이어지는 행 들여쓰기"),
         {tr("고정"), tr("원래 들여쓰기"), tr("한 단계 추가"), tr("두 단계 추가")}, {0, 1, 2, 3});
-    controls_["documentViews/textView/wrapIndentMode"]->setProperty("defaultValue", 1);
     auto* Ruler = Card(Text, tr("눈금자"));
-    Check(Ruler, "documentViews/textView/showRuler", tr("눈금자"), true);
+    Check(Ruler, "documentViews/textView/showRuler", tr("눈금자"));
     FontField(Ruler, "rulerFontFamily", tr("눈금자 글꼴"));
-    Spin(Ruler, "rulerFontSize", tr("눈금자 글꼴 크기 (pt)"), 6, 36, 8);
+    Spin(Ruler, "rulerFontSize", tr("눈금자 글꼴 크기 (pt)"), 6, 36);
     auto* Save = Card(Text, tr("새 문서 · 복구"));
     Combo(Save, "documentViews/textView/defaultLineEnding", tr("새 줄 기본 줄끝"), {"CRLF", "LF", "CR"}, {"CRLF", "LF", "CR"});
     Combo(Save, "documentViews/textView/saveEncoding", tr("새 문서 기본 인코딩"), {"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}, {"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"});
     Combo(Save, "documentViews/textView/saveBomMode", tr("새 문서 BOM"), {tr("인코딩 권장값"), tr("포함"), tr("제외")}, {0, 1, 2});
-    controls_["documentViews/textView/saveBomMode"]->setProperty("defaultValue", 1);
-    Check(Save, "documentViews/textView/recoveryEnabled", tr("미저장 문서의 주기적 복구 사본 생성"), true);
-    Spin(Save, "largeFileMB", tr("대용량 안내 기준 (MiB)"), 1, 16, 1);
+    Check(Save, "documentViews/textView/recoveryEnabled", tr("미저장 문서의 주기적 복구 사본 생성"));
+    Spin(Save, "largeFileMB", tr("대용량 안내 기준 (MiB)"), 1, 16);
     Note(Save, tr("기존 파일의 인코딩·BOM·줄끝은 유지합니다. 수정 중인 문서는 다시 읽기 전에 확인합니다. 복구를 꺼도 F3 문서 교체 시 미저장 내용은 보호합니다."));
     auto* External = Card(Text, tr("외부 파일 변경"));
     Combo(External, "documentViews/textView/externalChangeAction", tr("외부 파일 변경"), {tr("감시 끄기"), tr("수정하지 않은 문서 자동 다시 읽기"), tr("항상 확인")}, {0, 1, 2});
-    controls_["documentViews/textView/externalChangeAction"]->setProperty("defaultValue", 1);
     Combo(External, "documentViews/textView/externalChangeDetection", tr("변경 감지 방식"), {tr("OS 알림"), tr("주기적 확인")}, {0, 1});
-    Spin(External, "externalChangePollSeconds", tr("확인 간격 (초, OS 알림 실패 시에도 사용)"), 1, 3600, 3);
+    Spin(External, "externalChangePollSeconds", tr("확인 간격 (초, OS 알림 실패 시에도 사용)"), 1, 3600);
     auto* Mask = Card(Text, tr("글자 마스크"));
-    Check(Mask, "documentViews/textView/mask/enabled", tr("글자 마스크 보정"), false);
-    auto MaskSpin = [&](const QString& Key, const QString& Label, double Maximum, double Default) {
+    Check(Mask, "documentViews/textView/mask/enabled", tr("글자 마스크 보정"));
+    auto MaskSpin = [&](const QString& Key, const QString& Label, double Maximum) {
         auto* Field = new QDoubleSpinBox(this); Field->setRange(.5, Maximum); Field->setSingleStep(.05); Field->setDecimals(2);
-        Field->setProperty("defaultValue", Default); Field->setObjectName("documentViews/textView/mask/" + Key);
+        Field->setProperty("defaultValue", hc::defaults::edit::ViewValue("textView/mask/" + Key)); Field->setObjectName("documentViews/textView/mask/" + Key);
         controls_[Field->objectName()] = Field; Mask->addRow(Label, Field);
         auto* Enabled = qobject_cast<QCheckBox*>(controls_["documentViews/textView/mask/enabled"]);
         Field->setEnabled(false); connect(Enabled, &QCheckBox::toggled, Field, &QWidget::setEnabled);
     };
-    MaskSpin("gamma", tr("글자 마스크 감마"), 3.0, 1.2); MaskSpin("strength", tr("글자 마스크 강도"), 2.0, 1.1);
+    MaskSpin("gamma", tr("글자 마스크 감마"), 3.0); MaskSpin("strength", tr("글자 마스크 강도"), 2.0);
     Text->addStretch();
     auto* TextCommon = Pages->widget(1); Pages->removeWidget(TextCommon);
     auto* TextTabs = new QTabWidget(Pages); TextTabs->setObjectName("textViewerTabs");
@@ -278,23 +275,23 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     };
     EpubTool("javaPath",tr("EPUBCheck Java 실행 파일"),tr("Java 실행 파일 (java.exe);;모든 파일 (*)"));
     EpubTool("epubcheckJar",tr("EPUBCheck JAR"),tr("EPUBCheck (epubcheck.jar);;JAR 파일 (*.jar)"));
-    Check(EpubForm,"documentViews/epubEditor/requireEpubCheck",tr("EPUB 다른 이름 저장 전에 EPUBCheck 오류 없음 필수"),false);
+    Check(EpubForm,"documentViews/epubEditor/requireEpubCheck",tr("EPUB 다른 이름 저장 전에 EPUBCheck 오류 없음 필수"));
     Note(EpubForm, tr("기본 검사는 패키지·XML·CSS 괄호·참조·이미지를 확인합니다. EPUBCheck는 선택한 외부 Java/JAR로 사본을 검사합니다. 경고는 저장을 허용하며, 필수 검사를 켜면 검사 실패·취소·오류가 있을 때 저장을 중단합니다."));
     auto* EpubCheckHelp=new QLabel(tr("<a href=\"https://www.w3.org/publishing/epubcheck/docs/installation/\">EPUBCheck 공식 설치 안내</a>"),this);EpubCheckHelp->setOpenExternalLinks(true);EpubForm->addRow(EpubCheckHelp);
     auto* Reading = Card(EpubPage, tr("읽기 기본값 · 모든 책"));
-    epubSettings_=new hc::epub::poc::ReadingSettings(QDir(QFileInfo(path_).absolutePath()).filePath("epub-reading.json"),QString(64,'0'),"light",this);
+    epubSettings_=new hc::epub::poc::ReadingSettings(hc::defaults::edit::EpubReadingFile(QFileInfo(path_).absolutePath()),QString(64,'0'),"light",this);
     epubSettings_->setObjectName("epubGlobalSettings");epubSettings_->SetGlobalOnly();Reading->addRow(epubSettings_);
     EpubPage->addStretch();
     auto* Markdown=Page(tr("마크다운"),tr("미리보기 글꼴과 문법, 개요 및 소스·본문 동기화를 설정합니다."));
     auto* MdFonts=Card(Markdown,tr("미리보기 글꼴 (.MD)"));
     const QString MdPrefix="documentViews/markdown/",FontPrefix=MdPrefix+"previewFonts/";
-    Check(MdFonts,FontPrefix+"enabled",tr("글꼴 사용자 설정 사용"),false);
+    Check(MdFonts,FontPrefix+"enabled",tr("글꼴 사용자 설정 사용"));
     Combo(MdFonts,FontPrefix+"mode",tr("글꼴 적용"),{tr("문서 글꼴 (없으면 웹뷰 기본)"),tr("웹뷰 기본"),tr("사용자 글꼴")},{"document","web","user"});
-    auto MdSpin=[&](QFormLayout* Form,const QString& Key,const QString& Label,int Low,int High,int Default){auto* Field=new QSpinBox(this);Field->setRange(Low,High);Field->setObjectName(Key);Field->setProperty("defaultValue",Default);controls_[Key]=Field;Form->addRow(Label,Field);};
-    for(const auto& Pair:{std::pair{"bodyFamily",tr("본문 글꼴")},std::pair{"codeFamily",tr("코드 글꼴")}}){auto* Field=new QFontComboBox(this);const QString Key=FontPrefix+Pair.first;Field->setObjectName(Key);Field->setProperty("defaultValue",QString(Pair.first)=="bodyFamily"?"맑은 고딕":"Consolas");Field->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);Field->setMinimumContentsLength(12);controls_[Key]=Field;MdFonts->addRow(Pair.second,Field);}
-    MdSpin(MdFonts,FontPrefix+"bodySizePt",tr("본문 크기 (pt)"),8,72,11);MdSpin(MdFonts,FontPrefix+"codeSizePt",tr("코드 크기 (pt)"),8,72,10);
-    auto* MdSpacing=new QDoubleSpinBox(this);MdSpacing->setRange(1.,3.);MdSpacing->setSingleStep(.1);MdSpacing->setDecimals(2);MdSpacing->setObjectName(FontPrefix+"lineHeight");MdSpacing->setProperty("defaultValue",1.7);controls_[MdSpacing->objectName()]=MdSpacing;MdFonts->addRow(tr("본문 행간"),MdSpacing);
-    Check(MdFonts,FontPrefix+"headings",tr("제목에도 선택한 글꼴 적용"),true);
+    auto MdSpin=[&](QFormLayout* Form,const QString& Key,const QString& Label,int Low,int High){auto* Field=new QSpinBox(this);Field->setRange(Low,High);Field->setObjectName(Key);Field->setProperty("defaultValue",hc::defaults::edit::SettingValue(Key));controls_[Key]=Field;Form->addRow(Label,Field);};
+    for(const auto& Pair:{std::pair{"bodyFamily",tr("본문 글꼴")},std::pair{"codeFamily",tr("코드 글꼴")}}){auto* Field=new QFontComboBox(this);const QString Key=FontPrefix+Pair.first;Field->setObjectName(Key);Field->setProperty("defaultValue",hc::defaults::edit::SettingValue(Key));Field->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);Field->setMinimumContentsLength(12);controls_[Key]=Field;MdFonts->addRow(Pair.second,Field);}
+    MdSpin(MdFonts,FontPrefix+"bodySizePt",tr("본문 크기 (pt)"),8,72);MdSpin(MdFonts,FontPrefix+"codeSizePt",tr("코드 크기 (pt)"),8,72);
+    auto* MdSpacing=new QDoubleSpinBox(this);MdSpacing->setRange(1.,3.);MdSpacing->setSingleStep(.1);MdSpacing->setDecimals(2);MdSpacing->setObjectName(FontPrefix+"lineHeight");MdSpacing->setProperty("defaultValue",hc::defaults::edit::ViewValue("markdown/previewFonts/lineHeight"));controls_[MdSpacing->objectName()]=MdSpacing;MdFonts->addRow(tr("본문 행간"),MdSpacing);
+    Check(MdFonts,FontPrefix+"headings",tr("제목에도 선택한 글꼴 적용"));
     Note(MdFonts,tr("미리보기에만 적용합니다. 문서 글꼴을 선택하거나 사용자 설정을 끄면 원래 문서 스타일로 돌아갑니다. 수식·아이콘 글꼴은 유지합니다."));
     auto* MdSample=new QLabel(this);MdSample->setObjectName("markdownFontSample");MdSample->setWordWrap(true);MdSample->setMargin(16);MdSample->setFrameShape(QFrame::StyledPanel);MdFonts->addRow(tr("적용 견본"),MdSample);
     auto UpdateFonts=[this,FontPrefix,MdSample]{
@@ -308,7 +305,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
         const auto Body=Custom?QString("font-family:'%1';font-size:%2pt;").arg(Family).arg(Size):QString();
         const auto Code=Custom?QString("font-family:'%1';font-size:%2pt;").arg(CodeFamily).arg(CodeSize):QString("font-family:Consolas;");
         const auto Heading=Custom&&qobject_cast<QCheckBox*>(controls_[FontPrefix+"headings"])->isChecked()?QString("font-family:'%1';").arg(Family):QString();
-        const auto Spacing=Override?qobject_cast<QDoubleSpinBox*>(controls_[FontPrefix+"lineHeight"])->value():1.7;
+        const auto Spacing=Override?qobject_cast<QDoubleSpinBox*>(controls_[FontPrefix+"lineHeight"])->value():hc::defaults::edit::ViewValue("markdown/previewFonts/lineHeight").toDouble();
         MdSample->setText(QString("<h3 style=\"%3\">문서에 맞는 읽기 환경</h3><p style=\"%1;line-height:%4%;\">미리보기 본문의 글꼴을 확인합니다.<br>행간 설정을 함께 확인합니다.</p><p style=\"%2\">const auto view = &quot;preview&quot;;</p><p style=\"font-family:Cambria\">E = mc<sup>2</sup></p>").arg(Body,Code,Heading).arg(qRound(Spacing*100)));
     };
     for(const auto& Key:{"enabled","headings"})connect(qobject_cast<QCheckBox*>(controls_[FontPrefix+Key]),&QCheckBox::toggled,this,UpdateFonts);
@@ -318,20 +315,20 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* MdView=Card(Markdown,tr("보기·개요"));
     Combo(MdView,MdPrefix+"viewerMode",tr("HyperViewer 기본 보기"),{tr("미리보기"),tr("소스")},{"preview","source"});
     Combo(MdView,MdPrefix+"editorMode",tr("HyperEditor 기본 보기"),{tr("나란히 보기"),tr("소스"),tr("미리보기")},{"split","source","preview"});
-    Check(MdView,MdPrefix+"viewerOutline",tr("HyperViewer에서 개요 표시"),false);Check(MdView,MdPrefix+"editorOutline",tr("HyperEditor에서 개요 표시"),true);
-    MdSpin(MdView,MdPrefix+"outlineDepth",tr("개요 최대 깊이"),1,6,6);
-    Check(MdView,MdPrefix+"positionSync",tr("소스·본문 위치 동기화"),true);Check(MdView,MdPrefix+"scrollSync",tr("소스·본문 스크롤 동기화"),true);
+    Check(MdView,MdPrefix+"viewerOutline",tr("HyperViewer에서 개요 표시"));Check(MdView,MdPrefix+"editorOutline",tr("HyperEditor에서 개요 표시"));
+    MdSpin(MdView,MdPrefix+"outlineDepth",tr("개요 최대 깊이"),1,6);
+    Check(MdView,MdPrefix+"positionSync",tr("소스·본문 위치 동기화"));Check(MdView,MdPrefix+"scrollSync",tr("소스·본문 스크롤 동기화"));
     auto UpdateSync=[this,MdPrefix]{controls_[MdPrefix+"scrollSync"]->setEnabled(qobject_cast<QCheckBox*>(controls_[MdPrefix+"positionSync"])->isChecked());};
     connect(qobject_cast<QCheckBox*>(controls_[MdPrefix+"positionSync"]),&QCheckBox::toggled,this,UpdateSync);
     Note(MdView,tr("위치 동기화는 캐럿·본문 클릭 위치를, 스크롤 동기화는 화면 이동을 연결합니다. 위치 동기화를 끄면 스크롤 동기화는 비활성화되며 체크 상태를 유지합니다."));
     auto* MdRender=Card(Markdown,tr("문법·렌더링"));
-    for(const auto& Pair:{std::pair{"math",tr("수식 표시 (KaTeX)")},std::pair{"inlineDollar",tr("인라인 $…$ 수식")},std::pair{"mermaid",tr("Mermaid 다이어그램")},std::pair{"codeHighlight",tr("코드 블록 구문강조")},std::pair{"autoPreview",tr("입력 후 미리보기 자동 갱신")}})Check(MdRender,MdPrefix+Pair.first,Pair.second,true);
-    MdSpin(MdRender,MdPrefix+"debounceMs",tr("입력 후 갱신 지연 (ms)"),100,3000,250);Check(MdRender,MdPrefix+"remoteImages",tr("외부 이미지 자동 다운로드"),false);
+    for(const auto& Pair:{std::pair{"math",tr("수식 표시 (KaTeX)")},std::pair{"inlineDollar",tr("인라인 $…$ 수식")},std::pair{"mermaid",tr("Mermaid 다이어그램")},std::pair{"codeHighlight",tr("코드 블록 구문강조")},std::pair{"autoPreview",tr("입력 후 미리보기 자동 갱신")}})Check(MdRender,MdPrefix+Pair.first,Pair.second);
+    MdSpin(MdRender,MdPrefix+"debounceMs",tr("입력 후 갱신 지연 (ms)"),100,3000);Check(MdRender,MdPrefix+"remoteImages",tr("외부 이미지 자동 다운로드"));
     Note(MdRender,tr("수식·다이어그램 렌더러와 글꼴은 내장되어 오프라인에서도 표시합니다. 원문 HTML은 텍스트로 표시하며 스크립트는 실행하지 않습니다."));
     Markdown->addStretch();QTimer::singleShot(0,this,[UpdateFonts,UpdateSync]{UpdateFonts();UpdateSync();});
     auto* ImagePage = Page(tr("이미지 뷰어"), tr("이미지와 코믹 읽기 설정을 관리합니다."));
     auto* ComicCard = Card(ImagePage, tr("읽기 설정"));
-    Check(ComicCard, "documentViews/imageView/comic/coverAlone", tr("표지 단독"), true);
+    Check(ComicCard, "documentViews/imageView/comic/coverAlone", tr("표지 단독"));
     Note(ComicCard, tr("코믹 보기에서 첫 쪽을 단독으로 표시합니다. 읽기 설정 메뉴에서 바꾼 값도 함께 저장됩니다."));
     ImagePage->addStretch();
     auto* ImageContent = Pages->widget(Pages->count()-1); Pages->removeWidget(ImageContent);
@@ -355,11 +352,19 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
             for (const auto& Key : Legacy.keys()) if (Key.startsWith("text.lexer.")) Colors[Key] = QJsonValue::Null;
             textColors_[Mode] = Colors; refreshTextColorRows(); return;
         }
-        if(List->currentRow()==3){epubSettings_->ResetDraft();for(auto I=controls_.begin();I!=controls_.end();++I)if(I.key().startsWith("documentViews/epubEditor/")){if(auto* Field=qobject_cast<QLineEdit*>(I.value()))Field->clear();else if(auto* Check=qobject_cast<QCheckBox*>(I.value()))Check->setChecked(false);}return;}
-        if(List->currentRow()==5){qobject_cast<QCheckBox*>(controls_["documentViews/imageView/comic/coverAlone"])->setChecked(true);return;}
+        if (List->currentRow() == 3) {
+            epubSettings_->ResetDraft();
+            for (auto I = controls_.begin(); I != controls_.end(); ++I) if (I.key().startsWith("documentViews/epubEditor/")) {
+                const auto Default = hc::defaults::edit::SettingValue(I.key());
+                if (auto* Field = qobject_cast<QLineEdit*>(I.value())) Field->setText(Default.toString());
+                else if (auto* Check = qobject_cast<QCheckBox*>(I.value())) Check->setChecked(Default.toBool());
+            }
+            return;
+        }
+        if(List->currentRow()==5){qobject_cast<QCheckBox*>(controls_["documentViews/imageView/comic/coverAlone"])->setChecked(hc::defaults::edit::ViewValue("imageView/comic/coverAlone").toBool());return;}
         if(List->currentRow()==4){const auto Original=base_;base_=values();settings::UnifiedConfig::Set(base_,{"documentViews","markdown"},QJsonObject{});loadControls();base_=Original;return;}
         if (List->currentRow() == 2) { for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control)) Field->setKeySequence(QKeySequence(Field->property("defaultValue").toString())); return; }
-        imported_ = {}; const auto Original = base_; base_ = {{"schemaVersion", 2}}; loadControls(); base_ = Original;
+        imported_ = {}; const auto Original = base_; base_ = hc::defaults::edit::DefaultDocument(); loadControls(); base_ = Original;
     });
     QString Error; valid_ = settings::UnifiedConfig::Load(path_, base_, Error);
     if (!valid_) error_->setText(tr("설정을 읽을 수 없습니다.\n%1\n%2").arg(QDir::toNativeSeparators(path_), Error));
@@ -393,7 +398,7 @@ QWidget* DocumentSettingsDialog::createTextColorPage()
     Layout->addWidget(colorTable_, 1);
     auto* PreviewLabel = new QLabel(tr("미리보기"), Page); Layout->addWidget(PreviewLabel);
     colorPreview_ = new ScintillaQtDirectBackend(Page, Page); colorPreview_->widget()->setObjectName("textColorPreview");
-    colorPreview_->setEditorFont(QFont("Consolas", 11));
+    colorPreview_->setEditorFont(QFont(hc::defaults::edit::SettingsPreviewFont()["family"].toString(), hc::defaults::edit::SettingsPreviewFont()["pointSize"].toInt()));
     auto PreviewSettings = ScintillaEditorSettings::standard(); PreviewSettings.lineNumberMarginDigits = 2;
     PreviewSettings.showCodeFolding = false; colorPreview_->applySettings(PreviewSettings);
     colorPreview_->widget()->setMinimumHeight(120); colorPreview_->widget()->setMaximumHeight(170);
@@ -501,7 +506,7 @@ void DocumentSettingsDialog::refreshTextColorPreview()
     else if (Lexer == "yaml") Sample = "# comment\nname: sample\ncount: 42\nready: true\n";
     colorPreview_->setReadOnly(false); colorPreview_->setText(Sample); colorPreview_->applyLanguage(PreviewLanguage);
     const auto TextSettings = settings::UnifiedConfig::Value(base_, {"documentViews", "textView"}).toObject();
-    colorPreview_->setEditorFont(QFont(TextSettings["fontFamily"].toString("Consolas"), qBound(9, TextSettings["fontSize"].toInt(11), 16)));
+    colorPreview_->setEditorFont(QFont(TextSettings["fontFamily"].toString(hc::defaults::edit::SettingsPreviewFont()["family"].toString()), qBound(9, TextSettings["fontSize"].toInt(hc::defaults::edit::SettingsPreviewFont()["pointSize"].toInt()), 16)));
     const auto SciColor = [](const QColor& C) { return qintptr(C.red() | (C.green() << 8) | (C.blue() << 16)); };
     colorPreview_->Send(SCI_STYLESETFORE, STYLE_DEFAULT, SciColor(textDraftColor("text.foreground")));
     colorPreview_->Send(SCI_STYLESETBACK, STYLE_DEFAULT, SciColor(textDraftColor("text.background")));
@@ -536,17 +541,17 @@ void DocumentSettingsDialog::loadControls()
     auto Effective = base_;
     const auto Text = settings::UnifiedConfig::Value(Effective, {"documentViews", "textView"}).toObject();
     if (!Text.contains("wordWrapMode")) {
-        const int Mode = Text.contains("wordWrap") ? (Text["wordWrap"].toBool() ? 1 : 0) : (Text.isEmpty() ? 2 : 0);
+        const int Mode = hc::defaults::edit::TextWrapMode(Text, !Text.isEmpty());
         settings::UnifiedConfig::Set(Effective, {"documentViews", "textView", "wordWrapMode"}, Mode);
     }
     settings::UnifiedConfig::Set(Effective, {"documentViews", "shortcuts", "bindings"}, DocumentShortcutRegistry::Bindings(settings::UnifiedConfig::Value(base_, {"documentViews", "shortcuts", "bindings"}).toObject()));
     for (auto It = controls_.begin(); It != controls_.end(); ++It) {
         const auto Raw = settings::UnifiedConfig::Value(Effective, It.key().split('/'));
-        auto Value = Raw.isUndefined() ? It.value()->property("defaultValue") : settings::UnifiedConfig::Decode(Raw);
-        if (auto* Field = qobject_cast<QFontComboBox*>(It.value())) Field->setCurrentFont(Value.toString().isEmpty() ? QFont("Consolas") : QFont(Value.toString()));
+        auto Value = Raw.isUndefined() ? hc::defaults::edit::SettingValue(It.key()) : settings::UnifiedConfig::Decode(Raw);
+        if (auto* Field = qobject_cast<QFontComboBox*>(It.value())) Field->setCurrentFont(Value.toString().isEmpty() ? QFont(hc::defaults::edit::ViewValue("textView/rulerFontFamily").toString()) : QFont(Value.toString()));
         else if (auto* Field = qobject_cast<QComboBox*>(It.value())) {
-            if (!Value.isValid()) Value = It.key().endsWith("fontRendering") ? QVariant(2) : It.key().endsWith("changeHistoryMode") ? QVariant(3) : Field->itemData(0);
-            const auto Index = Field->findData(Value); Field->setCurrentIndex(Index < 0 ? 0 : Index);
+            if (!Value.isValid()) Value = hc::defaults::edit::SettingValue(It.key());
+            const auto Index = Field->findData(Value); Field->setCurrentIndex(Index < 0 ? Field->findData(hc::defaults::edit::SettingValue(It.key())) : Index);
         } else if (auto* Field = qobject_cast<QSpinBox*>(It.value())) Field->setValue(Value.toInt());
         else if (auto* Field = qobject_cast<QDoubleSpinBox*>(It.value())) Field->setValue(Value.toDouble());
         else if (auto* Field = qobject_cast<QCheckBox*>(It.value())) Field->setChecked(Value.toBool());

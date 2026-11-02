@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/ProductDefaults_Compare.hpp"
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QList>
@@ -8,7 +9,7 @@ class QWidget;
 class QKeyEvent;
 namespace hc::compare
 {
-    struct CompareCommand { QString id_, label_, category_, scope_; QList<QKeySequence> defaults_; };
+    using CompareCommand = hc::defaults::compare::Command;
     QList<CompareCommand> CompareCommands();
     QList<QKeySequence> CompareKeys(const QString& Id, const QJsonObject& Overrides);
     QString CompareKeyError(const QKeySequence& Key);

@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "commonLibs/columns/columnContracts.hpp"
 
 // 제품 기본값의 편집 지점. 이 헤더를 고친 뒤 다시 빌드하면 새 설치에 적용된다.
 // settings.json에 저장된 값(빈 배열·단축키 해제 포함)은 기본값보다 우선한다.
@@ -6,9 +7,47 @@
 // 새 명령은 이 목록 외에 실행 핸들러도 구현해야 한다.
 
 #include <QtCore>
-#include "directoryRefreshSettings.hpp"
-#include "quickFindSettings.hpp"
 #include "commonLibs/commands/commandBus.hpp"
+
+struct TyOpts
+{
+    // UI
+    QString                             Cate;
+    QString                             Desc;
+    QString                             Tooltip;
+
+    // Settings
+    QString                             Section;        // Application option category
+    QString                             Key;
+    QString                             ValueType;
+    QString                             DefaultValue;
+
+    // Etc
+    unsigned int                        Build = 0;
+};
+
+Q_DECLARE_METATYPE( TyOpts );
+
+// 변수명, OPT_카테고리_키
+
+const TyOpts OPT_COLOR_SCHEME_COUNT = { "", "", "",
+                                        "ColorScheme", "", "", "", 1 };
+
+const TyOpts OPT_COLORS_LISTFONT  = { QObject::tr( "색상" ), QObject::tr( "글꼴" ), QObject::tr( "파일 목록의 글꼴" ),
+                                      "Colors", "FileListFontName", "FontName", "D2Coding ligature",
+                                      1 };
+
+const TyOpts OPT_COLORS_LISTFONTSIZE = { QObject::tr( "색상" ), QObject::tr( "글꼴 크기" ), QObject::tr( "파일 목록의 글꼴 크기" ),
+                                      "Colors", "FileListFontSize", "int", "16",
+                                      1 };
+
+const TyOpts OPT_COLORS_FORECOLOR = { QObject::tr( "색상" ), QObject::tr( "글꼴 색상" ), QObject::tr( "파일 목록의 글꼴 색상" ),
+                                      "Colors", "FileListForeColor", "Color(RGB)", "#DFDFDF",
+                                      1 };
+const TyOpts OPT_COLORS_BACKCOLOR = { QObject::tr( "색상" ), QObject::tr( "배경 색상" ), QObject::tr( "파일 목록의 배경 색상" ),
+                                      "Colors", "FileListBackColor", "Color(RGB)", "#1F1F1F",
+                                      1 };
+
 
 struct TyHC_COMMAND
 {
@@ -1197,6 +1236,18 @@ namespace hc::defaults
                  { "animateNowPlaying",       true },
                  { "materializeLimitMiB",     1024 } };
     }
+    inline QJsonObject DirectoryRefresh()
+    {
+        return {{"names", true}, {"metadata", true}, {"appendNewEntries", false}, {"pauseInBackground", true},
+            {"updateFooter", true}, {"updateHeader", true}, {"excludedDrives", ""},
+            {"fallbackEnabled", false}, {"fallbackSeconds", 15}};
+    }
+    inline QJsonObject QuickFind()
+    {
+        return {{"enabled", true}, {"highlight", true}, {"everythingKorean", true},
+            {"everythingDisplayIntervalMs", 500}, {"activation", "ctrl-alt"}, {"scope", "panel"},
+            {"match", "starts"}, {"result", "cursor"}};
+    }
     inline QJsonObject General( bool ExistingInstallation )
     {
         return { { "sizeInHeader", "adaptive2" },
@@ -1213,8 +1264,8 @@ namespace hc::defaults
                  { "sortNumericAware",        true },
                  { "directoryStyle",          ExistingInstallation ? "plain" : "brackets" },
                  { "focusPreviousDirectory",  true },
-                 { "quickFind",               hc::quickfind::Settings{}.ToJson() },
-                 { "refresh",                 hc::refresh::Settings{}.ToJson() },
+                 { "quickFind",               QuickFind() },
+                 { "refresh",                 DirectoryRefresh() },
                  { "darkTitleBar",            true },
                  { "showMainToolbar",         false },
                  { "showCommandLine",         true },
@@ -1299,4 +1350,685 @@ namespace hc::defaults
                  { "automation",              QJsonObject{ { "version", 2 }, { "scripts", QJsonArray{} } } },
                  { "options",                 Options( ExistingInstallation ) } };
     }
+    // File locations and compatibility recovery values are product policy as well.
+    inline constexpr auto ConfigFileName = "HyperCommander.json";
+    inline constexpr auto LegacySettingsFileName = "settings.json";
+    inline constexpr auto LegacyWorkspaceFileName = "workspace.json";
+    inline QString ConfigDirectory(const QString& ExecutableDirectory) { return ExecutableDirectory; }
+    inline QString UserConfigDirectory() { return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation); }
+    inline QString LegacyConfigDirectory(const QString& Directory) { return QDir(Directory).filePath("config"); }
+    inline QString SettingsFile(const QString& Directory) { return QDir(Directory).filePath(ConfigFileName); }
+    inline QJsonObject Policy()
+    {
+        return {
+            {"selection", QJsonObject{{"operation", 0}, {"syntax", 0}, {"scope", 0}, {"pattern", "*"}, {"exclude", ""},
+                {"groupId", ""}, {"caseSensitive", false}, {"advanced", false}, {"all", true}, {"size", ""}, {"minimumSize", true}, {"modified", ""}}},
+            {"columnAutoSelection", QJsonObject{{"version", 1}, {"enabled", false}, {"rules", QJsonArray{}}}},
+            {"columnAutoRule", QJsonObject{{"enabled", true}, {"percent", 50}}},
+            {"columnPresentation", QJsonObject{{"listMode", "details"}, {"precision", 1}, {"splitNameExtension", false}, {"providerDisplay", true}}},
+            {"update", QJsonObject{{"automaticCheck", true}, {"checkIntervalDays", 7}, {"disabledIntervalDays", 0}}},
+            {"pluginRecord", QJsonObject{{"hostEnabled", false}, {"invalidHostEnabled", true}, {"hostReviewed", QJsonObject{}}}},
+            {"builtinApplication", QJsonObject{{"enabled", true}, {"mode", "all"}}},
+            {"fileColorGroup", QJsonObject{{"enabled", true}, {"autoDark", false}}},
+            {"fileColorRules", QJsonObject{{"version", 1}, {"mode", "first"}, {"groups", QJsonArray{}}}},
+            {"workspace", QJsonObject{{"defaultExpanded", true}, {"keepAncestors", true}, {"columnVisible", true}}},
+            {"rename", QJsonObject{{"name", "[N]"}, {"extension", "[E]"}, {"find", ""}, {"replace", ""},
+                {"regex", false}, {"sensitive", false}, {"nameCase", 0}, {"extensionCase", 0}, {"start", 1},
+                {"step", 1}, {"digits", 3}, {"date", "yyyy-MM-dd"}, {"dateSource", 0}, {"dateOffset", 0}, {"includeExtension", false}}},
+            {"archiveCreation", QJsonObject{{"schemaVersion", 1}, {"lastFormat", "7z"},
+                {"composition", QJsonObject{{"preservePaths", true}, {"includeSubdirectories", true},
+                    {"separateArchives", false}, {"omitSelectedFolderRoot", false}}}}}
+        };
+    }
+    inline QJsonValue DefaultValue(const QString& Path, bool ExistingInstallation = true)
+    {
+        static const auto Existing = Settings(true), Fresh = Settings(false), Extra = Policy();
+        const auto Find = [&Path](const QJsonObject& Object) {
+            QJsonValue Value(Object);
+            for (const auto& Key : Path.split('/')) Value = Value.toObject().value(Key);
+            return Value;
+        };
+        const auto Value = Find(ExistingInstallation ? Existing : Fresh);
+        return Value.isUndefined() ? Find(Extra) : Value;
+    }
+    inline QJsonObject FontDefaults(const QString& Role, bool Recovery = false)
+    {
+        return {{"family", Role == "list" ? "D2Coding ligature" : "Malgun Gothic"},
+            {"pointSize", Role == "list" ? 16 : Recovery ? 9 : 11}};
+    }
+    inline QString InvalidColor(const QString& Role)
+    { return Role.contains("Background") ? "#FFFFFF" : "#202020"; }
+    template<typename Design> inline constexpr Design ProductDesign = Design::PaperFluent;
+
+    inline QJsonObject StoreDefaults() { return {{"schemaVersion", 1}}; }
+    template<typename Settings> inline Settings SevenZipCreation(bool Zip)
+    {
+        using Method = decltype(std::declval<Settings>().method_);
+        using Solid = decltype(std::declval<Settings>().solid_);
+        return Settings{5, Method::Automatic, {}, {}, {}, Zip ? Solid::Off : Solid::All, {}, false, true};
+    }
+    template<typename Settings> inline Settings IsoCreation()
+    {
+        using Profile = decltype(std::declval<Settings>().profile_);
+        return Settings{Profile::UdfBridge, "HYPERCOMMANDER", false, 946684800, 128ull * 1024 * 1024 * 1024};
+    }
+
+    namespace columnPolicy {
+        using namespace hc::columns;
+    inline QVector<hc::columns::FieldDefinition> ColumnFields()
+    {
+        return {{"file.name", QObject::tr("이름 (확장자 포함)"), FieldType::Text},
+            {"file.size", QObject::tr("크기"), FieldType::UnsignedInteger},
+            {"file.created", QObject::tr("만든 날짜"), FieldType::Timestamp},
+            {"file.attributes", QObject::tr("속성"), FieldType::UnsignedInteger},
+            {"file.modified", QObject::tr("수정 날짜"), FieldType::Timestamp},
+            {"file.extension", QObject::tr("확장자"), FieldType::Text},
+            {"file.stem", QObject::tr("이름 (확장자 제외)"), FieldType::Text},
+            {"file.type", QObject::tr("파일 형식 설명"), FieldType::Text},
+            {"file.isDirectory", QObject::tr("폴더 여부"), FieldType::Boolean},
+            {"file.kind", QObject::tr("항목 종류"), FieldType::Text},
+            {"file.path", QObject::tr("전체 경로"), FieldType::Text},
+            {"file.parentPath", QObject::tr("폴더 경로"), FieldType::Text},
+            {"file.parentName", QObject::tr("부모 폴더명"), FieldType::Text},
+            {"file.pathLength", QObject::tr("경로 길이"), FieldType::UnsignedInteger},
+            {"file.accessed", QObject::tr("접근 시각"), FieldType::Timestamp},
+            {"file.readOnly", QObject::tr("읽기 전용"), FieldType::Boolean},
+            {"file.hidden", QObject::tr("숨김"), FieldType::Boolean},
+            {"file.system", QObject::tr("시스템"), FieldType::Boolean},
+            {"file.archive", QObject::tr("보관"), FieldType::Boolean},
+            {"file.compressed", QObject::tr("압축"), FieldType::Boolean},
+            {"file.encrypted", QObject::tr("암호화"), FieldType::Boolean},
+            {"file.sparse", QObject::tr("희소 파일"), FieldType::Boolean},
+            {"file.offline", QObject::tr("오프라인"), FieldType::Boolean},
+            {"file.allocatedSize", QObject::tr("디스크 할당 크기"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.linkTarget", QObject::tr("링크 대상"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.fileVersion", QObject::tr("파일 버전"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.productVersion", QObject::tr("제품 버전"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.productName", QObject::tr("제품 이름"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.company", QObject::tr("회사"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.description", QObject::tr("파일 설명"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.imageWidth", QObject::tr("이미지 가로"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.imageHeight", QObject::tr("이미지 세로"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.imageDimensions", QObject::tr("이미지 규격"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
+            {"file.imageBitDepth", QObject::tr("이미지 비트 깊이"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background}};
+    }
+    inline const QUuid BuiltInProfileId{"a4ea8e7c-b621-4db7-bc79-b37dab6e7b8d"};
+    inline hc::columns::ColumnProfile DefaultColumnProfile()
+    {
+        ColumnProfile Profile;
+        Profile.id_ = BuiltInProfileId;
+        Profile.title_ = QObject::tr("자세히");
+        // Assigned once; never derive identity from field expressions or indices.
+        const std::array<const char*, 8> Ids{{
+            "519c8fbd-8d4a-4160-b742-bfeaf5ea9918", "81404f28-d586-4c19-99e7-f0bcabac3299",
+            "e09a576b-14c3-4680-9bea-a0745bcdb9e3", "5753b771-d0a5-4a8b-a00e-f41ba091275a",
+            "db962c8f-412a-442b-8cc8-a46f3cd4e7f8", "050d3fe3-b4ce-4a03-b42c-b78d207d3623",
+            "0c00423a-e4b7-4e90-8cf2-706b0f2b0a6e", "128c32c8-1a12-4c9b-bb90-fad63f676f25"}};
+        const auto Fields = ColumnFields();
+        for (int Index = 0; Index < int(Ids.size()); ++Index) {
+            ColumnDefinition Column;
+            Column.id_ = QUuid(Ids[Index]);
+            Column.fieldId_ = Fields[Index].id_;
+            Column.title_ = Index == 0 ? QObject::tr("이름") : Index == 7 ? QObject::tr("종류") : Fields[Index].title_;
+            Column.alignment_ = Index == 1 ? Qt::AlignRight : Index == 2 || Index == 3 || Index == 4 ? Qt::AlignCenter : Qt::AlignLeft;
+            if (Index == 1) Column.format_.size_ = SizeFormat::Adaptive;
+            hc::view::ColumnWidthPolicy Width;
+            if (Index < 5) Width = {hc::view::WidthUnit::Percent, hc::view::WidthMode::Flexible,
+                Index == 0 ? 46.0 : Index == 1 ? 15.0 : Index == 3 ? 9.0 : 30.0};
+            Width.hidden_ = Index >= 4;
+            Column.widths_.fill(Width);
+            if (!Width.hidden_) {
+                Width.value_ = Index == 0 ? 100 : std::round(Width.value_ * 100 / 54 * 1000000) / 1000000;
+                Column.widths_[1] = Column.widths_[2] = Width;
+            }
+            if (Index != 0) {
+                auto Two = Width;
+                Two.unit_ = hc::view::WidthUnit::Percent; Two.mode_ = hc::view::WidthMode::Flexible;
+                Two.hidden_ = Index != 1 && Index != 3 && Index != 4 && Index != 7;
+                Two.value_ = Index == 1 ? 18 : Index == 3 ? 12 : Index == 4 ? 36 : 34;
+                Column.widths_[1] = Column.widths_[2] = Two;
+            }
+            Profile.columns_.append(Column);
+        }
+        Profile.primaryNameId_ = Profile.columns_.front().id_;
+        Profile.sorts_.append({Profile.primaryNameId_, Qt::AscendingOrder});
+        return Profile;
+    }
+    inline const QUuid ReferenceProfileId{"5ff35fcb-93ae-47ac-9a4b-c4e723991e38"};
+    inline const QUuid ReferenceTwoLineProfileId{"7dac5cda-e87a-43c7-af0b-58c6a1c8e5da"};
+    inline hc::columns::ColumnProfile ReferenceColumnProfile(bool TwoLine = false)
+    {
+        ColumnProfile Profile;
+        Profile.id_ = TwoLine ? ReferenceTwoLineProfileId : ReferenceProfileId;
+        Profile.title_ = TwoLine ? QObject::tr("시안 자세히 · 2줄") : QObject::tr("시안 자세히 · 1줄");
+        Profile.mode_ = TwoLine ? LayoutMode::NameFirst : LayoutMode::Details;
+        Profile.splitNameExtension_ = true;
+        const std::array<const char*, 6> Ids{{"d4203a5f-a52a-49da-a849-a5cdbe69fc23",
+            "07a00643-8716-4dfe-909a-5f0d02950c7f", "ae7cd1be-0be6-45b0-adc5-5e01c6b91c34",
+            "ac66b249-a810-42bc-a8a9-57e67c6c922b", "aa3cac42-1715-4942-a4b7-305d78c42e7f",
+            "91fa28bf-c77b-4564-a927-ab979f1797da"}};
+        const QStringList Fields{"file.name", "file.type", "file.extension", "file.size", "file.modified", "file.attributes"};
+        const QStringList Titles{QObject::tr("이름"), QObject::tr("종류"), QObject::tr("확장자"),
+            QObject::tr("크기"), QObject::tr("수정한 날짜"), QObject::tr("속성")};
+        const std::array<double, 6> One{{46, 0, 9, 12, 25, 8}}, Two{{100, 34, 0, 18, 36, 12}};
+        for (int Index = 0; Index < int(Ids.size()); ++Index) {
+            ColumnDefinition Column;
+            Column.id_ = QUuid(Ids[Index]); Column.fieldId_ = Fields[Index]; Column.title_ = Titles[Index];
+            Column.alignment_ = Index == 3 ? Qt::AlignRight : Index == 2 || Index == 5 ? Qt::AlignCenter : Qt::AlignLeft;
+            if (Index == 3) { Column.format_.size_ = SizeFormat::Adaptive; Column.format_.precision_ = 1; }
+            if (Index == 4) Column.format_.datePattern_ = "yyyy-MM-dd HH:mm";
+            for (int Mode = 0; Mode < 3; ++Mode) {
+                auto& Width = Column.widths_[Mode];
+                Width.unit_ = hc::view::WidthUnit::Percent; Width.mode_ = hc::view::WidthMode::Flexible;
+                Width.value_ = Mode == 0 ? One[Index] : Two[Index];
+                Width.hidden_ = Mode == 0 ? Index == 1 : Index == 2;
+            }
+            Profile.columns_.append(Column);
+        }
+        Profile.primaryNameId_ = Profile.columns_.front().id_;
+        Profile.sorts_.append({Profile.primaryNameId_, Qt::AscendingOrder});
+        return Profile;
+    }
+    }
+
+    inline QString MenuBarFile(const QString& Directory) { return QDir(Directory).filePath("menu-bar.json"); }
+    inline QString PluginIniFile(const QString& Directory, const QString& Format, const QString& Id = {})
+    {
+        return QDir(Directory).filePath(Format == "wcx" ? "archive-plugins/" + Id + "/pkplugin.ini"
+            : Format == "wlx" ? "lsplugin.ini" : Format == "wfx" ? "fsplugin.ini" : "contentplugin.ini");
+    }
+
+    inline QKeyCombination AuxiliaryShortcut(const QString& Id, int Index = 0)
+    {
+        if (Id == "indexedChoice") return QKeyCombination(Qt::AltModifier, Qt::Key(Qt::Key_1 + Index));
+        if (Id == "externalEditor") return QKeyCombination::fromCombined(int(Qt::ControlModifier) | int(Qt::Key_1) | Index);
+        static const QHash<QString, QKeyCombination> Keys{
+            {"conflict.renameIncoming", Qt::ALT | Qt::Key_F}, {"conflict.renameExisting", Qt::ALT | Qt::Key_G},
+            {"fileColorGroup.add", Qt::ALT | Qt::Key_W}, {"background", Qt::Key_F2},
+            {"path.edit", Qt::Key_F2}, {"path.editAlternate", Qt::CTRL | Qt::Key_L},
+            {"path.complete", Qt::CTRL | Qt::Key_Space}, {"quickFind.toggleMode", Qt::CTRL | Qt::Key_S}, {"window.systemMenu", Qt::ALT | Qt::Key_Space}};
+        if (Id == "quickView.close") return BuiltInCMD_Src_QuickView.Default;
+        return Keys.value(Id, QKeyCombination::fromCombined(0));
+    }
+    template<typename Sequence> inline Sequence SettingsFindShortcut() { return Sequence(Sequence::Find); }
+    template<typename Sequence> inline Sequence ViewerSurfaceShortcut(const QString& Command)
+    {
+        if (Command == "find") return Sequence(Sequence::Find);
+        if (Command == "zoom-in") return Sequence(Sequence::ZoomIn);
+        if (Command == "zoom-out") return Sequence(Sequence::ZoomOut);
+        return {};
+    }
+
+    inline QString LegacyPluginIniFile(bool Viewer, bool Archive)
+    { return QDir(UserConfigDirectory()).filePath(Viewer ? "lsplugin.ini" : Archive ? "pkplugin.ini" : "tc-data.ini"); }
+    inline QString PluginHelperIniFile(const QString& Directory) { return QDir(Directory).filePath("wincmd.ini"); }
+
+    inline QByteArray MenuBarDefaults()
+    {
+        return QByteArrayLiteral(
+            "{\n"
+            "  \"schemaVersion\": 1,\n"
+            "  \"menus\": [\n"
+            "    {\n"
+            "      \"id\": \"file\",\n"
+            "      \"label\": \"파일(&F)\",\n"
+            "      \"items\": [\n"
+            "        {\n"
+            "          \"id\": \"view\",\n"
+            "          \"command\": \"hc.viewer.open\",\n"
+            "          \"label\": \"보기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"edit\",\n"
+            "          \"command\": \"hc.file.edit\",\n"
+            "          \"label\": \"편집\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"type\": \"separator\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"compare\",\n"
+            "          \"command\": \"hc.file.compare\",\n"
+            "          \"label\": \"파일·폴더 비교\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"copy\",\n"
+            "          \"command\": \"hc.file.copy\",\n"
+            "          \"label\": \"복사\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"move\",\n"
+            "          \"command\": \"hc.file.move\",\n"
+            "          \"label\": \"이동\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"rename\",\n"
+            "          \"command\": \"hc.file.rename\",\n"
+            "          \"label\": \"이름 변경\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"mkdir\",\n"
+            "          \"command\": \"hc.file.mkdir\",\n"
+            "          \"label\": \"새 폴더\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"newfile\",\n"
+            "          \"command\": \"hc.file.new\",\n"
+            "          \"label\": \"새 파일\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"delete\",\n"
+            "          \"command\": \"hc.file.delete\",\n"
+            "          \"label\": \"삭제\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"type\": \"separator\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"batch\",\n"
+            "          \"command\": \"hc.file.batchRename\",\n"
+            "          \"label\": \"다중 이름 변경\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"permissions\",\n"
+            "          \"command\": \"hc.file.permissions\",\n"
+            "          \"label\": \"권한 확인\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"archives\",\n"
+            "          \"label\": \"압축 · 이미지\",\n"
+            "          \"items\": [\n"
+            "            {\n"
+            "              \"id\": \"zip\",\n"
+            "              \"command\": \"hc.archive.create\",\n"
+            "              \"label\": \"파일 압축…\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"archive-extract\",\n"
+            "              \"command\": \"hc.archive.extract\",\n"
+            "              \"label\": \"파일 압축 해제…\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"iso\",\n"
+            "              \"command\": \"hc.iso.create\",\n"
+            "              \"label\": \"ISO 생성\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"inspectiso\",\n"
+            "              \"command\": \"hc.iso.inspect\",\n"
+            "              \"label\": \"ISO 구조 확인\"\n"
+            "            }\n"
+            "          ]\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"jobs\",\n"
+            "          \"command\": \"hc.jobs.show\",\n"
+            "          \"label\": \"작업관리자\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"type\": \"separator\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"exit\",\n"
+            "          \"command\": \"hc.app.exit\",\n"
+            "          \"label\": \"종료\"\n"
+            "        }\n"
+            "      ]\n"
+            "    },\n"
+            "    {\n"
+            "      \"id\": \"edit-menu\",\n"
+            "      \"label\": \"편집(&E)\",\n"
+            "      \"items\": [\n"
+            "        {\n"
+            "          \"id\": \"editfile\",\n"
+            "          \"command\": \"hc.file.edit\",\n"
+            "          \"label\": \"편집\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"renameedit\",\n"
+            "          \"command\": \"hc.file.rename\",\n"
+            "          \"label\": \"이름 변경\"\n"
+            "        }\n"
+            "      ]\n"
+            "    },\n"
+            "    {\n"
+            "      \"id\": \"select\",\n"
+            "      \"label\": \"선택(&S)\",\n"
+            "      \"items\": [\n"
+            "        {\n"
+            "          \"id\": \"select-items\",\n"
+            "          \"command\": \"hc.selection.select\",\n"
+            "          \"label\": \"항목 선택…\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"deselect-items\",\n"
+            "          \"command\": \"hc.selection.deselect\",\n"
+            "          \"label\": \"항목 선택 해제…\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"type\": \"separator\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"select-all\",\n"
+            "          \"command\": \"hc.selection.all\",\n"
+            "          \"label\": \"전체 선택\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"deselect-all\",\n"
+            "          \"command\": \"hc.selection.clear\",\n"
+            "          \"label\": \"전체 선택 해제\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"invert-all\",\n"
+            "          \"command\": \"hc.selection.invertAll\",\n"
+            "          \"label\": \"전체 선택 반전\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"type\": \"separator\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"same-extension\",\n"
+            "          \"command\": \"hc.selection.sameExtension\",\n"
+            "          \"label\": \"현재 항목과 같은 확장자 선택\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"clear-extension\",\n"
+            "          \"command\": \"hc.selection.clearExtension\",\n"
+            "          \"label\": \"같은 확장자 선택 해제\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"type\": \"separator\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"restore-selection\",\n"
+            "          \"command\": \"hc.selection.restore\",\n"
+            "          \"label\": \"이전 선택 복원\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"remember-selection\",\n"
+            "          \"command\": \"hc.selection.remember\",\n"
+            "          \"label\": \"현재 선택 기억\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"recall-selection\",\n"
+            "          \"command\": \"hc.selection.recall\",\n"
+            "          \"label\": \"기억한 선택 불러오기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"type\": \"separator\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"invert\",\n"
+            "          \"command\": \"hc.selection.invert\",\n"
+            "          \"label\": \"현재 항목 선택 전환 · 다음 항목\"\n"
+            "        }\n"
+            "      ]\n"
+            "    },\n"
+            "    {\n"
+            "      \"id\": \"show\",\n"
+            "      \"label\": \"보기(&V)\",\n"
+            "      \"items\": [\n"
+            "        {\n"
+            "          \"id\": \"quick\",\n"
+            "          \"command\": \"hc.viewer.quick\",\n"
+            "          \"label\": \"반대 패널 미리 보기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"closequick\",\n"
+            "          \"command\": \"hc.viewer.close\",\n"
+            "          \"label\": \"미리 보기 닫기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"hidden\",\n"
+            "          \"command\": \"hc.view.hidden\",\n"
+            "          \"label\": \"숨김·시스템 파일 표시 전환\"\n"
+            "        }\n"
+            "      ]\n"
+            "    },\n"
+            "    {\n"
+            "      \"id\": \"navigate\",\n"
+            "      \"label\": \"명령(&C)\",\n"
+            "      \"items\": [\n"
+            "        {\n"
+            "          \"id\": \"back\",\n"
+            "          \"command\": \"hc.navigate.back\",\n"
+            "          \"label\": \"뒤로\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"forward\",\n"
+            "          \"command\": \"hc.navigate.forward\",\n"
+            "          \"label\": \"앞으로\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"find\",\n"
+            "          \"command\": \"hc.search.focus\",\n"
+            "          \"label\": \"설정 범위에서 찾기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"find-everything\",\n"
+            "          \"command\": \"hc.search.everything\",\n"
+            "          \"label\": \"Everything에서 찾기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"search-location\",\n"
+            "          \"command\": \"hc.search.openLocation\",\n"
+            "          \"label\": \"검색 결과의 원본 위치 열기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"path\",\n"
+            "          \"command\": \"hc.navigate.path\",\n"
+            "          \"label\": \"경로 이동\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"parent\",\n"
+            "          \"command\": \"hc.navigate.parent\",\n"
+            "          \"label\": \"상위 폴더\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"refresh\",\n"
+            "          \"command\": \"hc.navigate.refresh\",\n"
+            "          \"label\": \"새로 고침\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"cancel\",\n"
+            "          \"command\": \"hc.navigate.cancel\",\n"
+            "          \"label\": \"중지\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"favorites\",\n"
+            "          \"command\": \"hc.navigate.favorites\",\n"
+            "          \"label\": \"즐겨찾기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"search\",\n"
+            "          \"command\": \"hc.search.show\",\n"
+            "          \"label\": \"범위 검색\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"compatibility\",\n"
+            "          \"command\": \"hc.navigate.compatibility\",\n"
+            "          \"label\": \"호환 탐색\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"enter-file\",\n"
+            "          \"command\": \"hc.navigate.enterFile\",\n"
+            "          \"label\": \"파일 내부로 들어가기\"\n"
+            "        }\n"
+            "      ]\n"
+            "    },\n"
+            "    {\n"
+            "      \"id\": \"tabs\",\n"
+            "      \"label\": \"탭(&T)\",\n"
+            "      \"items\": [\n"
+            "        {\n"
+            "          \"id\": \"newtab\",\n"
+            "          \"command\": \"hc.tab.new\",\n"
+            "          \"label\": \"새 탭\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"closetab\",\n"
+            "          \"command\": \"hc.tab.close\",\n"
+            "          \"label\": \"탭 닫기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"prevtab\",\n"
+            "          \"command\": \"hc.tab.previous\",\n"
+            "          \"label\": \"이전 탭\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"nexttab\",\n"
+            "          \"command\": \"hc.tab.next\",\n"
+            "          \"label\": \"다음 탭\"\n"
+            "        }\n"
+            "      ]\n"
+            "    },\n"
+            "    {\n"
+            "      \"id\": \"tools\",\n"
+            "      \"label\": \"도구(&U)\",\n"
+            "      \"items\": [\n"
+            "        {\n"
+            "          \"id\": \"plugins\",\n"
+            "          \"section\": \"plugins\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"automation\",\n"
+            "          \"section\": \"automation\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"type\": \"separator\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"audio\",\n"
+            "          \"label\": \"오디오 미리 듣기\",\n"
+            "          \"items\": [\n"
+            "            {\n"
+            "              \"id\": \"audioPreview\",\n"
+            "              \"command\": \"hc.audio.preview\",\n"
+            "              \"label\": \"미리 듣기\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"audioPlayPause\",\n"
+            "              \"command\": \"hc.audio.playPause\",\n"
+            "              \"label\": \"재생/일시정지\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"audioStop\",\n"
+            "              \"command\": \"hc.audio.stop\",\n"
+            "              \"label\": \"정지\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"type\": \"separator\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"audioPrev\",\n"
+            "              \"command\": \"hc.audio.prev\",\n"
+            "              \"label\": \"이전 곡\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"audioNext\",\n"
+            "              \"command\": \"hc.audio.next\",\n"
+            "              \"label\": \"다음 곡\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"audioSeekBack\",\n"
+            "              \"command\": \"hc.audio.seekBack\",\n"
+            "              \"label\": \"5초 뒤로\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"audioSeekForward\",\n"
+            "              \"command\": \"hc.audio.seekForward\",\n"
+            "              \"label\": \"5초 앞으로\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"type\": \"separator\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"audioLocate\",\n"
+            "              \"command\": \"hc.audio.locate\",\n"
+            "              \"label\": \"재생 중인 파일 위치 보기\"\n"
+            "            }\n"
+            "          ]\n"
+            "        },\n"
+            "        {\n"
+            "          \"type\": \"separator\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"system\",\n"
+            "          \"label\": \"프로세스·서비스\",\n"
+            "          \"items\": [\n"
+            "            {\n"
+            "              \"id\": \"systemProcesses\",\n"
+            "              \"command\": \"hc.system.processes.open\",\n"
+            "              \"label\": \"프로세스 보기\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"systemServices\",\n"
+            "              \"command\": \"hc.system.services.open\",\n"
+            "              \"label\": \"서비스 보기\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"type\": \"separator\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"systemRun\",\n"
+            "              \"command\": \"hc.process.run\",\n"
+            "              \"label\": \"새 작업 실행…\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"systemFollow\",\n"
+            "              \"command\": \"hc.system.followLocation\",\n"
+            "              \"label\": \"실행 파일 위치 따라가기\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"systemHelper\",\n"
+            "              \"command\": \"hc.system.startAdminHelper\",\n"
+            "              \"label\": \"관리자 도우미 미리 시작\"\n"
+            "            }\n"
+            "          ]\n"
+            "        }\n"
+            "      ]\n"
+            "    },\n"
+            "    {\n"
+            "      \"id\": \"settings\",\n"
+            "      \"label\": \"설정(&O)\",\n"
+            "      \"items\": [\n"
+            "        {\n"
+            "          \"id\": \"options\",\n"
+            "          \"command\": \"hc.settings.show\",\n"
+            "          \"label\": \"환경 설정\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"editmenu\",\n"
+            "          \"command\": \"hc.menu.edit\",\n"
+            "          \"label\": \"메뉴 파일 열기\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"reloadmenu\",\n"
+            "          \"command\": \"hc.menu.reload\",\n"
+            "          \"label\": \"메뉴 파일 다시 읽기\"\n"
+            "        }\n"
+            "      ]\n"
+            "    },\n"
+            "    {\n"
+            "      \"id\": \"help\",\n"
+            "      \"label\": \"도움말(&H)\",\n"
+            "      \"items\": [\n"
+            "        {\n"
+            "          \"id\": \"about\",\n"
+            "          \"command\": \"hc.app.about\",\n"
+            "          \"label\": \"HyperCommander 정보\"\n"
+            "        }\n"
+            "      ]\n"
+            "    }\n"
+            "  ]\n"
+            "}");
+    }
+
+    inline QList<QKeyCombination> ProtectedScopeKeys()
+    {
+        return {Qt::Key_Tab, Qt::Key_Escape, Qt::Key_F12, Qt::CTRL | Qt::Key_Tab,
+            Qt::CTRL | Qt::Key_F, Qt::CTRL | Qt::Key_Q, Qt::CTRL | Qt::SHIFT | Qt::Key_Tab,
+            Qt::ALT | Qt::Key_F1, Qt::ALT | Qt::Key_F2, Qt::ALT | Qt::Key_Left, Qt::ALT | Qt::Key_Right};
+    }
+
 } // namespace hc::defaults

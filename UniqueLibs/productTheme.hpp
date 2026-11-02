@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 
 /// 외부 라이브러리
 
@@ -11,7 +12,7 @@
 namespace hc::theme
 {
     /// 제품 화면 디자인 — HyperCommander · HyperEditor · HyperViewer가 같은 디자인을 쓴다.
-    inline constexpr fm::style::Design ProductDesign = fm::style::Design::PaperFluent;
+    inline constexpr fm::style::Design ProductDesign = hc::defaults::ProductDesign<fm::style::Design>;
 
     /// 워터컬러를 쓰던 때 저장한 기준 색 · 직접 지정은 그 디자인 칸에 남아 있다. 제품 디자인 칸이
     /// 모두 비어 있으면 워터컬러 칸을 제품 디자인 칸으로 옮긴다 — 복사가 아니라 옮겨야, 변형 초기화로

@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include "commandMgr_Defs.hpp"
 #include <QJsonObject>
 #include <QJsonArray>
@@ -112,13 +113,7 @@ inline InputScope HomeScope(const QString& Id)
 // 패널 전환·탭·검색·탐색 키는 보기 범위에서 다시 정의할 수 없다.
 inline bool IsProtectedScopeKey(QKeyCombination Key)
 {
-    const auto Modifiers = Key.keyboardModifiers() & ~Qt::KeypadModifier;
-    const auto Code = Key.key();
-    if (Modifiers == Qt::NoModifier && (Code == Qt::Key_Tab || Code == Qt::Key_Escape || Code == Qt::Key_F12)) return true;
-    if (Modifiers == Qt::ControlModifier && (Code == Qt::Key_Tab || Code == Qt::Key_F || Code == Qt::Key_Q)) return true;
-    if (Modifiers == (Qt::ControlModifier | Qt::ShiftModifier) && Code == Qt::Key_Tab) return true;
-    if (Modifiers == Qt::AltModifier && (Code == Qt::Key_F1 || Code == Qt::Key_F2 || Code == Qt::Key_Left || Code == Qt::Key_Right)) return true;
-    return false;
+    return hc::defaults::ProtectedScopeKeys().contains(QKeyCombination(Key.keyboardModifiers() & ~Qt::KeypadModifier, Key.key()));
 }
 
 inline TyMapShortcutToCMDStr DefaultScopeShortcuts(InputScope Scope)
@@ -176,7 +171,7 @@ inline TyMapShortcutToCMDStr EffectiveScopeShortcuts(const QJsonObject& Override
 inline TyMapShortcutToCMDStr DefaultShortcuts(const QJsonObject& General)
 {
     TyMapShortcutToCMDStr Values;
-    if (!General["useBuiltInShortcuts"].toBool(true)) return Values;
+    if (!General["useBuiltInShortcuts"].toBool(hc::defaults::DefaultValue("general/useBuiltInShortcuts").toBool())) return Values;
     for (const auto& Command : hc::defaults::Commands())
         if (Command.Default.key() != Qt::Key_unknown && !IsCommandLineShortcut(Command.Name) && !IsViewScopedCommand(Command.Name)) Values[Command.Default] = Command.Name;
     const auto Changes = hc::defaults::ShortcutPresetChanges(General["shortcutPreset"].toString(hc::defaults::ExistingShortcutPreset));

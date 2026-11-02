@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
 #include "UniqueLibs/nativeStorageRevision.hpp"
 #include "errorPresentation.hpp"
@@ -295,10 +296,19 @@ inline storage::Result<operations::PreparedJob> PrepareCreate(std::shared_ptr<st
     Job.task_ = std::make_unique<CreateTask>(std::move(Writer), std::move(Target), Data, std::move(Elevation), AskForName); return Job;
 }
 struct Rules {
-    QString name_ = "[N]", extension_ = "[E]", find_, replace_, dateFormat_ = "yyyy-MM-dd";
-    bool regex_ = false, caseSensitive_ = false, includeExtension_ = false;
-    int dateSource_ = 0, dateOffsetSeconds_ = 0;
-    int nameCase_ = 0, extensionCase_ = 0, start_ = 1, step_ = 1, digits_ = 3;
+    QString name_ = hc::defaults::DefaultValue("rename/name").toString();
+    QString extension_ = hc::defaults::DefaultValue("rename/extension").toString(), find_, replace_;
+    QString dateFormat_ = hc::defaults::DefaultValue("rename/date").toString();
+    bool regex_ = hc::defaults::DefaultValue("rename/regex").toBool();
+    bool caseSensitive_ = hc::defaults::DefaultValue("rename/sensitive").toBool();
+    bool includeExtension_ = hc::defaults::DefaultValue("rename/includeExtension").toBool();
+    int dateSource_ = hc::defaults::DefaultValue("rename/dateSource").toInt();
+    int dateOffsetSeconds_ = hc::defaults::DefaultValue("rename/dateOffset").toInt();
+    int nameCase_ = hc::defaults::DefaultValue("rename/nameCase").toInt();
+    int extensionCase_ = hc::defaults::DefaultValue("rename/extensionCase").toInt();
+    int start_ = hc::defaults::DefaultValue("rename/start").toInt();
+    int step_ = hc::defaults::DefaultValue("rename/step").toInt();
+    int digits_ = hc::defaults::DefaultValue("rename/digits").toInt();
 };
 struct RenameRow { Entry source_; QString target_, error_; };
 inline QList<RenameRow> Plan(const QList<Entry>& Sources, const Rules& Rule, const std::function<bool()>& Stop = {}) {

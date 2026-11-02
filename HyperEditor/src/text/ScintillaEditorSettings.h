@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <QFont>
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 
 struct ScintillaEditorSettings
 {
@@ -49,25 +50,25 @@ struct ScintillaEditorSettings
         WrapIndentDeepIndent = 3
     };
 
-    bool  useUtf8 = true;
-    bool  showLineNumbers = true;
-    bool  showIndentationGuides = true;
-    bool  highlightCurrentLine = true;
-    bool  autoIndent = true;
-    bool  useTabs = true;
-    bool  braceMatching = true;
-    bool  readOnly = false;
-    WrapMode wrapMode = WrapChar;
-    int wrapVisualFlags = WrapFlagEnd;
-    WrapIndentMode wrapIndentMode = WrapIndentSame;
-    bool  showWhitespace = false;
-    bool  showCodeFolding = true;
-    int   tabWidth = 4;
-    double lineSpacingScale = 1.1;
-    int   lineNumberMarginDigits = 5;
-    FontRenderingMode fontRendering = Antialiased;
-    ChangeHistoryMode changeHistoryMode = ChangeHistoryBoth;
-    IndentGuideStyle indentGuideStyle = IndentGuideReal;
+    bool  useUtf8 = hc::defaults::edit::TextRuntime()["useUtf8"].toBool();
+    bool  showLineNumbers = hc::defaults::edit::ViewValue("textView/showLineNumbers").toBool();
+    bool  showIndentationGuides = hc::defaults::edit::ViewValue("textView/showIndentationGuides").toBool();
+    bool  highlightCurrentLine = hc::defaults::edit::ViewValue("textView/highlightCurrentLine").toBool();
+    bool  autoIndent = hc::defaults::edit::ViewValue("textView/autoIndent").toBool();
+    bool  useTabs = hc::defaults::edit::ViewValue("textView/useTabs").toBool();
+    bool  braceMatching = hc::defaults::edit::ViewValue("textView/braceHighlight").toBool();
+    bool  readOnly = hc::defaults::edit::TextRuntime()["readOnly"].toBool();
+    WrapMode wrapMode = static_cast<WrapMode>(hc::defaults::edit::ViewValue("textView/wordWrapMode").toInt());
+    int wrapVisualFlags = hc::defaults::edit::ViewValue("textView/wrapVisualFlags").toInt();
+    WrapIndentMode wrapIndentMode = static_cast<WrapIndentMode>(hc::defaults::edit::ViewValue("textView/wrapIndentMode").toInt());
+    bool  showWhitespace = hc::defaults::edit::ViewValue("textView/showWhitespace").toBool();
+    bool  showCodeFolding = hc::defaults::edit::ViewValue("textView/showCodeFolding").toBool();
+    int   tabWidth = hc::defaults::edit::ViewValue("textView/tabWidth").toInt();
+    double lineSpacingScale = hc::defaults::edit::ViewValue("textView/lineSpacing").toDouble();
+    int   lineNumberMarginDigits = hc::defaults::edit::TextRuntime()["lineNumberMarginDigits"].toInt();
+    FontRenderingMode fontRendering = static_cast<FontRenderingMode>(hc::defaults::edit::ViewValue("textView/fontRendering").toInt());
+    ChangeHistoryMode changeHistoryMode = static_cast<ChangeHistoryMode>(hc::defaults::edit::ViewValue("textView/changeHistoryMode").toInt());
+    IndentGuideStyle indentGuideStyle = static_cast<IndentGuideStyle>(hc::defaults::edit::ViewValue("textView/indentGuideStyle").toInt());
 
     static ScintillaEditorSettings standard();
     static ScintillaEditorSettings limitedPreview();

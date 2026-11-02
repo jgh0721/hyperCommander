@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include "quickFindSettings.hpp"
 #include "quickFindHighlight.hpp"
 #include "commandMgr.hpp"
@@ -205,7 +206,7 @@ protected:
             if ((Event->type() == QEvent::KeyPress || Event->type() == QEvent::ShortcutOverride) &&
                 (configuration().enabled_ || (quick_ && scope_ == "everything"))) {
                 const auto* Key = static_cast<QKeyEvent*>(Event);
-                if (Key->key() == Qt::Key_S && Key->modifiers() == Qt::ControlModifier) {
+                if (Key->keyCombination() == hc::defaults::AuxiliaryShortcut("quickFind.toggleMode")) {
                     Event->accept();
                     if (Event->type() == QEvent::KeyPress && !Key->isAutoRepeat()) {
                         toggleMode();

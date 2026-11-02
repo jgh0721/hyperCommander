@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "UniqueLibs/ProductDefaults_Compare.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include "comparePalette.hpp"
 #include "compareCommands.hpp"
@@ -97,13 +98,12 @@ namespace hc::compare
         Preferences settings;
         SetActiveCompareSettings(CompareSettings::Load());
         // The former bool is read once: a saved dark choice stays dark, anything else follows the product.
-        themeMode_ = settings.Contains("theme/mode") ? settings.Value("theme/mode").toString() : settings.Value("theme/dark", false).toBool() ? QString("dark") : QString("product");
+        themeMode_ = ActiveCompareSettings().theme_;
         if (!request_.theme_.isEmpty()) themeMode_ = request_.theme_;
         if (themeMode_ != "light" && themeMode_ != "dark") themeMode_ = "product";
         { auto& theme = fm::style::ThemeManager::instance(); theme.setScheme(themeScheme(themeMode_)); dark_ = theme.colors().isDark(); }
-        uiFont_ = qApp->font(); uiFont_.fromString(settings.Value("fonts/ui", uiFont_.toString()).toString());
-        listFont_ = QFont("D2Coding", 12); listFont_.fromString(settings.Value("fonts/list", listFont_.toString()).toString());
-        textFont_ = QFont("D2Coding ligature", 14); textFont_.fromString(settings.Value("fonts/text", textFont_.toString()).toString());
+        const auto& Fonts = ActiveCompareSettings().fonts_;
+        uiFont_ = Fonts[0]; listFont_ = Fonts[1]; textFont_ = Fonts[2];
         auto* layout = new QSplitter(Qt::Vertical, this);
         auto* sources = new QWidget(layout); sources_ = sources; auto* row = new QHBoxLayout(sources); row->setContentsMargins(0, 0, 0, 0); row->setSpacing(0);
         panes_ = new QSplitter(Qt::Horizontal, sources); overview_ = new OverviewBar(sources);
@@ -267,12 +267,12 @@ namespace hc::compare
         auto* findPrevious = editMenu->addAction(tr("이전 찾기"), this, [this] { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(-1); else find_->Find(true); });
         auto* findAll = editMenu->addAction(tr("모두 찾기"), find_, &FindBar::FindAll);
         findActions_ = {find, findNext, findPrevious, findAll}; for (auto* action : findActions_) action->setEnabled(false);
-        auto* closeFind = new QAction(this); closeFind->setShortcut(QKeySequence(Qt::Key_Escape)); closeFind->setEnabled(false); addAction(closeFind);
+        auto* closeFind = new QAction(this); closeFind->setShortcut(QKeySequence(hc::defaults::compare::AuxiliaryShortcut("find.close"))); closeFind->setEnabled(false); addAction(closeFind);
         connect(closeFind, &QAction::triggered, find_, &FindBar::Close);
         connect(find_, &QToolBar::visibilityChanged, closeFind, &QAction::setEnabled);
         auto* viewMenu = menuBar()->addMenu(tr("보기"));
         alignAll_ = viewMenu->addAction(tr("전체 패널 표시 줄 정렬")); alignAll_->setCheckable(true);
-        alignAll_->setChecked(settings.Value("view/alignAllPanes", true).toBool()); alignAll_->setEnabled(false);
+        alignAll_->setChecked(settings.Value("view/alignAllPanes").toBool()); alignAll_->setEnabled(false);
         alignAll_->setToolTip(tr("BASE·RESULT를 포함한 모든 패널을 맞춥니다. RESULT 편집 후 다시 계산하며 표시 여백은 복사·저장 내용에 포함되지 않습니다."));
         connect(alignAll_, &QAction::toggled, this, [this](bool Enabled) {
             Preferences{}.SetValue("view/alignAllPanes", Enabled);
@@ -296,14 +296,14 @@ namespace hc::compare
             }
         }
         alignRows_ = viewMenu->addAction(tr("왼쪽·오른쪽 표시 줄 정렬")); alignRows_->setCheckable(true);
-        alignRows_->setChecked(settings.Value("view/alignSourceRows", true).toBool()); alignRows_->setEnabled(false);
+        alignRows_->setChecked(settings.Value("view/alignSourceRows").toBool()); alignRows_->setEnabled(false);
         alignRows_->setToolTip(tr("두 원본의 대응 줄을 빈 여백으로 맞춥니다. 여백은 복사하거나 저장하는 텍스트에 포함되지 않습니다."));
         connect(alignRows_, &QAction::toggled, this, [this](bool Enabled) {
             Preferences{}.SetValue("view/alignSourceRows", Enabled);
             if (scroll_ && !busy()) { scroll_->SetAligned(Enabled); overview_->SetAligned(Enabled); }
         });
         syncScroll_ = viewMenu->addAction(tr("왼쪽·오른쪽 스크롤 동기화")); syncScroll_->setCheckable(true);
-        syncScroll_->setChecked(settings.Value("view/synchronizeSources", true).toBool()); syncScroll_->setEnabled(false);
+        syncScroll_->setChecked(settings.Value("view/synchronizeSources").toBool()); syncScroll_->setEnabled(false);
         syncScroll_->setToolTip(tr("첫 번째와 두 번째 원본 패널의 대응 줄과 가로 위치를 함께 이동합니다."));
         connect(syncScroll_, &QAction::toggled, this, [this](bool Enabled) {
             Preferences{}.SetValue("view/synchronizeSources", Enabled);
@@ -315,7 +315,7 @@ namespace hc::compare
             if (multi_) multi_->SetEnabled(Enabled && !busy());
         });
         inlineHighlights_ = viewMenu->addAction(tr("줄 내부 차이 강조")); inlineHighlights_->setCheckable(true);
-        inlineHighlights_->setChecked(settings.Value("view/inlineHighlights", true).toBool());
+        inlineHighlights_->setChecked(settings.Value("view/inlineHighlights").toBool());
         inlineHighlights_->setToolTip(tr("선택한 두 원본의 변경 줄을 순서대로 짝지어 동일한 단어·식별자를 먼저 대응시키고, 나머지는 문자 묶음 단위로 차이를 표시합니다. 결합 문자와 이모지 내부는 나누지 않습니다. 긴 줄은 줄 단위 표시를 유지합니다."));
         connect(inlineHighlights_, &QAction::toggled, this, [this](bool Enabled) {
             Preferences{}.SetValue("view/inlineHighlights", Enabled); applyInlineHighlights();
@@ -331,7 +331,7 @@ namespace hc::compare
         if (request_.syntax_ != "auto" && !CompareSyntaxChoices().contains(request_.syntax_)) request_.syntax_ = "auto";
         syncSyntaxActions();
         showOverview_ = viewMenu->addAction(tr("차이 개요 막대")); showOverview_->setCheckable(true);
-        showOverview_->setChecked(settings.Value("view/overview", true).toBool()); showOverview_->setEnabled(false);
+        showOverview_->setChecked(settings.Value("view/overview").toBool()); showOverview_->setEnabled(false);
         connect(showOverview_, &QAction::toggled, this, [this](bool Enabled) {
             // Hiding the focused bar must not focus the change list: its first
             // current-item event would navigate and replace source selections.
@@ -522,7 +522,7 @@ namespace hc::compare
         const auto left = QFileDialog::getExistingDirectory(this, tr("왼쪽 디렉터리")); if (left.isEmpty()) return;
         const auto right = QFileDialog::getExistingDirectory(this, tr("오른쪽 디렉터리")); if (right.isEmpty()) return;
         const auto third = Three ? QFileDialog::getExistingDirectory(this, tr("FILE 3 디렉터리(BASE 아님)")) : QString{}; if (Three && third.isEmpty()) return;
-        Request request; request.mode_ = "directory"; request.timeoutMs_ = 0; request.directory_.level_ = Preferences{}.Value("directory/level", "text").toString(); request.file1_ = left; request.file2_ = right; request.file3_ = third; request_ = request; dirty_ = false; start();
+        Request request; request.mode_ = "directory"; request.timeoutMs_ = 0; request.directory_.level_ = Preferences{}.Value("directory/level").toString(); request.file1_ = left; request.file2_ = right; request.file3_ = third; request_ = request; dirty_ = false; start();
     }
     void CompareWindow::openInputs()
     {

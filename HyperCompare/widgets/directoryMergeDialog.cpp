@@ -143,7 +143,7 @@ namespace hc::compare
         streams_->setToolTip(tr("원본 파일의 추가 데이터 스트림을 복사하고 내용을 검증합니다. 지원되지 않는 저장소에서는 실행을 중단합니다."));
         copyRow->addWidget(metadata_); copyRow->addWidget(acl_); copyRow->addWidget(streams_); copyRow->addStretch(); box->addLayout(copyRow);
         model_ = new DirectoryPlanModel(this); model_->setObjectName("directoryPlanModel"); table_ = new QTableView(this); table_->setObjectName("directoryPlanTable"); table_->setModel(model_);
-        QFont list = font(); list.fromString(Preferences{}.Value("fonts/list", list.toString()).toString()); table_->setFont(list);
+        QFont list = font(); list.fromString(Preferences{}.Value("fonts/list").toString()); table_->setFont(list);
         table_->setItemDelegateForColumn(1, new ChoiceDelegate(table_)); table_->setSelectionBehavior(QAbstractItemView::SelectRows); table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
         table_->setAlternatingRowColors(true); table_->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
         table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch); table_->setColumnWidth(1, 250); table_->setColumnWidth(2, 180); box->addWidget(table_, 1);

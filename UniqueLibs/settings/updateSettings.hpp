@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include <QDateTime>
 #include <QJsonObject>
 
@@ -10,7 +11,8 @@ inline int UpdateCheckIntervalDays(const QJsonObject& Update)
     const auto Value = Update.value("checkIntervalDays");
     if (Value.isDouble())
         for (const int Days : {0, 1, 7, 30}) if (Value.toDouble() == Days) return Days;
-    return Update["automaticCheck"].toBool(true) ? 7 : 0;
+    return Update["automaticCheck"].toBool(hc::defaults::DefaultValue("update/automaticCheck").toBool())
+        ? hc::defaults::DefaultValue("update/checkIntervalDays").toInt() : hc::defaults::DefaultValue("update/disabledIntervalDays").toInt();
 }
 inline bool UpdateCheckDue(const QJsonObject& Update, const QDateTime& Now)
 {

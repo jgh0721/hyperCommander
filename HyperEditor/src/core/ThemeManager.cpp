@@ -13,7 +13,7 @@ namespace {
 
 constexpr auto kThemeOverridesKey = "theme/colorOverridesJson";
 constexpr auto kThemeOverridesSchemaVersionKey = "theme/colorOverridesSchemaVersion";
-constexpr int kThemeOverridesSchemaVersion = 4;
+constexpr int kThemeOverridesSchemaVersion = hc::defaults::edit::ThemeOverridesSchemaVersion;
 
 QJsonObject colorMapToJson(const QHash<QString, QColor>& colors)
 {
@@ -227,104 +227,7 @@ QHash<QString, QColor> ThemeManager::defaultColors(Theme theme)
     const bool WantDark = theme == Dark;
     const auto& T = fm::style::isDarkVariant(Manager.effectiveVariant()) == WantDark
         ? Manager.colors() : Manager.colors(WantDark ? fm::style::Variant::Dark : fm::style::Variant::Light);
-    const auto Alpha = [](QColor Color, int Value) { Color.setAlpha(Value); return Color; };
-    QHash<QString, QColor> c;
-    c.insert(QStringLiteral("common.background"), T[Token::Win]);
-    c.insert(QStringLiteral("common.surface"), T[Token::Surface]);
-    c.insert(QStringLiteral("common.surfaceAlt"), T[Token::Alt]);
-    c.insert(QStringLiteral("common.foreground"), T[Token::Fg]);
-    c.insert(QStringLiteral("common.foregroundMuted"), T[Token::Fg2]);
-    c.insert(QStringLiteral("common.accent"), T[Token::Accent]);
-    c.insert(QStringLiteral("common.border"), T[Token::Line]);
-    c.insert(QStringLiteral("common.toolbar"), T[Token::Win]);
-    c.insert(QStringLiteral("common.tabActive"), T[Token::Surface]);
-    c.insert(QStringLiteral("common.tabInactive"), T[Token::Alt]);
-    c.insert(QStringLiteral("common.canvas"), T[Token::Alt]);
-
-    c.insert(QStringLiteral("pdf.canvas"), T[Token::Alt]);
-    c.insert(QStringLiteral("pdf.pageGap"), T[Token::Grid]);
-    c.insert(QStringLiteral("pdf.searchHighlight"), Alpha(T[Token::Warn], 0x5A));
-    c.insert(QStringLiteral("pdf.searchCurrent"), Alpha(T[Token::Accent], 0x6E));
-    c.insert(QStringLiteral("pdf.textSelection"), Alpha(T[Token::Accent], 0x46));
-    c.insert(QStringLiteral("pdf.imageSelection"), Alpha(T[Token::Ok], 0xE6));
-    c.insert(QStringLiteral("pdf.annotation"), Alpha(T[Token::Warn], 0x80));
-
-    c.insert(QStringLiteral("image.canvas"), T[Token::Alt]);
-    c.insert(QStringLiteral("image.draw"), T[Token::Danger]);
-    c.insert(QStringLiteral("image.selection"), T[Token::Accent]);
-    c.insert(QStringLiteral("image.compositeOutline"), T[Token::Surface]);
-    c.insert(QStringLiteral("image.handleFill"), T[Token::Surface]);
-    c.insert(QStringLiteral("image.handleBorder"), T[Token::Fg]);
-    c.insert(QStringLiteral("image.accept"), T[Token::Ok]);
-    c.insert(QStringLiteral("image.cancel"), T[Token::Danger]);
-
-    c.insert(QStringLiteral("markdown.background"), T[Token::Surface]);
-    c.insert(QStringLiteral("markdown.foreground"), T[Token::Fg]);
-    c.insert(QStringLiteral("markdown.link"), T[Token::AccentFg]);
-    c.insert(QStringLiteral("markdown.heading"), T[Token::Fg]);
-    c.insert(QStringLiteral("markdown.border"), T[Token::Line]);
-    c.insert(QStringLiteral("markdown.codeBackground"), T[Token::Alt]);
-    c.insert(QStringLiteral("markdown.inlineCode"), T[Token::Danger]);
-    c.insert(QStringLiteral("markdown.blockquote"), T[Token::Fg2]);
-    c.insert(QStringLiteral("markdown.taskChecked"), T[Token::Ok]);
-
-    c.insert(QStringLiteral("text.background"), T[Token::Surface]);
-    c.insert(QStringLiteral("text.foreground"), T[Token::Fg]);
-    c.insert(QStringLiteral("text.currentLine"), T[Token::Alt]);
-    c.insert(QStringLiteral("text.selection"), T[Token::AccentSoft]);
-    c.insert(QStringLiteral("text.selectionForeground"), T[Token::Fg]);
-    c.insert(QStringLiteral("text.caret"), T[Token::Fg]);
-    c.insert(QStringLiteral("text.marginBackground"), T[Token::Win]);
-    c.insert(QStringLiteral("text.marginForeground"), T[Token::Fg3]);
-    c.insert(QStringLiteral("text.indentGuide"), T[Token::Line]);
-    c.insert(QStringLiteral("text.foldMarker"), T[Token::Fg3]);
-    c.insert(QStringLiteral("text.braceMatch"), T[Token::Accent]);
-    c.insert(QStringLiteral("text.braceMismatch"), T[Token::Danger]);
-
-    // Keep syntax text at 4.5:1 against both Paper Fluent body/current-line
-    // surfaces. Explicit user syntax overrides are applied separately.
-    if (WantDark) {
-        c.insert(QStringLiteral("text.lexer.comment"), QColor(QStringLiteral("#93907D")));
-        c.insert(QStringLiteral("text.lexer.number"), QColor(QStringLiteral("#AE81FF")));
-        c.insert(QStringLiteral("text.lexer.keyword"), QColor(QStringLiteral("#FF4388")));
-        c.insert(QStringLiteral("text.lexer.type"), QColor(QStringLiteral("#66D9EF")));
-        c.insert(QStringLiteral("text.lexer.string"), QColor(QStringLiteral("#E6DB74")));
-        c.insert(QStringLiteral("text.lexer.preprocessor"), QColor(QStringLiteral("#A6E22E")));
-        c.insert(QStringLiteral("text.lexer.operator"), QColor(QStringLiteral("#FF4388")));
-        c.insert(QStringLiteral("text.lexer.identifier"), QColor(QStringLiteral("#F8F8F2")));
-        c.insert(QStringLiteral("text.lexer.function"), QColor(QStringLiteral("#A6E22E")));
-        c.insert(QStringLiteral("text.lexer.variable"), QColor(QStringLiteral("#FD971F")));
-    } else {
-        c.insert(QStringLiteral("text.lexer.comment"), QColor(QStringLiteral("#716D5A")));
-        c.insert(QStringLiteral("text.lexer.number"), QColor(QStringLiteral("#7444F5")));
-        c.insert(QStringLiteral("text.lexer.keyword"), QColor(QStringLiteral("#D0005F")));
-        c.insert(QStringLiteral("text.lexer.type"), QColor(QStringLiteral("#00749F")));
-        c.insert(QStringLiteral("text.lexer.string"), QColor(QStringLiteral("#856800")));
-        c.insert(QStringLiteral("text.lexer.preprocessor"), QColor(QStringLiteral("#437900")));
-        c.insert(QStringLiteral("text.lexer.operator"), QColor(QStringLiteral("#D0005F")));
-        c.insert(QStringLiteral("text.lexer.identifier"), QColor(QStringLiteral("#272822")));
-        c.insert(QStringLiteral("text.lexer.function"), QColor(QStringLiteral("#3B7D00")));
-        c.insert(QStringLiteral("text.lexer.variable"), QColor(QStringLiteral("#AB5500")));
-    }
-
-    const QStringList lexerKeys = {
-        QStringLiteral("cpp"), QStringLiteral("python"), QStringLiteral("json"),
-        QStringLiteral("xml"), QStringLiteral("hypertext"), QStringLiteral("css"),
-        QStringLiteral("bash"), QStringLiteral("sql")
-    };
-    const QStringList tokenKeys = {
-        QStringLiteral("comment"), QStringLiteral("number"), QStringLiteral("keyword"),
-        QStringLiteral("type"), QStringLiteral("string"), QStringLiteral("preprocessor"),
-        QStringLiteral("operator"), QStringLiteral("identifier"), QStringLiteral("function"),
-        QStringLiteral("variable")
-    };
-    for (const QString& lexerKey : lexerKeys) {
-        for (const QString& tokenKey : tokenKeys) {
-            c.insert(QStringLiteral("text.lexer.%1.%2").arg(lexerKey, tokenKey),
-                     c.value(QStringLiteral("text.lexer.%1").arg(tokenKey)));
-        }
-    }
-    return c;
+    return hc::defaults::edit::Colors<Token>(T, WantDark);
 }
 
 QString ThemeManager::themeName(Theme theme)
@@ -347,7 +250,7 @@ bool ThemeManager::importThemeFile(const QString& filePath, QString* errorMessag
     }
 
     const QJsonObject root = document.object();
-    const QString mode = root.value(QStringLiteral("mode")).toString(QStringLiteral("light")).toLower();
+    const QString mode = root.value(QStringLiteral("mode")).toString(hc::defaults::edit::ImportedThemeMode).toLower();
     const Theme importedTheme = mode == QStringLiteral("dark") ? Dark : Light;
     const QJsonObject colors = root.value(QStringLiteral("colors")).toObject();
     if (colors.isEmpty()) {
@@ -427,7 +330,7 @@ void ThemeManager::applyToApplication()
 void ThemeManager::loadOverrides()
 {
     AppSettings settings;
-    const int schemaVersion = settings.value(QString::fromLatin1(kThemeOverridesSchemaVersionKey), 1).toInt();
+    const int schemaVersion = settings.value(QString::fromLatin1(kThemeOverridesSchemaVersionKey)).toInt();
     const QJsonDocument document = QJsonDocument::fromJson(settings.value(QString::fromLatin1(kThemeOverridesKey)).toByteArray());
 
     const QJsonObject root = document.object();

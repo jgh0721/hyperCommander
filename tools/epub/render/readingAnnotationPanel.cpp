@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingNavigation.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "readingAnnotations.hpp"
 #include <QComboBox>
 #include <QFileDialog>
@@ -77,7 +78,7 @@ bool ReadingNavigation::annotationAction(const QString& Action,const QJsonValue&
     if(annotationBusy_ || annotationPending_>=0 || !transferPending_.isEmpty() || readFailed_)return false;
     if(Action=="annotation-reload"){reloadAnnotations();return true;}
     if(Action=="annotation-add" || Action=="annotation-link") {
-        const auto Input=Value.toObject();annotationDraft_={{"id",QUuid::createUuid().toString(QUuid::Id128)},{"note",Input["note"].toString()},{"color",Input["color"].toString("#ffde59")},{"quote","pending"},{"prefix",""},{"suffix",""},{"locator","epubcfi(/6/2!/4/2:0)"},{"unresolved",false}};
+        const auto Input=Value.toObject();annotationDraft_={{"id",QUuid::createUuid().toString(QUuid::Id128)},{"note",Input["note"].toString()},{"color",Input["color"].toString(hc::defaults::edit::AnnotationColor)},{"quote","pending"},{"prefix",""},{"suffix",""},{"locator","epubcfi(/6/2!/4/2:0)"},{"unresolved",false}};
         if(Action=="annotation-link") {bool Found=false;for(const auto& Row:annotations_)if(Row.toObject()["id"]==Input["id"]){annotationDraft_=Row.toObject();Found=true;}if(!Found)return false;}
         if(!ReadingAnnotations::Valid(annotationDraft_) || (Action=="annotation-add" && annotations_.size()>=32))return false;
         QJsonValue Target=Input.contains("locator")?Input["locator"]:QJsonValue{};send("annotation-capture",Target);annotationPending_=serial_;annotationMode_=Action=="annotation-link"?"link":"capture";refreshAnnotations();return true;

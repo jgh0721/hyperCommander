@@ -29,11 +29,7 @@ void setError(QString* errorMessage, const QString& message)
 
 QString TextShadowBackupStore::backupDirectoryPath()
 {
-    QString basePath = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-    if (basePath.isEmpty())
-        basePath = QDir::tempPath() + QStringLiteral("/MultiViewer");
-
-    return QDir(basePath).filePath(QStringLiteral("TextHotExit"));
+    return hc::defaults::edit::TextBackupDirectory();
 }
 
 QString TextShadowBackupStore::backupPathForFile(const QString& originalFilePath)
@@ -57,7 +53,7 @@ QString TextShadowBackupStore::backupPathForUntitled(const QString& untitledId)
 bool TextShadowBackupStore::saveSnapshot(const Snapshot& snapshot, QString* errorMessage)
 {
     AppSettings settings;
-    if (!settings.value("textView/hotExitEnabled", true).toBool())
+    if (!settings.value("textView/hotExitEnabled").toBool())
         return true;
 
     const QString untitledId = normalizedUntitledId(snapshot.untitledId);

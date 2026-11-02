@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "builtInFsModel.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "startupTrace.hpp"
 #include <QtConcurrent/QtConcurrentTask>
 #include "shellDriveSort.hpp"
@@ -334,7 +335,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                     RoleWith.setData(QString::fromStdString(Item->storageEntry_->hints_.at("displayName"))); break;
                 }
                 if (Col == 0 && Role == Qt::DisplayRole && (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && Item->Name_ != "..") {
-                    const auto Style = displaySettings_["directoryStyle"].toString();
+                    const auto Style = displaySettings_["directoryStyle"].toString(hc::defaults::DefaultValue("general/directoryStyle").toString());
                     if (Style == "brackets") { RoleWith.setData("[" + Item->Name_ + "]"); break; }
                     if (Style == "suffix") { RoleWith.setData(Item->Name_ + "\\"); break; }
                 }
@@ -350,7 +351,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             } break;
 
             case Qt::DecorationRole: {
-                if (Col == 0 && displaySettings_["iconMode"].toString() != "none") RoleWith.setData(vecNode_[Row]->Icon);
+                if (Col == 0 && displaySettings_["iconMode"].toString(hc::defaults::DefaultValue("general/iconMode").toString()) != "none") RoleWith.setData(vecNode_[Row]->Icon);
                 else RoleWith.clearData();
             } break;
 
@@ -1008,8 +1009,8 @@ hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison
     const auto& First = Bindings.front().definition_;
     if (Bindings.size() == 1 && (First.sortField_ == "file.name" ||
         (First.sortField_.isEmpty() && First.template_.isEmpty() && First.fieldId_ == "file.name"))) {
-        const auto TextOrder = TextCompare(displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
-            displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
+        const auto TextOrder = TextCompare(displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()), displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()),
+            displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive);
         const auto Direction = Orders.front();
         // Name sorting needs no display object, template evaluation or identity
         // encoding except on a tie. Keep the exact shared text comparison rules.
@@ -1021,8 +1022,8 @@ hc::storage::Result<hc::storage::PagedEntryIndex::Less> CFSModel::pageComparison
             return QString::compare(hc::workspace::SelectionKey(A), hc::workspace::SelectionKey(B), Qt::CaseSensitive) < 0;
         });
     }
-    const auto Compare = SortLess(Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
-        displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
+    const auto Compare = SortLess(Orders, displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()), displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()),
+        displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive);
     const auto Parent = ParentPath.isEmpty() ? GetCurrentPathWithRoot() : ParentPath;
     const auto MakeRow = [Bindings, Parent](const hc::storage::EntrySnapshot& Entry) {
         FileSnapshot Item; Item.name_ = QString::fromStdString(Entry.name_); Item.attributes_ = Entry.attributes_;
@@ -1184,7 +1185,7 @@ DisplayIconQueries IconQueries(const nsHC::TySpFileSource& Item, const QJsonObje
 {
     using namespace hc::icons;
     const bool Directory = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
-    const auto Mode = Settings["iconMode"].toString("standard");
+    const auto Mode = Settings["iconMode"].toString(hc::defaults::DefaultValue("general/iconMode").toString());
     Request Base; Base.pixels_ = Pixels; Base.directory_ = Directory;
     Base.kind_ = Directory ? Kind::Folder : Mode == "standard" ? Kind::File : Kind::Associated;
     Base.extension_ = Base.kind_ == Kind::Associated ? QFileInfo(Item->Name_).suffix().toLower() : QString{};
@@ -1205,10 +1206,10 @@ DisplayIconQueries IconQueries(const nsHC::TySpFileSource& Item, const QJsonObje
         Specific.revision_ = QString::number(Item->Modified_.toMSecsSinceEpoch()) + ':' + QString::number(Item->Size_) + ':' + QString::number(Item->Attributes_);
     }
     const auto Extension = QFileInfo(Item->Name_).suffix().toLower();
-    const bool Individual = !Specific.path_.isEmpty() && (Specific.virtual_ ? Settings["virtualFolderIcons"].toBool(true)
-        : Directory ? Settings["specialFolderIcons"].toBool(true)
+    const bool Individual = !Specific.path_.isEmpty() && (Specific.virtual_ ? Settings["virtualFolderIcons"].toBool(hc::defaults::DefaultValue("general/virtualFolderIcons").toBool())
+        : Directory ? Settings["specialFolderIcons"].toBool(hc::defaults::DefaultValue("general/specialFolderIcons").toBool())
         : Mode == "all" && (Extension == "exe" || Extension == "lnk" || Extension == "ico"));
-    DisplayIconQueries Queries{Individual ? Specific : Base, Specific, Settings["iconOverlays"].toBool(true) && !Specific.path_.isEmpty()};
+    DisplayIconQueries Queries{Individual ? Specific : Base, Specific, Settings["iconOverlays"].toBool(hc::defaults::DefaultValue("general/iconOverlays").toBool()) && !Specific.path_.isEmpty()};
     Queries.overlay_.kind_ = Kind::Overlay;
     return Queries;
 }
@@ -1303,7 +1304,7 @@ void CFSModel::appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entri
 {
     if (!searchResults_ || Entries.empty()) return;
     emit ColumnValuesChanging();
-    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(true);
+    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(hc::defaults::DefaultValue("general/explorerDefaultIcons").toBool());
     const auto FolderIcon = GenericIcon(true, iconPixels_, Explorer), FileIcon = GenericIcon(false, iconPixels_, Explorer);
     QVector<nsHC::TySpFileSource> Items; Items.reserve(Entries.size());
     for (const auto& Entry : Entries) Items.push_back(makeDisplayItem(Entry, FolderIcon, FileIcon));
@@ -1378,7 +1379,7 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
         Parent->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
         Items.push_back(Parent);
     }
-    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(true);
+    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(hc::defaults::DefaultValue("general/explorerDefaultIcons").toBool());
     const auto FolderIcon = GenericIcon(true, iconPixels_, Explorer);
     const auto FileIcon = GenericIcon(false, iconPixels_, Explorer);
     const int ParentRows = int(Items.size());
@@ -1484,11 +1485,11 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
         directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{}; directorySizePending_.clear();
     }
     const auto Options = hc::settings::AppSettings().CommittedObject()["options"].toObject();
-    const auto Mode = Options["folderSizeMode"].toString("everything");
+    const auto Mode = Options["folderSizeMode"].toString(hc::defaults::DefaultValue("options/folderSizeMode").toString());
     const auto Location = WorkspaceLocation();
     if (!searchResults_ && hc::folders::IsNetwork(Location)) return;
     if (Automatic && !hc::folders::Automatic(Mode, Location)) return;
-    const bool UseIndex = !searchResults_ && Options["folderSizeUseEverything"].toBool(true)
+    const bool UseIndex = !searchResults_ && Options["folderSizeUseEverything"].toBool(hc::defaults::DefaultValue("options/folderSizeUseEverything").toBool())
         && (Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb);
     const bool IndexOnly = Automatic && Mode == "everything";
     if (IndexOnly && !UseIndex) return;
@@ -1623,9 +1624,9 @@ void CFSModel::refreshNameSortRanks(int First)
     hc::startup::Span Trace("listing.nameRanks");
     // Supply numeric ranks to the grid so locale and natural-number options
     // remain independent, without relying on its locale-only numeric comparator.
-    const bool Locale = displaySettings_["sortLocaleAware"].toBool(true);
-    const bool Numeric = displaySettings_["sortNumericAware"].toBool(true);
-    const auto Case = displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    const bool Locale = displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool());
+    const bool Numeric = displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool());
+    const auto Case = displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive;
     QCollator Collator; Collator.setCaseSensitivity(Case); Collator.setNumericMode(Numeric);
     const auto Compare = [&](const QString& Left, const QString& Right) -> int {
         if (Locale) return Collator.compare(Left, Right);
@@ -1703,7 +1704,7 @@ void CFSModel::refreshDisplayIcons(int First)
         setProperty("hc.explicitIconRefresh", false); setProperty("hc.revalidateIconsOnce", true);
     }
     auto& Icons = hc::icons::FileIconService::Instance();
-    const auto Mode = displaySettings_["iconMode"].toString("standard");
+    const auto Mode = displaySettings_["iconMode"].toString(hc::defaults::DefaultValue("general/iconMode").toString());
     const bool ResetAppearance = property("hc.resetIconAppearance").toBool(); setProperty("hc.resetIconAppearance", false);
     if (!First) { ++iconGeneration_; iconVisibleRows_.clear(); }
     if (Mode == "none") {
@@ -1712,7 +1713,7 @@ void CFSModel::refreshDisplayIcons(int First)
         for (int Row = First; Row < vecNode_.size(); ++Row) vecNode_[Row]->Icon = {};
         return;
     }
-    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(true);
+    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(hc::defaults::DefaultValue("general/explorerDefaultIcons").toBool());
     const auto Folder = Icons.DefaultIcon(true, iconPixels_, Explorer, this);
     const auto File = Icons.DefaultIcon(false, iconPixels_, Explorer, this);
     for (int Row = First; Row < vecNode_.size(); ++Row) {
@@ -1734,10 +1735,10 @@ void CFSModel::SetIconViewport(const QModelIndexList& Entries, bool Enabled)
         Wanted.insert(Index.row()); Rows.append(Index.row());
     }
     auto& Icons = hc::icons::FileIconService::Instance();
-    const bool Show = displaySettings_["iconMode"].toString("standard") != "none";
+    const bool Show = displaySettings_["iconMode"].toString(hc::defaults::DefaultValue("general/iconMode").toString()) != "none";
     for (const int Row : iconVisibleRows_) if (Row >= 0 && Row < vecNode_.size() && !Wanted.contains(Row)) {
         auto& Item = vecNode_[Row];
-        Item->Icon = Show && Item->Name_ != ".." ? Icons.DefaultIcon(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY, iconPixels_, displaySettings_["explorerDefaultIcons"].toBool(true)) : QPixmap{};
+        Item->Icon = Show && Item->Name_ != ".." ? Icons.DefaultIcon(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY, iconPixels_, displaySettings_["explorerDefaultIcons"].toBool(hc::defaults::DefaultValue("general/explorerDefaultIcons").toBool())) : QPixmap{};
     }
     iconVisibleRows_ = std::move(Rows);
     if (!Enabled) { Icons.BeginRequests(this); return; }
@@ -1751,8 +1752,8 @@ void CFSModel::applyRequestedIcons()
     const auto RefreshSettings = hc::refresh::Settings::FromJson(displaySettings_["refresh"].toObject());
     Icons.SetAutomaticRefresh(this, !RefreshSettings.Excludes(GetCurrentPathWithRoot())
         && (!RefreshSettings.pauseInBackground || qGuiApp->applicationState() == Qt::ApplicationActive));
-    if (!iconViewportEnabled_ || displaySettings_["iconMode"].toString("standard") == "none") return;
-    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(true);
+    if (!iconViewportEnabled_ || displaySettings_["iconMode"].toString(hc::defaults::DefaultValue("general/iconMode").toString()) == "none") return;
+    const bool Explorer = displaySettings_["explorerDefaultIcons"].toBool(hc::defaults::DefaultValue("general/explorerDefaultIcons").toBool());
     const auto Folder = Icons.DefaultIcon(true, iconPixels_, Explorer, this), File = Icons.DefaultIcon(false, iconPixels_, Explorer, this);
     const auto LegacyBase = LegacyIconBase(this);
     const bool Explicit = property("hc.revalidateIconsOnce").toBool();
@@ -1780,7 +1781,7 @@ void CFSModel::applyRequestedIcons()
 
 void CFSModel::invalidateDisplayIcons(bool All, int SettleMs)
 {
-    if (displaySettings_["iconMode"].toString("standard") == "none") return;
+    if (displaySettings_["iconMode"].toString(hc::defaults::DefaultValue("general/iconMode").toString()) == "none") return;
     QSet<QString> Keys, Paths;
     const auto LegacyBase = LegacyIconBase(this);
     const auto Add = [&](int Row) {
@@ -2467,8 +2468,8 @@ void CFSModel::refreshColumnSortRanks(int First)
         emit ColumnQueryStatus(tr("정렬 값을 조회 중… 남은 값 %1개").arg(Pending)); return;
     }
     if (searchResults_) {
-        const auto Compare = SortLess(Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
-            displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
+        const auto Compare = SortLess(Orders, displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()), displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()),
+            displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive);
         auto Order = Merge ? searchSortOrder_ : QVector<int>{};
         const auto Start = Order.size();
         for (int Row = Start; Row < Rows.size(); ++Row) Order.append(Row);
@@ -2478,8 +2479,8 @@ void CFSModel::refreshColumnSortRanks(int First)
         columnSortRanks_.resize(Order.size());
         for (int Rank = 0; Rank < Order.size(); ++Rank) columnSortRanks_[Order[Rank]] = Rank;
         searchSortRows_ = std::move(Rows); searchSortOrder_ = std::move(Order); searchSorts_ = columnSorts_;
-    } else columnSortRanks_ = SortRanks(Rows, Orders, displaySettings_["sortLocaleAware"].toBool(true), displaySettings_["sortNumericAware"].toBool(true),
-        displaySettings_["sortCaseSensitive"].toBool() ? Qt::CaseSensitive : Qt::CaseInsensitive);
+    } else columnSortRanks_ = SortRanks(Rows, Orders, displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()), displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()),
+        displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive);
     // Synthetic archive entry stays immediately after the parent row for every
     // column sort; it is an alternate view, not a member ordered by file metadata.
     const int FirstEntry = std::count_if(vecNode_.begin(), vecNode_.end(), [](const auto& Item) { return Item->Name_ == ".."; });

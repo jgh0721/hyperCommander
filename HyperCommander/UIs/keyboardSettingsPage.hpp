@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include "commandSelector.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <fmwidgets/Card.h>
@@ -101,7 +102,7 @@ public:
     }
     void Load() {
         loading_ = true; const auto G = settings::AppSettings().Read(settings::Section::General).toObject();
-        preset_->setCurrentIndex(qMax(0, hc::defaults::ShortcutPresetIds().indexOf(G["shortcutPreset"].toString())));
+        preset_->setCurrentIndex(qMax(0, hc::defaults::ShortcutPresetIds().indexOf(G["shortcutPreset"].toString(hc::defaults::DefaultValue("general/shortcutPreset").toString()))));
         for (int Kind = 0; Kind < 3; ++Kind) {
             const auto Value = FunctionBarKind(Kind);
             drafts_[Kind].commands_ = FunctionCommandsFor(G, Value);

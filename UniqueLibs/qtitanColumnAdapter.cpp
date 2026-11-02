@@ -90,7 +90,7 @@ void QtitanColumnAdapter::Reload()
     if (workspaceOwned_) { Request(); return; }
     baseProfile_ = hc::columns::SettingsPrefix + PaneKey() + "/" + viewId_;
     const auto Profile = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()[baseProfile_].toObject();
-    const auto Mode = Profile.value("listMode").toString("details");
+    const auto Mode = Profile.value("listMode").toString(hc::defaults::DefaultValue("columnPresentation/listMode").toString());
     activateLayout(LayoutModes.contains(Mode) ? Mode : "details");
     if (!LayoutModes.contains(Mode)) settings_.writable_ = false;
     Request();

@@ -350,7 +350,7 @@ int main(int Argc, char** Argv)
             });
             if (Opened.HasValue()) {
                 Ready = true; auto Reply = Policy;
-                Reply["archiveOptionsVersion"] = 1;
+                Reply["archiveOptionsVersion"] = 2;
                 if (!Plugin.viewer_ && Session) {
                     Reply["sessionProtocol"] = 2; Reply["sessionEpoch"] = Session->Epoch();
                 }

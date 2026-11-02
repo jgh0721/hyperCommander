@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 
 #include "commonLibs/document/documentFormatSupport.hpp"
 #include "pluginHost/pluginApplicationRule.hpp"
@@ -32,7 +33,7 @@ inline QJsonValue BuiltinApplication(const QJsonObject& Plugins, const QString& 
     if (Record.isUndefined()) return {};
     if (!Record.isObject()) return QJsonArray{};
     const auto Rule = Record.toObject().value("application");
-    const auto Mode = Rule.toObject().value("mode").toString("all");
+    const auto Mode = Rule.toObject().value("mode").toString(hc::defaults::DefaultValue("builtinApplication/mode").toString());
     if (Mode != "all" && Mode != "excludeExtensions") return QJsonArray{};
     return Rule;
 }

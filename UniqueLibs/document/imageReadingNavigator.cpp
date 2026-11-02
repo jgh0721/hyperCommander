@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "imageReadingNavigator.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "imageReadingView.hpp"
 #include "core/AppSettings.h"
 #include <QApplication>
@@ -123,7 +124,7 @@ ImageReadingNavigator::ImageReadingNavigator(ImageReadingView *Reader) : QWidget
     nextVolume_ = Button("imageNavigatorNextVolume", tr("다음 권"), Glyph::NextVolume);
     Buttons->addStretch();
     pin_ = Button("imageNavigatorPin", tr("네비게이터 고정"), Glyph::Pin); pin_->setCheckable(true);
-    pin_->setChecked(AppSettings().value("imageView/navigatorPinned", false).toBool());
+    pin_->setChecked(AppSettings().value("imageView/navigatorPinned").toBool());
     more_ = Button("imageNavigatorMore", tr("읽기 설정"), Glyph::More); more_->setPopupMode(QToolButton::InstantPopup);
     Layout->addLayout(Buttons);
     for (auto *B : {previousVolume_, previous_, next_, nextVolume_, pages_})
@@ -242,7 +243,7 @@ bool ImageReadingNavigator::eventFilter(QObject *Object, QEvent *Event)
     if (!eligible_) return false;
     if (Event->type() == QEvent::ShortcutOverride) {
         auto *Key = static_cast<QKeyEvent *>(Event);
-        if (Key->key() == Qt::Key_F6 || (Key->key() == Qt::Key_Escape && isAncestorOf(Widget))) {
+        if (Key->key() == hc::defaults::edit::AuxiliaryShortcut("image.focusNavigator").key() || (Key->key() == Qt::Key_Escape && isAncestorOf(Widget))) {
             Event->accept(); return true;
         }
     }
@@ -253,7 +254,7 @@ bool ImageReadingNavigator::eventFilter(QObject *Object, QEvent *Event)
     if (Event->type() == QEvent::FocusIn && (Widget == this || isAncestorOf(Widget))) Reveal();
     if (Event->type() == QEvent::KeyPress) {
         auto *Key = static_cast<QKeyEvent *>(Event);
-        if (Key->key() == Qt::Key_F6) { Reveal(); progress_->setFocus(Qt::ShortcutFocusReason); return true; }
+        if (Key->key() == hc::defaults::edit::AuxiliaryShortcut("image.focusNavigator").key()) { Reveal(); progress_->setFocus(Qt::ShortcutFocusReason); return true; }
         if (Key->key() == Qt::Key_Escape && isAncestorOf(Widget) && !QApplication::activePopupWidget()) {
             reader_->setFocus(); idle_.start(); return true;
         }

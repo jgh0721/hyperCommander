@@ -29,12 +29,12 @@ public:
     void Load(const QJsonObject& Document, const QJsonObject& Workspace = {}) {
         loading_ = true; base_ = draft_ = Document; pending_ = {}; useScheme_ = false; error_->clear();
         refreshSchemes(Document["appearance"].toObject()["selected"].toString());
-        builtInKeys_->setChecked(Document["general"].toObject()["useBuiltInShortcuts"].toBool(true));
+        builtInKeys_->setChecked(Document["general"].toObject()["useBuiltInShortcuts"].toBool(hc::defaults::DefaultValue("general/useBuiltInShortcuts").toBool()));
         const auto Handlers = documentHandlers();
-        view_->setEditText(Handlers["defaultViewHandlerId"].toString("builtin.hyperviewer"));
-        edit_->setEditText(Handlers["defaultEditHandlerId"].toString("builtin.hypereditor"));
-        policy_->setEditText(Handlers["selectionPolicy"].toString("askWhenMultiple"));
-        const auto Mode = Document["general"].toObject()["themeMode"].toString();
+        view_->setEditText(Handlers["defaultViewHandlerId"].toString(hc::defaults::DefaultValue("editors/documentHandlers/defaultViewHandlerId").toString()));
+        edit_->setEditText(Handlers["defaultEditHandlerId"].toString(hc::defaults::DefaultValue("editors/documentHandlers/defaultEditHandlerId").toString()));
+        policy_->setEditText(Handlers["selectionPolicy"].toString(hc::defaults::DefaultValue("editors/documentHandlers/selectionPolicy").toString()));
+        const auto Mode = Document["general"].toObject()["themeMode"].toString(hc::defaults::DefaultValue("general/themeMode").toString());
         mode_->setCurrentIndex(qMax(0, mode_->findData(Mode)));
         fillObjects(handlerTable_, Handlers["handlers"].toArray(), {"stableId", "enabled", "view", "edit"}, true);
         QJsonArray Extensions;
@@ -70,13 +70,13 @@ public:
         const auto StoreText = [&](const QStringList& Path, const QString& Text) {
             if (Text != value(base_, Path).toString()) set(pending_, Path, Text);
         };
-        if (builtInKeys_->isChecked() != base_["general"].toObject()["useBuiltInShortcuts"].toBool(true))
+        if (builtInKeys_->isChecked() != base_["general"].toObject()["useBuiltInShortcuts"].toBool(hc::defaults::DefaultValue("general/useBuiltInShortcuts").toBool()))
             set(pending_, {"general", "useBuiltInShortcuts"}, builtInKeys_->isChecked());
         const QStringList HandlerPath{"editors", "documentHandlers"};
         StoreText(HandlerPath + QStringList{"defaultViewHandlerId"}, view_->currentText().trimmed());
         StoreText(HandlerPath + QStringList{"defaultEditHandlerId"}, edit_->currentText().trimmed());
         StoreText(HandlerPath + QStringList{"selectionPolicy"}, policy_->currentText().trimmed());
-        if (mode_->currentData().toString() != base_["general"].toObject()["themeMode"].toString())
+        if (mode_->currentData().toString() != base_["general"].toObject()["themeMode"].toString(hc::defaults::DefaultValue("general/themeMode").toString()))
             set(pending_, {"general", "themeMode"}, mode_->currentData().toString());
         QJsonArray Handlers; QSet<QString> HandlerIds;
         for (int Row = 0; Row < handlerTable_->rowCount(); ++Row) {
@@ -127,7 +127,7 @@ public:
         if (pending_.isEmpty() && !Prepare()) return false;
         auto Next = settings::UnifiedConfig::Changed(base_, pending_, Current);
         if (useScheme_) set(Next, {"general", "themeMode"}, mode_->currentData().toString());
-        if (base_["general"].toObject()["useBuiltInShortcuts"].toBool(true) && !Next["general"].toObject()["useBuiltInShortcuts"].toBool(true)) {
+        if (base_["general"].toObject()["useBuiltInShortcuts"].toBool(hc::defaults::DefaultValue("general/useBuiltInShortcuts").toBool()) && !Next["general"].toObject()["useBuiltInShortcuts"].toBool(hc::defaults::DefaultValue("general/useBuiltInShortcuts").toBool())) {
             // SaveSettings materializes the effective key map. Disabling the
             // built-ins must not turn previously implicit keys into overrides.
             auto Keys = Next["shortcuts"].toObject(); const auto Existing = base_["shortcuts"].toObject();

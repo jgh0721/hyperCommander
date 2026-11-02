@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "solFavoriteDirMgr.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 
 #include "commandMgr.hpp"
 #include "UIs/dlgFavoriteDir.hpp"
@@ -165,7 +166,7 @@ void CFavoriteDirMgr::OnConfigure( bool checked )
 bool CFavoriteDirMgr::doRefresh()
 {
     const auto Favorites = hc::settings::AppSettings().Read(hc::settings::Section::Favorites).toObject();
-    const auto Position = Favorites["drivesOn"].toString();
+    const auto Position = Favorites["drivesOn"].toString(hc::defaults::DefaultValue("favorites/drivesOn").toString());
     drivesOn_ = Position == "top" ? DRIVES_ON_TOP : Position == "bottom" ? DRIVES_ON_BOTTOM : static_cast<TyEnDrivesOn>(0);
     vecItems_.clear();
     for (const auto& Value : Favorites["items"].toArray()) {

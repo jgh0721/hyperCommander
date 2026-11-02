@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "colorSchemeMgr.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 
 #include <private/qcssparser_p.h>
 #include <fmstyle/ThemeColors.h>
@@ -56,18 +57,18 @@ void CColorSchemeMgr::Refresh()
             // The selected product mode is authoritative. Older saved schemes
             // can contain a dark palette with dark=false; mixing those colors
             // with light control surfaces makes text unreadable.
-            const auto Mode = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["themeMode"].toString();
+            const auto Mode = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["themeMode"].toString(hc::defaults::DefaultValue("general/themeMode").toString());
             if (Mode == "system") Scheme.IsDarkMode = qApp->styleHints()->colorScheme() == Qt::ColorScheme::Dark;
             else if (Mode == "dark" || Mode == "light") Scheme.IsDarkMode = Mode == "dark";
         }
         Scheme.IsInverseCursor = Record["inverseCursor"].toBool();
         Scheme.IsInverseSelect = Record["inverseSelection"].toBool();
         const auto Fonts = Record["fonts"].toObject(); const auto Colors = Record["colors"].toObject();
-        Scheme.Menu_Font = retrieveFont(Fonts["menu"].toObject(), 9);
-        Scheme.Dialog_Font = retrieveFont(Fonts["dialog"].toObject(), 9);
+        Scheme.Menu_Font = retrieveFont(Fonts["menu"].toObject(), "menu");
+        Scheme.Dialog_Font = retrieveFont(Fonts["dialog"].toObject(), "dialog");
         auto ListFont = Fonts["list"].toObject();
-        if (!ListFont.contains("family")) ListFont["family"] = "D2Coding ligature";
-        Scheme.FileList_Font = retrieveFont(ListFont, 16);
+        if (!ListFont.contains("family")) ListFont["family"] = hc::defaults::FontDefaults("list")["family"];
+        Scheme.FileList_Font = retrieveFont(ListFont, "list");
         const auto Defaults = defaultColors(Scheme.IsDarkMode);
         const auto Legacy = Fallback["colors"].toObject();
         const auto Explicit = Record.value("colorOverrides").toObject();
@@ -137,7 +138,7 @@ void CColorSchemeMgr::UpsertColorScheme( const TyColorScheme& ColorScheme, bool 
     if (IsWriteToFile) {
         auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
         auto Schemes = Appearance["schemes"].toObject();
-        const auto EncodeFont = [](const QFont& Font) { return QJsonObject{{"family",Font.family()},{"pointSize",Font.pointSize() > 0 ? Font.pointSize() : 9}}; };
+        const auto EncodeFont = [](const QFont& Font) { return QJsonObject{{"family",Font.family()},{"pointSize",Font.pointSize() > 0 ? Font.pointSize() : hc::defaults::FontDefaults("dialog", true)["pointSize"].toInt()}}; };
         for (const auto& Scheme : mapNameToScheme) {
             auto Record = Schemes[Scheme.Name].toObject();
             Record["dark"] = Scheme.IsDarkMode;
@@ -275,9 +276,11 @@ bool CColorSchemeMgr::JudgeFileSet( const TyFileSet& FileSet, nsHC::CFileSourceT
     return IsMatch;
 }
 
-QFont CColorSchemeMgr::retrieveFont( const QJsonObject& Record, int DefaultSize ) const
+QFont CColorSchemeMgr::retrieveFont( const QJsonObject& Record, const QString& Role ) const
 {
-    const auto Family = Record["family"].toString("맑은 고딕");
+    const auto Defaults = hc::defaults::FontDefaults(Role, true);
+    const auto Family = Record["family"].toString(Defaults["family"].toString());
+    const int DefaultSize = Defaults["pointSize"].toInt();
     auto Size = Record["pointSize"].toInt(DefaultSize); if (Size < 6 || Size > 72) Size = DefaultSize;
     QFont Font(Family, Size); Font.setStyleStrategy(QFont::PreferAntialias); Font.setHintingPreference(QFont::PreferFullHinting); return Font;
 }

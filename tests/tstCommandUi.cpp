@@ -658,9 +658,8 @@ private slots:
     }
     void systemMenuResource()
     {
-        QFile File(":/HyperCommander/menu-bar.json"); QVERIFY(File.open(QIODevice::ReadOnly));
         QStringList Commands;
-        for (const auto& Menu : QJsonDocument::fromJson(File.readAll()).object()["menus"].toArray())
+        for (const auto& Menu : QJsonDocument::fromJson(hc::defaults::MenuBarDefaults()).object()["menus"].toArray())
             if (Menu.toObject()["id"] == "tools")
                 for (const auto& Item : Menu.toObject()["items"].toArray())
                     if (Item.toObject()["id"] == "system")
@@ -670,16 +669,14 @@ private slots:
     }
     void defaultResource()
     {
-        QFile File(":/HyperCommander/menu-bar.json"); QVERIFY(File.open(QIODevice::ReadOnly));
-        const auto Definition = MenuDefinition::Parse(File.readAll(), {}, {"plugins", "automation"});
+        const auto Definition = MenuDefinition::Parse(hc::defaults::MenuBarDefaults(), {}, {"plugins", "automation"});
         QVERIFY2(Definition.error_.isEmpty(), qPrintable(Definition.error_)); QCOMPARE(Definition.menus_.size(), 9);
     }
     void stockSelectionMenuUpgradePreservesUserFile()
     {
         QTemporaryDir Directory; QMenuBar Bar; QAction Select("Select", &Bar), Toggle("Toggle", &Bar);
         QMenu Plugins("Plugins", &Bar), Scripts("Automation", &Bar);
-        QFile Resource(":/HyperCommander/menu-bar.json"); QVERIFY(Resource.open(QIODevice::ReadOnly));
-        auto Root = QJsonDocument::fromJson(Resource.readAll()).object(); auto Menus = Root["menus"].toArray();
+        auto Root = QJsonDocument::fromJson(hc::defaults::MenuBarDefaults()).object(); auto Menus = Root["menus"].toArray();
         for (qsizetype I = 0; I < Menus.size(); ++I) if (Menus[I].toObject()["id"] == "select") {
             auto Old = Menus[I].toObject();
             Old["items"] = QJsonArray{QJsonObject{{"id", "invert"}, {"command", "hc.selection.invert"}, {"label", QStringLiteral("선택 반전 · 다음 항목")}}};
@@ -687,8 +684,8 @@ private slots:
         }
         Root["menus"] = Menus; const auto Bytes = QJsonDocument(Root).toJson();
         const auto Path = Directory.filePath("menu-bar.json"); QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly));
-        QCOMPARE(File.write(Bytes), Bytes.size()); File.close(); Resource.seek(0);
-        UserMenu Menu(&Bar, Path, Resource.readAll(), {{"hc.selection.select", &Select}, {"hc.selection.invert", &Toggle}}, {{"plugins", &Plugins}, {"automation", &Scripts}});
+        QCOMPARE(File.write(Bytes), Bytes.size()); File.close();
+        UserMenu Menu(&Bar, Path, hc::defaults::MenuBarDefaults(), {{"hc.selection.select", &Select}, {"hc.selection.invert", &Toggle}}, {{"plugins", &Plugins}, {"automation", &Scripts}});
         QVERIFY(Menu.Reload()); QVERIFY(Bar.findChild<QAction*>("hc.userMenu.select-items"));
         QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), Bytes);
     }

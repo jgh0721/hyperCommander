@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include <QSettings>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -14,10 +15,14 @@ public:
         valid_ = hc::settings::UnifiedConfig::Load(path_, base_, error_); draft_ = base_;
     }
     ~AppSettings() override { sync(); }
-    QVariant value(const QString& Key, const QVariant& Default = {}) const
+    QVariant value(const QString& Key) const
     {
         const auto Value = hc::settings::UnifiedConfig::Value(draft_["documentViews"].toObject(), Key.split('/'));
-        return Value.isUndefined() ? Default : hc::settings::UnifiedConfig::Decode(Value);
+        return Value.isUndefined() ? hc::defaults::edit::ViewValue(Key) : hc::settings::UnifiedConfig::Decode(Value);
+    }
+    bool contains(const QString& Key) const
+    {
+        return !hc::settings::UnifiedConfig::Value(draft_["documentViews"].toObject(), Key.split('/')).isUndefined();
     }
     void setValue(const QString& Key, const QVariant& Value)
     {

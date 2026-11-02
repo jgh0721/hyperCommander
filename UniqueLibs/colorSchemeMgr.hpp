@@ -35,7 +35,7 @@ signals:
     void                                sigFileSetChanged();
 
 private:
-    QFont                               retrieveFont( const QJsonObject& Record, int DefaultSize = 9 ) const;
+    QFont                               retrieveFont( const QJsonObject& Record, const QString& Role ) const;
 
     TyColorScheme                       currentColorScheme;
     QMap< QString, TyColorScheme >      mapNameToScheme;

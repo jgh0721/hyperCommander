@@ -1,0 +1,401 @@
+﻿#pragma once
+#include <array>
+#include <type_traits>
+#include <QtCore>
+
+// HyperViewer / HyperEditor 제품 기본값의 편집 지점.
+// 저장된 값(빈 문자열·단축키 해제 포함)이 우선하며 기본값은 파일에 미리 쓰지 않는다.
+// 키는 documentViews 아래 경로다. Viewer / Editor의 서로 다른 시작 모드는 별도로 둔다.
+
+#include <QHash>
+#include <QJsonObject>
+#include <QList>
+#include <QObject>
+#include <QString>
+#include <QVariant>
+
+namespace hc::defaults::edit
+{
+    struct Command { QString id_, label_, key_, scope_; };
+
+    inline QList<Command> Commands()
+    {
+        return {
+            {"markdown.toggleSource",QObject::tr("소스·미리보기 전환"),"Ctrl+Alt+M","markdown"},
+            {"markdown.preview",QObject::tr("미리보기"),{},"markdown"},
+            {"markdown.source",QObject::tr("소스 보기·편집"),{},"markdown"},
+            {"markdown.split",QObject::tr("나란히 보기"),{},"markdown"},
+            {"markdown.toggleToc",QObject::tr("개요 표시 전환"),"Ctrl+Alt+O","markdown"},
+            {"markdown.positionSync",QObject::tr("소스·본문 위치 동기화"),{},"markdown"},
+            {"markdown.syncScroll",QObject::tr("소스·본문 스크롤 동기화"),{},"markdown"},
+            {"markdown.refresh",QObject::tr("미리보기 갱신"),"Ctrl+Alt+R","markdown"},
+            {"markdown.focusOtherPane",QObject::tr("소스·미리보기 포커스 이동"),"F6","markdown"},
+            {"markdown.find",QObject::tr("마크다운 찾기"),{},"markdown"},
+            {"markdown.zoomIn",QObject::tr("미리보기 확대"),{},"markdown"},
+            {"markdown.zoomOut",QObject::tr("미리보기 축소"),{},"markdown"},
+            {"file.new", QObject::tr("새 문서"), "Ctrl+N", "common"},
+            {"file.openWorkspace", QObject::tr("문서 열기"), "Ctrl+O", "common"},
+            {"file.save", QObject::tr("저장"), "Ctrl+S", "common"},
+            {"file.saveAs", QObject::tr("다른 이름으로 저장"), "Ctrl+Shift+S", "common"},
+            {"file.reload", QObject::tr("다시 읽기"), "Ctrl+R", "common"},
+            {"file.cancel", QObject::tr("작업 취소"), "Ctrl+.", "common"},
+            {"file.print", QObject::tr("인쇄"), "Ctrl+P", "common"},
+            {"file.printPreview", QObject::tr("인쇄 미리보기"), "", "common"},
+            {"capture.screen", QObject::tr("화면 캡처"), "Alt+Shift+S", "common"},
+            {"tab.close", QObject::tr("현재 탭 닫기"), "Ctrl+W", "common"},
+            {"tab.next", QObject::tr("다음 탭"), "Ctrl+Tab", "common"},
+            {"tab.previous", QObject::tr("이전 탭"), "Ctrl+Shift+Tab", "common"},
+            {"app.settings", QObject::tr("설정"), "Ctrl+I", "common"},
+            {"view.displayOptions", QObject::tr("표시 옵션"), "Ctrl+Shift+M", "common"},
+            {"edit.undo", QObject::tr("실행 취소"), "Ctrl+Z", "edit"},
+            {"edit.redo", QObject::tr("다시 실행"), "Ctrl+Y", "edit"},
+            {"edit.cut", QObject::tr("잘라내기"), "Ctrl+X", "edit"},
+            {"edit.copy", QObject::tr("복사"), "Ctrl+C", "edit"},
+            {"edit.paste", QObject::tr("붙여넣기"), "Ctrl+V", "edit"},
+            {"edit.selectAll", QObject::tr("전체 선택"), "Ctrl+A", "edit"},
+            {"text.find", QObject::tr("찾기"), "Ctrl+F", "text"},
+            {"text.replace", QObject::tr("바꾸기"), "Ctrl+H", "text"},
+            {"text.findNext", QObject::tr("다음 찾기"), "F3", "text"},
+            {"text.findPrev", QObject::tr("이전 찾기"), "Shift+F3", "text"},
+            {"text.goToLine", QObject::tr("줄 이동"), "Ctrl+G", "text"},
+            {"text.wordWrap", QObject::tr("자동 줄바꿈 전환"), "Alt+Z", "text"},
+            {"text.foldAll", QObject::tr("전체 접기"), "Ctrl+Shift+-", "text"},
+            {"text.unfoldAll", QObject::tr("전체 펼치기"), "Ctrl+Shift++", "text"},
+            {"epub.next", QObject::tr("EPUB 다음 화면"), "PgDown", "epub"},
+            {"epub.previous", QObject::tr("EPUB 이전 화면"), "PgUp", "epub"},
+            {"epub.next-chapter", QObject::tr("EPUB 다음 장"), "Ctrl+Alt+Right", "epub"},
+            {"epub.previous-chapter", QObject::tr("EPUB 이전 장"), "Ctrl+Alt+Left", "epub"},
+            {"epub.back", QObject::tr("EPUB 이전 위치"), "Alt+Left", "epub"},
+            {"epub.focus-toc", QObject::tr("EPUB 목차"), "Ctrl+Alt+T", "epub"},
+            {"epub.focus-settings", QObject::tr("EPUB 읽기 설정"), "Ctrl+Shift+E", "epub"},
+            {"epub.focus-search", QObject::tr("EPUB 검색"), "Ctrl+F", "epub"},
+            {"epub.bookmark-add", QObject::tr("EPUB 책갈피 추가"), "Ctrl+D", "epub"},
+            {"epub.cycle-focus", QObject::tr("EPUB 영역 포커스 이동"), "F6", "epub"},
+            {"epub.fullscreen", QObject::tr("EPUB 전체 화면"), "F11", "epub"},
+            {"epubEdit.apply", QObject::tr("변경 반영"), "Ctrl+Enter", "epub-edit"},
+            {"epubEdit.validate", QObject::tr("기본 검사"), "F7", "epub-edit"},
+            {"epubEdit.epubcheck", QObject::tr("EPUBCheck 검사"), "Shift+F7", "epub-edit"},
+            {"epubEdit.filter", QObject::tr("리소스 필터"), "Ctrl+E", "epub-edit"},
+            {"epubEdit.previewRefresh", QObject::tr("미리보기 갱신"), "F5", "epub-edit"},
+            {"epubEdit.scrollSync", QObject::tr("스크롤 동기화"), "", "epub-edit"},
+            {"epubEdit.closeTab", QObject::tr("편집기 탭 닫기"), "Ctrl+F4", "epub-edit"},
+            {"epubEdit.toc", QObject::tr("목차 편집…"), "", "epub-edit"},
+            {"epubEdit.metadata", QObject::tr("서지정보 편집…"), "", "epub-edit"},
+            {"epubEdit.toggleTree", QObject::tr("책 구조 패널 표시"), "", "epub-edit"},
+            {"epubEdit.togglePreview", QObject::tr("미리보기 패널 표시"), "", "epub-edit"},
+            {"epubEdit.toggleProblems", QObject::tr("문제 패널 표시"), "", "epub-edit"},
+            {"epubEdit.orientation", QObject::tr("좌우 · 상하 배치 전환"), "", "epub-edit"},
+            {"epubEdit.recover", QObject::tr("초안 복원"), "", "epub-edit"},
+            {"epubTree.rename", QObject::tr("이름·경로 변경…"), "F2", "epub-edit.tree"},
+            {"epubTree.delete", QObject::tr("삭제…"), "Del", "epub-edit.tree"},
+            {"epubTree.moveUp", QObject::tr("읽기 순서 위로"), "Alt+Up", "epub-edit.tree"},
+            {"epubTree.moveDown", QObject::tr("읽기 순서 아래로"), "Alt+Down", "epub-edit.tree"},
+            {"epubTree.copyPath", QObject::tr("경로 복사"), "Ctrl+Shift+C", "epub-edit.tree"},
+            {"epubSource.quickFix", QObject::tr("빠른 수정"), "Alt+Enter", "epub-edit.source"},
+            {"epubSource.openLink", QObject::tr("링크된 리소스 열기"), "F12", "epub-edit.source"},
+            {"epubSource.findAll", QObject::tr("모든 리소스에서 찾기"), "Ctrl+Shift+F", "epub-edit.source"},
+            {"epubSource.locate", QObject::tr("미리보기에서 이 위치 보기"), "", "epub-edit.source"},
+            {"epubSource.wrapEm", QObject::tr("태그로 감싸기 · em"), "", "epub-edit.source"},
+            {"epubSource.wrapStrong", QObject::tr("태그로 감싸기 · strong"), "", "epub-edit.source"},
+            {"epubSource.wrapSpan", QObject::tr("태그로 감싸기 · span"), "", "epub-edit.source"},
+            {"epubSource.wrapLink", QObject::tr("태그로 감싸기 · a"), "", "epub-edit.source"},
+            {"epubSource.wrapRuby", QObject::tr("태그로 감싸기 · ruby"), "", "epub-edit.source"},
+            {"image.fullscreen", QObject::tr("전체 화면 전환"), "F11", "image"},
+            {"image.animation", QObject::tr("재생/정지"), "Alt+Pause", "image"},
+            {"image.previousSpace", QObject::tr("이전 쪽 (Shift+Space)"), "Shift+Space", "image.comic"},
+            {"image.next", QObject::tr("다음 이미지 · 다음 쪽"), "Space", "image"},
+            {"image.previous", QObject::tr("이전 이미지 · 이전 쪽"), "Backspace", "image"},
+            {"image.scrollDown", QObject::tr("아래로 스크롤"), "Down", "image.comic"},
+            {"image.scrollUp", QObject::tr("위로 스크롤"), "Up", "image.comic"},
+            {"image.pageNext", QObject::tr("다음 화면"), "PgDown", "image.comic"},
+            {"image.pagePrevious", QObject::tr("이전 화면"), "PgUp", "image.comic"},
+            {"image.pageNextSingle", QObject::tr("한 쪽 앞으로"), "Shift+PgDown", "image.comic"},
+            {"image.pagePreviousSingle", QObject::tr("한 쪽 뒤로"), "Shift+PgUp", "image.comic"},
+            {"image.first", QObject::tr("첫 쪽"), "Home", "image.comic"},
+            {"image.last", QObject::tr("마지막 쪽"), "End", "image.comic"},
+            {"image.volumeNext", QObject::tr("다음 권"), "]", "image.comic"},
+            {"image.volumePrevious", QObject::tr("이전 권"), "[", "image.comic"},
+            {"image.right", QObject::tr("오른쪽 쪽"), "Right", "image.comic"},
+            {"image.left", QObject::tr("왼쪽 쪽"), "Left", "image.comic"},
+            {"pdf.pageNext", QObject::tr("다음 쪽"), "PgDown", "pdf"},
+            {"pdf.pagePrevious", QObject::tr("이전 쪽"), "PgUp", "pdf"},
+            {"pdf.first", QObject::tr("첫 쪽"), "Home", "pdf"},
+            {"pdf.last", QObject::tr("마지막 쪽"), "End", "pdf"}
+        };
+    }
+
+    inline const QHash<QString, QVariant>& ViewValues()
+    {
+        static const QHash<QString, QVariant> Values{
+            {"common/closeViewerOnEscape", true}, {"theme/colorOverridesSchemaVersion", 1},
+            {"imageView/navigatorPinned", false}, {"epubEditor/layout/preview", true},
+            {"textView/fontFamily", "D2Coding ligature"}, {"textView/fontSize", 16},
+            {"textView/lineSpacing", 1.1}, {"textView/fontRendering", 2},
+            {"textView/showLineNumbers", true}, {"textView/highlightCurrentLine", true},
+            {"textView/braceHighlight", true}, {"textView/showCodeFolding", true},
+            {"textView/showWhitespace", false}, {"textView/showIndentationGuides", true},
+            {"textView/indentGuideStyle", 1}, {"textView/changeHistoryMode", 3},
+            {"textView/tabWidth", 4}, {"textView/autoIndent", true}, {"textView/useTabs", true},
+            {"textView/wordWrapMode", 2}, {"textView/wordWrapLastMode", 2},
+            {"textView/wrapVisualFlags", 1}, {"textView/wrapIndentMode", 1},
+            {"textView/showRuler", true}, {"textView/rulerFontFamily", "Consolas"},
+            {"textView/rulerFontSize", 8}, {"textView/defaultLineEnding", "CRLF"},
+            {"textView/saveEncoding", "UTF-8"}, {"textView/saveBomMode", 1},
+            {"textView/recoveryEnabled", true}, {"textView/hotExitEnabled", true},
+            {"textView/largeFileMB", 1}, {"textView/externalChangeAction", 1},
+            {"textView/externalChangeDetection", 0}, {"textView/externalChangePollSeconds", 3},
+            {"textView/mask/enabled", false}, {"textView/mask/gamma", 1.2}, {"textView/mask/strength", 1.1},
+            {"markdown/viewerMode", "preview"}, {"markdown/editorMode", "split"},
+            {"markdown/viewerOutline", false}, {"markdown/editorOutline", true},
+            {"markdown/outlineDepth", 6}, {"markdown/positionSync", true}, {"markdown/scrollSync", true},
+            {"markdown/math", true}, {"markdown/inlineDollar", true}, {"markdown/mermaid", true},
+            {"markdown/codeHighlight", true}, {"markdown/autoPreview", true},
+            {"markdown/debounceMs", 250}, {"markdown/remoteImages", false},
+            {"markdown/previewFonts/enabled", false}, {"markdown/previewFonts/mode", "document"},
+            {"markdown/previewFonts/bodyFamily", QStringLiteral("맑은 고딕")},
+            {"markdown/previewFonts/bodySizePt", 11}, {"markdown/previewFonts/codeFamily", "Consolas"},
+            {"markdown/previewFonts/codeSizePt", 10}, {"markdown/previewFonts/lineHeight", 1.7},
+            {"markdown/previewFonts/headings", true},
+            {"epubEditor/javaPath", ""}, {"epubEditor/epubcheckJar", ""},
+            {"epubEditor/requireEpubCheck", false},
+            {"imageView/comic/coverAlone", true}, {"imageView/fullscreenRemember", true},
+            {"imageView/fullscreenPinTop", false}, {"imageView/fullscreenPinBottom", false},
+            {"imageView/fullscreenHideCursor", true}, {"imageView/normalMaximized", false},
+            {"imageView/fullscreen", false}
+        };
+        return Values;
+    }
+
+    inline QVariant ViewValue(const QString& Key)
+    {
+        return ViewValues().value(Key);
+    }
+
+    inline QJsonObject Workspace()
+    {
+        return {{"schemaVersion", 1}, {"themeMode", "product"}, {"mainMenuMode", "recommended"},
+            {"mainToolbarMode", "recommended"}, {"viewOverrides", QJsonObject{}}};
+    }
+
+    // Settings controls use full JSON paths; runtime AppSettings uses relative view paths.
+    inline QVariant SettingValue(const QString& Key)
+    {
+        const QString ViewsPrefix = "documentViews/", WorkspacePrefix = "appearance/documentWorkspace/";
+        if (Key.startsWith(ViewsPrefix)) return ViewValue(Key.mid(ViewsPrefix.size()));
+        if (Key.startsWith(WorkspacePrefix)) {
+            const auto Value = Workspace().value(Key.mid(WorkspacePrefix.size()));
+            if (!Value.isUndefined()) return Value.toVariant();
+        }
+        return {};
+    }
+    inline constexpr auto ConfigFileName = "HyperEditor.json";
+    inline constexpr auto LegacySettingsFileName = "settings.json";
+    inline constexpr auto LegacyWorkspaceFileName = "workspace.json";
+    inline constexpr auto LegacyViewsFileName = "document-views.ini";
+    inline constexpr auto EpubReadingFileName = "epub-reading.json";
+    inline constexpr auto ImageReadingFileName = "HyperViewer-reading.json";
+    inline QString ConfigDirectory(const QString& ExecutableDirectory) { return ExecutableDirectory; }
+    inline QString SettingsFile(const QString& Directory) { return QDir(Directory).filePath(ConfigFileName); }
+    inline QString EpubReadingFile(const QString& Directory) { return QDir(Directory).filePath(EpubReadingFileName); }
+    inline QString ImageReadingFile(const QString& Directory) { return QDir(Directory).filePath(ImageReadingFileName); }
+    inline QString EpubProfilesFile(const QString& Directory) { return QDir(Directory).filePath("epub-profiles.json"); }
+    inline QString EpubStateDirectory(const QString& Directory) { return QDir(Directory).filePath("epub-state"); }
+    inline QString RecoveryDirectory(bool Viewer)
+    { return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + (Viewer ? "/recovery/viewer" : "/recovery/editor"); }
+    inline QString HwpCacheDirectory()
+    { return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/rhwp"; }
+    inline QString TextBackupDirectory()
+    {
+        auto Base = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        if (Base.isEmpty()) Base = QDir::tempPath() + "/MultiViewer";
+        return QDir(Base).filePath("TextHotExit");
+    }
+    inline QJsonObject EpubReading()
+    {
+        return {{"theme", "system"}, {"font", "Malgun Gothic"}, {"size", 19}, {"weight", 400},
+            {"letter", 0}, {"word", 0}, {"line", 1.8}, {"before", 0}, {"after", 0.8}, {"indent", 0},
+            {"background", "theme"}, {"backgroundColor", ""}, {"textColor", ""}, {"backgroundAsset", ""},
+            {"customCss", ""}, {"cssEnabled", false}, {"cssForce", true}, {"resume", true},
+            {"privateReading", false}, {"historyEpoch", 0}, {"backgroundFit", "cover"}, {"backgroundOpacity", 1},
+            {"layout", "scroll"}, {"columns", 0}, {"align", "left"}, {"margin", 28}, {"width", 760}, {"override", true}};
+    }
+    inline QJsonObject ImageReading()
+    {
+        return {{"rtl", false}, {"split", false}, {"part", 0}, {"gap", 0}, {"fit", 1},
+            {"brightness", 0}, {"contrast", 1}, {"gamma", 1}, {"sharpness", 0}, {"grayscale", false},
+            {"invert", false}, {"automaticNext", true}, {"zoom", 1}, {"filter", "auto"}, {"mode", 0}};
+    }
+    inline QJsonValue ViewDefault(const QString& Key) { return QJsonValue::fromVariant(ViewValue(Key)); }
+    inline int TextWrapMode(const QJsonObject& Text, bool ExistingSection)
+    {
+        if (Text.contains("wordWrapMode")) return Text["wordWrapMode"].toInt(ViewValue("textView/wordWrapMode").toInt());
+        if (Text.contains("wordWrap")) return Text["wordWrap"].toBool() ? 1 : 0;
+        return ExistingSection ? 0 : ViewValue("textView/wordWrapMode").toInt();
+    }
+    inline QVariant WorkspaceValue(const QString& Key)
+    {
+        if (Key == "viewOverrideMode") return "inherit";
+        return Workspace().value(Key).toVariant();
+    }
+
+    inline constexpr int ConfigSchemaVersion = 2;
+    inline constexpr int ThemeOverridesSchemaVersion = 4;
+    inline constexpr int AnnotationDefaultColor = 0xffde59;
+    inline constexpr auto AnnotationColor = "#ffde59";
+    inline constexpr auto ProductThemeFallback = "system";
+    inline constexpr auto ImportedThemeMode = "light";
+    inline QJsonObject TextRuntime()
+    { return {{"useUtf8", true}, {"readOnly", false}, {"lineNumberMarginDigits", 5}}; }
+    inline QJsonObject DefaultDocument() { return {{"schemaVersion", ConfigSchemaVersion}}; }
+
+    template<typename Token, typename Palette>
+    inline auto Colors(const Palette& T, bool WantDark)
+    {
+        using Color = std::remove_cvref_t<decltype(T[Token::Surface])>;
+    const auto Alpha = [](Color Value, int AlphaValue) { Value.setAlpha(AlphaValue); return Value; };
+    QHash<QString, Color> c;
+    c.insert(QStringLiteral("common.background"), T[Token::Win]);
+    c.insert(QStringLiteral("common.surface"), T[Token::Surface]);
+    c.insert(QStringLiteral("common.surfaceAlt"), T[Token::Alt]);
+    c.insert(QStringLiteral("common.foreground"), T[Token::Fg]);
+    c.insert(QStringLiteral("common.foregroundMuted"), T[Token::Fg2]);
+    c.insert(QStringLiteral("common.accent"), T[Token::Accent]);
+    c.insert(QStringLiteral("common.border"), T[Token::Line]);
+    c.insert(QStringLiteral("common.toolbar"), T[Token::Win]);
+    c.insert(QStringLiteral("common.tabActive"), T[Token::Surface]);
+    c.insert(QStringLiteral("common.tabInactive"), T[Token::Alt]);
+    c.insert(QStringLiteral("common.canvas"), T[Token::Alt]);
+
+    c.insert(QStringLiteral("pdf.canvas"), T[Token::Alt]);
+    c.insert(QStringLiteral("pdf.pageGap"), T[Token::Grid]);
+    c.insert(QStringLiteral("pdf.searchHighlight"), Alpha(T[Token::Warn], 0x5A));
+    c.insert(QStringLiteral("pdf.searchCurrent"), Alpha(T[Token::Accent], 0x6E));
+    c.insert(QStringLiteral("pdf.textSelection"), Alpha(T[Token::Accent], 0x46));
+    c.insert(QStringLiteral("pdf.imageSelection"), Alpha(T[Token::Ok], 0xE6));
+    c.insert(QStringLiteral("pdf.annotation"), Alpha(T[Token::Warn], 0x80));
+
+    c.insert(QStringLiteral("image.canvas"), T[Token::Alt]);
+    c.insert(QStringLiteral("image.draw"), T[Token::Danger]);
+    c.insert(QStringLiteral("image.selection"), T[Token::Accent]);
+    c.insert(QStringLiteral("image.compositeOutline"), T[Token::Surface]);
+    c.insert(QStringLiteral("image.handleFill"), T[Token::Surface]);
+    c.insert(QStringLiteral("image.handleBorder"), T[Token::Fg]);
+    c.insert(QStringLiteral("image.accept"), T[Token::Ok]);
+    c.insert(QStringLiteral("image.cancel"), T[Token::Danger]);
+
+    c.insert(QStringLiteral("markdown.background"), T[Token::Surface]);
+    c.insert(QStringLiteral("markdown.foreground"), T[Token::Fg]);
+    c.insert(QStringLiteral("markdown.link"), T[Token::AccentFg]);
+    c.insert(QStringLiteral("markdown.heading"), T[Token::Fg]);
+    c.insert(QStringLiteral("markdown.border"), T[Token::Line]);
+    c.insert(QStringLiteral("markdown.codeBackground"), T[Token::Alt]);
+    c.insert(QStringLiteral("markdown.inlineCode"), T[Token::Danger]);
+    c.insert(QStringLiteral("markdown.blockquote"), T[Token::Fg2]);
+    c.insert(QStringLiteral("markdown.taskChecked"), T[Token::Ok]);
+
+    c.insert(QStringLiteral("text.background"), T[Token::Surface]);
+    c.insert(QStringLiteral("text.foreground"), T[Token::Fg]);
+    c.insert(QStringLiteral("text.currentLine"), T[Token::Alt]);
+    c.insert(QStringLiteral("text.selection"), T[Token::AccentSoft]);
+    c.insert(QStringLiteral("text.selectionForeground"), T[Token::Fg]);
+    c.insert(QStringLiteral("text.caret"), T[Token::Fg]);
+    c.insert(QStringLiteral("text.marginBackground"), T[Token::Win]);
+    c.insert(QStringLiteral("text.marginForeground"), T[Token::Fg3]);
+    c.insert(QStringLiteral("text.indentGuide"), T[Token::Line]);
+    c.insert(QStringLiteral("text.foldMarker"), T[Token::Fg3]);
+    c.insert(QStringLiteral("text.braceMatch"), T[Token::Accent]);
+    c.insert(QStringLiteral("text.braceMismatch"), T[Token::Danger]);
+
+    // Keep syntax text at 4.5:1 against both Paper Fluent body/current-line
+    // surfaces. Explicit user syntax overrides are applied separately.
+    if (WantDark) {
+        c.insert(QStringLiteral("text.lexer.comment"), Color(QStringLiteral("#93907D")));
+        c.insert(QStringLiteral("text.lexer.number"), Color(QStringLiteral("#AE81FF")));
+        c.insert(QStringLiteral("text.lexer.keyword"), Color(QStringLiteral("#FF4388")));
+        c.insert(QStringLiteral("text.lexer.type"), Color(QStringLiteral("#66D9EF")));
+        c.insert(QStringLiteral("text.lexer.string"), Color(QStringLiteral("#E6DB74")));
+        c.insert(QStringLiteral("text.lexer.preprocessor"), Color(QStringLiteral("#A6E22E")));
+        c.insert(QStringLiteral("text.lexer.operator"), Color(QStringLiteral("#FF4388")));
+        c.insert(QStringLiteral("text.lexer.identifier"), Color(QStringLiteral("#F8F8F2")));
+        c.insert(QStringLiteral("text.lexer.function"), Color(QStringLiteral("#A6E22E")));
+        c.insert(QStringLiteral("text.lexer.variable"), Color(QStringLiteral("#FD971F")));
+    } else {
+        c.insert(QStringLiteral("text.lexer.comment"), Color(QStringLiteral("#716D5A")));
+        c.insert(QStringLiteral("text.lexer.number"), Color(QStringLiteral("#7444F5")));
+        c.insert(QStringLiteral("text.lexer.keyword"), Color(QStringLiteral("#D0005F")));
+        c.insert(QStringLiteral("text.lexer.type"), Color(QStringLiteral("#00749F")));
+        c.insert(QStringLiteral("text.lexer.string"), Color(QStringLiteral("#856800")));
+        c.insert(QStringLiteral("text.lexer.preprocessor"), Color(QStringLiteral("#437900")));
+        c.insert(QStringLiteral("text.lexer.operator"), Color(QStringLiteral("#D0005F")));
+        c.insert(QStringLiteral("text.lexer.identifier"), Color(QStringLiteral("#272822")));
+        c.insert(QStringLiteral("text.lexer.function"), Color(QStringLiteral("#3B7D00")));
+        c.insert(QStringLiteral("text.lexer.variable"), Color(QStringLiteral("#AB5500")));
+    }
+
+    const QStringList lexerKeys = {
+        QStringLiteral("cpp"), QStringLiteral("python"), QStringLiteral("json"),
+        QStringLiteral("xml"), QStringLiteral("hypertext"), QStringLiteral("css"),
+        QStringLiteral("bash"), QStringLiteral("sql")
+    };
+    const QStringList tokenKeys = {
+        QStringLiteral("comment"), QStringLiteral("number"), QStringLiteral("keyword"),
+        QStringLiteral("type"), QStringLiteral("string"), QStringLiteral("preprocessor"),
+        QStringLiteral("operator"), QStringLiteral("identifier"), QStringLiteral("function"),
+        QStringLiteral("variable")
+    };
+    for (const QString& lexerKey : lexerKeys) {
+        for (const QString& tokenKey : tokenKeys) {
+            c.insert(QStringLiteral("text.lexer.%1.%2").arg(lexerKey, tokenKey),
+                     c.value(QStringLiteral("text.lexer.%1").arg(tokenKey)));
+        }
+    }
+    return c;
+    }
+
+    inline QJsonObject SettingsPreviewFont() { return {{"family", "Consolas"}, {"pointSize", 11}}; }
+    inline QString EpubWorkspaceFile(const QString& Directory) { return QDir(Directory).filePath("HyperEditor.epub-workspace.json"); }
+    inline QString EpubStandaloneSettingsFile()
+    { return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/HyperCommander/EpubPoc/reading-profiles.json"; }
+    inline QString BookStateFile(const QString& Directory, const QString& Book) { return QDir(Directory).filePath(Book + ".json"); }
+
+    inline QString Shortcut(const QString& Id)
+    {
+        for (const auto& Command : Commands()) if (Command.id_ == Id) return Command.key_;
+        return {};
+    }
+    inline QKeyCombination AuxiliaryShortcut(const QString& Id)
+    {
+        static const QHash<QString, QKeyCombination> Keys{{"image.focusNavigator", Qt::Key_F6}, {"viewer.close", Qt::Key_Escape}, {"capture.cancel", Qt::Key_Escape}, {"reading.panel", Qt::CTRL | Qt::SHIFT | Qt::Key_R}};
+        return Keys.value(Id, QKeyCombination::fromCombined(0));
+    }
+
+    inline QMap<QString, QString> ShortcutAliases() { return {{"edit.redo", "Ctrl+Shift+Z"}, {"edit.copy", "Ctrl+Insert"}, {"edit.cut", "Shift+Delete"}, {"edit.paste", "Shift+Insert"}}; }
+
+    inline QMap<QString, QString> CommandAliases() { return {{"file.open", "file.openWorkspace"}, {"file.close", "tab.close"},
+            {"view.capture", "capture.screen"}, {"text.new", "file.new"}}; }
+
+    inline QStringList ReservedShortcuts() { return {"Ctrl+Space", "Ctrl+Shift+Space", "Ctrl+L", "Ctrl+Shift+L", "Ctrl+T", "Ctrl+Shift+T",
+            "Ctrl+D", "Ctrl+U", "Ctrl+Shift+U", "Ctrl+[", "Ctrl+Shift+[", "Ctrl+]", "Ctrl+Shift+]",
+            "Ctrl+/", "Ctrl+Shift+/", "Ctrl+\\", "Ctrl+Shift+\\", "Ctrl++", "Ctrl+-", "Ctrl+0"}; }
+
+    // Scintilla protocol IDs; the backend checks these against the installed API.
+    inline constexpr int NativeKeyHome = 304, NativeKeyEnd = 305, NativeShift = 1 << 16;
+    inline constexpr int NativeHomeDisplay = 2345, NativeHomeDisplayExtend = 2346;
+    inline constexpr int NativeLineEndDisplay = 2347, NativeLineEndDisplayExtend = 2348;
+    inline constexpr std::array<std::pair<int, int>, 4> NativeTextBindings{{
+        {NativeKeyHome, NativeHomeDisplay}, {NativeKeyHome | NativeShift, NativeHomeDisplayExtend},
+        {NativeKeyEnd, NativeLineEndDisplay}, {NativeKeyEnd | NativeShift, NativeLineEndDisplayExtend}}};
+
+    inline QList<Qt::Key> InputFocusKeys() { return {Qt::Key_Tab, Qt::Key_Backtab, Qt::Key_Return, Qt::Key_Enter, Qt::Key_Escape}; }
+
+    inline QList<Qt::Key> EditingKeys() { return {Qt::Key_Delete, Qt::Key_Backspace, Qt::Key_Insert, Qt::Key_Left, Qt::Key_Right, Qt::Key_Up,
+            Qt::Key_Down, Qt::Key_Home, Qt::Key_End, Qt::Key_PageUp, Qt::Key_PageDown}; }
+
+    inline QString EpubDraftDirectory(const QString& Directory) { return QDir(Directory).absoluteFilePath("epub-drafts"); }
+
+    inline constexpr int NativeControl = 2 << 16, NativeKeyInsert = 309;
+    inline constexpr std::array<int, 5> NativeBrokerClipboardKeys{{
+        'C' | NativeControl, 'X' | NativeControl, 'V' | NativeControl,
+        NativeKeyInsert | NativeShift, NativeKeyInsert | NativeControl}};
+
+}

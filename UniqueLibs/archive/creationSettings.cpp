@@ -20,8 +20,8 @@ QJsonObject Overlay(QJsonObject Base, const QJsonObject& Next) { for (auto It = 
 QJsonObject CreationPreferences(settings::Repository& Settings)
 {
     auto Out = Settings.Read(settings::Section::Plugins).toObject()["archiveCreation"].toObject();
-    if (!Out.contains("schemaVersion")) Out["schemaVersion"] = 1;
-    if (!Out.contains("lastFormat")) Out["lastFormat"] = "7z"; return Out;
+    if (!Out.contains("schemaVersion")) Out["schemaVersion"] = hc::defaults::DefaultValue("archiveCreation/schemaVersion");
+    if (!Out.contains("lastFormat")) Out["lastFormat"] = hc::defaults::DefaultValue("archiveCreation/lastFormat"); return Out;
 }
 Result<Unit> SaveCreationPreferences(settings::Repository& Settings, QJsonObject Preferences)
 {
@@ -35,7 +35,7 @@ Result<Unit> SaveCreationPreferences(settings::Repository& Settings, QJsonObject
 ArchiveCompositionOptions ReadComposition(const QJsonObject& Preferences)
 {
     const auto Value = Preferences["composition"].toObject();
-    return {Value["preservePaths"].toBool(true), Value["includeSubdirectories"].toBool(true), Value["separateArchives"].toBool(false), Value["omitSelectedFolderRoot"].toBool(false)};
+    return {Value["preservePaths"].toBool(hc::defaults::DefaultValue("archiveCreation/composition/preservePaths").toBool()), Value["includeSubdirectories"].toBool(hc::defaults::DefaultValue("archiveCreation/composition/includeSubdirectories").toBool()), Value["separateArchives"].toBool(hc::defaults::DefaultValue("archiveCreation/composition/separateArchives").toBool()), Value["omitSelectedFolderRoot"].toBool(hc::defaults::DefaultValue("archiveCreation/composition/omitSelectedFolderRoot").toBool())};
 }
 void WriteComposition(QJsonObject& Preferences, ArchiveCompositionOptions O)
 {
@@ -58,8 +58,8 @@ Result<ArchiveCreateSettings> ReadCreatorSettings(const QJsonObject& Preferences
     if (Kind == ArchiveCreatorKind::Wcx || Kind == ArchiveCreatorKind::DopusVfs) return ArchiveCreateSettings(ExternalArchiveCreateSettings{});
     const auto Stored = Preferences["creators"].toObject()[Key(Creator, Format)].toObject();
     if (Stored.isEmpty()) {
-        if (Kind == ArchiveCreatorKind::BuiltinIso) return ArchiveCreateSettings(IsoCreateSettings{});
-        SevenZipCreateSettings S; if (Format == "zip") S.solid_ = ArchiveSolidMode::Off; return ArchiveCreateSettings(S);
+        if (Kind == ArchiveCreatorKind::BuiltinIso) return ArchiveCreateSettings(hc::defaults::IsoCreation<IsoCreateSettings>());
+        auto S = hc::defaults::SevenZipCreation<SevenZipCreateSettings>(Format == "zip"); return ArchiveCreateSettings(S);
     }
     if (Kind == ArchiveCreatorKind::BuiltinSevenZip) {
         const auto Value = Stored["value"].toObject(); QJsonObject Known;

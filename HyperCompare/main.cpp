@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/bundledFonts.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "runtime/batch.hpp"
@@ -59,14 +60,14 @@ int main(int argc, char** argv)
     // Tokens, accent and fonts come from HyperCommander's settings next to the executable (read only);
     // HyperCompare chooses only light/dark itself. Without the file the design defaults stay.
     {
-        QFile product(QDir(QCoreApplication::applicationDirPath()).filePath("HyperCommander.json"));
+        QFile product(hc::defaults::SettingsFile(hc::defaults::ConfigDirectory(QCoreApplication::applicationDirPath())));
         if (product.open(QIODevice::ReadOnly))
         {
             const auto settings = QJsonDocument::fromJson(product.readAll()).object(); const auto general = settings["general"].toObject();
             theme.setColorScheme(hc::theme::ReadProductScheme(settings["appearance"].toObject()["watercolorTheme"].toObject()));
-            theme.setDarkTitleBar(general["darkTitleBar"].toBool(true));
-            theme.setMonoFont(general["monoFontFamily"].toString("Cascadia Mono"), general["monoFontPx"].toInt(12));
-            app.setProperty("hc.productThemeMode", general["themeMode"].toString("system"));
+            theme.setDarkTitleBar(general["darkTitleBar"].toBool(hc::defaults::DefaultValue("general/darkTitleBar").toBool()));
+            theme.setMonoFont(general["monoFontFamily"].toString(hc::defaults::DefaultValue("general/monoFontFamily").toString()), general["monoFontPx"].toInt(hc::defaults::DefaultValue("general/monoFontPx").toInt()));
+            app.setProperty("hc.productThemeMode", general["themeMode"].toString(hc::defaults::DefaultValue("general/themeMode").toString()));
         }
     }
     if (!parsed.error_.isEmpty()) { hc::ui::MessageDialog::warning(nullptr, "HyperCompare", parsed.error_); return 2; }

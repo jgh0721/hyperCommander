@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingSettings.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "readingNavigation.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "ownerMode.hpp"
@@ -419,7 +420,7 @@ namespace
                 && ((!qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus) && !qobject_cast<QAbstractSpinBox*>(Focus) && !qobject_cast<QComboBox*>(Focus) && !qobject_cast<QAbstractItemView*>(Focus))
                     || Id=="epub.cycle-focus" || Id.startsWith("epub.focus-"));});
             shortcuts_->Apply({});
-            auto* PanelKey=new QShortcut(QKeySequence("Ctrl+Shift+R"),this);connect(PanelKey,&QShortcut::activated,this,[this]{if(!composing_){if(navigationScroll_->isVisible()){navigationScroll_->hide();focusReading();}else readAction("focus-toc",{});}});
+            auto* PanelKey=new QShortcut(QKeySequence(hc::defaults::edit::AuxiliaryShortcut("reading.panel")),this);connect(PanelKey,&QShortcut::activated,this,[this]{if(!composing_){if(navigationScroll_->isVisible()){navigationScroll_->hide();focusReading();}else readAction("focus-toc",{});}});
             qApp->installEventFilter(this);
             view_->setUrl(QUrl("epub://app/app/index.html"));
         }
@@ -899,7 +900,7 @@ int main(int Argc, char** Argv)
         if(!Evidence.isEmpty() && (QDir(Evidence).exists() || !QDir().mkpath(Evidence))) throw QString("Evidence directory must be new");
         if(!Evidence.isEmpty() && Parser.isSet("settings-file")) throw QString("Evidence mode must not write persistent settings");
         const auto SettingsPath = Evidence.isEmpty() && !Owner.enabled ? (Parser.isSet("settings-file") ? Parser.value("settings-file")
-            : QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/HyperCommander/EpubPoc/reading-profiles.json") : QString();
+            : hc::defaults::edit::EpubStandaloneSettingsFile()) : QString();
         Window Main(Items, Publication, Parser.value("engine"), Parser.value("theme"), Evidence, SettingsPath);
         if(!Evidence.isEmpty()) Main.setAttribute(Qt::WA_DontShowOnScreen);
         Main.show();

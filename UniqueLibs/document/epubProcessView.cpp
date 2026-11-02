@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubProcessView.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/settings/unifiedConfig.hpp"
@@ -303,8 +304,8 @@ namespace hc::document
         work_->appearance_ = epubui::Appearance();
         auto Config = qApp->property("documentViewsConfigDir").toString();
         if(Config.isEmpty()) Config = hc::settings::DocumentPaths().directory_;
-        work_->globalSettingsPath_ = QDir(Config).absoluteFilePath("epub-reading.json");
-        work_->settingsPath_ = QDir(SettingsDirectory.isEmpty()?Config:SettingsDirectory).absoluteFilePath("epub-reading.json");
+        work_->globalSettingsPath_ = hc::defaults::edit::EpubReadingFile(Config);
+        work_->settingsPath_ = hc::defaults::edit::EpubReadingFile(SettingsDirectory.isEmpty()?Config:SettingsDirectory);
         QJsonObject Preferences;QString PreferencesError;
         if(hc::settings::UnifiedConfig::Load(hc::settings::UnifiedConfig::FileName(Config),Preferences,PreferencesError))
             work_->settingsRequests_.push_back({{"kind","reader-action"},{"action","bindings"},{"value",Preferences["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject()}});

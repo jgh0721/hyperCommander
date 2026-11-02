@@ -7,7 +7,7 @@
 #include <QLockFile>
 #include <QSaveFile>
 #include <QStringList>
-#include "UniqueLibs/cmnTypeDefs_Name.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 
 namespace hc::settings {
 // HyperCommander.json holds the settings sections and "workspace" in one file.
@@ -15,14 +15,14 @@ namespace hc::settings {
 class ProfileConfig {
 public:
     static constexpr qint64 MaxBytes = 16 * 1024 * 1024;
-    static QString FileName(const QString& Directory) { return QDir(Directory).filePath(MAIN_CONFIG_FILENAME); }
+    static QString FileName(const QString& Directory) { return hc::defaults::SettingsFile(Directory); }
     // 이전 파일이 있는 첫 폴더만 사용한다. 설정과 작업공간을 다른 폴더에서 섞지 않는다.
     static QString LegacyDirectory(const QString& Directory, const QStringList& Legacy)
     {
         for (const auto& Candidate : QStringList{Directory} + Legacy) {
             if (Candidate.isEmpty()) continue;
             const QDir Folder(Candidate);
-            if (QFileInfo::exists(Folder.filePath("settings.json")) || QFileInfo::exists(Folder.filePath("workspace.json"))) return Folder.absolutePath();
+            if (QFileInfo::exists(Folder.filePath(hc::defaults::LegacySettingsFileName)) || QFileInfo::exists(Folder.filePath(hc::defaults::LegacyWorkspaceFileName))) return Folder.absolutePath();
         }
         return {};
     }
@@ -32,7 +32,7 @@ public:
         QFile File(FileName(Directory));
         if (!File.exists()) {
             const auto Source = LegacyDirectory(Directory, Legacy);
-            return !Source.isEmpty() && QFileInfo::exists(QDir(Source).filePath("settings.json"));
+            return !Source.isEmpty() && QFileInfo::exists(QDir(Source).filePath(hc::defaults::LegacySettingsFileName));
         }
         if (!File.open(QIODevice::ReadOnly) || File.size() > MaxBytes) return true;
         const auto Doc = QJsonDocument::fromJson(File.readAll());
@@ -53,7 +53,7 @@ public:
         if (!Lock.tryLock(0)) { Error = "file-locked"; return false; }
         if (QFileInfo::exists(Path)) return true;
         QJsonObject Settings, Workspace;
-        if (!read(QDir(Source).filePath("settings.json"), Settings, Error) || !read(QDir(Source).filePath("workspace.json"), Workspace, Error)) return false;
+        if (!read(QDir(Source).filePath(hc::defaults::LegacySettingsFileName), Settings, Error) || !read(QDir(Source).filePath(hc::defaults::LegacyWorkspaceFileName), Workspace, Error)) return false;
         QJsonObject Root;
         for (auto It = Settings.begin(); It != Settings.end(); ++It) if (It.key() != "workspace") Root[It.key()] = It.value();
         if (Workspace.contains("workspace")) Root["workspace"] = Workspace["workspace"];

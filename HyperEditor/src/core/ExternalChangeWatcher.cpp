@@ -17,7 +17,7 @@ constexpr auto kActionKey    = "textView/externalChangeAction";
 constexpr auto kDetectionKey = "textView/externalChangeDetection";
 constexpr auto kPollKey      = "textView/externalChangePollSeconds";
 
-constexpr int kDefaultPollSeconds = 3;
+const int kDefaultPollSeconds = hc::defaults::edit::ViewValue("textView/externalChangePollSeconds").toInt();
 constexpr int kMinPollSeconds     = 1;
 constexpr int kMaxPollSeconds     = 3600;
 
@@ -59,8 +59,7 @@ ExternalChangeWatcher::~ExternalChangeWatcher() = default;
 ExternalChangeWatcher::Action ExternalChangeWatcher::configuredAction()
 {
     AppSettings settings;
-    const int raw = settings.value( QString::fromLatin1( kActionKey ),
-                                    static_cast< int >( Action::Reload ) ).toInt();
+    const int raw = settings.value( QString::fromLatin1( kActionKey )).toInt();
     switch( raw )
     {
         case static_cast< int >( Action::Ignore ): return Action::Ignore;
@@ -72,8 +71,7 @@ ExternalChangeWatcher::Action ExternalChangeWatcher::configuredAction()
 ExternalChangeWatcher::Detection ExternalChangeWatcher::configuredDetection()
 {
     AppSettings settings;
-    const int raw = settings.value( QString::fromLatin1( kDetectionKey ),
-                                    static_cast< int >( Detection::Notify ) ).toInt();
+    const int raw = settings.value( QString::fromLatin1( kDetectionKey )).toInt();
     return raw == static_cast< int >( Detection::Poll ) ? Detection::Poll : Detection::Notify;
 }
 
@@ -81,7 +79,7 @@ int ExternalChangeWatcher::configuredPollSeconds()
 {
     AppSettings settings;
     return qBound( kMinPollSeconds,
-                   settings.value( QString::fromLatin1( kPollKey ), kDefaultPollSeconds ).toInt(),
+                   settings.value( QString::fromLatin1( kPollKey )).toInt(),
                    kMaxPollSeconds );
 }
 

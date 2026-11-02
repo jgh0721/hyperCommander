@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/imagePerformance.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include <QDir>
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentViewPane.hpp"
@@ -108,7 +109,7 @@ namespace hc::document
         if(epubEditor_ && !epubEditor_->IsModified() && Input.hash_==QCryptographicHash::hash(epubBytes_,QCryptographicHash::Sha256))RetryLocator=currentEpub()->ViewState()["locator"].toString();
         else if(epub_ && epubSourceHash_==Input.hash_) {
             const auto Last=epub_->ViewState()["lastReaderState"].toObject();
-            if(!Last["profile"].toObject()["privateReading"].toBool() && Last["profile"].toObject()["resume"].toBool(true))RetryLocator=Last["locator"].toString();
+            if(!Last["profile"].toObject()["privateReading"].toBool() && Last["profile"].toObject()["resume"].toBool(hc::defaults::edit::EpubReading()["resume"].toBool()))RetryLocator=Last["locator"].toString();
         }
         const QSignalBlocker Block(this);
         viewId_=Input.viewId_;encoding_=Input.encoding_;bom_=Input.bom_;eol_=Input.eol_;statusEol_=Input.eol_;
@@ -166,7 +167,7 @@ namespace hc::document
                 auto* Restore=new QTimer(epub_);Restore->setInterval(150);auto Attempts=std::make_shared<int>(0);
                 connect(Restore,&QTimer::timeout,epub_,[this,Restore,Attempts,RetryLocator]{
                     const auto State=epub_->ViewState();if(++*Attempts>400 || State["status"]=="error"){Restore->deleteLater();return;}
-                    if(State["readingProfile"].toObject()["privateReading"].toBool() || !State["readingProfile"].toObject()["resume"].toBool(true)){Restore->deleteLater();return;}
+                    if(State["readingProfile"].toObject()["privateReading"].toBool() || !State["readingProfile"].toObject()["resume"].toBool(hc::defaults::edit::EpubReading()["resume"].toBool())){Restore->deleteLater();return;}
                     if(State["status"]=="ready" && State["readingStateLoaded"].toBool() && !State["readingStateRestoring"].toBool() && epub_->ReaderAction("locate",RetryLocator))Restore->deleteLater();
                 });Restore->start();
             }
@@ -180,7 +181,7 @@ namespace hc::document
         }
         if(IsHwp()) {
             hwpFocusPending_=true;
-            hwp_=new HwpOpenWindow(Input.path_,QStandardPaths::writableLocation(QStandardPaths::CacheLocation)+"/rhwp",hwpRuntime_);
+            hwp_=new HwpOpenWindow(Input.path_,hc::defaults::edit::HwpCacheDirectory(),hwpRuntime_);
             hwp_->setParent(this,Qt::Widget);hwp_->setAttribute(Qt::WA_QuitOnClose,false);
             // The workspace owns the print command and its shortcut.
             if(auto* Print=hwp_->findChild<QAction*>("rhwp.nativePrint")){Print->setShortcut({});hwp_->removeAction(Print);}
@@ -257,7 +258,7 @@ namespace hc::document
             connect(reading_,&ImageReadingView::Changed,this,[this]{if(!reading_->isHidden())emit ReadingSelected();emit ViewStateChanged();});
             const auto ReadingOptionsStart=toolbar_->actions().size();
             auto* Rtl=toolbar_->addAction(tr("우→좌"));Rtl->setCheckable(true);Rtl->setObjectName("imageRightToLeft");connect(Rtl,&QAction::toggled,reading_,&ImageReadingView::SetRightToLeft);
-            auto* Cover=toolbar_->addAction(tr("표지 단독"));Cover->setObjectName("imageCover");Cover->setCheckable(true);Cover->setChecked(AppSettings().value("imageView/comic/coverAlone",true).toBool());connect(Cover,&QAction::toggled,reading_,&ImageReadingView::SetCover);
+            auto* Cover=toolbar_->addAction(tr("표지 단독"));Cover->setObjectName("imageCover");Cover->setCheckable(true);Cover->setChecked(AppSettings().value("imageView/comic/coverAlone").toBool());connect(Cover,&QAction::toggled,reading_,&ImageReadingView::SetCover);
             auto* Split=toolbar_->addAction(tr("펼침면 분할"));Split->setObjectName("imageSplit");Split->setCheckable(true);connect(Split,&QAction::toggled,reading_,&ImageReadingView::SetSplit);
             auto* Auto=toolbar_->addAction(tr("다음 권 자동"));Auto->setObjectName("imageAutoNext");Auto->setCheckable(true);Auto->setChecked(true);connect(Auto,&QAction::toggled,reading_,&ImageReadingView::SetAutomaticNext);
             auto* NextVolume=toolbar_->addAction(tr("다음 권"));connect(NextVolume,&QAction::triggered,reading_,[this]{reading_->OpenVolume(1);});
@@ -495,8 +496,9 @@ namespace hc::document
         // The workspace intercepts brokered commands. Remove native Scintilla
         // clipboard key bindings and popup/drop paths inside restricted hosts.
         auto* Backend=static_cast<ScintillaQtDirectBackend*>(text_->Backend());Backend->Send(SCI_USEPOPUP,SC_POPUP_NEVER);
-        for(auto Key:{'C','X','V'})Backend->Send(SCI_CLEARCMDKEY,Key|(SCMOD_CTRL<<16));
-        Backend->Send(SCI_CLEARCMDKEY,SCK_INSERT|(SCMOD_SHIFT<<16));Backend->Send(SCI_CLEARCMDKEY,SCK_INSERT|(SCMOD_CTRL<<16));
+        static_assert(hc::defaults::edit::NativeControl==(SCMOD_CTRL<<16));
+        static_assert(hc::defaults::edit::NativeKeyInsert==SCK_INSERT);
+        for(auto Key:hc::defaults::edit::NativeBrokerClipboardKeys)Backend->Send(SCI_CLEARCMDKEY,Key);
         Backend->widget()->setAcceptDrops(false);
     }
     void DocumentViewPane::applyTheme()

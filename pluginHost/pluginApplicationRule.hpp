@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include "pluginHost/wlxDetection.hpp"
 #include <QFileInfo>
 #include <QJsonArray>
@@ -21,8 +22,8 @@ public:
         if (Object.value("version") != QJsonValue(1)) return invalid("plugin-rule-version");
         if (Object.contains("enabled") && !Object.value("enabled").isBool()) return invalid("plugin-rule-enabled");
         if (Object.contains("mode") && !Object.value("mode").isString()) return invalid("plugin-rule-mode");
-        Rule.enabled_ = Object.value("enabled").toBool(true);
-        Rule.mode_ = Object.value("mode").toString("all");
+        Rule.enabled_ = Object.value("enabled").toBool(hc::defaults::DefaultValue("builtinApplication/enabled").toBool());
+        Rule.mode_ = Object.value("mode").toString(hc::defaults::DefaultValue("builtinApplication/mode").toString());
         if (Rule.mode_ == "all") return Rule;
         if (Rule.mode_ == "extensions" || Rule.mode_ == "excludeExtensions") {
             if (!Object.value("extensions").isArray() || Object.value("extensions").toArray().size() > 256) return invalid("plugin-rule-extensions");

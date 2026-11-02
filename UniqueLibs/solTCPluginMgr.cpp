@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "pluginHost/pluginApplicationRule.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "builtinPluginCatalog.hpp"
 #include "wcxStorage.hpp"
 #include "solTCPluginMgr.hpp"
@@ -772,7 +773,7 @@ void CTCPlugInMgr::Refresh()
         Plugin.Detect           = Record["detect"].toString();
         Plugin.IsContain64Bit   = Record["support64Bit"].toBool();
         Plugin.applicationRule_ = Record.value("application");
-        Plugin.hostEnabled_ = Record["hostEnabled"].toBool();
+        Plugin.hostEnabled_ = Record["hostEnabled"].toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool());
         Plugin.hostManifest_ = Record["hostManifest"].toString();
         Plugin.hostReviewed_ = hc::settings::JsonBytes(Record["hostReviewed"]);
         VecWLX.push_back( Plugin );
@@ -789,7 +790,7 @@ void CTCPlugInMgr::Refresh()
         Plugin.Exts             = hc::settings::Strings(Record["extensions"]);
         Plugin.IsContain64Bit   = Record["support64Bit"].toBool();
         Plugin.applicationRule_ = Record.value("application");
-        Plugin.hostEnabled_ = Record["hostEnabled"].toBool();
+        Plugin.hostEnabled_ = Record["hostEnabled"].toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool());
         Plugin.hostManifest_ = Record["hostManifest"].toString();
         auto Reviewed = hc::plugins::ParseManifest(hc::settings::JsonBytes(Record["hostReviewed"]));
         if (Reviewed.HasValue()) {

@@ -1,4 +1,5 @@
 ﻿#include "UniqueLibs/settings/appSettings.hpp"
+#include <type_traits>
 #include "HyperEditor/editorInstance.hpp"
 #include "UniqueLibs/productTheme.hpp"
 #include <future>
@@ -55,6 +56,7 @@
 #include <QTemporaryDir>
 #include <QScopeGuard>
 #include <QtTest>
+static_assert(!std::is_invocable_v<decltype(&AppSettings::value), AppSettings*, const QString&, const QVariant&>);
 using namespace hc::settings;
 using namespace hc::document;
 class DocumentPreferencesTests : public QObject {
@@ -149,6 +151,44 @@ private slots:
         QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), qintptr(0));
         QCOMPARE(Backend.Send(SCI_GETANCHOR), qintptr(0));
         QCOMPARE(Backend.text(), Line + QStringLiteral("\r\nnext\r\n"));
+    }
+    void productDefaultsPreserveStoredValues()
+    {
+        QTemporaryDir Temp; const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        const auto Path = UnifiedConfig::FileName(Temp.path());
+        {
+            ::AppSettings Settings;
+            QCOMPARE(Settings.value("textView/fontSize").toInt(), 16);
+            QVERIFY(Settings.value("textView/showCodeFolding").toBool());
+            QCOMPARE(Settings.value("markdown/viewerMode").toString(), QString("preview"));
+            QCOMPARE(Settings.value("markdown/editorMode").toString(), QString("split"));
+            QVERIFY(!Settings.contains("textView/wordWrapMode"));
+            QVERIFY(!Settings.value("extension/unknown").isValid());
+        }
+        QVERIFY(!QFileInfo::exists(Path));
+        {
+            ::AppSettings Settings;
+            Settings.setValue("textView/fontSize", 19);
+            Settings.setValue("textView/showCodeFolding", false);
+            Settings.setValue("markdown/viewerMode", "source");
+            Settings.setValue("extension/unknown", 7);
+        }
+        const auto Before = Read(Path);
+        {
+            ::AppSettings Settings;
+            QCOMPARE(Settings.value("textView/fontSize").toInt(), 19);
+            QVERIFY(!Settings.value("textView/showCodeFolding").toBool());
+            QCOMPARE(Settings.value("markdown/viewerMode").toString(), QString("source"));
+            QCOMPARE(Settings.value("extension/unknown").toInt(), 7);
+        }
+        QCOMPARE(Read(Path), Before);
+        QCOMPARE(DocumentShortcutRegistry::Bindings({{"file.save", ""}})["file.save"].toString(), QString());
+        DocumentSettingsDialog Dialog(Path, {});
+        QCOMPARE(Dialog.findChild<QSpinBox*>("documentViews/textView/fontSize")->value(), 19);
+        QVERIFY(!Dialog.findChild<QCheckBox*>("documentViews/textView/showCodeFolding")->isChecked());
+        QCOMPARE(Read(Path), Before);
     }
     void completeLexerCatalogAndDetection()
     {

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "imageFullscreen.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include <QDir>
 #include "imageReadingView.hpp"
 #include "imageReadingNavigator.hpp"
@@ -90,7 +91,7 @@ ImageFullscreen::ImageFullscreen(QWidget *Workspace, std::function<ImageReadingV
     bottom_->setObjectName("imageFullscreenStatus");
     bottom_->setAutoFillBackground(true);
     bottom_->hide();
-    auto *ToggleKey = new QShortcut(QKeySequence(Qt::Key_F11), Workspace);
+    auto *ToggleKey = new QShortcut(QKeySequence(hc::defaults::edit::Shortcut("image.fullscreen")), Workspace);
     ToggleKey->setObjectName("imageFullscreenFallback");
     ToggleKey->setAutoRepeat(false);
     connect(ToggleKey, &QShortcut::activated, this, &ImageFullscreen::Toggle);
@@ -122,10 +123,10 @@ void ImageFullscreen::Restore()
     restored_ = true;
     tracked_ = true;
     AppSettings S;
-    remember_ = S.value("imageView/fullscreenRemember", true).toBool();
-    pinTop_ = S.value("imageView/fullscreenPinTop", false).toBool();
-    pinBottom_ = S.value("imageView/fullscreenPinBottom", false).toBool();
-    hideCursor_ = S.value("imageView/fullscreenHideCursor", true).toBool();
+    remember_ = S.value("imageView/fullscreenRemember").toBool();
+    pinTop_ = S.value("imageView/fullscreenPinTop").toBool();
+    pinBottom_ = S.value("imageView/fullscreenPinBottom").toBool();
+    hideCursor_ = S.value("imageView/fullscreenHideCursor").toBool();
     for (auto *Action : top_->actions())
     {
         const QSignalBlocker Block(Action);
@@ -156,10 +157,10 @@ void ImageFullscreen::Restore()
         if (!OnScreen)
             Rect.moveTopLeft(Area.topLeft());
         workspace_->setGeometry(Rect);
-        if (S.value("imageView/normalMaximized", false).toBool())
+        if (S.value("imageView/normalMaximized").toBool())
             workspace_->showMaximized();
     }
-    if (remember_ && ScreenPresent && S.value("imageView/fullscreen", false).toBool())
+    if (remember_ && ScreenPresent && S.value("imageView/fullscreen").toBool())
         QTimer::singleShot(0, this,
                            [this]
                            {
@@ -353,9 +354,9 @@ bool ImageFullscreen::eventFilter(QObject *Object, QEvent *Event)
             Leave();
             return true;
         }
-        if (Key->key() == Qt::Key_F6 || Key->key() == Qt::Key_Tab)
+        if (Key->key() == hc::defaults::edit::AuxiliaryShortcut("image.focusNavigator").key() || Key->key() == Qt::Key_Tab)
         {
-            if (Key->key() == Qt::Key_F6)
+            if (Key->key() == hc::defaults::edit::AuxiliaryShortcut("image.focusNavigator").key())
                 if (auto *Reader = reader_ ? reader_() : nullptr; Reader && Reader->isVisible())
                     if (auto *Navigator = Reader->findChild<ImageReadingNavigator *>();
                         Navigator && Reader->State()["mode"].toInt() != ImageReadingView::Single)
@@ -366,7 +367,7 @@ bool ImageFullscreen::eventFilter(QObject *Object, QEvent *Event)
                         return true;
                     }
             reveal(true, true);
-            if (Key->key() == Qt::Key_F6)
+            if (Key->key() == hc::defaults::edit::AuxiliaryShortcut("image.focusNavigator").key())
             {
                 if (auto *First = top_->widgetForAction(top_->actions().first()))
                     First->setFocus();

@@ -1,6 +1,10 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/settings/appSettings.hpp"
+#include "UniqueLibs/ProductDefaults_Compare.hpp"
+#include "UniqueLibs/quickFindSettings.hpp"
+#include "UniqueLibs/directoryRefreshSettings.hpp"
 #include <QtTest>
+#include <QDirIterator>
 #include <QTemporaryDir>
 using namespace hc::settings;
 class SettingsTests : public QObject {
@@ -9,6 +13,56 @@ private:
     static QByteArray Bytes(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static bool Write(const QString& Path, const QByteArray& Data) { QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write(Data) == Data.size(); }
 private slots:
+    void productDefaultLocationsAndTypedReaders()
+    {
+        QTemporaryDir Temp;
+        QCOMPARE(QFileInfo(ProfileConfig::FileName(Temp.path())).fileName(), QString("HyperCommander.json"));
+        QCOMPARE(QFileInfo(UnifiedConfig::FileName(Temp.path())).fileName(), QString("HyperEditor.json"));
+        QCOMPARE(QFileInfo(hc::defaults::compare::SettingsFile(Temp.path())).fileName(), QString("HyperCompare.json"));
+        QCOMPARE(hc::refresh::Settings::FromJson({}).ToJson(), hc::defaults::DirectoryRefresh());
+        QCOMPARE(hc::quickfind::Settings::FromJson({}).ToJson(), hc::defaults::QuickFind());
+        auto Refresh = hc::defaults::DirectoryRefresh(); Refresh["names"] = false; Refresh["fallbackSeconds"] = 37;
+        QCOMPARE(hc::refresh::Settings::FromJson(Refresh).ToJson(), Refresh);
+        auto Quick = hc::defaults::QuickFind(); Quick["enabled"] = false; Quick["activation"] = "typing"; Quick["scope"] = "everything";
+        QCOMPARE(hc::quickfind::Settings::FromJson(Quick).ToJson(), Quick);
+        QVERIFY(!QFileInfo::exists(ProfileConfig::FileName(Temp.path())));
+        QCOMPARE(hc::defaults::DefaultValue("pluginRecord/hostEnabled"), QJsonValue(false));
+        QCOMPARE(hc::defaults::DefaultValue("columnAutoSelection/enabled"), QJsonValue(false));
+    }
+    void productDefaultDefinitionsStayInPolicyHeaders()
+    {
+        const QDir Root(QString::fromUtf8(HC_PRODUCT_SOURCE_DIR));
+        const QSet<QString> Policies{"UniqueLibs/productDefaults.hpp", "UniqueLibs/ProductDefaults_Edit.hpp", "UniqueLibs/ProductDefaults_Compare.hpp"};
+        const QRegularExpression FileName("\"(?:HyperCommander\\.json|HyperEditor\\.json|HyperCompare\\.json|menu-bar\\.json|epub-reading\\.json|epub-profiles\\.json|HyperViewer-reading\\.json|HyperEditor\\.epub-workspace\\.json|lsplugin\\.ini|fsplugin\\.ini|contentplugin\\.ini)\"");
+        const QRegularExpression Shortcut("(?:setShortcuts?\\s*\\(\\s*|new\\s+QShortcut\\s*\\(\\s*)QKeySequence\\s*(?:\\(\\s*(?:Qt::|\"|QString\\s*\\()|::(?!fromString\\b))|addAction\\(\\s*(?:tr|QObject::tr)\\([^\\n]*?\\),\\s*QKeySequence::(?!fromString\\b)");
+        const QRegularExpression NativeShortcut("SCI_(?:ASSIGN|CLEAR)CMDKEY\\s*\\),\\s*(?:SCK_|[0-9]|\')");
+        const QRegularExpression KeyAlias("\\{\\s*\"edit[.][^\"]+\",\\s*\"(?:Ctrl|Alt|Shift)[+]");
+        const QRegularExpression LiteralDefault("(?:\\[[^\\]\\n]+\\]|\\.value\\([^\\)\\n]+\\))\\s*\\.to(?:Bool|Int|Double|String)\\(\\s*(?:true\\b|false\\b|\\d+|\")");
+        const QSet<QString> SettingsReaders{
+            "UniqueLibs/directoryRefreshSettings.hpp", "UniqueLibs/quickFindSettings.hpp", "UniqueLibs/settings/updateSettings.hpp",
+            "HyperCommander/UIs/Components/thumbnailSettings.hpp", "HyperCommander/UIs/Components/filePanelSettings.hpp",
+            "UniqueLibs/itemSelection.hpp", "UniqueLibs/columnAutoSelection.hpp", "UniqueLibs/builtinPluginCatalog.hpp",
+            "UniqueLibs/qtPluginHostSettings.cpp", "UniqueLibs/qtPluginManagementPage.cpp", "pluginHost/pluginApplicationRule.hpp",
+            "UniqueLibs/document/documentSettingsDialog.cpp", "UniqueLibs/document/documentThemeAdapter.cpp",
+            "HyperCompare/widgets/compareSettings.cpp", "HyperEditor/src/core/ExternalChangeWatcher.cpp"};
+        QVERIFY(FileName.isValid()); QVERIFY(Shortcut.isValid()); QVERIFY(NativeShortcut.isValid()); QVERIFY(KeyAlias.isValid()); QVERIFY(LiteralDefault.isValid());
+        QStringList Problems; int Scanned = 0;
+        for (const auto& Folder : {"HyperCommander", "HyperEditor", "HyperCompare", "UniqueLibs", "pluginHost", "tools/epub/render", "commonLibs/columns"}) {
+            QDirIterator Files(Root.filePath(Folder), {"*.cpp", "*.hpp", "*.h"}, QDir::Files, QDirIterator::Subdirectories);
+            while (Files.hasNext()) {
+                const auto Path = Files.next(), Relative = Root.relativeFilePath(Path);
+                if (Relative.contains("/tests/") || Relative.contains("/thirdparty/") || QFileInfo(Path).fileName().startsWith("test") || Policies.contains(Relative)) continue;
+                QFile File(Path); QVERIFY2(File.open(QIODevice::ReadOnly), qPrintable(Relative));
+                auto Text = QString::fromUtf8(File.readAll()); ++Scanned;
+                Text.remove(QRegularExpression("/\\*[\\s\\S]*?\\*/|^\\s*//[^\\n]*", QRegularExpression::MultilineOption));
+                if (FileName.match(Text).hasMatch()) Problems.append(Relative + ": settings file location outside policy");
+                if (Shortcut.match(Text).hasMatch() || NativeShortcut.match(Text).hasMatch() || KeyAlias.match(Text).hasMatch()) Problems.append(Relative + ": shortcut default outside policy");
+                if (SettingsReaders.contains(Relative) && LiteralDefault.match(Text).hasMatch()) Problems.append(Relative + ": literal settings fallback outside policy");
+            }
+        }
+        QVERIFY2(Problems.isEmpty(), qPrintable(Problems.join('\n')));
+        QVERIFY(Scanned > 100);
+    }
     void freshInstallationPreferences()
     {
         QTemporaryDir Temp; Repository Fresh(Temp.path());

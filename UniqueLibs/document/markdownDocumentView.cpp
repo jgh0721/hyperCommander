@@ -127,7 +127,7 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     connect(source_, &QTextView::ContentChanged, this, [this] {
         ++revision_;
         status_ = tr("갱신 대기");
-        if (options_["autoPreview"].toBool(true))
+        if (options_["autoPreview"].toBool(hc::defaults::edit::ViewValue("markdown/autoPreview").toBool()))
             debounce_.start();
         emit Changed();
     });
@@ -140,7 +140,7 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     AppSettings S;
     splitter_->restoreState(QByteArray::fromBase64(
         S.value(QString("markdown/layout/") + (editor_ ? "editor" : "viewer")).toString().toLatin1()));
-    mode(S.value(QString("markdown/") + (editor_ ? "editorMode" : "viewerMode"), editor_ ? "split" : "preview")
+    mode(S.value(QString("markdown/") + (editor_ ? "editorMode" : "viewerMode"))
              .toString());
     QTimer::singleShot(0, this, [this] { Refresh(); });
 }
@@ -310,26 +310,22 @@ void MarkdownDocumentView::ReloadPreferences()
     AppSettings S;
     options_ = {};
     for (const auto &Key : {"math", "mermaid", "inlineDollar", "codeHighlight", "autoPreview"})
-        options_[Key] = S.value("markdown/" + QString(Key), true).toBool();
-    options_["remoteImages"] = S.value("markdown/remoteImages", false).toBool();
+        options_[Key] = S.value("markdown/" + QString(Key)).toBool();
+    options_["remoteImages"] = S.value("markdown/remoteImages").toBool();
     QJsonObject Fonts;
-    for (const auto &Pair : {std::pair{"enabled", QVariant(false)}, std::pair{"mode", QVariant("document")},
-                             std::pair{"bodyFamily", QVariant("맑은 고딕")}, std::pair{"bodySizePt", QVariant(11)},
-                             std::pair{"codeFamily", QVariant("Consolas")}, std::pair{"codeSizePt", QVariant(10)},
-                             std::pair{"lineHeight", QVariant(1.7)}, std::pair{"headings", QVariant(true)}})
-        Fonts[Pair.first] =
-            QJsonValue::fromVariant(S.value("markdown/previewFonts/" + QString(Pair.first), Pair.second));
+    for (const auto& Key : {"enabled", "mode", "bodyFamily", "bodySizePt", "codeFamily", "codeSizePt", "lineHeight", "headings"})
+        Fonts[Key] = QJsonValue::fromVariant(S.value("markdown/previewFonts/" + QString(Key)));
     options_["previewFonts"] = Fonts;
     for (const auto &Pair :
          {std::pair{"markdown.positionSync", "positionSync"}, std::pair{"markdown.syncScroll", "scrollSync"}})
     {
         const QSignalBlocker B(actions_[Pair.first]);
-        actions_[Pair.first]->setChecked(S.value("markdown/" + QString(Pair.second), true).toBool());
+        actions_[Pair.first]->setChecked(S.value("markdown/" + QString(Pair.second)).toBool());
     }
     actions_["markdown.toggleToc"]->setChecked(
-        S.value(editor_ ? "markdown/editorOutline" : "markdown/viewerOutline", editor_).toBool());
+        S.value(editor_ ? "markdown/editorOutline" : "markdown/viewerOutline").toBool());
     syncControls();
-    debounce_.setInterval(qBound(100, S.value("markdown/debounceMs", 250).toInt(), 3000));
+    debounce_.setInterval(qBound(100, S.value("markdown/debounceMs").toInt(), 3000));
     if (!mode_.isEmpty())
         Refresh();
 }
@@ -407,7 +403,7 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
         outline_->clear();
         QList<QTreeWidgetItem *> Parents(7, nullptr);
         AppSettings S;
-        const int Depth = qBound(1, S.value("markdown/outlineDepth", 6).toInt(), 6);
+        const int Depth = qBound(1, S.value("markdown/outlineDepth").toInt(), 6);
         for (const auto V : Value["headings"].toArray())
         {
             const auto H = V.toObject();

@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "imageBook.hpp"
 #include "imageResampler.hpp"
 #include <QAbstractScrollArea>
@@ -131,15 +132,25 @@ class ImageReadingView final : public QAbstractScrollArea
     std::uint64_t generation_ = 0;
     std::uint64_t bookGeneration_ = 0;
     std::shared_ptr<std::stop_source> bookStop_ = std::make_shared<std::stop_source>();
-    int workers_ = 0, index_ = 0, fit_ = 1;
-    int splitPart_ = 0, gap_ = 0;
-    Mode mode_ = Single;
+    int workers_ = 0, index_ = 0;
+    int fit_ = hc::defaults::edit::ImageReading()["fit"].toInt();
+    int splitPart_ = hc::defaults::edit::ImageReading()["part"].toInt();
+    int gap_ = hc::defaults::edit::ImageReading()["gap"].toInt();
+    Mode mode_ = Mode(hc::defaults::edit::ImageReading()["mode"].toInt());
     QString modeOrigin_ = "legacy";
-    QString filter_ = "auto", error_;
-    bool rtl_ = false, cover_ = true, split_ = false, automaticNext_ = true, volumePending_ = false,
-         rebuilding_ = false;
-    double zoom_ = 1, brightness_ = 0, contrast_ = 1, gamma_ = 1, sharpness_ = 0;
-    bool grayscale_ = false, invert_ = false;
+    QString filter_ = hc::defaults::edit::ImageReading()["filter"].toString(), error_;
+    bool rtl_ = hc::defaults::edit::ImageReading()["rtl"].toBool();
+    bool cover_ = hc::defaults::edit::ViewValue("imageView/comic/coverAlone").toBool();
+    bool split_ = hc::defaults::edit::ImageReading()["split"].toBool();
+    bool automaticNext_ = hc::defaults::edit::ImageReading()["automaticNext"].toBool();
+    bool volumePending_ = false, rebuilding_ = false;
+    double zoom_ = hc::defaults::edit::ImageReading()["zoom"].toDouble();
+    double brightness_ = hc::defaults::edit::ImageReading()["brightness"].toDouble();
+    double contrast_ = hc::defaults::edit::ImageReading()["contrast"].toDouble();
+    double gamma_ = hc::defaults::edit::ImageReading()["gamma"].toDouble();
+    double sharpness_ = hc::defaults::edit::ImageReading()["sharpness"].toDouble();
+    bool grayscale_ = hc::defaults::edit::ImageReading()["grayscale"].toBool();
+    bool invert_ = hc::defaults::edit::ImageReading()["invert"].toBool();
     qreal extent_ = 0;
     qreal width_ = 0;
     double relative_ = 0;

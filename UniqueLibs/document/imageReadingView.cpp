@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "imageReadingView.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "imageReadingNavigator.hpp"
 #include <QAction>
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -191,7 +192,7 @@ void ImageReadingView::OpenPath(const QString &Path, const QString &Entry, int R
 QString ImageReadingView::historyFile() const
 {
     AppSettings Settings;
-    return QFileInfo(Settings.fileName()).absolutePath() + "/HyperViewer-reading.json";
+    return hc::defaults::edit::ImageReadingFile(QFileInfo(Settings.fileName()).absolutePath());
 }
 void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First, int Start)
 {
@@ -240,30 +241,30 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
                 index_ = I;
                 break;
             }
-        rtl_ = Entry["rtl"].toBool();
+        rtl_ = Entry["rtl"].toBool(hc::defaults::edit::ImageReading()["rtl"].toBool());
 
-        split_ = Entry["split"].toBool();
-        splitPart_ = Entry["part"].toInt();
+        split_ = Entry["split"].toBool(hc::defaults::edit::ImageReading()["split"].toBool());
+        splitPart_ = Entry["part"].toInt(hc::defaults::edit::ImageReading()["part"].toInt());
         bookmark_ = Entry["bookmark"].toObject();
-        gap_ = qBound(0, Entry["gap"].toInt(), 200);
-        fit_ = qBound(0, Entry["fit"].toInt(1), 3);
-        brightness_ = qBound(-1., Entry["brightness"].toDouble(), 1.);
-        contrast_ = qBound(.1, Entry["contrast"].toDouble(1), 3.);
-        gamma_ = qBound(.1, Entry["gamma"].toDouble(1), 5.);
-        sharpness_ = qBound(0., Entry["sharpness"].toDouble(), 2.);
-        grayscale_ = Entry["grayscale"].toBool();
-        invert_ = Entry["invert"].toBool();
-        automaticNext_ = Entry["automaticNext"].toBool(true);
-        zoom_ = qBound(.1, Entry["zoom"].toDouble(1), 16.);
-        const auto SavedFilter = Entry["filter"].toString("auto");
+        gap_ = qBound(0, Entry["gap"].toInt(hc::defaults::edit::ImageReading()["gap"].toInt()), 200);
+        fit_ = qBound(0, Entry["fit"].toInt(hc::defaults::edit::ImageReading()["fit"].toInt()), 3);
+        brightness_ = qBound(-1., Entry["brightness"].toDouble(hc::defaults::edit::ImageReading()["brightness"].toDouble()), 1.);
+        contrast_ = qBound(.1, Entry["contrast"].toDouble(hc::defaults::edit::ImageReading()["contrast"].toDouble()), 3.);
+        gamma_ = qBound(.1, Entry["gamma"].toDouble(hc::defaults::edit::ImageReading()["gamma"].toDouble()), 5.);
+        sharpness_ = qBound(0., Entry["sharpness"].toDouble(hc::defaults::edit::ImageReading()["sharpness"].toDouble()), 2.);
+        grayscale_ = Entry["grayscale"].toBool(hc::defaults::edit::ImageReading()["grayscale"].toBool());
+        invert_ = Entry["invert"].toBool(hc::defaults::edit::ImageReading()["invert"].toBool());
+        automaticNext_ = Entry["automaticNext"].toBool(hc::defaults::edit::ImageReading()["automaticNext"].toBool());
+        zoom_ = qBound(.1, Entry["zoom"].toDouble(hc::defaults::edit::ImageReading()["zoom"].toDouble()), 16.);
+        const auto SavedFilter = Entry["filter"].toString(hc::defaults::edit::ImageReading()["filter"].toString());
         filter_ = SavedFilter == "auto" || ImageFilterRegistry::Resolve(SavedFilter, {}).kernel_ ? SavedFilter
-                                                                                                 : QString("auto");
-        mode_ = Mode(qBound(0, Entry["mode"].toInt(int(mode_)), 2));
+                                                                                                 : hc::defaults::edit::ImageReading()["filter"].toString();
+        mode_ = Mode(qBound(0, Entry["mode"].toInt(hc::defaults::edit::ImageReading()["mode"].toInt()), 2));
     }
     modeOrigin_=Entry["modeOrigin"].toString()=="user"?"user":"legacy";
-    if(modeOrigin_=="user")mode_=Mode(qBound(0,Entry["mode"].toInt(int(mode_)),2));
+    if(modeOrigin_=="user")mode_=Mode(qBound(0,Entry["mode"].toInt(hc::defaults::edit::ImageReading()["mode"].toInt()),2));
     else if(book_->readingAnalysis_.mode_>=0){mode_=Mode(book_->readingAnalysis_.mode_);modeOrigin_="auto";}
-    cover_ = AppSettings().value("imageView/comic/coverAlone", true).toBool();
+    cover_ = AppSettings().value("imageView/comic/coverAlone").toBool();
     if (index_ != Start)
         currentImage_ = {};
     rebuild(false);
@@ -349,7 +350,7 @@ void ImageReadingView::SetMode(Mode Value, bool UserSelected)
 }
 void ImageReadingView::SetFilter(const QString &Id)
 {
-    filter_ = Id == "auto" || ImageFilterRegistry::Resolve(Id, {}).kernel_ ? Id : QString("auto");
+    filter_ = Id == "auto" || ImageFilterRegistry::Resolve(Id, {}).kernel_ ? Id : hc::defaults::edit::ImageReading()["filter"].toString();
     invalidateRenders();
     changed();
 }

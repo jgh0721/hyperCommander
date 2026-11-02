@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileAttributesDialog.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include <QDir>
@@ -155,7 +156,7 @@ namespace hc::ui
     void FileAttributesDialog::collect()
     {
         if (busy_) return;
-        state_ = std::make_shared<State>(); state_->allowElevation_ = settings::AppSettings().Read(settings::Section::Options).toObject()["allowElevation"].toBool(true);
+        state_ = std::make_shared<State>(); state_->allowElevation_ = settings::AppSettings().Read(settings::Section::Options).toObject()["allowElevation"].toBool(hc::defaults::DefaultValue("options/allowElevation").toBool());
         SetMessage({});
         busy_ = true; applying_ = result_ = ready_ = false; retry_->hide(); details_->clear(); update();
         showDetails_->setChecked(false); showDetails_->setText(tr("대상 목록 펼치기"));

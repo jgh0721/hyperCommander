@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -23,7 +24,7 @@
 namespace hc::document {
 QString EpubSourceEditor::RecoveryDirectory() {
     auto Config=qApp->property("documentViewsConfigDir").toString();if(Config.isEmpty())Config=hc::settings::DocumentPaths().directory_;
-    return QDir(Config).absoluteFilePath("epub-drafts");
+    return hc::defaults::edit::EpubDraftDirectory(Config);
 }
 void EpubSourceEditor::resetRecoverySession() {
     draftSession_=std::make_shared<DraftSession>();recoverySession_=QUuid::createUuid().toString(QUuid::Id128);
@@ -39,7 +40,7 @@ void EpubSourceEditor::setupRecovery() {
     recoveryRoot_=RecoveryDirectory();resetRecoverySession();
     QJsonObject Preferences;QString Error;
     if(hc::settings::UnifiedConfig::Load(hc::settings::UnifiedConfig::FileName(Config),Preferences,Error))
-        recoveryEnabled_=Preferences["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(true);
+        recoveryEnabled_=Preferences["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(hc::defaults::edit::ViewValue("textView/recoveryEnabled").toBool());
     draftTimer_.setSingleShot(true);draftTimer_.setInterval(500);
     connect(&draftTimer_,&QTimer::timeout,this,&EpubSourceEditor::Checkpoint);
     connect(this,&EpubSourceEditor::Changed,this,[this]{if(recoveryEnabled_ && !discardedRecovery_ && ready_)draftTimer_.start();});

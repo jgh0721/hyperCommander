@@ -85,6 +85,7 @@ target_compile_options(hc_document_sdi PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>
 
 add_subdirectory("${PROJECT_SOURCE_DIR}/tools/markdown" "${CMAKE_BINARY_DIR}/markdown")
 qt_add_library(hc_document_widgets STATIC
+    ../UniqueLibs/ProductDefaults_Edit.hpp
     ../UniqueLibs/document/markdownDocumentView.cpp ../UniqueLibs/document/markdownDocumentView.hpp
     ../UniqueLibs/document/markdownProcessView.cpp ../UniqueLibs/document/markdownProcessView.hpp
     ../tools/epub/render/readingSettings.cpp ../tools/epub/render/readingSettings.hpp

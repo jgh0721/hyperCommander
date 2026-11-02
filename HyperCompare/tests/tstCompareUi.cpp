@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "widgets/compareWindow.hpp"
+#include <type_traits>
 #include "widgets/compareSettingsDialog.hpp"
 #include "widgets/compareCommands.hpp"
 #include "widgets/comparePalette.hpp"
@@ -77,6 +78,7 @@
 #include <Windows.h>
 #include <psapi.h>
 
+static_assert(!std::is_invocable_v<decltype(&hc::compare::Preferences::Value), hc::compare::Preferences*, const QString&, const QVariant&>);
 using namespace hc::compare;
 class CompareUiTests final : public QObject
 {
@@ -133,6 +135,32 @@ class CompareUiTests final : public QObject
         timer.start(50); Action->trigger(); timer.stop();
     }
 private slots:
+    void productDefaultsPreserveStoredValues()
+    {
+        QTemporaryDir Temp; const auto Previous = qApp->property("compareSettingsDirectory");
+        qApp->setProperty("compareSettingsDirectory", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("compareSettingsDirectory", Previous); });
+        const auto Path = Preferences::FileName();
+        const auto Fresh = CompareSettings::Load();
+        QCOMPARE(Fresh.theme_, QString("product"));
+        QCOMPARE(Fresh.fonts_[1].pointSize(), 12); QCOMPARE(Fresh.fonts_[2].pointSize(), 14);
+        for (const auto Enabled : Fresh.view_) QVERIFY(Enabled);
+        QVERIFY(!QFileInfo::exists(Path));
+        Preferences Settings;
+        QVERIFY(Settings.SetValue("theme/dark", true));
+        QVERIFY(Settings.SetValue("view/overview", false));
+        QVERIFY(Settings.SetValue("fonts/text", QFont("Consolas", 17).toString()));
+        QVERIFY(Settings.SetValue("extension/unknown", 7));
+        auto Stored = CompareSettings::Load();
+        QCOMPARE(Stored.theme_, QString("dark")); QVERIFY(!Stored.view_[4]);
+        QCOMPARE(Stored.fonts_[2].family(), QString("Consolas")); QCOMPARE(Stored.fonts_[2].pointSize(), 17);
+        Stored.shortcuts_["find.open"] = ""; QString Error; QVERIFY2(Stored.Save(Error), qPrintable(Error));
+        QFile File(Path); QVERIFY(File.open(QIODevice::ReadOnly)); const auto Before = File.readAll(); File.close();
+        const auto Loaded = CompareSettings::Load();
+        QVERIFY(CompareKeys("find.open", Loaded.shortcuts_).isEmpty());
+        QCOMPARE(Settings.Value("extension/unknown").toInt(), 7);
+        QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), Before);
+    }
     void directoryIndependentThreeTreesAndPairTransfer()
     {
         QTemporaryDir dir; Request input; input.mode_ = "directory"; input.file1_ = dir.filePath("first"); input.file2_ = dir.filePath("second"); input.file3_ = dir.filePath("third");

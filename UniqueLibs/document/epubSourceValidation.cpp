@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "epubResourceTree.hpp"
 #ifdef Q_OS_WIN
 #include <Windows.h>
@@ -97,7 +98,7 @@ bool EpubSourceEditor::selectDiagnostic(int Index) {
     if(!openResource(Path) || !sourceShown())return false;
     text_->goToPosition(qMax(1,Row["line"].toInt(1)),qMax(1,Row["column"].toInt(1)));static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_SCROLLCARET);focusSource();return true;
 }
-bool EpubSourceEditor::standardValidationRequired()const{return checkerSettings_["requireEpubCheck"].toBool(false);}
+bool EpubSourceEditor::standardValidationRequired()const{return checkerSettings_["requireEpubCheck"].toBool(hc::defaults::edit::ViewValue("epubEditor/requireEpubCheck").toBool());}
 bool EpubSourceEditor::standardValidationAccepted()const{return !standardValidationRequired() || checkerVerifiedToken_==Token();}
 void EpubSourceEditor::startEpubCheck() {
     checkerVerifiedToken_.clear();checkerWorkToken_=validationToken_;checkerLog_.clear();checkerOutput_->clear();checkerReason_.clear();checkerState_="running";

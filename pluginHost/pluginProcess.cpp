@@ -1,4 +1,5 @@
 ﻿#include "pluginProcess.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "commonLibs/layout/productLayout.hpp"
 #include "commonLibs/win/restrictedEnvironment.hpp"
@@ -362,7 +363,7 @@ namespace hc::plugins
             } else {
                 S.helperConfig_ = std::make_unique<QTemporaryDir>(QDir::tempPath() + "/hc-total7zip-XXXXXX");
                 if (!S.helperConfig_->isValid()) return HostError("host-helper-config-directory");
-                Directory = S.helperConfig_->path(); HelperIni = S.helperConfig_->filePath("wincmd.ini");
+                Directory = S.helperConfig_->path(); HelperIni = hc::defaults::PluginHelperIniFile(S.helperConfig_->path());
             }
             if (!QFileInfo::exists(HelperIni)) {
                 QFile Ini(HelperIni); if (!Ini.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return HostError("host-helper-config-write");
@@ -450,7 +451,7 @@ namespace hc::plugins
         if (Limits.purpose_ == HostPurpose::Configuration) Declaration["configuration"] = true;
         {
             const auto Ini = !HelperIni.isEmpty() ? HelperIni : DefaultIniPath.isEmpty()
-                ? QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)).filePath(S.viewer_ ? "lsplugin.ini" : Inspected.Value().manifest_.format_ == PluginFormat::Wcx ? "pkplugin.ini" : "tc-data.ini") : DefaultIniPath;
+                ? hc::defaults::LegacyPluginIniFile(S.viewer_, Inspected.Value().manifest_.format_ == PluginFormat::Wcx) : DefaultIniPath;
             if (!QDir::isAbsolutePath(Ini) || Ini.contains(QChar::Null)) return HostError("host-wlx-config-path");
             Declaration.insert("defaultIni", QDir::cleanPath(Ini));
         }

@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 
 #include "settings/fileColorRules.hpp"
 #include <QBitArray>
@@ -12,13 +13,15 @@ enum class Syntax { Wildcard, Contains, Regex };
 enum class Scope { Files, Folders, Both };
 
 struct Criteria {
-    Operation operation_ = Operation::Add;
-    Syntax syntax_ = Syntax::Wildcard;
-    Scope scope_ = Scope::Files;
-    QString pattern_ = "*", exclude_, groupId_;
-    bool caseSensitive_ = false, advanced_ = false, all_ = true;
+    Operation operation_ = static_cast<Operation>(hc::defaults::DefaultValue("selection/operation").toInt());
+    Syntax syntax_ = static_cast<Syntax>(hc::defaults::DefaultValue("selection/syntax").toInt());
+    Scope scope_ = static_cast<Scope>(hc::defaults::DefaultValue("selection/scope").toInt());
+    QString pattern_ = hc::defaults::DefaultValue("selection/pattern").toString(), exclude_, groupId_;
+    bool caseSensitive_ = hc::defaults::DefaultValue("selection/caseSensitive").toBool();
+    bool advanced_ = hc::defaults::DefaultValue("selection/advanced").toBool();
+    bool all_ = hc::defaults::DefaultValue("selection/all").toBool();
     QString size_;
-    bool minimumSize_ = true;
+    bool minimumSize_ = hc::defaults::DefaultValue("selection/minimumSize").toBool();
     QDate modified_;
     QJsonObject group_;
     int groupVersion_ = 2;
@@ -31,17 +34,17 @@ struct Criteria {
     }
     static Criteria Load(const QJsonObject& Value) {
         Criteria C;
-        C.operation_ = Operation(qBound(0, Value["operation"].toInt(), 3));
-        C.syntax_ = Syntax(qBound(0, Value["syntax"].toInt(), 2));
-        C.scope_ = Scope(qBound(0, Value["scope"].toInt(), 2));
-        C.pattern_ = Value["pattern"].toString("*"); C.exclude_ = Value["exclude"].toString();
-        C.groupId_ = Value["groupId"].toString();
+        C.operation_ = Operation(qBound(0, Value["operation"].toInt(hc::defaults::DefaultValue("selection/operation").toInt()), 3));
+        C.syntax_ = Syntax(qBound(0, Value["syntax"].toInt(hc::defaults::DefaultValue("selection/syntax").toInt()), 2));
+        C.scope_ = Scope(qBound(0, Value["scope"].toInt(hc::defaults::DefaultValue("selection/scope").toInt()), 2));
+        C.pattern_ = Value["pattern"].toString(hc::defaults::DefaultValue("selection/pattern").toString()); C.exclude_ = Value["exclude"].toString(hc::defaults::DefaultValue("selection/exclude").toString());
+        C.groupId_ = Value["groupId"].toString(hc::defaults::DefaultValue("selection/groupId").toString());
         // Retired built-in templates keep their saved name pattern as direct input.
         if (C.groupId_.startsWith("builtin.")) C.groupId_.clear();
-        C.caseSensitive_ = Value["caseSensitive"].toBool();
-        C.advanced_ = Value["advanced"].toBool(); C.all_ = Value["all"].toBool(true);
-        C.size_ = Value["size"].toString(); C.minimumSize_ = Value["minimumSize"].toBool(true);
-        C.modified_ = QDate::fromString(Value["modified"].toString(), Qt::ISODate);
+        C.caseSensitive_ = Value["caseSensitive"].toBool(hc::defaults::DefaultValue("selection/caseSensitive").toBool());
+        C.advanced_ = Value["advanced"].toBool(hc::defaults::DefaultValue("selection/advanced").toBool()); C.all_ = Value["all"].toBool(hc::defaults::DefaultValue("selection/all").toBool());
+        C.size_ = Value["size"].toString(hc::defaults::DefaultValue("selection/size").toString()); C.minimumSize_ = Value["minimumSize"].toBool(hc::defaults::DefaultValue("selection/minimumSize").toBool());
+        C.modified_ = QDate::fromString(Value["modified"].toString(hc::defaults::DefaultValue("selection/modified").toString()), Qt::ISODate);
         return C;
     }
 };
@@ -53,7 +56,7 @@ inline QList<Group> Groups(const QJsonObject& UserRules) {
     if (settings::FileColorRules::Validate(Rules, false).isEmpty())
         for (const auto& Value : Rules["groups"].toArray()) {
             const auto Rule = Value.toObject();
-            if (Rule["enabled"].toBool(true))
+            if (Rule["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool()))
                 Result.append({"user:" + Rule["id"].toString(), Rule["name"].toString(), Rule, Rules["version"].toInt()});
         }
     return Result;

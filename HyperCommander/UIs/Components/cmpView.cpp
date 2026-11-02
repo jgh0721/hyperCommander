@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpView.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "startupTrace.hpp"
 #include "UniqueLibs/columnAutoSelection.hpp"
 #include "commonLibs/view/listIconSize.hpp"
@@ -1005,7 +1006,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         const auto Native = qobject_cast<CFSModel*>(model_);
         if (!ParentNavigation || (Native && Native->LastNavigationError())) return;
         if (view_->getRowCount()) view_->setFocusedRowIndex(0);
-        if (!hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["focusPreviousDirectory"].toBool(true)) return;
+        if (!hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["focusPreviousDirectory"].toBool(hc::defaults::DefaultValue("general/focusPreviousDirectory").toBool())) return;
         for (int Index = 0; (!Previous.isEmpty() || !PreviousRoot.isEmpty()) && Index < model_->rowCount(); ++Index) {
             const auto Source = model_->index(Index, 0);
             if (!PreviousRoot.isEmpty()) {
@@ -1146,10 +1147,10 @@ void CGridView::ApplyDisplaySettings()
     if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ApplyDisplaySettings();
     for (int Index = 0; Index < model_->columnCount(); ++Index) {
         auto* Column = static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index)); if (!Column) continue;
-        Column->setSortCaseSensitivity(General["sortCaseSensitive"].toBool());
-        Column->setSortLocaleAware(General["sortLocaleAware"].toBool(true));
+        Column->setSortCaseSensitivity(General["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()));
+        Column->setSortLocaleAware(General["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()));
         const auto Order = Column->sortOrder();
-        Column->setSortOrder(Order, General["sortNumericAware"].toBool(true));
+        Column->setSortOrder(Order, General["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()));
     }
     view_->modelController()->refresh();
     view_->endUpdate();
@@ -1520,7 +1521,7 @@ void CGridView::RestoreWorkspaceView(const QJsonObject& View)
             if (Position >= 0 && Position < model_->columnCount()) Column->setVisualIndex(Position);
             const auto Sort = Value.value("sort").toInt(-1);
             if (Sort == Qtitan::SortAscending || Sort == Qtitan::SortDescending)
-                Column->setSortOrder(static_cast<Qtitan::SortOrder>(Sort), hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["sortNumericAware"].toBool(true));
+                Column->setSortOrder(static_cast<Qtitan::SortOrder>(Sort), hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()));
         }
     view_->endUpdate();
     restorePresentation(View); groupingTimer_.start(0);
@@ -1706,7 +1707,7 @@ nsHC::TySpFileSource CGridView::SelectRowOnCurrentTab( const QModelIndex& SrcInd
         IsSelected = view_->modelController()->isRowSelected(Row);
     }
     if (IsSelected && Info && Info->Name_ != ".." && (Info->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && !Info->directorySize_.has_value()
-        && hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeOnSpace"].toBool(true))
+        && hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeOnSpace"].toBool(hc::defaults::DefaultValue("options/folderSizeOnSpace").toBool()))
         if (auto* Native = qobject_cast<CFSModel*>(model_)) Native->RequestDirectorySizes({ModelIndex});
     
     if( IsMoveDown == true )
@@ -2008,7 +2009,7 @@ void CGridView::oo_grid_cellClicked( Qtitan::CellClickEventArgs* Args )
 {
     const auto& Cell = Args->cell();
     if (!panelActive_ || !plainLeftClick_ || Cell.modelIndex().column() != 0 || IsEditing()
-        || !hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["renameOnSlowClick"].toBool(true)) {
+        || !hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["renameOnSlowClick"].toBool(hc::defaults::DefaultValue("options/renameOnSlowClick").toBool())) {
         lastNameClickIndex_ = QPersistentModelIndex{}; lastNameClickTime_.invalidate(); return;
     }
     const auto Index = Cell.modelIndex();
@@ -2700,7 +2701,7 @@ void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::ICo
         surface_ = Host.CreateSurface(this); vbox_->addWidget(surface_); setFocusProxy(surface_);
         connect(surface_, &QtViewerSurface::CloseRequested, this, &CQuickView::CloseRequested);
         auto* Close = new QAction(tr("미리 보기 닫기"), this);
-        Close->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Q)); Close->setShortcutContext(Qt::WidgetWithChildrenShortcut); addAction(Close);
+        Close->setShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("quickView.close"))); Close->setShortcutContext(Qt::WidgetWithChildrenShortcut); addAction(Close);
         connect(Close, &QAction::triggered, this, &CQuickView::CloseRequested);
     }
     surface_->Open(std::move(Source), hc::viewer::ViewerPurpose::QuickPreview);

@@ -1,4 +1,5 @@
 ﻿#include "capture/CaptureOverlay.h"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 
 #include "capture/CaptureMarkupDialog.h"
 #include "capture/WindowsGraphicsCapture.h"
@@ -194,7 +195,7 @@ CaptureOverlay::CaptureOverlay(QWidget* parent)
     setGeometry(m_overlayGeometry);
     if (auto* app = QCoreApplication::instance())
         app->installEventFilter(this);
-    m_escapeShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    m_escapeShortcut = new QShortcut(QKeySequence(hc::defaults::edit::AuxiliaryShortcut("capture.cancel")), this);
     m_escapeShortcut->setContext(Qt::ApplicationShortcut);
     connect(m_escapeShortcut, &QShortcut::activated, this, [this] { cancelCapture(); });
     m_escapePollTimer = new QTimer(this);

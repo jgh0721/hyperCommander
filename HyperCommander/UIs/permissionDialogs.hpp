@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/productDefaults.hpp"
 #include "dialogShell.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/permissionService.hpp"
@@ -63,7 +64,7 @@ public:
                 if(auto* Jobs=permissions::Controller()){const auto Error=Jobs->SubmitSecurityJob(request_.source_,Grant->isChecked());if(Error.isEmpty()){decision_=Succeeded;QDialog::accept();}else SetMessage(Error,true);}
             });
         }
-        const bool Allowed = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["allowElevation"].toBool(true);
+        const bool Allowed = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["allowElevation"].toBool(hc::defaults::DefaultValue("options/allowElevation").toBool());
         const bool Supported = (request_.canElevate_||!request_.elevatedRequest_.isEmpty()) && Allowed && QFileInfo::exists(permissions::HelperPath());
         AcceptButton()->setText(request_.screen_=="A05"?tr("관리자 권한으로 이름 바꾸기(&R)"):tr("관리자 권한으로 실행(&U)")); SetAcceptEnabled(Supported);
         CancelButton()->setText(tr("닫기 / 취소"));

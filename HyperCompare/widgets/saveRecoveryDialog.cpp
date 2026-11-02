@@ -3,6 +3,7 @@
 #include "UniqueLibs/errorPresentation.hpp"
 #include "runtime/saveRecovery.hpp"
 #include "UniqueLibs/qtDialogFrame.hpp"
+#include <QApplication>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QTreeWidget>
 #include <QHeaderView>
@@ -86,9 +87,10 @@ namespace hc::compare
             }
             updateControls(); if (activityChanged_) activityChanged_(); if (closing_) close();
         });
-        Preferences settings; QFont listFont("D2Coding", 12), textFont("D2Coding ligature", 14);
-        listFont.fromString(settings.Value("fonts/list", listFont.toString()).toString());
-        textFont.fromString(settings.Value("fonts/text", textFont.toString()).toString());
+        Preferences settings; const auto Fonts = hc::defaults::compare::Fonts(qApp->font());
+        auto listFont = Fonts[1], textFont = Fonts[2];
+        listFont.fromString(settings.Value("fonts/list").toString());
+        textFont.fromString(settings.Value("fonts/text").toString());
         journals_->setFont(listFont); details_->setFont(textFont);
         Refresh();
     }

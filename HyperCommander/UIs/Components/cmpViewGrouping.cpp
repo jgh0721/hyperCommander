@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmpView.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 
 #include "builtInFsModel.hpp"
 #include "qtitanColumnAdapter.hpp"
@@ -206,7 +207,7 @@ void CGridView::applyGroupExpansion()
 void CGridView::RestoreGroupExpansion(const QJsonObject& State)
 {
     applyGrouping();
-    groupsExpandedByDefault_ = State.value("defaultExpanded").toBool(true);
+    groupsExpandedByDefault_ = State.value("defaultExpanded").toBool(hc::defaults::DefaultValue("workspace/defaultExpanded").toBool());
     groupExpansion_ = {}; const auto Values = State.value("groups").toObject();
     for (auto It = Values.begin(); It != Values.end() && groupExpansion_.size() < 4096; ++It)
         if (It.value().isBool()) groupExpansion_.insert(It.key(), It.value());

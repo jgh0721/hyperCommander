@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileJobInteraction.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include <QDir>
 #include "fileOperationErrorText.hpp"
 
@@ -274,12 +275,12 @@ namespace hc::ui
                 if (has(InteractionChoice::RenameIncoming)) {
                     auto* Action = Menu->addAction(tr("자동 이름 변경: 복사할 파일(&F)"));
                     connect(Action, &QAction::triggered, this, [this] { choose(InteractionChoice::RenameIncoming); });
-                    new QShortcut(QKeySequence(Qt::ALT | Qt::Key_F), actions_, [this] { choose(InteractionChoice::RenameIncoming); });
+                    new QShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("conflict.renameIncoming")), actions_, [this] { choose(InteractionChoice::RenameIncoming); });
                 }
                 if (has(InteractionChoice::RenameExisting)) {
                     auto* Action = Menu->addAction(tr("자동 이름 변경: 기존 대상 파일(&G)"));
                     connect(Action, &QAction::triggered, this, [this] { choose(InteractionChoice::RenameExisting); });
-                    new QShortcut(QKeySequence(Qt::ALT | Qt::Key_G), actions_, [this] { choose(InteractionChoice::RenameExisting); });
+                    new QShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("conflict.renameExisting")), actions_, [this] { choose(InteractionChoice::RenameExisting); });
                 }
                 connect(Options, &QPushButton::clicked, this, [Options, Menu] {
                     const auto Size = Menu->sizeHint();

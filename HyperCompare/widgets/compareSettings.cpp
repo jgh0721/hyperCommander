@@ -28,7 +28,7 @@ namespace hc::compare
     QString Preferences::FileName()
     {
         const auto Override = qApp->property("compareSettingsDirectory");
-        return QDir(Override.isValid() ? Override.toString() : QCoreApplication::applicationDirPath()).filePath("HyperCompare.json");
+        return hc::defaults::compare::SettingsFile(Override.isValid() ? Override.toString() : hc::defaults::compare::ConfigDirectory());
     }
     Preferences::Preferences() : store_(std::make_unique<hc::settings::JsonStore>(FileName())) { reload(); }
     Preferences::~Preferences() = default;
@@ -47,7 +47,7 @@ namespace hc::compare
         if (!store_->Reload()) return finish(false, store_->Error());
         // The old registry is only an import source. Never write or remove its values.
         if (!store_->Exists() && !qApp->property("compareSettingsDirectory").isValid()) {
-            QSettings Legacy(QSettings::NativeFormat, QSettings::UserScope, "HyperTools", "HyperCompare");
+            QSettings Legacy(QSettings::NativeFormat, QSettings::UserScope, hc::defaults::compare::LegacyOrganization, hc::defaults::compare::LegacyApplication);
             Legacy.setFallbacksEnabled(false);
             return ImportLegacy(Legacy);
         }
@@ -66,12 +66,12 @@ namespace hc::compare
         const auto Saved = store_->Replace(Document);
         return finish(Saved, store_->Error());
     }
-    QVariant Preferences::Value(const QString& Key, const QVariant& Default)
+    QVariant Preferences::Value(const QString& Key)
     {
         // A settings object may outlive another window's save (including Apply/Cancel dialogs).
-        if (!reload()) return Default;
+        if (!reload()) return hc::defaults::compare::Value(Key);
         const auto Value = hc::settings::UnifiedConfig::Value(store_->Object(), Key.split('/'));
-        if (Value.isUndefined()) return Default;
+        if (Value.isUndefined()) return hc::defaults::compare::Value(Key);
         if (Key == "compare/customizationV1" && Value.isObject() && !Value.toObject().contains("$type"))
             return QJsonDocument(Value.toObject()).toJson(QJsonDocument::Compact);
         return hc::settings::UnifiedConfig::Decode(Value);
@@ -98,12 +98,11 @@ namespace hc::compare
     {
         CompareSettings result; Preferences settings;
         if (!settings.Error().isEmpty()) result.warnings_.append(settings.Error());
-        result.theme_ = settings.Value("theme/mode", settings.Value("theme/dark", false).toBool() ? "dark" : "product").toString();
-        if (result.theme_ != "dark" && result.theme_ != "light") result.theme_ = "product";
-        result.fonts_ = {qApp->font(), QFont("D2Coding", 12), QFont("D2Coding ligature", 14)};
+        result.theme_ = hc::defaults::compare::ThemeMode(settings.Contains("theme/mode") ? QJsonValue(settings.Value("theme/mode").toString()) : QJsonValue(QJsonValue::Undefined), QJsonValue(settings.Value("theme/dark").toBool()));
+        result.fonts_ = hc::defaults::compare::Fonts(qApp->font());
         const char* fonts[]{"fonts/ui", "fonts/list", "fonts/text"};
-        for (int i = 0; i < 3; ++i) result.fonts_[i].fromString(settings.Value(fonts[i], result.fonts_[i].toString()).toString());
-        for (int i = 0; i < 5; ++i) result.view_[i] = settings.Value(compareViewKeys[i], true).toBool();
+        for (int i = 0; i < 3; ++i) result.fonts_[i].fromString(settings.Value(fonts[i]).toString());
+        for (int i = 0; i < 5; ++i) result.view_[i] = settings.Value(compareViewKeys[i]).toBool();
         const auto data = settings.Value("compare/customizationV1").toByteArray();
         if (!data.isEmpty())
         {
@@ -116,7 +115,7 @@ namespace hc::compare
                 for (int i = 0; i < 2; ++i)
                 {
                     const auto palette = object[i ? "dark" : "light"].toObject();
-                    result.linked_[i] = palette["linked"].toBool(true); result.colors_[i] = palette["colors"].toObject();
+                    result.linked_[i] = palette["linked"].toBool(hc::defaults::compare::LinkColors); result.colors_[i] = palette["colors"].toObject();
                     for (const auto& key : result.colors_[i].keys())
                     {
                         const auto value = result.colors_[i][key];

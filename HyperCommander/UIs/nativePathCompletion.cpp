@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "nativePathCompletion.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 
 /// UIs
 #include "dialogShell.hpp"
@@ -117,7 +118,7 @@ protected:
                 const auto Modifiers = Key->modifiers();
                 const bool Plain = Modifiers == Qt::NoModifier || Modifiers == Qt::KeypadModifier;
                 const bool Open = Plain && (Key->key() == Qt::Key_Down || Key->key() == Qt::Key_Up);
-                const bool Trigger = Key->key() == Qt::Key_Space && Modifiers == Qt::ControlModifier;
+                const bool Trigger = Key->keyCombination() == hc::defaults::AuxiliaryShortcut("path.complete");
                 const bool Visible = popup_->isVisible();
                 const bool Active = Visible || timer_.isActive() || pending_ || (watcher_.isRunning() && scanGeneration_ == generation_);
                 const bool Commit = Active && Plain && (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter || (Visible && Key->key() == Qt::Key_Tab));

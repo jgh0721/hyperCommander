@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "viewUiContribution.hpp"
 #include <QJsonObject>
 #include <QObject>
@@ -29,7 +30,6 @@ namespace hc::document
         ViewUiContribution active_;
         bool suppressed_ = false;
         QList<QPointer<QAction>> activeActions_;
-        QJsonObject settings_{{"schemaVersion", 1}, {"mainMenuMode", "recommended"},
-            {"mainToolbarMode", "recommended"}, {"viewOverrides", QJsonObject{}}};
+        QJsonObject settings_ = hc::defaults::edit::Workspace();
     };
 }

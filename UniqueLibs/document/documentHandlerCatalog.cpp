@@ -1,4 +1,5 @@
 ﻿#include "documentOpenController.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "pluginHost/manifestFile.hpp"
 #include "UniqueLibs/builtinPluginCatalog.hpp"
 #include "commonLibs/document/documentFormatSupport.hpp"
@@ -31,8 +32,8 @@ DocumentHandlerCatalog BuildDocumentHandlerCatalog(hc::settings::Repository& Set
     DocumentHandlerCatalog Result;
     const auto Editors = MigrateEditors(Settings.Read(hc::settings::Section::Editors));
     const auto Config = Editors["documentHandlers"].toObject();
-    Result.defaultView_ = Config["defaultViewHandlerId"].toString("builtin.hyperviewer").toStdString();
-    Result.defaultEdit_ = Config["defaultEditHandlerId"].toString("builtin.hypereditor").toStdString();
+    Result.defaultView_ = Config["defaultViewHandlerId"].toString(hc::defaults::DefaultValue("editors/documentHandlers/defaultViewHandlerId").toString()).toStdString();
+    Result.defaultEdit_ = Config["defaultEditHandlerId"].toString(hc::defaults::DefaultValue("editors/documentHandlers/defaultEditHandlerId").toString()).toStdString();
     Result.overrides_ = Config["fileTypeOverrides"].toObject();
     // Preserve old saved handler selections while moving F3 into the workspace.
     if(Result.defaultView_=="builtin.rhwp-viewer")Result.defaultView_="builtin.hyperviewer";

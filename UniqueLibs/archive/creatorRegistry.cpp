@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "creatorRegistry.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/builtinPluginCatalog.hpp"
 
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -108,7 +109,7 @@ CreatorRuntime ExternalCreator(const QJsonObject& Record, PluginFormat Format, c
     Options.binaryPath_ = QDir(Root).filePath(QString::fromStdString(Reviewed.Value().binary_));
     const auto Id = (Format == PluginFormat::Wcx ? "wcx." : "dopus.") + Reviewed.Value().id_.substr(0, 96) + '.'
         + QCryptographicHash::hash(Options.manifestPath_.toUtf8(), QCryptographicHash::Sha256).toHex().left(12).toStdString();
-    Options.defaultIniPath_ = QDir(SettingsDirectory).filePath("archive-plugins/" + QString::fromStdString(Id) + "/pkplugin.ini");
+    Options.defaultIniPath_ = hc::defaults::PluginIniFile(SettingsDirectory, "wcx", QString::fromStdString(Id));
     auto& Descriptor = Out.descriptor_; Descriptor.id_ = Id; Descriptor.displayName_ = QFileInfo(Options.binaryPath_).fileName().toStdString();
     Descriptor.kind_ = Format == PluginFormat::Wcx ? ArchiveCreatorKind::Wcx : ArchiveCreatorKind::DopusVfs;
     Descriptor.identity_ = {Reviewed.Value().sha256_, Reviewed.Value()};
@@ -118,7 +119,7 @@ CreatorRuntime ExternalCreator(const QJsonObject& Record, PluginFormat Format, c
         for (const auto Value : Evidence["formats"].toArray()) { const auto Name = Value.toString().toStdString(); Descriptor.formats_.push_back({Name, Name, ArchiveSettingsKind::External, ArchiveCreationEvidence::VerifiedPackage}); }
     }
     const auto Rule = PluginApplicationRule::Parse(Record["application"]);
-    Out.available_ = Record["hostEnabled"].toBool() && Rule.HasValue() && Rule.Value().Enabled() && ValidateArchiveCreator(Descriptor).HasValue();
+    Out.available_ = Record["hostEnabled"].toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool()) && Rule.HasValue() && Rule.Value().Enabled() && ValidateArchiveCreator(Descriptor).HasValue();
     if (!Out.available_) Out.status_ = QObject::tr("설정 또는 실행 승인을 확인하십시오."); return Out;
 }
 std::vector<CreatorRuntime> CreatorCatalog(settings::Repository& Settings)

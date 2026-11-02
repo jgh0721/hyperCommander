@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "audioSession.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 
 /// 모듈
 
@@ -68,22 +69,22 @@ namespace hc::audio
     void AudioSession::ReloadSettings()
     {
         const auto Settings = hc::settings::AppSettings().Read( hc::settings::Section::General ).toObject().value( "audioPreview" ).toObject();
-        extensions_ = ParseExtensions( Settings.value( "extensions" ).toString() );
+        extensions_ = ParseExtensions( Settings.value( "extensions" ).toString(hc::defaults::DefaultValue("general/audioPreview/extensions").toString()) );
         if( extensions_.isEmpty() ) extensions_ = DefaultExtensions();
-        volume_ = std::clamp( Settings.value( "volume" ).toInt( 70 ), 0, 100 );
-        muted_ = Settings.value( "muted" ).toBool( false );
-        autoNext_ = Settings.value( "autoNext" ).toBool( true );
-        animateNowPlaying_ = Settings.value( "animateNowPlaying" ).toBool( true );
-        materializeLimitBytes_ = qint64( std::clamp( Settings.value( "materializeLimitMiB" ).toInt( 1024 ), 16, 8192 ) ) * 1024 * 1024;
-        queue_.SetRepeat( RepeatModeFromName( Settings.value( "repeat" ).toString() ) );
-        if( queue_.Shuffle() != Settings.value( "shuffle" ).toBool( false ) ) queue_.SetShuffle( !queue_.Shuffle(), QRandomGenerator::global()->generate() );
+        volume_ = std::clamp( Settings.value( "volume" ).toInt(hc::defaults::DefaultValue("general/audioPreview/volume").toInt()), 0, 100 );
+        muted_ = Settings.value( "muted" ).toBool(hc::defaults::DefaultValue("general/audioPreview/muted").toBool());
+        autoNext_ = Settings.value( "autoNext" ).toBool(hc::defaults::DefaultValue("general/audioPreview/autoNext").toBool());
+        animateNowPlaying_ = Settings.value( "animateNowPlaying" ).toBool(hc::defaults::DefaultValue("general/audioPreview/animateNowPlaying").toBool());
+        materializeLimitBytes_ = qint64( std::clamp( Settings.value( "materializeLimitMiB" ).toInt(hc::defaults::DefaultValue("general/audioPreview/materializeLimitMiB").toInt()), 16, 8192 ) ) * 1024 * 1024;
+        queue_.SetRepeat( RepeatModeFromName( Settings.value( "repeat" ).toString(hc::defaults::DefaultValue("general/audioPreview/repeat").toString()) ) );
+        if( queue_.Shuffle() != Settings.value( "shuffle" ).toBool(hc::defaults::DefaultValue("general/audioPreview/shuffle").toBool()) ) queue_.SetShuffle( !queue_.Shuffle(), QRandomGenerator::global()->generate() );
         if( engine_ ) { engine_->SetVolume( volume_ ); engine_->SetMuted( muted_ ); }
         emit sigModeChanged();
     }
 
     bool AudioSession::OpenInternally() const
     {
-        return hc::settings::AppSettings().Read( hc::settings::Section::Options ).toObject().value( "audioOpenInternally" ).toBool( false );
+        return hc::settings::AppSettings().Read( hc::settings::Section::Options ).toObject().value( "audioOpenInternally" ).toBool(hc::defaults::DefaultValue("options/audioOpenInternally").toBool());
     }
 
     bool AudioSession::IsAvailable() { return engine() != nullptr; }
