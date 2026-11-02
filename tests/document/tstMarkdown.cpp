@@ -15,6 +15,7 @@
 #include <QScreen>
 #include <QJsonDocument>
 #include <iostream>
+#include <qt_windows.h>
 #include "UniqueLibs/document/documentShortcutRegistry.hpp"
 #include "core/AppSettings.h"
 using namespace hc::document;
@@ -107,6 +108,17 @@ class MarkdownTests final : public QObject
         QVERIFY(Pane.Content().contains("# "));
         QVERIFY(!Pane.Content().contains("<html"));
         Pane.grab().save(config_.filePath("editor.png"));
+    }
+    void previewFocus() {
+        DocumentViewPane Pane;Pane.resize(1100,800);QVERIFY(Pane.Load(input(),true,true));Pane.show();Pane.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&Pane));auto* Md=Pane.findChild<MarkdownDocumentView*>();QVERIFY(Md);
+        auto* Input=Pane.InputWidget();QVERIFY(Input);Input->setFocus();
+        for(int Pass=0;Pass<3;++Pass) {
+            Md->Refresh(true);
+            QTRY_COMPARE_WITH_TIMEOUT(Md->State()["renderedRevision"].toInteger(-2),Md->State()["revision"].toInteger(-1),30000);
+            QTRY_VERIFY(Input->hasFocus());
+            QTRY_COMPARE(GetFocus(),reinterpret_cast<HWND>(Input->effectiveWinId()));
+        }
     }
     void settings()
     {

@@ -106,8 +106,11 @@ int main(int Argc, char **Argv)
     QWebEngineView View;
     View.resize(800, 600);
     View.setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
+    View.setAttribute(Qt::WA_ShowWithoutActivating);
     auto *Page = new MarkdownPage(&Profile, &View);
     View.setPage(Page);
+    // Loading or refreshing a passive preview must not take source-editor input.
+    Page->settings()->setAttribute(QWebEngineSettings::FocusOnNavigationEnabled, false);
     Page->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
     Page->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
     Page->settings()->setAttribute(QWebEngineSettings::JavascriptCanOpenWindows, false);

@@ -23,6 +23,8 @@
 #include <QDir>
 #include <QDesktopServices>
 #include <QSignalBlocker>
+#include <QApplication>
+#include <qt_windows.h>
 
 namespace hc::document
 {
@@ -424,6 +426,15 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
             for (int I = Level + 1; I < 7; ++I)
                 Parents[I] = nullptr;
         }
+        // The foreign preview can leave Qt's logical source focus intact while
+        // reparenting changes the native keyboard receiver. Repair that mismatch
+        // only while the source still owns focus in the foreground editor.
+        auto* Input=source_->Backend()->widget();
+        const auto Root=GetAncestor(reinterpret_cast<HWND>(window()->effectiveWinId()),GA_ROOT);
+        if(SourceVisible() && Input->hasFocus() && Input->isVisible() && Input->isEnabled()
+            && Root && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root
+            && !QApplication::activeModalWidget() && !QApplication::activePopupWidget())
+            SetFocus(reinterpret_cast<HWND>(Input->effectiveWinId()));
         outline_->expandAll();
         if(auto* Filter=findChild<QLineEdit*>("markdownOutlineFilter"))QMetaObject::invokeMethod(Filter,"textChanged",Qt::DirectConnection,Q_ARG(QString,Filter->text()));
     }

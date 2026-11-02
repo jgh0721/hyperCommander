@@ -497,6 +497,32 @@ private slots:
         QVERIFY(!Session->PreviewChapter("unknown.xhtml",Changed));
         QCOMPARE(Session->ReadValidatedResource(Resource).bytes_,Original.bytes_);
     }
+    void previewSaveFocus() {
+        const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");
+        QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        EpubSourceEditor Editor(File.readAll(),Path);Editor.SetRecoveryEnabled(false);Editor.resize(1300,850);Editor.show();QVERIFY(foreground(Editor));
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);Editor.ConfigurePreview(testEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")));
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.Snapshot()["preview"].toObject()["current"].toBool(),60000);
+        auto* Input=Editor.SourceInput();QVERIFY(Input);Input->setFocus();
+        for(int Pass=0;Pass<3;++Pass) {
+            QVERIFY(!Editor.Execute({{"action","epub.edit.validate"}}).contains("error"));
+            QTRY_VERIFY_WITH_TIMEOUT(Editor.IsValidated(),15000);
+            const auto Output=Editor.Export(Temp.filePath(QString("copy-%1.epub").arg(Pass)));QVERIFY(Output.HasValue());
+            Editor.Commit(Temp.filePath(QString("copy-%1.epub").arg(Pass)),Output.Value());
+            const auto Pid=Editor.PreviewView()->ViewState()["processId"].toInteger();
+            Editor.findChild<QAction*>("epubPreviewRefresh")->trigger();
+            QTRY_VERIFY_WITH_TIMEOUT(Editor.PreviewView() && Editor.PreviewView()->ViewState()["processId"].toInteger()!=Pid
+                && Editor.Snapshot()["preview"].toObject()["current"].toBool(),60000);
+            QTRY_VERIFY_WITH_TIMEOUT(Input->hasFocus(),3000);
+            QTRY_COMPARE_WITH_TIMEOUT(GetFocus(),reinterpret_cast<HWND>(Input->effectiveWinId()),3000);
+            // Send real keyboard input without clicking or repairing focus in the test.
+            const auto Position=sourceState(Editor)["position"].toInt();
+            INPUT Keys[2]{};for(auto& Key:Keys){Key.type=INPUT_KEYBOARD;Key.ki.wVk=VK_RIGHT;Key.ki.dwFlags=KEYEVENTF_EXTENDEDKEY;}
+            Keys[1].ki.dwFlags|=KEYEVENTF_KEYUP;QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2));
+            QTRY_VERIFY(sourceState(Editor)["position"].toInt()!=Position);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.RequestPreviewClose(),30000);
+    }
     void incrementalPreview() {
         const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");
         QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());

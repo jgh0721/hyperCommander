@@ -42,16 +42,32 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
         }
         if(After || !Before || !previewCandidate_ || !(sourcePanel_->isAncestorOf(Before) || treePanel_->isAncestorOf(Before)))return;
         const QPointer<QWidget> Input=Before;const QPointer<EpubProcessView> Candidate=previewCandidate_;
-        QTimer::singleShot(40,this,[this,Input,Candidate]{
-            if(!Input || !Candidate || Candidate!=previewCandidate_ || previewClosing_ || !IsSourceVisible()
-                || !Input->isVisible() || !Input->isEnabled() || QApplication::focusWidget()
-                || QApplication::activePopupWidget() || QApplication::activeModalWidget())return;
+        auto* Retry=new QTimer(this);Retry->setInterval(40);
+        // Reparenting and activation are asynchronous. The candidate may already
+        // be the displayed preview when Windows finally transfers keyboard input.
+        connect(qApp,&QApplication::focusChanged,Retry,[Retry,Input](QWidget*,QWidget* Next){
+            if(Next && Next!=Input){Retry->stop();Retry->deleteLater();}
+        });
+        connect(Retry,&QTimer::timeout,this,[this,Input,Candidate,Retry,Attempts=0]()mutable{
+            const auto Finish=[Retry]{Retry->stop();Retry->deleteLater();};
+            if(++Attempts>50 || !Input || !Candidate || (Candidate!=previewCandidate_ && Candidate!=previewView_)
+                || previewClosing_ || !IsSourceVisible() || !Input->isVisible() || !Input->isEnabled()
+                || (QApplication::focusWidget() && QApplication::focusWidget()!=Input)
+                || QApplication::activePopupWidget() || QApplication::activeModalWidget()
+                || GetAsyncKeyState(VK_LBUTTON)<0 || GetAsyncKeyState(VK_RBUTTON)<0){Finish();return;}
             const auto Foreground=GetForegroundWindow();const auto Root=GetAncestor(reinterpret_cast<HWND>(window()->winId()),GA_ROOT);
             DWORD Pid=0;GetWindowThreadProcessId(Foreground,&Pid);
-            if(!Root || GetAncestor(Foreground,GA_ROOT)!=Root || Pid!=Candidate->ViewState()["processId"].toInteger())return;
+            const auto PreviewPid=Candidate->ViewState()["processId"].toInteger();
+            if(!Root || !Foreground)return;
+            // A foreign helper can temporarily own activation before it is parented.
+            // Never activate the editor after the user has switched applications.
+            if(GetAncestor(Foreground,GA_ROOT)!=Root && (!PreviewPid || Pid!=PreviewPid)){Finish();return;}
+            if(GetAncestor(Foreground,GA_ROOT)!=Root)return;
             SetActiveWindow(Root);QApplication::setActiveWindow(window());
             if(Input){SetFocus(reinterpret_cast<HWND>(Input->effectiveWinId()));Input->setFocus(Qt::OtherFocusReason);}
+            if(Input && Input->hasFocus() && GetFocus()==reinterpret_cast<HWND>(Input->effectiveWinId()))Finish();
         });
+        Retry->start();
     });
     connect(qApp,&QGuiApplication::applicationStateChanged,this,[this]{suspendInactivePreview();});
     connect(&previewTimer_,&QTimer::timeout,this,[this]{requestPreview();});
