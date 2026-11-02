@@ -178,6 +178,9 @@ namespace hc::storage
         // Experimental bounded native read/write overlap; stays off unless a
         // measured profile is selected. Two buffers, each <=8 MiB.
         bool nativeReadAhead_ = false;
+        // One extra archive read may overlap an SMB write, using the shared
+        // pipeline budget. Decoder order and per-file publication stay serial.
+        bool archiveReadAhead_ = true;
         std::size_t nativeCopyBufferBytes_ = 1024 * 1024;
         // The producer allocates its own output; do not reserve a second payload.
         bool producingContent_ = false;

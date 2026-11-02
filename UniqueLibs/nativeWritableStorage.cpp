@@ -131,8 +131,9 @@ namespace hc::storage
             for (auto End = Path.root_.size();;)
             {
                 const auto Part = Path.path_.substr(0, End);
-                // Prevent parent rename and reparse-point edits while an output
-                // is being created. Child operations do not mutate this handle.
+                // Recheck every component for each file. Some NAS servers allow
+                // directory rename despite these share restrictions, so retaining
+                // the handles alone cannot authorize reuse for later paths.
                 Handle Directory(CreateFileW(Part.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
                     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
                 if (Directory.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), Id, Utf8(Part));
@@ -165,10 +166,12 @@ namespace hc::storage
                 return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Expected.id_, false, "refresh"};
             return Unit{};
         }
-        Result<std::string> RecoveryIdentity(HANDLE File, const std::wstring& Path, bool Content)
+        Result<std::string> RecoveryIdentity(HANDLE File, const std::wstring& Path, bool Content,
+            const BY_HANDLE_FILE_INFORMATION* KnownInfo = nullptr)
         {
             BY_HANDLE_FILE_INFORMATION Info{};
-            if (!GetFileInformationByHandle(File, &Info)) return Failure(GetLastError(), {"write-recovery"}, Utf8(Path));
+            if (KnownInfo) Info = *KnownInfo;
+            else if (!GetFileInformationByHandle(File, &Info)) return Failure(GetLastError(), {"write-recovery"}, Utf8(Path));
             if (!Content) return native::PersistentIdentity(File, Info);
             // The caller pins the object against writes/deletion. Content binds
             // recovery across reopen/rename when the transport has no stable ID.
@@ -236,14 +239,18 @@ namespace hc::storage
                 record_.transaction_ = Utf8(std::filesystem::path(stagePath_).filename().wstring());
                 record_.destination_ = destination_; record_.stage_ = {destination_.kind_, Utf8(stagePath_)};
                 record_.backup_ = {destination_.kind_, Utf8(TemporaryName(std::filesystem::path(path_.path_).parent_path().wstring(), L"backup"))};
-                BY_HANDLE_FILE_INFORMATION Info{};
-                if (!GetFileInformationByHandle(file_.value_, &Info)) return Failure(GetLastError(), id_);
-                const auto Time = [](FILETIME Value) { return LONGLONG((uint64_t(Value.dwHighDateTime) << 32) | Value.dwLowDateTime); };
-                initialTimes_.CreationTime.QuadPart = Time(Info.ftCreationTime);
-                initialTimes_.LastAccessTime.QuadPart = Time(Info.ftLastAccessTime);
-                initialTimes_.LastWriteTime.QuadPart = Time(Info.ftLastWriteTime);
-                record_.stageIdentity_ = native::PersistentIdentity(file_.value_, Info);
-                if (checkpoint_ && native::NeedsContentIdentity(file_.value_, path_.path_)) record_.stageIdentity_ = "content:writing";
+                // Ordinary SMB streaming needs neither producer timestamps nor
+                // an initial journal identity. Commit queries the completed file.
+                if (destination_.kind_ != LocatorKind::Smb || checkpoint_ || Context.producingContent_ || !Context.expectedWriteBytes_) {
+                    BY_HANDLE_FILE_INFORMATION Info{};
+                    if (!GetFileInformationByHandle(file_.value_, &Info)) return Failure(GetLastError(), id_);
+                    const auto Time = [](FILETIME Value) { return LONGLONG((uint64_t(Value.dwHighDateTime) << 32) | Value.dwLowDateTime); };
+                    initialTimes_.CreationTime.QuadPart = Time(Info.ftCreationTime);
+                    initialTimes_.LastAccessTime.QuadPart = Time(Info.ftLastAccessTime);
+                    initialTimes_.LastWriteTime.QuadPart = Time(Info.ftLastWriteTime);
+                    record_.stageIdentity_ = native::PersistentIdentity(file_.value_, Info);
+                    if (checkpoint_ && native::NeedsContentIdentity(file_.value_, path_.path_)) record_.stageIdentity_ = "content:writing";
+                }
                 if (Context.expectedWriteBytes_) {
                     if (*Context.expectedWriteBytes_ > uint64_t(INT64_MAX)) return Error{ErrorCategory::Unsupported, "native-file-size-range", id_};
                     FILE_ALLOCATION_INFO Allocation{}; Allocation.AllocationSize.QuadPart = LONGLONG(*Context.expectedWriteBytes_);
@@ -551,11 +558,13 @@ namespace hc::storage
                 const auto FinalAttributes = Basic.FileAttributes;
                 Basic.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
                 if (!Basic.FileAttributes) Basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+                // Keep the existing pre-publication metadata order; only
+                // redundant information queries are elided on the SMB path.
                 if (!SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) return Failure(GetLastError(), id_);
                 BY_HANDLE_FILE_INFORMATION StageInfo{};
                 if (!GetFileInformationByHandle(file_.value_, &StageInfo)) return Failure(GetLastError(), id_, Utf8(stagePath_));
                 const bool ContentIdentity = checkpoint_ && native::NeedsContentIdentity(file_.value_, path_.path_);
-                auto StageIdentity = RecoveryIdentity(file_.value_, stagePath_, ContentIdentity);
+                auto StageIdentity = RecoveryIdentity(file_.value_, stagePath_, ContentIdentity, expectedBytes_ ? &StageInfo : nullptr);
                 if (!StageIdentity.HasValue()) return StageIdentity.Failure();
                 record_.stageIdentity_ = std::move(StageIdentity.Value());
                 if (expected_.exists_)
@@ -571,7 +580,7 @@ namespace hc::storage
                     if (!Valid.HasValue()) { backup_.Close(); return Valid.Failure(); }
                     BY_HANDLE_FILE_INFORMATION Original{};
                     if (!GetFileInformationByHandle(backup_.value_, &Original)) return Failure(GetLastError(), id_);
-                    auto OriginalIdentity = RecoveryIdentity(backup_.value_, path_.path_, ContentIdentity);
+                    auto OriginalIdentity = RecoveryIdentity(backup_.value_, path_.path_, ContentIdentity, expectedBytes_ ? &Original : nullptr);
                     if (!OriginalIdentity.HasValue()) return OriginalIdentity.Failure();
                     record_.originalIdentity_ = std::move(OriginalIdentity.Value());
                     auto Saved = checkpoint(WritePhase::Prepared); if (!Saved.HasValue()) return Saved.Failure();

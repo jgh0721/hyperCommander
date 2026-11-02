@@ -1,4 +1,5 @@
-﻿#define NOMINMAX
+﻿#include "stdafx.h"
+#define NOMINMAX
 #include <QtTest>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -20,6 +21,7 @@
 #include "UniqueLibs/archiveExtractJob.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "commonLibs/plugins/archiveSelectionDigest.hpp"
+#include "UniqueLibs/operationMetrics.hpp"
 
 using namespace hc::storage;
 using namespace hc::plugins;
@@ -72,6 +74,149 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void smbArchiveMetadata() {
+        using namespace hc::operations;
+        const auto Target = qEnvironmentVariable("HC_SMB_EXTRACT_ROOT");
+        if (Target.isEmpty()) QSKIP("Explicit owned SMB test path required");
+        QVERIFY(QFileInfo::exists(QDir(Target).filePath(".hc-benchmark-owner.json")));
+        QTemporaryDir Input, Output(QDir(Target).filePath("metadata-XXXXXX")); QVERIFY(Input.isValid()); QVERIFY(Output.isValid());
+        const QByteArray Payload(4096, 'm');
+        for (const auto& Name : {QString("normal.bin"), QString("protected.bin")}) {
+            const auto Path = QDir::toNativeSeparators(Input.filePath(Name)); QVERIFY(Put(Path, Payload));
+            const auto File = CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+            QVERIFY(File != INVALID_HANDLE_VALUE); const auto Ticks = uint64_t(1577934246000LL + 11644473600000LL) * 10000;
+            FILETIME Time{DWORD(Ticks), DWORD(Ticks >> 32)}; const auto Timed = SetFileTime(File, nullptr, nullptr, &Time); CloseHandle(File); QVERIFY(Timed);
+            QVERIFY(SetFileAttributesW(reinterpret_cast<LPCWSTR>(Path.utf16()), Name == "normal.bin" ? FILE_ATTRIBUTE_NORMAL : FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE));
+        }
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        const auto Archive = Input.filePath("metadata.zip"); ArchiveUpdate Create;
+        Create.archive_ = Archive.toStdString(); Create.inputDirectory_ = Input.path().toStdString(); Create.add_ = {"normal.bin", "protected.bin"}; Create.creation_ = ArchiveCreationOptions{};
+        QVERIFY(Backend->Update(std::move(Create), {}).HasValue());
+        for (const auto& Name : {QString("normal.bin"), QString("protected.bin")}) {
+            const auto Path = QDir::toNativeSeparators(Input.filePath(Name)); QVERIFY(SetFileAttributesW(reinterpret_cast<LPCWSTR>(Path.utf16()), FILE_ATTRIBUTE_NORMAL));
+        }
+        const Locator Root{LocatorKind::Archive, Archive.toStdString(), {{"wcx", "/"}}};
+        auto Reader = MakeWcxReadProvider({}, Root, {}, Backend); auto Listed = Reader->Enumerate(Root, {}).get(); QVERIFY(Listed.HasValue());
+        auto Page = Listed.Value()->Next(16, {}).get(); QVERIFY(Page.HasValue()); QCOMPARE(Page.Value().entries_.size(), size_t(2));
+        auto Entries = Page.Value().entries_; Listed.Value().reset();
+        FileOperationRequest Request; Request.destination_ = {LocatorKind::Smb, Output.path().toStdString()};
+        Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Smb, MakeNativeReadProvider(LocatorKind::Smb));
+        for (const auto& Entry : Entries) Request.sources_.push_back({Entry, Reader, {}});
+        OperationContext Context; Context.flushFileContents_ = false;
+        auto Prepared = PrepareFileOperation(std::move(Request), Context); QVERIFY(Prepared.HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Job = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+        const auto Result = Job.Value().completion_.get(); QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "incomplete extraction"); QVERIFY(Result.cleanupErrors_.empty());
+        for (const auto& Entry : Entries) {
+            const auto Path = QDir::toNativeSeparators(Output.filePath(QString::fromStdString(Entry.name_)));
+            QCOMPARE(Read(Path), Payload);
+            const auto File = CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            QVERIFY(File != INVALID_HANDLE_VALUE); BY_HANDLE_FILE_INFORMATION Info{}; const auto Queried = GetFileInformationByHandle(File, &Info); CloseHandle(File); QVERIFY(Queried);
+            constexpr DWORD Mask = FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_SYSTEM;
+            QCOMPARE(Info.dwFileAttributes & Mask, DWORD(Entry.attributes_ & Mask));
+            const auto Ticks = (uint64_t(Info.ftLastWriteTime.dwHighDateTime) << 32) | Info.ftLastWriteTime.dwLowDateTime;
+            QCOMPARE(qint64(Ticks / 10000) - 11644473600000LL, qint64(Entry.modifiedUtcMs_));
+            if (Entry.name_ == "protected.bin") QVERIFY(Entry.attributes_ & FILE_ATTRIBUTE_READONLY);
+            QVERIFY(SetFileAttributesW(reinterpret_cast<LPCWSTR>(Path.utf16()), FILE_ATTRIBUTE_NORMAL));
+        }
+    }
+    void smbExtractionCancellation() {
+        using namespace hc::operations;
+        const auto Source = qEnvironmentVariable("HC_SMB_EXTRACT_ARCHIVE");
+        const auto Target = qEnvironmentVariable("HC_SMB_EXTRACT_ROOT");
+        if (Source.isEmpty() || Target.isEmpty()) QSKIP("Explicit owned SMB archive paths required");
+        QVERIFY(QFileInfo::exists(QDir(Target).filePath(".hc-benchmark-owner.json")));
+        QTemporaryDir Output(QDir(Target).filePath("cancel-XXXXXX")); QVERIFY(Output.isValid());
+        const auto Existing = Output.filePath("file-0000.bin"); QVERIFY(Put(Existing, "existing destination"));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        const Locator Root{LocatorKind::Archive, Source.toStdString(), {{"wcx", "/"}}};
+        auto Reader = MakeWcxReadProvider({}, Root, {}, Backend); auto Entry = Reader->Resolve({LocatorKind::Archive, Source.toStdString(), {{"wcx", "/file-0000.bin"}}}, {}).get();
+        QVERIFY(Entry.HasValue()); QVERIFY(Entry.Value().size_ >= 256 * 1024 * 1024);
+        FileOperationRequest Request; Request.sources_.push_back({Entry.Value(), Reader, {}});
+        Request.destination_ = {LocatorKind::Smb, Output.path().toStdString()};
+        Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Smb, MakeNativeReadProvider(LocatorKind::Smb)); Request.conflict_ = ConflictPolicy::Replace;
+        OperationContext Context; Context.flushFileContents_ = false;
+        auto Prepared = PrepareFileOperation(std::move(Request), Context); QVERIFY(Prepared.HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Job = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Job.HasValue());
+        QElapsedTimer Clock; Clock.start();
+        while (Clock.elapsed() < 30000) {
+            const auto Snapshot = Scheduler.Snapshot(Job.Value().id_); QVERIFY(Snapshot.HasValue());
+            if (Snapshot.Value().progress_.bytesDone_ >= 1024 * 1024) break;
+            QTest::qWait(1);
+        }
+        QVERIFY(Clock.elapsed() < 30000); QVERIFY(Scheduler.Cancel(Job.Value().id_).HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+        const auto Result = Job.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Cancelled); QVERIFY(Result.cleanupErrors_.empty());
+        QCOMPARE(Read(Existing), QByteArray("existing destination"));
+        QCOMPARE(QDir(Output.path()).entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot), QStringList{"file-0000.bin"});
+        const auto Parent = QDir::toNativeSeparators(Output.path()); const auto Renamed = Parent + "-renamed";
+        QVERIFY(MoveFileW(reinterpret_cast<LPCWSTR>(Parent.utf16()), reinterpret_cast<LPCWSTR>(Renamed.utf16())));
+        QVERIFY(MoveFileW(reinterpret_cast<LPCWSTR>(Renamed.utf16()), reinterpret_cast<LPCWSTR>(Parent.utf16())));
+    }
+    void smbExtractionBenchmark() {
+        using namespace hc::operations;
+        const auto Source = qEnvironmentVariable("HC_SMB_EXTRACT_ARCHIVE");
+        const auto Target = qEnvironmentVariable("HC_SMB_EXTRACT_ROOT");
+        const auto Metrics = qEnvironmentVariable("HC_SMB_EXTRACT_METRICS");
+        if (Source.isEmpty() || Target.isEmpty() || Metrics.isEmpty()) QSKIP("Explicit owned SMB benchmark paths required");
+        QVERIFY(Target.startsWith("\\\\"));
+        QVERIFY(QFileInfo::exists(QDir(Target).filePath(".hc-benchmark-owner.json")));
+        const auto Manifest = QJsonDocument::fromJson(Read(Source + ".json")).object();
+        QVERIFY(!Manifest.isEmpty());
+        const auto SourceInfo = QFileInfo(Source);
+        const auto SourceSize = SourceInfo.size(); const auto SourceTime = SourceInfo.lastModified();
+        const auto SourceHash = QCryptographicHash::hash(Read(Source), QCryptographicHash::Sha256);
+        QTemporaryDir Output(QDir(Target).filePath("extract-XXXXXX")); QVERIFY(Output.isValid());
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        const Locator Root{LocatorKind::Archive, Source.toStdString(), {{"wcx", "/"}}};
+        auto Reader = MakeWcxReadProvider({}, Root, {}, Backend);
+        auto Listed = Reader->Enumerate(Root, {}).get(); QVERIFY(Listed.HasValue());
+        FileOperationRequest Request; Request.destination_ = {LocatorKind::Smb, Output.path().toStdString()};
+        Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Smb, MakeNativeReadProvider(LocatorKind::Smb));
+        Request.copyOptions_.metadata_ = true; Request.conflict_ = ConflictPolicy::Replace;
+        for (;;) {
+            auto Page = Listed.Value()->Next(256, {}).get(); QVERIFY(Page.HasValue());
+            for (auto& Entry : Page.Value().entries_) Request.sources_.push_back({std::move(Entry), Reader, {}});
+            if (Page.Value().end_) break;
+        }
+        Listed.Value().reset();
+        OperationContext Context; Context.flushFileContents_ = false;
+        auto Prepared = PrepareFileOperation(std::move(Request), Context); QVERIFY(Prepared.HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        hc::operations::OperationMetrics::Instance().Reset(true); QElapsedTimer Clock; Clock.start();
+        auto Job = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Job.HasValue());
+        while (Job.Value().completion_.wait_for(std::chrono::milliseconds(10)) != std::future_status::ready && Clock.elapsed() < 600000)
+            QCoreApplication::processEvents();
+        if (Job.Value().completion_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) Scheduler.Cancel(Job.Value().id_);
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+        const auto Result = Job.Value().completion_.get(); const auto Wall = Clock.elapsed();
+        QVERIFY(OperationMetrics::Instance().Save(Metrics, Wall));
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "incomplete extraction");
+        QVERIFY2(Result.cleanupErrors_.empty(), Result.cleanupErrors_.empty() ? "" : Result.cleanupErrors_.front().code_.c_str());
+        std::uint64_t Bytes = 0; qsizetype Files = 0;
+        QElapsedTimer Drain; Drain.start();
+        for (auto It = Manifest.begin(); It != Manifest.end(); ++It) {
+            const auto Path = QDir::toNativeSeparators(QDir(Output.path()).filePath(It.key()));
+            const auto File = CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+            QVERIFY(File != INVALID_HANDLE_VALUE); const auto Flushed = FlushFileBuffers(File); CloseHandle(File); QVERIFY(Flushed);
+        }
+        const auto DrainMs = Drain.elapsed();
+        for (auto It = Manifest.begin(); It != Manifest.end(); ++It) {
+            QFile File(QDir(Output.path()).filePath(It.key())); QVERIFY(File.open(QIODevice::ReadOnly));
+            QCryptographicHash Hash(QCryptographicHash::Sha256); QVERIFY(Hash.addData(&File));
+            QCOMPARE(QString::fromLatin1(Hash.result().toHex()), It.value().toObject()["sha256"].toString());
+            QCOMPARE(File.size(), It.value().toObject()["bytes"].toInteger()); Bytes += File.size(); ++Files;
+        }
+        QCOMPARE(QFileInfo(Source).size(), SourceSize); QCOMPARE(QFileInfo(Source).lastModified(), SourceTime);
+        QCOMPARE(QCryptographicHash::hash(Read(Source), QCryptographicHash::Sha256), SourceHash);
+        auto Summary = QJsonDocument(QJsonObject{{"wallMs", Wall}, {"drainMs", DrainMs}, {"bytes", qint64(Bytes)}, {"files", Files},
+            {"source", Source}, {"sourceSha256", QString::fromLatin1(SourceHash.toHex())}, {"target", Target}}).toJson();
+        Summary.replace("\n", "\r\n");
+        QVERIFY(Put(Metrics + ".summary.json", Summary));
+        qInfo().noquote() << Summary;
+    }
     void msiBrowse_data() {
         QTest::addColumn<bool>("External"); QTest::addColumn<bool>("Loose");
         QTest::newRow("embedded") << false << false;

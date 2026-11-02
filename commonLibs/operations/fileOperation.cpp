@@ -1,4 +1,5 @@
-﻿#include "fileOperation.hpp"
+﻿#include "stdafx.h"
+#include "fileOperation.hpp"
 #include <set>
 #include <atomic>
 #include <condition_variable>
@@ -313,7 +314,11 @@ namespace hc::operations
                     const bool NativeWindow = (ReadContext.nativeReadAhead_ || ReadContext.nativeCopyBufferBytes_ > 1024 * 1024) && !request_.bytesPerSecondLimit_
                         && current().source_.entry_.locator_.kind_ == LocatorKind::Local
                         && current().source_.entry_.size_ > 1024 * 1024 && current().source_.reader_->SupportsParallelReads();
-                    if (NativeWindow && !readAheadSlot_) {
+                    const bool ArchiveWindow = ReadContext.archiveReadAhead_ && !request_.bytesPerSecondLimit_
+                        && current().source_.entry_.locator_.kind_ == LocatorKind::Archive
+                        && current().destination_.kind_ == LocatorKind::Smb && current().source_.entry_.size_ > 1024 * 1024;
+                    if (ArchiveWindow) ReadContext.maxReadBytes_ = std::min<std::size_t>(ReadContext.maxReadBytes_, 1024 * 1024);
+                    if ((NativeWindow || ArchiveWindow) && !readAheadSlot_) {
                         auto Slots = ReadAheadSlots.load();
                         while (Slots < 12 && !ReadAheadSlots.compare_exchange_weak(Slots, Slots + 1)) {}
                         readAheadSlot_ = Slots < 12;
@@ -334,7 +339,15 @@ namespace hc::operations
                     if (Chunk.Value().bytes_.size() > request_.maxBytes_ - bytesDone_)
                         return failed({ErrorCategory::BudgetExceeded, "copy-byte-budget"});
                     chunk_ = std::move(Chunk.Value());
-                    if (ReadContext.nativeReadAhead_ && !chunk_.eof_ && !request_.bytesPerSecondLimit_
+                    if (ArchiveWindow && readAheadSlot_ && !chunk_.eof_) {
+                        auto AheadContext = transferContext(ReadContext);
+                        // Archive reads can wait on decoder/host IPC. Keep just
+                        // one read outstanding while Append owns the other buffer.
+                        readAhead_ = std::async(std::launch::async, [Stream = stream_, Capacity, AheadContext]() mutable {
+                            return Stream->Read(Capacity, AheadContext).get();
+                        });
+                    }
+                    else if (ReadContext.nativeReadAhead_ && !chunk_.eof_ && !request_.bytesPerSecondLimit_
                         && current().source_.entry_.locator_.kind_ == LocatorKind::Local
                         && current().source_.entry_.size_ > 1024 * 1024 && current().source_.reader_->SupportsParallelReads()) {
                         auto AheadContext = transferContext(ReadContext); AheadContext.workerRead_ = false;
