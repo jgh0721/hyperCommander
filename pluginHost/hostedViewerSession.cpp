@@ -511,6 +511,11 @@ namespace hc::plugins
                 if (!State->details_.candidateFailures_.empty()) return State->details_.candidateFailures_.front().error_;
                 NoMatch = true; return Unit{};
             }
+            // Document bindings own each input until its tab closes. Retaining
+            // the initial lease/source here would pin a closed ZIP (or its outer
+            // archive) for the entire reusable viewer process lifetime.
+            // Ordinary WLX viewers still need their session-scoped input lease.
+            if (Document) { Lease.reset(); Source.reset(); }
             auto HostState = Host->Snapshot();
             OperationContext Calls; Calls.stopToken_ = Context.stopToken_;
             while (!State->stop_.stop_requested())

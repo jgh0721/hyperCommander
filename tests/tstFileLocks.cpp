@@ -154,6 +154,72 @@ private slots:
         if(Operation==int(hc::operations::FileOperation::Rename))QVERIFY(QFile::exists(Root.filePath("renamed.txt")));
         if(Operation==int(hc::operations::FileOperation::Move))QVERIFY(QFile::exists(Destination));
     }
+    void mappedDeleteCanRetryAfterElevationFailure_data() {
+        QTest::addColumn<QString>("Outcome");
+        for (const auto* Outcome : {"release", "replace", "skip", "skip-all", "cancel", "headless"}) QTest::newRow(Outcome) << QString::fromLatin1(Outcome);
+    }
+    void mappedDeleteCanRetryAfterElevationFailure() {
+        QFETCH(QString, Outcome); QTemporaryDir Root; QVERIFY(Root.isValid()); const auto Path = Root.filePath("mapped.zip"); write(Path);
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        const auto Source = Reader->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
+        const auto Native = QDir::toNativeSeparators(Path).toStdWString();
+        HANDLE File = CreateFileW(Native.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+        QVERIFY(File != INVALID_HANDLE_VALUE); const auto CloseFile = qScopeGuard([&] { if (File != INVALID_HANDLE_VALUE) CloseHandle(File); });
+        HANDLE Mapping = CreateFileMappingW(File, nullptr, PAGE_READONLY, 0, 0, nullptr); QVERIFY(Mapping);
+        void* View = MapViewOfFile(Mapping, FILE_MAP_READ, 0, 0, 0); QVERIFY(View);
+        const auto Unmap = qScopeGuard([&] { if (View) UnmapViewOfFile(View); if (Mapping) CloseHandle(Mapping); });
+        CloseHandle(File); File = INVALID_HANDLE_VALUE;
+        // DELETE access is granted, but a mapped section still rejects disposition
+        // with access denied. An elevated process encounters the same section.
+        const auto Blocked = Writer->Remove(Source.Value(), {}); QVERIFY(!Blocked.HasValue());
+        QCOMPARE(Blocked.Failure().code_, std::string("win32:5"));
+        struct Elevation final : IFileElevationService {
+            struct Session final : IFileElevationSession {
+                std::shared_ptr<IWritableStorage> writer_; EntrySnapshot source_; FileElevationStatus status_;
+                Session(std::shared_ptr<IWritableStorage> Writer, EntrySnapshot Source) : writer_(std::move(Writer)), source_(std::move(Source)) { status_.readyToCommit_ = true; }
+                Result<FileElevationStatus> Poll() override { return status_; }
+                Result<Unit> Commit() override {
+                    const auto Removed = writer_->Remove(source_, {}); status_.readyToCommit_ = false; status_.finished_ = true;
+                    if (!Removed.HasValue()) status_.error_ = Removed.Failure(); else status_.sourceRemoved_ = true;
+                    return Unit{};
+                }
+                void Cancel() override {} std::vector<Error> Close() override { return {}; }
+            };
+            std::shared_ptr<IWritableStorage> writer_; int attempts_ = 0;
+            bool CanExecute(const FileElevationRequest&) const override { return true; }
+            Result<std::unique_ptr<IFileElevationSession>> Begin(FileElevationRequest Request, OperationContext) override {
+                ++attempts_; return std::unique_ptr<IFileElevationSession>(new Session(writer_, *Request.source_));
+            }
+        };
+        auto Elevated = std::make_shared<Elevation>(); Elevated->writer_ = Writer;
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.sources_ = {{Source.Value(), Reader, Writer}};
+        Request.fileLockInteractions_ = Outcome != "headless"; Request.confirmDelete_ = false;
+        if (Outcome != "headless") Request.elevation_ = Elevated;
+        auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue()); auto Job = std::move(Prepared.Value()); JobStepContext Context;
+        const auto Cleanup = qScopeGuard([&] { Job.task_->Finalize(JobState::Cancelled); });
+        auto Step = advanceToStop(Job, Context);
+        if (Outcome == "headless") { QCOMPARE(Step.next_, JobState::Failed); QVERIFY(Step.error_); QCOMPARE(Step.error_->code_, std::string("win32:5")); QCOMPARE(Elevated->attempts_, 0); return; }
+        QCOMPARE(Step.next_, JobState::WaitingForUser); QVERIFY(Step.interaction_); QCOMPARE(Step.interaction_->kind_, InteractionKind::Elevation);
+        Context.answer_ = InteractionAnswer{"", InteractionChoice::Elevate, {}};
+        for (int Attempt = 1; Attempt <= 2; ++Attempt) {
+            Step = advanceToStop(Job, Context); QCOMPARE(Step.next_, JobState::WaitingForUser); QVERIFY(Step.interaction_);
+            QCOMPARE(Step.interaction_->kind_, InteractionKind::RetryFailure);
+            QCOMPARE(Step.interaction_->reason_, std::string("delete-failure:win32:5")); QCOMPARE(Elevated->attempts_, Attempt);
+            QVERIFY(QFile::exists(Path)); Context.answer_ = InteractionAnswer{"", InteractionChoice::Retry, {}};
+        }
+        if (Outcome == "skip" || Outcome == "skip-all" || Outcome == "cancel") {
+            Context.answer_ = InteractionAnswer{"", Outcome == "skip" ? InteractionChoice::Skip : Outcome == "skip-all" ? InteractionChoice::SkipAll : InteractionChoice::Cancel, {}};
+            Step = advanceToStop(Job, Context); QCOMPARE(Step.next_, Outcome == "cancel" ? JobState::Cancelled : JobState::Completed);
+            QCOMPARE(Elevated->attempts_, 2); QVERIFY(QFile::exists(Path)); return;
+        }
+        UnmapViewOfFile(View); View = nullptr; CloseHandle(Mapping); Mapping = nullptr;
+        if (Outcome == "replace") { QVERIFY(QFile::rename(Path, Path + ".original")); write(Path); }
+        Step = advanceToStop(Job, Context); QCOMPARE(Elevated->attempts_, 3);
+        if (Outcome == "replace") {
+            QCOMPARE(Step.next_, JobState::Failed); QVERIFY(Step.error_); QCOMPARE(Step.error_->category_, ErrorCategory::StaleRevision);
+            QVERIFY(QFile::exists(Path)); QVERIFY(QFile::exists(Path + ".original"));
+        } else { QCOMPARE(Step.next_, JobState::Completed); QVERIFY(!QFile::exists(Path)); }
+    }
     void changedSourceIsNotDeletedAfterWait() {
         QTemporaryDir Root;const auto Path=Root.filePath("source.txt");write(Path);Holder Owner(Path);QVERIFY(Owner.ready_["ready"].toBool());
         auto Reader=MakeNativeReadProvider(LocatorKind::Local);auto Writer=MakeNativeWritableStorage(LocatorKind::Local,Reader);auto Source=Reader->Resolve({LocatorKind::Local,Path.toStdString()},{}).get();QVERIFY(Source.HasValue());

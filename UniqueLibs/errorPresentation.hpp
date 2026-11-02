@@ -80,7 +80,7 @@ namespace hc::ui
             switch (Code) {
             case ERROR_ACCESS_DENIED: case ERROR_PRIVILEGE_NOT_HELD: return ErrorKind::AccessDenied;
             case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: return ErrorKind::NotFound;
-            case ERROR_SHARING_VIOLATION: case ERROR_LOCK_VIOLATION: return ErrorKind::InUse;
+            case ERROR_SHARING_VIOLATION: case ERROR_LOCK_VIOLATION: case ERROR_USER_MAPPED_FILE: return ErrorKind::InUse;
             case ERROR_DISK_FULL: case ERROR_HANDLE_DISK_FULL: return ErrorKind::DiskFull;
             case ERROR_CANCELLED: case ERROR_OPERATION_ABORTED: return ErrorKind::Cancelled;
             case ERROR_TIMEOUT: case WAIT_TIMEOUT: return ErrorKind::Timeout;

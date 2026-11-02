@@ -304,7 +304,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -9690,6 +9690,95 @@ private slots:
         QVERIFY(!names(Model).empty()); QCOMPARE(Model->WorkspaceLocation().nesting_.size(), 2);
         Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && Index(Inner).isValid());
         Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && Index(Name).isValid());
+    }
+    void mappedDeleteFailureUi()
+    {
+        using namespace hc::operations;
+        JobSnapshot Snapshot; Snapshot.metadata_.kind_ = JobKind::Delete;
+        Snapshot.interaction_ = InteractionRequest{"mapped-delete", InteractionKind::RetryFailure, "delete-failure:win32:5",
+            {InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::SkipAll, InteractionChoice::Cancel}};
+        int Details = 0; std::optional<InteractionChoice> Answer;
+        hc::ui::FileJobInteraction Dialog(Snapshot, QStringLiteral("영구 삭제"), [&](InteractionChoice Choice, const QString&) { Answer = Choice; }, {}, [&] { ++Details; }, main_);
+        Dialog.show(); QTRY_VERIFY(Dialog.isVisible());
+        QString Text; for (auto* Label : Dialog.findChildren<QLabel*>()) Text += Label->text();
+        QVERIFY(Text.contains(QStringLiteral("삭제 대기"))); QVERIFY(Text.contains(QStringLiteral("win32:5")));
+        auto* Usage = Dialog.findChild<QPushButton*>("hc.jobs.fileLocks"); QVERIFY(Usage && Usage->isVisible());
+        Usage->click(); QCOMPARE(Details, 1);
+        auto* Retry = Dialog.findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(InteractionChoice::Retry))); QVERIFY(Retry && Retry->isVisible());
+        Retry->click(); QCOMPARE(Answer, std::optional(InteractionChoice::Retry)); Dialog.Dismiss();
+    }
+    void zipDeleteAfterUseUi_data()
+    {
+        QTest::addColumn<QString>("Route");
+        for (const auto* Route : {"listing", "archive", "f3", "ctrlq"}) QTest::newRow(Route) << QString::fromLatin1(Route);
+    }
+    void zipDeleteAfterUseUi()
+    {
+        QFETCH(QString, Route); QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QImage Page(320, 480, QImage::Format_RGB32); Page.fill(QColor(40, 100, 180)); QVERIFY(Page.save(Directory.filePath("page.png")));
+        const auto Name = QString::fromUtf8("삭제 확인9.zip"), Path = Directory.filePath(Name);
+        hc::plugins::ArchiveUpdate Create{Path.toStdString(), Directory.path().toStdString(), {"page.png"}};
+        Create.creation_ = hc::plugins::ArchiveCreationOptions{1, false};
+        const auto Made = hc::plugins::MakeApprovedWcxBackend(hc::plugins::BuiltinSevenZipOptions())->Update(Create, {});
+        QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str());
+        const auto Workspace = main_->CaptureWorkspace(); QPointer<QDialog> Full; bool Verified = false;
+        const auto Restore = qScopeGuard([&] {
+            if (Full && Full->isVisible()) Full->close();
+            if (!Verified) if (auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host"))) {
+                Host->CloseAll(); QElapsedTimer Wait; Wait.start(); while (!Host->IsIdle() && Wait.elapsed() < 5000) QTest::qWait(10);
+            }
+            main_->RestoreWorkspace(Workspace); QThreadPool::globalInstance()->waitForDone();
+        });
+        auto* Panel = panels_.front(); auto* Target = panels_.back(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        for (auto* Current : {Panel, Target}) {
+            static_cast<CFSModel*>(model(Current))->SetProviderEnabled(true); Current->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+            QTRY_VERIFY(!model(Current)->IsLoading());
+        }
+        const auto Find = [&](const QString& Wanted) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Wanted) return Model->index(Row, 0); return QModelIndex{}; };
+        auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid);
+        const auto Entry = Model->GetFileInfo(Find(Name)); QVERIFY(Entry && Entry->storageEntry_);
+        const auto Focus = [&] {
+            Panel->sig_NotifyPanelActivated();
+            for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
+                Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+                while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Index.model() == Model && Model->GetName(Index) == Name) { Grid->EnsureKeyboardFocusOnView(); return true; }
+            }
+            return false;
+        };
+        main_->show(); QVERIFY(Focus()); QTest::qWait(150); // Let the real panel's icon/metadata requests run.
+        if (Route == "archive") {
+            Model->ChangeDirectory(Find(Name)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Find("page.png").isValid(), 10000);
+            Model->ChangeDirectory(".."); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Find(Name).isValid(), 10000);
+        } else if (Route == "f3") {
+            QVERIFY(Focus()); QTest::keyClick(QApplication::focusWidget(), Qt::Key_F3);
+            QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), 15000);
+            Full = main_->findChild<QDialog*>("hc.document.workspace"); auto* Surface = Full->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
+            QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().error_, 15000);
+            QVERIFY2(Surface->IsReady(), Surface->Snapshot().error_ ? Surface->Snapshot().error_->code_.c_str() : "viewer did not become ready");
+            QTRY_VERIFY_WITH_TIMEOUT(Surface->Details().documentState_["idle"].toBool(), 15000);
+            QVERIFY(sendWlxKey(Full, VK_ESCAPE, false)); QTRY_VERIFY_WITH_TIMEOUT(!Full || Full->isHidden(), 10000);
+        } else if (Route == "ctrlq") {
+            QVERIFY(Focus()); auto* Action = main_->findChild<QAction*>("hc.menu.hc.viewer.quick"); QVERIFY(Action); Action->trigger();
+            QTRY_VERIFY_WITH_TIMEOUT(qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex())), 10000);
+            QPointer<CQuickView> Quick = qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex()));
+            auto* Surface = Quick->findChild<QtViewerSurface*>(); QVERIFY(Surface);
+            QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().error_, 15000);
+            if (!Surface->IsReady()) {
+                QVERIFY(Surface->Snapshot().error_); QCOMPARE(Surface->Snapshot().error_->code_, std::string("viewer-no-provider"));
+                qInfo() << "Default quick view has no ZIP provider; verifying release after closing its error panel";
+            }
+            Panel->sig_NotifyPanelActivated(); Action->trigger(); QTRY_VERIFY(Quick.isNull());
+        }
+        // Do not drain pools before this check: that would hide a retained reader.
+        auto Reader = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
+        auto Writer = hc::storage::MakeNativeWritableStorage(hc::storage::LocatorKind::Local, Reader);
+        const auto Source = Reader->Resolve({hc::storage::LocatorKind::Local, Path.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
+        QElapsedTimer Elapsed; Elapsed.start(); auto Removed = Writer->Remove(Source.Value(), {});
+        const auto InitialCode = Removed.HasValue() ? std::string{} : Removed.Failure().code_;
+        while (!Removed.HasValue() && Elapsed.elapsed() < 3000) { QTest::qWait(20); Removed = Writer->Remove(Source.Value(), {}); }
+        qInfo() << "ZIP deletion after" << Route << "initial error" << QString::fromStdString(InitialCode) << "release ms" << Elapsed.elapsed();
+        QVERIFY2(Removed.HasValue(), Removed.HasValue() ? "" : Removed.Failure().code_.c_str()); QVERIFY(!QFile::exists(Path)); Verified = true;
     }
     void builtinUnEggNavigation()
     {

@@ -47,7 +47,7 @@ namespace hc::storage
             if (Code == ERROR_FILE_NOT_FOUND || Code == ERROR_PATH_NOT_FOUND) Value.category_ = ErrorCategory::NotFound;
             if (Code == ERROR_ACCESS_DENIED || Code == ERROR_PRIVILEGE_NOT_HELD || Code == ERROR_LOGON_FAILURE)
             { Value.category_ = ErrorCategory::AccessDenied; Value.userAction_ = "check-permission"; }
-            Value.retryable_ = Code == ERROR_SHARING_VIOLATION || Code == ERROR_LOCK_VIOLATION
+            Value.retryable_ = Code == ERROR_SHARING_VIOLATION || Code == ERROR_LOCK_VIOLATION || Code == ERROR_USER_MAPPED_FILE
                 || Code == ERROR_NETWORK_UNREACHABLE || Code == ERROR_BAD_NETPATH || Code == ERROR_NETNAME_DELETED
                 || Code == ERROR_SEM_TIMEOUT || Code == ERROR_NETWORK_BUSY;
             if (Code == ERROR_DISK_FULL || Code == ERROR_HANDLE_DISK_FULL) Value.userAction_ = "free-space";

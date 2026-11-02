@@ -11,6 +11,10 @@ namespace hc::operations
     using namespace storage;
     namespace
     {
+        bool FileInUse(const std::string& Code)
+        {
+            return Code == "win32:32" || Code == "win32:33" || Code == "win32:1224";
+        }
         std::u32string Scalars(const std::string& Text)
         {
             std::u32string Result;
@@ -663,7 +667,7 @@ namespace hc::operations
                 if (request_.fileLockInteractions_ && index_ < items_.size()
                     && (phase_ == Phase::Rename || phase_ == Phase::Remove)
                     && current().source_.entry_.locator_.kind_ == LocatorKind::Local
-                    && (Error.code_ == "win32:32" || Error.code_ == "win32:33")) {
+                    && FileInUse(Error.code_)) {
                     if (request_.operation_ == FileOperation::Delete && skipDeleteErrors_) return done(ItemOutcome::Status::Skipped);
                     lockError_ = Error; resumePhase_ = phase_; phase_ = Phase::LockPrompt;
                     return progress();
@@ -703,7 +707,7 @@ namespace hc::operations
             {
                 if (!Context.answer_) {
                     auto Step = progress(); Step.next_ = JobState::WaitingForUser;
-                    Step.interaction_ = InteractionRequest{"", InteractionKind::RetryFailure, (request_.operation_ == FileOperation::Delete && lockError_.code_ != "win32:32" && lockError_.code_ != "win32:33" ? "delete-failure:" : "file-in-use:") + lockError_.code_,
+                    Step.interaction_ = InteractionRequest{"", InteractionKind::RetryFailure, (request_.operation_ == FileOperation::Delete && !FileInUse(lockError_.code_) ? "delete-failure:" : "file-in-use:") + lockError_.code_,
                         {InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::Cancel}, current().source_.entry_.id_,
                         lockError_.nativePath_.empty() ? current().source_.entry_.locator_.root_ : lockError_.nativePath_, current().destination_.root_};
                     if (request_.operation_ == FileOperation::Delete) Step.interaction_->choices_.insert(Step.interaction_->choices_.end() - 1, InteractionChoice::SkipAll);
@@ -719,6 +723,7 @@ namespace hc::operations
                     if (!Fresh.HasValue() || !Fresh.Value() || Fresh.Value()->id_ != publishedDestination_->id_)
                         return terminalFailure({ErrorCategory::StaleRevision,"move-destination-changed"});
                 }
+                if (resumePhase_ == Phase::ElevationRun) return beginElevation(Context);
                 phase_ = resumePhase_;
                 auto Step = progress(); Step.next_ = JobState::Committing; return Step;
             }
@@ -825,6 +830,10 @@ namespace hc::operations
                 }
                 if (Choice != InteractionChoice::Elevate && Choice != InteractionChoice::ElevateAll) return terminalFailure({ErrorCategory::InvalidRequest, "invalid-elevation-answer"});
                 if (Choice == InteractionChoice::ElevateAll) request_.elevationApproval_->Choose(jobId_, approvalScope(), InteractionChoice::Elevate);
+                return beginElevation(Context);
+            }
+            JobStep beginElevation(const JobStepContext& Context)
+            {
                 auto Begun = request_.elevation_->Begin(elevatedRequest_, Context.operation_);
                 if (!Begun.HasValue()) return terminalFailure(Begun.Failure());
                 elevatedSession_ = std::move(Begun.Value()); elevatedBase_ = bytesDone_ - itemBytes_; elevationCommitSent_ = false;
@@ -848,10 +857,15 @@ namespace hc::operations
                 destinationCommitted_ |= Status.Value().destinationCommitted_;
                 auto Closed = elevatedSession_->Close(); elevatedSession_.reset(); cleanup_.insert(cleanup_.end(), Closed.begin(), Closed.end());
                 if (Status.Value().error_) {
-                    if (request_.fileLockInteractions_ && (Status.Value().error_->code_ == "win32:32" || Status.Value().error_->code_ == "win32:33")
+                    // A mapped file can reject disposition with access denied even
+                    // after DELETE access was granted. Elevation cannot release it.
+                    // Keep the original error and offer inspection/retry; retries
+                    // use the same verified elevated request and commit gate.
+                    if (request_.fileLockInteractions_ && (FileInUse(Status.Value().error_->code_)
+                            || (request_.operation_ == FileOperation::Delete && Status.Value().error_->code_ == "win32:5"))
                         && (elevatedRequest_.action_ == FileElevationAction::Remove || elevatedRequest_.action_ == FileElevationAction::Recycle || elevatedRequest_.action_ == FileElevationAction::Rename)) {
-                        phase_ = elevatedRequest_.action_ == FileElevationAction::Rename ? Phase::Rename : Phase::Remove;
-                        return failed(*Status.Value().error_);
+                        lockError_ = *Status.Value().error_; resumePhase_ = Phase::ElevationRun; phase_ = Phase::LockPrompt;
+                        return progress();
                     }
                     auto Failed = terminalFailure(*Status.Value().error_);
                     if (Status.Value().error_->category_ == ErrorCategory::Cancelled) Failed.next_ = JobState::Cancelled;
@@ -1323,7 +1337,7 @@ namespace hc::operations
                     const auto& Error = Removed.Failure();
                     const auto Kind = current().source_.entry_.locator_.kind_;
                     if (request_.operation_ == FileOperation::Move && (Kind == LocatorKind::Local || Kind == LocatorKind::Smb)
-                        && Error.retryable_ && (Error.code_ == "win32:32" || Error.code_ == "win32:33") && sourceRemoveRetries_ < 5) {
+                        && Error.retryable_ && FileInUse(Error.code_) && sourceRemoveRetries_ < 5) {
                         phase_ = Phase::RetryRemove;
                         auto Step = progress();
                         Step.deferFor_ = std::chrono::milliseconds(50u << sourceRemoveRetries_++);

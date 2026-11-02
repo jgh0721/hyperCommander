@@ -1,4 +1,6 @@
 ﻿#include "pluginProcess.hpp"
+#include "HyperCommanderBuiltInPlugin/SevenZip/builtinSevenZip.hpp"
+#include "pluginHost/approvedWcxBackend.hpp"
 #include "pipeChannel.hpp"
 #include "hostedViewerSession.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
@@ -147,6 +149,51 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Surface->Details().documentState_["idle"].toBool(),10000);
         QVERIFY(Surface->OpenPrepared({{Source,{}}}));QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(),20000);
         QCOMPARE(Copies.load(),0);
+    }
+    void closedBookReleasesInputWhileViewerStaysAlive_data()
+    {
+        QTest::addColumn<QString>("Extension");
+        for (const auto* Extension : {"zip", "cbz", "7z", "cb7"}) QTest::newRow(Extension) << QString::fromLatin1(Extension);
+    }
+    void closedBookReleasesInputWhileViewerStaysAlive()
+    {
+        QFETCH(QString, Extension);
+        const auto Package = QCoreApplication::applicationDirPath() + "/Addons/WLX/HyperViewer/hyperviewer.json";
+        QVERIFY(QFileInfo::exists(Package)); auto Inspected = Worker([&] { return InspectManifestFile(Package); }); QVERIFY(Inspected.HasValue());
+        QTemporaryDir Root; QVERIFY(Root.isValid()); const auto Path = Root.filePath("closed-book." + Extension);
+        const auto Bytes = QByteArray::fromBase64("UEsDBBQAAAAAAHFrYl2sgj2NSQAAAEkAAAAIAAAAcGFnZS5wbmeJUE5HDQoaCgAAAA1JSERSAAAAAgAAAAMIAgAAADaISdYAAAAQSURBVHicYzAoWABEDCgUAEw1B4FUiYMjAAAAAElFTkSuQmCCUEsBAhQAFAAAAAAAcWtiXayCPY1JAAAASQAAAAgAAAAAAAAAAAAAAIABAAAAAHBhZ2UucG5nUEsFBgAAAAABAAEANgAAAG8AAAAAAA==");
+        if (Extension == "zip" || Extension == "cbz") {
+            QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size());
+        } else {
+            { QFile File(Root.filePath("page.png")); QVERIFY(File.open(QIODevice::WriteOnly)); QVERIFY(File.write(QByteArray::fromBase64("iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAEElEQVR4nGMwKFgARAwoFABMNQeBVImDIwAAAABJRU5ErkJggg==")) > 0); }
+            ArchiveUpdate Create{Root.filePath("created.7z").toStdString(), Root.path().toStdString(), {"page.png"}}; Create.creation_ = ArchiveCreationOptions{1, false};
+            const auto Made = MakeApprovedWcxBackend(BuiltinSevenZipOptions())->Update(Create, {});
+            QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str()); QVERIFY(QFile::rename(Root.filePath("created.7z"), Path));
+        }
+        auto Provider = MakeNativeReadProvider(LocatorKind::Local);
+        auto Entry = Worker([&] { return Provider->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get(); }); QVERIFY(Entry.HasValue());
+        auto Source = std::make_shared<ProviderContentSource>(Provider, Entry.Value());
+        QWidget Main; Main.resize(900, 600); auto* Layout = new QVBoxLayout(&Main);
+        QtPluginViewerController Controller(&Main, [&] { return MakeNativeMaterializer(Root.path().toStdString()); });
+        auto* Surface = new QtPluginViewerSurface(&Controller, &Main); Layout->addWidget(Surface); Main.show();
+        const auto Drain = qScopeGuard([&] { Surface->Close(); while (!Controller.IsIdle()) QTest::qWait(10); });
+        PluginViewerOptions Options; Options.executable_ = host_; Options.manifestPath_ = Package; Options.binaryPath_ = Inspected.Value().binaryPath_;
+        Options.approval_ = {Inspected.Value().manifest_, true, false, Inspected.Value().manifest_.permissions_}; Options.defaultIniPath_ = Root.filePath("plugin.ini");
+        Surface->Open(Options, Source);
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() || Surface->Snapshot().status_ == hc::viewer::ViewerStatus::Failed, 20000);
+        QVERIFY2(Surface->IsReady(), Surface->Snapshot().error_ ? Surface->Snapshot().error_->code_.c_str() : "book viewer not ready");
+        QTRY_COMPARE_WITH_TIMEOUT(Surface->Details().documentState_["documents"].toArray().size(), 1, 10000);
+        const auto Document = Surface->Details().documentState_["documents"].toArray()[0].toObject()["documentId"].toString();
+        QVERIFY(!QFile::remove(Path)); // The open book must still own its input.
+        const auto Closed = Surface->SendDocument({{"action", "close"}, {"documentId", Document}}); QVERIFY(Closed.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->Details().documentState_["documents"].toArray().isEmpty(), 10000);
+        // A reusable viewer must not keep the initial document's separate pin.
+        // Keep its process/session running to expose accidental extra ownership.
+        QVERIFY(!Controller.IsIdle()); bool Removed = false; DWORD Code = ERROR_SUCCESS; QElapsedTimer Wait; Wait.start();
+        const auto Native = QDir::toNativeSeparators(Path).toStdWString();
+        while (!(Removed = DeleteFileW(Native.c_str())) && Wait.elapsed() < 3000) { Code = GetLastError(); QTest::qWait(20); }
+        if (!Removed) qInfo() << "Closed book Windows error" << Code << "viewer pid" << Surface->Details().host_.processId_;
+        QVERIFY(Removed);
     }
     void changedPackageRecovery()
     {
