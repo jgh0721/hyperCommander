@@ -408,7 +408,7 @@ void viewerTabEmbedding(){
     QFETCH(QStringList, Kinds);
     const auto Corpus = qEnvironmentVariable("HC_RHWP_TEST_CORPUS");
     const auto Epub = qEnvironmentVariable("HC_EPUB_READER_EPUB");
-    QVERIFY2(!Corpus.isEmpty() && !Epub.isEmpty(), "HWP and EPUB fixtures required");
+    if (Corpus.isEmpty() || Epub.isEmpty()) QSKIP("HWP and EPUB fixtures required");
     QTemporaryDir Root;
     const auto Markdown = Root.filePath("sample.md"); QVERIFY(Put(Markdown, "# Viewer tab\n\nMixed documents.\n"));
     const QMap<QString, QString> Paths{{"hwp", Corpus + "/c02.hwp"}, {"hwpx", Corpus + "/c05.hwpx"},
@@ -424,28 +424,47 @@ void viewerTabEmbedding(){
         return Sent.HasValue() && Wait([&] { return Surface.Details().commandSequence_ >= Sent.Value(); }, 10000)
             && !Surface.Details().commandError_;
     };
+    HWND Viewer = nullptr;
     QStringList Ids;
     for (qsizetype Index = 0; Index < Kinds.size(); ++Index) {
         const auto Path = Paths[Kinds[Index]];
         if (Index == 0) {
             Surface.Open(Options(), Content(Path));
             QVERIFY2(Wait([&] { return Surface.IsReady(); }, 45000), "F3 viewer did not become ready");
+            QVERIFY(Send({{"action", "present"}}));
+            QVERIFY(Wait([&] {
+                struct Search { DWORD pid_; HWND window_ = nullptr; } Found{Surface.Details().host_.processId_};
+                EnumWindows([](HWND Candidate, LPARAM Data) -> BOOL {
+                    auto* Found = reinterpret_cast<Search*>(Data); DWORD Pid = 0; GetWindowThreadProcessId(Candidate, &Pid);
+                    wchar_t Title[256]{}; GetWindowTextW(Candidate, Title, 256);
+                    if (Pid == Found->pid_ && IsWindowVisible(Candidate) && QString::fromWCharArray(Title).startsWith("HyperViewer")) {
+                        Found->window_ = Candidate; return FALSE;
+                    }
+                    return TRUE;
+                }, reinterpret_cast<LPARAM>(&Found));
+                Viewer = Found.window_; return Viewer != nullptr;
+            }));
         } else QVERIFY(Send({{"action", "open"}, {"path", Path}}));
         QVERIFY(Wait([&] {
             const auto State = Surface.Details().documentState_;
-            return Doc(State, State["activeDocumentId"].toString())["lifecycle"] == "ready";
+            return State["documents"].toArray().size() == Index + 1
+                && !Ids.contains(State["activeDocumentId"].toString())
+                && Doc(State, State["activeDocumentId"].toString())["lifecycle"] == "ready";
         }, 45000));
         const auto State = Surface.Details().documentState_; Ids << State["activeDocumentId"].toString();
         QCOMPARE(State["documents"].toArray().size(), Index + 1);
     }
     for (const auto& Size : {QSize(900, 650), QSize(1180, 850)}) {
-        Surface.resize(Size); QCoreApplication::processEvents();
+        // FullViewer presents a separate host window; the Qt surface is only its controller.
+        const auto Scale = Surface.devicePixelRatioF();
+        QVERIFY(SetWindowPos(Viewer, nullptr, 60, 60, qRound(Size.width() * Scale), qRound(Size.height() * Scale), SWP_NOZORDER | SWP_NOACTIVATE));
+        QCoreApplication::processEvents();
         for (const auto& Id : Ids) {
             QVERIFY(Send({{"action", "activate"}, {"documentId", Id}}));
-            QCOMPARE(Surface.Details().documentState_["activeDocumentId"].toString(), Id);
-            QCOMPARE(Doc(Surface.Details().documentState_, Id)["lifecycle"].toString(), QString("ready"));
+            QTRY_COMPARE_WITH_TIMEOUT(Surface.Details().documentState_["activeDocumentId"].toString(), Id, 10000);
+            QTRY_COMPARE_WITH_TIMEOUT(Doc(Surface.Details().documentState_, Id)["lifecycle"].toString(), QString("ready"), 10000);
             bool FramedHwp = false;
-            EnumChildWindows(reinterpret_cast<HWND>(Surface.winId()), [](HWND Child, LPARAM Data) -> BOOL {
+            EnumChildWindows(Viewer, [](HWND Child, LPARAM Data) -> BOOL {
                 wchar_t Class[256]{}; GetClassNameW(Child, Class, 256);
                 const auto Name = QString::fromWCharArray(Class);
                 if (Name.contains("HwpOpenWindow") || Name.contains("HwpSdiWindow")) {
@@ -458,10 +477,18 @@ void viewerTabEmbedding(){
             QVERIFY(!FramedHwp);
             const auto Evidence = qEnvironmentVariable("HC_RHWP_TEST_EVIDENCE");
             if (!Evidence.isEmpty() && Size.width() == 1180) {
-                Surface.raise(); Surface.activateWindow(); QTest::qWait(100);
-                const auto Top = Surface.mapToGlobal(QPoint());
+                // Avoid repeated title-bar clicks becoming a double-click/maximize gesture.
+                if (GetAncestor(GetForegroundWindow(), GA_ROOT) != Viewer) QVERIFY(Foreground(Viewer));
+                QTest::qWait(200);
+                GUITHREADINFO Thread{sizeof(GUITHREADINFO)};
+                QVERIFY(GetGUIThreadInfo(GetWindowThreadProcessId(Viewer, nullptr), &Thread));
+                QVERIFY(Thread.hwndFocus && GetAncestor(Thread.hwndFocus, GA_ROOT) == Viewer);
                 const auto Name = QString::fromLatin1(QTest::currentDataTag()) + "-" + Kinds[Ids.indexOf(Id)] + ".png";
-                QVERIFY(Surface.screen()->grabWindow(0, Top.x(), Top.y(), Surface.width(), Surface.height()).save(Evidence + '/' + Name));
+                // Capture the composed desktop: a parent HWND DC omits GPU/cross-process child surfaces.
+                RECT Bounds{}; QVERIFY(GetWindowRect(Viewer, &Bounds));
+                const auto Dpr = Surface.screen()->devicePixelRatio();
+                QVERIFY(Surface.screen()->grabWindow(0, qRound(Bounds.left / Dpr), qRound(Bounds.top / Dpr),
+                    qRound((Bounds.right - Bounds.left) / Dpr), qRound((Bounds.bottom - Bounds.top) / Dpr)).save(Evidence + '/' + Name));
             }
         }
     }
