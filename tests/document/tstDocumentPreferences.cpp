@@ -62,6 +62,94 @@ class DocumentPreferencesTests : public QObject {
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
 private slots:
+    void screenLineHome_data()
+    {
+        QTest::addColumn<int>("WrapMode");
+        QTest::addColumn<bool>("ReadOnly");
+        QTest::addColumn<QString>("Unit");
+        for (const int Wrap : {SC_WRAP_NONE, SC_WRAP_WORD, SC_WRAP_CHAR, SC_WRAP_WHITESPACE})
+            for (const bool ReadOnly : {false, true})
+                for (const QString& Unit : {QStringLiteral("runtime을  "), QStringLiteral("한글문장끝"), QStringLiteral("abc\tdef ")})
+                    QTest::newRow(qPrintable(QString("%1-%2-%3").arg(Wrap).arg(ReadOnly).arg(Unit))) << Wrap << ReadOnly << Unit;
+    }
+    void screenLineHome()
+    {
+        QFETCH(int, WrapMode);
+        QFETCH(bool, ReadOnly);
+        QFETCH(QString, Unit);
+        QWidget Host;
+        ScintillaQtDirectBackend Backend(&Host);
+        auto* Input = Backend.widget();
+        Input->resize(320, 700);
+        const QString Line = QStringLiteral("    ") + Unit.repeated(12);
+        const QByteArray Bytes = Line.toUtf8();
+        Backend.setText(Line + QStringLiteral("\r\nnext\r\n"));
+        Backend.Send(SCI_SETWRAPMODE, WrapMode);
+        Backend.setReadOnly(ReadOnly);
+        Host.show();
+        Input->show();
+        Input->setFocus();
+        QCoreApplication::processEvents();
+
+        // Discover real screen rows without issuing the Home command under test.
+        QList<qintptr> Starts{0};
+        auto LastY = Backend.Send(SCI_POINTYFROMPOSITION, 0, 0);
+        for (auto Pos = Backend.Send(SCI_POSITIONAFTER, 0); Pos < Bytes.size(); Pos = Backend.Send(SCI_POSITIONAFTER, Pos))
+        {
+            const auto Y = Backend.Send(SCI_POINTYFROMPOSITION, 0, Pos);
+            if (Y != LastY) Starts.append(Pos);
+            LastY = Y;
+        }
+        QVERIFY(WrapMode == SC_WRAP_NONE || Starts.size() > 1);
+        for (qsizetype Row = 0; Row < Starts.size(); ++Row)
+        {
+            const auto Start = Starts[Row];
+            const qintptr End = Row + 1 < Starts.size() ? Starts[Row + 1] : Bytes.size();
+            Backend.Send(SCI_GOTOPOS, Start);
+            const auto Y = Backend.Send(SCI_POINTYFROMPOSITION, 0, Start);
+            QTest::keyClick(Input, Qt::Key_End);
+            QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), End);
+            QCOMPARE(Backend.Send(SCI_POINTYFROMPOSITION, 0, End), Y);
+            QTest::keyClick(Input, Qt::Key_Home);
+            QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), Start);
+            QCOMPARE(Backend.Send(SCI_GETANCHOR), Start);
+            QCOMPARE(Backend.Send(SCI_POINTYFROMPOSITION, 0, Start), Y);
+            QTest::keyClick(Input, Qt::Key_Home);
+            QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), Start);
+
+            // A freshly positioned caret inside the row must behave the same.
+            const auto Inside = Backend.Send(SCI_POSITIONBEFORE, End);
+            Backend.Send(SCI_GOTOPOS, Inside);
+            QTest::keyClick(Input, Qt::Key_Home);
+            QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), Start);
+
+            Backend.Send(SCI_GOTOPOS, Start);
+            QTest::keyClick(Input, Qt::Key_End);
+            QTest::keyClick(Input, Qt::Key_Home, Qt::ShiftModifier);
+            QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), Start);
+            QCOMPARE(Backend.Send(SCI_GETANCHOR), End);
+            QCOMPARE(Backend.Send(SCI_GETSELECTIONSTART), Start);
+            QCOMPARE(Backend.Send(SCI_GETSELECTIONEND), End);
+            QTest::keyClick(Input, Qt::Key_Home, Qt::ShiftModifier);
+            QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), Start);
+            QCOMPARE(Backend.Send(SCI_GETANCHOR), End);
+
+            // Preserve an anchor outside the current display row.
+            Backend.Send(SCI_SETSEL, Backend.Send(SCI_GETLENGTH), Inside);
+            QTest::keyClick(Input, Qt::Key_Home, Qt::ShiftModifier);
+            QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), Start);
+            QCOMPARE(Backend.Send(SCI_GETANCHOR), Backend.Send(SCI_GETLENGTH));
+        }
+        QTest::keyClick(Input, Qt::Key_End, Qt::ControlModifier);
+        QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), Backend.Send(SCI_GETLENGTH));
+        QTest::keyClick(Input, Qt::Key_Home, Qt::ControlModifier | Qt::ShiftModifier);
+        QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), qintptr(0));
+        QCOMPARE(Backend.Send(SCI_GETANCHOR), Backend.Send(SCI_GETLENGTH));
+        QTest::keyClick(Input, Qt::Key_Home, Qt::ControlModifier);
+        QCOMPARE(Backend.Send(SCI_GETCURRENTPOS), qintptr(0));
+        QCOMPARE(Backend.Send(SCI_GETANCHOR), qintptr(0));
+        QCOMPARE(Backend.text(), Line + QStringLiteral("\r\nnext\r\n"));
+    }
     void completeLexerCatalogAndDetection()
     {
         const auto& Registry = TextLexerRegistry::instance();

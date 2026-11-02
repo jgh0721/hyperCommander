@@ -132,6 +132,11 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 {
 	m_editorFont = m_editor->font();
 
+    // Home follows the display row, including a caret at its wrapped end.
+    m_editor->send(sciMessage(SCI_ASSIGNCMDKEY), SCK_HOME, SCI_HOMEDISPLAY);
+    m_editor->send(sciMessage(SCI_ASSIGNCMDKEY), SCK_HOME | (SCMOD_SHIFT << 16),
+        SCI_HOMEDISPLAYEXTEND);
+
 	// 리사이즈 시 깜빡임 방지: 시스템 배경 지움 비활성화
 	// Scintilla paints the viewport only. The scroll area must still erase
 	// exposed edges and the corner between its two scroll bars.
