@@ -7,6 +7,7 @@
 #include <Windows.h>
 #include <winioctl.h>
 #include "nativeStorageRevision.hpp"
+#include "nativeCopyCapabilities.hpp"
 #include <Aclapi.h>
 #include <QCryptographicHash>
 #include <QScopeGuard>
@@ -417,6 +418,13 @@ namespace hc::storage
                 if (Source.directory_) return Error{ErrorCategory::Unsupported, "copy-extras-files-only", id_};
                 auto Path = Normalize(Source.locator_, Source.locator_.kind_, Source.id_.providerId_);
                 if (!Path.HasValue()) return Path.Failure();
+                // Guard direct sessions and administrator/recovery callers too.
+                const auto Input = native::CopyExtrasAt(Path.Value().path_);
+                const auto Output = native::CopyExtrasAt(path_.root_);
+                Options.acl_ = Options.acl_ && Input.acl_ && Output.acl_;
+                Options.streams_ = Options.streams_ && Input.streams_ && Output.streams_;
+                options_ = Options;
+                if (!Options.acl_ && !Options.streams_) return Unit{};
                 auto Parents = PinParents(Path.Value(), Source.id_.providerId_);
                 if (!Parents.HasValue()) return Parents.Failure();
                 sourceParents_ = std::move(Parents.Value()); sourcePath_ = Path.Value().path_;
@@ -819,6 +827,12 @@ namespace hc::storage
                 return std::optional<EntrySnapshot>{std::move(Entry.Value())};
             }
             CopyCapabilities CopySupport() const override { return {true, true, true, true}; }
+            Result<CopyCapabilities> CopySupportAt(Locator At, OperationContext Context) override {
+                if (const auto Error = Context.Check(id_)) return *Error;
+                const auto Path = Normalize(At, kind_, id_); if (!Path.HasValue()) return Path.Failure();
+                const auto Extras = native::CopyExtrasAt(Path.Value().root_);
+                return CopyCapabilities{true, true, Extras.acl_, Extras.streams_};
+            }
             bool SupportsParallelCopies() const override { return kind_ == LocatorKind::Local; }
             std::size_t PreferredCopyWorkers(Locator Source, Locator Destination) const override
             {
@@ -881,6 +895,10 @@ namespace hc::storage
                 auto Parents = PinParents(Path.Value(), id_);
                 if (!Parents.HasValue()) return Parents.Failure();
                 const auto Temp = TemporaryName(std::filesystem::path(Path.Value().path_).parent_path().wstring(), L"stage");
+                if (Options.acl_ || Options.streams_) {
+                    const auto Extras = native::CopyExtrasAt(Path.Value().root_);
+                    Options.acl_ = Options.acl_ && Extras.acl_; Options.streams_ = Options.streams_ && Extras.streams_;
+                }
                 const bool RecoveryRead = Context.writeCheckpoint_ && native::NeedsContentIdentity(Parents.Value().back().value_, Path.Value().path_);
                 Handle File(CreateFileW(Temp.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | READ_CONTROL | DELETE | ((Options.verify_ || RecoveryRead) ? GENERIC_READ : 0) | (Options.acl_ ? WRITE_DAC : 0), FILE_SHARE_READ, nullptr,
                     CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));

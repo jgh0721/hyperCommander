@@ -5,6 +5,7 @@
 #include <thread>
 #include <atomic>
 #include "nativeStorageRevision.hpp"
+#include "nativeCopyCapabilities.hpp"
 #include "mappedDriveRecovery.hpp"
 #include <lm.h>
 #include <winnetwk.h>
@@ -275,6 +276,13 @@ namespace hc::storage
             explicit NativeProvider(LocatorKind Kind) : kind_(Kind), id_{Kind == LocatorKind::Smb ? "smb" : "local"}, session_(Session()) {}
             ProviderId Id() const override { return id_; }
             bool SupportsParallelReads() const override { return kind_ == LocatorKind::Local; }
+            Task<CopyExtras> CopyExtrasAt(Locator At, OperationContext Context) override {
+                return Run<CopyExtras>([At = std::move(At), Context, Id = id_, Kind = kind_]() -> Result<CopyExtras> {
+                    if (const auto Failure = Context.Check(Id)) return *Failure;
+                    if (At.kind_ != Kind || At.root_.empty() || !At.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "locator-kind", Id};
+                    return native::CopyExtrasAt(FilePath(At.root_));
+                });
+            }
             Result<EntrySnapshot> BindSnapshot(EntrySnapshot Entry) const {
                 if (Entry.locator_.kind_ != kind_ || !Entry.locator_.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "native-snapshot-kind"};
                 Entry.id_.providerId_ = id_; Entry.id_.key_ = session_ + Serialize(Entry.locator_);

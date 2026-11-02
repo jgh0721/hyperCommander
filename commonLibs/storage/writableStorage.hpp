@@ -81,6 +81,9 @@ namespace hc::storage
         { return Error{ErrorCategory::Unsupported, "metadata-patch-unavailable", Id()}; }
         virtual Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context) = 0;
         virtual CopyCapabilities CopySupport() const { return {}; }
+        // Engine support above is path independent. Endpoint support may differ
+        // across local volumes, SMB shares and redirected RDP drives.
+        virtual Result<CopyCapabilities> CopySupportAt(Locator, OperationContext) { return CopySupport(); }
         virtual bool SupportsParallelCopies() const { return false; }
         virtual std::size_t PreferredCopyWorkers(Locator, Locator) const { return 1; }
         virtual bool CanProduceContent(OperationContext) const { return false; }

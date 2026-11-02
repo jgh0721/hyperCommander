@@ -326,6 +326,10 @@ namespace hc::storage
         // Independent read sessions may be owned by different copy workers.
         virtual bool SupportsParallelReads() const { return false; }
         virtual ProviderCapabilities Capabilities() const { return {}; }
+        // Optional native metadata must be available from the source endpoint,
+        // not merely implemented by the destination's write engine.
+        struct CopyExtras { bool acl_ = false, streams_ = false; };
+        virtual Task<CopyExtras> CopyExtrasAt(Locator, OperationContext) { return Ready<CopyExtras>(CopyExtras{}); }
         virtual Task<SupportDecision> Supports(Operation Request, OperationContext Context) = 0;
         virtual Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext Context) = 0;
         virtual Task<EntrySnapshot> Stat(ResourceId Resource, OperationContext Context) = 0;

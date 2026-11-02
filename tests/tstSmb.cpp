@@ -3969,6 +3969,60 @@ private slots:
         QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_));
     }
 
+    void todoBugNetworkTransferTotalsUi_data()
+    {
+        QTest::addColumn<bool>("Redirected"); QTest::addColumn<bool>("Manifest");
+        QTest::newRow("local-file") << false << false;
+        QTest::newRow("local-selection") << false << true;
+        QTest::newRow("rdp-file") << true << false;
+        QTest::newRow("rdp-selection") << true << true;
+    }
+    void todoBugNetworkTransferTotalsUi()
+    {
+        using namespace hc::operations; using namespace hc::storage; using namespace hc::settings;
+        QFETCH(bool, Redirected); QFETCH(bool, Manifest);
+        const auto Share = qEnvironmentVariable("HC_TEST_RDP_SHARE");
+        if (Redirected && Share.isEmpty()) QSKIP("Set HC_TEST_RDP_SHARE for owned RDP transfer UI fixtures");
+        QVERIFY(!Share.contains('/') && !Share.contains('\\'));
+        QTemporaryDir SourceRoot(Redirected ? QString("//tsclient/%1/hc-progress-XXXXXX").arg(Share) : QDir::tempPath() + "/hc-progress-XXXXXX"), Destination;
+        QVERIFY(SourceRoot.isValid() && Destination.isValid());
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); });
+        auto Options = Settings.Read(Section::Options).toObject(); Options["folderSizeBeforeOperations"] = false;
+        Options["jobCloseOnSuccess"] = false; Options["saveJobProgress"] = false;
+        QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit());
+        const QByteArray Payload(4 * 1024 * 1024 + 17, 'R');
+        QFile Input(SourceRoot.filePath("transfer.bin")); QVERIFY(Input.open(QIODevice::WriteOnly)); QCOMPARE(Input.write(Payload), Payload.size()); Input.close();
+        const auto Kind = Redirected ? LocatorKind::Smb : LocatorKind::Local;
+        auto Reader = MakeNativeReadProvider(Kind); auto Writer = MakeNativeWritableStorage(Kind, Reader);
+        const Locator Source{Kind, QDir::toNativeSeparators(Input.fileName()).toStdString()};
+        auto Entry = Reader->Resolve(Source, {}).get(); QVERIFY(Entry.HasValue());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move;
+        Request.sources_ = {{Entry.Value(), Reader, Writer}};
+        if (Manifest) {
+            auto Selection = std::make_shared<R9Manifest>(); Selection->entries_ = {Entry.Value()}; Selection->provider_ = Reader;
+            Request.selection_ = Selection; Request.selectionRoot_ = {Kind, QDir::toNativeSeparators(SourceRoot.path()).toStdString()};
+            Request.selectionWriter_ = Writer; Request.sources_.clear();
+        }
+        Request.destination_ = {LocatorKind::Local, QDir::toNativeSeparators(Destination.path()).toStdString()};
+        Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
+        Request.copyOptions_ = {true, true, true, true}; Request.bytesPerSecondLimit_ = 2 * 1024 * 1024;
+        OperationContext Context; Context.maxReadBytes_ = 128 * 1024;
+        QWidget Window; FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        const auto Started = Jobs.Submit(std::move(Request), Context); QVERIFY(Started.HasValue());
+        auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Dialog);
+        auto* Bar = Dialog->findChild<QProgressBar*>("hc.jobs.overallProgress");
+        auto* Metrics = Dialog->findChild<QLabel*>("hc.jobs.metrics"); auto* Overall = Dialog->findChild<QLabel*>("hc.jobs.overallMetrics");
+        QVERIFY(Bar && Metrics && Overall);
+        QTRY_VERIFY(Bar->maximum() > 0 && Bar->value() > 0 && Bar->value() < Bar->maximum());
+        QVERIFY(Dialog->windowTitle().contains(QStringLiteral("예정 1개"))); QVERIFY(!Overall->text().contains(QStringLiteral("집계 중")));
+        QCOMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.bytesTotal_.value_or(0), uint64_t(Payload.size()));
+        QTRY_VERIFY(Metrics->text().contains(QStringLiteral("남은 시간 약")));
+        QVERIFY(SaveR9Dialog(*Dialog, "network-transfer-" + QString::fromLatin1(QTest::currentDataTag())));
+        QTRY_COMPARE_WITH_TIMEOUT(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Completed, 15000);
+        QVERIFY(!QFileInfo::exists(Input.fileName()));
+        QFile Output(Destination.filePath("transfer.bin")); QVERIFY(Output.open(QIODevice::ReadOnly)); QCOMPARE(Output.readAll(), Payload); Output.close();
+    }
     void r21TransferProgressUi()
     {
         using namespace hc::operations; using namespace hc::settings;
@@ -4002,7 +4056,7 @@ private slots:
         QTRY_VERIFY(Graph->bytesDone()>0); QTRY_VERIFY(Bar->maximum()>0 && Bar->value()>0); QVERIFY(Graph->totalBytes()==16*1024*1024);
         QVERIFY(Dialog->findChild<QLabel*>("hc.jobs.overallMetrics")->text().contains("MiB")); QVERIFY(!Metrics->text().contains(QStringLiteral("미상"))); QVERIFY(!Details->isVisible());
                 auto* Destination = Dialog->findChild<QLabel*>("hc.jobs.destination.path"); QVERIFY(Destination);
-        QVERIFY(Destination->text().contains("D:/Qt/output")); QVERIFY(!Destination->text().contains("hc-job-"));
+        QVERIFY(QDir::fromNativeSeparators(Destination->text()).contains("D:/Qt/output")); QVERIFY(!Destination->text().contains("hc-job-"));
         const auto Top = [Dialog](QWidget* Item) { return Item->mapTo(Dialog, QPoint()).y(); };
         const auto Bottom = [&](QWidget* Item) { return Top(Item) + Item->height() - 1; };
         const auto Before = [&](QWidget* Left, QWidget* Right) {

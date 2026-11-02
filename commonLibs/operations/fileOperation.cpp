@@ -56,6 +56,14 @@ namespace hc::operations
             return !Name.empty() && Name != "." && Name != ".." && Name.find_first_of("/\\:") == std::string::npos
                 && Name.find('\0') == std::string::npos;
         }
+        void AddListedFileBytes(std::optional<std::uint64_t>& Total, const EntrySnapshot& Entry, const std::string& Pattern)
+        {
+            if (!Total) return;
+            if (Entry.directory_ || (Entry.attributes_ & 0x400)) { Total.reset(); return; }
+            if (!Matches(Entry.name_, Pattern)) return;
+            if (Entry.size_ > std::numeric_limits<std::uint64_t>::max() - *Total) { Total.reset(); return; }
+            *Total += Entry.size_;
+        }
         std::string& EntryPath(Locator& At) { return At.kind_ == LocatorKind::Archive && !At.nesting_.empty() ? At.nesting_.back().entry_ : At.root_; }
         Locator Child(Locator Parent, const std::string& Name)
         {
@@ -152,6 +160,12 @@ namespace hc::operations
         public:
             explicit FileTask(FileOperationRequest Request) : request_(std::move(Request))
             {
+                // Disabling recursive discovery must not discard file sizes
+                // already captured by the selection, including RDP listings.
+                if (request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move) {
+                    listedBytes_ = 0;
+                    for (const auto& Source : request_.sources_) AddListedFileBytes(listedBytes_, Source.entry_, request_.includePattern_);
+                }
                 const bool Native = std::ranges::all_of(request_.sources_, [](const auto& Source) {
                         return (Source.entry_.locator_.kind_ == LocatorKind::Local || Source.entry_.locator_.kind_ == LocatorKind::Smb)
                             && !Source.reader_->UsesOrderedReads();
@@ -254,10 +268,10 @@ namespace hc::operations
                     }
                     auto WriteContext = Context.operation_; WriteContext.expectedWriteBytes_ = current().source_.entry_.size_;
                     WriteContext.producingContent_ = producer_.has_value();
-                    auto Created = request_.destinationWriter_->BeginCopy(current().destination_, expected_, request_.copyOptions_, WriteContext);
+                    auto Created = request_.destinationWriter_->BeginCopy(current().destination_, expected_, effectiveCopyOptions_, WriteContext);
                     if (!Created.HasValue()) return failed(Created.Failure());
                     session_ = std::move(Created.Value());
-                    auto Configured = session_->ConfigureCopy(current().source_.entry_, request_.copyOptions_, WriteContext);
+                    auto Configured = session_->ConfigureCopy(current().source_.entry_, effectiveCopyOptions_, WriteContext);
                     if (!Configured.HasValue()) return failed(Configured.Failure());
                     phase_ = producer_ ? Phase::Produce : Phase::Read;
                     return progress();
@@ -620,6 +634,10 @@ namespace hc::operations
                 // stream copy never hides the planned total.
                 Step.progress_ = JobProgress{bytesDone_, bytesTotal_ + extraBytes_, index_ < items_.size() ? current().source_.entry_.name_ : std::string{}};
                 if (phase_ == Phase::Preparing || !request_.calculateSizeBefore_) Step.progress_->bytesTotal_.reset();
+                if (listedBytes_) {
+                    Step.progress_->bytesTotal_ = (planningFinished_ ? bytesTotal_ : *listedBytes_) + extraBytes_;
+                    Step.progress_->plannedItems_ = request_.sources_.size();
+                }
                 if (planningFinished_ || request_.operation_ == FileOperation::MakeDirectory) Step.progress_->plannedItems_ = request_.operation_ == FileOperation::Move
                     ? std::ranges::count_if(items_, [](const auto& Item) { return !Item.source_.entry_.directory_ || Item.removeDirectory_; }) : items_.size();
                 if (request_.operation_ == FileOperation::Delete) {
@@ -763,6 +781,7 @@ namespace hc::operations
                 partialOutcome_.reset(); publishedDestination_.reset();
                 session_.reset(); stream_.reset(); producer_.reset(); chunk_ = {}; itemBytes_ = 0; destinationCommitted_ = false;
                 ++index_; readOnlyAnswered_ = false; sourceRemoveRetries_ = 0;
+                copyOptionsResolved_ = false;
                 phase_ = Phase::Begin;
                 if (index_ == items_.size()) {
                     if (streaming_ && !planningFinished_) { phase_ = Phase::Preparing; Step.next_ = JobState::Preparing; }
@@ -775,7 +794,8 @@ namespace hc::operations
                 FileElevationRequest Request; Request.jobId_ = jobId_;
                 const auto& Item = items_[index_];
                 if (!Item.source_.entry_.locator_.root_.empty()) { Request.source_ = Item.source_.entry_; Request.sourceReader_ = Item.source_.reader_; }
-                Request.destination_ = Item.destination_; Request.expected_ = expected_; Request.copyOptions_ = request_.copyOptions_;
+                Request.destination_ = Item.destination_; Request.expected_ = expected_;
+                Request.copyOptions_ = copyOptionsResolved_ ? effectiveCopyOptions_ : request_.copyOptions_;
                 Request.maxBytes_ = request_.maxBytes_ - (bytesDone_ - itemBytes_); Request.bytesPerSecondLimit_ = request_.bytesPerSecondLimit_;
                 Request.allowReadOnlyRemoval_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_ || readOnlyAnswered_;
                 if (destinationCommitted_ && request_.operation_ == FileOperation::Move && !Item.removeDirectory_) {
@@ -1136,6 +1156,19 @@ namespace hc::operations
                     current().preparationError_.reset(); ++verifiedItems_;
                     return progress();
                 }
+                if ((request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move)
+                    && !Removing && !current().source_.entry_.directory_ && !copyOptionsResolved_) {
+                    effectiveCopyOptions_ = request_.copyOptions_;
+                    if (effectiveCopyOptions_.acl_ || effectiveCopyOptions_.streams_) {
+                        auto Input = current().source_.reader_->CopyExtrasAt(current().source_.entry_.locator_, Context).get();
+                        if (!Input.HasValue()) return failed(Input.Failure());
+                        auto Output = request_.destinationWriter_->CopySupportAt(current().destination_, Context);
+                        if (!Output.HasValue()) return failed(Output.Failure());
+                        effectiveCopyOptions_.acl_ = effectiveCopyOptions_.acl_ && Input.Value().acl_ && Output.Value().acl_;
+                        effectiveCopyOptions_.streams_ = effectiveCopyOptions_.streams_ && Input.Value().streams_ && Output.Value().streams_;
+                    }
+                    copyOptionsResolved_ = true;
+                }
                 const auto Kind = Removing ? request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Recycle ? Mutation::Recycle : Mutation::Remove : Renaming ? Mutation::Rename
                     : request_.operation_ == FileOperation::MakeDirectory || current().source_.entry_.directory_ ? Mutation::MakeDirectory : Mutation::CreateContent;
                 const auto Supported = Writer->Supports(Kind, Removing ? current().source_.entry_.locator_ : current().destination_, Context);
@@ -1391,6 +1424,9 @@ namespace hc::operations
             std::size_t index_ = 0;
             std::uint32_t sourceRemoveRetries_ = 0;
             std::uint64_t bytesTotal_ = 0, bytesDone_ = 0, itemBytes_ = 0, extraBytes_ = 0;
+            std::optional<std::uint64_t> listedBytes_;
+            CopyOptions effectiveCopyOptions_;
+            bool copyOptionsResolved_ = false;
             bool replaceAllowed_ = false, destinationCommitted_ = false;
             std::optional<EntrySnapshot> conflictEntry_;
             Locator automaticOriginal_, automaticTarget_;
@@ -1449,6 +1485,29 @@ namespace hc::operations
                 }
                 JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{}; Step.progress_->deletedFiles_ = 0; return Step;
             }
+            if (request_.operation_ != FileOperation::Delete && !selectionSummarized_) {
+                // Read only bounded pages of the immutable selection metadata.
+                // No network Stat or recursive directory walk is needed for a
+                // flat file selection. A directory keeps its total unknown.
+                auto Page = request_.selection_->Read(summaryOffset_, 256, Context.operation_);
+                if (!Page.HasValue()) return failed(Page.Failure());
+                if (Page.Value().entries_.empty() || Page.Value().entries_.size() > 256
+                    || Page.Value().entries_.size() > request_.selection_->Count() - summaryOffset_)
+                    return failed({ErrorCategory::Internal, "selection-no-progress"});
+                for (const auto& Entry : Page.Value().entries_) {
+                    if (Entry.id_.providerId_ != request_.selection_->Provider()->Id() || !SafeName(Entry.name_)
+                        || Child(request_.selectionRoot_, Entry.name_) != Entry.locator_)
+                        return failed({ErrorCategory::InvalidRequest, "selection-container-mismatch"});
+                    AddListedFileBytes(listedBytes_, Entry, request_.includePattern_);
+                }
+                summaryOffset_ += Page.Value().entries_.size();
+                selectionSummarized_ = !listedBytes_ || summaryOffset_ == request_.selection_->Count();
+                JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{}; Step.progress_->phase_ = JobPhase::Preparing;
+                if (selectionSummarized_ && listedBytes_) {
+                    Step.progress_->bytesTotal_ = listedBytes_; Step.progress_->plannedItems_ = request_.selection_->Count();
+                }
+                return Step;
+            }
             if (inner_) {
                 if (Context.answer_ && Context.answer_->choice_ == InteractionChoice::ConfirmAll) request_.readOnly_ = ReadOnlyPolicy::Allow;
                 auto Step = inner_->Advance(Context);
@@ -1456,10 +1515,18 @@ namespace hc::operations
                 if (Step.replaceItem_) *Step.replaceItem_ += outcomeBase_;
                 if (Step.progress_) {
                     innerBytes_ = Step.progress_->bytesDone_;
+                    if (listedBytes_ && innerListedBytes_ && Step.progress_->bytesTotal_ && *Step.progress_->bytesTotal_ >= *innerListedBytes_)
+                        innerExtraBytes_ = *Step.progress_->bytesTotal_ - *innerListedBytes_;
                     Step.progress_->bytesDone_ += completedBytes_; Step.progress_->bytesTotal_.reset();
                     // Delete uses one globally validated selection plan. Other
                     // operations still coordinate independent root batches.
                     if (request_.operation_ != FileOperation::Delete) Step.progress_->plannedItems_.reset();
+                    if (request_.operation_ != FileOperation::Delete && listedBytes_) {
+                        // Child totals describe one root/page. Keep the full
+                        // selection total and accumulate copied extra streams.
+                        Step.progress_->bytesTotal_ = *listedBytes_ + completedExtraBytes_ + innerExtraBytes_;
+                        Step.progress_->plannedItems_ = request_.selection_->Count();
+                    }
                 }
                 if (Step.next_ == JobState::Failed && Step.error_ && Step.error_->category_ == ErrorCategory::Cancelled) {
                     Step.next_ = JobState::Cancelled; return Step;
@@ -1472,6 +1539,7 @@ namespace hc::operations
                     }
                     Step.next_ = JobState::Running; Context.answer_.reset();
                     completedBytes_ += innerBytes_; innerBytes_ = 0;
+                    completedExtraBytes_ += innerExtraBytes_; innerExtraBytes_ = 0;
                 }
                 return Step;
             }
@@ -1498,6 +1566,8 @@ namespace hc::operations
                 if (Regular) {
                     auto Request = request_; Request.selection_.reset(); Request.sources_.clear(); Request.continueSelectedFiles_ = true;
                     for (const auto& Entry : Page.Value().entries_) Request.sources_.push_back({Entry, SelectedReader, request_.selectionWriter_});
+                    innerListedBytes_ = 0;
+                    for (const auto& Entry : Page.Value().entries_) AddListedFileBytes(innerListedBytes_, Entry, request_.includePattern_);
                     current_ = Page.Value().entries_.front();
                     auto Prepared = PrepareFileOperation(std::move(Request), Context.operation_);
                     if (!Prepared.HasValue()) return failed(Prepared.Failure());
@@ -1515,6 +1585,7 @@ namespace hc::operations
                 return failed({ErrorCategory::InvalidRequest, "selection-container-mismatch"});
             auto Request = request_; Request.selection_.reset(); Request.confirmDelete_ = false;
             Request.sources_ = {{current_, Reader, request_.selectionWriter_}};
+            innerListedBytes_ = 0; AddListedFileBytes(innerListedBytes_, current_, request_.includePattern_);
             auto Prepared = PrepareFileOperation(std::move(Request), Context.operation_);
             if (!Prepared.HasValue()) return failed(Prepared.Failure());
             inner_ = std::move(Prepared.Value().task_); outcomeBase_ = emitted_;
@@ -1532,6 +1603,11 @@ namespace hc::operations
         EntrySnapshot current_;
         uint64_t offset_ = 0;
         uint64_t completedBytes_ = 0, innerBytes_ = 0;
+        uint64_t summaryOffset_ = 0;
+        uint64_t completedExtraBytes_ = 0, innerExtraBytes_ = 0;
+        std::optional<uint64_t> listedBytes_ = 0;
+        std::optional<uint64_t> innerListedBytes_;
+        bool selectionSummarized_ = false;
         size_t emitted_ = 0, outcomeBase_ = 0;
         bool confirmed_ = false;
         std::vector<Error> cleanup_;
@@ -1561,7 +1637,7 @@ namespace hc::operations
         if (Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move) {
             if (!Request.destinationWriter_) return Error{ErrorCategory::InvalidRequest, "missing-destination-writer"};
             const auto Support = Request.destinationWriter_->CopySupport();
-            if ((Request.copyOptions_.verify_ && !Support.verify_) || (Request.copyOptions_.acl_ && !Support.acl_) || (Request.copyOptions_.streams_ && !Support.streams_))
+            if (Request.copyOptions_.verify_ && !Support.verify_)
                 return Error{ErrorCategory::Unsupported, "copy-options-unavailable", Request.destinationWriter_->Id()};
         }
         if (Request.selection_) {

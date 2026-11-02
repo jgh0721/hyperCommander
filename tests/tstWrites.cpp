@@ -671,13 +671,141 @@ private slots:
         }
         QCOMPARE(State, JobState::Completed); QVERIFY(Task->Finalize(State).empty()); Task.reset();
         QCOMPARE(Completed, Mode == 0 ? 72 : 71); QCOMPARE(Failed, Mode == 0 ? 0 : 1);
-        QCOMPARE(Selection->largestPage_, std::size_t(64)); QVERIFY(Probe->peak_ > 1); QVERIFY(!Probe->wrongCommitThread_);
+        QCOMPARE(Selection->largestPage_, std::size_t(256)); QVERIFY(Probe->peak_ > 1); QVERIFY(!Probe->wrongCommitThread_);
         for (int I = 0; I < 72; ++I) {
             const auto Name = Prefix + "/to/" + QString::number(I) + ".bin";
             if (I == 7 && Mode == 1) QVERIFY(!QFileInfo::exists(root_->filePath(Name)));
             else QCOMPARE(read(Name), I == 7 && Mode == 2 ? QByteArray("original") : QByteArray(4096, char(I)));
         }
         QCOMPARE(QDir(root_->filePath(Prefix + "/to")).entryList({".hc-*"}, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot).size(), 0);
+    }
+    void listedTransferTotals_data()
+    {
+        QTest::addColumn<bool>("Move"); QTest::addColumn<bool>("Manifest");
+        QTest::addColumn<int>("Files"); QTest::addColumn<QString>("Pattern"); QTest::addColumn<bool>("Streams");
+        QTest::newRow("copy-file") << false << false << 1 << "*" << false;
+        QTest::newRow("move-files") << true << false << 2 << "*" << false;
+        QTest::newRow("copy-selection-pages") << false << true << 257 << "*" << false;
+        QTest::newRow("move-selection") << true << true << 2 << "*" << false;
+        QTest::newRow("filtered-selection") << false << true << 2 << "0.bin" << false;
+        QTest::newRow("empty-selection-total") << false << true << 2 << "*.txt" << false;
+        QTest::newRow("move-selection-streams") << true << true << 2 << "*" << true;
+    }
+    void copyEndpointCapabilities_data()
+    {
+        QTest::addColumn<bool>("SourceExtras"); QTest::addColumn<bool>("DestinationExtras");
+        QTest::newRow("unsupported-source") << false << true;
+        QTest::newRow("unsupported-destination") << true << false;
+        QTest::newRow("supported-endpoints") << true << true;
+    }
+    void copyEndpointCapabilities()
+    {
+        QFETCH(bool, SourceExtras); QFETCH(bool, DestinationExtras);
+        if (kind_ != LocatorKind::Local) QSKIP("Local ADS capability fixture required");
+        class Reader final : public IStorageProvider {
+        public:
+            Reader(std::shared_ptr<IStorageProvider> Inner, bool Extras) : inner_(std::move(Inner)), extras_(Extras) {}
+            ProviderId Id() const override { return inner_->Id(); }
+            Task<SupportDecision> Supports(Operation R, OperationContext C) override { return inner_->Supports(R, C); }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator L, OperationContext C) override { return inner_->Enumerate(L, C); }
+            Task<EntrySnapshot> Stat(ResourceId R, OperationContext C) override { return inner_->Stat(R, C); }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId R, OperationContext C) override { return inner_->OpenRead(R, C); }
+            Task<CopyExtras> CopyExtrasAt(Locator, OperationContext) override { return Ready<CopyExtras>(CopyExtras{extras_, extras_}); }
+        private:
+            std::shared_ptr<IStorageProvider> inner_; bool extras_;
+        };
+        class Writer final : public IWritableStorage {
+        public:
+            Writer(std::shared_ptr<IWritableStorage> Inner, bool Extras) : inner_(std::move(Inner)), extras_(Extras) {}
+            ProviderId Id() const override { return inner_->Id(); }
+            CopyCapabilities CopySupport() const override { return {true, true, true, true}; }
+            Result<CopyCapabilities> CopySupportAt(Locator, OperationContext) override { return CopyCapabilities{true, true, extras_, extras_}; }
+            Result<SupportDecision> Supports(Mutation M, Locator L, OperationContext C) override { return inner_->Supports(M, L, C); }
+            Result<std::optional<EntrySnapshot>> Inspect(Locator L, OperationContext C) override { return inner_->Inspect(L, C); }
+            Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator L, DestinationExpectation E, OperationContext C) override { return inner_->BeginWrite(L, E, C); }
+            Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator L, DestinationExpectation E, CopyOptions O, OperationContext C) override {
+                used_ = O; return inner_->BeginCopy(L, E, O, C);
+            }
+            Result<Unit> MakeDirectory(Locator L, OperationContext C) override { return inner_->MakeDirectory(L, C); }
+            Result<Unit> Remove(EntrySnapshot E, OperationContext C) override { return inner_->Remove(E, C); }
+            Result<Unit> Rename(EntrySnapshot E, Locator L, OperationContext C) override { return inner_->Rename(E, L, C); }
+            CopyOptions used_;
+        private:
+            std::shared_ptr<IWritableStorage> inner_; bool extras_;
+        };
+        const auto Base = QString("capabilities-%1").arg(QTest::currentDataTag());
+        QVERIFY(QDir().mkpath(root_->filePath(Base + "/to"))); QVERIFY(write(Base + "/file", "main")); QVERIFY(write(Base + "/file:notes", "extra"));
+        auto Source = reader_->Resolve(at(Base + "/file"), {}).get(); QVERIFY(Source.HasValue());
+        auto Output = std::make_shared<Writer>(writer_, DestinationExtras);
+        FileOperationRequest Request; Request.sources_ = {{Source.Value(), std::make_shared<Reader>(reader_, SourceExtras), {}}};
+        Request.destination_ = at(Base + "/to"); Request.destinationWriter_ = Output; Request.copyOptions_ = {true, true, true, true};
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1); auto Started = SubmitFileOperation(Scheduler, std::move(Request)); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get(); QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "copy failed");
+        QCOMPARE(Output->used_.acl_, SourceExtras && DestinationExtras); QCOMPARE(Output->used_.streams_, SourceExtras && DestinationExtras); QVERIFY(Output->used_.verify_);
+        QCOMPARE(read(Base + "/to/file"), QByteArray("main")); QCOMPARE(QFileInfo::exists(root_->filePath(Base + "/to/file:notes")), SourceExtras && DestinationExtras);
+        QCOMPARE(read(Base + "/file:notes"), QByteArray("extra")); QVERIFY(Result.cleanupErrors_.empty());
+    }
+    void listedTransferTotals()
+    {
+        QFETCH(bool, Move); QFETCH(bool, Manifest); QFETCH(int, Files); QFETCH(QString, Pattern); QFETCH(bool, Streams);
+        if (Streams && kind_ != LocatorKind::Local) QSKIP("Local alternate stream fixture required");
+        const auto Base = QString("listed-%1").arg(QTest::currentDataTag());
+        QVERIFY(QDir().mkpath(root_->filePath(Base + "/from"))); QVERIFY(QDir().mkpath(root_->filePath(Base + "/to")));
+        auto Selection = std::make_shared<CopySelection>(); Selection->reader_ = reader_;
+        const QByteArray Payload(4097, 'P');
+        for (int I = 0; I < Files; ++I) {
+            const auto Name = Base + "/from/" + QString::number(I) + ".bin";
+            QVERIFY(write(Name, Payload)); if (Streams) QVERIFY(write(Name + ":notes", "stream"));
+            auto Entry = reader_->Resolve(at(Name), {}).get(); QVERIFY(Entry.HasValue()); Selection->entries_.push_back(Entry.Value());
+        }
+        FileOperationRequest Request; Request.operation_ = Move ? hc::operations::FileOperation::Move : hc::operations::FileOperation::Copy;
+        Request.destination_ = at(Base + "/to"); Request.destinationWriter_ = writer_;
+        Request.calculateSizeBefore_ = false; Request.includePattern_ = Pattern.toStdString(); Request.copyOptions_.streams_ = Streams; Request.copyOptions_.verify_ = true;
+        if (Manifest) { Request.selection_ = Selection; Request.selectionRoot_ = at(Base + "/from"); Request.selectionWriter_ = writer_; }
+        else for (const auto& Entry : Selection->entries_) Request.sources_.push_back({Entry, reader_, writer_});
+        const uint64_t ExpectedFiles = Pattern == "*" ? Files : Pattern == "0.bin" ? 1 : 0;
+        const uint64_t MainBytes = ExpectedFiles * Payload.size(), ExpectedBytes = MainBytes + (Streams ? ExpectedFiles * 6 : 0);
+        auto Prepared = PrepareFileOperation(std::move(Request)); QVERIFY(Prepared.HasValue());
+        auto Task = std::move(Prepared.Value().task_); JobStepContext Context; Context.operation_.maxReadBytes_ = 1024;
+        JobState State = JobState::Preparing; JobProgress Last; bool Known = false, Partial = false; uint64_t Previous = 0;
+        const auto Start = std::chrono::steady_clock::now();
+        while (!IsTerminal(State) && std::chrono::steady_clock::now() - Start < std::chrono::seconds(30)) {
+            auto Step = Task->Advance(Context); State = Step.next_; Context.committing_ = State == JobState::Committing;
+            QVERIFY2(!Step.error_, Step.error_ ? Step.error_->code_.c_str() : "");
+            if (!Step.progress_) continue;
+            Last = *Step.progress_; QVERIFY(Last.bytesDone_ >= Previous); Previous = Last.bytesDone_;
+            if (!Known && Last.bytesTotal_) { QCOMPARE(Last.bytesDone_, 0ull); Known = true; }
+            if (Known) { QVERIFY(Last.bytesTotal_); QVERIFY(*Last.bytesTotal_ >= MainBytes); QVERIFY(*Last.bytesTotal_ <= ExpectedBytes); QCOMPARE(Last.plannedItems_.value_or(0), uint64_t(Files)); }
+            if (Last.bytesDone_ > 0 && Last.bytesDone_ < MainBytes) { Partial = true; QVERIFY(Known); }
+        }
+        QCOMPARE(State, JobState::Completed); QVERIFY(Task->Finalize(State).empty()); Task.reset();
+        QVERIFY(Known); QCOMPARE(Last.bytesDone_, ExpectedBytes); QCOMPARE(Last.bytesTotal_.value_or(UINT64_MAX), ExpectedBytes);
+        if (ExpectedFiles) QVERIFY(Partial);
+        for (int I = 0; I < Files; ++I) {
+            const auto Name = QString::number(I) + ".bin";
+            const bool Included = Pattern == "*" || (Pattern == "0.bin" && I == 0);
+            if (Included) { QCOMPARE(read(Base + "/to/" + Name), Payload); if (Streams) QCOMPARE(read(Base + "/to/" + Name + ":notes"), QByteArray("stream")); }
+            else QVERIFY(!QFileInfo::exists(root_->filePath(Base + "/to/" + Name)));
+            QCOMPARE(QFileInfo::exists(root_->filePath(Base + "/from/" + Name)), !Move || !Included);
+        }
+    }
+    void nativeEndpointCopyOptions()
+    {
+        QVERIFY(QDir().mkpath(root_->filePath("native-options/to")));
+        QVERIFY(write("native-options/file", "main"));
+        auto Input = reader_->CopyExtrasAt(at("native-options/file"), {}).get(); QVERIFY(Input.HasValue());
+        auto Output = writer_->CopySupportAt(at("native-options/to/file"), {}); QVERIFY(Output.HasValue());
+        if (Input.Value().streams_) QVERIFY(write("native-options/file:notes", "extra"));
+        auto Source = reader_->Resolve(at("native-options/file"), {}).get(); QVERIFY(Source.HasValue());
+        FileOperationRequest Request; Request.sources_ = {{Source.Value(), reader_, {}}};
+        Request.destination_ = at("native-options/to"); Request.destinationWriter_ = writer_; Request.copyOptions_ = {true, true, true, true};
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1); auto Started = SubmitFileOperation(Scheduler, std::move(Request)); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get(); QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "copy failed");
+        QCOMPARE(read("native-options/to/file"), QByteArray("main"));
+        if (Input.Value().streams_ && Output.Value().streams_) QCOMPARE(read("native-options/to/file:notes"), QByteArray("extra"));
+        QVERIFY(Result.cleanupErrors_.empty());
     }
     void parallelGlobalBudget()
     {
@@ -1096,6 +1224,10 @@ private slots:
         auto LocalWriter = MakeNativeWritableStorage(LocatorKind::Local, LocalReader);
         const auto At = [&](const char* Name) { return Locator{LocatorKind::Smb, QDir::toNativeSeparators(Remote.filePath(Name)).toStdString()}; };
         const auto LocalAt = [&](const char* Name) { return Locator{LocatorKind::Local, QDir::toNativeSeparators(Local.filePath(Name)).toStdString()}; };
+        auto SourceExtras = Reader->CopyExtrasAt(At("source.bin"), {}).get(); QVERIFY(SourceExtras.HasValue());
+        QVERIFY(!SourceExtras.Value().acl_ && !SourceExtras.Value().streams_);
+        auto DestinationSupport = Writer->CopySupportAt(At("source.bin"), {}); QVERIFY(DestinationSupport.HasValue());
+        QVERIFY(DestinationSupport.Value().verify_ && !DestinationSupport.Value().acl_ && !DestinationSupport.Value().streams_);
         const QByteArray Payload(2 * 1024 * 1024 + 17, 'R');
         QFile Source(Local.filePath("source.bin")); QVERIFY(Source.open(QIODevice::WriteOnly));
         QCOMPARE(Source.write(Payload), Payload.size()); Source.close();
@@ -1106,6 +1238,14 @@ private slots:
             FileOperationRequest Request; Request.operation_ = Operation; Request.sources_ = {{Entry, Input, InputWriter}};
             Request.destination_ = Target; Request.destinationWriter_ = Output; Request.conflict_ = ConflictPolicy::Replace;
             Request.confirmDelete_ = false; Request.copyOptions_.verify_ = true;
+            Request.copyOptions_.streams_ = true; Request.copyOptions_.acl_ = true; Request.calculateSizeBefore_ = false;
+            if (native::IsRedirectedPath(Entry.locator_.root_.empty() ? std::wstring{} : QString::fromStdString(Entry.locator_.root_).toStdWString())) {
+                auto Selection = std::make_shared<CopySelection>(); Selection->reader_ = Input; Selection->entries_ = {Entry};
+                Request.selection_ = Selection; Request.selectionWriter_ = InputWriter;
+                Request.selectionRoot_ = Entry.locator_;
+                Request.selectionRoot_.root_ = QDir::toNativeSeparators(QFileInfo(QString::fromStdString(Entry.locator_.root_)).absolutePath()).toStdString();
+                Request.sources_.clear();
+            }
             auto Started = SubmitFileOperation(Scheduler, std::move(Request));
             if (!Started.HasValue()) { JobResult Result; Result.snapshot_.state_ = JobState::Failed; Result.snapshot_.error_ = Started.Failure(); return Result; }
             return Started.Value().completion_.get();
@@ -1129,6 +1269,8 @@ private slots:
         auto Renamed = Reader->Resolve(At("renamed-with-longer-name.bin"), {}).get(); QVERIFY(Renamed.HasValue());
         const auto Returned = Run(hc::operations::FileOperation::Copy, Renamed.Value(), Reader, Writer, LocalAt(""), LocalWriter);
         QCOMPARE(Returned.snapshot_.state_, JobState::Completed);
+        QCOMPARE(Returned.snapshot_.progress_.bytesTotal_.value_or(0), uint64_t(Payload.size()));
+        QCOMPARE(Returned.snapshot_.progress_.plannedItems_.value_or(0), 1ull);
         QVERIFY(Writer->Remove(Renamed.Value(), {}).HasValue());
         const auto Moved = Run(hc::operations::FileOperation::Move, Original.Value(), LocalReader, LocalWriter, At(""), Writer);
         QVERIFY2(Moved.snapshot_.state_ == JobState::Completed, Moved.snapshot_.error_ ? Moved.snapshot_.error_->code_.c_str() : "move failed");
