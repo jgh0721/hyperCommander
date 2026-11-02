@@ -3,6 +3,7 @@
 export async function typographyProbe(api, fixture) {
     if (!["embedded-font", "css-priority", "ruby", "rtl", "vertical"].includes(fixture)) throw Error("Unknown typography fixture");
     const initialProfile = { ...api.profile() };
+    let inlineEmphasis;
     const conditionalFixture = api.documents()[0]?.body.dataset.hcConditional === "true";
     const catalogFixture = api.documents()[0]?.body.dataset.hcCatalog === "true";
     const near = (value, expected) => Math.abs(parseFloat(value) - expected) < 0.2;
@@ -63,7 +64,24 @@ export async function typographyProbe(api, fixture) {
         await api.apply({ font: "HCFixtureFont", weight: 400 });
         capabilities.embeddedFontSelection = inspect().paragraphs[0].font.includes("HCFixtureFont");
     }
-    if (fixture === "css-priority") capabilities.nestedInlineOverride = near(adjusted.nested?.size, 24);
+    if (fixture === "css-priority") {
+        capabilities.nestedInlineOverride = near(adjusted.nested?.size, 24);
+        const style = id => {
+            const doc = api.documents()[0];
+            return doc.defaultView.getComputedStyle(doc.getElementById(id));
+        };
+        const weight = id => style(id).fontWeight;
+        const weights = () => Object.fromEntries(["hc-plain", "hc-bold", "hc-bold-child", "hc-strong", "hc-b", "hc-inline-bold", "hc-list-bold"]
+            .map(id => [id, weight(id)]));
+        const emphasis = values => Object.entries(values).every(([id, value]) => id === "hc-plain" || value === "700");
+        await api.apply({ weight: 400 });
+        const normal = weights();
+        await api.apply({ weight: 500, line: 2.2 });
+        const medium = weights();
+        inlineEmphasis = { normal, medium };
+        capabilities.inlineEmphasisPreserved = normal["hc-plain"] === "400" && emphasis(normal)
+            && medium["hc-plain"] === "500" && emphasis(medium);
+    }
     if (fixture === "ruby" || fixture === "vertical") {
         capabilities.rubyAnnotation = adjusted.rt?.display === "ruby-text" && parseFloat(adjusted.rt.size) < parseFloat(adjusted.ruby.size)
             && adjusted.rt.width > 0 && adjusted.rt.height > 0;
@@ -126,6 +144,6 @@ export async function typographyProbe(api, fixture) {
     capabilities.firstContentAfterProfileRestore = final.headingVisible && final.firstParagraphVisible;
     return { status: Object.values(checks).every(Boolean) ? "passed" : "failed", phase: "P0-B-typography",
         scope: "Probe execution only; false capabilities remain unsupported and block acceptance", fixture,
-        engine: api.engine, checks, capabilities, publisher, adjusted, restored, final,
+        engine: api.engine, checks, capabilities, inlineEmphasis, publisher, adjusted, restored, final,
         sourceSha256: api.publication.sourceSha256 };
 }

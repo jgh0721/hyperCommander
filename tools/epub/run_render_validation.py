@@ -78,7 +78,7 @@ def main():
                         required = ["typographyOverride", "independentSpacing", "publisherRestored",
                                     "publisherInlineRestored", "invalidProfilePreserved"]
                         if result.get("fixture") == "css-priority":
-                            required.append("nestedInlineOverride")
+                            required += ["nestedInlineOverride", "inlineEmphasisPreserved"]
                         record["readingOverridesAccepted"] = all(record["capabilities"].get(key) is True for key in required)
                 cases.append(record)
                 print(json.dumps(record, ensure_ascii=False), flush=True)

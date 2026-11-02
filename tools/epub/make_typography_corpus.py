@@ -52,6 +52,12 @@ def generate(output):
                 raw = raw.replace('<p>', '<p><span id="hc-font-probe" style="font-family:HCFixtureFont;font-size:20px;letter-spacing:0;word-spacing:0">\ue000</span> Font loading probe. ', 1)
             elif ident == 'css-priority':
                 raw = raw.replace('<p>', '<p id="hc-priority" style="font:italic 700 11px/1.1 serif!important;letter-spacing:.3em!important;margin:9px 17px!important;text-align:right!important;color:#803030!important"><span id="hc-nested" style="font-size:14px!important;line-height:1!important">Nested text</span> ', 1)
+                raw = raw.replace('</p>', '</p><p id="hc-emphasis"><span id="hc-plain">일반 본문</span> '
+                    '<span id="hc-bold" class="bold">주혜월 <span id="hc-bold-child">님</span></span> '
+                    '<strong id="hc-strong">강조</strong> <b id="hc-b">굵게</b> '
+                    '<span id="hc-inline-bold" style="font-weight:700!important">인라인 강조</span> '
+                    '<em id="hc-italic">기울임</em></p>'
+                    '<ul><li><span id="hc-list-bold" class="bold">목록 강조</span></li></ul>', 1)
             elif ident in ('ruby', 'vertical'):
                 raw = raw.replace('<p>', '<p><ruby id="hc-ruby">日本語<rt>にほんご</rt></ruby><span id="hc-axis">日本語</span> ', 1)
             elif ident == 'rtl':
@@ -63,7 +69,7 @@ def generate(output):
             entries['EPUB/content.opf'] = entries['EPUB/content.opf'].replace(b'</manifest>', b'<item id="probe-font" href="Fonts/probe.ttf" media-type="font/ttf"/></manifest>')
             entries['EPUB/Styles/book.css'] += b'@font-face{font-family:HCFixtureFont;src:url("../Fonts/probe.ttf") format("truetype");font-weight:400;font-style:normal}'
         elif ident == 'css-priority':
-            entries['EPUB/Styles/book.css'] += b':root{--publisher-size:13px}@media screen{body #hc-priority{font-size:var(--publisher-size)!important;margin-block-end:41px!important}}'
+            entries['EPUB/Styles/book.css'] += b':root{--publisher-size:13px}@media screen{body #hc-priority{font-size:var(--publisher-size)!important;margin-block-end:41px!important}}.bold{font-weight:bold}'
         elif ident == 'vertical':
             entries['EPUB/Styles/book.css'] += b'html,body{writing-mode:vertical-rl!important}rt{font-size:50%}img{max-height:360px}'
         elif ident == 'ruby':

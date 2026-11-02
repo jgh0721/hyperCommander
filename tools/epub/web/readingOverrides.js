@@ -35,17 +35,20 @@ export function applyReadingOverrides(doc, profile, foreground, background, cust
         && !node.closest("rt, rp, svg, math, img, video, audio, script, style") && (node.matches(textSelector) || node.closest(textSelector)));
     if (nodes.length > 32768) throw Error("Reading override element budget exceeded");
     for (const node of [doc.documentElement, doc.body]) set(node, "background-color", profile.background && profile.background !== "theme" ? "transparent" : background);
-    const values = { "font-family": JSON.stringify(profile.font), "font-size": `${profile.size}px`, "font-weight": String(profile.weight),
+    const values = { "font-family": JSON.stringify(profile.font), "font-size": `${profile.size}px`,
             "line-height": String(profile.line), "letter-spacing": `${profile.letter}em`, "word-spacing": `${profile.word}em`, "text-align": profile.align, color: foreground };
-    const paragraphValues = { ...values, "margin-block-start": `${profile.before}em`, "margin-block-end": `${profile.after}em`, "text-indent": `${profile.indent}em` };
+    // Set the reading weight on text blocks. Inline elements inherit it unless
+    // publisher CSS or semantic markup (b/strong) supplies an emphasis weight.
+    const blockValues = { ...values, "font-weight": String(profile.weight) };
+    const paragraphValues = { ...blockValues, "margin-block-start": `${profile.before}em`, "margin-block-end": `${profile.after}em`, "text-indent": `${profile.indent}em` };
     // Parse the declarations once, then change each live element once. Retain
     // the same inline !important precedence and exact publisher-style restore.
     const declaration = entries => Object.entries(entries).map(([name, value]) => `${name}:${value} !important;`).join("");
-    const textStyle = declaration(values), paragraphStyle = declaration(paragraphValues);
+    const textStyle = declaration(values), blockStyle = declaration(blockValues), paragraphStyle = declaration(paragraphValues);
     for (const node of nodes) {
-        const paragraph = node.matches("p");
-        for (const name of Object.keys(paragraph ? paragraphValues : values)) remember(node, name);
-        node.style.cssText += ";" + (paragraph ? paragraphStyle : textStyle);
+        const paragraph = node.matches("p"), block = node.matches(textSelector);
+        for (const name of Object.keys(paragraph ? paragraphValues : block ? blockValues : values)) remember(node, name);
+        node.style.cssText += ";" + (paragraph ? paragraphStyle : block ? blockStyle : textStyle);
     }
     const error = applyCustomCss(doc, custom, remember, profile.cssForce !== false);
     for (const [node, record] of state) record.applied = node.getAttribute("style");
