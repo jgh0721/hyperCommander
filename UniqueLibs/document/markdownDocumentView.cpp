@@ -25,6 +25,7 @@
 #include <QSignalBlocker>
 #include <QApplication>
 #include <QAbstractScrollArea>
+#include <cmath>
 #include <qt_windows.h>
 
 namespace hc::document
@@ -122,9 +123,10 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
             Refresh();
             return;
         }
+        // Outline lines come from the rendered revision.
         const int Line = Item->data(0, Qt::UserRole).toInt();
         if (SourceVisible() && (!previewActive_ || actions_["markdown.syncScroll"]->isChecked()))
-            source_->goToLine(Line);
+            source_->goToLine(int(fromPreviewLine(Line)));
         if (!preview_->isHidden() &&
             (!SourceVisible() || previewActive_ || actions_["markdown.syncScroll"]->isChecked()))
             sendPosition(Line, false);
@@ -140,8 +142,19 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     });
     connect(preview_, &MarkdownProcessView::Reported, this, &MarkdownDocumentView::report);
     source_->Backend()->widget()->installEventFilter(this);
-    sample_.setInterval(80);
-    connect(&sample_, &QTimer::timeout, this, &MarkdownDocumentView::sampleSource);
+    // The anchor follows the editor's own caret and viewport signals; several in one event
+    // loop turn are sent once. Nothing is computed while the editor is idle.
+    sampleSoon_.setSingleShot(true);
+    connect(&sampleSoon_, &QTimer::timeout, this, &MarkdownDocumentView::sampleSource);
+    connect(source_->Backend(), &ITextEditorBackend::cursorPositionChanged, this, [this] { sampleSoon_.start(0); });
+    connect(source_->Backend(), &ITextEditorBackend::viewportScrolled, this, [this] { sampleSoon_.start(0); });
+    connect(source_->Backend(), &ITextEditorBackend::linesShifted, this, [this](int Line, int Delta) {
+        if (shifts_.size() < 256) shifts_.append({Line, Delta}); else shiftsOverflow_ = true;
+    });
+    connect(splitter_, &QSplitter::splitterMoved, this, [this] { sampleSoon_.start(0); });
+    // The preview's native focus has no Qt signal in this process.
+    sample_.setInterval(250);
+    connect(&sample_, &QTimer::timeout, this, &MarkdownDocumentView::pollFocus);
     sample_.start();
     ReloadPreferences();
     AppSettings S;
@@ -265,7 +278,7 @@ bool MarkdownDocumentView::Run(const QString &Id)
     {
         syncControls();
         saveToggle("scrollSync", actions_[Id]->isChecked());
-        lastLine_ = lastTop_ = -1;
+        lastLine_ = -1;lastPosition_ = -1;lastSourceAnchor_ = {};sampleSoon_.start(0);
     }
     else if (Id == "markdown.refresh")
     {
@@ -322,6 +335,8 @@ bool MarkdownDocumentView::Run(const QString &Id)
     {
         zoom_ = qBound(.5, zoom_ + (Id.endsWith("In") ? .1 : -.1), 3.);
         preview_->Send({{"type", "zoom"}, {"value", zoom_}});
+        // Offsets are CSS pixels; the same screen height is a different offset now.
+        lastSourceAnchor_ = {};sampleSoon_.start(0);
     }
     emit Changed();
     return true;
@@ -337,11 +352,17 @@ void MarkdownDocumentView::ReloadPreferences()
     for (const auto& Key : {"enabled", "mode", "bodyFamily", "bodySizePt", "codeFamily", "codeSizePt", "lineHeight", "headings"})
         Fonts[Key] = QJsonValue::fromVariant(S.value("markdown/previewFonts/" + QString(Key)));
     options_["previewFonts"] = Fonts;
-    for (const auto &Pair :
-         {std::pair{"markdown.syncScroll", "scrollSync"}})
+    // Position and scroll sync are one toggle now. Scroll sync only ever worked while
+    // position sync was on, so the setting keeps what was effectively enabled.
+    if (S.contains("markdown/positionSync"))
     {
-        const QSignalBlocker B(actions_[Pair.first]);
-        actions_[Pair.first]->setChecked(S.value("markdown/" + QString(Pair.second)).toBool());
+        S.setValue("markdown/scrollSync", S.value("markdown/positionSync").toBool() && S.value("markdown/scrollSync").toBool());
+        S.remove("markdown/positionSync");
+        S.sync();
+    }
+    {
+        const QSignalBlocker B(actions_["markdown.syncScroll"]);
+        actions_["markdown.syncScroll"]->setChecked(S.value("markdown/scrollSync").toBool());
     }
     actions_["markdown.toggleToc"]->setChecked(
         S.value(editor_ ? "markdown/editorOutline" : "markdown/viewerOutline").toBool());
@@ -370,6 +391,9 @@ void MarkdownDocumentView::Refresh(bool Force)
     }
     ++revision_;
     renderRequested_ = revision_;
+    // The request carries every edit so far; later edits shift lines against it.
+    shifts_.clear();
+    shiftsOverflow_ = false;
     error_.clear();
     message_->hide();
     status_ = source_->isContentTruncated() ? tr("부분 미리보기 갱신 중") : tr("갱신 중");
@@ -414,7 +438,19 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
             }
         return;
     }
-    if (Type != "error" && Value["revision"].toInteger(-1) != revision_)
+    if (Type == "focus")
+    {
+        pollFocus();
+        return;
+    }
+    if (Type == "diagnostics")
+    {
+        diagnostics_ = Value;
+        return;
+    }
+    // Reports describe the requested revision. Edits made since then are mapped
+    // through shifts_, so the preview stays synchronised while it waits for a render.
+    if (Type != "error" && Value["revision"].toInteger(-1) != renderRequested_)
         return;
     if (Type == "error")
     {
@@ -425,8 +461,12 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
     }
     else if (Type == "rendered")
     {
-        rendered_ = revision_;
-        status_ = source_->isContentTruncated() ? tr("부분 미리보기") : tr("최신");
+        rendered_ = renderRequested_;
+        status_ = renderRequested_ != revision_ ? tr("갱신 대기") : source_->isContentTruncated() ? tr("부분 미리보기") : tr("최신");
+        // The new frame has its own layout: send the current anchor to it.
+        lastSourceAnchor_ = {};
+        lastPosition_ = -1;
+        sampleSoon_.start(0);
         problems_ = Value["problems"].toInt();
         problemDetails_ = Value["details"].toArray();
         outline_->clear();
@@ -476,8 +516,12 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
     }
     else if (Type == "position" && actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_)
     {
+        // A click places the caret at the clicked character and keeps its screen height.
         suppress_.restart();
-        source_->goToLine(Value["line"].toInt());
+        placeSource(fromPreviewLine(Value["line"].toDouble(1)), Value["column"].isDouble() ? Value["column"].toInt() : -1,
+                    Value["offset"].toDouble(), true);
+        lastSourceAnchor_ = sourceScrollAnchor();
+        lastPosition_ = static_cast<ScintillaQtDirectBackend *>(source_->Backend())->Send(SCI_GETCURRENTPOS);
     }
     else if (Type == "scroll")
     {
@@ -491,15 +535,21 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
                 outline_->setCurrentItem(*It);
                 break;
             }
-        if (Value["user"].toBool() && preview_->HasFocus() && actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_ &&
-            (!suppress_.isValid() || suppress_.elapsed() > 300))
+        // Keys reach the preview only while it has focus. Wheel, pointer and touch scroll the
+        // preview under the pointer even while the source keeps the focus, and the source follows.
+        // A scrollbar drag or press has no page input events; the preview reports it as such.
+        // Every user report is followed: a smooth scroll keeps reporting after the first one,
+        // and the preview never calls its own echo of an editor request a user scroll.
+        const auto Intent = Value["intent"].toString();
+        const bool Positional = Intent == "wheel" || Intent == "pointer" || Intent == "touch" || Intent == "scrollbar";
+        if (Value["user"].toBool() && (Positional || preview_->HasFocus()) && actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_)
         {
             auto *B = static_cast<ScintillaQtDirectBackend *>(source_->Backend());
             suppress_.restart();
             if (Value["top"].toBool()) B->Send(SCI_SETFIRSTVISIBLELINE, 0);
             else if (Value["bottom"].toBool()) B->Send(SCI_SETFIRSTVISIBLELINE, quintptr(1) << 30);
-            else B->scrollFractionalLineToViewportRatio(Value["line"].toDouble(1), Value["ratio"].toDouble(.5));
-            lastTop_ = int(B->Send(SCI_GETFIRSTVISIBLELINE));
+            else placeSource(fromPreviewLine(Value["line"].toDouble(1)), Value["column"].isDouble() ? Value["column"].toInt() : -1,
+                             Value["anchorOffset"].toDouble(), false);
             lastSourceAnchor_ = sourceScrollAnchor();
             lastPosition_ = B->Send(SCI_GETCURRENTPOS);
         }
@@ -514,66 +564,155 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
     }
     emit Changed();
 }
-void MarkdownDocumentView::sendPosition(double Line, bool Scroll, double Ratio, bool Caret)
+void MarkdownDocumentView::sendPosition(double Line, bool Scroll, const QJsonObject &Anchor)
 {
-    if (rendered_ != revision_ && renderRequested_ != revision_)
+    if (renderRequested_ < 0)
         return;
-    preview_->Send({{"type", Scroll ? "scroll" : "position"},
-                    {"revision", revision_},
-                    {"line", Line},
-                    {"ratio", Ratio},
-                    {"end", Scroll && !Caret && source_->Backend()->isScrolledToEnd()},
-                    {"caret", Caret},
-                    {"reveal", !actions_["markdown.syncScroll"]->isChecked()}});
+    QJsonObject Message{{"type", Scroll ? "scroll" : "position"},
+                        {"revision", renderRequested_},
+                        {"line", Line},
+                        {"reveal", !actions_["markdown.syncScroll"]->isChecked()}};
+    if (Scroll)
+    {
+        for (const auto *Key : {"column", "offset", "caret", "top", "end"})
+            if (Anchor.contains(Key))
+                Message[Key] = Anchor[Key];
+        Message["serial"] = ++scrollSerial_;
+    }
+    preview_->Send(Message);
+}
+double MarkdownDocumentView::toPreviewLine(double Line) const
+{
+    return qMax(1.0, ToRevisionLine(Line, shifts_));
+}
+double MarkdownDocumentView::fromPreviewLine(double Line) const
+{
+    return qMax(1.0, FromRevisionLine(Line, shifts_));
+}
+// Both panes share screen coordinates: an anchor row and its rendered line go to the same
+// screen height. The preview measures CSS pixels, scaled by its zoom factor.
+double MarkdownDocumentView::previewOffsetForSourceY(double Y) const
+{
+    const auto *Viewport = static_cast<ScintillaQtDirectBackend *>(source_->Backend())->scrollArea()->viewport();
+    return (Viewport->mapToGlobal(QPoint(0, 0)).y() + Y - preview_->mapToGlobal(QPoint(0, 0)).y()) / qMax(.1, zoom_);
+}
+double MarkdownDocumentView::sourceYForPreviewOffset(double Offset) const
+{
+    const auto *Viewport = static_cast<ScintillaQtDirectBackend *>(source_->Backend())->scrollArea()->viewport();
+    return preview_->mapToGlobal(QPoint(0, 0)).y() + Offset * qMax(.1, zoom_) - Viewport->mapToGlobal(QPoint(0, 0)).y();
 }
 QJsonObject MarkdownDocumentView::sourceScrollAnchor() const
 {
-    auto* B = static_cast<ScintillaQtDirectBackend*>(source_->Backend());
-    auto Position = B->Send(SCI_GETCURRENTPOS);
-    int Line = int(B->Send(SCI_LINEFROMPOSITION, Position));
+    auto *B = static_cast<ScintillaQtDirectBackend *>(source_->Backend());
     const int Height = qMax(1, B->scrollArea()->viewport()->height());
-    double Y = B->Send(SCI_POINTYFROMPOSITION, 0, Position) + qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, Line)) * .5;
-    if (Y < 0 || Y >= Height) {
+    auto Position = B->Send(SCI_GETCURRENTPOS);
+    // POINTY is the top of the display row holding the position.
+    auto Y = B->Send(SCI_POINTYFROMPOSITION, 0, Position);
+    const bool Caret = Y >= 0 && Y < Height;
+    if (!Caret)
+    {
         if (B->firstVisibleLine() == 0)
-            return {{"line", 1}, {"ratio", 0}, {"caret", false}, {"end", false}};
+            return {{"line", 1}, {"column", 0}, {"top", true}, {"caret", false}, {"end", false}};
         if (B->isScrolledToEnd())
-            return {{"line", B->lineCount() + 1}, {"ratio", .5}, {"caret", false}, {"end", true}};
-        // Continue at the nearest visible row when the caret leaves the viewport.
-        // A sudden switch to the centre can skip several tall preview paragraphs.
+            return {{"line", B->lineCount() + 1}, {"column", 0}, {"top", false}, {"caret", false}, {"end", true}};
+        // The nearest visible row keeps the preview continuous; its first character visible
+        // at the left edge is the anchor, also when a long unwrapped line is scrolled sideways.
         Position = B->Send(SCI_POSITIONFROMPOINT, B->leftMarginWidth() + 1, qBound(0, int(Y), Height - 1));
-        Line = int(B->Send(SCI_LINEFROMPOSITION, Position));
-        Y = B->Send(SCI_POINTYFROMPOSITION, 0, Position) + qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, Line)) * .5;
+        Y = B->Send(SCI_POINTYFROMPOSITION, 0, Position);
     }
-    // Use the display row's vertical progress, not the caret's column. Combining
-    // horizontal progress with a new row's viewport ratio makes the preview
-    // creep upward and then jump back down at soft and hard line breaks.
-    const auto Start = B->Send(SCI_POSITIONFROMLINE, Line);
-    const double Row = qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, Line));
-    const double Rows = qMax<qintptr>(1, B->Send(SCI_WRAPCOUNT, Line));
-    const double Top = B->Send(SCI_POINTYFROMPOSITION, 0, Start);
-    const double Fraction = qBound(0.0, (Y - Row * .5 - Top) / (Rows * Row), .999);
-    return {{"line", Line + 1 + Fraction}, {"ratio", qBound(0.0, Y / Height, 1.0)}, {"caret", true}, {"end", false}};
+    // A space has no rendered counterpart at a soft wrap; a character of the same row stands for it.
+    Position = B->RowTextCharacter(Position);
+    const int Line = int(B->Send(SCI_LINEFROMPOSITION, Position));
+    const int Column = int(B->Send(SCI_COUNTCODEUNITS, B->Send(SCI_POSITIONFROMLINE, Line), Position));
+    return {{"line", Line + 1}, {"column", Column}, {"sourceY", double(Y)}, {"offset", previewOffsetForSourceY(double(Y))},
+            {"caret", Caret}, {"top", false}, {"end", false}};
 }
-void MarkdownDocumentView::sampleSource()
+void MarkdownDocumentView::placeSource(double Line, int Column, double Offset, bool MoveCaret)
+{
+    auto *B = static_cast<ScintillaQtDirectBackend *>(source_->Backend());
+    const int DocLine = qBound(0, int(std::floor(Line)) - 1, qMax(1, source_->lineCount()) - 1);
+    const auto Start = B->Send(SCI_POSITIONFROMLINE, DocLine), End = B->Send(SCI_GETLINEENDPOSITION, DocLine);
+    const double Y = sourceYForPreviewOffset(Offset);
+    const int Height = qMax(1, B->scrollArea()->viewport()->height());
+    if (Column < 0)
+    {
+        // No character to match (an image or a diagram): the line's share of the block.
+        if (MoveCaret)
+            B->Send(SCI_SETEMPTYSELECTION, quintptr(Start));
+        B->scrollFractionalLineToViewportRatio(Line, qBound(0.0, Y / Height, 1.0));
+        return;
+    }
+    auto Position = B->Send(SCI_POSITIONRELATIVECODEUNITS, quintptr(Start), Column);
+    if (Position < Start || Position > End)
+        Position = End;
+    if (MoveCaret)
+        B->Send(SCI_SETEMPTYSELECTION, quintptr(Position));
+    // Scintilla scrolls whole display rows: the row holding the character goes to the row
+    // nearest the wanted height.
+    const auto Place = [B, Position, Y] {
+        const auto Row = qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, B->Send(SCI_LINEFROMPOSITION, quintptr(Position))));
+        const auto Now = B->Send(SCI_POINTYFROMPOSITION, 0, Position);
+        const auto Rows = qintptr(std::lround((double(Now) - Y) / double(Row)));
+        if (Rows != 0)
+            B->Send(SCI_SETFIRSTVISIBLELINE, quintptr(qMax<qintptr>(0, B->Send(SCI_GETFIRSTVISIBLELINE) + Rows)));
+    };
+    const auto Line0 = B->Send(SCI_VISIBLEFROMDOCLINE, quintptr(DocLine));
+    const auto Sub = qMax<qintptr>(0, (B->Send(SCI_POINTYFROMPOSITION, 0, Position) - B->Send(SCI_POINTYFROMPOSITION, 0, Start))
+                                          / qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, DocLine)));
+    const auto RowsAbove = qintptr(std::lround(Y / double(qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, DocLine)))));
+    B->Send(SCI_SETFIRSTVISIBLELINE, quintptr(qMax<qintptr>(0, Line0 + Sub - RowsAbove)));
+    // Rows above may wrap once they are shown; correct by the rows they added.
+    Place();
+    QTimer::singleShot(0, this, [this, Place] { suppress_.restart(); Place(); });
+    // Without word wrap the character may sit beside the visible part of a long line.
+    if (!source_->isWordWrapEnabled())
+        B->Send(SCI_SCROLLRANGE, quintptr(Position), Position);
+}
+void MarkdownDocumentView::pollFocus()
 {
     const bool PreviewFocus = preview_->HasFocus();
     const bool Active = PreviewFocus ? true : source_->Backend()->widget()->hasFocus() ? false : previewActive_;
-    if (Active != previewActive_) { previewActive_ = Active; emit Changed(); }
-    if (!SourceVisible() || preview_->isHidden() || composing_ || PreviewFocus
-        || !actions_["markdown.syncScroll"]->isChecked()
-        || (rendered_ != revision_ && renderRequested_ != revision_)
-        || !source_->Backend()->widget()->hasFocus() || (suppress_.isValid() && suppress_.elapsed() < 300)) return;
-    auto* B = static_cast<ScintillaQtDirectBackend*>(source_->Backend());
+    if (Active != previewActive_)
+    {
+        previewActive_ = Active;
+        emit Changed();
+    }
+}
+void MarkdownDocumentView::sampleSource()
+{
+    pollFocus();
+    if (!SourceVisible() || preview_->isHidden() || composing_ || preview_->HasFocus()
+        || !actions_["markdown.syncScroll"]->isChecked() || renderRequested_ < 0
+        || !source_->Backend()->widget()->hasFocus())
+        return;
+    // The preview has just moved the editor: answering now would bounce. Send the
+    // final position once the guard ends.
+    if (suppress_.isValid() && suppress_.elapsed() < 300)
+    {
+        sampleSoon_.start(int(300 - suppress_.elapsed()) + 16);
+        return;
+    }
+    ++anchorSyncs_;
+    auto *B = static_cast<ScintillaQtDirectBackend *>(source_->Backend());
     const auto Position = B->Send(SCI_GETCURRENTPOS);
-    if (Position != lastPosition_) {
-        lastPosition_ = Position;lastLine_ = source_->currentLine();
-        sendPosition(lastLine_, false);
+    if (Position != lastPosition_)
+    {
+        lastPosition_ = Position;
+        lastLine_ = source_->currentLine();
+        sendPosition(toPreviewLine(lastLine_), false);
     }
     const auto Anchor = sourceScrollAnchor();
-    if (Anchor != lastSourceAnchor_ || lastTop_ < 0) {
-        lastSourceAnchor_ = Anchor;lastTop_ = B->firstVisibleLine();
-        sendPosition(Anchor["line"].toDouble(), true, Anchor["ratio"].toDouble(), Anchor["caret"].toBool());
+    if (Anchor != lastSourceAnchor_)
+    {
+        lastSourceAnchor_ = Anchor;
+        sendPosition(Anchor["top"].toBool() || Anchor["end"].toBool() ? Anchor["line"].toDouble() : toPreviewLine(Anchor["line"].toDouble()), true, Anchor);
     }
+}
+void MarkdownDocumentView::RequestDiagnostics(QJsonObject Request)
+{
+    diagnostics_ = {};
+    Request["type"] = "diagnostics";
+    preview_->Send(Request);
 }
 void MarkdownDocumentView::alignPreview()
 {
@@ -584,7 +723,13 @@ void MarkdownDocumentView::alignPreview()
 bool MarkdownDocumentView::eventFilter(QObject *, QEvent *Event)
 {
     if (Event->type() == QEvent::Move || Event->type() == QEvent::Resize || Event->type() == QEvent::Show)
+    {
         QTimer::singleShot(0, this, &MarkdownDocumentView::alignPreview);
+        // Geometry changes the screen height of the anchor row.
+        sampleSoon_.start(0);
+    }
+    if (Event->type() == QEvent::FocusIn || Event->type() == QEvent::FocusOut)
+        sampleSoon_.start(0);
     if (Event->type() == QEvent::InputMethod)
         composing_ = !static_cast<QInputMethodEvent *>(Event)->preeditString().isEmpty();
     return false;
@@ -622,8 +767,13 @@ QJsonObject MarkdownDocumentView::State() const
             {"previewScroll", previewScroll_},
             {"sourceAnchor", sourceScrollAnchor()},
             {"problems", problems_},
-            {"positionSync", actions_["markdown.syncScroll"]->isChecked()},
             {"scrollSync", actions_["markdown.syncScroll"]->isChecked()},
+            {"requestedRevision", renderRequested_},
+            {"anchorSyncs", anchorSyncs_},
+            {"scrollRequests", scrollSerial_},
+            {"lineShifts", shifts_.size()},
+            {"lineShiftsOverflow", shiftsOverflow_},
+            {"diagnostics", diagnostics_},
             {"error", error_}};
 }
 } // namespace hc::document

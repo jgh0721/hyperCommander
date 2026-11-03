@@ -27,6 +27,7 @@
 #include <QTreeWidget>
 #include <QUrl>
 #include <Scintilla.h>
+#include <QtConcurrentRun>
 namespace hc::document {
 namespace {
 constexpr int DiagnosticIndicator=26,WarningMarker=10,ErrorMarker=11,DiagnosticMargin=3;
@@ -36,11 +37,22 @@ void EpubSourceEditor::ReloadValidationSettings() {
     QJsonObject Root;QString Error;
     checkerSettingsFile_=hc::settings::UnifiedConfig::FileName(Config);
     if(!hc::settings::UnifiedConfig::Load(checkerSettingsFile_,Root,Error))return;
+    ApplyValidationSettings(Root["documentViews"].toObject()["epubEditor"].toObject());
+}
+void EpubSourceEditor::ApplyValidationSettings(QJsonObject Next) {
     // The saved panel layout shares this section but never affects a verdict.
-    auto Next=Root["documentViews"].toObject()["epubEditor"].toObject();Next.remove("layout");
+    Next.remove("layout");
     if(Next==checkerSettings_)return;
     checkerSettings_=Next;checkerVerifiedToken_.clear();if(checkerProcess_ && checkerProcess_->state()!=QProcess::NotRunning)cancelEpubCheck("settings-changed");
     emit StateChanged();
+}
+void EpubSourceEditor::reloadValidationSettingsAsync() {
+    if(validationSettingsReader_.isRunning()){validationSettingsAgain_=true;return;}
+    validationSettingsReader_.setFuture(QtConcurrent::run([File=checkerSettingsFile_]()->std::optional<QJsonObject>{
+        QJsonObject Root;QString Error;
+        if(File.isEmpty() || !hc::settings::UnifiedConfig::Load(File,Root,Error))return std::nullopt;
+        return Root["documentViews"].toObject()["epubEditor"].toObject();
+    }));
 }
 void EpubSourceEditor::setupValidation() {
     checkerProcess_=new QProcess(this);checkerProcess_->setProcessChannelMode(QProcess::MergedChannels);
@@ -57,6 +69,10 @@ void EpubSourceEditor::setupValidation() {
         if(checkerElapsed_.elapsed()>120000)cancelEpubCheck("timeout");
         else if(checkerDirectory_ && QFileInfo(QDir(checkerDirectory_->path()).filePath("report.json")).size()>8*1024*1024)cancelEpubCheck("report-limit");
     });ReloadValidationSettings();
+    connect(&validationSettingsReader_,&QFutureWatcher<std::optional<QJsonObject>>::finished,this,[this]{
+        if(const auto Next=validationSettingsReader_.result())ApplyValidationSettings(*Next);
+        if(std::exchange(validationSettingsAgain_,false))reloadValidationSettingsAsync();
+    });
     auto* Backend=static_cast<ScintillaQtDirectBackend*>(text_->Backend());
     Backend->Send(SCI_INDICSETSTYLE,DiagnosticIndicator,INDIC_SQUIGGLE);Backend->Send(SCI_INDICSETFORE,DiagnosticIndicator,0x0677d9);
     Backend->Send(SCI_MARKERDEFINE,WarningMarker,SC_MARK_SMALLRECT);Backend->Send(SCI_MARKERSETBACK,WarningMarker,0x0677d9);Backend->Send(SCI_MARKERSETFORE,WarningMarker,0x0677d9);

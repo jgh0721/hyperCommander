@@ -8,6 +8,7 @@
 /// Internal libraries
 #include "commonLibs/document/epub/epubPackage.hpp"
 #include "commonLibs/document/epub/epubInputSender.hpp"
+#include "commonLibs/document/epub/epubScrollRequest.hpp"
 
 /// Platform/framework headers
 #define WIN32_LEAN_AND_MEAN
@@ -276,9 +277,7 @@ namespace hc::document
         work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value.isUndefined()?QJsonValue(QJsonValue::Null):Value}});work_->wake_.notify_one();return true;
     }
     bool EpubProcessView::RequestSourceScroll(const QJsonObject& Value) {
-        const double Line=Value["line"].toDouble(-1),Ratio=Value["ratio"].toDouble(-1);
-        if(!work_ || closed_ || failed_ || !bound_ || Value.size()!=5 || Value["chapter"].toInt(-1)<0 || !std::isfinite(Line) || Line<1
-            || Ratio<0 || Ratio>1 || !Value["end"].isBool() || !Value["serial"].isDouble())return false;
+        if(!work_ || closed_ || failed_ || !bound_ || !epub::ValidSourceScrollRequest(Value))return false;
         // Only the newest target matters; an unsent older one is replaced rather than queued behind reader commands.
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready")return false;
         work_->sourceScroll_=Value;work_->wake_.notify_one();return true;

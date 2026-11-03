@@ -873,6 +873,34 @@ int ScintillaQtDirectBackend::leftMarginWidth() const
 	return total;
 }
 
+qintptr ScintillaQtDirectBackend::RowTextCharacter(qintptr Position) const
+{
+	if (!m_editor)
+		return Position;
+	const auto Blank = [this](qintptr At) { const auto Char = Send(SCI_GETCHARAT, quintptr(At)); return Char == ' ' || Char == '\t'; };
+	const qintptr Line = Send(SCI_LINEFROMPOSITION, quintptr(Position)), Start = Send(SCI_POSITIONFROMLINE, quintptr(Line)), End = Send(SCI_GETLINEENDPOSITION, quintptr(Line));
+	if (Position >= End || !Blank(Position))
+		return Position;
+	// Bounded: a run of indentation or padding is short, and this runs on every caret move.
+	const qintptr Row = Send(SCI_POINTYFROMPOSITION, 0, Position);
+	for (qintptr At = Send(SCI_POSITIONAFTER, quintptr(Position)), Steps = 0; At < End && Steps < 256; At = Send(SCI_POSITIONAFTER, quintptr(At)), ++Steps)
+	{
+		if (Send(SCI_POINTYFROMPOSITION, 0, At) != Row)
+			break;
+		if (!Blank(At))
+			return At;
+	}
+	for (qintptr At = Position, Steps = 0; At > Start && Steps < 256; ++Steps)
+	{
+		At = Send(SCI_POSITIONBEFORE, quintptr(At));
+		if (Send(SCI_POINTYFROMPOSITION, 0, At) != Row)
+			break;
+		if (!Blank(At))
+			return At;
+	}
+	return Position;
+}
+
 void ScintillaQtDirectBackend::SetCurrentLineColors(const CurrentLineColors& Colors)
 {
 	currentLineColors_ = Colors;

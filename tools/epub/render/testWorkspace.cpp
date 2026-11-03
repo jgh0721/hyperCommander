@@ -194,7 +194,17 @@ bool sourceCaretAligned(EpubSourceEditor& Editor) {
 }
 // Wheel notches over a widget's centre, sent as real input so the page sees the user's scroll.
 bool wheelOver(QWidget& Window,QWidget* Target,int Notches) {
-    if(!foreground(Window))return false;const auto Local=Target->mapTo(&Window,Target->rect().center());const qreal Dpr=Window.devicePixelRatioF();
+    if(!foreground(Window))return false;
+    // The wheel goes to the window under the cursor. On a desktop smaller than the test window (a remote
+    // session) the target's centre can lie off screen or under the taskbar, so the window moves to bring it in.
+    if(const auto* Screen=Window.screen()) {
+        const auto Work=Screen->availableGeometry().adjusted(16,16,-16,-16);const auto Center=Target->mapToGlobal(Target->rect().center());
+        if(!Work.contains(Center)){
+            Window.move(Window.pos()+QPoint(qBound(Work.left(),Center.x(),Work.right())-Center.x(),qBound(Work.top(),Center.y(),Work.bottom())-Center.y()));
+            if(!QTest::qWaitFor([&]{return Work.contains(Target->mapToGlobal(Target->rect().center()));},3000))return false;QTest::qWait(150);
+        }
+    }
+    const auto Local=Target->mapTo(&Window,Target->rect().center());const qreal Dpr=Window.devicePixelRatioF();
     POINT Point{LONG(Local.x()*Dpr),LONG(Local.y()*Dpr)};if(!ClientToScreen(reinterpret_cast<HWND>(Window.winId()),&Point) || !SetCursorPos(Point.x,Point.y))return false;QTest::qWait(60);
     for(int I=0;I<qAbs(Notches);++I){INPUT Wheel{};Wheel.type=INPUT_MOUSE;Wheel.mi.dwFlags=MOUSEEVENTF_WHEEL;Wheel.mi.mouseData=DWORD(Notches<0?WHEEL_DELTA:-WHEEL_DELTA);if(SendInput(1,&Wheel,sizeof(Wheel))!=1)return false;QTest::qWait(40);}
     return true;
@@ -530,10 +540,19 @@ private slots:
         Backend->Send(SCI_SETFIRSTVISIBLELINE,quintptr(1)<<30);QVERIFY(Backend->isScrolledToEnd());QTRY_VERIFY_WITH_TIMEOUT(([&]{const auto State=previewPage(*Editor)["scrollState"].toObject();return State["extent"].toDouble()-State["offset"].toDouble()<1;})(),5000);
         // Preview -> editor: the user's wheel in the preview moves the editor to the same line.
         Backend->Send(SCI_GOTOLINE,int(Lines*.3)-1);Backend->scrollFractionalLineToViewportRatio(Lines*0.3,0.5);QTRY_VERIFY_WITH_TIMEOUT(Applied(),5000);QTest::qWait(400);
-        const int Before=Backend->firstVisibleLine();QVERIFY(wheelOver(Window,Editor->PreviewView(),6));
-        QTRY_VERIFY_WITH_TIMEOUT(Backend->firstVisibleLine()>Before,5000);
+        const int Before=Backend->firstVisibleLine();const double OffsetBefore=previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble();
+        const auto GeometryBefore=QString("window %1x%2 viewport %3 / ").arg(Window.width()).arg(Window.height()).arg(Backend->scrollArea()->viewport()->height());
+        QVERIFY(wheelOver(Window,Editor->PreviewView(),6));
+        // Which window took the wheel, for a failure: another top-level window over the preview takes it.
+        POINT Cursor{};GetCursorPos(&Cursor);const HWND Under=WindowFromPoint(Cursor);wchar_t UnderClass[128]{};GetClassNameW(Under,UnderClass,128);DWORD UnderPid=0;GetWindowThreadProcessId(Under,&UnderPid);
+        const auto Wheeled=GeometryBefore+QString("window %1x%2 viewport %3 first %4 -> %5 ").arg(Window.width()).arg(Window.height()).arg(Backend->scrollArea()->viewport()->height()).arg(Before).arg(Backend->firstVisibleLine())
+            +QString("cursor %1,%2 window %3 pid %4 (test %5) preview offset %6 -> ").arg(Cursor.x).arg(Cursor.y).arg(QString::fromWCharArray(UnderClass)).arg(UnderPid).arg(GetCurrentProcessId()).arg(OffsetBefore);
+        QTRY_VERIFY2_WITH_TIMEOUT(Backend->firstVisibleLine()>Before,qPrintable(Wheeled+QString::number(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble())+QString(" editor %1 -> %2 preview %3 sync %4").arg(Before).arg(Backend->firstVisibleLine())
+            .arg(QString::fromUtf8(QJsonDocument(previewScroll(*Editor)).toJson(QJsonDocument::Compact))).arg(QString::fromUtf8(QJsonDocument(Editor->Snapshot()["scrollSync"].toObject()).toJson(QJsonDocument::Compact)))),5000);
         QTRY_VERIFY2_WITH_TIMEOUT(previewScroll(*Editor)["user"].toBool() && qAbs(Backend->fractionalLineAtViewportRatio(0.5)-previewScroll(*Editor)["line"].toDouble())<=1.0,
-            qPrintable(QString("editor %1 preview %2").arg(Backend->fractionalLineAtViewportRatio(0.5)).arg(previewScroll(*Editor)["line"].toDouble())),3000);
+            qPrintable(Wheeled+QString::number(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble())+QString(" editor %1 preview %2 state %3 sync %4").arg(Backend->fractionalLineAtViewportRatio(0.5)).arg(previewScroll(*Editor)["line"].toDouble())
+                .arg(QString::fromUtf8(QJsonDocument(previewPage(*Editor)["scrollState"].toObject()).toJson(QJsonDocument::Compact))+QString::fromUtf8(QJsonDocument(previewScroll(*Editor)).toJson(QJsonDocument::Compact)))
+                .arg(QString::fromUtf8(QJsonDocument(Editor->Snapshot()["scrollSync"].toObject()).toJson(QJsonDocument::Compact)))),3000);
         // Neither side bounces once the wheel stops.
         QTest::qWait(300);const int First=Backend->firstVisibleLine();const double Offset=previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble();QTest::qWait(1000);
         QCOMPARE(Backend->firstVisibleLine(),First);QVERIFY2(qAbs(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-Offset)<2,qPrintable(QString::number(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-Offset)));
@@ -600,19 +619,31 @@ private slots:
             Backend->Send(SCI_GOTOPOS,Base);QTest::qWait(500);
             QVERIFY(foreground(Window));QApplication::setActiveWindow(&Window);Editor->SourceInput()->setFocus();
             QTRY_VERIFY(Editor->SourceInput()->hasFocus());QTRY_VERIFY_WITH_TIMEOUT(Applied(),5000);
-            for(int Step=0;Step<12;++Step) {
+            // D5: the caret's character keeps the source row's screen height; the preview moves only
+            // when that character's rendered line changes, with at most one request per key.
+            auto* Frame=Editor->findChild<QWidget*>("epubPreviewFrame");QVERIFY(Frame);auto* Viewport=Backend->scrollArea()->viewport();
+            for(int Step=0;Step<8;++Step) {
                 const auto BeforePos=Backend->Send(SCI_GETCURRENTPOS),BeforeLine=Backend->Send(SCI_LINEFROMPOSITION,BeforePos);
                 const auto BeforeY=Backend->Send(SCI_POINTYFROMPOSITION,0,BeforePos);
                 const int BeforeTop=Backend->firstVisibleLine();const auto BeforeAnchor=Editor->Snapshot()["scrollSync"].toObject()["line"].toDouble();
-                const double BeforeOffset=previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble();
-                QTest::keyClick(Editor->SourceInput(),Step<6?Qt::Key_Right:Qt::Key_Left);QTest::qWait(350);
+                const auto BeforeRequests=scrollRequests(*Editor);
+                QTest::keyClick(Editor->SourceInput(),Step<4?Qt::Key_Right:Qt::Key_Left);
                 const auto AfterPos=Backend->Send(SCI_GETCURRENTPOS);
                 QVERIFY2(AfterPos!=BeforePos,qPrintable(QString("base %1 step %2 position %3 focus %4").arg(Base).arg(Step).arg(BeforePos).arg(Editor->SourceInput()->hasFocus())));
-                QTRY_VERIFY_WITH_TIMEOUT(Applied(),5000);
-                if(Backend->Send(SCI_LINEFROMPOSITION,AfterPos)==BeforeLine && Backend->Send(SCI_POINTYFROMPOSITION,0,AfterPos)==BeforeY && Backend->firstVisibleLine()==BeforeTop) {
+                // The editor sends from the event loop after the caret settles; until then the last request reads as applied.
+                QTest::qWait(50);QTRY_VERIFY_WITH_TIMEOUT(Applied(),5000);
+                QVERIFY2(scrollRequests(*Editor)-BeforeRequests<=1,"One key sent several scroll requests");
+                const auto Scroll=previewScroll(*Editor);
+                if(Scroll["appliedOffset"].isDouble() && !Scroll["clamped"].toBool()) {
+                    const double SourceY=Viewport->mapToGlobal(QPoint(0,int(Backend->Send(SCI_POINTYFROMPOSITION,0,AfterPos)))).y();
+                    const double PreviewY=Frame->mapToGlobal(QPoint(0,0)).y()+Scroll["appliedOffset"].toDouble();
+                    QVERIFY2(qAbs(SourceY-PreviewY)<=Backend->Send(SCI_TEXTHEIGHT,quintptr(Backend->Send(SCI_LINEFROMPOSITION,AfterPos))),
+                        qPrintable(QString("base %1 step %2 caret %3 -> %4: source row %5 preview line %6 preview %7 sync %8").arg(Base).arg(Step).arg(BeforePos).arg(AfterPos).arg(SourceY).arg(PreviewY)
+                            .arg(QString::fromUtf8(QJsonDocument(Scroll).toJson(QJsonDocument::Compact))).arg(QString::fromUtf8(QJsonDocument(Editor->Snapshot()["scrollSync"].toObject()).toJson(QJsonDocument::Compact)))));
+                }
+                if(Backend->Send(SCI_LINEFROMPOSITION,AfterPos)==BeforeLine && Backend->Send(SCI_POINTYFROMPOSITION,0,AfterPos)==BeforeY && Backend->firstVisibleLine()==BeforeTop)
                     QCOMPARE(Editor->Snapshot()["scrollSync"].toObject()["line"].toDouble(),BeforeAnchor);
-                    QVERIFY2(qAbs(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-BeforeOffset)<2,"Horizontal caret movement scrolled the preview");
-                } else ++Crossings;
+                else ++Crossings;
             }
         }
         QVERIFY(Crossings>0);

@@ -148,7 +148,7 @@ namespace hc::defaults::edit
             {"textView/mask/enabled", false}, {"textView/mask/gamma", 1.2}, {"textView/mask/strength", 1.1},
             {"markdown/viewerMode", "preview"}, {"markdown/editorMode", "split"},
             {"markdown/viewerOutline", false}, {"markdown/editorOutline", true},
-            {"markdown/outlineDepth", 6}, {"markdown/positionSync", true}, {"markdown/scrollSync", true},
+            {"markdown/outlineDepth", 6}, {"markdown/scrollSync", true},
             {"markdown/math", true}, {"markdown/inlineDollar", true}, {"markdown/mermaid", true},
             {"markdown/codeHighlight", true}, {"markdown/autoPreview", true},
             {"markdown/debounceMs", 250}, {"markdown/remoteImages", false},

@@ -34,6 +34,10 @@ public:
     };
 
     qintptr Send(unsigned int Message, quintptr W=0, qintptr L=0) const;
+    // The character a scroll anchor names for Position. A space or tab has no counterpart on a rendered
+    // page (one at a soft wrap hangs at the end of the previous rendered line), so the nearest other
+    // character on the same display row stands for it, the next one first; Position when there is none.
+    qintptr RowTextCharacter(qintptr Position) const;
     // Replaces the theme colors until the next applyThemeColors(), e.g. for a settings preview.
     void SetCurrentLineColors(const CurrentLineColors& Colors);
 	explicit ScintillaQtDirectBackend(QWidget* editorParent, QObject* parent = nullptr);

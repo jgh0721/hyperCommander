@@ -145,7 +145,7 @@ void EpubSourceEditor::finishPreviewPatch() {
         previewPatchRejected_=previewPatchToken_;
     } else if(Result.contains("error"))previewPatchRejected_=previewPatchToken_;
     else {
-        previewActiveToken_=previewPatchToken_;previewChanges_=previewPatchChanges_;
+        previewActiveToken_=previewPatchToken_;previewChanges_=previewPatchChanges_;previewMatchesSource_=previewActiveToken_==Token();
         previewReadyMs_=previewPatchClock_.elapsed();previewExportMs_=0;previewError_.clear();
         // Keep line shifts from edits typed while this asynchronous update was in flight.
         for(auto At=sourceBuffers_.begin();At!=sourceBuffers_.end();++At) {
@@ -186,7 +186,7 @@ void EpubSourceEditor::showPreview(const QByteArray& Bytes) {
     if(previewClosing_)return;if(sourceComposing_){previewPending_=true;previewTimer_.start();return;}
     auto* Candidate=new EpubProcessView(*previewRuntime_,{0,0,20000},previewStack_->parentWidget());Candidate->setObjectName("epubDraftPreview");
     previewCandidateChanges_=previewWorkChanges_;previewCandidateEdition_=previewWorkEdition_;
-    previewCandidate_=Candidate;previewCandidateToken_=previewWorkToken_;previewCandidateEpoch_=previewWorkEpoch_;previewCandidateSerial_=-2;previewCandidateInputRequested_=false;previewCandidateScrollSerial_=-1;previewStack_->addWidget(Candidate);
+    previewCandidate_=Candidate;previewCandidateToken_=previewWorkToken_;previewCandidateEpoch_=previewWorkEpoch_;previewCandidateSerial_=-2;previewCandidateInputRequested_=false;previewCandidateScrollSerial_=-1;previewCandidateScrollRetries_=0;previewStack_->addWidget(Candidate);
     if(previewView_)previewStack_->setCurrentWidget(previewView_);else previewStack_->setCurrentWidget(Candidate);
     Candidate->show();reportPreview(tr("새 본문·내장 글꼴·이미지를 준비하고 있습니다…"));
     connect(Candidate,&EpubProcessView::EscapeRequested,this,&EpubSourceEditor::EscapeRequested);connect(Candidate,&EpubProcessView::FullscreenRequested,this,&EpubSourceEditor::FullscreenRequested);
@@ -230,7 +230,7 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
         if(previewCandidateScrollSerial_<0) {
             auto Target=sourceScrollTarget(false);Candidate->setProperty("epubSourceScrollTarget",QVariant::fromValue(Target));
             previewCandidateScrollSerial_=++sourceScrollSerial_;Target["serial"]=previewCandidateScrollSerial_;
-            if(Candidate->RequestSourceScroll(Target)){previewCandidateScrollClock_.start();QTimer::singleShot(5000,this,[this,Guard=QPointer<EpubProcessView>(Candidate)]{if(Guard)admitPreview(Guard);});return;}
+            if(Candidate->RequestSourceScroll(Target)){previewCandidateScrollClock_.start();previewCandidateScrollTimer_.start();return;}
             previewCandidateScrollSerial_=0;
         }
         else if(State["previewScroll"].toObject()["applied"].toInteger()<previewCandidateScrollSerial_) {
@@ -240,14 +240,17 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
             reportPreview(tr("미리보기 위치를 복원하지 못해 이전 화면을 유지합니다. 갱신을 다시 실행해 주세요."));
             retirePreview(Candidate);emit StateChanged();return;
         }
-        else if(Candidate->property("epubSourceScrollTarget").value<QJsonObject>()!=sourceScrollTarget(false)){
+        else if(previewCandidateScrollRetries_<CandidateScrollRetries && Candidate->property("epubSourceScrollTarget").value<QJsonObject>()!=sourceScrollTarget(false)){
             // Input can move while the renderer acknowledges its first scroll.
             // Keep the old preview visible until the replacement reaches the latest anchor.
-            previewCandidateScrollSerial_=-1;admitPreview(Candidate);return;
+            // Held keys move it on every acknowledgement; after a few rounds the swap
+            // proceeds and syncPreviewScroll() below sends the anchor of that moment.
+            ++previewCandidateScrollRetries_;previewCandidateScrollSerial_=-1;admitPreview(Candidate);return;
         }
     }
+    previewCandidateScrollTimer_.stop();
     previewChanges_=previewCandidateChanges_;previewEdition_=previewCandidateEdition_;previewReadyMs_=previewBuildClock_.isValid()?previewBuildClock_.elapsed():0;
-    auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;sourceSelectionSerial_=State["sourceSelection"].toObject()["serial"].toInteger(-1);
+    auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;previewMatchesSource_=previewActiveToken_==Token();sourceSelectionSerial_=State["sourceSelection"].toObject()["serial"].toInteger(-1);
     // The new preview shows the current text: earlier line shifts no longer apply and the first report is new.
     clearLineShifts();previewScrollSeen_=-1;lastScrollLine_=-1;lastScrollChapter_=-1;scrollSyncPending_=true;contextRequestSerial_=State["contextRequest"].toObject()["serial"].toInteger(-1);if((sourceSyncPending_ || SourceInput()->hasFocus()) && action("epubPreviewScrollSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();
     if(Old)retirePreview(Old);

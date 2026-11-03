@@ -45,9 +45,15 @@ namespace hc::document
         std::function<QJsonArray()> CaptureBookSearchSources(const QString& Document) const;
         bool ApplySearchText(const QString& Expected, const QString& Replacement);
         void SelectSearchRange(qint64 Start, qint64 Length);
+        // Session bytes and, for text, why they cannot be written in the document's
+        // encoding. Both come from one serialization so a save never pairs bytes
+        // with another revision's verdict.
+        struct SessionSerialization { QByteArray bytes_; std::optional<storage::Error> error_; };
+        SessionSerialization SerializeSession() const;
         QByteArray SessionContent() const;
         storage::Result<QByteArray> Export(const QString& Destination,bool SaveEpubOriginal=false) const;
-        DocumentEncoder CaptureSave(const QString& Destination, bool SaveEpubOriginal = false, std::optional<QByteArray> Content = std::nullopt) const;
+        DocumentEncoder CaptureSave(const QString& Destination, bool SaveEpubOriginal = false, std::optional<QByteArray> Content = std::nullopt,
+            std::optional<storage::Error> ContentError = std::nullopt) const;
         void CommitSaved(const QString& Path, const QByteArray& Bytes, const QByteArray& Content, const QByteArray& Hash, bool Current);
         void ReportSaveFailure(const QByteArray& Content, const QString& Error);
         QJsonObject Execute(const QJsonObject& Request);
@@ -126,7 +132,7 @@ namespace hc::document
         QString viewId_ = "text", encoding_ = "UTF-8", eol_ = "LF";
         bool bom_ = false, syncing_ = false;
         mutable QString statusEol_;
-        mutable std::optional<storage::Error> textSerializationError_;
+        QByteArray serializeContent(std::optional<storage::Error>* Error) const;
         bool unlimitedBytes_ = false;
         int quality_ = -1;
         QByteArray originalImageBytes_, originalImageHash_;

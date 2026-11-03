@@ -319,6 +319,13 @@ void EpubSourceEditor::updateActions() {
 }
 void EpubSourceEditor::restoreLayout() {
     AppSettings Settings;const auto Orientation=Settings.value("epubEditor/layout/orientation").toString();
+    // Position and scroll sync are one toggle now. Scroll sync only ever worked while
+    // position sync was on, so the setting keeps what was effectively enabled.
+    if(Settings.contains("epubEditor/layout/positionSync")){
+        const auto Scroll=Settings.value("epubEditor/layout/scrollSync");
+        Settings.setValue("epubEditor/layout/scrollSync",Settings.value("epubEditor/layout/positionSync").toBool() && (!Scroll.isValid() || Scroll.toBool()));
+        Settings.remove("epubEditor/layout/positionSync");Settings.sync();
+    }
     // Restored quietly: a saved toggle alone must not request or move the preview.
     for(const auto& [Key,Name]:previewToggles()){const auto Value=Settings.value(QString("epubEditor/layout/")+Key);if(!Value.isValid())continue;const QSignalBlocker Block(action(Name));action(Name)->setChecked(Value.toBool());}
     applyOrientation(Orientation=="vertical"?Qt::Vertical:Orientation=="horizontal"?Qt::Horizontal:window()->width()<980?Qt::Vertical:Qt::Horizontal,false);

@@ -46,6 +46,8 @@ public:
     void ReportSaveFailure(const QByteArray& Content, const QString& Error);
     bool CanPrepareSave()const{return ready_ && !structuring_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty();}
     void ReloadValidationSettings();
+    // Applies an already loaded documentViews.epubEditor section without reading the file.
+    void ApplyValidationSettings(QJsonObject Section);
     void Checkpoint();
     void DiscardRecovery();
     void SetRecoveryEnabled(bool Enabled);
@@ -82,6 +84,8 @@ private:
     QTimer workspaceTimer_;QJsonObject workspacePositions_,workspaceSaved_,workspaceLastDocument_;
     QMap<QString,QByteArray> workspaceLastSources_;
     QString workspaceFile_,workspaceError_;bool workspaceRestoring_=false,workspaceRestored_=false;
+    // Sessions written before "positionUnits" counted a leading BOM as one unit.
+    bool workspaceLegacyUnits_=false;
     void alignPreview();
     void restoreLayout();void saveLayout();void applyOrientation(Qt::Orientation Value,bool Save=true);void setPanelVisible(const QString& Panel,bool Visible);
     QAction* action(const QString& Id)const;void updateActions();void updateStatus();
@@ -89,8 +93,9 @@ private:
     void refreshTree();void selectResource(const QString& Path);bool openResource(const QString& Path);QString mediaOf(const QString& Path)const;QString treeResource()const;
     void refreshTabs();void closeTab(int Index);void closeTabs(const QList<int>& Indexes);bool closeResource(const QString& Path,bool Ask);void revertResource(const QString& Path);
     QStringList openResources_;QSet<QString> touchedResources_;
-    // Scintilla position helpers: model and draft positions stay UTF-16 offsets.
-    int toUtf16(qintptr Position)const;qintptr fromUtf16(int Offset)const;
+    // Scintilla position helpers: model and draft positions stay UTF-16 offsets of the
+    // decoded text, which has no leading BOM; bomBytes() is the BOM kept in the buffer.
+    int toUtf16(qintptr Position)const;qintptr fromUtf16(int Offset)const;qintptr bomBytes()const;
     void invalidateSourceCache();
     const epub::SourceMap* sourceMap()const;
     mutable QByteArray sourceBytesCache_;mutable QString sourceTextCache_;
@@ -98,10 +103,13 @@ private:
     mutable bool sourceBytesCached_=false,sourceTextCached_=false,sourceMapCached_=false,sourceMapValid_=false;
     mutable qint64 sourceReads_=0,sourceMapBuilds_=0;
     struct SourcePosition {qintptr byte_=-1;int utf16_=0;};
-    mutable SourcePosition sourcePositions_[2];
+    mutable SourcePosition sourcePositions_[2];mutable qintptr sourceBom_=-1;
     QByteArray sourceBytes()const;QString sourceText()const;bool sourceModified()const;bool sourceShown()const;
     int sourcePosition()const;int sourceAnchor()const;void setSourceSelection(int Anchor,int Position,bool Reveal=true);
-    int firstVisibleLine()const;int horizontalOffset()const;void setScroll(int Line,int Offset);void setSourceReadOnly(bool ReadOnly);
+    // The view's top as a document line and a wrapped row inside it. Unlike a display
+    // row number it means the same text at another wrap width.
+    struct ScrollTop {int line_=0,subLine_=0;};
+    int firstVisibleLine()const;int horizontalOffset()const;ScrollTop scrollTop()const;void setScroll(ScrollTop Top,int Offset);void setSourceReadOnly(bool ReadOnly);
     void focusSource();void insertSource(const QString& Text);
     struct StructureOutput {epub::EditModel model_;QString error_,selected_;};
     QFutureWatcher<StructureOutput> structureWorker_;std::shared_ptr<std::atomic_bool> structureCancel_;
@@ -119,6 +127,8 @@ private:
     QTimer checkerTimer_;QElapsedTimer checkerElapsed_;std::unique_ptr<QTemporaryDir> checkerDirectory_;
     QJsonObject checkerSettings_;QJsonArray diagnosticRows_;QByteArray checkerWorkToken_,checkerVerifiedToken_,checkerLog_;
     QString checkerSettingsFile_;
+    // After a save the verdict display follows the policy its worker read, without a GUI-thread file read.
+    void reloadValidationSettingsAsync();QFutureWatcher<std::optional<QJsonObject>> validationSettingsReader_;bool validationSettingsAgain_=false;
     QString checkerState_="idle",checkerReason_,checkerVersion_;bool checkerRequested_=false;QStringList problemFilter_;QString problemResource_;
     void setupRecovery();
     void modelLoaded(epub::EditModel Model);
@@ -155,6 +165,12 @@ private:
     double toPreviewLine(double Line)const;double fromPreviewLine(double Line)const;void clearLineShifts();
     QTimer scrollRetryTimer_;qint64 previewDrivenIgnoreUntil_=0,suppressSyncUntil_=0,previewScrollSeen_=-1,sourceScrollSerial_=0,previewCandidateScrollSerial_=-1;
     double lastScrollLine_=-1,lastScrollRatio_=-1;int lastScrollChapter_=-1;bool lastScrollEnd_=false,scrollSyncPending_=false;QElapsedTimer previewCandidateScrollClock_;
+    // The source-map anchor names nodes of the previewed text; it is sent only while that is the current text.
+    bool previewMatchesSource_=false;QJsonObject lastScrollTarget_;
+    // Both panes share screen coordinates: viewOffset is the height below the preview frame's top.
+    double previewViewOffset(double SourceY)const;double sourceYForViewOffset(double Offset)const;void placeSourceRow(qintptr Position,double Y);
+    // A replacement preview re-requests the latest anchor at most this many times while input moves it.
+    static constexpr int CandidateScrollRetries=3;int previewCandidateScrollRetries_=0;QTimer previewCandidateScrollTimer_;
     void editMetadata();void inspectImage(const QString& Path);void editImageProperties(const QJsonObject& Inspection);
     // Context menus and source tools.
     void showTreeMenu(const QPoint& Position);void showSourceMenu(const QPoint& Position);void showTabMenu(const QPoint& Position);void showProblemMenu(const QPoint& Position);
@@ -162,7 +178,8 @@ private:
     void findInResources(const QString& Text);void findSelectionInSource(const QString& Text);void copyPath(const QString& Path,bool Relative);
     void insertImageReference(const QString& Path);void exportResource(const QString& Path);void duplicateResource(const QString& Path);void importResources();
     // shifts_: line changes since the shown preview was built, so scroll positions map onto it.
-    struct SourceState {qintptr document_=0;QByteArray applied_;int position_=0,anchor_=0,line_=0,offset_=0;quint64 serial_=0;QList<LineShift> shifts_;bool shiftsOverflow_=false;};
+    // line_/subLine_: ScrollTop of the buffer when it was last shown.
+    struct SourceState {qintptr document_=0;QByteArray applied_;int position_=0,anchor_=0,line_=0,subLine_=0,offset_=0;quint64 serial_=0;QList<LineShift> shifts_;bool shiftsOverflow_=false;};
     QMap<QString,SourceState> sourceBuffers_;QString bufferResource_;quint64 bufferSerial_=0;
     QTimer sourceSyncTimer_;bool sourceSyncPending_=false,sourceSyncReveal_=false;int sourceSyncAttempts_=0;qint64 sourceSelectionSerial_=-1;qint64 contextRequestSerial_=-1;
     QFutureWatcher<QJsonObject> imageInspection_;QByteArray imageInspectionToken_;
@@ -178,7 +195,7 @@ private:
     QString current_,error_,message_,draftMessage_,previewMessage_;QStringList protectedPaths_;QList<QByteArray> identities_;QByteArray baseToken_,reference_;
     bool ready_=false,updating_=false,sourceComposing_=false,commitRestore_=false,commitFocus_=false,sourceReadOnly_=false;
     bool bookUndoPriority_=false,bookRedoPriority_=false,recoveryDismissed_=false;
-    QString commitResource_;int commitPosition_=0,commitAnchor_=0,commitVertical_=0,commitHorizontal_=0;
+    QString commitResource_;int commitPosition_=0,commitAnchor_=0,commitHorizontal_=0;ScrollTop commitTop_;
     EpubResourceModel* resourceModel_=nullptr;EpubResourceFilter* resourceFilter_=nullptr;QTreeView* tree_=nullptr;QLineEdit* treeFilter_=nullptr;QLabel* treeSummary_=nullptr;QTabBar* tabs_=nullptr;
     QSplitter *outerSplitter_=nullptr,*workSplitter_=nullptr,*previewSplitter_=nullptr;QWidget *treePanel_=nullptr,*previewPanel_=nullptr;QTimer layoutTimer_;bool layoutRestored_=false;
     QMap<QString,QAction*> actions_;QList<QAction*> toolbarActions_,menuActions_;QMenu *validateMenu_=nullptr,*structureMenu_=nullptr,*draftMenu_=nullptr,*layoutMenu_=nullptr;

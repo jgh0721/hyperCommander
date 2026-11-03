@@ -405,7 +405,8 @@ namespace hc::document
         epub_->hide();epubEditor_->show();epubEditor_->SetSourceVisible(true);updateEpubMode();
         if(WasActive && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root)Focus();return true;
     }
-    QByteArray DocumentViewPane::Content() const
+    QByteArray DocumentViewPane::Content() const { return serializeContent(nullptr); }
+    QByteArray DocumentViewPane::serializeContent(std::optional<storage::Error>* Error) const
     {
         if(text_){
             const auto Text=text_->Content();
@@ -413,26 +414,30 @@ namespace hc::document
             bool CrLf=false,Cr=false,Lf=false;
             for(qsizetype I=0;I<Text.size();++I){if(Text[I]=='\r'){if(I+1<Text.size()&&Text[I+1]=='\n'){CrLf=true;++I;}else Cr=true;}else if(Text[I]=='\n')Lf=true;if(int(CrLf)+int(Cr)+int(Lf)>1)break;}
             statusEol_=int(CrLf)+int(Cr)+int(Lf)>1?"MIXED":CrLf?"CRLF":Cr?"CR":Lf?"LF":text_->detectedLineEnding()==QTextView::CRLF?"CRLF":text_->detectedLineEnding()==QTextView::CR?"CR":"LF";
-            auto Bytes=EncodeDocumentText(Text,encoding_,bom_);textSerializationError_.reset();
+            auto Bytes=EncodeDocumentText(Text,encoding_,bom_);
             if(Bytes.HasValue())return Bytes.Value();
-            textSerializationError_=Bytes.Failure();return Text.toUtf8();
+            if(Error)*Error=Bytes.Failure();return Text.toUtf8();
         }
         return pdf_?pdf_->SerializeContent():image_?(image_->isModified()?image_->SerializeContent():originalImageBytes_):QByteArray{};
 }
-    QByteArray DocumentViewPane::SessionContent() const
+    DocumentViewPane::SessionSerialization DocumentViewPane::SerializeSession() const
     {
-        if(epub_)return "epub:"+(epubEditor_?epubEditor_->Token():epubSourceHash_).toHex();
-        if (!image_) return Content();
-        if (!image_->isModified()) return "image:" + originalImageHash_.toHex();
-        const auto Bytes = image_->SerializeContent();
-        return Bytes.isEmpty() ? QByteArray{} : "image:" + QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex();
+        SessionSerialization Result;
+        if(epub_)Result.bytes_="epub:"+(epubEditor_?epubEditor_->Token():epubSourceHash_).toHex();
+        else if(!image_)Result.bytes_=serializeContent(&Result.error_);
+        else if(!image_->isModified())Result.bytes_="image:"+originalImageHash_.toHex();
+        else if(const auto Bytes=image_->SerializeContent();!Bytes.isEmpty())Result.bytes_="image:"+QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256).toHex();
+        return Result;
     }
-    DocumentEncoder DocumentViewPane::CaptureSave(const QString& Destination,bool SaveEpubOriginal,std::optional<QByteArray> Content) const
+    QByteArray DocumentViewPane::SessionContent() const { return SerializeSession().bytes_; }
+    DocumentEncoder DocumentViewPane::CaptureSave(const QString& Destination,bool SaveEpubOriginal,std::optional<QByteArray> Content,std::optional<storage::Error> ContentError) const
     {
         if(epubEditor_)return epubEditor_->CaptureSave(Destination,SaveEpubOriginal);
         // The session owns the exact serialized revision already. Capturing it
         // avoids reading/decoding/re-encoding the entire source again for Ctrl+S.
-        if(text_ && Content)return [Bytes=std::move(*Content),Error=textSerializationError_](storage::OperationContext Context)->storage::Result<QByteArray>{
+        // The caller passes the verdict produced with those bytes: the pane's latest
+        // serialization may belong to an edit that was rejected and undone.
+        if(text_ && Content)return [Bytes=std::move(*Content),Error=std::move(ContentError)](storage::OperationContext Context)->storage::Result<QByteArray>{
             if(auto Stop=Context.Check({"document"}))return *Stop;
             // Unrepresentable source stays editable as UTF-8 in the session, but
             // those fallback bytes must never be written as the requested encoding.

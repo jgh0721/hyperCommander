@@ -66,6 +66,7 @@
 #include <QThread>
 #include <QSemaphore>
 #include "UniqueLibs/document/documentTextCodec.hpp"
+#include "commonLibs/document/epub/epubScrollRequest.hpp"
 static_assert(!std::is_invocable_v<decltype(&AppSettings::value), AppSettings*, const QString&, const QVariant&>);
 using namespace hc::settings;
 using namespace hc::document;
@@ -73,7 +74,7 @@ class DocumentPreferencesTests : public QObject {
     Q_OBJECT
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
-    static QByteArray workspaceBook(int Paragraphs=100)
+    static QByteArray workspaceBook(int Paragraphs=100,bool Bom=false,int Repeat=0)
     {
         QByteArray Bytes;QBuffer Buffer(&Bytes);if(!Buffer.open(QIODevice::WriteOnly))return {};
         QZipWriter Zip(&Buffer);Zip.setCompressionPolicy(QZipWriter::NeverCompress);
@@ -81,8 +82,8 @@ class DocumentPreferencesTests : public QObject {
         Zip.addFile("META-INF/container.xml","<container xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\" version=\"1.0\"><rootfiles><rootfile full-path=\"EPUB/content.opf\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>");
         Zip.addFile("EPUB/content.opf","<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"id\"><metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:identifier id=\"id\">workspace-test</dc:identifier><dc:title>Workspace</dc:title><dc:language>ko</dc:language><meta property=\"dcterms:modified\">2026-11-03T00:00:00Z</meta></metadata><manifest><item id=\"one\" href=\"one.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"two\" href=\"two.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/></manifest><spine><itemref idref=\"one\"/><itemref idref=\"two\"/></spine></package>");
         Zip.addFile("EPUB/nav.xhtml","<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>Contents</title></head><body><nav epub:type=\"toc\"><ol><li><a href=\"one.xhtml\">First</a></li><li><a href=\"two.xhtml\">Second</a></li></ol></nav></body></html>");
-        QByteArray Chapter="<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Chapter</title></head><body>\n";
-        for(int I=0;I<Paragraphs;++I)Chapter+="<p>workspace paragraph "+QByteArray::number(I)+" 가나다 text</p>\n";
+        QByteArray Chapter=QByteArray(Bom?"\xef\xbb\xbf":"")+"<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Chapter</title></head><body>\n";
+        for(int I=0;I<Paragraphs;++I)Chapter+="<p>workspace paragraph "+QByteArray::number(I)+" 가나다"+QByteArray(" long words for wrapping").repeated(Repeat)+" text</p>\n";
         Chapter+="</body></html>";Zip.addFile("EPUB/one.xhtml",Chapter);Zip.addFile("EPUB/two.xhtml",Chapter);Zip.close();
         return Zip.status()==QZipWriter::NoError?Bytes:QByteArray{};
     }
@@ -1128,11 +1129,54 @@ private slots:
         const auto Latest=Pane.SessionContent();Pane.CommitSaved(Input.path_,Latest,Latest,QCryptographicHash::hash(Latest,QCryptographicHash::Sha256),true);
         QVERIFY(!Source->isModified());QVERIFY(Backend->Send(SCI_CANUNDO));
         if(Encoding=="CP949"){
-            Backend->replace(QStringLiteral("😀"));const auto Unrepresentable=Pane.SessionContent();
-            auto Rejected=Pane.CaptureSave(Input.path_,false,Unrepresentable);
+            Backend->replace(QStringLiteral("😀"));const auto Unrepresentable=Pane.SerializeSession();QVERIFY(Unrepresentable.error_.has_value());
+            auto Rejected=Pane.CaptureSave(Input.path_,false,Unrepresentable.bytes_,Unrepresentable.error_);
             auto Failure=QtConcurrent::run([Rejected]{return Rejected(hc::storage::OperationContext{});});QTRY_VERIFY_WITH_TIMEOUT(Failure.isFinished(),15000);
             QVERIFY(!Failure.result().HasValue());QCOMPARE(Failure.result().Failure().code_,std::string("document-encoding-unrepresentable"));QVERIFY(Source->isModified());
         }
+    }
+    void textSaveKeepsSessionAfterRejectedEdit_data()
+    {
+        QTest::addColumn<QString>("Encoding");QTest::addColumn<QString>("Before");QTest::addColumn<QString>("Oversize");QTest::addColumn<bool>("Saves");
+        // The session holds UTF-8 fallback bytes; the oversize text is representable.
+        QTest::newRow("cp949-fallback-kept")<<QString("CP949")<<QStringLiteral("😀")<<QString("a")<<false;
+        // The session holds valid CP949; the oversize text is not representable.
+        QTest::newRow("cp949-valid-kept")<<QString("CP949")<<QStringLiteral("추가 ")<<QStringLiteral("😀")<<true;
+        // Select-all replacement: its deletion reaches the session before the insertion is rejected.
+        QTest::newRow("utf8-replace-all")<<QString("UTF-8")<<QString()<<QString("a")<<false;
+    }
+    void textSaveKeepsSessionAfterRejectedEdit()
+    {
+        // An oversize edit is undone without reaching the session. The session text and
+        // its encoding verdict must stay those of the restored content.
+        QFETCH(QString,Encoding);QFETCH(QString,Before);QFETCH(QString,Oversize);QFETCH(bool,Saves);
+        QTemporaryDir Temp;const auto OldConfig=qApp->property("documentViewsConfigDir");qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto RestoreConfig=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        ::AppSettings Settings;Settings.setValue("markdown/autoPreview",false);Settings.sync();
+        const auto Original=EncodeDocumentText(QStringLiteral("한글 원본\r\n"),Encoding,false);QVERIFY(Original.HasValue());
+        const auto Path=Temp.filePath("legacy.txt");Write(Path,Original.Value());
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
+        const auto Id=Window.Handle({{"action","open"},{"path",Path}})["documentId"].toString();QVERIFY(!Id.isEmpty());QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(),15000);
+        auto* Source=Window.findChild<QTextView*>();QVERIFY(Source);auto* Backend=static_cast<ScintillaQtDirectBackend*>(Source->Backend());
+        const auto State=[&]{for(const auto& Value:Window.Snapshot()["documents"].toArray())if(Value.toObject()["documentId"].toString()==Id)return Value.toObject();return QJsonObject{};};
+        if(!Before.isEmpty()){Backend->Send(SCI_GOTOPOS,0);Backend->replace(Before);}
+        const auto Kept=Source->Content();
+        // Larger than TextByteLimit in every encoding of the row.
+        QString Large(17*1024*1024,QChar('a'));if(Oversize!="a")Large.replace(0,Oversize.size(),Oversize);
+        Backend->Send(SCI_SELECTALL);Backend->replace(Large);
+        QCOMPARE(State()["error"].toString(),QString("p0-text-byte-limit"));
+        // The editor rejects the edit after its change notification returns.
+        QTRY_COMPARE_WITH_TIMEOUT(Source->Content(),Kept,10000);
+        Window.findChild<QAction*>("saveDocument")->trigger();QTRY_VERIFY_WITH_TIMEOUT(!State()["saving"].toBool(),30000);
+        if(Saves){
+            const auto Expected=EncodeDocumentText(Kept,Encoding,false);QVERIFY(Expected.HasValue());
+            QVERIFY2(State()["error"].toString().isEmpty(),qPrintable(State()["error"].toString()));QCOMPARE(Read(Path),Expected.Value());
+        } else {
+            // Either nothing to save (restored text equals the file) or an encoding refusal; the file never changes.
+            QCOMPARE(Read(Path),Original.Value());
+            if(Before==QStringLiteral("😀"))QCOMPARE(State()["error"].toString(),QString("document-encoding-unrepresentable"));
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),15000);
     }
     void markdownQueuedSavePreservesTyping()
     {
@@ -1175,6 +1219,121 @@ private slots:
         const auto Hash=QCryptographicHash::hash(Frozen,QCryptographicHash::Sha256);Clock.restart();Pane.CommitSaved(Input.path_,Frozen,Frozen,Hash,true);const auto CompletionMs=Clock.elapsed();
         QCOMPARE(Backend->Send(SCI_GETDOCPOINTER),Document);QCOMPARE(Backend->Send(SCI_GETCURRENTPOS),Position);QVERIFY(Backend->Send(SCI_CANUNDO));QVERIFY(!Source->isModified());
         qInfo()<<"Markdown large-source save: sourceBytes="<<Frozen.size()<<" captureMs="<<CaptureMs<<" completionMs="<<CompletionMs;
+    }
+    void epubSourceScrollRequestValidation()
+    {
+        // The editor and the sandboxed preview helper accept the same request shape: the five
+        // required fields, and optionally a screen offset and a bounded source-map anchor.
+        using hc::document::epub::ValidSourceScrollRequest;
+        const QJsonObject Base{{"chapter",2},{"line",14.5},{"ratio",.4},{"end",false},{"serial",9}};
+        const QJsonObject Anchor{{"path",QJsonArray{1,0,3}},{"child",2},{"offset",17}};
+        QVERIFY(ValidSourceScrollRequest(Base));
+        auto Full=Base;Full["viewOffset"]=240.5;Full["anchor"]=Anchor;QVERIFY(ValidSourceScrollRequest(Full));
+        auto Offset=Base;Offset["viewOffset"]=-12;QVERIFY(ValidSourceScrollRequest(Offset));
+        const auto Rejected=[&](const QString& Key,const QJsonValue& Value){auto Request=Full;Request[Key]=Value;return !ValidSourceScrollRequest(Request);};
+        QVERIFY(Rejected("viewOffset","240"));QVERIFY(Rejected("viewOffset",1e9));QVERIFY(Rejected("anchor",QJsonArray{}));QVERIFY(Rejected("line",0.5));QVERIFY(Rejected("ratio",1.5));
+        auto Extra=Full;Extra["reveal"]="none";QVERIFY(!ValidSourceScrollRequest(Extra));
+        for(const auto& Bad:{QJsonObject{{"path",QJsonArray{1,-1}},{"child",0},{"offset",0}},QJsonObject{{"path",QJsonArray{1.5}},{"child",0},{"offset",0}},
+                             QJsonObject{{"path",QJsonArray{}},{"child",-2},{"offset",0}},QJsonObject{{"path",QJsonArray{}},{"child",0},{"offset",3*1024*1024}},
+                             QJsonObject{{"path",QJsonArray{}},{"child",0}},QJsonObject{{"path",QJsonArray{}},{"child",0},{"offset",0},{"extra",1}}})
+            QVERIFY2(Rejected("anchor",Bad),qPrintable(QString::fromUtf8(QJsonDocument(Bad).toJson(QJsonDocument::Compact))));
+        QJsonArray Deep;for(int I=0;I<129;++I)Deep.append(0);QVERIFY(Rejected("anchor",QJsonObject{{"path",Deep},{"child",0},{"offset",0}}));
+    }
+    void epubSourceBomPositionsUseDecodedText()
+    {
+        // Positions shared with search, drafts and sessions are UTF-16 units of the
+        // decoded text. Qt drops a leading BOM when decoding; the buffer keeps it.
+        QCOMPARE(QString::fromUtf8(QByteArray("\xef\xbb\xbf" "a")).size(),qsizetype(1));
+        QTemporaryDir Temp;const auto OldWorkspace=qApp->property("epubWorkspaceDirectory"),OldConfig=qApp->property("documentViewsConfigDir");
+        qApp->setProperty("epubWorkspaceDirectory",Temp.path());qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        const auto Bytes=workspaceBook(100,true);QVERIFY(!Bytes.isEmpty());
+        const auto Path=Temp.filePath("bom.epub"),Json=Temp.filePath("HyperEditor.epub-workspace.json");Write(Path,Bytes);
+        const auto Raw=[](ScintillaQtDirectBackend* Backend){const auto Length=Backend->Send(SCI_GETLENGTH);QByteArray Text(Length+1,Qt::Uninitialized);
+            Backend->Send(SCI_GETTEXT,quintptr(Length+1),reinterpret_cast<qintptr>(Text.data()));Text.resize(Length);return Text;};
+        const QByteArray Needle("workspace paragraph 7 ");qintptr Caret=-1;
+        {
+            EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+            auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend());const auto Source=Raw(Backend);
+            QVERIFY(Source.startsWith("\xef\xbb\xbf"));const auto Text=QString::fromUtf8(Source);
+            const auto At=Source.indexOf(Needle);QVERIFY(At>0);Backend->Send(SCI_SETSEL,At,At+Needle.size());
+            auto State=Editor.Execute({{"action","epub.edit.source-state"}});
+            QCOMPARE(Text.mid(State["anchor"].toInt(),State["position"].toInt()-State["anchor"].toInt()),QString::fromUtf8(Needle));
+            for(const qintptr Inside:{0,1,3}){Backend->Send(SCI_GOTOPOS,Inside);QCOMPARE(Editor.Execute({{"action","epub.edit.source-state"}})["position"].toInt(),0);}
+            // A search result is an offset into the decoded text.
+            const auto Hit=Text.indexOf("workspace paragraph 9 ");QVERIFY(Hit>0);
+            Editor.SelectSearchRange(Editor.Snapshot()["current"].toString(),Hit,22);QCOMPARE(Editor.SourceView()->Backend()->selectedText(),QString("workspace paragraph 9 "));
+            Caret=At+Needle.size();Backend->Send(SCI_GOTOPOS,Caret);
+            QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["workspaceSaving"].toBool(),5000);
+        }
+        const auto Reopen=[&]{
+            EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);
+            if(!QTest::qWaitFor([&]{return Editor.IsReady();},15000))return qintptr(-2);
+            const auto Position=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend())->Send(SCI_GETCURRENTPOS);
+            // Let the restored position's session write finish before the file is read or edited.
+            QTest::qWait(850);if(!QTest::qWaitFor([&]{return !Editor.Snapshot()["workspaceSaving"].toBool();},5000))return qintptr(-3);
+            return Position;
+        };
+        QCOMPARE(Reopen(),Caret);
+        // A session written before positionUnits counted the BOM as one unit.
+        auto Root=QJsonDocument::fromJson(Read(Json)).object();auto Documents=Root["documents"].toObject();QCOMPARE(Documents.size(),1);
+        auto Document=Documents.begin()->toObject();QCOMPARE(Document["positionUnits"].toString(),QString("text"));Document.remove("positionUnits");
+        auto Tabs=Document["tabs"].toArray();auto Tab=Tabs[0].toObject();Tab["position"]=Tab["position"].toInt()+1;Tab["anchor"]=Tab["anchor"].toInt()+1;Tabs[0]=Tab;
+        Document["tabs"]=Tabs;Documents[Documents.begin().key()]=Document;Root["documents"]=Documents;Write(Json,QJsonDocument(Root).toJson());
+        QCOMPARE(Reopen(),Caret);
+    }
+    void epubWorkspaceRestoresTopAcrossWidth()
+    {
+        // The saved top is a document line and wrapped row, so a narrower window that
+        // wraps every line into more rows still opens at the same text.
+        QTemporaryDir Temp;const auto OldWorkspace=qApp->property("epubWorkspaceDirectory"),OldConfig=qApp->property("documentViewsConfigDir");
+        qApp->setProperty("epubWorkspaceDirectory",Temp.path());qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        const auto Bytes=workspaceBook(120,false,12);QVERIFY(!Bytes.isEmpty());const auto Path=Temp.filePath("wide.epub");Write(Path,Bytes);
+        const auto TopLine=[](ScintillaQtDirectBackend* Backend){return int(Backend->Send(SCI_DOCLINEFROMVISIBLE,quintptr(Backend->Send(SCI_GETFIRSTVISIBLELINE))));};
+        int Line=-1;
+        {
+            EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);Editor.resize(850,650);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+            Editor.SourceView()->setWordWrap(true);QTest::qWait(300);
+            auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend());const auto Text=Editor.SourceView()->Content();
+            Line=int(Backend->Send(SCI_LINEFROMPOSITION,quintptr(Text.left(Text.indexOf("workspace paragraph 60 ")).toUtf8().size())));
+            QVERIFY(Line>60);QVERIFY(Backend->Send(SCI_WRAPCOUNT,quintptr(Line))>=2);
+            // Rows above are wrapped too: a display row number would point at an earlier line elsewhere.
+            QVERIFY(Backend->Send(SCI_VISIBLEFROMDOCLINE,quintptr(Line))>Line+30);
+            Backend->Send(SCI_SCROLLVERTICAL,quintptr(Line),1);QTest::qWait(100);QCOMPARE(TopLine(Backend),Line);
+            Backend->Send(SCI_SETEMPTYSELECTION,quintptr(Backend->Send(SCI_GETLINEENDPOSITION,quintptr(Line))));QTest::qWait(100);QCOMPARE(TopLine(Backend),Line);
+            QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["workspaceSaving"].toBool(),5000);
+        }
+        {
+            EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);Editor.resize(600,650);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+            QVERIFY(Editor.SourceView()->isWordWrapEnabled());auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend());
+            QTRY_COMPARE_WITH_TIMEOUT(TopLine(Backend),Line,3000);
+            // Idle wrapping of the rows above must not move the restored top.
+            QTest::qWait(800);QCOMPARE(TopLine(Backend),Line);
+            QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["workspaceSaving"].toBool(),5000);
+        }
+    }
+    void epubResourceSwitchKeepsUiResponsive()
+    {
+        // Restoring a resource's top must not wrap the whole buffer on the UI thread.
+        QTemporaryDir Temp;const auto OldWorkspace=qApp->property("epubWorkspaceDirectory"),OldConfig=qApp->property("documentViewsConfigDir");
+        qApp->setProperty("epubWorkspaceDirectory",Temp.path());qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        const auto Bytes=workspaceBook(5000,false,12);QVERIFY(!Bytes.isEmpty());const auto Path=Temp.filePath("large-wrapped.epub");Write(Path,Bytes);
+        EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);Editor.resize(850,650);Editor.show();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),30000);
+        Editor.SourceView()->setWordWrap(true);QTest::qWait(300);
+        const auto First=Editor.Snapshot()["current"].toString(),Second=First.endsWith("one.xhtml")?QString("EPUB/two.xhtml"):QString("EPUB/one.xhtml");
+        QVERIFY(Editor.Execute({{"action","epub.edit.select"},{"resource",Second}})["accepted"].toBool());QTest::qWait(300);
+        QElapsedTimer Clock;Clock.start();qint64 Previous=0,LargestGap=0;
+        QTimer Heartbeat;Heartbeat.setInterval(5);connect(&Heartbeat,&QTimer::timeout,[&]{const auto Now=Clock.elapsed();LargestGap=qMax(LargestGap,Now-Previous);Previous=Now;});Heartbeat.start();
+        for(int Round=0;Round<4;++Round){
+            QVERIFY(Editor.Execute({{"action","epub.edit.select"},{"resource",Round%2?Second:First}})["accepted"].toBool());QTest::qWait(150);
+        }
+        Heartbeat.stop();
+        const double Scale=qEnvironmentVariableIsSet("HC_PERF_THRESHOLD_SCALE")?qEnvironmentVariable("HC_PERF_THRESHOLD_SCALE").toDouble():1.0;
+        qInfo()<<"EPUB wrapped resource switch: sourceBytes="<<Bytes.size()<<" maximumUiGapMs="<<LargestGap;
+        QVERIFY2(LargestGap<qint64(250*Scale),qPrintable(QString("UI gap %1 ms").arg(LargestGap)));
+        QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["workspaceSaving"].toBool(),5000);
     }
     void epubSourcePositionCacheKeepsUnicodeOffsets()
     {
@@ -1221,12 +1380,16 @@ private slots:
         QCOMPARE(Tab["position"].toInt(),QString::fromUtf8(Source.first(Position)).size());
         QCOMPARE(Tab["anchor"].toInt(),Tab["position"].toInt());
         qInfo()<<"EPUB large-source session capture: sourceBytes="<<Source.size()<<" maximumUiGapMs="<<LargestGap;
+        // Loose bounds for slow machines; HC_PERF_THRESHOLD_SCALE widens them further.
+        const double Scale=qEnvironmentVariableIsSet("HC_PERF_THRESHOLD_SCALE")?qEnvironmentVariable("HC_PERF_THRESHOLD_SCALE").toDouble():1.0;
+        QVERIFY2(LargestGap<qint64(250*Scale),qPrintable(QString("session capture paused the UI for %1 ms").arg(LargestGap)));
         Editor.SetRecoveryEnabled(true);Backend->Send(SCI_GOTOPOS,Source.lastIndexOf(" text</p>")+5);Backend->replace(QStringLiteral("😀"));
         const auto Cursor=Backend->Send(SCI_GETCURRENTPOS);Clock.restart();Editor.Checkpoint();const auto DraftCaptureMs=Clock.elapsed();
         QTRY_VERIFY2_WITH_TIMEOUT(Editor.Snapshot()["recoverySaved"].toBool(),qPrintable(Editor.Snapshot()["recoveryError"].toString()),15000);
         const auto Recovery=epub::DraftStore::Read(Editor.RecoveryDirectory(),Editor.Snapshot()["recoveryPath"].toString());QVERIFY2(Recovery,qPrintable(Recovery.error_));
         const auto Live=Editor.SourceView()->Content().toUtf8();QCOMPARE(Recovery.snapshot_.cursor_,QString::fromUtf8(Live.first(Cursor)).size());
         qInfo()<<"EPUB large-source recovery captureMs="<<DraftCaptureMs;
+        QVERIFY2(DraftCaptureMs<qint64(50*Scale),qPrintable(QString("draft capture took %1 ms").arg(DraftCaptureMs)));
         QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["workspaceSaving"].toBool(),5000);
     }
     void epubSaveCaptureSettingsInWorker()
@@ -1251,6 +1414,39 @@ private slots:
         Write(UnifiedConfig::FileName(Temp.path()),QJsonDocument(Root).toJson(QJsonDocument::Compact));
         auto Allowed=QtConcurrent::run([Other]{return Other(hc::storage::OperationContext{});});
         QTRY_VERIFY_WITH_TIMEOUT(Allowed.isFinished(),15000);QVERIFY(Allowed.result().HasValue());
+        // The editor's verdict policy follows the file once a save completes or fails,
+        // read off the GUI thread; capture itself still emits nothing.
+        const auto Required=[&]{return Editor.Snapshot()["standardValidation"].toObject()["required"].toBool();};
+        const auto Hash=QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256),Content="epub:"+Editor.Token().toHex();
+        Editor.CommitSaved(Path,Content,Hash);QTRY_VERIFY_WITH_TIMEOUT(!Required(),5000);
+        Root["documentViews"]=QJsonObject{{"epubEditor",QJsonObject{{"requireEpubCheck",true}}}};
+        Write(UnifiedConfig::FileName(Temp.path()),QJsonDocument(Root).toJson(QJsonDocument::Compact));
+        Editor.ReportSaveFailure(Content,"test-failure");QTRY_VERIFY_WITH_TIMEOUT(Required(),5000);
+    }
+    void epubWorkspaceLockRetryKeepsFinalSnapshot()
+    {
+        // A held session lock delays the write; the batch, including a closed editor's
+        // final position and a Save As predecessor, is retried rather than dropped.
+        const auto Bytes=workspaceBook();QVERIFY(!Bytes.isEmpty());QTemporaryDir Temp;QVERIFY(Temp.isValid());
+        const auto OldWorkspace=qApp->property("epubWorkspaceDirectory"),OldConfig=qApp->property("documentViewsConfigDir"),OldLock=qApp->property("epubWorkspaceLockTimeoutMs");
+        qApp->setProperty("epubWorkspaceDirectory",QVariant{});qApp->setProperty("documentViewsConfigDir",Temp.path());qApp->setProperty("epubWorkspaceLockTimeoutMs",400);
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);qApp->setProperty("documentViewsConfigDir",OldConfig);qApp->setProperty("epubWorkspaceLockTimeoutMs",OldLock);});
+        const auto Path=Temp.filePath("book.epub"),SavedAs=Temp.filePath("saved-as.epub"),Json=Temp.filePath("HyperEditor.epub-workspace.json");
+        Write(Path,Bytes);Write(SavedAs,Bytes);
+        auto Editor=std::make_unique<EpubSourceEditor>(Bytes,Path);Editor->SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor->IsReady(),15000);
+        QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Editor->Snapshot()["workspaceSaving"].toBool(),5000);
+        QLockFile Lock(Json+".lock");QVERIFY(Lock.tryLock(0));
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor->SourceView()->Backend());Backend->Send(SCI_GOTOPOS,40);
+        Editor->CommitSaved(SavedAs,"epub:"+Editor->Token().toHex(),QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256));
+        Backend->Send(SCI_GOTOPOS,77);Editor.reset();
+        // The first attempt times out at 400 ms with the lock still held.
+        QTest::qWait(550);Lock.unlock();
+        EpubSourceEditor Reopened(Bytes,SavedAs);Reopened.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Reopened.IsReady(),15000);
+        QCOMPARE(static_cast<ScintillaQtDirectBackend*>(Reopened.SourceView()->Backend())->Send(SCI_GETCURRENTPOS),qintptr(77));
+        const auto Documents=QJsonDocument::fromJson(Read(Json)).object()["documents"].toObject();
+        const auto OldKey=QDir::fromNativeSeparators(QFileInfo(Path).canonicalFilePath()).toCaseFolded();
+        QCOMPARE(Documents[OldKey].toObject()["tabs"].toArray().first().toObject()["position"].toInt(),40);
+        QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Reopened.Snapshot()["workspaceSaving"].toBool(),5000);
     }
     void epubWorkspaceInputDuringSave()
     {

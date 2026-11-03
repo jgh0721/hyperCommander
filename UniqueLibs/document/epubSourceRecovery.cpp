@@ -112,7 +112,7 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
             if(model_.IsEditable(Snapshot.currentResource_)){current_=Snapshot.currentResource_;select();}
             if(Snapshot.hasCurrentDraft_) {
                 if(current_!=Snapshot.currentResource_ || !sourceShown()){recoveryError_="epub-draft-selected-resource";reportDraft(tr("선택한 리소스 초안은 수동 확인이 필요합니다."));}
-                else {updating_=true;static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_SETTEXT,0,reinterpret_cast<qintptr>(Snapshot.currentDraft_.constData()));setSourceSelection(Snapshot.cursor_,Snapshot.cursor_);setScroll(Snapshot.scroll_,0);updating_=false;refreshTabs();}
+                else {updating_=true;static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_SETTEXT,0,reinterpret_cast<qintptr>(Snapshot.currentDraft_.constData()));setSourceSelection(Snapshot.cursor_,Snapshot.cursor_);setScroll({Snapshot.scroll_,0},0);updating_=false;refreshTabs();}
             }
             recoveryLocator_=Snapshot.locator_;recoverySourceChanged_=recoveryReadingSourceChanged_;recoveredFrom_=readingRecoveryPath_;
             previewPreferredChapter_=-1;previewRestoreChapter_=Snapshot.readingChapter_;previewRecoveryPosition_=true;
@@ -128,7 +128,7 @@ void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
         if(model_.IsEditable(commitResource_) && commitResource_!=current_){current_=commitResource_;select();}
         if(sourceShown())setSourceSelection(commitAnchor_,commitPosition_,false);
         if(commitFocus_ && previewOwnerActive())focusSource();
-        if(sourceShown())setScroll(commitVertical_,commitHorizontal_);
+        if(sourceShown())setScroll(commitTop_,commitHorizontal_);
     }
     commitRestore_=false;refreshRecovery();updateActions();emit StateChanged();
 }
@@ -141,8 +141,9 @@ void EpubSourceEditor::Checkpoint() {
     if(!IsModified()) {if(!recoveryPath_.isEmpty()){DiscardRecovery();resetRecoverySession();}return;}
     if(draftWrittenToken_==Token())return;
     epub::DraftSnapshot Snapshot;Snapshot.sourcePath_=sourcePath_;Snapshot.original_=model_.OriginalBytes();Snapshot.structuralBytes_=model_.StructuralBytes();Snapshot.changes_=model_.Changes();Snapshot.currentResource_=current_;Snapshot.locator_=recoveryLocator_;Snapshot.readingChapter_=previewRecoveryPosition_?previewRestoreChapter_:previewSnapshot()["state"].toObject()["chapterIndex"].toInt(previewRestoreChapter_);
-    // Draft positions stay UTF-16 offsets and first lines so earlier drafts restore unchanged.
-    const auto Current=draft();Snapshot.hasCurrentDraft_=Current.contains(current_);Snapshot.currentDraft_=Current.value(current_);Snapshot.scroll_=sourceShown()?firstVisibleLine():0;
+    // Draft positions stay UTF-16 offsets of the decoded text. The scroll is the top document line;
+    // drafts written before it held a display row and restore up to the wrapped rows above.
+    const auto Current=draft();Snapshot.hasCurrentDraft_=Current.contains(current_);Snapshot.currentDraft_=Current.value(current_);Snapshot.scroll_=sourceShown()?scrollTop().line_:0;
     const auto CursorSource=sourceShown()?sourceBytes():QByteArray{};
     const auto Cursor=sourceShown()?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_GETCURRENTPOS):0;
     Snapshot.diskHash_=sourceHashAtOpen_;

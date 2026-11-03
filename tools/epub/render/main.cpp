@@ -8,6 +8,7 @@
 #include "publicationResources.hpp"
 #include "commonLibs/document/epub/epubPackage.hpp"
 #include "commonLibs/document/epub/epubSourceLines.hpp"
+#include "commonLibs/document/epub/epubScrollRequest.hpp"
 #include <cmath>
 #include <QWindow>
 #include <QPointer>
@@ -530,9 +531,8 @@ namespace
             page_->runJavaScript("window.hcFocusReading && window.hcFocusReading()");
         }
         bool sourceScroll(const QJsonValue& Value) {
-            const auto Request=Value.toObject();const double Line=Request["line"].toDouble(-1),Ratio=Request["ratio"].toDouble(-1);
-            if(!started_ || !Value.isObject() || Request.size()!=5 || Request["chapter"].toInt(-1)<0 || !std::isfinite(Line) || Line<1 || Ratio<0 || Ratio>1
-                || !Request["end"].isBool() || !Request["serial"].isDouble())return false;
+            const auto Request=Value.toObject();
+            if(!started_ || !Value.isObject() || !hc::document::epub::ValidSourceScrollRequest(Request))return false;
             page_->runJavaScript("window.hcSourceScroll && window.hcSourceScroll("+QString::fromUtf8(QJsonDocument(Request).toJson(QJsonDocument::Compact))+")");
             scrollActive_.restart();if(poll_.interval()>33)poll_.start(33);return true;
         }

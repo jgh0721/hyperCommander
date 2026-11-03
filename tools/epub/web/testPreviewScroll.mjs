@@ -24,18 +24,39 @@ assert.equal(scroll.test.yForLine(7),200);assert.equal(scroll.test.lineForY(200)
 for(const line of [2.5,6.25,10.5,12.9])assert.ok(Math.abs(scroll.test.lineForY(scroll.test.yForLine(line))-line)<1e-9);
 
 // The requested line lands at the requested height ratio; line 1 and the end are exact.
-scroll.apply({chapter:3,line:7,ratio:0.5,end:false,serial:1});
+// Requests are applied on the next frame.
+const apply=async request=>{scroll.apply(request);await sleep(70);};
+await apply({chapter:3,line:7,ratio:0.5,end:false,serial:1});
 assert.equal(container.scrollTop,100);let state=scroll.state();assert.equal(state.applied,1);assert.equal(state.appliedLine,7);assert.ok(state.supported);assert.equal(state.anchors,5);
-scroll.apply({chapter:3,line:1,ratio:0.5,end:false,serial:2});assert.equal(container.scrollTop,0);
-scroll.apply({chapter:3,line:9,ratio:0.5,end:true,serial:3});assert.equal(container.scrollTop,600);
-scroll.apply({chapter:4,line:9,ratio:0.5,end:false,serial:4});assert.equal(container.scrollTop,600);assert.equal(scroll.state().error,"chapter");
-scroll.apply({chapter:3,line:9,ratio:0.25,end:false,serial:5});assert.equal(container.scrollTop,250);assert.equal(scroll.state().error,undefined);
+await apply({chapter:3,line:1,ratio:0.5,end:false,serial:2});assert.equal(container.scrollTop,0);
+await apply({chapter:3,line:9,ratio:0.5,end:true,serial:3});assert.equal(container.scrollTop,600);
+await apply({chapter:4,line:9,ratio:0.5,end:false,serial:4});assert.equal(container.scrollTop,600);assert.equal(scroll.state().error,"chapter");
+await apply({chapter:3,line:9,ratio:0.25,end:false,serial:5});assert.equal(container.scrollTop,250);assert.equal(scroll.state().error,undefined);
+// A screen offset from the window top replaces the ratio; an anchor that does not resolve keeps the line.
+await apply({chapter:3,line:9,ratio:0.25,viewOffset:20,end:false,serial:6});assert.equal(container.scrollTop,280);
+await apply({chapter:3,line:9,ratio:0.25,viewOffset:20,anchor:{path:[7,9],child:0,offset:0},end:false,serial:7});assert.equal(container.scrollTop,280);assert.equal(scroll.state().applied,7);
+// Requests faster than frames are merged: only the newest is applied.
+scroll.apply({chapter:3,line:7,ratio:0.5,end:false,serial:8});scroll.apply({chapter:3,line:9,ratio:0.25,end:false,serial:9});await sleep(70);
+assert.equal(container.scrollTop,250);assert.equal(scroll.state().applied,9);
+// A layout change re-applies the last request without reporting a new one.
+elements[4].getBoundingClientRect=()=>({top:340,height:40});scroll.test.invalidate();
+scroll.test.relayout();await sleep(70);assert.equal(container.scrollTop,290);assert.equal(scroll.state().applied,9);
+elements[4].getBoundingClientRect=()=>({top:300,height:40});scroll.test.invalidate();await apply({chapter:3,line:9,ratio:0.25,end:false,serial:10});
 
-// Our own scroll is not reported; a later scroll is, and only input makes it the user's.
+// Our own scroll is not reported. A later scroll with no input is a scrollbar drag or press and
+// counts as the user's; it also releases the editor's anchor. A scroll right after a layout change is
+// the page settling; input names its kind.
 onScroll();await sleep(80);assert.equal(scroll.state().serial,0);
-await sleep(200);container.scrollTop=300;onScroll();await sleep(80);state=scroll.state();
-assert.equal(state.serial,1);assert.equal(state.chapter,3);assert.equal(state.line,lineOf(400));assert.equal(state.user,false);assert.equal(state.top,false);assert.equal(state.bottom,false);
-scroll.markIntent();container.scrollTop=600;onScroll();await sleep(80);state=scroll.state();assert.equal(state.serial,2);assert.equal(state.user,true);assert.equal(state.bottom,true);
+await sleep(300);container.scrollTop=300;onScroll();await sleep(80);state=scroll.state();
+assert.equal(state.serial,1);assert.equal(state.chapter,3);assert.equal(state.line,lineOf(400));assert.equal(state.user,true);assert.equal(state.intent,'scrollbar');assert.equal(state.top,false);assert.equal(state.bottom,false);
+scroll.test.relayout();container.scrollTop=320;onScroll();await sleep(80);state=scroll.state();assert.equal(state.serial,2);assert.equal(state.user,false);assert.equal(container.scrollTop,320);
+scroll.markIntent('wheel');container.scrollTop=600;onScroll();await sleep(80);state=scroll.state();assert.equal(state.serial,3);assert.equal(state.user,true);assert.equal(state.intent,'wheel');assert.equal(state.bottom,true);
+// The reader's own moves for the host (a revealed source position) are not reported, and a later
+// layout change does not undo them by re-applying the editor's placement.
+await apply({chapter:3,line:9,ratio:0.25,end:false,serial:11});await sleep(300);assert.equal(container.scrollTop,250);
+scroll.quiet();container.scrollTop=420;onScroll();await sleep(80);assert.equal(scroll.state().serial,3);
+scroll.test.relayout();await sleep(70);assert.equal(container.scrollTop,420);
+await sleep(300);container.scrollTop=430;onScroll();await sleep(80);state=scroll.state();assert.equal(state.serial,4);assert.equal(state.intent,'scrollbar');
 function lineOf(y){return scroll.test.lineForY(y);}
 
 // Paginated, fixed-layout and vertical chapters have no table, so the host keeps position sync only.

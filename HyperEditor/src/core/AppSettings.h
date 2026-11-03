@@ -30,6 +30,14 @@ public:
         hc::settings::UnifiedConfig::Set(Views, Key.split('/'), hc::settings::UnifiedConfig::Encode(Value));
         draft_["documentViews"] = Views; dirty_ = true;
     }
+    // Drops a stored key; value() then falls back to the product default.
+    // The unified-config merge applies the removal to the file on sync().
+    void remove(const QString& Key)
+    {
+        auto Views = draft_["documentViews"].toObject();
+        if (!removePath(Views, Key.split('/'))) return;
+        draft_["documentViews"] = Views; dirty_ = true;
+    }
     void sync()
     {
         if (!dirty_) return;
@@ -44,6 +52,14 @@ public:
     QSettings::Status status() const { return error_.isEmpty() ? QSettings::NoError : QSettings::AccessError; }
     QString fileName() const { return path_; }
 private:
+    static bool removePath(QJsonObject& Object, const QStringList& Path)
+    {
+        if (Path.isEmpty() || !Object.contains(Path.first())) return false;
+        if (Path.size() == 1) { Object.remove(Path.first()); return true; }
+        auto Child = Object[Path.first()].toObject();
+        if (!removePath(Child, Path.mid(1))) return false;
+        Object[Path.first()] = Child; return true;
+    }
     QString path_, error_;
     QJsonObject base_, draft_;
     bool dirty_ = false, valid_ = false;

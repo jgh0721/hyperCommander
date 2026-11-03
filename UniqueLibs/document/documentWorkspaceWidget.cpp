@@ -178,6 +178,10 @@ namespace hc::document
         bool composingSave_ = false;
         std::uint64_t checkpointedRevision_ = std::numeric_limits<std::uint64_t>::max();
         std::shared_ptr<DocumentSession> session_ = std::make_shared<DocumentSession>(id_.toStdString());
+        // Encoding verdict of the bytes the session holds. Updated only together with
+        // the session text, never by a serialization that was rejected.
+        std::optional<storage::Error> serializationError_;
+        bool rejectingEdit_ = false;
         std::optional<SaveTicket> pending_;
         TextInput input_;
         QPointer<DocumentViewPane> pane_;
@@ -579,7 +583,8 @@ namespace hc::document
         for(auto* Reader:findChildren<ImageReadingView*>())if(Reader->State()["cover"].toBool()!=Cover)Reader->SetCover(Cover);
         for (auto* View : findChildren<QTextView*>()) View->ReloadPreferences();
         for(auto* Markdown:findChildren<MarkdownDocumentView*>())Markdown->ReloadPreferences();
-        for(auto* Source:findChildren<EpubSourceEditor*>())Source->ReloadValidationSettings();
+        // Root is already loaded; editors apply it without reading the file again.
+        for(auto* Source:findChildren<EpubSourceEditor*>())Source->ApplyValidationSettings(Root["documentViews"].toObject()["epubEditor"].toObject());
         for(const auto& Tab:documents_)Tab->pane_->SetEpubRecoveryEnabled(Root["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(hc::defaults::edit::ViewValue("textView/recoveryEnabled").toBool()));
         const auto Bindings = Root["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
         const auto ShortcutError = shortcutRouter_->Apply(Bindings);
@@ -727,15 +732,31 @@ namespace hc::document
         connect(Pane, &DocumentViewPane::ClipboardRequested, this, [this, Tab](const QString& Mode) { clipboard(Tab, Mode); });
         connect(Pane,&DocumentViewPane::ContentChanged,this,[this,Tab] {
             if(Tab->loading_||Tab->closed_)return;
-            auto Bytes=Tab->pane_->SessionContent();
+            auto Serialized=Tab->pane_->SerializeSession();const auto& Bytes=Serialized.bytes_;
             if(Tab->pane_->ViewId()=="text" && !hosted_ && Bytes.size()>TextByteLimit) {
-                const QSignalBlocker Block(Tab->pane_);
-                Tab->pane_->Undo();Tab->error_="p0-text-byte-limit";
-                Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo());update();return;
+                Tab->error_="p0-text-byte-limit";update();
+                // This runs inside the editor's change notification, where Scintilla ignores
+                // undo; revert once the edit has returned. One revert per rejected edit.
+                if(std::exchange(Tab->rejectingEdit_,true))return;
+                QTimer::singleShot(0,this,[this,Tab]{
+                    Tab->rejectingEdit_=false;if(Tab->closed_||!Tab->pane_)return;
+                    {const QSignalBlocker Block(Tab->pane_);Tab->pane_->Undo();}
+                    // A replacement arrives as a deletion and then an insertion, and the
+                    // deletion has already reached the session. Resynchronise with the
+                    // restored text so a save never writes that intermediate state, and
+                    // keep the verdict of those bytes rather than the rejected ones.
+                    auto Restored=Tab->pane_->SerializeSession();
+                    if(Restored.bytes_.size()<=TextByteLimit && Tab->session_->Execute("document.setText",Restored.bytes_.toStdString()).HasValue())
+                        Tab->serializationError_=std::move(Restored.error_);
+                    Tab->error_="p0-text-byte-limit";
+                    Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo());update();
+                });
+                return;
             }
             if(Tab->pane_->ViewId()!="text"&&Bytes.isEmpty()){Tab->error_="document-serialization-failed";update();return;}
             auto Result=Tab->session_->Execute("document.setText",Bytes.toStdString());
-            if(!Result.HasValue())Tab->error_=QString::fromStdString(Result.Failure().code_);else Tab->error_.clear();
+            if(!Result.HasValue())Tab->error_=QString::fromStdString(Result.Failure().code_);
+            else {Tab->error_.clear();Tab->serializationError_=std::move(Serialized.error_);}
             Tab->session_->SetHistoryState(Tab->pane_->CanUndo(),Tab->pane_->CanRedo());update();
             if(searchPanel_)searchPanel_->SourcesChanged();
         });
@@ -821,7 +842,7 @@ namespace hc::document
                     Tab->pane_->Load(Tab->input_,true,!hosted_);Tab->loading_=false;
                     SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),{},Tab->originalSave_};
                     Tab->session_->SetBinaryContent(true);
-                    Tab->session_->CompleteOpen(Started.Value(),OpenedDocument{std::move(Source),Tab->pane_->SessionContent().toStdString()});
+                    {auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;Tab->session_->CompleteOpen(Started.Value(),OpenedDocument{std::move(Source),Serialized.bytes_.toStdString()});}
                     Tab->pane_->SetClipboardBroker(clipboardBroker_);
                     if(auto* Input=Tab->pane_->InputWidget()){Input->installEventFilter(this);for(auto* Child:Input->findChildren<QWidget*>())Child->installEventFilter(this);}
                     cleanupRecovery(Tab,Revision);
@@ -896,7 +917,7 @@ namespace hc::document
                 if(!Loaded){Tab->session_->CompleteOpen(Generation,storage::Error{storage::ErrorCategory::InvalidRequest,"document-view-load"});Tab->error_="document-view-load";}
                 else {
                     Tab->session_->SetBinaryContent(true);
-                    Tab->session_->CompleteOpen(Generation,OpenedDocument{std::move(Source),Tab->pane_->SessionContent().toStdString()});
+                    {auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;Tab->session_->CompleteOpen(Generation,OpenedDocument{std::move(Source),Serialized.bytes_.toStdString()});}
                     Tab->pane_->SetClipboardBroker(clipboardBroker_);
                     if(auto* Input=Tab->pane_->InputWidget()){if(hosted_&&Tab->pane_->ViewId()=="text")Input->setAttribute(Qt::WA_NativeWindow);Input->installEventFilter(this);for(auto* Child:Input->findChildren<QWidget*>())Child->installEventFilter(this);}
                 }
@@ -977,9 +998,9 @@ namespace hc::document
         auto Request=std::make_shared<LocalSave>();Request->destination_=Destination;Request->original_=Original;Request->overwrite_=Overwrite;
         Request->content_=Tab->session_->Text();Request->revision_=Tab->Revision();
         const auto Capture=[&]{
-            std::optional<QByteArray> Content;
-            if(Tab->pane_->ViewId()=="text")Content=QByteArray::fromStdString(Request->content_);
-            return Tab->pane_->CaptureSave(Destination,Original && SaveEpubOriginal,std::move(Content));
+            std::optional<QByteArray> Content;std::optional<storage::Error> ContentError;
+            if(Tab->pane_->ViewId()=="text"){Content=QByteArray::fromStdString(Request->content_);ContentError=Tab->serializationError_;}
+            return Tab->pane_->CaptureSave(Destination,Original && SaveEpubOriginal,std::move(Content),std::move(ContentError));
         };
         if(Tab->saving_) {
             if(!Tab->activeSave_ || Tab->activeSave_->destination_!=Destination || Tab->activeSave_->overwrite_!=Overwrite){Tab->error_="document-save-target-busy";update();return;}
@@ -1211,7 +1232,7 @@ namespace hc::document
                         Tab->sourceToken_=Item["sourceToken"].toString();Tab->broker_=Item["broker"].toBool()&&!Tab->input_.book_&&!Tab->pane_->IsProcessDocument();
                         Tab->displayName_=Item["displayName"].toString();
                         SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),Tab->sourceToken_.toStdString(),Tab->broker_};
-                        Tab->session_->CompleteOpen(Begun.Value(),OpenedDocument{std::move(Source),Tab->pane_->SessionContent().toStdString()});
+                        {auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;Tab->session_->CompleteOpen(Begun.Value(),OpenedDocument{std::move(Source),Serialized.bytes_.toStdString()});}
                         Results.append(QJsonObject{{"documentId",Tab->id_},{"boundExistingHost",true}});
                         update();Bound=true;break;
                     }

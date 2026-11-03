@@ -27,10 +27,21 @@ namespace {
 ScintillaQtDirectBackend* direct(QTextView* View){return static_cast<ScintillaQtDirectBackend*>(View->Backend());}
 QString languageOf(const QString& Media){return Media=="application/xhtml+xml"?QStringLiteral("HTML"):Media=="text/css"?QStringLiteral("CSS"):Media.endsWith("+xml") || Media.endsWith("/xml")?QStringLiteral("XML"):QStringLiteral("None");}
 }
-// Drafts, the source map and diagnostics count UTF-16 code units; Scintilla counts UTF-8 bytes.
+// Drafts, the source map, search and diagnostics count UTF-16 code units of the text
+// as QString::fromUtf8 and DecodeDocumentText decode it, without a leading UTF-8 BOM.
+// Scintilla keeps those three bytes in the buffer so saved bytes stay unchanged, and
+// counts UTF-8 bytes; counting from the document start would include the BOM.
+qintptr EpubSourceEditor::bomBytes()const {
+    if(sourceBom_<0){
+        auto* Backend=direct(text_);const auto Byte=[Backend](int At){return int(Backend->Send(SCI_GETCHARAT,quintptr(At))&0xff);};
+        sourceBom_=Backend->Send(SCI_GETLENGTH)>=3 && Byte(0)==0xef && Byte(1)==0xbb && Byte(2)==0xbf?3:0;
+    }
+    return sourceBom_;
+}
 int EpubSourceEditor::toUtf16(qintptr Position)const {
-    auto* Backend=direct(text_);Position=qBound(qintptr(0),Position,Backend->Send(SCI_GETLENGTH));
-    SourcePosition Nearest{0,0};
+    auto* Backend=direct(text_);const auto Bom=bomBytes();Position=qBound(qintptr(0),Position,Backend->Send(SCI_GETLENGTH));
+    if(Position<=Bom)return 0;
+    SourcePosition Nearest{Bom,0};
     for(const auto& Cached:sourcePositions_){
         if(Cached.byte_<0)continue;
         if(Cached.byte_==Position)return Cached.utf16_;
@@ -42,10 +53,12 @@ int EpubSourceEditor::toUtf16(qintptr Position)const {
     const int Units=Nearest.utf16_+(Position>=Nearest.byte_?Delta:-Delta);
     sourcePositions_[1]=sourcePositions_[0];sourcePositions_[0]={Position,Units};return Units;
 }
-qintptr EpubSourceEditor::fromUtf16(int Offset)const{return direct(text_)->Send(SCI_POSITIONRELATIVECODEUNITS,0,qMax(0,Offset));}
+qintptr EpubSourceEditor::fromUtf16(int Offset)const{return direct(text_)->Send(SCI_POSITIONRELATIVECODEUNITS,quintptr(bomBytes()),qMax(0,Offset));}
 void EpubSourceEditor::invalidateSourceCache() {
     sourceBytesCached_=sourceTextCached_=sourceMapCached_=sourceMapValid_=false;
     for(auto& Position:sourcePositions_)Position={};
+    // An edit can remove the invisible U+FEFF at the start of the buffer.
+    sourceBom_=-1;
 }
 const epub::SourceMap* EpubSourceEditor::sourceMap()const {
     if(!sourceMapCached_){sourceMapValid_=sourceMapCache_.Load(sourceText());sourceMapCached_=true;++sourceMapBuilds_;}
@@ -66,19 +79,27 @@ void EpubSourceEditor::setSourceSelection(int Anchor,int Position,bool Reveal) {
 }
 int EpubSourceEditor::firstVisibleLine()const{return int(direct(text_)->Send(SCI_GETFIRSTVISIBLELINE));}
 int EpubSourceEditor::horizontalOffset()const{return int(direct(text_)->Send(SCI_GETXOFFSET));}
-void EpubSourceEditor::setScroll(int Line,int Offset){
+EpubSourceEditor::ScrollTop EpubSourceEditor::scrollTop()const{
+    auto* Backend=direct(text_);const auto Display=Backend->Send(SCI_GETFIRSTVISIBLELINE);
+    const auto Line=Backend->Send(SCI_DOCLINEFROMVISIBLE,quintptr(Display));
+    return {int(Line),int(qMax<qintptr>(0,Display-Backend->Send(SCI_VISIBLEFROMDOCLINE,quintptr(Line))))};
+}
+void EpubSourceEditor::setScroll(ScrollTop Top,int Offset){
     auto* Backend=direct(text_);
-    // First-visible-line counts wrapped display rows. Complete pending wrapping
-    // before restoring it; idle wrapping would otherwise move the restored top.
-    Backend->Send(SCI_ENSUREVISIBLE,quintptr(Backend->Send(SCI_LINEFROMPOSITION,quintptr(Backend->Send(SCI_GETCURRENTPOS)))));
-    Backend->Send(SCI_SETFIRSTVISIBLELINE,quintptr(qMax(0,Line)));Backend->Send(SCI_SETXOFFSET,quintptr(qMax(0,Offset)));
+    // Display rows above the top may not be wrapped yet. SCROLLVERTICAL keeps the
+    // document line and sub-row as its target and re-applies it once wrapping has
+    // reached them, so restoring never forces the whole resource to wrap here.
+    // Scintilla clamps a sub-row beyond the line's rows at this wrap width.
+    Backend->Send(SCI_SCROLLVERTICAL,quintptr(qBound(0,Top.line_,int(Backend->Send(SCI_GETLINECOUNT))-1)),qMax(0,Top.subLine_));
+    Backend->Send(SCI_SETXOFFSET,quintptr(qMax(0,Offset)));
 }
 void EpubSourceEditor::setSourceReadOnly(bool ReadOnly){sourceReadOnly_=ReadOnly;text_->setReadOnly(ReadOnly);updateActions();}
 void EpubSourceEditor::focusSource(){if(sourceShown())SourceInput()->setFocus(Qt::OtherFocusReason);}
 void EpubSourceEditor::insertSource(const QString& Text){const auto Bytes=Text.toUtf8();direct(text_)->Send(SCI_REPLACESEL,0,reinterpret_cast<qintptr>(Bytes.constData()));}
 void EpubSourceEditor::saveSourceState() {
     if(bufferResource_.isEmpty() || !sourceBuffers_.contains(bufferResource_) || sourceStack_->currentWidget()!=text_)return;
-    auto& State=sourceBuffers_[bufferResource_];State.position_=toUtf16(direct(text_)->Send(SCI_GETCURRENTPOS));State.anchor_=toUtf16(direct(text_)->Send(SCI_GETANCHOR));State.line_=firstVisibleLine();State.offset_=horizontalOffset();
+    auto& State=sourceBuffers_[bufferResource_];State.position_=toUtf16(direct(text_)->Send(SCI_GETCURRENTPOS));State.anchor_=toUtf16(direct(text_)->Send(SCI_GETANCHOR));
+    const auto Top=scrollTop();State.line_=Top.line_;State.subLine_=Top.subLine_;State.offset_=horizontalOffset();
 }
 void EpubSourceEditor::releaseSource(const QString& Path) {
     if(!sourceBuffers_.contains(Path))return;const auto State=sourceBuffers_.take(Path);
@@ -102,13 +123,18 @@ void EpubSourceEditor::activateSource(const QByteArray& Data,const QString& Medi
     }
     if(Fresh && workspacePositions_.contains(current_)){
         const auto Saved=workspacePositions_.take(current_).toObject();const int Length=QString::fromUtf8(Data).size();
-        State.position_=qBound(0,Saved["position"].toInt(),Length);State.anchor_=qBound(0,Saved["anchor"].toInt(State.position_),Length);
-        State.line_=qMax(0,Saved["firstVisibleLine"].toInt());
+        // Older sessions counted the BOM of this resource as one unit.
+        const int Legacy=workspaceLegacyUnits_ && Data.startsWith("\xef\xbb\xbf")?1:0;
+        State.position_=qBound(0,Saved["position"].toInt()-Legacy,Length);State.anchor_=qBound(0,Saved["anchor"].toInt(State.position_+Legacy)-Legacy,Length);
+        // Sessions before topLine stored a display row; read it as a document line.
+        State.line_=qMax(0,Saved.contains("topLine")?Saved["topLine"].toInt():Saved["firstVisibleLine"].toInt());
+        State.subLine_=qMax(0,Saved["topSubLine"].toInt());
         State.offset_=qBound(0,Saved["horizontalOffset"].toInt(),1000000);
     }
-    text_->setReadOnly(sourceReadOnly_);setSourceSelection(State.anchor_,State.position_,false);setScroll(State.line_,State.offset_);
-    const auto Resource=current_;const int Line=State.line_,Offset=State.offset_;
-    QTimer::singleShot(0,this,[this,Resource,Line,Offset]{if(bufferResource_==Resource && sourceStack_->currentWidget()==text_)setScroll(Line,Offset);});
+    const ScrollTop Top{State.line_,State.subLine_};
+    text_->setReadOnly(sourceReadOnly_);setSourceSelection(State.anchor_,State.position_,false);setScroll(Top,State.offset_);
+    const auto Resource=current_;const int Offset=State.offset_;
+    QTimer::singleShot(0,this,[this,Resource,Top,Offset]{if(bufferResource_==Resource && sourceStack_->currentWidget()==text_)setScroll(Top,Offset);});
     for(const auto& Path:sourceBuffers_.keys())if(Path!=current_ && !model_.IsEditable(Path))releaseSource(Path);
 }
 void EpubSourceEditor::locateSource(bool Reveal) {
@@ -171,6 +197,9 @@ bool readWorkspaceFile(const QString& Path,QJsonObject& Root,QString& Error) {
 struct EpubSourceEditor::WorkspaceState {
     struct Snapshot {QJsonObject document_;QMap<QString,QByteArray> sources_;QString utf8Resource_;};
     std::mutex mutex_;QMap<QString,Snapshot> pending_;bool running_=false;
+    // Result of the last write round. The editor reads it here rather than from the
+    // future: setFuture() drops a finished signal that has not been delivered yet.
+    QString error_;
 };
 QFuture<EpubSourceEditor::WorkspaceRead> EpubSourceEditor::readWorkspace(QString FilePath,QString Source) {
     return QtConcurrent::run(workspacePool(),[FilePath=std::move(FilePath),Source=std::move(Source)]{
@@ -182,7 +211,7 @@ QFuture<EpubSourceEditor::WorkspaceRead> EpubSourceEditor::readWorkspace(QString
 void EpubSourceEditor::setupWorkspace() {
     workspaceFile_=workspaceFile();workspaceState_=std::make_shared<WorkspaceState>();
     connect(&workspaceWriter_,&QFutureWatcher<QString>::finished,this,[this]{
-        const auto Error=workspaceWriter_.result();
+        const auto Error=[this]{const std::lock_guard Guard(workspaceState_->mutex_);return workspaceState_->error_;}();
         if(!Error.isEmpty()){
             if(Error=="workspace-lock-failed"){workspaceLastDocument_={};workspaceTimer_.start(1000);}
             if(workspaceError_!=Error)report(tr("EPUB 워크스페이스 저장 실패: %1 (%2)").arg(workspaceFile_,Error));
@@ -201,21 +230,22 @@ void EpubSourceEditor::saveWorkspace() {
         auto Saved=workspacePositions_.value(Path).toObject();
         if(sourceBuffers_.contains(Path)){
             const auto& State=sourceBuffers_[Path];
-            Saved={{"position",State.position_},{"anchor",State.anchor_},
+            // firstVisibleLine stays for older readers; it now holds the document line.
+            Saved={{"position",State.position_},{"anchor",State.anchor_},{"topLine",State.line_},{"topSubLine",State.subLine_},
                 {"firstVisibleLine",State.line_},{"horizontalOffset",State.offset_}};
             if(Path==current_ && sourceShown()){
                 // Scintilla already owns byte positions. Counting UTF-16 units from
                 // the document start here pauses input near the end of a large chapter.
-                auto* Backend=direct(text_);Snapshot.utf8Resource_=Path;
+                auto* Backend=direct(text_);Snapshot.utf8Resource_=Path;const auto Top=scrollTop();
                 Saved={{"position",int(Backend->Send(SCI_GETCURRENTPOS))},{"anchor",int(Backend->Send(SCI_GETANCHOR))},
-                    {"firstVisibleLine",firstVisibleLine()},{"horizontalOffset",horizontalOffset()}};
+                    {"topLine",Top.line_},{"topSubLine",Top.subLine_},{"firstVisibleLine",Top.line_},{"horizontalOffset",horizontalOffset()}};
                 Snapshot.sources_[Path]=sourceBytes();
             } else Snapshot.sources_[Path]=State.applied_;
         }
         Saved["resource"]=Path;Tabs.append(Saved);
     }
     Snapshot.document_={{"path",sourcePath_},{"activeResource",current_},{"tabs",Tabs},
-        {"sourceSha256",QString::fromLatin1(sourceHashAtOpen_.toHex())}};
+        {"sourceSha256",QString::fromLatin1(sourceHashAtOpen_.toHex())},{"positionUnits","text"}};
     if(workspaceLastDocument_==Snapshot.document_ && workspaceLastSources_==Snapshot.sources_)return;
     workspaceLastDocument_=Snapshot.document_;workspaceLastSources_=Snapshot.sources_;
     {
@@ -224,20 +254,32 @@ void EpubSourceEditor::saveWorkspace() {
         workspaceState_->pending_[sourcePath_]=std::move(Snapshot);
         if(workspaceState_->running_)return;workspaceState_->running_=true;
     }
-    workspaceWriter_.setFuture(QtConcurrent::run(workspacePool(),[State=workspaceState_,FilePath=workspaceFile_]{
-        QString Error;
+    const int LockMs=qBound(1,qApp->property("epubWorkspaceLockTimeoutMs").toInt()>0?qApp->property("epubWorkspaceLockTimeoutMs").toInt():5000,60000);
+    workspaceWriter_.setFuture(QtConcurrent::run(workspacePool(),[State=workspaceState_,FilePath=workspaceFile_,LockMs]{
+        QString Error;int LockAttempts=0;
         for(;;){
             QMap<QString,WorkspaceState::Snapshot> Pending;
             {
                 const std::lock_guard Guard(State->mutex_);
-                if(State->pending_.isEmpty()){State->running_=false;return Error;}
+                // A batch still held after the last lock attempt stays queued; the editor's
+                // next save starts a new round with it.
+                if(State->pending_.isEmpty() || LockAttempts>=3){State->running_=false;State->error_=Error;return Error;}
                 Pending.swap(State->pending_);
             }
             Error.clear();
             // No filesystem operation, lock wait or atomic commit is allowed on the GUI thread.
             if(!QDir().mkpath(QFileInfo(FilePath).absolutePath()))Error="workspace-create-directory-failed";
             QLockFile Lock(FilePath+".lock");Lock.setStaleLockTime(30000);
-            if(Error.isEmpty() && !Lock.tryLock(5000))Error="workspace-lock-failed";
+            if(Error.isEmpty() && !Lock.tryLock(LockMs)){
+                // Another writer holds the file. Requeue the batch instead of dropping it:
+                // it may be the final position of an editor that has already closed, or the
+                // previous path of a Save As. A newer snapshot of the same book wins.
+                Error="workspace-lock-failed";++LockAttempts;
+                const std::lock_guard Guard(State->mutex_);
+                for(auto It=Pending.begin();It!=Pending.end();++It)if(!State->pending_.contains(It.key()))State->pending_.insert(It.key(),std::move(It.value()));
+                State->error_=Error;qWarning("EPUB workspace save waits for lock: %s",qPrintable(FilePath));continue;
+            }
+            LockAttempts=0;
             QJsonObject Root;
             if(Error.isEmpty() && readWorkspaceFile(FilePath,Root,Error)){
                 auto Documents=Root["documents"].toObject();
@@ -264,6 +306,7 @@ void EpubSourceEditor::saveWorkspace() {
                 if(Bytes.size()>8*1024*1024 || !File.open(QIODevice::WriteOnly) || File.write(Bytes)!=Bytes.size() || !File.commit())Error="workspace-write-failed";
             }
             if(!Error.isEmpty())qWarning("EPUB workspace save failed: %s (%s)",qPrintable(FilePath),qPrintable(Error));
+            {const std::lock_guard Guard(State->mutex_);State->error_=Error;}
             // The shared queue outlives the widget: closing adds the final snapshot without
             // waiting for the disk or abandoning a newer position behind an in-flight save.
         }
@@ -273,6 +316,7 @@ bool EpubSourceEditor::restoreWorkspace() {
     if(!workspaceError_.isEmpty()){report(tr("EPUB 워크스페이스를 읽지 못했습니다: %1").arg(workspaceFile_));return false;}
     const auto Saved=std::exchange(workspaceSaved_,{});
     if(!Saved["tabs"].isArray())return false;
+    workspaceLegacyUnits_=Saved["positionUnits"].toString()!="text";
     workspaceRestoring_=true;openResources_.clear();workspacePositions_={};
     for(const auto& Value:Saved["tabs"].toArray()){
         const auto Tab=Value.toObject();const auto Path=Tab["resource"].toString();

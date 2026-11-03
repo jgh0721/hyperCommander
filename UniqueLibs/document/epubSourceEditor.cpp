@@ -198,7 +198,7 @@ QJsonObject EpubSourceEditor::Snapshot()const {
     const QJsonObject Source{{"resource",current_},{"buffer",QString::number(State.serial_)},{"shown",sourceShown()},{"modified",ready_ && sourceShown() && sourceModified()},{"readOnly",sourceReadOnly_},{"language",text_->currentLanguage()}};
     const QJsonObject Layout{{"orientation",previewSplitter_->orientation()==Qt::Horizontal?"horizontal":"vertical"},{"tree",!treePanel_->isHidden()},{"preview",!previewPanel_->isHidden()},{"problems",!problemsPanel_->isHidden()}};
     const QJsonObject Status{{"message",message_},{"draft",draftMessage_},{"preview",previewMessage_},{"validation",statusValidation_->text()}};
-    return {{"sourceCache",QJsonObject{{"reads",sourceReads_},{"maps",sourceMapBuilds_}}},{"workspaceError",workspaceError_},{"workspaceFile",workspaceFile_},{"workspaceSaving",workspaceWriter_.isRunning()},{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",false},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
+    return {{"sourceCache",QJsonObject{{"reads",sourceReads_},{"maps",sourceMapBuilds_}}},{"workspaceError",workspaceError_},{"workspaceFile",workspaceFile_},{"workspaceSaving",workspaceWriter_.isRunning()},{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",false},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_},{"target",lastScrollTarget_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
 }
 QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
     const auto Action=Request["action"].toString();
@@ -332,13 +332,15 @@ void EpubSourceEditor::CommitSaved(const QString& Path,const QByteArray& Content
     // draft and its recovery record remain owned by the current editor.
     if(!IsModified()){error_.clear();if(sourceShown())text_->CommitContent();DiscardRecovery();resetRecoverySession();}
     else {draftWrittenToken_.clear();draftTimer_.start();}
-    report(IsModified()?tr("저장 완료 · 추가 변경 있음"):tr("저장 완료"));emit StateChanged();
+    report(IsModified()?tr("저장 완료 · 추가 변경 있음"):tr("저장 완료"));
+    // The save worker read the current verdict policy; follow it here without a GUI-thread read.
+    reloadValidationSettingsAsync();emit StateChanged();
 }
 void EpubSourceEditor::ReportSaveFailure(const QByteArray& Content,const QString& Error) {
     // The failing snapshot can be older than the displayed source. Do not mark
     // the newer source invalid, but retain a visible failure for this request.
     if(Content=="epub:"+Token().toHex())error_=Error;
-    report(tr("저장 실패: %1 · 편집 내용은 유지됩니다. 소스와 검사 설정을 확인한 뒤 다시 저장하십시오.").arg(Error));emit StateChanged();
+    report(tr("저장 실패: %1 · 편집 내용은 유지됩니다. 소스와 검사 설정을 확인한 뒤 다시 저장하십시오.").arg(Error));reloadValidationSettingsAsync();emit StateChanged();
 }
 storage::Result<QByteArray> EpubSourceEditor::Export(const QString& Destination,bool SaveOriginal)const {
     if(!ready_ || QFileInfo(Destination).suffix().compare("epub",Qt::CaseInsensitive)!=0)return storage::Error{storage::ErrorCategory::Unsupported,"epub-edit-save-as-epub-required"};
@@ -369,7 +371,7 @@ bool EpubSourceEditor::eventFilter(QObject* Object,QEvent* Event) {
     if(Object==SourceInput() && Event->type()==QEvent::FocusIn)updateActions();
     return QWidget::eventFilter(Object,Event);
 }
-void EpubSourceEditor::Commit(const QString& Path,const QByteArray& Bytes){saveWorkspace();commitRestore_=true;commitResource_=current_;commitPosition_=sourcePosition();commitAnchor_=sourceAnchor();commitVertical_=firstVisibleLine();commitHorizontal_=horizontalOffset();commitFocus_=SourceInput()->hasFocus();DiscardRecovery();resetRecoverySession();sourcePath_=Path;baseToken_=Token();protectSourcePath(Path);touchedResources_.clear();
+void EpubSourceEditor::Commit(const QString& Path,const QByteArray& Bytes){saveWorkspace();commitRestore_=true;commitResource_=current_;commitPosition_=sourcePosition();commitAnchor_=sourceAnchor();commitTop_=scrollTop();commitHorizontal_=horizontalOffset();commitFocus_=SourceInput()->hasFocus();DiscardRecovery();resetRecoverySession();sourcePath_=Path;baseToken_=Token();protectSourcePath(Path);touchedResources_.clear();
     // Only the immutable model produced by validation of these exact bytes may
     // bypass loading. Saving a stale revision still follows the normal load path.
     const auto Prepared=cachedExport_.prepared_;

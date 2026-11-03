@@ -130,6 +130,9 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
     async function action(request) {
         if(request.action==="search")return search(request);
         const {action,value,serial}=request;result={serial,busy:true};
+        // Pages the reader moves for the host are not the user's scroll; next/previous/back are (below).
+        const quiet=["source-position","locate","preview-location","toc","chapter","next-chapter","previous-chapter"].includes(action) && !(action==="source-position" && value?.reveal==="none");
+        if(quiet)previewScroll.quiet();
         try {
             if(["annotations-set","annotation-capture","annotation-resolve"].includes(action)){await annotations.action(request);result={serial,annotation:true};}
             else if(action==="source-position") {const doc=documents()[0];if(!doc)throw Error("본문이 준비되지 않았습니다.");placeSourcePosition(doc,value);sourcePositions.capture(doc);result={serial,located:true};}
@@ -145,6 +148,8 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
             else if(action==="preview-width") {const width=Math.max(0,Math.min(4096,Number(value)||0));const root=document.documentElement;root.style.setProperty("--hc-preview-width",width?`${width}px`:"none");document.body.classList.toggle("hc-preview-width",width>0);window.dispatchEvent(new Event("resize"));result={serial};}
             else throw Error("지원하지 않는 읽기 명령입니다.");
         } catch(error) {result={serial,error:String(error)};}
+        // Navigation finishes asynchronously; its last scrolls fall inside a fresh guard.
+        finally {if(quiet)previewScroll.quiet();}
     }
     window.hcDismissPopup = () => {if(!dialog)return false;close();return true;};
     return {hook,action,cancelSearch,cancelAnnotations:annotations.cancel,previewScroll,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),previewScroll:previewScroll.state(),readerAction:result,readerSearch:searchResult,popup,contextRequest})};

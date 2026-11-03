@@ -8,6 +8,8 @@
 #include <QJsonArray>
 #include <Scintilla.h>
 #include <QAbstractScrollArea>
+#include <QTimer>
+#include <cmath>
 
 namespace hc::document {
 namespace {
@@ -20,6 +22,9 @@ ScintillaQtDirectBackend* direct(QTextView* View){return static_cast<ScintillaQt
 }
 void EpubSourceEditor::setupScrollSync() {
     scrollRetryTimer_.setSingleShot(true);connect(&scrollRetryTimer_,&QTimer::timeout,this,&EpubSourceEditor::syncPreviewScroll);
+    // One deadline per replacement: re-requests restart it instead of stacking timers.
+    previewCandidateScrollTimer_.setSingleShot(true);previewCandidateScrollTimer_.setInterval(5000);
+    connect(&previewCandidateScrollTimer_,&QTimer::timeout,this,[this]{if(previewCandidate_)admitPreview(previewCandidate_);});
     connect(text_->Backend(),&ITextEditorBackend::viewportScrolled,this,&EpubSourceEditor::syncPreviewScroll);
     connect(text_->Backend(),&ITextEditorBackend::cursorPositionChanged,this,[this]{
         if(updating_ || !SourceInput()->hasFocus())return;
@@ -35,7 +40,33 @@ void EpubSourceEditor::setupScrollSync() {
         if(updating_ || bufferResource_.isEmpty() || !sourceBuffers_.contains(bufferResource_))return;
         auto& State=sourceBuffers_[bufferResource_];if(State.shifts_.size()<256)State.shifts_.append({Line,Delta});else State.shiftsOverflow_=true;
     });
-    connect(this,&EpubSourceEditor::Changed,this,[this]{if(previewView_ && previewActiveToken_==Token())clearLineShifts();});
+    connect(this,&EpubSourceEditor::Changed,this,[this]{
+        previewMatchesSource_=previewView_ && previewActiveToken_==Token();
+        if(previewMatchesSource_)clearLineShifts();
+    });
+}
+double EpubSourceEditor::previewViewOffset(double SourceY)const{
+    const auto* Viewport=direct(text_)->scrollArea()->viewport();const auto* Frame=previewStack_->parentWidget();
+    return Viewport->mapToGlobal(QPoint(0,0)).y()+SourceY-Frame->mapToGlobal(QPoint(0,0)).y();
+}
+double EpubSourceEditor::sourceYForViewOffset(double Offset)const{
+    const auto* Viewport=direct(text_)->scrollArea()->viewport();const auto* Frame=previewStack_->parentWidget();
+    return Frame->mapToGlobal(QPoint(0,0)).y()+Offset-Viewport->mapToGlobal(QPoint(0,0)).y();
+}
+void EpubSourceEditor::placeSourceRow(qintptr Position,double Y){
+    // The editor scrolls whole display rows: the row holding the character goes to the row nearest Y.
+    // Rows above may wrap once shown, so the placement is corrected once more after that.
+    auto* Backend=direct(text_);
+    const auto Place=[Backend,Position,Y]{
+        const auto Row=qMax<qintptr>(1,Backend->Send(SCI_TEXTHEIGHT,Backend->Send(SCI_LINEFROMPOSITION,quintptr(Position))));
+        const auto Rows=qintptr(std::lround((double(Backend->Send(SCI_POINTYFROMPOSITION,0,Position))-Y)/double(Row)));
+        if(Rows!=0)Backend->Send(SCI_SETFIRSTVISIBLELINE,quintptr(qMax<qintptr>(0,Backend->Send(SCI_GETFIRSTVISIBLELINE)+Rows)));
+    };
+    const int Line=int(Backend->Send(SCI_LINEFROMPOSITION,quintptr(Position)));const auto Row=qMax<qintptr>(1,Backend->Send(SCI_TEXTHEIGHT,quintptr(Line)));
+    const auto Sub=qMax<qintptr>(0,(Backend->Send(SCI_POINTYFROMPOSITION,0,Position)-Backend->Send(SCI_POINTYFROMPOSITION,0,Backend->Send(SCI_POSITIONFROMLINE,quintptr(Line))))/Row);
+    Backend->Send(SCI_SETFIRSTVISIBLELINE,quintptr(qMax<qintptr>(0,Backend->Send(SCI_VISIBLEFROMDOCLINE,quintptr(Line))+Sub-qintptr(std::lround(Y/double(Row))))));
+    Place();
+    QTimer::singleShot(0,this,[this,Place]{suppressSyncUntil_=nowMs()+SyncGuardMs;Place();});
 }
 bool EpubSourceEditor::scrollSyncActive()const{return action("epubPreviewScrollSync")->isChecked();}
 int EpubSourceEditor::spineIndex(const QString& Path)const{const auto Spine=model_.Publication()["spine"].toArray();for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==Path)return I;return -1;}
@@ -46,7 +77,8 @@ QJsonObject EpubSourceEditor::sourceScrollTarget(bool Revision)const {
     auto* Backend=direct(text_);auto Position=Backend->Send(SCI_GETCURRENTPOS);
     int CaretLine=int(Backend->Send(SCI_LINEFROMPOSITION,Position));
     const int Height=qMax(1,Backend->scrollArea()->viewport()->height());
-    double Y=Backend->Send(SCI_POINTYFROMPOSITION,0,Position)+qMax<qintptr>(1,Backend->Send(SCI_TEXTHEIGHT,CaretLine))*.5;
+    // POINTY is the top of the display row holding the position.
+    double Y=Backend->Send(SCI_POINTYFROMPOSITION,0,Position);
     const bool Visible=Y>=0 && Y<Height;
     if(!Visible){
         // Keep the nearest visible row when the caret leaves the viewport. Switching
@@ -55,17 +87,25 @@ QJsonObject EpubSourceEditor::sourceScrollTarget(bool Revision)const {
         if(Backend->isScrolledToEnd())return {{"chapter",spineIndex(current_)},{"line",Backend->lineCount()+1},{"ratio",AnchorRatio},{"end",true}};
         Position=Backend->Send(SCI_POSITIONFROMPOINT,Backend->leftMarginWidth()+1,qBound(0,int(Y),Height-1));
         CaretLine=int(Backend->Send(SCI_LINEFROMPOSITION,Position));
-        Y=Backend->Send(SCI_POINTYFROMPOSITION,0,Position)+qMax<qintptr>(1,Backend->Send(SCI_TEXTHEIGHT,CaretLine))*.5;
+        Y=Backend->Send(SCI_POINTYFROMPOSITION,0,Position);
     }
     // Horizontal progress is not a vertical scroll anchor: at the next display
     // row the viewport ratio also changes, pulling the preview back down.
     // Follow the start of the display row, including wrapped rows, instead.
+    // Line fraction and height ratio both name the row's top, so the preview point for
+    // that row lands at the row's own height rather than half a row below it.
     const auto Start=Backend->Send(SCI_POSITIONFROMLINE,CaretLine);
     const double Row=qMax<qintptr>(1,Backend->Send(SCI_TEXTHEIGHT,CaretLine));
     const double Rows=qMax<qintptr>(1,Backend->Send(SCI_WRAPCOUNT,CaretLine));
     const double Top=Backend->Send(SCI_POINTYFROMPOSITION,0,Start);
-    const double Line=CaretLine+1+qBound(0.0,(Y-Row*.5-Top)/(Rows*Row),.999);
-    return {{"chapter",spineIndex(current_)},{"line",Revision?toPreviewLine(Line):Line},{"ratio",qBound(0.0,Y/Height,1.0)},{"end",false}};
+    const double Line=CaretLine+1+qBound(0.0,(Y-Top)/(Rows*Row),.999);
+    QJsonObject Target{{"chapter",spineIndex(current_)},{"line",Revision?toPreviewLine(Line):Line},{"ratio",qBound(0.0,Y/Height,1.0)},{"end",false},
+        {"viewOffset",previewViewOffset(Y)}};
+    // D5: the character itself, the caret's or the first one visible at the row's left edge, by its
+    // source-map position. A replacement preview shows the current text; the shown one only until an edit.
+    if((!Revision || previewMatchesSource_) && sourceShown())
+        if(const auto* Map=sourceMap())if(const auto Anchor=Map->Anchor(toUtf16(Backend->RowTextCharacter(Position)));!Anchor.isEmpty())Target["anchor"]=Anchor;
+    return Target;
 }
 void EpubSourceEditor::syncPreviewScroll() {
     if(!scrollSyncActive() || previewPatchPending_ || updating_ || sourceComposing_ || !ready_ || !sourceShown() || !previewView_ || previewClosing_ || previewPanel_->isHidden())return;
@@ -80,8 +120,9 @@ void EpubSourceEditor::syncPreviewScroll() {
     auto Target=sourceScrollTarget(true);const double Line=Target["line"].toDouble();const bool End=Target["end"].toBool();const double Ratio=Target["ratio"].toDouble();
     // Viewport signals also follow changes that keep the line, such as wrap toggles. An unchanged target sends
     // nothing and sets no guard, which would otherwise swallow the user's next preview scroll.
-    if(Chapter==lastScrollChapter_ && End==lastScrollEnd_ && qFuzzyCompare(Line,lastScrollLine_) && qFuzzyCompare(Ratio,lastScrollRatio_))return;
-    lastScrollChapter_=Chapter;lastScrollEnd_=End;lastScrollLine_=Line;lastScrollRatio_=Ratio;Target["serial"]=++sourceScrollSerial_;
+    // The anchor character can change within a row (horizontal moves), so the whole target is compared.
+    if(Chapter==lastScrollChapter_ && Target==lastScrollTarget_)return;
+    lastScrollChapter_=Chapter;lastScrollEnd_=End;lastScrollLine_=Line;lastScrollRatio_=Ratio;lastScrollTarget_=Target;Target["serial"]=++sourceScrollSerial_;
     if(previewView_->RequestSourceScroll(Target))previewDrivenIgnoreUntil_=Now+SyncGuardMs;
 }
 void EpubSourceEditor::previewScrolled(const QJsonObject& Report) {
@@ -90,17 +131,21 @@ void EpubSourceEditor::previewScrolled(const QJsonObject& Report) {
     if(!scrollSyncActive() || !Report["user"].toBool() || !Report["supported"].toBool() || sourceComposing_ || !ready_ || !sourceShown())return;
     const qint64 Now=nowMs();if(Now<previewDrivenIgnoreUntil_ || Report["chapter"].toInt(-1)!=spineIndex(current_))return;
     suppressSyncUntil_=Now+SyncGuardMs;auto* Backend=direct(text_);
+    // The preview's reference character, by its source-map position, keeps its screen height here.
+    const auto Reference=Report["reference"].toObject();const auto* Map=previewMatchesSource_?sourceMap():nullptr;
+    const int Exact=Map && Reference["anchor"].isObject()?Map->Position(Reference["anchor"].toObject()):-1;
     if(Report["top"].toBool())Backend->Send(SCI_SETFIRSTVISIBLELINE,0);
     else if(Report["bottom"].toBool())Backend->Send(SCI_SETFIRSTVISIBLELINE,quintptr(Backend->Send(SCI_VISIBLEFROMDOCLINE,quintptr(Backend->lineCount()))));
+    else if(Exact>=0)placeSourceRow(fromUtf16(Exact),sourceYForViewOffset(Reference["viewOffset"].toDouble()));
     else Backend->scrollFractionalLineToViewportRatio(fromPreviewLine(Report["line"].toDouble()),Report["ratio"].toDouble(AnchorRatio));
     // The editor scrolls whole rows. Remembering where it landed keeps the retry after the guard from
     // sending that rounded position back and nudging the preview the user just placed.
-    const auto Landed=sourceScrollTarget(true);lastScrollChapter_=Landed["chapter"].toInt();lastScrollLine_=Landed["line"].toDouble();lastScrollEnd_=Landed["end"].toBool();lastScrollRatio_=Landed["ratio"].toDouble();
+    const auto Landed=sourceScrollTarget(true);lastScrollChapter_=Landed["chapter"].toInt();lastScrollLine_=Landed["line"].toDouble();lastScrollEnd_=Landed["end"].toBool();lastScrollRatio_=Landed["ratio"].toDouble();lastScrollTarget_=Landed;
 }
 void EpubSourceEditor::placeSourceLine(int Position,double Ratio) {
     // A preview click keeps its height in the editor. The editor's resulting scroll must not echo back.
     suppressSyncUntil_=nowMs()+SyncGuardMs;auto* Backend=direct(text_);
     Backend->scrollFractionalLineToViewportRatio(double(Backend->Send(SCI_LINEFROMPOSITION,quintptr(fromUtf16(Position))))+1,qBound(0.0,Ratio,0.9));
-    const auto Landed=sourceScrollTarget(true);lastScrollChapter_=Landed["chapter"].toInt();lastScrollLine_=Landed["line"].toDouble();lastScrollEnd_=Landed["end"].toBool();lastScrollRatio_=Landed["ratio"].toDouble();
+    const auto Landed=sourceScrollTarget(true);lastScrollChapter_=Landed["chapter"].toInt();lastScrollLine_=Landed["line"].toDouble();lastScrollEnd_=Landed["end"].toBool();lastScrollRatio_=Landed["ratio"].toDouble();lastScrollTarget_=Landed;
 }
 }
