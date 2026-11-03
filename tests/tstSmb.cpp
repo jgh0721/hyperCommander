@@ -317,7 +317,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobInteractionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationProgressUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationLayoutUi"
-                || (QStringList{"r24ExtractOptionsUi", "r24ExtractOptionsJobUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
+                || (QStringList{"r24MoveProgressControlsUi", "r24ExtractOptionsUi", "r24ExtractOptionsJobUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileClipboardUi"
@@ -4024,6 +4024,66 @@ private slots:
         QVERIFY(!QFileInfo::exists(Input.fileName()));
         QFile Output(Destination.filePath("transfer.bin")); QVERIFY(Output.open(QIODevice::ReadOnly)); QCOMPARE(Output.readAll(), Payload); Output.close();
     }
+    void r24MoveProgressControlsUi()
+    {
+        using namespace hc::operations; using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); });
+        auto Options = Settings.Read(Section::Options).toObject(); Options["jobCloseOnSuccess"] = false;
+        Options["saveJobProgress"] = false; Options["jobDetailed"] = false; Options["showJobDetails"] = false;
+        QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit());
+        struct Control { std::atomic<int> stage_{0}; std::atomic<bool> commit_{false}; };
+        class Task final : public IJobTask {
+        public:
+            explicit Task(std::shared_ptr<Control> State) : state_(std::move(State)) {}
+            JobStep Advance(JobStepContext) override {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                JobStep Step{state_->commit_ ? JobState::Committing : JobState::Running};
+                Step.progress_ = JobProgress{512, 1024, "item.txt"};
+                Step.progress_->phase_ = state_->stage_ == 0 ? JobPhase::Copying : state_->stage_ == 1 ? JobPhase::Verifying : JobPhase::RemovingSource;
+                if (state_->stage_ == 0) Step.progress_->currentTotal_ = 1024;
+                Step.progress_->source_ = "E:/source/item.txt"; Step.progress_->destination_ = "E:/target/item.txt";
+                return Step;
+            }
+            std::vector<hc::storage::Error> Finalize(JobState) override { return {}; }
+        private: std::shared_ptr<Control> state_;
+        };
+        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); Window.show();
+        FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        const auto State = std::make_shared<Control>(); PreparedJob Work;
+        Work.request_.metadata_ = {"이동", "E:/source", "E:/target", ""}; Work.request_.metadata_.kind_ = JobKind::Move;
+        Work.task_ = std::make_unique<Task>(State); const auto Started = Jobs.Submit(std::move(Work), QStringLiteral("이동")); QVERIFY(Started.HasValue());
+        auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Dialog);
+        auto* Cancel = Dialog->findChild<QPushButton*>("hc.jobs.cancel"); auto* Pause = Dialog->findChild<QPushButton*>("hc.jobs.pause");
+        auto* Close = Dialog->findChild<QCheckBox*>("hc.jobs.closeOnSuccess"); QVERIFY(Cancel && Pause && Close);
+        QTRY_VERIFY(Dialog->isVisible()); QTRY_COMPARE(Dialog->focusWidget(), Cancel); QVERIFY(Cancel->isDefault());
+        QTest::qWait(300); const auto Height = Dialog->height();
+        QCOMPARE(Dialog->width(), 790);
+        for (const auto* Side : {"source", "destination"}) {
+            const auto Prefix = QString("hc.jobs.%1").arg(Side);
+            auto* Path = Dialog->findChild<QLabel*>(Prefix + ".path"); auto* Name = Dialog->findChild<QLabel*>(Prefix + ".name"); QVERIFY(Path && Name);
+            QCOMPARE(Path->width(), Path->fontMetrics().horizontalAdvance(Path->text()));
+            QCOMPARE(Name->geometry().left(), Path->geometry().right() + 1);
+        }
+        const auto CenterY = [Dialog](QWidget* Item) { return Item->mapTo(Dialog, Item->rect().center()).y(); };
+        auto* Toggle = Dialog->findChild<QPushButton*>("hc.jobs.toggleDetails"); QVERIFY(Toggle);
+        QVERIFY(qAbs(CenterY(Close) - CenterY(Toggle)) <= 1);
+        for (const auto Stage : {1, 2, 0}) {
+            State->stage_ = Stage; State->commit_ = true;
+            QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Committing);
+            QTest::qWait(300); QVERIFY(Pause->isEnabled()); QVERIFY(Cancel->isEnabled()); QCOMPARE(Dialog->height(), Height);
+            State->commit_ = false;
+            QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Running);
+        }
+        State->commit_ = true; QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Committing);
+        Pause->click(); QTRY_VERIFY(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().pauseRequested_);
+        State->commit_ = false; QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Paused);
+        Pause->click(); QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Running);
+        State->commit_ = true; QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Committing);
+        Cancel->click(); QTRY_VERIFY(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().cancelRequested_);
+        State->commit_ = false; QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Cancelled);
+        QVERIFY(SaveR9Dialog(*Dialog, "r24-move-progress"));
+    }
     void r24ExtractOptionsJobUi_data()
     {
         QTest::addColumn<bool>("Paths"); QTest::addColumn<bool>("Filtered");
@@ -4146,7 +4206,7 @@ private slots:
             QVERIFY(Dialog->rect().contains(QRect(Pause->mapTo(Dialog, QPoint()), Pause->size())));
         }
         QVERIFY(SaveR9Dialog(*Dialog,"r21-progress-known"));
-        Control->commit_=true; QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_,JobState::Committing); QTest::qWait(250); QVERIFY(!Pause->isEnabled()); Control->commit_=false; QTRY_VERIFY(Pause->isEnabled());
+        Control->commit_=true; QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_,JobState::Committing); QTest::qWait(250); QVERIFY(Pause->isEnabled()); QVERIFY(Dialog->findChild<QPushButton*>("hc.jobs.cancel")->isEnabled()); Control->commit_=false; QTRY_VERIFY(Pause->isEnabled());
         Pause->click(); QTRY_VERIFY(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().pauseRequested_); Control->commit_=false;
         QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_,JobState::Paused); QTRY_VERIFY(Graph->isPaused());
         QVERIFY(SaveR9Dialog(*Dialog,"r21-progress-paused")); Pause->click(); QTRY_VERIFY(!Graph->isPaused());

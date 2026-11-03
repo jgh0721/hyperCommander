@@ -217,7 +217,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     dialog_ = new QDialog(Main);
     dialog_->setObjectName("hc.fileJobs");
     dialog_->setWindowTitle(tr("파일 작업"));
-    dialog_->resize(840, 480);
+    dialog_->resize(790, 480);
     dialog_->setMinimumWidth(520);
     dialog_->installEventFilter(this);
     auto* Layout = new QVBoxLayout(dialog_);
@@ -295,11 +295,13 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
         delete Footer->takeAt(0);
         auto* Controls = new QWidget(Footer->parentWidget()); Footer->addWidget(Controls);
         progressFooter_ = new QGridLayout(Controls); progressFooter_->setContentsMargins(0, 0, 0, 0); progressFooter_->setHorizontalSpacing(12); progressFooter_->setColumnStretch(0, 1);
-        footerLeft_ = new QWidget(Controls); auto* Left = new fm::ui::WrapLayout(footerLeft_); Left->setContentsMargins(0, 0, 0, 0);
-        for (auto* Item : {static_cast<QWidget*>(Hide), static_cast<QWidget*>(Toggle), static_cast<QWidget*>(autoClose_)}) { Item->setParent(footerLeft_); Left->addWidget(Item); }
+        footerLeft_ = new QWidget(Controls); auto* Left = new QHBoxLayout(footerLeft_); Left->setContentsMargins(0, 0, 0, 0);
+        for (auto* Item : {static_cast<QWidget*>(Hide), static_cast<QWidget*>(Toggle), static_cast<QWidget*>(autoClose_)}) { Item->setParent(footerLeft_); Left->addWidget(Item, 0, Qt::AlignVCenter); }
         footerRight_ = new QWidget(Controls); auto* Right = new QHBoxLayout(footerRight_); Right->setContentsMargins(0, 0, 0, 0); Right->setSpacing(8);
         pause_->setParent(footerRight_); cancel_->setParent(footerRight_); Right->addWidget(pause_); Right->addWidget(cancel_);
-        progressFooter_->addWidget(footerLeft_, 0, 0); progressFooter_->addWidget(footerRight_, 0, 1, Qt::AlignRight);
+        progressFooter_->addWidget(footerLeft_, 0, 0, Qt::AlignVCenter); progressFooter_->addWidget(footerRight_, 0, 1, Qt::AlignRight | Qt::AlignVCenter);
+        for (auto* Button : {static_cast<QPushButton*>(Hide), Toggle, pause_, cancel_}) Button->setAutoDefault(false);
+        cancel_->setDefault(true);
         QWidget::setTabOrder(Hide, Toggle); QWidget::setTabOrder(Toggle, autoClose_);
         QWidget::setTabOrder(autoClose_, pause_); QWidget::setTabOrder(pause_, cancel_);
     }
@@ -701,7 +703,11 @@ void FileJobUi::ApplyDefaults()
 
 void FileJobUi::Background() { dialog_->hide(); }
 void FileJobUi::Show() { updateManager(); manager_->show(); manager_->raise(); manager_->activateWindow(); updateSelection(); }
-void FileJobUi::showProgress() { updateSelection(); fitProgressDialog(); dialog_->show(); dialog_->raise(); dialog_->activateWindow(); updateSelection(); }
+void FileJobUi::showProgress() {
+    const bool Opening = !dialog_->isVisible();
+    updateSelection(); fitProgressDialog(); dialog_->show(); dialog_->raise(); dialog_->activateWindow(); updateSelection();
+    if (Opening) cancel_->setFocus(Qt::OtherFocusReason);
+}
 void FileJobUi::controlSelected(bool Pause)
 {
     if (!Pause) {
@@ -962,10 +968,10 @@ void FileJobUi::updateSelection()
     const bool Valid = Current.HasValue();
     const auto Snapshot = Valid ? Current.Value() : JobSnapshot{};
     const bool Active = Valid && !IsTerminal(Snapshot.state_);
-    pause_->setEnabled(Active && !Snapshot.cancelRequested_ && Snapshot.state_ != JobState::Committing && Snapshot.state_ != JobState::WaitingForUser);
+    pause_->setEnabled(Active && !Snapshot.cancelRequested_ && Snapshot.state_ != JobState::WaitingForUser);
     pause_->setText(Snapshot.state_ == JobState::Paused ? tr("재개(&P)") : Snapshot.pauseRequested_ ? tr("일시 정지 요청 해제(&P)") : tr("일시 정지(&P)"));
     if (managerPause_) updateManagerSelection(Valid ? &Snapshot : nullptr);
-    cancel_->setEnabled(Valid && (!Active || (!Snapshot.cancelRequested_ && Snapshot.state_ != JobState::Committing)));
+    cancel_->setEnabled(Valid && (!Active || !Snapshot.cancelRequested_));
     cancel_->setText(Active ? tr("취소(&C)") : tr("닫기(&C)"));
     updateInteraction(Valid ? &Snapshot : nullptr);
     const bool Password = Active && Snapshot.interaction_ && Snapshot.interaction_->kind_ == InteractionKind::Password;
@@ -1140,6 +1146,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const bool Bytes = Mode == RateMode::Bytes;
     const bool CurrentBytes = Bytes && Progress.currentTotal_.has_value();
     const bool Current = ArchiveCreation || (CurrentBytes && Kind != JobKind::ArchiveCreate && Kind != JobKind::IsoCreate);
+    auto CurrentPolicy = currentBlock_->sizePolicy(); CurrentPolicy.setRetainSizeWhenHidden(Kind == JobKind::Move && Progress.phase_ != JobPhase::ApplyingNames); currentBlock_->setSizePolicy(CurrentPolicy);
     currentBlock_->setVisible(Current);
     const auto State = Snapshot.state_ == JobState::Paused || Snapshot.state_ == JobState::WaitingForUser || Snapshot.deferred_
         ? fm::ui::ProgressBar::Paused : Snapshot.state_ == JobState::Failed ? fm::ui::ProgressBar::Error : fm::ui::ProgressBar::Normal;
@@ -1203,11 +1210,11 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const auto RateText = ArchiveCreation&&Snapshot.state_==JobState::Paused?tr("일시 정지"):Bytes ? fm::ui::TransferGraph::formatRate(Rate) : QLocale().toString(Rate, 'f', 1) + (Mode == RateMode::Files ? tr(" 파일/초") : tr(" 항목/초"));
     metrics_->setText((Mode == RateMode::None ? QString{} : tr("속도 %1   ").arg(RateText))
         + (ArchiveCreation ? tr("현재 단계 남은 시간 %1   경과 %2초") : tr("남은 시간 %1   경과 %2초")).arg(Remaining).arg(Elapsed));
-    const bool WrapMetrics = overallMetrics_->fontMetrics().horizontalAdvance(Overall) + metrics_->fontMetrics().horizontalAdvance(metrics_->text()) + 12 > dialog_->width() - 40;
+    const bool WrapMetrics = Kind == JobKind::Move || overallMetrics_->fontMetrics().horizontalAdvance(Overall) + metrics_->fontMetrics().horizontalAdvance(metrics_->text()) + 12 > dialog_->width() - 40;
     metrics_->setWordWrap(WrapMetrics && metrics_->fontMetrics().horizontalAdvance(metrics_->text()) > dialog_->width() - 40);
     metricsLayout_->setDirection(WrapMetrics ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     metricsLayout_->setAlignment(metrics_, Qt::AlignRight);
-    const bool HasGraph = ArchiveCreation || Mode != RateMode::None;
+    const bool HasGraph = ArchiveCreation || Kind == JobKind::Move || Mode != RateMode::None;
     graphToggle_->setVisible(HasGraph);
     graphToggle_->setText(detailed_ ? tr("그래프 숨김(&D)") : tr("그래프 표시(&D)"));
     graph_->setVisible(detailed_ && HasGraph); graphAxis_->setVisible(detailed_ && HasGraph); axisBlock_->setVisible(detailed_ && HasGraph);
@@ -1217,7 +1224,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
         + QString::number(!Phases.empty()) + QString::number(detailed_ && HasGraph);
     if (dialog_->property("hc.jobs.presentationShape").toString() != Shape) {
         dialog_->setProperty("hc.jobs.presentationShape", Shape);
-        if (dialog_->isVisible()) QTimer::singleShot(0, this, [this] { fitProgressDialog(); });
+        if (dialog_->isVisible() && Kind != JobKind::Move) QTimer::singleShot(0, this, [this] { fitProgressDialog(); });
     }
 }
 

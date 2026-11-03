@@ -16,6 +16,8 @@ namespace detail {
 class PathDirectoryLabel final : public fm::ui::Label {
 public:
     using fm::ui::Label::Label;
+    QSize sizeHint() const override { return {fontMetrics().horizontalAdvance(text()), fontMetrics().height()}; }
+    QSize minimumSizeHint() const override { return {0, fontMetrics().height()}; }
 protected:
     void paintEvent(QPaintEvent*) override {
         // fm::Label replaces tooltips with its own text while painting; keep
@@ -37,6 +39,7 @@ public:
         path_ = new detail::PathDirectoryLabel(this);
         path_->setObjectName(ObjectName + ".path"); path_->setTextRole(fm::ui::Label::Meta);
         path_->setTextFormat(Qt::PlainText); path_->setElideMode(Qt::ElideMiddle);
+        path_->setMargin(0); path_->setIndent(0);
         path_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         name_ = new hc::qt::ElidedLabel(this);
         name_->setObjectName(ObjectName + ".name"); name_->SetElideMode(Qt::ElideMiddle);
