@@ -307,7 +307,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -1632,6 +1632,93 @@ private slots:
         });
         Guard.start();Bridge->PromptArchive(true,Index);Guard.stop();QVERIFY(Rejected);QVERIFY(!ExtractDialog);
     }
+    void itemSelectionRefreshUi()
+    {
+        auto& Settings = hc::settings::AppSettings();
+        const auto OriginalGeneral = Settings.Read(hc::settings::Section::General);
+        const auto RestoreGeneral = qScopeGuard([&] { Settings.Put(hc::settings::Section::General, OriginalGeneral); });
+        auto General = OriginalGeneral.toObject();
+        General["selectionDialog"] = QJsonObject{{"last", QJsonObject{{"pattern", "*.txt"}}}};
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto RestoreWorkspace = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto& Name : {"first.txt", "second.txt", "selected.png"}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("selection refresh fixture");
+        }
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        auto* Model = qobject_cast<CFSModel*>(model(Panel)); QVERIFY(Model);
+        QTRY_VERIFY(!Model->IsLoading()); QTRY_COMPARE(Model->rowCount(), 4);
+        // Use real model resets at a known cadence instead of depending on the
+        // machine's native watcher coalescing and foreground policy.
+        Model->SetWatchEnabled(false);
+        const auto RestoreWatch = qScopeGuard([&] { Model->SetWatchEnabled(true); });
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        auto* Grid = View->BaseView(); Grid->deselectAll();
+        for (int I = 0; I < Grid->getRowCount(); ++I) {
+            const auto Row = Grid->getRow(I); auto Index = Row.modelIndex(0);
+            while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+            if (Index.isValid() && Model->GetFileInfo(Index)->Name_ == "selected.png") Grid->selectRow(I, Qtitan::Select);
+        }
+        QCOMPARE(View->CaptureSelection().size(), 1);
+        Panel->sig_NotifyPanelActivated();
+        bool Completed = false;
+        QTimer::singleShot(0, main_, [&] {
+            auto* Dialog = main_->findChild<QDialog*>("hc.selection.dialog"); QVERIFY(Dialog);
+            const auto Close = qScopeGuard([&] { Dialog->reject(); });
+            auto* Preview = Dialog->findChild<QLabel*>("hc.selection.preview"); QVERIFY(Preview);
+            auto* Apply = Dialog->findChild<QPushButton*>("hc.selection.apply"); QVERIFY(Apply);
+            auto* Accept = Dialog->findChild<QPushButton*>("hc.dialog.accept"); QVERIFY(Accept);
+            QTRY_VERIFY(Apply->isEnabled());
+            QVERIFY(Preview->text().startsWith(QStringLiteral("일치 2개 · 현재 선택 1개")));
+            const auto DialogSize = Dialog->size();
+            bool Steady = true; int Refreshes = 0;
+            QTimer Observe; Observe.setInterval(10);
+            connect(&Observe, &QTimer::timeout, Dialog, [&] {
+                Steady &= Preview->text().startsWith(QStringLiteral("일치 2개 · 현재 선택 1개"))
+                    && Apply->isEnabled() && Accept->isEnabled() && Dialog->size() == DialogSize;
+            });
+            QTimer Churn; Churn.setInterval(100);
+            connect(&Churn, &QTimer::timeout, Dialog, [&] {
+                if (Model->IsLoading()) return;
+                QFile File(Directory.filePath("downloading.tmp"));
+                if (!File.open(QIODevice::WriteOnly | QIODevice::Append)) { Steady = false; return; }
+                File.write("download progress"); File.close(); ++Refreshes; Model->ForceRefresh();
+            });
+            Observe.start(); Churn.start(); QTest::qWait(2400); Churn.stop(); Observe.stop();
+            QVERIFY(Refreshes >= 10); QVERIFY(Steady);
+            QTRY_VERIFY(!Model->IsLoading());
+            QCOMPARE(View->CaptureSelection().size(), 1);
+            // The old preview remains clickable during a refresh. The click must
+            // wait for the new snapshot and include the newly matching file.
+            { QFile File(Directory.filePath("late.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("late match"); }
+            Model->ForceRefresh(); Apply->click();
+            QTRY_COMPARE(View->CaptureSelection().size(), 4);
+            QTRY_VERIFY(Preview->text().startsWith(QStringLiteral("일치 3개 · 현재 선택 4개")));
+            // Editing the criteria cancels a deferred apply from the old input.
+            auto* Operation = Dialog->findChild<QComboBox*>("hc.selection.operation"); QVERIFY(Operation);
+            Operation->setCurrentIndex(1); QTRY_VERIFY(Apply->isEnabled());
+            Model->ForceRefresh(); Apply->click();
+            Dialog->findChild<QLineEdit*>("hc.selection.pattern")->setText("no-match.*");
+            QTRY_VERIFY(Preview->text().startsWith(QStringLiteral("일치 0개 · 현재 선택 4개")));
+            QCOMPARE(View->CaptureSelection().size(), 4); QVERIFY(!Apply->isEnabled());
+            // If the last match disappears after Accept, the deferred no-op
+            // still honors the request to close the dialog.
+            { QFile File(Directory.filePath("vanishing.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("vanishing match"); }
+            Model->ForceRefresh();
+            Operation->setCurrentIndex(0);
+            Dialog->findChild<QLineEdit*>("hc.selection.pattern")->setText("vanishing.txt");
+            QTRY_VERIFY(Apply->isEnabled());
+            QVERIFY(QFile::remove(Directory.filePath("vanishing.txt")));
+            Model->ForceRefresh(); Accept->click();
+            QTRY_VERIFY(!Dialog->isVisible());
+            QCOMPARE(View->CaptureSelection().size(), 4);
+            Completed = true;
+        });
+        hc::ui::ItemSelectionController::For(View)->Execute("hc.selection.select");
+        QVERIFY(Completed);
+    }
+
     void itemSelectionUi()
     {
         auto& Settings = hc::settings::AppSettings();

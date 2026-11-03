@@ -134,8 +134,19 @@ public:
         if (useDate_->isChecked()) C.modified_ = date_->date(); return C;
     }
     QJsonObject Settings() const { auto Result = settings_; Result["last"] = Read().Save(); return Result; }
+    void Pending(bool Background) {
+        // An explicit foreground scan supersedes the queued input refresh.
+        if (!Background) debounce_.stop();
+        // A refresh invalidates row indexes, not the last confirmed result.
+        // Keep its text and actions steady until a complete replacement is ready.
+        if (!hasResult_ && preview_->text().isEmpty()) preview_->setText(Text("일치 항목 확인 중…"));
+        if (!Background) { SetAcceptEnabled(false); apply_->setEnabled(false); }
+    }
     void Result(const QString& Summary, bool CanApply, bool CanUndo, const QString& Error = {}) {
-        preview_->setText(Summary); preview_->setToolTip(Summary); SetMessage(Error, !Error.isEmpty()); SetAcceptEnabled(CanApply); apply_->setEnabled(CanApply); undo_->setEnabled(CanUndo);
+        hasResult_ = Error.isEmpty() && !Summary.isEmpty();
+        if (preview_->text() != Summary) { preview_->setText(Summary); preview_->setToolTip(Summary); }
+        if (error_ != Error) { error_ = Error; SetMessage(Error, !Error.isEmpty()); }
+        SetAcceptEnabled(CanApply); apply_->setEnabled(CanApply); undo_->setEnabled(CanUndo);
         const bool Remove = operation_->currentIndex() == 1;
         SetTitle(Remove ? Text("항목 선택 해제") : Text("항목 선택")); AcceptButton()->setText(Remove ? Text("해제 후 닫기(&D)") : Text("선택 후 닫기(&S)"));
     }
@@ -168,13 +179,13 @@ private:
     void schedule() {
         if (loading_) return;
         tabs_->setFixedHeight(tabs_->tabBar()->sizeHint().height() + tabs_->currentWidget()->sizeHint().height() + 8);
-        if (invalidated_) invalidated_(); Result(Text("일치 항목 확인 중…"), false, false); debounce_.start();
+        if (invalidated_) invalidated_(); Pending(false); debounce_.start();
     }
     void refreshPresets() {
         presets_->clear(); presets_->addItem(Text("저장한 조건 선택…"));
         for (const auto& I : settings_["presets"].toArray()) presets_->addItem(I.toObject()["name"].toString());
     }
-    QList<Group> groups_; QJsonObject settings_; bool loading_ = false; QTimer debounce_;
+    QList<Group> groups_; QJsonObject settings_; bool loading_ = false, hasResult_ = false; QString error_; QTimer debounce_;
     QComboBox *operation_, *group_, *syntax_, *combine_, *sizeOp_, *scope_, *presets_;
     QLineEdit *pattern_, *exclude_, *size_; QCheckBox *case_, *useDate_; QDateEdit* date_; QTabWidget* tabs_;
     QLabel* preview_; fm::ui::Button *apply_, *undo_;
@@ -196,6 +207,7 @@ struct Scan {
 struct ItemSelectionController::State {
     ItemSelectionController* owner_; QPointer<CGridView> view_; QPointer<CFsModelT> model_; QPointer<SelectionDialog> dialog_;
     quint64 generation_ = 0, selection_ = 0; bool applying_ = false;
+    QTimer refresh_; std::optional<bool> pendingApply_;
     std::shared_ptr<Scan> scan_; QStringList previous_, remembered_;
     QString historyLocation_, dialogLocation_; bool hasPrevious_ = false, hasRemembered_ = false;
     QString location() const { return model_ ? model_->GetCurrentPathWithRoot() : QString{}; }
@@ -219,15 +231,43 @@ struct ItemSelectionController::State {
     }
     void invalidate() {
         ++generation_; scan_.reset();
-        if (dialog_) dialog_->Result(Text("목록이 변경되었습니다. 조건을 변경하여 다시 확인하십시오."), false, false);
+        if (dialog_) {
+            if (dialogLocation_ != locationKey()) {
+                refresh_.stop(); pendingApply_.reset();
+                dialog_->Result({}, false, false, Text("경로가 변경되었습니다. 창을 닫고 다시 실행하십시오."));
+            } else queueRefresh();
+        }
         if (historyLocation_ != locationKey()) { previous_.clear(); remembered_.clear(); hasPrevious_ = hasRemembered_ = false; historyLocation_ = locationKey(); }
     }
-    void start(Criteria Criteria, const QString& Command = {}) {
-        scan_.reset();
+    void queueRefresh() {
+        // Do not restart the timer on every event: a busy download folder must
+        // still publish complete results, at most once per refresh interval.
+        if (dialog_ && !refresh_.isActive()) refresh_.start();
+    }
+    void selectionChanged() {
+        if (applying_) return;
+        ++selection_; scan_.reset(); queueRefresh();
+    }
+    void requestApply(bool Close) {
+        if (scan_ && scan_->ready_ && valid(scan_)) { apply(Close); return; }
+        if (!dialog_) return;
+        // The visible result can outlive its row indexes. Never apply those old
+        // indexes; defer the click until the current snapshot has been evaluated.
+        pendingApply_ = Close; start(dialog_->Read());
+    }
+    void start(Criteria Criteria, const QString& Command = {}, bool Background = false) {
+        refresh_.stop(); scan_.reset();
         if (dialog_ && dialogLocation_ != locationKey()) {
             dialog_->Result({}, false, false, Text("경로가 변경되었습니다. 창을 닫고 다시 실행하십시오.")); return;
         }
-        if (loading()) { message(Text("파일 목록을 읽는 중에는 선택을 변경할 수 없습니다.")); return; }
+        const auto* Native = qobject_cast<CFSModel*>(model_.data());
+        const bool WaitingForSizes = Native && Criteria.advanced_ && !Criteria.size_.trimmed().isEmpty()
+            && Criteria.scope_ != Scope::Files && Native->PendingDirectorySizes() > 0;
+        if (loading() || WaitingForSizes) {
+            if (dialog_) { dialog_->Pending(Background); queueRefresh(); }
+            else message(Text("파일 목록을 읽는 중에는 선택을 변경할 수 없습니다."));
+            return;
+        }
         auto Work = std::make_shared<Scan>(); Work->criteria_ = Criteria; Work->command_ = Command;
         Work->generation_ = generation_; Work->selection_ = selection_; Work->rows_ = view_->BaseView()->getRowCount(); Work->location_ = locationKey();
         Work->grouped_ = view_->GroupingActive(); Work->sourceRows_ = model_->rowCount();
@@ -235,7 +275,7 @@ struct ItemSelectionController::State {
         Work->before_.resize(Work->rows_); Work->after_.resize(Work->rows_);
         if (Command == "restore") Work->restoreKeys_ = QSet<QString>(previous_.begin(), previous_.end());
         if (Command == "recall") Work->restoreKeys_ = QSet<QString>(remembered_.begin(), remembered_.end());
-        scan_ = Work; if (dialog_) dialog_->Result(Text("일치 항목 확인 중…"), false, hasPrevious_);
+        scan_ = Work; if (dialog_) dialog_->Pending(Background);
         using Prepared = QPair<Matcher, QString>;
         auto* Watcher = new QFutureWatcher<Prepared>(owner_);
         QObject::connect(Watcher, &QFutureWatcher<Prepared>::finished, owner_, [this, Work, Watcher] {
@@ -292,6 +332,9 @@ struct ItemSelectionController::State {
             if (Work->command_ == "remember") { remembered_ = Work->beforeKeys_; hasRemembered_ = true; historyLocation_ = locationKey(); message(Text("현재 선택을 기억하였습니다.")); scan_.reset(); return; }
             if (!Work->command_.isEmpty()) { apply(false); return; }
             updatePreview();
+            if (pendingApply_ && dialog_ && Work->criteria_.Save() == dialog_->Read().Save()) {
+                const bool Close = *pendingApply_; pendingApply_.reset(); apply(Close);
+            }
         });
         Watcher->setFuture(QtConcurrent::run([Matcher = Work->matcher_, Batch, Context = Work->ruleContext_] {
             BatchResult Result; Result.first.reserve(Batch.size());
@@ -311,7 +354,13 @@ struct ItemSelectionController::State {
         auto Work = scan_; if (!Work || !Work->ready_ || !valid(Work)) return;
         // A changed input invalidates the preview before its debounce expires.
         if (Work->command_.isEmpty() && dialog_ && Work->criteria_.Save() != dialog_->Read().Save()) return;
-        if (!Work->added_ && !Work->removed_) { message(Text("선택 변경 없음")); return; }
+        if (!Work->added_ && !Work->removed_) {
+            message(Text("선택 변경 없음"));
+            // A deferred accept can become a no-op when the matching entry
+            // disappears during refresh. The requested close still completes.
+            if (Close && dialog_) dialog_->done(QDialog::Accepted);
+            return;
+        }
         auto* Grid = view_->BaseView(); applying_ = true;
         if (Work->grouped_) view_->RestoreSelection(Work->afterKeys_, view_->CaptureFocus());
         else {
@@ -351,14 +400,14 @@ struct ItemSelectionController::State {
             SelectionDialog Dialog(Groups(Rules), Config, Command == "deselect", view_->window()); dialog_ = &Dialog; dialogLocation_ = locationKey();
             Dialog.SetSummary(location());
             Dialog.changed_ = [this](const Criteria& C) { start(C); };
-            Dialog.invalidated_ = [this] { scan_.reset(); };
-            Dialog.applyAction_ = [this](bool Close) { apply(Close); };
+            Dialog.invalidated_ = [this] { refresh_.stop(); scan_.reset(); pendingApply_.reset(); };
+            Dialog.applyAction_ = [this](bool Close) { requestApply(Close); };
             Dialog.undoAction_ = [this] { if (hasPrevious_) { Criteria C; C.scope_ = Scope::Both; C.operation_ = Operation::Replace; start(C, "restore"); } };
             const QPointer<ItemSelectionController> Guard(owner_);
             QObject::connect(owner_, &QObject::destroyed, &Dialog, &QDialog::reject);
             start(Dialog.Read()); Dialog.exec();
             if (!Guard) return;
-            scan_.reset(); dialog_ = nullptr;
+            refresh_.stop(); pendingApply_.reset(); scan_.reset(); dialog_ = nullptr;
             auto General = Settings.Read(settings::Section::General).toObject(); General["selectionDialog"] = Dialog.Settings();
             if (!Settings.Put(settings::Section::General, General)) message(Text("선택 조건 설정을 저장할 수 없습니다."));
             if (view_ && model_) view_->EnsureKeyboardFocusOnView(); return;
@@ -390,6 +439,13 @@ ItemSelectionController* ItemSelectionController::For(CGridView* View) {
 ItemSelectionController::ItemSelectionController(CGridView* View) : QObject(View), state_(std::make_unique<State>()) {
     setObjectName("hc.selection.controller"); state_->owner_ = this; state_->view_ = View;
     auto* Model = View->BaseModel(); state_->model_ = Model;
+    state_->refresh_.setSingleShot(true); state_->refresh_.setInterval(750);
+    connect(&state_->refresh_, &QTimer::timeout, this, [this] { if (state_->dialog_) state_->start(state_->dialog_->Read(), {}, true); });
+    connect(Model, &CFsModelT::sigRefreshCompleted, this, [this] { state_->queueRefresh(); });
+    if (auto* Native = qobject_cast<CFSModel*>(Model)) {
+        connect(Native, &CFSModel::DirectorySizesChanged, this, [this] { state_->invalidate(); });
+        connect(Native, &CFSModel::MetadataChanged, this, [this] { state_->invalidate(); });
+    }
     connect(Model, &QObject::destroyed, this, [this] {
         state_->scan_.reset(); if (state_->dialog_) state_->dialog_->reject();
     });
@@ -406,8 +462,7 @@ ItemSelectionController::ItemSelectionController(CGridView* View) : QObject(View
     connect(View->BaseView(), &Qtitan::GridViewBase::sortingChanged, this, ViewOrderChanged);
     connect(View->BaseView(), &Qtitan::GridViewBase::groupingChanged, this, ViewOrderChanged);
     connect(View, &CGridView::sigSelectionIdentityChanged, this, [this] {
-        if (state_->applying_) return; ++state_->selection_; state_->scan_.reset();
-        if (state_->dialog_) state_->start(state_->dialog_->Read());
+        state_->selectionChanged();
     });
     if (auto* Visible = View->BaseView()->model(); Visible != Model) {
         connect(Visible, &QAbstractItemModel::modelReset, this, [this] { state_->invalidate(); });
@@ -416,8 +471,7 @@ ItemSelectionController::ItemSelectionController(CGridView* View) : QObject(View
         connect(Visible, &QAbstractItemModel::rowsRemoved, this, [this] { state_->invalidate(); });
     }
     connect(View->BaseView(), &Qtitan::GridViewBase::selectionChanged, this, [this] {
-        if (state_->applying_ || state_->view_->GroupingActive()) return; ++state_->selection_; state_->scan_.reset();
-        if (state_->dialog_) state_->start(state_->dialog_->Read());
+        if (!state_->view_->GroupingActive()) state_->selectionChanged();
     });
 }
 ItemSelectionController::~ItemSelectionController() = default;
