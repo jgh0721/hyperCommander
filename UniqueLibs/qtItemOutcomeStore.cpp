@@ -54,12 +54,25 @@ Result<std::shared_ptr<IItemOutcomeStore>> PagedItemOutcomeStore::Create(const Q
     return std::shared_ptr<IItemOutcomeStore>(new PagedItemOutcomeStore(Records.Value()));
 }
 std::uint64_t PagedItemOutcomeStore::Count() const { std::lock_guard Lock(mutex_); return records_->Count(); }
+Result<storage::Unit> PagedItemOutcomeStore::Flush()
+{
+    std::lock_guard Lock(mutex_);
+    auto Flushed = records_->Flush(); if (!Flushed.HasValue()) return Flushed.Failure();
+    pending_ = 0; lastFlush_ = std::chrono::steady_clock::now(); return storage::Unit{};
+}
 Result<std::uint64_t> PagedItemOutcomeStore::Append(const ItemOutcome& Item)
 {
     OperationMetric Timing("outcomes.append.inclusive");
     std::lock_guard Lock(mutex_);
     auto Written = records_->Append(EncodeOutcome(Item)); if (!Written.HasValue()) return Written.Failure();
-    auto Flushed = records_->Flush(); if (!Flushed.HasValue()) return Flushed.Failure();
+    // This store is session-only. Keep bounded QFile buffers rather than two
+    // kernel writes per result. DiskRecords::Read flushes before reading, and
+    // the scheduler Flush barrier reports any remaining error before completion.
+    const auto Now = std::chrono::steady_clock::now();
+    if (++pending_ >= 128 || Now - lastFlush_ >= std::chrono::milliseconds(50)) {
+        auto Flushed = records_->Flush(); if (!Flushed.HasValue()) return Flushed.Failure();
+        pending_ = 0; lastFlush_ = Now;
+    }
     return Written.Value();
 }
 Result<storage::Unit> PagedItemOutcomeStore::Replace(std::uint64_t Row, const ItemOutcome& Item)

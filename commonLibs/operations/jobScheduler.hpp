@@ -149,6 +149,9 @@ namespace hc::operations
         // Replace a previously emitted outcome without counting the item twice.
         // Used when destination commit and source removal are separate phases.
         std::optional<std::size_t> replaceItem_;
+        // Bounded completed effects from one commit (for example parallel
+        // deletion). Mutually exclusive with item_/replaceItem_; <=128 rows.
+        std::vector<ItemOutcome> items_;
     };
     class IJobTask
     {

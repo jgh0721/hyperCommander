@@ -105,11 +105,27 @@ namespace hc::operations
         Error Closed() { return {ErrorCategory::InvalidRequest, "job-terminal"}; }
         std::int64_t Number(std::uint64_t Value) { return static_cast<std::int64_t>(std::min(Value, static_cast<std::uint64_t>(INT64_MAX))); }
     }
+    namespace
+    {
+        JobResult JournalRecord(const JobResult& Value)
+        {
+            JobResult Record;
+            Record.snapshot_ = Value.snapshot_; Record.cleanupErrors_ = Value.cleanupErrors_;
+            Record.outcomes_ = Value.outcomes_; Record.writes_ = Value.writes_;
+            // An outcome ledger is authoritative. The first 200 UI preview rows
+            // are neither encoded nor read by the journal; copying all of them
+            // before every tiny task step costs millions of path allocations.
+            if (!Record.outcomes_) Record.items_ = Value.items_;
+            return Record;
+        }
+    }
     struct JobScheduler::State
     {
         std::mutex mutex_;
         std::condition_variable changed_;
         std::map<std::string, std::shared_ptr<Job>> jobs_;
+        // Retained history must not be copied/scanned into each scheduling turn.
+        std::map<std::string, std::shared_ptr<Job>> activeJobs_;
         std::map<std::string, std::size_t> laneLimits_;
         std::map<std::string, std::size_t> occupied_;
         std::shared_ptr<commands::EventHub> events_;
@@ -148,6 +164,7 @@ namespace hc::operations
         {
             if (Value.result_.snapshot_.state_ == Next) return;
             Value.result_.snapshot_.state_ = Next;
+            if (IsTerminal(Next)) activeJobs_.erase(Value.result_.snapshot_.id_);
             if ((Next == JobState::Paused || Next == JobState::WaitingForUser || IsTerminal(Next)) && Value.admitted_)
             { Value.admitted_ = false; if (!Value.result_.snapshot_.foreground_) --admitted_; }
             notify(Value, IsTerminal(Next) ? "job." + std::string(StateName(Next)) : "job.changed");
@@ -248,6 +265,8 @@ namespace hc::operations
             }
             Snapshot.queueOrder_ = ++state_->nextOrder_;
             state_->jobs_.emplace(Snapshot.id_, Value);
+            try { state_->activeJobs_.emplace(Snapshot.id_, Value); }
+            catch (...) { state_->jobs_.erase(Snapshot.id_); throw; }
             state_->notify(*Value, "job.changed");
         }
         state_->changed_.notify_all();
@@ -364,6 +383,7 @@ namespace hc::operations
             if (!IsTerminal(Found->second->result_.snapshot_.state_) || Found->second->executing_)
                 return Error{ErrorCategory::InvalidRequest, "job-active"};
             Removed = std::move(Found->second);
+            state_->activeJobs_.erase(Id);
             state_->jobs_.erase(Found);
         }
         return storage::Unit{};
@@ -422,10 +442,10 @@ namespace hc::operations
             bool ReceiptOnly = false;
             {
                 std::unique_lock Lock(Shared->mutex_);
-                auto Position = Shared->jobs_.upper_bound(Shared->lastPicked_);
+                auto Position = Shared->activeJobs_.upper_bound(Shared->lastPicked_);
                 std::vector<std::shared_ptr<Job>> Candidates, Queued;
-                for (std::size_t Index = 0; Index < Shared->jobs_.size(); ++Index) {
-                    if (Position == Shared->jobs_.end()) Position = Shared->jobs_.begin();
+                for (std::size_t Index = 0; Index < Shared->activeJobs_.size(); ++Index) {
+                    if (Position == Shared->activeJobs_.end()) Position = Shared->activeJobs_.begin();
                     const auto Candidate = (Position++)->second;
                     (Candidate->result_.snapshot_.state_ == JobState::Queued ? Queued : Candidates).push_back(Candidate);
                 }
@@ -496,7 +516,7 @@ namespace hc::operations
             flushEvents(Shared);
             if (!Abort && ReceiptOnly) {
                 JobResult Receipt;
-                { std::lock_guard Lock(Shared->mutex_); Receipt = Value->result_; }
+                { std::lock_guard Lock(Shared->mutex_); Receipt = JournalRecord(Value->result_); }
                 try { auto Saved = Shared->journal_->Checkpoint(Receipt); if (!Saved.HasValue()) Abort = Saved.Failure(); }
                 catch (...) { Abort = Error{ErrorCategory::Unavailable, "job-journal-exception"}; }
                 if (!Abort) {
@@ -521,7 +541,7 @@ namespace hc::operations
                     Value->itemsOpened_ = true;
                 }
                 JobResult Checkpoint;
-                { std::lock_guard Lock(Shared->mutex_); Checkpoint = Value->result_; }
+                { std::lock_guard Lock(Shared->mutex_); Checkpoint = JournalRecord(Value->result_); }
                 try { auto Saved = Shared->journal_->Checkpoint(Checkpoint); if (!Saved.HasValue()) Abort = Saved.Failure(); }
                 catch (...) { Abort = Error{ErrorCategory::Unavailable, "job-journal-exception"}; }
             }
@@ -541,6 +561,23 @@ namespace hc::operations
             JobState Terminal = JobState::Running;
             // Disk writes and replacement reads must never hold the scheduler
             // mutex: cancellation and unrelated lanes stay responsive.
+            if (!Step.items_.empty() && (Step.item_ || Step.replaceItem_ || Step.retry_ || Step.items_.size() > 128)) {
+                Step = JobStep{JobState::Failed}; Step.error_ = Error{ErrorCategory::Internal, "invalid-item-result-batch"};
+            }
+            if (Value->result_.outcomes_ && !Step.items_.empty()) {
+                auto& Store = Value->result_.outcomes_;
+                std::optional<Error> Failure;
+                for (const auto& Item : Step.items_) {
+                    try {
+                        if (Store->Count() >= Value->request_.maxItemResults_) Failure = Error{ErrorCategory::BudgetExceeded, "item-result-budget"};
+                        else { auto Saved = Store->Append(Item); if (!Saved.HasValue()) Failure = Saved.Failure(); }
+                    } catch (...) { Failure = Error{ErrorCategory::Unavailable, "job-outcome-write-exception"}; }
+                    if (Failure) break;
+                }
+                // Effects already occurred: retain counts/preview on persistence
+                // failure, and fail the job rather than reporting successful save.
+                if (Failure) { Step.next_ = JobState::Failed; Step.error_ = *Failure; }
+            }
             std::optional<ItemOutcome> PreviousItem;
             if (Value->result_.outcomes_ && (Step.item_ || Step.replaceItem_)) {
                 auto& Store = Value->result_.outcomes_;
@@ -584,8 +621,7 @@ namespace hc::operations
                     Step = JobStep{JobState::Failed};
                     Step.error_ = Error{ErrorCategory::Internal, "invalid-item-result-update"};
                 }
-                if (Step.item_)
-                {
+                const auto AccountItem = [&](ItemOutcome& Item) {
                     if (!Value->result_.outcomes_ && !Step.replaceItem_ && Value->result_.items_.size() == Value->request_.maxItemResults_)
                     { Step.next_ = JobState::Failed; Step.error_ = Error{ErrorCategory::BudgetExceeded, "item-result-budget"}; Step.retry_ = false; }
                     else
@@ -599,18 +635,20 @@ namespace hc::operations
                             case ItemOutcome::Status::Failed: --Snapshot.failedItems_; break;
                             }
                         }
-                        switch (Step.item_->status_)
+                        switch (Item.status_)
                         {
                         case ItemOutcome::Status::Completed: ++Snapshot.completedItems_; break;
                         case ItemOutcome::Status::Skipped: ++Snapshot.skippedItems_; break;
                         case ItemOutcome::Status::Failed: ++Snapshot.failedItems_; break;
                         }
                         if (Step.replaceItem_) {
-                            if (*Step.replaceItem_ < Value->result_.items_.size()) Value->result_.items_[*Step.replaceItem_] = std::move(*Step.item_);
+                            if (*Step.replaceItem_ < Value->result_.items_.size()) Value->result_.items_[*Step.replaceItem_] = std::move(Item);
                         } else if (!Value->result_.outcomes_ || Value->result_.items_.size() < 200)
-                            Value->result_.items_.push_back(std::move(*Step.item_));
+                            Value->result_.items_.push_back(std::move(Item));
                     }
-                }
+                };
+                if (Step.item_) AccountItem(*Step.item_);
+                for (auto& Item : Step.items_) AccountItem(Item);
                 if (Step.retry_)
                 {
                     if (Snapshot.state_ != JobState::Committing && Step.error_ && Step.error_->retryable_ && Snapshot.retryAttempt_ < Value->request_.maxRetries_)
@@ -681,12 +719,18 @@ namespace hc::operations
                 std::vector<Error> Cleanup;
                 try { Cleanup = Value->task_->Finalize(Terminal); }
                 catch (...) { Cleanup.push_back({ErrorCategory::Internal, "cleanup-exception"}); }
+                if (Value->result_.outcomes_) {
+                    try {
+                        auto Flushed = Value->result_.outcomes_->Flush();
+                        if (!Flushed.HasValue()) Cleanup.push_back(Flushed.Failure());
+                    } catch (...) { Cleanup.push_back({ErrorCategory::Unavailable, "job-outcome-flush-exception"}); }
+                }
                 // History retains value results, never live provider/task handles.
                 Value->task_.reset();
                 if (Shared->journal_)
                 {
                     JobResult Checkpoint;
-                    { std::lock_guard Lock(Shared->mutex_); Checkpoint = Value->result_; }
+                    { std::lock_guard Lock(Shared->mutex_); Checkpoint = JournalRecord(Value->result_); }
                     Checkpoint.snapshot_.state_ = Cleanup.empty() ? Terminal : JobState::Failed;
                     Checkpoint.cleanupErrors_ = Cleanup;
                     if (!Cleanup.empty() && !Checkpoint.snapshot_.error_) Checkpoint.snapshot_.error_ = Error{ErrorCategory::Unavailable, "cleanup-incomplete"};

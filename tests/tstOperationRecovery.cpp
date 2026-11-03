@@ -1,4 +1,5 @@
-﻿#include <QtTest>
+﻿#include "stdafx.h"
+#include <QtTest>
 #include <QTemporaryDir>
 #include <QProcess>
 #include <QFile>
@@ -418,6 +419,34 @@ private slots:
         QVERIFY(Session.Value()->Abort().HasValue()); QCOMPARE(Read(Path), QByteArray("original"));
         QCOMPARE(DecodeWriteRecovery(Store.Value()->Read(0, 1).Value().items_[0]).Value().phase_, WritePhase::Aborted);
         QCOMPARE(QDir(Directory.path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden).size(), 0);
+    }
+    void terminalOutcomeFlushFailureIsReported()
+    {
+        class Store final : public IItemOutcomeStore {
+        public:
+            uint64_t Count() const override { return 0; }
+            Result<uint64_t> Append(const ItemOutcome&) override { return uint64_t(0); }
+            Result<Unit> Replace(uint64_t, const ItemOutcome&) override { return Unit{}; }
+            Result<ItemOutcomePage> Read(uint64_t, size_t, const OperationContext&) const override { return ItemOutcomePage{}; }
+            Result<Unit> Flush() override { return Error{ErrorCategory::Unavailable, "injected-buffer-flush-failure"}; }
+        };
+        class Journal final : public IJobJournal {
+        public:
+            Result<Unit> Checkpoint(const JobResult&) override { return Unit{}; }
+            Result<std::vector<JobResult>> Recover() override { return std::vector<JobResult>{}; }
+            Result<Unit> Forget(const std::string&) override { return Unit{}; }
+            Result<std::shared_ptr<IItemOutcomeStore>> OpenItems(const std::string&) override { return std::shared_ptr<IItemOutcomeStore>(std::make_shared<Store>()); }
+        };
+        class Task final : public IJobTask {
+        public:
+            JobStep Advance(JobStepContext) override { return JobStep{JobState::Completed}; }
+            std::vector<Error> Finalize(JobState) override { return {}; }
+        };
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1, 16, std::make_shared<Journal>());
+        auto Job = Scheduler.Submit({}, std::make_unique<Task>()); QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+        const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Failed);
+        QVERIFY(!Done.cleanupErrors_.empty()); QCOMPARE(Done.cleanupErrors_.front().code_, std::string("injected-buffer-flush-failure"));
     }
     void manifestBatchAndPartialFailure()
     {

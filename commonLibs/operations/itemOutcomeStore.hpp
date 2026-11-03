@@ -12,6 +12,9 @@ namespace hc::operations
     public:
         virtual ~IItemOutcomeStore() = default;
         virtual std::uint64_t Count() const = 0;
+        // Session-only stores may buffer results. Durable stores keep their
+        // existing per-record barriers; terminal publication flushes both kinds.
+        virtual Result<storage::Unit> Flush() { return storage::Unit{}; }
         virtual Result<std::uint64_t> Append(const ItemOutcome& Item) = 0;
         virtual Result<storage::Unit> Replace(std::uint64_t Row, const ItemOutcome& Item) = 0;
         virtual Result<ItemOutcomePage> Read(std::uint64_t Offset, std::size_t MaxItems,

@@ -699,6 +699,26 @@ private slots:
         QVERIFY(!Scheduler.Submit({}, std::make_unique<ScriptTask>(std::make_shared<Probe>())).HasValue());
         Scheduler.Shutdown();
     }
+    void completedHistoryKeepsLiveSchedulingResponsive()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2, 256);
+        std::vector<std::string> History;
+        for (int Index = 0; Index < 128; ++Index) {
+            auto Done = Scheduler.Submit({}, std::make_unique<ScriptTask>(std::make_shared<Probe>())); QVERIFY(Done.HasValue());
+            QVERIFY(Ready(Done.Value())); QCOMPARE(Done.Value().completion_.get().snapshot_.state_, JobState::Completed);
+            History.push_back(Done.Value().id_);
+        }
+        auto Running = std::make_shared<Probe>();
+        auto Live = Scheduler.Submit({}, std::make_unique<ScriptTask>(Running, [](JobStepContext) {
+            JobStep Step{JobState::Running}; Step.deferFor_ = 1ms; return Step;
+        })); QVERIFY(Live.HasValue());
+        auto Fast = Scheduler.Submit({}, std::make_unique<ScriptTask>(std::make_shared<Probe>())); QVERIFY(Fast.HasValue());
+        QVERIFY(Ready(Fast.Value())); QCOMPARE(Fast.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QVERIFY(Scheduler.Cancel(Live.Value().id_).HasValue()); QVERIFY(Ready(Live.Value()));
+        QCOMPARE(Live.Value().completion_.get().snapshot_.state_, JobState::Cancelled);
+        for (const auto& Id : History) { QVERIFY(Scheduler.Snapshot(Id).HasValue()); QVERIFY(Scheduler.Forget(Id).HasValue()); }
+        auto Final = Scheduler.Submit({}, std::make_unique<ScriptTask>(std::make_shared<Probe>())); QVERIFY(Final.HasValue()); QVERIFY(Ready(Final.Value()));
+    }
 };
 
 QTEST_GUILESS_MAIN(JobTests)

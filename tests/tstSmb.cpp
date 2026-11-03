@@ -13581,7 +13581,7 @@ private slots:
         QTRY_VERIFY(Previous->isEnabled()); QVERIFY(!Next->isEnabled());
         auto Last = Done.outcomes_->Read(200, 1); QVERIFY(Last.HasValue());
         auto At = ParseLocator(Last.Value().items_[0].item_); QVERIFY(At.HasValue());
-        QVERIFY(Details->toPlainText().contains(QString::fromStdString(At.Value().root_)));
+        QTRY_VERIFY(Details->toPlainText().contains(QDir::toNativeSeparators(QString::fromStdString(At.Value().root_))));
         Previous->click(); QTRY_VERIFY(Next->isEnabled()); QVERIFY(!Previous->isEnabled());
     }
     void closingWindowCancelsWaitingFileJob()
