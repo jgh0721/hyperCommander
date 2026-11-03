@@ -1002,6 +1002,218 @@ private slots:
         QTRY_VERIFY(!QFileInfo::exists(Stale));
     }
 
+    void todoBugModalDirectoryRefreshUi_data()
+    {
+        QTest::addColumn<QString>("Command"); QTest::addColumn<QString>("DialogName");
+        QTest::addColumn<bool>("Indexed"); QTest::addColumn<bool>("RunOperation");
+        struct Scenario { const char* name_; const char* command_; const char* dialog_; bool run_; };
+        const Scenario Scenarios[] = {
+            {"copy", "hc.file.copy", "hc.dialog.fileOperation", true},
+            {"move", "hc.file.move", "hc.dialog.fileOperation", true},
+            {"rename", "hc.file.rename", "hc.dialog.fileOperation", true},
+            {"mkdir", "hc.file.mkdir", "hc.dialog.fileOperation", true},
+            {"new-file", "hc.file.new", "hc.newFile", false},
+            {"batch-rename", "hc.file.batchRename", "hc.batchRename", false},
+            {"archive-create", "hc.archive.create", "hc.archive.create", false},
+            {"archive-extract", "hc.archive.extract", "hc.archive.extract", false},
+            {"attributes", "hc.file.attributes", "hc.fileAttributes", false},
+            {"permissions", "hc.file.permissions", "hc.permission.A01", false},
+            {"selection", "hc.selection.select", "hc.selection.dialog", false},
+            {"settings", "hc.settings.show", "dlgOpts", false},
+        };
+        for (const auto& Scenario : Scenarios) for (const bool Indexed : {false, true}) {
+            const auto Name = QByteArray(Scenario.name_) + (Indexed ? "-indexed" : "");
+            QTest::newRow(Name.constData()) << QString::fromLatin1(Scenario.command_) << QString::fromLatin1(Scenario.dialog_)
+                << Indexed << Scenario.run_;
+        }
+    }
+
+    void todoBugModalDirectoryRefreshUi()
+    {
+        using namespace hc::operations;
+        QFETCH(QString, Command); QFETCH(QString, DialogName); QFETCH(bool, Indexed); QFETCH(bool, RunOperation);
+        QTest::failOnWarning(QRegularExpression(QStringLiteral(".*Index QModelIndex.*(is not valid|does not belong).*$")));
+        const auto Workspace = main_->CaptureWorkspace();
+        auto& Settings = hc::settings::AppSettings(); const auto SavedSettings = Settings.Object();
+        QTemporaryDir Source(QDir(unc_).filePath("modal-refresh-source-XXXXXX"));
+        QTemporaryDir Target(QDir(unc_).filePath("modal-refresh-target-XXXXXX"));
+        QVERIFY(Source.isValid() && Target.isValid());
+        const auto Restore = qScopeGuard([&] { Settings.Replace(SavedSettings); main_->RestoreWorkspace(Workspace); });
+        auto Options = Settings.Read(hc::settings::Section::Options).toObject(); Options["renameInDialog"] = true;
+        QVERIFY(Settings.Put(hc::settings::Section::Options, Options));
+        const QByteArray Payload("modal refresh fixture");
+        { QFile File(Source.filePath("input.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Payload), Payload.size()); }
+        { QFile File(Source.filePath("input.zip")); QVERIFY(File.open(QIODevice::WriteOnly));
+            File.write(QByteArray::fromHex("504b05060000000000000000000000000000000000000000")); }
+        const int KeptCount = Indexed ? int(CFSModel::IndexedOrderThreshold) + 1 : 1;
+        for (int I = 0; I < KeptCount; ++I) {
+            QFile File(Source.filePath(QString("keep%1.txt").arg(I, 5, 10, QChar('0')))); QVERIFY(File.open(QIODevice::WriteOnly));
+        }
+        const auto Before = QDir(Source.path()).entryList(QDir::Files);
+        auto* Panel = panels_.front(); Panel->SetSearch({});
+        Panel->ChangeCurrentPath(Source.path(), {}); Panel->sig_NotifyPanelActivated();
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !Model->IsPageLoading(), 30000);
+        QCOMPARE(Model->UsesIndexedOrder(), Indexed);
+        QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile())); QVERIFY(View->SetListMode("one-line"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsPageLoading(), 30000);
+        const auto SelectedName = Command == "hc.archive.extract" ? QString("input.zip") : QString("input.txt");
+        QString Key;
+        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+            if (Item && Item->storageEntry_ && Item->Name_ == SelectedName) { Key = hc::workspace::SelectionKey(*Item->storageEntry_); break; }
+        }
+        QVERIFY(!Key.isEmpty());
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        for (const bool Accept : {false, true}) {
+            if (Accept && !RunOperation) break;
+            View->RestoreSelection({Key}, Key); View->EnsureKeyboardFocusOnView();
+            QTRY_VERIFY(Bridge->Action(Command) && Bridge->Action(Command)->isEnabled());
+            QPersistentModelIndex Original(View->BaseView()->focusedRow().modelIndex(0)); QVERIFY(Original.isValid());
+            QSignalSpy Resets(Model, &QAbstractItemModel::modelReset);
+            std::set<std::string> Prior; for (const auto& Job : Scheduler.Snapshots()) Prior.insert(Job.id_);
+            bool Opened = false, Finished = false; int Refreshes = 0;
+            QElapsedTimer Clock; Clock.start(); QTimer Interact; Interact.setInterval(15);
+            connect(&Interact, &QTimer::timeout, main_, [&] {
+                if (Clock.elapsed() > 20000) {
+                    Interact.stop();
+                    for (auto* Widget : QApplication::topLevelWidgets())
+                        if (auto* Dialog = qobject_cast<QDialog*>(Widget); Dialog && Dialog->isVisible() && Dialog->window() != main_) Dialog->reject();
+                    return;
+                }
+                QDialog* Dialog = nullptr;
+                for (auto* Widget : QApplication::topLevelWidgets())
+                    if (auto* Candidate = qobject_cast<QDialog*>(Widget); Candidate && Candidate->isVisible() && Candidate->objectName() == DialogName) { Dialog = Candidate; break; }
+                if (!Dialog) return;
+                Opened = true;
+                if (Model->IsLoading() || Model->IsPageLoading()) return;
+                if (Refreshes < 3) { ++Refreshes; Model->Refresh(); return; }
+                if (Resets.count() < 3) return;
+                if (!Accept) { Finished = true; Interact.stop(); Dialog->reject(); return; }
+                auto* Input = Dialog->findChild<QLineEdit*>("hc.operation.editor");
+                auto* Button = Dialog->findChild<QPushButton*>("hc.dialog.accept");
+                if (!Input || !Button) return;
+                Input->setText(Command == "hc.file.rename" ? QString("renamed.txt") : Command == "hc.file.mkdir" ? QString("created") : Target.path());
+                if (Button->isEnabled()) { Finished = true; Interact.stop(); Button->click(); }
+            });
+            Interact.start(); QVERIFY(Bridge->ExecuteCommand(Command, Original));
+            QTRY_VERIFY_WITH_TIMEOUT(Finished || !Interact.isActive(), 25000); Interact.stop();
+            QVERIFY2(Opened && Finished, qPrintable("Expected refreshed dialog: " + DialogName));
+            QVERIFY(Resets.count() >= 3); QVERIFY(!Original.isValid());
+            if (!Accept) {
+                for (const auto& Job : Scheduler.Snapshots()) QVERIFY(Prior.contains(Job.id_));
+                QCOMPARE(QDir(Source.path()).entryList(QDir::Files), Before); QVERIFY(QDir(Target.path()).isEmpty());
+                continue;
+            }
+            std::string JobId;
+            QTRY_VERIFY(([&] { for (const auto& Job : Scheduler.Snapshots()) if (!Prior.contains(Job.id_)) { JobId = Job.id_; return true; } return false; })());
+            QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(JobId).Value().state_), 30000);
+            const auto Done = Scheduler.Snapshot(JobId).Value(); QCOMPARE(Done.state_, JobState::Completed);
+            QCOMPARE(Done.failedItems_, 0ULL); QCOMPARE(Done.skippedItems_, 0ULL);
+            if (Command == "hc.file.mkdir") QVERIFY(QFileInfo(Source.filePath("created")).isDir());
+            else {
+                const auto Result = Command == "hc.file.rename" ? Source.filePath("renamed.txt") : Target.filePath("input.txt");
+                QFile File(Result); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), Payload);
+            }
+            QCOMPARE(QFileInfo::exists(Source.filePath("input.txt")), Command == "hc.file.copy" || Command == "hc.file.mkdir");
+            QCOMPARE(QDir(Source.path()).entryList({"keep*.txt"}, QDir::Files).size(), KeptCount);
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !Model->IsPageLoading(), 30000);
+        }
+    }
+
+    void todoBugBulkTempDeleteRefreshUi_data()
+    {
+        QTest::addColumn<bool>("Permanent");
+        QTest::addColumn<bool>("Indexed");
+        QTest::newRow("permanent") << true << false;
+        QTest::newRow("recycle") << false << false;
+        QTest::newRow("permanent-indexed") << true << true;
+        QTest::newRow("recycle-indexed") << false << true;
+    }
+
+    void todoBugBulkTempDeleteRefreshUi()
+    {
+        using namespace hc::operations;
+        QFETCH(bool, Permanent); QFETCH(bool, Indexed);
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory(QDir(unc_).filePath("bulk-temp-delete-XXXXXX")); QVERIFY(Directory.isValid());
+        constexpr int SelectedCount = 48;
+        for (int I = 0; I < SelectedCount; ++I) {
+            const auto Name = QString(".tmp%1").arg(I, 3, 10, QChar('0'));
+            QVERIFY(QDir(Directory.path()).mkpath(Name + "/nested"));
+            QFile File(Directory.filePath(Name + "/nested/payload.txt"));
+            QVERIFY(File.open(QIODevice::WriteOnly)); File.write("bulk temp delete fixture");
+        }
+        const int KeptCount = Indexed ? int(CFSModel::IndexedOrderThreshold) + 1 : 1;
+        for (int I = 0; I < KeptCount; ++I) {
+            QFile File(Directory.filePath(QString("keep%1.txt").arg(I, 5, 10, QChar('0'))));
+            QVERIFY(File.open(QIODevice::WriteOnly)); File.write("keep");
+        }
+        auto* Panel = panels_.front(); Panel->SetSearch({});
+        Panel->ChangeCurrentPath(Directory.path(), {}); Panel->sig_NotifyPanelActivated();
+        auto* Model = static_cast<CFSModel*>(model(Panel));
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !Model->IsPageLoading(), 30000);
+        QCOMPARE(Model->UsesIndexedOrder(), Indexed);
+        QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile())); QVERIFY(View->SetListMode("one-line"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsPageLoading(), 30000);
+        QStringList Keys;
+        for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Item = Model->GetFileInfo(Model->index(Row, 0));
+            if (Item && Item->storageEntry_ && Item->Name_.startsWith(".tmp"))
+                Keys.append(hc::workspace::SelectionKey(*Item->storageEntry_));
+        }
+        QCOMPARE(Keys.size(), SelectedCount);
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        // Keep the command's proxy index alive across several resets inside the
+        // modal confirmation loop, as a busy TEMP directory's watcher does.
+        for (const bool Accept : {false, true}) {
+            // Recycle confirmation covers the same reset path; cancel it so
+            // fixture contents never remain in the user's Windows recycle bin.
+            if (!Permanent && Accept) break;
+            View->RestoreSelection(Keys, Keys.front()); View->EnsureKeyboardFocusOnView();
+            QCOMPARE(View->CaptureSelection().size(), SelectedCount);
+            QSignalSpy Resets(Model, &QAbstractItemModel::modelReset);
+            QPersistentModelIndex Original(View->BaseView()->focusedRow().modelIndex(0)); QVERIFY(Original.isValid());
+            std::set<std::string> Prior; for (const auto& Job : Scheduler.Snapshots()) Prior.insert(Job.id_);
+            bool Opened = false, Finished = false; int Refreshes = 0;
+            QElapsedTimer Clock; Clock.start(); QTimer Confirm; Confirm.setInterval(15);
+            connect(&Confirm, &QTimer::timeout, main_, [&] {
+                auto* Dialog = main_->findChild<QDialog*>("hc.dialog.fileOperation");
+                if (!Dialog || !Dialog->isVisible()) return;
+                Opened = true;
+                if (Clock.elapsed() > 20000) { Confirm.stop(); Dialog->reject(); return; }
+                auto* Mode = Dialog->findChild<QRadioButton*>(Permanent ? "hc.operation.permanent" : "hc.operation.recycle");
+                if (!Mode || !Mode->isEnabled()) return;
+                Mode->setChecked(true);
+                if (Model->IsLoading() || Model->IsPageLoading()) return;
+                if (Refreshes < 3) { ++Refreshes; Model->Refresh(); return; }
+                if (Resets.count() < 3) return;
+                if (!Accept) { Finished = true; Confirm.stop(); Dialog->reject(); return; }
+                auto* Button = Dialog->findChild<QPushButton*>("hc.dialog.accept");
+                if (!Button) return;
+                if (Button->isEnabled()) { Finished = true; Confirm.stop(); Button->click(); }
+            });
+            Confirm.start(); QVERIFY(Bridge->ExecuteCommand("hc.file.delete", Original)); Confirm.stop();
+            QVERIFY(Opened && Finished); QVERIFY(Resets.count() >= 3); QVERIFY(!Original.isValid());
+            if (!Accept) {
+                for (const auto& Job : Scheduler.Snapshots()) QVERIFY(Prior.contains(Job.id_));
+                QCOMPARE(QDir(Directory.path()).entryList({".tmp*"}, QDir::Dirs | QDir::NoDotAndDotDot).size(), SelectedCount);
+                continue;
+            }
+            std::string JobId;
+            QTRY_VERIFY(([&] { for (const auto& Job : Scheduler.Snapshots()) if (!Prior.contains(Job.id_)) { JobId = Job.id_; return true; } return false; })());
+            QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(JobId).Value().state_), 30000);
+            const auto Done = Scheduler.Snapshot(JobId).Value(); QCOMPARE(Done.state_, JobState::Completed);
+            QCOMPARE(Done.failedItems_, 0ULL); QCOMPARE(Done.skippedItems_, 0ULL);
+            QTRY_VERIFY(QDir(Directory.path()).entryList({".tmp*"}, QDir::Dirs | QDir::NoDotAndDotDot).isEmpty());
+            QCOMPARE(QDir(Directory.path()).entryList({"keep*.txt"}, QDir::Files).size(), KeptCount);
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !Model->IsPageLoading(), 30000);
+        }
+    }
+
     void fileDeleteCursorUi()
     {
         using namespace hc::operations;

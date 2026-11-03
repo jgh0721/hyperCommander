@@ -1092,7 +1092,7 @@ void CommandUiBridge::createAudioUi(QWidget* Window)
 
 bool CommandUiBridge::ExecuteCommand(const QString& Id, const QModelIndex& Index)
 {
-    const QScopedValueRollback<QModelIndex> Context(commandIndex_, Index);
+    const QScopedValueRollback<QPersistentModelIndex> Context(commandIndex_, Index);
     if (auto* Command = Action(Id)) {
         if (Command->isEnabled()) Command->trigger();
         return true;
@@ -1252,9 +1252,14 @@ void CommandUiBridge::refreshActionState()
     if (auto* Command = Action("hc.search.openLocation")) Command->setEnabled(Ready && Model->IsSearchResults());
     if (auto* Command = Action("hc.audio.preview")) {
         bool Playable = false;
-        if (Ready && audio_)
-            if (const auto Item = Model->GetFileInfo(SourceIndex(commandIndex())))
-                Playable = Item->storageEntry_ && !(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && hc::audio::IsPlayable(Item->Name_, audio_->Extensions());
+        if (Ready && audio_) {
+            const auto Index = SourceIndex(commandIndex());
+            // A reset can leave no focused row, or activate another panel while
+            // a modal command still carries its original source model.
+            if (Index.isValid() && Index.model() == Model)
+                if (const auto Item = Model->GetFileInfo(Index))
+                    Playable = Item->storageEntry_ && !(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && hc::audio::IsPlayable(Item->Name_, audio_->Extensions());
+        }
         Command->setEnabled(Playable);
     }
     if (auto* Command = Action("hc.file.attributes")) {
@@ -1501,7 +1506,7 @@ void CommandUiBridge::createCommandUi()
 }
 
 void CommandUiBridge::PromptArchive(bool Extract, const QModelIndex& Index) {
-    const QScopedValueRollback<QModelIndex> Scope(commandIndex_, Index);
+    const QScopedValueRollback<QPersistentModelIndex> Scope(commandIndex_, Index);
     if (Extract) extractArchive(); else openArchive();
 }
 void CommandUiBridge::extractArchive() {

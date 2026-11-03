@@ -1,7 +1,7 @@
 ﻿#pragma once
 #include <QObject>
 #include <QPointer>
-#include <QModelIndex>
+#include <QPersistentModelIndex>
 #include <QVariantMap>
 #include <QStringList>
 #include <QHash>
@@ -127,7 +127,9 @@ private:
     hc::sys::SystemCommands* system_ = nullptr;
     int functionBarKind_ = -2;              // 기능 키 막대가 보이는 보기 종류(-1 파일, 0 프로세스, 1 서비스)
     QSet<QString> systemDisabled_;          // 시스템 보기 때문에 끈 명령. 파일 보기로 돌아오면 다시 켠다
-    QModelIndex commandIndex_;
+    // Modal commands process watcher refreshes; resets must invalidate the
+    // saved proxy index before action-state updates map it back to the source.
+    QPersistentModelIndex commandIndex_;
     std::map<std::string, std::vector<hc::storage::Locator>> affectedLocations_;
     struct JobSelection { QPointer<CGridView> view_; QPointer<CFSModel> model_; QString location_; QStringList keys_; };
     std::map<std::string, JobSelection> jobSelections_;
