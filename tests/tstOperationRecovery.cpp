@@ -13,6 +13,9 @@
 #include "commonLibs/operations/writeRecovery.hpp"
 #include <Windows.h>
 #include <QLockFile>
+#include "UniqueLibs/operationMetrics.hpp"
+#include <QJsonArray>
+#include <QElapsedTimer>
 #include <atomic>
 #include <thread>
 
@@ -503,6 +506,103 @@ private slots:
         QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
         const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Failed);
         QVERIFY(!Done.cleanupErrors_.empty()); QCOMPARE(Done.cleanupErrors_.front().code_, std::string("injected-buffer-flush-failure"));
+    }
+    // Opt in explicitly: fixtures are created under a unique, owned directory,
+    // outside the measured interval. Both implementations enumerate and delete
+    // the same tree shape; the product path includes scheduler and result I/O.
+    void nativeDeletionBenchmark()
+    {
+        const auto Parent = qEnvironmentVariable("HC_DELETE_BENCH_ROOT");
+        if (Parent.isEmpty()) QSKIP("Set HC_DELETE_BENCH_ROOT to an owned benchmark directory");
+        QVERIFY(QDir::isAbsolutePath(Parent));
+        QVERIFY(QDir().mkpath(Parent));
+        const auto Count = qEnvironmentVariableIntValue("HC_DELETE_BENCH_COUNT") > 0
+            ? qEnvironmentVariableIntValue("HC_DELETE_BENCH_COUNT") : 12000;
+        const auto Repeats = qEnvironmentVariableIntValue("HC_DELETE_BENCH_REPEATS") > 0
+            ? qEnvironmentVariableIntValue("HC_DELETE_BENCH_REPEATS") : 3;
+        QVERIFY(Count <= 100000 && Repeats <= 10);
+        QJsonArray Results;
+        const auto DeleteTree = [](auto&& Self, const std::wstring& Path, std::uint64_t& Removed) -> DWORD {
+            WIN32_FIND_DATAW Found{};
+            const auto Search = FindFirstFileExW((Path + L"\\*").c_str(), FindExInfoBasic,
+                &Found, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+            if (Search == INVALID_HANDLE_VALUE) return GetLastError();
+            DWORD Error = ERROR_SUCCESS;
+            do {
+                if (!wcscmp(Found.cFileName, L".") || !wcscmp(Found.cFileName, L"..")) continue;
+                const auto Child = Path + L"\\" + Found.cFileName;
+                if (Found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) { Error = ERROR_REPARSE_TAG_INVALID; break; }
+                if (Found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) Error = Self(Self, Child, Removed);
+                else if (!DeleteFileW(Child.c_str())) Error = GetLastError();
+                else ++Removed;
+                if (Error) break;
+            } while (FindNextFileW(Search, &Found));
+            if (!Error && GetLastError() != ERROR_NO_MORE_FILES) Error = GetLastError();
+            FindClose(Search);
+            if (!Error && !RemoveDirectoryW(Path.c_str())) Error = GetLastError();
+            return Error;
+        };
+        for (const auto Deep : {false, true}) for (int Repeat = 0; Repeat < Repeats; ++Repeat) {
+            // Alternate order to reduce systematic cache/temperature bias.
+            for (int Position = 0; Position < 2; ++Position) {
+                const bool Native = (Position + Repeat) % 2 == 0;
+                QTemporaryDir Directory(QDir(Parent).filePath("hc-delete-XXXXXX")); QVERIFY(Directory.isValid());
+                QVERIFY(Put(Directory.filePath("owner.json"), QJsonDocument(QJsonObject{
+                    {"task", "native-delete-comparison"}, {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+                    {"expiresUtc", QDateTime::currentDateTimeUtc().addDays(7).toString(Qt::ISODate)}}).toJson()));
+                const auto Tree = Directory.filePath("data"); QVERIFY(QDir().mkdir(Tree));
+                for (int Index = 0; Index < Count; ++Index) {
+                    const auto Folder = Deep ? QDir(Tree).filePath("a/b/c/d/e/group-" + QString::number(Index / 100)) : Tree;
+                    if (Deep && Index % 100 == 0) QVERIFY(QDir().mkpath(Folder));
+                    const auto Path = QDir::toNativeSeparators(QDir(Folder).filePath(QString::number(Index) + ".dat")).toStdWString();
+                    const auto File = CreateFileW(Path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    QVERIFY(File != INVALID_HANDLE_VALUE);
+                    const char Payload[128]{}; DWORD Written = 0;
+                    const bool Created = WriteFile(File, Payload, sizeof(Payload), &Written, nullptr);
+                    CloseHandle(File); QVERIFY(Created && Written == sizeof(Payload));
+                }
+                auto Journal = MakeFileJobJournal(Directory.filePath("journal"), false, true, false);
+                JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1, 16, Journal);
+                auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+                auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+                OperationMetrics::Instance().Reset(qEnvironmentVariableIsSet("HC_DELETE_BENCH_DETAILED"));
+                QElapsedTimer Clock; Clock.start(); std::uint64_t Removed = 0;
+                if (Native) {
+                    const auto Error = DeleteTree(DeleteTree, QDir::toNativeSeparators(Tree).toStdWString(), Removed);
+                    QCOMPARE(Error, DWORD(ERROR_SUCCESS));
+                } else {
+                    auto Entry = Reader->Resolve({LocatorKind::Local, Tree.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+                    FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete;
+                    Request.confirmDelete_ = false; Request.fileLockInteractions_ = true;
+                    Request.sources_ = {{Entry.Value(), Reader, Writer}};
+                    OperationContext Operation; Operation.fileDeleteWorkers_ = qEnvironmentVariableIsSet("HC_DELETE_BENCH_WORKERS")
+                        ? std::size_t(qEnvironmentVariableIntValue("HC_DELETE_BENCH_WORKERS")) : 0;
+                    auto Job = SubmitFileOperation(Scheduler, std::move(Request), Operation); QVERIFY(Job.HasValue());
+                    QVERIFY(Job.Value().completion_.wait_for(std::chrono::minutes(5)) == std::future_status::ready);
+                    const auto Done = Job.Value().completion_.get();
+                    QVERIFY2(Done.snapshot_.state_ == JobState::Completed,
+                        Done.snapshot_.error_ ? Done.snapshot_.error_->code_.c_str() : "incomplete");
+                    Removed = Done.snapshot_.progress_.deletedFiles_.value_or(0);
+                    QCOMPARE(Done.snapshot_.failedItems_, 0ull);
+                }
+                const auto Milliseconds = Clock.nsecsElapsed() / 1e6;
+                QCOMPARE(Removed, std::uint64_t(Count)); QVERIFY(!QFile::exists(Tree));
+                const auto MetricsPath = Directory.filePath("metrics.json");
+                QVERIFY(OperationMetrics::Instance().Save(MetricsPath, Milliseconds));
+                Results.append(QJsonObject{{"implementation", Native ? "win32" : "hypercommander"},
+                    {"shape", Deep ? "deep" : "flat"}, {"repeat", Repeat + 1}, {"files", Count},
+                    {"detailedMetrics", qEnvironmentVariableIsSet("HC_DELETE_BENCH_DETAILED")},
+                    {"preferredWorkers", int(Writer->PreferredDeleteWorkers({LocatorKind::Local, Tree.toStdString()}))},
+                    {"milliseconds", Milliseconds}, {"filesPerSecond", Count * 1000.0 / Milliseconds},
+                    {"metrics", QJsonDocument::fromJson(Read(MetricsPath)).object()}});
+                qInfo().noquote() << (Native ? "Win32" : "HyperCommander") << (Deep ? "deep" : "flat")
+                    << Repeat + 1 << Milliseconds << "ms" << Count * 1000.0 / Milliseconds << "files/s";
+            }
+        }
+        const auto Report = qEnvironmentVariable("HC_DELETE_BENCH_REPORT");
+        if (!Report.isEmpty()) QVERIFY(Put(Report, QJsonDocument(QJsonObject{
+            {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+            {"root", Parent}, {"results", Results}}).toJson()));
     }
     void manifestBatchAndPartialFailure()
     {
