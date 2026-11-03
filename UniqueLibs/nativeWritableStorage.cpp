@@ -995,6 +995,22 @@ namespace hc::storage
                 const auto RecyclePath = Utf8(Name); CoTaskMemFree(Name);
                 return WriteReceipt{Locator{LocatorKind::Local, RecyclePath}};
             }
+            Result<bool> CanRenameTo(Locator From, Locator To, OperationContext Context) override
+            {
+                if (const auto Error = Context.Check(id_)) return *Error;
+                if (kind_ != LocatorKind::Local || From.kind_ != kind_ || To.kind_ != kind_) return false;
+                const auto Source = Normalize(From, kind_, id_), Destination = Normalize(To, kind_, id_);
+                if (!Source.HasValue() || !Destination.HasValue()) return false;
+                const auto Volume = [](const std::wstring& Path) {
+                    std::vector<wchar_t> Mount(32768), Name(32768);
+                    if (!GetVolumePathNameW(Path.c_str(), Mount.data(), DWORD(Mount.size()))
+                        || !GetVolumeNameForVolumeMountPointW(Mount.data(), Name.data(), DWORD(Name.size()))) return std::wstring{};
+                    return std::wstring(Name.data());
+                };
+                const auto SourceVolume = Volume(Source.Value().path_);
+                const auto Parent = std::filesystem::path(Destination.Value().path_).parent_path().wstring();
+                return !SourceVolume.empty() && SourceVolume == Volume(Parent);
+            }
             Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override
             {
                 if (const auto Error = Context.Check(id_)) return *Error;

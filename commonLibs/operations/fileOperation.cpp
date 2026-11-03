@@ -104,6 +104,7 @@ namespace hc::operations
             Locator destination_;
             std::size_t depth_ = 0;
             bool removeDirectory_ = false;
+            bool renameMove_ = false;
             bool readOnly_ = false, excluded_ = false;
             std::size_t root_ = 0;
             std::shared_ptr<const Error> preparationError_;
@@ -652,7 +653,7 @@ namespace hc::operations
                     Step.progress_->plannedItems_ = request_.sources_.size();
                 }
                 if (planningFinished_ || request_.operation_ == FileOperation::MakeDirectory) Step.progress_->plannedItems_ = request_.operation_ == FileOperation::Move
-                    ? std::ranges::count_if(items_, [](const auto& Item) { return !Item.source_.entry_.directory_ || Item.removeDirectory_; }) : items_.size();
+                    ? std::ranges::count_if(items_, [](const auto& Item) { return !Item.source_.entry_.directory_ || Item.removeDirectory_ || Item.renameMove_; }) : items_.size();
                 if (request_.operation_ == FileOperation::Delete) {
                     Step.progress_->discoveredItems_ = verifiedItems_;
                     Step.progress_->discoveredFiles_ = discoveredFiles_;
@@ -788,7 +789,7 @@ namespace hc::operations
                 if (Status == ItemOutcome::Status::Skipped && (request_.operation_ == FileOperation::Move || request_.operation_ == FileOperation::Delete))
                     skippedSources_.push_back(current().source_.entry_.locator_);
                 // Move directories produce one outcome when source removal runs.
-                if (!(request_.operation_ == FileOperation::Move && current().source_.entry_.directory_ && !current().removeDirectory_))
+                if (!(request_.operation_ == FileOperation::Move && current().source_.entry_.directory_ && !current().removeDirectory_ && !current().renameMove_))
                     Step.item_ = ItemOutcome{itemLocator(), Status, {}, Destination, Removed, current().source_.entry_};
                 if (Step.item_) { if (partialOutcome_) Step.replaceItem_ = partialOutcome_; else ++outcomeIndex_; }
                 partialOutcome_.reset(); publishedDestination_.reset();
@@ -816,7 +817,7 @@ namespace hc::operations
                 }
                 else if (request_.operation_ == FileOperation::Delete || Item.removeDirectory_)
                     Request.action_ = request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Recycle ? FileElevationAction::Recycle : FileElevationAction::Remove;
-                else if (request_.operation_ == FileOperation::Rename) Request.action_ = FileElevationAction::Rename;
+                else if (request_.operation_ == FileOperation::Rename || Item.renameMove_) Request.action_ = FileElevationAction::Rename;
                 else if (request_.operation_ == FileOperation::MakeDirectory || Item.source_.entry_.directory_) Request.action_ = FileElevationAction::MakeDirectory;
                 else Request.action_ = FileElevationAction::Copy;
                 if(request_.operation_==FileOperation::Delete||Item.removeDirectory_)Request.destination_=Item.source_.entry_.locator_;
@@ -1110,6 +1111,25 @@ namespace hc::operations
                 Item.readOnly_ = (Item.source_.entry_.attributes_ & 1) != 0;
                 const bool Recycling = request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Recycle;
                 if (Item.readOnly_) readOnlySources_.push_back(Item.source_.entry_.locator_);
+                // A whole-tree rename avoids enumerating or copying any descendants.
+                // Only an absent destination qualifies; existing folders still merge.
+                if (request_.operation_ == FileOperation::Move && Item.source_.writer_
+                    && Item.source_.entry_.locator_.kind_ == LocatorKind::Local && Item.destination_.kind_ == LocatorKind::Local
+                    && (request_.includePattern_ == "*" || request_.includePattern_ == "*.*")
+                    && request_.maxBytes_ == std::numeric_limits<std::uint64_t>::max()
+                    && request_.copyOptions_.metadata_ && !request_.copyOptions_.verify_ && !request_.bytesPerSecondLimit_) {
+                    const auto CanRename = Item.source_.writer_->CanRenameTo(Item.source_.entry_.locator_, Item.destination_, Context);
+                    if (!CanRename.HasValue()) return failed(CanRename.Failure());
+                    if (CanRename.Value()) {
+                        const auto Existing = request_.destinationWriter_->Inspect(Item.destination_, Context);
+                        if (!Existing.HasValue()) return failed(Existing.Failure());
+                        if (!Existing.Value()) {
+                            Item.renameMove_ = true; items_.push_back(std::move(Item));
+                            if (streaming_) phase_ = Phase::Begin;
+                            return progress();
+                        }
+                    }
+                }
                 if (Recycling ? Item.depth_ == 0 : !Item.source_.entry_.directory_ || request_.operation_ != FileOperation::Delete) items_.push_back(Item);
                 if (Item.source_.entry_.directory_ && request_.operation_ != FileOperation::Rename)
                 {
@@ -1138,7 +1158,7 @@ namespace hc::operations
                 expected_ = {};
                 destinationCommitted_ = request_.operation_ == FileOperation::Move && current().removeDirectory_;
                 const bool Removing = request_.operation_ == FileOperation::Delete || current().removeDirectory_;
-                const bool Renaming = request_.operation_ == FileOperation::Rename;
+                const bool Renaming = request_.operation_ == FileOperation::Rename || current().renameMove_;
                 auto Writer = Removing || Renaming ? current().source_.writer_ : request_.destinationWriter_;
                 if (Removing && request_.operation_ == FileOperation::Delete) {
                     for (const auto& At : skippedSources_) if (SameOrWithin(At, current().source_.entry_.locator_)) return done(ItemOutcome::Status::Skipped);
@@ -1146,7 +1166,7 @@ namespace hc::operations
                 if (current().removeDirectory_ && request_.operation_ == FileOperation::Move)
                     for (const auto& Skipped : skippedSources_)
                         if (SameOrWithin(Skipped, current().source_.entry_.locator_)) return done(ItemOutcome::Status::Skipped, true);
-                if (Removing || (request_.operation_ == FileOperation::Move && !current().source_.entry_.directory_)) {
+                if (Removing || (request_.operation_ == FileOperation::Move && (!current().source_.entry_.directory_ || current().renameMove_))) {
                     if (current().readOnly_ && request_.readOnly_ != ReadOnlyPolicy::Allow && !allowAllReadOnly_ && !readOnlyAnswered_) {
                         if (request_.readOnly_ == ReadOnlyPolicy::Skip) return done(ItemOutcome::Status::Skipped, destinationCommitted_);
                         phase_ = Phase::ReadOnly; return readOnlyQuestion();
@@ -1203,7 +1223,12 @@ namespace hc::operations
                     phase_ = Phase::MakeDirectory;
                 }
                 else if (request_.operation_ == FileOperation::Delete || current().removeDirectory_) phase_ = Phase::Remove;
-                else if (request_.operation_ == FileOperation::Rename) {
+                else if (Renaming) {
+                    if (current().renameMove_) {
+                        const auto Existing = Writer->Inspect(current().destination_, Context);
+                        if (!Existing.HasValue()) return failed(Existing.Failure());
+                        if (Existing.Value()) return failed({ErrorCategory::StaleRevision, "move-destination-appeared"});
+                    }
                     if (request_.fileLockInteractions_) {
                         const auto Existing = Writer->Inspect(current().destination_, Context); if (!Existing.HasValue()) return failed(Existing.Failure());
                         if (Existing.Value() && Existing.Value()->id_ != current().source_.entry_.id_) {
@@ -1346,6 +1371,7 @@ namespace hc::operations
                 {
                     const auto Renamed = current().source_.writer_->Rename(current().source_.entry_, current().destination_, Context);
                     if (!Renamed.HasValue()) return failed(Renamed.Failure());
+                    if (current().renameMove_ && !current().source_.entry_.directory_) { bytesDone_ += current().source_.entry_.size_; itemBytes_ = current().source_.entry_.size_; }
                     return done(ItemOutcome::Status::Completed, true, true);
                 }
                 if (phase_ == Phase::Remove) return removeSource(Context);
@@ -1674,7 +1700,7 @@ namespace hc::operations
             return Error{ErrorCategory::InvalidRequest, "invalid-file-operation"};
         JobRequest Job;
         Job.correlationId_ = Request.correlationId_; Job.operation_ = Context; Job.maxItemResults_ = Request.maxEntries_;
-        if (!Request.calculateSizeBefore_ || (Request.operation_ == FileOperation::Delete && Request.deleteWhileListing_)) {
+        if (Request.operation_ == FileOperation::Move || !Request.calculateSizeBefore_ || (Request.operation_ == FileOperation::Delete && Request.deleteWhileListing_)) {
             // Streaming must reject overlapping selected roots before publishing
             // any output, rather than discovering duplicates later in the tree.
             std::set<std::pair<LocatorKind, std::string>> Roots;

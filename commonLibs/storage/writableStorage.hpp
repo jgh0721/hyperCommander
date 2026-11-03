@@ -96,6 +96,8 @@ namespace hc::storage
         // Remove is one file or one empty directory; recursive traversal and
         // source-after-destination ordering belong to the coordinator.
         virtual Result<Unit> Remove(EntrySnapshot Entry, OperationContext Context) = 0;
+        // Planning only: a later Rename still validates source identity and refuses replacement.
+        virtual Result<bool> CanRenameTo(Locator, Locator, OperationContext) { return false; }
         virtual Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) = 0;
         // Providers must recycle or fail. Permanent removal is never a fallback.
         virtual Result<WriteReceipt> Recycle(EntrySnapshot, OperationContext) { return Error{ErrorCategory::Unsupported, "recycle-not-supported", Id()}; }

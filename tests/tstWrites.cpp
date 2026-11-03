@@ -2274,6 +2274,89 @@ private slots:
             Path = Path.left(Path.lastIndexOf('/'));
         }
     }
+    void sameVolumeMoveKeepsIdentity_data()
+    {
+        QTest::addColumn<bool>("Directory"); QTest::addColumn<bool>("Prescan");
+        for (const bool Directory : {false, true}) for (const bool Prescan : {false, true})
+            QTest::newRow(qPrintable(QString("%1-%2").arg(Directory).arg(Prescan))) << Directory << Prescan;
+    }
+    void sameVolumeMoveKeepsIdentity()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local volume identity fixture required.");
+        QFETCH(bool, Directory); QFETCH(bool, Prescan);
+        const auto Prefix = QString("rename-move-%1-%2").arg(Directory).arg(Prescan);
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/target")));
+        const auto SourceName = Prefix + "/source";
+        if (Directory) QVERIFY(QDir().mkpath(root_->filePath(SourceName + "/a/b/c")));
+        QVERIFY(write(SourceName + (Directory ? "/a/b/c/data.txt" : ""), "identity-preserved"));
+        const auto Identity = [&](const QString& Name) {
+            const auto Path = QDir::toNativeSeparators(root_->filePath(Name)).toStdWString();
+            HANDLE File = CreateFileW(Path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            if (File == INVALID_HANDLE_VALUE) return QByteArray{};
+            FILE_ID_INFO Info{}; const bool Ok = GetFileInformationByHandleEx(File, FileIdInfo, &Info, sizeof(Info)); CloseHandle(File);
+            return Ok ? QByteArray(reinterpret_cast<const char*>(&Info), sizeof(Info)) : QByteArray{};
+        };
+        const auto Before = Identity(SourceName); QVERIFY(!Before.isEmpty());
+        const auto Source = writer_->Inspect(at(SourceName), {}); QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move;
+        Request.calculateSizeBefore_ = Prescan; Request.maxDepth_ = 1;
+        Request.sources_ = {{*Source.Value(), reader_, writer_}}; Request.destination_ = at(Prefix + "/target"); Request.destinationWriter_ = writer_;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        QElapsedTimer Clock; Clock.start(); const auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "rename move failed");
+        QCOMPARE(Result.items_.size(), std::size_t(1)); QVERIFY(Result.items_.front().sourceRemoved_ && Result.items_.front().destinationCommitted_);
+        if (Prescan) QCOMPARE(Result.snapshot_.progress_.phase_, JobPhase::ApplyingNames);
+        QCOMPARE(Identity(Prefix + "/target/source"), Before);
+        QVERIFY(!QFileInfo::exists(root_->filePath(SourceName)));
+        QCOMPARE(read(Prefix + "/target/source" + (Directory ? "/a/b/c/data.txt" : "")), QByteArray("identity-preserved"));
+        qInfo() << "Same-volume move, directory=" << Directory << "prescan=" << Prescan << "elapsed ms=" << Clock.elapsed();
+    }
+    void sameVolumeMoveElevationKeepsRenameAction_data()
+    {
+        QTest::addColumn<bool>("Directory"); QTest::newRow("file") << false; QTest::newRow("directory") << true;
+    }
+    void sameVolumeMoveElevationKeepsRenameAction()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local volume fixture required.");
+        QFETCH(bool, Directory);
+        class DeniedRename final : public IWritableStorage {
+        public:
+            explicit DeniedRename(std::shared_ptr<IWritableStorage> Inner) : inner_(std::move(Inner)) {}
+            ProviderId Id() const override { return inner_->Id(); }
+            Result<SupportDecision> Supports(Mutation Kind, Locator At, OperationContext Context) override { return inner_->Supports(Kind, At, Context); }
+            Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override { return inner_->Inspect(At, Context); }
+            Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context) override { return inner_->BeginWrite(At, Expected, Context); }
+            Result<Unit> MakeDirectory(Locator At, OperationContext Context) override { return inner_->MakeDirectory(At, Context); }
+            Result<Unit> Remove(EntrySnapshot Entry, OperationContext Context) override { return inner_->Remove(Entry, Context); }
+            Result<bool> CanRenameTo(Locator From, Locator To, OperationContext Context) override { return inner_->CanRenameTo(From, To, Context); }
+            Result<Unit> Rename(EntrySnapshot, Locator, OperationContext) override { return Error{ErrorCategory::AccessDenied, "injected-rename-denied"}; }
+        private: std::shared_ptr<IWritableStorage> inner_;
+        };
+        class Approval final : public IFileElevationService {
+        public:
+            bool CanExecute(const FileElevationRequest& Request) const override { action_ = Request.action_; return false; }
+            Result<std::unique_ptr<IFileElevationSession>> Begin(FileElevationRequest, OperationContext) override { return Error{ErrorCategory::Unsupported, "unexpected-helper"}; }
+            mutable std::optional<FileElevationAction> action_;
+        };
+        const auto Prefix = QString("rename-elevation-%1").arg(Directory);
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/target")));
+        if (Directory) QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/source")));
+        QVERIFY(write(Prefix + "/source" + (Directory ? "/payload" : ""), "keep source"));
+        const auto Source = writer_->Inspect(at(Prefix + "/source"), {}); QVERIFY(Source.HasValue() && Source.Value());
+        const auto Service = std::make_shared<Approval>(); FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move;
+        Request.sources_ = {{*Source.Value(), reader_, std::make_shared<DeniedRename>(writer_)}};
+        Request.destination_ = at(Prefix + "/target"); Request.destinationWriter_ = writer_; Request.elevation_ = Service;
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        const auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Started.Value().completion_.get().snapshot_.state_, JobState::Failed);
+        QVERIFY(Service->action_); QCOMPARE(*Service->action_, FileElevationAction::Rename);
+        QCOMPARE(read(Prefix + "/source" + (Directory ? "/payload" : "")), QByteArray("keep source"));
+        QVERIFY(!QFileInfo::exists(root_->filePath(Prefix + "/target/source")));
+    }
     void nestedDirectoryPlanAndNamedMove()
     {
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
@@ -2638,6 +2721,7 @@ private slots:
             for (const auto* Action : {"release", "persistent", "cancel", "replace", "new-child"})
                 QTest::newRow(qPrintable(QString("%1-%2").arg(Prescan ? "prescan" : "streaming", Action))) << Prescan << QString(Action);
     }
+    // Exercise the copy/delete fallback independently from same-volume renames.
     void moveDirectorySharingConflict()
     {
         if (kind_ != LocatorKind::Local) QSKIP("Native local handle-sharing fixture required.");
@@ -2654,7 +2738,7 @@ private slots:
         QVERIFY(Lock != INVALID_HANDLE_VALUE);
         const auto Unlock = qScopeGuard([&] { if (Lock != INVALID_HANDLE_VALUE) CloseHandle(Lock); });
         FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move;
-        Request.calculateSizeBefore_ = Prescan; Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        Request.calculateSizeBefore_ = Prescan; Request.copyOptions_.verify_ = true; Request.sources_ = {{*Source.Value(), reader_, writer_}};
         Request.destination_ = at(TargetName); Request.destinationWriter_ = writer_;
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
         const auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue()); const auto Id = Started.Value().id_;
@@ -2714,7 +2798,7 @@ private slots:
         const auto Prefix = QString("readonly-move-%1-%2-%3").arg(Directory).arg(Policy).arg(ConfirmAll);
         QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/target")));
         FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move;
-        Request.readOnly_ = ReadOnlyPolicy(Policy); Request.destination_ = at(Prefix + "/target"); Request.destinationWriter_ = writer_;
+        Request.copyOptions_.verify_ = true; Request.readOnly_ = ReadOnlyPolicy(Policy); Request.destination_ = at(Prefix + "/target"); Request.destinationWriter_ = writer_;
         std::vector<std::wstring> Paths;
         const auto Restore = qScopeGuard([&] { for (const auto& Path : Paths) {
             const auto Attr = GetFileAttributesW(Path.c_str());
