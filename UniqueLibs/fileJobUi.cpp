@@ -547,6 +547,7 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
         if (Request.selection_) Paths.append(QString::fromStdString(Request.selectionRoot_.root_));
         beforeMutation_(Paths);
     }
+    if (Request.operation_ == hc::operations::FileOperation::Delete) Context.fileDeleteWorkers_ = 0;
     Request.fileLockInteractions_ = true;
     Request.calculateSizeBefore_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeBeforeOperations"].toBool(hc::defaults::DefaultValue("options/folderSizeBeforeOperations").toBool());
     if ((Request.selection_ && hc::folders::IsNetwork(Request.selectionRoot_))

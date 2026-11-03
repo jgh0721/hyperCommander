@@ -102,7 +102,7 @@ namespace hc::storage
             return true;
         }
         EntrySnapshot Entry(const ProviderId& Provider, const std::string& Prefix, const Locator& At,
-            std::string Name, const WIN32_FILE_ATTRIBUTE_DATA& Data)
+            std::string Name, const WIN32_FILE_ATTRIBUTE_DATA& Data, bool Presentation = true)
         {
             EntrySnapshot Value;
             Value.id_ = {Provider, Prefix + Serialize(At), IdentityScope::NavigationSession, Revision(Data)};
@@ -116,7 +116,7 @@ namespace hc::storage
             if (Ticks(Data.ftLastAccessTime)) Value.hints_["accessedUtcMs"] = std::to_string(Milliseconds(Data.ftLastAccessTime));
             // Called on the provider worker. Cache by extension for this thread;
             // no file access or shell association lookup occurs during painting.
-            if (!Value.directory_) {
+            if (Presentation && !Value.directory_) {
                 const auto Extension = QFileInfo(QString::fromStdString(Value.name_)).suffix().toLower();
                 if (!Extension.isEmpty()) {
                     static thread_local QMap<QString, QString> Descriptions;
@@ -172,6 +172,15 @@ namespace hc::storage
                         if (count_ >= Context.EnumerationLimit()) return Error{ErrorCategory::BudgetExceeded, "entry-limit", provider_};
                         const auto Name = Utf8(found_.cFileName);
                         const auto Path = at_.root_ + (at_.root_.ends_with('\\') ? "" : "\\") + Name;
+                        if (Context.removalPreparation_ && !(found_.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_READONLY))) {
+                            const WIN32_FILE_ATTRIBUTE_DATA Listed{found_.dwFileAttributes, found_.ftCreationTime, found_.ftLastAccessTime,
+                                found_.ftLastWriteTime, found_.nFileSizeHigh, found_.nFileSizeLow};
+                            auto Prepared = Context.removalPreparation_->Prepare(Entry(provider_, prefix_, {at_.kind_, Path}, Name, Listed, false), Context);
+                            if (Prepared.HasValue()) { Page.entries_.push_back(std::move(Prepared.Value())); ++count_; continue; }
+                            // Access, readonly and locking errors keep the normal
+                            // metadata path, so the coordinator can prompt/retry.
+                            if (const auto Failure = Context.Check(provider_)) return *Failure;
+                        }
                         WIN32_FILE_ATTRIBUTE_DATA Data{}; ResourceRevision Revision;
                         DWORD metadataError = ERROR_SUCCESS;
                         if (!ReadAttributes(FilePath(Path), Data, &Revision)) {
@@ -183,7 +192,7 @@ namespace hc::storage
                             { metadataWarning_ = true; LogDirectoryError(metadataError, Path, "child-metadata-fallback", &recovery_); }
                             Data = {found_.dwFileAttributes, found_.ftCreationTime, found_.ftLastAccessTime, found_.ftLastWriteTime, found_.nFileSizeHigh, found_.nFileSizeLow};
                         }
-                        auto Item = Entry(provider_, prefix_, {at_.kind_, Path}, Name, Data);
+                        auto Item = Entry(provider_, prefix_, {at_.kind_, Path}, Name, Data, false);
                         if (metadataError) { Item.hints_["nativeListingRevision"] = Item.id_.revision_->token_; Item.id_.revision_.reset(); Item.hints_["comparisonError"] = "win32:" + std::to_string(metadataError); }
                         else Item.id_.revision_ = std::move(Revision); Item.hints_["reparseTag"] = std::to_string(found_.dwReserved0);
                         Page.entries_.push_back(std::move(Item)); ++count_;
@@ -275,13 +284,14 @@ namespace hc::storage
         public:
             explicit NativeProvider(LocatorKind Kind) : kind_(Kind), id_{Kind == LocatorKind::Smb ? "smb" : "local"}, session_(Session()) {}
             ProviderId Id() const override { return id_; }
+            bool SupportsFreshEnumerationMetadata() const override { return kind_ == LocatorKind::Local; }
             bool SupportsParallelReads() const override { return kind_ == LocatorKind::Local; }
             Task<CopyExtras> CopyExtrasAt(Locator At, OperationContext Context) override {
                 return Run<CopyExtras>([At = std::move(At), Context, Id = id_, Kind = kind_]() -> Result<CopyExtras> {
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     if (At.kind_ != Kind || At.root_.empty() || !At.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "locator-kind", Id};
-                    return native::CopyExtrasAt(FilePath(At.root_));
-                });
+                    return native::CopyExtrasAt(FilePath(At.root_), Context);
+                }, Context.workerRead_ && kind_ == LocatorKind::Local);
             }
             Result<EntrySnapshot> BindSnapshot(EntrySnapshot Entry) const {
                 if (Entry.locator_.kind_ != kind_ || !Entry.locator_.nesting_.empty()) return Error{ErrorCategory::InvalidRequest, "native-snapshot-kind"};
@@ -469,7 +479,7 @@ namespace hc::storage
                     }
                     if (const auto Failure = Context.Check(Id)) return *Failure;
                     return std::unique_ptr<IEntryCursor>(new SnapshotCursor(std::move(Entries), Id));
-                });
+                }, Context.workerRead_ && kind_ == LocatorKind::Local);
             }
             Task<EntrySnapshot> Stat(ResourceId Resource, OperationContext Context) override
             {

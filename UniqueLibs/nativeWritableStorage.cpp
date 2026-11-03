@@ -6,6 +6,7 @@
 #endif
 #include <Windows.h>
 #include <winioctl.h>
+#include <winternl.h>
 #include "nativeStorageRevision.hpp"
 #include "nativeCopyCapabilities.hpp"
 #include <Aclapi.h>
@@ -122,10 +123,11 @@ namespace hc::storage
             const auto Trim = Unc ? 2u : 0u;
             return NativePath{Prefix + Path.substr(Trim), Prefix + Path.substr(Trim, RootEnd - Trim)};
         }
-        Result<std::vector<Handle>> PinParents(const NativePath& Path, const ProviderId& Id)
+        using ParentPins = std::shared_ptr<std::vector<Handle>>;
+        Result<ParentPins> OpenParents(const NativePath& Path, const ProviderId& Id, bool Retain = false)
         {
             operations::OperationMetric Timing("native.parent-pin", 0, true);
-            std::vector<Handle> Parents;
+            auto Parents = std::make_shared<std::vector<Handle>>();
             const auto Parent = std::filesystem::path(Path.path_).parent_path().wstring();
             if (Path.path_ == Path.root_) return Error{ErrorCategory::InvalidRequest, "root-mutation-denied", Id};
             for (auto End = Path.root_.size();;)
@@ -134,19 +136,191 @@ namespace hc::storage
                 // Recheck every component for each file. Some NAS servers allow
                 // directory rename despite these share restrictions, so retaining
                 // the handles alone cannot authorize reuse for later paths.
-                Handle Directory(CreateFileW(Part.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
+                Handle Directory(CreateFileW(Part.c_str(), FILE_READ_ATTRIBUTES | (Retain ? FILE_LIST_DIRECTORY : 0), FILE_SHARE_READ, nullptr,
                     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
                 if (Directory.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), Id, Utf8(Part));
                 BY_HANDLE_FILE_INFORMATION Info{};
                 if (!GetFileInformationByHandle(Directory.value_, &Info)) return Failure(GetLastError(), Id);
                 if (!(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
                     return Error{ErrorCategory::Unsupported, "reparse-parent-denied", Id};
-                Parents.push_back(std::move(Directory));
+                Parents->push_back(std::move(Directory));
                 if (End >= Parent.size()) break;
                 End = Path.path_.find(L'\\', End + (Path.path_[End - 1] == L'\\' ? 0 : 1));
                 if (End == std::wstring::npos || End > Parent.size()) End = Parent.size();
             }
             return Parents;
+        }
+        HANDLE OpenRelativeRemoval(const NativePath& Path, const ParentPins& Parents)
+        {
+            // A single component relative to the already verified, pinned parent
+            // avoids reparsing the whole path in the object manager. NtCreateFile
+            // runs in user mode with the same desired access/share/backup policy;
+            // the opened object is still inspected before it can be deleted.
+            using Open = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+                PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+            static const auto Create = reinterpret_cast<Open>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtCreateFile"));
+            if (!Create || !Parents || Parents->empty()) return INVALID_HANDLE_VALUE;
+            const auto Begin = Path.path_.find_last_of(L'\\') + 1;
+            UNICODE_STRING Name{}; Name.Length = USHORT((Path.path_.size() - Begin) * sizeof(wchar_t));
+            Name.MaximumLength = Name.Length; Name.Buffer = const_cast<wchar_t*>(Path.path_.data() + Begin);
+            OBJECT_ATTRIBUTES Attributes{}; Attributes.Length = sizeof(Attributes);
+            Attributes.RootDirectory = Parents->back().value_; Attributes.ObjectName = &Name;
+            Attributes.Attributes = 0x40; // OBJ_CASE_INSENSITIVE
+            IO_STATUS_BLOCK Status{}; HANDLE File = INVALID_HANDLE_VALUE;
+            constexpr ULONG OpenExisting = 1, Synchronous = 0x20, NonDirectory = 0x40, BackupIntent = 0x4000, OpenReparsePoint = 0x200000;
+            const auto Result = Create(&File, DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &Attributes, &Status,
+                nullptr, 0, FILE_SHARE_READ, OpenExisting, Synchronous | NonDirectory | BackupIntent | OpenReparsePoint, nullptr, 0);
+            if (Result == 0 && File != INVALID_HANDLE_VALUE) {
+                operations::OperationMetric Relative("native.prepare.relative-open", 0, true); return File;
+            }
+            if (File != INVALID_HANDLE_VALUE && File) CloseHandle(File);
+            return INVALID_HANDLE_VALUE;
+        }
+        class NativeMutationScope final : public MutationScope, public IRemovalPreparation
+        {
+        public:
+            void Clear() override
+            {
+                std::lock_guard Lock(mutex_); prepared_.clear(); parents_.clear();
+            }
+            void ReleaseDirectory(const Locator& At)
+            {
+                const auto Path = Normalize(At, LocatorKind::Local, {"local"});
+                if (!Path.HasValue()) { Clear(); return; }
+                const auto& Directory = Path.Value().path_;
+                const auto Within = [&](const std::wstring& Candidate) {
+                    return Candidate.size() >= Directory.size()
+                        && !_wcsnicmp(Candidate.c_str(), Directory.c_str(), Directory.size())
+                        && (Candidate.size() == Directory.size() || Directory.back() == L'\\' || Candidate[Directory.size()] == L'\\');
+                };
+                std::lock_guard Lock(mutex_);
+                for (auto It = prepared_.begin(); It != prepared_.end();) {
+                    const auto Child = Normalize(It->second->locator_, LocatorKind::Local, {"local"});
+                    if (!Child.HasValue() || Within(Child.Value().path_)) It = prepared_.erase(It); else ++It;
+                }
+                // Keep common ancestors and unrelated folders. Clearing every
+                // pin for each empty leaf directory repeated the root walk once
+                // per directory during large delete/move cleanup.
+                for (auto It = parents_.begin(); It != parents_.end();)
+                    if (Within(It->first)) It = parents_.erase(It); else ++It;
+            }
+            struct PreparedRemoval {
+                Handle file_;
+                ParentPins parents_;
+                ResourceRevision revision_;
+                BY_HANDLE_FILE_INFORMATION info_{};
+                Locator locator_;
+            };
+            Result<EntrySnapshot> Prepare(EntrySnapshot Entry, const OperationContext& Context) override
+            {
+                if (const auto Error = Context.Check(Entry.id_.providerId_)) return *Error;
+                const auto Path = Normalize(Entry.locator_, LocatorKind::Local, Entry.id_.providerId_);
+                if (!Path.HasValue()) return Path.Failure();
+                { std::lock_guard Lock(mutex_);
+                  if (!reusableRoot(Path.Value())) return Error{ErrorCategory::Unsupported, "delete-preparation-share-policy"};
+                  if (prepared_.size() >= 512) return Error{ErrorCategory::Unavailable, "delete-preparation-full"}; }
+                auto Parents = Pin(Path.Value(), Entry.id_.providerId_); if (!Parents.HasValue()) return Parents.Failure();
+                auto Prepared = std::make_unique<PreparedRemoval>(); Prepared->parents_ = std::move(Parents.Value());
+                Prepared->file_ = Handle(OpenRelativeRemoval(Path.Value(), Prepared->parents_));
+                if (Prepared->file_.value_ == INVALID_HANDLE_VALUE)
+                    Prepared->file_ = Handle(CreateFileW(Path.Value().path_.c_str(), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+                        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+                if (Prepared->file_.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), Entry.id_.providerId_);
+                BY_HANDLE_FILE_INFORMATION Info{};
+                if (!GetFileInformationByHandle(Prepared->file_.value_, &Info)) return Failure(GetLastError(), Entry.id_.providerId_);
+                if (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_READONLY))
+                    return Error{ErrorCategory::Unsupported, "delete-preparation-special-entry"};
+                Entry.attributes_ = Info.dwFileAttributes; Entry.directory_ = false;
+                Entry.size_ = (uint64_t(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow;
+                const auto Milliseconds = [](FILETIME Time) { return int64_t(((uint64_t(Time.dwHighDateTime) << 32) | Time.dwLowDateTime) / 10000) - 11644473600000LL; };
+                Entry.createdUtcMs_ = Milliseconds(Info.ftCreationTime); Entry.modifiedUtcMs_ = Milliseconds(Info.ftLastWriteTime);
+                bool Ntfs = false;
+                { std::lock_guard Lock(mutex_); Ntfs = ntfs_[Path.Value().root_]; }
+                // NTFS exposes its complete 64-bit file reference in this query;
+                // ReFS keeps the 128-bit FileIdInfo path. The live handle remains
+                // pinned through deletion in both cases.
+                Entry.id_.revision_ = Ntfs ? native::HandleRevision(Info)
+                    : native::HandleRevision(Prepared->file_.value_, Info, Path.Value().path_);
+                Prepared->locator_ = Entry.locator_;
+                Prepared->revision_ = *Entry.id_.revision_; Prepared->info_ = Info;
+                // Deny write/delete sharing from capture through deletion. The
+                // pinned ancestor chain also prevents pathname replacement.
+                std::lock_guard Lock(mutex_);
+                if (prepared_.size() >= 512) return Error{ErrorCategory::Unavailable, "delete-preparation-full"};
+                prepared_[Entry.locator_.root_] = std::move(Prepared);
+                return Entry;
+            }
+            std::unique_ptr<PreparedRemoval> Take(const EntrySnapshot& Entry)
+            {
+                std::lock_guard Lock(mutex_);
+                const auto Found = prepared_.find(Entry.locator_.root_);
+                if (Found == prepared_.end()) return {};
+                auto Prepared = std::move(Found->second); prepared_.erase(Found);
+                if (Entry.id_.providerId_.value_ != "local" || Entry.locator_ != Prepared->locator_
+                    || !Entry.id_.revision_ || Prepared->revision_ != *Entry.id_.revision_) return {};
+                operations::OperationMetric Reused("native.remove.prepared", 0, true);
+                return Prepared;
+            }
+            Result<ParentPins> Pin(const NativePath& Path, const ProviderId& Id)
+            {
+                std::lock_guard Lock(mutex_);
+                const bool Reusable = reusableRoot(Path);
+                // Local NTFS/ReFS honors the no-delete/no-write sharing on each
+                // pinned ancestor. NAS and redirected drives must keep rechecking
+                // every component; their rename/share semantics can differ.
+                if (!Reusable) return OpenParents(Path, Id);
+                if (Path.path_ == Path.root_) return Error{ErrorCategory::InvalidRequest, "root-mutation-denied", Id};
+                const auto Parent = std::filesystem::path(Path.path_).parent_path().wstring();
+                if (const auto Existing = parents_.find(Parent); Existing != parents_.end()) {
+                    operations::OperationMetric Hit("native.parent-pin.reused", 0, true);
+                    return Existing->second;
+                }
+                // Attribute-only handles do not participate in Windows share
+                // checks. Retained directory handles need LIST_DIRECTORY so
+                // no-delete sharing actually prevents ancestor replacement.
+                // A traverse-only user retains the uncached verification path.
+                auto Pins = OpenParents(Path, Id, true);
+                if (!Pins.HasValue()) return OpenParents(Path, Id);
+                // Bound retained handles even when a batch visits many folders.
+                // Write sessions retain their own shared pins through publication.
+                if (parents_.size() == 8) parents_.erase(parents_.begin());
+                parents_.emplace(Parent, Pins.Value()); return Pins;
+            }
+        private:
+            std::mutex mutex_;
+            std::map<std::wstring, ParentPins> parents_;
+            std::map<std::string, std::unique_ptr<PreparedRemoval>> prepared_;
+            std::map<std::wstring, bool> roots_, ntfs_;
+            bool reusableRoot(const NativePath& Path)
+            {
+                if (const auto Found = roots_.find(Path.root_); Found != roots_.end()) return Found->second;
+                wchar_t FileSystem[32]{}; const auto Type = GetDriveTypeW(Path.root_.c_str());
+                const bool Reusable = (Type == DRIVE_FIXED || Type == DRIVE_REMOVABLE || Type == DRIVE_RAMDISK)
+                    && GetVolumeInformationW(Path.root_.c_str(), nullptr, 0, nullptr, nullptr, nullptr,
+                        FileSystem, DWORD(std::size(FileSystem)))
+                    && (!_wcsicmp(FileSystem, L"NTFS") || !_wcsicmp(FileSystem, L"ReFS"));
+                roots_.emplace(Path.root_, Reusable); ntfs_.emplace(Path.root_, Reusable && !_wcsicmp(FileSystem, L"NTFS"));
+                return Reusable;
+            }
+        };
+        Result<ParentPins> PinParents(const NativePath& Path, const ProviderId& Id, const OperationContext& Context = {}, bool Removal = false)
+        {
+            // Strong directory pins are retained only for removals. A rename
+            // into a pinned directory needs write sharing on that parent.
+            if (Removal && Id.value_ == "local") if (const auto Scope = std::dynamic_pointer_cast<NativeMutationScope>(Context.mutationScope_))
+                return Scope->Pin(Path, Id);
+            return OpenParents(Path, Id);
+        }
+        void ReleaseDirectoryPins(const EntrySnapshot& Entry, const OperationContext& Context)
+        {
+            // A previously visited child pins this directory. Release cached
+            // ancestors before deleting/renaming the directory itself; active
+            // write sessions keep their independent references until commit.
+            if (Entry.directory_ && Context.mutationScope_) {
+                if (const auto Scope = std::dynamic_pointer_cast<NativeMutationScope>(Context.mutationScope_)) {
+                    if (Entry.locator_.kind_ == LocatorKind::Local) Scope->ReleaseDirectory(Entry.locator_);
+                } else Context.mutationScope_->Clear();
+            }
         }
         std::string Identity(const BY_HANDLE_FILE_INFORMATION& Info)
         {
@@ -155,7 +329,7 @@ namespace hc::storage
             return std::to_string(Info.dwVolumeSerialNumber) + ":" + std::to_string(Info.nFileIndexHigh) + ":"
                 + std::to_string(Info.nFileIndexLow);
         }
-        Result<Unit> CheckEntry(HANDLE File, const EntrySnapshot& Expected, const ProviderId& Id)
+        Result<Unit> CheckEntry(HANDLE File, const EntrySnapshot& Expected, const ProviderId& Id, BY_HANDLE_FILE_INFORMATION* Verified = nullptr)
         {
             BY_HANDLE_FILE_INFORMATION Info{};
             if (!GetFileInformationByHandle(File, &Info)) return Failure(GetLastError(), Id);
@@ -164,6 +338,7 @@ namespace hc::storage
                 || !native::MatchesRevision(*Expected.id_.revision_, Info, File, std::filesystem::u8path(Expected.locator_.root_).wstring())
                 || Expected.directory_ != bool(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
                 return Error{ErrorCategory::StaleRevision, "revision-changed", Id, Expected.id_, false, "refresh"};
+            if (Verified) *Verified = Info;
             return Unit{};
         }
         Result<std::string> RecoveryIdentity(HANDLE File, const std::wstring& Path, bool Content,
@@ -224,7 +399,7 @@ namespace hc::storage
         {
         public:
             NativeWriteSession(ProviderId Id, Locator Destination, NativePath Path, DestinationExpectation Expected,
-                std::vector<Handle> Parents, Handle File, std::wstring StagePath)
+                ParentPins Parents, Handle File, std::wstring StagePath)
                 : id_(std::move(Id)), destination_(std::move(Destination)), path_(std::move(Path)), expected_(std::move(Expected)),
                   parents_(std::move(Parents)), file_(std::move(File)), stagePath_(std::move(StagePath)) {}
             ~NativeWriteSession() override { Abort(); if (streamSearch_ != INVALID_HANDLE_VALUE) FindClose(streamSearch_); }
@@ -372,9 +547,9 @@ namespace hc::storage
                     return Error{ErrorCategory::InvalidRequest, "adopt-content-outside-destination", id_};
                 const bool Redirected = native::IsRedirectedPath(path_.path_);
                 DWORD VolumeFlags=0;
-                const bool HaveVolumeFlags=GetVolumeInformationByHandleW(Parents.Value().back().value_,nullptr,0,nullptr,nullptr,&VolumeFlags,nullptr,0);
+                const bool HaveVolumeFlags=GetVolumeInformationByHandleW(Parents.Value()->back().value_,nullptr,0,nullptr,nullptr,&VolumeFlags,nullptr,0);
                 const bool PreserveAcl=!Redirected&&(!HaveVolumeFlags||(VolumeFlags&FILE_PERSISTENT_ACLS));
-                const bool RecoveryRead = Context.writeCheckpoint_ && native::NeedsContentIdentity(Parents.Value().back().value_, path_.path_);
+                const bool RecoveryRead = Context.writeCheckpoint_ && native::NeedsContentIdentity(Parents.Value()->back().value_, path_.path_);
                 const DWORD Access = GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE | (PreserveAcl ? WRITE_DAC : 0) | (RecoveryRead ? GENERIC_READ : 0);
                 Handle File(CreateFileW(Candidate.Value().path_.c_str(), Access,
                     FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
@@ -426,13 +601,13 @@ namespace hc::storage
                 auto Path = Normalize(Source.locator_, Source.locator_.kind_, Source.id_.providerId_);
                 if (!Path.HasValue()) return Path.Failure();
                 // Guard direct sessions and administrator/recovery callers too.
-                const auto Input = native::CopyExtrasAt(Path.Value().path_);
-                const auto Output = native::CopyExtrasAt(path_.root_);
+                const auto Input = native::CopyExtrasAt(Path.Value().path_, Context);
+                const auto Output = native::CopyExtrasAt(path_.root_, Context);
                 Options.acl_ = Options.acl_ && Input.acl_ && Output.acl_;
                 Options.streams_ = Options.streams_ && Input.streams_ && Output.streams_;
                 options_ = Options;
                 if (!Options.acl_ && !Options.streams_) return Unit{};
-                auto Parents = PinParents(Path.Value(), Source.id_.providerId_);
+                auto Parents = PinParents(Path.Value(), Source.id_.providerId_, Context);
                 if (!Parents.HasValue()) return Parents.Failure();
                 sourceParents_ = std::move(Parents.Value()); sourcePath_ = Path.Value().path_;
                 sourceFile_ = Handle(CreateFileW(sourcePath_.c_str(), GENERIC_READ | (Options.acl_ ? READ_CONTROL : 0), FILE_SHARE_READ, nullptr,
@@ -508,7 +683,7 @@ namespace hc::storage
                     auto Valid = CheckEntry(sourceFile_.value_, source_, source_.id_.providerId_);
                     if (!Valid.HasValue()) return Valid.Failure();
                 }
-                sourceFile_.Close(); sourceParents_.clear(); extrasDone_ = true; return CopyExtraProgress{};
+                sourceFile_.Close(); sourceParents_.reset(); extrasDone_ = true; return CopyExtraProgress{};
             }
             Result<bool> VerifyContent(OperationContext Context) override
             {
@@ -611,13 +786,13 @@ namespace hc::storage
                     auto Error = Failure(Reopened, id_, destination_.root_); Error.userAction_ = "published-file-reopen";
                     Receipt.cleanupErrors_.push_back(std::move(Error));
                     if (!backupPath_.empty()) Receipt.preservedArtifacts_.push_back(record_.backup_);
-                    backup_.Close(); parents_.clear(); return Receipt;
+                    backup_.Close(); parents_.reset(); return Receipt;
                 }
                 auto Published = checkpoint(WritePhase::Published);
                 if (!Published.HasValue()) {
                     Receipt.cleanupErrors_.push_back(Published.Failure());
                     if (!backupPath_.empty()) Receipt.preservedArtifacts_.push_back(record_.backup_);
-                    file_.Close(); backup_.Close(); parents_.clear(); return Receipt;
+                    file_.Close(); backup_.Close(); parents_.reset(); return Receipt;
                 }
                 Basic.FileAttributes = FinalAttributes;
                 if (!SetFileInformationByHandle(file_.value_, FileBasicInfo, &Basic, sizeof(Basic))) {
@@ -666,14 +841,14 @@ namespace hc::storage
                 }
                 auto ProductionCleaned = cleanupProduction();
                 if (!ProductionCleaned.HasValue()) Receipt.cleanupErrors_.push_back(ProductionCleaned.Failure());
-                parents_.clear();
+                parents_.reset();
                 auto Finished = checkpoint(WritePhase::Finished);
                 if (!Finished.HasValue()) Receipt.cleanupErrors_.push_back(Finished.Failure());
                 return Receipt;
             }
             Result<Unit> Abort() override
             {
-                sourceStream_.Close(); destinationStream_.Close(); verificationStream_.Close(); sourceFile_.Close(); sourceParents_.clear();
+                sourceStream_.Close(); destinationStream_.Close(); verificationStream_.Close(); sourceFile_.Close(); sourceParents_.reset();
                 if (committed_ || closed_) return Unit{};
                 const auto Restored = restoreBackup();
                 std::optional<Error> Error;
@@ -687,7 +862,7 @@ namespace hc::storage
                 }
                 auto ProductionCleaned = cleanupProduction();
                 if (!ProductionCleaned.HasValue() && !Error) Error = ProductionCleaned.Failure();
-                parents_.clear();
+                parents_.reset();
                 closed_ = true;
                 if (Error) return *Error;
                 if (checkpoint_ && recoveryRow_) { auto Saved = checkpoint(WritePhase::Aborted); if (!Saved.HasValue()) return Saved; }
@@ -727,7 +902,7 @@ namespace hc::storage
             EntrySnapshot source_;
             std::wstring sourcePath_, streamName_;
             Handle sourceFile_, sourceStream_, destinationStream_, verificationStream_;
-            std::vector<Handle> sourceParents_;
+            ParentPins sourceParents_;
             HANDLE streamSearch_ = INVALID_HANDLE_VALUE;
             std::unique_ptr<QCryptographicHash> sourceHash_, streamHash_, readHash_;
             std::vector<std::pair<std::wstring, QByteArray>> streamHashes_;
@@ -762,7 +937,7 @@ namespace hc::storage
             Locator destination_;
             NativePath path_;
             DestinationExpectation expected_;
-            std::vector<Handle> parents_;
+            ParentPins parents_;
             Handle file_;
             std::wstring stagePath_;
             Handle backup_;
@@ -775,7 +950,7 @@ namespace hc::storage
             bool committed_ = false;
             bool failed_ = false;
         };
-        std::optional<DWORD> CopyNvmeDisk(const NativePath& Path)
+        std::optional<DWORD> SolidStateDisk(const NativePath& Path, bool RequireNvme = true)
         {
             wchar_t Root[32768]{}, Volume[128]{}, FileSystem[32]{};
             if (!GetVolumePathNameW(Path.path_.c_str(), Root, DWORD(std::size(Root))) || GetDriveTypeW(Root) != DRIVE_FIXED
@@ -792,6 +967,7 @@ namespace hc::storage
             DEVICE_SEEK_PENALTY_DESCRIPTOR Seek{};
             if (!DeviceIoControl(Device.value_, IOCTL_STORAGE_QUERY_PROPERTY, &Query, sizeof(Query), &Seek, sizeof(Seek), &Returned, nullptr)
                 || Returned < sizeof(Seek) || Seek.Size < sizeof(Seek) || Seek.Version < sizeof(Seek) || Seek.IncursSeekPenalty) return {};
+            if (!RequireNvme) return Extents.Extents[0].DiskNumber;
             Query.PropertyId = StorageDeviceProperty;
             alignas(STORAGE_DEVICE_DESCRIPTOR) std::byte Storage[4096]{};
             if (!DeviceIoControl(Device.value_, IOCTL_STORAGE_QUERY_PROPERTY, &Query, sizeof(Query), Storage, sizeof(Storage), &Returned, nullptr)
@@ -806,6 +982,8 @@ namespace hc::storage
             NativeWritableStorage(LocatorKind Kind, std::shared_ptr<IStorageProvider> Reader)
                 : kind_(Kind), id_{Kind == LocatorKind::Smb ? "smb" : "local"}, reader_(std::move(Reader)) {}
             ProviderId Id() const override { return id_; }
+            std::shared_ptr<MutationScope> CreateMutationScope() const override
+            { return kind_ == LocatorKind::Local ? std::make_shared<NativeMutationScope>() : nullptr; }
             Result<SupportDecision> Supports(Mutation Operation, Locator At, OperationContext Context) override
             {
                 if (const auto Error = Context.Check(id_)) return *Error;
@@ -839,24 +1017,33 @@ namespace hc::storage
             Result<CopyCapabilities> CopySupportAt(Locator At, OperationContext Context) override {
                 if (const auto Error = Context.Check(id_)) return *Error;
                 const auto Path = Normalize(At, kind_, id_); if (!Path.HasValue()) return Path.Failure();
-                const auto Extras = native::CopyExtrasAt(Path.Value().root_);
+                const auto Extras = native::CopyExtrasAt(Path.Value().root_, Context);
                 return CopyCapabilities{true, true, Extras.acl_, Extras.streams_};
             }
             bool SupportsParallelCopies() const override { return kind_ == LocatorKind::Local; }
+            bool SupportsParallelRemovals() const override { return kind_ == LocatorKind::Local; }
+            std::size_t PreferredDeleteWorkers(Locator At) const override
+            {
+                if (kind_ != LocatorKind::Local || At.kind_ != LocatorKind::Local) return 1;
+                const auto Path = Normalize(At, kind_, id_);
+                return Path.HasValue() && SolidStateDisk(Path.Value(), false) ? 4 : 1;
+            }
             std::size_t PreferredCopyWorkers(Locator Source, Locator Destination) const override
             {
                 if (kind_ != LocatorKind::Local || Source.kind_ != LocatorKind::Local || Destination.kind_ != LocatorKind::Local) return 1;
                 const auto From = Normalize(Source, kind_, id_), To = Normalize(Destination, kind_, id_);
                 if (!From.HasValue() || !To.HasValue()) return 1;
-                const auto SourceDisk = CopyNvmeDisk(From.Value()), DestinationDisk = CopyNvmeDisk(To.Value());
+                const auto SourceDisk = SolidStateDisk(From.Value()), DestinationDisk = SolidStateDisk(To.Value());
                 return SourceDisk && DestinationDisk && *SourceDisk != *DestinationDisk ? 4 : 1;
             }
             bool CanProduceContent(OperationContext Context) const override
             { return kind_ == LocatorKind::Local && !Context.writeCheckpoint_; }
             Result<Unit> PatchMetadata(EntrySnapshot Entry, MetadataPatch Patch, OperationContext Context) override
             {
+                if (Context.mutationScope_) Context.mutationScope_->Clear();
                 if (!Patch.Valid()) return Error{ErrorCategory::InvalidRequest, "invalid-metadata-patch", id_};
                 if (const auto Error = Context.Check(id_)) return *Error;
+                ReleaseDirectoryPins(Entry, Context);
                 if (Patch.Empty()) return Unit{};
                 if (!Entry.id_.revision_ || (!Entry.id_.revision_->token_.starts_with("directory:")
                     && !Entry.id_.revision_->token_.starts_with("rdp:")
@@ -864,7 +1051,7 @@ namespace hc::storage
                     return Error{ErrorCategory::StaleRevision, "metadata-identity-required", id_};
                 auto Path = Normalize(Entry.locator_, kind_, id_);
                 if (!Path.HasValue()) return Path.Failure();
-                auto Parents = PinParents(Path.Value(), id_);
+                auto Parents = PinParents(Path.Value(), id_, Context);
                 if (!Parents.HasValue()) return Parents.Failure();
                 Handle File(CreateFileW(Path.Value().path_.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                     FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
@@ -896,19 +1083,20 @@ namespace hc::storage
             { return BeginCopy(std::move(At), std::move(Expected), {}, Context); }
             Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context) override
             {
+                if (Context.mutationScope_) Context.mutationScope_->Clear();
                 operations::OperationMetric Timing("native.begin-copy.total", 0, true);
                 if (const auto Error = Context.Check(id_)) return *Error;
                 if (Expected.exists_ != Expected.revision_.has_value()) return Error{ErrorCategory::InvalidRequest, "destination-expectation", id_};
                 auto Path = Normalize(At, kind_, id_);
                 if (!Path.HasValue()) return Path.Failure();
-                auto Parents = PinParents(Path.Value(), id_);
+                auto Parents = PinParents(Path.Value(), id_, Context);
                 if (!Parents.HasValue()) return Parents.Failure();
                 const auto Temp = TemporaryName(std::filesystem::path(Path.Value().path_).parent_path().wstring(), L"stage");
                 if (Options.acl_ || Options.streams_) {
-                    const auto Extras = native::CopyExtrasAt(Path.Value().root_);
+                    const auto Extras = native::CopyExtrasAt(Path.Value().root_, Context);
                     Options.acl_ = Options.acl_ && Extras.acl_; Options.streams_ = Options.streams_ && Extras.streams_;
                 }
-                const bool RecoveryRead = Context.writeCheckpoint_ && native::NeedsContentIdentity(Parents.Value().back().value_, Path.Value().path_);
+                const bool RecoveryRead = Context.writeCheckpoint_ && native::NeedsContentIdentity(Parents.Value()->back().value_, Path.Value().path_);
                 Handle File(CreateFileW(Temp.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | READ_CONTROL | DELETE | ((Options.verify_ || RecoveryRead) ? GENERIC_READ : 0) | (Options.acl_ ? WRITE_DAC : 0), FILE_SHARE_READ, nullptr,
                     CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
                 if (File.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_);
@@ -920,27 +1108,64 @@ namespace hc::storage
             }
             Result<Unit> MakeDirectory(Locator At, OperationContext Context) override
             {
+                if (Context.mutationScope_) Context.mutationScope_->Clear();
                 if (const auto Error = Context.Check(id_)) return *Error;
                 const auto Path = Normalize(At, kind_, id_);
                 if (!Path.HasValue()) return Path.Failure();
-                auto Parents = PinParents(Path.Value(), id_);
+                auto Parents = PinParents(Path.Value(), id_, Context);
                 if (!Parents.HasValue()) return Parents.Failure();
                 if (!CreateDirectoryW(Path.Value().path_.c_str(), nullptr)) return Failure(GetLastError(), id_);
                 return Unit{};
             }
             Result<Unit> Remove(EntrySnapshot Entry, OperationContext Context) override
             {
+                operations::OperationMetric Timing("native.remove", 0, true);
                 if (const auto Error = Context.Check(id_)) return *Error;
+                ReleaseDirectoryPins(Entry, Context);
+                if (!Entry.directory_ && id_.value_ == "local") {
+                    if (const auto Scope = std::dynamic_pointer_cast<NativeMutationScope>(Context.mutationScope_)) {
+                        if (auto Prepared = Scope->Take(Entry)) {
+                            if (const auto Error = Context.Check(id_)) return *Error;
+                            // The handle itself cannot designate a replacement.
+                            // Attribute-only writers can still change timestamps,
+                            // so retain the original revision/readonly checks.
+                            FILE_BASIC_INFO Current{};
+                            if (!GetFileInformationByHandleEx(Prepared->file_.value_, FileBasicInfo, &Current, sizeof(Current))) return Failure(GetLastError(), id_);
+                            const auto Ticks = [](FILETIME Time) { return (uint64_t(Time.dwHighDateTime) << 32) | Time.dwLowDateTime; };
+                            const auto& Before = Prepared->info_;
+                            // The exact handle and denied write sharing protect
+                            // identity/size, including writable mappings. Only
+                            // attribute writers can still change times/readonly;
+                            // do not requery volume IDs and file IDs here.
+                            if (Current.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)
+                                || uint64_t(Current.CreationTime.QuadPart) != Ticks(Before.ftCreationTime)
+                                || uint64_t(Current.LastWriteTime.QuadPart) != Ticks(Before.ftLastWriteTime))
+                                return Error{ErrorCategory::StaleRevision, "revision-changed", id_, Entry.id_, false, "refresh"};
+                            if (Current.FileAttributes & FILE_ATTRIBUTE_READONLY) {
+                                if (!Context.allowReadOnlyRemoval_) return Error{ErrorCategory::AccessDenied, "readonly-removal-not-authorized", id_};
+                                // Captured ordinary handles have no WRITE_ATTRIBUTES.
+                                // Reopen through the normal verified/restore path.
+                                Prepared->file_.Close(); return Remove(std::move(Entry), Context);
+                            }
+                            auto Removed = DeleteHandle(Prepared->file_.value_, id_);
+                            Prepared->file_.Close(); // disposition takes effect before reporting success
+                            return Removed;
+                        }
+                    }
+                }
                 auto Path = Normalize(Entry.locator_, kind_, id_);
                 if (!Path.HasValue()) return Path.Failure();
-                auto Parents = PinParents(Path.Value(), id_);
+                auto Parents = PinParents(Path.Value(), id_, Context, true);
                 if (!Parents.HasValue()) return Parents.Failure();
                 Handle File(CreateFileW(Path.Value().path_.c_str(), DELETE | FILE_READ_ATTRIBUTES | (Context.allowReadOnlyRemoval_ ? FILE_WRITE_ATTRIBUTES : 0), FILE_SHARE_READ, nullptr,
                     OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
                 if (File.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_);
-                const auto Valid = CheckEntry(File.value_, Entry, id_);
+                BY_HANDLE_FILE_INFORMATION Info{};
+                const auto Valid = CheckEntry(File.value_, Entry, id_, &Info);
                 if (!Valid.HasValue()) return Valid.Failure();
-                FILE_BASIC_INFO Basic{}; if (!GetFileInformationByHandleEx(File.value_, FileBasicInfo, &Basic, sizeof(Basic))) return Failure(GetLastError(), id_);
+                // The verified handle already supplied attributes. Zero times
+                // preserve timestamps when clearing/restoring readonly.
+                FILE_BASIC_INFO Basic{}; Basic.FileAttributes = Info.dwFileAttributes;
                 const bool ReadOnly = (Basic.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
                 if (ReadOnly && !Context.allowReadOnlyRemoval_) return Error{ErrorCategory::AccessDenied, "readonly-removal-not-authorized", id_};
                 const auto Original = Basic;
@@ -954,13 +1179,15 @@ namespace hc::storage
             }
             Result<WriteReceipt> Recycle(EntrySnapshot Entry, OperationContext Context) override
             {
+                if (Context.mutationScope_) Context.mutationScope_->Clear();
                 using Microsoft::WRL::ComPtr;
                 if (const auto Error = Context.Check(id_)) return *Error;
+                ReleaseDirectoryPins(Entry, Context);
                 const auto Supported = Supports(Mutation::Recycle, Entry.locator_, Context);
                 if (!Supported.HasValue()) return Supported.Failure();
                 if (Supported.Value().availability_ == Availability::Unsupported) return Error{ErrorCategory::Unsupported, Supported.Value().reason_, id_};
                 auto Path = Normalize(Entry.locator_, kind_, id_); if (!Path.HasValue()) return Path.Failure();
-                auto Parents = PinParents(Path.Value(), id_); if (!Parents.HasValue()) return Parents.Failure();
+                auto Parents = PinParents(Path.Value(), id_, Context); if (!Parents.HasValue()) return Parents.Failure();
                 {
                     Handle File(CreateFileW(Path.Value().path_.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                         OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
@@ -1013,14 +1240,16 @@ namespace hc::storage
             }
             Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override
             {
+                if (Context.mutationScope_) Context.mutationScope_->Clear();
                 if (const auto Error = Context.Check(id_)) return *Error;
+                ReleaseDirectoryPins(Entry, Context);
                 const auto FromPath = Normalize(Entry.locator_, kind_, id_);
                 if (!FromPath.HasValue()) return FromPath.Failure();
                 const auto ToPath = Normalize(To, kind_, id_);
                 if (!ToPath.HasValue()) return ToPath.Failure();
-                auto FromParents = PinParents(FromPath.Value(), id_);
+                auto FromParents = PinParents(FromPath.Value(), id_, Context);
                 if (!FromParents.HasValue()) return FromParents.Failure();
-                auto ToParents = PinParents(ToPath.Value(), id_);
+                auto ToParents = PinParents(ToPath.Value(), id_, Context);
                 if (!ToParents.HasValue()) return ToParents.Failure();
                 Handle File(CreateFileW(FromPath.Value().path_.c_str(), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
                     OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));

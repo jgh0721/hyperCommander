@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "fileOperation.hpp"
 #include <set>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -103,7 +104,8 @@ namespace hc::operations
             OperationSource source_;
             Locator destination_;
             std::size_t depth_ = 0;
-            bool removeDirectory_ = false;
+            bool removeDirectory_ = false, freshMetadata_ = false;
+            std::optional<Error> removalError_;
             bool renameMove_ = false;
             bool readOnly_ = false, excluded_ = false, recursiveRemoval_ = false;
             std::size_t root_ = 0;
@@ -162,6 +164,11 @@ namespace hc::operations
         public:
             explicit FileTask(FileOperationRequest Request) : request_(std::move(Request))
             {
+                if (request_.destinationWriter_) mutationScope_ = request_.destinationWriter_->CreateMutationScope();
+                if (!mutationScope_) for (const auto& Source : request_.sources_) {
+                    if (Source.writer_) mutationScope_ = Source.writer_->CreateMutationScope();
+                    if (mutationScope_) break;
+                }
                 // Disabling recursive discovery must not discard file sizes
                 // already captured by the selection, including RDP listings.
                 if (request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move) {
@@ -195,13 +202,34 @@ namespace hc::operations
                 // Advance already belongs to a coordinator/continuation worker.
                 // Local metadata and file opens need no nested PPL dispatch.
                 Context.operation_.workerRead_ = true;
+                Context.operation_.mutationScope_ = mutationScope_;
+                if (Context.operation_.stopToken_.stop_possible()) mutationStop_ = Context.operation_.stopToken_;
+                if (!deleteWorkers_) {
+                    deleteWorkers_ = 1;
+                    // Durable recovery retains its original per-file commit /
+                    // outcome barrier. Never widen its crash window to a batch.
+                    if (request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Permanent
+                        && !Context.operation_.writeCheckpoint_ && !request_.sources_.empty() && request_.sources_.front().writer_
+                        && request_.sources_.front().writer_->SupportsParallelRemovals())
+                        deleteWorkers_ = std::clamp<std::size_t>(Context.operation_.fileDeleteWorkers_
+                            ? Context.operation_.fileDeleteWorkers_
+                            : request_.sources_.front().writer_->PreferredDeleteWorkers(request_.sources_.front().entry_.locator_), 1, 8);
+                }
                 jobId_ = Context.jobId_;
                 if (const auto Error = Context.operation_.Check({})) return failed(*Error);
                 if (phase_ == Phase::PreparationPrompt) return preparationQuestion(Context);
                 if (phase_ == Phase::LockPrompt) return lockQuestion(Context);
                 if (phase_ == Phase::ElevationPrompt) return permission(Context);
                 if (phase_ == Phase::ElevationRun) return elevated(Context);
-                if (phase_ == Phase::Preparing) return prepare(Context.operation_);
+                if (phase_ == Phase::Preparing) {
+                    auto Step = prepare(Context.operation_);
+                    for (std::size_t I = 1; deleteWorkers_ > 1 && I < 64 && phase_ == Phase::Preparing
+                        && Step.next_ == JobState::Preparing && !Step.error_ && !Step.item_ && !Step.interaction_; ++I) {
+                        if (const auto Error = Context.operation_.Check({})) return failed(*Error);
+                        Step = prepare(Context.operation_);
+                    }
+                    return Step;
+                }
                 if (phase_ == Phase::RetryRemove)
                 {
                     // A failed deletion has no side effects. Re-enter its commit
@@ -213,7 +241,7 @@ namespace hc::operations
                 {
                     if (!Context.answer_)
                     {
-                        auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                        releasePreparedMutations(); auto Step = progress(); Step.next_ = JobState::WaitingForUser;
                         Step.interaction_ = InteractionRequest{"", InteractionKind::DeleteConfirmation, request_.deleteMode_ == DeleteMode::Recycle ? "confirm-recycle-delete" : "confirm-permanent-delete",
                             {InteractionChoice::Confirm, InteractionChoice::Cancel}};
                         return Step;
@@ -439,6 +467,7 @@ namespace hc::operations
                     auto Closed=Reader->FinishReadBatch({}).get(); if (!Closed.HasValue()) cleanup_.push_back(Closed.Failure());
                 }
                 batchReaders_.clear();
+                if (ownsMutationScope_ && mutationScope_) mutationScope_->Clear();
                 if (State != JobState::Completed || preservedFailure_)
                     for (const auto& At : preservedDestinations_)
                         cleanup_.push_back({ErrorCategory::Unavailable, "conflict-destination-preserved", {}, {}, false, {}, Serialize(At)});
@@ -507,6 +536,9 @@ namespace hc::operations
                 Task->pending_.clear(); Task->items_.push_back(Item); Task->items_.back().root_ = 0;
                 Task->bytesTotal_ = Item.source_.entry_.size_; Task->planningFinished_ = true;
                 Task->phase_ = Phase::Begin; Task->copyWorkers_ = 1;
+                // All file workers belong to one job. Reuse its parent pins and
+                // capability lifetime rather than recreating/clearing per file.
+                Task->mutationScope_ = mutationScope_; Task->ownsMutationScope_ = false;
                 Copy.task_ = std::move(Task); Copy.barrier_.reset(); Copy.recheck_ = false;
             }
             static void copyBytes(PreparedCopy& Copy, std::uint64_t Bytes)
@@ -635,8 +667,11 @@ namespace hc::operations
                 std::vector<EntrySnapshot> entries_;
                 std::size_t next_ = 0;
                 bool ended_ = false;
+                // Declared after cursor_: destruction joins the outstanding
+                // page before destroying the cursor captured by its provider.
+                Task<EntryPage> readAhead_;
             };
-            enum class Phase { Preparing, PreparationPrompt, Confirm, ReadOnly, Begin, Conflict, AutomaticName, PreserveDestination, OpenRead, Produce, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RetryRemove, Rename, ElevationPrompt, ElevationRun, LockPrompt };
+            enum class Phase { Preparing, PreparationPrompt, Confirm, ReadOnly, Begin, Conflict, AutomaticName, PreserveDestination, OpenRead, Produce, Read, Write, Extras, Verify, ReadyCommit, Commit, MakeDirectory, Remove, RemoveBatch, RetryRemove, Rename, ElevationPrompt, ElevationRun, LockPrompt };
             PlannedItem& current() { return items_[index_]; }
             std::string itemLocator()
             { return Serialize(current().source_.entry_.locator_.root_.empty() ? current().destination_ : current().source_.entry_.locator_); }
@@ -671,6 +706,7 @@ namespace hc::operations
                     : phase_ == Phase::Rename ? JobPhase::ApplyingNames : phase_ == Phase::MakeDirectory ? JobPhase::Creating
                     : phase_ == Phase::Verify ? JobPhase::Verifying
                     : (phase_ == Phase::Remove || phase_ == Phase::RetryRemove) && request_.operation_ == FileOperation::Move ? JobPhase::RemovingSource
+                    : request_.operation_ == FileOperation::Delete ? JobPhase::Deleting
                     : phase_ == Phase::Commit ? JobPhase::Committing : JobPhase::Copying;
                 return Step;
             }
@@ -738,7 +774,7 @@ namespace hc::operations
             JobStep lockQuestion(const JobStepContext& Context)
             {
                 if (!Context.answer_) {
-                    auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                    releasePreparedMutations(); auto Step = progress(); Step.next_ = JobState::WaitingForUser;
                     Step.interaction_ = InteractionRequest{"", InteractionKind::RetryFailure, (request_.operation_ == FileOperation::Delete && !FileInUse(lockError_.code_) ? "delete-failure:" : "file-in-use:") + lockError_.code_,
                         {InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::Cancel}, current().source_.entry_.id_,
                         lockError_.nativePath_.empty() ? current().source_.entry_.locator_.root_ : lockError_.nativePath_, current().destination_.root_};
@@ -840,7 +876,7 @@ namespace hc::operations
                 auto Cached = request_.elevationApproval_->Decision(jobId_, approvalScope());
                 if(!canElevate_&&Cached==InteractionChoice::Elevate)Cached.reset();
                 if (!Context.answer_ && !Cached) {
-                    auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                    releasePreparedMutations(); auto Step = progress(); Step.next_ = JobState::WaitingForUser;
                     Step.interaction_ = InteractionRequest{"", InteractionKind::Elevation, permissionError_->code_,
                         {InteractionChoice::Elevate, InteractionChoice::ElevateAll, InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::SkipAll, InteractionChoice::Cancel},
                         elevatedRequest_.source_ ? std::optional(elevatedRequest_.source_->id_) : std::nullopt};
@@ -894,6 +930,9 @@ namespace hc::operations
             }
             JobStep beginElevation(const JobStepContext& Context)
             {
+                // The helper opens its own verified handles. Release prepared
+                // children and parent pins before handing over a partial tree.
+                releasePreparedMutations();
                 auto Begun = request_.elevation_->Begin(elevatedRequest_, Context.operation_);
                 if (!Begun.HasValue()) return terminalFailure(Begun.Failure());
                 elevatedSession_ = std::move(Begun.Value()); elevatedBase_ = bytesDone_ - itemBytes_; elevationCommitSent_ = false;
@@ -941,6 +980,9 @@ namespace hc::operations
             JobStep prepare(OperationContext Context)
             {
                 Context.freshEnumerationMetadata_ = true;
+                Context.fileDeleteWorkers_ = deleteWorkers_;
+                if (request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Permanent)
+                    Context.removalPreparation_ = std::dynamic_pointer_cast<IRemovalPreparation>(mutationScope_);
                 Context.incrementalEnumeration_ = request_.operation_ == FileOperation::Delete;
                 if (request_.operation_ == FileOperation::Delete) Context.allowUnavailableChildMetadata_ = true;
                 if (incrementalDelete_ && !enumerations_.empty()) return prepareIncremental(Context);
@@ -971,6 +1013,7 @@ namespace hc::operations
                         if (!SafeName(Entry.name_)) return failed({ErrorCategory::InvalidRequest, "unsafe-entry-name"});
                         PlannedItem Item{{Entry, enumerating_.source_.reader_, enumerating_.source_.writer_},
                             Child(request_.preservePaths_ ? enumerating_.destination_ : request_.destination_, Entry.name_), enumerating_.depth_ + 1};
+                        Item.freshMetadata_ = Context.freshEnumerationMetadata_ && Item.source_.reader_->SupportsFreshEnumerationMetadata();
                         Item.root_ = enumerating_.root_; pending_.push_back(std::move(Item));
                     }
                     if (Page.Value().end_) cursor_.reset();
@@ -1023,6 +1066,22 @@ namespace hc::operations
                 auto Item = std::move(pending_.front()); pending_.pop_front();
                 return prepareItem(std::move(Item), Context);
             }
+            bool prefetchAvailable() const
+            {
+                // Completed ancestor pages do not occupy the single I/O slot.
+                // Retain at most one running prefetch across the DFS stack.
+                return std::ranges::none_of(enumerations_, [](const auto& Frame) {
+                    return Frame.readAhead_.valid() && Frame.readAhead_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
+                });
+            }
+            void releasePreparedMutations()
+            {
+                // User interaction may last indefinitely. Finish the bounded
+                // discovery page before closing its prepared handles; resume
+                // through normal revision verification rather than holding locks.
+                for (auto& Frame : enumerations_) if (Frame.readAhead_.valid()) Frame.readAhead_.wait();
+                if (mutationScope_) mutationScope_->Clear();
+            }
             JobStep prepareIncremental(OperationContext Context)
             {
                 auto& Frame = enumerations_.back();
@@ -1030,10 +1089,12 @@ namespace hc::operations
                     auto Entry = std::move(Frame.entries_[Frame.next_++]);
                     PlannedItem Item{{std::move(Entry), Frame.parent_.source_.reader_, Frame.parent_.source_.writer_}, {}, Frame.parent_.depth_ + 1};
                     Item.destination_ = Child(request_.preservePaths_ ? Frame.parent_.destination_ : request_.destination_, Item.source_.entry_.name_); Item.root_ = Frame.parent_.root_;
+                    Item.freshMetadata_ = Item.source_.reader_->SupportsFreshEnumerationMetadata();
                     return prepareItem(std::move(Item), Context);
                 }
                 if (Frame.ended_) { enumerations_.pop_back(); return progress(); }
-                auto Page = Frame.cursor_->Next(Context.maxPageItems_, Context).get();
+                const bool Prefetched = Frame.readAhead_.valid();
+                auto Page = Prefetched ? Frame.readAhead_.get() : Frame.cursor_->Next(Context.maxPageItems_, Context).get();
                 if (!Page.HasValue()) return enumerationFailure(Page.Failure());
                 if (Page.Value().entries_.empty() && !Page.Value().end_) return failed({ErrorCategory::Internal, "cursor-no-progress"});
                 if (Page.Value().entries_.size() > request_.maxEntries_ - seen_.size()) return failed({ErrorCategory::BudgetExceeded, "operation-entry-budget"});
@@ -1044,6 +1105,9 @@ namespace hc::operations
                         return failed({ErrorCategory::InvalidRequest, "enumerated-child-outside-source"});
                 }
                 Frame.entries_ = std::move(Page.Value().entries_); Frame.next_ = 0; Frame.ended_ = Page.Value().end_;
+                if (!Frame.ended_ && deleteWorkers_ > 1 && prefetchAvailable()) {
+                    Frame.readAhead_ = Frame.cursor_->Next(Context.maxPageItems_, Context);
+                }
                 return progress();
             }
             JobStep enumerationFailure(Error Error)
@@ -1069,7 +1133,7 @@ namespace hc::operations
             JobStep preparationQuestion(const JobStepContext& Context)
             {
                 if (!Context.answer_) {
-                    auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                    releasePreparedMutations(); auto Step = progress(); Step.next_ = JobState::WaitingForUser;
                     Step.interaction_ = InteractionRequest{"", InteractionKind::RetryFailure, "delete-failure:" + lockError_.code_,
                         {InteractionChoice::Skip, InteractionChoice::SkipAll, InteractionChoice::Cancel}, preparationItem_.source_.entry_.id_,
                         lockError_.nativePath_.empty() ? preparationItem_.source_.entry_.locator_.root_ : lockError_.nativePath_};
@@ -1137,12 +1201,19 @@ namespace hc::operations
                 if (Item.depth_ > request_.maxDepth_ || seen_.size() >= request_.maxEntries_)
                     return failed({ErrorCategory::BudgetExceeded, "operation-tree-budget"});
                 if (!seen_.insert(Serialize(Item.source_.entry_.locator_)).second) return failed({ErrorCategory::InvalidRequest, "overlapping-selection"});
-                auto Fresh = Item.source_.reader_->Stat(Item.source_.entry_.id_, Context).get();
-                if (!Fresh.HasValue()) return preparationFailure(std::move(Item), Fresh.Failure());
-                if (Fresh.Value().locator_ != Item.source_.entry_.locator_ || Fresh.Value().id_.providerId_ != Item.source_.reader_->Id()
-                    || Fresh.Value().id_.key_ != Item.source_.entry_.id_.key_ || !SafeName(Fresh.Value().name_))
-                    return preparationFailure(std::move(Item), {ErrorCategory::Internal, "provider-returned-different-entry"});
-                Item.source_.entry_ = std::move(Fresh.Value());
+                // Native mutation enumeration already opened this child and
+                // captured a handle revision. Do not reopen it immediately in
+                // Stat. Selected roots, unavailable metadata and retries retain
+                // the original query; OpenRead/Remove/Rename verify again.
+                const bool FreshMetadata = std::exchange(Item.freshMetadata_, false) && Item.source_.entry_.id_.revision_;
+                if (!FreshMetadata) {
+                    auto Fresh = Item.source_.reader_->Stat(Item.source_.entry_.id_, Context).get();
+                    if (!Fresh.HasValue()) return preparationFailure(std::move(Item), Fresh.Failure());
+                    if (Fresh.Value().locator_ != Item.source_.entry_.locator_ || Fresh.Value().id_.providerId_ != Item.source_.reader_->Id()
+                        || Fresh.Value().id_.key_ != Item.source_.entry_.id_.key_ || !SafeName(Fresh.Value().name_))
+                        return preparationFailure(std::move(Item), {ErrorCategory::Internal, "provider-returned-different-entry"});
+                    Item.source_.entry_ = std::move(Fresh.Value());
+                }
                 if (Item.source_.entry_.attributes_ & 0x400) return preparationFailure(std::move(Item), {ErrorCategory::Unsupported, "reparse-entry-denied"});
                 ++verifiedItems_;
                 if (!Item.source_.entry_.directory_)
@@ -1185,14 +1256,25 @@ namespace hc::operations
                     auto Cursor = Item.source_.reader_->Enumerate(Item.source_.entry_.locator_, Context).get();
                     if (!Cursor.HasValue()) return request_.operation_ == FileOperation::Delete
                         ? preparationFailure(std::move(Item), Cursor.Failure(), false) : failed(Cursor.Failure());
-                    if (incrementalDelete_) enumerations_.push_back({std::move(Item), std::move(Cursor.Value())});
+                    if (incrementalDelete_) {
+                        enumerations_.push_back({std::move(Item), std::move(Cursor.Value())});
+                        // Capture the next directory while deleting the previous
+                        // directory's remaining files. Small folders otherwise
+                        // serialize discovery and removal despite file workers.
+                        if (deleteWorkers_ > 1 && index_ < items_.size() && prefetchAvailable()) {
+                            auto& Frame = enumerations_.back();
+                            Frame.readAhead_ = Frame.cursor_->Next(Context.maxPageItems_, Context);
+                            phase_ = Phase::Begin;
+                        }
+                    }
                     else { cursor_ = std::move(Cursor.Value()); enumerating_ = std::move(Item); }
                 }
-                if (streaming_ && index_ < items_.size() && !(incrementalDelete_ && Recycling)) phase_ = Phase::Begin;
+                if (streaming_ && index_ < items_.size() && !(incrementalDelete_ && Recycling)
+                    && !(incrementalDelete_ && deleteWorkers_ > 1 && items_.size() - index_ < std::size_t{64})) phase_ = Phase::Begin;
                 return progress();
             }
             JobStep readOnlyQuestion() {
-                JobStep Step{JobState::WaitingForUser}; Step.interaction_ = InteractionRequest{"", InteractionKind::ReadOnlyRemoval, "read-only-removal",
+                releasePreparedMutations(); JobStep Step{JobState::WaitingForUser}; Step.interaction_ = InteractionRequest{"", InteractionKind::ReadOnlyRemoval, "read-only-removal",
                     {InteractionChoice::Confirm, InteractionChoice::ConfirmAll, InteractionChoice::Skip, InteractionChoice::Cancel}, current().source_.entry_.id_,
                     Serialize(current().source_.entry_.locator_)}; return Step;
             }
@@ -1202,6 +1284,10 @@ namespace hc::operations
                 if (current().preparationError_ && (request_.operation_ != FileOperation::Delete || !request_.elevation_
                     || current().preparationError_->category_ != ErrorCategory::AccessDenied)) return terminalFailure(*current().preparationError_);
                 if (current().excluded_) return done(ItemOutcome::Status::Skipped);
+                if (current().removalError_) {
+                    auto Error = std::move(*current().removalError_); current().removalError_.reset();
+                    phase_ = Phase::Remove; return failed(std::move(Error));
+                }
                 expected_ = {};
                 destinationCommitted_ = request_.operation_ == FileOperation::Move && current().removeDirectory_;
                 const bool Removing = request_.operation_ == FileOperation::Delete || current().removeDirectory_;
@@ -1261,7 +1347,7 @@ namespace hc::operations
                     if (Existing.Value()) {
                         if (request_.fileLockInteractions_) {
                             phase_ = Phase::Conflict; replaceAllowed_ = false;
-                            auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                            releasePreparedMutations(); auto Step = progress(); Step.next_ = JobState::WaitingForUser;
                             Step.interaction_ = InteractionRequest{"", InteractionKind::Rename, "destination-exists",
                                 {InteractionChoice::Rename, InteractionChoice::Cancel}, Existing.Value()->id_, {}, Serialize(current().destination_)};
                             return Step;
@@ -1270,7 +1356,10 @@ namespace hc::operations
                     }
                     phase_ = Phase::MakeDirectory;
                 }
-                else if (request_.operation_ == FileOperation::Delete || current().removeDirectory_) phase_ = Phase::Remove;
+                else if (request_.operation_ == FileOperation::Delete || current().removeDirectory_) {
+                    phase_ = deleteWorkers_ > 1 && deleteCandidate(index_) && deleteCandidate(index_ + 1)
+                        ? Phase::RemoveBatch : Phase::Remove;
+                }
                 else if (Renaming) {
                     if (current().renameMove_) {
                         const auto Existing = Writer->Inspect(current().destination_, Context);
@@ -1281,7 +1370,7 @@ namespace hc::operations
                         const auto Existing = Writer->Inspect(current().destination_, Context); if (!Existing.HasValue()) return failed(Existing.Failure());
                         if (Existing.Value() && Existing.Value()->id_ != current().source_.entry_.id_) {
                             phase_ = Phase::Conflict; replaceAllowed_ = false;
-                            auto Step = progress(); Step.next_ = JobState::WaitingForUser;
+                            releasePreparedMutations(); auto Step = progress(); Step.next_ = JobState::WaitingForUser;
                             Step.interaction_ = InteractionRequest{"", InteractionKind::Rename, "destination-exists",
                                 {InteractionChoice::Rename, InteractionChoice::Cancel}, Existing.Value()->id_, Serialize(current().source_.entry_.locator_), Serialize(current().destination_)};
                             return Step;
@@ -1309,7 +1398,7 @@ namespace hc::operations
                         {
                             replaceAllowed_ = !Existing.Value()->directory_ && !current().source_.entry_.directory_;
                             phase_ = Phase::Conflict;
-                            JobStep Step{JobState::WaitingForUser};
+                            releasePreparedMutations(); JobStep Step{JobState::WaitingForUser};
                             Step.interaction_ = InteractionRequest{"", InteractionKind::Overwrite, "destination-exists",
                                 {InteractionChoice::Rename, InteractionChoice::Cancel}, Existing.Value()->id_,
                                 Serialize(current().source_.entry_.locator_), Serialize(current().destination_)};
@@ -1422,6 +1511,7 @@ namespace hc::operations
                     if (current().renameMove_ && !current().source_.entry_.directory_) { bytesDone_ += current().source_.entry_.size_; itemBytes_ = current().source_.entry_.size_; }
                     return done(ItemOutcome::Status::Completed, true, true);
                 }
+                if (phase_ == Phase::RemoveBatch) return removeBatch(Context);
                 if (phase_ == Phase::Remove) return removeSource(Context);
                 auto Receipt = session_->Commit(Context);
                 if (!Receipt.HasValue()) return failed(Receipt.Failure());
@@ -1441,6 +1531,75 @@ namespace hc::operations
                 }
                 return done(ItemOutcome::Status::Completed, true, request_.operation_ == FileOperation::Move);
             }
+            bool deleteCandidate(std::size_t Index) const
+            {
+                if (request_.operation_ != FileOperation::Delete || request_.deleteMode_ != DeleteMode::Permanent
+                    || Index >= items_.size()) return false;
+                const auto& Item = items_[Index];
+                return !Item.removalError_ && !Item.preparationError_ && !Item.excluded_
+                    && !Item.readOnly_ && !Item.source_.entry_.directory_ && !Item.removeDirectory_
+                    && !(Item.source_.entry_.attributes_ & 0x400) && Item.source_.entry_.id_.revision_
+                    && Item.source_.entry_.locator_.kind_ == LocatorKind::Local && Item.source_.writer_
+                    && Item.source_.writer_ == items_[index_].source_.writer_ && Item.source_.writer_->SupportsParallelRemovals();
+            }
+            JobStep removeBatch(OperationContext Context)
+            {
+                // One bounded commit collects <=64 ordinary local files. Workers
+                // check the real cancellation token before every individual remove.
+                // Directory/recycle/readonly and unknown-provider paths stay serial.
+                std::array<std::future<JobStep>, 8> Work;
+                std::array<JobStep, 64> Results;
+                std::array<PlannedItem, 64> Ordered;
+                std::size_t Count = 0, Started = 0;
+                while (Count < std::size_t{64} && deleteCandidate(index_ + Count)) ++Count;
+                std::vector<ItemOutcome> Outcomes; Outcomes.reserve(Count);
+                for (std::size_t I = 0; I < Count; ++I)
+                    Outcomes.push_back({Serialize(items_[index_ + I].source_.entry_.locator_), ItemOutcome::Status::Completed, {}, false, true, items_[index_ + I].source_.entry_});
+                std::vector<ItemOutcome> Completed; Completed.reserve(Count);
+                std::atomic<std::size_t> Next{0};
+                Context.stopToken_ = mutationStop_;
+                Context.allowReadOnlyRemoval_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_;
+                try {
+                    for (; Started < std::min(deleteWorkers_, Count); ++Started) {
+                        Work[Started] = CopyWorkers().Submit([this, &Results, &Next, Count, Context] {
+                            for (;;) {
+                                const auto I = Next.fetch_add(1); if (I >= Count) break;
+                                const auto& Item = items_[index_ + I];
+                                try {
+                                    auto Removed = Item.source_.writer_->Remove(Item.source_.entry_, Context);
+                                    Results[I].next_ = Removed.HasValue() ? JobState::Completed : JobState::Failed;
+                                    if (!Removed.HasValue()) Results[I].error_ = Removed.Failure();
+                                } catch (...) {
+                                    Results[I].next_ = JobState::Failed; Results[I].error_ = Error{ErrorCategory::Internal, "delete-worker-exception"};
+                                }
+                            }
+                            return JobStep{JobState::Completed};
+                        });
+                    }
+                } catch (...) {
+                    // Submitted workers still finish the bounded queue and must
+                    // be joined before any item or provider state can be released.
+                }
+                if (!Started) { phase_ = Phase::Remove; return removeSource(Context); }
+                for (std::size_t I = 0; I < Started; ++I) Work[I].get();
+                // Emit successes first. An error prompt, cancellation or terminal
+                // failure must never hide successful deletions from the ledger.
+                std::size_t Position = 0, Succeeded = 0;
+                for (const bool Success : {true, false}) for (std::size_t I = 0; I < Count; ++I) {
+                    if ((Results[I].next_ == JobState::Completed) != Success) continue;
+                    if (Success) { Completed.push_back(std::move(Outcomes[I])); ++Succeeded; }
+                    auto Item = std::move(items_[index_ + I]);
+                    if (!Success) Item.removalError_ = std::move(Results[I].error_);
+                    Ordered[Position++] = std::move(Item);
+                }
+                for (std::size_t I = 0; I < Count; ++I) items_[index_ + I] = std::move(Ordered[I]);
+                index_ += Succeeded; outcomeIndex_ += Succeeded; deletedFiles_ += Succeeded;
+                readOnlyAnswered_ = false; sourceRemoveRetries_ = 0;
+                phase_ = index_ == items_.size() && streaming_ && !planningFinished_ ? Phase::Preparing : Phase::Begin;
+                auto Step = progress(); Step.items_ = std::move(Completed);
+                if (index_ == items_.size() && planningFinished_) Step.next_ = JobState::Completed;
+                return Step;
+            }
             JobStep removeSource(OperationContext Context)
             {
                 Context.allowReadOnlyRemoval_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_ || readOnlyAnswered_;
@@ -1454,6 +1613,7 @@ namespace hc::operations
                 // verifies it and refuses directories that acquired new children.
                 const auto Removed = current().source_.writer_->Remove(current().source_.entry_, Context);
                 if (!Removed.HasValue()) {
+                    releasePreparedMutations();
                     const auto& Error = Removed.Failure();
                     const auto Kind = current().source_.entry_.locator_.kind_;
                     if (request_.operation_ == FileOperation::Move && (Kind == LocatorKind::Local || Kind == LocatorKind::Smb)
@@ -1474,6 +1634,10 @@ namespace hc::operations
                 return done(ItemOutcome::Status::Completed, request_.operation_ == FileOperation::Move, true);
             }
             FileOperationRequest request_;
+            std::shared_ptr<MutationScope> mutationScope_;
+            bool ownsMutationScope_ = true;
+            std::stop_token mutationStop_;
+            std::size_t deleteWorkers_ = 0;
             std::deque<std::unique_ptr<PreparedCopy>> copies_;
             std::stop_source copyStop_;
             std::size_t copyWorkers_ = 0;
@@ -1599,6 +1763,7 @@ namespace hc::operations
                 if (Context.answer_ && Context.answer_->choice_ == InteractionChoice::ConfirmAll) request_.readOnly_ = ReadOnlyPolicy::Allow;
                 auto Step = inner_->Advance(Context);
                 if (Step.item_ && !Step.replaceItem_) ++emitted_;
+                emitted_ += Step.items_.size();
                 if (Step.replaceItem_) *Step.replaceItem_ += outcomeBase_;
                 if (Step.progress_) {
                     innerBytes_ = Step.progress_->bytesDone_;

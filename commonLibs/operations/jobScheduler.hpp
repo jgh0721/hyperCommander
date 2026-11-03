@@ -37,7 +37,7 @@ namespace hc::operations
         RenameUndo, RenameRedo, RenameResume, RenameRestore, MakeFile, MakeDirectory, SecurityChange, SecurityRestore };
     enum class JobPhase { None, Preparing, Copying, Verifying, RemovingSource, PreparingInputs, BuildingArchive,
         SavingOutput, RewritingArchive, Committing, Inspecting, TemporaryNames, ApplyingNames, RestoringNames,
-        Creating, BackingUpSecurity, ApplyingSecurity, RestoringSecurity };
+        Creating, BackingUpSecurity, ApplyingSecurity, RestoringSecurity, Deleting };
     struct JobProgress
     {
         std::uint64_t bytesDone_ = 0;

@@ -74,6 +74,7 @@ namespace hc::storage
     public:
         virtual ~IWritableStorage() = default;
         virtual ProviderId Id() const = 0;
+        virtual std::shared_ptr<MutationScope> CreateMutationScope() const { return {}; }
         virtual Result<SupportDecision> Supports(Mutation Operation, Locator At, OperationContext Context) = 0;
         virtual Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) = 0;
         // Existing object only: never opens a content-write session or replaces data.
@@ -85,6 +86,8 @@ namespace hc::storage
         // across local volumes, SMB shares and redirected RDP drives.
         virtual Result<CopyCapabilities> CopySupportAt(Locator, OperationContext) { return CopySupport(); }
         virtual bool SupportsParallelCopies() const { return false; }
+        virtual bool SupportsParallelRemovals() const { return false; }
+        virtual std::size_t PreferredDeleteWorkers(Locator) const { return 1; }
         virtual std::size_t PreferredCopyWorkers(Locator, Locator) const { return 1; }
         virtual bool CanProduceContent(OperationContext) const { return false; }
         virtual Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context)

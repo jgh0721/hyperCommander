@@ -118,6 +118,7 @@ namespace
         ParallelWriter(std::shared_ptr<IWritableStorage> Inner, std::shared_ptr<ParallelProbe> Probe)
             : inner_(std::move(Inner)), probe_(std::move(Probe)) {}
         ProviderId Id() const override { return inner_->Id(); }
+        std::shared_ptr<MutationScope> CreateMutationScope() const override { return inner_->CreateMutationScope(); }
         bool SupportsParallelCopies() const override { return true; }
         CopyCapabilities CopySupport() const override { return inner_->CopySupport(); }
         Result<SupportDecision> Supports(Mutation Kind, Locator At, OperationContext Context) override { return inner_->Supports(Kind, At, Context); }
@@ -2637,6 +2638,144 @@ private slots:
             QVERIFY(Created); QCOMPARE(Reader->enumerations_, Prescan ? 2 : 1);
             QVERIFY(Prepared.Value().task_->Finalize(JobState::Cancelled).empty());
         }
+    }
+    void localMutationScopeKeepsAncestorsAndReleasesDirectories()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Folder = Directory.filePath("pinned"); QVERIFY(QDir().mkdir(Folder));
+        for (const auto Name : {"first", "second"}) {
+            QFile File(QDir(Folder).filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("data"), qint64(4));
+        }
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        OperationContext Context; Context.mutationScope_ = Writer->CreateMutationScope(); QVERIFY(Context.mutationScope_);
+        auto First = Reader->Resolve({LocatorKind::Local, QDir(Folder).filePath("first").toStdString()}, {}).get(); QVERIFY(First.HasValue());
+        QVERIFY(Writer->Remove(First.Value(), Context).HasValue());
+        const auto From = QDir::toNativeSeparators(Folder).toStdWString();
+        const auto To = QDir::toNativeSeparators(Directory.filePath("renamed")).toStdWString();
+        QVERIFY(!MoveFileW(From.c_str(), To.c_str())); // the cached parent cannot be replaced
+        auto Second = Reader->Resolve({LocatorKind::Local, QDir(Folder).filePath("second").toStdString()}, {}).get(); QVERIFY(Second.HasValue());
+        QVERIFY(Writer->Remove(Second.Value(), Context).HasValue());
+        auto Parent = Reader->Resolve({LocatorKind::Local, Folder.toStdString()}, {}).get(); QVERIFY(Parent.HasValue());
+        const auto Renamed = Writer->Rename(Parent.Value(), {LocatorKind::Local, Directory.filePath("renamed").toStdString()}, Context);
+        QVERIFY2(Renamed.HasValue(), Renamed.HasValue() ? "" : Renamed.Failure().code_.c_str());
+        Parent = Reader->Resolve({LocatorKind::Local, Directory.filePath("renamed").toStdString()}, {}).get(); QVERIFY(Parent.HasValue());
+        QVERIFY(Writer->Remove(Parent.Value(), Context).HasValue());
+        Context.mutationScope_->Clear();
+        QVERIFY(!QFileInfo::exists(Folder)); QVERIFY(!QFileInfo::exists(Directory.filePath("renamed")));
+    }
+    void freshMutationMetadataStillRejectsReplacement()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Folder = Directory.filePath("source"); QVERIFY(QDir().mkdir(Folder));
+        const auto Path = QDir(Folder).filePath("file");
+        { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("old"), qint64(3)); }
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        auto Source = Reader->Resolve({LocatorKind::Local, Folder.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        Request.sources_ = {{Source.Value(), Reader, Writer}};
+        auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
+        JobStepContext Context; Context.committing_ = true;
+        bool Replaced = false, Rejected = false;
+        for (int Advance = 0; Advance < 100; ++Advance) {
+            auto Step = Prepared.Value().task_->Advance(Context);
+            if (!Replaced && Step.progress_ && Step.progress_->currentItem_ == "file") {
+                if (!QFile::rename(Path, Path + ".original")) {
+                    const auto Native = QDir::toNativeSeparators(Path).toStdWString();
+                    const auto WriteHandle = CreateFileW(Native.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    QVERIFY(WriteHandle == INVALID_HANDLE_VALUE); QCOMPARE(GetLastError(), DWORD(ERROR_SHARING_VIOLATION));
+                    // Prepared native deletion keeps the captured object pinned.
+                    // Cancellation must release it without deleting the source.
+                    QVERIFY(Prepared.Value().task_->Finalize(JobState::Cancelled).empty());
+                    QVERIFY(QFile::rename(Path, Path + ".original"));
+                    QVERIFY(QFile::rename(Path + ".original", Path));
+                    return;
+                }
+                QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("new"), qint64(3)); File.close();
+                Replaced = true;
+            }
+            if (Step.error_ && Step.error_->category_ == ErrorCategory::StaleRevision) Rejected = true;
+            if (IsTerminal(Step.next_)) break;
+        }
+        QVERIFY(Replaced); QVERIFY(Rejected); QVERIFY(QFileInfo::exists(Path));
+        QVERIFY(Prepared.Value().task_->Finalize(JobState::Failed).empty());
+    }
+    void preparedDeletionDetectsMetadataEdits()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Folder = Directory.filePath("source"); QVERIFY(QDir().mkdir(Folder));
+        const auto Path = QDir(Folder).filePath("file");
+        { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("data"), qint64(4)); }
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        auto Source = Reader->Resolve({LocatorKind::Local, Folder.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        Request.sources_ = {{Source.Value(), Reader, Writer}};
+        auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
+        JobStepContext Context; Context.committing_ = true; bool Changed = false, Rejected = false;
+        for (int Advance = 0; Advance < 100; ++Advance) {
+            auto Step = Prepared.Value().task_->Advance(Context);
+            if (!Changed && Step.progress_ && Step.progress_->currentItem_ == "file") {
+                const auto Native = QDir::toNativeSeparators(Path).toStdWString();
+                const auto Handle = CreateFileW(Native.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (Handle == INVALID_HANDLE_VALUE) {
+                    QCOMPARE(GetLastError(), DWORD(ERROR_SHARING_VIOLATION));
+                    QVERIFY(Prepared.Value().task_->Finalize(JobState::Cancelled).empty()); return;
+                }
+                FILETIME Time{}; GetSystemTimeAsFileTime(&Time);
+                ULARGE_INTEGER Future{}; Future.HighPart = Time.dwHighDateTime; Future.LowPart = Time.dwLowDateTime; Future.QuadPart += 10000000;
+                Time.dwHighDateTime = Future.HighPart; Time.dwLowDateTime = Future.LowPart;
+                const auto Written = SetFileTime(Handle, nullptr, nullptr, &Time); CloseHandle(Handle); QVERIFY(Written);
+                Changed = true;
+            }
+            if (Step.error_ && Step.error_->category_ == ErrorCategory::StaleRevision) Rejected = true;
+            if (IsTerminal(Step.next_)) break;
+        }
+        QVERIFY(Changed); QVERIFY(Rejected); QVERIFY(QFileInfo::exists(Path));
+        QVERIFY(Prepared.Value().task_->Finalize(JobState::Failed).empty());
+    }
+    void preparedDeletionHonorsReadonlyApproval()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Folder = Directory.filePath("source"); QVERIFY(QDir().mkdir(Folder));
+        const auto Path = QDir(Folder).filePath("file");
+        { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("data"), qint64(4)); }
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        auto Source = Reader->Resolve({LocatorKind::Local, Folder.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        Request.readOnly_ = ReadOnlyPolicy::Allow; Request.sources_ = {{Source.Value(), Reader, Writer}};
+        auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
+        JobStepContext Context; Context.committing_ = true; bool Changed = false, Completed = false;
+        for (int Advance = 0; Advance < 100; ++Advance) {
+            auto Step = Prepared.Value().task_->Advance(Context);
+            if (!Changed && Step.progress_ && Step.progress_->currentItem_ == "file") {
+                const auto Native = QDir::toNativeSeparators(Path).toStdWString();
+                QVERIFY(SetFileAttributesW(Native.c_str(), FILE_ATTRIBUTE_READONLY)); Changed = true;
+            }
+            if (IsTerminal(Step.next_)) { Completed = Step.next_ == JobState::Completed; break; }
+        }
+        QVERIFY(Changed); QVERIFY(Completed); QVERIFY(!QFileInfo::exists(Path));
+        QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty());
+    }
+    void directoryRemovalKeepsUnrelatedCachedParents()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        OperationContext Context; Context.mutationScope_ = Writer->CreateMutationScope();
+        for (const auto Name : {"first", "second"}) {
+            const auto Folder = Directory.filePath(Name); QVERIFY(QDir().mkdir(Folder));
+            const auto Path = QDir(Folder).filePath("file");
+            { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("data"), qint64(4)); }
+            auto Entry = Reader->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+            QVERIFY(Writer->Remove(Entry.Value(), Context).HasValue());
+        }
+        auto First = Reader->Resolve({LocatorKind::Local, Directory.filePath("first").toStdString()}, {}).get(); QVERIFY(First.HasValue());
+        QVERIFY(Writer->Remove(First.Value(), Context).HasValue());
+        const auto From = QDir::toNativeSeparators(Directory.filePath("second")).toStdWString();
+        const auto To = QDir::toNativeSeparators(Directory.filePath("renamed")).toStdWString();
+        QVERIFY(!MoveFileW(From.c_str(), To.c_str())); // the unrelated cache entry remains pinned
+        Context.mutationScope_->Clear(); QVERIFY(MoveFileW(From.c_str(), To.c_str()));
     }
     void deleteWhileListing_data()
     {

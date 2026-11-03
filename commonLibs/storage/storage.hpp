@@ -121,6 +121,7 @@ namespace hc::storage
         void clear() { volatile char* Bytes = value_.data(); for (std::size_t Index = 0; Index < value_.size(); ++Index) Bytes[Index] = 0; value_.clear(); }
         std::string value_;
     };
+    class IRemovalPreparation;
     struct OperationContext;
     using PasswordPrompt = std::function<Result<Password>(const std::string& Archive, unsigned Attempt, const OperationContext& Context)>;
     enum class WorkloadIntent { Explicit, Automatic };
@@ -147,6 +148,14 @@ namespace hc::storage
     };
     using InteractionPrompt = std::function<Result<ProviderInteractionReply>(const ProviderInteractionRequest&, const OperationContext&)>;
     using InteractionStart = std::function<Task<ProviderInteractionReply>(const ProviderInteractionRequest&, const OperationContext&)>;
+    // Execution-scoped provider resources. Never serialized or an authorization
+    // grant; providers still validate the object opened for each mutation.
+    class MutationScope
+    {
+    public:
+        virtual ~MutationScope() = default;
+        virtual void Clear() = 0;
+    };
     struct OperationContext
     {
         std::string requestId_;
@@ -172,9 +181,14 @@ namespace hc::storage
         // Coordinator-only execution hints; neither grants access to a path.
         bool directContent_ = true;
         bool workerRead_ = false;
+        std::shared_ptr<MutationScope> mutationScope_;
+        std::shared_ptr<IRemovalPreparation> removalPreparation_;
         // Local coordinator policy. One preserves sequential execution; zero
         // selects the destination's measured device policy. Never serialized.
         std::size_t fileCopyWorkers_ = 1;
+        // Permanent local deletion only; zero asks the endpoint for its device
+        // policy. Generic callers and remote/recycle operations stay serial.
+        std::size_t fileDeleteWorkers_ = 1;
         // Experimental bounded native read/write overlap; stays off unless a
         // measured profile is selected. Two buffers, each <=8 MiB.
         bool nativeReadAhead_ = false;
@@ -237,6 +251,14 @@ namespace hc::storage
         std::int64_t modifiedUtcMs_ = 0;
         // Provider-specific presentation hints; no native pointer crosses the boundary.
         std::map<std::string, std::string> hints_;
+    };
+    // A bounded mutation enumeration may keep verified deletion handles in its
+    // execution scope. Snapshots remain values; no handle is persisted in them.
+    class IRemovalPreparation
+    {
+    public:
+        virtual ~IRemovalPreparation() = default;
+        virtual Result<EntrySnapshot> Prepare(EntrySnapshot Entry, const OperationContext& Context) = 0;
     };
     struct EntryPage
     {
@@ -328,6 +350,9 @@ namespace hc::storage
         virtual ProviderId Id() const = 0;
         // Independent read sessions may be owned by different copy workers.
         virtual bool SupportsParallelReads() const { return false; }
+        // Only fresh mutation enumerations qualify. Selected/cached roots still
+        // require Stat, and opened content/mutation handles recheck the revision.
+        virtual bool SupportsFreshEnumerationMetadata() const { return false; }
         virtual ProviderCapabilities Capabilities() const { return {}; }
         // Optional native metadata must be available from the source endpoint,
         // not merely implemented by the destination's write engine.

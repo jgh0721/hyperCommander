@@ -94,7 +94,7 @@ namespace hc::operations
             Snapshot.progress_.source_ = Object["currentSource"].toString().toStdString();
             Snapshot.progress_.destination_ = Object["currentDestination"].toString().toStdString();
             const auto Phase = Object["phase"].toInt();
-            if (Phase >= 0 && Phase <= int(JobPhase::RestoringSecurity)) Snapshot.progress_.phase_ = JobPhase(Phase);
+            if (Phase >= 0 && Phase <= int(JobPhase::Deleting)) Snapshot.progress_.phase_ = JobPhase(Phase);
             Snapshot.progress_.activeFiles_ = uint32_t(std::max(0, Object["activeFiles"].toInt()));
             if (Object.contains("itemsDone")) Snapshot.progress_.itemsDone_ = Object["itemsDone"].toString().toULongLong();
             if (Object.contains("outputIndex")) Snapshot.progress_.outputIndex_ = Object["outputIndex"].toString().toULongLong();

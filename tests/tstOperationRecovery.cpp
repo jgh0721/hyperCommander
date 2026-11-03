@@ -13,6 +13,8 @@
 #include "commonLibs/operations/writeRecovery.hpp"
 #include <Windows.h>
 #include <QLockFile>
+#include <atomic>
+#include <thread>
 
 using namespace hc::storage;
 using namespace hc::operations;
@@ -257,11 +259,13 @@ private slots:
     {
         QTemporaryDir Directory; auto Journal = MakeFileJobJournal(Directory.path(), true); JobResult Record;
         Record.snapshot_.id_ = "hc-job-delete-count"; Record.snapshot_.state_ = JobState::Preparing;
+        Record.snapshot_.progress_.phase_ = JobPhase::Deleting;
         Record.snapshot_.progress_.discoveredItems_ = 10000000000ull;
         Record.snapshot_.progress_.discoveredFiles_ = 9000000000ull; Record.snapshot_.progress_.deletedFiles_ = 0;
         QVERIFY(Journal->Checkpoint(Record).HasValue());
         auto Recovered = Journal->Recover(); QVERIFY(Recovered.HasValue()); QCOMPARE(Recovered.Value().size(), size_t(1));
         const auto& Progress = Recovered.Value()[0].snapshot_.progress_;
+        QCOMPARE(Progress.phase_, JobPhase::Deleting);
         QVERIFY(!Progress.plannedItems_); QCOMPARE(Progress.discoveredItems_.value_or(0), 10000000000ull);
         QCOMPARE(Progress.discoveredFiles_.value_or(0), 9000000000ull); QVERIFY(Progress.deletedFiles_.has_value()); QCOMPARE(*Progress.deletedFiles_, 0ull);
         Record.snapshot_.state_ = JobState::Completed; Record.snapshot_.progress_.deletedFiles_ = 9000000000ull;
@@ -419,6 +423,58 @@ private slots:
         QVERIFY(Session.Value()->Abort().HasValue()); QCOMPARE(Read(Path), QByteArray("original"));
         QCOMPARE(DecodeWriteRecovery(Store.Value()->Read(0, 1).Value().items_[0]).Value().phase_, WritePhase::Aborted);
         QCOMPARE(QDir(Directory.path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden).size(), 0);
+    }
+    void parallelDeleteAccountsForFailuresAndCancellation()
+    {
+        class Writer final : public IWritableStorage {
+        public:
+            std::shared_ptr<IWritableStorage> inner_; std::stop_source* stop_ = nullptr;
+            std::atomic<int> active_{0}, peak_{0}, removed_{0}; bool fail_ = false;
+            ProviderId Id() const override { return inner_->Id(); }
+            bool SupportsParallelRemovals() const override { return true; }
+            std::shared_ptr<MutationScope> CreateMutationScope() const override { return inner_->CreateMutationScope(); }
+            Result<SupportDecision> Supports(Mutation Kind, Locator At, OperationContext Context) override { return inner_->Supports(Kind, At, Context); }
+            Result<std::optional<EntrySnapshot>> Inspect(Locator At, OperationContext Context) override { return inner_->Inspect(At, Context); }
+            Result<std::unique_ptr<IWriteSession>> BeginWrite(Locator At, DestinationExpectation Expected, OperationContext Context) override { return inner_->BeginWrite(At, Expected, Context); }
+            Result<Unit> MakeDirectory(Locator At, OperationContext Context) override { return inner_->MakeDirectory(At, Context); }
+            Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override { return inner_->Rename(Entry, To, Context); }
+            Result<Unit> Remove(EntrySnapshot Entry, OperationContext Context) override {
+                if (Entry.directory_) return inner_->Remove(Entry, Context);
+                const auto Active = ++active_; auto Peak = peak_.load();
+                while (Active > Peak && !peak_.compare_exchange_weak(Peak, Active)) {}
+                std::this_thread::sleep_for(std::chrono::milliseconds(3));
+                auto Removed = fail_ && Entry.name_ == "00.dat" ? Result<Unit>(Error{ErrorCategory::Unavailable, "delete-probe-failure"}) : inner_->Remove(Entry, Context);
+                --active_;
+                if (Removed.HasValue()) { const auto Count = ++removed_; if (stop_ && Count == 1) stop_->request_stop(); }
+                return Removed;
+            }
+        };
+        for (const bool Recovery : {false, true}) for (int Mode = 0; Mode < 3; ++Mode) {
+            QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(QDir().mkdir(Directory.filePath("data")));
+            for (int Index = 0; Index < 20; ++Index) QVERIFY(Put(Directory.filePath(QString("data/%1.dat").arg(Index, 2, 10, QChar('0'))), "payload"));
+            auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Probe = std::make_shared<Writer>();
+            Probe->inner_ = MakeNativeWritableStorage(LocatorKind::Local, Reader); Probe->fail_ = Mode == 1;
+            std::stop_source Stop; if (Mode == 2) Probe->stop_ = &Stop;
+            auto Entry = Reader->Resolve({LocatorKind::Local, Directory.filePath("data").toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+            FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+            Request.sources_ = {{Entry.Value(), Reader, Probe}};
+            OperationContext Context; Context.fileDeleteWorkers_ = 4; Context.stopToken_ = Stop.get_token();
+            JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1, 16, MakeFileJobJournal(Directory.filePath("journal"), false, true, Recovery));
+            auto Job = SubmitFileOperation(Scheduler, Request, Context); QVERIFY(Job.HasValue());
+            QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+            const auto Done = Job.Value().completion_.get();
+            QCOMPARE(Done.snapshot_.state_, Mode == 0 ? JobState::Completed : Mode == 1 ? JobState::Failed : JobState::Cancelled);
+            if (Recovery) QCOMPARE(Probe->peak_.load(), 1);
+            else QVERIFY(Probe->peak_ > 1);
+            QVERIFY(Probe->peak_ <= 4);
+            QCOMPARE(Done.snapshot_.progress_.deletedFiles_.value_or(0), uint64_t(Probe->removed_.load()));
+            uint64_t RecordedRemoved = 0;
+            const auto Page = Done.outcomes_->Read(0, 100); QVERIFY(Page.HasValue());
+            for (const auto& Item : Page.Value().items_) if (Item.sourceRemoved_) ++RecordedRemoved;
+            QCOMPARE(RecordedRemoved, uint64_t(Probe->removed_.load() + (Mode == 0 ? 1 : 0)));
+            if (Mode == 0) QCOMPARE(Probe->removed_.load(), 20);
+            else QVERIFY(QFile::exists(Directory.filePath("data")));
+        }
     }
     void terminalOutcomeFlushFailureIsReported()
     {
