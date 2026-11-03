@@ -105,7 +105,7 @@ namespace hc::operations
             std::size_t depth_ = 0;
             bool removeDirectory_ = false;
             bool renameMove_ = false;
-            bool readOnly_ = false, excluded_ = false;
+            bool readOnly_ = false, excluded_ = false, recursiveRemoval_ = false;
             std::size_t root_ = 0;
             std::shared_ptr<const Error> preparationError_;
         };
@@ -812,6 +812,9 @@ namespace hc::operations
                 Request.copyOptions_ = copyOptionsResolved_ ? effectiveCopyOptions_ : request_.copyOptions_;
                 Request.maxBytes_ = request_.maxBytes_ - (bytesDone_ - itemBytes_); Request.bytesPerSecondLimit_ = request_.bytesPerSecondLimit_;
                 Request.allowReadOnlyRemoval_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_ || readOnlyAnswered_;
+                Request.recursiveRemoval_ = Item.recursiveRemoval_;
+                Request.maxEntries_ = request_.maxEntries_ - seen_.size() + 1;
+                Request.maxDepth_ = request_.maxDepth_ - Item.depth_;
                 if (destinationCommitted_ && request_.operation_ == FileOperation::Move && !Item.removeDirectory_) {
                     Request.action_ = FileElevationAction::Remove; Request.requiresPublishedDestination_ = true; Request.publishedDestination_ = publishedDestination_;
                 }
@@ -859,6 +862,29 @@ namespace hc::operations
                     skippedSources_.push_back(current().source_.entry_.locator_); return done(ItemOutcome::Status::Completed, true, false);
                 }
                 if (Choice == InteractionChoice::Retry) {
+                    if (current().recursiveRemoval_) {
+                        // Permission changes may also unblock errors captured for
+                        // later roots. Revalidate those plans instead of asking
+                        // again from their cached access-denied results.
+                        std::deque<PlannedItem> Retried;
+                        const auto Retry = [&](PlannedItem& Item) {
+                            if (!Item.recursiveRemoval_) return false;
+                            seen_.erase(Serialize(Item.source_.entry_.locator_));
+                            Item.preparationError_.reset(); Item.recursiveRemoval_ = false;
+                            Retried.push_back(std::move(Item)); return true;
+                        };
+                        items_.erase(std::remove_if(items_.begin() + index_, items_.end(), Retry), items_.end());
+                        // Reopened subtrees must finish before any queued parent
+                        // cleanup. Restore discovery order for the final reverse pass.
+                        for (auto At = items_.size(); At > index_;) {
+                            --At;
+                            if (!items_[At].removeDirectory_) continue;
+                            directories_.push_back(std::move(items_[At])); items_.erase(items_.begin() + At);
+                        }
+                        for (auto It = Retried.rbegin(); It != Retried.rend(); ++It) pending_.push_front(std::move(*It));
+                        planningFinished_ = false; phase_ = Phase::Preparing;
+                        auto Step = progress(); Step.next_ = JobState::Preparing; return Step;
+                    }
                     phase_ = destinationCommitted_ ? Phase::Remove : Phase::Begin;
                     auto Step = progress(); if (destinationCommitted_) Step.next_ = JobState::Committing; return Step;
                 }
@@ -954,6 +980,8 @@ namespace hc::operations
                 {
                     planningFinished_ = true;
                     for (auto It = directories_.rbegin(); It != directories_.rend(); ++It) items_.push_back(*It);
+                    // Permission Retry can resume discovery; transfer cleanup entries once.
+                    directories_.clear();
                     if (request_.deleteMode_ == DeleteMode::Recycle && request_.operation_ == FileOperation::Delete)
                         for (auto& Item : items_) for (const auto& At : readOnlySources_) if (SameOrWithin(At, Item.source_.entry_.locator_)) Item.readOnly_ = true;
                     if (request_.operation_==FileOperation::Copy || request_.operation_==FileOperation::Move) {
@@ -1060,16 +1088,34 @@ namespace hc::operations
             }
             JobStep preparationFailure(PlannedItem Item, Error Error, bool Retry = true)
             {
-                // Protected files can fail Stat before reaching Remove. Keep the
-                // captured listing so the elevated helper can verify it itself.
+                // Protected entries can fail Stat or enumeration before Remove.
+                // Keep the captured revision for independent helper verification;
+                // an unscanned directory requires a bounded recursive delete.
                 if (request_.operation_ == FileOperation::Delete && request_.elevation_ && !skipDeleteErrors_
-                    && Error.category_ == ErrorCategory::AccessDenied && !Item.source_.entry_.directory_
-                    && Item.source_.entry_.locator_.kind_ == LocatorKind::Local && !(Item.source_.entry_.attributes_ & 0x400)) {
+                    && Error.category_ == ErrorCategory::AccessDenied
+                    && Item.source_.entry_.locator_.kind_ == LocatorKind::Local && !(Item.source_.entry_.attributes_ & 0x400)
+                    && std::ranges::none_of(skippedSources_, [&](const auto& At) { return SameOrWithin(At, Item.source_.entry_.locator_); })) {
+                    if (Item.source_.entry_.directory_) {
+                        Item.recursiveRemoval_ = true;
+                        // A cursor can fail after queuing children. Transfer only
+                        // the remaining subtree and release its discovery IDs.
+                        const auto Within = [&](const PlannedItem& Pending) {
+                            const bool Match = SameOrWithin(Pending.source_.entry_.locator_, Item.source_.entry_.locator_);
+                            if (Match) seen_.erase(Serialize(Pending.source_.entry_.locator_));
+                            return Match;
+                        };
+                        std::erase_if(pending_, Within);
+                        std::erase_if(directories_, Within);
+                        items_.erase(std::remove_if(items_.begin() + index_, items_.end(), Within), items_.end());
+                        seen_.insert(Serialize(Item.source_.entry_.locator_));
+                    }
                     Item.preparationError_ = std::make_shared<const storage::Error>(std::move(Error));
                     Item.readOnly_ = (Item.source_.entry_.attributes_ & 1) != 0;
-                    ++discoveredFiles_; ++rootFiles_[Item.root_];
-                    if (Item.source_.entry_.size_ > request_.maxBytes_ - bytesTotal_) return failed({ErrorCategory::BudgetExceeded, "operation-byte-budget"});
-                    bytesTotal_ += Item.source_.entry_.size_;
+                    if (!Item.source_.entry_.directory_) {
+                        ++discoveredFiles_; ++rootFiles_[Item.root_];
+                        if (Item.source_.entry_.size_ > request_.maxBytes_ - bytesTotal_) return failed({ErrorCategory::BudgetExceeded, "operation-byte-budget"});
+                        bytesTotal_ += Item.source_.entry_.size_;
+                    }
                     items_.push_back(std::move(Item));
                     if (streaming_) phase_ = Phase::Begin;
                     return progress();
@@ -1174,6 +1220,7 @@ namespace hc::operations
                     }
                 }
                 if (current().preparationError_) {
+                    if (current().recursiveRemoval_) return failed(*current().preparationError_);
                     // Retry queries again instead of replaying a cached error.
                     auto Resource = current().source_.entry_.id_;
                     if (!Resource.revision_) {
@@ -1694,7 +1741,7 @@ namespace hc::operations
         }
         if ((!Request.preservePaths_ && Request.operation_ != FileOperation::Copy)
             || Request.operation_ < FileOperation::Copy || Request.operation_ > FileOperation::Rename
-            || !Request.maxEntries_ || !Request.maxDepth_ || !Request.maxBytes_
+            || !Request.maxEntries_ || !Request.maxBytes_
             || Request.sources_.size() > Request.maxEntries_ || (Request.operation_ != FileOperation::MakeDirectory && Request.sources_.empty())
             || (Request.operation_ == FileOperation::MakeDirectory && !Request.sources_.empty())
             || (Request.operation_ == FileOperation::Rename && Request.sources_.size() != 1)

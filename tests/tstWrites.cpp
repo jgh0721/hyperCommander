@@ -2,7 +2,6 @@
 #include "UniqueLibs/fileBatchOperations.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/nativeStorageRevision.hpp"
-#include "UniqueLibs/nativeStorageRevision.hpp"
 #include "commonLibs/operations/fileOperation.hpp"
 #include <QtTest>
 #include "UniqueLibs/errorPresentation.hpp"
@@ -1430,14 +1429,135 @@ private slots:
             QCOMPARE(QFileInfo::exists(root_->filePath(Folder + '/' + Name)), Choice == 3 && (QString(Name) == "b.txt" || QString(Name) == "c.txt"));
         QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty());
     }
+    void deleteDirectoryPreparationElevation_data()
+    {
+        QTest::addColumn<bool>("Streaming"); QTest::addColumn<bool>("Nested"); QTest::addColumn<int>("Denial"); QTest::addColumn<int>("Choice");
+        for (bool Streaming : {false, true}) for (bool Nested : {false, true})
+            for (int Denial = 0; Denial < 4; ++Denial) for (int Choice = 0; Choice < 4; ++Choice)
+                QTest::newRow(qPrintable(QString("stream-%1-nested-%2-denial-%3-choice-%4").arg(Streaming).arg(Nested).arg(Denial).arg(Choice))) << Streaming << Nested << Denial << Choice;
+    }
+    void deleteDirectoryPreparationElevation()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local directory elevation fixture.");
+        QFETCH(bool, Streaming); QFETCH(bool, Nested); QFETCH(int, Denial); QFETCH(int, Choice);
+        class DeniedCursor final : public IEntryCursor {
+        public:
+            DeniedCursor(std::unique_ptr<IEntryCursor> Inner, bool Partial) : inner_(std::move(Inner)), partial_(Partial) {}
+            Task<EntryPage> Next(std::size_t, OperationContext C) override {
+                if (partial_) { partial_ = false; auto Page = inner_->Next(1, C).get(); if (Page.HasValue()) Page.Value().end_ = false; return Ready<EntryPage>(std::move(Page)); }
+                return Ready<EntryPage>(Error{ErrorCategory::AccessDenied, "win32:5"});
+            }
+        private: std::unique_ptr<IEntryCursor> inner_; bool partial_;
+        };
+        class DeniedReader final : public IStorageProvider {
+        public:
+            DeniedReader(std::shared_ptr<IStorageProvider> Inner, int Denial) : inner_(std::move(Inner)), denial_(Denial) {}
+            ProviderId Id() const override { return inner_->Id(); }
+            Task<SupportDecision> Supports(Operation Op, OperationContext C) override { return inner_->Supports(Op, C); }
+            Task<EntrySnapshot> Stat(ResourceId Id, OperationContext C) override {
+                if (deny_ && denial_ == 0 && (Id.key_.ends_with("blocked-a") || Id.key_.ends_with("blocked-b"))) return Ready<EntrySnapshot>(Error{ErrorCategory::AccessDenied, "win32:5"});
+                return inner_->Stat(Id, C);
+            }
+            Task<std::unique_ptr<IEntryCursor>> Enumerate(Locator At, OperationContext C) override {
+                const bool Blocked = deny_ && denial_ != 0 && (At.root_.ends_with("blocked-a") || At.root_.ends_with("blocked-b"));
+                if (Blocked && denial_ == 1) return Ready<std::unique_ptr<IEntryCursor>>(Error{ErrorCategory::AccessDenied, "win32:5"});
+                auto Cursor = inner_->Enumerate(At, C).get();
+                if (!Blocked || !Cursor.HasValue()) return Ready<std::unique_ptr<IEntryCursor>>(std::move(Cursor));
+                return Ready<std::unique_ptr<IEntryCursor>>(std::unique_ptr<IEntryCursor>(new DeniedCursor(std::move(Cursor.Value()), denial_ == 3)));
+            }
+            Task<std::shared_ptr<IReadStream>> OpenRead(ResourceId Id, OperationContext C) override { return inner_->OpenRead(Id, C); }
+            bool deny_ = true;
+        private: std::shared_ptr<IStorageProvider> inner_; int denial_;
+        };
+        const auto Folder = QString("directory-elevation-%1-%2-%3-%4").arg(Streaming).arg(Nested).arg(Denial).arg(Choice);
+        QVERIFY(QDir().mkpath(root_->filePath(Folder)));
+        auto Denied = std::make_shared<DeniedReader>(reader_, Denial); std::atomic_int Launches = 0;
+        auto Service = hc::permissions::MakeFileElevationService(FixtureLauncher([&] { ++Launches; }));
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.elevation_ = Service;
+        Request.deleteWhileListing_ = Streaming; Request.confirmDelete_ = true; Request.fileLockInteractions_ = true;
+        for (const auto* Name : {"blocked-a", "blocked-b", "normal"}) {
+            const auto Base = Folder + "/selected/" + Name; QVERIFY(QDir().mkpath(root_->filePath(Base + "/nested")));
+            QVERIFY(write(Base + "/first.txt", "first")); QVERIFY(write(Base + "/nested/last.txt", "last"));
+            auto Entry = writer_->Inspect(at(Base), {}); QVERIFY(Entry.HasValue() && Entry.Value());
+            if (Denial == 0) {
+                WIN32_FILE_ATTRIBUTE_DATA Data{}; const auto Native = hc::filetools::NativePath(root_->filePath(Base));
+                QVERIFY(GetFileAttributesExW(reinterpret_cast<LPCWSTR>(Native.utf16()), GetFileExInfoStandard, &Data));
+                Entry.Value()->hints_["nativeListingRevision"] = native::ListingRevision(Data).token_; Entry.Value()->id_.revision_.reset();
+            }
+            if (!Nested) Request.sources_.push_back({*Entry.Value(), Denied, writer_});
+        }
+        QVERIFY(write(Folder + "/outside.txt", "keep outside selected roots"));
+        if (Nested) {
+            auto Parent = writer_->Inspect(at(Folder + "/selected"), {}); QVERIFY(Parent.HasValue() && Parent.Value());
+            Request.sources_.push_back({*Parent.Value(), Denied, writer_});
+        }
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        int Questions = 0, Confirmations = 0; QElapsedTimer Timer; Timer.start();
+        while (Job.Value().completion_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready && Timer.elapsed() < 30000) {
+            const auto State = Scheduler.Snapshot(Job.Value().id_); QVERIFY(State.HasValue());
+            if (State.Value().interaction_) {
+                const auto& Query = *State.Value().interaction_; auto Answer = InteractionChoice::Confirm;
+                if (Query.kind_ == InteractionKind::DeleteConfirmation) ++Confirmations;
+                else {
+                    QCOMPARE(Query.kind_, InteractionKind::Elevation); ++Questions;
+                    for (const auto Expected : {InteractionChoice::Elevate, InteractionChoice::ElevateAll, InteractionChoice::Retry, InteractionChoice::SkipAll})
+                        QVERIFY(std::ranges::find(Query.choices_, Expected) != Query.choices_.end());
+                    Answer = Choice == 0 ? InteractionChoice::Elevate : Choice == 1 ? InteractionChoice::ElevateAll : Choice == 2 ? InteractionChoice::Retry : InteractionChoice::SkipAll;
+                    if (Choice == 2) Denied->deny_ = false;
+                }
+                QVERIFY(Scheduler.Reply(Job.Value().id_, {Query.id_, Answer, {}}).HasValue());
+            }
+            QTest::qWait(10);
+        }
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+        const auto& Result = Job.Value().completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "directory delete failed");
+        QCOMPARE(Confirmations, 1); QCOMPARE(Questions, Choice == 0 ? 2 : 1); QCOMPARE(Launches.load(), Choice <= 1 ? 2 : 0);
+        for (const auto* Name : {"blocked-a", "blocked-b", "normal"})
+            QCOMPARE(QFileInfo::exists(root_->filePath(Folder + "/selected/" + Name)), Choice == 3 && QString(Name) != "normal");
+        QVERIFY(QFileInfo::exists(root_->filePath(Folder + "/outside.txt"))); QVERIFY(Result.cleanupErrors_.empty());
+    }
+    void deleteDirectoryHelperGuards_data()
+    {
+        QTest::addColumn<int>("Guard");
+        QTest::newRow("entry-budget") << 0; QTest::newRow("depth-budget") << 1; QTest::newRow("replaced-root") << 2;
+    }
+    void deleteDirectoryHelperGuards()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local directory helper fixture.");
+        QFETCH(int, Guard); const auto Folder = QString("directory-helper-guard-%1").arg(Guard);
+        QVERIFY(QDir().mkpath(root_->filePath(Folder + "/nested"))); QVERIFY(write(Folder + "/nested/keep.txt", "keep"));
+        auto Entry = writer_->Inspect(at(Folder), {}); QVERIFY(Entry.HasValue() && Entry.Value());
+        FileElevationRequest Request; Request.action_ = FileElevationAction::Remove; Request.source_ = *Entry.Value();
+        Request.destination_ = Entry.Value()->locator_; Request.recursiveRemoval_ = true;
+        if (Guard == 0) Request.maxEntries_ = 1;
+        if (Guard == 1) Request.maxDepth_ = 0;
+        bool Replaced = false;
+        auto Service = hc::permissions::MakeFileElevationService(FixtureLauncher([&] {
+            if (Guard == 2) { Replaced = QDir().rename(root_->filePath(Folder), root_->filePath(Folder + "-original")); QDir().mkpath(root_->filePath(Folder + "/nested")); write(Folder + "/nested/keep.txt", "replacement"); }
+        }));
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); JobRequest Options;
+        auto Job = Scheduler.Submit(Options, std::make_unique<FileElevationJob>(Request, Service)); QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(15)) == std::future_status::ready);
+        const auto& Result = Job.Value().completion_.get(); QCOMPARE(Result.snapshot_.state_, JobState::Failed);
+        QVERIFY(QFileInfo::exists(root_->filePath(Folder + "/nested/keep.txt")));
+        if (Guard == 2) { QVERIFY(Replaced); QVERIFY(QFileInfo::exists(root_->filePath(Folder + "-original/nested/keep.txt"))); }
+        QVERIFY(Result.snapshot_.error_);
+        QVERIFY2(Result.snapshot_.error_->category_ == (Guard == 2 ? ErrorCategory::StaleRevision : ErrorCategory::BudgetExceeded),
+                 Result.snapshot_.error_->code_.c_str());
+        QVERIFY(Result.cleanupErrors_.empty());
+    }
     void deleteProtectedMetadataHelper_data()
     {
-        QTest::addColumn<bool>("Change"); QTest::newRow("unchanged") << false; QTest::newRow("changed-during-uac") << true;
+        QTest::addColumn<bool>("Directory"); QTest::addColumn<bool>("Change");
+        for (bool Directory : {false, true}) for (bool Change : {false, true})
+            QTest::newRow(qPrintable(QString("directory-%1-change-%2").arg(Directory).arg(Change))) << Directory << Change;
     }
     void deleteProtectedMetadataHelper()
     {
         if (kind_ != LocatorKind::Local) QSKIP("Local protected fixture.");
-        QFETCH(bool, Change);
+        QFETCH(bool, Directory); QFETCH(bool, Change);
         // The validation shell may enable backup privilege. Disable it in this
         // test process so FILE_READ_ATTRIBUTES really observes the owned ACL.
         HANDLE TokenRaw = nullptr; QVERIFY(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &TokenRaw));
@@ -1445,13 +1565,30 @@ private slots:
         Disabled.PrivilegeCount = 1; QVERIFY(LookupPrivilegeValueW(nullptr, SE_BACKUP_NAME, &Disabled.Privileges[0].Luid));
         QVERIFY(AdjustTokenPrivileges(Token.value_, FALSE, &Disabled, sizeof(Previous), &Previous, &PreviousSize));
         const auto RestorePrivilege = qScopeGuard([&] { AdjustTokenPrivileges(Token.value_, FALSE, &Previous, 0, nullptr, nullptr); });
-        const auto Name = QString("delete-protected-%1.txt").arg(Change); QVERIFY(write(Name, "owned source"));
+        const auto Name = QString("delete-protected-%1-%2").arg(Directory).arg(Change);
+        if (Directory) {
+            QVERIFY(QDir().mkpath(root_->filePath(Name + "/nested")));
+            QVERIFY(write(Name + "/nested/owned.txt", "owned source"));
+            // Restrict the root only. Changing an inherited parent ACL otherwise
+            // strips the children's inherited access during this owned fixture.
+            for (const auto& Child : {Name + "/nested/owned.txt", Name + "/nested"}) {
+                const auto NativeChild = hc::filetools::NativePath(root_->filePath(Child));
+                hc::filetools::Handle Pin(CreateFileW(reinterpret_cast<LPCWSTR>(NativeChild.utf16()), READ_CONTROL | WRITE_DAC,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+                QVERIFY(Pin.value_ != INVALID_HANDLE_VALUE);
+                PACL Dacl = nullptr; PSECURITY_DESCRIPTOR Sd = nullptr;
+                QCOMPARE(GetSecurityInfo(Pin.value_, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &Dacl, nullptr, &Sd), DWORD(ERROR_SUCCESS));
+                const auto Free = qScopeGuard([&] { LocalFree(Sd); });
+                QCOMPARE(SetSecurityInfo(Pin.value_, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                    nullptr, nullptr, Dacl, nullptr), DWORD(ERROR_SUCCESS));
+            }
+        } else QVERIFY(write(Name, "owned source"));
         auto Source = writer_->Inspect(at(Name), {}); QVERIFY(Source.HasValue() && Source.Value()); auto Entry = *Source.Value();
         const auto Native = hc::filetools::NativePath(root_->filePath(Name)); WIN32_FILE_ATTRIBUTE_DATA Data{};
         QVERIFY(GetFileAttributesExW(reinterpret_cast<LPCWSTR>(Native.utf16()), GetFileExInfoStandard, &Data));
         Entry.id_.revision_ = native::ListingRevision(Data);
         hc::filetools::Handle Protected(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()), READ_CONTROL | WRITE_DAC | WRITE_OWNER,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr));
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
         QVERIFY(Protected.value_ != INVALID_HANDLE_VALUE); DWORD Code = 0;
         const auto Original = hc::permissions::security::Descriptor(Protected.value_, Code); QCOMPARE(Code, DWORD(ERROR_SUCCESS));
         const auto Restore = qScopeGuard([&] { if (Protected.value_ != INVALID_HANDLE_VALUE) hc::permissions::security::Restore(Protected.value_, Original); });
@@ -1479,10 +1616,13 @@ private slots:
             for (const auto& Listed : Page.Value().entries_) if (Listed.name_ == Name.toStdString()) { Entry = Listed; Found = true; }
         }
         Cursor.Value().reset(); QVERIFY(Found); QVERIFY(!Entry.id_.revision_); QVERIFY(Entry.hints_.contains("nativeListingRevision"));
-        int Launches = 0; DWORD RestoreCode = ERROR_SUCCESS;
+        int Launches = 0; DWORD RestoreCode = ERROR_SUCCESS; bool Replaced = false;
         auto Launch = FixtureLauncher([&] {
             ++Launches; RestoreCode = hc::permissions::security::Restore(Protected.value_, Original);
-            if (Change) write(Name, "changed while awaiting UAC");
+            if (Change && Directory) {
+                Replaced = QDir().rename(root_->filePath(Name), root_->filePath(Name + "-original"));
+                if (Replaced) { QDir().mkpath(root_->filePath(Name)); write(Name + "/replacement.txt", "replacement"); }
+            } else if (Change) write(Name, "changed while awaiting UAC");
         });
         FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.sources_ = {{Entry, reader_, writer_}};
         Request.confirmDelete_ = false; Request.fileLockInteractions_ = true; Request.elevation_ = hc::permissions::MakeFileElevationService(Launch);
@@ -1498,6 +1638,7 @@ private slots:
         // can complete an already successful delete disposition.
         CloseHandle(Protected.value_); Protected.value_ = INVALID_HANDLE_VALUE;
         QCOMPARE(QFileInfo::exists(root_->filePath(Name)), Change); QVERIFY(Result.cleanupErrors_.empty());
+        if (Directory && Change) { QVERIFY(Replaced); QVERIFY(QFileInfo::exists(root_->filePath(Name + "-original/nested/owned.txt"))); }
     }
     void r10CopyElevationPreservesCompletedItems()
     {

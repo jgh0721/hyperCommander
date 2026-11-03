@@ -19,6 +19,10 @@ namespace hc::operations
         std::vector<std::byte> content_;
         std::uint64_t maxBytes_ = std::numeric_limits<std::uint64_t>::max(), bytesPerSecondLimit_ = 0;
         bool allowReadOnlyRemoval_ = false, requiresPublishedDestination_ = false;
+        // Only an unscanned delete subtree may request recursive removal.
+        // Ordinary directory cleanup and move-source removal stay nonrecursive.
+        bool recursiveRemoval_ = false;
+        std::size_t maxEntries_ = std::numeric_limits<std::size_t>::max(), maxDepth_ = 32;
         // Security changes are independent, explicit jobs, never a side effect
         // of selecting Elevate for a copy, move, delete or create operation.
         bool grantAccess_ = false;

@@ -147,7 +147,7 @@ void Run(const std::shared_ptr<SessionState>& S) {
     while(std::chrono::steady_clock::now()<End) {
         const bool Cancel=S->cancelled_||S->context_.Check({}).has_value();
         const bool Paused=!S->commit_&&S->context_.pauseRequested_&&S->context_.pauseRequested_();
-        QJsonObject Command{{"kind","control"},{"cancel",Cancel&&!S->commit_},{"pause",Paused},{"commit",S->commit_.load()}};
+        QJsonObject Command{{"kind","control"},{"cancel",Cancel&&(!S->commit_||S->original_.recursiveRemoval_)},{"pause",Paused},{"commit",S->commit_.load()}};
         const auto SourceCheck=[&]()->std::optional<Error>{
             auto C=S->context_;if(S->commit_){C.stopToken_={};C.deadline_=std::chrono::steady_clock::time_point::max();}
             auto Fresh=S->original_.sourceReader_->Stat(S->original_.source_->id_,C).get();
@@ -247,6 +247,10 @@ class Service final:public IFileElevationService {
 public:
     explicit Service(FileElevationLauncher Launcher):launcher_(std::move(Launcher)){}
     bool CanExecute(const FileElevationRequest& R) const override {
+        if (R.recursiveRemoval_ && (!R.source_ || !R.source_->directory_
+            || (R.source_->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) || !R.source_->id_.revision_
+            || R.destination_ != R.source_->locator_ || !R.maxEntries_
+            || (R.action_ != FileElevationAction::Remove && R.action_ != FileElevationAction::Recycle))) return false;
         if (R.action_ == FileElevationAction::Metadata && (!R.source_ || !R.metadataPatch_.Valid()
             || R.metadataPatch_.Empty() || R.destination_ != R.source_->locator_ || !R.source_->id_.revision_)) return false;
         if(R.jobId_.empty()||R.destination_.kind_!=LocatorKind::Local||!R.destination_.nesting_.empty()||!Local(Text(R.destination_.root_)))return false;
@@ -266,6 +270,7 @@ public:
             {"expectedExists",R.expected_.exists_},{"expectedRevision",R.expected_.revision_?Text(R.expected_.revision_->token_):QString()},
             {"writeCheckpoints",bool(Context.writeCheckpoint_)},{"readOnly",R.allowReadOnlyRemoval_},{"flushFileContents",Context.flushFileContents_},{"requirePublished",R.requiresPublishedDestination_},{"bytesLimit",QString::number(R.maxBytes_)},{"rate",QString::number(R.bytesPerSecondLimit_)},
             {"metadata",R.copyOptions_.metadata_},{"verify",R.copyOptions_.verify_},{"acl",R.copyOptions_.acl_},{"streams",R.copyOptions_.streams_},
+            {"recursiveRemoval",R.recursiveRemoval_},{"entryLimit",QString::number(R.maxEntries_)},{"depthLimit",QString::number(R.maxDepth_)},
             {"content",QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(R.content_.data()),qsizetype(R.content_.size())).toBase64())}};
         const bool Streamed=R.source_&&(R.source_->locator_.kind_!=LocatorKind::Local||!Local(Text(R.source_->locator_.root_)));
         Object["streamed"]=Streamed;
@@ -288,7 +293,7 @@ public:
             auto Fresh=Writer->Inspect(R.source_->locator_,Context);
             const bool ProtectedRemoval = !Fresh.HasValue() && Fresh.Failure().category_ == ErrorCategory::AccessDenied
                 && (R.action_ == FileElevationAction::Remove || R.action_ == FileElevationAction::Recycle)
-                && !R.source_->directory_ && !(R.source_->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) && R.source_->id_.revision_;
+                && !(R.source_->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) && R.source_->id_.revision_;
             if (ProtectedRemoval) {
                 // An unprivileged Inspect must not prevent the requested UAC.
                 // The helper verifies this revision and pins parents before commit.
@@ -386,7 +391,29 @@ DWORD ExecuteFileElevation(const QJsonObject& Bootstrap) {
     if (!Status.error_ && Action == FileElevationAction::Metadata && (!Source || Source->attributes_ != std::uint32_t(R["sourceAttributes"].toInt())))
         Status.error_ = Failure(ERROR_FILE_INVALID, "metadata-attributes-changed");
     const Locator Destination{LocatorKind::Local,String(R["destination"])};
-    if(!Status.error_&&Action==FileElevationAction::Copy&&R["streamed"].toBool()) {
+    const bool RecursiveRemoval = R["recursiveRemoval"].toBool();
+    if (RecursiveRemoval) {
+        bool EntriesValid = false, DepthValid = false;
+        const auto Entries = R["entryLimit"].toString().toULongLong(&EntriesValid);
+        const auto Depth = R["depthLimit"].toString().toULongLong(&DepthValid);
+        if (!Status.error_ && (!EntriesValid || !DepthValid || !Entries || !Source || !Source->directory_
+            || Source->locator_ != Destination || (Source->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)
+            || (Action != FileElevationAction::Remove && Action != FileElevationAction::Recycle)))
+            Status.error_ = Failure(ERROR_INVALID_PARAMETER, "elevation-recursive-removal");
+        if (!Status.error_) {
+            // Reuse normal planning and handle-based deletion, including link,
+            // identity and budget checks. Validate the tree before any mutation.
+            FileOperationRequest Request; Request.operation_ = FileOperation::Delete;
+            Request.sources_ = {{*Source, Reader, Writer}}; Request.confirmDelete_ = false;
+            Request.deleteWhileListing_ = false;
+            Request.deleteMode_ = Action == FileElevationAction::Recycle ? DeleteMode::Recycle : DeleteMode::Permanent;
+            Request.readOnly_ = Context.allowReadOnlyRemoval_ ? ReadOnlyPolicy::Allow : ReadOnlyPolicy::Ask;
+            Request.maxEntries_ = std::size_t(Entries); Request.maxDepth_ = std::size_t(Depth);
+            Request.maxBytes_ = R["bytesLimit"].toString().toULongLong();
+            auto Prepared = PrepareFileOperation(std::move(Request), Context);
+            if (Prepared.HasValue()) Task = std::move(Prepared.Value().task_); else Status.error_ = Prepared.Failure();
+        }
+    } else if(!Status.error_&&Action==FileElevationAction::Copy&&R["streamed"].toBool()) {
         if(R.contains("source")||R["acl"].toBool()||R["streams"].toBool())Status.error_=Failure(ERROR_NOT_SUPPORTED,"elevation-provider-extras");
         else {auto Copy=std::make_unique<IncomingCopy>(Writer,Destination,R,Input);Incoming=Copy.get();Task=std::move(Copy);}
     } else if(!Status.error_&&Action==FileElevationAction::Copy) {
@@ -409,13 +436,14 @@ DWORD ExecuteFileElevation(const QJsonObject& Bootstrap) {
         Input=*Command;
         if(Input.contains("sourceError")){Status.error_=DecodeError(Input["sourceError"].toObject());Final=JobState::Failed;}
         if(Status.error_)Status.finished_=true;
-        if((*Command)["cancel"].toBool()&&!Gate){Stop.request_stop();Status.error_=Failure(ERROR_CANCELLED,"elevation-cancelled");Status.finished_=true;Final=JobState::Cancelled;}
+        if((*Command)["cancel"].toBool()&&(!Gate||RecursiveRemoval)){Stop.request_stop();Status.error_=Failure(ERROR_CANCELLED,"elevation-cancelled");Status.finished_=true;Final=JobState::Cancelled;}
         if(!Status.finished_&&!(*Command)["pause"].toBool()&&std::chrono::steady_clock::now()>=NextAdvance) {
-            if(Status.readyToCommit_&&(*Command)["commit"].toBool()){Gate=true;Context.stopToken_={};}
+            if(Status.readyToCommit_&&(*Command)["commit"].toBool()){Gate=true;if(!RecursiveRemoval)Context.stopToken_={};}
             if(!Status.readyToCommit_||Gate) {
                 if(Task) {
                     auto Step=Task->Advance({String(R["jobId"]),Context,{},0,Gate});NextAdvance=std::chrono::steady_clock::now()+Step.deferFor_;if(Step.progress_)Status.bytesDone_=Step.progress_->bytesDone_;
-                    if(Step.item_){Status.destinationCommitted_|=Step.item_->destinationCommitted_;Status.sourceRemoved_|=Step.item_->sourceRemoved_;}
+                    if(Step.item_){Status.destinationCommitted_|=Step.item_->destinationCommitted_;
+                        if (!RecursiveRemoval || (Step.item_->source_ && Step.item_->source_->locator_ == Source->locator_)) Status.sourceRemoved_|=Step.item_->sourceRemoved_;}
                     if(Step.next_==JobState::Committing)Status.readyToCommit_=true;
                     if(IsTerminal(Step.next_)){Status.finished_=true;Status.error_=Step.error_;Final=Step.next_;}
                     if(Step.next_==JobState::WaitingForUser){Status.finished_=true;Status.error_=Failure(ERROR_FILE_INVALID,"elevation-unapproved-interaction");}

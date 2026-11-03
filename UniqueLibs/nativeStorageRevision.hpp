@@ -18,6 +18,11 @@ namespace hc::storage::native
     }
     inline ResourceRevision ListingRevision(const WIN32_FILE_ATTRIBUTE_DATA& Data)
     {
+        // A protected directory can have only enumeration metadata. Match both
+        // birth and modification times once, then upgrade it to a file-ID token.
+        if (Data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            return {"listing-directory:" + std::to_string(FileTimeTicks(Data.ftCreationTime))
+                + ":" + std::to_string(FileTimeTicks(Data.ftLastWriteTime))};
         // SMB may synthesize different creation times for attribute-only and
         // read handles. Creation time is display metadata, not a content version.
         return {"file:" + std::to_string(FileTimeTicks(Data.ftLastWriteTime))
@@ -162,10 +167,9 @@ namespace hc::storage::native
             if (!IsRedirectedPath(Path) && !Expected.token_.starts_with("rdp:") && Expected == HandleRevision(Info)) return true;
         }
         else if (Expected == HandleRevision(Info)) return true;
-        if (Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return false;
         const WIN32_FILE_ATTRIBUTE_DATA Data{Info.dwFileAttributes, Info.ftCreationTime,
             Info.ftLastAccessTime, Info.ftLastWriteTime, Info.nFileSizeHigh, Info.nFileSizeLow};
-        // Cheap directory listings have no file ID. Accept only the exact
+        // Cheap listings have no file ID. Accept only the exact
         // metadata-only token; Stat then upgrades it to a handle revision.
         return Expected == ListingRevision(Data);
     }
