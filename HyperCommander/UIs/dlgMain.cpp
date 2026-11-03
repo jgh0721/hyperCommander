@@ -129,6 +129,11 @@ void QMainUI::restoreInputFocus()
     // Recover input only when Windows already has HC in front. Never activate
     // HC over another application or one of its still-open command windows.
     if (GetForegroundWindow() != Root) return;
+    // Console exit and repeated native activation can leave Qt inactive even
+    // though Windows already returned HC to the foreground. setFocus alone
+    // only remembers the input widget while Qt still considers us inactive.
+    if (QApplication::activeWindow() != this) QApplication::setActiveWindow(this);
+    if (GetActiveWindow() != Root) SetActiveWindow(Root);
     const auto Current = QApplication::focusWidget();
     const auto Native = GetFocus();
     const bool CurrentValid = Current && Current != this && Current->window() == this && Current->isVisible() && Current->isEnabled();
@@ -156,6 +161,14 @@ bool QMainUI::nativeEventFilter(const QByteArray& Type, void* Message, qintptr* 
     if (Type != "windows_generic_MSG") return false;
     const auto* Native = static_cast<MSG*>(Message);
     const auto Root = reinterpret_cast<HWND>(internalWinId());
+    // Qt can suppress a duplicate activation for its remembered focus window.
+    // Recover after native dispatch, including when no WindowActivate is sent.
+    if (Root && Native->hwnd == Root
+        && ((Native->message == WM_ACTIVATE && LOWORD(Native->wParam) != WA_INACTIVE)
+            || (Native->message == WM_ACTIVATEAPP && Native->wParam))) {
+        activationFocusRestorePending_ = true;
+        requestInputFocusRestore();
+    }
     if (Root && (Native->hwnd == Root || IsChild(Root, Native->hwnd))
         && (Native->message == WM_SETFOCUS || Native->message == WM_KILLFOCUS)) requestInputFocusRestore();
     // 키보드 미디어 키. 미리 듣기 중일 때만 받고, 아니면 다른 재생 앱이 받도록 넘긴다.
@@ -727,6 +740,9 @@ void QMainUI::initialize()
     // and viewers. Focus outside both panels keeps the current command source.
     qApp->installEventFilter(this);
     qApp->installNativeEventFilter(this);
+    connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) {
+        if (State == Qt::ApplicationActive) requestInputFocusRestore();
+    });
     setActivePanel(currentPanelIndex);
 
     workspace_ = hc::workspace::Load(hc::settings::WorkspaceSettings()); workspaceLoaded_ = true;

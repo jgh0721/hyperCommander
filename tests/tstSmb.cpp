@@ -307,7 +307,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -6264,11 +6264,11 @@ private slots:
     {
         auto* Panel = panels_.front();
         auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
-        main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
+        const auto Root = reinterpret_cast<HWND>(main_->winId());
+        main_->showNormal(); QVERIFY(ActivateTestWindow(Root));
         Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
         const auto Focus = GetFocus(); QVERIFY(Focus); QPointer<QWidget> Input = QApplication::focusWidget(); QVERIFY(Input);
-        SetForegroundWindow(reinterpret_cast<HWND>(main_->winId()));
-        QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(main_->winId()));
+        QCOMPARE(GetForegroundWindow(), Root);
         const auto Catalog = hc::document::BuildDocumentHandlerCatalog(hc::settings::AppSettings(), QCoreApplication::applicationDirPath());
         const auto Found = Catalog.targets_.find("builtin.hyperviewer"); QVERIFY(Found != Catalog.targets_.end());
         QVERIFY2(Found->second.descriptor_.available_, "The pinned built-in viewer must be available");
@@ -6343,8 +6343,7 @@ private slots:
         QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(model(Panel)->rowCount(), 7);
         auto* Command = main_->findChild<fm::ui::CommandLine*>("hc.commandLine"); QVERIFY(Command); Command->show();
         const auto Root = reinterpret_cast<HWND>(main_->winId());
-        main_->showNormal(); main_->activateWindow(); SetForegroundWindow(Root);
-        QTRY_COMPARE(GetForegroundWindow(), Root);
+        main_->showNormal(); QVERIFY(ActivateTestWindow(Root));
         Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
         View->BaseView()->setFocusedRowIndex(2);
         if (Target == 2) { Command->lineEdit()->clear(); Command->lineEdit()->setFocus(); }
@@ -6369,7 +6368,7 @@ private slots:
                 QTest::mouseClick(Button, Qt::LeftButton);
                 QTRY_VERIFY(main_->isMinimized());
             }
-            QVERIFY(SetForegroundWindow(PeerWindow));
+            QVERIFY(ActivateTestWindow(PeerWindow));
             QTRY_COMPARE(GetForegroundWindow(), PeerWindow);
             // Exercise a valid Qt fallback while the native panel is inactive.
             // A fallback must not replace the user's last input destination.
@@ -6378,11 +6377,11 @@ private slots:
             if (Minimize) ShowWindow(Root, SW_RESTORE);
             // The foreground peer grants activation just as the taskbar does.
             // Do not repair either Qt or native child focus from the harness.
-            QVERIFY(SendMessageW(PeerWindow, WM_APP + 117, reinterpret_cast<WPARAM>(Root), 0));
+            QVERIFY(GetForegroundWindow() == Root || SendMessageW(PeerWindow, WM_APP + 117, reinterpret_cast<WPARAM>(Root), 0));
             QTRY_COMPARE(GetForegroundWindow(), Root);
             QTest::qWait(150); // Let native activation and queued recovery complete without clicking a panel.
-            QCOMPARE(QApplication::focusWidget(), Input.data());
-            QVERIFY(GetFocus() && (GetFocus() == Root || IsChild(Root, GetFocus())));
+            QTRY_COMPARE(QApplication::focusWidget(), Input.data());
+            QTRY_VERIFY(GetFocus() && (GetFocus() == Root || IsChild(Root, GetFocus())));
             INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
             Keys[0].ki.wVk = Keys[1].ki.wVk = Target == 2 ? 'X' : VK_DOWN;
             Keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
@@ -6391,6 +6390,103 @@ private slots:
                 auto* Editor = qobject_cast<QLineEdit*>(Input.data()); QVERIFY(Editor);
                 QTRY_COMPARE(Editor->text(), QString(Cycle + 1, 'x'));
             } else QTRY_COMPARE(View->BaseView()->focusedRowIndex(), Row + Cycle + 1);
+        }
+    }
+
+    void windowActivationStateRepairUi()
+    {
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { QApplication::setActiveWindow(main_); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (int I = 0; I < 6; ++I) {
+            QFile File(Directory.filePath(QString("entry%1.txt").arg(I)));
+            QVERIFY(File.open(QIODevice::WriteOnly)); File.write("activation fixture");
+        }
+        auto* Command = main_->findChild<fm::ui::CommandLine*>("hc.commandLine"); QVERIFY(Command); Command->show();
+        const auto Root = reinterpret_cast<HWND>(main_->winId());
+        for (int Target = 0; Target < 3; ++Target) {
+            auto* Panel = panels_[Target == 1 ? 1 : 0];
+            Panel->ChangeCurrentPath(Directory.path(), {});
+            QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(model(Panel)->rowCount(), 7);
+            auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+            QVERIFY(ActivateTestWindow(Root));
+            Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+            View->BaseView()->setFocusedRowIndex(2);
+            if (Target == 2) { Command->lineEdit()->clear(); Command->lineEdit()->setFocus(); }
+            QPointer<QWidget> Input = QApplication::focusWidget(); QVERIFY(Input);
+            // Windows can reactivate the same HWND while Qt still remembers it
+            // as inactive. A repeated native activation must repair both layers.
+            QApplication::setActiveWindow(nullptr);
+            QCOMPARE(GetForegroundWindow(), Root);
+            QVERIFY(PostMessageW(Root, WM_ACTIVATE, WA_ACTIVE, 0));
+            QTRY_COMPARE(QApplication::activeWindow(), main_);
+            QTRY_COMPARE(QApplication::focusWidget(), Input.data());
+            QVERIFY(GetFocus());
+            INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
+            Keys[0].ki.wVk = Keys[1].ki.wVk = Target == 2 ? 'X' : VK_DOWN;
+            Keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2));
+            if (Target == 2) QTRY_COMPARE(Command->lineEdit()->text(), QString("x"));
+            else QTRY_COMPARE(View->BaseView()->focusedRowIndex(), 3);
+        }
+    }
+
+    void commandLineFocusReturnUi()
+    {
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto* Panel = panels_.front();
+        Panel->ChangeCurrentPath(Directory.path(), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading());
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        auto* Command = main_->findChild<fm::ui::CommandLine*>("hc.commandLine"); QVERIFY(Command);
+        auto* Editor = Command->lineEdit();
+        const auto Root = reinterpret_cast<HWND>(main_->winId());
+        main_->showNormal(); QVERIFY(ActivateTestWindow(Root));
+        Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+        INPUT Shortcut[4]{};
+        for (auto& Key : Shortcut) Key.type = INPUT_KEYBOARD;
+        Shortcut[0].ki.wVk = Shortcut[3].ki.wVk = VK_CONTROL;
+        Shortcut[1].ki.wVk = Shortcut[2].ki.wVk = VK_OEM_2;
+        Shortcut[2].ki.dwFlags = Shortcut[3].ki.dwFlags = KEYEVENTF_KEYUP;
+        QCOMPARE(SendInput(4, Shortcut, sizeof(INPUT)), UINT(4));
+        QTRY_COMPARE(QApplication::focusWidget(), Editor);
+        const auto TypeText = [](const QString& Text) {
+            QList<INPUT> Keys;
+            for (const auto Ch : Text) {
+                const auto Key = VkKeyScanW(Ch.unicode());
+                if (Key == -1 || HIBYTE(Key)) return false;
+                INPUT Down{}; Down.type = INPUT_KEYBOARD; Down.ki.wVk = LOBYTE(Key);
+                Keys.append(Down); Down.ki.dwFlags = KEYEVENTF_KEYUP; Keys.append(Down);
+            }
+            return SendInput(UINT(Keys.size()), Keys.data(), sizeof(INPUT)) == Keys.size();
+        };
+        const auto Enter = [] {
+            INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
+            Keys[0].ki.wVk = Keys[1].ki.wVk = VK_RETURN; Keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            return SendInput(2, Keys, sizeof(INPUT)) == 2;
+        };
+        for (int Cycle = 0; Cycle < 3; ++Cycle) {
+            // A unique title identifies only the console owned by this test.
+            const auto Title = QString("HC-command-focus-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+            HWND Console = nullptr;
+            const auto CloseConsole = qScopeGuard([&] { if (Console && IsWindow(Console)) PostMessageW(Console, WM_CLOSE, 0, 0); });
+            // Set up the command directly; launch, exit and the return probe
+            // must still cross the real Windows keyboard input queue.
+            Editor->setText(QString("cmd /d /k title %1").arg(Title));
+            QVERIFY(Enter());
+            QTRY_VERIFY_WITH_TIMEOUT((Console = FindWindowW(nullptr, Title.toStdWString().c_str())), 5000);
+            QTRY_COMPARE(GetForegroundWindow(), Console);
+            QVERIFY(TypeText("exit")); QVERIFY(Enter());
+            QTRY_VERIFY_WITH_TIMEOUT(!IsWindow(Console), 5000);
+            QTRY_COMPARE(GetForegroundWindow(), Root);
+            // Do not activate HC or repair either focus layer after console exit.
+            QTRY_COMPARE(QApplication::activeWindow(), main_);
+            QTRY_COMPARE(QApplication::focusWidget(), Editor);
+            QVERIFY(GetFocus());
+            QVERIFY(TypeText("x"));
+            QTRY_COMPARE(Editor->text(), QString("x"));
         }
     }
 
