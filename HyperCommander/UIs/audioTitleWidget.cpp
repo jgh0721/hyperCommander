@@ -21,14 +21,19 @@
 /// 선언 헤더파일들
 
 /// 플랫폼/프레임워크 헤더파일( Windows, Boost, Qt, ... )
+#include <QApplication>
 #include <QDesktopServices>
 #include <QFileInfo>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QScreen>
+#include <QSignalBlocker>
 #include <QStyle>
+#include <QTimer>
 #include <QToolButton>
 #include <QUrl>
 
@@ -56,8 +61,9 @@ namespace hc::ui
                 case MediaGlyph::Pause: Bar( 2.6, 2.0, 2.4, 8.0 ); Bar( 7.0, 2.0, 2.4, 8.0 ); break;
                 case MediaGlyph::Volume:
                     Painter.drawPolygon( Speaker );
-                    Painter.drawArc( QRectF( 5.6, 3.6, 4.8, 4.8 ), -60 * 16, 120 * 16 );
-                    Painter.drawArc( QRectF( 4.6, 1.6, 8.4, 8.8 ), -60 * 16, 120 * 16 );
+                    // 둥근 펜 끝까지 12 × 12 픽스맵 안에 남겨 바깥 음파가 잘리지 않게 한다.
+                    Painter.drawArc( QRectF( 4.0, 3.6, 5.2, 4.8 ), -60 * 16, 120 * 16 );
+                    Painter.drawArc( QRectF( 2.8, 1.6, 8.4, 8.8 ), -60 * 16, 120 * 16 );
                     break;
                 case MediaGlyph::Mute:
                     Painter.drawPolygon( Speaker ); Painter.drawLine( QPointF( 8.4, 4.4 ), QPointF( 11.2, 7.6 ) ); Painter.drawLine( QPointF( 11.2, 4.4 ), QPointF( 8.4, 7.6 ) );
@@ -245,7 +251,33 @@ namespace hc::ui
                 QDesktopServices::openUrl( QUrl::fromLocalFile( Track->localPath_ ) );
         } );
         connect( seek_, &AudioSeekBar::sigSeekRequested, this, [ this ]( qint64 Position ) { if( session_ ) session_->Seek( Position ); } );
-        volume_->installEventFilter( this );
+        // Popup의 마우스 grab 없이 띄워 아이콘의 휠·음소거와 패널 입력 포커스를 유지한다.
+        volumePopup_ = new QFrame( this, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus );
+        volumePopup_->setObjectName( "hc.audio.volumePopup" ); volumePopup_->setAccessibleName( tr( "음량 조절" ) );
+        volumePopup_->setAttribute( Qt::WA_ShowWithoutActivating );
+        auto* VolumeLayout = new QHBoxLayout( volumePopup_ );
+        VolumeLayout->setContentsMargins( 12, 8, 12, 8 ); VolumeLayout->setSpacing( 8 );
+        volumeSlider_ = new QSlider( Qt::Horizontal, volumePopup_ );
+        volumeSlider_->setObjectName( "hc.audio.titleVolumeSlider" ); volumeSlider_->setAccessibleName( tr( "음량" ) );
+        volumeSlider_->setRange( 0, 100 ); volumeSlider_->setSingleStep( 5 ); volumeSlider_->setPageStep( 10 );
+        volumeSlider_->setFixedSize( 124, 24 ); volumeSlider_->setFocusPolicy( Qt::NoFocus );
+        volumeText_ = new QLabel( volumePopup_ ); volumeText_->setObjectName( "hc.audio.titleVolumeText" );
+        volumeText_->setFixedWidth( 40 ); volumeText_->setAlignment( Qt::AlignRight | Qt::AlignVCenter );
+        VolumeLayout->addWidget( volumeSlider_ ); VolumeLayout->addWidget( volumeText_ );
+        volumeHideTimer_ = new QTimer( this ); volumeHideTimer_->setInterval( 220 );
+        connect( volumeHideTimer_, &QTimer::timeout, this, [ this ] {
+            // 마우스 grab 중에는 Leave가 생략될 수 있어 표시 중 커서 위치를 계속 확인한다.
+            // 아이콘과 팝업 사이 간격을 건너거나, 바깥에서 손잡이를 끌 때는 닫지 않는다.
+            if( volumeSlider_->isSliderDown() ) return;
+            const auto Cursor = QCursor::pos();
+            if( !QRect( volume_->mapToGlobal( QPoint() ), volume_->size() ).contains( Cursor )
+                && !volumePopup_->frameGeometry().contains( Cursor ) ) hideVolumePopup();
+        } );
+        connect( volumeSlider_, &QSlider::valueChanged, this, [ this ]( int Value ) {
+            if( session_ && session_->Volume() != Value ) session_->SetVolume( Value );
+        } );
+        for( auto* Item : std::initializer_list<QWidget*>{ volume_, volumePopup_, volumeSlider_, volumeText_ } )
+            Item->installEventFilter( this );
         Chrome->installEventFilter( this );
         if( auto* Top = Chrome->window() ) Top->installEventFilter( this );
         connect( &fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, &AudioTitleWidget::refreshTheme );
@@ -306,6 +338,12 @@ namespace hc::ui
         track_->setFixedHeight( wellHeight_ );
         prev_->setIcon( MediaIcon( MediaGlyph::Previous, Fg ) ); next_->setIcon( MediaIcon( MediaGlyph::Next, Fg ) );
         close_->setIcon( MediaIcon( MediaGlyph::Close, Fg, 10 ) ); track_->setIcon( MediaIcon( MediaGlyph::Note, Fg ) );
+        volumePopup_->setPalette( palette() );
+        volumePopup_->setStyleSheet( QString( "QFrame{background:%1;border:1px solid %2;border-radius:6px;}"
+                                             "QLabel{background:transparent;border:0;color:%3;}QSlider{background:transparent;}" )
+                                        .arg( palette().color( QPalette::Window ).name(), palette().color( QPalette::Mid ).name(),
+                                              palette().color( QPalette::WindowText ).name() ) );
+        volumeText_->setFont( fm::style::pixelFont( font(), 11 ) );
         refreshVolume();
         auto Small = fm::style::pixelFont( font(), 11 ); Small.setFeature( QFont::Tag( "tnum" ), 1 );
         for( auto* Label : { position_, duration_, remaining_ } ) Label->setFont( Small );
@@ -320,7 +358,36 @@ namespace hc::ui
         const bool Muted = session_ && session_->Muted();
         volume_->setIcon( MediaIcon( Muted ? MediaGlyph::Mute : MediaGlyph::Volume, foreground_, 14 ) ); volume_->setIconSize( QSize( 14, 14 ) );
         volume_->setAccessibleName( Muted ? tr( "음소거 해제" ) : tr( "음소거" ) );
-        volume_->setToolTip( tr( "%1 · 볼륨 %2% · 휠로 조절" ).arg( volume_->accessibleName() ).arg( session_ ? session_->Volume() : 0 ) );
+        const int Volume = session_ ? session_->Volume() : 0;
+        volume_->setToolTip( tr( "%1 · 볼륨 %2% · 휠로 조절" ).arg( volume_->accessibleName() ).arg( Volume ) );
+        const QSignalBlocker Blocker( volumeSlider_ );
+        volumeSlider_->setValue( Volume ); volumeText_->setText( QString( "%1%" ).arg( Volume ) );
+        volumeSlider_->setAccessibleDescription( Muted ? tr( "음소거 · %1%" ).arg( Volume ) : volumeText_->text() );
+    }
+
+    void AudioTitleWidget::showVolumePopup()
+    {
+        if( !session_ || !volume_->isVisible() ) return;
+        volumeHideTimer_->start();
+        if( volumePopup_->isVisible() ) return;
+        refreshVolume(); volumePopup_->adjustSize();
+        const QRect Anchor( volume_->mapToGlobal( QPoint() ), volume_->size() );
+        auto Position = QPoint( Anchor.center().x() - volumePopup_->width() / 2, Anchor.bottom() + 4 );
+        if( const auto* Screen = volume_->screen() )
+        {
+            const auto Area = Screen->availableGeometry().adjusted( 4, 4, -4, -4 );
+            Position.setX( std::clamp( Position.x(), Area.left(), std::max( Area.left(), Area.right() - volumePopup_->width() + 1 ) ) );
+            if( Position.y() + volumePopup_->height() > Area.bottom() + 1 ) Position.setY( Anchor.top() - volumePopup_->height() - 4 );
+            Position.setY( std::max( Area.top(), Position.y() ) );
+        }
+        volumePopup_->move( Position );
+        // 보이는 동안만 창 바깥 클릭·비활성화도 관찰한다. 이벤트는 원래 대상으로 계속 전달한다.
+        qApp->installEventFilter( this ); volumePopup_->show();
+    }
+
+    void AudioTitleWidget::hideVolumePopup()
+    {
+        volumeHideTimer_->stop(); qApp->removeEventFilter( this ); volumePopup_->hide();
     }
 
     void AudioTitleWidget::refreshState()
@@ -441,11 +508,32 @@ namespace hc::ui
 
     bool AudioTitleWidget::eventFilter( QObject* Object, QEvent* Event )
     {
-        if( Object == volume_ && Event->type() == QEvent::Wheel && session_ )
+        const auto Type = Event->type();
+        const bool VolumeControl = Object == volume_ || Object == volumePopup_ || Object == volumeSlider_ || Object == volumeText_;
+        if( VolumeControl && Type == QEvent::Enter )
         {
+            if( Object == volume_ ) showVolumePopup();
+            if( volumePopup_->isVisible() ) volumeHideTimer_->start();
+        }
+        if( VolumeControl && Type == QEvent::Leave && volumePopup_->isVisible() ) volumeHideTimer_->start();
+        if( VolumeControl && Type == QEvent::Wheel && session_ )
+        {
+            showVolumePopup();
             const auto Steps = static_cast<QWheelEvent*>( Event )->angleDelta().y() / 120;
             if( Steps ) session_->SetVolume( session_->Volume() + Steps * 5 );
-            return true;
+            Event->accept(); return true;
+        }
+        if( volumePopup_->isVisible() )
+        {
+            if( Type == QEvent::MouseButtonPress )
+            {
+                const auto Position = static_cast<QMouseEvent*>( Event )->globalPosition().toPoint();
+                if( !QRect( volume_->mapToGlobal( QPoint() ), volume_->size() ).contains( Position )
+                    && !volumePopup_->frameGeometry().contains( Position ) ) hideVolumePopup();
+            }
+            if( ( Type == QEvent::Hide && ( Object == this || Object == volume_ || Object == volumePopup_ ) )
+                || ( Object == window() && ( Type == QEvent::WindowDeactivate || Type == QEvent::Hide || Type == QEvent::Move || Type == QEvent::Resize ) )
+                || ( Type == QEvent::KeyPress && static_cast<QKeyEvent*>( Event )->key() == Qt::Key_Escape ) ) hideVolumePopup();
         }
         if( Object == parentWidget() && ( Event->type() == QEvent::Resize || Event->type() == QEvent::Show ) ) updateTier();
         if( Object == window() && Event->type() == QEvent::ActivationChange ) refreshTheme();

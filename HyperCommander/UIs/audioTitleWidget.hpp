@@ -8,6 +8,7 @@
 
 class QLabel;
 class QToolButton;
+class QTimer;
 namespace hc::audio { class AudioSession; }
 
 namespace hc::ui
@@ -63,6 +64,8 @@ namespace hc::ui
     private:
         void                refreshTheme();
         void                refreshVolume();
+        void                showVolumePopup();
+        void                hideVolumePopup();
         void                refreshState();
         void                refreshTrack();
         void                refreshPosition();
@@ -77,6 +80,10 @@ namespace hc::ui
         QLabel              *position_ = nullptr, *duration_ = nullptr, *remaining_ = nullptr, *error_ = nullptr;
         AudioSeekBar*       seek_ = nullptr;
         QWidget*            ring_ = nullptr;
+        QWidget*            volumePopup_ = nullptr;
+        QSlider*            volumeSlider_ = nullptr;
+        QLabel*             volumeText_ = nullptr;
+        QTimer*             volumeHideTimer_ = nullptr;
         QList<QWidget*>     separators_;
         Tier                tier_ = Tier::Full;
         QColor              foreground_, glyph_, well_, wellLine_, trackColor_;

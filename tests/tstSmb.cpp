@@ -77,6 +77,8 @@
 #include "commandMgr.hpp"
 #include "UniqueLibs/commandUiBridge.hpp"
 #include "UniqueLibs/audio/audioSession.hpp"
+#include "HyperCommander/UIs/audioTitleWidget.hpp"
+#include <QStyleOptionSlider>
 #include "UniqueLibs/system/systemCommands.hpp"
 #include "HyperCommander/UIs/Components/cmpSystemView.hpp"
 #include "qtitanColumnAdapter.hpp"
@@ -893,7 +895,9 @@ private slots:
         QCOMPARE(IndexOf(Names[0]).data(CFSModel::NowPlayingRole).toInt(), 0);
         // 재생 중 행의 막대는 창이 활성일 때 움직인다(B안). Windows 애니메이션 효과와 무관하다(원격 세션은 이를
         // 끈다). 상태값이 아니라 그린 픽셀이 시간에 따라 바뀌고, 타이머가 실제로 다시 그리게 하는지 본다.
-        main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
+        main_->raise(); main_->activateWindow();
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+        QVERIFY(QTest::qWaitForWindowActive(main_));
         QTRY_VERIFY(View->NowPlayingAnimating());
         auto* GridWidget = View->findChild<Qtitan::Grid*>(); QVERIFY(GridWidget);
         const auto PlayingCell = [&] {
@@ -937,6 +941,71 @@ private slots:
         QCOMPARE(QApplication::focusWidget(), Focus.data());
         QTRY_COMPARE(IndexOf(Names[1]).data(CFSModel::NowPlayingRole).toInt(), 2);
         QTRY_VERIFY(!View->NowPlayingAnimating());
+        // 아이콘의 음파가 픽스맵 경계에서 잘리면 확대 렌더링의 오른쪽 가장자리까지 잉크가 닿는다.
+        for (const qreal Dpr : {1.0, 1.25, 1.5, 2.0}) {
+            const auto Glyph = hc::ui::MediaIcon(hc::ui::MediaGlyph::Volume, Qt::white, 120).pixmap(QSize(120, 120), Dpr).toImage();
+            QVERIFY(!Glyph.isNull());
+            for (int Y = 0; Y < Glyph.height(); ++Y) QCOMPARE(qAlpha(Glyph.pixel(Glyph.width() - 1, Y)), 0);
+        }
+        auto* Volume = Widget->findChild<QToolButton*>("hc.audio.volume"); QVERIFY(Volume && Volume->isVisible());
+        auto* VolumePopup = Widget->findChild<QWidget*>("hc.audio.volumePopup"); QVERIFY(VolumePopup);
+        auto* VolumeSlider = Widget->findChild<QSlider*>("hc.audio.titleVolumeSlider"); QVERIFY(VolumeSlider);
+        auto* VolumeText = Widget->findChild<QLabel*>("hc.audio.titleVolumeText"); QVERIFY(VolumeText);
+        const auto PlayerSize = Widget->size();
+        Audio->SetVolume(50); Audio->SetMuted(false);
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+        QTest::mouseMove(Volume, Volume->rect().center());
+        QTRY_VERIFY(VolumePopup->isVisible());
+        QCOMPARE(VolumeSlider->value(), 50); QCOMPARE(VolumeText->text(), QString("50%"));
+        QCOMPARE(Widget->size(), PlayerSize); QCOMPARE(QApplication::focusWidget(), Focus.data());
+        QVERIFY(VolumePopup->screen()->availableGeometry().contains(VolumePopup->frameGeometry()));
+        const auto Wheel = [&](QWidget* Target, int Delta) {
+            const auto Local = Target->rect().center();
+            QWheelEvent Event(QPointF(Local), QPointF(Target->mapToGlobal(Local)), QPoint(), QPoint(0, Delta),
+                              Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(Target, &Event);
+        };
+        Wheel(Volume, 120); QCOMPARE(Audio->Volume(), 55); QCOMPARE(VolumeSlider->value(), 55);
+        QCOMPARE(VolumeText->text(), QString("55%"));
+        QTest::mouseMove(VolumeSlider, VolumeSlider->rect().center()); QTest::qWait(300);
+        QVERIFY(VolumePopup->isVisible());
+        Wheel(VolumeSlider, -120); QCOMPARE(Audio->Volume(), 50); QCOMPARE(VolumeSlider->value(), 50);
+        // 손잡이를 직접 끌고, 바깥으로 나가도 놓기 전에는 닫히지 않는다.
+        QStyleOptionSlider SliderOption; SliderOption.initFrom(VolumeSlider);
+        SliderOption.orientation = Qt::Horizontal; SliderOption.minimum = 0; SliderOption.maximum = 100;
+        SliderOption.sliderPosition = SliderOption.sliderValue = VolumeSlider->value();
+        const auto Handle = VolumeSlider->style()->subControlRect(QStyle::CC_Slider, &SliderOption, QStyle::SC_SliderHandle, VolumeSlider);
+        // QWidget 합성 drag는 실제 커서를 그대로 둘 수 있다. 팝업의 커서 판정까지
+        // 확인하도록 Windows 입력으로 누르고 실제 커서를 이동한 뒤 놓는다.
+        QCOMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(main_->winId()));
+        INPUT Mouse{}; Mouse.type = INPUT_MOUSE; bool MouseHeld = false;
+        const auto ReleaseMouse = qScopeGuard([&] {
+            if (MouseHeld) { Mouse.mi.dwFlags = MOUSEEVENTF_LEFTUP; SendInput(1, &Mouse, sizeof(INPUT)); }
+        });
+        QCursor::setPos(VolumeSlider->mapToGlobal(Handle.center()));
+        Mouse.mi.dwFlags = MOUSEEVENTF_LEFTDOWN; QCOMPARE(SendInput(1, &Mouse, sizeof(INPUT)), UINT(1)); MouseHeld = true;
+        QTRY_VERIFY(VolumeSlider->isSliderDown());
+        QCursor::setPos(VolumeSlider->mapToGlobal(QPoint(VolumeSlider->width() - 8, VolumeSlider->height() / 2)));
+        QTRY_VERIFY(Audio->Volume() > 80); QCOMPARE(Audio->Volume(), VolumeSlider->value());
+        const auto Outside = VolumePopup->frameGeometry().bottomRight() + QPoint(50, 50);
+        QCursor::setPos(Outside); QTest::qWait(300);
+        QVERIFY(!VolumePopup->frameGeometry().contains(QCursor::pos()));
+        QVERIFY(VolumeSlider->isSliderDown()); QVERIFY(VolumePopup->isVisible());
+        Mouse.mi.dwFlags = MOUSEEVENTF_LEFTUP; QCOMPARE(SendInput(1, &Mouse, sizeof(INPUT)), UINT(1)); MouseHeld = false;
+        QTRY_VERIFY(!VolumeSlider->isSliderDown());
+        QTRY_VERIFY(!VolumePopup->isVisible()); QCOMPARE(QApplication::focusWidget(), Focus.data());
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+        QTest::mouseMove(Volume, Volume->rect().center()); QTRY_VERIFY(VolumePopup->isVisible());
+        Audio->SetVolume(35); QCOMPARE(VolumeSlider->value(), 35); QCOMPARE(VolumeText->text(), QString("35%"));
+        QTest::mouseClick(Volume, Qt::LeftButton); QVERIFY(Audio->Muted()); QCOMPARE(Audio->Volume(), 35);
+        QTest::mouseClick(Volume, Qt::LeftButton); QVERIFY(!Audio->Muted());
+        const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
+        if (!Artifacts.isEmpty()) {
+            QVERIFY(Widget->grab().save(QDir(Artifacts).filePath("audio-title.png")));
+            QVERIFY(VolumePopup->grab().save(QDir(Artifacts).filePath("audio-volume-popup.png")));
+        }
+        QTest::mouseClick(Widget, Qt::LeftButton, Qt::NoModifier, QPoint(1, 1));
+        QTRY_VERIFY(!VolumePopup->isVisible());
         // 다음 곡으로 넘어가면 재생 중 표시도 옮겨 간다.
         Audio->Next();
         QTRY_COMPARE(Audio->Queue().CurrentIndex(), qsizetype(2));
