@@ -467,7 +467,8 @@ void DocumentSettingsDialog::refreshTextColorRows()
         const auto Value = textColors_[Mode].toObject().value(Key);
         if (Value.isString()) Edit->setText(Value.toString());
         else if (Value.isUndefined() && Key.startsWith("text.lexer.")) Edit->setText(legacyTextColors_[Mode].toObject()[Key].toString());
-        Edit->setPlaceholderText(tr("기본값 %1").arg(textDraftColor(Key).name(QColor::HexRgb)));
+        const auto Default = textDraftColor(Key);
+        Edit->setPlaceholderText(tr("기본값 %1").arg(Default.name(Default.alpha() < 255 ? QColor::HexArgb : QColor::HexRgb)));
         auto* Pick = new QPushButton(tr("선택…"), Cell); Pick->setAccessibleName(tr("%1 색상 선택").arg(Label));
         auto* Reset = new QPushButton(tr("기본값"), Cell); Reset->setAccessibleName(tr("%1 기본값").arg(Label));
         auto RefreshSwatch = [this, Key, Pick] {
@@ -527,7 +528,10 @@ void DocumentSettingsDialog::refreshTextColorPreview()
     for (int Element : {SC_ELEMENT_SELECTION_TEXT, SC_ELEMENT_SELECTION_INACTIVE_TEXT})
         colorPreview_->Send(SCI_SETELEMENTCOLOUR, Element, SciColor(textDraftColor("text.selectionForeground")) | (qintptr(255) << 24));
     colorPreview_->Send(SCI_SETCARETFORE, SciColor(textDraftColor("text.caret")));
-    colorPreview_->Send(SCI_SETCARETLINEBACK, SciColor(textDraftColor("text.currentLine")));
+    // The preview never takes focus; show the active current line colors and leave the inactive rows
+    // to the editors themselves.
+    const auto Frame = textDraftColor("text.currentLineFrame"), Gutter = textDraftColor("text.currentLineGutter"), Number = textDraftColor("text.currentLineNumber");
+    colorPreview_->SetCurrentLineColors({Frame, Gutter, Number, Frame, Gutter, Number});
     colorPreview_->Send(SCI_COLOURISE, 0, -1); colorPreview_->setReadOnly(true);
 }
 

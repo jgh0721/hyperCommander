@@ -494,18 +494,27 @@ private slots:
         for (const auto Mode : {ThemeManager::Light, ThemeManager::Dark}) {
             const auto Colors = ThemeManager::defaultColors(Mode);
             for (const auto& Pair : {qMakePair("text.foreground", "text.background"),
-                    qMakePair("text.foreground", "text.currentLine"), qMakePair("text.selectionForeground", "text.selection"),
+                    qMakePair("text.selectionForeground", "text.selection"),
                     qMakePair("text.marginForeground", "text.marginBackground"), qMakePair("text.caret", "text.background")}) {
                 const auto Ratio = fm::style::contrastRatio(Colors[Pair.first], Colors[Pair.second]);
                 QVERIFY2(Ratio >= 4.5, qPrintable(QString("%1 %2/%3=%4").arg(Mode).arg(Pair.first, Pair.second).arg(Ratio)));
             }
+            // The current line has no fill. Its number sits on the margin background under the cell tint.
+            const auto Over = [](const QColor& Top, const QColor& Bottom) {
+                const qreal A = Top.alphaF();
+                return QColor::fromRgbF(Top.redF() * A + Bottom.redF() * (1 - A), Top.greenF() * A + Bottom.greenF() * (1 - A),
+                    Top.blueF() * A + Bottom.blueF() * (1 - A));
+            };
+            QVERIFY(!Colors.contains("text.currentLine"));
+            for (const auto& Pair : {qMakePair("text.currentLineNumber", "text.currentLineGutter"),
+                    qMakePair("text.currentLineNumberInactive", "text.currentLineGutterInactive")}) {
+                const auto Ratio = fm::style::contrastRatio(Colors[Pair.first], Over(Colors[Pair.second], Colors["text.marginBackground"]));
+                QVERIFY2(Ratio >= 4.5, qPrintable(QString("%1 %2/%3=%4").arg(Mode).arg(Pair.first, Pair.second).arg(Ratio)));
+            }
             for (auto It = Colors.cbegin(); It != Colors.cend(); ++It) {
                 if (!It.key().startsWith("text.lexer.")) continue;
-                for (const auto* Background : {"text.background", "text.currentLine"}) {
-                    const auto Ratio = fm::style::contrastRatio(It.value(), Colors[Background]);
-                    QVERIFY2(Ratio >= 4.5, qPrintable(QString("%1 %2/%3=%4")
-                        .arg(Mode).arg(It.key(), Background).arg(Ratio)));
-                }
+                const auto Ratio = fm::style::contrastRatio(It.value(), Colors["text.background"]);
+                QVERIFY2(Ratio >= 4.5, qPrintable(QString("%1 %2/text.background=%3").arg(Mode).arg(It.key()).arg(Ratio)));
             }
         }
     }
@@ -632,6 +641,68 @@ private slots:
         QVERIFY(Scrolled.count()>0);
         // Actual caret/selection changes still notify position-sync and selection consumers.
         QTest::keyClick(Input,Qt::Key_Right,Qt::ShiftModifier);QTRY_VERIFY(Cursor.count()>0);QTRY_VERIFY(Selection.count()>0);
+    }
+    void currentLineMarksRulesAndNumberCell() {
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([]{qApp->setProperty("documentViewsConfigDir",QVariant());});
+        QString Text;for(int I=1;I<=60;++I)Text+=QString("line %1\n").arg(I);
+        QTextView View;View.LoadContent(Text,Temp.filePath("current.txt"),"UTF-8");View.resize(600,400);View.show();QVERIFY(QTest::qWaitForWindowExposed(&View));
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(View.Backend());QVERIFY(Backend);
+        auto* Viewport=Backend->scrollArea()->viewport();
+        // Earlier tests can leave a tiny text font or a zoom behind; the number glyph check needs a readable size.
+        // setEditorFont() reapplies the theme, so the test colors follow it.
+        Backend->setEditorFont(QFont("Consolas",12));Backend->Send(SCI_SETZOOM,0);
+        if(const auto Capture=qEnvironmentVariable("HC_DOCUMENT_UI_CAPTURE");!Capture.isEmpty()){
+            // Theme colors for review; both focus states.
+            QDir().mkpath(Capture);Backend->Send(SCI_GOTOLINE,4);
+            Backend->widget()->activateWindow();Backend->widget()->setFocus();QTest::qWaitForWindowActive(&View);
+            QVERIFY(Viewport->grab().save(Capture+"/current-line-theme-active.png"));
+            Backend->widget()->clearFocus();QVERIFY(Viewport->grab().save(Capture+"/current-line-theme-inactive.png"));
+        }
+        // Opaque test colors make the pixels exact; the theme values are translucent.
+        const QColor Frame(255,0,0),Gutter(0,0,255),Number(0,255,0),FrameOff(255,0,255),GutterOff(0,255,255),NumberOff(255,255,0);
+        Backend->SetCurrentLineColors({Frame,Gutter,Number,FrameOff,GutterOff,NumberOff});
+        Backend->widget()->clearFocus();QTRY_VERIFY(!Backend->widget()->hasFocus());
+        const int TextLeft=Backend->leftMarginWidth()-int(Backend->Send(SCI_GETMARGINLEFT));
+        const int NumberWidth=int(Backend->Send(SCI_GETMARGINWIDTHN,0));QVERIFY(NumberWidth>0);
+        // Samples the device pixel whose centre lies in the logical pixel (X, Y).
+        const auto At=[](const QImage& Image,int X,int Y){const qreal Dpr=Image.devicePixelRatio();
+            return Image.pixelColor(qFloor((X+.5)*Dpr),qFloor((Y+.5)*Dpr));};
+        const auto Top=[&](int Line){return int(Backend->Send(SCI_POINTYFROMPOSITION,0,Backend->Send(SCI_POSITIONFROMLINE,Line)));};
+        const int Row=Backend->textHeight(0);QVERIFY(Row>2);
+        const auto HasNumber=[&](const QImage& Image,int Y,const QColor& Ink){
+            for(int X=0;X<NumberWidth;++X)for(int Dy=0;Dy<Row;++Dy){const auto C=At(Image,X,Y+Dy);
+                if(qAbs(C.red()-Ink.red())<60&&qAbs(C.green()-Ink.green())<60&&qAbs(C.blue()-Ink.blue())<60)return true;}
+            return false;};
+
+        Backend->Send(SCI_GOTOLINE,4);
+        auto Image=Viewport->grab().toImage();const int Y4=Top(4);
+        if(const auto Capture=qEnvironmentVariable("HC_DOCUMENT_UI_CAPTURE");!Capture.isEmpty()){
+            QDir().mkpath(Capture);QVERIFY(Image.save(Capture+"/current-line-inactive.png"));}
+        QCOMPARE(At(Image,TextLeft+200,Y4),FrameOff);QCOMPARE(At(Image,TextLeft+200,Y4+Row-1),FrameOff);
+        QCOMPARE(At(Image,1,Y4+1),GutterOff);QVERIFY(HasNumber(Image,Y4,NumberOff));
+        // No fill: the middle of the line keeps the body background.
+        const QColor Body=At(Image,TextLeft+200,Top(1)+Row/2);
+        QCOMPARE(At(Image,TextLeft+200,Y4+Row/2),Body);
+
+        // Moving the caret moves the marking; the previous line returns to the plain margin and body.
+        Backend->Send(SCI_GOTOLINE,9);
+        Image=Viewport->grab().toImage();const int Y9=Top(9);
+        QCOMPARE(At(Image,TextLeft+200,Y9),FrameOff);QCOMPARE(At(Image,1,Y9+1),GutterOff);
+        QCOMPARE(At(Image,TextLeft+200,Y4),Body);QVERIFY(At(Image,1,Y4+1)!=GutterOff);
+
+        // Focus switches to the active colors.
+        Backend->widget()->activateWindow();Backend->widget()->setFocus();
+        if(QTest::qWaitForWindowActive(&View)&&Backend->widget()->hasFocus()){
+            Image=Viewport->grab().toImage();
+            QCOMPARE(At(Image,TextLeft+200,Y9),Frame);QCOMPARE(At(Image,1,Y9+1),Gutter);QVERIFY(HasNumber(Image,Y9,Number));
+        }
+
+        // Turning the option off removes the marking.
+        auto Settings=ScintillaEditorSettings::standard();Settings.highlightCurrentLine=false;Backend->applySettings(Settings);
+        Image=Viewport->grab().toImage();
+        QCOMPARE(At(Image,TextLeft+200,Y9),Body);QVERIFY(At(Image,1,Y9+1)!=Gutter&&At(Image,1,Y9+1)!=GutterOff);
+        QCOMPARE(Backend->Send(SCI_GETCARETLINEVISIBLE),qintptr(0));
     }
     void epubShortcutScope() {
         QCOMPARE(DocumentShortcutRegistry::NormalizeNavigationKeys(QKeySequence("Num+PgUp")),QKeySequence("PgUp"));

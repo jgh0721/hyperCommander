@@ -2,9 +2,12 @@
 
 #include "text/ITextEditorBackend.h"
 
+#include <QColor>
 #include <QFont>
 #include <QPointer>
+#include <QRect>
 
+class QPaintEvent;
 class ScintillaEditBase;
 
 namespace Scintilla {
@@ -18,7 +21,21 @@ class ScintillaQtDirectBackend : public ITextEditorBackend
 	Q_OBJECT
 
 public:
+    // Current line marking shared by HyperEditor and HyperViewer. Nothing fills the line; 1 px rules run
+    // above and below its text area and the line number cell is tinted. Inactive colors apply without focus.
+    struct CurrentLineColors
+    {
+        QColor frame;
+        QColor gutter;
+        QColor number;
+        QColor frameInactive;
+        QColor gutterInactive;
+        QColor numberInactive;
+    };
+
     qintptr Send(unsigned int Message, quintptr W=0, qintptr L=0) const;
+    // Replaces the theme colors until the next applyThemeColors(), e.g. for a settings preview.
+    void SetCurrentLineColors(const CurrentLineColors& Colors);
 	explicit ScintillaQtDirectBackend(QWidget* editorParent, QObject* parent = nullptr);
 	~ScintillaQtDirectBackend() override;
 
@@ -107,7 +124,22 @@ protected:
 	bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    // Viewport rectangles of the current line. Wrapped sub-lines are included.
+    struct CurrentLineBand
+    {
+        int line = -1;
+        QRect text;
+        QRect number;
+        bool operator==(const CurrentLineBand&) const = default;
+    };
+
+    CurrentLineBand currentLineBand() const;
+    void refreshCurrentLine(bool Repaint);
+    void paintCurrentLine(const QPaintEvent* Event);
+
     mutable int characterCount_ = -1;
+    CurrentLineColors currentLineColors_;
+    CurrentLineBand currentLineBand_;
 	int visibleAnchorLine(int line) const;
 	void configureCodeFolding(bool enabled);
 	void configureBraceHighlightIndicators();

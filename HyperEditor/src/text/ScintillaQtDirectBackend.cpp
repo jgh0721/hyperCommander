@@ -3,6 +3,7 @@
 #include "core/ThemeManager.h"
 #include "text/ScintillaEditorSettings.h"
 #include "text/TextLexerRegistry.h"
+#include "thirdparty/scintilla-qt/PlatQtTextRendering.hpp"
 #include "commonLibs/document/lexerKeywords.hpp"
 
 #include <QAbstractScrollArea>
@@ -10,6 +11,9 @@
 #include <QEvent>
 #include <QFile>
 #include <QFontMetrics>
+#include <QFontMetricsF>
+#include <QPainter>
+#include <QPaintEvent>
 #include <QTextStream>
 #include <QWidget>
 
@@ -18,7 +22,37 @@
 #include <Lexilla.h>
 #include <SciLexer.h>
 
+#include <cmath>
+#include <functional>
+#include <utility>
+
 namespace {
+
+// Scintilla paints the viewport directly; the current line marking is painted right after it inside the
+// same paint event. An overlay child widget would not work because ScintillaQt::ScrollText() blits with
+// viewport()->scroll(), which moves child widgets along with the pixels.
+class CurrentLineEditBase final : public ScintillaEditBase
+{
+public:
+	using OverlayPainter = std::function<void(const QPaintEvent*)>;
+
+	explicit CurrentLineEditBase(QWidget* Parent) : ScintillaEditBase(Parent) {}
+	void SetOverlayPainter(OverlayPainter Painter) { overlayPainter_ = std::move(Painter); }
+
+protected:
+	void paintEvent(QPaintEvent* Event) override
+	{
+		ScintillaEditBase::paintEvent(Event);
+		if (overlayPainter_)
+			overlayPainter_(Event);
+	}
+
+private:
+	OverlayPainter overlayPainter_;
+};
+
+// ViewStyle::marginNumberPadding: line numbers end this far from the right edge of their margin.
+constexpr qreal kMarginNumberPadding = 3.0;
 
 using MessageInt = unsigned int;
 constexpr int kSciSetLexer = 4001;
@@ -128,8 +162,9 @@ void positionToLineIndex(ScintillaEditBase* editor, const sptr_t position, int& 
 
 ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObject* parent)
 	: ITextEditorBackend(parent)
-	, m_editor(new ScintillaEditBase(editorParent))
+	, m_editor(new CurrentLineEditBase(editorParent))
 {
+	static_cast<CurrentLineEditBase*>(m_editor.data())->SetOverlayPainter([this](const QPaintEvent* Event) { paintCurrentLine(Event); });
 	m_editorFont = m_editor->font();
 
 	// 리사이즈 시 깜빡임 방지: 시스템 배경 지움 비활성화
@@ -209,6 +244,7 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 	connect(m_editor, &ScintillaEditBase::updateUi,
 			this, [this](Scintilla::Update Updated) {
 				updateBraceHighlight();
+				refreshCurrentLine(false);
 				// A viewport-only update keeps the caret and selection unchanged. Reporting it
 				// as a cursor move makes EPUB position sync reveal the old caret after scroll
 				// sync has aligned the preview, producing large jumps around tall images.
@@ -226,6 +262,8 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 				// Folding moves the text below without a VScroll update.
 				emit viewportScrolled();
 			});
+	// Focus picks the active or inactive current line colors.
+	connect(m_editor, &ScintillaEditBase::focusChanged, this, [this](bool) { refreshCurrentLine(true); });
 	// A new height moves the line at any fixed height ratio.
 	m_editor->installEventFilter(this);
 	m_lastKnownLineCount = lineCount();
@@ -233,6 +271,9 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 
 ScintillaQtDirectBackend::~ScintillaQtDirectBackend()
 {
+	// The editor widget belongs to its parent and can outlive this backend.
+	if (m_editor)
+		static_cast<CurrentLineEditBase*>(m_editor.data())->SetOverlayPainter({});
 	clearLexer();
 }
 
@@ -255,7 +296,8 @@ void ScintillaQtDirectBackend::applySettings(const ScintillaEditorSettings& sett
 	m_editor->send(sciMessage(SCI_SETMARGINTYPEN), 0, static_cast<sptr_t>(Scintilla::MarginType::Number));
 	m_editor->send(sciMessage(SCI_SETINDENTATIONGUIDES),
 		settings.showIndentationGuides ? static_cast<sptr_t>(settings.indentGuideStyle) : static_cast<sptr_t>(Scintilla::IndentView::None));
-	m_editor->send(sciMessage(SCI_SETCARETLINEVISIBLE), settings.highlightCurrentLine ? 1 : 0);
+	// The current line is marked by paintCurrentLine(); Scintilla's caret line fill stays off.
+	m_editor->send(sciMessage(SCI_SETCARETLINEVISIBLE), 0);
 	m_editor->send(sciMessage(SCI_SETINDENT), settings.tabWidth);
 	m_editor->send(sciMessage(SCI_SETTABWIDTH), settings.tabWidth);
 	m_editor->send(sciMessage(SCI_SETUSETABS), settings.useTabs ? 1 : 0);
@@ -292,6 +334,7 @@ void ScintillaQtDirectBackend::applySettings(const ScintillaEditorSettings& sett
 	m_lineNumberMarginDigits = settings.showLineNumbers ? settings.lineNumberMarginDigits : 0;
 	m_braceMatchingEnabled = settings.braceMatching;
 	m_highlightCurrentLine = settings.highlightCurrentLine;
+	refreshCurrentLine(true);
 	configureBraceHighlightIndicators();
 	if (!m_braceMatchingEnabled)
 		m_editor->send(sciMessage(SCI_BRACEHIGHLIGHT), kInvalidPosition, kInvalidPosition);
@@ -830,6 +873,110 @@ int ScintillaQtDirectBackend::leftMarginWidth() const
 	return total;
 }
 
+void ScintillaQtDirectBackend::SetCurrentLineColors(const CurrentLineColors& Colors)
+{
+	currentLineColors_ = Colors;
+	refreshCurrentLine(true);
+}
+
+ScintillaQtDirectBackend::CurrentLineBand ScintillaQtDirectBackend::currentLineBand() const
+{
+	CurrentLineBand Band;
+	if (!m_editor || !m_highlightCurrentLine)
+		return Band;
+	const sptr_t Line = Send(SCI_LINEFROMPOSITION, Send(SCI_GETCURRENTPOS));
+	// A line hidden by a fold has no screen position.
+	if (!Send(SCI_GETLINEVISIBLE, Line))
+		return Band;
+	// Scintilla reports device pixels only under the pixel-aligned scale technique.
+	const qreal Scale = Send(SCI_GETSCALETECHNIQUE) == static_cast<sptr_t>(Scintilla::ScaleTechnique::PixelAligned)
+		? m_editor->devicePixelRatioF() : 1.0;
+	const auto Logical = [Scale](sptr_t Value) { return static_cast<int>(std::lround(Value / Scale)); };
+	const sptr_t Top = Send(SCI_POINTYFROMPOSITION, 0, Send(SCI_POSITIONFROMLINE, Line));
+	const sptr_t Height = Send(SCI_TEXTHEIGHT, Line) * qMax<sptr_t>(1, Send(SCI_WRAPCOUNT, Line));
+	sptr_t Margins = 0;
+	for (sptr_t Margin = 0, Count = Send(SCI_GETMARGINS); Margin < Count; ++Margin)
+		Margins += Send(SCI_GETMARGINWIDTHN, Margin);
+	const int TextLeft = Logical(Margins);
+	Band.line = static_cast<int>(Line);
+	Band.text = QRect(TextLeft, Logical(Top), qMax(0, m_editor->viewport()->width() - TextLeft), Logical(Height));
+	Band.number = QRect(0, Logical(Top), Logical(Send(SCI_GETMARGINWIDTHN, 0)), Logical(Height));
+	return Band;
+}
+
+void ScintillaQtDirectBackend::refreshCurrentLine(bool Repaint)
+{
+	if (!m_editor)
+		return;
+	const CurrentLineBand Band = currentLineBand();
+	if (!Repaint && Band == currentLineBand_)
+		return;
+	// Scintilla repaints only what it invalidates. Repainting the rules and the number cell at the old and
+	// new places lets Scintilla clear them and paintCurrentLine() draw them again.
+	QWidget* Viewport = m_editor->viewport();
+	const CurrentLineBand* Places[] = {&currentLineBand_, &Band};
+	for (const CurrentLineBand* Each : Places) {
+		if (Each->line < 0)
+			continue;
+		Viewport->update(QRect(Each->text.left(), Each->text.top(), Each->text.width(), 1));
+		Viewport->update(QRect(Each->text.left(), Each->text.bottom(), Each->text.width(), 1));
+		Viewport->update(Each->number);
+	}
+	currentLineBand_ = Band;
+}
+
+void ScintillaQtDirectBackend::paintCurrentLine(const QPaintEvent* Event)
+{
+	// A blit scroll moves the line without asking this class first, so measure it again here.
+	refreshCurrentLine(false);
+	const CurrentLineBand& Band = currentLineBand_;
+	if (!m_editor || Band.line < 0 || !Event->region().intersects(Band.text.united(Band.number)))
+		return;
+	const bool Active = m_editor->hasFocus();
+	const QColor Frame = Active ? currentLineColors_.frame : currentLineColors_.frameInactive;
+	const QColor Gutter = Active ? currentLineColors_.gutter : currentLineColors_.gutterInactive;
+	const QColor Number = Active ? currentLineColors_.number : currentLineColors_.numberInactive;
+	QWidget* Viewport = m_editor->viewport();
+	QPainter Painter(Viewport);
+
+	if (!Band.number.isEmpty() && Gutter.isValid() && Number.isValid()) {
+		// The number margin draws every line with STYLE_LINENUMBER, so the current number is drawn again
+		// over an opaque cell: the margin background first, then the tint.
+		const sptr_t Back = Send(SCI_STYLEGETBACK, STYLE_LINENUMBER);
+		Painter.fillRect(Band.number, QColor(static_cast<int>(Back & 0xFF), static_cast<int>((Back >> 8) & 0xFF), static_cast<int>((Back >> 16) & 0xFF)));
+		Painter.fillRect(Band.number, Gutter);
+
+		// Same face, size, zoom and quality as Scintilla's line number font (PlatQt FontAndCharacterSet).
+		const sptr_t FaceLength = Send(SCI_STYLEGETFONT, STYLE_LINENUMBER);
+		QByteArray Face(FaceLength + 1, '\0');
+		Send(SCI_STYLEGETFONT, STYLE_LINENUMBER, reinterpret_cast<sptr_t>(Face.data()));
+		Face.truncate(FaceLength);
+		const sptr_t Size = qMax<sptr_t>(2 * SC_FONT_SIZE_MULTIPLIER,
+			Send(SCI_STYLEGETSIZEFRACTIONAL, STYLE_LINENUMBER) + Send(SCI_GETZOOM) * SC_FONT_SIZE_MULTIPLIER);
+		QFont Font;
+		const sptr_t Quality = Send(SCI_GETFONTQUALITY);
+		Font.setStyleStrategy(Quality == SC_EFF_QUALITY_NON_ANTIALIASED ? QFont::NoAntialias
+			: Quality == SC_EFF_QUALITY_DEFAULT ? QFont::PreferDefault : QFont::PreferAntialias);
+		Font.setFamily(QString::fromUtf8(Face));
+		Font.setPointSizeF(static_cast<qreal>(Size) / SC_FONT_SIZE_MULTIPLIER);
+		// ViewStyle floors each font's ascent and adds the extra ascent to place the baseline.
+		const qreal Baseline = Band.number.top() + std::floor(QFontMetricsF(Font, Viewport).ascent())
+			+ static_cast<qreal>(Send(SCI_GETEXTRAASCENT));
+		Font.setBold(true);
+		const QString Text = QString::number(Band.line + 1);
+		const qreal Right = Band.number.left() + Band.number.width() - kMarginNumberPadding;
+		Painter.setFont(Font);
+		Painter.setPen(Number);
+		mrst::scintilla::drawTextWithMask(Painter, QPointF(Right - QFontMetricsF(Font, Viewport).horizontalAdvance(Text), Baseline), Text);
+	}
+
+	if (Frame.isValid() && Frame.alpha() > 0 && !Band.text.isEmpty()) {
+		// The rules sit inside the line's own top and bottom pixel rows, over the text.
+		Painter.fillRect(QRect(Band.text.left(), Band.text.top(), Band.text.width(), 1), Frame);
+		Painter.fillRect(QRect(Band.text.left(), Band.text.bottom(), Band.text.width(), 1), Frame);
+	}
+}
+
 int ScintillaQtDirectBackend::changeHistoryFlags() const
 {
 	return m_editor ? static_cast<int>(m_editor->send(sciMessage(SCI_GETCHANGEHISTORY))) : 0;
@@ -1079,7 +1226,6 @@ void ScintillaQtDirectBackend::applyThemeColors(bool dark)
 	const QColor marginFg = theme.color(QStringLiteral("text.marginForeground"));
 	const QColor selection = theme.color(QStringLiteral("text.selection"));
 	const QColor selectionForeground = theme.color(QStringLiteral("text.selectionForeground"));
-	const QColor caretLine = theme.color(QStringLiteral("text.currentLine"));
 	const QColor caret = theme.color(QStringLiteral("text.caret"));
 	const QColor foldMarker = theme.color(QStringLiteral("text.foldMarker"));
 	const QColor indentGuide = theme.color(QStringLiteral("text.indentGuide"));
@@ -1095,8 +1241,13 @@ void ScintillaQtDirectBackend::applyThemeColors(bool dark)
 
 	m_editor->send(sciMessage(SCI_SETCARETFORE), colourToSci(caret));
 	m_editor->send(sciMessage(SCI_SETADDITIONALCARETFORE), colourToSci(caret));
-	m_editor->send(sciMessage(SCI_SETCARETLINEVISIBLEALWAYS), 1);
-	m_editor->send(sciMessage(SCI_SETCARETLINEBACK), colourToSci(caretLine));
+	currentLineColors_ = {theme.color(QStringLiteral("text.currentLineFrame")),
+		theme.color(QStringLiteral("text.currentLineGutter")),
+		theme.color(QStringLiteral("text.currentLineNumber")),
+		theme.color(QStringLiteral("text.currentLineFrameInactive")),
+		theme.color(QStringLiteral("text.currentLineGutterInactive")),
+		theme.color(QStringLiteral("text.currentLineNumberInactive"))};
+	refreshCurrentLine(true);
 
 	// SCI_SETSELALPHA also switches the layer to OVER_TEXT, which hides text
 	// with opaque theme colors. Element RGBA colors leave the layer unchanged.

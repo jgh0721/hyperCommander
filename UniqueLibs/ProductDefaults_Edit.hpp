@@ -298,7 +298,15 @@ namespace hc::defaults::edit
 
     c.insert(QStringLiteral("text.background"), T[Token::Surface]);
     c.insert(QStringLiteral("text.foreground"), T[Token::Fg]);
-    c.insert(QStringLiteral("text.currentLine"), T[Token::Alt]);
+    // Current line, shared by HyperEditor and HyperViewer: no fill, 1 px rules above and below the text
+    // area, and an accent number cell. The rules are painted over glyphs, so they stay translucent; the
+    // cell tint is laid over text.marginBackground. Inactive values apply while the editor lacks focus.
+    c.insert(QStringLiteral("text.currentLineFrame"), Alpha(T[Token::Focus], WantDark ? 0x75 : 0x66));
+    c.insert(QStringLiteral("text.currentLineGutter"), Alpha(T[Token::Accent], WantDark ? 0x38 : 0x1F));
+    c.insert(QStringLiteral("text.currentLineNumber"), T[Token::AccentFg]);
+    c.insert(QStringLiteral("text.currentLineFrameInactive"), T[Token::Line]);
+    c.insert(QStringLiteral("text.currentLineGutterInactive"), Alpha(T[Token::Fg], WantDark ? 0x0F : 0x0D));
+    c.insert(QStringLiteral("text.currentLineNumberInactive"), T[Token::Fg2]);
     c.insert(QStringLiteral("text.selection"), T[Token::AccentSoft]);
     c.insert(QStringLiteral("text.selectionForeground"), T[Token::Fg]);
     c.insert(QStringLiteral("text.caret"), T[Token::Fg]);
@@ -309,8 +317,8 @@ namespace hc::defaults::edit
     c.insert(QStringLiteral("text.braceMatch"), T[Token::Accent]);
     c.insert(QStringLiteral("text.braceMismatch"), T[Token::Danger]);
 
-    // Keep syntax text at 4.5:1 against both Paper Fluent body/current-line
-    // surfaces. Explicit user syntax overrides are applied separately.
+    // Keep syntax text at 4.5:1 against the Paper Fluent body surface. The current line adds no fill, so
+    // the body is the only surface under syntax text. Explicit user syntax overrides are applied separately.
     if (WantDark) {
         c.insert(QStringLiteral("text.lexer.comment"), Color(QStringLiteral("#93907D")));
         c.insert(QStringLiteral("text.lexer.number"), Color(QStringLiteral("#AE81FF")));

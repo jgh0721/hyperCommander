@@ -176,7 +176,12 @@ QList<ThemeManager::ColorEntry> ThemeManager::editableColorEntries()
 
         {QStringLiteral("text.background"), tr("Text 편집기 배경"), tr("TEXT")},
         {QStringLiteral("text.foreground"), tr("Text 기본 글자"), tr("TEXT")},
-        {QStringLiteral("text.currentLine"), tr("Text 현재 줄"), tr("TEXT")},
+        {QStringLiteral("text.currentLineFrame"), tr("Text 현재 줄 위·아래 선"), tr("TEXT")},
+        {QStringLiteral("text.currentLineGutter"), tr("Text 현재 줄 번호 칸"), tr("TEXT")},
+        {QStringLiteral("text.currentLineNumber"), tr("Text 현재 줄 번호"), tr("TEXT")},
+        {QStringLiteral("text.currentLineFrameInactive"), tr("Text 현재 줄 위·아래 선 (비활성)"), tr("TEXT")},
+        {QStringLiteral("text.currentLineGutterInactive"), tr("Text 현재 줄 번호 칸 (비활성)"), tr("TEXT")},
+        {QStringLiteral("text.currentLineNumberInactive"), tr("Text 현재 줄 번호 (비활성)"), tr("TEXT")},
         {QStringLiteral("text.selection"), tr("Text 선택 배경"), tr("TEXT")},
         {QStringLiteral("text.selectionForeground"), tr("Text 선택 글자"), tr("TEXT")},
         {QStringLiteral("text.caret"), tr("Text 캐럿"), tr("TEXT")},
