@@ -62,6 +62,9 @@
 #include <QScopeGuard>
 #include <QtTest>
 #include <QtConcurrentRun>
+#include <QThreadPool>
+#include <QSemaphore>
+#include "UniqueLibs/document/documentTextCodec.hpp"
 static_assert(!std::is_invocable_v<decltype(&AppSettings::value), AppSettings*, const QString&, const QVariant&>);
 using namespace hc::settings;
 using namespace hc::document;
@@ -987,6 +990,83 @@ private slots:
         {EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);QVERIFY(!Editor.Snapshot()["workspaceError"].toString().isEmpty());
             QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["workspaceSaving"].toBool(),5000);}
         QCOMPARE(Read(Json),QByteArray("{broken"));
+    }
+    void textSaveUsesProvidedSnapshot_data()
+    {
+        QTest::addColumn<QString>("Encoding");QTest::addColumn<bool>("Bom");QTest::addColumn<bool>("Empty");
+        QTest::newRow("markdown-utf8")<<QString("UTF-8")<<false<<false;
+        QTest::newRow("markdown-utf8-bom")<<QString("UTF-8")<<true<<false;
+        QTest::newRow("markdown-utf16")<<QString("UTF-16LE")<<true<<false;
+        QTest::newRow("markdown-cp949")<<QString("CP949")<<false<<false;
+        QTest::newRow("markdown-empty")<<QString("UTF-8")<<false<<true;
+    }
+    void textSaveUsesProvidedSnapshot()
+    {
+        QFETCH(QString,Encoding);QFETCH(bool,Bom);QFETCH(bool,Empty);QTemporaryDir Temp;
+        const auto OldConfig=qApp->property("documentViewsConfigDir");qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        ::AppSettings Settings;Settings.setValue("markdown/editorMode","source");Settings.setValue("markdown/autoPreview",false);Settings.sync();
+        TextInput Input;Input.path_=Temp.filePath("snapshot.md");Input.text_=Empty?QString{}:QStringLiteral("한글 원본\r\n");Input.encoding_=Encoding;Input.bom_=Bom;Input.eol_="CRLF";
+        const auto Encoded=EncodeDocumentText(Input.text_,Encoding,Bom);QVERIFY(Encoded.HasValue());Input.bytes_=Encoded.Value();
+        DocumentViewPane Pane;QVERIFY(Pane.Load(Input,true,true));auto* Source=Pane.findChild<QTextView*>();QVERIFY(Source);
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(Source->Backend());const auto Frozen=Pane.SessionContent();
+        Backend->Send(SCI_GOTOPOS,Backend->Send(SCI_GETLENGTH));Backend->replace(QStringLiteral("후속 변경\r\n"));
+        const auto Live=Source->Content();const auto Position=Backend->Send(SCI_GETCURRENTPOS),Document=Backend->Send(SCI_GETDOCPOINTER);
+        auto Encoder=Pane.CaptureSave(Input.path_,false,Frozen);
+        auto Work=QtConcurrent::run([Encoder]{return Encoder(hc::storage::OperationContext{});});QTRY_VERIFY_WITH_TIMEOUT(Work.isFinished(),15000);
+        QVERIFY(Work.result().HasValue());QCOMPARE(Work.result().Value(),Frozen);
+        Pane.CommitSaved(Input.path_,Frozen,Frozen,QCryptographicHash::hash(Frozen,QCryptographicHash::Sha256),false);
+        QCOMPARE(Source->Content(),Live);QVERIFY(Source->isModified());QCOMPARE(Backend->Send(SCI_GETCURRENTPOS),Position);QCOMPARE(Backend->Send(SCI_GETDOCPOINTER),Document);
+        const auto Latest=Pane.SessionContent();Pane.CommitSaved(Input.path_,Latest,Latest,QCryptographicHash::hash(Latest,QCryptographicHash::Sha256),true);
+        QVERIFY(!Source->isModified());QVERIFY(Backend->Send(SCI_CANUNDO));
+        if(Encoding=="CP949"){
+            Backend->replace(QStringLiteral("😀"));const auto Unrepresentable=Pane.SessionContent();
+            auto Rejected=Pane.CaptureSave(Input.path_,false,Unrepresentable);
+            auto Failure=QtConcurrent::run([Rejected]{return Rejected(hc::storage::OperationContext{});});QTRY_VERIFY_WITH_TIMEOUT(Failure.isFinished(),15000);
+            QVERIFY(!Failure.result().HasValue());QCOMPARE(Failure.result().Failure().code_,std::string("document-encoding-unrepresentable"));QVERIFY(Source->isModified());
+        }
+    }
+    void markdownQueuedSavePreservesTyping()
+    {
+        QTemporaryDir Temp;const auto OldConfig=qApp->property("documentViewsConfigDir");qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto RestoreConfig=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        ::AppSettings Settings;Settings.setValue("markdown/editorMode","source");Settings.setValue("markdown/autoPreview",false);Settings.sync();
+        const auto Path=Temp.filePath("queued.md");Write(Path,"initial\n");DocumentWorkspaceWidget Window(Temp.filePath("recovery"));
+        Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
+        const auto Id=Window.Handle({{"action","open"},{"path",Path}})["documentId"].toString();QVERIFY(!Id.isEmpty());QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(),15000);
+        auto* Source=Window.findChild<QTextView*>();QVERIFY(Source);auto* Backend=static_cast<ScintillaQtDirectBackend*>(Source->Backend());
+        const auto State=[&]{for(const auto& Value:Window.Snapshot()["documents"].toArray())if(Value.toObject()["documentId"].toString()==Id)return Value.toObject();return QJsonObject{};};
+        Backend->Send(SCI_GOTOPOS,Backend->Send(SCI_GETLENGTH));Backend->replace("first\n");
+        auto* Pool=QThreadPool::globalInstance();const int Threads=Pool->maxThreadCount();Pool->setMaxThreadCount(1);
+        const auto Gate=std::make_shared<QSemaphore>();const auto Entered=std::make_shared<std::atomic_bool>(false);
+        auto Blocker=QtConcurrent::run([Gate,Entered]{Entered->store(true);Gate->acquire();});
+        const auto RestorePool=qScopeGuard([&]{Gate->release();Blocker.waitForFinished();Pool->setMaxThreadCount(Threads);});QTRY_VERIFY_WITH_TIMEOUT(Entered->load(),15000);
+        Window.findChild<QAction*>("saveDocument")->trigger();QVERIFY(State()["saving"].toBool());
+        Backend->replace("latest requested\n");const auto Saved=Source->Content();Window.findChild<QAction*>("saveDocument")->trigger();QVERIFY(State()["saveQueued"].toBool());
+        Backend->Send(SCI_BEGINUNDOACTION);Backend->replace("unsaved typing\n");Backend->Send(SCI_ENDUNDOACTION);const auto Live=Source->Content();
+        const auto Document=Backend->Send(SCI_GETDOCPOINTER),Position=Backend->Send(SCI_GETCURRENTPOS);
+        Gate->release();QTRY_VERIFY_WITH_TIMEOUT(!State()["saving"].toBool(),30000);QVERIFY2(State()["error"].toString().isEmpty(),qPrintable(State()["error"].toString()));
+        QCOMPARE(Read(Path),Saved.toUtf8());QCOMPARE(Source->Content(),Live);QVERIFY(State()["dirty"].toBool());
+        QCOMPARE(Backend->Send(SCI_GETDOCPOINTER),Document);QCOMPARE(Backend->Send(SCI_GETCURRENTPOS),Position);
+        Backend->Send(SCI_UNDO);QCOMPARE(Source->Content(),Saved);QVERIFY(!State()["dirty"].toBool());Backend->Send(SCI_REDO);QCOMPARE(Source->Content(),Live);
+        Window.Checkpoint();QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(),15000);QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),15000);
+    }
+    void markdownLargeSaveCapture()
+    {
+        QTemporaryDir Temp;const auto OldConfig=qApp->property("documentViewsConfigDir");qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        ::AppSettings Settings;Settings.setValue("markdown/editorMode","source");Settings.setValue("markdown/autoPreview",false);Settings.sync();
+        TextInput Input;Input.path_=Temp.filePath("large.md");Input.text_=QStringLiteral("Markdown line 가😀 text\n").repeated(160000);Input.bytes_=Input.text_.toUtf8();Input.encoding_="UTF-8";Input.eol_="LF";
+        DocumentViewPane Pane;QVERIFY(Pane.Load(Input,true,true));QVERIFY(Pane.IsMarkdown());
+        auto* Source=Pane.findChild<QTextView*>();QVERIFY(Source);Source->setWordWrap(false);
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(Source->Backend());Backend->Send(SCI_GOTOPOS,Backend->Send(SCI_GETLENGTH));Backend->replace("changed");
+        const auto Frozen=Pane.SessionContent();const auto Document=Backend->Send(SCI_GETDOCPOINTER),Position=Backend->Send(SCI_GETCURRENTPOS);
+        QElapsedTimer Clock;Clock.start();auto Encoder=Pane.CaptureSave(Input.path_,false,Frozen);const auto CaptureMs=Clock.elapsed();
+        auto Work=QtConcurrent::run([Encoder]{return Encoder(hc::storage::OperationContext{});});QTRY_VERIFY_WITH_TIMEOUT(Work.isFinished(),15000);
+        QVERIFY(Work.result().HasValue());QCOMPARE(Work.result().Value(),Frozen);
+        const auto Hash=QCryptographicHash::hash(Frozen,QCryptographicHash::Sha256);Clock.restart();Pane.CommitSaved(Input.path_,Frozen,Frozen,Hash,true);const auto CompletionMs=Clock.elapsed();
+        QCOMPARE(Backend->Send(SCI_GETDOCPOINTER),Document);QCOMPARE(Backend->Send(SCI_GETCURRENTPOS),Position);QVERIFY(Backend->Send(SCI_CANUNDO));QVERIFY(!Source->isModified());
+        qInfo()<<"Markdown large-source save: sourceBytes="<<Frozen.size()<<" captureMs="<<CaptureMs<<" completionMs="<<CompletionMs;
     }
     void epubSourcePositionCacheKeepsUnicodeOffsets()
     {

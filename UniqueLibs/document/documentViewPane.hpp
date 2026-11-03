@@ -5,6 +5,7 @@
 #include "hwpOpenWindow.hpp"
 #include <QWidget>
 #include <QJsonObject>
+#include <optional>
 
 class QToolBar;
 class QBaseView;
@@ -46,8 +47,8 @@ namespace hc::document
         void SelectSearchRange(qint64 Start, qint64 Length);
         QByteArray SessionContent() const;
         storage::Result<QByteArray> Export(const QString& Destination,bool SaveEpubOriginal=false) const;
-        DocumentEncoder CaptureSave(const QString& Destination, bool SaveEpubOriginal = false) const;
-        void CommitSaved(const QString& Path, const QByteArray& Bytes, const QByteArray& Content, const QByteArray& Hash);
+        DocumentEncoder CaptureSave(const QString& Destination, bool SaveEpubOriginal = false, std::optional<QByteArray> Content = std::nullopt) const;
+        void CommitSaved(const QString& Path, const QByteArray& Bytes, const QByteArray& Content, const QByteArray& Hash, bool Current);
         void ReportSaveFailure(const QByteArray& Content, const QString& Error);
         QJsonObject Execute(const QJsonObject& Request);
         QString ViewId() const { return viewId_; }
@@ -125,6 +126,7 @@ namespace hc::document
         QString viewId_ = "text", encoding_ = "UTF-8", eol_ = "LF";
         bool bom_ = false, syncing_ = false;
         mutable QString statusEol_;
+        mutable std::optional<storage::Error> textSerializationError_;
         bool unlimitedBytes_ = false;
         int quality_ = -1;
         QByteArray originalImageBytes_, originalImageHash_;

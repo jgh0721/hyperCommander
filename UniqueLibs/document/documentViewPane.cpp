@@ -413,7 +413,9 @@ namespace hc::document
             bool CrLf=false,Cr=false,Lf=false;
             for(qsizetype I=0;I<Text.size();++I){if(Text[I]=='\r'){if(I+1<Text.size()&&Text[I+1]=='\n'){CrLf=true;++I;}else Cr=true;}else if(Text[I]=='\n')Lf=true;if(int(CrLf)+int(Cr)+int(Lf)>1)break;}
             statusEol_=int(CrLf)+int(Cr)+int(Lf)>1?"MIXED":CrLf?"CRLF":Cr?"CR":Lf?"LF":text_->detectedLineEnding()==QTextView::CRLF?"CRLF":text_->detectedLineEnding()==QTextView::CR?"CR":"LF";
-            auto Bytes=EncodeDocumentText(Text,encoding_,bom_);return Bytes.HasValue()?Bytes.Value():Text.toUtf8();
+            auto Bytes=EncodeDocumentText(Text,encoding_,bom_);textSerializationError_.reset();
+            if(Bytes.HasValue())return Bytes.Value();
+            textSerializationError_=Bytes.Failure();return Text.toUtf8();
         }
         return pdf_?pdf_->SerializeContent():image_?(image_->isModified()?image_->SerializeContent():originalImageBytes_):QByteArray{};
 }
@@ -425,9 +427,18 @@ namespace hc::document
         const auto Bytes = image_->SerializeContent();
         return Bytes.isEmpty() ? QByteArray{} : "image:" + QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex();
     }
-    DocumentEncoder DocumentViewPane::CaptureSave(const QString& Destination,bool SaveEpubOriginal) const
+    DocumentEncoder DocumentViewPane::CaptureSave(const QString& Destination,bool SaveEpubOriginal,std::optional<QByteArray> Content) const
     {
         if(epubEditor_)return epubEditor_->CaptureSave(Destination,SaveEpubOriginal);
+        // The session owns the exact serialized revision already. Capturing it
+        // avoids reading/decoding/re-encoding the entire source again for Ctrl+S.
+        if(text_ && Content)return [Bytes=std::move(*Content),Error=textSerializationError_](storage::OperationContext Context)->storage::Result<QByteArray>{
+            if(auto Stop=Context.Check({"document"}))return *Stop;
+            // Unrepresentable source stays editable as UTF-8 in the session, but
+            // those fallback bytes must never be written as the requested encoding.
+            if(Error)return *Error;
+            return Bytes;
+        };
         if(text_)return [Text=text_->Content(),Encoding=encoding_,Bom=bom_](storage::OperationContext Context)->storage::Result<QByteArray>{
             if(auto Stop=Context.Check({"document"}))return *Stop;
             return EncodeDocumentText(Text,Encoding,Bom);
@@ -447,11 +458,13 @@ namespace hc::document
         const auto Result=Export(Destination,SaveEpubOriginal);
         return [Result](storage::OperationContext){return Result;};
     }
-    void DocumentViewPane::CommitSaved(const QString& Path,const QByteArray& Bytes,const QByteArray& Content,const QByteArray& Hash)
+    void DocumentViewPane::CommitSaved(const QString& Path,const QByteArray& Bytes,const QByteArray& Content,const QByteArray& Hash,bool Current)
     {
         if(epubEditor_){epubEditor_->CommitSaved(Path,Content,Hash);epubBytes_=Bytes;epubPath_=Path;return;}
         if(markdown_)markdown_->SetPath(Path);
-        if(SessionContent()==Content)Commit(Path,Bytes);
+        // The session has compared the completed snapshot with current content.
+        // Repeating that serialization here stalls source input on save completion.
+        if(Current)Commit(Path,Bytes);
     }
     void DocumentViewPane::ReportSaveFailure(const QByteArray& Content,const QString& Error)
     {

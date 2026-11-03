@@ -976,15 +976,20 @@ namespace hc::document
         }
         auto Request=std::make_shared<LocalSave>();Request->destination_=Destination;Request->original_=Original;Request->overwrite_=Overwrite;
         Request->content_=Tab->session_->Text();Request->revision_=Tab->Revision();
+        const auto Capture=[&]{
+            std::optional<QByteArray> Content;
+            if(Tab->pane_->ViewId()=="text")Content=QByteArray::fromStdString(Request->content_);
+            return Tab->pane_->CaptureSave(Destination,Original && SaveEpubOriginal,std::move(Content));
+        };
         if(Tab->saving_) {
             if(!Tab->activeSave_ || Tab->activeSave_->destination_!=Destination || Tab->activeSave_->overwrite_!=Overwrite){Tab->error_="document-save-target-busy";update();return;}
             // A repeated request supersedes the single queued snapshot, including
             // an undo back to the in-flight content. No unrequested typing is saved.
             if(Request->content_==Tab->activeSave_->content_)Tab->queuedSave_.reset();
-            else {Request->encoder_=Tab->pane_->CaptureSave(Destination,Original && SaveEpubOriginal);Tab->queuedSave_=std::move(Request);}
+            else {Request->encoder_=Capture();Tab->queuedSave_=std::move(Request);}
             update();return;
         }
-        Request->encoder_=Tab->pane_->CaptureSave(Destination,Original && SaveEpubOriginal);
+        Request->encoder_=Capture();
         startSave(Tab,std::move(Request));
     }
     void DocumentWorkspaceWidget::startSave(const std::shared_ptr<Tab>& Tab,std::shared_ptr<LocalSave> Request)
@@ -1025,7 +1030,7 @@ namespace hc::document
                 Tab->queuedSave_.reset();Tab->closeAfterSave_=false;closingWorkspace_=false;
             } else if(!ExportOnly) {
                 Tab->error_.clear();
-                Tab->pane_->CommitSaved(Destination,Output.bytes_,QByteArray::fromStdString(Request->content_),Result.Value().hash_);
+                Tab->pane_->CommitSaved(Destination,Output.bytes_,QByteArray::fromStdString(Request->content_),Result.Value().hash_,!Tab->Dirty());
                 Tab->path_=Destination;Tab->displayName_.clear();Tab->input_.source_=Result.Value().source_;Tab->input_.hash_=Result.Value().hash_;
                 Tab->originalAuthority_=true;Tab->originalSave_=Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u);
                 Tab->recovered_=false;Tab->recoveredName_.clear();Tab->broker_=false;Tab->sourceToken_.clear();
@@ -1089,9 +1094,9 @@ namespace hc::document
             // EPUB source drafts are tokens, not a recovery archive. Never persist them as EPUB bytes.
             if(Tab->pane_->IsEpub()){Tab->pane_->CheckpointEpub();continue;}
             if (Tab->loading_ || Tab->navigating_ || Tab->closed_ || Tab->checkpointing_ || !Tab->Dirty() || Tab->checkpointedRevision_ == Tab->Revision()) continue;
-            const auto Bytes = Tab->pane_->ViewId() == "image" ? Tab->pane_->Content() : QByteArray::fromStdString(Tab->session_->Text());
+            auto Bytes = Tab->pane_->ViewId() == "image" ? Tab->pane_->Content().toStdString() : Tab->session_->Text();
             if (!hosted_ && Bytes.size() > DocumentByteLimit) { Tab->error_ = "document-recovery-budget"; continue; }
-            RecoverySnapshot Record; Record.document_ = Tab->session_->Snapshot(); Record.bytes_ = Bytes.toStdString();Record.viewId_=Tab->pane_->ViewId().toStdString();
+            RecoverySnapshot Record; Record.document_ = Tab->session_->Snapshot(); Record.bytes_ = std::move(Bytes);Record.viewId_=Tab->pane_->ViewId().toStdString();
             const auto Revision = Tab->Revision(); Tab->checkpointing_ = true;
             auto* Watcher = new QFutureWatcher<storage::Result<RecoverySnapshot>>(this);
             connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, Revision, SavedRevision = Record.document_.savedRevision_, SourcePath = Record.document_.source_.localPath_] {
