@@ -147,8 +147,8 @@ public:
                 handles_.clear(); parents_.clear(); lockPath_ = Path; lockCode_ = OpenError;
                 return running();
             }
-            const auto Actual = Inspect(Path);
-            if (File->value_ == INVALID_HANDLE_VALUE || Identity(File->value_) != Row.source_.identity_ || Actual.identity_ != Row.source_.identity_
+            const auto Actual = InspectOpened(Path, File->value_);
+            if (File->value_ == INVALID_HANDLE_VALUE || Actual.identity_ != Row.source_.identity_
                 || Actual.modified_ != Row.source_.modified_ || Actual.size_ != Row.source_.size_ || Actual.directory_ != Row.source_.directory_)
                 return fail("rename-source-changed: " + Path);
             current_[I] = Path; handles_.push_back(std::move(File)); ++pinned_; return running();

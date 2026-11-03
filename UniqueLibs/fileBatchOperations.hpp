@@ -48,11 +48,13 @@ struct Handle {
     Handle(const Handle&) = delete;
     Handle& operator=(const Handle&) = delete;
 };
-inline QByteArray Identity(HANDLE File) {
-    BY_HANDLE_FILE_INFORMATION Info{};
-    if (!GetFileInformationByHandle(File, &Info)) return {};
+inline QByteArray Identity(HANDLE File, const BY_HANDLE_FILE_INFORMATION& Info) {
     if (storage::native::IsRedirectedHandle(File)) return QByteArray::fromStdString(storage::native::RedirectedRevision(Info).token_);
     return QByteArray::number(Info.dwVolumeSerialNumber) + ':' + QByteArray::number(Info.nFileIndexHigh) + ':' + QByteArray::number(Info.nFileIndexLow);
+}
+inline QByteArray Identity(HANDLE File) {
+    BY_HANDLE_FILE_INFORMATION Info{};
+    return GetFileInformationByHandle(File, &Info) ? Identity(File, Info) : QByteArray{};
 }
 inline DWORD RenameHandle(HANDLE& File, const QString& Destination) {
     const auto Path = NativePath(Destination); const auto Bytes = Path.size() * sizeof(wchar_t);
@@ -66,19 +68,24 @@ inline DWORD RenameHandle(HANDLE& File, const QString& Destination) {
     return storage::native::RefreshRenamedHandle(File, Path.toStdWString(), DELETE | FILE_READ_ATTRIBUTES, Before);
 }
 struct Entry { QString path_; QByteArray identity_; QDateTime modified_; bool directory_ = false; quint64 size_ = 0; QDateTime captured_; };
-inline Entry Inspect(const QString& Path) {
+// Callers that already hold the mutation handle must inspect that same object.
+// Reopening its pathname adds I/O and can inspect a different object on rename.
+inline Entry InspectOpened(const QString& Path, HANDLE File) {
     Entry E; E.path_ = QDir::cleanPath(Path);
-    const auto Native = NativePath(E.path_);
-    Handle File(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-    if (File.value_ == INVALID_HANDLE_VALUE) return E;
+    if (File == INVALID_HANDLE_VALUE) return E;
     BY_HANDLE_FILE_INFORMATION Info{};
-    if (!GetFileInformationByHandle(File.value_, &Info) || (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return E;
+    if (!GetFileInformationByHandle(File, &Info) || (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return E;
     E.size_ = (quint64(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow;
-    E.identity_ = Identity(File.value_); E.directory_ = Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY;
+    E.identity_ = Identity(File, Info); E.directory_ = Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY;
     const quint64 Ticks = (quint64(Info.ftLastWriteTime.dwHighDateTime) << 32) | Info.ftLastWriteTime.dwLowDateTime;
     E.modified_ = QDateTime::fromMSecsSinceEpoch(qint64(Ticks / 10000) - 11644473600000LL).toLocalTime();
     return E;
+}
+inline Entry Inspect(const QString& Path) {
+    const auto Native = NativePath(QDir::cleanPath(Path));
+    Handle File(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    return InspectOpened(Path, File.value_);
 }
 inline QString PinNativeParents(const QString& Folder, std::vector<std::unique_ptr<Handle>>& Pins) {
     if (!NativeFolder(Folder)) return QObject::tr("로컬·SMB 파일 경로만 지원합니다.");
@@ -399,8 +406,8 @@ inline BatchResult Execute(const QList<RenameRow>& Rows, const std::function<boo
         const auto Path = NativePath(Row.source_.path_);
         auto File = std::make_unique<Handle>(CreateFileW(reinterpret_cast<LPCWSTR>(Path.utf16()), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
             nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-        const auto Current = Inspect(Row.source_.path_);
-        if (File->value_ == INVALID_HANDLE_VALUE || Row.source_.identity_.isEmpty() || Identity(File->value_) != Row.source_.identity_
+        const auto Current = InspectOpened(Row.source_.path_, File->value_);
+        if (File->value_ == INVALID_HANDLE_VALUE || Row.source_.identity_.isEmpty() || Current.identity_ != Row.source_.identity_
             || Current.modified_ != Row.source_.modified_ || Current.size_ != Row.source_.size_ || Current.directory_ != Row.source_.directory_) {
             Result.error_ = QObject::tr("원본이 바뀌었거나 잠글 수 없습니다: %1").arg(Row.source_.path_); return Result;
         }
