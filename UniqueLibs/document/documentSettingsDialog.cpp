@@ -325,7 +325,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     for(const auto& Pair:{std::pair{"math",tr("수식 표시 (KaTeX)")},std::pair{"inlineDollar",tr("인라인 $…$ 수식")},std::pair{"mermaid",tr("Mermaid 다이어그램")},std::pair{"codeHighlight",tr("코드 블록 구문강조")},std::pair{"autoPreview",tr("입력 후 미리보기 자동 갱신")}})Check(MdRender,MdPrefix+Pair.first,Pair.second);
     MdSpin(MdRender,MdPrefix+"debounceMs",tr("입력 후 갱신 지연 (ms)"),100,3000);Check(MdRender,MdPrefix+"remoteImages",tr("외부 이미지 자동 다운로드"));
     Note(MdRender,tr("수식·다이어그램 렌더러와 글꼴은 내장되어 오프라인에서도 표시합니다. 원문 HTML은 텍스트로 표시하며 스크립트는 실행하지 않습니다."));
-    Markdown->addStretch();QTimer::singleShot(0,this,[UpdateFonts,UpdateSync]{UpdateFonts();UpdateSync();});
+    Markdown->addStretch();QTimer::singleShot(0,this,UpdateFonts);
     auto* ImagePage = Page(tr("이미지 뷰어"), tr("이미지와 코믹 읽기 설정을 관리합니다."));
     auto* ComicCard = Card(ImagePage, tr("읽기 설정"));
     Check(ComicCard, "documentViews/imageView/comic/coverAlone", tr("표지 단독"));
