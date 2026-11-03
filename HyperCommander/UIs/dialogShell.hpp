@@ -89,13 +89,15 @@ public:
     QString Destination() const;
     QString Conflict() const;
     bool SeparateFolders() const;
+    bool PreservePaths() const;
+    QString IncludePattern() const;
     bool Queued() const;
 private:
     void validate();
     QString baseDirectory_;
     QLineEdit* destination_;
-    QComboBox* conflict_;
-    QCheckBox *separate_, *queued_;
+    QLineEdit* pattern_;
+    QCheckBox *separate_, *paths_, *overwrite_, *queued_;
 };
 // Product request values are captured before entering the modal event loop.
 struct FileOperationDialogRequest

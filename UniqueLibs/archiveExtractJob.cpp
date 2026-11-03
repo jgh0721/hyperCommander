@@ -1,4 +1,5 @@
-﻿#include "archiveExtractJob.hpp"
+﻿#include "stdafx.h"
+#include "archiveExtractJob.hpp"
 #include "commonLibs/operations/providerInteractionTask.hpp"
 #include "commonLibs/operations/directoryPreparation.hpp"
 #include <QDir>
@@ -94,6 +95,7 @@ public:
         if (entries_.empty()) inner_ = std::make_unique<DirectoryPreparation>(target_, request_.writer_, std::make_unique<EmptyExtract>());
         else {
             FileOperationRequest Copy; Copy.sources_ = std::move(entries_); Copy.destination_ = target_; Copy.destinationWriter_ = request_.writer_;
+            Copy.preservePaths_ = request_.preservePaths_; Copy.includePattern_ = request_.includePattern_;
             Copy.conflict_ = request_.conflict_; Copy.createParents_ = true; Copy.elevation_ = request_.elevation_; Copy.maxEntries_ = Context.operation_.EnumerationLimit();
             auto Prepared = PrepareFileOperation(std::move(Copy), Context.operation_); if (!Prepared.HasValue()) return failed(Prepared.Failure());
             inner_ = std::move(Prepared.Value().task_);
@@ -120,7 +122,7 @@ private:
 };
 }
 Result<PreparedJob> PrepareExtract(ExtractRequest Request, OperationContext Context) {
-    if (!Request.writer_ || !Request.readers_ || (Request.archives_.empty() && !Request.selection_)
+    if (!IsValidCopyPattern(Request.includePattern_) || !Request.writer_ || !Request.readers_ || (Request.archives_.empty() && !Request.selection_)
         || (Request.selection_ && (!Request.selection_->Provider() || !Request.selection_->Count() || !Request.archives_.empty()))
         || (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb)
         || !QDir::isAbsolutePath(QString::fromStdString(Request.destination_.root_))) return Error{ErrorCategory::InvalidRequest, "invalid-extract-request"};

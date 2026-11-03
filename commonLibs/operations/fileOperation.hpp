@@ -66,6 +66,8 @@ namespace hc::operations
         // Semicolon-separated basename wildcards. Directories are always visited;
         // excluded files keep their source parent alive during a filtered move.
         std::string includePattern_ = "*";
+        // Extraction may visit directories while writing every file into one folder.
+        bool preservePaths_ = true;
         std::uint64_t bytesPerSecondLimit_ = 0; // Zero means unlimited, per job.
         // Optional single-selection output name for copy/move.
         std::string destinationName_;

@@ -2357,6 +2357,33 @@ private slots:
         QCOMPARE(read(Prefix + "/source" + (Directory ? "/payload" : "")), QByteArray("keep source"));
         QVERIFY(!QFileInfo::exists(root_->filePath(Prefix + "/target/source")));
     }
+    void flattenedFilteredExtraction_data()
+    {
+        QTest::addColumn<bool>("Paths"); QTest::newRow("paths") << true; QTest::newRow("flat") << false;
+    }
+    void flattenedFilteredExtraction()
+    {
+        QFETCH(bool, Paths);
+        const auto Prefix = QString("extract-paths-%1").arg(Paths);
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/input/sub/deep")));
+        QVERIFY(QDir().mkpath(root_->filePath(Prefix + "/output")));
+        QVERIFY(write(Prefix + "/input/sub/deep/a.txt", "text")); QVERIFY(write(Prefix + "/input/sub/README", "no extension"));
+        QVERIFY(write(Prefix + "/input/sub/b.bin", "excluded"));
+        const auto Source = writer_->Inspect(at(Prefix + "/input"), {}); QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request; Request.sources_ = {{*Source.Value(), reader_, {}}};
+        Request.destination_ = at(Prefix + "/output"); Request.destinationWriter_ = writer_;
+        Request.preservePaths_ = Paths; Request.includePattern_ = "*.txt;README";
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        const auto Started = SubmitFileOperation(Scheduler, Request); QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "filtered extraction failed");
+        QCOMPARE(read(Prefix + "/output/" + (Paths ? "input/sub/deep/" : "") + "a.txt"), QByteArray("text"));
+        QCOMPARE(read(Prefix + "/output/" + (Paths ? "input/sub/" : "") + "README"), QByteArray("no extension"));
+        QVERIFY(!QFileInfo::exists(root_->filePath(Prefix + "/output/" + (Paths ? "input/sub/" : "") + "b.bin")));
+        QCOMPARE(QFileInfo::exists(root_->filePath(Prefix + "/output/input")), Paths);
+        QCOMPARE(read(Prefix + "/input/sub/b.bin"), QByteArray("excluded"));
+    }
     void nestedDirectoryPlanAndNamedMove()
     {
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());

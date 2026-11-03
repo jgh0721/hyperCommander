@@ -892,23 +892,31 @@ ArchiveExtractDialog::ArchiveExtractDialog(const QStringList& Names, const QStri
     auto* Browse = new fm::ui::Button(tr("찾아보기(&B)"), Card); Browse->setAutoDefault(false); PathRow->addWidget(Browse);
     auto* DestinationLabel = new QLabel(tr("대상 폴더(&D)"), Card); DestinationLabel->setBuddy(destination_); Form->addRow(DestinationLabel, PathRow);
     connect(Browse, &QPushButton::clicked, this, [this] { const auto Path = QFileDialog::getExistingDirectory(this, tr("압축 해제 대상 폴더"), this->Destination()); if (!Path.isEmpty()) destination_->setText(QDir::toNativeSeparators(Path)); });
-    separate_ = new QCheckBox(tr("압축 파일 이름으로 각각 하위 폴더 만들기(&F)"), Card); separate_->setObjectName("hc.archive.extract.separate"); separate_->setChecked(!InsideArchive); separate_->setEnabled(!InsideArchive); Form->addRow(separate_);
-    conflict_ = new QComboBox(Card); conflict_->setObjectName("hc.archive.extract.conflict"); conflict_->addItem(tr("묻기"), "ask"); conflict_->addItem(tr("덮어쓰기"), "replace"); conflict_->addItem(tr("건너뛰기"), "skip"); Form->addRow(tr("같은 이름의 파일"), conflict_);
+    separate_ = new QCheckBox(tr("압축 파일 이름으로 각각 하위 폴더 만들기(&S)"), Card); separate_->setObjectName("hc.archive.extract.separate"); separate_->setChecked(!InsideArchive); separate_->setEnabled(!InsideArchive); Form->addRow(separate_);
+    paths_ = new QCheckBox(tr("경로명도 파일과 함께 압축 해제하기(&U)"), Card); paths_->setObjectName("hc.archive.extract.paths"); paths_->setChecked(true); Form->addRow(paths_);
+    overwrite_ = new QCheckBox(tr("기존 파일 덮어쓰기(&O)"), Card); overwrite_->setObjectName("hc.archive.extract.overwrite"); Form->addRow(overwrite_);
+    pattern_ = new QLineEdit(QStringLiteral("*.*"), Card); pattern_->setObjectName("hc.archive.extract.pattern");
+    auto* PatternLabel = new QLabel(tr("압축 해제할 파일(&F)"), Card); PatternLabel->setBuddy(pattern_); Form->addRow(PatternLabel, pattern_);
+    connect(pattern_, &QLineEdit::textChanged, this, [this] { validate(); });
     queued_ = new QCheckBox(tr("대기열에 추가(&Q)"), Card); queued_->setObjectName("hc.archive.extract.queued"); Form->addRow(queued_);
     auto* Resolved = new hc::qt::ElidedLabel(this); Resolved->setObjectName("hc.archive.extract.resolved"); BodyLayout()->addWidget(Resolved);
     const auto UpdateResolved = [this, Resolved] { Resolved->SetText(tr("대상: %1").arg(QDir::toNativeSeparators(this->Destination()))); Resolved->setToolTip(tr("상대경로 기준: %1\n해석된 대상: %2").arg(QDir::toNativeSeparators(baseDirectory_),QDir::toNativeSeparators(this->Destination()))); };
     connect(destination_, &QLineEdit::textChanged, this, UpdateResolved); UpdateResolved();
-    auto* Note = new QLabel(tr("원본은 유지하고 하위 폴더 구조를 보존합니다. 암호가 필요하면 작업 중 입력을 요청합니다."), this); Note->setWordWrap(true); BodyLayout()->addWidget(Note); BodyLayout()->addStretch();
-    AcceptButton()->setText(tr("압축 해제(&S)")); connect(destination_, &QLineEdit::textChanged, this, [this] { validate(); });
+    auto* Note = new QLabel(tr("원본은 유지합니다. 파일 패턴은 세미콜론으로 구분합니다. 암호가 필요하면 작업 중 입력을 요청합니다."), this); Note->setWordWrap(true); BodyLayout()->addWidget(Note); BodyLayout()->addStretch();
+    AcceptButton()->setText(tr("압축 해제(&X)")); connect(destination_, &QLineEdit::textChanged, this, [this] { validate(); });
     destination_->selectAll(); SetInitialInput(destination_); validate(); FitToContents();
     InstallNativePathCompletion(destination_, baseDirectory_, false);
 }
 QString ArchiveExtractDialog::Destination() const { return ResolveNativeDestination(destination_->text(), baseDirectory_); }
-QString ArchiveExtractDialog::Conflict() const { return conflict_->currentData().toString(); }
+QString ArchiveExtractDialog::Conflict() const { return overwrite_->isChecked() ? QStringLiteral("replace") : QStringLiteral("ask"); }
+bool ArchiveExtractDialog::PreservePaths() const { return paths_->isChecked(); }
+QString ArchiveExtractDialog::IncludePattern() const { return pattern_->text().trimmed(); }
 bool ArchiveExtractDialog::SeparateFolders() const { return separate_->isChecked(); }
 bool ArchiveExtractDialog::Queued() const { return queued_->isChecked(); }
 void ArchiveExtractDialog::validate() {
-    const bool Valid = !Destination().isEmpty();
-    SetAcceptEnabled(Valid); SetMessage(Valid ? QString() : tr("대상 경로를 입력하세요. . · .. 상대경로는 현재 작업 폴더 기준입니다."), !Valid);
+    const bool ValidPath = !Destination().isEmpty();
+    const bool ValidPattern = hc::operations::IsValidCopyPattern(IncludePattern().toStdString());
+    const bool Valid = ValidPath && ValidPattern;
+    SetAcceptEnabled(Valid); SetMessage(Valid ? QString() : !ValidPath ? tr("대상 경로를 입력하세요. . · .. 상대경로는 현재 작업 폴더 기준입니다.") : tr("올바른 파일 패턴을 입력하세요. 예: *.*; *.txt; *.jpg"), !Valid);
 }
 }

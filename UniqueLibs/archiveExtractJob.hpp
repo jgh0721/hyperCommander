@@ -12,6 +12,8 @@ struct ExtractRequest {
     // thread. Each returned provider performs mounting only on the job worker.
     std::function<std::vector<std::shared_ptr<storage::IStorageProvider>>(const storage::EntrySnapshot&)> readers_;
     bool separateFolders_ = true;
+    bool preservePaths_ = true;
+    std::string includePattern_ = "*.*";
     ConflictPolicy conflict_ = ConflictPolicy::Ask;
     std::shared_ptr<IFileElevationService> elevation_;
 };

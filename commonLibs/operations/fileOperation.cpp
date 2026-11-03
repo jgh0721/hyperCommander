@@ -944,7 +944,7 @@ namespace hc::operations
                     {
                         if (!SafeName(Entry.name_)) return failed({ErrorCategory::InvalidRequest, "unsafe-entry-name"});
                         PlannedItem Item{{Entry, enumerating_.source_.reader_, enumerating_.source_.writer_},
-                            Child(enumerating_.destination_, Entry.name_), enumerating_.depth_ + 1};
+                            Child(request_.preservePaths_ ? enumerating_.destination_ : request_.destination_, Entry.name_), enumerating_.depth_ + 1};
                         Item.root_ = enumerating_.root_; pending_.push_back(std::move(Item));
                     }
                     if (Page.Value().end_) cursor_.reset();
@@ -1001,7 +1001,7 @@ namespace hc::operations
                 if (Frame.next_ < Frame.entries_.size()) {
                     auto Entry = std::move(Frame.entries_[Frame.next_++]);
                     PlannedItem Item{{std::move(Entry), Frame.parent_.source_.reader_, Frame.parent_.source_.writer_}, {}, Frame.parent_.depth_ + 1};
-                    Item.destination_ = Child(Frame.parent_.destination_, Item.source_.entry_.name_); Item.root_ = Frame.parent_.root_;
+                    Item.destination_ = Child(request_.preservePaths_ ? Frame.parent_.destination_ : request_.destination_, Item.source_.entry_.name_); Item.root_ = Frame.parent_.root_;
                     return prepareItem(std::move(Item), Context);
                 }
                 if (Frame.ended_) { enumerations_.pop_back(); return progress(); }
@@ -1130,7 +1130,8 @@ namespace hc::operations
                         }
                     }
                 }
-                if (Recycling ? Item.depth_ == 0 : !Item.source_.entry_.directory_ || request_.operation_ != FileOperation::Delete) items_.push_back(Item);
+                if ((Recycling ? Item.depth_ == 0 : !Item.source_.entry_.directory_ || request_.operation_ != FileOperation::Delete)
+                    && (request_.preservePaths_ || !Item.source_.entry_.directory_)) items_.push_back(Item);
                 if (Item.source_.entry_.directory_ && request_.operation_ != FileOperation::Rename)
                 {
                     if (request_.operation_ == FileOperation::Move || (request_.operation_ == FileOperation::Delete && !Recycling))
@@ -1691,7 +1692,8 @@ namespace hc::operations
             if (Request.operation_ != FileOperation::Delete) Job.resourceLanes_.push_back(LaneFor(Request.destination_));
             return PreparedJob{std::move(Job), std::make_unique<SelectionTask>(std::move(Request))};
         }
-        if (Request.operation_ < FileOperation::Copy || Request.operation_ > FileOperation::Rename
+        if ((!Request.preservePaths_ && Request.operation_ != FileOperation::Copy)
+            || Request.operation_ < FileOperation::Copy || Request.operation_ > FileOperation::Rename
             || !Request.maxEntries_ || !Request.maxDepth_ || !Request.maxBytes_
             || Request.sources_.size() > Request.maxEntries_ || (Request.operation_ != FileOperation::MakeDirectory && Request.sources_.empty())
             || (Request.operation_ == FileOperation::MakeDirectory && !Request.sources_.empty())

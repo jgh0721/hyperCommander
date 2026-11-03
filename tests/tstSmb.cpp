@@ -317,6 +317,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobInteractionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationProgressUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationLayoutUi"
+                || (QStringList{"r24ExtractOptionsUi", "r24ExtractOptionsJobUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileClipboardUi"
@@ -4022,6 +4023,62 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Completed, 15000);
         QVERIFY(!QFileInfo::exists(Input.fileName()));
         QFile Output(Destination.filePath("transfer.bin")); QVERIFY(Output.open(QIODevice::ReadOnly)); QCOMPARE(Output.readAll(), Payload); Output.close();
+    }
+    void r24ExtractOptionsJobUi_data()
+    {
+        QTest::addColumn<bool>("Paths"); QTest::addColumn<bool>("Filtered");
+        for (const bool Paths : {false, true}) for (const bool Filtered : {false, true})
+            QTest::newRow(qPrintable(QString("%1-%2").arg(Paths).arg(Filtered))) << Paths << Filtered;
+    }
+    void r24ExtractOptionsJobUi()
+    {
+        using namespace hc::operations; using namespace hc::storage;
+        QFETCH(bool, Paths); QFETCH(bool, Filtered);
+        QTemporaryDir Directory(QDir::current().filePath("r24-extract-XXXXXX")); QVERIFY(Directory.isValid());
+        QVERIFY(QDir().mkpath(Directory.filePath("input/deep")));
+        const auto Put = [&](const QString& Name, const QByteArray& Data) { QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Data) == Data.size(); };
+        QVERIFY(Put("input/a.txt", "archive text")); QVERIFY(Put("input/deep/README", "extensionless")); QVERIFY(Put("input/b.bin", "binary"));
+        auto Backend = hc::plugins::MakeApprovedWcxBackend(hc::plugins::BuiltinSevenZipOptions());
+        hc::plugins::ArchiveUpdate Create; Create.archive_ = Directory.filePath("sample.7z").toStdString();
+        Create.inputDirectory_ = Directory.path().toStdString(); Create.add_ = {"input/a.txt", "input/deep/README", "input/b.bin"};
+        Create.creation_ = hc::plugins::ArchiveCreationOptions{5, true};
+        const auto Made = Backend->Update(std::move(Create), {}); QVERIFY2(Made.HasValue(), Made.HasValue() ? "" : Made.Failure().code_.c_str());
+        const auto Output = Paths ? QString("output/input/") : QString("output/");
+        QVERIFY(QDir().mkpath(Directory.filePath(Output))); QVERIFY(Put(Output + "a.txt", "old content"));
+        auto Native = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Native);
+        const auto Source = Native->Resolve({LocatorKind::Local, Directory.filePath("sample.7z").toStdString()}, {}).get(); QVERIFY(Source.HasValue());
+        ExtractRequest Request; Request.archives_ = {{Source.Value(), Native, {}}}; Request.sourceRoot_ = {LocatorKind::Local, Directory.path().toStdString()};
+        Request.destination_ = {LocatorKind::Local, Directory.filePath("output").toStdString()}; Request.writer_ = Writer;
+        Request.separateFolders_ = false; Request.preservePaths_ = Paths; Request.includePattern_ = Filtered ? "*.txt;README" : "*.*"; Request.conflict_ = ConflictPolicy::Replace;
+        Request.readers_ = [Backend, Base = Directory.path().toStdString()](const EntrySnapshot& Entry) {
+            return std::vector<std::shared_ptr<IStorageProvider>>{MakeWcxReadProvider({}, {LocatorKind::Archive, Entry.locator_.root_, {{"wcx", "/"}}}, Base, Backend, {}, true)};
+        };
+        auto Prepared = PrepareExtract(std::move(Request)); QVERIFY(Prepared.HasValue());
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Started = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Started.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Started.Value().completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 15000);
+        const auto Result = Started.Value().completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "extraction failed");
+        QFile Text(Directory.filePath(Output + "a.txt")); QVERIFY(Text.open(QIODevice::ReadOnly)); QCOMPARE(Text.readAll(), QByteArray("archive text")); Text.close();
+        QFile Readme(Directory.filePath(Output + (Paths ? "deep/" : "") + "README")); QVERIFY(Readme.open(QIODevice::ReadOnly)); QCOMPARE(Readme.readAll(), QByteArray("extensionless")); Readme.close();
+        QCOMPARE(QFileInfo::exists(Directory.filePath(Output + "b.bin")), !Filtered);
+        QCOMPARE(QFileInfo::exists(Directory.filePath("output/input")), Paths);
+    }
+    void r24ExtractOptionsUi()
+    {
+        hc::ui::ArchiveExtractDialog Dialog({"sample.zip"}, QDir::tempPath(), false, main_);
+        auto* Separate = Dialog.findChild<QCheckBox*>("hc.archive.extract.separate");
+        auto* Paths = Dialog.findChild<QCheckBox*>("hc.archive.extract.paths");
+        auto* Overwrite = Dialog.findChild<QCheckBox*>("hc.archive.extract.overwrite");
+        auto* Pattern = Dialog.findChild<QLineEdit*>("hc.archive.extract.pattern");
+        QVERIFY(Separate && Paths && Overwrite && Pattern);
+        QCOMPARE(Pattern->text(), QString("*.*")); QVERIFY(Dialog.PreservePaths()); QCOMPARE(Dialog.Conflict(), QString("ask"));
+        QVERIFY(Separate->text().contains("(&S)")); QVERIFY(Paths->text().contains("(&U)")); QVERIFY(Overwrite->text().contains("(&O)"));
+        Dialog.show(); QTest::qWait(100); QVERIFY(SaveR9Dialog(Dialog, "r24-extract-options"));
+        Paths->setChecked(false); Overwrite->setChecked(true); Pattern->setText("*.txt;README");
+        QVERIFY(!Dialog.PreservePaths()); QCOMPARE(Dialog.Conflict(), QString("replace")); QCOMPARE(Dialog.IncludePattern(), QString("*.txt;README"));
+        Pattern->setText("bad/path"); QVERIFY(!Dialog.AcceptButton()->isEnabled()); Pattern->setText("*.*"); QVERIFY(Dialog.AcceptButton()->isEnabled());
+        QVERIFY(Dialog.AcceptButton()->text().contains("(&X)"));
     }
     void r21TransferProgressUi()
     {

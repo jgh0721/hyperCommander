@@ -1536,11 +1536,12 @@ void CommandUiBridge::extractArchive() {
     Result<hc::operations::PreparedJob> Prepared = Error{ErrorCategory::Internal, "extract-prepare"};
     if (BrowseRoot) {
         hc::operations::ExtractRequest Request; Request.archives_ = Sources; Request.sourceRoot_ = Context.location_;
-        Request.destination_ = Target; Request.writer_ = Writer; Request.conflict_ = Conflict; Request.separateFolders_ = Dialog.SeparateFolders(); Request.elevation_ = fileJobs_->ElevationService();
+        Request.destination_ = Target; Request.writer_ = Writer; Request.conflict_ = Conflict; Request.separateFolders_ = Dialog.SeparateFolders(); Request.preservePaths_ = Dialog.PreservePaths(); Request.includePattern_ = Dialog.IncludePattern().toStdString(); Request.elevation_ = fileJobs_->ElevationService();
         Request.readers_ = [Reader = Sources.front().reader_](const EntrySnapshot&) { return std::vector<std::shared_ptr<IStorageProvider>>{Reader}; };
         Prepared = hc::operations::PrepareExtract(std::move(Request), Operation);
     } else if (Inside) {
         hc::operations::FileOperationRequest Copy; Copy.sources_ = std::move(Sources); Copy.selection_ = Context.selectionManifest_; Copy.selectionRoot_ = Context.location_;
+        Copy.preservePaths_ = Dialog.PreservePaths(); Copy.includePattern_ = Dialog.IncludePattern().toStdString();
         Copy.destination_ = Target; Copy.destinationWriter_ = Writer; Copy.conflict_ = Conflict; Copy.createParents_ = true; Copy.elevation_ = fileJobs_->ElevationService();
         Prepared = hc::operations::PrepareFileOperation(std::move(Copy), Operation);
         if (Prepared.HasValue()) Prepared.Value().task_ = std::make_unique<hc::operations::ProviderInteractionTask>(std::move(Prepared.Value().task_));
@@ -1562,7 +1563,7 @@ void CommandUiBridge::extractArchive() {
             Choices.push_back({Plugin, Spec.Exts, std::move(Backend), Spec.applicationRule_, Spec.hostEnabled_ && Spec.hostApproval_.reviewed_.format_ == hc::plugins::PluginFormat::SevenZip});
         }
         hc::operations::ExtractRequest Request; Request.archives_ = std::move(Sources); Request.selection_ = Context.selectionManifest_; Request.sourceRoot_ = Context.location_;
-        Request.destination_ = Target; Request.writer_ = Writer; Request.conflict_ = Conflict; Request.separateFolders_ = Dialog.SeparateFolders(); Request.elevation_ = fileJobs_->ElevationService();
+        Request.destination_ = Target; Request.writer_ = Writer; Request.conflict_ = Conflict; Request.separateFolders_ = Dialog.SeparateFolders(); Request.preservePaths_ = Dialog.PreservePaths(); Request.includePattern_ = Dialog.IncludePattern().toStdString(); Request.elevation_ = fileJobs_->ElevationService();
         Request.readers_ = [Choices = std::move(Choices), Temporary = Target.kind_==LocatorKind::Local ? Target.root_ : std::string{}](const EntrySnapshot& Entry) {
             std::vector<std::shared_ptr<IStorageProvider>> Readers; const auto Extension = QFileInfo(QString::fromStdString(Entry.name_)).suffix();
             for (const auto& Choice : Choices) {
