@@ -195,9 +195,44 @@ class MarkdownTests final : public QObject
         QTRY_VERIFY_WITH_TIMEOUT(Aligned(),5000);
         QTRY_VERIFY_WITH_TIMEOUT(Md->State()["previewScroll"].toObject()["position"].toObject()["visible"].toBool(),5000);
         QCOMPARE(Md->State()["previewScroll"].toObject()["position"].toObject()["line"].toInt(),Text->currentLine());
+        // Moving within a display row must not scroll, on either side of a line break.
+        const auto CaretLine=Backend->Send(SCI_LINEFROMPOSITION,Backend->Send(SCI_GETCURRENTPOS));
+        const auto RowStart=Backend->Send(SCI_POSITIONFROMLINE,CaretLine),LineEnd=Backend->Send(SCI_GETLINEENDPOSITION,CaretLine);
+        auto Boundary=LineEnd;
+        if(SourceWrap) {
+            const auto FirstY=Backend->Send(SCI_POINTYFROMPOSITION,0,RowStart);
+            for(auto Pos=Backend->Send(SCI_POSITIONAFTER,RowStart);Pos<LineEnd;Pos=Backend->Send(SCI_POSITIONAFTER,Pos))
+                if(Backend->Send(SCI_POINTYFROMPOSITION,0,Pos)>FirstY){Boundary=Pos;break;}
+            QVERIFY(Boundary<LineEnd);
+        }
+        QList<qintptr> Bases{RowStart};
+        if(SourceWrap)Bases.append(Backend->Send(SCI_POSITIONBEFORE,Backend->Send(SCI_POSITIONBEFORE,Boundary)));
+        Bases.append(Backend->Send(SCI_POSITIONBEFORE,Backend->Send(SCI_POSITIONBEFORE,LineEnd)));
+        int Crossings=0;
+        for(const auto Base:Bases) {
+            Backend->Send(SCI_GOTOPOS,Base);QTest::qWait(500);
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Pane.winId())));
+            Backend->widget()->setFocus();SetFocus(reinterpret_cast<HWND>(Backend->widget()->effectiveWinId()));QTRY_VERIFY(Backend->widget()->hasFocus());QTRY_VERIFY_WITH_TIMEOUT(Aligned(),5000);
+            for(int Step=0;Step<12;++Step) {
+                const auto BeforePos=Backend->Send(SCI_GETCURRENTPOS),BeforeLine=Backend->Send(SCI_LINEFROMPOSITION,BeforePos);
+                const auto BeforeY=Backend->Send(SCI_POINTYFROMPOSITION,0,BeforePos);
+                const int BeforeTop=Backend->firstVisibleLine();const auto BeforeAnchor=Md->State()["sourceAnchor"].toObject();
+                const double BeforeOffset=Md->State()["previewScroll"].toObject()["offset"].toDouble();
+                QTest::keyClick(Backend->widget(),Step<6?Qt::Key_Right:Qt::Key_Left);QTest::qWait(350);
+                const auto AfterPos=Backend->Send(SCI_GETCURRENTPOS);
+                QVERIFY2(AfterPos!=BeforePos,qPrintable(QString("base %1 step %2 position %3 focus %4").arg(Base).arg(Step).arg(BeforePos).arg(Backend->widget()->hasFocus())));
+                QTRY_VERIFY_WITH_TIMEOUT(Aligned(),5000);
+                if(Backend->Send(SCI_LINEFROMPOSITION,AfterPos)==BeforeLine && Backend->Send(SCI_POINTYFROMPOSITION,0,AfterPos)==BeforeY && Backend->firstVisibleLine()==BeforeTop) {
+                    QCOMPARE(Md->State()["sourceAnchor"].toObject(),BeforeAnchor);
+                    QVERIFY2(qAbs(Md->State()["previewScroll"].toObject()["offset"].toDouble()-BeforeOffset)<2,"Horizontal caret movement scrolled the preview");
+                } else ++Crossings;
+            }
+        }
+        QVERIFY(Crossings>0);
+        Backend->Send(SCI_GOTOPOS,I.text_.left(Paragraph50).toUtf8().size());Pane.Focus();QTRY_VERIFY_WITH_TIMEOUT(Aligned(),5000);
         for(int Step=0;Step<24;++Step){
             QTest::keyClick(Pane.InputWidget(),Step<12?Qt::Key_Down:Qt::Key_Up,Step%3==0?Qt::ControlModifier:Qt::NoModifier);
-            QTest::qWait(350);QVERIFY2(Aligned(),qPrintable(QString::fromUtf8(QJsonDocument(Md->State()).toJson(QJsonDocument::Compact))));
+            QTest::qWait(350);QTRY_VERIFY2_WITH_TIMEOUT(Aligned(),qPrintable(QString::fromUtf8(QJsonDocument(Md->State()).toJson(QJsonDocument::Compact))),5000);
         }
         if(TallImage) {
             const auto Start=Backend->Send(SCI_POSITIONFROMLINE,ImageLine-1),End=Backend->Send(SCI_GETLINEENDPOSITION,ImageLine-1);

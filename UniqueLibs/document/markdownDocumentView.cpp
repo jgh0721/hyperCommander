@@ -544,9 +544,14 @@ QJsonObject MarkdownDocumentView::sourceScrollAnchor() const
         Line = int(B->Send(SCI_LINEFROMPOSITION, Position));
         Y = B->Send(SCI_POINTYFROMPOSITION, 0, Position) + qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, Line)) * .5;
     }
-    const auto Start = B->Send(SCI_POSITIONFROMLINE, Line), End = B->Send(SCI_GETLINEENDPOSITION, Line);
-    const double Count = qMax<qintptr>(1, B->Send(SCI_COUNTCHARACTERS, Start, End));
-    const double Fraction = qBound(0.0, double(B->Send(SCI_COUNTCHARACTERS, Start, Position)) / Count, .999);
+    // Use the display row's vertical progress, not the caret's column. Combining
+    // horizontal progress with a new row's viewport ratio makes the preview
+    // creep upward and then jump back down at soft and hard line breaks.
+    const auto Start = B->Send(SCI_POSITIONFROMLINE, Line);
+    const double Row = qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, Line));
+    const double Rows = qMax<qintptr>(1, B->Send(SCI_WRAPCOUNT, Line));
+    const double Top = B->Send(SCI_POINTYFROMPOSITION, 0, Start);
+    const double Fraction = qBound(0.0, (Y - Row * .5 - Top) / (Rows * Row), .999);
     return {{"line", Line + 1 + Fraction}, {"ratio", qBound(0.0, Y / Height, 1.0)}, {"caret", true}, {"end", false}};
 }
 void MarkdownDocumentView::sampleSource()

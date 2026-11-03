@@ -57,9 +57,14 @@ QJsonObject EpubSourceEditor::sourceScrollTarget(bool Revision)const {
         CaretLine=int(Backend->Send(SCI_LINEFROMPOSITION,Position));
         Y=Backend->Send(SCI_POINTYFROMPOSITION,0,Position)+qMax<qintptr>(1,Backend->Send(SCI_TEXTHEIGHT,CaretLine))*.5;
     }
-    const auto Start=Backend->Send(SCI_POSITIONFROMLINE,CaretLine),End=Backend->Send(SCI_GETLINEENDPOSITION,CaretLine);
-    const double Count=qMax<qintptr>(1,Backend->Send(SCI_COUNTCHARACTERS,Start,End));
-    const double Line=CaretLine+1+qBound(0.0,double(Backend->Send(SCI_COUNTCHARACTERS,Start,Position))/Count,.999);
+    // Horizontal progress is not a vertical scroll anchor: at the next display
+    // row the viewport ratio also changes, pulling the preview back down.
+    // Follow the start of the display row, including wrapped rows, instead.
+    const auto Start=Backend->Send(SCI_POSITIONFROMLINE,CaretLine);
+    const double Row=qMax<qintptr>(1,Backend->Send(SCI_TEXTHEIGHT,CaretLine));
+    const double Rows=qMax<qintptr>(1,Backend->Send(SCI_WRAPCOUNT,CaretLine));
+    const double Top=Backend->Send(SCI_POINTYFROMPOSITION,0,Start);
+    const double Line=CaretLine+1+qBound(0.0,(Y-Row*.5-Top)/(Rows*Row),.999);
     return {{"chapter",spineIndex(current_)},{"line",Revision?toPreviewLine(Line):Line},{"ratio",qBound(0.0,Y/Height,1.0)},{"end",false}};
 }
 void EpubSourceEditor::syncPreviewScroll() {

@@ -566,6 +566,58 @@ private slots:
         }
         QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
     }
+    void horizontalCaretScrollSync_data() { scrollSyncTallImageKeys_data(); }
+    void horizontalCaretScrollSync() {
+        QFETCH(bool,SourceWrap);QFETCH(bool,PreviewWrap);
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");QVERIFY(!Corpus.isEmpty());
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        QString Chapter;const auto Bytes=scrollBook(Corpus,Chapter,240,true,PreviewWrap);QVERIFY(!Bytes.isEmpty());
+        const auto Book=Temp.filePath("horizontal-scroll.epub");QVERIFY(writeBook(Book,Bytes));
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));QString Id;QVERIFY(openReading(Window,Book,Id));
+        auto* Editor=beginEditing(Window,Id);QVERIFY(Editor);QVERIFY(selectResource(*Editor,Chapter));
+        QTRY_VERIFY_WITH_TIMEOUT(previewPage(*Editor)["chapterIndex"].toInt()==0 && previewScroll(*Editor)["supported"].toBool(),15000);
+        Editor->SourceView()->setWordWrap(SourceWrap);QTest::qWait(400);
+        auto* Backend=sourceBackend(*Editor);const auto Text=sourceText(*Editor);
+        const int Paragraph50=Text.indexOf("scroll sync evidence 50 ");QVERIFY(Paragraph50>0);
+        Backend->Send(SCI_GOTOPOS,Text.left(Paragraph50).toUtf8().size());
+        Backend->scrollFractionalLineToViewportRatio(Text.left(Paragraph50).count('\n')+1,.2);
+        const auto Applied=[&]{return previewScroll(*Editor)["applied"].toInteger()==scrollRequests(*Editor);};
+        // Moving within a display row must not scroll, on either side of a line break.
+        const auto CaretLine=Backend->Send(SCI_LINEFROMPOSITION,Backend->Send(SCI_GETCURRENTPOS));
+        const auto RowStart=Backend->Send(SCI_POSITIONFROMLINE,CaretLine),LineEnd=Backend->Send(SCI_GETLINEENDPOSITION,CaretLine);
+        auto Boundary=LineEnd;
+        if(SourceWrap) {
+            const auto FirstY=Backend->Send(SCI_POINTYFROMPOSITION,0,RowStart);
+            for(auto Pos=Backend->Send(SCI_POSITIONAFTER,RowStart);Pos<LineEnd;Pos=Backend->Send(SCI_POSITIONAFTER,Pos))
+                if(Backend->Send(SCI_POINTYFROMPOSITION,0,Pos)>FirstY){Boundary=Pos;break;}
+            QVERIFY(Boundary<LineEnd);
+        }
+        QList<qintptr> Bases{RowStart};
+        if(SourceWrap)Bases.append(Backend->Send(SCI_POSITIONBEFORE,Backend->Send(SCI_POSITIONBEFORE,Boundary)));
+        Bases.append(Backend->Send(SCI_POSITIONBEFORE,Backend->Send(SCI_POSITIONBEFORE,LineEnd)));
+        int Crossings=0;
+        for(const auto Base:Bases) {
+            Backend->Send(SCI_GOTOPOS,Base);QTest::qWait(500);
+            QVERIFY(foreground(Window));QApplication::setActiveWindow(&Window);Editor->SourceInput()->setFocus();
+            QTRY_VERIFY(Editor->SourceInput()->hasFocus());QTRY_VERIFY_WITH_TIMEOUT(Applied(),5000);
+            for(int Step=0;Step<12;++Step) {
+                const auto BeforePos=Backend->Send(SCI_GETCURRENTPOS),BeforeLine=Backend->Send(SCI_LINEFROMPOSITION,BeforePos);
+                const auto BeforeY=Backend->Send(SCI_POINTYFROMPOSITION,0,BeforePos);
+                const int BeforeTop=Backend->firstVisibleLine();const auto BeforeAnchor=Editor->Snapshot()["scrollSync"].toObject()["line"].toDouble();
+                const double BeforeOffset=previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble();
+                QTest::keyClick(Editor->SourceInput(),Step<6?Qt::Key_Right:Qt::Key_Left);QTest::qWait(350);
+                const auto AfterPos=Backend->Send(SCI_GETCURRENTPOS);
+                QVERIFY2(AfterPos!=BeforePos,qPrintable(QString("base %1 step %2 position %3 focus %4").arg(Base).arg(Step).arg(BeforePos).arg(Editor->SourceInput()->hasFocus())));
+                QTRY_VERIFY_WITH_TIMEOUT(Applied(),5000);
+                if(Backend->Send(SCI_LINEFROMPOSITION,AfterPos)==BeforeLine && Backend->Send(SCI_POINTYFROMPOSITION,0,AfterPos)==BeforeY && Backend->firstVisibleLine()==BeforeTop) {
+                    QCOMPARE(Editor->Snapshot()["scrollSync"].toObject()["line"].toDouble(),BeforeAnchor);
+                    QVERIFY2(qAbs(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-BeforeOffset)<2,"Horizontal caret movement scrolled the preview");
+                } else ++Crossings;
+            }
+        }
+        QVERIFY(Crossings>0);
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
     void scrollSyncTallImageKeys_data() {
         QTest::addColumn<bool>("SourceWrap");QTest::addColumn<bool>("PreviewWrap");
         for(bool SourceWrap:{false,true})for(bool PreviewWrap:{false,true})
