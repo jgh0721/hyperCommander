@@ -16,6 +16,9 @@
 #include "text/ColumnRulerWidget.h"
 #include <QClipboard>
 #include <QSaveFile>
+#include <QBuffer>
+#include <QLockFile>
+#include <QtCore/private/qzipwriter_p.h>
 #include <QDoubleSpinBox>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -65,6 +68,19 @@ class DocumentPreferencesTests : public QObject {
     Q_OBJECT
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
     static void Write(const QString& Path, const QByteArray& Bytes) { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Bytes), Bytes.size()); }
+    static QByteArray workspaceBook()
+    {
+        QByteArray Bytes;QBuffer Buffer(&Bytes);if(!Buffer.open(QIODevice::WriteOnly))return {};
+        QZipWriter Zip(&Buffer);Zip.setCompressionPolicy(QZipWriter::NeverCompress);
+        Zip.addFile("mimetype","application/epub+zip");
+        Zip.addFile("META-INF/container.xml","<container xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\" version=\"1.0\"><rootfiles><rootfile full-path=\"EPUB/content.opf\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>");
+        Zip.addFile("EPUB/content.opf","<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"id\"><metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:identifier id=\"id\">workspace-test</dc:identifier><dc:title>Workspace</dc:title><dc:language>ko</dc:language><meta property=\"dcterms:modified\">2026-11-03T00:00:00Z</meta></metadata><manifest><item id=\"one\" href=\"one.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"two\" href=\"two.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/></manifest><spine><itemref idref=\"one\"/><itemref idref=\"two\"/></spine></package>");
+        Zip.addFile("EPUB/nav.xhtml","<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>Contents</title></head><body><nav epub:type=\"toc\"><ol><li><a href=\"one.xhtml\">First</a></li><li><a href=\"two.xhtml\">Second</a></li></ol></nav></body></html>");
+        QByteArray Chapter="<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Chapter</title></head><body>\n";
+        for(int I=0;I<100;++I)Chapter+="<p>workspace paragraph "+QByteArray::number(I)+" 가나다 text</p>\n";
+        Chapter+="</body></html>";Zip.addFile("EPUB/one.xhtml",Chapter);Zip.addFile("EPUB/two.xhtml",Chapter);Zip.close();
+        return Zip.status()==QZipWriter::NoError?Bytes:QByteArray{};
+    }
 private slots:
     void windowSizePersistence_data()
     {
@@ -937,8 +953,7 @@ private slots:
     }
     void epubEditingWorkspaceRoundTrip()
     {
-        QFile Fixture(qEnvironmentVariable("HC_EPUB_READER_EPUB"));if(Fixture.fileName().isEmpty())QSKIP("EPUB fixture required");
-        QVERIFY(Fixture.open(QIODevice::ReadOnly));const auto Bytes=Fixture.readAll();QTemporaryDir Temp;
+        const auto Bytes=workspaceBook();QVERIFY(!Bytes.isEmpty());QTemporaryDir Temp;
         const auto OldWorkspace=qApp->property("epubWorkspaceDirectory"),OldConfig=qApp->property("documentViewsConfigDir");
         qApp->setProperty("epubWorkspaceDirectory",Temp.path());qApp->setProperty("documentViewsConfigDir",Temp.path());
         const auto Restore=qScopeGuard([&]{qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);qApp->setProperty("documentViewsConfigDir",OldConfig);});
@@ -966,10 +981,47 @@ private slots:
         }
         const auto Other=Temp.filePath("other.epub");Write(Other,Bytes);
         {EpubSourceEditor Editor(Bytes,Other);Editor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);}
-        QCOMPARE(QJsonDocument::fromJson(Read(Json)).object()["documents"].toObject().size(),2);
+        QTRY_COMPARE_WITH_TIMEOUT(QJsonDocument::fromJson(Read(Json)).object()["documents"].toObject().size(),2,5000);
         Write(Json,"{broken");
-        {EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);QVERIFY(!Editor.Snapshot()["workspaceError"].toString().isEmpty());}
+        {EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);QVERIFY(!Editor.Snapshot()["workspaceError"].toString().isEmpty());
+            QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["workspaceSaving"].toBool(),5000);}
         QCOMPARE(Read(Json),QByteArray("{broken"));
+    }
+    void epubWorkspaceInputDuringSave()
+    {
+        const auto Bytes=workspaceBook();QVERIFY(!Bytes.isEmpty());QTemporaryDir Temp;QVERIFY(Temp.isValid());
+        const auto OldWorkspace=qApp->property("epubWorkspaceDirectory"),OldConfig=qApp->property("documentViewsConfigDir");
+        qApp->setProperty("epubWorkspaceDirectory",QVariant{});qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);qApp->setProperty("documentViewsConfigDir",OldConfig);});
+        const auto Path=Temp.filePath("book.epub"),Other=Temp.filePath("other.epub"),SavedAs=Temp.filePath("saved-as.epub");
+        const auto Json=Temp.filePath("HyperEditor.epub-workspace.json");Write(Path,Bytes);Write(Other,Bytes);Write(SavedAs,Bytes);
+        auto Editor=std::make_unique<EpubSourceEditor>(Bytes,Path);Editor->SetRecoveryEnabled(false);Editor->resize(850,650);Editor->show();
+        EpubSourceEditor OtherEditor(Bytes,Other);OtherEditor.SetRecoveryEnabled(false);
+        QTRY_VERIFY_WITH_TIMEOUT(Editor->IsReady() && OtherEditor.IsReady(),15000);
+        QCOMPARE(Editor->Snapshot()["workspaceFile"].toString(),Json);
+        QTRY_COMPARE_WITH_TIMEOUT(QJsonDocument::fromJson(Read(Json)).object()["documents"].toObject().size(),2,5000);
+        QTRY_VERIFY(!Editor->Snapshot()["workspaceSaving"].toBool() && !OtherEditor.Snapshot()["workspaceSaving"].toBool());
+        QLockFile Lock(Json+".lock");QVERIFY(Lock.tryLock(0));
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor->SourceView()->Backend());Backend->Send(SCI_GOTOPOS,10);
+        QTRY_VERIFY_WITH_TIMEOUT(Editor->Snapshot()["workspaceSaving"].toBool(),2500);
+        int Ticks=0;QTimer Heartbeat;Heartbeat.setInterval(10);connect(&Heartbeat,&QTimer::timeout,[&]{++Ticks;});Heartbeat.start();
+        QElapsedTimer Clock;Clock.start();const auto Length=Backend->Send(SCI_GETLENGTH);
+        QTest::keyClicks(Editor->SourceInput(),"queued-input");QCOMPARE(Backend->Send(SCI_GETLENGTH),Length+12);const auto InputMs=Clock.elapsed();
+        QTest::qWait(250);QVERIFY(Ticks>=10);QVERIFY(Clock.elapsed()<1000);
+        // Queue a changed position behind the blocked write, then switch the book path.
+        Backend->Send(SCI_GOTOPOS,40);QTest::qWait(850);
+        Editor->CommitSaved(SavedAs,"epub:"+Editor->Token().toHex(),QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256));
+        Backend->Send(SCI_GOTOPOS,77);Clock.restart();Editor.reset();const auto CloseMs=Clock.elapsed();QVERIFY(CloseMs<1000);
+        Lock.unlock();
+        // Opening immediately after close must observe its final queued snapshot.
+        EpubSourceEditor Reopened(Bytes,SavedAs);Reopened.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Reopened.IsReady(),15000);
+        auto* ReopenedBackend=static_cast<ScintillaQtDirectBackend*>(Reopened.SourceView()->Backend());QCOMPARE(ReopenedBackend->Send(SCI_GETCURRENTPOS),qintptr(77));
+        const auto Documents=QJsonDocument::fromJson(Read(Json)).object()["documents"].toObject();QCOMPARE(Documents.size(),3);
+        const auto OldKey=QDir::fromNativeSeparators(QFileInfo(Path).canonicalFilePath()).toCaseFolded();
+        QCOMPARE(Documents[OldKey].toObject()["tabs"].toArray().first().toObject()["position"].toInt(),40);
+        qInfo()<<"EPUB session held-lock regression: inputMs="<<InputMs<<" closeMs="<<CloseMs<<" heartbeatTicks="<<Ticks<<" finalPositions=40,77 books=3";
+        // Complete the reopened editor's initial timer before temporary directory cleanup.
+        QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Reopened.Snapshot()["workspaceSaving"].toBool(),5000);
     }
     void comicSettingsAndShortcutCatalog()
     {

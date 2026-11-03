@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
+#include "UniqueLibs/settings/appSettings.hpp"
 #include "epubProcessView.hpp"
 #include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
@@ -17,6 +18,9 @@
 #include <QLabel>
 #include <QStackedWidget>
 #include <Scintilla.h>
+#include <QThreadPool>
+#include <QtConcurrentRun>
+#include <mutex>
 
 namespace hc::document {
 namespace {
@@ -123,19 +127,26 @@ bool EpubSourceEditor::selectPreviewSource(const QJsonObject& Requested) {
 
 namespace hc::document {
 namespace {
+// Session reads follow already queued saves, including a just-closed editor's final
+// snapshot. This pool never runs widget/model work and is independent of preview jobs.
+QThreadPool* workspacePool() {
+    struct Pool final:QThreadPool {Pool(){setMaxThreadCount(1);}};
+    static Pool Instance;return &Instance;
+}
 QString workspaceFile() {
     const auto Override=QCoreApplication::instance()->property("epubWorkspaceDirectory");
-    return hc::defaults::edit::EpubWorkspaceFile(Override.isValid()?Override.toString():hc::defaults::edit::ConfigDirectory(QCoreApplication::applicationDirPath()));
+    const auto Config=QCoreApplication::instance()->property("documentViewsConfigDir");
+    return hc::defaults::edit::EpubWorkspaceFile(Override.isValid()?Override.toString():Config.isValid()?Config.toString():hc::settings::DocumentPaths().directory_);
 }
 QString workspaceKey(const QString& Path) {
     const QFileInfo Info(Path);const auto Canonical=Info.canonicalFilePath();
     return QDir::fromNativeSeparators(Canonical.isEmpty()?Info.absoluteFilePath():Canonical).toCaseFolded();
 }
-bool readWorkspace(const QString& Path,QJsonObject& Root,QString& Error) {
+bool readWorkspaceFile(const QString& Path,QJsonObject& Root,QString& Error) {
     Root={{"schemaVersion",1},{"documents",QJsonObject{}}};
     QFile File(Path);if(!File.exists())return true;
     if(!File.open(QIODevice::ReadOnly) || File.size()>8*1024*1024){Error="workspace-read-failed";return false;}
-    QJsonParseError Parse;const auto Json=QJsonDocument::fromJson(File.readAll(),&Parse);
+    QJsonParseError Parse;const auto Json=QJsonDocument::fromJson(File.read(8*1024*1024+1),&Parse);
     if(File.error()!=QFileDevice::NoError || Parse.error!=QJsonParseError::NoError || !Json.isObject()
         || Json.object()["schemaVersion"].toInt()!=1 || !Json.object()["documents"].isObject()){
         Error="workspace-invalid-json";return false;
@@ -143,41 +154,97 @@ bool readWorkspace(const QString& Path,QJsonObject& Root,QString& Error) {
     Root=Json.object();return true;
 }
 }
+struct EpubSourceEditor::WorkspaceState {
+    struct Snapshot {QJsonObject document_;QMap<QString,QByteArray> sources_;};
+    std::mutex mutex_;QMap<QString,Snapshot> pending_;bool running_=false;
+};
+QFuture<EpubSourceEditor::WorkspaceRead> EpubSourceEditor::readWorkspace(QString FilePath,QString Source) {
+    return QtConcurrent::run(workspacePool(),[FilePath=std::move(FilePath),Source=std::move(Source)]{
+        WorkspaceRead Result;QJsonObject Root;
+        if(readWorkspaceFile(FilePath,Root,Result.error_))Result.document_=Root["documents"].toObject()[workspaceKey(Source)].toObject();
+        return Result;
+    });
+}
+void EpubSourceEditor::setupWorkspace() {
+    workspaceFile_=workspaceFile();workspaceState_=std::make_shared<WorkspaceState>();
+    connect(&workspaceWriter_,&QFutureWatcher<QString>::finished,this,[this]{
+        const auto Error=workspaceWriter_.result();
+        if(!Error.isEmpty()){
+            if(Error=="workspace-lock-failed"){workspaceLastDocument_={};workspaceTimer_.start(1000);}
+            if(workspaceError_!=Error)report(tr("EPUB 워크스페이스 저장 실패: %1 (%2)").arg(workspaceFile_,Error));
+        }
+        workspaceError_=Error;
+        // Reporting session persistence must not emit StateChanged and schedule another save.
+    });
+}
 void EpubSourceEditor::scheduleWorkspace() {
     if(ready_ && !updating_ && !workspaceRestoring_ && !sourcePath_.isEmpty())workspaceTimer_.start();
 }
 void EpubSourceEditor::saveWorkspace() {
     workspaceTimer_.stop();if(!ready_ || workspaceRestoring_ || sourcePath_.isEmpty())return;
-    saveSourceState();QJsonArray Tabs;
+    saveSourceState();QJsonArray Tabs;WorkspaceState::Snapshot Snapshot;
     for(const auto& Path:openResources_){
-        auto Saved=workspacePositions_[Path].toObject();
+        auto Saved=workspacePositions_.value(Path).toObject();
         if(sourceBuffers_.contains(Path)){
-            const auto State=sourceBuffers_.value(Path);const auto Text=Path==current_ && sourceShown()?sourceText():QString::fromUtf8(State.applied_);
-            const auto Prefix=Text.left(State.position_);const int Break=Prefix.lastIndexOf('\n');
-            Saved={{"position",State.position_},{"anchor",State.anchor_},{"line",Prefix.count('\n')+1},
-                {"column",Prefix.size()-Break},{"firstVisibleLine",State.line_},{"horizontalOffset",State.offset_}};
+            const auto& State=sourceBuffers_[Path];
+            Saved={{"position",State.position_},{"anchor",State.anchor_},
+                {"firstVisibleLine",State.line_},{"horizontalOffset",State.offset_}};
+            // Capture shared bytes only. UTF-16 conversion/line counting belongs to the worker.
+            Snapshot.sources_[Path]=Path==current_ && sourceShown()?sourceBytes():State.applied_;
         }
         Saved["resource"]=Path;Tabs.append(Saved);
     }
-    const auto FilePath=workspaceFile();QString Error;
-    if(!QDir().mkpath(QFileInfo(FilePath).absolutePath()))Error="workspace-create-directory-failed";
-    QLockFile Lock(FilePath+".lock");Lock.setStaleLockTime(30000);
-    if(Error.isEmpty() && !Lock.tryLock(0)){workspaceTimer_.start(1000);return;}
-    QJsonObject Root;
-    if(Error.isEmpty() && readWorkspace(FilePath,Root,Error)){
-        auto Documents=Root["documents"].toObject();
-        Documents[workspaceKey(sourcePath_)]=QJsonObject{{"path",sourcePath_},{"activeResource",current_},{"tabs",Tabs},
-            {"sourceSha256",QString::fromLatin1(sourceHashAtOpen_.toHex())},{"savedAtUtc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
-        Root["documents"]=Documents;const auto Bytes=QJsonDocument(Root).toJson();QSaveFile File(FilePath);
-        if(Bytes.size()>8*1024*1024 || !File.open(QIODevice::WriteOnly) || File.write(Bytes)!=Bytes.size() || !File.commit())Error="workspace-write-failed";
+    Snapshot.document_={{"path",sourcePath_},{"activeResource",current_},{"tabs",Tabs},
+        {"sourceSha256",QString::fromLatin1(sourceHashAtOpen_.toHex())}};
+    if(workspaceLastDocument_==Snapshot.document_)return;
+    workspaceLastDocument_=Snapshot.document_;
+    {
+        const std::lock_guard Guard(workspaceState_->mutex_);
+        // Save As can leave snapshots for two paths. Coalesce only within the same book.
+        workspaceState_->pending_[sourcePath_]=std::move(Snapshot);
+        if(workspaceState_->running_)return;workspaceState_->running_=true;
     }
-    if(!Error.isEmpty() && workspaceError_!=Error)report(tr("EPUB 워크스페이스 저장 실패: %1 (%2)").arg(FilePath,Error));
-    workspaceError_=Error;
+    workspaceWriter_.setFuture(QtConcurrent::run(workspacePool(),[State=workspaceState_,FilePath=workspaceFile_]{
+        QString Error;
+        for(;;){
+            QMap<QString,WorkspaceState::Snapshot> Pending;
+            {
+                const std::lock_guard Guard(State->mutex_);
+                if(State->pending_.isEmpty()){State->running_=false;return Error;}
+                Pending.swap(State->pending_);
+            }
+            Error.clear();
+            // No filesystem operation, lock wait or atomic commit is allowed on the GUI thread.
+            if(!QDir().mkpath(QFileInfo(FilePath).absolutePath()))Error="workspace-create-directory-failed";
+            QLockFile Lock(FilePath+".lock");Lock.setStaleLockTime(30000);
+            if(Error.isEmpty() && !Lock.tryLock(5000))Error="workspace-lock-failed";
+            QJsonObject Root;
+            if(Error.isEmpty() && readWorkspaceFile(FilePath,Root,Error)){
+                auto Documents=Root["documents"].toObject();
+                for(auto It=Pending.begin();It!=Pending.end();++It){
+                    auto Document=It->document_;auto Tabs=Document["tabs"].toArray();
+                    for(int I=0;I<Tabs.size();++I){
+                        auto Tab=Tabs[I].toObject();const auto Resource=Tab["resource"].toString();
+                        if(It->sources_.contains(Resource)){
+                            const auto Prefix=QString::fromUtf8(It->sources_.value(Resource)).left(Tab["position"].toInt());
+                            Tab["line"]=Prefix.count('\n')+1;Tab["column"]=Prefix.size()-Prefix.lastIndexOf('\n');Tabs[I]=Tab;
+                        }
+                    }
+                    Document["tabs"]=Tabs;Document["savedAtUtc"]=QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+                    Documents[workspaceKey(It.key())]=Document;
+                }
+                Root["documents"]=Documents;const auto Bytes=QJsonDocument(Root).toJson();QSaveFile File(FilePath);File.setDirectWriteFallback(false);
+                if(Bytes.size()>8*1024*1024 || !File.open(QIODevice::WriteOnly) || File.write(Bytes)!=Bytes.size() || !File.commit())Error="workspace-write-failed";
+            }
+            if(!Error.isEmpty())qWarning("EPUB workspace save failed: %s (%s)",qPrintable(FilePath),qPrintable(Error));
+            // The shared queue outlives the widget: closing adds the final snapshot without
+            // waiting for the disk or abandoning a newer position behind an in-flight save.
+        }
+    }));
 }
 bool EpubSourceEditor::restoreWorkspace() {
-    QJsonObject Root;QString Error;
-    if(!readWorkspace(workspaceFile(),Root,Error)){workspaceError_=Error;report(tr("EPUB 워크스페이스를 읽지 못했습니다: %1").arg(workspaceFile()));return false;}
-    const auto Saved=Root["documents"].toObject()[workspaceKey(sourcePath_)].toObject();
+    if(!workspaceError_.isEmpty()){report(tr("EPUB 워크스페이스를 읽지 못했습니다: %1").arg(workspaceFile_));return false;}
+    const auto Saved=std::exchange(workspaceSaved_,{});
     if(!Saved["tabs"].isArray())return false;
     workspaceRestoring_=true;openResources_.clear();workspacePositions_={};
     for(const auto& Value:Saved["tabs"].toArray()){

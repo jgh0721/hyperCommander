@@ -74,8 +74,13 @@ private:
     void report(const QString& Text);void reportDraft(const QString& Text);void reportPreview(const QString& Text);
     // Layout, panels and commands.
     void setupLayout();void setupActions();void setupStatus();void setupProblems(QWidget* Panel);void setupResources(QWidget* Panel);
-    void saveWorkspace();bool restoreWorkspace();void scheduleWorkspace();
-    QTimer workspaceTimer_;QJsonObject workspacePositions_;QString workspaceError_;bool workspaceRestoring_=false,workspaceRestored_=false;
+    struct WorkspaceRead {QJsonObject document_;QString error_;};
+    struct WorkspaceState;
+    static QFuture<WorkspaceRead> readWorkspace(QString FilePath,QString Source);
+    void setupWorkspace();void saveWorkspace();bool restoreWorkspace();void scheduleWorkspace();
+    std::shared_ptr<WorkspaceState> workspaceState_;QFutureWatcher<QString> workspaceWriter_;
+    QTimer workspaceTimer_;QJsonObject workspacePositions_,workspaceSaved_,workspaceLastDocument_;
+    QString workspaceFile_,workspaceError_;bool workspaceRestoring_=false,workspaceRestored_=false;
     void alignPreview();
     void restoreLayout();void saveLayout();void applyOrientation(Qt::Orientation Value,bool Save=true);void setPanelVisible(const QString& Panel,bool Visible);
     QAction* action(const QString& Id)const;void updateActions();void updateStatus();
@@ -160,7 +165,8 @@ private:
     QJsonObject previewSnapshot()const;
     epub::EditOutput cachedExport_;QByteArray cachedExportToken_;
     QByteArray savedToken_;
-    epub::EditModel model_;QFutureWatcher<epub::EditModel> worker_;
+    struct LoadOutput {epub::EditModel model_;std::optional<WorkspaceRead> workspace_;};
+    epub::EditModel model_;QFutureWatcher<LoadOutput> worker_;
     QFutureWatcher<epub::EditOutput> validation_;QByteArray validationToken_,validatedToken_,validatedBytes_;bool saveAfter_=false,saveAsAfter_=true,nativeValidating_=false;
     std::shared_ptr<std::atomic_bool> cancel_,validationCancel_;
     qint64 exportRuns_=0,exportJoins_=0;
