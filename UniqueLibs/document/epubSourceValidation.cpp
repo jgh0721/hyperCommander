@@ -34,7 +34,8 @@ constexpr int DiagnosticIndicator=26,WarningMarker=10,ErrorMarker=11,DiagnosticM
 void EpubSourceEditor::ReloadValidationSettings() {
     auto Config=qApp->property("documentViewsConfigDir").toString();if(Config.isEmpty())Config=hc::settings::DocumentPaths().directory_;
     QJsonObject Root;QString Error;
-    if(!hc::settings::UnifiedConfig::Load(hc::settings::UnifiedConfig::FileName(Config),Root,Error))return;
+    checkerSettingsFile_=hc::settings::UnifiedConfig::FileName(Config);
+    if(!hc::settings::UnifiedConfig::Load(checkerSettingsFile_,Root,Error))return;
     // The saved panel layout shares this section but never affects a verdict.
     auto Next=Root["documentViews"].toObject()["epubEditor"].toObject();Next.remove("layout");
     if(Next==checkerSettings_)return;

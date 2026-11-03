@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
 #include "documentTextCodec.hpp"
+#include "UniqueLibs/settings/unifiedConfig.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
 #include "epubResourceTree.hpp"
 #include "text/QTextView.h"
@@ -262,14 +263,22 @@ bool EpubSourceEditor::PrepareSave(bool SaveAs) {
     return false;
 }
 DocumentEncoder EpubSourceEditor::CaptureSave(const QString& Destination,bool SaveOriginal) {
-    ReloadValidationSettings();
     const bool Available=ready_ && !sourceComposing_ && !structuring_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty();
-    return [Model=model_,Draft=draft(),Destination,SaveOriginal,Available,Paths=protectedPaths_,Ids=identities_,Source=sourcePath_,Settings=checkerSettings_,
-            Required=standardValidationRequired(),Cached=cachedExportToken_==Token()?cachedExport_:epub::EditOutput{},
-            Checked=checkerVerifiedToken_==Token()](storage::OperationContext Context)->storage::Result<QByteArray> {
+    return [Model=model_,Draft=draft(),Destination,SaveOriginal,Available,Paths=protectedPaths_,Ids=identities_,Source=sourcePath_,Settings=checkerSettings_,SettingsFile=checkerSettingsFile_,
+            RequiredDefault=hc::defaults::edit::ViewValue("epubEditor/requireEpubCheck").toBool(),Cached=cachedExportToken_==Token()?cachedExport_:epub::EditOutput{},
+            Checked=checkerVerifiedToken_==Token()](storage::OperationContext Context) mutable ->storage::Result<QByteArray> {
         using namespace storage;
         if(!Available)return Error{ErrorCategory::InvalidRequest,"epub-edit-save-busy"};
         if(QFileInfo(Destination).suffix().compare("epub",Qt::CaseInsensitive)!=0)return Error{ErrorCategory::Unsupported,"epub-edit-save-as-epub-required"};
+        if(auto Stop=Context.Check({"document"}))return *Stop;
+        // Read current validation policy in the worker too: config paths can be
+        // redirected or remote. A changed policy cannot reuse an old EPUBCheck verdict.
+        QJsonObject Root;QString SettingsError;
+        if(hc::settings::UnifiedConfig::Load(SettingsFile,Root,SettingsError)){
+            auto Next=Root["documentViews"].toObject()["epubEditor"].toObject();Next.remove("layout");
+            Checked=Checked && Next==Settings;Settings=std::move(Next);
+        }
+        const bool Required=Settings["requireEpubCheck"].toBool(RequiredDefault);
         if(auto Stop=Context.Check({"document"}))return *Stop;
         // Network identity probes belong to the worker, including hard-link aliases.
         if(!SaveOriginal && (Paths.contains(QFileInfo(Destination).absoluteFilePath().toCaseFolded()) || Ids.contains(identity(Destination)) || (!identity(Source).isEmpty() && identity(Source)==identity(Destination))))

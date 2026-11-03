@@ -142,10 +142,14 @@ void EpubSourceEditor::Checkpoint() {
     if(draftWrittenToken_==Token())return;
     epub::DraftSnapshot Snapshot;Snapshot.sourcePath_=sourcePath_;Snapshot.original_=model_.OriginalBytes();Snapshot.structuralBytes_=model_.StructuralBytes();Snapshot.changes_=model_.Changes();Snapshot.currentResource_=current_;Snapshot.locator_=recoveryLocator_;Snapshot.readingChapter_=previewRecoveryPosition_?previewRestoreChapter_:previewSnapshot()["state"].toObject()["chapterIndex"].toInt(previewRestoreChapter_);
     // Draft positions stay UTF-16 offsets and first lines so earlier drafts restore unchanged.
-    const auto Current=draft();Snapshot.hasCurrentDraft_=Current.contains(current_);Snapshot.currentDraft_=Current.value(current_);Snapshot.cursor_=sourceShown()?sourcePosition():0;Snapshot.scroll_=sourceShown()?firstVisibleLine():0;
+    const auto Current=draft();Snapshot.hasCurrentDraft_=Current.contains(current_);Snapshot.currentDraft_=Current.value(current_);Snapshot.scroll_=sourceShown()?firstVisibleLine():0;
+    const auto CursorSource=sourceShown()?sourceBytes():QByteArray{};
+    const auto Cursor=sourceShown()?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_GETCURRENTPOS):0;
     Snapshot.diskHash_=sourceHashAtOpen_;
     draftWritingToken_=Token();reportDraft(tr("편집 초안을 자동 복구용으로 보관하고 있습니다…"));
-    draftWriter_.setFuture(QtConcurrent::run([Root=recoveryRoot_,Session=recoverySession_,Snapshot=std::move(Snapshot),State=draftSession_]{
+    draftWriter_.setFuture(QtConcurrent::run([Root=recoveryRoot_,Session=recoverySession_,Snapshot=std::move(Snapshot),State=draftSession_,CursorSource,Cursor]() mutable {
+        // Keep the persisted UTF-16 format without scanning the chapter on the GUI thread.
+        Snapshot.cursor_=int(QString::fromUtf8(CursorSource.constData(),qBound(qsizetype(0),qsizetype(Cursor),CursorSource.size())).size());
         auto Result=epub::DraftStore::Write(Root,Session,Snapshot,[State]{return State->cancelled_.load();});
         if(State->discard_.load())epub::DraftStore::Remove(Root,QDir(Root).filePath(Session+".hcedraft"));return Result;
     }));emit StateChanged();

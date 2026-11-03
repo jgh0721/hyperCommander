@@ -28,10 +28,24 @@ ScintillaQtDirectBackend* direct(QTextView* View){return static_cast<ScintillaQt
 QString languageOf(const QString& Media){return Media=="application/xhtml+xml"?QStringLiteral("HTML"):Media=="text/css"?QStringLiteral("CSS"):Media.endsWith("+xml") || Media.endsWith("/xml")?QStringLiteral("XML"):QStringLiteral("None");}
 }
 // Drafts, the source map and diagnostics count UTF-16 code units; Scintilla counts UTF-8 bytes.
-int EpubSourceEditor::toUtf16(qintptr Position)const{return int(direct(text_)->Send(SCI_COUNTCODEUNITS,0,qBound<qintptr>(0,Position,direct(text_)->Send(SCI_GETLENGTH))));}
+int EpubSourceEditor::toUtf16(qintptr Position)const {
+    auto* Backend=direct(text_);Position=qBound(qintptr(0),Position,Backend->Send(SCI_GETLENGTH));
+    SourcePosition Nearest{0,0};
+    for(const auto& Cached:sourcePositions_){
+        if(Cached.byte_<0)continue;
+        if(Cached.byte_==Position)return Cached.utf16_;
+        if(qAbs(Position-Cached.byte_)<qAbs(Position-Nearest.byte_))Nearest=Cached;
+    }
+    // Status/actions ask repeatedly for the same caret and anchor. Adjacent
+    // movement only counts the delta; a source edit or buffer switch clears both.
+    const int Delta=int(Backend->Send(SCI_COUNTCODEUNITS,qMin(Position,Nearest.byte_),qMax(Position,Nearest.byte_)));
+    const int Units=Nearest.utf16_+(Position>=Nearest.byte_?Delta:-Delta);
+    sourcePositions_[1]=sourcePositions_[0];sourcePositions_[0]={Position,Units};return Units;
+}
 qintptr EpubSourceEditor::fromUtf16(int Offset)const{return direct(text_)->Send(SCI_POSITIONRELATIVECODEUNITS,0,qMax(0,Offset));}
 void EpubSourceEditor::invalidateSourceCache() {
     sourceBytesCached_=sourceTextCached_=sourceMapCached_=sourceMapValid_=false;
+    for(auto& Position:sourcePositions_)Position={};
 }
 const epub::SourceMap* EpubSourceEditor::sourceMap()const {
     if(!sourceMapCached_){sourceMapValid_=sourceMapCache_.Load(sourceText());sourceMapCached_=true;++sourceMapBuilds_;}
@@ -155,7 +169,7 @@ bool readWorkspaceFile(const QString& Path,QJsonObject& Root,QString& Error) {
 }
 }
 struct EpubSourceEditor::WorkspaceState {
-    struct Snapshot {QJsonObject document_;QMap<QString,QByteArray> sources_;};
+    struct Snapshot {QJsonObject document_;QMap<QString,QByteArray> sources_;QString utf8Resource_;};
     std::mutex mutex_;QMap<QString,Snapshot> pending_;bool running_=false;
 };
 QFuture<EpubSourceEditor::WorkspaceRead> EpubSourceEditor::readWorkspace(QString FilePath,QString Source) {
@@ -182,22 +196,28 @@ void EpubSourceEditor::scheduleWorkspace() {
 }
 void EpubSourceEditor::saveWorkspace() {
     workspaceTimer_.stop();if(!ready_ || workspaceRestoring_ || sourcePath_.isEmpty())return;
-    saveSourceState();QJsonArray Tabs;WorkspaceState::Snapshot Snapshot;
+    QJsonArray Tabs;WorkspaceState::Snapshot Snapshot;
     for(const auto& Path:openResources_){
         auto Saved=workspacePositions_.value(Path).toObject();
         if(sourceBuffers_.contains(Path)){
             const auto& State=sourceBuffers_[Path];
             Saved={{"position",State.position_},{"anchor",State.anchor_},
                 {"firstVisibleLine",State.line_},{"horizontalOffset",State.offset_}};
-            // Capture shared bytes only. UTF-16 conversion/line counting belongs to the worker.
-            Snapshot.sources_[Path]=Path==current_ && sourceShown()?sourceBytes():State.applied_;
+            if(Path==current_ && sourceShown()){
+                // Scintilla already owns byte positions. Counting UTF-16 units from
+                // the document start here pauses input near the end of a large chapter.
+                auto* Backend=direct(text_);Snapshot.utf8Resource_=Path;
+                Saved={{"position",int(Backend->Send(SCI_GETCURRENTPOS))},{"anchor",int(Backend->Send(SCI_GETANCHOR))},
+                    {"firstVisibleLine",firstVisibleLine()},{"horizontalOffset",horizontalOffset()}};
+                Snapshot.sources_[Path]=sourceBytes();
+            } else Snapshot.sources_[Path]=State.applied_;
         }
         Saved["resource"]=Path;Tabs.append(Saved);
     }
     Snapshot.document_={{"path",sourcePath_},{"activeResource",current_},{"tabs",Tabs},
         {"sourceSha256",QString::fromLatin1(sourceHashAtOpen_.toHex())}};
-    if(workspaceLastDocument_==Snapshot.document_)return;
-    workspaceLastDocument_=Snapshot.document_;
+    if(workspaceLastDocument_==Snapshot.document_ && workspaceLastSources_==Snapshot.sources_)return;
+    workspaceLastDocument_=Snapshot.document_;workspaceLastSources_=Snapshot.sources_;
     {
         const std::lock_guard Guard(workspaceState_->mutex_);
         // Save As can leave snapshots for two paths. Coalesce only within the same book.
@@ -226,7 +246,14 @@ void EpubSourceEditor::saveWorkspace() {
                     for(int I=0;I<Tabs.size();++I){
                         auto Tab=Tabs[I].toObject();const auto Resource=Tab["resource"].toString();
                         if(It->sources_.contains(Resource)){
-                            const auto Prefix=QString::fromUtf8(It->sources_.value(Resource)).left(Tab["position"].toInt());
+                            const auto Source=It->sources_.value(Resource);const auto Text=QString::fromUtf8(Source);
+                            if(Resource==It->utf8Resource_){
+                                const auto Position=qBound(qsizetype(0),qsizetype(Tab["position"].toInt()),Source.size());
+                                const auto Anchor=qBound(qsizetype(0),qsizetype(Tab["anchor"].toInt()),Source.size());
+                                const auto Utf16=QString::fromUtf8(Source.constData(),Position).size();
+                                Tab["position"]=int(Utf16);Tab["anchor"]=int(Anchor==Position?Utf16:QString::fromUtf8(Source.constData(),Anchor).size());
+                            }
+                            const auto Prefix=Text.left(Tab["position"].toInt());
                             Tab["line"]=Prefix.count('\n')+1;Tab["column"]=Prefix.size()-Prefix.lastIndexOf('\n');Tabs[I]=Tab;
                         }
                     }

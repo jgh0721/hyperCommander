@@ -80,6 +80,7 @@ private:
     void setupWorkspace();void saveWorkspace();bool restoreWorkspace();void scheduleWorkspace();
     std::shared_ptr<WorkspaceState> workspaceState_;QFutureWatcher<QString> workspaceWriter_;
     QTimer workspaceTimer_;QJsonObject workspacePositions_,workspaceSaved_,workspaceLastDocument_;
+    QMap<QString,QByteArray> workspaceLastSources_;
     QString workspaceFile_,workspaceError_;bool workspaceRestoring_=false,workspaceRestored_=false;
     void alignPreview();
     void restoreLayout();void saveLayout();void applyOrientation(Qt::Orientation Value,bool Save=true);void setPanelVisible(const QString& Panel,bool Visible);
@@ -96,6 +97,8 @@ private:
     mutable epub::SourceMap sourceMapCache_;
     mutable bool sourceBytesCached_=false,sourceTextCached_=false,sourceMapCached_=false,sourceMapValid_=false;
     mutable qint64 sourceReads_=0,sourceMapBuilds_=0;
+    struct SourcePosition {qintptr byte_=-1;int utf16_=0;};
+    mutable SourcePosition sourcePositions_[2];
     QByteArray sourceBytes()const;QString sourceText()const;bool sourceModified()const;bool sourceShown()const;
     int sourcePosition()const;int sourceAnchor()const;void setSourceSelection(int Anchor,int Position,bool Reveal=true);
     int firstVisibleLine()const;int horizontalOffset()const;void setScroll(int Line,int Offset);void setSourceReadOnly(bool ReadOnly);
@@ -115,6 +118,7 @@ private:
     QProcess* checkerProcess_=nullptr;QTreeWidget* diagnostics_=nullptr;QPlainTextEdit* checkerOutput_=nullptr;QTreeWidget* searchResults_=nullptr;QTabWidget* problems_=nullptr;QLabel* problemsSummary_=nullptr;QWidget* problemsPanel_=nullptr;
     QTimer checkerTimer_;QElapsedTimer checkerElapsed_;std::unique_ptr<QTemporaryDir> checkerDirectory_;
     QJsonObject checkerSettings_;QJsonArray diagnosticRows_;QByteArray checkerWorkToken_,checkerVerifiedToken_,checkerLog_;
+    QString checkerSettingsFile_;
     QString checkerState_="idle",checkerReason_,checkerVersion_;bool checkerRequested_=false;QStringList problemFilter_;QString problemResource_;
     void setupRecovery();
     void modelLoaded(epub::EditModel Model);
