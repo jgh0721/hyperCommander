@@ -159,17 +159,21 @@ private slots:
         for (const auto* Outcome : {"release", "replace", "skip", "skip-all", "cancel", "headless"}) QTest::newRow(Outcome) << QString::fromLatin1(Outcome);
     }
     void mappedDeleteCanRetryAfterElevationFailure() {
-        QFETCH(QString, Outcome); QTemporaryDir Root; QVERIFY(Root.isValid()); const auto Path = Root.filePath("mapped.zip"); write(Path);
+        QFETCH(QString, Outcome); QTemporaryDir Root; QVERIFY(Root.isValid()); const auto Path = Root.filePath("mapped.dll");
+        // POSIX deletion (like DeleteFileW) unlinks a file behind a data mapping.
+        // An image section, as for a loaded module, still blocks it.
+        wchar_t System[MAX_PATH]{}; QVERIFY(GetSystemDirectoryW(System, MAX_PATH));
+        QVERIFY(QFile::copy(QDir(QString::fromWCharArray(System)).filePath("version.dll"), Path));
         auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
         const auto Source = Reader->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
         const auto Native = QDir::toNativeSeparators(Path).toStdWString();
         HANDLE File = CreateFileW(Native.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
         QVERIFY(File != INVALID_HANDLE_VALUE); const auto CloseFile = qScopeGuard([&] { if (File != INVALID_HANDLE_VALUE) CloseHandle(File); });
-        HANDLE Mapping = CreateFileMappingW(File, nullptr, PAGE_READONLY, 0, 0, nullptr); QVERIFY(Mapping);
+        HANDLE Mapping = CreateFileMappingW(File, nullptr, PAGE_READONLY | SEC_IMAGE, 0, 0, nullptr); QVERIFY(Mapping);
         void* View = MapViewOfFile(Mapping, FILE_MAP_READ, 0, 0, 0); QVERIFY(View);
         const auto Unmap = qScopeGuard([&] { if (View) UnmapViewOfFile(View); if (Mapping) CloseHandle(Mapping); });
         CloseHandle(File); File = INVALID_HANDLE_VALUE;
-        // DELETE access is granted, but a mapped section still rejects disposition
+        // DELETE access is granted, but a mapped image still rejects disposition
         // with access denied. An elevated process encounters the same section.
         const auto Blocked = Writer->Remove(Source.Value(), {}); QVERIFY(!Blocked.HasValue());
         QCOMPARE(Blocked.Failure().code_, std::string("win32:5"));

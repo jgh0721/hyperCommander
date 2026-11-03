@@ -39,6 +39,7 @@ public:
         auto Prepared = build_(std::move(entries_), Context.operation_); if (!Prepared.HasValue()) return failed(Prepared.Failure());
         inner_ = std::move(Prepared.Value().task_); build_ = {}; return JobStep{JobState::Preparing};
     }
+    CompletedEffects TakeCompletedEffects() override { return inner_ ? inner_->TakeCompletedEffects() : CompletedEffects{}; }
     std::vector<storage::Error> Finalize(JobState State) override
     {
         auto Errors = inner_ ? inner_->Finalize(State) : std::vector<storage::Error>{};

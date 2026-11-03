@@ -38,6 +38,12 @@ public:
         if (Step.progress_ && Step.progress_->plannedItems_) *Step.progress_->plannedItems_ += parentOutcomes_;
         return Step;
     }
+    CompletedEffects TakeCompletedEffects() override
+    {
+        auto Effects = inner_->TakeCompletedEffects();
+        if (Effects.progress_ && Effects.progress_->plannedItems_) *Effects.progress_->plannedItems_ += parentOutcomes_;
+        return Effects;
+    }
     std::vector<storage::Error> Finalize(JobState State) override { return inner_->Finalize(State); }
     static storage::Locator ParentOf(storage::Locator At) {
         auto& Path = At.root_;

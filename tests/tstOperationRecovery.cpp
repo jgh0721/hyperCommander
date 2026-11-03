@@ -542,7 +542,15 @@ private slots:
             if (!Error && !RemoveDirectoryW(Path.c_str())) Error = GetLastError();
             return Error;
         };
-        for (const auto Deep : {false, true}) for (int Repeat = 0; Repeat < Repeats; ++Repeat) {
+        // flat: one folder; deep: 100-file folders below five levels; tree:
+        // 10-file folders in a three-level fan-out; selected: the flat files as
+        // individually selected entries (their revision checks are retained).
+        const QStringList AllShapes{"flat", "deep", "tree", "selected"};
+        const auto Requested = qEnvironmentVariable("HC_DELETE_BENCH_SHAPES");
+        const auto Shapes = Requested.isEmpty() ? AllShapes : Requested.split(',', Qt::SkipEmptyParts);
+        for (const auto& Shape : Shapes) for (int Repeat = 0; Repeat < Repeats; ++Repeat) {
+            QVERIFY(AllShapes.contains(Shape));
+            const bool Selected = Shape == "selected";
             // Alternate order to reduce systematic cache/temperature bias.
             for (int Position = 0; Position < 2; ++Position) {
                 const bool Native = (Position + Repeat) % 2 == 0;
@@ -551,30 +559,47 @@ private slots:
                     {"task", "native-delete-comparison"}, {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
                     {"expiresUtc", QDateTime::currentDateTimeUtc().addDays(7).toString(Qt::ISODate)}}).toJson()));
                 const auto Tree = Directory.filePath("data"); QVERIFY(QDir().mkdir(Tree));
+                std::vector<std::wstring> Paths;
                 for (int Index = 0; Index < Count; ++Index) {
-                    const auto Folder = Deep ? QDir(Tree).filePath("a/b/c/d/e/group-" + QString::number(Index / 100)) : Tree;
-                    if (Deep && Index % 100 == 0) QVERIFY(QDir().mkpath(Folder));
+                    auto Folder = Tree;
+                    if (Shape == "deep") Folder = QDir(Tree).filePath("a/b/c/d/e/group-" + QString::number(Index / 100));
+                    if (Shape == "tree") Folder = QDir(Tree).filePath(QString("p%1/q%2/r%3").arg(Index / 1000).arg(Index / 100 % 10).arg(Index / 10 % 10));
+                    if ((Shape == "deep" && Index % 100 == 0) || (Shape == "tree" && Index % 10 == 0)) QVERIFY(QDir().mkpath(Folder));
                     const auto Path = QDir::toNativeSeparators(QDir(Folder).filePath(QString::number(Index) + ".dat")).toStdWString();
                     const auto File = CreateFileW(Path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
                     QVERIFY(File != INVALID_HANDLE_VALUE);
                     const char Payload[128]{}; DWORD Written = 0;
                     const bool Created = WriteFile(File, Payload, sizeof(Payload), &Written, nullptr);
                     CloseHandle(File); QVERIFY(Created && Written == sizeof(Payload));
+                    if (Selected) Paths.push_back(Path);
                 }
                 auto Journal = MakeFileJobJournal(Directory.filePath("journal"), false, true, false);
                 JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1, 16, Journal);
                 auto Reader = MakeNativeReadProvider(LocatorKind::Local);
                 auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+                // A selection arrives with listed snapshots; resolve outside the clock.
+                std::vector<OperationSource> Sources;
+                if (!Native && Selected) for (const auto& Path : Paths) {
+                    auto Entry = Reader->Resolve({LocatorKind::Local, QString::fromStdWString(Path).toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+                    Sources.push_back({std::move(Entry.Value()), Reader, Writer});
+                }
+                if (!Native && !Selected) {
+                    auto Entry = Reader->Resolve({LocatorKind::Local, Tree.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+                    Sources.push_back({std::move(Entry.Value()), Reader, Writer});
+                }
+                // Let the lazy writer settle the fixture's creation metadata.
+                QTest::qWait(500);
                 OperationMetrics::Instance().Reset(qEnvironmentVariableIsSet("HC_DELETE_BENCH_DETAILED"));
                 QElapsedTimer Clock; Clock.start(); std::uint64_t Removed = 0;
-                if (Native) {
+                if (Native && Selected) {
+                    for (const auto& Path : Paths) { QVERIFY(DeleteFileW(Path.c_str())); ++Removed; }
+                } else if (Native) {
                     const auto Error = DeleteTree(DeleteTree, QDir::toNativeSeparators(Tree).toStdWString(), Removed);
                     QCOMPARE(Error, DWORD(ERROR_SUCCESS));
                 } else {
-                    auto Entry = Reader->Resolve({LocatorKind::Local, Tree.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
                     FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete;
                     Request.confirmDelete_ = false; Request.fileLockInteractions_ = true;
-                    Request.sources_ = {{Entry.Value(), Reader, Writer}};
+                    Request.sources_ = std::move(Sources);
                     OperationContext Operation; Operation.fileDeleteWorkers_ = qEnvironmentVariableIsSet("HC_DELETE_BENCH_WORKERS")
                         ? std::size_t(qEnvironmentVariableIntValue("HC_DELETE_BENCH_WORKERS")) : 0;
                     auto Job = SubmitFileOperation(Scheduler, std::move(Request), Operation); QVERIFY(Job.HasValue());
@@ -586,16 +611,18 @@ private slots:
                     QCOMPARE(Done.snapshot_.failedItems_, 0ull);
                 }
                 const auto Milliseconds = Clock.nsecsElapsed() / 1e6;
-                QCOMPARE(Removed, std::uint64_t(Count)); QVERIFY(!QFile::exists(Tree));
+                QCOMPARE(Removed, std::uint64_t(Count));
+                if (Selected) { QVERIFY(QDir(Tree).isEmpty()); QVERIFY(QDir().rmdir(Tree)); }
+                QVERIFY(!QFile::exists(Tree));
                 const auto MetricsPath = Directory.filePath("metrics.json");
                 QVERIFY(OperationMetrics::Instance().Save(MetricsPath, Milliseconds));
                 Results.append(QJsonObject{{"implementation", Native ? "win32" : "hypercommander"},
-                    {"shape", Deep ? "deep" : "flat"}, {"repeat", Repeat + 1}, {"files", Count},
+                    {"shape", Shape}, {"repeat", Repeat + 1}, {"files", Count},
                     {"detailedMetrics", qEnvironmentVariableIsSet("HC_DELETE_BENCH_DETAILED")},
                     {"preferredWorkers", int(Writer->PreferredDeleteWorkers({LocatorKind::Local, Tree.toStdString()}))},
                     {"milliseconds", Milliseconds}, {"filesPerSecond", Count * 1000.0 / Milliseconds},
                     {"metrics", QJsonDocument::fromJson(Read(MetricsPath)).object()}});
-                qInfo().noquote() << (Native ? "Win32" : "HyperCommander") << (Deep ? "deep" : "flat")
+                qInfo().noquote() << (Native ? "Win32" : "HyperCommander") << Shape
                     << Repeat + 1 << Milliseconds << "ms" << Count * 1000.0 / Milliseconds << "files/s";
             }
         }

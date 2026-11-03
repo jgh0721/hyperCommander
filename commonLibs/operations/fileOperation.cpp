@@ -108,6 +108,8 @@ namespace hc::operations
             std::optional<Error> removalError_;
             bool renameMove_ = false;
             bool readOnly_ = false, excluded_ = false, recursiveRemoval_ = false;
+            // Returned by the bulk tree removal: list it through the provider.
+            bool classicTraversal_ = false;
             std::size_t root_ = 0;
             std::shared_ptr<const Error> preparationError_;
         };
@@ -223,8 +225,8 @@ namespace hc::operations
                 if (phase_ == Phase::ElevationRun) return elevated(Context);
                 if (phase_ == Phase::Preparing) {
                     auto Step = prepare(Context.operation_);
-                    for (std::size_t I = 1; deleteWorkers_ > 1 && I < 64 && phase_ == Phase::Preparing
-                        && Step.next_ == JobState::Preparing && !Step.error_ && !Step.item_ && !Step.interaction_; ++I) {
+                    for (std::size_t I = 1; deleteWorkers_ > 1 && I < 64 && phase_ == Phase::Preparing && !tree_
+                        && Step.next_ == JobState::Preparing && !Step.error_ && !Step.item_ && Step.items_.empty() && !Step.interaction_; ++I) {
                         if (const auto Error = Context.operation_.Check({})) return failed(*Error);
                         Step = prepare(Context.operation_);
                     }
@@ -431,8 +433,22 @@ namespace hc::operations
                 if (!Context.committing_) return failed({ErrorCategory::Internal, "commit-boundary-required"});
                 return commit(Context.operation_);
             }
+            CompletedEffects TakeCompletedEffects() override
+            {
+                // Tree removal runs ahead of the steps. A cancelled, paused or
+                // failed job still records every file it already deleted.
+                if (!tree_) return {};
+                tree_->Release();
+                CompletedEffects Effects;
+                if (auto Batch = tree_->Collect(std::numeric_limits<std::size_t>::max(), std::chrono::milliseconds(0)); Batch.HasValue())
+                    Effects.items_ = acceptRemoved(std::move(Batch.Value().removed_));
+                tree_.reset();
+                Effects.progress_ = progress().progress_;
+                return Effects;
+            }
             std::vector<Error> Finalize(JobState State) override
             {
+                if (tree_) { tree_->Release(); tree_.reset(); }
                 transferStop_.request_stop();
                 stopCopies();
                 for (auto& Copy : copies_) {
@@ -688,7 +704,8 @@ namespace hc::operations
                     Step.progress_->plannedItems_ = request_.sources_.size();
                 }
                 if (planningFinished_ || request_.operation_ == FileOperation::MakeDirectory) Step.progress_->plannedItems_ = request_.operation_ == FileOperation::Move
-                    ? std::ranges::count_if(items_, [](const auto& Item) { return !Item.source_.entry_.directory_ || Item.removeDirectory_ || Item.renameMove_; }) : items_.size();
+                    ? std::ranges::count_if(items_, [](const auto& Item) { return !Item.source_.entry_.directory_ || Item.removeDirectory_ || Item.renameMove_; })
+                    : items_.size() + trimmedItems_ + treeItems_;
                 if (request_.operation_ == FileOperation::Delete) {
                     Step.progress_->discoveredItems_ = verifiedItems_;
                     Step.progress_->discoveredFiles_ = discoveredFiles_;
@@ -837,7 +854,16 @@ namespace hc::operations
                     if (streaming_ && !planningFinished_) { phase_ = Phase::Preparing; Step.next_ = JobState::Preparing; }
                     else Step.next_ = JobState::Completed;
                 }
+                trimProcessed();
                 return Step;
+            }
+            void trimProcessed()
+            {
+                // Deletion completes plans in order. Release finished ones so a
+                // large selection keeps memory proportional to unfinished work.
+                if (request_.operation_ != FileOperation::Delete || index_ < 4096 || partialOutcome_) return;
+                items_.erase(items_.begin(), items_.begin() + std::ptrdiff_t(index_));
+                trimmedItems_ += index_; index_ = 0;
             }
             FileElevationRequest elevationRequest() const
             {
@@ -985,6 +1011,7 @@ namespace hc::operations
                     Context.removalPreparation_ = std::dynamic_pointer_cast<IRemovalPreparation>(mutationScope_);
                 Context.incrementalEnumeration_ = request_.operation_ == FileOperation::Delete;
                 if (request_.operation_ == FileOperation::Delete) Context.allowUnavailableChildMetadata_ = true;
+                if (tree_) return collectTree();
                 if (incrementalDelete_ && !enumerations_.empty()) return prepareIncremental(Context);
                 if (incrementalDelete_ && request_.deleteMode_ == DeleteMode::Recycle && index_ < items_.size()) {
                     // Recycle a selected directory as one unit, after its own
@@ -1247,10 +1274,21 @@ namespace hc::operations
                         }
                     }
                 }
+                const auto Planned = [&] {
+                    if (streaming_ && index_ < items_.size() && !(incrementalDelete_ && Recycling)
+                        && !(incrementalDelete_ && deleteWorkers_ > 1 && items_.size() - index_ < std::size_t{64})) phase_ = Phase::Begin;
+                    return progress();
+                };
                 if ((Recycling ? Item.depth_ == 0 : !Item.source_.entry_.directory_ || request_.operation_ != FileOperation::Delete)
-                    && (request_.preservePaths_ || !Item.source_.entry_.directory_)) items_.push_back(Item);
+                    && (request_.preservePaths_ || !Item.source_.entry_.directory_)) {
+                    if (!Item.source_.entry_.directory_) { items_.push_back(std::move(Item)); return Planned(); }
+                    items_.push_back(Item);
+                }
                 if (Item.source_.entry_.directory_ && request_.operation_ != FileOperation::Rename)
                 {
+                    // The tree engine owns this directory until it reports back;
+                    // planned files wait so no prompt can hold its handles.
+                    if (request_.operation_ == FileOperation::Delete && !Recycling && startTree(Item, Context)) return progress();
                     if (request_.operation_ == FileOperation::Move || (request_.operation_ == FileOperation::Delete && !Recycling))
                     { auto Removed = Item; Removed.removeDirectory_ = true; directories_.push_back(std::move(Removed)); }
                     auto Cursor = Item.source_.reader_->Enumerate(Item.source_.entry_.locator_, Context).get();
@@ -1269,9 +1307,91 @@ namespace hc::operations
                     }
                     else { cursor_ = std::move(Cursor.Value()); enumerating_ = std::move(Item); }
                 }
-                if (streaming_ && index_ < items_.size() && !(incrementalDelete_ && Recycling)
-                    && !(incrementalDelete_ && deleteWorkers_ > 1 && items_.size() - index_ < std::size_t{64})) phase_ = Phase::Begin;
-                return progress();
+                return Planned();
+            }
+            bool startTree(const PlannedItem& Item, const OperationContext& Context)
+            {
+                // Permanent local deletion of a directory whose identity was
+                // just verified. Descendants are removed as listed (the same
+                // trust as Explorer-style tools) but never through links; durable
+                // recovery keeps its per-file barriers on the item path.
+                if (!incrementalDelete_ || request_.deleteMode_ != DeleteMode::Permanent || Context.writeCheckpoint_
+                    || Item.classicTraversal_ || Item.preparationError_ || !Item.source_.writer_ || !Item.source_.reader_
+                    || !Item.source_.entry_.id_.revision_
+                    || !Item.source_.writer_->SupportsTreeRemoval(*Item.source_.reader_, Item.source_.entry_.locator_)) return false;
+                TreeRemovalOptions Options;
+                Options.workers_ = deleteWorkers_;
+                Options.maxDepth_ = request_.maxDepth_ > Item.depth_ ? request_.maxDepth_ - Item.depth_ : 0;
+                Options.allowReadOnly_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_;
+                auto Started = Item.source_.writer_->BeginTreeRemoval(Item.source_.entry_, Options, Context);
+                // The item path reopens the directory and reports a real error.
+                if (!Started.HasValue()) return false;
+                tree_ = std::move(Started.Value());
+                treeRoot_ = Item; treeRoot_.removeDirectory_ = true;
+                return true;
+            }
+            std::vector<ItemOutcome> acceptRemoved(std::vector<EntrySnapshot> Removed)
+            {
+                std::vector<ItemOutcome> Outcomes; Outcomes.reserve(Removed.size());
+                for (auto& Entry : Removed) {
+                    // The root was counted when it was planned and verified.
+                    if (Entry.locator_ != treeRoot_.source_.entry_.locator_) ++verifiedItems_;
+                    if (!Entry.directory_) {
+                        ++discoveredFiles_; ++deletedFiles_; ++rootFiles_[treeRoot_.root_]; bytesTotal_ += Entry.size_;
+                    }
+                    ++treeItems_; ++outcomeIndex_;
+                    treeCurrent_ = Entry.name_;
+                    Outcomes.push_back(ItemOutcome{Serialize(Entry.locator_), ItemOutcome::Status::Completed, {}, false, true, std::move(Entry)});
+                }
+                if (!Outcomes.empty()) treeSource_ = Outcomes.back().item_;
+                return Outcomes;
+            }
+            JobStep collectTree()
+            {
+                auto Collected = tree_->Collect(128, std::chrono::milliseconds(20));
+                if (!Collected.HasValue()) { tree_->Release(); tree_.reset(); return failed(Collected.Failure()); }
+                auto& Batch = Collected.Value();
+                auto Outcomes = acceptRemoved(std::move(Batch.removed_));
+                if (Batch.finished_) finishTree(Batch);
+                auto Step = progress();
+                if (tree_ || !Outcomes.empty()) {
+                    Step.next_ = JobState::Running; Step.progress_->phase_ = JobPhase::Deleting;
+                    if (!treeCurrent_.empty()) { Step.progress_->currentItem_ = treeCurrent_; Step.progress_->source_ = treeSource_; }
+                }
+                if (seen_.size() + treeItems_ > request_.maxEntries_ || bytesTotal_ > request_.maxBytes_) {
+                    if (tree_) { tree_->Release(); tree_.reset(); }
+                    Step = failed({ErrorCategory::BudgetExceeded, seen_.size() + treeItems_ > request_.maxEntries_ ? "operation-entry-budget" : "operation-byte-budget"});
+                }
+                Step.items_ = std::move(Outcomes);
+                return Step;
+            }
+            void finishTree(TreeRemovalBatch& Batch)
+            {
+                tree_->Release(); tree_.reset(); treeCurrent_.clear(); treeSource_.clear();
+                const auto& Root = treeRoot_.source_.entry_.locator_;
+                for (auto& Kept : Batch.remaining_) {
+                    // Kept because a descendant remains. Ancestors come first, so
+                    // the final reverse pass removes them after those entries.
+                    auto Item = treeRoot_;
+                    if (Kept.entry_.locator_ != Root) {
+                        Item = PlannedItem{{std::move(Kept.entry_), treeRoot_.source_.reader_, treeRoot_.source_.writer_}, {}, treeRoot_.depth_ + Kept.depth_};
+                        Item.root_ = treeRoot_.root_; ++verifiedItems_;
+                    }
+                    Item.removeDirectory_ = true; Item.readOnly_ = (Item.source_.entry_.attributes_ & 1) != 0;
+                    directories_.push_back(std::move(Item));
+                }
+                for (auto It = Batch.deferred_.rbegin(); It != Batch.deferred_.rend(); ++It) {
+                    // Decisions, links and errors take the verified per-item path.
+                    PlannedItem Item{{std::move(It->entry_), treeRoot_.source_.reader_, treeRoot_.source_.writer_}, {}, treeRoot_.depth_ + It->depth_};
+                    Item.root_ = treeRoot_.root_;
+                    if (Item.source_.entry_.locator_ == Root) {
+                        // The engine could not list the root: plan it again.
+                        Item = treeRoot_; Item.removeDirectory_ = false;
+                        seen_.erase(Serialize(Root)); --verifiedItems_;
+                    }
+                    Item.classicTraversal_ = Item.source_.entry_.directory_;
+                    pending_.push_front(std::move(Item));
+                }
             }
             JobStep readOnlyQuestion() {
                 releasePreparedMutations(); JobStep Step{JobState::WaitingForUser}; Step.interaction_ = InteractionRequest{"", InteractionKind::ReadOnlyRemoval, "read-only-removal",
@@ -1556,21 +1676,36 @@ namespace hc::operations
                 for (std::size_t I = 0; I < Count; ++I)
                     Outcomes.push_back({Serialize(items_[index_ + I].source_.entry_.locator_), ItemOutcome::Status::Completed, {}, false, true, items_[index_ + I].source_.entry_});
                 std::vector<ItemOutcome> Completed; Completed.reserve(Count);
+                // Same-directory removals serialize in a local filesystem; four
+                // workers splitting one folder measured slower than one worker.
+                // Such writers get whole directories per worker instead.
+                std::array<std::size_t, 65> Groups{};
+                std::size_t GroupCount = 0;
+                const bool ByDirectory = items_[index_].source_.writer_->SerializesDirectoryRemovals();
+                const auto Folder = [&](std::size_t I) {
+                    const std::string_view Path = items_[index_ + I].source_.entry_.locator_.root_;
+                    return Path.substr(0, Path.find_last_of("/\\") == std::string_view::npos ? 0 : Path.find_last_of("/\\"));
+                };
+                for (std::size_t I = 0; I < Count; ++I)
+                    if (!ByDirectory || !I || Folder(I) != Folder(I - 1)) Groups[GroupCount++] = I;
+                Groups[GroupCount] = Count;
                 std::atomic<std::size_t> Next{0};
                 Context.stopToken_ = mutationStop_;
                 Context.allowReadOnlyRemoval_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_;
                 try {
-                    for (; Started < std::min(deleteWorkers_, Count); ++Started) {
-                        Work[Started] = CopyWorkers().Submit([this, &Results, &Next, Count, Context] {
+                    for (; Started < std::min(deleteWorkers_, GroupCount); ++Started) {
+                        Work[Started] = CopyWorkers().Submit([this, &Results, &Next, &Groups, GroupCount, Context] {
                             for (;;) {
-                                const auto I = Next.fetch_add(1); if (I >= Count) break;
-                                const auto& Item = items_[index_ + I];
-                                try {
-                                    auto Removed = Item.source_.writer_->Remove(Item.source_.entry_, Context);
-                                    Results[I].next_ = Removed.HasValue() ? JobState::Completed : JobState::Failed;
-                                    if (!Removed.HasValue()) Results[I].error_ = Removed.Failure();
-                                } catch (...) {
-                                    Results[I].next_ = JobState::Failed; Results[I].error_ = Error{ErrorCategory::Internal, "delete-worker-exception"};
+                                const auto Group = Next.fetch_add(1); if (Group >= GroupCount) break;
+                                for (auto I = Groups[Group]; I < Groups[Group + 1]; ++I) {
+                                    const auto& Item = items_[index_ + I];
+                                    try {
+                                        auto Removed = Item.source_.writer_->Remove(Item.source_.entry_, Context);
+                                        Results[I].next_ = Removed.HasValue() ? JobState::Completed : JobState::Failed;
+                                        if (!Removed.HasValue()) Results[I].error_ = Removed.Failure();
+                                    } catch (...) {
+                                        Results[I].next_ = JobState::Failed; Results[I].error_ = Error{ErrorCategory::Internal, "delete-worker-exception"};
+                                    }
                                 }
                             }
                             return JobStep{JobState::Completed};
@@ -1598,6 +1733,7 @@ namespace hc::operations
                 phase_ = index_ == items_.size() && streaming_ && !planningFinished_ ? Phase::Preparing : Phase::Begin;
                 auto Step = progress(); Step.items_ = std::move(Completed);
                 if (index_ == items_.size() && planningFinished_) Step.next_ = JobState::Completed;
+                trimProcessed();
                 return Step;
             }
             JobStep removeSource(OperationContext Context)
@@ -1638,6 +1774,11 @@ namespace hc::operations
             bool ownsMutationScope_ = true;
             std::stop_token mutationStop_;
             std::size_t deleteWorkers_ = 0;
+            // Active bulk removal of treeRoot_; its outcomes are not in items_.
+            std::unique_ptr<ITreeRemoval> tree_;
+            PlannedItem treeRoot_;
+            std::uint64_t treeItems_ = 0, trimmedItems_ = 0;
+            std::string treeCurrent_, treeSource_;
             std::deque<std::unique_ptr<PreparedCopy>> copies_;
             std::stop_source copyStop_;
             std::size_t copyWorkers_ = 0;
@@ -1842,6 +1983,14 @@ namespace hc::operations
             if (!Prepared.HasValue()) return failed(Prepared.Failure());
             inner_ = std::move(Prepared.Value().task_); outcomeBase_ = emitted_;
             return JobStep{JobState::Running};
+        }
+        CompletedEffects TakeCompletedEffects() override
+        {
+            if (!inner_) return {};
+            auto Effects = inner_->TakeCompletedEffects();
+            emitted_ += Effects.items_.size();
+            if (Effects.progress_) { Effects.progress_->bytesDone_ += completedBytes_; Effects.progress_->bytesTotal_.reset(); }
+            return Effects;
         }
         std::vector<Error> Finalize(JobState State) override
         {

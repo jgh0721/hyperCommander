@@ -153,6 +153,12 @@ namespace hc::operations
         // deletion). Mutually exclusive with item_/replaceItem_; <=128 rows.
         std::vector<ItemOutcome> items_;
     };
+    // Effects that task-owned background work completed after its last step.
+    struct CompletedEffects
+    {
+        std::vector<ItemOutcome> items_;
+        std::optional<JobProgress> progress_;
+    };
     class IJobTask
     {
     public:
@@ -160,6 +166,10 @@ namespace hc::operations
         // One bounded I/O unit per call; keep continuation state in this object.
         // Return WaitingForUser to release the worker instead of waiting in it.
         virtual JobStep Advance(JobStepContext Context) = 0;
+        // Called once before Finalize on every terminal transition, including a
+        // cancellation that skips Advance. Stop that work first, then return
+        // every completed effect so the result ledger never omits one.
+        virtual CompletedEffects TakeCompletedEffects() { return {}; }
         // Called once, including for never-started and failed tasks, outside locks.
         // Cleanup must not inherit user cancellation; report every failed cleanup.
         virtual std::vector<Error> Finalize(JobState State) = 0;

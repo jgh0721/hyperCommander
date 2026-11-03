@@ -12,6 +12,7 @@
 #include "UniqueLibs/fileSecurityRecovery.hpp"
 #include <QTemporaryDir>
 #include <QFile>
+#include <QDirIterator>
 #include <Windows.h>
 #include <Aclapi.h>
 #include <sddl.h>
@@ -354,6 +355,42 @@ private:
     { return Session.Append({reinterpret_cast<const std::byte*>(Bytes.constData()), static_cast<std::size_t>(Bytes.size())}, Context); }
     QStringList artifacts()
     { return QDir(root_->path()).entryList({".hc-*"}, QDir::Files | QDir::Hidden | QDir::System); }
+    bool makeJunction(const QString& LinkName, const QString& TargetName)
+    {
+        // Mount point to a local folder; no symbolic-link privilege required.
+        const auto Link = QDir::toNativeSeparators(root_->filePath(LinkName)).toStdWString();
+        const auto Target = QDir::toNativeSeparators(root_->filePath(TargetName)).toStdWString();
+        if (!CreateDirectoryW(Link.c_str(), nullptr)) return false;
+        const auto Substitute = std::wstring(L"\\??\\") + Target;
+        struct JunctionData { DWORD tag_; WORD size_, reserved_, substituteOffset_, substituteLength_, printOffset_, printLength_; wchar_t paths_[1]; };
+        const auto PathBytes = (Substitute.size() + Target.size() + 2) * sizeof(wchar_t);
+        std::vector<std::byte> Buffer(16 + PathBytes);
+        auto* Data = reinterpret_cast<JunctionData*>(Buffer.data());
+        Data->tag_ = IO_REPARSE_TAG_MOUNT_POINT; Data->size_ = static_cast<WORD>(8 + PathBytes);
+        Data->substituteLength_ = static_cast<WORD>(Substitute.size() * sizeof(wchar_t));
+        Data->printOffset_ = Data->substituteLength_ + sizeof(wchar_t); Data->printLength_ = static_cast<WORD>(Target.size() * sizeof(wchar_t));
+        memcpy(Data->paths_, Substitute.c_str(), Data->substituteLength_ + sizeof(wchar_t));
+        memcpy(reinterpret_cast<std::byte*>(Data->paths_) + Data->printOffset_, Target.c_str(), Data->printLength_ + sizeof(wchar_t));
+        const auto Handle = CreateFileW(Link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (Handle == INVALID_HANDLE_VALUE) return false;
+        DWORD Returned = 0;
+        const bool Set = DeviceIoControl(Handle, FSCTL_SET_REPARSE_POINT, Buffer.data(), static_cast<DWORD>(Buffer.size()), nullptr, 0, &Returned, nullptr);
+        CloseHandle(Handle); return Set;
+    }
+    // Drives a scheduled job, answering each question with Answer(question).
+    JobResult runJob(JobScheduler& Scheduler, JobHandle& Job, const std::function<InteractionChoice(const InteractionRequest&)>& Answer)
+    {
+        QElapsedTimer Timer; Timer.start();
+        while (Job.completion_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready && Timer.elapsed() < 30000) {
+            const auto State = Scheduler.Snapshot(Job.id_);
+            if (State.HasValue() && State.Value().interaction_) {
+                const auto Query = *State.Value().interaction_;
+                Scheduler.Reply(Job.id_, {Query.id_, Answer(Query), {}});
+            }
+            QTest::qWait(5);
+        }
+        return Job.completion_.get();
+    }
 private slots:
     void errorPresentation_data() {
         using namespace hc::ui;
@@ -2666,12 +2703,14 @@ private slots:
     }
     void freshMutationMetadataStillRejectsReplacement()
     {
+        // A selected entry keeps its revision check. Descendants of a selected
+        // folder are removed as listed (treeRemoval* tests).
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         const auto Folder = Directory.filePath("source"); QVERIFY(QDir().mkdir(Folder));
         const auto Path = QDir(Folder).filePath("file");
         { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("old"), qint64(3)); }
         auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
-        auto Source = Reader->Resolve({LocatorKind::Local, Folder.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
+        auto Source = Reader->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
         FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
         Request.sources_ = {{Source.Value(), Reader, Writer}};
         auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
@@ -2703,12 +2742,13 @@ private slots:
     }
     void preparedDeletionDetectsMetadataEdits()
     {
+        // Selected entries only; see freshMutationMetadataStillRejectsReplacement.
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         const auto Folder = Directory.filePath("source"); QVERIFY(QDir().mkdir(Folder));
         const auto Path = QDir(Folder).filePath("file");
         { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("data"), qint64(4)); }
         auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
-        auto Source = Reader->Resolve({LocatorKind::Local, Folder.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
+        auto Source = Reader->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
         FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
         Request.sources_ = {{Source.Value(), Reader, Writer}};
         auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
@@ -2737,12 +2777,13 @@ private slots:
     }
     void preparedDeletionHonorsReadonlyApproval()
     {
+        // Readonly inside a selected folder: treeRemovalAsksForReadonlyAndLinks.
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         const auto Folder = Directory.filePath("source"); QVERIFY(QDir().mkdir(Folder));
         const auto Path = QDir(Folder).filePath("file");
         { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("data"), qint64(4)); }
         auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
-        auto Source = Reader->Resolve({LocatorKind::Local, Folder.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
+        auto Source = Reader->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get(); QVERIFY(Source.HasValue());
         FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
         Request.readOnly_ = ReadOnlyPolicy::Allow; Request.sources_ = {{Source.Value(), Reader, Writer}};
         auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
@@ -2935,10 +2976,15 @@ private slots:
         Request.deleteWhileListing_ = Streaming; Request.calculateSizeBefore_ = !Streaming;
         auto Prepared = PrepareFileOperation(Request); QVERIFY(Prepared.HasValue());
         bool Changed = false, Completed = false; JobStepContext Context; Context.committing_ = true;
+        const auto FileRemoved = [](const ItemOutcome& Item) { return Item.sourceRemoved_ && Item.source_ && !Item.source_->directory_; };
         for (int I = 0; I < 1000 && !Completed; ++I) {
             const auto Step = Prepared.Value().task_->Advance(Context);
             QVERIFY2(Step.next_ != JobState::Failed, Step.error_ ? Step.error_->code_.c_str() : "delete failed");
-            if (!Changed && Step.item_ && Step.item_->sourceRemoved_ && Step.item_->source_ && !Step.item_->source_->directory_) {
+            // The local tree engine may finish this small folder in one step;
+            // treeRemovalKeepsAncestorsOfDeferredEntries covers its kept root.
+            if (!Changed && (Step.item_ ? FileRemoved(*Step.item_) : std::ranges::any_of(Step.items_, FileRemoved))
+                && !QFileInfo::exists(root_->filePath(Name))) Changed = true;
+            if (!Changed && (Step.item_ ? FileRemoved(*Step.item_) : std::ranges::any_of(Step.items_, FileRemoved))) {
                 const auto Native = QDir::toNativeSeparators(root_->filePath(Name)).toStdWString();
                 const auto Handle = CreateFileW(Native.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
@@ -2951,6 +2997,121 @@ private slots:
         }
         QVERIFY(Changed && Completed); QVERIFY(!QFileInfo::exists(root_->filePath(Name)));
         QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty());
+    }
+    void treeRemovalAsksForReadonlyAndLinks()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local tree removal fixture.");
+        // Descendants are removed as listed, but readonly entries still ask and
+        // a link is never followed: its target keeps every file.
+        const QString Name = "tree-readonly-link";
+        QVERIFY(QDir().mkpath(root_->filePath(Name + "/sub/deep"))); QVERIFY(QDir().mkpath(root_->filePath(Name + "-outside")));
+        for (const auto* File : {"/a.txt", "/sub/b.txt", "/sub/deep/c.txt", "/ro.txt"}) QVERIFY(write(Name + File, "payload"));
+        QVERIFY(write(Name + "-outside/keep.txt", "keep"));
+        const auto ReadOnly = QDir::toNativeSeparators(root_->filePath(Name + "/ro.txt")).toStdWString();
+        QVERIFY(SetFileAttributesW(ReadOnly.c_str(), FILE_ATTRIBUTE_READONLY));
+        const auto Clear = qScopeGuard([&] { SetFileAttributesW(ReadOnly.c_str(), FILE_ATTRIBUTE_NORMAL); });
+        QVERIFY(makeJunction(Name + "/link", Name + "-outside"));
+        const auto Unlink = qScopeGuard([&] { RemoveDirectoryW(QDir::toNativeSeparators(root_->filePath(Name + "/link")).toStdWString().c_str()); });
+        auto Source = writer_->Inspect(at(Name), {}); QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        Request.fileLockInteractions_ = true; Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        int ReadOnlyQuestions = 0, LinkQuestions = 0; std::string Unexpected;
+        const auto Done = runJob(Scheduler, Job.Value(), [&](const InteractionRequest& Query) {
+            if (Query.kind_ == InteractionKind::ReadOnlyRemoval) { ++ReadOnlyQuestions; return InteractionChoice::ConfirmAll; }
+            if (Query.reason_ == "delete-failure:reparse-entry-denied") ++LinkQuestions; else Unexpected = Query.reason_;
+            return InteractionChoice::Skip;
+        });
+        QVERIFY2(Done.snapshot_.state_ == JobState::Completed, Done.snapshot_.error_ ? Done.snapshot_.error_->code_.c_str() : "tree removal failed");
+        QVERIFY2(Unexpected.empty(), Unexpected.c_str());
+        QCOMPARE(ReadOnlyQuestions, 1); QCOMPARE(LinkQuestions, 1);
+        for (const auto* Removed : {"/a.txt", "/sub", "/ro.txt"}) QVERIFY(!QFileInfo::exists(root_->filePath(Name + Removed)));
+        QVERIFY(QFileInfo::exists(root_->filePath(Name + "/link"))); // the skipped link keeps its parent
+        QCOMPARE(read(Name + "-outside/keep.txt"), QByteArray("keep"));
+        QCOMPARE(Done.snapshot_.progress_.deletedFiles_.value_or(0), 4ull);
+    }
+    void treeRemovalUnlinksSharedOpenFiles()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local tree removal fixture.");
+        // An indexer-style reader that allows deletion must not leave a
+        // delete-pending name behind, or the parent could not be removed.
+        const QString Name = "tree-shared-open";
+        QVERIFY(QDir().mkpath(root_->filePath(Name + "/inner"))); QVERIFY(write(Name + "/inner/held.txt", "held"));
+        const auto Native = QDir::toNativeSeparators(root_->filePath(Name + "/inner/held.txt")).toStdWString();
+        const auto Held = CreateFileW(Native.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+        QVERIFY(Held != INVALID_HANDLE_VALUE); const auto Close = qScopeGuard([&] { CloseHandle(Held); });
+        auto Source = writer_->Inspect(at(Name), {}); QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        Request.fileLockInteractions_ = true; Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        int Questions = 0;
+        const auto Done = runJob(Scheduler, Job.Value(), [&](const InteractionRequest&) { ++Questions; return InteractionChoice::Cancel; });
+        QVERIFY2(Done.snapshot_.state_ == JobState::Completed, Done.snapshot_.error_ ? Done.snapshot_.error_->code_.c_str() : "shared-open removal failed");
+        QCOMPARE(Questions, 0); QVERIFY(!QFileInfo::exists(root_->filePath(Name)));
+    }
+    void treeRemovalKeepsAncestorsOfDeferredEntries()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local tree removal fixture.");
+        const QString Name = "tree-locked";
+        QVERIFY(QDir().mkpath(root_->filePath(Name + "/sub")));
+        for (int I = 0; I < 40; ++I) QVERIFY(write(Name + "/" + QString::number(I) + ".txt", "payload"));
+        QVERIFY(write(Name + "/sub/locked.txt", "locked"));
+        const auto Native = QDir::toNativeSeparators(root_->filePath(Name + "/sub/locked.txt")).toStdWString();
+        HANDLE Locked = CreateFileW(Native.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        QVERIFY(Locked != INVALID_HANDLE_VALUE); const auto Close = qScopeGuard([&] { if (Locked != INVALID_HANDLE_VALUE) CloseHandle(Locked); });
+        auto Source = writer_->Inspect(at(Name), {}); QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        Request.fileLockInteractions_ = true; Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        int Questions = 0; bool Kept = false;
+        const auto Done = runJob(Scheduler, Job.Value(), [&](const InteractionRequest& Query) {
+            ++Questions;
+            if (!Query.reason_.starts_with("file-in-use:")) return InteractionChoice::Cancel;
+            // Every other file is gone; the locked one keeps its ancestors.
+            Kept = QDir(root_->filePath(Name)).entryList(QDir::Files).isEmpty() && QFileInfo::exists(root_->filePath(Name + "/sub/locked.txt"));
+            // A tunneled creation time must not invalidate the kept root.
+            const auto Folder = QDir::toNativeSeparators(root_->filePath(Name)).toStdWString();
+            const auto Handle = CreateFileW(Folder.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            if (Handle != INVALID_HANDLE_VALUE) {
+                FILETIME Time{}; GetSystemTimeAsFileTime(&Time); SetFileTime(Handle, &Time, nullptr, nullptr); CloseHandle(Handle);
+            }
+            CloseHandle(Locked); Locked = INVALID_HANDLE_VALUE;
+            return InteractionChoice::Retry;
+        });
+        QVERIFY2(Done.snapshot_.state_ == JobState::Completed, Done.snapshot_.error_ ? Done.snapshot_.error_->code_.c_str() : "locked tree removal failed");
+        QCOMPARE(Questions, 1); QVERIFY(Kept); QVERIFY(!QFileInfo::exists(root_->filePath(Name)));
+        QCOMPARE(Done.snapshot_.progress_.deletedFiles_.value_or(0), 41ull);
+        const auto Removed = std::ranges::count_if(Done.items_, [](const ItemOutcome& Item) { return Item.sourceRemoved_; });
+        QCOMPARE(Removed, 43); // 41 files, the kept subfolder and the root
+    }
+    void treeRemovalCancellationRecordsRemovedFiles()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("Local tree removal fixture.");
+        const QString Name = "tree-cancel";
+        constexpr int Folders = 40, Files = 100;
+        for (int D = 0; D < Folders; ++D) {
+            QVERIFY(QDir().mkpath(root_->filePath(Name + "/" + QString::number(D))));
+            for (int F = 0; F < Files; ++F) QVERIFY(write(Name + "/" + QString::number(D) + "/" + QString::number(F), "x"));
+        }
+        auto Source = writer_->Inspect(at(Name), {}); QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        QElapsedTimer Timer; Timer.start();
+        while (Job.Value().completion_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready && Timer.elapsed() < 20000) {
+            const auto State = Scheduler.Snapshot(Job.Value().id_);
+            if (State.HasValue() && State.Value().progress_.deletedFiles_.value_or(0) > 0) { Scheduler.Cancel(Job.Value().id_); break; }
+            std::this_thread::yield();
+        }
+        const auto Done = Job.Value().completion_.get();
+        QVERIFY(Done.snapshot_.state_ == JobState::Cancelled || Done.snapshot_.state_ == JobState::Completed);
+        int Left = 0;
+        for (QDirIterator It(root_->filePath(Name), QDir::Files, QDirIterator::Subdirectories); It.hasNext(); It.next()) ++Left;
+        const auto Deleted = std::uint64_t(Folders * Files - Left);
+        // Removals that finished after the last step still reach the ledger.
+        const auto Recorded = std::ranges::count_if(Done.items_, [](const ItemOutcome& Item) { return Item.sourceRemoved_ && Item.source_ && !Item.source_->directory_; });
+        QCOMPARE(std::uint64_t(Recorded), Deleted);
+        QCOMPARE(Done.snapshot_.progress_.deletedFiles_.value_or(0), Deleted);
     }
     void nativeDeleteEnumerationYieldsBeforeFolderEnd()
     {

@@ -5,6 +5,8 @@
 #endif
 #include <Windows.h>
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cwctype>
 #include <iterator>
 #include <string_view>
@@ -66,6 +68,27 @@ namespace hc::storage::native
         if (Value == L"\\\\tsclient" || Value.starts_with(L"\\\\tsclient\\")) return true;
         if (Value.starts_with(L"\\device\\rdpdr\\")) return true;
         // Mapped redirected drives have the same handle semantics as tsclient.
+        if (Value.size() >= 2 && Value[1] == L':' && Value[0] >= L'a' && Value[0] <= L'z') {
+            // Revision and capability checks ask this for every file, and each
+            // QueryDosDevice costs several object-manager calls. A drive mapping
+            // changes rarely: reuse the answer briefly on this thread. A remap
+            // inside the window only delays detection; identity checks remain.
+            struct Cached { std::chrono::steady_clock::time_point at_{}; bool known_ = false, redirected_ = false; };
+            static thread_local std::array<Cached, 26> Drives;
+            auto& Slot = Drives[Value[0] - L'a'];
+            const auto Now = std::chrono::steady_clock::now();
+            if (Slot.known_ && Now - Slot.at_ < std::chrono::seconds(1)) return Slot.redirected_;
+            const wchar_t Drive[]{Value[0], L':', L'\0'};
+            wchar_t Target[1024]{};
+            bool Redirected = false;
+            if (QueryDosDeviceW(Drive, Target, DWORD(std::size(Target)))) {
+                std::wstring Device(Target);
+                std::transform(Device.begin(), Device.end(), Device.begin(), [](wchar_t Character) { return towlower(Character); });
+                Redirected = Device.starts_with(L"\\device\\rdpdr\\") || Device.find(L"\\tsclient\\") != std::wstring::npos;
+            }
+            Slot = {Now, true, Redirected};
+            return Redirected;
+        }
         if (Value.size() >= 2 && Value[1] == L':') {
             const wchar_t Drive[]{Value[0], L':', L'\0'};
             wchar_t Target[1024]{};

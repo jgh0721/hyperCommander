@@ -717,7 +717,33 @@ namespace hc::operations
             if (IsTerminal(Terminal))
             {
                 std::vector<Error> Cleanup;
-                try { Cleanup = Value->task_->Finalize(Terminal); }
+                // Background work may finish effects after the last step, and a
+                // cancellation can end the job without another Advance. Record
+                // them before cleanup; the effects already happened.
+                CompletedEffects Late;
+                try { Late = Value->task_->TakeCompletedEffects(); }
+                catch (...) { Cleanup.push_back({ErrorCategory::Internal, "completed-effects-exception"}); }
+                if (Value->result_.outcomes_) for (const auto& Item : Late.items_) {
+                    try {
+                        auto Saved = Value->result_.outcomes_->Append(Item);
+                        if (!Saved.HasValue()) { Cleanup.push_back(Saved.Failure()); break; }
+                    } catch (...) { Cleanup.push_back({ErrorCategory::Unavailable, "job-outcome-write-exception"}); break; }
+                }
+                if (!Late.items_.empty() || Late.progress_) {
+                    std::lock_guard Lock(Shared->mutex_);
+                    auto& Snapshot = Value->result_.snapshot_;
+                    if (Late.progress_) Snapshot.progress_ = std::move(*Late.progress_);
+                    for (auto& Item : Late.items_) {
+                        switch (Item.status_)
+                        {
+                        case ItemOutcome::Status::Completed: ++Snapshot.completedItems_; break;
+                        case ItemOutcome::Status::Skipped: ++Snapshot.skippedItems_; break;
+                        case ItemOutcome::Status::Failed: ++Snapshot.failedItems_; break;
+                        }
+                        if (!Value->result_.outcomes_ || Value->result_.items_.size() < 200) Value->result_.items_.push_back(std::move(Item));
+                    }
+                }
+                try { auto Finalized = Value->task_->Finalize(Terminal); Cleanup.insert(Cleanup.end(), Finalized.begin(), Finalized.end()); }
                 catch (...) { Cleanup.push_back({ErrorCategory::Internal, "cleanup-exception"}); }
                 if (Value->result_.outcomes_) {
                     try {

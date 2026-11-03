@@ -69,6 +69,40 @@ namespace hc::storage
         // a backup that cannot safely be restored; report its recovery locator.
         virtual Result<Unit> Abort() = 0;
     };
+    // Bulk local deletion of one already verified directory tree. The selected
+    // root keeps its revision check; descendants are removed as they are listed
+    // and never through links (reparse entries are returned untouched).
+    // Anything that needs a decision (readonly, locks, access, depth) returns to
+    // the coordinator's verified per-item path, with every ancestor it keeps.
+    struct TreeRemovalOptions
+    {
+        std::size_t workers_ = 1;   // directories processed concurrently
+        std::size_t maxDepth_ = 32; // relative to the root; its children are 1
+        bool allowReadOnly_ = false;
+    };
+    struct TreeRemovalEntry
+    {
+        EntrySnapshot entry_;
+        std::size_t depth_ = 0;     // relative to the root
+    };
+    struct TreeRemovalBatch
+    {
+        std::vector<EntrySnapshot> removed_;
+        // Only with finished_: entries for the per-item path and directories
+        // kept because a descendant remains (ancestors first, with revisions).
+        std::vector<TreeRemovalEntry> deferred_, remaining_;
+        bool finished_ = false;
+    };
+    class ITreeRemoval
+    {
+    public:
+        virtual ~ITreeRemoval() = default;
+        // Waits at most Wait for MaxItems removals or for completion.
+        virtual Result<TreeRemovalBatch> Collect(std::size_t MaxItems, std::chrono::milliseconds Wait) = 0;
+        // Stops scheduling work, joins it and releases every handle. Removals
+        // completed before the stop remain collectable.
+        virtual void Release() = 0;
+    };
     class IWritableStorage
     {
     public:
@@ -87,7 +121,15 @@ namespace hc::storage
         virtual Result<CopyCapabilities> CopySupportAt(Locator, OperationContext) { return CopySupport(); }
         virtual bool SupportsParallelCopies() const { return false; }
         virtual bool SupportsParallelRemovals() const { return false; }
+        // Removals inside one directory serialize in the filesystem. Workers
+        // then share directories, never one directory's files.
+        virtual bool SerializesDirectoryRemovals() const { return false; }
         virtual std::size_t PreferredDeleteWorkers(Locator) const { return 1; }
+        // Only for a reader whose enumeration this writer can replace; wrapped
+        // or foreign readers keep their own listing and per-item verification.
+        virtual bool SupportsTreeRemoval(const IStorageProvider&, const Locator&) const { return false; }
+        virtual Result<std::unique_ptr<ITreeRemoval>> BeginTreeRemoval(EntrySnapshot, TreeRemovalOptions, OperationContext)
+        { return Error{ErrorCategory::Unsupported, "tree-removal-unavailable", Id()}; }
         virtual std::size_t PreferredCopyWorkers(Locator, Locator) const { return 1; }
         virtual bool CanProduceContent(OperationContext) const { return false; }
         virtual Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context)
