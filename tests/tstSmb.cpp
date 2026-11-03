@@ -4282,6 +4282,25 @@ private slots:
             }
             Close->setChecked(true); Cancel->click(); QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_)); QTRY_VERIFY(!Dialog->isVisible());
         }
+        // Unknown totals exercise the phase-text branch used by streaming delete.
+        for (const auto Phase : {JobPhase::Preparing, JobPhase::Deleting, JobPhase::Copying}) {
+            QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false);
+            FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+            auto Control = std::make_shared<struct Control>(); JobProgress Progress;
+            Progress.phase_ = Phase; Progress.currentItem_ = "sample.bin";
+            Progress.source_ = "D:/source/sample.bin"; Progress.deletedFiles_ = 4; Progress.discoveredItems_ = 10;
+            PreparedJob Work; Work.request_.metadata_ = {"delete", "D:/source/sample.bin", {}, {}, {}, JobKind::Delete};
+            Work.task_ = std::make_unique<Task>(Control, Progress);
+            auto Started = Jobs.Submit(std::move(Work), "delete-phase"); QVERIFY(Started.HasValue());
+            auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Dialog);
+            auto* Metrics = Dialog->findChild<QLabel*>("hc.jobs.overallMetrics"); QVERIFY(Metrics);
+            const auto Expected = Phase == JobPhase::Preparing ? QStringLiteral("삭제할 항목 확인") : QStringLiteral("삭제 중");
+            QTRY_VERIFY(Metrics->text().contains(Expected));
+            QVERIFY(!Metrics->text().contains(QStringLiteral("복사"))); QVERIFY(!Metrics->text().contains(QStringLiteral("변경 준비")));
+            QVERIFY(SaveR9Dialog(*Dialog, "job-delete-phase-" + QString::number(int(Phase))));
+            Jobs.Scheduler().Cancel(Started.Value().id_);
+            QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_));
+        }
         for (const bool CleanupFailure : {false, true}) {
             QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
             auto Control = std::make_shared<struct Control>(); Control->cleanupFailure_ = CleanupFailure;

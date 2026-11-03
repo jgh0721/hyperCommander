@@ -126,11 +126,12 @@ namespace
         default: return {};
         }
     }
-    QString PhaseText(JobPhase Phase)
+    QString PhaseText(JobPhase Phase, JobKind Kind = JobKind::Unknown)
     {
         switch (Phase) {
-        case JobPhase::Preparing: return QObject::tr("변경 준비");
-        case JobPhase::Copying: return QObject::tr("대상에 복사");
+        case JobPhase::Preparing: return Kind == JobKind::Delete || Kind == JobKind::Recycle ? QObject::tr("삭제할 항목 확인") : QObject::tr("변경 준비");
+        case JobPhase::Copying: return Kind == JobKind::Delete || Kind == JobKind::Recycle ? QObject::tr("삭제") : QObject::tr("대상에 복사");
+        case JobPhase::Deleting: return Kind == JobKind::Recycle ? QObject::tr("휴지통으로 이동") : QObject::tr("삭제");
         case JobPhase::Verifying: return QObject::tr("결과 확인");
         case JobPhase::RemovingSource: return QObject::tr("원본 제거");
         case JobPhase::PreparingInputs: return QObject::tr("파일 목록 확인");
@@ -1110,7 +1111,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const bool Create = Kind == JobKind::MakeFile || Kind == JobKind::MakeDirectory || Kind == JobKind::ArchiveMakeDirectory;
     const bool Security = Kind == JobKind::SecurityChange || Kind == JobKind::SecurityRestore;
     const bool ArchiveCreation = Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate || Kind == JobKind::IsoCreate;
-    const auto ActivePhase=ArchiveCreation&&Progress.phase_==JobPhase::PreparingInputs&&Progress.currentTotal_?tr("입력 파일 준비"):PhaseText(Progress.phase_);
+    const auto ActivePhase=ArchiveCreation&&Progress.phase_==JobPhase::PreparingInputs&&Progress.currentTotal_?tr("입력 파일 준비"):PhaseText(Progress.phase_, Kind);
     auto Operation = OperationText(Kind);
     if (Operation.isEmpty()) Operation = jobs_->currentText().section(QStringLiteral(" · "), 0, 0);
     if (Operation.isEmpty()) Operation = tr("파일 작업");
@@ -1166,7 +1167,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
         while (auto* Item = Layout->takeAt(0)) { delete Item->widget(); delete Item; }
         for (size_t Index = 0; Index < Phases.size(); ++Index) {
             const bool Current = Phases[Index] == Progress.phase_;
-            auto* Label = new fm::ui::Label(QString::number(Index + 1) + ". " + (Kind == JobKind::IsoCreate && Phases[Index] == JobPhase::BuildingArchive ? tr("ISO 생성") : PhaseText(Phases[Index])), phaseBlock_);
+            auto* Label = new fm::ui::Label(QString::number(Index + 1) + ". " + (Kind == JobKind::IsoCreate && Phases[Index] == JobPhase::BuildingArchive ? tr("ISO 생성") : PhaseText(Phases[Index], Kind)), phaseBlock_);
             Label->setTextRole(fm::ui::Label::Meta); Label->setTone(Current ? fm::ui::Label::Accent : fm::ui::Label::Secondary);
             Label->setProperty("hc.jobs.activePhase", Current); Label->setMargin(5); Label->setFrameShape(QFrame::StyledPanel);
             Layout->addWidget(Label);
@@ -1224,7 +1225,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     if (Bytes) Overall = Total ? tr("처리량 %1 / %2").arg(SizeText(Done), SizeText(*Total))
         : tr("처리량 %1 · 전체 크기 집계 중").arg(SizeText(Done));
     else if (Total) Overall = tr("처리 항목 %1 / %2개").arg(Done).arg(*Total);
-    else Overall = PhaseText(Progress.phase_).isEmpty() ? tr("전체 집계 중") : PhaseText(Progress.phase_) + tr(" 중입니다.");
+    else Overall = PhaseText(Progress.phase_, Kind).isEmpty() ? tr("전체 집계 중") : PhaseText(Progress.phase_, Kind) + tr(" 중입니다.");
     if (ArchiveCreation) {
         Overall = tr("생성 완료 %1 / %2개").arg(Snapshot.completedItems_).arg(Progress.outputCount_.value_or(0));
         if (Progress.outputIndex_ && Progress.outputCount_ && *Progress.outputCount_ > 1 && *Progress.outputIndex_ < *Progress.outputCount_)
