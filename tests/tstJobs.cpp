@@ -123,6 +123,62 @@ private slots:
         QVERIFY(Scheduler.Control({Cancelled.Value().id_}, JobControl::Cancel).HasValue()); QVERIFY(Ready(Cancelled.Value()));
         QCOMPARE(Never->calls_.load(), 0); QCOMPARE(Never->finalizations_.load(), 1);
     }
+    void pathAdmission_data()
+    {
+        QTest::addColumn<QString>("First"); QTest::addColumn<QString>("Second"); QTest::addColumn<bool>("Overlap");
+        QTest::newRow("same-volume-disjoint") << QString::fromUtf8("D:/QtSrc/one") << QString::fromUtf8("D:/Dev/iMonAGR/Tools") << false;
+        QTest::newRow("same") << QString::fromUtf8("D:/QtSrc/one") << QString::fromUtf8("d:/qtsrc/ONE/") << true;
+        QTest::newRow("parent") << QString::fromUtf8("D:/QtSrc") << QString::fromUtf8("D:/QtSrc/one") << true;
+        QTest::newRow("child") << QString::fromUtf8("D:/QtSrc/one") << QString::fromUtf8("D:/QtSrc") << true;
+        QTest::newRow("prefix-is-not-parent") << QString::fromUtf8("D:/QtSrc/one") << QString::fromUtf8("D:/QtSrc/one-more") << false;
+        QTest::newRow("dot-components") << QString::fromUtf8("D:/QtSrc/one") << QString::fromUtf8("D:/QtSrc/other/../one/./child") << true;
+        QTest::newRow("extended") << QString::fromUtf8("D:/QtSrc/one") << QString::fromUtf8(R"(\\?\D:\QtSrc\one\child)") << true;
+        QTest::newRow("unc-extended") << QString::fromUtf8("//SERVER/SHARE/one") << QString::fromUtf8(R"(\\?\UNC\server\share\ONE\child)") << true;
+        QTest::newRow("unc-disjoint") << QString::fromUtf8("//server/share/one") << QString::fromUtf8("//server/share/two") << false;
+        QTest::newRow("volume-root") << QString::fromUtf8("D:/") << QString::fromUtf8("D:/QtSrc/one") << true;
+        QTest::newRow("unicode-case") << QString::fromUtf8("D:/Ärea/자료") << QString::fromUtf8("d:/ärea/자료/child") << true;
+        QTest::newRow("unicode-final-sigma-distinct") << QString::fromUtf8("D:/Σource") << QString::fromUtf8("d:/ςource/child") << false;
+        QTest::newRow("unicode-sigma") << QString::fromUtf8("D:/Σource") << QString::fromUtf8("d:/σource/child") << true;
+    }
+    void pathAdmission()
+    {
+        QFETCH(QString, First); QFETCH(QString, Second); QFETCH(bool, Overlap);
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);
+        auto A = std::make_shared<Probe>(); auto B = std::make_shared<Probe>();
+        auto One = Scheduler.Submit(Lane("path:" + First.toStdString()), std::make_unique<ScriptTask>(A, [](auto) { return Prompt(); }));
+        QVERIFY(One.HasValue()); QTRY_COMPARE(Scheduler.Snapshot(One.Value().id_).Value().state_, JobState::WaitingForUser);
+        auto Two = Scheduler.Submit(Lane("path:" + Second.toStdString()), std::make_unique<ScriptTask>(B)); QVERIFY(Two.HasValue());
+        if (Overlap) { QTest::qWait(60); QCOMPARE(B->calls_.load(), 0); }
+        else QVERIFY(Ready(Two.Value()));
+        QVERIFY(Scheduler.Cancel(One.Value().id_).HasValue()); QVERIFY(Ready(One.Value())); QVERIFY(Ready(Two.Value()));
+        QCOMPARE(Two.Value().completion_.get().snapshot_.state_, JobState::Completed);
+    }
+    void foregroundBypassesBackgroundLimitAndDemotionIsBounded()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 3);
+        QVERIFY(Scheduler.SetConcurrencyLimit(2).HasValue());
+        const auto Keep = [](auto) { JobStep Step{JobState::Running}; Step.deferFor_ = 10ms; return Step; };
+        std::vector<JobHandle> Background;
+        for (int Index = 0; Index < 2; ++Index) {
+            auto Value = Scheduler.Submit(Lane("background-" + std::to_string(Index)), std::make_unique<ScriptTask>(std::make_shared<Probe>(), Keep));
+            QVERIFY(Value.HasValue()); Background.push_back(Value.Value());
+            QTRY_COMPARE(Scheduler.Snapshot(Value.Value().id_).Value().state_, JobState::Running);
+        }
+        auto Request = Lane("foreground"); Request.foreground_ = true;
+        auto Front = Scheduler.Submit(Request, std::make_unique<ScriptTask>(std::make_shared<Probe>(), Keep)); QVERIFY(Front.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Front.Value().id_).Value().state_, JobState::Running);
+        auto Demotion = Scheduler.SetForeground(Front.Value().id_, false); QVERIFY(!Demotion.HasValue());
+        QCOMPARE(Demotion.Failure().code_, std::string("background-concurrency-full"));
+        QVERIFY(Scheduler.Snapshot(Front.Value().id_).Value().foreground_);
+        QVERIFY(Scheduler.Cancel(Background.front().id_).HasValue()); QVERIFY(Ready(Background.front()));
+        QVERIFY(Scheduler.SetForeground(Front.Value().id_, false).HasValue());
+        auto ProbeValue = std::make_shared<Probe>();
+        auto Third = Scheduler.Submit(Lane("third-background"), std::make_unique<ScriptTask>(ProbeValue)); QVERIFY(Third.HasValue());
+        QTest::qWait(60); QCOMPARE(ProbeValue->calls_.load(), 0);
+        QVERIFY(Scheduler.SetForeground(Front.Value().id_, true).HasValue()); QVERIFY(Ready(Third.Value()));
+        QVERIFY(Scheduler.Cancel(Front.Value().id_).HasValue()); QVERIFY(Ready(Front.Value()));
+        QVERIFY(Scheduler.Cancel(Background.back().id_).HasValue()); QVERIFY(Ready(Background.back()));
+    }
     void concurrencyLimitRetainsJobsAcrossStepsAndFreesPrompt()
     {
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);

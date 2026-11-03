@@ -329,6 +329,7 @@ if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOUR
 endif()
 if(TARGET hc_smb_tests)
     target_link_libraries(hc_smb_tests PRIVATE msi)
+    add_dependencies(hc_smb_tests hc_plugin_fault_hang)
     add_dependencies(hc_smb_tests hc_wlx_fixture hc_tc_data_fixture hc_dopus_fixture)
 endif()
 qt_add_executable(hc_hosted_wlx_tests tstHostedWlx.cpp)

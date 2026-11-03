@@ -160,6 +160,27 @@ private slots:
         if (Fixture.contains("crash")) QCOMPARE(Host->Snapshot().exitCode_.value(), DWORD(EXCEPTION_ACCESS_VIOLATION));
         qInfo() << "Host failure" << QString::fromStdString(Probe.Failure().code_) << "exit" << Host->Snapshot().exitCode_.value();
     }
+    void busyHostObservationAndQueuedDeadline()
+    {
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, "hc_plugin_fault_hang.dll", Approval));
+        HostLimits Limits; Limits.requestMs_ = 1500; Limits.heartbeatMs_ = 5000;
+        auto Started = PluginProcess::Start(host_, Directory.filePath("plugin.json"), Approval, Limits);
+        QVERIFY(Started.HasValue()); auto Host = std::move(Started.Value());
+        std::atomic<bool> Calling = false;
+        auto Work = std::async(std::launch::async, [&] { Calling = true; return Host->Probe(); });
+        QTRY_VERIFY(Calling.load()); QTest::qWait(80);
+        QElapsedTimer Timer; Timer.start(); const auto Busy = Host->Snapshot();
+        QVERIFY2(Timer.elapsed() < 150, "A status query must not wait for the stalled plugin's IPC mutex");
+        QVERIFY(Busy.busy_); QVERIFY(Busy.running_);
+        OperationContext Context; Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(70);
+        Timer.restart(); auto Queued = Host->Ping(Context);
+        QVERIFY(!Queued.HasValue()); QCOMPARE(Queued.Failure().code_, std::string("deadline-exceeded"));
+        QVERIFY2(Timer.elapsed() < 300, "A queued request must honour its own deadline before acquiring the pipe");
+        QCOMPARE(Work.wait_for(std::chrono::milliseconds(0)), std::future_status::timeout);
+        QVERIFY(Work.wait_for(std::chrono::seconds(4)) == std::future_status::ready); QVERIFY(!Work.get().HasValue());
+        const auto Failed = Host->Snapshot(); QVERIFY(!Failed.busy_); QVERIFY(Failed.failure_);
+        Timer.restart(); Host->Close(); QVERIFY(Timer.elapsed() < 3000);
+    }
     void childCreationDenied()
     {
         QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, "hc_plugin_fault_child.dll", Approval));

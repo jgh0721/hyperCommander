@@ -850,9 +850,9 @@ private slots:
     {
         QTest::addColumn<bool>("SharedLane");
         QTest::addColumn<bool>("Ui");
-        QTest::newRow("retain-volume-lane") << false << false;
+        QTest::newRow("retain-source-paths") << false << false;
         QTest::newRow("two-admitted-jobs") << true << false;
-        QTest::newRow("ui-retain-volume-lane") << false << true;
+        QTest::newRow("ui-retain-source-paths") << false << true;
         QTest::newRow("ui-two-admitted-jobs") << true << true;
     }
     void parallelSchedulerControls()
@@ -870,7 +870,10 @@ private slots:
         auto FirstProbe = std::make_shared<ParallelProbe>(); FirstProbe->hold_ = true;
         auto SecondProbe = std::make_shared<ParallelProbe>();
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);
-        if (SharedLane) QVERIFY(Scheduler.SetLaneLimit(FileOperationLane(at(Prefix)), 2).HasValue());
+        // This fixture deliberately permits both jobs to read the same sources.
+        // Production keeps those exact path claims exclusive by default.
+        if (SharedLane) for (const auto& Source : Request.sources_)
+            QVERIFY(Scheduler.SetLaneLimit(FileOperationLane(Source.entry_.locator_), 2).HasValue());
         OperationContext Context; Context.fileCopyWorkers_ = 4; Context.flushFileContents_ = false;
         Context.providerInteractions_ = Ui;
         Request.destination_ = at(Prefix + "/first"); Request.destinationWriter_ = std::make_shared<ParallelWriter>(writer_, FirstProbe);
@@ -1795,8 +1798,8 @@ private slots:
         using namespace hc::filetools;
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
         const Locator Parent{kind_,root_->path().toStdString()};
-        QCOMPARE(FileOperationLane({LocatorKind::Local,"C:/folder"}),std::string("volume:c:"));
-        QCOMPARE(FileOperationLane({LocatorKind::Smb,"//SERVER/SHARE/folder"}),std::string("share:\\\\server\\share"));
+        QCOMPARE(FileOperationLane({LocatorKind::Local,"C:/folder"}), std::string(R"(path:c:\folder)"));
+        QCOMPARE(FileOperationLane({LocatorKind::Smb,"//SERVER/SHARE/folder"}), std::string(R"(path:\\server\share\folder)"));
         for (int Type = 0; Type < 8; ++Type) {
             const auto Name = "r9_" + QString::number(Type) + ".txt";
             auto Prepared = PrepareCreate(writer_, Parent, Name, Type, true); QVERIFY(Prepared.HasValue());

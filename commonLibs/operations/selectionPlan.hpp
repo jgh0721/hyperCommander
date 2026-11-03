@@ -2,21 +2,7 @@
 #include "fileOperation.hpp"
 
 namespace hc::operations {
-inline std::string ResourceLane(storage::Locator At)
-{
-    auto Path = At.root_; std::replace(Path.begin(), Path.end(), '/', '\\');
-    if (Path.starts_with("\\\\?\\UNC\\")) Path = "\\\\" + Path.substr(8);
-    else if (Path.starts_with("\\\\?\\")) Path.erase(0, 4);
-    while (!Path.empty() && Path.back() == '\\') Path.pop_back();
-    for (auto& Letter : Path) if (Letter >= 'A' && Letter <= 'Z') Letter += 'a' - 'A';
-    if (At.kind_ == storage::LocatorKind::Archive) return "archive:" + Path;
-    if (At.kind_ == storage::LocatorKind::Plugin) return "plugin:" + Path.substr(0, Path.find('\\'));
-    if (Path.starts_with("\\\\")) {
-        const auto Server = Path.find('\\', 2); const auto Share = Server == std::string::npos ? Server : Path.find('\\', Server + 1);
-        return "share:" + Path.substr(0, Share);
-    }
-    return "volume:" + Path.substr(0, 2);
-}
+inline std::string ResourceLane(const storage::Locator& At) { return FileOperationLane(At); }
 // Legacy atomic archive APIs need a full change vector. Read the immutable
 // selection on the worker in cancellable pages while retaining its lease.
 class SelectionPlan final : public IJobTask {

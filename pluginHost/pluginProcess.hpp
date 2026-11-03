@@ -21,6 +21,7 @@ namespace hc::plugins
     {
         std::uint32_t processId_ = 0, activeProcesses_ = 0, totalProcesses_ = 0;
         bool running_ = false;
+        bool busy_ = false; // Cached observation while another IPC call owns the channel.
         bool forcedTermination_ = false;
         std::optional<std::uint32_t> exitCode_;
         std::optional<storage::Error> failure_;

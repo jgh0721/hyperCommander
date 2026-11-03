@@ -88,7 +88,9 @@ namespace hc::plugins
     }
     struct PluginProcess::State
     {
-        mutable std::mutex mutex_;
+        mutable std::timed_mutex mutex_;
+        mutable std::mutex snapshotMutex_;
+        mutable HostSnapshot lastSnapshot_;
         WinHandle pipe_, job_, process_;
         HostLimits limits_;
         std::unique_ptr<QTemporaryDir> helperConfig_;
@@ -110,6 +112,19 @@ namespace hc::plugins
         QString epoch_;
         std::atomic<ProviderSessionState> sessionState_{ProviderSessionState::Closed};
         ReadChunk streamReply_;
+        Result<std::unique_lock<std::timed_mutex>> acquire(OperationContext Context)
+        {
+            // A queued call must honour its own cancellation/deadline even while
+            // another long archive call owns the pipe. A plain mutex ignores both.
+            Context = Bound(Context, limits_.requestMs_);
+            std::unique_lock Lock(mutex_, std::defer_lock);
+            for (;;) {
+                if (const auto Stop = Context.Check({"plugin-host"})) return *Stop;
+                if (Lock.try_lock_for(std::chrono::milliseconds(20))) break;
+            }
+            if (const auto Stop = Context.Check({"plugin-host"})) return *Stop;
+            return std::move(Lock);
+        }
         void fail(Error Error)
         {
             if (!failure_) failure_ = std::move(Error);
@@ -466,6 +481,7 @@ namespace hc::plugins
             if (S.epoch_.size() != 32) return HostError("host-session-negotiation");
             S.sessionState_ = ProviderSessionState::Ready;
         }
+        Owner->Snapshot(); // Seed observations before monitoring can own the channel.
         S.heartbeat_ = std::jthread([State = &S](std::stop_token Stop) {
             while (!Stop.stop_requested())
             {
@@ -484,18 +500,18 @@ namespace hc::plugins
         return Owner;
     }
     Result<QJsonObject> PluginProcess::Probe(OperationContext Context)
-    { std::lock_guard Lock(state_->mutex_); return state_->call(WireKind::Probe, {}, Context); }
+    { auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure(); return state_->call(WireKind::Probe, {}, Context); }
     Result<QJsonObject> PluginProcess::Ping(OperationContext Context)
-    { std::lock_guard Lock(state_->mutex_); return state_->call(WireKind::Ping, {}, Context); }
+    { auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure(); return state_->call(WireKind::Ping, {}, Context); }
     Result<QJsonObject> PluginProcess::ArchiveCall(WireKind Kind, QJsonObject Request, OperationContext Context)
     {
         if (!IsArchiveCommand(Kind)) return HostError("host-archive-command");
-        std::lock_guard Lock(state_->mutex_); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
+        auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure(); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
     }
     Result<QJsonObject> PluginProcess::ViewerCall(WireKind Kind, QJsonObject Request, OperationContext Context)
     {
         if (!IsViewerCommand(Kind)) return HostError("host-viewer-command");
-        std::lock_guard Lock(state_->mutex_); auto& S = *state_;
+        auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure(); auto& S = *state_;
         if (!S.viewer_ || S.closed_ || S.failure_) return HostError("host-viewer-unavailable");
         if (Kind == WireKind::ViewerOpen)
         {
@@ -540,22 +556,29 @@ namespace hc::plugins
     {
         if (!IsDataCommand(Kind)) return HostError("host-data-command");
         if (const auto Stop = Context.Check({"hosted-data"})) return *Stop;
-        std::lock_guard Lock(state_->mutex_); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
+        auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure(); return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
     }
     Result<QJsonObject> PluginProcess::Configure(std::uint64_t Owner, OperationContext Context)
     {
         if (state_->limits_.purpose_ != HostPurpose::Configuration) return HostError("host-configuration-session-required");
-        std::lock_guard Lock(state_->mutex_);
+        auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure();
         return state_->call(WireKind::PluginConfigure, QJsonDocument(QJsonObject{{"owner", QString::number(Owner)}}).toJson(QJsonDocument::Compact), Context);
     }
     unsigned PluginProcess::ArchiveOptionsVersion() const { return state_->archiveOptionsVersion_; }
     HostSnapshot PluginProcess::Snapshot() const
     {
-        std::lock_guard Lock(state_->mutex_); HostSnapshot Snapshot; Snapshot.processId_ = state_->pid_; Snapshot.failure_ = state_->failure_; Snapshot.forcedTermination_ = state_->forcedTermination_;
+        std::unique_lock Lock(state_->mutex_, std::try_to_lock);
+        if (!Lock.owns_lock()) {
+            // Status observation must never wait for a stalled plugin request.
+            std::lock_guard Observation(state_->snapshotMutex_);
+            auto Snapshot = state_->lastSnapshot_; Snapshot.busy_ = true; return Snapshot;
+        }
+        HostSnapshot Snapshot; Snapshot.processId_ = state_->pid_; Snapshot.failure_ = state_->failure_; Snapshot.forcedTermination_ = state_->forcedTermination_;
         if (state_->process_.Valid()) { DWORD Exit = 0; if (GetExitCodeProcess(state_->process_.Get(), &Exit)) { Snapshot.running_ = WaitForSingleObject(state_->process_.Get(), 0) == WAIT_TIMEOUT; if (!Snapshot.running_) Snapshot.exitCode_ = Exit; } }
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION Accounting{};
         if (state_->job_.Valid() && QueryInformationJobObject(state_->job_.Get(), JobObjectBasicAccountingInformation, &Accounting, sizeof(Accounting), nullptr))
         { Snapshot.activeProcesses_ = Accounting.ActiveProcesses; Snapshot.totalProcesses_ = Accounting.TotalProcesses; }
+        { std::lock_guard Observation(state_->snapshotMutex_); state_->lastSnapshot_ = Snapshot; }
         return Snapshot;
     }
     void PluginProcess::Close()
@@ -598,14 +621,14 @@ namespace hc::plugins
     {
         if (Kind != WireKind::StreamOpen && Kind != WireKind::StreamSeek && Kind != WireKind::StreamClose && Kind != WireKind::ArchiveUpdateBinary)
             return HostError("host-session-command");
-        std::lock_guard Lock(state_->mutex_);
+        auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure();
         if (state_->epoch_.isEmpty()) return Error{ErrorCategory::Unsupported, "session-v2-required"};
         return state_->call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context, Binary);
     }
     Result<ReadChunk> PluginProcess::ReadStream(const QString& Token, std::size_t Count, OperationContext Context)
     {
         if (!Count || !Context.maxReadBytes_) return HostError("host-stream-read-size");
-        std::lock_guard Lock(state_->mutex_);
+        auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure();
         if (state_->epoch_.isEmpty()) return Error{ErrorCategory::Unsupported, "session-v2-required"};
         const auto Wanted = std::min({Count, Context.maxReadBytes_, std::size_t(WirePayloadLimit / 2)});
         auto Read = state_->call(WireKind::StreamRead, QJsonDocument(QJsonObject{{"stream", Token}, {"count", QString::number(Wanted)}}).toJson(QJsonDocument::Compact), Context);
@@ -616,7 +639,7 @@ namespace hc::plugins
     Result<ReadChunk> PluginProcess::ReadArchiveStream(std::uint64_t Stream, std::uint32_t Ordinal, std::size_t Count, OperationContext Context)
     {
         if (!Count || !Context.maxReadBytes_) return HostError("host-stream-read-size");
-        std::lock_guard Lock(state_->mutex_);
+        auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure();
         if (state_->epoch_.isEmpty()) return Error{ErrorCategory::Unsupported,"session-v2-required"};
         const auto Wanted=std::min({Count,Context.maxReadBytes_,std::size_t(WirePayloadLimit-1)});
         auto Read=state_->call(WireKind::StreamRead,QJsonDocument(QJsonObject{{"archiveStream",QString::number(Stream)},

@@ -50,6 +50,13 @@ using namespace hc::storage;
 
 namespace
 {
+    class FileProgressDialog final : public QDialog
+    {
+    public:
+        using QDialog::QDialog;
+        std::function<void()> background_;
+        void reject() override { if (background_) background_(); else QDialog::reject(); }
+    };
     QString StateText(JobState State)
     {
         switch (State)
@@ -206,7 +213,7 @@ namespace
 FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Events)
     : QObject(Main), journal_(MakeFileJobJournal(QDir(QStandardPaths::isTestModeEnabled()
           ? QCoreApplication::applicationDirPath() : QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath("HyperCommander")).filePath("operation-journal"),false,true,false)),
-      scheduler_(std::move(Events), 2, 1024, journal_), main_(Main)
+      scheduler_(std::move(Events), 3, 1024, journal_), main_(Main)
 {
     previousPermissionController_=QCoreApplication::instance()->property("hc.permission.controller").value<QObject*>();
     QCoreApplication::instance()->setProperty("hc.permission.controller",QVariant::fromValue<QObject*>(this));
@@ -215,7 +222,9 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     SetFileJobPersistence(journal_, Defaults["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()), Defaults["saveJobProgress"].toBool(hc::defaults::DefaultValue("options/saveJobProgress").toBool()));
     appliedConcurrency_ = Defaults["jobConcurrency"].toInt(hc::defaults::DefaultValue("options/jobConcurrency").toInt());
     scheduler_.SetConcurrencyLimit(appliedConcurrency_);
-    dialog_ = new QDialog(Main);
+    auto* Progress = new FileProgressDialog(Main);
+    Progress->background_ = [Guard = QPointer<FileJobUi>(this)] { if (Guard) Guard->Background(); };
+    dialog_ = Progress;
     dialog_->setObjectName("hc.fileJobs");
     dialog_->setWindowTitle(tr("파일 작업"));
     dialog_->resize(790, 480);
@@ -350,12 +359,12 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     queueDown_ = new fm::ui::Button(tr("아래로(&N)"), manager_); queueDown_->setObjectName("hc.jobs.queueDown");
     for (auto* Button : {StartQueue, static_cast<fm::ui::Button*>(queueUp_), static_cast<fm::ui::Button*>(queueDown_)}) Button->setAutoDefault(false);
     concurrency_ = new QSpinBox(manager_); concurrency_->setRange(1, 2); concurrency_->setValue(static_cast<int>(scheduler_.ConcurrencyLimit()));
-    concurrency_->setObjectName("hc.jobs.concurrency"); concurrency_->setAccessibleName(tr("동시 실행 작업 수"));
-    concurrency_->setToolTip(tr("1~2개 작업을 동시에 실행합니다. 줄이면 기존 작업이 끝날 때까지 기다립니다."));
+    concurrency_->setObjectName("hc.jobs.concurrency"); concurrency_->setAccessibleName(tr("백그라운드 동시 실행 작업 수"));
+    concurrency_->setToolTip(tr("백그라운드 작업을 1~2개 실행합니다. 경로가 겹치지 않는 전경 작업은 이 한도와 별도로 실행합니다."));
     QueueControls->addWidget(StartQueue); QueueControls->addWidget(queueUp_); QueueControls->addWidget(queueDown_);
     auto* ConcurrencyGroup = new QWidget(manager_); auto* ConcurrencyLayout = new QHBoxLayout(ConcurrencyGroup);
     ConcurrencyLayout->setContentsMargins(0, 0, 0, 0);
-    auto* ConcurrencyLabel = new QLabel(tr("동시 실행(&J)"), ConcurrencyGroup); ConcurrencyLabel->setBuddy(concurrency_);
+    auto* ConcurrencyLabel = new QLabel(tr("백그라운드 동시 실행(&J)"), ConcurrencyGroup); ConcurrencyLabel->setBuddy(concurrency_);
     ConcurrencyLayout->addWidget(ConcurrencyLabel); ConcurrencyLayout->addWidget(concurrency_); QueueControls->addWidget(ConcurrencyGroup);
     QueueRows->addLayout(QueueControls);
     connect(StartQueue, &QPushButton::clicked, this, [this] { controlAll(JobControl::Start); });
@@ -456,7 +465,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
             return Result;
         }));
     });
-    connect(Hide, &QPushButton::clicked, dialog_, &QDialog::hide);
+    connect(Hide, &QPushButton::clicked, this, &FileJobUi::Background);
     connect(pause_, &QPushButton::clicked, this, [this] { controlSelected(true); });
     connect(cancel_, &QPushButton::clicked, this, [this] { controlSelected(false); });
     connect(jobs_, &QComboBox::currentIndexChanged, this, [this] { resultOffset_ = 0; updateSelection(); });
@@ -558,6 +567,7 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
     if(!Request.elevation_)Request.elevation_=ElevationService();
     auto Prepared = PrepareFileOperation(Request, Context); if (!Prepared.HasValue()) return Prepared.Failure();
     Prepared.Value().request_.deferred_ = Deferred;
+    Prepared.Value().request_.foreground_ = !Deferred;
     QString Options = tr("부모 폴더: %1").arg(Request.createParents_ ? tr("만듦") : tr("만들지 않음"));
     if (Operation == hc::operations::FileOperation::Copy || Operation == hc::operations::FileOperation::Move)
         Options += tr(" · 충돌: %1 · 대상 이름: %2")
@@ -599,6 +609,7 @@ Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationCo
     const auto Source = Request.sources_.empty() ? DisplayPath(Serialize(Request.selectionRoot_)) : DisplayPath(Serialize(Request.sources_.front().entry_.locator_));
     auto Prepared = PrepareArchiveOperation(Request, Context); if (!Prepared.HasValue()) return Prepared.Failure();
     Prepared.Value().request_.deferred_ = Deferred;
+    Prepared.Value().request_.foreground_ = !Deferred;
     Prepared.Value().request_.metadata_ = {Label, Source.toStdString(), Destination.toStdString(), "conflict=" + std::to_string(static_cast<int>(Request.conflict_)), {}};
     Prepared.Value().request_.metadata_.kind_ = Operation == hc::operations::FileOperation::Copy ? JobKind::ArchiveAdd
         : Operation == hc::operations::FileOperation::Move ? JobKind::ArchiveMove
@@ -624,6 +635,7 @@ Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationConte
     const auto Source = Request.sources_.empty() ? DisplayPath(Serialize(Request.selectionRoot_)) : DisplayPath(Serialize(Request.sources_.front().locator_));
     auto Prepared = PrepareMoveOperation(Request, Context); if (!Prepared.HasValue()) return Prepared.Failure();
     Prepared.Value().request_.deferred_ = Deferred;
+    Prepared.Value().request_.foreground_ = !Deferred;
     Prepared.Value().request_.metadata_ = {Label, Source.toStdString(), Destination.toStdString(), "conflict=" + std::to_string(static_cast<int>(Request.conflict_)), {}};
     Prepared.Value().request_.metadata_.kind_ = JobKind::Move;
     auto Submitted = track(scheduler_.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)), hc::operations::FileOperation::Move, Label);
@@ -641,6 +653,7 @@ Result<JobHandle> FileJobUi::Submit(PreparedJob Job, const QString& Label, Prepa
     const bool Renaming = Presentation == JobKind::Rename || Presentation == JobKind::BatchRename || Presentation == JobKind::RenameUndo
         || Presentation == JobKind::RenameRedo || Presentation == JobKind::RenameResume || Presentation == JobKind::RenameRestore;
     const auto Kind = Renaming ? hc::operations::FileOperation::Rename : hc::operations::FileOperation::Copy;
+    Job.request_.foreground_ = !Job.request_.deferred_;
     const auto Context = Job.request_.operation_;
     auto Submitted = track(scheduler_.Submit(std::move(Job.request_), std::move(Job.task_)), Kind, Label.toStdString());
     if (Submitted.HasValue()) jobs_->setItemText(jobs_->findData(QString::fromStdString(Submitted.Value().id_)), Label);
@@ -703,9 +716,27 @@ void FileJobUi::ApplyDefaults()
     }
 }
 
-void FileJobUi::Background() { dialog_->hide(); }
+void FileJobUi::Background()
+{
+    const auto Id = selectedId(); const auto Snapshot = scheduler_.Snapshot(Id);
+    if (Snapshot.HasValue() && !IsTerminal(Snapshot.Value().state_)) {
+        const auto Changed = scheduler_.SetForeground(Id, false);
+        if (!Changed.HasValue()) {
+            const auto Current = scheduler_.Snapshot(Id);
+            if (Current.HasValue() && !IsTerminal(Current.Value().state_)) {
+                if (auto* Existing = dialog_->findChild<QMessageBox*>("hc.jobs.backgroundLimit")) { Existing->raise(); return; }
+                auto* Message = new hc::ui::MessageDialog(QMessageBox::Information, tr("백그라운드 실행 한도"),
+                    tr("백그라운드 작업이 최대 %1개 실행 중입니다. 전경 작업을 유지합니다. 다른 작업이 끝난 뒤 다시 전환하세요.").arg(scheduler_.ConcurrencyLimit()), QMessageBox::Ok, dialog_);
+                Message->setObjectName("hc.jobs.backgroundLimit"); Message->setAttribute(Qt::WA_DeleteOnClose); Message->open(); return;
+            }
+        }
+    }
+    dialog_->hide();
+}
 void FileJobUi::Show() { updateManager(); manager_->show(); manager_->raise(); manager_->activateWindow(); updateSelection(); }
 void FileJobUi::showProgress() {
+    const auto Snapshot = scheduler_.Snapshot(selectedId());
+    if (Snapshot.HasValue() && !IsTerminal(Snapshot.Value().state_)) scheduler_.SetForeground(Snapshot.Value().id_, true);
     const bool Opening = !dialog_->isVisible();
     updateSelection(); fitProgressDialog(); dialog_->show(); dialog_->raise(); dialog_->activateWindow(); updateSelection();
     if (Opening) cancel_->setFocus(Qt::OtherFocusReason);
@@ -795,6 +826,7 @@ void FileJobUi::retrySelected()
         if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), hc::ui::ErrorText(Prepared.Failure())); updateSelection(); return; }
         Prepared.Value().request_.metadata_ = Parent.Value().metadata_;
         Prepared.Value().request_.metadata_.retryOf_ = Id; Prepared.Value().request_.metadata_.options_ = tr("충돌: 다시 확인 · 재시도: 저장 전 실패한 항목만").toStdString();
+        Prepared.Value().request_.foreground_ = true;
         auto Submitted = track(scheduler_.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)), Request.operation_, Request.sources_.front().entry_.name_);
         if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(manager_, tr("재시도 접수 실패"), hc::ui::ErrorText(Submitted.Failure())); updateSelection(); return; }
         const auto NewId = Submitted.Value().id_; retryRequests_[NewId] = Request; retryContexts_[NewId] = Context; endpoints_[NewId] = endpoints_[Id];
@@ -1307,7 +1339,7 @@ void FileJobUi::updateManager()
         if (!Item) { Item = new QTreeWidgetItem(jobList_); Item->setData(0, Qt::UserRole, Id); }
         Item->setText(0, (Positions.contains(Snapshot.id_) ? tr("대기 #%1 · ").arg(Positions.at(Snapshot.id_)) : QString{}) + jobs_->itemText(Row));
         Item->setData(0, Qt::UserRole + 2, QVariant::fromValue<qulonglong>(Snapshot.queueOrder_));
-        Item->setText(1, JobStatusText(Snapshot));
+        Item->setText(1, JobStatusText(Snapshot) + (IsTerminal(Snapshot.state_) ? QString{} : Snapshot.foreground_ ? tr(" · 전경") : tr(" · 백그라운드")));
         bool Stalled = false;
         if (Snapshot.state_ == JobState::Running && !Snapshot.pauseRequested_ && samples_.contains(Snapshot.id_)) {
             const auto& History = samples_.at(Snapshot.id_);

@@ -10,6 +10,8 @@ namespace hc::operations
     enum class JobState { Queued, Preparing, Running, WaitingForUser, Paused, Committing, Completed, Failed, Cancelled };
     bool IsTerminal(JobState State);
     const char* StateName(JobState State);
+    // Logical absolute paths; no filesystem access on the submitting/UI thread.
+    std::string FileOperationPath(std::string Path);
     enum class InteractionKind { Overwrite, Rename, Elevation, Password, DeleteConfirmation, RetryFailure, ReadOnlyRemoval };
     enum class InteractionChoice { Replace, Skip, Rename, Retry, Elevate, Confirm, Cancel, ConfirmAll, ElevateAll, SkipAll, CopyOnly,
         ReplaceAll, RenameIncoming, RenameExisting };
@@ -90,6 +92,7 @@ namespace hc::operations
         std::chrono::steady_clock::time_point updated_;
         double bytesPerSecond_ = 0;
         bool deferred_ = false;
+        bool foreground_ = false;
         std::uint64_t queueOrder_ = 0;
         std::int64_t submittedUtcMs_ = 0;
         JobMetadata metadata_;
@@ -113,6 +116,7 @@ namespace hc::operations
     {
         std::string correlationId_;
         bool deferred_ = false;
+        bool foreground_ = false;
         JobMetadata metadata_;
         // Acquire all lanes together and retain them across pause/interaction.
         std::vector<std::string> resourceLanes_;
@@ -197,6 +201,8 @@ namespace hc::operations
         Result<storage::Unit> SetConcurrencyLimit(std::size_t Limit);
         std::size_t ConcurrencyLimit() const;
         Result<storage::Unit> SetLaneLimit(std::string Lane, std::size_t Limit);
+        // Foreground work bypasses the background limit, but retains path exclusion.
+        Result<storage::Unit> SetForeground(const std::string& Id, bool Foreground);
         std::uint64_t DroppedNotifications() const;
         // Owner-thread lifetime operation; do not race destruction with API calls.
         void Shutdown();

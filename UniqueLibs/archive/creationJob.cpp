@@ -274,7 +274,13 @@ Result<PreparedJob> PrepareCreation(CreateJobRequest Request, OperationContext C
     Request.value_.composition_.omitSelectedFolderRoot_ = Request.value_.composition_.OmitSelectedFolderRoot();
     JobRequest Job; Job.correlationId_ = Request.value_.correlationId_; Job.operation_ = Context;
     Job.deferred_ = Request.value_.schedule_ == plugins::ArchiveCreateSchedule::Queued;
-    Job.resourceLanes_ = {FileOperationLane(Request.value_.output_), "archive-creator:" + Request.value_.creator_.id_};
+    Job.resourceLanes_ = {FileOperationLane(Request.value_.output_)};
+    if (Request.selection_) Job.resourceLanes_.push_back(FileOperationLane(Request.value_.sourceRoot_));
+    for (const auto& Source : Request.sources_) Job.resourceLanes_.push_back(FileOperationLane(Source.entry_.locator_));
+    // External creators may share their mutable INI/package settings. Built-ins
+    // create independent codec sessions and can run on disjoint paths together.
+    if (Kind == plugins::ArchiveCreatorKind::Wcx || Kind == plugins::ArchiveCreatorKind::DopusVfs)
+        Job.resourceLanes_.push_back("archive-creator:" + Request.value_.creator_.id_);
     Job.metadata_.destination_ = Request.value_.output_.root_; Job.metadata_.options_ = Request.value_.format_ + " · " + Request.value_.creator_.displayName_;
     Job.metadata_.source_ = Request.sources_.size() == 1 ? Serialize(Request.sources_.front().entry_.locator_) : Request.value_.sourceRoot_.root_;
     Job.metadata_.kind_ = Request.value_.composition_.separateArchives_ ? JobKind::ArchiveSeparate

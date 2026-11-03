@@ -81,7 +81,7 @@ private slots:
     void queueLaneAndDurableUndo() {
         QTemporaryDir Data, Journal, General; QVERIFY(Data.isValid()); const auto Rows = Fixture(Data.path(), true); QCOMPARE(Rows.size(), 3);
         auto Prepared = PrepareBatchRename(Journal.path(), Rows); QVERIFY(Prepared.HasValue()); const auto Id = IdOf(Prepared.Value());
-        QCOMPARE(Prepared.Value().request_.resourceLanes_.size(), std::size_t(1)); QVERIFY(Prepared.Value().request_.resourceLanes_.front().starts_with("volume:"));
+        QCOMPARE(Prepared.Value().request_.resourceLanes_.size(), std::size_t(1)); QVERIFY(Prepared.Value().request_.resourceLanes_.front().starts_with("path:"));
         Prepared.Value().request_.deferred_ = true;
         {
             JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2, 1024, MakeFileJobJournal(General.path()));

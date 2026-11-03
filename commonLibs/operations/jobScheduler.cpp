@@ -6,10 +6,62 @@
 #include <random>
 #include <set>
 #include "providerInteractionTask.hpp"
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace hc::operations
 {
     using storage::ErrorCategory;
+
+    std::string FileOperationPath(std::string Path)
+    {
+        if (Path.empty() || Path.size() > 131072 || Path.find('\0') != std::string::npos) return {};
+        std::replace(Path.begin(), Path.end(), '/', '\\');
+        for (auto& Letter : Path) if (Letter >= 'A' && Letter <= 'Z') Letter += 'a' - 'A';
+        if (Path.starts_with(R"(\\?\unc\)")) Path = R"(\\)" + Path.substr(8);
+        else if (Path.starts_with(R"(\\?\)")) Path.erase(0, 4);
+#if defined(_WIN32)
+        // Windows case matching includes non-ASCII names. Keep the core API UTF-8.
+        const auto Count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, Path.data(), int(Path.size()), nullptr, 0);
+        if (!Count) return {};
+        std::wstring Wide(Count, L'\0');
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, Path.data(), int(Path.size()), Wide.data(), Count);
+        const auto FoldedCount = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, Wide.data(), Count, nullptr, 0, nullptr, nullptr, 0);
+        if (!FoldedCount) return {};
+        std::wstring Folded(FoldedCount, L'\0');
+        LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, Wide.data(), Count, Folded.data(), FoldedCount, nullptr, nullptr, 0);
+        const auto Bytes = WideCharToMultiByte(CP_UTF8, 0, Folded.data(), FoldedCount, nullptr, 0, nullptr, nullptr);
+        if (!Bytes) return {};
+        Path.resize(Bytes); WideCharToMultiByte(CP_UTF8, 0, Folded.data(), FoldedCount, Path.data(), Bytes, nullptr, nullptr);
+        for (auto& Letter : Path) if (Letter >= 'A' && Letter <= 'Z') Letter += 'a' - 'A';
+#endif
+        std::string Root;
+        std::size_t Start = 0;
+        if (Path.size() == 2 && Path[1] == ':') return Path; // Already-normalized volume root.
+        if (Path.size() >= 3 && Path[1] == ':' && Path[2] == '\\') { Root = Path.substr(0, 2); Start = 3; }
+        else if (Path.starts_with(R"(\\)")) {
+            const auto Server = Path.find('\\', 2);
+            if (Server == std::string::npos || Server == 2) return {};
+            const auto Share = Path.find('\\', Server + 1);
+            Root = Path.substr(0, Share);
+            if (Root.size() == Server + 1) return {};
+            Start = Share == std::string::npos ? Path.size() : Share + 1;
+        } else return {};
+        std::vector<std::string> Parts;
+        while (Start < Path.size()) {
+            const auto End = Path.find('\\', Start); const auto Part = Path.substr(Start, End - Start);
+            if (Part == "..") { if (!Parts.empty()) Parts.pop_back(); }
+            else if (!Part.empty() && Part != ".") Parts.push_back(Part);
+            if (End == std::string::npos) break;
+            Start = End + 1;
+        }
+        for (const auto& Part : Parts) Root += '\\' + Part;
+        return Root;
+    }
     bool IsTerminal(JobState State) { return State == JobState::Completed || State == JobState::Failed || State == JobState::Cancelled; }
     const char* StateName(JobState State)
     {
@@ -97,7 +149,7 @@ namespace hc::operations
             if (Value.result_.snapshot_.state_ == Next) return;
             Value.result_.snapshot_.state_ = Next;
             if ((Next == JobState::Paused || Next == JobState::WaitingForUser || IsTerminal(Next)) && Value.admitted_)
-            { Value.admitted_ = false; --admitted_; }
+            { Value.admitted_ = false; if (!Value.result_.snapshot_.foreground_) --admitted_; }
             notify(Value, IsTerminal(Next) ? "job." + std::string(StateName(Next)) : "job.changed");
         }
         bool acquire(Job& Value)
@@ -106,7 +158,18 @@ namespace hc::operations
             for (const auto& Lane : Value.request_.resourceLanes_)
             {
                 const auto Limit = laneLimits_.contains(Lane) ? laneLimits_[Lane] : 1;
-                if (occupied_[Lane] >= Limit) return false;
+                const auto Exact = occupied_.find(Lane);
+                if (Exact != occupied_.end() && Exact->second >= Limit) return false;
+                if (!Lane.starts_with("path:")) continue;
+                // Ordered lookup avoids comparing every selected file with every
+                // occupied file while holding the mutex used by UI snapshots.
+                const auto Prefix = Lane + '\\';
+                const auto Child = occupied_.lower_bound(Prefix);
+                if (Child != occupied_.end() && Child->first.starts_with(Prefix)) return false;
+                for (auto End = Lane.find('\\', 5); End != std::string::npos; End = Lane.find('\\', End + 1)) {
+                    const auto Parent = occupied_.find(Lane.substr(0, End));
+                    if (Parent != occupied_.end() && Parent->second) return false;
+                }
             }
             for (const auto& Lane : Value.request_.resourceLanes_) ++occupied_[Lane];
             Value.lanesHeld_ = true;
@@ -143,8 +206,15 @@ namespace hc::operations
             return Error{ErrorCategory::InvalidRequest, "invalid-job-request"};
         for (const auto* Value : {&Request.metadata_.label_, &Request.metadata_.source_, &Request.metadata_.destination_, &Request.metadata_.options_, &Request.metadata_.retryOf_})
             if (Value->size() > 65536) return Error{ErrorCategory::InvalidRequest, "job-metadata-budget"};
-        for (const auto& Lane : Request.resourceLanes_)
-            if (Lane.empty() || Lane.size() > 1024) return Error{ErrorCategory::InvalidRequest, "invalid-resource-lane"};
+        for (auto& Lane : Request.resourceLanes_) {
+            if (Lane.empty() || Lane.size() > (Lane.starts_with("path:") ? 131077 : 1024))
+                return Error{ErrorCategory::InvalidRequest, "invalid-resource-lane"};
+            if (Lane.starts_with("path:")) {
+                auto Path = FileOperationPath(Lane.substr(5));
+                if (Path.empty()) return Error{ErrorCategory::InvalidRequest, "invalid-resource-path"};
+                Lane = "path:" + Path;
+            }
+        }
         std::sort(Request.resourceLanes_.begin(), Request.resourceLanes_.end());
         Request.resourceLanes_.erase(std::unique(Request.resourceLanes_.begin(), Request.resourceLanes_.end()), Request.resourceLanes_.end());
         auto Value = std::make_shared<Job>();
@@ -160,6 +230,7 @@ namespace hc::operations
         Snapshot.submitted_ = std::chrono::steady_clock::now();
         Snapshot.submittedUtcMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         Snapshot.deferred_ = Value->request_.deferred_;
+        Snapshot.foreground_ = Value->request_.foreground_;
         Snapshot.metadata_ = Value->request_.metadata_;
         Value->externalStop_ = std::make_unique<std::stop_callback<std::function<void()>>>(Value->request_.operation_.stopToken_, [Stop = Value->stop_]() mutable { Stop.request_stop(); });
         {
@@ -297,6 +368,22 @@ namespace hc::operations
         }
         return storage::Unit{};
     }
+    Result<storage::Unit> JobScheduler::SetForeground(const std::string& Id, bool Foreground)
+    {
+        {
+            std::lock_guard Lock(state_->mutex_);
+            const auto Found = state_->jobs_.find(Id); if (Found == state_->jobs_.end()) return Missing();
+            auto& Value = *Found->second; auto& Snapshot = Value.result_.snapshot_;
+            if (IsTerminal(Snapshot.state_)) return Closed();
+            if (Snapshot.foreground_ == Foreground) return storage::Unit{};
+            if (!Foreground && state_->admitted_ >= state_->concurrencyLimit_)
+                return Error{ErrorCategory::Unavailable, "background-concurrency-full"};
+            if (Value.admitted_) { if (Foreground) --state_->admitted_; else ++state_->admitted_; }
+            Snapshot.foreground_ = Value.request_.foreground_ = Foreground;
+            state_->notify(Value, "job.changed");
+        }
+        state_->changed_.notify_all(); flushEvents(state_); return storage::Unit{};
+    }
     Result<storage::Unit> JobScheduler::SetLaneLimit(std::string Lane, std::size_t Limit)
     {
         if (Lane.empty() || Lane.size() > 1024 || !Limit || Limit > 64) return Error{ErrorCategory::InvalidRequest, "invalid-lane-limit"};
@@ -368,9 +455,9 @@ namespace hc::operations
                             continue;
                         }
                         if (!Snapshot.deferred_) {
-                            if (!Candidate->admitted_ && Shared->admitted_ >= Shared->concurrencyLimit_) continue;
+                            if (!Snapshot.foreground_ && !Candidate->admitted_ && Shared->admitted_ >= Shared->concurrencyLimit_) continue;
                             if (Candidate->readyAt_ > Now || !Shared->acquire(*Candidate)) continue;
-                            if (!Candidate->admitted_) { Candidate->admitted_ = true; ++Shared->admitted_; }
+                            if (!Candidate->admitted_) { Candidate->admitted_ = true; if (!Snapshot.foreground_) ++Shared->admitted_; }
                         }
                     }
                     Value = Candidate;

@@ -1,4 +1,6 @@
-﻿#include "UniqueLibs/wcxStorage.hpp"
+﻿#include "stdafx.h"
+#include "UniqueLibs/wcxStorage.hpp"
+#include "pluginHost/pluginProcess.hpp"
 #include "UniqueLibs/archiveExtractJob.hpp"
 #include <QDir>
 #include "UniqueLibs/fileJobInteraction.hpp"
@@ -46,7 +48,6 @@
 #include "HyperCommander/UIs/thumbnailSettingsPage.hpp"
 #include <fmwidgets/DialogWidgets.h>
 #include <fmwidgets/Button.h>
-#include "stdafx.h"
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QContextMenuEvent>
@@ -304,7 +305,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -13132,6 +13133,96 @@ private slots:
                 QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), QByteArray(4096, char(I)));
             }
         }
+    }
+    void foregroundJobsAndTimeoutUi()
+    {
+        using namespace hc::operations; using namespace hc::storage;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); Window.resize(600, 300);
+        auto* Input = new QPushButton("input", &Window); Input->setGeometry(20, 20, 120, 40);
+        Window.show();
+        FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        QVERIFY(Jobs.Scheduler().SetConcurrencyLimit(2).HasValue());
+        std::shared_ptr<hc::plugins::PluginProcess> Host;
+        class Task final : public IJobTask {
+        public:
+            explicit Task(bool Fail, std::shared_ptr<hc::plugins::PluginProcess> Host) : fail_(Fail), host_(std::move(Host)) {}
+            JobStep Advance(JobStepContext Context) override {
+                if (fail_) {
+                    auto Outcome = host_->Probe(Context.operation_); JobStep Step{JobState::Failed};
+                    Step.error_ = Outcome.HasValue() ? Error{ErrorCategory::Internal, "fixture-did-not-time-out"} : Outcome.Failure(); return Step;
+                }
+                JobStep Step{JobState::Running}; Step.deferFor_ = std::chrono::milliseconds(20); return Step;
+            }
+            std::vector<Error> Finalize(JobState) override { if (host_) host_->Close(); return {}; }
+        private: bool fail_; std::shared_ptr<hc::plugins::PluginProcess> host_;
+        };
+        const auto Submit = [&](const std::string& Name, bool Fail = false) {
+            PreparedJob Job; Job.request_.resourceLanes_ = {FileOperationLane({LocatorKind::Local, Directory.filePath("QtSrc/" + QString::fromStdString(Name)).toStdString()})};
+            Job.request_.metadata_.kind_ = JobKind::Copy; Job.task_ = std::make_unique<Task>(Fail, Fail ? Host : nullptr);
+            return Jobs.Submit(std::move(Job), QString::fromStdString(Name));
+        };
+        std::vector<JobHandle> Background;
+        for (const auto* Name : {"first", "second"}) {
+            auto Started = Submit(Name); QVERIFY(Started.HasValue()); Background.push_back(Started.Value());
+            QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Running);
+            Jobs.Background(); QVERIFY(!Jobs.Scheduler().Snapshot(Started.Value().id_).Value().foreground_);
+        }
+        QVERIFY(QDir().mkpath(Directory.filePath("iMonFTS/Tools"))); QVERIFY(QDir().mkpath(Directory.filePath("iMonAGR/Tools")));
+        const auto RelativeTarget = hc::ui::ResolveNativeDestination(R"(..\..\iMonAGR\Tools)", Directory.filePath("iMonFTS/Tools"));
+        QCOMPARE(RelativeTarget, Directory.filePath("iMonAGR/Tools"));
+        QFile SourceFile(Directory.filePath("iMonFTS/Tools/delcert.exe")); QVERIFY(SourceFile.open(QIODevice::WriteOnly));
+        QCOMPARE(SourceFile.write("foreground-copy"), qint64(15)); SourceFile.close();
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
+        auto Entry = Reader->Resolve({LocatorKind::Local, SourceFile.fileName().toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+        FileOperationRequest Copy; Copy.sources_ = {{Entry.Value(), Reader, Writer}};
+        Copy.destination_ = {LocatorKind::Local, RelativeTarget.toStdString()}; Copy.destinationWriter_ = Writer;
+        auto Copied = Jobs.Submit(Copy, {}); QVERIFY(Copied.HasValue());
+        QTRY_VERIFY(!Jobs.IsUiPending(Copied.Value().id_));
+        QCOMPARE(Jobs.Scheduler().Snapshot(Copied.Value().id_).Value().state_, JobState::Completed);
+        QFile TargetFile(Directory.filePath("iMonAGR/Tools/delcert.exe")); QVERIFY(TargetFile.open(QIODevice::ReadOnly));
+        QCOMPARE(TargetFile.readAll(), QByteArray("foreground-copy")); TargetFile.close();
+        auto Front = Submit("foreground"); QVERIFY(Front.HasValue());
+        QTRY_COMPARE(Jobs.Scheduler().Snapshot(Front.Value().id_).Value().state_, JobState::Running);
+        auto* Progress = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Progress && Progress->isVisible());
+        Progress->reject(); // Escape/window close obey the same limit as F2.
+        QTRY_VERIFY(Window.findChild<QMessageBox*>("hc.jobs.backgroundLimit"));
+        QVERIFY(Progress->isVisible()); QVERIFY(Jobs.Scheduler().Snapshot(Front.Value().id_).Value().foreground_);
+        Window.findChild<QMessageBox*>("hc.jobs.backgroundLimit")->accept();
+        QVERIFY(Jobs.Scheduler().Cancel(Background.front().id_).HasValue());
+        QTRY_VERIFY(!Jobs.IsUiPending(Background.front().id_)); Jobs.Background();
+        QVERIFY(!Progress->isVisible()); QVERIFY(!Jobs.Scheduler().Snapshot(Front.Value().id_).Value().foreground_);
+        QTemporaryDir Package; QVERIFY(Package.isValid());
+        const auto Runtime = QCoreApplication::applicationDirPath();
+        QVERIFY(QFile::copy(QDir(Runtime).filePath("hc_plugin_fault_hang.dll"), Package.filePath("test.wcx64")));
+        QFile Binary(Package.filePath("test.wcx64")); QVERIFY(Binary.open(QIODevice::ReadOnly));
+        hc::plugins::PluginManifest Manifest; Manifest.id_ = "hc.test.host"; Manifest.version_ = "1.0"; Manifest.binary_ = "test.wcx64";
+        Manifest.sha256_ = QCryptographicHash::hash(Binary.readAll(), QCryptographicHash::Sha256).toHex().toStdString(); Binary.close();
+        Manifest.extensions_ = {hc::plugins::Extension::ArchiveRead}; Manifest.permissions_ = {hc::plugins::Permission::ReadContent};
+        hc::plugins::PluginApproval Approval; Approval.reviewed_ = Manifest; Approval.approved_ = true; Approval.granted_ = Manifest.permissions_;
+        QFile Descriptor(Package.filePath("plugin.json")); QVERIFY(Descriptor.open(QIODevice::WriteOnly));
+        QVERIFY(Descriptor.write(hc::plugins::EncodeManifest(Manifest)) > 0); Descriptor.close();
+        hc::plugins::HostLimits Limits; Limits.requestMs_ = 1000; Limits.heartbeatMs_ = 5000;
+        auto Started = std::async(std::launch::async, [Runtime, Path = Descriptor.fileName(), Approval, Limits] {
+            return hc::plugins::PluginProcess::Start(QDir(Runtime).filePath("hc-plugin-host-x64.exe"), Path, Approval, Limits);
+        }).get();
+        QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str()); Host = std::shared_ptr<hc::plugins::PluginProcess>(std::move(Started.Value()));
+        int Ticks = 0; qint64 ObservationDelay = 0; bool SawBusy = false;
+        QTimer Heartbeat; Heartbeat.setInterval(10);
+        connect(&Heartbeat, &QTimer::timeout, &Window, [&] {
+            ++Ticks; QElapsedTimer Timer; Timer.start(); const auto Snapshot = Host->Snapshot();
+            ObservationDelay = std::max(ObservationDelay, Timer.elapsed()); SawBusy |= Snapshot.busy_;
+        }); Heartbeat.start();
+        auto Failure = Submit("host-timeout", true); QVERIFY(Failure.HasValue());
+        QTRY_VERIFY(!Jobs.IsUiPending(Failure.Value().id_));
+        QVERIFY(SawBusy); QVERIFY2(ObservationDelay < 150, "Host observation must not stall the GUI event loop");
+        auto* Notice = Window.findChild<QMessageBox*>("hc.jobs.failure"); QVERIFY(Notice);
+        QVERIFY(Notice->informativeText().contains("deadline-exceeded"));
+        Notice->accept(); Jobs.Background(); Window.raise(); Window.activateWindow();
+        QSignalSpy Clicked(Input, &QPushButton::clicked); Input->setFocus(); QTest::keyClick(Input, Qt::Key_Space);
+        QTRY_COMPARE(Clicked.count(), 1); const auto Before = Ticks; QTRY_VERIFY(Ticks >= Before + 3);
+        QVERIFY(Jobs.Scheduler().Cancel(Background.back().id_).HasValue()); QVERIFY(Jobs.Scheduler().Cancel(Front.Value().id_).HasValue());
+        QTRY_VERIFY(!Jobs.IsUiPending(Background.back().id_) && !Jobs.IsUiPending(Front.Value().id_));
     }
     void backgroundJobManagerUi()
     {

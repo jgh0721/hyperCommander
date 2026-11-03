@@ -7,21 +7,14 @@
 
 namespace hc::operations
 {
-    // All mutation coordinators share the same volume/share/plugin admission lane.
+    // Native paths exclude equal/ancestor/descendant paths across all mutation kinds.
+    // An archive's outer file participates in the same exclusion as native files.
     inline std::string FileOperationLane(const storage::Locator& At)
     {
-        auto Path = At.root_; std::replace(Path.begin(),Path.end(),'/','\\');
-        if (Path.starts_with("\\\\?\\UNC\\")) Path = "\\\\" + Path.substr(8);
-        else if (Path.starts_with("\\\\?\\")) Path.erase(0,4);
-        while (!Path.empty() && Path.back() == '\\') Path.pop_back();
-        for (auto& C : Path) if (C >= 'A' && C <= 'Z') C += 'a'-'A';
-        if (At.kind_ == storage::LocatorKind::Archive) return "archive:" + Path;
-        if (At.kind_ == storage::LocatorKind::Plugin) return "plugin:" + Path.substr(0,Path.find('\\'));
-        if (Path.starts_with("\\\\")) {
-            const auto Server = Path.find('\\',2); const auto Share = Server == std::string::npos ? Server : Path.find('\\',Server+1);
-            return "share:" + Path.substr(0,Share);
-        }
-        return "volume:" + Path.substr(0,2);
+        if (At.kind_ != storage::LocatorKind::Plugin) return "path:" + FileOperationPath(At.root_);
+        auto Path = At.root_; std::replace(Path.begin(), Path.end(), '/', '\\');
+        for (auto& Letter : Path) if (Letter >= 'A' && Letter <= 'Z') Letter += 'a' - 'A';
+        return "plugin:" + Path.substr(0, Path.find('\\'));
     }
     enum class FileOperation { Copy, Move, Delete, MakeDirectory, Rename };
     enum class DeleteMode { Permanent, Recycle };

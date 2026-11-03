@@ -14,14 +14,7 @@ namespace hc::operations
         std::string Child(std::string Parent, const std::string& Name) { if (!Parent.ends_with('/')) Parent += '/'; return Parent + Name; }
         std::string Parent(const std::string& Path) { const auto Slash = Path.find_last_of('/'); return Slash == 0 ? "/" : Path.substr(0, Slash); }
         bool Within(const std::string& Path, const std::string& Root) { return Path == Root || Path.starts_with(Root + "/"); }
-        std::string Lane(std::string Path)
-        {
-            std::replace(Path.begin(), Path.end(), '/', '\\');
-            if (Path.starts_with("\\\\?\\UNC\\")) Path = "\\\\" + Path.substr(8);
-            else if (Path.starts_with("\\\\?\\")) Path.erase(0, 4);
-            for (auto& Letter : Path) if (Letter >= 'A' && Letter <= 'Z') Letter += 'a' - 'A';
-            return "archive:" + Path;
-        }
+        std::string Lane(const std::string& Path) { return FileOperationLane({LocatorKind::Local, Path}); }
         class ArchiveTask final : public IJobTask
         {
             struct Item { OperationSource source_; std::string destination_; std::size_t depth_ = 0; };
