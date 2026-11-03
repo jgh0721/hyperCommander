@@ -3,8 +3,8 @@
   "files": [
     {
       "path": "web/bundle.js",
-      "bytes": 3268830,
-      "sha256": "560a8aa5af51742cbcbeb90364f98eaf84c93ee09477df5a8b97babf4783727d"
+      "bytes": 3270743,
+      "sha256": "3afb759078660194e1737c4c800cc764868492c6138b072360042bf51a6b033b"
     },
     {
       "path": "web/bundle.js.LEGAL.txt",
@@ -318,8 +318,8 @@
     },
     {
       "path": "web/renderer.js",
-      "bytes": 11906,
-      "sha256": "7a784efb5aaa46f87abfb15ff1e2aa4e474f08d295bf750a934a01a32ed0b81c"
+      "bytes": 15779,
+      "sha256": "0765e4760520e6c9b7c58770e0dc00e5979308a853e67a6b1e998729c3972857"
     },
     {
       "path": "web/shell.html",
@@ -328,8 +328,8 @@
     },
     {
       "path": "web/style.css",
-      "bytes": 1348,
-      "sha256": "a7f39855ac3d30c525a6368cfecf953b093852b347b6341a4a2d31cc35016b96"
+      "bytes": 1376,
+      "sha256": "ec5c2947775cf193a1277b95721173e7ffc5e0b4a3cf28affd8cd3e15cbc26c5"
     },
     {
       "path": "licenses/@antfu_install-pkg-LICENSE",

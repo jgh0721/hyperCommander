@@ -1521,6 +1521,9 @@ void CommandUiBridge::extractArchive() {
         const auto Item = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
         if (Item && Item->storageEntry_) {
             if (!Inside && Item->storageEntry_->directory_) { hc::ui::MessageDialog::information(main_, tr("파일 압축 해제"), tr("압축 파일만 선택하세요.")); return; }
+            if (!Inside && TyStPlugInMgr::GetInstance()->RetrieveWCXByExts(QFileInfo(Item->Name_).suffix(), Item->Name_).isEmpty()) {
+                hc::ui::MessageDialog::information(main_, tr("파일 압축 해제"), tr("지원하는 압축 파일이 아닙니다: %1").arg(Item->Name_)); return;
+            }
             Sources.push_back({*Item->storageEntry_, Model->ProviderFor(*Item->storageEntry_), {}}); Names.append(Item->Name_);
         }
     }

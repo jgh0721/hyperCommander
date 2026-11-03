@@ -21,13 +21,12 @@ namespace hc::defaults::edit
     inline QList<Command> Commands()
     {
         return {
-            {"markdown.toggleSource",QObject::tr("소스·미리보기 전환"),"Ctrl+Alt+M","markdown"},
+            {"markdown.toggleSource",QObject::tr("소스·미리보기 전환"),"Alt+O","markdown"},
             {"markdown.preview",QObject::tr("미리보기"),{},"markdown"},
             {"markdown.source",QObject::tr("소스 보기·편집"),{},"markdown"},
             {"markdown.split",QObject::tr("나란히 보기"),{},"markdown"},
             {"markdown.toggleToc",QObject::tr("개요 표시 전환"),"Ctrl+Alt+O","markdown"},
-            {"markdown.positionSync",QObject::tr("소스·본문 위치 동기화"),{},"markdown"},
-            {"markdown.syncScroll",QObject::tr("소스·본문 스크롤 동기화"),{},"markdown"},
+            {"markdown.syncScroll",QObject::tr("스크롤 동기화"),{},"markdown"},
             {"markdown.refresh",QObject::tr("미리보기 갱신"),"Ctrl+Alt+R","markdown"},
             {"markdown.focusOtherPane",QObject::tr("소스·미리보기 포커스 이동"),"F6","markdown"},
             {"markdown.find",QObject::tr("마크다운 찾기"),{},"markdown"},

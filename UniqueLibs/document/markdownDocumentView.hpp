@@ -48,6 +48,7 @@ class MarkdownDocumentView final : public QWidget
   signals:
     void Changed();
     void OpenRequested(const QString &Path);
+    void EscapeRequested();
 
   protected:
     bool eventFilter(QObject *, QEvent *) override;
@@ -57,8 +58,9 @@ class MarkdownDocumentView final : public QWidget
     void alignPreview();
     void report(const QJsonObject &Value);
     void sampleSource();
+    QJsonObject sourceScrollAnchor() const;
     void syncControls();
-    void sendPosition(int Line, bool Scroll, double Ratio = .2);
+    void sendPosition(double Line, bool Scroll, double Ratio = .2, bool Caret = false);
     void saveToggle(const QString &Key, bool Value);
     QTextView *source_;
     QString path_, mode_, status_, heading_, error_;
@@ -74,10 +76,11 @@ class MarkdownDocumentView final : public QWidget
     QMap<QString, QAction *> actions_;
     QTimer debounce_, sample_;
     QElapsedTimer suppress_;
-    QJsonObject options_;
+    QJsonObject options_, previewScroll_, lastSourceAnchor_;
     QJsonArray problemDetails_;
     bool previewActive_ = false;
-    qint64 revision_ = 0, rendered_ = -1;
+    qint64 revision_ = 0, rendered_ = -1, renderRequested_ = -1;
+    qintptr lastPosition_ = -1;
     int lastLine_ = -1, lastTop_ = -1, progress_ = 0, problems_ = 0;
     double zoom_ = 1;
 };

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileAttributesDialog.hpp"
+#include "commonLibs/Qt/elidedLabel.hpp"
 #include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -20,7 +21,7 @@ namespace hc::ui
           state_(std::make_shared<State>()), watcher_(new QFutureWatcher<void>(this)), timer_(new QTimer(this))
     {
         setObjectName("hc.fileAttributes"); resize(680, 700);
-        targetPath_ = new QLabel(this); targetPath_->setObjectName("hc.attributes.targetPath");
+        targetPath_ = new hc::qt::ElidedLabel(this); targetPath_->setObjectName("hc.attributes.targetPath");
         targetPath_->setWordWrap(true); targetPath_->setTextFormat(Qt::PlainText);
         targetPath_->setTextInteractionFlags(Qt::TextSelectableByMouse); BodyLayout()->addWidget(targetPath_);
         updateTargetSummary(roots_);
@@ -36,7 +37,7 @@ namespace hc::ui
         recursive_ = new QCheckBox(tr("선택한 폴더의 하위 파일·폴더 포함"), this); recursive_->setObjectName("hc.attributes.recursive");
         recursive_->setEnabled(manifest_ || std::any_of(roots_.begin(), roots_.end(), [](const auto& E) { return E.directory_; }));
         BodyLayout()->addWidget(recursive_);
-        scope_ = new QLabel(this); scope_->setWordWrap(true); scope_->setTextFormat(Qt::PlainText); BodyLayout()->addWidget(scope_);
+        scope_ = new hc::qt::ElidedLabel(this); scope_->setWordWrap(true); scope_->setTextFormat(Qt::PlainText); BodyLayout()->addWidget(scope_);
         auto* Tabs = new QTabWidget(this); Tabs->setObjectName("hc.attributes.tabs"); BodyLayout()->addWidget(Tabs);
         auto* AttributesPage = new QWidget(Tabs); auto* AttributesLayout = new QVBoxLayout(AttributesPage);
         auto* Grid = new QGridLayout;
@@ -59,7 +60,7 @@ namespace hc::ui
         now_ = new QPushButton(tr("현재 시각"), this); now_->setAutoDefault(false); Time->addWidget(timestamp_, 1); Time->addWidget(now_); DatesLayout->addLayout(Time);
         auto* TimeNote = new QLabel(tr("시간대: %1 · 생성·접근 시각 유지").arg(QString::fromUtf8(QTimeZone::systemTimeZoneId())), this);
         TimeNote->setWordWrap(true); DatesLayout->addWidget(TimeNote); DatesLayout->addStretch(); Tabs->addTab(DatesPage,tr("날짜·시간"));
-        summary_ = new QLabel(this); summary_->setWordWrap(true); summary_->setTextFormat(Qt::PlainText); summary_->setObjectName("hc.attributes.summary"); BodyLayout()->addWidget(summary_);
+        summary_ = new hc::qt::ElidedLabel(this); summary_->setWordWrap(true); summary_->setTextFormat(Qt::PlainText); summary_->setObjectName("hc.attributes.summary"); static_cast<hc::qt::ElidedLabel*>(summary_)->SetLineCount(2); BodyLayout()->addWidget(summary_);
         retry_ = new QPushButton(tr("실패 항목만 다시 확인"), this); retry_->setAutoDefault(false); retry_->hide(); BodyLayout()->addWidget(retry_);
         connect(retry_, &QPushButton::clicked, this, [this] {
             roots_.clear(); manifest_.reset();
@@ -81,12 +82,12 @@ namespace hc::ui
     {
         const auto Count = manifest_ ? manifest_->Count() : Entries.size();
         if (Entries.empty()) {
-            SetSummary(tr("%1개 항목 선택").arg(Count)); targetPath_->setText(tr("대상 경로 확인 중…")); return;
+            SetSummary(tr("%1개 항목 선택").arg(Count)); static_cast<hc::qt::ElidedLabel*>(targetPath_)->SetText(tr("대상 경로 확인 중…")); return;
         }
         const auto FirstPath = QDir::toNativeSeparators(QString::fromStdString(Entries.front().locator_.root_));
         if (Count == 1) {
             SetSummary(tr("%1 · %2 1개").arg(QFileInfo(FirstPath).fileName(), Entries.front().directory_ ? tr("폴더") : tr("파일")));
-            targetPath_->setText(QDir::toNativeSeparators(FirstPath));
+            static_cast<hc::qt::ElidedLabel*>(targetPath_)->SetText(QDir::toNativeSeparators(FirstPath));
         } else {
             const auto Folders = std::count_if(Entries.begin(), Entries.end(), [](const auto& E) { return E.directory_; });
             SetSummary(Count == Entries.size() ? tr("%1개 항목 선택 · 파일 %2개, 폴더 %3개").arg(Count).arg(Entries.size() - Folders).arg(Folders)
@@ -95,7 +96,7 @@ namespace hc::ui
             const bool SameParent = std::all_of(Entries.begin(), Entries.end(), [&](const auto& E) {
                 return QFileInfo(QString::fromStdString(E.locator_.root_)).absolutePath().compare(Parent, Qt::CaseInsensitive) == 0;
             });
-            targetPath_->setText(SameParent ? QDir::toNativeSeparators(Parent) : tr("여러 위치 · 첫 번째 대상: %1").arg(QDir::toNativeSeparators(FirstPath)));
+            static_cast<hc::qt::ElidedLabel*>(targetPath_)->SetText(SameParent ? QDir::toNativeSeparators(Parent) : tr("여러 위치 · 첫 번째 대상: %1").arg(QDir::toNativeSeparators(FirstPath)));
         }
         targetPath_->setToolTip(targetPath_->text());
     }
@@ -115,7 +116,7 @@ namespace hc::ui
     {
         if (!busy_ || asking_) return;
         std::optional<std::pair<storage::EntrySnapshot, bool>> Question;
-        { std::lock_guard Lock(state_->mutex_); summary_->setText(state_->progress_); Question = std::exchange(state_->question_, {}); }
+        { std::lock_guard Lock(state_->mutex_); static_cast<hc::qt::ElidedLabel*>(summary_)->SetText(state_->progress_); Question = std::exchange(state_->question_, {}); }
         if (!Question) return;
         asking_ = true;
         hc::ui::MessageDialog Box(QMessageBox::Question, tr("관리자 권한 필요"),
@@ -150,7 +151,7 @@ namespace hc::ui
         if (!busy_ && !result_) {
             QStringList Changes; for (int I = 0; I < 4; ++I) if (values_[I]->currentIndex()) Changes << values_[I]->accessibleName() + " " + values_[I]->currentText();
             if (changeTime_->isChecked()) Changes << tr("수정 시각 %1").arg(timestamp_->text());
-            summary_->setText(Changes.isEmpty() ? tr("변경할 속성을 선택하세요.") : Changes.join(" · "));
+            static_cast<hc::qt::ElidedLabel*>(summary_)->SetText(Changes.isEmpty() ? tr("변경할 속성을 선택하세요.") : Changes.join(" · "));
         }
     }
     void FileAttributesDialog::collect()
@@ -195,7 +196,7 @@ namespace hc::ui
         if (applying_) {
             result_ = true; const auto& Result = state_->outcome_; changed_ |= Result.changed_ > 0 || Result.failed_ > 0;
             showDetails_->setText(tr("처리 결과 접기")); showDetails_->setChecked(true);
-            summary_->setText(tr("성공 %1 · 변경 없음 %2 · 실패 %3 · 건너뜀 %4 · 미처리 %5\n수집 단계 제외·실패 %6건 (조회 불가 폴더의 하위 개수는 미확인)")
+            static_cast<hc::qt::ElidedLabel*>(summary_)->SetText(tr("성공 %1 · 변경 없음 %2 · 실패 %3 · 건너뜀 %4 · 미처리 %5\n수집 단계 제외·실패 %6건 (조회 불가 폴더의 하위 개수는 미확인)")
                 .arg(Result.changed_).arg(Result.unchanged_).arg(Result.failed_).arg(Result.skipped_).arg(Result.pending_).arg(state_->plan_.issues_.size()));
             for (const auto& Item : Result.items_) Lines << Item.state_ + " · " + QString::fromStdString(Item.entry_.locator_.root_) + " · " + Item.detail_;
             retry_->setVisible(std::any_of(Result.items_.begin(), Result.items_.end(), [](const auto& I) { return I.retry_; }));
@@ -203,7 +204,7 @@ namespace hc::ui
         } else {
             if (manifest_ && !recursive_->isChecked()) updateTargetSummary(state_->plan_.entries_);
             ready_ = !state_->plan_.blocked_ && !state_->plan_.cancelled_;
-            scope_->setText(tr("대상 %1개 · 수집 제외·실패 %2건 · %3").arg(state_->plan_.entries_.size()).arg(state_->plan_.issues_.size()).arg(recursive_->isChecked() ? tr("하위 항목 포함") : tr("선택 항목만")));
+            static_cast<hc::qt::ElidedLabel*>(scope_)->SetText(tr("대상 %1개 · 수집 제외·실패 %2건 · %3").arg(state_->plan_.entries_.size()).arg(state_->plan_.issues_.size()).arg(recursive_->isChecked() ? tr("하위 항목 포함") : tr("선택 항목만")));
             static constexpr std::uint32_t Bits[]{1, 2, 4, 32};
             for (int I = 0; I < 4; ++I) {
                 const auto Count = std::count_if(state_->plan_.entries_.begin(), state_->plan_.entries_.end(), [I](const auto& E) { return (E.attributes_ & Bits[I]) != 0; });

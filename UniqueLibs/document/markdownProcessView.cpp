@@ -178,6 +178,14 @@ void MarkdownProcessView::receive()
             resizeChild();
             ShowWindow(Window, SW_SHOWNOACTIVATE);
             Send({{"type", "attached"}});
+            // A pending request remains valid only while the preview still owns Qt focus.
+            const auto Root = GetAncestor(reinterpret_cast<HWND>(window()->effectiveWinId()), GA_ROOT);
+            if (focusRequested_ && hasFocus() && isVisible() && Root && GetAncestor(GetForegroundWindow(), GA_ROOT) == Root
+                && !QApplication::activeModalWidget() && !QApplication::activePopupWidget())
+            {
+                SetFocus(Window);
+                Send({{"type", "focus"}});
+            }
             if (!pending_.isEmpty())
                 Send(pending_);
             if (!shortcuts_.isEmpty())
@@ -208,11 +216,16 @@ bool MarkdownProcessView::HasFocus() const
     const auto Window = reinterpret_cast<HWND>(child_);
     return Window && GetGUIThreadInfo(0, &Info) && (Info.hwndFocus == Window || IsChild(Window, Info.hwndFocus));
 }
+void MarkdownProcessView::FocusInput()
+{
+    focusRequested_ = true;
+    setFocus(Qt::OtherFocusReason);
+    if (ready_ && isVisible()) Send({{"type", "focus"}});
+}
 void MarkdownProcessView::focusInEvent(QFocusEvent *Event)
 {
     QWidget::focusInEvent(Event);
-    if (child_)
-        SetFocus(reinterpret_cast<HWND>(child_));
-    Send({{"type", "focus"}});
+    focusRequested_ = true;
+    if (ready_) Send({{"type", "focus"}});
 }
 } // namespace hc::document

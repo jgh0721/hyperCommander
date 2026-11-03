@@ -88,7 +88,7 @@ public:
         date_ = Criteria.modified_.isValid() ? std::optional<qint64>(Criteria.modified_.startOfDay().toMSecsSinceEpoch()) : std::nullopt;
         return {};
     }
-    bool Matches(const settings::FileRuleInput& Input, QString* Error = nullptr, settings::FileColorRules::EvaluationContext* Context = nullptr) const {
+    bool Matches(const settings::FileRuleInput& Input, QString* Error = nullptr, settings::FileColorRules::EvaluationContext* Context = nullptr, bool SizeKnown = true) const {
         if (Input.name_ == "..") return false;
         const bool Folder = (Input.attributes_ & 0x10u) != 0;
         if ((criteria_.scope_ == Scope::Files && Folder) || (criteria_.scope_ == Scope::Folders && !Folder)) return false;
@@ -101,7 +101,7 @@ public:
         bool Any = false, All = true, Present = false;
         const auto Add = [&](bool Value) { Present = true; Any |= Value; All &= Value; };
         if (!include_.isEmpty()) Add(hit(include_, Input.name_));
-        if (criteria_.advanced_ && size_) Add(!Folder && (criteria_.minimumSize_ ? Input.size_ >= *size_ : Input.size_ <= *size_));
+        if (criteria_.advanced_ && size_) Add(SizeKnown && (criteria_.minimumSize_ ? Input.size_ >= *size_ : Input.size_ <= *size_));
         if (criteria_.advanced_ && date_) Add(Input.modifiedUtcMs_ && *Input.modifiedUtcMs_ >= *date_);
         return !Present || (criteria_.all_ || !criteria_.advanced_ ? All : Any);
     }

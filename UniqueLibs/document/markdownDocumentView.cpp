@@ -24,6 +24,7 @@
 #include <QDesktopServices>
 #include <QSignalBlocker>
 #include <QApplication>
+#include <QAbstractScrollArea>
 #include <qt_windows.h>
 
 namespace hc::document
@@ -55,9 +56,8 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     }
     toolbar_->addSeparator();
     Make("markdown.toggleToc", tr("개요"), true);
-    Make("markdown.positionSync", tr("위치 동기화"), true)->setToolTip(tr("소스 캐럿·본문 클릭 위치를 연결합니다."));
     Make("markdown.syncScroll", tr("스크롤 동기화"), true)
-        ->setToolTip(tr("소스·본문 화면 이동을 연결합니다. 위치 동기화가 켜져 있어야 합니다."));
+        ->setToolTip(tr("소스 캐럿·본문 클릭과 화면 스크롤을 함께 연결합니다."));
     Make("markdown.refresh", tr("갱신"));
     toolbar_->removeAction(Make("markdown.focusOtherPane", tr("포커스 이동")));
     toolbar_->removeAction(Make("markdown.toggleSource", tr("소스 전환")));
@@ -123,10 +123,10 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
             return;
         }
         const int Line = Item->data(0, Qt::UserRole).toInt();
-        if (SourceVisible() && (!previewActive_ || actions_["markdown.positionSync"]->isChecked()))
+        if (SourceVisible() && (!previewActive_ || actions_["markdown.syncScroll"]->isChecked()))
             source_->goToLine(Line);
         if (!preview_->isHidden() &&
-            (!SourceVisible() || previewActive_ || actions_["markdown.positionSync"]->isChecked()))
+            (!SourceVisible() || previewActive_ || actions_["markdown.syncScroll"]->isChecked()))
             sendPosition(Line, false);
     });
     debounce_.setSingleShot(true);
@@ -171,7 +171,14 @@ void MarkdownDocumentView::SetReadOnly(bool Value)
 }
 void MarkdownDocumentView::Focus()
 {
-    InputWidget()->setFocus();
+    auto* Input = InputWidget();
+    if (Input == preview_) preview_->FocusInput();
+    else {
+        Input->setFocus(Qt::OtherFocusReason);
+        const auto Root = GetAncestor(reinterpret_cast<HWND>(window()->effectiveWinId()), GA_ROOT);
+        if (Root && GetAncestor(GetForegroundWindow(), GA_ROOT) == Root)
+            SetFocus(reinterpret_cast<HWND>(Input->effectiveWinId()));
+    }
 }
 void MarkdownDocumentView::SetSourceTools(QToolBar *Tools)
 {
@@ -204,7 +211,6 @@ void MarkdownDocumentView::mode(const QString &Value)
 }
 void MarkdownDocumentView::syncControls()
 {
-    actions_["markdown.syncScroll"]->setEnabled(actions_["markdown.positionSync"]->isChecked());
     outlinePanel_->setVisible(actions_["markdown.toggleToc"]->isChecked());
 }
 void MarkdownDocumentView::saveToggle(const QString &Key, bool Value)
@@ -231,9 +237,15 @@ bool MarkdownDocumentView::Run(const QString &Id)
     if (!CanRun(Id))
         return false;
     if (Id == "markdown.source" || Id == "markdown.preview" || Id == "markdown.split")
+    {
         mode(Id.section('.', 1));
+        Focus();
+    }
     else if (Id == "markdown.toggleSource")
+    {
         mode(SourceVisible() ? "preview" : "source");
+        Focus();
+    }
     else if (Id == "markdown.focusOtherPane")
     {
         if (mode_ == "split")
@@ -241,7 +253,7 @@ bool MarkdownDocumentView::Run(const QString &Id)
             if (preview_->HasFocus())
                 source_->Backend()->widget()->setFocus();
             else
-                preview_->setFocus();
+                preview_->FocusInput();
         }
     }
     else if (Id == "markdown.toggleToc")
@@ -249,10 +261,10 @@ bool MarkdownDocumentView::Run(const QString &Id)
         syncControls();
         saveToggle(editor_ ? "editorOutline" : "viewerOutline", actions_[Id]->isChecked());
     }
-    else if (Id == "markdown.positionSync" || Id == "markdown.syncScroll")
+    else if (Id == "markdown.syncScroll")
     {
         syncControls();
-        saveToggle(Id == "markdown.positionSync" ? "positionSync" : "scrollSync", actions_[Id]->isChecked());
+        saveToggle("scrollSync", actions_[Id]->isChecked());
         lastLine_ = lastTop_ = -1;
     }
     else if (Id == "markdown.refresh")
@@ -326,7 +338,7 @@ void MarkdownDocumentView::ReloadPreferences()
         Fonts[Key] = QJsonValue::fromVariant(S.value("markdown/previewFonts/" + QString(Key)));
     options_["previewFonts"] = Fonts;
     for (const auto &Pair :
-         {std::pair{"markdown.positionSync", "positionSync"}, std::pair{"markdown.syncScroll", "scrollSync"}})
+         {std::pair{"markdown.syncScroll", "scrollSync"}})
     {
         const QSignalBlocker B(actions_[Pair.first]);
         actions_[Pair.first]->setChecked(S.value("markdown/" + QString(Pair.second)).toBool());
@@ -357,6 +369,7 @@ void MarkdownDocumentView::Refresh(bool Force)
         return;
     }
     ++revision_;
+    renderRequested_ = revision_;
     error_.clear();
     message_->hide();
     status_ = source_->isContentTruncated() ? tr("부분 미리보기 갱신 중") : tr("갱신 중");
@@ -366,12 +379,19 @@ void MarkdownDocumentView::Refresh(bool Force)
                     {"text", Text},
                     {"path", path_},
                     {"baseUrl", QUrl::fromLocalFile(QFileInfo(path_).absolutePath() + "/").toString()},
-                    {"options", options_}});
+                    {"options", options_},
+                    {"scroll", SourceVisible() && actions_["markdown.syncScroll"]->isChecked()
+                        && source_->Backend()->widget()->hasFocus() && !preview_->HasFocus() ? sourceScrollAnchor() : QJsonObject{}}});
     emit Changed();
 }
 void MarkdownDocumentView::report(const QJsonObject &Value)
 {
     const auto Type = Value["type"].toString();
+    if (Type == "escape")
+    {
+        emit EscapeRequested();
+        return;
+    }
     if (Type == "command")
     {
         const auto Id = Value["id"].toString();
@@ -441,17 +461,27 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
         if(SourceVisible() && Input->hasFocus() && Input->isVisible() && Input->isEnabled()
             && Root && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root
             && !QApplication::activeModalWidget() && !QApplication::activePopupWidget())
-            SetFocus(reinterpret_cast<HWND>(Input->effectiveWinId()));
+            QTimer::singleShot(0, this, [this] {
+                auto* Source = source_->Backend()->widget();
+                const auto Owner = GetAncestor(reinterpret_cast<HWND>(window()->effectiveWinId()), GA_ROOT);
+                if (SourceVisible() && Source->hasFocus() && Source->isVisible() && Owner
+                    && GetAncestor(GetForegroundWindow(), GA_ROOT) == Owner
+                    && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
+                    SetActiveWindow(Owner);QApplication::setActiveWindow(window());
+                    Source->setFocus(Qt::OtherFocusReason);SetFocus(reinterpret_cast<HWND>(Source->effectiveWinId()));
+                }
+            });
         outline_->expandAll();
         if(auto* Filter=findChild<QLineEdit*>("markdownOutlineFilter"))QMetaObject::invokeMethod(Filter,"textChanged",Qt::DirectConnection,Q_ARG(QString,Filter->text()));
     }
-    else if (Type == "position" && actions_["markdown.positionSync"]->isChecked() && SourceVisible() && !composing_)
+    else if (Type == "position" && actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_)
     {
         suppress_.restart();
         source_->goToLine(Value["line"].toInt());
     }
     else if (Type == "scroll")
     {
+        previewScroll_ = Value;
         progress_ = Value["progress"].toInt();
         heading_ = Value["heading"].toString();
         for (QTreeWidgetItemIterator It(outline_); *It; ++It)
@@ -461,17 +491,17 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
                 outline_->setCurrentItem(*It);
                 break;
             }
-        if (Value["user"].toBool() && actions_["markdown.positionSync"]->isChecked() &&
-            actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_ &&
+        if (Value["user"].toBool() && preview_->HasFocus() && actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_ &&
             (!suppress_.isValid() || suppress_.elapsed() > 300))
         {
             auto *B = static_cast<ScintillaQtDirectBackend *>(source_->Backend());
-            const int Line = qBound(0, Value["line"].toInt() - 1, source_->lineCount() - 1);
             suppress_.restart();
-            const int Display = int(B->Send(SCI_VISIBLEFROMDOCLINE, Line));
-            B->Send(SCI_SETFIRSTVISIBLELINE,
-                    qMax(0, Display - int(Value["ratio"].toDouble() * B->Send(SCI_LINESONSCREEN))));
+            if (Value["top"].toBool()) B->Send(SCI_SETFIRSTVISIBLELINE, 0);
+            else if (Value["bottom"].toBool()) B->Send(SCI_SETFIRSTVISIBLELINE, quintptr(1) << 30);
+            else B->scrollFractionalLineToViewportRatio(Value["line"].toDouble(1), Value["ratio"].toDouble(.5));
             lastTop_ = int(B->Send(SCI_GETFIRSTVISIBLELINE));
+            lastSourceAnchor_ = sourceScrollAnchor();
+            lastPosition_ = B->Send(SCI_GETCURRENTPOS);
         }
     }
     else if (Type == "link")
@@ -484,40 +514,60 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
     }
     emit Changed();
 }
-void MarkdownDocumentView::sendPosition(int Line, bool Scroll, double Ratio)
+void MarkdownDocumentView::sendPosition(double Line, bool Scroll, double Ratio, bool Caret)
 {
-    if (rendered_ != revision_)
+    if (rendered_ != revision_ && renderRequested_ != revision_)
         return;
     preview_->Send({{"type", Scroll ? "scroll" : "position"},
                     {"revision", revision_},
                     {"line", Line},
                     {"ratio", Ratio},
-                    {"nearest", actions_["markdown.syncScroll"]->isChecked()}});
+                    {"end", Scroll && !Caret && source_->Backend()->isScrolledToEnd()},
+                    {"caret", Caret},
+                    {"reveal", !actions_["markdown.syncScroll"]->isChecked()}});
+}
+QJsonObject MarkdownDocumentView::sourceScrollAnchor() const
+{
+    auto* B = static_cast<ScintillaQtDirectBackend*>(source_->Backend());
+    auto Position = B->Send(SCI_GETCURRENTPOS);
+    int Line = int(B->Send(SCI_LINEFROMPOSITION, Position));
+    const int Height = qMax(1, B->scrollArea()->viewport()->height());
+    double Y = B->Send(SCI_POINTYFROMPOSITION, 0, Position) + qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, Line)) * .5;
+    if (Y < 0 || Y >= Height) {
+        if (B->firstVisibleLine() == 0)
+            return {{"line", 1}, {"ratio", 0}, {"caret", false}, {"end", false}};
+        if (B->isScrolledToEnd())
+            return {{"line", B->lineCount() + 1}, {"ratio", .5}, {"caret", false}, {"end", true}};
+        // Continue at the nearest visible row when the caret leaves the viewport.
+        // A sudden switch to the centre can skip several tall preview paragraphs.
+        Position = B->Send(SCI_POSITIONFROMPOINT, B->leftMarginWidth() + 1, qBound(0, int(Y), Height - 1));
+        Line = int(B->Send(SCI_LINEFROMPOSITION, Position));
+        Y = B->Send(SCI_POINTYFROMPOSITION, 0, Position) + qMax<qintptr>(1, B->Send(SCI_TEXTHEIGHT, Line)) * .5;
+    }
+    const auto Start = B->Send(SCI_POSITIONFROMLINE, Line), End = B->Send(SCI_GETLINEENDPOSITION, Line);
+    const double Count = qMax<qintptr>(1, B->Send(SCI_COUNTCHARACTERS, Start, End));
+    const double Fraction = qBound(0.0, double(B->Send(SCI_COUNTCHARACTERS, Start, Position)) / Count, .999);
+    return {{"line", Line + 1 + Fraction}, {"ratio", qBound(0.0, Y / Height, 1.0)}, {"caret", true}, {"end", false}};
 }
 void MarkdownDocumentView::sampleSource()
 {
-    const bool Active = preview_->HasFocus() ? true : source_->Backend()->widget()->hasFocus() ? false : previewActive_;
-    if (Active != previewActive_)
-    {
-        previewActive_ = Active;
-        emit Changed();
+    const bool PreviewFocus = preview_->HasFocus();
+    const bool Active = PreviewFocus ? true : source_->Backend()->widget()->hasFocus() ? false : previewActive_;
+    if (Active != previewActive_) { previewActive_ = Active; emit Changed(); }
+    if (!SourceVisible() || preview_->isHidden() || composing_ || PreviewFocus
+        || !actions_["markdown.syncScroll"]->isChecked()
+        || (rendered_ != revision_ && renderRequested_ != revision_)
+        || !source_->Backend()->widget()->hasFocus() || (suppress_.isValid() && suppress_.elapsed() < 300)) return;
+    auto* B = static_cast<ScintillaQtDirectBackend*>(source_->Backend());
+    const auto Position = B->Send(SCI_GETCURRENTPOS);
+    if (Position != lastPosition_) {
+        lastPosition_ = Position;lastLine_ = source_->currentLine();
+        sendPosition(lastLine_, false);
     }
-    if (!SourceVisible() || preview_->isHidden() || composing_ || !actions_["markdown.positionSync"]->isChecked() ||
-        rendered_ != revision_ || !source_->Backend()->widget()->hasFocus() ||
-        (suppress_.isValid() && suppress_.elapsed() < 300))
-        return;
-    auto *B = static_cast<ScintillaQtDirectBackend *>(source_->Backend());
-    const int Line = source_->currentLine(), Top = int(B->Send(SCI_GETFIRSTVISIBLELINE));
-    if (Line != lastLine_)
-    {
-        lastLine_ = Line;
-        sendPosition(Line, false);
-    }
-    if (Top != lastTop_)
-    {
-        lastTop_ = Top;
-        if (actions_["markdown.syncScroll"]->isChecked())
-            sendPosition(int(B->Send(SCI_DOCLINEFROMVISIBLE, Top)) + 1, true, 0);
+    const auto Anchor = sourceScrollAnchor();
+    if (Anchor != lastSourceAnchor_ || lastTop_ < 0) {
+        lastSourceAnchor_ = Anchor;lastTop_ = B->firstVisibleLine();
+        sendPosition(Anchor["line"].toDouble(), true, Anchor["ratio"].toDouble(), Anchor["caret"].toBool());
     }
 }
 void MarkdownDocumentView::alignPreview()
@@ -564,8 +614,10 @@ QJsonObject MarkdownDocumentView::State() const
             {"revision", revision_},
             {"renderedRevision", rendered_},
             {"status", status_},
+            {"previewScroll", previewScroll_},
+            {"sourceAnchor", sourceScrollAnchor()},
             {"problems", problems_},
-            {"positionSync", actions_["markdown.positionSync"]->isChecked()},
+            {"positionSync", actions_["markdown.syncScroll"]->isChecked()},
             {"scrollSync", actions_["markdown.syncScroll"]->isChecked()},
             {"error", error_}};
 }

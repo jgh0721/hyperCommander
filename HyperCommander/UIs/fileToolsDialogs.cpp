@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileToolsDialogs.hpp"
+#include "commonLibs/Qt/elidedLabel.hpp"
 #include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include "permissionDialogs.hpp"
@@ -171,7 +172,7 @@ BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, Q
     auto* HelpButton = new fm::ui::Button(tr("마스크 도움말(&H)"), this); HelpButton->setAutoDefault(false); HelpButton->setObjectName("hc.rename.helpButton"); ViewOptions->addWidget(HelpButton);
     comparison_ = new fm::ui::RenameComparisonView(this); comparison_->setObjectName("hc.rename.preview"); comparison_->setMinimumHeight(280); BodyLayout()->addWidget(comparison_, 1);
     connect(Modes, &fm::ui::SegmentedControl::currentIndexChanged, this, [this](int Mode) { comparison_->SetMode(Mode); });
-    summary_ = new QLabel(this); summary_->setObjectName("hc.rename.summary"); BodyLayout()->addWidget(summary_);
+    summary_ = new hc::qt::ElidedLabel(this); summary_->setObjectName("hc.rename.summary"); BodyLayout()->addWidget(summary_);
     auto* Pages = new QHBoxLayout; BodyLayout()->addLayout(Pages);
     previousPage_ = new fm::ui::Button(tr("이전 페이지"), this); nextPage_ = new fm::ui::Button(tr("다음 페이지"), this); pageLabel_ = new QLabel(this);
     previousPage_->setObjectName("hc.rename.previousPage"); nextPage_->setObjectName("hc.rename.nextPage"); pageLabel_->setObjectName("hc.rename.page");
@@ -243,7 +244,7 @@ BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, Q
             auto Rows = Watcher->result(); Watcher->deleteLater(); if (Generation != generation_ || !ready_ || busy_ || metadataLoading_) return;
             plan_ = std::move(Rows); int Changes = 0, Errors = 0, Unchanged = 0;
             for (const auto& Row : plan_) { if (!Row.error_.isEmpty()) ++Errors; else if (Row.source_.path_ != Row.target_) ++Changes; else ++Unchanged; }
-            summary_->setText(tr("%1개 중 변경 %2 · 충돌/오류 %3 · 변경 없음 %4").arg(plan_.size()).arg(Changes).arg(Errors).arg(Unchanged));
+            static_cast<hc::qt::ElidedLabel*>(summary_)->SetText(tr("%1개 중 변경 %2 · 충돌/오류 %3 · 변경 없음 %4").arg(plan_.size()).arg(Changes).arg(Errors).arg(Unchanged));
             page_ = 0; showPage(); SetAcceptEnabled(allowExecute_ && Changes > 0 && !Errors); if (allowExecute_) SetMessage({});
         });
         Watcher->setFuture(QtConcurrent::run([Sources = sources_, Existing = existing_, R, Stop] {

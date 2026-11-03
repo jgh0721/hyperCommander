@@ -34,7 +34,7 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
     // The header's minimum width bounds the editor window's; in a narrow window the title gives way before the toggles.
     auto* Title=new QLabel(tr("미리보기"),Header);auto Font=Title->font();Font.setWeight(QFont::DemiBold);Title->setFont(Font);Title->setMinimumWidth(1);Controls->addWidget(Title);
     previewChip_=new QLabel(Header);previewChip_->setObjectName("epubPreviewState");previewChip_->setTextFormat(Qt::PlainText);previewChip_->setAccessibleName(tr("EPUB 미리보기 상태"));previewChip_->setMinimumWidth(24);Controls->addWidget(previewChip_);Controls->addStretch();
-    for(const auto& Name:{"epubAutoPreview","epubPreviewSync","epubPreviewScrollSync","epubPreviewRefresh"}){auto* Button=new QToolButton(Header);Button->setDefaultAction(action(Name));Button->setAutoRaise(true);Button->setToolButtonStyle(Qt::ToolButtonTextOnly);Controls->addWidget(Button);}
+    for(const auto& Name:{"epubAutoPreview","epubPreviewScrollSync","epubPreviewRefresh"}){auto* Button=new QToolButton(Header);Button->setDefaultAction(action(Name));Button->setAutoRaise(true);Button->setToolButtonStyle(Qt::ToolButtonTextOnly);Controls->addWidget(Button);}
     previewChapterLabel_=new QLabel(Header);previewChapterLabel_->setObjectName("epubPreviewChapter");previewChapterLabel_->setForegroundRole(QPalette::PlaceholderText);previewChapterLabel_->setMinimumWidth(1);Controls->addWidget(previewChapterLabel_);Layout->addWidget(Header);
     auto* Frame=new QWidget(Panel);Frame->setMinimumSize(200,140);Frame->setObjectName("epubPreviewFrame");previewStack_=new QStackedLayout(Frame);previewStack_->setContentsMargins(0,0,0,0);previewStack_->setStackingMode(QStackedLayout::StackAll);Layout->addWidget(Frame,1);
     QTimer::singleShot(0,this,&EpubSourceEditor::alignPreview);
@@ -217,7 +217,7 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
     if(!Candidate->property("epubEditingRequested").toBool()){Candidate->setProperty("epubEditingRequested",true);Candidate->ReaderAction("context-menu",true);if(previewWidth_>0)Candidate->ReaderAction("preview-width",previewWidth_);}
     if(previewCandidateSerial_==-2) {
         const int OldChapter=!previewRecoveryPosition_ && previewView_?previewView_->ViewState()["chapterIndex"].toInt(-1):previewRestoreChapter_;const auto Locator=!previewRecoveryPosition_ && previewView_?previewView_->ViewState()["locator"].toString():recoveryLocator_;
-        int Target=-1;const auto Spine=model_.Publication()["spine"].toArray();if(action("epubPreviewSync")->isChecked())for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Target=I;
+        int Target=-1;const auto Spine=model_.Publication()["spine"].toArray();if(action("epubPreviewScrollSync")->isChecked())for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Target=I;
         if(Target<0 && previewRecoveryPosition_)Target=previewRestoreChapter_;
         const bool Located=Target>=0 && (Target!=OldChapter || Locator.isEmpty() && Target!=State["chapterIndex"].toInt(-1))?Candidate->ReaderAction("chapter",Target):!Locator.isEmpty()?Candidate->ReaderAction("preview-location",Locator):false;
         previewCandidateSerial_=Located?State["readerAction"].toObject()["serial"].toInteger()+1:-1;if(Located)return;
@@ -228,7 +228,8 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
     // It shows the current text, so no line shifts apply. 0 means aligned or skipped.
     if(previewCandidateScrollSerial_!=0 && scrollSyncActive() && sourceShown() && State["chapterIndex"].toInt(-1)==spineIndex(current_) && State["previewScroll"].toObject()["supported"].toBool()) {
         if(previewCandidateScrollSerial_<0) {
-            auto Target=sourceScrollTarget(false);previewCandidateScrollSerial_=++sourceScrollSerial_;Target["serial"]=previewCandidateScrollSerial_;
+            auto Target=sourceScrollTarget(false);Candidate->setProperty("epubSourceScrollTarget",QVariant::fromValue(Target));
+            previewCandidateScrollSerial_=++sourceScrollSerial_;Target["serial"]=previewCandidateScrollSerial_;
             if(Candidate->RequestSourceScroll(Target)){previewCandidateScrollClock_.start();QTimer::singleShot(5000,this,[this,Guard=QPointer<EpubProcessView>(Candidate)]{if(Guard)admitPreview(Guard);});return;}
             previewCandidateScrollSerial_=0;
         }
@@ -239,11 +240,16 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
             reportPreview(tr("미리보기 위치를 복원하지 못해 이전 화면을 유지합니다. 갱신을 다시 실행해 주세요."));
             retirePreview(Candidate);emit StateChanged();return;
         }
+        else if(Candidate->property("epubSourceScrollTarget").value<QJsonObject>()!=sourceScrollTarget(false)){
+            // Input can move while the renderer acknowledges its first scroll.
+            // Keep the old preview visible until the replacement reaches the latest anchor.
+            previewCandidateScrollSerial_=-1;admitPreview(Candidate);return;
+        }
     }
     previewChanges_=previewCandidateChanges_;previewEdition_=previewCandidateEdition_;previewReadyMs_=previewBuildClock_.isValid()?previewBuildClock_.elapsed():0;
     auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;sourceSelectionSerial_=State["sourceSelection"].toObject()["serial"].toInteger(-1);
     // The new preview shows the current text: earlier line shifts no longer apply and the first report is new.
-    clearLineShifts();previewScrollSeen_=-1;lastScrollLine_=-1;lastScrollChapter_=-1;scrollSyncPending_=true;contextRequestSerial_=State["contextRequest"].toObject()["serial"].toInteger(-1);if((sourceSyncPending_ || SourceInput()->hasFocus()) && action("epubPreviewSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();
+    clearLineShifts();previewScrollSeen_=-1;lastScrollLine_=-1;lastScrollChapter_=-1;scrollSyncPending_=true;contextRequestSerial_=State["contextRequest"].toObject()["serial"].toInteger(-1);if((sourceSyncPending_ || SourceInput()->hasFocus()) && action("epubPreviewScrollSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();
     if(Old)retirePreview(Old);
     syncPreviewScroll();
     const auto LocationError=State["readerAction"].toObject()["error"].toString();
@@ -255,7 +261,7 @@ void EpubSourceEditor::syncPreviewSource(bool Force) {
     if(previewNavigationSerial_>=0){if(State["readerAction"].toObject()["serial"].toInteger()<previewNavigationSerial_)return;previewNavigationSerial_=-1;previewChapter_=State["chapterIndex"].toInt(-1);if(previewActiveToken_==Token())recoveryLocator_=State["locator"].toString();return;}
     const auto Spine=model_.Publication()["spine"].toArray();const int Chapter=State["chapterIndex"].toInt(-1);if(Chapter<0 || Chapter>=Spine.size())return;
     if(previewActiveToken_==Token())recoveryLocator_=State["locator"].toString();
-    if(!action("epubPreviewSync")->isChecked())return;
+    if(!action("epubPreviewScrollSync")->isChecked())return;
     if(!Force && !SourceInput()->hasFocus()) {
         // Dialogs and toolbar clicks do not authorize an old preview selection
         // to move the source. Embedded WebEngine input has a different Win32 owner.

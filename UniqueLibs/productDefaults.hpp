@@ -298,19 +298,19 @@ DECLARE_CMD( BuiltInCMD_App_About,                QObject::tr( "기타" ),    "h
 DECLARE_CMD( BuiltInCMD_App_Update,               QObject::tr( "기타" ),    "hc.app.update",
              Qt::Key_unknown,                                           QObject::tr( "업데이트 확인" ) );
 
-// 제목표시줄 오디오 미리 듣기. 미리 듣기만 기본 키(Ctrl+Enter)를 두고 나머지는 사용자가 지정한다.
+// 제목표시줄 오디오 미리 듣기와 재생 제어의 제품 기본 단축키.
 DECLARE_CMD( BuiltInCMD_Audio_Preview,            QObject::tr( "오디오" ),  "hc.audio.preview",
-             Qt::ControlModifier | Qt::Key_Return,                      QObject::tr( "오디오 미리 듣기" ) );
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_Up,         QObject::tr( "오디오 미리 듣기" ) );
 DECLARE_CMD( BuiltInCMD_Audio_PreviewKeypad,      QObject::tr( "오디오" ),  "hc.audio.preview",
-             Qt::ControlModifier | Qt::KeypadModifier | Qt::Key_Enter,  QObject::tr( "오디오 미리 듣기" ) );
+             Qt::Key_unknown,                                           QObject::tr( "오디오 미리 듣기" ) );
 DECLARE_CMD( BuiltInCMD_Audio_PlayPause,          QObject::tr( "오디오" ),  "hc.audio.playPause",
              Qt::Key_unknown,                                           QObject::tr( "재생/일시정지" ) );
 DECLARE_CMD( BuiltInCMD_Audio_Stop,               QObject::tr( "오디오" ),  "hc.audio.stop",
-             Qt::Key_unknown,                                           QObject::tr( "정지" ) );
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_Down,       QObject::tr( "정지" ) );
 DECLARE_CMD( BuiltInCMD_Audio_Next,               QObject::tr( "오디오" ),  "hc.audio.next",
-             Qt::Key_unknown,                                           QObject::tr( "다음 곡" ) );
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_Right,       QObject::tr( "다음 곡" ) );
 DECLARE_CMD( BuiltInCMD_Audio_Prev,               QObject::tr( "오디오" ),  "hc.audio.prev",
-             Qt::Key_unknown,                                           QObject::tr( "이전 곡" ) );
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_Left,       QObject::tr( "이전 곡" ) );
 DECLARE_CMD( BuiltInCMD_Audio_SeekForward,        QObject::tr( "오디오" ),  "hc.audio.seekForward",
              Qt::Key_unknown,                                           QObject::tr( "5초 앞으로" ) );
 DECLARE_CMD( BuiltInCMD_Audio_SeekBack,           QObject::tr( "오디오" ),  "hc.audio.seekBack",

@@ -105,6 +105,10 @@ int main(int Argc, char **Argv)
                      [](QWebEngineDownloadRequest *Download) { Download->cancel(); });
     QWebEngineView View;
     View.resize(800, 600);
+    auto *Escape = new QShortcut(QKeySequence(Qt::Key_Escape), &View);
+    Escape->setObjectName("previewEscape");
+    Escape->setContext(Qt::WindowShortcut);
+    QObject::connect(Escape, &QShortcut::activated, &App, [&] { Send({{"type", "escape"}}); });
     View.setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
     View.setAttribute(Qt::WA_ShowWithoutActivating);
     auto *Page = new MarkdownPage(&Profile, &View);
@@ -135,7 +139,7 @@ int main(int Argc, char **Argv)
         if (Type == "shortcuts")
         {
             for (auto *Shortcut : View.findChildren<QShortcut *>())
-                delete Shortcut;
+                if (Shortcut != Escape) delete Shortcut;
             const auto Bindings = Message["bindings"].toObject();
             for (auto At = Bindings.begin(); At != Bindings.end(); ++At)
             {
@@ -178,7 +182,8 @@ int main(int Argc, char **Argv)
         }
         if (Type == "focus")
         {
-            View.setFocus();
+            View.activateWindow();
+            View.setFocus(Qt::OtherFocusReason);
             return;
         }
         if (Ready)

@@ -48,7 +48,13 @@ void EpubSourceEditor::setSourceSelection(int Anchor,int Position,bool Reveal) {
 }
 int EpubSourceEditor::firstVisibleLine()const{return int(direct(text_)->Send(SCI_GETFIRSTVISIBLELINE));}
 int EpubSourceEditor::horizontalOffset()const{return int(direct(text_)->Send(SCI_GETXOFFSET));}
-void EpubSourceEditor::setScroll(int Line,int Offset){direct(text_)->Send(SCI_SETFIRSTVISIBLELINE,quintptr(qMax(0,Line)));direct(text_)->Send(SCI_SETXOFFSET,quintptr(qMax(0,Offset)));}
+void EpubSourceEditor::setScroll(int Line,int Offset){
+    auto* Backend=direct(text_);
+    // First-visible-line counts wrapped display rows. Complete pending wrapping
+    // before restoring it; idle wrapping would otherwise move the restored top.
+    Backend->Send(SCI_ENSUREVISIBLE,quintptr(Backend->Send(SCI_LINEFROMPOSITION,quintptr(Backend->Send(SCI_GETCURRENTPOS)))));
+    Backend->Send(SCI_SETFIRSTVISIBLELINE,quintptr(qMax(0,Line)));Backend->Send(SCI_SETXOFFSET,quintptr(qMax(0,Offset)));
+}
 void EpubSourceEditor::setSourceReadOnly(bool ReadOnly){sourceReadOnly_=ReadOnly;text_->setReadOnly(ReadOnly);updateActions();}
 void EpubSourceEditor::focusSource(){if(sourceShown())SourceInput()->setFocus(Qt::OtherFocusReason);}
 void EpubSourceEditor::insertSource(const QString& Text){const auto Bytes=Text.toUtf8();direct(text_)->Send(SCI_REPLACESEL,0,reinterpret_cast<qintptr>(Bytes.constData()));}
@@ -79,7 +85,7 @@ void EpubSourceEditor::activateSource(const QByteArray& Data,const QString& Medi
     if(Fresh && workspacePositions_.contains(current_)){
         const auto Saved=workspacePositions_.take(current_).toObject();const int Length=QString::fromUtf8(Data).size();
         State.position_=qBound(0,Saved["position"].toInt(),Length);State.anchor_=qBound(0,Saved["anchor"].toInt(State.position_),Length);
-        State.line_=qBound(0,Saved["firstVisibleLine"].toInt(),int(direct(text_)->Send(SCI_GETLINECOUNT))-1);
+        State.line_=qMax(0,Saved["firstVisibleLine"].toInt());
         State.offset_=qBound(0,Saved["horizontalOffset"].toInt(),1000000);
     }
     text_->setReadOnly(sourceReadOnly_);setSourceSelection(State.anchor_,State.position_,false);setScroll(State.line_,State.offset_);

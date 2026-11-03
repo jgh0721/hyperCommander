@@ -329,6 +329,7 @@ namespace hc::document
             toolbar_=markdown_->Toolbar();static_cast<QVBoxLayout*>(layout())->insertWidget(0,toolbar_);layout()->addWidget(markdown_);
             markdown_->SetSourceTools(SourceBar);markdown_->SetShortcutBindings(DocumentShortcutRegistry::Bindings(shortcutBindings_));connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::ViewStateChanged);
             connect(markdown_,&MarkdownDocumentView::OpenRequested,this,&DocumentViewPane::OpenRequested);
+            connect(markdown_,&MarkdownDocumentView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
             contribution_.menuTitle_=tr("마크다운");
         }
         contribution_.menuActions_=toolbar_->actions();applyTheme();return true;
@@ -390,7 +391,7 @@ namespace hc::document
                 for(auto* Item:epubEditor_->ToolbarActions()) {
                     if(Item->isSeparator() && !Spaced){auto* Spacer=new QWidget(Bar);Spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);Bar->addWidget(Spacer);Spaced=true;continue;}
                     Bar->addAction(Item);auto* Button=qobject_cast<QToolButton*>(Bar->widgetForAction(Item));if(!Button)continue;
-                    if(Item->menu())Button->setPopupMode(QToolButton::InstantPopup);if(Item->objectName()=="epubSaveCopy")fm::style::setButtonRole(Button,fm::style::ButtonRole::Primary);
+                    if(Item->menu())Button->setPopupMode(QToolButton::InstantPopup);
                 }
             }
             epubEditor_->SetShortcutBindings(shortcutBindings_);

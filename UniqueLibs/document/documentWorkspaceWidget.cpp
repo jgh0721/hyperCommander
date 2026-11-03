@@ -434,7 +434,7 @@ namespace hc::document
             {"printDocument", "file.print"}, {"previewDocument", "file.printPreview"}, {"cancelDocument", "file.cancel"},
             {"captureScreen", "capture.screen"}, {"workspaceDisplayOptions", "view.displayOptions"}, {"documentPreferences", "app.settings"}};
         qApp->installEventFilter(this);
-        new DocumentFocusRestore(this,[this]()->QWidget*{auto* Focus=QApplication::focusWidget();if(searchPanel_&&Focus&&(Focus==searchPanel_||searchPanel_->isAncestorOf(Focus)))return Focus;auto Tab=active();return Tab&&!Tab->loading_?Tab->pane_->InputWidget():nullptr;});
+        new DocumentFocusRestore(this,[this]()->QWidget*{auto* Focus=QApplication::focusWidget();if(searchPanel_&&Focus&&(Focus==searchPanel_||searchPanel_->isAncestorOf(Focus)))return Focus;auto Tab=active();return Tab&&!Tab->loading_?Tab->pane_->InputWidget():nullptr;},[this]{auto* Focus=QApplication::focusWidget();if(searchPanel_&&Focus&&(Focus==searchPanel_||searchPanel_->isAncestorOf(Focus)))return;auto Tab=active();if(Tab&&!Tab->loading_&&Tab->pane_->IsMarkdown())Tab->pane_->Focus();});
         if (hosted_) {
             viewerEscape_ = new QShortcut(QKeySequence(hc::defaults::edit::AuxiliaryShortcut("viewer.close")), this);
             viewerEscape_->setAutoRepeat(false);
@@ -1426,7 +1426,8 @@ namespace hc::document
                 chrome_->SetActive(std::move(Contribution));
             }
         }
-        else chrome_->SetActive({});
+        // Search is an auxiliary tab: retain the document's chrome policy.
+        else if (!searchPanel_ || tabs_->currentWidget() != searchPanel_) chrome_->SetActive({});
         auto Capability = Tab ? Tab->session_->Capabilities() : DocumentCapabilities{};
         if(Tab && Tab->pane_->IsProcessDocument()){Capability.save_=Tab->originalSave_ && Tab->pane_->CanEditEpub();Capability.saveAs_=Tab->pane_->CanEditEpub();Capability.undo_=Tab->pane_->CanUndo();Capability.redo_=Tab->pane_->CanRedo();}
         for (const auto& Item : {std::pair{"saveDocument", Capability.save_ || Capability.saveAs_},

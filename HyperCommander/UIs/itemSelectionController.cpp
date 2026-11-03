@@ -8,6 +8,7 @@
 
 /// 내부 라이브러리
 #include "UniqueLibs/itemSelection.hpp"
+#include "commonLibs/Qt/elidedLabel.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
 #include "UniqueLibs/qtWorkspaceRestore.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -62,7 +63,7 @@ public:
         AdvancedLayout->addRow(Text("조건 결합"), combine_);
         size_ = new QLineEdit; size_->setObjectName("hc.selection.size"); size_->setPlaceholderText(Text("빈 값: 크기 조건 사용 안 함"));
         size_->setMaxLength(24); sizeOp_ = combo("hc.selection.sizeOp", {Text("이상 (MiB)"), Text("이하 (MiB)")});
-        auto* SizeRow = new QHBoxLayout; SizeRow->addWidget(sizeOp_); SizeRow->addWidget(size_, 1); AdvancedLayout->addRow(Text("파일 크기"), SizeRow);
+        auto* SizeRow = new QHBoxLayout; SizeRow->addWidget(sizeOp_); SizeRow->addWidget(size_, 1); AdvancedLayout->addRow(Text("크기 (폴더는 계산된 크기)"), SizeRow);
         useDate_ = new QCheckBox(Text("기준일 이후 (포함)")); useDate_->setObjectName("hc.selection.useDate");
         date_ = new QDateEdit(QDate::currentDate()); date_->setObjectName("hc.selection.date"); date_->setCalendarPopup(true);
         auto* DateRow = new QHBoxLayout; DateRow->addWidget(useDate_); DateRow->addWidget(date_, 1); AdvancedLayout->addRow(Text("수정일"), DateRow);
@@ -76,7 +77,7 @@ public:
         auto* Save = new QPushButton(Text("조건 저장…")); Save->setObjectName("hc.selection.savePreset"); Save->setAutoDefault(false);
         auto* Delete = new QPushButton(Text("조건 삭제")); Delete->setObjectName("hc.selection.deletePreset"); Delete->setAutoDefault(false);
         PresetRow->addWidget(presets_, 1); PresetRow->addWidget(Save); PresetRow->addWidget(Delete); BodyLayout()->addLayout(PresetRow);
-        preview_ = new QLabel; preview_->setObjectName("hc.selection.preview"); preview_->setTextFormat(Qt::PlainText); preview_->setWordWrap(true);
+        preview_ = new hc::qt::ElidedLabel; static_cast<hc::qt::ElidedLabel*>(preview_)->SetLineCount(4); preview_->setObjectName("hc.selection.preview"); preview_->setTextFormat(Qt::PlainText); preview_->setWordWrap(true);
         preview_->setTextInteractionFlags(Qt::TextSelectableByMouse); preview_->setAccessibleName(Text("선택 결과 미리보기")); BodyLayout()->addWidget(preview_);
         auto* Footer = qobject_cast<QHBoxLayout*>(AcceptButton()->parentWidget()->layout());
         apply_ = new fm::ui::Button(Text("적용(&A)")); apply_->setObjectName("hc.selection.apply"); apply_->setAutoDefault(false);
@@ -134,10 +135,9 @@ public:
     }
     QJsonObject Settings() const { auto Result = settings_; Result["last"] = Read().Save(); return Result; }
     void Result(const QString& Summary, bool CanApply, bool CanUndo, const QString& Error = {}) {
-        preview_->setText(Summary); SetMessage(Error, !Error.isEmpty()); SetAcceptEnabled(CanApply); apply_->setEnabled(CanApply); undo_->setEnabled(CanUndo);
+        preview_->setText(Summary); preview_->setToolTip(Summary); SetMessage(Error, !Error.isEmpty()); SetAcceptEnabled(CanApply); apply_->setEnabled(CanApply); undo_->setEnabled(CanUndo);
         const bool Remove = operation_->currentIndex() == 1;
         SetTitle(Remove ? Text("항목 선택 해제") : Text("항목 선택")); AcceptButton()->setText(Remove ? Text("해제 후 닫기(&D)") : Text("선택 후 닫기(&S)"));
-        if (isVisible()) FitToContents();
     }
     std::function<void(const Criteria&)> changed_;
     std::function<void()> invalidated_;
@@ -180,7 +180,7 @@ private:
     QLabel* preview_; fm::ui::Button *apply_, *undo_;
 };
 
-struct RowInput { settings::FileRuleInput rule_; QString key_; int row_ = -1; bool selected_ = false; };
+struct RowInput { settings::FileRuleInput rule_; QString key_; int row_ = -1; bool selected_ = false, sizeKnown_ = true; };
 struct Scan {
     Criteria criteria_; Matcher matcher_; quint64 generation_ = 0, selection_ = 0;
     qint64 referenceTime_ = QDateTime::currentMSecsSinceEpoch();
@@ -263,6 +263,10 @@ struct ItemSelectionController::State {
                 Input.rule_.size_ = Item->storageEntry_->size_;
                 Input.rule_.modifiedUtcMs_ = settings::FileColorRules::MetadataTime(Item->storageEntry_->modifiedUtcMs_);
             } else Input.key_ = "legacy:" + Item->Name_;
+            if (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) {
+                Input.sizeKnown_ = Item->directorySize_.has_value();
+                Input.rule_.size_ = Item->directorySize_.value_or(0);
+            }
             if (Item->Reserved0_) Input.rule_.reparseTag_ = Item->Reserved0_;
             Input.row_ = At; Input.selected_ = Work->grouped_ ? view_->IsSourceSelected(Index) : Grid->modelController()->isRowSelected(Row); Batch.append(std::move(Input));
         }
@@ -291,7 +295,7 @@ struct ItemSelectionController::State {
         });
         Watcher->setFuture(QtConcurrent::run([Matcher = Work->matcher_, Batch, Context = Work->ruleContext_] {
             BatchResult Result; Result.first.reserve(Batch.size());
-            for (const auto& Input : Batch) { Result.first.append(Matcher.Matches(Input.rule_, &Result.second, Context.get())); if (!Result.second.isEmpty()) break; }
+            for (const auto& Input : Batch) { Result.first.append(Matcher.Matches(Input.rule_, &Result.second, Context.get(), Input.sizeKnown_)); if (!Result.second.isEmpty()) break; }
             return Result;
         }));
     }

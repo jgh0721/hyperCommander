@@ -319,10 +319,8 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     Combo(MdView,MdPrefix+"editorMode",tr("HyperEditor 기본 보기"),{tr("나란히 보기"),tr("소스"),tr("미리보기")},{"split","source","preview"});
     Check(MdView,MdPrefix+"viewerOutline",tr("HyperViewer에서 개요 표시"));Check(MdView,MdPrefix+"editorOutline",tr("HyperEditor에서 개요 표시"));
     MdSpin(MdView,MdPrefix+"outlineDepth",tr("개요 최대 깊이"),1,6);
-    Check(MdView,MdPrefix+"positionSync",tr("소스·본문 위치 동기화"));Check(MdView,MdPrefix+"scrollSync",tr("소스·본문 스크롤 동기화"));
-    auto UpdateSync=[this,MdPrefix]{controls_[MdPrefix+"scrollSync"]->setEnabled(qobject_cast<QCheckBox*>(controls_[MdPrefix+"positionSync"])->isChecked());};
-    connect(qobject_cast<QCheckBox*>(controls_[MdPrefix+"positionSync"]),&QCheckBox::toggled,this,UpdateSync);
-    Note(MdView,tr("위치 동기화는 캐럿·본문 클릭 위치를, 스크롤 동기화는 화면 이동을 연결합니다. 위치 동기화를 끄면 스크롤 동기화는 비활성화되며 체크 상태를 유지합니다."));
+    Check(MdView,MdPrefix+"scrollSync",tr("스크롤 동기화"));
+    Note(MdView,tr("소스 캐럿·본문 클릭 위치와 화면 스크롤을 함께 연결합니다."));
     auto* MdRender=Card(Markdown,tr("문법·렌더링"));
     for(const auto& Pair:{std::pair{"math",tr("수식 표시 (KaTeX)")},std::pair{"inlineDollar",tr("인라인 $…$ 수식")},std::pair{"mermaid",tr("Mermaid 다이어그램")},std::pair{"codeHighlight",tr("코드 블록 구문강조")},std::pair{"autoPreview",tr("입력 후 미리보기 자동 갱신")}})Check(MdRender,MdPrefix+Pair.first,Pair.second);
     MdSpin(MdRender,MdPrefix+"debounceMs",tr("입력 후 갱신 지연 (ms)"),100,3000);Check(MdRender,MdPrefix+"remoteImages",tr("외부 이미지 자동 다운로드"));

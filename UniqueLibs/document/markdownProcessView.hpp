@@ -18,6 +18,7 @@ class MarkdownProcessView final : public QWidget
     void Restart();
     void Stop();
     bool HasFocus() const;
+    void FocusInput();
   signals:
     void Reported(const QJsonObject &Message);
 
@@ -38,6 +39,6 @@ class MarkdownProcessView final : public QWidget
     QTimer startup_;
     quintptr child_ = 0;
     void *job_ = nullptr;
-    bool ready_ = false, stopping_ = false;
+    bool ready_ = false, stopping_ = false, focusRequested_ = false;
 };
 } // namespace hc::document

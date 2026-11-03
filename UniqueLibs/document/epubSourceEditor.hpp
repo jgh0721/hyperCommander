@@ -140,12 +140,12 @@ private:
     void previewContextRequest(EpubProcessView* View);
     void saveSourceState();void activateSource(const QByteArray& Data,const QString& Media);void releaseSource(const QString& Path);
     void locateSource(bool Reveal=false);bool selectPreviewSource(const QJsonObject& Anchor={});
-    // Scroll synchronisation (epubSourceScroll.cpp): the line at half the editor height stays at half the preview height.
+    // Scroll synchronisation keeps the editing point, or its nearest visible row, at the same height in both panes.
     void setupScrollSync();bool scrollSyncActive()const;void syncPreviewScroll();void previewScrolled(const QJsonObject& Report);
     QJsonObject sourceScrollTarget(bool Revision)const;void placeSourceLine(int Position,double Ratio);int spineIndex(const QString& Path)const;
     double toPreviewLine(double Line)const;double fromPreviewLine(double Line)const;void clearLineShifts();
     QTimer scrollRetryTimer_;qint64 previewDrivenIgnoreUntil_=0,suppressSyncUntil_=0,previewScrollSeen_=-1,sourceScrollSerial_=0,previewCandidateScrollSerial_=-1;
-    double lastScrollLine_=-1;int lastScrollChapter_=-1;bool lastScrollEnd_=false,scrollSyncPending_=false;QElapsedTimer previewCandidateScrollClock_;
+    double lastScrollLine_=-1,lastScrollRatio_=-1;int lastScrollChapter_=-1;bool lastScrollEnd_=false,scrollSyncPending_=false;QElapsedTimer previewCandidateScrollClock_;
     void editMetadata();void inspectImage(const QString& Path);void editImageProperties(const QJsonObject& Inspection);
     // Context menus and source tools.
     void showTreeMenu(const QPoint& Position);void showSourceMenu(const QPoint& Position);void showTabMenu(const QPoint& Position);void showProblemMenu(const QPoint& Position);

@@ -304,7 +304,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -1529,6 +1529,39 @@ private slots:
         qInfo() << "Actual TEMP deletion:" << Root << Names << "selection" << SelectMs << "ms, Delete/confirm/completion" << Clock.elapsed() << "ms;" << Model->rowCount() << "rows";
     }
 
+    void selectionRefreshAndArchiveGuardUi()
+    {
+        QTemporaryDir Directory;QVERIFY(Directory.isValid());
+        QFile File(Directory.filePath("plain.txt"));QVERIFY(File.open(QIODevice::WriteOnly));File.write("ordinary file");File.close();
+        auto* Panel=panels_.front();Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()),{});
+        QTRY_VERIFY(!model(Panel)->IsLoading());Panel->sig_NotifyPanelActivated();
+        auto* View=qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));QVERIFY(View);
+        auto* Bridge=TyStCommandMgr::GetInstance()->Bridge();QVERIFY(Bridge);
+        QTimer Timer;Timer.setInterval(100);int Ticks=0;QSize Size;QRect Footer;bool Stable=true;int Samples=0;
+        connect(&Timer,&QTimer::timeout,main_,[&]{
+            auto* Dialog=main_->findChild<QDialog*>("hc.selection.dialog");
+            if(++Ticks>60){if(Dialog)Dialog->reject();return;}
+            if(!Dialog)return;
+            auto* Accept=Dialog->findChild<QPushButton*>("hc.dialog.accept");if(!Accept)return;
+            if(Ticks<5)return;
+            if(Size.isEmpty()){Size=Dialog->size();Footer=Accept->parentWidget()->geometry();}
+            else{Stable&=Dialog->size()==Size && Accept->parentWidget()->geometry()==Footer;++Samples;}
+            if(Ticks%3==0)Panel->RefreshSource(Panel->CurrentTabIndex());
+            if(Ticks>22)Dialog->reject();
+        });
+        Timer.start();QVERIFY(Bridge->ExecuteCommand("hc.selection.select"));Timer.stop();QVERIFY(Samples>10);QVERIFY(Stable);
+        QTRY_VERIFY(!model(Panel)->IsLoading());QModelIndex Index;
+        for(int Row=0;Row<model(Panel)->rowCount();++Row)if(model(Panel)->GetName(model(Panel)->index(Row,0))=="plain.txt")Index=model(Panel)->index(Row,0);
+        QVERIFY(Index.isValid());bool Rejected=false,ExtractDialog=false;QTimer Guard;Guard.setInterval(25);
+        connect(&Guard,&QTimer::timeout,main_,[&]{
+            if(auto* Dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget())){
+                ExtractDialog|=Dialog->windowTitle()==QStringLiteral("파일 압축 해제") && !qobject_cast<QMessageBox*>(Dialog);
+                if(auto* Message=qobject_cast<QMessageBox*>(Dialog))Rejected=Message->text().contains(QStringLiteral("압축 파일이 아닙니다"));
+                Dialog->reject();
+            }
+        });
+        Guard.start();Bridge->PromptArchive(true,Index);Guard.stop();QVERIFY(Rejected);QVERIFY(!ExtractDialog);
+    }
     void itemSelectionUi()
     {
         auto& Settings = hc::settings::AppSettings();
@@ -4401,7 +4434,7 @@ private slots:
             .arg(Graph->x()).arg(Graph->y()).arg(Graph->width()).arg(Graph->height()).arg(Toggle->x()).arg(Toggle->y()).arg(Toggle->width()).arg(Toggle->height())));
         QVERIFY(Bottom(Graph) < Top(Axis));
         QVERIFY(Before(Toggle, AutoClose));
-        QVERIFY(Bottom(Axis) < Top(AutoClose));
+        QVERIFY2(Bottom(Axis) < Top(AutoClose), qPrintable(QString("font %1 dialog %2x%3 axis %4..%5 footer %6..%7").arg(Dialog->font().pointSize()).arg(Dialog->width()).arg(Dialog->height()).arg(Top(Axis)).arg(Bottom(Axis)).arg(Top(AutoClose)).arg(Bottom(AutoClose))));
         QVERIFY(SaveR9Dialog(*Dialog, "progress-graph-expanded"));
         Toggle->click(); QTRY_VERIFY(!Graph->isVisible()); QVERIFY(!Axis->isVisible());
         QVERIFY(SaveR9Dialog(*Dialog, "progress-graph-collapsed"));
@@ -4414,7 +4447,7 @@ private slots:
             QTRY_VERIFY(Bottom(Graph) < Top(Toggle));
             QVERIFY(Bottom(Graph) < Top(Axis));
             QVERIFY(Before(Toggle, AutoClose));
-            QVERIFY(Bottom(Axis) < Top(AutoClose));
+            QVERIFY2(Bottom(Axis) < Top(AutoClose), qPrintable(QString("font %1 dialog %2x%3 axis %4..%5 footer %6..%7").arg(Dialog->font().pointSize()).arg(Dialog->width()).arg(Dialog->height()).arg(Top(Axis)).arg(Bottom(Axis)).arg(Top(AutoClose)).arg(Bottom(AutoClose))));
             QVERIFY(Dialog->rect().contains(QRect(Pause->mapTo(Dialog, QPoint()), Pause->size())));
         }
         QVERIFY(SaveR9Dialog(*Dialog,"r21-progress-known"));
@@ -4422,7 +4455,9 @@ private slots:
         Pause->click(); QTRY_VERIFY(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().pauseRequested_); Control->commit_=false;
         QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_,JobState::Paused); QTRY_VERIFY(Graph->isPaused());
         QVERIFY(SaveR9Dialog(*Dialog,"r21-progress-paused")); Pause->click(); QTRY_VERIFY(!Graph->isPaused());
-        Control->unknown_=true; QTRY_COMPARE(Bar->maximum(),0); QVERIFY(!Metrics->text().contains(QStringLiteral("미상"))); QVERIFY(!Metrics->text().contains(QStringLiteral("예정")));
+        QTest::qWait(300);const auto StableSize=Dialog->size();const auto StableFooter=Pause->mapTo(Dialog,QPoint());
+        Control->unknown_=true; QTRY_COMPARE(Bar->maximum(),0);QTest::qWait(300);
+        QCOMPARE(Dialog->size(),StableSize);QCOMPARE(Pause->mapTo(Dialog,QPoint()),StableFooter); QVERIFY(!Metrics->text().contains(QStringLiteral("미상"))); QVERIFY(!Metrics->text().contains(QStringLiteral("예정")));
         QVERIFY(SaveR9Dialog(*Dialog,"r21-progress-preparing"));
         Control->unknown_=false; QTRY_VERIFY(Bar->maximum()>0);
         QTRY_VERIFY(Bottom(Graph) < Top(Toggle));

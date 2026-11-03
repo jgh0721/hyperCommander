@@ -46,7 +46,7 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
     baseToken_=SourceHash.isEmpty()?QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256):SourceHash;sourceHashAtOpen_=baseToken_;sourcePath_=Path;
     setupLayout();setupActions();setupStatus();setupScrollSync();
     sourceSyncTimer_.setSingleShot(true);sourceSyncTimer_.setInterval(180);connect(&sourceSyncTimer_,&QTimer::timeout,this,[this]{locateSource();});
-    connect(text_->Backend(),&ITextEditorBackend::cursorPositionChanged,this,[this]{if(!updating_ && SourceInput()->hasFocus() && action("epubPreviewSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}updateStatus();});
+    connect(text_->Backend(),&ITextEditorBackend::cursorPositionChanged,this,[this]{if(!updating_ && SourceInput()->hasFocus() && action("epubPreviewScrollSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}updateStatus();});
     connect(text_->Backend(),&ITextEditorBackend::selectionChanged,this,&EpubSourceEditor::updateActions);
     connect(text_,&QTextView::ContentChanged,this,[this]{
         invalidateSourceCache();
@@ -148,7 +148,7 @@ bool EpubSourceEditor::openResource(const QString& Path) {
     if(!flush()){selectResource(current_);refreshTabs();return false;}
     current_=Path;select();
     // A resource chosen in the tree or tabs takes a linked preview to its caret.
-    if(!previewSyncing_ && action("epubPreviewSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}
+    if(!previewSyncing_ && action("epubPreviewScrollSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}
     return true;
 }
 void EpubSourceEditor::select() {

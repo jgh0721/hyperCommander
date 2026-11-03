@@ -6,9 +6,10 @@ import mermaid from 'mermaid';
 import hljs from 'highlight.js/lib/common';
 
 // Only the fixed application shell owns the bridge. Document HTML is disabled.
-let revision = 0, options = {}, bridge, suppression = 0, serial = 0;
+let revision = 0, options = {}, bridge, suppression = 0, serial = 0, renderedTextRows = 0, displayedRevision = -1, sourceAnchor = null, appliedAnchor = null, currentPosition = 0, inputUntil = 0;
 const root = document.getElementById('content');
 root.classList.add('markdown-content');
+for(const type of ['wheel','keydown','pointerdown','touchmove'])addEventListener(type,()=>{inputUntil=Date.now()+500},{capture:true,passive:true});
 const report = value => bridge?.report(JSON.stringify({ ...value, revision }));
 const escaped = s => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function math(source, display) {
@@ -59,10 +60,59 @@ function parser() {
     return md;
 }
 function anchorAtTop() {const blocks=[...root.querySelectorAll('[data-line]')];return blocks.find(e=>e.getBoundingClientRect().bottom>0)||blocks.at(-1);}
+// Both directions interpolate through the same measured blocks. Long wrapped
+// paragraphs must not snap the preview to the paragraph's first source line.
+function scrollAnchors() {
+    const points=new Map();
+    for(const e of root.querySelectorAll('[data-line]')) {
+        const box=e.getBoundingClientRect(),line=Number(e.dataset.line);
+        if(!(line>0)||box.height<=0)continue;
+        const point={line,end:Math.max(line,Number(e.dataset.end)||line),y:scrollY+box.top,height:box.height};
+        if(!points.has(line)||box.height<points.get(line).height)points.set(line,point);
+    }
+    const table=[];
+    for(const p of [...points.values()].sort((a,b)=>a.y-b.y||a.line-b.line)) {
+        const last=table.at(-1);if(!last||(p.line>last.line&&p.y>last.y))table.push(p);
+    }
+    const last=table.at(-1);if(last)table.push({line:Math.max(last.line+1,last.end),y:last.y+last.height});
+    return table;
+}
+function mapScroll(key,value,other) {
+    const points=scrollAnchors();if(!points.length)return 0;
+    if(value<=points[0][key])return points[0][other];
+    for(let i=1;i<points.length;++i)if(value<points[i][key]) {
+        const a=points[i-1],b=points[i];return a[other]+(b[other]-a[other])*(value-a[key])/(b[key]-a[key]);
+    }
+    return points.at(-1)[other];
+}
+function positionElement(line) {
+    const all=[...root.querySelectorAll('[data-line]')];
+    return all.filter(e=>Number(e.dataset.line)<=line && Number(e.dataset.end)>line).at(-1)
+        || all.filter(e=>Number(e.dataset.line)<=line).at(-1)||all[0];
+}
+function caretY(line) {
+    const e=positionElement(line);if(!e)return null;
+    const rect=e.getBoundingClientRect(),start=Number(e.dataset.line),end=Math.max(start+1,Number(e.dataset.end)||start+1);
+    return scrollY+rect.top+rect.height*Math.max(0,Math.min(.999,(line-start)/(end-start)));
+}
 function emitPosition() {
-    const e=anchorAtTop();if(!e)return;
+    if(!root.children.length || displayedRevision!==revision)return;
     const headings=[...root.querySelectorAll('h1,h2,h3,h4,h5,h6')];const h=headings.filter(x=>x.getBoundingClientRect().top<100).at(-1)||headings[0];
-    report({type:'scroll',line:Number(e.dataset.line),ratio:e.getBoundingClientRect().top/innerHeight,user:Date.now()>suppression,progress:document.documentElement.scrollHeight<=innerHeight?100:Math.round(scrollY/(document.documentElement.scrollHeight-innerHeight)*100),heading:h?.textContent||'',headingLine:Number(h?.dataset.line||0)});
+    const e=positionElement(currentPosition),box=e?.getBoundingClientRect();
+    const point=appliedAnchor?.caret?caretY(appliedAnchor.line):null;
+    const anchor=appliedAnchor?{...appliedAnchor,actualRatio:point===null?null:(point-scrollY)/innerHeight,visible:point!==null&&point>=scrollY&&point<=scrollY+innerHeight}:null;
+    report({type:'scroll',textRows:renderedTextRows,offset:scrollY,line:mapScroll('y',scrollY+innerHeight*.5,'line'),ratio:.5,
+        user:Date.now()>suppression&&Date.now()<inputUntil,top:scrollY<=1,bottom:scrollY>=document.documentElement.scrollHeight-innerHeight-1,
+        appliedAnchor:anchor,position:{line:currentPosition,visible:!!box&&box.bottom>0&&box.top<innerHeight},
+        progress:document.documentElement.scrollHeight<=innerHeight?100:Math.round(scrollY/(document.documentElement.scrollHeight-innerHeight)*100),heading:h?.textContent||'',headingLine:Number(h?.dataset.line||0)});
+}
+function applyScroll(request) {
+    if(!Number.isFinite(request.line))return;
+    suppression=Date.now()+300;
+    const y=request.caret?caretY(request.line):mapScroll('line',request.line,'y');
+    const target=request.end?document.documentElement.scrollHeight:!request.caret&&request.line<=1?0:(y??0)-innerHeight*request.ratio;
+    scrollTo(0,target);appliedAnchor={line:request.line,ratio:request.ratio,caret:!!request.caret,
+        clamped:Math.abs(scrollY-target)>2};
 }
 function fonts(f={},target=root) {
     target.style.fontFamily=f.enabled&&f.mode==='user'?f.bodyFamily:'';
@@ -73,7 +123,7 @@ function fonts(f={},target=root) {
 }
 async function render(request) {
     const generation=++serial;revision=request.revision;options=request.options||{};
-    const old=anchorAtTop(),position=old?{line:Number(old.dataset.line),ratio:old.getBoundingClientRect().top/innerHeight}:null;
+    sourceAnchor=Number.isFinite(request.scroll?.line)?request.scroll:null;
     document.documentElement.dataset.theme=options.dark?'dark':'light';
     document.getElementById('base').href=request.baseUrl||'qrc:/markdown/';
     const md=parser(),tokens=md.parse(request.text,{}),headings=[],slugs=new Map();
@@ -104,16 +154,42 @@ async function render(request) {
         if(generation!==serial)return;
         // Reuse unchanged top-level nodes, including already rendered diagrams and loaded images.
         const available=[...root.childNodes];const children=[...next.childNodes].map(node=>{const at=available.findIndex(old=>old.isEqualNode(node));return at<0?node:available.splice(at,1)[0];});
+        // Capture the displayed position at commit time: the user may have
+        // scrolled while images and diagrams for this revision were loading.
+        const previous=scrollY<=1?{line:1,ratio:0}:{line:mapScroll('y',scrollY+innerHeight*.5,'line'),ratio:.5};
         suppression=Date.now()+300;
         root.replaceChildren(...children);fonts(options.previewFonts);
-        if(position)scrollToLine(position.line,position.ratio);
+        displayedRevision=revision;applyScroll(sourceAnchor||previous);
         const details=[...root.querySelectorAll('.problem')].map(e=>({kind:e.classList.contains('mermaid')?'Mermaid':'KaTeX',line:Number(e.closest('[data-line]')?.dataset.line||1),message:e.title||e.textContent}));
+        renderedTextRows=0;
+        for(const block of root.querySelectorAll('p,pre code')) {
+            if(!block.textContent.trim())continue;
+            const range=document.createRange();range.selectNodeContents(block);
+            renderedTextRows=Math.max(renderedTextRows,new Set([...range.getClientRects()].filter(r=>r.height>0).map(r=>Math.round(r.top))).size);
+        }
         report({type:'rendered',headings,problems:details.length,details});emitPosition();
     } catch(error) {if(generation===serial)throw error;} finally {next.remove();}
 }
-function scrollToLine(line,ratio=0.2){const all=[...root.querySelectorAll('[data-line]')];const e=all.filter(e=>Number(e.dataset.line)<=line).at(-1)||all[0];if(e){suppression=Date.now()+300;scrollTo(0,scrollY+e.getBoundingClientRect().top-innerHeight*ratio);}}
+function scrollToLine(line,ratio=0.2,end=false){applyScroll({line,ratio,end});}
 window.hcMarkdown={render,scrollToLine};
 let scheduled=false;addEventListener('scroll',()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;emitPosition()})});
 root.addEventListener('click',e=>{const link=e.target.closest('a');if(link){e.preventDefault();const href=link.getAttribute('href');if(href?.startsWith('#'))document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView();else report({type:'link',url:link.href});return;}const block=e.target.closest('[data-line]');if(block)report({type:'position',line:Number(block.dataset.line)});});
 root.addEventListener('load',()=>emitPosition(),true);
-if(window.qt)new QWebChannel(qt.webChannelTransport,channel=>{bridge=channel.objects.markdown;bridge.request.connect(s=>{const r=JSON.parse(s);if(r.type==='render')render(r).catch(e=>report({type:'error',message:String(e)}));else if(r.type==='scroll')scrollToLine(r.line,r.ratio);else if(r.type==='position'){const e=[...root.querySelectorAll('[data-line]')].filter(e=>Number(e.dataset.line)<=r.line).at(-1);if(e){root.querySelectorAll('.current').forEach(x=>x.classList.remove('current'));e.classList.add('current');if(!r.nearest||e.getBoundingClientRect().bottom<0||e.getBoundingClientRect().top>innerHeight)scrollToLine(r.line);}}});report({type:'ready'});});
+if(window.qt)new QWebChannel(qt.webChannelTransport,channel=>{
+    bridge=channel.objects.markdown;
+    bridge.request.connect(s=>{
+        const r=JSON.parse(s);
+        if(r.type==='render')render(r).catch(e=>report({type:'error',message:String(e)}));
+        else if(r.revision!==revision)return;
+        else if(r.type==='scroll'){
+            sourceAnchor=r;if(displayedRevision===revision){applyScroll(r);emitPosition();}
+        } else if(r.type==='position'){
+            currentPosition=r.line;
+            if(displayedRevision!==revision)return;
+            const e=positionElement(r.line);
+            if(e){root.querySelectorAll('.current').forEach(x=>x.classList.remove('current'));e.classList.add('current');if(r.reveal!==false)scrollToLine(r.line);}
+            emitPosition();
+        }
+    });
+    report({type:'ready'});
+});

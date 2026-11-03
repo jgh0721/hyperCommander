@@ -24,7 +24,7 @@ public:
         Layout->addWidget(Header);
         auto* Start = new QGroupBox(tr("재생 시작"), this); auto* StartRows = new QVBoxLayout(Start); StartRows->setContentsMargins(14, 12, 14, 14);
         openInternally_ = new QCheckBox(tr("Enter·두 번 클릭으로 오디오를 제목표시줄에서 재생"), Start); openInternally_->setObjectName("hc.settings.audio.openInternally");
-        auto* StartHint = new QLabel(tr("끄면 Enter·두 번 클릭은 연결 프로그램을 엽니다. Ctrl+Enter(오디오 미리 듣기 명령)와 도구 메뉴는 항상 쓸 수 있습니다."), Start);
+        auto* StartHint = new QLabel(tr("끄면 Enter·두 번 클릭은 연결 프로그램을 엽니다. Ctrl+Alt+위쪽 화살표(오디오 미리 듣기 명령)와 도구 메뉴는 항상 쓸 수 있습니다."), Start);
         StartHint->setWordWrap(true); StartHint->setForegroundRole(QPalette::PlaceholderText);
         autoNext_ = new QCheckBox(tr("곡이 끝나면 같은 폴더의 다음 오디오 파일 재생"), Start); autoNext_->setObjectName("hc.settings.audio.autoNext");
         StartRows->addWidget(openInternally_); StartRows->addWidget(StartHint); StartRows->addWidget(autoNext_);

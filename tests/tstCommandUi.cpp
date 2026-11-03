@@ -9,6 +9,9 @@
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/settings/fileColorRules.hpp"
 #include "UniqueLibs/itemSelection.hpp"
+#include "commonLibs/Qt/elidedLabel.hpp"
+#include <QVBoxLayout>
+#include <QPushButton>
 
 using namespace hc::ui;
 namespace {
@@ -204,6 +207,37 @@ private slots:
             QCOMPARE(Matcher::Selected(Operation::Intersect, Before, Match), Before && Match);
         }
         const auto Encoded = C.Save(); QCOMPARE(Criteria::Load(Encoded).Save(), Encoded);
+    }
+    void changingStatusKeepsLayout()
+    {
+        QWidget Window;auto* Layout=new QVBoxLayout(&Window);auto* Status=new hc::qt::ElidedLabel(&Window);
+        Status->SetLineCount(4);Status->setWordWrap(true);Layout->addWidget(Status);
+        auto* Footer=new QPushButton("Apply",&Window);Layout->addWidget(Footer);Window.resize(420,220);Window.show();
+        QCoreApplication::processEvents();const auto Size=Window.size();const auto Bounds=Footer->geometry();const auto LabelBounds=Status->geometry();
+        for(const auto& Text:QStringList{"", "Scanning...", QString(4000,'x'), "one\ntwo\nthree\nfour\nfive"}) {
+            Status->SetText(Text);QCoreApplication::processEvents();
+            QCOMPARE(Window.size(),Size);QCOMPARE(Footer->geometry(),Bounds);QCOMPARE(Status->geometry(),LabelBounds);QCOMPARE(Status->toolTip(),Text);
+        }
+    }
+    void mediaDefaultShortcuts()
+    {
+        const auto Keys=EffectiveShortcuts({}, {});
+        const auto Command=[&](Qt::Key Key){return CommandId(Keys.value(QKeyCombination(Qt::ControlModifier|Qt::AltModifier,Key)));};
+        QCOMPARE(Command(Qt::Key_Up),"hc.audio.preview");QCOMPARE(Command(Qt::Key_Down),"hc.audio.stop");
+        QCOMPARE(Command(Qt::Key_Left),"hc.audio.prev");QCOMPARE(Command(Qt::Key_Right),"hc.audio.next");
+        QVERIFY(CommandId(Keys.value(QKeyCombination(Qt::ControlModifier,Qt::Key_Return)))!="hc.audio.preview");
+    }
+    void folderSizeSelection()
+    {
+        using namespace hc::selection;
+        Criteria C; C.advanced_ = true; C.scope_ = Scope::Folders; C.pattern_ = "*"; C.size_ = "0"; C.minimumSize_ = false;
+        Matcher M; QVERIFY(M.Compile(C).isEmpty());
+        QVERIFY(M.Matches({"empty", 0x10, 0, false}));
+        QVERIFY(!M.Matches({"nonempty", 0x10, 1, false}));
+        QVERIFY(!M.Matches({"unknown", 0x10, 0, false}, nullptr, nullptr, false));
+        C.minimumSize_ = true; C.size_ = "1"; QVERIFY(M.Compile(C).isEmpty());
+        QVERIFY(M.Matches({"large", 0x10, 1048576, false}));
+        QVERIFY(!M.Matches({"small", 0x10, 1048575, false}));
     }
     void itemSelectionShortcutsAndOverrides()
     {
