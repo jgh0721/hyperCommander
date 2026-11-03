@@ -634,7 +634,11 @@ private slots:
                 QTest::qWait(50);QTRY_VERIFY_WITH_TIMEOUT(Applied(),5000);
                 QVERIFY2(scrollRequests(*Editor)-BeforeRequests<=1,"One key sent several scroll requests");
                 const auto Scroll=previewScroll(*Editor);
-                if(Scroll["appliedOffset"].isDouble() && !Scroll["clamped"].toBool()) {
+                // Mid-chapter, the preview never needs clamping. On markup (<p>, </p>) or past the row's last tag the
+                // anchor is still a text character of the row: white space between blocks used to name the whole body.
+                QVERIFY2(Scroll["appliedOffset"].isDouble() && !Scroll["clamped"].toBool(),qPrintable(QString("base %1 step %2 caret %3 -> %4 preview %5 sync %6").arg(Base).arg(Step).arg(BeforePos).arg(AfterPos)
+                    .arg(QString::fromUtf8(QJsonDocument(Scroll).toJson(QJsonDocument::Compact))).arg(QString::fromUtf8(QJsonDocument(Editor->Snapshot()["scrollSync"].toObject()).toJson(QJsonDocument::Compact)))));
+                {
                     const double SourceY=Viewport->mapToGlobal(QPoint(0,int(Backend->Send(SCI_POINTYFROMPOSITION,0,AfterPos)))).y();
                     const double PreviewY=Frame->mapToGlobal(QPoint(0,0)).y()+Scroll["appliedOffset"].toDouble();
                     QVERIFY2(qAbs(SourceY-PreviewY)<=Backend->Send(SCI_TEXTHEIGHT,quintptr(Backend->Send(SCI_LINEFROMPOSITION,AfterPos))),

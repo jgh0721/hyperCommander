@@ -161,7 +161,7 @@ private:
     void locateSource(bool Reveal=false);bool selectPreviewSource(const QJsonObject& Anchor={});
     // Scroll synchronisation keeps the editing point, or its nearest visible row, at the same height in both panes.
     void setupScrollSync();bool scrollSyncActive()const;void syncPreviewScroll();void previewScrolled(const QJsonObject& Report);
-    QJsonObject sourceScrollTarget(bool Revision)const;void placeSourceLine(int Position,double Ratio);int spineIndex(const QString& Path)const;
+    QJsonObject sourceScrollTarget(bool Revision)const;QJsonObject sourceAnchor(qintptr Position)const;void placeSourceLine(int Position,double Ratio);int spineIndex(const QString& Path)const;
     double toPreviewLine(double Line)const;double fromPreviewLine(double Line)const;void clearLineShifts();
     QTimer scrollRetryTimer_;qint64 previewDrivenIgnoreUntil_=0,suppressSyncUntil_=0,previewScrollSeen_=-1,sourceScrollSerial_=0,previewCandidateScrollSerial_=-1;
     double lastScrollLine_=-1,lastScrollRatio_=-1;int lastScrollChapter_=-1;bool lastScrollEnd_=false,scrollSyncPending_=false;QElapsedTimer previewCandidateScrollClock_;

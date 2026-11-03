@@ -104,8 +104,48 @@ QJsonObject EpubSourceEditor::sourceScrollTarget(bool Revision)const {
     // D5: the character itself, the caret's or the first one visible at the row's left edge, by its
     // source-map position. A replacement preview shows the current text; the shown one only until an edit.
     if((!Revision || previewMatchesSource_) && sourceShown())
-        if(const auto* Map=sourceMap())if(const auto Anchor=Map->Anchor(toUtf16(Backend->RowTextCharacter(Position)));!Anchor.isEmpty())Target["anchor"]=Anchor;
+        if(const auto Anchor=sourceAnchor(Position);!Anchor.isEmpty())Target["anchor"]=Anchor;
     return Target;
+}
+QJsonObject EpubSourceEditor::sourceAnchor(qintptr Position)const{
+    // The caret can sit in markup (inside <p class="…">, on </p>) or after a row's last tag. There the map
+    // names an element, whose box top is not its text's line, or the white space between blocks, which
+    // has no box at all, so the preview falls back to its whole parent. The nearest text character of
+    // the same display row stands for the caret, the next one first; a space has no rendered counterpart.
+    const auto* Map=sourceMap();if(!Map)return {};
+    auto* Backend=direct(text_);
+    const qintptr Line=Backend->Send(SCI_LINEFROMPOSITION,quintptr(Position));
+    const qintptr Start=Backend->Send(SCI_POSITIONFROMLINE,quintptr(Line)),End=Backend->Send(SCI_GETLINEENDPOSITION,quintptr(Line));
+    const qintptr Row=Backend->Send(SCI_POINTYFROMPOSITION,0,Position);
+    const auto Char=[Backend](qintptr At){return char(Backend->Send(SCI_GETCHARAT,quintptr(At)));};
+    const auto Blank=[](char C){return C==' '||C=='\t'||C=='\r'||C=='\n';};
+    const int Origin=toUtf16(Position);const auto Own=Map->Anchor(Origin);
+    // Inside a tag when the nearest angle bracket to the left opens one. UTF-8 continuation bytes are never brackets.
+    bool Inside=false;
+    for(qintptr At=Position-1;At>=Start && Position-At<=4096;--At){const char C=Char(At);if(C=='>')break;if(C=='<'){Inside=true;break;}}
+    // Tags are skipped by their brackets; only a text candidate costs a map lookup. Bounded for long attribute values.
+    bool Tag=Inside;int Utf16=Origin;
+    for(qintptr At=Position,Steps=0;At<End && Steps<1024;++Steps){
+        if(At!=Position && Backend->Send(SCI_POINTYFROMPOSITION,0,At)!=Row)break;
+        const char C=Char(At);
+        if(Tag){if(C=='>')Tag=false;}
+        else if(C=='<')Tag=true;
+        else if(!Blank(C))if(const auto Anchor=Map->Anchor(Utf16);Anchor["child"].toInt(-1)>=0)return Anchor;
+        const qintptr Next=Backend->Send(SCI_POSITIONAFTER,quintptr(At));Utf16+=int(Backend->Send(SCI_COUNTCODEUNITS,quintptr(At),Next));At=Next;
+    }
+    Tag=Inside;Utf16=Origin;
+    for(qintptr At=Position,Steps=0;At>Start && Steps<1024;++Steps){
+        const qintptr Previous=Backend->Send(SCI_POSITIONBEFORE,quintptr(At));Utf16-=int(Backend->Send(SCI_COUNTCODEUNITS,quintptr(Previous),At));At=Previous;
+        if(Backend->Send(SCI_POINTYFROMPOSITION,0,At)!=Row)break;
+        const char C=Char(At);
+        if(Tag){if(C=='<')Tag=false;}
+        else if(C=='>')Tag=true;
+        else if(!Blank(C))if(const auto Anchor=Map->Anchor(Utf16);Anchor["child"].toInt(-1)>=0)return Anchor;
+    }
+    // A row of markup only: an element that starts on this row still names its own box. White space between
+    // blocks, or a container opened rows above, names nothing here; the line table places the row instead.
+    if(Own["child"].toInt(-1)<0)if(const int Begin=Map->Position(Own);Begin>=0 && Backend->Send(SCI_LINEFROMPOSITION,quintptr(fromUtf16(Begin)))==Line)return Own;
+    return {};
 }
 void EpubSourceEditor::syncPreviewScroll() {
     if(!scrollSyncActive() || previewPatchPending_ || updating_ || sourceComposing_ || !ready_ || !sourceShown() || !previewView_ || previewClosing_ || previewPanel_->isHidden())return;
