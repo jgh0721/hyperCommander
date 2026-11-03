@@ -8,6 +8,11 @@
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QTimer>
+#include <QFutureWatcher>
+#include <QPointer>
+#include <QThreadPool>
+#include <QtConcurrentRun>
+#include <utility>
 
 namespace mrst {
 
@@ -30,10 +35,18 @@ constexpr int kDefaultSettleMs = 250;
 /// 감시가 그 파일을 영원히 놓지 않도록 못을 박아 둔다.
 constexpr qint64 kSelfWriteMaxMs = 30 * 1000;
 
+// Slow network metadata must neither block input nor occupy document-save workers.
+QThreadPool* probePool()
+{
+    struct Pool final : QThreadPool { Pool() { setMaxThreadCount(2); } };
+    static Pool Instance;
+    return &Instance;
+}
+
 } // namespace
 
-ExternalChangeWatcher::ExternalChangeWatcher( QObject* parent )
-    : QObject( parent )
+ExternalChangeWatcher::ExternalChangeWatcher( QObject* parent, ProbeReader Reader )
+    : QObject( parent ), probeReader_(Reader ? std::move(Reader) : ProbeReader(fingerprintOf))
 {
     settleTimer_ = new QTimer( this );
     settleTimer_->setSingleShot( true );
@@ -207,6 +220,7 @@ void ExternalChangeWatcher::setWatchedFiles( const QStringList& filePaths )
 
         Entry entry;
         entry.path     = it.value();
+        entry.generation_ = ++probeGeneration_;
         entry.baseline = savedFingerprints_.contains(it.key()) ? savedFingerprints_.take(it.key()) : fingerprintOf( entry.path );
         entries_.insert( it.key(), entry );
         if( isEnabled() && detection_ == Detection::Notify )
@@ -224,6 +238,7 @@ void ExternalChangeWatcher::markSynchronized( const QString& filePath )
     if( it == entries_.end() )
         return;
 
+    it->generation_ = ++probeGeneration_;
     it->baseline = fingerprintOf( it->path );
     it->probing  = false;
     pending_.remove( key );
@@ -250,6 +265,7 @@ void ExternalChangeWatcher::beginSelfWrite( const QString& filePath )
     if( it == entries_.end() )
         return;
 
+    it->generation_ = ++probeGeneration_;
     ++it->selfWrites;
     it->selfWriteDeadlineMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + kSelfWriteMaxMs;
 }
@@ -261,6 +277,7 @@ void ExternalChangeWatcher::endSelfWrite( const QString& filePath, bool synchron
     if( it == entries_.end() )
         return;
 
+    it->generation_ = ++probeGeneration_;
     if( it->selfWrites > 0 )
         --it->selfWrites;
     if( it->selfWrites == 0 ) {
@@ -274,6 +291,7 @@ void ExternalChangeWatcher::endSelfWrite(const QString& filePath,const Fingerpri
     const auto Key=keyFor(filePath);
     auto It=entries_.find(Key);
     if(It==entries_.end()){savedFingerprints_.insert(Key,fingerprint);return;}
+    It->generation_=++probeGeneration_;
     if(It->selfWrites>0)--It->selfWrites;
     if(It->selfWrites==0){It->baseline=fingerprint;It->probing=false;pending_.remove(Key);}
     // The directory watch survives replacement. Polling is the fallback if the
@@ -327,28 +345,66 @@ void ExternalChangeWatcher::scheduleProbe( const QString& key )
 
 void ExternalChangeWatcher::onSettleTick()
 {
-    if( inSettleTick_ )
-        return;         // 신호를 받은 쪽의 모달 이벤트 루프에서 재진입했다
+    if (!inSettleTick_ && !probeRunning_) startProbes(false);
+}
 
+void ExternalChangeWatcher::startProbes(bool Poll)
+{
+    if (!isEnabled() || probeRunning_) return;
+    const auto Keys = Poll ? entries_.keys() : pending_.values();
+    if (!Poll) pending_.clear();
+    QList<Probe> Samples;
+    for (const auto& Key : Keys) {
+        auto It = entries_.find(Key);
+        if (It == entries_.end() || (Poll && detection_ != Detection::Poll && !It->pollFallback)
+            || consumeSelfWrite(*It)) continue;
+        Samples.append({Key, It->path, {}, It->generation_});
+    }
+    if (Samples.isEmpty()) return;
+    probeRunning_ = true;
+    auto* Watcher = new QFutureWatcher<QList<Probe>>(this);
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Poll] {
+        const auto Samples = Watcher->result(); Watcher->deleteLater();
+        const QPointer<ExternalChangeWatcher> Guard(this);
+        if (isEnabled()) finishProbes(Samples, Poll);
+        if (!Guard) return;
+        probeRunning_ = false;
+        if (isEnabled() && !pending_.isEmpty() && !settleTimer_->isActive()) settleTimer_->start();
+    });
+    Watcher->setFuture(QtConcurrent::run(probePool(), [Samples = std::move(Samples), Reader = probeReader_]() mutable {
+        for (auto& Sample : Samples) Sample.value_ = Reader(Sample.path_);
+        return Samples;
+    }));
+}
+
+void ExternalChangeWatcher::finishProbes(const QList<Probe>& Samples, bool Poll)
+{
+    if (Poll) {
+        for (const auto& Sample : Samples) {
+            auto It = entries_.find(Sample.key_);
+            if (It != entries_.end() && It->generation_ == Sample.generation_
+                && !consumeSelfWrite(*It) && Sample.value_ != It->baseline)
+                scheduleProbe(Sample.key_);
+        }
+        return;
+    }
     inSettleTick_ = true;
-
-    const QSet< QString > checking = pending_;
-    pending_.clear();
-
     QStringList changed;
     QStringList vanished;
 
-    for( const QString& key : checking )
+    for( const auto& Sample : Samples )
     {
+        const auto& key = Sample.key_;
         auto it = entries_.find( key );
-        if( it == entries_.end() )
+        // A save or watch replacement after this read began owns a newer baseline.
+        if( it == entries_.end() || it->generation_ != Sample.generation_ )
             continue;
 
         Entry& entry = *it;
         if( consumeSelfWrite( entry ) )
             continue;                       // 우리가 쓰는 중이다. 알림을 버린다
 
-        const Fingerprint now = fingerprintOf( entry.path );
+        const Fingerprint now = Sample.value_;
         if( now == entry.baseline )
         {
             entry.probing = false;          // 우리가 아는 상태로 돌아왔다
@@ -378,15 +434,18 @@ void ExternalChangeWatcher::onSettleTick()
 
     // 신호는 상태를 모두 정리한 뒤에 낸다. 받는 쪽이 setWatchedFiles() 로
     // 되돌아오면 위에서 잡은 Entry& 가 무효가 된다.
+    const QPointer<ExternalChangeWatcher> Guard(this);
     for( const QString& path : changed )
     {
 
         emit sigFileChanged( path );
+        if (!Guard) return;
     }
     for( const QString& path : vanished )
     {
 
         emit sigFileVanished( path );
+        if (!Guard) return;
     }
 
     inSettleTick_ = false;
@@ -397,19 +456,7 @@ void ExternalChangeWatcher::onSettleTick()
 
 void ExternalChangeWatcher::onPollTick()
 {
-    if( !isEnabled() )
-        return;
-
-    const bool pollEverything = detection_ == Detection::Poll;
-    for( auto it = entries_.begin(); it != entries_.end(); ++it )
-    {
-        if( !pollEverything && !it->pollFallback )
-            continue;
-        if( consumeSelfWrite( *it ) )
-            continue;
-        if( fingerprintOf( it->path ) != it->baseline )
-            scheduleProbe( it.key() );
-    }
+    if (!inSettleTick_ && !probeRunning_) startProbes(true);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -419,6 +466,7 @@ void ExternalChangeWatcher::rebaselineAll()
 {
     for( auto it = entries_.begin(); it != entries_.end(); ++it )
     {
+        it->generation_ = ++probeGeneration_;
         it->baseline = fingerprintOf( it->path );
         it->probing  = false;
     }

@@ -63,6 +63,7 @@
 #include <QtTest>
 #include <QtConcurrentRun>
 #include <QThreadPool>
+#include <QThread>
 #include <QSemaphore>
 #include "UniqueLibs/document/documentTextCodec.hpp"
 static_assert(!std::is_invocable_v<decltype(&AppSettings::value), AppSettings*, const QString&, const QVariant&>);
@@ -990,6 +991,42 @@ private slots:
         {EpubSourceEditor Editor(Bytes,Path);Editor.SetRecoveryEnabled(false);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);QVERIFY(!Editor.Snapshot()["workspaceError"].toString().isEmpty());
             QTest::qWait(850);QTRY_VERIFY_WITH_TIMEOUT(!Editor.Snapshot()["workspaceSaving"].toBool(),5000);}
         QCOMPARE(Read(Json),QByteArray("{broken"));
+    }
+    void fileWatcherSlowProbeDuringSave_data()
+    {
+        QTest::addColumn<bool>("Poll");QTest::newRow("settle")<<false;QTest::newRow("poll")<<true;
+    }
+    void fileWatcherSlowProbeDuringSave()
+    {
+        QFETCH(bool,Poll);QTemporaryDir Temp;const auto Path=Temp.filePath("watched.md");Write(Path,"before");
+        const auto Gate=std::make_shared<QSemaphore>();const auto Entered=std::make_shared<std::atomic_bool>(false),WrongThread=std::make_shared<std::atomic_bool>(false);
+        const auto Calls=std::make_shared<std::atomic_int>(0);auto* Owner=QThread::currentThread();
+        const auto Release=qScopeGuard([&]{Gate->release();});
+        mrst::ExternalChangeWatcher Watcher(nullptr,[Gate,Entered,WrongThread,Calls,Owner](const QString& File){
+            const auto Value=mrst::ExternalChangeWatcher::fingerprintOf(File);const int Count=++*Calls;
+            if(QThread::currentThread()==Owner){WrongThread->store(true);return Value;}
+            if(Count==1){Entered->store(true);Gate->acquire();}return Value;
+        });
+        Watcher.setAction(mrst::ExternalChangeWatcher::Action::Reload);Watcher.setDetection(mrst::ExternalChangeWatcher::Detection::Poll);
+        Watcher.setPollSeconds(1);Watcher.setSettleInterval(10);Watcher.setWatchedFiles({Path});
+        QSignalSpy Changed(&Watcher,&mrst::ExternalChangeWatcher::sigFileChanged),Vanished(&Watcher,&mrst::ExternalChangeWatcher::sigFileVanished);
+        if(!Poll)Watcher.recheckAll();QTRY_VERIFY_WITH_TIMEOUT(Entered->load() || WrongThread->load(),2500);QVERIFY(!WrongThread->load());
+        int Ticks=0;QTimer Heartbeat;Heartbeat.setInterval(5);connect(&Heartbeat,&QTimer::timeout,[&]{++Ticks;});Heartbeat.start();
+        QLineEdit Input;QTest::keyClicks(&Input,"typing during slow metadata");QCOMPARE(Input.text(),QString("typing during slow metadata"));
+        Watcher.beginSelfWrite(Path);Write(Path,"own committed save");Watcher.endSelfWrite(Path,mrst::ExternalChangeWatcher::fingerprintOf(Path));
+        QTest::qWait(100);QVERIFY(Ticks>=5);Gate->release();QTest::qWait(200);
+        QCOMPARE(Changed.count(),0);QCOMPARE(Vanished.count(),0);QCOMPARE(Calls->load(),1);
+        Write(Path,"subsequent external modification");if(!Poll)Watcher.recheckAll();QTRY_COMPARE_WITH_TIMEOUT(Changed.count(),1,5000);
+        QCOMPARE(Vanished.count(),0);QVERIFY(!WrongThread->load());
+        qInfo()<<"File watcher slow-probe regression: poll="<<Poll<<" heartbeatTicks="<<Ticks;
+    }
+    void fileWatcherCanCloseFromChangeSignal()
+    {
+        QTemporaryDir Temp;const auto Path=Temp.filePath("close.md");Write(Path,"before");
+        auto Watcher=std::make_unique<mrst::ExternalChangeWatcher>();Watcher->setAction(mrst::ExternalChangeWatcher::Action::Reload);
+        Watcher->setDetection(mrst::ExternalChangeWatcher::Detection::Poll);Watcher->setSettleInterval(10);Watcher->setWatchedFiles({Path});
+        QObject Context;connect(Watcher.get(),&mrst::ExternalChangeWatcher::sigFileChanged,&Context,[&]{Watcher.reset();});
+        Write(Path,"external modification");Watcher->recheckAll();QTRY_VERIFY_WITH_TIMEOUT(!Watcher,5000);
     }
     void textSaveUsesProvidedSnapshot_data()
     {

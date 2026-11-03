@@ -1,10 +1,12 @@
 ﻿#pragma once
 
 #include <QHash>
+#include <QList>
 #include <QObject>
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <functional>
 
 class QFileSystemWatcher;
 class QTimer;
@@ -73,7 +75,9 @@ public:
         bool operator==( const Fingerprint& other ) const = default;
     };
 
-    explicit ExternalChangeWatcher( QObject* parent = nullptr );
+    // Background readers must own their data and must not capture GUI objects.
+    using ProbeReader = std::function<Fingerprint(const QString&)>;
+    explicit ExternalChangeWatcher( QObject* parent = nullptr, ProbeReader Reader = {} );
     ~ExternalChangeWatcher() override;
 
     // ── 설정 (AppSettings) ──
@@ -135,6 +139,7 @@ private:
         Fingerprint baseline;           ///< 우리가 아는 상태
         Fingerprint probe;              ///< 직전 확인에서 본 상태
         bool        probing = false;
+        quint64     generation_ = 0;
         int         selfWrites = 0;
         /// 자기 쓰기 구간이 언제까지 유효한가 (단조 시계, ms).
         ///
@@ -162,6 +167,9 @@ private:
     void onWatchedDirectoryChanged( const QString& dirPath );
     void onSettleTick();
     void onPollTick();
+    struct Probe { QString key_, path_; Fingerprint value_; quint64 generation_ = 0; };
+    void startProbes(bool Poll);
+    void finishProbes(const QList<Probe>& Samples, bool Poll);
 
     void scheduleProbe( const QString& key );
     void rebaselineAll();
@@ -186,6 +194,9 @@ private:
     /// 그 이벤트 루프에서 이 타이머가 다시 발화한다. 재진입을 막지 않으면 같은
     /// 항목을 두 번 알린다.
     bool                    inSettleTick_ = false;
+    ProbeReader             probeReader_;
+    quint64                 probeGeneration_ = 0;
+    bool                    probeRunning_ = false;
 };
 
 } // namespace mrst
