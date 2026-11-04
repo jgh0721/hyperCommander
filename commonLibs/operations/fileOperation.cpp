@@ -185,6 +185,7 @@ namespace hc::operations
                 streaming_ = incrementalDelete_ || (!request_.calculateSizeBefore_ && Native
                     && (request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move));
                 rootFiles_.resize(request_.sources_.size());
+                renameRoots_.resize(request_.sources_.size());
                 for (std::size_t Root = 0; auto& Source : request_.sources_) {
                     PlannedItem Item{Source, request_.operation_ == FileOperation::Rename ? request_.destination_ : Child(request_.destination_, request_.destinationName_.empty() ? Source.entry_.name_ : request_.destinationName_)};
                     Item.root_ = Root++; pending_.push_back(std::move(Item));
@@ -326,10 +327,14 @@ namespace hc::operations
                         });
                     }
                     if (production_.valid()) {
-                        if (production_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+                        // Wait inside this bounded step and continue as soon as the
+                        // producer finishes. A 10 ms deferral resumed only on the
+                        // scheduler's next tick: 25 ms, or 15.6 ms timer resolution,
+                        // added to every file over 1 MiB.
+                        if (production_.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) {
                             const auto Producing = std::min(Size, productionProgress_->load());
                             auto Step = progress(); Step.progress_->bytesDone_ += Producing; Step.progress_->currentBytes_ += Producing;
-                            Step.deferFor_ = std::chrono::milliseconds(10); return Step;
+                            return Step;
                         }
                         Produced = production_.get(); productionProgress_.reset();
                     } else Produced = session_->ProduceContent(*producer_, Context.operation_);
@@ -435,20 +440,34 @@ namespace hc::operations
             }
             CompletedEffects TakeCompletedEffects() override
             {
-                // Tree removal runs ahead of the steps. A cancelled, paused or
-                // failed job still records every file it already deleted.
-                if (!tree_) return {};
-                tree_->Release();
+                // Tree removal and transfer run ahead of the steps. A cancelled,
+                // paused or failed job still records every completed file.
+                if (!tree_ && !transfer_ && transferLeftover_.empty()) return {};
                 CompletedEffects Effects;
-                if (auto Batch = tree_->Collect(std::numeric_limits<std::size_t>::max(), std::chrono::milliseconds(0)); Batch.HasValue())
-                    Effects.items_ = acceptRemoved(std::move(Batch.Value().removed_));
-                tree_.reset();
+                for (auto& Outcome : transferLeftover_) Effects.items_.push_back(std::move(Outcome));
+                transferLeftover_.clear();
+                if (tree_) {
+                    tree_->Release();
+                    if (auto Batch = tree_->Collect(std::numeric_limits<std::size_t>::max(), std::chrono::milliseconds(0)); Batch.HasValue())
+                        Effects.items_ = acceptRemoved(std::move(Batch.Value().removed_));
+                    tree_.reset();
+                }
+                if (transfer_) {
+                    // Release removes the files it left incomplete first.
+                    transfer_->Release();
+                    if (auto Batch = transfer_->Collect(std::numeric_limits<std::size_t>::max(), std::chrono::milliseconds(0)); Batch.HasValue()) {
+                        auto Transferred = acceptTransferred(std::move(Batch.Value().done_));
+                        Effects.items_.insert(Effects.items_.end(), std::make_move_iterator(Transferred.begin()), std::make_move_iterator(Transferred.end()));
+                    }
+                    transfer_.reset();
+                }
                 Effects.progress_ = progress().progress_;
                 return Effects;
             }
             std::vector<Error> Finalize(JobState State) override
             {
                 if (tree_) { tree_->Release(); tree_.reset(); }
+                if (transfer_) { transfer_->Release(); transfer_.reset(); }
                 transferStop_.request_stop();
                 stopCopies();
                 for (auto& Copy : copies_) {
@@ -617,10 +636,10 @@ namespace hc::operations
                 if (copies_.empty()) return begin(Context.operation_);
                 auto& Copy = *copies_.front();
                 if (Copy.work_.valid()) {
-                    if (Copy.work_.wait_for(std::chrono::microseconds(100)) != std::future_status::ready) {
-                        auto Step = copyProgress();
-                        Step.deferFor_ = std::chrono::milliseconds(1); return Step;
-                    }
+                    // New workers were started above; wait for the oldest within
+                    // this step instead of a 1 ms deferral that the scheduler's
+                    // tick stretched to 15-25 ms.
+                    if (Copy.work_.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) return copyProgress();
                     Copy.barrier_ = Copy.work_.get();
                 }
                 if (Copy.recheck_ && !Context.committing_) {
@@ -704,8 +723,7 @@ namespace hc::operations
                     Step.progress_->plannedItems_ = request_.sources_.size();
                 }
                 if (planningFinished_ || request_.operation_ == FileOperation::MakeDirectory) Step.progress_->plannedItems_ = request_.operation_ == FileOperation::Move
-                    ? std::ranges::count_if(items_, [](const auto& Item) { return !Item.source_.entry_.directory_ || Item.removeDirectory_ || Item.renameMove_; })
-                    : items_.size() + trimmedItems_ + treeItems_;
+                    ? movePlannedItems() + treeItems_ : items_.size() + trimmedItems_ + treeItems_;
                 if (request_.operation_ == FileOperation::Delete) {
                     Step.progress_->discoveredItems_ = verifiedItems_;
                     Step.progress_->discoveredFiles_ = discoveredFiles_;
@@ -726,6 +744,17 @@ namespace hc::operations
                     : request_.operation_ == FileOperation::Delete ? JobPhase::Deleting
                     : phase_ == Phase::Commit ? JobPhase::Committing : JobPhase::Copying;
                 return Step;
+            }
+            std::uint64_t movePlannedItems()
+            {
+                // Every step reports progress. Counting the whole plan each time
+                // made large moves quadratic: 270,000 files moved at 77/s.
+                // The plan only changes size after planning, so cache by size.
+                if (movePlannedSize_ != items_.size()) {
+                    movePlannedSize_ = items_.size();
+                    movePlanned_ = std::ranges::count_if(items_, [](const auto& Item) { return !Item.source_.entry_.directory_ || Item.removeDirectory_ || Item.renameMove_; });
+                }
+                return movePlanned_;
             }
             JobStep paced(std::uint64_t Bytes)
             {
@@ -1011,7 +1040,15 @@ namespace hc::operations
                     Context.removalPreparation_ = std::dynamic_pointer_cast<IRemovalPreparation>(mutationScope_);
                 Context.incrementalEnumeration_ = request_.operation_ == FileOperation::Delete;
                 if (request_.operation_ == FileOperation::Delete) Context.allowUnavailableChildMetadata_ = true;
+                if (!transferLeftover_.empty()) {
+                    auto Step = progress(); Step.next_ = JobState::Running;
+                    while (!transferLeftover_.empty() && Step.items_.size() < 128) {
+                        Step.items_.push_back(std::move(transferLeftover_.front())); transferLeftover_.pop_front();
+                    }
+                    return Step;
+                }
                 if (tree_) return collectTree();
+                if (transfer_) return collectTransfer();
                 if (incrementalDelete_ && !enumerations_.empty()) return prepareIncremental(Context);
                 if (incrementalDelete_ && request_.deleteMode_ == DeleteMode::Recycle && index_ < items_.size()) {
                     // Recycle a selected directory as one unit, after its own
@@ -1262,9 +1299,15 @@ namespace hc::operations
                     && (request_.includePattern_ == "*" || request_.includePattern_ == "*.*")
                     && request_.maxBytes_ == std::numeric_limits<std::uint64_t>::max()
                     && request_.copyOptions_.metadata_ && !request_.copyOptions_.verify_ && !request_.bytesPerSecondLimit_) {
-                    const auto CanRename = Item.source_.writer_->CanRenameTo(Item.source_.entry_.locator_, Item.destination_, Context);
-                    if (!CanRename.HasValue()) return failed(CanRename.Failure());
-                    if (CanRename.Value()) {
+                    // Descendants share their root's volumes: links and mount
+                    // points are denied above, so query the volumes once per root.
+                    auto& Renamable = renameRoots_[Item.root_];
+                    if (!Renamable) {
+                        const auto CanRename = Item.source_.writer_->CanRenameTo(Item.source_.entry_.locator_, Item.destination_, Context);
+                        if (!CanRename.HasValue()) return failed(CanRename.Failure());
+                        Renamable = CanRename.Value();
+                    }
+                    if (*Renamable) {
                         const auto Existing = request_.destinationWriter_->Inspect(Item.destination_, Context);
                         if (!Existing.HasValue()) return failed(Existing.Failure());
                         if (!Existing.Value()) {
@@ -1272,7 +1315,19 @@ namespace hc::operations
                             if (streaming_) phase_ = Phase::Begin;
                             return progress();
                         }
+                        // Into an existing folder on the same volume: rename the
+                        // children folder by folder instead of one planned item each.
+                        if (Existing.Value()->directory_ && transferAllowed(Item, Context) && startTransfer(Item, Context, TreeTransferMode::Merge))
+                            return progress();
                     }
+                }
+                // A whole folder copied, or moved to another volume, into a new
+                // destination folder. The engine owns it until it reports back.
+                if (transferAllowed(Item, Context) && (request_.operation_ == FileOperation::Copy || renameRoots_[Item.root_] == false)) {
+                    const auto Existing = request_.destinationWriter_->Inspect(Item.destination_, Context);
+                    if (!Existing.HasValue()) return failed(Existing.Failure());
+                    if (!Existing.Value() && startTransfer(Item, Context, request_.operation_ == FileOperation::Copy ? TreeTransferMode::Copy : TreeTransferMode::Move))
+                        return progress();
                 }
                 const auto Planned = [&] {
                     if (streaming_ && index_ < items_.size() && !(incrementalDelete_ && Recycling)
@@ -1387,6 +1442,134 @@ namespace hc::operations
                     if (Item.source_.entry_.locator_ == Root) {
                         // The engine could not list the root: plan it again.
                         Item = treeRoot_; Item.removeDirectory_ = false;
+                        seen_.erase(Serialize(Root)); --verifiedItems_;
+                    }
+                    Item.classicTraversal_ = Item.source_.entry_.directory_;
+                    pending_.push_front(std::move(Item));
+                }
+            }
+            bool transferAllowed(const PlannedItem& Item, const OperationContext& Context) const
+            {
+                // Whole local folders with the default copy semantics. Durable
+                // recovery, filters, limits, verification and copy extras keep the
+                // per-item path and its per-file commit boundaries; so do folders
+                // the engine already returned.
+                return Context.fileTransferWorkers_ != 1 && !Context.writeCheckpoint_ && !Context.workload_.IsAutomatic()
+                    && (request_.operation_ == FileOperation::Copy || request_.operation_ == FileOperation::Move)
+                    && Item.source_.entry_.directory_ && !Item.preparationError_ && !Item.classicTraversal_
+                    && Item.source_.writer_ && Item.source_.reader_ && Item.source_.entry_.id_.revision_ && request_.preservePaths_
+                    && (request_.includePattern_ == "*" || request_.includePattern_ == "*.*")
+                    && request_.maxBytes_ == std::numeric_limits<std::uint64_t>::max() && !request_.bytesPerSecondLimit_
+                    && request_.copyOptions_.metadata_ && !request_.copyOptions_.verify_ && !request_.copyOptions_.acl_ && !request_.copyOptions_.streams_
+                    && !request_.approvedDestination_
+                    && Item.source_.writer_->SupportsTreeTransfer(*Item.source_.reader_, Item.source_.entry_.locator_, *request_.destinationWriter_, Item.destination_);
+            }
+            bool startTransfer(const PlannedItem& Item, const OperationContext& Context, TreeTransferMode Mode)
+            {
+                TreeTransferOptions Options;
+                Options.mode_ = Mode;
+                // Renames within one volume contend in the filesystem: two workers
+                // renamed 4,700 entries/s against 12,000/s for one (qt-repo, ReFS).
+                Options.workers_ = Mode == TreeTransferMode::Merge ? 1 : std::clamp<std::size_t>(Context.fileTransferWorkers_ ? Context.fileTransferWorkers_
+                    : Item.source_.writer_->PreferredTreeTransferWorkers(Item.source_.entry_.locator_, Item.destination_), 1, 16);
+                Options.maxDepth_ = request_.maxDepth_ > Item.depth_ ? request_.maxDepth_ - Item.depth_ : 0;
+                Options.allowReadOnly_ = request_.readOnly_ == ReadOnlyPolicy::Allow || allowAllReadOnly_;
+                Options.countFirst_ = request_.calculateSizeBefore_;
+                auto Started = Item.source_.writer_->BeginTreeTransfer(Item.source_.entry_, Item.destination_, Options, Context);
+                // The item path reopens the folder and reports a real error.
+                if (!Started.HasValue()) return false;
+                transfer_ = std::move(Started.Value()); transferRoot_ = Item; transferMode_ = Mode;
+                transferAccepted_ = transferBytes_ = 0; transferItemsBase_ = treeItems_;
+                transferCountedBytes_.reset(); transferCountedItems_.reset();
+                return true;
+            }
+            std::vector<ItemOutcome> acceptTransferred(std::vector<TreeTransferEntry> Done)
+            {
+                std::vector<ItemOutcome> Outcomes; Outcomes.reserve(Done.size());
+                if (!Done.empty()) {
+                    transferCurrent_ = Done.back().entry_.name_;
+                    transferSource_ = Serialize(Done.back().entry_.locator_); transferTarget_ = Serialize(Done.back().destination_);
+                }
+                for (auto& Item : Done) {
+                    // The root was counted when it was planned and verified.
+                    if (Item.entry_.locator_ != transferRoot_.source_.entry_.locator_) ++verifiedItems_;
+                    if (!Item.entry_.directory_) {
+                        ++discoveredFiles_; bytesTotal_ += Item.entry_.size_; bytesDone_ += Item.entry_.size_; transferAccepted_ += Item.entry_.size_;
+                    }
+                    ++treeItems_; ++outcomeIndex_;
+                    Outcomes.push_back(ItemOutcome{Serialize(Item.entry_.locator_), ItemOutcome::Status::Completed, {}, true,
+                        transferMode_ != TreeTransferMode::Copy, std::move(Item.entry_)});
+                }
+                return Outcomes;
+            }
+            JobStep collectTransfer()
+            {
+                auto Collected = transfer_->Collect(128, std::chrono::milliseconds(20));
+                if (!Collected.HasValue()) { transfer_->Release(); transfer_.reset(); return failed(Collected.Failure()); }
+                auto& Batch = Collected.Value();
+                auto Outcomes = acceptTransferred(std::move(Batch.done_));
+                transferBytes_ = Batch.bytes_;
+                if (Batch.countedBytes_) { transferCountedBytes_ = Batch.countedBytes_; transferCountedItems_ = Batch.countedItems_; }
+                if (Batch.finished_) {
+                    // Results reported while the workers stopped still belong here.
+                    transfer_->Release();
+                    if (auto Rest = transfer_->Collect(std::numeric_limits<std::size_t>::max(), std::chrono::milliseconds(0)); Rest.HasValue()) {
+                        auto More = acceptTransferred(std::move(Rest.Value().done_));
+                        Outcomes.insert(Outcomes.end(), std::make_move_iterator(More.begin()), std::make_move_iterator(More.end()));
+                    }
+                    finishTransfer(Batch);
+                }
+                // A step carries at most 128 results; later steps send the rest.
+                while (Outcomes.size() > 128) { transferLeftover_.push_front(std::move(Outcomes.back())); Outcomes.pop_back(); }
+                auto Step = progress();
+                if (transfer_ || !Outcomes.empty()) {
+                    Step.next_ = JobState::Running; Step.progress_->phase_ = JobPhase::Copying;
+                    if (!transferCurrent_.empty()) {
+                        Step.progress_->currentItem_ = transferCurrent_;
+                        Step.progress_->source_ = transferSource_; Step.progress_->destination_ = transferTarget_;
+                    }
+                }
+                if (transfer_) {
+                    // Bytes of files still being copied, and the listed totals.
+                    Step.progress_->bytesDone_ += transferBytes_ > transferAccepted_ ? transferBytes_ - transferAccepted_ : 0;
+                    if (request_.calculateSizeBefore_ && transferCountedBytes_)
+                        Step.progress_->bytesTotal_ = bytesTotal_ - transferAccepted_ + *transferCountedBytes_ + extraBytes_;
+                    if (transferCountedItems_)
+                        Step.progress_->plannedItems_ = (request_.operation_ == FileOperation::Move ? movePlannedItems() : items_.size() + trimmedItems_)
+                            + transferItemsBase_ + *transferCountedItems_;
+                }
+                if (seen_.size() + treeItems_ > request_.maxEntries_) {
+                    if (transfer_) { transfer_->Release(); transfer_.reset(); }
+                    Step = failed({ErrorCategory::BudgetExceeded, "operation-entry-budget"});
+                }
+                Step.items_ = std::move(Outcomes);
+                return Step;
+            }
+            void finishTransfer(TreeTransferBatch& Batch)
+            {
+                transfer_->Release(); transfer_.reset();
+                transferCurrent_.clear(); transferSource_.clear(); transferTarget_.clear();
+                const auto& Root = transferRoot_.source_.entry_.locator_;
+                for (auto& Kept : Batch.remaining_) {
+                    // Moved folders kept because an entry below them remains. The
+                    // final reverse pass removes them after those entries.
+                    auto Item = transferRoot_;
+                    if (Kept.entry_.locator_ != Root) {
+                        Item = PlannedItem{{std::move(Kept.entry_), transferRoot_.source_.reader_, transferRoot_.source_.writer_},
+                            std::move(Kept.destination_), transferRoot_.depth_ + Kept.depth_};
+                        Item.root_ = transferRoot_.root_; ++verifiedItems_;
+                    }
+                    Item.removeDirectory_ = true; Item.readOnly_ = (Item.source_.entry_.attributes_ & 1) != 0;
+                    directories_.push_back(std::move(Item));
+                }
+                for (auto It = Batch.deferred_.rbegin(); It != Batch.deferred_.rend(); ++It) {
+                    // Decisions, links and errors take the verified per-item path.
+                    PlannedItem Item{{std::move(It->entry_), transferRoot_.source_.reader_, transferRoot_.source_.writer_},
+                        std::move(It->destination_), transferRoot_.depth_ + It->depth_};
+                    Item.root_ = transferRoot_.root_;
+                    if (Item.source_.entry_.locator_ == Root) {
+                        // The engine could not list the root: plan it again.
+                        Item = transferRoot_;
                         seen_.erase(Serialize(Root)); --verifiedItems_;
                     }
                     Item.classicTraversal_ = Item.source_.entry_.directory_;
@@ -1778,7 +1961,17 @@ namespace hc::operations
             std::unique_ptr<ITreeRemoval> tree_;
             PlannedItem treeRoot_;
             std::uint64_t treeItems_ = 0, trimmedItems_ = 0;
+            std::size_t movePlannedSize_ = std::numeric_limits<std::size_t>::max();
+            std::uint64_t movePlanned_ = 0;
             std::string treeCurrent_, treeSource_;
+            // Active bulk copy/move of transferRoot_; its outcomes are not in items_.
+            std::unique_ptr<ITreeTransfer> transfer_;
+            PlannedItem transferRoot_;
+            TreeTransferMode transferMode_ = TreeTransferMode::Copy;
+            std::uint64_t transferAccepted_ = 0, transferBytes_ = 0, transferItemsBase_ = 0;
+            std::optional<std::uint64_t> transferCountedBytes_, transferCountedItems_;
+            std::string transferCurrent_, transferSource_, transferTarget_;
+            std::deque<ItemOutcome> transferLeftover_;
             std::deque<std::unique_ptr<PreparedCopy>> copies_;
             std::stop_source copyStop_;
             std::size_t copyWorkers_ = 0;
@@ -1795,6 +1988,7 @@ namespace hc::operations
             std::unique_ptr<IEntryCursor> cursor_;
             std::vector<EnumerationFrame> enumerations_;
             std::vector<std::uint64_t> rootFiles_;
+            std::vector<std::optional<bool>> renameRoots_;
             std::shared_ptr<IReadStream> stream_;
             Task<ReadChunk> readAhead_;
             bool readAheadSlot_ = false;

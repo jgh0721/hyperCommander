@@ -103,6 +103,53 @@ namespace hc::storage
         // completed before the stop remain collectable.
         virtual void Release() = 0;
     };
+    // Bulk local copy or move of one already verified directory tree, the way
+    // Explorer-style tools transfer folders. Copy and cross-volume move create a
+    // destination root that must not exist yet and write each file directly to
+    // its final name: a file interrupted by cancellation or failure is removed,
+    // completed files stay. Merge renames the children of the source into an
+    // existing destination folder on the same volume. Descendants are handled as
+    // listed and never through links. Anything that needs a decision (conflict,
+    // lock, access, readonly source of a move, link, depth) returns to the
+    // coordinator's verified per-item path, with every source folder it keeps.
+    enum class TreeTransferMode { Copy, Move, Merge };
+    struct TreeTransferOptions
+    {
+        TreeTransferMode mode_ = TreeTransferMode::Copy;
+        std::size_t workers_ = 1;     // folders and file groups processed concurrently
+        std::size_t maxDepth_ = 32;   // relative to the root; its children are 1
+        bool allowReadOnly_ = false;  // move/merge: remove readonly sources
+        bool countFirst_ = false;     // list the tree once for totals before copying
+    };
+    struct TreeTransferEntry
+    {
+        EntrySnapshot entry_;         // source entry; no revision for deferred ones
+        Locator destination_;
+        std::size_t depth_ = 0;       // relative to the root
+    };
+    struct TreeTransferBatch
+    {
+        // Copied (copy) or moved and removed (move/merge), folders included.
+        std::vector<TreeTransferEntry> done_;
+        // Only with finished_: entries for the per-item path, and source folders
+        // kept because a descendant remains (ancestors first, with revisions).
+        std::vector<TreeTransferEntry> deferred_, remaining_;
+        // Completed bytes including the file being copied now.
+        std::uint64_t bytes_ = 0;
+        // Present once the optional first listing finished.
+        std::optional<std::uint64_t> countedBytes_, countedItems_;
+        bool finished_ = false;
+    };
+    class ITreeTransfer
+    {
+    public:
+        virtual ~ITreeTransfer() = default;
+        // Waits at most Wait for MaxItems results or for completion.
+        virtual Result<TreeTransferBatch> Collect(std::size_t MaxItems, std::chrono::milliseconds Wait) = 0;
+        // Stops scheduling work, removes files left incomplete, joins the
+        // workers and releases every handle. Completed results remain collectable.
+        virtual void Release() = 0;
+    };
     class IWritableStorage
     {
     public:
@@ -131,6 +178,12 @@ namespace hc::storage
         virtual Result<std::unique_ptr<ITreeRemoval>> BeginTreeRemoval(EntrySnapshot, TreeRemovalOptions, OperationContext)
         { return Error{ErrorCategory::Unsupported, "tree-removal-unavailable", Id()}; }
         virtual std::size_t PreferredCopyWorkers(Locator, Locator) const { return 1; }
+        // Only for a source listed by this writer's own reader and a destination
+        // this engine writes like Destination itself would (same native kind).
+        virtual bool SupportsTreeTransfer(const IStorageProvider&, const Locator&, const IWritableStorage&, const Locator&) const { return false; }
+        virtual std::size_t PreferredTreeTransferWorkers(Locator, Locator) const { return 1; }
+        virtual Result<std::unique_ptr<ITreeTransfer>> BeginTreeTransfer(EntrySnapshot, Locator, TreeTransferOptions, OperationContext)
+        { return Error{ErrorCategory::Unsupported, "tree-transfer-unavailable", Id()}; }
         virtual bool CanProduceContent(OperationContext) const { return false; }
         virtual Result<std::unique_ptr<IWriteSession>> BeginCopy(Locator At, DestinationExpectation Expected, CopyOptions Options, OperationContext Context)
         {

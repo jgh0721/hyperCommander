@@ -453,6 +453,10 @@ namespace hc::operations
                 Candidates.insert(Candidates.end(), Queued.begin(), Queued.end());
                 bool Active = false;
                 const auto Now = std::chrono::steady_clock::now();
+                // Wake for the earliest cooperative delay instead of the poll
+                // interval. A 1-10 ms deferFor_ otherwise cost the full 25 ms:
+                // about 30 ms per file over 1 MiB and a throttled copy coordinator.
+                auto Wake = Now + std::chrono::milliseconds(25);
                 for (const auto& Candidate : Candidates)
                 {
                     auto& Snapshot = Candidate->result_.snapshot_;
@@ -476,7 +480,8 @@ namespace hc::operations
                         }
                         if (!Snapshot.deferred_) {
                             if (!Snapshot.foreground_ && !Candidate->admitted_ && Shared->admitted_ >= Shared->concurrencyLimit_) continue;
-                            if (Candidate->readyAt_ > Now || !Shared->acquire(*Candidate)) continue;
+                            if (Candidate->readyAt_ > Now) { Wake = std::min(Wake, Candidate->readyAt_); continue; }
+                            if (!Shared->acquire(*Candidate)) continue;
                             if (!Candidate->admitted_) { Candidate->admitted_ = true; if (!Snapshot.foreground_) ++Shared->admitted_; }
                         }
                     }
@@ -509,7 +514,7 @@ namespace hc::operations
                     if (Shared->stopping_ && !Active) return;
                     Lock.unlock(); flushEvents(Shared); Lock.lock();
                     // Poll external stop tokens and deadlines even while all jobs await UI.
-                    Shared->changed_.wait_for(Lock, std::chrono::milliseconds(25));
+                    Shared->changed_.wait_until(Lock, Wake);
                     continue;
                 }
             }

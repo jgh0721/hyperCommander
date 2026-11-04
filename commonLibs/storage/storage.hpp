@@ -189,6 +189,9 @@ namespace hc::storage
         // Permanent local deletion only; zero asks the endpoint for its device
         // policy. Generic callers and remote/recycle operations stay serial.
         std::size_t fileDeleteWorkers_ = 1;
+        // Whole-folder local copy/move engine. One keeps the per-item path;
+        // zero selects the endpoints' device policy. Never serialized.
+        std::size_t fileTransferWorkers_ = 1;
         // Experimental bounded native read/write overlap; stays off unless a
         // measured profile is selected. Two buffers, each <=8 MiB.
         bool nativeReadAhead_ = false;

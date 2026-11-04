@@ -71,6 +71,25 @@ target_compile_options(hc_operation_recovery_tests PRIVATE $<$<COMPILE_LANG_AND_
 add_test(NAME hc.operation_recovery COMMAND hc_operation_recovery_tests -o "${CMAKE_BINARY_DIR}/operation-recovery-$<CONFIG>.txt,txt")
 set_tests_properties(hc.operation_recovery PROPERTIES TIMEOUT 180)
 hc_enable_qt_deployment(hc_operation_recovery_tests TEST)
+# Opt-in copy/move comparison; skipped unless HC_TRANSFER_BENCH_ROOT is set.
+qt_add_executable(hc_file_transfer_bench_tests tstFileTransferBenchmark.cpp
+    ../UniqueLibs/qtJobJournal.cpp ../UniqueLibs/qtDurableOutcomes.cpp ../UniqueLibs/qtPagedStorage.cpp ../UniqueLibs/qtItemOutcomeStore.cpp
+    ../UniqueLibs/nativeWritableStorage.cpp ../UniqueLibs/storageProviders.cpp ../commonLibs/operations/fileOperation.cpp)
+target_link_libraries(hc_file_transfer_bench_tests PRIVATE hc_viewer_core Qt6::Test)
+target_include_directories(hc_file_transfer_bench_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_compile_options(hc_file_transfer_bench_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_test(NAME hc.file_transfer_bench COMMAND hc_file_transfer_bench_tests)
+set_tests_properties(hc.file_transfer_bench PROPERTIES TIMEOUT 60 LABELS "bench")
+hc_enable_qt_deployment(hc_file_transfer_bench_tests TEST)
+qt_add_executable(hc_file_transfer_tests tstFileTransfer.cpp
+    ../UniqueLibs/nativeWritableStorage.cpp ../UniqueLibs/storageProviders.cpp
+    ../commonLibs/operations/fileOperation.cpp ../commonLibs/operations/jobScheduler.cpp)
+target_include_directories(hc_file_transfer_tests PRIVATE ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_compile_options(hc_file_transfer_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_file_transfer_tests PRIVATE Qt6::Test Advapi32 Shell32 Ole32)
+add_test(NAME hc.file_transfer COMMAND hc_file_transfer_tests)
+set_tests_properties(hc.file_transfer PROPERTIES TIMEOUT 180)
+hc_enable_qt_deployment(hc_file_transfer_tests TEST)
 qt_add_executable(hc_lua_tests tstLuaRuntime.cpp)
 target_link_libraries(hc_lua_tests PRIVATE hc_script_runtime Qt6::Test)
 target_compile_options(hc_lua_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

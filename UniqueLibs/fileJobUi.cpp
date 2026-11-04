@@ -560,6 +560,11 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
         && Request.selectionRoot_.kind_ == LocatorKind::Local && Request.destination_.kind_ == LocatorKind::Local
         && !hc::settings::AppSettings().CommittedObject()["options"].toObject()["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()))
         Context.fileCopyWorkers_ = 0;
+    // 로컬 폴더 복사·이동은 폴더 단위 병렬 엔진이 처리한다. 작업 복구를 켜면
+    // 파일마다 커밋 기록이 필요하므로 항목별 경로를 유지한다.
+    if ((Request.operation_ == hc::operations::FileOperation::Copy || Request.operation_ == hc::operations::FileOperation::Move)
+        && !hc::settings::AppSettings().CommittedObject()["options"].toObject()["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()))
+        Context.fileTransferWorkers_ = 0;
     Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(hc::defaults::DefaultValue("options/delayedFileWrites").toBool());
     if (closing_) return Error{ErrorCategory::Cancelled, "window-closing"};
     const auto Label = Request.sources_.empty() ? Request.destination_.root_ : Request.sources_.front().entry_.name_;
