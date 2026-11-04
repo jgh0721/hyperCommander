@@ -30,6 +30,7 @@ namespace hc::document
             const auto Chunk = Bytes.subspan(Offset, std::min(ChunkSize, Bytes.size() - Offset));
             auto Appended = Session.Append(Chunk, Context); if (!Appended.HasValue()) return Fail(Appended.Failure());
             auto Recorded = Session.RecordSourceBytes(Chunk, Context); if (!Recorded.HasValue()) return Fail(Recorded.Failure());
+            if (Context.reportProgress_) Context.reportProgress_({std::uint64_t(Offset + Chunk.size()), 0, 0, std::uint64_t(Bytes.size()), {}});
         }
         for (;;)
         {

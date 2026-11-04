@@ -111,8 +111,19 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/imageReadingNavigator.cpp ../UniqueLibs/document/imageReadingNavigator.hpp
     ../UniqueLibs/document/imageFullscreen.cpp ../UniqueLibs/document/imageFullscreen.hpp
     ../UniqueLibs/document/documentTextCodec.hpp
+    ../UniqueLibs/document/textDocumentMetrics.cpp ../UniqueLibs/document/textDocumentMetrics.hpp
     ../UniqueLibs/document/search/documentSearchPanel.cpp ../UniqueLibs/document/search/documentSearchPanel.hpp
     ../UniqueLibs/document/documentViewPane.cpp ../UniqueLibs/document/documentViewPane.hpp
+    ../UniqueLibs/document/documentViewKind.hpp
+    ../UniqueLibs/document/documentViewMenus.cpp
+    ../UniqueLibs/document/documentStatusPickers.cpp
+    ../UniqueLibs/document/documentStatusPopup.cpp ../UniqueLibs/document/documentStatusPopup.hpp
+    ../UniqueLibs/document/documentProgressOverlay.cpp ../UniqueLibs/document/documentProgressOverlay.hpp
+    ../UniqueLibs/document/recentDocuments.cpp ../UniqueLibs/document/recentDocuments.hpp
+    ../UniqueLibs/document/recentDocumentsDialog.cpp ../UniqueLibs/document/recentDocumentsDialog.hpp
+    ../UniqueLibs/document/documentStartPage.cpp ../UniqueLibs/document/documentStartPage.hpp
+    ../UniqueLibs/document/documentRecentMenu.cpp ../UniqueLibs/document/documentRecentMenu.hpp
+    ../UniqueLibs/document/textContextMenu.cpp ../UniqueLibs/document/textContextMenu.hpp
     ../UniqueLibs/document/viewUiContribution.hpp
     ../UniqueLibs/document/workspaceChromeController.cpp ../UniqueLibs/document/workspaceChromeController.hpp
     ../UniqueLibs/document/documentThemeAdapter.cpp ../UniqueLibs/document/documentThemeAdapter.hpp

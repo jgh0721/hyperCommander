@@ -14,6 +14,9 @@
 #include "imageReadingNavigator.hpp"
 #include "imageFramePlayer.hpp"
 #include "documentTextCodec.hpp"
+#include "textContextMenu.hpp"
+#include <QMenu>
+#include <QLineEdit>
 #include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
 #include <Scintilla.h>
@@ -112,7 +115,8 @@ namespace hc::document
             if(!Last["profile"].toObject()["privateReading"].toBool() && Last["profile"].toObject()["resume"].toBool(hc::defaults::edit::EpubReading()["resume"].toBool()))RetryLocator=Last["locator"].toString();
         }
         const QSignalBlocker Block(this);
-        viewId_=Input.viewId_;encoding_=Input.encoding_;bom_=Input.bom_;eol_=Input.eol_;statusEol_=Input.eol_;
+        resetChrome();
+        viewId_=Input.viewId_;encoding_=Input.encoding_;bom_=Input.bom_;eol_=Input.eol_;statusEol_=Input.eol_;readEncoding_=Input.encoding_;readDetection_=Input.detection_;
         originalImageBytes_ = viewId_ == "image" ? Input.bytes_ : QByteArray{};
         originalImageHash_ = viewId_ == "image" ? Input.hash_ : QByteArray{};
         originalImagePath_ = viewId_ == "image" ? Input.path_ : QString{};
@@ -171,8 +175,8 @@ namespace hc::document
                     if(State["status"]=="ready" && State["readingStateLoaded"].toBool() && !State["readingStateRestoring"].toBool() && epub_->ReaderAction("locate",RetryLocator))Restore->deleteLater();
                 });Restore->start();
             }
-            contribution_={};contribution_.viewId_="epub";contribution_.menuTitle_=tr("EPUB");
-            contribution_.mainToolbarRecommended_=false;
+            contribution_={};contribution_.viewId_="epub";contribution_.menuTitle_=tr("EPUB(&B)");
+            buildEpubChrome(findChild<QToolBar*>("epubEditToolbar"));
             connect(epub_,&EpubProcessView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
             connect(epub_,&EpubProcessView::FullscreenRequested,this,&DocumentViewPane::FullscreenRequested);
             connect(epub_,&EpubProcessView::ViewStateChanged,this,&DocumentViewPane::ViewStateChanged);
@@ -207,30 +211,27 @@ namespace hc::document
         if(!toolbar_)toolbar_=new QToolBar(this);
         toolbar_->setObjectName("viewToolbar");layout()->addWidget(toolbar_);
         connect(view_, &QBaseView::ClipboardRequested, this, &DocumentViewPane::ClipboardRequested);
-        if(pdf_) {auto* Auxiliary=view_->createAuxiliaryToolBar();if(Auxiliary){layout()->addWidget(Auxiliary);pdf_->ShowAnnotationToolBar(true);}}
+        if(pdf_) {auto* Auxiliary=view_->createAuxiliaryToolBar();if(Auxiliary)layout()->addWidget(Auxiliary);}
         // A pane that is already visible would only queue the show, so commands sent at "ready" could miss the view.
         layout()->addWidget(view_);view_->show();
-        contribution_.viewId_=viewId_;contribution_.menuTitle_=viewId_=="pdf"?tr("PDF"):viewId_=="image"?tr("이미지"):tr("텍스트");
+        contribution_.viewId_=viewId_;contribution_.menuTitle_=viewId_=="pdf"?tr("PDF(&P)"):viewId_=="image"?tr("이미지(&I)"):tr("텍스트(&X)");
         contribution_.menuActions_=toolbar_->actions();
         if(text_) {
             connect(text_,&QTextView::ContentChanged,this,[this]{emit ContentChanged();});
-            connect(text_,&QTextView::EncodingRequested,this,&DocumentViewPane::EncodingRequested);
-            auto* Encoding=new QComboBox(toolbar_);Encoding->setObjectName("documentEncoding");Encoding->setAccessibleName(tr("저장 인코딩"));Encoding->addItems({"UTF-8","UTF-16LE","UTF-16BE","CP949"});Encoding->setCurrentText(encoding_);
-            toolbar_->addWidget(Encoding);
-            connect(Encoding,&QComboBox::textActivated,this,[this](const QString& Value) {
-                // Validate conversion before changing output settings. The user
-                // keeps editing if a legacy encoding cannot represent a scalar.
-                auto Bytes=EncodeDocumentText(text_->Content(),Value,bom_);
-                if(Bytes.HasValue()){encoding_=Value;emit ContentChanged();}
-                else EncodingRequested(Value);
-            });
-            auto* Bom = new QComboBox(toolbar_); Bom->setObjectName("documentBom"); Bom->setAccessibleName(tr("저장 BOM"));
-            Bom->addItem(tr("BOM 제외"), false); Bom->addItem(tr("BOM 포함"), true); Bom->setCurrentIndex(bom_ ? 1 : 0); Bom->setEnabled(encoding_ != "CP949"); toolbar_->addWidget(Bom);
-            connect(Bom, &QComboBox::activated, this, [this, Bom] { bom_ = Bom->currentData().toBool(); emit ContentChanged(); });
-            connect(Encoding, &QComboBox::textActivated, this, [this, Bom] { Bom->setEnabled(encoding_ != "CP949"); });
             connect(text_,&QTextView::statusChanged,this,&DocumentViewPane::ViewStateChanged);
+            // Encoding, line ending and indentation are status-bar pickers and 텍스트(X) submenus (no toolbar combos).
+            modeMenu_=new QMenu(contribution_.menuTitle_,this);modeMenu_->setObjectName("textModeMenu");
+            buildTextChrome(modeMenu_,true);buildTextViewItems(true);contribution_.menu_=modeMenu_;
+            // Korean body menu shared with the EPUB source editor, instead of Scintilla's built-in English popup.
+            static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_USEPOPUP,SC_POPUP_NEVER);
+            auto* Input=text_->Backend()->widget();Input->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(Input,&QWidget::customContextMenuRequested,this,[this,Input](const QPoint& Position){
+                MoveCaretForContextMenu(text_,Position);QMenu Menu(this);TextMenuOptions Options;
+                if(markdown_){Options.deleteItem_=false;Options.findInSelection_=false;}
+                FillTextContextMenu(Menu,text_,Options);Menu.exec(Input->mapToGlobal(Position));
+            });
         }
-        if(pdf_){connect(pdf_,&QPDFView::ContentChanged,this,&DocumentViewPane::ContentChanged);connect(pdf_,&QPDFView::viewStateChanged,this,&DocumentViewPane::ViewStateChanged);}
+        if(pdf_){connect(pdf_,&QPDFView::ContentChanged,this,&DocumentViewPane::ContentChanged);connect(pdf_,&QPDFView::viewStateChanged,this,&DocumentViewPane::ViewStateChanged);buildPdfChrome();}
         if(image_) {
             const auto OriginalActions=toolbar_->actions();
             reading_=new ImageReadingView(this);reading_->hide();layout()->addWidget(reading_);
@@ -240,7 +241,7 @@ namespace hc::document
             connect(Play,&QAction::triggered,animation_,[this]{if(!reading_->isHidden())reading_->ToggleAnimation();else animation_->Play(!animation_->Playing());});
             for(int Direction:{-1,1}){auto* Step=toolbar_->addAction(Direction<0?tr("이전 프레임"):tr("다음 프레임"));Step->setObjectName(Direction<0?"imageFramePrevious":"imageFrameNext");connect(Step,&QAction::triggered,animation_,[this,Direction]{if(!reading_->isHidden())reading_->StepAnimation(Direction);else animation_->Step(Direction);});}
             if(Input.bytes_.startsWith("GIF")||(Input.bytes_.startsWith("RIFF")&&Input.bytes_.mid(8,4)=="WEBP"))animation_->Load(Input.bytes_);
-            auto* Mode=new QComboBox(toolbar_);Mode->setObjectName("imageReadingMode");Mode->setAccessibleName(tr("이미지 보기 모드"));Mode->addItems({tr("일반 이미지"),tr("코믹"),tr("웹툰")});toolbar_->insertWidget(toolbar_->actions().value(0),Mode);
+            auto* Mode=new QComboBox(toolbar_);Mode->setObjectName("imageReadingMode");Mode->setAccessibleName(tr("이미지 보기 모드"));Mode->addItems({tr("일반 이미지"),tr("코믹"),tr("웹툰")});Mode->hide();
             const auto Book=Input.book_;const auto Path=Input.path_;const auto First=Input.image_;
             connect(Mode,&QComboBox::activated,this,[this,Book,Path,First,Mode](int Value){
                 if(image_->isModified()||image_->IsEditing()) {const QSignalBlocker Block(Mode);Mode->setCurrentIndex(0);hc::ui::MessageDialog::information(this,tr("읽기 모드"),tr("편집한 이미지를 저장한 후 읽기 모드로 전환하십시오."));return;}
@@ -274,7 +275,7 @@ namespace hc::document
             });
             for(auto* A:toolbar_->actions())if(A->objectName().startsWith("imageFrame")){toolbar_->removeAction(A);ReadingOptions->addAction(A);}
             const auto AllActions=toolbar_->actions();for(int I=int(ReadingOptionsStart)-2;I<AllActions.size();++I){toolbar_->removeAction(AllActions[I]);ReadingOptions->addAction(AllActions[I]);}
-            auto* OptionsButton=new QToolButton(toolbar_);OptionsButton->setText(tr("읽기 설정"));OptionsButton->setPopupMode(QToolButton::InstantPopup);OptionsButton->setMenu(ReadingOptions);toolbar_->addWidget(OptionsButton);
+            
             connect(image_,&QImageView::ContentChanged,this,&DocumentViewPane::ContentChanged);connect(image_,&QImageView::viewStateChanged,this,&DocumentViewPane::ViewStateChanged);
             auto* EditToolbar=new QToolBar(tr("이미지 편집"),this);EditToolbar->setObjectName("imageEditToolbar");
             auto* Edit=toolbar_->addAction(ToolbarIcons::iconByName("annotation-freetext"),tr("편집"));
@@ -294,9 +295,8 @@ namespace hc::document
                     connect(Action,&QAction::triggered,this,[this,Direction]{if(!reading_->isHidden())reading_->Move(Direction);else if(Direction>0)image_->nextImage();else image_->previousImage();});
                 } else {toolbar_->removeAction(Action);EditToolbar->addAction(Action);}
             }
-            auto* Fit=new QComboBox(toolbar_);Fit->setObjectName("imageReadingFit");Fit->addItems({tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤"),tr("늘림")});Fit->setCurrentIndex(1);toolbar_->addWidget(Fit);
+            auto* Fit=new QComboBox(toolbar_);Fit->setObjectName("imageReadingFit");Fit->addItems({tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤"),tr("늘림")});Fit->setCurrentIndex(1);Fit->hide();
             connect(Fit,&QComboBox::activated,this,[this](int Value){if(!reading_->isHidden())reading_->SetFit(Value);else image_->setFitMode(static_cast<QImageView::FitMode>(Value));});
-            for(int Direction:{-1,1}){auto* Zoom=toolbar_->addAction(Direction>0?tr("확대"):tr("축소"));connect(Zoom,&QAction::triggered,this,[this,Direction]{if(!reading_->isHidden())reading_->Zoom(Direction>0?1.25:.8);else if(Direction>0)image_->setZoomLevel(image_->zoomLevel()*1.25);else image_->setZoomLevel(image_->zoomLevel()*.8);});}
             auto* Gap=ReadingOptions->addAction(tr("페이지 간격"));connect(Gap,&QAction::triggered,this,[this]{bool Ok=false;const auto Value=hc::ui::InputDialog::getInt(this,tr("페이지 간격"),tr("간격 (DIP)"),reading_->State()["gap"].toInt(),0,200,1,&Ok);if(Ok)reading_->SetGap(Value);});
             auto* Bookmark=ReadingOptions->addAction(tr("책갈피 저장"));connect(Bookmark,&QAction::triggered,reading_,&ImageReadingView::Bookmark);
             auto* OpenBookmark=ReadingOptions->addAction(tr("책갈피 이동"));connect(OpenBookmark,&QAction::triggered,reading_,&ImageReadingView::OpenBookmark);
@@ -307,18 +307,21 @@ namespace hc::document
             for(const auto& Filter:ImageFilterRegistry::Filters())Filters->addItem(Filter.label_,Filter.id_);
             auto* Quality=new QSpinBox(toolbar_);Quality->setObjectName("imageExportQuality");Quality->setRange(0,100);Quality->setValue(95);Quality->setPrefix(tr("품질 "));EditToolbar->addWidget(Quality);
             connect(Quality,&QSpinBox::valueChanged,this,[this](int Value){quality_=Value;});
-            auto* Resize=EditToolbar->addAction(tr("출력 크기"));
+            auto* Resize=EditToolbar->addAction(tr("출력 크기"));Resize->setObjectName("imageOutputSize");
             connect(Resize,&QAction::triggered,this,[this] {
                 bool Accepted=false;const auto Current=image_->Content().size();
                 const int Width=hc::ui::InputDialog::getInt(this,tr("출력 크기"),tr("너비"),Current.width(),1,16384,1,&Accepted);if(!Accepted)return;
                 const int Height=hc::ui::InputDialog::getInt(this,tr("출력 크기"),tr("높이"),Current.height(),1,16384,1,&Accepted);if(Accepted)image_->ApplyResize(QSize(Width,Height),image_->DisplayFilter());
             });
-            toolbar_->insertWidget(toolbar_->actions().value(0),Filters);connect(Filters,&QComboBox::activated,image_,[this,Filters](int Index){image_->SetDisplayFilter(Filters->itemData(Index).toString());if(reading_)reading_->SetFilter(Filters->itemData(Index).toString());});
+            Filters->hide();connect(Filters,&QComboBox::activated,image_,[this,Filters](int Index){image_->SetDisplayFilter(Filters->itemData(Index).toString());if(reading_)reading_->SetFilter(Filters->itemData(Index).toString());});
             connect(reading_,&ImageReadingView::Changed,this,[this,Mode,Rtl,Cover,Split,Auto,Filters,Fit]{
                 if(!!reading_->isHidden()||!reading_->State()["pageCount"].toInt())return;const auto S=reading_->State();
                 const QSignalBlocker B1(Mode),B2(Rtl),B3(Cover),B4(Split),B5(Auto),B6(Filters),B7(Fit);
                 Mode->setCurrentIndex(S["mode"].toInt());Rtl->setChecked(S["rtl"].toBool());Cover->setChecked(S["cover"].toBool());Split->setChecked(S["split"].toBool());Auto->setChecked(S["automaticNext"].toBool());Filters->setCurrentIndex(Filters->findData(S["filter"].toString()));Fit->setCurrentIndex(S["fit"].toInt());
             });
+            buildImageChrome();
+            connect(reading_,&ImageReadingView::Changed,this,&DocumentViewPane::syncImageChrome);
+            connect(image_,&QImageView::viewStateChanged,this,&DocumentViewPane::syncImageChrome);
             if(Book){reading_->Load(Book,First);const auto State=reading_->State();const int Value=reading_->property("readingHistoryRestored").toBool() || State["modeOrigin"].toString()!="legacy"?State["mode"].toInt():1;Mode->setCurrentIndex(Value);Mode->setProperty("automaticSelection",true);emit Mode->activated(Value);Mode->setProperty("automaticSelection",false);EditToolbar->hide();if(!readingPath_.isEmpty()&&readingPath_!=Book->path_)reading_->OpenPath(readingPath_,readingEntry_);}
         }
         connect(view_,&QBaseView::OpenRequested,this,&DocumentViewPane::OpenRequested);
@@ -330,18 +333,45 @@ namespace hc::document
             markdown_->SetSourceTools(SourceBar);markdown_->SetShortcutBindings(DocumentShortcutRegistry::Bindings(shortcutBindings_));connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::ViewStateChanged);
             connect(markdown_,&MarkdownDocumentView::OpenRequested,this,&DocumentViewPane::OpenRequested);
             connect(markdown_,&MarkdownDocumentView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
-            contribution_.menuTitle_=tr("마크다운");
+            // 마크다운(M) replaces 텍스트(X); the text submenus join it for source editing.
+            delete modeMenu_;modeMenu_=nullptr;contribution_.viewActions_.clear();buildMarkdownChrome();
+            connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::syncMarkdownChrome);
         }
         contribution_.menuActions_=toolbar_->actions();applyTheme();return true;
     }
     void DocumentViewPane::updateEpubMode() {
         auto* Bar=findChild<QToolBar*>("epubEditToolbar");if(!Bar)return;const bool Editing=IsEpubEditing();
         if(auto* Read=Bar->findChild<QAction*>("epubRead")){const QSignalBlocker Block(Read);Read->setChecked(!Editing);}
-        bool After=false;for(auto* Item:Bar->actions()){if(Item->objectName()=="epubEditSeparator")After=true;if(After)Item->setVisible(Editing);}
-        contribution_.statusWidget_=Editing && epubEditor_?epubEditor_->StatusStrip():nullptr;
+        bool After=false;for(auto* Item:Bar->actions()){if(Item->objectName()=="epubEditSeparator")After=true;if(After)Item->setVisible(Editing);else if(Item->property("epubReaderItem").toBool())Item->setVisible(!Editing);}
+        const auto Kind=Editing?DocumentViewKind::EpubEdit:DocumentViewKind::EpubRead;
+        for(auto* Item:contribution_.viewActions_)if(viewKinds::Has(Item))Item->setVisible(viewKinds::Applies(Item,Kind));
     }
+    QToolBar* DocumentViewPane::PrimaryToolbar() const { return toolbar_ ? toolbar_ : findChild<QToolBar*>("epubEditToolbar"); }
     bool DocumentViewPane::MarkdownSourceVisible()const{return markdown_ && markdown_->SourceVisible();}
+    DocumentViewKind DocumentViewPane::Kind() const
+    {
+        if (IsHwp()) return DocumentViewKind::Hwp;
+        if (IsEpub()) return IsEpubEditing() ? DocumentViewKind::EpubEdit : DocumentViewKind::EpubRead;
+        if (markdown_) return markdown_->SourceVisible() ? DocumentViewKind::MarkdownEdit : DocumentViewKind::MarkdownPreview;
+        if (viewId_ == "pdf") return DocumentViewKind::Pdf;
+        if (viewId_ == "image") {
+            // A book (archive/folder) read one page at a time is still a comic; only webtoon changes the vocabulary.
+            if (reading_ && !reading_->isHidden()) return reading_->State()["mode"].toInt() == 2 ? DocumentViewKind::Webtoon : DocumentViewKind::Comic;
+            return DocumentViewKind::Image;
+        }
+        return DocumentViewKind::Text;
+    }
     bool DocumentViewPane::CanRunViewCommand(const QString& Id)const {
+        if(Id=="text.goToLine")return text_ && text_->findChild<QAction*>("text.goToLine");
+        // pdf.zoom* and image.zoom* are the keyboard commands of the shared view zoom.
+        if(Id=="pdf.zoomIn" || Id=="pdf.zoomOut" || Id=="pdf.zoomReset")return pdf_ != nullptr;
+        if(Id=="image.zoomIn" || Id=="image.zoomOut" || Id=="image.zoomReset")return image_ != nullptr;
+        if(Id=="view.zoomIn" || Id=="view.zoomOut" || Id=="view.zoomReset")return text_ || pdf_ || image_;
+        // 쪽으로 이동 · 찾기 open the status picker and the toolbar field.
+        if(Id=="pdf.goToPage" || Id=="pdf.find" || Id=="pdf.findNext" || Id=="pdf.findPrev")return pdf_ != nullptr;
+        if(Id=="image.goToPage" || Id=="image.bookmarkSave" || Id=="image.bookmarkOpen")return reading_ && !reading_->isHidden();
+        // Copy of a PDF selection, the displayed image or the current reading page.
+        if(Id=="edit.copy")return (reading_ && !reading_->isHidden()) ? !reading_->CurrentImage().isNull() : (view_ && !text_ && view_->canCopy());
         if(Id.startsWith("markdown."))return markdown_ && markdown_->CanRun(Id);
         if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return IsEpubEditing() && epubEditor_->CanRunCommand(Id);
         // Every image pane owns a reading view; a single image steps through its folder while it is hidden.
@@ -351,6 +381,27 @@ namespace hc::document
     }
     bool DocumentViewPane::RunViewCommand(const QString& Id) {
         if(!CanRunViewCommand(Id))return false;
+        if(Id=="text.goToLine"){text_->findChild<QAction*>("text.goToLine")->trigger();return true;}
+        if(Id.startsWith("pdf.zoom") || Id.startsWith("image.zoom"))return RunViewCommand(QStringLiteral("view.")+Id.mid(Id.indexOf('.')+1));
+        if(Id.startsWith("view.zoom")) {
+            const int Step=Id=="view.zoomIn"?1:Id=="view.zoomOut"?-1:0;
+            if(text_)text_->Zoom(Step);
+            else if(pdf_){if(Step)pdf_->setZoomLevel(pdf_->zoomLevel()*(Step>0?1.25:0.8));else pdf_->setZoomLevel(100);}
+            else if(reading_ && !reading_->isHidden()){if(Step)reading_->Zoom(Step>0?1.25:0.8);else reading_->SetFit(0);}
+            else if(image_){if(Step)image_->setZoomLevel(image_->zoomLevel()*(Step>0?1.25:0.8));else image_->setZoomLevel(100);}
+            emit ViewStateChanged();return true;
+        }
+        if(Id=="pdf.goToPage" || Id=="image.goToPage"){emit StatusPickerRequested("page");return true;}
+        if(Id=="pdf.find"){if(auto* Field=pdf_->findChild<QLineEdit*>("pdfSearchField")){if(!toolbar_->isVisible())toolbar_->show();Field->setFocus(Qt::ShortcutFocusReason);Field->selectAll();}return true;}
+        if(Id=="pdf.findNext"){pdf_->searchNext();return true;}
+        if(Id=="pdf.findPrev"){pdf_->searchPrev();return true;}
+        if(Id=="image.bookmarkSave"){reading_->Bookmark();return true;}
+        if(Id=="image.bookmarkOpen"){reading_->OpenBookmark();return true;}
+        if(Id=="edit.copy") {
+            if(view_ && view_->ClipboardRestricted()){emit ClipboardRequested("copy");return true;}
+            if(reading_ && !reading_->isHidden()){QGuiApplication::clipboard()->setImage(reading_->CurrentImage());return true;}
+            return view_->copySelection();
+        }
         if(Id.startsWith("markdown.")){auto* Action=markdown_->Toolbar()->findChild<QAction*>(Id);if(Action && Action->isCheckable())Action->trigger();else markdown_->Run(Id);return true;}
         if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return epubEditor_->RunCommand(Id);
         if(Id=="image.animation"){if(auto* Play=findChild<QAction*>("imageAnimation"))Play->trigger();return true;}
@@ -585,30 +636,36 @@ namespace hc::document
         const auto Add = [&](QString Id, QString Text, bool Essential = true, QString Compact = {}, QString Detail = {}, QString Command = {}) {
             if(!Text.isEmpty())Fields.append(DocumentStatusField{Id,Text,Compact,Detail,Command,Essential});
         };
+        // A field that opens its picker (OpenStatusPicker); Trailing starts the right-aligned group.
+        const auto Pick = [&](QString Id, QString Text, bool Essential = true, bool Trailing = false, QString Compact = {}, QString Detail = {}) {
+            if(Text.isEmpty())return;Fields.append(DocumentStatusField{Id,Text,Compact,Detail,{},Essential,Trailing,true});
+        };
         const auto Number = [](int Value) { return QLocale().toString(Value); };
         if(text_) {
             auto* Backend=static_cast<ScintillaQtDirectBackend*>(text_->Backend());
             const auto Position=Backend->Send(SCI_GETCURRENTPOS);
             const int Line=int(Backend->Send(SCI_LINEFROMPOSITION,Position))+1, Column=int(Backend->Send(SCI_GETCOLUMN,Position))+1;
             const auto Total=text_->isContentTruncated()?tr("부분"):Number(int(Backend->Send(SCI_GETLINECOUNT)));
-            Add("position",tr("줄 %1 / %2 · 열 %3").arg(Line).arg(Total).arg(Column),true,QString("%1:%2 / %3").arg(Line).arg(Column).arg(Total),{},"text.goToLine");
+            Pick("position",tr("줄 %1 / %2 · 열 %3").arg(Line).arg(Total).arg(Column),true,false,QString("%1:%2 / %3").arg(Line).arg(Column).arg(Total),tr("전체 %1자 · UTF-16 코드 단위").arg(Number(text_->characterCount())));
             int Selected=0;for(int I=0;I<int(Backend->Send(SCI_GETSELECTIONS));++I)Selected+=int(Backend->Send(SCI_COUNTCODEUNITS,Backend->Send(SCI_GETSELECTIONNSTART,I),Backend->Send(SCI_GETSELECTIONNEND,I)));
             if(Selected)Add("selection",tr("선택 %1자").arg(Number(Selected)),true,{},tr("선택 문자 수 · UTF-16 코드 단위"));
-            Add("encoding",encoding_+(bom_?tr(" (BOM)"):encoding_=="UTF-8"?tr(" (BOM 없음)"):QString{}),true,encoding_+(bom_?" BOM":""));
-            Add("eol",statusEol_=="MIXED"?tr("혼합 개행"):statusEol_);
             if(text_->isContentTruncated()||text_->isLimitedPreviewMode())Add("partial",tr("부분 로드"));
-            Add("language",text_->currentLanguage(),false);
-            Add("indent",text_->useTabs()?tr("탭 %1").arg(text_->tabWidth()):tr("공백 %1").arg(text_->tabWidth()),false);
+            const auto EncodingLabel=EncodingInfo(encoding_).label_.isEmpty()?encoding_:EncodingInfo(encoding_).label_;
+            Pick("language",text_->currentLanguage().isEmpty()?tr("일반 텍스트"):text_->currentLanguage(),false,true);
+            Pick("encoding",EncodingLabel+(bom_?tr(" (BOM)"):QString{}),true,false,encoding_+(bom_?" BOM":""),CanonicalEncodingName(readEncoding_)!=CanonicalEncodingName(encoding_)?tr("다음 저장부터 %1(으)로 변환").arg(EncodingLabel):QString{});
+            Pick("eol",statusEol_=="MIXED"?tr("혼합"):statusEol_);
+            Pick("indent",text_->useTabs()?tr("탭 %1").arg(text_->tabWidth()):tr("공백 %1").arg(text_->tabWidth()),false);
             if(!text_->isReadOnly())Add("insert",Backend->Send(SCI_GETOVERTYPE)?tr("덮어쓰기"):tr("삽입"),false);
-            Add("wrap",text_->isWordWrapEnabled()?tr("줄 바꿈 켜짐"):tr("줄 바꿈 꺼짐"),false,{},{},"status.wrap");
-            Add("characters",tr("전체 %1자").arg(Number(text_->characterCount())),false,{},tr("현재 로드된 문자 수 · UTF-16 코드 단위"));
         } else if(pdf_) {
-            Add("page",tr("쪽 %1 / %2").arg(pdf_->currentPage()+1).arg(pdf_->totalPageCount()),true,{}, {},"status.page");
+            Pick("page",tr("쪽 %1 / %2").arg(pdf_->currentPage()+1).arg(pdf_->totalPageCount()));
             if(pdf_->totalSearchResultCount()>0)Add("search",tr("찾기 %1 / %2").arg(pdf_->currentSearchResultIndex()+1).arg(pdf_->totalSearchResultCount()));
-            Add("zoom",QString::number(pdf_->zoomLevel(),'f',0)+"%",true,{},{},"status.zoom");
             const auto Fit=pdf_->zoomMode();
-            Add("fit",Fit==QPDFView::FitWidth?tr("너비 맞춤"):Fit==QPDFView::FitHeight?tr("높이 맞춤"):Fit==QPDFView::FitPage?tr("쪽 맞춤"):tr("사용자 배율"),false);
-            Add("rotation",tr("회전 %1°").arg(int(pdf_->rotationAngle())),false);
+            const auto FitText=Fit==QPDFView::FitWidth?tr("너비 맞춤"):Fit==QPDFView::FitHeight?tr("높이 맞춤"):Fit==QPDFView::FitPage?tr("쪽 맞춤"):QString{};
+            const auto ZoomText=QString::number(pdf_->zoomLevel(),'f',0)+" %";
+            Pick("zoom",FitText.isEmpty()?ZoomText:ZoomText+" · "+FitText,true,true,ZoomText);
+            const QStringList Layouts{tr("한 쪽"),tr("연속 스크롤"),tr("두 쪽")};
+            Pick("pdfLayout",Layouts.value(int(pdf_->viewMode()))+(pdf_->viewMode()==QPDFView::TwoPageSpread?(pdf_->spreadReadingDirection()==QPDFView::RightToLeft?tr(" · 우 → 좌"):tr(" · 좌 → 우")):QString{}),false);
+            Pick("rotation",tr("회전 %1°").arg(int(pdf_->rotationAngle())),false);
             const auto PageSize=pdf_->CurrentPageSize();
             if(PageSize.isValid())Add("pageSize",QString("%1 × %2 mm").arg(PageSize.width()*25.4/72,0,'f',1).arg(PageSize.height()*25.4/72,0,'f',1),false);
             Add("format","PDF",false);
@@ -618,16 +675,17 @@ namespace hc::document
             const auto First=(Presented?State["presentedPage"].toInt():State["page"].toInt())+1;
             const auto Last=(Presented?State["presentedLastPage"].toInt():State["lastPage"].toInt(State["page"].toInt()))+1;
             const auto Range=Last>First?QString("%1–%2").arg(First).arg(Last):QString::number(First);
-            Add("page",(Webtoon?tr("이미지 %1 / %2"):tr("쪽 %1 / %2")).arg(Range).arg(State["discoveringPages"].toBool()?tr("확인 중"):QString::number(State["pageCount"].toInt())),true,{},{},"status.page");
-            if(Webtoon)Add("progress",tr("현재 이미지 %1%").arg(qRound(State["relative"].toDouble()*100)));
-            else Add("direction",State["rtl"].toBool()?tr("오른쪽 → 왼쪽"):tr("왼쪽 → 오른쪽"),true,State["rtl"].toBool()?tr("← 읽기"):tr("→ 읽기"));
-            const QStringList Fits{tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤")};
-            Add("fit",Fits.value(State["fit"].toInt()),true);
+            const auto Count=State["discoveringPages"].toBool()?tr("확인 중"):QString::number(State["pageCount"].toInt());
+            if(Webtoon)Pick("page",tr("이미지 %1 / %2 · %3 %").arg(Range,Count).arg(qRound(State["relative"].toDouble()*100)),true,false,QString("%1 / %2").arg(Range,Count));
+            else Pick("page",tr("쪽 %1 / %2").arg(Range,Count));
+            if(State["split"].toBool())Add("split",tr("분할 %1").arg(State["part"].toInt()+1),false);
             if(State["private"].toBool())Add("private",tr("읽기 기록 저장 안 함"));
             Add("pageName",QDir::toNativeSeparators(State[Presented?"presentedName":"pageName"].toString()),false);
-            Add("readingMode",Webtoon?tr("세로 연속"):State["mode"].toInt()==ImageReadingView::Comic?tr("코믹"):tr("한 쪽"),false);
-            if(Webtoon)Add("gap",tr("간격 %1 px").arg(State["gap"].toInt()),false);
-            if(State["split"].toBool())Add("split",tr("분할 %1").arg(State["part"].toInt()+1),false);
+            const auto Direction=State["rtl"].toBool()?tr("오른쪽 → 왼쪽"):tr("왼쪽 → 오른쪽");
+            if(Webtoon)Pick("webtoon",tr("세로 연속 · 간격 %1 px").arg(State["gap"].toInt()),true,true,tr("세로 연속"));
+            else Pick("spread",(State["mode"].toInt()==ImageReadingView::Comic?tr("두 쪽"):tr("한 쪽"))+" · "+Direction,true,true,State["rtl"].toBool()?tr("← 읽기"):tr("→ 읽기"));
+            const QStringList Fits{tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤")};
+            Pick("fit",Fits.value(State["fit"].toInt()));
             Add("bookmark",State["bookmark"].toObject().isEmpty()?tr("책갈피 없음"):tr("책갈피 있음"),false);
             const auto Error=State["pageError"].toString().isEmpty()?State["error"].toString():State["pageError"].toString();
             if(!Error.isEmpty())Add("viewError",tr("⚠ 현재 이미지 표시 실패"),true,{},Error);
@@ -636,17 +694,21 @@ namespace hc::document
         } else if(image_) {
             const auto Size=image_->Content().size();
             if(Size.isValid())Add("dimensions",QString("%1 × %2 px").arg(Size.width()).arg(Size.height()),true,QString("%1×%2").arg(Size.width()).arg(Size.height()));
-            Add("zoom",QString::number(image_->displayScalePercent(),'f',0)+"%",true,{},{},"status.zoom");
+            const QStringList Fits{tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤"),tr("늘림")};
+            const auto ZoomText=QString::number(image_->displayScalePercent(),'f',0)+" %";
+            Pick("fit",ZoomText+" · "+Fits.value(int(image_->fitMode())),true,true,ZoomText);
+            Pick("imageMode",tr("일반 이미지"),false);
+            const auto Filter=image_->DisplayFilter();QString FilterText=tr("자동");
+            for(const auto& Item:ImageFilterRegistry::Filters())if(Item.id_==Filter)FilterText=Item.label_;
+            Pick("resample",tr("보기 품질: %1").arg(FilterText),false);
             if(animation_&&animation_->Supported()) {
                 Add("playing",animation_->Playing()?tr("재생 중"):tr("일시정지"),true,{},{},"status.play");
                 if(animation_->CurrentFrame()>=0)Add("frame",animation_->FrameCount()>0?tr("프레임 %1 / %2").arg(animation_->CurrentFrame()+1).arg(animation_->FrameCount()):tr("프레임 %1").arg(animation_->CurrentFrame()+1));
             }
             const auto Selection=image_->SelectionSize();
             if(!Selection.isEmpty())Add("selection",tr("선택 %1 × %2 px").arg(Selection.width()).arg(Selection.height()),true,QString("%1×%2 px").arg(Selection.width()).arg(Selection.height()));
-            Add("format",image_->imageFormatName(),false);
-            const QStringList Fits{tr("원본 크기"),tr("창에 맞춤"),tr("너비 맞춤"),tr("높이 맞춤"),tr("늘림")};
-            Add("fit",Fits.value(int(image_->fitMode())),false);
-            Add("color",image_->imageColorDescription(),false);
+            const auto Color=image_->imageColorDescription();
+            Add("format",image_->imageFormatName()+(Color.isEmpty()?QString{}:" · "+Color),false);
             if(!image_->RenderError().isEmpty())Add("viewError",tr("⚠ 이미지 표시 실패"),true,{},image_->RenderError());
         } else if(IsEpubEditing()&&epubEditor_) return epubEditor_->StatusFields();
         else if(epub_) {

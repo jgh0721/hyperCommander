@@ -206,7 +206,6 @@ int main(int Argc, char** Argv)
             for(const auto& Item : Documents) {
                 const auto Record = Item.toObject();
                 if(Record["view"].toObject()["viewId"] != "epub") continue;
-                const auto View=Record["view"].toObject();
                 if(*EditPending && !Record["loading"].toBool() && Record["error"].toString().isEmpty()) {
                     *EditPending=false;const auto Id=Record["documentId"].toString();
                     QTimer::singleShot(0,Current,[Current,Id,EpubLocator,EpubChapter]{
@@ -214,12 +213,8 @@ int main(int Argc, char** Argv)
                         if(Result.contains("error"))Current->ShowShellError(QObject::tr("EPUB 편집 모드를 열지 못했습니다: %1").arg(Result["error"].toString()));
                     });
                 }
-                const auto State = !Record["error"].toString().isEmpty() ? QObject::tr("열기 실패")
-                    : View["epubMode"]=="edit" ? QObject::tr("EPUB 편집")
-                    : View["ready"].toBool() ? QObject::tr("읽기 전용") : QObject::tr("불러오는 중");
-                Current->setWindowTitle(Record["displayName"].toString() + " — " + State + " — HyperEditor"); return;
+                return;
             }
-            Current->setWindowTitle("HyperEditor");
         });
         Current->closed_=[&App,&Windows,Current]{QTimer::singleShot(0,&App,[&Windows,Current]{
             std::erase_if(Windows,[Current](const auto& Window){return Window.get()==Current;});

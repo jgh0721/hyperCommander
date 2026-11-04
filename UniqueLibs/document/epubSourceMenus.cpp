@@ -4,6 +4,7 @@
 #include "core/AppSettings.h"
 #include "epubResourceTree.hpp"
 #include "epubProcessView.hpp"
+#include "textContextMenu.hpp"
 #include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
 #include <QAction>
@@ -58,17 +59,10 @@ void EpubSourceEditor::showSourceMenu(const QPoint& Position) {
     if(!Link.isEmpty()){Menu.addAction(tr("%1 열기").arg(QFileInfo(Link).fileName()),action("epubOpenLink")->shortcut(),this,[this]{openLink();});if(mediaOf(Link).startsWith("image/"))Menu.addAction(tr("이미지 속성…"),this,[this,Link]{inspectImage(Link);});}
     if(Selection){auto* Wrap=Menu.addMenu(tr("태그로 감싸기"));for(const auto& Tag:{"em","strong","span","a","ruby"})Wrap->addAction(action(QString("epubWrap_")+Tag));Wrap->addSeparator();Wrap->addAction(action("epubWrap_custom"));Wrap->setEnabled(action("epubWrap_em")->isEnabled());}
     Menu.addAction(action("epubLocateSource"));if(Selection)Menu.addAction(action("epubFindAll"));Menu.addSeparator();
-    Menu.addAction(tr("실행 취소"),documentMenuShortcut("edit.undo"),this,&EpubSourceEditor::Undo)->setEnabled(CanUndo());Menu.addAction(tr("다시 실행"),documentMenuShortcut("edit.redo"),this,&EpubSourceEditor::Redo)->setEnabled(CanRedo());Menu.addSeparator();
-    const bool Writable=!sourceReadOnly_;
-    Menu.addAction(tr("잘라내기"),documentMenuShortcut("edit.cut"),this,[Backend]{Backend->Send(SCI_CUT);})->setEnabled(Writable && Selection);
-    Menu.addAction(tr("복사"),documentMenuShortcut("edit.copy"),this,[Backend]{Backend->Send(SCI_COPY);})->setEnabled(Selection);
-    Menu.addAction(tr("붙여넣기"),documentMenuShortcut("edit.paste"),this,[Backend]{Backend->Send(SCI_PASTE);})->setEnabled(Writable && Backend->Send(SCI_CANPASTE));
-    Menu.addAction(tr("삭제"),this,[Backend]{Backend->Send(SCI_CLEAR);})->setEnabled(Writable && Selection);
-    Menu.addAction(tr("모두 선택"),documentMenuShortcut("edit.selectAll"),this,[Backend]{Backend->Send(SCI_SELECTALL);});Menu.addSeparator();
-    Menu.addAction(tr("찾기…"),this,[this]{text_->showFindBar(false);});Menu.addAction(tr("바꾸기…"),this,[this]{text_->showFindBar(true);})->setEnabled(Writable);
-    Menu.addAction(tr("줄로 이동…"),this,[this]{if(auto* Go=text_->findChild<QAction*>("text.goToLine"))Go->trigger();});Menu.addSeparator();
-    auto* Fold=Menu.addMenu(tr("접기"));Fold->addAction(tr("전체 접기"),this,[this]{text_->FoldAll(true);});Fold->addAction(tr("전체 펼치기"),this,[this]{text_->FoldAll(false);});
-    auto* Wrap=Menu.addAction(tr("자동 줄바꿈"),this,[this](bool On){text_->setWordWrap(On);});Wrap->setCheckable(true);Wrap->setChecked(text_->isWordWrapEnabled());
+    // The shared body menu (textContextMenu.cpp) with the editor's document-wide undo history.
+    TextMenuOptions Options;Options.findInSelection_=false;Options.selectAllText_=tr("모두 선택");Options.readOnly_=sourceReadOnly_;
+    Options.canUndo_=[this]{return CanUndo();};Options.canRedo_=[this]{return CanRedo();};Options.undo_=[this]{Undo();};Options.redo_=[this]{Redo();};
+    FillTextContextMenu(Menu,text_,Options);
     Menu.exec(SourceInput()->mapToGlobal(Position));
 }
 void EpubSourceEditor::showTabMenu(const QPoint& Position) {

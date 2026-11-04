@@ -39,6 +39,7 @@
 #include <QFontComboBox>
 #include <QInputDialog>
 #include <QLineEdit>
+#include <QToolButton>
 #include <QFileInfo>
 #include <QFile>
 #include <QMessageBox>
@@ -89,6 +90,27 @@ public:
 }
 
 // ═══════════════════════════════════════════════════════════
+namespace
+{
+    // Keeps the thumbnail grid as wide as the list viewport so every page sits in the centre.
+    class ThumbnailColumn final : public QObject
+    {
+    public:
+        explicit ThumbnailColumn(QListWidget* List) : QObject(List), list_(List) {}
+    protected:
+        bool eventFilter(QObject* Watched, QEvent* Event) override
+        {
+            if (Event->type() == QEvent::Resize && Watched == list_->viewport()) {
+                const int Height = list_->iconSize().height() + list_->fontMetrics().height() + 16;
+                list_->setGridSize(QSize(qMax(list_->iconSize().width() + 8, list_->viewport()->width()), Height));
+            }
+            return QObject::eventFilter(Watched, Event);
+        }
+    private:
+        QListWidget* list_;
+    };
+}
+
 QPDFView::QPDFView(QWidget* parent)
     : QBaseView(parent)
     , m_formManager(new PDFFormManager(this))
@@ -137,6 +159,15 @@ void QPDFView::setupUI()
 
     // 사이드바 탭 (썸네일 + 목차)
     m_thumbList->setIconSize(QSize(120, 160));
+    // One centred column: icon mode with a grid as wide as the list, the page number under each page.
+    m_thumbList->setViewMode(QListView::IconMode);
+    m_thumbList->setFlow(QListView::TopToBottom);
+    m_thumbList->setWrapping(false);
+    m_thumbList->setMovement(QListView::Static);
+    m_thumbList->setResizeMode(QListView::Adjust);
+    m_thumbList->setUniformItemSizes(true);
+    m_thumbList->setObjectName(QStringLiteral("pdfThumbnails"));
+    m_thumbList->viewport()->installEventFilter(new ThumbnailColumn(m_thumbList));
     m_bookmarkTree->setHeaderHidden(true);
     m_sidebarTabs->addTab(m_thumbList, tr("썸네일"));
     m_sidebarTabs->addTab(m_bookmarkTree, tr("목차"));
@@ -1046,7 +1077,7 @@ void QPDFView::updateSidebar()
 void QPDFView::startThumbnailGeneration()
 {
     if(!m_thumbList)return;m_thumbList->clear();thumbnailsDone_.clear();
-    for(int i=0;i<m_pageCount;++i)m_thumbList->addItem(tr("Page %1").arg(i+1));
+    for(int i=0;i<m_pageCount;++i){auto* item=new QListWidgetItem(QString::number(i+1),m_thumbList);item->setTextAlignment(Qt::AlignHCenter|Qt::AlignTop);item->setToolTip(tr("%1쪽").arg(i+1));}
     if(m_thumbnailTimer)m_thumbnailTimer->start(30);
 }
 void QPDFView::generateNextThumbnail()
@@ -1634,125 +1665,71 @@ int QPDFView::pageCount() const { return m_pageCount; }
 QToolBar* QPDFView::createToolBar()
 {
     auto* tb = QBaseView::createToolBar();
-
+    // Page number, zoom value, page layout and rotation are status bar pickers; the toolbar keeps actions.
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.previousPage"),
             &QAction::triggered, this, &QPDFView::previousPage);
-
-    auto* pageBox = new ReversedPageSpinBox(tb);
-    pageBox->setRange(1, qMax(1, m_pageCount));
-    pageBox->setValue(m_currentPage + 1);
-    connect(pageBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v){ goToPage(v-1); });
-    connect(this, &QPDFView::pageChanged, pageBox, [pageBox](int cur, int total){
-        pageBox->setMaximum(total); pageBox->setValue(cur);
-    });
-    tb->addWidget(pageBox);
-
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.nextPage"),
             &QAction::triggered, this, &QPDFView::nextPage);
     tb->addSeparator();
 
-    auto* zoomCombo = new QComboBox(tb);
-    zoomCombo->setEditable(true);
-    for (int z : {50, 75, 100, 125, 150, 200, 300})
-        zoomCombo->addItem(QStringLiteral("%1%").arg(z), z);
-    zoomCombo->setCurrentText(QStringLiteral("%1%").arg(static_cast<int>(m_zoomLevel)));
-    connect(zoomCombo, &QComboBox::currentTextChanged, this, [this](const QString& t){
-        QString num = t; num.remove('%');
-        bool ok; qreal val = num.toDouble(&ok);
-        if (ok) setZoomLevel(val);
-    });
-    tb->addWidget(zoomCombo);
-
+    connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.zoomOut"), &QAction::triggered, this, [this] { setZoomLevel(m_zoomLevel / 1.25); });
+    connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.zoomIn"), &QAction::triggered, this, [this] { setZoomLevel(m_zoomLevel * 1.25); });
     auto* fitModeGroup = new QActionGroup(tb);
     fitModeGroup->setExclusive(true);
-
     auto* fitWidthAction = MV_CREATE_TOOLBAR_ACTION(tb, "pdf.fitWidth");
     auto* fitPageAction = MV_CREATE_TOOLBAR_ACTION(tb, "pdf.fitPage");
     fitModeGroup->addAction(fitWidthAction);
     fitModeGroup->addAction(fitPageAction);
     fitWidthAction->setChecked(m_zoomMode == FitWidth);
     fitPageAction->setChecked(m_zoomMode == FitPage);
-
     connect(fitWidthAction, &QAction::triggered, this, [this]{ setZoomMode(FitWidth); });
     connect(fitPageAction, &QAction::triggered, this, [this]{ setZoomMode(FitPage); });
     connect(this, &QPDFView::viewStateChanged, fitWidthAction, [this, fitWidthAction, fitPageAction] {
-        const bool widthChecked = m_zoomMode == FitWidth;
-        const bool pageChecked = m_zoomMode == FitPage;
-        fitWidthAction->setChecked(widthChecked);
-        fitPageAction->setChecked(pageChecked);
+        // A custom zoom leaves both unchecked; an exclusive group would keep the last one.
+        fitWidthAction->setChecked(m_zoomMode == FitWidth);
+        fitPageAction->setChecked(m_zoomMode == FitPage);
+        if (m_zoomMode != FitWidth && m_zoomMode != FitPage) {
+            fitWidthAction->actionGroup()->setExclusive(false);
+            fitWidthAction->setChecked(false); fitPageAction->setChecked(false);
+            fitWidthAction->actionGroup()->setExclusive(true);
+        }
     });
     tb->addSeparator();
 
-    auto* viewModeCombo = new QComboBox(tb);
-    viewModeCombo->addItem(tr("단일 페이지"), SinglePage);
-    viewModeCombo->addItem(tr("연속 스크롤"), ContinuousScroll);
-    viewModeCombo->addItem(tr("2장 보기"), TwoPageSpread);
-    viewModeCombo->setCurrentIndex(viewModeCombo->findData(m_viewMode));
-    connect(viewModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [this, viewModeCombo](int index) {
-                const QVariant data = viewModeCombo->itemData(index);
-                if (data.isValid())
-                    setViewMode(static_cast<ViewMode>(data.toInt()));
-            });
-    tb->addWidget(new QLabel(tr(" 보기: "), tb));
-    tb->addWidget(viewModeCombo);
-
-    auto* directionCombo = new QComboBox(tb);
-    directionCombo->addItem(tr("좌→우"), LeftToRight);
-    directionCombo->addItem(tr("우→좌"), RightToLeft);
-    directionCombo->setCurrentIndex(directionCombo->findData(m_spreadReadingDirection));
-    connect(directionCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [this, directionCombo](int index) {
-                const QVariant data = directionCombo->itemData(index);
-                if (data.isValid())
-                    setSpreadReadingDirection(static_cast<SpreadReadingDirection>(data.toInt()));
-            });
-
-    auto* rotationCombo = new QComboBox(tb);
-    rotationCombo->addItem(tr("0°"), Rotate0);
-    rotationCombo->addItem(tr("90°"), Rotate90);
-    rotationCombo->addItem(tr("180°"), Rotate180);
-    rotationCombo->addItem(tr("270°"), Rotate270);
-    rotationCombo->setCurrentIndex(rotationCombo->findData(m_rotationAngle));
-    connect(rotationCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [this, rotationCombo](int index) {
-                const QVariant data = rotationCombo->itemData(index);
-                if (data.isValid())
-                    setRotationAngle(static_cast<RotationAngle>(data.toInt()));
-            });
-    connect(this, &QPDFView::viewStateChanged, tb, [this, directionCombo, rotationCombo] {
-        {
-            const QSignalBlocker blocker(directionCombo);
-            directionCombo->setCurrentIndex(directionCombo->findData(m_spreadReadingDirection));
-            directionCombo->setEnabled(m_viewMode == TwoPageSpread);
-        }
-        {
-            const QSignalBlocker blocker(rotationCombo);
-            rotationCombo->setCurrentIndex(rotationCombo->findData(m_rotationAngle));
-        }
+    connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.rotateLeft"), &QAction::triggered, this, [this] {
+        setRotationAngle(static_cast<RotationAngle>((int(m_rotationAngle) + 270) % 360));
     });
-    directionCombo->setEnabled(m_viewMode == TwoPageSpread);
-    tb->addWidget(new QLabel(tr(" 방향: "), tb));
-    tb->addWidget(directionCombo);
-    tb->addWidget(new QLabel(tr(" 회전: "), tb));
-    tb->addWidget(rotationCombo);
+    connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.rotateRight"), &QAction::triggered, this, [this] {
+        setRotationAngle(static_cast<RotationAngle>((int(m_rotationAngle) + 90) % 360));
+    });
     tb->addSeparator();
 
-    // 검색
     auto* searchEdit = new QLineEdit(tb);
-    searchEdit->setPlaceholderText(tr("🔍 검색..."));
-    searchEdit->setMaximumWidth(180);
+    searchEdit->setObjectName(QStringLiteral("pdfSearchField"));
+    searchEdit->setPlaceholderText(tr("문서에서 찾기"));
+    searchEdit->setAccessibleName(tr("문서에서 찾기"));
+    searchEdit->setClearButtonEnabled(true);
+    searchEdit->setMaximumWidth(200);
     connect(searchEdit, &QLineEdit::returnPressed, this, [this, searchEdit]{
         searchText(searchEdit->text());
     });
     tb->addWidget(searchEdit);
-    connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.searchNext"),
-            &QAction::triggered, this, &QPDFView::searchNext);
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.searchPrev"),
             &QAction::triggered, this, &QPDFView::searchPrev);
-    tb->addSeparator();
+    connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.searchNext"),
+            &QAction::triggered, this, &QPDFView::searchNext);
 
+    // Panel toggles sit at the right edge with their names (prototype '패널' · '주석').
+    auto* spacer = new QWidget(tb);
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    tb->addWidget(spacer);
+    const auto named = [tb](QAction* action, const QString& text) {
+        action->setText(text);
+        if (auto* button = qobject_cast<QToolButton*>(tb->widgetForAction(action)))
+            button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    };
     auto* tocAction = MV_CREATE_TOOLBAR_ACTION(tb, "pdf.toggleToc");
+    named(tocAction, tr("패널"));
     tocAction->setChecked(m_sidebarPos != SidebarHidden);
     connect(this, &QPDFView::viewStateChanged, tocAction, [this, tocAction] {
         tocAction->setChecked(m_sidebarPos != SidebarHidden);
@@ -1761,8 +1738,8 @@ QToolBar* QPDFView::createToolBar()
         setSidebarPosition(m_sidebarPos == SidebarHidden ? SidebarLeft : SidebarHidden);
     });
 
-    tb->addSeparator();
     auto* annotationToolsAction = MV_CREATE_TOOLBAR_ACTION(tb, "pdf.toggleAnnotations");
+    named(annotationToolsAction, tr("주석"));
     annotationToolsAction->setChecked(m_annotationToolBarVisible);
     connect(annotationToolsAction, &QAction::triggered, this, [this](bool checked) {
         setAnnotationToolBarVisible(checked);

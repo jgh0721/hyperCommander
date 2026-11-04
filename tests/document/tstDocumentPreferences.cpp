@@ -436,8 +436,9 @@ private slots:
         QTextView Text; auto* Toolbar = Text.createToolBar();
         Text.LoadContent(QString::fromUtf8(Source), "compile.CMD", "UTF-8");
         QCOMPARE(Text.currentLanguage(), QString("Batch"));
-        QCOMPARE(Toolbar->findChild<QComboBox*>("textLanguage")->currentText(), QString("Batch"));
-        Text.setLanguage("Python"); QCOMPARE(Toolbar->findChild<QComboBox*>("textLanguage")->currentText(), QString("Python"));
+        // The language is a status bar picker and a 텍스트(X) submenu, not a toolbar combo (editor chrome plan).
+        QVERIFY(!Toolbar->findChild<QComboBox*>("textLanguage"));
+        Text.setLanguage("Python"); QCOMPARE(Text.currentLanguage(), QString("Python"));
     }
     void textColorTabsAndPersistence()
     {
@@ -793,6 +794,7 @@ private slots:
         if (hosted && !Theme.isInstalled()) { QCOMPARE(qApp->style(), ApplicationStyle); QCOMPARE(qApp->styleSheet(), ApplicationSheet); }
         auto* Toolbar = Window.findChild<QToolBar*>("mainToolbar"); QVERIFY(Toolbar);
         for (auto* Action : Toolbar->actions()) {
+            if (Action->isSeparator()) continue;  // the prototype groups the common actions with separators
             QVERIFY2(!Action->icon().isNull(), qPrintable(Action->objectName()));
             QVERIFY(Action->isIconVisibleInMenu()); QVERIFY(!Action->text().isEmpty());
         }

@@ -120,7 +120,22 @@ namespace hc::defaults::edit
             {"pdf.pageNext", QObject::tr("다음 쪽"), "PgDown", "pdf"},
             {"pdf.pagePrevious", QObject::tr("이전 쪽"), "PgUp", "pdf"},
             {"pdf.first", QObject::tr("첫 쪽"), "Home", "pdf"},
-            {"pdf.last", QObject::tr("마지막 쪽"), "End", "pdf"}
+            {"pdf.last", QObject::tr("마지막 쪽"), "End", "pdf"},
+            {"pdf.goToPage", QObject::tr("쪽으로 이동"), "Ctrl+G", "pdf"},
+            {"pdf.find", QObject::tr("PDF 찾기"), "Ctrl+F", "pdf"},
+            {"pdf.findNext", QObject::tr("다음 검색 결과"), "F3", "pdf"},
+            {"pdf.findPrev", QObject::tr("이전 검색 결과"), "Shift+F3", "pdf"},
+            {"image.goToPage", QObject::tr("쪽 · 이미지로 이동"), "Ctrl+G", "image.comic"},
+            {"image.bookmarkSave", QObject::tr("책갈피 저장"), "Ctrl+D", "image.comic"},
+            {"image.bookmarkOpen", QObject::tr("책갈피로 이동"), "", "image.comic"},
+            // Zoom follows the active view (text, PDF, image, Markdown preview, EPUB reading text size).
+            // Zoom keys belong to the views that zoom; in text the editor keeps its own zoom keys (reserved).
+            {"pdf.zoomIn", QObject::tr("PDF 확대"), "Ctrl++", "pdf"},
+            {"pdf.zoomOut", QObject::tr("PDF 축소"), "Ctrl+-", "pdf"},
+            {"pdf.zoomReset", QObject::tr("PDF 원래 크기"), "Ctrl+0", "pdf"},
+            {"image.zoomIn", QObject::tr("이미지 확대"), "Ctrl++", "image"},
+            {"image.zoomOut", QObject::tr("이미지 축소"), "Ctrl+-", "image"},
+            {"image.zoomReset", QObject::tr("이미지 원래 크기"), "Ctrl+0", "image"}
         };
     }
 
@@ -162,7 +177,9 @@ namespace hc::defaults::edit
             {"imageView/comic/coverAlone", true}, {"imageView/fullscreenRemember", true},
             {"imageView/fullscreenPinTop", false}, {"imageView/fullscreenPinBottom", false},
             {"imageView/fullscreenHideCursor", true}, {"imageView/normalMaximized", false},
-            {"imageView/fullscreen", false}
+            {"imageView/fullscreen", false},
+            {"textView/detectIndent", true},
+            {"recent/enabled", true}, {"recent/menuCount", 9}
         };
         return Values;
     }
@@ -175,7 +192,7 @@ namespace hc::defaults::edit
     inline QJsonObject Workspace()
     {
         return {{"schemaVersion", 1}, {"themeMode", "product"}, {"mainMenuMode", "recommended"},
-            {"mainToolbarMode", "recommended"}, {"viewOverrides", QJsonObject{}}};
+            {"mainToolbarMode", "recommended"}, {"statusBarMode", "recommended"}, {"toolbarLayout", "single"}, {"viewOverrides", QJsonObject{}}};
     }
 
     // Settings controls use full JSON paths; runtime AppSettings uses relative view paths.

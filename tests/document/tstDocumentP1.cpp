@@ -369,7 +369,9 @@ private slots:
         DWORD Affinity = ~DWORD(0);
         QVERIFY(GetWindowDisplayAffinity(reinterpret_cast<HWND>(Widget.winId()), &Affinity));
         QCOMPARE(Affinity, DWORD(WDA_NONE));
-        auto* Menu=Bar->actions().last()->menu(); QVERIFY(Menu);
+        // The mode menu (텍스트(X)) sits before 도구(T), as in the chrome prototype.
+        const auto ModeAction=[Bar]()->QAction*{for(auto* Item:Bar->actions())if(Item->menu()&&Item->menu()->objectName()=="textModeMenu")return Item;return nullptr;};
+        QVERIFY(ModeAction()); auto* Menu=ModeAction()->menu(); QVERIFY(Menu);
         auto* Toolbar=Pane->findChild<QToolBar*>("viewToolbar"); QVERIFY(Toolbar);
         QPointer<QMenu> Stable=Menu; QAction* Lock=nullptr; QAction* MenuLock=nullptr;
         int Controls=0;
@@ -400,16 +402,16 @@ private slots:
         QCOMPARE(Pane->Content(),QString("base typed")); QVERIFY(Document(Widget,Id)["dirty"].toBool());
         QInputMethodEvent Commit; Commit.setCommitString(QString::fromUtf8(" 한글"));
         QApplication::sendEvent(Input,&Commit); QCOMPARE(Pane->Content(),QString::fromUtf8("base typed 한글"));
-        QCOMPARE(Stable.data(),Bar->actions().last()->menu());
+        QCOMPARE(Stable.data(),ModeAction()->menu());
         MenuLock->trigger(); QVERIFY(Lock->isChecked()); QVERIFY(Pane->ViewState()["readOnly"].toBool());
         QTest::keyClicks(Input,"blocked"); QCOMPARE(Pane->Content(),QString::fromUtf8("base typed 한글"));
         Lock->trigger(); QVERIFY(!MenuLock->isChecked()); QTest::keyClicks(Input,"!");
         QCOMPARE(Pane->Content(),QString::fromUtf8("base typed 한글!"));
-        Widget.Checkpoint(); QTRY_VERIFY(Widget.IsIdle()); QCOMPARE(Stable.data(),Bar->actions().last()->menu());
+        Widget.Checkpoint(); QTRY_VERIFY(Widget.IsIdle()); QCOMPARE(Stable.data(),ModeAction()->menu());
         auto* FileMenu=Bar->actions().first()->menu(); QVERIFY(FileMenu);
         QTest::mouseClick(Bar,Qt::LeftButton,Qt::NoModifier,Bar->actionGeometry(Bar->actions().first()).center());
         QTRY_VERIFY(FileMenu->isVisible());
-        const auto Hover=Bar->actionGeometry(Bar->actions().last()).center();
+        const auto Hover=Bar->actionGeometry(ModeAction()).center();
         QMouseEvent Move(QEvent::MouseMove,Hover,Bar->mapToGlobal(Hover),Qt::NoButton,Qt::NoButton,Qt::NoModifier);
         QApplication::sendEvent(Bar,&Move);
         QTRY_VERIFY(Menu->isVisible()); QVERIFY(!FileMenu->isVisible());

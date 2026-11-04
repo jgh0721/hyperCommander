@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "commonLibs/document/documentSaveCoordinator.hpp"
 #include "commonLibs/document/documentTypes.hpp"
+#include "documentTextCodec.hpp"
 #include <QByteArray>
 #include <QString>
 #include <QImage>
@@ -18,6 +19,8 @@ namespace hc::document
         std::shared_ptr<ImageBook> book_;
         QString viewId_ = "text", encoding_ = "UTF-8";
         bool bom_ = false;
+        // How encoding_ was chosen (text only): detected, or named by "다른 인코딩으로 다시 읽기".
+        TextDetection detection_ = TextDetection::Explicit;
         QString eol_ = "CRLF";
         storage::EntrySnapshot source_;
         std::optional<SourceIdentity> recoveryOrigin_;
@@ -30,6 +33,8 @@ namespace hc::document
     };
     storage::Result<TextInput> ReadDocumentFile(const QString& Path, storage::OperationContext Context = {}, bool Unlimited = false, std::function<void(QImage)> Preview = {}, QSize PreviewBounds = {1024,1024});
     storage::Result<TextInput> ReadTextFile(const QString& Path, storage::OperationContext Context = {});
+    // Decodes Input.bytes_ (detected when Encoding is empty) into text_, encoding_, bom_ and eol_.
+    storage::Result<TextInput> DecodeTextInput(TextInput Input, const QString& Encoding = {});
     storage::Result<LocalSaveResult> SaveTextFile(const QString& Path, const QByteArray& Bytes,
         storage::DestinationExpectation Expected, const QByteArray& ExpectedHash,
         storage::OperationContext Context = {}, bool Image = false, bool Unlimited = false);

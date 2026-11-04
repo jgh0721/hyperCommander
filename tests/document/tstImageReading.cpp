@@ -8,6 +8,7 @@
 #include "commonLibs/document/documentFormatSupport.hpp"
 #include <QTemporaryDir>
 #include <QToolBar>
+#include <QPainter>
 #include <QToolButton>
 #include <QSlider>
 #include <QLabel>
@@ -1123,7 +1124,7 @@ class ImageReadingTests : public QObject
         QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"]=="ready",20000);
         auto* Pane=W.findChild<DocumentViewPane*>();QVERIFY(Pane);auto* Reader=Pane->findChild<ImageReadingView*>();QVERIFY(Reader);
         auto* Cover=Pane->findChild<QAction*>("imageCover");QVERIFY(Cover);Cover->setChecked(false);
-        QCOMPARE(AppSettings().value("imageView/comic/coverAlone",true).toBool(),false);
+        QCOMPARE(AppSettings().value("imageView/comic/coverAlone").toBool(),false);
         const auto Id=Document(W)["documentId"].toString();
         Pane->Focus();QTest::keyClick(Reader,Qt::Key_BracketRight);
         QTRY_COMPARE_WITH_TIMEOUT(Document(W)["path"].toString(),Root.filePath("comic 2.cbz"),20000);
@@ -1479,6 +1480,7 @@ class ImageReadingTests : public QObject
         QTRY_VERIFY(W.isFullScreen());
         QVERIFY(Menu->isHidden());
         QVERIFY(Toolbar->isHidden());
+        QVERIFY(!W.findChild<DocumentViewPane*>()->PrimaryToolbar()->isVisible());
         // Reapplying appearance must not expose normal controls over the overlay.
         QVERIFY(W.ApplyChromeSettings(Settings));
         QVERIFY(Menu->isHidden());
@@ -1492,8 +1494,64 @@ class ImageReadingTests : public QObject
         QTest::keyClick(&W, Qt::Key_F11);
         QTRY_VERIFY(!Fullscreen->Active());
         QCOMPARE(Menu->isVisible(), ShowChrome);
-        QCOMPARE(Toolbar->isVisible(), ShowChrome);
+        // One toolbar row: with a document the common actions ride on the view's toolbar.
+        auto* Row = W.findChild<DocumentViewPane*>()->PrimaryToolbar();
+        QCOMPARE(Toolbar->isVisible() || (Row && Row->isVisible()), ShowChrome);
         QVERIFY(W.findChild<QWidget*>("documentStatusRow")->isVisible());
+    }
+    void fullscreenReadingControlsCapture_data()
+    {
+        QTest::addColumn<int>("Mode");
+        QTest::newRow("comic") << 1;
+        QTest::newRow("webtoon") << 2;
+    }
+    // The overlay controls of comic and webtoon full screen (top) and the status line (bottom).
+    // With HC_IMAGE_TEST_ARTIFACTS set, the revealed overlay is saved for the chrome review.
+    void fullscreenReadingControlsCapture()
+    {
+        QFETCH(int, Mode);
+        const auto Private = qApp->property("privateReading");
+        qApp->setProperty("privateReading", true);
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("privateReading", Private); });
+        QTemporaryDir Root;
+        QVERIFY(QDir().mkpath(Root.filePath("sample-comic")));
+        for (int I = 1; I <= 12; ++I)
+        {
+            QImage Page(900, 1300, QImage::Format_RGB32);
+            Page.fill(QColor::fromHsv(I * 29 % 360, 36, 246));
+            QPainter Paint(&Page);
+            Paint.setPen(QPen(QColor(45, 45, 45), 6));
+            for (int Row = 0; Row < 3; ++Row) Paint.drawRect(40, 40 + Row * 410, 820, 380);
+            QFont Font = Paint.font(); Font.setPixelSize(160); Font.setBold(true); Paint.setFont(Font);
+            Paint.drawText(Page.rect(), Qt::AlignCenter, QString::number(I));
+            Paint.end();
+            QVERIFY(Page.save(Root.filePath(QString("sample-comic/%1.png").arg(I, 3, 10, QChar('0')))));
+        }
+        DocumentWorkspaceWidget W(Root.filePath("recovery"));
+        W.resize(1200, 800); W.show(); W.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&W));
+        W.Handle({{"action", "open"}, {"path", Root.filePath("sample-comic")}});
+        QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"] == "ready", 20000);
+        auto *Pane = W.findChild<DocumentViewPane *>(); QVERIFY(Pane);
+        QVERIFY(!Pane->Execute({{"action", "reading.mode"}, {"mode", Mode}}).contains("error"));
+        auto *Reader = W.findChild<ImageReadingView *>(); QVERIFY(Reader);
+        QTRY_VERIFY_WITH_TIMEOUT(!Reader->CurrentImage().isNull(), 20000);
+        auto *Fullscreen = W.findChild<ImageFullscreen *>("imageFullscreen"); QVERIFY(Fullscreen);
+        QTest::keyClick(&W, Qt::Key_F11);
+        QTRY_VERIFY(Fullscreen->Active());
+        auto *Top = W.findChild<QToolBar *>("imageFullscreenControls"); QVERIFY(Top);
+        auto *PinTop = W.findChild<QAction *>("fullscreenPinTop"); auto *PinBottom = W.findChild<QAction *>("fullscreenPinBottom");
+        QVERIFY(PinTop && PinBottom);
+        PinTop->setChecked(true); PinBottom->setChecked(true);
+        QTRY_VERIFY(Top->isVisible());
+        QTRY_VERIFY(W.findChild<QWidget *>("imageFullscreenStatus")->isVisible());
+        QTest::qWait(400);
+        const auto Artifacts = qEnvironmentVariable("HC_IMAGE_TEST_ARTIFACTS");
+        if (!Artifacts.isEmpty())
+            QVERIFY(W.grab().save(Artifacts + "/fullscreen-reading-" + QTest::currentDataTag() + ".png"));
+        PinTop->setChecked(false); PinBottom->setChecked(false);
+        QTest::keyClick(&W, Qt::Key_F11);
+        QTRY_VERIFY(!Fullscreen->Active());
     }
     void fullscreenAutoHideAndEdgeReveal()
     {

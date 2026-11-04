@@ -1,13 +1,16 @@
 ﻿#pragma once
 #include "viewUiContribution.hpp"
+#include "documentViewKind.hpp"
 #include "documentStatusBar.hpp"
 #include "documentStorageAdapter.hpp"
 #include "hwpOpenWindow.hpp"
 #include <QWidget>
 #include <QJsonObject>
+#include <functional>
 #include <optional>
 
 class QToolBar;
+class QMenu;
 class QBaseView;
 class QTextView;
 class QPDFView;
@@ -63,6 +66,7 @@ namespace hc::document
         bool ImagePresentationReady() const;
         bool IsEditing() const;
         bool IsEpubEditing() const;
+        DocumentViewKind Kind() const;
         void DiscardEpubRecovery();
         void SetEpubRecoveryEnabled(bool Enabled);
         void CheckpointEpub();
@@ -82,12 +86,24 @@ namespace hc::document
         void ApplyClipboard(const QString& Mode,const QString& Text,const QJsonObject& Selection);
         QWidget* InputWidget() const;
         QBaseView* View() const { return view_; }
+        // The view's own toolbar row (text, PDF, image, Markdown, EPUB); nullptr for HWP.
+        QToolBar* PrimaryToolbar() const;
         EpubSourceEditor* EpubEditor() const { return epubEditor_; }
         // Image, PDF and EPUB editing commands dispatched by the workspace shortcut router.
         bool RunViewCommand(const QString& Id);
         bool CanRunViewCommand(const QString& Id) const;
         void SetShortcutBindings(const QJsonObject& Bindings);
+        // Status-bar picker for a field ("encoding", "eol", "page", …) anchored at its button.
+        void OpenStatusPicker(const QString& Id, QWidget* Anchor);
+        // "변환하여 저장": checked before anything changes; ErrorCode receives the reason on failure.
+        bool SetSaveEncoding(const QString& Encoding, bool Bom, QString* ErrorCode = nullptr);
+        QString SaveEncoding() const { return encoding_; }
+        bool SaveBom() const { return bom_; }
     signals:
+        // "다시 읽기 (해석만)": the workspace re-decodes the loaded bytes.
+        void ReinterpretRequested(const QString& Encoding);
+        // A command such as Ctrl+G asks the workspace to open the picker of a status field.
+        void StatusPickerRequested(const QString& Id);
         void ContentChanged();
         void SearchRequested(const QString& Query);
         void ViewStateChanged();
@@ -109,6 +125,26 @@ namespace hc::document
         QWidget* loadingPreview_ = nullptr;
 
         bool editEpub(const QString& Locator={},int Chapter=-1);
+        // Mode menu and View/Edit menu items per view kind (documentViewMenus.cpp).
+        void buildTextChrome(QMenu* Menu, bool Language);
+        void buildTextViewItems(bool Zoom);
+        void buildMarkdownChrome();
+        void syncMarkdownChrome();
+        void buildPdfChrome();
+        void buildImageChrome();
+        // Image, comic and webtoon share one pane: titles and items follow Kind() (documentViewMenus.cpp).
+        void syncImageChrome();
+        // EPUB(B) menu, view items and the reader row of the EPUB toolbar (documentViewMenus.cpp).
+        void buildEpubChrome(QToolBar* Bar);
+        void resetChrome();
+        // The encoding the loaded bytes were decoded with ("다시 읽기" check mark); encoding_ is the save encoding.
+        QString readEncoding_;
+        TextDetection readDetection_ = TextDetection::Explicit;
+        void refreshChrome();
+        QAction* chromeAction(const QString& Text, const QString& Name, std::function<void()> Run, const QString& Key = {});
+        QMenu* modeMenu_ = nullptr;
+        // Owns the per-load mode menu and menu actions so a reload replaces them all.
+        QObject* chromeOwner_ = nullptr;
         EpubProcessView* currentEpub()const;
         void applyTheme();
         bool readOnly_ = true;

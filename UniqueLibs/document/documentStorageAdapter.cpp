@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QStringConverter>
 #include "documentTextCodec.hpp"
+#include "textDocumentMetrics.hpp"
 #include <QBuffer>
 #include <QImageReader>
 
@@ -149,16 +150,13 @@ namespace hc::document
             return Invalid("document-image-codec-unavailable-or-corrupt");
         }
         if(!Unlimited&&Input.bytes_.size()>TextByteLimit)return Error{ErrorCategory::BudgetExceeded,"document-text-byte-limit"};
-        auto Text=DecodeDocumentText(Input.bytes_);if(!Text.HasValue())return Text.Failure();
-        Input.text_=Text.Value().text_;Input.encoding_=Text.Value().encoding_;Input.bom_=Text.Value().bom_;
-        bool CrLf=false,Cr=false,Lf=false;
-        for(qsizetype I=0;I<Input.text_.size();++I){
-            if(Input.text_[I]=='\r'){
-                if(I+1<Input.text_.size() && Input.text_[I+1]=='\n'){CrLf=true;++I;}else Cr=true;
-            }else if(Input.text_[I]=='\n')Lf=true;
-            if(int(CrLf)+int(Cr)+int(Lf)>1)break;
-        }
-        Input.eol_=(int(CrLf)+int(Cr)+int(Lf)>1)?"MIXED":CrLf?"CRLF":Cr?"CR":"LF";
+        return DecodeTextInput(std::move(Input));
+    }
+    Result<TextInput> DecodeTextInput(TextInput Input, const QString& Encoding)
+    {
+        auto Text=DecodeDocumentText(Input.bytes_,Encoding);if(!Text.HasValue())return Text.Failure();
+        Input.text_=Text.Value().text_;Input.encoding_=Text.Value().encoding_;Input.bom_=Text.Value().bom_;Input.detection_=Text.Value().detection_;
+        const auto Eol=CountLineEndings(QStringView(Input.text_)).Dominant();Input.eol_=Eol.isEmpty()?QStringLiteral("LF"):Eol;
         return Input;
     }
     Result<TextInput> ReadTextFile(const QString& Path, OperationContext Context)

@@ -174,7 +174,7 @@ void statusBarPdfAndImage(){
     auto Pdf=ReadDocumentFile(Fixture("basic.pdf"));QVERIFY(Pdf.HasValue());DocumentViewPane Pane;QVERIFY(Pane.Load(Pdf.Value(),false));
     auto Fields=Pane.StatusFields();auto Text=[&](const QString& Key){for(const auto& Field:Fields)if(Field.id_==Key)return Field.text_;return QString{};};
     QVERIFY(Text("page").contains("1 / 2"));Pane.Execute({{"action","pdf.page"},{"page",1}});Fields=Pane.StatusFields();QVERIFY(Text("page").contains("2 / 2"));
-    TextInput Input;Input.viewId_="image";Input.path_="sample.png";Input.image_=QImage(320,200,QImage::Format_ARGB32);Input.image_.fill(Qt::blue);DocumentViewPane Image;QVERIFY(Image.Load(Input,false));Fields=Image.StatusFields();QVERIFY(Text("dimensions").contains("320"));QVERIFY(!Text("zoom").isEmpty());
+    TextInput Input;Input.viewId_="image";Input.path_="sample.png";Input.image_=QImage(320,200,QImage::Format_ARGB32);Input.image_.fill(Qt::blue);DocumentViewPane Image;QVERIFY(Image.Load(Input,false));Fields=Image.StatusFields();QVERIFY(Text("dimensions").contains("320"));QVERIFY(Text("fit").contains("%"));
 }
 
 void workspaceReactivation_data(){
@@ -194,7 +194,9 @@ void workspaceReactivation(){
     Viewer.resize(900,700);Viewer.show();const auto Window=reinterpret_cast<HWND>(Viewer.winId());Foreground(Window);QTRY_COMPARE(GetForegroundWindow(),Window);
     const auto Id=Viewer.Handle({{"action","open"},{"path",Path}})["documentId"].toString();QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Id)["lifecycle"]=="ready";},45000));
     auto* Pane=Viewer.findChild<DocumentViewPane*>();QVERIFY(Pane);
-    auto* ToolbarField=new QLineEdit;Viewer.findChild<QToolBar*>("mainToolbar")->addWidget(ToolbarField);
+    // Two toolbar rows keep the workspace toolbar (and this field) across view reloads; one row hides it with a document.
+    {auto Chrome=Viewer.ChromeSettings();Chrome["toolbarLayout"]="split";QVERIFY(Viewer.ApplyChromeSettings(Chrome));}
+    auto* ToolbarField=new QLineEdit;Viewer.findChild<QToolBar*>("mainToolbar")->addWidget(ToolbarField);QTRY_VERIFY(ToolbarField->isVisible());
     int Acks=0;if(auto* Hwp=Viewer.findChild<HwpOpenWindow*>())for(auto* W:Hwp->findChildren<QWidget*>())if(auto* B=dynamic_cast<HwpProcessBackend*>(W))
         connect(B,&HwpSdiBackend::EditorReply,&Viewer,[&](quint64,QJsonObject R){if(R["requestType"]=="DocumentNavigate"&&R["ok"].toBool())++Acks;});
     QProcess Peer;Peer.start(QCoreApplication::applicationFilePath(),{"--focus-peer"});QVERIFY(Wait([&]{return Peer.canReadLine();}));
@@ -266,7 +268,8 @@ void pdfNavigationKeys(){
     Pdf->setZoomLevel(200);QTRY_VERIFY(Scroll->verticalScrollBar()->maximum()>0);
     Scroll->verticalScrollBar()->setValue(0);QTest::keyClick(Input,Qt::Key_Down);QTRY_VERIFY(Scroll->verticalScrollBar()->value()>0);
     QTest::keyClick(Input,Qt::Key_Up);QTRY_COMPARE(Scroll->verticalScrollBar()->value(),0);
-    auto* PageBox=Viewer.findChild<QSpinBox*>();QVERIFY(PageBox);auto* Field=PageBox->findChild<QLineEdit*>();QVERIFY(Field);
+    // The page number is a status bar picker; the toolbar's text field (문서에서 찾기) keeps Home/End for editing.
+    auto* Field=Viewer.findChild<QLineEdit*>("pdfSearchField");QVERIFY(Field);Field->setText("page");Field->setFocus();
     Pdf->goToPage(1);QTest::keyClick(Field,Qt::Key_Home);QCOMPARE(Pdf->currentPage(),1);QCOMPARE(Field->cursorPosition(),0);
     QTest::keyClick(Field,Qt::Key_End);QCOMPARE(Pdf->currentPage(),1);QCOMPARE(Field->cursorPosition(),Field->text().size());
 }
@@ -814,7 +817,9 @@ void externalEditorOpensMultipleWindows(){
         EnumWindows([](HWND Window,LPARAM Context)->BOOL{
             auto* Search=reinterpret_cast<Finder*>(Context);DWORD Owner=0;GetWindowThreadProcessId(Window,&Owner);
             wchar_t Title[256]{};GetWindowTextW(Window,Title,256);
-            if(Owner==Search->pid_&&IsWindowVisible(Window)&&QString::fromWCharArray(Title)=="HyperEditor")
+            // The title names the document (prototype: 'first.txt — HyperEditor').
+            const auto Text=QString::fromWCharArray(Title);
+            if(Owner==Search->pid_&&IsWindowVisible(Window)&&(Text=="HyperEditor"||Text.endsWith(QString::fromUtf8(" — HyperEditor"))))
                 ++Search->count_;
             return TRUE;
         },reinterpret_cast<LPARAM>(&State));return State.count_==2;

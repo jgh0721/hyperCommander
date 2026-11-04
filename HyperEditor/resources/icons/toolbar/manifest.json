@@ -32,10 +32,14 @@
     { "key": "pdf.nextPage", "iconName": "chevron-right", "toolTip": "다음 페이지", "checkable": false },
     { "key": "pdf.fitWidth", "iconName": "fit-width", "toolTip": "폭 맞춤", "checkable": true },
     { "key": "pdf.fitPage", "iconName": "fit-page", "toolTip": "페이지 맞춤", "checkable": true },
+    { "key": "pdf.zoomOut", "iconName": "zoom-out", "toolTip": "축소", "checkable": false },
+    { "key": "pdf.zoomIn", "iconName": "zoom-in", "toolTip": "확대", "checkable": false },
+    { "key": "pdf.rotateLeft", "iconName": "rotate-ccw", "toolTip": "왼쪽으로 90° 회전", "checkable": false },
+    { "key": "pdf.rotateRight", "iconName": "rotate-cw", "toolTip": "오른쪽으로 90° 회전", "checkable": false },
     { "key": "pdf.searchNext", "iconName": "search-next", "toolTip": "다음 검색 결과", "checkable": false },
     { "key": "pdf.searchPrev", "iconName": "search-prev", "toolTip": "이전 검색 결과", "checkable": false },
-    { "key": "pdf.toggleToc", "iconName": "toc-toggle", "toolTip": "목차/사이드바 표시 전환", "checkable": true },
-    { "key": "pdf.toggleAnnotations", "iconName": "annotation-toggle", "toolTip": "어노테이션 도구모음 표시 전환", "checkable": true },
+    { "key": "pdf.toggleToc", "iconName": "sidebar", "toolTip": "썸네일 · 목차 패널", "checkable": true },
+    { "key": "pdf.toggleAnnotations", "iconName": "annotation-toggle", "toolTip": "주석 도구", "checkable": true },
     { "key": "pdf.annot.select", "iconName": "annotation-select", "toolTip": "어노테이션 도구 해제", "checkable": true },
     { "key": "pdf.annot.highlight", "iconName": "annotation-highlight", "toolTip": "선택/드래그 영역 하이라이트", "checkable": true },
     { "key": "pdf.annot.ink", "iconName": "annotation-ink", "toolTip": "형광펜/잉크 그리기", "checkable": true },
@@ -50,6 +54,9 @@
     { "key": "text.replace", "iconName": "replace", "toolTip": "현재 항목 치환", "checkable": false },
     { "key": "text.replaceAll", "iconName": "replace-all", "toolTip": "모든 항목 치환", "checkable": false },
     { "key": "text.readOnly", "iconName": "read-only", "toolTip": "읽기 전용 전환", "checkable": true },
+    { "key": "text.find", "iconName": "search", "toolTip": "찾기", "checkable": false },
+    { "key": "text.replaceBar", "iconName": "replace", "toolTip": "바꾸기", "checkable": false },
+    { "key": "text.whitespace", "iconName": "whitespace", "toolTip": "탭 · 공백 · 줄 끝 표시", "checkable": true },
 
     { "key": "markdown.preview", "iconName": "view-preview", "toolTip": "미리보기 모드", "checkable": true },
     { "key": "markdown.source", "iconName": "view-source", "toolTip": "소스 모드", "checkable": true },
@@ -101,7 +108,7 @@
       "groups": [
         {
           "title": "Page / Fit / Search / Sidebar",
-          "cards": ["pdf.previousPage", "pdf.nextPage", "pdf.fitWidth", "pdf.fitPage", "pdf.searchNext", "pdf.searchPrev", "pdf.toggleToc", "pdf.toggleAnnotations"]
+          "cards": ["pdf.previousPage", "pdf.nextPage", "pdf.zoomOut", "pdf.zoomIn", "pdf.fitWidth", "pdf.fitPage", "pdf.rotateLeft", "pdf.rotateRight", "pdf.searchNext", "pdf.searchPrev", "pdf.toggleToc", "pdf.toggleAnnotations"]
         },
         {
           "title": "Annotations",

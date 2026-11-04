@@ -16,6 +16,8 @@ class DocumentSettingsDialog final : public QDialog {
 public:
     explicit DocumentSettingsDialog(QString Path, const QList<QAction*>& Actions, QWidget* Parent = nullptr);
     bool Apply(bool ResolveConflicts = false);
+    // Selects a category: "common", "text", "shortcuts", "epub", "markdown", "image".
+    void ShowPage(const QString& Key);
 signals:
     void PreferencesSaved();
     void ShortcutsValidated();

@@ -3,6 +3,7 @@
 #include "commonLibs/document/documentWorkspace.hpp"
 #include "documentRecoveryStore.hpp"
 #include "workspaceChromeController.hpp"
+#include "documentViewKind.hpp"
 #include "hwpOpenWindow.hpp"
 #include <functional>
 #include <QWidget>
@@ -13,18 +14,28 @@
 #include <memory>
 
 class QMenuBar;
+class QMenu;
 class QToolBar;
+class QContextMenuEvent;
 class QLabel;
 class QStackedWidget;
 class QFileSystemWatcher;
 class QShortcut;
 class QMainWindow;
 class QDockWidget;
+class QResizeEvent;
+class QDragEnterEvent;
+class QDropEvent;
 namespace mrst { class ExternalChangeWatcher; }
 namespace hc::document
 {
     namespace search { class Panel; }
     class DocumentStatusBar;
+    class DocumentProgressOverlay;
+    class RecentDocumentStore;
+    class RecentDocumentsDialog;
+    class DocumentStartPage;
+    struct RecentDocument;
     class DocumentShortcutRouter;
     class DocumentSettingsDialog;
     class DocumentWindowSize;
@@ -52,12 +63,49 @@ namespace hc::document
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
         void RestoreWindowSize();
         void OpenSearchContext(const QJsonObject& Context);
+        DocumentViewKind CurrentKind() const;
     protected:
         bool eventFilter(QObject* Watched, QEvent* Event) override;
+        // Surfaces own their context menus; anything else ends here instead of falling through to every action.
+        void contextMenuEvent(QContextMenuEvent* Event) override;
+        void resizeEvent(QResizeEvent* Event) override;
+        void dragEnterEvent(QDragEnterEvent* Event) override;
+        void dropEvent(QDropEvent* Event) override;
     signals:
         void StateChanged();
         void ChromeSettingsChanged(const QJsonObject& Settings);
     private:
+        void buildMenus();
+        QAction* scoped(QAction* Action, quint32 Kinds);
+        void applyKind(DocumentViewKind Kind);
+        void setChromePart(WorkspaceChromeController::Part Which, bool Visible);
+        void refreshChromeChecks();
+        void updateTitle();
+        QList<QPointer<QAction>> kindActions_;
+        QPointer<QMenu> fileMenu_, editMenu_, viewMenu_, toolsMenu_, themeMenu_, chromeMenu_;
+        QPointer<QAction> recentAnchor_;
+        // 최근 항목 (plan 6): shared with HyperViewer through recent-documents.json.
+        RecentDocumentStore* recent_ = nullptr;
+        DocumentStartPage* startPage_ = nullptr;
+        QPointer<RecentDocumentsDialog> recentDialog_;
+        QList<QPointer<QAction>> recentActions_;
+        QString pendingOpenEncoding_;
+        void refreshRecentMenu();
+        void openRecent(const RecentDocument& Document);
+        void showRecentDialog();
+        void clearRecent();
+        void placeStartPage();
+        // One row (default): the active pane's toolbar starts with the shared common actions and the top
+        // toolbar shows only without a document. Two rows ("split"): common above the tabs, the view's below.
+        bool toolbarVisible_ = true;
+        void syncToolbarRow();
+        void showChromeMenu(const QPoint& Global, bool Toolbar);
+        void showTabMenu(const QPoint& Global, int Index);
+        void showStatusMenu(const QPoint& Global);
+        // id · text of the fields the active view offers (before hiding), for the status bar menu.
+        QList<QPair<QString, QString>> statusFieldNames_;
+        DocumentViewKind appliedKind_ = DocumentViewKind::None;
+        bool kindApplied_ = false;
         void openSearch(bool Replace);
         void placeSearch(const QString& Location);
         QJsonArray searchSources() const;
@@ -90,6 +138,8 @@ namespace hc::document
         void load(const std::shared_ptr<Tab>& Tab, bool Discard = false, const QString& RecoveryPath = {});
         void navigateImage(const std::shared_ptr<Tab>& Tab, const QString& Path);
         void retire(std::shared_ptr<Tab> Tab, bool Discard, bool PreserveRecovery = false);
+        // Opens the popover of an active status field; a hidden field falls back to its command.
+        void openStatusPicker(const QString& Id);
         void cleanupRecovery(const std::shared_ptr<Tab>& Tab, std::uint64_t ThroughRevision);
         QWidget* currentPane() const;
         void activate(const std::shared_ptr<Tab>& Tab);
@@ -130,6 +180,12 @@ namespace hc::document
         QToolBar* toolbar_;
         QTabWidget* tabs_;
         DocumentStatusBar* statusBar_ = nullptr;
+        // File read and write progress over the left of the status bar; follows the active tab.
+        DocumentProgressOverlay* progressOverlay_ = nullptr;
+        QString progressTab_;
+        void refreshProgress(const std::shared_ptr<Tab>& Tab);
+        void recordRecent(const std::shared_ptr<Tab>& Tab);
+        void finishProgress(const std::shared_ptr<Tab>& Tab, bool Success, const QString& Code = {});
         QWidget* statusSlot_ = nullptr;
         std::vector<std::shared_ptr<Tab>> documents_;
     };

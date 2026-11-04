@@ -9,6 +9,8 @@
 #include <QVector>
 #include <QPair>
 #include <atomic>
+#include <optional>
+#include <utility>
 
 class ITextEditorBackend;
 class FindReplaceWidget;
@@ -51,6 +53,7 @@ public:
     static QStringList availableEncodings();
 
     // ── 글꼴 ──
+    void  ChooseEditorFont();
     void  setEditorFont(const QFont& font);
     QFont editorFont() const;
     double lineSpacingScale() const;
@@ -117,6 +120,12 @@ public:
     // ── 줄바꿈 ──
     LineEnding detectedLineEnding() const;
     void       setLineEnding(LineEnding ending);
+    void       ConvertLineEnding(LineEnding ending);
+    // Indentation for this document only (not written to preferences).
+    void       SetDocumentIndentation(bool UseTabs, int Width);
+    void       ConvertIndentation(bool ToTabs);
+    // Step > 0 zooms in, < 0 out, 0 restores the configured font size.
+    void       Zoom(int Step);
     bool       isWordWrapEnabled() const;
     void       setWordWrap(bool enabled);
     int WordWrapMode() const;
@@ -195,6 +204,7 @@ private:
     TextFileSession       m_fileSession;
     ScintillaDocument     m_document;
     ScintillaEditorSettings m_editorSettings;
+    std::optional<std::pair<bool, int>> documentIndentation_;
 
     QString             m_encoding;
     QString             m_detectedEncoding;

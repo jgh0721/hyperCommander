@@ -327,6 +327,11 @@ namespace
                 }
                 focusReading();
             });
+#ifdef HC_EPUB_PRODUCT_HELPER
+            // The product host draws the reading row and shows the location in its own status bar;
+            // the hidden actions keep their keys, enablement and the state they report.
+            ReadingBar->setVisible(false); statusBar()->setVisible(false);
+#endif
             profile_ = new QWebEngineProfile(this); profile_->setHttpCacheType(QWebEngineProfile::MemoryHttpCache);profile_->setHttpCacheMaximumSize(32*1024*1024);
             profile_->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
             filter_ = new Filter(Items, profile_); profile_->setUrlRequestInterceptor(filter_);

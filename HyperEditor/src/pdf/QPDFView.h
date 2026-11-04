@@ -40,12 +40,16 @@ public:
     bool AddAnnotation(int Page, const QString& Kind, const QRectF& Rect, const QString& Text = {});
     void CommitContent();
     void ShowAnnotationToolBar(bool Enabled) { setAnnotationToolBarVisible(Enabled); }
+    bool AnnotationToolBarShown() const { return m_annotationToolBarVisible; }
     enum ZoomMode   { FitWidth, FitHeight, FitPage, CustomZoom };
     enum ViewMode   { SinglePage, ContinuousScroll, TwoPageSpread };
     enum SidebarPos { SidebarLeft, SidebarRight, SidebarHidden };
     enum SpreadReadingDirection { LeftToRight, RightToLeft };
     enum RotationAngle { Rotate0 = 0, Rotate90 = 90, Rotate180 = 180, Rotate270 = 270 };
     enum AnnotationTool { AnnotationNone, AnnotationHighlight, AnnotationInk, AnnotationFreeText, AnnotationUnderline, AnnotationStrikeOut, AnnotationNote };
+    // PDF(P) › 주석 menu: the same tools as the annotation toolbar.
+    void SelectAnnotationTool(AnnotationTool Tool) { setAnnotationTool(Tool); }
+    AnnotationTool CurrentAnnotationTool() const { return m_annotationTool; }
 
     Q_ENUM(ZoomMode)
     Q_ENUM(ViewMode)

@@ -58,6 +58,25 @@
         <file>icons/toolbar/view-source.svg</file>
         <file>icons/toolbar/view-split.svg</file>
         <file>icons/toolbar/word-wrap.svg</file>
+        <file>icons/toolbar/search.svg</file>
+        <file>icons/toolbar/zoom-in.svg</file>
+        <file>icons/toolbar/zoom-out.svg</file>
+        <file>icons/toolbar/whitespace.svg</file>
+        <file>icons/toolbar/bookmark.svg</file>
+        <file>icons/toolbar/spread.svg</file>
+        <file>icons/toolbar/reading-direction.svg</file>
+        <file>icons/toolbar/adjust.svg</file>
+        <file>icons/toolbar/first-page.svg</file>
+        <file>icons/toolbar/last-page.svg</file>
+        <file>icons/toolbar/chevron-up.svg</file>
+        <file>icons/toolbar/chevron-down.svg</file>
+        <file>icons/toolbar/sidebar.svg</file>
+        <file>icons/toolbar/book-open.svg</file>
+        <file>icons/toolbar/edit-pencil.svg</file>
+        <file>icons/toolbar/sync.svg</file>
+        <file>icons/toolbar/alert.svg</file>
+        <file>icons/toolbar/layout.svg</file>
+        <file>icons/toolbar/slideshow.svg</file>
         <file>text/lexers.json</file>
     </qresource>
 </RCC>

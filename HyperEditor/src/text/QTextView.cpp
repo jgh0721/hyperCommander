@@ -605,6 +605,53 @@ void QTextView::setTabWidth(int width)
 
     AppSettings settings;
     settings.setValue("textView/tabWidth", width);
+    emit statusChanged();
+}
+
+void QTextView::SetDocumentIndentation(bool UseTabs, int Width)
+{
+    // Per-document choice from the status bar; preferences keep their own default.
+    documentIndentation_ = std::pair{UseTabs, qBound(1, Width, 16)};
+    m_editorSettings.useTabs = UseTabs; m_editorSettings.tabWidth = documentIndentation_->second;
+    applyEditorSettings();
+    emit statusChanged();
+}
+
+void QTextView::ConvertIndentation(bool ToTabs)
+{
+    if (!m_editor || isReadOnly()) return;
+    auto* Backend = static_cast<ScintillaQtDirectBackend*>(m_editor.data());
+    // Indentation widths are read with the current tab width, then rewritten in the new style
+    // as one undo step; content after the indentation is untouched.
+    const auto Lines = Backend->Send(SCI_GETLINECOUNT);
+    QVector<int> Widths; Widths.reserve(int(Lines));
+    for (qintptr Line = 0; Line < Lines; ++Line) Widths.append(int(Backend->Send(SCI_GETLINEINDENTATION, quintptr(Line))));
+    SetDocumentIndentation(ToTabs, tabWidth());
+    Backend->Send(SCI_BEGINUNDOACTION);
+    for (qintptr Line = 0; Line < Lines; ++Line)
+        if (Widths[int(Line)] > 0) Backend->Send(SCI_SETLINEINDENTATION, quintptr(Line), Widths[int(Line)]);
+    Backend->Send(SCI_ENDUNDOACTION);
+    emit statusChanged();
+}
+
+void QTextView::Zoom(int Step)
+{
+    if (!m_editor) return;
+    auto* Backend = static_cast<ScintillaQtDirectBackend*>(m_editor.data());
+    if (Step > 0) Backend->Send(SCI_ZOOMIN);
+    else if (Step < 0) Backend->Send(SCI_ZOOMOUT);
+    else Backend->Send(SCI_SETZOOM, 0);
+    emit statusChanged();
+}
+
+void QTextView::ConvertLineEnding(LineEnding e)
+{
+    // Unlike setLineEnding this always converts, so stray endings in a mixed file are fixed too.
+    if (!m_editor || isReadOnly()) return;
+    m_document.setLineEnding(toDocumentLineEnding(e));
+    m_editor->setLineEnding(toDocumentLineEnding(e), true);
+    m_editor->setModified(true);
+    emit statusChanged();
 }
 
 bool QTextView::useTabs() const
@@ -912,98 +959,46 @@ QToolBar* QTextView::createToolBar()
     if (!m_editor)
         return tb;
 
-    // 언어 선택
-    auto* langCombo = new QComboBox(tb);
-    langCombo->setObjectName("textLanguage");
-    langCombo->setMaxVisibleItems(24);
-    langCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    langCombo->setMinimumContentsLength(12);
-    langCombo->setEditable(true);
-    langCombo->setInsertPolicy(QComboBox::NoInsert);
-    langCombo->completer()->setCaseSensitivity(Qt::CaseInsensitive);
-    langCombo->addItems(TextLexerRegistry::instance().displayNames());
-    langCombo->setCurrentText(m_document.language());
-    connect(langCombo, &QComboBox::activated, this, [this, langCombo] { setLanguage(langCombo->currentText()); });
-    connect(this, &QTextView::languageChanged, langCombo, [langCombo](const QString& Language) {
-        const QSignalBlocker Block(langCombo); langCombo->setCurrentText(Language);
-    });
-    tb->addWidget(new QLabel(tr(" 언어: "), tb));
-    tb->addWidget(langCombo);
-
+    // Values (language, encodings, line endings, indentation) are status-bar pickers; the toolbar keeps actions.
+    auto* Find = MV_CREATE_TOOLBAR_ACTION(tb, "text.find");
+    Find->setObjectName(QStringLiteral("textToolbar.find"));
+    connect(Find, &QAction::triggered, this, [this] { showFindBar(false); });
+    auto* Replace = MV_CREATE_TOOLBAR_ACTION(tb, "text.replaceBar");
+    Replace->setObjectName(QStringLiteral("textToolbar.replace"));
+    connect(Replace, &QAction::triggered, this, [this] { showFindBar(true); });
     tb->addSeparator();
 
-    // 인코딩 선택
-    auto* encCombo = new QComboBox(tb);
-    encCombo->addItems(availableEncodings());
-    encCombo->setCurrentText(m_encoding);
-    connect(encCombo, &QComboBox::currentTextChanged, this, &QTextView::reloadWithEncoding);
-    tb->addWidget(new QLabel(tr(" 인코딩: "), tb));
-    tb->addWidget(encCombo);
-
-    tb->addSeparator();
-
-    // 줄바꿈
-    auto* eolCombo = new QComboBox(tb);
-    eolCombo->setAccessibleName(tr("줄끝 형식"));
-    eolCombo->addItem("CRLF", CRLF);
-    eolCombo->addItem("LF",   LF);
-    eolCombo->addItem("CR",   CR);
-    eolCombo->setCurrentIndex(eolCombo->findData(detectedLineEnding()));
-    connect(eolCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [this, eolCombo](int idx) { setLineEnding(static_cast<LineEnding>(eolCombo->itemData(idx).toInt())); });
-    tb->addWidget(eolCombo);
-
-    // 탭 간격
-    auto* tabSpin = new QSpinBox(tb);
-    tabSpin->setAccessibleName(tr("탭 간격"));
-    tabSpin->setRange(1, 16);
-    tabSpin->setValue(tabWidth());
-    tabSpin->setPrefix(tr("Tab: "));
-    tabSpin->setToolTip(tr("탭 간격 (칸)"));
-    connect(tabSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &QTextView::setTabWidth);
-    tb->addWidget(tabSpin);
-
-    tb->addSeparator();
-
-    // 글꼴
-    connect(MV_CREATE_TOOLBAR_ACTION(tb, "text.font"),
-            &QAction::triggered, this, [this]{
-        bool ok;
-        hc::fonts::RegisterBundledFonts();
-        QFont font = QFontDialog::getFont(&ok, editorFont(), this);
-        if (ok) {
-            setEditorFont(font);
-            AppSettings Settings;
-            Settings.setValue("textView/fontFamily", font.family());
-            Settings.setValue("textView/fontSize", qBound(6, font.pointSize(), 72));
-        }
-    });
-
-    // 읽기 전용
-    tb->addSeparator();
-    auto* Wrap = new QComboBox(tb); Wrap->setObjectName("wordWrapMode"); Wrap->setAccessibleName(tr("자동 줄바꿈"));
-    Wrap->addItems({tr("줄바꿈 없음"), tr("단어 단위"), tr("문자 단위"), tr("공백 단위")});
-    Wrap->setCurrentIndex(WordWrapMode()); tb->addWidget(Wrap);
-    connect(Wrap, &QComboBox::currentIndexChanged, this, &QTextView::SetWordWrapMode);
-
-    auto* foldingAction = MV_CREATE_TOOLBAR_ACTION(tb, "text.codeFolding");
-    foldingAction->setChecked(isCodeFoldingEnabled());
-    connect(foldingAction, &QAction::toggled, this, &QTextView::setCodeFoldingEnabled);
-
-    auto* wsCheck = new QCheckBox(tr("¶"), tb);
-    wsCheck->setChecked(isWhitespaceVisible());
-    wsCheck->setToolTip(tr("탭/공백/개행 문자 표시"));
-    connect(wsCheck, &QCheckBox::toggled, this, &QTextView::setWhitespaceVisible);
-    tb->addWidget(wsCheck);
-
+    // Wrap on/off uses the last wrap mode; the mode itself is in 보기 › 자동 줄바꿈.
+    auto* Wrap = MV_CREATE_TOOLBAR_ACTION(tb, "text.wordWrap");
+    Wrap->setObjectName(QStringLiteral("textToolbar.wordWrap"));
+    Wrap->setChecked(isWordWrapEnabled());
+    connect(Wrap, &QAction::triggered, this, [this](bool On) { setWordWrap(On); });
+    auto* Whitespace = MV_CREATE_TOOLBAR_ACTION(tb, "text.whitespace");
+    Whitespace->setObjectName(QStringLiteral("textToolbar.whitespace"));
+    Whitespace->setChecked(isWhitespaceVisible());
+    connect(Whitespace, &QAction::triggered, this, &QTextView::setWhitespaceVisible);
     auto* roAction = MV_CREATE_TOOLBAR_ACTION(tb, "text.readOnly");
     roAction->setChecked(isReadOnly());
     connect(roAction, &QAction::toggled, this, &QTextView::setReadOnly);
-    connect(this, &QTextView::statusChanged, roAction, [this, roAction] {
-        const QSignalBlocker Block(roAction); roAction->setChecked(isReadOnly());
+    connect(this, &QTextView::statusChanged, tb, [this, roAction, Wrap, Whitespace] {
+        for (const auto& Item : {std::pair{roAction, isReadOnly()}, std::pair{Wrap, isWordWrapEnabled()}, std::pair{Whitespace, isWhitespaceVisible()}}) {
+            const QSignalBlocker Block(Item.first); Item.first->setChecked(Item.second);
+        }
     });
 
     return tb;
+}
+
+void QTextView::ChooseEditorFont()
+{
+    bool ok = false;
+    hc::fonts::RegisterBundledFonts();
+    const QFont font = QFontDialog::getFont(&ok, editorFont(), this);
+    if (!ok) return;
+    setEditorFont(font);
+    AppSettings Settings;
+    Settings.setValue("textView/fontFamily", font.family());
+    Settings.setValue("textView/fontSize", qBound(6, font.pointSize(), 72));
 }
 
 bool QTextView::promptOpenModeForFile(const QString& filePath, TextFileSession::OpenMode& openMode) const
@@ -1152,6 +1147,8 @@ void QTextView::applyPersistedEditorPreferences(ScintillaEditorSettings& setting
     settings.wrapIndentMode = static_cast<ScintillaEditorSettings::WrapIndentMode>(qBound(0, persisted.value("textView/wrapIndentMode").toInt(), 3));
     settings.tabWidth = qBound(1, persisted.value("textView/tabWidth").toInt(), 16);
     settings.useTabs = persisted.value("textView/useTabs").toBool();
+    // A document's own indentation (detected or chosen in the status bar) survives preference reloads.
+    if (documentIndentation_) { settings.useTabs = documentIndentation_->first; settings.tabWidth = documentIndentation_->second; }
     settings.showIndentationGuides = persisted.value("textView/showIndentationGuides").toBool();
     const int indentGuideValue = persisted.value("textView/indentGuideStyle").toInt();
     settings.indentGuideStyle = static_cast<ScintillaEditorSettings::IndentGuideStyle>(

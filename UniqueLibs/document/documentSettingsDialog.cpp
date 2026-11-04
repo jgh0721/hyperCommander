@@ -537,6 +537,11 @@ void DocumentSettingsDialog::refreshTextColorPreview()
     colorPreview_->Send(SCI_COLOURISE, 0, -1); colorPreview_->setReadOnly(true);
 }
 
+void DocumentSettingsDialog::ShowPage(const QString& Key)
+{
+    static const QStringList Keys{"common", "text", "shortcuts", "epub", "markdown", "image"};
+    if (auto* List = findChild<QListWidget*>("settingsCategories"); List && Keys.contains(Key)) List->setCurrentRow(int(Keys.indexOf(Key)));
+}
 void DocumentSettingsDialog::loadControls()
 {
     loadTextColors();
