@@ -7,6 +7,7 @@
 #include <QLayout>
 #include <QPainter>
 #include <QPushButton>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <fmstyle/StyleProps.h>
@@ -29,6 +30,28 @@ struct DialogFrameOptions
 };
 
 namespace detail {
+// Initial activation is not a keyboard event, but a prompt must still reveal
+// its current focus before the user presses Tab. Mouse input can hide it again.
+class DialogKeyboardFocus final : public QObject
+{
+public:
+    explicit DialogKeyboardFocus(QDialog* Dialog) : QObject(Dialog), dialog_(Dialog)
+    { Dialog->installEventFilter(this); }
+protected:
+    bool eventFilter(QObject* Object, QEvent* Event) override
+    {
+        if (Event->type() == QEvent::Show || Event->type() == QEvent::WindowActivate)
+            QTimer::singleShot(0, this, [this] {
+                if (!dialog_->isVisible()) return;
+                dialog_->setAttribute(Qt::WA_KeyboardFocusChange);
+                if (auto* Focus = dialog_->focusWidget()) Focus->update();
+            });
+        return QObject::eventFilter(Object, Event);
+    }
+private:
+    QDialog* dialog_;
+};
+
 class DialogOutline final : public QWidget
 {
 public:
@@ -100,6 +123,7 @@ inline QHBoxLayout* ApplyDialogFrame( QDialog* Dialog, const DialogFrameOptions&
     // Changing flags recreates the window, which must not happen while a dialog is being shown.
     if( Dialog->windowFlags().testFlag( Qt::WindowContextHelpButtonHint ) && !Dialog->testAttribute( Qt::WA_WState_Created ) )
         Dialog->setWindowFlag( Qt::WindowContextHelpButtonHint, false );
+    new detail::DialogKeyboardFocus(Dialog);
     auto* Body = new QWidget( Dialog ); Body->setObjectName( QStringLiteral( "hc.dialog.body" ) );
     // setLayout takes the layout out of the dialog and moves its widgets into the body.
     if( auto* Content = Dialog->layout() ) { Body->setLayout( Content ); Content->setContentsMargins( 20, 12, 20, 12 ); }

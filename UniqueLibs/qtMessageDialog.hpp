@@ -69,6 +69,8 @@ protected:
         if( !framed_ ) frame();
         QMessageBox::showEvent( Event );     // may add the automatic OK button, then sizes from the framed layout
         detail::MarkPrimary( findChild< QDialogButtonBox* >(), defaultButton() );
+        // Framing reparents the buttons; restore the caller's default focus.
+        if (auto* Default = defaultButton(); Default && Default->isEnabled()) Default->setFocus(Qt::TabFocusReason);
     }
 
 private:

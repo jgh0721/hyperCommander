@@ -291,6 +291,13 @@ namespace hc::ui
             }
         }
         addButton(Secondary, tr("취소(&C)"), "hc.jobs.interaction.cancel", [this] { choose(InteractionChoice::Cancel); });
+        // Expose the Enter action before the user starts keyboard navigation.
+        auto* Default = apply_;
+        if (!Default && Kind == InteractionKind::Overwrite)
+            Default = findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(InteractionChoice::Replace)));
+        if (!Default) Default = findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(InteractionChoice::Skip)));
+        if (!Default) Default = findChild<QPushButton*>("hc.jobs.interaction.cancel");
+        if (Default) Default->setDefault(true);
         validate();
         if (layout()) fitToContents();
         if (isVisible()) QTimer::singleShot(0, this, [this] { focusAction(); });
@@ -330,9 +337,8 @@ namespace hc::ui
     {
         if (dismissed_ || replied_ || !isVisible()) return;
         if (rename_ || snapshot_.interaction_->kind_ == InteractionKind::Password) { editor_->setFocus(Qt::OtherFocusReason); return; }
-        auto* Target = findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(InteractionChoice::Skip)));
-        if (!Target) Target = findChild<QPushButton*>("hc.jobs.interaction.cancel");
-        if (Target) Target->setFocus(Qt::TabFocusReason);
+        for (auto* Button : actions_->findChildren<QPushButton*>())
+            if (Button->isDefault() && Button->isEnabled()) { Button->setFocus(Qt::TabFocusReason); break; }
     }
     void FileJobInteraction::showEvent(QShowEvent* Event)
     {

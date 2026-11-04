@@ -4,6 +4,7 @@
 #include "UniqueLibs/archiveExtractJob.hpp"
 #include <QDir>
 #include "UniqueLibs/fileJobInteraction.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/archive/creationDialog.hpp"
 #include "msiBrowseFixture.hpp"
 #include "nativeTestInput.hpp"
@@ -318,6 +319,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "firstRunProductDefaultsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobInteractionUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "promptKeyboardFocusUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationProgressUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationLayoutUi"
                 || (QStringList{"r24MoveProgressControlsUi", "r24ExtractOptionsUi", "r24ExtractOptionsJobUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
@@ -3988,6 +3990,42 @@ private slots:
         QVERIFY(QFileInfo::exists(Source));
     }
 
+    void promptKeyboardFocusUi()
+    {
+        hc::ui::MessageDialog Message(QMessageBox::Question, "Focus", "Choose an action", QMessageBox::Yes | QMessageBox::No);
+        Message.setDefaultButton(QMessageBox::No);
+        Message.show(); Message.activateWindow();
+        auto* Default = Message.defaultButton();
+        QTRY_VERIFY(Default->hasFocus());
+        QTRY_VERIFY(Message.testAttribute(Qt::WA_KeyboardFocusChange));
+        QTest::keyClick(Default, Qt::Key_Return);
+        QCOMPARE(Message.result(), int(QMessageBox::No));
+
+        hc::ui::InputDialog Input;
+        Input.setLabelText("Name"); Input.setTextValue("initial");
+        Input.show(); Input.activateWindow();
+        auto* Editor = Input.findChild<QLineEdit*>(); QVERIFY(Editor);
+        QTRY_VERIFY(Editor->hasFocus());
+        QTRY_VERIFY(Input.testAttribute(Qt::WA_KeyboardFocusChange));
+        Input.reject();
+
+        using namespace hc::operations;
+        JobSnapshot Snapshot;
+        Snapshot.interaction_ = InteractionRequest{};
+        Snapshot.interaction_->kind_ = InteractionKind::Overwrite;
+        Snapshot.interaction_->choices_ = {InteractionChoice::Replace, InteractionChoice::Skip, InteractionChoice::Cancel};
+        auto Answer = InteractionChoice::Cancel;
+        hc::ui::FileJobInteraction Conflict(Snapshot, "Copy", [&](InteractionChoice Choice, const QString&) { Answer = Choice; }, {}, {}, nullptr);
+        Conflict.setAttribute(Qt::WA_DeleteOnClose, false);
+        Conflict.show(); Conflict.activateWindow();
+        auto* Replace = Conflict.findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(InteractionChoice::Replace)));
+        QVERIFY(Replace && Replace->isDefault());
+        QTRY_VERIFY(Replace->hasFocus());
+        QTest::keyClick(Replace, Qt::Key_Return);
+        QCOMPARE(Answer, InteractionChoice::Replace);
+        Conflict.Dismiss();
+    }
+
     void fileJobInteractionUi_data()
     {
         QTest::addColumn<int>("Mode");
@@ -4042,11 +4080,15 @@ private slots:
         const auto ChoiceButton = [&](InteractionChoice Choice) { return Popup->findChild<QPushButton*>("hc.jobs.choice." + QString::number(int(Choice))); };
         QVERIFY(Popup->findChild<QWidget*>("hc.dialog.outline")); QVERIFY(Progress->findChild<QWidget*>("hc.dialog.outline"));
         if (Mode != 1 && Mode != 2) {
-            auto* Initial = ChoiceButton(InteractionChoice::Skip);
+            auto* Initial = ChoiceButton(Kind == InteractionKind::Overwrite ? InteractionChoice::Replace : InteractionChoice::Skip);
             if (!Initial) Initial = Popup->findChild<QPushButton*>("hc.jobs.interaction.cancel");
             QTRY_COMPARE(Popup->focusWidget(), Initial); QTRY_VERIFY(Initial->hasFocus());
         } else QTRY_COMPARE(Popup->focusWidget(), Editor);
-        for (auto* Button : Popup->findChildren<QPushButton*>()) if (Button->isVisibleTo(Popup) && !Button->objectName().startsWith("hc.dialog")) { QVERIFY(!Button->isDefault()); QVERIFY(!Button->autoDefault()); }
+        QTRY_VERIFY(Popup->testAttribute(Qt::WA_KeyboardFocusChange));
+        int Defaults = 0;
+        for (auto* Button : Popup->findChildren<QPushButton*>()) if (Button->isVisibleTo(Popup) && !Button->objectName().startsWith("hc.dialog")) { Defaults += Button->isDefault(); QVERIFY(!Button->autoDefault()); }
+        QCOMPARE(Defaults, 1);
+        if (Kind == InteractionKind::Overwrite) QVERIFY(ChoiceButton(InteractionChoice::Replace)->isDefault());
         if (Mode == 0) {
             auto* Skip = ChoiceButton(InteractionChoice::Skip);
             QTest::keyClick(Skip, Qt::Key_Left); QCOMPARE(Popup->focusWidget(), ChoiceButton(InteractionChoice::Replace));
