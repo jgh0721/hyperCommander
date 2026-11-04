@@ -67,43 +67,20 @@ namespace nsCmn
 #if defined(USE_QT_SUPPORT)
         QString GetReparsePointTo( const QString& Path )
         {
-            WIN32_FIND_DATAW Wfd = { 0, };
-            const auto P = Path.toStdWString();
-            auto FindHandle = FindFirstFileW( P.c_str(), &Wfd );
-
-            if( FindHandle == INVALID_HANDLE_VALUE )
+            // 태그는 비트 집합이 아니므로 FlagOn 으로 가리지 않는다. 판별은 ReadReparseLink 가 맡는다.
+            const auto hFile = CreateFileW( Path.toStdWString().c_str(), 0,
+                                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr );
+            if( hFile == INVALID_HANDLE_VALUE )
                 return "";
 
-            if( FlagOn( Wfd.dwFileAttributes, FILE_ATTRIBUTE_DIRECTORY ) )
-            {
-                if( FlagOn( Wfd.dwReserved0, IO_REPARSE_TAG_SYMLINK ) ||            // SYMLINKD
-                    FlagOn( Wfd.dwReserved0, IO_REPARSE_TAG_MOUNT_POINT ) )         // JUNTION
-                {
-                    auto hFile =
-                        CreateFileW( P.c_str(), 0,
-                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                     NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL );
+            const auto Link = ReadReparseLink( hFile );
+            CloseHandle( hFile );
 
-                    if( hFile != INVALID_HANDLE_VALUE )
-                    {
-                        DWORD cbData;
-                        BYTE DataBuffer[ 16384 ] = { 0 };   // REPARSE_GUID_DATA_BUFFER 는 최대 16KB 이다. 
+            if( !Link.Value || Link.Value->Kind == TyReparseLink::REPARSE_LINK_OTHER )
+                return "";
 
-                        if( DeviceIoControl( hFile, FSCTL_GET_REPARSE_POINT, nullptr, 0, &DataBuffer, sizeof( DataBuffer ), &cbData, nullptr ) != FALSE )
-                        {
-                            CloseHandle( hFile );
-                            const auto pRGDB = ( REPARSE_GUID_DATA_BUFFER* )&DataBuffer;
-                            return QString::fromWCharArray( reinterpret_cast< const wchar_t* >( pRGDB->GenericReparseBuffer.DataBuffer ) );
-                        }
-
-                        CloseHandle( hFile );
-                    }
-                }
-            }
-
-            FindClose( FindHandle );
-
-            return "";
+            return QString::fromStdWString( Link.Value->Target );
         }
 
         bool IsContainPathSeps( const QString& Path )
@@ -151,6 +128,81 @@ namespace nsCmn
                 return MAKE_WIN32_VALUE( FileInformation.nNumberOfLinks );
 
             return MAKE_WIN32_LAST_ERROR;
+        }
+
+        TyOsValue< TyReparseLink > ReadReparseLink( HANDLE hFile )
+        {
+            // REPARSE_DATA_BUFFER 는 ntifs.h 에만 있다. 오프셋을 직접 읽는다.
+            //   0 Tag(4) · 4 DataLength(2) · 8 SubstituteOffset · 10 SubstituteLength · 12 PrintOffset · 14 PrintLength
+            //   심볼릭 링크는 16 Flags(4) 뒤 20 에서, 접합 지점은 16 에서 경로 버퍼가 시작한다.
+            std::vector< BYTE > Buffer( MAXIMUM_REPARSE_DATA_BUFFER_SIZE );
+            DWORD Bytes = 0;
+            if( DeviceIoControl( hFile, FSCTL_GET_REPARSE_POINT, nullptr, 0, Buffer.data(), DWORD( Buffer.size() ), &Bytes, nullptr ) == FALSE )
+                return MAKE_WIN32_LAST_ERROR;
+
+            const TyOsValue< TyReparseLink > Invalid{ std::nullopt, { TyOsError::OS_WIN32_ERROR, ERROR_INVALID_REPARSE_DATA } };
+            const auto Word = [ &Buffer ]( size_t Offset ) { WORD Value = 0; memcpy( &Value, Buffer.data() + Offset, sizeof( Value ) ); return size_t( Value ); };
+            if( Bytes < 8 )
+                return Invalid;
+
+            TyReparseLink Link;
+            memcpy( &Link.Tag, Buffer.data(), sizeof( Link.Tag ) );
+            if( Word( 4 ) + 8 > Bytes )
+                return Invalid;
+
+            size_t PathBuffer = 0;
+            if( Link.Tag == IO_REPARSE_TAG_SYMLINK )
+            {
+                Link.Kind = TyReparseLink::REPARSE_LINK_SYMLINK;
+                PathBuffer = 20;
+            }
+            else if( Link.Tag == IO_REPARSE_TAG_MOUNT_POINT )
+            {
+                Link.Kind = TyReparseLink::REPARSE_LINK_JUNCTION;
+                PathBuffer = 16;
+            }
+            else
+                return MAKE_WIN32_VALUE( Link );
+
+            if( Bytes < PathBuffer )
+                return Invalid;
+
+            const auto Name = [ & ]( size_t Field, std::wstring& Out ) {
+                const auto Offset = Word( Field ), Length = Word( Field + 2 );
+                if( ( Offset | Length ) & 1 || PathBuffer + Offset + Length > Bytes )
+                    return false;
+                Out.assign( reinterpret_cast< const wchar_t* >( Buffer.data() + PathBuffer + Offset ), Length / sizeof( wchar_t ) );
+                return true;
+            };
+
+            std::wstring Substitute, Print;
+            if( !Name( 8, Substitute ) || !Name( 12, Print ) )
+                return Invalid;
+
+            if( Link.Kind == TyReparseLink::REPARSE_LINK_SYMLINK )
+            {
+                ULONG Flags = 0;
+                memcpy( &Flags, Buffer.data() + 16, sizeof( Flags ) );
+                Link.Relative = ( Flags & 1 ) != 0;     // SYMLINK_FLAG_RELATIVE
+            }
+
+            // 표시 이름이 사용자가 만든 경로다. 볼륨 탑재 지점처럼 표시 이름이 없으면 NT 경로를 Win32 꼴로 바꾼다.
+            if( !Print.empty() )
+                Link.Target = Print;
+            else if( Substitute.rfind( L"\\??\\", 0 ) == 0 )
+            {
+                const auto Rest = Substitute.substr( 4 );
+                if( Rest.rfind( L"UNC\\", 0 ) == 0 )
+                    Link.Target = L"\\\\" + Rest.substr( 4 );
+                else if( Rest.size() >= 2 && Rest[ 1 ] == L':' )
+                    Link.Target = Rest;
+                else
+                    Link.Target = L"\\\\?\\" + Rest;
+            }
+            else
+                Link.Target = Substitute;
+
+            return MAKE_WIN32_VALUE( Link );
         }
 
         TyOsValue<bool> IsDirExists( const std::wstring& DirPath )

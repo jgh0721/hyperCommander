@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "cmnPath.hpp"
 #include <QtTest>
+#include <winioctl.h>
 
 class CPathTests : public QObject
 {
@@ -12,7 +13,39 @@ private slots:
     void separators();
     void fileAndDirectoryQueries();
     void missingPathErrors();
+    void reparseLinks();
 };
+
+namespace
+{
+    // Mount point to a local folder; needs no symbolic-link privilege.
+    bool MakeJunction(const std::wstring& Link, const std::wstring& Target)
+    {
+        if (!CreateDirectoryW(Link.c_str(), nullptr)) return false;
+        const auto Substitute = std::wstring(L"\\??\\") + Target;
+        const auto PathBytes = (Substitute.size() + Target.size() + 2) * sizeof(wchar_t);
+        std::vector<BYTE> Buffer(16 + PathBytes);
+        const auto Put16 = [&](size_t Offset, size_t Value) { const WORD Word = WORD(Value); memcpy(Buffer.data() + Offset, &Word, 2); };
+        const DWORD Tag = IO_REPARSE_TAG_MOUNT_POINT; memcpy(Buffer.data(), &Tag, 4);
+        Put16(4, 8 + PathBytes); Put16(8, 0); Put16(10, Substitute.size() * 2);
+        Put16(12, (Substitute.size() + 1) * 2); Put16(14, Target.size() * 2);
+        memcpy(Buffer.data() + 16, Substitute.c_str(), (Substitute.size() + 1) * 2);
+        memcpy(Buffer.data() + 16 + (Substitute.size() + 1) * 2, Target.c_str(), (Target.size() + 1) * 2);
+        const auto Handle = CreateFileW(Link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (Handle == INVALID_HANDLE_VALUE) return false;
+        DWORD Returned = 0;
+        const bool Set = DeviceIoControl(Handle, FSCTL_SET_REPARSE_POINT, Buffer.data(), DWORD(Buffer.size()), nullptr, 0, &Returned, nullptr);
+        CloseHandle(Handle); return Set;
+    }
+    nsCmn::nsCmnPath::TyReparseLink ReadLink(const std::wstring& Path, bool* Ok)
+    {
+        const auto Handle = CreateFileW(Path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+            OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        *Ok = false; if (Handle == INVALID_HANDLE_VALUE) return {};
+        const auto Link = nsCmn::nsCmnPath::ReadReparseLink(Handle); CloseHandle(Handle);
+        *Ok = Link.Value.has_value(); return Link.Value.value_or(nsCmn::nsCmnPath::TyReparseLink{});
+    }
+}
 
 void CPathTests::extension_data()
 {
@@ -99,6 +132,45 @@ void CPathTests::missingPathErrors()
     QCOMPARE(Exists.ErrorCode.ErrorCode, uint32_t(ERROR_FILE_NOT_FOUND));
     // The legacy directory-size API has no error channel; preserve this baseline explicitly.
     QCOMPARE(nsCmn::nsCmnPath::CalculateDirSize(Missing), int64_t(0));
+}
+
+void CPathTests::reparseLinks()
+{
+    using Link = nsCmn::nsCmnPath::TyReparseLink;
+    QTemporaryDir Fixture;
+    QVERIFY(Fixture.isValid());
+    QDir Root(Fixture.path());
+    QVERIFY(Root.mkdir(QStringLiteral("대상 폴더")));
+    const auto Target = QDir::toNativeSeparators(Root.filePath(QStringLiteral("대상 폴더"))).toStdWString();
+    const auto Junction = QDir::toNativeSeparators(Root.filePath(QStringLiteral("접합"))).toStdWString();
+    QVERIFY(MakeJunction(Junction, Target));
+
+    bool Ok = false;
+    const auto Mount = ReadLink(Junction, &Ok);
+    QVERIFY(Ok);
+    QCOMPARE(Mount.Kind, Link::REPARSE_LINK_JUNCTION);
+    QCOMPARE(Mount.Tag, uint32_t(IO_REPARSE_TAG_MOUNT_POINT));
+    QCOMPARE(QString::fromStdWString(Mount.Target), QString::fromStdWString(Target));
+    QCOMPARE(nsCmn::nsCmnPath::GetReparsePointTo(QString::fromStdWString(Junction)), QString::fromStdWString(Target));
+
+    // An ordinary folder is no reparse point: the read fails and the legacy query is empty.
+    const auto Plain = ReadLink(Target, &Ok);
+    QVERIFY(!Ok);
+    QCOMPARE(Plain.Kind, Link::REPARSE_LINK_OTHER);
+    QVERIFY(nsCmn::nsCmnPath::GetReparsePointTo(QString::fromStdWString(Target)).isEmpty());
+
+    // A relative symbolic link keeps its stored text. Creating one needs Developer Mode or the privilege.
+    const auto Symbolic = QDir::toNativeSeparators(Root.filePath(QStringLiteral("상대 링크"))).toStdWString();
+    if (!CreateSymbolicLinkW(Symbolic.c_str(), L"대상 폴더", SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+        QCOMPARE(GetLastError(), DWORD(ERROR_PRIVILEGE_NOT_HELD));
+        qInfo("symbolic-link case not run: Developer Mode or the privilege is unavailable");
+        return;
+    }
+    const auto Relative = ReadLink(Symbolic, &Ok);
+    QVERIFY(Ok);
+    QCOMPARE(Relative.Kind, Link::REPARSE_LINK_SYMLINK);
+    QVERIFY(Relative.Relative);
+    QCOMPARE(QString::fromStdWString(Relative.Target), QStringLiteral("대상 폴더"));
 }
 
 QTEST_GUILESS_MAIN(CPathTests)

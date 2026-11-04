@@ -61,6 +61,9 @@ namespace hc::columns
         QString display_;
     };
 
+    // What a number counts. Drives condition editors (B/KiB/MiB/GiB, px) and never changes values.
+    enum class FieldUnit { None, Bytes, Pixels, Count, Characters };
+    struct FieldValueChoice { QString value_, title_; };
     struct FieldDefinition
     {
         QString id_; // Provider-qualified, case-sensitive: file.name, wdx.<plugin>.<field>, lua.<script>.<field>.
@@ -70,6 +73,11 @@ namespace hc::columns
         EvaluationCost cost_ = EvaluationCost::Snapshot;
         bool sortable_ = true;
         Qt::Alignment defaultAlignment_ = {};
+        // Picker grouping only; never part of identity. Built-in: a topic, plugin: its name, Lua: its script.
+        QString group_;
+        FieldUnit unit_ = FieldUnit::None;
+        // A closed value set (raw value + label), e.g. Internet zones. Empty: free input.
+        QVector<FieldValueChoice> choices_;
     };
     struct FormatOptions
     {
@@ -167,7 +175,7 @@ namespace hc::columns
     inline QVector<FieldDefinition> ScriptFields(const ColumnProfile& Profile) {
         QVector<FieldDefinition> Result;
         for (const auto& Script : Profile.scripts_) for (const auto& Output : Script.outputs_)
-            Result.append({ScriptPrefix(Script) + Output.name_, Script.title_ + " / " + Output.title_, Output.type_, ProviderKind::Lua, EvaluationCost::Background});
+            Result.append({ScriptPrefix(Script) + Output.name_, Script.title_ + " / " + Output.title_, Output.type_, ProviderKind::Lua, EvaluationCost::Background, true, {}, Script.title_});
         return Result;
     }
     inline QString ValidateScripts(const ColumnProfile& Profile) {
