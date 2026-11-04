@@ -1,4 +1,5 @@
-﻿#include "core/ToolbarIcons.h"
+﻿#include "stdafx.h"
+#include "core/ToolbarIcons.h"
 
 #include "core/ThemeManager.h"
 #include <fmstyle/ThemeManager.h>
@@ -10,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPainter>
+#include <QIconEngine>
 #include <QSet>
 #include <QSvgRenderer>
 #include <QToolBar>
@@ -184,12 +186,11 @@ QColor colorFor(ThemeManager::Theme theme, QIcon::Mode mode, QIcon::State state)
     }
 }
 
-QPixmap renderTintedIcon(const QString& iconName, const QByteArray& svgTemplate, const QColor& color, const QSize& size)
+QPixmap renderTintedIcon(const QString& iconName, const QByteArray& svgTemplate, const QColor& color, const QSize& size, qreal dpr = 2.0)
 {
     if (!size.isValid() || size.isEmpty())
         return {};
 
-    const qreal dpr = 2.0;
     const QSize pixelSize(qRound(size.width() * dpr), qRound(size.height() * dpr));
     QImage image(pixelSize, QImage::Format_ARGB32_Premultiplied);
     if (image.isNull())
@@ -228,38 +229,60 @@ QPixmap renderTintedIcon(const QString& iconName, const QByteArray& svgTemplate,
     return pixmap;
 }
 
+// Defer rasterization until Qt requests an actual size/state. The previous path
+// rendered 24 pixmaps per icon, including icons in menus never opened.
+class LazyToolbarIcon final : public QIconEngine
+{
+public:
+    explicit LazyToolbarIcon(QString Name) : name_(std::move(Name)), svg_(loadSvgTemplate(name_))
+    {
+        const auto Theme = ThemeManager::instance().currentTheme();
+        for (int Mode = 0; Mode < 4; ++Mode)
+            for (int State = 0; State < 2; ++State)
+                colors_[Mode][State] = colorFor(Theme, QIcon::Mode(Mode), QIcon::State(State));
+    }
+    QIconEngine* clone() const override { return new LazyToolbarIcon(*this); }
+    bool isNull() override { return false; }
+    QPixmap pixmap(const QSize& Size, QIcon::Mode Mode, QIcon::State State) override
+    {
+        return scaledPixmap(Size, Mode, State, 1.0);
+    }
+    QPixmap scaledPixmap(const QSize& Size, QIcon::Mode Mode, QIcon::State State, qreal Scale) override
+    {
+        const auto Key = QString("%1:%2:%3:%4:%5").arg(Size.width()).arg(Size.height()).arg(int(Mode)).arg(int(State)).arg(Scale);
+        const auto Found = cache_.constFind(Key);
+        if (Found != cache_.cend()) return Found.value();
+        auto Pixmap = renderTintedIcon(name_, svg_, colors_[int(Mode)][int(State)], Size, Scale);
+        if (cache_.size() >= 64) cache_.clear();
+        cache_.insert(Key, Pixmap);
+        return Pixmap;
+    }
+    void paint(QPainter* Painter, const QRect& Rect, QIcon::Mode Mode, QIcon::State State) override
+    {
+        const auto Pixmap = scaledPixmap(Rect.size(), Mode, State, Painter->device()->devicePixelRatioF());
+        Painter->drawPixmap(Rect, Pixmap);
+    }
+private:
+    QString name_;
+    QByteArray svg_;
+    QColor colors_[4][2];
+    QHash<QString, QPixmap> cache_;
+};
+
 QIcon buildIcon(const QString& iconName)
 {
     const QString effectiveName = iconName.isEmpty() ? QStringLiteral("missing-icon") : iconName;
     static QHash<QString, QIcon> cache;
     const auto CurrentTheme = ThemeManager::instance().currentTheme();
-    const QString cacheKey = QStringLiteral("%1:%2:%3:%4")
-        .arg(static_cast<int>(CurrentTheme))
-        .arg(colorFor(CurrentTheme, QIcon::Normal, QIcon::Off).name(QColor::HexArgb), colorFor(CurrentTheme, QIcon::Normal, QIcon::On).name(QColor::HexArgb))
-        .arg(effectiveName);
-    if (cache.contains(cacheKey))
-        return cache.value(cacheKey);
-
-    const QByteArray svgTemplate = loadSvgTemplate(effectiveName);
-    QIcon icon;
-    const auto theme = ThemeManager::instance().currentTheme();
-    const QList<QSize> sizes{QSize(16, 16), QSize(20, 20), QSize(24, 24), QSize(32, 32)};
-    const QList<QIcon::Mode> modes{QIcon::Normal, QIcon::Active, QIcon::Disabled};
-    const QList<QIcon::State> states{QIcon::Off, QIcon::On};
-
-    for (QIcon::Mode mode : modes) {
-        for (QIcon::State state : states) {
-            const QColor color = colorFor(theme, mode, state);
-            for (const QSize& size : sizes) {
-                QPixmap pm = renderTintedIcon(effectiveName, svgTemplate, color, size);
-                if (!pm.isNull())
-                    icon.addPixmap(pm, mode, state);
-            }
-        }
-    }
-
-    cache.insert(cacheKey, icon);
-    return cache.value(cacheKey);
+    QString cacheKey = effectiveName;
+    for (int Mode = 0; Mode < 4; ++Mode)
+        for (int State = 0; State < 2; ++State)
+            cacheKey += ':' + colorFor(CurrentTheme, QIcon::Mode(Mode), QIcon::State(State)).name(QColor::HexArgb);
+    if (const auto Found = cache.constFind(cacheKey); Found != cache.cend()) return Found.value();
+    if (cache.size() >= 512) cache.clear();
+    const QIcon Icon(new LazyToolbarIcon(effectiveName));
+    cache.insert(cacheKey, Icon);
+    return Icon;
 }
 
 } // namespace

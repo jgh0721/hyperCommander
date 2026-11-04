@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "documentWorkspaceWidget.hpp"
+#include "hwpStartupTrace.hpp"
 #include "documentWindowSize.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -201,6 +202,7 @@ namespace hc::document
         : QWidget(Parent), recoveryRoot_(std::move(RecoveryRoot)),
           workspaceId_(QUuid::createUuid().toString(QUuid::Id128)), hosted_(Hosted), workspace_(Hosted?0:16)
     {
+        hc::document::startup::Scope BuildTrace("editor.shellControls");
         if (Hosted) { DocumentThemeAdapter::InstallLocal(*this); QImageReader::setAllocationLimit(0); }
         else DocumentThemeAdapter::Install(*qApp);
         InitializePortedViewResources();
@@ -208,17 +210,20 @@ namespace hc::document
         recovery_ = std::make_shared<DocumentRecoveryStore>(recoveryRoot_);
         setObjectName("documentWorkspace"); setWindowTitle(Hosted ? "HyperViewer" : "HyperEditor"); resize(hc::defaults::edit::WindowSize);
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
+        hc::document::startup::Scope BasicTrace("editor.basicWidgets");
         menu_ = new QMenuBar(this); toolbar_ = new QToolBar(tr("공통 도구모음"), this);
         menu_->setObjectName("mainMenu"); toolbar_->setObjectName("mainToolbar");
         toolbar_->setToolButtonStyle(Qt::ToolButtonIconOnly); toolbar_->setIconSize(QSize(24, 24));
         tabs_ = new QTabWidget(this); tabs_->setObjectName("documentTabs"); tabs_->setTabsClosable(true);
         singlePane_ = new QStackedWidget(this); singlePane_->setObjectName("singleDocument"); singlePane_->hide();
+        BasicTrace.End();
         // The standalone editor uses the product title bar; a hosted viewer keeps its host's frame.
         if (!Hosted && !Parent) {
             setWindowFlag(Qt::FramelessWindowHint);
             // Native editor/foreign preview HWNDs consume edge hit tests before
             // WindowChrome sees them. Keep its six-DIP resize border host-owned.
             Layout->setContentsMargins(6, 6, 6, 6);
+            hc::document::startup::Scope ChromeTrace("editor.titleChrome");
             auto* Chrome = new fm::ui::WindowChrome(this, this); Chrome->setObjectName("documentWindowChrome"); Layout->addWidget(Chrome);
         }
         // One measured status row owns the active view fields and session state.
@@ -232,6 +237,7 @@ namespace hc::document
         connect(StatusRefresh,&QTimer::timeout,this,[this]{update();tryFinishClose();});
         Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(StatusRow);
         chrome_ = new WorkspaceChromeController(menu_, toolbar_, this);
+        BuildTrace.End(); hc::document::startup::Scope ActionsTrace("editor.actions");
         auto* FileMenu = menu_->addMenu(tr("파일(&F)"));
         auto Add = [&](const QString& Label, const char* Id, auto Callback) {
             auto* Action = FileMenu->addAction(Label); Action->setObjectName(Id); toolbar_->addAction(Action); addAction(Action);
@@ -481,6 +487,7 @@ namespace hc::document
                 && !qobject_cast<QAbstractSpinBox*>(Focus) && !qobject_cast<QComboBox*>(Focus) && Tab->pane_->CanRunViewCommand(Id);
             return true;
         });
+        ActionsTrace.End(); hc::document::startup::Scope WatchersTrace("editor.watchers");
         const auto Override = qApp->property("documentViewsConfigDir");
         settingsPath_ = hc::settings::UnifiedConfig::FileName(Override.isValid() ? Override.toString() : hc::settings::DocumentPaths().directory_);
         settingsWatcher_ = new QFileSystemWatcher(this);
@@ -494,9 +501,10 @@ namespace hc::document
         connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) { if (State == Qt::ApplicationActive) externalWatcher_->recheckAll(); });
         connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed,
             this, [this] { RefreshWorkspaceIcons(*this); });
-        refreshPreferences();
-        RefreshWorkspaceIcons(*this);
-        windowSize_ = std::make_unique<DocumentWindowSize>(this, hosted_, [this](const QString& Error) { ShowShellError(Error); });
+        WatchersTrace.End();
+        { hc::document::startup::Scope Trace("editor.preferences"); refreshPreferences(); }
+        { hc::document::startup::Scope Trace("editor.icons"); RefreshWorkspaceIcons(*this); }
+        { hc::document::startup::Scope Trace("editor.windowSize"); windowSize_ = std::make_unique<DocumentWindowSize>(this, hosted_, [this](const QString& Error) { ShowShellError(Error); }); }
     }
     DocumentWorkspaceWidget::~DocumentWorkspaceWidget()
     {
@@ -1655,7 +1663,7 @@ namespace hc::document
     {
         if (!hosted_ || QApplication::activeModalWidget() || QApplication::activePopupWidget()
             || (preferences_ && preferences_->isVisible())) return;
-        refreshPreferences();
+        { hc::document::startup::Scope Trace("editor.preferences"); refreshPreferences(); }
         if (closeViewerOnEscape_ && RequestClose()) finishWindowClose();
     }
     void DocumentWorkspaceWidget::finishWindowClose()

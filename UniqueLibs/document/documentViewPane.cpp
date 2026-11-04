@@ -567,7 +567,16 @@ namespace hc::document
         // Actions are created before the workspace applies its palette. Refresh
         // normal/off glyphs too; a Light icon otherwise disappears on Dark.
         for(auto* Action:findChildren<QAction*>())ToolbarIcons::refreshAction(Action);
-        if(text_){auto Font=QFontDatabase::systemFont(QFontDatabase::FixedFont);if(!Theme.monoFontFamily().isEmpty())Font.setFamily(Theme.monoFontFamily());Font.setPixelSize(Theme.monoFontPx());text_->setEditorFont(Font);text_->ReloadPreferences();}
+        if (text_) {
+            // Text preferences own the final font. Applying the product mono font
+            // first performs an unnecessary layout (and an alias scan if absent).
+            if (::AppSettings().value("textView/fontFamily").toString().isEmpty()) {
+                auto Font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+                if (!Theme.monoFontFamily().isEmpty()) Font.setFamily(Theme.monoFontFamily());
+                Font.setPixelSize(Theme.monoFontPx()); text_->setEditorFont(Font);
+            }
+            text_->ReloadPreferences();
+        }
     }
     QList<DocumentStatusField> DocumentViewPane::StatusFields() const
     {

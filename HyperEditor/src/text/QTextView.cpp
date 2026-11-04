@@ -1,4 +1,6 @@
-﻿#include "text/QTextView.h"
+﻿#include "stdafx.h"
+#include "text/QTextView.h"
+#include "UniqueLibs/bundledFonts.hpp"
 #include "text/ScintillaQtDirectBackend.h"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <Scintilla.h>
@@ -967,6 +969,7 @@ QToolBar* QTextView::createToolBar()
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "text.font"),
             &QAction::triggered, this, [this]{
         bool ok;
+        hc::fonts::RegisterBundledFonts();
         QFont font = QFontDialog::getFont(&ok, editorFont(), this);
         if (ok) {
             setEditorFont(font);
@@ -1124,7 +1127,7 @@ void QTextView::ReloadPreferences()
     AppSettings Settings;
     auto Font = editorFont();
     const auto Family = Settings.value("textView/fontFamily").toString();
-    if (!Family.isEmpty()) Font.setFamily(Family);
+    if (!Family.isEmpty()) { hc::fonts::RegisterBundledFonts(Family); Font.setFamily(Family); }
     const int Size = Settings.value("textView/fontSize").toInt();
     if (Size >= 6 && Size <= 72) Font.setPointSize(Size);
     m_editor->setEditorFont(Font);
@@ -1187,6 +1190,7 @@ void QTextView::applyEditorSettings()
         : qBound(1, Settings.value("textView/wordWrapLastMode").toInt(), 3);
     if (auto* Wrap = findChild<QComboBox*>("wordWrapMode")) { const QSignalBlocker Block(Wrap); Wrap->setCurrentIndex(WordWrapMode()); }
     if (m_ruler) {
+        hc::fonts::RegisterBundledFonts(Settings.value("textView/rulerFontFamily").toString());
         QFont RulerFont(Settings.value("textView/rulerFontFamily").toString());
         RulerFont.setPointSize(qBound(6, Settings.value("textView/rulerFontSize").toInt(), 36));
         m_ruler->SetLabelFont(RulerFont);

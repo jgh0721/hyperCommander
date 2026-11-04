@@ -1,4 +1,5 @@
-﻿#include "UniqueLibs/settings/appSettings.hpp"
+﻿#include "stdafx.h"
+#include "UniqueLibs/settings/appSettings.hpp"
 #include <type_traits>
 #include "HyperEditor/editorInstance.hpp"
 #include "UniqueLibs/productTheme.hpp"
@@ -32,6 +33,7 @@
 #include "core/ExternalChangeWatcher.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
+#include "core/ToolbarIcons.h"
 #include <QWindow>
 #include <QScreen>
 #include "text/ITextEditorBackend.h"
@@ -55,6 +57,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFontComboBox>
+#include <QFontInfo>
 #include <QKeySequenceEdit>
 #include <QListWidget>
 #include <QSpinBox>
@@ -88,6 +91,61 @@ class DocumentPreferencesTests : public QObject {
         return Zip.status()==QZipWriter::NoError?Bytes:QByteArray{};
     }
 private slots:
+    void smallTextStartupAcceptsInputAndSaves()
+    {
+        QTemporaryDir Temp;
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        const auto Path = Temp.filePath("startup.txt");
+        Write(Path, "hello\r\n");
+        DocumentWorkspaceWidget Window(Temp.path() + "/recovery");
+        Window.SetClosePrompt([](const QString&) { return int(QMessageBox::Discard); });
+        Window.show();
+        QVERIFY(!Window.Handle({{"action", "open"}, {"path", Path}}).contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 15000);
+        auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text);
+        QCOMPARE(QFontInfo(Text->editorFont()).family(), QString("D2Coding ligature"));
+        auto* Pane = Window.findChild<DocumentViewPane*>(); QVERIFY(Pane);
+        auto* Input = Pane->InputWidget(); QVERIFY(Input);
+        Input->setFocus();
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(Text->Backend());
+        Backend->Send(SCI_DOCUMENTEND);
+        QTest::keyClicks(Input, "startup-input");
+        QVERIFY(Text->Content().endsWith("startup-input"));
+        Window.findChild<QAction*>("saveDocument")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 15000);
+        QTRY_VERIFY(Read(Path).endsWith("startup-input"));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(), 15000);
+    }
+    void toolbarIconsRenderAtRequestedScale()
+    {
+        QTemporaryDir Temp;
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        DocumentWorkspaceWidget Workspace(Temp.path() + "/recovery");
+        auto Icon = ToolbarIcons::iconByName("save");
+        QVERIFY(!Icon.isNull());
+        for (const qreal Scale : {1.0, 1.5, 2.0}) {
+            for (auto Mode : {QIcon::Normal, QIcon::Active, QIcon::Disabled}) {
+                for (auto State : {QIcon::Off, QIcon::On}) {
+                    const auto Pixmap = Icon.pixmap(QSize(24, 24), Scale, Mode, State);
+                    QVERIFY(!Pixmap.isNull());
+                    QCOMPARE(Pixmap.size(), QSize(qRound(24 * Scale), qRound(24 * Scale)));
+                    QCOMPARE(Pixmap.devicePixelRatio(), Scale);
+                    const auto Image = Pixmap.toImage();
+                    bool Painted = false;
+                    for (int Y = 0; Y < Image.height() && !Painted; ++Y)
+                        for (int X = 0; X < Image.width(); ++X)
+                            if (qAlpha(Image.pixel(X, Y))) { Painted = true; break; }
+                    QVERIFY(Painted);
+                }
+            }
+        }
+        QVERIFY(Icon.pixmap(QSize(24, 24), QIcon::Normal).toImage()
+            != Icon.pixmap(QSize(24, 24), QIcon::Disabled).toImage());
+    }
     void windowSizePersistence_data()
     {
         QTest::addColumn<bool>("Hosted");

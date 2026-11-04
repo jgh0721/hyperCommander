@@ -38,7 +38,12 @@ namespace
     public:
         using hc::document::DocumentWorkspaceWidget::DocumentWorkspaceWidget;
         std::function<void()> closed_;
+        bool startupPainted_ = false;
     protected:
+        void paintEvent(QPaintEvent* Event) override {
+            DocumentWorkspaceWidget::paintEvent(Event);
+            if (!startupPainted_) { startupPainted_ = true; hc::document::startup::Data().Aggregate("editor.firstPaint", hc::document::startup::Data().Now()); }
+        }
         void closeEvent(QCloseEvent* Event) override { if (RequestClose()) {Event->accept();if(closed_)closed_();} else Event->ignore(); }
     };
 }
@@ -51,8 +56,7 @@ int main(int Argc, char** Argv)
     hc::document::startup::Data().Begin("editor.entryToTitle");
     const auto QtStart = hc::document::startup::Data().Begin("editor.qtApplication");
     QApplication App(Argc, Argv); App.setOrganizationName("HyperCommander"); App.setApplicationName("HyperEditor"); hc::ui::InstallQtTranslation(App);
-    hc::fonts::RegisterBundledFonts();
-    InitializePortedViewResources(); App.setWindowIcon(QIcon(":/icons/app/hypereditor.svg"));
+    hc::document::startup::Scope ResourcesTrace("editor.resources"); InitializePortedViewResources(); ResourcesTrace.End(); App.setWindowIcon(QIcon(":/icons/app/hypereditor.svg"));
     hc::document::startup::Data().End(QtStart);
     QCommandLineParser Parser; Parser.addHelpOption();
     Parser.addOption(QCommandLineOption("rhwp-edit", "Edit one HWP/HWPX document"));
@@ -72,9 +76,11 @@ int main(int Argc, char** Argv)
     Parser.addPositionalArgument("files", "PDF, text and image files", "[files...]"); Parser.process(App);
     const auto Config = hc::settings::DocumentPaths();
     if (!Config.error_.isEmpty()) { hc::ui::MessageDialog::critical(nullptr, QObject::tr("설정 경로 오류"), Config.error_); return 11; }
+    hc::document::startup::Scope ThemeTrace("editor.theme");
     hc::document::DocumentThemeAdapter::Install(App);
     // Product tokens, accent and fonts first, so every entry point (HWP, EPUB, editor) opens in the product look.
     hc::document::DocumentThemeAdapter::LoadProductTheme(Config.directory_);
+    ThemeTrace.End();
     QJsonObject ParentAppearance;
     if(Parser.isSet("document-appearance")) {
         const auto Encoded=Parser.value("document-appearance").toLatin1(); if(Encoded.size()>16384)return 9;
@@ -83,7 +89,7 @@ int main(int Argc, char** Argv)
         ParentAppearance=Decoded.object();
     }
     if (Parser.isSet("verify-epub-runtime")) return VerifyEpubRuntime(QFileInfo(Parser.value("verify-epub-runtime")).absoluteFilePath());
-    if (Parser.isSet("verify-runtime")) return VerifyDocumentRuntime();
+    if (Parser.isSet("verify-runtime")) { hc::fonts::RegisterBundledFonts(); return VerifyDocumentRuntime(); }
     const bool RhwpEdit = Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy");
     const bool EpubEdit=Parser.isSet("epub-edit");
     QJsonObject SearchContext;
@@ -129,6 +135,8 @@ int main(int Argc, char** Argv)
         Window.show(); QTimer::singleShot(0, &Window, &hc::document::HwpOpenWindow::Open);
         return App.exec();
     }
+    QObject::connect(&App, &QCoreApplication::aboutToQuit, &App, [] { hc::document::startup::Write(hc::document::startup::Data().Snapshot(), "editor", QCoreApplication::applicationPid()); });
+    hc::document::startup::Scope InstanceTrace("editor.instance");
     EditorInstance Instance;
     if(!EpubEdit && !Parser.isSet("find-in-files") && !Parser.isSet("document-copy")){
         const auto Canonical=[](const QString& Path){const QFileInfo Info(Path);const auto Name=Info.canonicalFilePath();return (Name.isEmpty()?Info.absoluteFilePath():Name).toCaseFolded();};
@@ -137,6 +145,8 @@ int main(int Argc, char** Argv)
         if(Started==EditorInstance::Forwarded)return 0;
         if(Started==EditorInstance::Failed){hc::ui::MessageDialog::warning(nullptr,QObject::tr("문서 열기"),QObject::tr("기존 HyperEditor에 열기 요청을 전달하지 못했습니다. 잠시 후 다시 시도하십시오."));return 12;}
     }
+    InstanceTrace.End();
+    hc::document::startup::Scope SettingsTrace("editor.settings");
     const auto RecoveryRoot = hc::defaults::edit::RecoveryDirectory(false);
     hc::settings::JsonStore Settings(hc::settings::UnifiedConfig::FileName(Config.directory_),
         {{"schemaVersion", 2}}, nullptr, hc::settings::JsonStore::Scope::Product);
@@ -144,12 +154,16 @@ int main(int Argc, char** Argv)
     // Light/dark follows the product unless the editor's own setting overrides it.
     hc::document::DocumentThemeAdapter::SetMode(Appearance["documentWorkspace"].toObject()["themeMode"].toString(hc::defaults::edit::WorkspaceValue("themeMode").toString()));
     if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
+    SettingsTrace.End();
     std::vector<std::unique_ptr<Workspace>> Windows;
     const auto OpenFiles=[&](QStringList Files){
     if (Files.isEmpty()) Files.append(QString{});
     Windows.reserve(Windows.size()+Files.size());
     for (const auto& File : Files) {
+        hc::document::startup::Scope WindowTrace("editor.windowSetup");
+        hc::document::startup::Scope ConstructorTrace("editor.workspaceConstructor");
         auto Window = std::make_unique<Workspace>(RecoveryRoot, false);
+        ConstructorTrace.End();
         Window->ConfigureHwp(hc::document::MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));
         if (Appearance.contains("documentWorkspace") && !Window->ApplyChromeSettings(Appearance["documentWorkspace"].toObject()))
             Window->ShowShellError(QObject::tr("문서 표시 설정을 적용하지 못하여 기본 표시를 사용합니다."));
@@ -162,6 +176,21 @@ int main(int Argc, char** Argv)
                 if (!Settings.Replace(Root)) Current->ShowShellError(QObject::tr("표시 설정을 저장하지 못했습니다."));
                 else Current->ShowShellError({});
             });
+        if (hc::document::startup::Enabled()) {
+            const auto Ready = std::make_shared<bool>(false);
+            QObject::connect(Current, &hc::document::DocumentWorkspaceWidget::StateChanged, Current, [Current, Ready] {
+                if (*Ready || !Current->IsIdle()) return;
+                for (const auto& Item : Current->Snapshot()["documents"].toArray()) {
+                    const auto Record = Item.toObject();
+                    if (!Record["loading"].toBool() && Record["error"].toString().isEmpty()
+                        && Record["view"].toObject()["viewId"] == "text") {
+                        *Ready = true;
+                        hc::document::startup::Data().Aggregate("editor.textReady", hc::document::startup::Data().Now());
+                        break;
+                    }
+                }
+            });
+        }
         const auto EditPending=std::make_shared<bool>(EpubEdit);
         if(Parser.isSet("find-in-files")) {
             auto* SearchWait=new QTimer(Current); SearchWait->setInterval(50);
@@ -195,7 +224,12 @@ int main(int Argc, char** Argv)
         Current->closed_=[&App,&Windows,Current]{QTimer::singleShot(0,&App,[&Windows,Current]{
             std::erase_if(Windows,[Current](const auto& Window){return Window.get()==Current;});
         });};
-        Current->show();Current->raise();Current->activateWindow();
+        WindowTrace.End();
+        hc::document::startup::Scope ShowTrace("editor.show");
+        // show() activates a newly created top-level window; avoid redundant native activation.
+        Current->show();
+        ShowTrace.End();
+        hc::document::startup::Scope OpenTrace("editor.openRequest");
         if (!File.isEmpty() && Current->Handle({{"action", "open"}, {"path", QFileInfo(File).absoluteFilePath()},{"copyOnly",Parser.isSet("document-copy")}}).contains("error"))
             Current->ShowShellError(QObject::tr("문서 한도 때문에 파일을 열지 못했습니다: %1").arg(File));
         Windows.push_back(std::move(Window));
@@ -203,5 +237,7 @@ int main(int Argc, char** Argv)
     };
     Instance.SetOpenHandler(OpenFiles);
     OpenFiles(Parser.positionalArguments());
+    hc::document::startup::Data().EndNamed("editor.entryToTitle");
+    QTimer::singleShot(0, &App, [] { hc::document::startup::Data().Aggregate("editor.eventLoopReached", hc::document::startup::Data().Now()); });
     return App.exec();
 }

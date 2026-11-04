@@ -1,4 +1,6 @@
-﻿#include "documentThemeAdapter.hpp"
+﻿#include "stdafx.h"
+#include "documentThemeAdapter.hpp"
+#include "UniqueLibs/bundledFonts.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/productDefaults.hpp"
 #include <QApplication>
@@ -99,6 +101,7 @@ namespace hc::document
         auto& Theme = fm::style::ThemeManager::instance();
         fm::style::ThemeManager::Batch Batch(Theme);
         Theme.setColorScheme(hc::theme::ReadProductScheme(Appearance["watercolorTheme"].toObject()));
+        hc::fonts::RegisterBundledFonts(General["monoFontFamily"].toString(hc::defaults::DefaultValue("general/monoFontFamily").toString()));
         Theme.setMonoFont(General["monoFontFamily"].toString(hc::defaults::DefaultValue("general/monoFontFamily").toString()), General["monoFontPx"].toInt(hc::defaults::DefaultValue("general/monoFontPx").toInt()));
         Theme.setDarkTitleBar(General["darkTitleBar"].toBool(hc::defaults::DefaultValue("general/darkTitleBar").toBool()));
         if (RequestedMode() == "product") ApplyScheme(ProductMode());
@@ -107,7 +110,15 @@ namespace hc::document
     void DocumentThemeAdapter::Install(QApplication& App)
     {
         auto& Theme = fm::style::ThemeManager::instance();
-        if (!Theme.isInstalled()) { Theme.setDesign(hc::theme::ProductDesign); Theme.install(App); }
+        if (!Theme.isInstalled()) {
+            Theme.setDesign(hc::theme::ProductDesign); Theme.install(App);
+            // Use the platform's installed UI family before WindowChrome asks for
+            // font metrics. Optional theme font names trigger a full alias scan
+            // on first layout when those families are absent on this machine.
+            auto Font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+            Font.setPixelSize(13);
+            App.setFont(Font);
+        }
     }
     void DocumentThemeAdapter::InstallLocal(QWidget& Widget)
     {
@@ -132,7 +143,7 @@ namespace hc::document
         auto Apply = [Editor] {
             const auto& Current = fm::style::ThemeManager::instance();
             auto Font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-            if (!Current.monoFontFamily().isEmpty()) Font.setFamily(Current.monoFontFamily());
+            if (!Current.monoFontFamily().isEmpty()) { hc::fonts::RegisterBundledFonts(Current.monoFontFamily()); Font.setFamily(Current.monoFontFamily()); }
             Font.setPixelSize(Current.monoFontPx()); Editor->setFont(Font);
             Editor->setPalette(QApplication::palette());
         };

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "documentSettingsDialog.hpp"
+#include "UniqueLibs/bundledFonts.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentShortcutRegistry.hpp"
@@ -62,6 +63,7 @@ QWidget* SwitchRow(QCheckBox* Check, QWidget* Parent)
 DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction*>& Actions, QWidget* Parent)
     : QDialog(Parent), path_(std::move(Path))
 {
+    hc::fonts::RegisterBundledFonts();
     setObjectName("documentSettingsDialog"); setWindowTitle(tr("설정"));
     const auto Screen = screen()->availableGeometry().size(); resize(qMin(900, Screen.width() - 40), qMin(680, Screen.height() - 60));
     // Same arrangement as the product settings (board Set-*): a soft-selection category column, a page heading,
