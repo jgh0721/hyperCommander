@@ -1356,6 +1356,15 @@ private slots:
         QFile Changed(Remote.filePath("recovered.bin")); QVERIFY(Changed.open(QIODevice::WriteOnly | QIODevice::Truncate)); QCOMPARE(Changed.write("changed"), 7); Changed.close();
         QVERIFY(!RecoverNativeWrite(Record).HasValue());
         auto ToDelete = Reader->Resolve(At("recovered.bin"), {}).get(); QVERIFY(ToDelete.HasValue()); QVERIFY(Writer->Remove(ToDelete.Value(), {}).HasValue());
+        QFile PreparedInput(Remote.filePath("prepared.bin")); QVERIFY(PreparedInput.open(QIODevice::WriteOnly));
+        QCOMPARE(PreparedInput.write("adopted"), 7); PreparedInput.close();
+        auto Adopted = Writer->BeginWrite(At("adopted.bin"), {}, Context); QVERIFY(Adopted.HasValue());
+        ProducedContent Content{At("prepared.bin").root_, std::make_shared<int>(1)};
+        auto Taken = Adopted.Value()->AdoptContent(std::move(Content), Context);
+        QVERIFY2(Taken.HasValue(), Taken.HasValue() ? "" : Taken.Failure().code_.c_str());
+        auto Published = Adopted.Value()->Commit(Context); QVERIFY2(Published.HasValue(), Published.HasValue() ? "" : Published.Failure().code_.c_str());
+        QVERIFY(Published.Value().cleanupErrors_.empty()); Adopted.Value().reset();
+        QFile AdoptedBytes(Remote.filePath("adopted.bin")); QVERIFY(AdoptedBytes.open(QIODevice::ReadOnly)); QCOMPARE(AdoptedBytes.readAll(), QByteArray("adopted")); AdoptedBytes.close();
         QVERIFY(Remote.remove());
     }
     void smbReadSourceCopiesToLocal_data()
