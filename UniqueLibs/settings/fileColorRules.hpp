@@ -11,6 +11,7 @@
 #include <QCache>
 #include <memory>
 #include "commonLibs/fileNameGlob.hpp"
+#include "commonLibs/columns/fieldCondition.hpp"
 #include <limits>
 #include <optional>
 
@@ -24,12 +25,20 @@ struct FileRuleInput
     std::optional<qint64> modifiedUtcMs_;
     std::optional<quint32> reparseTag_;
     qint64 referenceUtcMs_ = QDateTime::currentMSecsSinceEpoch();
+    // Column field values in FileColorRules::RequiredFields() order. A missing slot reads as Pending.
+    // Copies only: the worker never reaches back into the model.
+    QVector<hc::columns::CellValue> fields_;
 };
 struct FileRuleResult
 {
     bool matched_ = false;
+    // A field condition is still waiting for its value and could change the outcome (design 4.4).
+    // Pending results carry the pending style, not a guess from a lower group.
+    bool pending_ = false;
+    // Slots whose Unknown value the decision actually depended on. Only these need a query.
+    quint64 neededSlots_ = 0;
     QString error_;
-    QColor foreground_, background_;
+    QColor foreground_, background_, marker_;
     QJsonObject font_;
     QStringList groups_;
     QMap<QString, QString> owners_;
@@ -49,12 +58,26 @@ struct FileRuleKey
     quint64 size_ = 0;
     std::optional<qint64> modified_;
     std::optional<quint32> tag_;
+    // Field values, by state and raw value. A value that changes or stops being pending changes
+    // the key, so field-dependent results need no separate invalidation (design 6.1).
+    quint64 fields_ = 0;
     // A style depends only on these inputs, so results stay valid across
     // listings; the same file re-read after a refresh is a cache hit.
-    static FileRuleKey From(const FileRuleInput& Input) { return {Input.name_, Input.attributes_, Input.size_, Input.modifiedUtcMs_, Input.reparseTag_}; }
+    static FileRuleKey From(const FileRuleInput& Input) { return {Input.name_, Input.attributes_, Input.size_, Input.modifiedUtcMs_, Input.reparseTag_, Digest(Input.fields_)}; }
+    static quint64 Digest(const QVector<hc::columns::CellValue>& Fields) {
+        if (Fields.isEmpty()) return 0;
+        size_t Seed = 0x9e3779b97f4a7c15ull;
+        for (const auto& Value : Fields) {
+            Seed = qHashMulti(Seed, int(Value.State()), Value.Type() ? int(*Value.Type()) : -1);
+            if (Value.State() != hc::columns::ValueState::Ready) continue;
+            const auto Raw = Value.Raw();
+            Seed = qHashMulti(Seed, Raw.metaType() == QMetaType::fromType<QDateTime>() ? QString::number(Raw.toDateTime().toMSecsSinceEpoch()) : Raw.toString());
+        }
+        return quint64(Seed) | 1; // Never 0: 0 means "no field conditions".
+    }
     bool operator==(const FileRuleKey&) const = default;
     friend size_t qHash(const FileRuleKey& Key, size_t Seed = 0) noexcept {
-        return qHashMulti(Seed, Key.name_, Key.attributes_, Key.size_, Key.modified_.has_value(), Key.modified_.value_or(0), Key.tag_.has_value(), Key.tag_.value_or(0));
+        return qHashMulti(Seed, Key.name_, Key.attributes_, Key.size_, Key.modified_.has_value(), Key.modified_.value_or(0), Key.tag_.has_value(), Key.tag_.value_or(0), Key.fields_);
     }
 };
 class FileColorRules
@@ -92,7 +115,19 @@ public:
         return Dot < 0 || Dot < Name.lastIndexOf(u'/') || Dot < Name.lastIndexOf(u'\\') ? QStringView{} : Name.sliced(Dot + 1);
     }
     static QJsonObject Empty() { return hc::defaults::DefaultValue("fileColorRules").toObject(); }
-    static bool Supported(const QJsonObject& Document) { return Document["version"] == QJsonValue(1) || Document["version"] == QJsonValue(2) || Document["version"] == QJsonValue(3); }
+    // v4 adds column field conditions ({"type": "field"}); documents without them stay v3.
+    static bool Supported(const QJsonObject& Document) { return Document["version"] == QJsonValue(1) || Document["version"] == QJsonValue(2) || Document["version"] == QJsonValue(3) || Document["version"] == QJsonValue(4); }
+    static bool HasFieldConditions(const QJsonObject& Document) {
+        for (const auto G : Document["groups"].toArray()) for (const auto C : G.toObject()["conditions"].toArray())
+            if (C.toObject()["type"] == "field") return true;
+        return false;
+    }
+    // Rows whose field values are still being read (design 6.4). The document may override the defaults.
+    static QColor PendingColor(const QJsonObject& Document, bool Dark, const char* Role) {
+        const auto Scheme = Dark ? QStringLiteral("dark") : QStringLiteral("light");
+        const QColor Saved(Document["pending"].toObject()[Scheme].toObject()[Role].toString());
+        return Saved.isValid() ? Saved : QColor(hc::defaults::DefaultValue("fileColorPending/" + Scheme + "/" + Role).toString());
+    }
     static QString Syntax(const QJsonObject& C, int Version = 3) {
         return Version >= 3 && C.contains("syntax") ? C["syntax"].toString()
             : C["type"] == "pattern" ? QStringLiteral("wildcard") : QStringLiteral("literal");
@@ -153,7 +188,14 @@ public:
         if (!Supported(Document)) return QObject::tr("지원하지 않는 파일 색상 규칙 버전입니다.");
         if (Document["mode"] != "first" && Document["mode"] != "merge") return QObject::tr("그룹 합성 정책이 올바르지 않습니다.");
         if (!Document["groups"].isArray() || Document["groups"].toArray().size() > 256) return QObject::tr("그룹은 최대 256개입니다.");
-        QSet<QString> Ids, Names;
+        if (Document.contains("pending")) {
+            if (!Document["pending"].isObject()) return QObject::tr("확인 중 항목 색 형식이 올바르지 않습니다.");
+            for (const auto& Scheme : {"light", "dark"}) for (const auto& Role : {"background", "marker"}) {
+                const QJsonValue Value = Document["pending"].toObject().value(Scheme).toObject().value(Role);
+                if (!Value.isUndefined() && !QColor(Value.toString()).isValid()) return QObject::tr("확인 중 항목 색은 #RRGGBB 형식입니다.");
+            }
+        }
+        QSet<QString> Ids, Names, FieldIds;
         for (const auto Value : Document["groups"].toArray()) {
             const auto Group = Value.toObject(); const auto Id = Group["id"].toString(); const auto Name = Group["name"].toString().trimmed();
             if (Id.isEmpty() || Ids.contains(Id) || Name.isEmpty() || Names.contains(Name.toCaseFolded())) return QObject::tr("그룹 ID와 이름은 비어 있거나 중복될 수 없습니다.");
@@ -201,6 +243,16 @@ public:
                 }
                 if (Type == "rtl") {
                     if (Op != "contains" && Op != "notContains") return QObject::tr("RTL 문자 조건은 포함 또는 비포함입니다.");
+                    continue;
+                }
+                if (Type == "field") {
+                    if (Document["version"].toInt() < 4) return QObject::tr("필드 조건에는 파일 색상 규칙 버전 4가 필요합니다.");
+                    hc::columns::FieldCondition Compiled;
+                    const auto Failure = hc::columns::CompileFieldCondition(Condition, Compiled);
+                    if (!Failure.isEmpty()) return QObject::tr("%1 · 조건 %2: %3").arg(Name).arg(ConditionIndex).arg(Failure);
+                    // Slots form a 64-bit request mask in FileRuleResult::neededSlots_.
+                    FieldIds.insert(Compiled.field_);
+                    if (FieldIds.size() > 64) return QObject::tr("필드 조건에 쓰는 필드는 모든 그룹을 합쳐 64개까지입니다.");
                     continue;
                 }
                 if (!Condition["value"].isString() || Text.size() > 512 || (Type == "pattern" ? Text.isEmpty() : Text.trimmed().isEmpty())) return QObject::tr("조건은 1~512자로 입력하세요.");
@@ -253,9 +305,14 @@ public:
         if (conditionDocument_ != ConditionDocument) revision_ = std::make_shared<const int>(0);
         conditionDocument_ = ConditionDocument;
         groups_.clear(); relativeDates_ = false; needsExtension_ = false; extensionOnly_ = true;
-        cacheConditions_ = 0; merge_ = Document["mode"] == "merge";
+        cacheConditions_ = 0; merge_ = Document["mode"] == "merge"; fields_.clear();
+        for (int Dark = 0; Dark < 2; ++Dark) {
+            pendingBackground_[Dark] = PendingColor(Document, Dark, "background");
+            pendingMarker_[Dark] = PendingColor(Document, Dark, "marker");
+        }
         const auto Error = Validate(Document, false); if (!Error.isEmpty()) return Error;
         const int Version = Document["version"].toInt();
+        const auto Catalog = hc::defaults::columnPolicy::ColumnFields();
         for (const auto Value : Document["groups"].toArray()) {
             const auto Object = Value.toObject();
             if (!Object["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool())) {
@@ -298,6 +355,17 @@ public:
                         const auto Parts = Extensions(Item.value_); Item.extensions_ = QSet<QString>(Parts.cbegin(), Parts.cend());
                     }
                 }
+                if (Item.type_ == FieldValue) {
+                    // The per-extension group cache would file a pending outcome as "no group" for
+                    // every later file with the same extension.
+                    extensionOnly_ = false;
+                    hc::columns::CompileFieldCondition(O, Item.field_); // Validate() already accepted it.
+                    Item.slot_ = int(fields_.indexOf(Item.field_.field_));
+                    if (Item.slot_ < 0) { Item.slot_ = int(fields_.size()); fields_.append(Item.field_.field_); }
+                    const auto Known = std::find_if(Catalog.begin(), Catalog.end(), [&](const auto& F) { return F.id_ == Item.field_.field_; });
+                    Item.cost_ = qint8(Known != Catalog.end() ? hc::columns::CostOf(*Known) : Item.field_.field_.startsWith("file.") ? hc::columns::ConditionCost::Slow : hc::columns::ConditionCost::Plugin);
+                    G.conditions_.append(std::move(Item)); continue;
+                }
                 Item.number_ = number(O).value_or(0); Item.date_ = utcDate(Item.value_).value_or(0);
                 if (Item.type_ == Modified && Item.op_ == Within) relativeDates_ = true;
                 needsExtension_ |= Item.type_ == Extension || Item.type_ == Link;
@@ -305,19 +373,26 @@ public:
                 if (Item.type_ == Extension) Item.cacheIndex_ = cacheConditions_++;
                 G.conditions_.append(std::move(Item));
             }
+            // Cheap first (design 4.4): a decided AND/OR never asks for a slower value. The saved
+            // and edited order is untouched; only this compiled copy is reordered.
+            std::stable_sort(G.conditions_.begin(), G.conditions_.end(), [](const Condition& L, const Condition& R) { return L.cost_ < R.cost_; });
             groups_.append(std::move(G));
         }
         return {};
     }
     bool HasRules() const { return !groups_.isEmpty(); }
     bool HasRelativeDates() const { return relativeDates_; }
+    // Field ids in slot order: FileRuleInput::fields_ and FileRuleResult::neededSlots_ use these indexes.
+    const QStringList& RequiredFields() const { return fields_; }
+    QColor PendingBackground(bool Dark) const { return pendingBackground_[Dark]; }
+    QColor PendingMarker(bool Dark) const { return pendingMarker_[Dark]; }
     bool SameConditions(const FileColorRules& Other) const { return revision_ == Other.revision_; }
     FileRuleResult Evaluate(const QString& Name, quint32 Attributes, quint64 Size, bool Dark) const { return Evaluate(FileRuleInput{Name, Attributes, Size, Dark}); }
     FileRuleResult EvaluateStyle(const FileRuleInput& Input, EvaluationContext* Context = nullptr) const { return evaluate(Input, Context, false, true); }
     FileRuleResult Matches(const FileRuleInput& Input, EvaluationContext* Context = nullptr) const { return evaluate(Input, Context, false, false); }
     FileRuleResult Evaluate(const FileRuleInput& Input, EvaluationContext* Context = nullptr) const { return evaluate(Input, Context, true, true); }
 private:
-    enum Field { Extension, Pattern, Folder, Normalization, Attributes, Size, Modified, Link, Rtl };
+    enum Field { Extension, Pattern, Folder, Normalization, Attributes, Size, Modified, Link, Rtl, FieldValue };
     enum Operator { In, NotIn, MatchesOp, NotMatches, Contains, NotContains, Is, Any, All, Gt, Ge, Lt, Le, Eq, Ne, Before, After, Within };
     enum SyntaxKind { LiteralSyntax, GlobSyntax, RegexSyntax };
     struct Condition {
@@ -325,6 +400,8 @@ private:
         QString value_; QSet<QString> extensions_; QList<hc::text::FileNameGlob> globs_;
         QRegularExpression regex_; quint64 number_ = 0; qint64 date_ = 0;
         int cacheIndex_ = -1; bool negate_ = false;
+        hc::columns::FieldCondition field_; int slot_ = -1;
+        qint8 cost_ = 0; // hc::columns::ConditionCost; built-in conditions are Immediate.
     };
     struct Group {
         QString label_; bool all_ = false; QList<Condition> conditions_;
@@ -337,7 +414,7 @@ private:
         return Keys;
     }
     static const QStringList& typeNames() {
-        static const QStringList Names{"extension", "pattern", "folder", "normalization", "attributes", "size", "modified", "link", "rtl"}; return Names;
+        static const QStringList Names{"extension", "pattern", "folder", "normalization", "attributes", "size", "modified", "link", "rtl", "field"}; return Names;
     }
     static const QStringList& opNames() {
         static const QStringList Names{"in", "notIn", "matches", "notMatches", "contains", "notContains", "is", "any", "all", "gt", "ge", "lt", "le", "eq", "ne", "before", "after", "within"}; return Names;
@@ -427,25 +504,54 @@ private:
                 Context->extensions_.insert(Key, Cached, Cost);
             }
         }
-        QList<int> Matched;
+        QList<int> Matched; bool Pending = false; quint64 Needed = 0;
         if (Cached && extensionOnly_ && Cached->complete_) Matched = Cached->groups_;
         else {
+            static const hc::columns::CellValue Unread = hc::columns::CellValue::Missing(hc::columns::ValueState::Pending);
             for (qsizetype Index = 0; Index < groups_.size(); ++Index) {
-                const auto& G = groups_[Index]; bool Hit = G.all_, Failed = false;
+                const auto& G = groups_[Index]; bool Hit = G.all_, Failed = false, Decided = false;
+                // Unknown fields of the cheapest waiting tier: a slower one is asked for only once
+                // the cheaper ones could not decide the group.
+                quint64 Waiting = 0; qint8 WaitingCost = std::numeric_limits<qint8>::max();
                 for (const auto& C : G.conditions_) {
                     qint8 Value = Cached && C.cacheIndex_ >= 0 ? Cached->conditions_[C.cacheIndex_] : -1;
-                    if (Value < 0) {
+                    if (C.type_ == FieldValue) {
+                        const auto& Field = C.slot_ < Input.fields_.size() ? Input.fields_[C.slot_] : Unread;
+                        const auto Truth = hc::columns::EvaluateFieldCondition(C.field_, Field, Input.referenceUtcMs_);
+                        if (Truth == hc::columns::Truth::Unknown) {
+                            if (C.cost_ < WaitingCost) { WaitingCost = C.cost_; Waiting = 0; }
+                            if (C.cost_ == WaitingCost) Waiting |= quint64(1) << C.slot_;
+                            continue;
+                        }
+                        Value = Truth == hc::columns::Truth::True;
+                    } else if (Value < 0) {
                         Value = conditionHit(C, Input, Ext, IsFolder, Decomposed, RtlName, ListedExt);
                         if (Cached && C.cacheIndex_ >= 0) Cached->conditions_[C.cacheIndex_] = Value;
                     }
                     if (Value == 2) { Failed = true; continue; }
-                    if ((G.all_ && !Value) || (!G.all_ && Value)) { Hit = Value; Failed = false; break; }
+                    if ((G.all_ && !Value) || (!G.all_ && Value)) { Hit = Value; Failed = false; Decided = true; break; }
+                }
+                if (!Decided && Waiting) {
+                    // Design 4.4: an undecided group leaves everything below it undecided in first
+                    // mode, and the ownership of every property undecided in merge mode.
+                    Pending = true; Needed |= Waiting;
+                    if (!merge_) break;
+                    continue;
                 }
                 if (Failed) { if (Result.error_.isEmpty()) Result.error_ = QObject::tr("%1: 정규표현식 실행 한도를 초과했거나 평가할 수 없습니다.").arg(G.label_); continue; }
                 if (!Hit) continue;
                 Matched.append(int(Index)); if (!merge_) break;
             }
             if (Cached && extensionOnly_ && Result.error_.isEmpty()) { Cached->groups_ = Matched; Cached->complete_ = true; }
+        }
+        if (Pending) {
+            Result.pending_ = true; Result.neededSlots_ = Needed;
+            if (Style) {
+                Result.background_ = pendingBackground_[Input.dark_]; Result.marker_ = pendingMarker_[Input.dark_];
+                // Carried with the row effects so every painter that draws borders draws the marker too.
+                Result.font_ = QJsonObject{{"pendingMarker", Result.marker_.name(QColor::HexArgb)}};
+            }
+            return Result;
         }
         Result.matched_ = !Matched.isEmpty();
         if (!Style && !Diagnostics) return Result;
@@ -486,6 +592,8 @@ private:
         return Date.toMSecsSinceEpoch();
     }
     QList<Group> groups_;
+    QStringList fields_;
+    QColor pendingBackground_[2], pendingMarker_[2];
     bool merge_ = false, relativeDates_ = false, needsExtension_ = false, extensionOnly_ = true;
     int cacheConditions_ = 0;
     std::shared_ptr<const int> revision_ = std::make_shared<const int>(0);

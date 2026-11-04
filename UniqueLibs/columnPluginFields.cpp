@@ -62,6 +62,8 @@ namespace hc::columns {
                         if (Unit < Field.units_.size() && !Field.units_[Unit].empty()) Title += " [" + QString::fromStdString(Field.units_[Unit]) + "]";
                         if (!Field.choices_.empty()) { QStringList Values; for (const auto& Value : Field.choices_) Values.append(QString::fromStdString(Value)); Title += " {" + Values.join(", ") + "}"; }
                         FieldDefinition Definition{Id, Title, MetadataFieldType(Field.type_), Dopus ? ProviderKind::DOpus : ProviderKind::Wdx, EvaluationCost::Background};
+                        Definition.group_ = Choice.name_;
+                        for (const auto& Value : Field.choices_) Definition.choices_.append({QString::fromStdString(Value), QString::fromStdString(Value)});
                         Result->entries_.insert(Id, {Definition, Provider.Value(), {Field.index_, Unit, true, false}, Field.descending_, Options.applicationRule_});
                     }
                 }

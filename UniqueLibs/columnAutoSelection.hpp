@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include "commonLibs/columns/columnProfileStorage.hpp"
 #include "commonLibs/columns/builtInColumns.hpp"
+#include "commonLibs/columns/columnQueryEngine.hpp"
 #include "commonLibs/storage/entryIndex.hpp"
 #include "settings/fileColorRules.hpp"
 
@@ -65,7 +66,15 @@ inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(
                 hc::settings::FileRuleInput Input{QString::fromStdString(Entry.name_), Entry.attributes_, Entry.size_, false}; Input.referenceUtcMs_ = ReferenceTime;
                 Input.modifiedUtcMs_ = hc::settings::FileColorRules::MetadataTime(Entry.modifiedUtcMs_);
                 if (const auto Tag = Entry.hints_.find("reparseTag"); Tag != Entry.hints_.end()) { bool Ok = false; const auto Value = QString::fromStdString(Tag->second).toUInt(&Ok); if (Ok) Input.reparseTag_ = Value; }
+                FileSnapshot File; File.name_ = Input.name_; File.size_ = Entry.size_; File.attributes_ = Entry.attributes_; File.parentPath_ = QDir::toNativeSeparators(Path);
+                if (Entry.createdUtcMs_) File.created_ = QDateTime::fromMSecsSinceEpoch(Entry.createdUtcMs_, QTimeZone::UTC);
+                if (Input.modifiedUtcMs_) File.modified_ = QDateTime::fromMSecsSinceEpoch(*Input.modifiedUtcMs_, QTimeZone::UTC);
                 for (auto It = Groups.begin(); It != Groups.end(); ++It) {
+                    // A folder-wide ratio cannot wait for I/O: list fields are resolved here, queried
+                    // fields count as unsupported, so groups that need them never match (design 6.5).
+                    Input.fields_.clear();
+                    for (const auto& Field : It.value().RequiredFields())
+                        Input.fields_.append(QueryFamily(Field).isEmpty() ? Resolve(Field, File) : CellValue::Missing(ValueState::Unsupported, "auto-columns-no-io"));
                     const auto Match = It.value().Matches(Input, Contexts[It.key()].get());
                     if (!Match.error_.isEmpty()) return Error{ErrorCategory::InvalidRequest, "auto-column-group-evaluation", {}, {}, false, Match.error_.toStdString()};
                     if (Match.matched_) ++Hits[It.key()];

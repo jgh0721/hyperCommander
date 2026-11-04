@@ -25,12 +25,17 @@ struct Criteria {
     QDate modified_;
     QJsonObject group_;
     int groupVersion_ = 2;
+    // Advanced-tab conditions in the file color rule format, column field conditions included
+    // (design 7.1). They join the name, size and date terms under the same AND/OR choice.
+    QJsonArray conditions_;
 
     QJsonObject Save() const {
-        return {{"operation", int(operation_)}, {"syntax", int(syntax_)}, {"scope", int(scope_)},
+        QJsonObject Result{{"operation", int(operation_)}, {"syntax", int(syntax_)}, {"scope", int(scope_)},
             {"pattern", pattern_}, {"exclude", exclude_}, {"groupId", groupId_},
             {"caseSensitive", caseSensitive_}, {"advanced", advanced_}, {"all", all_},
             {"size", size_}, {"minimumSize", minimumSize_}, {"modified", modified_.toString(Qt::ISODate)}};
+        if (!conditions_.isEmpty()) Result["conditions"] = conditions_;
+        return Result;
     }
     static Criteria Load(const QJsonObject& Value) {
         Criteria C;
@@ -45,6 +50,7 @@ struct Criteria {
         C.advanced_ = Value["advanced"].toBool(hc::defaults::DefaultValue("selection/advanced").toBool()); C.all_ = Value["all"].toBool(hc::defaults::DefaultValue("selection/all").toBool());
         C.size_ = Value["size"].toString(hc::defaults::DefaultValue("selection/size").toString()); C.minimumSize_ = Value["minimumSize"].toBool(hc::defaults::DefaultValue("selection/minimumSize").toBool());
         C.modified_ = QDate::fromString(Value["modified"].toString(hc::defaults::DefaultValue("selection/modified").toString()), Qt::ISODate);
+        C.conditions_ = Value["conditions"].toArray();
         return C;
     }
 };
@@ -62,10 +68,14 @@ inline QList<Group> Groups(const QJsonObject& UserRules) {
     return Result;
 }
 
+// A row's outcome. Unknown: a field value is still missing; needed_ names the fields to read.
+struct Verdict { hc::columns::Truth truth_ = hc::columns::Truth::False; QStringList needed_; QString error_; };
+using FieldValueMap = QHash<QString, hc::columns::CellValue>;
+
 class Matcher {
 public:
     QString Compile(const Criteria& Criteria) {
-        criteria_ = Criteria; include_.clear(); exclude_.clear(); hasGroup_ = false; size_.reset();
+        criteria_ = Criteria; include_.clear(); exclude_.clear(); hasGroup_ = hasConditions_ = false; size_.reset();
         if (Criteria.pattern_.size() > 4096 || Criteria.exclude_.size() > 4096)
             return QObject::tr("이름 조건은 4096자 이내로 입력하십시오.");
         if (!Criteria.groupId_.isEmpty()) {
@@ -74,6 +84,13 @@ public:
             const auto Error = group_.Load(Document);
             if (!Error.isEmpty()) return Error;
             hasGroup_ = true;
+        }
+        if (Criteria.advanced_ && !Criteria.conditions_.isEmpty()) {
+            // The conditions form one rule group joined like the other advanced terms.
+            const QJsonObject Group{{"id", "selection"}, {"name", QObject::tr("선택 조건")}, {"join", Criteria.all_ ? "all" : "any"}, {"conditions", Criteria.conditions_}};
+            const auto Error = conditions_.Load(QJsonObject{{"version", 4}, {"mode", "merge"}, {"groups", QJsonArray{Group}}});
+            if (!Error.isEmpty()) return Error;
+            hasConditions_ = true;
         }
         auto Error = compile(Criteria.pattern_, Criteria.syntax_, include_);
         if (!Error.isEmpty()) return Error;
@@ -89,21 +106,55 @@ public:
         return {};
     }
     bool Matches(const settings::FileRuleInput& Input, QString* Error = nullptr, settings::FileColorRules::EvaluationContext* Context = nullptr, bool SizeKnown = true) const {
-        if (Input.name_ == "..") return false;
+        const auto Result = Evaluate(Input, {}, Context, SizeKnown);
+        if (Error && !Result.error_.isEmpty()) *Error = Result.error_;
+        return Result.truth_ == hc::columns::Truth::True;
+    }
+    // Field ids the selected group and the advanced conditions read, without duplicates.
+    QStringList RequiredFields() const {
+        QStringList Result;
+        if (hasGroup_) Result += group_.RequiredFields();
+        if (hasConditions_) for (const auto& Field : conditions_.RequiredFields()) if (!Result.contains(Field)) Result.append(Field);
+        return Result;
+    }
+    Verdict Evaluate(const settings::FileRuleInput& Input, const FieldValueMap& Fields, settings::FileColorRules::EvaluationContext* Context = nullptr, bool SizeKnown = true) const {
+        using hc::columns::Truth;
+        Verdict Result;
+        if (Input.name_ == "..") return Result;
         const bool Folder = (Input.attributes_ & 0x10u) != 0;
-        if ((criteria_.scope_ == Scope::Files && Folder) || (criteria_.scope_ == Scope::Folders && !Folder)) return false;
-        if (hit(exclude_, Input.name_)) return false;
+        if ((criteria_.scope_ == Scope::Files && Folder) || (criteria_.scope_ == Scope::Folders && !Folder)) return Result;
+        if (hit(exclude_, Input.name_)) return Result;
+        // Each rule set reads its own slot order; a missing value reads as pending.
+        const auto Run = [&](const settings::FileColorRules& Rules, settings::FileColorRules::EvaluationContext* With) {
+            auto In = Input; In.fields_.clear();
+            for (const auto& Field : Rules.RequiredFields()) In.fields_.append(Fields.value(Field, hc::columns::CellValue::Missing(hc::columns::ValueState::Pending)));
+            const auto Outcome = Rules.Matches(In, With);
+            if (Outcome.pending_) for (int Slot = 0; Slot < Rules.RequiredFields().size() && Slot < 64; ++Slot)
+                if ((Outcome.neededSlots_ & (quint64(1) << Slot)) && !Result.needed_.contains(Rules.RequiredFields()[Slot])) Result.needed_.append(Rules.RequiredFields()[Slot]);
+            return Outcome;
+        };
+        Truth Group = Truth::True;
         if (hasGroup_) {
-            const auto Result = group_.Matches(Input, Context);
-            if (!Result.error_.isEmpty()) { if (Error) *Error = Result.error_; return false; }
-            if (!Result.matched_) return false;
+            const auto Outcome = Run(group_, Context);
+            if (!Outcome.error_.isEmpty()) { Result.error_ = Outcome.error_; return Result; }
+            Group = Outcome.pending_ ? Truth::Unknown : Outcome.matched_ ? Truth::True : Truth::False;
+            if (Group == Truth::False) { Result.needed_.clear(); return Result; }
         }
-        bool Any = false, All = true, Present = false;
-        const auto Add = [&](bool Value) { Present = true; Any |= Value; All &= Value; };
-        if (!include_.isEmpty()) Add(hit(include_, Input.name_));
-        if (criteria_.advanced_ && size_) Add(SizeKnown && (criteria_.minimumSize_ ? Input.size_ >= *size_ : Input.size_ <= *size_));
-        if (criteria_.advanced_ && date_) Add(Input.modifiedUtcMs_ && *Input.modifiedUtcMs_ >= *date_);
-        return !Present || (criteria_.all_ || !criteria_.advanced_ ? All : Any);
+        Truth Any = Truth::False, All = Truth::True; bool Present = false;
+        const auto Add = [&](Truth Value) { Present = true; Any = hc::columns::Combine(Any, Value, false); All = hc::columns::Combine(All, Value, true); };
+        const auto Of = [](bool Value) { return Value ? Truth::True : Truth::False; };
+        if (!include_.isEmpty()) Add(Of(hit(include_, Input.name_)));
+        if (criteria_.advanced_ && size_) Add(Of(SizeKnown && (criteria_.minimumSize_ ? Input.size_ >= *size_ : Input.size_ <= *size_)));
+        if (criteria_.advanced_ && date_) Add(Of(Input.modifiedUtcMs_ && *Input.modifiedUtcMs_ >= *date_));
+        if (hasConditions_) {
+            const auto Outcome = Run(conditions_, nullptr);
+            if (!Outcome.error_.isEmpty()) { Result.error_ = Outcome.error_; Result.needed_.clear(); return Result; }
+            Add(Outcome.pending_ ? Truth::Unknown : Of(Outcome.matched_));
+        }
+        const auto Terms = !Present ? Truth::True : criteria_.all_ || !criteria_.advanced_ ? All : Any;
+        Result.truth_ = hc::columns::Combine(Group, Terms, true);
+        if (Result.truth_ != Truth::Unknown) Result.needed_.clear();
+        return Result;
     }
     static bool Selected(Operation Op, bool Before, bool Match) {
         switch (Op) {
@@ -137,8 +188,8 @@ private:
     }
     Criteria criteria_;
     QList<QRegularExpression> include_, exclude_;
-    settings::FileColorRules group_;
-    bool hasGroup_ = false;
+    settings::FileColorRules group_, conditions_;
+    bool hasGroup_ = false, hasConditions_ = false;
     std::optional<quint64> size_;
     std::optional<qint64> date_;
 };

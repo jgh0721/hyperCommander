@@ -331,6 +331,147 @@ private:
         }
         return Can[0][0];
     }
+private slots:
+    void fieldConditionsAndPending()
+    {
+        using hc::columns::CellValue; using hc::columns::ValueState;
+        const auto Field = [](const QString& Id, const QString& Type, const QString& Op, const QJsonValue& Value) {
+            return QJsonObject{{"type", "field"}, {"field", Id}, {"valueType", Type}, {"op", Op}, {"value", Value}};
+        };
+        const auto Group = [](const QString& Id, bool All, const QJsonArray& Conditions, const QString& Color) {
+            return QJsonObject{{"id", Id}, {"name", Id}, {"join", All ? "all" : "any"}, {"conditions", Conditions}, {"light", QJsonObject{{"foreground", Color}}}};
+        };
+        const QJsonObject Images{{"type", "extension"}, {"op", "in"}, {"value", "jpg, png"}};
+        const auto Wide = Group("wide", true, {Field("file.imageWidth", "unsigned", "ge", "3840"), Images}, "#AA0000");
+        const auto Jpeg = Group("jpeg", true, {QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "jpg"}}}, "#0000AA");
+        QJsonObject Doc{{"version", 4}, {"mode", "first"}, {"groups", QJsonArray{Wide, Jpeg}}};
+        auto V3 = Doc; V3["version"] = 3; QVERIFY(!FileColorRules::Validate(V3).isEmpty());
+        FileColorRules Rules; const auto Error = Rules.Load(Doc); QVERIFY2(Error.isEmpty(), qPrintable(Error));
+        QCOMPARE(Rules.RequiredFields(), QStringList{"file.imageWidth"});
+
+        // The saved order puts the width first; the extension still decides a text file without it.
+        auto Text = Rules.Evaluate(FileRuleInput{"notes.txt"});
+        QVERIFY(!Text.pending_); QVERIFY(!Text.matched_); QCOMPARE(Text.neededSlots_, quint64(0));
+        // A pending group above hides the lower JPEG group in first mode, with the pending style.
+        FileRuleInput Photo{"photo.jpg"};
+        auto Waiting = Rules.Evaluate(Photo);
+        QVERIFY(Waiting.pending_); QVERIFY(!Waiting.matched_); QCOMPARE(Waiting.neededSlots_, quint64(1));
+        QCOMPARE(Waiting.background_, QColor("#F3F1EC")); QCOMPARE(Waiting.marker_, QColor("#B7791F")); QVERIFY(!Waiting.foreground_.isValid());
+        Photo.dark_ = true; QCOMPARE(Rules.Evaluate(Photo).background_, QColor("#2A2924")); QCOMPARE(Rules.Evaluate(Photo).marker_, QColor("#D9A44A")); Photo.dark_ = false;
+        // Arrival changes the cache key and decides the row.
+        const auto PendingKey = FileRuleKey::From(Photo);
+        Photo.fields_ = {CellValue::Ready(quint64(4032))};
+        QVERIFY(!(FileRuleKey::From(Photo) == PendingKey));
+        auto Decided = Rules.Evaluate(Photo); QVERIFY(!Decided.pending_); QCOMPARE(Decided.foreground_, QColor("#AA0000"));
+        Photo.fields_ = {CellValue::Ready(quint64(1920))};
+        QCOMPARE(Rules.Evaluate(Photo).foreground_, QColor("#0000AA"));
+        Photo.fields_ = {CellValue::Missing(ValueState::Unsupported)};
+        Decided = Rules.Evaluate(Photo); QVERIFY(!Decided.pending_); QCOMPARE(Decided.foreground_, QColor("#0000AA"));
+        // One evaluation context serves a whole listing: a pending outcome must not be filed under
+        // the extension as decided for the next file of the same type.
+        {
+            FileColorRules::EvaluationContext Context; FileRuleInput First{"a.jpg"}, Second{"b.jpg"};
+            Second.fields_ = {CellValue::Ready(quint64(4032))};
+            QVERIFY(Rules.Evaluate(First, &Context).pending_);
+            const auto Shared = Rules.Evaluate(Second, &Context); QVERIFY(!Shared.pending_); QCOMPARE(Shared.foreground_, QColor("#AA0000"));
+            QVERIFY(Rules.Evaluate(First, &Context).pending_);
+        }
+        // Merge mode keeps the whole row pending while any group is undecided.
+        Doc["mode"] = "merge"; QVERIFY(Rules.Load(Doc).isEmpty());
+        QVERIFY(Rules.Evaluate(FileRuleInput{"photo.jpg"}).pending_);
+
+        // Cost tiers: a plugin value is requested only after the slow built-in one could not decide.
+        const auto Plugin = QStringLiteral("wdx.0123456789abcdef0123456789abcdef.1.0");
+        const auto Tiered = Group("tiered", true, {Field(Plugin, "text", "contains", "Canon"), Field("file.alternateDataStream.count", "unsigned", "ge", "1")}, "#00AA00");
+        Doc = {{"version", 4}, {"mode", "first"}, {"groups", QJsonArray{Tiered}}}; QVERIFY(Rules.Load(Doc).isEmpty());
+        const int Streams = int(Rules.RequiredFields().indexOf("file.alternateDataStream.count")), Model = int(Rules.RequiredFields().indexOf(Plugin));
+        QVERIFY(Streams >= 0 && Model >= 0);
+        FileRuleInput Raw{"raw.cr3"};
+        QCOMPARE(Rules.Evaluate(Raw).neededSlots_, quint64(1) << Streams);
+        Raw.fields_.resize(2); Raw.fields_[Streams] = CellValue::Ready(quint64(0)); Raw.fields_[Model] = CellValue::Missing(ValueState::Pending);
+        auto NoStreams = Rules.Evaluate(Raw); QVERIFY(!NoStreams.pending_); QVERIFY(!NoStreams.matched_);
+        Raw.fields_[Streams] = CellValue::Ready(quint64(2));
+        QCOMPARE(Rules.Evaluate(Raw).neededSlots_, quint64(1) << Model);
+        Raw.fields_[Model] = CellValue::Ready(QString("Canon EOS R5"));
+        QVERIFY(Rules.Evaluate(Raw).matched_);
+
+        // Document colors override the defaults; documents without field conditions keep v3 keys.
+        Doc["pending"] = QJsonObject{{"light", QJsonObject{{"background", "#EEEEEE"}}}}; QVERIFY(Rules.Load(Doc).isEmpty());
+        QCOMPARE(Rules.Evaluate(FileRuleInput{"raw.cr3"}).background_, QColor("#EEEEEE"));
+        QCOMPARE(Rules.Evaluate(FileRuleInput{"raw.cr3"}).marker_, QColor("#B7791F"));
+        Doc["pending"] = QJsonObject{{"light", QJsonObject{{"background", "blue-ish"}}}}; QVERIFY(!FileColorRules::Validate(Doc).isEmpty());
+        QVERIFY(Rules.Load(document({{"type", "extension"}, {"op", "in"}, {"value", "txt"}})).isEmpty());
+        QVERIFY(Rules.RequiredFields().isEmpty()); QCOMPARE(FileRuleKey::From(FileRuleInput{"a.txt"}).fields_, quint64(0));
+        // Lua outputs are profile-scoped and rejected (design 13.1).
+        Doc = {{"version", 4}, {"mode", "first"}, {"groups", QJsonArray{Group("lua", true, {Field("lua.0123456789abcdef0123456789abcdef.area", "integer", "ge", "1")}, "#000000")}}};
+        QVERIFY(FileColorRules::Validate(Doc).contains("Lua"));
+    }
+    void fieldConditionEditor()
+    {
+        QTableWidget Table(0, 4);
+        hc::ui::FileColorConditionRow Row(&Table, QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "txt"}}, 4);
+        auto* Field = qobject_cast<QComboBox*>(Table.cellWidget(0, 0)); auto* Operator = qobject_cast<QComboBox*>(Table.cellWidget(0, 1));
+        // Fields and built-in types share one picker; duplicates of built-in types are stored as those types.
+        QVERIFY(Field->findData("file.imageWidth") >= 0); QVERIFY(Field->findData("extension") >= 0);
+        QCOMPARE(Field->findData("file.extension"), -1); QCOMPARE(Field->findData("file.size"), -1);
+        Field->setCurrentIndex(Field->findData("file.imageWidth"));
+        auto Record = Row.Record();
+        QCOMPARE(Record["type"].toString(), QString("field")); QCOMPARE(Record["valueType"].toString(), QString("unsigned"));
+        QCOMPARE(Record["op"].toString(), QString("ge")); QVERIFY(Table.cellWidget(0, 2)->findChild<QLabel*>("hc.condition.unitLabel"));
+        hc::columns::FieldCondition Compiled; QVERIFY(hc::columns::CompileFieldCondition(Record, Compiled).isEmpty());
+        Operator->setCurrentIndex(Operator->findData("between"));
+        QCOMPARE(Row.Record()["value"].toArray().size(), 2);
+        Table.cellWidget(0, 2)->findChild<QLineEdit*>("hc.condition.valueHigh")->setText("8000");
+        QCOMPARE(Row.Record()["value"].toArray()[1].toString(), QString("8000"));
+        // Bytes take a unit; choices take a checkable menu; ADS names only offer substring tests.
+        Field->setCurrentIndex(Field->findData("file.alternateDataStream.totalSize"));
+        QCOMPARE(Row.Record()["unit"].toString(), QString("MiB")); QVERIFY(Table.cellWidget(0, 2)->findChild<QComboBox*>("hc.condition.unit"));
+        Field->setCurrentIndex(Field->findData("file.alternateDataStream.zone"));
+        QCOMPARE(Row.Record()["op"].toString(), QString("in")); QCOMPARE(Row.Record()["value"].toArray(), QJsonArray{"0"});
+        auto* Choices = Table.cellWidget(0, 2)->findChild<QToolButton*>("hc.condition.choices"); QVERIFY(Choices);
+        Choices->menu()->actions()[3]->setChecked(true); Choices->menu()->actions()[0]->setChecked(false);
+        QCOMPARE(Row.Record()["value"].toArray(), QJsonArray{"3"});
+        Field->setCurrentIndex(Field->findData("file.alternateDataStream.names"));
+        QCOMPARE(Operator->count(), 2); QCOMPARE(Row.Record()["value"].toString(), QString("Zone.Identifier"));
+        // Text wildcards over paths; switching back to a built-in type drops the field keys.
+        Field->setCurrentIndex(Field->findData("file.junction.target"));
+        Operator->setCurrentIndex(Operator->findData("globMatches"));
+        Table.cellWidget(0, 2)->findChild<QLineEdit*>("hc.condition.value")->setText("\\\\nas\\*; D:\\a\\;b");
+        QCOMPARE(Row.Record()["syntax"].toString(), QString("wildcard")); QCOMPARE(Row.Record()["value"].toArray(), QJsonArray({"\\\\nas\\*", "D:\\a;b"}));
+        Field->setCurrentIndex(Field->findData("size"));
+        QCOMPARE(Row.Record()["type"].toString(), QString("size")); QVERIFY(!Row.Record().contains("field")); QVERIFY(!Row.Record().contains("valueType"));
+        // Lua is listed but cannot be chosen; a field the catalog lacks is preserved and labelled.
+        const auto Lua = Field->findData("lua"); QVERIFY(Lua >= 0);
+        QVERIFY(!qobject_cast<QStandardItemModel*>(Field->model())->item(Lua)->isEnabled());
+        const QJsonObject Missing{{"type", "field"}, {"field", "wdx.0123456789abcdef0123456789abcdef.2.0"}, {"valueType", "text"}, {"op", "contains"}, {"value", "x"}, {"fieldTitle", "Exif / Model"}};
+        QTableWidget Other(0, 4); hc::ui::FileColorConditionRow Kept(&Other, Missing, 4);
+        auto* KeptField = qobject_cast<QComboBox*>(Other.cellWidget(0, 0));
+        QVERIFY(KeptField->currentText().contains("Exif / Model")); QCOMPARE(Kept.Record(), Missing);
+    }
+    void selectionFieldVerdicts()
+    {
+        using namespace hc::selection; using hc::columns::CellValue; using hc::columns::Truth;
+        Criteria C; C.advanced_ = true; C.all_ = true; C.pattern_ = "*.jpg"; C.syntax_ = Syntax::Wildcard; C.scope_ = Scope::Files;
+        C.conditions_ = QJsonArray{QJsonObject{{"type", "field"}, {"field", "file.imageWidth"}, {"valueType", "unsigned"}, {"op", "ge"}, {"value", "3840"}}};
+        Matcher Match; QVERIFY(Match.Compile(C).isEmpty());
+        QCOMPARE(Match.RequiredFields(), QStringList{"file.imageWidth"});
+        // The name decides a text file without reading a width; a JPEG waits for it.
+        QCOMPARE(Match.Evaluate(FileRuleInput{"notes.txt"}, {}).truth_, Truth::False);
+        const auto Waiting = Match.Evaluate(FileRuleInput{"a.jpg"}, {});
+        QCOMPARE(Waiting.truth_, Truth::Unknown); QCOMPARE(Waiting.needed_, QStringList{"file.imageWidth"});
+        QCOMPARE(Match.Evaluate(FileRuleInput{"a.jpg"}, {{"file.imageWidth", CellValue::Ready(quint64(4032))}}).truth_, Truth::True);
+        QCOMPARE(Match.Evaluate(FileRuleInput{"a.jpg"}, {{"file.imageWidth", CellValue::Ready(quint64(1920))}}).truth_, Truth::False);
+        QVERIFY(!Match.Matches(FileRuleInput{"a.jpg"})); // A pending verdict never selects.
+        // OR: a matching name decides without the field.
+        C.all_ = false; QVERIFY(Match.Compile(C).isEmpty());
+        QCOMPARE(Match.Evaluate(FileRuleInput{"a.jpg"}, {}).truth_, Truth::True);
+        QCOMPARE(Match.Evaluate(FileRuleInput{"a.png"}, {}).truth_, Truth::Unknown);
+        // Saved criteria round-trip their conditions; older saves have none.
+        QCOMPARE(Criteria::Load(C.Save()).conditions_, C.conditions_);
+        QVERIFY(Criteria::Load(QJsonObject{{"pattern", "*"}}).conditions_.isEmpty());
+        QVERIFY(!Criteria::Load(QJsonObject{{"pattern", "*"}}).Save().contains("conditions"));
+    }
+private:
     static QJsonObject document(const QJsonObject& Condition) {
         const QJsonObject Group{{"id", "test"}, {"name", "시험"}, {"join", "all"},
             {"conditions", QJsonArray{Condition}}, {"light", QJsonObject{{"foreground", "#2266AA"}}}};

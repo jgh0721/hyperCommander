@@ -5,9 +5,12 @@
 /// UIs
 #include "Components/cmpView.hpp"
 #include "dialogShell.hpp"
+#include "fileColorConditionRow.hpp"
 
 /// 내부 라이브러리
 #include "UniqueLibs/itemSelection.hpp"
+#include "UniqueLibs/columnPluginFields.hpp"
+#include "commonLibs/columns/columnQueryEngine.hpp"
 #include "commonLibs/Qt/elidedLabel.hpp"
 #include "UniqueLibs/builtInFsModel.hpp"
 #include "UniqueLibs/qtWorkspaceRestore.hpp"
@@ -67,6 +70,19 @@ public:
         useDate_ = new QCheckBox(Text("기준일 이후 (포함)")); useDate_->setObjectName("hc.selection.useDate");
         date_ = new QDateEdit(QDate::currentDate()); date_->setObjectName("hc.selection.date"); date_->setCalendarPopup(true);
         auto* DateRow = new QHBoxLayout; DateRow->addWidget(useDate_); DateRow->addWidget(date_, 1); AdvancedLayout->addRow(Text("수정일"), DateRow);
+        // Design 8 E: the file color condition table, column fields included. Its result joins the
+        // terms above with the same AND/OR choice.
+        conditions_ = new QTableWidget(0, 4); conditions_->setObjectName("hc.selection.conditions"); conditions_->verticalHeader()->hide();
+        conditions_->setHorizontalHeaderLabels({Text("항목"), Text("비교 방법"), Text("값"), Text("삭제")});
+        conditions_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch); conditions_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed);
+        conditions_->setColumnWidth(0, 150); conditions_->setColumnWidth(3, 40); conditions_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        conditions_->setSelectionBehavior(QAbstractItemView::SelectRows); conditions_->setAccessibleName(Text("추가 조건"));
+        auto* AddCondition = new QPushButton(Text("조건 추가")); AddCondition->setObjectName("hc.selection.addCondition"); AddCondition->setAutoDefault(false);
+        AdvancedLayout->addRow(Text("추가 조건"), conditions_); AdvancedLayout->addRow(QString{}, AddCondition);
+        connect(AddCondition, &QPushButton::clicked, this, [this] {
+            if (rows_.size() >= 32) return;
+            appendCondition(settings::FileColorRules::NormalizeCondition({{"type", "extension"}, {"value", "txt"}}, 1)); schedule();
+        });
         tabs_->addTab(Advanced, Text("고급")); BodyLayout()->addWidget(tabs_);
         auto* Options = new QHBoxLayout;
         scope_ = combo("hc.selection.scope", {Text("파일만"), Text("폴더만"), Text("파일과 폴더")}); Options->addWidget(new QLabel(Text("항목 종류"))); Options->addWidget(scope_);
@@ -79,6 +95,10 @@ public:
         PresetRow->addWidget(presets_, 1); PresetRow->addWidget(Save); PresetRow->addWidget(Delete); BodyLayout()->addLayout(PresetRow);
         preview_ = new hc::qt::ElidedLabel; static_cast<hc::qt::ElidedLabel*>(preview_)->SetLineCount(4); preview_->setObjectName("hc.selection.preview"); preview_->setTextFormat(Qt::PlainText); preview_->setWordWrap(true);
         preview_->setTextInteractionFlags(Qt::TextSelectableByMouse); preview_->setAccessibleName(Text("선택 결과 미리보기")); BodyLayout()->addWidget(preview_);
+        // Field value checks: "조회 시작" past the large-scan gate, "중지" while reading (design 7.3).
+        auto* QueryRow = new QHBoxLayout; QueryRow->addStretch(); BodyLayout()->addLayout(QueryRow);
+        query_ = new fm::ui::Button(Text("중지")); query_->setObjectName("hc.selection.query"); query_->setAutoDefault(false); query_->hide(); QueryRow->addWidget(query_);
+        connect(query_, &QPushButton::clicked, this, [this] { if (queryAction_) queryAction_(); });
         auto* Footer = qobject_cast<QHBoxLayout*>(AcceptButton()->parentWidget()->layout());
         apply_ = new fm::ui::Button(Text("적용(&A)")); apply_->setObjectName("hc.selection.apply"); apply_->setAutoDefault(false);
         undo_ = new fm::ui::Button(Text("이전 선택 복원")); undo_->setObjectName("hc.selection.undo"); undo_->setAutoDefault(false);
@@ -131,18 +151,26 @@ public:
         C.groupId_ = group_->currentData().toString(); if (const auto G = selectedGroup()) { C.group_ = G->rule_; C.groupVersion_ = G->version_; }
         C.caseSensitive_ = case_->isChecked(); C.advanced_ = tabs_->currentIndex() == 1; C.all_ = combine_->currentIndex() == 0;
         C.size_ = size_->text(); C.minimumSize_ = sizeOp_->currentIndex() == 0;
+        for (auto* Row : rows_) C.conditions_.append(Row->Record());
         if (useDate_->isChecked()) C.modified_ = date_->date(); return C;
+    }
+    // A field check is waiting for the user (Button "조회 시작") or running (Button "중지").
+    void Querying(const QString& Summary, const QString& Button) {
+        if (preview_->text() != Summary) { preview_->setText(Summary); preview_->setToolTip(Summary); }
+        query_->setText(Button); query_->show(); SetAcceptEnabled(false); apply_->setEnabled(false);
     }
     QJsonObject Settings() const { auto Result = settings_; Result["last"] = Read().Save(); return Result; }
     void Pending(bool Background) {
         // An explicit foreground scan supersedes the queued input refresh.
         if (!Background) debounce_.stop();
+        if (!Background) { query_->hide(); queryAction_ = {}; }
         // A refresh invalidates row indexes, not the last confirmed result.
         // Keep its text and actions steady until a complete replacement is ready.
         if (!hasResult_ && preview_->text().isEmpty()) preview_->setText(Text("일치 항목 확인 중…"));
         if (!Background) { SetAcceptEnabled(false); apply_->setEnabled(false); }
     }
     void Result(const QString& Summary, bool CanApply, bool CanUndo, const QString& Error = {}) {
+        query_->hide();
         hasResult_ = Error.isEmpty() && !Summary.isEmpty();
         if (preview_->text() != Summary) { preview_->setText(Summary); preview_->setToolTip(Summary); }
         if (error_ != Error) { error_ = Error; SetMessage(Error, !Error.isEmpty()); }
@@ -153,7 +181,7 @@ public:
     std::function<void(const Criteria&)> changed_;
     std::function<void()> invalidated_;
     std::function<void(bool)> applyAction_;
-    std::function<void()> undoAction_;
+    std::function<void()> undoAction_, queryAction_;
 protected:
     void accept() override { if (AcceptButton()->isEnabled() && applyAction_) applyAction_(true); }
 private:
@@ -171,6 +199,8 @@ private:
         tabs_->setCurrentIndex(C.advanced_ ? 1 : 0); combine_->setCurrentIndex(C.all_ ? 0 : 1); size_->setText(C.size_);
         sizeOp_->setCurrentIndex(C.minimumSize_ ? 0 : 1); useDate_->setChecked(C.modified_.isValid());
         if (C.modified_.isValid()) date_->setDate(C.modified_);
+        qDeleteAll(rows_); rows_.clear(); conditions_->setRowCount(0);
+        for (const auto Value : C.conditions_) appendCondition(Value.toObject());
         auto GroupIndex = group_->findData(C.groupId_);
         if (GroupIndex < 0 && !C.groupId_.isEmpty()) { group_->addItem(Text("사용할 수 없는 그룹"), C.groupId_); GroupIndex = group_->count() - 1; }
         group_->setCurrentIndex(qMax(0, GroupIndex)); const auto G = selectedGroup();
@@ -185,13 +215,32 @@ private:
         presets_->clear(); presets_->addItem(Text("저장한 조건 선택…"));
         for (const auto& I : settings_["presets"].toArray()) presets_->addItem(I.toObject()["name"].toString());
     }
+    void appendCondition(const QJsonObject& Record) {
+        auto* Row = new FileColorConditionRow(conditions_, Record, 4, catalog_); rows_.append(Row);
+        Row->onEdited_ = [this] { if (!loading_) schedule(); };
+        Row->onRemove_ = [this, Row] {
+            if (Row->Row() < 0) return; conditions_->removeRow(Row->Row()); rows_.removeAll(Row); Row->deleteLater(); updateConditionHeight(); schedule();
+        };
+        updateConditionHeight();
+    }
+    void updateConditionHeight() {
+        int Height = conditions_->horizontalHeader()->sizeHint().height() + 2 * conditions_->frameWidth();
+        if (!conditions_->rowCount()) Height += conditions_->verticalHeader()->defaultSectionSize();
+        for (int I = 0; I < qMin(conditions_->rowCount(), 4); ++I) Height += conditions_->rowHeight(I);
+        conditions_->setFixedHeight(Height);
+    }
     QList<Group> groups_; QJsonObject settings_; bool loading_ = false, hasResult_ = false; QString error_; QTimer debounce_;
+    QTableWidget* conditions_ = nullptr; QList<FileColorConditionRow*> rows_; fm::ui::Button* query_ = nullptr;
+    QVector<hc::columns::FieldDefinition> catalog_ = hc::columns::PluginFields::Instance().Fields();
     QComboBox *operation_, *group_, *syntax_, *combine_, *sizeOp_, *scope_, *presets_;
     QLineEdit *pattern_, *exclude_, *size_; QCheckBox *case_, *useDate_; QDateEdit* date_; QTabWidget* tabs_;
     QLabel* preview_; fm::ui::Button *apply_, *undo_;
 };
 
-struct RowInput { settings::FileRuleInput rule_; QString key_; int row_ = -1; bool selected_ = false, sizeKnown_ = true; };
+struct RowInput {
+    settings::FileRuleInput rule_; QString key_; int row_ = -1; bool selected_ = false, sizeKnown_ = true;
+    FieldValueMap fields_; QString path_; QStringList needed_; bool done_ = false;
+};
 struct Scan {
     Criteria criteria_; Matcher matcher_; quint64 generation_ = 0, selection_ = 0;
     qint64 referenceTime_ = QDateTime::currentMSecsSinceEpoch();
@@ -201,6 +250,11 @@ struct Scan {
     bool grouped_ = false; int sourceRows_ = 0;
     QModelIndexList entries_; QStringList afterKeys_;
     std::shared_ptr<settings::FileColorRules::EvaluationContext> ruleContext_ = std::make_shared<settings::FileColorRules::EvaluationContext>();
+    // Design 7.2: rows the list values could not decide, and their field check.
+    QStringList required_; QList<RowInput> unknown_; QMultiHash<QString, int> byPath_;
+    std::shared_ptr<hc::columns::QueryEngine> engine_;
+    int next_ = 0, resolved_ = 0, unavailable_ = 0, unresolved_ = 0;
+    bool confirmed_ = false, querying_ = false;
 };
 }
 
@@ -281,7 +335,7 @@ struct ItemSelectionController::State {
         QObject::connect(Watcher, &QFutureWatcher<Prepared>::finished, owner_, [this, Work, Watcher] {
             auto Prepared = Watcher->future().takeResult(); Watcher->deleteLater(); if (!valid(Work)) return;
             if (!Prepared.second.isEmpty()) { if (dialog_) dialog_->Result({}, false, hasPrevious_, Prepared.second); else message(Prepared.second); return; }
-            Work->matcher_ = std::move(Prepared.first); step(Work);
+            Work->matcher_ = std::move(Prepared.first); Work->required_ = Work->matcher_.RequiredFields(); step(Work);
         });
         Watcher->setFuture(QtConcurrent::run([Criteria] { Matcher Prepared; const auto Error = Prepared.Compile(Criteria); return QPair<Matcher, QString>{std::move(Prepared), Error}; }));
     }
@@ -308,39 +362,139 @@ struct ItemSelectionController::State {
                 Input.rule_.size_ = Item->directorySize_.value_or(0);
             }
             if (Item->Reserved0_) Input.rule_.reparseTag_ = Item->Reserved0_;
+            // Values already known (list values, cached field values) decide most rows here.
+            if (const auto* Native = qobject_cast<CFSModel*>(model_.data()); Native && !Work->required_.isEmpty()) {
+                Input.path_ = Native->FieldQueryPath(Item);
+                for (const auto& Field : Work->required_) Input.fields_.insert(Field, Native->RuleFieldValue(Item, Field));
+            }
             Input.row_ = At; Input.selected_ = Work->grouped_ ? view_->IsSourceSelected(Index) : Grid->modelController()->isRowSelected(Row); Batch.append(std::move(Input));
         }
-        using BatchResult = QPair<QList<bool>, QString>;
+        using BatchResult = QPair<QList<Verdict>, QString>;
         auto* Watcher = new QFutureWatcher<BatchResult>(owner_);
         QObject::connect(Watcher, &QFutureWatcherBase::finished, owner_, [this, Work, Watcher, Batch] {
             const auto Result = Watcher->result(); Watcher->deleteLater(); if (!valid(Work)) return;
             if (!Result.second.isEmpty()) { Work->ready_ = false; if (dialog_) dialog_->Result({}, false, hasPrevious_, Result.second); else message(Result.second); return; }
-            const auto& Matches = Result.first;
+            const auto& Verdicts = Result.first;
             for (qsizetype I = 0; I < Batch.size(); ++I) {
-                const auto& Input = Batch[I]; bool Match = Matches[I]; bool After;
-                if (Work->command_ == "invertAll") Match = !Input.selected_;
-                if (Work->command_ == "restore" || Work->command_ == "recall") Match = Work->restoreKeys_.contains(Input.key_);
-                After = Matcher::Selected(Work->criteria_.operation_, Input.selected_, Match);
-                Work->before_.setBit(Input.row_, Input.selected_); Work->after_.setBit(Input.row_, After);
-                if (Input.selected_) Work->beforeKeys_.append(Input.key_);
-                if (After) Work->afterKeys_.append(Input.key_);
-                Work->matched_ += Match; Work->added_ += After && !Input.selected_; Work->removed_ += !After && Input.selected_; Work->total_ += After;
-                if (Match && Work->names_.size() < 12) Work->names_.append(Input.rule_.name_);
+                if (Verdicts[I].truth_ == hc::columns::Truth::Unknown) {
+                    auto Row = Batch[I]; Row.needed_ = Verdicts[I].needed_; Work->unknown_.append(std::move(Row)); continue;
+                }
+                account(Work, Batch[I], Verdicts[I].truth_ == hc::columns::Truth::True);
             }
             if (Work->offset_ < Work->rows_) { QTimer::singleShot(0, owner_, [this, Work] { step(Work); }); return; }
-            Work->ready_ = true;
-            if (Work->command_ == "remember") { remembered_ = Work->beforeKeys_; hasRemembered_ = true; historyLocation_ = locationKey(); message(Text("현재 선택을 기억하였습니다.")); scan_.reset(); return; }
-            if (!Work->command_.isEmpty()) { apply(false); return; }
-            updatePreview();
-            if (pendingApply_ && dialog_ && Work->criteria_.Save() == dialog_->Read().Save()) {
-                const bool Close = *pendingApply_; pendingApply_.reset(); apply(Close);
-            }
+            if (!Work->unknown_.isEmpty()) { beginQuery(Work); return; }
+            finish(Work);
         });
         Watcher->setFuture(QtConcurrent::run([Matcher = Work->matcher_, Batch, Context = Work->ruleContext_] {
             BatchResult Result; Result.first.reserve(Batch.size());
-            for (const auto& Input : Batch) { Result.first.append(Matcher.Matches(Input.rule_, &Result.second, Context.get(), Input.sizeKnown_)); if (!Result.second.isEmpty()) break; }
+            for (const auto& Input : Batch) {
+                Result.first.append(Matcher.Evaluate(Input.rule_, Input.fields_, Context.get(), Input.sizeKnown_));
+                if (!Result.first.back().error_.isEmpty()) { Result.second = Result.first.back().error_; break; }
+            }
             return Result;
         }));
+    }
+    void account(const std::shared_ptr<Scan>& Work, const RowInput& Input, bool Match) {
+        if (Work->command_ == "invertAll") Match = !Input.selected_;
+        if (Work->command_ == "restore" || Work->command_ == "recall") Match = Work->restoreKeys_.contains(Input.key_);
+        const bool After = Matcher::Selected(Work->criteria_.operation_, Input.selected_, Match);
+        Work->before_.setBit(Input.row_, Input.selected_); Work->after_.setBit(Input.row_, After);
+        if (Input.selected_) Work->beforeKeys_.append(Input.key_);
+        if (After) Work->afterKeys_.append(Input.key_);
+        Work->matched_ += Match; Work->added_ += After && !Input.selected_; Work->removed_ += !After && Input.selected_; Work->total_ += After;
+        if (Match && Work->names_.size() < 12) Work->names_.append(Input.rule_.name_);
+    }
+    void finish(const std::shared_ptr<Scan>& Work) {
+        Work->ready_ = true; Work->querying_ = false;
+        // The engine may be the caller (its change callback); release it after the stack unwinds.
+        if (Work->engine_) QTimer::singleShot(0, owner_, [Engine = std::exchange(Work->engine_, {})] {});
+        if (Work->command_ == "remember") { remembered_ = Work->beforeKeys_; hasRemembered_ = true; historyLocation_ = locationKey(); message(Text("현재 선택을 기억하였습니다.")); scan_.reset(); return; }
+        if (!Work->command_.isEmpty()) { apply(false); return; }
+        updatePreview();
+        if (pendingApply_ && dialog_ && Work->criteria_.Save() == dialog_->Read().Save()) {
+            const bool Close = *pendingApply_; pendingApply_.reset(); apply(Close);
+        }
+    }
+    // Design 7.3: past the threshold the check waits for "조회 시작"; it never starts on its own.
+    void beginQuery(const std::shared_ptr<Scan>& Work) {
+        if (!dialog_) { stopQuery(Work); return; }
+        bool Plugin = false;
+        for (const auto& Row : Work->unknown_) for (const auto& Field : Row.needed_) Plugin |= hc::columns::IsPluginField(Field);
+        if (!Work->confirmed_ && Work->unknown_.size() > (Plugin ? 200 : 2000)) {
+            const std::weak_ptr<Scan> Weak = Work;
+            dialog_->queryAction_ = [this, Weak] { if (const auto W = Weak.lock(); W && valid(W)) { W->confirmed_ = true; beginQuery(W); } };
+            dialog_->Querying(Text("%1개 항목의 필드 값을 조회해야 합니다.\n이름·크기 등 다른 조건으로 걸러진 뒤의 개수입니다. %2디스크에 따라 몇 분 걸릴 수 있으며, 조회 중에도 중지할 수 있습니다.")
+                .arg(QLocale().toString(qsizetype(Work->unknown_.size())), Plugin ? Text("플러그인 필드는 파일 내용을 읽습니다. ") : QString{}), Text("조회 시작"));
+            return;
+        }
+        Work->confirmed_ = true; Work->querying_ = true;
+        for (int Index = 0; Index < Work->unknown_.size(); ++Index) Work->byPath_.insert(Work->unknown_[Index].path_, Index);
+        Work->engine_ = std::make_shared<hc::columns::QueryEngine>(hc::columns::PluginFields::Instance().Loader(true));
+        const std::weak_ptr<Scan> Weak = Work;
+        Work->engine_->Changed = [this, Weak](const QSet<QString>& Paths) {
+            const auto W = Weak.lock(); if (!W) return;
+            resolve(W, Paths);
+            QTimer::singleShot(0, owner_, [W] {}); // Never drop the last reference inside the engine's callback.
+        };
+        dialog_->queryAction_ = [this, Weak] { if (const auto W = Weak.lock(); W && valid(W)) stopQuery(W); };
+        pump(Work); progress(Work);
+        if (Work->resolved_ == Work->unknown_.size()) finish(Work);
+    }
+    void pump(const std::shared_ptr<Scan>& Work) {
+        // Bounded in flight, well under the engine's own 4096 budget.
+        while (Work->engine_ && Work->next_ < Work->unknown_.size() && Work->engine_->Pending() < 512) request(Work, Work->next_++);
+    }
+    void request(const std::shared_ptr<Scan>& Work, int Index) {
+        auto& Row = Work->unknown_[Index]; bool Waiting = false;
+        for (const auto& Field : Row.needed_) {
+            if (Row.fields_.value(Field, hc::columns::CellValue::Missing(hc::columns::ValueState::Pending)).State() != hc::columns::ValueState::Pending) continue;
+            const auto Value = Work->engine_->Read(Row.path_, Field, true, false);
+            if (Value.State() == hc::columns::ValueState::Pending) Waiting = true;
+            else Row.fields_[Field] = Value.State() == hc::columns::ValueState::OnDemand ? hc::columns::CellValue::Missing(hc::columns::ValueState::Unsupported, "on-demand") : Value;
+        }
+        if (!Waiting) reevaluate(Work, Index);
+    }
+    void resolve(const std::shared_ptr<Scan>& Work, const QSet<QString>& Paths) {
+        if (!valid(Work) || !Work->querying_) return;
+        for (const auto& Path : Paths) for (const int Index : Work->byPath_.values(Path)) {
+            auto& Row = Work->unknown_[Index]; if (Row.done_) continue; bool Waiting = false;
+            for (const auto& Field : Row.needed_) {
+                if (Row.fields_.value(Field, hc::columns::CellValue::Missing(hc::columns::ValueState::Pending)).State() != hc::columns::ValueState::Pending) continue;
+                const auto Value = Work->engine_->Read(Path, Field, false);
+                if (Value.State() == hc::columns::ValueState::Pending) { Waiting = true; continue; }
+                Row.fields_[Field] = Value.State() == hc::columns::ValueState::OnDemand ? hc::columns::CellValue::Missing(hc::columns::ValueState::Unsupported, "on-demand") : Value;
+            }
+            if (!Waiting) reevaluate(Work, Index);
+        }
+        pump(Work); progress(Work);
+        if (Work->querying_ && Work->resolved_ == Work->unknown_.size()) finish(Work);
+    }
+    void reevaluate(const std::shared_ptr<Scan>& Work, int Index) {
+        auto& Row = Work->unknown_[Index]; if (Row.done_) return;
+        const auto Outcome = Work->matcher_.Evaluate(Row.rule_, Row.fields_, Work->ruleContext_.get(), Row.sizeKnown_);
+        // A slower tier may be needed once the cheaper values are in.
+        if (Outcome.truth_ == hc::columns::Truth::Unknown && Outcome.error_.isEmpty()) {
+            bool Fresh = false; for (const auto& Field : Outcome.needed_) Fresh |= Row.fields_.value(Field, hc::columns::CellValue::Missing(hc::columns::ValueState::Pending)).State() == hc::columns::ValueState::Pending && !Row.needed_.contains(Field);
+            if (Fresh) { Row.needed_ = Outcome.needed_; request(Work, Index); return; }
+        }
+        Row.done_ = true; ++Work->resolved_;
+        for (const auto& Value : std::as_const(Row.fields_)) if (Value.State() == hc::columns::ValueState::Error || Value.State() == hc::columns::ValueState::Unsupported) { ++Work->unavailable_; break; }
+        account(Work, Row, Outcome.truth_ == hc::columns::Truth::True);
+        if (auto* Native = qobject_cast<CFSModel*>(model_.data())) {
+            hc::columns::FieldValues Shared; for (auto It = Row.fields_.cbegin(); It != Row.fields_.cend(); ++It) Shared.insert(It.key(), It.value());
+            Native->ShareRuleFieldValues(Row.path_, Shared);
+        }
+    }
+    // Stopped rows count as not matching; the summary says how many (design 7.3).
+    void stopQuery(const std::shared_ptr<Scan>& Work) {
+        for (auto& Row : Work->unknown_) if (!Row.done_) { Row.done_ = true; ++Work->unresolved_; account(Work, Row, false); }
+        Work->resolved_ = Work->unknown_.size(); finish(Work);
+    }
+    void progress(const std::shared_ptr<Scan>& Work) {
+        if (!dialog_ || !Work->querying_) return;
+        dialog_->Querying(Text("필드 값 확인 중 %1 / %2\n일치 %3개 · 확인 불가 %4개")
+            .arg(QLocale().toString(Work->resolved_), QLocale().toString(qsizetype(Work->unknown_.size())))
+            .arg(Work->matched_).arg(Work->unavailable_), Text("중지"));
     }
     void updatePreview() {
         const auto Work = scan_; if (!dialog_ || !Work || !valid(Work) || !Work->ready_) return;
@@ -348,6 +502,8 @@ struct ItemSelectionController::State {
         QString Summary = Text("일치 %1개 · 현재 선택 %2개\n%3\n추가 %4개 · 해제 %5개 → 적용 후 선택 %6개")
             .arg(Work->matched_).arg(Work->beforeKeys_.size()).arg(Work->names_.join(" · ")).arg(Work->added_).arg(Work->removed_).arg(Work->total_);
         if (!Work->total_ && !Work->beforeKeys_.isEmpty()) Summary += "\n" + Text("현재 선택이 모두 해제됩니다.");
+        if (Work->unresolved_) Summary += "\n" + Text("중지됨 · 미확인 %1개는 일치하지 않음으로 처리했습니다.").arg(Work->unresolved_);
+        if (Work->unavailable_) Summary += "\n" + Text("필드 값을 확인할 수 없는 %1개는 일치하지 않음으로 처리했습니다.").arg(Work->unavailable_);
         dialog_->Result(Summary, Work->added_ + Work->removed_ > 0, hasPrevious_);
     }
     void apply(bool Close) {

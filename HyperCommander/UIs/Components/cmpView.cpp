@@ -138,6 +138,7 @@ public:
         paintRecordCursor(&Painter, Value.rect, owner_->RecordGeometry(), owner_->ListAppearance(), State, owner_->RecordColors());
         Painter.save(); if (Effects["dim"].toBool()) Painter.setOpacity(Painter.opacity() * 0.55);
         hc::ui::PaintFileRuleBorder(&Painter, Value.rect, Value.index.data(Qt::ForegroundRole).value<QColor>(), Effects);
+        hc::ui::PaintFileRulePending(&Painter, Value.rect, Effects);
         owner_->RecordStartupPaint(Value.index,4);
         Painter.restore();
     }
@@ -233,7 +234,9 @@ public:
     QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override { return base_->sizeHint(Option, Index); }
     void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
         base_->paint(Painter, Option, Index);
-        hc::ui::PaintFileRuleBorder(Painter, Option.rect, Index.data(Qt::ForegroundRole).value<QColor>(), Index.data(CFSModel::FileEffectsRole).toJsonObject());
+        const auto Effects = Index.data(CFSModel::FileEffectsRole).toJsonObject();
+        hc::ui::PaintFileRuleBorder(Painter, Option.rect, Index.data(Qt::ForegroundRole).value<QColor>(), Effects);
+        hc::ui::PaintFileRulePending(Painter, Option.rect, Effects);
         owner_->RecordStartupPaint(owner_->Thumbnails()->SourceIndex(Index.row()),7);
     }
     bool editorEvent(QEvent* Event, QAbstractItemModel* Model, const QStyleOptionViewItem& Option, const QModelIndex& Index) override {
@@ -749,10 +752,44 @@ QModelIndexList CGridView::VisibleSourceRows(int Overscan) const
         auto Index=Row.modelIndex(0);if(proxy_)Index=proxy_->mapToSource(Index);if(Index.isValid())Entries.append(Index);}
     return Entries;
 }
+QModelIndexList CGridView::AheadSourceRows(int Screens) const
+{
+    // Rows partly visible at the bottom edge are returned too; callers treat the visible set first.
+    QModelIndexList Entries; if (!isVisible() || !view_ || !model_ || Screens <= 0) return Entries;
+    const auto Append = [&](QModelIndex Index) {
+        if (proxy_ && Index.model() == proxy_) Index = proxy_->mapToSource(Index);
+        if (Index.isValid()) Entries.append(Index);
+    };
+    if (IsThumbnailMode()) {
+        auto* List = thumbnails_->listView(); const auto Area = List->viewport()->rect();
+        const int Count = thumbnailModel_->rowCount(), Limit = Area.bottom() + Screens * std::max(1, Area.height());
+        int Low = 0, High = Count;
+        while (Low < High) {
+            const int Middle = (Low + High) / 2;
+            if (List->visualRect(thumbnailModel_->index(Middle, 0)).bottom() <= Area.bottom()) Low = Middle + 1;
+            else High = Middle;
+        }
+        for (int Row = Low; Row < Count && Entries.size() < 1024; ++Row) {
+            if (List->visualRect(thumbnailModel_->index(Row, 0)).top() > Limit) break;
+            Append(thumbnailModel_->SourceIndex(Row));
+        }
+        return Entries;
+    }
+    auto* Layout = static_cast<Qtitan::GridViewBase*>(view_)->layout(); const int Count = view_->getRowCount(); if (!Count) return Entries;
+    const int Scroll = view_->verticalScrollBar()->value(), Height = std::max(1, Layout->rowsPanel()->boundedRect().height());
+    const auto Position = [&](int Y) { int Low = 0, High = Count; while (Low + 1 < High) { const int Mid = (Low + High) / 2; if (Layout->getRowScrollPos(Mid) <= Y) Low = Mid; else High = Mid; } return Low; };
+    const int Last = Position(Scroll + (1 + Screens) * Height);
+    for (int At = Position(Scroll + Height); At <= Last && Entries.size() < 1024; ++At) {
+        const auto Row = view_->getRow(At); if (!Row.isValid() || Row.type() != Qtitan::GridRow::DataRow) continue;
+        Append(Row.modelIndex(0));
+    }
+    return Entries;
+}
 void CGridView::updateIconViewport()
 {
     auto* Model = qobject_cast<CFSModel*>(model_); if (!Model || !view_) return;
-    Model->SetFileColorViewport(VisibleSourceRows(), isVisible() && panelActive_);
+    // Design 6.3: slow rule values are asked for up to two screens below the viewport.
+    Model->SetFileColorViewport(VisibleSourceRows(), isVisible() && panelActive_, Model->HasSlowFileRuleFields() ? AheadSourceRows(2) : QModelIndexList{});
     if (!isVisible() || IsThumbnailMode()) { Model->SetIconViewport({}, false); return; }
     auto* Layout = static_cast<Qtitan::GridViewBase*>(view_)->layout(); const int Count = view_->getRowCount();
     if (!Count) { Model->SetIconViewport({}, true); return; }

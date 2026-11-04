@@ -164,6 +164,8 @@ public:
         auto* PatternHelp = new QLabel(tr("확장자는 마지막 . 뒤, 파일명은 확장자를 포함한 전체 이름입니다.\n와일드카드: 전체 일치(*, ?) · 정규표현식: 부분 일치(전체는 \\A…\\z)"), editor_);
         PatternHelp->setObjectName("hc.rules.patternHelp"); PatternHelp->setWordWrap(true);
         PatternHelp->setFixedHeight(PatternHelp->fontMetrics().lineSpacing() * 2 + 6); Definition->addWidget(PatternHelp);
+        // Design 8 B: what the slow conditions of this group cost, and what is shown meanwhile.
+        cost_ = new QLabel(editor_); cost_->setObjectName("hc.rules.cost"); cost_->setWordWrap(true); cost_->hide(); Definition->addWidget(cost_);
         auto* ConditionButtons = new QHBoxLayout; Definition->addLayout(ConditionButtons);
         auto* AddCondition = Button(tr("조건 추가(&D)"), ConditionButtons, [this] { if (conditionRows_.size() >= 32) return; ensureVersion2(); appendCondition(settings::FileColorRules::NormalizeCondition({{"type", "extension"}, {"value", "txt"}}, 1)); storeForm(); });
         AddCondition->setObjectName("hc.rules.addCondition"); ConditionButtons->addStretch();
@@ -225,11 +227,31 @@ public:
         previewModified_ = new QDateTimeEdit(QDateTime::currentDateTimeUtc(), DateSample); previewModified_->setObjectName("hc.rules.sampleModified"); previewModified_->setTimeZone(QTimeZone::UTC); previewModified_->setDisplayFormat("yyyy-MM-dd HH:mm:ss 'UTC'"); previewModified_->setEnabled(false); DateFields->addWidget(previewModified_, 1); SampleForm->addRow(tr("수정 시각"), DateSample);
         DateSample->setToolTip(tr("수정 시각을 확인할 수 없으면 날짜 조건에 일치하지 않습니다. 최근 기간은 현재 UTC 시각을 기준으로 판정합니다."));
         previewLink_ = new QComboBox(editor_); previewLink_->setObjectName("hc.rules.sampleLink"); previewLink_->addItems({tr("파일명·속성 사용"), tr("심볼릭 링크"), tr("정션"), tr("종류를 모르는 재분석 지점")}); SampleForm->addRow(tr("링크 종류"), previewLink_);
+        previewFields_ = new QLineEdit(editor_); previewFields_->setObjectName("hc.rules.sampleFields"); previewFields_->setMaxLength(4096);
+        previewFields_->setPlaceholderText(tr("예: file.imageWidth=4032; file.alternateDataStream.zone=3"));
+        previewFields_->setToolTip(tr("필드 조건에 쓸 표본 값입니다. 필드=값을 ;로 구분합니다.\n적지 않은 필드는 확인 중, 값 자리에 -를 적으면 빈 값, !를 적으면 오류로 봅니다."));
+        SampleForm->addRow(tr("필드 표본 값"), previewFields_);
+        connect(previewFields_, &QLineEdit::textChanged, this, [this] { updatePreview(); });
         connect(previewModifiedKnown_, &QCheckBox::toggled, this, [this](bool Known) { previewModified_->setEnabled(Known); updatePreview(); });
         connect(previewModified_, &QDateTimeEdit::dateTimeChanged, this, [this] { updatePreview(); });
         connect(previewLink_, &QComboBox::currentIndexChanged, this, [this] { updatePreview(); });
         preview_ = new FileRulePreviewLabel(editor_); preview_->setTextFormat(Qt::PlainText); preview_->setAutoFillBackground(true); preview_->setMinimumHeight(40); CustomLayout->addWidget(preview_);
-        owners_ = new QLabel(editor_); owners_->setTextFormat(Qt::PlainText); owners_->setWordWrap(true); CustomLayout->addWidget(owners_); Right->addStretch();
+        owners_ = new QLabel(editor_); owners_->setTextFormat(Qt::PlainText); owners_->setWordWrap(true); CustomLayout->addWidget(owners_);
+        // Design 6.4: rows whose field values are still being read. Empty uses the product default.
+        auto* Pending = Card(tr("확인 중 항목"), "hc.rules.pendingCard");
+        auto* PendingGrid = new QGridLayout; Pending->addLayout(PendingGrid);
+        PendingGrid->addWidget(new QLabel(tr("라이트 테마"), editor_), 0, 1); PendingGrid->addWidget(new QLabel(tr("다크 테마"), editor_), 0, 2);
+        PendingGrid->addWidget(new QLabel(tr("배경색"), editor_), 1, 0); PendingGrid->addWidget(new QLabel(tr("표시선"), editor_), 2, 0);
+        for (int I = 0; I < 4; ++I) {
+            pending_[I] = new fm::ui::ColorPickButton(editor_); pending_[I]->setAllowNone(true); pending_[I]->setAutoDefault(false);
+            pending_[I]->setObjectName("hc.rules.pending." + QString::number(I));
+            pending_[I]->setAccessibleName((I % 2 ? tr("다크 ") : tr("라이트 ")) + (I / 2 ? tr("확인 중 표시선") : tr("확인 중 배경색")));
+            PendingGrid->addWidget(pending_[I], I / 2 + 1, I % 2 + 1);
+            connect(pending_[I], &fm::ui::ColorPickButton::colorChanged, this, [this] { storePending(); });
+        }
+        auto* PendingHelp = new QLabel(tr("필드 조건(ADS·이미지·버전·링크·플러그인 필드 등)의 값을 확인하기 전인 행에 씁니다. 비워 두면 기본색을 씁니다."), editor_);
+        PendingHelp->setWordWrap(true); Pending->addWidget(PendingHelp);
+        Right->addStretch();
         error_ = new QLabel(this); error_->setTextFormat(Qt::PlainText); error_->setWordWrap(true); Layout->addWidget(error_);
         Button(tr("기존 규칙 가져오기"), Files, [this] { ImportLegacy(); });
         auto* Examples = Button(tr("기본 예제 그룹 추가"), Files, [this] { addExamples(); }); Examples->setObjectName("hc.rules.addExamples"); Examples->setToolTip(tr("10가지 예제 중 아직 없는 그룹을 뒤에 추가합니다. 기존 그룹과 우선순위는 유지합니다."));
@@ -294,6 +316,11 @@ public:
         error_->setText(tr("기존 파일집합과 색 구성표 원본을 초안에 백업했습니다. 적용 전 순서와 조건을 확인하세요. 기존 엔진에서 미지원이던 파일명·크기 조건은 비활성으로 이관합니다."));
     }
     QJsonObject Document() const { return document_; }
+    // Built-in fields plus the plugin fields of this installation (PluginFields::Fields()).
+    void SetFieldCatalog(QVector<hc::columns::FieldDefinition> Catalog) {
+        catalog_ = std::move(Catalog); const int Row = list_->currentRow();
+        loading_ = true; updateGroupItems(); loading_ = false; list_->setCurrentRow(Row); loadForm();
+    }
     bool Validate() {
         if (!supported_) return true;
         if (settings::FileColorRules::HasRegex(document_)) {
@@ -308,7 +335,7 @@ private:
         if (document_["version"] == QJsonValue(1)) { document_ = settings::FileColorRules::Upgrade(document_); for (auto* Row : conditionRows_) Row->Upgrade(); }
     }
     void appendCondition(const QJsonObject& Condition) {
-        auto* Row = new FileColorConditionRow(conditions_, Condition, document_["version"].toInt()); conditionRows_.append(Row);
+        auto* Row = new FileColorConditionRow(conditions_, Condition, document_["version"].toInt(), catalog_); conditionRows_.append(Row);
         Row->onEdited_ = [this] { if (loading_) return; ensureVersion2(); storeForm(); };
         Row->onRemove_ = [this, Row] { if (loading_ || Row->Row() < 0) return; ensureVersion2(); conditions_->removeRow(Row->Row()); conditionRows_.removeAll(Row); Row->deleteLater(); storeForm(); };
     }
@@ -329,8 +356,20 @@ private:
                 if (C["type"] == "normalization") Text = C["value"] == "decomposed" ? tr("자소 분리 있음 (NFD·혼합)") : tr("분리 없음 (NFC)");
                 if (C["type"] == "rtl") Text = C["op"] == "notContains" ? tr("비포함") : tr("포함");
                 if (C["value"].isArray()) { QStringList Parts; for (const auto P : C["value"].toArray()) Parts.append(P.toString()); Text = Parts.join("; "); }
-                const QMap<QString, QString> Comparisons{{"gt", ">"}, {"ge", "≥"}, {"lt", "<"}, {"le", "≤"}, {"eq", "="}, {"ne", "≠"}, {"any", tr("하나라도")}, {"all", tr("모두")}, {"within", tr("최근")}, {"before", tr("이전")}, {"after", tr("이후")}, {"notMatches", tr("불일치")}, {"notIn", tr("제외")}};
+                const QMap<QString, QString> Comparisons{{"gt", ">"}, {"ge", "≥"}, {"lt", "<"}, {"le", "≤"}, {"eq", "="}, {"ne", "≠"}, {"any", tr("하나라도")}, {"all", tr("모두")}, {"within", tr("최근")}, {"before", tr("이전")}, {"after", tr("이후")}, {"notMatches", tr("불일치")}, {"notIn", tr("제외")},
+                    {"between", tr("범위")}, {"exists", tr("값 있음")}, {"notExists", tr("값 없음")}};
                 QString Label = Types.value(typeKeys_.indexOf(C["type"].toString()));
+                if (C["type"] == "field") {
+                    const auto Id = C["field"].toString();
+                    const auto Known = std::find_if(catalog_.begin(), catalog_.end(), [&](const auto& F) { return F.id_ == Id; });
+                    Label = Known != catalog_.end() ? Known->title_ : C["fieldTitle"].toString(Id);
+                    if (C["op"] == "contains") Label += tr(" 포함"); else if (C["op"] == "notContains") Label += tr(" 포함 아님");
+                    else if (C["op"] == "in") Label += tr(" 중 하나"); else if (C["op"] == "matches") Label += C["syntax"] == "regex" ? tr(" 정규식") : tr(" 와일드카드");
+                    else if (C["op"] == "is") Text = C["value"] == "true" ? tr("예") : tr("아니요");
+                    if (Known != catalog_.end() && C["op"] == "in") { QStringList Titles; const auto Values = C["value"].toArray();
+                        for (const auto& Choice : Known->choices_) if (Values.contains(Choice.value_)) Titles.append(Choice.title_);
+                        if (!Titles.isEmpty()) { Conditions.append(Label + ": " + Titles.join(", ")); continue; } }
+                }
                 if (C["type"] == "extension" || C["type"] == "pattern") {
                     const auto Syntax = settings::FileColorRules::Syntax(C, document_["version"].toInt());
                     if (Syntax == "regex") Label += tr(" 정규식");
@@ -343,7 +382,9 @@ private:
                 Conditions.append(Label + ": " + Text);
             }
             const auto Summary = Conditions.join(G["join"] == "all" ? tr(" · 모두 · ") : tr(" · 또는 · "));
-            auto* Item = list_->item(Row); const auto Title = QString::number(Row + 1) + ". " + G["name"].toString() + (G["example"].toBool() ? tr(" · 예제") : QString{});
+            const auto [Slow, Plugin] = fieldCosts(G);
+            auto* Item = list_->item(Row); const auto Title = QString::number(Row + 1) + ". " + G["name"].toString() + (G["example"].toBool() ? tr(" · 예제") : QString{})
+                + (Plugin ? tr(" · 플러그인") : Slow ? tr(" · 느림") : QString{});
             Item->setText(Title + "\n" + list_->fontMetrics().elidedText(Summary, Qt::ElideRight, qMax(80, list_->viewport()->width() - 110)));
             Item->setToolTip(Title + "\n" + Summary); Item->setData(Qt::AccessibleTextRole, Title + " " + Summary);
             QPixmap Swatch(QSize(40, 32) * devicePixelRatioF()); Swatch.setDevicePixelRatio(devicePixelRatioF());
@@ -371,14 +412,16 @@ private:
         autoDark_->setChecked(G["autoDark"].toBool()); refreshColors();
         for (int I = 0; I < fontKeys_.size(); ++I) fonts_[I]->SetState(G["font"].toObject().contains(fontKeys_[I]) ? G["font"].toObject()[fontKeys_[I]].toBool() ? 1 : 2 : 0);
         border_->setCurrentIndex(qMax(0, border_->findData(G["font"].toObject()["border"].toString())));
-        updateConditionHeight();
+        updateConditionHeight(); refreshCost(); refreshPending();
         loading_ = false; updatePreview();
     }
     void storeForm() {
         if (loading_ || list_->currentRow() < 0) return;
         auto Groups = document_["groups"].toArray(); auto G = Groups[list_->currentRow()].toObject(); G["name"] = name_->text(); G["join"] = join_->checkedId() == 1 ? "all" : "any";
         QJsonArray Conditions; for (auto* Row : conditionRows_) Conditions.append(Row->Record()); G["conditions"] = Conditions;
-        for (const auto C : Conditions) if (C.toObject().contains("syntax")) { document_["version"] = 3; break; }
+        // v4 carries field conditions; once raised it stays (design 4.5). Never lower another group's need.
+        if (document_["version"].toInt() < 3) for (const auto C : Conditions) if (C.toObject().contains("syntax")) { document_["version"] = 3; break; }
+        for (const auto C : Conditions) if (C.toObject()["type"] == "field") { document_["version"] = 4; break; }
         auto Light = G["light"].toObject(), Dark = G["dark"].toObject(), Font = G["font"].toObject();
         for (int I = 0; I < 4; ++I) {
             if (I % 2 && (autoDark_->isChecked() || G["autoDark"].toBool())) continue;
@@ -392,7 +435,47 @@ private:
         if (autoDark_->isChecked() || G.contains("autoDark")) G["autoDark"] = autoDark_->isChecked();
         G["light"] = Light; G["dark"] = Dark; G["font"] = Font; Groups[list_->currentRow()] = G; document_["groups"] = Groups; refreshColors();
         loading_ = true; updateGroupItems(); loading_ = false;
-        updateConditionHeight();
+        updateConditionHeight(); refreshCost();
+        updatePreview();
+    }
+    // Conditions of a group by price (design 3): {slow built-in, plugin}.
+    QPair<int, int> fieldCosts(const QJsonObject& Group) const {
+        int Slow = 0, Plugin = 0;
+        for (const auto Value : Group["conditions"].toArray()) {
+            const auto C = Value.toObject(); if (C["type"] != "field") continue;
+            const auto Id = C["field"].toString();
+            const auto Known = std::find_if(catalog_.begin(), catalog_.end(), [&](const auto& F) { return F.id_ == Id; });
+            const auto Cost = Known != catalog_.end() ? hc::columns::CostOf(*Known) : Id.startsWith("file.") ? hc::columns::ConditionCost::Slow : hc::columns::ConditionCost::Plugin;
+            if (Cost == hc::columns::ConditionCost::Slow) ++Slow; else if (Cost == hc::columns::ConditionCost::Plugin) ++Plugin;
+        }
+        return {Slow, Plugin};
+    }
+    void refreshCost() {
+        const auto Groups = document_["groups"].toArray(); const int Row = list_->currentRow();
+        const auto [Slow, Plugin] = Row >= 0 && Row < Groups.size() ? fieldCosts(Groups[Row].toObject()) : QPair<int, int>{};
+        cost_->setVisible(Slow || Plugin); if (!Slow && !Plugin) return;
+        QStringList Parts; if (Slow) Parts.append(tr("느린 조건 %1개").arg(Slow)); if (Plugin) Parts.append(tr("플러그인 조건 %1개").arg(Plugin));
+        auto Text = Parts.join(" · ") + tr(" — 같은 그룹의 다른 조건으로 결정되지 않은 항목만, 화면에 보이는 것부터 값을 확인합니다. 확인 전에는 「확인 중 항목」 색으로 표시합니다.");
+        if (Row < Groups.size() - 1) Text += tr(" 위쪽 그룹의 느린 조건은 아래 그룹의 표시도 늦춥니다.");
+        if (Plugin) Text += tr(" 플러그인의 느린 필드는 상태 표시줄의 다시 조회로 계산합니다.");
+        cost_->setText(Text);
+    }
+    void refreshPending() {
+        const auto Pending = document_.value("pending").toObject();
+        for (int I = 0; I < 4; ++I) {
+            const QSignalBlocker Block(pending_[I]);
+            const QColor Color(Pending[I % 2 ? "dark" : "light"].toObject()[I / 2 ? "marker" : "background"].toString());
+            pending_[I]->setColor(Color.isValid() ? std::optional<QColor>(Color) : std::nullopt);
+        }
+    }
+    void storePending() {
+        if (loading_) return;
+        QJsonObject Pending;
+        for (int I = 0; I < 4; ++I) if (const auto Color = pending_[I]->color()) {
+            auto Scheme = Pending[I % 2 ? "dark" : "light"].toObject(); Scheme[I / 2 ? "marker" : "background"] = Color->name(QColor::HexRgb);
+            Pending[I % 2 ? "dark" : "light"] = Scheme;
+        }
+        if (Pending.isEmpty()) document_.remove("pending"); else document_["pending"] = Pending;
         updatePreview();
     }
     void refreshColors() {
@@ -450,8 +533,26 @@ private:
     }
     struct PreviewWork {
         QJsonObject document_; settings::FileRuleInput input_; QList<settings::FileRuleInput> samples_;
+        QMap<QString, QString> fields_; // Sample field values of the custom input, by field id.
         quint64 generation_ = 0;
     };
+    // "-" empty, "!" error, anything else parsed with the condition's value type.
+    static hc::columns::CellValue sampleValue(const QString& Text, hc::columns::FieldType Type) {
+        using namespace hc::columns;
+        if (Text == "-") return CellValue::Missing(ValueState::Empty);
+        if (Text == "!") return CellValue::Missing(ValueState::Error, "sample");
+        bool Ok = false;
+        switch (Type) {
+        case FieldType::UnsignedInteger: { const auto V = Text.toULongLong(&Ok); if (Ok) return CellValue::Ready(quint64(V)); break; }
+        case FieldType::Integer: { const auto V = Text.toLongLong(&Ok); if (Ok) return CellValue::Ready(qint64(V)); break; }
+        case FieldType::Real: { const auto V = Text.toDouble(&Ok); if (Ok) return CellValue::Ready(V); break; }
+        case FieldType::Boolean: return CellValue::Ready(Text == "true" || Text == "1" || Text == QObject::tr("예"));
+        case FieldType::Date: case FieldType::Timestamp: { const auto V = QDateTime::fromString(Text, Qt::ISODateWithMs); if (V.isValid()) return CellValue::Ready(V); break; }
+        case FieldType::Time: { const auto V = QTime::fromString(Text, Qt::ISODate); if (V.isValid()) return CellValue::Ready(V); break; }
+        case FieldType::Text: return CellValue::Ready(Text);
+        }
+        return CellValue::Missing(ValueState::Error, "sample-format");
+    }
     struct PreviewOutput {
         QString error_; settings::FileRuleResult custom_; QList<settings::FileRuleResult> samples_;
     };
@@ -464,7 +565,16 @@ private:
             if (Output.error_.isEmpty()) Output.error_ = Style.error_;
             Output.samples_.append(std::move(Style));
         }
-        Output.custom_ = Rules.Evaluate(Work.input_, &Context);
+        // Examples carry no field values (they show as being checked); the custom input takes them.
+        auto Custom = Work.input_;
+        for (const auto& Field : Rules.RequiredFields()) {
+            QString Type;
+            for (const auto G : Work.document_["groups"].toArray()) for (const auto C : G.toObject()["conditions"].toArray())
+                if (C.toObject()["field"] == Field) Type = C.toObject()["valueType"].toString();
+            Custom.fields_.append(Work.fields_.contains(Field) ? sampleValue(Work.fields_[Field], hc::columns::ParseFieldType(Type).value_or(hc::columns::FieldType::Text))
+                : hc::columns::CellValue::Missing(hc::columns::ValueState::Pending));
+        }
+        Output.custom_ = Rules.Evaluate(Custom, &Context);
         if (Output.error_.isEmpty()) Output.error_ = Output.custom_.error_;
         return Output;
     }
@@ -492,6 +602,10 @@ private:
         if (previewModifiedKnown_->isChecked()) Input.modifiedUtcMs_ = previewModified_->dateTime().toMSecsSinceEpoch();
         if (previewLink_->currentIndex()) { Input.attributes_ |= 0x400; if (previewLink_->currentIndex() < 3) Input.reparseTag_ = previewLink_->currentIndex() == 1 ? 0xa000000cu : 0xa0000003u; }
         Work->samples_ = settings::FileColorExamples::Samples(); for (auto& Sample : Work->samples_) Sample.dark_ = Input.dark_;
+        for (const auto& Pair : previewFields_->text().split(';', Qt::SkipEmptyParts)) {
+            const auto At = Pair.indexOf('='); if (At <= 0) continue;
+            Work->fields_.insert(Pair.left(At).trimmed(), Pair.mid(At + 1).trimmed());
+        }
         validationPending_ = true;
         if (settings::FileColorRules::HasRegex(document_)) {
             error_->setText(tr("조건을 검증하고 있습니다…"));
@@ -507,7 +621,8 @@ private:
         preview_->setProperty("hc.fileEffects", QVariant::fromValue(Result.font_)); preview_->update();
         const QMap<QString, QString> EffectNames{{"dim", tr("흐려짐")}, {"border", tr("행 테두리")}};
         QStringList Owners; for (auto It = Result.owners_.begin(); It != Result.owners_.end(); ++It) Owners.append(EffectNames.value(It.key(), It.key()) + ": " + It.value());
-        owners_->setText(tr("일치 그룹: %1\n%2\n크기·속성은 위 미리보기 입력을 사용합니다.").arg(Result.groups_.join(", "), Owners.join(" · ")));
+        if (Result.pending_) owners_->setText(tr("확인 중: 필드 표본 값이 없는 필드 조건이 결과를 정합니다. 확인 중 항목 색으로 표시합니다."));
+        else owners_->setText(tr("일치 그룹: %1\n%2\n크기·속성은 위 미리보기 입력을 사용합니다.").arg(Result.groups_.join(", "), Owners.join(" · ")));
     }
 
     void addExamples() {
@@ -528,7 +643,8 @@ private:
         int Height = previewTable_->horizontalHeader()->height() + 2 * previewTable_->frameWidth(); int SizeWidth = previewTable_->fontMetrics().horizontalAdvance(tr("크기")) + 20;
         for (int Row = 0; Row < Samples.size(); ++Row) { auto Input = Samples[Row]; Input.dark_ = previewDark_->isChecked(); const auto Style = previewStyles_.value(Row);
             QStringList Owners; for (auto It = Style.owners_.begin(); It != Style.owners_.end(); ++It) Owners.append(Labels.value(It.key(), It.key()) + ": " + It.value());
-            const QStringList Values{Input.name_, QLocale().formattedDataSize(Input.size_, 1, QLocale::DataSizeTraditionalFormat), Style.groups_.isEmpty() ? tr("목록 기본값") : Style.groups_.join(" + ")};
+            const QStringList Values{Input.name_, QLocale().formattedDataSize(Input.size_, 1, QLocale::DataSizeTraditionalFormat),
+                Style.pending_ ? tr("확인 중 · 필드 값 필요") : Style.groups_.isEmpty() ? tr("목록 기본값") : Style.groups_.join(" + ")};
             for (int Col = 0; Col < 3; ++Col) { auto* Item = previewTable_->item(Row, Col); if (!Item) { Item = new QTableWidgetItem; previewTable_->setItem(Row, Col, Item); }
                 Item->setText(Values[Col]); Item->setFont(Style.Font(BaseFont)); Item->setToolTip(Values.join(" · ") + "\n" + Owners.join("\n")); Item->setData(Qt::AccessibleDescriptionRole, Owners.join(" · "));
             }
@@ -566,7 +682,10 @@ private:
     QDateTimeEdit* previewModified_ = nullptr;
     QCheckBox* previewModifiedKnown_ = nullptr;
     QCheckBox *previewFolder_ = nullptr, *previewDark_ = nullptr, *previewSelected_ = nullptr;
-    QLabel *preview_ = nullptr, *owners_ = nullptr, *error_ = nullptr;
+    QLabel *preview_ = nullptr, *owners_ = nullptr, *error_ = nullptr, *cost_ = nullptr;
+    QLineEdit* previewFields_ = nullptr;
+    fm::ui::ColorPickButton* pending_[4]{};
+    QVector<hc::columns::FieldDefinition> catalog_ = hc::columns::BuiltInFields();
     const QStringList typeKeys_{"extension", "pattern", "folder", "attributes", "size", "modified", "link", "normalization", "rtl"};
     const QStringList fontKeys_{"bold", "italic", "underline", "strike", "dim"};
 };

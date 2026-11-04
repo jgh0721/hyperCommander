@@ -148,6 +148,17 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     ui.lblDirectory->hide();
     for (auto* Choice : {ui.radioButton, ui.radioButton_2, ui.radioButton_3}) DirectoryRows->addWidget(Choice);
     SizeRows->addWidget(DirectoryCard);
+    // Design 6.6: how far column field conditions reach on network locations.
+    auto* FieldCard = new QGroupBox(tr("느린 필드 조건"), SizeBody); FieldCard->setObjectName("hc.settings.fieldConditionsCard");
+    auto* FieldRows = new QFormLayout(FieldCard); FieldRows->setContentsMargins(14, 12, 14, 14); FieldRows->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    networkFieldConditions_ = new QComboBox(FieldCard); networkFieldConditions_->setObjectName("hc.settings.networkFieldConditions");
+    networkFieldConditions_->addItem(tr("계산 안 함"), "off"); networkFieldConditions_->addItem(tr("내장 필드만"), "builtIn"); networkFieldConditions_->addItem(tr("내장·플러그인 필드"), "all");
+    FieldRows->addRow(tr("네트워크 위치에서 계산(&N)"), networkFieldConditions_);
+    auto* FieldHelp = new QLabel(tr("파일 그룹 색상과 항목 선택의 필드 조건(ADS, 이미지, 버전, 링크, 플러그인 필드 등)에 적용합니다. "
+        "네트워크 위치는 파일마다 왕복이 생겨 느리고, 플러그인 필드는 파일 내용을 읽을 수 있습니다. "
+        "계산하지 않는 필드는 지원 안 함으로 보고 조건에 일치하지 않습니다. 열 값 표시는 이 설정과 무관합니다."), FieldCard);
+    FieldHelp->setWordWrap(true); FieldRows->addRow(FieldHelp);
+    SizeRows->addWidget(FieldCard);
     ui.widget_4->hide();
     SizeRows->addStretch(); DisplayRows->addStretch();
     ui.lstOptCate->setStyleSheet({});
@@ -249,6 +260,9 @@ void QMainOpts::LoadSettings()
     twoLineSeparator_->setCurrentIndex(int(Presentation.appearance_.twoLineSeparator));
     listDensity_->setCurrentIndex(int(Presentation.appearance_.density));
     listElide_->setCurrentIndex(int(Presentation.appearance_.nameElide));
+    networkFieldConditions_->setCurrentIndex(std::max(0, networkFieldConditions_->findData(Panel.value("networkFieldConditions")
+        .toString(hc::defaults::DefaultValue("general/filePanel/networkFieldConditions").toString()))));
+    networkFieldConditions_->setEnabled(filePanelSupported_);
     listAutoWidth_->setValue(Presentation.appearance_.autoWidth);
     listAutoPercent_->setValue(Presentation.appearance_.autoPercent);
     resetListModeDraft_ = false;
@@ -468,6 +482,7 @@ bool QMainOpts::SaveSettings()
         Panel["density"] = QStringList{"compact", "normal", "relaxed"}.value(listDensity_->currentIndex(), "normal");
         Panel["nameElide"] = QStringList{"keep-extension", "end", "middle"}.value(listElide_->currentIndex(), "keep-extension");
         Panel["autoWidthDip"] = listAutoWidth_->value(); Panel["autoClippedPercent"] = listAutoPercent_->value();
+        Panel["networkFieldConditions"] = networkFieldConditions_->currentData().toString();
         General["filePanel"] = Panel;
     }
     if (keyboardSettings_ && !keyboardSettings_->SaveFunctions(General)) return false;
@@ -1027,6 +1042,7 @@ void QMainOpts::initializeDesignPages()
     auto* FileColorsScroll = new QScrollArea(ui.stkOpts); FileColorsScroll->setObjectName("hc.settings.fileColorsScroll");
     FileColorsScroll->setWidgetResizable(true); FileColorsScroll->setFrameShape(QFrame::NoFrame);
     fileColors_ = new hc::ui::FileColorRulesPage;
+    fileColors_->SetFieldCatalog(hc::columns::PluginFields::Instance().Fields());
     FileColorsScroll->setWidget(fileColors_); ui.stkOpts->addWidget(FileColorsScroll);
     auto* Jobs = Page(tr("파일 작업"), tr("공통 동작과 작업별 기본값을 설정합니다. 변경한 값은 새 작업부터 적용합니다."));
     Jobs->setObjectName("hc.settings.fileOperations");

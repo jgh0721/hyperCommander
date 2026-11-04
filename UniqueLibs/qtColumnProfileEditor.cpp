@@ -11,6 +11,7 @@
 #include <QFileIconProvider>
 #include <QPainter>
 #include "columnPluginFields.hpp"
+#include "qtFieldPicker.hpp"
 #include "commonLibs/columns/luaColumns.hpp"
 #include "nativeMaterializer.hpp"
 #include "storageProviders.hpp"
@@ -74,6 +75,7 @@ namespace
             if (objectName() == "hc.columns.unit" || objectName() == "hc.columns.widthMode") Option->textAlignment = Qt::AlignCenter;
         }
     };
+
     class WidthNumber final : public QDoubleSpinBox
     {
     public:
@@ -85,9 +87,10 @@ namespace
     protected:
         QString textFromValue(double Value) const override { return locale().toString(Value, 'f', 0); }
     };
+    template<typename Combo = ColumnChoice>
     QComboBox* Choice(QWidget* Parent, const char* Name, const QStringList& Items)
     {
-        auto* Result = new ColumnChoice(Parent); Result->setObjectName(Name); Result->addItems(Items);
+        auto* Result = new Combo(Parent); Result->setObjectName(Name); Result->addItems(Items);
         Result->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         Result->setMinimumContentsLength(12); Result->setMaxVisibleItems(16);
         Result->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed); Result->setMinimumWidth(75);
@@ -184,9 +187,7 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     auto TitleFont = font(); TitleFont.setBold(true); columnTitle_->setFont(TitleFont); InspectorRows->addWidget(columnTitle_);
     auto* Content = new QWidget(Inspector); auto* Form = new QFormLayout(Content); contentForm_ = Form;
     Form->setContentsMargins(0, 0, 0, 0); Form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    field_ = Choice(Content, "hc.columns.field", {});
-    for (const auto& Field : availableFields()) field_->addItem(Field.title_, Field.id_);
-    field_->addItem(tr("복합 템플릿"), QString{});
+    field_ = Choice<FieldPicker>(Content, "hc.columns.field", {});
     title_ = new QLineEdit(Content); title_->setObjectName("hc.columns.title");
     alignment_ = Choice(Content, "hc.columns.alignment", {tr("왼쪽"), tr("가운데"), tr("오른쪽")});
     Form->addRow(tr("내용"), field_); Form->addRow(tr("제목"), title_); Form->addRow(tr("글자 정렬"), alignment_);
@@ -195,8 +196,9 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     auto* Insert = new QPushButton(tr("필드 삽입"), templateRow_); TemplateRow->addWidget(template_, 1); TemplateRow->addWidget(Insert);
     Form->addRow(tr("템플릿"), templateRow_);
     connect(Insert, &QPushButton::clicked, this, [this, Insert] {
-        QMenu Menu(this); for (const auto& Field : availableFields()) { auto* Action = Menu.addAction(Field.title_); Action->setData(Field.id_); }
-        if (const auto* Action = Menu.exec(Insert->mapToGlobal(QPoint(0, Insert->height())))) template_->insert("${" + Action->data().toString() + "}");
+        QVector<FieldMenuEntry> Entries; for (const auto& Field : availableFields()) Entries.append({Field.title_, Field.id_, Field.group_, int(Field.provider_), FieldBadge(Field)});
+        QMenu Menu(this); Menu.setObjectName("hc.columns.insertFieldMenu"); Menu.setToolTipsVisible(true); FillFieldMenu(Menu, Entries, -1);
+        if (const auto* Action = Menu.exec(Insert->mapToGlobal(QPoint(0, Insert->height())))) template_->insert("${" + Entries[Action->data().toInt()].id_ + "}");
     });
     primary_ = new QCheckBox(tr("주 이름 열로 사용"), Content); primary_->setObjectName("hc.columns.primary");
     splitNameExtension_ = new QCheckBox(tr("한 줄 보기에서 확장자 분리"), Content); splitNameExtension_->setObjectName("hc.columns.splitNameExtension");
@@ -238,8 +240,8 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     auto* Advanced = new QWidget(Inspector); auto* AdvancedForm = new QFormLayout(Advanced); AdvancedForm->setContentsMargins(0, 0, 0, 0);
     fieldSearch_ = new QLineEdit(Advanced); fieldSearch_->setObjectName("hc.columns.search"); fieldSearch_->setPlaceholderText(tr("필드 이름 또는 식별자 검색"));
     fieldCategory_ = Choice(Advanced, "hc.columns.category", {tr("전체"), tr("내장"), "WDX", "DOpus", "Lua"});
-    sortField_ = Choice(Advanced, "hc.columns.sortField", {tr("원래 값 / 템플릿 문자열")});
-    for (const auto& Field : availableFields()) sortField_->addItem(Field.title_, Field.id_);
+    sortField_ = Choice<FieldPicker>(Advanced, "hc.columns.sortField", {tr("원래 값 / 템플릿 문자열")});
+    refreshFields();
     plusSign_ = new QCheckBox(tr("양수에 + 표시"), Advanced); plusSign_->setObjectName("hc.columns.plusSign");
     providerDisplay_ = new QCheckBox(tr("플러그인 표시 문자열 사용"), Advanced); providerDisplay_->setObjectName("hc.columns.providerDisplay");
     fieldInfo_ = new QLabel(Advanced); fieldInfo_->setObjectName("hc.columns.fieldInfo"); fieldInfo_->setWordWrap(true);
@@ -475,10 +477,7 @@ void QtColumnProfileEditor::SetContextFields(QVector<FieldDefinition> Fields)
 {
     contextFields_.clear();
     for (const auto& Field : Fields) if (IsVfsColumn(Field.id_)) contextFields_.append(Field);
-    const QSignalBlocker One(field_), Two(sortField_);
-    field_->clear(); sortField_->clear(); sortField_->addItem(tr("원래 값 / 템플릿 문자열"));
-    for (const auto& Field : availableFields()) { field_->addItem(Field.title_, Field.id_); sortField_->addItem(Field.title_, Field.id_); }
-    field_->addItem(tr("복합 템플릿"), QString{});
+    refreshFields();
 }
 
 void QtColumnProfileEditor::Load(const ColumnProfile& Profile, const QJsonObject& Library, bool Writable)
@@ -763,7 +762,7 @@ CellValue QtColumnProfileEditor::readSample(const PreviewSample& Sample, const Q
         return !calculating_ && Value.State() == ValueState::Pending ? CellValue::Missing(ValueState::OnDemand) : Value;
     }
     if (!QueryFamily(Field).isEmpty()) {
-        if (Sample.directory_ && Field != "file.linkTarget" && !IsPluginField(Field)) return CellValue::Missing(ValueState::Empty);
+        if (Sample.directory_ && !QueriesFolders(Field)) return CellValue::Missing(ValueState::Empty);
         const auto Value = previewQueries_->Read(PreviewPath(Sample), Field, calculating_);
         return !calculating_ && Value.State() == ValueState::Pending ? CellValue::Missing(ValueState::OnDemand) : Value;
     }
@@ -908,11 +907,13 @@ void QtColumnProfileEditor::refreshSorts(int Row)
 void QtColumnProfileEditor::refreshFields()
 {
     const QSignalBlocker One(field_), Two(sortField_); field_->clear(); sortField_->clear(); sortField_->addItem(tr("원래 값 / 템플릿 문자열"));
+    // The group and provider roles drive the categorized popup; the item data stays the field id.
+    const auto Append = [](QComboBox* Combo, const FieldDefinition& Field) { static_cast<FieldPicker*>(Combo)->AddField(Field); };
     for (const auto& Field : availableFields()) {
-        sortField_->addItem(Field.title_, Field.id_);
+        Append(sortField_, Field);
         if (fieldCategory_->currentIndex() && int(Field.provider_) != fieldCategory_->currentIndex() - 1) continue;
-        if (!(Field.title_ + ' ' + Field.id_).contains(fieldSearch_->text(), Qt::CaseInsensitive)) continue;
-        field_->addItem(Field.title_, Field.id_);
+        if (!(Field.group_ + ' ' + Field.title_ + ' ' + Field.id_).contains(fieldSearch_->text(), Qt::CaseInsensitive)) continue;
+        Append(field_, Field);
     }
     field_->addItem(tr("복합 템플릿"), QString{});
 }

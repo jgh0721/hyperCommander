@@ -133,11 +133,23 @@ public:
     void ApplyDirectorySizeSettings();
     int PendingDirectorySizes() const { return int(directorySizePending_.size()); }
     // Read-only observation: never schedules evaluation or expires cache entries.
-    void SetFileColorViewport(const QModelIndexList& Rows, bool Active);
+    // Ahead: rows below the viewport (design 6.3: up to two screens) whose slow rule values are asked for
+    // at normal priority before they scroll in.
+    void SetFileColorViewport(const QModelIndexList& Rows, bool Active, const QModelIndexList& Ahead = {});
+    // Design 6.4: rows still waiting for rule values keep the default look for the first 120 ms of a listing.
+    bool InFileRuleGrace() const { return fileRuleGrace_; }
+    // Whether colour rules use slow (queried) fields, so the view has rows ahead worth passing.
+    bool HasSlowFileRuleFields() const { return fileColorRules_.HasRules() && hasQueryRuleFields(); }
     bool AreFileColorsReady(const QModelIndexList& Rows) const;
     quint64 FileRuleGeneration() const { return fileRuleLoadGeneration_; }
     bool FileRulesLoading() const { return fileRulesLoading_; }
     bool FileRuleCompletionIdle() const { return !fileRuleCompleting_ && !fileRuleCompleteTimer_.isActive(); }
+    // Item selection reads the same field values as file colors (design 7.2): list values and
+    // values already known; Pending when a query is still needed. Never queues anything.
+    hc::columns::CellValue RuleFieldValue(const nsHC::TySpFileSource& Item, const QString& Field) const { return ruleFieldValue(Item, Field); }
+    QString FieldQueryPath(const nsHC::TySpFileSource& Item) const { return queryPath(Item); }
+    // Values a selection scan read are kept for colors too; repaints pick them up.
+    void ShareRuleFieldValues(const QString& Path, const hc::columns::FieldValues& Values);
 
     ////////////////////////////////////////////////////////////////////////////
     /// 파일 / 디렉토리 조작 
@@ -214,7 +226,38 @@ private:
     QString queryPath(const nsHC::TySpFileSource& Item) const;
     void columnResultsReady(const QSet<QString>& Paths);
     hc::settings::FileRuleInput fileRuleInput(const nsHC::TySpFileSource& Item) const;
-    hc::settings::FileRuleResult fileRuleStyle(int Row) const;
+    // Drawn: the row is being painted or is in the viewport; other rows only ask for slow values ahead.
+    hc::settings::FileRuleResult fileRuleStyle(int Row, bool Drawn = true) const;
+    // Design 6.2: column field values used by file color rules, kept for the listing's lifetime
+    // (the column cache expires after 30 s and a repaint must not re-query a decided row).
+    mutable QHash<QString, hc::columns::FieldValues> ruleFields_;
+    // Path \0 family of rule queries in flight, for the status line.
+    mutable QSet<QString> ruleFieldRequests_;
+    mutable QHash<QString, bool> networkRoots_;
+    // Paths whose values were carried over a background re-list; a drawn row re-checks them once,
+    // because a stream write need not change the metadata the carry compared (design 6.2).
+    mutable QSet<QString> ruleFieldsStale_;
+    void revalidateRuleFields(const nsHC::TySpFileSource& Item) const;
+    mutable bool ruleStatusQueued_ = false;
+    bool ruleRecolorQueued_ = false;
+    hc::columns::CellValue ruleFieldValue(const nsHC::TySpFileSource& Item, const QString& Field) const;
+    bool ruleFieldAllowed(const nsHC::TySpFileSource& Item, const QString& Field) const;
+    void requestRuleFields(const nsHC::TySpFileSource& Item, quint64 Slots, bool Urgent = true) const;
+    bool hasQueryRuleFields() const;
+    void prefetchRuleFields(int Row, const hc::settings::FileRuleResult& Style) const;
+    void endFileRuleGrace();
+    // Design 6.3: rows up to two screens below the viewport; their rule values are asked for at normal
+    // priority, at most FileRuleAheadRequests in flight so a long listing never floods the query queue.
+    QSet<int> fileRuleAheadRows_;
+    static constexpr int FileRuleAheadRequests = 256;
+    // Design 6.4: a listings first batch waits up to FileRuleGraceMs for rule values before it shows the
+    // pending colour, so a value that arrives in time changes the row once.
+    static constexpr int FileRuleGraceMs = 120;
+    QTimer fileRuleGraceTimer_;
+    bool fileRuleGrace_ = false;
+    bool isNetworkLocation(const hc::storage::Locator& At) const;
+    void refreshColumnStatus();
+    void clearRuleFields();
     // Leading rows are styled inside the listing worker so the first paint
     // carries group colors; the budget bounds a pathological rule set.
     static constexpr std::size_t FileRuleSeedRows = 4096;

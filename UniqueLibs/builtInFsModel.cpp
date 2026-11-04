@@ -357,19 +357,19 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
             case FileEffectsRole: { RoleWith.setData(RuleStyle.font_); } break;
             case FileColorOverrideRole: {
-                RoleWith.setData(RuleStyle.matched_ ||
+                RoleWith.setData(RuleStyle.matched_ || RuleStyle.pending_ ||
                     (vecRowColors_[Row].first.isValid() && vecRowColors_[Row].first != colorScheme_.FileList_FGColor) ||
                     (vecRowColors_[Row].second.isValid() && vecRowColors_[Row].second != colorScheme_.FileList_BGColor));
             } break;
             case Qt::ForegroundRole: {
-                if (RuleStyle.matched_) { RoleWith.setData(RuleStyle.foreground_.isValid() ? RuleStyle.foreground_ : colorScheme_.FileList_FGColor); break; }
+                if (RuleStyle.matched_ || RuleStyle.pending_) { RoleWith.setData(RuleStyle.foreground_.isValid() ? RuleStyle.foreground_ : colorScheme_.FileList_FGColor); break; }
                 if( vecRowColors_[ Row ].first.isValid() == true )
                     RoleWith.setData( vecRowColors_[ Row ].first );
                 else if( colorScheme_.FileList_FGColor.isValid() == true )
                     RoleWith.setData( colorScheme_.FileList_FGColor );   // no fixed white: an unset scheme leaves the view palette
             } break;
             case Qt::BackgroundRole: {
-                if (RuleStyle.matched_) { RoleWith.setData(RuleStyle.background_.isValid() ? RuleStyle.background_ : colorScheme_.FileList_BGColor); break; }
+                if (RuleStyle.matched_ || RuleStyle.pending_) { RoleWith.setData(RuleStyle.background_.isValid() ? RuleStyle.background_ : colorScheme_.FileList_BGColor); break; }
                 if( vecRowColors_[ Row ].second.isValid() == true )
                     RoleWith.setData( vecRowColors_[ Row ].second );
                 else if( colorScheme_.FileList_BGColor.isValid() == true )
@@ -616,6 +616,8 @@ CFSModel::CFSModel()
     connect(&fileRulePump_, &QTimer::timeout, this, &CFSModel::pumpFileRules);
     fileRuleCompleteTimer_.setSingleShot(true);
     connect(&fileRuleCompleteTimer_, &QTimer::timeout, this, &CFSModel::completeFileRuleStyles);
+    fileRuleGraceTimer_.setSingleShot(true);
+    connect(&fileRuleGraceTimer_, &QTimer::timeout, this, &CFSModel::endFileRuleGrace);
     connect(this, &QAbstractItemModel::modelAboutToBeReset, this, &CFSModel::resetFileRules);
     iconApplyTimer_.setSingleShot(true); iconApplyTimer_.setInterval(0);
     connect(&iconApplyTimer_, &QTimer::timeout, this, [this] { applyRequestedIcons(); });
@@ -623,7 +625,7 @@ CFSModel::CFSModel()
     columnQueries_ = std::make_unique<hc::columns::QueryEngine>(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), columnView_.profile_));
     columnQueries_->Changed = [this](const QSet<QString>& Paths) { columnResultsReady(Paths); };
     connect(&hc::columns::PluginFields::Instance(), &hc::columns::PluginFields::Changed, this, [this] {
-        columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), columnView_.profile_));
+        columnQueries_->SetLoader(hc::columns::WithLuaColumns(hc::columns::PluginFields::Instance().Loader(), columnView_.profile_)); clearRuleFields();
         if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1));
         refreshColumnSortRanks();
     });
@@ -694,7 +696,7 @@ void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QStrin
     automaticRefresh_ = autoRefreshRequested_ = false;
     elevatedDirectorySession_.reset();
     CancelNavigation(); tracker_.SetLocation({});
-    columnQueries_->Reset();
+    columnQueries_->Reset(); clearRuleFields();
     beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); fileCount_ = directoryCount_ = 0; totalSize_ = 0;
     vecFs_.clear(); acceptedRoots_.clear(); acceptedProvider_.reset(); path_.clear(); acceptedPath_.clear();
     placeholder_ = Location; recoveryLocation_.reset(); index_.Publish({}); setProperty("hc.snapshotLocation", QString{});
@@ -715,7 +717,7 @@ void CFSModel::publishNavigationFallback(const hc::storage::Locator& Location)
 {
     // A failed first listing still needs a selectable escape route. Keep this
     // synthetic parent outside the provider snapshot and every file operation.
-    tracker_.SetLocation({}); columnQueries_->Reset();
+    tracker_.SetLocation({}); columnQueries_->Reset(); clearRuleFields();
     pageSource_.reset(); pageView_.reset(); index_.Publish({});
     beginResetModel();
     recoveryLocation_ = Location;
@@ -1130,6 +1132,9 @@ std::vector<hc::settings::FileRuleResult> CFSModel::seedFileRuleStyles(const hc:
     // budget fall back to the pump.
     std::vector<hc::settings::FileRuleResult> Styles;
     if (!Rules.HasRules()) return Styles;
+    // A seed sees no field values. Queried fields are still pending when the rows are published, so
+    // such a seed matches the finished row's key; a list field would be read there, so no seeds.
+    for (const auto& Field : Rules.RequiredFields()) if (hc::columns::QueryFamily(Field).isEmpty()) return Styles;
     hc::settings::FileColorRules::EvaluationContext Context;
     QElapsedTimer Clock; Clock.start();
     const auto Limit = std::min<std::size_t>(Entries.size(), FileRuleSeedRows);
@@ -1227,7 +1232,7 @@ void CFSModel::StartEverythingSearch(const QString& Query, const QString& Match,
     StopEverythingSearch(); CancelNavigation(); recoveryLocation_.reset(); navigationError_.reset();
     searchResults_ = true; everythingQuery_ = Query;
     pageSource_.reset(); pageView_.reset(); index_.Publish({});
-    columnQueries_->Reset(); iconStop_.request_stop(); ++iconGeneration_;
+    columnQueries_->Reset(); clearRuleFields(); iconStop_.request_stop(); ++iconGeneration_;
     SetWatchEnabled(watchEnabled_);
     if (!searchLocal_) searchLocal_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
     if (!searchSmb_) searchSmb_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
@@ -1358,7 +1363,14 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
     for (const int Row : iconVisibleRows_) if (Row >= 0 && Row < vecNode_.size() && vecNode_[Row]->storageEntry_ && !vecNode_[Row]->Icon.isNull())
         PreviousIcons.insert(IconIdentity(*vecNode_[Row]->storageEntry_), vecNode_[Row]->Icon);
     directorySizeStop_.request_stop(); directorySizeStop_ = std::stop_source{}; directorySizePending_.clear();
-    requestOnlyValues_ = false; columnQueries_->Reset(); columnSortRanks_.clear();
+    // A background re-list keeps the rule values of entries whose metadata did not change, so a write to
+    // one file does not send every colored row back to the pending colour while it is re-queried.
+    QHash<QString, QPair<QString, hc::columns::FieldValues>> KnownRuleFields;
+    if (automaticRefresh_)
+        for (const auto& Old : vecNode_)
+            if (Old->storageEntry_) if (const auto Path = queryPath(Old); !Path.isEmpty())
+                if (const auto Found = ruleFields_.constFind(Path); Found != ruleFields_.cend()) KnownRuleFields.insert(Path, {IconIdentity(*Old->storageEntry_), *Found});
+    requestOnlyValues_ = false; columnQueries_->Reset(); clearRuleFields(); columnSortRanks_.clear();
     // The directory tracker re-lists the open folder on changes and on its periodic rescan. Keep each folder's
     // measured size on screen while it is re-measured instead of turning every folder back to "calculating".
     // An explicit refresh or navigation starts without sizes.
@@ -1416,6 +1428,13 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
         }
         Items.push_back(std::move(Item));
     }
+    // Restored only after the seeds are keyed: the worker styled them without these values, so keying a
+    // seed with them would file a pending style under the decided key.
+    if (!KnownRuleFields.isEmpty())
+        for (const auto& Item : Items)
+            if (const auto Path = queryPath(Item); !Path.isEmpty())
+                if (const auto Known = KnownRuleFields.constFind(Path); Known != KnownRuleFields.cend() && Known->first == IconIdentity(*Item->storageEntry_))
+                    { ruleFields_.insert(Path, Known->second); ruleFieldsStale_.insert(Path); }
     { hc::startup::Span Values("listing.values"); createBuiltFsValues(Items); }
     QVector<TyPrFGWithBG> Colors; Colors.reserve(Items.size());
     int Files = 0, Directories = 0;
@@ -1444,6 +1463,8 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
         columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0);
     }
     endResetModel();
+    // Design 6.4: the first batch of rows waiting for slow rule values stays plain for up to 120 ms.
+    if (fileColorRules_.HasRules() && hasQueryRuleFields()) { fileRuleGrace_ = true; fileRuleGraceTimer_.start(FileRuleGraceMs); }
     refreshDisplayIcons();
     refreshColumnSortRanks();
     RequestDirectorySizes({}, true);
@@ -1496,17 +1517,7 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
     std::vector<EntrySnapshot> Targets;
     QHash<QString, int> Rows;
     const QSet<QModelIndex> Requested(Entries.begin(), Entries.end());
-    QHash<QString, bool> NetworkRoots;
-    const auto IsNetwork = [&](const Locator& At) {
-        if (At.kind_ != LocatorKind::Local) return hc::folders::IsNetwork(At);
-        auto Root = QDir::toNativeSeparators(QString::fromStdString(At.root_));
-        if (Root.startsWith("\\\\?\\")) Root = Root.mid(4);
-        if (Root.startsWith("\\\\") || Root.startsWith("UNC\\", Qt::CaseInsensitive)) return true;
-        Root = Root.left(3).toUpper();
-        if (const auto Found = NetworkRoots.constFind(Root); Found != NetworkRoots.cend()) return *Found;
-        // Drive type is shared by its children; do not call Windows for every row.
-        const bool Network = hc::folders::IsNetwork(At); NetworkRoots.insert(Root, Network); return Network;
-    };
+    const auto IsNetwork = [this](const Locator& At) { return isNetworkLocation(At); };
     bool HadSizes = false;
     for (int Row = 0; Row < rowCount(); ++Row) {
         if (!Entries.isEmpty() && !Requested.contains(index(Row, 0))) continue;
@@ -1810,18 +1821,153 @@ hc::settings::FileRuleInput CFSModel::fileRuleInput(const nsHC::TySpFileSource& 
     hc::settings::FileRuleInput Input{Item->Name_, Item->Attributes_, Folder ? 0 : quint64(qMax<qint64>(0, Item->Size_)), colorScheme_.IsDarkMode};
     if (Item->Modified_.isValid()) Input.modifiedUtcMs_ = hc::settings::FileColorRules::MetadataTime(Item->Modified_.toMSecsSinceEpoch());
     if (Item->Reserved0_) Input.reparseTag_ = Item->Reserved0_;
+    // Field values join the key (FileRuleKey::fields_): an arrival re-keys the row instead of
+    // invalidating anything. Reading here never queues a query.
+    if (const auto& Fields = fileColorRules_.RequiredFields(); !Fields.isEmpty() && Item->Name_ != "..") {
+        Input.fields_.reserve(Fields.size());
+        for (const auto& Field : Fields) Input.fields_.append(ruleFieldValue(Item, Field));
+    }
     return Input;
 }
 
-hc::settings::FileRuleResult CFSModel::fileRuleStyle(int Row) const
+bool CFSModel::isNetworkLocation(const hc::storage::Locator& At) const
+{
+    using hc::storage::LocatorKind;
+    if (At.kind_ != LocatorKind::Local) return hc::folders::IsNetwork(At);
+    auto Root = QDir::toNativeSeparators(QString::fromStdString(At.root_));
+    if (Root.startsWith("\\\\?\\")) Root = Root.mid(4);
+    if (Root.startsWith("\\\\") || Root.startsWith("UNC\\", Qt::CaseInsensitive)) return true;
+    Root = Root.left(3).toUpper();
+    if (const auto Found = networkRoots_.constFind(Root); Found != networkRoots_.cend()) return *Found;
+    // Drive type is shared by its children; do not call Windows for every row.
+    const bool Network = hc::folders::IsNetwork(At); networkRoots_.insert(Root, Network); return Network;
+}
+
+bool CFSModel::ruleFieldAllowed(const nsHC::TySpFileSource& Item, const QString& Field) const
+{
+    // Design 6.6: settings → file panel decides how far field conditions reach on network locations.
+    const auto Mode = displaySettings_["filePanel"].toObject()["networkFieldConditions"]
+        .toString(hc::defaults::DefaultValue("general/filePanel/networkFieldConditions").toString());
+    if (Mode == "all" || !Item->storageEntry_ || !isNetworkLocation(Item->storageEntry_->locator_)) return true;
+    return Mode == "builtIn" && !hc::columns::IsPluginField(Field);
+}
+
+hc::columns::CellValue CFSModel::ruleFieldValue(const nsHC::TySpFileSource& Item, const QString& Field) const
+{
+    using namespace hc::columns;
+    // List values cost nothing extra; only queried families wait.
+    if (QueryFamily(Field).isEmpty()) return readField(Item, Field, false, false);
+    const auto Path = queryPath(Item);
+    if (Path.isEmpty()) return CellValue::Missing(ValueState::Unsupported, "rule-field-location");
+    if ((Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && !QueriesFolders(Field)) return CellValue::Missing(ValueState::Empty);
+    if (!ruleFieldAllowed(Item, Field)) return CellValue::Missing(ValueState::Unsupported, "network-field-conditions");
+    if (const auto Found = ruleFields_.constFind(Path); Found != ruleFields_.cend())
+        if (const auto Value = Found->constFind(Field); Value != Found->cend()) return *Value;
+    // The same field shown as a column may already be cached.
+    const auto Cached = columnQueries_->Read(Path, Field, false);
+    if (Cached.State() == ValueState::Pending || Cached.State() == ValueState::OnDemand) return CellValue::Missing(ValueState::Pending);
+    ruleFields_[Path][Field] = Cached; return Cached;
+}
+
+void CFSModel::requestRuleFields(const nsHC::TySpFileSource& Item, quint64 Slots, bool Urgent) const
+{
+    using namespace hc::columns;
+    const auto& Fields = fileColorRules_.RequiredFields();
+    const auto Path = queryPath(Item); if (Path.isEmpty() || !Slots) return;
+    // Rows ahead of the viewport wait behind drawn rows and stop at the in-flight bound (design 6.3).
+    if (!Urgent && ruleFieldRequests_.size() >= FileRuleAheadRequests) return;
+    for (int Slot = 0; Slot < Fields.size() && Slot < 64; ++Slot) {
+        if (!(Slots & (quint64(1) << Slot)) || QueryFamily(Fields[Slot]).isEmpty()) continue;
+        if (columnQueries_->Read(Path, Fields[Slot], true, Urgent).State() == ValueState::Pending)
+            ruleFieldRequests_.insert(Path + QChar(0) + QueryFamily(Fields[Slot]));
+    }
+    if (!ruleStatusQueued_ && !ruleFieldRequests_.isEmpty()) {
+        ruleStatusQueued_ = true;
+        auto* Self = const_cast<CFSModel*>(this);
+        QTimer::singleShot(0, Self, [Self] { Self->ruleStatusQueued_ = false; Self->refreshColumnStatus(); });
+    }
+}
+
+void CFSModel::refreshColumnStatus()
+{
+    const int Rules = int(ruleFieldRequests_.size());
+    emit ColumnQueryStatus(Rules ? tr("색상 조건 확인 중 · 남은 항목 %1개").arg(Rules)
+        : columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending())
+        : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{});
+}
+
+void CFSModel::ShareRuleFieldValues(const QString& Path, const hc::columns::FieldValues& Values)
+{
+    using hc::columns::ValueState;
+    if (Path.isEmpty()) return;
+    bool Changed = false;
+    for (auto It = Values.cbegin(); It != Values.cend(); ++It) {
+        if (It->State() == ValueState::Pending || It->State() == ValueState::OnDemand) continue;
+        auto& Stored = ruleFields_[Path]; Changed |= !Stored.contains(It.key()); Stored[It.key()] = *It;
+    }
+    // One repaint request per burst: a selection scan shares values for many rows at once.
+    if (Changed && !ruleRecolorQueued_) {
+        ruleRecolorQueued_ = true;
+        QTimer::singleShot(50, this, [this] {
+            ruleRecolorQueued_ = false;
+            if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1),
+                {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileColorOverrideRole, FileEffectsRole});
+        });
+    }
+}
+
+void CFSModel::clearRuleFields()
+{
+    ruleFields_.clear(); ruleFieldRequests_.clear(); networkRoots_.clear(); ruleFieldsStale_.clear();
+}
+
+void CFSModel::revalidateRuleFields(const nsHC::TySpFileSource& Item) const
+{
+    const auto Path = queryPath(Item); if (!ruleFieldsStale_.remove(Path)) return;
+    // Normal priority and no status line: the row already shows its carried colour.
+    for (const auto& Field : fileColorRules_.RequiredFields())
+        if (!hc::columns::QueryFamily(Field).isEmpty() && ruleFieldAllowed(Item, Field)) columnQueries_->Read(Path, Field, true, false);
+}
+
+bool CFSModel::hasQueryRuleFields() const
+{
+    for (const auto& Field : fileColorRules_.RequiredFields())
+        if (!hc::columns::QueryFamily(Field).isEmpty()) return true;
+    return false;
+}
+
+void CFSModel::prefetchRuleFields(int Row, const hc::settings::FileRuleResult& Style) const
+{
+    if (Style.pending_ && fileRuleAheadRows_.contains(Row) && Row >= 0 && Row < vecNode_.size())
+        requestRuleFields(vecNode_[Row], Style.neededSlots_, false);
+}
+
+void CFSModel::endFileRuleGrace()
+{
+    if (!std::exchange(fileRuleGrace_, false)) return;
+    // Rows still waiting now show the pending colour; rows decided in time already repainted.
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1),
+        {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileColorOverrideRole, FileEffectsRole});
+}
+
+hc::settings::FileRuleResult CFSModel::fileRuleStyle(int Row, bool Drawn) const
 {
     const auto& Item = vecNode_[Row];
     if (Item->Name_ == ".." || !fileColorRules_.HasRules()) return {};
+    if (Drawn && !ruleFieldsStale_.isEmpty()) revalidateRuleFields(Item);
     auto Input = fileRuleInput(Item);
     const auto Key = hc::settings::FileRuleKey::From(Input);
     if (auto* Cached = fileColorCache_.object(Key)) {
         if (!Cached->style_.validUntilUtcMs_ || Input.referenceUtcMs_ < *Cached->style_.validUntilUtcMs_) {
             if (Cached->style_.validUntilUtcMs_) scheduleFileRuleExpiry(*Cached->style_.validUntilUtcMs_);
+            // Design 6.3: a drawn row asks for its slow values first in line; rows ahead of the
+            // viewport ask behind them.
+            if (Cached->style_.pending_) {
+                if (const bool Ahead = fileRuleAheadRows_.contains(Row); Drawn || Ahead) requestRuleFields(Item, Cached->style_.neededSlots_, !Ahead);
+                // Design 6.4: within the listing's grace the row keeps the default look, so a value
+                // that arrives in time changes it once instead of flashing the pending colour.
+                if (fileRuleGrace_) return {};
+            }
             return Cached->style_;
         }
         fileColorCache_.remove(Key);
@@ -1836,12 +1982,27 @@ hc::settings::FileRuleResult CFSModel::fileRuleStyle(int Row) const
     return {};
 }
 
-void CFSModel::SetFileColorViewport(const QModelIndexList& Rows, bool Active)
+void CFSModel::SetFileColorViewport(const QModelIndexList& Rows, bool Active, const QModelIndexList& Ahead)
 {
     fileRuleActiveViewport_ = Active;
-    fileRuleVisibleRows_.clear();
+    fileRuleVisibleRows_.clear(); fileRuleAheadRows_.clear();
     for (const auto& Index : Rows)
         if (Index.model() == this && Index.row() >= 0 && Index.row() < rowCount()) fileRuleVisibleRows_.insert(Index.row());
+    // Rows ahead whose style is already known to wait for slow values ask for them now; the rest ask
+    // when the background pass or the pump reports them pending.
+    if (fileColorRules_.HasRules() && hasQueryRuleFields()) {
+        for (const auto& Index : Ahead)
+            if (Index.model() == this && Index.row() >= 0 && Index.row() < rowCount() && !fileRuleVisibleRows_.contains(Index.row()))
+                fileRuleAheadRows_.insert(Index.row());
+        for (const int Row : std::as_const(fileRuleAheadRows_)) {
+            if (ruleFieldRequests_.size() >= FileRuleAheadRequests) break;
+            const auto& Item = vecNode_[Row]; if (Item->Name_ == "..") continue;
+            const auto Input = fileRuleInput(Item);
+            if (const auto* Cached = fileColorCache_.object(hc::settings::FileRuleKey::From(Input));
+                Cached && (!Cached->style_.validUntilUtcMs_ || Input.referenceUtcMs_ < *Cached->style_.validUntilUtcMs_))
+                prefetchRuleFields(Row, Cached->style_);
+        }
+    }
     // Make room for the current viewport without canceling a running batch.
     // Evicted queued rows remain deferred and retain any existing cache entry.
     for (qsizetype At = fileRuleQueue_.size(); At-- > 0; ) {
@@ -1861,7 +2022,8 @@ void CFSModel::resetFileRules()
     // rule and palette changes clear the cache in SetColorScheme.
     fileRuleStop_.request_stop(); fileRuleStop_ = std::stop_source{}; ++fileRuleEpoch_;
     fileRuleQueue_.clear(); fileRulePending_.clear(); fileRuleDeferredRows_.clear(); fileRulePump_.stop();
-    fileRuleFirstBatch_ = true; fileRuleVisibleRows_.clear();
+    fileRuleFirstBatch_ = true; fileRuleVisibleRows_.clear(); fileRuleAheadRows_.clear();
+    fileRuleGraceTimer_.stop(); fileRuleGrace_ = false;
     // An in-flight completion chunk reports to the old epoch and is dropped.
     fileRuleCompleteTimer_.stop(); fileRuleCompleteLow_ = fileRuleCompleteNext_ = 0; fileRuleCompleteBudget_ = 0;
 }
@@ -1895,13 +2057,15 @@ void CFSModel::completeFileRuleStyles()
     const auto Epoch = fileRuleEpoch_; const auto Token = fileRuleStop_.get_token(); const auto Rules = fileColorRules_;
     using Chunk = QList<hc::settings::FileRuleResult>;
     auto* Watcher = new QFutureWatcher<Chunk>(this);
-    connect(Watcher, &QFutureWatcher<Chunk>::finished, this, [this, Watcher, Epoch, Inputs] {
+    connect(Watcher, &QFutureWatcher<Chunk>::finished, this, [this, Watcher, Epoch, Inputs, First] {
         auto Results = Watcher->future().takeResult(); Watcher->deleteLater(); fileRuleCompleting_ = false;
         if (Epoch == fileRuleEpoch_) {
             // Rows already on screen were queued by the pump and repaint from
-            // there; rows not yet painted need no signal.
+            // there; rows not yet painted need no signal. Pending rows ahead of
+            // the viewport ask for their slow values now (design 6.3).
             for (qsizetype I = 0; I < Results.size(); ++I) {
                 if (Results[I].validUntilUtcMs_) scheduleFileRuleExpiry(*Results[I].validUntilUtcMs_);
+                prefetchRuleFields(First + int(I), Results[I]);
                 fileColorCache_.insert(hc::settings::FileRuleKey::From(Inputs[I]), new CachedFileRule{std::move(Results[I])});
             }
         }
@@ -1945,6 +2109,7 @@ void CFSModel::pumpFileRules()
                 if (Row < 0) continue;
                 if (hc::settings::FileRuleKey::From(fileRuleInput(vecNode_[Row])) != Job.key_) { fileRuleDeferredRows_.insert(Row); continue; }
                 if (Result.second.validUntilUtcMs_) scheduleFileRuleExpiry(*Result.second.validUntilUtcMs_);
+                prefetchRuleFields(Row, Result.second);
                 fileColorCache_.insert(Job.key_, new CachedFileRule{std::move(Result.second)}); Rows.append(Row);
             }
             std::sort(Rows.begin(), Rows.end());
@@ -1963,7 +2128,7 @@ void CFSModel::pumpFileRules()
         }
         while (!fileRuleDeferredRows_.isEmpty() && fileRulePending_.size() < 256) {
             const int Row = *fileRuleDeferredRows_.begin(); fileRuleDeferredRows_.remove(Row);
-            if (Row >= 0 && Row < rowCount()) fileRuleStyle(Row);
+            if (Row >= 0 && Row < rowCount()) fileRuleStyle(Row, fileRuleVisibleRows_.contains(Row));
         }
         std::stable_partition(fileRuleQueue_.begin(), fileRuleQueue_.end(), [this](const auto& Job) { return fileRuleVisibleRows_.contains(Job.row_); });
         if (!fileRuleQueue_.isEmpty()) fileRulePump_.start(16);
@@ -2263,7 +2428,7 @@ QVector<hc::columns::FieldDefinition> CFSModel::AvailableColumns() const
     using namespace hc::columns;
     auto Fields = PluginFields::Instance().Fields(); Fields += ScriptFields(columnView_.profile_);
     if (SnapshotProvider()) for (const auto& Column : SnapshotProvider()->Columns())
-        Fields.append({QString::fromStdString(Column.key_), tr("VFS / %1").arg(QString::fromStdString(Column.title_)), Column.flags_ & 112 ? FieldType::Real : FieldType::Text, ProviderKind::DOpus, EvaluationCost::Snapshot, true, Column.flags_ & 4 ? Qt::AlignCenter : Column.flags_ & 1 ? Qt::AlignRight : Qt::AlignLeft});
+        Fields.append({QString::fromStdString(Column.key_), tr("VFS / %1").arg(QString::fromStdString(Column.title_)), Column.flags_ & 112 ? FieldType::Real : FieldType::Text, ProviderKind::DOpus, EvaluationCost::Snapshot, true, Column.flags_ & 4 ? Qt::AlignCenter : Column.flags_ & 1 ? Qt::AlignRight : Qt::AlignLeft, "VFS"});
     return Fields;
 }
 
@@ -2322,7 +2487,7 @@ hc::columns::CellValue CFSModel::readField(const nsHC::TySpFileSource& Item, con
     if (!QueryFamily(Field).isEmpty()) {
         const auto Path = queryPath(Item);
         if (Path.isEmpty()) return CellValue::Missing(Item->Name_ == ".." ? ValueState::Empty : ValueState::Unsupported);
-        if ((Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && Field != "file.linkTarget" && !IsPluginField(Field)) return CellValue::Missing(ValueState::Empty);
+        if ((Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && !QueriesFolders(Field)) return CellValue::Missing(ValueState::Empty);
         auto Value = columnQueries_->Read(Path, Field, Request, Urgent);
         if (IsPluginField(Field) && Value.State() == ValueState::OnDemand) requestOnlyValues_ = true;
         return Value;
@@ -2345,12 +2510,28 @@ void CFSModel::columnResultsReady(const QSet<QString>& Paths)
     emit ColumnValuesChanging();
     QSet<QString> ScriptItems;
     for (const auto& Path : Paths) if (Path.startsWith('{')) ScriptItems.insert(QJsonDocument::fromJson(Path.toUtf8()).object()["identity"].toString());
+    // Rule field values are copied out of the 30 s column cache into the listing's own store; the
+    // new values re-key each row's color, and the color roles below make the view ask again.
+    const auto& RuleFields = fileColorRules_.RequiredFields(); bool Recolor = false;
     int First = rowCount(), Last = -1;
-    for (int Row = 0; Row < vecNode_.size(); ++Row) if (Paths.contains(queryPath(vecNode_[Row])) ||
-        ScriptItems.contains(vecNode_[Row]->storageEntry_ ? hc::workspace::SelectionKey(*vecNode_[Row]->storageEntry_) : vecNode_[Row]->Name_)) {
+    for (int Row = 0; Row < vecNode_.size(); ++Row) {
+        const auto Path = queryPath(vecNode_[Row]);
+        if (!Paths.contains(Path) && !ScriptItems.contains(vecNode_[Row]->storageEntry_ ? hc::workspace::SelectionKey(*vecNode_[Row]->storageEntry_) : vecNode_[Row]->Name_)) continue;
         createBuiltFsValues(vecNode_[Row], -1); First = std::min(First, Row); Last = Row;
+        for (const auto& Field : RuleFields) {
+            const auto Family = hc::columns::QueryFamily(Field); if (Family.isEmpty() || Path.isEmpty()) continue;
+            const auto Value = columnQueries_->Read(Path, Field, false);
+            if (Value.State() == hc::columns::ValueState::Pending || Value.State() == hc::columns::ValueState::OnDemand) continue;
+            // A re-checked carried value recolors only when it changed.
+            auto& Stored = ruleFields_[Path]; const auto Old = Stored.constFind(Field);
+            Recolor |= Old == Stored.cend() || Old->State() != Value.State() || Old->Value() != Value.Value();
+            Stored[Field] = Value;
+            ruleFieldRequests_.remove(Path + QChar(0) + Family);
+        }
     }
-    if (Last >= First && columnCount()) emit dataChanged(index(First, 0), index(Last, columnCount() - 1), {Qt::DisplayRole, Qt::ToolTipRole, ColumnStateRole});
+    QList<int> Roles{Qt::DisplayRole, Qt::ToolTipRole, ColumnStateRole};
+    if (Recolor) Roles += {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileColorOverrideRole, FileEffectsRole};
+    if (Last >= First && columnCount()) emit dataChanged(index(First, 0), index(Last, columnCount() - 1), Roles);
     refreshColumnSortRanks();
     emit ColumnValuesChanged();
 }
@@ -2360,7 +2541,7 @@ void CFSModel::CancelColumnQueries()
     pageStop_.request_stop(); ++pageGeneration_; pageBusy_ = false;
     const bool HadPending = columnQueries_->Pending() != 0;
     const bool SortChanged = columnSorts_ != completedSorts_;
-    columnQueries_->Cancel(); columnSorts_ = completedSorts_;
+    columnQueries_->Cancel(); ruleFieldRequests_.clear(); columnSorts_ = completedSorts_;
     if (SortChanged) emit ColumnSortCancelled();
     emit ColumnQueryStatus(tr("컬럼 조회가 중지되었습니다."));
     // Ready cached values did not change. Invalidating all rows would force a
@@ -2424,7 +2605,7 @@ void CFSModel::refreshColumnSortRanks(int First)
     }
     if (columnSorts_.isEmpty()) {
         columnQueries_->EndSnapshot(); columnSortRanks_.clear(); completedSorts_.clear();
-        emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{}); return;
+        refreshColumnStatus(); return;
     }
     QVector<SortRow> Rows; QVector<Qt::SortOrder> Orders; QVector<const Column*> Bindings;
     for (const auto& Sort : columnSorts_) {
@@ -2504,6 +2685,8 @@ bool CFSModel::AreFileColorsReady(const QModelIndexList& Rows) const
         const auto Input=fileRuleInput(Item);const auto Key=hc::settings::FileRuleKey::From(Input);
         const auto* Cached=fileColorCache_.object(Key);
         if(!Cached||!Cached->style_.error_.isEmpty()||(Cached->style_.validUntilUtcMs_&&Input.referenceUtcMs_>=*Cached->style_.validUntilUtcMs_))return false;
+        // A row still waiting for rule values during the grace is drawn plain, not in its final look.
+        if(fileRuleGrace_&&Cached->style_.pending_)return false;
     }
     return true;
 }

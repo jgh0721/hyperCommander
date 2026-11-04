@@ -103,6 +103,7 @@ private:
     QComboBox* twoLineSeparator_ = nullptr;
     QComboBox* listDensity_ = nullptr;
     QComboBox* listElide_ = nullptr;
+    QComboBox* networkFieldConditions_ = nullptr;
     QCheckBox* listNameBelow_ = nullptr;
     QSpinBox* listAutoWidth_ = nullptr;
     QSpinBox* listAutoPercent_ = nullptr;

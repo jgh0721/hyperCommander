@@ -308,7 +308,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -8438,10 +8438,294 @@ private slots:
         QCOMPARE(Version["file.fileVersion"].State(), ValueState::Ready); QVERIFY(!Version["file.fileVersion"].Raw().toString().isEmpty());
         const auto Header = ReadNativeFields(Directory.filePath("picture.png"), "image", {});
         QCOMPARE(Header["file.imageBitDepth"].Raw().toULongLong(), quint64(32));
+        {
+            // Named streams, link count and reparse targets, read the way a column job reads them.
+            QTemporaryDir Links; QVERIFY(Links.isValid());
+            const auto Native = [&](const QString& Name) { return QDir::toNativeSeparators(Links.filePath(Name)); };
+            { QFile File(Links.filePath("marked.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("body"); }
+            const auto WriteStream = [&](const QString& Stream, const QByteArray& Bytes) {
+                const auto Handle = CreateFileW((Native("marked.txt") + ':' + Stream).toStdWString().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+                if (Handle == INVALID_HANDLE_VALUE) return false;
+                DWORD Written = 0; const bool Ok = WriteFile(Handle, Bytes.constData(), DWORD(Bytes.size()), &Written, nullptr);
+                CloseHandle(Handle); return Ok && Written == DWORD(Bytes.size());
+            };
+            const QByteArray Marker("[ZoneTransfer]\r\nZoneId=3\r\n");
+            QVERIFY(WriteStream("Zone.Identifier", Marker)); QVERIFY(WriteStream("note", "abc"));
+            const auto Streams = ReadNativeFields(Links.filePath("marked.txt"), "streams", {});
+            QCOMPARE(Streams["file.alternateDataStream.count"].Raw().toULongLong(), quint64(2)); // ::$DATA is the body, not counted.
+            QCOMPARE(Streams["file.alternateDataStream.totalSize"].Raw().toULongLong(), quint64(Marker.size() + 3));
+            const auto StreamNames = Streams["file.alternateDataStream.names"].Raw().toString().split(", ");
+            QCOMPARE(StreamNames.size(), 2); QVERIFY(StreamNames.contains("Zone.Identifier")); QVERIFY(StreamNames.contains("note"));
+            QCOMPARE(Streams["file.alternateDataStream.zone"].Raw().toULongLong(), quint64(3));
+            QCOMPARE(Format(Streams["file.alternateDataStream.zone"]), QObject::tr("인터넷") + " (3)");
+            const auto Folder = ReadNativeFields(Links.path(), "streams", {});
+            QCOMPARE(Folder["file.alternateDataStream.count"].Raw().toULongLong(), quint64(0)); QCOMPARE(Folder["file.alternateDataStream.totalSize"].Raw().toULongLong(), quint64(0));
+            QCOMPARE(Folder["file.alternateDataStream.names"].State(), ValueState::Empty); QCOMPARE(Folder["file.alternateDataStream.zone"].State(), ValueState::Empty);
+            QVERIFY(CreateHardLinkW(Native("second.txt").toStdWString().c_str(), Native("marked.txt").toStdWString().c_str(), nullptr));
+            const auto Standard = ReadNativeFields(Links.filePath("marked.txt"), "standard", {});
+            QCOMPARE(Standard["file.hardlink.count"].Raw().toULongLong(), quint64(2)); QCOMPARE(Standard["file.allocatedSize"].State(), ValueState::Ready);
+            const auto NotLink = ReadNativeFields(Links.filePath("marked.txt"), "link", {});
+            for (const auto* Key : {"file.linkTarget", "file.softlink.target", "file.junction.target"}) QCOMPARE(NotLink[Key].State(), ValueState::Empty);
+            QVERIFY(QDir(Links.path()).mkdir("target"));
+            QCOMPARE(QProcess::execute("cmd", {"/c", "mklink", "/J", Native("junction"), Native("target")}), 0);
+            const auto Mount = ReadNativeFields(Links.filePath("junction"), "link", {});
+            RemoveDirectoryW(Native("junction").toStdWString().c_str()); // The junction alone; cleanup never walks through it.
+            QCOMPARE(Mount["file.junction.target"].Raw().toString(), Native("target"));
+            QCOMPARE(Mount["file.linkTarget"].Raw().toString(), Native("target")); QCOMPARE(Mount["file.softlink.target"].State(), ValueState::Empty);
+        }
         Profile = View->ColumnProfile(); Add("file.fileVersion", "Version"); QVERIFY(View->ApplyColumnProfile(Profile));
         Model->CancelColumnQueries(); QCOMPARE(Model->index(RowOf("picture.png"), Model->columnCount() - 1).data(CFSModel::ColumnStateRole).toInt(), int(ValueState::OnDemand));
         Model->ResumeColumnQueries(); Model->index(RowOf("picture.png"), Model->columnCount() - 1).data();
         QTRY_COMPARE(Model->PendingColumnQueries(), 0);
+    }
+    void fieldConditionColorsAndSelectionUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto* Name : {"marked.txt", "plain.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("body"); }
+        {
+            const auto Stream = QDir::toNativeSeparators(Directory.filePath("marked.txt")) + ":Zone.Identifier";
+            const auto Handle = CreateFileW(Stream.toStdWString().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr); QVERIFY(Handle != INVALID_HANDLE_VALUE);
+            const QByteArray Marker("[ZoneTransfer]\r\nZoneId=3\r\n"); DWORD Written = 0; QVERIFY(WriteFile(Handle, Marker.constData(), DWORD(Marker.size()), &Written, nullptr)); CloseHandle(Handle);
+        }
+        // A v4 group with an ADS zone condition colors only the file carrying the mark.
+        auto Rules = FileColorRules::Empty(); Rules["version"] = 4;
+        Rules["groups"] = QJsonArray{QJsonObject{{"id", "internet"}, {"name", "인터넷"}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "field"}, {"field", "file.alternateDataStream.zone"}, {"valueType", "unsigned"}, {"op", "in"}, {"value", QJsonArray{"3", "4"}}}}},
+            {"light", QJsonObject{{"foreground", "#aa0000"}}}, {"dark", QJsonObject{{"foreground", "#aa0000"}}}}};
+        auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = Rules; QVERIFY(Settings.Put(Section::Options, Options));
+        auto General = Settings.Read(Section::General).toObject();
+        General["selectionDialog"] = QJsonObject{{"last", QJsonObject{{"pattern", "*"}, {"syntax", 0}, {"scope", 0}, {"advanced", true}, {"all", true},
+            {"conditions", QJsonArray{QJsonObject{{"type", "field"}, {"field", "file.alternateDataStream.count"}, {"valueType", "unsigned"}, {"op", "ge"}, {"value", "1"}}}}}}};
+        QVERIFY(Settings.Put(Section::General, General));
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        Model->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 3);
+        const auto IndexOf = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
+        // Painting asks for the value; the arrival re-keys the row and decides it.
+        QTRY_COMPARE_WITH_TIMEOUT(IndexOf("marked.txt").data(Qt::ForegroundRole).value<QColor>(), QColor("#aa0000"), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!IndexOf("plain.txt").data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker"), 10000);
+        QVERIFY(IndexOf("plain.txt").data(Qt::ForegroundRole).value<QColor>() != QColor("#aa0000"));
+        // Item selection checks the ADS count of every file before it applies.
+        Panel->sig_NotifyPanelActivated();
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View); View->BaseView()->deselectAll();
+        QTimer Timer; Timer.setInterval(20); int Ticks = 0; QString Seen;
+        connect(&Timer, &QTimer::timeout, main_, [&] {
+            auto* Dialog = main_->findChild<QDialog*>("hc.selection.dialog"); if (!Dialog) return;
+            if (++Ticks > 1500) { Dialog->reject(); Timer.stop(); return; }
+            Seen = Dialog->findChild<QLabel*>("hc.selection.preview")->text();
+            if (Seen.startsWith(QStringLiteral("일치 1개"))) { Timer.stop(); QMetaObject::invokeMethod(Dialog, "accept"); }
+        });
+        Timer.start(); hc::ui::ItemSelectionController::For(View)->Execute("cm.selection.select"); Timer.stop();
+        QVERIFY2(Seen.startsWith(QStringLiteral("일치 1개")), qPrintable(Seen));
+        const auto Selected = View->CaptureSelection(); QCOMPARE(Selected.size(), 1); QVERIFY(Selected.front().contains("marked.txt", Qt::CaseInsensitive));
+    }
+    void fieldConditionPrefetchAndGraceUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        // Every file carries an internet-zone mark, so every row waits for the same slow field.
+        for (int At = 0; At < 300; ++At) {
+            const auto Name = QString("f%1.txt").arg(At, 3, 10, QChar('0'));
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("body"); File.close();
+            const auto Stream = QDir::toNativeSeparators(Directory.filePath(Name)) + ":Zone.Identifier";
+            const auto Handle = CreateFileW(Stream.toStdWString().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr); QVERIFY(Handle != INVALID_HANDLE_VALUE);
+            const QByteArray Marker("[ZoneTransfer]\r\nZoneId=3\r\n"); DWORD Written = 0; QVERIFY(WriteFile(Handle, Marker.constData(), DWORD(Marker.size()), &Written, nullptr)); CloseHandle(Handle);
+        }
+        auto Rules = FileColorRules::Empty(); Rules["version"] = 4;
+        Rules["groups"] = QJsonArray{QJsonObject{{"id", "internet"}, {"name", "인터넷"}, {"join", "all"},
+            {"conditions", QJsonArray{QJsonObject{{"type", "field"}, {"field", "file.alternateDataStream.zone"}, {"valueType", "unsigned"}, {"op", "in"}, {"value", QJsonArray{"3", "4"}}}}},
+            {"light", QJsonObject{{"foreground", "#aa0000"}}}, {"dark", QJsonObject{{"foreground", "#aa0000"}}}}};
+        auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = Rules; QVERIFY(Settings.Put(Section::Options, Options));
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        Model->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 301);
+        Panel->sig_NotifyPanelActivated();
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View); QVERIFY(Model->HasSlowFileRuleFields());
+        QTRY_VERIFY(!View->VisibleSourceRows().isEmpty());
+        const auto IndexOf = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
+        const auto Zone = [&](const QModelIndex& Index) { return Model->RuleFieldValue(Model->GetFileInfo(Index), "file.alternateDataStream.zone").State(); };
+
+        // Design 6.3: a row two screens below the viewport gets its slow value without being drawn.
+        const auto Visible = View->VisibleSourceRows(); const auto Ahead = View->AheadSourceRows(2);
+        QVERIFY2(!Ahead.isEmpty() && !Visible.contains(Ahead.back()), qPrintable(QString("visible %1 ahead %2").arg(Visible.size()).arg(Ahead.size())));
+        QTRY_COMPARE_WITH_TIMEOUT(Zone(Ahead.back()), hc::columns::ValueState::Ready, 10000);
+        // Past the window nothing is asked for until it scrolls in.
+        QModelIndex Far;
+        for (int Row = Model->rowCount() - 1; Row >= 0 && !Far.isValid(); --Row) {
+            const auto Index = Model->index(Row, 0);
+            if (!Visible.contains(Index) && !Ahead.contains(Index) && Model->GetName(Index) != "..") Far = Index;
+        }
+        QVERIFY(Far.isValid()); QCOMPARE(Zone(Far), hc::columns::ValueState::Pending);
+
+        // Design 6.4: right after a re-list, a row whose known style waits for the value is drawn plain,
+        // and only after the grace in the pending colour. Pausing the queries keeps the value away.
+        QTRY_COMPARE_WITH_TIMEOUT(IndexOf("f000.txt").data(Qt::ForegroundRole).value<QColor>(), QColor("#aa0000"), 10000);
+        bool Checked = false, Grace = false, Plain = false, Ready = true;
+        auto Connection = connect(Model, &CFSModel::PageChanged, main_, [&] {
+            if (Checked) return;
+            Model->CancelColumnQueries();
+            const auto Index = IndexOf("f000.txt"); Grace = Model->InFileRuleGrace();
+            Plain = !Index.data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker") && Index.data(Qt::ForegroundRole).value<QColor>() != QColor("#aa0000");
+            Ready = Model->AreFileColorsReady({Index}); Checked = true;
+        });
+        Model->ForceRefresh(); QTRY_VERIFY_WITH_TIMEOUT(Checked, 10000); disconnect(Connection);
+        QVERIFY(Grace); QVERIFY(Plain); QVERIFY(!Ready);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->InFileRuleGrace(), 2000);
+        QVERIFY(IndexOf("f000.txt").data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker"));
+        QVERIFY(Model->AreFileColorsReady({IndexOf("f000.txt")}));
+
+        // A background re-list keeps decided values of unchanged files: no row goes back to pending.
+        Model->ForceRefresh(); QTRY_VERIFY(!Model->IsLoading());
+        QTRY_COMPARE_WITH_TIMEOUT(IndexOf("f000.txt").data(Qt::ForegroundRole).value<QColor>(), QColor("#aa0000"), 10000);
+        bool Automatic = false; QColor Kept; bool KeptPending = true;
+        Connection = connect(Model, &CFSModel::PageChanged, main_, [&] {
+            if (Automatic || !Model->IsAutomaticRefresh()) return;
+            const auto Index = IndexOf("f000.txt"); Automatic = true;
+            Kept = Index.data(Qt::ForegroundRole).value<QColor>();
+            KeptPending = Index.data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker");
+        });
+        { QFile File(Directory.filePath("new.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("x"); }
+        QTRY_VERIFY_WITH_TIMEOUT(Automatic, 15000); disconnect(Connection);
+        QCOMPARE(Kept, QColor("#aa0000")); QVERIFY(!KeptPending);
+        // A carried value is re-checked when drawn: a stream rewritten with its file's time put back
+        // keeps the metadata the carry compares, and still changes colour once the re-check returns.
+        QTRY_VERIFY(!Model->IsLoading());
+        {
+            const auto Main = QDir::toNativeSeparators(Directory.filePath("f001.txt")).toStdWString();
+            FILETIME Created{}, Accessed{}, Written{};
+            const auto File = CreateFileW(Main.c_str(), GENERIC_READ | FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+            QVERIFY(File != INVALID_HANDLE_VALUE); QVERIFY(GetFileTime(File, &Created, &Accessed, &Written));
+            const auto Stream = CreateFileW((Main + L":Zone.Identifier").c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, 0, nullptr);
+            QVERIFY(Stream != INVALID_HANDLE_VALUE);
+            const QByteArray Marker("[ZoneTransfer]\r\nZoneId=0\r\n"); DWORD Count = 0; QVERIFY(WriteFile(Stream, Marker.constData(), DWORD(Marker.size()), &Count, nullptr)); CloseHandle(Stream);
+            QVERIFY(SetFileTime(File, &Created, &Accessed, &Written)); CloseHandle(File);
+        }
+        { QFile File(Directory.filePath("new2.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("x"); }
+        QTRY_VERIFY_WITH_TIMEOUT(Model->rowCount() == 303, 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(IndexOf("f001.txt").data(Qt::ForegroundRole).value<QColor>() != QColor("#aa0000")
+            && !IndexOf("f001.txt").data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker"), 10000);
+        QCOMPARE(IndexOf("f002.txt").data(Qt::ForegroundRole).value<QColor>(), QColor("#aa0000"));
+    }
+    // Captures of the colour rules preview with field conditions (design 8, screen C, as built):
+    // fixed examples without field values, and the custom input's "필드 표본 값".
+    void fieldConditionPreviewCaptureUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); auto* Manager = TyStColorSchemeMgr::GetInstance();
+        auto& Theme = fm::style::ThemeManager::instance(); const auto Scheme = Theme.scheme();
+        const auto Restore = qScopeGuard([&] { Theme.setScheme(Scheme); Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Manager->GetCurrentColorScheme())); });
+        const QDir Out(qEnvironmentVariable("HC_UI_ARTIFACT_DIR")); const bool Capture = !qEnvironmentVariableIsEmpty("HC_UI_ARTIFACT_DIR"); if (Capture) QDir().mkpath(Out.path());
+        QMainOpts Dialog(main_); Dialog.resize(1280, 940); Dialog.show(); QTest::qWait(50); Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(4);
+        auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors")); QVERIFY(Page);
+        const auto Field = [](const char* Id, const char* Op, const QJsonValue& Value) { return QJsonObject{{"type", "field"}, {"field", Id}, {"valueType", "unsigned"}, {"op", Op}, {"value", Value}}; };
+        const auto Extensions = [](const char* List) { return QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", List}}; };
+        auto Doc = FileColorRules::Empty(); Doc["version"] = 4;
+        Doc["groups"] = QJsonArray{
+            QJsonObject{{"id", "internet-exe"}, {"name", "인터넷에서 받은 실행 파일"}, {"join", "all"},
+                {"conditions", QJsonArray{Extensions("exe,msi"), Field("file.alternateDataStream.zone", "in", QJsonArray{"3", "4"})}},
+                {"light", QJsonObject{{"foreground", "#b42318"}, {"background", "#fdecea"}}}, {"dark", QJsonObject{{"foreground", "#ff8a80"}, {"background", "#3a1f1f"}}}},
+            QJsonObject{{"id", "large-image"}, {"name", "큰 이미지"}, {"join", "all"},
+                {"conditions", QJsonArray{Extensions("jpg,png"), Field("file.imageWidth", "ge", "3840")}},
+                {"light", QJsonObject{{"foreground", "#1d4ed8"}}}, {"dark", QJsonObject{{"foreground", "#93c5fd"}}}},
+            QJsonObject{{"id", "source"}, {"name", "소스 코드"}, {"join", "any"}, {"conditions", QJsonArray{Extensions("cpp,h")}},
+                {"light", QJsonObject{{"foreground", "#7c3aed"}}}, {"dark", QJsonObject{{"foreground", "#c4b5fd"}}}}};
+        Page->Load(Doc); QVERIFY(Page->Validate());
+        Page->findChild<QListWidget*>("hc.rules.groups")->setCurrentRow(0);
+        auto* Card = Page->findChild<QWidget*>("hc.rules.previewCard"); auto* Table = Page->findChild<QTableWidget*>("hc.rules.previewTable");
+        auto* DarkPreview = Page->findChild<QCheckBox*>("hc.rules.previewDark"); QVERIFY(Card && Table && DarkPreview);
+        const auto Row = [&](const QString& Name) { for (int R = 0; R < Table->rowCount(); ++R) if (Table->item(R, 0) && Table->item(R, 0)->text() == Name) return R; return -1; };
+        const auto Save = [&](QWidget* Widget, const QString& Name) {
+            QCoreApplication::processEvents(); QTest::qWait(60);
+            if (Capture) QVERIFY(Widget->grab().save(Out.filePath(Name + ".png")));
+        };
+        // Examples carry no field values: the cheap extension condition settles every row but the
+        // installer, which waits for its zone and shows as being checked.
+        const int Installer = Row("Qt-6.12.0-windows-x64-installer.exe"), Source = Row("BandedPanelView.cpp"), Archive = Row("font-pack_Cascadia-Code-NF_2026-07.7z");
+        QVERIFY(Installer >= 0 && Source >= 0 && Archive >= 0);
+        for (const bool Dark : {false, true}) {
+            Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
+            emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); DarkPreview->setChecked(Dark);
+            QTRY_COMPARE(Table->item(Installer, 2)->text(), QStringLiteral("확인 중 · 필드 값 필요"));
+            QCOMPARE(Table->item(Source, 2)->text(), QStringLiteral("소스 코드")); QCOMPARE(Table->item(Archive, 2)->text(), QStringLiteral("목록 기본값"));
+            Save(&Dialog, QString("dialog-%1").arg(Dark ? "dark" : "light"));
+            Save(Card, QString("examples-%1").arg(Dark ? "dark" : "light"));
+        }
+        Theme.setScheme(fm::style::ThemeManager::Scheme::Light);
+        emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(QStringLiteral("기본 라이트"))); DarkPreview->setChecked(false);
+        // The custom input takes field values as text: name=value pairs, '-' empty, '!' error, absent = being checked.
+        Page->findChild<QToolButton*>("hc.rules.customToggle")->setChecked(true);
+        auto* Name = Page->findChild<QLineEdit*>("hc.rules.sample"); auto* Fields = Page->findChild<QLineEdit*>("hc.rules.sampleFields"); auto* Size = Page->findChild<QLineEdit*>("hc.rules.sampleSize");
+        QVERIFY(Name && Fields && Size);
+        const auto Owners = [&] { QString Text; for (auto* Label : Card->findChildren<QLabel*>()) if (Label->text().startsWith(QStringLiteral("확인 중:")) || Label->text().startsWith(QStringLiteral("일치 그룹:"))) Text = Label->text(); return Text; };
+        struct Step { const char* name_; const char* fields_; const char* file_; const char* expected_; };
+        const Step Steps[] = {
+            {"setup_2026.exe", "", "custom-pending", "확인 중:"},
+            {"setup_2026.exe", "file.alternateDataStream.zone=3", "custom-zone3", "일치 그룹: 인터넷에서 받은 실행 파일"},
+            {"setup_2026.exe", "file.alternateDataStream.zone=!", "custom-error", "일치 그룹: \n"},
+            {"photo.jpg", "file.imageWidth=4032", "custom-image", "일치 그룹: 큰 이미지"},
+        };
+        Size->setText("88290304");
+        for (const auto& S : Steps) {
+            Name->setText(QString::fromUtf8(S.name_)); Fields->setText(QString::fromUtf8(S.fields_));
+            QTRY_VERIFY2(Owners().startsWith(QString::fromUtf8(S.expected_)), qPrintable(Owners()));
+            Save(Card, S.file_);
+        }
+        Dialog.reject();
+    }
+    void columnFieldPickerUi()
+    {
+        using namespace hc::columns;
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* View = static_cast<CGridView*>(Left->GetFocusView(0));
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.ShowListSettingsPage(); Dialog.show(); QCoreApplication::processEvents();
+        auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); QVERIFY(Editor);
+        auto* Field = Editor->findChild<QComboBox*>("hc.columns.field");
+        int Row = -1; const auto Profile = Editor->Profile();
+        for (int Index = 0; Index < Profile.columns_.size() && Row < 0; ++Index)
+            if (Profile.columns_[Index].id_ != Profile.primaryNameId_ && Profile.columns_[Index].template_.isEmpty()) Row = Index;
+        QVERIFY(Row >= 0); Editor->findChild<QListWidget*>("hc.columns.list")->setCurrentRow(Row);
+        QString Expected; for (const auto& Definition : BuiltInFields()) if (Definition.id_ == Field->currentData().toString()) Expected = Definition.group_;
+        // Built-in topics are submenus; the topic holding the current field is bold.
+        QStringList Topics; QString Bold;
+        QTimer::singleShot(0, Editor, [&] {
+            auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!Menu || Menu->objectName() != "hc.columns.field.menu") { if (Menu) Menu->close(); return; }
+            QAction* Links = nullptr;
+            for (auto* Action : Menu->actions()) if (Action->menu()) {
+                Topics.append(Action->text()); if (Action->font().bold()) Bold = Action->text();
+                if (Action->text() == QObject::tr("링크")) Links = Action;
+            }
+            if (!Links) { Menu->close(); return; }
+            Menu->setActiveAction(Links); auto* Sub = Links->menu();
+            // Badges ride in the shortcut column after a tab: "JC 대상\t느림".
+            for (auto* Item : Sub->actions()) if (Item->text().section('\t', 0, 0) == QObject::tr("JC 대상")) { QCOMPARE(Item->text().section('\t', 1), QObject::tr("느림")); Sub->setActiveAction(Item); }
+            QTest::keyClick(Sub, Qt::Key_Return);
+        });
+        Field->showPopup();
+        for (const auto& Topic : {QObject::tr("이름·형식"), QObject::tr("크기"), QObject::tr("속성"), QObject::tr("링크"), QObject::tr("대체 데이터 스트림")})
+            QVERIFY2(Topics.contains(Topic), qPrintable(Topics.join(" | ")));
+        if (!Expected.isEmpty()) QCOMPARE(Bold, Expected);
+        QCOMPARE(Field->currentData().toString(), QString("file.junction.target"));
+        QCOMPARE(Editor->Profile().columns_[Row].fieldId_, QString("file.junction.target"));
+        // A search result is short: one flat level with the topic on the left.
+        Editor->findChild<QLineEdit*>("hc.columns.search")->setText("alternateDataStream");
+        QStringList Flat;
+        QTimer::singleShot(0, Editor, [&] {
+            if (auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+                for (auto* Action : Menu->actions()) if (!Action->isSeparator()) { QVERIFY(!Action->menu()); Flat.append(Action->text().section('\t', 0, 0)); }
+                Menu->close();
+            }
+        });
+        Field->showPopup();
+        QVERIFY2(Flat.contains(QObject::tr("대체 데이터 스트림") + "  ›  " + QObject::tr("ADS 크기")), qPrintable(Flat.join(" | ")));
+        QCOMPARE(Field->currentData().toString(), QString("file.junction.target")); // Closing the popup changes nothing.
+        Dialog.reject();
     }
 
     void listLayoutSettingsUi()
@@ -12459,6 +12743,10 @@ private slots:
         Group["conditions"] = QJsonArray{QJsonObject{{"type", "modified"}, {"op", "within"}, {"value", "24"}, {"unit", "hours"}}}; Groups[0] = Group; Recent["groups"] = Groups;
         Page->Load(Recent); QVERIFY(Dialog.SaveSettings()); QTRY_COMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
         auto Expiring = Recent; auto ExpiringGroups = Expiring["groups"].toArray(); auto ExpiringGroup = ExpiringGroups[0].toObject(); ExpiringGroup["conditions"] = QJsonArray{QJsonObject{{"type", "modified"}, {"op", "within"}, {"value", "1"}, {"unit", "minutes"}}}; ExpiringGroups[0] = ExpiringGroup; Expiring["groups"] = ExpiringGroups;
+        // The steps above take seconds (opening the settings dialog alone is about 3 s here). Restamp so
+        // the one-minute window starts now instead of when the fixture was written.
+        { QFile F(Directory.filePath("plain.txt")); QVERIFY(F.open(QIODevice::ReadWrite)); QVERIFY(F.setFileTime(QDateTime::currentDateTimeUtc().addSecs(-56), QFileDevice::FileModificationTime)); }
+        Model->Refresh(); QTRY_VERIFY(!Model->IsLoading());
         Page->Load(Expiring); QVERIFY(Dialog.SaveSettings()); QTRY_COMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), ExplicitColor);
         // An idle visible row must lose its relative-date color at expiry;
         // changing no files or settings exercises the model's cache clock.

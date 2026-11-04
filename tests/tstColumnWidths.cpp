@@ -8,6 +8,7 @@
 #include <thread>
 #include <limits>
 #include "commonLibs/columns/builtInColumns.hpp"
+#include "commonLibs/columns/fieldCondition.hpp"
 #include "commonLibs/columns/columnProfileStorage.hpp"
 #include "commonLibs/view/listIconSize.hpp"
 using namespace hc::view;
@@ -181,6 +182,136 @@ private slots:
         QVERIFY(IsSupportedProfile(Profile)); const auto Restored = DecodeProfile(EncodeProfile(Profile)); QVERIFY(Restored); QVERIFY(*Restored == Profile);
         Profile.columns_[1].template_ = "${file.doesNotExist}"; QVERIFY(!IsSupportedProfile(Profile));
         Profile = DefaultProfile(); Profile.columns_[0].template_ = "${file.name}"; QVERIFY(!Validate(Profile).isEmpty());
+    }
+    void builtInFieldGroupsAndQueryFamilies()
+    {
+        using namespace hc::columns;
+        // Every built-in field belongs to one picker topic, and each topic is contiguous.
+        const auto Fields = BuiltInFields(); QSet<QString> Ids, Closed; QString Previous;
+        for (const auto& Field : Fields) {
+            QVERIFY2(!Field.group_.isEmpty(), qPrintable(Field.id_)); QVERIFY(IsFieldId(Field.id_));
+            QVERIFY2(!Ids.contains(Field.id_), qPrintable(Field.id_)); Ids.insert(Field.id_);
+            if (Field.group_ != Previous) { QVERIFY2(!Closed.contains(Field.group_), qPrintable(Field.group_)); Closed.insert(Previous); Previous = Field.group_; }
+        }
+        const QStringList Link{"file.linkTarget", "file.softlink.target", "file.junction.target"};
+        const QStringList Streams{"file.alternateDataStream.count", "file.alternateDataStream.names",
+            "file.alternateDataStream.totalSize", "file.alternateDataStream.zone"};
+        for (const auto& Id : Link + Streams + QStringList{"file.hardlink.count"}) {
+            QVERIFY2(Ids.contains(Id), qPrintable(Id)); QVERIFY(!QueryFamily(Id).isEmpty());
+            QVERIFY(CompileTemplate("${" + Id + "}").Valid());
+        }
+        for (const auto& Id : Link) { QCOMPARE(QueryFamily(Id), QString("link")); QVERIFY(QueriesFolders(Id)); }
+        for (const auto& Id : Streams) { QCOMPARE(QueryFamily(Id), QString("streams")); QVERIFY(QueriesFolders(Id)); }
+        // Allocation and link count share one read; a folder has neither.
+        QCOMPARE(QueryFamily("file.hardlink.count"), QueryFamily("file.allocatedSize"));
+        QVERIFY(!QueriesFolders("file.hardlink.count")); QVERIFY(!QueriesFolders("file.fileVersion")); QVERIFY(!QueriesFolders("file.name"));
+        auto Profile = DefaultProfile(); Profile.columns_[1].template_ = "${file.alternateDataStream.names} · ${file.junction.target}";
+        Profile.columns_[1].sortField_ = "file.alternateDataStream.zone"; QVERIFY(IsSupportedProfile(Profile));
+        // Regrouping the picker must not move the default profile's fields.
+        const QStringList Expected{"file.name", "file.size", "file.created", "file.attributes", "file.modified", "file.extension", "file.stem", "file.type"};
+        const auto Default = DefaultProfile(); for (int Index = 0; Index < Expected.size(); ++Index) QCOMPARE(Default.columns_[Index].fieldId_, Expected[Index]);
+    }
+    void fieldConditionCompileAndEvaluate()
+    {
+        using namespace hc::columns;
+        const auto Compile = [](const QJsonObject& Json) { FieldCondition C; const auto Error = CompileFieldCondition(Json, C); return std::make_pair(C, Error); };
+        const auto Number = [](const QString& Field, const QString& Type, const QString& Op, const QJsonValue& Value, const QString& Unit = {}) {
+            QJsonObject Json{{"type", "field"}, {"field", Field}, {"valueType", Type}, {"op", Op}, {"value", Value}}; if (!Unit.isEmpty()) Json["unit"] = Unit; return Json;
+        };
+        // Profile- and listing-scoped fields, unknown types and narrowed operators are rejected.
+        QVERIFY(Compile(Number("lua.0123456789abcdef0123456789abcdef.area", "integer", "ge", "1")).second.contains("Lua"));
+        QVERIFY(!Compile(Number("dopusvfs.0123456789abcdef0123456789abcdef.1", "text", "exists", {})).second.isEmpty());
+        QVERIFY(!Compile(Number("file.imageWidth", "pixels", "ge", "1")).second.isEmpty());
+        QVERIFY(!Compile(Number("file.alternateDataStream.names", "text", "matches", QJsonArray{"Zone*"})).second.isEmpty());
+        QVERIFY(Compile(Number("file.alternateDataStream.names", "text", "contains", "Zone.Identifier")).second.isEmpty());
+        QVERIFY(!Compile(Number("file.alternateDataStream.totalSize", "unsigned", "gt", "-1")).second.isEmpty());
+        QVERIFY(!Compile(Number("file.alternateDataStream.totalSize", "unsigned", "gt", "18446744073709551615", "KiB")).second.isEmpty());
+        QVERIFY(!Compile(Number("file.alternateDataStream.count", "unsigned", "between", QJsonArray{"3", "1"})).second.isEmpty());
+        QVERIFY(!Compile(Number("file.junction.target", "text", "matches", "(", {})).second.isEmpty());
+
+        // Units scale the operand; comparisons stay exact across signed/unsigned payloads.
+        auto [Size, SizeError] = Compile(Number("file.alternateDataStream.totalSize", "unsigned", "gt", "64", "KiB"));
+        QVERIFY2(SizeError.isEmpty(), qPrintable(SizeError));
+        QCOMPARE(EvaluateFieldCondition(Size, CellValue::Ready(quint64(65536)), 0), Truth::False);
+        QCOMPARE(EvaluateFieldCondition(Size, CellValue::Ready(quint64(65537)), 0), Truth::True);
+        QCOMPARE(EvaluateFieldCondition(Size, CellValue::Ready(qint64(-1)), 0), Truth::False);
+        QCOMPARE(EvaluateFieldCondition(Size, CellValue::Ready(quint64(UINT64_MAX)), 0), Truth::True);
+        auto [Range, RangeError] = Compile(Number("file.alternateDataStream.count", "unsigned", "between", QJsonArray{"1", "3"}));
+        QVERIFY(RangeError.isEmpty());
+        for (const auto [Count, Expected] : std::initializer_list<std::pair<quint64, Truth>>{{0, Truth::False}, {1, Truth::True}, {3, Truth::True}, {4, Truth::False}})
+            QCOMPARE(EvaluateFieldCondition(Range, CellValue::Ready(Count), 0), Expected);
+        auto [Zone, ZoneError] = Compile(Number("file.alternateDataStream.zone", "unsigned", "in", QJsonArray{"3", "4"}));
+        QVERIFY(ZoneError.isEmpty());
+        QCOMPARE(EvaluateFieldCondition(Zone, CellValue::Ready(quint64(3)).WithDisplay("인터넷 (3)"), 0), Truth::True);
+        QCOMPARE(EvaluateFieldCondition(Zone, CellValue::Ready(quint64(2)), 0), Truth::False);
+
+        // Design 4.3: missing values never match, even negated; values being read are unknown.
+        auto [Not, NotError] = Compile(Number("file.imageWidth", "unsigned", "ne", "100"));
+        auto [Has, HasError] = Compile(Number("file.imageWidth", "unsigned", "exists", {}));
+        auto [Lacks, LacksError] = Compile(Number("file.imageWidth", "unsigned", "notExists", {}));
+        QVERIFY(NotError.isEmpty() && HasError.isEmpty() && LacksError.isEmpty());
+        struct Row { CellValue value_; Truth ne_, exists_, notExists_; };
+        const QList<Row> Table{{CellValue::Ready(quint64(5)), Truth::True, Truth::True, Truth::False},
+            {CellValue::Missing(ValueState::Empty), Truth::False, Truth::False, Truth::True},
+            {CellValue::Missing(ValueState::Unsupported), Truth::False, Truth::False, Truth::False},
+            {CellValue::Missing(ValueState::Error), Truth::False, Truth::False, Truth::False},
+            {CellValue::Missing(ValueState::Pending), Truth::Unknown, Truth::Unknown, Truth::Unknown},
+            {CellValue::Missing(ValueState::OnDemand), Truth::Unknown, Truth::Unknown, Truth::Unknown}};
+        for (const auto& Item : Table) {
+            QCOMPARE(EvaluateFieldCondition(Not, Item.value_, 0), Item.ne_);
+            QCOMPARE(EvaluateFieldCondition(Has, Item.value_, 0), Item.exists_);
+            QCOMPARE(EvaluateFieldCondition(Lacks, Item.value_, 0), Item.notExists_);
+        }
+
+        // Text: case-insensitive substring, anchored wildcard across separators, bounded regex.
+        auto [Names, NamesError] = Compile(Number("file.alternateDataStream.names", "text", "notContains", "zone.identifier"));
+        QVERIFY(NamesError.isEmpty());
+        QCOMPARE(EvaluateFieldCondition(Names, CellValue::Ready(QString("Zone.Identifier, note")), 0), Truth::False);
+        QCOMPARE(EvaluateFieldCondition(Names, CellValue::Ready(QString("note")), 0), Truth::True);
+        QJsonObject Wild = Number("file.junction.target", "text", "matches", QJsonArray{"\\\\NAS\\*"}); Wild["syntax"] = "wildcard";
+        auto [Target, TargetError] = Compile(Wild);
+        QVERIFY2(TargetError.isEmpty(), qPrintable(TargetError));
+        QCOMPARE(EvaluateFieldCondition(Target, CellValue::Ready(QString("\\\\nas\\share\\deep\\dir")), 0), Truth::True);
+        QCOMPARE(EvaluateFieldCondition(Target, CellValue::Ready(QString("D:\\\\nas\\share")), 0), Truth::False);
+        QJsonObject Regex = Number("file.fileVersion", "text", "notMatches", "\\A10\\."); Regex["syntax"] = "regex";
+        auto [Version, VersionError] = Compile(Regex);
+        QVERIFY(VersionError.isEmpty());
+        QCOMPARE(EvaluateFieldCondition(Version, CellValue::Ready(QString("10.0.26100.1")), 0), Truth::False);
+        QCOMPARE(EvaluateFieldCondition(Version, CellValue::Ready(QString("6.3.9600")), 0), Truth::True);
+
+        // Boolean and dates.
+        auto [ReadOnly, ReadOnlyError] = Compile(Number("file.readOnly", "boolean", "is", "true"));
+        QVERIFY(ReadOnlyError.isEmpty());
+        QCOMPARE(EvaluateFieldCondition(ReadOnly, CellValue::Ready(true), 0), Truth::True);
+        QCOMPARE(EvaluateFieldCondition(ReadOnly, CellValue::Ready(false), 0), Truth::False);
+        auto [Recent, RecentError] = Compile(Number("file.created", "timestamp", "within", "7", "days"));
+        QVERIFY(RecentError.isEmpty());
+        const auto Now = QDateTime::fromString("2026-11-04T12:00:00Z", Qt::ISODate);
+        QCOMPARE(EvaluateFieldCondition(Recent, CellValue::Ready(Now.addDays(-6)), Now.toMSecsSinceEpoch()), Truth::True);
+        QCOMPARE(EvaluateFieldCondition(Recent, CellValue::Ready(Now.addDays(-8)), Now.toMSecsSinceEpoch()), Truth::False);
+        QCOMPARE(EvaluateFieldCondition(Recent, CellValue::Ready(Now.addDays(1)), Now.toMSecsSinceEpoch()), Truth::False);
+        auto [Before, BeforeError] = Compile(Number("file.accessed", "timestamp", "before", "2026-01-01T00:00:00+09:00"));
+        QVERIFY(BeforeError.isEmpty());
+        QCOMPARE(EvaluateFieldCondition(Before, CellValue::Ready(QDateTime::fromString("2025-12-31T14:59:59Z", Qt::ISODate)), 0), Truth::True);
+        QCOMPARE(EvaluateFieldCondition(Before, CellValue::Ready(QDateTime::fromString("2025-12-31T15:00:00Z", Qt::ISODate)), 0), Truth::False);
+
+        // Kleene AND / OR.
+        const QList<Truth> All{Truth::False, Truth::True, Truth::Unknown};
+        for (const auto L : All) for (const auto R : All) {
+            const auto And = Combine(L, R, true), Or = Combine(L, R, false);
+            QCOMPARE(And, L == Truth::False || R == Truth::False ? Truth::False : L == Truth::Unknown || R == Truth::Unknown ? Truth::Unknown : Truth::True);
+            QCOMPARE(Or, L == Truth::True || R == Truth::True ? Truth::True : L == Truth::Unknown || R == Truth::Unknown ? Truth::Unknown : Truth::False);
+        }
+
+        // Built-in metadata the editors rely on.
+        const auto Fields = BuiltInFields();
+        const auto Find = [&](const QString& Id) { return *std::find_if(Fields.begin(), Fields.end(), [&](const auto& F) { return F.id_ == Id; }); };
+        QCOMPARE(Find("file.alternateDataStream.totalSize").unit_, FieldUnit::Bytes);
+        QCOMPARE(Find("file.imageWidth").unit_, FieldUnit::Pixels);
+        QCOMPARE(Find("file.alternateDataStream.zone").choices_.size(), 5);
+        QCOMPARE(Find("file.alternateDataStream.zone").choices_[3].value_, QString("3"));
+        QCOMPARE(CostOf(Find("file.stem")), ConditionCost::Immediate);
+        QCOMPARE(CostOf(Find("file.alternateDataStream.count")), ConditionCost::Slow);
     }
     void vfsColumnTypesAndScope()
     {

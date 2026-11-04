@@ -1,9 +1,11 @@
 ﻿#include "stdafx.h"
 #include "columnNativeFields.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
+#include "UniqueLibs/productDefaults.hpp"
 #include <QBuffer>
 #include <QFile>
 #include <QImageReader>
+#include <QScopeGuard>
 #include <QtEndian>
 #include <Windows.h>
 #include <winver.h>
@@ -11,6 +13,35 @@
 
 namespace hc::columns
 {
+    namespace
+    {
+        // ZoneId from the Mark-of-the-Web stream. The raw zone sorts; the display names it.
+        CellValue ZoneCell(const std::wstring& Native)
+        {
+            const auto Stream = Native + L":Zone.Identifier";
+            const auto Handle = CreateFileW(Stream.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            if (Handle == INVALID_HANDLE_VALUE) return CellValue::Missing(ValueState::Error, QString::number(GetLastError()));
+            const auto Close = qScopeGuard([Handle] { CloseHandle(Handle); });
+            // The marker is a few lines; a larger stream is not read past this budget.
+            QByteArray Bytes(4096, '\0'); DWORD Read = 0;
+            if (!ReadFile(Handle, Bytes.data(), DWORD(Bytes.size()), &Read, nullptr)) return CellValue::Missing(ValueState::Error, QString::number(GetLastError()));
+            Bytes.truncate(int(Read));
+            // Browsers write ANSI text; a few tools write UTF-16 with a byte-order mark.
+            const auto Text = Bytes.startsWith("\xFF\xFE")
+                ? QString::fromUtf16(reinterpret_cast<const char16_t*>(Bytes.constData() + 2), (Bytes.size() - 2) / 2) : QString::fromUtf8(Bytes);
+            for (const auto& Line : Text.split('\n')) {
+                const auto Equal = Line.indexOf('=');
+                if (Equal < 0 || Line.left(Equal).trimmed().compare("ZoneId", Qt::CaseInsensitive)) continue;
+                bool Valid = false; const auto Zone = Line.mid(Equal + 1).trimmed().toUInt(&Valid);
+                if (!Valid) break;
+                const auto Names = hc::defaults::columnPolicy::ZoneNames();
+                return CellValue::Ready(quint64(Zone)).WithDisplay(Zone < uint(Names.size()) ? QString("%1 (%2)").arg(Names[int(Zone)]).arg(Zone) : QString::number(Zone));
+            }
+            return CellValue::Missing(ValueState::Error, "zone-id-missing");
+        }
+    }
+
     FieldValues ReadNativeFields(const QString& Path, const QString& Family, std::stop_token Stop)
     {
         FieldValues Result;
@@ -20,30 +51,81 @@ namespace hc::columns
         };
         if (Stop.stop_requested()) return Result;
         const auto Native = hc::storage::native::FilePath(Path).toStdWString();
-        if (Family == "allocation" || Family == "link") {
-            const QString Key = Family == "allocation" ? "file.allocatedSize" : "file.linkTarget";
-            const auto Attributes = GetFileAttributesW(Native.c_str());
-            if (Attributes == INVALID_FILE_ATTRIBUTES) return Missing({Key}, ValueState::Error, QString::number(GetLastError()));
-            if (Family == "link" && !(Attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return Missing({Key}, ValueState::Empty);
+        if (Family == "standard") {
+            const QStringList Keys{"file.allocatedSize", "file.hardlink.count"};
+            // Follows a link, like the size column: the target's allocation and its link count.
             const auto Handle = CreateFileW(Native.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-            if (Handle == INVALID_HANDLE_VALUE) return Missing({Key}, ValueState::Error, QString::number(GetLastError()));
-            if (Family == "allocation") {
-                FILE_STANDARD_INFO Info{};
-                if (GetFileInformationByHandleEx(Handle, FileStandardInfo, &Info, sizeof(Info)) && Info.AllocationSize.QuadPart >= 0)
-                    Result[Key] = CellValue::Ready(quint64(Info.AllocationSize.QuadPart));
-                else Missing({Key}, ValueState::Error, QString::number(GetLastError()));
+            if (Handle == INVALID_HANDLE_VALUE) return Missing(Keys, ValueState::Error, QString::number(GetLastError()));
+            const auto Close = qScopeGuard([Handle] { CloseHandle(Handle); });
+            // One call carries both values; nsCmnPath::GetHardLinkCount would query the same count again.
+            FILE_STANDARD_INFO Info{};
+            if (!GetFileInformationByHandleEx(Handle, FileStandardInfo, &Info, sizeof(Info)) || Info.AllocationSize.QuadPart < 0)
+                return Missing(Keys, ValueState::Error, QString::number(GetLastError()));
+            Result[Keys[0]] = CellValue::Ready(quint64(Info.AllocationSize.QuadPart));
+            Result[Keys[1]] = CellValue::Ready(quint64(Info.NumberOfLinks));
+            return Result;
+        }
+        if (Family == "link") {
+            const QStringList Keys{"file.linkTarget", "file.softlink.target", "file.junction.target"};
+            const auto Attributes = GetFileAttributesW(Native.c_str());
+            if (Attributes == INVALID_FILE_ATTRIBUTES) return Missing(Keys, ValueState::Error, QString::number(GetLastError()));
+            if (!(Attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return Missing(Keys, ValueState::Empty);
+            // Opens the reparse point itself: the stored target is read, never followed,
+            // so a dangling link still shows where it points.
+            const auto Handle = CreateFileW(Native.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (Handle == INVALID_HANDLE_VALUE) return Missing(Keys, ValueState::Error, QString::number(GetLastError()));
+            const auto Close = qScopeGuard([Handle] { CloseHandle(Handle); });
+            // Cloud placeholders, dedup and similar tags are not links. The tag alone decides,
+            // so their filters are never asked for reparse data.
+            FILE_ATTRIBUTE_TAG_INFO Tag{};
+            if (!GetFileInformationByHandleEx(Handle, FileAttributeTagInfo, &Tag, sizeof(Tag)))
+                return Missing(Keys, ValueState::Error, QString::number(GetLastError()));
+            if (Tag.ReparseTag != IO_REPARSE_TAG_SYMLINK && Tag.ReparseTag != IO_REPARSE_TAG_MOUNT_POINT) return Missing(Keys, ValueState::Empty);
+            const auto Link = nsCmn::nsCmnPath::ReadReparseLink(Handle);
+            if (!Link.Value) return Missing(Keys, ValueState::Error, QString::number(Link.ErrorCode.ErrorCode));
+            using Kind = nsCmn::nsCmnPath::TyReparseLink;
+            const auto Target = QString::fromStdWString(Link.Value->Target);
+            const auto Cell = [&Target](bool Present) { return Present && !Target.isEmpty() ? CellValue::Ready(Target) : CellValue::Missing(ValueState::Empty); };
+            Result[Keys[0]] = Cell(Link.Value->Kind != Kind::REPARSE_LINK_OTHER);
+            Result[Keys[1]] = Cell(Link.Value->Kind == Kind::REPARSE_LINK_SYMLINK);
+            Result[Keys[2]] = Cell(Link.Value->Kind == Kind::REPARSE_LINK_JUNCTION);
+            return Result;
+        }
+        if (Family == "streams") {
+            const QStringList Keys{"file.alternateDataStream.count", "file.alternateDataStream.names",
+                "file.alternateDataStream.totalSize", "file.alternateDataStream.zone"};
+            QStringList Names; quint64 Count = 0, Bytes = 0; bool Zone = false;
+            WIN32_FIND_STREAM_DATA Data{};
+            const auto Find = FindFirstStreamW(Native.c_str(), FindStreamInfoStandard, &Data, 0);
+            if (Find == INVALID_HANDLE_VALUE) {
+                // A folder without named streams has no stream at all. FAT, exFAT and some
+                // network file systems have no streams to enumerate.
+                const auto Error = GetLastError();
+                if (Error != ERROR_HANDLE_EOF) return Missing(Keys, Error == ERROR_INVALID_PARAMETER || Error == ERROR_INVALID_FUNCTION ||
+                    Error == ERROR_NOT_SUPPORTED ? ValueState::Unsupported : ValueState::Error, QString::number(Error));
             } else {
-                std::wstring Buffer(32768, L'\0');
-                const auto Length = GetFinalPathNameByHandleW(Handle, Buffer.data(), DWORD(Buffer.size()), FILE_NAME_NORMALIZED);
-                if (Length && Length < Buffer.size()) {
-                    auto Target = QString::fromWCharArray(Buffer.data(), int(Length));
-                    if (Target.startsWith("\\\\?\\UNC\\")) Target = "\\\\" + Target.mid(8);
-                    else if (Target.startsWith("\\\\?\\")) Target = Target.mid(4);
-                    Result[Key] = CellValue::Ready(Target);
-                } else Missing({Key}, ValueState::Error, QString::number(GetLastError()));
+                const auto Close = qScopeGuard([Find] { FindClose(Find); });
+                do {
+                    if (Stop.stop_requested()) return Result;
+                    // ":name:$DATA". The unnamed "::$DATA" stream is the file body, not an ADS.
+                    auto Name = QString::fromWCharArray(Data.cStreamName);
+                    if (!Name.compare("::$DATA", Qt::CaseInsensitive)) continue;
+                    if (Name.endsWith(":$DATA", Qt::CaseInsensitive)) Name.chop(6);
+                    if (Name.startsWith(':')) Name.remove(0, 1);
+                    ++Count; Bytes += quint64(std::max<LONGLONG>(0, Data.StreamSize.QuadPart));
+                    Zone |= !Name.compare("Zone.Identifier", Qt::CaseInsensitive);
+                    if (Names.size() < 64) Names.append(Name);
+                } while (FindNextStreamW(Find, &Data));
+                if (const auto Error = GetLastError(); Error != ERROR_HANDLE_EOF) return Missing(Keys, ValueState::Error, QString::number(Error));
             }
-            CloseHandle(Handle); return Result;
+            Result[Keys[0]] = CellValue::Ready(Count);
+            Result[Keys[1]] = Names.isEmpty() ? CellValue::Missing(ValueState::Empty)
+                : CellValue::Ready(Names.join(", ") + (Count > quint64(Names.size()) ? QStringLiteral(", …") : QString{}));
+            Result[Keys[2]] = CellValue::Ready(Bytes);
+            Result[Keys[3]] = Zone ? ZoneCell(Native) : CellValue::Missing(ValueState::Empty);
+            return Result;
         }
         if (Family == "version") {
             const QStringList Keys{"file.fileVersion", "file.productVersion", "file.productName", "file.company", "file.description"};

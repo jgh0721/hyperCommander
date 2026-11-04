@@ -80,6 +80,8 @@ public:
     int TwoLineTextIndent() const;
     bool IsPanelActive() const { return panelActive_; }
     QModelIndexList VisibleSourceRows(int Overscan = 0) const;
+    // Source rows below the viewport, up to Screens screen heights, in view order.
+    QModelIndexList AheadSourceRows(int Screens) const;
     void RecordStartupPaint(const QModelIndex& Index,int Part);
     void StartupPaintCompleted();
     bool IsTwoLine() const;

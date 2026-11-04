@@ -1224,7 +1224,10 @@ namespace hc::defaults
                  { "autoWidthDip",            640 },
                  { "autoClippedPercent",      25 },
                  { "density",                 "normal" },
-                 { "nameElide",               "keep-extension" } };
+                 { "nameElide",               "keep-extension" },
+                 // Field conditions of file color rules and item selection on UNC paths and mapped
+                 // network drives: "off", "builtIn" (no plugin fields) or "all".
+                 { "networkFieldConditions",  "builtIn" } };
     }
     inline QJsonObject Thumbnails()
     {
@@ -1379,6 +1382,10 @@ namespace hc::defaults
             {"pluginRecord", QJsonObject{{"hostEnabled", false}, {"invalidHostEnabled", true}, {"hostReviewed", QJsonObject{}}}},
             {"builtinApplication", QJsonObject{{"enabled", true}, {"mode", "all"}}},
             {"fileColorGroup", QJsonObject{{"enabled", true}, {"autoDark", false}}},
+            // Rows whose field conditions are still being read. Warm neutrals: distinct from the list
+            // backgrounds (#FFFFFF / #181C23) and from the blue cursor and selection colors.
+            {"fileColorPending", QJsonObject{{"light", QJsonObject{{"background", "#F3F1EC"}, {"marker", "#B7791F"}}},
+                {"dark", QJsonObject{{"background", "#2A2924"}, {"marker", "#D9A44A"}}}}},
             {"fileColorRules", QJsonObject{{"version", 1}, {"mode", "first"}, {"groups", QJsonArray{}}}},
             {"workspace", QJsonObject{{"defaultExpanded", true}, {"keepAncestors", true}, {"columnVisible", true}}},
             {"rename", QJsonObject{{"name", "[N]"}, {"extension", "[E]"}, {"find", ""}, {"replace", ""},
@@ -1424,23 +1431,36 @@ namespace hc::defaults
 
     namespace columnPolicy {
         using namespace hc::columns;
+    // URLZONE_LOCAL_MACHINE … URLZONE_UNTRUSTED. One list for the ADS zone column and its condition choices.
+    inline QStringList ZoneNames()
+    {
+        return {QObject::tr("내 컴퓨터"), QObject::tr("로컬 인트라넷"), QObject::tr("신뢰할 수 있는 사이트"), QObject::tr("인터넷"), QObject::tr("제한된 사이트")};
+    }
+    // Picker order: groups as listed, fields inside a group as listed. Identity is the id alone,
+    // so regrouping or reordering never changes a saved profile.
     inline QVector<hc::columns::FieldDefinition> ColumnFields()
     {
-        return {{"file.name", QObject::tr("이름 (확장자 포함)"), FieldType::Text},
-            {"file.size", QObject::tr("크기"), FieldType::UnsignedInteger},
-            {"file.created", QObject::tr("만든 날짜"), FieldType::Timestamp},
-            {"file.attributes", QObject::tr("속성"), FieldType::UnsignedInteger},
-            {"file.modified", QObject::tr("수정 날짜"), FieldType::Timestamp},
-            {"file.extension", QObject::tr("확장자"), FieldType::Text},
+        QVector<FieldDefinition> Result;
+        const auto Group = [&Result](const QString& Title, std::initializer_list<FieldDefinition> Fields) {
+            for (auto Field : Fields) { Field.group_ = Title; Result.append(std::move(Field)); }
+        };
+        constexpr auto Slow = EvaluationCost::Background;
+        Group(QObject::tr("이름·형식"), {{"file.name", QObject::tr("이름 (확장자 포함)"), FieldType::Text},
             {"file.stem", QObject::tr("이름 (확장자 제외)"), FieldType::Text},
+            {"file.extension", QObject::tr("확장자"), FieldType::Text},
             {"file.type", QObject::tr("파일 형식 설명"), FieldType::Text},
-            {"file.isDirectory", QObject::tr("폴더 여부"), FieldType::Boolean},
             {"file.kind", QObject::tr("항목 종류"), FieldType::Text},
-            {"file.path", QObject::tr("전체 경로"), FieldType::Text},
+            {"file.isDirectory", QObject::tr("폴더 여부"), FieldType::Boolean}});
+        Group(QObject::tr("크기"), {{"file.size", QObject::tr("크기"), FieldType::UnsignedInteger},
+            {"file.allocatedSize", QObject::tr("디스크 할당 크기"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, Slow}});
+        Group(QObject::tr("날짜·시간"), {{"file.created", QObject::tr("만든 날짜"), FieldType::Timestamp},
+            {"file.modified", QObject::tr("수정 날짜"), FieldType::Timestamp},
+            {"file.accessed", QObject::tr("접근 시각"), FieldType::Timestamp}});
+        Group(QObject::tr("경로"), {{"file.path", QObject::tr("전체 경로"), FieldType::Text},
             {"file.parentPath", QObject::tr("폴더 경로"), FieldType::Text},
             {"file.parentName", QObject::tr("부모 폴더명"), FieldType::Text},
-            {"file.pathLength", QObject::tr("경로 길이"), FieldType::UnsignedInteger},
-            {"file.accessed", QObject::tr("접근 시각"), FieldType::Timestamp},
+            {"file.pathLength", QObject::tr("경로 길이"), FieldType::UnsignedInteger}});
+        Group(QObject::tr("속성"), {{"file.attributes", QObject::tr("속성"), FieldType::UnsignedInteger},
             {"file.readOnly", QObject::tr("읽기 전용"), FieldType::Boolean},
             {"file.hidden", QObject::tr("숨김"), FieldType::Boolean},
             {"file.system", QObject::tr("시스템"), FieldType::Boolean},
@@ -1448,18 +1468,40 @@ namespace hc::defaults
             {"file.compressed", QObject::tr("압축"), FieldType::Boolean},
             {"file.encrypted", QObject::tr("암호화"), FieldType::Boolean},
             {"file.sparse", QObject::tr("희소 파일"), FieldType::Boolean},
-            {"file.offline", QObject::tr("오프라인"), FieldType::Boolean},
-            {"file.allocatedSize", QObject::tr("디스크 할당 크기"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.linkTarget", QObject::tr("링크 대상"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.fileVersion", QObject::tr("파일 버전"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.productVersion", QObject::tr("제품 버전"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.productName", QObject::tr("제품 이름"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.company", QObject::tr("회사"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.description", QObject::tr("파일 설명"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.imageWidth", QObject::tr("이미지 가로"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.imageHeight", QObject::tr("이미지 세로"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.imageDimensions", QObject::tr("이미지 규격"), FieldType::Text, ProviderKind::BuiltIn, EvaluationCost::Background},
-            {"file.imageBitDepth", QObject::tr("이미지 비트 깊이"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, EvaluationCost::Background}};
+            {"file.offline", QObject::tr("오프라인"), FieldType::Boolean}});
+        // file.linkTarget is whichever of the symbolic-link and junction targets exists.
+        Group(QObject::tr("링크"), {{"file.linkTarget", QObject::tr("링크 대상"), FieldType::Text, ProviderKind::BuiltIn, Slow},
+            {"file.softlink.target", QObject::tr("SL 대상"), FieldType::Text, ProviderKind::BuiltIn, Slow},
+            {"file.junction.target", QObject::tr("JC 대상"), FieldType::Text, ProviderKind::BuiltIn, Slow},
+            {"file.hardlink.count", QObject::tr("HL 수량"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, Slow}});
+        // Named streams only: the unnamed ::$DATA stream is the file body.
+        Group(QObject::tr("대체 데이터 스트림"), {{"file.alternateDataStream.count", QObject::tr("ADS 수량"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, Slow},
+            {"file.alternateDataStream.names", QObject::tr("ADS 목록"), FieldType::Text, ProviderKind::BuiltIn, Slow},
+            {"file.alternateDataStream.totalSize", QObject::tr("ADS 크기"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, Slow},
+            {"file.alternateDataStream.zone", QObject::tr("ADS 인터넷 존"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, Slow}});
+        Group(QObject::tr("버전 정보"), {{"file.fileVersion", QObject::tr("파일 버전"), FieldType::Text, ProviderKind::BuiltIn, Slow},
+            {"file.productVersion", QObject::tr("제품 버전"), FieldType::Text, ProviderKind::BuiltIn, Slow},
+            {"file.productName", QObject::tr("제품 이름"), FieldType::Text, ProviderKind::BuiltIn, Slow},
+            {"file.company", QObject::tr("회사"), FieldType::Text, ProviderKind::BuiltIn, Slow},
+            {"file.description", QObject::tr("파일 설명"), FieldType::Text, ProviderKind::BuiltIn, Slow}});
+        Group(QObject::tr("이미지"), {{"file.imageWidth", QObject::tr("이미지 가로"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, Slow},
+            {"file.imageHeight", QObject::tr("이미지 세로"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, Slow},
+            {"file.imageDimensions", QObject::tr("이미지 규격"), FieldType::Text, ProviderKind::BuiltIn, Slow},
+            {"file.imageBitDepth", QObject::tr("이미지 비트 깊이"), FieldType::UnsignedInteger, ProviderKind::BuiltIn, Slow}});
+        const QStringList Bytes{"file.size", "file.allocatedSize", "file.alternateDataStream.totalSize"};
+        const QStringList Pixels{"file.imageWidth", "file.imageHeight"};
+        const QStringList Counts{"file.hardlink.count", "file.alternateDataStream.count"};
+        for (auto& Field : Result) {
+            if (Bytes.contains(Field.id_)) Field.unit_ = FieldUnit::Bytes;
+            else if (Pixels.contains(Field.id_)) Field.unit_ = FieldUnit::Pixels;
+            else if (Counts.contains(Field.id_)) Field.unit_ = FieldUnit::Count;
+            else if (Field.id_ == "file.pathLength") Field.unit_ = FieldUnit::Characters;
+            else if (Field.id_ == "file.alternateDataStream.zone") {
+                const auto Names = ZoneNames();
+                for (int Zone = 0; Zone < Names.size(); ++Zone) Field.choices_.append({QString::number(Zone), QStringLiteral("%1 (%2)").arg(Names[Zone]).arg(Zone)});
+            }
+        }
+        return Result;
     }
     inline const QUuid BuiltInProfileId{"a4ea8e7c-b621-4db7-bc79-b37dab6e7b8d"};
     inline hc::columns::ColumnProfile DefaultColumnProfile()
@@ -1473,12 +1515,19 @@ namespace hc::defaults
             "e09a576b-14c3-4680-9bea-a0745bcdb9e3", "5753b771-d0a5-4a8b-a00e-f41ba091275a",
             "db962c8f-412a-442b-8cc8-a46f3cd4e7f8", "050d3fe3-b4ce-4a03-b42c-b78d207d3623",
             "0c00423a-e4b7-4e90-8cf2-706b0f2b0a6e", "128c32c8-1a12-4c9b-bb90-fad63f676f25"}};
+        // Named, not indexed: ColumnFields() is ordered for the picker, not for this profile.
+        const std::array<const char*, 8> FieldIds{{"file.name", "file.size", "file.created", "file.attributes",
+            "file.modified", "file.extension", "file.stem", "file.type"}};
         const auto Fields = ColumnFields();
+        const auto TitleOf = [&Fields](const QString& Id) {
+            for (const auto& Field : Fields) if (Field.id_ == Id) return Field.title_;
+            return QString{};
+        };
         for (int Index = 0; Index < int(Ids.size()); ++Index) {
             ColumnDefinition Column;
             Column.id_ = QUuid(Ids[Index]);
-            Column.fieldId_ = Fields[Index].id_;
-            Column.title_ = Index == 0 ? QObject::tr("이름") : Index == 7 ? QObject::tr("종류") : Fields[Index].title_;
+            Column.fieldId_ = FieldIds[Index];
+            Column.title_ = Index == 0 ? QObject::tr("이름") : Index == 7 ? QObject::tr("종류") : TitleOf(Column.fieldId_);
             Column.alignment_ = Index == 1 ? Qt::AlignRight : Index == 2 || Index == 3 || Index == 4 ? Qt::AlignCenter : Qt::AlignLeft;
             if (Index == 1) Column.format_.size_ = SizeFormat::Adaptive;
             hc::view::ColumnWidthPolicy Width;

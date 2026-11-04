@@ -17,9 +17,17 @@ namespace hc::columns
         if (IsPluginField(Field)) return Field;
         if (Field.startsWith("file.image")) return "image";
         if (QStringList{"file.fileVersion", "file.productVersion", "file.productName", "file.company", "file.description"}.contains(Field)) return "version";
-        if (Field == "file.allocatedSize") return "allocation";
-        if (Field == "file.linkTarget") return "link";
+        // One OS read per family fills every field in it.
+        if (Field == "file.allocatedSize" || Field == "file.hardlink.count") return "standard";
+        if (Field == "file.linkTarget" || Field == "file.softlink.target" || Field == "file.junction.target") return "link";
+        if (Field.startsWith("file.alternateDataStream.")) return "streams";
         return {};
+    }
+    // Folders carry reparse data and named streams, but no payload, version resource or image header.
+    inline bool QueriesFolders(const QString& Field)
+    {
+        const auto Family = QueryFamily(Field);
+        return Family == "link" || Family == "streams" || IsPluginField(Field);
     }
     // GUI-owned queue/cache. Workers own immutable inputs and a stop token only.
     // Destroying a tab never joins an OS metadata call or posts to a dead model.
