@@ -118,6 +118,17 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
         Combo(Display, "appearance/documentWorkspace/" + Key, Key == "mainMenuMode" ? tr("메뉴 표시") : tr("도구모음 표시"), {tr("뷰 권장값"), tr("표시"), tr("숨기기")}, {"recommended", "show", "hide"});
     auto* WindowCard = Card(General, tr("창"));
     Check(WindowCard, "documentViews/common/closeViewerOnEscape", tr("ESC 키를 눌러 창 닫기 (HyperViewer 전용)"));
+    auto* Recent = Card(General, tr("최근 항목"));
+    Check(Recent, "documentViews/recent/enabled", tr("최근 항목 기록"));
+    {
+        auto* Field = new QSpinBox(this); Field->setRange(0, 15); Field->setObjectName("documentViews/recent/menuCount");
+        Field->setProperty("defaultValue", hc::defaults::edit::SettingValue("documentViews/recent/menuCount")); controls_[Field->objectName()] = Field;
+        Recent->addRow(tr("파일 메뉴에 표시할 개수"), Field);
+    }
+    Note(Recent, tr("0이면 파일 메뉴의 최근 항목 구획을 숨깁니다. 기록을 끄면 새 기록만 멈추고, 있던 목록은 지우기 전까지 남습니다. HyperEditor와 HyperViewer가 같은 목록을 씁니다."));
+    auto* ClearRecent = new QPushButton(tr("최근 항목 지우기…"), this); ClearRecent->setObjectName("settingsClearRecent");
+    auto* ClearRow = new QHBoxLayout; ClearRow->addWidget(ClearRecent); ClearRow->addStretch(); Recent->addRow(ClearRow);
+    connect(ClearRecent, &QPushButton::clicked, this, &DocumentSettingsDialog::ClearRecentRequested);
     auto* Files = Card(General, tr("설정 파일"));
     auto* Location = new QLabel(tr("설정 파일: %1").arg(QDir::toNativeSeparators(path_)), this); Location->setWordWrap(true); Location->setTextInteractionFlags(Qt::TextSelectableByMouse); Files->addRow(Location);
     auto* Import = new QPushButton(tr("기존 설정 가져오기…"), this); auto* ImportRow = new QHBoxLayout; ImportRow->addWidget(Import); ImportRow->addStretch(); Files->addRow(ImportRow);

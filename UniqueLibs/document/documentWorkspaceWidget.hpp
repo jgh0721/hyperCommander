@@ -114,6 +114,9 @@ namespace hc::document
         QMainWindow* searchHost_ = nullptr;
         QDockWidget* searchDock_ = nullptr;
         QString searchDocument_, searchPlacement_;
+        // The EPUB editor whose problems panel hosts 파일에서 찾기 ("epubProblems" placement).
+        QPointer<QWidget> searchEpubHost_;
+        void syncSearchHost();
         std::unique_ptr<DocumentWindowSize> windowSize_;
         void refreshPreferences();
         void externalChange(const QString& Path, bool Missing);

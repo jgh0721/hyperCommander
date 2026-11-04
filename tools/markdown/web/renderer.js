@@ -245,14 +245,18 @@ function anchorY(line, column) {
     }
     return lineTop(line);
 }
+// The DOM caret (text node and offset) at a viewport point.
+function caretAt(x, y) {
+    const position = document.caretPositionFromPoint?.(x, y);
+    if (position) return {node: position.offsetNode, at: position.offset};
+    const range = document.caretRangeFromPoint?.(x, y);
+    return {node: range?.startContainer || null, at: range?.startOffset || 0};
+}
 // The source character at the preview's reference height and the top of its rendered line.
 function previewAnchor(height = innerHeight * .5) {
     const fallback = () => ({line: interpolate('y', scrollY + height, 'line'), column: null, offset: height});
     const content = root.getBoundingClientRect(), x = content.left + (parseFloat(getComputedStyle(root).paddingLeft) || 0) + 2;
-    let node = null, at = 0;
-    const position = document.caretPositionFromPoint?.(x, height);
-    if (position) { node = position.offsetNode; at = position.offset; }
-    else { const range = document.caretRangeFromPoint?.(x, height); node = range?.startContainer; at = range?.startOffset || 0; }
+    const {node, at} = caretAt(x, height);
     if (!node || node.nodeType !== Node.TEXT_NODE || !root.contains(node)) return fallback();
     const element = node.parentElement.closest('[data-line]'), block = element && blockOf.get(element);
     if (!block) return fallback();
@@ -261,6 +265,18 @@ function previewAnchor(height = innerHeight * .5) {
     const index = Math.min(a.total - 1, entry.start + Math.min(at, node.data.length - 1)), box = charBox(node, index - entry.start);
     if (!box || box.bottom < 0 || box.top > innerHeight) return fallback();
     return {...sourceLineColumn(a.offsets[index]), offset: box.top};
+}
+// The source position under a viewport point: the character where it resolves, otherwise the
+// block's first line, otherwise the interpolated line. Line 0 means no rendered content.
+function sourceAt(x, y) {
+    if (!blocks.length) return {line: 0, column: null};
+    const {node, at} = caretAt(x, y);
+    const element = (node?.nodeType === Node.TEXT_NODE ? node.parentElement : document.elementFromPoint(x, y))?.closest?.('[data-line]');
+    const block = element && root.contains(element) ? blockOf.get(element) : null;
+    if (!block) return {line: Math.max(1, interpolate('y', scrollY + y, 'line')), column: null};
+    const a = alignment(block), entry = node?.nodeType === Node.TEXT_NODE ? a.nodes.find(n => n.node === node) : null;
+    if (!entry || !a.total) return {line: block.line, column: null};
+    return sourceLineColumn(a.offsets[Math.min(a.total - 1, entry.start + Math.max(0, Math.min(at, node.data.length - 1)))]);
 }
 
 // ---- Applying and reporting positions -------------------------------------------------------
@@ -420,6 +436,18 @@ root.addEventListener('click',e=>{
     const hit=previewAnchor(e.clientY),exact=hit.column!==null&&Math.abs(hit.offset-e.clientY)<64;
     report({type:'position',line:exact?hit.line:Number(block.dataset.line),column:exact?hit.column:null,offset:exact?hit.offset:e.clientY});
 });
+// The host draws a themed menu instead of Chromium's. x and y are CSS px in the viewport; line and
+// column are in the displayed revision. Without the bridge (still loading) Chromium's own request
+// reaches the host's fallback, so the event is left alone.
+addEventListener('contextmenu',e=>{
+    if(!bridge)return;
+    e.preventDefault();
+    const link=e.target.closest?.('a[href]'),href=link?.getAttribute('href')||'',hit=sourceAt(e.clientX,e.clientY);
+    let fragment='';if(href.startsWith('#'))try{fragment=decodeURIComponent(href.slice(1));}catch{fragment=href.slice(1);}
+    // The host only needs to know a selection exists; a whole-document selection must not fill the pipe.
+    report({type:'context',x:e.clientX,y:e.clientY,selection:String(getSelection()||'').slice(0,1024),link:link?link.href:'',
+        fragment,line:hit.line,column:hit.column});
+});
 if(window.qt)new QWebChannel(qt.webChannelTransport,channel=>{
     bridge=channel.objects.markdown;
     bridge.request.connect(s=>{
@@ -435,6 +463,9 @@ if(window.qt)new QWebChannel(qt.webChannelTransport,channel=>{
             const b=blockFor(r.line);
             if(b){root.querySelectorAll('.current').forEach(x=>x.classList.remove('current'));b.e.classList.add('current');if(r.reveal!==false)scrollToLine(r.line);}
             emitPosition();
+        } else if(r.type==='anchor'){
+            // An in-document link opened from the host's context menu, as a click would.
+            if(displayedRevision===revision)document.getElementById(r.id)?.scrollIntoView();
         }
     });
     report({type:'ready'});

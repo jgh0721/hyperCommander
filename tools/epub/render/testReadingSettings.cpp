@@ -20,6 +20,8 @@
 #include <QTemporaryDir>
 #include <QFileDialog>
 #include <QTreeWidget>
+#include <QListWidget>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QtTest>
 
@@ -135,6 +137,16 @@ private slots:
         auto* Toc=Navigation.findChild<QTreeWidget*>("epubToc");QVERIFY(Toc);QCOMPARE(Toc->topLevelItemCount(),1);QCOMPARE(Toc->topLevelItem(0)->childCount(),1);
         QVERIFY(!Navigation.Execute("toc",1));Navigation.Poll({{"status","ready"},{"tocIndex",1}});
         QCOMPARE(Toc->currentItem()->text(0),QString("절"));QVERIFY(Navigation.Execute("toc",1));QCOMPARE(Request["action"].toString(),QString("toc"));QCOMPARE(Request["value"].toInt(),1);QVERIFY(!Navigation.Execute("toc",9));
+    }
+    void panelListsFillAndOfferMenus() {
+        // Whole tab names, lists without a height cap, item menus, and a search started elsewhere shows its query.
+        QJsonObject Request;hc::epub::poc::ReadingNavigation Navigation({},book,[&](const QJsonObject& Value){Request=Value;});
+        auto* Tabs=Navigation.findChild<QTabWidget*>();QVERIFY(Tabs);QVERIFY(Tabs->usesScrollButtons());QCOMPARE(Tabs->elideMode(),Qt::ElideNone);
+        QVERIFY(Navigation.minimumSizeHint().width()>=Tabs->tabBar()->sizeHint().width());
+        for(const auto* Name:{"epubSearchResults","epubBookmarks","epubAnnotations"}){auto* List=Navigation.findChild<QListWidget*>(Name);QVERIFY(List);QCOMPARE(List->maximumHeight(),QWIDGETSIZE_MAX);}
+        for(const auto* Name:{"epubToc","epubSearchResults","epubBookmarks"}){auto* List=Navigation.findChild<QAbstractItemView*>(Name);QVERIFY(List);QCOMPARE(List->contextMenuPolicy(),Qt::CustomContextMenu);}
+        Navigation.Poll({{"status","ready"},{"locator","epubcfi(/6/2!/4/2:0)"}});QVERIFY(Navigation.Execute("search",QStringLiteral("바람")));
+        QCOMPARE(Request["action"].toString(),QString("search"));QCOMPARE(Navigation.findChild<QLineEdit*>("epubSearch")->text(),QStringLiteral("바람"));
     }
     void imeAndAccessibleControls() {
         QJsonObject Request;hc::epub::poc::ReadingNavigation Navigation({},QString(64,'a'),[&](const QJsonObject& Value){Request=Value;});Navigation.show();

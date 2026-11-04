@@ -5,6 +5,7 @@
 #include "core/AppSettings.h"
 #include <QApplication>
 #include <QComboBox>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -24,7 +25,7 @@ namespace hc::document
 {
 namespace
 {
-enum class Glyph { Previous, Next, Up, Down, PreviousVolume, NextVolume, Pages, Minus, Plus, Pin, More };
+enum class Glyph { Previous, Next, Up, Down, PreviousVolume, NextVolume, Pages, Minus, Plus, Pin, More, ExitFullscreen };
 QIcon NavigatorIcon(Glyph Value)
 {
     QIcon Icon;
@@ -62,6 +63,14 @@ QIcon NavigatorIcon(Glyph Value)
             P.setPen(Qt::NoPen); P.setBrush(QColor("#f1f4f8"));
             for (int X : {5, 12, 19}) P.drawEllipse(QPointF(X, 12), 1.5, 1.5);
         }
+        else if (Value == Glyph::ExitFullscreen) {
+            // Four corners turned inward.
+            for (const auto &Corner : {QPointF(9, 9), QPointF(15, 9), QPointF(9, 15), QPointF(15, 15)}) {
+                const qreal X = Corner.x() < 12 ? -5 : 5, Y = Corner.y() < 12 ? -5 : 5;
+                const QPointF Arms[] = {QPointF(Corner.x(), Corner.y() + Y), Corner, QPointF(Corner.x() + X, Corner.y())};
+                P.drawPolyline(Arms, 3);
+            }
+        }
         else {
             QPainterPath Path;
             Path.moveTo(10, 3); Path.lineTo(20, 13); Path.lineTo(16, 13); Path.lineTo(13, 16);
@@ -79,20 +88,7 @@ ImageReadingNavigator::ImageReadingNavigator(ImageReadingView *Reader) : QWidget
     setObjectName("imageReadingNavigator");
     setAccessibleName(tr("읽기 네비게이터"));
     setAutoFillBackground(false);
-    setStyleSheet(QStringLiteral(
-        "#imageReadingNavigator { color: #f1f4f8; }"
-        "#imageReadingNavigator QToolButton { background: #252a32; border: 1px solid #59616d; border-radius: 18px; padding: 0px; }"
-        "#imageReadingNavigator QToolButton:hover, #imageReadingNavigator QToolButton:focus { background: #404b59; border-color: #86b7e7; }"
-        "#imageReadingNavigator QToolButton:checked { background: #35516d; border-color: #86b7e7; }"
-        "#imageReadingNavigator QToolButton:disabled { background: transparent; }"
-        "#imageReadingNavigator QComboBox { color: #f1f4f8; background: #282d35; border: 1px solid #59616d; border-radius: 7px; padding: 4px 8px; }"
-        "#imageReadingNavigator QComboBox:focus { border-color: #86b7e7; }"
-        "#imageReadingNavigator QComboBox QAbstractItemView { color: #f1f4f8; background: #282d35; selection-background-color: #35516d; }"
-        "#imageReadingNavigator QLabel { color: #f1f4f8; background: transparent; }"
-        "#imageReadingNavigator QSlider { background: transparent; min-height: 24px; }"
-        "#imageReadingNavigator QSlider::groove:horizontal { height: 6px; background: #545960; border-radius: 3px; }"
-        "#imageReadingNavigator QSlider::sub-page:horizontal { background: #86b7e7; border-radius: 3px; }"
-        "#imageReadingNavigator QSlider::handle:horizontal { width: 16px; margin: -5px 0; background: #f1f4f8; border-radius: 8px; }"));
+    setStyleSheet(OverlayStyleSheet(objectName()));
     auto *Layout = new QVBoxLayout(this);
     Layout->setContentsMargins(20, 9, 20, 10); Layout->setSpacing(4);
     Layout->setSizeConstraint(QLayout::SetNoConstraint);
@@ -112,7 +108,8 @@ ImageReadingNavigator::ImageReadingNavigator(ImageReadingView *Reader) : QWidget
     };
     pages_ = Button("imageNavigatorPages", tr("페이지 목록"), Glyph::Pages);
     mode_ = new QComboBox(this); mode_->setObjectName("imageNavigatorMode"); mode_->setAccessibleName(tr("읽기 모드"));
-    mode_->addItems({tr("코믹"), tr("웹툰")}); Buttons->addWidget(mode_);
+    // Item order is the mode value minus one (ModeRequested); only the labels follow the menu terms.
+    mode_->addItems({tr("만화"), tr("웹툰")}); Buttons->addWidget(mode_);
     Buttons->addStretch();
     previousVolume_ = Button("imageNavigatorPreviousVolume", tr("이전 권"), Glyph::PreviousVolume);
     previous_ = Button("imageNavigatorPrevious", tr("이전 쪽"), Glyph::Previous);
@@ -123,7 +120,7 @@ ImageReadingNavigator::ImageReadingNavigator(ImageReadingView *Reader) : QWidget
     next_ = Button("imageNavigatorNext", tr("다음 쪽"), Glyph::Next);
     nextVolume_ = Button("imageNavigatorNextVolume", tr("다음 권"), Glyph::NextVolume);
     Buttons->addStretch();
-    pin_ = Button("imageNavigatorPin", tr("네비게이터 고정"), Glyph::Pin); pin_->setCheckable(true);
+    pin_ = Button("imageNavigatorPin", tr("탐색 막대 고정"), Glyph::Pin); pin_->setCheckable(true);
     pin_->setChecked(AppSettings().value("imageView/navigatorPinned").toBool());
     more_ = Button("imageNavigatorMore", tr("읽기 설정"), Glyph::More); more_->setPopupMode(QToolButton::InstantPopup);
     Layout->addLayout(Buttons);
@@ -140,11 +137,12 @@ ImageReadingNavigator::ImageReadingNavigator(ImageReadingView *Reader) : QWidget
     });
     connect(this, &ImageReadingNavigator::ModeRequested, Reader, [Reader](int Mode) { Reader->SetMode(ImageReadingView::Mode(Mode)); });
     connect(fit_, &QComboBox::activated, Reader, &ImageReadingView::SetFit);
-    connect(pages_, &QToolButton::clicked, this, &ImageReadingNavigator::showPages);
+    connect(pages_, &QToolButton::clicked, this, &ImageReadingNavigator::ShowPages);
     connect(pin_, &QToolButton::toggled, this, [this](bool On) {
         if (!reader_->State()["private"].toBool() && !qApp->property("privateReading").toBool())
             AppSettings().setValue("imageView/navigatorPinned", On);
         Reveal();
+        emit PinnedChanged(On);
     });
     // Seeking on release avoids decoding every page passed while dragging.
     connect(progress_, &QSlider::sliderReleased, this, [this] {
@@ -158,12 +156,55 @@ ImageReadingNavigator::ImageReadingNavigator(ImageReadingView *Reader) : QWidget
     idle_.setSingleShot(true); idle_.setInterval(2200);
     message_.setSingleShot(true); message_.setInterval(5000);
     connect(&message_, &QTimer::timeout, this, &ImageReadingNavigator::Sync);
-    connect(&idle_, &QTimer::timeout, this, &ImageReadingNavigator::hideIdle);
+    connect(&idle_, &QTimer::timeout, this, &ImageReadingNavigator::HideIdle);
     qApp->installEventFilter(this);
     hide();
 }
 ImageReadingNavigator::~ImageReadingNavigator() { qApp->removeEventFilter(this); }
 void ImageReadingNavigator::SetOptionsMenu(QMenu *Menu) { more_->setMenu(Menu); }
+bool ImageReadingNavigator::Pinned() const { return pin_->isChecked(); }
+void ImageReadingNavigator::SetPinned(bool On) { pin_->setChecked(On); }
+QString ImageReadingNavigator::OverlayStyleSheet(const QString &Root)
+{
+    return QStringLiteral(
+        "#%1 { color: #f1f4f8; }"
+        "#%1 QToolButton { color: #f1f4f8; background: #252a32; border: 1px solid #59616d; border-radius: 18px; padding: 0px; }"
+        "#%1 QToolButton:hover, #%1 QToolButton:focus { background: #404b59; border-color: #86b7e7; }"
+        "#%1 QToolButton:checked { background: #35516d; border-color: #86b7e7; }"
+        "#%1 QToolButton:disabled { color: #8a929c; background: transparent; }"
+        "#%1 QComboBox { color: #f1f4f8; background: #282d35; border: 1px solid #59616d; border-radius: 7px; padding: 4px 8px; }"
+        "#%1 QComboBox:focus { border-color: #86b7e7; }"
+        "#%1 QComboBox QAbstractItemView { color: #f1f4f8; background: #282d35; selection-background-color: #35516d; }"
+        "#%1 QLabel { color: #f1f4f8; background: transparent; }"
+        "#%1 QSlider { background: transparent; min-height: 24px; }"
+        "#%1 QSlider::groove:horizontal { height: 6px; background: #545960; border-radius: 3px; }"
+        "#%1 QSlider::sub-page:horizontal { background: #86b7e7; border-radius: 3px; }"
+        "#%1 QSlider::handle:horizontal { width: 16px; margin: -5px 0; background: #f1f4f8; border-radius: 8px; }").arg(Root);
+}
+QIcon ImageReadingNavigator::OverlayIcon(const QString &Name)
+{
+    static const QHash<QString, Glyph> Glyphs{
+        {"previous", Glyph::Previous}, {"next", Glyph::Next}, {"up", Glyph::Up}, {"down", Glyph::Down},
+        {"previousVolume", Glyph::PreviousVolume}, {"nextVolume", Glyph::NextVolume}, {"pages", Glyph::Pages},
+        {"minus", Glyph::Minus}, {"plus", Glyph::Plus}, {"pin", Glyph::Pin}, {"more", Glyph::More},
+        {"exitFullscreen", Glyph::ExitFullscreen}};
+    const auto Found = Glyphs.constFind(Name);
+    return Found == Glyphs.constEnd() ? QIcon() : NavigatorIcon(*Found);
+}
+void ImageReadingNavigator::PaintOverlay(QPainter &Painter, const QRectF &Rect, qreal Radius, int Shadow)
+{
+    Painter.save();
+    Painter.setRenderHint(QPainter::Antialiasing);
+    // Stacked translucent outlines give a soft drop shadow that separates the glass from bright pages.
+    Painter.setPen(Qt::NoPen);
+    for (int I = Shadow; I > 0; --I) {
+        Painter.setBrush(QColor(0, 0, 0, 9));
+        Painter.drawRoundedRect(Rect.adjusted(-I, -I + 2, I, I + 2), Radius + I, Radius + I);
+    }
+    Painter.setPen(QPen(QColor(140, 152, 168, 150), 1)); Painter.setBrush(QColor(29, 33, 39, 238));
+    Painter.drawRoundedRect(Rect.adjusted(.5, .5, -.5, -.5), Radius, Radius);
+    Painter.restore();
+}
 void ImageReadingNavigator::Sync()
 {
     const auto S = reader_->State();
@@ -200,7 +241,9 @@ void ImageReadingNavigator::Sync()
         previous_->setIcon(NavigatorIcon(Webtoon ? Glyph::Up : Glyph::Previous));
         next_->setIcon(NavigatorIcon(Webtoon ? Glyph::Down : Glyph::Next));
         previous_->setToolTip(Webtoon ? tr("이전 화면") : tr("이전 쪽")); next_->setToolTip(Webtoon ? tr("다음 화면") : tr("다음 쪽"));
-        previous_->setAccessibleName(previous_->toolTip()); next_->setAccessibleName(next_->toolTip());
+        // A webtoon volume is an episode (회차), as in the 웹툰 menu.
+        previousVolume_->setToolTip(Webtoon ? tr("이전 회차") : tr("이전 권")); nextVolume_->setToolTip(Webtoon ? tr("다음 회차") : tr("다음 권"));
+        for (auto *Button : {previous_, next_, previousVolume_, nextVolume_}) Button->setAccessibleName(Button->toolTip());
     }
     position();
     if (!WasEligible || lastMode_ != Mode || NewError) Reveal();
@@ -224,7 +267,7 @@ void ImageReadingNavigator::Reveal()
     if (!eligible_) return;
     position(); show(); raise(); reader_->window()->unsetCursor(); idle_.start();
 }
-void ImageReadingNavigator::hideIdle()
+void ImageReadingNavigator::HideIdle()
 {
     auto *Focus = QApplication::focusWidget();
     if (pin_->isChecked() || underMouse() || (Focus && (Focus == this || isAncestorOf(Focus))) ||
@@ -263,9 +306,12 @@ bool ImageReadingNavigator::eventFilter(QObject *Object, QEvent *Event)
 }
 void ImageReadingNavigator::paintEvent(QPaintEvent *)
 {
-    QPainter P(this); P.setRenderHint(QPainter::Antialiasing);
-    P.setPen(QPen(QColor(140, 152, 168, 150), 1)); P.setBrush(QColor(29, 33, 39, 238));
-    P.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), 30, 30);
+    QPainter P(this);
+    PaintOverlay(P, QRectF(rect()), 30);
+}
+void ImageReadingNavigator::ShowPages()
+{
+    Reveal(); showPages();
 }
 void ImageReadingNavigator::showPages()
 {
@@ -279,7 +325,10 @@ void ImageReadingNavigator::showPages()
     connect(List, &QListWidget::itemActivated, &Menu, [this, List, &Menu] { reader_->GoTo(List->currentRow()); Menu.close(); });
     connect(List, &QListWidget::itemClicked, &Menu, [this, List, &Menu] { reader_->GoTo(List->currentRow()); Menu.close(); });
     QTimer::singleShot(0, List, [List] { List->setFocus(); });
-    Menu.exec(pages_->mapToGlobal(QPoint(0, -List->height())));
+    // Without the navigator (single page layout, hidden bar) the list opens over the page instead.
+    const auto Viewport = reader_->viewport();
+    Menu.exec(pages_->isVisible() ? pages_->mapToGlobal(QPoint(0, -List->height()))
+                                  : Viewport->mapToGlobal(QPoint((Viewport->width() - List->width()) / 2, (Viewport->height() - List->height()) / 2)));
     reader_->setFocus(); Reveal();
 }
 } // namespace hc::document

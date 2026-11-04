@@ -26,6 +26,9 @@
 #include <QtEndian>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QContextMenuEvent>
+#include <QKeySequence>
+#include <memory>
 #include <QScopeGuard>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -917,25 +920,45 @@ class ImageReadingTests : public QObject
     }
     void fullscreenUsesSelectedReader()
     {
+        const auto Private = qApp->property("privateReading");
+        qApp->setProperty("privateReading", true);
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("privateReading", Private); });
         QTemporaryDir Root;
-        Fixture(Root.path());
-        auto Book = OpenImageBook(Root.path());
+        Fixture(Root.filePath("first"), 2);
+        Fixture(Root.filePath("second"), 3);
+        auto First = OpenImageBook(Root.filePath("first"));
+        auto Second = OpenImageBook(Root.filePath("second"));
+        QVERIFY(First.HasValue() && Second.HasValue());
         QWidget W;
         W.resize(600, 400);
         auto *A = new ImageReadingView(&W);
         auto *B = new ImageReadingView(&W);
-        A->Load(Book.Value(), Picture());
-        B->Load(Book.Value(), Picture());
+        A->SetPrivate(true);
+        B->SetPrivate(true);
+        A->Load(First.Value(), Picture());
+        B->Load(Second.Value(), Picture());
+        B->SetMode(ImageReadingView::Comic);
         A->hide();
         B->setGeometry(W.rect());
         B->show();
         W.show();
         ImageFullscreen F(&W, [B] { return B; });
         F.Enter();
-        auto *Controls = W.findChild<QToolBar *>("imageFullscreenControls");
+        auto *Controls = W.findChild<QWidget *>("imageFullscreenControls");
         QVERIFY(Controls);
-        Controls->actions().at(2)->trigger();
-        QCOMPARE(B->State()["page"].toInt(), 1);
+        // The capsule names the selected reader's book and image; the full path is the tooltip.
+        const auto Book = B->State()["book"].toString();
+        auto *Name = Controls->findChild<QLabel *>("imageFullscreenBook");
+        QVERIFY(Name);
+        QCOMPARE(Name->text(), QFileInfo(Book).fileName());
+        QVERIFY(Name->toolTip().startsWith(QDir::toNativeSeparators(Book)));
+        QVERIFY(!Name->toolTip().startsWith(QDir::toNativeSeparators(A->State()["book"].toString())));
+        // Paging is the selected reader's navigator; the capsule has no previous/next of its own.
+        QVERIFY(Controls->findChild<QToolButton *>("fullscreenNext")->isHidden());
+        auto *Next = B->findChild<QToolButton *>("imageNavigatorNext");
+        QVERIFY(Next);
+        Next->click();
+        QTRY_VERIFY(B->State()["page"].toInt() > 0);
         QCOMPARE(A->State()["page"].toInt(), 0);
         QTest::keyClick(B, Qt::Key_Escape);
         QVERIFY(!F.Active());
@@ -975,6 +998,87 @@ class ImageReadingTests : public QObject
         if (Hosted) QTest::mouseClick(Button, Qt::LeftButton);
         QVERIFY(Edit->isChecked()); QVERIFY(EditBar->isVisible());
         QVERIFY(!Document(W)["dirty"].toBool());
+        // Edit row (prototype): flip | drawing tools | crop | width, line, text size, colour. The pane may append its own items.
+        QStringList Row;
+        for (auto* Action : EditBar->actions()) {
+            auto* Widget = EditBar->widgetForAction(Action);
+            if (Action->isSeparator()) Row << "|";
+            else Row << (Action->objectName().isEmpty() && Widget ? Widget->objectName() : Action->objectName());
+        }
+        const QStringList Expected{"image.flipHorizontal", "image.flipVertical", "|", "image.tool.freeDraw", "image.tool.rectangle",
+            "image.tool.ellipse", "image.tool.arrow", "image.tool.text", "|", "image.tool.crop", "image.cropApply", "|",
+            "imagePenWidthButton", "imagePenStyleButton", "imageTextSizeButton", "widget.colorButton"};
+        QCOMPARE(Row.mid(0, Expected.size()), Expected);
+        // Rotate, undo, slideshow, save as and quality live in the window chrome now.
+        for (const char* Removed : {"image.rotateCw", "image.rotateCcw", "image.undo", "image.redo", "image.slideshowStart", "image.slideshowStop", "image.saveAs"})
+            QVERIFY2(!Pane->findChild<QAction*>(Removed), Removed);
+        for (auto* Child : EditBar->findChildren<QWidget*>())
+            QVERIFY2(!Child->inherits("QAbstractSpinBox") && !Child->inherits("QComboBox"), qPrintable(Child->objectName()));
+        auto* Width = EditBar->findChild<QToolButton*>("imagePenWidthButton"); QVERIFY(Width);
+        auto* Style = EditBar->findChild<QToolButton*>("imagePenStyleButton"); QVERIFY(Style);
+        auto* Size = EditBar->findChild<QToolButton*>("imageTextSizeButton"); QVERIFY(Size);
+        QCOMPARE(Width->text(), QString::fromUtf8("굵기 2 px"));
+        QCOMPARE(Style->text(), QString::fromUtf8("실선"));
+        QCOMPARE(Size->text(), QString::fromUtf8("글자 24 px"));
+        for (auto* Drop : {Width, Style, Size}) {
+            QCOMPARE(Drop->popupMode(), QToolButton::InstantPopup);
+            QVERIFY(Drop->menu()); QCOMPARE(Drop->menu()->actions().last()->text(), QString::fromUtf8("사용자 지정…"));
+        }
+        const auto Choose = [](QToolButton* Drop, const char* Text) {
+            for (auto* Item : Drop->menu()->actions())
+                if (Item->text() == QString::fromUtf8(Text)) { Item->trigger(); return true; }
+            return false;
+        };
+        QVERIFY(Choose(Width, "5 px")); QCOMPARE(Image->penWidth(), 5); QCOMPARE(Width->text(), QString::fromUtf8("굵기 5 px"));
+        QVERIFY(Choose(Style, "점선")); QCOMPARE(Image->penStyle(), Qt::DashLine); QCOMPARE(Style->text(), QString::fromUtf8("점선"));
+        QVERIFY(Choose(Size, "48 px")); QCOMPARE(Image->textPixelSize(), 48); QCOMPARE(Size->text(), QString::fromUtf8("글자 48 px"));
+        Image->setPenWidth(12); QCOMPARE(Width->text(), QString::fromUtf8("굵기 12 px"));
+        auto* Color = Pane->findChild<QAction*>("widget.colorButton"); QVERIFY(Color); QVERIFY(!Color->icon().isNull());
+        // An empty edit history must not mark the image as edited; undoing to the save point is clean again.
+        QVERIFY(!Image->CanUndo());
+        Image->undoEdit(); Image->redoEdit();
+        QVERIFY(!Image->isModified()); QVERIFY(!Document(W)["dirty"].toBool());
+        Pane->findChild<QAction*>("image.flipHorizontal")->trigger();
+        QVERIFY(Image->isModified()); QVERIFY(Image->CanUndo());
+        Image->undoEdit(); QVERIFY(!Image->isModified());
+        Image->redoEdit(); QVERIFY(Image->isModified());
+        Image->undoEdit(); QVERIFY(!Image->isModified());
+        QTRY_VERIFY(!Document(W)["dirty"].toBool());
+        // Zooming out of a fit mode continues from the scale on screen.
+        Image->setFitMode(QImageView::FitToWindow);
+        const double Shown = Image->displayScalePercent();
+        Image->ZoomBy(0.8);
+        QCOMPARE(Image->fitMode(), QImageView::OriginalSize);
+        QVERIFY2(qAbs(Image->zoomLevel() - Shown * 0.8) < 0.01, qPrintable(QString("%1 / %2").arg(Image->zoomLevel()).arg(Shown)));
+        Image->setFitMode(QImageView::FitToWindow);
+        {
+            // Canvas menu; items the host owns come back through ContextCommand.
+            QImageView Lone;
+            QVERIFY(Lone.openImage(Picture(), QStringLiteral("lone")));
+            QScopedPointer<QMenu> Menu(Lone.CreateContextMenu());
+            QStringList Items;
+            for (auto* Action : Menu->actions()) Items << (Action->isSeparator() ? QString("|") : Action->text());
+            QCOMPARE(Items, (QStringList{"확대", "축소", "맞춤", "|", "시계 방향 90°", "반시계 방향 90°", "뒤집기", "|",
+                                         "이전 이미지", "다음 이미지", "|", "이미지 복사", "편집 모드", "전체 화면"}));
+            QCOMPARE(Menu->findChild<QAction*>("imageContext.fit")->menu()->actions().size(), 5);
+            QVERIFY(Menu->findChild<QAction*>("imageContext.fitWindow")->isChecked());
+            QVERIFY(!Menu->findChild<QAction*>("imageContext.next")->isEnabled());
+            QVERIFY(!Menu->findChild<QAction*>("imageContext.editMode")->isCheckable());
+            Lone.SetEditModeChecked(true);
+            QScopedPointer<QMenu> Checked(Lone.CreateContextMenu());
+            QVERIFY(Checked->findChild<QAction*>("imageContext.editMode")->isChecked());
+            QSignalSpy Commands(&Lone, &QImageView::ContextCommand);
+            QSignalSpy Clipboard(&Lone, &QBaseView::ClipboardRequested);
+            Lone.RestrictClipboard(true);
+            for (const char* Name : {"imageContext.editMode", "imageContext.fullscreen", "imageContext.copy", "imageContext.zoomIn"})
+                Menu->findChild<QAction*>(Name)->trigger();
+            QTRY_COMPARE(Commands.count(), 2);
+            QCOMPARE(Commands.at(0).at(0).toString(), QString("image.editMode"));
+            QCOMPARE(Commands.at(1).at(0).toString(), QString("image.fullscreen"));
+            QTRY_COMPARE(Clipboard.count(), 1);
+            QCOMPARE(Clipboard.at(0).at(0).toString(), QString("copy"));
+            QTRY_COMPARE(Lone.fitMode(), QImageView::OriginalSize);
+        }
         Image->setEditTool(QImageView::Rectangle);
         QTest::mouseClick(Button, Qt::LeftButton);
         QVERIFY(EditBar->isHidden());
@@ -1389,6 +1493,9 @@ class ImageReadingTests : public QObject
         QTRY_VERIFY_WITH_TIMEOUT(!Nav->findChild<QLabel *>("imageNavigatorPosition")->toolTip().isEmpty(), 15000);
         Reader->GoTo(0);
         auto *Modes = Nav->findChild<QComboBox *>("imageNavigatorMode"); QVERIFY(Modes);
+        // Same term as the menus ('만화', not '코믹'); item order is still mode - 1.
+        QCOMPARE(Modes->itemText(0), QStringLiteral("만화")); QCOMPARE(Modes->itemText(1), QStringLiteral("웹툰"));
+        QCOMPARE(Nav->findChild<QToolButton *>("imageNavigatorNextVolume")->toolTip(), Webtoon ? QStringLiteral("다음 회차") : QStringLiteral("다음 권"));
         Modes->setCurrentIndex(Webtoon ? 0 : 1); emit Modes->activated(Modes->currentIndex());
         QCOMPARE(Reader->State()["mode"].toInt(), Webtoon ? int(ImageReadingView::Comic) : int(ImageReadingView::Webtoon));
         Reader->SetMode(Webtoon ? ImageReadingView::Webtoon : ImageReadingView::Comic);
@@ -1505,7 +1612,7 @@ class ImageReadingTests : public QObject
         QTest::newRow("comic") << 1;
         QTest::newRow("webtoon") << 2;
     }
-    // The overlay controls of comic and webtoon full screen (top) and the status line (bottom).
+    // The overlay controls of comic and webtoon full screen: the top capsule and the bottom navigator.
     // With HC_IMAGE_TEST_ARTIFACTS set, the revealed overlay is saved for the chrome review.
     void fullscreenReadingControlsCapture()
     {
@@ -1539,33 +1646,199 @@ class ImageReadingTests : public QObject
         auto *Fullscreen = W.findChild<ImageFullscreen *>("imageFullscreen"); QVERIFY(Fullscreen);
         QTest::keyClick(&W, Qt::Key_F11);
         QTRY_VERIFY(Fullscreen->Active());
-        auto *Top = W.findChild<QToolBar *>("imageFullscreenControls"); QVERIFY(Top);
+        auto *Top = W.findChild<QWidget *>("imageFullscreenControls"); QVERIFY(Top);
         auto *PinTop = W.findChild<QAction *>("fullscreenPinTop"); auto *PinBottom = W.findChild<QAction *>("fullscreenPinBottom");
         QVERIFY(PinTop && PinBottom);
+        QCOMPARE(PinBottom->text(), QStringLiteral("탐색 막대 고정"));
+        auto *Nav = Reader->findChild<ImageReadingNavigator *>(); QVERIFY(Nav);
+        auto *NavPin = Nav->findChild<QToolButton *>("imageNavigatorPin"); QVERIFY(NavPin);
         PinTop->setChecked(true); PinBottom->setChecked(true);
+        // 탐색 막대 고정 pins the bottom navigator; the old status line stays hidden while reading.
+        QVERIFY(NavPin->isChecked());
         QTRY_VERIFY(Top->isVisible());
-        QTRY_VERIFY(W.findChild<QWidget *>("imageFullscreenStatus")->isVisible());
+        QTRY_VERIFY(Nav->isVisible());
+        QVERIFY(!W.findChild<QWidget *>("imageFullscreenStatus")->isVisible());
+        QVERIFY(!Fullscreen->State()["status"].toBool());
+        QVERIFY(Fullscreen->State()["navigator"].toBool());
+        // One capsule centred at the top edge: book · image name | reading tools | ⋯ | 전체 화면 해제.
+        QTRY_VERIFY(qAbs(Top->geometry().center().x() - W.width() / 2) <= 1);
+        QVERIFY(Top->geometry().top() >= 0 && Top->geometry().top() < 24);
+        QVERIFY(Top->geometry().bottom() < Nav->mapTo(&W, QPoint(0, 0)).y());
+        const QStringList Tools = Mode == 1
+            ? QStringList{"readingPageList", "readingSpreadButton", "readingDirectionButton", "readingCorrectButton", "readingBookmarkButton"}
+            : QStringList{"readingPageList", "readingGapButton", "readingCorrectButton", "readingBookmarkButton"};
+        QTRY_COMPARE(Fullscreen->State()["tools"].toVariant().toStringList(), Tools);
+        const auto Buttons = Top->findChildren<QToolButton *>();
+        for (const auto &Name : Tools) {
+            auto *Action = Pane->findChild<QAction *>(Name); QVERIFY2(Action, qPrintable(Name));
+            // The capsule shares the pane's action, so text, check state and menu follow the window toolbar.
+            QTRY_VERIFY2(std::any_of(Buttons.begin(), Buttons.end(), [Action](QToolButton *B) { return B->defaultAction() == Action && B->isVisible(); }),
+                         qPrintable(Name));
+        }
+        if (Mode == 1) QVERIFY(Pane->findChild<QAction *>("readingSpreadButton")->isChecked());
+        auto *Book = Top->findChild<QLabel *>("imageFullscreenBook"); QVERIFY(Book);
+        QVERIFY(Book->isVisible()); QCOMPARE(Book->text(), QStringLiteral("sample-comic"));
+        QVERIFY(!Top->findChild<QLabel *>("imageFullscreenItem")->text().isEmpty());
+        QVERIFY(Book->toolTip().contains(QDir::toNativeSeparators(Root.filePath("sample-comic"))));
+        // Previous / next belong to the navigator only.
+        QVERIFY(Top->findChild<QToolButton *>("fullscreenPrevious")->isHidden());
+        QVERIFY(Top->findChild<QToolButton *>("fullscreenNext")->isHidden());
+        for (auto *Button : Buttons)
+            if (Button->isVisible())
+                QVERIFY2(Button->text() != QStringLiteral("이전") && Button->text() != QStringLiteral("다음"), qPrintable(Button->objectName()));
+        auto *Exit = Top->findChild<QToolButton *>("fullscreenExit"); QVERIFY(Exit && Exit->isVisible());
+        QCOMPARE(Exit->text(), QStringLiteral("전체 화면 해제"));
+        auto *More = Top->findChild<QToolButton *>("fullscreenMore"); QVERIFY(More && More->isVisible() && More->menu());
+        QStringList Display;
+        for (auto *Action : More->menu()->actions()) if (Action->isCheckable()) Display << Action->objectName();
+        QCOMPARE(Display, (QStringList{"fullscreenPinTop", "fullscreenPinBottom", "fullscreenCursor", "fullscreenRemember"}));
+        // Unpinning the navigator from its own button clears 탐색 막대 고정 as well.
+        NavPin->setChecked(false);
+        QVERIFY(!PinBottom->isChecked());
+        PinBottom->setChecked(true);
         QTest::qWait(400);
         const auto Artifacts = qEnvironmentVariable("HC_IMAGE_TEST_ARTIFACTS");
         if (!Artifacts.isEmpty())
             QVERIFY(W.grab().save(Artifacts + "/fullscreen-reading-" + QTest::currentDataTag() + ".png"));
         PinTop->setChecked(false); PinBottom->setChecked(false);
+        QVERIFY(!NavPin->isChecked());
         QTest::keyClick(&W, Qt::Key_F11);
         QTRY_VERIFY(!Fullscreen->Active());
     }
+    void fullscreenAutoHideAndEdgeReveal_data()
+    {
+        QTest::addColumn<bool>("Reading");
+        QTest::newRow("image") << false;
+        QTest::newRow("reading") << true;
+    }
+    // The capsule and the navigator appear from the screen edge together and leave together when idle.
     void fullscreenAutoHideAndEdgeReveal()
     {
-        QWidget W;W.setFocusPolicy(Qt::StrongFocus);W.resize(900,600);W.show();W.activateWindow();
-        QVERIFY(QTest::qWaitForWindowActive(&W));ImageFullscreen F(&W);F.Enter();W.setFocus();
+        QFETCH(bool, Reading);
+        const auto Private=qApp->property("privateReading");qApp->setProperty("privateReading",true);
+        const auto RestorePrivate=qScopeGuard([&]{qApp->setProperty("privateReading",Private);});
+        QTemporaryDir Root;Fixture(Root.path(),6);
+        QWidget W;W.setFocusPolicy(Qt::StrongFocus);W.resize(900,600);
+        ImageReadingView* Reader=nullptr;
+        if(Reading){
+            auto Book=OpenImageBook(Root.path());QVERIFY(Book.HasValue());
+            auto* Layout=new QVBoxLayout(&W);Layout->setContentsMargins(0,0,0,0);
+            Reader=new ImageReadingView(&W);Layout->addWidget(Reader);Reader->SetPrivate(true);
+            Reader->Load(Book.Value(),Picture());Reader->SetMode(ImageReadingView::Comic);
+        }
+        W.show();W.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&W));ImageFullscreen F(&W,[Reader]{return Reader;});F.Enter();W.setFocus();
+        auto* Nav=Reader?Reader->findChild<ImageReadingNavigator*>():nullptr;
+        if(Nav)Nav->SetPinned(false);
         const auto Cursor=QCursor::pos();const auto Cleanup=qScopeGuard([&]{F.Leave();QCursor::setPos(Cursor);});QCursor::setPos(W.mapToGlobal(W.rect().center()));
         QTest::mouseMove(&W,W.rect().center());
-        QTRY_VERIFY_WITH_TIMEOUT(!F.State()["toolbar"].toBool()&&!F.State()["status"].toBool(),5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!F.State()["toolbar"].toBool()&&!F.State()["status"].toBool()&&!F.State()["navigator"].toBool(),6000);
         QVERIFY(F.State()["cursorHidden"].toBool());
         const QPointF Local(W.width()/2,1),Global=W.mapToGlobal(Local.toPoint());
         QMouseEvent Edge(QEvent::MouseMove,Local,Global,Qt::NoButton,Qt::NoButton,Qt::NoModifier);QCoreApplication::sendEvent(&W,&Edge);
         QTRY_VERIFY_WITH_TIMEOUT(F.State()["toolbar"].toBool(),1000);QVERIFY(!F.State()["cursorHidden"].toBool());
+        if(Reading){
+            // Reading: the navigator comes with the capsule and the status line stays away.
+            QTRY_VERIFY_WITH_TIMEOUT(F.State()["navigator"].toBool(),1000);QVERIFY(!F.State()["status"].toBool());
+            auto* Top=W.findChild<QWidget*>("imageFullscreenControls");QVERIFY(Top);
+            QVERIFY(qAbs(Top->geometry().center().x()-W.width()/2)<=1);
+            QTRY_VERIFY_WITH_TIMEOUT(!F.State()["toolbar"].toBool()&&!F.State()["navigator"].toBool(),6000);
+        }
         auto* Pin=W.findChild<QAction*>("fullscreenPinTop");QVERIFY(Pin);Pin->setChecked(true);W.setFocus();
         F.Leave();QCursor::setPos(Cursor);QVERIFY(!F.Active());QVERIFY(W.cursor().shape()!=Qt::BlankCursor);
+    }
+    void readingContextMenu_data()
+    {
+        QTest::addColumn<bool>("Webtoon");
+        QTest::newRow("comic") << false;
+        QTest::newRow("webtoon") << true;
+    }
+    // Reading view right-click (prototype MODES.comic / MODES.webtoon ctx) replaces the old 2-item action menu.
+    void readingContextMenu()
+    {
+        QFETCH(bool, Webtoon);
+        const auto Private = qApp->property("privateReading"); qApp->setProperty("privateReading", true);
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("privateReading", Private); });
+        QTemporaryDir Root; Fixture(Root.path(), 4);
+        auto Book = OpenImageBook(Root.path()); QVERIFY(Book.HasValue());
+        ImageReadingView View; View.SetPrivate(true); View.resize(700, 500);
+        View.Load(Book.Value(), Picture()); View.SetCover(false); View.SetAutomaticNext(false);
+        View.SetMode(Webtoon ? ImageReadingView::Webtoon : ImageReadingView::Comic);
+        View.show(); View.activateWindow(); QVERIFY(QTest::qWaitForWindowExposed(&View));
+        QCOMPARE(View.contextMenuPolicy(), Qt::DefaultContextMenu);
+        QVERIFY(View.actions().isEmpty());
+        const auto Items = [](QMenu *Of) {
+            QStringList Texts;
+            for (auto *Action : Of->actions()) Texts << (Action->isSeparator() ? QStringLiteral("|") : Action->text().section(QLatin1Char('\t'), 0, 0));
+            return Texts;
+        };
+        const auto Key = [](QMenu *Of, const char *Name) {
+            auto *Action = Of->findChild<QAction *>(QString::fromLatin1(Name)); return Action ? Action->text().section(QLatin1Char('\t'), 1) : QString("missing");
+        };
+        const auto Native = [](const char *Portable) { return QKeySequence(QString::fromLatin1(Portable), QKeySequence::PortableText).toString(QKeySequence::NativeText); };
+        const QStringList Expected = Webtoon
+            ? QStringList{QStringLiteral("다음 화면"), QStringLiteral("이전 화면"), "|", QStringLiteral("이미지로 이동…"), "|",
+                          QStringLiteral("맞춤"), QStringLiteral("이미지 간격"), "|", QStringLiteral("책갈피 저장"), QStringLiteral("책갈피로 이동…"), "|",
+                          QStringLiteral("이 이미지 다시 읽기"), QStringLiteral("화질 보정"), QStringLiteral("전체 화면")}
+            : QStringList{QStringLiteral("다음 쪽"), QStringLiteral("이전 쪽"), "|", QStringLiteral("쪽으로 이동…"), QStringLiteral("페이지 목록…"), "|",
+                          QStringLiteral("두 쪽 보기"), QStringLiteral("오른쪽 → 왼쪽"), QStringLiteral("맞춤"), "|",
+                          QStringLiteral("책갈피 저장"), QStringLiteral("책갈피로 이동…"), "|",
+                          QStringLiteral("이 쪽 다시 읽기"), QStringLiteral("화질 보정"), QStringLiteral("전체 화면")};
+        std::unique_ptr<QMenu> Menu(View.CreateContextMenu());
+        QCOMPARE(Items(Menu.get()), Expected);
+        QCOMPARE(Key(Menu.get(), "readingContext.next"), Native("Space"));
+        QCOMPARE(Key(Menu.get(), "readingContext.previous"), Native(Webtoon ? "Shift+Space" : "Backspace"));
+        QCOMPARE(Key(Menu.get(), "readingContext.goTo"), Native("Ctrl+G"));
+        QCOMPARE(Key(Menu.get(), "readingContext.bookmark"), Native("Ctrl+D"));
+        QCOMPARE(Key(Menu.get(), "readingContext.fullscreen"), Native("F11"));
+        QVERIFY(Menu->actions().contains(View.findChild<QAction *>("image.retryPage")));
+        QVERIFY(!Menu->findChild<QAction *>("readingContext.openBookmark")->isEnabled());
+        const auto Sub = [&Items](QMenu *Of, const char *Name) {
+            auto *Action = Of->findChild<QAction *>(QString::fromLatin1(Name)); return Action && Action->menu() ? Items(Action->menu()) : QStringList{"missing"};
+        };
+        const QStringList Fits = Webtoon ? QStringList{QStringLiteral("너비 맞춤"), QStringLiteral("원본 크기")}
+                                         : QStringList{QStringLiteral("창에 맞춤"), QStringLiteral("너비 맞춤"), QStringLiteral("높이 맞춤")};
+        const QStringList Corrections = Webtoon ? QStringList{QStringLiteral("회색조"), QStringLiteral("색 반전")}
+                                                : QStringList{QStringLiteral("회색조"), QStringLiteral("색 반전"), QStringLiteral("밝기…")};
+        QCOMPARE(Sub(Menu.get(), "readingContext.fit"), Fits);
+        QCOMPARE(Sub(Menu.get(), "readingContext.correct"), Corrections);
+        if (Webtoon) {
+            QCOMPARE(Sub(Menu.get(), "readingContext.gap"), (QStringList{"0 px", "8 px", "16 px"}));
+            QVERIFY(Menu->findChild<QAction *>("readingContext.fitWidth")->isChecked());
+            Menu->findChild<QAction *>("readingContext.gap16")->trigger();
+            QCOMPARE(View.State()["gap"].toInt(), 16);
+        } else {
+            QVERIFY(Menu->findChild<QAction *>("readingContext.spread")->isChecked());
+            QCOMPARE(Menu->findChild<QAction *>("readingContext.rightToLeft")->isChecked(), View.State()["rtl"].toBool());
+            const bool Rtl = View.State()["rtl"].toBool();
+            Menu->findChild<QAction *>("readingContext.rightToLeft")->trigger();
+            QCOMPARE(View.State()["rtl"].toBool(), !Rtl);
+            Menu->findChild<QAction *>("readingContext.fitHeight")->trigger();
+            QCOMPARE(View.State()["fit"].toInt(), 3);
+        }
+        Menu->findChild<QAction *>("readingContext.grayscale")->trigger();
+        QVERIFY(View.State()["grayscale"].toBool());
+        // Host requests run after the menu has closed.
+        QSignalSpy GoTo(&View, &ImageReadingView::GoToRequested), Full(&View, &ImageReadingView::FullscreenRequested);
+        Menu->findChild<QAction *>("readingContext.goTo")->trigger();
+        Menu->findChild<QAction *>("readingContext.fullscreen")->trigger();
+        QCOMPARE(GoTo.size(), 0);
+        QTRY_COMPARE(GoTo.size(), 1); QTRY_COMPARE(Full.size(), 1);
+        Menu->findChild<QAction *>("readingContext.bookmark")->trigger();
+        QVERIFY(!View.State()["bookmark"].toObject().isEmpty());
+        std::unique_ptr<QMenu> Again(View.CreateContextMenu());
+        QVERIFY(Again->findChild<QAction *>("readingContext.openBookmark")->isEnabled());
+        Again->findChild<QAction *>("readingContext.next")->trigger();
+        if (Webtoon) QTRY_VERIFY(View.verticalScrollBar()->value() > 0);
+        else QTRY_VERIFY(View.State()["page"].toInt() > 0);
+        // A real right-click opens the same menu (never the window's action list).
+        QContextMenuEvent Event(QContextMenuEvent::Mouse, QPoint(40, 40), View.viewport()->mapToGlobal(QPoint(40, 40)));
+        QCoreApplication::sendEvent(View.viewport(), &Event);
+        auto *Popup = qobject_cast<QMenu *>(QApplication::activePopupWidget()); QVERIFY(Popup);
+        QCOMPARE(Popup->objectName(), QStringLiteral("imageReadingContextMenu"));
+        QCOMPARE(Items(Popup), Expected);
+        Popup->close();
+        QTRY_VERIFY(!QApplication::activePopupWidget());
     }
     void fullscreenRoundTripAndCursor()
     {

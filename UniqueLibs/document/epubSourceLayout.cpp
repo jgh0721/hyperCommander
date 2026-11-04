@@ -128,15 +128,27 @@ void EpubSourceEditor::setupResources(QWidget* Panel) {
     connect(tree_,&QTreeView::customContextMenuRequested,this,&EpubSourceEditor::showTreeMenu);
     auto* AddMenu=new QMenu(Add);Add->setMenu(AddMenu);connect(AddMenu,&QMenu::aboutToShow,this,[this,AddMenu]{AddMenu->clear();for(const auto& Name:{"epubAddChapter","epubAddImage","epubImportResource"})AddMenu->addAction(action(Name));});
 }
+void EpubSourceEditor::AttachSearchPanel(QWidget* Panel) {
+    if(!Panel || !problems_ || searchPanel_==Panel)return;
+    if(searchPanel_)DetachSearchPanel();
+    searchPanel_=Panel;problems_->addTab(Panel,tr("파일에서 찾기"));problems_->setCurrentWidget(Panel);
+    setPanelVisible("problems",true);Panel->show();
+}
+QWidget* EpubSourceEditor::DetachSearchPanel() {
+    QWidget* Panel=searchPanel_;searchPanel_.clear();if(!Panel)return nullptr;
+    if(problems_){const int Index=problems_->indexOf(Panel);if(Index>=0)problems_->removeTab(Index);}
+    Panel->hide();Panel->setParent(nullptr);return Panel;
+}
+void EpubSourceEditor::SetSearchPanelTitle(const QString& Title) {
+    if(searchPanel_ && problems_){const int Index=problems_->indexOf(searchPanel_);if(Index>=0)problems_->setTabText(Index,Title);}
+}
 void EpubSourceEditor::setupProblems(QWidget* Panel) {
     auto* Layout=new QVBoxLayout(Panel);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
     problems_=new QTabWidget(Panel);problems_->setObjectName("epubProblemTabs");problems_->setDocumentMode(true);Layout->addWidget(problems_);
     problemsSummary_=new QLabel(problems_);problemsSummary_->setObjectName("epubProblemSummary");problemsSummary_->setTextFormat(Qt::PlainText);problemsSummary_->setContentsMargins(0,0,8,0);problemsSummary_->setForegroundRole(QPalette::PlaceholderText);problems_->setCornerWidget(problemsSummary_,Qt::TopRightCorner);
     diagnostics_=new QTreeWidget(problems_);diagnostics_->setObjectName("epubEditDiagnostics");diagnostics_->setAccessibleName(tr("EPUB 소스 검사 결과"));diagnostics_->setHeaderLabels({tr("수준"),tr("리소스"),tr("행"),tr("설명")});diagnostics_->setRootIsDecorated(false);diagnostics_->setColumnWidth(0,70);diagnostics_->setColumnWidth(1,220);diagnostics_->setColumnWidth(2,50);diagnostics_->setContextMenuPolicy(Qt::CustomContextMenu);problems_->addTab(diagnostics_,tr("문제"));
     checkerOutput_=new QPlainTextEdit(problems_);checkerOutput_->setObjectName("epubCheckerOutput");checkerOutput_->setReadOnly(true);checkerOutput_->setAccessibleName(tr("EPUBCheck 출력"));checkerOutput_->setLineWrapMode(QPlainTextEdit::NoWrap);problems_->addTab(checkerOutput_,tr("EPUBCheck 출력"));
-    searchResults_=new QTreeWidget(problems_);searchResults_->setObjectName("epubSearchResults");searchResults_->setAccessibleName(tr("EPUB 리소스 검색 결과"));searchResults_->setHeaderLabels({tr("리소스"),tr("행"),tr("내용")});searchResults_->setRootIsDecorated(false);searchResults_->setColumnWidth(0,220);searchResults_->setColumnWidth(1,50);problems_->addTab(searchResults_,tr("검색 결과"));
     connect(diagnostics_,&QTreeWidget::customContextMenuRequested,this,&EpubSourceEditor::showProblemMenu);
-    connect(searchResults_,&QTreeWidget::itemActivated,this,[this](QTreeWidgetItem* Item,int){if(!Item)return;if(openResource(Item->data(0,Qt::UserRole).toString())){const int Line=Item->data(1,Qt::UserRole).toInt(),Column=Item->data(2,Qt::UserRole).toInt();text_->goToPosition(Line,Column);focusSource();}});
 }
 void EpubSourceEditor::setupActions() {
     const auto Make=[this](const QString& Name,const QString& Text,auto Slot,bool Checkable=false)->QAction* {
@@ -231,16 +243,22 @@ QList<QAction*> EpubSourceEditor::ToolbarActions()const{return toolbarActions_;}
 QList<QAction*> EpubSourceEditor::MenuActions()const{return menuActions_;}
 QWidget* EpubSourceEditor::StatusStrip()const{return statusStrip_;}
 QList<DocumentStatusField> EpubSourceEditor::StatusFields()const {
+    // Prototype order: 줄 · 열 (picker) · resource … 형식 · UTF-8 · 줄 끝 · 검사 (pickers) · 문제 · 초안 (plan 8.7).
     QList<DocumentStatusField> Fields;
-    if(IsSourceVisible() && sourceShown()) {
-        Fields.append(DocumentStatusField{"position",tr("줄 %1 · 열 %2").arg(text_->currentLine()).arg(text_->currentColumn()),QString("%1:%2").arg(text_->currentLine()).arg(text_->currentColumn()),{},"text.goToLine"});
-        const auto Eol=static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_GETEOLMODE);
-        Fields.append(DocumentStatusField{"encoding","UTF-8"});Fields.append(DocumentStatusField{"eol",Eol==SC_EOL_CRLF?"CRLF":Eol==SC_EOL_CR?"CR":"LF"});
-    }
-    Fields.append(DocumentStatusField{"validation",statusValidation_->text()});
-    Fields.append(DocumentStatusField{"problems",statusProblems_->text(),{},{},"epub.status.problems"});
+    const bool Source=IsSourceVisible() && sourceShown();
+    const auto Pick=[&Fields](QString Id,QString Text,bool Essential=true,bool Trailing=false,QString Compact={},QString Detail={}){
+        if(!Text.isEmpty())Fields.append(DocumentStatusField{Id,Text,Compact,Detail,{},Essential,Trailing,true});
+    };
+    if(Source)Pick("position",tr("줄 %1 · 열 %2").arg(text_->currentLine()).arg(text_->currentColumn()),true,false,QString("%1:%2").arg(text_->currentLine()).arg(text_->currentColumn()));
     Fields.append(DocumentStatusField{"resource",current_,{},current_,{},false});
-    if(IsSourceVisible() && sourceShown())Fields.append(DocumentStatusField{"language",text_->currentLanguage(),{},{},{},false});
+    if(Source) {
+        Fields.append(DocumentStatusField{"language",text_->currentLanguage(),{},{},{},false,true});
+        const auto Eol=static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_GETEOLMODE);
+        Pick("encoding","UTF-8",false,false,{},tr("EPUB 리소스는 UTF-8로 저장합니다."));
+        Pick("eol",Eol==SC_EOL_CRLF?"CRLF":Eol==SC_EOL_CR?"CR":"LF",false);
+    }
+    Pick("validation",statusValidation_->text(),true,!Source);
+    Fields.append(DocumentStatusField{"problems",statusProblems_->text(),{},{},"epub.status.problems"});
     Fields.append(DocumentStatusField{"draft",statusDraft_->text(),{},draftMessage_,{},false});
     if(!statusMessage_->toolTip().isEmpty()) {
         const bool Failure=!error_.isEmpty()||!previewError_.isEmpty();

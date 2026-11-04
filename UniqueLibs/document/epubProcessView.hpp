@@ -24,6 +24,8 @@ namespace hc::document
         bool RequestSourceScroll(const QJsonObject& Value);
         QJsonObject ViewState() const;
         bool IsLoaded() const { return loaded_; }
+        // Shortcut bindings last sent to the reader, for the key text of host menus.
+        QJsonObject ShortcutBindings() const { return bindings_; }
         static void InitializeLifecycle();
         static void RequestShutdown();
         static bool IsDrained();
@@ -35,6 +37,9 @@ namespace hc::document
         void Failed(const QString& Error);
         void Closed();
         void ViewStateChanged();
+        // Once per new right click (or menu key) in the reader, after ViewStateChanged. Request: serial, x, y
+        // (relative to this view), selection, link, locator, chapter, anchor, target {kind: text|image|margin}.
+        void ContextMenuRequested(const QJsonObject& Request);
     protected:
         bool event(QEvent* Event) override;
     private:
@@ -53,6 +58,7 @@ namespace hc::document
         std::shared_ptr<BindingState> native_;
         bool bound_ = false, loaded_ = false, failed_ = false, closed_ = false;
         QTimer* timer_ = nullptr;
-        QJsonObject reported_;
+        QJsonObject reported_, bindings_;
+        qint64 contextSerial_ = 0;
     };
 }

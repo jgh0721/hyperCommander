@@ -4,7 +4,6 @@
 #include "readingAnnotations.hpp"
 #include <QComboBox>
 #include <QFileDialog>
-#include <QFormLayout>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -22,9 +21,12 @@
 namespace hc::epub::poc {
 void ReadingNavigation::addAnnotations(QTabWidget* Tabs) {
     annotationPanel_=new QWidget(Tabs);auto* Layout=new QVBoxLayout(annotationPanel_);Tabs->addTab(annotationPanel_,tr("형광펜·메모"));
-    annotationList_=new QListWidget(annotationPanel_);annotationList_->setObjectName("epubAnnotations");annotationList_->setAccessibleName(tr("형광펜과 메모 목록"));annotationList_->setMaximumHeight(180);Layout->addWidget(annotationList_);
+    // The list takes the height the panel has left.
+    annotationList_=new QListWidget(annotationPanel_);annotationList_->setObjectName("epubAnnotations");annotationList_->setAccessibleName(tr("형광펜과 메모 목록"));Layout->addWidget(annotationList_,1);
     annotationQuote_=new QLabel(annotationPanel_);annotationQuote_->setTextFormat(Qt::PlainText);annotationQuote_->setWordWrap(true);annotationQuote_->setAccessibleName(tr("메모의 인용 문장"));Layout->addWidget(annotationQuote_);
-    auto* Form=new QFormLayout;annotationColor_=new QComboBox(annotationPanel_);annotationColor_->setObjectName("epubAnnotationColor");for(const auto& Entry:QList<QPair<QString,QString>>{{tr("노랑"),"#ffde59"},{tr("민트"),"#63d8ad"},{tr("분홍"),"#f38ab2"},{tr("파랑"),"#78baf5"}})annotationColor_->addItem(Entry.first,Entry.second);Form->addRow(tr("형광펜 색"),annotationColor_);Layout->addLayout(Form);
+    // Same names and values as the host's body menu (epubReaderMenus.cpp).
+    auto* ColorRow=new QHBoxLayout;annotationColor_=new QComboBox(annotationPanel_);annotationColor_->setObjectName("epubAnnotationColor");for(const auto& Entry:QList<QPair<QString,QString>>{{tr("노랑"),"#ffde59"},{tr("초록"),"#63d8ad"},{tr("파랑"),"#78baf5"},{tr("분홍"),"#f38ab2"}})annotationColor_->addItem(Entry.first,Entry.second);
+    auto* ColorLabel=new QLabel(tr("형광펜 색"),annotationPanel_);ColorLabel->setBuddy(annotationColor_);ColorRow->addWidget(ColorLabel);ColorRow->addWidget(annotationColor_,1);Layout->addLayout(ColorRow);
     annotationNote_=new QPlainTextEdit(annotationPanel_);annotationNote_->setObjectName("epubAnnotationNote");annotationNote_->setAccessibleName(tr("메모 내용"));annotationNote_->setPlaceholderText(tr("메모 입력 후 선택 문장에 추가하거나 선택 메모를 수정하세요."));annotationNote_->setMaximumHeight(110);Layout->addWidget(annotationNote_);
     const auto Button=[&](const QString& Text,const QString& Name){auto* Value=new QPushButton(Text,annotationPanel_);Value->setObjectName(Name);Layout->addWidget(Value);return Value;};
     auto* Add=Button(tr("선택한 본문에 형광펜·메모 추가"),"epubAnnotationAdd");auto* Update=Button(tr("선택 메모 수정"),"epubAnnotationUpdate");auto* Link=Button(tr("선택 메모를 현재 본문 선택에 다시 연결"),"epubAnnotationLink");auto* Go=Button(tr("선택 메모 위치로 이동"),"epubAnnotationGo");auto* Remove=Button(tr("선택 메모 삭제"),"epubAnnotationRemove");

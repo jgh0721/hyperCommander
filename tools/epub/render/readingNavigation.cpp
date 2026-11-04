@@ -2,17 +2,23 @@
 #include "readingNavigation.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "readingAnnotations.hpp"
+#include <QClipboard>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QLockFile>
+#include <QMenu>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QStyle>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTreeWidget>
 #include <QSignalBlocker>
@@ -39,16 +45,23 @@ ReadingNavigation::ReadingNavigation(const QString& Settings,const QString& Book
         if(QFileInfo(Directory).isSymLink() || !QDir().mkpath(Directory)) {error_=tr("읽기 기록 폴더를 만들 수 없습니다.");readFailed_=true;}
         else {path_=hc::defaults::edit::BookStateFile(Directory, Book);try {const auto Root=read(path_);restore_=saved_=Root["locator"].toString();bookmarks_=Root["bookmarks"].toArray();annotations_=Root["annotations"].toArray();for(const auto& Value:annotations_)annotationBases_.insert(Value.toObject()["id"].toString(),Value.toObject());}catch(const QString& Error){error_=Error;readFailed_=true;}}
     }
-    auto* Layout=new QVBoxLayout(this);Layout->setContentsMargins(0,0,0,0);auto* Tabs=new QTabWidget(this);Layout->addWidget(Tabs);
+    auto* Layout=new QVBoxLayout(this);Layout->setContentsMargins(0,0,0,0);auto* Tabs=new QTabWidget(this);tabs_=Tabs;Layout->addWidget(Tabs,1);
+    // Tab names stay whole: the row scrolls instead of eliding, and minimumSizeHint() fits all of them.
+    Tabs->setUsesScrollButtons(true);Tabs->setElideMode(Qt::ElideNone);
     toc_=new QTreeWidget(Tabs);toc_->setObjectName("epubToc");toc_->setAccessibleName(tr("목차"));toc_->setHeaderHidden(true);
     toc_->setMinimumHeight(180);Tabs->addTab(toc_,tr("목차"));
     const auto OpenToc=[this](QTreeWidgetItem* Item){const auto Index=Item->data(0,Qt::UserRole).toInt();if(navigation_[Index].toObject()["path"].toString().isEmpty())Item->setExpanded(!Item->isExpanded());else Execute("toc",Index);};
     connect(toc_,&QTreeWidget::itemClicked,this,OpenToc);connect(toc_,&QTreeWidget::itemActivated,this,OpenToc);
     auto* Search=new QWidget(Tabs);auto* SearchLayout=new QVBoxLayout(Search);query_=new QLineEdit(Search);query_->setMaxLength(128);query_->setPlaceholderText(tr("책 전체에서 검색"));query_->setObjectName("epubSearch");query_->setAccessibleName(tr("책 전체 검색어"));query_->setAccessibleDescription(tr("Ctrl+F로 이동하고 Enter로 검색합니다."));
-    auto* Find=new QPushButton(tr("검색"),Search);results_=new QListWidget(Search);results_->setObjectName("epubSearchResults");results_->setAccessibleName(tr("본문 검색 결과"));results_->setMaximumHeight(140);
-    SearchLayout->addWidget(query_);SearchLayout->addWidget(Find);SearchLayout->addWidget(results_);Tabs->addTab(Search,tr("검색"));
-    auto* Marks=new QWidget(Tabs);auto* MarkLayout=new QVBoxLayout(Marks);marks_=new QListWidget(Marks);marks_->setObjectName("epubBookmarks");marks_->setAccessibleName(tr("책갈피 목록"));marks_->setMaximumHeight(140);
-    auto* Add=new QPushButton(tr("현재 위치 책갈피"),Marks);auto* Remove=new QPushButton(tr("선택 책갈피 삭제"),Marks);Add->setObjectName("epubBookmarkAdd");Remove->setObjectName("epubBookmarkRemove");MarkLayout->addWidget(marks_);MarkLayout->addWidget(Add);MarkLayout->addWidget(Remove);Tabs->addTab(Marks,tr("책갈피"));
+    auto* Find=new QPushButton(tr("검색"),Search);results_=new QListWidget(Search);results_->setObjectName("epubSearchResults");results_->setAccessibleName(tr("본문 검색 결과"));
+    // The query row stays on top; result and bookmark lists take the remaining height.
+    auto* QueryRow=new QHBoxLayout;QueryRow->addWidget(query_,1);QueryRow->addWidget(Find);SearchLayout->addLayout(QueryRow);SearchLayout->addWidget(results_,1);Tabs->addTab(Search,tr("검색"));
+    auto* Marks=new QWidget(Tabs);auto* MarkLayout=new QVBoxLayout(Marks);marks_=new QListWidget(Marks);marks_->setObjectName("epubBookmarks");marks_->setAccessibleName(tr("책갈피 목록"));
+    auto* Add=new QPushButton(tr("현재 위치 책갈피"),Marks);auto* Remove=new QPushButton(tr("선택 책갈피 삭제"),Marks);Add->setObjectName("epubBookmarkAdd");Remove->setObjectName("epubBookmarkRemove");MarkLayout->addWidget(marks_,1);MarkLayout->addWidget(Add);MarkLayout->addWidget(Remove);Tabs->addTab(Marks,tr("책갈피"));
+    for(auto* List:std::initializer_list<QWidget*>{toc_,results_,marks_})List->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(toc_,&QWidget::customContextMenuRequested,this,[this](const QPoint& At){tocMenu(At);});
+    connect(results_,&QWidget::customContextMenuRequested,this,[this](const QPoint& At){searchMenu(At);});
+    connect(marks_,&QWidget::customContextMenuRequested,this,[this](const QPoint& At){bookmarkMenu(At);});
     addAnnotations(Tabs);
     status_=new QLabel(this);status_->setTextFormat(Qt::PlainText);status_->setWordWrap(true);Layout->addWidget(status_);
     connect(Find,&QPushButton::clicked,this,[this]{Execute("search",query_->text());});connect(query_,&QLineEdit::returnPressed,this,[this]{Execute("search",query_->text());});
@@ -69,7 +82,10 @@ bool ReadingNavigation::Execute(const QString& Action,const QJsonValue& Value) {
     if(QStringList{"next","previous","back","next-chapter","previous-chapter"}.contains(Action)){send(Action,Value);return true;}
     if(Action=="chapter"){if(!Value.isDouble() || Value.toDouble()!=Value.toInt(-1) || Value.toInt(-1)<0 || Value.toInt()>=spineCount_)return false;send(Action,Value);return true;}
     if(Action=="toc") {if(!Value.isDouble() || Value.toInt()<0 || Value.toInt()>=navigation_.size() || navigation_[Value.toInt()].toObject()["path"].toString().isEmpty())return false;send(Action,Value);return true;}
-    if(Action=="search") {if(!Value.isString() || Value.toString().trimmed().isEmpty() || Value.toString().size()>128)return false;results_->clear();status_->setText(tr("책 전체에서 검색 중…"));send(Action,Value);return true;}
+    if(Action=="search") {if(!Value.isString() || Value.toString().trimmed().isEmpty() || Value.toString().size()>128)return false;
+        // A search started elsewhere (the host's body menu) shows its query with the results.
+        if(query_->text()!=Value.toString())query_->setText(Value.toString());
+        results_->clear();status_->setText(tr("책 전체에서 검색 중…"));send(Action,Value);return true;}
     if(Action=="bookmark-add") {
         if(!cfi(locator_) || bookmarks_.size()>=128)return false;
         const auto Mark=QJsonObject{{"id",QUuid::createUuid().toString(QUuid::Id128)},{"locator",locator_},{"label",Value.toString().isEmpty()?tr("책갈피 %1").arg(bookmarks_.size()+1):Value.toString().left(160)}};
@@ -97,7 +113,7 @@ void ReadingNavigation::Poll(const QJsonObject& State) {
     if(Serial>seen_ && !Result["busy"].toBool()) {
         seen_=Serial;
         if(Result.contains("error"))status_->setText(Result["error"].toString());
-        else if(Result.contains("hits")) {results_->clear();for(const auto& Hit:Result["hits"].toArray()){const auto H=Hit.toObject();auto* Item=new QListWidgetItem(H["excerpt"].toString(),results_);Item->setData(Qt::UserRole,H["cfi"]);}
+        else if(Result.contains("hits") && Serial>searchCleared_) {results_->clear();for(const auto& Hit:Result["hits"].toArray()){const auto H=Hit.toObject();auto* Item=new QListWidgetItem(H["excerpt"].toString(),results_);Item->setData(Qt::UserRole,H["cfi"]);}
             status_->setText(tr("검색 결과 %1개%2").arg(results_->count()).arg(Result["limited"].toBool()?tr(" · 검색 한도에 도달했습니다"):QString{}));}
     }
     const auto Search=State["readerSearch"].toObject();
@@ -130,6 +146,43 @@ void ReadingNavigation::ConfigureProfile(const QJsonObject& Profile) {
     historyEpoch_=Epoch;
 }
 QJsonObject ReadingNavigation::Snapshot()const {return {{"bookmarks",bookmarks_},{"annotations",annotations_},{"annotationMessage",annotationStatus_?annotationStatus_->text():QString{}},{"annotationsTransient",transient_},{"annotationsBusy",annotationBusy_ || annotationPending_>=0 || !transferPending_.isEmpty()},{"readingStateError",error_},{"readingStateRestoring",restoring_},{"readingStateLoaded",started_}};}
+QSize ReadingNavigation::minimumSizeHint() const {
+    auto Size=QWidget::minimumSizeHint();
+    if(tabs_)Size.setWidth(qMax(Size.width(),tabs_->tabBar()->sizeHint().width()+2*tabs_->style()->pixelMetric(QStyle::PM_DefaultFrameWidth,nullptr,tabs_)));
+    return Size;
+}
+// Item menus. Rows are copied before the menu opens: a search result arriving meanwhile replaces the list.
+void ReadingNavigation::tocMenu(const QPoint& Position) {
+    const auto* Item=toc_->itemAt(Position);const int Index=Item?Item->data(0,Qt::UserRole).toInt():-1;
+    QMenu Menu(this);
+    auto* Go=Menu.addAction(tr("이 장으로 이동"),this,[this,Index]{Execute("toc",Index);});
+    Go->setEnabled(Index>=0 && Index<navigation_.size() && !navigation_[Index].toObject()["path"].toString().isEmpty());Menu.setDefaultAction(Go);
+    Menu.addSeparator();
+    Menu.addAction(tr("모두 펼치기"),this,[this]{toc_->expandAll();});Menu.addAction(tr("모두 접기"),this,[this]{toc_->collapseAll();});
+    Menu.exec(toc_->viewport()->mapToGlobal(Position));
+}
+void ReadingNavigation::searchMenu(const QPoint& Position) {
+    const auto* Item=results_->itemAt(Position);const auto Locator=Item?Item->data(Qt::UserRole).toString():QString{},Text=Item?Item->text():QString{};
+    QMenu Menu(this);
+    auto* Go=Menu.addAction(tr("이 위치로 이동")+QStringLiteral("\tEnter"),this,[this,Locator]{Execute("locate",Locator);});Go->setEnabled(!Locator.isEmpty());Menu.setDefaultAction(Go);
+    Menu.addSeparator();
+    Menu.addAction(tr("결과 복사"),this,[Text]{QGuiApplication::clipboard()->setText(Text);})->setEnabled(Item!=nullptr);
+    Menu.addAction(tr("모든 결과 복사"),this,[this]{QStringList Rows;for(int Row=0;Row<results_->count();++Row)Rows.append(results_->item(Row)->text());QGuiApplication::clipboard()->setText(Rows.join('\n'));})->setEnabled(results_->count()>0);
+    Menu.addSeparator();
+    Menu.addAction(tr("검색 지우기"),this,[this]{
+        // A search still running must not refill the cleared list.
+        searchCleared_=serial_;searchSeen_=qMax(searchSeen_,serial_);results_->clear();query_->clear();status_->setText(error_);
+    })->setEnabled(results_->count()>0 || !query_->text().isEmpty());
+    Menu.exec(results_->viewport()->mapToGlobal(Position));
+}
+void ReadingNavigation::bookmarkMenu(const QPoint& Position) {
+    const auto* Item=marks_->itemAt(Position);const auto Id=Item?Item->data(Qt::UserRole).toString():QString{},Locator=Item?Item->data(Qt::UserRole+1).toString():QString{};
+    QMenu Menu(this);
+    auto* Go=Menu.addAction(tr("이 책갈피로 이동"),this,[this,Locator]{Execute("locate",Locator);});Go->setEnabled(!Locator.isEmpty());Menu.setDefaultAction(Go);
+    Menu.addSeparator();
+    Menu.addAction(tr("삭제"),this,[this,Id]{Execute("bookmark-remove",Id);})->setEnabled(!Id.isEmpty() && !transient_);
+    Menu.exec(marks_->viewport()->mapToGlobal(Position));
+}
 void ReadingNavigation::refresh(){marks_->clear();for(const auto& Value:bookmarks_){const auto M=Value.toObject();auto* Item=new QListWidgetItem(M["label"].toString(),marks_);Item->setData(Qt::UserRole,M["id"]);Item->setData(Qt::UserRole+1,M["locator"]);}if(!error_.isEmpty())status_->setText(error_);}
 bool ReadingNavigation::Flush() {
     saveTimer_.stop();if(transient_ || path_.isEmpty())return true;save();

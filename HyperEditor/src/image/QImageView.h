@@ -14,6 +14,9 @@
 #include <QLabel>
 #include <QPixmap>
 #include <QRubberBand>
+#include <optional>
+
+class QMenu;
 
 class QImageView : public QBaseView
 {
@@ -65,6 +68,8 @@ public:
     FitMode fitMode() const;
     void    setZoomLevel(qreal pct);
     qreal   zoomLevel() const;
+    // Custom zoom relative to the scale on screen, so leaving a fit mode does not jump.
+    void    ZoomBy(double Factor);
 
     // ── 변환 ──
     void rotateClockwise();
@@ -80,6 +85,7 @@ public:
     QJsonObject ClipboardContent() const;
     void     setPenColor(const QColor& color);
     void     setPenWidth(int width);
+    int      penWidth() const;
     void     setPenStyle(Qt::PenStyle style);
     Qt::PenStyle penStyle() const;
     void     setTextPixelSize(int pixelSize);
@@ -111,7 +117,15 @@ public:
     // ── 합성 (Composite) ──
     bool startComposite(const QImage& image);
 
+    // ── Canvas context menu ──
+    // Builds the canvas menu; items the host owns are reported through ContextCommand.
+    QMenu* CreateContextMenu(QWidget* Parent = nullptr);
+    // Check state of the edit mode item in the canvas menu; the host owns the toggle itself.
+    void SetEditModeChecked(bool Checked);
+
 signals:
+    // "image.editMode" or "image.fullscreen" chosen from the canvas menu.
+    void ContextCommand(const QString& Id);
     void ContentChanged();
     void imageChanged();
     void imagePresented(bool Final);
@@ -126,6 +140,7 @@ protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
 
 private:
     QTimer renderTimer_;
@@ -147,6 +162,11 @@ private:
     std::shared_ptr<std::stop_source> directoryStop_ = std::make_shared<std::stop_source>();
     void pushUndoImage();       // 현재 상태를 Undo 스택에 저장
     void setModifiedState(bool modified);
+    void syncModifiedFromHistory();
+    // Modified state at the undo stack's clean index (a pasted image starts unsaved).
+    bool cleanModified_ = false;
+    QImage strokeBefore_;
+    std::optional<bool> editModeChecked_;
     void updateDisplay();
     QImage scaledImage() const;
     QPoint toImageCoord(const QPoint& widgetPos) const;
@@ -196,6 +216,7 @@ private:
     QColor      m_penColor  = Qt::red;
     int         m_penWidth  = 2;
     Qt::PenStyle m_penStyle = Qt::SolidLine;
+    QList<qreal> m_dashPattern{4.0, 2.0};    // Qt::CustomDashLine, in pen widths
     int         m_textPixelSize = 24;
     bool        m_modified  = false;
 

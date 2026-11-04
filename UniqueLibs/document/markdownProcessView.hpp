@@ -35,7 +35,8 @@ class MarkdownProcessView final : public QWidget
     QPointer<QProcess> process_;
     QByteArray input_;
     QString token_;
-    QJsonObject pending_, shortcuts_;
+    // Replayed when the helper (re)attaches.
+    QJsonObject pending_, shortcuts_, zoom_;
     QTimer startup_;
     quintptr child_ = 0;
     void *job_ = nullptr;

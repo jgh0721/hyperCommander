@@ -4,6 +4,8 @@
 #include <QThread>
 #include <QPointer>
 #include <functional>
+#include <optional>
+#include <QStringList>
 class QLineEdit; class QCheckBox; class QLabel; class QTableView; class QPushButton; class QComboBox;
 namespace hc::document::search {
 class ResultModel;
@@ -23,7 +25,13 @@ public:
     QJsonObject Context() const;
     void RestoreContext(const QJsonObject& Context);
     void FinishBuffer(quint64 Ticket, const QString& Error);
+    // Docked inside an EPUB editor's problems panel: the host tab shows the title, so the panel hides
+    // its own title, placement and close controls.
+    void SetEmbedded(bool Embedded);
+    // '파일에서 찾기 · “검색어” n건' for the hosting tab.
+    QString Summary() const;
 signals:
+    void SummaryChanged(const QString& Summary);
     void Navigate(const QJsonObject& Row);
     void PlacementRequested(const QString& Location);
     void CloseRequested();
@@ -35,10 +43,19 @@ private:
     void start();
     void invalidatePreview();
     void replace(const QString& Scope);
+    void showResultMenu(const QPoint& Position);
+    QString rowText(const QJsonObject& Row) const;
+    void copyAll();
+    void clearResults();
     QLineEdit *query_, *replacement_, *root_, *include_, *exclude_;
     QCheckBox *regex_, *case_, *recursive_, *replaceMode_;
     QComboBox* target_;
-    QLabel *status_, *replacementLabel_;
+    QLabel *status_, *replacementLabel_, *title_ = nullptr;
+    QWidget *dock_ = nullptr, *close_ = nullptr;
+    qint64 rows_ = 0;
+    // 모든 결과 복사 reads the spooled pages one by one.
+    struct CopyJob { quint64 generation_ = 0, version_ = 0; int next_ = 0, total_ = 0; QStringList lines_; };
+    std::optional<CopyJob> copy_;
     QTableView* table_;
     ResultModel* model_;
     QPushButton *selected_, *file_, *all_, *undo_;

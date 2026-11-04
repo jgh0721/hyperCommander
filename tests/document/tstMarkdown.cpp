@@ -26,6 +26,12 @@
 #include <QJsonArray>
 #include <QRegularExpression>
 #include <QAbstractScrollArea>
+#include <QMenu>
+#include <QToolBar>
+#include <QClipboard>
+#include <QTimer>
+#include <QApplication>
+#include <functional>
 #include <algorithm>
 #include <limits>
 #include <iostream>
@@ -150,6 +156,25 @@ static QRect nativeRect(QWidget *Widget)
 static void sendMouse(DWORD Flags, int Data = 0)
 {
     INPUT Input{}; Input.type = INPUT_MOUSE; Input.mi.dwFlags = Flags; Input.mi.mouseData = DWORD(Data); SendInput(1, &Input, sizeof(INPUT));
+}
+// Context menus run their own event loop: Inspect sees the next popup menu, which is then closed.
+static void onNextMenu(std::function<void(QMenu *)> Inspect)
+{
+    auto *Poll = new QTimer(qApp);
+    Poll->setInterval(50);
+    QObject::connect(Poll, &QTimer::timeout, qApp, [Poll, Inspect = std::move(Inspect), Tries = 0]() mutable {
+        auto *Menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (!Menu && ++Tries < 200)
+            return;
+        Poll->stop();
+        Poll->deleteLater();
+        if (Menu)
+        {
+            Inspect(Menu);
+            Menu->close();
+        }
+    });
+    Poll->start();
 }
     // A split view whose preview shows token paragraphs, with the source focused.
     struct SyncFixture
@@ -290,11 +315,150 @@ class MarkdownTests final : public QObject
                                  qPrintable(QString::fromUtf8(QJsonDocument(Md->State()).toJson(QJsonDocument::Compact))),
                                  30000);
         QVERIFY(Md->State()["problems"].toInt() > 0);
+        QCOMPARE(Md->RenderProblemCount(), Md->State()["problems"].toInt());
+        bool ProblemField = false;
+        for (const auto &F : Md->StatusFields())
+            ProblemField = ProblemField || (F.id_ == "render" && F.text_ == QStringLiteral("렌더링 문제 %1건").arg(Md->RenderProblemCount()));
+        QVERIFY(ProblemField);
         QVERIFY(Pane.Content() != Original);
         QVERIFY(Pane.RunViewCommand("markdown.preview"));
         QVERIFY(Pane.Content().contains("# "));
         QVERIFY(!Pane.Content().contains("<html"));
         Pane.grab().save(config_.filePath("editor.png"));
+    }
+    // Plan 8.2: one toolbar row, picker status fields with their data, and the Korean context menus.
+    void chromeToolbarStatusAndMenus()
+    {
+        DocumentViewPane Pane;
+        Pane.resize(1100, 800);
+        QVERIFY(Pane.Load(input(), true, true));
+        Pane.show();
+        auto *Md = Pane.findChild<MarkdownDocumentView *>();
+        QVERIFY(Md);
+        QVERIFY(Pane.RunViewCommand("markdown.split"));
+        auto *Bar = Md->Toolbar();
+        QCOMPARE(Bar->objectName(), QString("markdownToolbar"));
+        const auto Find = [Bar](std::initializer_list<const char *> Names) -> QAction * {
+            for (auto *A : Bar->actions())
+                for (const auto *Name : Names)
+                    if (A->objectName() == QLatin1String(Name))
+                        return A;
+            return nullptr;
+        };
+        for (const auto *Id : {"markdown.preview", "markdown.source", "markdown.split", "markdown.toggleToc", "markdown.syncScroll",
+                               "markdown.zoomOut", "markdown.zoomIn", "markdown.refresh", "markdown.find"})
+            QVERIFY2(Find({Id}), Id);
+        // The text editor's replace, wrap and whitespace join the row; its own bar stays hidden.
+        auto *Replace = Find({"textToolbar.replace", "text.replaceBar"});
+        auto *Wrap = Find({"textToolbar.wordWrap", "text.wordWrap"});
+        auto *Whitespace = Find({"textToolbar.whitespace", "text.whitespace"});
+        QVERIFY(Replace && Wrap && Whitespace);
+        QVERIFY(!Find({"textToolbar.find", "text.find", "text.readOnly"}));
+        QToolBar *SourceBar = nullptr;
+        for (auto *Other : Pane.findChildren<QToolBar *>())
+            if (Other != Bar && Other->findChild<QAction *>("text.readOnly", Qt::FindDirectChildrenOnly))
+                SourceBar = Other;
+        QVERIFY(SourceBar && !SourceBar->isVisible());
+        QVERIFY(Replace->isVisible() && Wrap->isVisible() && Whitespace->isVisible());
+        QVERIFY(Pane.RunViewCommand("markdown.preview"));
+        QVERIFY(!Replace->isVisible() && !Wrap->isVisible() && !Whitespace->isVisible());
+        QTRY_VERIFY2_WITH_TIMEOUT(Md->State()["renderedRevision"].toInteger(-2) == Md->State()["revision"].toInteger(-1),
+                                 qPrintable(QString::fromUtf8(QJsonDocument(Md->State()).toJson(QJsonDocument::Compact))),
+                                 30000);
+
+        // Status fields: heading · zoom · render are pickers; the zoom starts the right-aligned group.
+        const auto Field = [Md](const char *Id) {
+            for (const auto &F : Md->StatusFields())
+                if (F.id_ == QLatin1String(Id))
+                    return F;
+            return DocumentStatusField{};
+        };
+        QVERIFY(Field("heading").picker_);
+        QVERIFY(Field("heading").text_.endsWith(" %"));
+        QVERIFY(Field("mdzoom").picker_ && Field("mdzoom").trailing_);
+        QCOMPARE(Field("mdzoom").text_, QStringLiteral("미리보기 100 %"));
+        QVERIFY(Field("render").picker_);
+        QCOMPARE(Field("render").text_, QStringLiteral("렌더링 최신"));
+        QVERIFY(!Field("markdown.viewMode").id_.isEmpty());
+        QCOMPARE(Md->RenderProblemCount(), 0);
+        QVERIFY(Md->RenderedAt().isValid());
+
+        // Zoom: direct value, command with a value, reset, bounds.
+        Md->SetPreviewZoom(125);
+        QCOMPARE(Md->PreviewZoomPercent(), 125);
+        QCOMPARE(Field("mdzoom").text_, QStringLiteral("미리보기 125 %"));
+        QVERIFY(Md->Run("markdown.zoomReset"));
+        QCOMPARE(Md->PreviewZoomPercent(), 100);
+        QVERIFY(Md->CanRun("markdown.zoomSet"));
+        QVERIFY(Md->Run("markdown.zoomSet", 150));
+        QCOMPARE(Md->State()["zoom"].toInt(), 150);
+        Md->SetPreviewZoom(1000);
+        QCOMPARE(Md->PreviewZoomPercent(), MarkdownDocumentView::MaxZoomPercent);
+        QVERIFY(Md->Run("markdown.zoomReset"));
+
+        // Headings: outline order, source lines and depth.
+        const auto Headings = Md->Headings();
+        QCOMPARE(Headings.size(), 3);
+        QCOMPARE(Headings[0].first, QStringLiteral("제목"));
+        QCOMPARE(Headings[0].second, 1);
+        QCOMPARE(Headings[1].second, 3);
+        QCOMPARE(Headings[2].second, 7);
+        QCOMPARE(Md->HeadingDepth(0), 0);
+        QCOMPARE(Md->HeadingDepth(2), 1);
+        Md->GoToHeading(2);
+        QCOMPARE(Md->CurrentHeadingIndex(), 2);
+
+        // Preview menu: the renderer's report opens the host's Korean menu.
+        auto *Preview = Md->findChild<MarkdownProcessView *>();
+        QVERIFY(Preview);
+        QStringList Labels;
+        onNextMenu([&](QMenu *Menu) {
+            for (auto *A : Menu->actions())
+                if (!A->isSeparator())
+                    Labels << A->text();
+        });
+        emit Preview->Reported({{"type", "context"}, {"x", 30}, {"y", 30}, {"selection", ""}, {"link", "https://example.com/"},
+                                {"fragment", ""}, {"line", 1}, {"column", 0}});
+        QTRY_VERIFY(!Labels.isEmpty());
+        QCOMPARE(Labels, (QStringList{QStringLiteral("복사"), QStringLiteral("전체 선택"), QStringLiteral("소스에서 이 위치 보기"),
+                                      QStringLiteral("링크 열기"), QStringLiteral("링크 주소 복사"), QStringLiteral("미리보기 확대"),
+                                      QStringLiteral("미리보기 축소"), QStringLiteral("미리보기 원래 크기"), QStringLiteral("미리보기 갱신"),
+                                      QStringLiteral("개요"), QStringLiteral("스크롤 동기화")}));
+
+        // Outline menu, and its copy item.
+        // The toolbar (and its actions) lives in the pane's layout, outside the Markdown view.
+        auto *Toc = Md->Toolbar()->findChild<QAction *>("markdown.toggleToc");
+        auto *Tree = Md->findChild<QTreeWidget *>();
+        QVERIFY(Toc && Tree);
+        const bool TocShown = Toc->isChecked();
+        if (!TocShown)
+            Toc->trigger();
+        QTRY_VERIFY(Tree->isVisible());
+        QStringList OutlineLabels;
+        onNextMenu([&](QMenu *Menu) {
+            for (auto *A : Menu->actions())
+            {
+                if (A->isSeparator())
+                    continue;
+                OutlineLabels << A->text();
+                if (A->text() == QStringLiteral("제목 텍스트 복사"))
+                    A->trigger();
+            }
+        });
+        emit Tree->customContextMenuRequested(Tree->visualItemRect(Tree->topLevelItem(0)).center());
+        QTRY_VERIFY(!OutlineLabels.isEmpty());
+        QCOMPARE(OutlineLabels, (QStringList{QStringLiteral("이 제목으로 이동"), QStringLiteral("모두 펼치기"), QStringLiteral("모두 접기"),
+                                             QStringLiteral("제목 텍스트 복사")}));
+        QTRY_COMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("제목"));
+        if (!TocShown)
+            Toc->trigger();
+
+        // Source menu's "미리보기에서 이 위치 보기" shows the preview beside a source-only view.
+        QVERIFY(Pane.RunViewCommand("markdown.source"));
+        QVERIFY(!Preview->isVisible());
+        Md->ShowSourceLineInPreview();
+        QCOMPARE(Md->State()["mode"].toString(), QString("split"));
+        QTRY_VERIFY(Preview->isVisible());
     }
     void previewFocus() {
         DocumentViewPane Pane;Pane.resize(1100,800);QVERIFY(Pane.Load(input(),true,true));Pane.show();Pane.activateWindow();

@@ -81,6 +81,8 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
     });load(std::move(Bytes));
 }
 EpubSourceEditor::~EpubSourceEditor(){
+    // The docked search panel runs a worker thread and belongs to the workspace: hand it back first.
+    if(auto* Panel=DetachSearchPanel())emit SearchPanelReleased(Panel);
     if(validationCancel_)validationCancel_->store(true);if(previewCancel_)previewCancel_->store(true);if(structureCancel_)structureCancel_->store(true);stopEpubCheck();RequestPreviewClose();if(ready_ && !discardedRecovery_ && recoveryEnabled_)Checkpoint();if(cancel_)cancel_->store(true);
     saveWorkspace();saveLayout();for(const auto& Path:sourceBuffers_.keys())releaseSource(Path);
     // The workspace may have adopted the strip into its status row.

@@ -32,19 +32,27 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
     const sourcePositions=createSourcePositions(snapshot,scroll.container);
     const previewScroll=createPreviewScroll({documents,...scroll});
     let result = { serial: 0 }, popup = null, dialog = null, focus = null;
-    // Editing previews report right clicks; the host process shows the menu.
+    // Readers and editing previews report right clicks; the host process shows the menu.
     let contextMenus = false, contextRequest = { serial: 0 }, contextSerial = 0;
+    // Reading position of the menu target: the selection, or the caret placed at the click.
+    function contextLocation(doc) {
+        const view=book()?.rendition?.manager?.views?.all().find(item=>item.document===doc), selection=doc.getSelection();
+        let locator="";
+        try {if(view && selection?.rangeCount){const value=view.section.cfiFromRange(selection.getRangeAt(0));if(validCfi(value))locator=value;}} catch {}
+        return {locator,chapter:view?.section?.index ?? -1};
+    }
     function requestContext(event, doc) {
         if(!contextMenus)return;event.preventDefault();event.stopImmediatePropagation();
         const frame=doc.defaultView?.frameElement, offset=frame?frame.getBoundingClientRect():{left:0,top:0};
         const keyboard=event.type==="keydown", target=keyboard?doc.getSelection()?.anchorNode?.parentElement||doc.body:event.target;
         const rect=keyboard?target?.getBoundingClientRect?.()||{left:0,top:0,height:0}:null;
         const x=Math.round(offset.left+(keyboard?rect.left:event.clientX)), y=Math.round(offset.top+(keyboard?rect.top+rect.height:event.clientY));
-        const selection=doc.getSelection()?.toString().slice(0,4096)||"";const image=target?.closest?.("img");
+        const selection=doc.getSelection()?.toString().slice(0,4096)||"";const image=target?.closest?.("img"), anchorElement=target?.closest?.("a[href]");
         if(!keyboard && target && !doc.getSelection()?.containsNode(target,true)) {const range=doc.caretRangeFromPoint?.(event.clientX,event.clientY);if(range && !selection){const s=doc.getSelection();s.removeAllRanges();s.addRange(range);}}
         sourcePositions.capture(doc);const anchor=sourcePositions.state();
         let path="";if(image){try{const url=new URL(image.getAttribute("src"),doc.baseURI);if(url.protocol==="epub:" && url.pathname.startsWith("/book/"))path=decodeURIComponent(url.pathname.slice(6));}catch{}}
-        contextRequest={serial:++contextSerial,x,y,selection,anchor,target:image?{kind:"image",path}:{kind:"text"}};
+        let link="";if(anchorElement){try{link=new URL(anchorElement.getAttribute("href"),doc.baseURI).href.slice(0,2048);}catch{}}
+        contextRequest={serial:++contextSerial,x,y,selection,anchor,link,...contextLocation(doc),target:image?{kind:"image",path}:{kind:"text"}};
     }
     let searchResult = { serial: 0 }, searchController;
     const cancelSearch = () => { searchController?.abort(); searchController = null; };
@@ -152,5 +160,7 @@ export function createReaderTools({ publication, documents, snapshot, restore, b
         finally {if(quiet)previewScroll.quiet();}
     }
     window.hcDismissPopup = () => {if(!dialog)return false;close();return true;};
-    return {hook,action,cancelSearch,cancelAnnotations:annotations.cancel,previewScroll,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),previewScroll:previewScroll.state(),readerAction:result,readerSearch:searchResult,popup,contextRequest})};
+    // Outside the command queue: switching menus must not replace a pending command's result.
+    const setContextMenus = value => { contextMenus = value === true; };
+    return {hook,action,cancelSearch,cancelAnnotations:annotations.cancel,previewScroll,setContextMenus,state:()=>({...annotations.state(),sourceSelection:sourcePositions.state(),previewScroll:previewScroll.state(),readerAction:result,readerSearch:searchResult,popup,contextRequest})};
 }

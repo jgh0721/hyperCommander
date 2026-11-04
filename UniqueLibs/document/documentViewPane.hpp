@@ -11,6 +11,7 @@
 
 class QToolBar;
 class QMenu;
+class QTimer;
 class QBaseView;
 class QTextView;
 class QPDFView;
@@ -171,6 +172,13 @@ namespace hc::document
         QByteArray serializeContent(std::optional<storage::Error>* Error) const;
         bool unlimitedBytes_ = false;
         int quality_ = -1;
+        // The slideshow outlives the image view: stepping to the next image reloads the view (plan 8.4).
+        QTimer* slideshow_ = nullptr;
+        bool slideshowStep_ = false;
+    public:
+        void SetSlideshow(bool Running);
+        bool SlideshowRunning() const;
+    private:
         QByteArray originalImageBytes_, originalImageHash_;
         QString originalImagePath_;
         QString readingPath_,readingEntry_;

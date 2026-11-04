@@ -4,11 +4,14 @@
 #include <QWidget>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QJsonValue>
+#include <QDateTime>
 #include <QTimer>
 #include <QElapsedTimer>
 class QTextView;
 class QToolBar;
 class QTreeWidget;
+class QTreeWidgetItem;
 class QSplitter;
 class QLabel;
 class QAction;
@@ -19,18 +22,24 @@ class MarkdownDocumentView final : public QWidget
 {
     Q_OBJECT
   public:
+    static constexpr int MinZoomPercent = 50, MaxZoomPercent = 300;
     MarkdownDocumentView(QTextView *Source, const QString &Path, bool Editor, QWidget *Parent = nullptr);
     ~MarkdownDocumentView() override;
+    // The one-row "markdownToolbar"; while the source is shown it also carries the text editor's
+    // replace, word wrap and whitespace actions (SetSourceTools).
     QToolBar *Toolbar() const
     {
         return toolbar_;
     }
     bool SourceVisible() const;
     bool CanRun(const QString &Id) const;
-    bool Run(const QString &Id);
+    // Value is used by markdown.zoomSet (percent); without one that command asks for it.
+    bool Run(const QString &Id, const QJsonValue &Value = {});
     bool RunPreviewCommand(const QString &Id);
     void ReloadPreferences();
     void SetShortcutBindings(const QJsonObject &Bindings);
+    // Takes replace, word wrap and whitespace from the text editor's bar into Toolbar() and keeps
+    // that bar hidden. Find stays markdown.find, which serves both panes.
     void SetSourceTools(QToolBar *Tools);
     void Refresh(bool Force = false);
     void Focus();
@@ -44,8 +53,37 @@ class MarkdownDocumentView final : public QWidget
         }
     }
     QWidget *InputWidget() const;
+    // Fields: "heading" (preview only), "markdown.viewMode", "mdzoom" (not in source mode) and
+    // "render". heading, mdzoom and render are pickers.
     QList<DocumentStatusField> StatusFields() const;
     QJsonObject State() const;
+
+    // Data for the status pickers.
+    // Outline headings in document order: (text, current source line).
+    QList<QPair<QString, int>> Headings() const;
+    // Index in Headings() of the heading at the top of the preview, or -1.
+    int CurrentHeadingIndex() const;
+    // Nesting depth of a heading in the outline; 0 is top level.
+    int HeadingDepth(int Index) const;
+    void GoToHeading(int Index);
+    int PreviewZoomPercent() const;
+    void SetPreviewZoom(int Percent);
+    int RenderProblemCount() const
+    {
+        return problems_;
+    }
+    // Problems of the rendered revision: {line, kind, message}.
+    QJsonArray RenderProblems() const
+    {
+        return problemDetails_;
+    }
+    // When the shown revision finished rendering; invalid before the first render.
+    QDateTime RenderedAt() const
+    {
+        return renderedAt_;
+    }
+    // Scrolls the preview to the source caret, showing the preview beside the source when hidden.
+    void ShowSourceLineInPreview();
   signals:
     void Changed();
     void OpenRequested(const QString &Path);
@@ -60,6 +98,14 @@ class MarkdownDocumentView final : public QWidget
     void RequestDiagnostics(QJsonObject Request);
 
   private:
+    enum class RenderState
+    {
+        Waiting,
+        Rendering,
+        Manual,
+        Current,
+        Partial
+    };
     void mode(const QString &Mode);
     void alignPreview();
     void report(const QJsonObject &Value);
@@ -78,14 +124,26 @@ class MarkdownDocumentView final : public QWidget
     double toPreviewLine(double Line) const;
     double fromPreviewLine(double Line) const;
     void syncControls();
-    // Line is in the previewed revision.
-    void sendPosition(double Line, bool Scroll, const QJsonObject &Anchor = {});
+    // Line is in the previewed revision. Reveal scrolls the preview to it even with scroll sync on.
+    void sendPosition(double Line, bool Scroll, const QJsonObject &Anchor = {}, bool Reveal = false);
     void saveToggle(const QString &Key, bool Value);
+    void focusSource();
+    // Line is in the previewed revision.
+    void goToHeadingLine(int Line);
+    // Context menus. Value is a renderer "context" report: x, y in CSS px, selection, link, fragment, line, column.
+    void showPreviewMenu(const QJsonObject &Value);
+    void showOutlineMenu(const QPoint &Position);
+    // Line is in the previewed revision; Offset is the CSS px height in the preview to keep.
+    void showInSource(double Line, int Column, double Offset);
+    void openLink(const QString &Url, const QString &Fragment);
+    QString renderText() const;
+    QString renderDetail() const;
     QTextView *source_;
     QString path_, mode_, status_, heading_, error_;
     bool editor_ = false, readOnly_ = false, composing_ = false;
     QToolBar *toolbar_;
-    QToolBar *sourceTools_ = nullptr;
+    // Text editor actions shown in toolbar_ only while the source is visible.
+    QList<QAction *> sourceActions_;
     QWidget *outlinePanel_;
     QWidget *previewPanel_;
     QTreeWidget *outline_;
@@ -95,8 +153,10 @@ class MarkdownDocumentView final : public QWidget
     QMap<QString, QAction *> actions_;
     QTimer debounce_, sample_, sampleSoon_;
     QElapsedTimer suppress_;
-    QJsonObject options_, previewScroll_, lastSourceAnchor_, diagnostics_;
+    QJsonObject options_, previewScroll_, lastSourceAnchor_, diagnostics_, bindings_;
     QJsonArray problemDetails_;
+    QDateTime renderedAt_;
+    RenderState render_ = RenderState::Waiting;
     bool previewActive_ = false;
     qint64 revision_ = 0, rendered_ = -1, renderRequested_ = -1, scrollSerial_ = 0, anchorSyncs_ = 0;
     qintptr lastPosition_ = -1;

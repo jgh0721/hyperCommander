@@ -267,6 +267,14 @@ namespace hc::document
         Mode->addAction(chromeAction(tr("다음 검색 결과"), "pdfMenu.findNext", [Pdf] { Pdf->searchNext(); }, Key("pdf.findNext")));
         Mode->addAction(chromeAction(tr("이전 검색 결과"), "pdfMenu.findPrev", [Pdf] { Pdf->searchPrev(); }, Key("pdf.findPrev")));
         Mode->addSeparator();
+        // D1: the stored /Rotate of the current page (an edit), apart from the view rotation in 보기.
+        Mode->addMenu(RadioMenu(Mode, tr("현재 쪽 회전 (편집)"), [Pdf](QMenu* Menu) {
+            auto* Group = new QActionGroup(Menu);
+            for (const int Angle : {0, 90, 180, 270}) {
+                auto* Item = Check(Menu, QStringLiteral("%1°").arg(Angle), int(Pdf->currentPageRotation()) == Angle); Group->addAction(Item);
+                QObject::connect(Item, &QAction::triggered, Pdf, [Pdf, Angle] { Pdf->RotateCurrentPage(static_cast<QPDFView::RotationAngle>(Angle)); });
+            }
+        }));
         Mode->addMenu(RadioMenu(Mode, tr("주석"), [Pdf](QMenu* Menu) {
             using T = QPDFView::AnnotationTool;
             auto* Group = new QActionGroup(Menu);
@@ -308,13 +316,13 @@ namespace hc::document
             QObject::connect(Rtl, &QAction::triggered, Pdf, [Pdf](bool On) { Pdf->setSpreadReadingDirection(On ? QPDFView::RightToLeft : QPDFView::LeftToRight); });
         })->menuAction();
         Items << RadioMenu(modeMenu_, tr("회전"), [Pdf](QMenu* Menu) {
-            QObject::connect(Menu->addAction(tr("왼쪽으로 90°")), &QAction::triggered, Pdf, [Pdf] { Pdf->setRotationAngle(static_cast<QPDFView::RotationAngle>((int(Pdf->rotationAngle()) + 270) % 360)); });
-            QObject::connect(Menu->addAction(tr("오른쪽으로 90°")), &QAction::triggered, Pdf, [Pdf] { Pdf->setRotationAngle(static_cast<QPDFView::RotationAngle>((int(Pdf->rotationAngle()) + 90) % 360)); });
+            QObject::connect(Menu->addAction(tr("왼쪽으로 90°")), &QAction::triggered, Pdf, [Pdf] { Pdf->setViewRotation(Pdf->viewRotation() - 90); });
+            QObject::connect(Menu->addAction(tr("오른쪽으로 90°")), &QAction::triggered, Pdf, [Pdf] { Pdf->setViewRotation(Pdf->viewRotation() + 90); });
             Menu->addSeparator();
             auto* Group = new QActionGroup(Menu);
             for (const int Angle : {0, 90, 180, 270}) {
-                auto* Item = Check(Menu, QStringLiteral("%1°").arg(Angle), int(Pdf->rotationAngle()) == Angle); Group->addAction(Item);
-                QObject::connect(Item, &QAction::triggered, Pdf, [Pdf, Angle] { Pdf->setRotationAngle(static_cast<QPDFView::RotationAngle>(Angle)); });
+                auto* Item = Check(Menu, QStringLiteral("%1°").arg(Angle), Pdf->viewRotation() == Angle); Group->addAction(Item);
+                QObject::connect(Item, &QAction::triggered, Pdf, [Pdf, Angle] { Pdf->setViewRotation(Angle); });
             }
         })->menuAction();
         auto* Gap2 = new QAction(chromeOwner_); Gap2->setSeparator(true); Items << Gap2;
@@ -378,8 +386,8 @@ namespace hc::document
         connect(Crop->addAction(tr("자르기 적용")), &QAction::triggered, Image, &QImageView::cropToSelection);
         Item(tr("출력 크기…"), "imageMenu.outputSize", Single, [this] { if (auto* Resize = findChild<QAction*>("imageOutputSize")) Resize->trigger(); });
         Separator(Single);
-        Item(tr("슬라이드쇼 시작"), "imageMenu.slideshowStart", Single, [Image] { Image->startSlideshow(); });
-        Item(tr("슬라이드쇼 정지"), "imageMenu.slideshowStop", Single, [Image] { Image->stopSlideshow(); });
+        Item(tr("슬라이드쇼 시작"), "imageMenu.slideshowStart", Single, [this] { SetSlideshow(true); });
+        Item(tr("슬라이드쇼 정지"), "imageMenu.slideshowStop", Single, [this] { SetSlideshow(false); });
         Separator(Single);
         auto* Play = Item(tr("재생 / 일시정지"), "imageMenu.animation", Single, [this] { RunViewCommand("image.animation"); }, "image.animation");
         auto* PreviousFrame = Item(tr("이전 프레임"), "imageMenu.framePrevious", Single, [this] { animation_->Step(-1); });
@@ -396,6 +404,11 @@ namespace hc::document
         Item(tr("다음 쪽"), "comicMenu.next", Comic, [Reading] { Reading->RunCommand("image.next"); }, "image.next");
         Item(tr("마지막 쪽"), "comicMenu.last", Comic, [Reading] { Reading->RunCommand("image.last"); }, "image.last");
         Item(tr("쪽으로 이동…"), "comicMenu.goToPage", Comic, [this] { emit StatusPickerRequested("page"); }, "image.goToPage");
+        // 페이지 목록: the navigator's page grid. The full screen capsule shares readingPageList.
+        const auto OpenPages = [Reading] { if (auto* Pages = Reading->findChild<QToolButton*>("imageNavigatorPages")) Pages->click(); };
+        Item(tr("페이지 목록…"), "comicMenu.pages", Comic, OpenPages);
+        auto* PageList = Scoped(chromeAction(tr("페이지 목록"), "readingPageList", OpenPages), Books);
+        PageList->setIcon(ToolbarIcons::iconByName("toc-toggle")); PageList->setProperty("documentIconName", "toc-toggle");
         Item(tr("다음 화면"), "webtoonMenu.next", Webtoon, [Reading] { Reading->RunCommand("image.next"); }, "image.next");
         Item(tr("이전 화면"), "webtoonMenu.previous", Webtoon, [Reading] { Reading->RunCommand("image.previousSpace"); }, "image.previousSpace");
         Item(tr("첫 이미지"), "webtoonMenu.first", Webtoon, [Reading] { Reading->RunCommand("image.first"); }, "image.first");
@@ -557,15 +570,27 @@ namespace hc::document
         Tool("rotate-cw", tr("시계 방향 90°"), Single, [Image] { Image->rotateClockwise(); });
         Line(Single);
         auto* Slideshow = Tool("play", tr("슬라이드쇼"), Single, {}, tr("슬라이드쇼")); Slideshow->setCheckable(true);
-        connect(Slideshow, &QAction::triggered, Image, [Image](bool On) { if (On) Image->startSlideshow(); else Image->stopSlideshow(); });
+        Slideshow->setObjectName("imageSlideshowButton"); Slideshow->setChecked(SlideshowRunning());
+        connect(Slideshow, &QAction::triggered, this, [this](bool On) { SetSlideshow(On); });
         auto* Spread = Tool("spread", tr("두 쪽 보기"), Comic, {}, tr("두 쪽")); Spread->setCheckable(true); Spread->setObjectName("readingSpreadButton");
         connect(Spread, &QAction::triggered, Reading, [Reading](bool On) { Reading->SetMode(On ? ImageReadingView::Comic : ImageReadingView::Single); });
         auto* Direction = Tool("reading-direction", tr("읽기 방향"), Comic, [Reading] { Reading->SetRightToLeft(!Reading->State()["rtl"].toBool()); }, tr("왼쪽→오른쪽"));
         Direction->setObjectName("readingDirectionButton");
         Line(Comic);
-        auto* CorrectButton = Tool("adjust", tr("화질 보정"), Books, {}, tr("화질 보정")); CorrectButton->setMenu(Correct);
+        auto* CorrectButton = Tool("adjust", tr("화질 보정"), Books, {}, tr("화질 보정")); CorrectButton->setMenu(Correct); CorrectButton->setObjectName("readingCorrectButton");
         if (auto* Button = qobject_cast<QToolButton*>(toolbar_->widgetForAction(CorrectButton))) Button->setPopupMode(QToolButton::InstantPopup);
-        Tool("bookmark", tr("책갈피 저장"), Books, [Reading] { Reading->Bookmark(); });
+        Tool("bookmark", tr("책갈피 저장"), Books, [Reading] { Reading->Bookmark(); })->setObjectName("readingBookmarkButton");
+        // 이미지 간격 ▾ (webtoon): used by the full screen capsule; the status bar has the same chips.
+        auto* GapMenu = new QMenu(modeMenu_);
+        for (const int Value : {0, 8, 16}) connect(GapMenu->addAction(tr("%1 px").arg(Value)), &QAction::triggered, Reading, [Reading, Value] { Reading->SetGap(Value); });
+        GapMenu->addSeparator();
+        connect(GapMenu->addAction(tr("사용자 지정…")), &QAction::triggered, this, [this, Reading] {
+            bool Ok = false;
+            const int Value = hc::ui::InputDialog::getInt(this, tr("이미지 간격"), tr("간격 (DIP)"), Reading->State()["gap"].toInt(), 0, 200, 1, &Ok);
+            if (Ok) Reading->SetGap(Value);
+        });
+        auto* GapButton = Scoped(new QAction(ToolbarIcons::iconByName("layout"), tr("간격 0 px"), chromeOwner_), Webtoon);
+        GapButton->setObjectName("readingGapButton"); GapButton->setToolTip(tr("이미지 간격")); GapButton->setProperty("documentIconName", "layout"); GapButton->setMenu(GapMenu);
         auto* Spacer = new QWidget(toolbar_); Spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         Scoped(toolbar_->addWidget(Spacer), Every);
         if (Edit) {
@@ -584,6 +609,7 @@ namespace hc::document
         QList<QAction*> Scoped = modeMenu_->actions() + toolbar_->actions() + contribution_.viewActions_ + contribution_.editActions_;
         for (auto* Action : Scoped) if (viewKinds::Has(Action)) Action->setVisible(viewKinds::Applies(Action, Kind));
         const auto State = reading_->isHidden() ? QJsonObject{} : reading_->State();
+        if (auto* Gap = chromeOwner_->findChild<QAction*>("readingGapButton")) Gap->setText(tr("간격 %1 px").arg(State["gap"].toInt()));
         for (auto* Action : toolbar_->actions()) {
             const QSignalBlocker Block(Action);
             if (Action->objectName() == QLatin1String("readingSpreadButton")) Action->setChecked(State["mode"].toInt() == ImageReadingView::Comic);
@@ -774,6 +800,7 @@ namespace hc::document
         contribution_.viewActions_ = Saved;
         View << Scoped(chromeAction(tr("미리보기 확대"), "markdownView.zoomIn", Command("markdown.zoomIn"), Key("markdown.zoomIn")), Both);
         View << Scoped(chromeAction(tr("미리보기 축소"), "markdownView.zoomOut", Command("markdown.zoomOut"), Key("markdown.zoomOut")), Both);
+        View << Scoped(chromeAction(tr("미리보기 원래 크기"), "markdownView.zoomReset", Command("markdown.zoomReset"), {}), Both);
         contribution_.viewActions_ = View;
         contribution_.menu_ = modeMenu_;
         syncMarkdownChrome();

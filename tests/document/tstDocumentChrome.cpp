@@ -17,6 +17,13 @@
 #include "UniqueLibs/document/documentStatusPopup.hpp"
 #include "UniqueLibs/document/documentProgressOverlay.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
+#include "UniqueLibs/document/documentSettingsDialog.hpp"
+#include <QClipboard>
+#include <QImage>
+#include <QPushButton>
+#include <QSignalSpy>
+#include <QSpinBox>
+#include <QCheckBox>
 
 using namespace hc::document;
 
@@ -154,6 +161,39 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(Store), 5000);
         QFile Json(Store); QVERIFY(Json.open(QIODevice::ReadOnly));
         QVERIFY(QString::fromUtf8(Json.readAll()).contains("recent.txt"));
+    }
+    void recentSettings()
+    {
+        // 설정 › 공통 › 최근 항목 (plan 6.6): record switch, menu count 0–15 and the clear request.
+        const auto Path = qApp->property("documentViewsConfigDir").toString() + "/settings-recent.json";
+        DocumentSettingsDialog Dialog(Path, {});
+        auto* Enabled = Dialog.findChild<QCheckBox*>("documentViews/recent/enabled"); QVERIFY(Enabled); QVERIFY(Enabled->isChecked());
+        auto* Count = Dialog.findChild<QSpinBox*>("documentViews/recent/menuCount"); QVERIFY(Count);
+        QCOMPARE(Count->minimum(), 0); QCOMPARE(Count->maximum(), 15); QCOMPARE(Count->value(), 9);
+        auto* Clear = Dialog.findChild<QPushButton*>("settingsClearRecent"); QVERIFY(Clear);
+        QSignalSpy Requests(&Dialog, &DocumentSettingsDialog::ClearRecentRequested);
+        Clear->click(); QCOMPARE(Requests.count(), 1);
+    }
+    void imageCopyAndSlideshow()
+    {
+        QTemporaryDir Folder;
+        for (int I = 1; I <= 3; ++I) { QImage Image(64, 40, QImage::Format_RGB32); Image.fill(QColor::fromHsv(I * 90, 200, 200)); QVERIFY(Image.save(Folder.filePath(QString("%1.png").arg(I)))); }
+        DocumentWorkspaceWidget Workspace(root_.filePath("recovery-f")); Workspace.resize(900, 600); Workspace.show();
+        Workspace.SetClosePrompt([](const QString&) { return int(QMessageBox::Discard); });
+        const auto Id = open(Workspace, Folder.filePath("1.png")); QVERIFY(!Id.isEmpty());
+        auto* Pane = Workspace.findChild<DocumentViewPane*>(); QVERIFY(Pane);
+        // 이미지 복사 without a selection copies the displayed image.
+        QGuiApplication::clipboard()->clear();
+        QVERIFY(Pane->RunViewCommand("edit.copy"));
+        QCOMPARE(QGuiApplication::clipboard()->image().size(), QSize(64, 40));
+        // The slideshow keeps running across the view reload of each step and stops on a manual step.
+        const auto PathOf = [&] { for (const auto& Item : Workspace.Snapshot()["documents"].toArray()) if (Item.toObject()["documentId"].toString() == Id) return Item.toObject()["path"].toString(); return QString(); };
+        Pane->SetSlideshow(true); QVERIFY(Pane->SlideshowRunning());
+        QTRY_VERIFY_WITH_TIMEOUT(PathOf().endsWith("2.png"), 8000);
+        QTRY_VERIFY_WITH_TIMEOUT(PathOf().endsWith("3.png"), 8000);
+        QVERIFY(Pane->SlideshowRunning());
+        QVERIFY(Pane->RunViewCommand("image.previous"));
+        QVERIFY(!Pane->SlideshowRunning());
     }
 };
 

@@ -319,6 +319,14 @@ namespace hc::document
             Tab->choosingSavePath_ = true;
             ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
                 Tab->choosingSavePath_ = false;
+                // Lossy formats ask for the quality after the path (plan 8.4, D7); cancel keeps the document as is.
+                const auto Suffix = QFileInfo(Path).suffix().toLower();
+                if (!Tab->closed_ && !Path.isEmpty() && Tab->pane_->ViewId() == "image" && QStringList{"jpg", "jpeg", "webp"}.contains(Suffix)) {
+                    bool Accepted = false;
+                    const int Quality = hc::ui::InputDialog::getInt(this, tr("이미지 품질"), tr("품질 (1–100)"), 95, 1, 100, 1, &Accepted);
+                    if (!Accepted) { Tab->closeRequested_ = Tab->closeAfterSave_ = false; closingWorkspace_ = false; return; }
+                    Tab->pane_->Execute({{"action", "image.exportQuality"}, {"quality", Quality}});
+                }
                 if (!Tab->closed_ && !Path.isEmpty()) save(Tab, Path, true);
                 else if (!Tab->closed_) { Tab->closeRequested_ = Tab->closeAfterSave_ = false; closingWorkspace_ = false; }
             });
@@ -788,6 +796,7 @@ namespace hc::document
         auto* Dialog = new DocumentSettingsDialog(settingsPath_, findChildren<QAction*>(), hosted_ ? nullptr : this);
         preferences_ = Dialog; Dialog->setAttribute(Qt::WA_DeleteOnClose);
         connect(Dialog, &DocumentSettingsDialog::PreferencesSaved, this, &DocumentWorkspaceWidget::refreshPreferences);
+        connect(Dialog, &DocumentSettingsDialog::ClearRecentRequested, this, &DocumentWorkspaceWidget::clearRecent);
         if (!hosted_) Dialog->setWindowModality(Qt::WindowModal);
         const auto Available = screen()->availableGeometry();
         const auto Center = mapToGlobal(rect().center());
@@ -1031,7 +1040,8 @@ namespace hc::document
         });
         connect(Pane,&DocumentViewPane::ViewStateChanged,this,[this,Tab]{if(!Tab->closed_&&!Tab->loading_){auto* Timer=findChild<QTimer*>("documentStatusRefresh");if(!Timer->isActive())Timer->start();}});
         connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_){if(epubFullscreen_)toggleEpubFullscreen();else escapeViewer();}});
-        connect(Pane,&DocumentViewPane::FullscreenRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_)toggleEpubFullscreen();});
+        // Images (and comic/webtoon books) use the image full screen overlay; EPUB has its own.
+        connect(Pane,&DocumentViewPane::FullscreenRequested,this,[this,Tab]{if(active()!=Tab || Tab->closed_)return;if(Tab->pane_->ViewId()=="image")findChild<ImageFullscreen*>("imageFullscreen")->Toggle();else toggleEpubFullscreen();});
         connect(Pane,&DocumentViewPane::RetryRequested,this,[this,Tab]{if(!Tab->closed_){activate(Tab);findChild<QAction*>("reloadDocument")->trigger();}});
         connect(Pane,&DocumentViewPane::ReadingVolumeChanged,this,[this,Tab](const QString& Path){
             if(Tab->closed_ || Tab->loading_)return;
@@ -1873,7 +1883,7 @@ namespace hc::document
             if(!Hidden.isEmpty())Fields.erase(std::remove_if(Fields.begin(),Fields.end(),[&Hidden](const auto& Field){return Field.id_!="mode"&&Field.id_!="state"&&Hidden.contains(Field.id_);}),Fields.end());
         }
         statusBar_->SetFields(Fields);statusSlot_->show();
-        placeStartPage(); syncToolbarRow();
+        placeStartPage(); syncToolbarRow(); syncSearchHost();
         findChild<ImageFullscreen*>("imageFullscreen")->UpdateStatus();
         emit StateChanged();
     }
@@ -1961,8 +1971,10 @@ namespace hc::document
     void DocumentWorkspaceWidget::clearRecent()
     {
         if (!recent_) return;
+        // From the settings dialog the question belongs to that dialog, which is modal over the workspace.
+        QWidget* Owner = preferences_ && preferences_->isVisible() ? static_cast<QWidget*>(preferences_.data()) : this;
         auto* Box = new hc::ui::MessageDialog(QMessageBox::Question, tr("최근 항목 지우기"), tr("고정하지 않은 최근 항목을 모두 지우시겠습니까?"),
-            QMessageBox::Yes | QMessageBox::Cancel, this);
+            QMessageBox::Yes | QMessageBox::Cancel, Owner);
         Box->setAttribute(Qt::WA_DeleteOnClose);
         connect(Box, &QMessageBox::finished, this, [this](int Result) { if (Result == QMessageBox::Yes && recent_) recent_->Clear(false); });
         Box->open();
@@ -2321,6 +2333,9 @@ void DocumentWorkspaceWidget::openSearch(bool Replace) {
             searchPanel_->FinishBuffer(Ticket, Error);
         });
         connect(searchPanel_, &search::Panel::PlacementRequested, this, &DocumentWorkspaceWidget::placeSearch);
+        connect(searchPanel_, &search::Panel::SummaryChanged, this, [this](const QString& Summary) {
+            if (auto* Editor = qobject_cast<EpubSourceEditor*>(searchEpubHost_.data())) Editor->SetSearchPanelTitle(Summary);
+        });
         connect(searchPanel_, &search::Panel::CloseRequested, this, [this] {
             const auto Index = tabs_->indexOf(searchPanel_); if (Index >= 0) tabs_->removeTab(Index);
             searchDock_->hide(); searchPanel_->hide();
@@ -2328,13 +2343,40 @@ void DocumentWorkspaceWidget::openSearch(bool Replace) {
     }
     const auto Location = appliedPreferences_["documentViews"].toObject()["textView"].toObject()["findInFiles"].toObject()["openLocation"].toString("bottom");
     searchPanel_->setProperty("configuredLocation", Location);
-    if (searchPlacement_.isEmpty() || !searchPanel_->isVisible()) placeSearch(Location);
+    // While a book is edited the results dock into its problems panel (plan 8.7).
+    if (Tab->pane_->IsEpubEditing() && Tab->pane_->EpubEditor()) placeSearch(QStringLiteral("epubProblems"));
+    else if (searchPlacement_.isEmpty() || searchPlacement_ == QLatin1String("epubProblems") || !searchPanel_->isVisible()) placeSearch(Location);
     searchPanel_->SetReadOnly(hosted_);
     searchPanel_->Open(Replace, Tab->pane_->IsEpub() ? Tab->path_ : QFileInfo(Tab->path_).absolutePath(), Tab->pane_->IsEpub(), searchSources());
     if(ChangedBook)searchPanel_->SourcesChanged();
 }
-void DocumentWorkspaceWidget::placeSearch(const QString& Location) {
+void DocumentWorkspaceWidget::placeSearch(const QString& Requested) {
     if (!searchPanel_) return;
+    auto Location = Requested;
+    const auto Configured = searchPanel_->property("configuredLocation").toString().isEmpty() ? QStringLiteral("bottom") : searchPanel_->property("configuredLocation").toString();
+    if (auto* Host = qobject_cast<EpubSourceEditor*>(searchEpubHost_.data())) Host->DetachSearchPanel();
+    searchEpubHost_.clear(); searchPanel_->SetEmbedded(false);
+    if (Location == QLatin1String("epubProblems")) {
+        auto Tab = active(); auto* Editor = Tab && Tab->pane_->IsEpubEditing() ? Tab->pane_->EpubEditor() : nullptr;
+        if (Editor) {
+            searchPlacement_ = Location;
+            const auto Index = tabs_->indexOf(searchPanel_); if (Index >= 0) tabs_->removeTab(Index);
+            if (searchDock_->widget() == searchPanel_) searchDock_->setWidget(nullptr);
+            searchDock_->hide();
+            Editor->AttachSearchPanel(searchPanel_); searchPanel_->SetEmbedded(true); Editor->SetSearchPanelTitle(searchPanel_->Summary());
+            searchEpubHost_ = Editor;
+            if (!Editor->property("searchReleaseConnected").toBool()) {
+                Editor->setProperty("searchReleaseConnected", true);
+                // The editor hands the panel back before it is destroyed; the panel returns to its configured place.
+                connect(Editor, &EpubSourceEditor::SearchPanelReleased, this, [this](QWidget*) {
+                    searchEpubHost_.clear(); searchPanel_->SetEmbedded(false);
+                    placeSearch(searchPanel_->property("configuredLocation").toString().isEmpty() ? QStringLiteral("bottom") : searchPanel_->property("configuredLocation").toString());
+                });
+            }
+            searchPanel_->show(); return;
+        }
+        Location = Configured;
+    }
     searchPlacement_ = Location;
     const auto Index = tabs_->indexOf(searchPanel_); if (Index >= 0) tabs_->removeTab(Index);
     if(searchDock_->widget()==searchPanel_)searchDock_->setWidget(nullptr);
@@ -2356,6 +2398,13 @@ void DocumentWorkspaceWidget::placeSearch(const QString& Location) {
 void DocumentWorkspaceWidget::OpenSearchContext(const QJsonObject& Context) {
     openSearch(true); if(searchPanel_)searchPanel_->RestoreContext(Context);
 }
+void DocumentWorkspaceWidget::syncSearchHost() {
+    // The docked panel follows its book: leaving edit mode returns it to the configured place.
+    if (!searchPanel_ || searchPlacement_ != QLatin1String("epubProblems")) return;
+    bool Live = false;
+    for (const auto& Each : documents_) if (Each->pane_ && Each->pane_->EpubEditor() == searchEpubHost_.data() && Each->pane_->IsEpubEditing()) Live = true;
+    if (!Live) placeSearch(searchPanel_->property("configuredLocation").toString().isEmpty() ? QStringLiteral("bottom") : searchPanel_->property("configuredLocation").toString());
+}
 void DocumentWorkspaceWidget::navigateSearch(const QJsonObject& Row) {
     auto Tab = find(Row["document"].toString());
     if (!Tab) { const auto Reply = open(Row["path"].toString(), false, {}, false); Tab = find(Reply["documentId"].toString()); }
@@ -2368,7 +2417,11 @@ void DocumentWorkspaceWidget::navigateSearch(const QJsonObject& Row) {
         if (!Row["resource"].toString().isEmpty()) {
             auto* Editor = Current->pane_->EpubEditor();
             if(Editor && !Editor->IsReady())return;
-            if (Editor && Editor->IsReady()) Editor->SelectSearchRange(Row["resource"].toString(), Row["start"].toInteger(), Row["length"].toInteger());
+            if (Editor && Editor->IsReady()) {
+                Editor->SelectSearchRange(Row["resource"].toString(), Row["start"].toInteger(), Row["length"].toInteger());
+                // 미리보기에서 보기 (result context menu): the same command as the source context menu.
+                if (Row["preview"].toBool()) if (auto* Locate = Editor->findChild<QAction*>("epubLocateSource")) Locate->trigger();
+            }
             else if(Row["chapter"].toInt(-1)>=0)Current->pane_->Execute({{"action","epub.reader.chapter"},{"value",Row["chapter"]}});
         } else Current->pane_->SelectSearchRange(Row["start"].toInteger(), Row["length"].toInteger()); Wait->deleteLater();
     }); Wait->start();

@@ -10,8 +10,10 @@
 #include "imageFramePlayer.hpp"
 #include "imagePerformance.hpp"
 #include "core/AppSettings.h"
+#include <QActionGroup>
 #include <QApplication>
 #include <QBuffer>
+#include <QContextMenuEvent>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -24,11 +26,15 @@
 #include <QSaveFile>
 #include <QLockFile>
 #include <QDateTime>
+#include <QFontMetrics>
+#include <QKeySequence>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QScrollBar>
 #include <QWheelEvent>
 #include <QtConcurrent>
 #include <cmath>
+#include <functional>
 #include <limits>
 
 namespace hc::document
@@ -125,11 +131,12 @@ ImageReadingView::ImageReadingView(QWidget *Parent) : QAbstractScrollArea(Parent
                 viewport()->update();
                 emit Changed();
             });
-    auto* Retry=new QAction(tr("이 페이지 다시 읽기"),this);Retry->setObjectName("image.retryPage");
-    addAction(Retry);connect(Retry,&QAction::triggered,this,&ImageReadingView::RetryPage);
-    auto* Next=new QAction(tr("다음 페이지"),this);Next->setObjectName("image.nextReadablePage");
-    addAction(Next);connect(Next,&QAction::triggered,this,[this]{Move(1,true);});
-    setContextMenuPolicy(Qt::ActionsContextMenu);
+    // The retry command keeps its name; the context menu relabels it per mode (쪽 · 이미지).
+    retry_ = new QAction(tr("이 쪽 다시 읽기"), this);
+    retry_->setObjectName("image.retryPage");
+    connect(retry_, &QAction::triggered, this, &ImageReadingView::RetryPage);
+    // contextMenuEvent builds the reading menu; the window's action list must never appear here.
+    setContextMenuPolicy(Qt::DefaultContextMenu);
     saveTimer_.setSingleShot(true);
     saveTimer_.setInterval(600);
     connect(&saveTimer_, &QTimer::timeout, this, &ImageReadingView::persist);
@@ -692,8 +699,14 @@ bool ImageReadingView::paintGroup(QPainter &Painter)
         Painter.drawText(Banner.adjusted(8,2,-8,-2),Qt::AlignLeft|Qt::AlignVCenter|Qt::TextWordWrap,
             tr("%1 페이지를 읽지 못했습니다. 다시 읽거나 다른 페이지로 이동할 수 있습니다. %2").arg(index_+1).arg(Error));
     } else if (transitionPending_ && transitionClock_.elapsed() >= 150) {
-        Painter.fillRect(QRect(8,8,200,30),palette().brush(QPalette::Base));Painter.setPen(palette().color(QPalette::Text));
-        Painter.drawText(QRect(16,8,184,30),Qt::AlignVCenter,tr("%1 페이지 불러오는 중…").arg(index_+1));
+        // A small centred capsule: the top edge belongs to the full screen controls.
+        const auto Text = tr("%1 페이지 불러오는 중…").arg(index_+1);
+        const QFontMetrics Metrics(Painter.font());
+        const QSizeF Size(Metrics.horizontalAdvance(Text) + 36, Metrics.height() + 16);
+        const QRectF Notice(QPointF((viewport()->width() - Size.width()) / 2, (viewport()->height() - Size.height()) / 2), Size);
+        ImageReadingNavigator::PaintOverlay(Painter, Notice, Notice.height() / 2);
+        Painter.setPen(QColor(0xf1, 0xf4, 0xf8));
+        Painter.drawText(Notice, Qt::AlignCenter, Text);
     }
     return Ready;
 }
@@ -1263,6 +1276,106 @@ void ImageReadingView::OpenBookmark()
 {
     if (!bookmark_.isEmpty())
         GoTo(bookmark_["page"].toInt(), bookmark_["relative"].toDouble());
+}
+void ImageReadingView::contextMenuEvent(QContextMenuEvent *E)
+{
+    // Accepted even without a book, so the window's own action list never opens over the reader.
+    E->accept();
+    if (!book_)
+        return;
+    auto *Menu = CreateContextMenu(this);
+    connect(Menu, &QMenu::aboutToHide, Menu, &QObject::deleteLater);
+    Menu->popup(E->globalPos());
+}
+QMenu *ImageReadingView::CreateContextMenu(QWidget *Parent)
+{
+    // Prototype reading menus (comic and webtoon). Keys are display text only:
+    // the window-level commands own the bindings.
+    auto *Menu = new QMenu(Parent);
+    Menu->setObjectName("imageReadingContextMenu");
+    const bool Strip = mode_ == Webtoon;
+    const auto Key = [](const char *Id)
+    {
+        return QKeySequence(hc::defaults::edit::Shortcut(QString::fromLatin1(Id)), QKeySequence::PortableText)
+            .toString(QKeySequence::NativeText);
+    };
+    const auto Add = [this](QMenu *Into, const QString &Name, const QString &Text, const QString &Shortcut, std::function<void()> Run)
+    {
+        auto *Action = Into->addAction(Shortcut.isEmpty() ? Text : Text + QLatin1Char('\t') + Shortcut);
+        Action->setObjectName(QStringLiteral("readingContext.") + Name);
+        if (Run)
+            connect(Action, &QAction::triggered, this, [Run = std::move(Run)] { Run(); });
+        return Action;
+    };
+    const auto Check = [&Add](QMenu *Into, const QString &Name, const QString &Text, bool Checked, std::function<void(bool)> Run)
+    {
+        auto *Action = Add(Into, Name, Text, {}, {});
+        Action->setCheckable(true);
+        Action->setChecked(Checked);
+        QObject::connect(Action, &QAction::triggered, Into, [Run = std::move(Run)](bool On) { Run(On); });
+        return Action;
+    };
+    const auto Sub = [Menu](const QString &Name, const QString &Text)
+    {
+        auto *Child = Menu->addMenu(Text);
+        Child->menuAction()->setObjectName(QStringLiteral("readingContext.") + Name);
+        return Child;
+    };
+    // Commands that open another popup, a dialog or change the window run after this menu has closed.
+    const auto Later = [this](std::function<void()> Run) -> std::function<void()>
+    { return [this, Run = std::move(Run)] { QTimer::singleShot(0, this, Run); }; };
+
+    Add(Menu, "next", Strip ? tr("다음 화면") : tr("다음 쪽"), Key("image.next"), [this] { Move(1); });
+    Add(Menu, "previous", Strip ? tr("이전 화면") : tr("이전 쪽"), Key(Strip ? "image.previousSpace" : "image.previous"),
+        [this] { Move(-1); });
+    Menu->addSeparator();
+    Add(Menu, "goTo", Strip ? tr("이미지로 이동…") : tr("쪽으로 이동…"), Key("image.goToPage"), Later([this] { emit GoToRequested(); }));
+    if (!Strip)
+        Add(Menu, "pages", tr("페이지 목록…"), {}, Later([this] { navigator_->ShowPages(); }));
+    Menu->addSeparator();
+    if (!Strip)
+    {
+        // 두 쪽 보기 switches between the comic spread and single pages, as the toolbar toggle does.
+        Check(Menu, "spread", tr("두 쪽 보기"), mode_ == Comic, [this](bool On) { SetMode(On ? Comic : Single); });
+        Check(Menu, "rightToLeft", tr("오른쪽 → 왼쪽"), rtl_, [this](bool On) { SetRightToLeft(On); });
+    }
+    auto *Fit = Sub("fit", tr("맞춤"));
+    auto *Fits = new QActionGroup(Fit);
+    const QStringList FitNames{tr("원본 크기"), tr("창에 맞춤"), tr("너비 맞춤"), tr("높이 맞춤")};
+    const char *FitIds[] = {"fitOriginal", "fitWindow", "fitWidth", "fitHeight"};
+    // A webtoon fills the width unless the original size was chosen.
+    const int CurrentFit = Strip ? (fit_ == 0 ? 0 : 2) : fit_;
+    for (const int Value : Strip ? QList<int>{2, 0} : QList<int>{1, 2, 3})
+        Fits->addAction(Check(Fit, FitIds[Value], FitNames[Value], CurrentFit == Value, [this, Value](bool) { SetFit(Value); }));
+    if (Strip)
+    {
+        auto *Gap = Sub("gap", tr("이미지 간격"));
+        auto *Gaps = new QActionGroup(Gap);
+        for (const int Value : {0, 8, 16})
+            Gaps->addAction(Check(Gap, QStringLiteral("gap%1").arg(Value), tr("%1 px").arg(Value), gap_ == Value,
+                                  [this, Value](bool) { SetGap(Value); }));
+    }
+    Menu->addSeparator();
+    Add(Menu, "bookmark", tr("책갈피 저장"), Key("image.bookmarkSave"), [this] { Bookmark(); });
+    Add(Menu, "openBookmark", tr("책갈피로 이동…"), {}, [this] { OpenBookmark(); })->setEnabled(!bookmark_.isEmpty());
+    Menu->addSeparator();
+    retry_->setText(Strip ? tr("이 이미지 다시 읽기") : tr("이 쪽 다시 읽기"));
+    retry_->setEnabled(book_ != nullptr);
+    Menu->addAction(retry_);
+    auto *Correct = Sub("correct", tr("화질 보정"));
+    Check(Correct, "grayscale", tr("회색조"), grayscale_, [this](bool On) { SetAdjustment(QStringLiteral("grayscale"), On ? 1 : 0); });
+    Check(Correct, "invert", tr("색 반전"), invert_, [this](bool On) { SetAdjustment(QStringLiteral("invert"), On ? 1 : 0); });
+    if (!Strip)
+        Add(Correct, "brightness", tr("밝기…"), {}, Later([this] {
+                bool Ok = false;
+                const double Value = hc::ui::InputDialog::getDouble(this, tr("밝기"), tr("밝기"), brightness_, -1, 1, 2, &Ok);
+                if (Ok)
+                    SetAdjustment(QStringLiteral("brightness"), Value);
+            }));
+    // In full screen the same entry leaves it (F11 toggles).
+    Add(Menu, "fullscreen", window()->isFullScreen() ? tr("전체 화면 해제") : tr("전체 화면"), Key("image.fullscreen"),
+        Later([this] { emit FullscreenRequested(); }));
+    return Menu;
 }
 void ImageReadingView::mousePressEvent(QMouseEvent *E)
 {

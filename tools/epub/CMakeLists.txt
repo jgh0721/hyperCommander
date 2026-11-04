@@ -60,7 +60,8 @@ foreach(HC_EPUB_RENDER_TARGET IN LISTS HC_EPUB_RENDER_TARGETS)
         "${PROJECT_SOURCE_DIR}/UniqueLibs/document/documentThemeAdapter.cpp"
     )
     target_precompile_headers(${HC_EPUB_RENDER_TARGET} PRIVATE render/stdafx.h)
-    target_include_directories(${HC_EPUB_RENDER_TARGET} PRIVATE "${PROJECT_SOURCE_DIR}")
+    # render/ first: shared UniqueLibs sources open with #include "stdafx.h" and get the helper's header.
+    target_include_directories(${HC_EPUB_RENDER_TARGET} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/render" "${PROJECT_SOURCE_DIR}")
     target_link_libraries(${HC_EPUB_RENDER_TARGET} PRIVATE hc_epub_package Qt6::Widgets Qt6::WebEngineWidgets Qt6::Concurrent Qt6::Network Fm::style Fm::widgets shell32)
     target_compile_options(${HC_EPUB_RENDER_TARGET} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     set_target_properties(${HC_EPUB_RENDER_TARGET} PROPERTIES
@@ -89,7 +90,7 @@ if(BUILD_TESTING AND HC_BUILD_EPUB_POC)
     qt_add_executable(hc_epub_workspace_tests render/testWorkspace.cpp render/stdafx.h)
     target_precompile_headers(hc_epub_workspace_tests PRIVATE render/stdafx.h)
     target_link_libraries(hc_epub_workspace_tests PRIVATE hc_document_widgets hc_epub_host Qt6::Test Fm::style)
-    target_compile_options(hc_epub_workspace_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+    target_compile_options(hc_epub_workspace_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8 /bigobj>)
     set_target_properties(hc_epub_workspace_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/epub-poc")
     # Run explicitly with independently pinned development runtime and evidence paths.
     qt_add_executable(hc_epub_settings_tests

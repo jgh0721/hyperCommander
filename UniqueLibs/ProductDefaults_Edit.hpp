@@ -179,7 +179,8 @@ namespace hc::defaults::edit
             {"imageView/fullscreenHideCursor", true}, {"imageView/normalMaximized", false},
             {"imageView/fullscreen", false},
             {"textView/detectIndent", true},
-            {"recent/enabled", true}, {"recent/menuCount", 9}
+            {"recent/enabled", true}, {"recent/menuCount", 9},
+            {"pdfView/annotationToolbar", false}
         };
         return Values;
     }

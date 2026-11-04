@@ -18,7 +18,10 @@ public:
     bool Flush();
     void SetPublication(const QJsonObject& Publication);
     void ConfigureProfile(const QJsonObject& Profile);
+    // Wide enough for every tab name; the reader sizes its side panel from it.
+    QSize minimumSizeHint() const override;
 private:
+    void tocMenu(const QPoint& Position);void searchMenu(const QPoint& Position);void bookmarkMenu(const QPoint& Position);
     void addAnnotations(QTabWidget* Tabs);void refreshAnnotations();void syncAnnotations();
     bool annotationAction(const QString& Action,const QJsonValue& Value);bool putAnnotation(QJsonObject Row);bool annotationFits(const QJsonArray& Rows) const;
     void pollAnnotations(const QJsonObject& State);void annotationFile(bool Import);
@@ -33,8 +36,8 @@ private:
     QJsonArray bookmarks_,additions_;QStringList removals_;
     Dispatch send_;QTimer saveTimer_;
     QLineEdit* query_=nullptr;QListWidget *results_=nullptr,*marks_=nullptr;QLabel* status_=nullptr;
-    qint64 serial_=0,seen_=0,restoreSerial_=0,searchSeen_=0;bool started_=false,restoring_=false,readFailed_=false;
-    QTreeWidget* toc_=nullptr;
+    qint64 serial_=0,seen_=0,restoreSerial_=0,searchSeen_=0,searchCleared_=0;bool started_=false,restoring_=false,readFailed_=false;
+    QTreeWidget* toc_=nullptr;QTabWidget* tabs_=nullptr;
     QJsonArray navigation_;
     bool resume_=true,remember_=true;
     qint64 historyEpoch_=-1;

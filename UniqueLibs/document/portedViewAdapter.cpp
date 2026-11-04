@@ -53,7 +53,7 @@ bool QPDFView::LoadContent(const QByteArray& Bytes, const QString& Path)
     if(!m_document) { m_fileData.clear();return false; }
     m_pageCount=FPDF_GetPageCount(m_document);
     if(m_pageCount<=0) { closeFile();return false; }
-    m_currentPage=0;m_rotationAngle=Rotate0;m_annotationManager.setDocument(m_document);
+    m_currentPage=0;m_annotationManager.setDocument(m_document);
     // Original form implementation never creates a valid form handle. Keep it
     // unavailable until a separate, validated form-fill lifecycle is implemented.
     m_formHandle=nullptr; m_nextThumbnailPage=0;

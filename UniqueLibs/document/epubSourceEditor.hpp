@@ -68,7 +68,13 @@ public:
     bool RunCommand(const QString& Id);
     bool CanRunCommand(const QString& Id)const;
     void SetShortcutBindings(const QJsonObject& Bindings);
-signals:void StatusChanged();void Changed();void StateChanged();void SaveRequested(bool SaveAs);void PreviewCommitted();void EscapeRequested();void FullscreenRequested();void SearchRequested(const QString& Query);
+    // 파일에서 찾기 docks as a tab of the problems panel while this book is edited (plan 8.7).
+    // The editor never owns the panel: it hands it back before it is destroyed (SearchPanelReleased).
+    void AttachSearchPanel(QWidget* Panel);
+    QWidget* DetachSearchPanel();
+    void SetSearchPanelTitle(const QString& Title);
+    QWidget* AttachedSearchPanel()const{return searchPanel_;}
+signals:void SearchPanelReleased(QWidget* Panel);void StatusChanged();void Changed();void StateChanged();void SaveRequested(bool SaveAs);void PreviewCommitted();void EscapeRequested();void FullscreenRequested();void SearchRequested(const QString& Query);
 protected:bool eventFilter(QObject* Object,QEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();
@@ -123,7 +129,7 @@ private:
     bool standardValidationRequired()const;bool standardValidationAccepted()const;
     void startEpubCheck();void cancelEpubCheck(const QString& Reason);void finishEpubCheck(int Code,bool Normal);void stopEpubCheck();
     QJsonObject validationSnapshot()const;
-    QProcess* checkerProcess_=nullptr;QTreeWidget* diagnostics_=nullptr;QPlainTextEdit* checkerOutput_=nullptr;QTreeWidget* searchResults_=nullptr;QTabWidget* problems_=nullptr;QLabel* problemsSummary_=nullptr;QWidget* problemsPanel_=nullptr;
+    QProcess* checkerProcess_=nullptr;QTreeWidget* diagnostics_=nullptr;QPlainTextEdit* checkerOutput_=nullptr;QPointer<QWidget> searchPanel_;QTabWidget* problems_=nullptr;QLabel* problemsSummary_=nullptr;QWidget* problemsPanel_=nullptr;
     QTimer checkerTimer_;QElapsedTimer checkerElapsed_;std::unique_ptr<QTemporaryDir> checkerDirectory_;
     QJsonObject checkerSettings_;QJsonArray diagnosticRows_;QByteArray checkerWorkToken_,checkerVerifiedToken_,checkerLog_;
     QString checkerSettingsFile_;

@@ -682,6 +682,8 @@ window.hcValidateCss = source => {
 window.hcCommand = (command, value) => {
     if(command==="read" && value?.action==="search") { void tools.action(value); return; }
     if(command==="read" && value?.action==="annotation-cancel"){tools.cancelAnnotations();return;}
+    // The host enables its menu as soon as the book loads, which can be while the saved position is restored.
+    if(command==="read" && value?.action==="context-menu"){tools.setContextMenus(value.value);return;}
     const pageMove=command==="read" && ["next","previous"].includes(value?.action);
     if(pageMove && pendingPageMoves>=2)return;
     const queuedAt=performance.now();

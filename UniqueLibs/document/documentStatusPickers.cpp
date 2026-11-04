@@ -15,6 +15,11 @@
 /// 기타 헤더파일
 #include "documentTextCodec.hpp"
 #include "textDocumentMetrics.hpp"
+#include "documentShortcutRegistry.hpp"
+#include "epubSourceEditor.hpp"
+#include "epubProcessView.hpp"
+#include "markdownDocumentView.hpp"
+#include <QJsonArray>
 
 /// 고유 라이브러리
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -30,6 +35,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFileInfo>
+#include <QKeySequence>
 #include <QLineEdit>
 #include <QPointer>
 #include <QRegularExpression>
@@ -50,6 +56,12 @@ namespace hc::document
             return true;
         }
         QString Percent(double Value) { return QStringLiteral("%1 %").arg(qRound(Value)); }
+        // Display text of a command's current key; the window-level action owns the binding.
+        QString ShortcutText(const QJsonObject& Stored, const QString& Id)
+        {
+            const auto Bindings = DocumentShortcutRegistry::Bindings(Stored);
+            return QKeySequence::fromString(Bindings[Id].toString(), QKeySequence::PortableText).toString(QKeySequence::NativeText);
+        }
         void SelectImageMode(QWidget* Pane, int Mode)
         {
             // The mode combo owns the switch between the single image editor and the reading views.
@@ -61,6 +73,145 @@ namespace hc::document
         if (!Anchor) return;
         QPointer<DocumentViewPane> Self(this);
         const auto Done = [Self] { if (Self) { emit Self->ViewStateChanged(); Self->Focus(); } };
+        if (epub_ && !IsEpubEditing()) {
+            auto* View = currentEpub(); if (!View) return;
+            const auto State = View->ViewState(); const auto Profile = State["profile"].toObject();
+            // Reading settings go through the reader's own path (preview a patch, then apply).
+            const auto Apply = [View](const QJsonObject& Patch) { if (View->ChangeReadingSettings(QStringLiteral("preview"), Patch, false)) View->ChangeReadingSettings(QStringLiteral("apply"), {}, false); };
+            if (Id == "chapter") {
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("장으로 이동"));
+                QList<QPair<QString, QString>> Items; QList<int> Chapters;
+                const auto Toc = State["toc"].toArray(); const int Count = State["chapterCount"].toInt();
+                for (const auto& Entry : Toc) { const auto Item = Entry.toObject(); Items.append({Item["title"].toString(), tr("%1 / %2").arg(Item["chapter"].toInt() + 1).arg(Count)}); Chapters << Item["chapter"].toInt(); }
+                if (Items.isEmpty()) for (int Chapter = 0; Chapter < Count; ++Chapter) { Items.append({tr("%1장").arg(Chapter + 1), {}}); Chapters << Chapter; }
+                const int Current = Chapters.indexOf(State["chapterIndex"].toInt());
+                auto* Search = Items.size() > 12 ? Popup->AddSearch(Popup->Root(), tr("장 검색")) : nullptr;
+                Popup->AddList(Popup->Root(), Items, Current, [Popup, View, Chapters, Done](int Index) {
+                    View->ReaderAction(QStringLiteral("chapter"), Chapters.value(Index)); Popup->close(); Done();
+                }, Search);
+                Popup->ShowAbove(); return;
+            }
+            if (Id == "epubLayout") {
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("읽기 방식"));
+                const bool Paged = Profile["layout"] == QLatin1String("paginated");
+                Popup->AddChips(Popup->Root(), {tr("세로 스크롤"), tr("가로 페이지")}, Paged ? 1 : 0, [Apply](int Index) {
+                    Apply({{"layout", Index == 1 ? QStringLiteral("paginated") : QStringLiteral("scroll")}});
+                });
+                Popup->AddNote(Popup->Root(), tr("단 수"));
+                Popup->AddChips(Popup->Root(), {tr("자동"), tr("1단"), tr("2단")}, Profile["columns"].toInt(), [Apply](int Index) { Apply({{"columns", Index}}); });
+                Popup->AddNote(Popup->Root(), tr("단 수는 가로 페이지에서 쓰입니다. 화면이 좁으면 1단으로 보입니다."));
+                Popup->ShowAbove(); return;
+            }
+            if (Id == "font") {
+                const double Size = Profile["size"].toDouble(18);
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("글자 크기 — %1 px").arg(Size));
+                Popup->AddChips(Popup->Root(), {tr("작게"), tr("%1 px").arg(Size), tr("크게")}, 1, [Apply, Size](int Index) {
+                    if (Index != 1) Apply({{"size", qBound(8.0, Size + (Index == 0 ? -1 : 1), 64.0)}});
+                });
+                Popup->AddAction(Popup->Root(), tr("읽기 설정 열기…"), ShortcutText(shortcutBindings_, "epub.focus-settings"), [View] { View->ReaderAction(QStringLiteral("toggle-settings")); });
+                Popup->ShowAbove(); return;
+            }
+        }
+        if (markdown_) {
+            auto* Markdown = markdown_;
+            if (Id == "heading") {
+                // Outline headings indented by depth; the current one is marked.
+                const auto Headings = Markdown->Headings();
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("현재 제목"));
+                QList<QPair<QString, QString>> Items;
+                for (int Index = 0; Index < Headings.size(); ++Index)
+                    Items.append({QString(Markdown->HeadingDepth(Index), QChar(0x3000)) + Headings[Index].first, tr("줄 %1").arg(Headings[Index].second)});
+                if (Items.isEmpty()) Popup->AddNote(Popup->Root(), tr("이 문서에는 제목이 없습니다."));
+                else {
+                    auto* Search = Items.size() > 12 ? Popup->AddSearch(Popup->Root(), tr("제목 검색")) : nullptr;
+                    Popup->AddList(Popup->Root(), Items, Markdown->CurrentHeadingIndex(), [Popup, Markdown, Done](int Index) {
+                        Markdown->GoToHeading(Index); Popup->close(); Done();
+                    }, Search);
+                }
+                Popup->ShowAbove(); return;
+            }
+            if (Id == "mdzoom") {
+                const int Zoom = Markdown->PreviewZoomPercent();
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("미리보기 배율 — %1 %").arg(Zoom));
+                const QList<int> Steps{75, 90, 100, 110, 125, 150};
+                QStringList Labels; for (const int Step : Steps) Labels << tr("%1 %").arg(Step);
+                Popup->AddChips(Popup->Root(), Labels, Steps.indexOf(Zoom), [Markdown, Steps, Done](int Index) { Markdown->SetPreviewZoom(Steps.value(Index, 100)); Done(); });
+                Popup->AddAction(Popup->Root(), tr("원래 크기"), QStringLiteral("100 %"), [Self, Done] { if (Self) Self->RunViewCommand(QStringLiteral("markdown.zoomReset")); Done(); });
+                Popup->AddAction(Popup->Root(), tr("배율 입력…"), tr("%1–%2 %").arg(MarkdownDocumentView::MinZoomPercent).arg(MarkdownDocumentView::MaxZoomPercent),
+                    [Self] { if (Self) Self->RunViewCommand(QStringLiteral("markdown.zoomSet")); });
+                Popup->ShowAbove(); return;
+            }
+            if (Id == "render") {
+                const auto At = Markdown->RenderedAt();
+                const auto Fields = Markdown->StatusFields();
+                QString Text; for (const auto& Field : Fields) if (Field.id_ == "render") Text = Field.text_;
+                auto* Popup = DocumentStatusPopup::Open(Anchor, At.isValid() ? tr("미리보기 렌더링 — %1 · %2").arg(Text, QLocale().toString(At.time(), QLocale::ShortFormat)) : tr("미리보기 렌더링 — %1").arg(Text));
+                Popup->AddAction(Popup->Root(), tr("미리보기 갱신"), ShortcutText(shortcutBindings_, "markdown.refresh"), [Self, Done] { if (Self) Self->RunViewCommand(QStringLiteral("markdown.refresh")); Done(); });
+                const auto Problems = Markdown->RenderProblems();
+                if (Problems.isEmpty()) Popup->AddNote(Popup->Root(), tr("수식 · 다이어그램 오류 0건. 오류가 있으면 ‘렌더링 문제 n건’으로 바뀌고 여기서 문제 위치로 이동할 수 있습니다."));
+                else {
+                    Popup->AddWarning(Popup->Root(), tr("수식 · 다이어그램 오류 %1건 — 고를 때 소스 위치로 이동합니다.").arg(Markdown->RenderProblemCount()));
+                    QList<QPair<QString, QString>> Items; QList<int> Lines;
+                    for (const auto& Value : Problems) {
+                        const auto Problem = Value.toObject();
+                        Items.append({Problem["message"].toString().simplified().left(120), tr("줄 %1 · %2").arg(Problem["line"].toInt()).arg(Problem["kind"].toString())});
+                        Lines << Problem["line"].toInt();
+                    }
+                    Popup->AddList(Popup->Root(), Items, -1, [Self, Popup, Lines, Done](int Index) {
+                        Popup->close();
+                        if (!Self || !Self->text_) return;
+                        if (!Self->markdown_->SourceVisible()) Self->RunViewCommand(QStringLiteral("markdown.split"));
+                        Self->text_->goToLine(Lines.value(Index, 1));
+                        Done();
+                    }, nullptr);
+                }
+                Popup->ShowAbove(); return;
+            }
+        }
+        if (IsEpubEditing() && epubEditor_) {
+            auto* Editor = epubEditor_; auto* Source = Editor->SourceView();
+            const auto Run = [Editor](const char* Name) { if (auto* Item = Editor->findChild<QAction*>(QString::fromLatin1(Name)); Item && Item->isEnabled()) Item->trigger(); };
+            if (Id == "position" && Source) {
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("줄로 이동"));
+                const int Lines = Source->lineCount();
+                Popup->AddInput(Popup->Root(), QStringLiteral("%1:%2").arg(Source->currentLine()).arg(Source->currentColumn()), tr("줄[:열] · 1–%1").arg(Lines),
+                    [Source, Lines, Done](const QString& Value) {
+                        int Line = 0, Column = 0;
+                        if (!ParseLineColumn(Value, Line, Column) || Line < 1 || Line > Lines) return false;
+                        if (Column > 0) Source->goToPosition(Line, Column); else Source->goToLine(Line);
+                        Done(); return true;
+                    });
+                Popup->ShowAbove(); return;
+            }
+            if (Id == "encoding") {
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("인코딩 — UTF-8"));
+                Popup->AddNote(Popup->Root(), tr("EPUB 리소스(XHTML · CSS · OPF)는 규격에 따라 UTF-8로 읽고 저장합니다. 다른 인코딩으로 바꿀 수 없습니다."));
+                Popup->ShowAbove(); return;
+            }
+            if (Id == "eol" && Source) {
+                const auto Stats = CountLineEndings(QStringView(Source->Content()));
+                const auto Dominant = Stats.Dominant();
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("줄 끝 — %1").arg(Dominant == "MIXED" ? tr("혼합") : Dominant.isEmpty() ? QStringLiteral("LF") : Dominant));
+                Popup->AddNote(Popup->Root(), tr("현재 리소스만 바꿉니다."));
+                for (const auto& [Name, Ending] : {std::pair{QString("CRLF"), QTextView::CRLF}, std::pair{QString("LF"), QTextView::LF}, std::pair{QString("CR"), QTextView::CR}}) {
+                    if (Dominant == Name) continue;
+                    const auto Changes = Stats.Breaks() - (Name == "CRLF" ? Stats.crlf_ : Name == "LF" ? Stats.lf_ : Stats.cr_);
+                    auto* Button = Popup->AddAction(Popup->Root(), tr("모든 줄을 %1로 변환").arg(Name), tr("%1줄 변경").arg(Changes), [Self, Source, Ending] {
+                        Source->ConvertLineEnding(Ending); if (Self) emit Self->ViewStateChanged();
+                    });
+                    Button->setEnabled(!Source->isReadOnly() && Changes > 0);
+                }
+                Popup->ShowAbove(); return;
+            }
+            if (Id == "validation") {
+                QString State; for (const auto& Field : Editor->StatusFields()) if (Field.id_ == "validation") State = Field.text_;
+                auto* Popup = DocumentStatusPopup::Open(Anchor, State.isEmpty() ? tr("검사") : tr("검사 — %1").arg(State));
+                Popup->AddAction(Popup->Root(), tr("기본 검사"), ShortcutText(shortcutBindings_, "epubEdit.validate"), [Run] { Run("epubBasicValidation"); });
+                Popup->AddAction(Popup->Root(), tr("EPUBCheck 검사"), ShortcutText(shortcutBindings_, "epubEdit.epubcheck"), [Run] { Run("epubStandardValidation"); });
+                Popup->AddNote(Popup->Root(), tr("문제 수를 누르면 하단 문제 패널로 이동합니다."));
+                Popup->ShowAbove(); return;
+            }
+        }
         if (text_) {
             auto* Text = text_;
             if (Id == "position") {
@@ -204,8 +355,11 @@ namespace hc::document
                     if (!Ok || Page < 1 || Page > Count) return false;
                     Pdf->goToPage(Page - 1); Done(); return true;
                 });
-                Popup->AddChips(Popup->Root(), {tr("첫 쪽"), tr("마지막 쪽")}, -1, [Popup, Pdf, Done](int Index) {
-                    Pdf->goToPage(Index == 0 ? 0 : Pdf->totalPageCount() - 1); Popup->close(); Done();
+                // 이전 위치: the page before the last jump (first/last page or a page number).
+                const int Back = Pdf->PreviousLocation();
+                QStringList Chips{tr("첫 쪽"), tr("마지막 쪽")}; if (Back >= 0) Chips << tr("이전 위치 (%1쪽)").arg(Back + 1);
+                Popup->AddChips(Popup->Root(), Chips, -1, [Popup, Pdf, Back, Done](int Index) {
+                    Pdf->goToPage(Index == 0 ? 0 : Index == 1 ? Pdf->totalPageCount() - 1 : Back); Popup->close(); Done();
                 });
                 Popup->ShowAbove(); return;
             }
@@ -236,10 +390,12 @@ namespace hc::document
                 Popup->ShowAbove(); return;
             }
             if (Id == "rotation") {
-                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("회전 — %1°").arg(int(Pdf->rotationAngle())));
-                const QList<QPDFView::RotationAngle> Angles{QPDFView::Rotate0, QPDFView::Rotate90, QPDFView::Rotate180, QPDFView::Rotate270};
-                Popup->AddChips(Popup->Root(), {QStringLiteral("0°"), QStringLiteral("90°"), QStringLiteral("180°"), QStringLiteral("270°")}, Angles.indexOf(Pdf->rotationAngle()),
-                    [Pdf, Angles, Done](int Index) { Pdf->setRotationAngle(Angles.value(Index)); Done(); });
+                // View rotation: the document is not changed (PDF › 현재 쪽 회전 (편집) edits a page).
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("회전 — %1°").arg(Pdf->viewRotation()));
+                const QList<int> Angles{0, 90, 180, 270};
+                Popup->AddChips(Popup->Root(), {QStringLiteral("0°"), QStringLiteral("90°"), QStringLiteral("180°"), QStringLiteral("270°")}, Angles.indexOf(Pdf->viewRotation()),
+                    [Pdf, Angles, Done](int Index) { Pdf->setViewRotation(Angles.value(Index)); Done(); });
+                Popup->AddNote(Popup->Root(), tr("보기만 돌립니다. 저장되는 쪽 회전은 PDF › 현재 쪽 회전 (편집)을 쓰십시오."));
                 Popup->ShowAbove(); return;
             }
         }

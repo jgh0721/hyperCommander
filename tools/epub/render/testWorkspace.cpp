@@ -1431,6 +1431,10 @@ private slots:
         const auto State=[&]{return document(Window,Id)["view"].toObject()["epub"].toObject();};
         const auto Do=[&](const QString& Action){return Window.Handle({{"action","epub.reader."+Action},{"documentId",Id}});};
         QTRY_VERIFY_WITH_TIMEOUT(State()["readingStateLoaded"].toBool(),60000);
+        // The host draws the reader chrome (configure hostChrome); the reader reports what that chrome shows.
+        QVERIFY(!State()["readingToolbarVisible"].toBool());QVERIFY(State().contains("readerMessage"));QVERIFY(State()["contextRequest"].isObject());
+        const auto Toc=State()["toc"].toArray();QVERIFY(!Toc.isEmpty());
+        for(const auto& Entry:Toc){const auto Row=Entry.toObject();QVERIFY(!Row["title"].toString().isEmpty());QVERIFY(Row["chapter"].toInt(-1)>=0 && Row["chapter"].toInt()<State()["chapterCount"].toInt());}
         auto* MainMenu=Window.findChild<QMenuBar*>("mainMenu");QVERIFY(MainMenu);
         const auto Menus=MainMenu->actions();
         QVERIFY(std::any_of(Menus.cbegin(),Menus.cend(),[](QAction* Action){return Action->text()==QString("EPUB") && Action->isVisible() && Action->menu() && !Action->menu()->actions().isEmpty();}));
@@ -1477,6 +1481,9 @@ private slots:
         for(int Columns:{2,1}) {
             QVERIFY(!Window.Handle({{"action","epub.settings.preview"},{"documentId",Id},{"profile",QJsonObject{{"columns",Columns}}}}).contains("error"));
             QTRY_VERIFY_WITH_TIMEOUT(State()["toolbarColumns"].toInt()==Columns && State()["columnCount"].toInt()==Columns && !State()["readerBusy"].toBool(),20000);
+            // A spread of columns is one screen, as the reader's own location line counts it.
+            const auto Screens=State();const int Spread=qMax(1,Screens["columnCount"].toInt());
+            QCOMPARE(Screens["chapterScreens"].toInt(),(qMax(1,Screens["chapterPages"].toInt())+Spread-1)/Spread);
         }
         QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
     }

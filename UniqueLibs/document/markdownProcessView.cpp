@@ -16,6 +16,8 @@ MarkdownProcessView::MarkdownProcessView(QWidget *Parent) : QWidget(Parent)
     setObjectName("markdownPreview");
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_NativeWindow);
+    // The owner draws the preview menu; nothing falls through to the window's menus.
+    setContextMenuPolicy(Qt::CustomContextMenu);
     startup_.setSingleShot(true);
     startup_.setInterval(15000);
     connect(&startup_, &QTimer::timeout, this, [this] {
@@ -131,6 +133,9 @@ void MarkdownProcessView::Send(const QJsonObject &Message)
         pending_ = Message;
     if (Message["type"] == "shortcuts")
         shortcuts_ = Message;
+    // A restarted helper starts at 100 %; the owner's zoom and menu coordinates assume the last value.
+    if (Message["type"] == "zoom")
+        zoom_ = Message;
     if (!process_)
         start();
     if (ready_ && socket_ && socket_->bytesToWrite() < 32 * 1024 * 1024)
@@ -190,6 +195,8 @@ void MarkdownProcessView::receive()
                 Send(pending_);
             if (!shortcuts_.isEmpty())
                 Send(shortcuts_);
+            if (!zoom_.isEmpty())
+                Send(zoom_);
         }
         else
             emit Reported(Message);

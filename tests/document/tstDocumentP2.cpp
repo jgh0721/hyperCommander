@@ -73,9 +73,14 @@ void continuousPdfShowsLastPageWithoutWholeBookBitmap(){
     const auto Frame=Scroll->viewport()->grab().toImage();QVERIFY(!Frame.isNull());
     const auto Color=Frame.pixelColor(Frame.width()/2,Frame.height()/2);
     QVERIFY2(Color.red()>230 && Color.green()>230 && Color.blue()>230,"last PDF page must be visible");
-    View.setRotationAngle(QPDFView::Rotate90);QTRY_VERIFY(!View.IsRendering());
+    // View rotation re-lays out every page but leaves the document untouched.
+    View.setViewRotation(90);QTRY_VERIFY(!View.IsRendering());
+    QCOMPARE(View.viewRotation(),90);QVERIFY(!View.isModified());QCOMPARE(View.currentPage(),119);
     View.setViewMode(QPDFView::SinglePage);QTRY_VERIFY(!View.IsRendering());
     QCOMPARE(View.currentPage(),119);
+    // Turning the stored page stays an edit.
+    View.RotateCurrentPage(QPDFView::Rotate90);QTRY_VERIFY(!View.IsRendering());
+    QVERIFY(View.isModified());QCOMPARE(View.currentPageRotation(),QPDFView::Rotate90);QCOMPARE(View.viewRotation(),90);
 }
 void imageFitTracksViewportAfterHiddenLoad(){
     QImageView View; View.resize(900,650);

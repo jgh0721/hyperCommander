@@ -5,6 +5,7 @@
 #include <QWebEngineSettings>
 #include <QWebEngineUrlRequestInterceptor>
 #include <QWebEngineDownloadRequest>
+#include <QWebEngineContextMenuRequest>
 #include <QWebChannel>
 #include <QLocalSocket>
 #include <QDesktopServices>
@@ -113,6 +114,19 @@ int main(int Argc, char **Argv)
     View.setAttribute(Qt::WA_ShowWithoutActivating);
     auto *Page = new MarkdownPage(&Profile, &View);
     View.setPage(Page);
+    // The host draws the menu. The page reports its own right clicks; Chromium asks for a menu only
+    // before the script is ready or outside the document, and that request becomes the same report.
+    View.setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(&View, &QWidget::customContextMenuRequested, &App, [&](const QPoint &Position) {
+        const auto *Request = View.lastContextMenuRequest();
+        const double Zoom = qMax(.1, View.zoomFactor());
+        Send({{"type", "context"},
+              {"x", Position.x() / Zoom},
+              {"y", Position.y() / Zoom},
+              {"selection", Request ? Request->selectedText().left(1024) : QString()},
+              {"link", Request ? Request->linkUrl().toString() : QString()},
+              {"line", 0}});
+    });
     // Loading or refreshing a passive preview must not take source-editor input.
     Page->settings()->setAttribute(QWebEngineSettings::FocusOnNavigationEnabled, false);
     Page->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);

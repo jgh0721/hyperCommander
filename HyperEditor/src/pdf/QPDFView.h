@@ -82,7 +82,8 @@ public:
     void  setZoomLevel(qreal percentage);
     ZoomMode zoomMode() const;
     qreal zoomLevel() const;
-    QSizeF CurrentPageSize() const { return rotatedPageSize(m_currentPage); }
+    // Paper size as stored (with /Rotate); the view rotation does not change it.
+    QSizeF CurrentPageSize() const { return pageSize(m_currentPage); }
 
     // ── 사이드바 ──
     void       setSidebarPosition(SidebarPos pos);
@@ -93,9 +94,16 @@ public:
     ViewMode viewMode() const;
     void     setSpreadReadingDirection(SpreadReadingDirection direction);
     SpreadReadingDirection spreadReadingDirection() const;
-    void     setRotationAngle(RotationAngle angle);
-    RotationAngle rotationAngle() const;
+    // Display-only rotation (0/90/180/270, other values snap to quarter turns); never marks the document modified.
+    void     setViewRotation(int Degrees);
+    int      viewRotation() const;
+    // Edit: stores Angle as the current page's /Rotate and marks the document modified.
+    void     RotateCurrentPage(RotationAngle Angle);
+    RotationAngle currentPageRotation() const;
     bool     saveFileAs();
+    // Page (0-based) shown before the last jump; -1 when there is none.
+    int      PreviousLocation() const;
+    void     FocusSearchField();
 
     // ── 검색 ──
     void searchText(const QString& text);
@@ -110,6 +118,8 @@ public:
     bool hasImageSelection() const;
     bool canCopy() const override;
     bool copySelection() override;
+    // Selects all text of the current page; false when the page has no text.
+    bool SelectAllText();
 
 signals:
     void ContentChanged();
@@ -170,6 +180,11 @@ private:
     };
 
     void setupUI();
+    void showPage(int page, bool jump);
+    void syncThumbnailSelection(int page);
+    void showPageContextMenu(const QPoint& globalPos);
+    void showThumbnailContextMenu(const QPoint& viewportPos);
+    void showBookmarkContextMenu(const QPoint& viewportPos);
     bool handleNavigationKey(QKeyEvent* event);
     void renderCurrentPage();
     void renderCurrentPageNow();
@@ -258,6 +273,7 @@ private:
     QLabel*             m_pageLabel     = nullptr;
     QRubberBand*        m_textSelectionBand = nullptr;
     QPointer<QToolBar>  m_annotationToolBar = nullptr;
+    QPointer<QLineEdit> m_searchField;
     QPropertyAnimation* m_horizontalScrollAnimation = nullptr;
     QPropertyAnimation* m_verticalScrollAnimation = nullptr;
     QTimer*             m_thumbnailTimer = nullptr;
@@ -269,7 +285,8 @@ private:
     ZoomMode    m_zoomMode      = FitPage;
     ViewMode    m_viewMode      = SinglePage;
     SpreadReadingDirection m_spreadReadingDirection = LeftToRight;
-    RotationAngle m_rotationAngle = Rotate0;
+    int         m_viewRotation  = 0;
+    int         m_previousLocation = -1;
     SidebarPos  m_sidebarPos    = SidebarLeft;
     bool        m_modified      = false;
     bool        m_annotationToolBarVisible = false;

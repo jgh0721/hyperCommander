@@ -2,9 +2,12 @@
 #include "UniqueLibs/document/imagePerformance.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 
+#include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 #include "core/ToolbarIcons.h"
 #include "utils/FileLoadHelper.h"
+
+#include <fmstyle/ThemeManager.h>
 
 #include <fpdfview.h>
 #include <fpdf_progressive.h>
@@ -39,11 +42,14 @@
 #include <QFontComboBox>
 #include <QInputDialog>
 #include <QLineEdit>
+#include <QMenu>
 #include <QToolButton>
 #include <QFileInfo>
 #include <QFile>
 #include <QMessageBox>
 #include <QSignalBlocker>
+#include <QStyle>
+#include <QStyledItemDelegate>
 #include <QThreadPool>
 #include <QTimer>
 #include <QTreeWidgetItem>
@@ -51,7 +57,9 @@
 #include <algorithm>
 #include <climits>
 #include <cstring>
+#include <functional>
 #include <limits>
+#include <utility>
 
 // Progressive PDFium calls execute on the GUI/owner thread. Each render owns
 // an immutable document snapshot, so edits or close cannot invalidate a paused page.
@@ -101,13 +109,57 @@ namespace
         bool eventFilter(QObject* Watched, QEvent* Event) override
         {
             if (Event->type() == QEvent::Resize && Watched == list_->viewport()) {
-                const int Height = list_->iconSize().height() + list_->fontMetrics().height() + 16;
-                list_->setGridSize(QSize(qMax(list_->iconSize().width() + 8, list_->viewport()->width()), Height));
+                // Room for the delegate's padding around the page and its number.
+                const int Height = list_->iconSize().height() + list_->fontMetrics().height() + 24;
+                list_->setGridSize(QSize(qMax(list_->iconSize().width() + 20, list_->viewport()->width()), Height));
             }
             return QObject::eventFilter(Watched, Event);
         }
     private:
         QListWidget* list_;
+    };
+
+    // Marks the page on screen with an accent frame on the selection colour. It follows the
+    // view's current page rather than the list selection, which a click can clear.
+    class ThumbnailDelegate final : public QStyledItemDelegate
+    {
+    public:
+        ThumbnailDelegate(std::function<int()> Current, QObject* Parent) : QStyledItemDelegate(Parent), current_(std::move(Current)) {}
+
+        QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override
+        {
+            return QStyledItemDelegate::sizeHint(Option, Index) + QSize(2 * PadX, 2 * PadY);
+        }
+
+        void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override
+        {
+            using fm::style::Token;
+            QStyleOptionViewItem Item(Option);
+            initStyleOption(&Item, Index);
+            const bool Current = current_ && Index.row() == current_();
+            const auto& Colors = fm::style::themeColorsFor(Item.widget);
+            // The frame replaces the style's own selection, hover and focus marks.
+            Item.state &= ~(QStyle::State_Selected | QStyle::State_HasFocus | QStyle::State_MouseOver);
+            if (Current) {
+                Painter->save();
+                Painter->setRenderHint(QPainter::Antialiasing);
+                Painter->setPen(QPen(Colors[Token::Accent], 2));
+                Painter->setBrush(Colors[Token::Sel]);
+                Painter->drawRoundedRect(QRectF(Item.rect).adjusted(1, 1, -1, -1), 5, 5);
+                Painter->restore();
+            }
+            // Designs that fill the selection with the accent need the on-accent text colour.
+            const QColor Text = !Current ? Colors[Token::Fg2] : Colors.fillsSelection() ? Colors[Token::OnAccent] : Colors[Token::Fg];
+            Item.palette.setColor(QPalette::Text, Text);
+            Item.rect.adjust(PadX, PadY, -PadX, -PadY);
+            const QWidget* Widget = Item.widget;
+            QStyle* Style = Widget ? Widget->style() : QApplication::style();
+            Style->drawControl(QStyle::CE_ItemViewItem, &Item, Painter, Widget);
+        }
+
+    private:
+        static constexpr int PadX = 6, PadY = 4;
+        std::function<int()> current_;
     };
 }
 
@@ -119,6 +171,7 @@ QPDFView::QPDFView(QWidget* parent)
     ensurePdfiumInitialized();
     m_annotationColor = ThemeManager::instance().color(QStringLiteral("pdf.annotation"));
     m_annotationFont = QFont(QStringLiteral("Arial"));
+    m_annotationToolBarVisible = AppSettings().value(QStringLiteral("pdfView/annotationToolbar")).toBool();
     setupUI();
     setFocusPolicy(Qt::StrongFocus);
     connect(m_formManager, &PDFFormManager::unsupportedFieldClicked, this,
@@ -168,9 +221,16 @@ void QPDFView::setupUI()
     m_thumbList->setUniformItemSizes(true);
     m_thumbList->setObjectName(QStringLiteral("pdfThumbnails"));
     m_thumbList->viewport()->installEventFilter(new ThumbnailColumn(m_thumbList));
+    m_thumbList->setItemDelegate(new ThumbnailDelegate([this] { return m_currentPage; }, m_thumbList));
+    m_thumbList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_thumbList, &QWidget::customContextMenuRequested, this, &QPDFView::showThumbnailContextMenu);
     m_bookmarkTree->setHeaderHidden(true);
+    m_bookmarkTree->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_bookmarkTree, &QWidget::customContextMenuRequested, this, &QPDFView::showBookmarkContextMenu);
     m_sidebarTabs->addTab(m_thumbList, tr("썸네일"));
     m_sidebarTabs->addTab(m_bookmarkTree, tr("목차"));
+    // The styles answer AlignLeft for SH_TabBar_Alignment; a sheet rule is the supported override.
+    m_sidebarTabs->setStyleSheet(QStringLiteral("QTabWidget::tab-bar { alignment: center; }"));
     m_sidebarTabs->setMaximumWidth(220);
     m_sidebarTabs->setMinimumWidth(120);
 
@@ -182,6 +242,11 @@ void QPDFView::setupUI()
     m_scrollArea->setAlignment(Qt::AlignCenter);
     m_scrollArea->viewport()->setMouseTracking(true);
     m_scrollArea->viewport()->installEventFilter(this);
+    // A scroll area reports its context menu position in viewport coordinates.
+    m_scrollArea->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_scrollArea, &QWidget::customContextMenuRequested, this, [this](const QPoint& Position) {
+        showPageContextMenu(m_scrollArea->viewport()->mapToGlobal(Position));
+    });
     m_textSelectionBand = new QRubberBand(QRubberBand::Rectangle, m_scrollArea->viewport());
     m_textSelectionBand->hide();
     m_horizontalScrollAnimation = new QPropertyAnimation(m_scrollArea->horizontalScrollBar(), "value", this);
@@ -199,10 +264,25 @@ void QPDFView::setupUI()
     layout()->addWidget(m_splitter);
 
     connect(m_thumbList, &QListWidget::currentRowChanged, this, &QPDFView::goToPage);
+    connect(this, &QPDFView::pageChanged, this, [this](int Page, int) { syncThumbnailSelection(Page - 1); });
     connect(m_bookmarkTree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* item) {
         int page = item->data(0, Qt::UserRole).toInt();
         goToPage(page);
     });
+}
+
+void QPDFView::syncThumbnailSelection(int page)
+{
+    if (!m_thumbList || page < 0 || page >= m_thumbList->count())
+        return;
+    {
+        // The list drives goToPage; following the view must not feed back into it.
+        const QSignalBlocker Blocker(m_thumbList);
+        m_thumbList->setCurrentRow(page);
+    }
+    m_thumbList->scrollToItem(m_thumbList->item(page), QAbstractItemView::EnsureVisible);
+    // The delegate frames the current page, so the previous one needs a repaint too.
+    m_thumbList->viewport()->update();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -278,6 +358,7 @@ void QPDFView::closeFileInternal(bool emitSignals)
     m_fileData.clear();
     continuousPages_.clear();continuousScale_=0;continuousHeight_=continuousTop_=0;continuousRotation_=-1;
     m_pageCount = 0; m_currentPage = 0;bookmarksLoaded_=false;thumbnailsDone_.clear();renderSnapshot_.clear();renderHasEdits_=false; setModifiedState(false);
+    m_viewRotation = 0; m_previousLocation = -1;
     m_searchPage = 0; m_searchMatchStart = -1; m_searchMatchCount = 0;
     m_searchResultIndex = -1; m_searchResultTotal = 0;
     m_nextThumbnailPage = 0;
@@ -382,9 +463,19 @@ void QPDFView::setTheme(Theme theme)
 // ═══════════════════════════════════════════════════════════
 int  QPDFView::currentPage() const { return m_currentPage; }
 int  QPDFView::totalPageCount() const { return m_pageCount; }
-void QPDFView::goToPage(int page)
+void QPDFView::goToPage(int page) { showPage(page, true); }
+int  QPDFView::PreviousLocation() const
+{
+    return m_previousLocation != m_currentPage && m_previousLocation < m_pageCount ? m_previousLocation : -1;
+}
+void QPDFView::showPage(int page, bool jump)
 {
     if (!m_document || page < 0 || page >= m_pageCount) return;
+    // Page turns are not jumps; a jump to the first/last page or across several pages
+    // is remembered so the page popup can offer the way back.
+    const int Step = m_viewMode == TwoPageSpread ? 2 : 1;
+    if (jump && page != m_currentPage && (qAbs(page - m_currentPage) > Step || page == 0 || page == m_pageCount - 1))
+        m_previousLocation = m_currentPage;
     m_currentPage = page;
     if(m_viewMode==ContinuousScroll && page<continuousPages_.size()){
         cancelPageRender();requestPageImage(page,continuousScale_);
@@ -396,8 +487,8 @@ void QPDFView::goToPage(int page)
     emit pageChanged(m_currentPage + 1, m_pageCount);
     emit viewStateChanged();
 }
-void QPDFView::nextPage()     { goToPage(m_currentPage + (m_viewMode == TwoPageSpread ? 2 : 1)); }
-void QPDFView::previousPage() { goToPage(m_currentPage - (m_viewMode == TwoPageSpread ? 2 : 1)); }
+void QPDFView::nextPage()     { showPage(m_currentPage + (m_viewMode == TwoPageSpread ? 2 : 1), false); }
+void QPDFView::previousPage() { showPage(m_currentPage - (m_viewMode == TwoPageSpread ? 2 : 1), false); }
 
 void QPDFView::setZoomMode(ZoomMode mode)
 {
@@ -409,6 +500,7 @@ void QPDFView::setZoomMode(ZoomMode mode)
 
 void QPDFView::setZoomLevel(qreal pct)
 {
+    // Product zoom range is 10–800 %; menus, popups and the wheel all pass through here.
     m_zoomLevel = qBound(10.0, pct, 800.0);
     m_zoomMode = CustomZoom;
     m_pageCache.clear();
@@ -427,6 +519,8 @@ void QPDFView::setSidebarPosition(SidebarPos pos)
         m_sidebarTabs->show();
         m_splitter->insertWidget(pos == SidebarLeft ? 0 : 1, m_sidebarTabs);
     }
+    // The toolbar '패널' toggle and the 보기 menu follow this state.
+    emit viewStateChanged();
 }
 QPDFView::SidebarPos QPDFView::sidebarPosition() const { return m_sidebarPos; }
 
@@ -462,17 +556,38 @@ QPDFView::SpreadReadingDirection QPDFView::spreadReadingDirection() const
     return m_spreadReadingDirection;
 }
 
-void QPDFView::setRotationAngle(RotationAngle angle)
+void QPDFView::setViewRotation(int Degrees)
+{
+    // Snap to quarter turns so callers can pass viewRotation() +/- 90 directly.
+    const int Rotation = ((qRound(Degrees / 90.0) % 4) + 4) % 4 * 90;
+    if (Rotation == m_viewRotation)
+        return;
+    m_viewRotation = Rotation;
+    m_pageCache.clear();
+    thumbnailsDone_.clear();
+    renderCurrentPage();
+    emit viewStateChanged();
+}
+
+int QPDFView::viewRotation() const
+{
+    return m_viewRotation;
+}
+
+void QPDFView::RotateCurrentPage(RotationAngle Angle)
 {
     if (!m_document) return;
     auto Page=FPDF_LoadPage(m_document,m_currentPage); if (!Page) return;
-    FPDFPage_SetRotation(Page,(int(angle)/90)%4); FPDF_ClosePage(Page);
-    m_rotationAngle=Rotate0; m_pageCache.clear(); setModifiedState(true); renderCurrentPage(); emit viewStateChanged();
+    FPDFPage_SetRotation(Page,(int(Angle)/90)%4); FPDF_ClosePage(Page);
+    // The page size changed, so the continuous layout and this page's thumbnail are stale.
+    continuousRotation_=-1; thumbnailsDone_.remove(m_currentPage);
+    m_pageCache.clear(); setModifiedState(true); renderCurrentPage(); emit viewStateChanged();
 }
 
-QPDFView::RotationAngle QPDFView::rotationAngle() const
+QPDFView::RotationAngle QPDFView::currentPageRotation() const
 {
-    return m_rotationAngle;
+    const int Rotation = PageRotation(m_currentPage);
+    return Rotation > 0 ? static_cast<RotationAngle>((Rotation % 4) * 90) : Rotate0;
 }
 
 void QPDFView::setModifiedState(bool modified)
@@ -495,7 +610,14 @@ void QPDFView::setAnnotationTool(AnnotationTool tool)
 
 void QPDFView::setAnnotationToolBarVisible(bool visible)
 {
-    m_annotationToolBarVisible = visible;
+    if (m_annotationToolBarVisible != visible) {
+        m_annotationToolBarVisible = visible;
+        AppSettings Settings;
+        Settings.setValue(QStringLiteral("pdfView/annotationToolbar"), visible);
+    }
+    // A hidden toolbar cannot show which tool is armed, so fall back to selection.
+    if (!visible)
+        setAnnotationTool(AnnotationNone);
     if (m_annotationToolBar)
         m_annotationToolBar->setVisible(visible && isToolBarVisible());
     emit viewStateChanged();
@@ -660,9 +782,11 @@ QImage QPDFView::renderPageToImage(int pageIndex, qreal scale)
 }
 QImage QPDFView::decoratePageImage(QImage img,int pageIndex,qreal scale)
 {
-    if (m_rotationAngle != Rotate0) {
+    // Pages render upright; the view rotation turns the bitmap (quarter turns take QImage's
+    // lossless fast path) and the overlay mapping below follows the same rotation.
+    if (m_viewRotation != 0) {
         QTransform transform;
-        transform.rotate(static_cast<int>(m_rotationAngle));
+        transform.rotate(m_viewRotation);
         img = img.transformed(transform, Qt::SmoothTransformation);
     }
 
@@ -720,7 +844,7 @@ QSizeF QPDFView::pageSize(int pageIndex) const
 QSizeF QPDFView::rotatedPageSize(int pageIndex) const
 {
     const QSizeF size = pageSize(pageIndex);
-    if (m_rotationAngle == Rotate90 || m_rotationAngle == Rotate270)
+    if (m_viewRotation == 90 || m_viewRotation == 270)
         return {size.height(), size.width()};
     return size;
 }
@@ -748,14 +872,14 @@ QPointF QPDFView::mapPdfPointToImagePoint(const QPointF& pdfPoint, int pageIndex
     const qreal width = baseSize.width();
     const qreal height = baseSize.height();
 
-    switch (m_rotationAngle) {
-        case Rotate90:
+    // Clockwise view rotation, matching QTransform::rotate in decoratePageImage.
+    switch (m_viewRotation) {
+        case 90:
             return {pdfPoint.y() * scale, pdfPoint.x() * scale};
-        case Rotate180:
+        case 180:
             return {(width - pdfPoint.x()) * scale, pdfPoint.y() * scale};
-        case Rotate270:
+        case 270:
             return {(height - pdfPoint.y()) * scale, (width - pdfPoint.x()) * scale};
-        case Rotate0:
         default:
             return {pdfPoint.x() * scale, (height - pdfPoint.y()) * scale};
     }
@@ -772,14 +896,13 @@ QPointF QPDFView::mapImagePointToPdfPoint(const QPointF& imagePoint, int pageInd
     const qreal x = imagePoint.x() / scale;
     const qreal y = imagePoint.y() / scale;
 
-    switch (m_rotationAngle) {
-        case Rotate90:
+    switch (m_viewRotation) {
+        case 90:
             return {y, x};
-        case Rotate180:
+        case 180:
             return {width - x, y};
-        case Rotate270:
+        case 270:
             return {width - y, height - x};
-        case Rotate0:
         default:
             return {x, height - y};
     }
@@ -952,10 +1075,14 @@ void QPDFView::continuousScrollChanged()
 }
 void QPDFView::layoutContinuousPages(qreal scale)
 {
-    const bool rebuild=!qFuzzyCompare(continuousScale_,scale)||continuousPages_.size()!=m_pageCount||continuousRotation_!=int(m_rotationAngle);
-    const qreal oldScale=continuousScale_;
+    const bool rebuild=!qFuzzyCompare(continuousScale_,scale)||continuousPages_.size()!=m_pageCount||continuousRotation_!=m_viewRotation;
     if(rebuild){
-        m_pageCache.clear();continuousScale_=scale;continuousRotation_=int(m_rotationAngle);continuousPages_.clear();
+        // Keep the same spot of the current page in view. Rotation changes page heights and the
+        // 24 px gaps do not scale, so scaling the old offset would drift on long documents.
+        const int anchor=m_currentPage;
+        const bool anchored=continuousScale_>0 && anchor>=0 && anchor<continuousPages_.size();
+        const qreal fraction=anchored?qBound(0.,(continuousTop_-continuousPages_[anchor].top())/qMax(1.,continuousPages_[anchor].height()),1.):0.;
+        m_pageCache.clear();continuousScale_=scale;continuousRotation_=m_viewRotation;continuousPages_.clear();
         qreal width=1,y=0;
         for(int i=0;i<m_pageCount;++i){
             const auto size=rotatedPageSize(i)*scale;
@@ -964,7 +1091,7 @@ void QPDFView::layoutContinuousPages(qreal scale)
         }
         for(auto& rect:continuousPages_)rect.moveLeft((width-rect.width())/2);
         continuousHeight_=qMax(1.,y-24);
-        if(oldScale>0)continuousTop_*=scale/oldScale;else if(m_currentPage<continuousPages_.size())continuousTop_=continuousPages_[m_currentPage].top();
+        if(anchor>=0 && anchor<continuousPages_.size())continuousTop_=continuousPages_[anchor].top()+fraction*continuousPages_[anchor].height();
     }
     qreal width=1;for(const auto& rect:continuousPages_)width=qMax(width,rect.right());
     continuousScrolling_=true;m_pageLabel->clear();
@@ -1077,7 +1204,7 @@ void QPDFView::updateSidebar()
 void QPDFView::startThumbnailGeneration()
 {
     if(!m_thumbList)return;m_thumbList->clear();thumbnailsDone_.clear();
-    for(int i=0;i<m_pageCount;++i){auto* item=new QListWidgetItem(QString::number(i+1),m_thumbList);item->setTextAlignment(Qt::AlignHCenter|Qt::AlignTop);item->setToolTip(tr("%1쪽").arg(i+1));}
+    for(int i=0;i<m_pageCount;++i){auto* item=new QListWidgetItem(tr("%1쪽").arg(i+1),m_thumbList);item->setTextAlignment(Qt::AlignHCenter|Qt::AlignTop);}
     if(m_thumbnailTimer)m_thumbnailTimer->start(30);
 }
 void QPDFView::generateNextThumbnail()
@@ -1085,7 +1212,12 @@ void QPDFView::generateNextThumbnail()
     if(!m_document || !m_thumbList || IsRendering())return;
     if(!m_sidebarTabs->isVisible())return;
     if(m_sidebarTabs->currentWidget()==m_bookmarkTree){if(!bookmarksLoaded_)loadBookmarks();return;}
-    const int first=qMax(0,m_thumbList->indexAt(QPoint(5,5)).row());
+    // Pages sit centred in a viewport-wide grid, so probe down the middle; a probe may land
+    // in the gap between two pages, hence the short walk over one grid row.
+    QModelIndex top;
+    const int centerX=m_thumbList->viewport()->width()/2,rowHeight=qMax(1,m_thumbList->gridSize().height());
+    for(int y=0;y<=rowHeight && !top.isValid();y+=4)top=m_thumbList->indexAt(QPoint(centerX,y));
+    const int first=qMax(0,top.row());
     for(int i=first;i<m_thumbList->count();++i){
         auto* item=m_thumbList->item(i);const auto rect=m_thumbList->visualItemRect(item);
         if(rect.top()>m_thumbList->viewport()->height())break;
@@ -1652,7 +1784,10 @@ void QPDFView::renderPage(QPainter* painter, int pageIndex, const QRectF& rect)
 {
     FPDF_PAGE page = FPDF_LoadPage(m_document, pageIndex);
     if (!page) return;
+    // Print the document as stored; the view rotation is a screen-only preference.
+    const int savedRotation = std::exchange(m_viewRotation, 0);
     QImage img = renderPageToImage(pageIndex, rect.width() / FPDF_GetPageWidth(page));
+    m_viewRotation = savedRotation;
     painter->drawImage(rect, img);
     FPDF_ClosePage(page);
 }
@@ -1696,15 +1831,17 @@ QToolBar* QPDFView::createToolBar()
     });
     tb->addSeparator();
 
+    // View rotation; turning the stored page is the PDF › 현재 쪽 회전 (편집) command.
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.rotateLeft"), &QAction::triggered, this, [this] {
-        setRotationAngle(static_cast<RotationAngle>((int(m_rotationAngle) + 270) % 360));
+        setViewRotation(m_viewRotation - 90);
     });
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "pdf.rotateRight"), &QAction::triggered, this, [this] {
-        setRotationAngle(static_cast<RotationAngle>((int(m_rotationAngle) + 90) % 360));
+        setViewRotation(m_viewRotation + 90);
     });
     tb->addSeparator();
 
     auto* searchEdit = new QLineEdit(tb);
+    m_searchField = searchEdit;
     searchEdit->setObjectName(QStringLiteral("pdfSearchField"));
     searchEdit->setPlaceholderText(tr("문서에서 찾기"));
     searchEdit->setAccessibleName(tr("문서에서 찾기"));
@@ -1956,6 +2093,150 @@ bool QPDFView::copySelection()
         }
     }
     return false;
+}
+
+bool QPDFView::SelectAllText()
+{
+    if (!m_document || m_currentPage < 0 || m_currentPage >= m_pageCount)
+        return false;
+    FPDF_PAGE page = FPDF_LoadPage(m_document, m_currentPage);
+    if (!page)
+        return false;
+    FPDF_TEXTPAGE textPage = FPDFText_LoadPage(page);
+    if (!textPage) {
+        FPDF_ClosePage(page);
+        return false;
+    }
+
+    QString text;
+    PdfRect bounds;
+    const int charCount = FPDFText_CountChars(textPage);
+    if (charCount > 0) {
+        QVector<char16_t> buffer(charCount + 1, 0);
+        // The count written includes the terminator.
+        const int written = FPDFText_GetText(textPage, 0, charCount, reinterpret_cast<unsigned short*>(buffer.data()));
+        text = QString::fromUtf16(buffer.constData(), qMax(0, written - 1)).trimmed();
+        // The selection model keeps one box per page: the union of the text runs.
+        const int rectCount = FPDFText_CountRects(textPage, 0, charCount);
+        for (int rectIndex = 0; rectIndex < rectCount; ++rectIndex) {
+            double left = 0.0, top = 0.0, right = 0.0, bottom = 0.0;
+            if (!FPDFText_GetRect(textPage, rectIndex, &left, &top, &right, &bottom))
+                continue;
+            const PdfRect rect{left, right, bottom, top};
+            if (!rect.isValid())
+                continue;
+            bounds = bounds.isValid()
+                ? PdfRect{qMin(bounds.left, rect.left), qMax(bounds.right, rect.right), qMin(bounds.bottom, rect.bottom), qMax(bounds.top, rect.top)}
+                : rect;
+        }
+    }
+    FPDFText_ClosePage(textPage);
+    FPDF_ClosePage(page);
+    if (text.isEmpty())
+        return false;
+
+    m_selectedText = text;
+    m_selectedTextPage = m_currentPage;
+    m_selectedTextBounds = bounds;
+    m_selectedImage = {};
+    m_pageCache.clear();
+    renderCurrentPage();
+    updateCopyAvailability();
+    return true;
+}
+
+void QPDFView::FocusSearchField()
+{
+    if (!m_searchField)
+        return;
+    // The field lives on the view toolbar; reveal it when the toolbar was hidden.
+    if (auto* bar = m_searchField->parentWidget(); bar && bar->isHidden())
+        bar->show();
+    m_searchField->setFocus(Qt::ShortcutFocusReason);
+    m_searchField->selectAll();
+}
+
+// ═══════════════════════════════════════════════════════════
+// 우클릭 메뉴
+// ═══════════════════════════════════════════════════════════
+void QPDFView::showPageContextMenu(const QPoint& globalPos)
+{
+    QMenu menu(this);
+    menu.addAction(ToolbarIcons::iconByName(QStringLiteral("copy")), tr("복사"), QKeySequence(QKeySequence::Copy), this, [this] { copySelection(); })
+        ->setEnabled(canCopy());
+    menu.addAction(tr("전체 선택"), QKeySequence(QKeySequence::SelectAll), this, [this] { SelectAllText(); })
+        ->setEnabled(m_document != nullptr);
+    menu.addSeparator();
+    menu.addAction(ToolbarIcons::iconByName(QStringLiteral("search")), tr("찾기…"), QKeySequence(QKeySequence::Find), this, &QPDFView::FocusSearchField)
+        ->setEnabled(!m_searchField.isNull());
+    menu.addSeparator();
+    menu.addAction(ToolbarIcons::iconForActionKey(QStringLiteral("pdf.zoomIn"), __FILE__, __LINE__), tr("확대"), this, [this] { setZoomLevel(m_zoomLevel * 1.25); });
+    menu.addAction(ToolbarIcons::iconForActionKey(QStringLiteral("pdf.zoomOut"), __FILE__, __LINE__), tr("축소"), this, [this] { setZoomLevel(m_zoomLevel / 1.25); });
+
+    auto* fitMenu = menu.addMenu(tr("맞춤"));
+    auto* fitGroup = new QActionGroup(fitMenu);
+    const auto addFit = [this, fitMenu, fitGroup](const QString& text, bool checked, std::function<void()> run) {
+        auto* action = fitMenu->addAction(text, this, std::move(run));
+        action->setCheckable(true);
+        action->setChecked(checked);
+        fitGroup->addAction(action);
+    };
+    addFit(tr("너비 맞춤"), m_zoomMode == FitWidth, [this] { setZoomMode(FitWidth); });
+    addFit(tr("쪽 맞춤"), m_zoomMode == FitPage, [this] { setZoomMode(FitPage); });
+    addFit(tr("실제 크기"), m_zoomMode == CustomZoom && qRound(m_zoomLevel) == 100, [this] { setZoomLevel(100); });
+
+    auto* rotateMenu = menu.addMenu(tr("회전"));
+    rotateMenu->addAction(ToolbarIcons::iconForActionKey(QStringLiteral("pdf.rotateLeft"), __FILE__, __LINE__), tr("왼쪽으로 90°"), this,
+                          [this] { setViewRotation(m_viewRotation - 90); });
+    rotateMenu->addAction(ToolbarIcons::iconForActionKey(QStringLiteral("pdf.rotateRight"), __FILE__, __LINE__), tr("오른쪽으로 90°"), this,
+                          [this] { setViewRotation(m_viewRotation + 90); });
+    menu.addSeparator();
+
+    // Same tools as the annotation toolbar; picking a drawing tool brings the toolbar up.
+    auto* annotationMenu = menu.addMenu(tr("주석"));
+    auto* toolGroup = new QActionGroup(annotationMenu);
+    for (const auto& [tool, text] : {std::pair{AnnotationNone, tr("선택 도구")}, std::pair{AnnotationHighlight, tr("하이라이트")},
+                                     std::pair{AnnotationInk, tr("형광펜 · 잉크")}, std::pair{AnnotationFreeText, tr("자유 텍스트")},
+                                     std::pair{AnnotationUnderline, tr("밑줄")}, std::pair{AnnotationStrikeOut, tr("취소선")},
+                                     std::pair{AnnotationNote, tr("팝업 노트")}}) {
+        auto* action = annotationMenu->addAction(text, this, [this, tool] {
+            if (tool != AnnotationNone)
+                setAnnotationToolBarVisible(true);
+            setAnnotationTool(tool);
+        });
+        action->setCheckable(true);
+        action->setChecked(m_annotationTool == tool);
+        toolGroup->addAction(action);
+    }
+    annotationMenu->setEnabled(m_document != nullptr);
+
+    menu.exec(globalPos);
+}
+
+void QPDFView::showThumbnailContextMenu(const QPoint& viewportPos)
+{
+    if (!m_thumbList)
+        return;
+    const int row = m_thumbList->indexAt(viewportPos).row();
+    QMenu menu(this);
+    menu.addAction(tr("이 쪽으로 이동"), this, [this, row] { goToPage(row); })->setEnabled(row >= 0);
+    menu.addSeparator();
+    menu.addAction(tr("패널 닫기"), this, [this] { setSidebarPosition(SidebarHidden); });
+    menu.exec(m_thumbList->viewport()->mapToGlobal(viewportPos));
+}
+
+void QPDFView::showBookmarkContextMenu(const QPoint& viewportPos)
+{
+    if (!m_bookmarkTree)
+        return;
+    const QTreeWidgetItem* item = m_bookmarkTree->itemAt(viewportPos);
+    const int page = item ? item->data(0, Qt::UserRole).toInt() : -1;
+    QMenu menu(this);
+    menu.addAction(tr("이 항목으로 이동"), this, [this, page] { goToPage(page); })->setEnabled(page >= 0);
+    menu.addSeparator();
+    menu.addAction(tr("모두 펼치기"), m_bookmarkTree, &QTreeWidget::expandAll);
+    menu.addAction(tr("모두 접기"), m_bookmarkTree, &QTreeWidget::collapseAll);
+    menu.exec(m_bookmarkTree->viewport()->mapToGlobal(viewportPos));
 }
 
 bool QPDFView::eventFilter(QObject* watched, QEvent* event)
@@ -2339,6 +2620,10 @@ void QPDFView::keyPressEvent(QKeyEvent* event)
             event->accept();
             return;
         }
+    }
+    if (event->matches(QKeySequence::SelectAll) && SelectAllText()) {
+        event->accept();
+        return;
     }
 
     if (m_document && m_formManager->handle()) {

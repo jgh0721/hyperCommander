@@ -7,8 +7,15 @@
 #include "core/AppSettings.h"
 #include "core/ToolbarIcons.h"
 #include <Scintilla.h>
+#include <fmstyle/StyleProps.h>
 #include <QActionGroup>
 #include <QToolBar>
+#include <QToolButton>
+#include <QMenu>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QKeySequence>
+#include <QPointer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QHeaderView>
@@ -37,36 +44,65 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     auto *Layout = new QVBoxLayout(this);
     Layout->setContentsMargins(0, 0, 0, 0);
     Layout->setSpacing(0);
+    // One row: [미리보기 | 소스 | 나란히] | 개요 · 스크롤 동기화 | 축소 · 확대 · 갱신 | 찾기, plus the text
+    // editor's tools while the source is shown (SetSourceTools). Icon-only like the other view rows;
+    // the modes, 개요 and 스크롤 동기화 keep their names beside the icon.
     toolbar_ = new QToolBar(tr("마크다운"), this);
-    toolbar_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    auto Make = [&](const QString &Id, const QString &Label, bool Check = false) {
+    toolbar_->setObjectName("markdownToolbar");
+    toolbar_->setMovable(false);
+    toolbar_->setIconSize(QSize(20, 20));
+    toolbar_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    auto Make = [&](const QString &Id, const QString &Label, bool Check = false, const char *Icon = nullptr) {
         auto *A = toolbar_->addAction(Label);
         A->setObjectName(Id);
         A->setCheckable(Check);
+        if (Icon)
+        {
+            A->setIcon(ToolbarIcons::iconByName(QString::fromLatin1(Icon)));
+            // The workspace re-tints named icons when the theme changes.
+            A->setProperty("documentIconName", QString::fromLatin1(Icon));
+        }
         actions_[Id] = A;
         connect(A, &QAction::triggered, this, [this, Id] { Run(Id); });
         return A;
     };
+    const auto Named = [this](QAction *A) {
+        if (auto *Button = qobject_cast<QToolButton *>(toolbar_->widgetForAction(A)))
+            Button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        return A;
+    };
     auto *Modes = new QActionGroup(this);
-    for (const auto &Pair : {std::pair{"preview", tr("미리보기")}, std::pair{"source", tr("소스 편집")},
-                             std::pair{"split", tr("나란히 보기")}})
+    QList<QAbstractButton *> Segment;
+    for (const auto &[Id, Label, Tip, Icon] :
+         {std::tuple{"markdown.preview", tr("미리보기"), tr("미리보기"), "view-preview"},
+          std::tuple{"markdown.source", tr("소스"), tr("소스 편집"), "view-source"},
+          std::tuple{"markdown.split", tr("나란히"), tr("나란히 보기"), "view-split"}})
     {
-        auto *A = Make("markdown." + QString(Pair.first), Pair.second, true);
-        A->setIcon(ToolbarIcons::iconForActionKey("markdown." + QString(Pair.first), __FILE__, __LINE__));
+        auto *A = Named(Make(QString::fromLatin1(Id), Label, true, Icon));
+        A->setToolTip(Tip);
         Modes->addAction(A);
+        if (auto *Button = qobject_cast<QAbstractButton *>(toolbar_->widgetForAction(A)))
+            Segment << Button;
     }
+    fm::style::setSegments(Segment);
     toolbar_->addSeparator();
-    Make("markdown.toggleToc", tr("개요"), true);
-    Make("markdown.syncScroll", tr("스크롤 동기화"), true)
+    Named(Make("markdown.toggleToc", tr("개요"), true, "toc-toggle"))->setToolTip(tr("개요 표시 전환"));
+    Named(Make("markdown.syncScroll", tr("스크롤 동기화"), true, "sync"))
         ->setToolTip(tr("소스 캐럿·본문 클릭과 화면 스크롤을 함께 연결합니다."));
-    Make("markdown.refresh", tr("갱신"));
-    toolbar_->removeAction(Make("markdown.focusOtherPane", tr("포커스 이동")));
-    toolbar_->removeAction(Make("markdown.toggleSource", tr("소스 전환")));
-    toolbar_->removeAction(Make("markdown.problems", tr("렌더링 문제")));
-    toolbar_->removeAction(Make("markdown.currentHeading", tr("현재 개요 항목")));
-    Make("markdown.zoomOut", tr("축소"));
-    Make("markdown.zoomIn", tr("확대"));
-    Make("markdown.find", tr("찾기"));
+    toolbar_->addSeparator();
+    Make("markdown.zoomOut", tr("미리보기 축소"), false, "zoom-out");
+    Make("markdown.zoomIn", tr("미리보기 확대"), false, "zoom-in");
+    Make("markdown.refresh", tr("미리보기 갱신"), false, "refresh");
+    toolbar_->addSeparator();
+    Make("markdown.find", tr("찾기"), false, "search");
+    // Commands without a button: menus, status pickers and shortcuts run them.
+    for (const auto &[Id, Label] : {std::pair{"markdown.focusOtherPane", tr("포커스 이동")},
+                                    std::pair{"markdown.toggleSource", tr("소스 전환")},
+                                    std::pair{"markdown.problems", tr("렌더링 문제")},
+                                    std::pair{"markdown.currentHeading", tr("현재 개요 항목")},
+                                    std::pair{"markdown.zoomReset", tr("미리보기 원래 크기")},
+                                    std::pair{"markdown.zoomSet", tr("미리보기 배율")}})
+        toolbar_->removeAction(Make(QString::fromLatin1(Id), Label));
     message_ = new QLabel(this);
     message_->setWordWrap(true);
     message_->hide();
@@ -117,30 +153,26 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
         S.setValue(QString("markdown/layout/") + (editor_ ? "editor" : "viewer"),
                    QString::fromLatin1(splitter_->saveState().toBase64()));
     });
-    connect(outline_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *Item) {
-        if (rendered_ != revision_)
-        {
-            Refresh();
-            return;
-        }
-        // Outline lines come from the rendered revision.
-        const int Line = Item->data(0, Qt::UserRole).toInt();
-        if (SourceVisible() && (!previewActive_ || actions_["markdown.syncScroll"]->isChecked()))
-            source_->goToLine(int(fromPreviewLine(Line)));
-        if (!preview_->isHidden() &&
-            (!SourceVisible() || previewActive_ || actions_["markdown.syncScroll"]->isChecked()))
-            sendPosition(Line, false);
-    });
+    // Outline lines come from the rendered revision.
+    connect(outline_, &QTreeWidget::itemClicked, this,
+            [this](QTreeWidgetItem *Item) { goToHeadingLine(Item->data(0, Qt::UserRole).toInt()); });
+    outline_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(outline_, &QWidget::customContextMenuRequested, this, &MarkdownDocumentView::showOutlineMenu);
     debounce_.setSingleShot(true);
     connect(&debounce_, &QTimer::timeout, this, [this] { Refresh(); });
     connect(source_, &QTextView::ContentChanged, this, [this] {
         ++revision_;
         status_ = tr("갱신 대기");
+        render_ = RenderState::Waiting;
         if (options_["autoPreview"].toBool(hc::defaults::edit::ViewValue("markdown/autoPreview").toBool()))
             debounce_.start();
         emit Changed();
     });
     connect(preview_, &MarkdownProcessView::Reported, this, &MarkdownDocumentView::report);
+    // Before the preview window attaches, a right click lands on the host widget itself.
+    connect(preview_, &QWidget::customContextMenuRequested, this, [this](const QPoint &Position) {
+        showPreviewMenu({{"type", "context"}, {"x", Position.x() / qMax(.1, zoom_)}, {"y", Position.y() / qMax(.1, zoom_)}, {"line", 0}});
+    });
     source_->Backend()->widget()->installEventFilter(this);
     // The anchor follows the editor's own caret and viewport signals; several in one event
     // loop turn are sent once. Nothing is computed while the editor is idle.
@@ -180,40 +212,77 @@ void MarkdownDocumentView::SetReadOnly(bool Value)
 {
     readOnly_ = Value;
     source_->setReadOnly(Value);
-    actions_["markdown.source"]->setText(Value ? tr("소스 보기") : tr("소스 편집"));
+    actions_["markdown.source"]->setToolTip(Value ? tr("소스 보기") : tr("소스 편집"));
 }
 void MarkdownDocumentView::Focus()
 {
     auto* Input = InputWidget();
     if (Input == preview_) preview_->FocusInput();
-    else {
-        Input->setFocus(Qt::OtherFocusReason);
-        const auto Root = GetAncestor(reinterpret_cast<HWND>(window()->effectiveWinId()), GA_ROOT);
-        if (Root && GetAncestor(GetForegroundWindow(), GA_ROOT) == Root)
-            SetFocus(reinterpret_cast<HWND>(Input->effectiveWinId()));
-    }
+    else focusSource();
+}
+void MarkdownDocumentView::focusSource()
+{
+    auto *Input = source_->Backend()->widget();
+    Input->setFocus(Qt::OtherFocusReason);
+    // The preview is another process's window; its native focus does not follow Qt's.
+    const auto Root = GetAncestor(reinterpret_cast<HWND>(window()->effectiveWinId()), GA_ROOT);
+    if (Root && GetAncestor(GetForegroundWindow(), GA_ROOT) == Root)
+        SetFocus(reinterpret_cast<HWND>(Input->effectiveWinId()));
 }
 void MarkdownDocumentView::SetSourceTools(QToolBar *Tools)
 {
-    sourceTools_ = Tools;
-    static_cast<QVBoxLayout *>(layout())->insertWidget(0, Tools);
-    Tools->setVisible(SourceVisible());
+    if (!Tools)
+        return;
+    // The text bar is never shown as a second row. Actions are matched by their toolbar name or,
+    // after a theme refresh renamed them, by their action key.
+    Tools->hide();
+    const auto Take = [Tools](const char *Name, const char *Key) -> QAction * {
+        for (auto *A : Tools->actions())
+            if (A->objectName() == QLatin1String(Name) || A->objectName() == QLatin1String(Key))
+            {
+                Tools->removeAction(A);
+                return A;
+            }
+        return nullptr;
+    };
+    auto *Replace = Take("textToolbar.replace", "text.replaceBar");
+    auto *Wrap = Take("textToolbar.wordWrap", "text.wordWrap");
+    auto *Whitespace = Take("textToolbar.whitespace", "text.whitespace");
+    // After 찾기: 바꾸기 | 줄바꿈 · 공백 문자.
+    if (Replace)
+        sourceActions_ << Replace;
+    if (Wrap || Whitespace)
+    {
+        auto *Gap = new QAction(toolbar_);
+        Gap->setSeparator(true);
+        sourceActions_ << Gap;
+    }
+    for (auto *A : {Wrap, Whitespace})
+        if (A)
+            sourceActions_ << A;
+    for (auto *A : sourceActions_)
+    {
+        toolbar_->addAction(A);
+        A->setVisible(SourceVisible());
+    }
 }
 void MarkdownDocumentView::SetShortcutBindings(const QJsonObject &Bindings)
 {
+    // Stored overrides or a resolved table: both resolve to every command's key.
+    bindings_ = DocumentShortcutRegistry::Bindings(Bindings);
     QJsonObject Keys;
     for (const auto &Item : DocumentShortcutRegistry::Commands())
         if (Item.scope_ == "markdown" || Item.scope_ == "common")
-            Keys[Item.id_] = Bindings[Item.id_];
-    Keys["markdown.find"] = Bindings["text.find"];
+            Keys[Item.id_] = bindings_.value(Item.id_);
+    Keys["markdown.find"] = bindings_.value("text.find");
     preview_->Send({{"type", "shortcuts"}, {"bindings", Keys}});
 }
 void MarkdownDocumentView::mode(const QString &Value)
 {
     mode_ = QStringList{"source", "preview", "split"}.contains(Value) ? Value : "preview";
     source_->setVisible(SourceVisible());
-    if (sourceTools_)
-        sourceTools_->setVisible(SourceVisible());
+    for (auto *A : sourceActions_)
+        A->setVisible(SourceVisible());
     previewPanel_->setVisible(mode_ != "source");
     preview_->setVisible(mode_ != "source");
     QTimer::singleShot(0, this, &MarkdownDocumentView::alignPreview);
@@ -245,7 +314,7 @@ bool MarkdownDocumentView::RunPreviewCommand(const QString &Id)
         Run("markdown.find");
     return Id.startsWith("edit.") || Id.startsWith("text.");
 }
-bool MarkdownDocumentView::Run(const QString &Id)
+bool MarkdownDocumentView::Run(const QString &Id, const QJsonValue &Value)
 {
     if (!CanRun(Id))
         return false;
@@ -320,7 +389,8 @@ bool MarkdownDocumentView::Run(const QString &Id)
     }
     else if (Id == "markdown.find")
     {
-        if (SourceVisible() && !preview_->HasFocus() && source_->Backend()->widget()->hasFocus())
+        // The row's one 찾기 button: the source's find bar unless the preview is the pane in use.
+        if (mode_ == "source" || (SourceVisible() && !preview_->HasFocus() && source_->Backend()->widget()->hasFocus()))
             source_->showFindBar();
         else
         {
@@ -332,14 +402,37 @@ bool MarkdownDocumentView::Run(const QString &Id)
         }
     }
     else if (Id == "markdown.zoomIn" || Id == "markdown.zoomOut")
+        SetPreviewZoom(PreviewZoomPercent() + (Id.endsWith("In") ? 10 : -10));
+    else if (Id == "markdown.zoomReset")
+        SetPreviewZoom(100);
+    else if (Id == "markdown.zoomSet")
     {
-        zoom_ = qBound(.5, zoom_ + (Id.endsWith("In") ? .1 : -.1), 3.);
-        preview_->Send({{"type", "zoom"}, {"value", zoom_}});
-        // Offsets are CSS pixels; the same screen height is a different offset now.
-        lastSourceAnchor_ = {};sampleSoon_.start(0);
+        bool Ok = false;
+        int Percent = qRound(Value.toVariant().toDouble(&Ok));
+        if (!Ok)
+            Percent = QInputDialog::getInt(this, tr("미리보기 배율"), tr("배율 (%)"), PreviewZoomPercent(), MinZoomPercent,
+                                           MaxZoomPercent, 10, &Ok);
+        if (Ok)
+            SetPreviewZoom(Percent);
     }
     emit Changed();
     return true;
+}
+int MarkdownDocumentView::PreviewZoomPercent() const
+{
+    return qRound(zoom_ * 100);
+}
+void MarkdownDocumentView::SetPreviewZoom(int Percent)
+{
+    const int Value = qBound(MinZoomPercent, Percent, MaxZoomPercent);
+    if (Value == PreviewZoomPercent())
+        return;
+    zoom_ = Value / 100.0;
+    preview_->Send({{"type", "zoom"}, {"value", zoom_}});
+    // Offsets are CSS pixels; the same screen height is a different offset now.
+    lastSourceAnchor_ = {};
+    sampleSoon_.start(0);
+    emit Changed();
 }
 void MarkdownDocumentView::ReloadPreferences()
 {
@@ -378,6 +471,7 @@ void MarkdownDocumentView::Refresh(bool Force)
     if (!Force && Text.size() > 2 * 1024 * 1024)
     {
         status_ = tr("대용량 · 수동 갱신 필요");
+        render_ = RenderState::Manual;
         emit Changed();
         return;
     }
@@ -397,6 +491,7 @@ void MarkdownDocumentView::Refresh(bool Force)
     error_.clear();
     message_->hide();
     status_ = source_->isContentTruncated() ? tr("부분 미리보기 갱신 중") : tr("갱신 중");
+    render_ = RenderState::Rendering;
     options_["dark"] = palette().color(QPalette::Window).lightness() < 128;
     preview_->Send({{"type", "render"},
                     {"revision", revision_},
@@ -414,6 +509,13 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
     if (Type == "escape")
     {
         emit EscapeRequested();
+        return;
+    }
+    if (Type == "context")
+    {
+        // Not tied to a revision. The menu opens after this socket read returns, so its event
+        // loop never runs inside MarkdownProcessView::receive.
+        QTimer::singleShot(0, this, [this, Value] { showPreviewMenu(Value); });
         return;
     }
     if (Type == "command")
@@ -463,6 +565,10 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
     {
         rendered_ = renderRequested_;
         status_ = renderRequested_ != revision_ ? tr("갱신 대기") : source_->isContentTruncated() ? tr("부분 미리보기") : tr("최신");
+        render_ = renderRequested_ != revision_ ? RenderState::Waiting
+                  : source_->isContentTruncated() ? RenderState::Partial
+                                                  : RenderState::Current;
+        renderedAt_ = QDateTime::currentDateTime();
         // The new frame has its own layout: send the current anchor to it.
         lastSourceAnchor_ = {};
         lastPosition_ = -1;
@@ -555,23 +661,31 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
         }
     }
     else if (Type == "link")
-    {
-        const QUrl Url(Value["url"].toString());
-        if (Url.scheme() == "https" || Url.scheme() == "http")
-            QDesktopServices::openUrl(Url);
-        else if (Url.isLocalFile())
-            emit OpenRequested(Url.toLocalFile());
-    }
+        openLink(Value["url"].toString(), {});
     emit Changed();
 }
-void MarkdownDocumentView::sendPosition(double Line, bool Scroll, const QJsonObject &Anchor)
+void MarkdownDocumentView::openLink(const QString &Link, const QString &Fragment)
+{
+    if (!Fragment.isEmpty())
+    {
+        // An in-document link scrolls the preview, as a click on it does.
+        preview_->Send({{"type", "anchor"}, {"revision", renderRequested_}, {"id", Fragment}});
+        return;
+    }
+    const QUrl Url(Link);
+    if (Url.scheme() == "https" || Url.scheme() == "http")
+        QDesktopServices::openUrl(Url);
+    else if (Url.isLocalFile() && !QFileInfo(Url.toLocalFile()).isDir())
+        emit OpenRequested(Url.toLocalFile());
+}
+void MarkdownDocumentView::sendPosition(double Line, bool Scroll, const QJsonObject &Anchor, bool Reveal)
 {
     if (renderRequested_ < 0)
         return;
     QJsonObject Message{{"type", Scroll ? "scroll" : "position"},
                         {"revision", renderRequested_},
                         {"line", Line},
-                        {"reveal", !actions_["markdown.syncScroll"]->isChecked()}};
+                        {"reveal", Reveal || !actions_["markdown.syncScroll"]->isChecked()}};
     if (Scroll)
     {
         for (const auto *Key : {"column", "offset", "caret", "top", "end"})
@@ -737,26 +851,216 @@ bool MarkdownDocumentView::eventFilter(QObject *, QEvent *Event)
 QList<DocumentStatusField> MarkdownDocumentView::StatusFields() const
 {
     QList<DocumentStatusField> F;
+    // Fields are {id, text, compact, detail, command, essential, trailing, picker}. The command runs
+    // only where the host offers no picker.
+    const auto Percent = [](int Value) { return QStringLiteral("%1 %").arg(Value); };
     if (!SourceVisible())
-        F.append({"markdown.location",
-                  QString("%1 · %2%").arg(heading_.isEmpty() ? tr("Markdown") : heading_).arg(progress_),
-                  {},
-                  {},
-                  "markdown.currentHeading"});
+        F.append({"heading", QStringLiteral("%1 · %2").arg(heading_.isEmpty() ? tr("Markdown") : heading_, Percent(progress_)),
+                  Percent(progress_), tr("현재 제목 · 미리보기 위치"), "markdown.currentHeading", true, false, true});
     F.append({"markdown.viewMode", mode_ == "split" ? (previewActive_ ? tr("나란히 · 미리보기") : tr("나란히 · 소스"))
                                    : mode_ == "source" ? tr("소스")
                                                        : tr("미리보기")});
+    // In preview the zoom starts the right-aligned group; with the source shown the text fields
+    // before these already start it.
     if (mode_ != "source")
-        F.append({"markdown.zoom", tr("미리보기 %1%").arg(qRound(zoom_ * 100)), {}, {}, "markdown.zoomIn", false});
-    F.append({"markdown.render", status_, {}, error_, "markdown.refresh", !error_.isEmpty()});
-    if (problems_)
-        F.append({"markdown.problems",
-                  tr("수식·다이어그램 오류 %1건").arg(problems_),
-                  {},
-                  tr("클릭하여 문제와 소스 위치를 확인하세요."),
-                  "markdown.problems",
-                  true});
+        F.append({"mdzoom", tr("미리보기 %1").arg(Percent(PreviewZoomPercent())), Percent(PreviewZoomPercent()),
+                  tr("미리보기 배율"), "markdown.zoomSet", true, !SourceVisible(), true});
+    F.append({"render", renderText(), {}, renderDetail(), "markdown.refresh", !error_.isEmpty() || problems_ > 0, false, true});
     return F;
+}
+QString MarkdownDocumentView::renderText() const
+{
+    if (!error_.isEmpty())
+        return tr("렌더링 실패");
+    switch (render_)
+    {
+    case RenderState::Waiting:
+        return tr("렌더링 대기");
+    case RenderState::Rendering:
+        return tr("렌더링 중");
+    case RenderState::Manual:
+        return tr("렌더링 수동 갱신");
+    case RenderState::Current:
+    case RenderState::Partial:
+        break;
+    }
+    if (problems_ > 0)
+        return tr("렌더링 문제 %1건").arg(problems_);
+    return render_ == RenderState::Partial ? tr("렌더링 최신 · 부분") : tr("렌더링 최신");
+}
+QString MarkdownDocumentView::renderDetail() const
+{
+    if (!error_.isEmpty())
+        return error_;
+    if (render_ == RenderState::Manual)
+        return tr("큰 문서는 자동으로 갱신하지 않습니다. 미리보기 갱신으로 렌더링합니다.");
+    if ((render_ == RenderState::Current || render_ == RenderState::Partial) && problems_ > 0)
+        return tr("수식 · 다이어그램 오류 %1건").arg(problems_);
+    return renderedAt_.isValid() ? tr("미리보기 렌더링 — %1 · %2").arg(status_, QLocale().toString(renderedAt_.time(), QLocale::ShortFormat))
+                                 : tr("미리보기 렌더링 — %1").arg(status_);
+}
+QList<QPair<QString, int>> MarkdownDocumentView::Headings() const
+{
+    QList<QPair<QString, int>> Items;
+    for (QTreeWidgetItemIterator It(outline_); *It; ++It)
+        Items.append({(*It)->text(0), int(fromPreviewLine((*It)->data(0, Qt::UserRole).toInt()))});
+    return Items;
+}
+int MarkdownDocumentView::CurrentHeadingIndex() const
+{
+    int Index = 0;
+    for (QTreeWidgetItemIterator It(outline_); *It; ++It, ++Index)
+        if (*It == outline_->currentItem())
+            return Index;
+    return -1;
+}
+int MarkdownDocumentView::HeadingDepth(int Index) const
+{
+    int At = 0;
+    for (QTreeWidgetItemIterator It(outline_); *It; ++It, ++At)
+        if (At == Index)
+        {
+            int Depth = 0;
+            for (auto *Parent = (*It)->parent(); Parent; Parent = Parent->parent())
+                ++Depth;
+            return Depth;
+        }
+    return 0;
+}
+void MarkdownDocumentView::GoToHeading(int Index)
+{
+    int At = 0;
+    for (QTreeWidgetItemIterator It(outline_); *It; ++It, ++At)
+        if (At == Index)
+        {
+            {
+                const QSignalBlocker Block(outline_);
+                outline_->setCurrentItem(*It);
+            }
+            goToHeadingLine((*It)->data(0, Qt::UserRole).toInt());
+            return;
+        }
+}
+void MarkdownDocumentView::goToHeadingLine(int Line)
+{
+    if (rendered_ != revision_)
+    {
+        Refresh();
+        return;
+    }
+    if (SourceVisible() && (!previewActive_ || actions_["markdown.syncScroll"]->isChecked()))
+        source_->goToLine(int(fromPreviewLine(Line)));
+    // The preview always shows the heading: with the source hidden or unfocused no anchor follows.
+    if (!preview_->isHidden() &&
+        (!SourceVisible() || previewActive_ || actions_["markdown.syncScroll"]->isChecked()))
+        sendPosition(Line, false, {}, true);
+}
+void MarkdownDocumentView::ShowSourceLineInPreview()
+{
+    if (mode_ == "source")
+        mode("split");
+    // A preview shown just now has no layout yet; place it once the splitter has settled.
+    QTimer::singleShot(0, this, [this] {
+        if (renderRequested_ < 0 || preview_->isHidden())
+            return;
+        const auto Anchor = sourceScrollAnchor();
+        const bool Caret = Anchor["caret"].toBool();
+        // Marks the caret's block; without a visible caret it also scrolls to it.
+        sendPosition(toPreviewLine(source_->currentLine()), false, {}, !Caret);
+        if (Caret)
+        {
+            // The caret's character goes to the same screen height in the preview.
+            lastSourceAnchor_ = Anchor;
+            sendPosition(toPreviewLine(Anchor["line"].toDouble()), true, Anchor);
+        }
+    });
+}
+void MarkdownDocumentView::showInSource(double Line, int Column, double Offset)
+{
+    const bool Shown = SourceVisible();
+    if (!Shown)
+        mode("split");
+    const auto Place = [this, Line, Column, Offset] {
+        // As a click in the preview: the character keeps its screen height, and the editor's own
+        // anchor is not sent back.
+        suppress_.restart();
+        placeSource(fromPreviewLine(Line), Column, Offset, true);
+        lastSourceAnchor_ = sourceScrollAnchor();
+        lastPosition_ = static_cast<ScintillaQtDirectBackend *>(source_->Backend())->Send(SCI_GETCURRENTPOS);
+        focusSource();
+    };
+    if (Shown)
+        Place();
+    else
+        QTimer::singleShot(0, this, Place);
+}
+void MarkdownDocumentView::showPreviewMenu(const QJsonObject &Value)
+{
+    if (preview_->isHidden())
+        return;
+    const double X = Value["x"].toDouble(), Y = Value["y"].toDouble();
+    const auto Global = preview_->mapToGlobal(QPoint(qRound(X * zoom_), qRound(Y * zoom_)));
+    const auto Link = Value["link"].toString(), Fragment = Value["fragment"].toString();
+    double Line = Value["line"].toDouble(), Offset = Y;
+    int Column = Value["column"].isDouble() ? Value["column"].toInt() : -1;
+    if (Line < 1)
+    {
+        // Outside the document: the preview's own anchor at mid height stands in.
+        Line = previewScroll_["line"].toDouble();
+        Column = previewScroll_["column"].isDouble() ? previewScroll_["column"].toInt() : -1;
+        Offset = previewScroll_["anchorOffset"].toDouble(Y);
+    }
+    const auto Key = [this](const char *Id) {
+        return QKeySequence::fromString(bindings_.value(QString::fromLatin1(Id)).toString(), QKeySequence::PortableText);
+    };
+    const QUrl Url(Link);
+    const bool HadFocus = preview_->HasFocus();
+    QMenu Menu(this);
+    Menu.setObjectName("markdownPreviewMenu");
+    Menu.addAction(tr("복사"), Key("edit.copy"), this, [this] { preview_->Send({{"type", "copy"}}); })
+        ->setEnabled(!Value["selection"].toString().isEmpty());
+    Menu.addAction(tr("전체 선택"), Key("edit.selectAll"), this, [this] { preview_->Send({{"type", "selectAll"}}); });
+    Menu.addSeparator();
+    auto *Source = Menu.addAction(tr("소스에서 이 위치 보기"), this, [this, Line, Column, Offset] { showInSource(Line, Column, Offset); });
+    Source->setEnabled(Line >= 1 && rendered_ >= 0);
+    auto *Open = Menu.addAction(tr("링크 열기"), this, [this, Link, Fragment] { openLink(Link, Fragment); });
+    Open->setEnabled(!Fragment.isEmpty() || Url.scheme() == "https" || Url.scheme() == "http" || Url.isLocalFile());
+    Menu.addAction(tr("링크 주소 복사"), this, [Link] { QGuiApplication::clipboard()->setText(Link); })->setEnabled(!Link.isEmpty());
+    Menu.addSeparator();
+    for (const auto &[Id, Label] : {std::pair{"markdown.zoomIn", tr("미리보기 확대")}, std::pair{"markdown.zoomOut", tr("미리보기 축소")},
+                                    std::pair{"markdown.zoomReset", tr("미리보기 원래 크기")}, std::pair{"markdown.refresh", tr("미리보기 갱신")}})
+        Menu.addAction(Label, Key(Id), this, [this, Command = QString::fromLatin1(Id)] { Run(Command); })
+            ->setEnabled(CanRun(QString::fromLatin1(Id)));
+    Menu.addSeparator();
+    for (const auto &[Id, Label] : {std::pair{"markdown.toggleToc", tr("개요")}, std::pair{"markdown.syncScroll", tr("스크롤 동기화")}})
+    {
+        auto *Own = actions_[QString::fromLatin1(Id)];
+        // The toolbar action owns the state and its saved setting.
+        auto *Item = Menu.addAction(Label, Key(Id), Own, [Own] { Own->trigger(); });
+        Item->setCheckable(true);
+        Item->setChecked(Own->isChecked());
+    }
+    const QPointer<MarkdownDocumentView> Self(this);
+    auto *Chosen = Menu.exec(Global);
+    // The menu took the keyboard from the preview window; give it back unless the choice moved on.
+    if (Self && HadFocus && Chosen != Source && Chosen != Open && !preview_->isHidden())
+        preview_->FocusInput();
+}
+void MarkdownDocumentView::showOutlineMenu(const QPoint &Position)
+{
+    // A render may rebuild the outline while the menu is open: keep values, not the item.
+    const auto *Item = outline_->itemAt(Position);
+    const int Line = Item ? Item->data(0, Qt::UserRole).toInt() : 0;
+    const auto Text = Item ? Item->text(0) : QString();
+    QMenu Menu(this);
+    Menu.setObjectName("markdownOutlineMenu");
+    Menu.addAction(tr("이 제목으로 이동"), this, [this, Line] { goToHeadingLine(Line); })->setEnabled(Item != nullptr);
+    Menu.addSeparator();
+    Menu.addAction(tr("모두 펼치기"), this, [this] { outline_->expandAll(); });
+    Menu.addAction(tr("모두 접기"), this, [this] { outline_->collapseAll(); });
+    Menu.addSeparator();
+    Menu.addAction(tr("제목 텍스트 복사"), this, [Text] { QGuiApplication::clipboard()->setText(Text); })->setEnabled(Item != nullptr);
+    Menu.exec(outline_->viewport()->mapToGlobal(Position));
 }
 QJsonObject MarkdownDocumentView::State() const
 {
@@ -767,6 +1071,7 @@ QJsonObject MarkdownDocumentView::State() const
             {"previewScroll", previewScroll_},
             {"sourceAnchor", sourceScrollAnchor()},
             {"problems", problems_},
+            {"zoom", PreviewZoomPercent()},
             {"scrollSync", actions_["markdown.syncScroll"]->isChecked()},
             {"requestedRevision", renderRequested_},
             {"anchorSyncs", anchorSyncs_},

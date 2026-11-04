@@ -22,6 +22,8 @@
 #include <QApplication>
 #include <QGridLayout>
 #include <QDesktopServices>
+#include <QClipboard>
+#include <QGuiApplication>
 
 namespace hc::document::search {
 class ResultModel final : public QAbstractTableModel {
@@ -104,11 +106,11 @@ Panel::Panel(QWidget* Parent) : QWidget(Parent) {
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(6, 6, 6, 6); Layout->setSpacing(4);
     auto* Top = new QHBoxLayout; Layout->addLayout(Top);
     replaceMode_ = new QCheckBox(tr("바꾸기(&R)"), this); Top->addWidget(replaceMode_);
-    auto* Title = new QLabel(tr("파일에서 찾기 / 바꾸기"), this); Top->addWidget(Title); Top->addStretch();
+    auto* Title = new QLabel(tr("파일에서 찾기 / 바꾸기"), this); title_ = Title; Top->addWidget(Title); Top->addStretch();
     auto* Dock = new QToolButton(this); Dock->setText(tr("위치(&J)")); Dock->setPopupMode(QToolButton::InstantPopup); auto* Menu = new QMenu(Dock); Dock->setMenu(Menu);
     for (const auto& Item : QList<QPair<QString, QString>>{{tr("하단 패널(&M)"), "bottom"}, {tr("콘텐츠 탭(&P)"), "tab"}, {tr("분리 창(&J)"), "floating"}})
         connect(Menu->addAction(Item.first), &QAction::triggered, this, [this, Location = Item.second] { emit PlacementRequested(Location); });
-    Top->addWidget(Dock); auto* Close = new QPushButton(tr("닫기(&Q)"), this); Top->addWidget(Close); connect(Close, &QPushButton::clicked, this, &Panel::CloseRequested);
+    dock_ = Dock; Top->addWidget(Dock); auto* Close = new QPushButton(tr("닫기(&Q)"), this); close_ = Close; Top->addWidget(Close); connect(Close, &QPushButton::clicked, this, &Panel::CloseRequested);
     auto* Grid = new QGridLayout; Layout->addLayout(Grid);
     const auto Field = [this, Grid](int Row, const QString& Caption, const QString& Name) {
         auto* Input = new QLineEdit(this); Input->setObjectName(Name); auto* Label = new QLabel(Caption, this); Label->setBuddy(Input); Grid->addWidget(Label, Row, 0); Grid->addWidget(Input, Row, 1, 1, 4); return Input;
@@ -164,10 +166,25 @@ Panel::Panel(QWidget* Parent) : QWidget(Parent) {
     });
     connect(engine_, &Engine::Progress, this, [this](quint64 Generation, qint64 Rows, qint64 Files, qint64 Errors, bool Complete, const QString& Message) {
         if (Generation != generation_ || applying_) return; complete_ = Complete && Message.isEmpty(); model_->Count(Rows);
+        if (rows_ != Rows || Complete) { rows_ = Rows; emit SummaryChanged(Summary()); }
         status_->setText(tr("%1 · %2개 파일 · %3건 · 제외/오류 %4%5").arg(Complete ? tr("검색 완료/중지") : tr("검색 중")).arg(Files).arg(Rows).arg(Errors).arg(Message.isEmpty() ? QString{} : " · " + Message));
         all_->setEnabled(complete_ && Rows > 0 && replaceMode_->isChecked());
     });
     connect(Stop, &QPushButton::clicked, this, [this] { debounce_.stop(); engine_->RequestStop(); QMetaObject::invokeMethod(engine_, &Engine::Stop); status_->setText(tr("검색 중지 요청")); });
+    table_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(table_, &QWidget::customContextMenuRequested, this, &Panel::showResultMenu);
+    connect(engine_, &Engine::PageReady, this, [this](quint64 Generation, int First, const QJsonArray& Rows, quint64 Version) {
+        if (!copy_ || Generation != copy_->generation_ || Version != copy_->version_ || First != copy_->next_) return;
+        for (const auto& Row : Rows) copy_->lines_ << rowText(Row.toObject());
+        copy_->next_ += 64;
+        if (Rows.isEmpty() || copy_->next_ >= copy_->total_) {
+            QGuiApplication::clipboard()->setText(copy_->lines_.join('\n'));
+            status_->setText(tr("결과 %1건을 복사했습니다.").arg(copy_->lines_.size())); copy_.reset(); return;
+        }
+        status_->setText(tr("결과 복사 중… %1 / %2").arg(copy_->next_).arg(copy_->total_));
+        const auto Replacement = replacement_->text(); const bool Replace = replaceMode_->isChecked(); const auto Job = *copy_;
+        QMetaObject::invokeMethod(engine_, [Engine = engine_, Job, Replacement, Replace] { Engine->Page(Job.generation_, Job.next_, 64, Replacement, Replace, Job.version_); });
+    });
     connect(table_, &QTableView::doubleClicked, this, [this](const QModelIndex& Index) { const auto Row = Index.data(Qt::UserRole).toJsonObject(); if (!Row.isEmpty()) emit Navigate(Row); });
     debounce_.setSingleShot(true); debounce_.setInterval(250); connect(&debounce_, &QTimer::timeout, this, &Panel::start);
     for (auto* Input : {query_, root_, include_, exclude_}) connect(Input, &QLineEdit::textChanged, this, &Panel::schedule);
@@ -231,4 +248,52 @@ void Panel::replace(const QString& Scope) {
     });
 }
 void Panel::FinishBuffer(quint64 Ticket, const QString& Error) { QMetaObject::invokeMethod(engine_, [Engine = engine_, Ticket, Error] { Engine->BufferApplied(Ticket, Error); }); }
+void Panel::SetEmbedded(bool Embedded) {
+    for (auto* Widget : {static_cast<QWidget*>(title_), dock_, close_}) if (Widget) Widget->setVisible(!Embedded);
+}
+QString Panel::Summary() const {
+    return query_->text().isEmpty() ? tr("파일에서 찾기") : tr("파일에서 찾기 · “%1” %2건").arg(query_->text()).arg(rows_);
+}
+QString Panel::rowText(const QJsonObject& Row) const {
+    const auto Text = Row["error"].toString().isEmpty() ? Row["before"].toString() + Row["match"].toString() + Row["after"].toString() : Row["error"].toString();
+    return QStringLiteral("%1:%2:%3: %4").arg(QDir::toNativeSeparators(Row["displayPath"].toString(Row["path"].toString())))
+        .arg(Row["line"].toInteger()).arg(Row["column"].toInteger()).arg(Text.simplified());
+}
+void Panel::showResultMenu(const QPoint& Position) {
+    const auto Clicked = table_->indexAt(Position);
+    if (Clicked.isValid() && !table_->selectionModel()->isRowSelected(Clicked.row(), {})) table_->selectRow(Clicked.row());
+    QList<QJsonObject> Rows;
+    for (const auto& Index : table_->selectionModel()->selectedRows()) if (const auto Row = Index.data(Qt::UserRole).toJsonObject(); !Row.isEmpty()) Rows << Row;
+    const auto First = Rows.isEmpty() ? QJsonObject{} : Rows.first();
+    QMenu Menu(this);
+    // EPUB editing opens a resource location; a plain search opens the file.
+    auto* Open = Menu.addAction((book_ ? tr("해당 위치 열기") : tr("열기")) + QStringLiteral("\tEnter"), this, [this, First] { emit Navigate(First); });
+    Open->setEnabled(!First.isEmpty());
+    if (book_) {
+        Menu.addAction(tr("미리보기에서 보기"), this, [this, First] { auto Row = First; Row["preview"] = true; emit Navigate(Row); })->setEnabled(!First.isEmpty());
+    }
+    Menu.addSeparator();
+    if (!book_) {
+        Menu.addAction(tr("경로 복사"), this, [Rows] {
+            QStringList Paths; for (const auto& Row : Rows) { const auto Path = QDir::toNativeSeparators(Row["path"].toString()); if (!Paths.contains(Path)) Paths << Path; }
+            QGuiApplication::clipboard()->setText(Paths.join('\n'));
+        })->setEnabled(!Rows.isEmpty());
+    }
+    Menu.addAction(tr("결과 복사"), this, [this, Rows] { QStringList Lines; for (const auto& Row : Rows) Lines << rowText(Row); QGuiApplication::clipboard()->setText(Lines.join('\n')); })->setEnabled(!Rows.isEmpty());
+    Menu.addAction(tr("모든 결과 복사"), this, &Panel::copyAll)->setEnabled(model_->rowCount() > 0 && !copy_);
+    Menu.addSeparator();
+    Menu.addAction(tr("결과 지우기"), this, &Panel::clearResults)->setEnabled(model_->rowCount() > 0 && !applying_);
+    Menu.exec(table_->viewport()->mapToGlobal(Position));
+}
+void Panel::copyAll() {
+    if (copy_ || !model_->rowCount()) return;
+    copy_ = CopyJob{generation_, previewVersion_, 0, model_->rowCount(), {}};
+    status_->setText(tr("결과 복사 중… 0 / %1").arg(copy_->total_));
+    const auto Replacement = replacement_->text(); const bool Replace = replaceMode_->isChecked(); const auto Job = *copy_;
+    QMetaObject::invokeMethod(engine_, [Engine = engine_, Job, Replacement, Replace] { Engine->Page(Job.generation_, 0, 64, Replacement, Replace, Job.version_); });
+}
+void Panel::clearResults() {
+    // A new generation drops late pages and progress of the cleared search.
+    ++generation_; copy_.reset(); rows_ = 0; model_->Reset(); status_->clear(); emit SummaryChanged(Summary());
+}
 }

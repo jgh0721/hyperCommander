@@ -41,7 +41,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
-#include <QFormLayout>
+#include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -261,7 +261,8 @@ namespace
     class Window final : public QMainWindow
     {
     public:
-        Window(const Assets& Items, const QJsonObject& Publication, const QString& Engine, const QString& Theme, const QString& Evidence, const QString& SettingsPath, qint64 Generation = 1,bool InitiallyInteractive=true,bool SourceLines=false,const QString& GlobalSettingsPath={})
+        // HostChrome: the embedding host draws the reading row and the status line.
+        Window(const Assets& Items, const QJsonObject& Publication, const QString& Engine, const QString& Theme, const QString& Evidence, const QString& SettingsPath, qint64 Generation = 1,bool InitiallyInteractive=true,bool SourceLines=false,const QString& GlobalSettingsPath={},bool HostChrome=false)
             : QMainWindow(nullptr,InitiallyInteractive?Qt::WindowFlags{}:Qt::WindowFlags(Qt::WindowDoesNotAcceptFocus)), evidence_(Evidence), documentId_(Publication["sourceSha256"].toString()), generation_(Generation)
         {
             setAttribute(Qt::WA_ShowWithoutActivating);previewAssets_=Items;engine_=Engine;interactive_=InitiallyInteractive;editingPreview_=SourceLines;
@@ -279,18 +280,34 @@ namespace
             auto* Splitter = new QSplitter(Central);splitter_=Splitter; Layout->addWidget(Splitter, 1);
             auto* Scroll = new QScrollArea(Splitter); navigationScroll_=Scroll; Scroll->setWidgetResizable(true); Scroll->setMinimumWidth(220);
             auto* Panel = new QWidget; Scroll->setWidget(Panel);
-            auto* Form = new QFormLayout(Panel);
-            Form->setRowWrapPolicy(QFormLayout::WrapLongRows);
-            Form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-            auto* EngineBox = new QComboBox(Panel); EngineBox->addItems({"EPUB.js", "Readium Web"});
-            EngineBox->setCurrentIndex(Engine == "readium" ? 1 : 0); Form->addRow(tr("엔진"), EngineBox);
+            // The panel grows with the window so the lists below fill the remaining height.
+            auto* Form = new QVBoxLayout(Panel);
+            auto* EngineRow = new QWidget(Panel); auto* EngineLayout = new QHBoxLayout(EngineRow); EngineLayout->setContentsMargins(0,0,0,0);
+            auto* EngineBox = new QComboBox(EngineRow); EngineBox->addItems({"EPUB.js", "Readium Web"});
+            EngineBox->setCurrentIndex(Engine == "readium" ? 1 : 0);
+            auto* EngineLabel = new QLabel(tr("엔진"), EngineRow); EngineLabel->setBuddy(EngineBox);
+            EngineLayout->addWidget(EngineLabel); EngineLayout->addWidget(EngineBox, 1); Form->addWidget(EngineRow);
 #ifdef HC_EPUB_PRODUCT_HELPER
-            Form->setRowVisible(EngineBox,false); EngineBox->setEnabled(false);
+            EngineRow->setVisible(false); EngineBox->setEnabled(false);
 #endif
             settings_ = new hc::epub::poc::ReadingSettings(settingsPath_, Publication["sourceSha256"].toString(), Theme, Panel);
             if(SourceLines)settings_->SetEditingPreview();
             navigation_=new hc::epub::poc::ReadingNavigation(SettingsPath,documentId_,[this](const QJsonObject& Request){command("read",Request);},Panel);
             navigation_->SetPublication(Publication);
+            {
+                // Host chapter list: contents entries that lead into the reading order. Entries and title
+                // lengths are bounded so the first snapshot stays well inside the pipe payload limit.
+                QHash<QString,int> Spine;const auto Order=Publication["spine"].toArray();
+                for(int Index=0;Index<Order.size();++Index)Spine.insert(Order[Index].toObject()["path"].toString(),Index);
+                qsizetype Characters=0;
+                for(const auto& Value:Publication["navigation"].toArray()) {
+                    const auto Entry=Value.toObject();const int Chapter=Spine.value(Entry["path"].toString(),-1);
+                    if(Chapter<0)continue;
+                    const auto Title=(Entry["label"].toString().isEmpty()?Entry["path"].toString():Entry["label"].toString()).left(128);
+                    if(toc_.size()>=512 || (Characters+=Title.size())>32768)break;
+                    toc_.append(QJsonObject{{"title",Title},{"chapter",Chapter}});
+                }
+            }
             auto* ReadingBar=addToolBar(tr("독서"));ReadingBar->setObjectName("epubReadingToolbar");ReadingBar->setMovable(false);ReadingBar->setVisible(!SourceLines);
             for(const auto& Entry:QList<QPair<QString,QString>>{{"back",tr("이전 위치")},{"previous",tr("이전")},{"next",tr("다음")}}) {
                 auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
@@ -299,10 +316,20 @@ namespace
                 connect(Action,&QAction::triggered,this,[this,Name=Entry.first]{navigation_->Execute(Name);view_->setFocus(Qt::OtherFocusReason);});
             }
             location_=new QLabel(this);location_->setTextFormat(Qt::PlainText);location_->setObjectName("epubReadingLocation");location_->setAccessibleName(tr("현재 읽기 위치"));location_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);location_->setMinimumWidth(0);statusBar()->addPermanentWidget(location_,1);
-            Form->addRow(navigation_);
+            Form->addWidget(navigation_, 1);
             settingsScroll_=new QScrollArea(Splitter);settingsScroll_->setObjectName("epubQuickSettings");settingsScroll_->setWidgetResizable(true);settingsScroll_->setMinimumWidth(320);settingsScroll_->setWidget(settings_);
             view_ = new QWebEngineView(Splitter);view_->setFocusPolicy(InitiallyInteractive?Qt::StrongFocus:Qt::NoFocus); Splitter->setSizes({260,360,880});
+            fitNavigationWidth();
             navigationScroll_->hide();settingsScroll_->hide();
+            // Book frames report their own right clicks; this covers the page margins around them
+            // and keeps the browser's own menu away.
+            view_->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(view_,&QWidget::customContextMenuRequested,this,[this](const QPoint& Position){
+                if(!contextMenus_)return;
+                const auto At=view_->mapTo(this,Position);
+                contextRequest_={{"serial",++contextSerial_},{"x",At.x()},{"y",At.y()},{"selection",""},{"link",""},{"anchor",QJsonObject{}},
+                    {"locator",latest_.value("locator").toString()},{"chapter",latest_.value("chapterIndex").toInt(-1)},{"target",QJsonObject{{"kind","margin"}}}};
+            });
             for(const auto& Entry:QList<QPair<QString,QString>>{{"focus-toc",tr("목차")},{"focus-search",tr("검색")},{"focus-bookmarks",tr("책갈피")},{"focus-notes",tr("형광펜·메모")},{"focus-settings",tr("Aa · 읽기 설정")}}) {
                 if(SourceLines && Entry.first=="focus-settings")continue;
                 auto* Action=ReadingBar->addAction(Entry.second);Action->setObjectName("epub."+Entry.first);
@@ -327,11 +354,11 @@ namespace
                 }
                 focusReading();
             });
-#ifdef HC_EPUB_PRODUCT_HELPER
-            // The product host draws the reading row and shows the location in its own status bar;
-            // the hidden actions keep their keys, enablement and the state they report.
-            ReadingBar->setVisible(false); statusBar()->setVisible(false);
-#endif
+            if(HostChrome) {
+                // The host draws the reading row and shows the location in its own status bar;
+                // the hidden actions keep their keys, enablement and the state they report.
+                ReadingBar->setVisible(false); statusBar()->setVisible(false);
+            }
             profile_ = new QWebEngineProfile(this); profile_->setHttpCacheType(QWebEngineProfile::MemoryHttpCache);profile_->setHttpCacheMaximumSize(32*1024*1024);
             profile_->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
             filter_ = new Filter(Items, profile_); profile_->setUrlRequestInterceptor(filter_);
@@ -353,6 +380,7 @@ namespace
             connect(page_, &QWebEnginePage::loadFinished, this, [this, Engine](bool Ok) {
                 if(!Ok) { finish({{"status", "error"}, {"message", "shell load failed"}}); return; }
                 shellReady_=true; sendProfile();
+                if(contextMenus_)command("read",QJsonObject{{"action","context-menu"},{"value",true}});
             });
             connect(&poll_, &QTimer::timeout, this, [this] {
                 if(pending_) return;
@@ -369,6 +397,13 @@ namespace
                     if(Result["frameId"]!=latest_["frameId"] && !Detailed)detailPending_=true;
                     if(!Detailed){auto Merged=latest_;for(auto At=Result.begin();At!=Result.end();++At)Merged[At.key()]=At.value();Result=std::move(Merged);}
                     latest_ = Result;
+                    // Frame clicks are relative to the web view; the host places its menu in this window.
+                    const auto Context=Result.value("contextRequest").toObject();const auto ContextSerial=Context["serial"].toInteger();
+                    if(ContextSerial>0 && ContextSerial!=pageContextSeen_) {
+                        pageContextSeen_=ContextSerial;const auto Offset=view_->mapTo(this,QPoint{});
+                        contextRequest_=Context;contextRequest_["serial"]=++contextSerial_;
+                        contextRequest_["x"]=Context["x"].toInt()+Offset.x();contextRequest_["y"]=Context["y"].toInt()+Offset.y();
+                    }
                     const auto ScrollSerial=Result["previewScroll"].toObject()["serial"].toInteger(-1);
                     if(ScrollSerial!=scrollSerialSeen_){scrollSerialSeen_=ScrollSerial;scrollActive_.restart();}
                     const auto Stamp=QFileInfo(settingsPath_).lastModified().toMSecsSinceEpoch();
@@ -384,7 +419,7 @@ namespace
                     if(Result["status"]=="ready") {
                         location_->setText(tr("%1 · 장 %2/%3 · 화면 %4/%5 · 전체 약 %6% (장 기준)")
                             .arg(Result["chapterTitle"].toString()).arg(Result["chapterIndex"].toInt()+1).arg(Result["chapterCount"].toInt())
-                            .arg((qMax(1,Result["chapterPage"].toInt(1))+qMax(1,Result["columnCount"].toInt(1))-1)/qMax(1,Result["columnCount"].toInt(1))).arg((qMax(1,Result["chapterPages"].toInt(1))+qMax(1,Result["columnCount"].toInt(1))-1)/qMax(1,Result["columnCount"].toInt(1))).arg(qRound(Result["progress"].toDouble()*100)));
+                            .arg(screens(Result,"chapterPage")).arg(screens(Result,"chapterPages")).arg(qRound(Result["progress"].toDouble()*100)));
                         findChild<QAction*>("epub.back")->setEnabled(Result["canBack"].toBool());
                         // Busy navigation is already bounded by the reader queue.
                         // Keep toolbar contrast stable between interior pages.
@@ -432,7 +467,7 @@ namespace
         }
         bool Appearance(const QJsonObject& Value) {
             if(!hc::document::epubui::ApplyAppearance(Value))return false;
-            hostAppearance_=Value;const auto Palette=fm::style::ThemeManager::instance().colors().toPalette();QApplication::setPalette(Palette);setPalette(Palette);sendProfile();return true;
+            hostAppearance_=Value;const auto Palette=fm::style::ThemeManager::instance().colors().toPalette();QApplication::setPalette(Palette);setPalette(Palette);fitNavigationWidth();sendProfile();return true;
         }
         ~Window() override { finished_ = true; poll_.stop(); delete view_; view_ = nullptr; delete profile_; profile_ = nullptr; }
         QByteArray Control(const QByteArray& Bytes)
@@ -452,6 +487,11 @@ namespace
                 State["toolbarColumns"]=columnsChoice_->currentIndex();State["columnsControlEnabled"]=columnsChoice_->isEnabled();
                 State["readingSettingsAvailable"] = !editingPreview_;State["settingsBusy"] = settings_->IsBusy(); State["settingsDirty"] = settings_->IsDirty();State["detailSnapshots"]=detailSnapshots_;
                 State["readingProfile"] = settings_->Profile(); State["cssValid"]=settings_->CssValid(); State["cssValidationError"]=settings_->CssError();
+                // Host chrome: chapter list, button availability, screens as the reader counts them, menus and messages.
+                // Unchanged values, such as the chapter list, are not repeated in deltas.
+                State["toc"]=toc_;State["readerMessage"]=readerMessage_;State["contextRequest"]=contextRequest_;
+                for(const auto* Key:{"canBack","atStart","atEnd"})State[QLatin1String(Key)]=latest_.value(QLatin1String(Key)).toBool();
+                if(latest_.contains("chapterPages")){State["chapterScreen"]=screens(latest_,"chapterPage");State["chapterScreens"]=screens(latest_,"chapterPages");}
                 if(Kind=="snapshot-delta") {
                     QJsonObject Delta;QJsonArray Removed;
                     for(auto At=State.begin();At!=State.end();++At)if(!sentState_.contains(At.key()) || sentState_[At.key()]!=At.value())Delta[At.key()]=At.value();
@@ -497,6 +537,8 @@ namespace
             return QJsonDocument(Reply).toJson(QJsonDocument::Compact);
         }
     protected:
+        // The reading row cannot be hidden from a context menu; the host owns that chrome.
+        QMenu* createPopupMenu() override { return nullptr; }
         void resizeEvent(QResizeEvent* Event) override {
             QMainWindow::resizeEvent(Event);
             if(splitter_)splitter_->setOrientation(width()<700?Qt::Vertical:Qt::Horizontal);
@@ -520,6 +562,19 @@ namespace
             return QMainWindow::eventFilter(Object,Event);
         }
     private:
+        // Screens per chapter as the reader shows them: a spread of columns is one screen.
+        static int screens(const QJsonObject& State,const char* Key) {
+            const int Columns=qMax(1,State.value("columnCount").toInt(1));
+            return (qMax(1,State.value(QLatin1String(Key)).toInt(1))+Columns-1)/Columns;
+        }
+        // Tab names stay whole: the side panel is never narrower than the tab row.
+        void fitNavigationWidth() {
+            if(!navigationScroll_ || !navigation_)return;
+            const int Frame=2*navigationScroll_->frameWidth()+navigationScroll_->verticalScrollBar()->sizeHint().width();
+            const auto* Layout=navigation_->parentWidget()?navigation_->parentWidget()->layout():nullptr;
+            const int Margins=Layout?Layout->contentsMargins().left()+Layout->contentsMargins().right():0;
+            navigationScroll_->setMinimumWidth(qMax(220,navigation_->minimumSizeHint().width()+Margins+Frame));
+        }
         QString openPanel() const {
             if(settingsScroll_->isVisible())return "settings";
             if(!navigationScroll_->isVisible())return {};
@@ -569,6 +624,9 @@ namespace
             }
             if(Action=="enable-input"){if(!Value.isBool() || !windowHandle())return false;interactive_=Value.toBool();view_->setFocusPolicy(interactive_?Qt::StrongFocus:Qt::NoFocus);windowHandle()->setFlag(Qt::WindowDoesNotAcceptFocus,!interactive_);return true;}
             if(Action=="fullscreen"){++fullscreenRequests_;return true;}
+            // The host shows the body menu. It enables it on load, possibly while the saved position is
+            // still being restored, so this skips the reading-state gate and the reader's result slot.
+            if(Action=="context-menu"){if(!Value.isBool())return false;contextMenus_=Value.toBool();command("read",QJsonObject{{"action",Action},{"value",Value}});return true;}
             if(Action=="bindings") {
                 if(!Value.isObject() || !shortcuts_->Apply(Value.toObject()).isEmpty())return false;
                 command("bindings",hc::document::DocumentShortcutRegistry::Bindings(Value.toObject()));return true;
@@ -622,8 +680,11 @@ namespace
                     Self->command("background",QJsonObject{{"asset",Data.isEmpty()?QString{}:Asset},
                         {"data",Data.isEmpty()?QString{}:QString("data:image/png;base64,")+QString::fromLatin1(Data.toBase64())}});
                     Self->backgroundAsset_=Error.isEmpty()?Asset:QString{};
-                    if(!Error.isEmpty()) Self->statusBar()->showMessage(Error);
+                    // The status bar may be hidden behind the host's; the snapshot carries the message.
+                    if(!Error.isEmpty()) {Self->statusBar()->showMessage(Error);Self->readerMessage_=Error;}
+                    else if(!Self->finished_) Self->readerMessage_.clear();
                 }
+                else if(Asset.isEmpty() && !Self->finished_) Self->readerMessage_.clear();
                 Self->command("profile",Rendered);
                 if(!Self->started_) {Self->started_=true;Self->command("start",Self->engine_);Self->poll_.start(33);}
             };
@@ -641,7 +702,7 @@ namespace
         void finish(QJsonObject Result)
         {
             if(finished_) return;
-            if(evidence_.isEmpty()) {latest_=Result;if(Result["status"]=="error"){finished_=true;poll_.stop();}statusBar()->showMessage(Result["status"].toString() + ": " + Result["message"].toString()); return; }
+            if(evidence_.isEmpty()) {latest_=Result;if(Result["status"]=="error"){finished_=true;poll_.stop();}readerMessage_=Result["status"].toString() + ": " + Result["message"].toString();statusBar()->showMessage(readerMessage_); return; }
 #ifndef HC_EPUB_PRODUCT_HELPER
             // A hidden panel retains its startup scrollbar range. Measure the
             // comparison window only after showing and laying out its settings.
@@ -708,6 +769,9 @@ namespace
         QJsonArray pendingBookmarks_;
         QTimer debounce_, poll_;
         bool pending_ = false, testing_ = false, finished_ = false;
+        // Host chrome state: chapter list, last reader error and the latest body menu request.
+        QJsonArray toc_;QString readerMessage_;
+        bool contextMenus_=false;QJsonObject contextRequest_{{"serial",0}};qint64 contextSerial_=0,pageContextSeen_=0;
     };
 
     // The caller retains the stable native surface through retirement. Parsing runs
@@ -747,12 +811,13 @@ namespace
 #endif
             if(Kind == "configure") {
                 const auto Path = Request["settingsPath"].toString();
-                if(configured_ || preparing_ || reader_ || Request.size()<6 || Request.size()>9 || Request.size()!=6+Request.contains("initiallyInteractive")+Request.contains("sourceLines")+Request.contains("globalSettingsPath")
-                    || (Request.contains("initiallyInteractive") && !Request["initiallyInteractive"].isBool()) || (Request.contains("sourceLines") && !Request["sourceLines"].isBool()) || !QFileInfo(Path).isAbsolute()
+                if(configured_ || preparing_ || reader_ || Request.size()<6 || Request.size()>10 || Request.size()!=6+Request.contains("initiallyInteractive")+Request.contains("sourceLines")+Request.contains("globalSettingsPath")+Request.contains("hostChrome")
+                    || (Request.contains("initiallyInteractive") && !Request["initiallyInteractive"].isBool()) || (Request.contains("sourceLines") && !Request["sourceLines"].isBool())
+                    || (Request.contains("hostChrome") && !Request["hostChrome"].isBool()) || !QFileInfo(Path).isAbsolute()
                     || (Request.contains("globalSettingsPath") && (!QFileInfo(Request["globalSettingsPath"].toString()).isAbsolute() || !Request["globalSettingsPath"].toString().endsWith("/epub-reading.json")))
                     || !Path.endsWith("/epub-reading.json") || !hc::document::epubui::ApplyAppearance(Request["appearance"].toObject()))
                     return {{"error", "epub-configuration-invalid"}};
-                globalSettingsPath_=Request["globalSettingsPath"].toString();settingsPath_ = Path; appearance_ = Request["appearance"].toObject(); initiallyInteractive_=Request["initiallyInteractive"].toBool(true); sourceLines_=Request["sourceLines"].toBool(false); configured_ = true;
+                globalSettingsPath_=Request["globalSettingsPath"].toString();settingsPath_ = Path; appearance_ = Request["appearance"].toObject(); initiallyInteractive_=Request["initiallyInteractive"].toBool(true); sourceLines_=Request["sourceLines"].toBool(false); hostChrome_=Request["hostChrome"].toBool(false); configured_ = true;
                 return {{"accepted", true}, {"epubInputVersion",2}};
             }
             if(Kind.startsWith("input-")) {
@@ -816,7 +881,7 @@ namespace
             if(!initiallyInteractive_ && (!IsWindowVisible(Parent)
                 || GetAncestor(GetForegroundWindow(),GA_ROOT)!=GetAncestor(Parent,GA_ROOT)))return;
             auto Result=std::move(*prepared_);prepared_.reset();
-            reader_ = new Window(Result.assets,Result.publication,preparedEngine_,"light",{},settingsPath_,preparedGeneration_,initiallyInteractive_,sourceLines_,globalSettingsPath_);
+            reader_ = new Window(Result.assets,Result.publication,preparedEngine_,"light",{},settingsPath_,preparedGeneration_,initiallyInteractive_,sourceLines_,globalSettingsPath_,hostChrome_);
             if(!appearance_.isEmpty())reader_->Appearance(appearance_);
             reader_->setWindowFlags(Qt::Window | Qt::FramelessWindowHint | (initiallyInteractive_?Qt::WindowFlags{}:Qt::WindowFlags(Qt::WindowDoesNotAcceptFocus)));
             reader_->winId();reader_->windowHandle()->setParent(nativeParent_);reader_->setAttribute(Qt::WA_ShowWithoutActivating);
@@ -832,7 +897,7 @@ namespace
         std::uintptr_t nativeReader_ = 0;
         Window* reader_ = nullptr;
         QTimer timer_;
-        bool preparing_ = false, cancelled_ = false,initiallyInteractive_=true,sourceLines_=false;
+        bool preparing_ = false, cancelled_ = false,initiallyInteractive_=true,sourceLines_=false,hostChrome_=false;
     };
 }
 

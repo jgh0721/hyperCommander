@@ -15,6 +15,7 @@
 #include "imageFramePlayer.hpp"
 #include "documentTextCodec.hpp"
 #include "textContextMenu.hpp"
+#include "epubReaderMenus.hpp"
 #include <QMenu>
 #include <QLineEdit>
 #include "text/QTextView.h"
@@ -180,7 +181,14 @@ namespace hc::document
             connect(epub_,&EpubProcessView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
             connect(epub_,&EpubProcessView::FullscreenRequested,this,&DocumentViewPane::FullscreenRequested);
             connect(epub_,&EpubProcessView::ViewStateChanged,this,&DocumentViewPane::ViewStateChanged);
-            connect(epub_,&EpubProcessView::Loaded,this,[this]{if(auto* Edit=findChild<QAction*>("epubEdit"))Edit->setEnabled(true);if(isVisible() && !IsEpubEditing())epub_->FocusInput();});
+            connect(epub_,&EpubProcessView::Loaded,this,[this]{if(auto* Edit=findChild<QAction*>("epubEdit"))Edit->setEnabled(true);if(isVisible() && !IsEpubEditing())epub_->FocusInput();epub_->ReaderAction("context-menu",true);});
+            // Reader right-click (plan 8.6): queued so the menu does not open inside the view's polling slot.
+            connect(epub_,&EpubProcessView::ContextMenuRequested,this,[this](const QJsonObject& Request){
+                if(!epub_ || IsEpubEditing() || !epub_->isVisible())return;
+                std::function<void(const QString&,int)> EditAt;
+                if(epubEditingAllowed_)EditAt=[this](const QString& Locator,int Chapter){Execute({{"action","epub.edit.begin"},{"locator",Locator},{"chapter",Chapter}});};
+                ShowEpubReaderContextMenu(epub_,this,Request,EditAt);
+            },Qt::QueuedConnection);
             return epub_->Load(Input.bytes_);
         }
         if(IsHwp()) {
@@ -227,7 +235,7 @@ namespace hc::document
             auto* Input=text_->Backend()->widget();Input->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(Input,&QWidget::customContextMenuRequested,this,[this,Input](const QPoint& Position){
                 MoveCaretForContextMenu(text_,Position);QMenu Menu(this);TextMenuOptions Options;
-                if(markdown_){Options.deleteItem_=false;Options.findInSelection_=false;}
+                if(markdown_){Options.deleteItem_=false;Options.findInSelection_=false;Options.leadingText_=tr("미리보기에서 이 위치 보기");Options.leading_=[this]{if(markdown_)markdown_->ShowSourceLineInPreview();};}
                 FillTextContextMenu(Menu,text_,Options);Menu.exec(Input->mapToGlobal(Position));
             });
         }
@@ -235,6 +243,9 @@ namespace hc::document
         if(image_) {
             const auto OriginalActions=toolbar_->actions();
             reading_=new ImageReadingView(this);reading_->hide();layout()->addWidget(reading_);
+            // Reading context menu (plan 8.5): 쪽으로 이동… opens the page picker (a dialog in full screen), 전체 화면 toggles it.
+            connect(reading_,&ImageReadingView::GoToRequested,this,[this]{emit StatusPickerRequested("page");});
+            connect(reading_,&ImageReadingView::FullscreenRequested,this,&DocumentViewPane::FullscreenRequested);
             animation_=new ImageFramePlayer(this);connect(animation_,&ImageFramePlayer::Frame,image_,&QImageView::DisplayAnimationFrame);
             connect(image_,&QImageView::ContentChanged,animation_,[this]{animation_->Play(false);});
             auto* Play=toolbar_->addAction(tr("재생/정지"));Play->setObjectName("imageAnimation");Play->setShortcutContext(Qt::WidgetWithChildrenShortcut);addAction(Play);
@@ -280,10 +291,12 @@ namespace hc::document
             auto* EditToolbar=new QToolBar(tr("이미지 편집"),this);EditToolbar->setObjectName("imageEditToolbar");
             auto* Edit=toolbar_->addAction(ToolbarIcons::iconByName("annotation-freetext"),tr("편집"));
             Edit->setObjectName("imageEditMode");Edit->setProperty("documentIconName","annotation-freetext");
-            Edit->setToolTip(tr("이미지 편집 도구모음 표시/숨기기"));Edit->setCheckable(true);Edit->setChecked(ImageEditing);
+            Edit->setToolTip(tr("이미지 편집 도구모음 표시/숨기기"));Edit->setCheckable(true);Edit->setChecked(ImageEditing);image_->SetEditModeChecked(ImageEditing);
+            // Canvas context menu items the view cannot run itself (편집 모드 · 전체 화면).
+            connect(image_,&QImageView::ContextCommand,this,[this,Edit](const QString& Id){if(Id==QLatin1String("image.editMode"))Edit->trigger();else if(Id==QLatin1String("image.fullscreen"))emit FullscreenRequested();});
             if(auto* Button=qobject_cast<QToolButton*>(toolbar_->widgetForAction(Edit)))Button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
             connect(Edit,&QAction::toggled,this,[this,EditToolbar](bool Enabled){
-                EditToolbar->setVisible(Enabled);
+                EditToolbar->setVisible(Enabled);if(Enabled)SetSlideshow(false);image_->SetEditModeChecked(Enabled);
                 // A hidden drawing toolbar must not leave an active canvas tool.
                 if(!Enabled)image_->setEditTool(QImageView::None);
                 emit ViewStateChanged();
@@ -305,7 +318,7 @@ namespace hc::document
             EditToolbar->setVisible(ImageEditing);
             auto* Filters=new QComboBox(toolbar_);Filters->setObjectName("imageDisplayFilter");Filters->addItem(tr("자동"),"auto");
             for(const auto& Filter:ImageFilterRegistry::Filters())Filters->addItem(Filter.label_,Filter.id_);
-            auto* Quality=new QSpinBox(toolbar_);Quality->setObjectName("imageExportQuality");Quality->setRange(0,100);Quality->setValue(95);Quality->setPrefix(tr("품질 "));EditToolbar->addWidget(Quality);
+            auto* Quality=new QSpinBox(this);Quality->hide();Quality->setObjectName("imageExportQuality");Quality->setRange(0,100);Quality->setValue(95);Quality->setPrefix(tr("품질 "));
             connect(Quality,&QSpinBox::valueChanged,this,[this](int Value){quality_=Value;});
             auto* Resize=EditToolbar->addAction(tr("출력 크기"));Resize->setObjectName("imageOutputSize");
             connect(Resize,&QAction::triggered,this,[this] {
@@ -371,7 +384,7 @@ namespace hc::document
         if(Id=="pdf.goToPage" || Id=="pdf.find" || Id=="pdf.findNext" || Id=="pdf.findPrev")return pdf_ != nullptr;
         if(Id=="image.goToPage" || Id=="image.bookmarkSave" || Id=="image.bookmarkOpen")return reading_ && !reading_->isHidden();
         // Copy of a PDF selection, the displayed image or the current reading page.
-        if(Id=="edit.copy")return (reading_ && !reading_->isHidden()) ? !reading_->CurrentImage().isNull() : (view_ && !text_ && view_->canCopy());
+        if(Id=="edit.copy")return (reading_ && !reading_->isHidden()) ? !reading_->CurrentImage().isNull() : image_ ? !image_->Content().isNull() : (view_ && !text_ && view_->canCopy());
         if(Id.startsWith("markdown."))return markdown_ && markdown_->CanRun(Id);
         if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return IsEpubEditing() && epubEditor_->CanRunCommand(Id);
         // Every image pane owns a reading view; a single image steps through its folder while it is hidden.
@@ -379,8 +392,25 @@ namespace hc::document
         if(Id.startsWith("image."))return image_ && reading_ && (!reading_->isHidden() || ((Id=="image.next" || Id=="image.previous") && !image_->IsEditing()));
         return Id.startsWith("pdf.") && pdf_ && QStringList{"pdf.pageNext","pdf.pagePrevious","pdf.first","pdf.last"}.contains(Id);
     }
+    void DocumentViewPane::SetSlideshow(bool Running) {
+        if(!Running){if(SlideshowRunning()){slideshow_->stop();emit ViewStateChanged();}return;}
+        if(!image_)return;
+        if(!slideshow_){
+            slideshow_=new QTimer(this);slideshow_->setInterval(3000);
+            connect(slideshow_,&QTimer::timeout,this,[this]{
+                // An edited image would ask to save at every step; stop instead.
+                if(!image_ || image_->isModified() || image_->IsEditing()){SetSlideshow(false);return;}
+                slideshowStep_=true;const bool Stepped=RunViewCommand(QStringLiteral("image.next"));slideshowStep_=false;
+                if(!Stepped)SetSlideshow(false);
+            });
+        }
+        slideshow_->start();emit ViewStateChanged();
+    }
+    bool DocumentViewPane::SlideshowRunning() const { return slideshow_ && slideshow_->isActive(); }
     bool DocumentViewPane::RunViewCommand(const QString& Id) {
         if(!CanRunViewCommand(Id))return false;
+        // A manual step ends the slideshow; its own timer steps with slideshowStep_ set.
+        if(!slideshowStep_ && (Id==QLatin1String("image.next") || Id==QLatin1String("image.previous")))SetSlideshow(false);
         if(Id=="text.goToLine"){text_->findChild<QAction*>("text.goToLine")->trigger();return true;}
         if(Id.startsWith("pdf.zoom") || Id.startsWith("image.zoom"))return RunViewCommand(QStringLiteral("view.")+Id.mid(Id.indexOf('.')+1));
         if(Id.startsWith("view.zoom")) {
@@ -388,11 +418,11 @@ namespace hc::document
             if(text_)text_->Zoom(Step);
             else if(pdf_){if(Step)pdf_->setZoomLevel(pdf_->zoomLevel()*(Step>0?1.25:0.8));else pdf_->setZoomLevel(100);}
             else if(reading_ && !reading_->isHidden()){if(Step)reading_->Zoom(Step>0?1.25:0.8);else reading_->SetFit(0);}
-            else if(image_){if(Step)image_->setZoomLevel(image_->zoomLevel()*(Step>0?1.25:0.8));else image_->setZoomLevel(100);}
+            else if(image_){if(Step)image_->ZoomBy(Step>0?1.25:0.8);else image_->setZoomLevel(100);}
             emit ViewStateChanged();return true;
         }
         if(Id=="pdf.goToPage" || Id=="image.goToPage"){emit StatusPickerRequested("page");return true;}
-        if(Id=="pdf.find"){if(auto* Field=pdf_->findChild<QLineEdit*>("pdfSearchField")){if(!toolbar_->isVisible())toolbar_->show();Field->setFocus(Qt::ShortcutFocusReason);Field->selectAll();}return true;}
+        if(Id=="pdf.find"){pdf_->FocusSearchField();return true;}
         if(Id=="pdf.findNext"){pdf_->searchNext();return true;}
         if(Id=="pdf.findPrev"){pdf_->searchPrev();return true;}
         if(Id=="image.bookmarkSave"){reading_->Bookmark();return true;}
@@ -400,6 +430,8 @@ namespace hc::document
         if(Id=="edit.copy") {
             if(view_ && view_->ClipboardRestricted()){emit ClipboardRequested("copy");return true;}
             if(reading_ && !reading_->isHidden()){QGuiApplication::clipboard()->setImage(reading_->CurrentImage());return true;}
+            // 이미지 복사: the selection when there is one, otherwise the displayed image.
+            if(image_ && image_->SelectionSize().isEmpty()){QGuiApplication::clipboard()->setImage(image_->Content());return true;}
             return view_->copySelection();
         }
         if(Id.startsWith("markdown.")){auto* Action=markdown_->Toolbar()->findChild<QAction*>(Id);if(Action && Action->isCheckable())Action->trigger();else markdown_->Run(Id);return true;}
@@ -665,7 +697,7 @@ namespace hc::document
             Pick("zoom",FitText.isEmpty()?ZoomText:ZoomText+" · "+FitText,true,true,ZoomText);
             const QStringList Layouts{tr("한 쪽"),tr("연속 스크롤"),tr("두 쪽")};
             Pick("pdfLayout",Layouts.value(int(pdf_->viewMode()))+(pdf_->viewMode()==QPDFView::TwoPageSpread?(pdf_->spreadReadingDirection()==QPDFView::RightToLeft?tr(" · 우 → 좌"):tr(" · 좌 → 우")):QString{}),false);
-            Pick("rotation",tr("회전 %1°").arg(int(pdf_->rotationAngle())),false);
+            Pick("rotation",tr("회전 %1°").arg(pdf_->viewRotation()),false);
             const auto PageSize=pdf_->CurrentPageSize();
             if(PageSize.isValid())Add("pageSize",QString("%1 × %2 mm").arg(PageSize.width()*25.4/72,0,'f',1).arg(PageSize.height()*25.4/72,0,'f',1),false);
             Add("format","PDF",false);
@@ -712,17 +744,31 @@ namespace hc::document
             if(!image_->RenderError().isEmpty())Add("viewError",tr("⚠ 이미지 표시 실패"),true,{},image_->RenderError());
         } else if(IsEpubEditing()&&epubEditor_) return epubEditor_->StatusFields();
         else if(epub_) {
+            // Prototype: 1장 / 5장 (picker) · 장내 2 / 7화면 · 책 약 3 % · 장 제목 … 읽기 방식 · 단 (picker) · 글자 (picker) · EPUB.
             const auto State=currentEpub()->ViewState(); const auto Profile=State["profile"].toObject();
-            if(State["chapterCount"].toInt()>0)Add("chapter",tr("%1장 / %2장").arg(State["chapterIndex"].toInt()+1).arg(State["chapterCount"].toInt()));
-            if(State["readerBusy"].toBool())Add("layout",tr("쪽 계산 중…"));
-            else if(State["chapterPages"].toInt()>0&&Profile["layout"]!="scroll")Add("page",tr("장내 %1 / %2쪽").arg(State["chapterPage"].toInt()).arg(State["chapterPages"].toInt()),true,{},tr("현재 글꼴과 창 크기에 따른 장내 쪽 번호"));
-            if(State.contains("progress"))Add("progress",tr("책 약 %1%").arg(qRound(State["progress"].toDouble()*100)),true,{},tr("장 위치를 기준으로 추정한 읽기 진행률"));
-            if(Profile["size"].toDouble()>0)Add("font",tr("글자 %1 px").arg(Profile["size"].toDouble()));
+            if(State["chapterCount"].toInt()>0)Pick("chapter",tr("%1장 / %2장").arg(State["chapterIndex"].toInt()+1).arg(State["chapterCount"].toInt()));
+            QString Where;
+            if(State["readerBusy"].toBool())Where=tr("쪽 계산 중…");
+            else if(State["chapterScreens"].toInt()>0&&Profile["layout"]!="scroll")Where=tr("장내 %1 / %2화면").arg(State["chapterScreen"].toInt()).arg(State["chapterScreens"].toInt());
+            else if(State["chapterPages"].toInt()>0&&Profile["layout"]!="scroll")Where=tr("장내 %1 / %2화면").arg(State["chapterPage"].toInt()).arg(State["chapterPages"].toInt());
+            if(State.contains("progress"))Where+=(Where.isEmpty()?QString():QStringLiteral(" · "))+tr("책 약 %1 %").arg(qRound(State["progress"].toDouble()*100));
+            Add("position",Where,true,{},tr("장내 화면은 현재 글꼴 · 창 크기 · 단 수 기준이고, 책 진행률은 장 위치로 추정합니다."));
             Add("chapterTitle",State["chapterTitle"].toString(),false);
-            Add("layoutMode",Profile["layout"]=="scroll"?tr("세로 연속"):tr("쪽 넘김"),false);
+            const QStringList Columns{tr("자동 단"),tr("1단"),tr("2단")};
+            Pick("epubLayout",(Profile["layout"]=="paginated"?tr("가로 페이지"):tr("세로 스크롤"))+QStringLiteral(" · ")+Columns.value(Profile["columns"].toInt()),true,true,Profile["layout"]=="paginated"?tr("가로"):tr("세로"));
+            if(Profile["size"].toDouble()>0)Pick("font",tr("글자 %1 px").arg(Profile["size"].toDouble()),false);
             Add("format","EPUB",false);
+            if(!State["readerMessage"].toString().isEmpty())Add("readerMessage",tr("⚠ 읽기 오류"),true,{},State["readerMessage"].toString());
         } else if(hwp_) Add("format",viewId_.toUpper());
-        if(markdown_)Fields.append(markdown_->StatusFields());
+        if(markdown_) {
+            // Prototype (source · split): 줄 · 열 · 보기 방식 | 언어 · 인코딩 · … · 미리보기 배율 · 렌더링.
+            // The view mode joins the leading group; the rest follows the text tail.
+            for(const auto& Field:markdown_->StatusFields()) {
+                if(Field.id_!="markdown.viewMode"){Fields.append(Field);continue;}
+                const auto Tail=std::find_if(Fields.begin(),Fields.end(),[](const DocumentStatusField& Item){return Item.trailing_;});
+                Fields.insert(Tail,Field);
+            }
+        }
         return Fields;
     }
     void DocumentViewPane::RunStatusCommand(const QString& Id)
@@ -740,7 +786,7 @@ namespace hc::document
             const auto Page=QInputDialog::getInt(this,tr("쪽 이동"),tr("쪽 번호"),(pdf_?pdf_->currentPage():State["page"].toInt())+1,1,Count,1,&Accepted);
             if(Accepted){if(pdf_)pdf_->goToPage(Page-1);else reading_->GoTo(Page-1);}
         } else if(Id=="status.zoom"&&(pdf_||image_)) {
-            const auto Zoom=QInputDialog::getInt(this,tr("확대율"),tr("배율 (%)"),qRound(pdf_?pdf_->zoomLevel():image_->displayScalePercent()),10,1600,10,&Accepted);
+            const auto Zoom=QInputDialog::getInt(this,tr("확대율"),tr("배율 (%)"),qRound(pdf_?pdf_->zoomLevel():image_->displayScalePercent()),10,800,10,&Accepted);
             if(Accepted){if(pdf_)pdf_->setZoomLevel(Zoom);else image_->setZoomLevel(Zoom);}
         }
         Focus();
@@ -804,6 +850,7 @@ namespace hc::document
         }
         if(text_&&text_->isReadOnly()&&(Action=="replaceText"||Action=="text.replaceAll"))return Error("document-edit-unavailable");
         if(Action=="replaceText"&&text_){auto Text=Request["text"].toString();if(eol_=="CRLF")Text.replace("\r\n","\n").replace("\n","\r\n");text_->ReplaceContent(Text);return {{"accepted",true}};}
+        if(Action=="selectAll"&&pdf_){pdf_->SelectAllText();return {{"accepted",true}};}
         if(Action=="selectAll"&&text_){static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_SELECTALL);return {{"accepted",true}};}
         if(markdown_&&!markdown_->SourceVisible() && (Action=="print"||Action=="printToPdf"||Action=="printPreview"))return Error("markdown-source-print-only");
         if(Action.startsWith("markdown."))return RunViewCommand(Action)?QJsonObject{{"accepted",true}}:Error("markdown-command-unavailable");
@@ -817,7 +864,7 @@ namespace hc::document
         }
         else if(Action=="pdf.page"&&pdf_)pdf_->goToPage(Request["page"].toInt());
         else if(Action=="pdf.search"&&pdf_)pdf_->searchText(Request["text"].toString());
-        else if(Action=="pdf.rotate"&&pdf_)pdf_->setRotationAngle(static_cast<QPDFView::RotationAngle>(Request["angle"].toInt()));
+        else if(Action=="pdf.rotate"&&pdf_)pdf_->RotateCurrentPage(static_cast<QPDFView::RotationAngle>(Request["angle"].toInt()));
         else if(Action=="pdf.annotate"&&pdf_){if(!pdf_->AddAnnotation(Request["page"].toInt(),Request["kind"].toString(),QRectF(Request["x"].toDouble(),Request["y"].toDouble(),Request["width"].toDouble(),Request["height"].toDouble()),Request["text"].toString()))return Error("document-pdf-annotation");}
         else if(Action=="image.fit"&&image_){if(reading_&&!reading_->isHidden())reading_->SetFit(Request["mode"].toInt());else image_->setFitMode(static_cast<QImageView::FitMode>(qBound(0,Request["mode"].toInt(),4)));}
         else if(Action=="image.filter"&&image_){image_->SetDisplayFilter(Request["filter"].toString());if(reading_)reading_->SetFilter(Request["filter"].toString());}

@@ -9,6 +9,8 @@
 #include "UniqueLibs/document/imageAsync.hpp"
 #include "UniqueLibs/document/imageDecodeCache.hpp"
 #include "UniqueLibs/document/imageColor.hpp"
+#include "UniqueLibs/document/documentShortcutRegistry.hpp"
+#include "core/AppSettings.h"
 #include "core/ToolbarIcons.h"
 #include "utils/FileLoadHelper.h"
 
@@ -26,17 +28,17 @@
 #include <QFileDialog>
 #include <QWheelEvent>
 #include <QMouseEvent>
-#include <QComboBox>
+#include <QContextMenuEvent>
 #include <QColorDialog>
 #include <QImageReader>
 #include <QImageWriter>
 #include <QInputDialog>
+#include <QMenu>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
 #include <QScopedValueRollback>
 #include <QSizePolicy>
-#include <QSpinBox>
 #include <QThreadPool>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -44,6 +46,7 @@
 #include <QScrollBar>
 #include <QShortcut>
 #include <cmath>
+#include <functional>
 #include <algorithm>
 #include <utility>
 #include <QVariant>
@@ -92,14 +95,42 @@ struct ImageOpenResult {
     QImage image;
 };
 
-QPen makeDrawingPen(const QColor& color, int width, Qt::PenStyle style)
+QPen makeDrawingPen(const QColor& color, int width, Qt::PenStyle style, const QList<qreal>& dashPattern)
 {
-    return QPen(color, qMax(1, width), style, Qt::RoundCap, Qt::RoundJoin);
+    QPen pen(color, qMax(1, width), style, Qt::RoundCap, Qt::RoundJoin);
+    if (style == Qt::CustomDashLine && !dashPattern.isEmpty())
+        pen.setDashPattern(dashPattern);
+    return pen;
 }
 
-QString toolButtonForegroundColor(const QColor& color)
+// The colour button shows the pen colour itself, as in the edit row mockup.
+QIcon colorSwatchIcon(const QColor& color, const QColor& border)
 {
-    return color.lightnessF() < 0.45 ? QStringLiteral("#ffffff") : QStringLiteral("#111111");
+    constexpr qreal scale = 2.0;
+    QPixmap pixmap(QSize(20, 20) * scale);
+    pixmap.setDevicePixelRatio(scale);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(border, 1.0));
+    painter.setBrush(color);
+    painter.drawRoundedRect(QRectF(3.5, 3.5, 13.0, 13.0), 3.0, 3.0);
+    painter.end();
+    return QIcon(pixmap);
+}
+
+// Keys are shown only: the workspace shortcut router owns the bindings.
+QKeySequence boundKey(const QJsonObject& bindings, const QString& id)
+{
+    return QKeySequence::fromString(bindings[id].toString(), QKeySequence::PortableText);
+}
+
+QJsonObject shortcutBindings()
+{
+    using hc::document::DocumentShortcutRegistry;
+    AppSettings settings;
+    const auto stored = settings.value(QStringLiteral("shortcuts/bindings")).toJsonObject();
+    return DocumentShortcutRegistry::Bindings(DocumentShortcutRegistry::Validate(stored).isEmpty() ? stored : QJsonObject{});
 }
 
 QString imageFormatText(QImage::Format format, bool hasAlpha)
@@ -209,6 +240,8 @@ bool QImageView::openImage(const QImage& image, const QString& title)
     m_undoStack->clear();
     m_dirFiles.clear();
     m_dirIndex = 0;
+    cleanModified_ = m_modified;
+    strokeBefore_ = {};
 
     if (isVisible()) {
         updateDisplay();
@@ -263,6 +296,7 @@ void QImageView::closeFile()
     endLoading();
     m_originalImage = {}; m_displayImage = {};
     m_filePath.clear(); setModifiedState(false);
+    cleanModified_ = false; strokeBefore_ = {};
     m_imageFormat.clear();
     setDisplayTitle({});
     m_dirFiles.clear();
@@ -299,6 +333,13 @@ void QImageView::setFitMode(FitMode mode) { m_fitMode = mode; renderTimer_.start
 QImageView::FitMode QImageView::fitMode() const { return m_fitMode; }
 void QImageView::setZoomLevel(qreal pct)  { m_zoomLevel = qBound(10.0, pct, 1600.0); m_fitMode = OriginalSize; renderTimer_.start(); emit viewStateChanged(); }
 qreal QImageView::zoomLevel() const       { return m_zoomLevel; }
+void QImageView::ZoomBy(double Factor)
+{
+    if (!(Factor > 0.0)) return;
+    // A fit mode keeps an unrelated stored level; continue from the scale on screen instead.
+    const qreal Base = m_fitMode == OriginalSize ? m_zoomLevel : displayScalePercent();
+    setZoomLevel(Base * Factor);
+}
 
 bool QImageView::canCopy() const
 {
@@ -380,30 +421,59 @@ void QImageView::setEditTool(EditTool tool)
 }
 
 QImageView::EditTool QImageView::currentEditTool() const { return m_editTool; }
+// Setters report through viewStateChanged so the edit row shows values set from elsewhere.
 void QImageView::setPenColor(const QColor& c)
 {
-    if (c.isValid())
-        m_penColor = c;
+    if (!c.isValid() || c == m_penColor) return;
+    m_penColor = c;
+    emit viewStateChanged();
 }
 
-void QImageView::setPenWidth(int w)           { m_penWidth = qBound(1, w, 50); }
-void QImageView::setPenStyle(Qt::PenStyle s)  { m_penStyle = s; }
+void QImageView::setPenWidth(int w)
+{
+    const int Width = qBound(1, w, 50);
+    if (Width == m_penWidth) return;
+    m_penWidth = Width;
+    emit viewStateChanged();
+}
+int QImageView::penWidth() const              { return m_penWidth; }
+void QImageView::setPenStyle(Qt::PenStyle s)
+{
+    if (s == m_penStyle) return;
+    m_penStyle = s;
+    emit viewStateChanged();
+}
 Qt::PenStyle QImageView::penStyle() const     { return m_penStyle; }
-void QImageView::setTextPixelSize(int size)   { m_textPixelSize = qBound(8, size, 256); }
+void QImageView::setTextPixelSize(int size)
+{
+    const int Size = qBound(8, size, 256);
+    if (Size == m_textPixelSize) return;
+    m_textPixelSize = Size;
+    emit viewStateChanged();
+}
 int QImageView::textPixelSize() const         { return m_textPixelSize; }
 
 void QImageView::undoEdit()
 {
+    // An empty history must not mark the image as edited.
+    if (!m_undoStack->canUndo()) return;
     m_undoStack->undo();
-    setModifiedState(true);
+    syncModifiedFromHistory();
     updateDisplay();
 }
 
 void QImageView::redoEdit()
 {
+    if (!m_undoStack->canRedo()) return;
     m_undoStack->redo();
-    setModifiedState(true);
+    syncModifiedFromHistory();
     updateDisplay();
+}
+
+void QImageView::syncModifiedFromHistory()
+{
+    // Back at the save point the pixels equal the saved image again.
+    setModifiedState(cleanModified_ || !m_undoStack->isClean());
 }
 
 void QImageView::cropToSelection()
@@ -781,7 +851,7 @@ void QImageView::updateOverlay(const QPoint& curLabelPos)
     QImage overlay = scaledImage();
     QPainter painter(&overlay);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(makeDrawingPen(m_penColor, m_penWidth, m_penStyle));
+    painter.setPen(makeDrawingPen(m_penColor, m_penWidth, m_penStyle, m_dashPattern));
     painter.setBrush(Qt::NoBrush);
 
     // labelPos → 표시 이미지 좌표 (toImageCoord는 원본 좌표이므로 별도 계산)
@@ -823,22 +893,21 @@ QToolBar* QImageView::createToolBar()
 {
     auto* tb = QBaseView::createToolBar();
 
+    // The document pane keeps previous/next in its main row and moves every other item
+    // into the edit row. Rotate, undo, slideshow and save as live in the window chrome.
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.previous"),
             &QAction::triggered, this, &QImageView::previousImage);
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.next"),
             &QAction::triggered, this, &QImageView::nextImage);
 
-    connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.rotateCw"),
-            &QAction::triggered, this, &QImageView::rotateClockwise);
-    connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.rotateCcw"),
-            &QAction::triggered, this, &QImageView::rotateCounterClockwise);
+    // Flip
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.flipHorizontal"),
             &QAction::triggered, this, &QImageView::flipHorizontal);
     connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.flipVertical"),
             &QAction::triggered, this, &QImageView::flipVertical);
     tb->addSeparator();
 
-    // 그리기 도구
+    // Drawing tools and the crop area: one exclusive group across two sections.
     auto* toolGroup = new QActionGroup(tb);
     toolGroup->setExclusive(true);
 
@@ -847,6 +916,7 @@ QToolBar* QImageView::createToolBar()
     auto* ellipseAction = MV_CREATE_TOOLBAR_ACTION(tb, "image.tool.ellipse");
     auto* arrowAction = MV_CREATE_TOOLBAR_ACTION(tb, "image.tool.arrow");
     auto* textAction = MV_CREATE_TOOLBAR_ACTION(tb, "image.tool.text");
+    tb->addSeparator();
     auto* cropAction = MV_CREATE_TOOLBAR_ACTION(tb, "image.tool.crop");
 
     toolGroup->addAction(freeDrawAction);
@@ -878,85 +948,140 @@ QToolBar* QImageView::createToolBar()
             &QAction::triggered, this, &QImageView::cropToSelection);
     tb->addSeparator();
 
-    auto* penWidthSpin = new QSpinBox(tb);
-    penWidthSpin->setRange(1, 50);
-    penWidthSpin->setPrefix(tr("굵기"));
-    penWidthSpin->setValue(m_penWidth);
-    penWidthSpin->setSuffix(tr(" px"));
-    penWidthSpin->setToolTip(tr("선 굵기"));
-    connect(penWidthSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, &QImageView::setPenWidth);
-    tb->addWidget(penWidthSpin);
-
-    auto* penStyleCombo = new QComboBox(tb);
-    penStyleCombo->addItem(tr("실선"), static_cast<int>(Qt::SolidLine));
-    penStyleCombo->addItem(tr("점선"), static_cast<int>(Qt::DashLine));
-    penStyleCombo->addItem(tr("도트"), static_cast<int>(Qt::DotLine));
-    penStyleCombo->addItem(tr("일점쇄선"), static_cast<int>(Qt::DashDotLine));
-    const int penStyleIndex = penStyleCombo->findData(static_cast<int>(m_penStyle));
-    if (penStyleIndex >= 0)
-        penStyleCombo->setCurrentIndex(penStyleIndex);
-    penStyleCombo->setToolTip(tr("선 스타일"));
-    connect(penStyleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [this, penStyleCombo](int index) {
-                setPenStyle(static_cast<Qt::PenStyle>(penStyleCombo->itemData(index).toInt()));
-            });
-    tb->addWidget(penStyleCombo);
-
-    auto* textSizeSpin = new QSpinBox(tb);
-    textSizeSpin->setRange(8, 256);
-    textSizeSpin->setPrefix(tr("글자"));
-    textSizeSpin->setValue(m_textPixelSize);
-    textSizeSpin->setSuffix(tr(" px"));
-    textSizeSpin->setToolTip(tr("텍스트 도구 글자 크기"));
-    connect(textSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, &QImageView::setTextPixelSize);
-    tb->addWidget(textSizeSpin);
-
-    auto* colorButton = new QToolButton(tb);
-    colorButton->setIcon(ToolbarIcons::iconByName(QStringLiteral("color-picker")));
-    colorButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    const auto updateColorButton = [this, colorButton] {
-        colorButton->setStyleSheet(QStringLiteral(
-            "QToolButton { background-color: %1; color: %2; border: 1px solid palette(mid); padding: 3px 8px; border-radius: 3px; }"
-        ).arg(m_penColor.name(QColor::HexArgb), toolButtonForegroundColor(m_penColor)));
-        colorButton->setToolTip(tr("선/도형/텍스트 색상"));
-        colorButton->setStatusTip(tr("선/도형/텍스트 색상"));
+    // Width, line style, text size: instant drop-downs that show the current value. They are widgets
+    // because the pane moves actions between toolbars and cannot set a popup mode.
+    const auto addDropDown = [tb](const char* name, const QString& tip) {
+        auto* button = new QToolButton(tb);
+        button->setObjectName(QString::fromLatin1(name));
+        button->setToolTip(tip);
+        button->setStatusTip(tip);
+        button->setAccessibleName(tip);
+        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        button->setPopupMode(QToolButton::InstantPopup);
+        button->setAutoRaise(true);
+        button->setFocusPolicy(Qt::NoFocus);
+        button->setMenu(new QMenu(button));
+        tb->addWidget(button);
+        return button;
     };
-    updateColorButton();
-    connect(colorButton, &QToolButton::clicked, this, [this, updateColorButton] {
-        const QColor color = QColorDialog::getColor(m_penColor, this, tr("그리기 색상 선택"));
-        if (!color.isValid())
+    const auto addSizeDropDown = [this, &addDropDown](const char* name, const QString& tip, const QString& format,
+                                                      const QList<int>& presets, int minimum, int maximum,
+                                                      int (QImageView::*get)() const, void (QImageView::*set)(int)) {
+        auto* button = addDropDown(name, tip);
+        auto* menu = button->menu();
+        auto* group = new QActionGroup(menu);
+        for (const int value : presets) {
+            auto* item = menu->addAction(tr("%1 px").arg(value));
+            item->setCheckable(true);
+            item->setData(value);
+            group->addAction(item);
+            connect(item, &QAction::triggered, this, [this, set, value] { (this->*set)(value); });
+        }
+        menu->addSeparator();
+        connect(menu->addAction(tr("사용자 지정…")), &QAction::triggered, this, [this, tip, minimum, maximum, get, set] {
+            bool accepted = false;
+            const int value = hc::ui::InputDialog::getInt(this, tip, tr("크기 (%1–%2 px)").arg(minimum).arg(maximum),
+                                                          (this->*get)(), minimum, maximum, 1, &accepted);
+            if (accepted)
+                (this->*set)(value);
+        });
+        // A custom value outside the presets leaves every preset unchecked.
+        connect(menu, &QMenu::aboutToShow, button, [this, group, get] {
+            const int current = (this->*get)();
+            for (auto* item : group->actions())
+                item->setChecked(item->data().toInt() == current);
+        });
+        const auto sync = [this, button, format, get] { button->setText(format.arg((this->*get)())); };
+        sync();
+        connect(this, &QImageView::viewStateChanged, button, sync);
+        return button;
+    };
+
+    addSizeDropDown("imagePenWidthButton", tr("선 굵기"), tr("굵기 %1 px"), {1, 2, 3, 5, 8, 12}, 1, 50,
+                    &QImageView::penWidth, &QImageView::setPenWidth);
+
+    auto* styleButton = addDropDown("imagePenStyleButton", tr("선 스타일"));
+    {
+        const QList<std::pair<Qt::PenStyle, QString>> styles{
+            {Qt::SolidLine, tr("실선")}, {Qt::DashLine, tr("점선")}, {Qt::DotLine, tr("도트")}, {Qt::DashDotLine, tr("일점쇄선")}};
+        auto* menu = styleButton->menu();
+        auto* group = new QActionGroup(menu);
+        for (const auto& entry : styles) {
+            auto* item = menu->addAction(entry.second);
+            item->setCheckable(true);
+            item->setData(static_cast<int>(entry.first));
+            group->addAction(item);
+            connect(item, &QAction::triggered, this, [this, style = entry.first] { setPenStyle(style); });
+        }
+        menu->addSeparator();
+        auto* customItem = menu->addAction(tr("사용자 지정…"));
+        customItem->setCheckable(true);
+        customItem->setData(static_cast<int>(Qt::CustomDashLine));
+        group->addAction(customItem);
+        connect(customItem, &QAction::triggered, this, [this] {
+            QStringList current;
+            for (const qreal length : m_dashPattern)
+                current << QString::number(length);
+            bool accepted = false;
+            const QString text = hc::ui::InputDialog::getText(this, tr("선 스타일"), tr("선과 간격 길이 (굵기의 배수, 예: 4 2)"),
+                                                              QLineEdit::Normal, current.join(QLatin1Char(' ')), &accepted);
+            if (!accepted)
+                return;
+            QList<qreal> pattern;
+            for (const auto& part : QString(text).replace(QLatin1Char(','), QLatin1Char(' ')).split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+                bool valid = false;
+                const qreal length = part.toDouble(&valid);
+                if (!valid || length <= 0.0)
+                    return;
+                pattern << length;
+            }
+            // QPen takes dash and gap lengths in pairs.
+            if (pattern.isEmpty() || pattern.size() % 2 != 0)
+                return;
+            m_dashPattern = pattern;
+            m_penStyle = Qt::CustomDashLine;
+            emit viewStateChanged();
+        });
+        connect(menu, &QMenu::aboutToShow, styleButton, [this, group] {
+            for (auto* item : group->actions())
+                item->setChecked(item->data().toInt() == static_cast<int>(m_penStyle));
+        });
+        const auto sync = [this, styleButton, styles] {
+            QString label = tr("사용자 지정");
+            for (const auto& entry : styles)
+                if (entry.first == m_penStyle)
+                    label = entry.second;
+            styleButton->setText(label);
+        };
+        sync();
+        connect(this, &QImageView::viewStateChanged, styleButton, sync);
+    }
+
+    addSizeDropDown("imageTextSizeButton", tr("텍스트 도구 글자 크기"), tr("글자 %1 px"), {12, 16, 24, 32, 48, 72}, 8, 256,
+                    &QImageView::textPixelSize, &QImageView::setTextPixelSize);
+
+    // Colour: a swatch of the current pen colour.
+    auto* colorAction = MV_CREATE_TOOLBAR_ACTION(tb, "widget.colorButton");
+    const auto syncColor = [this, colorAction] {
+        if (colorAction->data().value<QColor>() == m_penColor)
             return;
-        setPenColor(color);
-        updateColorButton();
-    });
-    tb->addWidget(colorButton);
-
-    tb->addSeparator();
-    connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.undo"),
-            &QAction::triggered, this, &QImageView::undoEdit);
-    connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.redo"),
-            &QAction::triggered, this, &QImageView::redoEdit);
-    tb->addSeparator();
-
-    connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.slideshowStart"),
-            &QAction::triggered, this, [this]{ startSlideshow(); });
-    connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.slideshowStop"),
-            &QAction::triggered, this, &QImageView::stopSlideshow);
-    tb->addSeparator();
-
-    connect(MV_CREATE_TOOLBAR_ACTION(tb, "image.saveAs"),
-            &QAction::triggered, this, [this]{
-        saveFileAs();
+        colorAction->setData(QVariant::fromValue(m_penColor));
+        colorAction->setIcon(colorSwatchIcon(m_penColor, palette().color(QPalette::Mid)));
+    };
+    syncColor();
+    connect(this, &QImageView::viewStateChanged, colorAction, syncColor);
+    connect(colorAction, &QAction::triggered, this, [this] {
+        const QColor color = QColorDialog::getColor(m_penColor, this, tr("그리기 색상 선택"));
+        if (color.isValid())
+            setPenColor(color);
     });
 
     return tb;
 }
 
-// ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧??
-// ?⑹꽦 (Composite)
-// ?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧?먥븧??
+// ═══════════════════════════════════════════════════════════
+// 합성 (Composite)
+// ═══════════════════════════════════════════════════════════
 bool QImageView::startComposite(const QImage& image)
 {
     if (image.isNull() || m_displayImage.isNull())
@@ -966,7 +1091,7 @@ bool QImageView::startComposite(const QImage& image)
     m_compositeMode = true;
     m_compositeRotation = 0.0;
 
-    // 珥덇린 ?ш린: ?붾㈃(?cheon) 以묒븰??蹂몃옒 ?ш린濡? ???붾㈃蹂대떎 ?щ㈃ 以꾩엫
+    // Start centred at natural size; shrink to 80 % of the canvas when larger.
     double ratio = 1.0;
     if (m_compositeImage.width() > m_displayImage.width() || m_compositeImage.height() > m_displayImage.height()) {
         double rw = static_cast<double>(m_displayImage.width()) / m_compositeImage.width();
@@ -1370,6 +1495,8 @@ bool QImageView::eventFilter(QObject* obj, QEvent* event)
             return true;
         }
         // FreeDraw, Rectangle, Ellipse, Arrow
+        if (m_editTool == FreeDraw)
+            strokeBefore_ = m_displayImage;
         m_drawing = true;
         return true;
     }
@@ -1392,7 +1519,7 @@ bool QImageView::eventFilter(QObject* obj, QEvent* event)
         if (m_editTool == FreeDraw) {
             QPainter painter(&m_displayImage);
             painter.setRenderHint(QPainter::Antialiasing);
-            painter.setPen(makeDrawingPen(m_penColor, m_penWidth, m_penStyle));
+            painter.setPen(makeDrawingPen(m_penColor, m_penWidth, m_penStyle, m_dashPattern));
             painter.drawLine(toImageCoord(m_lastDrawPoint), toImageCoord(labelPos));
             painter.end();
             m_lastDrawPoint = labelPos;
@@ -1416,6 +1543,17 @@ bool QImageView::eventFilter(QObject* obj, QEvent* event)
 
         if (m_editTool == Crop) return true;   // rubberband 유지
 
+        if (m_editTool == FreeDraw) {
+            // Segments were painted while dragging; record the stroke as one undo step.
+            const QImage before = std::exchange(strokeBefore_, QImage());
+            if (!before.isNull() && before.cacheKey() != m_displayImage.cacheKey()) {
+                m_undoStack->push(new ImageEditCommand(&m_displayImage, before, m_displayImage, "Draw"));
+                setModifiedState(true);
+                updateDisplay();
+            }
+            return true;
+        }
+
         QPoint labelPos = m_imageLabel->mapFromGlobal(me->globalPosition().toPoint());
         QPoint imgStart = toImageCoord(m_dragStart);   // m_dragStart = imageLabel 좌표
         QPoint imgEnd   = toImageCoord(labelPos);
@@ -1424,7 +1562,7 @@ bool QImageView::eventFilter(QObject* obj, QEvent* event)
             QImage before = m_displayImage;
             QPainter painter(&m_displayImage);
             painter.setRenderHint(QPainter::Antialiasing);
-            painter.setPen(makeDrawingPen(m_penColor, m_penWidth, m_penStyle));
+            painter.setPen(makeDrawingPen(m_penColor, m_penWidth, m_penStyle, m_dashPattern));
             painter.setBrush(Qt::NoBrush);
 
             if (m_editTool == Rectangle) {
@@ -1466,11 +1604,98 @@ void QImageView::resizeEvent(QResizeEvent* event)
 void QImageView::wheelEvent(QWheelEvent* event)
 {
     if (event->modifiers() & Qt::ControlModifier) {
-        setZoomLevel(m_zoomLevel + (event->angleDelta().y() > 0 ? 10.0 : -10.0));
+        ZoomBy(event->angleDelta().y() > 0 ? 1.25 : 0.8);
         event->accept();
     } else {
         QBaseView::wheelEvent(event);
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Canvas context menu
+// ═══════════════════════════════════════════════════════════
+void QImageView::SetEditModeChecked(bool Checked) { editModeChecked_ = Checked; }
+
+QMenu* QImageView::CreateContextMenu(QWidget* Parent)
+{
+    auto* Menu = new QMenu(Parent ? Parent : this);
+    Menu->setObjectName(QStringLiteral("imageCanvasMenu"));
+    const auto Bindings = shortcutBindings();
+    const bool HasImage = !m_displayImage.isNull();
+    const bool Idle = HasImage && !m_compositeMode && !pendingEdit_;
+    // Queued: 'next image' can make the host replace this view, which must not
+    // happen inside the menu's own mouse event.
+    const auto Add = [this, &Bindings](QMenu* Target, const char* Name, const QString& Text, const char* IconName,
+                                       const char* KeyId, std::function<void()> Run) {
+        auto* Action = Target->addAction(Text);
+        Action->setObjectName(QString::fromLatin1(Name));
+        if (IconName) Action->setIcon(ToolbarIcons::iconByName(QString::fromLatin1(IconName)));
+        if (KeyId) Action->setShortcut(boundKey(Bindings, QString::fromLatin1(KeyId)));
+        connect(Action, &QAction::triggered, this, std::move(Run), Qt::QueuedConnection);
+        return Action;
+    };
+
+    Add(Menu, "imageContext.zoomIn", tr("확대"), "zoom-in", "image.zoomIn", [this] { ZoomBy(1.25); })->setEnabled(HasImage);
+    Add(Menu, "imageContext.zoomOut", tr("축소"), "zoom-out", "image.zoomOut", [this] { ZoomBy(0.8); })->setEnabled(HasImage);
+    auto* Fit = Menu->addMenu(tr("맞춤"));
+    Fit->menuAction()->setObjectName(QStringLiteral("imageContext.fit"));
+    auto* FitGroup = new QActionGroup(Fit);
+    struct FitItem { const char* name_; QString text_; FitMode mode_; const char* key_; };
+    const FitItem Fits[]{
+        {"imageContext.fitWindow", tr("창에 맞춤"), FitToWindow, nullptr},
+        {"imageContext.fitWidth", tr("너비 맞춤"), FitWidth, nullptr},
+        {"imageContext.fitHeight", tr("높이 맞춤"), FitHeight, nullptr},
+        {"imageContext.originalSize", tr("원본 크기"), OriginalSize, "image.zoomReset"},
+        {"imageContext.stretch", tr("늘림"), StretchToWindow, nullptr}};
+    for (const auto& Item : Fits) {
+        // Original size means 100 %; a custom zoom also uses OriginalSize but checks nothing.
+        const auto Mode = Item.mode_;
+        auto* Action = Add(Fit, Item.name_, Item.text_, nullptr, Item.key_, [this, Mode] {
+            if (Mode == OriginalSize) setZoomLevel(100.0); else setFitMode(Mode);
+        });
+        Action->setCheckable(true);
+        Action->setChecked(Mode == OriginalSize ? m_fitMode == OriginalSize && qFuzzyCompare(m_zoomLevel, 100.0) : m_fitMode == Mode);
+        FitGroup->addAction(Action);
+    }
+    Fit->setEnabled(HasImage);
+    Menu->addSeparator();
+
+    Add(Menu, "imageContext.rotateCw", tr("시계 방향 90°"), "rotate-cw", nullptr, [this] { rotateClockwise(); })->setEnabled(Idle);
+    Add(Menu, "imageContext.rotateCcw", tr("반시계 방향 90°"), "rotate-ccw", nullptr, [this] { rotateCounterClockwise(); })->setEnabled(Idle);
+    auto* Flip = Menu->addMenu(tr("뒤집기"));
+    Flip->menuAction()->setObjectName(QStringLiteral("imageContext.flip"));
+    Add(Flip, "imageContext.flipHorizontal", tr("좌우"), nullptr, nullptr, [this] { flipHorizontal(); });
+    Add(Flip, "imageContext.flipVertical", tr("상하"), nullptr, nullptr, [this] { flipVertical(); });
+    Flip->setEnabled(Idle);
+    Menu->addSeparator();
+
+    const bool CanStep = Idle && (m_dirFiles.size() > 1 || directoryLoading_);
+    Add(Menu, "imageContext.previous", tr("이전 이미지"), nullptr, "image.previous", [this] { StepImage(-1); })->setEnabled(CanStep);
+    Add(Menu, "imageContext.next", tr("다음 이미지"), nullptr, "image.next", [this] { StepImage(1); })->setEnabled(CanStep);
+    Menu->addSeparator();
+
+    Add(Menu, "imageContext.copy", tr("이미지 복사"), nullptr, "edit.copy", [this] { copySelection(); })
+        ->setEnabled(HasImage || ClipboardRestricted());
+    auto* EditMode = Add(Menu, "imageContext.editMode", tr("편집 모드"), nullptr, nullptr,
+                         [this] { emit ContextCommand(QStringLiteral("image.editMode")); });
+    if (editModeChecked_) {
+        EditMode->setCheckable(true);
+        EditMode->setChecked(*editModeChecked_);
+    }
+    Add(Menu, "imageContext.fullscreen", tr("전체 화면"), nullptr, "image.fullscreen",
+        [this] { emit ContextCommand(QStringLiteral("image.fullscreen")); });
+    return Menu;
+}
+
+void QImageView::contextMenuEvent(QContextMenuEvent* event)
+{
+    event->accept();
+    // No menu over a drag in progress, a pending composite or an empty canvas.
+    if (m_drawing || m_compositeMode || m_displayImage.isNull())
+        return;
+    auto* Menu = CreateContextMenu(this);
+    connect(Menu, &QMenu::aboutToHide, Menu, &QObject::deleteLater);
+    Menu->popup(event->reason() == QContextMenuEvent::Mouse ? event->globalPos() : mapToGlobal(rect().center()));
 }
 
 
@@ -1489,7 +1714,7 @@ QByteArray QImageView::SerializeContent(const QByteArray& Format,int Quality) co
     QImageWriter Writer(&Buffer,Format);Writer.setQuality(Quality);
     return Writer.write(m_displayImage)?Bytes:QByteArray{};
 }
-void QImageView::CommitContent() {m_undoStack->setClean();m_modified=false;}
+void QImageView::CommitContent() {m_undoStack->setClean();m_modified=false;cleanModified_=false;}
 void QImageView::DisplayAnimationFrame(const QImage& Image){if(Image.isNull()||m_modified||rendering_||pendingEdit_)return;m_displayImage=Image;++contentRevision_;renderStop_->request_stop();renderedKey_.clear();renderError_.clear();updateDisplay();emit imageChanged();}
 void QImageView::SetDisplayFilter(const QString& Filter)
 {

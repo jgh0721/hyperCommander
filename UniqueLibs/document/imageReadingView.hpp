@@ -10,6 +10,8 @@
 #include <QElapsedTimer>
 #include <stop_token>
 
+class QAction;
+class QMenu;
 class QPainter;
 namespace hc::document
 {
@@ -63,13 +65,19 @@ class ImageReadingView final : public QAbstractScrollArea
     void SavePosition();
     void ToggleAnimation();
     void StepAnimation(int Direction);
+    // The right-click menu for the current mode (comic or webtoon terms); the caller owns the menu.
+    QMenu *CreateContextMenu(QWidget *Parent = nullptr);
   signals:
     void Changed();
     void VolumeChanged(const QString &Path);
     void FramePresented(int Page);
+    // Requests the host owns: the page/image picker (Ctrl+G) and toggling full screen (F11).
+    void GoToRequested();
+    void FullscreenRequested();
 
   protected:
     bool event(QEvent *) override;
+    void contextMenuEvent(QContextMenuEvent *) override;
     void paintEvent(QPaintEvent *) override;
     void resizeEvent(QResizeEvent *) override;
     void wheelEvent(QWheelEvent *) override;
@@ -157,6 +165,7 @@ class ImageReadingView final : public QAbstractScrollArea
     QTimer saveTimer_;
     ImageFramePlayer *animation_ = nullptr;
     ImageReadingNavigator *navigator_ = nullptr;
+    QAction *retry_ = nullptr;
     int animationPage_ = -1;
     bool animationPending_ = false;
     std::uint64_t animationGeneration_ = 0;

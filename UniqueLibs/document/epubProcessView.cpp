@@ -260,7 +260,11 @@ namespace hc::document
         }
         if(Escape && !Retired) {emit EscapeRequested();if(!Guard)return;}
         if(Fullscreen && !Retired){emit FullscreenRequested();if(!Guard)return;}
+        // Serials only grow (the reader numbers frame and margin requests together); each one is shown once.
+        const auto Context=State["contextRequest"].toObject();const auto ContextSerial=Context["serial"].toInteger();
+        const bool ContextMenu=ContextSerial>contextSerial_ && !Retired;if(ContextSerial>contextSerial_)contextSerial_=ContextSerial;
         emit ViewStateChanged();
+        if(ContextMenu && Guard)emit ContextMenuRequested(Context);
     }
     bool EpubProcessView::event(QEvent* Event)
     {
@@ -274,7 +278,9 @@ namespace hc::document
             || (Action=="preview-chapter" && !work_->sourceLines_)
             || QJsonDocument(QJsonArray{Value}).toJson(QJsonDocument::Compact).size()>(Action=="preview-chapter"?512*1024:16384))return false;
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
-        work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value.isUndefined()?QJsonValue(QJsonValue::Null):Value}});work_->wake_.notify_one();return true;
+        work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value.isUndefined()?QJsonValue(QJsonValue::Null):Value}});work_->wake_.notify_one();
+        if(Action=="bindings" && Value.isObject())bindings_=Value.toObject();
+        return true;
     }
     bool EpubProcessView::RequestSourceScroll(const QJsonObject& Value) {
         if(!work_ || closed_ || failed_ || !bound_ || !epub::ValidSourceScrollRequest(Value))return false;
@@ -306,8 +312,10 @@ namespace hc::document
         work_->globalSettingsPath_ = hc::defaults::edit::EpubReadingFile(Config);
         work_->settingsPath_ = hc::defaults::edit::EpubReadingFile(SettingsDirectory.isEmpty()?Config:SettingsDirectory);
         QJsonObject Preferences;QString PreferencesError;
-        if(hc::settings::UnifiedConfig::Load(hc::settings::UnifiedConfig::FileName(Config),Preferences,PreferencesError))
-            work_->settingsRequests_.push_back({{"kind","reader-action"},{"action","bindings"},{"value",Preferences["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject()}});
+        if(hc::settings::UnifiedConfig::Load(hc::settings::UnifiedConfig::FileName(Config),Preferences,PreferencesError)) {
+            bindings_=Preferences["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
+            work_->settingsRequests_.push_back({{"kind","reader-action"},{"action","bindings"},{"value",bindings_}});
+        }
         if((runtime_.kind_ != WebProcessKind::EpubPrototype && runtime_.kind_ != WebProcessKind::EpubReadOnly) || Generation < 1 || Generation > 9007199254740991LL
             || Bytes.isEmpty() || Bytes.size() > epub::InputLimit) {
             work_->Update({{"status", "error"}, {"message", "epub-view-admission"}});
@@ -370,8 +378,9 @@ namespace hc::document
                 if(Deadline.hasExpired()) { Failure = "epub-view-attach-timeout"; return; }
                 QJsonObject Applied;
                 { std::lock_guard Lock(State->mutex_); Applied = State->appearance_; }
+                // hostChrome: the document pane draws the reading row and the status line for readers and previews.
                 const auto Configure = QJsonDocument(QJsonObject{{"protocolVersion", 1}, {"documentId", Id},
-                    {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_},{"initiallyInteractive",State->initiallyInteractive_},{"sourceLines",State->sourceLines_},{"globalSettingsPath",State->globalSettingsPath_}}).toJson(QJsonDocument::Compact);
+                    {"generation", State->generation_}, {"kind", "configure"}, {"appearance", Applied}, {"settingsPath", State->settingsPath_},{"initiallyInteractive",State->initiallyInteractive_},{"sourceLines",State->sourceLines_},{"globalSettingsPath",State->globalSettingsPath_},{"hostChrome",true}}).toJson(QJsonDocument::Compact);
                 QByteArray ConfigureReply;
                 if(!Owner->Exchange(Configure, ConfigureReply, 5000, Error)
                     || !QJsonDocument::fromJson(ConfigureReply).object()["accepted"].toBool()

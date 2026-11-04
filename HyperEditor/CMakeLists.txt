@@ -103,6 +103,7 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/epubSourceProperties.cpp
     ../UniqueLibs/document/epubSourceLayout.cpp
     ../UniqueLibs/document/epubSourceMenus.cpp
+    ../UniqueLibs/document/epubReaderMenus.cpp ../UniqueLibs/document/epubReaderMenus.hpp
     ../UniqueLibs/document/epubSourceTools.cpp
     ../UniqueLibs/document/epubResourceTree.cpp ../UniqueLibs/document/epubResourceTree.hpp
     ../UniqueLibs/document/imageBook.cpp ../UniqueLibs/document/imageBook.hpp

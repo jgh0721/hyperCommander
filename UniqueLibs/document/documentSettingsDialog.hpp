@@ -19,6 +19,8 @@ public:
     // Selects a category: "common", "text", "shortcuts", "epub", "markdown", "image".
     void ShowPage(const QString& Key);
 signals:
+    // '최근 항목 지우기': the workspace owns the recent list and confirms before clearing.
+    void ClearRecentRequested();
     void PreferencesSaved();
     void ShortcutsValidated();
 private:

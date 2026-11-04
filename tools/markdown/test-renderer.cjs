@@ -31,6 +31,36 @@ const {chromium}=require(process.env.HC_PLAYWRIGHT_MODULE||'playwright');
  await page.waitForSelector('[data-preview-staging]',{state:'attached'});
  assert(await page.evaluate(async()=>{for(let i=0;i<12;i++){await new Promise(requestAnimationFrame);if(document.getElementById('content').innerHTML!==__oldHtml)return false;}return true;}),'Displayed body changed before its font arrived');
  await page.evaluate(()=>__pending);assert(await page.evaluate(()=>document.fonts.check('15pt DelayedPreview')));assert.deepEqual(errors,[]);
+ // Context menu without the bridge (still loading): Chromium keeps the event, so its request reaches the host fallback.
+ await render('# Menu\n\nPlain [link](https://example.com/) text.\n');
+ await page.evaluate(()=>{window.__prevented=null;addEventListener('contextmenu',e=>{window.__prevented=e.defaultPrevented;});});
+ await page.locator('#content a').click({button:'right'});assert.equal(await page.evaluate(()=>window.__prevented),false,'Context menu was taken without the bridge');
+ // Context menu with the bridge: the page reports the point, selection, link and source position; Chromium's menu never opens.
+ const bridged=await browser.newPage({deviceScaleFactor:Number(process.env.HC_DPR||1)});bridged.on('pageerror',e=>errors.push(e.message));
+ await bridged.addInitScript(()=>{window.__reports=[];window.qt={webChannelTransport:{}};window.QWebChannel=function(_,ready){ready({objects:{markdown:{report:s=>__reports.push(JSON.parse(s)),request:{connect:f=>{window.__request=f;}}}}});};});
+ await bridged.goto(origin+'/markdown/shell.html');await bridged.waitForFunction(()=>window.hcMarkdown&&window.__request&&__reports.some(r=>r.type==='ready'));
+ const menuText='# Title\n\nFirst paragraph with [a link](https://example.com/page) inside.\n\nSecond [jump](#title) paragraph.\n\n'+Array.from({length:60},(_,i)=>`Filler paragraph ${i}.`).join('\n\n');
+ await bridged.evaluate(async({text,origin})=>{await hcMarkdown.render({text,revision:7,baseUrl:origin+'/markdown/',options:{}});},{text:menuText,origin});
+ await bridged.evaluate(()=>{window.__prevented=null;addEventListener('contextmenu',e=>{window.__prevented=e.defaultPrevented;});});
+ const context=async(locator,options={})=>{await bridged.evaluate(()=>{__reports.length=0;window.__prevented=null;});await locator.click({button:'right',...options});
+  await bridged.waitForFunction(()=>__reports.some(r=>r.type==='context'));assert.equal(await bridged.evaluate(()=>window.__prevented),true,'Chromium context menu was not suppressed');
+  return bridged.evaluate(()=>__reports.find(r=>r.type==='context'));};
+ const external=bridged.locator('a[href^="https"]');let menu=await context(external);const box=await external.boundingBox();
+ assert.equal(menu.link,'https://example.com/page');assert.equal(menu.fragment,'');assert.equal(menu.selection,'');assert.equal(menu.revision,7);
+ assert.equal(menu.line,3);assert(menu.column>=22&&menu.column<=28,`Link column ${menu.column}`);
+ assert(Math.abs(menu.x-(box.x+box.width/2))<=1&&Math.abs(menu.y-(box.y+box.height/2))<=1,'Context point is not in viewport CSS px');
+ await bridged.evaluate(()=>getSelection().selectAllChildren(document.querySelector('#content p')));
+ menu=await context(external);assert(menu.selection.startsWith('First paragraph'),`Selection ${JSON.stringify(menu.selection)}`);
+ await bridged.evaluate(()=>getSelection().removeAllRanges());
+ menu=await context(bridged.locator('a[href="#title"]'));assert.equal(menu.fragment,'title');assert.equal(menu.line,5);assert.equal(menu.selection,'');
+ // Outside the text column there is no link, and the line still locates the source.
+ menu=await context(bridged.locator('body'),{position:{x:4,y:300}});assert.equal(menu.link,'');assert(menu.line>=1,`Line ${menu.line}`);
+ // The host opens an in-document link through an anchor request.
+ await bridged.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight));assert(await bridged.evaluate(()=>scrollY>100),'Document too short to scroll');
+ await bridged.evaluate(()=>__request(JSON.stringify({type:'anchor',id:'title',revision:7})));
+ await bridged.waitForFunction(()=>Math.abs(document.getElementById('title').getBoundingClientRect().top)<=1);
+ assert.deepEqual(errors,[]);
+ console.log('PASS: context menu reports point, selection, link, fragment and source line; Chromium menu only without the bridge; anchor request');
  console.log('PASS: delayed font preserves last good frame');
  console.log('PASS: retained visible frame during delayed image, stable committed layout, unchanged diagram node');console.log('PASS: headings/front matter/fences, Korean/duplicate IDs, KaTeX, Mermaid, code highlighting, HTML isolation, remote images, partial errors, latest revision');
  }finally{await browser.close();server.close();}
