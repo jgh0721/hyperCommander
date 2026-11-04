@@ -8662,7 +8662,7 @@ private slots:
         Theme.setScheme(fm::style::ThemeManager::Scheme::Light);
         emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(QStringLiteral("기본 라이트"))); DarkPreview->setChecked(false);
         // The custom input takes field values as text: name=value pairs, '-' empty, '!' error, absent = being checked.
-        Page->findChild<QToolButton*>("hc.rules.customToggle")->setChecked(true);
+        Page->findChild<QAbstractButton*>("hc.rules.customToggle")->setChecked(true);
         auto* Name = Page->findChild<QLineEdit*>("hc.rules.sample"); auto* Fields = Page->findChild<QLineEdit*>("hc.rules.sampleFields"); auto* Size = Page->findChild<QLineEdit*>("hc.rules.sampleSize");
         QVERIFY(Name && Fields && Size);
         const auto Owners = [&] { QString Text; for (auto* Label : Card->findChildren<QLabel*>()) if (Label->text().startsWith(QStringLiteral("확인 중:")) || Label->text().startsWith(QStringLiteral("일치 그룹:"))) Text = Label->text(); return Text; };
@@ -12257,7 +12257,7 @@ private slots:
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Manager->GetCurrentColorScheme())); QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, NativeDialogs); });
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(4);
         auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors"));
-        Page->Load(FileColorRules::Empty()); Page->findChild<QPushButton*>("hc.rules.addExamples")->click(); Page->findChild<QRadioButton*>("hc.rules.merge")->click();
+        Page->Load(FileColorExamples::AddTo(FileColorRules::Empty())); Page->findChild<QRadioButton*>("hc.rules.merge")->click();
         auto* Groups = Page->findChild<QListWidget*>("hc.rules.groups"); Groups->setCurrentRow(5); const auto Expected = Page->Document();
         const auto Source = Groups->currentItem()->data(Qt::UserRole); Groups->setFocus(); QTest::keyClick(Groups, Qt::Key_Up, Qt::AltModifier);
         QCOMPARE(Groups->currentRow(), 4); QCOMPARE(Groups->currentItem()->data(Qt::UserRole), Source); QTest::keyClick(Groups, Qt::Key_Down, Qt::AltModifier); QCOMPARE(Page->Document(), Expected);
@@ -12321,9 +12321,9 @@ private slots:
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(4);
         auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors")); auto Doc = FileColorRules::Empty();
         QJsonObject OriginalGroup{{"id", "user-group"}, {"name", "문서"}, {"join", "any"}, {"future", 42}, {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "foo"}}}}};
-        Doc["groups"] = QJsonArray{OriginalGroup}; Page->Load(Doc); auto* Add = Page->findChild<QPushButton*>("hc.rules.addExamples"); QVERIFY(Add); Add->click();
+        Doc["groups"] = QJsonArray{OriginalGroup}; QVERIFY(!Page->findChild<QPushButton*>("hc.rules.addExamples")); Page->Load(FileColorExamples::AddTo(Doc));
         QCOMPARE(Page->Document()["groups"].toArray().size(), 11); QCOMPARE(Page->Document()["groups"].toArray()[0].toObject()["future"], QJsonValue(42)); QVERIFY(Page->Validate());
-        const auto Once = Page->Document(); Add->click(); QCOMPARE(Page->Document(), Once);
+        QCOMPARE(FileColorExamples::AddTo(Page->Document()), Page->Document());
         auto* Table = Page->findChild<QTableWidget*>("hc.rules.previewTable"); QVERIFY(Table); QCOMPARE(Table->rowCount(), 6);
         QCOMPARE(Table->item(0, 2)->text(), QStringLiteral("소스 코드")); QVERIFY(!Table->item(2, 0)->font().strikeOut());
         Page->findChild<QRadioButton*>("hc.rules.merge")->click();
@@ -12345,7 +12345,7 @@ private slots:
             for (auto* Scroll : Page->findChildren<QScrollArea*>()) if (Scroll->isAncestorOf(Table)) Scroll->ensureWidgetVisible(Table);
             QCoreApplication::processEvents(); const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (!Out.isEmpty()) { QDir().mkpath(Out); QVERIFY(Dialog.grab().save(QDir(Out).filePath(QString("preview-%1-%2.png").arg(IsDark ? "dark" : "light").arg(Dialog.devicePixelRatioF())))); }
         }
-        Page->findChild<QToolButton*>("hc.rules.customToggle")->setChecked(true); Page->findChild<QLineEdit*>("hc.rules.sample")->setText("custom.cpp");
+        Page->findChild<QAbstractButton*>("hc.rules.customToggle")->setChecked(true); Page->findChild<QLineEdit*>("hc.rules.sample")->setText("custom.cpp");
         QCOMPARE(Page->Document(), Saved); Dialog.reject(); Repository Restart(QFileInfo(Settings.FileName()).absolutePath()); QCOMPARE(Restart.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
     }
 
@@ -12950,11 +12950,37 @@ private slots:
         QVERIFY2(Table->width() >= Page->width() - 60, qPrintable(QString("%1 / %2").arg(Table->width()).arg(Page->width())));
         QVERIFY2(Conditions->width() >= 520, qPrintable(QString::number(Conditions->width())));
         QCOMPARE(Table->rowCount(), 6); QCOMPARE(Table->verticalScrollBar()->maximum(), 0);
+        // The preview starts at about nine rows; the editor above takes the rest of the height.
+        const int PreviewRows = Table->viewport()->height() / Table->rowHeight(0);
+        QVERIFY2(PreviewRows >= 8 && PreviewRows <= 10, qPrintable(QString::number(PreviewRows)));
+        QVERIFY(Page->findChild<QWidget*>("hc.rules.top")->height() > 316);
         // The selected group's field gets a column; rows the extension decided show a dash.
         QCOMPARE(Table->columnCount(), 4); QCOMPARE(Table->horizontalHeaderItem(2)->text(), QObject::tr("ADS 인터넷 존"));
         const int Installer = RowOf("Qt-6.12.0-windows-x64-installer.exe"), Source = RowOf("BandedPanelView.cpp"); QVERIFY(Installer >= 0 && Source >= 0);
         QCOMPARE(Table->item(Installer, 2)->text(), QObject::tr("확인 중")); QCOMPARE(Table->item(Installer, 3)->text(), QObject::tr("확인 중 · 필드 값 필요"));
         QCOMPARE(Table->item(Source, 2)->text(), QObject::tr("—")); QCOMPARE(Table->item(Source, 3)->text(), QObject::tr("소스 코드"));
+        // Group list and editor share a splitter; the list starts at 270 and keeps its width when moved or widened.
+        auto* Body = Page->findChild<QSplitter*>("hc.rules.bodySplitter"); auto* GroupsCard = Page->findChild<QWidget*>("hc.rules.groupsCard"); QVERIFY(Body && GroupsCard);
+        QVERIFY2(qAbs(GroupsCard->width() - 270) <= 2, qPrintable(QString::number(GroupsCard->width())));
+        QVERIFY(!Page->findChild<QPushButton*>("hc.rules.addExamples"));
+        // The preview columns fill the table, and every header tool has one height.
+        int Columns = 0; for (int C = 0; C < Table->columnCount(); ++C) Columns += Table->horizontalHeader()->sectionSize(C);
+        QVERIFY2(qAbs(Columns - Table->viewport()->width()) <= 1, qPrintable(QString("%1 / %2").arg(Columns).arg(Table->viewport()->width())));
+        const int ToolHeight = Page->findChild<QWidget*>("hc.rules.source.0")->height();
+        for (const auto* Name : {"hc.rules.compute", "hc.rules.pendingLegend", "hc.rules.customToggle", "hc.rules.previewCollapse"}) QVERIFY2(Page->findChild<QWidget*>(Name)->height() == ToolHeight, Name);
+        // Condition tab: "add" at the tab corner, the input help shown as text, centred headers, short join labels.
+        auto* EditorTabs = Page->findChild<QTabWidget*>("hc.rules.editorTabs"); auto* AddButton = Page->findChild<QWidget*>("hc.rules.addCondition"); auto* Corner = EditorTabs->cornerWidget(Qt::TopRightCorner);
+        QVERIFY(Corner && Corner->isAncestorOf(AddButton)); // kept 2 px off the tab line
+        QVERIFY2(AddButton->geometry().bottom() <= Corner->height() - 3, qPrintable(QString("%1 / %2").arg(AddButton->geometry().bottom()).arg(Corner->height())));
+        auto* Help = Page->findChild<QLabel*>("hc.rules.patternHelp"); QVERIFY(Help && Help->isVisible() && Help->text().contains(QObject::tr("와일드카드")));
+        QCOMPARE(Conditions->horizontalHeader()->defaultAlignment(), Qt::Alignment(Qt::AlignCenter));
+        QCOMPARE(Page->findChild<QPushButton*>("hc.rules.any")->text(), QObject::tr("일부 일치")); QCOMPARE(Page->findChild<QPushButton*>("hc.rules.all")->text(), QObject::tr("모두 일치"));
+        qobject_cast<QPushButton*>(Page->findChild<QWidget*>("hc.rules.addCondition"))->click();
+        QCOMPARE(Conditions->rowCount(), 3); QCOMPARE(EditorTabs->tabText(0), QObject::tr("조건"));
+        hc::ui::FileColorConditionRow::CellEditor<QPushButton>(Conditions, 2, 3)->click(); QCOMPARE(Conditions->rowCount(), 2);
+        Body->setSizes({320, Body->width() - 320 - Body->handleWidth()}); QCoreApplication::processEvents();
+        QVERIFY2(qAbs(GroupsCard->width() - 320) <= 2, qPrintable(QString::number(GroupsCard->width())));
+        Body->setSizes({270, Body->width() - 270 - Body->handleWidth()}); QCoreApplication::processEvents();
         Save(&Dialog, "layout-default-light");
 
         // Condition cells: every editor sits 4 px inside its cell with one height.
@@ -12969,10 +12995,21 @@ private slots:
         Save(Page->findChild<QWidget*>("hc.rules.editorCard"), "layout-conditions-light");
 
         // Appearance tab: colours left, font effects right.
-        auto* Tabs = Page->findChild<QTabWidget*>("hc.rules.editorTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->tabText(0), QObject::tr("조건 2"));
+        auto* Tabs = Page->findChild<QTabWidget*>("hc.rules.editorTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->tabText(0), QObject::tr("조건"));
         Tabs->setCurrentIndex(1); QCoreApplication::processEvents();
         auto* Light = Page->findChild<QWidget*>("hc.rules.color.0"); auto* Bold = Page->findChild<QWidget*>("hc.rules.font.bold");
         QVERIFY(Light->isVisible() && Bold->isVisible()); QVERIFY(Bold->mapTo(Page, QPoint()).x() > Light->mapTo(Page, QPoint()).x() + Light->width());
+        // Colour buttons fit their content and the effect buttons share one width; neither follows the window width.
+        QVERIFY2(Light->width() <= 160, qPrintable(QString::number(Light->width())));
+        for (int I = 1; I < 4; ++I) QCOMPARE(Page->findChild<QWidget*>("hc.rules.color." + QString::number(I))->width(), Light->width());
+        for (const auto* Key : {"italic", "underline", "strike", "dim"}) QCOMPARE(Page->findChild<QWidget*>(QString("hc.rules.font.") + Key)->width(), Bold->width());
+        // The appearance tab fits the default editor width without a horizontal scroll bar.
+        QCOMPARE(Page->findChild<QScrollArea*>("hc.rules.appearanceScroll")->horizontalScrollBar()->maximum(), 0);
+        {
+            const int ColourWidth = Light->width(), EffectWidth = Bold->width(); const auto Before = Dialog.size();
+            Dialog.resize(Before + QSize(300, 0)); QCoreApplication::processEvents();
+            QCOMPARE(Light->width(), ColourWidth); QCOMPARE(Bold->width(), EffectWidth); Dialog.resize(Before); QCoreApplication::processEvents();
+        }
         Save(&Dialog, "layout-appearance-light"); Tabs->setCurrentIndex(0);
 
         // Current folder: the panel's rows, then their slow values on request.
@@ -12983,13 +13020,14 @@ private slots:
         auto* Compute = Page->findChild<QPushButton*>("hc.rules.compute"); QVERIFY(Compute->isEnabled()); Compute->click();
         QTRY_COMPARE_WITH_TIMEOUT(Table->item(RowOf("setup.exe"), 3)->text(), QString("인터넷에서 받은 실행 파일"), 10000);
         QTRY_COMPARE(Table->item(RowOf("tool.exe"), 2)->text(), QObject::tr("없음"));
+        { const int Setup = RowOf("setup.exe"); QVERIFY2(Table->columnWidth(2) >= QFontMetrics(Table->item(Setup, 2)->font()).horizontalAdvance(Table->item(Setup, 2)->text()), qPrintable(QString::number(Table->columnWidth(2)))); }
         QCOMPARE(Table->item(RowOf("tool.exe"), 3)->text(), QObject::tr("목록 기본값"));
         QCOMPARE(Table->item(RowOf("notes.txt"), 2)->text(), QObject::tr("없음")); QCOMPARE(Table->item(RowOf("notes.txt"), 3)->text(), QObject::tr("목록 기본값"));
         QTRY_VERIFY(Status->text().contains(QObject::tr("계산 완료"))); QVERIFY(!Compute->isEnabled());
         Save(&Dialog, "layout-folder-light");
 
         // Custom drawer: one row per field; the rows write the sample text the evaluation reads.
-        Page->findChild<QToolButton*>("hc.rules.customToggle")->setChecked(true); QCoreApplication::processEvents();
+        Page->findChild<QAbstractButton*>("hc.rules.customToggle")->setChecked(true); QCoreApplication::processEvents();
         QVERIFY(Page->findChild<QWidget*>("hc.rules.customPanel")->isVisible());
         Page->findChild<QLineEdit*>("hc.rules.sample")->setText("setup_2026.exe");
         auto* State = Page->findChild<QComboBox*>("hc.rules.sampleState.file.alternateDataStream.zone"); auto* Value = Page->findChild<QComboBox*>("hc.rules.sampleValue.file.alternateDataStream.zone");
@@ -13002,15 +13040,15 @@ private slots:
         Save(Page->findChild<QWidget*>("hc.rules.previewCard"), "layout-custom-light");
         State->setCurrentIndex(3); QCOMPARE(Sample->text(), QString("file.alternateDataStream.zone=!"));
         QTRY_VERIFY2(Owners().contains(QObject::tr("오류 값은 조건에 일치하지 않는 것으로 봅니다: ADS 인터넷 존")), qPrintable(Owners()));
-        Page->findChild<QToolButton*>("hc.rules.customToggle")->setChecked(false);
+        Page->findChild<QAbstractButton*>("hc.rules.customToggle")->setChecked(false);
 
         // Pending colours: a popover from the legend, part of the page for search and accessibility.
-        Page->findChild<QToolButton*>("hc.rules.pendingLegend")->click();
+        Page->findChild<QAbstractButton*>("hc.rules.pendingLegend")->click();
         auto* Popover = Page->findChild<QFrame*>("hc.rules.pendingPopover"); QTRY_VERIFY(Popover && Popover->isVisible());
         QVERIFY(Popover->findChild<QWidget*>("hc.rules.pending.0")); Save(Popover, "layout-pending-light"); Popover->hide();
 
         // Collapse and restore the preview from its header.
-        auto* Collapse = Page->findChild<QToolButton*>("hc.rules.previewCollapse"); Collapse->click(); QTRY_VERIFY(!Table->isVisible());
+        auto* Collapse = Page->findChild<QAbstractButton*>("hc.rules.previewCollapse"); Collapse->click(); QTRY_VERIFY(!Table->isVisible());
         QVERIFY(Page->findChild<QAction*>("hc.rules.collapseAction")->isChecked()); Collapse->click(); QTRY_VERIFY(Table->isVisible());
 
         // The settings search reaches menu actions and the popover.

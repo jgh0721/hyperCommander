@@ -23,5 +23,21 @@ public:
         return Result;
     }
     static QJsonArray Groups() { return hc::defaults::ExampleFileGroups(); }
+    // Document with the example groups it lacks appended after its own (names kept unique, 256 groups at most).
+    // A v1 document is upgraded first, as the examples use v2 conditions. Existing groups and order stay.
+    static QJsonObject AddTo(QJsonObject Document) {
+        auto Groups = Document["groups"].toArray(); QSet<QString> Ids, Names;
+        for (const auto Value : Groups) { Ids.insert(Value.toObject()["id"].toString()); Names.insert(Value.toObject()["name"].toString().toCaseFolded()); }
+        QJsonArray Added;
+        for (const auto Value : FileColorExamples::Groups()) {
+            auto G = Value.toObject(); if (Ids.contains(G["id"].toString()) || Groups.size() + Added.size() >= 256) continue;
+            const auto Base = G["name"].toString(); auto Name = Base; int N = 2; while (Names.contains(Name.toCaseFolded())) Name = Base + " " + QString::number(N++);
+            G["name"] = Name; Names.insert(Name.toCaseFolded()); Added.append(G);
+        }
+        if (Added.isEmpty()) return Document;
+        if (Document["version"] == QJsonValue(1)) Document = FileColorRules::Upgrade(Document);
+        Groups = Document["groups"].toArray(); for (const auto Value : Added) Groups.append(Value); Document["groups"] = Groups;
+        return Document;
+    }
 };
 } // namespace hc::settings

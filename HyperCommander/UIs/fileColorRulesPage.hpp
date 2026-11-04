@@ -13,6 +13,7 @@
 #include <fmwidgets/DialogHeader.h>
 #include <fmstyle/StyleProps.h>
 #include <fmstyle/ThemeManager.h>
+#include <fmstyle/StylePaint.h>
 #include "fileColorConditionRow.hpp"
 #include "commonLibs/columns/columnQueryEngine.hpp"
 #include "UniqueLibs/columnPluginFields.hpp"
@@ -110,7 +111,7 @@ public:
             connect(Item, &QPushButton::clicked, this, Action); return Item;
         };
         auto* Files = new QHBoxLayout; Files->setSpacing(6); Heading->addLayout(Files);
-        auto* Examples = Button(tr("기본 예제 그룹 추가"), Files, [this] { addExamples(); }); Examples->setObjectName("hc.rules.addExamples"); Examples->setToolTip(tr("10가지 예제 중 아직 없는 그룹을 뒤에 추가합니다. 기존 그룹과 우선순위는 유지합니다."));
+        // No "add example groups" action: a first installation already registers the default groups.
         // Rarely used file actions and the rule-wide pending colours live in one menu (plan 3.3).
         more_ = new QToolButton(this); more_->setObjectName("hc.rules.more"); more_->setText(tr("⋯")); more_->setAccessibleName(tr("가져오기·내보내기 등 더 보기"));
         more_->setToolTip(tr("가져오기 · 내보내기 · 기존 규칙 가져오기 · 확인 중 항목 색")); more_->setPopupMode(QToolButton::InstantPopup); Files->addWidget(more_);
@@ -139,9 +140,13 @@ public:
         splitter_ = new QSplitter(Qt::Vertical, this); splitter_->setObjectName("hc.rules.splitter"); splitter_->setChildrenCollapsible(false); splitter_->setHandleWidth(10);
         splitter_->setAccessibleName(tr("편집과 미리보기 크기 조절")); Layout->addWidget(splitter_, 1);
         auto* Top = new QWidget(splitter_); Top->setObjectName("hc.rules.top"); Top->setMinimumHeight(200); splitter_->addWidget(Top);
-        auto* Body = new QHBoxLayout(Top); Body->setContentsMargins(0, 0, 0, 0); Body->setSpacing(12);
-        auto* GroupsCard = new fm::ui::Card(tr("그룹"), Top); GroupsCard->setObjectName("hc.rules.groupsCard"); GroupsCard->setMeta(tr("위에서부터 적용"));
-        GroupsCard->setFixedWidth(236); Body->addWidget(GroupsCard);
+        // The group list and the editor share a horizontal splitter; the list keeps its width when the window grows.
+        auto* Body = new QHBoxLayout(Top); Body->setContentsMargins(0, 0, 0, 0); Body->setSpacing(0);
+        bodySplitter_ = new QSplitter(Qt::Horizontal, Top); bodySplitter_->setObjectName("hc.rules.bodySplitter"); bodySplitter_->setChildrenCollapsible(false); bodySplitter_->setHandleWidth(12);
+        bodySplitter_->setAccessibleName(tr("그룹 목록과 그룹 편집 크기 조절")); Body->addWidget(bodySplitter_);
+        auto* GroupsCard = new fm::ui::Card(tr("그룹"), bodySplitter_); GroupsCard->setObjectName("hc.rules.groupsCard"); GroupsCard->setMeta(tr("위에서부터 적용"));
+        GroupsCard->setMinimumWidth(200); bodySplitter_->addWidget(GroupsCard);
+        connect(bodySplitter_, &QSplitter::splitterMoved, this, [this] { const bool WasLoading = loading_; loading_ = true; updateGroupItems(); loading_ = WasLoading; });
         auto* GroupRows = new QVBoxLayout(GroupsCard); GroupRows->setContentsMargins(8, 8, 8, 10);
         // Compact icon actions live in the card header band.
         auto* ActionBox = new QWidget(GroupsCard); auto* Actions = new QHBoxLayout(ActionBox); Actions->setContentsMargins(0, 0, 0, 0); Actions->setSpacing(4);
@@ -160,14 +165,15 @@ public:
         list_->setItemDelegate(new FileColorGroupDelegate(list_->itemDelegate(), list_)); list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         GroupRows->addWidget(new QLabel(tr("여러 그룹에 해당할 때"), GroupsCard));
         mode_ = new QButtonGroup(this); mode_->setObjectName("hc.rules.mode");
-        // Two lines: the 236 px card cannot hold both labels side by side.
+        // Two lines: a narrow card cannot hold both labels side by side.
         auto* ModeRow = new QVBoxLayout; ModeRow->setSpacing(2); GroupRows->addLayout(ModeRow);
         auto* First = new QRadioButton(tr("위 그룹 하나만"), GroupsCard); First->setObjectName("hc.rules.first"); mode_->addButton(First, 0); ModeRow->addWidget(First);
         auto* Merge = new QRadioButton(tr("속성별로 합치기"), GroupsCard); Merge->setObjectName("hc.rules.merge"); mode_->addButton(Merge, 1); ModeRow->addWidget(Merge);
         First->setToolTip(tr("처음 일치한 그룹을 적용합니다.")); Merge->setToolTip(tr("각 속성을 지정한 첫 그룹의 값을 사용합니다."));
 
         // Group editor: name and join on one line, then the condition and appearance tabs.
-        auto* EditorCard = new fm::ui::Card(Top); EditorCard->setObjectName("hc.rules.editorCard"); Body->addWidget(EditorCard, 1);
+        auto* EditorCard = new fm::ui::Card(bodySplitter_); EditorCard->setObjectName("hc.rules.editorCard"); bodySplitter_->addWidget(EditorCard);
+        bodySplitter_->setStretchFactor(0, 0); bodySplitter_->setStretchFactor(1, 1);
         editor_ = EditorCard;
         auto* Editor = new QVBoxLayout(EditorCard); Editor->setContentsMargins(14, 12, 14, 10); Editor->setSpacing(8);
         auto* NameRow = new QHBoxLayout; NameRow->setSpacing(8); Editor->addLayout(NameRow);
@@ -181,7 +187,8 @@ public:
         NameRow->addSpacing(6); NameRow->addWidget(new QLabel(tr("다음 조건 중"), EditorCard));
         join_ = new QButtonGroup(this);
         auto* JoinButtons = new QHBoxLayout; JoinButtons->setSpacing(0); NameRow->addLayout(JoinButtons); QList<QAbstractButton*> Joins;
-        for (int I = 0; I < 2; ++I) { auto* Choice = new QPushButton(I ? tr("모두 맞으면") : tr("하나라도 맞으면"), EditorCard); Choice->setCheckable(true); Choice->setAutoDefault(false); Choice->setObjectName(I ? "hc.rules.all" : "hc.rules.any"); join_->addButton(Choice, I); JoinButtons->addWidget(Choice); Joins.append(Choice); }
+        for (int I = 0; I < 2; ++I) { auto* Choice = new QPushButton(I ? tr("모두 일치") : tr("일부 일치"), EditorCard); Choice->setCheckable(true); Choice->setAutoDefault(false); Choice->setObjectName(I ? "hc.rules.all" : "hc.rules.any"); join_->addButton(Choice, I); JoinButtons->addWidget(Choice); Joins.append(Choice);
+            Choice->setToolTip(I ? tr("모든 조건이 맞으면 이 그룹을 적용합니다.") : tr("조건 중 하나라도 맞으면 이 그룹을 적용합니다.")); }
         fm::style::setSegments(Joins);
         editorTabs_ = new QTabWidget(EditorCard); editorTabs_->setObjectName("hc.rules.editorTabs"); editorTabs_->setDocumentMode(true); Editor->addWidget(editorTabs_, 1);
         auto* ConditionsPage = new QWidget; ConditionsPage->setObjectName("hc.rules.conditionsPage"); editorTabs_->addTab(Scrolled(ConditionsPage, "hc.rules.conditionsScroll"), tr("조건"));
@@ -189,40 +196,44 @@ public:
         conditions_ = new QTableWidget(ConditionsPage); conditions_->setObjectName("hc.rules.conditions"); conditions_->setColumnCount(4); conditions_->verticalHeader()->hide();
         conditions_->setHorizontalHeaderLabels({tr("항목"), tr("비교 방법"), tr("값"), QString{}});
         conditions_->horizontalHeaderItem(3)->setData(Qt::AccessibleTextRole, tr("삭제"));
-        conditions_->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        conditions_->horizontalHeader()->setDefaultAlignment(Qt::AlignCenter);
         conditions_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch); conditions_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed); conditions_->setColumnWidth(3, 36); conditions_->setEditTriggers(QAbstractItemView::NoEditTriggers);
         conditions_->setColumnWidth(0, qMax(150, QFontMetrics(conditions_->font()).horizontalAdvance(tr("파일명 정규화")) + 52)); conditions_->setColumnWidth(1, 124);
         conditions_->setShowGrid(false); conditions_->setSelectionBehavior(QAbstractItemView::SelectRows); conditions_->setSelectionMode(QAbstractItemView::NoSelection);
         Definition->addWidget(conditions_);
-        auto* ConditionButtons = new QHBoxLayout; ConditionButtons->setSpacing(10); Definition->addLayout(ConditionButtons);
-        auto* AddCondition = Button(tr("조건 추가(&D)"), ConditionButtons, [this] { if (conditionRows_.size() >= 32) return; ensureVersion2(); appendCondition(settings::FileColorRules::NormalizeCondition({{"type", "extension"}, {"value", "txt"}}, 1)); storeForm(); });
-        AddCondition->setObjectName("hc.rules.addCondition");
+        // "Add condition" sits at the top right of the tabs, beside the condition tab it acts on.
+        // The tab widget sets a corner widget's bottom on the tab line; a 2 px bottom margin keeps the button off it.
+        auto* Corner = new QWidget(editorTabs_); Corner->setObjectName("hc.rules.tabCorner");
+        auto* CornerLayout = new QHBoxLayout(Corner); CornerLayout->setContentsMargins(0, 0, 0, 2); CornerLayout->setSpacing(0);
+        auto* AddCondition = new fm::ui::Button(tr("조건 추가(&D)"), Corner); AddCondition->setObjectName("hc.rules.addCondition"); AddCondition->setCompact(true); AddCondition->setAutoDefault(false);
+        fm::style::setSizeVariant(AddCondition, fm::style::SizeVariant::Small); CornerLayout->addWidget(AddCondition); editorTabs_->setCornerWidget(Corner, Qt::TopRightCorner);
+        connect(AddCondition, &QPushButton::clicked, this, [this] {
+            if (conditionRows_.size() >= 32) return; editorTabs_->setCurrentIndex(0); ensureVersion2();
+            appendCondition(settings::FileColorRules::NormalizeCondition({{"type", "extension"}, {"value", "txt"}}, 1)); storeForm();
+        });
         // Design 8 B: what the slow conditions of this group cost, and what is shown meanwhile (full text in the tooltip).
-        cost_ = new QLabel(ConditionsPage); cost_->setObjectName("hc.rules.cost"); cost_->hide(); cost_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); ConditionButtons->addWidget(cost_, 1);
-        ConditionButtons->addStretch();
-        // The pattern rules live in a tooltip so the condition table keeps the height (plan 3.3).
-        auto* PatternHelp = new QToolButton(ConditionsPage); PatternHelp->setObjectName("hc.rules.patternHelp"); PatternHelp->setText(tr("입력 도움말")); PatternHelp->setAutoRaise(true);
-        PatternHelp->setToolTip(tr("확장자는 마지막 . 뒤, 파일명은 확장자를 포함한 전체 이름입니다.\n와일드카드: 전체 일치(*, ?) · 정규표현식: 부분 일치(전체는 \\A…\\z)"));
-        connect(PatternHelp, &QToolButton::clicked, this, [PatternHelp] { QToolTip::showText(PatternHelp->mapToGlobal(QPoint(0, PatternHelp->height())), PatternHelp->toolTip(), PatternHelp); });
-        ConditionButtons->addWidget(PatternHelp); Definition->addStretch();
+        cost_ = new QLabel(ConditionsPage); cost_->setObjectName("hc.rules.cost"); cost_->hide(); cost_->setWordWrap(true); Definition->addWidget(cost_);
+        auto* PatternHelp = new QLabel(tr("확장자는 마지막 . 뒤, 파일명은 확장자를 포함한 전체 이름입니다.\n와일드카드: 전체 일치(*, ?) · 정규표현식: 부분 일치(전체는 \\A…\\z)"), ConditionsPage);
+        PatternHelp->setObjectName("hc.rules.patternHelp"); PatternHelp->setWordWrap(true); Definition->addWidget(PatternHelp); Definition->addStretch();
         conditions_->setAccessibleName(tr("그룹 조건")); conditions_->setToolTip(tr("확장자: txt, cpp · 무확장자: <none>\n파일명 패턴: CMakeLists.txt; *.cmake · 크기: 단위와 비교 방법 선택\n속성: 비트 값 또는 메뉴 선택 · 날짜: UTC 기준 · 확인되지 않은 날짜는 일치하지 않습니다."));
 
         auto* AppearancePage = new QWidget; AppearancePage->setObjectName("hc.rules.appearancePage"); editorTabs_->addTab(Scrolled(AppearancePage, "hc.rules.appearanceScroll"), tr("색상 · 글꼴"));
-        auto* AppearanceGrid = new QGridLayout(AppearancePage); AppearanceGrid->setContentsMargins(0, 10, 0, 0); AppearanceGrid->setHorizontalSpacing(18); AppearanceGrid->setVerticalSpacing(6);
+        auto* AppearanceGrid = new QGridLayout(AppearancePage); AppearanceGrid->setContentsMargins(0, 10, 0, 0); AppearanceGrid->setHorizontalSpacing(14); AppearanceGrid->setVerticalSpacing(6);
         auto* ColorColumn = new QVBoxLayout; ColorColumn->setSpacing(6); auto* FontColumn = new QVBoxLayout; FontColumn->setSpacing(6);
         AppearanceGrid->addLayout(ColorColumn, 0, 0); AppearanceGrid->addLayout(FontColumn, 0, 1);
-        AppearanceGrid->setColumnStretch(0, 1); AppearanceGrid->setColumnStretch(1, 1); AppearanceGrid->setRowStretch(1, 1);
+        // Both columns keep their natural width; a wider window only widens the empty column on the right.
+        AppearanceGrid->setColumnStretch(2, 1); AppearanceGrid->setRowStretch(1, 1);
         auto* Colors = new QGridLayout; Colors->setHorizontalSpacing(8); Colors->setVerticalSpacing(6); ColorColumn->addLayout(Colors);
-        Colors->addWidget(new QLabel(tr("라이트 테마"), AppearancePage), 0, 1); Colors->addWidget(new QLabel(tr("다크 테마"), AppearancePage), 0, 2);
+        Colors->addWidget(new QLabel(tr("라이트 테마"), AppearancePage), 0, 1, Qt::AlignHCenter); Colors->addWidget(new QLabel(tr("다크 테마"), AppearancePage), 0, 2, Qt::AlignHCenter);
         for (int I = 0; I < 4; ++I) {
             colors_[I] = new fm::ui::ColorPickButton(AppearancePage); colors_[I]->setAllowNone(true); colors_[I]->setAutoDefault(false);
             colors_[I]->setObjectName("hc.rules.color." + QString::number(I));
             colors_[I]->setAccessibleName((I % 2 ? tr("다크 ") : tr("라이트 ")) + (I / 2 ? tr("배경색") : tr("글자색")));
-            Colors->addWidget(colors_[I], I / 2 + 1, I % 2 + 1);
+            fitColorButton(colors_[I]); Colors->addWidget(colors_[I], I / 2 + 1, I % 2 + 1);
             connect(colors_[I], &fm::ui::ColorPickButton::colorChanged, this, [this] { storeForm(); });
         }
         Colors->addWidget(new QLabel(tr("글자색"), AppearancePage), 1, 0); Colors->addWidget(new QLabel(tr("배경색"), AppearancePage), 2, 0);
-        Colors->setColumnStretch(1, 1); Colors->setColumnStretch(2, 1);
+        Colors->setColumnStretch(3, 1);
         autoDark_ = new QCheckBox(tr("라이트 색에서 다크 색 자동 계산"), AppearancePage); autoDark_->setObjectName("hc.rules.autoDark"); ColorColumn->addWidget(autoDark_);
         autoDark_->setToolTip(tr("색조·채도·투명도를 유지하고 밝기를 다크용으로 조정합니다. 끄면 저장된 수동 다크 색으로 돌아갑니다."));
         connect(autoDark_, &QCheckBox::toggled, this, [this] { if (loading_) return; ensureVersion2(); storeForm(); refreshColors(); });
@@ -233,19 +244,26 @@ public:
             fonts_[I] = new FileFontEffectButton(FontNames[I], AppearancePage); fonts_[I]->setObjectName("hc.rules.font." + fontKeys_[I]); FontRow->addWidget(fonts_[I], I / 2, I % 2);
             connect(fonts_[I], &QPushButton::clicked, this, [this, I] { fonts_[I]->SetState((fonts_[I]->State() + 1) % 3); storeForm(); });
         }
+        // One width for the five effect buttons (their widest "· 기본" label), never stretched by the window.
+        int FontWidth = 0; for (auto* Effect : fonts_) FontWidth = qMax(FontWidth, Effect->sizeHint().width());
+        for (auto* Effect : fonts_) Effect->setFixedWidth(FontWidth);
+        FontRow->setColumnStretch(2, 1);
         border_ = new QComboBox(AppearancePage); border_->setObjectName("hc.rules.border"); border_->setAccessibleName(tr("파일 행 전체 테두리"));
         const QStringList BorderNames{tr("기본값"), tr("없음"), tr("실선"), tr("파선"), tr("점선"), tr("일점쇄선"), tr("이점쇄선")};
         const QStringList BorderKeys{"", "none", "solid", "dash", "dot", "dashDot", "dashDotDot"};
         for (int I = 0; I < BorderNames.size(); ++I) border_->addItem(BorderNames[I], BorderKeys[I]);
         border_->setToolTip(tr("파일 행 전체에 테두리를 표시합니다. 색상은 파일의 글자색을 따릅니다. 기본값은 아래 그룹을 따르고 없음은 테두리를 해제합니다."));
-        auto* BorderRow = new QHBoxLayout; BorderRow->addWidget(new QLabel(tr("행 테두리"), AppearancePage)); BorderRow->addWidget(border_, 1); FontRow->addLayout(BorderRow, 2, 1);
+        // Its own line under the effects, as wide as one effect button, so it never widens the button columns.
+        border_->setFixedWidth(FontWidth);
+        auto* BorderRow = new QHBoxLayout; BorderRow->addWidget(new QLabel(tr("행 테두리"), AppearancePage)); BorderRow->addWidget(border_); BorderRow->addStretch(); FontRow->addLayout(BorderRow, 3, 0, 1, 3);
         connect(border_, &QComboBox::currentIndexChanged, this, [this] { storeForm(); });
         auto* DefaultHelp = new QLabel(tr("지정하지 않은 색·글꼴은 아래 그룹 또는 목록 기본값을 따릅니다."), AppearancePage); DefaultHelp->setWordWrap(true); FontColumn->addWidget(DefaultHelp);
         ColorColumn->addStretch(); FontColumn->addStretch();
 
         // Preview: full page width under the splitter handle (plan 3.1).
         previewCard_ = new fm::ui::Card(tr("미리보기"), splitter_); previewCard_->setObjectName("hc.rules.previewCard"); previewCard_->setMinimumHeight(120); splitter_->addWidget(previewCard_);
-        splitter_->setStretchFactor(0, 0); splitter_->setStretchFactor(1, 1);
+        // The editor takes what the window gains; the preview keeps its rows (see applyInitialSplit).
+        splitter_->setStretchFactor(0, 1); splitter_->setStretchFactor(1, 0);
         auto* PreviewTools = new QWidget(previewCard_); auto* Tools = new QHBoxLayout(PreviewTools); Tools->setContentsMargins(0, 0, 0, 0); Tools->setSpacing(6);
         source_ = new QButtonGroup(this); auto* SourceRow = new QHBoxLayout; SourceRow->setSpacing(0); Tools->addLayout(SourceRow); QList<QAbstractButton*> Sources;
         const QStringList SourceNames{tr("예제"), tr("현재 폴더"), tr("선택 항목")};
@@ -256,25 +274,32 @@ public:
         fm::style::setSegments(Sources); source_->button(0)->setChecked(true);
         source_->button(1)->setToolTip(tr("설정 창을 연 패널의 현재 폴더에서 최대 50개를 씁니다.")); source_->button(2)->setToolTip(tr("설정 창을 연 패널에서 선택한 항목을 씁니다."));
         connect(source_, &QButtonGroup::idClicked, this, [this] { stopComputation(); updatePreview(); });
-        compute_ = new fm::ui::Button(tr("값 계산"), PreviewTools); compute_->setObjectName("hc.rules.compute"); compute_->setCompact(true); compute_->setAutoDefault(false);
+        // Every tool in the preview header is the same small button as the source segments, one height for all.
+        const auto Tool = [PreviewTools](const QString& Text, const char* Name) {
+            auto* Item = new fm::ui::Button(Text, PreviewTools); Item->setObjectName(Name); Item->setCompact(true); Item->setAutoDefault(false);
+            fm::style::setSizeVariant(Item, fm::style::SizeVariant::Small); return Item;
+        };
+        compute_ = Tool(tr("값 계산"), "hc.rules.compute");
         compute_->setToolTip(tr("표본의 느린 필드·플러그인 필드 값을 읽습니다. 네트워크 위치는 「설정 → 파일 패널」의 범위를 따릅니다.")); Tools->addWidget(compute_);
         connect(compute_, &QPushButton::clicked, this, [this] { computeSampleFields(); });
         sampleStatus_ = new QLabel(PreviewTools); sampleStatus_->setObjectName("hc.rules.sampleStatus"); sampleStatus_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); Tools->addWidget(sampleStatus_, 1);
-        pendingLegend_ = new QToolButton(PreviewTools); pendingLegend_->setObjectName("hc.rules.pendingLegend"); pendingLegend_->setText(tr("확인 중")); pendingLegend_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        pendingLegend_ = Tool(tr("확인 중"), "hc.rules.pendingLegend");
         pendingLegend_->setAccessibleName(tr("확인 중 항목 색")); pendingLegend_->setToolTip(tr("필드 값을 확인하기 전인 행의 색입니다. 눌러서 바꿉니다.")); Tools->addWidget(pendingLegend_);
-        connect(pendingLegend_, &QToolButton::clicked, this, [this] { showPendingPopover(); });
+        connect(pendingLegend_, &QPushButton::clicked, this, [this] { showPendingPopover(); });
         previewDark_ = new QCheckBox(tr("다크"), PreviewTools); previewDark_->setObjectName("hc.rules.previewDark"); previewDark_->setChecked(fm::style::isDarkVariant(fm::style::ThemeManager::instance().effectiveVariant())); Tools->addWidget(previewDark_);
-        auto* CustomToggle = new QToolButton(PreviewTools); CustomToggle->setText(tr("직접 입력")); CustomToggle->setObjectName("hc.rules.customToggle"); CustomToggle->setCheckable(true);
-        CustomToggle->setToolTip(tr("파일 이름·크기·필드 값을 직접 정해 결과를 확인합니다.")); CustomToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon); CustomToggle->setArrowType(Qt::LeftArrow); Tools->addWidget(CustomToggle);
-        previewCollapse_ = new QToolButton(PreviewTools); previewCollapse_->setObjectName("hc.rules.previewCollapse"); previewCollapse_->setCheckable(true); previewCollapse_->setArrowType(Qt::DownArrow);
+        auto* CustomToggle = Tool(tr("직접 입력"), "hc.rules.customToggle"); CustomToggle->setCheckable(true);
+        CustomToggle->setToolTip(tr("파일 이름·크기·필드 값을 직접 정해 결과를 확인합니다.")); Tools->addWidget(CustomToggle);
+        previewCollapse_ = Tool(tr("접기"), "hc.rules.previewCollapse"); previewCollapse_->setCheckable(true);
         previewCollapse_->setAccessibleName(tr("미리보기 접기")); previewCollapse_->setToolTip(tr("미리보기 접기")); Tools->addWidget(previewCollapse_);
-        connect(previewCollapse_, &QToolButton::toggled, this, [this](bool On) { setPreviewCollapsed(On); });
+        connect(previewCollapse_, &QPushButton::toggled, this, [this](bool On) { setPreviewCollapsed(On); });
+        const int ToolHeight = source_->button(0)->sizeHint().height();
+        for (auto* Item : {compute_, pendingLegend_, CustomToggle, previewCollapse_}) Item->setFixedHeight(ToolHeight);
         previewCard_->setHeaderWidget(PreviewTools);
         auto* PreviewRows = new QVBoxLayout(previewCard_); PreviewRows->setContentsMargins(10, 8, 10, 10);
         previewBody_ = new QWidget(previewCard_); auto* BodyRow = new QHBoxLayout(previewBody_); BodyRow->setContentsMargins(0, 0, 0, 0); BodyRow->setSpacing(10); PreviewRows->addWidget(previewBody_, 1);
         previewTable_ = new QTableWidget(6, 3, previewBody_); previewTable_->setObjectName("hc.rules.previewTable"); previewTable_->setAccessibleName(tr("표본 파일과 적용 그룹"));
         previewTable_->setHorizontalHeaderLabels({tr("이름"), tr("크기"), tr("적용된 그룹")}); previewTable_->verticalHeader()->hide(); previewTable_->setShowGrid(false);
-        previewTable_->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        previewTable_->horizontalHeader()->setDefaultAlignment(Qt::AlignCenter);
         previewTable_->setEditTriggers(QAbstractItemView::NoEditTriggers); previewTable_->setSelectionBehavior(QAbstractItemView::SelectRows); previewTable_->setSelectionMode(QAbstractItemView::SingleSelection);
         previewTable_->setToolTip(tr("행을 선택하면 선택색을 확인할 수 있습니다. 예제 기준: 2026-01-15 12:00 UTC"));
         previewTable_->setItemDelegate(new FileRulePreviewDelegate([this](int Row, bool Selected, bool Name) { return recordPair(previewDark_->isChecked(), previewStyles_.value(Row), Selected, Name); },
@@ -284,7 +309,7 @@ public:
         customPanel_ = new QScrollArea(previewBody_); customPanel_->setObjectName("hc.rules.customPanel"); customPanel_->setWidgetResizable(true); customPanel_->setFrameShape(QFrame::NoFrame);
         customPanel_->setFixedWidth(300); customPanel_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); customPanel_->hide(); BodyRow->addWidget(customPanel_);
         auto* Custom = new QWidget; customPanel_->setWidget(Custom); auto* CustomLayout = new QVBoxLayout(Custom); CustomLayout->setContentsMargins(0, 0, 6, 0); CustomLayout->setSpacing(6);
-        connect(CustomToggle, &QToolButton::toggled, this, [this, CustomToggle](bool Open) { customPanel_->setVisible(Open); CustomToggle->setArrowType(Open ? Qt::RightArrow : Qt::LeftArrow); });
+        connect(CustomToggle, &QPushButton::toggled, this, [this](bool Open) { customPanel_->setVisible(Open); });
         auto* PreviewRow = new QHBoxLayout; CustomLayout->addLayout(PreviewRow);
         previewName_ = new QLineEdit("sample.txt", Custom); previewName_->setAccessibleName(tr("미리보기 파일 이름")); previewName_->setObjectName("hc.rules.sample"); PreviewRow->addWidget(previewName_, 1);
         previewFolder_ = new QCheckBox(tr("폴더"), Custom); PreviewRow->addWidget(previewFolder_);
@@ -322,13 +347,13 @@ public:
         auto* PendingReset = new QPushButton(tr("기본값으로"), pendingPopover_); PendingReset->setObjectName("hc.rules.pendingReset"); PendingReset->setAutoDefault(false);
         fm::style::setButtonRole(PendingReset, fm::style::ButtonRole::Link); PendingTitle->addWidget(PendingReset);
         auto* PendingGrid = new QGridLayout; PendingGrid->setHorizontalSpacing(8); PendingRows->addLayout(PendingGrid);
-        PendingGrid->addWidget(new QLabel(tr("라이트 테마"), pendingPopover_), 0, 1); PendingGrid->addWidget(new QLabel(tr("다크 테마"), pendingPopover_), 0, 2);
+        PendingGrid->addWidget(new QLabel(tr("라이트 테마"), pendingPopover_), 0, 1, Qt::AlignHCenter); PendingGrid->addWidget(new QLabel(tr("다크 테마"), pendingPopover_), 0, 2, Qt::AlignHCenter);
         PendingGrid->addWidget(new QLabel(tr("배경색"), pendingPopover_), 1, 0); PendingGrid->addWidget(new QLabel(tr("표시선"), pendingPopover_), 2, 0);
         for (int I = 0; I < 4; ++I) {
             pending_[I] = new fm::ui::ColorPickButton(pendingPopover_); pending_[I]->setAllowNone(true); pending_[I]->setAutoDefault(false);
             pending_[I]->setObjectName("hc.rules.pending." + QString::number(I));
             pending_[I]->setAccessibleName((I % 2 ? tr("다크 ") : tr("라이트 ")) + (I / 2 ? tr("확인 중 표시선") : tr("확인 중 배경색")));
-            PendingGrid->addWidget(pending_[I], I / 2 + 1, I % 2 + 1);
+            fitColorButton(pending_[I]); PendingGrid->addWidget(pending_[I], I / 2 + 1, I % 2 + 1);
             connect(pending_[I], &fm::ui::ColorPickButton::colorChanged, this, [this] { storePending(); });
         }
         connect(PendingReset, &QPushButton::clicked, this, [this] { for (auto* Pick : pending_) { const QSignalBlocker Block(Pick); Pick->setColor(std::nullopt); } storePending(); });
@@ -513,7 +538,7 @@ private:
         autoDark_->setChecked(G["autoDark"].toBool()); refreshColors();
         for (int I = 0; I < fontKeys_.size(); ++I) fonts_[I]->SetState(G["font"].toObject().contains(fontKeys_[I]) ? G["font"].toObject()[fontKeys_[I]].toBool() ? 1 : 2 : 0);
         border_->setCurrentIndex(qMax(0, border_->findData(G["font"].toObject()["border"].toString())));
-        updateConditionHeight(); refreshCost(); refreshPending(); refreshConditionTab();
+        updateConditionHeight(); refreshCost(); refreshPending();
         loading_ = false; updatePreview();
     }
     void storeForm() {
@@ -536,7 +561,7 @@ private:
         if (autoDark_->isChecked() || G.contains("autoDark")) G["autoDark"] = autoDark_->isChecked();
         G["light"] = Light; G["dark"] = Dark; G["font"] = Font; Groups[list_->currentRow()] = G; document_["groups"] = Groups; refreshColors();
         loading_ = true; updateGroupItems(); loading_ = false;
-        updateConditionHeight(); refreshCost(); refreshConditionTab();
+        updateConditionHeight(); refreshCost();
         updatePreview();
     }
     // Conditions of a group by price (design 3): {slow built-in, plugin}.
@@ -562,7 +587,12 @@ private:
         // One line beside "add condition"; the whole explanation is the tooltip (plan 3.3).
         cost_->setText(Parts.join(" · ") + tr(" · 걸러지지 않은 항목만, 보이는 것부터 확인")); cost_->setToolTip(Text);
     }
-    void refreshConditionTab() { editorTabs_->setTabText(0, conditionRows_.isEmpty() ? tr("조건") : tr("조건 %1").arg(conditionRows_.size())); }
+    // A colour button as wide as what it shows (swatch, hex code or "none", chevron) instead of its grid column.
+    static void fitColorButton(fm::ui::ColorPickButton* Button) {
+        QFont None = Button->font(); None.setPixelSize(13);
+        const int Text = qMax(QFontMetrics(fm::style::monoFont(12.5)).horizontalAdvance(QStringLiteral("#FFFFFFFF")), QFontMetrics(None).horizontalAdvance(tr("지정 안 함")));
+        Button->setFixedWidth(qMax(Button->minimumSizeHint().width(), 26 + 8 + Text + 30 + 4));
+    }
     void refreshPending() {
         const auto Pending = document_.value("pending").toObject();
         for (int I = 0; I < 4; ++I) {
@@ -591,7 +621,7 @@ private:
     }
     void setPreviewCollapsed(bool Collapsed) {
         { const QSignalBlocker Button(previewCollapse_), Action(collapseAction_); previewCollapse_->setChecked(Collapsed); collapseAction_->setChecked(Collapsed); }
-        previewCollapse_->setArrowType(Collapsed ? Qt::UpArrow : Qt::DownArrow);
+        previewCollapse_->setText(Collapsed ? tr("펼치기") : tr("접기"));
         previewCollapse_->setToolTip(Collapsed ? tr("미리보기 펼치기") : tr("미리보기 접기")); previewCollapse_->setAccessibleName(previewCollapse_->toolTip());
         previewBody_->setVisible(!Collapsed);
         previewCard_->setMinimumHeight(Collapsed ? 0 : 120);
@@ -599,11 +629,18 @@ private:
     }
     void applyInitialSplit() {
         const int Total = splitter_->height() - splitter_->handleWidth(); if (splitApplied_ || Total <= 0) return; splitApplied_ = true;
-        // Plan 3.2: the default dialog keeps six example rows unscrolled; a short screen favours the editor.
-        // A short page keeps at least 170 for the preview (a few rows) and gives the editor the rest.
+        // The preview starts at about nine rows (the six examples with room to spare) and the editor takes the rest;
+        // a short page keeps 170 for the preview (a few rows).
         const int TopMinimum = splitter_->widget(0)->minimumSizeHint().height();
-        const int Top = Total >= 560 ? qMax(TopMinimum, 316) : qMax(TopMinimum, Total - 170);
-        splitter_->setSizes({Top, qMax(previewCard_->minimumHeight(), Total - Top)});
+        const int Row = previewTable_->rowCount() ? previewTable_->rowHeight(0) : qMax(24, QFontMetrics(recordScheme(previewDark_->isChecked()).FileList_Font).height() + 8);
+        const int Chrome = qMax(0, previewCard_->height() - previewTable_->height());
+        const int Rows = Chrome + previewTable_->horizontalHeader()->sizeHint().height() + 2 * previewTable_->frameWidth() + 9 * Row;
+        const int Preview = qBound(previewCard_->minimumHeight(), Total >= 560 ? Rows : 170, qMax(previewCard_->minimumHeight(), Total - TopMinimum));
+        splitter_->setSizes({Total - Preview, Preview});
+        // The group list starts a little wider than its minimum; the editor takes the rest.
+        const int Width = bodySplitter_->width() - bodySplitter_->handleWidth();
+        if (Width > 0) { const int Groups = qBound(bodySplitter_->widget(0)->minimumWidth(), 270, qMax(200, Width - 420)); bodySplitter_->setSizes({Groups, Width - Groups}); }
+        const bool WasLoading = loading_; loading_ = true; updateGroupItems(); loading_ = WasLoading;
     }
     void storePending() {
         if (loading_) return;
@@ -903,17 +940,6 @@ private:
         }
     }
 
-    void addExamples() {
-        auto Groups = document_["groups"].toArray(); QSet<QString> Ids, Names;
-        for (const auto Value : Groups) { Ids.insert(Value.toObject()["id"].toString()); Names.insert(Value.toObject()["name"].toString().toCaseFolded()); }
-        auto Added = QJsonArray{};
-        for (const auto Value : settings::FileColorExamples::Groups()) { auto G = Value.toObject(); if (Ids.contains(G["id"].toString()) || Groups.size() + Added.size() >= 256) continue;
-            const auto Base = G["name"].toString(); auto Name = Base; int N = 2; while (Names.contains(Name.toCaseFolded())) Name = Base + " " + QString::number(N++);
-            G["name"] = Name; Names.insert(Name.toCaseFolded()); Added.append(G);
-        }
-        if (Added.isEmpty()) return; ensureVersion2(); Groups = document_["groups"].toArray(); const int First = Groups.size();
-        for (const auto Value : Added) Groups.append(Value); document_["groups"] = Groups; refreshList(First);
-    }
     // A field cell: the value, or why there is none. A row decided without the value shows a dash (plan 7).
     QString fieldCellText(const hc::columns::CellValue& Value, bool RowPending) const {
         using namespace hc::columns;
@@ -932,11 +958,12 @@ private:
         if (Combined) Headers.append(tr("필드 값")); else for (const auto& Id : GroupFields) Headers.append(fieldTitle(Id));
         Headers.append(tr("적용된 그룹")); const int Columns = int(Headers.size()), GroupColumn = Columns - 1;
         QStringList Current; for (int Col = 0; Col < previewTable_->columnCount(); ++Col) Current.append(previewTable_->horizontalHeaderItem(Col) ? previewTable_->horizontalHeaderItem(Col)->text() : QString{});
-        if (Current != Headers) {
-            previewTable_->setColumnCount(Columns); previewTable_->setHorizontalHeaderLabels(Headers);
-            auto* Header = previewTable_->horizontalHeader(); Header->setSectionResizeMode(0, QHeaderView::Stretch); Header->setSectionResizeMode(1, QHeaderView::Fixed);
-            for (int Col = 2; Col < Columns; ++Col) { Header->setSectionResizeMode(Col, QHeaderView::Interactive); previewTable_->setColumnWidth(Col, Col == GroupColumn ? 190 : Combined ? 200 : 128); }
-        }
+        if (Current != Headers) { previewTable_->setColumnCount(Columns); previewTable_->setHorizontalHeaderLabels(Headers); }
+        // The columns always fill the table: name and group share the free width, size and field values fit their text.
+        auto* Header = previewTable_->horizontalHeader(); Header->setSectionResizeMode(0, QHeaderView::Stretch); Header->setSectionResizeMode(1, QHeaderView::Fixed);
+        for (int Col = 2; Col < Columns; ++Col) Header->setSectionResizeMode(Col, Col == GroupColumn ? QHeaderView::Stretch : QHeaderView::Fixed);
+        // Field columns are measured with the row fonts the delegate draws, like the size column.
+        QVector<int> FieldWidths; for (int Col = 2; Col < GroupColumn; ++Col) FieldWidths.append(Header->fontMetrics().horizontalAdvance(Headers[Col]) + 24);
         const auto BaseFont = recordScheme(previewDark_->isChecked()).FileList_Font;
         const auto Labels = effectNames();
         int SizeWidth = previewTable_->fontMetrics().horizontalAdvance(tr("크기")) + 20;
@@ -953,8 +980,11 @@ private:
             }
             const int Pitch = qMax(24, QFontMetrics(Style.Font(BaseFont)).height() + 8); previewTable_->setRowHeight(Row, Pitch);
             SizeWidth = qMax(SizeWidth, QFontMetrics(Style.Font(BaseFont)).horizontalAdvance(Values[1]) + 20);
+            for (int I = 0; I < FieldWidths.size(); ++I) FieldWidths[I] = qMax(FieldWidths[I], QFontMetrics(Style.Font(BaseFont)).horizontalAdvance(Values.value(2 + I)) + 20);
         }
-        previewTable_->setColumnWidth(1, SizeWidth); previewTable_->viewport()->update();
+        previewTable_->setColumnWidth(1, SizeWidth);
+        for (int I = 0; I < FieldWidths.size(); ++I) previewTable_->setColumnWidth(2 + I, qMin(FieldWidths[I], 260));
+        previewTable_->viewport()->update();
     }
     QTimer previewTimer_;
     quint64 previewGeneration_ = 0;
@@ -986,7 +1016,9 @@ private:
     QLineEdit* previewFields_ = nullptr;
     fm::ui::ColorPickButton* pending_[4]{};
     // Layout (plan 3.1).
-    QToolButton *more_ = nullptr, *pendingLegend_ = nullptr, *previewCollapse_ = nullptr;
+    QToolButton* more_ = nullptr;
+    fm::ui::Button *pendingLegend_ = nullptr, *previewCollapse_ = nullptr;
+    QSplitter* bodySplitter_ = nullptr;
     QAction* collapseAction_ = nullptr;
     QSplitter* splitter_ = nullptr;
     QTabWidget* editorTabs_ = nullptr;
