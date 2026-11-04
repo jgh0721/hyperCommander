@@ -3,6 +3,7 @@
 #include "UniqueLibs/settings/fileColorRules.hpp"
 #include "UniqueLibs/qtFieldPicker.hpp"
 #include "commonLibs/columns/builtInColumns.hpp"
+#include <fmstyle/StyleProps.h>
 
 namespace hc::ui {
 // A row keeps its original JSON until edited. Opening the settings dialog or
@@ -20,9 +21,11 @@ public:
         auto* Anchor = new QTableWidgetItem; Anchor->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable); Table->setItem(Row, 0, Anchor);
         field_ = new hc::columns::FieldPicker(Table); field_->setObjectName("hc.condition.field"); field_->setAccessibleName(tr("조건 항목"));
         field_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); field_->setMinimumContentsLength(8);
-        populateField(); selectField(); Table->setCellWidget(Row, 0, field_);
-        op_ = new QComboBox(Table); op_->setObjectName("hc.condition.operator"); op_->setAccessibleName(tr("조건 비교 방법")); Table->setCellWidget(Row, 1, op_);
-        auto* Remove = new QPushButton(tr("×"), Table); Remove->setObjectName("hc.condition.remove"); Remove->setAutoDefault(false); Remove->setAccessibleName(tr("이 조건 삭제")); Table->setCellWidget(Row, 3, Remove);
+        populateField(); selectField(); fieldCell_ = Cell(Table, field_); Table->setCellWidget(Row, 0, fieldCell_);
+        op_ = new QComboBox(Table); op_->setObjectName("hc.condition.operator"); op_->setAccessibleName(tr("조건 비교 방법")); Table->setCellWidget(Row, 1, Cell(Table, op_));
+        auto* Remove = new QPushButton(tr("×"), Table); Remove->setObjectName("hc.condition.remove"); Remove->setAutoDefault(false); Remove->setAccessibleName(tr("이 조건 삭제"));
+        Remove->setToolTip(tr("이 조건 삭제")); fm::style::setButtonRole(Remove, fm::style::ButtonRole::Subtle); Remove->setFixedSize(24, 24);
+        Table->setCellWidget(Row, 3, Cell(Table, Remove, true)); Table->setRowHeight(Row, RowHeight(Table));
         connect(Remove, &QPushButton::clicked, this, [this] { if (onRemove_) onRemove_(); });
         rebuildOperators(); rebuildValue();
         connect(field_, &QComboBox::currentIndexChanged, this, [this] {
@@ -63,7 +66,36 @@ public:
             rebuildValue(); edited();
         });
     }
-    int Row() const { for (int I = 0; I < table_->rowCount(); ++I) if (table_->cellWidget(I, 0) == field_) return I; return -1; }
+    int Row() const { for (int I = 0; I < table_->rowCount(); ++I) if (table_->cellWidget(I, 0) == fieldCell_) return I; return -1; }
+    // Cell editors (261104 layout plan L2): every editor sits 4 px inside its cell, drawn flat like an input,
+    // so the row reads as one table with the flat header instead of a strip of raised buttons.
+    static constexpr int CellInset = 4;
+    static QWidget* Cell(QTableWidget* Table, QWidget* Editor, bool Center = false) {
+        auto* Host = new QWidget(Table); Host->setObjectName("hc.condition.cell");
+        auto* Box = new QHBoxLayout(Host); Box->setContentsMargins(CellInset, CellInset, CellInset, CellInset); Box->setSpacing(4);
+        if (Center) { Box->addStretch(); Box->addWidget(Editor); Box->addStretch(); } else Box->addWidget(Editor);
+        if (!qobject_cast<QPushButton*>(Editor)) CellEditorStyle(Editor);
+        return Host;
+    }
+    // Flat, and as tall as the row allows: combos, inputs and choice buttons line up in one row.
+    static void CellEditorStyle(QWidget* Editor) {
+        fm::style::setCellEditor(Editor);
+        // A choice button fills its cell like the combos beside it instead of sitting at its text width.
+        Editor->setSizePolicy(qobject_cast<QToolButton*>(Editor) ? QSizePolicy::Expanding : Editor->sizePolicy().horizontalPolicy(), QSizePolicy::Expanding);
+    }
+    // Editor height of this table's style and density, plus the inset above and below. Measured each time:
+    // the density comes from the dialog the table ends up in.
+    static int RowHeight(QTableWidget* Table) {
+        QComboBox Probe(Table); fm::style::setCellEditor(&Probe); Probe.addItem(QStringLiteral("가"));
+        QLineEdit Edit(Table); fm::style::setCellEditor(&Edit);
+        QToolButton Pick(Table); fm::style::setCellEditor(&Pick); Pick.setText(QStringLiteral("가"));
+        return (std::max)({Probe.sizeHint().height(), Edit.sizeHint().height(), Pick.sizeHint().height()}) + 2 * CellInset;
+    }
+    // The editor reached through a cell (the cell holds a host widget).
+    template <typename T> static T* CellEditor(QTableWidget* Table, int Row, int Column) {
+        auto* Widget = Table->cellWidget(Row, Column); if (auto* Direct = qobject_cast<T*>(Widget)) return Direct;
+        return Widget ? Widget->findChild<T*>() : nullptr;
+    }
     QJsonObject Record() const { return edited_ ? draft_ : original_; }
     void Upgrade() { original_ = settings::FileColorRules::NormalizeCondition(original_, version_); version_ = 2; }
     std::function<void()> onEdited_, onRemove_;
@@ -304,7 +336,7 @@ private:
     }
     void rebuildValue() {
         loading_ = true; const int CurrentRow = Row(); if (CurrentRow < 0) { loading_ = false; return; }
-        auto* Panel = new QWidget(table_); auto* Fields = new QHBoxLayout(Panel); Fields->setContentsMargins(0, 0, 0, 0); Fields->setSpacing(4);
+        auto* Panel = new QWidget(table_); auto* Fields = new QHBoxLayout(Panel); Fields->setContentsMargins(CellInset, CellInset, CellInset, CellInset); Fields->setSpacing(4);
         const auto Type = draft_["type"].toString();
         const auto Mode = settings::FileColorRules::Syntax(draft_);
         const bool List = (Type == "extension" || Type == "pattern") && Mode == "wildcard";
@@ -358,10 +390,14 @@ private:
                 });
             }
         }
-        table_->setCellWidget(CurrentRow, 2, Panel); table_->setRowHeight(CurrentRow, qMax(table_->verticalHeader()->defaultSectionSize(), Panel->sizeHint().height() + 2)); loading_ = false;
+        for (auto* Child : Panel->findChildren<QWidget*>(Qt::FindDirectChildrenOnly))
+            if (qobject_cast<QComboBox*>(Child) || qobject_cast<QLineEdit*>(Child) || qobject_cast<QToolButton*>(Child) || qobject_cast<QAbstractSpinBox*>(Child)) CellEditorStyle(Child);
+        // One height for every row: the editors stretch to it (CellEditorStyle), so no row grows for its value kind.
+        table_->setCellWidget(CurrentRow, 2, Panel); table_->setRowHeight(CurrentRow, RowHeight(table_)); loading_ = false;
     }
     QTableWidget* table_;
     hc::columns::FieldPicker* field_;
+    QWidget* fieldCell_ = nullptr;
     QComboBox* op_;
     QJsonObject original_, draft_;
     QMap<QString, QJsonValue> modeValues_;

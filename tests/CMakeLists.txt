@@ -793,7 +793,7 @@ add_dependencies(hc_check hc_dialog_foundation_tests)
 
 qt_add_executable(hc_file_rule_tests tstFileColorRules.cpp)
 target_include_directories(hc_file_rule_tests PRIVATE "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/commonLibs" "${PROJECT_SOURCE_DIR}/HyperCommander")
-target_link_libraries(hc_file_rule_tests PRIVATE Qt6::Test Qt6::Widgets)
+target_link_libraries(hc_file_rule_tests PRIVATE Qt6::Test Qt6::Widgets Fm::style)
 target_compile_options(hc_file_rule_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_test(NAME hc.file_rules COMMAND hc_file_rule_tests)
 set_tests_properties(hc.file_rules PROPERTIES TIMEOUT 60)

@@ -29,6 +29,16 @@ struct FileRuleInput
     // Copies only: the worker never reaches back into the model.
     QVector<hc::columns::CellValue> fields_;
 };
+// A panel row for the colour rules preview (261104 layout plan, L4): the rule input without field values,
+// the values already known for it by field id (list fields, values the panel has read), and the facts that
+// decide which slow fields may be read.
+struct FileRuleSample
+{
+    FileRuleInput input_;
+    QString path_;
+    bool directory_ = false, network_ = false;
+    QMap<QString, hc::columns::CellValue> values_;
+};
 struct FileRuleResult
 {
     bool matched_ = false;

@@ -55,8 +55,8 @@ private slots:
         }
         QVERIFY(!FileColorRules::Validate(document({{"type", "rtl"}, {"op", "is"}})).isEmpty());
         QTableWidget Table(0, 4); hc::ui::FileColorConditionRow Row(&Table, {{"type", "rtl"}, {"op", "contains"}}, 2);
-        auto* Field = qobject_cast<QComboBox*>(Table.cellWidget(0, 0)); QCOMPARE(Field->currentText(), QString("RTL 문자"));
-        auto* Operator = qobject_cast<QComboBox*>(Table.cellWidget(0, 1)); QCOMPARE(Operator->count(), 2);
+        auto* Field = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(&Table, 0, 0); QCOMPARE(Field->currentText(), QString("RTL 문자"));
+        auto* Operator = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(&Table, 0, 1); QCOMPARE(Operator->count(), 2);
         QCOMPARE(Operator->itemText(0), QString("포함")); QCOMPARE(Operator->itemText(1), QString("비포함"));
         QVERIFY(!Table.cellWidget(0, 2)->findChild<QLineEdit*>());
         Operator->setCurrentIndex(1); QCOMPARE(Row.Record()["op"].toString(), QString("notContains"));
@@ -68,7 +68,7 @@ private slots:
         const QJsonObject Original{{"type", "extension"}, {"op", "in"}, {"value", "txt"}, {"future", "keep"}};
         hc::ui::FileColorConditionRow Row(&Table, Original, 2);
         QCOMPARE(Row.Record(), Original);
-        auto* Operator = qobject_cast<QComboBox*>(Table.cellWidget(0, 1)); QCOMPARE(Operator->count(), 6);
+        auto* Operator = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(&Table, 0, 1); QCOMPARE(Operator->count(), 6);
         const auto Value = [&] { return Table.cellWidget(0, 2)->findChild<QLineEdit*>("hc.condition.value"); };
         Operator->setCurrentIndex(Operator->findData("regexNotMatches"));
         const auto Pattern = QStringLiteral("\\A(?:a;b|\\d+)\\z"); Value()->setText(Pattern);
@@ -78,7 +78,7 @@ private slots:
         Operator->setCurrentIndex(Operator->findData("regexMatches")); QCOMPARE(Value()->text(), Pattern);
         Operator->setCurrentIndex(Operator->findData("globMatches")); Value()->setText("jp*; literal\\;x");
         QCOMPARE(Row.Record()["value"].toArray(), QJsonArray({"jp*", "literal;x"})); QCOMPARE(Row.Record()["future"].toString(), QString("keep"));
-        auto* Field = qobject_cast<QComboBox*>(Table.cellWidget(0, 0)); Field->setCurrentIndex(Field->findData("pattern"));
+        auto* Field = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(&Table, 0, 0); Field->setCurrentIndex(Field->findData("pattern"));
         Operator->setCurrentIndex(Operator->findData("notMatches")); QCOMPARE(Row.Record()["op"].toString(), QString("notMatches"));
         QVERIFY(Table.columnWidth(1) >= Operator->fontMetrics().horizontalAdvance(Operator->itemText(5)) + 36);
     }
@@ -410,7 +410,7 @@ private slots:
     {
         QTableWidget Table(0, 4);
         hc::ui::FileColorConditionRow Row(&Table, QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "txt"}}, 4);
-        auto* Field = qobject_cast<QComboBox*>(Table.cellWidget(0, 0)); auto* Operator = qobject_cast<QComboBox*>(Table.cellWidget(0, 1));
+        auto* Field = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(&Table, 0, 0); auto* Operator = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(&Table, 0, 1);
         // Fields and built-in types share one picker; duplicates of built-in types are stored as those types.
         QVERIFY(Field->findData("file.imageWidth") >= 0); QVERIFY(Field->findData("extension") >= 0);
         QCOMPARE(Field->findData("file.extension"), -1); QCOMPARE(Field->findData("file.size"), -1);
@@ -445,7 +445,7 @@ private slots:
         QVERIFY(!qobject_cast<QStandardItemModel*>(Field->model())->item(Lua)->isEnabled());
         const QJsonObject Missing{{"type", "field"}, {"field", "wdx.0123456789abcdef0123456789abcdef.2.0"}, {"valueType", "text"}, {"op", "contains"}, {"value", "x"}, {"fieldTitle", "Exif / Model"}};
         QTableWidget Other(0, 4); hc::ui::FileColorConditionRow Kept(&Other, Missing, 4);
-        auto* KeptField = qobject_cast<QComboBox*>(Other.cellWidget(0, 0));
+        auto* KeptField = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(&Other, 0, 0);
         QVERIFY(KeptField->currentText().contains("Exif / Model")); QCOMPARE(Kept.Record(), Missing);
     }
     void selectionFieldVerdicts()

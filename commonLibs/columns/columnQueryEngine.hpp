@@ -23,6 +23,11 @@ namespace hc::columns
         if (Field.startsWith("file.alternateDataStream.")) return "streams";
         return {};
     }
+    // Settings → file panel → network field conditions (design 6.6): "off", "builtIn" (no plugin fields) or "all".
+    inline bool NetworkFieldAllowed(const QString& Mode, bool Network, const QString& Field)
+    {
+        return Mode == "all" || !Network || (Mode == "builtIn" && !IsPluginField(Field));
+    }
     // Folders carry reparse data and named streams, but no payload, version resource or image header.
     inline bool QueriesFolders(const QString& Field)
     {

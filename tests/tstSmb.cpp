@@ -308,7 +308,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -8652,8 +8652,10 @@ private slots:
         for (const bool Dark : {false, true}) {
             Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
             emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); DarkPreview->setChecked(Dark);
-            QTRY_COMPARE(Table->item(Installer, 2)->text(), QStringLiteral("확인 중 · 필드 값 필요"));
-            QCOMPARE(Table->item(Source, 2)->text(), QStringLiteral("소스 코드")); QCOMPARE(Table->item(Archive, 2)->text(), QStringLiteral("목록 기본값"));
+            // The applied group is the last column; the selected group's field sits before it.
+            const int Group = Table->columnCount() - 1; QCOMPARE(Group, 3);
+            QTRY_COMPARE(Table->item(Installer, Group)->text(), QStringLiteral("확인 중 · 필드 값 필요"));
+            QCOMPARE(Table->item(Source, Group)->text(), QStringLiteral("소스 코드")); QCOMPARE(Table->item(Archive, Group)->text(), QStringLiteral("목록 기본값"));
             Save(&Dialog, QString("dialog-%1").arg(Dark ? "dark" : "light"));
             Save(Card, QString("examples-%1").arg(Dark ? "dark" : "light"));
         }
@@ -12275,7 +12277,7 @@ private slots:
                 if (!Chosen) { Chosen = true; Picker->setDirectory(Files.path()); }
                 if (auto* FileName = Picker->findChild<QLineEdit*>("fileNameEdit")) FileName->setText(Path);
                 QMetaObject::invokeMethod(Picker, "accept", Qt::QueuedConnection);
-            } }); Driver.start(); Page->findChild<QPushButton*>(ButtonName)->click(); Driver.stop(); QVERIFY(Chosen); QVERIFY(!TimedOut);
+            } }); Driver.start(); Page->findChild<QAction*>(ButtonName)->trigger(); Driver.stop(); QVERIFY(Chosen); QVERIFY(!TimedOut);
         };
         Pick("hc.rules.export"); QFile Export(Path); QVERIFY(Export.open(QIODevice::ReadOnly)); const auto Bytes = Export.readAll(); Export.close();
         QCOMPARE(QJsonDocument::fromJson(Bytes).object(), Expected); QVERIFY(Bytes.contains("\r\n")); QVERIFY(!QByteArray(Bytes).replace("\r\n", "").contains('\n'));
@@ -12357,6 +12359,7 @@ private slots:
         auto Doc = FileColorRules::Empty(); QJsonObject G{{"id", "appearance"}, {"name", "색상 보존"}, {"join", "any"}, {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "txt"}}}},
             {"light", QJsonObject{{"foreground", "#80123456"}, {"future", "light"}}}, {"dark", QJsonObject{{"foreground", "#abcdef"}, {"background", "#223344"}, {"future", "dark"}}}, {"font", QJsonObject{{"bold", false}, {"future", "font"}}}};
         Doc["groups"] = QJsonArray{G}; Page->Load(Doc); QCOMPARE(Page->Document(), Doc);
+        Page->findChild<QTabWidget*>("hc.rules.editorTabs")->setCurrentIndex(1); QCoreApplication::processEvents();
         auto* Auto = Page->findChild<QCheckBox*>("hc.rules.autoDark"); auto* Dark = Page->findChild<fm::ui::ColorPickButton*>("hc.rules.color.1");
         QVERIFY(Auto && Dark); Auto->setChecked(true); QVERIFY(!Dark->isEnabled());
         QCOMPARE(Page->Document()["groups"].toArray()[0].toObject()["dark"], G["dark"]);
@@ -12404,7 +12407,7 @@ private slots:
             {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "txt"}}}},
             {"light", QJsonObject{{"foreground", "#d15c00"}}}, {"dark", QJsonObject{{"foreground", "#d15c00"}}}, {"font", QJsonObject{{"bold", true}}}}};
         Page->Load(Doc); auto* Table = Page->findChild<QTableWidget*>("hc.rules.conditions"); QVERIFY(Table);
-        auto* Field = qobject_cast<QComboBox*>(Table->cellWidget(0, 0)); QVERIFY(Field); QVERIFY(Field->findData("normalization") >= 0);
+        auto* Field = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 0, 0); QVERIFY(Field); QVERIFY(Field->findData("normalization") >= 0);
         Field->setCurrentIndex(Field->findData("normalization"));
         QVERIFY(Table->columnWidth(0) >= Field->fontMetrics().horizontalAdvance(Field->currentText()) + 24);
         QCOMPARE(Page->Document()["version"], QJsonValue(2));
@@ -12454,9 +12457,9 @@ private slots:
             {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "txt"}}}},
             {"light", QJsonObject{{"foreground", "#c82277"}}}, {"dark", QJsonObject{{"foreground", "#c82277"}}}}};
         Page->Load(Doc); auto* Table = Page->findChild<QTableWidget*>("hc.rules.conditions"); QVERIFY(Table);
-        auto* Field = qobject_cast<QComboBox*>(Table->cellWidget(0, 0)); QVERIFY(Field->findData("rtl") >= 0);
+        auto* Field = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 0, 0); QVERIFY(Field->findData("rtl") >= 0);
         Field->setCurrentIndex(Field->findData("rtl"));
-        auto* Operator = qobject_cast<QComboBox*>(Table->cellWidget(0, 1)); QCOMPARE(Operator->count(), 2);
+        auto* Operator = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 0, 1); QCOMPARE(Operator->count(), 2);
         QCOMPARE(Operator->currentText(), QString("포함")); QVERIFY(Page->Validate()); QVERIFY(Dialog.SaveSettings());
         for (const auto& Name : Rtl + Plain) QTRY_COMPARE(IndexFor(Name).data(Qt::ForegroundRole).value<QColor>() == QColor("#c82277"), Rtl.contains(Name));
         auto* Dim = Page->findChild<QPushButton*>("hc.rules.font.dim"); QVERIFY(Dim); Dim->click();
@@ -12488,7 +12491,7 @@ private slots:
         for (const auto& Name : Rtl + Plain) QTRY_COMPARE(IndexFor(Name).data(Qt::ForegroundRole).value<QColor>() == QColor("#c82277"), Plain.contains(Name));
         const auto Saved = Page->Document(); Repository Reload(QFileInfo(Settings.FileName()).absolutePath());
         QCOMPARE(Reload.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
-        Page->Load(Saved); Operator = qobject_cast<QComboBox*>(Table->cellWidget(0, 1));
+        Page->Load(Saved); Operator = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 0, 1);
         QCOMPARE(Operator->currentData().toString(), QString("notContains"));
         QCOMPARE(Page->findChild<QComboBox*>("hc.rules.border")->currentData().toString(), QString("dot"));
         QVERIFY(Page->findChild<QPushButton*>("hc.rules.font.dim")->isChecked());
@@ -12514,7 +12517,7 @@ private slots:
             {"light", QJsonObject{{"foreground", "#2266AA"}}}, {"dark", QJsonObject{{"foreground", "#88BBEE"}}}};
         Page->Load({{"version", 2}, {"mode", "first"}, {"groups", QJsonArray{Group}}});
         auto* Table = Page->findChild<QTableWidget*>("hc.rules.conditions");
-        auto* Op = qobject_cast<QComboBox*>(Table->cellWidget(0, 1)); QCOMPARE(Op->count(), 6);
+        auto* Op = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 0, 1); QCOMPARE(Op->count(), 6);
         Op->setCurrentIndex(Op->findData("globMatches"));
         Table->cellWidget(0, 2)->findChild<QLineEdit*>("hc.condition.value")->setText("t?t");
         QCOMPARE(Page->Document()["version"], QJsonValue(3)); QVERIFY(Page->Validate()); QVERIFY(Dialog.SaveSettings());
@@ -12533,7 +12536,7 @@ private slots:
             return Ready;
         };
         QTRY_VERIFY(AllColored());
-        auto* Field = qobject_cast<QComboBox*>(Table->cellWidget(0, 0)); Field->setCurrentIndex(Field->findData("pattern"));
+        auto* Field = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 0, 0); Field->setCurrentIndex(Field->findData("pattern"));
         Op->setCurrentIndex(Op->findData("regexMatches"));
         auto* Value = Table->cellWidget(0, 2)->findChild<QLineEdit*>("hc.condition.value");
         Value->setText("("); QVERIFY(!Page->Validate()); QTRY_VERIFY(!Page->IsValidationPending()); QVERIFY(!Page->Validate());
@@ -12725,12 +12728,12 @@ private slots:
         PatternValue->setText("CMakeLists.txt; *.cmake"); QCOMPARE(Page->Document()["version"], QJsonValue(2));
         auto Record = Page->Document()["groups"].toArray()[0].toObject()["conditions"].toArray()[0].toObject(); QCOMPARE(Record["value"].toArray(), QJsonArray({"CMakeLists.txt", "*.cmake"})); QCOMPARE(Record["futureCondition"], QJsonValue("preserve"));
         Page->findChild<QPushButton*>("hc.rules.addCondition")->click();
-        auto* Field = qobject_cast<QComboBox*>(Table->cellWidget(1, 0)); Field->setCurrentIndex(Field->findData("size"));
-        auto* Operator = qobject_cast<QComboBox*>(Table->cellWidget(1, 1)); QCOMPARE(Operator->currentData().toString(), QString("ge"));
+        auto* Field = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 1, 0); Field->setCurrentIndex(Field->findData("size"));
+        auto* Operator = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 1, 1); QCOMPARE(Operator->currentData().toString(), QString("ge"));
         Table->cellWidget(1, 2)->findChild<QLineEdit*>("hc.condition.value")->setText("4"); auto* Unit = Table->cellWidget(1, 2)->findChild<QComboBox*>("hc.condition.unit"); Unit->setCurrentIndex(Unit->findData("B"));
         Page->findChild<QPushButton*>("hc.rules.all")->click(); QVERIFY(Page->Validate());
         FileColorRules Rules; Rules.Load(Page->Document()); QVERIFY(Rules.Evaluate("example.cmake", 0, 4, false).matched_); QVERIFY(!Rules.Evaluate("example.cmake", 0, 3, false).matched_);
-        qobject_cast<QPushButton*>(Table->cellWidget(1, 3))->click(); QCOMPARE(Table->rowCount(), 1); QVERIFY(Page->Validate()); QVERIFY(Dialog.SaveSettings());
+        hc::ui::FileColorConditionRow::CellEditor<QPushButton>(Table, 1, 3)->click(); QCOMPARE(Table->rowCount(), 1); QVERIFY(Page->Validate()); QVERIFY(Dialog.SaveSettings());
         const auto SavedPattern = Page->Document();
         auto* Model = static_cast<CFSModel*>(model(panels_.front())); const auto RowOf = [&](const QString& Name) { for (int I = 0; I < Model->rowCount(); ++I) if (Model->GetName(Model->index(I, 0)) == Name) return I; return -1; };
         QTRY_COMPARE(Model->index(RowOf("example.cmake"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
@@ -12758,7 +12761,7 @@ private slots:
         Page->Load(Recent); QVERIFY(Dialog.SaveSettings());
         const auto Before = Page->Document(); auto* Sample = Page->findChild<QLineEdit*>("hc.rules.sample"); Sample->setText("plain.txt");
         Page->findChild<QCheckBox*>("hc.rules.sampleModifiedKnown")->setChecked(true); Page->findChild<QDateTimeEdit*>("hc.rules.sampleModified")->setDateTime(QDateTime::currentDateTimeUtc().addSecs(-3600));
-        Page->findChild<QPushButton*>("hc.rules.addCondition")->click(); auto* LinkField = qobject_cast<QComboBox*>(Table->cellWidget(1, 0)); LinkField->setCurrentIndex(LinkField->findData("link")); Page->findChild<QPushButton*>("hc.rules.any")->click();
+        Page->findChild<QPushButton*>("hc.rules.addCondition")->click(); auto* LinkField = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 1, 0); LinkField->setCurrentIndex(LinkField->findData("link")); Page->findChild<QPushButton*>("hc.rules.any")->click();
         const auto Capture = [&](const QString& Name) { const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) return; QDir().mkpath(Out); QVERIFY(Dialog.grab().save(QDir(Out).filePath(Name + '-' + QString::number(Dialog.devicePixelRatioF()) + ".png"))); };
         for (const bool Dark : {false, true}) { emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); QCoreApplication::processEvents(); Capture(Dark ? "conditions-dark" : "conditions-light"); }
         QCOMPARE(Table->verticalScrollBar()->maximum(), 0);
@@ -12905,6 +12908,133 @@ private slots:
         }
     }
 
+    // 261104 layout plan: the preview spans the page under a splitter, the editor uses tabs, condition cells
+    // are flat with one height, and the preview samples the panel and computes slow values.
+    void fileColorLayoutUi()
+    {
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace(); auto* Manager = TyStColorSchemeMgr::GetInstance();
+        auto& Theme = fm::style::ThemeManager::instance(); const auto Scheme = Theme.scheme();
+        const auto Restore = qScopeGuard([&] { Theme.setScheme(Scheme); Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh();
+            emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Manager->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const QDir Out(qEnvironmentVariable("HC_UI_ARTIFACT_DIR")); const bool Capture = !qEnvironmentVariableIsEmpty("HC_UI_ARTIFACT_DIR"); if (Capture) QDir().mkpath(Out.path());
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (const auto* Name : {"setup.exe", "tool.exe", "notes.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("body"); }
+        {
+            const auto Stream = QDir::toNativeSeparators(Directory.filePath("setup.exe")) + ":Zone.Identifier";
+            const auto Handle = CreateFileW(Stream.toStdWString().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr); QVERIFY(Handle != INVALID_HANDLE_VALUE);
+            const QByteArray Marker("[ZoneTransfer]\r\nZoneId=3\r\n"); DWORD Written = 0; QVERIFY(WriteFile(Handle, Marker.constData(), DWORD(Marker.size()), &Written, nullptr)); CloseHandle(Handle);
+        }
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!model(Panel)->IsLoading() && names(model(Panel)).contains("setup.exe"));
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        Theme.setScheme(fm::style::ThemeManager::Scheme::Light); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(QStringLiteral("기본 라이트")));
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.resize(1100, 800); Dialog.show(); QTest::qWait(50);
+        Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(4); QTest::qWait(50);
+        auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors")); QVERIFY(Page);
+        const auto Field = [](const char* Id, const char* Op, const QJsonValue& Value) { return QJsonObject{{"type", "field"}, {"field", Id}, {"valueType", "unsigned"}, {"op", Op}, {"value", Value}}; };
+        auto Doc = FileColorRules::Empty(); Doc["version"] = 4;
+        Doc["groups"] = QJsonArray{
+            QJsonObject{{"id", "internet-exe"}, {"name", "인터넷에서 받은 실행 파일"}, {"join", "all"},
+                {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "exe,msi"}}, Field("file.alternateDataStream.zone", "in", QJsonArray{"3", "4"})}},
+                {"light", QJsonObject{{"foreground", "#b42318"}, {"background", "#fdecea"}}}, {"dark", QJsonObject{{"foreground", "#ff8a80"}, {"background", "#3a1f1f"}}}},
+            QJsonObject{{"id", "source"}, {"name", "소스 코드"}, {"join", "any"}, {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "cpp,h"}}}},
+                {"light", QJsonObject{{"foreground", "#7c3aed"}}}, {"dark", QJsonObject{{"foreground", "#c4b5fd"}}}}};
+        Page->Load(Doc); QVERIFY(Page->Validate()); QTest::qWait(50);
+        const auto Save = [&](QWidget* Widget, const QString& Name) { QCoreApplication::processEvents(); QTest::qWait(40); if (Capture) QVERIFY(Widget->grab().save(Out.filePath(Name + ".png"))); };
+        auto* Scroll = Dialog.findChild<QScrollArea*>("hc.settings.fileColorsScroll"); QVERIFY(Scroll);
+        auto* Table = Page->findChild<QTableWidget*>("hc.rules.previewTable"); auto* Conditions = Page->findChild<QTableWidget*>("hc.rules.conditions"); QVERIFY(Table && Conditions);
+        const auto RowOf = [&](const QString& Name) { for (int R = 0; R < Table->rowCount(); ++R) if (Table->item(R, 0) && Table->item(R, 0)->text() == Name) return R; return -1; };
+
+        // Default size: no page scroll, the preview spans the page, the condition table has room, six examples unscrolled.
+        QTRY_COMPARE(Scroll->verticalScrollBar()->maximum(), 0);
+        QVERIFY2(Table->width() >= Page->width() - 60, qPrintable(QString("%1 / %2").arg(Table->width()).arg(Page->width())));
+        QVERIFY2(Conditions->width() >= 520, qPrintable(QString::number(Conditions->width())));
+        QCOMPARE(Table->rowCount(), 6); QCOMPARE(Table->verticalScrollBar()->maximum(), 0);
+        // The selected group's field gets a column; rows the extension decided show a dash.
+        QCOMPARE(Table->columnCount(), 4); QCOMPARE(Table->horizontalHeaderItem(2)->text(), QObject::tr("ADS 인터넷 존"));
+        const int Installer = RowOf("Qt-6.12.0-windows-x64-installer.exe"), Source = RowOf("BandedPanelView.cpp"); QVERIFY(Installer >= 0 && Source >= 0);
+        QCOMPARE(Table->item(Installer, 2)->text(), QObject::tr("확인 중")); QCOMPARE(Table->item(Installer, 3)->text(), QObject::tr("확인 중 · 필드 값 필요"));
+        QCOMPARE(Table->item(Source, 2)->text(), QObject::tr("—")); QCOMPARE(Table->item(Source, 3)->text(), QObject::tr("소스 코드"));
+        Save(&Dialog, "layout-default-light");
+
+        // Condition cells: every editor sits 4 px inside its cell with one height.
+        auto* FieldEditor = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Conditions, 1, 0);
+        auto* OperatorEditor = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Conditions, 1, 1);
+        auto* Choices = Conditions->cellWidget(1, 2)->findChild<QToolButton*>("hc.condition.choices"); QVERIFY(FieldEditor && OperatorEditor && Choices);
+        QCOMPARE(FieldEditor->geometry().top(), hc::ui::FileColorConditionRow::CellInset); QCOMPARE(FieldEditor->geometry().left(), hc::ui::FileColorConditionRow::CellInset);
+        QCOMPARE(OperatorEditor->height(), FieldEditor->height()); QCOMPARE(Choices->height(), FieldEditor->height());
+        QCOMPARE(Conditions->rowHeight(0), Conditions->rowHeight(1)); QCOMPARE(Conditions->rowHeight(1), FieldEditor->height() + 2 * hc::ui::FileColorConditionRow::CellInset);
+        QVERIFY(FieldEditor->property(fm::style::props::kCell).toBool());
+        QCOMPARE(fm::style::buttonRole(hc::ui::FileColorConditionRow::CellEditor<QPushButton>(Conditions, 1, 3)), fm::style::ButtonRole::Subtle);
+        Save(Page->findChild<QWidget*>("hc.rules.editorCard"), "layout-conditions-light");
+
+        // Appearance tab: colours left, font effects right.
+        auto* Tabs = Page->findChild<QTabWidget*>("hc.rules.editorTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->tabText(0), QObject::tr("조건 2"));
+        Tabs->setCurrentIndex(1); QCoreApplication::processEvents();
+        auto* Light = Page->findChild<QWidget*>("hc.rules.color.0"); auto* Bold = Page->findChild<QWidget*>("hc.rules.font.bold");
+        QVERIFY(Light->isVisible() && Bold->isVisible()); QVERIFY(Bold->mapTo(Page, QPoint()).x() > Light->mapTo(Page, QPoint()).x() + Light->width());
+        Save(&Dialog, "layout-appearance-light"); Tabs->setCurrentIndex(0);
+
+        // Current folder: the panel's rows, then their slow values on request.
+        auto* Folder = Page->findChild<QPushButton*>("hc.rules.source.1"); QVERIFY(Folder && Folder->isEnabled()); Folder->click();
+        QTRY_COMPARE(Table->rowCount(), 3);
+        auto* Status = Page->findChild<QLabel*>("hc.rules.sampleStatus"); QVERIFY(Status->text().contains(QObject::tr("값 필요")));
+        QCOMPARE(Table->item(RowOf("setup.exe"), 3)->text(), QObject::tr("확인 중 · 필드 값 필요"));
+        auto* Compute = Page->findChild<QPushButton*>("hc.rules.compute"); QVERIFY(Compute->isEnabled()); Compute->click();
+        QTRY_COMPARE_WITH_TIMEOUT(Table->item(RowOf("setup.exe"), 3)->text(), QString("인터넷에서 받은 실행 파일"), 10000);
+        QTRY_COMPARE(Table->item(RowOf("tool.exe"), 2)->text(), QObject::tr("없음"));
+        QCOMPARE(Table->item(RowOf("tool.exe"), 3)->text(), QObject::tr("목록 기본값"));
+        QCOMPARE(Table->item(RowOf("notes.txt"), 2)->text(), QObject::tr("없음")); QCOMPARE(Table->item(RowOf("notes.txt"), 3)->text(), QObject::tr("목록 기본값"));
+        QTRY_VERIFY(Status->text().contains(QObject::tr("계산 완료"))); QVERIFY(!Compute->isEnabled());
+        Save(&Dialog, "layout-folder-light");
+
+        // Custom drawer: one row per field; the rows write the sample text the evaluation reads.
+        Page->findChild<QToolButton*>("hc.rules.customToggle")->setChecked(true); QCoreApplication::processEvents();
+        QVERIFY(Page->findChild<QWidget*>("hc.rules.customPanel")->isVisible());
+        Page->findChild<QLineEdit*>("hc.rules.sample")->setText("setup_2026.exe");
+        auto* State = Page->findChild<QComboBox*>("hc.rules.sampleState.file.alternateDataStream.zone"); auto* Value = Page->findChild<QComboBox*>("hc.rules.sampleValue.file.alternateDataStream.zone");
+        QVERIFY(State && Value); QVERIFY(!Value->isEnabled());
+        State->setCurrentIndex(0); QVERIFY(Value->isEnabled()); Value->setCurrentIndex(Value->findData("3"));
+        auto* Sample = Page->findChild<QLineEdit*>("hc.rules.sampleFields"); QCOMPARE(Sample->text(), QString("file.alternateDataStream.zone=3"));
+        const auto Owners = [&] { QString Text; for (auto* Label : Page->findChild<QWidget*>("hc.rules.customPanel")->findChildren<QLabel*>()) if (Label->text().startsWith(QObject::tr("일치 그룹:")) || Label->text().startsWith(QObject::tr("확인 중:"))) Text = Label->text(); return Text; };
+        QTRY_VERIFY2(Owners().startsWith(QObject::tr("일치 그룹: 인터넷에서 받은 실행 파일")), qPrintable(Owners()));
+        QVERIFY2(Owners().contains(QObject::tr("글자색")) && !Owners().contains("foreground"), qPrintable(Owners()));
+        Save(Page->findChild<QWidget*>("hc.rules.previewCard"), "layout-custom-light");
+        State->setCurrentIndex(3); QCOMPARE(Sample->text(), QString("file.alternateDataStream.zone=!"));
+        QTRY_VERIFY2(Owners().contains(QObject::tr("오류 값은 조건에 일치하지 않는 것으로 봅니다: ADS 인터넷 존")), qPrintable(Owners()));
+        Page->findChild<QToolButton*>("hc.rules.customToggle")->setChecked(false);
+
+        // Pending colours: a popover from the legend, part of the page for search and accessibility.
+        Page->findChild<QToolButton*>("hc.rules.pendingLegend")->click();
+        auto* Popover = Page->findChild<QFrame*>("hc.rules.pendingPopover"); QTRY_VERIFY(Popover && Popover->isVisible());
+        QVERIFY(Popover->findChild<QWidget*>("hc.rules.pending.0")); Save(Popover, "layout-pending-light"); Popover->hide();
+
+        // Collapse and restore the preview from its header.
+        auto* Collapse = Page->findChild<QToolButton*>("hc.rules.previewCollapse"); Collapse->click(); QTRY_VERIFY(!Table->isVisible());
+        QVERIFY(Page->findChild<QAction*>("hc.rules.collapseAction")->isChecked()); Collapse->click(); QTRY_VERIFY(Table->isVisible());
+
+        // The settings search reaches menu actions and the popover.
+        auto* Search = Dialog.findChild<QLineEdit*>("hc.settings.search"); auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
+        for (const auto* Text : {"내보내기", "확인 중 항목 색", "필드 표본 값"}) { Search->setText(QString::fromUtf8(Text)); QVERIFY2(!Categories->item(4)->isHidden(), Text); }
+        Search->clear();
+
+        // A short screen (1080p at 150 %: a 1100 x 648 dialog leaves about 842 x 480 for the page). The dialog itself
+        // cannot shrink that far while other pages raise its minimum, so the page is measured on its own.
+        {
+            QWidget Host; fm::style::setDensity(&Host, fm::style::Density::Settings); auto* HostLayout = new QVBoxLayout(&Host); HostLayout->setContentsMargins(0, 0, 0, 0);
+            auto* Small = new hc::ui::FileColorRulesPage(&Host); HostLayout->addWidget(Small); Small->Load(Doc);
+            Host.resize(842, 480); Host.show(); QTest::qWait(120);
+            QVERIFY2(Small->minimumSizeHint().height() <= 480, qPrintable(QString::number(Small->minimumSizeHint().height())));
+            auto* SmallTable = Small->findChild<QTableWidget*>("hc.rules.previewTable");
+            QVERIFY2(SmallTable->isVisible() && SmallTable->viewport()->height() >= 2 * SmallTable->rowHeight(0), qPrintable(QString::number(SmallTable->viewport()->height())));
+            QVERIFY(Small->findChild<QWidget*>("hc.rules.top")->height() >= 200);
+            Save(&Host, "layout-compact-light");
+        }
+        Theme.setScheme(fm::style::ThemeManager::Scheme::Dark); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(QStringLiteral("기본 다크")));
+        Page->findChild<QCheckBox*>("hc.rules.previewDark")->setChecked(true); Dialog.resize(1100, 800); QTest::qWait(80);
+        Save(&Dialog, "layout-folder-dark"); Tabs->setCurrentIndex(1); Save(&Dialog, "layout-appearance-dark");
+        Dialog.reject();
+    }
     void fileColorSettingsUi()
     {
         auto* ProductStyle = qobject_cast<QProxyStyle*>(qApp->style());
@@ -12924,7 +13054,8 @@ private slots:
         QVERIFY(!Dialog.findChild<QWidget*>("pgDisplay_ColorScheme"));
         QVERIFY(!Dialog.findChild<QComboBox*>("cbxColorScheme"));
         for (auto* Button : Dialog.findChildren<QPushButton*>()) QVERIFY(!Button->text().contains("기존 색 구성표"));
-        for (const auto& Name : {"hc.rules.groupsCard", "hc.rules.definitionCard", "hc.rules.appearanceCard", "hc.rules.previewCard"}) QVERIFY(Page->findChild<fm::ui::Card*>(Name));
+        for (const auto& Name : {"hc.rules.groupsCard", "hc.rules.editorCard", "hc.rules.previewCard"}) QVERIFY(Page->findChild<fm::ui::Card*>(Name));
+        QVERIFY(Page->findChild<QWidget*>("hc.rules.appearancePage") && Page->findChild<QSplitter*>("hc.rules.splitter"));
         const auto InitialSize = Dialog.size();
         if (InitialSize.height() > 850) {
             auto* Stack = Dialog.findChild<QStackedWidget*>("stkOpts");

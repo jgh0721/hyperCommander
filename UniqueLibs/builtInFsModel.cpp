@@ -1848,8 +1848,7 @@ bool CFSModel::ruleFieldAllowed(const nsHC::TySpFileSource& Item, const QString&
     // Design 6.6: settings → file panel decides how far field conditions reach on network locations.
     const auto Mode = displaySettings_["filePanel"].toObject()["networkFieldConditions"]
         .toString(hc::defaults::DefaultValue("general/filePanel/networkFieldConditions").toString());
-    if (Mode == "all" || !Item->storageEntry_ || !isNetworkLocation(Item->storageEntry_->locator_)) return true;
-    return Mode == "builtIn" && !hc::columns::IsPluginField(Field);
+    return hc::columns::NetworkFieldAllowed(Mode, Item->storageEntry_ && isNetworkLocation(Item->storageEntry_->locator_), Field);
 }
 
 hc::columns::CellValue CFSModel::ruleFieldValue(const nsHC::TySpFileSource& Item, const QString& Field) const
@@ -2443,6 +2442,26 @@ QVector<hc::columns::PreviewSample> CFSModel::ColumnSamples(const QStringList& S
         Sample.path_ = queryPath(Item); Sample.name_ = Item->Name_; Sample.directory_ = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
         for (const auto& Field : Fields) if (Field.cost_ == EvaluationCost::Snapshot) Sample.values_[Field.id_] = readField(Item, Field.id_, false, false);
         if (Item->storageEntry_ && ProviderFor(*Item->storageEntry_)) Sample.source_ = std::make_shared<hc::storage::ProviderContentSource>(ProviderFor(*Item->storageEntry_), *Item->storageEntry_);
+        Samples.append(std::move(Sample)); if (Samples.size() == 50) break;
+    }
+    return Samples;
+}
+
+QVector<hc::settings::FileRuleSample> CFSModel::FileRuleSamples(const QStringList& Selection) const
+{
+    using namespace hc::columns; QVector<hc::settings::FileRuleSample> Samples;
+    const auto Fields = AvailableColumns();
+    for (const auto& Item : vecNode_) {
+        if (Item->Name_ == "..") continue;
+        const auto Identity = Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : Item->Name_;
+        if (!Selection.isEmpty() && !Selection.contains(Identity)) continue;
+        hc::settings::FileRuleSample Sample; Sample.input_ = fileRuleInput(Item); Sample.input_.fields_.clear();
+        Sample.path_ = queryPath(Item); Sample.directory_ = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
+        Sample.network_ = Item->storageEntry_ && isNetworkLocation(Item->storageEntry_->locator_);
+        for (const auto& Field : Fields) if (Field.cost_ == EvaluationCost::Snapshot) Sample.values_[Field.id_] = readField(Item, Field.id_, false, false);
+        // Values the panel already read for its own rules spare the preview a query.
+        if (const auto Known = ruleFields_.constFind(Sample.path_); !Sample.path_.isEmpty() && Known != ruleFields_.cend())
+            for (auto It = Known->cbegin(); It != Known->cend(); ++It) Sample.values_.insert(It.key(), It.value());
         Samples.append(std::move(Sample)); if (Samples.size() == 50) break;
     }
     return Samples;

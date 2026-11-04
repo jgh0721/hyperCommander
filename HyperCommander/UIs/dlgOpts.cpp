@@ -343,6 +343,10 @@ void QMainOpts::SetListView(CGridView* View)
     QStringList Selected = View ? View->CaptureSelection() : QStringList{};
     if (Selected.isEmpty() && View && !View->CaptureFocus().isEmpty()) Selected.append(View->CaptureFocus());
     columnEditor_->SetSamples(Model ? Model->ColumnSamples() : QVector<hc::columns::PreviewSample>{}, Model && !Selected.isEmpty() ? Model->ColumnSamples(Selected) : QVector<hc::columns::PreviewSample>{});
+    // The colour rules preview samples the same panel (layout plan L4).
+    if (fileColors_) fileColors_->SetSamples(Model ? Model->FileRuleSamples() : QVector<hc::settings::FileRuleSample>{},
+        Model && !Selected.isEmpty() ? Model->FileRuleSamples(Selected) : QVector<hc::settings::FileRuleSample>{},
+        Model ? QDir::toNativeSeparators(Model->GetCurrentPathWithRoot()) : QString{});
     // Follow the preview pane by default; an explicit simulated width remains
     // available in its options without inheriting the live panel's full width.
     columnEditor_->SetPreviewWidth(0);
@@ -1205,6 +1209,8 @@ void QMainOpts::initializeDesignPages()
         for (auto* Label : Page->findChildren<QLabel*>()) Content += " " + Label->text(); for (auto* Button : Page->findChildren<QAbstractButton*>()) Content += " " + Button->text();
         for (auto* Combo : Page->findChildren<QComboBox*>()) for (int I = 0; I < Combo->count(); ++I) Content += " " + Combo->itemText(I);
         for (auto* Tabs : Page->findChildren<QTabWidget*>()) for (int I = 0; I < Tabs->count(); ++I) Content += " " + Tabs->tabText(I);
+        // Page menus (file colors: import, export, pending colours) count as page content.
+        for (auto* Action : Page->findChildren<QAction*>()) Content += " " + Action->text().remove('&');
         Item->setHidden(!Content.contains(Text.trimmed(), Qt::CaseInsensitive));
     } });
     ui.lstOptCate->setCurrentRow(0); ui.stkOpts->setCurrentWidget(General);

@@ -75,6 +75,8 @@ public:
     void ResumeColumnQueries();
     QVector<hc::columns::FieldDefinition> AvailableColumns() const;
     QVector<hc::columns::PreviewSample> ColumnSamples(const QStringList& Selection = {}) const;
+    // Rows for the colour rules preview (same 50-row bound and selection keys as ColumnSamples).
+    QVector<hc::settings::FileRuleSample> FileRuleSamples(const QStringList& Selection = {}) const;
     int PendingColumnQueries() const { return columnQueries_->Pending(); }
     void StartEverythingSearch(const QString& Query, const QString& Match, int Interval);
     void StopEverythingSearch(bool Leave = false);
