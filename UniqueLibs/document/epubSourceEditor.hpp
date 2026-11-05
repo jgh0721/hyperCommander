@@ -204,7 +204,7 @@ private:
     QString commitResource_;int commitPosition_=0,commitAnchor_=0,commitHorizontal_=0;ScrollTop commitTop_;
     EpubResourceModel* resourceModel_=nullptr;EpubResourceFilter* resourceFilter_=nullptr;QTreeView* tree_=nullptr;QLineEdit* treeFilter_=nullptr;QLabel* treeSummary_=nullptr;QTabBar* tabs_=nullptr;
     QSplitter *outerSplitter_=nullptr,*workSplitter_=nullptr,*previewSplitter_=nullptr;QWidget *treePanel_=nullptr,*previewPanel_=nullptr;QTimer layoutTimer_;bool layoutRestored_=false;
-    QMap<QString,QAction*> actions_;QList<QAction*> toolbarActions_,menuActions_;QMenu *validateMenu_=nullptr,*structureMenu_=nullptr,*draftMenu_=nullptr,*layoutMenu_=nullptr;
+    QMap<QString,QAction*> actions_;QList<QAction*> toolbarActions_,menuActions_;QMenu *validateMenu_=nullptr,*structureMenu_=nullptr,*draftMenu_=nullptr;
     QWidget* statusStrip_=nullptr;QLabel *statusValidation_=nullptr,*statusMessage_=nullptr,*statusDraft_=nullptr,*statusCaret_=nullptr,*statusFormat_=nullptr;QToolButton* statusProblems_=nullptr;
     struct DraftSession {std::atomic_bool cancelled_=false,discard_=false;};
     std::shared_ptr<DraftSession> draftSession_=std::make_shared<DraftSession>();
@@ -217,6 +217,7 @@ private:
     std::optional<epub::DraftSnapshot> pendingRecovery_;
     bool recoveryEnabled_=hc::defaults::edit::ViewValue("textView/recoveryEnabled").toBool(),recoverySourceChanged_=false,recoveryReadingSourceChanged_=false,discardedRecovery_=false;
     QStackedLayout* previewStack_=nullptr;QLabel *previewChip_=nullptr,*previewChapterLabel_=nullptr;
+    qint64 previewUpdatedAt_=0;
     std::optional<WebProcessRuntime> previewRuntime_;std::unique_ptr<QTemporaryDir> previewDirectory_;
     QFutureWatcher<epub::EditOutput> previewWorker_;QTimer previewTimer_;
     EpubProcessView *previewView_=nullptr,*previewCandidate_=nullptr;QList<QPointer<EpubProcessView>> previewRetiring_;

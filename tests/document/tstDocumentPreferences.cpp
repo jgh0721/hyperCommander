@@ -24,6 +24,8 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QToolBar>
+#include <QToolButton>
+#include <QProcess>
 #include <QMenu>
 #include <QMenuBar>
 #include <QStyleOptionSlider>
@@ -1087,6 +1089,72 @@ private slots:
         QCOMPARE(ConfigPaths::Resolve({"app", "--", "--config-dir=D:/other"}, "D:/bin", {}, true).directory_, QString("D:/bin"));
         QVERIFY(!ConfigPaths::Resolve({"app", "--config-dir="}, "D:/bin").error_.isEmpty());
         QVERIFY(!ConfigPaths::Resolve({"app", "--config-dir", "D:/a", "--config-dir=D:/b"}, "D:/bin").error_.isEmpty());
+    }
+    void epubEditorExecutableStartup_data()
+    {
+        QTest::addColumn<QString>("Book");
+        QTest::newRow("fixture")<<QString{};
+        const auto Reported=qEnvironmentVariable("HC_EPUB_STARTUP_BOOK");
+        if(!Reported.isEmpty())QTest::newRow("reported-book")<<Reported;
+    }
+    void epubEditorExecutableStartup()
+    {
+        const auto Executable=qEnvironmentVariable("HC_EPUB_STARTUP_EXECUTABLE");
+        if(Executable.isEmpty())QSKIP("Set HC_EPUB_STARTUP_EXECUTABLE to test the actual product binary");
+        QFETCH(QString,Book);QTemporaryDir Temp;
+        const auto Path=Temp.filePath("startup.epub");Write(Path,Book.isEmpty()?workspaceBook():Read(Book));
+        QVERIFY(QFileInfo(Path).size()>0);
+        QProcess Editor;Editor.setProgram(Executable);Editor.setArguments({"--config-dir",Temp.path(),"--epub-edit",Path});
+        const auto Stop=qScopeGuard([&]{if(Editor.state()!=QProcess::NotRunning){Editor.kill();Editor.waitForFinished(5000);}});
+        Editor.start();QVERIFY2(Editor.waitForStarted(10000),qPrintable(Editor.errorString()));
+        const auto Workspace=Temp.filePath("HyperEditor.epub-workspace.json");
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(Workspace) || Editor.state()==QProcess::NotRunning,30000);
+        QVERIFY2(Editor.state()!=QProcess::NotRunning,Editor.readAllStandardError().constData());
+        const auto State=QJsonDocument::fromJson(Read(Workspace)).object();QVERIFY(!State["documents"].toObject().isEmpty());
+        bool SourceReady=false;for(const auto& Entry:State["documents"].toObject())SourceReady|=!Entry.toObject()["activeResource"].toString().isEmpty();
+        QVERIFY(SourceReady);QTest::qWait(2000);QVERIFY(Editor.state()!=QProcess::NotRunning);
+        Editor.terminate();QTRY_VERIFY_WITH_TIMEOUT(Editor.state()==QProcess::NotRunning,30000);
+        QCOMPARE(Editor.exitStatus(),QProcess::NormalExit);QCOMPARE(Editor.exitCode(),0);
+    }
+    void epubWrapMenuFollowsSourceSettings()
+    {
+        QTemporaryDir Temp;
+        const auto OldConfig=qApp->property("documentViewsConfigDir"),OldWorkspace=qApp->property("epubWorkspaceDirectory");
+        qApp->setProperty("documentViewsConfigDir",Temp.path());qApp->setProperty("epubWorkspaceDirectory",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",OldConfig);qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);});
+        {::AppSettings Settings;Settings.setValue("textView/wordWrapMode",2);}
+        TextInput Input;Input.viewId_="epub";Input.path_=Temp.filePath("wrap.epub");Input.bytes_=workspaceBook();
+        DocumentViewPane Pane;Pane.ConfigureEpub({},true);
+        // No renderer is needed to exercise the source editor and its workspace menu contribution.
+        Pane.Load(Input,false);QVERIFY(Pane.Execute({{"action","epub.edit.begin"}})["accepted"].toBool());
+        auto* Editor=Pane.EpubEditor();QVERIFY(Editor);Editor->SetRecoveryEnabled(false);
+        QTRY_VERIFY_WITH_TIMEOUT(Editor->IsReady(),15000);
+        auto* Source=Editor->SourceView();QVERIFY(Source);QCOMPARE(Source->WordWrapMode(),2);
+        QAction* Wrap=nullptr;for(auto* Item:Pane.Contribution().viewActions_)if(Item->objectName()=="epubView.wrap")Wrap=Item;
+        QVERIFY(Wrap);QVERIFY(Wrap->isVisible());QVERIFY(Wrap->isChecked());
+        Wrap->trigger();QVERIFY(!Source->isWordWrapEnabled());QVERIFY(!Wrap->isChecked());
+        Source->setWordWrap(true);QVERIFY(Wrap->isChecked());QCOMPARE(Source->WordWrapMode(),2);
+        Source->setWordWrap(false);QVERIFY(!Wrap->isChecked());
+        {::AppSettings Settings;Settings.setValue("textView/wordWrapMode",1);}
+        Source->ReloadPreferences();QVERIFY(Wrap->isChecked());
+        QVERIFY(Editor->Execute({{"action","epub.edit.select"},{"resource","EPUB/two.xhtml"}})["accepted"].toBool());
+        QVERIFY(Wrap->isChecked());
+        const auto Content=Source->Content();QVERIFY(!Source->isModified());
+        QVERIFY(Pane.Execute({{"action","epub.edit.source-visible"},{"visible",false}})["accepted"].toBool());QVERIFY(!Wrap->isVisible());
+        QVERIFY(Pane.Execute({{"action","epub.edit.source-visible"},{"visible",true}})["accepted"].toBool());QVERIFY(Wrap->isVisible());QVERIFY(Wrap->isChecked());
+        QCOMPARE(Source->Content(),Content);QVERIFY(!Source->isModified());
+        auto* Bar=Pane.PrimaryToolbar();QVERIFY(Bar);
+        for(const auto* Name:{"epubToggleTree","epubTogglePreview","epubToggleProblems"}) {
+            auto* Item=Editor->findChild<QAction*>(Name);QVERIFY(Item);QVERIFY(!Bar->actions().contains(Item));
+        }
+        QVERIFY(!Editor->findChild<QAction*>("epubLayoutMenuAction"));
+        auto* Header=Editor->findChild<QWidget*>("epubPreviewHeader");QVERIFY(Header);
+        const auto Buttons=Header->findChildren<QToolButton*>();QCOMPARE(Buttons.size(),1);
+        QCOMPARE(Buttons.first()->defaultAction(),Editor->findChild<QAction*>("epubPreviewRefresh"));
+        for(const auto* Title:{"배치","패널","미리보기"}) {
+            QMenu* Menu=nullptr;for(auto* Item:Pane.Contribution().viewActions_)if(Item->text()==QString::fromUtf8(Title))Menu=Item->menu();
+            QVERIFY(Menu);emit Menu->aboutToShow();QVERIFY(!Menu->actions().isEmpty());
+        }
     }
     void epubEditingWorkspaceRoundTrip()
     {

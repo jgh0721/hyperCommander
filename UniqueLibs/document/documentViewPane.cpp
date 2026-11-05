@@ -357,7 +357,14 @@ namespace hc::document
         if(auto* Read=Bar->findChild<QAction*>("epubRead")){const QSignalBlocker Block(Read);Read->setChecked(!Editing);}
         bool After=false;for(auto* Item:Bar->actions()){if(Item->objectName()=="epubEditSeparator")After=true;if(After)Item->setVisible(Editing);else if(Item->property("epubReaderItem").toBool())Item->setVisible(!Editing);}
         const auto Kind=Editing?DocumentViewKind::EpubEdit:DocumentViewKind::EpubRead;
-        for(auto* Item:contribution_.viewActions_)if(viewKinds::Has(Item))Item->setVisible(viewKinds::Applies(Item,Kind));
+        for(auto* Item:contribution_.viewActions_) {
+            if(viewKinds::Has(Item))Item->setVisible(viewKinds::Applies(Item,Kind));
+            if(Item->objectName()==QLatin1String("epubView.wrap")) {
+                const auto* Source=epubEditor_?epubEditor_->SourceView():nullptr;
+                const QSignalBlocker Block(Item);Item->setEnabled(Editing && Source);
+                Item->setChecked(Source && Source->isWordWrapEnabled());
+            }
+        }
     }
     QToolBar* DocumentViewPane::PrimaryToolbar() const { return toolbar_ ? toolbar_ : findChild<QToolBar*>("epubEditToolbar"); }
     bool DocumentViewPane::MarkdownSourceVisible()const{return markdown_ && markdown_->SourceVisible();}
@@ -457,6 +464,8 @@ namespace hc::document
             connect(epubEditor_,&EpubSourceEditor::Changed,this,&DocumentViewPane::ContentChanged);
             connect(epubEditor_,&EpubSourceEditor::SearchRequested,this,&DocumentViewPane::SearchRequested);
             connect(epubEditor_,&EpubSourceEditor::StatusChanged,this,&DocumentViewPane::ViewStateChanged);
+            // Context menus, shortcuts and preference reloads also change the source view settings.
+            connect(epubEditor_->SourceView(),&QTextView::statusChanged,this,&DocumentViewPane::updateEpubMode);
             const auto InitialFocus=std::make_shared<bool>(true);
             connect(epubEditor_,&EpubSourceEditor::StateChanged,this,[this,InitialFocus]{
                 if(*InitialFocus && epubEditor_->IsReady()){

@@ -814,6 +814,7 @@ void QTextView::SetWordWrapMode(int Mode)
     Settings.setValue("textView/wordWrapMode", Mode);
     Settings.setValue("textView/wordWrapLastMode", lastWrapMode_);
     Settings.setValue("textView/wordWrap", Mode != 0);
+    emit statusChanged();
 }
 void QTextView::FoldAll(bool Contract) { if (m_editor && m_editorSettings.showCodeFolding) m_editor->FoldAll(Contract); }
 

@@ -7,6 +7,7 @@
 #include "text/QTextView.h"
 #include <QAction>
 #include <QDir>
+#include <QDateTime>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QLabel>
@@ -31,10 +32,10 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
     if(previewRuntime_)return;if(workspaceRestored_)Chapter=spineIndex(current_);previewRuntime_=Runtime;previewPreferredChapter_=previewRestoreChapter_=Chapter;
     auto* Panel=previewPanel_;auto* Layout=new QVBoxLayout(Panel);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
     auto* Header=new QWidget(Panel);Header->setObjectName("epubPreviewHeader");auto* Controls=new QHBoxLayout(Header);Controls->setContentsMargins(8,2,4,2);Controls->setSpacing(4);
-    // The header's minimum width bounds the editor window's; in a narrow window the title gives way before the toggles.
+    // Keep layout and preview toggles in the View menu so the header can stay compact.
     auto* Title=new QLabel(tr("미리보기"),Header);auto Font=Title->font();Font.setWeight(QFont::DemiBold);Title->setFont(Font);Title->setMinimumWidth(1);Controls->addWidget(Title);
     previewChip_=new QLabel(Header);previewChip_->setObjectName("epubPreviewState");previewChip_->setTextFormat(Qt::PlainText);previewChip_->setAccessibleName(tr("EPUB 미리보기 상태"));previewChip_->setMinimumWidth(24);Controls->addWidget(previewChip_);Controls->addStretch();
-    for(const auto& Name:{"epubAutoPreview","epubPreviewScrollSync","epubPreviewRefresh"}){auto* Button=new QToolButton(Header);Button->setDefaultAction(action(Name));Button->setAutoRaise(true);Button->setToolButtonStyle(Qt::ToolButtonTextOnly);Controls->addWidget(Button);}
+    auto* Refresh=new QToolButton(Header);Refresh->setDefaultAction(action("epubPreviewRefresh"));Refresh->setAutoRaise(true);Refresh->setToolButtonStyle(Qt::ToolButtonTextOnly);Controls->addWidget(Refresh);
     previewChapterLabel_=new QLabel(Header);previewChapterLabel_->setObjectName("epubPreviewChapter");previewChapterLabel_->setForegroundRole(QPalette::PlaceholderText);previewChapterLabel_->setMinimumWidth(1);Controls->addWidget(previewChapterLabel_);Layout->addWidget(Header);
     auto* Frame=new QWidget(Panel);Frame->setMinimumSize(200,140);Frame->setObjectName("epubPreviewFrame");previewStack_=new QStackedLayout(Frame);previewStack_->setContentsMargins(0,0,0,0);previewStack_->setStackingMode(QStackedLayout::StackAll);Layout->addWidget(Frame,1);
     QTimer::singleShot(0,this,&EpubSourceEditor::alignPreview);
@@ -147,6 +148,7 @@ void EpubSourceEditor::finishPreviewPatch() {
     else {
         previewActiveToken_=previewPatchToken_;previewChanges_=previewPatchChanges_;previewMatchesSource_=previewActiveToken_==Token();
         previewReadyMs_=previewPatchClock_.elapsed();previewExportMs_=0;previewError_.clear();
+        previewUpdatedAt_=QDateTime::currentMSecsSinceEpoch();
         // Keep line shifts from edits typed while this asynchronous update was in flight.
         for(auto At=sourceBuffers_.begin();At!=sourceBuffers_.end();++At) {
             At->shifts_.remove(0,qMin(previewPatchShiftCounts_.value(At.key()),At->shifts_.size()));
@@ -250,6 +252,7 @@ void EpubSourceEditor::admitPreview(EpubProcessView* Candidate) {
     }
     previewCandidateScrollTimer_.stop();
     previewChanges_=previewCandidateChanges_;previewEdition_=previewCandidateEdition_;previewReadyMs_=previewBuildClock_.isValid()?previewBuildClock_.elapsed():0;
+    previewUpdatedAt_=QDateTime::currentMSecsSinceEpoch();
     auto* Old=previewView_;previewView_=Candidate;previewCandidate_=nullptr;previewActiveToken_=previewCandidateToken_;previewMatchesSource_=previewActiveToken_==Token();sourceSelectionSerial_=State["sourceSelection"].toObject()["serial"].toInteger(-1);
     // The new preview shows the current text: earlier line shifts no longer apply and the first report is new.
     clearLineShifts();previewScrollSeen_=-1;lastScrollLine_=-1;lastScrollChapter_=-1;scrollSyncPending_=true;contextRequestSerial_=State["contextRequest"].toObject()["serial"].toInteger(-1);if((sourceSyncPending_ || SourceInput()->hasFocus()) && action("epubPreviewScrollSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}previewRecoveryPosition_=false;previewChapter_=State["chapterIndex"].toInt(-1);previewNavigationSerial_=-1;previewStack_->setCurrentWidget(Candidate);Candidate->show();

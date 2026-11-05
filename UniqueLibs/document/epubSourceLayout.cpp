@@ -231,11 +231,10 @@ void EpubSourceEditor::setupActions() {
         for(const auto& Entry:recoveryEntries_){auto* Sub=draftMenu_->addMenu(Entry.first);const auto Path=Entry.second;connect(Sub->addAction(tr("복원")),&QAction::triggered,this,[this,Path]{restoreRecovery(Path);});connect(Sub->addAction(tr("삭제…")),&QAction::triggered,this,[this,Path]{removeRecovery(Path);});}
         draftMenu_->addSeparator();auto* Auto=action("epubAutoRecovery");{const QSignalBlocker Block(Auto);Auto->setChecked(recoveryEnabled_);}draftMenu_->addAction(Auto);
     });
-    layoutMenu_=new QMenu(tr("배치"),this);layoutMenu_->setObjectName("epubLayoutMenu");layoutMenu_->addActions({action("epubLayoutHorizontal"),action("epubLayoutVertical")});layoutMenu_->addSeparator();layoutMenu_->addActions({action("epubToggleTree"),action("epubTogglePreview"),action("epubToggleProblems")});
     const auto MenuAction=[this](QMenu* Menu,const QString& Name){auto* Item=Menu->menuAction();Item->setObjectName(Name);actions_[Name]=Item;return Item;};
-    MenuAction(validateMenu_,"epubValidateMenuAction");MenuAction(structureMenu_,"epubStructureMenuAction");MenuAction(draftMenu_,"epubDraftMenuAction");MenuAction(layoutMenu_,"epubLayoutMenuAction");
+    MenuAction(validateMenu_,"epubValidateMenuAction");MenuAction(structureMenu_,"epubStructureMenuAction");MenuAction(draftMenu_,"epubDraftMenuAction");
     const auto Separator=[this]{auto* Item=new QAction(this);Item->setSeparator(true);return Item;};
-    toolbarActions_={action("epubApplyResource"),action("epubValidateMenuAction"),action("epubStructureMenuAction"),action("epubEditNavigation"),action("epubDraftMenuAction"),Separator(),action("epubToggleTree"),action("epubTogglePreview"),action("epubToggleProblems"),action("epubLayoutMenuAction")};
+    toolbarActions_={action("epubApplyResource"),action("epubValidateMenuAction"),action("epubStructureMenuAction"),action("epubEditNavigation"),action("epubDraftMenuAction")};
     menuActions_={action("epubApplyResource"),action("epubBasicValidation"),action("epubStandardValidation"),Separator(),action("epubAddChapter"),action("epubAddImage"),action("epubImportResource"),action("epubMetadataAction"),action("epubEditNavigation"),Separator(),action("epubResourceFilter"),action("epubFindAll"),Separator(),action("epubLayoutHorizontal"),action("epubLayoutVertical"),action("epubToggleTree"),action("epubTogglePreview"),action("epubToggleProblems")};
 }
 QAction* EpubSourceEditor::action(const QString& Id)const{return actions_.value(Id);}
@@ -300,12 +299,12 @@ void EpubSourceEditor::updateStatus() {
     problems_->setTabText(0,diagnosticRows_.isEmpty()?tr("문제"):tr("문제 %1").arg(diagnosticRows_.size()));
     if(previewChip_) {
         const auto Preview=previewSnapshot();const bool Busy=Preview["busy"].toBool(),Current=Preview["current"].toBool();
-        previewChip_->setText(!previewError_.isEmpty()?tr("⚠ 검사 실패 · 마지막 정상 화면"):Preview["waitingForFocus"].toBool()?tr("창이 활성화되면 갱신"):Busy || !Current?tr("갱신 대기"):tr("✓ 최신 · %1").arg(QDateTime::currentDateTime().toString("HH:mm")));
+        previewChip_->setText(!previewError_.isEmpty()?tr("⚠ 검사 실패 · 마지막 정상 화면"):Preview["waitingForFocus"].toBool()?tr("창이 활성화되면 갱신"):Busy || !Current?tr("갱신 대기"):tr("✓ 편집 내용 반영 · %1").arg(QDateTime::fromMSecsSinceEpoch(previewUpdatedAt_).toString("HH:mm")));
         // Saved toggles survive restarts, so the chip says which ones are off.
-        QStringList Notes{previewMessage_};if(!action("epubAutoPreview")->isChecked())Notes.append(tr("실시간 꺼짐 · 편집 뒤에는 [갱신]을 누르세요"));if(!action("epubPreviewScrollSync")->isChecked())Notes.append(tr("스크롤 동기화 꺼짐"));
+        QStringList Notes{previewMessage_,tr("표시 시각은 미리보기 갱신 완료 시각입니다. 파일 저장 여부와는 별개입니다.")};if(!action("epubAutoPreview")->isChecked())Notes.append(tr("실시간 꺼짐 · 편집 뒤에는 보기 > 미리보기 > 미리보기 갱신을 실행하세요"));if(!action("epubPreviewScrollSync")->isChecked())Notes.append(tr("스크롤 동기화 꺼짐"));
         if(sourceBuffers_.value(current_).shiftsOverflow_)Notes.append(tr("이전 판 기준 · 스크롤 위치가 조금 어긋날 수 있습니다"));
         previewChip_->setToolTip(Notes.join('\n'));
-        const auto State=Preview["state"].toObject();const int Chapter=State["chapterIndex"].toInt(-1);const int Count=model_.Publication()["spine"].toArray().size();previewChapterLabel_->setText(Chapter>=0 && Count>0?tr("%1 / %2장").arg(Chapter+1).arg(Count):QString{});
+        const auto State=Preview["state"].toObject();const int Chapter=State["chapterIndex"].toInt(-1);const int Count=model_.Publication()["spine"].toArray().size();previewChapterLabel_->setText(Chapter>=0 && Count>0?tr("현재 %1장 / 전체 %2장").arg(Chapter+1).arg(Count):QString{});
     }
     if(treeSummary_ && resourceModel_){int Changed=0,Problem=0;for(const auto& Value:model_.Publication()["resources"].toArray()){const auto Path=Value.toObject()["path"].toString();Changed+=touchedResources_.contains(Path) || model_.Changes().contains(Path);}for(const auto& Value:diagnosticRows_)Problem+=!Value.toObject()["resource"].toString().isEmpty();treeSummary_->setText(tr("%1개 리소스 · 수정 %2 · 문제 %3").arg(resourceModel_->ResourceCount()).arg(Changed).arg(Problem));}
     emit StatusChanged();
@@ -333,7 +332,6 @@ void EpubSourceEditor::updateActions() {
     for(const auto& Tag:{"em","strong","span","a","ruby","custom"})action(QString("epubWrap_")+Tag)->setEnabled(Editable && Selection && mediaOf(current_)=="application/xhtml+xml");
     action("epubRecoverDraft")->setEnabled(Idle && !recoveryEntries_.isEmpty());action("epubDraftMenuAction")->setEnabled(true);action("epubValidateMenuAction")->setEnabled(ready_);action("epubStructureMenuAction")->setEnabled(ready_);
     action("epubLayoutHorizontal")->setChecked(previewSplitter_->orientation()==Qt::Horizontal);action("epubLayoutVertical")->setChecked(previewSplitter_->orientation()==Qt::Vertical);
-    action("epubLayoutMenuAction")->setText(previewSplitter_->orientation()==Qt::Horizontal?tr("좌우 배치"):tr("상하 배치"));
 }
 void EpubSourceEditor::restoreLayout() {
     AppSettings Settings;const auto Orientation=Settings.value("epubEditor/layout/orientation").toString();
