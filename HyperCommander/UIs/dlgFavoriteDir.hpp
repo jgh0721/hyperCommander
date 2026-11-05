@@ -39,6 +39,8 @@ private:
 
     QVector<CFavoriteDirMgr::TyFavoriteDir> items_;
     CFavoriteDirMgr::TyEnDrivesOn     drivesOn_ = CFavoriteDirMgr::DRIVES_ON_NONE;
+    CFavoriteDirMgr::TyEnDrivesOn shellPathsOn_ = CFavoriteDirMgr::DRIVES_ON_NONE;
+    QComboBox* shellPaths_ = nullptr;
     Ui::dlgFavoriteDir              ui;
     QLineEdit*                      nameView_ = nullptr;
     QLabel*                         status_ = nullptr;

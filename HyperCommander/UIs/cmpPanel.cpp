@@ -1065,6 +1065,19 @@ void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter 
     emit sig_NotifyPanelActivated();
     Model->setProperty("hc.historyTarget", {});
     if (!WasSearch && Path.trimmed() == CurrentPath()) return;
+    // Shell parsing names must bypass filesystem cleanup and archive-relative navigation.
+    auto ShellPath = Path.trimmed();
+    if (ShellPath.startsWith("shell:", Qt::CaseInsensitive)) ShellPath.remove(0, 6);
+    if (ShellPath.startsWith('{')) ShellPath.prepend("::");
+    if (ShellPath.startsWith("::{") && ShellPath.size() >= 40 && !QUuid(ShellPath.mid(2, 38)).isNull()
+        && (ShellPath.size() == 40 || ShellPath[40] == '/' || ShellPath[40] == '\\')) {
+        auto Saved = CaptureWorkspace().tabs_[ui.tabWidget->currentIndex()];
+        Saved.location_ = {hc::storage::LocatorKind::Shell, QDir::toNativeSeparators(ShellPath).toStdString()};
+        Saved.provider_.clear(); Saved.nativeRoot_.clear(); Saved.selection_.clear(); Saved.focus_.clear();
+        State->workspace_ = Saved; restoreTab(ui.tabWidget->currentIndex());
+        updateWorkspaceStatus(); syncPanelChrome();
+        return;
+    }
     if (Location.kind_ == hc::storage::LocatorKind::Archive && Model->GetRoot()) {
         const auto Root = Model->GetRoot()->GetRoot();
         if (Path.startsWith(Root, Qt::CaseInsensitive) && Path.size() > Root.size() && (Path[Root.size()] == '/' || Path[Root.size()] == '\\')) {

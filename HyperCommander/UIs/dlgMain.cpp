@@ -547,6 +547,7 @@ DEFINE_HC_COMMAND( QMainUI, FileEdit )
 void QMainUI::OnAddCurrentDirToFavorite()
 {
     const auto Src = retrieveSrcPanel();
+    if (!Src) return;
     const auto View = Src->GetFocusView( Src->CurrentTabIndex() );
     
     if( View == nullptr )
@@ -559,22 +560,35 @@ void QMainUI::OnAddCurrentDirToFavorite()
     if( Model == nullptr )
         return;
 
-    const auto Current = Model->GetCurrentPathWithRoot();
+    auto Current = Model->GetCurrentPathWithRoot();
+    if (const auto* FileModel = qobject_cast<CFSModel*>(Model);
+        FileModel && FileModel->WorkspaceLocation().kind_ == hc::storage::LocatorKind::Shell)
+        Current = QString::fromStdString(FileModel->WorkspaceLocation().root_);
 
-    hc::ui::InputDialog Ui;
+    hc::ui::InputDialog Ui(this);
+    Ui.setWindowTitle(tr("현재 폴더 추가"));
     Ui.setLabelText( tr( "항목의 이름을 지정해 주세요:" ) );
     Ui.setOkButtonText( tr( "확인(&O)" ) );
     Ui.setCancelButtonText( tr( "취소(&C)" ) );
-    Ui.setTextValue( Current );
-    Ui.setOptions( QInputDialog::UsePlainTextEditForTextInput );
+    auto Leaf = QFileInfo(QDir::cleanPath(QDir::fromNativeSeparators(Current))).fileName();
+    if (Current.startsWith("::{")) {
+        for (const auto& Choice : CFavoriteDirMgr::ShellPathChoices())
+            if (CFavoriteDirMgr::ResolveShellPath(Choice.Id).compare(Current, Qt::CaseInsensitive) == 0) { Leaf = Choice.Name; break; }
+    }
+    Ui.setTextValue(Leaf.isEmpty() ? Current : Leaf);
+    QTimer::singleShot(0, &Ui, [&Ui] {
+        if (auto* Edit = Ui.findChild<QLineEdit*>()) { Edit->setFocus(Qt::OtherFocusReason); Edit->selectAll(); }
+    });
     Ui.setInputMode( QInputDialog::TextInput );
     if( Ui.exec() == QDialog::Rejected )
         return;
 
     const auto StFavorites = TyStFavoriteDirMgr::GetInstance();
     CFavoriteDirMgr::TyFavoriteDir CurrentCMD;
-    CurrentCMD.Name = Ui.textValue();
+    CurrentCMD.Name = Ui.textValue().trimmed();
+    if (CurrentCMD.Name.isEmpty()) return;
     CurrentCMD.Command = QString( R"(cd %1)" ).arg( Current );
+    CurrentCMD.Path = Current;
     StFavorites->SetItem( CurrentCMD );
 }
 

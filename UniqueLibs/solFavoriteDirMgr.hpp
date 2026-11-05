@@ -30,6 +30,12 @@ public:
 
     bool                            ApplyConfiguration( QVector<TyFavoriteDir> Items, TyEnDrivesOn DrivesOn );
 
+    TyEnDrivesOn GetShellPathsOn() const { return shellPathsOn_; }
+    QStringList GetShellPaths() const { return shellPaths_; }
+    struct TyShellPath { QString Id; QString Name; };
+    static QVector<TyShellPath> ShellPathChoices();
+    static QString ResolveShellPath(const QString& Id);
+    bool ApplyConfiguration(QVector<TyFavoriteDir> Items, TyEnDrivesOn DrivesOn, TyEnDrivesOn ShellPathsOn, QStringList ShellPaths);
     void                            ConstructDirMenu( QMenu* Menu );
 
 public slots:
@@ -43,6 +49,9 @@ protected:
     bool                            doSaveSettings() override;
 
 private:
+    void createShellPaths(QMenu* Menu);
+    TyEnDrivesOn shellPathsOn_ = DRIVES_ON_NONE;
+    QStringList shellPaths_;
     void                            createDrives( QMenu* Menu );
 
     TyEnDrivesOn                    drivesOn_ = DRIVES_ON_NONE;

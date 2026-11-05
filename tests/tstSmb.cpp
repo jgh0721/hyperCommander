@@ -308,7 +308,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -1990,6 +1990,132 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(&Dialog, "on_btnOK_clicked", Q_ARG(bool, false)));
         QCOMPARE(Dialog.result(), int(QDialog::Accepted));
         QCOMPARE(Favorites->GetCount(), qsizetype(0));
+    }
+
+    void favoritesAddCurrentUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object();
+        auto* Favorites = TyStFavoriteDirMgr::GetInstance(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Before); Favorites->Refresh(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto* Panel = panels_.front();
+        hc::workspace::TabState Tab; Tab.id_ = "favorites-add";
+        Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 10000);
+        main_->activateWindow(); main_->raise();
+        Panel->SetFocusView(Panel->CurrentTabIndex()); Panel->sig_NotifyPanelActivated(); QTest::qWait(80);
+        QVERIFY(Favorites->ApplyConfiguration({}, CFavoriteDirMgr::DRIVES_ON_NONE));
+        for (int Attempt = 0; Attempt < 2; ++Attempt) {
+            bool Opened = false, Focused = false, Titled = false, Named = false, Invoked = false;
+            QTimer Probe; Probe.setInterval(30);
+            connect(&Probe, &QTimer::timeout, main_, [&] {
+                if (auto* Dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget())) {
+                    Opened = true; Titled = Dialog->windowTitle() == QString::fromUtf8("현재 폴더 추가");
+                    auto* Edit = Dialog->findChild<QLineEdit*>();
+                    Focused = Edit && Edit->hasFocus();
+                    Named = Dialog->textValue() == QFileInfo(Directory.path()).fileName();
+                    Dialog->grab().save(QCoreApplication::applicationDirPath() + "/favorites-add-current.png");
+                    if (Attempt && Edit) QTest::keyClick(Edit, Qt::Key_Return);
+                    else Dialog->reject();
+                    if (Dialog->isVisible()) Dialog->reject();
+                } else if (!Invoked) {
+                    if (auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+                        Invoked = true;
+                        if (Attempt) QTest::keyClick(Menu, Qt::Key_Plus);
+                        else for (auto* Action : Menu->actions()) if (Action->text().contains("현재 폴더 추가")) {
+                            const auto Rect = Menu->actionGeometry(Action);
+                            QTest::mouseClick(Menu, Qt::LeftButton, Qt::NoModifier, QPoint(Rect.left() + 12, Rect.center().y())); break;
+                        }
+                    }
+                }
+            });
+            Probe.start();
+            QTimer::singleShot(3000, &Probe, [] { if (auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) Menu->close(); });
+            QVERIFY(TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.navigate.favorites"));
+            QTRY_VERIFY_WITH_TIMEOUT(Opened, 5000);
+            Probe.stop(); QVERIFY(Titled); QVERIFY(Focused); QVERIFY(Named);
+            QCOMPARE(Favorites->GetCount(), qsizetype(Attempt));
+        }
+        QCOMPARE(Favorites->GetItem(0).Name, QFileInfo(Directory.path()).fileName());
+        for (const auto& Path : {QString("shell:::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"),
+                               QString("::{645FF040-5081-101B-9F08-00AA002F954E}")}) {
+            Panel->ChangeCurrentPath(Path, {});
+            QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 10000);
+            QCOMPARE(static_cast<CFSModel*>(model(Panel))->WorkspaceLocation().kind_, hc::storage::LocatorKind::Shell);
+            QVERIFY(!static_cast<CFSModel*>(model(Panel))->HasPlaceholder());
+            QVERIFY(!static_cast<CFSModel*>(model(Panel))->LastNavigationError().has_value());
+        }
+    }
+
+    void favoritesShellAndReorderUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object();
+        auto* Favorites = TyStFavoriteDirMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Before); Favorites->Refresh(); });
+        QVERIFY(Favorites->ApplyConfiguration({{"first", "cd C:/", "C:/"}, {"second", "cd D:/", "D:/"}},
+            CFavoriteDirMgr::DRIVES_ON_TOP, CFavoriteDirMgr::DRIVES_ON_TOP, {"downloads", "documents"}));
+        {
+            QFavoriteDirConfigure Dialog(main_); Dialog.show(); Dialog.raise(); Dialog.activateWindow();
+            QTest::qWait(150); QTRY_VERIFY(Dialog.isActiveWindow());
+            auto* List = Dialog.findChild<fm::ui::ReorderListWidget*>("lstDir"); QVERIFY(List);
+            List->setCurrentRow(0);
+            auto* Edit = Dialog.findChild<QLineEdit*>("edtPath"); Edit->setText("C:/draft");
+            QVERIFY(QMetaObject::invokeMethod(&Dialog, "on_edtPath_editingFinished"));
+            QTest::qWait(60);
+            const auto Send = [&](QEvent::Type Type, QPoint Point, Qt::MouseButton Button, Qt::MouseButtons Buttons) {
+                QMouseEvent Event(Type, Point, List->viewport()->mapToGlobal(Point), Button, Buttons, Qt::NoModifier);
+                QApplication::sendEvent(List->viewport(), &Event);
+            };
+            const auto Target = List->visualItemRect(List->item(1)).bottomLeft() + QPoint(15, -1);
+            Send(QEvent::MouseButtonPress, List->HandleRect(0).center(), Qt::LeftButton, Qt::LeftButton);
+            Send(QEvent::MouseMove, Target, Qt::NoButton, Qt::LeftButton);
+            Send(QEvent::MouseButtonRelease, Target, Qt::LeftButton, Qt::NoButton);
+            QCOMPARE(List->item(0)->text(), QString("second"));
+            QCOMPARE(List->currentItem()->text(), QString("first"));
+            QCOMPARE(Edit->text(), QDir::toNativeSeparators("C:/draft"));
+            auto* Combo = Dialog.findChild<QComboBox*>("hc.favorites.shellPaths"); QVERIFY(Combo);
+            QCOMPARE(Combo->itemData(Combo->findData("downloads"), Qt::CheckStateRole).toInt(), int(Qt::Checked));
+            Combo->showPopup(); QTRY_VERIFY_WITH_TIMEOUT(Combo->view()->isVisible(), 2000);
+            QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + "/favorites-updated-config.png"));
+            QVERIFY(Combo->view()->isVisible());
+            const auto Download = Combo->model()->index(Combo->findData("downloads"), 0);
+            QTest::mouseClick(Combo->view()->viewport(), Qt::LeftButton, Qt::NoModifier, Combo->view()->visualRect(Download).center());
+            QCOMPARE(Combo->itemData(Combo->findData("downloads"), Qt::CheckStateRole).toInt(), int(Qt::Unchecked));
+            QVERIFY(Combo->view()->isVisible());
+            Combo->hidePopup();
+            QVERIFY(Dialog.grab().save(QCoreApplication::applicationDirPath() + "/favorites-updated-config.png"));
+            QVERIFY(QMetaObject::invokeMethod(&Dialog, "on_btnOK_clicked", Q_ARG(bool, false)));
+        }
+        Favorites->Refresh();
+        QCOMPARE(Favorites->GetItem(0).Name, QString("second"));
+        QCOMPARE(Favorites->GetItem(1).Path, QString("C:/draft"));
+        QCOMPARE(Favorites->GetShellPaths(), QStringList{"documents"});
+        for (auto Position : {CFavoriteDirMgr::DRIVES_ON_TOP, CFavoriteDirMgr::DRIVES_ON_BOTTOM}) {
+            QVERIFY(Favorites->ApplyConfiguration({{"entry", "cd C:/", "C:/"}}, Position, Position, {"downloads", "documents"}));
+            QMenu Menu; Favorites->ConstructDirMenu(&Menu);
+            int Drive = -1, Shell = -1, Favorite = -1;
+            for (int Row = 0; Row < Menu.actions().size(); ++Row) {
+                auto* Action = Menu.actions()[Row];
+                if (Action->menu()) {
+                    if (Action->menu()->objectName() == "hc.favorites.shellPathsMenu") { Shell = Row; QCOMPARE(Action->menu()->actions().size(), 2); }
+                    else Drive = Row;
+                } else if (Action->text().contains("entry")) Favorite = Row;
+            }
+            QVERIFY(Drive >= 0); QVERIFY(Shell > Drive);
+            QVERIFY(Position == CFavoriteDirMgr::DRIVES_ON_TOP ? Shell < Favorite : Favorite < Drive);
+        }
+        QVERIFY(!CFavoriteDirMgr::ResolveShellPath("profile").isEmpty());
+        QCOMPARE(CFavoriteDirMgr::ResolveShellPath("computer"), QString("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"));
+        QVERIFY(CFavoriteDirMgr::ResolveShellPath("unknown").isEmpty());
+        const auto Saved = Settings.Read(hc::settings::Section::Favorites);
+        {
+            QFavoriteDirConfigure Dialog;
+            Dialog.findChild<QRadioButton*>("hc.favorites.shellPosition0")->setChecked(true);
+            Dialog.findChild<QComboBox*>("hc.favorites.shellPaths")->setItemData(0, Qt::Unchecked, Qt::CheckStateRole);
+            Dialog.reject();
+        }
+        QCOMPARE(Settings.Read(hc::settings::Section::Favorites), Saved);
     }
 
     void todoBugFavoriteDraft()

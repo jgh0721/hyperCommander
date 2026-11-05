@@ -11,6 +11,7 @@
 #include <fmstyle/ThemeManager.h>
 #include <fmwidgets/Card.h>
 #include <fmwidgets/WindowChrome.h>
+#include <fmwidgets/SettingsWidgets.h>
 #include <QDir>
 #include <QFileDialog>
 #include <QStyledItemDelegate>
@@ -22,7 +23,8 @@ class FavoriteItemDelegate final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
     QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
-        return QSize(QStyledItemDelegate::sizeHint(Option, Index).width(), Option.fontMetrics.height() * 2 + 12);
+        Q_UNUSED(Index);
+        return QSize(0, Option.fontMetrics.height() * 2 + 12);
     }
     void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
         QStyleOptionViewItem Base = Option; initStyleOption(&Base, Index); Base.text.clear(); Base.icon = {};
@@ -31,10 +33,12 @@ public:
         using fm::style::Token;
         const bool Selected = Option.state & QStyle::State_Selected;
         const bool OnFill = Selected && Colors.fillsSelection() && (Option.state & QStyle::State_Active);
-        const QRect R = Option.rect.adjusted(10, 4, -8, -4);
+        const QRect R = Option.rect.adjusted(40, 4, -8, -4);
         const int Line = Option.fontMetrics.height();
         Painter->save();
         Painter->setPen(OnFill ? Colors[Token::OnAccent] : Colors[Token::Fg3]);
+        const auto Grip = static_cast<const fm::ui::ReorderListWidget*>(Option.widget)->HandleRect(Index.row());
+        for (int Offset : {-4, 0, 4}) Painter->drawLine(Grip.center().x() - 6, Grip.center().y() + Offset, Grip.center().x() + 6, Grip.center().y() + Offset);
         Painter->drawText(QRect(R.left(), R.top(), 16, Line), Qt::AlignLeft | Qt::AlignVCenter, QString::number(Index.row() + 1));
         const auto Path = Index.data(Qt::UserRole).toString();
         const bool Network = Path.startsWith(QStringLiteral("\\\\")) || Path.startsWith(QStringLiteral("//"));
@@ -63,6 +67,7 @@ QFavoriteDirConfigure::QFavoriteDirConfigure( QWidget* Parent, Qt::WindowFlags F
     for( qsizetype Index = 0; Index < Favorites->GetCount(); ++Index )
         items_.append( Favorites->GetItem( Index ) );
     drivesOn_ = Favorites->GetDrivesOn();
+    shellPathsOn_ = Favorites->GetShellPathsOn();
     // Populate controls without invoking persistence through toggled signals.
     const QSignalBlocker None( ui.rdoDrivesOnNone ), Top( ui.rdoDrivesOnTop ), Bottom( ui.rdoDrivesOnBottom );
     ui.rdoDrivesOnNone->setChecked( drivesOn_ == CFavoriteDirMgr::DRIVES_ON_NONE );
@@ -72,6 +77,12 @@ QFavoriteDirConfigure::QFavoriteDirConfigure( QWidget* Parent, Qt::WindowFlags F
     connect( ui.edtPath, &QLineEdit::textEdited, this, [this] { on_edtPath_editingFinished(); ui.lstDir->viewport()->update(); } );
     arrangeLayout();
     refresh();
+    connect(ui.lstDir->model(), &QAbstractItemModel::rowsMoved, this, [this](const QModelIndex&, int First, int Last, const QModelIndex&, int Destination) {
+        Q_UNUSED(Last);
+        items_.move(First, Destination > First ? Destination - 1 : Destination);
+        refreshItem(ui.lstDir->currentItem() ? ui.lstDir->currentItem()->text() : QString{});
+        ui.lstDir->viewport()->update();
+    });
 }
 
 void QFavoriteDirConfigure::arrangeLayout()
@@ -85,7 +96,7 @@ void QFavoriteDirConfigure::arrangeLayout()
     Outer->insertWidget( 1, Body, 1 );
 
     // Left: items card with compact actions in its header band.
-    auto* Items = new fm::ui::Card( tr( "항목" ), Body ); Items->setMeta( tr( "↑↓ 순서 변경 · 1~9 번호 키" ) ); Items->setMinimumWidth( 300 );
+    auto* Items = new fm::ui::Card( tr( "항목" ), Body ); Items->setMeta( tr( "☰ 끌어서 순서 변경 · Alt+↑↓" ) ); Items->setMinimumWidth( 300 );
     auto* ItemRows = new QVBoxLayout( Items ); ItemRows->setContentsMargins( 0, 0, 0, 0 );
     ui.lstDir->setFrameShape( QFrame::NoFrame ); ui.lstDir->setItemDelegate( new FavoriteItemDelegate( ui.lstDir ) ); ItemRows->addWidget( ui.lstDir );
     auto* Actions = new QWidget( Items ); auto* ActionRow = new QHBoxLayout( Actions ); ActionRow->setContentsMargins( 0, 0, 0, 0 ); ActionRow->setSpacing( 4 );
@@ -132,6 +143,36 @@ void QFavoriteDirConfigure::arrangeLayout()
     for( auto* Choice : { ui.rdoDrivesOnNone, ui.rdoDrivesOnTop, ui.rdoDrivesOnBottom } ) { Choice->setParent( Drives ); DriveLine->addWidget( Choice ); }
     DriveLine->addStretch(); DriveRows->addLayout( DriveLine );
     auto* DriveHint = new QLabel( tr( "드라이브는 하위 메뉴로 접히며, 항목 번호 키 1~9는 즐겨찾기 순서를 따릅니다." ), Drives ); DriveHint->setWordWrap( true ); DriveRows->addWidget( DriveHint );
+    auto* Shell = new fm::ui::Card(tr("셸 경로 목록"), Body); Side->addWidget(Shell);
+    auto* ShellRows = new QVBoxLayout(Shell); ShellRows->setContentsMargins(14, 12, 14, 12);
+    auto* Positions = new QHBoxLayout; ShellRows->addLayout(Positions);
+    Positions->addWidget(new QLabel(tr("팝업 위치"), Shell));
+    const QStringList Labels{tr("표시 안함"), tr("상단에 표시"), tr("하단에 표시")};
+    for (int Index = 0; Index < Labels.size(); ++Index) {
+        auto* Radio = new QRadioButton(Labels[Index], Shell);
+        Radio->setObjectName(QStringLiteral("hc.favorites.shellPosition%1").arg(Index));
+        Radio->setChecked(int(shellPathsOn_) == Index); Positions->addWidget(Radio);
+        connect(Radio, &QRadioButton::toggled, this, [this, Index](bool Checked) {
+            if (Checked) shellPathsOn_ = static_cast<CFavoriteDirMgr::TyEnDrivesOn>(Index);
+        });
+    }
+    auto* Combo = new fm::ui::CheckListCombo(Shell); shellPaths_ = Combo;
+    Combo->setObjectName("hc.favorites.shellPaths"); Combo->setAccessibleName(tr("Ctrl+G에 표시할 셸 경로"));
+    const auto Enabled = TyStFavoriteDirMgr::GetInstance()->GetShellPaths();
+    const auto Choices = CFavoriteDirMgr::ShellPathChoices();
+    QStringList Names;
+    for (const auto& Choice : Choices) Names.append(Choice.Name);
+    Combo->setCheckItems(Names);
+    int Mask = 0;
+    for (int Row = 0; Row < Choices.size(); ++Row) {
+        Combo->setItemData(Row, Choices[Row].Id);
+        if (Enabled.contains(Choices[Row].Id)) Mask |= 1 << Row;
+    }
+    Combo->setCheckedMask(Mask); ShellRows->addWidget(Combo);
+    Combo->setToolTip(Combo->summaryText());
+    connect(Combo, &fm::ui::CheckListCombo::checkedMaskChanged, Combo, [Combo] { Combo->setToolTip(Combo->summaryText()); });
+    auto* ShellHint = new QLabel(tr("여러 경로를 선택할 수 있습니다. 같은 위치에서는 드라이브 다음에 표시하며, 이동할 때 최신 경로를 확인합니다."), Shell);
+    ShellHint->setWordWrap(true); ShellRows->addWidget(ShellHint);
     Side->addStretch();
 
     // Footer: count status at the left, OK (primary) · Cancel at the right.
@@ -142,7 +183,7 @@ void QFavoriteDirConfigure::arrangeLayout()
     fm::style::setButtonRole( ui.btnOK, fm::style::ButtonRole::Primary ); ui.btnOK->setDefault( true );
     Outer->insertWidget( 2, Footer );
     ui.frmContent->hide(); ui.frmFooter->hide();
-    resize( 720, 480 );
+    resize( 800, 600 );
 }
 
 void QFavoriteDirConfigure::moveCurrent( int Offset )
@@ -150,9 +191,7 @@ void QFavoriteDirConfigure::moveCurrent( int Offset )
     const int Row = ui.lstDir->currentRow(), Target = Row + Offset;
     if( Row < 0 || Target < 0 || Target >= items_.size() ) return;
     on_edtCommand_editingFinished();
-    items_.swapItemsAt( Row, Target );
-    refresh();
-    ui.lstDir->setCurrentRow( Target );
+    ui.lstDir->MoveRow(Row, Target);
 }
 
 void QFavoriteDirConfigure::on_btnClose_clicked( bool checked )
@@ -230,6 +269,8 @@ void QFavoriteDirConfigure::on_edtCommand_editingFinished()
     Item.Name       = Current->text();
     Item.Command    = ui.edtCommand->text();
     Item.Path       = ui.edtPath->text();
+    const auto OriginalPath = items_.value(ui.lstDir->currentRow()).Path;
+    if (Item.Path == QDir::toNativeSeparators(OriginalPath)) Item.Path = OriginalPath;
 
     items_[ ui.lstDir->currentRow() ] = Item;
     Current->setData( Qt::UserRole, Item.Path );
@@ -244,7 +285,11 @@ void QFavoriteDirConfigure::on_btnOK_clicked( bool checked )
 {
     on_edtCommand_editingFinished();
 
-    if( !TyStFavoriteDirMgr::GetInstance()->ApplyConfiguration( items_, drivesOn_ ) )
+    QStringList ShellPaths;
+    for (int Row = 0; Row < shellPaths_->count(); ++Row)
+        if (shellPaths_->itemData(Row, Qt::CheckStateRole).toInt() == Qt::Checked)
+            ShellPaths.append(shellPaths_->itemData(Row).toString());
+    if( !TyStFavoriteDirMgr::GetInstance()->ApplyConfiguration( items_, drivesOn_, shellPathsOn_, ShellPaths ) )
     {
         ::ShowMSGBox( this, QMessageBox::Warning, tr( "즐겨찾기를 저장하지 못했습니다. 설정 파일의 쓰기 권한을 확인한 뒤 다시 시도하세요." ) );
         return;

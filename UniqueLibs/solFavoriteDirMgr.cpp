@@ -8,6 +8,8 @@
 #include <fmstyle/Glyphs.h>
 #include <fmstyle/ThemeManager.h>
 #include <QStorageInfo>
+#include <ShlObj.h>
+#include "qtMessageDialog.hpp"
 
 DECLARE_CMNLIBSV2_NAMESPACE
 
@@ -95,17 +97,28 @@ void CFavoriteDirMgr::SetDrivesOn( TyEnDrivesOn DrivesOn )
 
 bool CFavoriteDirMgr::ApplyConfiguration( QVector<TyFavoriteDir> Items, TyEnDrivesOn DrivesOn )
 {
+    return ApplyConfiguration(std::move(Items), DrivesOn, shellPathsOn_, shellPaths_);
+}
+
+bool CFavoriteDirMgr::ApplyConfiguration(QVector<TyFavoriteDir> Items, TyEnDrivesOn DrivesOn, TyEnDrivesOn ShellPathsOn, QStringList ShellPaths)
+{
+    const auto PreviousShellOn = shellPathsOn_;
+    const auto PreviousShellPaths = shellPaths_;
     const auto PreviousSettings = hc::settings::AppSettings().Read( hc::settings::Section::Favorites );
     const auto PreviousItems = vecItems_;
     const auto PreviousDrives = drivesOn_;
     vecItems_ = std::move( Items );
     drivesOn_ = DrivesOn;
+    shellPathsOn_ = ShellPathsOn;
+    shellPaths_ = std::move(ShellPaths);
     if( SaveSettings() ) return true;
     // Put updates the in-memory settings before attempting its atomic write.
     // Restore that draft too, so a later unrelated save cannot persist a failed edit.
     hc::settings::AppSettings().Put( hc::settings::Section::Favorites, PreviousSettings );
     vecItems_ = PreviousItems;
     drivesOn_ = PreviousDrives;
+    shellPathsOn_ = PreviousShellOn;
+    shellPaths_ = PreviousShellPaths;
     return false;
 }
 
@@ -124,6 +137,7 @@ void CFavoriteDirMgr::ConstructDirMenu( QMenu* Menu )
 
     if( drivesOn_ == DRIVES_ON_TOP )
         createDrives( Menu );
+    if( shellPathsOn_ == DRIVES_ON_TOP ) createShellPaths(Menu);
 
     // Items 1~9 get their number as the menu mnemonic; the target path is the right-hand tail.
     const QFontMetrics Metrics( Menu->font() );
@@ -146,12 +160,14 @@ void CFavoriteDirMgr::ConstructDirMenu( QMenu* Menu )
     if( drivesOn_ == DRIVES_ON_BOTTOM )
         createDrives( Menu );
 
+    if( shellPathsOn_ == DRIVES_ON_BOTTOM ) createShellPaths(Menu);
+
     QAction* Ac = nullptr;
 
     Menu->addSeparator();
 
-    Ac = Menu->addAction( fm::style::glyphIcon( fm::style::Glyph::PlusSmall, Colors[ Token::Fg2 ] ), QObject::tr( "현재 폴더 추가" ) );
-    connect( Ac, &QAction::triggered, this, &CFavoriteDirMgr::NotifyAppendCurrentPath );
+    Ac = Menu->addAction( fm::style::glyphIcon( fm::style::Glyph::PlusSmall, Colors[ Token::Fg2 ] ), QObject::tr( "현재 폴더 추가(&+)" ) );
+    connect( Ac, &QAction::triggered, this, &CFavoriteDirMgr::NotifyAppendCurrentPath, Qt::QueuedConnection );
     Ac = Menu->addAction( QObject::tr( "환경설정(&C)" ) );
     connect( Ac, &QAction::triggered, this, &CFavoriteDirMgr::OnConfigure );
 }
@@ -168,6 +184,14 @@ bool CFavoriteDirMgr::doRefresh()
     const auto Favorites = hc::settings::AppSettings().Read(hc::settings::Section::Favorites).toObject();
     const auto Position = Favorites["drivesOn"].toString(hc::defaults::DefaultValue("favorites/drivesOn").toString());
     drivesOn_ = Position == "top" ? DRIVES_ON_TOP : Position == "bottom" ? DRIVES_ON_BOTTOM : static_cast<TyEnDrivesOn>(0);
+    const auto ShellPosition = Favorites["shellPathsOn"].toString();
+    shellPathsOn_ = ShellPosition == "top" ? DRIVES_ON_TOP : ShellPosition == "bottom" ? DRIVES_ON_BOTTOM : DRIVES_ON_NONE;
+    shellPaths_.clear();
+    for (const auto& Value : Favorites["shellPaths"].toArray()) {
+        const auto Id = Value.toString();
+        for (const auto& Choice : ShellPathChoices())
+            if (Choice.Id == Id && !shellPaths_.contains(Id)) shellPaths_.append(Id);
+    }
     vecItems_.clear();
     for (const auto& Value : Favorites["items"].toArray()) {
         const auto Record = Value.toObject();
@@ -183,6 +207,8 @@ bool CFavoriteDirMgr::doSaveSettings()
     QJsonArray Items;
     for (const auto& Item : vecItems_) Items.append(QJsonObject{{"name",Item.Name},{"command",Item.Command},{"path",Item.Path}});
     return hc::settings::AppSettings().Put(hc::settings::Section::Favorites, QJsonObject{{"items",Items},
+        {"shellPathsOn", shellPathsOn_ == DRIVES_ON_TOP ? "top" : shellPathsOn_ == DRIVES_ON_BOTTOM ? "bottom" : "none"},
+        {"shellPaths", QJsonArray::fromStringList(shellPaths_)},
         {"drivesOn",drivesOn_ == DRIVES_ON_TOP ? "top" : drivesOn_ == DRIVES_ON_BOTTOM ? "bottom" : "none"}});
 }
 
@@ -217,5 +243,66 @@ void CFavoriteDirMgr::createDrives( QMenu* Menu )
             while( *wszC++ );
 
         } while( *wszC );
+    }
+}
+
+namespace {
+struct ShellFolderEntry { const char* Id; const char* Name; const KNOWNFOLDERID* Folder; const char* ParsingName = nullptr; };
+const ShellFolderEntry ShellFolders[] = {
+    {"computer", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "내 PC"), nullptr, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"},
+    {"recycleBin", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "휴지통"), nullptr, "::{645FF040-5081-101B-9F08-00AA002F954E}"},
+    {"network", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "네트워크"), nullptr, "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"},
+    {"downloads", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "다운로드"), &FOLDERID_Downloads},
+    {"documents", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "내 문서함"), &FOLDERID_Documents},
+    {"desktop", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "바탕 화면"), &FOLDERID_Desktop},
+    {"pictures", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "사진"), &FOLDERID_Pictures},
+    {"music", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "음악"), &FOLDERID_Music},
+    {"videos", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "동영상"), &FOLDERID_Videos},
+    {"profile", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "사용자 폴더"), &FOLDERID_Profile},
+    {"roamingAppData", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "앱 데이터 (로밍)"), &FOLDERID_RoamingAppData},
+    {"localAppData", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "앱 데이터 (로컬)"), &FOLDERID_LocalAppData},
+    {"public", QT_TRANSLATE_NOOP("CFavoriteDirMgr", "공용 폴더"), &FOLDERID_Public},
+};
+}
+
+QVector<CFavoriteDirMgr::TyShellPath> CFavoriteDirMgr::ShellPathChoices()
+{
+    QVector<TyShellPath> Choices;
+    for (const auto& Entry : ShellFolders) Choices.append({QString::fromLatin1(Entry.Id), tr(Entry.Name)});
+    return Choices;
+}
+
+QString CFavoriteDirMgr::ResolveShellPath(const QString& Id)
+{
+    for (const auto& Entry : ShellFolders) {
+        if (Id != QLatin1String(Entry.Id)) continue;
+        if (Entry.ParsingName) return QString::fromLatin1(Entry.ParsingName);
+        PWSTR Buffer = nullptr;
+        // Resolve the redirected current location on every activation; persist only the folder ID.
+        const auto Result = SHGetKnownFolderPath(*Entry.Folder, KF_FLAG_DONT_VERIFY, nullptr, &Buffer);
+        const auto Path = SUCCEEDED(Result) && Buffer ? QString::fromWCharArray(Buffer) : QString{};
+        CoTaskMemFree(Buffer);
+        return Path;
+    }
+    return {};
+}
+
+void CFavoriteDirMgr::createShellPaths(QMenu* Menu)
+{
+    if (shellPaths_.isEmpty()) return;
+    auto* Parent = Menu->addMenu(tr("셸 경로"));
+    Parent->setObjectName("hc.favorites.shellPathsMenu");
+    for (const auto& Choice : ShellPathChoices()) {
+        if (!shellPaths_.contains(Choice.Id)) continue;
+        auto* Action = Parent->addAction(Choice.Name);
+        Action->setData(Choice.Id);
+        connect(Action, &QAction::triggered, this, [Choice] {
+            const auto Path = ResolveShellPath(Choice.Id);
+            if (Path.isEmpty()) {
+                hc::ui::MessageDialog::warning(nullptr, tr("셸 경로"), tr("%1 경로를 찾을 수 없습니다.").arg(Choice.Name));
+                return;
+            }
+            TyStCommandMgr::GetInstance()->ProcessFavoriteDir(QStringLiteral("cd ") + Path, {});
+        });
     }
 }

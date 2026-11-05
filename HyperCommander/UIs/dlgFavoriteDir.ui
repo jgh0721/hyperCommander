@@ -142,7 +142,7 @@
        <number>12</number>
       </property>
       <item>
-       <widget class="QListWidget" name="lstDir"/>
+       <widget class="fm::ui::ReorderListWidget" name="lstDir"/>
       </item>
       <item>
        <widget class="QWidget" name="widget" native="true">
@@ -329,6 +329,13 @@
    </item>
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>fm::ui::ReorderListWidget</class>
+   <extends>QListWidget</extends>
+   <header>fmwidgets/ReorderList.h</header>
+  </customwidget>
+ </customwidgets>
  <resources>
   <include location="../HyperCommander.qrc"/>
  </resources>
