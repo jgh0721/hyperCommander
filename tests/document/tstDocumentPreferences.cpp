@@ -13,6 +13,7 @@
 #include "text/QTextView.h"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
+#include "UniqueLibs/document/epubSourceTabs.hpp"
 #include "UniqueLibs/document/epubLineShifts.hpp"
 #include "text/ColumnRulerWidget.h"
 #include <QClipboard>
@@ -1115,6 +1116,54 @@ private slots:
         QVERIFY(SourceReady);QTest::qWait(2000);QVERIFY(Editor.state()!=QProcess::NotRunning);
         Editor.terminate();QTRY_VERIFY_WITH_TIMEOUT(Editor.state()==QProcess::NotRunning,30000);
         QCOMPARE(Editor.exitStatus(),QProcess::NormalExit);QCOMPARE(Editor.exitCode(),0);
+    }
+    void epubChapterTabsAndPreviewHeader()
+    {
+        QTemporaryDir Temp;const auto OldConfig=qApp->property("documentViewsConfigDir"),OldWorkspace=qApp->property("epubWorkspaceDirectory");
+        qApp->setProperty("documentViewsConfigDir",Temp.path());qApp->setProperty("epubWorkspaceDirectory",Temp.path());
+        auto& Theme=fm::style::ThemeManager::instance();const auto OldScheme=Theme.scheme();
+        const auto Restore=qScopeGuard([&]{Theme.setScheme(OldScheme);qApp->setProperty("documentViewsConfigDir",OldConfig);qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);});
+        if(!Theme.isInstalled())Theme.install(*qApp);
+        EpubSourceEditor Editor(workspaceBook(),Temp.filePath("tabs.epub"));Editor.SetRecoveryEnabled(false);
+        Editor.findChild<QAction*>("epubAutoPreview")->setChecked(false);Editor.ConfigurePreview({});Editor.resize(1280,650);Editor.show();
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+        QVERIFY(Editor.Execute({{"action","epub.edit.layout"},{"orientation","horizontal"},{"tree",false},{"problems",false},{"preview",true}})["accepted"].toBool());
+        auto* Tabs=static_cast<EpubSourceTabs*>(Editor.findChild<QTabBar*>("epubSourceTabs"));QVERIFY(Tabs);
+        QCOMPARE(Tabs->tabText(0),QString("First\none.xhtml"));
+        const auto Select=[&](const QString& Path){return Editor.Execute({{"action","epub.edit.select"},{"resource",Path}})["accepted"].toBool();};
+        const auto Resource=[&]{for(const auto& Field:Editor.StatusFields())if(Field.id_=="resource")return Field.text_;return QString{};};
+        QCOMPARE(Resource(),QString("one.xhtml(First)"));
+        QVERIFY(Select("EPUB/two.xhtml"));QCOMPARE(Tabs->tabText(Tabs->currentIndex()),QString("Second\ntwo.xhtml"));
+        QVERIFY(Select("EPUB/nav.xhtml"));QCOMPARE(Tabs->tabText(Tabs->currentIndex()),QString("nav.xhtml"));QCOMPARE(Resource(),QString("nav.xhtml"));
+        auto* Header=Editor.findChild<QWidget*>("epubPreviewHeader");auto* Title=Editor.findChild<QLabel*>("epubPreviewTitle");
+        auto* Frame=Editor.findChild<QWidget*>("epubPreviewFrame");QVERIFY(Header && Title && Frame);
+        const auto Aligned=[&]{return qAbs(Tabs->mapTo(&Editor,Tabs->PrimaryTextRect(Tabs->currentIndex()).center()).y()-Title->mapTo(&Editor,Title->rect().center()).y())<=1
+            && Frame->mapTo(&Editor,QPoint{}).y()==Editor.SourceInput()->mapTo(&Editor,QPoint{}).y();};
+        const auto Geometry=[&]{return QString("tabTitle=%1 previewTitle=%2 sourceBody=%3 previewBody=%4 headerHeight=%5 controlsHeight=%6")
+            .arg(Tabs->mapTo(&Editor,Tabs->PrimaryTextRect(Tabs->currentIndex()).center()).y()).arg(Title->mapTo(&Editor,Title->rect().center()).y())
+            .arg(Editor.SourceInput()->mapTo(&Editor,QPoint{}).y()).arg(Frame->mapTo(&Editor,QPoint{}).y()).arg(Header->height()).arg(Header->findChild<QWidget*>("epubPreviewControls")->height());};
+        QColor PreviousLine;
+        for(const auto Scheme:{fm::style::ThemeManager::Scheme::Light,fm::style::ThemeManager::Scheme::Dark}) {
+            Theme.setScheme(Scheme);
+            for(const auto& Path:{QString("EPUB/one.xhtml"),QString("EPUB/nav.xhtml")}) {
+                QVERIFY(Select(Path));QTRY_VERIFY2(Aligned(),qPrintable(Geometry()));
+                for(const bool Ruler:{false,true}){Editor.SourceView()->setRulerVisible(Ruler);QTRY_VERIFY2(Aligned(),qPrintable(Geometry()));}
+                const auto Shot=Header->grab().toImage();const auto Expected=Theme.colors()[fm::style::Token::Line];
+                QCOMPARE(Shot.pixelColor(Shot.width()/2,Shot.height()-1).rgb(),Expected.rgb());
+                const auto Output=qEnvironmentVariable("HC_UI_LOCAL_ROOT");if(!Output.isEmpty())QVERIFY(Editor.grab(QRect(0,0,Editor.width(),130)).save(Output+QString("/epub-header-%1-%2.png").arg(Scheme==fm::style::ThemeManager::Scheme::Light?"light":"dark",Path.endsWith("nav.xhtml")?"filename":"chapter")));
+            }
+            const auto Line=Theme.colors()[fm::style::Token::Line];if(PreviousLine.isValid())QVERIFY(PreviousLine!=Line);PreviousLine=Line;
+        }
+        QVERIFY(Select("EPUB/one.xhtml"));
+        QVERIFY(Editor.Execute({{"action","epub.edit.layout"},{"tree",true}})["accepted"].toBool());
+        auto* Hide=Editor.findChild<QToolButton*>("epubResourceHide");auto* TreeToggle=Editor.findChild<QAction*>("epubToggleTree");QVERIFY(Hide && TreeToggle);
+        QVERIFY(Hide->isVisible());Hide->click();QVERIFY(!TreeToggle->isChecked());QVERIFY(Editor.findChild<QWidget*>("epubResourcePane")->isHidden());
+        TreeToggle->trigger();QVERIFY(TreeToggle->isChecked());QVERIFY(!Editor.findChild<QWidget*>("epubResourcePane")->isHidden());
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend());Backend->replace(" ");
+        QVERIFY(Tabs->tabText(Tabs->currentIndex()).startsWith(QString("First ●\n")));QCOMPARE(Resource(),QString("one.xhtml(First)"));
+        const auto Small=Tabs->FilenameFont();QVERIFY((Small.pixelSize()>0?Small.pixelSize():Small.pointSizeF())<(Tabs->font().pixelSize()>0?Tabs->font().pixelSize():Tabs->font().pointSizeF()));
+        QVERIFY(Editor.Execute({{"action","epub.edit.layout"},{"orientation","vertical"}})["accepted"].toBool());
+        QTRY_VERIFY(Header->height()<=Header->findChild<QWidget*>("epubPreviewControls")->height()+5);
     }
     void epubWrapMenuFollowsSourceSettings()
     {

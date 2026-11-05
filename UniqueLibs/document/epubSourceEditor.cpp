@@ -364,7 +364,7 @@ void EpubSourceEditor::validate(bool SaveAfter,bool Standard) {
 }
 bool EpubSourceEditor::eventFilter(QObject* Object,QEvent* Event) {
     if((Object==SourceInput() || Object==sourcePanel_) &&
-       (Event->type()==QEvent::Move || Event->type()==QEvent::Resize || Event->type()==QEvent::Show || Event->type()==QEvent::LayoutRequest))
+       (Event->type()==QEvent::Move || Event->type()==QEvent::Resize || Event->type()==QEvent::Show || Event->type()==QEvent::LayoutRequest || Event->type()==QEvent::FontChange || Event->type()==QEvent::StyleChange))
         QTimer::singleShot(0,this,&EpubSourceEditor::alignPreview);
     if(Object==SourceInput() && Event->type()==QEvent::InputMethod) {
         sourceComposing_=!static_cast<QInputMethodEvent*>(Event)->preeditString().isEmpty();text_->setProperty("epubSourceComposing",sourceComposing_);setProperty("epubSourceComposing",sourceComposing_);

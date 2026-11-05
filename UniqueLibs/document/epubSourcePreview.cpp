@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <Windows.h>
 #include "epubProcessView.hpp"
+#include "epubSourceTabs.hpp"
 #include "core/AppSettings.h"
 #include "text/QTextView.h"
 #include <QAction>
@@ -11,6 +12,7 @@
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QLabel>
+#include <QPainter>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedLayout>
@@ -19,21 +21,46 @@
 #include <QVBoxLayout>
 #include <QtConcurrentRun>
 #include <algorithm>
+#include <fmstyle/ThemeManager.h>
 namespace hc::document {
+namespace {
+class EpubPreviewHeader final:public QWidget {
+public:
+    using QWidget::QWidget;
+protected:
+    void paintEvent(QPaintEvent* Event)override {
+        QWidget::paintEvent(Event);QPainter Painter(this);
+        Painter.fillRect(QRect(0,height()-1,width(),1),fm::style::themeColorsFor(this)[fm::style::Token::Line]);
+    }
+};
+}
 // Follow the actual input surface when the ruler, tabs or recovery notice changes.
 void EpubSourceEditor::alignPreview() {
     auto* Header=previewPanel_->findChild<QWidget*>("epubPreviewHeader");
     if(!Header)return;
-    const int Height=previewSplitter_->orientation()==Qt::Horizontal && sourceShown()
-        ? SourceInput()->mapTo(sourcePanel_,QPoint{}).y() : Header->sizeHint().height();
+    auto* Controls=Header->findChild<QWidget*>("epubPreviewControls");if(!Controls)return;
+    if(auto* Refresh=Controls->findChild<QToolButton*>())Refresh->setFixedHeight(Refresh->fontMetrics().height()+6);
+    const bool Beside=previewSplitter_->orientation()==Qt::Horizontal && IsSourceVisible() && sourceShown();
+    const int RowHeight=Controls->sizeHint().height();Controls->setFixedHeight(RowHeight);
+    // The source header also contains a ruler/recovery notice. Align the status row with
+    // the active tab's primary line while keeping the preview body level with the editor input.
+    const auto TitleRect=static_cast<EpubSourceTabs*>(tabs_)->PrimaryTextRect(tabs_->currentIndex());
+    const int TitleY=tabs_->mapTo(sourcePanel_,TitleRect.center()).y();
+    const int Top=Beside && TitleRect.isValid()?qMax(0,TitleY-RowHeight/2):2;
+    Header->layout()->setContentsMargins(0,Top,0,1);
+    const int Height=Beside?qMax(SourceInput()->mapTo(sourcePanel_,QPoint{}).y(),Top+RowHeight+1):Top+RowHeight+1;
     if(Header->height()!=Height || Header->minimumHeight()!=Height)Header->setFixedHeight(Height);
 }
 void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Chapter) {
     if(previewRuntime_)return;if(workspaceRestored_)Chapter=spineIndex(current_);previewRuntime_=Runtime;previewPreferredChapter_=previewRestoreChapter_=Chapter;
     auto* Panel=previewPanel_;auto* Layout=new QVBoxLayout(Panel);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
-    auto* Header=new QWidget(Panel);Header->setObjectName("epubPreviewHeader");auto* Controls=new QHBoxLayout(Header);Controls->setContentsMargins(8,2,4,2);Controls->setSpacing(4);
+    auto* Header=new EpubPreviewHeader(Panel);Header->setObjectName("epubPreviewHeader");
+    auto* HeaderLayout=new QVBoxLayout(Header);HeaderLayout->setContentsMargins(0,2,0,1);HeaderLayout->setSpacing(0);
+    auto* ControlRow=new QWidget(Header);ControlRow->setObjectName("epubPreviewControls");HeaderLayout->addWidget(ControlRow);HeaderLayout->addStretch();
+    auto* Controls=new QHBoxLayout(ControlRow);Controls->setContentsMargins(8,2,4,2);Controls->setSpacing(4);
+    connect(&fm::style::ThemeManager::instance(),&fm::style::ThemeManager::changed,Header,[Header]{Header->update();});
     // Keep layout and preview toggles in the View menu so the header can stay compact.
-    auto* Title=new QLabel(tr("미리보기"),Header);auto Font=Title->font();Font.setWeight(QFont::DemiBold);Title->setFont(Font);Title->setMinimumWidth(1);Controls->addWidget(Title);
+    auto* Title=new QLabel(tr("미리보기"),ControlRow);Title->setObjectName("epubPreviewTitle");auto Font=Title->font();Font.setWeight(QFont::DemiBold);Title->setFont(Font);Title->setMinimumWidth(1);Controls->addWidget(Title);
     previewChip_=new QLabel(Header);previewChip_->setObjectName("epubPreviewState");previewChip_->setTextFormat(Qt::PlainText);previewChip_->setAccessibleName(tr("EPUB 미리보기 상태"));previewChip_->setMinimumWidth(24);Controls->addWidget(previewChip_);Controls->addStretch();
     auto* Refresh=new QToolButton(Header);Refresh->setDefaultAction(action("epubPreviewRefresh"));Refresh->setAutoRaise(true);Refresh->setToolButtonStyle(Qt::ToolButtonTextOnly);Controls->addWidget(Refresh);
     previewChapterLabel_=new QLabel(Header);previewChapterLabel_->setObjectName("epubPreviewChapter");previewChapterLabel_->setForegroundRole(QPalette::PlaceholderText);previewChapterLabel_->setMinimumWidth(1);Controls->addWidget(previewChapterLabel_);Layout->addWidget(Header);

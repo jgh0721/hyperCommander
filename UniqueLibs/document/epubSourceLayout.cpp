@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
 #include "epubResourceTree.hpp"
+#include "epubSourceTabs.hpp"
 #include "epubProcessView.hpp"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
@@ -74,7 +75,7 @@ void EpubSourceEditor::setupLayout() {
     workSplitter_=new EpubSplitter(Qt::Vertical,outerSplitter_,[this]{setPanelVisible("problems",false);});workSplitter_->setObjectName("epubWorkSplitter");
     previewSplitter_=new EpubSplitter(Qt::Horizontal,workSplitter_,[this]{setPanelVisible("preview",false);});previewSplitter_->setObjectName("epubPreviewSplitter");
     sourcePanel_=new QWidget(previewSplitter_);sourcePanel_->setObjectName("epubSourceArea");auto* Source=new QVBoxLayout(sourcePanel_);Source->setContentsMargins(0,0,0,0);Source->setSpacing(0);
-    tabs_=new QTabBar(sourcePanel_);tabs_->setObjectName("epubSourceTabs");tabs_->setAccessibleName(tr("열린 EPUB 리소스"));tabs_->setTabsClosable(true);tabs_->setDocumentMode(true);tabs_->setExpanding(false);tabs_->setElideMode(Qt::ElideNone);tabs_->setUsesScrollButtons(true);tabs_->setContextMenuPolicy(Qt::CustomContextMenu);Source->addWidget(tabs_);
+    tabs_=new EpubSourceTabs(sourcePanel_);tabs_->setObjectName("epubSourceTabs");tabs_->setAccessibleName(tr("열린 EPUB 리소스"));tabs_->setTabsClosable(true);tabs_->setDocumentMode(true);tabs_->setExpanding(false);tabs_->setElideMode(Qt::ElideNone);tabs_->setUsesScrollButtons(true);tabs_->setContextMenuPolicy(Qt::CustomContextMenu);Source->addWidget(tabs_);
     recoveryBar_=new QWidget(sourcePanel_);recoveryBar_->setObjectName("epubRecoveryBar");recoveryBar_->setAutoFillBackground(true);recoveryBar_->setBackgroundRole(QPalette::AlternateBase);
     {auto* Row=new QHBoxLayout(recoveryBar_);Row->setContentsMargins(10,4,6,4);Row->setSpacing(6);recoveryText_=new QLabel(recoveryBar_);recoveryText_->setTextFormat(Qt::PlainText);recoveryText_->setWordWrap(false);Row->addWidget(recoveryText_,1);
      for(const auto& [Name,Label]:{std::pair{"epubRecoveryRestore",tr("초안 복원")},std::pair{"epubRecoveryOther",tr("다른 초안…")},std::pair{"epubRecoveryRemove",tr("삭제")}}){auto* Button=new QToolButton(recoveryBar_);Button->setObjectName(Name);Button->setText(Label);Button->setAutoRaise(false);Row->addWidget(Button);}
@@ -114,7 +115,8 @@ void EpubSourceEditor::setupResources(QWidget* Panel) {
     auto* Layout=new QVBoxLayout(Panel);Layout->setContentsMargins(6,6,4,4);Layout->setSpacing(4);
     auto* Header=new QHBoxLayout;Header->setSpacing(2);auto* Title=new QLabel(tr("책 구조"),Panel);auto Font=Title->font();Font.setWeight(QFont::DemiBold);Title->setFont(Font);Header->addWidget(Title,1);
     auto* Add=new QToolButton(Panel);Add->setObjectName("epubResourceAdd");Add->setText(QStringLiteral("+"));Add->setToolTip(tr("리소스 추가"));Add->setAccessibleName(tr("리소스 추가"));Add->setAutoRaise(true);Add->setPopupMode(QToolButton::InstantPopup);Header->addWidget(Add);
-    auto* Collapse=new QToolButton(Panel);Collapse->setObjectName("epubResourceCollapse");Collapse->setText(QStringLiteral("⌃"));Collapse->setToolTip(tr("모두 접기"));Collapse->setAccessibleName(tr("모두 접기"));Collapse->setAutoRaise(true);Header->addWidget(Collapse);Layout->addLayout(Header);
+    auto* Collapse=new QToolButton(Panel);Collapse->setObjectName("epubResourceCollapse");Collapse->setText(QStringLiteral("⌃"));Collapse->setToolTip(tr("모두 접기"));Collapse->setAccessibleName(tr("모두 접기"));Collapse->setAutoRaise(true);Header->addWidget(Collapse);
+    auto* Hide=new QToolButton(Panel);Hide->setObjectName("epubResourceHide");Hide->setText(QStringLiteral("‹"));Hide->setToolTip(tr("책 구조 패널 접기"));Hide->setAccessibleName(tr("책 구조 패널 접기"));Hide->setAutoRaise(true);Header->addWidget(Hide);connect(Hide,&QToolButton::clicked,this,[this]{setPanelVisible("tree",false);});Layout->addLayout(Header);
     treeFilter_=new QLineEdit(Panel);treeFilter_->setObjectName("epubResourceFilter");treeFilter_->setClearButtonEnabled(true);treeFilter_->setAccessibleName(tr("리소스 필터"));Layout->addWidget(treeFilter_);
     resourceModel_=new EpubResourceModel(this);resourceFilter_=new EpubResourceFilter(this);resourceFilter_->setSourceModel(resourceModel_);
     resourceModel_->SetDecorations([this](const QString& Path){return touchedResources_.contains(Path) || model_.Changes().contains(Path) || (Path==current_ && sourceShown() && sourceModified());},
@@ -249,7 +251,8 @@ QList<DocumentStatusField> EpubSourceEditor::StatusFields()const {
         if(!Text.isEmpty())Fields.append(DocumentStatusField{Id,Text,Compact,Detail,{},Essential,Trailing,true});
     };
     if(Source)Pick("position",tr("줄 %1 · 열 %2").arg(text_->currentLine()).arg(text_->currentColumn()),true,false,QString("%1:%2").arg(text_->currentLine()).arg(text_->currentColumn()));
-    Fields.append(DocumentStatusField{"resource",current_,{},current_,{},false});
+    const auto Title=resourceModel_->Title(current_).simplified();const auto Filename=QFileInfo(current_).fileName();
+    Fields.append(DocumentStatusField{"resource",Title.isEmpty()?Filename:Filename+"("+Title+")",{},current_,{},false});
     if(Source) {
         Fields.append(DocumentStatusField{"language",text_->currentLanguage(),{},{},{},false,true});
         const auto Eol=static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_GETEOLMODE);
@@ -385,8 +388,14 @@ void EpubSourceEditor::refreshTabs() {
     openResources_.removeIf([this](const QString& Path){return !model_.Publication().isEmpty() && !model_.IsEditable(Path);});
     bool Same=tabs_->count()==openResources_.size();for(int I=0;Same && I<tabs_->count();++I)Same=tabs_->tabData(I).toString()==openResources_[I];
     if(!Same){while(tabs_->count())tabs_->removeTab(0);for(const auto& Path:openResources_){const int Index=tabs_->addTab(QFileInfo(Path).fileName());tabs_->setTabData(Index,Path);tabs_->setTabToolTip(Index,Path);}}
-    for(int I=0;I<tabs_->count();++I){const auto Path=tabs_->tabData(I).toString();tabs_->setTabText(I,QFileInfo(Path).fileName()+(Path==current_ && sourceShown() && sourceModified()?QStringLiteral(" ●"):QString{}));}
+    for(int I=0;I<tabs_->count();++I){
+        const auto Path=tabs_->tabData(I).toString(),Filename=QFileInfo(Path).fileName(),Title=resourceModel_->Title(Path).simplified();
+        const auto Dirty=Path==current_ && sourceShown() && sourceModified()?QStringLiteral(" ●"):QString{};
+        tabs_->setTabText(I,Title.isEmpty()?Filename+Dirty:Title+Dirty+'\n'+Filename);
+        tabs_->setTabToolTip(I,Title.isEmpty()?Path:Title+'\n'+Path);
+    }
     tabs_->setCurrentIndex(openResources_.indexOf(current_));updating_=Old;if(resourceModel_)resourceModel_->Refresh();updateActions();
+    QTimer::singleShot(0,this,&EpubSourceEditor::alignPreview);
 }
 void EpubSourceEditor::closeTab(int Index){if(Index>=0 && Index<tabs_->count())closeResource(tabs_->tabData(Index).toString(),true);}
 void EpubSourceEditor::closeTabs(const QList<int>& Indexes){QStringList Paths;for(const int Index:Indexes)Paths.append(tabs_->tabData(Index).toString());for(const auto& Path:Paths)if(!closeResource(Path,true))break;}
