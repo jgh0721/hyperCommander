@@ -29,7 +29,10 @@ namespace hc::ui
         const bool Remote = NativePath.startsWith("\\\\") || NetworkFailure;
         const bool Redirected = NativePath.compare("\\\\tsclient", Qt::CaseInsensitive) == 0
             || NativePath.startsWith("\\\\tsclient\\", Qt::CaseInsensitive);
-        if (Error.category_ == ErrorCategory::Cancelled) {
+        if (Code == "file-container-not-supported") {
+            Text.summary_ = QObject::tr("선택한 파일을 열 수 있는 컨테이너 플러그인이 없습니다.");
+            Text.recovery_ = QObject::tr("파일 형식과 플러그인의 활성화·적용 조건을 확인하세요.");
+        } else if (Error.category_ == ErrorCategory::Cancelled) {
             Text.summary_ = QObject::tr("폴더 목록 조회를 취소했습니다.");
             Text.recovery_ = QObject::tr("다시 시도를 누르면 같은 폴더를 다시 조회합니다.");
         } else if (Error.category_ == ErrorCategory::AccessDenied) {

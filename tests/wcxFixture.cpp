@@ -92,6 +92,8 @@ extern "C" __declspec(dllexport) HANDLE __stdcall OpenArchiveW(tOpenArchiveDataW
 {
     auto State = new ArchiveState;
     if (!Load(Open->ArcName, *State)) { delete State; Open->OpenResult = E_UNKNOWN_FORMAT; return nullptr; }
+    if (State->mode_ == 'G') { delete State; Open->OpenResult = E_BAD_ARCHIVE; return nullptr; }
+    if (State->mode_ == 'H') Sleep(1000); // A content probe must remain cancellable without blocking the GUI.
     if (State->mode_ == 'M' && !CommitLargeDictionary()) { delete State; Open->OpenResult = E_NO_MEMORY; return nullptr; }
     if (State->mode_ == 'U') { Open->OpenResult = CheckPassword(Open->ArcName); if (Open->OpenResult) { delete State; return nullptr; } }
     return State;

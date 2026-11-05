@@ -343,7 +343,7 @@ std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::ViewerChoi
     return Choices;
 }
 
-std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::DataChoices(hc::settings::Repository& Settings, hc::plugins::PluginFormat Format)
+std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::DataChoices(hc::settings::Repository& Settings, hc::plugins::PluginFormat Format, bool FileContainers)
 {
     using namespace hc::plugins;
     std::vector<QtViewerSurface::PluginViewerChoice> Choices;
@@ -353,7 +353,7 @@ std::vector<QtViewerSurface::PluginViewerChoice> QPluginHostSettings::DataChoice
         const auto Record = Items[Index].toObject();
         const auto Rule = PluginApplicationRule::Parse(Record.value("application"));
         if (!Rule.HasValue() || !Rule.Value().Enabled() || !Record["hostEnabled"].toBool(hc::defaults::DefaultValue("pluginRecord/hostEnabled").toBool())) continue;
-        if ((Format == PluginFormat::Wfx || Format == PluginFormat::DopusVfs) && Record.value("application").toObject().value("mode").toString(hc::defaults::DefaultValue("builtinApplication/mode").toString()) != "all") continue;
+        if (!FileContainers && (Format == PluginFormat::Wfx || Format == PluginFormat::DopusVfs) && Record.value("application").toObject().value("mode").toString(hc::defaults::DefaultValue("builtinApplication/mode").toString()) != "all") continue;
         QtViewerSurface::PluginViewerChoice Choice; Choice.id_ = QString::number(Index);
         Choice.extensions_ = hc::settings::Strings(Record.value("extensions"));
         auto& Options = Choice.options_; Options.binaryPath_ = Record["path"].toString(); Options.applicationRule_ = Record.value("application");

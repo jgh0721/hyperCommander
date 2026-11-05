@@ -20,6 +20,16 @@ namespace
     Instance& State(HANDLE Handle) { Require(Initialized && Handle); return *static_cast<Instance*>(Handle); }
     BOOL Result(HANDLE Handle, BOOL Good) { State(Handle).error_ = Good ? 0 : GetLastError(); return Good; }
     bool ArchivePath(const std::wstring& Path) { return Path.ends_with(L".hcvfs"); }
+    std::filesystem::path ContentRoot(const std::wstring& Path)
+    {
+        wchar_t Binary[1024]{}; GetModuleFileNameW(Module, Binary, 1024); if (!wcsstr(Binary, L"content")) return {};
+        auto Root = std::filesystem::path(Path);
+        while (!Root.empty()) {
+            std::error_code Error; if (std::filesystem::is_regular_file(Root, Error)) return Root;
+            const auto Parent = Root.parent_path(); if (Parent == Root) break; Root = Parent;
+        }
+        return {};
+    }
     void StoreArchive(const std::filesystem::path& Target, const std::vector<std::filesystem::path>& Sources)
     {
         std::vector<std::pair<std::filesystem::path, std::wstring>> Entries;
@@ -40,12 +50,15 @@ namespace
     }
     std::wstring Mapped(HANDLE Handle, const wchar_t* Path)
     {
-        const std::wstring Value(Path); const auto End = Value.find(L".hcvfs"); if (End == std::wstring::npos) return Value;
-        const auto Root = Value.substr(0, End + 6); if (!std::filesystem::is_regular_file(Root)) return Value;
+        const std::wstring Value(Path); const auto End = Value.find(L".hcvfs"); const auto Content = ContentRoot(Value);
+        if (End == std::wstring::npos && Content.empty()) return Value;
+        const auto Root = Content.empty() ? Value.substr(0, End + 6) : Content.wstring(); if (!std::filesystem::is_regular_file(Root)) return Value;
         auto& Cache = State(Handle).cache_;
         if (Cache.empty()) {
             wchar_t Base[MAX_PATH]{}; Require(GetTempPathW(MAX_PATH, Base)); Cache = std::filesystem::path(Base) / (L"hc-dopus-fixture-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
-            Require(std::filesystem::create_directory(Cache)); std::ifstream Input(Root, std::ios::binary); uint32_t Count = 0; Input.read(reinterpret_cast<char*>(&Count), 4); Require(Count < 1000);
+            Require(std::filesystem::create_directory(Cache)); std::ifstream Input(Root, std::ios::binary);
+            if (!Content.empty()) Input.seekg(7);
+            uint32_t Count = 0; Input.read(reinterpret_cast<char*>(&Count), 4); Require(Count < 1000);
             for (uint32_t I = 0; I < Count; ++I) {
                 uint32_t Length = 0, Directory = 0; uint64_t Size = 0; Input.read(reinterpret_cast<char*>(&Length), 4); Require(Length && Length < 1024);
                 std::wstring Name(Length, 0); Input.read(reinterpret_cast<char*>(Name.data()), Length * sizeof(wchar_t)); Input.read(reinterpret_cast<char*>(&Directory), 4); Input.read(reinterpret_cast<char*>(&Size), 8); Require(Size < 16 * 1024 * 1024 && Name.find(L"..") == std::wstring::npos && Name.front() != L'\\');
@@ -54,7 +67,7 @@ namespace
                 Require(Input.good());
             }
         }
-        auto Tail = Value.substr(End + 6); while (!Tail.empty() && Tail.front() == L'\\') Tail.erase(Tail.begin()); return (Cache / Tail).wstring();
+        auto Tail = Value.substr(Root.size()); while (!Tail.empty() && Tail.front() == L'\\') Tail.erase(Tail.begin()); return (Cache / Tail).wstring();
     }
 }
 BOOL WINAPI DllMain(HINSTANCE Instance, DWORD Reason, void*) { if (Reason == DLL_PROCESS_ATTACH) Module = Instance; return TRUE; }
@@ -194,6 +207,11 @@ API VfsCustomColumn<wchar_t>* VFS_GetCustomColumnsW(HANDLE Handle)
 }
 API int VFS_ReadDirectoryW(HANDLE Handle, void*, VfsReadDirectoryData* Data)
 {
+    const auto Content = ContentRoot(Data->path_);
+    if (!Content.empty()) {
+        std::ifstream Input(Content, std::ios::binary); char Magic[7]{}; Input.read(Magic, 7);
+        if (std::string(Magic, 7) != "HCDOPUS") { State(Handle).error_ = -3; return 0; }
+    }
     State(Handle); Require(Data && Data->size_ == sizeof(*Data) && Data->operation_ == 1 && Data->heap_); Fail(Data->path_);
     std::wstring Path = Mapped(Handle, Data->path_); if (!Path.ends_with(L'\\')) Path += L'\\'; Path += L'*';
     WIN32_FIND_DATAW File{}; const auto Find = FindFirstFileW(Path.c_str(), &File);

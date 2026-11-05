@@ -28,7 +28,7 @@ namespace hc::plugins
             storage::Result<Record> Read();
         };
         storage::Error failure(const char* Operation);
-        storage::Result<storage::Unit> selectFormat(const QString& Path);
+        storage::Result<storage::Unit> selectFormat(const QString& Path, const QString& FormatHint = {});
         storage::Result<std::wstring> path(const QJsonValue& Remote);
         storage::Result<QJsonObject> enumerate(const QJsonObject& Request);
         storage::Result<QJsonObject> transfer(const QJsonObject& Request, bool Write);

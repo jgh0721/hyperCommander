@@ -8,9 +8,9 @@ namespace
 {
     bool Put(const QString& Path, QByteArray Bytes) { QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); }
     QByteArray Read(const QString& Path) { QFile File(Path); return File.open(QIODevice::ReadOnly) ? File.readAll() : QByteArray{}; }
-    Result<std::shared_ptr<PluginProcess>> Start(QTemporaryDir& Directory, bool Write = true, bool ReadOnly = false, unsigned RequestMs = 3000, bool Batch = false)
+    Result<std::shared_ptr<PluginProcess>> Start(QTemporaryDir& Directory, bool Write = true, bool ReadOnly = false, unsigned RequestMs = 3000, bool Batch = false, bool Multi = false)
     {
-        const auto Name = ReadOnly ? "readonly.dll" : Batch ? "batch.dll" : "fixture.dll"; const auto Binary = Directory.filePath(Name);
+        const auto Name = Multi ? "multi.dll" : ReadOnly ? "readonly.dll" : Batch ? "batch.dll" : "fixture.dll"; const auto Binary = Directory.filePath(Name);
         if (!QFile::copy(QCoreApplication::applicationDirPath() + "/hc_dopus_fixture.dll", Binary)) return Error{ErrorCategory::Internal, "fixture-copy"};
         PluginManifest Manifest; Manifest.id_ = "hc.test.dopus"; Manifest.version_ = "1"; Manifest.binary_ = Name; Manifest.format_ = PluginFormat::DopusVfs;
         Manifest.sha256_ = QCryptographicHash::hash(Read(Binary), QCryptographicHash::Sha256).toHex().toStdString();
@@ -26,6 +26,21 @@ class HostedDopusTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void contentFormatHint()
+    {
+        QTemporaryDir Package, Root, Cache; QVERIFY(Put(Root.filePath("payload.txt"), "content"));
+        auto Process = Start(Package, false, false, 3000, false, true); QVERIFY(Process.HasValue());
+        auto Store = MakeNativeContentStore(Cache.path().toStdString()); QVERIFY(Store.HasValue());
+        auto Unknown = MakeHostedDopusVfsProvider(Process.Value(), {"hint"}, Store.Value(), false, Root.path(), "zip");
+        QVERIFY(!Unknown.HasValue()); QCOMPARE(Unknown.Failure().code_, std::string("dopus-vfs-format-unhandled"));
+        auto Invalid = MakeHostedDopusVfsProvider(Process.Value(), {"hint"}, Store.Value(), false, Root.path(), "../hcvfs");
+        QVERIFY(!Invalid.HasValue()); QCOMPARE(Invalid.Failure().code_, std::string("dopus-vfs-format-hint"));
+        auto Mounted = MakeHostedDopusVfsProvider(Process.Value(), {"hint"}, Store.Value(), false, Root.path(), "hcvfs");
+        QVERIFY2(Mounted.HasValue(), Mounted.HasValue() ? "" : Mounted.Failure().code_.c_str());
+        auto Cursor = Mounted.Value().reader_->Enumerate(Mounted.Value().root_, {}).get(); QVERIFY(Cursor.HasValue());
+        auto Page = Cursor.Value()->Next(16, {}).get(); QVERIFY(Page.HasValue());
+        QCOMPARE(Page.Value().entries_.size(), size_t(1)); QCOMPARE(Page.Value().entries_.front().name_, std::string("payload.txt"));
+    }
     void diskListingBeyondOldLimit()
     {
         QTemporaryDir Package, Root, Cache; QVERIFY(QDir(Root.path()).mkdir("large-list"));

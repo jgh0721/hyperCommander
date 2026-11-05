@@ -212,7 +212,7 @@ public:
     CTCPlugInWCX() = default;
     ~CTCPlugInWCX();
 
-    TyOsError                           LoadWCX( const TyPlugInWCX& WCX );
+    TyOsError                           LoadWCX( const TyPlugInWCX& WCX, std::shared_ptr<hc::plugins::IArchiveBackend> Backend = {} );
     hc::storage::Result<hc::storage::Unit> WritePolicy() const;
     QString                             PluginPath() const { return wcx_.FileFullPath; }
     std::shared_ptr<hc::plugins::IArchiveBackend> Backend() const { return backend_; }

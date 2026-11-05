@@ -103,6 +103,7 @@ public:
     bool HasNavigationFallback() const { return recoveryLocation_.has_value(); }
     using CFsModelT::ChangeDirectory;
     void ChangeDirectory(const QString& Child) override;
+    hc::storage::Result<hc::storage::Unit> EnterFile(const QModelIndex& Index, std::function<void()> BeforeMount = {});
     quint64 DirectoryGeneration() const { return generation_; }
     std::shared_ptr<hc::storage::IEntryIndex> DirectoryEntries() const;
     quint64 MetadataGeneration() const { return index_.Generation(); }

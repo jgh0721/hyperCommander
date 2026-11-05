@@ -341,13 +341,14 @@ hc::storage::Result<hc::storage::Unit> CTCPlugInWCX::WritePolicy() const
 {
     if (!wcx_.hostEnabled_) return hc::storage::Unit{};
     if (!wcx_.hostApproval_.approved_) return hc::storage::Error{hc::storage::ErrorCategory::AccessDenied, "plugin-review-required", {"wcx"}};
+    if (!wcx_.hostApproval_.granted_.contains(hc::plugins::Permission::WriteContent)) return hc::storage::Error{hc::storage::ErrorCategory::AccessDenied, "plugin-write-permission-denied", {"wcx"}};
     if (wcx_.hostApproval_.reviewed_.format_ == hc::plugins::PluginFormat::SevenZip
         && !ArchiveFile.endsWith(".7z", Qt::CaseInsensitive) && !ArchiveFile.endsWith(".zip", Qt::CaseInsensitive))
         return hc::storage::Error{hc::storage::ErrorCategory::Unsupported, "7zip-format-read-only", {"7zip"}};
     return hc::plugins::ArchiveWritePolicy(wcx_.hostApproval_.reviewed_);
 }
 
-TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
+TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX, std::shared_ptr<hc::plugins::IArchiveBackend> Backend )
 {
     CloseWCX();
     std::unique_lock Lock(WcxCallMutex(), std::defer_lock);
@@ -370,7 +371,7 @@ TyOsError CTCPlugInWCX::LoadWCX( const TyPlugInWCX& WCX )
             Options.manifestPath_ = wcx_.hostManifest_; Options.binaryPath_ = wcx_.FileFullPath; Options.approval_ = wcx_.hostApproval_;
             Options.limits_.requestMs_ = 30000;
             Options.passwordPrompt_ = hc::plugins::AskArchivePassword;
-            backend_ = hc::plugins::MakeApprovedWcxBackend(std::move(Options));
+            backend_ = Backend ? std::move(Backend) : hc::plugins::MakeApprovedWcxBackend(std::move(Options));
             break;
         }
 

@@ -86,10 +86,12 @@ namespace hc::plugins
         return Unit{};
     }
     bool DopusVfsHostService::CanConfigure() const { return (flags_ & 1u) && GetProcAddress(module_, "VFS_Configure"); }
-    Result<Unit> DopusVfsHostService::selectFormat(const QString& Path)
+    Result<Unit> DopusVfsHostService::selectFormat(const QString& Path, const QString& FormatHint)
     {
         if (!(flags_ & (1u << 2))) return Unit{};
-        const auto Extension = "." + QFileInfo(Path).suffix().toLower();
+        // QueryPath's FALSE form takes an extension. Parsing the real path still decides admission.
+        if (!FormatHint.isEmpty() && !QRegularExpression("^[a-z0-9]{1,16}$").match(FormatHint).hasMatch()) return Invalid("dopus-vfs-format-hint");
+        const auto Extension = "." + (FormatHint.isEmpty() ? QFileInfo(Path).suffix().toLower() : FormatHint);
         if (instance_) return Extension == selectedExtension_ ? Result<Unit>(Unit{}) : Result<Unit>(Unsupported("dopus-vfs-format-already-selected"));
         auto Text = Extension.toStdWString(); GUID Id{};
         const auto Query = Export<BOOL(*)(wchar_t*, BOOL, GUID*)>(module_, "VFS_QueryPathW");
@@ -120,7 +122,7 @@ namespace hc::plugins
     Result<QJsonObject> DopusVfsHostService::enumerate(const QJsonObject& Request)
     {
         const auto Action = Request["action"].toString();
-        if (Action == "mount" && Request.size() == 2 && root_.isEmpty())
+        if (Action == "mount" && (Request.size() == 2 || (Request.size() == 3 && Request["formatHint"].isString())) && root_.isEmpty())
         {
             auto Root = Request["root"].toString();
             if (!Local(Root)) return Invalid("dopus-vfs-mount-root");
@@ -397,7 +399,7 @@ namespace hc::plugins
         auto ClearContext = qScopeGuard([this] { context_ = {}; });
         if (const auto Stop = Context.Check({"dopus-vfs"})) return *Stop;
         if ((Kind == WireKind::StorageEnumerate && Request["action"] == "mount") || (Kind == WireKind::StorageMutate && Request["action"] == "create-archive")) {
-            auto Selected = selectFormat(Request[Kind == WireKind::StorageEnumerate ? "root" : "archive"].toString());
+            auto Selected = selectFormat(Request[Kind == WireKind::StorageEnumerate ? "root" : "archive"].toString(), Kind == WireKind::StorageEnumerate ? Request["formatHint"].toString() : QString{});
             if (!Selected.HasValue()) return Selected.Failure();
         }
         if (!instance_) return Invalid("dopus-vfs-not-initialized");

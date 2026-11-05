@@ -308,7 +308,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"contentContainerNavigationUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -3088,7 +3088,8 @@ private slots:
             auto Rejection = TyStCommandMgr::GetInstance()->Bridge()->Dispatch("hc.navigate.enterFile", {}, "everything-test", Model->index(0, 0));
             QTRY_VERIFY(Rejection.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
             const auto Rejected = Rejection.get();
-            QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().code_, std::string("file-container-not-supported"));
+            QVERIFY(Rejected.HasValue()); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);
+            QVERIFY(Model->LastNavigationError()); QCOMPARE(Model->LastNavigationError()->code_,std::string("file-container-not-supported"));
             QVERIFY(Model->IsSearchResults()); QCOMPARE(Model->rowCount(), 1);
         }
         if (Action == 1) {
@@ -11003,6 +11004,90 @@ private slots:
             Panel->ChangeCurrentPath(unc_, {}); QTRY_VERIFY(!Model->IsLoading());
         }
         QVERIFY(hc::settings::AppSettings().Plugins("wcx").isEmpty());
+    }
+    void contentContainerNavigationUi()
+    {
+        using namespace hc::plugins; using namespace hc::storage;
+        QTemporaryDir Directory, Package, Input; QVERIFY(Directory.isValid() && Package.isValid() && Input.isValid());
+        const auto Put=[&](const QString& Path,const QByteArray& Bytes){QFile File(Path);return File.open(QIODevice::WriteOnly) && File.write(Bytes)==Bytes.size();};
+        const auto Read=[&](const QString& Path){QFile File(Path);return File.open(QIODevice::ReadOnly)?File.readAll():QByteArray{};};
+        QVERIFY(Put(Input.filePath("payload.txt"),"content navigation"));
+        auto Backend=MakeApprovedWcxBackend(BuiltinSevenZipOptions());ArchiveUpdate Create{Directory.filePath("base.zip").toStdString(),Input.path().toStdString(),{"payload.txt"}};
+        Create.creation_=ArchiveCreationOptions{};QVERIFY(Backend->Update(Create,{}).HasValue());
+        const auto Zip=Read(Directory.filePath("base.zip"));
+        for(const auto* Name:{"sample.vsix","sample.blob","extensionless","wrong.iso","wrong.egg"})QVERIFY(Put(Directory.filePath(Name),Zip));
+        QVERIFY(Put(Directory.filePath("ordinary.txt"),"not an archive"));QVERIFY(Put(Directory.filePath("external.blob"),"HCWCX01"));QVERIFY(Put(Directory.filePath("slow.blob"),"HCWCX01H"));QVERIFY(Put(Directory.filePath("corrupt.blob"),"HCWCX01G"));
+        QVERIFY(Put(Input.filePath("inner.vsix"),Zip));Create.archive_=Directory.filePath("outer.zip").toStdString();Create.add_={"inner.vsix"};QVERIFY(Backend->Update(Create,{}).HasValue());
+        auto* Panel=panels_.front();auto* Model=static_cast<CFSModel*>(model(Panel));Model->SetProviderEnabled(true);Panel->sig_NotifyPanelActivated();
+        const auto Saved=hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
+        const auto Restore=qScopeGuard([&]{Panel->StopEverythingSearch(false);Panel->ChangeCurrentPath(unc_,{});QTest::qWait(100);hc::settings::AppSettings().Put(hc::settings::Section::Plugins,Saved);TyStPlugInMgr::GetInstance()->Refresh();});
+        const auto Register=[&](const QString& Fixture,const QString& Name,PluginFormat Format)->QJsonObject{
+            const auto Folder=Package.filePath(Format==PluginFormat::Wcx?"wcx":"dopus");if(!QDir().mkpath(Folder))return {};
+            const auto Binary=QDir(Folder).filePath(Name);if(!QFile::copy(QCoreApplication::applicationDirPath()+"/"+Fixture,Binary))return {};
+            PluginManifest Manifest;Manifest.id_=Format==PluginFormat::Wcx?"hc.test.content.wcx":"hc.test.content.dopus";Manifest.version_="1";Manifest.binary_=Name.toStdString();Manifest.format_=Format;
+            Manifest.sha256_=QCryptographicHash::hash(Read(Binary),QCryptographicHash::Sha256).toHex().toStdString();
+            Manifest.extensions_={Format==PluginFormat::Wcx?Extension::ArchiveRead:Extension::StorageRead};Manifest.permissions_={Permission::ReadContent};
+            const auto Path=Binary+".json";if(!Put(Path,EncodeManifest(Manifest)))return {};
+            return {{"path",Binary},{"extensions",QJsonArray{"vsix"}},{"caps",PK_CAPS_BY_CONTENT},{"hostEnabled",true},{"hostManifest",Path},{"hostReviewed",hc::settings::JsonObject(EncodeManifest(Manifest))}};
+        };
+        const auto Wcx=Register("hc_wcx_fixture.wcx64","content.wcx64",PluginFormat::Wcx);QVERIFY(!Wcx.isEmpty());
+        const auto Dopus=Register("hc_dopus_fixture.dll","content-readonly.dll",PluginFormat::DopusVfs);QVERIFY(!Dopus.isEmpty());
+        hc::settings::AppSettings().SetPlugins("wcx",QJsonArray{Wcx});hc::settings::AppSettings().SetPlugins("dopusVfs",QJsonArray{Dopus});TyStPlugInMgr::GetInstance()->Refresh();
+        const auto Find=[&](const QString& Name){for(int Row=0;Row<Model->rowCount();++Row)if(Model->GetName(Model->index(Row,0))==Name)return Model->index(Row,0);return QModelIndex{};};
+        const auto Home=[&]{Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()),{});Model->Refresh();return QTest::qWaitFor([&]{return !Model->IsLoading();},15000);};
+        const auto Enter=[&](const QString& Name){const auto Index=Find(Name);if(!Index.isValid())return false;auto Future=TyStCommandMgr::GetInstance()->Bridge()->Dispatch("hc.navigate.enterFile",{},"content-test",Index);if(!QTest::qWaitFor([&]{return Future.wait_for(std::chrono::milliseconds(0))==std::future_status::ready;},5000))return false;return Future.get().HasValue();};
+        for(const auto* Name:{"sample.vsix","sample.blob","extensionless","wrong.iso","wrong.egg","outer.zip"}){
+            qInfo() << "Content navigation:" << Name;QVERIFY(Home());QVERIFY(Enter(Name));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);QVERIFY2(!Model->LastNavigationError(),Model->LastNavigationError()?Model->LastNavigationError()->code_.c_str():"");
+            QCOMPARE(Model->WorkspaceLocation().kind_,LocatorKind::Archive);
+            if(QString(Name)=="outer.zip"){QVERIFY(Enter("inner.vsix"));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);QCOMPARE(Model->WorkspaceLocation().nesting_.size(),size_t(2));}
+            QVERIFY(names(Model).contains("payload.txt"));
+            if(QString(Name)=="sample.vsix" || QString(Name)=="outer.zip"){
+                const auto Tab=Panel->CaptureWorkspace().tabs_[Panel->CurrentTabIndex()];CFSModel Reopened;Reopened.SetColumnView(TyStColumnMgr::GetInstance()->GetColumnView(0));Reopened.SetProviderEnabled(true);RestoreWorkspaceLocation(&Reopened,Tab);
+                QVERIFY(QTest::qWaitFor([&]{return !Reopened.HasPlaceholder() && !Reopened.IsLoading() && names(&Reopened).contains("payload.txt");},15000));
+                QCOMPARE(Reopened.WorkspaceLocation(),Tab.location_);
+            }
+        }
+        QVERIFY(Home());QVERIFY(Enter("external.blob"));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);QVERIFY(names(Model).contains("alpha.txt"));
+        QCOMPARE(dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get())->GetWCX()->PluginPath(),Wcx["path"].toString());
+        QVERIFY(!dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get())->GetWCX()->WritePolicy().HasValue());
+        for(const auto* Policy:{"no-content","disabled","excluded"}){
+            auto Restricted=Wcx;
+            if(QString(Policy)=="no-content")Restricted["caps"]=0;
+            if(QString(Policy)=="disabled")Restricted["hostEnabled"]=false;
+            if(QString(Policy)=="excluded")Restricted["application"]=QJsonObject{{"version",1},{"mode","excludeExtensions"},{"extensions",QJsonArray{"blob"}}};
+            hc::settings::AppSettings().SetPlugins("wcx",QJsonArray{Restricted});TyStPlugInMgr::GetInstance()->Refresh();
+            QVERIFY(Home());const auto Before=Model->WorkspaceLocation();QVERIFY(Enter("external.blob"));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);
+            QVERIFY(Model->LastNavigationError());QCOMPARE(Model->LastNavigationError()->code_,std::string("file-container-not-supported"));QCOMPARE(Model->WorkspaceLocation(),Before);
+        }
+        hc::settings::AppSettings().SetPlugins("wcx",QJsonArray{Wcx});TyStPlugInMgr::GetInstance()->Refresh();
+        QByteArray Vfs="HCDOPUS";const auto Number=[&](quint64 Value,int Bytes){for(int Byte=0;Byte<Bytes;++Byte)Vfs.append(char(Value>>(Byte*8)));};
+        const QString Name="vfs.txt";Number(1,4);Number(Name.size(),4);Vfs.append(reinterpret_cast<const char*>(Name.utf16()),Name.size()*2);Number(0,4);Number(4,8);Vfs+="DOPU";
+        QVERIFY(Put(Directory.filePath("vfs.blob"),Vfs));
+        {
+            auto Restricted=Dopus;Restricted["application"]=QJsonObject{{"version",1},{"mode","excludeExtensions"},{"extensions",QJsonArray{"blob"}}};
+            hc::settings::AppSettings().SetPlugins("dopusVfs",QJsonArray{Restricted});
+            QVERIFY(Home());const auto Before=Model->WorkspaceLocation();QVERIFY(Enter("vfs.blob"));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);
+            QVERIFY(Model->LastNavigationError());QCOMPARE(Model->LastNavigationError()->code_,std::string("file-container-not-supported"));QCOMPARE(Model->WorkspaceLocation(),Before);
+            Restricted["application"]=QJsonObject{{"version",1},{"mode","extensions"},{"extensions",QJsonArray{"blob"}}};
+            hc::settings::AppSettings().SetPlugins("dopusVfs",QJsonArray{Restricted});
+        }
+        QVERIFY(Home());QVERIFY(Enter("vfs.blob"));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);QVERIFY2(!Model->LastNavigationError(),Model->LastNavigationError()?Model->LastNavigationError()->code_.c_str():"");
+        QCOMPARE(Model->WorkspaceLocation().kind_,LocatorKind::Plugin);QVERIFY(names(Model).contains("vfs.txt"));
+        {
+            const auto Tab=Panel->CaptureWorkspace().tabs_[Panel->CurrentTabIndex()];CFSModel Reopened;Reopened.SetColumnView(TyStColumnMgr::GetInstance()->GetColumnView(0));Reopened.SetProviderEnabled(true);RestoreWorkspaceLocation(&Reopened,Tab);
+            QVERIFY(QTest::qWaitFor([&]{return !Reopened.HasPlaceholder() && !Reopened.IsLoading() && names(&Reopened).contains("vfs.txt");},15000));
+            Reopened.ChangeDirectory("..");QTRY_VERIFY(!Reopened.IsLoading());QCOMPARE(QDir::cleanPath(Reopened.GetCurrentPathWithRoot()),QDir::cleanPath(QDir::toNativeSeparators(Directory.path())));
+        }
+        Model->ChangeDirectory("..");QTRY_VERIFY(!Model->IsLoading());QCOMPARE(QDir::cleanPath(Model->GetCurrentPathWithRoot()),QDir::cleanPath(QDir::toNativeSeparators(Directory.path())));
+        QVERIFY(Home());const auto Location=Model->WorkspaceLocation();QVERIFY(Enter("ordinary.txt"));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);QVERIFY(Model->LastNavigationError());QCOMPARE(Model->LastNavigationError()->code_,std::string("file-container-not-supported"));QCOMPARE(Model->WorkspaceLocation(),Location);
+        QVERIFY(Enter("corrupt.blob"));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);QVERIFY(Model->LastNavigationError());QCOMPARE(Model->LastNavigationError()->code_,"wcx:"+std::to_string(E_BAD_ARCHIVE));QCOMPARE(Model->WorkspaceLocation(),Location);
+        for(auto* Dialog:main_->findChildren<QDialog*>("hc.navigationError"))Dialog->reject();
+        QTRY_VERIFY(!main_->findChild<QDialog*>("hc.navigationError"));QTest::qWait(50);
+        QVERIFY(Enter("slow.blob"));QTest::qWait(150);Model->CancelNavigation();QVERIFY(!Model->IsLoading());QTest::qWait(1400);QCOMPARE(Model->WorkspaceLocation(),Location);
+        const auto Reported=qEnvironmentVariable("HC_CONTENT_ARCHIVE_SOURCE");if(!Reported.isEmpty()){
+            hc::settings::AppSettings().Put(hc::settings::Section::Plugins,Saved);TyStPlugInMgr::GetInstance()->Refresh();QVERIFY(QFile::copy(Reported,Directory.filePath("reported.vsix")));
+            QVERIFY(Home());QVERIFY(Enter("reported.vsix"));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),30000);QVERIFY2(!Model->LastNavigationError(),Model->LastNavigationError()?Model->LastNavigationError()->code_.c_str():"");QVERIFY(names(Model).contains("extension.vsixmanifest"));
+        }
     }
     void builtinSevenZipNavigation()
     {

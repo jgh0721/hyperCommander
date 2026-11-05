@@ -20,7 +20,7 @@ namespace hc::plugins
     storage::Result<std::shared_ptr<IMetadataProvider>> MakeHostedWdxProvider(std::shared_ptr<PluginProcess> Process,
         std::shared_ptr<storage::IMaterializer> Materializer);
     storage::Result<HostedStorage> MakeHostedDopusVfsProvider(std::shared_ptr<PluginProcess> Process,
-        storage::ProviderId Id, std::shared_ptr<storage::INativeContentStore> Store, bool Writable, const QString& NativeRoot);
+        storage::ProviderId Id, std::shared_ptr<storage::INativeContentStore> Store, bool Writable, const QString& NativeRoot, const QString& FormatHint = {}, storage::OperationContext Context = {});
     storage::Result<std::shared_ptr<IMetadataProvider>> MakeHostedDopusMetadataProvider(std::shared_ptr<PluginProcess> Process,
         std::shared_ptr<storage::IMaterializer> Materializer);
     storage::Result<std::shared_ptr<IContentConverter>> MakeHostedDopusConverter(std::shared_ptr<PluginProcess> Process,

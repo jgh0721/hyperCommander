@@ -130,6 +130,7 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/qtWorkspaceState.cpp
         ../UniqueLibs/qtWorkspaceState.hpp
         ../UniqueLibs/qtWorkspaceRestore.cpp
+        ../UniqueLibs/fileContainerOpen.cpp ../UniqueLibs/fileContainerOpen.hpp
         ../UniqueLibs/qtWorkspaceRestore.hpp
         ../UniqueLibs/qtDirectoryTracker.cpp
         ../UniqueLibs/qtDirectoryTracker.hpp

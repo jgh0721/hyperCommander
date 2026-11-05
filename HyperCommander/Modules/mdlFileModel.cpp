@@ -108,6 +108,10 @@ void CFsModelT::ChangeDirectory( const QString& Child )
 {
     QString Notify; bool IsEscape = false;
     const auto Root = GetRoot();
+    if (Child == ".." && IsRoot() && Root && Root->property("hc.fileContainer").toBool() && vecFs_.size() > 1) {
+        SetCurrentPath(Root->property("hc.containerParentPath").toString()); vecFs_.removeLast();
+        Refresh(); if (!HandlesRefreshSignals()) emit sigChangedDirectory(GetCurrentPathWithRoot()); return;
+    }
     QString PreviousDirectory, PreviousRoot;
     if (Child == "..") {
         auto PreviousPath = QDir::fromNativeSeparators(GetCurrentPath());

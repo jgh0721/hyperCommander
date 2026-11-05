@@ -1504,7 +1504,17 @@ void CmpPanel::StartEverythingSearch(const QString& Query, const QString& Match,
 
 void CmpPanel::StopEverythingSearch(bool Restore)
 {
-    const auto State = retrieveFocusState(); if (!State || !State->searchOrigin_) return;
+    stopEverythingSearch(CurrentTabIndex(), Restore);
+}
+void CmpPanel::StopEverythingSearchForModel(CFsModelT* Model)
+{
+    for (int Index = 0; Index < vecTabStates.size(); ++Index)
+        if (vecTabStates[Index] && vecTabStates[Index]->Model == Model) { stopEverythingSearch(Index, false); return; }
+}
+void CmpPanel::stopEverythingSearch(int Index, bool Restore)
+{
+    if (Index < 0 || Index >= vecTabStates.size()) return;
+    const auto State = vecTabStates[Index]; if (!State || !State->searchOrigin_) return;
     const auto Origin = *State->searchOrigin_; State->searchOrigin_.reset();
     static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true);
     auto* View = static_cast<CGridView*>(State->View);
@@ -1513,9 +1523,9 @@ void CmpPanel::StopEverythingSearch(bool Restore)
     State->workspace_ = Origin;
     auto Settings = Origin.view_; Settings["listPresentation"] = Presentation;
     View->RestoreWorkspaceView(Settings);
-    if (Restore) { State->restoreSearchGroups_ = true; State->restoreSelection_ = true; restoreTab(CurrentTabIndex()); }
+    if (Restore) { State->restoreSearchGroups_ = true; State->restoreSelection_ = true; restoreTab(Index); }
     else { State->searchScroll_ = {}; State->searchGroups_ = {}; State->restoreSearchGroups_ = false; }
-    syncPanelChrome();
+    if (Index == CurrentTabIndex()) syncPanelChrome();
 }
 
 void CmpPanel::RevealItem( const QString& Folder, const QString& Key )

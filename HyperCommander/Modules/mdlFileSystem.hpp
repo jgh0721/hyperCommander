@@ -248,6 +248,7 @@ namespace nsHC
     public:
         void SetArchiveChain(hc::storage::Locator Location, std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> Ancestors);
         std::vector<std::shared_ptr<hc::plugins::IArchiveBackend>> ArchiveBackends() const;
+        void UseReadProvider(std::shared_ptr<hc::storage::IStorageProvider> Provider) { readProvider_ = std::move(Provider); }
     };
 
     class CFSPlugin final : public CFileSystemT

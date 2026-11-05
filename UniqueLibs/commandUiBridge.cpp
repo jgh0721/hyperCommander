@@ -850,7 +850,7 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
                 || (!Entry->storageEntry_ && Selected.providerId_.value_ == "legacy" && Entry->Name_.toStdString() == Selected.key_))
             {
                 if (!(Entry->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)) {
-                    if (Id != "hc.navigate.enterFile" || TyStPlugInMgr::GetInstance()->RetrieveWCXByExts(Entry->Ext_, Entry->Name_).isEmpty())
+                    if (Id != "hc.navigate.enterFile")
                         return Error{ErrorCategory::Unsupported, "file-container-not-supported"};
                 }
                 Target = Index;
@@ -858,6 +858,12 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
             }
         }
         if (!Target.isValid()) return Error{ErrorCategory::StaleRevision, "selection-changed"};
+        if (Id == "hc.navigate.enterFile" && !(Model->GetFileInfo(Target)->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)) {
+            const QPointer<CmpPanel> Owner = Panel; const QPointer<CFSModel> View = Model;
+            auto Started = Model->EnterFile(Target, [Owner, View] { if (Owner && View) Owner->StopEverythingSearchForModel(View); });
+            if (!Started.HasValue()) return Started.Failure();
+            return CommandOutcome{CommandOutcome::Status::Accepted, Invocation.correlationId_};
+        }
         // Unsupported entries must keep their search snapshot and providers.
         if (Model->IsSearchResults()) Panel->StopEverythingSearch(false);
         Model->ChangeDirectory(Target);

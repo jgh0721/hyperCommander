@@ -408,10 +408,10 @@ namespace hc::plugins
         return HostedStorage{Provider, Provider, {LocatorKind::Plugin, Root(Id) + "\\"}};
     }
     Result<HostedStorage> MakeHostedDopusVfsProvider(std::shared_ptr<PluginProcess> Process, ProviderId Id,
-        std::shared_ptr<INativeContentStore> Store, bool Writable, const QString& NativeRoot)
+        std::shared_ptr<INativeContentStore> Store, bool Writable, const QString& NativeRoot, const QString& FormatHint, OperationContext Context)
     {
         if (!Process || !Store || Id.value_.empty() || Id.value_.find_first_of(":\\/\0", 0, 4) != std::string::npos) return Invalid("dopus-vfs-provider-options");
-        auto Probe = Process->Probe(); if (!Probe.HasValue()) return Probe.Failure();
+        auto Probe = Process->Probe(Context); if (!Probe.HasValue()) return Probe.Failure();
         if (Probe.Value()["format"] != "dopus-vfs" || !Probe.Value()["readOnly"].isBool()) return Invalid("dopus-vfs-provider-format");
         QSet<QString> Native; for (const auto& Item : Probe.Value()["exports"].toArray()) Native.insert(Item.toString());
         // Only the SDK boundary interprets export names. Shared storage code
@@ -427,7 +427,9 @@ namespace hc::plugins
             {"VFS_RemoveDirectoryW", StorageFeature::RemoveDirectory}, {"VFS_MoveFileW", StorageFeature::Rename},
             {"VFS_SetFileAttrW", StorageFeature::Attributes}, {"VFS_SetFileTimeW", StorageFeature::Modified}})
             if (Native.contains(Name)) Features.insert(Feature);
-        auto Mounted = Process->DataCall(WireKind::StorageEnumerate, {{"action", "mount"}, {"root", NativeRoot}});
+        QJsonObject Mount{{"action", "mount"}, {"root", NativeRoot}};
+        if (!FormatHint.isEmpty()) Mount["formatHint"] = FormatHint;
+        auto Mounted = Process->DataCall(WireKind::StorageEnumerate, Mount, Context);
         if (!Mounted.HasValue()) return Mounted.Failure();
         if (Mounted.Value()["batchAdd"].toBool()) Features.insert(StorageFeature::WriteFile);
         if (Mounted.Value()["batchExtract"].toBool()) Features.insert(StorageFeature::ReadFile);

@@ -27,7 +27,7 @@ public:
     std::function<void()> onChanged_;
     void Save(hc::settings::Repository& Settings);
     static std::vector<QtViewerSurface::PluginViewerChoice> ViewerChoices(hc::settings::Repository& Settings);
-    static std::vector<QtViewerSurface::PluginViewerChoice> DataChoices(hc::settings::Repository& Settings, hc::plugins::PluginFormat Format);
+    static std::vector<QtViewerSurface::PluginViewerChoice> DataChoices(hc::settings::Repository& Settings, hc::plugins::PluginFormat Format, bool FileContainers = false);
     static QtViewerSurface::PluginViewerSelectionMode ViewerSelection(hc::settings::Repository& Settings);
 private:
     struct Row { int index_; QString path_, manifest_; QByteArray reviewed_; QString verification_; QJsonObject creation_; };
