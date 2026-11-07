@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "fileJobUi.hpp"
+#include "ProductContants.hpp"
 #include "UniqueLibs/productDefaults.hpp"
 #include <QDir>
 #include "fileOperationErrorText.hpp"
@@ -215,7 +216,8 @@ namespace
 FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Events)
     : QObject(Main), journal_(MakeFileJobJournal(QDir(QStandardPaths::isTestModeEnabled()
           ? QCoreApplication::applicationDirPath() : QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath("HyperCommander")).filePath("operation-journal"),false,true,false)),
-      scheduler_(std::move(Events), 3, 1024, journal_), main_(Main)
+      // Keep one worker available for foreground work at the background maximum.
+      scheduler_(std::move(Events), hc::product::jobConcurrencyMax + 1, 1024, journal_), main_(Main)
 {
     previousPermissionController_=QCoreApplication::instance()->property("hc.permission.controller").value<QObject*>();
     QCoreApplication::instance()->setProperty("hc.permission.controller",QVariant::fromValue<QObject*>(this));
@@ -360,9 +362,9 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     queueUp_ = new fm::ui::Button(tr("위로(&U)"), manager_); queueUp_->setObjectName("hc.jobs.queueUp");
     queueDown_ = new fm::ui::Button(tr("아래로(&N)"), manager_); queueDown_->setObjectName("hc.jobs.queueDown");
     for (auto* Button : {StartQueue, static_cast<fm::ui::Button*>(queueUp_), static_cast<fm::ui::Button*>(queueDown_)}) Button->setAutoDefault(false);
-    concurrency_ = new QSpinBox(manager_); concurrency_->setRange(1, 2); concurrency_->setValue(static_cast<int>(scheduler_.ConcurrencyLimit()));
+    concurrency_ = new QSpinBox(manager_); concurrency_->setRange(hc::product::jobConcurrencyMin, hc::product::jobConcurrencyMax); concurrency_->setValue(static_cast<int>(scheduler_.ConcurrencyLimit()));
     concurrency_->setObjectName("hc.jobs.concurrency"); concurrency_->setAccessibleName(tr("백그라운드 동시 실행 작업 수"));
-    concurrency_->setToolTip(tr("백그라운드 작업을 1~2개 실행합니다. 경로가 겹치지 않는 전경 작업은 이 한도와 별도로 실행합니다."));
+    concurrency_->setToolTip(tr("백그라운드 작업을 %1~%2개 실행합니다. 경로가 겹치지 않는 전경 작업은 이 한도와 별도로 실행합니다.").arg(hc::product::jobConcurrencyMin).arg(hc::product::jobConcurrencyMax));
     QueueControls->addWidget(StartQueue); QueueControls->addWidget(queueUp_); QueueControls->addWidget(queueDown_);
     auto* ConcurrencyGroup = new QWidget(manager_); auto* ConcurrencyLayout = new QHBoxLayout(ConcurrencyGroup);
     ConcurrencyLayout->setContentsMargins(0, 0, 0, 0);

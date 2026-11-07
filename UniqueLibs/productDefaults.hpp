@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "commonLibs/columns/columnContracts.hpp"
+#include "ProductContants.hpp"
 
 // 제품 기본값의 편집 지점. 이 헤더를 고친 뒤 다시 빌드하면 새 설치에 적용된다.
 // settings.json에 저장된 값(빈 배열·단축키 해제 포함)은 기본값보다 우선한다.
@@ -1325,7 +1326,7 @@ namespace hc::defaults
                  { "deleteWhileListing",      true },
                  { "jobNotification",         "attention" },
                  { "queueInsertion",          "last" },
-                 { "jobConcurrency",          2 },
+                 { "jobConcurrency",          hc::product::jobConcurrencyDefault },
                  { "enableJobRecovery",       false },
                  { "saveJobProgress",         false },
                  { "showJobDetails",          false },

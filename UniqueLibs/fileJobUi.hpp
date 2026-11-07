@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <QObject>
+#include "ProductContants.hpp"
 #include "permissionJobController.hpp"
 #include "renameJobController.hpp"
 #include <QPointer>
@@ -84,7 +85,7 @@ private:
     hc::operations::JobScheduler scheduler_;
     std::map<std::string, hc::operations::JobHandle> pending_;
     std::map<std::string, QString> notifications_;
-    int appliedConcurrency_ = 2;
+    int appliedConcurrency_ = hc::product::jobConcurrencyDefault;
     std::map<std::string, hc::operations::JobResult> results_;
     QPointer<QWidget> main_;
     QPointer<QObject> previousPermissionController_;

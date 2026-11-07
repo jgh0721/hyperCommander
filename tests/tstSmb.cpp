@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/wcxStorage.hpp"
+#include "UniqueLibs/ProductContants.hpp"
 #include "pluginHost/pluginProcess.hpp"
 #include "UniqueLibs/archiveExtractJob.hpp"
 #include <QDir>
@@ -5144,6 +5145,68 @@ private slots:
           Check->setChecked(false); Dialog.reject(); }
         { Repository Reload(QFileInfo(Settings.FileName()).absolutePath()); QVERIFY(Reload.Read(Section::Options).toObject()["saveJobProgress"].toBool()); }
         { QMainOpts Dialog(main_); Dialog.LoadSettings(); QVERIFY(Dialog.findChild<QCheckBox*>("hc.settings.saveJobProgress")->isChecked()); Dialog.reject(); }
+    }
+    void todoBugJobConcurrencyUi()
+    {
+        using namespace hc::settings; using namespace hc::operations;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); });
+        auto Options = Settings.Read(Section::Options).toObject(); Options["jobConcurrency"] = hc::product::jobConcurrencyDefault;
+        Options["enableJobRecovery"] = false; Options["saveJobProgress"] = false;
+        QVERIFY(Settings.Put(Section::Options, Options));
+        QWidget Window; FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        QCOMPARE(Jobs.Scheduler().ConcurrencyLimit(), size_t(hc::product::jobConcurrencyDefault));
+        auto* ManagerLimit = Window.findChild<QSpinBox*>("hc.jobs.concurrency"); QVERIFY(ManagerLimit);
+        QCOMPARE(ManagerLimit->minimum(), hc::product::jobConcurrencyMin); QCOMPARE(ManagerLimit->maximum(), hc::product::jobConcurrencyMax);
+        {
+            QMainOpts Dialog(main_); Dialog.LoadSettings(); auto* Limit = Dialog.findChild<QSpinBox*>("hc.settings.jobConcurrency"); QVERIFY(Limit);
+            QCOMPARE(Limit->minimum(), hc::product::jobConcurrencyMin); QCOMPARE(Limit->maximum(), hc::product::jobConcurrencyMax);
+            QCOMPARE(Limit->value(), hc::product::jobConcurrencyDefault);
+            Limit->setValue(hc::product::jobConcurrencyMax); QVERIFY(Dialog.SaveSettings());
+        }
+        Repository Reload(QFileInfo(Settings.FileName()).absolutePath());
+        QCOMPARE(Reload.Read(Section::Options).toObject()["jobConcurrency"].toInt(), hc::product::jobConcurrencyMax);
+        Jobs.ApplyDefaults(); QCOMPARE(Jobs.Scheduler().ConcurrencyLimit(), size_t(hc::product::jobConcurrencyMax));
+        QCOMPARE(ManagerLimit->value(), hc::product::jobConcurrencyMax);
+        std::promise<void> Release; const auto Released = Release.get_future().share(); bool Unblocked = false;
+        const auto Unblock = qScopeGuard([&] { if (!Unblocked) Release.set_value(); });
+        class Task final : public IJobTask {
+        public:
+            Task(std::shared_ptr<std::atomic<int>> Entered, std::shared_future<void> Released, bool Block)
+                : entered_(std::move(Entered)), released_(std::move(Released)), block_(Block) {}
+            JobStep Advance(JobStepContext) override {
+                ++*entered_;
+                if (block_ && released_.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+                    JobStep Step{JobState::Failed}; Step.error_ = hc::storage::Error{hc::storage::ErrorCategory::Internal, "test-worker-timeout"}; return Step;
+                }
+                return JobStep{JobState::Completed};
+            }
+            std::vector<hc::storage::Error> Finalize(JobState) override { return {}; }
+        private:
+            std::shared_ptr<std::atomic<int>> entered_;
+            std::shared_future<void> released_;
+            bool block_;
+        };
+        const auto Entered = std::make_shared<std::atomic<int>>(0), ExtraEntered = std::make_shared<std::atomic<int>>(0);
+        std::vector<JobHandle> Background;
+        for (int Index = 0; Index < hc::product::jobConcurrencyMax; ++Index) {
+            auto Started = Jobs.Scheduler().Submit({}, std::make_unique<Task>(Entered, Released, true)); QVERIFY(Started.HasValue());
+            Background.push_back(Started.Value());
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(Entered->load(), hc::product::jobConcurrencyMax, 5000);
+        auto Extra = Jobs.Scheduler().Submit({}, std::make_unique<Task>(ExtraEntered, Released, false)); QVERIFY(Extra.HasValue());
+        JobRequest Foreground; Foreground.foreground_ = true;
+        auto Front = Jobs.Scheduler().Submit(Foreground, std::make_unique<Task>(std::make_shared<std::atomic<int>>(0), Released, false)); QVERIFY(Front.HasValue());
+        QVERIFY(Front.Value().completion_.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+        QCOMPARE(Front.Value().completion_.get().snapshot_.state_, JobState::Completed); QCOMPARE(ExtraEntered->load(), 0);
+        Release.set_value(); Unblocked = true;
+        for (const auto& Handle : Background) {
+            QVERIFY(Handle.completion_.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+            QCOMPARE(Handle.completion_.get().snapshot_.state_, JobState::Completed);
+        }
+        QVERIFY(Extra.Value().completion_.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+        QCOMPARE(Extra.Value().completion_.get().snapshot_.state_, JobState::Completed); QCOMPARE(ExtraEntered->load(), 1);
+        ManagerLimit->setValue(hc::product::jobConcurrencyMin); QCOMPARE(Jobs.Scheduler().ConcurrencyLimit(), size_t(hc::product::jobConcurrencyMin));
     }
     void r13SettingsOptionsUi()
     {

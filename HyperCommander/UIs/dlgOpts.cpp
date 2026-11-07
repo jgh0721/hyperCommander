@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "dlgOpts.hpp"
+#include "UniqueLibs/ProductContants.hpp"
 #include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/quickFindSettings.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -1089,7 +1090,7 @@ void QMainOpts::initializeDesignPages()
     auto* QueueForm = JobGroup(CommonRows, tr("대기열 · 동시 실행"));
     auto* Queue = QueueForm->parentWidget();
     auto* QueueOrder = new QComboBox(Queue); QueueOrder->setObjectName("hc.settings.queueOrder"); QueueOrder->addItems({tr("새 작업을 마지막에 추가"), tr("새 작업을 처음에 추가")}); QueueForm->addRow(tr("대기열 기본 순서"), QueueOrder);
-    auto* Concurrency = new QSpinBox(Queue); Concurrency->setObjectName("hc.settings.jobConcurrency"); Concurrency->setRange(1, 2); QueueForm->addRow(tr("백그라운드 동시 실행 수 기본값"), Concurrency);
+    auto* Concurrency = new QSpinBox(Queue); Concurrency->setObjectName("hc.settings.jobConcurrency"); Concurrency->setRange(hc::product::jobConcurrencyMin, hc::product::jobConcurrencyMax); QueueForm->addRow(tr("백그라운드 동시 실행 수 기본값"), Concurrency);
     auto* JobsNote = new QLabel(tr("동시 실행 수는 백그라운드 작업에 적용합니다. 경로가 겹치지 않는 전경 작업은 별도로 실행하며, 한도가 가득 차면 백그라운드 전환을 차단합니다. 실행 중인 작업은 중단하지 않습니다."), Queue); JobsNote->setWordWrap(true); QueueForm->addRow(JobsNote);
     CommonRows->addStretch();
 

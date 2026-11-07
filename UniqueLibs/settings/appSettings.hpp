@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include <QCoreApplication>
+#include "UniqueLibs/ProductContants.hpp"
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -370,7 +371,12 @@ protected:
         if (Copy.contains("deleteToRecycle") && !Copy["deleteToRecycle"].isBool()) { Copy["deleteToRecycle"] = hc::defaults::DefaultValue("options/deleteToRecycle"); Report("options.deleteToRecycle"); }
         if (Copy.contains("jobNotification") && !QStringList{"none", "status", "attention", "sound"}.contains(Copy["jobNotification"].toString())) { Copy["jobNotification"] = hc::defaults::DefaultValue("options/jobNotification"); Report("options.jobNotification"); }
         if (Copy.contains("queueInsertion") && !QStringList{"first", "last"}.contains(Copy["queueInsertion"].toString())) { Copy["queueInsertion"] = hc::defaults::DefaultValue("options/queueInsertion"); Report("options.queueInsertion"); }
-        if (Copy.contains("jobConcurrency") && (!Copy["jobConcurrency"].isDouble() || (Copy["jobConcurrency"].toDouble() != 1 && Copy["jobConcurrency"].toDouble() != 2))) { Copy["jobConcurrency"] = hc::defaults::DefaultValue("options/jobConcurrency"); Report("options.jobConcurrency"); }
+        if (Copy.contains("jobConcurrency") && (!Copy["jobConcurrency"].isDouble()
+            || Copy["jobConcurrency"].toDouble() < hc::product::jobConcurrencyMin
+            || Copy["jobConcurrency"].toDouble() > hc::product::jobConcurrencyMax
+            || Copy["jobConcurrency"].toDouble() != Copy["jobConcurrency"].toInt())) {
+            Copy["jobConcurrency"] = hc::defaults::DefaultValue("options/jobConcurrency"); Report("options.jobConcurrency");
+        }
         Document["options"] = Copy;
         auto Favorites = Document["favorites"].toObject();
         if (!QStringList{"none","top","bottom"}.contains(Favorites["drivesOn"].toString())) { Favorites["drivesOn"] = hc::defaults::DefaultValue("favorites/drivesOn"); Report("favorites.drivesOn"); }

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/settings/appSettings.hpp"
+#include "UniqueLibs/ProductContants.hpp"
 #include "UniqueLibs/ProductDefaults_Compare.hpp"
 #include "UniqueLibs/quickFindSettings.hpp"
 #include "UniqueLibs/directoryRefreshSettings.hpp"
@@ -258,6 +259,25 @@ private slots:
         QVERIFY(Reload.Read(Section::Options).toObject()["showJobDetails"].toBool());
         QVERIFY(!Reload.Read(Section::Options).toObject()["enableJobRecovery"].toBool());
         Reload.BeginEdit(); Options["showJobDetails"]="true"; QVERIFY(Reload.Put(Section::Options,Options)); QVERIFY(!Reload.Commit()); Reload.DiscardEdit();
+    }
+    void jobConcurrencyBoundsAndDefaults()
+    {
+        QTemporaryDir Temp; Repository Settings(Temp.path());
+        QCOMPARE(Settings.Read(Section::Options).toObject()["jobConcurrency"].toInt(), hc::product::jobConcurrencyDefault);
+        auto Options = Settings.Read(Section::Options).toObject();
+        for (int Limit = hc::product::jobConcurrencyMin; Limit <= hc::product::jobConcurrencyMax; ++Limit) {
+            Options["jobConcurrency"] = Limit; QVERIFY(Settings.Put(Section::Options, Options));
+            Repository Reload(Temp.path()); QCOMPARE(Reload.Read(Section::Options).toObject()["jobConcurrency"].toInt(), Limit);
+        }
+        for (const auto& Invalid : {QJsonValue(hc::product::jobConcurrencyMin - 1), QJsonValue(hc::product::jobConcurrencyMax + 1),
+                 QJsonValue(-1), QJsonValue(1.5), QJsonValue("4"), QJsonValue(true), QJsonValue(QJsonValue::Null)}) {
+            auto Next = Options; Next["jobConcurrency"] = Invalid;
+            Settings.BeginEdit(); QVERIFY(Settings.Put(Section::Options, Next)); QVERIFY(!Settings.Commit()); Settings.DiscardEdit();
+            QCOMPARE(Settings.Read(Section::Options).toObject()["jobConcurrency"].toInt(), hc::product::jobConcurrencyMax);
+        }
+        // A saved value from an older installation remains authoritative.
+        Options["jobConcurrency"] = 2; QVERIFY(Settings.Put(Section::Options, Options));
+        Repository Reload(Temp.path()); QCOMPARE(Reload.Read(Section::Options).toObject()["jobConcurrency"].toInt(), 2);
     }
     void r13OptionsPersistenceAndValidation()
     {
