@@ -22,6 +22,8 @@ namespace hc::compare
     const std::vector<EngineDescriptor>& RegisteredEngines()
     {
         static const std::vector<EngineDescriptor> engines{
+            {"binary.streaming", "1", "comparison", {"binary"}, "native-stream", {}, "binary-ranges", "binary.offset.v1", true, false, false, false, false, false, 0,
+                {{"windowBytes", 1024 * 1024}, {"maxDisplayedRanges", 4096}}},
             {"text.myers", textEngineVersion, "comparison", {"text"}, "bounded-text-codec", "native-verified-replace", "scintilla-text", "text.bytes.v1", true, true, true, true, true, false, 16 * 1024 * 1024},
             {"directory.native", "2", "comparison", {"directory"}, "native-directory-snapshot", "reviewed-directory-plan", "virtual-directory", "directory.entry.v1", true, true, true, true, true, false, 0},
             {"image.png", "1", "comparison", {"png"}, "qt-png-isolated", {}, "image-rgba", "image.rect.v1", true, false, false, false, false, true, 16 * 1024 * 1024,
@@ -57,6 +59,7 @@ namespace hc::compare
         if (Prefix.startsWith(QByteArray::fromHex("d0cf11e0a1b11ae1"))) return "office-compound";
         if (Prefix.startsWith("%PDF-")) return "pdf";
         if (Prefix.startsWith("\xff\xfe") || Prefix.startsWith("\xfe\xff")) return "text";
+        if (Prefix.startsWith(QByteArray::fromHex("1a45dfa3")) || Prefix.mid(4, 4) == "ftyp") return "binary";
         return Prefix.contains('\0') ? "binary" : "text";
     }
     QJsonObject EngineCatalog()
@@ -65,7 +68,7 @@ namespace hc::compare
         return {{"schemaVersion", 1}, {"engines", engines}, {"registration", "static"},
             {"location", "schema-version-resourceRevision-payload"}, {"nestedResources", "versioned-provider-locator"},
             {"probe", "-mode probe -file1 PATH -file2 PATH [-base PATH|-file3 PATH]"},
-            {"unsupportedFormats", QJsonArray{"jpeg", "gif", "webp", "xlsx", "pptx", "office-compound", "pdf", "binary"}}};
+            {"unsupportedFormats", QJsonArray{"jpeg", "gif", "webp", "xlsx", "pptx", "office-compound", "pdf"}}};
     }
     namespace
     {
@@ -113,6 +116,10 @@ namespace hc::compare
                     if (failure.code_ == "Canceled" || failure.code_ == "Timeout" || failure.code_ == "ChangedDuringRead") throw;
                     result["reason"] = QString::fromStdString(failure.code_); return result;
                 }
+            }
+            else if (format == "binary")
+            {
+                result["validation"] = "readable-stream";
             }
             else if (format != "directory")
             {

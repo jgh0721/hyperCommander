@@ -35,9 +35,7 @@ namespace hc::compare
         for (std::size_t i = 0; i < Inputs.size(); ++i)
         {
             const auto raw = read(Inputs[i], Limits);
-            // Match text-session policy: no implicit locale-dependent legacy fallback.
-            const auto encoding = !Encoding.isEmpty() ? Encoding : raw.startsWith("\xff\xfe") ? QString("UTF-16LE") : raw.startsWith("\xfe\xff") ? QString("UTF-16BE") : QString("UTF-8");
-            const auto decoded = document::DecodeDocumentText(raw, encoding); if (!decoded.HasValue()) return {};
+            const auto decoded = document::DecodeDocumentText(raw, Encoding); if (!decoded.HasValue()) return {};
             text[i] = decoded.Value().text_.toUtf8(); if (text[i].size() > limit) return {};
             try { CountLines({text[i].constData(), std::size_t(text[i].size())}, Limits, 300000, 256 * 1024); }
             catch (const Failure& error)

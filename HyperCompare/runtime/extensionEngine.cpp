@@ -1,15 +1,86 @@
 ﻿#include "stdafx.h"
 #include "extensionEngine.hpp"
+#include "UniqueLibs/storageProviders.hpp"
 #include "engineRegistry.hpp"
 #include "session.hpp"
 #include "workerHost.hpp"
 #include "nativeArchive.hpp"
+#include "controllerMemory.hpp"
+#include <Windows.h>
 #include <QCryptographicHash>
 
 namespace hc::compare
 {
     namespace
     {
+        template<class T> T checked(storage::Result<T> Value)
+        { if (!Value.HasValue()) throw Failure(Value.Failure().code_); return std::move(Value.Value()); }
+        void compareBinary(const Request& Input, Result& Value, const Budget& Limits)
+        {
+            if (Input.mode_ == "merge" || !Input.output_.isEmpty()) throw Failure("BinaryMergeUnsupported");
+            if (!Input.base_.isEmpty() || !Input.file3_.isEmpty()) throw Failure("BinaryThreeUnsupported");
+            const auto Reservation = ProcessControllerMemory()->ReserveController(8 * 1024 * 1024);
+            storage::OperationContext Context; Context.deadline_ = Limits.deadline_; Context.workerRead_ = true; Context.denyConcurrentMutation_ = true;
+            std::array<std::shared_ptr<storage::IStorageProvider>, 2> Readers;
+            std::array<std::shared_ptr<storage::IReadStream>, 2> Streams;
+            std::array<storage::EntrySnapshot, 2> Entries;
+            const std::array<QString, 2> Paths{Input.file1_, Input.file2_};
+            std::array<QCryptographicHash, 2> Hashes{QCryptographicHash(QCryptographicHash::Sha256), QCryptographicHash(QCryptographicHash::Sha256)};
+            std::array<bool, 2> Eof{}; std::array<std::uint64_t, 2> Sizes{};
+            for (int Side = 0; Side < 2; ++Side) {
+                const storage::Locator At{Paths[Side].startsWith("//") || Paths[Side].startsWith("\\\\") ? storage::LocatorKind::Smb : storage::LocatorKind::Local, Paths[Side].toUtf8().toStdString()};
+                Readers[Side] = storage::MakeNativeReadProvider(At.kind_);
+                Entries[Side] = checked(Readers[Side]->Resolve(At, Context).get());
+                if (Entries[Side].directory_ || (Entries[Side].attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) throw Failure("BinaryExpectedRegularFile");
+                Streams[Side] = checked(Readers[Side]->OpenRead(Entries[Side].id_, Context).get());
+            }
+            QJsonArray Ranges; std::uint64_t Offset = 0, Different = 0, RangeCount = 0, RangeStart = 0, RangeLength = 0;
+            QByteArray LeftSample, RightSample;
+            const auto FinishRange = [&] {
+                if (!RangeLength) return;
+                ++RangeCount;
+                if (Ranges.size() < 4096) Ranges.append(QJsonObject{{"offset", QString::number(RangeStart)}, {"length", QString::number(RangeLength)},
+                    {"leftHex", QString::fromLatin1(LeftSample.toHex(' '))}, {"rightHex", QString::fromLatin1(RightSample.toHex(' '))}});
+                RangeLength = 0; LeftSample.clear(); RightSample.clear();
+            };
+            for (;;) {
+                Limits.Check(); std::array<QByteArray, 2> Blocks;
+                for (int Side = 0; Side < 2; ++Side) {
+                    while (!Eof[Side] && Blocks[Side].size() < 1024 * 1024) {
+                        Limits.Check(); const auto Count = 1024 * 1024 - Blocks[Side].size();
+                        const auto Chunk = checked(Streams[Side]->Read(Count, Context).get());
+                        if (Chunk.bytes_.size() > size_t(Count) || (Chunk.bytes_.empty() && !Chunk.eof_)) throw Failure("ReadMadeNoProgress");
+                        const QByteArrayView Bytes(reinterpret_cast<const char*>(Chunk.bytes_.data()), qsizetype(Chunk.bytes_.size()));
+                        Hashes[Side].addData(Bytes); Blocks[Side].append(Bytes.data(), Bytes.size());
+                        Sizes[Side] += Chunk.bytes_.size(); Eof[Side] = Chunk.eof_;
+                        if (Sizes[Side] > Entries[Side].size_) throw Failure("ChangedDuringRead");
+                    }
+                }
+                const auto Count = std::max(Blocks[0].size(), Blocks[1].size()); if (!Count) break;
+                if (Blocks[0] == Blocks[1]) FinishRange();
+                else for (qsizetype Index = 0; Index < Count; ++Index) {
+                    if ((Index & 65535) == 0) Limits.Check();
+                    if (Index < Blocks[0].size() && Index < Blocks[1].size() && Blocks[0][Index] == Blocks[1][Index]) { FinishRange(); continue; }
+                    if (!RangeLength) RangeStart = Offset + Index;
+                    if (RangeLength < 32) {
+                        if (Index < Blocks[0].size()) LeftSample += Blocks[0][Index];
+                        if (Index < Blocks[1].size()) RightSample += Blocks[1][Index];
+                    }
+                    ++RangeLength; ++Different;
+                }
+                Offset += Count;
+            }
+            FinishRange(); QJsonArray Documents;
+            for (int Side = 0; Side < 2; ++Side) {
+                Limits.Check(); const auto After = checked(Readers[Side]->Stat(Entries[Side].id_, Context).get());
+                if (Sizes[Side] != Entries[Side].size_ || After.id_.revision_ != Entries[Side].id_.revision_) throw Failure("ChangedDuringRead");
+                Documents.append(QJsonObject{{"path", Paths[Side]}, {"size", QString::number(Sizes[Side])}, {"sha256", QString::fromLatin1(Hashes[Side].result().toHex())}});
+            }
+            Value.operation_ = "compare-binary"; Value.exitCode_ = Different ? 1 : 0; Value.outcome_ = Different ? "Different" : "Equal";
+            Value.extension_ = {{"engine", "binary.streaming"}, {"payloadSchema", "binary.offset.v1"}, {"scopeComplete", true},
+                {"documents", Documents}, {"differentBytes", QString::number(Different)}, {"rangeCount", QString::number(RangeCount)},
+                {"rangesComplete", RangeCount == std::uint64_t(Ranges.size())}, {"ranges", Ranges}};
+        }
         struct Extension { QString format_, engine_, schema_, operation_, validation_; };
         const std::vector<Extension>& extensions()
         { static const std::vector<Extension> entries{{"png", "image.png", "image.rgba.v1", "compare-image", "full-png-decode"},
@@ -69,6 +140,10 @@ namespace hc::compare
     bool TryExtensionComparison(const Request& Input, Result& Value, const Budget& Limits, bool Save)
     {
         const auto format = InspectResourceFormat(Input.file1_, Limits);
+        if (InputEncoding(Input, 0).isEmpty() && InputEncoding(Input, 1).isEmpty()
+            && (format == "binary" || (format == "text" && InspectResourceFormat(Input.file2_, Limits) == "binary"))) {
+            compareBinary(Input, Value, Limits); return true;
+        }
         if (QStringList{"zip", "7z", "rar"}.contains(format)) {
             if (Input.archiveEngine_ != "zip") return TryArchiveComparison(Input, Value, Limits, Save, format);
             if (format != "zip" || Input.mode_ == "merge" || !Input.archiveMembers_[0].isEmpty() || !Input.archiveMembers_[1].isEmpty() || !Input.archivePasswordFiles_[0].isEmpty() || !Input.archivePasswordFiles_[1].isEmpty()) throw Failure("ArchiveLegacyOptionsUnsupported");

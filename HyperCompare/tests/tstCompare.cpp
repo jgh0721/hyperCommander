@@ -2947,9 +2947,50 @@ private slots:
         QVERIFY(result.Json()["inputs"].toArray()[0].toObject()["bom"].toBool());
         QVERIFY(result.textComparison_["encodingOnly"].toBool());
         r.textEquality_ = "bytes"; QCOMPARE(Execute(r, cancel, false).exitCode_, 1);
-        write(r.file1_, QByteArray::fromHex("ff00")); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
-        write(r.file1_, QByteArray("a\0b", 3)); QCOMPARE(Execute(r, cancel, false).error_, QString("document-text-nul-or-surrogate"));
+        write(r.file1_, QByteArray::fromHex("ff00")); QCOMPARE(Execute(r, cancel, false).exitCode_, 1);
+        write(r.file1_, QByteArray("a\0b", 3)); QCOMPARE(Execute(r, cancel, false).operation_, QString("compare-binary"));
         r.file1_ = dir.filePath("missing"); QCOMPARE(Execute(r, cancel, false).exitCode_, 2);
+    }
+    void automaticSubtitleEncoding()
+    {
+        QTemporaryDir Dir; Request Input; Input.file1_ = Dir.filePath("left.smi"); Input.file2_ = Dir.filePath("right.smi");
+        write(Input.file1_, QByteArray::fromHex("b0a10d0a")); write(Input.file2_, QString::fromUtf8("가\r\n").toUtf8());
+        const auto Result = Execute(Input, std::make_shared<std::atomic_bool>(false), false);
+        QVERIFY2(Result.error_.isEmpty(), qPrintable(Result.error_)); QCOMPARE(Result.exitCode_, 0); QCOMPARE(Result.outcome_, QString("Equivalent"));
+        QCOMPARE(Result.inputs_[0].encoding_, QString("CP949"));
+    }
+    void streamedBinaryComparison()
+    {
+        QTemporaryDir Dir; Request Input; Input.file1_ = Dir.filePath("left.mkv"); Input.file2_ = Dir.filePath("right.mkv");
+        QByteArray Left(17 * 1024 * 1024 + 3, '\0'); Left.replace(0, 4, QByteArray::fromHex("1a45dfa3"));
+        auto Right = Left; Right[1024 * 1024 - 1] = 1; Right[1024 * 1024] = 2; Right += "tail";
+        write(Input.file1_, Left); write(Input.file2_, Right);
+        const auto Cancel = std::make_shared<std::atomic_bool>(false);
+        auto Result = Execute(Input, Cancel, false); QVERIFY2(Result.error_.isEmpty(), qPrintable(Result.error_));
+        QCOMPARE(Result.operation_, QString("compare-binary")); QCOMPARE(Result.exitCode_, 1); QVERIFY(!Result.largeText_);
+        QCOMPARE(Result.extension_["differentBytes"].toString(), QString("6"));
+        const auto Ranges = Result.extension_["ranges"].toArray(); QCOMPARE(Ranges.size(), 2);
+        QCOMPARE(Ranges[0].toObject()["offset"].toString().toULongLong(), 1024 * 1024 - 1ULL);
+        QCOMPARE(Ranges[0].toObject()["length"].toString(), QString("2"));
+        QCOMPARE(Result.Json()["inputs"].toArray()[0].toObject()["sha256"].toString(), QString::fromLatin1(QCryptographicHash::hash(Left, QCryptographicHash::Sha256).toHex()));
+        write(Input.file2_, Left); Result = Execute(Input, Cancel, false); QCOMPARE(Result.exitCode_, 0);
+        Input.mode_ = "probe"; QVERIFY(Execute(Input, Cancel, false).engineProbe_["available"].toBool());
+        Input.mode_ = "merge"; Input.output_ = Dir.filePath("out"); QCOMPARE(Execute(Input, Cancel, false).error_, QString("BinaryMergeUnsupported"));
+        Input.mode_ = "auto"; Input.output_.clear(); Cancel->store(true); QCOMPARE(Execute(Input, Cancel, false).exitCode_, 3);
+    }
+    void smbInputComparison()
+    {
+        const auto Root = qEnvironmentVariable("HC_COMPARE_SMB_ROOT"); if (Root.isEmpty()) QSKIP("An owned SMB fixture root is required");
+        QTemporaryDir Dir(QDir(Root).filePath("compare-XXXXXX")); QVERIFY(Dir.isValid());
+        Request Input; Input.file1_ = Dir.filePath("left.smi"); Input.file2_ = Dir.filePath("right.smi");
+        write(Input.file1_, QByteArray::fromHex("b0a10d0a")); write(Input.file2_, QString::fromUtf8("가\r\n").toUtf8());
+        const auto Cancel = std::make_shared<std::atomic_bool>(false);
+        auto Result = Execute(Input, Cancel, false); QVERIFY2(Result.error_.isEmpty(), qPrintable(Result.error_)); QCOMPARE(Result.exitCode_, 0);
+        QCOMPARE(Result.inputs_[0].entry_.locator_.kind_, hc::storage::LocatorKind::Smb);
+        write(Input.file1_, QByteArray::fromHex("1a45dfa300010203")); write(Input.file2_, QByteArray::fromHex("1a45dfa300010204"));
+        Result = Execute(Input, Cancel, false); QVERIFY2(Result.error_.isEmpty(), qPrintable(Result.error_));
+        QCOMPARE(Result.operation_, QString("compare-binary")); QCOMPARE(Result.exitCode_, 1);
+        QCOMPARE(Result.extension_["differentBytes"].toString(), QString("1"));
     }
     void mixedEncodingEquality()
     {

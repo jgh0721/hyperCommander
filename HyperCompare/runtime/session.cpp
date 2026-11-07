@@ -102,16 +102,9 @@ namespace hc::compare
         {
             auto result = readSnapshot(Path, textLimit, Limits, AllowMissing);
             const auto reservation = ProcessControllerMemory()->ReserveController(std::uint64_t(result.raw_.size()) * 6 + 4 * 1024 * 1024);
-            auto encoding = Encoding;
             const auto bomEncoding = result.raw_.startsWith("\xef\xbb\xbf") ? QString("UTF-8") : result.raw_.startsWith("\xff\xfe") ? QString("UTF-16LE") : result.raw_.startsWith("\xfe\xff") ? QString("UTF-16BE") : QString{};
             if (!Encoding.isEmpty() && !bomEncoding.isEmpty() && Encoding != bomEncoding) throw Failure("EncodingBomMismatch");
-            if (encoding.isEmpty())
-            {
-                if (result.raw_.startsWith("\xff\xfe")) encoding = "UTF-16LE";
-                else if (result.raw_.startsWith("\xfe\xff")) encoding = "UTF-16BE";
-                else encoding = "UTF-8";
-            }
-            const auto decoded = require(document::DecodeDocumentText(result.raw_, encoding));
+            const auto decoded = require(document::DecodeDocumentText(result.raw_, Encoding));
             result.encoding_ = decoded.encoding_; result.bom_ = decoded.bom_; result.utf8_ = decoded.text_.toUtf8();
             if (result.utf8_.contains('\0')) throw Failure("BinaryInputUnsupported");
             if (result.utf8_.size() > textLimit) throw Failure("DecodedSizeLimit");
@@ -495,6 +488,7 @@ namespace hc::compare
         }
         for (const auto& input : inputs_) inputs.append(QJsonObject{{"path", input.path_}, {"exists", input.exists_}, {"encoding", input.encoding_}, {"bom", input.bom_},
             {"sha256", QString::fromLatin1(QCryptographicHash::hash(input.raw_, QCryptographicHash::Sha256).toHex())}});
+        if (extension_["payloadSchema"] == "binary.offset.v1") inputs = extension_["documents"].toArray();
         for (const auto& edit : edits_) changes.append(QJsonObject{{"begin", double(edit.begin_)}, {"end", double(edit.end_)},
             {"otherBegin", double(edit.otherBegin_)}, {"otherEnd", double(edit.otherEnd_)}});
         for (const auto& conflict : merged_.conflicts_) conflicts.append(QJsonObject{{"baseBegin", double(conflict.baseBegin_)}, {"baseEnd", double(conflict.baseEnd_)}});

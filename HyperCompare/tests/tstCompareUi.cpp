@@ -2995,6 +2995,17 @@ private slots:
         QTRY_COMPARE(output->send(SCI_GETSELECTIONSTART), sptr_t(before.lastIndexOf("needle"))); QCOMPARE(window.ExitCode(), 0);
         QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), before); window.close();
     }
+    void binaryComparisonWindow()
+    {
+        QTemporaryDir Dir; Request Input; Input.file1_ = Dir.filePath("left.mkv"); Input.file2_ = Dir.filePath("right.mkv");
+        write(Input.file1_, QByteArray::fromHex("1a45dfa3000102")); write(Input.file2_, QByteArray::fromHex("1a45dfa3000103"));
+        CompareWindow Window(Input); Window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(Window.findChild<QWidget*>("hc.compare.binary"), 10000);
+        const auto Table = Window.findChild<QWidget*>("hc.compare.binary")->findChild<QTableWidget*>(); QVERIFY(Table);
+        QCOMPARE(Table->rowCount(), 1); QCOMPARE(Table->item(0, 0)->text(), QString("6"));
+        QCOMPARE(Table->item(0, 2)->text(), QString("02")); QCOMPARE(Table->item(0, 3)->text(), QString("03"));
+        Window.close();
+    }
     void alignedSourceRowsAndEngineBoundaries()
     {
         const std::vector<std::pair<std::string, std::string>> cases{
