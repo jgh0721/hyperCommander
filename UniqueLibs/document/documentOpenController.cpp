@@ -25,12 +25,7 @@ struct PreparedOpen {
     std::vector<std::shared_ptr<IMaterializedFileLease>> leases_;
     std::shared_ptr<IMaterializer> materializer_;
 };
-bool LooksLikeLocalText(const storage::EntrySnapshot& Entry) {
-    if (Entry.locator_.kind_ != LocatorKind::Local || Entry.directory_) return false;
-    QFile File(QString::fromStdString(Entry.locator_.root_));
-    if (!File.open(QIODevice::ReadOnly)) return false;
-    auto Sample = File.read(64 * 1024);
-    if (Sample.isEmpty() && File.size()) return false;
+bool LooksLikeText(const QByteArray& Sample) {
     // A prefix can end inside a UTF-8/CP949 sequence; trim only that boundary.
     for (int Trim = 0; Trim <= 3 && Trim <= Sample.size(); ++Trim) {
         const auto Bytes = Sample.left(Sample.size() - Trim);
@@ -49,6 +44,13 @@ bool LooksLikeLocalText(const storage::EntrySnapshot& Entry) {
         });
     }
     return false;
+}
+bool LooksLikeLocalText(const storage::EntrySnapshot& Entry) {
+    if (Entry.locator_.kind_ != LocatorKind::Local || Entry.directory_) return false;
+    QFile File(QString::fromStdString(Entry.locator_.root_));
+    if (!File.open(QIODevice::ReadOnly)) return false;
+    const auto Sample = File.read(64 * 1024);
+    return File.error() == QFileDevice::NoError && (!Sample.isEmpty() || !File.size()) && LooksLikeText(Sample);
 }
 }
 DocumentOpenController::DocumentOpenController(QWidget* Main, Catalog Candidates, PluginLaunch Launch)
@@ -79,6 +81,52 @@ bool DocumentOpenController::Open(const QString& Token) {
         const bool Known = std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) != DocumentExtensions.end();
         Selection.textContent_.push_back(!Known && LooksLikeLocalText(Entry));
     }
+    bool ProbeSmb = false;
+    for (const auto& Input : Request.documents_) if (Input.source_) {
+        const auto Entry = Input.source_->Describe();
+        const auto Ext = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
+        ProbeSmb |= Entry.locator_.kind_ == LocatorKind::Smb && !Entry.directory_
+            && std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) == DocumentExtensions.end();
+    }
+    if (!ProbeSmb) return selectHandler(Token, std::move(Request), std::move(Selection));
+    // Read only a bounded prefix on a worker. A slow share must not block the panel.
+    const auto Stop = std::make_shared<std::stop_source>(); pending_.insert(Token, Stop);
+    auto* Watcher = new QFutureWatcher<HandlerSelection>(this);
+    connect(Watcher, &QFutureWatcher<HandlerSelection>::finished, this, [this, Watcher, Token, Request] {
+        auto Selection = Watcher->result(); Watcher->deleteLater(); pending_.remove(Token);
+        if (cancelled_.contains(Token)) { report(Token, "cancelled"); return; }
+        if (!main_ || !Request.stillCurrent_()) { report(Token, "rejected", "document-context-changed"); return; }
+        selectHandler(Token, Request, std::move(Selection));
+    });
+    Watcher->setFuture(QtConcurrent::run([Request, Selection = std::move(Selection), Stop]() mutable {
+        OperationContext Context; Context.stopToken_ = Stop->get_token();
+        Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        Context.maxReadBytes_ = 64 * 1024;
+        for (size_t Index = 0; Index < Selection.names_.size(); ++Index) {
+            if (Context.Check({})) break;
+            const auto& Source = Request.documents_[Index].source_;
+            const auto Entry = Source->Describe();
+            const auto Ext = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
+            if (Entry.locator_.kind_ != LocatorKind::Smb || Entry.directory_
+                || std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) != DocumentExtensions.end()) continue;
+            auto Stream = Source->OpenRead(Context).get(); if (!Stream.HasValue()) continue;
+            QByteArray Sample;
+            while (Sample.size() < 64 * 1024 && !Context.Check({})) {
+                auto Chunk = Stream.Value()->Read(64 * 1024 - Sample.size(), Context).get();
+                if (!Chunk.HasValue() || Chunk.Value().bytes_.size() > size_t(64 * 1024 - Sample.size())
+                    || (Chunk.Value().bytes_.empty() && !Chunk.Value().eof_)) break;
+                const auto& Bytes = Chunk.Value().bytes_;
+                Sample.append(reinterpret_cast<const char*>(Bytes.data()), qsizetype(Bytes.size()));
+                if (Chunk.Value().eof_ || Sample.size() == 64 * 1024) {
+                    Selection.textContent_[Index] = !Context.Check({}) && LooksLikeText(Sample); break;
+                }
+            }
+        }
+        return Selection;
+    }));
+    return true;
+}
+bool DocumentOpenController::selectHandler(const QString& Token, DocumentOpenRequest Request, HandlerSelection Selection) {
     auto Catalog = catalog_();
     auto Default = Request.intent_ == DocumentIntent::View ? Catalog.defaultView_ : Catalog.defaultEdit_;
     if (!Selection.names_.empty()) {

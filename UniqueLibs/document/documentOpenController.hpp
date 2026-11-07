@@ -49,6 +49,7 @@ signals:
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
 private:
+    bool selectHandler(const QString& Token, DocumentOpenRequest Request, HandlerSelection Selection);
     void prepare(const QString& Token, DocumentOpenRequest Request, DocumentHandlerTarget Target, HandlerSelection Selection);
     void report(const QString& Token, const QString& Status, const QString& Reason = {});
     QPointer<QWidget> main_;

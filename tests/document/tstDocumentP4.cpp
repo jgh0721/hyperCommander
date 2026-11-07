@@ -34,9 +34,10 @@ public:
 };
 class Content final : public IContentSource {
 public:
+    QByteArray bytes_ = "lease test";
     EntrySnapshot entry_; std::atomic<int> verifies_{0}; std::atomic<bool> release_{true}; bool changed_ = false;
     EntrySnapshot Describe() const override { return entry_; }
-    Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext) override { return Ready<std::shared_ptr<IReadStream>>(std::shared_ptr<IReadStream>(std::make_shared<Stream>())); }
+    Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext) override { auto Result = std::make_shared<Stream>(); Result->bytes_ = bytes_; return Ready<std::shared_ptr<IReadStream>>(std::shared_ptr<IReadStream>(Result)); }
     Task<Unit> Verify(OperationContext Context) override {
         ++verifies_; while (!release_) { if (auto Stop = Context.Check({"test"})) return Ready<Unit>(*Stop); std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
         return Ready<Unit>(changed_ ? Result<Unit>(Error{ErrorCategory::StaleRevision, "test-source-changed"}) : Result<Unit>(Unit{}));
@@ -96,6 +97,13 @@ private slots:
             return DocumentHandlerResolver::Resolve(Catalog.registry_, Intent, {{Name}}).candidates_;
         };
         QCOMPARE(Candidates("collage.png", DocumentIntent::View), std::vector<std::string>{"builtin.hyperviewer"});
+        // Subtitle formats must resolve without the local-only content probe (SMB/archive inputs too).
+        for (const auto* Name : {"subtitle.smi", "subtitle.srt", "subtitle.SMI", "subtitle.SRT"}) {
+            QCOMPARE(Candidates(Name, DocumentIntent::View), std::vector<std::string>{"builtin.hyperviewer"});
+            QCOMPARE(Candidates(Name, DocumentIntent::Edit), std::vector<std::string>{"builtin.hypereditor"});
+        }
+        QCOMPARE(DocumentHandlerResolver::Resolve(Catalog.registry_, DocumentIntent::View,
+            {{"one.smi", "two.SRT"}}).candidates_, std::vector<std::string>{"builtin.hyperviewer"});
         QVERIFY(Candidates("setup.inf", DocumentIntent::View).empty());
         QCOMPARE(DocumentHandlerResolver::Resolve(Catalog.registry_, DocumentIntent::View,
             {{"setup.inf"}, false, true, {true}}).candidates_, std::vector<std::string>{"builtin.hyperviewer"});
@@ -108,7 +116,16 @@ private slots:
         QVERIFY(!DocumentHandlerResolver::Supports(Target.descriptor_, DocumentIntent::View, {"collage.png"}));
         QVERIFY(!DocumentHandlerResolver::Supports(Target.descriptor_, DocumentIntent::View, {"tool.dll"}));
     }
+    void localInfUsesContentProbe_data() {
+        QTest::addColumn<bool>("Smb");
+        QTest::addColumn<QByteArray>("Sample");
+        QTest::newRow("local") << false << QByteArray("plain text");
+        QTest::newRow("smb-utf8") << true << QString("자막 내용").toUtf8();
+        QTest::newRow("smb-cp949") << true << QByteArray::fromHex("c7d1b1db0d0a");
+        QTest::newRow("smb-utf16") << true << QByteArray::fromHex("fffe5cd500ae0d000a00");
+    }
     void localInfUsesContentProbe() {
+        QFETCH(bool, Smb); QFETCH(QByteArray, Sample);
         QTemporaryDir Temp; QVERIFY(Temp.isValid());
         const auto Path = Temp.filePath("setup.inf");
         QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly));
@@ -116,6 +133,8 @@ private slots:
         hc::settings::Repository Settings(Temp.path());
         const auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath());
         auto Input = Source("setup.inf"); Input->entry_.locator_.root_ = Path.toStdString();
+        Input->bytes_ = Sample;
+        if (Smb) Input->entry_.locator_ = {LocatorKind::Smb, "//test-server/share/setup.inf"};
         QWidget Window; int Launches = 0; QString LaunchedId;
         DocumentOpenController Controller(&Window, [&] { return Candidates; },
             [&](const auto& Target, auto, auto Completion) {
@@ -127,6 +146,33 @@ private slots:
         QTRY_COMPARE(Launches, 1);
         QCOMPARE(LaunchedId, QString("builtin.hyperviewer"));
         QCOMPARE(Finished.back()[1].toString(), QString("ready"));
+    }
+    void smbBinaryDoesNotUseTextFallback() {
+        QTemporaryDir Temp; QVERIFY(Temp.isValid()); hc::settings::Repository Settings(Temp.path());
+        hc::plugins::PluginViewerOptions Options; Options.binaryPath_ = QCoreApplication::applicationFilePath();
+        Options.executable_ = Options.binaryPath_; Options.approval_.approved_ = true;
+        const auto External = BuildPluginViewerTarget("binary", Options, {"*"});
+        const auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {External});
+        auto Input = Source("binary.unknown"); Input->entry_.locator_ = {LocatorKind::Smb, "//test-server/share/binary.unknown"};
+        Input->bytes_ = QByteArray::fromHex("000102030405");
+        QWidget Window; std::string Selected;
+        DocumentOpenController Controller(&Window, [&] { return Candidates; }, [&](const auto& Target, auto, auto Completion) {
+            Selected = Target.descriptor_.stableId_; Completion(true, {}); return true;
+        });
+        QVERIFY(Controller.Open(Controller.Capture({DocumentIntent::View, {{Input, {}}}, [] { return true; }})));
+        QTRY_COMPARE(Selected, External.descriptor_.stableId_);
+    }
+    void smbProbeCancellationPreventsLaunch() {
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());
+        const auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath());
+        auto Input = Source("setup.inf"); Input->entry_.locator_ = {LocatorKind::Smb, "//test-server/share/setup.inf"};
+        QWidget Window; int Launches = 0;
+        DocumentOpenController Controller(&Window, [&] { return Candidates; }, [&](const auto&, auto, auto) { ++Launches; return true; });
+        QSignalSpy Finished(&Controller, &DocumentOpenController::Finished);
+        const auto Token = Controller.Capture({DocumentIntent::View, {{Input, {}}}, [] { return true; }});
+        QVERIFY(Controller.Open(Token)); Controller.Cancel(Token);
+        QTRY_COMPARE(Finished.size(), 1); QCOMPARE(Finished.back()[1].toString(), QString("cancelled"));
+        QCOMPARE(Launches, 0);
     }
     void migrationPreservesLegacyAndShortcutOverrides() {
         QTemporaryDir Temp; const QJsonArray Items{QJsonObject{{"name", "선택한 편집기"}, {"program", "C:/custom/editor.exe"}, {"arguments", "--line 4 \"%FILE%\""}, {"extensions", QJsonArray{"txt"}}, {"stableId", "duplicate"}},
