@@ -2707,19 +2707,20 @@ private slots:
     }
     void streamedMoveTotals_data()
     {
-        QTest::addColumn<bool>("Manifest");
-        QTest::newRow("direct") << false; QTest::newRow("selection") << true;
+        QTest::addColumn<bool>("Manifest"); QTest::addColumn<bool>("Move");
+        QTest::newRow("direct") << false << true; QTest::newRow("selection") << true << true;
+        QTest::newRow("copy-direct") << false << false; QTest::newRow("copy-selection") << true << false;
     }
     void streamedMoveTotals()
     {
-        QFETCH(bool, Manifest);
-        const auto From = QString("move-totals-source-%1").arg(Manifest), To = QString("move-totals-destination-%1").arg(Manifest);
+        QFETCH(bool, Manifest); QFETCH(bool, Move);
+        const auto From = QString("move-totals-source-%1-%2").arg(Manifest).arg(Move), To = QString("move-totals-destination-%1-%2").arg(Manifest).arg(Move);
         QVERIFY(QDir().mkpath(root_->filePath(From + "/sub")));
         QVERIFY(QDir().mkpath(root_->filePath(To)));
         QVERIFY(write(From + "/sub/a.bin", QByteArray(128 * 1024, 'a')));
         QVERIFY(write(From + "/b.bin", QByteArray(256 * 1024, 'b')));
         const auto Source = reader_->Resolve(at(From), {}).get(); QVERIFY(Source.HasValue());
-        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move; Request.calculateSizeBefore_ = true;
+        FileOperationRequest Request; Request.operation_ = Move ? hc::operations::FileOperation::Move : hc::operations::FileOperation::Copy; Request.calculateSizeBefore_ = true;
         Request.sources_ = {{Source.Value(), reader_, writer_}}; Request.destination_ = at(To); Request.destinationWriter_ = writer_;
         if (Manifest) {
             auto Selection = std::make_shared<CopySelection>(); Selection->reader_ = reader_; Selection->entries_ = {Source.Value()};
@@ -2734,9 +2735,10 @@ private slots:
             if (Step.progress_ && Step.progress_->bytesTotal_ && *Step.progress_->bytesTotal_ == 384 * 1024) SawTotal = true;
             if (Step.next_ == JobState::Completed) { Complete = true; break; }
         }
-        QVERIFY(Complete); if (kind_ == LocatorKind::Smb) QVERIFY(SawTotal);
+        QVERIFY(Complete); if (kind_ == LocatorKind::Smb || !Move) QVERIFY(SawTotal);
         QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty());
         QCOMPARE(read(To + '/' + From + "/sub/a.bin"), QByteArray(128 * 1024, 'a'));
+        QCOMPARE(QFileInfo::exists(root_->filePath(From + "/sub/a.bin")), !Move);
     }
     void recycleAndShellRestore()
     {

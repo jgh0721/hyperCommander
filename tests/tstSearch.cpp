@@ -127,18 +127,22 @@ private slots:
         Size = hc::folders::Measure(Provider, Root, Context); QVERIFY(!Size.HasValue()); QCOMPARE(Size.Failure().category_, ErrorCategory::Cancelled);
         const Locator Local{LocatorKind::Local, "C:\\fixture"}, Network{LocatorKind::Smb, "\\\\server\\share"};
         QVERIFY(!hc::folders::Automatic("manual", Local)); QVERIFY(hc::folders::Automatic("local", Local));
-        QVERIFY(!hc::folders::Automatic("local", Network)); QVERIFY(!hc::folders::Automatic("all", Network));
+        QVERIFY(!hc::folders::Automatic("local", Network)); QVERIFY(hc::folders::Automatic("all", Network));
         QVERIFY(!hc::folders::Automatic("everything", Network)); QVERIFY(!hc::folders::Automatic("all", {LocatorKind::Archive, "archive.zip"}));
         const Locator UncLocal{LocatorKind::Local, "\\\\server\\share\\folder"};
         const Locator ExtendedUnc{LocatorKind::Local, "\\\\?\\UNC\\server\\share\\folder"};
-        for (const auto& At : {Network, UncLocal, ExtendedUnc}) {
+        const Locator Redirected{LocatorKind::Smb, "\\\\tsclient\\C\\folder"};
+        for (const auto& At : {Network, UncLocal, ExtendedUnc, Redirected}) {
             QVERIFY(hc::folders::IsNetwork(At));
-            for (const auto* Mode : {"manual", "local", "all", "everything"}) QVERIFY(!hc::folders::Automatic(Mode, At));
-            auto Remote = Root; Remote.locator_ = At;
-            const auto Denied = hc::folders::Measure(Provider, Remote, {});
-            QVERIFY(!Denied.HasValue()); QCOMPARE(Denied.Failure().code_, std::string("folder-size-network-disabled"));
+            for (const auto* Mode : {"manual", "local", "everything"}) QVERIFY(!hc::folders::Automatic(Mode, At));
+            QVERIFY(hc::folders::Automatic("all", At));
+            const auto RemoteId = Provider.Add(At, "measured", {}, true);
+            const auto Remote = Provider.Stat(RemoteId, {}).get().Value();
+            Provider.Add(Remote.locator_, "data", std::vector<std::byte>(11));
+            const auto Measured = hc::folders::Measure(Provider, Remote, {});
+            QVERIFY(Measured.HasValue()); QCOMPARE(Measured.Value(), 11u);
             const auto IndexDenied = hc::folders::Indexed(QString::fromStdString(At.root_), {}, "must-not-start.exe");
-            QVERIFY(!IndexDenied.HasValue()); QCOMPARE(IndexDenied.Failure().code_, std::string("folder-size-network-disabled"));
+            QVERIFY(!IndexDenied.HasValue()); QCOMPARE(IndexDenied.Failure().code_, std::string("folder-size-index-local-only"));
         }
         const auto Drives = GetLogicalDrives();
         for (int I = 0; I < 26; ++I) if (Drives & (1u << I)) {

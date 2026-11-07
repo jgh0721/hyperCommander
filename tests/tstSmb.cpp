@@ -4680,6 +4680,75 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Completed, 15000);
         QCOMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.bytesTotal_.value_or(0), Total);
     }
+    void todoBugNetworkFolderProgressUi_data()
+    {
+        QTest::addColumn<bool>("Move"); QTest::addColumn<bool>("ToNetwork"); QTest::addColumn<bool>("Manifest");
+        for (const bool Move : {false, true}) for (const bool ToNetwork : {false, true}) for (const bool Manifest : {false, true})
+            QTest::newRow(qPrintable(QString("%1-%2-%3").arg(Move ? "move" : "copy").arg(ToNetwork ? "outbound" : "inbound").arg(Manifest ? "selection" : "direct")))
+                << Move << ToNetwork << Manifest;
+    }
+    void todoBugNetworkFolderProgressUi()
+    {
+        using namespace hc::operations; using namespace hc::storage; using namespace hc::settings;
+        QFETCH(bool, Move); QFETCH(bool, ToNetwork); QFETCH(bool, Manifest);
+        const auto NetworkRoot = qEnvironmentVariable("HC_NETWORK_PROGRESS_ROOT");
+        if (NetworkRoot.isEmpty()) QSKIP("An explicit SMB or RDP redirected fixture root is required");
+        qInfo().noquote() << "Network fixture root:" << NetworkRoot;
+        QTemporaryDir Local, Remote(QDir(NetworkRoot).filePath("hc-folder-progress-XXXXXX"));
+        QVERIFY(Local.isValid() && Remote.isValid());
+        const auto From = ToNetwork ? Local.path() : Remote.path(), To = ToNetwork ? Remote.path() : Local.path();
+        const QByteArray Payload(2 * 1024 * 1024 + 17, 'R');
+        const QStringList Names{"folder-one/sub/a.bin", "folder-two/b.bin", "plain.bin"};
+        for (const auto& Name : Names) {
+            const auto Path = QDir(From).filePath(Name); QVERIFY(QDir().mkpath(QFileInfo(Path).path()));
+            QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Payload), Payload.size());
+        }
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); });
+        auto Options = Settings.Read(Section::Options).toObject(); Options["folderSizeBeforeOperations"] = true;
+        Options["jobCloseOnSuccess"] = false; Options["saveJobProgress"] = false; Options["enableJobRecovery"] = false;
+        QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit());
+        const auto Kind = [](const QString& Path) { return Path.startsWith("//") || Path.startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local; };
+        auto Reader = MakeNativeReadProvider(Kind(From)), TargetReader = MakeNativeReadProvider(Kind(To));
+        auto Writer = MakeNativeWritableStorage(Kind(From), Reader), TargetWriter = MakeNativeWritableStorage(Kind(To), TargetReader);
+        auto Selection = std::make_shared<R9Manifest>(); Selection->provider_ = Reader;
+        FileOperationRequest Request; Request.operation_ = Move ? hc::operations::FileOperation::Move : hc::operations::FileOperation::Copy;
+        for (const auto* Name : {"folder-one", "folder-two", "plain.bin"}) {
+            auto Entry = Reader->Resolve({Kind(From), QDir::toNativeSeparators(QDir(From).filePath(Name)).toStdString()}, {}).get();
+            QVERIFY2(Entry.HasValue(), Entry.HasValue() ? "" : Entry.Failure().code_.c_str());
+            Selection->entries_.push_back(Entry.Value()); Request.sources_.push_back({Entry.Value(), Reader, Writer});
+        }
+        if (Manifest) {
+            Request.selection_ = Selection; Request.selectionRoot_ = {Kind(From), QDir::toNativeSeparators(From).toStdString()};
+            Request.selectionWriter_ = Writer; Request.sources_.clear();
+        }
+        Request.destination_ = {Kind(To), QDir::toNativeSeparators(To).toStdString()}; Request.destinationWriter_ = TargetWriter;
+        Request.bytesPerSecondLimit_ = 2 * 1024 * 1024;
+        QWidget Window; FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        const auto Started = Jobs.Submit(Request, {}); QVERIFY(Started.HasValue());
+        const auto Cancel = qScopeGuard([&] { Jobs.Scheduler().Cancel(Started.Value().id_); });
+        auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Dialog); Dialog->resize(1040, Dialog->height());
+        auto* Bar = Dialog->findChild<QProgressBar*>("hc.jobs.overallProgress");
+        auto* Metrics = Dialog->findChild<QLabel*>("hc.jobs.metrics"); auto* Overall = Dialog->findChild<QLabel*>("hc.jobs.overallMetrics");
+        QVERIFY(Bar && Metrics && Overall);
+        QTRY_VERIFY_WITH_TIMEOUT(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.bytesDone_ > 0
+            || IsTerminal(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_), 10000);
+        const auto Snapshot = Jobs.Scheduler().Snapshot(Started.Value().id_).Value();
+        QVERIFY2(Snapshot.progress_.bytesDone_ > 0, Snapshot.error_ ? Snapshot.error_->code_.c_str() : "no transfer progress");
+        const auto Total = uint64_t(Payload.size()) * Names.size();
+        QCOMPARE(Snapshot.progress_.bytesTotal_.value_or(0), Total);
+        QTRY_VERIFY(Bar->maximum() == 1000 && Bar->value() > 0 && Bar->value() < 1000);
+        QVERIFY(!Overall->text().contains(QStringLiteral("집계 중")));
+        QTRY_VERIFY(Metrics->text().contains(QStringLiteral("남은 시간 약")));
+        QTRY_VERIFY(Metrics->isVisible() && Metrics->width() >= Metrics->fontMetrics().horizontalAdvance(Metrics->text()));
+        QVERIFY(SaveR9Dialog(*Dialog, "network-folder-" + QString::fromLatin1(QTest::currentDataTag())));
+        QTRY_COMPARE_WITH_TIMEOUT(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Completed, 20000);
+        QCOMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.bytesTotal_.value_or(0), Total);
+        for (const auto& Name : Names) {
+            QFile File(QDir(To).filePath(Name)); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), Payload);
+            QCOMPARE(QFileInfo::exists(QDir(From).filePath(Name)), !Move);
+        }
+    }
     void r24MoveProgressControlsUi()
     {
         using namespace hc::operations; using namespace hc::settings;
@@ -7456,6 +7525,81 @@ private slots:
         QTest::qWait(80); QVERIFY(!names(Model).contains("waiting")); QCOMPARE(Model->GetTotalSize(), 3u);
     }
 
+    void todoBugUnknownNetworkSizeUi_data()
+    {
+        QTest::addColumn<QString>("Root"); QTest::addColumn<bool>("Move"); QTest::addColumn<bool>("Inbound");
+        for (const auto& Root : {QString("C:\\network-size-fixture"), QString("\\\\server\\share"), QString("\\\\tsclient\\C"), QString("\\\\?\\UNC\\server\\share")})
+            for (const bool Move : {false, true}) for (const bool Inbound : {false, true})
+                QTest::newRow(qPrintable(Root + QString("-%1-%2").arg(Move).arg(Inbound))) << Root << Move << Inbound;
+    }
+    void todoBugUnknownNetworkSizeUi()
+    {
+        using namespace hc::operations;
+        QFETCH(QString, Root); QFETCH(bool, Move); QFETCH(bool, Inbound);
+        const auto Network = Root.startsWith("\\\\");
+        const auto Source = Inbound ? Root + "\\folder\\item.bin" : QString("E:\\fixture\\item.bin");
+        const auto Destination = Inbound ? QString("E:\\fixture\\item.bin") : Root + "\\folder\\item.bin";
+        class Task final : public IJobTask {
+        public:
+            Task(std::string Source, std::string Destination) : source_(std::move(Source)), destination_(std::move(Destination)) {}
+            JobStep Advance(JobStepContext Context) override {
+                if (auto Error = Context.operation_.Check({})) { JobStep Step{JobState::Cancelled}; Step.error_ = *Error; return Step; }
+                JobStep Step{JobState::Running}; Step.progress_ = JobProgress{512 * 1024, {}, "item.bin"};
+                Step.progress_->phase_ = JobPhase::Copying; Step.progress_->source_ = source_; Step.progress_->destination_ = destination_;
+                Step.deferFor_ = std::chrono::milliseconds(20); return Step;
+            }
+            std::vector<hc::storage::Error> Finalize(JobState) override { return {}; }
+        private:
+            std::string source_, destination_;
+        };
+        QWidget Window; FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        PreparedJob Work; Work.request_.metadata_ = {"transfer", Source.toStdString(), Destination.toStdString(), ""};
+        Work.request_.metadata_.kind_ = Move ? JobKind::Move : JobKind::Copy;
+        Work.task_ = std::make_unique<Task>(Source.toStdString(), Destination.toStdString());
+        const auto Started = Jobs.Submit(std::move(Work), "transfer"); QVERIFY(Started.HasValue());
+        const auto Cancel = qScopeGuard([&] { Jobs.Scheduler().Cancel(Started.Value().id_); });
+        auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Dialog);
+        auto* Overall = Dialog->findChild<QLabel*>("hc.jobs.overallMetrics"); QVERIFY(Overall);
+        QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.bytesDone_, 512u * 1024);
+        QTRY_VERIFY(Overall->text().contains(QStringLiteral("처리량")));
+        QTRY_COMPARE(Overall->text().contains(QStringLiteral("집계 중")), !Network);
+        QVERIFY(!Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.bytesTotal_);
+        QTRY_COMPARE(Dialog->findChild<QProgressBar*>("hc.jobs.overallProgress")->maximum(), 0);
+    }
+    void todoBugNetworkFolderSizesUi_data()
+    {
+        QTest::addColumn<QString>("Mode");
+        for (const auto* Mode : {"manual", "all", "everything"}) QTest::newRow(Mode) << QString(Mode);
+    }
+    void todoBugNetworkFolderSizesUi()
+    {
+        using namespace hc::settings;
+        QFETCH(QString, Mode);
+        const auto Share = qEnvironmentVariable("HC_NETWORK_PROGRESS_ROOT"); if (Share.isEmpty()) QSKIP("An explicit network fixture root is required");
+        QTemporaryDir Directory(QDir(Share).filePath("hc-folder-sizes-XXXXXX")); QVERIFY(Directory.isValid());
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); TyStCommandMgr::GetInstance()->Refresh(); main_->RestoreWorkspace(Workspace); });
+        auto Options = Settings.Read(Section::Options).toObject(); Options["folderSizeMode"] = Mode; Options["folderSizeUseEverything"] = true;
+        QVERIFY(Settings.Put(Section::Options, Options));
+        QVERIFY(QDir(Directory.path()).mkpath("alpha/nested")); QVERIFY(QDir(Directory.path()).mkpath("empty"));
+        { QFile File(Directory.filePath("alpha/nested/data")); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("network"), 7); }
+        hc::workspace::TabState Tab; Tab.id_ = "network-folder-sizes"; Tab.location_ = {hc::storage::LocatorKind::Smb, QDir::toNativeSeparators(Directory.path()).toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; auto* Panel = panels_.front(); Panel->RestoreWorkspace(Pane);
+        auto* Model = qobject_cast<CFSModel*>(model(Panel)); QVERIFY(Model);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 3, 10000); Model->SetWatchEnabled(false);
+        const auto IndexFor = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
+        const auto Item = [&](const QString& Name) { return Model->GetFileInfo(IndexFor(Name)); };
+        if (Mode != "all") {
+            QCOMPARE(Model->PendingDirectorySizes(), 0); QVERIFY(!Item("alpha")->directorySize_);
+            auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View); auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+            View->RestoreSelection({}, hc::workspace::SelectionKey(*Item("alpha")->storageEntry_));
+            main_->activateWindow(); SetForegroundWindow(reinterpret_cast<HWND>(main_->winId())); Panel->sig_NotifyPanelActivated(); Grid->setFocus();
+            QCoreApplication::processEvents();
+            QTest::keyClick(Grid, Qt::Key_Return, Qt::AltModifier | Qt::ShiftModifier);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(Item("alpha")->directorySize_.has_value() && Item("empty")->directorySize_.has_value() && Model->PendingDirectorySizes() == 0, 10000);
+        QCOMPARE(*Item("alpha")->directorySize_, 7u); QCOMPARE(*Item("empty")->directorySize_, 0u); QCOMPARE(Model->GetTotalSize(), 7u);
+    }
     void folderSizesUi()
     {
         using namespace hc::settings;
@@ -7541,15 +7685,6 @@ private slots:
         QCOMPARE(*Item("beta")->directorySize_, 13u); QCOMPARE(Model->GetTotalSize(), Total);
         QVERIFY(QFile::remove(Directory.filePath("added.txt"))); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 4, 10000);
         Model->SetWatchEnabled(false);
-        // Mixed search results must reject network folders before clearing a known size or queuing I/O.
-        for (const auto& Remote : {hc::storage::Locator{hc::storage::LocatorKind::Smb, "\\\\unreachable.invalid\\share\\alpha"},
-                 hc::storage::Locator{hc::storage::LocatorKind::Local, "\\\\?\\UNC\\unreachable.invalid\\share\\alpha"}}) {
-            const auto Folder = Item("alpha"); const auto Previous = Folder->storageEntry_->locator_;
-            const auto RestoreLocation = qScopeGuard([&] { Folder->storageEntry_->locator_ = Previous; });
-            Folder->storageEntry_->locator_ = Remote;
-            Model->RequestDirectorySizes({IndexFor("alpha")});
-            QCOMPARE(Model->PendingDirectorySizes(), 0); QVERIFY(Folder->directorySize_); QCOMPARE(*Folder->directorySize_, 8u);
-        }
         { QMainOpts Dialog(main_); Dialog.LoadSettings(); Dialog.show(); QTest::qWait(150);
             auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
             for (int Row = 0; Row < Categories->count(); ++Row) if (Categories->item(Row)->text() == "파일 작업") Categories->setCurrentRow(Row);

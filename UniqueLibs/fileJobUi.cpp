@@ -552,9 +552,6 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
     if (Request.operation_ == hc::operations::FileOperation::Delete) Context.fileDeleteWorkers_ = 0;
     Request.fileLockInteractions_ = true;
     Request.calculateSizeBefore_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeBeforeOperations"].toBool(hc::defaults::DefaultValue("options/folderSizeBeforeOperations").toBool());
-    if (Request.operation_ != hc::operations::FileOperation::Move && ((Request.selection_ && hc::folders::IsNetwork(Request.selectionRoot_))
-        || std::any_of(Request.sources_.begin(), Request.sources_.end(), [](const auto& Source) { return hc::folders::IsNetwork(Source.entry_.locator_); })))
-        Request.calculateSizeBefore_ = false;
     Request.deleteWhileListing_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["deleteWhileListing"].toBool(hc::defaults::DefaultValue("options/deleteWhileListing").toBool());
     Context.providerInteractions_ = true;
     if (Request.operation_ == hc::operations::FileOperation::Copy && Request.selection_ && Request.calculateSizeBefore_
@@ -1227,8 +1224,17 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     else SetBar(progress_, overallPercent_, Done, Total);
     const bool PhaseTotal = ArchiveCreation || (Mode == RateMode::None && !Total);
     overallTitle_->setText(PhaseTotal ? tr("현재 단계 · %1").arg(ActivePhase.isEmpty() ? JobStatusText(Snapshot) : ActivePhase) : tr("전체 진행"));
+    const auto NetworkEndpoint = [](const std::string& Path) {
+        return !Path.empty() && hc::folders::IsNetwork({LocatorKind::Local, DisplayPath(Path).toStdString()});
+    };
+    // An unknown network total need not mean a size scan is running. Streaming
+    // transfers can deliberately omit preflight and still report real bytes.
+    const bool UnknownNetworkTransfer = Bytes && !Total && (Kind == JobKind::Copy || Kind == JobKind::Move)
+        && (NetworkEndpoint(Progress.source_) || NetworkEndpoint(Progress.destination_)
+            || NetworkEndpoint(Snapshot.metadata_.source_) || NetworkEndpoint(Snapshot.metadata_.destination_));
     QString Overall;
     if (Bytes) Overall = Total ? tr("처리량 %1 / %2").arg(SizeText(Done), SizeText(*Total))
+        : UnknownNetworkTransfer ? tr("처리량 %1").arg(SizeText(Done))
         : tr("처리량 %1 · 전체 크기 집계 중").arg(SizeText(Done));
     else if (Total) Overall = tr("처리 항목 %1 / %2개").arg(Done).arg(*Total);
     else Overall = PhaseText(Progress.phase_, Kind).isEmpty() ? tr("전체 집계 중") : PhaseText(Progress.phase_, Kind) + tr(" 중입니다.");
@@ -1255,7 +1261,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
         + (ArchiveCreation ? tr("현재 단계 남은 시간 %1   경과 %2초") : tr("남은 시간 %1   경과 %2초")).arg(Remaining).arg(Elapsed));
     // Counter digits and rate units change continuously; only available width
     // and the operation determine the row layout.
-    const bool WrapMetrics = Kind == JobKind::Move || dialog_->width() < qMax(760, metrics_->fontMetrics().height() * 44);
+    const bool WrapMetrics = Kind == JobKind::Copy || Kind == JobKind::Move || dialog_->width() < qMax(760, metrics_->fontMetrics().height() * 44);
     metrics_->setToolTip(metrics_->text());
     metricsLayout_->setDirection(WrapMetrics ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     // Ignored-width labels need the full row when stacked; layout alignment

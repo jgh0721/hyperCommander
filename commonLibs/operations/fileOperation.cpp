@@ -2066,11 +2066,13 @@ namespace hc::operations
                 confirmed_ = true; Context.answer_.reset();
             }
             const bool Unified = request_.operation_ == FileOperation::Delete
-                || (request_.operation_ == FileOperation::Move && request_.calculateSizeBefore_);
+                || (request_.calculateSizeBefore_ && (request_.operation_ == FileOperation::Move
+                    || (request_.operation_ == FileOperation::Copy && selectionSummarized_ && !listedBytes_)));
             if (Unified && !unifiedPrepared_) {
                 // Validate the immutable selected roots before any mutation.
                 // Descendant discovery stays incremental inside one FileTask,
-                // sharing overlap checks, budgets and readonly decisions.
+                // sharing overlap checks, budgets and readonly decisions. For transfers,
+                // the complete folder selection must be counted before copying.
                 const auto Reader = request_.selection_->Provider();
                 auto Page = request_.selection_->Read(offset_, 256, Context.operation_);
                 if (!Page.HasValue()) return failed(Page.Failure());
@@ -2100,7 +2102,8 @@ namespace hc::operations
             if (request_.operation_ != FileOperation::Delete && !selectionSummarized_) {
                 // Read only bounded pages of the immutable selection metadata.
                 // No network Stat or recursive directory walk is needed for a
-                // flat file selection. A directory keeps its total unknown.
+                // flat file selection. Folders require one recursive plan when
+                // preflight is enabled; flat files retain their paged copy path.
                 auto Page = request_.selection_->Read(summaryOffset_, 256, Context.operation_);
                 if (!Page.HasValue()) return failed(Page.Failure());
                 if (Page.Value().entries_.empty() || Page.Value().entries_.size() > 256
@@ -2208,7 +2211,7 @@ namespace hc::operations
         {
             if (!inner_) return {};
             auto Effects = inner_->TakeCompletedEffects();
-            if (request_.operation_ == FileOperation::Delete || (request_.operation_ == FileOperation::Move && request_.calculateSizeBefore_)) return Effects;
+            if (unifiedPrepared_) return Effects;
             emitted_ += Effects.items_.size();
             if (Effects.progress_) {
                 Effects.progress_->bytesDone_ += completedBytes_;
