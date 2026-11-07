@@ -4615,6 +4615,71 @@ private slots:
         QVERIFY(!QFileInfo::exists(Input.fileName()));
         QFile Output(Destination.filePath("transfer.bin")); QVERIFY(Output.open(QIODevice::ReadOnly)); QCOMPARE(Output.readAll(), Payload); Output.close();
     }
+    void todoBugSmbMoveProgressUi_data()
+    {
+        QTest::addColumn<bool>("Folders"); QTest::addColumn<bool>("Manifest");
+        QTest::newRow("files") << false << false;
+        QTest::newRow("file-manifest") << false << true;
+        QTest::newRow("folders") << true << false;
+        QTest::newRow("folder-manifest") << true << true;
+    }
+    void todoBugSmbMoveProgressUi()
+    {
+        using namespace hc::operations; using namespace hc::storage; using namespace hc::settings;
+        QFETCH(bool, Folders); QFETCH(bool, Manifest);
+        const auto Share = qEnvironmentVariable("HC_MOVE_SMB_ROOT"); if (Share.isEmpty()) QSKIP("An owned SMB fixture root is required");
+        QTemporaryDir Source(QDir(Share).filePath("hc-move-source-XXXXXX")), Destination(QDir(Share).filePath("hc-move-target-XXXXXX"));
+        QVERIFY(Source.isValid() && Destination.isValid());
+        const QString Folder = QStringLiteral("긴 경로에서 항목 앞의 불필요한 공백을 검사하는 폴더");
+        if (Folders) QVERIFY(QDir().mkpath(Source.filePath(Folder + "/nested")));
+        const QByteArray Payload(4 * 1024 * 1024 + 17, 'S');
+        const QStringList Names = Folders ? QStringList{Folder + "/nested/a.bin", Folder + "/b.bin", "plain.bin"} : QStringList{"first.bin", "second.bin"};
+        for (const auto& Name : Names) { QFile File(Source.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(Payload), Payload.size()); }
+        auto& Settings = AppSettings(); const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); });
+        auto Options = Settings.Read(Section::Options).toObject(); Options["folderSizeBeforeOperations"] = true;
+        Options["jobCloseOnSuccess"] = false; Options["saveJobProgress"] = false;
+        QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit());
+        auto Reader = MakeNativeReadProvider(LocatorKind::Smb); auto Writer = MakeNativeWritableStorage(LocatorKind::Smb, Reader);
+        auto Selection = std::make_shared<R9Manifest>(); Selection->provider_ = Reader;
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move;
+        for (const auto& Name : Folders ? QStringList{Folder, "plain.bin"} : Names) {
+            auto Entry = Reader->Resolve({LocatorKind::Smb, QDir::toNativeSeparators(Source.filePath(Name)).toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+            Selection->entries_.push_back(Entry.Value()); Request.sources_.push_back({Entry.Value(), Reader, Writer});
+        }
+        if (Manifest) { Request.selection_ = Selection; Request.selectionRoot_ = {LocatorKind::Smb, QDir::toNativeSeparators(Source.path()).toStdString()}; Request.selectionWriter_ = Writer; Request.sources_.clear(); }
+        Request.destination_ = {LocatorKind::Smb, QDir::toNativeSeparators(Destination.path()).toStdString()}; Request.destinationWriter_ = Writer;
+        Request.bytesPerSecondLimit_ = 2 * 1024 * 1024;
+        QWidget Window; FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
+        const auto Started = Jobs.Submit(Request, {}); QVERIFY(Started.HasValue());
+        const auto Cancel = qScopeGuard([&] { Jobs.Scheduler().Cancel(Started.Value().id_); });
+        auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Dialog);
+        auto* Bar = Dialog->findChild<QProgressBar*>("hc.jobs.overallProgress");
+        auto* Metrics = Dialog->findChild<QLabel*>("hc.jobs.metrics"); auto* Overall = Dialog->findChild<QLabel*>("hc.jobs.overallMetrics");
+        QVERIFY(Bar && Metrics && Overall);
+        QTRY_VERIFY_WITH_TIMEOUT(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.bytesDone_ > 0
+            || IsTerminal(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_), 10000);
+        const auto Snapshot = Jobs.Scheduler().Snapshot(Started.Value().id_).Value();
+        QVERIFY2(Snapshot.progress_.bytesDone_ > 0, Snapshot.error_ ? Snapshot.error_->code_.c_str() : "no transfer progress");
+        const auto Total = uint64_t(Payload.size()) * Names.size();
+        QCOMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.bytesTotal_.value_or(0), Total);
+        QTRY_VERIFY(Bar->maximum() == 1000 && Bar->value() > 0 && Bar->value() < 1000);
+        QVERIFY(!Overall->text().contains(QStringLiteral("집계 중")));
+        QTRY_VERIFY(Metrics->text().contains(QStringLiteral("남은 시간 약")));
+        if (Folders) QTRY_VERIFY(Dialog->findChild<QLabel*>("hc.jobs.source.path")->text().contains(Folder));
+        QTRY_VERIFY(Metrics->isVisible() && Metrics->width() >= Metrics->fontMetrics().horizontalAdvance(Metrics->text()));
+        QVERIFY(SaveR9Dialog(*Dialog, "smb-move-" + QString::fromLatin1(QTest::currentDataTag())));
+        for (const auto* Side : {"source", "destination"}) {
+            const auto Prefix = QString("hc.jobs.%1").arg(Side);
+            auto* Path = Dialog->findChild<QLabel*>(Prefix + ".path"); auto* Name = Dialog->findChild<QLabel*>(Prefix + ".name"); QVERIFY(Path && Name);
+            const auto Available = Path->parentWidget()->contentsRect().width() / 2;
+            const auto Drawn = Path->fontMetrics().elidedText(Path->text(), Qt::ElideMiddle, Available);
+            QCOMPARE(Path->width(), Path->fontMetrics().horizontalAdvance(Drawn));
+            QCOMPARE(Name->geometry().left(), Path->geometry().right() + 1);
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Completed, 15000);
+        QCOMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().progress_.bytesTotal_.value_or(0), Total);
+    }
     void r24MoveProgressControlsUi()
     {
         using namespace hc::operations; using namespace hc::settings;
@@ -4663,6 +4728,10 @@ private slots:
             State->stage_ = Stage; State->commit_ = true;
             QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Committing);
             QTest::qWait(300); QVERIFY(Pause->isEnabled()); QVERIFY(Cancel->isEnabled()); QCOMPARE(Dialog->height(), Height);
+            if (Stage == 2) {
+                QTRY_COMPARE(Dialog->findChild<QProgressBar*>("hc.jobs.overallProgress")->maximum(), 1000);
+                QVERIFY(Dialog->findChild<QLabel*>("hc.jobs.overallMetrics")->text().contains(QStringLiteral("처리량")));
+            }
             State->commit_ = false;
             QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Running);
         }

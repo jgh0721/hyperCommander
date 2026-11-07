@@ -202,6 +202,7 @@ namespace hc::operations
             }
             JobStep Advance(JobStepContext Context) override
             {
+                if (Context.operation_.allowReadOnlyRemoval_) { request_.readOnly_ = ReadOnlyPolicy::Allow; allowAllReadOnly_ = true; }
                 // Advance already belongs to a coordinator/continuation worker.
                 // Local metadata and file opens need no nested PPL dispatch.
                 Context.operation_.workerRead_ = true;
@@ -786,7 +787,7 @@ namespace hc::operations
                     lockError_ = Error; resumePhase_ = phase_; phase_ = Phase::LockPrompt;
                     return progress();
                 }
-                if (Error.category_ == ErrorCategory::AccessDenied && request_.elevation_ && index_ < items_.size()
+                if (Error.category_ != ErrorCategory::Cancelled && request_.elevation_ && index_ < items_.size()
                     && phase_ != Phase::Preparing && phase_ != Phase::ElevationPrompt && phase_ != Phase::ElevationRun)
                 {
                     auto Request = elevationRequest();
@@ -825,11 +826,17 @@ namespace hc::operations
                         {InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::Cancel}, current().source_.entry_.id_,
                         lockError_.nativePath_.empty() ? current().source_.entry_.locator_.root_ : lockError_.nativePath_, current().destination_.root_};
                     if (request_.operation_ == FileOperation::Delete) Step.interaction_->choices_.insert(Step.interaction_->choices_.end() - 1, InteractionChoice::SkipAll);
+                    if (request_.elevation_ && request_.elevation_->CanExecute(elevationRequest()))
+                        Step.interaction_->choices_.insert(Step.interaction_->choices_.end() - 1, InteractionChoice::Elevate);
                     return Step;
                 }
                 if (Context.answer_->choice_ == InteractionChoice::SkipAll && request_.operation_ == FileOperation::Delete) skipDeleteErrors_ = true;
                 if (Context.answer_->choice_ == InteractionChoice::Skip || skipDeleteErrors_) return done(ItemOutcome::Status::Skipped, destinationCommitted_);
                 if (Context.answer_->choice_ == InteractionChoice::Cancel) { auto Step = terminalFailure({ErrorCategory::Cancelled,"file-in-use-cancelled"}); Step.next_ = JobState::Cancelled; return Step; }
+                if (Context.answer_->choice_ == InteractionChoice::Elevate && request_.elevation_) {
+                    elevatedRequest_ = elevationRequest(); canElevate_ = request_.elevation_->CanExecute(elevatedRequest_);
+                    permissionError_ = lockError_; phase_ = Phase::ElevationPrompt; return permission(Context);
+                }
                 if (Context.answer_->choice_ != InteractionChoice::Retry) return terminalFailure({ErrorCategory::InvalidRequest,"file-in-use-answer"});
                 if (destinationCommitted_ && request_.operation_ == FileOperation::Move && !current().removeDirectory_) {
                     if (!publishedDestination_) return terminalFailure({ErrorCategory::StaleRevision,"move-destination-unverified"});
@@ -1220,7 +1227,8 @@ namespace hc::operations
                 // Keep the captured revision for independent helper verification;
                 // an unscanned directory requires a bounded recursive delete.
                 if (request_.operation_ == FileOperation::Delete && request_.elevation_ && !skipDeleteErrors_
-                    && Error.category_ == ErrorCategory::AccessDenied
+                    && Error.category_ != ErrorCategory::Cancelled && Error.category_ != ErrorCategory::Internal
+                    && Error.category_ != ErrorCategory::InvalidRequest && Error.category_ != ErrorCategory::BudgetExceeded
                     && Item.source_.entry_.locator_.kind_ == LocatorKind::Local && !(Item.source_.entry_.attributes_ & 0x400)
                     && std::ranges::none_of(skippedSources_, [&](const auto& At) { return SameOrWithin(At, Item.source_.entry_.locator_); })) {
                     if (Item.source_.entry_.directory_) {
@@ -1278,7 +1286,8 @@ namespace hc::operations
                         return preparationFailure(std::move(Item), {ErrorCategory::Internal, "provider-returned-different-entry"});
                     Item.source_.entry_ = std::move(Fresh.Value());
                 }
-                if (Item.source_.entry_.attributes_ & 0x400) return preparationFailure(std::move(Item), {ErrorCategory::Unsupported, "reparse-entry-denied"});
+                if ((Item.source_.entry_.attributes_ & 0x400) && request_.operation_ != FileOperation::Delete)
+                    return preparationFailure(std::move(Item), {ErrorCategory::Unsupported, "reparse-entry-denied"});
                 ++verifiedItems_;
                 if (!Item.source_.entry_.directory_)
                 {
@@ -1292,6 +1301,13 @@ namespace hc::operations
                 Item.readOnly_ = (Item.source_.entry_.attributes_ & 1) != 0;
                 const bool Recycling = request_.operation_ == FileOperation::Delete && request_.deleteMode_ == DeleteMode::Recycle;
                 if (Item.readOnly_) readOnlySources_.push_back(Item.source_.entry_.locator_);
+                if (Item.source_.entry_.attributes_ & 0x400) {
+                    // Delete only the selected link/object, never enumerate its target.
+                    Item.removeDirectory_ = Item.source_.entry_.directory_;
+                    items_.push_back(std::move(Item));
+                    if (streaming_) phase_ = Phase::Begin;
+                    return progress();
+                }
                 // A whole-tree rename avoids enumerating or copying any descendants.
                 // Only an absent destination qualifies; existing folders still merge.
                 if (request_.operation_ == FileOperation::Move && Item.source_.writer_
@@ -1584,8 +1600,8 @@ namespace hc::operations
             JobStep begin(OperationContext Context)
             {
                 if (index_ == items_.size()) return JobStep{JobState::Completed};
-                if (current().preparationError_ && (request_.operation_ != FileOperation::Delete || !request_.elevation_
-                    || current().preparationError_->category_ != ErrorCategory::AccessDenied)) return terminalFailure(*current().preparationError_);
+                if (current().preparationError_ && (request_.operation_ != FileOperation::Delete || !request_.elevation_))
+                    return terminalFailure(*current().preparationError_);
                 if (current().excluded_) return done(ItemOutcome::Status::Skipped);
                 if (current().removalError_) {
                     auto Error = std::move(*current().removalError_); current().removalError_.reset();
@@ -1621,7 +1637,8 @@ namespace hc::operations
                     if (Fresh.Value().locator_ != current().source_.entry_.locator_ || Fresh.Value().id_.providerId_ != current().source_.reader_->Id()
                         || Fresh.Value().id_.key_ != current().source_.entry_.id_.key_ || !SafeName(Fresh.Value().name_))
                         return failed({ErrorCategory::Internal, "provider-returned-different-entry"});
-                    if (Fresh.Value().attributes_ & 0x400) return failed({ErrorCategory::Unsupported, "reparse-entry-denied"});
+                    if ((Fresh.Value().attributes_ & 0x400) && request_.operation_ != FileOperation::Delete)
+                        return failed({ErrorCategory::Unsupported, "reparse-entry-denied"});
                     current().source_.entry_ = std::move(Fresh.Value()); current().readOnly_ = (current().source_.entry_.attributes_ & 1) != 0;
                     current().preparationError_.reset(); ++verifiedItems_;
                     return progress();
@@ -2048,7 +2065,9 @@ namespace hc::operations
                 if (Context.answer_->choice_ != InteractionChoice::Confirm) return failed({ErrorCategory::InvalidRequest, "delete-confirmation-required"});
                 confirmed_ = true; Context.answer_.reset();
             }
-            if (request_.operation_ == FileOperation::Delete && !deletePrepared_) {
+            const bool Unified = request_.operation_ == FileOperation::Delete
+                || (request_.operation_ == FileOperation::Move && request_.calculateSizeBefore_);
+            if (Unified && !unifiedPrepared_) {
                 // Validate the immutable selected roots before any mutation.
                 // Descendant discovery stays incremental inside one FileTask,
                 // sharing overlap checks, budgets and readonly decisions.
@@ -2060,16 +2079,23 @@ namespace hc::operations
                 for (const auto& Entry : Page.Value().entries_) {
                     if (Entry.id_.providerId_ != Reader->Id() || !SafeName(Entry.name_) || Child(request_.selectionRoot_, Entry.name_) != Entry.locator_)
                         return failed({ErrorCategory::InvalidRequest, "selection-container-mismatch"});
-                    deleteSources_.push_back({Entry, Reader, request_.selectionWriter_});
+                    selectedSources_.push_back({Entry, Reader, request_.selectionWriter_});
                 }
                 offset_ += Page.Value().entries_.size();
                 if (offset_ == request_.selection_->Count()) {
-                    auto Request = request_; Request.selection_.reset(); Request.confirmDelete_ = false; Request.sources_ = std::move(deleteSources_);
+                    auto Request = request_; Request.selection_.reset(); Request.confirmDelete_ = false; Request.sources_ = std::move(selectedSources_);
                     auto Prepared = PrepareFileOperation(std::move(Request), Context.operation_);
                     if (!Prepared.HasValue()) return failed(Prepared.Failure());
-                    inner_ = std::move(Prepared.Value().task_); deletePrepared_ = true;
+                    inner_ = std::move(Prepared.Value().task_); unifiedPrepared_ = true;
                 }
-                JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{}; Step.progress_->deletedFiles_ = 0; return Step;
+                JobStep Step{JobState::Preparing}; Step.progress_ = JobProgress{};
+                if (request_.operation_ == FileOperation::Delete) Step.progress_->deletedFiles_ = 0;
+                return Step;
+            }
+            if (Unified && inner_) {
+                auto Step = inner_->Advance(Context);
+                if (Step.next_ == JobState::Failed && Step.error_ && Step.error_->category_ == ErrorCategory::Cancelled) Step.next_ = JobState::Cancelled;
+                return Step;
             }
             if (request_.operation_ != FileOperation::Delete && !selectionSummarized_) {
                 // Read only bounded pages of the immutable selection metadata.
@@ -2182,8 +2208,15 @@ namespace hc::operations
         {
             if (!inner_) return {};
             auto Effects = inner_->TakeCompletedEffects();
+            if (request_.operation_ == FileOperation::Delete || (request_.operation_ == FileOperation::Move && request_.calculateSizeBefore_)) return Effects;
             emitted_ += Effects.items_.size();
-            if (Effects.progress_) { Effects.progress_->bytesDone_ += completedBytes_; Effects.progress_->bytesTotal_.reset(); }
+            if (Effects.progress_) {
+                Effects.progress_->bytesDone_ += completedBytes_;
+                if (listedBytes_) {
+                    Effects.progress_->bytesTotal_ = *listedBytes_ + completedExtraBytes_ + innerExtraBytes_;
+                    Effects.progress_->plannedItems_ = request_.selection_->Count();
+                } else Effects.progress_->bytesTotal_.reset();
+            }
             return Effects;
         }
         std::vector<Error> Finalize(JobState State) override
@@ -2206,8 +2239,8 @@ namespace hc::operations
         size_t emitted_ = 0, outcomeBase_ = 0;
         bool confirmed_ = false;
         std::vector<Error> cleanup_;
-        std::vector<OperationSource> deleteSources_;
-        bool deletePrepared_ = false;
+        std::vector<OperationSource> selectedSources_;
+        bool unifiedPrepared_ = false;
     };
     }
     Result<PreparedJob> PrepareFileOperation(FileOperationRequest Request, OperationContext Context)

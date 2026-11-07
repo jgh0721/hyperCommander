@@ -92,7 +92,7 @@ WriteRecoveryRecord Recovery(const QJsonObject& R) {
     return {String(R["transaction"]),{LocatorKind::Local,String(R["destination"])},{LocatorKind::Local,String(R["stage"])},
         {LocatorKind::Local,String(R["backup"])},String(R["stageId"]),String(R["originalId"]),WritePhase(R["phase"].toInt())};
 }
-Result<EntrySnapshot> Verify(const QJsonObject& E,std::shared_ptr<IStorageProvider> Reader,OperationContext Context) {
+Result<EntrySnapshot> Verify(const QJsonObject& E,std::shared_ptr<IStorageProvider> Reader,OperationContext Context,bool AllowReparse=false) {
     const auto Path=E["path"].toString();if(!Local(Path)||E["revision"].toString().isEmpty())return Failure(ERROR_INVALID_PARAMETER,"elevation-source");
     auto Resolved=Reader->Resolve({LocatorKind::Local,Path.toStdString()},Context).get();if(!Resolved.HasValue())return Resolved.Failure();
     // Stat verifies a listing revision against the opened file and upgrades it
@@ -100,7 +100,7 @@ Result<EntrySnapshot> Verify(const QJsonObject& E,std::shared_ptr<IStorageProvid
     auto Resource = Resolved.Value().id_; Resource.revision_ = ResourceRevision{String(E["revision"])};
     auto Actual=Reader->Stat(Resource,Context).get();if(!Actual.HasValue())return Actual.Failure();
     if(Actual.Value().directory_!=E["directory"].toBool())return Failure(ERROR_FILE_INVALID,"elevation-source-changed");
-    if(Actual.Value().attributes_&FILE_ATTRIBUTE_REPARSE_POINT)return Failure(ERROR_FILE_INVALID,"elevation-reparse");
+    if((Actual.Value().attributes_&FILE_ATTRIBUTE_REPARSE_POINT)&&!AllowReparse)return Failure(ERROR_FILE_INVALID,"elevation-reparse");
     return Actual.Value();
 }
 QJsonObject EncodeStatus(const FileElevationStatus& S) {
@@ -387,7 +387,8 @@ DWORD ExecuteFileElevation(const QJsonObject& Bootstrap) {
     };
     std::optional<EntrySnapshot> Source;std::unique_ptr<IJobTask> Task;QJsonObject Input;IncomingCopy* Incoming=nullptr;
     if(PinError)Status.error_=Failure(PinError,"elevation-parent");
-    if(!Status.error_&&R.contains("source")){auto Checked=Verify(R["source"].toObject(),Reader,Context);if(Checked.HasValue())Source=Checked.Value();else Status.error_=Checked.Failure();}
+    const bool LeafRemoval = !R["recursiveRemoval"].toBool() && (Action == FileElevationAction::Remove || Action == FileElevationAction::Recycle);
+    if(!Status.error_&&R.contains("source")){auto Checked=Verify(R["source"].toObject(),Reader,Context,LeafRemoval);if(Checked.HasValue())Source=Checked.Value();else Status.error_=Checked.Failure();}
     if (!Status.error_ && Action == FileElevationAction::Metadata && (!Source || Source->attributes_ != std::uint32_t(R["sourceAttributes"].toInt())))
         Status.error_ = Failure(ERROR_FILE_INVALID, "metadata-attributes-changed");
     const Locator Destination{LocatorKind::Local,String(R["destination"])};
@@ -460,7 +461,7 @@ DWORD ExecuteFileElevation(const QJsonObject& Bootstrap) {
                             else if(!Checked.Value().id_.revision_||!native::MatchesRevision(*Checked.Value().id_.revision_,Info,PublishedLock->value_,P.toStdWString()))Status.error_=Failure(ERROR_FILE_INVALID,"elevation-published-changed");
                         }
                     }
-                    if(!Status.error_&&Source){auto Checked=Verify(R["source"].toObject(),Reader,Context);if(!Checked.HasValue())Status.error_=Checked.Failure();}
+                    if(!Status.error_&&Source){auto Checked=Verify(R["source"].toObject(),Reader,Context,LeafRemoval);if(!Checked.HasValue())Status.error_=Checked.Failure();}
                     if(!Status.error_) {
                         if(Action==FileElevationAction::Metadata){auto Done=Writer->PatchMetadata(*Source,Patch,Context);if(!Done.HasValue())Status.error_=Done.Failure();else Status.destinationCommitted_=true;}
                         else if(Action==FileElevationAction::MakeDirectory){auto Done=Writer->MakeDirectory(Destination,Context);if(!Done.HasValue())Status.error_=Done.Failure();else Status.destinationCommitted_=true;}

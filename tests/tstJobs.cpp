@@ -73,6 +73,30 @@ class JobTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void readonlyApprovalIsJobScoped()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        const auto ProbeValue = std::make_shared<Probe>();
+        int Stage = 0; std::atomic<bool> Retained{false};
+        const auto Job = Scheduler.Submit({}, std::make_unique<ScriptTask>(ProbeValue, [&](JobStepContext Context) {
+            if (Stage++ == 0) {
+                JobStep Step{JobState::WaitingForUser};
+                Step.interaction_ = InteractionRequest{"", InteractionKind::ReadOnlyRemoval, "read-only-removal", {InteractionChoice::ConfirmAll}};
+                return Step;
+            }
+            Retained = Context.operation_.allowReadOnlyRemoval_;
+            return JobStep{JobState::Completed};
+        }));
+        QVERIFY(Job.HasValue()); QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().state_, JobState::WaitingForUser);
+        const auto Prompt = Scheduler.Snapshot(Job.Value().id_).Value().interaction_;
+        QVERIFY(Scheduler.Reply(Job.Value().id_, {Prompt->id_, InteractionChoice::ConfirmAll}).HasValue());
+        QVERIFY(Ready(Job.Value())); QVERIFY(Retained.load());
+        std::atomic<bool> Leaked{true};
+        const auto Next = Scheduler.Submit({}, std::make_unique<ScriptTask>(std::make_shared<Probe>(), [&](JobStepContext Context) {
+            Leaked = Context.operation_.allowReadOnlyRemoval_; return JobStep{JobState::Completed};
+        }));
+        QVERIFY(Next.HasValue()); QVERIFY(Ready(Next.Value())); QVERIFY(!Leaked.load());
+    }
     void reorderWhileDeferredReceiptIsBeingPersisted()
     {
         class Journal final : public IJobJournal {

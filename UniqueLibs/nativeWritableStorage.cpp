@@ -335,11 +335,11 @@ namespace hc::storage
             return std::to_string(Info.dwVolumeSerialNumber) + ":" + std::to_string(Info.nFileIndexHigh) + ":"
                 + std::to_string(Info.nFileIndexLow);
         }
-        Result<Unit> CheckEntry(HANDLE File, const EntrySnapshot& Expected, const ProviderId& Id, BY_HANDLE_FILE_INFORMATION* Verified = nullptr)
+        Result<Unit> CheckEntry(HANDLE File, const EntrySnapshot& Expected, const ProviderId& Id, BY_HANDLE_FILE_INFORMATION* Verified = nullptr, bool AllowReparse = false)
         {
             BY_HANDLE_FILE_INFORMATION Info{};
             if (!GetFileInformationByHandle(File, &Info)) return Failure(GetLastError(), Id);
-            if (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return Error{ErrorCategory::Unsupported, "reparse-entry-denied", Id};
+            if ((Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && !AllowReparse) return Error{ErrorCategory::Unsupported, "reparse-entry-denied", Id};
             if (Expected.id_.providerId_ != Id || !Expected.id_.revision_
                 || !native::MatchesRevision(*Expected.id_.revision_, Info, File, std::filesystem::u8path(Expected.locator_.root_).wstring())
                 || Expected.directory_ != bool(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
@@ -2298,7 +2298,7 @@ namespace hc::storage
                     OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
                 if (File.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_);
                 BY_HANDLE_FILE_INFORMATION Info{};
-                const auto Valid = CheckEntry(File.value_, Entry, id_, &Info);
+                const auto Valid = CheckEntry(File.value_, Entry, id_, &Info, true);
                 if (!Valid.HasValue()) return Valid.Failure();
                 // The verified handle already supplied attributes. Zero times
                 // preserve timestamps when clearing/restoring readonly.
@@ -2329,7 +2329,7 @@ namespace hc::storage
                     Handle File(CreateFileW(Path.Value().path_.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                         OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
                     if (File.value_ == INVALID_HANDLE_VALUE) return Failure(GetLastError(), id_);
-                    const auto Valid = CheckEntry(File.value_, Entry, id_); if (!Valid.HasValue()) return Valid.Failure();
+                    const auto Valid = CheckEntry(File.value_, Entry, id_, nullptr, true); if (!Valid.HasValue()) return Valid.Failure();
                     BY_HANDLE_FILE_INFORMATION Info{}; if (!GetFileInformationByHandle(File.value_, &Info)) return Failure(GetLastError(), id_);
                     if ((Info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) && !Context.allowReadOnlyRemoval_) return Error{ErrorCategory::AccessDenied, "readonly-removal-not-authorized", id_};
                 }

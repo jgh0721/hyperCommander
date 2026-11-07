@@ -18,12 +18,28 @@ public:
     using fm::ui::Label::Label;
     QSize sizeHint() const override { return {fontMetrics().horizontalAdvance(text()), fontMetrics().height()}; }
     QSize minimumSizeHint() const override { return {0, fontMetrics().height()}; }
+    void SetAvailableWidth(int Width) {
+        availableWidth_ = qMax(0, Width);
+        shown_ = fontMetrics().elidedText(text(), Qt::ElideMiddle, availableWidth_);
+        // An elided string often uses less than the available width. Reserve
+        // its actual painted advance, otherwise that remainder looks like a space.
+        setFixedWidth(fontMetrics().horizontalAdvance(shown_)); update();
+    }
 protected:
     void paintEvent(QPaintEvent*) override {
         // fm::Label replaces tooltips with its own text while painting; keep
         // the endpoint's complete path, including the emphasized item name.
-        hc::qt::PaintElidedLabel(*this, Qt::ElideMiddle);
+        QPainter Painter(this);
+        style()->drawItemText(&Painter, contentsRect(), Qt::AlignLeft | Qt::AlignVCenter,
+            palette(), isEnabled(), shown_, QPalette::WindowText);
     }
+    void changeEvent(QEvent* Event) override {
+        fm::ui::Label::changeEvent(Event);
+        if (Event->type() == QEvent::FontChange || Event->type() == QEvent::StyleChange) SetAvailableWidth(availableWidth_);
+    }
+private:
+    QString shown_;
+    int availableWidth_ = 0;
 };
 }
 
@@ -58,6 +74,7 @@ public:
         path_->setText(Prefix); path_->setToolTip(FullPath); path_->setVisible(!Prefix.isEmpty());
         name_->SetText(Name); name_->setToolTip(FullPath);
         setToolTip(FullPath); setAccessibleName(FullPath);
+        syncPathWidth();
     }
     void SetPath(const QString& Path) {
         const auto NativePath = QDir::toNativeSeparators(Path);
@@ -73,11 +90,16 @@ public:
 protected:
     void resizeEvent(QResizeEvent* Event) override {
         // Reserve at least half of a narrow row for the emphasized item name.
-        path_->setMaximumWidth(qMax(0, contentsRect().width() / 2));
+        syncPathWidth();
         QWidget::resizeEvent(Event);
     }
 private:
-    fm::ui::Label* path_ = nullptr;
+    void syncPathWidth() {
+        // The adjacent item starts at the end of the drawn directory text,
+        // rather than after unused space allocated to a preferred-size label.
+        path_->SetAvailableWidth(contentsRect().width() / 2);
+    }
+    detail::PathDirectoryLabel* path_ = nullptr;
     hc::qt::ElidedLabel* name_ = nullptr;
 };
 }

@@ -364,6 +364,9 @@ namespace hc::operations
                 return Error{ErrorCategory::InvalidRequest, "interaction-answer"};
             Cancelled = Answer.choice_ == InteractionChoice::Cancel;
             if (Cancelled) Snapshot.cancelRequested_ = true;
+            // Approval belongs to the job, including later continuation tasks.
+            if (Prompt->kind_ == InteractionKind::ReadOnlyRemoval && Answer.choice_ == InteractionChoice::ConfirmAll)
+                Value.request_.operation_.allowReadOnlyRemoval_ = true;
             Value.answer_ = std::move(Answer);
             Snapshot.interaction_.reset();
             state_->transition(Value, Value.resume_);

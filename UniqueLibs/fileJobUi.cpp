@@ -184,7 +184,8 @@ namespace
             return Progress.phase_ == JobPhase::SavingOutput || Progress.bytesTotal_ || Progress.bytesDone_ > 0 ? RateMode::Bytes : RateMode::None;
         if (Kind == JobKind::Copy || Kind == JobKind::Extract || Kind == JobKind::Unknown) return RateMode::Bytes;
         if (Kind == JobKind::Move) {
-            if (Progress.phase_ == JobPhase::RemovingSource) return RateMode::None;
+            // Source removal is part of the same move. Keep the byte total and
+            // rate history instead of switching units between every file.
             return Progress.phase_ == JobPhase::ApplyingNames ? RateMode::Items : RateMode::Bytes;
         }
         return RateMode::None;
@@ -551,8 +552,8 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
     if (Request.operation_ == hc::operations::FileOperation::Delete) Context.fileDeleteWorkers_ = 0;
     Request.fileLockInteractions_ = true;
     Request.calculateSizeBefore_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["folderSizeBeforeOperations"].toBool(hc::defaults::DefaultValue("options/folderSizeBeforeOperations").toBool());
-    if ((Request.selection_ && hc::folders::IsNetwork(Request.selectionRoot_))
-        || std::any_of(Request.sources_.begin(), Request.sources_.end(), [](const auto& Source) { return hc::folders::IsNetwork(Source.entry_.locator_); }))
+    if (Request.operation_ != hc::operations::FileOperation::Move && ((Request.selection_ && hc::folders::IsNetwork(Request.selectionRoot_))
+        || std::any_of(Request.sources_.begin(), Request.sources_.end(), [](const auto& Source) { return hc::folders::IsNetwork(Source.entry_.locator_); })))
         Request.calculateSizeBefore_ = false;
     Request.deleteWhileListing_ = hc::settings::AppSettings().CommittedObject()["options"].toObject()["deleteWhileListing"].toBool(hc::defaults::DefaultValue("options/deleteWhileListing").toBool());
     Context.providerInteractions_ = true;
@@ -1041,7 +1042,7 @@ void FileJobUi::updateSelection()
         Details += Password ? tr("압축 파일의 암호를 입력하세요. 다른 파일 작업은 계속 진행할 수 있습니다.") : Snapshot.interaction_->kind_ == InteractionKind::DeleteConfirmation
             ? Snapshot.interaction_->reason_ == "confirm-recycle-delete" ? tr("선택한 항목을 Windows 휴지통으로 이동합니다.") : tr("선택한 항목과 하위 항목을 영구 삭제합니다. 휴지통에서 복원할 수 없습니다.")
             : Snapshot.interaction_->kind_ == InteractionKind::ReadOnlyRemoval ? tr("읽기 전용 항목의 삭제를 허용할지 선택하세요. 모두 허용은 이 작업 안에서만 적용됩니다.")
-            : Snapshot.interaction_->kind_==InteractionKind::Elevation ? tr("작업에 필요한 권한을 얻지 못했습니다. 권한 오류 자세히에서 지원 가능한 응답을 확인하세요.")
+            : Snapshot.interaction_->kind_==InteractionKind::Elevation ? tr("작업을 완료하지 못했습니다. 관리자 권한 재시도 등 처리 방법을 선택하세요.")
             : Snapshot.interaction_->kind_==InteractionKind::RetryFailure ? tr("작업 실패 후 재시도 또는 취소 응답을 기다립니다.") : tr("목적지에 같은 이름의 항목이 있습니다. 처리 방법을 선택하세요.");
     if (Snapshot.error_) Details += "\n" + hc::ui::ErrorText(*Snapshot.error_);
     if (const auto It = results_.find(Snapshot.id_); It != results_.end())
@@ -1257,7 +1258,9 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const bool WrapMetrics = Kind == JobKind::Move || dialog_->width() < qMax(760, metrics_->fontMetrics().height() * 44);
     metrics_->setToolTip(metrics_->text());
     metricsLayout_->setDirection(WrapMetrics ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-    metricsLayout_->setAlignment(metrics_, Qt::AlignRight);
+    // Ignored-width labels need the full row when stacked; layout alignment
+    // would otherwise reduce the ETA label to its zero-width size hint.
+    metricsLayout_->setAlignment(metrics_, WrapMetrics ? Qt::Alignment{} : Qt::AlignRight);
     const bool HasGraph = ArchiveCreation || Kind == JobKind::Move || Mode != RateMode::None;
     graphToggle_->setVisible(HasGraph);
     graphToggle_->setText(detailed_ ? tr("그래프 숨김(&D)") : tr("그래프 표시(&D)"));

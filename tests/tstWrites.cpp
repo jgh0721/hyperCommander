@@ -181,7 +181,8 @@ namespace
             return std::unique_ptr<IWriteSession>(new FaultSession(std::move(Session.Value()), fault_));
         }
         Result<Unit> MakeDirectory(Locator At, OperationContext Context) override { if (fault_ == WriteFault::Directory && made_++ == 1) return Error{ErrorCategory::AccessDenied, "injected-parent-create"}; return writer_->MakeDirectory(std::move(At), Context); }
-        Result<Unit> Remove(EntrySnapshot, OperationContext) override { return Error{ErrorCategory::AccessDenied, "injected-source-delete"}; }
+        void SetRemovalError(Error Error) { removalError_ = std::move(Error); }
+        Result<Unit> Remove(EntrySnapshot, OperationContext) override { return removalError_; }
         Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override {
             if (fault_ == WriteFault::PreserveRename) return Error{ErrorCategory::AccessDenied, "injected-preserve-denied"};
             return writer_->Rename(std::move(Entry), std::move(To), Context);
@@ -189,6 +190,7 @@ namespace
     private:
         std::shared_ptr<IWritableStorage> writer_;
         WriteFault fault_; int made_ = 0;
+        Error removalError_{ErrorCategory::AccessDenied, "injected-source-delete"};
     };
     class DeniedContentWriter final : public IWritableStorage
     {
@@ -807,7 +809,7 @@ private slots:
         auto Task = std::move(Prepared.Value().task_); JobStepContext Context; Context.operation_.maxReadBytes_ = 1024;
         JobState State = JobState::Preparing; JobProgress Last; bool Known = false, Partial = false; uint64_t Previous = 0;
         const auto Start = std::chrono::steady_clock::now();
-        while (!IsTerminal(State) && std::chrono::steady_clock::now() - Start < std::chrono::seconds(30)) {
+        while (!IsTerminal(State) && std::chrono::steady_clock::now() - Start < std::chrono::seconds(kind_ == LocatorKind::Smb ? 120 : 30)) {
             auto Step = Task->Advance(Context); State = Step.next_; Context.committing_ = State == JobState::Committing;
             QVERIFY2(!Step.error_, Step.error_ ? Step.error_->code_.c_str() : "");
             if (!Step.progress_) continue;
@@ -2431,13 +2433,32 @@ private slots:
         QVERIFY(!writer_->Inspect(at("junction"), {}).HasValue());
         auto Junction = reader_->Resolve(at("junction"), {}).get(); QVERIFY(Junction.HasValue());
         for (const auto Mode : {DeleteMode::Permanent, DeleteMode::Recycle}) for (const bool Streaming : {false, true}) {
+            if (GetFileAttributesW(Link.c_str()) == INVALID_FILE_ATTRIBUTES) QVERIFY(makeJunction("junction", "junction-target"));
+            Junction = reader_->Resolve(at("junction"), {}).get(); QVERIFY(Junction.HasValue());
             FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete;
             Request.sources_ = {{Junction.Value(), reader_, writer_}}; Request.deleteMode_ = Mode;
             Request.deleteWhileListing_ = Streaming; Request.confirmDelete_ = false;
             JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
-            const auto Done = Job.Value().completion_.get(); QCOMPARE(Done.snapshot_.state_, JobState::Failed);
-            QCOMPARE(Done.snapshot_.error_->code_, std::string("reparse-entry-denied"));
+            const auto Done = Job.Value().completion_.get();
+            QVERIFY2(Done.snapshot_.state_ == JobState::Completed, Done.snapshot_.error_ ? Done.snapshot_.error_->code_.c_str() : "junction deletion failed");
+            QCOMPARE(GetFileAttributesW(Link.c_str()), DWORD(INVALID_FILE_ATTRIBUTES));
             QCOMPARE(read("junction-target/sentinel.txt"), QByteArray("preserve"));
+            if (Mode == DeleteMode::Recycle) {
+                // Restore the test-owned item before unlinking it so the Shell
+                // also removes its recycle-bin bookkeeping.
+                const auto Marker = Done.items_.front().item_.find("\nrecycle: "); QVERIFY(Marker != std::string::npos);
+                const auto Recycled = ParseLocator(std::string_view(Done.items_.front().item_).substr(Marker + 10)); QVERIFY(Recycled.HasValue());
+                const auto Com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED); QVERIFY(SUCCEEDED(Com));
+                const auto Apartment = qScopeGuard([] { CoUninitialize(); });
+                using Microsoft::WRL::ComPtr;
+                ComPtr<IShellItem> Item, Parent, Destination, Restored; ComPtr<ITransferSource> Transfer;
+                auto Hr = SHCreateItemFromParsingName(QString::fromStdString(Recycled.Value().root_).toStdWString().c_str(), nullptr, IID_PPV_ARGS(&Item));
+                if (SUCCEEDED(Hr)) Hr = Item->GetParent(&Parent);
+                if (SUCCEEDED(Hr)) Hr = Parent->BindToHandler(nullptr, BHID_Transfer, IID_PPV_ARGS(&Transfer));
+                if (SUCCEEDED(Hr)) Hr = SHCreateItemFromParsingName(QDir::toNativeSeparators(root_->path()).toStdWString().c_str(), nullptr, IID_PPV_ARGS(&Destination));
+                if (SUCCEEDED(Hr)) Hr = Transfer->MoveItem(Item.Get(), Destination.Get(), L"junction", TSF_NORMAL, &Restored);
+                QVERIFY(SUCCEEDED(Hr)); QVERIFY(RemoveDirectoryW(Link.c_str()));
+            }
         }
         QCOMPARE(read("junction-target/sentinel.txt"), QByteArray("preserve"));
         QVERIFY(!QFileInfo::exists(root_->filePath("junction-target/escaped.txt")));
@@ -2632,6 +2653,90 @@ private slots:
         QVERIFY(Scheduler.Reply(Started.Value().id_, {Question.id_, InteractionChoice::ConfirmAll}).HasValue());
         QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready); const auto Removed = Started.Value().completion_.get();
         QVERIFY2(Removed.snapshot_.state_ == JobState::Completed, Removed.snapshot_.error_ ? Removed.snapshot_.error_->code_.c_str() : "readonly deletion failed"); QVERIFY(!QFileInfo::exists(A) && !QFileInfo::exists(B));
+    }
+    void operationalErrorsOfferElevation_data()
+    {
+        QTest::addColumn<int>("Category"); QTest::addColumn<QString>("Code");
+        QTest::newRow("unsupported") << int(ErrorCategory::Unsupported) << QString("injected-unsupported");
+        QTest::newRow("unavailable") << int(ErrorCategory::Unavailable) << QString("injected-unavailable");
+        QTest::newRow("stale") << int(ErrorCategory::StaleRevision) << QString("injected-stale");
+        QTest::newRow("in-use") << int(ErrorCategory::Unavailable) << QString("win32:32");
+    }
+    void operationalErrorsOfferElevation()
+    {
+        if (kind_ != LocatorKind::Local) QSKIP("The administrator helper operates on local paths");
+        QFETCH(int, Category); QFETCH(QString, Code);
+        QVERIFY(write("manual-elevation.txt", "payload"));
+        const auto Source = writer_->Inspect(at("manual-elevation.txt"), {}); QVERIFY(Source.HasValue() && Source.Value());
+        auto Fault = std::make_shared<FailedRemoveWriter>(writer_); Fault->SetRemovalError({ErrorCategory(Category), Code.toStdString()});
+        auto Elevation = std::make_shared<FixtureElevationService>(reader_, writer_);
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete; Request.confirmDelete_ = false;
+        Request.fileLockInteractions_ = true; Request.elevation_ = Elevation; Request.sources_ = {{*Source.Value(), reader_, Fault}};
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        int Questions = 0; std::string Unexpected;
+        const auto Done = runJob(Scheduler, Job.Value(), [&](const InteractionRequest& Query) {
+            ++Questions;
+            if (std::ranges::find(Query.choices_, InteractionChoice::Elevate) != Query.choices_.end()) return InteractionChoice::Elevate;
+            Unexpected = Query.reason_; return InteractionChoice::Cancel;
+        });
+        QVERIFY2(Unexpected.empty(), Unexpected.c_str());
+        QVERIFY2(Done.snapshot_.state_ == JobState::Completed, Done.snapshot_.error_ ? Done.snapshot_.error_->code_.c_str() : "manual elevation failed");
+        QCOMPARE(Questions, 1); QCOMPARE(Elevation->Requests().size(), size_t(1)); QVERIFY(!QFileInfo::exists(root_->filePath("manual-elevation.txt")));
+    }
+    void gitReadonlyConfirmAll()
+    {
+        const QString Name = "readonly-git/.git";
+        QVERIFY(QDir().mkpath(root_->filePath(Name + "/objects/ab")));
+        for (int Index = 0; Index < 3; ++Index) {
+            const auto File = Name + "/objects/ab/hash" + QString::number(Index);
+            QVERIFY(write(File, "git object"));
+            QVERIFY(SetFileAttributesW(QDir::toNativeSeparators(root_->filePath(File)).toStdWString().c_str(), FILE_ATTRIBUTE_READONLY));
+        }
+        auto Source = writer_->Inspect(at(Name), {}); QVERIFY(Source.HasValue() && Source.Value());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Delete;
+        Request.confirmDelete_ = false; Request.fileLockInteractions_ = true; Request.sources_ = {{*Source.Value(), reader_, writer_}};
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>()); auto Job = SubmitFileOperation(Scheduler, Request); QVERIFY(Job.HasValue());
+        int Questions = 0; std::string Unexpected;
+        const auto Done = runJob(Scheduler, Job.Value(), [&](const InteractionRequest& Query) {
+            if (Query.kind_ == InteractionKind::ReadOnlyRemoval) { ++Questions; return InteractionChoice::ConfirmAll; }
+            Unexpected = Query.reason_; return InteractionChoice::Cancel;
+        });
+        QVERIFY2(Unexpected.empty(), Unexpected.c_str());
+        QVERIFY2(Done.snapshot_.state_ == JobState::Completed, Done.snapshot_.error_ ? Done.snapshot_.error_->code_.c_str() : "readonly git deletion failed");
+        QCOMPARE(Questions, 1); QVERIFY(!QFileInfo::exists(root_->filePath(Name)));
+    }
+    void streamedMoveTotals_data()
+    {
+        QTest::addColumn<bool>("Manifest");
+        QTest::newRow("direct") << false; QTest::newRow("selection") << true;
+    }
+    void streamedMoveTotals()
+    {
+        QFETCH(bool, Manifest);
+        const auto From = QString("move-totals-source-%1").arg(Manifest), To = QString("move-totals-destination-%1").arg(Manifest);
+        QVERIFY(QDir().mkpath(root_->filePath(From + "/sub")));
+        QVERIFY(QDir().mkpath(root_->filePath(To)));
+        QVERIFY(write(From + "/sub/a.bin", QByteArray(128 * 1024, 'a')));
+        QVERIFY(write(From + "/b.bin", QByteArray(256 * 1024, 'b')));
+        const auto Source = reader_->Resolve(at(From), {}).get(); QVERIFY(Source.HasValue());
+        FileOperationRequest Request; Request.operation_ = hc::operations::FileOperation::Move; Request.calculateSizeBefore_ = true;
+        Request.sources_ = {{Source.Value(), reader_, writer_}}; Request.destination_ = at(To); Request.destinationWriter_ = writer_;
+        if (Manifest) {
+            auto Selection = std::make_shared<CopySelection>(); Selection->reader_ = reader_; Selection->entries_ = {Source.Value()};
+            Request.selection_ = Selection; Request.selectionRoot_ = {kind_, QDir::toNativeSeparators(root_->path()).toStdString()}; Request.selectionWriter_ = writer_; Request.sources_.clear();
+        }
+        OperationContext Context; Context.fileTransferWorkers_ = 1;
+        const auto Prepared = PrepareFileOperation(Request, Context); QVERIFY(Prepared.HasValue());
+        JobStepContext StepContext; StepContext.operation_ = Context; bool SawTotal = false, Complete = false;
+        for (int StepIndex = 0; StepIndex < 200; ++StepIndex) {
+            const auto Step = Prepared.Value().task_->Advance(StepContext); StepContext.committing_ = Step.next_ == JobState::Committing;
+            QVERIFY2(!Step.error_, Step.error_ ? Step.error_->code_.c_str() : "");
+            if (Step.progress_ && Step.progress_->bytesTotal_ && *Step.progress_->bytesTotal_ == 384 * 1024) SawTotal = true;
+            if (Step.next_ == JobState::Completed) { Complete = true; break; }
+        }
+        QVERIFY(Complete); if (kind_ == LocatorKind::Smb) QVERIFY(SawTotal);
+        QVERIFY(Prepared.Value().task_->Finalize(JobState::Completed).empty());
+        QCOMPARE(read(To + '/' + From + "/sub/a.bin"), QByteArray(128 * 1024, 'a'));
     }
     void recycleAndShellRestore()
     {
@@ -3033,9 +3138,9 @@ private slots:
         });
         QVERIFY2(Done.snapshot_.state_ == JobState::Completed, Done.snapshot_.error_ ? Done.snapshot_.error_->code_.c_str() : "tree removal failed");
         QVERIFY2(Unexpected.empty(), Unexpected.c_str());
-        QCOMPARE(ReadOnlyQuestions, 1); QCOMPARE(LinkQuestions, 1);
+        QCOMPARE(ReadOnlyQuestions, 1); QCOMPARE(LinkQuestions, 0);
         for (const auto* Removed : {"/a.txt", "/sub", "/ro.txt"}) QVERIFY(!QFileInfo::exists(root_->filePath(Name + Removed)));
-        QVERIFY(QFileInfo::exists(root_->filePath(Name + "/link"))); // the skipped link keeps its parent
+        QVERIFY(!QFileInfo::exists(root_->filePath(Name))); // only the link was removed; its target remains
         QCOMPARE(read(Name + "-outside/keep.txt"), QByteArray("keep"));
         QCOMPARE(Done.snapshot_.progress_.deletedFiles_.value_or(0), 4ull);
     }
