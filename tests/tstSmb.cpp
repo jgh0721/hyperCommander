@@ -8,6 +8,7 @@
 #include "UniqueLibs/archive/creationDialog.hpp"
 #include "msiBrowseFixture.hpp"
 #include "nativeTestInput.hpp"
+#include "UniqueLibs/fileDragMime.hpp"
 #include "UniqueLibs/qtJobJournal.hpp"
 #include "UniqueLibs/operationMetrics.hpp"
 #include "UniqueLibs/fileIconService.hpp"
@@ -313,7 +314,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "driveListOrderUi"
-                || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi"
+                || (QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi" || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragNativeFormatsUi")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileDropUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
@@ -6983,6 +6984,30 @@ private slots:
         QVERIFY(main_->grab().save(QDir(QCoreApplication::applicationDirPath()).filePath("drive-list-order.png")));
     }
 
+    void externalFileDragNativeFormatsUi()
+    {
+        const QStringList Paths{"C:/media/한글 #100% & movie.mp4", "//server/share/자막 #2%.srt"};
+        hc::ui::FileDragMime Mime(Paths);
+        hc::ui::FileDragMime::Converter Converter(&Mime);
+        QCOMPARE(Mime.urls().size(), Paths.size());
+        QVERIFY(!Mime.hasUrls()); QVERIFY(!Mime.hasText());
+        QVERIFY(!Mime.formats().contains("text/uri-list"));
+        FORMATETC Format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        STGMEDIUM Medium{}; QVERIFY(Converter.convertFromMime(Format, &Mime, &Medium));
+        const auto ReleaseMedium = qScopeGuard([&] { ReleaseStgMedium(&Medium); });
+        QCOMPARE(DragQueryFileW(HDROP(Medium.hGlobal), UINT(-1), nullptr, 0), UINT(Paths.size()));
+        for (int Index = 0; Index < Paths.size(); ++Index) {
+            const auto Length = DragQueryFileW(HDROP(Medium.hGlobal), Index, nullptr, 0);
+            std::wstring Path(Length + 1, L'\0');
+            QCOMPARE(DragQueryFileW(HDROP(Medium.hGlobal), Index, Path.data(), Length + 1), Length);
+            Path.resize(Length);
+            QCOMPARE(QString::fromStdWString(Path), QDir::toNativeSeparators(Paths[Index]));
+        }
+        for (const auto* Name : {L"UniformResourceLocator", L"UniformResourceLocatorW"}) {
+            Format.cfFormat = CLIPFORMAT(RegisterClipboardFormatW(Name));
+            QVERIFY(!Converter.canConvertFromMime(Format, &Mime));
+        }
+    }
     void externalFileDragUi()
     {
         const auto Workspace = main_->CaptureWorkspace();

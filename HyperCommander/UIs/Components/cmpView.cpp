@@ -33,6 +33,7 @@
 #include <QWidgetAction>
 #include <fmstyle/Glyphs.h>
 #include <QMimeData>
+#include "UniqueLibs/fileDragMime.hpp"
 #include <QUrl>
 #include <limits>
 #include <fmfilelist/ListPresentation.h>
@@ -2252,10 +2253,7 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
                     Button, Qt::NoButton, Mouse->modifiers());
                 QCoreApplication::sendEvent(Watched, &Release);
                 resetRenameClicks();
-                auto* Mime = new QMimeData;
-                QList<QUrl> Urls;
-                for (const auto& Path : Paths) Urls.append(QUrl::fromLocalFile(Path));
-                Mime->setUrls(Urls); // Qt's Windows platform exports these as CF_HDROP.
+                auto* Mime = new hc::ui::FileDragMime(Paths);
                 auto* Drag = new QDrag(this); Drag->setMimeData(Mime);
                 Mime->setData("application/x-hypercommander-drag-button", Button == Qt::RightButton ? "right" : "left");
                 Mime->setData("application/x-hypercommander-source-panel", FilePanelDragToken(this).toUtf8());
