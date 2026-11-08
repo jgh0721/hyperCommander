@@ -246,6 +246,8 @@ void Engine::Page(quint64 Generation, int First, int Count, QString ReplacementT
             {"start", double(Hit.range_.start_)}, {"length", double(Hit.range_.length_)}, {"line", double(Hit.line_)}, {"column", double(Hit.column_)}};
         const auto Relative=request_["book"].toBool()?Source["path"].toString():QDir(request_["root"].toString()).relativeFilePath(Source["path"].toString());
         const QFileInfo Display(Relative);Row["displayPath"]=Display.fileName()+(Display.path()=="."?QString{}:QStringLiteral(" · ")+Display.path());
+        // An untitled or recovered buffer has no path of its own to show ("새 문서 2").
+        if(const auto Name=Source["displayName"].toString();!Name.isEmpty())Row["displayPath"]=Name;
         const auto Text = sourceText(Source);
         if (!Text || !Hit.range_.Valid(Text->size())) Row["error"] = tr("검색 후 원문이 변경되었거나 읽을 수 없습니다.");
         else {

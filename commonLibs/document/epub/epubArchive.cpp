@@ -15,6 +15,8 @@ namespace hc::document::epub::detail
     {
         quint16 u16(const QByteArray& Bytes, qsizetype At) { return qFromLittleEndian<quint16>(Bytes.constData() + At); }
         quint32 u32(const QByteArray& Bytes, qsizetype At) { return qFromLittleEndian<quint32>(Bytes.constData() + At); }
+        void put16(QByteArray& Bytes, qsizetype At, quint16 Value) { qToLittleEndian(Value, Bytes.data() + At); }
+        void put32(QByteArray& Bytes, qsizetype At, quint32 Value) { qToLittleEndian(Value, Bytes.data() + At); }
         void range(const QByteArray& Bytes, qsizetype At, qsizetype Count)
         { if(At < 0 || Count < 0 || At > Bytes.size() || Count > Bytes.size() - At) Reject("zip-truncated"); }
         void extra(const QByteArray& Bytes, qsizetype At, qsizetype Count)
@@ -190,31 +192,50 @@ namespace hc::document::epub::detail
         for(auto I=Additions.begin();I!=Additions.end();++I){if(Canonical(I.key())!=I.key() || I.key().endsWith('/') || I.key()=="mimetype" || Names.contains(I.key().toCaseFolded()) || I.value().size()>16*1024*1024)Reject("edit-add-denied",I.key());Names.insert(I.key().toCaseFolded());}
         if(entries_.size()+Additions.size()-Removals.size()>4096)Reject("edit-entry-limit");
         auto Ordered=entries_.values();std::sort(Ordered.begin(),Ordered.end(),[](const Entry& A,const Entry& B){return A.offset_<B.offset_;});
-        QByteArray Output,Central;int Count=0;
-        const auto Put16=[](QByteArray& B,qsizetype At,quint16 V){qToLittleEndian(V,B.data()+At);};
-        const auto Put32=[](QByteArray& B,qsizetype At,quint32 V){qToLittleEndian(V,B.data()+At);};
-        const auto Budget=[&]{if(Output.size()+Central.size()+22+comment_.size()>InputLimit)Reject("edit-output-limit");};
-        const auto NewEntry=[&](const QString& Path,const QByteArray& Data){
-            Check(cancel_);const auto Name=Path.toUtf8();if(Name.size()>65535)Reject("edit-name-limit",Path);const auto Offset=quint32(Output.size());const auto Crc=quint32(crc32(0,reinterpret_cast<const Bytef*>(Data.constData()),uInt(Data.size())));
-            QByteArray Header(30,0);Put32(Header,0,0x04034b50);Put16(Header,4,20);Put16(Header,6,0x800);Put16(Header,12,0x21);Put32(Header,14,Crc);Put32(Header,18,quint32(Data.size()));Put32(Header,22,quint32(Data.size()));Put16(Header,26,quint16(Name.size()));Output+=Header;Output+=Name;Output+=Data;
-            QByteArray Record(46,0);Put32(Record,0,0x02014b50);Put16(Record,4,20);Put16(Record,6,20);Put16(Record,8,0x800);Put16(Record,14,0x21);Put32(Record,16,Crc);Put32(Record,20,quint32(Data.size()));Put32(Record,24,quint32(Data.size()));Put16(Record,28,quint16(Name.size()));Put32(Record,38,0x20);Put32(Record,42,Offset);Central+=Record;Central+=Name;++Count;Budget();
-        };
+        StoredZipWriter Writer(cancel_,comment_.size());
         // Every rewritten edition uses EPUB's required first, stored mimetype entry.
-        NewEntry("mimetype",QByteArray("application/epub+zip"));
+        Writer.Add("mimetype",QByteArray("application/epub+zip"));
         for(const auto& Item:Ordered) {
             if(Item.path_=="mimetype" || Removals.contains(Item.path_))continue;
-            Check(cancel_);auto Record=Item.central_;Put32(Record,42,quint32(Output.size()));
-            if(!Replacements.contains(Item.path_))Output+=bytes_.mid(Item.offset_,Item.end_-Item.offset_);
+            Check(cancel_);auto Record=Item.central_;put32(Record,42,Writer.Offset());
+            if(!Replacements.contains(Item.path_))Writer.Append(bytes_.mid(Item.offset_,Item.end_-Item.offset_),Record);
             else {
                 const auto Data=Replacements[Item.path_];const auto Crc=quint32(crc32(0,reinterpret_cast<const Bytef*>(Data.constData()),uInt(Data.size())));
                 auto Header=bytes_.mid(Item.offset_,Item.data_-Item.offset_);const auto Flags=quint16(u16(Header,6)&~quint16(14));
-                Put16(Header,6,Flags);Put16(Header,8,0);Put32(Header,14,Crc);Put32(Header,18,quint32(Data.size()));Put32(Header,22,quint32(Data.size()));
-                Put16(Record,8,Flags);Put16(Record,10,0);Put32(Record,16,Crc);Put32(Record,20,quint32(Data.size()));Put32(Record,24,quint32(Data.size()));Output+=Header;Output+=Data;
+                put16(Header,6,Flags);put16(Header,8,0);put32(Header,14,Crc);put32(Header,18,quint32(Data.size()));put32(Header,22,quint32(Data.size()));
+                put16(Record,8,Flags);put16(Record,10,0);put32(Record,16,Crc);put32(Record,20,quint32(Data.size()));put32(Record,24,quint32(Data.size()));
+                Writer.Append(Header+Data,Record);
             }
-            Central+=Record;++Count;Budget();
         }
-        for(auto I=Additions.begin();I!=Additions.end();++I)NewEntry(I.key(),I.value());
-        const auto Offset=Output.size();Output+=Central;QByteArray End(22,0);Put32(End,0,0x06054b50);Put16(End,8,quint16(Count));Put16(End,10,quint16(Count));Put32(End,12,quint32(Central.size()));Put32(End,16,quint32(Offset));Put16(End,20,quint16(comment_.size()));Output+=End;Output+=comment_;return Output;
+        for(auto I=Additions.begin();I!=Additions.end();++I)Writer.Add(I.key(),I.value());
+        return Writer.Finish(comment_);
+    }
+
+    void StoredZipWriter::budget() const
+    { if(output_.size()+central_.size()+22+commentSize_>InputLimit)Reject("edit-output-limit"); }
+
+    void StoredZipWriter::Add(const QString& Path,const QByteArray& Data)
+    {
+        Check(cancel_);const auto Name=Path.toUtf8();if(Name.size()>65535)Reject("edit-name-limit",Path);
+        if(count_>=65535)Reject("edit-entry-limit");
+        const auto Position=Offset();const auto Crc=quint32(crc32(0,reinterpret_cast<const Bytef*>(Data.constData()),uInt(Data.size())));
+        QByteArray Header(30,0);put32(Header,0,0x04034b50);put16(Header,4,20);put16(Header,6,0x800);put16(Header,12,0x21);put32(Header,14,Crc);put32(Header,18,quint32(Data.size()));put32(Header,22,quint32(Data.size()));put16(Header,26,quint16(Name.size()));
+        output_+=Header;output_+=Name;output_+=Data;
+        QByteArray Record(46,0);put32(Record,0,0x02014b50);put16(Record,4,20);put16(Record,6,20);put16(Record,8,0x800);put16(Record,14,0x21);put32(Record,16,Crc);put32(Record,20,quint32(Data.size()));put32(Record,24,quint32(Data.size()));put16(Record,28,quint16(Name.size()));put32(Record,38,0x20);put32(Record,42,Position);
+        central_+=Record;central_+=Name;++count_;budget();
+    }
+
+    void StoredZipWriter::Append(const QByteArray& Local,const QByteArray& Central)
+    {
+        Check(cancel_);if(count_>=65535)Reject("edit-entry-limit");
+        output_+=Local;central_+=Central;++count_;budget();
+    }
+
+    QByteArray StoredZipWriter::Finish(const QByteArray& Comment)
+    {
+        const auto Offset=quint32(output_.size());QByteArray Output=std::move(output_);Output+=central_;
+        QByteArray End(22,0);put32(End,0,0x06054b50);put16(End,8,quint16(count_));put16(End,10,quint16(count_));put32(End,12,quint32(central_.size()));put32(End,16,Offset);put16(End,20,quint16(Comment.size()));
+        Output+=End;Output+=Comment;output_.clear();central_.clear();count_=0;return Output;
     }
 
     QByteArray Archive::Read(const QString& Path) const

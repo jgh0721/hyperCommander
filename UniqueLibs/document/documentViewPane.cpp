@@ -24,6 +24,9 @@
 #include <QJsonArray>
 #include <algorithm>
 #include "pdf/QPDFView.h"
+#include <QPointer>
+#include <QScrollArea>
+#include <QScrollBar>
 #include "image/QImageView.h"
 #include "core/ThemeManager.h"
 #include "core/AppSettings.h"
@@ -451,6 +454,26 @@ namespace hc::document
     void DocumentViewPane::DiscardEpubRecovery(){if(epubEditor_)epubEditor_->DiscardRecovery();}
     void DocumentViewPane::SetEpubRecoveryEnabled(bool Enabled){if(epubEditor_)epubEditor_->SetRecoveryEnabled(Enabled);}
     void DocumentViewPane::CheckpointEpub(){if(epubEditor_)epubEditor_->Checkpoint();}
+    void DocumentViewPane::LocateEpub(const QString& Locator){
+        if(!epub_||Locator.isEmpty())return;
+        // Same readiness gate as the reload retry above; private reading never moves to a recorded place.
+        auto* Restore=new QTimer(epub_);Restore->setInterval(150);auto Attempts=std::make_shared<int>(0);
+        connect(Restore,&QTimer::timeout,epub_,[this,Restore,Attempts,Locator]{
+            const auto State=epub_->ViewState();
+            if(++*Attempts>400 || State["status"]=="error" || State["readingProfile"].toObject()["privateReading"].toBool()){Restore->stop();Restore->deleteLater();return;}
+            if(State["status"]=="ready" && State["readingStateLoaded"].toBool() && !State["readingStateRestoring"].toBool() && epub_->ReaderAction("locate",Locator)){Restore->stop();Restore->deleteLater();}
+        });Restore->start();
+    }
+    QJsonObject DocumentViewPane::PdfPosition()const{
+        if(!pdf_)return {};
+        QJsonObject Position{{"page",ViewState()["page"].toInt()},{"zoomMode",int(pdf_->zoomMode())},{"zoomLevel",pdf_->zoomLevel()}};
+        if(const auto* Area=pdf_->findChild<QScrollArea*>()){Position["x"]=Area->horizontalScrollBar()->value();Position["y"]=Area->verticalScrollBar()->value();}
+        return Position;
+    }
+    QString DocumentViewPane::EpubDraftPath()const{return epubEditor_?epubEditor_->DraftPath():QString{};}
+    bool DocumentViewPane::EpubDraftCurrent()const{return !epubEditor_ || epubEditor_->DraftCurrent();}
+    bool DocumentViewPane::EpubDraftEnabled()const{return epubEditor_ && epubEditor_->DraftEnabled();}
+    void DocumentViewPane::FlushEpubWorkspace(){if(epubEditor_ && epubEditor_->IsReady())epubEditor_->FlushWorkspace();}
     bool DocumentViewPane::CanEditEpub()const{return epubEditingAllowed_ && epubEditor_ && epubEditor_->IsReady();}
     bool DocumentViewPane::PrepareEpubSave(bool SaveAs){return !CanEditEpub() || epubEditor_->PrepareSave(SaveAs);}
     bool DocumentViewPane::CanSaveEpub()const{return CanEditEpub() && epubEditor_->IsValidated();}
@@ -530,7 +553,12 @@ namespace hc::document
         TextRecoveryState State;
         State.encoding_ = encoding_.toStdString(); State.bom_ = bom_; State.lineEnding_ = text_->detectedLineEnding() == QTextView::CRLF ? "CRLF" : text_->detectedLineEnding() == QTextView::CR ? "CR" : "LF";
         State.anchor_ = Backend->Send(SCI_GETANCHOR); State.caret_ = Backend->Send(SCI_GETCURRENTPOS);
-        State.firstLine_ = Backend->Send(SCI_DOCLINEFROMVISIBLE, Backend->Send(SCI_GETFIRSTVISIBLELINE));
+        // Top document line plus the wrapped row inside it: word wrap keeps the exact vertical position.
+        const auto Visible = Backend->Send(SCI_GETFIRSTVISIBLELINE);
+        State.firstLine_ = Backend->Send(SCI_DOCLINEFROMVISIBLE, Visible);
+        State.firstSubLine_ = qMax<qintptr>(0, Visible - Backend->Send(SCI_VISIBLEFROMDOCLINE, State.firstLine_));
+        // The restored copy's extension selects the view; Markdown must come back as Markdown.
+        State.suffix_ = markdown_ ? "md" : "txt";
         State.xOffset_ = Backend->Send(SCI_GETXOFFSET); return State;
     }
     bool DocumentViewPane::RestoreTextRecovery(const RecoverySnapshot& Record)
@@ -546,6 +574,9 @@ namespace hc::document
     void DocumentViewPane::RestoreTextPosition(const TextRecoveryState& State)
     {
         if (!text_ || !text_->Backend()) return;
+        // Wrapped rows exist only once the editor has its width: a hidden tab applies the position when first shown.
+        if (!text_->isVisible() || text_->width() <= 0) { pendingTextPosition_ = State; return; }
+        pendingTextPosition_.reset();
         auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
         const auto Boundary = [&](std::int64_t Position) {
             auto At = qBound<qintptr>(0, Position, Backend->Send(SCI_GETLENGTH));
@@ -553,8 +584,16 @@ namespace hc::document
             return At;
         };
         Backend->Send(SCI_SETSEL, Boundary(State.anchor_), Boundary(State.caret_));
-        Backend->Send(SCI_SETFIRSTVISIBLELINE, Backend->Send(SCI_VISIBLEFROMDOCLINE, qMin<qintptr>(State.firstLine_, Backend->Send(SCI_GETLINECOUNT) - 1)));
+        const auto Line = qMin<qintptr>(State.firstLine_, Backend->Send(SCI_GETLINECOUNT) - 1);
+        // The window may be narrower or wider than when captured: stay inside the line's actual rows.
+        const auto SubLine = qBound<qintptr>(0, State.firstSubLine_, qMax<qintptr>(0, Backend->Send(SCI_WRAPCOUNT, Line) - 1));
+        Backend->Send(SCI_SETFIRSTVISIBLELINE, Backend->Send(SCI_VISIBLEFROMDOCLINE, Line) + SubLine);
         Backend->Send(SCI_SETXOFFSET, State.xOffset_);
+    }
+    void DocumentViewPane::showEvent(QShowEvent* Event)
+    {
+        QWidget::showEvent(Event);
+        if (pendingTextPosition_) QTimer::singleShot(0, this, [this] { if (auto State = pendingTextPosition_; State && text_ && text_->isVisible()) RestoreTextPosition(*State); });
     }
     QByteArray DocumentViewPane::SessionContent() const { return SerializeSession().bytes_; }
     DocumentEncoder DocumentViewPane::CaptureSave(const QString& Destination,bool SaveEpubOriginal,std::optional<QByteArray> Content,std::optional<storage::Error> ContentError) const
@@ -907,6 +946,15 @@ namespace hc::document
             encoding_=Encoding;bom_=Bom;emit ContentChanged();
         }
         else if(Action=="pdf.page"&&pdf_)pdf_->goToPage(Request["page"].toInt());
+        // D11: page, zoom and the scroll inside the page. The scroll waits for the layout of the new zoom.
+        else if(Action=="pdf.position"&&pdf_){
+            const auto Mode=Request["zoomMode"].toInt(-1);
+            if(Mode>=QPDFView::FitWidth&&Mode<=QPDFView::CustomZoom){pdf_->setZoomMode(QPDFView::ZoomMode(Mode));if(Mode==QPDFView::CustomZoom&&Request["zoomLevel"].toDouble()>0)pdf_->setZoomLevel(Request["zoomLevel"].toDouble());}
+            if(Request.contains("page"))pdf_->goToPage(Request["page"].toInt());
+            if(Request.contains("x")||Request.contains("y"))QTimer::singleShot(0,pdf_,[View=QPointer<QPDFView>(pdf_),X=Request["x"].toInt(),Y=Request["y"].toInt()]{
+                if(!View)return;if(auto* Area=View->findChild<QScrollArea*>()){Area->horizontalScrollBar()->setValue(X);Area->verticalScrollBar()->setValue(Y);}
+            });
+        }
         else if(Action=="pdf.search"&&pdf_)pdf_->searchText(Request["text"].toString());
         else if(Action=="pdf.rotate"&&pdf_)pdf_->RotateCurrentPage(static_cast<QPDFView::RotationAngle>(Request["angle"].toInt()));
         else if(Action=="pdf.annotate"&&pdf_){if(!pdf_->AddAnnotation(Request["page"].toInt(),Request["kind"].toString(),QRectF(Request["x"].toDouble(),Request["y"].toDouble(),Request["width"].toDouble(),Request["height"].toDouble()),Request["text"].toString()))return Error("document-pdf-annotation");}

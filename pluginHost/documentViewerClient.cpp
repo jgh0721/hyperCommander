@@ -73,7 +73,23 @@ namespace hc::plugins
         }
         broker_.Retain(Tokens);
         const auto Edit=state_["editRequest"].toObject();
-        if(!Edit.isEmpty()){
+        // A new EPUB from HyperViewer's Ctrl+N: no document and no path cross this boundary.
+        // HyperEditor shows the dialog and creates the file itself (--new-epub).
+        if(Edit["format"]=="epub-new"){
+            const auto Program=QCoreApplication::applicationDirPath()+"/HyperEditor.exe";
+            QStringList Args{"--config-dir",hc::settings::DocumentPaths().directory_,"--new-epub"};
+            const auto Appearance=QJsonDocument(Edit["appearance"].toObject()).toJson(QJsonDocument::Compact).toBase64();
+            if(!Edit["appearance"].toObject().isEmpty() && Appearance.size()<=16384)Args<<"--document-appearance"<<QString::fromLatin1(Appearance);
+            auto Start=std::make_shared<std::promise<bool>>();auto Result=Start->get_future();
+            std::thread([Program,Args,Start]{
+                QProcess Process;Process.start(Program,Args);const bool Started=Process.waitForStarted(5000);
+                Start->set_value(Started);if(Started)Process.waitForFinished(-1);
+            }).detach();
+            const bool Started=Result.get();
+            auto Completed=Call("Execute",{{"action","editResult"},{"token",Edit["token"]},{"accepted",Started}},{},{},Context);
+            if(!Completed.HasValue()&&Completed.Failure().code_!="document-edit-token")return Completed.Failure();
+        }
+        else if(!Edit.isEmpty()){
             const bool Epub=Edit["format"]=="epub";
             const bool Search=Edit["format"]=="search";
             std::optional<document::DocumentHostBroker::EditorInput> Input;

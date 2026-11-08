@@ -36,6 +36,11 @@ public:
     storage::Result<QByteArray> Export(const QString& Destination,bool SaveOriginal=false)const;
     bool CanUndo()const;bool CanRedo()const;void Undo();void Redo();
     bool IsReady()const{return ready_;}
+    // HotExit (D9): the draft that holds the unsaved edits, whether it is current, and the per-book workspace flush.
+    QString DraftPath()const{return recoveryPath_;}
+    bool DraftCurrent()const{return !IsModified() || (!recoveryPath_.isEmpty() && draftWrittenToken_==Token());}
+    bool DraftEnabled()const{return recoveryEnabled_;}
+    void FlushWorkspace(){saveWorkspace();}
     bool IsModified()const{return ready_ && Token()!=(savedToken_.isEmpty()?baseToken_:savedToken_);}
     bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !nativeValidating_ && !structuring_ && validatedToken_==Token() && !validatedBytes_.isEmpty() && checkerState_!="running" && standardValidationAccepted();}
     static QString RecoveryDirectory();
@@ -122,7 +127,7 @@ private:
     QString structureError_;bool structuring_=false;
     QJsonArray tocDraft_;QByteArray tocDraftToken_;
     void setupStructure();bool structure(QJsonObject Request);void refreshResources(const QString& Preferred);
-    void addImageResource(const QString& Chapter={});void convertImageResource(const QString& Path);void addChapterResource(const QString& After={});void editNavigation();
+    void addImageResource(const QString& Chapter={});void convertImageResource(const QString& Path);void addChapterResource(const QString& After={});QString nextChapterPath()const;void editNavigation();
     void renameResource(const QString& Path);void removeResource(const QString& Path);void moveChapter(const QString& Path,int Delta);
     void setupValidation();void nativeDiagnostic(const epub::EditOutput& Result);
     void setDiagnostics(QJsonArray Rows);bool selectDiagnostic(int Index);void markDiagnostics();

@@ -66,6 +66,7 @@ int main(int Argc, char** Argv)
     Parser.addOption(QCommandLineOption("rhwp-edit-copy", "Edit a provider copy with Save As only"));
     Parser.addOption(QCommandLineOption("rhwp-view", "Open one HWP/HWPX in the isolated read-only viewer"));
     Parser.addOption(QCommandLineOption("epub-edit", "Open one DRM-free EPUB in edit mode"));
+    Parser.addOption(QCommandLineOption("new-epub", "Create a new EPUB (dialog) and open it in edit mode"));
     Parser.addOption(QCommandLineOption("find-in-files", "Restore a find/replace session without applying changes", "base64"));
     Parser.addOption(QCommandLineOption("document-copy", "Open a provider copy with Save As only"));
     Parser.addOption(QCommandLineOption("epub-locator", "Initial EPUB reading position", "cfi"));
@@ -95,6 +96,10 @@ int main(int Argc, char** Argv)
     if (Parser.isSet("verify-runtime")) { hc::fonts::RegisterBundledFonts(); return VerifyDocumentRuntime(); }
     const bool RhwpEdit = Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy");
     const bool EpubEdit=Parser.isSet("epub-edit");
+    // HyperViewer's Ctrl+N › EPUB: HyperEditor shows the dialog and creates the file; no path is passed in.
+    const bool NewEpub=Parser.isSet("new-epub");
+    if(NewEpub && (EpubEdit || RhwpEdit || Parser.isSet("rhwp-view") || Parser.isSet("find-in-files") || Parser.isSet("document-copy")
+        || Parser.isSet("epub-locator") || Parser.isSet("epub-chapter") || !Parser.positionalArguments().isEmpty()))return 10;
     QJsonObject SearchContext;
     if(Parser.isSet("find-in-files")) {
         const auto Encoded=Parser.value("find-in-files").toLatin1();
@@ -141,7 +146,7 @@ int main(int Argc, char** Argv)
     QObject::connect(&App, &QCoreApplication::aboutToQuit, &App, [] { hc::document::startup::Write(hc::document::startup::Data().Snapshot(), "editor", QCoreApplication::applicationPid()); });
     hc::document::startup::Scope InstanceTrace("editor.instance");
     EditorInstance Instance;
-    if(!EpubEdit && !Parser.isSet("find-in-files") && !Parser.isSet("document-copy")){
+    if(!EpubEdit && !NewEpub && !Parser.isSet("find-in-files") && !Parser.isSet("document-copy")){
         const auto Canonical=[](const QString& Path){const QFileInfo Info(Path);const auto Name=Info.canonicalFilePath();return (Name.isEmpty()?Info.absoluteFilePath():Name).toCaseFolded();};
         const auto Scope=QJsonDocument(QJsonArray{Canonical(QCoreApplication::applicationFilePath()),Canonical(Config.directory_),Parser.value("theme"),Parser.value("document-appearance")}).toJson(QJsonDocument::Compact);
         const auto Started=Instance.Start(Scope,Parser.positionalArguments());
@@ -253,7 +258,7 @@ int main(int Argc, char** Argv)
     QTimer::singleShot(0, &App, [&] {
         QSet<QString> RestoredPaths; bool Restored = false;
         const auto Text = Settings.Object()["documentViews"].toObject()["textView"].toObject();
-        if (!EpubEdit && !Parser.isSet("document-copy") && !Parser.isSet("find-in-files") && Text["hotExitEnabled"].toBool(true)) {
+        if (!EpubEdit && !NewEpub && !Parser.isSet("document-copy") && !Parser.isSet("find-in-files") && Text["hotExitEnabled"].toBool(true)) {
             hc::document::DocumentRecoveryStore Store(RecoveryRoot);
             for (const auto& Id : Store.Sessions()) {
                 auto Session = Store.ReadSession(Id); if (!Session.HasValue() || Session.Value()["profileId"].toString() != ProfileId || Session.Value()["documents"].toArray().isEmpty()) continue;
@@ -270,6 +275,8 @@ int main(int Argc, char** Argv)
         QStringList Files; for (const auto& File : Parser.positionalArguments())
             if (!RestoredPaths.contains(QDir::cleanPath(QFileInfo(File).absoluteFilePath()).toCaseFolded())) Files.append(File);
         if (!Files.isEmpty() || !Restored) OpenFiles(Files);
+        // Cancelling the dialog of a --new-epub window with nothing open closes that window.
+        if (NewEpub && !Windows.empty()) Windows.back()->ShowNewEpubDialog(true);
     });
     hc::document::startup::Data().EndNamed("editor.entryToTitle");
     QTimer::singleShot(0, &App, [] { hc::document::startup::Data().Aggregate("editor.eventLoopReached", hc::document::startup::Data().Now()); });

@@ -58,6 +58,8 @@ qt_add_library(hc_epub_package STATIC
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubDraftStore.hpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubArchive.hpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubArchive.cpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubTemplate.hpp"
+    "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/epubTemplate.cpp"
     "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/stdafx.h"
 )
 target_precompile_headers(hc_epub_package PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/document/epub/stdafx.h")
@@ -124,6 +126,9 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/recentDocuments.cpp ../UniqueLibs/document/recentDocuments.hpp
     ../UniqueLibs/document/recentDocumentsDialog.cpp ../UniqueLibs/document/recentDocumentsDialog.hpp
     ../UniqueLibs/document/documentStartPage.cpp ../UniqueLibs/document/documentStartPage.hpp
+    ../UniqueLibs/document/newDocumentChooser.cpp ../UniqueLibs/document/newDocumentChooser.hpp
+    ../UniqueLibs/document/newEpubDialog.cpp ../UniqueLibs/document/newEpubDialog.hpp
+    ../UniqueLibs/document/epubRestoreConflictDialog.cpp ../UniqueLibs/document/epubRestoreConflictDialog.hpp
     ../UniqueLibs/document/documentRecentMenu.cpp ../UniqueLibs/document/documentRecentMenu.hpp
     ../UniqueLibs/document/textContextMenu.cpp ../UniqueLibs/document/textContextMenu.hpp
     ../UniqueLibs/document/viewUiContribution.hpp

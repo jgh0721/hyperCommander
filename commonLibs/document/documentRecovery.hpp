@@ -10,6 +10,12 @@ namespace hc::document
         std::string encoding_ = "UTF-8", lineEnding_ = "LF", baselineSha256_;
         bool bom_ = false, untitled_ = false;
         std::int64_t anchor_ = 0, caret_ = 0, firstLine_ = 0, xOffset_ = 0;
+        // Wrapped row of firstLine_ shown at the top (word wrap keeps the exact scroll position).
+        std::int64_t firstSubLine_ = 0;
+        // Restored copies take this extension so the view (text or Markdown) survives: txt · md · markdown.
+        std::string suffix_ = "txt";
+        // "새 문서 N" of an untitled document; 0 when none was recorded.
+        std::int64_t untitledNumber_ = 0;
     };
     struct RecoverySnapshot
     {

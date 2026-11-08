@@ -5,6 +5,8 @@
 #include "workspaceChromeController.hpp"
 #include "documentViewKind.hpp"
 #include "hwpOpenWindow.hpp"
+#include "newDocumentChooser.hpp"
+#include "newEpubDialog.hpp"
 #include <functional>
 #include <QWidget>
 #include <QJsonObject>
@@ -68,6 +70,12 @@ namespace hc::document
         void RestoreWindowSize();
         void OpenSearchContext(const QJsonObject& Context);
         DocumentViewKind CurrentKind() const;
+        // Opens an EPUB and enters edit mode when it is ready (--epub-edit, a new EPUB, HotExit).
+        // Resource/Position select a source resource and caret; a draft path applies an EPUB draft.
+        QJsonObject OpenForEpubEdit(const QString& Path, const QString& Locator = {}, int Chapter = -1,
+            const QString& Resource = {}, int Position = -1, const QString& DraftPath = {});
+        // ‘새 EPUB 만들기’ (HyperEditor --new-epub, Ctrl+N › EPUB). Closing it with no document closes the window.
+        void ShowNewEpubDialog(bool CloseWhenCancelled = false);
     protected:
         bool eventFilter(QObject* Watched, QEvent* Event) override;
         // Surfaces own their context menus; anything else ends here instead of falling through to every action.
@@ -127,14 +135,28 @@ namespace hc::document
         mrst::ExternalChangeWatcher* externalWatcher_ = nullptr;
         void showPreferences();
         QPointer<DocumentSettingsDialog> preferences_;
-        QJsonObject newDocument();
+        QJsonObject newDocument(NewDocumentKind Kind = NewDocumentKind::Text);
+        // Ctrl+N: the kind popup, or a kind at once per documentViews/common/newDocumentAction.
+        void requestNewDocument(QWidget* Anchor, bool ImagePage = false);
+        QPointer<NewDocumentChooser> chooser_;
+        QJsonObject newImage(const NewImageSpec& Spec);
+        void createEpub(const NewEpubRequest& Request, bool CloseWhenCancelled);
+        bool epubCreating_ = false;
+        // Untitled documents: "새 문서 N" (text, Markdown) and "새 이미지 N" (images), numbered per window.
+        struct Tab;
+        QString documentName(const Tab& Value) const;
+        QString untitledFileName(const Tab& Value) const;
+        int nextUntitledNumber(bool Image, int Preferred = 0) const;
+        void nameUntitled(const std::shared_ptr<Tab>& Value, bool Image, int Preferred = 0);
+        QString lastSaveFolder() const;
+        // Save As start: the file itself; for untitled and recovered copies a real folder and name, never the recovery folder.
+        QString saveAsStart(const Tab& Value) const;
         void showEpubRecovery();
         QJsonObject openEpubRecovery(const QString& Path);
         DocumentShortcutRouter* shortcutRouter_ = nullptr;
         QString settingsPath_;
         QJsonObject appliedPreferences_;
         QFileSystemWatcher* settingsWatcher_ = nullptr;
-        struct Tab;
         struct LocalSave;
         std::shared_ptr<Tab> active() const;
         std::shared_ptr<Tab> find(const QString& Id) const;
@@ -179,6 +201,17 @@ namespace hc::document
         QRect epubWindowGeometry_;
         bool hotExitEnabled() const;
         bool hotExitEligible(const std::shared_ptr<Tab>& Tab) const;
+        // D9 / D10: EPUB tabs keep unsaved edits in their EPUB draft; PDF tabs in a full-PDF snapshot.
+        bool hotExitEpub(const std::shared_ptr<Tab>& Tab) const;
+        bool hotExitPdf(const std::shared_ptr<Tab>& Tab) const;
+        // EPUB drafts restored one at a time; a changed original asks first (EpubRestoreConflictDialog).
+        QList<QJsonObject> epubRestoreQueue_;
+        bool epubRestoreBusy_ = false;
+        // The close attempt whose EPUB editor workspaces were already flushed.
+        quint64 epubFlushEpoch_ = 0;
+        void nextEpubRestore();
+        // A PDF snapshot reattaches to its original only when the original still has this SHA-256.
+        QString pendingRecoveryBaseline_;
         bool requestHotExitClose();
         void publishHotExitSession(bool Closing);
         void cancelHotExitClose(const QString& Error = {});

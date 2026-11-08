@@ -91,10 +91,8 @@ QString srcsetReferences(const QString& Text,const std::function<QString(const Q
     auto Result=Text;for(auto I=Changes.crbegin();I!=Changes.crend();++I)Result.replace(I->first_,I->last_-I->first_,I->value_);return Result;
 }
 QByteArray imageData(const QJsonObject& Request,QString& Media) {
-    const auto Encoded=Request["base64"].toString().toLatin1();if(Encoded.size()>12*1024*1024)Reject("edit-image-budget");const auto Decoded=QByteArray::fromBase64Encoding(Encoded,QByteArray::AbortOnBase64DecodingErrors);if(!Decoded || Decoded.decoded.isEmpty() || Decoded.decoded.size()>8*1024*1024)Reject("edit-image-budget");
-    QBuffer Buffer;Buffer.setData(Decoded.decoded);Buffer.open(QIODevice::ReadOnly);QImageReader Reader(&Buffer);const auto Format=Reader.format();const auto Size=Reader.size();
-    if(!QList<QByteArray>{"png","jpeg","gif","webp"}.contains(Format) || !Size.isValid() || Size.width()>4096 || Size.height()>4096 || qint64(Size.width())*Size.height()>4194304 || Reader.read().isNull())Reject("edit-image-format-or-size");
-    Media=Format=="jpeg"?"image/jpeg":"image/"+QString::fromLatin1(Format);return Decoded.decoded;
+    const auto Encoded=Request["base64"].toString().toLatin1();if(Encoded.size()>12*1024*1024)Reject("edit-image-budget");const auto Decoded=QByteArray::fromBase64Encoding(Encoded,QByteArray::AbortOnBase64DecodingErrors);if(!Decoded || Decoded.decoded.isEmpty() || Decoded.decoded.size()>ImageByteLimit)Reject("edit-image-budget");
+    Media=ImageMediaType(Decoded.decoded);if(Media.isEmpty())Reject("edit-image-format-or-size");return Decoded.decoded;
 }
 struct Package {
     QByteArray source_;Cancellation cancel_;QJsonObject publication_;QDomDocument opf_;QString rootfile_;Archive archive_;
@@ -232,8 +230,29 @@ void Package::cover(const QString& Path) {
     if(!Old.isEmpty() && Old!=Path)references(Old,Path,false,false);
 }
 void Package::chapter(const QString& Path,const QString& Title,int After) {
-    if(Title.trimmed().isEmpty() || Title.size()>1024)Reject("edit-chapter-title");QDomDocument Document;auto Html=element(Document,Xhtml,"html");const auto Languages=publication_["languages"].toArray();const auto Language=Languages.isEmpty()?QString{}:Languages.first().toString();if(!Language.isEmpty())Html.setAttributeNS("http://www.w3.org/XML/1998/namespace","xml:lang",Language);Document.appendChild(Html);
-    auto Head=element(Document,Xhtml,"head");Head.appendChild(element(Document,Xhtml,"title",Title));Html.appendChild(Head);auto Body=element(Document,Xhtml,"body");Body.appendChild(element(Document,Xhtml,"h1",Title));Body.appendChild(element(Document,Xhtml,"p",QStringLiteral("새 문단")));Html.appendChild(Body);add(Path,"application/xhtml+xml",bytes(Document));
+    if(Title.trimmed().isEmpty() || Title.size()>1024)Reject("edit-chapter-title");
+    // A new chapter keeps the stylesheets of the chapter it follows (or the first chapter), so a
+    // book's own CSS still applies. Best effort: an unreadable reference adds the chapter without them.
+    QStringList Styles;
+    try {
+        QStringList Order;
+        for(auto Node=spine().firstChildElement();!Node.isNull();Node=Node.nextSiblingElement())if(Node.localName()=="itemref") {
+            const auto Id=Node.attribute("idref");
+            for(auto Item=manifest().firstChildElement();!Item.isNull();Item=Item.nextSiblingElement())if(Item.attribute("id")==Id){Order.append(resolve(rootfile_,Item.attribute("href")));break;}
+        }
+        const auto Reference=After>=0 && After<Order.size()?Order[After]:Order.value(0);
+        if(!Reference.isEmpty() && media_.value(Reference)=="application/xhtml+xml") {
+            const auto Source=xml(read(Reference),Reference);const auto SourceHead=child(Source.documentElement(),Xhtml,"head");
+            for(auto Node=SourceHead.firstChildElement();!Node.isNull();Node=Node.nextSiblingElement()) {
+                if(Node.namespaceURI()!=Xhtml || Node.localName()!="link" || !tokens(Node.attribute("rel").toLower()).contains("stylesheet"))continue;
+                const auto Target=resolve(Reference,Node.attribute("href"));
+                if(!Target.isEmpty() && media_.value(Target)=="text/css" && !Styles.contains(Target))Styles.append(Target);
+            }
+        }
+    } catch(const Rejected&) { Styles.clear(); }QDomDocument Document;auto Html=element(Document,Xhtml,"html");const auto Languages=publication_["languages"].toArray();const auto Language=Languages.isEmpty()?QString{}:Languages.first().toString();if(!Language.isEmpty())Html.setAttributeNS("http://www.w3.org/XML/1998/namespace","xml:lang",Language);Document.appendChild(Html);
+    auto Head=element(Document,Xhtml,"head");Head.appendChild(element(Document,Xhtml,"title",Title));
+    for(const auto& Style:Styles){auto Link=element(Document,Xhtml,"link");Link.setAttribute("rel","stylesheet");Link.setAttribute("type","text/css");Link.setAttribute("href",relative(Path,Style));Head.appendChild(Link);}
+    Html.appendChild(Head);auto Body=element(Document,Xhtml,"body");Body.appendChild(element(Document,Xhtml,"h1",Title));Body.appendChild(element(Document,Xhtml,"p",QStringLiteral("새 문단")));Html.appendChild(Body);add(Path,"application/xhtml+xml",bytes(Document));
     auto Ref=element(opf_,Opf,"itemref");Ref.setAttribute("idref",item(Path).attribute("id"));QList<QDomElement> Spine;for(auto Node=spine().firstChildElement();!Node.isNull();Node=Node.nextSiblingElement())if(Node.localName()=="itemref")Spine.append(Node);
     if(After>=0 && After<Spine.size())spine().insertAfter(Ref,Spine[After]);else spine().appendChild(Ref);
     auto Rows=toc_;Rows.append(QJsonObject{{"label",Title},{"path",Path},{"fragment",""},{"depth",0}});toc(Rows);
@@ -242,6 +261,12 @@ void Package::move(const QString& Path,int Delta) {
     const auto Id=item(Path).attribute("id");QList<QDomElement> Refs;for(auto Ref=spine().firstChildElement();!Ref.isNull();Ref=Ref.nextSiblingElement())if(Ref.localName()=="itemref")Refs.append(Ref);int Index=-1;for(int I=0;I<Refs.size();++I)if(Refs[I].attribute("idref")==Id)Index=I;
     if(Index<0 || (Delta!=-1 && Delta!=1) || Index+Delta<0 || Index+Delta>=Refs.size())Reject("edit-chapter-move",Path);if(Delta<0)spine().insertBefore(Refs[Index],Refs[Index-1]);else spine().insertAfter(Refs[Index],Refs[Index+1]);
 }
+}
+QString ImageMediaType(const QByteArray& Bytes) {
+    if(Bytes.isEmpty() || Bytes.size()>ImageByteLimit)return {};
+    QBuffer Buffer;Buffer.setData(Bytes);if(!Buffer.open(QIODevice::ReadOnly))return {};QImageReader Reader(&Buffer);const auto Format=Reader.format();const auto Size=Reader.size();
+    if(!QList<QByteArray>{"png","jpeg","gif","webp"}.contains(Format) || !Size.isValid() || Size.width()>4096 || Size.height()>4096 || qint64(Size.width())*Size.height()>4194304 || Reader.read().isNull())return {};
+    return Format=="jpeg"?QStringLiteral("image/jpeg"):"image/"+QString::fromLatin1(Format);
 }
 QString EditModel::Structure(const QJsonObject& Request,const Cancellation& Cancel) {
     try {

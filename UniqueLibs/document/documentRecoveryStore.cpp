@@ -11,6 +11,7 @@
 #include <QLockFile>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QStringList>
 #include <QUuid>
 #include <set>
 #include <algorithm>
@@ -186,11 +187,24 @@ namespace hc::document
             return {{"encoding", QString::fromStdString(State.encoding_)}, {"eol", QString::fromStdString(State.lineEnding_)},
                 {"bom", State.bom_}, {"untitled", State.untitled_}, {"baselineSha256", QString::fromStdString(State.baselineSha256_)},
                 {"anchor", QString::number(State.anchor_)}, {"caret", QString::number(State.caret_)},
-                {"firstLine", QString::number(State.firstLine_)}, {"xOffset", QString::number(State.xOffset_)}};
+                {"firstLine", QString::number(State.firstLine_)}, {"xOffset", QString::number(State.xOffset_)},
+                {"firstSubLine", QString::number(State.firstSubLine_)}, {"suffix", QString::fromStdString(State.suffix_)},
+                {"untitledNumber", QString::number(State.untitledNumber_)}};
         }
+        // Records written before firstSubLine/suffix/untitledNumber (9 fields) stay readable as text, unnumbered.
         bool ReadTextState(const QJsonObject& Json, TextRecoveryState& State)
         {
-            if (Json.size() != 9 || !TextValid(Json["encoding"], 128) || !Json["bom"].isBool() || !Json["untitled"].isBool()) return false;
+            const bool Extended = Json.size() == 12;
+            if ((Json.size() != 9 && !Extended) || !TextValid(Json["encoding"], 128) || !Json["bom"].isBool() || !Json["untitled"].isBool()) return false;
+            if (Extended) {
+                const auto Suffix = Json["suffix"].toString();
+                State.suffix_ = QStringList{"txt", "md", "markdown"}.contains(Suffix) ? Suffix.toStdString() : std::string("txt");
+                for (const auto& Field : {std::pair{"firstSubLine", &State.firstSubLine_}, {"untitledNumber", &State.untitledNumber_}}) {
+                    std::uint64_t Value = 0;
+                    if (!Unsigned(Json[Field.first], Value) || Value > 0x7fffffff) return false;
+                    *Field.second = static_cast<std::int64_t>(Value);
+                }
+            }
             State.encoding_ = Json["encoding"].toString().toStdString(); State.lineEnding_ = Json["eol"].toString().toStdString();
             State.baselineSha256_ = Json["baselineSha256"].toString().toStdString();
             State.bom_ = Json["bom"].toBool(); State.untitled_ = Json["untitled"].toBool();

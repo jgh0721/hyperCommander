@@ -33,6 +33,10 @@ namespace hc::defaults::edit
             {"markdown.zoomIn",QObject::tr("미리보기 확대"),{},"markdown"},
             {"markdown.zoomOut",QObject::tr("미리보기 축소"),{},"markdown"},
             {"file.new", QObject::tr("새 문서"), "Ctrl+N", "common"},
+            {"file.newText", QObject::tr("새 텍스트 문서"), "", "common"},
+            {"file.newMarkdown", QObject::tr("새 Markdown 문서"), "", "common"},
+            {"file.newEpub", QObject::tr("새 EPUB 책"), "", "common"},
+            {"file.newImage", QObject::tr("새 이미지"), "", "common"},
             {"file.openWorkspace", QObject::tr("문서 열기"), "Ctrl+O", "common"},
             {"file.save", QObject::tr("저장"), "Ctrl+S", "common"},
             {"file.saveAs", QObject::tr("다른 이름으로 저장"), "Ctrl+Shift+S", "common"},
@@ -180,6 +184,12 @@ namespace hc::defaults::edit
             {"imageView/fullscreen", false},
             {"textView/detectIndent", true},
             {"recent/enabled", true}, {"recent/menuCount", 9},
+            // Ctrl+N: ask (종류 선택 팝업) · text · markdown. The popup starts on the last kind made.
+            {"common/newDocumentAction", "ask"}, {"common/newDocumentLastKind", "text"},
+            {"common/newImagePreset", "fhd"}, {"common/newImageWidth", 1920}, {"common/newImageHeight", 1080},
+            {"common/newImageBackground", "white"},
+            // Untitled Save As starts here (else Documents); a new EPUB remembers its folder and author.
+            {"common/lastSaveFolder", ""}, {"common/newEpubFolder", ""}, {"common/newEpubCreator", ""},
             {"pdfView/annotationToolbar", false}
         };
         return Values;

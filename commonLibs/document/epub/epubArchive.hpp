@@ -5,6 +5,7 @@
 #include <QMap>
 #include <QSet>
 #include <QXmlStreamReader>
+#include <utility>
 
 namespace hc::document::epub::detail
 {
@@ -30,6 +31,26 @@ namespace hc::document::epub::detail
         bool directory_ = false;
         qsizetype data_ = 0, end_ = 0;
         QByteArray central_;
+    };
+
+    // Canonical stored ZIP output: UTF-8 names, method 0, no data descriptors.
+    // EPUB requires mimetype as the first entry; the caller adds it first.
+    class StoredZipWriter final
+    {
+    public:
+        explicit StoredZipWriter(Cancellation Cancel, qsizetype CommentSize = 0)
+            : cancel_(std::move(Cancel)), commentSize_(CommentSize) {}
+        quint32 Offset() const { return quint32(output_.size()); }
+        void Add(const QString& Path, const QByteArray& Data);
+        // A prepared local header + data and its central record (offset already patched).
+        void Append(const QByteArray& Local, const QByteArray& Central);
+        QByteArray Finish(const QByteArray& Comment = {});
+    private:
+        void budget() const;
+        Cancellation cancel_;
+        qsizetype commentSize_ = 0;
+        QByteArray output_, central_;
+        int count_ = 0;
     };
 
     // Implicitly shared immutable bytes and a value-owned cancellation callback.

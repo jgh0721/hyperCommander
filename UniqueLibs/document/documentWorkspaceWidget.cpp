@@ -11,7 +11,18 @@
 #include "recentDocumentsDialog.hpp"
 #include "documentStartPage.hpp"
 #include "documentRecentMenu.hpp"
+#include "newDocumentChooser.hpp"
+#include "newEpubDialog.hpp"
+#include "epubRestoreConflictDialog.hpp"
+#include "commonLibs/document/epub/epubDraftStore.hpp"
+#include "commonLibs/document/epub/epubTemplate.hpp"
 #include <QMimeData>
+#include <QCursor>
+#include <QElapsedTimer>
+#include <QLocale>
+#include <QPainter>
+#include <QSet>
+#include <QStandardPaths>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QResizeEvent>
@@ -139,8 +150,12 @@ namespace hc::document
         }
         void ChooseSavePath(QWidget* Parent,const QString& Current,const QString& ViewId,std::function<void(QString)> Completion)
         {
+            // A text document whose start is .txt or .md offers that type first; other text keeps "all files".
+            const auto TextSuffix=QFileInfo(Current).suffix().toLower();
+            const auto TextFilters=TextSuffix=="txt"?QObject::tr("텍스트 문서 (*.txt);;Markdown (*.md *.markdown);;모든 파일 (*.*)")
+                :TextSuffix=="md"||TextSuffix=="markdown"?QObject::tr("Markdown (*.md *.markdown);;텍스트 문서 (*.txt);;모든 파일 (*.*)"):QStringLiteral("Text files (*.*)");
             const auto Filters=ViewId=="image"?QStringLiteral("PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp);;TIFF (*.tif *.tiff);;WebP (*.webp)")
-                :ViewId=="pdf"?QStringLiteral("PDF (*.pdf)"):ViewId=="epub"?QStringLiteral("EPUB (*.epub)"):QStringLiteral("Text files (*.*)");
+                :ViewId=="pdf"?QStringLiteral("PDF (*.pdf)"):ViewId=="epub"?QStringLiteral("EPUB (*.epub)"):TextFilters;
             const auto Initial=ViewId=="epub"?QFileInfo(Current).dir().filePath(QFileInfo(Current).completeBaseName()+"-edited.epub"):Current;
             auto* Dialog=new QFileDialog(Parent,QObject::tr("다른 이름 저장"),Initial,Filters);Dialog->setAcceptMode(QFileDialog::AcceptSave);
             Dialog->setDefaultSuffix(ViewId=="image"?"png":ViewId=="pdf"?"pdf":QFileInfo(Current).suffix());
@@ -201,6 +216,14 @@ namespace hc::document
     {
         QString id_ = QUuid::createUuid().toString(QUuid::Id128), path_, error_;
         QString sourceToken_, pendingToken_, recoveredName_, temporarySource_, displayName_;
+        // "새 문서 N" / "새 이미지 N" while the document has no file of its own; 0 otherwise.
+        int untitledNumber_ = 0;
+        bool untitledImage_ = false;
+        // Where Save As of a recovered copy starts (the original it came from), when known.
+        QString suggestedSavePath_;
+        // HotExit PDF restore: the original's SHA-256 at close, and the view position to reapply once loaded.
+        QString recoveryBaseline_;
+        QJsonObject restorePosition_;
         QString readingPath_,readingEntry_, recoveryNotice_;
         QString navigationAfterSave_;
         QByteArray pendingHash_;
@@ -300,7 +323,11 @@ namespace hc::document
             auto* Action = new QAction(Label, this); Action->setObjectName(Id); addAction(Action);
             connect(Action, &QAction::triggered, this, Callback); return Action;
         };
-        Add(tr("새 문서"), "newDocument", [this] { newDocument(); });
+        Add(tr("새 문서…"), "newDocument", [this] { requestNewDocument(nullptr); });
+        Add(tr("새 텍스트 문서"), "file.newText", [this] { newDocument(NewDocumentKind::Text); });
+        Add(tr("새 Markdown 문서"), "file.newMarkdown", [this] { newDocument(NewDocumentKind::Markdown); });
+        Add(tr("새 EPUB 책…"), "file.newEpub", [this] { newDocument(NewDocumentKind::Epub); });
+        Add(tr("새 이미지…"), "file.newImage", [this] { requestNewDocument(nullptr, true); });
         Add(tr("열기…"), "openDocument", [this] {
             auto* Dialog = new QFileDialog(this, tr("문서 열기"));
             Dialog->setFileMode(QFileDialog::ExistingFiles);
@@ -320,7 +347,7 @@ namespace hc::document
             else if (Tab->originalSave_) save(Tab, Tab->path_, false, Tab->pane_->CanEditEpub());
             else {
                 Tab->choosingSavePath_ = true;
-                ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
+                ChooseSavePath(this,saveAsStart(*Tab),Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
                     Tab->choosingSavePath_ = false;
                     if (Tab->closed_) return;
                     if (!Path.isEmpty()) save(Tab, Path, true);
@@ -332,7 +359,7 @@ namespace hc::document
             auto Tab = active(); if (!Tab) return;
             if (Tab->choosingSavePath_ || Tab->saving_) return;
             Tab->choosingSavePath_ = true;
-            ChooseSavePath(this,Tab->path_,Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
+            ChooseSavePath(this,saveAsStart(*Tab),Tab->pane_->ViewId(),[this,Tab](const QString& Path) {
                 Tab->choosingSavePath_ = false;
                 // Lossy formats ask for the quality after the path (plan 8.4, D7); cancel keeps the document as is.
                 const auto Suffix = QFileInfo(Path).suffix().toLower();
@@ -379,7 +406,7 @@ namespace hc::document
             QDir().mkpath(recoveryRoot_);const auto Path=recoveryRoot_+"/capture-"+QUuid::createUuid().toString(QUuid::Id128)+".png";
             QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);
             if(!Captured.image.save(&Buffer,"PNG")||!StoreCopy(Path,Bytes)){ShowShellError(tr("캡처 사본을 만들지 못했습니다."));return;}
-            auto Reply=open(Path,false,{},false);if(auto Tab=find(Reply["documentId"].toString())){Tab->originalAuthority_=false;Tab->temporarySource_=Path;}
+            auto Reply=open(Path,false,{},false);if(auto Tab=find(Reply["documentId"].toString())){Tab->originalAuthority_=false;Tab->temporarySource_=Path;nameUntitled(Tab,true);update();}
         });
         for (const auto& Command : DocumentShortcutRegistry::Commands()) if (Command.id_ == "document.findInFiles" || Command.id_ == "document.replaceInFiles") {
             auto* Action = new QAction(Command.label_ + QStringLiteral("…"), this); Action->setObjectName(Command.id_); addAction(Action);
@@ -547,7 +574,7 @@ namespace hc::document
             startPage_ = new DocumentStartPage(recent_, this); startPage_->setObjectName("documentStartPage"); startPage_->hide();
             connect(startPage_, &DocumentStartPage::OpenRequested, this, [this](const RecentDocument& Document) { openRecent(Document); });
             connect(startPage_, &DocumentStartPage::OpenFileRequested, this, [this] { if (auto* Open = findChild<QAction*>("openDocument")) Open->trigger(); });
-            connect(startPage_, &DocumentStartPage::NewDocumentRequested, this, [this] { if (auto* New = findChild<QAction*>("newDocument")) New->trigger(); });
+            connect(startPage_, &DocumentStartPage::NewDocumentRequested, this, [this] { requestNewDocument(startPage_ ? startPage_->findChild<QWidget*>("startNew") : nullptr); });
             connect(startPage_, &DocumentStartPage::ShowAllRequested, this, &DocumentWorkspaceWidget::showRecentDialog);
             connect(startPage_, &DocumentStartPage::FilesDropped, this, [this](const QStringList& Paths) { for (const auto& Path : Paths) open(Path, false, {}, false); });
             setAcceptDrops(true);
@@ -750,7 +777,7 @@ namespace hc::document
         const auto Tab = active();
         QString Title = QStringLiteral("HyperEditor");
         if (Tab) {
-            const auto Name = !Tab->recoveredName_.isEmpty() ? Tab->recoveredName_ : !Tab->displayName_.isEmpty() ? Tab->displayName_ : QFileInfo(Tab->path_).fileName();
+            const auto Name = documentName(*Tab);
             const auto Kind = Tab->pane_->Kind();
             const auto Mode = Kind == DocumentViewKind::EpubEdit ? tr("EPUB 편집") : Kind == DocumentViewKind::EpubRead ? tr("읽기") : QString();
             if (!Name.isEmpty()) Title = Name + (Mode.isEmpty() ? QString() : QStringLiteral(" — ") + Mode) + QStringLiteral(" — HyperEditor");
@@ -898,6 +925,7 @@ namespace hc::document
             const auto Reply=open(Copy,false,{},false,{},tr("복구 초안 · %1").arg(QFileInfo(Result.snapshot_.sourcePath_).fileName()));
             auto Tab=find(Reply["documentId"].toString());if(!Tab){QFile::remove(Copy);ShowShellError(Reply["error"].toString());return;}
             Tab->temporarySource_=Copy;Tab->originalAuthority_=false;Tab->originalSave_=false;Tab->recovered_=true;
+            Tab->suggestedSavePath_=Result.snapshot_.sourcePath_;
             auto* Timer=new QTimer(this);Timer->setInterval(100);auto Elapsed=std::make_shared<QElapsedTimer>();
             connect(Timer,&QTimer::timeout,this,[this,Timer,Elapsed,Id=Tab->id_,Path]{
                 auto Current=find(Id);if(!Current || closingWorkspace_ || (Elapsed->isValid() && Elapsed->elapsed()>60000)){Timer->stop();Timer->deleteLater();return;}
@@ -918,18 +946,259 @@ namespace hc::document
         }));
         return {{"accepted",true}};
     }
-    QJsonObject DocumentWorkspaceWidget::newDocument()
+    QJsonObject DocumentWorkspaceWidget::newDocument(NewDocumentKind Kind)
     {
         if (hotExitClosing_) return Error("document-hotexit-closing");
+        if (Kind == NewDocumentKind::Image) {
+            AppSettings Settings; NewImageSpec Spec;
+            Spec.width_ = Settings.value("common/newImageWidth").toInt(); Spec.height_ = Settings.value("common/newImageHeight").toInt();
+            Spec.background_ = Settings.value("common/newImageBackground").toString();
+            return newImage(Spec);
+        }
+        if (Kind == NewDocumentKind::Epub) {
+            // HyperViewer never edits an EPUB: like "편집", the host starts HyperEditor (--new-epub).
+            if (hosted_) {
+                if (!editRequest_.isEmpty()) return Error("document-edit-busy");
+                editRequest_ = {{"token", QUuid::createUuid().toString(QUuid::Id128)}, {"format", "epub-new"}, {"appearance", epubui::Appearance()}};
+                update(); return {{"accepted", true}};
+            }
+            ShowNewEpubDialog(); return {{"accepted", true}};
+        }
         if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
-        const auto Path = recoveryRoot_ + "/untitled-" + QUuid::createUuid().toString(QUuid::Id128) + ".txt";
+        const bool Markdown = Kind == NewDocumentKind::Markdown;
+        // The GUID only keeps recovery files apart; the tab shows "새 문서 N" (documentName()).
+        const auto Path = recoveryRoot_ + "/untitled-" + QUuid::createUuid().toString(QUuid::Id128) + (Markdown ? ".md" : ".txt");
         if (!QDir().mkpath(recoveryRoot_) || !StoreCopy(Path, {})) return Error("document-new-file-failed");
         const auto Reply = open(Path, false, {}, false);
         if (auto Tab = find(Reply["documentId"].toString())) {
-            Tab->originalAuthority_ = false; Tab->originalSave_ = false;
-            Tab->temporarySource_ = Path; Tab->recoveredName_ = tr("새 문서");
+            Tab->originalAuthority_ = false; Tab->originalSave_ = false; Tab->temporarySource_ = Path;
+            nameUntitled(Tab, false);
+            // HyperViewer's default Markdown view (preview) would show an empty page: a new one starts in source.
+            if (Markdown && hosted_) { RecentDocument Start; Start.markdownView_ = QStringLiteral("source"); Tab->restore_ = Start; }
+            update();
         } else QFile::remove(Path);
         return Reply;
+    }
+    void DocumentWorkspaceWidget::requestNewDocument(QWidget* Anchor, bool ImagePage)
+    {
+        if (hotExitClosing_) return;
+        // file.new again while the popup is open (the router may see the key first): make the selected kind.
+        // A popup that already chose is only waiting for deleteLater(): open a new one.
+        if (chooser_ && chooser_->isVisible()) { chooser_->ActivateCurrent(); return; }
+        AppSettings Settings;
+        const auto Mode = Settings.value("common/newDocumentAction").toString();
+        if (!ImagePage && (Mode == "text" || Mode == "markdown")) {
+            const auto Result = newDocument(Mode == "markdown" ? NewDocumentKind::Markdown : NewDocumentKind::Text);
+            if (Result.contains("error")) ShowShellError(Message(Result["error"].toString()));
+            return;
+        }
+        if (!Anchor) if (auto* Button = qobject_cast<QToolButton*>(QApplication::widgetAt(QCursor::pos()));
+            Button && Button->defaultAction() && Button->defaultAction()->objectName() == "toolbar.newDocument") Anchor = Button;
+        NewDocumentChooser::Options Options;
+        Options.initial_ = NewDocumentKindFrom(Settings.value("common/newDocumentLastKind").toString());
+        Options.viewer_ = hosted_; Options.imagePage_ = ImagePage;
+        Options.nextDocument_ = nextUntitledNumber(false); Options.nextImage_ = nextUntitledNumber(true);
+        Options.lastImage_.preset_ = Settings.value("common/newImagePreset").toString();
+        Options.lastImage_.width_ = Settings.value("common/newImageWidth").toInt();
+        Options.lastImage_.height_ = Settings.value("common/newImageHeight").toInt();
+        Options.lastImage_.background_ = Settings.value("common/newImageBackground").toString();
+        // A restricted HyperViewer reads the clipboard through the host broker: no clipboard row there.
+        if (!clipboardBroker_) if (const auto* Mime = QGuiApplication::clipboard()->mimeData(); Mime && Mime->hasImage())
+            if (const auto Image = qvariant_cast<QImage>(Mime->imageData()); !Image.isNull()) Options.clipboardSize_ = Image.size();
+        if (auto* Command = findChild<QAction*>("newDocument", Qt::FindDirectChildrenOnly)) Options.repeatKey_ = Command->shortcut();
+        if (Anchor && Anchor->isVisible()) { Options.useAnchor_ = true; Options.anchorBelow_ = Anchor->mapToGlobal(QPoint(0, Anchor->height())); }
+        else {
+            auto* Area = tabbed_ ? static_cast<QWidget*>(tabs_) : static_cast<QWidget*>(singlePane_);
+            Options.topCenter_ = mapToGlobal(QPoint(width() / 2, Area->mapTo(this, QPoint(0, 0)).y() + 12));
+        }
+        auto* Focus = QApplication::focusWidget();
+        chooser_ = NewDocumentChooser::Open(this, Options);
+        chooser_->SetFocusReturn(Focus);
+        connect(chooser_, &NewDocumentChooser::Chosen, this, [this](NewDocumentKind Kind) {
+            AppSettings Remember; Remember.setValue("common/newDocumentLastKind", NewDocumentKindId(Kind)); Remember.sync();
+            const auto Result = newDocument(Kind);
+            if (Result.contains("error")) ShowShellError(Message(Result["error"].toString()));
+        });
+        connect(chooser_, &NewDocumentChooser::ImageChosen, this, [this](const NewImageSpec& Spec) {
+            AppSettings Remember; Remember.setValue("common/newDocumentLastKind", "image");
+            Remember.setValue("common/newImageBackground", Spec.background_);
+            if (!Spec.clipboard_) {
+                Remember.setValue("common/newImagePreset", Spec.preset_);
+                if (Spec.preset_ == "custom") { Remember.setValue("common/newImageWidth", Spec.width_); Remember.setValue("common/newImageHeight", Spec.height_); }
+            }
+            Remember.sync();
+            const auto Result = newImage(Spec);
+            if (Result.contains("error") && shellError_.isEmpty()) ShowShellError(Message(Result["error"].toString()));
+        });
+    }
+    QJsonObject DocumentWorkspaceWidget::newImage(const NewImageSpec& Spec)
+    {
+        if (hotExitClosing_) return Error("document-hotexit-closing");
+        if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
+        QImage Clip;
+        if (Spec.clipboard_ && !clipboardBroker_) if (const auto* Mime = QGuiApplication::clipboard()->mimeData(); Mime && Mime->hasImage())
+            Clip = qvariant_cast<QImage>(Mime->imageData());
+        if (Spec.clipboard_ && Clip.isNull()) { ShowShellError(tr("클립보드에 이미지가 없습니다.")); return Error("document-new-image-clipboard"); }
+        const QSize Size = Clip.isNull() ? QSize(Spec.width_, Spec.height_) : Clip.size();
+        if (const auto Problem = NewImageError(Size.width(), Size.height()); !Problem.isEmpty()) { ShowShellError(Problem); return Error("document-new-image-size"); }
+        QImage Image(Size, QImage::Format_ARGB32_Premultiplied);
+        if (Image.isNull()) { ShowShellError(tr("새 이미지를 만들 메모리가 부족합니다.")); return Error("document-new-image-memory"); }
+        Image.fill(Spec.background_ == "clear" ? QColor(Qt::transparent) : Spec.background_ == "black" ? QColor(Qt::black) : QColor(Qt::white));
+        if (!Clip.isNull()) { QPainter Painter(&Image); Painter.drawImage(0, 0, Clip); }
+        else if (Spec.background_ != "clear") Image = Image.convertToFormat(QImage::Format_RGB32);
+        const int DotsPerMeter = qRound(qMax(1, Spec.dotsPerInch_) / 0.0254);
+        Image.setDotsPerMeterX(DotsPerMeter); Image.setDotsPerMeterY(DotsPerMeter);
+        QByteArray Bytes; QBuffer Buffer(&Bytes); Buffer.open(QIODevice::WriteOnly);
+        const auto Path = recoveryRoot_ + "/untitled-" + QUuid::createUuid().toString(QUuid::Id128) + ".png";
+        if (!Image.save(&Buffer, "PNG") || !QDir().mkpath(recoveryRoot_) || !StoreCopy(Path, Bytes)) { ShowShellError(tr("새 이미지를 만들지 못했습니다.")); return Error("document-new-file-failed"); }
+        const auto Reply = open(Path, false, {}, false);
+        if (auto Tab = find(Reply["documentId"].toString())) {
+            // A temporary source opens in edit mode and without folder navigation (load()).
+            Tab->originalAuthority_ = false; Tab->originalSave_ = false; Tab->temporarySource_ = Path;
+            nameUntitled(Tab, true); update();
+        } else QFile::remove(Path);
+        return Reply;
+    }
+    void DocumentWorkspaceWidget::ShowNewEpubDialog(bool CloseWhenCancelled)
+    {
+        if (hosted_ || hotExitClosing_) return;
+        if (epubCreating_) { ShowShellError(tr("새 EPUB을 만드는 중입니다.")); return; }
+        if (documents_.size() >= 16 || (!tabbed_ && !documents_.empty())) { ShowShellError(Message("document-workspace-limit")); return; }
+        if (auto* Open = findChild<NewEpubDialog*>(QString(), Qt::FindDirectChildrenOnly)) { Open->raise(); Open->activateWindow(); return; }
+        AppSettings Settings;
+        QString Folder;
+        if (auto Tab = active(); Tab && Tab->originalAuthority_ && Tab->temporarySource_.isEmpty() && !Tab->broker_ && QFileInfo(Tab->path_).isAbsolute())
+            Folder = QFileInfo(Tab->path_).absolutePath();
+        if (Folder.isEmpty() || !QFileInfo(Folder).isDir()) Folder = Settings.value("common/newEpubFolder").toString();
+        if (Folder.isEmpty() || !QFileInfo(Folder).isDir()) Folder = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        const auto Language = QLocale().name().section('_', 0, 0);
+        auto* Dialog = new NewEpubDialog(this, Folder, Settings.value("common/newEpubCreator").toString(), Language.isEmpty() ? QStringLiteral("ko") : Language);
+        connect(Dialog, &NewEpubDialog::Requested, this, [this, CloseWhenCancelled](const NewEpubRequest& Request) { createEpub(Request, CloseWhenCancelled); });
+        if (CloseWhenCancelled) connect(Dialog, &QDialog::rejected, this, [this] { if (documents_.empty() && !epubCreating_) QTimer::singleShot(0, this, [this] { close(); }); });
+        Dialog->open();
+    }
+    void DocumentWorkspaceWidget::createEpub(const NewEpubRequest& Request, bool CloseWhenCancelled)
+    {
+        epubCreating_ = true; update();
+        using Created = std::pair<epub::EditOutput, QString>;
+        auto* Watcher = new QFutureWatcher<Created>(this);
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Request, CloseWhenCancelled] {
+            const auto Result = Watcher->result(); Watcher->deleteLater(); epubCreating_ = false;
+            if (Result.second.isEmpty()) {
+                AppSettings Settings;
+                Settings.setValue("common/newEpubFolder", QFileInfo(Request.path_).absolutePath());
+                Settings.setValue("common/newEpubCreator", Request.book_.creator_); Settings.sync();
+                // The caret goes into the first chapter's empty paragraph.
+                const auto Chapter = Result.first.prepared_ ? QString::fromUtf8(Result.first.prepared_->Read(QString::fromLatin1(epub::NewBookFirstChapter))) : QString{};
+                const auto At = Chapter.indexOf(QStringLiteral("<p></p>"));
+                const auto Reply = OpenForEpubEdit(Request.path_, {}, -1, QString::fromLatin1(epub::NewBookFirstChapter), At < 0 ? -1 : int(At) + 3);
+                if (Reply.contains("error")) ShowShellError(Message(Reply["error"].toString()));
+                update(); return;
+            }
+            // D5: the dialog closed before writing; a failure brings it back with the same values.
+            const bool Exists = Result.second == "exists";
+            auto* Dialog = new NewEpubDialog(this, QFileInfo(Request.path_).absolutePath(), Request.book_.creator_, Request.book_.language_);
+            connect(Dialog, &NewEpubDialog::Requested, this, [this, CloseWhenCancelled](const NewEpubRequest& Next) { createEpub(Next, CloseWhenCancelled); });
+            if (CloseWhenCancelled) connect(Dialog, &QDialog::rejected, this, [this] { if (documents_.empty()) QTimer::singleShot(0, this, [this] { close(); }); });
+            Dialog->Restore(Request, Exists ? QString{} : tr("EPUB을 만들지 못했습니다. (%1)").arg(Result.second), Exists);
+            Dialog->open(); update();
+        });
+        Watcher->setFuture(QtConcurrent::run([Request]() -> Created {
+            auto Output = epub::CreateBook(Request.book_);
+            if (!Output) return {Output, Output.error_ + (Output.location_.isEmpty() ? QString{} : ": " + Output.location_)};
+            if (QFileInfo::exists(Request.path_)) return {Output, QStringLiteral("exists")};
+            // The product's save path with a "must not exist" expectation: never replaces a file that appeared meanwhile.
+            auto Saved = SaveTextFile(Request.path_, Output.bytes_, storage::DestinationExpectation{}, {}, {}, false, true);
+            if (!Saved.HasValue()) return {Output, QFileInfo::exists(Request.path_) ? QStringLiteral("exists") : QString::fromStdString(Saved.Failure().code_)};
+            return {Output, QString{}};
+        }));
+    }
+    QJsonObject DocumentWorkspaceWidget::OpenForEpubEdit(const QString& Path, const QString& Locator, int Chapter, const QString& Resource, int Position, const QString& DraftPath)
+    {
+        if (hosted_) return Error("document-edit-unavailable");
+        const auto Reply = open(Path, false, {}, false);
+        const auto Id = Reply["documentId"].toString();
+        if (Id.isEmpty() || Reply.contains("error")) return Reply;
+        auto* Timer = new QTimer(this); Timer->setInterval(50);
+        auto Elapsed = std::make_shared<QElapsedTimer>(); Elapsed->start();
+        auto Begun = std::make_shared<bool>(false);
+        connect(Timer, &QTimer::timeout, this, [this, Timer, Elapsed, Begun, Id, Locator, Chapter, Resource, Position, DraftPath] {
+            const auto Stop = [Timer] { Timer->stop(); Timer->deleteLater(); };
+            auto Tab = find(Id);
+            if (!Tab || closingWorkspace_ || Elapsed->elapsed() > 60000) { Stop(); return; }
+            if (Tab->loading_) return;
+            if (!Tab->error_.isEmpty() || !Tab->pane_->IsEpub()) { Stop(); return; }
+            if (!*Begun) {
+                *Begun = true;
+                const auto Result = Handle({{"action", "epub.edit.begin"}, {"documentId", Id}, {"locator", Locator}, {"chapter", Chapter}});
+                if (Result.contains("error")) { ShowShellError(tr("EPUB 편집 모드를 열지 못했습니다: %1").arg(Result["error"].toString())); Stop(); }
+                return;
+            }
+            if (!Tab->pane_->IsEpubEditing() || !Tab->pane_->CanEditEpub() || Tab->pane_->IsBusy()) return;
+            if (!DraftPath.isEmpty()) Tab->pane_->Execute({{"action", "epub.edit.recover"}, {"path", DraftPath}});
+            else if (!Resource.isEmpty()) {
+                Tab->pane_->Execute({{"action", "epub.edit.select"}, {"resource", Resource}});
+                if (Position >= 0) Tab->pane_->Execute({{"action", "epub.edit.cursor"}, {"position", Position}});
+                if (active() == Tab) Tab->pane_->Focus();
+            }
+            Stop(); update();
+        });
+        Timer->start();
+        return Reply;
+    }
+    QString DocumentWorkspaceWidget::documentName(const Tab& Value) const
+    {
+        if (!Value.recoveredName_.isEmpty()) return Value.recoveredName_;
+        if (Value.untitledNumber_ > 0) {
+            if (Value.untitledImage_) return tr("새 이미지 %1").arg(Value.untitledNumber_);
+            const auto Suffix = QFileInfo(Value.path_).suffix().toLower();
+            return Suffix == "md" || Suffix == "markdown" ? tr("새 문서 %1.md").arg(Value.untitledNumber_) : tr("새 문서 %1").arg(Value.untitledNumber_);
+        }
+        if (!Value.displayName_.isEmpty()) return Value.displayName_;
+        return QFileInfo(Value.path_).fileName();
+    }
+    QString DocumentWorkspaceWidget::untitledFileName(const Tab& Value) const
+    {
+        if (Value.untitledImage_) return tr("새 이미지 %1.png").arg(Value.untitledNumber_);
+        const auto Suffix = QFileInfo(Value.path_).suffix().toLower();
+        return Suffix == "md" || Suffix == "markdown" ? tr("새 문서 %1.md").arg(Value.untitledNumber_) : tr("새 문서 %1.txt").arg(Value.untitledNumber_);
+    }
+    int DocumentWorkspaceWidget::nextUntitledNumber(bool Image, int Preferred) const
+    {
+        QSet<int> Used;
+        for (const auto& Tab : documents_) if (!Tab->closed_ && Tab->untitledNumber_ > 0 && Tab->untitledImage_ == Image) Used.insert(Tab->untitledNumber_);
+        if (Preferred > 0 && !Used.contains(Preferred)) return Preferred;
+        int Number = 1; while (Used.contains(Number)) ++Number;
+        return Number;
+    }
+    void DocumentWorkspaceWidget::nameUntitled(const std::shared_ptr<Tab>& Value, bool Image, int Preferred)
+    {
+        if (!Value) return;
+        Value->untitledNumber_ = 0; Value->untitledImage_ = Image; Value->recoveredName_.clear();
+        Value->untitledNumber_ = nextUntitledNumber(Image, Preferred);
+    }
+    QString DocumentWorkspaceWidget::saveAsStart(const Tab& Value) const
+    {
+        if (!Value.suggestedSavePath_.isEmpty()) return Value.suggestedSavePath_;
+        if (Value.temporarySource_.isEmpty()) return Value.path_;
+        QString Folder, Name = Value.untitledNumber_ > 0 ? untitledFileName(Value) : QString{};
+        if (Value.input_.recoveryOrigin_) {
+            const auto Origin = QString::fromStdString(Value.input_.recoveryOrigin_->localPath_);
+            if (!Origin.isEmpty() && QFileInfo(Origin).isAbsolute()) {
+                if (QFileInfo(QFileInfo(Origin).absolutePath()).isDir()) Folder = QFileInfo(Origin).absolutePath();
+                if (Name.isEmpty()) Name = QFileInfo(Origin).fileName();
+            }
+        }
+        if (Folder.isEmpty()) Folder = lastSaveFolder();
+        if (Name.isEmpty()) Name = documentName(Value);
+        if (QFileInfo(Name).suffix().isEmpty()) Name += "." + QFileInfo(Value.path_).suffix();
+        return QDir(Folder).filePath(Name);
+    }
+    QString DocumentWorkspaceWidget::lastSaveFolder() const
+    {
+        const auto Folder = AppSettings().value("common/lastSaveFolder").toString();
+        if (!Folder.isEmpty() && QFileInfo(Folder).isAbsolute() && QFileInfo(Folder).isDir()) return Folder;
+        return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
     }
     QWidget* DocumentWorkspaceWidget::currentPane() const { if (searchPanel_ && tabs_->isVisible() && tabs_->currentWidget() == searchPanel_) return nullptr; return tabbed_ ? tabs_->currentWidget() : singlePane_->currentWidget(); }
     std::shared_ptr<DocumentWorkspaceWidget::Tab> DocumentWorkspaceWidget::active() const
@@ -1000,6 +1269,7 @@ namespace hc::document
         auto Tab = std::make_shared<DocumentWorkspaceWidget::Tab>(); Tab->path_ = Path;
         Tab->session_->SetUnlimitedBytes(hosted_);
         Tab->hotExitRestore_ = pendingHotExitRestore_;
+        Tab->recoveryBaseline_ = pendingRecoveryBaseline_;
         Tab->displayName_ = DisplayName;
         Tab->encodingOverride_ = std::exchange(pendingOpenEncoding_, {});
         Tab->hostSlot_ = HostSlot; Tab->sourceToken_ = SourceToken; Tab->broker_ = Broker; Tab->recovered_ = !RecoveryPath.isEmpty();
@@ -1075,7 +1345,7 @@ namespace hc::document
             const auto Path=recoveryRoot_+"/image-copy-"+QUuid::createUuid().toString(QUuid::Id128)+".png";
             QByteArray Bytes;QBuffer Buffer(&Bytes);Buffer.open(QIODevice::WriteOnly);QDir().mkpath(recoveryRoot_);
             if(!Image.save(&Buffer,"PNG")||!StoreCopy(Path,Bytes)){ShowShellError(tr("이미지 사본을 만들지 못했습니다."));return;}
-            auto Reply=open(Path,false,{},false);if(auto Copy=find(Reply["documentId"].toString())){Copy->originalAuthority_=false;Copy->originalSave_=false;Copy->temporarySource_=Path;}
+            auto Reply=open(Path,false,{},false);if(auto Copy=find(Reply["documentId"].toString())){Copy->originalAuthority_=false;Copy->originalSave_=false;Copy->temporarySource_=Path;nameUntitled(Copy,true);update();}
         });
         connect(Pane,&DocumentViewPane::EncodingRequested,this,[this,Tab](const QString&) {Tab->error_="document-encoding-unrepresentable";update();});
         connect(Pane,&DocumentViewPane::ReinterpretRequested,this,[this,Tab](const QString& Encoding) {
@@ -1178,7 +1448,7 @@ namespace hc::document
             QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;Tab->preparation_=Progress->preparation_;}
             if(!Image.isNull())Tab->pane_->ShowLoadingPreview(Image);
             if(Tab->progress_.kind_==DocumentProgress::Kind::Read) {
-                const auto Name=QFileInfo(Tab->path_).fileName();const auto& State=Tab->preparation_;
+                const auto Name=documentName(*Tab);const auto& State=Tab->preparation_;
                 const auto Done=State["bytesDone"].toInteger(),Total=State["bytesTotal"].toInteger();
                 const auto Items=State["itemsDone"].toInteger(),ItemsTotal=State["itemsTotal"].toInteger();
                 if(ItemsTotal>0){Tab->progress_.label_=tr("이미지 분석 중 · %1").arg(Name);Tab->progress_.fraction_=double(qMin(Items,ItemsTotal))/double(ItemsTotal);Tab->progress_.count_.reset();}
@@ -1234,8 +1504,22 @@ namespace hc::document
                 else {
                     Tab->everReady_=true;finishProgress(Tab,true);
                     Tab->session_->SetBinaryContent(true);
-                    {auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;Tab->session_->CompleteOpen(Generation,OpenedDocument{std::move(Source),Serialized.bytes_.toStdString()});}
-                    if (Tab->input_.recoveryRecord_) {
+                    // D10: a preserved PDF opens dirty, against its original's bytes (reattached) or, as a copy, against nothing.
+                    const bool PdfRecovery = Tab->input_.recoveryRecord_ && !Tab->input_.recoveryRecord_->text_;
+                    {
+                        auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;
+                        const auto Baseline = !PdfRecovery ? Serialized.bytes_.toStdString()
+                            : Tab->input_.recoveryOriginalMatched_ ? Tab->input_.recoveryRecord_->bytes_ : std::string{};
+                        Tab->session_->CompleteOpen(Generation,OpenedDocument{std::move(Source),Baseline});
+                        if (PdfRecovery) {
+                            Tab->session_->Execute("document.setText", Serialized.bytes_.toStdString()); Tab->session_->MarkRecovered();
+                            if (Tab->hotExitRestore_) { auto Origin = *Tab->input_.recoveryRecord_; Origin.bytes_.clear(); restoredOriginals_.push_back(std::move(Origin)); }
+                            Tab->input_.recoveryRecord_->bytes_.clear();
+                            Tab->recoveryNotice_ = Tab->originalAuthority_ ? tr("저장하지 않은 주석을 복구했습니다. 원본 파일은 변경하지 않았습니다.")
+                                : tr("복구 내용을 별도 문서로 열었습니다. 원본 파일은 변경하지 않았습니다.");
+                        }
+                    }
+                    if (Tab->input_.recoveryRecord_ && !PdfRecovery) {
                         const auto Record = *Tab->input_.recoveryRecord_;
                         Tab->loading_ = true;
                         const bool Restored = Tab->pane_->RestoreTextRecovery(Record);
@@ -1245,7 +1529,8 @@ namespace hc::document
                             Tab->session_->Execute("document.setText", Serialized.bytes_.toStdString()); Tab->session_->MarkRecovered();
                             if (Tab->hotExitRestore_) { auto Origin = Record; Origin.bytes_.clear(); restoredOriginals_.push_back(std::move(Origin)); }
                             Tab->input_.recoveryRecord_->bytes_.clear();
-                            if (Record.text_->untitled_) Tab->recoveredName_ = tr("새 문서");
+                            // D8: an untitled document keeps its number (and .md, from the restored copy's extension).
+                            if (Record.text_->untitled_) nameUntitled(Tab, false, int(Record.text_->untitledNumber_));
                             else if (Tab->originalAuthority_) Tab->recoveredName_.clear();
                             Tab->recoveryNotice_ = Tab->originalAuthority_ ? tr("저장하지 않은 변경을 복구했습니다. 원본 파일은 변경하지 않았습니다.")
                                 : tr("복구 내용을 별도 문서로 열었습니다. 원본 파일은 변경하지 않았습니다.");
@@ -1253,6 +1538,11 @@ namespace hc::document
                     }
                     Tab->pane_->SetClipboardBroker(clipboardBroker_);
                     if (auto Position = std::exchange(Tab->cleanRestoreState_, std::nullopt)) Tab->pane_->RestoreTextPosition(*Position);
+                    // D11: a PDF's page, zoom and in-page scroll; an EPUB reader's recorded locator.
+                    if (const auto Position = std::exchange(Tab->restorePosition_, QJsonObject{}); !Position.isEmpty()) {
+                        if (Tab->pane_->ViewId() == "pdf") { auto Request = Position; Request["action"] = "pdf.position"; Tab->pane_->Execute(Request); }
+                        else if (Tab->pane_->IsEpub()) Tab->pane_->LocateEpub(Position["locator"].toString());
+                    }
                     if(auto Restore=std::exchange(Tab->restore_,std::nullopt)) {
                         if(Restore->pdfPage_>0)Tab->pane_->Execute({{"action","pdf.page"},{"page",Restore->pdfPage_-1}});
                         if(!Restore->markdownView_.isEmpty()&&Tab->pane_->IsMarkdown())Tab->pane_->RunViewCommand("markdown."+Restore->markdownView_);
@@ -1282,7 +1572,7 @@ namespace hc::document
         });
         auto Recovery = recovery_;
         const QSize PreviewBounds=(Tab->pane_->size()*Tab->pane_->devicePixelRatioF()).expandedTo(QSize(256,256));
-        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, PreviewBounds, AutoRestore=Tab->hotExitRestore_, Unlimited=hosted_, Override=Tab->encodingOverride_]()->storage::Result<TextInput> {
+        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, PreviewBounds, AutoRestore=Tab->hotExitRestore_, Baseline=Tab->recoveryBaseline_, Unlimited=hosted_, Override=Tab->encodingOverride_]()->storage::Result<TextInput> {
             const auto Read=[&]()->storage::Result<TextInput> {
                 storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
                 Context.reportProgress_=[Progress](const storage::OperationContext::Progress& P){
@@ -1300,11 +1590,29 @@ namespace hc::document
                             Original.Value().recoveryRecord_ = Record.Value(); Original.Value().recoveryOriginalMatched_ = true; return Original;
                         }
                     }
-                    if (!StoreCopy(Path, QByteArray::fromStdString(Record.Value().bytes_))) return storage::Result<TextInput>{storage::Error{storage::ErrorCategory::Unavailable, "document-recovery-copy"}};
-                    auto Input = ReadDocumentFile(Path, Context, Unlimited);
+                    // D10: a HotExit PDF snapshot reattaches to an unchanged original. The view shows the preserved
+                    // annotations; the record keeps the original bytes as the clean baseline (load() marks it dirty).
+                    if (!Record.Value().text_ && Record.Value().viewId_ == "pdf" && AutoRestore && !Baseline.isEmpty()
+                        && Record.Value().document_.source_.sourceToken_.empty() && !Record.Value().document_.source_.localPath_.empty()) {
+                        auto Original = ReadDocumentFile(QString::fromStdString(Record.Value().document_.source_.localPath_), Context, Unlimited);
+                        if (Original.HasValue() && Original.Value().viewId_ == "pdf" && QString::fromLatin1(Original.Value().hash_.toHex()) == Baseline) {
+                            auto Preserved = Record.Value(); const auto Annotated = QByteArray::fromStdString(Preserved.bytes_);
+                            Preserved.bytes_ = Original.Value().bytes_.toStdString();
+                            Original.Value().bytes_ = Annotated;
+                            Original.Value().recoveryRecord_ = std::move(Preserved); Original.Value().recoveryOriginalMatched_ = true; return Original;
+                        }
+                    }
+                    // The copy's extension selects the view: a Markdown record comes back as Markdown (txt · md · markdown).
+                    auto Copy = Path;
+                    if (Record.Value().text_ && QFileInfo(Path).fileName().startsWith("restored-")) {
+                        const auto Suffix = QString::fromStdString(Record.Value().text_->suffix_);
+                        if (QStringList{"txt", "md", "markdown"}.contains(Suffix)) Copy = QFileInfo(Path).dir().filePath(QFileInfo(Path).completeBaseName() + "." + Suffix);
+                    }
+                    if (!StoreCopy(Copy, QByteArray::fromStdString(Record.Value().bytes_))) return storage::Result<TextInput>{storage::Error{storage::ErrorCategory::Unavailable, "document-recovery-copy"}};
+                    auto Input = ReadDocumentFile(Copy, Context, Unlimited);
                     if (Input.HasValue()) {
                         Input.Value().recoveryOrigin_ = Record.Value().document_.source_;
-                        if (Record.Value().text_) Input.Value().recoveryRecord_ = Record.Value();
+                        if (Record.Value().text_ || (AutoRestore && Record.Value().viewId_ == "pdf")) Input.Value().recoveryRecord_ = Record.Value();
                     }
                     return Input;
                 }
@@ -1440,6 +1748,16 @@ namespace hc::document
             } else if(!ExportOnly) {
                 Tab->error_.clear();
                 Tab->pane_->CommitSaved(Destination,Output.bytes_,QByteArray::fromStdString(Request->content_),Result.Value().hash_,!Tab->Dirty());
+                // Save As into another folder: untitled documents start there next time.
+                if(!Tab->temporarySource_.isEmpty() || QFileInfo(Tab->path_).absolutePath()!=QFileInfo(Destination).absolutePath()){
+                    AppSettings Settings;Settings.setValue("common/lastSaveFolder",QFileInfo(Destination).absolutePath());Settings.sync();
+                }
+                // The document now has a file of its own: drop the untitled name and the temporary source.
+                if(!Tab->temporarySource_.isEmpty()){
+                    if(QFileInfo(Tab->temporarySource_).absoluteFilePath().compare(QFileInfo(Destination).absoluteFilePath(),Qt::CaseInsensitive)!=0)QFile::remove(Tab->temporarySource_);
+                    Tab->temporarySource_.clear();
+                }
+                Tab->untitledNumber_=0;Tab->suggestedSavePath_.clear();
                 Tab->path_=Destination;Tab->displayName_.clear();Tab->input_.source_=Result.Value().source_;Tab->input_.hash_=Result.Value().hash_;
                 Tab->originalAuthority_=true;Tab->originalSave_=Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u);
                 Tab->recoveryNotice_.clear();
@@ -1521,7 +1839,7 @@ namespace hc::document
                 QByteArray Utf8; Record.text_ = Tab->pane_->CaptureTextRecovery(Utf8);
                 if (Record.text_) {
                     Record.viewId_ = "text"; Record.bytes_ = Utf8.toStdString(); Record.ownerWindow_ = workspaceId_.toStdString();
-                    Record.text_->untitled_ = !Tab->temporarySource_.isEmpty();
+                    Record.text_->untitled_ = !Tab->temporarySource_.isEmpty(); Record.text_->untitledNumber_ = Tab->untitledNumber_;
                     Record.text_->baselineSha256_ = Record.text_->untitled_ ? std::string{} : Tab->input_.hash_.toHex().toStdString();
                     if (Record.text_->untitled_) Record.document_.source_.localPath_.clear();
                 }
@@ -1564,7 +1882,7 @@ namespace hc::document
             const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : State.error_ ? QString::fromStdString(State.error_->code_) : !State.cleanupErrors_.empty() ? QString("document-saved-cleanup-warning") : QString{};
             QJsonArray Cleanup; for (const auto& Issue : State.cleanupErrors_) Cleanup.append(QString::fromStdString(Issue.code_));
             Tabs.append(QJsonObject{{"documentId", Tab->id_}, {"path", Tab->path_},
-                {"displayName", Tab->displayName_.isEmpty() ? QFileInfo(Tab->path_).fileName() : Tab->displayName_},
+                {"displayName", documentName(*Tab)},
                 {"sourceReady", Tab->pane_->IsEpub() && !Tab->loading_ && !Tab->closeRequested_ && !closingWorkspace_ && !Tab->input_.hash_.isEmpty() && Tab->error_.isEmpty()},
                 {"imagePresentationReady", !Tab->closeRequested_ && !closingWorkspace_ && Code.isEmpty()
                     && (Tab->loading_ || Tab->navigating_ ? Tab->pane_->HasLoadingPreview() : Tab->pane_->ImagePresentationReady())},
@@ -1681,7 +1999,8 @@ namespace hc::document
         if (Action == "present" || Action == "conceal") return {{"accepted", hosted_}};
         if (Action == "escape") { escapeViewer(); return {{"accepted", hosted_ && closeViewerOnEscape_}}; }
         if (Action == "preferences") { findChild<QAction*>("documentPreferences")->trigger(); return {{"accepted", true}}; }
-        if (Action == "new") return newDocument();
+        // Automation keeps "new" = a text document; "kind" picks markdown · image · epub without the popup.
+        if (Action == "new") return newDocument(NewDocumentKindFrom(Request["kind"].toString()));
         if (Action == "epub.recovery.open") return openEpubRecovery(Request["path"].toString());
         if (Action == "focus") {
             if (hosted_ && !IsWindowVisible(reinterpret_cast<HWND>(winId()))) return {{"accepted", false}};
@@ -1722,6 +2041,7 @@ namespace hc::document
         if(Action=="editResult"){
             if(editRequest_.isEmpty()||Request["token"]!=editRequest_["token"])return Error("document-edit-token");
             if(auto Target=find(editRequest_["documentId"].toString());Target&&!Request["accepted"].toBool())Target->error_="document-editor-start-failed";
+            else if(editRequest_["format"]=="epub-new"&&!Request["accepted"].toBool())ShowShellError(tr("HyperEditor를 시작하지 못했습니다."));
             editRequest_={};update();return {{"accepted",true}};
         }
         if (Action == "prepareClose") { for (const auto& Tab : documents_) if (Tab->Dirty()) return {{"canClose", false}}; return {{"canClose", IsIdle()}}; }
@@ -1854,8 +2174,7 @@ namespace hc::document
         }
         for (const auto& Tab : documents_) if (tabbed_) {
             const auto Index = tabs_->indexOf(Tab->pane_); if (Index < 0) continue;
-            const auto Name = !Tab->recoveredName_.isEmpty() ? Tab->recoveredName_
-                : !Tab->displayName_.isEmpty() ? Tab->displayName_ : QFileInfo(Tab->path_).fileName();
+            const auto Name = documentName(*Tab);
             tabs_->setTabText(Index, Name + (Tab->Dirty() ? " *" : "") + (Tab->loading_ ? tr(" · 여는 중") : "")
                 + (Tab->session_->Snapshot().error_ || !Tab->error_.isEmpty() ? tr(" · 오류") : ""));
         }
@@ -1911,7 +2230,10 @@ namespace hc::document
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
                 Action->setEnabled(Tab && !Tab->loading_ && ((Tab->pane_->ViewId() == "text"
                     && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->pane_->IsReadOnly())) || Tab->pane_->IsEpubEditing()));
-            if (Id == "file.new") Action->setEnabled((hosted_ || documents_.size() < 16) && (tabbed_ || documents_.empty()));
+            if (Id == "file.new" || Id == "file.newText" || Id == "file.newMarkdown" || Id == "file.newImage")
+                Action->setEnabled((hosted_ || documents_.size() < 16) && (tabbed_ || documents_.empty()));
+            // HyperViewer hands a new EPUB to HyperEditor: no tab of its own.
+            if (Id == "file.newEpub") Action->setEnabled(!epubCreating_ && (hosted_ || ((documents_.size() < 16) && (tabbed_ || documents_.empty()))));
             if(Tab&&Tab->pane_->IsMarkdown()&&!Tab->pane_->MarkdownSourceVisible()&&(Id.startsWith("text.")||Id.startsWith("edit.")))Action->setEnabled(Id=="text.find"||Id=="edit.copy"||Id=="edit.selectAll");
             if (Id == "tab.next" || Id == "tab.previous") Action->setEnabled(tabbed_ && tabs_->count() > 1);
         }
@@ -2227,7 +2549,8 @@ namespace hc::document
         if(!Tab->pane_->RequestClose()){Tab->closeRequested_=true;return;}
         if(Tab->everReady_ && !Tab->loading_)recordRecent(Tab);
         if(editRequest_["documentId"]==Tab->id_)editRequest_={};
-        const auto Disposition = PreserveRecovery && hotExitReady_ && Tab->Dirty() ? CloseDisposition::PreserveSnapshot
+        // An EPUB keeps its edits in the EPUB draft (kept by PreserveRecovery); its session closes as discarded.
+        const auto Disposition = PreserveRecovery && hotExitReady_ && Tab->Dirty() && !Tab->pane_->IsEpub() ? CloseDisposition::PreserveSnapshot
             : Discard ? CloseDisposition::Discard : CloseDisposition::KeepChanges;
         if (!workspace_.Remove(Tab->id_.toStdString(), Disposition).HasValue()) return;
         Tab->cancellation_->request_stop(); Tab->closed_ = true; Tab->pane_->Cancel();
@@ -2397,6 +2720,65 @@ namespace hc::document
         const auto Text = appliedPreferences_["documentViews"].toObject()["textView"].toObject();
         return !hosted_ && Text["hotExitPolicyVersion"].toInt() == 1 && Text["hotExitEnabled"].toBool(true);
     }
+    void DocumentWorkspaceWidget::nextEpubRestore()
+    {
+        if (epubRestoreBusy_ || epubRestoreQueue_.isEmpty() || closingWorkspace_ || hosted_) return;
+        epubRestoreBusy_ = true;
+        const auto Item = epubRestoreQueue_.takeFirst();
+        const auto Root = EpubSourceEditor::RecoveryDirectory();
+        // The session names a file inside the draft folder; nothing else is followed.
+        const auto Draft = QDir(Root).filePath(QFileInfo(Item["draft"].toString()).fileName());
+        const auto Path = Item["path"].toString();
+        ++recoveryWorkers_;
+        auto* Watcher = new QFutureWatcher<EpubRestoreFacts>(this);
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Item, Draft, Path] {
+            const auto Facts = Watcher->result(); Watcher->deleteLater(); --recoveryWorkers_;
+            const auto Next = [this] { epubRestoreBusy_ = false; QTimer::singleShot(0, this, [this] { nextEpubRestore(); }); update(); };
+            const auto OpenCurrent = [this, Item, Path] {
+                if (!QFileInfo::exists(Path)) return;
+                if (Item["mode"].toString() == "edit") OpenForEpubEdit(Path, Item["locator"].toString(), Item["chapter"].toInt(-1));
+                else open(Path, false, {}, false);
+            };
+            if (!Facts.error_.isEmpty()) {
+                ShowShellError(tr("EPUB 편집 초안을 읽지 못해 파일만 엽니다: %1 · 초안 파일은 유지합니다.").arg(Facts.error_));
+                OpenCurrent(); Next(); return;
+            }
+            // Unchanged on disk: open as if A were reopened, with the edits applied from the draft (A itself untouched).
+            if (!Facts.sourceChanged_) {
+                const auto Reply = OpenForEpubEdit(Path, Item["locator"].toString(), Item["chapter"].toInt(-1), {}, -1, Draft);
+                if (Reply.contains("error")) ShowShellError(Message(Reply["error"].toString()));
+                Next(); return;
+            }
+            auto* Dialog = new EpubRestoreConflictDialog(Facts, this);
+            connect(Dialog, &EpubRestoreConflictDialog::Chosen, this, [this, Draft, OpenCurrent, Next](int Choice) {
+                if (Choice == EpubRestoreConflictDialog::OpenEditsAsCopy) {
+                    const auto Reply = openEpubRecovery(Draft);
+                    if (Reply.contains("error")) ShowShellError(Message(Reply["error"].toString()));
+                } else if (Choice == EpubRestoreConflictDialog::OpenCurrent) OpenCurrent();
+                else if (Choice == EpubRestoreConflictDialog::DiscardDraft) {
+                    (void)QtConcurrent::run([Root = EpubSourceEditor::RecoveryDirectory(), Draft] { epub::DraftStore::Remove(Root, Draft); });
+                    OpenCurrent();
+                }
+                Next();
+            });
+            Dialog->open();
+        });
+        Watcher->setFuture(QtConcurrent::run([Root, Draft, Path] { return GatherEpubRestoreFacts(Root, Draft, Path); }));
+    }
+    bool DocumentWorkspaceWidget::hotExitEpub(const std::shared_ptr<Tab>& Tab) const
+    {
+        // A real local EPUB: edits live in the EPUB draft store (D9). Copies and provider items keep asking.
+        return !hosted_ && Tab->pane_->IsEpub() && !Tab->loading_ && Tab->originalAuthority_ && Tab->temporarySource_.isEmpty()
+            && !Tab->hostSlot_ && !Tab->broker_ && Tab->sourceToken_.isEmpty() && QFileInfo(Tab->path_).isAbsolute()
+            && (!Tab->Dirty() || (Tab->pane_->IsEpubEditing() && Tab->pane_->EpubDraftEnabled()));
+    }
+    bool DocumentWorkspaceWidget::hotExitPdf(const std::shared_ptr<Tab>& Tab) const
+    {
+        // D10: the annotated PDF fits one recovery snapshot (64 MiB); larger ones keep asking.
+        return !hosted_ && Tab->pane_->ViewId() == "pdf" && !Tab->loading_ && Tab->originalAuthority_ && Tab->temporarySource_.isEmpty()
+            && !Tab->hostSlot_ && !Tab->broker_ && Tab->sourceToken_.isEmpty() && QFileInfo(Tab->path_).isAbsolute()
+            && Tab->session_->Text().size() <= DocumentByteLimit && !Tab->pane_->IsBusy();
+    }
     bool DocumentWorkspaceWidget::hotExitEligible(const std::shared_ptr<Tab>& Tab) const
     {
         return !hosted_ && !Tab->hostSlot_ && !Tab->broker_ && Tab->sourceToken_.isEmpty()
@@ -2417,11 +2799,19 @@ namespace hc::document
     {
         if (searchPanel_ && searchPanel_->Busy()) { ShowShellError(tr("파일 바꾸기가 진행 중입니다. 완료하거나 중지한 뒤 닫으십시오.")); return false; }
         if (!hotExitClosing_) { ++hotExitCloseEpoch_; QGuiApplication::inputMethod()->commit(); hotExitClosing_ = true; closingWorkspace_ = true; }
+        // D9: an edited EPUB writes its final draft and editor workspace first; IsIdle() waits for that write.
+        const bool FlushWorkspaces = std::exchange(epubFlushEpoch_, hotExitCloseEpoch_) != hotExitCloseEpoch_;
+        for (const auto& Tab : documents_) if (hotExitEpub(Tab) && !hotExitDiscard_.contains(Tab->id_)) {
+            if (Tab->Dirty()) Tab->pane_->CheckpointEpub();
+            if (FlushWorkspaces) Tab->pane_->FlushEpubWorkspace();
+        }
         if (!IsIdle() || hotExitPublishing_) return false;
         for (const auto& Tab : documents_) {
             if (!Tab->Dirty() || hotExitDiscard_.contains(Tab->id_)) continue;
             QByteArray Bytes;
             if (hotExitEligible(Tab) && Tab->pane_->CaptureTextRecovery(Bytes, false)) continue;
+            if (hotExitEpub(Tab) && Tab->pane_->EpubDraftCurrent() && !Tab->pane_->EpubDraftPath().isEmpty()) continue;
+            if (hotExitPdf(Tab)) continue;
             const QScopedValueRollback Guard(closePromptActive_, true);
             const int Choice = closePrompt_ ? closePrompt_(Tab->id_) : int(hc::ui::MessageDialog::question(this,
                 tr("변경 내용 저장"), tr("이 문서는 HotExit로 보존할 수 없습니다. 변경 내용을 저장하시겠습니까?"),
@@ -2454,8 +2844,45 @@ namespace hc::document
             if (Closing) cancelHotExitClose(tr("복원에 실패한 문서를 먼저 확인하십시오. 기존 사본은 유지합니다.")); return;
         }
         QJsonArray Items; std::vector<RecoverySnapshot> Captures;
+        const bool RestoreClean = PreferenceValue(appliedPreferences_, "textView/restoreCleanDocuments").toBool();
         for (const auto& Tab : documents_) {
-            if (!hotExitEligible(Tab) || hotExitDiscard_.contains(Tab->id_)) continue;
+            if (hotExitDiscard_.contains(Tab->id_)) continue;
+            // D9: the EPUB itself plus its draft; the draft is the preserved edit, the original stays untouched.
+            if (hotExitEpub(Tab)) {
+                if (!Tab->Dirty() && !RestoreClean) continue;
+                if (Tab->Dirty() && (!Tab->pane_->EpubDraftCurrent() || Tab->pane_->EpubDraftPath().isEmpty())) {
+                    if (Closing) { cancelHotExitClose(tr("EPUB 편집 초안을 아직 쓰지 못했습니다. 잠시 후 다시 닫으십시오.")); return; }
+                    continue;
+                }
+                const auto Reader = Tab->pane_->ViewState()["epub"].toObject();
+                QJsonObject Item{{"documentId", Tab->id_}, {"path", Tab->path_}, {"kind", "epub"}, {"mode", Tab->pane_->IsEpubEditing() ? "edit" : "read"},
+                    {"locator", Reader["locator"].toString()}, {"chapter", Reader["chapterIndex"].toInt(-1)}};
+                if (Tab->Dirty()) Item["draft"] = QFileInfo(Tab->pane_->EpubDraftPath()).fileName();
+                Items.append(Item); continue;
+            }
+            // D10: the annotated PDF as one snapshot, reattached on restore when the original is unchanged.
+            if (hotExitPdf(Tab)) {
+                QJsonObject Item{{"documentId", Tab->id_}, {"path", Tab->path_}, {"kind", "pdf"}, {"position", Tab->pane_->PdfPosition()}};
+                if (Tab->Dirty()) {
+                    Item["baselineSha256"] = QString::fromLatin1(Tab->input_.hash_.toHex());
+                    if (Closing) {
+                        Tab->session_->AdvanceRecoveryRevision();
+                        RecoverySnapshot Capture; Capture.document_ = Tab->session_->Snapshot(); Capture.viewId_ = "pdf";
+                        Capture.bytes_ = Tab->session_->Text(); Capture.ownerWindow_ = workspaceId_.toStdString();
+                        Captures.push_back(std::move(Capture));
+                    } else {
+                        const auto& Receipt = Tab->checkpointReceipt_;
+                        if (!Receipt || Receipt->viewId_ != "pdf" || Receipt->document_.generation_ != Tab->session_->Snapshot().generation_
+                            || Receipt->document_.revision_ != Tab->Revision()) return;
+                        Item["snapshot"] = QFileInfo(QString::fromStdString(Receipt->snapshotPath_)).fileName();
+                        Item["sha256"] = QString::fromStdString(Receipt->checksum_);
+                        Item["generation"] = QString::number(Receipt->document_.generation_);
+                        Item["revision"] = QString::number(Receipt->document_.revision_);
+                    }
+                } else if (!RestoreClean) continue;
+                Items.append(Item); continue;
+            }
+            if (!hotExitEligible(Tab)) continue;
             QByteArray Bytes; auto Text = Tab->pane_->CaptureTextRecovery(Bytes, Closing && Tab->Dirty());
             if (!Text) { if (Closing && Tab->Dirty()) { cancelHotExitClose(tr("완전한 텍스트를 읽을 수 없습니다.")); return; } continue; }
             QJsonObject Item{{"documentId", Tab->id_}, {"path", Tab->temporarySource_.isEmpty() ? Tab->path_ : QString{}}};
@@ -2466,7 +2893,7 @@ namespace hc::document
                     Tab->session_->AdvanceRecoveryRevision();
                     RecoverySnapshot Capture; Capture.document_ = Tab->session_->Snapshot(); Capture.text_ = Text;
                     Capture.bytes_ = Bytes.toStdString(); Capture.ownerWindow_ = workspaceId_.toStdString();
-                    Capture.text_->untitled_ = !Tab->temporarySource_.isEmpty();
+                    Capture.text_->untitled_ = !Tab->temporarySource_.isEmpty(); Capture.text_->untitledNumber_ = Tab->untitledNumber_;
                     Capture.text_->baselineSha256_ = Capture.text_->untitled_ ? std::string{} : Tab->input_.hash_.toHex().toStdString();
                     if (Capture.text_->untitled_) Capture.document_.source_.localPath_.clear();
                     Captures.push_back(std::move(Capture));
@@ -2480,7 +2907,8 @@ namespace hc::document
                     Item["revision"] = QString::number(Receipt->document_.revision_);
                 }
             } else if (!PreferenceValue(appliedPreferences_, "textView/restoreCleanDocuments").toBool() || !Tab->temporarySource_.isEmpty()) continue;
-            Item["position"] = QJsonObject{{"anchor", double(Text->anchor_)}, {"caret", double(Text->caret_)}, {"firstLine", double(Text->firstLine_)}, {"xOffset", double(Text->xOffset_)}};
+            Item["position"] = QJsonObject{{"anchor", double(Text->anchor_)}, {"caret", double(Text->caret_)}, {"firstLine", double(Text->firstLine_)},
+                {"firstSubLine", double(Text->firstSubLine_)}, {"xOffset", double(Text->xOffset_)}};
             Items.append(Item);
         }
         QJsonObject Manifest{{"profileId", qApp->property("documentRecoveryProfile").toString()}, {"documents", Items}, {"activeDocumentId", active() ? active()->id_ : QString{}},
@@ -2514,7 +2942,8 @@ namespace hc::document
                 }));
             }
             if (Closing) {
-                for (const auto& Tab : documents_) if (Tab->Dirty() && !hotExitDiscard_.contains(Tab->id_)) {
+                // EPUB edits are preserved by their draft, not by a session snapshot.
+                for (const auto& Tab : documents_) if (Tab->Dirty() && !hotExitDiscard_.contains(Tab->id_) && !Tab->pane_->IsEpub()) {
                     if (!Tab->checkpointReceipt_ || !Tab->session_->AuthorizeRecoveryClose(*Tab->checkpointReceipt_)) { cancelHotExitClose(tr("보존한 문서 버전이 현재 편집 내용과 다릅니다.")); return; }
                 }
                 if (hotExitProgress_) { hotExitProgress_->reset(); hotExitProgress_->deleteLater(); hotExitProgress_.clear(); }
@@ -2561,19 +2990,39 @@ namespace hc::document
                 tr("이전 편집이 정상적으로 종료되지 않았습니다. 보존된 내용을 복구하시겠습니까?"), QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) { restoringLock_.reset(); restoringSessionId_.clear(); return; }
             restoredActive_ = Manifest["activeDocumentId"].toString(); pendingHotExitRestore_ = true;
             for (const auto& Value : Manifest["documents"].toArray()) {
-                const auto Item = Value.toObject(); QJsonObject Reply;
-                if (!Item["snapshot"].toString().isEmpty()) Reply = Handle({{"action", "recover"}, {"path", recoveryRoot_ + "/" + Item["snapshot"].toString()}});
-                else if (!Item["path"].toString().isEmpty()) Reply = open(Item["path"].toString(), false, {}, false);
-                restoredIds_[Item["documentId"].toString()] = Reply["documentId"].toString();
-                if (Item["snapshot"].toString().isEmpty()) if (auto Tab = find(Reply["documentId"].toString())) {
-                    const auto Position = Item["position"].toObject(); TextRecoveryState State;
-                    State.anchor_ = qMax(0, Position["anchor"].toInt()); State.caret_ = qMax(0, Position["caret"].toInt());
-                    State.firstLine_ = qMax(0, Position["firstLine"].toInt()); State.xOffset_ = qMax(0, Position["xOffset"].toInt());
-                    Tab->cleanRestoreState_ = State;
+                const auto Item = Value.toObject(); QJsonObject Reply; const auto Kind = Item["kind"].toString();
+                if (Kind == "epub") {
+                    // D9: an EPUB with a draft is compared with the file first (nextEpubRestore); others reopen in their mode.
+                    if (!Item["draft"].toString().isEmpty()) { epubRestoreQueue_.append(Item); continue; }
+                    if (Item["mode"].toString() == "edit") Reply = OpenForEpubEdit(Item["path"].toString(), Item["locator"].toString(), Item["chapter"].toInt(-1));
+                    else {
+                        Reply = open(Item["path"].toString(), false, {}, false);
+                        if (auto Tab = find(Reply["documentId"].toString())) Tab->restorePosition_ = QJsonObject{{"locator", Item["locator"].toString()}};
+                    }
+                } else if (Kind == "pdf") {
+                    // D10: the snapshot reattaches to the original only while the original keeps its SHA-256.
+                    if (!Item["snapshot"].toString().isEmpty()) {
+                        pendingRecoveryBaseline_ = Item["baselineSha256"].toString();
+                        Reply = Handle({{"action", "recover"}, {"path", recoveryRoot_ + "/" + Item["snapshot"].toString()}});
+                        pendingRecoveryBaseline_.clear();
+                    } else if (!Item["path"].toString().isEmpty()) Reply = open(Item["path"].toString(), false, {}, false);
+                    if (auto Tab = find(Reply["documentId"].toString())) Tab->restorePosition_ = Item["position"].toObject();
+                } else {
+                    if (!Item["snapshot"].toString().isEmpty()) Reply = Handle({{"action", "recover"}, {"path", recoveryRoot_ + "/" + Item["snapshot"].toString()}});
+                    else if (!Item["path"].toString().isEmpty()) Reply = open(Item["path"].toString(), false, {}, false);
+                    if (Item["snapshot"].toString().isEmpty()) if (auto Tab = find(Reply["documentId"].toString())) {
+                        const auto Position = Item["position"].toObject(); TextRecoveryState State;
+                        State.anchor_ = qMax(0, Position["anchor"].toInt()); State.caret_ = qMax(0, Position["caret"].toInt());
+                        State.firstLine_ = qMax(0, Position["firstLine"].toInt()); State.xOffset_ = qMax(0, Position["xOffset"].toInt());
+                        State.firstSubLine_ = qMax(0, Position["firstSubLine"].toInt());
+                        Tab->cleanRestoreState_ = State;
+                    }
                 }
+                restoredIds_[Item["documentId"].toString()] = Reply["documentId"].toString();
                 if (Reply.contains("error")) { restorationIncomplete_ = true; ShowShellError(tr("일부 문서를 복원하지 못했습니다. 복구 사본은 유지합니다.")); }
             }
             pendingHotExitRestore_ = false;
+            if (!epubRestoreQueue_.isEmpty()) QTimer::singleShot(0, this, [this] { nextEpubRestore(); });
             const auto Geometry = QByteArray::fromBase64(Manifest["geometry"].toString().toLatin1());
             if (!Geometry.isEmpty()) { restoreGeometry(Geometry); if (screen() && !screen()->availableGeometry().intersects(frameGeometry())) move(screen()->availableGeometry().topLeft()); }
         });
@@ -2674,7 +3123,9 @@ QJsonArray DocumentWorkspaceWidget::searchSources() const {
     for (const auto& Tab : documents_) {
         if (Tab->loading_ || Tab->closed_ || (Tab->pane_->ViewId() != "text" && !Tab->pane_->IsMarkdown())) continue;
         Sources.append(QJsonObject{{"path", Tab->path_}, {"document", Tab->id_}, {"text", Tab->pane_->SearchText()},
-            {"revision", QString::number(Tab->Revision())}, {"encoding", Tab->input_.encoding_}, {"bom", Tab->input_.bom_}, {"readOnly", Tab->pane_->IsReadOnly()}});
+            {"revision", QString::number(Tab->Revision())}, {"encoding", Tab->input_.encoding_}, {"bom", Tab->input_.bom_}, {"readOnly", Tab->pane_->IsReadOnly()},
+            // Untitled and recovered documents live in the recovery folder: results show their name, not that path.
+            {"displayName", Tab->temporarySource_.isEmpty() ? QString{} : documentName(*Tab)}});
     }
     return Sources;
 }

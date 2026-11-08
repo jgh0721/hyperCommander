@@ -17,6 +17,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QUuid>
@@ -89,9 +90,16 @@ void EpubSourceEditor::convertImageResource(const QString& Source) {
     hc::ui::ApplyDialogFrame(&Dialog,Buttons,{{},tr("선택한 이미지를 PNG 또는 JPEG로 변환합니다."),fm::ui::glyph::File});
     if(Dialog.exec()==QDialog::Accepted)structure({{"operation","image-convert"},{"resource",Source},{"destination",Path->text()},{"format",Format->currentData().toString()},{"quality",Quality->value()},{"flattenAlpha",Alpha->isChecked()},{"flattenAnimation",Animation->isChecked()}});
 }
+// The first free Text/chapter-NNN.xhtml beside the package file (case-insensitive, like the archive).
+QString EpubSourceEditor::nextChapterPath() const {
+    auto Folder=QFileInfo(model_.Publication()["rootfile"].toString()).path();Folder=Folder=="."?QString{}:Folder+"/";Folder+="Text/";
+    QSet<QString> Existing;for(const auto& Value:model_.Publication()["resources"].toArray())Existing.insert(Value.toObject()["path"].toString().toCaseFolded());
+    int Number=1;while(Existing.contains((Folder+QString("chapter-%1.xhtml").arg(Number,3,10,QChar('0'))).toCaseFolded()))++Number;
+    return Folder+QString("chapter-%1.xhtml").arg(Number,3,10,QChar('0'));
+}
 void EpubSourceEditor::addChapterResource(const QString& After) {
     const auto Spine=model_.Publication()["spine"].toArray();int Index=-1;for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==(After.isEmpty()?current_:After))Index=I;
-    QDialog Dialog(this);Dialog.setWindowTitle(tr("새 장 추가"));auto* Form=new QFormLayout(&Dialog);auto* Title=new QLineEdit(tr("새 장"),&Dialog);Title->setMaxLength(1024);Form->addRow(tr("제목"),Title);auto* Path=new QLineEdit(QFileInfo(model_.Publication()["rootfile"].toString()).path()+"/Text/chapter-"+QUuid::createUuid().toString(QUuid::Id128)+".xhtml",&Dialog);Path->setMaxLength(2048);Form->addRow(tr("EPUB 내부 경로"),Path);
+    QDialog Dialog(this);Dialog.setWindowTitle(tr("새 장 추가"));auto* Form=new QFormLayout(&Dialog);auto* Title=new QLineEdit(tr("새 장"),&Dialog);Title->setMaxLength(1024);Form->addRow(tr("제목"),Title);auto* Path=new QLineEdit(nextChapterPath(),&Dialog);Path->setMaxLength(2048);Form->addRow(tr("EPUB 내부 경로"),Path);
     auto* Note=new QLabel(Index>=0?tr("%1 뒤에 읽기 순서를 추가하고 목차에도 연결합니다.").arg(QFileInfo(Spine[Index].toObject()["path"].toString()).fileName()):tr("읽기 순서 마지막에 추가하고 목차에도 연결합니다."),&Dialog);Note->setWordWrap(true);Form->addRow(Note);auto* Buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&Dialog);Buttons->button(QDialogButtonBox::Ok)->setText(tr("확인"));Buttons->button(QDialogButtonBox::Cancel)->setText(tr("취소"));Form->addRow(Buttons);connect(Buttons,&QDialogButtonBox::accepted,&Dialog,&QDialog::accept);connect(Buttons,&QDialogButtonBox::rejected,&Dialog,&QDialog::reject);
     hc::ui::ApplyDialogFrame(&Dialog,Buttons,{{},tr("선택한 장 다음에 새 장을 추가합니다."),fm::ui::glyph::NewFile});
     if(Dialog.exec()==QDialog::Accepted)structure({{"operation","chapter-add"},{"resource",Path->text()},{"title",Title->text()},{"after",Index}});

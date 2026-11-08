@@ -4,6 +4,10 @@
 #include <QList>
 #include <memory>
 namespace hc::document::epub {
+inline constexpr qsizetype ImageByteLimit=8*1024*1024;
+/// 책에 넣을 수 있는 이미지인지 판정한다. PNG · JPEG · GIF · WebP, 8 MiB · 4096 px · 4 MP 이하.
+/// 받을 수 있으면 미디어 형식(image/png 등), 아니면 빈 문자열.
+QString ImageMediaType(const QByteArray& Bytes);
 class EditModel;
 struct EditOutput {QByteArray bytes_;QString error_,location_;std::shared_ptr<const EditModel> prepared_;explicit operator bool()const{return error_.isEmpty() && !bytes_.isEmpty();}};
 class EditModel final {

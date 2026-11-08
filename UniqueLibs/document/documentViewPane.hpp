@@ -75,6 +75,15 @@ namespace hc::document
         void DiscardEpubRecovery();
         void SetEpubRecoveryEnabled(bool Enabled);
         void CheckpointEpub();
+        // HotExit (D9): the EPUB draft path, whether it holds the current edits, and the editor workspace flush.
+        QString EpubDraftPath() const;
+        // D11: page, zoom mode/level and the in-page scroll of a PDF (empty for other views).
+        QJsonObject PdfPosition() const;
+        // D11: moves the EPUB reader to a recorded locator once its reading state is ready.
+        void LocateEpub(const QString& Locator);
+        bool EpubDraftCurrent() const;
+        bool EpubDraftEnabled() const;
+        void FlushEpubWorkspace();
         bool CanUndo() const;
         bool CanRedo() const;
         void Undo();
@@ -126,8 +135,11 @@ namespace hc::document
         void EditEpubRequested();
     protected:
         void resizeEvent(QResizeEvent* Event) override;
+        void showEvent(QShowEvent* Event) override;
     private:
         QWidget* loadingPreview_ = nullptr;
+        // A text position restored while hidden; applied on first show, when wrapped rows are known.
+        std::optional<TextRecoveryState> pendingTextPosition_;
 
         bool editEpub(const QString& Locator={},int Chapter=-1);
         // Mode menu and View/Edit menu items per view kind (documentViewMenus.cpp).

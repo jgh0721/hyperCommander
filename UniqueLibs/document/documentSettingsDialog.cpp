@@ -118,6 +118,10 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
         Combo(Display, "appearance/documentWorkspace/" + Key, Key == "mainMenuMode" ? tr("메뉴 표시") : tr("도구모음 표시"), {tr("뷰 권장값"), tr("표시"), tr("숨기기")}, {"recommended", "show", "hide"});
     auto* WindowCard = Card(General, tr("창"));
     Check(WindowCard, "documentViews/common/closeViewerOnEscape", tr("ESC 키를 눌러 창 닫기 (HyperViewer 전용)"));
+    Combo(WindowCard, "documentViews/common/newDocumentAction", tr("Ctrl+N 동작"),
+        {tr("종류 선택 창 표시"), tr("텍스트 문서 바로 만들기"), tr("Markdown 문서 바로 만들기")}, {"ask", "text", "markdown"});
+    Note(WindowCard, tr("종류 선택 창은 마지막으로 만든 종류를 먼저 고릅니다. 열린 채 Ctrl+N을 다시 누르면 고른 종류를 만듭니다. "
+        "종류별 명령(새 텍스트 문서 · 새 Markdown 문서 · 새 EPUB 책 · 새 이미지)은 단축키 페이지에서 키를 지정할 수 있습니다."));
     auto* Recent = Card(General, tr("최근 항목"));
     Check(Recent, "documentViews/recent/enabled", tr("최근 항목 기록"));
     {
