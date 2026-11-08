@@ -129,7 +129,11 @@ namespace hc::plugins
         {
             if (container_) return Invalid("host-viewer-already-open");
             preview_ = Request["preview"].toBool();
-            if ((Request.size() != 5 && Request.size() != 6) || (Request.size() == 6 && !Request["preview"].isBool())
+            const bool HasPrefix = Request.contains("readPrefix");
+            const auto FieldCount = Request.size() - (HasPrefix ? 1 : 0);
+            if (HasPrefix && (manifest_.id_ != "builtin.hyperviewer" || !Request["readPrefix"].isObject()
+                || Request["readPrefix"].toObject()["bytes"].toString().size() > 87384)) return Invalid("host-viewer-prefix");
+            if ((FieldCount != 5 && FieldCount != 6) || (FieldCount == 6 && !Request["preview"].isBool())
                 || !Request["parent"].isString() || !Request["file"].isString()
                 || !Dimension(Request["width"]) || !Dimension(Request["height"])) return Invalid("host-viewer-open-fields");
             const auto Flags = Request["flags"].toInt(-1);
@@ -153,6 +157,7 @@ namespace hc::plugins
             if (!container_) return HostError("host-viewer-container", GetLastError());
             if (dopus_)
             {
+                if (QCoreApplication::instance()) QCoreApplication::instance()->setProperty("hc.readPrefix", Request["readPrefix"].toObject());
                 auto Opened = dopus_->Open(container_, File, Request["width"].toInt(), Request["height"].toInt(), Request["preview"].toBool());
                 if (!Opened.HasValue()) { close(); return Opened.Failure(); } viewer_ = Opened.Value();
             }

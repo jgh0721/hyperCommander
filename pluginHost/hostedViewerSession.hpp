@@ -36,6 +36,8 @@ namespace hc::plugins
         bool documentChannel_ = false;
         // Opt-in local native saving is owned by the plugin, not the document broker.
         bool directOriginal_ = false;
+        bool externalArchive_ = false, externalArchiveClosed_ = false, externalArchiveDone_ = false;
+        QString externalArchiveDraft_;
         QJsonObject documentState_, documentReply_;
     };
     class PluginViewerService;
@@ -66,6 +68,8 @@ namespace hc::plugins
         storage::Result<std::uint64_t> SendCommand(int Command, int Parameter);
         storage::Result<std::uint64_t> Search(QString Text, int Flags);
         storage::Result<std::uint64_t> SendDocument(QJsonObject Request);
+        // 0: close plugin and inspect, 1: publish saved draft, 2: discard saved draft.
+        storage::Result<std::uint64_t> CloseArchive(int Decision = 0);
         struct DocumentInput { std::shared_ptr<storage::IContentSource> source_; std::shared_ptr<storage::IWritableStorage> writer_; };
         storage::Result<std::uint64_t> OpenDocuments(std::vector<DocumentInput> Inputs, bool ReplacePrepared = false);
     private:

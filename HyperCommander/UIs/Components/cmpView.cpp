@@ -2086,7 +2086,7 @@ void CGridView::oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args )
 
 void CGridView::oo_grid_rowFocusChanged( int OldRowIndex, int NewRowIndex )
 {
-    if (OldRowIndex != NewRowIndex) resetRenameClicks();
+    if (OldRowIndex != NewRowIndex) { resetRenameClicks(); emit sigPreviewSelectionChanged(); }
     if (renameEditor_ && !renameSubmitting_ && !renameAwaitingRefresh_ && OldRowIndex != NewRowIndex)
         CancelRename();
     UNREFERENCED_PARAMETER( OldRowIndex );
@@ -2803,10 +2803,23 @@ void CQuickView::openContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IC
     const auto Entry = Source->Describe();
     informationText_ = tr("파일 정보\n\n이름: %1\n위치: %2\n크기: %3 byte")
         .arg(QString::fromStdString(Entry.name_), QString::fromStdString(Entry.locator_.root_)).arg(Entry.size_);
-    std::vector<hc::document::DocumentHandlerTarget> Plugins;
-    for (const auto& Choice : QPluginHostSettings::ViewerChoices(hc::settings::AppSettings()))
-        Plugins.push_back(hc::document::BuildPluginViewerTarget(Choice.name_, Choice.options_, Choice.extensions_));
-    const auto Catalog = hc::document::BuildDocumentHandlerCatalog(hc::settings::AppSettings(), QCoreApplication::applicationDirPath(), std::move(Plugins));
+    auto& Settings = hc::settings::AppSettings();
+    const auto SettingsKey = QJsonDocument(QJsonObject{{"editors", Settings.Read(hc::settings::Section::Editors)},
+        {"plugins", Settings.Read(hc::settings::Section::Plugins)}}).toJson(QJsonDocument::Compact);
+    const auto Stamp = [](const QString& Path) { const QFileInfo File(Path); return qMakePair(File.size(), File.lastModified().toMSecsSinceEpoch()); };
+    bool Changed = !handlerCatalog_ || handlerSettings_ != SettingsKey;
+    for (auto It = handlerFiles_.cbegin(); !Changed && It != handlerFiles_.cend(); ++It) Changed = Stamp(It.key()) != It.value();
+    if (Changed) {
+        std::vector<hc::document::DocumentHandlerTarget> Plugins;
+        for (const auto& Choice : QPluginHostSettings::ViewerChoices(Settings))
+            Plugins.push_back(hc::document::BuildPluginViewerTarget(Choice.name_, Choice.options_, Choice.extensions_));
+        handlerCatalog_ = std::make_shared<hc::document::DocumentHandlerCatalog>(hc::document::BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), std::move(Plugins)));
+        handlerSettings_ = SettingsKey; handlerFiles_.clear();
+        for (const auto& [Id, Target] : handlerCatalog_->targets_)
+            for (const auto& Path : {Target.plugin_.binaryPath_, Target.plugin_.manifestPath_, Target.plugin_.executable_, Target.executable_})
+                if (!Path.isEmpty()) handlerFiles_.insert(Path, Stamp(Path));
+    }
+    const auto& Catalog = *handlerCatalog_;
     auto Default = Catalog.defaultView_;
     const auto Override = Catalog.overrides_[QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower()].toObject()["view"].toString();
     if (!Override.isEmpty()) Default = Override.toStdString();

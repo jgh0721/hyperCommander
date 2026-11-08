@@ -12,6 +12,10 @@
 #include <QCryptographicHash>
 #include <QJsonArray>
 #include <QFileInfo>
+#include <QTemporaryDir>
+#include <QDir>
+#include <QJsonDocument>
+#include <QDateTime>
 #include <QStringDecoder>
 #include "wlxDetection.hpp"
 #include "pluginApplicationRule.hpp"
@@ -21,6 +25,7 @@
 #include <condition_variable>
 #include <deque>
 #include <thread>
+#include <future>
 
 namespace hc::plugins
 {
@@ -39,12 +44,12 @@ namespace hc::plugins
             return (Entry.locator_.kind_==LocatorKind::Local || Entry.locator_.kind_==LocatorKind::Smb) && !Entry.directory_
                 && QStringList{"zip","cbz","rar","cbr","7z","cb7"}.contains(QFileInfo(QString::fromUtf8(Entry.locator_.root_)).suffix().toLower());
         }
-        bool IsDirectImage(const EntrySnapshot& Entry)
+        bool IsDirectNative(const EntrySnapshot& Entry)
         {
-            if(Entry.locator_.kind_!=LocatorKind::Local || Entry.directory_ || (Entry.attributes_&FILE_ATTRIBUTE_REPARSE_POINT))return false;
+            if((Entry.locator_.kind_!=LocatorKind::Local && Entry.locator_.kind_!=LocatorKind::Smb) || Entry.directory_ || (Entry.attributes_&FILE_ATTRIBUTE_REPARSE_POINT))return false;
             const auto Path=QString::fromUtf8(Entry.locator_.root_);
-            const auto Extension=QFileInfo(Path).suffix().toLower().toStdString();
-            return QFileInfo(Path).isAbsolute() && std::ranges::find(hc::document::ImageDocumentExtensions,Extension)!=hc::document::ImageDocumentExtensions.end();
+            // All native inputs, including SMB and redirected RDP, share the verified direct-read path.
+            return QFileInfo(Path).isAbsolute();
         }
         // Only the approved built-in reader may borrow the original archive.
         // Keep a read-only handle without write/delete sharing for the complete
@@ -70,17 +75,17 @@ namespace hc::plugins
             auto Verified=Source->Verify(Context).get();if(!Verified.HasValue())return Verified.Failure();
             return Lease;
         }
-        Result<std::shared_ptr<IMaterializedFileLease>> BorrowImage(const std::shared_ptr<IContentSource>& Source,OperationContext Context)
+        Result<std::shared_ptr<IMaterializedFileLease>> BorrowNative(const std::shared_ptr<IContentSource>& Source,OperationContext Context)
         {
-            hc::document::ImageTraceSpan Trace("viewer.direct-image",QString::fromUtf8(Source->Describe().locator_.root_));
-            const auto Entry=Source->Describe();if(!IsDirectImage(Entry))return Invalid("viewer-image-path");
+            hc::document::ImageTraceSpan Trace("viewer.direct-native",QString::fromUtf8(Source->Describe().locator_.root_));
+            const auto Entry=Source->Describe();if(!IsDirectNative(Entry))return Invalid("viewer-native-path");
             const auto Path=QString::fromUtf8(Entry.locator_.root_);
             // The built-in image reader owns a verified byte snapshot after load.
             // Preserve external edits/renames, like a direct HyperEditor open;
             // ReadDocumentFile checks changes during reading and saves check SHA-256.
             const auto Pin=CreateFileW(reinterpret_cast<LPCWSTR>(hc::storage::native::FilePath(Path).utf16()),GENERIC_READ,
                 FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
-            if(Pin==INVALID_HANDLE_VALUE)return Error{ErrorCategory::Unavailable,"viewer-image-open:"+std::to_string(GetLastError())};
+            if(Pin==INVALID_HANDLE_VALUE)return Error{ErrorCategory::Unavailable,"viewer-native-open:"+std::to_string(GetLastError())};
             std::shared_ptr<IMaterializedFileLease> Lease=std::make_shared<SourceLease>(Entry,Pin);
             const auto Verified=Source->Verify(Context).get();if(!Verified.HasValue())return Verified.Failure();
             return Lease;
@@ -104,12 +109,20 @@ namespace hc::plugins
         Result<QByteArray> ReadDetectionPrefix(IContentSource& Source, const EntrySnapshot& Entry, OperationContext Context)
         {
             const auto Required = static_cast<std::size_t>(std::min<std::uint64_t>(Entry.size_, 8192));
+            if (const auto* Provider = dynamic_cast<ProviderContentSource*>(&Source)) {
+                const auto Cached = Provider->Prefix();
+                if (Cached.size() >= Required) {
+                    auto Verified = Source.Verify(Context).get(); if (!Verified.HasValue()) return Verified.Failure();
+                    return QByteArray(reinterpret_cast<const char*>(Cached.data()), qsizetype(Required));
+                }
+            }
             if (Required > Context.maxReadBytes_) return Error{ErrorCategory::BudgetExceeded, "wlx-detect-read-budget", Entry.id_.providerId_};
-            QByteArray Bytes;
+            QByteArray Bytes; std::shared_ptr<IReadStream> PrefixStream;
             if (Required)
             {
                 auto Opened = Source.OpenRead(Context).get(); if (!Opened.HasValue()) return Opened.Failure();
                 if (!Opened.Value()) return Invalid("wlx-detect-stream-required");
+                PrefixStream = Opened.Value();
                 while (static_cast<std::size_t>(Bytes.size()) < Required)
                 {
                     if (const auto Stop = Context.Check(Entry.id_.providerId_)) return *Stop;
@@ -123,7 +136,32 @@ namespace hc::plugins
                 }
             }
             auto Verified = Source.Verify(Context).get(); if (!Verified.HasValue()) return Verified.Failure();
+            if (auto* Provider = dynamic_cast<ProviderContentSource*>(&Source)) {
+                const auto* Data = reinterpret_cast<const std::byte*>(Bytes.constData());
+                Provider->RememberPrefix({Data, Data + Bytes.size()}, PrefixStream);
+            }
             return Bytes;
+        }
+        QJsonObject ReadPrefix(const std::shared_ptr<IContentSource>& Source)
+        {
+            const auto Provider = std::dynamic_pointer_cast<ProviderContentSource>(Source);
+            if (!Provider || !IsDirectNative(Provider->Describe())) return {};
+            const auto Bytes = Provider->Prefix(); if (Bytes.empty()) return {};
+            return {{"sourceId", QString::fromStdString(Serialize(Provider->Describe().id_))},
+                {"sourceLocator", QString::fromStdString(Serialize(Provider->Describe().locator_))},
+                {"bytes", QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(Bytes.data()), qsizetype(Bytes.size())).toBase64())}};
+        }
+        Result<QByteArray> DraftHash(const QString& Path)
+        {
+            // Refuse inspection while any other handle can still write the draft.
+            const auto Pin = CreateFileW(reinterpret_cast<LPCWSTR>(native::FilePath(Path).utf16()), GENERIC_READ,
+                FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (Pin == INVALID_HANDLE_VALUE) return Error{ErrorCategory::Unavailable, "archive-draft-busy"};
+            QFile File(Path); QCryptographicHash Hash(QCryptographicHash::Sha256);
+            const bool Read = File.open(QIODevice::ReadOnly) && Hash.addData(&File);
+            File.close(); CloseHandle(Pin);
+            if (!Read) return Error{ErrorCategory::Unavailable, "archive-draft-read"};
+            return Hash.result();
         }
     }
     struct HostedViewerSession::State
@@ -160,6 +198,14 @@ namespace hc::plugins
     }
     void HostedViewerSession::Cancel() { state_->stop(false); }
     void HostedViewerSession::Close() { state_->stop(true); }
+    Result<std::uint64_t> HostedViewerSession::CloseArchive(int Decision)
+    {
+        std::lock_guard Lock(state_->mutex_);
+        if (Decision < 0 || Decision > 2 || !state_->details_.externalArchive_ || state_->stop_.stop_requested()
+            || state_->queue_.size() >= 16) return Invalid("archive-close-unavailable");
+        const auto Sequence = state_->nextCommand_++;
+        state_->queue_.push_back({Sequence, 8, Decision}); state_->changed_.notify_one(); return Sequence;
+    }
     Result<Unit> HostedViewerSession::Resize(std::uint32_t Width, std::uint32_t Height)
     {
         if (Width > 32768 || Height > 32768) return Invalid("host-viewer-size");
@@ -301,9 +347,13 @@ namespace hc::plugins
         std::unique_ptr<ImageArchiveBroker> ArchiveBroker;
         std::unique_ptr<PluginProcess> Host;
         std::unique_ptr<DocumentViewerClient> Document;
-        bool NoMatch = false;
+        bool NoMatch = false, ArchiveIdle = false;
         bool DirectInputAllowed=false;
         bool DirectOriginal = false;
+        std::shared_ptr<QTemporaryDir> ExternalDraft;
+        QString ExternalPath;
+        QByteArray ExternalBaseline;
+        ProviderContentSource::ArchiveWriteback ExternalWriteback;
         const auto CloseHost = [&] {
             if (!Host) { ArchiveBroker.reset(); return; }
             Host->Close(); ArchiveBroker.reset(); Document.reset(); const auto Final = Host->Snapshot();
@@ -347,8 +397,8 @@ namespace hc::plugins
                     if(ArchiveBroker)ArchiveBroker->Allow(QString::fromStdString(Lease->LocalPath()));
                     return Unit{};
                 }
-                if(DirectInputAllowed && IsDirectImage(Source->Describe())){
-                    auto Borrowed=BorrowImage(Source,Context);if(!Borrowed.HasValue())return Borrowed.Failure();
+                if(DirectInputAllowed && IsDirectNative(Source->Describe())){
+                    auto Borrowed=BorrowNative(Source,Context);if(!Borrowed.HasValue())return Borrowed.Failure();
                     Lease=std::move(Borrowed.Value());return Unit{};
                 }
                 auto Created = Factory(); if (!Created.HasValue()) return Created.Failure(); Materializer = std::move(Created.Value());
@@ -414,7 +464,7 @@ namespace hc::plugins
                         && !(Resolved.Value().attributes_ & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_REPARSE_POINT));
                 }
                 if (PreviousDirectOriginal != DirectOriginal || (!DirectInputAllowed && !DirectOriginal && dynamic_cast<SourceLease*>(Lease.get()))) Lease.reset();
-                if (!Policy)
+                if (!Policy && !DirectInputAllowed)
                 {
                     auto Prepared = Materialize(); if (!Prepared.HasValue()) return Prepared.Failure();
                 }
@@ -422,6 +472,11 @@ namespace hc::plugins
                     auto Broker=ImageArchiveBroker::Start();if(!Broker.HasValue())return Broker.Failure();ArchiveBroker=std::move(Broker.Value());
                     const auto Origin=ReadingSource(*Entry);if(!Origin.isEmpty())ArchiveBroker->Allow(Origin["path"].toString());if(Lease)ArchiveBroker->Allow(QString::fromStdString(Lease->LocalPath()));
                 }
+                // Only the built-in handler is already selected without an SDK detect call.
+                // Its input preparation can overlap process/DLL startup on this worker.
+                std::future<Result<Unit>> InputPreparation;
+                if (DirectInputAllowed) InputPreparation = std::async(std::launch::async, Materialize);
+                const auto PreparedInput = [&]() -> Result<Unit> { return InputPreparation.valid() ? InputPreparation.get() : Materialize(); };
                 PreparationStage("host");
                 auto Started = [&]{hc::document::ImageTraceSpan Stage("viewer.host-start");return PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_,ArchiveBroker?ArchiveBroker->Endpoint():QJsonObject{});}();
                 if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
@@ -461,20 +516,42 @@ namespace hc::plugins
                         Match = Evaluated.Value();
                     }
                     if (Match.matches_ != true || (Policy && Policy->builtinMultimedia_ && !Policy->force_ && !Match.multimedia_)) return false;
-                    auto Prepared = Materialize();
+                    auto Prepared = PreparedInput();
                     if (!Prepared.HasValue()) { FatalContent = true; return Prepared.Failure(); }
                     if (Policy) Options.flags_ = (Options.flags_ & ~lcp_forceshow) | (Policy->force_ ? lcp_forceshow : 0);
                 }
                 if (Policy && Dopus)
                 {
                     if (Policy->builtinMultimedia_ && !Policy->force_ && !(Probe.Value()["flags"].toInteger() & (1u << 15))) return false;
-                    auto Prepared = Materialize(); if (!Prepared.HasValue()) { FatalContent = true; return Prepared.Failure(); }
+                    auto Prepared = PreparedInput(); if (!Prepared.HasValue()) { FatalContent = true; return Prepared.Failure(); }
+                }
+                if (InputPreparation.valid()) { auto Prepared = PreparedInput(); if (!Prepared.HasValue()) return Prepared.Failure(); }
+                const auto ArchiveSource = std::dynamic_pointer_cast<ProviderContentSource>(Source);
+                if (!DirectInputAllowed && ArchiveSource && ArchiveSource->GetArchiveWriteback()
+                    && Options.approval_.granted_.contains(Permission::WriteContent)) {
+                    ExternalDraft = std::make_shared<QTemporaryDir>(QDir::tempPath() + "/hc-preview-external-XXXXXX");
+                    if (!ExternalDraft->isValid() || !QDir(ExternalDraft->path()).mkdir("content")) return Invalid("archive-draft-directory");
+                    ExternalPath = ExternalDraft->filePath("content/" + QFileInfo(QString::fromUtf8(Entry->name_)).fileName());
+                    if (!QFile::copy(QString::fromStdString(Lease->LocalPath()), ExternalPath)
+                        || !QFile::setPermissions(ExternalPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) return Invalid("archive-draft-copy");
+                    auto Hash = DraftHash(ExternalPath); if (!Hash.HasValue()) return Hash.Failure();
+                    ExternalBaseline = Hash.Value(); ExternalWriteback = ArchiveSource->GetArchiveWriteback();
+                    // Preserve before granting the plugin write access, including crashes/forced shutdown.
+                    ExternalDraft->setAutoRemove(false);
+                    QFile Recovery(ExternalDraft->filePath("recovery.json"));
+                    if (Recovery.open(QIODevice::WriteOnly)) Recovery.write(QJsonDocument(QJsonObject{
+                        {"purpose", "external-archive-preview-edit"}, {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+                        {"owner", QString::fromStdString(State->details_.viewer_.id_)}, {"draft", ExternalPath},
+                        {"source", QString::fromStdString(Serialize(Entry->locator_))}, {"retention", "until-recovered-or-explicitly-discarded"}}).toJson());
+                    std::lock_guard Lock(State->mutex_); State->details_.externalArchive_ = true; State->details_.externalArchiveDraft_ = ExternalPath;
                 }
                 std::pair<std::uint32_t, std::uint32_t> Size;
                 { std::lock_guard Lock(State->mutex_); Size = *State->size_; }
                 PreparationStage("content");
-                auto Opened = Host->ViewerCall(WireKind::ViewerOpen, {{"parent", ParentWindow}, {"file", QString::fromStdString(Lease->LocalPath())},
-                    {"width", static_cast<int>(Size.first)}, {"height", static_cast<int>(Size.second)}, {"flags", Options.flags_}, {"preview", Options.purpose_ == ViewerPurpose::QuickPreview}}, Context);
+                QJsonObject OpenRequest{{"parent", ParentWindow}, {"file", ExternalDraft ? ExternalPath : QString::fromStdString(Lease->LocalPath())},
+                    {"width", static_cast<int>(Size.first)}, {"height", static_cast<int>(Size.second)}, {"flags", Options.flags_}, {"preview", Options.purpose_ == ViewerPurpose::QuickPreview}};
+                if (DirectInputAllowed) { const auto Prefix = ReadPrefix(Source); if (!Prefix.isEmpty()) OpenRequest["readPrefix"] = Prefix; }
+                auto Opened = Host->ViewerCall(WireKind::ViewerOpen, OpenRequest, Context);
                 if (!Opened.HasValue())
                 {
                     if (Policy && Opened.Failure().code_ == "host-viewer-load-rejected") return false;
@@ -483,6 +560,10 @@ namespace hc::plugins
                 if (Inspected.Value().manifest_.compatibility_ == "hyperviewer-v1") {
                     Document = std::make_unique<DocumentViewerClient>(*Host);
                     auto Ready = Document->Hello(Context); if (!Ready.HasValue()) return Ready.Failure();
+                    { std::lock_guard Lock(State->mutex_);
+                      State->details_.documentChannel_ = true;
+                      State->details_.window_ = Opened.Value()["window"].toString();
+                      State->details_.child_ = Opened.Value()["viewer"].toString(); }
                     // Ready negotiates the channel; the asynchronous SDK Load
                     // can still be parsing. Bind only after its slot is stable.
                     const auto Deadline = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(15));
@@ -515,15 +596,23 @@ namespace hc::plugins
                     WaitTrace.reset();
                     const bool DirectBook=DirectInputAllowed && IsDirectBook(*Entry);
                     auto Writer = DirectBook?std::shared_ptr<IWritableStorage>{}:Options.writer_;
-                    if (!DirectBook && !Writer && Entry->locator_.kind_ == LocatorKind::Local && !(Entry->attributes_ & 1u))
-                        Writer = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
+                    if (!DirectBook && !Writer && (Entry->locator_.kind_ == LocatorKind::Local || Entry->locator_.kind_ == LocatorKind::Smb) && !(Entry->attributes_ & 1u))
+                        Writer = MakeNativeWritableStorage(Entry->locator_.kind_, MakeNativeReadProvider(Entry->locator_.kind_));
                     PreparationStage("verify");
-                    QFile Input(QString::fromStdString(Lease->LocalPath())); QByteArray Hash;
-                    if (!DirectBook && Input.open(QIODevice::ReadOnly)) { QCryptographicHash Digest(QCryptographicHash::Sha256); if (Digest.addData(&Input)) Hash = Digest.result(); }
-                    const auto Token = Document->Bind(*Entry, Writer, Lease, Hash);
+                    // The approved reader already hashed the exact snapshot while loading it.
+                    // Re-reading an SMB/RDP input here doubles first-open network traffic.
+                    QByteArray Hash;
+                    const auto Loaded = Document->Call("DocumentState", {}, {}, {}, Context);
+                    if (!Loaded.HasValue()) return Loaded.Failure();
+                    for (const auto& Item : Loaded.Value()["documents"].toArray())
+                        if (Item.toObject()["hostSlot"].toBool()) Hash = QByteArray::fromHex(Item.toObject()["inputSha256"].toString().toLatin1());
+                    if (!DirectBook && Hash.size() != 32) return Invalid("document-input-hash-required");
+                    const auto ArchiveSource = std::dynamic_pointer_cast<ProviderContentSource>(Source);
+                    const auto Writeback = ArchiveSource ? ArchiveSource->GetArchiveWriteback() : ProviderContentSource::ArchiveWriteback{};
+                    const auto Token = Document->Bind(*Entry, Writer, Lease, Hash, Writeback);
                     if (Token.isEmpty()) return Invalid("document-source-binding");
                     auto Bound = Document->Call("OpenDocuments", {{"documents", QJsonArray{QJsonObject{{"path", QString::fromStdString(Lease->LocalPath())},
-                        {"displayName", QString::fromUtf8(Entry->name_)}, {"readingSource",ReadingSource(*Entry)}, {"sourceToken", Token}, {"broker", bool(Writer)}, {"hostSlot", true}, {"bindExistingHost", true}, {"readOnlyBook",DirectBook}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Context);
+                        {"displayName", QString::fromUtf8(Entry->name_)}, {"readingSource",ReadingSource(*Entry)}, {"sourceToken", Token}, {"broker", bool(Writer) || bool(Writeback)}, {"hostSlot", true}, {"bindExistingHost", true}, {"readOnlyBook",DirectBook}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Context);
                     if (!Bound.HasValue()) return Bound.Failure();
                     std::lock_guard Lock(State->mutex_); State->details_.documentChannel_ = true;
                 }
@@ -546,6 +635,13 @@ namespace hc::plugins
                 auto Tried = Attempt(Candidates[Index], Index);
                 if (Tried.HasValue() && Tried.Value()) { Selected = true; break; }
                 CloseHost();
+                if (ExternalDraft) {
+                    const auto Hash = DraftHash(ExternalPath);
+                    if (!Hash.HasValue() || Hash.Value() != ExternalBaseline)
+                        return Error{ErrorCategory::Unavailable, "archive-plugin-rejected-edited-draft:" + ExternalPath.toStdString()};
+                    ExternalDraft->setAutoRemove(true); ExternalDraft.reset(); ExternalPath.clear(); ExternalWriteback = {};
+                    std::lock_guard Lock(State->mutex_); State->details_.externalArchive_ = false; State->details_.externalArchiveDraft_.clear();
+                }
                 if (!Tried.HasValue())
                 {
                     if (!Policy || FatalContent) return Tried.Failure();
@@ -579,6 +675,29 @@ namespace hc::plugins
                     InputBinding = std::exchange(State->inputBinding_, {});
                     if (!State->queue_.empty()) { Command = State->queue_.front(); State->queue_.pop_front(); }
                 }
+                if (Command && Command->command_ == 8) {
+                    Result<QByteArray> Checked = ExternalBaseline;
+                    std::optional<Error> Error;
+                    if (Host) {
+                        auto Closed = Host->ViewerCall(WireKind::ViewerClose, {}, Calls);
+                        // Reap the process tree before inspecting the last saved bytes.
+                        Host->Close(); Host.reset();
+                        if (!Closed.HasValue()) Error = Closed.Failure();
+                    }
+                    if (!Error) { Checked = DraftHash(ExternalPath); if (!Checked.HasValue()) Error = Checked.Failure(); }
+                    bool Done = false;
+                    if (!Error && (Checked.Value() == ExternalBaseline || Command->parameter_ == 2)) Done = true;
+                    else if (!Error && Command->parameter_ == 1) {
+                        auto Saved = ExternalWriteback(ExternalPath.toStdString(), Calls);
+                        if (Saved.HasValue()) Done = true; else Error = Saved.Failure();
+                    }
+                    if (Done) ExternalDraft->setAutoRemove(true);
+                    std::lock_guard Lock(State->mutex_);
+                    State->details_.externalArchiveClosed_ = true; State->details_.externalArchiveDone_ = Done;
+                    State->details_.commandSequence_ = Command->sequence_; State->details_.commandError_ = Error;
+                    continue;
+                }
+                if (!Host) continue;
                 if (Resize)
                 {
                     auto Result = Host->ViewerCall(WireKind::ViewerResize, {{"width", static_cast<int>(Resize->first)}, {"height", static_cast<int>(Resize->second)}}, Calls);
@@ -594,21 +713,23 @@ namespace hc::plugins
                         for (const auto& Input : Command->inputs_) {
                             PreparationStage("materialize");
                             const bool DirectBook=bool(ArchiveBroker) && IsDirectBook(Input.source_->Describe());
-                            const bool DirectImage=bool(ArchiveBroker) && IsDirectImage(Input.source_->Describe());
+                            const bool DirectImage=bool(ArchiveBroker) && IsDirectNative(Input.source_->Describe());
                             if(!DirectBook && !DirectImage && !Materializer){auto Created=Factory();if(!Created.HasValue()){Result=Created.Failure();break;}Materializer=std::move(Created.Value());}
                             hc::document::ImageTraceSpan PrepareTrace("viewer.prepare-input",QString::fromUtf8(Input.source_->Describe().locator_.root_));
-                            auto Materialized = DirectBook?BorrowBook(Input.source_,Calls):DirectImage?BorrowImage(Input.source_,Calls):Materializer->Materialize({Input.source_, {}, {}}, PreparationContext(Calls, Input.source_->Describe())).get();
+                            auto Materialized = DirectBook?BorrowBook(Input.source_,Calls):DirectImage?BorrowNative(Input.source_,Calls):Materializer->Materialize({Input.source_, {}, {}}, PreparationContext(Calls, Input.source_->Describe())).get();
                             ClearPreparation();
                             if (!Materialized.HasValue()) { Result = Materialized.Failure(); break; }
                             const auto Entry = Input.source_->Describe();
                             if(ArchiveBroker){ArchiveBroker->Allow(QString::fromStdString(Materialized.Value()->LocalPath()));const auto Origin=ReadingSource(Entry);if(!Origin.isEmpty())ArchiveBroker->Allow(Origin["path"].toString());}
                             auto Writer = DirectBook?std::shared_ptr<IWritableStorage>{}:Input.writer_;
-                            if (!DirectBook && !Writer && Entry.locator_.kind_ == LocatorKind::Local && !(Entry.attributes_ & 1u))
-                                Writer = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
-                            const auto Token = Document->Bind(Entry, Writer, Materialized.Value());
+                            if (!DirectBook && !Writer && (Entry.locator_.kind_ == LocatorKind::Local || Entry.locator_.kind_ == LocatorKind::Smb) && !(Entry.attributes_ & 1u))
+                                Writer = MakeNativeWritableStorage(Entry.locator_.kind_, MakeNativeReadProvider(Entry.locator_.kind_));
+                            const auto ArchiveSource = std::dynamic_pointer_cast<ProviderContentSource>(Input.source_);
+                            const auto Writeback = ArchiveSource ? ArchiveSource->GetArchiveWriteback() : ProviderContentSource::ArchiveWriteback{};
+                            const auto Token = Document->Bind(Entry, Writer, Materialized.Value(), {}, Writeback);
                             if (Token.isEmpty()) { Result = Invalid("document-source-binding"); break; }
                             Inputs.append(QJsonObject{{"path", QString::fromStdString(Materialized.Value()->LocalPath())},
-                                {"displayName", QString::fromUtf8(Entry.name_)}, {"readingSource",ReadingSource(Entry)}, {"sourceToken", Token}, {"broker", bool(Writer)}});
+                                {"displayName", QString::fromUtf8(Entry.name_)}, {"readPrefix", ReadPrefix(Input.source_)}, {"readingSource",ReadingSource(Entry)}, {"sourceToken", Token}, {"broker", bool(Writer) || bool(Writeback)}});
                         }
                         if (Result.HasValue() && Command->parameter_ == 1) {
                             const auto Current = Document->Call("DocumentState", {}, {}, {}, Calls);
@@ -644,6 +765,9 @@ namespace hc::plugins
                 }
                 if (Document) {
                     auto Current = Document->Poll(Calls); if (!Current.HasValue()) return Current.Failure();
+                    const bool Empty = Current.Value()["documents"].toArray().isEmpty();
+                    if (Empty && !ArchiveIdle && ArchiveBroker) ArchiveBroker->Clear();
+                    ArchiveIdle = Empty;
                     std::lock_guard Lock(State->mutex_); State->details_.documentState_ = Current.Value();
                 }
                 HostState = Host->Snapshot();

@@ -13,7 +13,7 @@ namespace hc::plugins
         storage::Result<QJsonObject> Execute(QJsonObject Request, storage::OperationContext Context = {});
         storage::Result<QJsonObject> Poll(storage::OperationContext Context = {});
         QString Bind(storage::EntrySnapshot Source, std::shared_ptr<storage::IWritableStorage> Writer,
-            std::shared_ptr<storage::IMaterializedFileLease> Lease, QByteArray Hash = {});
+            std::shared_ptr<storage::IMaterializedFileLease> Lease, QByteArray Hash = {}, storage::ProviderContentSource::ArchiveWriteback ArchiveWriteback = {});
         void Close() { broker_.Close(); }
     private:
         PluginProcess& host_;

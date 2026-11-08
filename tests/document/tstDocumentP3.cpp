@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <Windows.h>
 #include "commonLibs/layout/productLayout.hpp"
+#include "HyperCommanderBuiltInPlugin/SevenZip/builtinSevenZip.hpp"
 #include <QtTest>
 #include "../nativeTestInput.hpp"
 #include <QJsonDocument>
@@ -127,6 +128,94 @@ PluginViewerOptions Options(){PluginViewerOptions Result;Result.executable_=QCor
 class DocumentP3Tests final:public QObject{
     Q_OBJECT
 private slots:
+void quickPreviewBenchmark()
+{
+    const int Size = qEnvironmentVariableIntValue("HC_PREVIEW_BENCH_BYTES");
+    if (Size <= 0 || Size > 100 * 1024 * 1024) QSKIP("Explicit benchmark size required");
+    QTemporaryDir Root; const auto Path = Root.filePath("bench.txt"); QByteArray Bytes(Size, 'a');
+    if (!qEnvironmentVariableIsSet("HC_PREVIEW_BENCH_LONG_LINE")) for (int At = 79; At < Bytes.size(); At += 80) Bytes[At] = '\n';
+    QVERIFY(Put(Path, Bytes)); Bytes.clear();
+    QWidget Main; Main.resize(900, 600); Main.show();
+    for (int Run = 0; Run < 5; ++Run) {
+        QtPluginViewerController Controller(&Main, [&] { return MakeNativeMaterializer(Root.path().toStdString()); });
+        auto Choice = Options(); Choice.purpose_ = hc::viewer::ViewerPurpose::QuickPreview;
+        auto* Surface = new QtPluginViewerSurface(&Controller, &Main); Surface->resize(Main.size()); Surface->show();
+        const auto Start = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        QElapsedTimer Timer; Timer.start(); Surface->Open(Choice, Content(Path));
+        QVERIFY2(Wait([&] { return Surface->IsReady() || Surface->Snapshot().error_.has_value(); }, 60000) && Surface->IsReady(), qPrintable(QString::fromStdString(Surface->Snapshot().error_ ? Surface->Snapshot().error_->code_ : "cold preview failed") + QString::fromUtf8(QJsonDocument(Surface->Details().documentState_).toJson(QJsonDocument::Compact)))); const auto Cold = Timer.elapsed();
+        const auto Process = Surface->Details().host_.processId_;
+        QTest::qWait(150); Surface->Close(); delete Surface; QTest::qWait(250);
+        Surface = new QtPluginViewerSurface(&Controller, &Main); Surface->resize(Main.size()); Surface->show();
+        Timer.restart(); Surface->Open(Choice, Content(Path)); bool Reported = false; QVERIFY(Wait([&] { if (!Reported && Timer.elapsed() > 500) { Reported = true; qInfo().noquote() << "Cached pending" << QJsonDocument(Surface->Details().documentState_).toJson(QJsonDocument::Compact); } return Surface->IsReady(); }, 60000));
+        QCOMPARE(Surface->Details().host_.processId_, Process);
+        qInfo().noquote() << QJsonDocument(QJsonObject{{"run",Run},{"bytes",Size},{"coldReadyMs",Cold},{"cachedReadyMs",Timer.elapsed()},
+            {"process",QString::number(Process)},{"startUs",double(Start)},{"source",Path}}).toJson(QJsonDocument::Compact);
+        Surface->Close(); delete Surface; Controller.CloseAll(); QVERIFY(Wait([&] { return Controller.IsIdle(); }, 15000));
+    }
+}
+void nativeNetworkPreviewReadsAndSavesDirectly()
+{
+    const auto Network = qEnvironmentVariable("HC_PREVIEW_NETWORK_ROOT");
+    if (Network.isEmpty()) QSKIP("An explicit SMB/RDP test root is required");
+    QTemporaryDir Root(QDir(Network).filePath("hc-preview-XXXXXX")); QVERIFY(Root.isValid());
+    const auto Path = Root.filePath("network.txt"); QVERIFY(Put(Path, "network original"));
+    auto Reader = MakeNativeReadProvider(LocatorKind::Smb);
+    auto Entry = Reader->Resolve({LocatorKind::Smb, Path.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+    auto Input = std::make_shared<ProviderContentSource>(Reader, Entry.Value());
+    const QByteArray Probe("network original"); const auto* Prefix = reinterpret_cast<const std::byte*>(Probe.constData());
+    Input->RememberPrefix({Prefix, Prefix + Probe.size()});
+    int Copies = 0; QWidget Main; Main.resize(900,600); Main.show();
+    QtPluginViewerController Controller(&Main, [&] { ++Copies; return MakeNativeMaterializer(QDir::tempPath().toStdString()); });
+    QtPluginViewerSurface Surface(&Controller, &Main); Surface.resize(Main.size()); Surface.show();
+    auto Choice = Options(); Choice.purpose_ = hc::viewer::ViewerPurpose::QuickPreview;
+    Choice.writer_ = MakeNativeWritableStorage(LocatorKind::Smb, Reader);
+    QElapsedTimer Elapsed; Elapsed.start(); Surface.Open(Choice, Input);
+    QVERIFY2(Wait([&] { return Surface.IsReady(); }, 30000), Surface.Snapshot().error_ ? Surface.Snapshot().error_->code_.c_str() : "network-preview-not-ready");
+    qInfo() << "Network first ready ms:" << Elapsed.elapsed(); QCOMPARE(Copies, 0);
+    const auto Id = Surface.Details().documentState_["documents"].toArray().first().toObject()["documentId"].toString();
+    auto Send = [&](QJsonObject Request) { const auto Queued = Surface.SendDocument(Request); return Queued.HasValue()
+        && Wait([&] { return Surface.Details().commandSequence_ >= Queued.Value(); }) && !Surface.Details().commandError_; };
+    QVERIFY(Send({{"action","replaceText"},{"documentId",Id},{"text","network edited"}}));
+    QVERIFY(Send({{"action","save"},{"documentId",Id}}));
+    QVERIFY(Wait([&] { const auto State = Doc(Surface.Details().documentState_,Id); return !State["dirty"].toBool() && !State["saving"].toBool(); }));
+    QCOMPARE(Read(Path), QByteArray("network edited"));
+    QVERIFY(Put(Path, "outside change"));
+    QVERIFY(Send({{"action","replaceText"},{"documentId",Id},{"text","must not overwrite"}}));
+    QVERIFY(Send({{"action","save"},{"documentId",Id}}));
+    QVERIFY(Wait([&] { return Doc(Surface.Details().documentState_,Id)["saveState"] == "conflict"; }));
+    QCOMPARE(Read(Path), QByteArray("outside change"));
+    Surface.Close(); Controller.CloseAll(); QVERIFY(Wait([&] { return Controller.IsIdle(); }));
+}
+void quickPreviewReusesAndExpiresHost()
+{
+    QTemporaryDir Root; const auto First = Root.filePath("first.txt"), Second = Root.filePath("second.txt");
+    QVERIFY(Put(First, "first")); QVERIFY(Put(Second, "second"));
+    QWidget Main; Main.resize(900, 600); Main.show();
+    int Copies = 0;
+    QtPluginViewerController Controller(&Main, [&]() { ++Copies; return MakeNativeMaterializer(Root.path().toStdString()); }, 1000);
+    auto Choice = Options(); Choice.purpose_ = hc::viewer::ViewerPurpose::QuickPreview;
+    auto* Surface = new QtPluginViewerSurface(&Controller, &Main); Surface->resize(Main.size()); Surface->show();
+    QElapsedTimer FirstOpen; FirstOpen.start(); Surface->Open(Choice, Content(First));
+    QVERIFY(Wait([&] { return Surface->IsReady(); }, 30000));
+    qInfo() << "Preview first ready ms:" << FirstOpen.elapsed();
+    const auto Process = Surface->Details().host_.processId_; QVERIFY(Process);
+    QCOMPARE(Copies, 0);
+    QElapsedTimer Switch; Switch.start(); QVERIFY(Surface->OpenPrepared({{Content(Second), {}}}));
+    QVERIFY(Wait([&] { return Surface->IsReady(); })); QCOMPARE(Surface->Details().host_.processId_, Process);
+    qInfo() << "Preview switch ready ms:" << Switch.elapsed();
+    Surface->Close(); delete Surface;
+    QTest::qWait(250);
+    Surface = new QtPluginViewerSurface(&Controller, &Main); Surface->resize(Main.size()); Surface->show();
+    QElapsedTimer Reopen; Reopen.start(); Surface->Open(Choice, Content(First));
+    QVERIFY(Wait([&] { return Surface->IsReady(); }, 30000));
+    qInfo() << "Preview cached reopen ms:" << Reopen.elapsed(); QCOMPARE(Surface->Details().host_.processId_, Process);
+    Surface->Close(); delete Surface;
+    QVERIFY(Wait([&] { return Controller.IsIdle(); }, 10000));
+    Surface = new QtPluginViewerSurface(&Controller, &Main); Surface->resize(Main.size()); Surface->show();
+    Surface->Open(Choice, Content(Second));
+    QVERIFY(Wait([&] { return Surface->IsReady(); }, 30000)); QVERIFY(Surface->Details().host_.processId_ != Process);
+    Controller.CloseAll(); QVERIFY(Wait([&] { return Controller.IsIdle(); })); delete Surface;
+}
 void statusBarMeasuredLayout(){
     DocumentStatusBar Bar;Bar.resize(1400,32);Bar.show();
     QList<DocumentStatusField> Fields{{"position",QString::fromUtf8("줄 88 / 109 · 열 6"),"88:6 / 109",{},"text.goToLine"},{"encoding","UTF-8 (BOM)","UTF-8 BOM"},{"eol","CRLF"}};
@@ -870,9 +959,13 @@ void isolatedComicArchiveReading(){
     QTemporaryDir Root;
     QImage Page(40,60,QImage::Format_RGB32);Page.fill(Qt::green);
     QVERIFY(Page.save(Root.filePath("1.png")));QVERIFY(Page.save(Root.filePath("2.png")));
-    QProcess Pack;Pack.setWorkingDirectory(Root.path());
-    Pack.start(QCoreApplication::applicationDirPath()+"/../sevenzip-tools/official/7z.exe",{"a","-tzip","comic 01.cbz","1.png","2.png"});
-    QVERIFY(Pack.waitForFinished(15000));QCOMPARE(Pack.exitCode(),0);
+    auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+    const auto CloseBackend = qScopeGuard([&] { CloseApprovedWcxBackend(Backend); });
+    ArchiveUpdate Create{Root.filePath("comic 01.zip").toStdString(), Root.path().toStdString(), {"1.png", "2.png"}};
+    Create.creation_ = ArchiveCreationOptions{1, false};
+    const auto Packed = Backend->Update(std::move(Create), {});
+    QVERIFY2(Packed.HasValue(), Packed.HasValue() ? "" : Packed.Failure().code_.c_str());
+    QVERIFY(QFile::rename(Root.filePath("comic 01.zip"),Root.filePath("comic 01.cbz")));
     QVERIFY(QFile::copy(Root.filePath("comic 01.cbz"),Root.filePath("comic 02.cbz")));
     const auto Private=Root.filePath("private");QVERIFY(QDir().mkpath(Private));
     auto Live=std::make_shared<std::atomic<int>>(0);
@@ -1271,7 +1364,8 @@ void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
     QTemporaryDir Root;const auto Large=Root.filePath("large.txt");QByteArray Bytes(2*1024*1024,'x');Bytes.replace(0,3,"old");QVERIFY(Put(Large,Bytes));
     auto Live=std::make_shared<std::atomic<int>>(0);QtPluginViewerController Controller(nullptr,[Live]()->Result<std::shared_ptr<IMaterializer>>{auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);});
     QtPluginViewerSurface Surface(&Controller);Surface.setWindowTitle("F3 input verification");Surface.resize(1000,700);Surface.show();Surface.Open(Options(),Content(Large));
-    auto* Loading=Surface.findChild<QLabel*>(QString{},Qt::FindDirectChildrenOnly);QVERIFY(Loading);
+    auto* LoadingLabel=Surface.findChild<QLabel*>("viewerPreparationStatus");QVERIFY(LoadingLabel);
+    auto* Loading=LoadingLabel->parentWidget();QVERIFY(Loading);QCoreApplication::processEvents();
     auto* Stack=qobject_cast<QStackedLayout*>(Surface.layout());QVERIFY(Stack);
     QCOMPARE(Stack->currentWidget(),Loading);QCOMPARE(Loading->geometry(),Surface.rect());
     auto* Anchor=Surface.findChild<QWidget*>("hc.wlx.native-parent");QVERIFY(Anchor);QVERIFY(Anchor->isHidden());
@@ -1294,10 +1388,10 @@ void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
     QVERIFY(Send({{"action","save"},{"documentId",Id}}));QVERIFY(Wait([&]{return !Doc(Surface.Details().documentState_,Id)["dirty"].toBool()&&!Doc(Surface.Details().documentState_,Id)["saving"].toBool();}));QCOMPARE(Read(Large),QByteArray("pasted text"));
     const auto Pdf=Root.filePath("doc.pdf"),Image=Root.filePath("image.png");QVERIFY(QFile::copy(Fixture("basic.pdf"),Pdf));QVERIFY(QFile::copy(Fixture("alpha.png"),Image));
     auto ImageSource=Content(Image);QVERIFY(ImageSource);
-    if(!Direct)ImageSource->entry_.locator_.kind_=LocatorKind::Smb;
+    if(!Direct)ImageSource->entry_.locator_.kind_=LocatorKind::Archive;
     auto Added=Surface.OpenDocuments({{Content(Pdf),{}},{ImageSource,{}}});QVERIFY(Added.HasValue());
     QVERIFY(Wait([&]{return Surface.Details().documentState_["documents"].toArray().size()==3&&Surface.Details().documentState_["idle"].toBool();}));
-    QCOMPARE(Live->load(),Direct?2:3);
+    QCOMPARE(Live->load(),Direct?0:1);
     for(const auto& Item:Surface.Details().documentState_["documents"].toArray()) {
         const auto Record=Item.toObject();const auto View=Record["view"].toObject()["viewId"].toString();
         if(View=="pdf")QCOMPARE(Record["displayName"].toString(),QString("doc.pdf"));
@@ -1305,7 +1399,7 @@ void hcSurfaceBrokerSaveClipboardAndPerTabLeases(){
     }
     auto State=Surface.Details().documentState_;QString ImageId;for(const auto& Item:State["documents"].toArray())if(Item.toObject()["view"].toObject()["viewId"].toString()=="image")ImageId=Item.toObject()["documentId"].toString();
     QVERIFY(Send({{"action","clipboard"},{"documentId",ImageId},{"mode","copy"}}));QVERIFY(Wait([&]{return !QApplication::clipboard()->image().isNull();}));
-    QVERIFY(Send({{"action","close"},{"documentId",ImageId},{"discard",true}}));QVERIFY(Wait([&]{return Live->load()==2;}));
+    QVERIFY(Send({{"action","close"},{"documentId",ImageId},{"discard",true}}));QVERIFY(Wait([&]{return Live->load()==0;}));
     Surface.Close();QVERIFY(Wait([&]{return Controller.IsIdle();}));QCOMPARE(Live->load(),0);
 }
 void pluginHostCrashAndTimeout_data(){QTest::addColumn<bool>("Hang");QTest::newRow("crash")<<false;QTest::newRow("timeout")<<true;}

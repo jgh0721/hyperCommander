@@ -14,6 +14,7 @@
 #include <QFontMetricsF>
 #include <QPainter>
 #include <QPaintEvent>
+#include "UniqueLibs/document/imagePerformance.hpp"
 #include <QTextStream>
 #include <QWidget>
 
@@ -45,6 +46,13 @@ protected:
 		ScintillaEditBase::paintEvent(Event);
 		if (overlayPainter_)
 			overlayPainter_(Event);
+		if (hc::document::ImageTraceSpan::Enabled()) {
+			const auto Source = property("hc.firstTextPaintSource").toString();
+			if (!Source.isEmpty()) {
+				setProperty("hc.firstTextPaintSource", QVariant{});
+				hc::document::ImageTraceSpan Painted("text.first-paint", Source);
+			}
+		}
 	}
 
 private:

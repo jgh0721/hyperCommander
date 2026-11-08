@@ -51,8 +51,8 @@ namespace hc::plugins
         return Error{ErrorCategory::Unavailable, "document-helper-startup-timeout"};
     }
     QString DocumentViewerClient::Bind(EntrySnapshot Source, std::shared_ptr<IWritableStorage> Writer,
-        std::shared_ptr<IMaterializedFileLease> Lease, QByteArray Hash)
-    { return broker_.Bind(std::move(Source), std::move(Writer), std::move(Lease), std::move(Hash)); }
+        std::shared_ptr<IMaterializedFileLease> Lease, QByteArray Hash, storage::ProviderContentSource::ArchiveWriteback ArchiveWriteback)
+    { return broker_.Bind(std::move(Source), std::move(Writer), std::move(Lease), std::move(Hash), std::move(ArchiveWriteback)); }
     Result<QJsonObject> DocumentViewerClient::Execute(QJsonObject Request, OperationContext Context)
     {
         const auto Id = Request.take("documentId").toString();
@@ -70,6 +70,7 @@ namespace hc::plugins
         std::set<QString> Tokens;
         for (const auto& Item : state_["documents"].toArray()) {
             const auto Token = Item.toObject()["sourceToken"].toString(); if (!Token.isEmpty()) Tokens.insert(Token);
+            if (!Item.toObject()["loading"].toBool()) broker_.CaptureLoadedHash(Token, QByteArray::fromHex(Item.toObject()["inputSha256"].toString().toLatin1()));
         }
         broker_.Retain(Tokens);
         const auto Edit=state_["editRequest"].toObject();
@@ -139,6 +140,14 @@ namespace hc::plugins
             // Closing the originating tab can retire its token while the
             // independent editor is starting. That reply does not fail the viewer.
             if(!Completed.HasValue()&&Completed.Failure().code_!="document-edit-token")return Completed.Failure();
+        }
+        for (const auto& Item : state_["documents"].toArray()) {
+            const auto Tab = Item.toObject();
+            if (!Tab["archiveUpdating"].toBool()) continue;
+            auto Result = broker_.CommitArchive(Tab["sourceToken"].toString(), Tab["archiveDiscard"].toBool(), Context);
+            Result["action"] = "archiveResult";
+            auto Replied = Call("Execute", Result, Tab["documentId"].toString(), Tab["generation"].toString(), Context);
+            if (!Replied.HasValue()) return Replied.Failure();
         }
         for (const auto& Item : state_["pendingSaves"].toArray()) {
             const auto Prepared = Item.toObject(); bool Valid = false;

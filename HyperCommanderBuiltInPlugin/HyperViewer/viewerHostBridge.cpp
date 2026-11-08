@@ -128,7 +128,9 @@ namespace hc::document
     {
         if (!state_->window_ || !Path) return false;
         const auto LocalPath = QString::fromWCharArray(Path);
-        const auto Result = state_->window_->Handle({{"action", "openHost"}, {"path", LocalPath}});
+        const auto Prefix = qApp->property("hc.readPrefix").toJsonObject();
+        qApp->setProperty("hc.readPrefix", QVariant{});
+        const auto Result = state_->window_->Handle({{"action", "openHost"}, {"path", LocalPath}, {"readPrefix", Prefix}});
         return !Result.contains("error");
     }
 

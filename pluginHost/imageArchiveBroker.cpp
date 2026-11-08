@@ -29,6 +29,7 @@ struct ImageArchiveBroker::State
     std::mutex mutex_;
     QSet<QString> roots_, files_;
     std::atomic<std::uint32_t> client_{0};
+    std::atomic<bool> clear_{false};
     std::jthread worker_;
     bool allowed(const QString &Path)
     {
@@ -78,15 +79,19 @@ Result<std::unique_ptr<ImageArchiveBroker>> ImageArchiveBroker::Start()
             Started.set_value(Listening);
             if (!Listening)
                 return;
-            auto Options = BuiltinSevenZipOptions();
-            Options.passwordPrompt_ = PromptArchivePassword;
-            auto Backend = MakeApprovedWcxBackend(std::move(Options));
+            // Text previews need only the endpoint; initialize archive support on its first use.
+            std::shared_ptr<hc::plugins::IArchiveBackend> Backend;
             std::map<QString, std::unique_ptr<IArchiveListing>> Listings;
             struct PageStream {std::unique_ptr<IArchiveReadSession> session_;std::uint32_t last_;};
             std::map<QString,PageStream> Streams;
             std::map<QString, std::chrono::steady_clock::time_point> Expiry;
             while (!Stop.stop_requested())
             {
+                if (Shared->clear_.exchange(false)) {
+                    Streams.clear(); Listings.clear(); Expiry.clear();
+                    if (Backend) CloseApprovedWcxBackend(Backend);
+                    Backend.reset();
+                }
                 for (auto At = Expiry.begin(); At != Expiry.end();)
                     if (At->second < std::chrono::steady_clock::now())
                     {
@@ -162,6 +167,10 @@ Result<std::unique_ptr<ImageArchiveBroker>> ImageArchiveBroker::Start()
                 if (Op == "open" || Op == "stream")
                 {
                     const auto Ext = QFileInfo(Path).suffix().toLower();
+                    if (!Backend && Shared->allowed(Path) && QStringList{"zip", "cbz", "rar", "cbr", "7z", "cb7"}.contains(Ext)) {
+                        auto Options = BuiltinSevenZipOptions(); Options.passwordPrompt_ = PromptArchivePassword;
+                        Backend = MakeApprovedWcxBackend(std::move(Options));
+                    }
                     if (!Shared->allowed(Path) || !QStringList{"zip", "cbz", "rar", "cbr", "7z", "cb7"}.contains(Ext) ||
                         Listings.size() + Streams.size() >= 32)
                         Reply = {{"error", "image-archive-source-denied"}};
@@ -292,7 +301,7 @@ Result<std::unique_ptr<ImageArchiveBroker>> ImageArchiveBroker::Start()
             }
             Streams.clear();
             Listings.clear();
-            CloseApprovedWcxBackend(Backend);
+            if (Backend) CloseApprovedWcxBackend(Backend);
             Backend.reset();
             Server.close();
         });
@@ -313,6 +322,11 @@ ImageArchiveBroker::~ImageArchiveBroker()
 QJsonObject ImageArchiveBroker::Endpoint() const
 {
     return {{"address", state_->address_}, {"token", state_->token_}};
+}
+void ImageArchiveBroker::Clear()
+{
+    { std::lock_guard Lock(state_->mutex_); state_->files_.clear(); state_->roots_.clear(); }
+    state_->clear_ = true;
 }
 void ImageArchiveBroker::BindClient(std::uint32_t Process)
 {

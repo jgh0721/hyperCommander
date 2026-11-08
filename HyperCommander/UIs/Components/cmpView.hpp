@@ -22,6 +22,7 @@ class QtViewerSurface;
 class ThumbnailModel;
 namespace fm::filelist { class ThumbnailView; }
 namespace hc::storage { class IContentSource; class IWritableStorage; }
+namespace hc::document { struct DocumentHandlerCatalog; }
 
 class CViewT : public QWidget
 {
@@ -147,6 +148,7 @@ signals:
     void                           sigListPresentationChanged();
     void sigThumbnailSelectionChanged();
     void sigSelectionIdentityChanged();
+    void sigPreviewSelectionChanged();
 
 protected slots:
     void                            oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args );
@@ -394,6 +396,9 @@ private:
     QAction*                        returnAction_ = nullptr;
     std::stop_source                probeStop_;
     std::uint64_t                   probeGeneration_ = 0;
+    std::shared_ptr<hc::document::DocumentHandlerCatalog> handlerCatalog_;
+    QByteArray handlerSettings_;
+    QMap<QString, QPair<qint64, qint64>> handlerFiles_;
     void                            cancelProbe();
     void                            openContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source,
                                         std::shared_ptr<hc::storage::IWritableStorage> Writer, bool TextContent);

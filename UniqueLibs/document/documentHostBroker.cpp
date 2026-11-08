@@ -3,6 +3,11 @@
 #include <QCryptographicHash>
 #include <QUuid>
 #include <QFile>
+#include <QSaveFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QJsonDocument>
+#include <QDateTime>
 
 namespace hc::document
 {
@@ -17,11 +22,11 @@ namespace hc::document
         return {};
     }
     QString DocumentHostBroker::Bind(storage::EntrySnapshot Source, std::shared_ptr<storage::IWritableStorage> Writer,
-        std::shared_ptr<storage::IMaterializedFileLease> Lease, QByteArray ContentHash)
+        std::shared_ptr<storage::IMaterializedFileLease> Lease, QByteArray ContentHash, storage::ProviderContentSource::ArchiveWriteback ArchiveWriteback)
     {
         if (!Source.id_.revision_ || Source.directory_) return {};
         const auto Token = QUuid::createUuid().toString(QUuid::Id128);
-        sources_.emplace(Token, Binding{std::move(Source), std::move(Writer), std::move(Lease), std::move(ContentHash)}); return Token;
+        sources_.emplace(Token, Binding{std::move(Source), std::move(Writer), std::move(Lease), std::move(ContentHash), std::move(ArchiveWriteback)}); return Token;
     }
     QJsonObject DocumentHostBroker::Commit(const QJsonObject& Prepared, storage::OperationContext Context)
     {
@@ -38,7 +43,7 @@ namespace hc::document
         auto Fail = [&](const QString& Code, storage::ErrorCategory Category = storage::ErrorCategory::Unavailable) { Reply["error"] = Code; Reply["errorCategory"] = int(Category); return Reply; };
         const auto Token = Prepared["sourceToken"].toString(), SaveToken = Prepared["saveToken"].toString();
         auto At = sources_.find(Token);
-        if (At == sources_.end() || !At->second.writer_ || SaveToken.size() != 32 || retiredSaves_.contains(SaveToken)) return Fail("document-stale-source-or-save-token");
+        if (At == sources_.end() || (!At->second.writer_ && !At->second.archiveWriteback_) || SaveToken.size() != 32 || retiredSaves_.contains(SaveToken)) return Fail("document-stale-source-or-save-token");
         if (retiredSaves_.size() >= 4096) return Fail("p0-save-token-budget");
         auto& Binding = At->second;
         if (Prepared.contains("byteLength") && Prepared["byteLength"].toString() != QString::number(Bytes.size())) return Fail("document-save-length");
@@ -46,9 +51,35 @@ namespace hc::document
         // Replay is rejected even after an unsuccessful attempt. A retry captures
         // a fresh immutable revision and obtains a new save token in the helper.
         retiredSaves_.insert(SaveToken);
+        if (Binding.archiveWriteback_) {
+            if (!Binding.draft_) {
+                Binding.draft_ = std::make_shared<QTemporaryDir>(QDir::tempPath() + "/hc-preview-edit-XXXXXX");
+                if (!Binding.draft_->isValid()) return Fail("archive-draft-directory");
+                if (!QDir(Binding.draft_->path()).mkdir("content")) return Fail("archive-draft-directory");
+                Binding.draftPath_ = Binding.draft_->filePath("content/" + QFileInfo(QString::fromUtf8(Binding.source_.name_)).fileName());
+                Binding.archiveHash_ = Binding.hash_;
+                if (Binding.archiveHash_.isEmpty() && Binding.lease_) {
+                    QFile Original(QString::fromStdString(Binding.lease_->LocalPath()));
+                    QCryptographicHash Hash(QCryptographicHash::Sha256);
+                    if (!Original.open(QIODevice::ReadOnly) || !Hash.addData(&Original)) { Binding.draft_.reset(); return Fail("archive-draft-baseline"); }
+                    Binding.archiveHash_ = Hash.result();
+                }
+            }
+            QSaveFile Draft(Binding.draftPath_);
+            if (!Draft.open(QIODevice::WriteOnly) || Draft.write(Bytes) != Bytes.size() || !Draft.commit()) return Fail("archive-draft-save");
+            Binding.archivePending_ = QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256) != Binding.archiveHash_;
+            // A failed update or helper crash must not delete the user's only edited copy.
+            Binding.draft_->setAutoRemove(!Binding.archivePending_);
+            QFile Manifest(Binding.draft_->filePath("recovery.json"));
+            if (Manifest.open(QIODevice::WriteOnly)) Manifest.write(QJsonDocument(QJsonObject{
+                {"purpose", "archive-preview-edit"}, {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}, {"owner", Token}, {"retention", "until-recovered-or-explicitly-discarded"}, {"source", QString::fromStdString(storage::Serialize(Binding.source_.locator_))},
+                {"draft", Binding.draftPath_}, {"pending", Binding.archivePending_}}).toJson());
+            Reply["committed"] = true; Reply["archivePending"] = Binding.archivePending_; Reply["draftPath"] = Binding.draftPath_;
+            return Reply;
+        }
         storage::Result<storage::WriteReceipt> Saved = storage::Error{storage::ErrorCategory::Internal, "document-save"};
         const storage::DestinationExpectation Expected{true, Binding.source_.id_.revision_};
-        if (Binding.source_.locator_.kind_ == storage::LocatorKind::Local && !Binding.hash_.isEmpty())
+        if ((Binding.source_.locator_.kind_ == storage::LocatorKind::Local || Binding.source_.locator_.kind_ == storage::LocatorKind::Smb) && !Binding.hash_.isEmpty())
         {
             QFile Current(QString::fromUtf8(Binding.source_.locator_.root_));
             if (!Current.open(QIODevice::ReadOnly)) return Fail("document-source-read");
@@ -73,6 +104,25 @@ namespace hc::document
         Binding.hash_ = QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256);
         Reply["committed"] = Saved.Value().destinationCommitted_;
         Reply["cleanupWarning"] = !Saved.Value().cleanupErrors_.empty(); return Reply;
+    }
+    void DocumentHostBroker::CaptureLoadedHash(const QString& Token, const QByteArray& Hash)
+    {
+        const auto At = sources_.find(Token);
+        if (At != sources_.end() && At->second.hash_.isEmpty() && Hash.size() == 32) At->second.hash_ = Hash;
+    }
+    QJsonObject DocumentHostBroker::CommitArchive(const QString& Token, bool Discard, storage::OperationContext Context)
+    {
+        const auto At = sources_.find(Token);
+        if (At == sources_.end()) return {{"error", "archive-source-expired"}};
+        auto& Binding = At->second;
+        if (!Binding.archivePending_) return {{"committed", true}};
+        if (!Discard) {
+            const auto Saved = Binding.archiveWriteback_(Binding.draftPath_.toStdString(), Context);
+            if (!Saved.HasValue()) return {{"error", QString::fromStdString(Saved.Failure().code_)}, {"draftPath", Binding.draftPath_}};
+        }
+        Binding.archivePending_ = false;
+        Binding.draft_->setAutoRemove(true);
+        return {{"committed", true}};
     }
     void DocumentHostBroker::Retain(const std::set<QString>& Tokens) { std::erase_if(sources_, [&](const auto& Item) { return !Tokens.contains(Item.first); }); }
     void DocumentHostBroker::Close() { sources_.clear(); retiredSaves_.clear(); }

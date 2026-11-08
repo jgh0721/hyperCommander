@@ -163,7 +163,7 @@ namespace hc::document
         std::shared_ptr<Tab> active() const;
         std::shared_ptr<Tab> find(const QString& Id) const;
         QJsonObject open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
-            const QString& RecoveryPath = {}, const QString& DisplayName = {});
+            const QString& RecoveryPath = {}, const QString& DisplayName = {}, QJsonObject ReadPrefix = {});
         void save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite = false, bool SaveEpubOriginal = false);
         void startSave(const std::shared_ptr<Tab>& Tab, std::shared_ptr<LocalSave> Request);
         void load(const std::shared_ptr<Tab>& Tab, bool Discard = false, const QString& RecoveryPath = {});

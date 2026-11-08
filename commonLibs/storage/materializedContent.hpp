@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "storage.hpp"
+#include <mutex>
 
 namespace hc::storage
 {
@@ -8,10 +9,30 @@ namespace hc::storage
     public:
         ProviderContentSource(std::shared_ptr<IStorageProvider> Provider, EntrySnapshot Entry)
             : provider_(std::move(Provider)), entry_(std::move(Entry)) {}
+        // Optional archive-close transaction captured by the owning navigation session.
+        // The argument is a saved draft, never a path supplied by the helper.
+        using ArchiveWriteback = std::function<Result<Unit>(const std::string&, OperationContext)>;
+        void SetArchiveWriteback(ArchiveWriteback Writeback) { archiveWriteback_ = std::move(Writeback); }
+        const ArchiveWriteback& GetArchiveWriteback() const { return archiveWriteback_; }
+        void RememberPrefix(std::vector<std::byte> Bytes, std::shared_ptr<IReadStream> Tail = {}) {
+            std::lock_guard Lock(prefixMutex_);
+            if (Bytes.size() <= 65536) {
+                prefix_ = std::move(Bytes);
+                // Preserve the decoder cursor so an archive probe is not extracted twice.
+                if (entry_.locator_.kind_ == LocatorKind::Archive) prefixTail_ = std::move(Tail);
+            }
+        }
+        std::vector<std::byte> Prefix() const { std::lock_guard Lock(prefixMutex_); return prefix_; }
         EntrySnapshot Describe() const override { return entry_; }
         Task<std::shared_ptr<IReadStream>> OpenRead(OperationContext Context) override
         {
             if (!provider_) return Ready<std::shared_ptr<IReadStream>>(Error{ErrorCategory::InvalidRequest, "content-provider-required"});
+            std::shared_ptr<IReadStream> Tail; std::vector<std::byte> Prefix;
+            { std::lock_guard Lock(prefixMutex_); Tail = std::exchange(prefixTail_, {}); if (Tail) Prefix = prefix_; }
+            if (Tail) {
+                auto Verified = Verify(Context).get(); if (!Verified.HasValue()) return Ready<std::shared_ptr<IReadStream>>(Verified.Failure());
+                return Ready<std::shared_ptr<IReadStream>>(std::shared_ptr<IReadStream>(std::make_shared<PrefixStream>(std::move(Prefix), std::move(Tail), entry_.size_)));
+            }
             return provider_->OpenRead(entry_.id_, std::move(Context));
         }
         Task<Unit> Verify(OperationContext Context) override
@@ -29,8 +50,33 @@ namespace hc::storage
             return Ready<Unit>(Unit{});
         }
     private:
+        class PrefixStream final : public IReadStream {
+        public:
+            PrefixStream(std::vector<std::byte> Bytes, std::shared_ptr<IReadStream> Tail, std::uint64_t Size)
+                : bytes_(std::move(Bytes)), tail_(std::move(Tail)), size_(Size) {}
+            bool CanSeek() const override { return false; }
+            ReadAccess Access() const override { return ReadAccess::Sequential; }
+            Task<Unit> Seek(std::uint64_t, OperationContext) override { return Ready<Unit>(Error{ErrorCategory::Unsupported, "prefix-stream-seek"}); }
+            Task<ReadChunk> Read(std::size_t Count, OperationContext Context) override {
+                if (auto Stop = Context.Check({})) return Ready<ReadChunk>(*Stop);
+                if (!Count || !Context.maxReadBytes_) return Ready<ReadChunk>(Error{ErrorCategory::InvalidRequest, "zero-read-size"});
+                if (position_ < bytes_.size()) {
+                    const auto Size = (std::min)({Count, Context.maxReadBytes_, bytes_.size() - position_});
+                    ReadChunk Chunk{{bytes_.begin() + position_, bytes_.begin() + position_ + Size}, position_ + Size == size_};
+                    position_ += Size; return Ready<ReadChunk>(std::move(Chunk));
+                }
+                return tail_->Read(Count, std::move(Context));
+            }
+        private:
+            std::vector<std::byte> bytes_; std::shared_ptr<IReadStream> tail_;
+            std::uint64_t size_; std::size_t position_ = 0;
+        };
         std::shared_ptr<IStorageProvider> provider_;
         EntrySnapshot entry_;
+        ArchiveWriteback archiveWriteback_;
+        mutable std::mutex prefixMutex_;
+        std::vector<std::byte> prefix_;
+        std::shared_ptr<IReadStream> prefixTail_;
     };
     struct MaterializationLimits
     {

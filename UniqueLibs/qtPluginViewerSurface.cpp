@@ -1,7 +1,11 @@
 ﻿#include "qtPluginViewerSurface.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
+#include "UniqueLibs/qtMessageDialog.hpp"
+#include <QMessageBox>
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include <QEvent>
+#include <QFileInfo>
+#include <QDateTime>
 #include <qt_windows.h>
 #include "pluginHost/wlxWindowMessage.hpp"
 #include <QFocusEvent>
@@ -24,6 +28,15 @@ using namespace hc::viewer;
 
 namespace
 {
+    QByteArray PreviewFiles(const PluginViewerOptions& Options)
+    {
+        QByteArray Key;
+        for (const auto& Path : {Options.binaryPath_, Options.manifestPath_, Options.executable_, Options.defaultIniPath_}) {
+            const QFileInfo File(Path);
+            Key += Path.toUtf8() + '\0' + QByteArray::number(File.size()) + ':' + QByteArray::number(File.lastModified().toMSecsSinceEpoch()) + '\0';
+        }
+        return Key;
+    }
     class WlxAnchor final : public QWidget
     {
     public:
@@ -56,9 +69,10 @@ namespace
     };
 }
 
-QtPluginViewerController::QtPluginViewerController(QWidget* Main, PluginViewerService::MaterializerFactory Factory)
+QtPluginViewerController::QtPluginViewerController(QWidget* Main, PluginViewerService::MaterializerFactory Factory, int PreviewIdleMs)
     : QObject(Main), service_(std::make_unique<PluginViewerService>(std::move(Factory)))
 {
+    previewIdleMs_ = std::max(1, PreviewIdleMs);
     parking_ = new QWidget(Main); parking_->setObjectName("hc.wlx.retiring");
     parking_->setAttribute(Qt::WA_NativeWindow); parking_->resize(1, 1); parking_->hide(); parking_->winId();
     timer_ = new QTimer(this); timer_->setInterval(16); connect(timer_, &QTimer::timeout, this, &QtPluginViewerController::collect); timer_->start();
@@ -99,14 +113,63 @@ void QtPluginViewerController::Retire(QWidget* Anchor, const std::shared_ptr<Hos
         Anchor->hide(); Anchor->setParent(parking_);
     }
 }
+bool QtPluginViewerController::CachePreview(QWidget* Anchor, const std::shared_ptr<HostedViewerSession>& Session,
+    const PluginViewerOptions& Options)
+{
+    if (!Anchor || !Session || Options.purpose_ != ViewerPurpose::QuickPreview
+        || Options.approval_.reviewed_.id_ != "builtin.hyperviewer") return false;
+    const auto Details = Session->Details();
+    if (!Details.documentChannel_ || Details.viewer_.status_ != ViewerStatus::Ready) return false;
+    for (const auto& Item : Details.documentState_["documents"].toArray()) {
+        const auto Tab = Item.toObject();
+        if (Tab["dirty"].toBool() || Tab["loading"].toBool() || Tab["saving"].toBool() || Tab["archivePending"].toBool() || Tab["archiveUpdating"].toBool()) return false;
+    }
+    const auto Clear = Session->SendDocument({{"action", "clearPreview"}});
+    if (!Clear.HasValue()) return false;
+    if (previewCache_.session_) Retire(previewCache_.anchor_, previewCache_.session_);
+    previewCache_ = {Anchor, Session}; previewOptions_ = Options; previewFiles_ = PreviewFiles(Options);
+    // Writer authority belongs to a document, never to the cached process.
+    previewOptions_->writer_.reset(); previewClearSequence_ = Clear.Value(); previewIdle_.invalidate();
+    Anchor->hide(); Anchor->setParent(parking_);
+    return true;
+}
+QtPluginViewerController::CachedPreview QtPluginViewerController::TakePreview(const PluginViewerOptions& Options)
+{
+    if (!previewCache_.session_ || !previewOptions_) return {};
+    const auto& Cached = *previewOptions_;
+    const auto Details = previewCache_.session_->Details();
+    const bool Compatible = previewFiles_ == PreviewFiles(Options) && Options.purpose_ == ViewerPurpose::QuickPreview && Options.approval_.approved_
+        && Cached.approval_.reviewed_ == Options.approval_.reviewed_
+        && Cached.approval_.granted_ == Options.approval_.granted_
+        && Cached.binaryPath_ == Options.binaryPath_ && Cached.manifestPath_ == Options.manifestPath_
+        && Cached.executable_ == Options.executable_ && Cached.applicationRule_ == Options.applicationRule_
+        && Cached.detectionOverride_ == Options.detectionOverride_ && Cached.flags_ == Options.flags_;
+    if (!Compatible || Details.idle_ || Details.commandError_) {
+        Retire(previewCache_.anchor_, previewCache_.session_); previewCache_ = {}; previewOptions_.reset(); return {};
+    }
+    // Clear and replacement are serialized on the same worker. Waiting for an empty
+    // snapshot prevents a failed close from becoming an implicit discard.
+    if (Details.commandSequence_ < previewClearSequence_ || !Details.documentState_["documents"].toArray().isEmpty()) return {};
+    previewOptions_.reset(); previewIdle_.invalidate();
+    return std::exchange(previewCache_, {});
+}
 void QtPluginViewerController::CloseAll()
 {
+    previewCache_ = {}; previewOptions_.reset(); previewIdle_.invalidate();
     for (auto& Record : records_) Retire(Record.anchor_, Record.session_);
     if (service_) service_->CancelAll();
 }
 bool QtPluginViewerController::IsIdle() const { return !service_ || service_->IsIdle(); }
 void QtPluginViewerController::collect()
 {
+    if (previewCache_.session_) {
+        const auto Details = previewCache_.session_->Details();
+        const bool Cleared = Details.commandSequence_ >= previewClearSequence_;
+        if (Cleared && !Details.commandError_ && Details.documentState_["documents"].toArray().isEmpty() && !previewIdle_.isValid()) previewIdle_.start();
+        if (Details.idle_ || (Cleared && Details.commandError_) || (previewIdle_.isValid() && previewIdle_.elapsed() >= previewIdleMs_)) {
+            Retire(previewCache_.anchor_, previewCache_.session_); previewCache_ = {}; previewOptions_.reset(); previewIdle_.invalidate();
+        }
+    }
     for (auto It = records_.begin(); It != records_.end();)
     {
         if (!It->session_->Details().idle_) { ++It; continue; }
@@ -163,7 +226,13 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
     if (!controller_) { status_->setText(tr("뷰어를 사용할 수 없습니다.")); emit Failed("viewer-host-unavailable"); return; }
     presentationTrace_=std::make_unique<hc::document::ImageTraceSpan>("viewer.prepare-to-present");
     beginPreparation(Source ? QString::fromStdString(Source->Describe().name_) : QString{});
-    auto* Anchor = new WlxAnchor(this); anchor_ = Anchor; anchor_->setObjectName("hc.wlx.native-parent");
+    previewOptions_.reset();
+    if (preview_ && !Candidates.empty() && Candidates.front().approval_.reviewed_.id_ == "builtin.hyperviewer") previewOptions_ = Candidates.front();
+    if (previewOptions_) previewFiles_ = PreviewFiles(*previewOptions_);
+    auto Cached = previewOptions_ ? controller_->TakePreview(*previewOptions_) : QtPluginViewerController::CachedPreview{};
+    auto* Anchor = Cached.anchor_ ? static_cast<WlxAnchor*>(Cached.anchor_.data()) : new WlxAnchor(this);
+    if (Cached.anchor_) Anchor->setParent(this);
+    anchor_ = Anchor; anchor_->setObjectName("hc.wlx.native-parent");
     Anchor->interactionRequested_ = [this](quintptr Child) {
         if (session_ && session_->Details().child_ == QString::number(Child, 16)) interacted_ = true;
     };
@@ -189,6 +258,11 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
     anchor_->setFocusPolicy(Qt::StrongFocus); anchor_->installEventFilter(this);
     layout()->addWidget(anchor_);anchor_->setGeometry(rect());anchor_->hide();
     static_cast<QStackedLayout*>(layout())->setCurrentWidget(preparation_);layout()->activate();
+    if (Cached.session_) {
+        session_ = std::move(Cached.session_); ready_ = true;
+        if (OpenPrepared({{Source, previewOptions_->writer_}})) { SetReturnKey(returnKey_); return; }
+        Close(); open(std::move(Candidates), std::move(Source), std::move(Policy)); return;
+    }
     auto Opened = Policy ? controller_->OpenAutomatic(anchor_, std::move(Candidates), std::move(Source), std::move(*Policy))
         : controller_->Open(anchor_, std::move(Candidates.front()), std::move(Source));
     if (!Opened.HasValue())
@@ -200,6 +274,7 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
 }
 void QtPluginViewerSurface::Close()
 {
+    const bool Cache = preview_ && previewOptions_ && ready_ && previewFiles_ == PreviewFiles(*previewOptions_);
     preview_ = interacted_ = false;
     presentationTrace_.reset();
     lastSearch_.clear(); clipboardToken_.clear();
@@ -212,9 +287,28 @@ void QtPluginViewerSurface::Close()
         static_cast<WlxAnchor*>(anchor_.data())->interactionRequested_ = {};
         anchor_->removeEventFilter(this); layout()->removeWidget(anchor_);
     }
-    if (controller_) controller_->Retire(anchor_, session_);
+    if (controller_) {
+        if (!Cache || !controller_->CachePreview(anchor_, session_, *previewOptions_)) controller_->Retire(anchor_, session_);
+    }
     else if (session_) session_->Close();
-    anchor_ = nullptr; session_.reset(); status_->setText(tr("뷰어를 닫았습니다.")); static_cast<QStackedLayout*>(layout())->setCurrentWidget(preparation_);
+    previewOptions_.reset(); anchor_ = nullptr; session_.reset(); status_->setText(tr("뷰어를 닫았습니다.")); static_cast<QStackedLayout*>(layout())->setCurrentWidget(preparation_);
+    archiveCloseSequence_ = 0;
+}
+void QtPluginViewerSurface::RequestArchiveClose()
+{
+    if (!session_ || archiveCloseSequence_) return;
+    const auto Sent = session_->CloseArchive();
+    if (Sent.HasValue()) { archiveCloseSequence_ = Sent.Value(); timer_->start(); }
+}
+bool QtPluginViewerSurface::ReusePreview(const PluginViewerOptions& Options, std::shared_ptr<IContentSource> Source)
+{
+    if (!previewOptions_ || !preview_ || !ready_ || interacted_ || previewFiles_ != PreviewFiles(Options)) return false;
+    const auto& Previous = *previewOptions_;
+    if (!Options.approval_.approved_ || Previous.approval_.reviewed_ != Options.approval_.reviewed_
+        || Previous.approval_.granted_ != Options.approval_.granted_ || Previous.applicationRule_ != Options.applicationRule_
+        || Previous.detectionOverride_ != Options.detectionOverride_ || Previous.flags_ != Options.flags_) return false;
+    if (!OpenPrepared({{std::move(Source), Options.writer_}})) return false;
+    previewOptions_ = Options; previewOptions_->purpose_ = ViewerPurpose::QuickPreview; return true;
 }
 bool QtPluginViewerSurface::OpenPrepared(std::vector<HostedViewerSession::DocumentInput> Inputs)
 {
@@ -246,6 +340,29 @@ void QtPluginViewerSurface::poll()
 {
     if (!session_) return;
     const auto Details = session_->Details();
+    if (archiveCloseSequence_) {
+        if (Details.commandSequence_ < archiveCloseSequence_) return;
+        archiveCloseSequence_ = 0;
+        if (Details.externalArchiveClosed_) {
+            static_cast<QStackedLayout*>(layout())->setCurrentWidget(preparation_);
+            status_->setText(tr("플러그인이 종료되었습니다. 편집본: %1").arg(Details.externalArchiveDraft_));
+        }
+        if (Details.commandError_) {
+            hc::ui::MessageDialog::warning(this, tr("압축 갱신 실패"),
+                tr("편집본을 보존했습니다. 다시 닫기를 실행하면 재시도할 수 있습니다.\n%1\n%2")
+                    .arg(Details.externalArchiveDraft_, QString::fromStdString(Details.commandError_->code_)));
+            return;
+        }
+        if (Details.externalArchiveDone_) { timer_->stop(); emit CloseRequested(); return; }
+        const auto Decision = hc::ui::MessageDialog::question(this, tr("압축 파일 갱신"),
+            tr("플러그인에서 저장한 변경 내용을 압축 파일에 반영하시겠습니까?\n아니요: 저장한 편집본 폐기\n취소: 편집본 보존\n%1").arg(Details.externalArchiveDraft_),
+            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (Decision == QMessageBox::Cancel) return;
+        const auto Sent = session_->CloseArchive(Decision == QMessageBox::Yes ? 1 : 2);
+        if (Sent.HasValue()) archiveCloseSequence_ = Sent.Value();
+        return;
+    }
+    if (Details.externalArchiveClosed_) return;
     if (!ready_ && preparationElapsed_.isValid()) {
         QString Stage;
         const auto Phase=Details.preparationStage_;
@@ -323,6 +440,14 @@ void QtPluginViewerSurface::poll()
             if (!Sent.HasValue()) clipboardToken_.clear();
         }
     }
+    if (!ready_ && Details.documentChannel_ && !Details.child_.isEmpty()) {
+        for (const auto& Item : Details.documentState_["documents"].toArray()) {
+            if (!Item.toObject()["textPresentationReady"].toBool()) continue;
+            static_cast<QStackedLayout*>(layout())->setCurrentWidget(anchor_); layout()->activate(); resizeNative();
+            if (presentationTrace_) { hc::document::ImageTraceSpan FirstText("viewer.first-text-prefix"); presentationTrace_.reset(); }
+            break;
+        }
+    }
     bool ContentReady=Details.viewer_.status_==ViewerStatus::Ready && Details.commandSequence_ >= preparedSequence_;
     if (preparedSequence_ && Details.commandSequence_ >= preparedSequence_ && Details.commandError_) {
         preparedSequence_ = 0; timer_->stop(); progress_->hide(); preparationDetail_->clear(); status_->setText(tr("문서를 열 수 없습니다."));
@@ -348,8 +473,10 @@ void QtPluginViewerSurface::poll()
             const auto Record=Item.toObject();
             const bool EpubSource=Record["view"].toObject()["viewId"]=="epub" && Record["sourceReady"].toBool()
                 && !Record["canSave"].toBool() && !Record["canSaveAs"].toBool();
+            // Retired-tab recovery cleanup must not hide an already attached text document.
             ContentReady &= !Record["sourceToken"].toString().isEmpty() && (EpubSource || Record["imagePresentationReady"].toBool() ||
-                (Details.documentState_["idle"].toBool() && !Record["loading"].toBool() && Record["lifecycle"].toString()=="ready"));
+                ((Record["view"].toObject()["viewId"] == "text" || Details.documentState_["idle"].toBool())
+                    && !Record["loading"].toBool() && Record["lifecycle"].toString()=="ready"));
         }
     }
     if (ContentReady && !ready_)
@@ -369,7 +496,9 @@ void QtPluginViewerSurface::poll()
     if (Details.viewer_.status_ == ViewerStatus::Failed)
     {
         status_->setText(tr("뷰어를 열 수 없습니다. 플러그인 설정과 파일을 확인하세요."));
-        emit Failed(QString::fromStdString(Details.viewer_.error_ ? Details.viewer_.error_->code_ : "viewer-failed"));
+        auto Error = QString::fromStdString(Details.viewer_.error_ ? Details.viewer_.error_->code_ : "viewer-failed");
+        if (Details.externalArchive_) Error += tr("\n보존한 압축 편집본: %1").arg(Details.externalArchiveDraft_);
+        emit Failed(Error);
     }
     else status_->setText(tr("뷰어를 닫았습니다."));
 }

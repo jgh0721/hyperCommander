@@ -30,13 +30,15 @@ namespace hc::document
     public:
         explicit DocumentViewPane(QWidget* Parent = nullptr);
         ~DocumentViewPane() override;
+        void ShowTextLoadingPreview(const QString& Text);
+        bool HasTextLoadingPreview() const;
         void ShowLoadingPreview(const QImage& Image,bool Partial=false);
         bool IsReadOnly() const { return readOnly_; }
         ViewUiContribution Contribution() const { return contribution_; }
         bool Load(const TextInput& Input, bool Traverse, bool ImageEditing = true);
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
         void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
-        void ConfigureEpub(WebProcessRuntime Runtime,bool Editing=false) { epubRuntime_ = std::move(Runtime);epubEditingAllowed_=Editing; }
+        void ConfigureEpub(WebProcessRuntime Runtime,bool Editing=false) { epubRuntime_ = std::move(Runtime);epubConfigured_=true;epubEditingAllowed_=Editing; }
         bool CanEditEpub()const;bool CanSaveEpub()const;bool CanPrepareEpubSave()const;bool PrepareEpubSave(bool SaveAs);
         bool IsMarkdown() const { return markdown_ != nullptr; }
         bool MarkdownSourceVisible() const;
@@ -138,6 +140,7 @@ namespace hc::document
         void showEvent(QShowEvent* Event) override;
     private:
         QWidget* loadingPreview_ = nullptr;
+        QWidget* textLoadingPreview_ = nullptr;
         // A text position restored while hidden; applied on first show, when wrapped rows are known.
         std::optional<TextRecoveryState> pendingTextPosition_;
 
@@ -182,6 +185,7 @@ namespace hc::document
         HwpOpenWindow* hwp_ = nullptr;
         bool hwpFocusPending_ = false;
         WebProcessRuntime hwpRuntime_, epubRuntime_;
+        bool epubConfigured_ = false;
         EpubProcessView* epub_ = nullptr;
         QWidget* epubFailure_=nullptr;
         bool epubClosing_ = false,epubEditingAllowed_=false;

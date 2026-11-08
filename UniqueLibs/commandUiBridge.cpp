@@ -12,6 +12,7 @@
 #include "commonLibs/plugins/archiveVolumeNames.hpp"
 #include <QCheckBox>
 #include "commandUiBridge.hpp"
+#include "archivePreviewWriteback.hpp"
 #include "HyperCommander/UIs/itemSelectionController.hpp"
 #include "navigationError.hpp"
 #include "HyperCommander/UIs/dlgMain.hpp"
@@ -369,7 +370,7 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
             else Window->statusBar()->showMessage(Status == "ready" ? tr("문서를 열었습니다.") : Status == "started" ? tr("편집기를 실행했습니다.") : tr("문서를 준비하고 있습니다…"), 3000);
         }
     });
-    auto* PreviewTimer = new QTimer(this); PreviewTimer->setInterval(120);
+    auto* PreviewTimer = new QTimer(this); PreviewTimer->setInterval(500);
     connect(PreviewTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview); PreviewTimer->start();
     fileJobs_->onFinished_ = [Guard = QPointer<CommandUiBridge>(this)](const hc::operations::JobResult& Result) {
         if (!Guard || !Guard->main_) return;
@@ -1980,7 +1981,27 @@ Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& I
     auto Writer = Selected->locator_.kind_ == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider()
         : Selected->locator_.kind_ == LocatorKind::Local || Selected->locator_.kind_ == LocatorKind::Smb
             ? MakeNativeWritableStorage(Selected->locator_.kind_, Reader) : nullptr;
-    auto Content = std::make_shared<ProviderContentSource>(std::move(Reader), *Selected);
+    auto Content = std::make_shared<ProviderContentSource>(Reader, *Selected);
+    if (Selected->locator_.kind_ == LocatorKind::Archive && fileJobs_ && Model->GetRoot()) {
+        const auto Pack = dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get());
+        if (Pack && Pack->GetWCX() && Pack->GetWCX()->WritePolicy().HasValue()) {
+            const auto Root = Pack->ReadLocation("/");
+            const auto Backend = Pack->GetWCX()->Backend();
+            const auto Plugin = Pack->GetWCX()->PluginPath().toStdString();
+            const auto Entry = *Selected;
+            auto* Scheduler = &fileJobs_->Scheduler();
+            Content->SetArchiveWriteback(MakeArchivePreviewWriteback(Root, Entry, Reader, Backend, Plugin, *Scheduler, [Root, Guard = QPointer<CommandUiBridge>(this)] {
+                if (Guard) QMetaObject::invokeMethod(Guard, [Guard, Root] {
+                    if (!Guard || !Guard->main_) return;
+                    for (auto* Model : Guard->main_->findChildren<CFSModel*>()) {
+                        const auto Location = Model->WorkspaceLocation();
+                        if (Location.kind_ == LocatorKind::Archive && Location.root_ == Root.root_) Model->Refresh();
+                    }
+                }, Qt::QueuedConnection);
+
+            }));
+        }
+    }
     if (Invocation.id_ == "hc.viewer.open") { viewers_->OpenFull(std::move(Content)); return CommandOutcome{}; }
     auto* SourcePanel = PanelOf(Model);
     if (Invocation.id_ == "hc.viewer.quick")
@@ -1993,6 +2014,11 @@ Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& I
         quick_ = qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex()));
         if (!quick_) return Error{ErrorCategory::Internal, "preview-surface-unavailable"};
         quickPanel_ = Target; quickSource_ = SourcePanel;
+        if (auto* Grid = qobject_cast<CGridView*>(SourcePanel->GetFocusView(SourcePanel->CurrentTabIndex()))) {
+            auto* SelectionTimer = new QTimer(quick_); SelectionTimer->setSingleShot(true); SelectionTimer->setInterval(35);
+            connect(Grid, &CGridView::sigPreviewSelectionChanged, SelectionTimer, [SelectionTimer]() { SelectionTimer->start(); });
+            connect(SelectionTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview);
+        }
         connect(quick_, &CQuickView::CloseRequested, this, [this] { Dispatch("hc.viewer.close", {}, "shortcut"); });
         connect(quick_, &CQuickView::FollowSelectionRequested, this, [this] { quickKey_.clear(); refreshPreview(); });
         connect(quick_, &CQuickView::ReturnFocusRequested, this, &CommandUiBridge::returnQuickFocus);

@@ -236,7 +236,7 @@ namespace hc::document
         std::optional<storage::Error> serializationError_;
         bool rejectingEdit_ = false;
         std::optional<SaveTicket> pending_;
-        TextInput input_;
+        TextInput input_; QJsonObject readPrefix_;
         // "다른 인코딩으로 다시 읽기": later reloads of this tab decode with it too.
         QString encodingOverride_;
         // The running read or write shown by the progress overlay; kind_ None when idle.
@@ -250,6 +250,8 @@ namespace hc::document
         std::shared_ptr<std::stop_source> cancellation_ = std::make_shared<std::stop_source>();
         bool loading_ = true, saving_ = false, hostSlot_ = false, broker_ = false;
         bool navigating_ = false, closeRequested_ = false, choosingSavePath_ = false;
+        bool archivePending_ = false, archiveUpdating_ = false, archiveDiscard_ = false;
+        QString archiveDraft_;
         bool reloadAfterClose_ = false;
         bool originalAuthority_ = false, originalSave_ = true, closed_ = false, checkpointing_ = false, closeAfterSave_ = false, recovered_ = false;
         std::optional<RecoverySnapshot> checkpointReceipt_;
@@ -1245,11 +1247,11 @@ namespace hc::document
     bool DocumentWorkspaceWidget::IsIdle() const
     {
         return (!searchPanel_ || !searchPanel_->Busy()) && !recoveryWorkers_ && std::none_of(documents_.begin(), documents_.end(), [](const auto& Tab) {
-            return Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
+            return Tab->archiveUpdating_ || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
         });
     }
     QJsonObject DocumentWorkspaceWidget::open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
-        const QString& RecoveryPath, const QString& DisplayName)
+        const QString& RecoveryPath, const QString& DisplayName, QJsonObject ReadPrefix)
     {
         if (hotExitClosing_) return Error("document-hotexit-closing");
         if (!QFileInfo(Path).isAbsolute() || Path.contains(QChar::Null)) return Error("document-open-path");
@@ -1275,7 +1277,7 @@ namespace hc::document
             activate(Tab); return {{"documentId", Tab->id_}, {"duplicate", true}};
         }
         if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
-        auto Tab = std::make_shared<DocumentWorkspaceWidget::Tab>(); Tab->path_ = Path;
+        auto Tab = std::make_shared<DocumentWorkspaceWidget::Tab>(); Tab->path_ = Path; Tab->readPrefix_ = std::move(ReadPrefix);
         Tab->session_->SetUnlimitedBytes(hosted_);
         Tab->hotExitRestore_ = pendingHotExitRestore_;
         Tab->recoveryBaseline_ = pendingRecoveryBaseline_;
@@ -1286,6 +1288,7 @@ namespace hc::document
         // while explicitly opened local files are writable in either product.
         Tab->originalAuthority_ = !HostSlot && !Broker && SourceToken.isEmpty() && !Tab->recovered_; Tab->originalSave_ = Tab->originalAuthority_;
         auto* Pane = new DocumentViewPane(tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_);
+        Pane->setProperty("hc.previewPath", Path);
         Pane->SetUnlimitedBytes(hosted_);
         Pane->SetShortcutBindings(shortcutRouter_->Bindings());
         Tab->pane_ = Pane;
@@ -1448,14 +1451,15 @@ namespace hc::document
         } else Tab->progress_ = {};
         refreshProgress(Tab);
         auto* Watcher = new QFutureWatcher<storage::Result<TextInput>>(this);
-        struct PreviewState {std::mutex mutex_;QImage image_;QJsonObject preparation_;};
+        struct PreviewState {std::mutex mutex_;QImage image_;QString text_;QJsonObject preparation_;};
         Tab->preparation_={};
         const auto Progress=std::make_shared<PreviewState>();
         auto* PreviewTimer=new QTimer(Watcher);PreviewTimer->setInterval(50);
         connect(PreviewTimer,&QTimer::timeout,this,[this,Tab,Generation,Cancellation,Progress]{
             if(Tab->closed_ || !Tab->loading_ || Cancellation->stop_requested() || Generation!=Tab->session_->Snapshot().generation_)return;
-            QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;Tab->preparation_=Progress->preparation_;}
+            QImage Image;QString Text;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;Text=Progress->text_;Tab->preparation_=Progress->preparation_;}
             if(!Image.isNull())Tab->pane_->ShowLoadingPreview(Image);
+            else if(!Text.isEmpty())Tab->pane_->ShowTextLoadingPreview(Text);
             if(Tab->progress_.kind_==DocumentProgress::Kind::Read) {
                 const auto Name=documentName(*Tab);const auto& State=Tab->preparation_;
                 const auto Done=State["bytesDone"].toInteger(),Total=State["bytesTotal"].toInteger();
@@ -1476,7 +1480,7 @@ namespace hc::document
             if(!Result.HasValue())finishProgress(Tab,false,Result.Failure().category_==storage::ErrorCategory::Cancelled?QString():QString::fromStdString(Result.Failure().code_));
             if (!Result.HasValue()) {
                 if(Result.Failure().category_!=storage::ErrorCategory::Cancelled){
-                    QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;Tab->preparation_=Progress->preparation_;}
+                    QImage Image;QString Text;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;Text=Progress->text_;Tab->preparation_=Progress->preparation_;}
                     Tab->pane_->ShowLoadingPreview(Image,true);
                 }
                 if (Tab->hotExitRestore_) restorationIncomplete_ = true;
@@ -1506,7 +1510,7 @@ namespace hc::document
                 Tab->loading_=true;
                 Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
                 Tab->pane_->ConfigureHwp(hwpRuntime_);
-                Tab->pane_->ConfigureEpub(epubRuntime_.value_or(MakeProductEpubRuntime(QCoreApplication::applicationDirPath())),!hosted_);
+                if (Tab->input_.viewId_ == "epub") Tab->pane_->ConfigureEpub(epubRuntime_ ? *epubRuntime_ : MakeProductEpubRuntime(QCoreApplication::applicationDirPath()),!hosted_);
                 const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_,!hosted_||!Tab->temporarySource_.isEmpty());
                 Tab->loading_=false;
                 if(!Loaded){Tab->session_->CompleteOpen(Generation,storage::Error{storage::ErrorCategory::InvalidRequest,"document-view-load"});Tab->error_="document-view-load";finishProgress(Tab,false,Tab->error_);}
@@ -1581,7 +1585,7 @@ namespace hc::document
         });
         auto Recovery = recovery_;
         const QSize PreviewBounds=(Tab->pane_->size()*Tab->pane_->devicePixelRatioF()).expandedTo(QSize(256,256));
-        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, PreviewBounds, AutoRestore=Tab->hotExitRestore_, Baseline=Tab->recoveryBaseline_, Unlimited=hosted_, Override=Tab->encodingOverride_]()->storage::Result<TextInput> {
+        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, PreviewBounds, AutoRestore=Tab->hotExitRestore_, Baseline=Tab->recoveryBaseline_, Unlimited=hosted_, Override=Tab->encodingOverride_, ReadPrefix=std::exchange(Tab->readPrefix_, {})]()->storage::Result<TextInput> {
             const auto Read=[&]()->storage::Result<TextInput> {
                 storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
                 Context.reportProgress_=[Progress](const storage::OperationContext::Progress& P){
@@ -1627,7 +1631,7 @@ namespace hc::document
                 }
                 return ReadDocumentFile(Path, Context, Unlimited,[Progress](QImage Image){
                     std::lock_guard Lock(Progress->mutex_);Progress->image_=std::move(Image);
-                },PreviewBounds);
+                },PreviewBounds,[Progress](QString Text){std::lock_guard Lock(Progress->mutex_);Progress->text_=std::move(Text);},ReadPrefix);
             };
             auto Input=Read();
             if(Override.isEmpty() || !Input.HasValue() || Input.Value().viewId_!="text")return Input;
@@ -1891,11 +1895,12 @@ namespace hc::document
             const auto Code = !Tab->error_.isEmpty() ? Tab->error_ : State.error_ ? QString::fromStdString(State.error_->code_) : !State.cleanupErrors_.empty() ? QString("document-saved-cleanup-warning") : QString{};
             QJsonArray Cleanup; for (const auto& Issue : State.cleanupErrors_) Cleanup.append(QString::fromStdString(Issue.code_));
             Tabs.append(QJsonObject{{"documentId", Tab->id_}, {"path", Tab->path_},
-                {"displayName", documentName(*Tab)},
+                {"displayName", documentName(*Tab)}, {"inputSha256", QString::fromLatin1(Tab->input_.hash_.toHex())},
                 {"sourceReady", Tab->pane_->IsEpub() && !Tab->loading_ && !Tab->closeRequested_ && !closingWorkspace_ && !Tab->input_.hash_.isEmpty() && Tab->error_.isEmpty()},
+                {"textPresentationReady", Tab->loading_ && !Tab->closeRequested_ && Tab->pane_->HasTextLoadingPreview()},
                 {"imagePresentationReady", !Tab->closeRequested_ && !closingWorkspace_ && Code.isEmpty()
                     && (Tab->loading_ || Tab->navigating_ ? Tab->pane_->HasLoadingPreview() : Tab->pane_->ImagePresentationReady())},
-                {"dirty", State.dirty_}, {"loading", Tab->loading_ || Tab->navigating_ || (Tab->pane_->IsProcessDocument()&&State.lifecycle_==DocumentLifecycle::Opening)},
+                {"archivePending", Tab->archivePending_}, {"archiveUpdating", Tab->archiveUpdating_}, {"archiveDiscard", Tab->archiveDiscard_}, {"dirty", State.dirty_}, {"loading", Tab->loading_ || Tab->navigating_ || (Tab->pane_->IsProcessDocument()&&State.lifecycle_==DocumentLifecycle::Opening)},
                 {"saving", Tab->saving_ || !Tab->pendingToken_.isEmpty()}, {"saveQueued", bool(Tab->queuedSave_)}, {"revision", QString::number(State.revision_)},
                 {"savedRevision", QString::number(State.savedRevision_)}, {"generation", QString::number(State.generation_)},
                 {"lifecycle", Life(State.lifecycle_)}, {"saveState", SaveState(State.saveState_)}, {"error", Code},
@@ -1974,7 +1979,7 @@ namespace hc::document
                         update();Bound=true;break;
                     }
                 }
-                if(!Bound)Results.append(open(Item["path"].toString(),Item["hostSlot"].toBool(),Item["sourceToken"].toString(),Item["broker"].toBool(),{},Item["displayName"].toString()));
+                if(!Bound)Results.append(open(Item["path"].toString(),Item["hostSlot"].toBool(),Item["sourceToken"].toString(),Item["broker"].toBool(),{},Item["displayName"].toString(),Item["readPrefix"].toObject()));
                 const auto Origin=Item["readingSource"].toObject();
                 if(!Origin.isEmpty()&&QFileInfo(Origin["path"].toString()).isAbsolute())for(const auto& Tab:documents_)if(Tab->sourceToken_==Item["sourceToken"].toString()&&!Tab->sourceToken_.isEmpty()){
                     Tab->readingPath_=Origin["path"].toString();Tab->readingEntry_=Origin["entry"].toString().replace('\\','/');Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
@@ -2000,6 +2005,14 @@ namespace hc::document
         if (Action == "setDocumentAppearance") return epubui::ApplyAppearance(Request["appearance"].toObject())
             ? QJsonObject{{"accepted", true}} : Error("document-appearance-invalid");
         if (Action == "state") return Snapshot();
+        if (Action == "clearPreview") {
+            if (!hosted_ || !property("hc.quickPreview").toBool() || !IsIdle()) return Error("preview-cache-busy");
+            for (const auto& Tab : documents_) if (Tab->Dirty() || Tab->archivePending_ || Tab->archiveUpdating_) return Error("preview-cache-dirty");
+            const auto Tabs = documents_;
+            for (const auto& Tab : Tabs) retire(Tab, false);
+            update();
+            return documents_.empty() ? QJsonObject{{"accepted", true}} : Error("preview-cache-busy");
+        }
         if (Action == "requestViewerClose") {
             if (!hosted_) return Error("document-not-hosted");
             QTimer::singleShot(0, this, [this] { RequestViewerClose(); });
@@ -2038,7 +2051,7 @@ namespace hc::document
             return {{"accepted",true}};
         }
         if (Action == "open" || Action == "openHost") {
-            const auto Reply=open(Request["path"].toString(), Action == "openHost", Request["sourceToken"].toString(), Request["broker"].toBool());
+            const auto Reply=open(Request["path"].toString(), Action == "openHost", Request["sourceToken"].toString(), Request["broker"].toBool(), {}, {}, Request["readPrefix"].toObject());
             if(!hosted_ && Request["copyOnly"].toBool())if(auto Tab=find(Reply["documentId"].toString())){Tab->originalAuthority_=false;Tab->originalSave_=false;}
             return Reply;
         }
@@ -2094,7 +2107,7 @@ namespace hc::document
         if(Tab->pane_->IsProcessDocument()&& !(Tab->pane_->CanEditEpub() && (Action=="saveAs" || Action=="save")) && (Action=="save"||Action=="saveAs"||Action=="prepareSave"))return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
         if (Action == "close") {
             if (Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
-            if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-close-dirty");
+            if ((Tab->Dirty() || Tab->archivePending_) && !Request["discard"].toBool()) return Error("document-close-dirty");
             retire(Tab, Request["discard"].toBool()); update(); return {{"accepted", true}};
         }
         if (Tab->loading_ || Tab->navigating_ || !Tab->pane_) return Error("document-not-ready");
@@ -2128,6 +2141,18 @@ namespace hc::document
             return {{"bytes", QString::fromLatin1(Chunk.toBase64())}, {"offset", QString::number(Offset)},
                 {"eof", Offset + quint64(Chunk.size()) == quint64(Tab->pendingBytes_.size())}};
         }
+        else if (Action == "archiveResult") {
+            if (!Tab->archiveUpdating_) return Error("archive-update-not-pending");
+            Tab->archiveUpdating_ = false;
+            if (Request["committed"].toBool()) {
+                Tab->archivePending_ = false; retire(Tab, true);
+            } else {
+                closingWorkspace_ = false; Tab->closeRequested_ = false; Tab->pane_->SetReadOnly(false);
+                Tab->error_ = Request["error"].toString("archive-update-failed");
+                ShowShellError(tr("압축 파일에 반영하지 못했습니다. 다시 닫아 재시도하거나 다른 위치에 저장하십시오.\n편집본: %1\n%2")
+                    .arg(Tab->archiveDraft_, Tab->error_));
+            }
+        }
         else if (Action == "commitSave") {
             if (!Tab->pending_ || Tab->pendingToken_.isEmpty() || Request["saveToken"].toString() != Tab->pendingToken_
                 || Request["revision"].toString() != QString::number(Tab->pending_->revision_) || !Request["committed"].isBool()) return Error("document-stale-save-token");
@@ -2142,9 +2167,10 @@ namespace hc::document
             if (!Tab->session_->CompleteSave(*Tab->pending_, std::move(Result))) return Error("document-stale-save-token");
             Tab->pendingToken_.clear(); Tab->pendingBytes_.clear(); Tab->pending_.reset();
             if (Request["committed"].toBool()) {
+                Tab->archivePending_ = Request["archivePending"].toBool(); Tab->archiveDraft_ = Request["draftPath"].toString();
                 Tab->checkpointedRevision_ = std::numeric_limits<std::uint64_t>::max();
                 cleanupRecovery(Tab, Revision);
-                if (Tab->closeAfterSave_ && !Tab->Dirty()) retire(Tab, true); else Tab->closeAfterSave_ = false;
+                if (Tab->closeAfterSave_ && !Tab->Dirty()) { Tab->closeAfterSave_ = false; closeTab(int(std::distance(documents_.begin(), std::find(documents_.begin(), documents_.end(), Tab)))); } else Tab->closeAfterSave_ = false;
             }
             else { Tab->closeAfterSave_ = false; closingWorkspace_ = false; }
         }
@@ -2586,6 +2612,16 @@ namespace hc::document
             if (Choice == QMessageBox::Save) {
                 activate(Target); Target->closeAfterSave_ = true; findChild<QAction*>(Target->pane_->CanEditEpub() && !Target->originalSave_?"saveDocumentAs":"saveDocument")->trigger(); return;
             }
+        }
+        if (Target->archiveUpdating_) return;
+        if (Target->archivePending_) {
+            const QScopedValueRollback PromptGuard(closePromptActive_, true);
+            const auto Choice = hc::ui::MessageDialog::question(this, tr("압축 파일 갱신"),
+                tr("임시 파일에 저장한 변경 내용을 압축 파일에 반영하시겠습니까?\n아니요를 선택하면 저장한 임시 편집본을 버립니다."),
+                QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Yes);
+            if (Choice == QMessageBox::Cancel) { closingWorkspace_ = false; return; }
+            Target->pane_->SetReadOnly(true); Target->archiveUpdating_ = true; Target->archiveDiscard_ = Choice == QMessageBox::No;
+            update(); return;
         }
         retire(Target, true); update();
     }

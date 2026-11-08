@@ -40,7 +40,7 @@ namespace hc::document
             if(Native.startsWith("\\\\tsclient\\",Qt::CaseInsensitive)&&Source.id_.revision_)
                 Source.id_.revision_=native::MetadataRevision(*Source.id_.revision_);
         }
-        Result<QByteArray> Read(const QString& Path, OperationContext Context, bool Image = false, QCryptographicHash* Digest = nullptr, QByteArray* Revision = nullptr, qint64 Limit = DocumentByteLimit, const std::function<void(QImage)>& Preview = {})
+        Result<QByteArray> Read(const QString& Path, OperationContext Context, bool Image = false, QCryptographicHash* Digest = nullptr, QByteArray* Revision = nullptr, qint64 Limit = DocumentByteLimit, const std::function<void(QImage)>& Preview = {}, const std::function<void(QString)>& TextPreview = {}, const QByteArray& Prefix = {})
         {
             ImageTraceSpan ReadTrace("file.read-and-hash",Path);
             if (auto Stop = Context.Check({"document"})) return *Stop;
@@ -51,14 +51,32 @@ namespace hc::document
             const auto Before=Revision?ImageDecodeCache::Signature(File):QByteArray{};
             ImagePartialDecoder Progressive;
             QByteArray Bytes;if(FileSize>=0&&FileSize<=64*1024*1024)Bytes.reserve(FileSize);
-            while(!File.atEnd()) { if(auto Stop=Context.Check({"document"}))return *Stop;auto Chunk=File.read(256*1024);if(Chunk.isEmpty()&&!File.atEnd())return Error{ErrorCategory::Unavailable,"document-read-incomplete"};ReadTrace.AddBytes(Chunk.size());if(Context.reportProgress_)Context.reportProgress_({std::uint64_t(File.pos()),0,0,std::uint64_t(FileSize),Path.toStdString()});if(Digest)Digest->addData(Chunk);Bytes+=Chunk;Progressive.Update(Bytes,Preview);if(!Image && Bytes.size()>Limit)return Error{ErrorCategory::BudgetExceeded,"document-read-budget"}; }
+            if (!Prefix.isEmpty()) {
+                if (Prefix.size() > FileSize || !File.seek(Prefix.size())) return Invalid("document-prefix-range");
+                Bytes = Prefix; if (Digest) Digest->addData(Prefix);
+            }
+            bool TextPublished = false;
+            while(!File.atEnd()) { if(auto Stop=Context.Check({"document"}))return *Stop;auto Chunk=File.read(256*1024);if(Chunk.isEmpty()&&!File.atEnd())return Error{ErrorCategory::Unavailable,"document-read-incomplete"};ReadTrace.AddBytes(Chunk.size());if(Context.reportProgress_)Context.reportProgress_({std::uint64_t(File.pos()),0,0,std::uint64_t(FileSize),Path.toStdString()});if(Digest)Digest->addData(Chunk);Bytes+=Chunk;
+                if (TextPreview && !TextPublished) {
+                    TextPublished = true;
+                    const auto Prefix = Bytes.first(std::min<qsizetype>(Bytes.size(), 64 * 1024));
+                    const auto Encoding = Prefix.startsWith("\xff\xfe") ? QStringDecoder::Utf16LE
+                        : Prefix.startsWith("\xfe\xff") ? QStringDecoder::Utf16BE : QStringDecoder::Utf8;
+                    QStringDecoder Decoder(Encoding); QString Text = Decoder(Prefix);
+                    if (!Decoder.hasError() && !Text.contains(QChar::Null)) {
+                        Text = Text.left(32768);
+                        if (!Text.isEmpty() && Text.back().isHighSurrogate()) Text.chop(1);
+                        TextPreview(Text);
+                    }
+                }
+                Progressive.Update(Bytes,Preview);if(!Image && Bytes.size()>Limit)return Error{ErrorCategory::BudgetExceeded,"document-read-budget"}; }
             if (File.error() != QFileDevice::NoError || (!Image && Bytes.size() > Limit) || !File.atEnd())
                 return Error{ErrorCategory::Unavailable, "document-read-incomplete"};
             if(Revision){const auto After=ImageDecodeCache::Signature(File);if(!Before.isEmpty()&&Before!=After)return Error{ErrorCategory::StaleRevision,"document-changed-during-read"};*Revision=After;}
             return Bytes;
         }
     }
-    Result<TextInput> ReadDocumentFile(const QString& Path, OperationContext Context, bool Unlimited, std::function<void(QImage)> Preview, QSize PreviewBounds)
+    Result<TextInput> ReadDocumentFile(const QString& Path, OperationContext Context, bool Unlimited, std::function<void(QImage)> Preview, QSize PreviewBounds, std::function<void(QString)> TextPreview, QJsonObject ReadPrefix)
     {
         ImageTraceSpan Trace("document.read",Path);
         if(PreviewBounds.isEmpty())PreviewBounds=QSize(1024,1024);
@@ -92,12 +110,32 @@ namespace hc::document
             ImageContent = Probe.canRead();
             if(ImageContent&&Header.size()==2&&Header[0]=='P'&&Header[1]>='1'&&Header[1]<='6')ImageContent=!Probe.size().isEmpty();
         }
+        if (QStringList{"pdf", "hwp", "hwpx", "epub"}.contains(QFileInfo(Path).suffix().toLower())) TextPreview = {};
+        QByteArray Prefix;
+        // A probe belongs to one immutable provider revision. Never reuse bytes
+        // after replacement or for an extracted file with a different identity.
+        const auto Encoded = ReadPrefix["bytes"].toString().toLatin1();
+        const auto PrefixId = storage::ParseResourceId(ReadPrefix["sourceId"].toString().toStdString());
+        const auto PrefixLocation = storage::ParseLocator(ReadPrefix["sourceLocator"].toString().toStdString());
+        auto Captured = Before.Value().id_;
+        if (PrefixId.HasValue()) Captured.revision_ = PrefixId.Value().revision_;
+        // Native IDs include a reader-session prefix. Transfer the version to
+        // this reader's identity only after checking the exact native location.
+        const bool SamePath = PrefixLocation.HasValue() && PrefixLocation.Value().kind_ == Before.Value().locator_.kind_
+            && PrefixLocation.Value().nesting_.empty()
+            && QDir::cleanPath(QDir::fromNativeSeparators(QString::fromStdString(PrefixLocation.Value().root_))).compare(
+                QDir::cleanPath(QDir::fromNativeSeparators(Canonical)), Qt::CaseInsensitive) == 0;
+        if (Encoded.size() <= 87384 && SamePath && PrefixId.HasValue() && Captured.revision_
+            && PrefixId.Value().providerId_ == Before.Value().id_.providerId_ && Reader->Stat(Captured, Context).get().HasValue()) {
+            auto Decoded = QByteArray::fromBase64Encoding(Encoded, QByteArray::AbortOnBase64DecodingErrors);
+            if (Decoded && Decoded.decoded.size() <= 65536 && quint64(Decoded.decoded.size()) <= Before.Value().size_) Prefix = std::move(Decoded.decoded);
+        }
         QCryptographicHash Digest(QCryptographicHash::Sha256);QByteArray Revision;
         // Metadata-only sources have no reliable per-handle identity to cache;
         // their exact version is rechecked by Stat and their bytes by SHA-256.
         const bool HasIdentity=Before.Value().id_.revision_&&Before.Value().id_.revision_->token_.find(":identity:")!=std::string::npos;
         const bool Epub=QFileInfo(Path).suffix().compare("epub",Qt::CaseInsensitive)==0;
-        auto Bytes=Read(Canonical,Context,(ImageContent||Unlimited)&&!Epub,&Digest,HasIdentity?&Revision:nullptr,Epub?epub::InputLimit:DocumentByteLimit,ImageContent?Preview:std::function<void(QImage)>{});
+        auto Bytes=Read(Canonical,Context,(ImageContent||Unlimited)&&!Epub,&Digest,HasIdentity?&Revision:nullptr,Epub?epub::InputLimit:DocumentByteLimit,ImageContent?Preview:std::function<void(QImage)>{}, ImageContent?std::function<void(QString)>{}:TextPreview,Prefix);
         if(!Bytes.HasValue()) {
             if(Epub&&Bytes.Failure().category_==ErrorCategory::BudgetExceeded)return Error{ErrorCategory::BudgetExceeded,"epub-input-budget"};
             return Bytes.Failure();

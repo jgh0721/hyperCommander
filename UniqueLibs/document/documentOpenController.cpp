@@ -64,8 +64,14 @@ bool ProbeDocumentText(IContentSource& Source, OperationContext Context) {
             || (Chunk.Value().bytes_.empty() && !Chunk.Value().eof_)) return false;
         const auto& Bytes = Chunk.Value().bytes_;
         Sample.append(reinterpret_cast<const char*>(Bytes.data()), qsizetype(Bytes.size()));
-        if (Chunk.Value().eof_ || Sample.size() == 64 * 1024)
-            return !Context.Check({}) && LooksLikeText(Sample);
+        if (Chunk.Value().eof_ || Sample.size() == 64 * 1024) {
+            if (Context.Check({}) || !Source.Verify(Context).get().HasValue()) return false;
+            if (auto* Provider = dynamic_cast<ProviderContentSource*>(&Source)) {
+                const auto* Data = reinterpret_cast<const std::byte*>(Sample.constData());
+                Provider->RememberPrefix({Data, Data + Sample.size()}, Stream.Value());
+            }
+            return LooksLikeText(Sample);
+        }
     }
     return false;
 }

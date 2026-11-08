@@ -123,6 +123,52 @@ private:
         Options.limits_.requestMs_ = 500; Options.limits_.heartbeatMs_ = 200; return Options;
     }
 private slots:
+    void externalArchiveClose_data()
+    {
+        QTest::addColumn<bool>("Discard"); QTest::addColumn<bool>("FailFirst"); QTest::addColumn<bool>("Edited");
+        QTest::newRow("publish") << false << false << true;
+        QTest::newRow("retry") << false << true << true;
+        QTest::newRow("discard") << true << false << true;
+        QTest::newRow("unchanged") << false << false << false;
+    }
+    void externalArchiveClose()
+    {
+        QFETCH(bool, Discard); QFETCH(bool, FailFirst); QFETCH(bool, Edited);
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
+        Approval.reviewed_.permissions_.insert(Permission::WriteContent); Approval.granted_ = Approval.reviewed_.permissions_;
+        QFile Manifest(Directory.filePath("plugin.json")); QVERIFY(Manifest.open(QIODevice::WriteOnly)); Manifest.write(EncodeManifest(Approval.reviewed_)); Manifest.close();
+        auto Source = std::dynamic_pointer_cast<ProviderContentSource>(MemoryContent("original bytes")); QVERIFY(Source);
+        QByteArray Published; int Attempts = 0;
+        Source->SetArchiveWriteback([&](const std::string& Path, OperationContext) -> Result<Unit> {
+            if (++Attempts == 1 && FailFirst) return Error{ErrorCategory::Unavailable, "injected-archive-conflict"};
+            QFile Draft(QString::fromStdString(Path)); if (!Draft.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "draft-missing"};
+            Published = Draft.readAll(); return Unit{};
+        });
+        QWidget Main; Main.show(); PluginViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
+        auto Opened = Service.Open(options(Directory, Approval), Source, QString::number(Main.winId(), 16), 320, 200); QVERIFY(Opened.HasValue());
+        auto Session = Opened.Value(); QTRY_COMPARE_WITH_TIMEOUT(Session->Snapshot().status_, hc::viewer::ViewerStatus::Ready, 8000);
+        QVERIFY(Session->Details().externalArchive_); const auto Draft = Session->Details().externalArchiveDraft_;
+        if (Edited) {
+        auto Saved = Session->SendCommand(4, 77); QVERIFY(Saved.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Session->Details().commandSequence_ >= Saved.Value(), 4000); QVERIFY(!Session->Details().commandError_);
+        }
+        QCOMPARE(Attempts, 0);
+        auto Closed = Session->CloseArchive(); QVERIFY(Closed.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Session->Details().commandSequence_ >= Closed.Value(), 4000);
+        if (!Edited) { QVERIFY(Session->Details().externalArchiveDone_); Session->Close(); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 4000); QVERIFY(!QFileInfo::exists(Draft)); QCOMPARE(Attempts, 0); return; }
+        QVERIFY(Session->Details().externalArchiveClosed_); QVERIFY(!Session->Details().externalArchiveDone_); QVERIFY(QFileInfo::exists(Draft));
+        auto Commit = Session->CloseArchive(Discard ? 2 : 1); QVERIFY(Commit.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Session->Details().commandSequence_ >= Commit.Value(), 4000);
+        if (FailFirst) {
+            QVERIFY(Session->Details().commandError_); QVERIFY(QFileInfo::exists(Draft));
+            Commit = Session->CloseArchive(1); QVERIFY(Commit.HasValue());
+            QTRY_VERIFY_WITH_TIMEOUT(Session->Details().commandSequence_ >= Commit.Value(), 4000);
+        }
+        QVERIFY2(!Session->Details().commandError_, "archive close must complete"); QVERIFY(Session->Details().externalArchiveDone_);
+        QCOMPARE(Published, Discard ? QByteArray{} : QByteArray("saved by WLX"));
+        Session->Close(); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 4000); QVERIFY(!QFileInfo::exists(Draft));
+    }
     void nativeOriginalSave_data()
     {
         QTest::addColumn<bool>("Approved"); QTest::addColumn<bool>("Local"); QTest::addColumn<bool>("ReadOnly");

@@ -164,6 +164,68 @@ private slots:
         QVERIFY(Workspace.Handle({{"action", "activate"}, {"documentId", "stale"}}).contains("error"));
         QVERIFY(Workspace.Handle({{"action", "state"}, {"protocolVersion", 99}}).contains("error"));
     }
+    void archiveDraftWaitsForCloseAndSurvivesFailure()
+    {
+        QTemporaryDir Root; const auto Path = Root.filePath("inside.txt"); QVERIFY(Put(Path, "original"));
+        auto Input = ReadTextFile(Path); QVERIFY(Input.HasValue());
+        auto Source = Input.Value().source_; Source.locator_.kind_ = LocatorKind::Archive;
+        bool Fail = true; int Commits = 0; QByteArray Published;
+        DocumentHostBroker Broker;
+        const auto Token = Broker.Bind(Source, {}, {}, Input.Value().hash_,
+            [&](const std::string& Draft, OperationContext) -> Result<Unit> {
+                ++Commits; if (Fail) return Error{ErrorCategory::Unavailable, "injected-update-failure"};
+                Published = Read(QString::fromStdString(Draft)); return Unit{};
+            });
+        QVERIFY(!Token.isEmpty());
+        QJsonObject Save{{"sourceToken", Token}, {"saveToken", QString(32, 'a')}, {"documentId", "doc"}, {"revision", "1"}};
+        const auto Saved = Broker.CommitBytes(Save, "edited");
+        QVERIFY(Saved["committed"].toBool()); QVERIFY(Saved["archivePending"].toBool()); QCOMPARE(Commits, 0);
+        const auto Draft = Saved["draftPath"].toString(); QCOMPARE(Read(Draft), QByteArray("edited"));
+        QVERIFY(Broker.CommitArchive(Token, false).contains("error")); QVERIFY(QFileInfo::exists(Draft));
+        Fail = false; QVERIFY(Broker.CommitArchive(Token, false)["committed"].toBool()); QCOMPARE(Published, QByteArray("edited"));
+        Broker.Close(); QVERIFY(!QFileInfo::exists(Draft)); QCOMPARE(Read(Path), QByteArray("original"));
+    }
+    void archiveUndoToBaselineDoesNotUpdate()
+    {
+        QTemporaryDir Root; const auto Path = Root.filePath("inside.txt"); QVERIFY(Put(Path, "original"));
+        auto Input = ReadTextFile(Path); QVERIFY(Input.HasValue());
+        auto Source = Input.Value().source_; Source.locator_.kind_ = LocatorKind::Archive;
+        int Commits = 0; DocumentHostBroker Broker;
+        const auto Token = Broker.Bind(Source, {}, {}, Input.Value().hash_,
+            [&](const std::string&, OperationContext) -> Result<Unit> { ++Commits; return Unit{}; });
+        QJsonObject Save{{"sourceToken", Token}, {"saveToken", QString(32, 'b')}};
+        const auto Saved = Broker.CommitBytes(Save, "original"); QVERIFY(Saved["committed"].toBool());
+        QVERIFY(!Saved["archivePending"].toBool()); QVERIFY(Broker.CommitArchive(Token, false)["committed"].toBool()); QCOMPARE(Commits, 0);
+        const auto Draft = Saved["draftPath"].toString(); Broker.Close(); QVERIFY(!QFileInfo::exists(Draft));
+    }
+    void readPrefixReusesOnlyMatchingRevision()
+    {
+        QTemporaryDir Root; const auto Path = Root.filePath("unknown.data"); const QByteArray Bytes(8192, 'a'); QVERIFY(Put(Path, Bytes));
+        auto Original = ReadTextFile(Path); QVERIFY(Original.HasValue());
+        QJsonObject Prefix{{"sourceId", QString::fromStdString(Serialize(Original.Value().source_.id_))},
+            {"sourceLocator", QString::fromStdString(Serialize(Original.Value().source_.locator_))},
+            {"bytes", QString::fromLatin1(Bytes.toBase64())}};
+        int Reads = 0; OperationContext Context; Context.reportProgress_ = [&](const auto&) { ++Reads; };
+        auto Cached = ReadDocumentFile(Path, Context, false, {}, {}, {}, Prefix);
+        QVERIFY(Cached.HasValue()); QCOMPARE(Cached.Value().bytes_, Bytes); QCOMPARE(Cached.Value().hash_, Original.Value().hash_); QCOMPARE(Reads, 0);
+        Prefix["sourceId"] = "stale"; Prefix["bytes"] = QString::fromLatin1(QByteArray(8192, 'z').toBase64());
+        auto Fresh = ReadDocumentFile(Path, Context, false, {}, {}, {}, Prefix);
+        QVERIFY(Fresh.HasValue()); QCOMPARE(Fresh.Value().bytes_, Bytes); QVERIFY(Reads > 0);
+        Prefix["sourceId"] = QString::fromStdString(Serialize(Original.Value().source_.id_));
+        Prefix["bytes"] = QString::fromLatin1(Bytes.toBase64());
+        const QByteArray Changed(8193, 'z'); QVERIFY(Put(Path, Changed));
+        auto Replaced = ReadDocumentFile(Path, {}, false, {}, {}, {}, Prefix);
+        QVERIFY(Replaced.HasValue()); QCOMPARE(Replaced.Value().bytes_, Changed);
+    }
+    void textPrefixPrecedesCompleteRead()
+    {
+        QTemporaryDir Root; const auto Path = Root.filePath("large.txt");
+        const QByteArray Bytes(2 * 1024 * 1024, 'a'); QVERIFY(Put(Path, Bytes));
+        int Calls = 0; QString Prefix;
+        auto Input = ReadDocumentFile(Path, {}, true, {}, {}, [&](QString Text) { ++Calls; Prefix = std::move(Text); });
+        QVERIFY(Input.HasValue()); QCOMPARE(Calls, 1); QCOMPARE(Prefix.size(), 32768);
+        QCOMPARE(Input.Value().bytes_, Bytes); QCOMPARE(Input.Value().hash_, QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256));
+    }
     void brokerRetainsNewEditsAndRejectsReplay()
     {
         QTemporaryDir Root; const auto Path = Root.filePath("source.txt"); QVERIFY(Put(Path, "base\n"));

@@ -10,6 +10,7 @@ class ImageArchiveBroker final
     ~ImageArchiveBroker();
     QJsonObject Endpoint() const;
     void Allow(const QString &Path);
+    void Clear();
     void BindClient(std::uint32_t Process);
 
   private:

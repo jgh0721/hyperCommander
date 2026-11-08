@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "documentViewPane.hpp"
+#include <QPlainTextEdit>
+#include <QTextBlock>
 #include "UniqueLibs/document/imagePerformance.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include <QDir>
@@ -43,7 +45,6 @@
 #include <QClipboard>
 #include <QJsonDocument>
 #include <memory>
-#include <QPlainTextEdit>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QComboBox>
@@ -84,18 +85,45 @@ namespace hc::document
             }
         };
     }
+    class LoadingTextPreview final : public QPlainTextEdit
+    {
+    public:
+        using QPlainTextEdit::QPlainTextEdit;
+    protected:
+        void paintEvent(QPaintEvent* Event) override {
+            QPlainTextEdit::paintEvent(Event);
+            if (!painted_ && ImageTraceSpan::Enabled()) {
+                painted_ = true;
+                ImageTraceSpan Painted("text.prefix-first-paint", parentWidget()->property("hc.previewPath").toString());
+            }
+        }
+    private:
+        bool painted_ = false;
+    };
+    void DocumentViewPane::ShowTextLoadingPreview(const QString& Text)
+    {
+        if (Text.isEmpty()) { if (textLoadingPreview_) textLoadingPreview_->hide(); return; }
+        if (!textLoadingPreview_) {
+            auto* Preview = new LoadingTextPreview(this); Preview->setReadOnly(true);
+            Preview->setLineWrapMode(QPlainTextEdit::NoWrap); Preview->setFocusPolicy(Qt::NoFocus);
+            Preview->setObjectName("quickPreviewTextPrefix"); textLoadingPreview_ = Preview;
+        }
+        auto* Preview = static_cast<QPlainTextEdit*>(textLoadingPreview_);
+        if (Preview->toPlainText() != Text) Preview->setPlainText(Text);
+        Preview->setGeometry(rect()); Preview->show(); Preview->raise();
+    }
+    bool DocumentViewPane::HasTextLoadingPreview() const { return textLoadingPreview_ && !textLoadingPreview_->isHidden(); }
     void DocumentViewPane::ShowLoadingPreview(const QImage& Image,bool Partial){
-        if(Image.isNull()){if(loadingPreview_)loadingPreview_->hide();return;}
+        if(Image.isNull()){if(loadingPreview_)loadingPreview_->hide();ShowTextLoadingPreview({});return;}
         if(!loadingPreview_)loadingPreview_=new LoadingImagePreview(this);
         auto* Preview=static_cast<LoadingImagePreview*>(loadingPreview_);
         if(!Preview->isHidden() && Preview->image_.cacheKey()==Image.cacheKey() && Preview->partial_==Partial)return;
         Preview->image_=Image;Preview->partial_=Partial;Preview->setProperty("partialImage",Partial);
         loadingPreview_->setGeometry(rect());loadingPreview_->show();loadingPreview_->raise();loadingPreview_->update();
     }
-    void DocumentViewPane::resizeEvent(QResizeEvent* Event){QWidget::resizeEvent(Event);if(loadingPreview_)loadingPreview_->setGeometry(rect());}
+    void DocumentViewPane::resizeEvent(QResizeEvent* Event){QWidget::resizeEvent(Event);if(loadingPreview_)loadingPreview_->setGeometry(rect());if(textLoadingPreview_)textLoadingPreview_->setGeometry(rect());}
     DocumentViewPane::DocumentViewPane(QWidget* Parent):QWidget(Parent)
     {
-        epubRuntime_ = MakeProductEpubRuntime(QCoreApplication::applicationDirPath());
         InitializePortedViewResources();setObjectName("documentViewPane");
         auto* Layout=new QVBoxLayout(this);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
         auto& Theme=fm::style::ThemeManager::instance();
@@ -110,6 +138,12 @@ namespace hc::document
     }
     bool DocumentViewPane::Load(const TextInput& Input,bool Traverse,bool ImageEditing)
     {
+        auto* Prefix = HasTextLoadingPreview() ? static_cast<QPlainTextEdit*>(textLoadingPreview_) : nullptr;
+        const auto PrefixCursor = Prefix ? Prefix->textCursor() : QTextCursor{};
+        const int PrefixLine = Prefix ? Prefix->cursorForPosition(QPoint(0, 0)).blockNumber() : 0;
+        const auto PrefixText = Prefix ? Prefix->toPlainText() : QString{};
+        const int PrefixCaret = Prefix ? PrefixText.left(PrefixCursor.position()).toUtf8().size() : 0;
+        const int PrefixAnchor = Prefix ? PrefixText.left(PrefixCursor.anchor()).toUtf8().size() : 0;
         ShowLoadingPreview({});
         ImageTraceSpan LoadTrace("document.attach-view",Input.path_);
         QString RetryLocator;
@@ -154,6 +188,7 @@ namespace hc::document
                 }else {Bar->addAction(Edit);Edit->setEnabled(false);connect(Edit,&QAction::triggered,this,&DocumentViewPane::EditEpubRequested);}
             }
             // Readers, previews and their Chromium children are not counted or capped; the Job only ends them with their owner.
+            if (!epubConfigured_) { epubRuntime_ = MakeProductEpubRuntime(QCoreApplication::applicationDirPath()); epubConfigured_ = true; }
             epub_=new EpubProcessView(epubRuntime_, {0, 0, 20000}, this);
             layout()->addWidget(epub_);epub_->show();
             epubFailure_=new QWidget(this);epubFailure_->setObjectName("epubFailure");epubFailure_->setAccessibleName(tr("EPUB 읽기 오류"));
@@ -344,6 +379,13 @@ namespace hc::document
         connect(view_,&QBaseView::SaveRequested,this,&DocumentViewPane::SaveRequested);
         markdownEditing_=ImageEditing;
         if(text_ && QStringList{"md","markdown"}.contains(QFileInfo(Input.path_).suffix().toLower()))attachMarkdown(Input.path_);
+        if (Prefix && text_ && text_->Backend()) {
+            auto* Backend = text_->Backend();
+            Backend->restoreViewState(PrefixCaret, PrefixLine);
+            Backend->setSelectionByPos(PrefixAnchor, PrefixCaret);
+        }
+        if (text_ && text_->Backend() && ImageTraceSpan::Enabled())
+            text_->Backend()->widget()->setProperty("hc.firstTextPaintSource", Input.path_);
         contribution_.menuActions_=toolbar_->actions();applyTheme();return true;
     }
     void DocumentViewPane::attachMarkdown(const QString& Path)

@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <map>
 #include <set>
+#include <QTemporaryDir>
 
 namespace hc::document
 {
@@ -13,9 +14,11 @@ namespace hc::document
     {
     public:
         QString Bind(storage::EntrySnapshot Source, std::shared_ptr<storage::IWritableStorage> Writer,
-            std::shared_ptr<storage::IMaterializedFileLease> Lease = {}, QByteArray ContentHash = {});
+            std::shared_ptr<storage::IMaterializedFileLease> Lease = {}, QByteArray ContentHash = {}, storage::ProviderContentSource::ArchiveWriteback ArchiveWriteback = {});
         QJsonObject Commit(const QJsonObject& Prepared, storage::OperationContext Context = {});
         QJsonObject CommitBytes(const QJsonObject& Prepared, const QByteArray& Bytes, storage::OperationContext Context = {});
+        void CaptureLoadedHash(const QString& Token, const QByteArray& Hash);
+        QJsonObject CommitArchive(const QString& Token, bool Discard, storage::OperationContext Context = {});
         void Retain(const std::set<QString>& Tokens);
         void Close();
         struct EditorInput {
@@ -31,6 +34,11 @@ namespace hc::document
             std::shared_ptr<storage::IWritableStorage> writer_;
             std::shared_ptr<storage::IMaterializedFileLease> lease_;
             QByteArray hash_;
+            storage::ProviderContentSource::ArchiveWriteback archiveWriteback_;
+            std::shared_ptr<QTemporaryDir> draft_;
+            QString draftPath_;
+            QByteArray archiveHash_;
+            bool archivePending_ = false;
         };
         std::map<QString, Binding> sources_;
         std::set<QString> retiredSaves_;

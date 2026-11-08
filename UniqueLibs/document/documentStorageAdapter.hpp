@@ -6,6 +6,7 @@
 #include <QByteArray>
 #include <QString>
 #include <QImage>
+#include <QJsonObject>
 
 namespace hc::document
 {
@@ -34,7 +35,7 @@ namespace hc::document
         storage::EntrySnapshot source_;
         QByteArray hash_;
     };
-    storage::Result<TextInput> ReadDocumentFile(const QString& Path, storage::OperationContext Context = {}, bool Unlimited = false, std::function<void(QImage)> Preview = {}, QSize PreviewBounds = {1024,1024});
+    storage::Result<TextInput> ReadDocumentFile(const QString& Path, storage::OperationContext Context = {}, bool Unlimited = false, std::function<void(QImage)> Preview = {}, QSize PreviewBounds = {1024,1024}, std::function<void(QString)> TextPreview = {}, QJsonObject ReadPrefix = {});
     storage::Result<TextInput> ReadTextFile(const QString& Path, storage::OperationContext Context = {});
     // Decodes Input.bytes_ (detected when Encoding is empty) into text_, encoding_, bom_ and eol_.
     storage::Result<TextInput> DecodeTextInput(TextInput Input, const QString& Encoding = {});

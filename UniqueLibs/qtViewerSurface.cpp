@@ -279,6 +279,8 @@ void QtViewerSurface::ConfigurePlugins(QtPluginViewerController* Controller, Vie
         state_->request_.provider_.clear(); reopen();
     });
     connect(S.pluginViewer_, &QtPluginViewerSurface::CloseRequested, this, [this] {
+        const auto Details = state_->pluginViewer_->Details();
+        if (Details.externalArchive_ && !Details.externalArchiveDone_) { RequestClose(); return; }
         state_->closeApproved_ = true;
         emit CloseRequested();
     });
@@ -385,6 +387,19 @@ void QtViewerSurface::reopen()
 void QtViewerSurface::OpenPreview(std::shared_ptr<hc::storage::IContentSource> Source, std::vector<PluginViewerChoice> Choices)
 {
     if (IsPinned()) return;
+    // A following preview keeps its own helper; replace only its clean document.
+    // Full-view windows never enter this path.
+    if (state_->request_.purpose_ == ViewerPurpose::QuickPreview && state_->pluginViewer_
+        && state_->selectedPlugin_ && state_->selectedPlugin_->id_ == "builtin.hyperviewer"
+        && !Choices.empty() && Choices.front().id_ == "builtin.hyperviewer"
+        && Choices.front().options_.approval_.approved_
+        && Choices.front().options_.approval_.reviewed_ == state_->selectedPlugin_->options_.approval_.reviewed_
+        && Choices.front().options_.binaryPath_ == state_->selectedPlugin_->options_.binaryPath_
+        && state_->pluginViewer_->ReusePreview(Choices.front().options_, Source)) {
+        state_->request_.source_ = std::move(Source); state_->ready_ = false;
+        state_->selectedPlugin_ = Choices.front(); state_->previewChoices_ = Choices;
+        state_->automaticChoices_ = std::move(Choices); return;
+    }
     state_->previewChoices_ = std::move(Choices);
     state_->request_ = ViewerRequest{};
     state_->request_.source_ = std::move(Source);
@@ -412,11 +427,11 @@ bool QtViewerSurface::IsPinned() const
     auto& S = *state_;
     if (S.request_.purpose_ != ViewerPurpose::QuickPreview || !S.pluginViewer_) return false;
     const auto Details = S.pluginViewer_->Details();
-    if (S.pluginViewer_->WasInteracted() || Details.directOriginal_) S.previewPinned_ = true;
+    if (S.pluginViewer_->WasInteracted() || Details.directOriginal_ || Details.externalArchive_) S.previewPinned_ = true;
     if (Details.documentChannel_) {
         for (const auto& Item : Details.documentState_["documents"].toArray()) {
             const auto Record = Item.toObject();
-            if (Record["dirty"].toBool() || Record["saving"].toBool()) S.previewPinned_ = true;
+            if (Record["dirty"].toBool() || Record["saving"].toBool() || Record["archivePending"].toBool() || Record["archiveUpdating"].toBool()) S.previewPinned_ = true;
         }
     }
     // Pin before editing, including native children for which Qt has no focus widget.
@@ -457,9 +472,16 @@ bool QtViewerSurface::RequestClose()
     auto& S = *state_;
     if (S.closeApproved_ || !S.pluginViewer_) return true;
     if (!S.pluginViewer_->Details().documentChannel_) {
-        if (IsPinned() && hc::ui::MessageDialog::question(this, tr("미리보기 닫기"),
+        const auto Details = S.pluginViewer_->Details();
+        if (Details.externalArchive_ && Details.idle_) {
+            hc::ui::MessageDialog::warning(this, tr("압축 편집본 보존"),
+                tr("플러그인이 종료되어 자동 반영을 완료하지 못했습니다. 편집본을 다른 위치에 복사하거나 다시 열어 복구할 수 있습니다.\n%1").arg(Details.externalArchiveDraft_));
+            S.closeApproved_ = true; return true;
+        }
+        if (!Details.externalArchiveClosed_ && IsPinned() && hc::ui::MessageDialog::question(this, tr("미리보기 닫기"),
             tr("이 플러그인은 미저장 상태를 알려주지 않습니다. 플러그인에서 변경 내용을 저장했는지 확인한 뒤 닫으십시오.\n미리보기를 닫으시겠습니까?"),
             QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) return false;
+        if (Details.externalArchive_ && !Details.externalArchiveDone_) { S.pluginViewer_->RequestArchiveClose(); return false; }
         S.closeApproved_ = true;
         return true;
     }

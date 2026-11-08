@@ -62,6 +62,32 @@ private:
     QString file(QTemporaryDir& Directory, const QString& Name)
     { QFile Value(Directory.filePath(Name)); if (!Value.open(QIODevice::WriteOnly) || Value.write("x") != 1) return {}; return Value.fileName(); }
 private slots:
+    void archiveClosePreservesDopusDraft()
+    {
+        QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(prepare(Package, Options));
+        Options.approval_.reviewed_.permissions_.insert(Permission::WriteContent); Options.approval_.granted_ = Options.approval_.reviewed_.permissions_;
+        QFile Manifest(Options.manifestPath_); QVERIFY(Manifest.open(QIODevice::WriteOnly)); Manifest.write(EncodeManifest(Options.approval_.reviewed_)); Manifest.close();
+        auto Provider = std::make_shared<hc::storage::test::MemoryProvider>();
+        const auto Id = Provider->Add(Provider->Root(), "preview.native", {std::byte{'x'}});
+        auto Source = std::make_shared<ProviderContentSource>(Provider, Provider->Stat(Id, {}).get().Value());
+        QByteArray Published;
+        Source->SetArchiveWriteback([&](const std::string& Path, OperationContext) -> Result<Unit> {
+            QFile Draft(QString::fromStdString(Path)); if (!Draft.open(QIODevice::ReadOnly)) return Error{ErrorCategory::Unavailable, "draft-missing"};
+            Published = Draft.readAll(); return Unit{};
+        });
+        QWidget Parent; Parent.show(); PluginViewerService Service([&] { return MakeNativeMaterializer(Package.path().toStdString()); });
+        const auto Cleanup = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(5); });
+        Options.purpose_ = hc::viewer::ViewerPurpose::QuickPreview;
+        auto Opened = Service.Open(Options, Source, QString::number(Parent.winId(), 16), 400, 300); QVERIFY(Opened.HasValue()); auto Session = Opened.Value();
+        QTRY_COMPARE_WITH_TIMEOUT(Session->Snapshot().status_, hc::viewer::ViewerStatus::Ready, 8000);
+        QVERIFY(Session->Details().externalArchive_); const auto Path = Session->Details().externalArchiveDraft_;
+        QFile Draft(Path); QVERIFY(Draft.open(QIODevice::WriteOnly)); Draft.write("DOpus saved draft"); Draft.close();
+        auto Closed = Session->CloseArchive(); QVERIFY(Closed.HasValue()); QTRY_VERIFY_WITH_TIMEOUT(Session->Details().commandSequence_ >= Closed.Value(), 5000);
+        QVERIFY(!Session->Details().commandError_); QVERIFY(Session->Details().externalArchiveClosed_); QVERIFY(Published.isEmpty());
+        auto Commit = Session->CloseArchive(1); QVERIFY(Commit.HasValue()); QTRY_VERIFY_WITH_TIMEOUT(Session->Details().commandSequence_ >= Commit.Value(), 5000);
+        QVERIFY(Session->Details().externalArchiveDone_); QCOMPARE(Published, QByteArray("DOpus saved draft"));
+        Session->Close(); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 5000); QVERIFY(!QFileInfo::exists(Path));
+    }
     void applicationScopeSurvivesForcedSelection()
     {
         QTemporaryDir Package; PluginViewerOptions Options; QVERIFY(prepare(Package, Options));
