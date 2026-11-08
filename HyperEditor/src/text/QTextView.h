@@ -63,6 +63,9 @@ public:
     void    setLanguage(const QString& language);
     QString currentLanguage() const;
     void    autoDetectLanguage();
+    // Save As: the view adopts the new path. Another extension re-detects the language (.txt → .json);
+    // the same extension keeps a language the user picked.
+    void    SetFilePath(const QString& Path);
 
     // ── 편집 ──
     void setReadOnly(bool on);

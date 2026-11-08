@@ -398,6 +398,14 @@ void QTextView::autoDetectLanguage()
     setLanguage(TextLexerRegistry::instance().languageForFileName(m_filePath));
 }
 
+void QTextView::SetFilePath(const QString& Path)
+{
+    const bool Changed = QFileInfo(m_filePath).suffix().compare(QFileInfo(Path).suffix(), Qt::CaseInsensitive) != 0;
+    m_filePath = Path;
+    if (Changed)
+        autoDetectLanguage();
+}
+
 // ═══════════════════════════════════════════════════════════
 // 편집
 // ═══════════════════════════════════════════════════════════

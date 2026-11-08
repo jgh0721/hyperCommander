@@ -146,6 +146,12 @@ namespace hc::document
         void buildTextChrome(QMenu* Menu, bool Language);
         void buildTextViewItems(bool Zoom);
         void buildMarkdownChrome();
+        // Save As within the text family: .md/.markdown wraps the editor in the Markdown view, any other
+        // extension unwraps it. The same QTextView stays, so content, caret and Undo survive the switch.
+        void adoptTextPath(const QString& Path);
+        void attachMarkdown(const QString& Path);
+        void detachMarkdown();
+        bool markdownEditing_ = false;
         void syncMarkdownChrome();
         void buildPdfChrome();
         void buildImageChrome();

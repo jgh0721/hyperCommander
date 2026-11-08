@@ -18,6 +18,7 @@
 #include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTabWidget>
+#include <QToolBar>
 #include "text/QTextView.h"
 #include "core/AppSettings.h"
 #include "commonLibs/document/epub/epubEditModel.hpp"
@@ -146,6 +147,31 @@ private slots:
         QCOMPARE(Name(Widget, Next), QObject::tr("새 문서 %1").arg(1));
         QCOMPARE(QDir::cleanPath(hc::settings::UnifiedConfig::Value(QJsonDocument::fromJson(Bytes(hc::settings::UnifiedConfig::FileName(Settings.root_.path()))).object()["documentViews"].toObject(),
             {"common", "lastSaveFolder"}).toString()), QDir::cleanPath(Settings.root_.path()));
+    }
+    void saveAsSwitchesTextAndMarkdown()
+    {
+        Profile Settings; DocumentWorkspaceWidget Widget(Settings.Path("recovery")); Widget.show();
+        const auto Id = Widget.Handle({{"action", "new"}})["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Id));
+        QVERIFY(!Widget.Handle({{"action", "replaceText"}, {"documentId", Id}, {"text", "# Title\r\nbody\r\n"}}).contains("error"));
+        QPointer<QTextView> Editor = Widget.findChild<QTextView*>(); QVERIFY(Editor); QVERIFY(!Widget.findChild<MarkdownDocumentView*>());
+        const auto SaveAs = [&](const QString& Name) {
+            QVERIFY(!Widget.Handle({{"action", "saveAs"}, {"documentId", Id}, {"path", Settings.Path(Name)}}).contains("error"));
+            QTRY_VERIFY(Widget.IsIdle()); QTRY_VERIFY(!Document(Widget, Id)["dirty"].toBool());
+        };
+        // Text → Markdown: the same editor (content, caret, Undo) moves into the Markdown view.
+        SaveAs("note.md");
+        QTRY_VERIFY(Widget.findChild<MarkdownDocumentView*>()); QCOMPARE(Widget.findChild<QTextView*>(), Editor.data());
+        QCOMPARE(Editor->Content(), QString("# Title\r\nbody\r\n")); QCOMPARE(Editor->currentLanguage(), QString("Markdown"));
+        // Markdown → text: the Markdown view goes, the editor stays.
+        SaveAs("note.txt");
+        QTRY_VERIFY(!Widget.findChild<MarkdownDocumentView*>()); QVERIFY(Editor); QCOMPARE(Widget.findChild<QTextView*>(), Editor.data());
+        QVERIFY(Widget.findChild<QToolBar*>("viewToolbar")); QCOMPARE(Editor->Content(), QString("# Title\r\nbody\r\n"));
+        // Another text extension only changes the highlighting; a non-text extension (.epub) keeps the text view.
+        const auto Before = Editor->currentLanguage();
+        SaveAs("data.json"); QVERIFY(Editor->currentLanguage() != Before); QVERIFY(!Widget.findChild<MarkdownDocumentView*>());
+        SaveAs("book.epub"); QCOMPARE(Widget.findChild<QTextView*>(), Editor.data()); QVERIFY(!Widget.findChild<MarkdownDocumentView*>());
+        // And back to Markdown once more after the round trip.
+        SaveAs("again.markdown"); QTRY_VERIFY(Widget.findChild<MarkdownDocumentView*>()); QCOMPARE(Widget.findChild<QTextView*>(), Editor.data());
     }
     void untitledMarkdownHotExitKeepsKindAndNumber()
     {

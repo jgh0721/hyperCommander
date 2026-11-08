@@ -342,18 +342,53 @@ namespace hc::document
         }
         connect(view_,&QBaseView::OpenRequested,this,&DocumentViewPane::OpenRequested);
         connect(view_,&QBaseView::SaveRequested,this,&DocumentViewPane::SaveRequested);
-        if(text_ && QStringList{"md","markdown"}.contains(QFileInfo(Input.path_).suffix().toLower())) {
-            auto* SourceBar=toolbar_;layout()->removeWidget(SourceBar);SourceBar->hide();
-            layout()->removeWidget(text_);markdown_=new MarkdownDocumentView(text_,Input.path_,ImageEditing,this);
-            toolbar_=markdown_->Toolbar();static_cast<QVBoxLayout*>(layout())->insertWidget(0,toolbar_);layout()->addWidget(markdown_);
-            markdown_->SetSourceTools(SourceBar);markdown_->SetShortcutBindings(DocumentShortcutRegistry::Bindings(shortcutBindings_));connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::ViewStateChanged);
-            connect(markdown_,&MarkdownDocumentView::OpenRequested,this,&DocumentViewPane::OpenRequested);
-            connect(markdown_,&MarkdownDocumentView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
-            // 마크다운(M) replaces 텍스트(X); the text submenus join it for source editing.
-            delete modeMenu_;modeMenu_=nullptr;contribution_.viewActions_.clear();buildMarkdownChrome();
-            connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::syncMarkdownChrome);
-        }
+        markdownEditing_=ImageEditing;
+        if(text_ && QStringList{"md","markdown"}.contains(QFileInfo(Input.path_).suffix().toLower()))attachMarkdown(Input.path_);
         contribution_.menuActions_=toolbar_->actions();applyTheme();return true;
+    }
+    void DocumentViewPane::attachMarkdown(const QString& Path)
+    {
+        if(!text_ || markdown_)return;
+        auto* SourceBar=toolbar_;layout()->removeWidget(SourceBar);SourceBar->hide();
+        layout()->removeWidget(text_);markdown_=new MarkdownDocumentView(text_,Path,markdownEditing_,this);
+        toolbar_=markdown_->Toolbar();static_cast<QVBoxLayout*>(layout())->insertWidget(0,toolbar_);layout()->addWidget(markdown_);
+        markdown_->SetSourceTools(SourceBar);markdown_->SetShortcutBindings(DocumentShortcutRegistry::Bindings(shortcutBindings_));connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::ViewStateChanged);
+        connect(markdown_,&MarkdownDocumentView::OpenRequested,this,&DocumentViewPane::OpenRequested);
+        connect(markdown_,&MarkdownDocumentView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
+        // 마크다운(M) replaces 텍스트(X); the text submenus join it for source editing.
+        delete modeMenu_;modeMenu_=nullptr;contribution_.viewActions_.clear();buildMarkdownChrome();
+        connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::syncMarkdownChrome);
+    }
+    void DocumentViewPane::detachMarkdown()
+    {
+        if(!text_ || !markdown_)return;
+        auto* Markdown=std::exchange(markdown_,nullptr);auto* MarkdownBar=toolbar_;toolbar_=nullptr;
+        layout()->removeWidget(MarkdownBar);layout()->removeWidget(Markdown);
+        // The hidden text bar the Markdown view took its source tools from is replaced by a fresh one.
+        for(auto* Bar:findChildren<QToolBar*>("viewToolbar",Qt::FindDirectChildrenOnly))delete Bar;
+        // Take the editor out of the Markdown splitter before the view goes (the same order as Load()).
+        text_->setParent(this);layout()->addWidget(text_);text_->show();
+        delete Markdown;delete MarkdownBar;
+        toolbar_=text_->createToolBar();if(!toolbar_)toolbar_=new QToolBar(this);
+        toolbar_->setObjectName("viewToolbar");static_cast<QVBoxLayout*>(layout())->insertWidget(0,toolbar_);toolbar_->show();
+        resetChrome();
+        contribution_.viewId_=viewId_;contribution_.menuTitle_=tr("텍스트(&X)");
+        modeMenu_=new QMenu(contribution_.menuTitle_,this);modeMenu_->setObjectName("textModeMenu");
+        buildTextChrome(modeMenu_,true);buildTextViewItems(true);contribution_.menu_=modeMenu_;
+        contribution_.menuActions_=toolbar_->actions();applyTheme();
+    }
+    void DocumentViewPane::adoptTextPath(const QString& Path)
+    {
+        // Only views of the text family switch. A binary target (.epub, .pdf, images) keeps the text view.
+        if(!text_ || Path.isEmpty())return;
+        const auto Suffix=QFileInfo(Path).suffix().toLower();
+        const bool Markdown=Suffix=="md" || Suffix=="markdown";
+        text_->SetFilePath(Path);
+        if(Markdown && !markdown_){attachMarkdown(Path);contribution_.menuActions_=toolbar_->actions();applyTheme();}
+        else if(!Markdown && markdown_)detachMarkdown();
+        else return;
+        if(InputWidget())InputWidget()->setFocus(Qt::OtherFocusReason);
+        emit ViewStateChanged();
     }
     void DocumentViewPane::updateEpubMode() {
         auto* Bar=findChild<QToolBar*>("epubEditToolbar");if(!Bar)return;const bool Editing=IsEpubEditing();
@@ -632,6 +667,7 @@ namespace hc::document
     void DocumentViewPane::CommitSaved(const QString& Path,const QByteArray& Bytes,const QByteArray& Content,const QByteArray& Hash,bool Current)
     {
         if(epubEditor_){epubEditor_->CommitSaved(Path,Content,Hash);epubBytes_=Bytes;epubPath_=Path;return;}
+        adoptTextPath(Path);
         if(markdown_)markdown_->SetPath(Path);
         // The session has compared the completed snapshot with current content.
         // Repeating that serialization here stalls source input on save completion.
