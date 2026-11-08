@@ -136,9 +136,11 @@ namespace hc::document
         void showPreferences();
         QPointer<DocumentSettingsDialog> preferences_;
         QJsonObject newDocument(NewDocumentKind Kind = NewDocumentKind::Text);
-        // Ctrl+N: the kind popup, or a kind at once per documentViews/common/newDocumentAction.
+        // Ctrl+N: the ‘새 문서’ dialog, or a kind at once per documentViews/common/newDocumentAction.
         void requestNewDocument(QWidget* Anchor, bool ImagePage = false);
         QPointer<NewDocumentChooser> chooser_;
+        QPointer<NewImageDialog> imageDialog_;
+        void showNewImageDialog();
         QJsonObject newImage(const NewImageSpec& Spec);
         void createEpub(const NewEpubRequest& Request, bool CloseWhenCancelled);
         bool epubCreating_ = false;

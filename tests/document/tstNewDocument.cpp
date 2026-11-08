@@ -6,8 +6,11 @@
 #include <QBuffer>
 #include <QDir>
 #include <QMessageBox>
+#include <QLabel>
 #include <QPointer>
+#include <QPushButton>
 #include <QSpinBox>
+#include <type_traits>
 #include <QFile>
 #include <QImage>
 #include <QJsonArray>
@@ -188,26 +191,55 @@ private slots:
     {
         Profile Settings; DocumentWorkspaceWidget Widget(Settings.Path("recovery")); Widget.show(); QVERIFY(QTest::qWaitForWindowExposed(&Widget));
         auto* New = Widget.findChild<QAction*>("newDocument"); QVERIFY(New);
+        const auto Visible = [&Widget](auto* Type) -> decltype(Type) {
+            for (auto* Item : Widget.findChildren<std::remove_pointer_t<decltype(Type)>*>()) if (Item->isVisible()) return Item;
+            return nullptr;
+        };
         New->trigger();
-        QPointer<NewDocumentChooser> Chooser; QTRY_VERIFY((Chooser = Widget.findChild<NewDocumentChooser*>()));
-        QTRY_VERIFY(Chooser->isVisible());
-        QTest::keyClick(QApplication::focusWidget() ? QApplication::focusWidget() : Chooser.data(), Qt::Key_2);
+        QPointer<NewDocumentChooser> Chooser; QTRY_VERIFY((Chooser = Visible(static_cast<NewDocumentChooser*>(nullptr))));
+        // The product dialog frame: header, cards, footer buttons.
+        QVERIFY(Chooser->findChild<QWidget*>("hc.dialog.header")); QVERIFY(Chooser->findChild<QWidget*>("hc.dialog.footer"));
+        // A single click only selects (dialog convention); the button then names what follows.
+        auto* Epub = Chooser->findChild<QAbstractButton*>("newDocument.epub"); QVERIFY(Epub);
+        QTest::mouseClick(Epub, Qt::LeftButton); QVERIFY(Epub->isChecked()); QVERIFY(Chooser->isVisible());
+        QVERIFY(Chooser->findChild<QPushButton*>("newDocument.create")->text().contains(QObject::tr("다음")));
+        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_2);
         QTRY_COMPARE(Documents(Widget).size(), 1); QTRY_VERIFY(!Chooser);
         const auto Id = Documents(Widget).first().toObject()["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Id));
         QCOMPARE(Name(Widget, Id), QObject::tr("새 문서 %1.md").arg(1));
-        // The popup starts on the last kind; file.new again while it is open creates that kind.
-        New->trigger(); QTRY_VERIFY((Chooser = Widget.findChild<NewDocumentChooser*>()));
+        // The dialog starts on the last kind; file.new again while it is open creates that kind.
+        New->trigger(); QTRY_VERIFY((Chooser = Visible(static_cast<NewDocumentChooser*>(nullptr))));
         New->trigger();
         QTRY_COMPARE(Documents(Widget).size(), 2);
         QCOMPARE(Name(Widget, Documents(Widget).last().toObject()["documentId"].toString()), QObject::tr("새 문서 %1.md").arg(2));
-        // Image: file.newImage opens the size step directly; Enter creates the remembered size.
-        Widget.findChild<QAction*>("file.newImage")->trigger();
-        QTRY_VERIFY([&] { for (auto* Item : Widget.findChildren<NewDocumentChooser*>()) if (Item->isVisible()) { Chooser = Item; return true; } return false; }());
-        auto* Width = Chooser->findChild<QSpinBox*>("newImageWidth"); QVERIFY(Width);
-        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_Return);
+        // Image: chosen in ‘새 문서’, it continues in its own ‘새 이미지’ dialog; Enter creates the remembered size.
+        New->trigger(); QTRY_VERIFY((Chooser = Visible(static_cast<NewDocumentChooser*>(nullptr))));
+        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_4);
+        QPointer<NewImageDialog> Image; QTRY_VERIFY((Image = Visible(static_cast<NewImageDialog*>(nullptr))));
+        QVERIFY(Image->findChild<QSpinBox*>("newImageWidth")); QVERIFY(!Image->findChild<QSpinBox*>("newImageWidth")->isEnabled());
+        QTest::keyClick(Image->focusWidget() ? Image->focusWidget() : Image.data(), Qt::Key_Return);
         QTRY_COMPARE(Documents(Widget).size(), 3);
-        const auto Image = Documents(Widget).last().toObject()["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Image));
-        QCOMPARE(Name(Widget, Image), QObject::tr("새 이미지 %1").arg(1));
+        const auto Created = Documents(Widget).last().toObject()["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Created));
+        QCOMPARE(Name(Widget, Created), QObject::tr("새 이미지 %1").arg(1));
+        // file.newImage opens the image dialog directly.
+        Widget.findChild<QAction*>("file.newImage")->trigger(); QTRY_VERIFY((Image = Visible(static_cast<NewImageDialog*>(nullptr))));
+        Image->reject(); QTRY_VERIFY(!Image); QCOMPARE(Documents(Widget).size(), 3);
+    }
+    void dialogsShareTheProductFrame()
+    {
+        // Captures for review: set HC_NEW_DOCUMENT_CAPTURE to a folder.
+        const auto Folder = qEnvironmentVariable("HC_NEW_DOCUMENT_CAPTURE");
+        Profile Settings; QWidget Host; Host.resize(900, 700); Host.show(); QVERIFY(QTest::qWaitForWindowExposed(&Host));
+        auto* Chooser = new NewDocumentChooser(&Host, {}); Chooser->show(); QVERIFY(QTest::qWaitForWindowExposed(Chooser));
+        auto* Image = new NewImageDialog(&Host, {QSize(617, 700), {}, 1, {}}); Image->show(); QVERIFY(QTest::qWaitForWindowExposed(Image));
+        auto* Epub = new NewEpubDialog(&Host, Settings.root_.path(), {}, "ko"); Epub->show(); QVERIFY(QTest::qWaitForWindowExposed(Epub));
+        for (QWidget* Dialog : {static_cast<QWidget*>(Chooser), static_cast<QWidget*>(Image), static_cast<QWidget*>(Epub)}) {
+            QVERIFY(Dialog->findChild<QWidget*>("hc.dialog.header")); QVERIFY(Dialog->findChild<QWidget*>("hc.dialog.footer"));
+            // No label shows a raw "(&X)" mnemonic.
+            for (auto* Label : Dialog->findChildren<QLabel*>()) if (Label->isVisible()) QVERIFY2(!(Label->text().contains("(&") && !Label->buddy()), qPrintable(Label->text()));
+            if (!Folder.isEmpty()) { QTest::qWait(150); QVERIFY(Dialog->grab().save(QDir(Folder).filePath(Dialog->objectName() + ".png"))); }
+        }
+        for (auto* Dialog : {static_cast<QDialog*>(Chooser), static_cast<QDialog*>(Image), static_cast<QDialog*>(Epub)}) Dialog->reject();
     }
     void chooserSettingSkipsPopup()
     {

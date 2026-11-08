@@ -98,11 +98,16 @@ namespace hc::document
         chapter_ = new QLineEdit( tr( "1장" ), this ); chapter_->setObjectName( "newEpub.chapter" ); chapter_->setMaxLength( 1024 );
         Form->addRow( tr( "첫 장 제목(&C)" ), chapter_ );
         auto* CoverRow = new QHBoxLayout; CoverRow->setSpacing( 6 );
-        cover_ = new QLabel( this ); cover_->setObjectName( "newEpub.cover" ); cover_->setTextFormat( Qt::PlainText ); cover_->setWordWrap( true );
+        // One line: a long file name is cut, never wrapped under the buttons (the tooltip keeps it whole).
+        cover_ = new QLabel( this ); cover_->setObjectName( "newEpub.cover" ); cover_->setTextFormat( Qt::PlainText ); cover_->setWordWrap( false );
+        cover_->setSizePolicy( QSizePolicy::Ignored, QSizePolicy::Preferred );
         auto* Pick = new QPushButton( tr( "이미지 선택…" ), this ); Pick->setObjectName( "newEpub.coverPick" );
+        Pick->setToolTip( tr( "PNG · JPEG · GIF · WebP, 8 MB · 4096 px · 4 MP 이하" ) );
         coverClear_ = new QPushButton( tr( "지우기" ), this ); coverClear_->setObjectName( "newEpub.coverClear" );
         CoverRow->addWidget( cover_, 1 ); CoverRow->addWidget( Pick ); CoverRow->addWidget( coverClear_ );
-        Form->addRow( tr( "표지" ), CoverRow );
+        // Rows whose field is a layout need an explicit buddy, or the label shows "(&I)" literally.
+        auto* CoverLabel = new QLabel( tr( "표지(&I)" ), this ); CoverLabel->setBuddy( Pick );
+        Form->addRow( CoverLabel, CoverRow );
         stylesheet_ = new QCheckBox( tr( "기본 스타일시트 포함 — 줄 간격 1.8 · 단어 단위 줄바꿈 · 문단 들여쓰기" ), this );
         stylesheet_->setObjectName( "newEpub.stylesheet" ); stylesheet_->setChecked( true );
         Form->addRow( QString{}, stylesheet_ );
@@ -110,7 +115,8 @@ namespace hc::document
         folder_ = new QLineEdit( QDir::toNativeSeparators( Folder ), this ); folder_->setObjectName( "newEpub.folder" );
         auto* Browse = new QPushButton( tr( "찾아보기…" ), this ); Browse->setObjectName( "newEpub.browse" );
         FolderRow->addWidget( folder_, 1 ); FolderRow->addWidget( Browse );
-        Form->addRow( tr( "저장 위치(&F)" ), FolderRow );
+        auto* FolderLabel = new QLabel( tr( "저장 위치(&F)" ), this ); FolderLabel->setBuddy( folder_ );
+        Form->addRow( FolderLabel, FolderRow );
         file_ = new QLineEdit( NewEpubFileName( title_->text() ), this ); file_->setObjectName( "newEpub.file" ); file_->setMaxLength( 200 );
         Form->addRow( tr( "파일 이름(&N)" ), file_ );
         auto* MessageRow = new QHBoxLayout; MessageRow->setSpacing( 6 );
@@ -168,7 +174,7 @@ namespace hc::document
     {
         coverPath_ = Path; coverBytes_.clear(); coverError_.clear();
         if( Path.isEmpty() ) {
-            cover_->setText( tr( "없음 · PNG · JPEG · GIF · WebP, 8 MB · 4096 px 이하" ) );
+            cover_->setText( tr( "없음" ) ); cover_->setToolTip( tr( "PNG · JPEG · GIF · WebP, 8 MB · 4096 px · 4 MP 이하" ) );
             coverClear_->setEnabled( false ); validate(); return;
         }
         QFile File( Path );
@@ -182,6 +188,7 @@ namespace hc::document
             QBuffer Buffer( &coverBytes_ ); Buffer.open( QIODevice::ReadOnly ); const auto Dimensions = QImageReader( &Buffer ).size();
             cover_->setText( QStringLiteral( "%1 · %2 × %3 · %4" ).arg( QFileInfo( Path ).fileName() ).arg( Dimensions.width() ).arg( Dimensions.height() ).arg( Size( coverBytes_.size() ) ) );
         } else cover_->setText( QFileInfo( Path ).fileName() );
+        cover_->setToolTip( QDir::toNativeSeparators( Path ) );
         coverClear_->setEnabled( true ); validate();
     }
 

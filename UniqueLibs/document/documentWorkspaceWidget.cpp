@@ -982,44 +982,52 @@ namespace hc::document
     void DocumentWorkspaceWidget::requestNewDocument(QWidget* Anchor, bool ImagePage)
     {
         if (hotExitClosing_) return;
-        // file.new again while the popup is open (the router may see the key first): make the selected kind.
-        // A popup that already chose is only waiting for deleteLater(): open a new one.
+        Q_UNUSED(Anchor);
+        // file.new again while a dialog is open (normally the dialog sees the key first): make the selected kind.
+        // A dialog that already chose is only waiting for deleteLater(): open a new one.
         if (chooser_ && chooser_->isVisible()) { chooser_->ActivateCurrent(); return; }
+        if (imageDialog_ && imageDialog_->isVisible()) { imageDialog_->ActivateCurrent(); return; }
         AppSettings Settings;
+        QKeySequence Repeat;
+        if (auto* Command = findChild<QAction*>("newDocument", Qt::FindDirectChildrenOnly)) Repeat = Command->shortcut();
+        if (ImagePage) { showNewImageDialog(); return; }
         const auto Mode = Settings.value("common/newDocumentAction").toString();
-        if (!ImagePage && (Mode == "text" || Mode == "markdown")) {
+        if (Mode == "text" || Mode == "markdown") {
             const auto Result = newDocument(Mode == "markdown" ? NewDocumentKind::Markdown : NewDocumentKind::Text);
             if (Result.contains("error")) ShowShellError(Message(Result["error"].toString()));
             return;
         }
-        if (!Anchor) if (auto* Button = qobject_cast<QToolButton*>(QApplication::widgetAt(QCursor::pos()));
-            Button && Button->defaultAction() && Button->defaultAction()->objectName() == "toolbar.newDocument") Anchor = Button;
+        // The product dialog frame, centred on this window like the other editor dialogs. open(): never block the host pump.
         NewDocumentChooser::Options Options;
         Options.initial_ = NewDocumentKindFrom(Settings.value("common/newDocumentLastKind").toString());
-        Options.viewer_ = hosted_; Options.imagePage_ = ImagePage;
+        Options.viewer_ = hosted_; Options.repeatKey_ = Repeat;
         Options.nextDocument_ = nextUntitledNumber(false); Options.nextImage_ = nextUntitledNumber(true);
+        chooser_ = new NewDocumentChooser(this, Options);
+        connect(chooser_, &NewDocumentChooser::Chosen, this, [this](NewDocumentKind Kind) {
+            AppSettings Remember; Remember.setValue("common/newDocumentLastKind", NewDocumentKindId(Kind)); Remember.sync();
+            // An image continues in its own dialog, after this one has gone.
+            if (Kind == NewDocumentKind::Image) { QTimer::singleShot(0, this, [this] { showNewImageDialog(); }); return; }
+            const auto Result = newDocument(Kind);
+            if (Result.contains("error")) ShowShellError(Message(Result["error"].toString()));
+        });
+        chooser_->open();
+    }
+    void DocumentWorkspaceWidget::showNewImageDialog()
+    {
+        if (hotExitClosing_ || (imageDialog_ && imageDialog_->isVisible())) return;
+        AppSettings Settings;
+        NewImageDialog::Options Options;
+        Options.nextImage_ = nextUntitledNumber(true);
         Options.lastImage_.preset_ = Settings.value("common/newImagePreset").toString();
         Options.lastImage_.width_ = Settings.value("common/newImageWidth").toInt();
         Options.lastImage_.height_ = Settings.value("common/newImageHeight").toInt();
         Options.lastImage_.background_ = Settings.value("common/newImageBackground").toString();
-        // A restricted HyperViewer reads the clipboard through the host broker: no clipboard row there.
+        if (auto* Command = findChild<QAction*>("newDocument", Qt::FindDirectChildrenOnly)) Options.repeatKey_ = Command->shortcut();
+        // A restricted HyperViewer reads the clipboard through the host broker: no clipboard item there.
         if (!clipboardBroker_) if (const auto* Mime = QGuiApplication::clipboard()->mimeData(); Mime && Mime->hasImage())
             if (const auto Image = qvariant_cast<QImage>(Mime->imageData()); !Image.isNull()) Options.clipboardSize_ = Image.size();
-        if (auto* Command = findChild<QAction*>("newDocument", Qt::FindDirectChildrenOnly)) Options.repeatKey_ = Command->shortcut();
-        if (Anchor && Anchor->isVisible()) { Options.useAnchor_ = true; Options.anchorBelow_ = Anchor->mapToGlobal(QPoint(0, Anchor->height())); }
-        else {
-            auto* Area = tabbed_ ? static_cast<QWidget*>(tabs_) : static_cast<QWidget*>(singlePane_);
-            Options.topCenter_ = mapToGlobal(QPoint(width() / 2, Area->mapTo(this, QPoint(0, 0)).y() + 12));
-        }
-        auto* Focus = QApplication::focusWidget();
-        chooser_ = NewDocumentChooser::Open(this, Options);
-        chooser_->SetFocusReturn(Focus);
-        connect(chooser_, &NewDocumentChooser::Chosen, this, [this](NewDocumentKind Kind) {
-            AppSettings Remember; Remember.setValue("common/newDocumentLastKind", NewDocumentKindId(Kind)); Remember.sync();
-            const auto Result = newDocument(Kind);
-            if (Result.contains("error")) ShowShellError(Message(Result["error"].toString()));
-        });
-        connect(chooser_, &NewDocumentChooser::ImageChosen, this, [this](const NewImageSpec& Spec) {
+        imageDialog_ = new NewImageDialog(this, Options);
+        connect(imageDialog_, &NewImageDialog::ImageChosen, this, [this](const NewImageSpec& Spec) {
             AppSettings Remember; Remember.setValue("common/newDocumentLastKind", "image");
             Remember.setValue("common/newImageBackground", Spec.background_);
             if (!Spec.clipboard_) {
@@ -1030,6 +1038,7 @@ namespace hc::document
             const auto Result = newImage(Spec);
             if (Result.contains("error") && shellError_.isEmpty()) ShowShellError(Message(Result["error"].toString()));
         });
+        imageDialog_->open();
     }
     QJsonObject DocumentWorkspaceWidget::newImage(const NewImageSpec& Spec)
     {
