@@ -8,8 +8,33 @@
 #include <fmwidgets/KeySequenceDelegate.h>
 
 namespace hc::ui {
+class CombinedKeyDelegate final : public QStyledItemDelegate {
+public:
+    static constexpr int DefaultRole = Qt::UserRole + 2;
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
+        QStyleOptionViewItem Background(Option); initStyleOption(&Background, Index); Background.text.clear();
+        const auto* Style = Option.widget ? Option.widget->style() : QApplication::style();
+        Style->drawControl(QStyle::CE_ItemViewItem, &Background, Painter, Option.widget);
+        const auto& Colors = fm::style::ThemeManager::instance().colors();
+        int X = Option.rect.left() + 5;
+        Painter->save(); Painter->setClipRect(Option.rect);
+        for (const bool Dim : {false, true}) {
+            for (const auto& Key : Index.data(Dim ? DefaultRole : Qt::DisplayRole).toString().split(", ", Qt::SkipEmptyParts)) {
+                const auto Size = fm::ui::keyCapSize(Key);
+                fm::ui::paintKeyCap(Painter, QRect(X, Option.rect.center().y() - Size.height() / 2, Size.width(), Size.height()), Key, Colors, Dim);
+                X += Size.width() + 4;
+            }
+            X += 8;
+        }
+        Painter->restore();
+    }
+    QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
+        auto Size = QStyledItemDelegate::sizeHint(Option, Index); Size.setHeight(qMax(26, Size.height())); return Size;
+    }
+};
 class KeyboardSettingsPage final : public QWidget {
-    enum Column { ScopeColumn, CommandColumn, DescriptionColumn, CurrentKeyColumn, DefaultKeyColumn, ColumnCount };
+    enum Column { ScopeColumn, CommandColumn, DescriptionColumn, CurrentKeyColumn, GlobalColumn, ColumnCount };
     // 범위 콤보의 순서. 앞의 일곱 개는 기존 순서를 유지한다(설정·시험이 색인을 쓴다).
     enum Category { AllCategory, FileCategory, PanelCategory, NavigateCategory, WindowCategory, CommandLineCategory, AudioCategory, ProcessCategory, ServiceCategory };
     static constexpr int InputScopeRole = Qt::UserRole + 1;
@@ -27,17 +52,17 @@ public:
         auto* PresetLabel = new QLabel(tr("기본 키:"), Page); Filter->addWidget(PresetLabel);
         preset_ = new QComboBox(Page); preset_->setObjectName("hc.keys.preset"); preset_->addItems({tr("기존 기본값"), tr("파일 작업 기본값"), tr("제품 기본값")}); Filter->addWidget(preset_); PresetLabel->setBuddy(preset_);
         preset_->setAccessibleName(tr("기본 단축키 구성"));
-        preset_->setToolTip(tr("기본값 열에 표시할 단축키 구성을 선택합니다. 내장 단축키 사용이 켜져 있으면 현재 키에도 반영하며, 사용자 지정 키가 우선합니다.\n초기화 버튼을 누르면 사용자 지정을 지우고 선택한 기본값으로 되돌립니다.\n변경은 적용/확인으로 저장하고 취소하면 복원합니다."));
+        preset_->setToolTip(tr("흐린 글씨로 표시할 기본 단축키 구성을 선택합니다. 내장 단축키 사용이 켜져 있으면 현재 키에도 반영하며, 사용자 지정 키가 우선합니다.\n초기화 버튼을 누르면 사용자 지정을 지우고 선택한 기본값으로 되돌립니다.\n변경은 적용/확인으로 저장하고 취소하면 복원합니다."));
         preset_->setItemData(0, tr("기존 단축키 구성 · F5 새로 고침"), Qt::ToolTipRole);
         preset_->setItemData(1, tr("파일 작업 구성 · F5 새로 고침 · F6 이동 · F7 새 폴더 · F8 삭제 · Ctrl+R 이름 변경"), Qt::ToolTipRole);
         preset_->setItemData(2, tr("제품 기본값 · Ctrl+C 복사 · F2/Ctrl+R 이름 변경 · Ctrl+M 이동 · Ctrl+Alt+R 다중 이름 변경 · Ctrl+K 새 폴더 · Ctrl+A 압축 · Ctrl+X 압축 해제"), Qt::ToolTipRole);
-        table_ = new QTableWidget(Page); table_->setObjectName("hc.keys.commands"); table_->setColumnCount(ColumnCount); table_->setHorizontalHeaderLabels({tr("범위"), tr("명령"), tr("설명"), tr("현재 키"), tr("기본값")});
-        table_->setItemDelegateForColumn(CurrentKeyColumn, new fm::ui::KeySequenceDelegate(false, table_)); table_->setItemDelegateForColumn(DefaultKeyColumn, new fm::ui::KeySequenceDelegate(true, table_));
+        table_ = new QTableWidget(Page); table_->setObjectName("hc.keys.commands"); table_->setColumnCount(ColumnCount); table_->setHorizontalHeaderLabels({tr("범위"), tr("명령"), tr("설명"), tr("현재 키 · 기본값"), tr("글로벌")});
+        table_->setItemDelegateForColumn(CurrentKeyColumn, new CombinedKeyDelegate(table_));
         table_->setSelectionBehavior(QAbstractItemView::SelectRows); table_->setSelectionMode(QAbstractItemView::SingleSelection); table_->setEditTriggers(QAbstractItemView::NoEditTriggers); table_->verticalHeader()->hide();
-        // Every column can be resized. The defaults keep the command, its description and the current key
-        // readable; the default-key column takes the remaining width. Multi-key rows no longer widen the table.
-        auto* Columns = table_->horizontalHeader(); Columns->setSectionResizeMode(QHeaderView::Interactive); Columns->setStretchLastSection(true); Columns->setMinimumSectionSize(48);
-        table_->setColumnWidth(ScopeColumn, 90); table_->setColumnWidth(CommandColumn, 200); table_->setColumnWidth(DescriptionColumn, 260); table_->setColumnWidth(CurrentKeyColumn, 170);
+        // Current and default keys share the expanding column.
+        // The global checkbox keeps a compact width.
+        auto* Columns = table_->horizontalHeader(); Columns->setSectionResizeMode(QHeaderView::Interactive); Columns->setStretchLastSection(false); Columns->setSectionResizeMode(CurrentKeyColumn, QHeaderView::Stretch); Columns->setMinimumSectionSize(48);
+        table_->setColumnWidth(ScopeColumn, 90); table_->setColumnWidth(CommandColumn, 200); table_->setColumnWidth(DescriptionColumn, 260); table_->setColumnWidth(CurrentKeyColumn, 320); table_->setColumnWidth(GlobalColumn, 85);
         table_->setWordWrap(false); table_->setTextElideMode(Qt::ElideRight); Rows->addWidget(table_, 1);
         auto* Edit = new fm::ui::Card(Page); auto* EditRows = new QVBoxLayout(Edit); Rows->addWidget(Edit);
         selector_ = new CommandSelector(Edit); selector_->setObjectName("hc.keys.command"); EditRows->addWidget(selector_);
@@ -73,6 +98,15 @@ public:
         });
         connect(functionKind_, &QComboBox::currentIndexChanged, this, [this](int Index) { storeFunctions(shownKind_); shownKind_ = Index; showFunctions(Index); });
         auto* Note = new QLabel(tr("변경 내용은 적용/확인으로 저장하고 취소하면 복원합니다. 키 표시와 기능바·메뉴는 같은 명령 ID를 사용합니다. 대화상자 자체의 고정 키는 여기서 변경하지 않습니다."), this); Note->setWordWrap(true); Root->addWidget(Note);
+        connect(table_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem* Item) {
+            if (Item->column() != GlobalColumn) return;
+            auto* M = TyStCommandMgr::GetInstance();
+            const auto Id = table_->item(Item->row(), CommandColumn)->data(Qt::UserRole).toString();
+            M->SetGlobalShortcutEnabled(Id, Item->checkState() == Qt::Checked);
+            const QSignalBlocker Block(table_);
+            Item->setText(M->GlobalShortcutError(Id).isEmpty() ? QString{} : tr("실패"));
+            Item->setToolTip(M->GlobalShortcutError(Id).isEmpty() ? tr("다른 앱 사용 중에도 현재 키로 실행합니다.") : M->GlobalShortcutError(Id));
+        });
         connect(search_, &QLineEdit::textChanged, this, [this] { filter(); }); connect(scope_, &QComboBox::currentIndexChanged, this, [this] { filter(); });
         connect(table_, &QTableWidget::currentCellChanged, this, [this](int Row) {
             if (Row < 0) return;
@@ -127,6 +161,7 @@ public:
         G["functionBars"] = Bars; return true;
     }
     void Refresh() {
+        const QSignalBlocker BlockTable(table_);
         auto* M = TyStCommandMgr::GetInstance(); M->Refresh();
         auto DefaultGeneral = settings::AppSettings().Read(settings::Section::General).toObject(); DefaultGeneral["useBuiltInShortcuts"] = true;
         const auto Values = M->Retrieve(), Defaults = DefaultShortcuts(DefaultGeneral);
@@ -152,7 +187,17 @@ public:
                         if (const auto Global = CommandId(Values.value(K[0])); !Global.isEmpty()) Shadowed.append(tr("%1 → 전역 '%2'").arg(K.toString(), FindCommand(Global).Desc));
                     if (!Shadowed.isEmpty()) CurrentItem->setToolTip(tr("이 보기에서는 아래 전역 명령보다 먼저 처리합니다:\n%1").arg(Shadowed.join('\n')));
                 }
-                table_->setItem(Row, DefaultKeyColumn, new QTableWidgetItem(Join(View ? DefaultScopeShortcuts(Scope) : CommandInput ? DefaultCommandLineShortcuts() : Defaults)));
+                const auto DefaultKeys = Join(View ? DefaultScopeShortcuts(Scope) : CommandInput ? DefaultCommandLineShortcuts() : Defaults);
+                CurrentItem->setData(CombinedKeyDelegate::DefaultRole, DefaultKeys);
+                CurrentItem->setToolTip(CurrentItem->toolTip() + tr("\n현재 키: %1\n기본값: %2").arg(Join(Current), DefaultKeys));
+                auto* Global = new QTableWidgetItem;
+                if (!View && !CommandInput) {
+                    Global->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
+                    Global->setCheckState(M->GlobalShortcutEnabled(Command) ? Qt::Checked : Qt::Unchecked);
+                    Global->setText(M->GlobalShortcutError(Command).isEmpty() ? QString{} : tr("실패"));
+                    Global->setToolTip(M->GlobalShortcutError(Command).isEmpty() ? tr("다른 앱 사용 중에도 현재 키로 실행합니다. 키가 없으면 등록하지 않습니다.") : M->GlobalShortcutError(Command));
+                } else { Global->setFlags(Qt::ItemIsSelectable); Global->setToolTip(tr("이 입력 범위에서만 실행하는 명령입니다.")); }
+                table_->setItem(Row, GlobalColumn, Global);
                 const int Category = View ? (Scope == InputScope::ProcessView ? ProcessCategory : ServiceCategory) : category(Command);
                 table_->setItem(Row, ScopeColumn, new QTableWidgetItem(scope_->itemText(Category)));
                 table_->item(Row, ScopeColumn)->setData(Qt::UserRole, Category); table_->item(Row, ScopeColumn)->setData(InputScopeRole, int(Scope));
@@ -169,7 +214,7 @@ private:
     TyMapShortcutToCMDStr scopeKeys(const QString& Id) const { auto* M = TyStCommandMgr::GetInstance(); return viewScope() ? M->RetrieveForScope(editScope_) : M->RetrieveForCommand(Id); }
     void filter() {
         const auto Text = search_->text().trimmed();
-        for (int R = 0; R < table_->rowCount(); ++R) { QString Match; for (int C = 0; C < ColumnCount; ++C) Match += " " + table_->item(R, C)->text(); table_->setRowHidden(R, (scope_->currentIndex() && table_->item(R, ScopeColumn)->data(Qt::UserRole) != scope_->currentIndex()) || !Match.contains(Text, Qt::CaseInsensitive)); }
+        for (int R = 0; R < table_->rowCount(); ++R) { QString Match; for (int C = 0; C < ColumnCount; ++C) Match += " " + table_->item(R, C)->text() + " " + table_->item(R, C)->data(CombinedKeyDelegate::DefaultRole).toString(); table_->setRowHidden(R, (scope_->currentIndex() && table_->item(R, ScopeColumn)->data(Qt::UserRole) != scope_->currentIndex()) || !Match.contains(Text, Qt::CaseInsensitive)); }
         resetScope_->setVisible(scope_->currentIndex() == ProcessCategory || scope_->currentIndex() == ServiceCategory);
     }
     void updateConflict() {

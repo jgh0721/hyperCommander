@@ -314,6 +314,7 @@ private slots:
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardGlobalShortcuts"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "driveListOrderUi"
                 || (QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi" || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragNativeFormatsUi")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileDropUi"
@@ -375,7 +376,7 @@ private slots:
         for (auto It = Requested.cbegin(); It != Requested.cend(); ++It) {
             int Row = 0; while (Row < Commands->rowCount() && Commands->item(Row, 1)->text() != It.value()) ++Row;
             QVERIFY(Row < Commands->rowCount());
-            QVERIFY(Commands->item(Row, 3)->text().contains(It.key())); QVERIFY(Commands->item(Row, 4)->text().contains(It.key()));
+            QVERIFY(Commands->item(Row, 3)->text().contains(It.key())); QVERIFY(Commands->item(Row, 3)->data(hc::ui::CombinedKeyDelegate::DefaultRole).toString().contains(It.key()));
         }
         auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); QVERIFY(Editor);
         QCOMPARE(Editor->Library().size(), 1); QCOMPARE(Editor->Profile().columns_[1].format_.size_, SizeFormat::Adaptive);
@@ -389,6 +390,60 @@ private slots:
         Dialog.reject();
     }
 
+    void keyboardGlobalShortcuts()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        auto* Manager = TyStCommandMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Original); Manager->Refresh(); });
+        auto General = Settings.Read(hc::settings::Section::General).toObject(); General.remove("globalShortcuts");
+        QVERIFY(Settings.Put(hc::settings::Section::General, General)); Manager->Refresh();
+        for (const auto* Id : {"hc.audio.preview", "hc.audio.next", "hc.audio.prev", "hc.audio.playPause", "hc.audio.stop"})
+            QVERIFY(Manager->GlobalShortcutEnabled(Id));
+        QVERIFY(!Manager->GlobalShortcutEnabled("hc.file.copy"));
+        const auto Key = QKeySequence("Ctrl+Alt+Shift+F11")[0];
+        Manager->SetShortcutWithCMD(Key, "hc.audio.stop");
+        Manager->SetGlobalShortcutEnabled("hc.audio.stop", true);
+        QVERIFY2(Manager->GlobalShortcutError("hc.audio.stop").isEmpty(), qPrintable(Manager->GlobalShortcutError("hc.audio.stop")));
+        hc::ui::KeyboardSettingsPage Page;
+        auto* Table = Page.findChild<QTableWidget*>("hc.keys.commands"); QVERIFY(Table);
+        int Row = -1;
+        for (int I = 0; I < Table->rowCount(); ++I) if (Table->item(I, 1)->text() == "hc.audio.stop") Row = I;
+        QVERIFY(Row >= 0); QCOMPARE(Table->item(Row, 4)->checkState(), Qt::Checked);
+        Table->item(Row, 4)->setCheckState(Qt::Unchecked);
+        QVERIFY(Settings.Reload());
+        QVERIFY(!Manager->GlobalShortcutEnabled("hc.audio.stop"));
+        // A competing registration makes the error visible; releasing it permits registration again.
+        QVERIFY(RegisterHotKey(nullptr, 0x3ffe, MOD_CONTROL | MOD_ALT | MOD_SHIFT, VK_F11));
+        const auto Release = qScopeGuard([] { UnregisterHotKey(nullptr, 0x3ffe); });
+        Table->item(Row, 4)->setCheckState(Qt::Checked);
+        QVERIFY(!Manager->GlobalShortcutError("hc.audio.stop").isEmpty());
+        QVERIFY(!Table->item(Row, 4)->text().isEmpty());
+        UnregisterHotKey(nullptr, 0x3ffe); Manager->Refresh();
+        QVERIFY(Manager->GlobalShortcutError("hc.audio.stop").isEmpty());
+        auto* Action = Manager->Bridge()->Action("hc.audio.stop"); QVERIFY(Action); Action->setEnabled(true);
+        QSignalSpy Triggered(Action, &QAction::triggered);
+        // An unrelated native window owns focus: Qt window shortcuts cannot deliver this command.
+        const auto Other = CreateWindowExW(0, L"STATIC", L"Global shortcut test", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            50, 50, 250, 100, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        QVERIFY(Other); const auto Close = qScopeGuard([&] { DestroyWindow(Other); });
+        QVERIFY(ActivateTestWindow(Other));
+        Action->setEnabled(true);
+        INPUT Inputs[8]{}; const WORD Codes[]{VK_CONTROL, VK_MENU, VK_SHIFT, VK_F11};
+        for (int I = 0; I < 4; ++I) {
+            Inputs[I].type = INPUT_KEYBOARD; Inputs[I].ki.wVk = Codes[I];
+            Inputs[4 + I].type = INPUT_KEYBOARD; Inputs[4 + I].ki.wVk = Codes[3 - I]; Inputs[4 + I].ki.dwFlags = KEYEVENTF_KEYUP;
+        }
+        QCOMPARE(SendInput(8, Inputs, sizeof(INPUT)), UINT(8));
+        QTRY_COMPARE(Triggered.count(), 1); QTest::qWait(80); QCOMPARE(Triggered.count(), 1);
+        {
+            QMainOpts Dialog(main_);
+            Manager->SetGlobalShortcutEnabled("hc.audio.stop", false);
+            QVERIFY(!Manager->GlobalShortcutEnabled("hc.audio.stop"));
+            Dialog.reject();
+        }
+        QVERIFY(Manager->GlobalShortcutEnabled("hc.audio.stop"));
+    }
+
     void keyboardCommandColumnsUi()
     {
         auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
@@ -399,7 +454,7 @@ private slots:
         QVERIFY(Settings.Put(hc::settings::Section::Shortcuts, QJsonObject{{"Ctrl+Alt+Y", "hc.file.compare"}}));
         hc::ui::KeyboardSettingsPage Keys;
         auto* Table = Keys.findChild<QTableWidget*>("hc.keys.commands"); QVERIFY(Table);
-        const QStringList Headers{QStringLiteral("범위"), QStringLiteral("명령"), QStringLiteral("설명"), QStringLiteral("현재 키"), QStringLiteral("기본값")};
+        const QStringList Headers{QStringLiteral("범위"), QStringLiteral("명령"), QStringLiteral("설명"), QStringLiteral("현재 키 · 기본값"), QStringLiteral("글로벌")};
         QCOMPARE(Table->columnCount(), Headers.size());
         for (int Column = 0; Column < Headers.size(); ++Column) QCOMPARE(Table->horizontalHeaderItem(Column)->text(), Headers[Column]);
         auto* Search = Keys.findChild<QLineEdit*>("hc.keys.search");
@@ -412,7 +467,7 @@ private slots:
         int Visible = 0; for (int R = 0; R < Table->rowCount(); ++R) if (!Table->isRowHidden(R)) ++Visible;
         QCOMPARE(Visible, 1); QCOMPARE(Table->item(Row, 0)->text(), QStringLiteral("파일 작업"));
         QCOMPARE(Table->item(Row, 2)->text(), Selector->itemText(Selector->findData("hc.file.compare")).section(" · ", 0, 0));
-        QVERIFY(Table->item(Row, 3)->text().contains("Ctrl+Alt+Y")); QVERIFY(Table->item(Row, 4)->text().contains("Ctrl+O"));
+        QVERIFY(Table->item(Row, 3)->text().contains("Ctrl+Alt+Y")); QVERIFY(Table->item(Row, 3)->data(hc::ui::CombinedKeyDelegate::DefaultRole).toString().contains("Ctrl+O"));
         Selector->SetCommand("hc.app.about"); Table->setCurrentCell(Row, 2); QCOMPARE(Selector->Command(), QString("hc.file.compare"));
         Search->setText(Table->item(Row, 2)->text()); QVERIFY(!Table->isRowHidden(Row));
         Search->setText("Ctrl+Alt+Y"); QVERIFY(!Table->isRowHidden(Row));
@@ -424,7 +479,7 @@ private slots:
         General = Settings.Read(hc::settings::Section::General).toObject(); General["useBuiltInShortcuts"] = false;
         QVERIFY(Settings.Put(hc::settings::Section::General, General)); Keys.Refresh();
         QCOMPARE(Table->item(CompareRow(), 3)->text(), QString("Ctrl+Alt+Y"));
-        QVERIFY(Table->item(CompareRow(), 4)->text().contains("Ctrl+O"));
+        QVERIFY(Table->item(CompareRow(), 3)->data(hc::ui::CombinedKeyDelegate::DefaultRole).toString().contains("Ctrl+O"));
         QMainOpts Dialog(main_); Dialog.show(); Dialog.LoadSettings();
         auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
         const auto Keyboard = Categories->findItems(QStringLiteral("키보드"), Qt::MatchExactly); QCOMPARE(Keyboard.size(), 1);
@@ -455,7 +510,7 @@ private slots:
             auto* Table = Keys.findChild<QTableWidget*>("hc.keys.commands"); QVERIFY(Table);
             const auto CheckRow = [&](const QString& Id, const QString& Key, const QString& Scope) {
                 for (int Row = 0; Row < Table->rowCount(); ++Row) if (Table->item(Row, 1)->text() == Id)
-                    return Table->item(Row, 3)->text() == Key && Table->item(Row, 4)->text() == Key && Table->item(Row, 0)->text() == Scope;
+                    return Table->item(Row, 3)->text() == Key && Table->item(Row, 3)->data(hc::ui::CombinedKeyDelegate::DefaultRole).toString() == Key && Table->item(Row, 0)->text() == Scope;
                 return false;
             };
             QVERIFY(CheckRow("hc.commandLine.execute", "Return", QStringLiteral("명령행 입력")));
@@ -554,7 +609,7 @@ private slots:
             for (int Row = 0; Row < Table->rowCount(); ++Row) if (!Table->isRowHidden(Row)) {
                 ++Visible; QCOMPARE(Table->item(Row, 1)->data(Qt::UserRole).toString(), QString("hc.file.compare"));
                 QCOMPARE(QKeySequence(Table->item(Row, 3)->text()), QKeySequence("Ctrl+O"));
-                QCOMPARE(QKeySequence(Table->item(Row, 4)->text()), QKeySequence("Ctrl+O"));
+                QCOMPARE(QKeySequence(Table->item(Row, 3)->data(hc::ui::CombinedKeyDelegate::DefaultRole).toString()), QKeySequence("Ctrl+O"));
             }
             QCOMPARE(Visible, 1);
         }

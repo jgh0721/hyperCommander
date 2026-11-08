@@ -7,17 +7,22 @@
 #include "commandUiConfig.hpp"
 
 #include <memory>
+#include <QAbstractNativeEventFilter>
 
 namespace Qtitan
 {
     class GridViewBase;
 }
 
-class CCommandMgr : public QObject
+class CCommandMgr : public QObject, public QAbstractNativeEventFilter
 {
     Q_OBJECT
   public:
     CCommandMgr( QObject* parent = nullptr );
+    ~CCommandMgr() override;
+    bool GlobalShortcutEnabled(const QString& Id) const;
+    void SetGlobalShortcutEnabled(const QString& Id, bool Enabled);
+    QString GlobalShortcutError(const QString& Id) const;
 
     void                  Refresh();
     void                  SaveSettings();
@@ -92,6 +97,12 @@ class CCommandMgr : public QObject
     using TySpMapKeyToCMDStr = std::shared_ptr<TyMapShortcutToCMDStr>;
 
     TySpMapKeyToCMDStr retrieve() const;
+    bool nativeEventFilter(const QByteArray& Type, void* Message, qintptr* Result) override;
+    void refreshGlobalShortcuts();
+    void clearGlobalShortcuts();
+    struct GlobalKey { QString command_; QKeyCombination key_; unsigned modifiers_; unsigned virtualKey_; };
+    QHash<int, GlobalKey> globalKeys_;
+    QHash<QString, QString> globalErrors_;
 
     TySpMapKeyToCMDStr SpMapKeyToCMDText_;
 
