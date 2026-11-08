@@ -302,11 +302,15 @@ namespace hc::document
             }
             if (Id == "eol") {
                 const auto Stats = CountLineEndings(QStringView(Text->Content()));
-                const auto Dominant = Stats.Dominant();
-                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("줄 끝 — %1").arg(Dominant == "MIXED" ? tr("혼합") : Dominant.isEmpty() ? eol_ : Dominant));
+                const auto Detected = Stats.Dominant();
+                // Without line breaks, use the editor mode applied from new-file settings.
+                const auto Dominant = Detected.isEmpty()
+                    ? QString(Text->detectedLineEnding() == QTextView::CRLF ? "CRLF" : Text->detectedLineEnding() == QTextView::CR ? "CR" : "LF")
+                    : Detected;
+                auto* Popup = DocumentStatusPopup::Open(Anchor, tr("줄 끝 — %1").arg(Dominant == "MIXED" ? tr("혼합") : Dominant));
                 Popup->AddNote(Popup->Root(), Dominant == "MIXED"
                     ? tr("혼합 (CRLF %1 · LF %2 · CR %3)").arg(Stats.crlf_).arg(Stats.lf_).arg(Stats.cr_)
-                    : tr("%1줄 모두 %2 · 혼합 없음").arg(Stats.Lines()).arg(Dominant.isEmpty() ? eol_ : Dominant));
+                    : tr("%1줄 모두 %2 · 혼합 없음").arg(Stats.Lines()).arg(Dominant));
                 for (const auto& [Name, Ending] : {std::pair{QString("CRLF"), QTextView::CRLF}, std::pair{QString("LF"), QTextView::LF}, std::pair{QString("CR"), QTextView::CR}}) {
                     if (Dominant == Name) continue;
                     const auto Changes = Stats.Breaks() - (Name == "CRLF" ? Stats.crlf_ : Name == "LF" ? Stats.lf_ : Stats.cr_);

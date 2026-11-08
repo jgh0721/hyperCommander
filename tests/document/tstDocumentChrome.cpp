@@ -77,6 +77,23 @@ private slots:
         // Shortcut actions are window actions; the workspace must not list them as a context menu.
         QVERIFY(Workspace.contextMenuPolicy() != Qt::ActionsContextMenu);
     }
+    void newTextLineEndingMenuMatchesStatus()
+    {
+        DocumentWorkspaceWidget Workspace(root_.filePath("recovery-new-eol")); Workspace.show();
+        Workspace.SetClosePrompt([](const QString&) { return int(QMessageBox::Discard); });
+        const auto Id = Workspace.Handle({{"action", "new"}})["documentId"].toString();
+        QTRY_VERIFY(Ready(Workspace, Id));
+        auto* Bar = static_cast<DocumentStatusBar*>(Workspace.findChild<QWidget*>("documentStatusBar")); QVERIFY(Bar);
+        QTRY_COMPARE(FieldText(Bar, "eol"), QString("CRLF"));
+        auto* Eol = SubMenu(TopMenu(Workspace, QStringLiteral("텍스트(&X)")), QStringLiteral("줄 끝")); QVERIFY(Eol);
+        emit Eol->aboutToShow();
+        QVERIFY(Eol->actions().first()->text().contains("CRLF"));
+        int Checked = 0;
+        for (auto* Action : Eol->actions()) if (Action->isChecked()) {
+            ++Checked; QVERIFY(Action->text().startsWith("CRLF"));
+        }
+        QCOMPARE(Checked, 1);
+    }
     void textModeMenuAndPickers()
     {
         const auto Path = root_.filePath("sample.cpp");

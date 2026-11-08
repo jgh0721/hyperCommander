@@ -141,9 +141,13 @@ namespace hc::document
         connect(Eol, &QMenu::aboutToShow, this, [this, Eol, Text] {
             Eol->clear();
             const auto Stats = CountLineEndings(QStringView(Text->Content()));
-            const auto Dominant = Stats.Dominant();
+            const auto Detected = Stats.Dominant();
+            // Without line breaks, use the editor mode applied from new-file settings.
+            const auto Dominant = Detected.isEmpty()
+                ? QString(Text->detectedLineEnding() == QTextView::CRLF ? "CRLF" : Text->detectedLineEnding() == QTextView::CR ? "CR" : "LF")
+                : Detected;
             Heading(Eol, Dominant == "MIXED" ? tr("현재: 혼합 (CRLF %1 · LF %2 · CR %3)").arg(Stats.crlf_).arg(Stats.lf_).arg(Stats.cr_)
-                : tr("현재: %1 · %2줄").arg(Dominant.isEmpty() ? eol_ : Dominant).arg(Stats.Lines()));
+                : tr("현재: %1 · %2줄").arg(Dominant).arg(Stats.Lines()));
             for (const auto& Item : {std::pair{QString("CRLF"), QTextView::CRLF}, std::pair{QString("LF"), QTextView::LF}, std::pair{QString("CR"), QTextView::CR}}) {
                 auto* Action = Check(Eol, tr("%1로 변환").arg(Item.first), Dominant == Item.first);
                 Action->setEnabled(!Text->isReadOnly());
