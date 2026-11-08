@@ -3,6 +3,7 @@
 #include "qtDialogFrame.hpp"
 
 #include <QCoreApplication>
+#include <QGridLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QMessageBox>
@@ -68,12 +69,31 @@ protected:
     {
         if( !framed_ ) frame();
         QMessageBox::showEvent( Event );     // may add the automatic OK button, then sizes from the framed layout
+        fitFrame();
         detail::MarkPrimary( findChild< QDialogButtonBox* >(), defaultButton() );
         // Framing reparents the buttons; restore the caller's default focus.
         if (auto* Default = defaultButton(); Default && Default->isEnabled()) Default->setFocus(Qt::TabFocusReason);
     }
 
+    bool event(QEvent* Event) override
+    {
+        const auto Handled = QMessageBox::event(Event);
+        // Details expansion and translated button labels can run updateSize again.
+        if (framed_ && Event->type() == QEvent::LayoutRequest) fitFrame();
+        return Handled;
+    }
+
 private:
+    void fitFrame()
+    {
+        if (fitting_ || !layout()) return;
+        fitting_ = true;
+        layout()->activate();
+        const auto Width = qMax(560, layout()->totalMinimumSize().width());
+        const auto Height = layout()->hasHeightForWidth() ? layout()->totalHeightForWidth(Width) : layout()->totalSizeHint().height();
+        setFixedSize(Width, Height);
+        fitting_ = false;
+    }
     static StandardButton ask( Icon Kind, QWidget* Parent, const QString& Title, const QString& Text, StandardButtons Buttons, StandardButton Default )
     {
         MessageDialog Box( Kind, Title, Text, Buttons, Parent );
@@ -91,12 +111,34 @@ private:
         else if( icon() == NoIcon ) { Glyph = fm::ui::glyph::App; Tone = fm::ui::DialogHeader::Mute; }
         // The header glyph replaces the large message icon.
         if( auto* IconLabel = findChild< QLabel* >( QStringLiteral( "qt_msgboxex_icon_label" ) ) ) IconLabel->hide();
+        // QMessageBox reserves an icon/indent column even after hiding the icon.
+        // Let the text use the whole body instead of stretching that empty column.
+        if (auto* Grid = qobject_cast<QGridLayout*>(layout())) {
+            const auto Columns = Grid->columnCount();
+            for (int Column = 0; Column < Columns; ++Column) {
+                Grid->setColumnMinimumWidth(Column, 0); Grid->setColumnStretch(Column, 0);
+            }
+            for (const auto* Name : {"qt_msgbox_label", "qt_msgbox_informativelabel"}) {
+                if (auto* Label = findChild<QLabel*>(QString::fromLatin1(Name))) {
+                    if (Grid->indexOf(Label) < 0) continue;
+                    int Row, Column, RowSpan, ColumnSpan;
+                    Grid->getItemPosition(Grid->indexOf(Label), &Row, &Column, &RowSpan, &ColumnSpan);
+                    Grid->removeWidget(Label); Grid->addWidget(Label, Row, 0, RowSpan, Columns);
+                    Label->setWordWrap(true);
+                }
+            }
+            // QMessageBox sizes from its label after framing. Keep the body width
+            // in the layout so that title, recovery text and footer stay readable.
+            Grid->addItem(new QSpacerItem(520, 0, QSizePolicy::Minimum, QSizePolicy::Minimum),
+                Grid->rowCount(), 0, 1, Columns);
+        }
         auto* Footer = ApplyDialogFrame( this, { windowTitle(), {}, Glyph } );
         if( auto* Header = findChild< fm::ui::DialogHeader* >( QStringLiteral( "hc.dialog.header" ) ) ) Header->setTone( Tone );
         MoveToFooter( Footer, findChild< QDialogButtonBox* >() );
     }
 
     bool framed_ = false;
+    bool fitting_ = false;
 };
 
 /// QInputDialog in the product dialog frame: header band with the title, the prompt and the field in the body,

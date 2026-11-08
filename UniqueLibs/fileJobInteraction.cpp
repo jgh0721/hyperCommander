@@ -11,6 +11,7 @@
 /// 고유 라이브러리
 #include "fileIconService.hpp"
 #include "fileBatchOperations.hpp"
+#include "commonLibs/Qt/elidedLabel.hpp"
 
 /// 플랫폼/프레임워크 헤더파일
 #include <QCheckBox>
@@ -39,7 +40,27 @@ namespace hc::ui
     using namespace operations;
     namespace
     {
-        // Like the shared wrap layout, but every visual row ends at the right edge.
+        class ActionButton final : public fm::ui::Button
+        {
+        public:
+            using fm::ui::Button::Button;
+            void SetCaution(bool Caution) { caution_ = Caution; update(); }
+        protected:
+            void paintEvent(QPaintEvent* Event) override
+            {
+                fm::ui::Button::paintEvent(Event);
+                // Keep the theme's native focus outline visible on keyboard selection.
+                if (!caution_ || !isEnabled() || hasFocus()) return;
+                QPainter Painter(this); Painter.setRenderHint(QPainter::Antialiasing);
+                Painter.setPen(QPen(fm::style::themeColorsFor(this)[fm::style::Token::Warn], 1.5));
+                Painter.setBrush(Qt::NoBrush); Painter.drawRoundedRect(QRectF(rect()).adjusted(1, 1, -1, -1), 5, 5);
+            }
+        private:
+            bool caution_ = false;
+        };
+
+        // Keep scope groups intact and give each row at most two full-width actions.
+        // Long translated labels wrap the row, never the button text.
         class ActionLayout final : public QLayout
         {
         public:
@@ -61,17 +82,18 @@ namespace hc::ui
                 int Top = Rect.top(), Width = 0, Height = 0;
                 QList<QLayoutItem*> Row;
                 const auto Flush = [&] {
-                    int Left = Rect.right() + 1 - Width;
+                    int Left = Rect.left();
+                    int Extra = Row.isEmpty() ? 0 : qMax(0, Rect.width() - Width) / int(Row.size());
                     for (auto* Item : Row) {
                         const auto Size = Item->sizeHint().expandedTo(Item->minimumSize()).boundedTo(Item->maximumSize());
-                        if (Apply) Item->setGeometry(QRect(Left, Top, Size.width(), Height));
-                        Left += Size.width() + spacing();
+                        if (Apply) Item->setGeometry(QRect(Left, Top, Size.width() + Extra, Height));
+                        Left += Size.width() + Extra + spacing();
                     }
                 };
                 for (auto* Item : items_) {
                     if (Item->isEmpty()) continue;
                     const auto Size = Item->sizeHint().expandedTo(Item->minimumSize()).boundedTo(Item->maximumSize());
-                    if (Width && Width + spacing() + Size.width() > Rect.width()) { Flush(); Top += Height + spacing(); Row.clear(); Width = Height = 0; }
+                    if (Width && (Row.size() == 2 || Width + spacing() + Size.width() > Rect.width())) { Flush(); Top += Height + spacing(); Row.clear(); Width = Height = 0; }
                     if (Width) Width += spacing(); Width += Size.width(); Height = qMax(Height, Size.height()); Row.append(Item);
                 }
                 Flush(); return Top - Rect.top() + Height;
@@ -129,13 +151,22 @@ namespace hc::ui
             : tr("작업을 계속할 수 없습니다.");
         messageText_ = Kind == InteractionKind::Overwrite ? tr("원본과 기존 대상을 확인하고 처리 방법을 선택하세요.")
             : Kind == InteractionKind::DeleteConfirmation ? Request.reason_ == "confirm-recycle-delete" ? tr("Windows 휴지통으로 이동합니다.") : tr("휴지통으로 이동하지 않습니다. 이미 삭제한 항목은 취소로 복원되지 않습니다.")
-            : Kind == InteractionKind::ReadOnlyRemoval ? tr("모두 허용은 현재 작업 안에서만 적용됩니다.")
+            : Kind == InteractionKind::ReadOnlyRemoval ? tr("삭제 허용은 현재 항목만 처리합니다. 건너뛰면 항목을 남겨두고 계속합니다.")
             : Password ? Request.passwordAttempt_ > 1 ? tr("암호가 맞지 않습니다. 다시 입력하거나 저장된 암호를 선택하세요.") : tr("입력한 암호는 작업 기록에 표시하지 않습니다.")
             : Kind == InteractionKind::RetryFailure && Request.reason_.starts_with("file-in-use:") ? tr("다른 프로그램에서 항목을 사용하고 있습니다. 파일을 닫은 뒤 다시 시도하세요.")
             : Kind == InteractionKind::RetryFailure && Request.reason_.starts_with("delete-failure:") ? FileOperationErrorText(Request.reason_.substr(15))
                 + (Request.reason_ == "delete-failure:win32:5" ? tr("\n파일을 사용 중이거나 삭제 대기 중일 때도 이 오류가 발생할 수 있습니다. 파일 사용 정보를 확인한 뒤 다시 시도하세요.") : QString{}) + tr("\n건너뛰면 해당 항목을 남겨두고 나머지 삭제를 계속합니다. 모두 건너뛰기는 현재 삭제 작업의 후속 오류에도 적용됩니다.")
             : Kind == InteractionKind::Elevation ? FileOperationErrorText(Request.reason_) + (has(InteractionChoice::Elevate) ? tr("\n관리자 권한으로 다시 시도할 수 있습니다.") + (has(InteractionChoice::ElevateAll) ? tr("\n모두 재시도는 현재 작업에서 이후 발생하는 오류에도 적용됩니다.") : QString{}) : tr("\n허용된 방법으로 다시 시도하거나 작업을 취소하세요.")) : hc::ui::ErrorText(Request.reason_);
         setWindowTitle(Operation + (Kind == InteractionKind::Overwrite || Kind == InteractionKind::Rename ? tr(" · 이름 충돌") : Password ? tr(" · 암호 입력") : tr(" · 응답 필요")));
+        QString ErrorDetails;
+        if (Kind == InteractionKind::Elevation || Kind == InteractionKind::RetryFailure) {
+            auto Code = QString::fromStdString(Request.reason_);
+            for (const auto* Prefix : {"delete-failure:", "file-in-use:"})
+                if (Code.startsWith(QLatin1String(Prefix))) Code.remove(0, qsizetype(qstrlen(Prefix)));
+            const auto Presented = DescribeError(Code);
+            messageText_.replace(Presented.Text(), Presented.Summary());
+            ErrorDetails = tr("%1 (%2)").arg(Presented.description_.simplified(), Presented.code_);
+        }
         auto* Layout = new QVBoxLayout(this); Layout->setSpacing(16); Layout->setAlignment(Qt::AlignTop);
         heading_ = new QLabel(headingText_, this); heading_->setObjectName("hc.jobs.interaction.heading"); heading_->setWordWrap(true); heading_->setTextFormat(Qt::PlainText);
         auto HeadingFont = Font; HeadingFont.setWeight(QFont::DemiBold); heading_->setFont(HeadingFont); Layout->addWidget(heading_);
@@ -143,6 +174,10 @@ namespace hc::ui
         content_ = new QWidget(this); body_ = new QVBoxLayout(content_); body_->setContentsMargins(0, 0, 0, 0); body_->setSpacing(14); Layout->addWidget(content_);
         if (!Source.empty()) endpoint(tr("원본"), Source, "source");
         if (!Destination.empty() && Source != Destination) endpoint(tr("대상"), Destination, "destination");
+        if (!ErrorDetails.isEmpty()) {
+            auto* Text = new hc::qt::ElidedLabel(content_); Text->setObjectName("hc.jobs.errorDetails.text");
+            Text->SetText(ErrorDetails); Text->SetElideMode(Qt::ElideMiddle); body_->addWidget(Text);
+        }
         if (snapshot_.progress_.plannedItems_ && Kind == InteractionKind::DeleteConfirmation) {
             auto* Count = new QLabel(tr("선택한 항목 %1개").arg(*snapshot_.progress_.plannedItems_), content_); body_->addWidget(Count);
         }
@@ -158,7 +193,15 @@ namespace hc::ui
         validation_ = new QLabel(content_); validation_->setObjectName("hc.jobs.interaction.error"); validation_->setTextFormat(Qt::PlainText); validation_->setWordWrap(true); validation_->hide(); body_->addWidget(validation_);
         connect(editor_, &QLineEdit::textChanged, this, [this] { validate(); });
         connect(editor_, &QLineEdit::returnPressed, this, [this, Password] { if (apply_ && apply_->isEnabled()) choose(Password ? InteractionChoice::Confirm : InteractionChoice::Rename); });
-        DialogFrameOptions Frame; Frame.title_ = windowTitle(); Frame.outline_ = true; auto* Footer = ApplyDialogFrame(this, Frame);
+        DialogFrameOptions Frame; Frame.title_ = windowTitle(); Frame.outline_ = true;
+        if (Kind == InteractionKind::ReadOnlyRemoval) Frame.title_ = tr("읽기 전용 항목 삭제");
+        else if (Kind == InteractionKind::Elevation) Frame.title_ = has(InteractionChoice::CopyOnly)
+            ? tr("이동한 파일의 원본 제거 실패") : tr("파일 작업 권한 오류");
+        else if (Kind == InteractionKind::RetryFailure) Frame.title_ = Operation + tr(" · 작업 오류");
+        Frame.glyph_ = Password ? fm::ui::glyph::Info : fm::ui::glyph::Warning;
+        auto* Footer = ApplyDialogFrame(this, Frame);
+        if (auto* Header = findChild<fm::ui::DialogHeader*>("hc.dialog.header"))
+            Header->setTone(Password ? fm::ui::DialogHeader::Info : fm::ui::DialogHeader::Warn);
         delete Footer->takeAt(0);
         auto* FooterWidget = new QWidget(Footer->parentWidget()); footer_ = new QVBoxLayout(FooterWidget); footer_->setContentsMargins(0, 0, 0, 0); footer_->setSpacing(8); Footer->addWidget(FooterWidget);
         rebuildActions();
@@ -216,7 +259,7 @@ namespace hc::ui
 
     QPushButton* FileJobInteraction::addButton(QLayout* Row, const QString& Text, const char* Name, std::function<void()> Clicked)
     {
-        auto* Button = new fm::ui::Button(Text, actions_); Button->setObjectName(QString::fromLatin1(Name));
+        auto* Button = new ActionButton(Text, actions_); Button->setObjectName(QString::fromLatin1(Name));
         Button->setAutoDefault(false); Button->setDefault(false); Button->setFont(font());
         Button->installEventFilter(this); Button->setFocusPolicy(Qt::StrongFocus);
         Button->setFixedHeight(qMax(44, QFontMetrics(font()).height() + 16));
@@ -227,13 +270,29 @@ namespace hc::ui
     void FileJobInteraction::rebuildActions()
     {
         delete actions_; actions_ = new QWidget(this); actions_->setObjectName("hc.jobs.interaction.actions"); apply_ = nullptr;
-        auto* Rows = new QVBoxLayout(actions_); Rows->setContentsMargins(0, 0, 0, 0); Rows->setSpacing(8); footer_->addWidget(actions_);
-        const auto NewRow = [&]() -> QLayout* { auto* Widget = new QWidget(actions_); auto* Flow = new ActionLayout(Widget); Rows->addWidget(Widget); return Flow; };
-        auto* Primary = NewRow();
+        auto* Rows = new QVBoxLayout(actions_); Rows->setContentsMargins(0, 0, 0, 0); Rows->setSpacing(12); footer_->addWidget(actions_);
+        const auto NewRow = [&](const QString& Title, const char* Name) -> QLayout* {
+            auto* Group = new QWidget(actions_); Group->setObjectName(QString::fromLatin1(Name));
+            auto* Layout = new QVBoxLayout(Group); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(8);
+            if (!Title.isEmpty()) {
+                auto* Heading = new QLabel(Title, Group); auto Font = font(); Font.setWeight(QFont::DemiBold); Heading->setFont(Font);
+                Heading->setMargin(8); Heading->setBackgroundRole(QPalette::AlternateBase); Heading->setAutoFillBackground(true);
+                Layout->addWidget(Heading);
+            }
+            auto* Widget = new QWidget(Group); auto* Flow = new ActionLayout(Widget); Layout->addWidget(Widget); Rows->addWidget(Group); return Flow;
+        };
+        const bool Batch = !rename_ && (has(InteractionChoice::ConfirmAll) || has(InteractionChoice::ElevateAll)
+            || has(InteractionChoice::ReplaceAll) || has(InteractionChoice::SkipAll));
+        auto* Primary = NewRow(Batch ? tr("현재 항목") : QString{}, "hc.jobs.actions.current");
         const auto Add = [&](QLayout* Row, InteractionChoice Choice, const QString& Text) {
             if (!has(Choice)) return static_cast<QPushButton*>(nullptr);
             const auto Name = "hc.jobs.choice." + std::to_string(int(Choice));
-            return addButton(Row, Text, Name.c_str(), [this, Choice] { choose(Choice); });
+            auto* Button = addButton(Row, Text, Name.c_str(), [this, Choice] { choose(Choice); });
+            const auto Kind = snapshot_.interaction_->kind_;
+            static_cast<ActionButton*>(Button)->SetCaution(Choice == InteractionChoice::Replace || Choice == InteractionChoice::ReplaceAll
+                || Choice == InteractionChoice::Elevate || Choice == InteractionChoice::ElevateAll || Choice == InteractionChoice::ConfirmAll
+                || (Choice == InteractionChoice::Confirm && (Kind == InteractionKind::ReadOnlyRemoval || Kind == InteractionKind::DeleteConfirmation)));
+            return Button;
         };
         const auto Kind = snapshot_.interaction_->kind_;
         if (rename_) {
@@ -254,23 +313,32 @@ namespace hc::ui
                 if (savedPasswords_) addButton(Primary, tr("저장된 암호(&D)..."), "hc.jobs.savedPasswords", savedPasswords_);
             }
             Add(Primary, InteractionChoice::Replace, tr("덮어쓰기(&O)"));
-            Add(Primary, InteractionChoice::Elevate, tr("관리자 권한으로 재시도(&E)..."));
             Add(Primary, InteractionChoice::Retry, has(InteractionChoice::CopyOnly) ? tr("원본 제거 다시 시도(&T)") : tr("다시 시도(&T)"));
+            Add(Primary, InteractionChoice::Elevate, tr("관리자 권한으로 재시도(&E)..."));
             Add(Primary, InteractionChoice::CopyOnly, tr("복사만 완료(&O)"));
             Add(Primary, InteractionChoice::Skip, tr("건너뛰기(&S)"));
             if (has(InteractionChoice::Rename)) {
                 const auto Name = "hc.jobs.choice." + std::to_string(int(InteractionChoice::Rename));
                 addButton(Primary, tr("이름 변경(&R)..."), Name.c_str(), [this] { if (!editor_->text().isEmpty() && !editor_->isHidden()) choose(InteractionChoice::Rename); else editName(); });
             }
-            Add(Primary, InteractionChoice::ConfirmAll, tr("모두 허용(&A)"));
-            Add(Primary, InteractionChoice::ElevateAll, tr("모두 관리자 권한으로 재시도(&A)..."));
-            if (details_) addButton(Primary, Kind == InteractionKind::Elevation ? tr("권한 오류 자세히(&P)...") : tr("파일 사용 정보(&L)..."),
-                Kind == InteractionKind::Elevation ? "hc.jobs.permission" : "hc.jobs.fileLocks", details_);
         }
-        auto* Secondary = !rename_ && (has(InteractionChoice::ReplaceAll) || has(InteractionChoice::RenameIncoming)) ? NewRow() : Primary;
+        if (Batch) {
+            auto* All = NewRow(tr("일괄 처리"), "hc.jobs.actions.batch");
+            Add(All, InteractionChoice::ConfirmAll, tr("모두 허용(&A)"));
+            Add(All, InteractionChoice::ElevateAll, tr("모두 관리자 권한으로 재시도(&A)..."));
+            Add(All, InteractionChoice::ReplaceAll, tr("모두 덮어쓰기(&A)"));
+            Add(All, InteractionChoice::SkipAll, tr("모두 건너뛰기(&K)"));
+            auto* Scope = new QLabel(Kind == InteractionKind::ReadOnlyRemoval
+                ? tr("모두 허용은 현재 작업의 읽기 전용 항목에만 적용됩니다.")
+                : tr("일괄 선택은 현재 작업에만 적용됩니다."), actions_);
+            Scope->setObjectName("hc.jobs.actions.scope"); Scope->setWordWrap(true); Rows->addWidget(Scope);
+        }
+        auto* Utilities = new fm::ui::DialogFooter(actions_); Utilities->setObjectName("hc.jobs.actions.utilities");
+        auto* Secondary = new QHBoxLayout(Utilities); Secondary->setContentsMargins(0, 12, 0, 0); Secondary->setSpacing(8);
+        Rows->addWidget(Utilities);
+        if (details_ && !rename_) addButton(Secondary, Kind == InteractionKind::Elevation ? tr("권한 오류 자세히(&P)...") : tr("파일 사용 정보(&L)..."),
+            Kind == InteractionKind::Elevation ? "hc.jobs.permission" : "hc.jobs.fileLocks", details_);
         if (!rename_) {
-            Add(Secondary, InteractionChoice::ReplaceAll, tr("모두 덮어쓰기(&A)"));
-            Add(Secondary, InteractionChoice::SkipAll, tr("모두 건너뛰기(&K)"));
             if (has(InteractionChoice::RenameIncoming) || has(InteractionChoice::RenameExisting)) {
                 auto* Options = addButton(Secondary, tr("옵션(&M)"), "hc.jobs.conflictOptions", [] {});
                 auto* Menu = new QMenu(Options);
@@ -290,7 +358,8 @@ namespace hc::ui
                 });
             }
         }
-        addButton(Secondary, tr("취소(&C)"), "hc.jobs.interaction.cancel", [this] { choose(InteractionChoice::Cancel); });
+        Secondary->addStretch(1);
+        addButton(Secondary, tr("작업 취소(&C)"), "hc.jobs.interaction.cancel", [this] { choose(InteractionChoice::Cancel); });
         // Expose the Enter action before the user starts keyboard navigation.
         auto* Default = apply_;
         if (!Default && Kind == InteractionKind::Overwrite)

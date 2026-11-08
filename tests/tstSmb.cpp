@@ -4123,6 +4123,27 @@ private slots:
 
     void promptKeyboardFocusUi()
     {
+        {
+            hc::ui::MessageDialog Warning(QMessageBox::Warning, QStringLiteral("폴더를 열 수 없습니다"),
+                QStringLiteral("원격 데스크톱의 공유 폴더에 접근하지 못했습니다.\n\n\\\\tsclient\\D\\Utils\\TelePhotoDownloader"),
+                QMessageBox::Retry | QMessageBox::Cancel);
+            Warning.setInformativeText(QStringLiteral("원격 연결과 드라이브 공유 설정을 확인한 뒤 다시 시도하세요."));
+            Warning.setDetailedText(QStringLiteral("경로: \\\\tsclient\\D\\Utils\\TelePhotoDownloader\n테스트 오류"));
+            Warning.setDefaultButton(QMessageBox::Cancel);
+            Warning.show(); QVERIFY(QTest::qWaitForWindowExposed(&Warning));
+            QVERIFY(Warning.width() >= 560);
+            for (auto* Button : Warning.buttons()) QVERIFY(Button->width() >= Button->sizeHint().width());
+            auto* Body = Warning.findChild<QWidget*>("hc.dialog.body"); QVERIFY(Body);
+            for (const auto* Name : {"qt_msgbox_label", "qt_msgbox_informativelabel"}) {
+                auto* Label = Warning.findChild<QLabel*>(Name); QVERIFY(Label);
+                QCOMPARE(Label->mapTo(Body, QPoint{}).x(), Body->layout()->contentsMargins().left());
+                QVERIFY(Label->width() > Body->width() / 2);
+            }
+            if (const auto Capture = qEnvironmentVariable("HC_JOB_INTERACTION_CAPTURE"); !Capture.isEmpty()) {
+                QDir().mkpath(Capture); QVERIFY(Warning.grab().save(QDir(Capture).filePath("message-warning.png")));
+            }
+            Warning.reject();
+        }
         hc::ui::MessageDialog Message(QMessageBox::Question, "Focus", "Choose an action", QMessageBox::Yes | QMessageBox::No);
         Message.setDefaultButton(QMessageBox::No);
         Message.show(); Message.activateWindow();
@@ -4160,7 +4181,7 @@ private slots:
     void fileJobInteractionUi_data()
     {
         QTest::addColumn<int>("Mode");
-        for (int Mode = 0; Mode != 13; ++Mode) QTest::newRow(qPrintable(QString("interaction-%1").arg(Mode))) << Mode;
+        for (int Mode = 0; Mode != 14; ++Mode) QTest::newRow(qPrintable(QString("interaction-%1").arg(Mode))) << Mode;
     }
     void fileJobInteractionUi()
     {
@@ -4191,11 +4212,12 @@ private slots:
             : Mode >= 11 ? std::vector{InteractionChoice::Elevate, InteractionChoice::ElevateAll, InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::SkipAll, InteractionChoice::Cancel}
             : Kind == InteractionKind::Elevation ? std::vector{InteractionChoice::Elevate, InteractionChoice::Retry, InteractionChoice::CopyOnly, InteractionChoice::Cancel}
             : Mode == 7 ? std::vector{InteractionChoice::Retry, InteractionChoice::Cancel} : std::vector{InteractionChoice::Retry, InteractionChoice::Skip, InteractionChoice::Cancel};
+        if (Mode == 13) Request.choices_.push_back(InteractionChoice::CopyOnly);
         QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); Window.show();
         FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
         auto Reply = std::make_shared<ReplyState>(); PreparedJob Work; Work.task_ = std::make_unique<PromptTask>(Request, Reply);
         Work.request_.metadata_.source_ = Source.toStdString(); Work.request_.metadata_.destination_ = Destination.toStdString();
-        Work.request_.metadata_.kind_ = Mode == 3 || Mode == 4 || Mode >= 11 ? JobKind::Delete : Mode == 5 ? JobKind::Move : Mode == 2 ? JobKind::Extract : Mode == 7 ? JobKind::BatchRename : JobKind::Copy;
+        Work.request_.metadata_.kind_ = Mode == 13 ? JobKind::Move : Mode == 3 || Mode == 4 || Mode >= 11 ? JobKind::Delete : Mode == 5 ? JobKind::Move : Mode == 2 ? JobKind::Extract : Mode == 7 ? JobKind::BatchRename : JobKind::Copy;
         auto Started = Jobs.Submit(std::move(Work), QStringLiteral("응답 팝업 시험")); QVERIFY(Started.HasValue());
         QTRY_VERIFY(Window.findChild<QDialog*>("hc.jobs.interaction") && Window.findChild<QDialog*>("hc.jobs.interaction")->isVisible());
         QPointer<QDialog> Popup = Window.findChild<QDialog*>("hc.jobs.interaction"); auto* Progress = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Popup && Progress && Popup != Progress);
@@ -4220,6 +4242,37 @@ private slots:
         for (auto* Button : Popup->findChildren<QPushButton*>()) if (Button->isVisibleTo(Popup) && !Button->objectName().startsWith("hc.dialog")) { Defaults += Button->isDefault(); QVERIFY(!Button->autoDefault()); }
         QCOMPARE(Defaults, 1);
         if (Kind == InteractionKind::Overwrite) QVERIFY(ChoiceButton(InteractionChoice::Replace)->isDefault());
+        if (Mode == 4 || Mode == 13) {
+            auto* Current = Popup->findChild<QWidget*>("hc.jobs.actions.current");
+            auto* Batch = Popup->findChild<QWidget*>("hc.jobs.actions.batch");
+            auto* Utilities = Popup->findChild<QWidget*>("hc.jobs.actions.utilities");
+            QVERIFY(Current && Batch && Utilities);
+            QVERIFY(Current->mapTo(Popup, QPoint{}).y() < Batch->mapTo(Popup, QPoint{}).y());
+            QVERIFY(Batch->mapTo(Popup, QPoint{}).y() < Utilities->mapTo(Popup, QPoint{}).y());
+            QVERIFY(Batch->isAncestorOf(ChoiceButton(Mode == 4 ? InteractionChoice::ConfirmAll : InteractionChoice::ElevateAll)));
+            QVERIFY(Current->isAncestorOf(ChoiceButton(InteractionChoice::Skip)));
+            if (Mode == 4) QVERIFY(!ChoiceButton(InteractionChoice::SkipAll));
+            if (Mode == 13) {
+                auto* Toggle = Popup->findChild<QToolButton*>("hc.jobs.errorDetails.toggle");
+                auto* Details = Popup->findChild<QLabel*>("hc.jobs.errorDetails.text");
+                QVERIFY(!Toggle && Details && Details->isVisibleTo(Popup));
+                QCOMPARE(Details->text(), hc::ui::DescribeError(QStringLiteral("win32:5")).description_.simplified() + " (win32:5)");
+                QVERIFY(!Details->wordWrap()); QVERIFY(!Details->text().contains('\n'));
+                QCOMPARE(Details->toolTip(), Details->text());
+            }
+            for (const auto Width : {520, 760}) {
+                Popup->resize(Width, Popup->height()); QTest::qWait(30);
+                const auto Buttons = Popup->findChild<QWidget*>("hc.jobs.interaction.actions")->findChildren<QPushButton*>();
+                QCOMPARE(Buttons.size(), Mode == 4 ? 4 : 8);
+                for (auto* Button : Buttons) {
+                    const QRect Bounds(Button->mapTo(Popup, QPoint{}), Button->size());
+                    QVERIFY2(Popup->rect().contains(Bounds), qPrintable(Button->text()));
+                    QVERIFY2(Button->width() >= Button->minimumWidth(), qPrintable(Button->text()));
+                    for (auto* Other : Buttons) if (Other != Button)
+                        QVERIFY(!Bounds.intersects(QRect(Other->mapTo(Popup, QPoint{}), Other->size())));
+                }
+            }
+        }
         if (Mode == 0) {
             auto* Skip = ChoiceButton(InteractionChoice::Skip);
             QTest::keyClick(Skip, Qt::Key_Left); QCOMPARE(Popup->focusWidget(), ChoiceButton(InteractionChoice::Replace));
@@ -4264,6 +4317,7 @@ private slots:
         else if (Mode == 3) ChoiceButton(InteractionChoice::Confirm)->click();
         else if (Mode == 4) { ChoiceButton(InteractionChoice::ConfirmAll)->click(); Expected = InteractionChoice::ConfirmAll; }
         else if (Mode == 5) { ChoiceButton(InteractionChoice::CopyOnly)->click(); Expected = InteractionChoice::CopyOnly; }
+        else if (Mode == 13) { ChoiceButton(InteractionChoice::CopyOnly)->click(); Expected = InteractionChoice::CopyOnly; }
         else if (Mode >= 11) {
             auto* Elevate = ChoiceButton(InteractionChoice::Elevate); auto* All = ChoiceButton(InteractionChoice::ElevateAll);
             QVERIFY(Elevate && All && Elevate->isVisibleTo(Popup) && All->isVisibleTo(Popup));
