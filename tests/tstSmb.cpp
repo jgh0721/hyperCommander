@@ -11157,6 +11157,9 @@ private slots:
         qInfo() << "Viewer corpus location:" << Directory.path() << "SMB:" << !localOnly_;
         const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
         QVERIFY(Put("first.txt", "first viewer content")); QVERIFY(Put("second.md", "# Second\n\nMarkdown preview")); QVERIFY(Put("archive.hcwcx", "HCWCX01"));
+        QVERIFY(Put("script.pl", "#!/usr/bin/perl\nuse strict;\nprint qq(hello\\n);\n"));
+        QVERIFY(Put("README", "Text without an extension\n"));
+        QVERIFY(Put("opaque.hcunknown", QByteArray(256, '\0')));
         QImage Picture(160, 90, QImage::Format_RGB32); Picture.fill(QColor(40, 100, 180));
         QVERIFY(Picture.save(Directory.filePath("picture.png")));
         auto* SourcePanel = panels_.front(); auto* TargetPanel = panels_.back();
@@ -11207,12 +11210,26 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 15000);
         QCOMPARE(Tabs->currentIndex(), PreviewIndex); QCOMPARE(Tabs->widget(0), FirstTab.data()); QCOMPARE(Tabs->count(), OriginalCount + 1);
         QCOMPARE(QString::fromStdString(Surface->Snapshot().source_.name_), QString("first.txt"));
+        for (const auto* Name : {"script.pl", "README"}) {
+            QVERIFY(Focus(Name).isValid());
+            QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == Name, 15000);
+            QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->Details().documentChannel_);
+            QCOMPARE(Surface->Snapshot().provider_, std::string("dopus-viewer.builtin.hyperviewer"));
+        }
+        QVERIFY(Focus("opaque.hcunknown").isValid());
+        const auto ShowsInformation = [&] {
+            for (const auto* Label : Quick->findChildren<QLabel*>())
+                if (Label->isVisible() && Label->text().contains("opaque.hcunknown") && Label->text().contains(QString::fromUtf8("파일 정보"))) return true;
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(ShowsInformation(), 15000); QVERIFY(!Surface->isVisible());
         QVERIFY(Focus("second.md").isValid());
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "second.md", 15000);
         QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->Details().documentChannel_);
         for (int Repeat = 0; Repeat < 12; ++Repeat)
         {
             QVERIFY(Focus("first.txt").isValid()); QTest::qWait(15);
+            QVERIFY(Focus("script.pl").isValid()); QTest::qWait(15);
             QVERIFY(Focus("picture.png").isValid()); QTest::qWait(15);
             QVERIFY(Focus("second.md").isValid()); QTest::qWait(15);
         }

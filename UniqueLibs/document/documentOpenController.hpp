@@ -8,6 +8,8 @@
 #include <QJsonObject>
 #include <functional>
 namespace hc::document {
+// Worker-only bounded content probe shared by full-window and panel selection.
+bool ProbeDocumentText(storage::IContentSource& Source, storage::OperationContext Context);
 struct DocumentHandlerTarget {
     HandlerDescriptor descriptor_;
     QString executable_, arguments_;

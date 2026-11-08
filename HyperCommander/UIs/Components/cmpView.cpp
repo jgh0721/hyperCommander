@@ -23,6 +23,7 @@
 #include "qtViewerHost.hpp"
 #include "UniqueLibs/qtPluginHostSettings.hpp"
 #include "UniqueLibs/document/documentOpenController.hpp"
+#include "commonLibs/document/documentFormatSupport.hpp"
 #include "Modules/mdlFileModel.hpp"
 #include "UIs/cmpPanel.hpp"
 
@@ -2766,6 +2767,39 @@ void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::ICo
     std::shared_ptr<hc::storage::IWritableStorage> Writer)
 {
     if (IsPinned() || !Source) return;
+    cancelProbe();
+    const auto Entry = Source->Describe();
+    const auto Extension = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
+    const auto& Formats = hc::document::DocumentExtensions;
+    if (Entry.directory_ || std::find(Formats.begin(), Formats.end(), Extension) != Formats.end()) {
+        openContent(Host, std::move(Source), std::move(Writer), false); return;
+    }
+    SetInformation(tr("파일 형식을 확인하는 중…\n\n%1").arg(QString::fromStdString(Entry.name_)));
+    const auto Generation = probeGeneration_;
+    const auto Stop = probeStop_.get_token();
+    auto* Watcher = new QFutureWatcher<bool>(this);
+    connect(Watcher, &QFutureWatcher<bool>::finished, this,
+        [this, Watcher, Generation, HostGuard = QPointer<QtViewerHost>(&Host), Source, Writer] {
+        const auto TextContent = Watcher->result(); Watcher->deleteLater();
+        if (Generation != probeGeneration_ || !HostGuard || IsPinned()) return;
+        openContent(*HostGuard, Source, Writer, TextContent);
+    });
+    Watcher->setFuture(QtConcurrent::run([Source, Stop] {
+        hc::storage::OperationContext Context; Context.stopToken_ = Stop;
+        Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        Context.maxReadBytes_ = 64 * 1024;
+        return hc::document::ProbeDocumentText(*Source, Context);
+    }));
+}
+CQuickView::~CQuickView() { cancelProbe(); }
+void CQuickView::cancelProbe()
+{
+    probeStop_.request_stop(); probeStop_ = std::stop_source{}; ++probeGeneration_;
+}
+void CQuickView::openContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source,
+    std::shared_ptr<hc::storage::IWritableStorage> Writer, bool TextContent)
+{
+    if (IsPinned() || !Source) return;
     const auto Entry = Source->Describe();
     informationText_ = tr("파일 정보\n\n이름: %1\n위치: %2\n크기: %3 byte")
         .arg(QString::fromStdString(Entry.name_), QString::fromStdString(Entry.locator_.root_)).arg(Entry.size_);
@@ -2776,7 +2810,7 @@ void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::ICo
     auto Default = Catalog.defaultView_;
     const auto Override = Catalog.overrides_[QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower()].toObject()["view"].toString();
     if (!Override.isEmpty()) Default = Override.toStdString();
-    hc::document::HandlerSelection Selection; Selection.names_ = {Entry.name_};
+    hc::document::HandlerSelection Selection; Selection.names_ = {Entry.name_}; Selection.textContent_ = {TextContent};
     const auto Resolution = hc::document::DocumentHandlerResolver::Resolve(Catalog.registry_, hc::document::DocumentIntent::View, Selection, Default);
     std::vector<QtViewerSurface::PluginViewerChoice> Choices;
     for (const auto& Id : Resolution.candidates_) {
@@ -2805,6 +2839,7 @@ void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::ICo
 void CQuickView::SetInformation(const QString& Information)
 {
     if (IsPinned()) return;
+    cancelProbe();
     if (surface_) { surface_->Close(); surface_->hide(); }
     if (!information_) {
         auto* Label = new QLabel(this);
@@ -2821,9 +2856,9 @@ void CQuickView::SetInformation(const QString& Information)
 }
 bool CQuickView::RequestClose() { return !surface_ || surface_->RequestClose(); }
 bool CQuickView::IsPinned() const { return surface_ && surface_->IsPinned(); }
-void CQuickView::CloseView() { if (surface_) surface_->Close(); if (information_) information_->hide(); }
+void CQuickView::CloseView() { cancelProbe(); if (surface_) surface_->Close(); if (information_) information_->hide(); }
 void CQuickView::EnsureKeyboardFocusOnView() const
-{ if (surface_) surface_->Pin(); if (focusProxy()) focusProxy()->setFocus(); }
+{ if (surface_ && surface_->isVisible()) surface_->Pin(); if (focusProxy()) focusProxy()->setFocus(); }
 
 ////int CmpPanel::InitializeGrid()
 ////{

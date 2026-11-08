@@ -53,6 +53,22 @@ bool LooksLikeLocalText(const storage::EntrySnapshot& Entry) {
     return File.error() == QFileDevice::NoError && (!Sample.isEmpty() || !File.size()) && LooksLikeText(Sample);
 }
 }
+bool ProbeDocumentText(IContentSource& Source, OperationContext Context) {
+    if (Source.Describe().directory_ || Context.Check({})) return false;
+    Context.maxReadBytes_ = std::min<std::size_t>(Context.maxReadBytes_, 64 * 1024);
+    auto Stream = Source.OpenRead(Context).get(); if (!Stream.HasValue()) return false;
+    QByteArray Sample;
+    while (Sample.size() < 64 * 1024 && !Context.Check({})) {
+        auto Chunk = Stream.Value()->Read(64 * 1024 - Sample.size(), Context).get();
+        if (!Chunk.HasValue() || Chunk.Value().bytes_.size() > size_t(64 * 1024 - Sample.size())
+            || (Chunk.Value().bytes_.empty() && !Chunk.Value().eof_)) return false;
+        const auto& Bytes = Chunk.Value().bytes_;
+        Sample.append(reinterpret_cast<const char*>(Bytes.data()), qsizetype(Bytes.size()));
+        if (Chunk.Value().eof_ || Sample.size() == 64 * 1024)
+            return !Context.Check({}) && LooksLikeText(Sample);
+    }
+    return false;
+}
 DocumentOpenController::DocumentOpenController(QWidget* Main, Catalog Candidates, PluginLaunch Launch)
     : QObject(Main), main_(Main), catalog_(std::move(Candidates)), launch_(std::move(Launch)) {
     setObjectName("hc.document.openController"); Main->installEventFilter(this);
@@ -109,18 +125,7 @@ bool DocumentOpenController::Open(const QString& Token) {
             const auto Ext = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
             if (Entry.locator_.kind_ != LocatorKind::Smb || Entry.directory_
                 || std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) != DocumentExtensions.end()) continue;
-            auto Stream = Source->OpenRead(Context).get(); if (!Stream.HasValue()) continue;
-            QByteArray Sample;
-            while (Sample.size() < 64 * 1024 && !Context.Check({})) {
-                auto Chunk = Stream.Value()->Read(64 * 1024 - Sample.size(), Context).get();
-                if (!Chunk.HasValue() || Chunk.Value().bytes_.size() > size_t(64 * 1024 - Sample.size())
-                    || (Chunk.Value().bytes_.empty() && !Chunk.Value().eof_)) break;
-                const auto& Bytes = Chunk.Value().bytes_;
-                Sample.append(reinterpret_cast<const char*>(Bytes.data()), qsizetype(Bytes.size()));
-                if (Chunk.Value().eof_ || Sample.size() == 64 * 1024) {
-                    Selection.textContent_[Index] = !Context.Check({}) && LooksLikeText(Sample); break;
-                }
-            }
+            Selection.textContent_[Index] = ProbeDocumentText(*Source, Context);
         }
         return Selection;
     }));

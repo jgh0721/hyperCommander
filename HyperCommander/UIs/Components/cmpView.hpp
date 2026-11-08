@@ -365,6 +365,7 @@ class CQuickView : public CViewT
     Q_OBJECT
 public:
     CQuickView( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
+    ~CQuickView() override;
 
     void                            SetFilePath( const QString& FilePath );
     void                            SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source,
@@ -391,6 +392,11 @@ private:
     QWidget*                        information_ = nullptr;
     QString                         informationText_;
     QAction*                        returnAction_ = nullptr;
+    std::stop_source                probeStop_;
+    std::uint64_t                   probeGeneration_ = 0;
+    void                            cancelProbe();
+    void                            openContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source,
+                                        std::shared_ptr<hc::storage::IWritableStorage> Writer, bool TextContent);
     void                            refreshReturnKey();
     CInternalViewer*                internalViewer_ = nullptr;
     CExternalViewer*                externalViewer_ = nullptr;
