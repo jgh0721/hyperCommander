@@ -5,6 +5,8 @@
 
 namespace hc::plugins
 {
+    // Oracle Outside In ships over 200 format DLLs; keep a bounded, fully hashed inventory.
+    inline constexpr std::size_t PluginDependencyLimit = 256;
     enum class PluginFormat { Wcx, Wlx, Wfx, Wdx, DopusVfs, DopusViewer, SevenZip, UnEgg };
     enum class Architecture { X64, X86, Arm64 };
     enum class ExecutionMode { Isolated, TrustedInProcess };

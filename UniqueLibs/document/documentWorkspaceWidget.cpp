@@ -1239,7 +1239,13 @@ namespace hc::document
             if(active()==Tab&&Tab->session_->Snapshot().lifecycle_==DocumentLifecycle::Ready){
                 if(Tab->input_.viewId_=="image")findChild<ImageFullscreen*>("imageFullscreen")->Restore();
                 setFocusProxy(Tab->pane_->InputWidget());
-                if (!hosted_ || IsWindowVisible(reinterpret_cast<HWND>(winId()))) Tab->pane_->Focus();
+                const auto Native = reinterpret_cast<HWND>(winId());
+                const auto Focus = GetFocus();
+                // A visible embedded preview loads while the file panel keeps
+                // keyboard ownership. Only refocus after the user entered it.
+                const bool MayFocus = !property("hc.quickPreview").toBool()
+                    || (Focus && (Focus == Native || IsChild(Native, Focus)));
+                if (MayFocus && (!hosted_ || IsWindowVisible(Native))) Tab->pane_->Focus();
             }
             update(); tryFinishClose();
         });
@@ -1604,6 +1610,11 @@ namespace hc::document
         if (Action == "setDocumentAppearance") return epubui::ApplyAppearance(Request["appearance"].toObject())
             ? QJsonObject{{"accepted", true}} : Error("document-appearance-invalid");
         if (Action == "state") return Snapshot();
+        if (Action == "requestViewerClose") {
+            if (!hosted_) return Error("document-not-hosted");
+            QTimer::singleShot(0, this, [this] { RequestViewerClose(); });
+            return {{"accepted", true}};
+        }
         if (Action == "present" || Action == "conceal") return {{"accepted", hosted_}};
         if (Action == "escape") { escapeViewer(); return {{"accepted", hosted_ && closeViewerOnEscape_}}; }
         if (Action == "preferences") { findChild<QAction*>("documentPreferences")->trigger(); return {{"accepted", true}}; }

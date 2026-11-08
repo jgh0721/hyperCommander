@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "pipeChannel.hpp"
 #include <QJsonObject>
+#include <QAbstractNativeEventFilter>
 #include "dopusViewerBackend.hpp"
 #include "wlxViewerBackend.hpp"
 
@@ -8,7 +9,7 @@ namespace hc::plugins
 {
     // A dedicated host owns one native viewer session. All SDK calls, window
     // messages and destruction run on the same thread, before DLL unload.
-    class NativeViewerHostService final
+    class NativeViewerHostService final : public QAbstractNativeEventFilter
     {
     public:
         NativeViewerHostService(HMODULE Module, DWORD ParentProcess, const PluginManifest& Manifest);
@@ -16,9 +17,11 @@ namespace hc::plugins
         storage::Result<storage::Unit> Initialize(const QString& DefaultIniPath);
         storage::Result<QJsonObject> Probe();
         storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request);
+        bool nativeEventFilter(const QByteArray& Type, void* Message, qintptr* Result) override;
     private:
         static LRESULT CALLBACK windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam);
         static LRESULT CALLBACK inputHook(int Code, WPARAM WParam, LPARAM LParam);
+        bool filterInput(MSG* Message);
         void close();
         HMODULE module_;
         PluginManifest manifest_;
@@ -29,6 +32,9 @@ namespace hc::plugins
         HWND container_ = nullptr, viewer_ = nullptr;
         HHOOK inputHook_ = nullptr;
         UINT closeMessage_ = 0;
+        UINT returnMessage_ = 0, interactionMessage_ = 0;
+        unsigned returnKey_ = 0, returnModifiers_ = 0;
+        bool preview_ = false, interacted_ = false;
         static thread_local NativeViewerHostService* inputOwner_;
 
     };

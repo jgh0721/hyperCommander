@@ -20,6 +20,12 @@ public:
     void Open(std::shared_ptr<hc::storage::IContentSource> Source,
         hc::viewer::ViewerPurpose Purpose = hc::viewer::ViewerPurpose::FullViewer);
     void Close();
+    bool RequestClose();
+    bool IsPinned() const;
+    void Pin();
+    void ResumeFollowing();
+    void SetReturnKey(QKeyCombination Key);
+    void OpenPreview(std::shared_ptr<hc::storage::IContentSource> Source, std::vector<PluginViewerChoice> Choices);
     void Execute(const QString& Command);
     bool IsReady() const;
     hc::viewer::ViewerSnapshot Snapshot() const;
@@ -29,6 +35,8 @@ signals:
     void Failed(const QString& Code);
     void LinkRequested(const QUrl& Url);
     void CloseRequested();
+    void ReturnFocusRequested();
+    void FollowSelectionRequested();
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
 private:
@@ -42,4 +50,5 @@ private:
     void find(bool Backward);
     void fail(const QString& Code);
     void refreshPluginMenu();
+    std::vector<PluginViewerChoice> currentPreviewChoices() const;
 };

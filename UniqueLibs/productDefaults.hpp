@@ -290,6 +290,8 @@ DECLARE_CMD( BuiltInCMD_Automation_Show,          QObject::tr( "기타" ),    "h
              Qt::Key_unknown,                                           QObject::tr( "자동화 관리" ) );
 DECLARE_CMD( BuiltInCMD_Viewer_Close,             QObject::tr( "보기" ),    "hc.viewer.close",
              Qt::Key_unknown,                                           QObject::tr( "미리 보기 닫기" ) );
+DECLARE_CMD( BuiltInCMD_Viewer_ReturnFocus,       QObject::tr( "보기" ),    "hc.viewer.returnFocus",
+             Qt::CTRL | Qt::ALT | Qt::Key_F12,                            QObject::tr( "미리 보기에서 파일 패널로" ) );
 DECLARE_CMD( BuiltInCMD_Menu_Edit,                QObject::tr( "기타" ),    "hc.menu.edit",
              Qt::Key_unknown,                                           QObject::tr( "메뉴 파일 열기" ) );
 DECLARE_CMD( BuiltInCMD_App_Exit,                 QObject::tr( "기타" ),    "hc.app.exit",
@@ -496,6 +498,7 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_Plugin_Dopus_Query,
     BuiltInCMD_Automation_Show,
     BuiltInCMD_Viewer_Close,
+    BuiltInCMD_Viewer_ReturnFocus,
     BuiltInCMD_Menu_Edit,
     BuiltInCMD_App_Exit,
     BuiltInCMD_App_About,
@@ -662,6 +665,7 @@ namespace hc::defaults
                  { "hc.viewer.quick" },
                  { "hc.viewer.preview" },
                  { "hc.viewer.close" },
+                 { "hc.viewer.returnFocus" },
                  { "hc.file.copy",
                    1,
                    { { "destination", { ParameterType::String } },

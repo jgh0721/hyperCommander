@@ -32,6 +32,21 @@ class PluginManifestTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void largeViewerDependencyInventory()
+    {
+        auto Value = Manifest(); Value.format_ = PluginFormat::Wlx;
+        Value.extensions_ = {Extension::Viewer}; Value.permissions_.insert(Permission::UserInterface);
+        for (std::size_t Index = 0; Index < PluginDependencyLimit; ++Index)
+            Value.dependencies_["redist/format" + std::to_string(Index) + ".dll"] = std::string(64, 'b');
+        QVERIFY(Validate(Value).HasValue());
+        QVERIFY(ParseManifest(EncodeManifest(Value)).HasValue());
+        Value.dependencies_["redist/overflow.dll"] = std::string(64, 'c');
+        QVERIFY(!Validate(Value).HasValue());
+        QVERIFY(!ParseManifest(EncodeManifest(Value)).HasValue());
+        Value.dependencies_.erase("redist/overflow.dll");
+        Value.dependencies_.begin()->second = "missing-hash";
+        QVERIFY(!Validate(Value).HasValue());
+    }
     void archiveCreationSeparatesReadFormats()
     {
         auto Plugin = Manifest(); Plugin.format_ = PluginFormat::SevenZip;

@@ -385,6 +385,14 @@ bool QtViewerHost::eventFilter(QObject* Object, QEvent* Event)
 {
     if (Object == main_ && Event->type() == QEvent::Close)
     {
+        for (const auto& Surface : surfaces_) {
+            if (Surface && !Surface->RequestClose()) {
+                // The helper may be waiting for a save/discard decision. Leave
+                // every session alive; the user can retry exit after resolving it.
+                static_cast<QCloseEvent*>(Event)->ignore();
+                return true;
+            }
+        }
         CloseAll();
         if (!IsIdle())
         {

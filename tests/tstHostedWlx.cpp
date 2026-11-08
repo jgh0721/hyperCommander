@@ -123,6 +123,47 @@ private:
         Options.limits_.requestMs_ = 500; Options.limits_.heartbeatMs_ = 200; return Options;
     }
 private slots:
+    void nativeOriginalSave_data()
+    {
+        QTest::addColumn<bool>("Approved"); QTest::addColumn<bool>("Local"); QTest::addColumn<bool>("ReadOnly");
+        QTest::newRow("approved-local") << true << true << false;
+        QTest::newRow("unapproved-local") << false << true << false;
+        QTest::newRow("approved-virtual") << true << false << false;
+        QTest::newRow("approved-readonly") << true << true << true;
+    }
+    void nativeOriginalSave()
+    {
+        QFETCH(bool, Approved); QFETCH(bool, Local); QFETCH(bool, ReadOnly);
+        QTemporaryDir Directory; PluginApproval Approval; QVERIFY(prepare(Directory, Approval));
+        if (Approved) {
+            Approval.reviewed_.permissions_.insert(Permission::WriteContent); Approval.granted_ = Approval.reviewed_.permissions_;
+            QFile Manifest(Directory.filePath("plugin.json")); QVERIFY(Manifest.open(QIODevice::WriteOnly));
+            QVERIFY(Manifest.write(EncodeManifest(Approval.reviewed_)) > 0); Manifest.close();
+        }
+        const auto Path = Directory.filePath("original.txt");
+        QFile Original(Path); QVERIFY(Original.open(QIODevice::WriteOnly)); Original.write("original bytes"); Original.close();
+        if (ReadOnly) QVERIFY(SetFileAttributesW(Path.toStdWString().c_str(), FILE_ATTRIBUTE_READONLY));
+        const auto RestoreAttributes = qScopeGuard([&] { SetFileAttributesW(Path.toStdWString().c_str(), FILE_ATTRIBUTE_NORMAL); });
+        auto Provider = MakeNativeReadProvider(LocatorKind::Local);
+        auto Entry = Worker([&] { return Provider->Resolve({LocatorKind::Local, Path.toUtf8().toStdString()}, {}).get(); });
+        QVERIFY(Entry.HasValue());
+        std::shared_ptr<IContentSource> Source = Local ? std::make_shared<ProviderContentSource>(Provider, Entry.Value()) : MemoryContent("original bytes");
+        QWidget Main; Main.resize(640, 360); Main.show();
+        PluginViewerService Service([&] { return MakeNativeMaterializer(Directory.path().toStdString()); });
+        const auto Drain = qScopeGuard([&] { Service.CancelAll(); while (!Service.IsIdle()) QTest::qWait(10); });
+        auto Options = options(Directory, Approval); Options.purpose_ = hc::viewer::ViewerPurpose::QuickPreview;
+        auto Opened = Service.Open(Options, Source, QString::number(Main.winId(), 16), 320, 200); QVERIFY(Opened.HasValue());
+        auto Session = Opened.Value();
+        QTRY_VERIFY_WITH_TIMEOUT(Session->Snapshot().status_ == hc::viewer::ViewerStatus::Ready || Session->Snapshot().status_ == hc::viewer::ViewerStatus::Failed, 8000);
+        QVERIFY2(Session->Snapshot().status_ == hc::viewer::ViewerStatus::Ready, Session->Snapshot().error_ ? Session->Snapshot().error_->code_.c_str() : "not ready");
+        QCOMPARE(Session->Details().directOriginal_, Approved && Local && !ReadOnly);
+        auto Sent = Session->SendCommand(4, 77); QVERIFY(Sent.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Session->Details().commandSequence_ >= Sent.Value(), 4000);
+        QVERIFY(Original.open(QIODevice::ReadOnly));
+        QCOMPARE(Original.readAll(), Approved && Local && !ReadOnly ? QByteArray("saved by WLX") : QByteArray("original bytes")); Original.close();
+        Session->Close(); QTRY_VERIFY_WITH_TIMEOUT(Service.IsIdle(), 4000);
+        QVERIFY(Leases(Directory.path()).isEmpty());
+    }
     void builtinImageDirectInputAndPresentation()
     {
         const auto Package=QCoreApplication::applicationDirPath()+"/Addons/WLX/HyperViewer/hyperviewer.json";
@@ -230,13 +271,15 @@ private slots:
         const auto ExpectedDpr = qEnvironmentVariable("HC_VIEWER_EXPECT_DPR");
         if (!ExpectedDpr.isEmpty()) QCOMPARE(Parent.devicePixelRatioF(), ExpectedDpr.toDouble());
         QTemporaryDir Config;
-        auto Started = Worker([&] { return PluginProcess::Start(host_, ManifestPath, Approval, {}, {}, Config.filePath("lsplugin.ini")); });
+        HostLimits Limits; const auto MemoryMb = qEnvironmentVariableIntValue("HC_WLX_MEMORY_MB");
+        if (MemoryMb > 0 && MemoryMb <= 4096) Limits.memoryBytes_ = std::uint64_t(MemoryMb) * 1024 * 1024;
+        auto Started = Worker([&] { return PluginProcess::Start(host_, ManifestPath, Approval, Limits, {}, Config.filePath("lsplugin.ini")); });
         QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str());
         auto Host = std::move(Started.Value()); const auto Cleanup = qScopeGuard([&] { Worker([&] { Host.reset(); }); });
         const auto Probe = Worker([&] { return Host->Probe(); }); QVERIFY(Probe.HasValue()); qInfo() << "Compatibility probe" << Probe.Value();
         QJsonObject Request{{"parent", QString::number(Parent.winId(), 16)}, {"file", Source}, {"width", qRound(900 * Parent.devicePixelRatioF())}, {"height", qRound(600 * Parent.devicePixelRatioF())}, {"flags", 0}};
         auto Opened = Worker([&] { return Host->ViewerCall(WireKind::ViewerOpen, Request); });
-        QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : Opened.Failure().code_.c_str());
+        QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : qPrintable(QString::fromStdString(Opened.Failure().code_) + " exit=" + QString::number(Host->Snapshot().exitCode_.value_or(0))));
         const auto Viewer = Window(Opened.Value(), "viewer"); QVERIFY(IsWindow(Viewer)); QVERIFY(IsChild(reinterpret_cast<HWND>(Parent.winId()), Viewer));
         QTest::qWait(400); Activate(Parent);
         QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(Parent.winId()));
@@ -630,7 +673,7 @@ private slots:
         QVERIFY(!Probe.Value()["detectAvailable"].toBool()); QVERIFY(Probe.Value()["detectStringBytes"].toString().isEmpty());
         const auto Request = request(Parent, Directory.filePath("문서.txt"));
         auto Opened = Worker([&] { return Host->ViewerCall(WireKind::ViewerOpen, Request); });
-        QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : Opened.Failure().code_.c_str());
+        QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : qPrintable(QString::fromStdString(Opened.Failure().code_) + " exit=" + QString::number(Host->Snapshot().exitCode_.value_or(0))));
         const auto Container = Window(Opened.Value(), "window"), Viewer = Window(Opened.Value(), "viewer");
         QCOMPARE(GetParent(Container), reinterpret_cast<HWND>(Parent.winId())); QVERIFY(IsChild(Container, Viewer));
         DWORD Pid = 0; GetWindowThreadProcessId(Viewer, &Pid); QCOMPARE(Pid, Host->Snapshot().processId_); QVERIFY(Pid != GetCurrentProcessId());
@@ -638,7 +681,8 @@ private slots:
         RECT Rect{}; QVERIFY(GetClientRect(Viewer, &Rect)); QCOMPARE(Rect.right, Request["width"].toInt()); QCOMPARE(Rect.bottom, Request["height"].toInt());
         auto Resized = Worker([&] { return Host->ViewerCall(WireKind::ViewerResize, {{"width", 333}, {"height", 177}}); });
         QVERIFY(Resized.HasValue()); QVERIFY(GetClientRect(Viewer, &Rect)); QCOMPARE(Rect.right, 333L); QCOMPARE(Rect.bottom, 177L);
-        Parent.activateWindow(); Parent.setFocus();
+        Activate(Parent); Parent.setFocus();
+        QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(Parent.winId()));
         auto Focused = Worker([&] { return Host->ViewerCall(WireKind::ViewerFocus, {}); }); QVERIFY(Focused.HasValue()); QVERIFY(Focused.Value()["focused"].toBool());
         auto Command = Worker([&] { return Host->ViewerCall(WireKind::ViewerCommand, {{"command", 3}, {"parameter", 0}}); });
         QVERIFY(Command.HasValue()); QCOMPARE(Command.Value()["result"].toInt(-1), 0);
@@ -704,7 +748,7 @@ private slots:
         if (Name == "hang-load") QVERIFY(!Opened.HasValue());
         else
         {
-            QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : Opened.Failure().code_.c_str());
+            QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : qPrintable(QString::fromStdString(Opened.Failure().code_) + " exit=" + QString::number(Host->Snapshot().exitCode_.value_or(0))));
             if (Name == "crash-command") QVERIFY(!Worker([&] { return Host->ViewerCall(WireKind::ViewerCommand, {{"command", 3}, {"parameter", 0}}); }).HasValue());
             if (Name == "hang-close") QVERIFY(!Worker([&] { return Host->ViewerCall(WireKind::ViewerClose, {}); }).HasValue());
         }

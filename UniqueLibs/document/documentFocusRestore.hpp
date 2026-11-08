@@ -45,6 +45,9 @@ private:
             if(!scope_ || !scope_->isVisible() || !scope_->isEnabled() || scope_->window()->isMinimized()
                 || QApplication::activeModalWidget() || QApplication::activePopupWidget())return;
             const auto Native=reinterpret_cast<HWND>(scope_->internalWinId());
+            const auto Focus=GetFocus();
+            if(scope_->property("hc.quickPreview").toBool()
+                && (!Focus || (Focus!=Native && !IsChild(Native,Focus))))return;
             const auto Root=Native?GetAncestor(Native,GA_ROOT):nullptr;
             if(!Root || GetAncestor(GetForegroundWindow(),GA_ROOT)!=Root)return;
             if(QApplication::activeWindow()!=scope_->window())QApplication::setActiveWindow(scope_->window());

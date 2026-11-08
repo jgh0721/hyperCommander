@@ -28,7 +28,9 @@ namespace
         auto* Owner = reinterpret_cast<Bridge*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
         if (Message == WM_CREATE)
         {
-            Owner = new Bridge(std::make_shared<hc::document::ViewerHostBridge>(Window));
+            const auto* Create = reinterpret_cast<CREATESTRUCTW*>(LParam);
+            const bool Preview = Create->lpCreateParams != nullptr;
+            Owner = new Bridge(std::make_shared<hc::document::ViewerHostBridge>(Window, Preview));
             SetWindowLongPtrW(Window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(Owner)); (*Owner)->Start(); return 0;
         }
         if (Owner)
@@ -36,7 +38,7 @@ namespace
             const auto Self = *Owner;
             if (Message == DVPLUGINMSG_LOADW && LParam) { return Self->Load(reinterpret_cast<const wchar_t*>(LParam)) ? TRUE : FALSE; }
             if (Message == DVPLUGINMSG_SETABORTEVENT) { Self->SetAbort(reinterpret_cast<HANDLE>(LParam)); return TRUE; }
-            if (Message == WM_SIZE || Message == DVPLUGINMSG_RESIZE) return 0;
+            if (Message == WM_SIZE || Message == DVPLUGINMSG_RESIZE) { Self->Resize(); return 0; }
             if (Message == WM_SETFOCUS) { Self->Focus(); return 0; }
             if (Message == WM_PAINT)
             {
@@ -123,7 +125,7 @@ extern "C" BOOL DVP_IdentifyFileW(HWND, LPWSTR File, LPVIEWERPLUGINFILEINFOW Inf
     Info->dwFlags = DVPFIF_CanReturnViewer; Info->wMajorType = Document?DVPMajorType_Other:Image?DVPMajorType_Image:DVPMajorType_Text;
     Copy(Info->lpszInfo, Info->cchInfoMax, L"PDF / HWP / HWPX / EPUB / text / image"); return TRUE;
 }
-extern "C" HWND DVP_CreateViewer(HWND Parent, LPRECT Rect, DWORD)
+extern "C" HWND DVP_CreateViewer(HWND Parent, LPRECT Rect, DWORD Flags)
 {
     if (!Parent || !IsWindow(Parent) || !Rect) return nullptr;
     HMODULE Module = nullptr;
@@ -133,7 +135,8 @@ extern "C" HWND DVP_CreateViewer(HWND Parent, LPRECT Rect, DWORD)
     WNDCLASSW Class{}; Class.hInstance = Module; Class.lpszClassName = ClassName; Class.lpfnWndProc = WindowProc; Class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     if (!RegisterClassW(&Class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return nullptr;
     return CreateWindowExW(0, ClassName, L"HyperViewer", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
-        Rect->left, Rect->top, Rect->right - Rect->left, Rect->bottom - Rect->top, Parent, nullptr, Module, nullptr);
+        Rect->left, Rect->top, Rect->right - Rect->left, Rect->bottom - Rect->top, Parent, nullptr, Module,
+        (Flags & (1u << 2)) ? reinterpret_cast<void*>(1) : nullptr);
 }
 extern "C" BOOL HC_DocumentCommand(HWND Window, const char* Input, UINT Size, char* Output, UINT* Capacity)
 {

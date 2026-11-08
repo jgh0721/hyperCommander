@@ -276,12 +276,24 @@ void QPluginHostSettings::review()
         Prompt.setObjectName("hc.plugin.reviewApproval"); Prompt.setTextFormat(Qt::PlainText); Prompt.setDefaultButton(QMessageBox::No);
         Prompt.setDetailedText(QString::fromUtf8(EncodeManifest(Manifest)));
         QCheckBox* AllowSettings = nullptr;
+        QCheckBox* AllowNativeSave = nullptr;
+        if (format_ == PluginFormat::Wlx || format_ == PluginFormat::DopusViewer) {
+            AllowNativeSave = new QCheckBox(tr("로컬 원본 직접 저장 허용 (플러그인 자체 저장·충돌 처리)"), &Prompt);
+            AllowNativeSave->setObjectName("hc.plugin.allowNativeSave");
+            AllowNativeSave->setChecked(Manifest.permissions_.contains(Permission::WriteContent));
+            AllowNativeSave->setToolTip(tr("편집 가능한 플러그인에 로컬 원본 경로를 전달합니다. HyperViewer의 저장 충돌 보호는 적용되지 않습니다. 원격·압축 항목은 읽기 전용 복사본으로 엽니다."));
+            Prompt.setCheckBox(AllowNativeSave);
+        }
         if (format_ == PluginFormat::Wcx && !Manifest.permissions_.contains(Permission::UserInterface)) {
             AllowSettings = new QCheckBox(tr("플러그인 설정 창 표시 권한도 승인"), &Prompt);
             AllowSettings->setObjectName("hc.plugin.allowSettingsUi"); AllowSettings->setChecked(false); Prompt.setCheckBox(AllowSettings);
         }
         if (Prompt.exec() != QMessageBox::Yes || Generation != generation_) { Reset(); return; }
         if (AllowSettings && AllowSettings->isChecked()) Plugin.manifest_.permissions_.insert(Permission::UserInterface);
+        if (AllowNativeSave) {
+            if (AllowNativeSave->isChecked()) Plugin.manifest_.permissions_.insert(Permission::WriteContent);
+            else Plugin.manifest_.permissions_.erase(Permission::WriteContent);
+        }
         auto* Save = new QFutureWatcher<Result<QString>>(this);
         connect(Save, &QFutureWatcher<Result<QString>>::finished, this, [this, Save, Plugin, At, Generation, Reset] {
             const auto Saved = Save->result(); Save->deleteLater(); if (Generation != generation_) return; Reset();

@@ -114,7 +114,7 @@ public:
     CViewT*                         GetFocusView( int TabIndex ) const;
 
     void                            OpenQuickView( int TabIndex, const QString& FilePath );
-    void                            CloseQuickView( int TabIndex );
+    bool                            CloseQuickView( int TabIndex );
     // 반대 패널의 시스템 보기를 따라가는 상세 보기를 빠른 보기 자리에 연다.
     void                            OpenDetailView( int TabIndex, CSystemView* Source );
 

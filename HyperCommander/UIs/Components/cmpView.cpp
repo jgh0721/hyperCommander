@@ -11,6 +11,7 @@
 #include "UniqueLibs/renameSelection.hpp"
 #include "UniqueLibs/quickFindHighlight.hpp"
 #include "UniqueLibs/commandUiConfig.hpp"
+#include "UniqueLibs/errorPresentation.hpp"
 #include "UniqueLibs/fileRulePaint.hpp"
 
 #include "builtInFsModel.hpp"
@@ -20,6 +21,8 @@
 #include "audio/audioSession.hpp"
 #include "qtitanColumnAdapter.hpp"
 #include "qtViewerHost.hpp"
+#include "UniqueLibs/qtPluginHostSettings.hpp"
+#include "UniqueLibs/document/documentOpenController.hpp"
 #include "Modules/mdlFileModel.hpp"
 #include "UIs/cmpPanel.hpp"
 
@@ -35,6 +38,7 @@
 #include <QMimeData>
 #include "UniqueLibs/fileDragMime.hpp"
 #include <QUrl>
+#include <QLabel>
 #include <limits>
 #include <fmfilelist/ListPresentation.h>
 #include <fmfilelist/ThumbnailView.h>
@@ -2672,6 +2676,35 @@ CQuickView::CQuickView( QWidget* Parent, Qt::WindowFlags f )
 
     setLayout( vbox_ );
     vbox_->setContentsMargins( 0, 0, 0, 0 );
+    auto* Close = new QAction(tr("미리 보기 닫기"), this);
+    Close->setShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("quickView.close")));
+    Close->setShortcutContext(Qt::WidgetWithChildrenShortcut); addAction(Close);
+    connect(Close, &QAction::triggered, this, &CQuickView::CloseRequested);
+    auto* Bar = new QToolBar(this);
+    returnAction_ = Bar->addAction(tr("파일 패널로"));
+    addAction(returnAction_);
+    connect(returnAction_, &QAction::triggered, this, &CQuickView::ReturnFocusRequested);
+    auto* Follow = Bar->addAction(tr("선택 따라가기"));
+    connect(Follow, &QAction::triggered, this, [this] {
+        if (surface_) surface_->ResumeFollowing(); else emit FollowSelectionRequested();
+    });
+    Bar->addAction(Close);
+    vbox_->addWidget(Bar);
+    connect(TyStCommandMgr::GetInstance(), &CCommandMgr::ShortcutsChanged, this, &CQuickView::refreshReturnKey);
+    refreshReturnKey();
+}
+
+void CQuickView::refreshReturnKey()
+{
+    QKeyCombination Key(Qt::Key_unknown);
+    const auto Values = TyStCommandMgr::GetInstance()->Retrieve();
+    for (auto It = Values.cbegin(); It != Values.cend(); ++It)
+        if (hc::ui::CommandId(It.value()) == "hc.viewer.returnFocus") { Key = It.key(); break; }
+    const auto Sequence = Key.key() == Qt::Key_unknown ? QKeySequence{} : QKeySequence(Key);
+    returnAction_->setShortcut(Sequence);
+    returnAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    returnAction_->setToolTip(tr("파일 패널로: %1").arg(Sequence.isEmpty() ? tr("단축키 없음") : Sequence.toString(QKeySequence::NativeText)));
+    if (surface_) surface_->SetReturnKey(Key);
 }
 
 void CQuickView::SetFilePath( const QString& FilePath )
@@ -2729,21 +2762,68 @@ void CQuickView::showEvent( QShowEvent* event )
     CViewT::showEvent( event );
 }
 
-void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source)
+void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source,
+    std::shared_ptr<hc::storage::IWritableStorage> Writer)
 {
+    if (IsPinned() || !Source) return;
+    const auto Entry = Source->Describe();
+    informationText_ = tr("파일 정보\n\n이름: %1\n위치: %2\n크기: %3 byte")
+        .arg(QString::fromStdString(Entry.name_), QString::fromStdString(Entry.locator_.root_)).arg(Entry.size_);
+    std::vector<hc::document::DocumentHandlerTarget> Plugins;
+    for (const auto& Choice : QPluginHostSettings::ViewerChoices(hc::settings::AppSettings()))
+        Plugins.push_back(hc::document::BuildPluginViewerTarget(Choice.name_, Choice.options_, Choice.extensions_));
+    const auto Catalog = hc::document::BuildDocumentHandlerCatalog(hc::settings::AppSettings(), QCoreApplication::applicationDirPath(), std::move(Plugins));
+    auto Default = Catalog.defaultView_;
+    const auto Override = Catalog.overrides_[QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower()].toObject()["view"].toString();
+    if (!Override.isEmpty()) Default = Override.toStdString();
+    hc::document::HandlerSelection Selection; Selection.names_ = {Entry.name_};
+    const auto Resolution = hc::document::DocumentHandlerResolver::Resolve(Catalog.registry_, hc::document::DocumentIntent::View, Selection, Default);
+    std::vector<QtViewerSurface::PluginViewerChoice> Choices;
+    for (const auto& Id : Resolution.candidates_) {
+        const auto& Target = Catalog.targets_.at(Id);
+        if (Target.descriptor_.kind_ != hc::document::HandlerKind::Plugin) continue;
+        auto Options = Target.plugin_; Options.writer_ = Writer;
+        Choices.push_back({QString::fromStdString(Id), QString::fromStdString(Target.descriptor_.name_), std::move(Options), {}});
+    }
+    if (Choices.empty()) { SetInformation(informationText_ + tr("\n\n지원하는 미리보기 처리기가 없습니다.")); return; }
+    if (information_) information_->hide();
     if (!surface_)
     {
         surface_ = Host.CreateSurface(this); vbox_->addWidget(surface_); setFocusProxy(surface_);
         connect(surface_, &QtViewerSurface::CloseRequested, this, &CQuickView::CloseRequested);
-        auto* Close = new QAction(tr("미리 보기 닫기"), this);
-        Close->setShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("quickView.close"))); Close->setShortcutContext(Qt::WidgetWithChildrenShortcut); addAction(Close);
-        connect(Close, &QAction::triggered, this, &CQuickView::CloseRequested);
+        connect(surface_, &QtViewerSurface::ReturnFocusRequested, this, &CQuickView::ReturnFocusRequested);
+        connect(surface_, &QtViewerSurface::FollowSelectionRequested, this, &CQuickView::FollowSelectionRequested);
+        connect(surface_, &QtViewerSurface::Failed, this, [this](const QString& Code) {
+            if (!IsPinned()) SetInformation(informationText_ + tr("\n\n미리보기를 열 수 없습니다: %1").arg(hc::ui::ErrorText(Code)));
+        });
     }
-    surface_->Open(std::move(Source), hc::viewer::ViewerPurpose::QuickPreview);
+    surface_->show(); setFocusProxy(surface_);
+    refreshReturnKey();
+    surface_->OpenPreview(std::move(Source), std::move(Choices));
 }
 
-void CQuickView::CloseView() { if (surface_) surface_->Close(); }
-void CQuickView::EnsureKeyboardFocusOnView() const { if (surface_) surface_->setFocus(); }
+void CQuickView::SetInformation(const QString& Information)
+{
+    if (IsPinned()) return;
+    if (surface_) { surface_->Close(); surface_->hide(); }
+    if (!information_) {
+        auto* Label = new QLabel(this);
+        Label->setTextFormat(Qt::PlainText);
+        Label->setWordWrap(true);
+        Label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+        Label->setMargin(12);
+        Label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        Label->setFocusPolicy(Qt::StrongFocus);
+        information_ = Label; vbox_->addWidget(Label);
+    }
+    static_cast<QLabel*>(information_)->setText(Information);
+    information_->show(); setFocusProxy(information_);
+}
+bool CQuickView::RequestClose() { return !surface_ || surface_->RequestClose(); }
+bool CQuickView::IsPinned() const { return surface_ && surface_->IsPinned(); }
+void CQuickView::CloseView() { if (surface_) surface_->Close(); if (information_) information_->hide(); }
+void CQuickView::EnsureKeyboardFocusOnView() const
+{ if (surface_) surface_->Pin(); if (focusProxy()) focusProxy()->setFocus(); }
 
 ////int CmpPanel::InitializeGrid()
 ////{

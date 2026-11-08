@@ -104,6 +104,7 @@ private:
     void refreshPreview();
     void rememberJobSelection(const std::string& Id, const hc::storage::CommandContext& Context);
     void closeQuick();
+    void returnQuickFocus();
     QPointer<QWidget> main_;
     QPointer<CmpPanel> activePanel_;
     std::shared_ptr<hc::commands::IExecutor> executor_;

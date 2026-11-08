@@ -50,7 +50,7 @@ namespace hc::plugins
         if (!Token(Manifest.id_) || !Token(Manifest.version_)) return Invalid("plugin-manifest-identity");
         if (!BinaryPath(Manifest.binary_)) return Invalid("plugin-binary-path");
         if (Manifest.sha256_.size() != 64 || !std::ranges::all_of(Manifest.sha256_, [](char Ch) { return (Ch >= '0' && Ch <= '9') || (Ch >= 'a' && Ch <= 'f'); })) return Invalid("plugin-binary-hash");
-        if (Manifest.dependencies_.size() > 64) return Invalid("plugin-dependency-budget");
+        if (Manifest.dependencies_.size() > PluginDependencyLimit) return Invalid("plugin-dependency-budget");
         std::set<std::string> Paths;
         auto Fold = [](std::string Path) { for (auto& Ch : Path) if (Ch >= 'A' && Ch <= 'Z') Ch += 'a' - 'A'; return Path; };
         Paths.insert(Fold(Manifest.binary_));

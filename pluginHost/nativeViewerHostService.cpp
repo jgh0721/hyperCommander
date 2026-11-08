@@ -1,6 +1,7 @@
 ﻿#include "nativeViewerHostService.hpp"
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QCoreApplication>
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include <commctrl.h>
 #include "wlxWindowMessage.hpp"
@@ -29,6 +30,7 @@ namespace hc::plugins
     { return dopus_ ? dopus_->Probe() : wlx_->Probe(); }
     void NativeViewerHostService::close()
     {
+        if (QCoreApplication::instance()) QCoreApplication::instance()->removeNativeEventFilter(this);
         if (inputHook_) UnhookWindowsHookEx(std::exchange(inputHook_, nullptr));
         if (inputOwner_ == this) inputOwner_ = nullptr;
         const auto Viewer = std::exchange(viewer_, nullptr);
@@ -36,31 +38,59 @@ namespace hc::plugins
         else if (Viewer && IsWindow(Viewer)) wlx_->Close(Viewer);
         if (container_) DestroyWindow(std::exchange(container_, nullptr));
         if (inputThread_) AttachThreadInput(GetCurrentThreadId(), std::exchange(inputThread_, 0), FALSE);
+        returnKey_ = returnModifiers_ = returnMessage_ = interactionMessage_ = 0;
+        preview_ = interacted_ = false;
     }
     LRESULT CALLBACK NativeViewerHostService::inputHook(int Code, WPARAM WParam, LPARAM LParam)
     {
         auto* Self = inputOwner_;
         if (Code == HC_ACTION && WParam == PM_REMOVE && Self && Self->viewer_)
+            Self->filterInput(reinterpret_cast<MSG*>(LParam));
+        return CallNextHookEx(nullptr, Code, WParam, LParam);
+    }
+    bool NativeViewerHostService::nativeEventFilter(const QByteArray& Type, void* Message, qintptr* Result)
+    {
+        if (viewer_ && (Type == "windows_generic_MSG" || Type == "windows_dispatcher_MSG")
+            && filterInput(static_cast<MSG*>(Message))) { if (Result) *Result = 0; return true; }
+        return false;
+    }
+    bool NativeViewerHostService::filterInput(MSG* Message)
+    {
+        auto* Self = this;
+        if ((Message->message == WM_LBUTTONDOWN || Message->message == WM_KEYDOWN || Message->message == WM_SYSKEYDOWN)
+            && (Message->hwnd == Self->viewer_ || IsChild(Self->viewer_, Message->hwnd)) && !interacted_ && interactionMessage_)
+            interacted_ = PostMessageW(GetParent(container_), interactionMessage_, reinterpret_cast<WPARAM>(viewer_), 0);
+        if ((Message->message == WM_KEYDOWN || Message->message == WM_SYSKEYDOWN)
+            && (Message->hwnd == Self->viewer_ || IsChild(Self->viewer_, Message->hwnd)))
         {
-            auto* Message = reinterpret_cast<MSG*>(LParam);
-            if (Message->message == WM_KEYDOWN && (Message->hwnd == Self->viewer_ || IsChild(Self->viewer_, Message->hwnd)))
+            const auto Parent = GetParent(Self->container_);
+            const auto Key = returnKey_;
+            const auto Modifiers = returnModifiers_;
+            const quintptr Current = ((GetKeyState(VK_CONTROL) & 0x8000) ? 1 : 0)
+                | ((GetKeyState(VK_MENU) & 0x8000) ? 2 : 0) | ((GetKeyState(VK_SHIFT) & 0x8000) ? 4 : 0)
+                | (((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000) ? 8 : 0);
+            if (Key && returnMessage_ && Message->wParam == Key && Current == Modifiers) {
+                if (!(Message->lParam & (1LL << 30))) PostMessageW(Parent, returnMessage_, reinterpret_cast<WPARAM>(Self->viewer_), 0);
+                Message->message = WM_NULL;
+                return true;
+            }
+            const bool Control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            const bool Modified = (GetKeyState(VK_MENU) & 0x8000) != 0 || (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            const bool Close = !Modified && ((!Control && Message->wParam == VK_ESCAPE) || (Control && Message->wParam == 'Q'));
+            // HyperViewer owns its setting and unsaved-document prompt in
+            // the helper. Do not bypass either through the native hook.
+            if (Close && !preview_ && Self->manifest_.compatibility_ != "hyperviewer-v1")
             {
-                const bool Control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-                const bool Modified = (GetKeyState(VK_MENU) & 0x8000) != 0 || (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-                const bool Close = !Modified && ((!Control && Message->wParam == VK_ESCAPE) || (Control && Message->wParam == 'Q'));
-                // HyperViewer owns its setting and unsaved-document prompt in
-                // the helper. Do not bypass either through the native hook.
-                if (Close && !(Self->manifest_.compatibility_ == "hyperviewer-v1" && Message->wParam == VK_ESCAPE))
-                {
-                    // Post to the one granted native parent. Queuing avoids a
-                    // synchronous call into the GUI while it retires this host.
-                    const bool Repeated = (Message->lParam & (1LL << 30)) != 0;
-                    if (!Repeated) PostMessageW(GetParent(Self->container_), Self->closeMessage_, reinterpret_cast<WPARAM>(Self->viewer_), 0);
-                    Message->message = WM_NULL;
-                }
+                // Post to the one granted native parent. Queuing avoids a
+                // synchronous call into the GUI while it retires this host.
+                const bool Repeated = (Message->lParam & (1LL << 30)) != 0;
+                if (!Repeated) PostMessageW(GetParent(Self->container_), Self->closeMessage_, reinterpret_cast<WPARAM>(Self->viewer_), 0);
+                Message->message = WM_NULL;
             }
         }
-        return CallNextHookEx(nullptr, Code, WParam, LParam);
+        // The dispatcher may supply a null result pointer and unrelated WM_NULL wakeups.
+        // Consume only gestures actually handled here, never a previously filtered message.
+        return false;
     }
     LRESULT CALLBACK NativeViewerHostService::windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
     {
@@ -98,6 +128,7 @@ namespace hc::plugins
         if (Kind == WireKind::ViewerOpen)
         {
             if (container_) return Invalid("host-viewer-already-open");
+            preview_ = Request["preview"].toBool();
             if ((Request.size() != 5 && Request.size() != 6) || (Request.size() == 6 && !Request["preview"].isBool())
                 || !Request["parent"].isString() || !Request["file"].isString()
                 || !Dimension(Request["width"]) || !Dimension(Request["height"])) return Invalid("host-viewer-open-fields");
@@ -115,7 +146,8 @@ namespace hc::plugins
             if (!Dpi || !SetThreadDpiAwarenessContext(Dpi)) return HostError("host-viewer-dpi", GetLastError());
             WNDCLASSW Class{}; Class.lpfnWndProc = windowProc; Class.hInstance = GetModuleHandleW(nullptr); Class.lpszClassName = WindowClass;
             if (!RegisterClassW(&Class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return HostError("host-viewer-window-class", GetLastError());
-            const bool Standalone = manifest_.id_ == "builtin.hyperviewer" && manifest_.compatibility_ == "hyperviewer-v1";
+            const bool Standalone = manifest_.id_ == "builtin.hyperviewer" && manifest_.compatibility_ == "hyperviewer-v1"
+                && !Request["preview"].toBool();
             container_ = CreateWindowExW(0, WindowClass, L"", Standalone ? WS_OVERLAPPED : WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                 0, 0, Request["width"].toInt(), Request["height"].toInt(), Standalone ? nullptr : Parent, nullptr, Class.hInstance, this);
             if (!container_) return HostError("host-viewer-container", GetLastError());
@@ -136,6 +168,7 @@ namespace hc::plugins
                 closeMessage_ = RegisterWindowMessageW(WlxCloseMessage); inputOwner_ = this;
                 inputHook_ = SetWindowsHookExW(WH_GETMESSAGE, inputHook, nullptr, GetCurrentThreadId());
                 if (!closeMessage_ || !inputHook_) { const auto Error = GetLastError(); close(); return HostError("host-viewer-input-hook", Error); }
+                if (QCoreApplication::instance()) QCoreApplication::instance()->installNativeEventFilter(this);
             }
             ShowWindow(viewer_, SW_SHOWNOACTIVATE);
             if (!Standalone) ShowWindow(container_, SW_SHOWNOACTIVATE);
@@ -156,9 +189,33 @@ namespace hc::plugins
         }
         if (Kind == WireKind::ViewerFocus)
         {
+            if (Request.size() == 5 && Request["configureOnly"].isBool() && Request["configureOnly"].toBool()) {
+                const auto Integer = [&](const char* Name, int Min, int Max) {
+                    const auto Value = Request[Name]; const auto Number = Value.toInt(-1);
+                    return Value.isDouble() && Value.toDouble() == Number && Number >= Min && Number <= Max;
+                };
+                if (!preview_ || !Integer("returnKey", 0, 255) || !Integer("returnModifiers", 0, 15)
+                    || !Integer("returnMessage", 0xc000, 0xffff) || !Integer("interactionMessage", 0xc000, 0xffff))
+                    return Invalid("host-viewer-input-binding");
+                returnKey_ = Request["returnKey"].toInt(); returnModifiers_ = Request["returnModifiers"].toInt();
+                returnMessage_ = Request["returnMessage"].toInt(); interactionMessage_ = Request["interactionMessage"].toInt();
+                return QJsonObject{{"configured", true}};
+            }
             if (!Request.isEmpty()) return Invalid("host-viewer-focus-fields");
-            if (manifest_.id_ == "builtin.hyperviewer" && manifest_.compatibility_ == "hyperviewer-v1")
+            if (manifest_.id_ == "builtin.hyperviewer" && manifest_.compatibility_ == "hyperviewer-v1"
+                && !(GetWindowLongPtrW(container_, GWL_STYLE) & WS_CHILD))
                 return QJsonObject{{"focused", false}};
+            const auto Parent = GetParent(container_);
+            const auto Root = GetAncestor(container_, GA_ROOT);
+            if (!Root || GetForegroundWindow() != Root) return QJsonObject{{"focused", false}};
+            const auto Thread = GetWindowThreadProcessId(Parent, nullptr);
+            // SetFocus in an isolated GUI thread otherwise only updates that
+            // thread's inactive queue. Join the granted caller on explicit entry.
+            if (!inputThread_ && Thread && Thread != GetCurrentThreadId()) {
+                if (!AttachThreadInput(GetCurrentThreadId(), Thread, TRUE))
+                    return HostError("host-viewer-input-attach", GetLastError());
+                inputThread_ = Thread;
+            }
             SetFocus(viewer_); return QJsonObject{{"focused", GetFocus() == viewer_ || IsChild(viewer_, GetFocus())}};
         }
         if (Kind == WireKind::DocumentCommand)

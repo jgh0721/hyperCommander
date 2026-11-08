@@ -414,13 +414,13 @@ hc::workspace::PaneState CmpPanel::CaptureWorkspace(int OnlyTab) const
 void CmpPanel::RestoreWorkspace(const hc::workspace::PaneState& Pane, const QJsonObject& Defaults)
 {
     if (Pane.tabs_.isEmpty() || Pane.tabs_.size() > 64 || Pane.active_ < 0 || Pane.active_ >= Pane.tabs_.size()) return;
-    workspaceRestored_ = true; workspaceDefaults_ = Defaults;
     // A preview temporarily replaces its grid in QTabWidget. Restore that grid
     // first so replacing a workspace also destroys its hidden model/watchers.
     for (int Index = 0; Index < vecTabStates.size(); ++Index) {
-        if (vecTabStates[Index]->QuickView) CloseQuickView(Index);
+        if (vecTabStates[Index]->QuickView && !CloseQuickView(Index)) return;
         if (vecTabStates[Index]->SystemView) HideSystemView(Index);
     }
+    workspaceRestored_ = true; workspaceDefaults_ = Defaults;
     { QSignalBlocker Blocker(ui.tabWidget);
       // Removing a focused tab synchronously emits application focus events.
       // Retire all old state pointers before deleting any grid: the main window
@@ -538,7 +538,7 @@ void CmpPanel::closeTabAt(int Current)
     { QSignalBlocker Blocker(ui.tabWidget); ui.tabWidget->setCurrentIndex(Current); }
     // Restore the original grid before deleting a preview tab so neither its
     // hidden model nor an active viewer session survives tab closure.
-    if (vecTabStates[Current]->QuickView) CloseQuickView(Current);
+    if (vecTabStates[Current]->QuickView && !CloseQuickView(Current)) return;
     if (vecTabStates[Current]->SystemView) HideSystemView(Current);
     const auto Closing = ui.tabWidget->widget(Current);
     {
@@ -566,7 +566,7 @@ void CmpPanel::SetFocusView( int TabIndex )
     if( View == nullptr )
         return;
 
-    if( View->GetViewMode() == CViewT::VM_GRID || View->GetViewMode() == CViewT::VM_SYSTEM )
+    if( View->GetViewMode() == CViewT::VM_GRID || View->GetViewMode() == CViewT::VM_SYSTEM || View->GetViewMode() == CViewT::VM_QUICK )
         View->EnsureKeyboardFocusOnView();
 }
 
@@ -645,7 +645,7 @@ CSystemView* CmpPanel::ShowSystemView( int Kind )
         return nullptr;
     materializeTab( Index );
     const auto State = vecTabStates[Index];
-    if( State->QuickView ) CloseQuickView( Index );
+    if( State->QuickView && !CloseQuickView(Index) ) return nullptr;
     if( auto* Existing = SystemView( Index ) )
     {
         if( int( Existing->ViewKind() ) == Kind )
@@ -730,7 +730,7 @@ void CmpPanel::OpenDetailView( int TabIndex, CSystemView* Source )
     if( TabIndex < 0 || TabIndex >= vecTabStates.size() )
         return;
     materializeTab( TabIndex );
-    if( vecTabStates[TabIndex]->QuickView ) CloseQuickView( TabIndex );
+    if( vecTabStates[TabIndex]->QuickView && !CloseQuickView(TabIndex) ) return;
     const auto State = vecTabStates[TabIndex];
     auto* Detail = new CSystemDetailView;
     State->QuickView = Detail;
@@ -757,7 +757,7 @@ void CmpPanel::RevealFile( const QString& Path )
         return;
     materializeTab( Index );
     const auto State = vecTabStates[Index];
-    if( State->QuickView ) CloseQuickView( Index );
+    if( State->QuickView && !CloseQuickView(Index) ) return;
     if( State->SystemView ) HideSystemView( Index );
     State->revealName_ = Name;
     const auto* Model = static_cast<CFSModel*>( State->Model );
@@ -794,7 +794,7 @@ void CmpPanel::OpenQuickView( int TabIndex, const QString& FilePath )
         return;
 
     materializeTab(TabIndex);
-    if (vecTabStates[TabIndex]->QuickView) CloseQuickView(TabIndex);
+    if (vecTabStates[TabIndex]->QuickView && !CloseQuickView(TabIndex)) return;
 
     {
         QSignalBlocker Blocker( ui.tabWidget );
@@ -809,11 +809,11 @@ void CmpPanel::OpenQuickView( int TabIndex, const QString& FilePath )
     }
 }
 
-void CmpPanel::CloseQuickView( int TabIndex )
+bool CmpPanel::CloseQuickView( int TabIndex )
 {
     Q_ASSERT( TabIndex >= 0 && TabIndex < ui.tabWidget->count() );
     if( TabIndex < 0 || TabIndex >= ui.tabWidget->count() )
-        return;
+        return false;
 
     {
         QSignalBlocker Blocker( ui.tabWidget );
@@ -821,7 +821,9 @@ void CmpPanel::CloseQuickView( int TabIndex )
         const auto& TabTitle = ui.tabWidget->tabText( TabIndex );
 
         if( State->QuickView == nullptr )
-            return;
+            return true;
+
+        if (auto* Quick = qobject_cast<CQuickView*>(State->QuickView); Quick && !Quick->RequestClose()) return false;
 
         State->QuickView->CloseView();
         ui.tabWidget->removeTab( TabIndex );
@@ -830,6 +832,7 @@ void CmpPanel::CloseQuickView( int TabIndex )
         ui.tabWidget->insertTab( TabIndex, State->SystemView ? State->SystemView : State->View, TabTitle );
         ui.tabWidget->setCurrentIndex( TabIndex );
     }
+    return true;
 }
 
 void CmpPanel::RefreshSource( int TabIndex )
@@ -1189,8 +1192,7 @@ void CmpPanel::changeVolumeIndex( int index, const QString& Path )
         return;
 
     // 해당 탭에서 QuickView 를 표시하고 있었다면 닫고 GridView 로 전환한다.
-    if( State->QuickView )
-        CloseQuickView( retrieveCurrentIndex() );
+    if( State->QuickView && !CloseQuickView(retrieveCurrentIndex()) ) return;
     // 드라이브를 고르면 시스템 보기를 걷고 그 드라이브 루트로 간다.
     if( State->SystemView )
         HideSystemView( retrieveCurrentIndex() );

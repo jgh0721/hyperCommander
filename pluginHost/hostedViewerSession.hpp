@@ -34,6 +34,8 @@ namespace hc::plugins
         QString preparationStage_ = "check";
         std::optional<storage::OperationContext::Progress> preparationProgress_;
         bool documentChannel_ = false;
+        // Opt-in local native saving is owned by the plugin, not the document broker.
+        bool directOriginal_ = false;
         QJsonObject documentState_, documentReply_;
     };
     class PluginViewerService;
@@ -59,6 +61,7 @@ namespace hc::plugins
         PluginViewerDetails Details() const;
         storage::Result<storage::Unit> Resize(std::uint32_t Width, std::uint32_t Height);
         storage::Result<storage::Unit> Focus();
+        storage::Result<storage::Unit> SetReturnKey(unsigned Key, unsigned Modifiers, unsigned ReturnMessage, unsigned InteractionMessage);
         // Acceptance queues work; Details reports its completion sequence/error.
         storage::Result<std::uint64_t> SendCommand(int Command, int Parameter);
         storage::Result<std::uint64_t> Search(QString Text, int Flags);

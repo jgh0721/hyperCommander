@@ -29,11 +29,23 @@ namespace
     public:
         using QWidget::QWidget;
         std::function<void(quintptr)> closeRequested_;
+        std::function<void(quintptr)> returnRequested_;
+        std::function<void(quintptr)> interactionRequested_;
     protected:
         bool nativeEvent(const QByteArray& Type, void* Event, qintptr* Result) override
         {
             const auto* Message = static_cast<MSG*>(Event);
             static const auto CloseMessage = RegisterWindowMessageW(WlxCloseMessage);
+            static const auto ReturnMessage = RegisterWindowMessageW(WlxReturnMessage);
+            static const auto InteractionMessage = RegisterWindowMessageW(WlxInteractionMessage);
+            if (Type == "windows_generic_MSG" && InteractionMessage && Message->message == InteractionMessage) {
+                if (interactionRequested_) interactionRequested_(Message->wParam);
+                *Result = 0; return true;
+            }
+            if (Type == "windows_generic_MSG" && ReturnMessage && Message->message == ReturnMessage) {
+                if (returnRequested_) returnRequested_(Message->wParam);
+                *Result = 0; return true;
+            }
             if (Type == "windows_generic_MSG" && CloseMessage && Message->message == CloseMessage)
             {
                 if (closeRequested_) closeRequested_(Message->wParam);
@@ -147,10 +159,21 @@ PluginViewerDetails QtPluginViewerSurface::Details() const
 void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, std::optional<PluginViewerSelectionPolicy> Policy)
 {
     Close();
+    preview_ = !Candidates.empty() && Candidates.front().purpose_ == ViewerPurpose::QuickPreview;
     if (!controller_) { status_->setText(tr("뷰어를 사용할 수 없습니다.")); emit Failed("viewer-host-unavailable"); return; }
     presentationTrace_=std::make_unique<hc::document::ImageTraceSpan>("viewer.prepare-to-present");
     beginPreparation(Source ? QString::fromStdString(Source->Describe().name_) : QString{});
     auto* Anchor = new WlxAnchor(this); anchor_ = Anchor; anchor_->setObjectName("hc.wlx.native-parent");
+    Anchor->interactionRequested_ = [this](quintptr Child) {
+        if (session_ && session_->Details().child_ == QString::number(Child, 16)) interacted_ = true;
+    };
+    Anchor->returnRequested_ = [this](quintptr Child) {
+        if (!session_ || session_->Details().child_ != QString::number(Child, 16)) return;
+        const auto Id = session_->Snapshot().id_;
+        QMetaObject::invokeMethod(this, [this, Id] {
+            if (session_ && session_->Snapshot().id_ == Id) emit ReturnFocusRequested();
+        }, Qt::QueuedConnection);
+    };
     Anchor->closeRequested_ = [this](quintptr Child) {
         if (!session_ || !ready_ || session_->Details().child_ != QString::number(Child, 16)) return;
         const auto Id = session_->Snapshot().id_;
@@ -173,10 +196,11 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
         delete anchor_.data(); status_->setText(tr("뷰어를 열 수 없습니다."));
         emit Failed(QString::fromStdString(Opened.Failure().code_)); return;
     }
-    session_ = std::move(Opened.Value()); timer_->start();
+    session_ = std::move(Opened.Value()); SetReturnKey(returnKey_); timer_->start();
 }
 void QtPluginViewerSurface::Close()
 {
+    preview_ = interacted_ = false;
     presentationTrace_.reset();
     lastSearch_.clear(); clipboardToken_.clear();
     timer_->stop(); ready_ = false; preparedSequence_ = 0;
@@ -184,6 +208,8 @@ void QtPluginViewerSurface::Close()
     if (anchor_)
     {
         static_cast<WlxAnchor*>(anchor_.data())->closeRequested_ = {};
+        static_cast<WlxAnchor*>(anchor_.data())->returnRequested_ = {};
+        static_cast<WlxAnchor*>(anchor_.data())->interactionRequested_ = {};
         anchor_->removeEventFilter(this); layout()->removeWidget(anchor_);
     }
     if (controller_) controller_->Retire(anchor_, session_);
@@ -306,6 +332,9 @@ void QtPluginViewerSurface::poll()
         for (const auto& Item : Details.documentState_["documents"].toArray()) {
             const auto Record = Item.toObject();
             const auto Failure = Record["error"].toString();
+            // A save conflict is a live document state, not a failed viewer.
+            // Keep polling so the user can resolve it and save again.
+            if (ready_ && Record["lifecycle"].toString() != "failed") continue;
             if (Failure.isEmpty() && Record["lifecycle"].toString() != "failed") continue;
             preparedSequence_ = 0; timer_->stop(); progress_->hide(); preparationDetail_->clear();
             const auto Reason = Failure.isEmpty() ? tr("문서 읽기 실패") : Failure;
@@ -359,6 +388,44 @@ bool QtPluginViewerSurface::eventFilter(QObject* Object, QEvent* Event)
 }
 void QtPluginViewerSurface::focusInEvent(QFocusEvent* Event)
 { if (session_ && ready_ && isVisible()) session_->Focus(); QWidget::focusInEvent(Event); }
+void QtPluginViewerSurface::SetReturnKey(QKeyCombination Key)
+{
+    returnKey_ = Key;
+    if (!session_ || !preview_) return;
+    const auto Code = int(Key.key());
+    quintptr Virtual = Code >= Qt::Key_F1 && Code <= Qt::Key_F24 ? VK_F1 + Code - Qt::Key_F1
+        : Code >= Qt::Key_A && Code <= Qt::Key_Z ? Code : Code >= Qt::Key_0 && Code <= Qt::Key_9 ? Code : 0;
+    if (!Virtual && Code >= 32 && Code < 127) {
+        const auto Mapped = VkKeyScanW(wchar_t(Code));
+        if (Mapped != -1) Virtual = LOBYTE(Mapped);
+    }
+    if (!Virtual) switch (Code) {
+    case Qt::Key_Escape: Virtual = VK_ESCAPE; break;
+    case Qt::Key_Tab: Virtual = VK_TAB; break;
+    case Qt::Key_Return: case Qt::Key_Enter: Virtual = VK_RETURN; break;
+    case Qt::Key_Backspace: Virtual = VK_BACK; break;
+    case Qt::Key_Delete: Virtual = VK_DELETE; break;
+    case Qt::Key_Insert: Virtual = VK_INSERT; break;
+    case Qt::Key_Home: Virtual = VK_HOME; break;
+    case Qt::Key_End: Virtual = VK_END; break;
+    case Qt::Key_PageUp: Virtual = VK_PRIOR; break;
+    case Qt::Key_PageDown: Virtual = VK_NEXT; break;
+    case Qt::Key_Left: Virtual = VK_LEFT; break;
+    case Qt::Key_Right: Virtual = VK_RIGHT; break;
+    case Qt::Key_Up: Virtual = VK_UP; break;
+    case Qt::Key_Down: Virtual = VK_DOWN; break;
+    default: break;
+    }
+    const auto Mods = Key.keyboardModifiers();
+    const quintptr Bits = (Mods.testFlag(Qt::ControlModifier) ? 1 : 0) | (Mods.testFlag(Qt::AltModifier) ? 2 : 0) | (Mods.testFlag(Qt::ShiftModifier) ? 4 : 0)
+        | (Mods.testFlag(Qt::MetaModifier) ? 8 : 0);
+    session_->SetReturnKey(unsigned(Virtual), unsigned(Bits), RegisterWindowMessageW(WlxReturnMessage),
+        RegisterWindowMessageW(WlxInteractionMessage));
+}
+bool QtPluginViewerSurface::WasInteracted() const
+{
+    return interacted_;
+}
 void QtPluginViewerSurface::Execute(const QString& Command)
 {
     if (!session_) return;

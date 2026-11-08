@@ -94,7 +94,7 @@ namespace hc::plugins
         }
         if (!Dependencies.isUndefined())
         {
-            if (!Dependencies.isObject() || Dependencies.toObject().size() > 64) return Invalid("plugin-dependencies");
+            if (!Dependencies.isObject() || Dependencies.toObject().size() > PluginDependencyLimit) return Invalid("plugin-dependencies");
             const auto Items = Dependencies.toObject();
             for (auto At = Items.begin(); At != Items.end(); ++At)
             { if (!At.value().isString()) return Invalid("plugin-dependencies"); Out.dependencies_.emplace(At.key().toStdString(), At.value().toString().toStdString()); }
@@ -278,7 +278,7 @@ namespace hc::plugins
         };
         AddDlls(QFileInfo(Path).absolutePath());
         for (const auto& [Name, Hash] : Manifest.helpers_) AddDlls(QFileInfo(QDir(Root).filePath(QString::fromStdString(Name))).absolutePath());
-        if (Manifest.dependencies_.size() > 64) return Invalid("plugin-dependency-budget");
+        if (Manifest.dependencies_.size() > PluginDependencyLimit) return Invalid("plugin-dependency-budget");
         for (auto& [Name, Hash] : Manifest.dependencies_) { auto Fresh = HashFile(QDir(Root).filePath(QString::fromStdString(Name)), false, Manifest.compatibility_ == "total7zip" && Name == "7z.dll"); if (!Fresh.HasValue()) return Fresh.Failure(); Hash = Fresh.Value(); }
         for (auto& [Name, Hash] : Manifest.helpers_) { auto Fresh = HashFile(QDir(Root).filePath(QString::fromStdString(Name)), true); if (!Fresh.HasValue()) return Fresh.Failure(); Hash = Fresh.Value(); }
         return InspectDeclared(Manifest, Root, Context);

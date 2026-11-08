@@ -1,5 +1,6 @@
 ﻿#include "hostedViewerSession.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
+#include "UniqueLibs/nativeStorageRevision.hpp"
 #include "documentViewerClient.hpp"
 #include "imageArchiveBroker.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
@@ -133,6 +134,7 @@ namespace hc::plugins
         PluginViewerDetails details_;
         bool closed_ = false, cancelled_ = false, commands_ = false, search_ = false, focus_ = false;
         std::optional<std::pair<std::uint32_t, std::uint32_t>> size_;
+        std::optional<QJsonObject> inputBinding_;
         struct Command { std::uint64_t sequence_; int command_, parameter_; QString text_; QJsonObject document_; std::vector<HostedViewerSession::DocumentInput> inputs_; };
         std::deque<Command> queue_;
         std::uint64_t nextCommand_ = 1;
@@ -170,6 +172,16 @@ namespace hc::plugins
         std::lock_guard Lock(state_->mutex_);
         if (state_->stop_.stop_requested() || state_->details_.idle_) return Error{ErrorCategory::Cancelled, "viewer-closed", {"wlx"}};
         state_->focus_ = true; state_->changed_.notify_one(); return Unit{};
+    }
+    Result<Unit> HostedViewerSession::SetReturnKey(unsigned Key, unsigned Modifiers, unsigned ReturnMessage, unsigned InteractionMessage)
+    {
+        if (Key > 255 || Modifiers > 15 || ReturnMessage < 0xc000 || ReturnMessage > 0xffff
+            || InteractionMessage < 0xc000 || InteractionMessage > 0xffff) return Invalid("host-viewer-input-binding");
+        std::lock_guard Lock(state_->mutex_);
+        if (state_->stop_.stop_requested()) return Error{ErrorCategory::Cancelled, "viewer-closed", {"wlx"}};
+        state_->inputBinding_ = QJsonObject{{"configureOnly", true}, {"returnKey", int(Key)}, {"returnModifiers", int(Modifiers)},
+            {"returnMessage", int(ReturnMessage)}, {"interactionMessage", int(InteractionMessage)}};
+        state_->changed_.notify_one(); return Unit{};
     }
     Result<std::uint64_t> HostedViewerSession::SendCommand(int Command, int Parameter)
     {
@@ -291,6 +303,7 @@ namespace hc::plugins
         std::unique_ptr<DocumentViewerClient> Document;
         bool NoMatch = false;
         bool DirectInputAllowed=false;
+        bool DirectOriginal = false;
         const auto CloseHost = [&] {
             if (!Host) { ArchiveBroker.reset(); return; }
             Host->Close(); ArchiveBroker.reset(); Document.reset(); const auto Final = Host->Snapshot();
@@ -310,6 +323,24 @@ namespace hc::plugins
                 hc::document::ImageTraceSpan Trace("viewer.prepare-input",QString::fromUtf8(Source->Describe().locator_.root_));
                 if (Lease) return Unit{};
                 PreparationStage("materialize");
+                if (DirectOriginal) {
+                    auto Verified = Source->Verify(Context).get(); if (!Verified.HasValue()) return Verified.Failure();
+                    const auto Original = Source->Describe();
+                    const auto Path = QString::fromUtf8(Original.locator_.root_);
+                    // Keep identity/lifetime without denying the plugin's save or atomic replacement.
+                    // This path is restricted to explicitly approved local native inputs below.
+                    const auto Pin = CreateFileW(reinterpret_cast<LPCWSTR>(native::FilePath(Path).utf16()), GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    if (Pin == INVALID_HANDLE_VALUE) return Error{ErrorCategory::Unavailable, "viewer-original-open:" + std::to_string(GetLastError())};
+                    auto Borrowed = std::make_shared<SourceLease>(Original, Pin);
+                    BY_HANDLE_FILE_INFORMATION Info{};
+                    if (!GetFileInformationByHandle(Pin, &Info) || !Original.id_.revision_
+                        || (Info.dwFileAttributes & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_REPARSE_POINT))
+                        || !native::MatchesRevision(*Original.id_.revision_, Info, Pin))
+                        return Error{ErrorCategory::StaleRevision, "viewer-original-changed"};
+                    Lease = std::move(Borrowed);
+                    return Unit{};
+                }
                 if(DirectInputAllowed && IsDirectBook(Source->Describe())){
                     auto Borrowed=BorrowBook(Source,Context);if(!Borrowed.HasValue())return Borrowed.Failure();
                     Lease=std::move(Borrowed.Value());
@@ -366,7 +397,23 @@ namespace hc::plugins
                 if (!Applies.HasValue()) return Applies.Failure();
                 if (!Applies.Value()) return false;
                 DirectInputAllowed=Inspected.Value().manifest_.compatibility_=="hyperviewer-v1" && Inspected.Value().manifest_.id_=="builtin.hyperviewer";
-                if(!DirectInputAllowed && dynamic_cast<SourceLease*>(Lease.get()))Lease.reset();
+                const bool PreviousDirectOriginal = DirectOriginal;
+                DirectOriginal = !DirectInputAllowed && Options.approval_.granted_.contains(Permission::WriteContent)
+                    && Entry->locator_.kind_ == LocatorKind::Local && !Entry->directory_
+                    && !(Entry->attributes_ & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_REPARSE_POINT))
+                    && QFileInfo(QString::fromUtf8(Entry->locator_.root_)).isAbsolute();
+                // Only the native provider can vouch for a directly writable original.
+                if (DirectOriginal) {
+                    const auto Path = native::FilePath(QString::fromUtf8(Entry->locator_.root_)).toStdWString();
+                    wchar_t Root[MAX_PATH]{};
+                    const auto Drive = GetVolumePathNameW(Path.c_str(), Root, MAX_PATH) ? GetDriveTypeW(Root) : DRIVE_UNKNOWN;
+                    auto Native = MakeNativeReadProvider(LocatorKind::Local);
+                    auto Resolved = Native->Resolve(Entry->locator_, Context).get();
+                    DirectOriginal = (Drive == DRIVE_FIXED || Drive == DRIVE_REMOVABLE) && Resolved.HasValue()
+                        && Native->Id() == Entry->id_.providerId_ && Entry->id_.revision_.has_value()
+                        && !(Resolved.Value().attributes_ & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_REPARSE_POINT));
+                }
+                if (PreviousDirectOriginal != DirectOriginal || (!DirectInputAllowed && !DirectOriginal && dynamic_cast<SourceLease*>(Lease.get()))) Lease.reset();
                 if (!Policy)
                 {
                     auto Prepared = Materialize(); if (!Prepared.HasValue()) return Prepared.Failure();
@@ -488,6 +535,7 @@ namespace hc::plugins
                     State->details_.viewer_.bytesRead_ = Lease->Describe().size_; State->details_.viewer_.status_ = ViewerStatus::Ready;
                     State->details_.viewer_.provider_ = std::string(Dopus ? "dopus-viewer." : "wlx.") + Options.approval_.reviewed_.id_;
                     State->details_.selectedCandidate_ = Index; State->commands_ = Probe.Value()["commands"].toBool();
+                    State->details_.directOriginal_ = DirectOriginal;
                     State->search_ = Probe.Value()["search"].toBool();
                 }
                 return true;
@@ -521,12 +569,14 @@ namespace hc::plugins
             while (!State->stop_.stop_requested())
             {
                 std::optional<std::pair<std::uint32_t, std::uint32_t>> Resize;
+                std::optional<QJsonObject> InputBinding;
                 std::optional<HostedViewerSession::State::Command> Command; bool Focus = false;
                 {
                     std::unique_lock Lock(State->mutex_);
-                    State->changed_.wait_for(Lock, std::chrono::milliseconds(50), [&] { return State->stop_.stop_requested() || State->size_ || State->focus_ || !State->queue_.empty(); });
+                    State->changed_.wait_for(Lock, std::chrono::milliseconds(50), [&] { return State->stop_.stop_requested() || State->size_ || State->focus_ || State->inputBinding_ || !State->queue_.empty(); });
                     if (State->stop_.stop_requested()) break;
                     Resize = std::exchange(State->size_, {}); Focus = std::exchange(State->focus_, false);
+                    InputBinding = std::exchange(State->inputBinding_, {});
                     if (!State->queue_.empty()) { Command = State->queue_.front(); State->queue_.pop_front(); }
                 }
                 if (Resize)
@@ -534,6 +584,7 @@ namespace hc::plugins
                     auto Result = Host->ViewerCall(WireKind::ViewerResize, {{"width", static_cast<int>(Resize->first)}, {"height", static_cast<int>(Resize->second)}}, Calls);
                     if (!Result.HasValue()) return Result.Failure();
                 }
+                if (InputBinding) { auto Result = Host->ViewerCall(WireKind::ViewerFocus, *InputBinding, Calls); if (!Result.HasValue()) return Result.Failure(); }
                 if (Focus) { auto Result = Host->ViewerCall(WireKind::ViewerFocus, {}, Calls); if (!Result.HasValue()) return Result.Failure(); }
                 if (Command && Document && (Command->command_ == 6 || Command->command_ == 7)) {
                     Result<QJsonObject> Result = QJsonObject{};

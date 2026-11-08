@@ -21,7 +21,7 @@ class QtViewerHost;
 class QtViewerSurface;
 class ThumbnailModel;
 namespace fm::filelist { class ThumbnailView; }
-namespace hc::storage { class IContentSource; }
+namespace hc::storage { class IContentSource; class IWritableStorage; }
 
 class CViewT : public QWidget
 {
@@ -367,12 +367,18 @@ public:
     CQuickView( QWidget* Parent = nullptr, Qt::WindowFlags f = Qt::WindowFlags() );
 
     void                            SetFilePath( const QString& FilePath );
-    void                            SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source);
+    void                            SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IContentSource> Source,
+                                        std::shared_ptr<hc::storage::IWritableStorage> Writer = {});
+    void                            SetInformation(const QString& Information);
+    bool                            RequestClose();
+    bool                            IsPinned() const;
     void                            CloseView() override;
     void                            EnsureKeyboardFocusOnView() const override;
 
 signals:
     void                            CloseRequested();
+    void                            ReturnFocusRequested();
+    void                            FollowSelectionRequested();
 
 protected:
     void                            showEvent( QShowEvent* event ) override;
@@ -382,6 +388,10 @@ private:
     bool                            isInitOnce_ = false;
     QtViewerSurface*                surface_ = nullptr;
     QString                         filePath_;
+    QWidget*                        information_ = nullptr;
+    QString                         informationText_;
+    QAction*                        returnAction_ = nullptr;
+    void                            refreshReturnKey();
     CInternalViewer*                internalViewer_ = nullptr;
     CExternalViewer*                externalViewer_ = nullptr;
 

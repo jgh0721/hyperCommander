@@ -765,6 +765,10 @@ CFSModel* CommandUiBridge::findModel(const std::string& TabId) const
 Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocation)
 {
     Q_ASSERT(QThread::currentThread() == thread());
+    if (Invocation.id_ == "hc.viewer.returnFocus") {
+        returnQuickFocus();
+        return CommandOutcome{};
+    }
     if (Invocation.id_ == "hc.navigate.systemProcesses" || Invocation.id_ == "hc.navigate.systemServices")
     {
         if (!activePanel_) return Error{ErrorCategory::Cancelled, "panel-closed"};
@@ -934,7 +938,7 @@ void CommandUiBridge::createActions()
     connect(Editors, &QAction::triggered, this, [this] { TyStExternalEditorMgr::GetInstance()->Refresh(); CExternalConfigure Dialog(main_); Dialog.exec(); });
     auto* Viewers = Window->findChild<QMenuBar*>("menubar")->addMenu(tr("뷰어"));
     for (const auto& Item : std::vector<std::pair<QString, QString>>{
-        {"hc.viewer.open", tr("문서 보기 · 프로그램 선택")}, {"hc.file.edit", tr("문서 편집 · 프로그램 선택")}, {"hc.viewer.quick", tr("반대 패널 미리 보기")}, {"hc.viewer.close", tr("미리 보기 닫기")}})
+        {"hc.viewer.open", tr("문서 보기 · 프로그램 선택")}, {"hc.file.edit", tr("문서 편집 · 프로그램 선택")}, {"hc.viewer.quick", tr("반대 패널 미리 보기")}, {"hc.viewer.close", tr("미리 보기 닫기")}, {"hc.viewer.returnFocus", tr("파일 패널로")}})
     {
         auto* Action = Viewers->addAction(Item.second); Action->setObjectName("hc.menu." + Item.first);
         connect(Action, &QAction::triggered, this, [this, Id = Item.first] {
@@ -1863,9 +1867,22 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
     Dialog->show();
 }
 
+void CommandUiBridge::returnQuickFocus()
+{
+    if (!quickSource_ || !main_ || GetForegroundWindow() != reinterpret_cast<HWND>(main_->winId())) return;
+    auto* Grid = qobject_cast<CGridView*>(quickSource_->GetFocusView(quickSource_->CurrentTabIndex()));
+    if (!Grid) return;
+    QApplication::setActiveWindow(main_);
+    if (auto* Focus = QApplication::focusWidget()) Focus->clearFocus();
+    quickSource_->sig_NotifyPanelActivated();
+    Grid->EnsureKeyboardFocusOnView();
+    if (auto* Focus = QApplication::focusWidget(); Focus && (Focus == Grid || Grid->isAncestorOf(Focus)))
+        SetFocus(reinterpret_cast<HWND>(Focus->effectiveWinId()));
+}
 void CommandUiBridge::closeQuick()
 {
     if (!quick_) return;
+    if (!quick_->RequestClose()) return;
     auto* Quick = quick_.data(); Quick->CloseView();
     bool Restored = false;
     if (quickPanel_)
@@ -1874,12 +1891,14 @@ void CommandUiBridge::closeQuick()
                 if (quickPanel_->GetFocusView(Index) == Quick)
                 { quickPanel_->CloseQuickView(Index); Restored = true; break; }
     if (!Restored) Quick->deleteLater();
+    returnQuickFocus();
     quick_.clear(); quickPanel_.clear(); quickSource_.clear(); quickKey_.clear();
 }
 
 void CommandUiBridge::refreshPreview()
 {
     if (!quick_ || !quickSource_ || !quickPanel_ || !quick_->isVisible()) return;
+    if (quick_->IsPinned()) return;
     if (quickPanel_->GetFocusView(quickPanel_->CurrentTabIndex()) != quick_) return;
     auto* Model = PanelModel(quickSource_);
     auto* View = qobject_cast<CGridView*>(quickSource_->GetFocusView(quickSource_->CurrentTabIndex()));
@@ -1888,7 +1907,7 @@ void CommandUiBridge::refreshPreview()
     const auto Focused = View->BaseView()->focusedRow();
     const auto Index = Focused.isValid() && Focused.type() == Qtitan::GridRow::DataRow ? SourceIndex(Focused.modelIndex(0)) : QModelIndex{};
     const auto Entry = Index.isValid() ? Model->GetFileInfo(Index) : nsHC::TySpFileSource{};
-    if (!Entry || !Entry->storageEntry_ || Entry->storageEntry_->directory_)
+    if (!Entry || !Entry->storageEntry_)
     { quick_->CloseView(); quickKey_.clear(); return; }
     const auto Key = Model->property("hc.tabId").toString() + QString::fromStdString(Serialize(Entry->storageEntry_->id_) + Serialize(Entry->storageEntry_->locator_));
     if (quickKey_ == Key) return;
@@ -1956,8 +1975,11 @@ Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& I
         { Selected = *Entry->storageEntry_; break; }
     }
     if (!Selected) return Error{ErrorCategory::StaleRevision, "selection-changed"};
-    if (Selected->directory_) return Error{ErrorCategory::Unsupported, "viewer-directory"};
+    if (Selected->directory_ && Invocation.id_ == "hc.viewer.open") return Error{ErrorCategory::Unsupported, "viewer-directory"};
     Reader = Model->ProviderFor(*Selected);
+    auto Writer = Selected->locator_.kind_ == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider()
+        : Selected->locator_.kind_ == LocatorKind::Local || Selected->locator_.kind_ == LocatorKind::Smb
+            ? MakeNativeWritableStorage(Selected->locator_.kind_, Reader) : nullptr;
     auto Content = std::make_shared<ProviderContentSource>(std::move(Reader), *Selected);
     if (Invocation.id_ == "hc.viewer.open") { viewers_->OpenFull(std::move(Content)); return CommandOutcome{}; }
     auto* SourcePanel = PanelOf(Model);
@@ -1972,13 +1994,18 @@ Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& I
         if (!quick_) return Error{ErrorCategory::Internal, "preview-surface-unavailable"};
         quickPanel_ = Target; quickSource_ = SourcePanel;
         connect(quick_, &CQuickView::CloseRequested, this, [this] { Dispatch("hc.viewer.close", {}, "shortcut"); });
+        connect(quick_, &CQuickView::FollowSelectionRequested, this, [this] { quickKey_.clear(); refreshPreview(); });
+        connect(quick_, &CQuickView::ReturnFocusRequested, this, &CommandUiBridge::returnQuickFocus);
     }
     else if (Invocation.id_ != "hc.viewer.preview") return Error{ErrorCategory::Unsupported, "viewer-command-unavailable"};
     if (!quick_ || quickSource_ != SourcePanel || !quickPanel_
         || quickPanel_->GetFocusView(quickPanel_->CurrentTabIndex()) != quick_)
         return Error{ErrorCategory::Cancelled, "preview-closed"};
     quickKey_ = Model->property("hc.tabId").toString() + QString::fromStdString(Serialize(Selected->id_) + Serialize(Selected->locator_));
-    quick_->SetContent(*viewers_, std::move(Content));
+    if (Selected->directory_)
+        quick_->SetInformation(tr("디렉터리 정보\n\n이름: %1\n위치: %2\n\n하위 항목 수와 전체 크기: 미계산")
+            .arg(QString::fromStdString(Selected->name_), QString::fromStdString(Selected->locator_.root_)));
+    else quick_->SetContent(*viewers_, std::move(Content), std::move(Writer));
     if (Invocation.id_ == "hc.viewer.quick")
         if (auto* Grid = qobject_cast<CGridView*>(SourcePanel->GetFocusView(SourcePanel->CurrentTabIndex()))) Grid->EnsureKeyboardFocusOnView();
     return CommandOutcome{};

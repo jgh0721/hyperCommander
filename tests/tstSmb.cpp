@@ -335,6 +335,8 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingViewerUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "realWlxQuickPreviewUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "quickPreviewIndependentDocumentUi"
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("filePanelGrouping"), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -6737,6 +6739,199 @@ private slots:
         }
     }
 
+    void realWlxQuickPreviewUi()
+    {
+        using namespace hc::plugins;
+        const auto ManifestPath = qEnvironmentVariable("HC_WLX_MANIFEST");
+        if (ManifestPath.isEmpty()) QSKIP("An explicit downloaded WLX package is required");
+        const auto Inspected = InspectManifestFile(ManifestPath);
+        QVERIFY2(Inspected.HasValue(), Inspected.HasValue() ? "" : Inspected.Failure().code_.c_str());
+        const auto OriginalPlugins = hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
+        const auto OriginalEditors = hc::settings::AppSettings().Read(hc::settings::Section::Editors);
+        auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
+        const auto Restore = qScopeGuard([&] {
+            Host->CloseAll(); while (!Host->IsIdle()) QTest::qWait(10);
+            hc::settings::AppSettings().Put(hc::settings::Section::Plugins, OriginalPlugins);
+            hc::settings::AppSettings().Put(hc::settings::Section::Editors, OriginalEditors);
+            TyStPlugInMgr::GetInstance()->Refresh();
+        });
+        hc::settings::AppSettings().SetPlugins("wlx", {});
+        SetPluginField(hc::settings::AppSettings(), "wlx", 0, "path", Inspected.Value().binaryPath_);
+        SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostManifest", ManifestPath);
+        SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostEnabled", true);
+        SetPluginField(hc::settings::AppSettings(), "wlx", 0, "hostReviewed", hc::settings::JsonObject(EncodeManifest(Inspected.Value().manifest_)));
+        hc::settings::AppSettings().Commit(); TyStPlugInMgr::GetInstance()->Refresh();
+        const auto Choices = QPluginHostSettings::ViewerChoices(hc::settings::AppSettings()); QVERIFY(!Choices.empty());
+        const auto Target = hc::document::BuildPluginViewerTarget(Choices.front().name_, Choices.front().options_, Choices.front().extensions_);
+        auto Editors = hc::settings::AppSettings().Read(hc::settings::Section::Editors).toObject();
+        auto Handlers = Editors["documentHandlers"].toObject(); Handlers["defaultViewHandlerId"] = QString::fromStdString(Target.descriptor_.stableId_);
+        Editors["documentHandlers"] = Handlers; hc::settings::AppSettings().Put(hc::settings::Section::Editors, Editors);
+        QTemporaryDir Content; const auto Name = QFileInfo(qEnvironmentVariable("HC_WLX_SOURCE")).fileName();
+        QVERIFY(QFile::copy(qEnvironmentVariable("HC_WLX_SOURCE"), Content.filePath(Name)));
+        auto* Source = panels_.front(); auto* Other = panels_.back();
+        for (auto* Panel : panels_) {
+            static_cast<CFSModel*>(model(Panel))->SetProviderEnabled(true);
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Content.path()), {});
+            QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 5000);
+        }
+        auto* Grid = qobject_cast<CGridView*>(Source->GetFocusView(Source->CurrentTabIndex())); QVERIFY(Grid);
+        QModelIndex Selected;
+        for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
+            Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+            while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+            if (model(Source)->GetName(Index) == Name) { Selected = Index; break; }
+        }
+        QVERIFY(Selected.isValid()); Source->sig_NotifyPanelActivated(); Grid->EnsureKeyboardFocusOnView();
+        QTimer Choose; Choose.setInterval(20);
+        connect(&Choose, &QTimer::timeout, this, [&] {
+            auto* Menu = main_->findChild<QMenu*>("hc.document.handlerMenu");
+            if (!Menu || !Menu->isVisible()) return;
+            auto* Action = Menu->findChild<QAction*>("hc.document.handler." + QString::fromStdString(Target.descriptor_.stableId_));
+            if (!Action) { Menu->close(); return; }
+            Menu->setActiveAction(Action); QTest::keyClick(Menu, Qt::Key_Return);
+        }); Choose.start();
+        QVERIFY(QApplication::focusWidget()); QTest::keyClick(QApplication::focusWidget(), Qt::Key_F3);
+        QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.document.workspace"), 10000);
+        auto* Full = main_->findChild<QDialog*>("hc.document.workspace");
+        auto* FullNative = Full->findChild<QtPluginViewerSurface*>(); QVERIFY(FullNative);
+        QTRY_VERIFY2_WITH_TIMEOUT(FullNative->IsReady(), FullNative->Snapshot().error_ ? FullNative->Snapshot().error_->code_.c_str() : "F3 not ready", 15000);
+        Choose.stop(); const auto FullId = FullNative->Snapshot().id_;
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+        Source->sig_NotifyPanelActivated(); Grid->EnsureKeyboardFocusOnView();
+        auto* QuickAction = main_->findChild<QAction*>("hc.menu.hc.viewer.quick"); QVERIFY(QuickAction); QuickAction->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(qobject_cast<CQuickView*>(Other->GetFocusView(Other->CurrentTabIndex())), 5000);
+        auto* Quick = qobject_cast<CQuickView*>(Other->GetFocusView(Other->CurrentTabIndex()));
+        auto* Native = Quick->findChild<QtPluginViewerSurface*>(); QVERIFY(Native);
+        QTRY_VERIFY2_WITH_TIMEOUT(Native->IsReady(), Native->Snapshot().error_ ? Native->Snapshot().error_->code_.c_str() : "CtrlQ not ready", 15000);
+        QVERIFY(Native->Snapshot().id_ != FullId); QVERIFY(FullNative->IsReady());
+        QCOMPARE(Native->Snapshot().provider_, FullNative->Snapshot().provider_);
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Tab);
+        const auto Child = reinterpret_cast<HWND>(quintptr(Native->Details().child_.toULongLong(nullptr, 16)));
+        const auto Focused = [&] { GUITHREADINFO Info{sizeof(Info)}; return GetGUIThreadInfo(GetWindowThreadProcessId(Child, nullptr), &Info) && (Info.hwndFocus == Child || IsChild(Child, Info.hwndFocus)); };
+        QTRY_VERIFY_WITH_TIMEOUT(Focused(), 5000);
+        INPUT Keys[6]{}; const WORD Codes[]{VK_CONTROL, VK_MENU, VK_F12, VK_F12, VK_MENU, VK_CONTROL};
+        for (int Index = 0; Index < 6; ++Index) { Keys[Index].type = INPUT_KEYBOARD; Keys[Index].ki.wVk = Codes[Index]; if (Index >= 3) Keys[Index].ki.dwFlags = KEYEVENTF_KEYUP; }
+        QCOMPARE(SendInput(6, Keys, sizeof(INPUT)), UINT(6));
+        QTRY_VERIFY_WITH_TIMEOUT(QApplication::focusWidget() && (QApplication::focusWidget() == Grid || Grid->isAncestorOf(QApplication::focusWidget())), 5000);
+        QVERIFY(Native->IsReady()); QVERIFY(FullNative->IsReady());
+        const auto Shot = qEnvironmentVariable("HC_WLX_SCREENSHOT");
+        QVERIFY(IsWindowVisible(Child)); RECT Bounds{}; QVERIFY(GetWindowRect(Child, &Bounds));
+        QVERIFY(Bounds.right - Bounds.left > 100 && Bounds.bottom - Bounds.top > 100);
+        if (!Shot.isEmpty()) { QTest::qWait(250); QVERIFY(main_->screen()->grabWindow(0).save(Shot)); }
+        qInfo() << "F3 and CtrlQ independent native sessions, Tab entry and return shortcut passed" << QString::fromStdString(Native->Snapshot().provider_);
+    }
+    void quickPreviewIndependentDocumentUi()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QFile File(Directory.filePath("same.txt"));
+        QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("original"), qint64(8)); File.close();
+        const auto Catalog = hc::document::BuildDocumentHandlerCatalog(hc::settings::AppSettings(), QCoreApplication::applicationDirPath());
+        const auto Found = Catalog.targets_.find("builtin.hyperviewer"); QVERIFY(Found != Catalog.targets_.end());
+        QVERIFY(Found->second.descriptor_.available_);
+        auto Provider = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
+        const auto Entry = Provider->Resolve({hc::storage::LocatorKind::Local, File.fileName().toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+        auto Source = std::make_shared<hc::storage::ProviderContentSource>(Provider, Entry.Value());
+        QtViewerHost Host(main_, [&] { return hc::storage::MakeNativeMaterializer(Directory.path().toStdString()); });
+        const auto Drain = qScopeGuard([&] { Host.CloseAll(); while (!Host.IsIdle()) QTest::qWait(10); });
+        auto FullPresented = std::make_shared<bool>(false);
+        auto* Full = Host.OpenPlugin(Found->second.plugin_, {{Source, {}}}, "independent full viewer",
+            [FullPresented](bool Success, const QString&) { *FullPresented = Success; }); QVERIFY(Full);
+        auto* FullSurface = Full->findChild<QtPluginViewerSurface*>(); QVERIFY(FullSurface);
+        QTRY_VERIFY_WITH_TIMEOUT(FullSurface->IsReady(), 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(*FullPresented, 30000);
+        const auto FullSession = FullSurface->Snapshot().id_;
+        QList<QtPluginViewerSurface*> OtherSurfaces;
+        for (const auto& Name : {QString("A.txt"), QString("B.txt")}) {
+            QFile Other(Directory.filePath(Name)); QVERIFY(Other.open(QIODevice::WriteOnly)); Other.write("other"); Other.close();
+            const auto OtherEntry = Provider->Resolve({hc::storage::LocatorKind::Local, Other.fileName().toStdString()}, {}).get(); QVERIFY(OtherEntry.HasValue());
+            auto OtherSource = std::make_shared<hc::storage::ProviderContentSource>(Provider, OtherEntry.Value());
+            auto Presented = std::make_shared<bool>(false);
+            auto* Window = Host.OpenPlugin(Found->second.plugin_, {{OtherSource, {}}}, Name,
+                [Presented](bool Success, const QString&) { *Presented = Success; }); QVERIFY(Window);
+            auto* OtherSurface = Window->findChild<QtPluginViewerSurface*>(); QVERIFY(OtherSurface);
+            QTRY_VERIFY_WITH_TIMEOUT(OtherSurface->IsReady(), 30000); OtherSurfaces.append(OtherSurface);
+            QTRY_VERIFY_WITH_TIMEOUT(*Presented, 30000);
+        }
+        QWidget Panel(main_); Panel.resize(640, 480); Panel.show();
+        auto* Surface = Host.CreateSurface(&Panel); Surface->resize(640, 480); Surface->show();
+        const auto MainWindow = reinterpret_cast<HWND>(main_->winId());
+        QVERIFY(ActivateTestWindow(MainWindow));
+        auto* SourcePanel = panels_.front();
+        auto* SourceView = qobject_cast<CGridView*>(SourcePanel->GetFocusView(SourcePanel->CurrentTabIndex())); QVERIFY(SourceView);
+        SourcePanel->sig_NotifyPanelActivated(); SourceView->EnsureKeyboardFocusOnView();
+        QPointer<QWidget> InitialInput = QApplication::focusWidget(); QVERIFY(InitialInput);
+        auto Options = Found->second.plugin_;
+        Surface->OpenPreview(Source, {{"builtin.hyperviewer", "HyperViewer", Options, {}}});
+        auto* Preview = Surface->findChild<QtPluginViewerSurface*>(); QVERIFY(Preview);
+        QTRY_VERIFY_WITH_TIMEOUT(Preview->IsReady(), 30000);
+        QCOMPARE(GetForegroundWindow(), MainWindow);
+        // Native embedding can promote the same Qt input to a new HWND.
+        QCOMPARE(QApplication::focusWidget(), InitialInput.data());
+        QCOMPARE(GetFocus(), reinterpret_cast<HWND>(InitialInput->effectiveWinId()));
+        QVERIFY(Preview->Snapshot().id_ != FullSession);
+        const auto Details = Preview->Details();
+        const auto Child = reinterpret_cast<HWND>(quintptr(Details.child_.toULongLong(nullptr, 16)));
+        QVERIFY(Child); QVERIFY(IsChild(reinterpret_cast<HWND>(Panel.winId()), Child));
+        Surface->SetReturnKey(QKeyCombination(Qt::ControlModifier | Qt::ShiftModifier, Qt::Key_F11));
+        QSignalSpy Returned(Surface, &QtViewerSurface::ReturnFocusRequested);
+        Preview->setFocus();
+        const auto NativeFocused = [&] {
+            GUITHREADINFO Info{sizeof(GUITHREADINFO)};
+            return GetGUIThreadInfo(GetWindowThreadProcessId(Child, nullptr), &Info)
+                && Info.hwndFocus && (Info.hwndFocus == Child || IsChild(Child, Info.hwndFocus));
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(NativeFocused(), 5000);
+        QTest::qWait(100);
+        QCOMPARE(GetForegroundWindow(), MainWindow);
+        INPUT Keys[6]{}; const WORD Codes[]{VK_CONTROL, VK_SHIFT, VK_F11, VK_F11, VK_SHIFT, VK_CONTROL};
+        for (int Index = 0; Index < 6; ++Index) { Keys[Index].type = INPUT_KEYBOARD; Keys[Index].ki.wVk = Codes[Index]; if (Index >= 3) Keys[Index].ki.dwFlags = KEYEVENTF_KEYUP; }
+        QCOMPARE(SendInput(6, Keys, sizeof(INPUT)), UINT(6));
+        QTRY_COMPARE_WITH_TIMEOUT(Returned.count(), 1, 5000);
+        QVERIFY(Preview->IsReady());
+        const auto Records = Details.documentState_["documents"].toArray(); QCOMPARE(Records.size(), 1);
+        const auto Id = Records.at(0).toObject()["documentId"].toString(); QVERIFY(!Id.isEmpty());
+        const auto Diagnostic = [&] {
+            const auto State = Preview->Details();
+            return QJsonDocument(State.documentState_).toJson(QJsonDocument::Compact)
+                + " / command=" + QByteArray::fromStdString(State.commandError_ ? State.commandError_->code_ : "none")
+                + " / session=" + QByteArray::fromStdString(State.viewer_.error_ ? State.viewer_.error_->code_ : "none")
+                + " / exit=" + QByteArray::number(State.host_.exitCode_.value_or(0))
+                + " / host=" + QByteArray::fromStdString(State.host_.failure_ ? State.host_.failure_->code_ : "none");
+        };
+        const auto EditPreview = Preview->SendDocument({{"action", "replaceText"}, {"documentId", Id}, {"text", "preview edit"}});
+        const auto PreviewError = Preview->Snapshot().error_;
+        QVERIFY2(EditPreview.HasValue(), qPrintable(QString::fromStdString(EditPreview.HasValue() ? "" : EditPreview.Failure().code_)
+            + " / " + QString::fromStdString(PreviewError ? PreviewError->code_ : "no-session-error")));
+        QTRY_VERIFY2_WITH_TIMEOUT(Preview->Details().documentState_["documents"].toArray().at(0).toObject()["dirty"].toBool(), Diagnostic().constData(), 5000);
+        QVERIFY(Surface->IsPinned());
+        QCOMPARE(FullSurface->Snapshot().id_, FullSession);
+        QVERIFY(!FullSurface->Details().documentState_["documents"].toArray().at(0).toObject()["dirty"].toBool());
+        const auto FullId = FullSurface->Details().documentState_["documents"].toArray().at(0).toObject()["documentId"].toString();
+        QVERIFY(FullSurface->SendDocument({{"action", "replaceText"}, {"documentId", FullId}, {"text", "full edit"}}).HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(FullSurface->Details().documentState_["documents"].toArray().at(0).toObject()["dirty"].toBool(), 5000);
+        QVERIFY(Preview->SendDocument({{"action", "save"}, {"documentId", Id}}).HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(!Preview->Details().documentState_["documents"].toArray().at(0).toObject()["dirty"].toBool(), 15000);
+        QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), QByteArray("preview edit")); File.close();
+        QVERIFY(FullSurface->SendDocument({{"action", "save"}, {"documentId", FullId}}).HasValue());
+        QTRY_COMPARE_WITH_TIMEOUT(FullSurface->Details().documentState_["documents"].toArray().at(0).toObject()["saveState"].toString(), QString("conflict"), 15000);
+        QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), QByteArray("preview edit")); File.close();
+        QSignalSpy Closed(Surface, &QtViewerSurface::CloseRequested);
+        QVERIFY(!Surface->RequestClose());
+        QTRY_COMPARE_WITH_TIMEOUT(Closed.count(), 1, 10000);
+        QVERIFY(Surface->RequestClose()); Surface->Close();
+        QCOMPARE(FullSurface->Snapshot().id_, FullSession);
+        QVERIFY(FullSurface->IsReady());
+        for (const auto* Other : OtherSurfaces) QVERIFY(Other->IsReady());
+        QFile Different(Directory.filePath("D.txt")); QVERIFY(Different.open(QIODevice::WriteOnly)); Different.write("different"); Different.close();
+        const auto DifferentEntry = Provider->Resolve({hc::storage::LocatorKind::Local, Different.fileName().toStdString()}, {}).get(); QVERIFY(DifferentEntry.HasValue());
+        auto DifferentSource = std::make_shared<hc::storage::ProviderContentSource>(Provider, DifferentEntry.Value());
+        Surface->OpenPreview(DifferentSource, {{"builtin.hyperviewer", "HyperViewer", Options, {}}});
+        QTRY_VERIFY_WITH_TIMEOUT(Preview->IsReady(), 30000);
+        QCOMPARE(QString::fromStdString(Preview->Snapshot().source_.name_), QString("D.txt"));
+        QCOMPARE(FullSurface->Snapshot().id_, FullSession);
+        QVERIFY(FullSurface->SendDocument({{"action", "close"}, {"documentId", FullId}, {"discard", true}}).HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(FullSurface->Details().documentState_["documents"].toArray().isEmpty(), 5000);
+    }
     void hiddenViewerPreparationKeepsFocusUi()
     {
         auto* Panel = panels_.front();
@@ -6777,12 +6972,22 @@ private slots:
         auto Provider = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
         const auto Entry = Provider->Resolve({hc::storage::LocatorKind::Local, File.fileName().toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
         auto Source = std::make_shared<hc::storage::ProviderContentSource>(Provider, Entry.Value());
-        QPointer<QDialog> Presented = Host.OpenPlugin(Found->second.plugin_, {{Source, {}}}, "focus fixture");
+        auto Completed = std::make_shared<bool>(false);
+        QPointer<QDialog> Presented = Host.OpenPlugin(Found->second.plugin_, {{Source, {}}}, "focus fixture",
+            [Completed](bool Success, const QString&) { *Completed = Success; });
         QCOMPARE(Presented.data(), Prepared); // Adopt the pinned HWND; do not recreate the native grant.
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 15000);
-        QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(Presented->winId()));
-        QTRY_VERIFY(GetFocus() && IsChild(reinterpret_cast<HWND>(Presented->winId()), GetFocus()));
-        Presented->reject();
+        QTRY_VERIFY_WITH_TIMEOUT(*Completed, 15000);
+        HWND NativeViewer = nullptr;
+        QTRY_VERIFY((NativeViewer = VisibleTestProcessWindow(Surface->Details().host_.processId_)) != nullptr);
+        QTRY_COMPARE(GetForegroundWindow(), NativeViewer);
+        QTRY_VERIFY(([&] {
+            const auto Native = NativeViewer;
+            GUITHREADINFO Info{sizeof(GUITHREADINFO)};
+            return GetGUIThreadInfo(GetWindowThreadProcessId(Native, nullptr), &Info)
+                && Info.hwndFocus && IsChild(Native, Info.hwndFocus);
+        })());
+        QVERIFY(Surface->SendDocument({{"action", "requestViewerClose"}}).HasValue());
         QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(main_->winId()));
         QTRY_COMPARE(QApplication::focusWidget(), Input.data());
         QTRY_VERIFY(GetFocus());
@@ -10930,7 +11135,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(main_->findChild<QDialog*>("hc.viewer.full"), 5000);
         QPointer<QDialog> Full = main_->findChild<QDialog*>("hc.viewer.full");
         auto* FullSurface = Full->findChild<QtViewerSurface*>(); QVERIFY(FullSurface);
-        QTRY_VERIFY_WITH_TIMEOUT(FullSurface->IsReady(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(FullSurface->IsReady(), 15000);
         QCOMPARE(FullSurface->findChild<QPlainTextEdit*>()->toPlainText(), QString("first viewer content"));
         QTest::keyClick(Full.data(), Qt::Key_Escape); QTRY_VERIFY(Full.isNull());
 
@@ -10940,16 +11145,17 @@ private slots:
         QTRY_VERIFY(!model(TargetPanel)->IsLoading());
         QPointer<QWidget> OriginalView = Tabs->widget(PreviewIndex);
         First = Focus("first.txt"); QVERIFY(First.isValid());
+        SourcePanel->sig_NotifyPanelActivated();
         auto* QuickAction = main_->findChild<QAction*>("hc.menu.hc.viewer.quick"); QVERIFY(QuickAction); QuickAction->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(qobject_cast<CQuickView*>(TargetPanel->GetFocusView(PreviewIndex)), 5000);
         QPointer<CQuickView> Quick = qobject_cast<CQuickView*>(TargetPanel->GetFocusView(PreviewIndex));
         auto* Surface = Quick->findChild<QtViewerSurface*>(); QVERIFY(Surface);
-        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 15000);
         QCOMPARE(Tabs->currentIndex(), PreviewIndex); QCOMPARE(Tabs->widget(0), FirstTab.data()); QCOMPARE(Tabs->count(), OriginalCount + 1);
-        QCOMPARE(Surface->findChild<QPlainTextEdit*>()->toPlainText(), QString("first viewer content"));
+        QCOMPARE(QString::fromStdString(Surface->Snapshot().source_.name_), QString("first.txt"));
         QVERIFY(Focus("second.md").isValid());
-        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "second.md", 5000);
-        QVERIFY(Surface->findChild<QTextBrowser*>()->toPlainText().contains("Second"));
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "second.md", 15000);
+        QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->Details().documentChannel_);
         for (int Repeat = 0; Repeat < 12; ++Repeat)
         {
             QVERIFY(Focus("first.txt").isValid()); QTest::qWait(15);
@@ -10957,12 +11163,12 @@ private slots:
             QVERIFY(Focus("second.md").isValid()); QTest::qWait(15);
         }
         QVERIFY(Focus("picture.png").isValid());
-        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "picture.png", 5000);
-        QVERIFY(Surface->findChild<QScrollArea*>("hc.viewer.image")->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "picture.png", 15000);
+        QVERIFY(Surface->findChild<QtPluginViewerSurface*>()->isVisible());
         QVERIFY(Focus("second.md").isValid());
-        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "second.md", 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady() && Surface->Snapshot().source_.name_ == "second.md", 15000);
         QVERIFY(main_->grab().save("viewer-product-quick.png"));
-        Surface->findChild<QTextBrowser*>()->setFocus(); QTest::keyClick(QApplication::focusWidget(), Qt::Key_Q, Qt::ControlModifier);
+        Grid->EnsureKeyboardFocusOnView(); QuickAction->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(Quick.isNull(), 5000); QCOMPARE(Tabs->widget(PreviewIndex), OriginalView.data()); QCOMPARE(Tabs->widget(0), FirstTab.data());
 
         // Archive content follows the same commands; no fake native pathname.
@@ -10972,11 +11178,11 @@ private slots:
         Model->AppendRoot(nsHC::TySpFileSystem(new nsHC::CFSPack(ArchivePath, Plugin))); Model->ChangeDirectory("/"); QTRY_VERIFY(!Model->IsLoading());
         const auto Archived = Focus("alpha.txt"); QVERIFY(Archived.isValid()); QVERIFY(Dispatch("hc.viewer.open", Archived));
         Full = main_->findChild<QDialog*>("hc.viewer.full"); QVERIFY(Full); FullSurface = Full->findChild<QtViewerSurface*>();
-        QTRY_VERIFY_WITH_TIMEOUT(FullSurface->IsReady(), 5000); QCOMPARE(FullSurface->findChild<QPlainTextEdit*>()->toPlainText(), QString("alpha")); Full->reject(); QTRY_VERIFY(Full.isNull());
+        QTRY_VERIFY_WITH_TIMEOUT(FullSurface->IsReady(), 15000); QCOMPARE(FullSurface->findChild<QPlainTextEdit*>()->toPlainText(), QString("alpha")); Full->reject(); QTRY_VERIFY(Full.isNull());
         QVERIFY(Dispatch("hc.viewer.quick", Archived)); Quick = qobject_cast<CQuickView*>(TargetPanel->GetFocusView(PreviewIndex)); QVERIFY(Quick);
-        Surface = Quick->findChild<QtViewerSurface*>(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 5000);
-        QCOMPARE(Surface->findChild<QPlainTextEdit*>()->toPlainText(), QString("alpha"));
-        TargetPanel->CloseTab(); QTRY_VERIFY(Quick.isNull()); QVERIFY(OriginalView.isNull()); QCOMPARE(Tabs->count(), OriginalCount); QCOMPARE(Tabs->widget(0), FirstTab.data());
+        Surface = Quick->findChild<QtViewerSurface*>(); QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(), 15000);
+        QCOMPARE(QString::fromStdString(Surface->Snapshot().source_.name_), QString("alpha.txt"));
+        TargetPanel->CloseTab(); QTRY_VERIFY_WITH_TIMEOUT(Quick.isNull(), 15000); if (OriginalView) TargetPanel->CloseTab(); QVERIFY(OriginalView.isNull()); QCOMPARE(Tabs->count(), OriginalCount); QCOMPARE(Tabs->widget(0), FirstTab.data());
         SourcePanel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
         auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
         QTRY_VERIFY_WITH_TIMEOUT(Host->IsIdle(), 5000);

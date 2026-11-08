@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QWindow>
 #include <qt_windows.h>
 
 namespace hc::document
@@ -33,15 +34,18 @@ namespace hc::document
     struct ViewerHostBridge::State
     {
         std::unique_ptr<ViewerWindow> window_;
+        std::unique_ptr<QWindow> parentWindow_;
         std::unique_ptr<HwpHostSession> rhwp_;
         HANDLE abort_ = nullptr;
         QTimer* abortTimer_ = nullptr;
         HWND container_ = nullptr;
         bool closeHandled_ = false, closeForeground_ = false;
         bool failed_ = false;
+        bool preview_ = false;
     };
 
-    ViewerHostBridge::ViewerHostBridge(HWND Container) : state_(std::make_unique<State>()) { state_->container_ = Container; }
+    ViewerHostBridge::ViewerHostBridge(HWND Container, bool Preview) : state_(std::make_unique<State>())
+    { state_->container_ = Container; state_->preview_ = Preview; }
     ViewerHostBridge::~ViewerHostBridge() { Stop(); }
 
     void ViewerHostBridge::Start()
@@ -53,11 +57,23 @@ namespace hc::document
         if (!ConfigDirectory.isEmpty()) qApp->setProperty("documentViewsConfigDir", ConfigDirectory);
         const auto Root = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recovery/viewer";
         state_->window_ = std::make_unique<ViewerWindow>(Root);
+        state_->window_->setProperty("hc.quickPreview", state_->preview_);
         state_->window_->ConfigureHwp(MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));
         state_->rhwp_ = std::make_unique<HwpHostSession>(
             QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/rhwp",
             MakeProductHwpRuntime(QCoreApplication::applicationDirPath(), QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));
         state_->window_->winId();
+        if (state_->preview_) {
+            // This is a newly created session. Never adopt a full viewer's window.
+            state_->window_->setAttribute(Qt::WA_ShowWithoutActivating);
+            state_->parentWindow_.reset(QWindow::fromWinId(reinterpret_cast<WId>(state_->container_)));
+            if (!state_->parentWindow_) { state_->failed_ = true; return; }
+            state_->window_->windowHandle()->setParent(state_->parentWindow_.get());
+            Resize();
+            state_->window_->show();
+            // Consume the helper's STARTF_USESHOWWINDOW/SW_HIDE without activation.
+            ShowWindow(reinterpret_cast<HWND>(state_->window_->winId()), SW_SHOWNOACTIVATE);
+        }
         QObject::connect(state_->window_.get(), &DocumentWorkspaceWidget::StateChanged,
             state_->window_.get(), [this] {
                 if (!state_->window_->Snapshot()["closeRequested"].toBool()) {
@@ -77,7 +93,7 @@ namespace hc::document
                 GetWindowThreadProcessId(Caller, &CallerPid);
                 GetWindowThreadProcessId(Owner, &OwnerPid);
                 const auto Return = Owner && CallerPid && OwnerPid == CallerPid ? Owner : Caller;
-                if (state_->closeForeground_ && Return && Return != Native && IsWindowVisible(Return)
+                if (!state_->preview_ && state_->closeForeground_ && Return && Return != Native && IsWindowVisible(Return)
                     && IsWindowEnabled(Return) && !IsIconic(Return) && GetForegroundWindow() == Native)
                     SetForegroundWindow(Return);
                 state_->window_->hide();
@@ -105,6 +121,7 @@ namespace hc::document
         if (state_->abort_) { CloseHandle(state_->abort_); state_->abort_ = nullptr; }
         if (state_->rhwp_) { state_->rhwp_->Shutdown(); state_->rhwp_.reset(); }
         if (state_->window_) { state_->window_->Checkpoint(); state_->window_.reset(); }
+        state_->parentWindow_.reset();
     }
 
     bool ViewerHostBridge::Load(const wchar_t* Path)
@@ -118,6 +135,16 @@ namespace hc::document
     void ViewerHostBridge::Focus()
     {
         if (state_->window_ && state_->window_->isVisible()) state_->window_->Handle({{"action", "focus"}});
+    }
+
+    void ViewerHostBridge::Resize()
+    {
+        if (!state_->preview_ || !state_->window_) return;
+        RECT Bounds{};
+        if (!GetClientRect(state_->container_, &Bounds)) return;
+        const auto Scale = state_->window_->devicePixelRatioF();
+        state_->window_->setGeometry(0, 0, qRound((Bounds.right - Bounds.left) / Scale),
+            qRound((Bounds.bottom - Bounds.top) / Scale));
     }
 
     void ViewerHostBridge::SetAbort(HANDLE Event)
@@ -167,7 +194,9 @@ namespace hc::document
         }
         const auto Dispatch = [this](const QJsonObject& Command) {
             const auto Action = (Command.contains("messageType") ? Command["payload"].toObject() : Command)["action"].toString();
-            if (Action == "present") {
+            if (Action == "present" && state_->preview_) {
+                Resize(); state_->window_->show();
+            } else if (Action == "present") {
                 // A warm viewer may predate a resize in another viewer window.
                 if (!state_->window_->isVisible()) state_->window_->RestoreWindowSize();
                 state_->window_->show();
@@ -199,7 +228,8 @@ namespace hc::document
         return true;
     }
 
-    HWND ViewerHostBridge::Child() const { return nullptr; }
+    HWND ViewerHostBridge::Child() const
+    { return state_->preview_ && state_->window_ ? reinterpret_cast<HWND>(state_->window_->winId()) : nullptr; }
     bool ViewerHostBridge::Failed() const { return state_->failed_; }
     std::string ViewerHostBridge::Diagnostic() const { return R"({"error":"viewer-not-ready"})"; }
 }

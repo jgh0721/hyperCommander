@@ -11,12 +11,13 @@ namespace hc::document
     class ViewerHostBridge final
     {
     public:
-        explicit ViewerHostBridge(HWND Container);
+        explicit ViewerHostBridge(HWND Container, bool Preview = false);
         ~ViewerHostBridge();
         void Start();
         void Stop();
         bool Load(const wchar_t* Path);
         void Focus();
+        void Resize();
         void SetAbort(HANDLE Event);
         bool Exchange(const char* Input, unsigned Size, std::string& Output);
         HWND Child() const;

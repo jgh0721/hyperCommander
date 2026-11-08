@@ -64,10 +64,18 @@ extern "C" __declspec(dllexport) void __stdcall ListCloseWindow(HWND Window)
     if (State && State->file_.find(L"hang-close") != std::wstring::npos) Sleep(INFINITE);
     DestroyWindow(Window);
 }
-extern "C" __declspec(dllexport) int __stdcall ListSendCommand(HWND Window, int, int)
+extern "C" __declspec(dllexport) int __stdcall ListSendCommand(HWND Window, int Command, int Parameter)
 {
     auto* State = reinterpret_cast<Viewer*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
     if (!State || State->thread_ != GetCurrentThreadId()) return 1;
+    if (Command == 4 && Parameter == 77) {
+        const auto File = CreateFileW(State->file_.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (File == INVALID_HANDLE_VALUE) return 1;
+        const char Text[] = "saved by WLX"; DWORD Written = 0;
+        const bool Saved = WriteFile(File, Text, sizeof(Text) - 1, &Written, nullptr) && Written == sizeof(Text) - 1 && SetEndOfFile(File);
+        CloseHandle(File); return Saved ? 0 : 1;
+    }
     if (State->file_.find(L"crash-command") != std::wstring::npos) RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, nullptr);
     return 0;
 }

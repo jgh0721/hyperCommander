@@ -22,6 +22,9 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QJsonArray>
+#include <qt_windows.h>
+#include "qtMessageDialog.hpp"
 
 using namespace hc::viewer;
 namespace
@@ -165,7 +168,10 @@ struct QtViewerSurface::State
     ViewerChoices pluginChoices_;
     ViewerSelection pluginSelection_;
     std::vector<PluginViewerChoice> automaticChoices_;
+    std::vector<PluginViewerChoice> previewChoices_;
     bool automaticPlugin_ = false;
+    mutable bool previewPinned_ = false;
+    bool closeApproved_ = false;
     std::optional<PluginViewerChoice> selectedPlugin_;
     std::vector<QAction*> builtinActions_;
     explicit State(ViewerService& Service) : service_(Service) {}
@@ -247,6 +253,7 @@ void QtViewerSurface::ConfigurePlugins(QtPluginViewerController* Controller, Vie
     auto& S = *state_; if (S.pluginViewer_) return;
     S.pluginChoices_ = std::move(Choices); S.pluginViewer_ = new QtPluginViewerSurface(Controller, S.pages_); S.pages_->addWidget(S.pluginViewer_);
     S.pluginSelection_ = std::move(Selection);
+    connect(S.pluginViewer_, &QtPluginViewerSurface::ReturnFocusRequested, this, &QtViewerSurface::ReturnFocusRequested);
     S.pluginMenu_->menuAction()->setVisible(true);
     connect(S.pluginViewer_, &QtPluginViewerSurface::Ready, this, [this](const QString& Id) {
         auto& S = *state_; if ((!S.selectedPlugin_ && !S.automaticPlugin_) || QString::fromStdString(S.pluginViewer_->Snapshot().id_) != Id) return;
@@ -258,15 +265,41 @@ void QtViewerSurface::ConfigurePlugins(QtPluginViewerController* Controller, Vie
         }
         S.ready_ = true; S.stop_->setEnabled(false);
         if (auto* Find = findChild<QAction*>("hc.viewer.find")) Find->setEnabled(S.pluginViewer_->CanSearch());
-        S.status_->setText(tr("%1 · %2").arg(QString::fromStdString(S.pluginViewer_->Snapshot().source_.name_), S.selectedPlugin_->name_));
+        const auto Details = S.pluginViewer_->Details();
+        auto Status = tr("%1 · %2").arg(QString::fromStdString(S.pluginViewer_->Snapshot().source_.name_), S.selectedPlugin_->name_);
+        if (!Details.documentChannel_) Status += Details.directOriginal_
+            ? tr(" · 원본 직접 저장 · 충돌 처리는 플러그인 담당") : tr(" · 읽기 전용 복사본");
+        S.status_->setText(Status);
         emit Ready(Id);
     });
     connect(S.pluginViewer_, &QtPluginViewerSurface::Failed, this, [this](const QString& Code) { if (state_->selectedPlugin_ || state_->automaticPlugin_) fail(Code); });
     connect(S.pluginViewer_, &QtPluginViewerSurface::NoMatch, this, [this] {
         if (!state_->automaticPlugin_) return;
+        if (state_->request_.purpose_ == ViewerPurpose::QuickPreview) { fail("viewer-no-match"); return; }
         state_->request_.provider_.clear(); reopen();
     });
-    connect(S.pluginViewer_, &QtPluginViewerSurface::CloseRequested, this, &QtViewerSurface::CloseRequested);
+    connect(S.pluginViewer_, &QtPluginViewerSurface::CloseRequested, this, [this] {
+        state_->closeApproved_ = true;
+        emit CloseRequested();
+    });
+}
+std::vector<QtViewerSurface::PluginViewerChoice> QtViewerSurface::currentPreviewChoices() const
+{
+    auto Choices = state_->previewChoices_;
+    if (!state_->pluginChoices_) return Choices;
+    const auto Current = state_->pluginChoices_();
+    for (auto& Choice : Choices) {
+        if (Choice.id_ == "builtin.hyperviewer") continue;
+        const auto It = std::find_if(Current.begin(), Current.end(), [&](const auto& Item) {
+            return Item.options_.binaryPath_.compare(Choice.options_.binaryPath_, Qt::CaseInsensitive) == 0;
+        });
+        if (It == Current.end()) Choice.options_.approval_.approved_ = false;
+        else {
+            const auto Writer = Choice.options_.writer_;
+            Choice.options_ = It->options_; Choice.options_.writer_ = Writer;
+        }
+    }
+    return Choices;
 }
 void QtViewerSurface::refreshPluginMenu()
 {
@@ -275,20 +308,24 @@ void QtViewerSurface::refreshPluginMenu()
     {
         auto* Action = S.pluginMenu_->addAction(Force ? tr("플러그인 우선으로 자동 선택") : tr("자동 선택"));
         Action->setObjectName(Force ? "hc.viewer.plugin.force" : "hc.viewer.plugin.automatic");
-        Action->setEnabled(static_cast<bool>(S.request_.source_));
+        Action->setEnabled(static_cast<bool>(S.request_.source_) && !IsPinned());
         connect(Action, &QAction::triggered, this, [this, Force] {
+            if (IsPinned()) return;
             state_->request_.provider_ = Force ? "wlx-force" : "wlx-auto"; reopen();
         });
     }
     S.pluginMenu_->addSeparator();
-    const auto Choices = S.pluginChoices_ ? S.pluginChoices_() : std::vector<PluginViewerChoice>{};
+    const auto Choices = S.request_.purpose_ == ViewerPurpose::QuickPreview ? currentPreviewChoices()
+        : S.pluginChoices_ ? S.pluginChoices_() : std::vector<PluginViewerChoice>{};
     for (const auto& Choice : Choices)
     {
         auto* Action = S.pluginMenu_->addAction(Choice.name_); Action->setObjectName("hc.viewer.plugin." + Choice.id_);
-        Action->setEnabled(static_cast<bool>(S.request_.source_));
+        Action->setEnabled(static_cast<bool>(S.request_.source_) && !IsPinned());
         connect(Action, &QAction::triggered, this, [this, Id = Choice.id_] {
+            if (IsPinned()) return;
             // Re-read approval when executing: the menu may predate revocation.
-            const auto Current = state_->pluginChoices_();
+            const auto Current = state_->request_.purpose_ == ViewerPurpose::QuickPreview ? currentPreviewChoices()
+                : state_->pluginChoices_();
             const auto It = std::find_if(Current.begin(), Current.end(), [&](const auto& Item) { return Item.id_ == Id; });
             if (It == Current.end())
             {
@@ -302,6 +339,7 @@ void QtViewerSurface::refreshPluginMenu()
 }
 void QtViewerSurface::Open(std::shared_ptr<hc::storage::IContentSource> Source, ViewerPurpose Purpose)
 {
+    if (IsPinned()) return;
     state_->request_ = ViewerRequest{}; state_->request_.source_ = std::move(Source); state_->request_.purpose_ = Purpose;
     const auto Mode = state_->pluginSelection_ ? state_->pluginSelection_() : PluginViewerSelectionMode::Manual;
     if (state_->pluginViewer_ && Mode != PluginViewerSelectionMode::Manual)
@@ -310,13 +348,15 @@ void QtViewerSurface::Open(std::shared_ptr<hc::storage::IContentSource> Source, 
 }
 void QtViewerSurface::reopen()
 {
+    if (IsPinned()) return;
     auto Request = state_->request_; auto SelectedPlugin = state_->selectedPlugin_; Close(); state_->request_ = std::move(Request); auto& S = *state_;
     if (S.pluginViewer_ && (S.request_.provider_ == "wlx-auto" || S.request_.provider_ == "wlx-force"))
     {
         S.automaticPlugin_ = true;
         // Capture names and options together; later settings edits must not
         // change the identity associated with the selected candidate index.
-        S.automaticChoices_ = S.pluginChoices_ ? S.pluginChoices_() : std::vector<PluginViewerChoice>{};
+        S.automaticChoices_ = S.request_.purpose_ == ViewerPurpose::QuickPreview ? currentPreviewChoices()
+            : S.pluginChoices_ ? S.pluginChoices_() : std::vector<PluginViewerChoice>{};
         std::vector<hc::plugins::PluginViewerOptions> Candidates;
         for (const auto& Choice : S.automaticChoices_)
         { auto Options = Choice.options_; Options.purpose_ = S.request_.purpose_; Candidates.push_back(std::move(Options)); }
@@ -342,9 +382,20 @@ void QtViewerSurface::reopen()
     if (!Opened.HasValue()) { fail(QString::fromStdString(Opened.Failure().code_)); return; }
     S.handle_ = std::move(Opened.Value()); S.stop_->setEnabled(true); S.timer_->start();
 }
+void QtViewerSurface::OpenPreview(std::shared_ptr<hc::storage::IContentSource> Source, std::vector<PluginViewerChoice> Choices)
+{
+    if (IsPinned()) return;
+    state_->previewChoices_ = std::move(Choices);
+    state_->request_ = ViewerRequest{};
+    state_->request_.source_ = std::move(Source);
+    state_->request_.purpose_ = ViewerPurpose::QuickPreview;
+    state_->request_.provider_ = "wlx-force";
+    reopen();
+}
 void QtViewerSurface::Close()
 {
     auto& S = *state_; S.timer_->stop(); S.ready_ = false;
+    S.previewPinned_ = false; S.closeApproved_ = false;
     S.text_->ClearSource(); S.previousPart_->setVisible(false); S.nextPart_->setVisible(false);
     if (S.pluginViewer_) S.pluginViewer_->Close(); S.selectedPlugin_.reset();
     S.automaticPlugin_ = false; S.automaticChoices_.clear();
@@ -356,7 +407,69 @@ void QtViewerSurface::Close()
     S.markdown_->clear(); S.image_->SetDocument({}); S.stop_->setEnabled(false); S.fit_->setEnabled(false);
     S.status_->setText(tr("뷰어를 닫았습니다."));
 }
+bool QtViewerSurface::IsPinned() const
+{
+    auto& S = *state_;
+    if (S.request_.purpose_ != ViewerPurpose::QuickPreview || !S.pluginViewer_) return false;
+    const auto Details = S.pluginViewer_->Details();
+    if (S.pluginViewer_->WasInteracted() || Details.directOriginal_) S.previewPinned_ = true;
+    if (Details.documentChannel_) {
+        for (const auto& Item : Details.documentState_["documents"].toArray()) {
+            const auto Record = Item.toObject();
+            if (Record["dirty"].toBool() || Record["saving"].toBool()) S.previewPinned_ = true;
+        }
+    }
+    // Pin before editing, including native children for which Qt has no focus widget.
+    const auto Child = reinterpret_cast<HWND>(quintptr(Details.child_.toULongLong(nullptr, 16)));
+    GUITHREADINFO Info{sizeof(GUITHREADINFO)};
+    const auto Thread = Child ? GetWindowThreadProcessId(Child, nullptr) : 0;
+    if (Thread && GetGUIThreadInfo(Thread, &Info) && Info.hwndFocus
+        && (Info.hwndFocus == Child || IsChild(Child, Info.hwndFocus))) S.previewPinned_ = true;
+    if (S.previewPinned_) S.status_->setText(tr("편집 보호를 위해 현재 파일 유지 · 닫을 때 변경 내용을 확인합니다."));
+    return S.previewPinned_;
+}
+void QtViewerSurface::Pin() { if (state_->request_.purpose_ == ViewerPurpose::QuickPreview) state_->previewPinned_ = true; }
+void QtViewerSurface::ResumeFollowing()
+{
+    auto& S = *state_;
+    emit ReturnFocusRequested();
+    if (!S.pluginViewer_ || !S.pluginViewer_->Details().documentChannel_) {
+        if (RequestClose()) { Close(); emit FollowSelectionRequested(); }
+        return;
+    }
+    const auto Id = S.pluginViewer_->Snapshot().id_;
+    const auto Sent = S.pluginViewer_->SendDocument({{"action", "prepareClose"}});
+    if (!Sent.HasValue()) return;
+    auto* Timer = new QTimer(this); Timer->setInterval(25);
+    connect(Timer, &QTimer::timeout, this, [this, Timer, Id, Sequence = Sent.Value(), Attempts = 0]() mutable {
+        const auto Details = state_->pluginViewer_->Details();
+        if (Details.viewer_.id_ != Id || ++Attempts > 400) { Timer->stop(); Timer->deleteLater(); return; }
+        if (Details.commandSequence_ < Sequence) return;
+        Timer->stop(); Timer->deleteLater();
+        if (!Details.commandError_ && Details.documentReply_["canClose"].toBool()) {
+            Close(); emit FollowSelectionRequested();
+        } else state_->status_->setText(tr("미저장 변경 또는 진행 중인 작업이 있습니다. 저장을 마친 뒤 선택 따라가기를 누르십시오."));
+    });
+    Timer->start();
+}
+bool QtViewerSurface::RequestClose()
+{
+    auto& S = *state_;
+    if (S.closeApproved_ || !S.pluginViewer_) return true;
+    if (!S.pluginViewer_->Details().documentChannel_) {
+        if (IsPinned() && hc::ui::MessageDialog::question(this, tr("미리보기 닫기"),
+            tr("이 플러그인은 미저장 상태를 알려주지 않습니다. 플러그인에서 변경 내용을 저장했는지 확인한 뒤 닫으십시오.\n미리보기를 닫으시겠습니까?"),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) return false;
+        S.closeApproved_ = true;
+        return true;
+    }
+    // The helper owns saving and its modal confirmation. Never block the GUI on IPC.
+    const auto Sent = S.pluginViewer_->SendDocument({{"action", "requestViewerClose"}});
+    if (!Sent.HasValue()) S.status_->setText(tr("문서 닫기를 요청할 수 없습니다. 문서 상태를 확인하십시오."));
+    return false;
+}
 bool QtViewerSurface::IsReady() const { return state_->ready_; }
+void QtViewerSurface::SetReturnKey(QKeyCombination Key) { if (state_->pluginViewer_) state_->pluginViewer_->SetReturnKey(Key); }
 ViewerSnapshot QtViewerSurface::Snapshot() const
 {
     if ((state_->selectedPlugin_ || state_->automaticPlugin_) && state_->pluginViewer_) return state_->pluginViewer_->Snapshot();
@@ -462,7 +575,7 @@ void QtViewerSurface::find(bool Backward)
 void QtViewerSurface::Execute(const QString& Command)
 {
     auto& S = *state_;
-    if (Command == "cancel") { Close(); return; }
+    if (Command == "cancel") { if (RequestClose()) Close(); return; }
     if (Command == "find") { S.searchBar_->show(); S.search_->setFocus(); S.search_->selectAll(); return; }
     if (Command == "previous-part" || Command == "next-part") { S.text_->Page(Command == "next-part"); return; }
     if (S.selectedPlugin_ && S.pluginViewer_) { S.pluginViewer_->Execute(Command); return; }

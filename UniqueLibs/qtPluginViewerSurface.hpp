@@ -49,12 +49,15 @@ public:
     hc::storage::Result<std::uint64_t> OpenDocuments(std::vector<hc::plugins::HostedViewerSession::DocumentInput> Inputs);
     bool OpenPrepared(std::vector<hc::plugins::HostedViewerSession::DocumentInput> Inputs);
     bool IsReady() const;
+    void SetReturnKey(QKeyCombination Key);
+    bool WasInteracted() const;
     hc::viewer::ViewerSnapshot Snapshot() const;
 signals:
     void Ready(const QString& SessionId);
     void Failed(const QString& Code);
     void NoMatch();
     void CloseRequested();
+    void ReturnFocusRequested();
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
     void focusInEvent(QFocusEvent* Event) override;
@@ -76,6 +79,8 @@ private:
     std::unique_ptr<hc::document::ImageTraceSpan> presentationTrace_;
     bool appearancePending_ = true;
     bool ready_ = false;
+    bool preview_ = false, interacted_ = false;
     std::uint64_t preparedSequence_ = 0;
     QString lastSearch_, clipboardToken_;
+    QKeyCombination returnKey_;
 };
