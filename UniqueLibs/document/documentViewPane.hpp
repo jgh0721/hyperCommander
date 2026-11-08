@@ -3,6 +3,7 @@
 #include "documentViewKind.hpp"
 #include "documentStatusBar.hpp"
 #include "documentStorageAdapter.hpp"
+#include "commonLibs/document/documentRecovery.hpp"
 #include "hwpOpenWindow.hpp"
 #include <QWidget>
 #include <QJsonObject>
@@ -55,6 +56,9 @@ namespace hc::document
         struct SessionSerialization { QByteArray bytes_; std::optional<storage::Error> error_; };
         SessionSerialization SerializeSession() const;
         QByteArray SessionContent() const;
+        std::optional<TextRecoveryState> CaptureTextRecovery(QByteArray& Bytes, bool IncludeText = true) const;
+        bool RestoreTextRecovery(const RecoverySnapshot& Record);
+        void RestoreTextPosition(const TextRecoveryState& State);
         storage::Result<QByteArray> Export(const QString& Destination,bool SaveEpubOriginal=false) const;
         DocumentEncoder CaptureSave(const QString& Destination, bool SaveEpubOriginal = false, std::optional<QByteArray> Content = std::nullopt,
             std::optional<storage::Error> ContentError = std::nullopt) const;

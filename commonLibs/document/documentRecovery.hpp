@@ -4,6 +4,13 @@
 namespace hc::document
 {
     inline constexpr std::uint32_t RecoveryEngineSchema = 1;
+    // Recovery text is lossless UTF-8, independent of the selected save encoding.
+    struct TextRecoveryState
+    {
+        std::string encoding_ = "UTF-8", lineEnding_ = "LF", baselineSha256_;
+        bool bom_ = false, untitled_ = false;
+        std::int64_t anchor_ = 0, caret_ = 0, firstLine_ = 0, xOffset_ = 0;
+    };
     struct RecoverySnapshot
     {
         DocumentSnapshot document_;
@@ -13,6 +20,8 @@ namespace hc::document
         // alone. These pins describe recovery compatibility, not write authority.
         std::string bundleSha256_, format_;
         std::uint32_t engineSchema_ = 0;
+        std::optional<TextRecoveryState> text_;
+        std::string ownerWindow_;
     };
     class IRecoveryStore
     {

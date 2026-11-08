@@ -2,6 +2,7 @@
 #include "commonLibs/document/documentSaveCoordinator.hpp"
 #include "commonLibs/document/documentTypes.hpp"
 #include "documentTextCodec.hpp"
+#include "commonLibs/document/documentRecovery.hpp"
 #include <QByteArray>
 #include <QString>
 #include <QImage>
@@ -24,6 +25,8 @@ namespace hc::document
         QString eol_ = "CRLF";
         storage::EntrySnapshot source_;
         std::optional<SourceIdentity> recoveryOrigin_;
+        std::optional<RecoverySnapshot> recoveryRecord_;
+        bool recoveryOriginalMatched_ = false;
     };
     struct LocalSaveResult
     {

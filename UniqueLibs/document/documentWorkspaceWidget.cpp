@@ -46,6 +46,13 @@
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "text/QTextView.h"
 #include <QFileSystemWatcher>
+#include <QLockFile>
+#include <QInputMethod>
+#include <QProgressDialog>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QDialogButtonBox>
+#include <QDateTime>
 #include <QDynamicPropertyChangeEvent>
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include <QtConcurrent>
@@ -194,7 +201,7 @@ namespace hc::document
     {
         QString id_ = QUuid::createUuid().toString(QUuid::Id128), path_, error_;
         QString sourceToken_, pendingToken_, recoveredName_, temporarySource_, displayName_;
-        QString readingPath_,readingEntry_;
+        QString readingPath_,readingEntry_, recoveryNotice_;
         QString navigationAfterSave_;
         QByteArray pendingHash_;
         std::shared_ptr<LocalSave> activeSave_, queuedSave_;
@@ -222,6 +229,9 @@ namespace hc::document
         bool navigating_ = false, closeRequested_ = false, choosingSavePath_ = false;
         bool reloadAfterClose_ = false;
         bool originalAuthority_ = false, originalSave_ = true, closed_ = false, checkpointing_ = false, closeAfterSave_ = false, recovered_ = false;
+        std::optional<RecoverySnapshot> checkpointReceipt_;
+        std::optional<TextRecoveryState> cleanRestoreState_;
+        bool hotExitRestore_ = false;
         QJsonObject preparation_;
         QByteArray pendingBytes_;
         bool Dirty() const { return session_->Snapshot().dirty_; }
@@ -237,6 +247,11 @@ namespace hc::document
         InitializePortedViewResources();
         setWindowIcon(QIcon(Hosted ? ":/icons/app/hyperviewer.svg" : ":/icons/app/hypereditor.svg"));
         recovery_ = std::make_shared<DocumentRecoveryStore>(recoveryRoot_);
+        if (!Hosted && QDir().mkpath(recoveryRoot_ + "/sessions")) {
+            hotExitLock_ = std::make_shared<QLockFile>(recovery_->SessionLockPath(workspaceId_));
+            hotExitLock_->setStaleLockTime(0);
+            if (!hotExitLock_->tryLock()) hotExitLock_.reset();
+        }
         setObjectName("documentWorkspace"); setWindowTitle(Hosted ? "HyperViewer" : "HyperEditor"); resize(hc::defaults::edit::WindowSize);
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
         hc::document::startup::Scope BasicTrace("editor.basicWidgets");
@@ -352,6 +367,7 @@ namespace hc::document
             auto Tab = active(); if (Tab) closeTab(int(std::distance(documents_.begin(), std::find(documents_.begin(), documents_.end(), Tab))));
         });
         Add(tr("작업 취소"), "cancelDocument", [this] {
+            if (hotExitClosing_) { cancelHotExitClose(); return; }
             if (auto Tab = active()) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->queuedSave_.reset();Tab->composingSave_=false;Tab->pane_->Cancel(); }
         });
         Add(tr("인쇄…"), "printDocument",[this]{if(auto Tab=active())Tab->pane_->Execute({{"action","print"}});});
@@ -402,23 +418,7 @@ namespace hc::document
         auto* EpubReopen=new QAction(tr("저장본 다시 열기"),this);EpubReopen->setObjectName("epubReopenDocument");EpubReopen->setProperty("documentIconName","open");addAction(EpubReopen);
         connect(EpubReopen,&QAction::triggered,this,[this]{if(auto Tab=active())if(auto* Reopen=Tab->pane_->findChild<QAction*>("epubReopen"))Reopen->trigger();});
         Restore->setObjectName("documentRecovery");
-        connect(Restore, &QAction::triggered, this, [this] {
-            auto* Watcher = new QFutureWatcher<storage::Result<std::vector<RecoverySnapshot>>>(this); ++recoveryWorkers_;
-            connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher] {
-                auto Result = Watcher->result(); Watcher->deleteLater(); --recoveryWorkers_;
-                if (closingWorkspace_) { tryFinishClose(); return; }
-                if (!Result.HasValue()) { ShowShellError(Message(QString::fromStdString(Result.Failure().code_))); return; }
-                QStringList Labels, Paths;
-                for (const auto& Record : Result.Value()) {
-                    Labels.append(QDir::toNativeSeparators(QString::fromStdString(Record.document_.source_.localPath_)) + " · " + QString::number(Record.document_.revision_) + " · " + QString::fromStdString(Record.document_.id_).left(8));
-                    Paths.append(QString::fromStdString(Record.snapshotPath_));
-                }
-                if (Paths.isEmpty()) { hc::ui::MessageDialog::information(this, tr("복구 목록"), tr("복구할 문서가 없습니다.")); return; }
-                bool Accepted = false; const auto Item = hc::ui::InputDialog::getItem(this, tr("복구 목록"), tr("복구할 문서"), Labels, 0, false, &Accepted);
-                if (Accepted) Handle({{"action", "recover"}, {"path", Paths.value(Labels.indexOf(Item))}});
-            });
-            auto Recovery = recovery_; Watcher->setFuture(QtConcurrent::run([Recovery] { return Recovery->List(); }));
-        });
+        connect(Restore, &QAction::triggered, this, &DocumentWorkspaceWidget::ShowRecoveryManager);
         connect(tabs_, &QTabWidget::tabCloseRequested, this, [this](int Index) {
             if (searchPanel_ && tabs_->widget(Index) == searchPanel_) { tabs_->removeTab(Index); searchPanel_->hide(); return; }
             auto* Pane = tabs_->widget(Index); for (std::size_t At = 0; At < documents_.size(); ++At) if (documents_[At]->pane_ == Pane) { closeTab(int(At)); break; }
@@ -797,6 +797,7 @@ namespace hc::document
         preferences_ = Dialog; Dialog->setAttribute(Qt::WA_DeleteOnClose);
         connect(Dialog, &DocumentSettingsDialog::PreferencesSaved, this, &DocumentWorkspaceWidget::refreshPreferences);
         connect(Dialog, &DocumentSettingsDialog::ClearRecentRequested, this, &DocumentWorkspaceWidget::clearRecent);
+        connect(Dialog, &DocumentSettingsDialog::RecoveryManagerRequested, this, &DocumentWorkspaceWidget::ShowRecoveryManager);
         if (!hosted_) Dialog->setWindowModality(Qt::WindowModal);
         const auto Available = screen()->availableGeometry();
         const auto Center = mapToGlobal(rect().center());
@@ -919,6 +920,7 @@ namespace hc::document
     }
     QJsonObject DocumentWorkspaceWidget::newDocument()
     {
+        if (hotExitClosing_) return Error("document-hotexit-closing");
         if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
         const auto Path = recoveryRoot_ + "/untitled-" + QUuid::createUuid().toString(QUuid::Id128) + ".txt";
         if (!QDir().mkpath(recoveryRoot_) || !StoreCopy(Path, {})) return Error("document-new-file-failed");
@@ -971,6 +973,7 @@ namespace hc::document
     QJsonObject DocumentWorkspaceWidget::open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
         const QString& RecoveryPath, const QString& DisplayName)
     {
+        if (hotExitClosing_) return Error("document-hotexit-closing");
         if (!QFileInfo(Path).isAbsolute() || Path.contains(QChar::Null)) return Error("document-open-path");
         for (const auto& Tab : documents_) if (Tab->hostSlot_ && HostSlot) {
             if(Tab->pane_->IsProcessDocument()&&!Tab->pane_->RequestClose()) {
@@ -996,6 +999,7 @@ namespace hc::document
         if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
         auto Tab = std::make_shared<DocumentWorkspaceWidget::Tab>(); Tab->path_ = Path;
         Tab->session_->SetUnlimitedBytes(hosted_);
+        Tab->hotExitRestore_ = pendingHotExitRestore_;
         Tab->displayName_ = DisplayName;
         Tab->encodingOverride_ = std::exchange(pendingOpenEncoding_, {});
         Tab->hostSlot_ = HostSlot; Tab->sourceToken_ = SourceToken; Tab->broker_ = Broker; Tab->recovered_ = !RecoveryPath.isEmpty();
@@ -1196,6 +1200,7 @@ namespace hc::document
                     QImage Image;{std::lock_guard Lock(Progress->mutex_);Image=Progress->image_;Tab->preparation_=Progress->preparation_;}
                     Tab->pane_->ShowLoadingPreview(Image,true);
                 }
+                if (Tab->hotExitRestore_) restorationIncomplete_ = true;
                 Tab->session_->CompleteOpen(Generation, Result.Failure()); Tab->error_ = QString::fromStdString(Result.Failure().code_);
             }
             else {
@@ -1206,6 +1211,11 @@ namespace hc::document
                     Tab->input_.encoding_ = CanonicalEncodingName(Encoding).isEmpty() ? QStringLiteral("UTF-8") : CanonicalEncodingName(Encoding);
                     const int Bom = Settings.value("textView/saveBomMode").toInt();
                     Tab->input_.bom_ = EncodingInfo(Tab->input_.encoding_).bomCapable_ && (Bom == 1 || (Bom == 0 && Tab->input_.encoding_.startsWith("UTF-16")));
+                }
+                if (Tab->input_.recoveryRecord_) {
+                    Tab->originalAuthority_ = Tab->input_.recoveryOriginalMatched_;
+                    Tab->recovered_ = !Tab->originalAuthority_;
+                    if (!Tab->originalAuthority_) Tab->temporarySource_ = Tab->path_;
                 }
                 if (Tab->input_.recoveryOrigin_) Tab->recoveredName_ = tr("복구 · ") + QFileInfo(QString::fromStdString(Tab->input_.recoveryOrigin_->localPath_)).fileName();
                 const bool Hwp=Tab->input_.viewId_=="hwp"||Tab->input_.viewId_=="hwpx";
@@ -1225,7 +1235,24 @@ namespace hc::document
                     Tab->everReady_=true;finishProgress(Tab,true);
                     Tab->session_->SetBinaryContent(true);
                     {auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;Tab->session_->CompleteOpen(Generation,OpenedDocument{std::move(Source),Serialized.bytes_.toStdString()});}
+                    if (Tab->input_.recoveryRecord_) {
+                        const auto Record = *Tab->input_.recoveryRecord_;
+                        Tab->loading_ = true;
+                        const bool Restored = Tab->pane_->RestoreTextRecovery(Record);
+                        Tab->loading_ = false;
+                        if (Restored) {
+                            auto Serialized = Tab->pane_->SerializeSession(); Tab->serializationError_ = Serialized.error_;
+                            Tab->session_->Execute("document.setText", Serialized.bytes_.toStdString()); Tab->session_->MarkRecovered();
+                            if (Tab->hotExitRestore_) { auto Origin = Record; Origin.bytes_.clear(); restoredOriginals_.push_back(std::move(Origin)); }
+                            Tab->input_.recoveryRecord_->bytes_.clear();
+                            if (Record.text_->untitled_) Tab->recoveredName_ = tr("새 문서");
+                            else if (Tab->originalAuthority_) Tab->recoveredName_.clear();
+                            Tab->recoveryNotice_ = Tab->originalAuthority_ ? tr("저장하지 않은 변경을 복구했습니다. 원본 파일은 변경하지 않았습니다.")
+                                : tr("복구 내용을 별도 문서로 열었습니다. 원본 파일은 변경하지 않았습니다.");
+                        } else { Tab->error_ = "document-recovery-text-restore"; if (Tab->hotExitRestore_) restorationIncomplete_ = true; }
+                    }
                     Tab->pane_->SetClipboardBroker(clipboardBroker_);
+                    if (auto Position = std::exchange(Tab->cleanRestoreState_, std::nullopt)) Tab->pane_->RestoreTextPosition(*Position);
                     if(auto Restore=std::exchange(Tab->restore_,std::nullopt)) {
                         if(Restore->pdfPage_>0)Tab->pane_->Execute({{"action","pdf.page"},{"page",Restore->pdfPage_-1}});
                         if(!Restore->markdownView_.isEmpty()&&Tab->pane_->IsMarkdown())Tab->pane_->RunViewCommand("markdown."+Restore->markdownView_);
@@ -1247,11 +1274,15 @@ namespace hc::document
                     || (Focus && (Focus == Native || IsChild(Native, Focus)));
                 if (MayFocus && (!hosted_ || IsWindowVisible(Native))) Tab->pane_->Focus();
             }
+            if (!restoredActive_.isEmpty() && IsIdle()) {
+                if (auto Active = find(restoredIds_.value(restoredActive_))) activate(Active);
+                restoredActive_.clear();
+            }
             update(); tryFinishClose();
         });
         auto Recovery = recovery_;
         const QSize PreviewBounds=(Tab->pane_->size()*Tab->pane_->devicePixelRatioF()).expandedTo(QSize(256,256));
-        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, PreviewBounds, Unlimited=hosted_, Override=Tab->encodingOverride_]()->storage::Result<TextInput> {
+        Watcher->setFuture(QtConcurrent::run([Path, Cancellation, RecoveryPath, Recovery, Progress, PreviewBounds, AutoRestore=Tab->hotExitRestore_, Unlimited=hosted_, Override=Tab->encodingOverride_]()->storage::Result<TextInput> {
             const auto Read=[&]()->storage::Result<TextInput> {
                 storage::OperationContext Context; Context.stopToken_ = Cancellation->get_token(); Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
                 Context.reportProgress_=[Progress](const storage::OperationContext::Progress& P){
@@ -1262,8 +1293,19 @@ namespace hc::document
                 if (!RecoveryPath.isEmpty()) {
                     auto Record = Recovery->Read(RecoveryPath.toStdString()); if (!Record.HasValue()) return storage::Result<TextInput>{Record.Failure()};
                     if (auto Stop = Context.Check({"document"})) return storage::Result<TextInput>{*Stop};
+                    if (Record.Value().text_ && AutoRestore && !Record.Value().text_->untitled_
+                        && !Record.Value().text_->baselineSha256_.empty() && Record.Value().document_.source_.sourceToken_.empty()) {
+                        auto Original = ReadTextFile(QString::fromStdString(Record.Value().document_.source_.localPath_), Context);
+                        if (Original.HasValue() && Original.Value().hash_.toHex().toStdString() == Record.Value().text_->baselineSha256_) {
+                            Original.Value().recoveryRecord_ = Record.Value(); Original.Value().recoveryOriginalMatched_ = true; return Original;
+                        }
+                    }
                     if (!StoreCopy(Path, QByteArray::fromStdString(Record.Value().bytes_))) return storage::Result<TextInput>{storage::Error{storage::ErrorCategory::Unavailable, "document-recovery-copy"}};
-                    auto Input = ReadDocumentFile(Path, Context, Unlimited); if (Input.HasValue()) Input.Value().recoveryOrigin_ = Record.Value().document_.source_;
+                    auto Input = ReadDocumentFile(Path, Context, Unlimited);
+                    if (Input.HasValue()) {
+                        Input.Value().recoveryOrigin_ = Record.Value().document_.source_;
+                        if (Record.Value().text_) Input.Value().recoveryRecord_ = Record.Value();
+                    }
                     return Input;
                 }
                 return ReadDocumentFile(Path, Context, Unlimited,[Progress](QImage Image){
@@ -1394,11 +1436,13 @@ namespace hc::document
                 Tab->pane_->ReportSaveFailure(QByteArray::fromStdString(Request->content_),Tab->error_);
                 // A failed/conflicting write never starts a queued write blindly.
                 Tab->queuedSave_.reset();Tab->closeAfterSave_=false;closingWorkspace_=false;
+                if (hotExitClosing_) cancelHotExitClose(Tab->error_);
             } else if(!ExportOnly) {
                 Tab->error_.clear();
                 Tab->pane_->CommitSaved(Destination,Output.bytes_,QByteArray::fromStdString(Request->content_),Result.Value().hash_,!Tab->Dirty());
                 Tab->path_=Destination;Tab->displayName_.clear();Tab->input_.source_=Result.Value().source_;Tab->input_.hash_=Result.Value().hash_;
                 Tab->originalAuthority_=true;Tab->originalSave_=Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u);
+                Tab->recoveryNotice_.clear();
                 Tab->recovered_=false;Tab->recoveredName_.clear();Tab->broker_=false;Tab->sourceToken_.clear();
                 Tab->checkpointedRevision_=std::numeric_limits<std::uint64_t>::max();
                 cleanupRecovery(Tab,Ticket->revision_);
@@ -1445,10 +1489,18 @@ namespace hc::document
             if (!Watcher->result().HasValue()) Tab->error_ = "document-recovery-cleanup";
             Watcher->deleteLater(); --recoveryWorkers_; update(); tryFinishClose();
         });
-        const auto Id = Tab->id_.toStdString(); Watcher->setFuture(QtConcurrent::run([Recovery, Id, ThroughRevision] { return Recovery->Remove(Id, ThroughRevision); }));
+        const auto Id = Tab->id_.toStdString(); const auto Generation = Tab->session_->Snapshot().generation_;
+        const auto Original = Tab->hotExitRestore_ ? std::optional<RecoverySnapshot>{} : Tab->input_.recoveryRecord_;
+        Watcher->setFuture(QtConcurrent::run([Recovery, Id, Generation, ThroughRevision, Original]()->storage::Result<storage::Unit> {
+            auto Removed = Recovery->RemoveThrough(Id, Generation, ThroughRevision); if (!Removed.HasValue()) return Removed.Failure();
+            if (Original) return Recovery->RemoveThrough(Original->document_.id_, Original->document_.generation_, Original->document_.revision_);
+            return storage::Unit{};
+        }));
     }
     void DocumentWorkspaceWidget::Checkpoint()
     {
+        if (hotExitClosing_ || hotExitPublishing_) return;
+        if (hotExitEnabled() && IsIdle()) publishHotExitSession(false);
         if (!pendingHostOpen_.isEmpty()) for (const auto& Tab : documents_) if (Tab->hostSlot_) {
             if (Tab->loading_ || Tab->navigating_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_ || Tab->pane_->IsBusy()) break;
             if (!Tab->Dirty() || Tab->checkpointedRevision_ == Tab->Revision()) {
@@ -1465,10 +1517,21 @@ namespace hc::document
             auto Bytes = Tab->pane_->ViewId() == "image" ? Tab->pane_->Content().toStdString() : Tab->session_->Text();
             if (!hosted_ && Bytes.size() > DocumentByteLimit) { Tab->error_ = "document-recovery-budget"; continue; }
             RecoverySnapshot Record; Record.document_ = Tab->session_->Snapshot(); Record.bytes_ = std::move(Bytes);Record.viewId_=Tab->pane_->ViewId().toStdString();
+            if (hotExitEligible(Tab)) {
+                QByteArray Utf8; Record.text_ = Tab->pane_->CaptureTextRecovery(Utf8);
+                if (Record.text_) {
+                    Record.viewId_ = "text"; Record.bytes_ = Utf8.toStdString(); Record.ownerWindow_ = workspaceId_.toStdString();
+                    Record.text_->untitled_ = !Tab->temporarySource_.isEmpty();
+                    Record.text_->baselineSha256_ = Record.text_->untitled_ ? std::string{} : Tab->input_.hash_.toHex().toStdString();
+                    if (Record.text_->untitled_) Record.document_.source_.localPath_.clear();
+                }
+            }
             const auto Revision = Tab->Revision(); Tab->checkpointing_ = true;
             auto* Watcher = new QFutureWatcher<storage::Result<RecoverySnapshot>>(this);
-            connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, Revision, SavedRevision = Record.document_.savedRevision_, SourcePath = Record.document_.source_.localPath_] {
-                const bool Stored = Watcher->result().HasValue(); Watcher->deleteLater(); Tab->checkpointing_ = false;
+            connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, Revision, SavedRevision = Record.document_.savedRevision_, SourcePath = Tab->session_->Snapshot().source_.localPath_] {
+                const bool Stored = Watcher->result().HasValue();
+                if (Stored) Tab->checkpointReceipt_ = Watcher->result().Value();
+                Watcher->deleteLater(); Tab->checkpointing_ = false;
                 const bool CurrentBaseline=SavedRevision==Tab->session_->Snapshot().savedRevision_ && SourcePath==Tab->session_->Snapshot().source_.localPath_;
                 // A completed save retires older checkpoints. A store rejected by
                 // that retirement is not a failure of the current dirty revision.
@@ -1519,7 +1582,7 @@ namespace hc::document
         return {{"protocolVersion", int(HostVersion)}, {"workspaceId", workspaceId_}, {"documents", Tabs}, {"pendingSaves", Pending},
             {"clipboard", clipboardRequest_}, {"editRequest",editRequest_}, {"recoveryList", recoveryList_}, {"activeDocumentId", active() ? active()->id_ : QString{}}, {"idle", IsIdle()},
             {"memoryPrivateBytes", QString::number(Memory.PrivateUsage)}, {"memoryPeakWorkingSetBytes", QString::number(Memory.PeakWorkingSetSize)}, {"memoryPeakPrivateBytes", QString::number(Memory.PeakPagefileUsage)},
-            {"recoveryRoot", recoveryRoot_}, {"dpr", devicePixelRatioF()}, {"tabbed", tabbed_}, {"chrome", chrome_->Settings()},
+            {"hotExitClosing", hotExitClosing_}, {"hotExitEnabled", hotExitEnabled()}, {"shellError", shellError_}, {"recoveryRoot", recoveryRoot_}, {"dpr", devicePixelRatioF()}, {"tabbed", tabbed_}, {"chrome", chrome_->Settings()},
             {"closeViewerOnEscape", closeViewerOnEscape_}, {"closeRequested", viewerCloseRequested_}};
     }
     QJsonObject DocumentWorkspaceWidget::HandleMessage(const QJsonObject& Envelope)
@@ -1653,6 +1716,8 @@ namespace hc::document
         }
         if (Action == "chrome") { if (!ApplyChromeSettings(Request["settings"].toObject())) return Error("document-chrome-settings"); emit ChromeSettingsChanged(chrome_->Settings()); return {{"accepted", true}}; }
         if (Action == "cancelHost") { for (const auto& Tab : documents_) if (Tab->hostSlot_) { Tab->session_->Cancel(); Tab->cancellation_->request_stop();Tab->queuedSave_.reset();Tab->composingSave_=false;Tab->pane_->Cancel(); } return {{"accepted", true}}; }
+        if (hotExitClosing_ && Action == "cancel") { cancelHotExitClose(); return {{"accepted", true}}; }
+        if (hotExitClosing_ && Action != "snapshot" && Action != "prepareClose") return Error("document-hotexit-closing");
         if (Action == "checkpoint") { Checkpoint(); return {{"accepted", true}}; }
         if(Action=="editResult"){
             if(editRequest_.isEmpty()||Request["token"]!=editRequest_["token"])return Error("document-edit-token");
@@ -1815,7 +1880,7 @@ namespace hc::document
         for (const auto& Item : {std::pair{"saveDocument", Capability.save_ || Capability.saveAs_},
             std::pair{"saveDocumentAs", Capability.saveAs_}, std::pair{"undoDocument", Capability.undo_}, std::pair{"redoDocument", Capability.redo_},
             std::pair{"closeDocument", Capability.close_ && Tab && !Tab->checkpointing_},
-            std::pair{"resolveDocumentConflict", Tab && Capability.view_ && Tab->session_->Snapshot().saveState_ == DocumentSaveState::Conflict}, std::pair{"cancelDocument", Capability.cancel_ || (Tab && (Tab->composingSave_ || Tab->pane_->IsBusy()))},
+            std::pair{"resolveDocumentConflict", Tab && Capability.view_ && Tab->session_->Snapshot().saveState_ == DocumentSaveState::Conflict}, std::pair{"cancelDocument", hotExitClosing_ || Capability.cancel_ || (Tab && (Tab->composingSave_ || Tab->pane_->IsBusy()))},
             std::pair{"reloadDocument", Tab && !Tab->saving_ && Tab->pendingToken_.isEmpty()}}) {
             if (auto* Action = findChild<QAction*>(Item.first)) Action->setEnabled(Item.second);
         }
@@ -1878,9 +1943,11 @@ namespace hc::document
             const bool Overlaid=progressOverlay_ && Tab->progress_.kind_!=DocumentProgress::Kind::None && progressOverlay_->CurrentToken()==Tab->progress_.token_
                 && (Shown==OverlayState::Pending||Shown==OverlayState::Visible||Shown==OverlayState::Done||Shown==OverlayState::Cancelling);
             const auto Code=!Tab->error_.isEmpty()?Tab->error_:!View["error"].toString().isEmpty()?View["error"].toString():State.error_?QString::fromStdString(State.error_->code_):QString{};
-            if(!shellError_.isEmpty()){MessageText=tr("⚠ 작업 오류");Detail=shellError_;}
+            if(hotExitClosing_){MessageText=tr("종료 준비 · 복구 사본 보존 중…");Detail=tr("취소 명령으로 종료를 중단할 수 있습니다.");}
+            else if(!shellError_.isEmpty()){MessageText=tr("⚠ 작업 오류");Detail=shellError_;}
             else if(State.saveState_==DocumentSaveState::Conflict){MessageText=tr("⚠ 원본 변경 충돌");Detail=Message("external-changed");}
             else if(!Code.isEmpty()){MessageText=State.saveState_==DocumentSaveState::Failed?tr("⚠ 저장 실패"):tr("⚠ 문서 오류");Detail=Message(Code)+"\n"+Code;}
+            else if(!Tab->recoveryNotice_.isEmpty()){MessageText=tr("복구된 변경");Detail=Tab->recoveryNotice_;}
             else if((Tab->loading_||Tab->navigating_) && !Overlaid)MessageText=tr("여는 중…");
             else if(Tab->composingSave_)MessageText=tr("한글 조합 완료 후 저장…");
             else if(Tab->saving_||!Tab->pendingToken_.isEmpty())MessageText=Tab->queuedSave_?tr("저장 중 · 다음 저장 예약됨…"):Overlaid?QString():tr("저장 중…");
@@ -2160,7 +2227,9 @@ namespace hc::document
         if(!Tab->pane_->RequestClose()){Tab->closeRequested_=true;return;}
         if(Tab->everReady_ && !Tab->loading_)recordRecent(Tab);
         if(editRequest_["documentId"]==Tab->id_)editRequest_={};
-        if (!workspace_.Remove(Tab->id_.toStdString(), Discard ? CloseDisposition::Discard : CloseDisposition::KeepChanges).HasValue()) return;
+        const auto Disposition = PreserveRecovery && hotExitReady_ && Tab->Dirty() ? CloseDisposition::PreserveSnapshot
+            : Discard ? CloseDisposition::Discard : CloseDisposition::KeepChanges;
+        if (!workspace_.Remove(Tab->id_.toStdString(), Disposition).HasValue()) return;
         Tab->cancellation_->request_stop(); Tab->closed_ = true; Tab->pane_->Cancel();
         if (tabbed_) tabs_->removeTab(tabs_->indexOf(Tab->pane_)); else singlePane_->removeWidget(Tab->pane_);
         Tab->pane_->deleteLater(); std::erase(documents_, Tab);
@@ -2169,7 +2238,7 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::closeTab(int Index)
     {
-        if (closePromptActive_ || Index < 0 || Index >= int(documents_.size())) return;
+        if (hotExitClosing_ || closePromptActive_ || Index < 0 || Index >= int(documents_.size())) return;
         auto Target = documents_[Index];
         Target->closeRequested_ = true;
         if(Target->pane_->IsProcessDocument()&&!Target->pane_->CanEditEpub()&&!Target->pane_->RequestClose())return;
@@ -2239,15 +2308,313 @@ namespace hc::document
         }
         return QWidget::eventFilter(Watched, Event);
     }
+
+
+    void DocumentWorkspaceWidget::ShowRecoveryManager()
+    {
+        if (hotExitClosing_) return;
+        auto* Dialog = new QDialog(preferences_ ? static_cast<QWidget*>(preferences_.data()) : this);
+        Dialog->setAttribute(Qt::WA_DeleteOnClose); Dialog->setWindowTitle(tr("복구 사본 관리")); Dialog->resize(760, 440);
+        auto* Layout = new QVBoxLayout(Dialog); auto* Note = new QLabel(tr("복구 사본을 읽는 중입니다…"), Dialog); Note->setWordWrap(true); Layout->addWidget(Note);
+        auto* Table = new QTableWidget(0, 4, Dialog); Table->setObjectName("recoveryCopies");
+        Table->setHorizontalHeaderLabels({tr("문서"), tr("보존 시각"), tr("크기"), tr("상태")});
+        Table->setSelectionBehavior(QAbstractItemView::SelectRows); Table->setSelectionMode(QAbstractItemView::SingleSelection);
+        Table->setEditTriggers(QAbstractItemView::NoEditTriggers); Table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch); Layout->addWidget(Table);
+        auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Close, Dialog);
+        auto* Restore = Buttons->addButton(tr("복구 사본으로 열기"), QDialogButtonBox::ActionRole);
+        auto* Delete = Buttons->addButton(tr("사본 삭제…"), QDialogButtonBox::ActionRole);
+        Restore->setEnabled(false); Delete->setEnabled(false); Layout->addWidget(Buttons);
+        connect(Buttons, &QDialogButtonBox::rejected, Dialog, &QDialog::reject);
+        auto Records = std::make_shared<std::vector<RecoverySnapshot>>();
+        const auto Owned = [this](const RecoverySnapshot& Record) {
+            if (find(QString::fromStdString(Record.document_.id_))) return true;
+            if (Record.ownerWindow_.empty()) return false;
+            QLockFile Lock(recovery_->SessionLockPath(QString::fromStdString(Record.ownerWindow_))); Lock.setStaleLockTime(0);
+            return !Lock.tryLock();
+        };
+        connect(Table, &QTableWidget::itemSelectionChanged, Dialog, [Table, Restore, Delete, Records, Owned] {
+            const int Row = Table->currentRow(); const bool Valid = Row >= 0 && Row < int(Records->size());
+            const bool Busy = Valid && Owned((*Records)[Row]); Restore->setEnabled(Valid && !Busy); Delete->setEnabled(Valid && !Busy);
+        });
+        connect(Restore, &QPushButton::clicked, Dialog, [this, Table, Records, Owned, Dialog] {
+            const int Row = Table->currentRow(); if (Row < 0 || Row >= int(Records->size()) || Owned((*Records)[Row])) return;
+            std::shared_ptr<QLockFile> Lease;
+            const auto Owner = QString::fromStdString((*Records)[Row].ownerWindow_);
+            if (!Owner.isEmpty()) {
+                Lease = std::make_shared<QLockFile>(recovery_->SessionLockPath(Owner)); Lease->setStaleLockTime(0);
+                if (!Lease->tryLock()) return;
+            }
+            const auto Reply = Handle({{"action", "recover"}, {"path", QString::fromStdString((*Records)[Row].snapshotPath_)}});
+            if (!Reply.contains("error") && Lease) manualRecoveryLocks_.push_back(std::move(Lease));
+            if (Reply.contains("error")) ShowShellError(Reply["error"].toString()); else Dialog->accept();
+        });
+        connect(Delete, &QPushButton::clicked, Dialog, [this, Table, Records, Owned, Dialog, Note, Delete, Restore] {
+            const int Row = Table->currentRow(); if (Row < 0 || Row >= int(Records->size()) || Owned((*Records)[Row])) return;
+            const auto Record = (*Records)[Row];
+            if (hc::ui::MessageDialog::question(Dialog, tr("복구 사본 삭제"), tr("이 사본을 삭제하면 저장하지 않은 내용을 되돌릴 수 없습니다. 설정 화면에서 취소해도 삭제는 되돌릴 수 없습니다. 삭제하시겠습니까?"), QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) return;
+            Delete->setEnabled(false); Restore->setEnabled(false); Table->setEnabled(false);
+            auto Store = recovery_; auto* Worker = new QFutureWatcher<storage::Result<storage::Unit>>(Dialog);
+            connect(Worker, &QFutureWatcherBase::finished, Dialog, [Worker, Table, Records, Row, Note] {
+                const bool Success = Worker->result().HasValue(); Worker->deleteLater(); Table->setEnabled(true);
+                if (Success) { Records->erase(Records->begin() + Row); Table->removeRow(Row); Note->setText(tr("선택한 복구 사본을 삭제했습니다.")); }
+                else Note->setText(tr("복구 사본을 삭제하지 못했습니다. 다른 창에서 사용 중이거나 저장소를 변경할 수 없습니다."));
+            });
+            Worker->setFuture(QtConcurrent::run([Store, Record]()->storage::Result<storage::Unit> {
+                std::unique_ptr<QLockFile> Lock;
+                const auto Owner = QString::fromStdString(Record.ownerWindow_);
+                if (!Owner.isEmpty()) { Lock = std::make_unique<QLockFile>(Store->SessionLockPath(Owner)); Lock->setStaleLockTime(0); if (!Lock->tryLock()) return storage::Error{storage::ErrorCategory::Unavailable, "document-recovery-owned"}; }
+                auto Removed = Store->RemoveThrough(Record.document_.id_, Record.document_.generation_, Record.document_.revision_);
+                if (!Removed.HasValue()) return Removed.Failure();
+                if (!Owner.isEmpty()) {
+                    auto Session = Store->ReadSession(Owner);
+                    if (Session.HasValue()) {
+                        auto Json = Session.Value(); QJsonArray Items;
+                        for (const auto& Item : Json["documents"].toArray()) if (Item.toObject()["documentId"].toString().toStdString() != Record.document_.id_) Items.append(Item);
+                        Json["documents"] = Items; return Store->StoreSession(Owner, Json);
+                    }
+                }
+                return storage::Unit{};
+            }));
+        });
+        auto* Watcher = new QFutureWatcher<storage::Result<std::vector<RecoverySnapshot>>>(Dialog);
+        connect(Watcher, &QFutureWatcherBase::finished, Dialog, [Watcher, Records, Table, Note, Owned] {
+            auto Result = Watcher->result(); Watcher->deleteLater();
+            if (!Result.HasValue()) { Note->setText(tr("복구 사본을 읽지 못했습니다.")); return; }
+            *Records = std::move(Result.Value()); Table->setRowCount(int(Records->size()));
+            for (int Row = 0; Row < int(Records->size()); ++Row) {
+                const auto& Record = (*Records)[Row]; const auto Path = QString::fromStdString(Record.document_.source_.localPath_);
+                Table->setItem(Row, 0, new QTableWidgetItem(Path.isEmpty() ? tr("새 문서") : QDir::toNativeSeparators(Path)));
+                Table->setItem(Row, 1, new QTableWidgetItem(QDateTime::fromMSecsSinceEpoch(Record.utcMs_).toString("yyyy-MM-dd HH:mm")));
+                Table->setItem(Row, 2, new QTableWidgetItem(tr("%1 KiB").arg((Record.bytes_.size() + 1023) / 1024)));
+                Table->setItem(Row, 3, new QTableWidgetItem(Owned(Record) ? tr("사용 중") : tr("복구 가능")));
+            }
+            Note->setText(tr("원본을 덮어쓰지 않고 별도 문서로 복구합니다. 사용 중인 사본은 삭제할 수 없습니다."));
+        });
+        auto Store = recovery_; Watcher->setFuture(QtConcurrent::run([Store] { return Store->List(); })); Dialog->open();
+    }
+    bool DocumentWorkspaceWidget::hotExitEnabled() const
+    {
+        const auto Text = appliedPreferences_["documentViews"].toObject()["textView"].toObject();
+        return !hosted_ && Text["hotExitPolicyVersion"].toInt() == 1 && Text["hotExitEnabled"].toBool(true);
+    }
+    bool DocumentWorkspaceWidget::hotExitEligible(const std::shared_ptr<Tab>& Tab) const
+    {
+        return !hosted_ && !Tab->hostSlot_ && !Tab->broker_ && Tab->sourceToken_.isEmpty()
+            && (Tab->originalAuthority_ || !Tab->temporarySource_.isEmpty())
+            && Tab->pane_->ViewId() == "text" && !Tab->loading_ && !Tab->navigating_
+            && !Tab->pane_->ViewState()["partial"].toBool();
+    }
+    void DocumentWorkspaceWidget::cancelHotExitClose(const QString& Error)
+    {
+        if (hotExitProgress_) { hotExitProgress_->reset(); hotExitProgress_->deleteLater(); hotExitProgress_.clear(); }
+        ++hotExitCloseEpoch_; hotExitClosing_ = false; closingWorkspace_ = false; hotExitDiscard_.clear();
+        menu_->setEnabled(true); toolbar_->setEnabled(true);
+        for (const auto& Tab : documents_) Tab->pane_->setEnabled(true);
+        if (!Error.isEmpty()) ShowShellError(tr("복구 사본을 보존하지 못했습니다. 창을 닫지 않았습니다. 다시 닫아 재시도하거나 문서를 저장하십시오.\n%1").arg(Error));
+        update();
+    }
+    bool DocumentWorkspaceWidget::requestHotExitClose()
+    {
+        if (searchPanel_ && searchPanel_->Busy()) { ShowShellError(tr("파일 바꾸기가 진행 중입니다. 완료하거나 중지한 뒤 닫으십시오.")); return false; }
+        if (!hotExitClosing_) { ++hotExitCloseEpoch_; QGuiApplication::inputMethod()->commit(); hotExitClosing_ = true; closingWorkspace_ = true; }
+        if (!IsIdle() || hotExitPublishing_) return false;
+        for (const auto& Tab : documents_) {
+            if (!Tab->Dirty() || hotExitDiscard_.contains(Tab->id_)) continue;
+            QByteArray Bytes;
+            if (hotExitEligible(Tab) && Tab->pane_->CaptureTextRecovery(Bytes, false)) continue;
+            const QScopedValueRollback Guard(closePromptActive_, true);
+            const int Choice = closePrompt_ ? closePrompt_(Tab->id_) : int(hc::ui::MessageDialog::question(this,
+                tr("변경 내용 저장"), tr("이 문서는 HotExit로 보존할 수 없습니다. 변경 내용을 저장하시겠습니까?"),
+                QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel));
+            if (Choice == QMessageBox::Discard) { hotExitDiscard_.append(Tab->id_); continue; }
+            if (Choice == QMessageBox::Save) {
+                activate(Tab); findChild<QAction*>(Tab->originalSave_ ? "saveDocument" : "saveDocumentAs")->trigger();
+                if (!Tab->saving_ && !Tab->choosingSavePath_ && !Tab->composingSave_) cancelHotExitClose();
+                return false;
+            }
+            cancelHotExitClose(); return false;
+        }
+        menu_->setEnabled(false); toolbar_->setEnabled(false);
+        for (const auto& Tab : documents_) Tab->pane_->setEnabled(false);
+        if (!hotExitProgress_) {
+            hotExitProgress_ = new QProgressDialog(tr("변경 내용을 보존한 뒤 창을 닫습니다."), tr("종료 취소"), 0, 0, this);
+            hotExitProgress_->setWindowTitle(tr("편집 내용 보존")); hotExitProgress_->setWindowModality(Qt::WindowModal);
+            hotExitProgress_->setMinimumDuration(500); hotExitProgress_->setAutoClose(false); hotExitProgress_->setValue(0);
+            connect(hotExitProgress_, &QProgressDialog::canceled, this, [this] { cancelHotExitClose(); });
+        }
+        publishHotExitSession(true); update(); return false;
+    }
+    void DocumentWorkspaceWidget::publishHotExitSession(bool Closing)
+    {
+        if (hotExitPublishing_ || !IsIdle() || (!Closing && !hotExitEnabled())) return;
+        if (!hotExitLock_) { if (Closing) cancelHotExitClose(tr("복구 폴더 잠금을 얻지 못했습니다.")); return; }
+        const bool Periodic = PreferenceValue(appliedPreferences_, "textView/recoveryEnabled").toBool();
+        if (!Closing && !Periodic && restoredOriginals_.empty()) return;
+        if (std::any_of(documents_.begin(), documents_.end(), [](const auto& Tab) { return Tab->hotExitRestore_ && (!Tab->everReady_ || !Tab->error_.isEmpty()); })) {
+            if (Closing) cancelHotExitClose(tr("복원에 실패한 문서를 먼저 확인하십시오. 기존 사본은 유지합니다.")); return;
+        }
+        QJsonArray Items; std::vector<RecoverySnapshot> Captures;
+        for (const auto& Tab : documents_) {
+            if (!hotExitEligible(Tab) || hotExitDiscard_.contains(Tab->id_)) continue;
+            QByteArray Bytes; auto Text = Tab->pane_->CaptureTextRecovery(Bytes, Closing && Tab->Dirty());
+            if (!Text) { if (Closing && Tab->Dirty()) { cancelHotExitClose(tr("완전한 텍스트를 읽을 수 없습니다.")); return; } continue; }
+            QJsonObject Item{{"documentId", Tab->id_}, {"path", Tab->temporarySource_.isEmpty() ? Tab->path_ : QString{}}};
+            if (Tab->Dirty()) {
+                if (Bytes.size() > DocumentByteLimit) { if (Closing) cancelHotExitClose(tr("복구 사본 크기 제한을 초과했습니다.")); return; }
+                if (Closing) {
+                    // Caret/encoding are part of the final capture even without another content edit.
+                    Tab->session_->AdvanceRecoveryRevision();
+                    RecoverySnapshot Capture; Capture.document_ = Tab->session_->Snapshot(); Capture.text_ = Text;
+                    Capture.bytes_ = Bytes.toStdString(); Capture.ownerWindow_ = workspaceId_.toStdString();
+                    Capture.text_->untitled_ = !Tab->temporarySource_.isEmpty();
+                    Capture.text_->baselineSha256_ = Capture.text_->untitled_ ? std::string{} : Tab->input_.hash_.toHex().toStdString();
+                    if (Capture.text_->untitled_) Capture.document_.source_.localPath_.clear();
+                    Captures.push_back(std::move(Capture));
+                } else {
+                    const auto& Receipt = Tab->checkpointReceipt_;
+                    if (!Receipt || !Receipt->text_ || Receipt->document_.generation_ != Tab->session_->Snapshot().generation_
+                        || Receipt->document_.revision_ != Tab->Revision()) return;
+                    Item["snapshot"] = QFileInfo(QString::fromStdString(Receipt->snapshotPath_)).fileName();
+                    Item["sha256"] = QString::fromStdString(Receipt->checksum_);
+                    Item["generation"] = QString::number(Receipt->document_.generation_);
+                    Item["revision"] = QString::number(Receipt->document_.revision_);
+                }
+            } else if (!PreferenceValue(appliedPreferences_, "textView/restoreCleanDocuments").toBool() || !Tab->temporarySource_.isEmpty()) continue;
+            Item["position"] = QJsonObject{{"anchor", double(Text->anchor_)}, {"caret", double(Text->caret_)}, {"firstLine", double(Text->firstLine_)}, {"xOffset", double(Text->xOffset_)}};
+            Items.append(Item);
+        }
+        QJsonObject Manifest{{"profileId", qApp->property("documentRecoveryProfile").toString()}, {"documents", Items}, {"activeDocumentId", active() ? active()->id_ : QString{}},
+            {"geometry", QString::fromLatin1(saveGeometry().toBase64())}, {"cleanShutdown", Closing}};
+        if (!Closing && Manifest == publishedSession_) return;
+        hotExitPublishing_ = true; ++recoveryWorkers_;
+        using Published = std::pair<QJsonObject, std::vector<RecoverySnapshot>>;
+        auto* Watcher = new QFutureWatcher<storage::Result<Published>>(this);
+        const auto CloseEpoch = hotExitCloseEpoch_;
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Closing, CloseEpoch] {
+            auto Result = Watcher->result(); Watcher->deleteLater(); --recoveryWorkers_; hotExitPublishing_ = false;
+            if (Closing && CloseEpoch != hotExitCloseEpoch_) return;
+            if (!Result.HasValue()) { if (Closing) cancelHotExitClose(QString::fromStdString(Result.Failure().code_)); else ShowShellError(tr("복구 세션 보존 실패: %1").arg(QString::fromStdString(Result.Failure().code_))); return; }
+            publishedSession_ = Result.Value().first;
+            for (const auto& Receipt : Result.Value().second) if (auto Tab = find(QString::fromStdString(Receipt.document_.id_))) Tab->checkpointReceipt_ = Receipt;
+            // The replacement manifest is durable before retiring the imported session's snapshots.
+            if (!restoredOriginals_.empty() && !restorationIncomplete_) {
+                restoringSessionId_.clear();
+                auto Originals = std::exchange(restoredOriginals_, {}); auto Store = recovery_;
+                auto* Cleanup = new QFutureWatcher<storage::Result<storage::Unit>>(this); ++recoveryWorkers_;
+                connect(Cleanup, &QFutureWatcherBase::finished, this, [this, Cleanup] {
+                    if (!Cleanup->result().HasValue()) ShowShellError(tr("이전 복구 사본을 정리하지 못했습니다."));
+                    Cleanup->deleteLater(); --recoveryWorkers_; tryFinishClose();
+                });
+                Cleanup->setFuture(QtConcurrent::run([Store, Originals, Lease = std::exchange(restoringLock_, {})]()->storage::Result<storage::Unit> {
+                    for (const auto& Original : Originals) {
+                        auto Removed = Store->RemoveThrough(Original.document_.id_, Original.document_.generation_, Original.document_.revision_);
+                        if (!Removed.HasValue()) return Removed.Failure();
+                    }
+                    return storage::Unit{};
+                }));
+            }
+            if (Closing) {
+                for (const auto& Tab : documents_) if (Tab->Dirty() && !hotExitDiscard_.contains(Tab->id_)) {
+                    if (!Tab->checkpointReceipt_ || !Tab->session_->AuthorizeRecoveryClose(*Tab->checkpointReceipt_)) { cancelHotExitClose(tr("보존한 문서 버전이 현재 편집 내용과 다릅니다.")); return; }
+                }
+                if (hotExitProgress_) { hotExitProgress_->reset(); hotExitProgress_->deleteLater(); hotExitProgress_.clear(); }
+                hotExitReady_ = true;
+                const auto Tabs = documents_;
+                for (const auto& Tab : Tabs) retire(Tab, true, !hotExitDiscard_.contains(Tab->id_));
+                hotExitClosing_ = false;
+                update(); tryFinishClose();
+            }
+        });
+        auto Store = recovery_; const auto Id = workspaceId_;
+        const auto RetireSession = restorationIncomplete_ ? QString{} : restoringSessionId_;
+        Watcher->setFuture(QtConcurrent::run([Store, Id, RetireSession, Manifest, Captures = std::move(Captures)]() mutable ->storage::Result<Published> {
+            std::vector<RecoverySnapshot> Receipts; auto Entries = Manifest["documents"].toArray();
+            for (auto& Capture : Captures) {
+                auto Result = Store->Store(std::move(Capture)); if (!Result.HasValue()) return Result.Failure();
+                auto Receipt = std::move(Result.Value());
+                for (qsizetype At = 0; At < Entries.size(); ++At) {
+                    auto Item = Entries[At].toObject(); if (Item["documentId"].toString().toStdString() != Receipt.document_.id_) continue;
+                    Item["snapshot"] = QFileInfo(QString::fromStdString(Receipt.snapshotPath_)).fileName(); Item["sha256"] = QString::fromStdString(Receipt.checksum_);
+                    Item["generation"] = QString::number(Receipt.document_.generation_); Item["revision"] = QString::number(Receipt.document_.revision_); Entries[At] = Item;
+                }
+                Receipts.push_back(std::move(Receipt));
+            }
+            Manifest["documents"] = Entries; auto Saved = Store->StoreSession(Id, Manifest);
+            if (!Saved.HasValue()) return Saved.Failure();
+            if (!RetireSession.isEmpty() && !Store->RemoveSession(RetireSession)) return storage::Error{storage::ErrorCategory::Unavailable, "document-hotexit-session-retire"};
+            return Published{Manifest, std::move(Receipts)};
+        }));
+    }
+    bool DocumentWorkspaceWidget::RestoreHotExit(const QString& SessionId)
+    {
+        if (hosted_ || !documents_.empty() || !hotExitEnabled()) return false;
+        auto Lock = std::make_shared<QLockFile>(recovery_->SessionLockPath(SessionId)); Lock->setStaleLockTime(0);
+        if (recovery_->SessionLockPath(SessionId).isEmpty() || !Lock->tryLock()) return false;
+        restoringLock_ = std::move(Lock); restoringSessionId_ = SessionId;
+        auto Store = recovery_; ++recoveryWorkers_;
+        auto* Watcher = new QFutureWatcher<storage::Result<QJsonObject>>(this);
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher] {
+            auto Result = Watcher->result(); Watcher->deleteLater(); --recoveryWorkers_;
+            if (!Result.HasValue()) { restoringLock_.reset(); restoringSessionId_.clear(); ShowShellError(tr("복구 세션을 읽지 못했습니다: %1").arg(QString::fromStdString(Result.Failure().code_))); return; }
+            const auto Manifest = Result.Value();
+            if (!Manifest["cleanShutdown"].toBool() && hc::ui::MessageDialog::question(this, tr("편집 내용 복구"),
+                tr("이전 편집이 정상적으로 종료되지 않았습니다. 보존된 내용을 복구하시겠습니까?"), QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) { restoringLock_.reset(); restoringSessionId_.clear(); return; }
+            restoredActive_ = Manifest["activeDocumentId"].toString(); pendingHotExitRestore_ = true;
+            for (const auto& Value : Manifest["documents"].toArray()) {
+                const auto Item = Value.toObject(); QJsonObject Reply;
+                if (!Item["snapshot"].toString().isEmpty()) Reply = Handle({{"action", "recover"}, {"path", recoveryRoot_ + "/" + Item["snapshot"].toString()}});
+                else if (!Item["path"].toString().isEmpty()) Reply = open(Item["path"].toString(), false, {}, false);
+                restoredIds_[Item["documentId"].toString()] = Reply["documentId"].toString();
+                if (Item["snapshot"].toString().isEmpty()) if (auto Tab = find(Reply["documentId"].toString())) {
+                    const auto Position = Item["position"].toObject(); TextRecoveryState State;
+                    State.anchor_ = qMax(0, Position["anchor"].toInt()); State.caret_ = qMax(0, Position["caret"].toInt());
+                    State.firstLine_ = qMax(0, Position["firstLine"].toInt()); State.xOffset_ = qMax(0, Position["xOffset"].toInt());
+                    Tab->cleanRestoreState_ = State;
+                }
+                if (Reply.contains("error")) { restorationIncomplete_ = true; ShowShellError(tr("일부 문서를 복원하지 못했습니다. 복구 사본은 유지합니다.")); }
+            }
+            pendingHotExitRestore_ = false;
+            const auto Geometry = QByteArray::fromBase64(Manifest["geometry"].toString().toLatin1());
+            if (!Geometry.isEmpty()) { restoreGeometry(Geometry); if (screen() && !screen()->availableGeometry().intersects(frameGeometry())) move(screen()->availableGeometry().topLeft()); }
+        });
+        Watcher->setFuture(QtConcurrent::run([Store, SessionId]()->storage::Result<QJsonObject> {
+            auto Session = Store->ReadSession(SessionId); if (!Session.HasValue()) return Session.Failure();
+            auto Latest = Store->List(); if (!Latest.HasValue()) return Latest.Failure();
+            auto Json = Session.Value(); auto Items = Json["documents"].toArray();
+            for (qsizetype At = 0; At < Items.size(); ++At) {
+                auto Item = Items[At].toObject(); if (Item["snapshot"].toString().isEmpty()) continue;
+                for (const auto& Record : Latest.Value()) if (Record.document_.id_ == Item["documentId"].toString().toStdString() && Record.ownerWindow_ == SessionId.toStdString()) {
+                    Item["snapshot"] = QFileInfo(QString::fromStdString(Record.snapshotPath_)).fileName(); Item["sha256"] = QString::fromStdString(Record.checksum_);
+                    Item["generation"] = QString::number(Record.document_.generation_); Item["revision"] = QString::number(Record.document_.revision_); break;
+                }
+                Items[At] = Item;
+            }
+            QJsonArray Remaining;
+            for (const auto& Value : Items) {
+                const auto Item = Value.toObject(); DocumentSnapshot Stamp; Stamp.id_ = Item["documentId"].toString().toStdString();
+                Stamp.generation_ = Item["generation"].toString().toULongLong(); Stamp.revision_ = Item["revision"].toString().toULongLong();
+                if (Item["snapshot"].toString().isEmpty() || !Store->IsRetired(Stamp)) Remaining.append(Item);
+            }
+            Json["documents"] = Remaining; return Json;
+        }));
+        return true;
+    }
     bool DocumentWorkspaceWidget::RequestClose()
     {
+        if (hotExitReady_) {
+            const auto Tabs = documents_; for (const auto& Tab : Tabs) retire(Tab, true, !hotExitDiscard_.contains(Tab->id_));
+            return documents_.empty() && IsIdle();
+        }
+        if (hotExitClosing_ || (!hosted_ && hotExitEnabled() && !documents_.empty())) return requestHotExitClose();
         if (searchPanel_ && searchPanel_->Busy()) { ShowShellError(tr("파일 바꾸기가 진행 중입니다. 완료하거나 중지한 뒤 닫으십시오.")); return false; }
         closingWorkspace_ = true;
         while (!documents_.empty()) {
             const auto Count = documents_.size(); closeTab(int(Count - 1));
             if (documents_.size() == Count) return false;
         }
-        return IsIdle();
+        if (!IsIdle()) return false;
+        if (!hosted_ && !recovery_->RemoveSession(workspaceId_)) { ShowShellError(tr("종료한 세션을 정리하지 못했습니다.")); return false; }
+        return true;
     }
     bool DocumentWorkspaceWidget::RequestViewerClose()
     {

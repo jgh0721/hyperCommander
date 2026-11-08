@@ -1,5 +1,6 @@
 ﻿#include "documentSession.hpp"
 #include "documentHostProtocol.hpp"
+#include "documentRecovery.hpp"
 
 namespace hc::document
 {
@@ -51,7 +52,7 @@ namespace hc::document
         if (!Capabilities().edit_) return Invalid("document-edit-unavailable");
         if ((!unlimitedBytes_ && Text.size() > (binary_ ? DocumentByteLimit : TextByteLimit)) || (!binary_ && !ValidText(Text))) return Invalid("document-text-budget-or-nul");
         if (Text != text_) { text_ = std::move(Text); ++snapshot_.revision_; }
-        snapshot_.dirty_ = text_ != savedText_;
+        snapshot_.dirty_ = recoveryDirty_ || text_ != savedText_;
         return Unit{};
     }
     Result<std::uint64_t> DocumentSession::BeginOpen(bool Discard)
@@ -70,6 +71,7 @@ namespace hc::document
             Result = Invalid("document-text-budget-or-nul");
         if (!Result.HasValue()) { snapshot_.lifecycle_ = DocumentLifecycle::Failed; snapshot_.error_ = Result.Failure(); return true; }
         snapshot_.source_ = std::move(Result.Value().source_);
+        recoveryDirty_ = false; recoveryClose_.reset();
         text_ = savedText_ = std::move(Result.Value().text_);
         ++snapshot_.revision_; snapshot_.savedRevision_ = snapshot_.revision_;
         snapshot_.dirty_ = false; snapshot_.error_.reset(); snapshot_.cleanupErrors_.clear();
@@ -101,11 +103,11 @@ namespace hc::document
         // Commit is authoritative even if cancellation or cleanup follows it.
         if (Result.committed_) {
             if (snapshot_.contentMode_ == DocumentContentMode::ExternalModel) snapshot_.savedModel_ = saving_->model_;
-            else savedText_ = saving_->text_;
+            else { savedText_ = saving_->text_; recoveryDirty_ = false; }
             snapshot_.savedRevision_ = saving_->revision_;
             if (Result.source_) snapshot_.source_ = std::move(*Result.source_);
             if (snapshot_.contentMode_ == DocumentContentMode::ExternalModel) updateModelDirty();
-            else snapshot_.dirty_ = text_ != savedText_;
+            else snapshot_.dirty_ = recoveryDirty_ || text_ != savedText_;
             snapshot_.saveState_ = DocumentSaveState::Idle;
             snapshot_.error_.reset(); snapshot_.cleanupErrors_ = std::move(Result.cleanupErrors_);
         }
@@ -126,10 +128,23 @@ namespace hc::document
     {
         if (IsBusy())
             return Invalid("document-close-busy");
-        if (snapshot_.dirty_ && Disposition != CloseDisposition::Discard) return Invalid("document-close-dirty");
+        const bool Preserved = Disposition == CloseDisposition::PreserveSnapshot && recoveryClose_
+            && *recoveryClose_ == std::pair{snapshot_.generation_, snapshot_.revision_};
+        if (snapshot_.dirty_ && Disposition != CloseDisposition::Discard && !Preserved) return Invalid("document-close-dirty");
         finishOperation();
         ++snapshot_.generation_; snapshot_.lifecycle_ = DocumentLifecycle::Closed;
         snapshot_.source_.lease_.reset(); return Unit{};
+    }
+    void DocumentSession::MarkRecovered()
+    {
+        if (snapshot_.contentMode_ != DocumentContentMode::InlineBytes || snapshot_.lifecycle_ != DocumentLifecycle::Ready) return;
+        recoveryDirty_ = true; snapshot_.dirty_ = true; ++snapshot_.revision_;
+    }
+    bool DocumentSession::AuthorizeRecoveryClose(const RecoverySnapshot& Receipt)
+    {
+        if (Receipt.document_.id_ != snapshot_.id_ || Receipt.document_.generation_ != snapshot_.generation_
+            || Receipt.document_.revision_ != snapshot_.revision_ || Receipt.checksum_.size() != 64 || Receipt.snapshotPath_.empty()) return false;
+        recoveryClose_ = std::pair{snapshot_.generation_, snapshot_.revision_}; return true;
     }
     void DocumentSession::SetHistoryState(bool Undo, bool Redo) { undo_ = Undo; redo_ = Redo; }
 }

@@ -169,11 +169,53 @@ namespace hc::document
             return Json;
         }
     }
+    namespace
+    {
+        bool Retired(const QString& Root, const DocumentSnapshot& Document)
+        {
+            QFile File(Root + "/" + QString::fromStdString(Document.id_) + ".retired");
+            if (!File.exists()) return false;
+            if (!File.open(QIODevice::ReadOnly)) return true;
+            const auto Json = QJsonDocument::fromJson(File.readAll()).object();
+            std::uint64_t Generation = 0, Revision = 0;
+            if (!Unsigned(Json["generation"], Generation) || !Unsigned(Json["revision"], Revision)) return true;
+            return Generation ? Stamp(Document) <= std::pair{Generation, Revision} : Document.revision_ <= Revision;
+        }
+        QJsonObject TextState(const TextRecoveryState& State)
+        {
+            return {{"encoding", QString::fromStdString(State.encoding_)}, {"eol", QString::fromStdString(State.lineEnding_)},
+                {"bom", State.bom_}, {"untitled", State.untitled_}, {"baselineSha256", QString::fromStdString(State.baselineSha256_)},
+                {"anchor", QString::number(State.anchor_)}, {"caret", QString::number(State.caret_)},
+                {"firstLine", QString::number(State.firstLine_)}, {"xOffset", QString::number(State.xOffset_)}};
+        }
+        bool ReadTextState(const QJsonObject& Json, TextRecoveryState& State)
+        {
+            if (Json.size() != 9 || !TextValid(Json["encoding"], 128) || !Json["bom"].isBool() || !Json["untitled"].isBool()) return false;
+            State.encoding_ = Json["encoding"].toString().toStdString(); State.lineEnding_ = Json["eol"].toString().toStdString();
+            State.baselineSha256_ = Json["baselineSha256"].toString().toStdString();
+            State.bom_ = Json["bom"].toBool(); State.untitled_ = Json["untitled"].toBool();
+            if (State.encoding_.empty() || (State.lineEnding_ != "CRLF" && State.lineEnding_ != "LF" && State.lineEnding_ != "CR")
+                || (!State.baselineSha256_.empty() && !Hex(State.baselineSha256_))) return false;
+            for (const auto& Field : {std::pair{"anchor", &State.anchor_}, {"caret", &State.caret_}, {"firstLine", &State.firstLine_}, {"xOffset", &State.xOffset_}}) {
+                std::uint64_t Value = 0;
+                if (!Unsigned(Json[Field.first], Value) || Value > 0x7fffffff) return false;
+                *Field.second = static_cast<std::int64_t>(Value);
+            }
+            return true;
+        }
+    }
     Result<RecoverySnapshot> DocumentRecoveryStore::Store(RecoverySnapshot Snapshot)
     {
         if (!IdValid(Snapshot.document_.id_)) return Failure("document-recovery-budget");
         if (!Snapshot.document_.generation_ || Snapshot.document_.savedRevision_ > Snapshot.document_.revision_)
             return Failure("document-recovery-generation");
+        if (Snapshot.text_) {
+            TextRecoveryState Checked;
+            if (Snapshot.viewId_ != "text" || Snapshot.document_.contentMode_ != DocumentContentMode::InlineBytes
+                || !ReadTextState(TextState(*Snapshot.text_), Checked)
+                || QString::fromUtf8(Snapshot.bytes_).toUtf8().toStdString() != Snapshot.bytes_)
+                return Failure("document-recovery-text-schema");
+        }
         const bool External = Snapshot.document_.contentMode_ == DocumentContentMode::ExternalModel;
         if ((Snapshot.document_.contentMode_ != DocumentContentMode::InlineBytes && !External)
             || (External && !ExternalValid(Snapshot))
@@ -182,6 +224,7 @@ namespace hc::document
         if (!QDir().mkpath(root_)) return Failure("document-recovery-directory");
         QLockFile Lock(root_ + "/index.lock"); if (!Lock.tryLock(2000)) return Failure("document-recovery-locked");
         auto Existing = Index(root_); if (!Existing.HasValue()) return Existing.Failure();
+        if (Retired(root_, Snapshot.document_)) return Failure("document-recovery-retired");
         const auto Id = QString::fromStdString(Snapshot.document_.id_);
         // Native generation/revision order wins over completion time. Reject
         // stale/equal completions before publishing files, index or P0 alias.
@@ -211,6 +254,10 @@ namespace hc::document
             {"revision", QString::number(Snapshot.document_.revision_)}, {"savedRevision", QString::number(Snapshot.document_.savedRevision_)},
             {"utcMs", QString::number(Snapshot.utcMs_)}, {"sha256", QString::fromStdString(Snapshot.checksum_)},
             {"bytes", QString::fromLatin1(Bytes.toBase64())}};
+        if (Snapshot.text_) {
+            Record["schemaVersion"] = 4; Record["payloadEncoding"] = "utf-8";
+            Record["text"] = TextState(*Snapshot.text_); Record["ownerWindow"] = QString::fromStdString(Snapshot.ownerWindow_);
+        }
         if (External) {
             auto Identity = Record["source"].toObject();
             Identity["inputSha256"] = QString::fromStdString(Snapshot.document_.source_.inputSha256_);
@@ -227,10 +274,16 @@ namespace hc::document
         const auto Payload = QJsonDocument(Record).toJson(QJsonDocument::Compact);
         if (!StoreBytes(QString::fromStdString(Snapshot.snapshotPath_), Payload)) return Failure("document-recovery-write");
         QJsonArray Next; Next.append(QJsonObject{{"documentId", Id}, {"generation", QString::number(Snapshot.document_.generation_)}, {"revision", QString::number(Snapshot.document_.revision_)}, {"path", Name}});
+        QStringList Pins;
+        for (const auto& SessionId : Sessions()) {
+            auto Session = ReadSession(SessionId);
+            if (!Session.HasValue()) continue;
+            for (const auto& Item : Session.Value()["documents"].toArray()) Pins.append(Item.toObject()["snapshot"].toString());
+        }
         QStringList Retired; int Previous = 0;
         for (const auto& Value : Existing.Value()) {
             const auto Item = Value.toObject();
-            if (Item["documentId"] == Id && ++Previous >= 3) Retired.append(Item["path"].toString());
+            if (Item["documentId"] == Id && ++Previous >= 3 && !Pins.contains(Item["path"].toString())) Retired.append(Item["path"].toString());
             else Next.append(Item);
         }
         // A snapshot is immutable and complete before its index is published.
@@ -257,16 +310,26 @@ namespace hc::document
         const auto Bytes = QByteArray::fromBase64(Json["bytes"].toString().toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
         const auto Id = Json["documentId"].toString().toStdString(); bool RevisionValid = false;
         const auto Revision = Json["revision"].toString().toULongLong(&RevisionValid);
-        if (Parse.error != QJsonParseError::NoError || !Document.isObject() || (Schema != 1 && Schema != 2 && Schema != 3)
+        if (Parse.error != QJsonParseError::NoError || !Document.isObject() || (Schema != 1 && Schema != 2 && Schema != 3 && Schema != 4)
             || !IdValid(Id) || !RevisionValid || Bytes.toBase64() != Json["bytes"].toString().toLatin1()
             || QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex() != Json["sha256"].toString().toLatin1())
             return Failure("document-recovery-checksum-or-schema");
         RecoverySnapshot Result; Result.document_.id_ = Id; Result.document_.revision_ = Revision;
-        if (Schema == 2 || Schema == 3) {
+        if (Schema == 2 || Schema == 3 || Schema == 4) {
             bool GenerationValid = false, SavedValid = false;
             Result.document_.generation_ = Json["generation"].toString().toULongLong(&GenerationValid);
             Result.document_.savedRevision_ = Json["savedRevision"].toString().toULongLong(&SavedValid);
             if (!GenerationValid || !Result.document_.generation_ || !SavedValid || Result.document_.savedRevision_ > Revision) return Failure("document-recovery-generation");
+        }
+        if (Retired(root_, Result.document_)) return Failure("document-recovery-retired");
+        if (Schema == 4) {
+            TextRecoveryState State;
+            if (Json["viewId"] != QJsonValue("text") || Json["payloadEncoding"] != QJsonValue("utf-8")
+                || !ReadTextState(Json["text"].toObject(), State) || QString::fromUtf8(Bytes).toUtf8() != Bytes)
+                return Failure("document-recovery-text-schema");
+            Result.text_ = std::move(State);
+            Result.ownerWindow_ = Json["ownerWindow"].toString().toStdString();
+            if (!Result.ownerWindow_.empty() && !IdValid(Result.ownerWindow_)) return Failure("document-recovery-owner");
         }
         Result.document_.source_.localPath_ = Json["sourcePath"].toString().toStdString();
         Result.document_.source_.sourceToken_ = Json["sourceToken"].toString().toStdString();
@@ -350,15 +413,34 @@ namespace hc::document
         return Result;
     }
     Result<Unit> DocumentRecoveryStore::Remove(const DocumentId& Id, std::uint64_t ThroughRevision)
+    { return RemoveThrough(Id, 0, ThroughRevision); }
+    Result<Unit> DocumentRecoveryStore::RemoveThrough(const DocumentId& Id, std::uint64_t Generation, std::uint64_t ThroughRevision)
     {
         if (!IdValid(Id)) return Failure("document-recovery-id");
-        if (!QFileInfo::exists(root_)) return Unit{};
+        if (!QDir().mkpath(root_)) return Failure("document-recovery-directory");
         QLockFile Lock(root_ + "/index.lock"); if (!Lock.tryLock(2000)) return Failure("document-recovery-locked");
         auto Entries = Index(root_); if (!Entries.HasValue()) return Entries.Failure();
+        if (!Generation) {
+            Generation = 1;
+            for (const auto& Value : Entries.Value()) if (Value.toObject()["documentId"].toString().toStdString() == Id)
+                Generation = std::max<std::uint64_t>(Generation, Value.toObject()["generation"].toString("1").toULongLong());
+        }
+        // Publish the deletion fence first: even a write that has not started cannot resurrect it.
+        const auto Fence = root_ + "/" + QString::fromStdString(Id) + ".retired";
+        QFile Previous(Fence);
+        if (Previous.exists()) {
+            if (!Previous.open(QIODevice::ReadOnly)) return Failure("document-recovery-cleanup");
+            const auto Old = QJsonDocument::fromJson(Previous.readAll()).object(); Previous.close();
+            std::uint64_t OldGeneration = 0, OldRevision = 0;
+            if (!Unsigned(Old["generation"], OldGeneration) || !Unsigned(Old["revision"], OldRevision)) return Failure("document-recovery-cleanup");
+            if (std::pair{OldGeneration, OldRevision} > std::pair{Generation, ThroughRevision}) { Generation = OldGeneration; ThroughRevision = OldRevision; }
+        }
+        if (!StoreBytes(Fence, QJsonDocument(QJsonObject{{"generation", QString::number(Generation)}, {"revision", QString::number(ThroughRevision)}}).toJson(QJsonDocument::Compact)))
+            return Failure("document-recovery-cleanup");
         QJsonArray Next; QStringList Retired; bool Remaining = false;
         for (auto Value : Entries.Value()) {
             const auto Item = Value.toObject();
-            if (Item["documentId"].toString().toStdString() == Id && Item["revision"].toString().toULongLong() <= ThroughRevision)
+            if (Item["documentId"].toString().toStdString() == Id && (Generation ? std::pair{Item["generation"].toString("1").toULongLong(), Item["revision"].toString().toULongLong()} <= std::pair{Generation, ThroughRevision} : Item["revision"].toString().toULongLong() <= ThroughRevision))
                 Retired.append(Item["path"].toString());
             else { Next.append(Item); if (Item["documentId"].toString().toStdString() == Id) Remaining = true; }
         }
@@ -369,8 +451,62 @@ namespace hc::document
         const auto Alias = root_ + "/" + QString::fromStdString(Id) + ".json";
         if (!Remaining && QFileInfo::exists(Alias)) {
             auto Record = Read(Alias.toStdString());
-            if (Record.HasValue() && Record.Value().document_.revision_ <= ThroughRevision && !QFile::remove(Alias)) return Failure("document-recovery-cleanup");
+            if ((!Record.HasValue() || Record.Value().document_.revision_ <= ThroughRevision) && !QFile::remove(Alias)) return Failure("document-recovery-cleanup");
         }
         return Unit{};
     }
+    bool DocumentRecoveryStore::IsRetired(const DocumentSnapshot& Document) const
+    { return !IdValid(Document.id_) || Retired(root_, Document); }
+    QString DocumentRecoveryStore::SessionLockPath(const QString& Id) const
+    { return IdValid(Id.toStdString()) ? root_ + "/sessions/" + Id + ".lock" : QString{}; }
+    QStringList DocumentRecoveryStore::Sessions() const
+    {
+        QStringList Result;
+        for (const auto& Name : QDir(root_ + "/sessions").entryList({"*.json"}, QDir::Files)) {
+            const auto Id = Name.chopped(5); if (IdValid(Id.toStdString())) Result.append(Id);
+        }
+        return Result;
+    }
+    Result<QJsonObject> DocumentRecoveryStore::ReadSession(const QString& Id) const
+    {
+        if (!IdValid(Id.toStdString())) return Failure("document-hotexit-session-id");
+        QFile File(root_ + "/sessions/" + Id + ".json");
+        if (!File.open(QIODevice::ReadOnly) || File.size() > 1024 * 1024) return Failure("document-hotexit-session-read");
+        QJsonParseError Error; const auto Json = QJsonDocument::fromJson(File.readAll(), &Error).object();
+        if (Error.error != QJsonParseError::NoError || Json["schemaVersion"] != QJsonValue(1)
+            || Json["windowId"] != Id || !Json["documents"].isArray() || Json["documents"].toArray().size() > 16)
+            return Failure("document-hotexit-session-schema");
+        for (const auto& Value : Json["documents"].toArray()) {
+            const auto Item = Value.toObject(); const auto Name = Item["snapshot"].toString();
+            if (!IdValid(Item["documentId"].toString().toStdString()) || !TextValid(Item["path"])) return Failure("document-hotexit-session-schema");
+            if (!Name.isEmpty() && (QFileInfo(Name).fileName() != Name || !Name.endsWith(".snapshot.json")
+                || !Name.startsWith(Item["documentId"].toString() + "-") || !Hex(Item["sha256"].toString().toStdString())))
+                return Failure("document-hotexit-session-schema");
+        }
+        return Json;
+    }
+    Result<Unit> DocumentRecoveryStore::StoreSession(const QString& Id, const QJsonObject& Session)
+    {
+        if (!IdValid(Id.toStdString()) || !QDir().mkpath(root_ + "/sessions")) return Failure("document-hotexit-session-directory");
+        QLockFile Lock(root_ + "/index.lock"); if (!Lock.tryLock(2000)) return Failure("document-recovery-locked");
+        for (const auto& Item : Session["documents"].toArray()) {
+            const auto Record = Item.toObject(); if (Record["snapshot"].toString().isEmpty()) continue;
+            auto ReadBack = Read((root_ + "/" + Record["snapshot"].toString()).toStdString());
+            if (!ReadBack.HasValue() || ReadBack.Value().document_.id_ != Record["documentId"].toString().toStdString()
+                || ReadBack.Value().checksum_ != Record["sha256"].toString().toStdString()
+                || QString::number(ReadBack.Value().document_.generation_) != Record["generation"].toString()
+                || QString::number(ReadBack.Value().document_.revision_) != Record["revision"].toString())
+                return Failure("document-hotexit-session-snapshot");
+        }
+        auto Json = Session; Json["schemaVersion"] = 1; Json["windowId"] = Id;
+        if (!StoreBytes(root_ + "/sessions/" + Id + ".json", QJsonDocument(Json).toJson(QJsonDocument::Compact))) return Failure("document-hotexit-session-write");
+        return Unit{};
+    }
+    bool DocumentRecoveryStore::RemoveSession(const QString& Id)
+    {
+        if (!IdValid(Id.toStdString())) return false;
+        const auto Path = root_ + "/sessions/" + Id + ".json";
+        return !QFileInfo::exists(Path) || QFile::remove(Path);
+    }
+
 }

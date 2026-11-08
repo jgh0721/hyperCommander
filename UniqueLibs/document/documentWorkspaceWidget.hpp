@@ -13,6 +13,8 @@
 #include <QPointer>
 #include <memory>
 
+class QLockFile;
+class QProgressDialog;
 class QMenuBar;
 class QMenu;
 class QToolBar;
@@ -49,6 +51,8 @@ namespace hc::document
         QJsonObject HandleMessage(const QJsonObject& Envelope);
         QJsonObject Snapshot() const;
         bool RequestClose();
+        bool RestoreHotExit(const QString& SessionId);
+        void ShowRecoveryManager();
         bool RequestViewerClose();
         bool IsIdle() const;
         bool SetTabbed(bool Enabled);
@@ -173,6 +177,24 @@ namespace hc::document
         void toggleEpubFullscreen();
         bool epubFullscreen_=false,epubWasMaximized_=false;
         QRect epubWindowGeometry_;
+        bool hotExitEnabled() const;
+        bool hotExitEligible(const std::shared_ptr<Tab>& Tab) const;
+        bool requestHotExitClose();
+        void publishHotExitSession(bool Closing);
+        void cancelHotExitClose(const QString& Error = {});
+        std::shared_ptr<QLockFile> hotExitLock_;
+        std::shared_ptr<QLockFile> restoringLock_;
+        std::vector<std::shared_ptr<QLockFile>> manualRecoveryLocks_;
+        QString restoringSessionId_;
+        bool restorationIncomplete_ = false;
+        QJsonObject publishedSession_;
+        std::vector<RecoverySnapshot> restoredOriginals_;
+        bool pendingHotExitRestore_ = false, hotExitClosing_ = false, hotExitPublishing_ = false, hotExitReady_ = false;
+        QPointer<QProgressDialog> hotExitProgress_;
+        quint64 hotExitCloseEpoch_ = 0;
+        QString restoredActive_;
+        QMap<QString, QString> restoredIds_;
+        QStringList hotExitDiscard_;
         bool closingWorkspace_ = false;
         bool closePromptActive_ = false;
         bool pendingActionsScheduled_ = false;

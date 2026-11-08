@@ -23,6 +23,8 @@
 #include <QTabWidget>
 #include <QMessageBox>
 #include <QLabel>
+#include <QCheckBox>
+#include "UniqueLibs/document/documentSettingsDialog.hpp"
 #include <QLockFile>
 #include <QScopeGuard>
 #include <QScreen>
@@ -67,6 +69,160 @@ class DocumentP1Tests final : public QObject
 {
     Q_OBJECT
 private slots:
+
+    void hotExitSettingsMigrationAndDependency()
+    {
+        QTemporaryDir Root; const auto Path = hc::settings::UnifiedConfig::FileName(Root.path());
+        QVERIFY(Put(Path, R"({"schemaVersion":2,"documentViews":{"textView":{}}})"));
+        DocumentSettingsDialog Dialog(Path, {});
+        auto* Enabled = Dialog.findChild<QCheckBox*>("documentViews/textView/hotExitEnabled");
+        auto* Clean = Dialog.findChild<QCheckBox*>("documentViews/textView/restoreCleanDocuments");
+        QVERIFY(Enabled); QVERIFY(Clean); QVERIFY(Enabled->isChecked()); QVERIFY(Clean->isChecked()); QVERIFY(Clean->isEnabled());
+        Enabled->setChecked(true); QVERIFY(Clean->isEnabled()); QVERIFY(Dialog.Apply());
+        const auto Json = QJsonDocument::fromJson(Bytes(Path)).object()["documentViews"].toObject()["textView"].toObject();
+        QCOMPARE(Json["hotExitPolicyVersion"].toInt(), 1); QVERIFY(Json["hotExitEnabled"].toBool());
+        Enabled->setChecked(false); QVERIFY(Dialog.Apply());
+    }
+    void hotExitTextSchemaAndRetirementFence()
+    {
+        QTemporaryDir Root; DocumentRecoveryStore Store(Root.path()); RecoverySnapshot Record;
+        Record.document_.id_ = std::string(32, 'b'); Record.document_.generation_ = 4;
+        Record.document_.revision_ = 9; Record.document_.savedRevision_ = 2; Record.bytes_ = QString::fromUtf8("한글 😀\r\n").toUtf8().toStdString();
+        Record.text_ = TextRecoveryState{}; Record.text_->encoding_ = "CP949"; Record.text_->lineEnding_ = "CRLF";
+        Record.text_->anchor_ = 3; Record.text_->caret_ = 7; Record.ownerWindow_ = std::string(32, 'c');
+        auto Stored = Store.Store(Record); QVERIFY(Stored.HasValue());
+        auto Read = Store.Read(Stored.Value().snapshotPath_); QVERIFY(Read.HasValue()); QVERIFY(Read.Value().text_);
+        QCOMPARE(Read.Value().bytes_, Record.bytes_); QCOMPARE(Read.Value().text_->encoding_, std::string("CP949"));
+        QCOMPARE(Read.Value().text_->caret_, std::int64_t(7)); QVERIFY(!Read.Value().document_.source_.originalWritable_);
+        QVERIFY(Store.RemoveThrough(Record.document_.id_, 4, 9).HasValue());
+        QVERIFY(!Store.Store(Record).HasValue()); QVERIFY(Store.List().Value().empty());
+        Record.document_.generation_ = 5; Record.document_.revision_ = 3;
+        QVERIFY(Store.Store(Record).HasValue()); // A newer document generation is independent of the old revision counter.
+        QVERIFY(Store.RemoveThrough(Record.document_.id_, 4, 99).HasValue());
+        QCOMPARE(Store.List().Value().size(), std::size_t(1));
+    }
+    void hotExitReceiptAndRecoveredSave()
+    {
+        QTemporaryDir Root; DocumentRecoveryStore Store(Root.path());
+        SourceIdentity Source; Source.localPath_ = "file.txt"; Source.originalWritable_ = true;
+        DocumentSession Session(std::string(32, 'd')); QVERIFY(Session.CompleteOpen(1, OpenedDocument{Source, "base"}));
+        Session.MarkRecovered(); QVERIFY(Session.Snapshot().dirty_);
+        auto Save = Session.Save({SaveDisposition::Original, "file.txt"}); QVERIFY(Save.HasValue());
+        QVERIFY(Session.CompleteSave(Save.Value(), {true})); QVERIFY(!Session.Snapshot().dirty_);
+        QVERIFY(Session.Execute("document.setText", "draft").HasValue());
+        QVERIFY(!Session.Close(CloseDisposition::PreserveSnapshot).HasValue());
+        RecoverySnapshot Record; Record.document_ = Session.Snapshot(); Record.bytes_ = Session.Text();
+        auto Saved = Store.Store(Record); QVERIFY(Saved.HasValue()); QVERIFY(Session.AuthorizeRecoveryClose(Saved.Value()));
+        QVERIFY(Session.Execute("document.setText", "newer").HasValue());
+        QVERIFY(!Session.Close(CloseDisposition::PreserveSnapshot).HasValue());
+        Record.document_ = Session.Snapshot(); Record.bytes_ = Session.Text(); Saved = Store.Store(Record);
+        QVERIFY(Saved.HasValue()); QVERIFY(Session.AuthorizeRecoveryClose(Saved.Value()));
+        QVERIFY(Session.Close(CloseDisposition::PreserveSnapshot).HasValue());
+    }
+    void hotExitWindowRoundTrip_data()
+    {
+        QTest::addColumn<bool>("Conflict"); QTest::addColumn<bool>("Periodic"); QTest::addColumn<QString>("Draft");
+        const auto Draft = QString::fromUtf8("초안 😀\r\n");
+        QTest::newRow("unchanged") << false << false << Draft;
+        QTest::newRow("external-change") << true << false << Draft;
+        QTest::newRow("periodic") << false << true << Draft;
+        QTest::newRow("empty-content") << false << false << QString{};
+    }
+    void hotExitWindowRoundTrip()
+    {
+        QFETCH(bool, Conflict); QFETCH(bool, Periodic); QFETCH(QString, Draft); QTemporaryDir Root;
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Root.path()); const auto Reset = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        QVERIFY(Put(hc::settings::UnifiedConfig::FileName(Root.path()), QByteArray(R"({"schemaVersion":2,"documentViews":{"textView":{"hotExitPolicyVersion":1,"hotExitEnabled":true,"recoveryEnabled":false}}})").replace("false", Periodic ? "true" : "false")));
+        const auto Path = Root.filePath("original.txt"); QVERIFY(Put(Path, "base\r\n"));
+        const auto RecoveryRoot = Root.filePath("recovery"); QString WindowId;
+        {
+            DocumentWorkspaceWidget Widget(RecoveryRoot); Widget.show(); QVERIFY(Widget.Snapshot()["hotExitEnabled"].toBool());
+            const auto Id = Widget.Handle({{"action", "open"}, {"path", Path}})["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Id));
+            QVERIFY(!Widget.Handle({{"action", "replaceText"}, {"documentId", Id}, {"text", Draft}}).contains("error"));
+            WindowId = Widget.Snapshot()["workspaceId"].toString();
+            if (Periodic) {
+                DocumentRecoveryStore Store(RecoveryRoot);
+                QTRY_VERIFY(Store.ReadSession(WindowId).HasValue() && !Store.ReadSession(WindowId).Value()["documents"].toArray().isEmpty());
+                QVERIFY(!Store.ReadSession(WindowId).Value()["cleanShutdown"].toBool());
+            }
+            QVERIFY(!Widget.RequestClose()); QTRY_VERIFY_WITH_TIMEOUT(Widget.RequestClose(), 10000);
+            QVERIFY(Widget.Snapshot()["documents"].toArray().isEmpty()); QCOMPARE(Bytes(Path), QByteArray("base\r\n"));
+        }
+        if (Conflict) QVERIFY(Put(Path, "external\r\n"));
+        DocumentWorkspaceWidget Restored(RecoveryRoot); Restored.show(); QVERIFY(Restored.RestoreHotExit(WindowId));
+        QTRY_COMPARE(Restored.Snapshot()["documents"].toArray().size(), 1);
+        const auto Id = Restored.Snapshot()["documents"].toArray().first().toObject()["documentId"].toString();
+        QTRY_VERIFY(Ready(Restored, Id)); QTRY_VERIFY(Document(Restored, Id)["dirty"].toBool());
+        QCOMPARE(Restored.findChild<QTextView*>()->Content(), Draft);
+        QCOMPARE(Document(Restored, Id)["canSave"].toBool(), !Conflict);
+        QCOMPARE(Bytes(Path), Conflict ? QByteArray("external\r\n") : QByteArray("base\r\n"));
+        const auto Output = Root.filePath("saved.txt");
+        QVERIFY(!Restored.Handle({{"action", "saveAs"}, {"documentId", Id}, {"path", Output}}).contains("error"));
+        QTRY_VERIFY(Restored.IsIdle()); QVERIFY(!Document(Restored, Id)["dirty"].toBool());
+    }
+    void hotExitWriteFailureKeepsWindow()
+    {
+        QTemporaryDir Root; const auto Previous = qApp->property("documentViewsConfigDir"); qApp->setProperty("documentViewsConfigDir", Root.path());
+        const auto Reset = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        QVERIFY(Put(hc::settings::UnifiedConfig::FileName(Root.path()), R"({"schemaVersion":2,"documentViews":{"textView":{"hotExitPolicyVersion":1,"hotExitEnabled":true,"recoveryEnabled":false}}})"));
+        const auto Path = Root.filePath("source.txt"); QVERIFY(Put(Path, "base"));
+        DocumentWorkspaceWidget Widget(Root.filePath("recovery"));
+        const auto Id = Widget.Handle({{"action","open"},{"path",Path}})["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Id));
+        QVERIFY(!Widget.Handle({{"action","replaceText"},{"documentId",Id},{"text","unsaved"}}).contains("error"));
+        QLockFile Block(Root.filePath("recovery/index.lock")); QVERIFY(Block.tryLock());
+        QVERIFY(!Widget.RequestClose()); QTRY_VERIFY_WITH_TIMEOUT(!Widget.Snapshot()["hotExitClosing"].toBool(), 10000);
+        QCOMPARE(Widget.Snapshot()["documents"].toArray().size(), 1); QVERIFY(Document(Widget,Id)["dirty"].toBool()); QCOMPARE(Bytes(Path),QByteArray("base"));
+        Block.unlock(); QVERIFY(!Widget.RequestClose()); QTRY_VERIFY_WITH_TIMEOUT(Widget.RequestClose(),10000);
+    }
+    void hotExitCancelKeepsNewerEdits()
+    {
+        QTemporaryDir Root; const auto Previous = qApp->property("documentViewsConfigDir"); qApp->setProperty("documentViewsConfigDir", Root.path());
+        const auto Reset = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        QVERIFY(Put(hc::settings::UnifiedConfig::FileName(Root.path()), R"({"schemaVersion":2,"documentViews":{"textView":{"hotExitPolicyVersion":1,"hotExitEnabled":true,"recoveryEnabled":false}}})"));
+        const auto RecoveryRoot = Root.filePath("recovery"); QString WindowId;
+        {
+            DocumentWorkspaceWidget Widget(RecoveryRoot); Widget.show();
+            const auto Id = Widget.Handle({{"action","new"}})["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Id));
+            QVERIFY(!Widget.Handle({{"action","replaceText"},{"documentId",Id},{"text","before cancellation"}}).contains("error"));
+            QLockFile Block(RecoveryRoot + "/index.lock"); QVERIFY(Block.tryLock());
+            QVERIFY(!Widget.RequestClose()); QVERIFY(Widget.Snapshot()["hotExitClosing"].toBool());
+            QVERIFY(!Widget.Handle({{"action","cancel"}}).contains("error"));
+            QVERIFY(!Widget.Handle({{"action","replaceText"},{"documentId",Id},{"text","after cancellation"}}).contains("error"));
+            Block.unlock(); QTRY_VERIFY(Widget.IsIdle());
+            QCOMPARE(Widget.Snapshot()["documents"].toArray().size(), 1); QVERIFY(Document(Widget,Id)["dirty"].toBool());
+            QVERIFY(!Widget.Snapshot()["hotExitClosing"].toBool());
+            WindowId = Widget.Snapshot()["workspaceId"].toString();
+            QVERIFY(!Widget.RequestClose()); QTRY_VERIFY(Widget.RequestClose());
+        }
+        DocumentWorkspaceWidget Restored(RecoveryRoot); QVERIFY(Restored.RestoreHotExit(WindowId));
+        QTRY_COMPARE(Restored.Snapshot()["documents"].toArray().size(), 1);
+        const auto Id = Restored.Snapshot()["documents"].toArray().first().toObject()["documentId"].toString();
+        QTRY_VERIFY(Ready(Restored, Id)); QCOMPARE(Restored.findChild<QTextView*>()->Content(), QString("after cancellation"));
+        QVERIFY(Document(Restored,Id)["dirty"].toBool()); QVERIFY(!Document(Restored,Id)["canSave"].toBool());
+    }
+    void hotExitIndependentWindowLeases()
+    {
+        QTemporaryDir Root; const auto Previous = qApp->property("documentViewsConfigDir"); qApp->setProperty("documentViewsConfigDir", Root.path());
+        const auto Reset = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        QVERIFY(Put(hc::settings::UnifiedConfig::FileName(Root.path()), R"({"schemaVersion":2,"documentViews":{"textView":{"hotExitPolicyVersion":1,"hotExitEnabled":true,"recoveryEnabled":false}}})"));
+        const auto RecoveryRoot = Root.filePath("recovery"); QStringList Sessions;
+        for (const auto Text : {"first window", "second window"}) {
+            DocumentWorkspaceWidget Widget(RecoveryRoot);
+            const auto Id = Widget.Handle({{"action","new"}})["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Id));
+            QVERIFY(!Widget.Handle({{"action","replaceText"},{"documentId",Id},{"text",Text}}).contains("error"));
+            Sessions.append(Widget.Snapshot()["workspaceId"].toString());
+            QVERIFY(!Widget.RequestClose()); QTRY_VERIFY(Widget.RequestClose());
+        }
+        QVERIFY(Sessions[0] != Sessions[1]);
+        DocumentWorkspaceWidget First(RecoveryRoot), Second(RecoveryRoot), Duplicate(RecoveryRoot);
+        QVERIFY(First.RestoreHotExit(Sessions[0])); QVERIFY(!Duplicate.RestoreHotExit(Sessions[0]));
+        QVERIFY(Second.RestoreHotExit(Sessions[1]));
+        QTRY_COMPARE(First.Snapshot()["documents"].toArray().size(), 1); QTRY_COMPARE(Second.Snapshot()["documents"].toArray().size(), 1);
+        QTRY_VERIFY(First.IsIdle()); QTRY_VERIFY(Second.IsIdle());
+        QCOMPARE(First.findChild<QTextView*>()->Content(), QString("first window"));
+        QCOMPARE(Second.findChild<QTextView*>()->Content(), QString("second window"));
+    }
     void sessionRevisionCancellationAndLifetime()
     {
         SourceIdentity Source; Source.localPath_ = "source.txt"; Source.originalWritable_ = true;

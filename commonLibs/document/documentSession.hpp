@@ -62,6 +62,9 @@ namespace hc::document
         void SetHistoryState(bool Undo, bool Redo);
         void SetBinaryContent(bool Binary) { binary_ = Binary; }
         void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
+        void MarkRecovered();
+        void AdvanceRecoveryRevision() { ++snapshot_.revision_; }
+        bool AuthorizeRecoveryClose(const RecoverySnapshot& Receipt);
         const std::string& Text() const { return text_; }
     private:
         struct PendingOperation
@@ -82,6 +85,7 @@ namespace hc::document
         std::optional<SaveTicket> saving_;
         std::uint64_t nextSave_ = 0;
         bool undo_ = false, redo_ = false, binary_ = false;
-        bool unlimitedBytes_ = false;
+        bool unlimitedBytes_ = false, recoveryDirty_ = false;
+        std::optional<std::pair<std::uint64_t, std::uint64_t>> recoveryClose_;
     };
 }

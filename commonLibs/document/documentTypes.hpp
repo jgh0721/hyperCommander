@@ -8,7 +8,7 @@ namespace hc::document
     enum class DocumentSaveState { Idle, Saving, Conflict, Failed, Exporting };
     enum class OpenIntent { View, Edit };
     enum class SaveDisposition { Original, SaveAs };
-    enum class CloseDisposition { KeepChanges, Discard };
+    enum class CloseDisposition { KeepChanges, Discard, PreserveSnapshot };
     enum class DocumentContentMode { InlineBytes, ExternalModel };
     enum class DocumentOperation { Idle, Loading, Exporting, Checkpointing, Printing };
     // A savepoint identifies complete content within one backend epoch, including

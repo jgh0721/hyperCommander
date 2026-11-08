@@ -175,7 +175,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     Combo(Save, "documentViews/textView/defaultLineEnding", tr("새 줄 기본 줄끝"), {"CRLF", "LF", "CR"}, {"CRLF", "LF", "CR"});
     Combo(Save, "documentViews/textView/saveEncoding", tr("새 문서 기본 인코딩"), {"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"}, {"UTF-8", "UTF-16LE", "UTF-16BE", "CP949"});
     Combo(Save, "documentViews/textView/saveBomMode", tr("새 문서 BOM"), {tr("인코딩 권장값"), tr("포함"), tr("제외")}, {0, 1, 2});
-    Check(Save, "documentViews/textView/recoveryEnabled", tr("미저장 문서의 주기적 복구 사본 생성"));
+
     Spin(Save, "largeFileMB", tr("대용량 안내 기준 (MiB)"), 1, 16);
     Note(Save, tr("기존 파일의 인코딩·BOM·줄끝은 유지합니다. 수정 중인 문서는 다시 읽기 전에 확인합니다. 복구를 꺼도 F3 문서 교체 시 미저장 내용은 보호합니다."));
     auto* External = Card(Text, tr("외부 파일 변경"));
@@ -196,6 +196,31 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* TextCommon = Pages->widget(1); Pages->removeWidget(TextCommon);
     auto* TextTabs = new QTabWidget(Pages); TextTabs->setObjectName("textViewerTabs");
     TextTabs->addTab(TextCommon, tr("공통")); TextTabs->addTab(createTextColorPage(), tr("색상"));
+    auto* RecoveryPage = new QWidget(TextTabs); auto* RecoveryLayout = new QVBoxLayout(RecoveryPage);
+    auto* Protection = Card(RecoveryLayout, tr("편집 중 보호"));
+    Check(Protection, "documentViews/textView/recoveryEnabled", tr("편집 중 복구 사본 만들기"));
+    Note(Protection, tr("예기치 않은 종료에 대비해 수정 내용을 주기적으로 보존합니다."));
+    auto* Session = Card(RecoveryLayout, tr("종료와 다시 시작"));
+    Check(Session, "documentViews/textView/hotExitEnabled", tr("창을 닫아도 다음 실행에서 이어서 편집 (HotExit)"));
+    Note(Session, tr("원본 파일은 저장하지 않습니다. 개별 탭을 닫을 때는 저장 여부를 확인합니다."));
+    Check(Session, "documentViews/textView/restoreCleanDocuments", tr("수정하지 않은 문서도 다시 열기"));
+    auto* HotExit = qobject_cast<QCheckBox*>(controls_["documentViews/textView/hotExitEnabled"]);
+    auto* Periodic = qobject_cast<QCheckBox*>(controls_["documentViews/textView/recoveryEnabled"]);
+    auto* Clean = controls_["documentViews/textView/restoreCleanDocuments"];
+    auto* Behavior = new QLabel(RecoveryPage); Behavior->setWordWrap(true); Behavior->setObjectName("hotExitBehavior");
+    Session->addRow(Behavior);
+    const auto Refresh = [HotExit, Periodic, Clean, Behavior] {
+        Clean->setEnabled(HotExit->isChecked());
+        Behavior->setText(HotExit->isChecked()
+            ? (Periodic->isChecked() ? tr("보존에 실패하면 창을 닫지 않습니다.") : tr("정상적으로 창을 닫을 때만 보존합니다. 실행 중 예기치 않게 종료되면 마지막 변경을 복구하지 못할 수 있습니다."))
+            : tr("창을 닫을 때 저장 여부를 확인합니다. 기존 복구 사본은 삭제하지 않습니다."));
+    };
+    connect(HotExit, &QCheckBox::toggled, this, Refresh); connect(Periodic, &QCheckBox::toggled, this, Refresh); Refresh();
+    auto* Copies = Card(RecoveryLayout, tr("보존된 복구 사본"));
+    Note(Copies, tr("기능을 꺼도 기존 사본은 삭제하지 않습니다."));
+    auto* Manage = new QPushButton(tr("복구 사본 관리…"), RecoveryPage); Manage->setObjectName("manageRecoveryCopies");
+    Copies->addRow(Manage); connect(Manage, &QPushButton::clicked, this, &DocumentSettingsDialog::RecoveryManagerRequested);
+    RecoveryLayout->addStretch(); TextTabs->addTab(RecoveryPage, tr("세션 · 복구"));
     Pages->insertWidget(1, TextTabs);
     Q_UNUSED(Actions);
     auto* ShortcutPage = Page(tr("단축키"), tr("명령이 동작하는 범위별로 단축키를 바꿉니다. 함께 동작할 수 있는 범위끼리만 충돌을 검사합니다."));
@@ -643,6 +668,8 @@ bool DocumentSettingsDialog::Apply(bool ResolveConflicts)
     auto Changed = base_;
     for (auto It = imported_.begin(); It != imported_.end(); ++It) Changed[It.key()] = It.value();
     Changed = settings::UnifiedConfig::Changed(initial_, Next, Changed);
+    settings::UnifiedConfig::Set(Changed, {"documentViews", "textView", "hotExitPolicyVersion"}, 1);
+    settings::UnifiedConfig::Set(Changed, {"documentViews", "textView", "hotExitEnabled"}, settings::UnifiedConfig::Value(Next, {"documentViews", "textView", "hotExitEnabled"}));
     const QStringList WrapPath{"documentViews", "textView", "wordWrapMode"};
     const auto Mode = settings::UnifiedConfig::Value(Next, WrapPath);
     if (settings::UnifiedConfig::Value(base_, WrapPath).isUndefined() || Mode != settings::UnifiedConfig::Value(initial_, WrapPath)) {

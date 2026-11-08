@@ -21,6 +21,7 @@ public:
 signals:
     // '최근 항목 지우기': the workspace owns the recent list and confirms before clearing.
     void ClearRecentRequested();
+    void RecoveryManagerRequested();
     void PreferencesSaved();
     void ShortcutsValidated();
 private:

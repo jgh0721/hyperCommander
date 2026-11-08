@@ -9,6 +9,9 @@
 #include "UniqueLibs/productTheme.hpp"
 #include "UniqueLibs/qtTranslation.hpp"
 #include <QJsonArray>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QSet>
 #include <QJsonDocument>
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/document/hwpStartupTrace.hpp"
@@ -147,16 +150,29 @@ int main(int Argc, char** Argv)
     }
     InstanceTrace.End();
     hc::document::startup::Scope SettingsTrace("editor.settings");
+    // Independent installations/configurations must not consume one another's editor sessions.
+    const auto Profile = QJsonDocument(QJsonArray{QDir::cleanPath(QCoreApplication::applicationFilePath()).toCaseFolded(),
+        QDir::cleanPath(Config.directory_).toCaseFolded()}).toJson(QJsonDocument::Compact);
+    const auto ProfileId = QString::fromLatin1(QCryptographicHash::hash(Profile, QCryptographicHash::Sha256).toHex());
+    App.setProperty("documentRecoveryProfile", ProfileId);
     const auto RecoveryRoot = hc::defaults::edit::RecoveryDirectory(false);
     hc::settings::JsonStore Settings(hc::settings::UnifiedConfig::FileName(Config.directory_),
         {{"schemaVersion", 2}}, nullptr, hc::settings::JsonStore::Scope::Product);
+    bool HotExitMigrationFailed = false;
+    if (Settings.Object()["documentViews"].toObject()["textView"].toObject()["hotExitPolicyVersion"].toInt() != 1) {
+        auto Root = Settings.Object();
+        hc::settings::UnifiedConfig::Set(Root, {"documentViews", "textView", "hotExitPolicyVersion"}, 1);
+        hc::settings::UnifiedConfig::Set(Root, {"documentViews", "textView", "hotExitEnabled"}, Root["documentViews"].toObject()["textView"].toObject()["hotExitEnabled"].toBool(true));
+        hc::settings::UnifiedConfig::Set(Root, {"documentViews", "textView", "restoreCleanDocuments"}, Root["documentViews"].toObject()["textView"].toObject()["restoreCleanDocuments"].toBool(true));
+        HotExitMigrationFailed = !Settings.Replace(Root);
+    }
     const auto Appearance = Settings.Object()["appearance"].toObject();
     // Light/dark follows the product unless the editor's own setting overrides it.
     hc::document::DocumentThemeAdapter::SetMode(Appearance["documentWorkspace"].toObject()["themeMode"].toString(hc::defaults::edit::WorkspaceValue("themeMode").toString()));
     if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
     SettingsTrace.End();
     std::vector<std::unique_ptr<Workspace>> Windows;
-    const auto OpenFiles=[&](QStringList Files){
+    const auto OpenFiles=[&](QStringList Files, QString SessionId = {}){
     if (Files.isEmpty()) Files.append(QString{});
     Windows.reserve(Windows.size()+Files.size());
     for (const auto& File : Files) {
@@ -169,6 +185,7 @@ int main(int Argc, char** Argv)
             Window->ShowShellError(QObject::tr("문서 표시 설정을 적용하지 못하여 기본 표시를 사용합니다."));
         if(!ParentAppearance.isEmpty()) hc::document::epubui::ApplyAppearance(ParentAppearance);
         auto* Current = Window.get();
+        if (HotExitMigrationFailed) Current->ShowShellError(QObject::tr("HotExit 설정을 저장하지 못했습니다. 기존 종료 동작을 유지합니다."));
         QObject::connect(Current, &hc::document::DocumentWorkspaceWidget::ChromeSettingsChanged, &App,
             [Current, &Settings](const QJsonObject& Chrome) {
                 auto Next = Settings.Object()["appearance"].toObject(); Next["documentWorkspace"] = Chrome;
@@ -225,13 +242,35 @@ int main(int Argc, char** Argv)
         Current->show();
         ShowTrace.End();
         hc::document::startup::Scope OpenTrace("editor.openRequest");
+        if (!SessionId.isEmpty() && !Current->RestoreHotExit(SessionId)) continue;
         if (!File.isEmpty() && Current->Handle({{"action", "open"}, {"path", QFileInfo(File).absoluteFilePath()},{"copyOnly",Parser.isSet("document-copy")}}).contains("error"))
             Current->ShowShellError(QObject::tr("문서 한도 때문에 파일을 열지 못했습니다: %1").arg(File));
         Windows.push_back(std::move(Window));
     }
     };
-    Instance.SetOpenHandler(OpenFiles);
-    OpenFiles(Parser.positionalArguments());
+    Instance.SetOpenHandler([&](const QStringList& Files) { OpenFiles(Files); });
+    // Show a shell first. Restoration itself reads snapshots off the GUI thread.
+    QTimer::singleShot(0, &App, [&] {
+        QSet<QString> RestoredPaths; bool Restored = false;
+        const auto Text = Settings.Object()["documentViews"].toObject()["textView"].toObject();
+        if (!EpubEdit && !Parser.isSet("document-copy") && !Parser.isSet("find-in-files") && Text["hotExitEnabled"].toBool(true)) {
+            hc::document::DocumentRecoveryStore Store(RecoveryRoot);
+            for (const auto& Id : Store.Sessions()) {
+                auto Session = Store.ReadSession(Id); if (!Session.HasValue() || Session.Value()["profileId"].toString() != ProfileId || Session.Value()["documents"].toArray().isEmpty()) continue;
+                const auto Before = Windows.size(); OpenFiles({}, Id);
+                if (Windows.size() > Before) {
+                    Restored = true;
+                    for (const auto& Item : Session.Value()["documents"].toArray()) {
+                        const auto Path = Item.toObject()["path"].toString();
+                        if (!Path.isEmpty()) RestoredPaths.insert(QDir::cleanPath(QFileInfo(Path).absoluteFilePath()).toCaseFolded());
+                    }
+                }
+            }
+        }
+        QStringList Files; for (const auto& File : Parser.positionalArguments())
+            if (!RestoredPaths.contains(QDir::cleanPath(QFileInfo(File).absoluteFilePath()).toCaseFolded())) Files.append(File);
+        if (!Files.isEmpty() || !Restored) OpenFiles(Files);
+    });
     hc::document::startup::Data().EndNamed("editor.entryToTitle");
     QTimer::singleShot(0, &App, [] { hc::document::startup::Data().Aggregate("editor.eventLoopReached", hc::document::startup::Data().Now()); });
     return App.exec();

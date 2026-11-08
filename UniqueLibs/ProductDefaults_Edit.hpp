@@ -157,7 +157,7 @@ namespace hc::defaults::edit
             {"textView/rulerFontSize", 8}, {"textView/defaultLineEnding", "CRLF"},
             {"textView/findInFiles/openLocation", "bottom"},
             {"textView/saveEncoding", "UTF-8"}, {"textView/saveBomMode", 1},
-            {"textView/recoveryEnabled", true}, {"textView/hotExitEnabled", true},
+            {"textView/recoveryEnabled", true}, {"textView/hotExitEnabled", true}, {"textView/hotExitPolicyVersion", 1}, {"textView/restoreCleanDocuments", true},
             {"textView/largeFileMB", 1}, {"textView/externalChangeAction", 1},
             {"textView/externalChangeDetection", 0}, {"textView/externalChangePollSeconds", 3},
             {"textView/mask/enabled", false}, {"textView/mask/gamma", 1.2}, {"textView/mask/strength", 1.1},

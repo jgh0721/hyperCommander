@@ -521,6 +521,41 @@ namespace hc::document
         else if(const auto Bytes=image_->SerializeContent();!Bytes.isEmpty())Result.bytes_="image:"+QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256).toHex();
         return Result;
     }
+    std::optional<TextRecoveryState> DocumentViewPane::CaptureTextRecovery(QByteArray& Bytes, bool IncludeText) const
+    {
+        if (!text_ || text_->isLimitedPreviewMode() || text_->isContentTruncated() || text_->isLoading()) return std::nullopt;
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+        if (!Backend) return std::nullopt;
+        if (IncludeText) Bytes = text_->Content().toUtf8();
+        TextRecoveryState State;
+        State.encoding_ = encoding_.toStdString(); State.bom_ = bom_; State.lineEnding_ = text_->detectedLineEnding() == QTextView::CRLF ? "CRLF" : text_->detectedLineEnding() == QTextView::CR ? "CR" : "LF";
+        State.anchor_ = Backend->Send(SCI_GETANCHOR); State.caret_ = Backend->Send(SCI_GETCURRENTPOS);
+        State.firstLine_ = Backend->Send(SCI_DOCLINEFROMVISIBLE, Backend->Send(SCI_GETFIRSTVISIBLELINE));
+        State.xOffset_ = Backend->Send(SCI_GETXOFFSET); return State;
+    }
+    bool DocumentViewPane::RestoreTextRecovery(const RecoverySnapshot& Record)
+    {
+        if (!text_ || !Record.text_ || CanonicalEncodingName(QString::fromStdString(Record.text_->encoding_)).isEmpty()) return false;
+        const auto& State = *Record.text_; const auto Text = QString::fromUtf8(Record.bytes_);
+        encoding_ = QString::fromStdString(State.encoding_); bom_ = State.bom_; eol_ = QString::fromStdString(State.lineEnding_);
+        text_->LoadContent(Text, QString::fromStdString(Record.document_.source_.localPath_), encoding_, Text.toUtf8(), eol_);
+        RestoreTextPosition(State); text_->Backend()->setModified(true);
+        if (markdown_) markdown_->Refresh(true);
+        emit ViewStateChanged(); return true;
+    }
+    void DocumentViewPane::RestoreTextPosition(const TextRecoveryState& State)
+    {
+        if (!text_ || !text_->Backend()) return;
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+        const auto Boundary = [&](std::int64_t Position) {
+            auto At = qBound<qintptr>(0, Position, Backend->Send(SCI_GETLENGTH));
+            while (At > 0 && (Backend->Send(SCI_GETCHARAT, At) & 0xc0) == 0x80) --At;
+            return At;
+        };
+        Backend->Send(SCI_SETSEL, Boundary(State.anchor_), Boundary(State.caret_));
+        Backend->Send(SCI_SETFIRSTVISIBLELINE, Backend->Send(SCI_VISIBLEFROMDOCLINE, qMin<qintptr>(State.firstLine_, Backend->Send(SCI_GETLINECOUNT) - 1)));
+        Backend->Send(SCI_SETXOFFSET, State.xOffset_);
+    }
     QByteArray DocumentViewPane::SessionContent() const { return SerializeSession().bytes_; }
     DocumentEncoder DocumentViewPane::CaptureSave(const QString& Destination,bool SaveEpubOriginal,std::optional<QByteArray> Content,std::optional<storage::Error> ContentError) const
     {
