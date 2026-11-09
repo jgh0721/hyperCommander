@@ -437,9 +437,18 @@ private slots:
     {
         const Locator Computer{LocatorKind::Shell, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"};
         auto Shell = MakeShellReadProvider(Computer.root_);
+        QElapsedTimer Timer; Timer.start();
         auto ShellCursor = Shell->Enumerate(Computer, {}).get();
         QVERIFY(ShellCursor.HasValue());
-        QVERIFY(ShellCursor.Value()->Next(256, {}).get().HasValue());
+        auto Drives = ShellCursor.Value()->Next(256, {}).get();
+        QVERIFY(Drives.HasValue());
+        QVERIFY2(Timer.elapsed() < 1000, "Computer listing waited for shell discovery");
+        const DWORD Mask = GetLogicalDrives();
+        for (int Letter = 0; Letter < 26; ++Letter) {
+            if (!(Mask & (DWORD(1) << Letter))) continue;
+            QVERIFY(std::any_of(Drives.Value().entries_.begin(), Drives.Value().entries_.end(),
+                [&](const auto& Item) { return Item.directory_ && hc::ui::DriveLetterSortKey(Item) == Letter; }));
+        }
         const Locator Root{LocatorKind::Archive, "fixture.zip", {{"wcx", "/"}}};
         auto Child = Root;
         Child.nesting_.back().entry_ = "/한글.txt";

@@ -22,10 +22,12 @@ HRESULT QSHChangeNotify::StartWatching()
         if( Ret != S_OK )
             break;
 
-        SHChangeNotifyEntry shCNE = { pidl, TRUE };
+        // Only Computer children: recursive file changes would repeatedly refresh the drive list.
+        SHChangeNotifyEntry shCNE = { pidl, FALSE };
         ulRegister = SHChangeNotifyRegister( reinterpret_cast< HWND >( hWnd ), 
                                              SHCNRF_ShellLevel | SHCNRF_InterruptLevel | SHCNRF_NewDelivery, 
-                                             SHCNE_DRIVEADD | SHCNE_DRIVEREMOVED | SHCNE_MEDIAINSERTED | SHCNE_MEDIAREMOVED, SHELL_NOTIFY_MESSAGE, 1, &shCNE );
+                                             SHCNE_DRIVEADD | SHCNE_DRIVEREMOVED | SHCNE_MEDIAINSERTED | SHCNE_MEDIAREMOVED
+                                             | SHCNE_CREATE | SHCNE_MKDIR | SHCNE_DELETE | SHCNE_RMDIR | SHCNE_UPDATEDIR | SHCNE_UPDATEITEM, SHELL_NOTIFY_MESSAGE, 1, &shCNE );
 
         Ret = ulRegister != 0 ? S_OK : E_FAIL;
 
@@ -81,6 +83,9 @@ bool QSHChangeNotify::nativeEvent( const QByteArray& eventType, void* message, q
             if( hNotifyLock == nullptr )
                 break;
 
+            emit ComputerChanged();
+            // Async discovery includes virtual/RDP children with no filesystem path.
+            if (!(lEvent & (SHCNE_DRIVEADD | SHCNE_DRIVEREMOVED | SHCNE_MEDIAINSERTED | SHCNE_MEDIAREMOVED))) break;
             if( isItemNotificationEvent( lEvent ) == false )
                 break;
 

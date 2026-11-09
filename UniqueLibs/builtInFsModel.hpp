@@ -97,6 +97,7 @@ public:
     // An automatic rescan retains the published location and entry snapshot.
     bool CanUseSnapshot() const { return !loading_ || automaticRefresh_; }
     void NotifyNetworkChange();
+    void NotifyComputerChange();
     void SetPlaceholder(const hc::storage::Locator& Location, const QString& Reason, bool Pending = false);
     hc::storage::Locator WorkspaceLocation() const;
     void ClearPlaceholder();

@@ -732,6 +732,9 @@ void QMainUI::initialize()
     connect(shlChangeNotify, &QSHChangeNotify::NetworkChanged, this, [this] {
         for (auto* Model : findChildren<CFSModel*>()) Model->NotifyNetworkChange();
     });
+    connect(shlChangeNotify, &QSHChangeNotify::ComputerChanged, this, [this] {
+        for (auto* Model : findChildren<CFSModel*>()) Model->NotifyComputerChange();
+    });
     shlChangeNotify->StartWatching();
 
     connect( shlChangeNotify, &QSHChangeNotify::OnDriveAdd, this, &QMainUI::OnDriveAdd );

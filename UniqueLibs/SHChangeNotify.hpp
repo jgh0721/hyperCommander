@@ -15,6 +15,7 @@ public:
 
 signals:
     void                                    NetworkChanged();
+    void                                    ComputerChanged();
     /* form X:\\ */
     void                                    OnDriveAdd( const QString& Root );
     /* form X:\\ */

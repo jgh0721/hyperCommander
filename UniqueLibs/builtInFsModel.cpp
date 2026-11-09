@@ -666,6 +666,11 @@ hc::storage::Locator CFSModel::WorkspaceLocation() const
     return Root ? Root->ReadLocation(GetCurrentPathWithRoot()) : hc::storage::Locator{};
 }
 
+void CFSModel::NotifyComputerChange()
+{
+    if (hc::ui::IsDriveList(WorkspaceLocation())) tracker_.Invalidate();
+}
+
 void CFSModel::NotifyNetworkChange()
 {
     const auto Location = WorkspaceLocation();

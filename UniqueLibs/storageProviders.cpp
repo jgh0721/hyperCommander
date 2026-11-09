@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "storageProviders.hpp"
+#include "shellDriveSort.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
 #include "operationMetrics.hpp"
 #include <thread>
@@ -683,6 +684,7 @@ namespace hc::storage
             // QSHChangeNotify subscribes to the network namespace and invalidates
             // active network panels when asynchronous discovery adds entries.
             const bool Network = At.root_ == "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}";
+            const bool Computer = hc::ui::IsDriveList(At);
             const SHCONTF Flags = Network ? SHCONTF_FOLDERS | SHCONTF_FASTITEMS | SHCONTF_ENABLE_ASYNC
                 : SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN;
             Status = Folder->EnumObjects(nullptr, Flags, &Enumerator);
@@ -709,7 +711,9 @@ namespace hc::storage
                 Status = SHGetNameFromIDList(Absolute, SIGDN_DESKTOPABSOLUTEPARSING, &Parsing);
                 if (FAILED(Status)) return NativeError(Status, Id);
                 auto FreeParsing = qScopeGuard([&] { CoTaskMemFree(Parsing); });
-                SFGAOF Attributes = SFGAO_FOLDER | SFGAO_HIDDEN | SFGAO_SYSTEM;
+                // HIDDEN/SYSTEM can query redirected media before publishing the list.
+                // Computer children only need the namespace navigation attribute.
+                SFGAOF Attributes = Computer ? SFGAO_FOLDER : SFGAO_FOLDER | SFGAO_HIDDEN | SFGAO_SYSTEM;
                 PCUITEMID_CHILD ChildArray[] = {Child};
                 Status = Folder->GetAttributesOf(1, ChildArray, &Attributes);
                 if (FAILED(Status)) return NativeError(Status, Id);
@@ -743,10 +747,100 @@ namespace hc::storage
         return Error{ErrorCategory::Unsupported, "native-snapshot-provider"};
     }
 
+    namespace
+    {
+        // Some Computer namespace extensions block inside IEnumIDList::Next even
+        // with FASTITEMS. Never make the visible drive list wait for that call.
+        // One process-wide worker warms names/PIDLs/redirected and virtual drives;
+        // subsequent navigation reuses that snapshot while it is refreshed.
+        struct ComputerSnapshot
+        {
+            std::mutex mutex_;
+            std::vector<EntrySnapshot> entries_;
+            bool busy_ = false;
+            std::chrono::steady_clock::time_point attempted_{};
+        };
+
+        Result<std::vector<EntrySnapshot>> ReadComputer(const OperationContext& Context)
+        {
+            const ProviderId Id{"shell"};
+            if (const auto Failure = Context.Check(Id)) return *Failure;
+            static const auto Cache = std::make_shared<ComputerSnapshot>();
+            std::vector<EntrySnapshot> Entries;
+            bool Start = false;
+            {
+                std::lock_guard Lock(Cache->mutex_);
+                Entries = Cache->entries_;
+                const auto Now = std::chrono::steady_clock::now();
+                Start = !Cache->busy_ && Now - Cache->attempted_ > std::chrono::seconds(5);
+                if (Start) { Cache->busy_ = true; Cache->attempted_ = Now; }
+            }
+            if (Start) {
+                try {
+                    std::thread([State = Cache] {
+                        bool Changed = false;
+                        try {
+                            auto Result = ReadShell({LocatorKind::Shell, "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"}, {});
+                            if (Result.HasValue()) {
+                                std::lock_guard Lock(State->mutex_);
+                                const auto& Fresh = Result.Value();
+                                Changed = Fresh.size() != State->entries_.size();
+                                for (std::size_t Index = 0; !Changed && Index < Fresh.size(); ++Index) {
+                                    const auto& A = Fresh[Index]; const auto& B = State->entries_[Index];
+                                    Changed = A.name_ != B.name_ || A.locator_ != B.locator_
+                                        || A.attributes_ != B.attributes_ || A.hints_ != B.hints_;
+                                }
+                                State->entries_ = std::move(Result.Value());
+                            }
+                        } catch (...) { /* Keep the last usable snapshot; later navigation retries. */ }
+                        {
+                            std::lock_guard Lock(State->mutex_);
+                            State->busy_ = false;
+                        }
+                        if (Changed && SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
+                            PIDLIST_ABSOLUTE Computer = nullptr;
+                            if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &Computer))) {
+                                SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_IDLIST, Computer, nullptr);
+                                CoTaskMemFree(Computer);
+                            }
+                            CoUninitialize();
+                        }
+                    }).detach();
+                } catch (...) {
+                    std::lock_guard Lock(Cache->mutex_);
+                    Cache->busy_ = false;
+                }
+            }
+            // GetLogicalDrives reads drive mappings without opening their roots.
+            // Keep shell-only children, but immediately drop removed drive letters.
+            const DWORD Drives = GetLogicalDrives();
+            if (!Drives) return NativeError(GetLastError(), Id);
+            std::erase_if(Entries, [&](const EntrySnapshot& Item) {
+                const int Letter = hc::ui::DriveLetterSortKey(Item);
+                return Letter < 26 && !(Drives & (DWORD(1) << Letter));
+            });
+            for (int Letter = 0; Letter < 26; ++Letter) {
+                if (!(Drives & (DWORD(1) << Letter))) continue;
+                if (std::any_of(Entries.begin(), Entries.end(), [&](const EntrySnapshot& Item) {
+                    return hc::ui::DriveLetterSortKey(Item) == Letter;
+                })) continue;
+                EntrySnapshot Item;
+                const std::string Path = std::string(1, char('A' + Letter)) + ":\\";
+                Item.name_ = Path;
+                Item.locator_ = {LocatorKind::Shell, Path};
+                Item.directory_ = true; Item.attributes_ = FILE_ATTRIBUTE_DIRECTORY;
+                Item.hints_["filesystemPath"] = Path;
+                Entries.push_back(std::move(Item));
+            }
+            return Entries;
+        }
+    }
+
     std::shared_ptr<IStorageProvider> MakeShellReadProvider(std::string RootParsingName)
     {
         return std::make_shared<CatalogProvider>(ProviderId{"shell"}, [Root = std::move(RootParsingName)](const Locator& At, const OperationContext& Context) {
-            return ReadShell(At.root_.empty() ? Locator{LocatorKind::Shell, Root} : At, Context);
+            const auto Location = At.root_.empty() ? Locator{LocatorKind::Shell, Root} : At;
+            return hc::ui::IsDriveList(Location) ? ReadComputer(Context) : ReadShell(Location, Context);
         });
     }
 
