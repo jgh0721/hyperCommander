@@ -43,12 +43,21 @@ struct FileRuleResult
 {
     bool matched_ = false;
     // A field condition is still waiting for its value and could change the outcome (design 4.4).
-    // Pending results carry the pending style, not a guess from a lower group.
+    // Pending results retain proven properties; provisional first-match styles are display-only.
     bool pending_ = false;
     // Slots whose Unknown value the decision actually depended on. Only these need a query.
     quint64 neededSlots_ = 0;
     QString error_;
-    QColor foreground_, background_, marker_;
+    QColor foreground_, background_, marker_, pendingBackground_;
+    // Indicators can be deferred without discarding proven colours.
+    FileRuleResult ForDisplay(bool ShowPending = true) const {
+        auto Result = *this;
+        if (pending_ && ShowPending) {
+            if (!Result.background_.isValid()) Result.background_ = pendingBackground_;
+            Result.font_.insert("pendingMarker", marker_.name(QColor::HexArgb));
+        }
+        return Result;
+    }
     QJsonObject font_;
     QStringList groups_;
     QMap<QString, QString> owners_;
@@ -198,6 +207,8 @@ public:
         if (!Supported(Document)) return QObject::tr("지원하지 않는 파일 색상 규칙 버전입니다.");
         if (Document["mode"] != "first" && Document["mode"] != "merge") return QObject::tr("그룹 합성 정책이 올바르지 않습니다.");
         if (!Document["groups"].isArray() || Document["groups"].toArray().size() > 256) return QObject::tr("그룹은 최대 256개입니다.");
+        if (Document.contains("provisionalFirst") && !Document["provisionalFirst"].isBool())
+            return QObject::tr("임시 색상 표시 설정은 true 또는 false입니다.");
         if (Document.contains("pending")) {
             if (!Document["pending"].isObject()) return QObject::tr("확인 중 항목 색 형식이 올바르지 않습니다.");
             for (const auto& Scheme : {"light", "dark"}) for (const auto& Role : {"background", "marker"}) {
@@ -315,7 +326,7 @@ public:
         if (conditionDocument_ != ConditionDocument) revision_ = std::make_shared<const int>(0);
         conditionDocument_ = ConditionDocument;
         groups_.clear(); relativeDates_ = false; needsExtension_ = false; extensionOnly_ = true;
-        cacheConditions_ = 0; merge_ = Document["mode"] == "merge"; fields_.clear();
+        cacheConditions_ = 0; merge_ = Document["mode"] == "merge"; provisionalFirst_ = Document["provisionalFirst"].toBool(false); fields_.clear();
         for (int Dark = 0; Dark < 2; ++Dark) {
             pendingBackground_[Dark] = PendingColor(Document, Dark, "background");
             pendingMarker_[Dark] = PendingColor(Document, Dark, "marker");
@@ -514,7 +525,8 @@ private:
                 Context->extensions_.insert(Key, Cached, Cost);
             }
         }
-        QList<int> Matched; bool Pending = false; quint64 Needed = 0;
+        QList<int> Matched, Undecided; bool Pending = false; quint64 Needed = 0;
+        const bool Provisional = Style && !Diagnostics && !merge_ && provisionalFirst_;
         if (Cached && extensionOnly_ && Cached->complete_) Matched = Cached->groups_;
         else {
             static const hc::columns::CellValue Unread = hc::columns::CellValue::Missing(hc::columns::ValueState::Pending);
@@ -542,10 +554,9 @@ private:
                     if ((G.all_ && !Value) || (!G.all_ && Value)) { Hit = Value; Failed = false; Decided = true; break; }
                 }
                 if (!Decided && Waiting) {
-                    // Design 4.4: an undecided group leaves everything below it undecided in first
-                    // mode, and the ownership of every property undecided in merge mode.
-                    Pending = true; Needed |= Waiting;
-                    if (!merge_) break;
+                    // Only properties this group could own are blocked in merge mode.
+                    Pending = true; Needed |= Waiting; Undecided.append(int(Index));
+                    if (!merge_ && !Provisional) break;
                     continue;
                 }
                 if (Failed) { if (Result.error_.isEmpty()) Result.error_ = QObject::tr("%1: 정규표현식 실행 한도를 초과했거나 평가할 수 없습니다.").arg(G.label_); continue; }
@@ -556,31 +567,37 @@ private:
         }
         if (Pending) {
             Result.pending_ = true; Result.neededSlots_ = Needed;
-            if (Style) {
-                Result.background_ = pendingBackground_[Input.dark_]; Result.marker_ = pendingMarker_[Input.dark_];
-                // Carried with the row effects so every painter that draws borders draws the marker too.
-                Result.font_ = QJsonObject{{"pendingMarker", Result.marker_.name(QColor::HexArgb)}};
-            }
-            return Result;
+            Result.pendingBackground_ = pendingBackground_[Input.dark_]; Result.marker_ = pendingMarker_[Input.dark_];
+            // Selection and diagnostics never receive a speculative match.
+            if (Diagnostics || !Style) return Style ? Result.ForDisplay() : Result;
         }
-        Result.matched_ = !Matched.isEmpty();
+        Result.matched_ = !Pending && !Matched.isEmpty();
         if (!Style && !Diagnostics) return Result;
-        quint8 FontOwners = 0;
+        quint8 FontOwners = 0, BlockedFont = 0;
+        bool BlockedForeground = false, BlockedBackground = false;
+        int WaitingIndex = 0;
         for (const auto Index : Matched) {
+            while (WaitingIndex < Undecided.size() && Undecided[WaitingIndex] < Index) {
+                const auto& Waiting = groups_[Undecided[WaitingIndex++]];
+                if (!Provisional) {
+                    BlockedForeground |= Waiting.foreground_[Input.dark_].isValid();
+                    BlockedBackground |= Waiting.background_[Input.dark_].isValid();
+                    BlockedFont |= Waiting.fontKeys_;
+                }
+            }
             const auto& G = groups_[Index]; if (Diagnostics) Result.groups_.append(G.label_);
-            if (!Result.foreground_.isValid() && G.foreground_[Input.dark_].isValid()) {
+            if (!BlockedForeground && !Result.foreground_.isValid() && G.foreground_[Input.dark_].isValid()) {
                 Result.foreground_ = G.foreground_[Input.dark_]; if (Diagnostics) Result.owners_["foreground"] = G.label_;
             }
-            if (!Result.background_.isValid() && G.background_[Input.dark_].isValid()) {
+            if (!BlockedBackground && !Result.background_.isValid() && G.background_[Input.dark_].isValid()) {
                 Result.background_ = G.background_[Input.dark_]; if (Diagnostics) Result.owners_["background"] = G.label_;
             }
             // The first group with effects lends its object unchanged, which is
             // the whole answer in first mode; later groups add only unowned keys.
-            const quint8 Fresh = quint8(G.fontKeys_ & ~FontOwners);
+            const quint8 Fresh = quint8(G.fontKeys_ & ~FontOwners & ~BlockedFont);
             if (!Fresh) continue;
-            if (!FontOwners) Result.font_ = G.font_;
             for (qsizetype Bit = 0; Bit < fontKeys().size(); ++Bit) if (Fresh & (1u << Bit)) {
-                if (FontOwners) Result.font_.insert(fontKeys()[Bit], G.font_[fontKeys()[Bit]]);
+                Result.font_.insert(fontKeys()[Bit], G.font_[fontKeys()[Bit]]);
                 if (Diagnostics) Result.owners_[QString(fontKeys()[Bit])] = G.label_;
             }
             FontOwners |= Fresh;
@@ -604,7 +621,7 @@ private:
     QList<Group> groups_;
     QStringList fields_;
     QColor pendingBackground_[2], pendingMarker_[2];
-    bool merge_ = false, relativeDates_ = false, needsExtension_ = false, extensionOnly_ = true;
+    bool merge_ = false, provisionalFirst_ = false, relativeDates_ = false, needsExtension_ = false, extensionOnly_ = true;
     int cacheConditions_ = 0;
     std::shared_ptr<const int> revision_ = std::make_shared<const int>(0);
     QJsonObject conditionDocument_;

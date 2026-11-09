@@ -284,6 +284,7 @@ private:
     QPoint                          renamePressPosition_;
     bool                            plainLeftClick_ = false;
     QTimer                          columnSortTimer_;
+    void                            positionColumnStatus();
     QLabel*                         columnStatus_ = nullptr;
     QStringList                     querySelection_;
     QString                         queryFocus_;

@@ -231,6 +231,9 @@ private:
     hc::settings::FileRuleInput fileRuleInput(const nsHC::TySpFileSource& Item) const;
     // Drawn: the row is being painted or is in the viewport; other rows only ask for slow values ahead.
     hc::settings::FileRuleResult fileRuleStyle(int Row, bool Drawn = true) const;
+    // Keep a small display-only fallback while a field arrival re-keys a visible row.
+    struct DisplayedFileRule { nsHC::TySpFileSource item_; hc::settings::FileRuleResult style_; };
+    mutable QCache<int, DisplayedFileRule> displayedFileRules_{256};
     // Design 6.2: column field values used by file color rules, kept for the listing's lifetime
     // (the column cache expires after 30 s and a repaint must not re-query a decided row).
     mutable QHash<QString, hc::columns::FieldValues> ruleFields_;
@@ -243,6 +246,7 @@ private:
     void revalidateRuleFields(const nsHC::TySpFileSource& Item) const;
     mutable bool ruleStatusQueued_ = false;
     bool ruleRecolorQueued_ = false;
+    QSet<QString> ruleRecolorPaths_;
     hc::columns::CellValue ruleFieldValue(const nsHC::TySpFileSource& Item, const QString& Field) const;
     bool ruleFieldAllowed(const nsHC::TySpFileSource& Item, const QString& Field) const;
     void requestRuleFields(const nsHC::TySpFileSource& Item, quint64 Slots, bool Urgent = true) const;

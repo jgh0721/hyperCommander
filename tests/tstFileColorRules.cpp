@@ -12,6 +12,77 @@ class FileColorRuleTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void pendingPropertiesAndFirstPreview()
+    {
+        using namespace hc::columns;
+        const QJsonObject Zone{{"type", "field"}, {"field", "file.alternateDataStream.zone"},
+            {"valueType", "unsigned"}, {"op", "eq"}, {"value", "3"}};
+        auto Doc = document({{"type", "extension"}, {"op", "in"}, {"value", "txt"}});
+        auto Fast = Doc["groups"].toArray()[0].toObject();
+        Fast["font"] = QJsonObject{{"bold", false}, {"italic", true}, {"border", "solid"}};
+        Fast["light"] = QJsonObject{{"foreground", "#2266AA"}, {"background", "#FFFFFF"}};
+        Fast["dark"] = QJsonObject{{"foreground", "#AABBCC"}, {"background", "#101010"}}; Fast["autoDark"] = false;
+        QJsonObject Slow{{"id", "zone"}, {"name", "zone"}, {"join", "all"}, {"conditions", QJsonArray{Zone}},
+            {"font", QJsonObject{{"border", "dash"}}}};
+        Doc["version"] = 4; Doc["mode"] = "merge"; Doc["groups"] = QJsonArray{Slow, Fast};
+        FileColorRules Rules; QVERIFY(Rules.Load(Doc).isEmpty());
+        for (const bool Dark : {false, true}) {
+            FileRuleInput Input{"file.txt"}; Input.dark_ = Dark;
+            const auto Partial = Rules.EvaluateStyle(Input);
+            QVERIFY(Partial.pending_); QVERIFY(!Partial.matched_); QCOMPARE(Partial.neededSlots_, quint64(1));
+            QCOMPARE(Partial.foreground_, QColor(Dark ? "#AABBCC" : "#2266AA"));
+            QCOMPARE(Partial.font_["bold"], QJsonValue(false)); QCOMPARE(Partial.font_["italic"], QJsonValue(true));
+            QVERIFY(!Partial.font_.contains("border")); QVERIFY(!Partial.ForDisplay(false).font_.contains("pendingMarker"));
+            QCOMPARE(Partial.ForDisplay().background_, Partial.background_); QVERIFY(Partial.ForDisplay().font_.contains("pendingMarker"));
+            Input.fields_ = {CellValue::Ready(quint64(3))};
+            const auto Final = Rules.EvaluateStyle(Input); QVERIFY(!Final.pending_); QCOMPARE(Final.font_["border"].toString(), QString("dash"));
+            Input.fields_ = {CellValue::Missing(ValueState::Empty)};
+            QCOMPARE(Rules.EvaluateStyle(Input).font_["border"].toString(), QString("solid"));
+        }
+        // Unknown later groups cannot hide properties already owned by an earlier match.
+        Slow["light"] = QJsonObject{{"foreground", "#FF0000"}}; Slow["font"] = QJsonObject{{"bold", true}};
+        Doc["groups"] = QJsonArray{Fast, Slow}; QVERIFY(Rules.Load(Doc).isEmpty());
+        QCOMPARE(Rules.EvaluateStyle(FileRuleInput{"file.txt"}).foreground_, QColor("#2266AA"));
+        QCOMPARE(Rules.EvaluateStyle(FileRuleInput{"file.txt"}).font_["bold"], QJsonValue(false));
+        Doc["groups"] = QJsonArray{Slow, Fast}; QVERIFY(Rules.Load(Doc).isEmpty());
+        auto Partial = Rules.EvaluateStyle(FileRuleInput{"file.txt"});
+        QVERIFY(!Partial.foreground_.isValid()); QVERIFY(!Partial.font_.contains("bold"));
+        QCOMPARE(Partial.font_["italic"], QJsonValue(true));
+        // First mode remains strict by default; its opt-in preview never changes matching or diagnostics.
+        Doc["mode"] = "first"; QVERIFY(Rules.Load(Doc).isEmpty());
+        QVERIFY(!Rules.EvaluateStyle(FileRuleInput{"file.txt"}).foreground_.isValid());
+        Doc["provisionalFirst"] = true; QVERIFY(Rules.Load(Doc).isEmpty());
+        Partial = Rules.EvaluateStyle(FileRuleInput{"file.txt"});
+        QVERIFY(Partial.pending_); QVERIFY(!Partial.matched_); QCOMPARE(Partial.foreground_, QColor("#2266AA"));
+        QVERIFY(!Rules.Evaluate(FileRuleInput{"file.txt"}).foreground_.isValid());
+        QVERIFY(!Rules.Matches(FileRuleInput{"file.txt"}).matched_);
+        FileRuleInput Ready{"file.txt"}; Ready.fields_ = {CellValue::Ready(quint64(3))};
+        QCOMPARE(Rules.EvaluateStyle(Ready).foreground_, QColor("#FF0000"));
+        Ready.fields_ = {CellValue::Missing(ValueState::Unsupported)};
+        QCOMPARE(Rules.EvaluateStyle(Ready).foreground_, QColor("#2266AA"));
+        Doc["provisionalFirst"] = "yes"; QVERIFY(!FileColorRules::Validate(Doc).isEmpty());
+    }
+    void progressiveColorBenchmark()
+    {
+        auto Doc = document({{"type", "extension"}, {"op", "in"}, {"value", "txt"}});
+        const QJsonValue Fast = Doc["groups"].toArray()[0];
+        const QJsonObject Slow{{"id", "zone"}, {"name", "zone"}, {"join", "all"}, {"font", QJsonObject{{"border", "dash"}}},
+            {"conditions", QJsonArray{QJsonObject{{"type", "field"}, {"field", "file.alternateDataStream.zone"},
+            {"valueType", "unsigned"}, {"op", "eq"}, {"value", "3"}}}}};
+        Doc["version"] = 4; Doc["mode"] = "merge"; Doc["groups"] = QJsonArray{Slow, Fast};
+        FileColorRules Rules; QVERIFY(Rules.Load(Doc).isEmpty());
+        for (const int Count : {100, 1000, 10000}) {
+            QList<qint64> Samples; FileColorRules::EvaluationContext Context;
+            for (int Run = 0; Run < 20; ++Run) {
+                QElapsedTimer Clock; Clock.start(); int Ready = 0;
+                for (int I = 0; I < Count; ++I) Ready += Rules.EvaluateStyle(FileRuleInput{QString("file%1.txt").arg(I)}, &Context).foreground_.isValid();
+                Samples.append(Clock.nsecsElapsed()); QCOMPARE(Ready, Count);
+            }
+            std::sort(Samples.begin(), Samples.end());
+            qInfo() << "progressive-colour" << Count << "all-fast-colours-ready-p50-ms" << Samples[10] / 1e6
+                << "p95-ms" << Samples[18] / 1e6 << "zone-values" << "still pending";
+        }
+    }
     void dimAndRowBorders()
     {
         auto Doc = document({{"type", "pattern"}, {"syntax", "literal"}, {"op", "contains"}, {"value", "sample"}});

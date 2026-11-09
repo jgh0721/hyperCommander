@@ -201,7 +201,7 @@ private slots:
             QVERIFY(CompileTemplate("${" + Id + "}").Valid());
         }
         for (const auto& Id : Link) { QCOMPARE(QueryFamily(Id), QString("link")); QVERIFY(QueriesFolders(Id)); }
-        for (const auto& Id : Streams) { QCOMPARE(QueryFamily(Id), QString("streams")); QVERIFY(QueriesFolders(Id)); }
+        for (const auto& Id : Streams) { QCOMPARE(QueryFamily(Id), Id.endsWith(".zone") ? QString("zone") : QString("streams")); QVERIFY(QueriesFolders(Id)); }
         // Allocation and link count share one read; a folder has neither.
         QCOMPARE(QueryFamily("file.hardlink.count"), QueryFamily("file.allocatedSize"));
         QVERIFY(!QueriesFolders("file.hardlink.count")); QVERIFY(!QueriesFolders("file.fileVersion")); QVERIFY(!QueriesFolders("file.name"));
@@ -388,6 +388,32 @@ private slots:
         Engine.Read("one", "file.fileVersion"); QTRY_COMPARE(Engine.Pending(), 0);
         QTest::qWait(40); Engine.BeginSnapshot();
         QCOMPARE(Engine.Read("one", "file.fileVersion", false).State(), ValueState::Pending);
+    }
+    void slowQueriesLeaveMetadataCapacity()
+    {
+        using namespace hc::columns;
+        struct State { std::atomic<int> slow{0}, active{0}, peak{0}, zone{0}; std::atomic<bool> release{false}; };
+        auto Shared = std::make_shared<State>();
+        const int Limit = qMax(2, QThread::idealThreadCount());
+        QueryEngine Engine([Shared](const QString&, const QString& Family, std::stop_token Stop) {
+            const int Active = ++Shared->active;
+            int Peak = Shared->peak.load(); while (Peak < Active && !Shared->peak.compare_exchange_weak(Peak, Active)) {}
+            if (Family == "version") {
+                ++Shared->slow; QElapsedTimer Timer; Timer.start();
+                while (!Shared->release && !Stop.stop_requested() && Timer.elapsed() < 5000) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } else if (Family == "zone") ++Shared->zone;
+            --Shared->active;
+            return FieldValues{{Family == "zone" ? "file.alternateDataStream.zone" : "file.fileVersion", CellValue::Ready(quint64(3))}};
+        });
+        for (int I = 0; I < Limit + 2; ++I) Engine.Read(QString::number(I), "file.fileVersion", true, false);
+        QTRY_COMPARE(Shared->slow.load(), Limit - 1);
+        Engine.Read("visible", "file.alternateDataStream.zone"); Engine.Read("visible", "file.alternateDataStream.zone");
+        QTRY_COMPARE(Engine.Read("visible", "file.alternateDataStream.zone", false).State(), ValueState::Ready);
+        QCOMPARE(Shared->zone.load(), 1); QVERIFY(Shared->slow.load() <= Limit - 1);
+        QVERIFY(Shared->peak.load() <= Limit);
+        Shared->release = true; QTRY_COMPARE(Engine.Pending(), 0);
+        // Local metadata can use the full model budget; the provider queue reserves no idle workers.
+        QVERIFY(Shared->slow.load() == Limit + 2);
     }
     void pathFlagsAndFormats()
     {

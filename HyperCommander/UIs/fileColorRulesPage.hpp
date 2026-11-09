@@ -170,6 +170,13 @@ public:
         auto* First = new QRadioButton(tr("위 그룹 하나만"), GroupsCard); First->setObjectName("hc.rules.first"); mode_->addButton(First, 0); ModeRow->addWidget(First);
         auto* Merge = new QRadioButton(tr("속성별로 합치기"), GroupsCard); Merge->setObjectName("hc.rules.merge"); mode_->addButton(Merge, 1); ModeRow->addWidget(Merge);
         First->setToolTip(tr("처음 일치한 그룹을 적용합니다.")); Merge->setToolTip(tr("각 속성을 지정한 첫 그룹의 값을 사용합니다."));
+        provisionalFirst_ = new QCheckBox(tr("확인 중에는 하위 그룹 색상 먼저 표시"), GroupsCard);
+        provisionalFirst_->setObjectName("hc.rules.provisionalFirst"); ModeRow->addWidget(provisionalFirst_);
+        provisionalFirst_->setToolTip(tr("위 그룹 판정이 끝나면 최종 색상으로 바뀝니다. 선택 조건에는 적용하지 않습니다."));
+        connect(provisionalFirst_, &QCheckBox::toggled, this, [this](bool Checked) {
+            if (loading_) return; document_["provisionalFirst"] = Checked; updatePreview();
+        });
+        connect(First, &QRadioButton::toggled, provisionalFirst_, &QCheckBox::setEnabled);
 
         // Group editor: name and join on one line, then the condition and appearance tabs.
         auto* EditorCard = new fm::ui::Card(bodySplitter_); EditorCard->setObjectName("hc.rules.editorCard"); bodySplitter_->addWidget(EditorCard);
@@ -527,6 +534,8 @@ private:
     }
     void refreshList(int Row) {
         loading_ = true; list_->clear(); mode_->button(document_["mode"] == "merge" ? 1 : 0)->setChecked(true);
+        provisionalFirst_->setChecked(document_.value("provisionalFirst").toBool(false));
+        provisionalFirst_->setEnabled(document_["mode"] == "first");
         for (const auto V : document_["groups"].toArray()) { auto* Item = new QListWidgetItem(V.toObject()["name"].toString(), list_); Item->setData(Qt::UserRole, V.toObject()["id"].toString()); Item->setCheckState(V.toObject()["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool()) ? Qt::Checked : Qt::Unchecked); }
         updateGroupItems(); list_->setCurrentRow(Row); loading_ = false; loadForm();
     }
@@ -744,6 +753,7 @@ private:
             auto Input = Row.input_; Input.fields_.clear();
             for (const auto& Field : Required) Input.fields_.append(Row.values_.value(Field, CellValue::Missing(ValueState::Pending)));
             auto Style = Rules.Evaluate(Input, &Context);
+            if (Style.pending_) Style = Rules.EvaluateStyle(Input, &Context).ForDisplay();
             if (Output.error_.isEmpty()) Output.error_ = Style.error_;
             Output.samples_.append(std::move(Style));
         }
@@ -758,6 +768,7 @@ private:
             Custom.fields_.append(Value);
         }
         Output.custom_ = Rules.Evaluate(Custom, &Context);
+        if (Output.custom_.pending_) Output.custom_ = Rules.EvaluateStyle(Custom, &Context).ForDisplay();
         if (Output.error_.isEmpty()) Output.error_ = Output.custom_.error_;
         return Output;
     }
@@ -1007,6 +1018,7 @@ private:
     QList<settings::FileRuleResult> previewStyles_;
     QButtonGroup* join_ = nullptr;
     QButtonGroup* mode_ = nullptr;
+    QCheckBox* provisionalFirst_ = nullptr;
     QTableWidget* conditions_ = nullptr;
     QList<FileColorConditionRow*> conditionRows_;
     QDateTimeEdit* previewModified_ = nullptr;

@@ -335,6 +335,8 @@ private slots:
                 || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "columnQueryOverlayUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "zoneQueryBenchmark"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingViewerUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "realWlxQuickPreviewUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "quickPreviewIndependentDocumentUi"
@@ -9052,6 +9054,95 @@ private slots:
         QCOMPARE(EmbeddedInspector->verticalScrollBar()->maximum(), 0); QCOMPARE(EmbeddedInspector->horizontalScrollBar()->maximum(), 0);
         Dialog.reject();
     }
+    void zoneQueryBenchmark_data()
+    {
+        QTest::addColumn<QString>("Root"); QTest::addColumn<int>("Count");
+        for (const int Count : {100, 1000, 10000}) {
+            QTest::newRow(qPrintable(QString("local-%1").arg(Count))) << QDir::tempPath() << Count;
+            const auto Share = qEnvironmentVariable("HC_ZONE_BENCH_ROOT");
+            if (!Share.isEmpty()) QTest::newRow(qPrintable(QString("smb-%1").arg(Count))) << Share << Count;
+        }
+    }
+    void zoneQueryBenchmark()
+    {
+        using namespace hc::columns;
+        QFETCH(QString, Root); QFETCH(int, Count);
+        QTemporaryDir Directory(QDir(Root).filePath("hc-zone-benchmark-XXXXXX")); QVERIFY(Directory.isValid());
+        const auto ExpectedRoot = QDir::cleanPath(QDir::fromNativeSeparators(Root)) + '/';
+        QVERIFY(QDir::cleanPath(Directory.path()).startsWith(ExpectedRoot, Qt::CaseInsensitive));
+        { QFile Owner(Directory.filePath(".hc-zone-benchmark-owner.json")); QVERIFY(Owner.open(QIODevice::WriteOnly));
+          Owner.write(QJsonDocument(QJsonObject{{"purpose", "async file colour zone benchmark"},
+              {"run", QCoreApplication::applicationDirPath()}, {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+              {"expiresUtc", QDateTime::currentDateTimeUtc().addDays(7).toString(Qt::ISODate)}}).toJson()); }
+        QStringList Paths;
+        for (int I = 0; I < Count; ++I) Paths.append(Directory.filePath(QString("f%1.txt").arg(I)));
+        // Fixture creation is outside the measurement; bounded parallel writes avoid a slow NAS
+        // exhausting the test watchdog before a single query has been measured.
+        QThreadPool SetupPool; SetupPool.setMaxThreadCount(4); QList<QFuture<QString>> Setup;
+        for (int Worker = 0; Worker < 4; ++Worker) Setup.append(QtConcurrent::run(&SetupPool, [Paths, Worker] {
+            for (int I = Worker; I < Paths.size(); I += 4) {
+                const auto& Path = Paths[I];
+                if (I % 10 == 0) { if (!QDir().mkdir(Path)) return Path; }
+                else { QFile File(Path); if (!File.open(QIODevice::WriteOnly) || File.write("body") != 4) return Path; }
+                if (I % 3 == 0) {
+                    QFile Marker(Path + ":Zone.Identifier");
+                    if (!Marker.open(QIODevice::WriteOnly) || Marker.write("[ZoneTransfer]\r\nZoneId=3\r\n") < 0) return Path;
+                }
+            }
+            return QString{};
+        }));
+        while (std::any_of(Setup.begin(), Setup.end(), [](const auto& Job) { return !Job.isFinished(); })) QTest::qWait(10);
+        for (const auto& Job : Setup) QVERIFY2(Job.result().isEmpty(), qPrintable(Job.result()));
+        // The former query enumerated ADS before opening the marker. Compare the same data and result.
+        for (const bool Direct : {false, true}) {
+            auto Calls = std::make_shared<std::atomic<int>>(0);
+            QueryEngine Engine([Calls, Direct](const QString& Path, const QString&, std::stop_token Stop) {
+                if (!Direct) {
+                    ++*Calls; const auto Streams = ReadNativeFields(Path, "streams", Stop);
+                    if (!Streams.value("file.alternateDataStream.names").Raw().toString().contains("Zone.Identifier", Qt::CaseInsensitive))
+                        return FieldValues{{"file.alternateDataStream.zone", CellValue::Missing(ValueState::Empty)}};
+                }
+                ++*Calls; return ReadNativeFields(Path, "zone", Stop);
+            });
+            QElapsedTimer Clock; Clock.start(); QList<qint64> Latency; int Next = 0, Marked = 0;
+            qint64 LastBeat = 0, MaxGap = 0; QTimer Heartbeat; Heartbeat.setInterval(1);
+            connect(&Heartbeat, &QTimer::timeout, this, [&] { const auto Now = Clock.nsecsElapsed(); MaxGap = qMax(MaxGap, Now - LastBeat); LastBeat = Now; }); Heartbeat.start();
+            Engine.Changed = [&](const QSet<QString>& Finished) {
+                for (const auto& Path : Finished) {
+                    const auto Value = Engine.Read(Path, "file.alternateDataStream.zone", false);
+                    if (Value.State() != ValueState::Ready && Value.State() != ValueState::Empty) continue;
+                    Latency.append(Clock.nsecsElapsed()); if (Value.State() == ValueState::Ready) ++Marked;
+                }
+            };
+            while (Latency.size() < Count && Clock.elapsed() < 120000) {
+                while (Next < Count && Engine.Pending() < 256) Engine.Read(Paths[Next++], "file.alternateDataStream.zone", true, false, Root.startsWith("\\\\"));
+                QCoreApplication::processEvents(); QTest::qWait(1);
+            }
+            Heartbeat.stop(); QCOMPARE(Latency.size(), Count); QCOMPARE(Marked, (Count + 2) / 3);
+            std::sort(Latency.begin(), Latency.end());
+            qInfo() << "zone-benchmark" << Root << Count << (Direct ? "direct" : "enumerate-first")
+                << "p50-complete-ms" << Latency[Count / 2] / 1e6 << "p95-complete-ms" << Latency[(Count - 1) * 95 / 100] / 1e6
+                << "total-ms" << Clock.elapsed() << "max-ui-gap-ms" << MaxGap / 1e6 << "native-family-calls" << Calls->load();
+        }
+    }
+    void columnQueryOverlayUi()
+    {
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); QVERIFY(Left);
+        auto* View = static_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex())); QVERIFY(View);
+        auto* Model = qobject_cast<CFSModel*>(View->BaseModel());
+        QVERIFY(Model);
+        auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        auto* Overlay = View->findChild<QWidget*>("hc.columns.queryOverlay"); QVERIFY(Overlay);
+        Model->CancelColumnQueries(); QTest::qWait(100);
+        const auto Resume = qScopeGuard([Model] { Model->ResumeColumnQueries(); });
+        Model->ColumnQueryStatus({}); QCoreApplication::processEvents();
+        const auto Geometry = Grid->geometry(); const auto Position = Grid->mapToGlobal(QPoint(0, 0));
+        Model->ColumnQueryStatus(QStringLiteral("색상 조건 확인 중 · 남은 항목 100개")); QCoreApplication::processEvents();
+        QVERIFY(Overlay->isVisible()); QCOMPARE(Grid->geometry(), Geometry); QCOMPARE(Grid->mapToGlobal(QPoint(0, 0)), Position);
+        QCOMPARE(Overlay->width(), Overlay->parentWidget()->width());
+        Model->ColumnQueryStatus({}); QCoreApplication::processEvents();
+        QVERIFY(!Overlay->isVisible()); QCOMPARE(Grid->geometry(), Geometry); QCOMPARE(Grid->mapToGlobal(QPoint(0, 0)), Position);
+    }
     void columnPreviewAndScopesUi()
     {
         using namespace hc::columns;
@@ -9189,11 +9280,32 @@ private slots:
             QCOMPARE(Streams["file.alternateDataStream.totalSize"].Raw().toULongLong(), quint64(Marker.size() + 3));
             const auto StreamNames = Streams["file.alternateDataStream.names"].Raw().toString().split(", ");
             QCOMPARE(StreamNames.size(), 2); QVERIFY(StreamNames.contains("Zone.Identifier")); QVERIFY(StreamNames.contains("note"));
-            QCOMPARE(Streams["file.alternateDataStream.zone"].Raw().toULongLong(), quint64(3));
-            QCOMPARE(Format(Streams["file.alternateDataStream.zone"]), QObject::tr("인터넷") + " (3)");
+            const auto Zone = ReadNativeFields(Links.filePath("marked.txt"), "zone", {});
+            QCOMPARE(Zone["file.alternateDataStream.zone"].Raw().toULongLong(), quint64(3));
+            QCOMPARE(Format(Zone["file.alternateDataStream.zone"]), QObject::tr("인터넷") + " (3)");
+            QVERIFY(!Streams.contains("file.alternateDataStream.zone"));
+            {
+                const auto Stream = (Native("marked.txt") + ":Zone.Identifier").toStdWString();
+                const auto Locked = CreateFileW(Stream.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+                QVERIFY(Locked != INVALID_HANDLE_VALUE);
+                const auto Error = ReadNativeFields(Links.filePath("marked.txt"), "zone", {});
+                CloseHandle(Locked); QCOMPARE(Error["file.alternateDataStream.zone"].State(), ValueState::Error);
+                QueryEngine Queries(ReadNativeFields);
+                Queries.Read(Links.filePath("marked.txt"), "file.alternateDataStream.zone");
+                Queries.Read(Links.filePath("marked.txt"), "file.alternateDataStream.count");
+                QTRY_COMPARE(Queries.Pending(), 0);
+                QCOMPARE(Queries.Read(Links.filePath("marked.txt"), "file.alternateDataStream.zone", false).Raw().toULongLong(), quint64(3));
+                QVERIFY(DeleteFileW(Stream.c_str())); Queries.Reset();
+                Queries.Read(Links.filePath("marked.txt"), "file.alternateDataStream.zone");
+                Queries.Read(Links.filePath("marked.txt"), "file.alternateDataStream.count");
+                QTRY_COMPARE(Queries.Pending(), 0);
+                QCOMPARE(Queries.Read(Links.filePath("marked.txt"), "file.alternateDataStream.zone", false).State(), ValueState::Empty);
+                QCOMPARE(Queries.Read(Links.filePath("marked.txt"), "file.alternateDataStream.count", false).Raw().toULongLong(), quint64(1));
+            }
             const auto Folder = ReadNativeFields(Links.path(), "streams", {});
             QCOMPARE(Folder["file.alternateDataStream.count"].Raw().toULongLong(), quint64(0)); QCOMPARE(Folder["file.alternateDataStream.totalSize"].Raw().toULongLong(), quint64(0));
-            QCOMPARE(Folder["file.alternateDataStream.names"].State(), ValueState::Empty); QCOMPARE(Folder["file.alternateDataStream.zone"].State(), ValueState::Empty);
+            QCOMPARE(Folder["file.alternateDataStream.names"].State(), ValueState::Empty); QVERIFY(!Folder.contains("file.alternateDataStream.zone"));
+            QCOMPARE(ReadNativeFields(Links.path(), "zone", {})["file.alternateDataStream.zone"].State(), ValueState::Empty);
             QVERIFY(CreateHardLinkW(Native("second.txt").toStdWString().c_str(), Native("marked.txt").toStdWString().c_str(), nullptr));
             const auto Standard = ReadNativeFields(Links.filePath("marked.txt"), "standard", {});
             QCOMPARE(Standard["file.hardlink.count"].Raw().toULongLong(), quint64(2)); QCOMPARE(Standard["file.allocatedSize"].State(), ValueState::Ready);
@@ -9255,6 +9367,19 @@ private slots:
         Timer.start(); hc::ui::ItemSelectionController::For(View)->Execute("cm.selection.select"); Timer.stop();
         QVERIFY2(Seen.startsWith(QStringLiteral("일치 1개")), qPrintable(Seen));
         const auto Selected = View->CaptureSelection(); QCOMPARE(Selected.size(), 1); QVERIFY(Selected.front().contains("marked.txt", Qt::CaseInsensitive));
+        QTRY_VERIFY(!Model->InFileRuleGrace()); QTRY_COMPARE(Model->PendingColumnQueries(), 0);
+        QTest::qWait(150); // Drain the selection scan's 50 ms shared-field notification before measuring a new change.
+        const auto Marked = IndexOf("marked.txt"); const auto Path = Model->FieldQueryPath(Model->GetFileInfo(Marked));
+        QCOMPARE(Marked.data(Qt::ForegroundRole).value<QColor>(), QColor("#aa0000"));
+        QSignalSpy Repaints(Model, &QAbstractItemModel::dataChanged);
+        Model->ShareRuleFieldValues(Path, {{"file.alternateDataStream.zone", hc::columns::CellValue::Missing(hc::columns::ValueState::Empty)}});
+        // Re-keying a row keeps its previous display until the worker supplies the new style.
+        QCOMPARE(Marked.data(Qt::ForegroundRole).value<QColor>(), QColor("#aa0000"));
+        QTRY_VERIFY(Marked.data(Qt::ForegroundRole).value<QColor>() != QColor("#aa0000"));
+        for (const auto& Call : Repaints) if (qvariant_cast<QList<int>>(Call[2]).contains(Qt::ForegroundRole)) {
+            QCOMPARE(qvariant_cast<QModelIndex>(Call[0]).row(), Marked.row());
+            QCOMPARE(qvariant_cast<QModelIndex>(Call[1]).row(), Marked.row());
+        }
     }
     void fieldConditionPrefetchAndGraceUi()
     {
@@ -9369,7 +9494,7 @@ private slots:
                 {"light", QJsonObject{{"foreground", "#1d4ed8"}}}, {"dark", QJsonObject{{"foreground", "#93c5fd"}}}},
             QJsonObject{{"id", "source"}, {"name", "소스 코드"}, {"join", "any"}, {"conditions", QJsonArray{Extensions("cpp,h")}},
                 {"light", QJsonObject{{"foreground", "#7c3aed"}}}, {"dark", QJsonObject{{"foreground", "#c4b5fd"}}}}};
-        Page->Load(Doc); QVERIFY(Page->Validate());
+        Page->Load(Doc); QVERIFY2(Page->Validate(), qPrintable(FileColorRules::Validate(Page->Document())));
         Page->findChild<QListWidget*>("hc.rules.groups")->setCurrentRow(0);
         auto* Card = Page->findChild<QWidget*>("hc.rules.previewCard"); auto* Table = Page->findChild<QTableWidget*>("hc.rules.previewTable");
         auto* DarkPreview = Page->findChild<QCheckBox*>("hc.rules.previewDark"); QVERIFY(Card && Table && DarkPreview);
@@ -13783,7 +13908,7 @@ private slots:
                 {"light", QJsonObject{{"foreground", "#b42318"}, {"background", "#fdecea"}}}, {"dark", QJsonObject{{"foreground", "#ff8a80"}, {"background", "#3a1f1f"}}}},
             QJsonObject{{"id", "source"}, {"name", "소스 코드"}, {"join", "any"}, {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"op", "in"}, {"value", "cpp,h"}}}},
                 {"light", QJsonObject{{"foreground", "#7c3aed"}}}, {"dark", QJsonObject{{"foreground", "#c4b5fd"}}}}};
-        Page->Load(Doc); QVERIFY(Page->Validate()); QTest::qWait(50);
+        Page->Load(Doc); QVERIFY2(Page->Validate(), qPrintable(FileColorRules::Validate(Page->Document()))); QTest::qWait(50);
         const auto Save = [&](QWidget* Widget, const QString& Name) { QCoreApplication::processEvents(); QTest::qWait(40); if (Capture) QVERIFY(Widget->grab().save(Out.filePath(Name + ".png"))); };
         auto* Scroll = Dialog.findChild<QScrollArea*>("hc.settings.fileColorsScroll"); QVERIFY(Scroll);
         auto* Table = Page->findChild<QTableWidget*>("hc.rules.previewTable"); auto* Conditions = Page->findChild<QTableWidget*>("hc.rules.conditions"); QVERIFY(Table && Conditions);

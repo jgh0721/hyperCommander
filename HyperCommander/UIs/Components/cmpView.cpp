@@ -414,14 +414,19 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
 
     vbox_->setContentsMargins( 0, 9, 0, 0 );
     auto* QueryBar = new QHBoxLayout;
-    columnStatus_ = new QLabel(this); columnStatus_->setObjectName("hc.columns.queryStatus"); columnStatus_->setWordWrap(true);
+    columnStatus_ = new QLabel(this); columnStatus_->setObjectName("hc.columns.queryStatus"); columnStatus_->setMinimumWidth(0); columnStatus_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto* Stop = new QPushButton(tr("컬럼 조회 중지"), this); Stop->setObjectName("hc.columns.stop");
     auto* Resume = new QPushButton(tr("다시 조회"), this); Resume->setObjectName("hc.columns.resume");
     QueryBar->addWidget(columnStatus_, 1); QueryBar->addWidget(Stop); QueryBar->addWidget(Resume);
-    auto* QueryWidget = new QWidget(this); QueryWidget->setLayout(QueryBar); QueryWidget->hide();
+    // Progress overlays the header without participating in the layout or moving rows.
+    auto* QueryWidget = new QWidget(grid_); QueryWidget->setObjectName("hc.columns.queryOverlay");
+    QueryBar->setContentsMargins(6, 2, 6, 2);
+    QueryWidget->setAutoFillBackground(true); QueryWidget->setLayout(QueryBar); QueryWidget->hide();
     presentationStack_ = new QStackedWidget(this);
     presentationStack_->addWidget(grid_);
-    vbox_->addWidget(QueryWidget); vbox_->addWidget(presentationStack_, 1);
+    QueryWidget->setParent(presentationStack_); presentationStack_->installEventFilter(this);
+    connect(presentationStack_, &QStackedWidget::currentChanged, this, [this, QueryWidget] { positionColumnStatus(); QueryWidget->raise(); });
+    vbox_->addWidget(presentationStack_, 1);
     connect(Stop, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->CancelColumnQueries(); });
     connect(Resume, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ResumeColumnQueries(); });
     columnSortTimer_.setSingleShot(true);
@@ -1084,7 +1089,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
                 if (Restore) { applyGroupExpansion(); RestoreSelection(querySelection_, queryFocus_); RestoreScrollState(queryScroll_); }
             }
         });
-        connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) { columnStatus_->setText(Text); columnStatus_->parentWidget()->setVisible(!Text.isEmpty()); });
+        connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) { columnStatus_->setText(Text); columnStatus_->setToolTip(Text); positionColumnStatus(); columnStatus_->parentWidget()->setVisible(!Text.isEmpty()); columnStatus_->parentWidget()->raise(); });
         connect(Native, &CFSModel::ColumnSortCancelled, this, [this, Native] {
             view_->beginUpdate();
             for (int Index = 0; Index < model_->columnCount(); ++Index) static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))->setSortOrder(Qtitan::SortNone);
@@ -2195,8 +2200,16 @@ void CGridView::syncViewportBackground()
     grid_->viewport()->update();
 }
 
+void CGridView::positionColumnStatus()
+{
+    if (!columnStatus_) return;
+    auto* Overlay = columnStatus_->parentWidget();
+    Overlay->setGeometry(0, 0, presentationStack_->width(), Overlay->sizeHint().height());
+}
+
 bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    if (Watched == presentationStack_ && Event->type() == QEvent::Resize) positionColumnStatus();
     if (forwardingSelectionNavigation_) return false;
     if(hc::startup::Enabled()&&Event->type()==QEvent::KeyPress){
         const auto* Key=static_cast<QKeyEvent*>(Event);

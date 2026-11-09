@@ -21,7 +21,12 @@ namespace hc::columns
             const auto Stream = Native + L":Zone.Identifier";
             const auto Handle = CreateFileW(Stream.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-            if (Handle == INVALID_HANDLE_VALUE) return CellValue::Missing(ValueState::Error, QString::number(GetLastError()));
+            if (Handle == INVALID_HANDLE_VALUE) {
+                const auto Error = GetLastError();
+                if (Error == ERROR_FILE_NOT_FOUND || Error == ERROR_PATH_NOT_FOUND) return CellValue::Missing(ValueState::Empty);
+                return CellValue::Missing(Error == ERROR_INVALID_PARAMETER || Error == ERROR_INVALID_FUNCTION || Error == ERROR_NOT_SUPPORTED
+                    ? ValueState::Unsupported : ValueState::Error, QString::number(Error));
+            }
             const auto Close = qScopeGuard([Handle] { CloseHandle(Handle); });
             // The marker is a few lines; a larger stream is not read past this budget.
             QByteArray Bytes(4096, '\0'); DWORD Read = 0;
@@ -51,6 +56,8 @@ namespace hc::columns
         };
         if (Stop.stop_requested()) return Result;
         const auto Native = hc::storage::native::FilePath(Path).toStdWString();
+        // Zone-only requests need one bounded stream read, never an enumeration of all ADS.
+        if (Family == "zone") return {{"file.alternateDataStream.zone", ZoneCell(Native)}};
         if (Family == "standard") {
             const QStringList Keys{"file.allocatedSize", "file.hardlink.count"};
             // Follows a link, like the size column: the target's allocation and its link count.
@@ -95,8 +102,8 @@ namespace hc::columns
         }
         if (Family == "streams") {
             const QStringList Keys{"file.alternateDataStream.count", "file.alternateDataStream.names",
-                "file.alternateDataStream.totalSize", "file.alternateDataStream.zone"};
-            QStringList Names; quint64 Count = 0, Bytes = 0; bool Zone = false;
+                "file.alternateDataStream.totalSize"};
+            QStringList Names; quint64 Count = 0, Bytes = 0;
             WIN32_FIND_STREAM_DATA Data{};
             const auto Find = FindFirstStreamW(Native.c_str(), FindStreamInfoStandard, &Data, 0);
             if (Find == INVALID_HANDLE_VALUE) {
@@ -115,7 +122,6 @@ namespace hc::columns
                     if (Name.endsWith(":$DATA", Qt::CaseInsensitive)) Name.chop(6);
                     if (Name.startsWith(':')) Name.remove(0, 1);
                     ++Count; Bytes += quint64(std::max<LONGLONG>(0, Data.StreamSize.QuadPart));
-                    Zone |= !Name.compare("Zone.Identifier", Qt::CaseInsensitive);
                     if (Names.size() < 64) Names.append(Name);
                 } while (FindNextStreamW(Find, &Data));
                 if (const auto Error = GetLastError(); Error != ERROR_HANDLE_EOF) return Missing(Keys, ValueState::Error, QString::number(Error));
@@ -124,7 +130,6 @@ namespace hc::columns
             Result[Keys[1]] = Names.isEmpty() ? CellValue::Missing(ValueState::Empty)
                 : CellValue::Ready(Names.join(", ") + (Count > quint64(Names.size()) ? QStringLiteral(", …") : QString{}));
             Result[Keys[2]] = CellValue::Ready(Bytes);
-            Result[Keys[3]] = Zone ? ZoneCell(Native) : CellValue::Missing(ValueState::Empty);
             return Result;
         }
         if (Family == "version") {

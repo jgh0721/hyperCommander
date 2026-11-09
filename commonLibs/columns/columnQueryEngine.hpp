@@ -5,6 +5,8 @@
 #include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QTimer>
+#include <QThread>
+#include <QThreadPool>
 #include <QtConcurrent/QtConcurrentRun>
 #include <stop_token>
 
@@ -20,6 +22,7 @@ namespace hc::columns
         // One OS read per family fills every field in it.
         if (Field == "file.allocatedSize" || Field == "file.hardlink.count") return "standard";
         if (Field == "file.linkTarget" || Field == "file.softlink.target" || Field == "file.junction.target") return "link";
+        if (Field == "file.alternateDataStream.zone") return "zone";
         if (Field.startsWith("file.alternateDataStream.")) return "streams";
         return {};
     }
@@ -32,7 +35,7 @@ namespace hc::columns
     inline bool QueriesFolders(const QString& Field)
     {
         const auto Family = QueryFamily(Field);
-        return Family == "link" || Family == "streams" || IsPluginField(Field);
+        return Family == "link" || Family == "streams" || Family == "zone" || IsPluginField(Field);
     }
     // GUI-owned queue/cache. Workers own immutable inputs and a stop token only.
     // Destroying a tab never joins an OS metadata call or posts to a dead model.
@@ -62,11 +65,11 @@ namespace hc::columns
         void Reset() { Cancel(); cache_.clear(); Resume(); }
         void Cancel()
         {
-            stop_.request_stop(); ++epoch_; paused_ = true; snapshot_ = false; queue_.clear(); pending_.clear();
+            stop_.request_stop(); ++epoch_; paused_ = true; snapshot_ = false; queues_[0].clear(); queues_[1].clear(); pending_.clear();
             pump_.stop(); changed_.stop(); changedPaths_.clear();
         }
         void Resume() { if (paused_) { stop_ = std::stop_source{}; paused_ = false; } }
-        CellValue Read(const QString& Path, const QString& Field, bool Request = true, bool Urgent = true)
+        CellValue Read(const QString& Path, const QString& Field, bool Request = true, bool Urgent = true, bool SlowStorage = false)
         {
             const auto Family = QueryFamily(Field); if (Family.isEmpty()) return CellValue::Missing(ValueState::Unsupported);
             const auto Key = Path + QChar(0) + Family;
@@ -78,26 +81,52 @@ namespace hc::columns
             if (Request && !pending_.contains(Key)) {
                 if (pending_.size() >= 4096) return CellValue::Missing(ValueState::OnDemand, "query-budget");
                 pending_.insert(Key);
-                Job Next{Path, Family, Key, epoch_};
-                if (Urgent) queue_.prepend(Next); else queue_.append(Next);
+                const bool Network = ((Path.startsWith("\\\\") || Path.startsWith("//")) && !Path.startsWith("\\\\?\\") && !Path.startsWith("//?/"))
+                    || Path.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive) || Path.startsWith("//?/UNC/", Qt::CaseInsensitive);
+                const bool Slow = SlowStorage || Network ||
+                    IsPluginField(Field) || Family.startsWith("lua.") || Family == "image" || Family == "version";
+                Job Next{Path, Family, Key, epoch_, Slow};
+                auto& Queue = queues_[Slow ? 1 : 0];
+                if (Urgent) Queue.prepend(Next); else Queue.append(Next);
                 if (!pump_.isActive()) pump_.start(0);
                 if (!changed_.isActive()) changed_.start();
             }
             if (Request && Urgent) {
-                for (int Index = 1; Index < queue_.size(); ++Index) if (queue_[Index].key_ == Key) { queue_.prepend(queue_.takeAt(Index)); break; }
+                for (auto& Queue : queues_)
+                    for (int Index = 1; Index < Queue.size(); ++Index) if (Queue[Index].key_ == Key) { Queue.prepend(Queue.takeAt(Index)); break; }
             }
             return CellValue::Missing(ValueState::Pending);
         }
     private:
         struct Cached { FieldValues values_; QElapsedTimer age_; };
-        struct Job { QString path_, family_, key_; quint64 epoch_; };
+        struct Job { QString path_, family_, key_; quint64 epoch_; bool slow_; };
+        static QThreadPool* pool(bool Slow)
+        {
+            // Process-lifetime pools isolate metadata from slow providers and the colour evaluator.
+            // No tab destructor waits for an uninterruptible OS call; workers capture no model.
+            static auto* Metadata = new QThreadPool;
+            static auto* Providers = new QThreadPool;
+            static const bool Initialized = [] {
+                Metadata->setMaxThreadCount(qMax(2, QThread::idealThreadCount()));
+                Providers->setMaxThreadCount(qMax(2, QThread::idealThreadCount()));
+                return true;
+            }();
+            (void)Initialized;
+            return Slow ? Providers : Metadata;
+        }
         void pump()
         {
-            while (!paused_ && running_ < 2 && !queue_.isEmpty()) {
-                const auto Next = queue_.takeFirst(); ++running_;
+            while (!paused_ && running_ < maxConcurrent_) {
+                const bool HasMetadata = !queues_[0].isEmpty();
+                // Always reserve one model slot for metadata, including when it arrives later.
+                const bool HasSlow = !queues_[1].isEmpty() && slowRunning_ < maxConcurrent_ - 1;
+                if (!HasMetadata && !HasSlow) break;
+                const bool Slow = HasSlow && (!HasMetadata || nextSlow_);
+                nextSlow_ = !Slow;
+                const auto Next = queues_[Slow ? 1 : 0].takeFirst(); ++running_; if (Slow) ++slowRunning_;
                 auto* Watcher = new QFutureWatcher<FieldValues>(this);
                 connect(Watcher, &QFutureWatcher<FieldValues>::finished, this, [this, Watcher, Next] {
-                    --running_;
+                    --running_; if (Next.slow_) --slowRunning_;
                     if (Next.epoch_ == epoch_) {
                         auto* Entry = new Cached{Watcher->result(), {}}; Entry->age_.start();
                         cache_.insert(Next.key_, Entry); pending_.remove(Next.key_); changedPaths_.insert(Next.path_);
@@ -106,7 +135,7 @@ namespace hc::columns
                     Watcher->deleteLater(); pump();
                 });
                 const auto Load = loader_; const auto Stop = stop_.get_token();
-                Watcher->setFuture(QtConcurrent::run([Next, Load, Stop] {
+                Watcher->setFuture(QtConcurrent::run(pool(Slow), [Next, Load, Stop] {
                     if (Stop.stop_requested()) return FieldValues{};
                     try { return Load(Next.path_, Next.family_, Stop); }
                     catch (...) { return FieldValues{{"__error", CellValue::Missing(ValueState::Error, "provider-exception")}}; }
@@ -115,12 +144,16 @@ namespace hc::columns
         }
         Loader loader_;
         QCache<QString, Cached> cache_;
-        QList<Job> queue_;
+        QList<Job> queues_[2];
         QSet<QString> pending_, changedPaths_;
         QTimer pump_, changed_;
         std::stop_source stop_;
         quint64 epoch_ = 0;
+        // Scale each model's queue to the available logical CPUs; unknown/single CPU keeps two slots.
+        const int maxConcurrent_ = qMax(2, QThread::idealThreadCount());
         int running_ = 0;
+        int slowRunning_ = 0;
+        bool nextSlow_ = false;
         int cacheLifetimeMs_ = 30000;
         bool paused_ = false, snapshot_ = false;
     };
