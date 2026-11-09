@@ -5,6 +5,7 @@
 
 namespace hc::compare
 {
+    QString BinaryProgressText(const ComparisonProgress::Snapshot& Value);
     struct BinaryBacking { QTemporaryFile file_; BinaryBacking(); };
     struct BinaryPiece { std::shared_ptr<BinaryBacking> backing_; qint64 offset_ = 0, size_ = 0; };
     struct BinarySourceLock { std::atomic<void*> handle_{nullptr}; ~BinarySourceLock(); void Release(); };

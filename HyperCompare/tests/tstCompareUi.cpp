@@ -2005,9 +2005,9 @@ private slots:
         auto* table = window.findChild<QTableView*>("directoryTable"); QCOMPARE(table->currentIndex().data().toString(), QString("src\\nested\\file099.cpp"));
         mode->setCurrentIndex(0); QCOMPARE(left->currentIndex().data().toString(), QString("file099.cpp"));
         query->clear(); status->setCurrentIndex(0); left->collapse(model->index(0, 0, model->index(0, 0))); left->verticalScrollBar()->setValue(0);
-        QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-tree-light.png"));
+        QTest::qWait(50); QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/directory-tree-light.png"));
         action(window, "Dark")->setChecked(true); QTest::qWait(50);
-        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/../HyperCompare/directory-tree-dark.png")); window.close();
+        QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/directory-tree-dark.png")); window.close();
     }
     void directoryRowsDoubleClickToggleBothTrees()
     {
@@ -2995,6 +2995,52 @@ private slots:
         scope->setCurrentIndex(3); query->setText("needle"); bar->Find(false);
         QTRY_COMPARE(output->send(SCI_GETSELECTIONSTART), sptr_t(before.lastIndexOf("needle"))); QCOMPARE(window.ExitCode(), 0);
         QFile saved(r.output_); QVERIFY(saved.open(QIODevice::ReadOnly)); QCOMPARE(saved.readAll(), before); window.close();
+    }
+    void largeBinaryProgressAndInteraction()
+    {
+        QTemporaryDir Dir;
+        Request Input; Input.timeoutMs_ = 0;
+        Input.file1_ = Dir.filePath("left.mkv"); Input.file2_ = Dir.filePath("right.mkv");
+        constexpr qint64 Size = 256 * 1024 * 1024;
+        for (const auto& Path : {Input.file1_, Input.file2_}) {
+            QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly));
+            QVERIFY(File.resize(Size)); QVERIFY(File.seek(0));
+            QCOMPARE(File.write(QByteArray::fromHex("1a45dfa3000102")), qint64(7));
+            if (Path == Input.file2_) { QVERIFY(File.seek(Size - 1)); QCOMPARE(File.write("x", 1), qint64(1)); }
+        }
+        CompareWindow Window(Input); Window.show();
+        auto* Status = Window.findChild<QLabel*>("compareStatus"); QVERIFY(Status);
+        int Ticks = 0; bool SawProgress = false; qint64 LongestGap = 0;
+        QElapsedTimer Elapsed; Elapsed.start(); qint64 Last = 0;
+        QTimer Interaction; Interaction.setInterval(20);
+        connect(&Interaction, &QTimer::timeout, &Window, [&] {
+            const auto Now = Elapsed.elapsed(); LongestGap = std::max(LongestGap, Now - Last); Last = Now;
+            ++Ticks; SawProgress |= Status->text().contains('%') && Status->text().contains("Hex");
+            Window.move(80 + Ticks % 3, 80 + Ticks % 2);
+            Window.resize(1100 + Ticks % 3, 720 + Ticks % 2);
+            QTest::mouseClick(Status, Qt::LeftButton);
+            if (auto* Hex = Window.findChild<HexCompareView*>("hc.compare.hex")) {
+                if (auto* Pane = Hex->findChild<QWidget*>("hexPane0")) Pane->setFocus();
+            }
+        });
+        Interaction.start();
+        QTRY_VERIFY_WITH_TIMEOUT(Window.findChild<HexCompareView*>("hc.compare.hex"), 60000);
+        auto* Hex = Window.findChild<HexCompareView*>("hc.compare.hex");
+        QTRY_VERIFY_WITH_TIMEOUT(!Hex->Busy(), 30000);
+        Interaction.stop();
+        QVERIFY(SawProgress); QVERIFY(Ticks >= 3);
+        QVERIFY2(LongestGap < 2000, qPrintable(QString("UI event gap: %1 ms").arg(LongestGap)));
+        QCOMPARE(Hex->Comparison()->different_, qint64(1)); QVERIFY(!Hex->Dirty());
+        // A GUI request with timeout 0 must also work for subsequent Hex operations.
+        Hex->NavigateDifference(1); QTRY_VERIFY_WITH_TIMEOUT(!Hex->Busy(), 10000);
+        QVERIFY(!Status->text().contains("Timeout"));
+        Window.close();
+
+        CompareWindow Canceled(Input); Canceled.show();
+        auto* CancelStatus = Canceled.findChild<QLabel*>("compareStatus");
+        QTRY_VERIFY_WITH_TIMEOUT(CancelStatus->text().contains('%'), 30000);
+        Canceled.close();
+        QTRY_VERIFY_WITH_TIMEOUT(!Canceled.isVisible(), 10000);
     }
     void binaryComparisonWindow()
     {

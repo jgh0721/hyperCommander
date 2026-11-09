@@ -395,7 +395,12 @@ namespace hc::compare
         statusBar()->addPermanentWidget(alignmentStatus_); alignmentStatus_->hide();
         directoryTimer_.setInterval(30);
         connect(&directoryTimer_, &QTimer::timeout, this, [this] {
-            if (!request_.directoryProgress_ || closing_) return;
+            if (closing_) return;
+            if (request_.progress_ && !canceled_->load()) {
+                const auto Text = BinaryProgressText(request_.progress_->Read());
+                if (!Text.isEmpty()) state_->setText(Text);
+            }
+            if (!request_.directoryProgress_) return;
             if (auto progress = request_.directoryProgress_->Take())
             {
                 if (!directoryStreaming_)
@@ -573,6 +578,7 @@ namespace hc::compare
             while (future.wait_for(std::chrono::milliseconds(20)) != std::future_status::ready) { if (!owner || (Limits.canceled_ && Limits.canceled_->load()) || std::chrono::steady_clock::now() >= Limits.deadline_) { aborted->store(true); return QString{}; } }
             return future.get();
         };
+        request_.progress_ = std::make_shared<ComparisonProgress>();
         request_.directoryProgress_ = std::make_shared<DirectoryProgressChannel>(); directoryStreaming_ = false; directoryTimer_.start();
         refreshing_ = Preserve && merge_;
         if (!refreshing_) { dirty_ = false; exitCode_ = 3; }
@@ -804,6 +810,7 @@ namespace hc::compare
             {
                 if (result_.binary_) {
                     auto* View = new HexCompareView(request_, result_.binary_, centralWidget()); extensionView_ = View;
+                    View->progressChanged_ = [this](const QString& Text) { state_->setText(Text); };
                     View->openComparison_ = [](Request Input) { auto* Window = new CompareWindow(std::move(Input)); Window->setAttribute(Qt::WA_DeleteOnClose); Window->show(); };
                     View->stateChanged_ = [this, View] { dirty_ = View->Dirty(); result_.binary_ = View->Comparison(); exitCode_ = result_.binary_->changeCount_ ? 1 : 0; updateMerge(); if (closing_ && !View->Busy()) QTimer::singleShot(0, this, [this] { close(); }); };
                 } else if (result_.archive_) {
@@ -1108,6 +1115,7 @@ namespace hc::compare
             save_->setVisible(true); save_->setText(tr("활성 압축 저장")); save_->setEnabled(archive->CanSave()); undo_->setEnabled(archive->CanUndo(false)); redo_->setEnabled(archive->CanUndo(true)); return;
         }
         if (auto* Hex = dynamic_cast<HexCompareView*>(extensionView_)) {
+            cancel_->setEnabled(Hex->Busy());
             for (int I = 0; I < 3; ++I) findActions_[I]->setEnabled(!Hex->Busy());
             save_->setVisible(true); save_->setText(tr("활성 Hex 저장")); save_->setEnabled(Hex->CanSave());
             undo_->setEnabled(Hex->CanUndo(false)); redo_->setEnabled(Hex->CanUndo(true));

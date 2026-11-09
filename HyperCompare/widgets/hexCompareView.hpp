@@ -2,6 +2,7 @@
 #include "extensionView.hpp"
 #include "runtime/binarySession.hpp"
 #include <QFutureWatcher>
+#include <QTimer>
 #include <functional>
 class QListWidget;
 class QMenu;
@@ -48,6 +49,7 @@ namespace hc::compare
         bool HasOverview() const override { return true; }
         void SetOverviewVisible(bool Visible) override;
         std::function<void()> stateChanged_;
+        std::function<void(const QString&)> progressChanged_;
         std::function<void(Request)> openComparison_;
         void NavigateDifference(int Direction);
         void ShowFind();
@@ -61,6 +63,8 @@ namespace hc::compare
         std::array<BinaryDocument, 2> saved_;
         std::vector<std::array<BinaryDocument, 2>> undo_, redo_;
         QFutureWatcher<HexWork> watcher_;
+        QTimer progressTimer_;
+        std::shared_ptr<ComparisonProgress> progress_;
         std::shared_ptr<std::atomic_bool> canceled_;
         std::array<HexPane*, 2> panes_{};
         std::array<QLabel*, 2> paths_{};

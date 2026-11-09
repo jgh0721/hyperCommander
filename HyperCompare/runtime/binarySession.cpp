@@ -18,6 +18,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
+#include <QLocale>
 #include <QLoggingCategory>
 #include <QProcess>
 #include <QTemporaryDir>
@@ -63,6 +64,21 @@ namespace hc::compare
             }
         }
     }
+    QString BinaryProgressText(const ComparisonProgress::Snapshot& Value)
+    {
+        using Phase = ComparisonProgress::Phase;
+        if (Value.phase_ == Phase::None) return {};
+        const auto Percent = Value.total_ ? int(100.0L * Value.completed_ / Value.total_) : 100;
+        const auto Stage = Value.phase_ == Phase::Read ? QObject::tr("Hex 파일 읽는 중") :
+            Value.phase_ == Phase::Compare ? QObject::tr("Hex 바이트 비교 중") : QObject::tr("Hex 차이 색인 중");
+        const auto Amount = [&](std::uint64_t Count) {
+            return Value.phase_ == Phase::Index ? QLocale().toString(qulonglong(Count)) + QObject::tr("구간") :
+                QLocale().formattedDataSize(qint64(Count));
+        };
+        return QObject::tr("%1 — %2% · %3 / %4%5").arg(Stage).arg(Percent)
+            .arg(Amount(Value.completed_), Amount(Value.total_),
+                Value.item_.empty() ? QString{} : " · " + QFileInfo(QString::fromStdString(Value.item_)).fileName());
+    }
     BinarySourceLock::~BinarySourceLock() { Release(); }
     void BinarySourceLock::Release() { if(auto Handle=handle_.exchange(nullptr))CloseHandle(Handle); }
     void SetBinarySourceLock(BinaryDocument& Document,qint64 UnlockedMiB,const Budget& Limits)
@@ -103,12 +119,15 @@ namespace hc::compare
         if (Entry.directory_ || (Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) || Entry.size_ > quint64(std::numeric_limits<qint64>::max())) throw Failure("BinaryExpectedRegularFile");
         auto Backing = std::make_shared<BinaryBacking>(); const auto Stream = checked(Provider->OpenRead(Entry.id_, Context).get()); QCryptographicHash Hash(QCryptographicHash::Sha256);
         qint64 Size = 0;
+        if (Limits.progress_) Limits.progress_->Publish(ComparisonProgress::Phase::Read, 0, Entry.size_, Path.toStdString());
         for (;;) {
             Limits.Check(); const auto Chunk = checked(Stream->Read(Block, Context).get());
             if (Chunk.bytes_.empty() && !Chunk.eof_) throw Failure("ReadMadeNoProgress");
             if (Chunk.bytes_.size() > size_t(Block) || quint64(Size) + Chunk.bytes_.size() > Entry.size_) throw Failure("ChangedDuringRead");
             const char* Data = reinterpret_cast<const char*>(Chunk.bytes_.data()); append(Backing->file_, Data, qint64(Chunk.bytes_.size()));
-            Hash.addData(QByteArrayView(Data, qsizetype(Chunk.bytes_.size()))); Size += qint64(Chunk.bytes_.size()); if (Chunk.eof_) break;
+            Hash.addData(QByteArrayView(Data, qsizetype(Chunk.bytes_.size()))); Size += qint64(Chunk.bytes_.size());
+            if (Limits.progress_) Limits.progress_->Publish(ComparisonProgress::Phase::Read, Size, Entry.size_, Path.toStdString());
+            if (Chunk.eof_) break;
         }
         if (quint64(Size) != Entry.size_ || checked(Provider->Stat(Entry.id_, Context).get()).id_.revision_ != Entry.id_.revision_) throw Failure("ChangedDuringRead");
         finish(Backing->file_); BinaryDocument Result; Result.original_.path_ = QFileInfo(Path).absoluteFilePath(); Result.original_.entry_ = Entry;
@@ -237,8 +256,16 @@ namespace hc::compare
             return QByteArrayView(Buffers[Side]).sliced(At[Side] - Bases[Side]);
         };
         const qint64 Window = Mode == "complete" ? 65536 : 4096;
+        const auto Total = quint64(Result->documents_[0].size_) + quint64(Result->documents_[1].size_);
+        quint64 NextProgress = 0;
         while (At[0] < Result->documents_[0].size_ || At[1] < Result->documents_[1].size_) {
-            Limits.Check(); auto Left = WindowBytes(0), Right = WindowBytes(1);
+            Limits.Check();
+            const auto Completed = quint64(At[0]) + quint64(At[1]);
+            if (Limits.progress_ && Completed >= NextProgress) {
+                Limits.progress_->Publish(ComparisonProgress::Phase::Compare, Completed, Total);
+                NextProgress = Completed + Block;
+            }
+            auto Left = WindowBytes(0), Right = WindowBytes(1);
             if (Left.isEmpty() || Right.isEmpty()) { Emit(Left.size(), Right.size(), true); continue; }
             qint64 Common = 0, Count = std::min(Left.size(), Right.size());
             while (Common < Count && Left[Common] == Right[Common]) ++Common;
@@ -271,16 +298,23 @@ namespace hc::compare
             while (Different < Stop && Left[Different] != Right[Different]) ++Different;
             Emit(Different, Different, true);
         }
+        if (Limits.progress_) Limits.progress_->Publish(ComparisonProgress::Phase::Compare, Total, Total);
         Flush(); finish(Result->runs_->file_); finish(Result->changes_->file_);
+        if (Limits.progress_) Limits.progress_->Publish(ComparisonProgress::Phase::Index, 0, Result->changeCount_);
         QFile Index(Result->changes_->file_.fileName()); if (!Index.open(QIODevice::ReadOnly)) throw Failure("BinaryIndexReadFailed");
         for (qint64 I = 0; I < Result->changeCount_; ++I) {
-            if ((I & 4095) == 0) Limits.Check(); HexRun Run;
+            if ((I & 4095) == 0) {
+                Limits.Check();
+                if (Limits.progress_) Limits.progress_->Publish(ComparisonProgress::Phase::Index, I, Result->changeCount_);
+            }
+            HexRun Run;
             if (Index.read(reinterpret_cast<char*>(&Run), sizeof(Run)) != sizeof(Run)) throw Failure("BinaryIndexReadFailed");
             const int First = int(HexScale(Run.position_, Result->length_, 4095));
             const int Last = int(HexScale(Run.position_ + Run.length_ - 1, Result->length_, 4095));
             for (int Side = 0; Side < 2; ++Side) for (int Bin = First; Bin <= Last; ++Bin)
                 Result->overview_[Side][Bin] |= !Run.size_[Side] ? 8 : !Run.size_[1-Side] ? (Side ? 2 : 4) : 1;
         }
+        if (Limits.progress_) Limits.progress_->Publish(ComparisonProgress::Phase::Index, Result->changeCount_, Result->changeCount_);
         return Result;
     }
     QJsonObject BinaryComparison::Json() const

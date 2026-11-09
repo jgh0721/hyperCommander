@@ -258,7 +258,14 @@ namespace hc::compare
         connect(layout_,&QComboBox::currentIndexChanged,this,[this](int I){splitter_->setOrientation(I?Qt::Vertical:Qt::Horizontal);Preferences{}.SetValue("hex/layout",I);});layout_->setCurrentIndex(Preferences{}.Value("hex/layout").toInt()==1?1:0);
         connect(scroll_,&QScrollBar::valueChanged,this,[this](int Value){if(!rebuilding_)showPage(fromPixel(Value,1000000,comparison_->length_));});
         connect(readOnly_,&QCheckBox::toggled,this,[this]{if(stateChanged_)stateChanged_();});
+        progressTimer_.setInterval(100);
+        connect(&progressTimer_, &QTimer::timeout, this, [this] {
+            if (!Busy() || canceled_->load() || !progress_) return;
+            const auto Text = BinaryProgressText(progress_->Read());
+            if (!Text.isEmpty()) { status_->setText(Text); if (progressChanged_) progressChanged_(Text); }
+        });
         connect(&watcher_,&QFutureWatcher<HexWork>::finished,this,[this]{
+            progressTimer_.stop();
             working_=false;auto Result=watcher_.result();if(!Result.error_.isEmpty()&&!Result.saved_)status_->setText(Result.error_);else{
                 if(Result.history_==1){undo_.push_back(comparison_->documents_);redo_.clear();if(undo_.size()>64)undo_.erase(undo_.begin());}
                 else if(Result.history_==2){redo_.push_back(comparison_->documents_);undo_.pop_back();}
@@ -270,7 +277,7 @@ namespace hc::compare
                 if(Result.saved_&&Result.message_=="hex.copy.next"&&request_.nextDifferenceFile_)request_.nextDifferenceFile_(1);
             }
             if(Result.error_.isEmpty()&&Result.clipboardReady_){auto* Mime=new QMimeData;Mime->setData("application/octet-stream",Result.clipboard_);Mime->setText(QString::fromLatin1(Result.clipboard_.toHex(' ')));QApplication::clipboard()->setMimeData(Mime);if(Result.cut_)editBytes({},true);}
-            if(stateChanged_)stateChanged_();if(pendingTop_>=0){const auto Next=std::exchange(pendingTop_,qint64(-1));showPage(Next);}
+            if(progressChanged_)progressChanged_(status_->text());if(stateChanged_)stateChanged_();if(pendingTop_>=0){const auto Next=std::exchange(pendingTop_,qint64(-1));showPage(Next);}
         });
         connect(&fm::style::ThemeManager::instance(),&fm::style::ThemeManager::changed,this,[this]{refresh();});
         SetOverviewVisible(Preferences{}.Value("view/overview").toBool());showPage(0);
@@ -288,9 +295,10 @@ namespace hc::compare
     void HexCompareView::work(std::function<HexWork(const Budget&)> Operation)
     {
         if(Busy())return;working_=true;canceled_=std::make_shared<std::atomic_bool>(false);auto Canceled=canceled_;int Timeout=request_.timeoutMs_;int Width=bytesPerRow(),Filter=filter_->currentIndex();auto Current=comparison_;auto Unlocked=unlockedMiB_;
+        progress_ = std::make_shared<ComparisonProgress>(); auto Progress = progress_; progressTimer_.start();
         status_->setText(tr("처리 중… (취소 가능)"));
-        watcher_.setFuture(QtConcurrent::run([Operation=std::move(Operation),Canceled,Timeout,Width,Filter,Current,Unlocked]{
-            HexWork Result;try{Budget B;B.canceled_=Canceled.get();B.deadline_=std::chrono::steady_clock::now()+std::chrono::milliseconds(Timeout);Result=Operation(B);
+        watcher_.setFuture(QtConcurrent::run([Operation=std::move(Operation),Canceled,Timeout,Width,Filter,Current,Unlocked,Progress]{
+            HexWork Result;try{Budget B;B.progress_=Progress;B.canceled_=Canceled.get();B.deadline_=Timeout==0?std::chrono::steady_clock::time_point::max():std::chrono::steady_clock::now()+std::chrono::milliseconds(Timeout);Result=Operation(B);
                 if(!Result.comparison_)Result.comparison_=Current;Result.comparison_=std::make_shared<BinaryComparison>(*Result.comparison_);for(auto& Doc:Result.comparison_->documents_)SetBinarySourceLock(Doc,Unlocked,B);auto PageBudget=B;if(Result.saved_){PageBudget.canceled_=nullptr;PageBudget.deadline_=std::chrono::steady_clock::now()+std::chrono::seconds(10);}auto Page=page(Result.comparison_,Result.top_,Width,Filter,PageBudget);Result.cells_=std::move(Page.cells_);Result.changes_=std::move(Page.changes_);Result.changeFirst_=Page.changeFirst_;Result.top_=Page.top_;
             }catch(const SaveRecoveryFailure& E){Result.error_=QString::fromUtf8(E.what())+"\n"+QString::fromUtf8(QJsonDocument(E.recovery_).toJson(QJsonDocument::Compact));}catch(const std::exception& E){Result.error_=QString::fromUtf8(E.what());}return Result;
         }));if(stateChanged_)stateChanged_();

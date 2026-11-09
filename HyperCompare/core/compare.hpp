@@ -6,6 +6,7 @@
 #include <limits>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -19,12 +20,34 @@ namespace hc::compare
         std::string code_;
         explicit Failure(std::string Code) : std::runtime_error(Code), code_(std::move(Code)) {}
     };
+    // Keep only the latest snapshot; the UI polls instead of queuing an event per block.
+    class ComparisonProgress
+    {
+    public:
+        enum class Phase { None, Read, Compare, Index };
+        struct Snapshot
+        {
+            Phase phase_ = Phase::None;
+            std::uint64_t completed_ = 0, total_ = 0;
+            std::string item_;
+        };
+        void Publish(Phase Stage, std::uint64_t Completed, std::uint64_t Total, std::string Item = {})
+        {
+            std::lock_guard Lock(mutex_);
+            value_ = {Stage, Completed, Total, std::move(Item)};
+        }
+        Snapshot Read() const { std::lock_guard Lock(mutex_); return value_; }
+    private:
+        mutable std::mutex mutex_;
+        Snapshot value_;
+    };
     struct Budget
     {
         std::chrono::steady_clock::time_point deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         const std::atomic_bool* canceled_ = nullptr;
         std::uint64_t traceBytes_ = 64 * 1024 * 1024, steps_ = 50'000'000;
         std::function<void()> memoryCheck_;
+        std::shared_ptr<ComparisonProgress> progress_;
         // A lease gates new allocations; input snapshots already in private commit are not charged again.
         std::function<std::shared_ptr<void>(std::uint64_t)> memoryReserve_;
         // Disk-backed callers consume line ranges without copying replacement text.

@@ -192,7 +192,7 @@ namespace hc::compare
     }
     Result Execute(const Request& Input, const std::shared_ptr<std::atomic_bool>& Canceled, bool Save)
     {
-        Result result; result.requestId_ = Input.requestId_; Budget limits; limits.canceled_ = Canceled.get();
+        Result result; result.requestId_ = Input.requestId_; Budget limits; limits.canceled_ = Canceled.get(); limits.progress_ = Input.progress_;
         std::array<std::shared_ptr<PairComparison>, 3> views;
         limits.deadline_ = Input.directoryProgress_ && Input.timeoutMs_ == 0 ? std::chrono::steady_clock::time_point::max() :
             std::chrono::steady_clock::now() + std::chrono::milliseconds(Input.timeoutMs_);

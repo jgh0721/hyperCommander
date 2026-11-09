@@ -39,6 +39,24 @@ private slots:
         QCOMPARE(C->At(19998).changed_,quint64(1));QCOMPARE(C->At(19999).changed_,quint64(0));
         QVERIFY(C->overview_[0][4094]!=0);QCOMPARE(C->Json()["ranges"].toArray().size(),4096);
     }
+    void progressAndCancellation()
+    {
+        QTemporaryDir Dir; const auto Path = Dir.filePath("progress.bin");
+        { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write(QByteArray(3 * 1024 * 1024, 'a')), qint64(3 * 1024 * 1024)); }
+        Budget Limits; Limits.progress_ = std::make_shared<ComparisonProgress>();
+        auto Document = OpenBinary(Path, Limits);
+        auto Progress = Limits.progress_->Read();
+        QCOMPARE(Progress.phase_, ComparisonProgress::Phase::Read);
+        QCOMPARE(Progress.completed_, std::uint64_t(Document.size_)); QCOMPARE(Progress.total_, Progress.completed_);
+        QVERIFY(BinaryProgressText(Progress).contains("100%"));
+        const auto Different = BinaryFromBytes("different");
+        const auto Comparison = CompareBinary({Document, Different}, "none", Limits);
+        Progress = Limits.progress_->Read();
+        QCOMPARE(Progress.phase_, ComparisonProgress::Phase::Index);
+        QCOMPARE(Progress.completed_, std::uint64_t(Comparison->changeCount_)); QCOMPARE(Progress.total_, Progress.completed_);
+        std::atomic_bool Canceled{true}; Limits.canceled_ = &Canceled;
+        QVERIFY_EXCEPTION_THROWN(CompareBinary({Document, Different}, "none", Limits), Failure);
+    }
     void alignment()
     {
         QByteArray A;for(int I=0;I<512;++I)A.append(char((I*37+I/7)%256));auto B=A;B.insert(64,"inserted!");
