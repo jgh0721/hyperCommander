@@ -36,7 +36,7 @@ namespace
             if(qEnvironmentVariableIsSet("HC_EPUB_USE_COMPILED_POLICY"))
                 return MakeProductEpubRuntime(ProductRoot);
             const auto Pin = qgetenv("HC_EPUB_PRODUCT_MANIFEST_SHA256");
-            const auto Manifest = readFile(ProductRoot + "/Libs/Epub/epub-runtime-inventory.json");
+            const auto Manifest = readFile(ProductRoot + "/Libs/epub-runtime-inventory.json");
             if(Pin.size() != 64 || QCryptographicHash::hash(Manifest, QCryptographicHash::Sha256).toHex() != Pin) return {};
             return MakeProductEpubRuntime(ProductRoot, Pin);
         }
@@ -354,8 +354,9 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(View->ViewState()["status"] == "ready" || View->ViewState()["retired"].toBool(), 60000);
             QVERIFY2(View->ViewState()["status"] == "ready", QJsonDocument(View->ViewState()).toJson().constData());
             QVERIFY(View->ViewState()["attached"].toBool());
-            QVERIFY(View->ViewState()["text"].toString().contains(QStringLiteral("나무")));
-            QVERIFY(!View->ViewState()["images"].toArray().isEmpty());
+            // Detailed snapshots arrive separately from the ready state (up to 500 ms later).
+            QTRY_VERIFY_WITH_TIMEOUT(View->ViewState()["text"].toString().contains(QStringLiteral("나무")), 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(!View->ViewState()["images"].toArray().isEmpty(), 10000);
             QVERIFY(Heartbeats > 5);
             if(Mode == "destroy-ready") { delete View; View = nullptr; }
             else if(Mode == "crash") {
@@ -379,10 +380,11 @@ private slots:
         auto Runtime = runtime(); WebProcessError Error;
         Runtime.approvedInventorySha256_ = QByteArray(64, '0');
         QVERIFY(!DocumentWebProcess::Start(Runtime, limits(), 0, Error)); QCOMPARE(Error.code_, QString("epub-runtime-inventory-hash"));
-        Runtime = runtime(); Runtime.sha256_["bundle/reader.js"] = QByteArray(64, '0');
+        Runtime = runtime(); Runtime.sha256_[Runtime.kind_ == WebProcessKind::EpubReadOnly ? "Libs/epub-bundle/reader.js" : "bundle/reader.js"] = QByteArray(64, '0');
         QVERIFY(!DocumentWebProcess::Start(Runtime, limits(), 0, Error)); QCOMPARE(Error.code_, QString("epub-runtime-mixed-authority"));
         Runtime = runtime(); Runtime.kind_ = WebProcessKind::Rhwp;
-        QVERIFY(!DocumentWebProcess::Start(Runtime, limits(), 0, Error)); QCOMPARE(Error.code_, QString("rhwp-runtime-inventory-missing"));
+        QVERIFY(!DocumentWebProcess::Start(Runtime, limits(), 0, Error)); QCOMPARE(Error.code_, QFile::exists(Runtime.root_ + "/runtime-inventory.json")
+            ? QString("rhwp-runtime-inventory-hash") : QString("rhwp-runtime-inventory-missing"));
     }
     void startupCancellation()
     {

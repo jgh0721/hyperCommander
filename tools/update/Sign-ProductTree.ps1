@@ -5,7 +5,7 @@ $Root = [IO.Path]::GetFullPath($Root)
 if (-not $CacheRoot) { $CacheRoot = Join-Path $PSScriptRoot '../../_build/signing-cache' }
 Assert-UpdatePlainPath $Root
 $Names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($Name in @('HyperCommander.exe','HyperCommanderAdmin.exe','HyperEditor.exe','HyperCompare.exe','HyperCompareCli.exe','HyperEditorWeb.exe','QtWebEngineProcess.exe','hc-plugin-host-x64.exe','hc-plugin-inspect.exe','hc-search-index.exe','HyperCommanderUpdater.exe','Everything64.dll')) {
+foreach ($Name in @('HyperCommander.exe','HyperCommanderAdmin.exe','HyperEditor.exe','HyperCompare.exe','HyperCompareCli.exe','HyperEditorWeb.exe','QtWebEngineProcess.exe','hc-plugin-host-x64.exe','hc-plugin-inspect.exe','hc-search-index.exe','hc-markdown-render.exe','HyperCommanderUpdater.exe','Everything64.dll')) {
     if (Test-Path -LiteralPath (Join-Path $Root $Name) -PathType Leaf) { [void]$Names.Add($Name) }
 }
 foreach ($File in Get-ChildItem -LiteralPath $Root -File) {
@@ -18,14 +18,6 @@ foreach ($Folder in @('Libs/platforms','Libs/imageformats','Libs/iconengines','L
     foreach ($File in Get-ChildItem -LiteralPath $Directory -File) {
         Assert-UpdatePlainPath $File.FullName
         if (Test-UpdatePe $File.FullName) { [void]$Names.Add($Folder + '/' + $File.Name) }
-    }
-}
-$MarkdownRoot = Join-Path $Root 'Libs/Markdown'
-if (Test-Path -LiteralPath $MarkdownRoot) {
-    foreach ($File in Get-ChildItem -LiteralPath $MarkdownRoot -Recurse -File) {
-        if ($File.Name -like "vc_redist*.exe") { continue }
-        Assert-UpdatePlainPath $File.FullName
-        if (Test-UpdatePe $File.FullName) { [void]$Names.Add($File.FullName.Substring($Root.Length + 1).Replace('\','/')) }
     }
 }
 $Records = @()

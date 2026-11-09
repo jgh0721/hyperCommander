@@ -1,32 +1,51 @@
-"""Copy an independently pinned product runtime into a fresh isolated application layout."""
+"""Stage an independently pinned EPUB runtime into the shared application root."""
 import argparse
 import json
 from pathlib import Path
 import shutil
-from qualify_runtime import audit
+from qualify_runtime import audit, digest
 
 
 def deploy(runtime, pin, source, application):
     runtime = runtime.resolve(strict=True)
-    destination = (application / 'Libs' / 'Epub').resolve()
+    destination = application.resolve()
     if destination == runtime or runtime in destination.parents or destination in runtime.parents:
         raise ValueError('Runtime and destination must be separate')
-    report = audit(runtime, pin, source, product_candidate=True)
-    if destination.exists():
-        # Never merge into or repair an existing tree. An identical snapshot is idempotent.
-        audit(destination, pin, source, product_candidate=True)
-        return report
-    destination.mkdir(parents=True, exist_ok=False)
+    report = audit(runtime, pin, source, product_candidate=True, shared_root=False)
+    manifest = 'Libs/epub-runtime-inventory.json'
+    if not (runtime / manifest).is_file():
+        raise ValueError('Shared deployment requires EPUB schema 4')
+    def owned(name):
+        return name in ('HyperEpubWeb.exe', manifest) or name.startswith('Libs/epub-bundle/')
+    names = {row['path'] for row in report['files']} | {manifest}
+    # Validate every destination before writing. Shared Qt files must agree with
+    # both independent inventories; an EPUB update must never replace another kit.
+    for name in names:
+        output = destination / name
+        for path in (output, *output.parents):
+            if path.is_symlink() or path.is_junction():
+                raise ValueError(f'Linked destination: {name}')
+        if output.exists() and not output.is_file():
+            raise ValueError(f'Non-file destination: {name}')
     for row in report['files']:
         output = destination / row['path']
+        if output.exists() and not owned(row['path']) and digest(output) != row['sha256']:
+            raise ValueError(f'Shared runtime integrity mismatch: {row["path"]}')
+    bundle = destination / 'Libs/epub-bundle'
+    if bundle.exists():
+        for path in bundle.rglob('*'):
+            if path.is_symlink() or path.is_junction():
+                raise ValueError('Linked EPUB bundle')
+            if path.is_file() and path.relative_to(destination).as_posix() not in names:
+                raise ValueError('Unlisted EPUB bundle input')
+    for row in report['files']:
+        output = destination / row['path']
+        if output.exists() and digest(output) == row['sha256']:
+            continue
         output.parent.mkdir(parents=True, exist_ok=True)
-        with (runtime / row['path']).open('rb') as reader, output.open('xb') as writer:
-            shutil.copyfileobj(reader, writer)
-    manifest = 'epub-runtime-inventory.json'
-    with (runtime / manifest).open('rb') as reader, (destination / manifest).open('xb') as writer:
-        shutil.copyfileobj(reader, writer)
-    # Source drift during copying cannot produce an accepted destination.
-    return audit(destination, pin, source, product_candidate=True)
+        shutil.copyfile(runtime / row['path'], output)
+    shutil.copyfile(runtime / manifest, destination / manifest)
+    return audit(destination, pin, source, product_candidate=True, shared_root=True)
 
 
 def main():

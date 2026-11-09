@@ -23,13 +23,16 @@ if(HC_SIGNING_SCRIPT AND CONFIG STREQUAL "Release")
     endif()
 endif()
 set(FILES HyperCommander.exe HyperCommanderAdmin.exe HyperEditor.exe
-    hc-plugin-host-x64.exe hc-plugin-inspect.exe hc-search-index.exe Libs/Fonts/D2Coding.rcc)
+    hc-plugin-host-x64.exe hc-plugin-inspect.exe hc-search-index.exe QtWebEngineProcess.exe Libs/Fonts/D2Coding.rcc)
 # Root files the oldest supported updater does not own (HyperCompare) are listed
 # only as signed copies under the root carrier. The product copies them to ROOT;
 # the build directory keeps its originals for development runs.
 include("${CMAKE_CURRENT_LIST_DIR}/UpdateOwnershipPolicy.cmake")
 hc_read_update_ownership()
 foreach(NAME IN LISTS HC_CARRIED_ROOT_FILES)
+    if(NAME STREQUAL "HyperEpubWeb.exe")
+        continue() # Staged from the independently pinned EPUB runtime below.
+    endif()
     if(NOT EXISTS "${SOURCE}/${NAME}")
         message(FATAL_ERROR "Missing carried root file: ${NAME}")
     endif()
@@ -54,9 +57,10 @@ foreach(FOLDER IN ITEMS Libs/platforms Libs/imageformats Libs/iconengines Libs/s
     endif()
     list(APPEND FILES ${INPUTS})
 endforeach()
-file(GLOB_RECURSE MARKDOWN_FILES LIST_DIRECTORIES FALSE RELATIVE "${SOURCE}" "${SOURCE}/Libs/Markdown/*")
-list(FILTER MARKDOWN_FILES EXCLUDE REGEX "(^|/)[.]|[.]log$|[.]pdb$|[.]ilk$|/vc_redist[^/]*[.]exe$")
-list(APPEND FILES ${MARKDOWN_FILES})
+# Markdown shares the root WebEngine runtime with the document helpers.
+file(GLOB_RECURSE WEBENGINE_FILES LIST_DIRECTORIES FALSE RELATIVE "${SOURCE}"
+    "${SOURCE}/Libs/resources/*" "${SOURCE}/Libs/translations/qtwebengine_locales/*")
+list(APPEND FILES ${WEBENGINE_FILES})
 include("${CMAKE_CURRENT_LIST_DIR}/ProductLayout.cmake")
 # Every notice and source archive, including the archive plugins', lives under Licenses/<component>.
 file(GLOB_RECURSE INPUTS LIST_DIRECTORIES FALSE RELATIVE "${SOURCE}" "${SOURCE}/${HC_LAYOUT_Licenses}/*")
@@ -189,13 +193,18 @@ if(EPUB_SOURCE)
         --source "${CMAKE_CURRENT_LIST_DIR}/../tools/epub/web" --application "${SOURCE}"
         RESULT_VARIABLE EPUB_COPY_RESULT)
     if(NOT EPUB_COPY_RESULT EQUAL 0)
-        message(FATAL_ERROR "EPUB isolated runtime staging failed")
+        message(FATAL_ERROR "EPUB shared runtime staging failed")
     endif()
     string(JSON EPUB_COUNT LENGTH "${EPUB_VALIDATED}" files)
     math(EXPR EPUB_LAST "${EPUB_COUNT}-1")
     foreach(EPUB_INDEX RANGE ${EPUB_LAST})
         string(JSON EPUB_NAME GET "${EPUB_VALIDATED}" files ${EPUB_INDEX} path)
-        list(APPEND FILES "Libs/Epub/${EPUB_NAME}")
+        if(EPUB_NAME STREQUAL "HyperEpubWeb.exe")
+            file(COPY_FILE "${SOURCE}/${EPUB_NAME}" "${SOURCE}/${HC_ROOT_CARRIER}${EPUB_NAME}" ONLY_IF_DIFFERENT)
+            list(APPEND FILES "${HC_ROOT_CARRIER}${EPUB_NAME}")
+        else()
+            list(APPEND FILES "${EPUB_NAME}")
+        endif()
     endforeach()
 endif()
 list(REMOVE_DUPLICATES FILES)

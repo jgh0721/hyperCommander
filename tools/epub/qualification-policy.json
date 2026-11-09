@@ -11,9 +11,10 @@
   },
   "runtimeAdmission": {
     "currentKind": "EpubReadOnly",
-    "productDirectory": "Libs/Epub",
-    "productManifest": "epub-runtime-inventory.json",
-    "productSchemaVersion": 3,
+    "productDirectory": ".",
+    "productManifest": "Libs/epub-runtime-inventory.json",
+    "productBundle": "Libs/epub-bundle",
+    "productSchemaVersion": 4,
     "qualifiedCandidateInventorySha256": "48c4de2cc9a23269375647eb26f31cde5a904a9026178538b5158a8b146a4535",
     "authority": "Independent native policy pin; never trust an adjacent manifest alone; preserve separately approved RHWP and Compare files"
   },

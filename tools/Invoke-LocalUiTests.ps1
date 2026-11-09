@@ -102,6 +102,24 @@ foreach ($Package in @('Addons/WLX/HyperViewer', 'Addons/WCX/IsoImage', 'Third-P
     [IO.Directory]::CreateDirectory($PackageDestination) | Out-Null
     foreach ($File in @(Get-ChildItem -LiteralPath (Join-Path $RuntimeDir $Package) -File -ErrorAction SilentlyContinue)) { Copy-Item -LiteralPath $File.FullName -Destination $PackageDestination }
 }
+# Markdown shares the root WebEngine executable, resources and locales.
+foreach ($Name in @('hc-markdown-render.exe', 'QtWebEngineProcess.exe')) {
+    Copy-Item -LiteralPath (Join-Path $RuntimeDir $Name) -Destination $RunDir
+}
+foreach ($Folder in @('Libs/resources', 'Libs/translations/qtwebengine_locales')) {
+    $Destination = Join-Path $RunDir $Folder
+    [IO.Directory]::CreateDirectory((Split-Path $Destination -Parent)) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $RuntimeDir $Folder) -Destination $Destination -Recurse
+}
+# Keep EPUB's pinned shared-root layout in isolated UI runs as well.
+foreach ($Relative in @('HyperEpubWeb.exe', 'Libs/epub-runtime-inventory.json', 'Libs/epub-bundle')) {
+    $Input = Join-Path $RuntimeDir $Relative
+    if (Test-Path -LiteralPath $Input) {
+        $Target = Join-Path $RunDir $Relative
+        [IO.Directory]::CreateDirectory((Split-Path $Target -Parent)) | Out-Null
+        Copy-Item -LiteralPath $Input -Destination $Target -Recurse
+    }
+}
 Copy-Item -LiteralPath $Executable -Destination $TestExe
 $StartInfo = New-Object Diagnostics.ProcessStartInfo
 $StartInfo.FileName = $TestExe

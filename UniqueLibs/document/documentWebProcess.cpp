@@ -52,7 +52,7 @@ namespace hc::document
         {
             const bool ProductEpub = Runtime.kind_ == WebProcessKind::EpubReadOnly;
             const bool Epub = ProductEpub || Runtime.kind_ == WebProcessKind::EpubPrototype;
-            const auto InventoryName = ProductEpub ? QStringLiteral("epub-runtime-inventory.json")
+            const auto InventoryName = ProductEpub ? QStringLiteral("Libs/epub-runtime-inventory.json")
                 : Epub ? QStringLiteral("poc-runtime.json") : QStringLiteral("runtime-inventory.json");
             const auto Fail = [&](const char* Code) {
                 Error = QString::fromLatin1(Code);
@@ -77,7 +77,7 @@ namespace hc::document
                 return Fail("rhwp-runtime-inventory-json");
             const auto Object = Document.object();
             if(ProductEpub) {
-                if(Object.value("schemaVersion") != QJsonValue(3)
+                if(Object.value("schemaVersion") != QJsonValue(4)
                     || Object.value("profile") != QJsonValue("epub-passive-read-only")
                     || Object.value("protocolVersion") != QJsonValue(1)
                     || Object.value("diagnosticOnly") != QJsonValue(false)
@@ -102,6 +102,7 @@ namespace hc::document
                 || Object.value("sourceCommit") != QJsonValue("1a76570e833917d15817415a53c09ad61ab3203f")
                 || Object.value("releaseEligible") != QJsonValue(true))
                 return Fail("rhwp-runtime-not-approved");
+            const auto EpubBundle = ProductEpub ? QStringLiteral("Libs/epub-bundle/") : QStringLiteral("bundle/");
             const auto BundlePin = Object.value(Epub ? "bundleManifestSha256" : "assetManifestSha256").toString().toLatin1();
             if (BundlePin.size() != 64 || QByteArray::fromHex(BundlePin).toHex() != BundlePin)
                 return Fail("rhwp-runtime-bundle-pin");
@@ -133,9 +134,9 @@ namespace hc::document
                 Seen.insert(Path.toCaseFolded()); Pins.insert(Path, Sha);
             }
             if (!Pins.contains(ProductEpub ? "HyperEpubWeb.exe" : Epub ? "hc_epub_render_poc.exe" : "HyperEditorWeb.exe") || !Pins.contains("QtWebEngineProcess.exe")
-                || Pins.value(Epub ? QStringLiteral("bundle/bundle.json") : QString(hc::layout::RhwpBundle) + "/asset-manifest.json") != BundlePin
-                || (Epub && !Pins.contains("bundle/reader.js"))
-                || (ProductEpub && !Pins.contains("bundle/THIRD-PARTY-NOTICES.txt")))
+                || Pins.value(Epub ? EpubBundle + "bundle.json" : QString(hc::layout::RhwpBundle) + "/asset-manifest.json") != BundlePin
+                || (Epub && !Pins.contains(EpubBundle + "reader.js"))
+                || (ProductEpub && !Pins.contains(EpubBundle + "THIRD-PARTY-NOTICES.txt")))
                 return Fail("rhwp-runtime-required-files");
             // Pin the inventory itself as well: the existing native acquisition
             // locks and rehashes ALL files before CreateProcess, closing the
@@ -222,7 +223,7 @@ namespace hc::document
     WebProcessRuntime MakeProductEpubRuntime(const QString& ApplicationDirectory, const QByteArray& ApprovedInventorySha256)
     {
         WebProcessRuntime Runtime;
-        Runtime.root_ = QDir(ApplicationDirectory).filePath("Libs/Epub");
+        Runtime.root_ = QDir::cleanPath(ApplicationDirectory);
         Runtime.kind_ = WebProcessKind::EpubReadOnly;
         Runtime.approvedInventorySha256_ = ApprovedInventorySha256;
         return Runtime;

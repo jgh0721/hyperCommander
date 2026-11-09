@@ -23,9 +23,13 @@ def read_json(path):
     return json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
 
 
-def audit(root, pin, source, product=None, product_candidate=False):
+def audit(root, pin, source, product=None, product_candidate=False, shared_root=False):
     root = root.resolve(strict=True)
-    manifest_name = 'epub-runtime-inventory.json' if product_candidate else 'poc-runtime.json'
+    shared_layout = product_candidate and (root / 'Libs/epub-runtime-inventory.json').is_file()
+    if shared_root and not shared_layout:
+        raise ValueError('Shared product runtime requires schema 4')
+    manifest_name = ('Libs/epub-runtime-inventory.json' if shared_layout else 'epub-runtime-inventory.json') if product_candidate else 'poc-runtime.json'
+    bundle_root = 'Libs/epub-bundle' if shared_layout else 'bundle'
     helper_name = 'HyperEpubWeb.exe' if product_candidate else 'hc_epub_render_poc.exe'
     manifest = root / manifest_name
     if len(pin) != 64 or any(c not in '0123456789abcdef' for c in pin) or digest(manifest) != pin:
@@ -34,7 +38,7 @@ def audit(root, pin, source, product=None, product_candidate=False):
     expected = dict(schemaVersion=2, diagnosticOnly=True, releaseEligible=False,
                     profile='epub-passive-read-only-poc', protocolVersion=1, helper='hc_epub_render_poc.exe')
     if product_candidate:
-        expected.update(schemaVersion=3, diagnosticOnly=False, releaseEligible=True,
+        expected.update(schemaVersion=4 if shared_layout else 3, diagnosticOnly=False, releaseEligible=True,
                         profile='epub-passive-read-only', helper=helper_name,
                         readOnly=True, readerEngine='epubjs', readerVersion='0.3.93')
     if any(data.get(k) != v for k, v in expected.items()):
@@ -48,7 +52,7 @@ def audit(root, pin, source, product=None, product_candidate=False):
         path = PurePosixPath(name)
         if (not name or path.is_absolute() or '\\' in name or ':' in name or
                 any(p in ('', '.', '..') or p.endswith((' ', '.')) for p in name.split('/')) or
-                name.casefold() in seen or name.casefold() == manifest_name):
+                name.casefold() in seen or name.casefold() == manifest_name.casefold()):
             raise ValueError(f'Invalid or duplicate path: {name}')
         seen.add(name.casefold())
         full = (root / name).resolve(strict=True)
@@ -58,16 +62,17 @@ def audit(root, pin, source, product=None, product_candidate=False):
         if product is not None and (product / name).is_file():
             row['sameProductBytes'] = digest(product / name) == entry['sha256']
         rows.append(row)
-    required = {helper_name.casefold(), 'qtwebengineprocess.exe', 'bundle/bundle.json',
-                'bundle/reader.js', 'bundle/third-party-notices.txt'}
-    if not required <= seen:
+    required = {helper_name.casefold(), 'qtwebengineprocess.exe', f'{bundle_root}/bundle.json',
+                f'{bundle_root}/reader.js', f'{bundle_root}/third-party-notices.txt'}
+    if not {name.casefold() for name in required} <= seen:
         raise ValueError('Missing helper, engine or license inventory')
-    actual = {p.relative_to(root).as_posix().casefold() for p in root.rglob('*') if p.is_file()}
-    if actual - seen - {manifest_name, 'deployment.log'}:
+    sealed = root / bundle_root if shared_root else root
+    actual = {p.relative_to(root).as_posix().casefold() for p in sealed.rglob('*') if p.is_file()}
+    if actual - seen - {manifest_name.casefold(), 'deployment.log'}:
         raise ValueError('Unlisted runtime files')
-    if digest(root / 'bundle/bundle.json') != data['bundleManifestSha256']:
+    if digest(root / bundle_root / 'bundle.json') != data['bundleManifestSha256']:
         raise ValueError('Bundle pin mismatch')
-    bundle = read_json(root / 'bundle/bundle.json')
+    bundle = read_json(root / bundle_root / 'bundle.json')
     if digest(source / 'package-lock.json') != bundle['packageLockSha256']:
         raise ValueError('Source dependency lock differs from bundle')
     for name, sha in bundle['sourceHashes'].items():
@@ -75,7 +80,7 @@ def audit(root, pin, source, product=None, product_candidate=False):
         if not full.is_relative_to(source.resolve()) or digest(full) != sha:
             raise ValueError(f'Bundle source drift: {name}')
     reader = bundle['files']
-    if len(reader) != 1 or reader[0]['path'] != 'reader.js' or digest(root / 'bundle/reader.js') != reader[0]['sha256']:
+    if len(reader) != 1 or reader[0]['path'] != 'reader.js' or digest(root / bundle_root / 'reader.js') != reader[0]['sha256']:
         raise ValueError('Reader bundle mismatch')
     return dict(schemaVersion=1, runtime=str(root), manifestSha256=pin,
                 diagnosticOnly=not product_candidate, releaseEligible=False, productProfile=product_candidate, engine='epubjs',
@@ -83,7 +88,7 @@ def audit(root, pin, source, product=None, product_candidate=False):
                 totalBytes=sum(r['bytes'] for r in rows),
                 identicalProductBytes=sum(r['bytes'] for r in rows if r.get('sameProductBytes') is True),
                 conflictingProductFiles=[r['path'] for r in rows if r.get('sameProductBytes') is False],
-                deploymentDecision='isolated EPUB runtime; do not overwrite RHWP/shared approved files',
+                deploymentDecision='shared product root; existing shared files must match independent pins' if shared_layout else 'isolated EPUB runtime',
                 pendingReleaseGates=['product inventory and independent native pin',
                                     'actual F3/F4 host and PDF/HWP coexistence',
                                     'IME and accessibility', 'large-book and aggregate resource scheduler',

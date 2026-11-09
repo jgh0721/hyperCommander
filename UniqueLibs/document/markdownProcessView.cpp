@@ -85,7 +85,7 @@ void MarkdownProcessView::start()
                 {{"type", "error"}, {"message", tr("미리보기가 종료되었습니다. 새로고침으로 다시 시도하세요.")}});
         Stop();
     });
-    Process->setProgram(QCoreApplication::applicationDirPath() + "/Libs/Markdown/hc-markdown-render.exe");
+    Process->setProgram(QCoreApplication::applicationDirPath() + "/hc-markdown-render.exe");
     Process->setArguments({server_.serverName(), token_});
     Process->setProcessChannelMode(QProcess::ForwardedErrorChannel);
     startup_.start();

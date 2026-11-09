@@ -40,7 +40,7 @@ private slots:
         else qunsetenv("HC_EPUB_APPROVED_INVENTORY_SHA256");
         QVERIFY(Before.approvedInventorySha256_.has_value());
         QCOMPARE(After.approvedInventorySha256_, Before.approvedInventorySha256_);
-        QCOMPARE(After.root_, QString("C:/application/Libs/Epub"));
+        QCOMPARE(After.root_, QString("C:/application"));
         QCOMPARE(After.kind_, WebProcessKind::EpubReadOnly);
         QVERIFY(After.sha256_.isEmpty());
     }
@@ -71,7 +71,7 @@ private slots:
             "wrong-source", "wrong-profile", "missing-helper", "missing-renderer", "bundle-mismatch",
             "duplicate", "traversal", "trailing-dot", "nul", "bad-sha", "changed-binary", "changed-manifest", "oversized", "invalid-json"})
             QTest::newRow(qPrintable(QString(Kind == 2 ? "epub-product-" : Kind == 1 ? "epub-" : "rhwp-") + Mode)) << QString::fromLatin1(Mode) << (Kind != 0) << (Kind == 2);
-        for(const auto* Mode : {"diagnostic", "editable", "wrong-engine", "wrong-version", "wrong-helper", "missing-notices", "prototype-schema"})
+        for(const auto* Mode : {"diagnostic", "editable", "wrong-engine", "wrong-version", "wrong-helper", "missing-notices", "prototype-schema", "isolated-schema"})
             QTest::newRow(qPrintable(QString("epub-product-") + Mode)) << QString(Mode) << true << true;
     }
     void approvedInventory()
@@ -84,27 +84,28 @@ private slots:
             Runtime.sha256_[EpubHelper] = Runtime.sha256_.take("HyperEditorWeb.exe"); Runtime.kind_ = ProductEpub ? WebProcessKind::EpubReadOnly : WebProcessKind::EpubPrototype;
         }
         const auto Helper = Epub ? EpubHelper : QString("HyperEditorWeb.exe");
-        const auto Inventory = ProductEpub ? QString("epub-runtime-inventory.json") : Epub ? QString("poc-runtime.json") : QString("runtime-inventory.json");
-        const auto BundlePath = Epub ? QString("bundle/bundle.json") : QString("Libs/bundle/asset-manifest.json");
+        const auto Inventory = ProductEpub ? QString("Libs/epub-runtime-inventory.json") : Epub ? QString("poc-runtime.json") : QString("runtime-inventory.json");
+        const auto EpubBundle = ProductEpub ? QString("Libs/epub-bundle/") : QString("bundle/");
+        const auto BundlePath = Epub ? EpubBundle + "bundle.json" : QString("Libs/bundle/asset-manifest.json");
         const auto Hash = [](const QByteArray& Bytes) { return QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex(); };
         const auto Write = [](const QString& Path, const QByteArray& Bytes) {
             QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size();
         };
-        QVERIFY(QDir(Directory.path()).mkpath(Epub ? "bundle" : "Libs/bundle"));
+        QVERIFY(QDir(Directory.path()).mkpath(Epub ? EpubBundle : QString("Libs/bundle")));
         QVERIFY(Write(Directory.filePath(BundlePath), "fixture bundle"));
         QVERIFY(Write(Directory.filePath("QtWebEngineProcess.exe"), "fixture renderer"));
         Runtime.sha256_[BundlePath] = Hash("fixture bundle");
-        if(Epub) { QVERIFY(Write(Directory.filePath("bundle/reader.js"), "fixture script")); Runtime.sha256_["bundle/reader.js"] = Hash("fixture script"); }
+        if(Epub) { QVERIFY(Write(Directory.filePath(EpubBundle + "reader.js"), "fixture script")); Runtime.sha256_[EpubBundle + "reader.js"] = Hash("fixture script"); }
         Runtime.sha256_["QtWebEngineProcess.exe"] = Hash("fixture renderer");
         if(ProductEpub) {
-            QVERIFY(Write(Directory.filePath("bundle/THIRD-PARTY-NOTICES.txt"), "fixture notices"));
-            Runtime.sha256_["bundle/THIRD-PARTY-NOTICES.txt"] = Hash("fixture notices");
+            QVERIFY(Write(Directory.filePath(EpubBundle + "THIRD-PARTY-NOTICES.txt"), "fixture notices"));
+            Runtime.sha256_[EpubBundle + "THIRD-PARTY-NOTICES.txt"] = Hash("fixture notices");
         }
         QJsonArray Files;
         for (auto At = Runtime.sha256_.cbegin(); At != Runtime.sha256_.cend(); ++At) {
             if ((Mode == "missing-helper" && At.key() == Helper)
                 || (Mode == "missing-renderer" && At.key() == "QtWebEngineProcess.exe")
-                || (Mode == "missing-notices" && At.key() == "bundle/THIRD-PARTY-NOTICES.txt")) continue;
+                || (Mode == "missing-notices" && At.key() == EpubBundle + "THIRD-PARTY-NOTICES.txt")) continue;
             Files.append(QJsonObject{{"path", At.key()}, {"sha256", QString::fromLatin1(At.value())}});
         }
         if (Mode == "duplicate") Files.append(QJsonObject{{"path", Helper.toLower()}, {"sha256", QString::fromLatin1(Hash("x"))}});
@@ -122,7 +123,7 @@ private slots:
                 {"helper", Helper}, {"bundleManifestSha256", QString::fromLatin1(Hash(Mode == "bundle-mismatch" ? "wrong" : "fixture bundle"))}, {"files", Files}};
         }
         if(ProductEpub) {
-            Manifest["schemaVersion"] = 3;
+            Manifest["schemaVersion"] = 4;
             Manifest["profile"] = Mode == "wrong-profile" ? "epub-passive-read-only-poc" : "epub-passive-read-only";
             Manifest["diagnosticOnly"] = false; Manifest["releaseEligible"] = Mode != "candidate";
             Manifest["readerEngine"] = Mode == "wrong-engine" ? "readium" : "epubjs";
@@ -131,6 +132,7 @@ private slots:
             if(Mode == "diagnostic") Manifest["diagnosticOnly"] = true;
             if(Mode == "wrong-helper") Manifest["helper"] = "hc_epub_render_poc.exe";
             if(Mode == "prototype-schema") Manifest["schemaVersion"] = 2;
+            if(Mode == "isolated-schema") Manifest["schemaVersion"] = 3;
         }
         auto Bytes = QJsonDocument(Manifest).toJson(QJsonDocument::Compact);
         if (Mode == "oversized") Bytes = QByteArray(256 * 1024 + 1, ' ');
@@ -153,7 +155,7 @@ private slots:
                 : Mode == "wrong-pin" || Mode == "changed-manifest" ? "rhwp-runtime-inventory-hash"
                 : Mode == "mixed-authority" ? "rhwp-runtime-mixed-authority"
                 : Mode == "candidate" || Mode == "wrong-source" || Mode == "wrong-profile"
-                    || QStringList{"diagnostic", "editable", "wrong-engine", "wrong-version", "wrong-helper", "prototype-schema"}.contains(Mode) ? "rhwp-runtime-not-approved"
+                    || QStringList{"diagnostic", "editable", "wrong-engine", "wrong-version", "wrong-helper", "prototype-schema", "isolated-schema"}.contains(Mode) ? "rhwp-runtime-not-approved"
                 : Mode == "missing-helper" || Mode == "missing-renderer" || Mode == "bundle-mismatch" || Mode == "missing-notices" ? "rhwp-runtime-required-files"
                 : Mode == "changed-binary" ? "web-owner-runtime-hash"
                 : Mode == "oversized" ? "rhwp-runtime-inventory-budget"
@@ -168,7 +170,7 @@ private slots:
     {
         QTemporaryDir Directory;
         auto Runtime = MakeProductEpubRuntime(Directory.path(), {});
-        QCOMPARE(Runtime.root_, QDir(Directory.path()).filePath("Libs/Epub"));
+        QCOMPARE(Runtime.root_, Directory.path());
         QCOMPARE(Runtime.kind_, WebProcessKind::EpubReadOnly);
         QVERIFY(Runtime.approvedInventorySha256_.has_value());
         WebProcessError Error;

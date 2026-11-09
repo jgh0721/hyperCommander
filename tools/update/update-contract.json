@@ -38,6 +38,10 @@
     {
       "since": "2026.10.27.1",
       "rootFiles": ["HyperCompare.exe", "HyperCompareCli.exe"]
+    },
+    {
+      "since": "2026.11.09.2",
+      "rootFiles": ["hc-markdown-render.exe", "HyperEpubWeb.exe"]
     }
   ],
   "updaterFloorNote": "Every package must be accepted by the oldest released updater below: its path ownership, signer pins and required files. Root files owned only after this version ship under rootCarrier and are promoted to ROOT by newer code. Raising the floor strands older clients; change it deliberately.",

@@ -14,14 +14,19 @@ class DeploymentTests(unittest.TestCase):
         for row in self.data['files']:
             if row['path'] == 'hc_epub_render_poc.exe':
                 row['path'] = 'HyperEpubWeb.exe'
-        self.data.update(schemaVersion=3, diagnosticOnly=False, releaseEligible=True,
+        (self.root / 'Libs').mkdir()
+        (self.root / 'bundle').rename(self.root / 'Libs/epub-bundle')
+        for row in self.data['files']:
+            if row['path'].startswith('bundle/'):
+                row['path'] = row['path'].replace('bundle/', 'Libs/epub-bundle/', 1)
+        self.data.update(schemaVersion=4, diagnosticOnly=False, releaseEligible=True,
                          profile='epub-passive-read-only', helper='HyperEpubWeb.exe',
                          readOnly=True, readerEngine='epubjs', readerVersion='0.3.93')
-        manifest = self.root / 'epub-runtime-inventory.json'
+        manifest = self.root / 'Libs/epub-runtime-inventory.json'
         manifest.write_text(json.dumps(self.data), encoding='utf-8')
         self.pin = digest(manifest)
         self.application = Path(self.temp.name) / 'application'
-        self.destination = self.application / 'Libs/Epub'
+        self.destination = self.application
 
     def test_copy_and_repeat_preserve_siblings(self):
         self.application.mkdir()
@@ -40,11 +45,28 @@ class DeploymentTests(unittest.TestCase):
 
     def test_existing_tamper_is_not_overwritten(self):
         deploy(self.root, self.pin, self.source, self.application)
-        helper = self.destination / 'HyperEpubWeb.exe'
+        helper = self.destination / 'QtWebEngineProcess.exe'
         helper.write_bytes(b'local changed file')
         with self.assertRaisesRegex(ValueError, 'integrity'):
             deploy(self.root, self.pin, self.source, self.application)
         self.assertEqual(helper.read_bytes(), b'local changed file')
+
+    def test_conflicting_shared_file_rejected_before_any_copy(self):
+        self.application.mkdir()
+        shared = self.application / 'QtWebEngineProcess.exe'
+        shared.write_bytes(b'another Qt build')
+        with self.assertRaisesRegex(ValueError, 'integrity'):
+            deploy(self.root, self.pin, self.source, self.application)
+        self.assertFalse((self.application / 'HyperEpubWeb.exe').exists())
+        self.assertEqual(shared.read_bytes(), b'another Qt build')
+
+    def test_unlisted_bundle_file_rejected(self):
+        deploy(self.root, self.pin, self.source, self.application)
+        extra = self.application / 'Libs/epub-bundle/extra.js'
+        extra.write_bytes(b'unlisted')
+        with self.assertRaisesRegex(ValueError, 'Unlisted'):
+            deploy(self.root, self.pin, self.source, self.application)
+        self.assertEqual(extra.read_bytes(), b'unlisted')
 
     def test_source_drift_creates_nothing(self):
         (self.source / 'reader.js').write_bytes(b'changed source')

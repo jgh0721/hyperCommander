@@ -946,7 +946,11 @@ int main(int Argc, char** Argv)
             if(!NativeParent) throw QString("Owner native parent unavailable");
             // Construct the complete reader only after transfer. Binding an empty
             // Qt widget first lets later WebEngine creation reset its native parent.
+            #ifdef HC_EPUB_PRODUCT_HELPER
+            OwnerController Controller(Root + "/Libs/epub-bundle", NativeParent.get());
+#else
             OwnerController Controller(Root + "/bundle", NativeParent.get());
+#endif
             if(!Peer.Ready(Surface.Window(), [&Controller](const QByteArray& Request) { return Controller.Control(Request); }, [] { qApp->quit(); }))
                 throw QString("Owner native attachment failed");
             QTimer ParentTimer;

@@ -18,7 +18,7 @@ class ProductSignatures(unittest.TestCase):
             capture_output=True, timeout=120)
 
     def test_signed_runtime(self):
-        manifest = ROOT/'epub-runtime-inventory.json'
+        manifest = ROOT/'Libs/epub-runtime-inventory.json'
         run = self.run_check(ROOT, hashlib.sha256(manifest.read_bytes()).hexdigest())
         self.assertEqual(run.returncode, 0, run.stderr.decode(errors='replace'))
         self.assertEqual(len(json.loads(run.stdout)['files']), len(json.loads(manifest.read_bytes())['files'])+1)
@@ -27,7 +27,7 @@ class ProductSignatures(unittest.TestCase):
         self.assertNotEqual(self.run_check(ROOT, '0'*64).returncode, 0)
 
     def test_rejected_manifests(self):
-        base = json.loads((ROOT/'epub-runtime-inventory.json').read_bytes())
+        base = json.loads((ROOT/'Libs/epub-runtime-inventory.json').read_bytes())
         cases = [dict(diagnosticOnly=True), dict(releaseEligible=False), dict(readOnly=False),
                  dict(readerEngine='readium'), dict(helper='other.exe'),
                  dict(files=[dict(path='../escape', sha256='0'*64)]),
@@ -37,11 +37,12 @@ class ProductSignatures(unittest.TestCase):
             with self.subTest(patch=patch), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 content = json.dumps(base | patch).encode()
-                (root/'epub-runtime-inventory.json').write_bytes(content)
+                (root/'Libs').mkdir(exist_ok=True)
+                (root/'Libs/epub-runtime-inventory.json').write_bytes(content)
                 self.assertNotEqual(self.run_check(root, hashlib.sha256(content).hexdigest()).returncode, 0)
 
     def test_unsigned_pe(self):
-        base = json.loads((ROOT/'epub-runtime-inventory.json').read_bytes())
+        base = json.loads((ROOT/'Libs/epub-runtime-inventory.json').read_bytes())
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             payload = bytearray((ROOT/'HyperEpubWeb.exe').read_bytes())
@@ -55,7 +56,8 @@ class ProductSignatures(unittest.TestCase):
             (root/'untrusted.exe').write_bytes(payload)
             base['files'] = [dict(path='untrusted.exe', sha256=hashlib.sha256(payload).hexdigest())]
             content = json.dumps(base).encode()
-            (root/'epub-runtime-inventory.json').write_bytes(content)
+            (root/'Libs').mkdir(exist_ok=True)
+            (root/'Libs/epub-runtime-inventory.json').write_bytes(content)
             run = self.run_check(root, hashlib.sha256(content).hexdigest())
             self.assertNotEqual(run.returncode, 0)
             self.assertIn(b'signature', run.stderr.lower())

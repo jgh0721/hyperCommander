@@ -30,9 +30,10 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     exe = args.output/('HyperEpubWeb.exe' if args.product_candidate else 'hc_epub_render_poc.exe')
     shutil.copyfile(args.executable, exe)
-    (args.output/'bundle').mkdir()
+    bundle = 'Libs/epub-bundle' if args.product_candidate else 'bundle'
+    (args.output/bundle).mkdir(parents=True)
     for name in ['reader.js', 'bundle.json', 'THIRD-PARTY-NOTICES.txt']:
-        shutil.copyfile(args.bundle/name, args.output/'bundle'/name)
+        shutil.copyfile(args.bundle/name, args.output/bundle/name)
     startup = subprocess.STARTUPINFO()
     startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 0
@@ -51,10 +52,17 @@ def main():
         destination = args.output/'Libs'/plugin.parent.name/plugin.name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(plugin, destination)
-    shutil.copytree(args.kit/'resources', args.output/'Libs/resources')
+    shutil.copytree(args.kit/'resources', args.output/'Libs/resources',
+                    ignore=shutil.ignore_patterns('*.debug.*'))
     locale = args.output/'Libs/translations/qtwebengine_locales'
     locale.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.kit/'translations/qtwebengine_locales/en-US.pak', locale/'en-US.pak')
+    # This is a newly created staging tree. The embedded qt.conf uses Libs,
+    # so discard windeployqt's redundant flat resources before sealing it.
+    for name in ('resources', 'translations'):
+        flat = args.output / name
+        if flat.exists():
+            shutil.rmtree(flat)
     if args.sign_product:
         signer = Path(__file__).resolve().parents[1]/'update/Sign-ProductFile.ps1'
         for path in sorted(args.output.rglob('*')):
@@ -77,11 +85,11 @@ def main():
         raise RuntimeError('Runtime file budget exceeded')
     metadata = dict(schemaVersion=2, diagnosticOnly=True, releaseEligible=False,
         profile='epub-passive-read-only-poc', protocolVersion=1, helper=exe.name,
-        bundleManifestSha256=hashlib.sha256((args.output/'bundle/bundle.json').read_bytes()).hexdigest(), files=files)
+        bundleManifestSha256=hashlib.sha256((args.output/bundle/'bundle.json').read_bytes()).hexdigest(), files=files)
     if args.product_candidate:
-        metadata.update(schemaVersion=3, diagnosticOnly=False, releaseEligible=True,
+        metadata.update(schemaVersion=4, diagnosticOnly=False, releaseEligible=True,
                         profile='epub-passive-read-only', readOnly=True, readerEngine='epubjs', readerVersion='0.3.93')
-    manifest = args.output/('epub-runtime-inventory.json' if args.product_candidate else 'poc-runtime.json')
+    manifest = args.output/('Libs/epub-runtime-inventory.json' if args.product_candidate else 'poc-runtime.json')
     manifest.write_text(json.dumps(metadata, indent=2), encoding='utf-8', newline='\r\n')
     print(json.dumps(dict(runtime=str(args.output.resolve()), manifestSha256=hashlib.sha256(manifest.read_bytes()).hexdigest(), files=len(files))))
 

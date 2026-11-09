@@ -44,8 +44,8 @@ if ($Product.rhwpInventorySha256) {
 }
 $EpubPins = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
 if ($Product.epubInventorySha256) {
-    $Epub = & (Join-Path $PSScriptRoot 'epub/Test-ProductRuntime.ps1') -RuntimeRoot (Join-Path $Source 'Libs/Epub') -ExpectedSha256 $Product.epubInventorySha256
-    foreach ($Entry in $Epub.files) { $EpubPins.Add(('Libs/Epub/' + $Entry.path), $Entry.sha256) }
+    $Epub = & (Join-Path $PSScriptRoot 'epub/Test-ProductRuntime.ps1') -RuntimeRoot $Source -SharedRoot -ExpectedSha256 $Product.epubInventorySha256
+    foreach ($Entry in $Epub.files) { $EpubPins.Add($Entry.path, $Entry.sha256) }
 }
 # Files of the previous installation, used to remove what the new layout no longer ships.
 $PreviousInventory = Join-Path $Destination 'product-inventory.json'
@@ -55,7 +55,7 @@ $Hashes = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]:
 foreach ($Entry in $Product.files) {
     $Relative = [string]$Entry.path
     if ($Relative -match '(^/|^[A-Za-z]:|(^|/)\.\.(/|$))' -or $Relative.Contains('\') -or
-        ($Relative -notmatch '^(HyperCommander(?:Admin|Updater)?\.exe|HyperEditor\.exe|Libs/RootFiles/HyperCompare(?:Cli)?\.exe|hc-(?:plugin-host-x64|plugin-inspect|search-index)\.exe|(?:Qt6|vcruntime|msvcp|concrt|d3dcompiler_|opengl32sw|pdfium)[A-Za-z0-9_.]*\.dll|Libs/(?:platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport|multimedia|ffmpeg)/[A-Za-z0-9_.-]+\.dll|Libs/translations/[A-Za-z0-9_.-]+\.qm|Libs/Markdown/[^:]+|Libs/Fonts/D2Coding\.rcc|Licenses/[^:]+|Addons/WCX/IsoImage/[^:]+|Addons/WLX/HyperViewer/[^:]+|Third-Party/(?:SevenZip|AlzEgg)/[^:]+)$' -and -not $RhwpPins.ContainsKey($Relative) -and -not $EpubPins.ContainsKey($Relative)) -or
+        ($Relative -notmatch '^(HyperCommander(?:Admin|Updater)?\.exe|HyperEditor\.exe|Libs/RootFiles/(?:HyperCompare(?:Cli)?|hc-markdown-render|HyperEpubWeb)\.exe|QtWebEngineProcess\.exe|hc-(?:plugin-host-x64|plugin-inspect|search-index)\.exe|(?:Qt6|vcruntime|msvcp|concrt|d3dcompiler_|opengl32sw|pdfium)[A-Za-z0-9_.]*\.dll|Libs/(?:platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport|multimedia|ffmpeg)/[A-Za-z0-9_.-]+\.dll|Libs/translations/[A-Za-z0-9_.-]+\.qm|Libs/(?:resources|translations/qtwebengine_locales)/[^:]+|Libs/Fonts/D2Coding\.rcc|Licenses/[^:]+|Addons/WCX/IsoImage/[^:]+|Addons/WLX/HyperViewer/[^:]+|Third-Party/(?:SevenZip|AlzEgg)/[^:]+)$' -and -not $RhwpPins.ContainsKey($Relative) -and -not $EpubPins.ContainsKey($Relative)) -or
         $Relative -match '(^|/)Qt6Test' -or $Entry.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or $Hashes.ContainsKey($Relative)) {
         throw "Invalid product inventory entry: $Relative"
     }
@@ -74,7 +74,8 @@ foreach ($Name in $RhwpPins.Keys) {
     if (-not $Hashes.ContainsKey($Name) -or $Hashes[$Name] -ine $RhwpPins[$Name]) { throw "RHWP product inventory mismatch: $Name" }
 }
 foreach ($Name in $EpubPins.Keys) {
-    if (-not $Hashes.ContainsKey($Name) -or $Hashes[$Name] -ine $EpubPins[$Name]) { throw "EPUB product inventory mismatch: $Name" }
+    $ProductName = if ($Name -eq 'HyperEpubWeb.exe') { $Floor.carrier + $Name } else { $Name }
+    if (-not $Hashes.ContainsKey($ProductName) -or $Hashes[$ProductName] -ine $EpubPins[$Name]) { throw "EPUB product inventory mismatch: $Name" }
 }
 # The viewer manifest sits in its package folder; its binary and dependencies are ROOT-relative.
 $ViewerManifest = Get-Content -LiteralPath (Join-Path $Source ($ViewerPackage + 'hyperviewer.json')) -Raw | ConvertFrom-Json
@@ -125,7 +126,7 @@ try {
         (Test-Path -LiteralPath $Target) -and (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash -ne $Hashes[$Floor.carrier + $_] -and
             -not $(try { $null = Assert-UpdateSignature $Target $_; $true } catch { $false })
     })
-    if ($Foreign.Count) { Write-Warning "Kept non-product files; HyperCompare was not copied to the installation root: $($Foreign -join ', ')" }
+    if ($Foreign.Count) { Write-Warning "Kept non-product files; Carried executables were not copied to the installation root: $($Foreign -join ', ')" }
     else {
         foreach ($Name in $Bundle) {
             $Target = Join-Path $Destination $Name; $Hash = $Hashes[$Floor.carrier + $Name]

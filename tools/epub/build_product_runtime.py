@@ -47,7 +47,7 @@ def main():
     stage=[sys.executable,repo/"tools/epub/stage_owner_runtime.py","--product-candidate","--sign-product","--executable",helper,"--bundle",output/"bundle","--kit",kit,"--output",output/"runtime-signed"]
     if a.signing_cache:stage += ["--signing-cache",a.signing_cache.resolve()]
     run("stage",stage)
-    manifest=output/"runtime-signed/epub-runtime-inventory.json";pin=hashlib.sha256(manifest.read_bytes()).hexdigest()
+    manifest=output/"runtime-signed/Libs/epub-runtime-inventory.json";pin=hashlib.sha256(manifest.read_bytes()).hexdigest()
     run("signatures",["powershell","-NoProfile","-ExecutionPolicy","Bypass","-File",repo/"tools/epub/Test-ProductRuntime.ps1","-RuntimeRoot",output/"runtime-signed","-ExpectedSha256",pin])
     run("configure-product",[*common,f"-DHC_EPUB_PRODUCT_RUNTIME_DIRECTORY={(output/'runtime-signed').as_posix()}",f"-DHC_EPUB_APPROVED_INVENTORY_SHA256={pin}"])
     run("policy-layout",[cmake,"--build","--preset","vc2026-release","--target","hc_epub_product_runtime"])

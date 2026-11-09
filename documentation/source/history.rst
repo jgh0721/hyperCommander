@@ -7,6 +7,10 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* EPUB: 실행 파일을 HyperCommander와 같은 폴더에 배치하고 Qt·WebEngine 파일 공유. 전용 번들은 Libs/epub-bundle에 배치하여 중복 설치 제거.
+
+* Markdown: 렌더러를 HyperCommander와 같은 폴더에 배치하고 Qt DLL·WebEngine 리소스·플러그인을 공유하여 중복 설치 제거.
+
 v2026.11.09.01 (2026-11-09)
 ----------------------------------------
 
