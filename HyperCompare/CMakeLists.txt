@@ -1,3 +1,4 @@
+find_package(Qt6 6.12 REQUIRED COMPONENTS PrintSupport)
 include("${CMAKE_CURRENT_SOURCE_DIR}/widgets/scintillaPadding.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/semanticParser.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime/archiveCodec.cmake")
@@ -16,6 +17,7 @@ target_precompile_headers(hc_compare_core PRIVATE stdafx.h)
 target_link_libraries(hc_compare_semantic_worker PRIVATE hc_compare_core)
 
 qt_add_library(hc_compare_runtime STATIC
+    runtime/binarySession.cpp runtime/binarySession.hpp
     runtime/largeText.cpp runtime/largeText.hpp
     runtime/largeTextSession.cpp
     runtime/largeTextTools.cpp
@@ -55,6 +57,7 @@ target_link_libraries(hc_compare_runtime PRIVATE pcre2-8-static)
 target_precompile_headers(hc_compare_runtime PRIVATE runtime/stdafx.h)
 
 qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widgets/directoryMergeDialog.hpp widgets/directoryView.cpp widgets/directoryView.hpp widgets/compareWindow.cpp widgets/compareWindow.hpp
+    widgets/hexCompareView.cpp widgets/hexCompareView.hpp
     widgets/compareSettings.cpp widgets/compareSettings.hpp
     ../UniqueLibs/ProductDefaults_Compare.hpp
     widgets/compareCommands.cpp widgets/compareCommands.hpp
@@ -76,7 +79,7 @@ qt_add_library(hc_compare_widgets STATIC widgets/directoryMergeDialog.cpp widget
     widgets/docxCompareView.cpp widgets/docxCompareView.hpp
     widgets/mergeController.cpp widgets/mergeController.hpp widgets/scrollSynchronizer.cpp widgets/scrollSynchronizer.hpp
     widgets/findBar.cpp widgets/findBar.hpp widgets/overviewBar.cpp widgets/overviewBar.hpp)
-target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Fm::widgets Qt6::Concurrent)
+target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets PRIVATE hc_scintilla hc_lexilla fmstyle Fm::widgets Qt6::Concurrent Qt6::PrintSupport)
 target_precompile_headers(hc_compare_widgets PRIVATE stdafx.h)
 
 qt_add_executable(HyperCompare WIN32 main.cpp)
@@ -94,6 +97,12 @@ hc_enable_qt_deployment(HyperCompareCli PLUGINS)
 
 if(BUILD_TESTING)
     find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
+    qt_add_executable(hc_hex_tests tests/tstHex.cpp)
+    target_link_libraries(hc_hex_tests PRIVATE hc_compare_widgets fmstyle Qt6::Test)
+    target_compile_options(hc_hex_tests PRIVATE /utf-8)
+    target_precompile_headers(hc_hex_tests PRIVATE stdafx.h)
+    add_test(NAME hypercompare.hex COMMAND hc_hex_tests)
+    hc_enable_qt_deployment(hc_hex_tests TEST PLUGINS)
     qt_add_executable(hc_compare_tests tests/tstCompare.cpp)
     # SourceTree equivalence runs in process; workers use the same object code.
     target_link_libraries(hc_compare_tests PRIVATE hc_compare_runtime hc_compare_semantic_worker hc_compare_parser hc_compare_zip Qt6::Test Qt6::Gui)

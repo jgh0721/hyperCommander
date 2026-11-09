@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "extensionEngine.hpp"
+#include "binarySession.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "engineRegistry.hpp"
 #include "session.hpp"
@@ -19,6 +20,11 @@ namespace hc::compare
         {
             if (Input.mode_ == "merge" || !Input.output_.isEmpty()) throw Failure("BinaryMergeUnsupported");
             if (!Input.base_.isEmpty() || !Input.file3_.isEmpty()) throw Failure("BinaryThreeUnsupported");
+            if (!Input.headless_ || Input.hex_) {
+                Value.binary_ = CompareBinary({OpenBinary(Input.file1_, Limits), OpenBinary(Input.file2_, Limits)}, Input.hexAlignment_, Limits);
+                Value.extension_ = Value.binary_->Json(); Value.operation_ = "compare-binary";
+                Value.exitCode_ = Value.binary_->changeCount_ ? 1 : 0; Value.outcome_ = Value.exitCode_ ? "Different" : "Equal"; return;
+            }
             const auto Reservation = ProcessControllerMemory()->ReserveController(8 * 1024 * 1024);
             storage::OperationContext Context; Context.deadline_ = Limits.deadline_; Context.workerRead_ = true; Context.denyConcurrentMutation_ = true;
             std::array<std::shared_ptr<storage::IStorageProvider>, 2> Readers;
@@ -139,6 +145,7 @@ namespace hc::compare
     }
     bool TryExtensionComparison(const Request& Input, Result& Value, const Budget& Limits, bool Save)
     {
+        if (Input.hex_) { compareBinary(Input, Value, Limits); return true; }
         const auto format = InspectResourceFormat(Input.file1_, Limits);
         if (InputEncoding(Input, 0).isEmpty() && InputEncoding(Input, 1).isEmpty()
             && (format == "binary" || (format == "text" && InspectResourceFormat(Input.file2_, Limits) == "binary"))) {

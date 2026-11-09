@@ -8,7 +8,7 @@ if(NOT TARGET hc_sevenzip_backend)
     qt_add_library(hc_compare_archive_backend STATIC
         "${PROJECT_SOURCE_DIR}/HyperCommanderBuiltInPlugin/SevenZip/sevenZipBackend.cpp")
     target_include_directories(hc_compare_archive_backend PRIVATE "${HC_7ZIP_SOURCE}/CPP" "${PROJECT_SOURCE_DIR}")
-    target_link_libraries(hc_compare_archive_backend PRIVATE Qt6::Core oleaut32)
+    target_link_libraries(hc_compare_archive_backend PRIVATE Qt6::Core oleaut32 msi)
     target_compile_options(hc_compare_archive_backend PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
     set(HC_COMPARE_ARCHIVE_BACKEND hc_compare_archive_backend)
 else()

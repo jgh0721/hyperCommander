@@ -54,6 +54,8 @@ namespace hc::compare
         value("archive-password2-file", "UTF-8 password file for RIGHT.");
         value("archive-members1", "Nested LEFT archive ordinal chain as a JSON array, maximum depth 4.");
         value("archive-members2", "Nested RIGHT archive ordinal chain as a JSON array, maximum depth 4.");
+        flag("hex", "Compare raw bytes regardless of detected file format.");
+        value("hex-alignment", "Hex alignment: none, fast, complete.");
         flag("headless", "Run without a GUI."); flag("gui", "Open the GUI (console launcher waits).");
         flag("reuse", "Send this GUI request to the current session's HyperCompare host.");
         value("wait-timeout-ms", "GUI request wait deadline (100..3600000); default unlimited. Timeout keeps the window and unsaved edits.");
@@ -93,6 +95,8 @@ namespace hc::compare
             }
             return ParseRequestFile(parser.value("request"), overrides, Console);
         }
+        request.hex_ = parser.isSet("hex");
+        if (parser.isSet("hex-alignment")) { request.hexAlignment_ = parser.value("hex-alignment"); request.hex_ = true; if (!QStringList{"none", "fast", "complete"}.contains(request.hexAlignment_)) return fail("Invalid Hex alignment."); }
         request.file1_ = parser.value("file1"); request.file2_ = parser.value("file2");
         request.file3_ = parser.value("file3"); request.base_ = parser.value("base"); request.output_ = parser.value("output");
         if (parser.isSet("directory-pair")) {

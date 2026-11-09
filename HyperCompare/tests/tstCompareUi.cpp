@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "widgets/compareWindow.hpp"
+#include "widgets/hexCompareView.hpp"
 #include <type_traits>
 #include "widgets/compareSettingsDialog.hpp"
 #include "widgets/compareCommands.hpp"
@@ -3000,10 +3001,11 @@ private slots:
         QTemporaryDir Dir; Request Input; Input.file1_ = Dir.filePath("left.mkv"); Input.file2_ = Dir.filePath("right.mkv");
         write(Input.file1_, QByteArray::fromHex("1a45dfa3000102")); write(Input.file2_, QByteArray::fromHex("1a45dfa3000103"));
         CompareWindow Window(Input); Window.show();
-        QTRY_VERIFY_WITH_TIMEOUT(Window.findChild<QWidget*>("hc.compare.binary"), 10000);
-        const auto Table = Window.findChild<QWidget*>("hc.compare.binary")->findChild<QTableWidget*>(); QVERIFY(Table);
-        QCOMPARE(Table->rowCount(), 1); QCOMPARE(Table->item(0, 0)->text(), QString("6"));
-        QCOMPARE(Table->item(0, 2)->text(), QString("02")); QCOMPARE(Table->item(0, 3)->text(), QString("03"));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.findChild<HexCompareView*>("hc.compare.hex"), 10000);
+        auto* Hex = Window.findChild<HexCompareView*>("hc.compare.hex");
+        QTRY_VERIFY_WITH_TIMEOUT(!Hex->Busy(), 10000);
+        QVERIFY(Hex->findChild<QWidget*>("hexPane0")); QVERIFY(Hex->findChild<QWidget*>("hexOverview"));
+        QVERIFY(!Hex->Dirty()); Hex->NavigateDifference(1); QTRY_VERIFY(!Hex->Busy());
         Window.close();
     }
     void alignedSourceRowsAndEngineBoundaries()

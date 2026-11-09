@@ -22,8 +22,8 @@ namespace hc::compare
     const std::vector<EngineDescriptor>& RegisteredEngines()
     {
         static const std::vector<EngineDescriptor> engines{
-            {"binary.streaming", "1", "comparison", {"binary"}, "native-stream", {}, "binary-ranges", "binary.offset.v1", true, false, false, false, false, false, 0,
-                {{"windowBytes", 1024 * 1024}, {"maxDisplayedRanges", 4096}}},
+            {"binary.streaming", "1", "comparison", {"binary"}, "native-stream", "native-verified-replace-gui", "hex-paged", "binary.offset.v1", true, false, false, false, false, false, 0,
+                {{"windowBytes", 1024 * 1024}, {"maxDisplayedRanges", 4096}, {"guiRangeLimit", "disk-budget"}, {"guiEdit", true}, {"overview", true}, {"hexOverride", "-hex"}, {"alignment", QJsonArray{"none", "fast", "complete"}}}},
             {"text.myers", textEngineVersion, "comparison", {"text"}, "bounded-text-codec", "native-verified-replace", "scintilla-text", "text.bytes.v1", true, true, true, true, true, false, 16 * 1024 * 1024},
             {"directory.native", "2", "comparison", {"directory"}, "native-directory-snapshot", "reviewed-directory-plan", "virtual-directory", "directory.entry.v1", true, true, true, true, true, false, 0},
             {"image.png", "1", "comparison", {"png"}, "qt-png-isolated", {}, "image-rgba", "image.rect.v1", true, false, false, false, false, true, 16 * 1024 * 1024,

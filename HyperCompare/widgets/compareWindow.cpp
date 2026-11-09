@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "compareWindow.hpp"
+#include "hexCompareView.hpp"
 #include "UniqueLibs/ProductDefaults_Compare.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include "comparePalette.hpp"
@@ -184,11 +185,24 @@ namespace hc::compare
             if (choice.second == Resolution::Base) baseChoice_ = action;
         }
         auto* fileMenu = menuBar()->addMenu(tr("파일"));
+        auto* HexOpen = fileMenu->addAction(tr("Hex 비교 열기…"), this, [this] {
+            const auto Left = QFileDialog::getOpenFileName(this, tr("Hex 왼쪽 파일")); if (Left.isEmpty()) return;
+            const auto Right = QFileDialog::getOpenFileName(this, tr("Hex 오른쪽 파일")); if (Right.isEmpty()) return;
+            Request Input; Input.file1_ = Left; Input.file2_ = Right; Input.hex_ = true;
+            auto* Window = new CompareWindow(Input); Window->setAttribute(Qt::WA_DeleteOnClose); Window->show();
+        }); HexOpen->setObjectName("openHexCompare");
+        fileMenu->addAction(tr("현재 파일을 Hex로 비교"), this, [this] {
+            if (request_.file1_.isEmpty() || request_.file2_.isEmpty() || busy()) return;
+            Request Input; Input.file1_ = request_.file1_; Input.file2_ = request_.file2_; Input.hex_ = true;
+            Input.readOnlyInputs_ = request_.readOnlyInputs_; Input.resourceLifetime_ = request_.resourceLifetime_;
+            auto* Window = new CompareWindow(Input); Window->setAttribute(Qt::WA_DeleteOnClose); Window->show();
+        });
         fileMenu->addActions({openFiles_, openFolders_, save_}); fileMenu->addSeparator();
         auto* threeFolders = fileMenu->addAction(tr("독립 3폴더 열기…"), this, [this] { openDirectories(true); }); threeFolders->setObjectName("openThreeDirectories");
         connect(openFolders_, &QAction::changed, threeFolders, [this, threeFolders] { threeFolders->setEnabled(openFolders_->isEnabled()); });
         exportReport_ = fileMenu->addAction(tr("비교 보고서 내보내기…"), this, [this] {
             if (!exportReport_->isEnabled()) return;
+            if (auto* Hex = dynamic_cast<HexCompareView*>(extensionView_)) { Hex->ExportReport(); return; }
             QFileDialog dialog(this, tr("비교 보고서 내보내기"), {}, tr("JSON 보고서 (*.json)"));
             dialog.setAcceptMode(QFileDialog::AcceptSave); dialog.setDefaultSuffix("json");
             if (dialog.exec() == QDialog::Accepted) ExportReport(dialog.selectedFiles().front(), true);
@@ -262,9 +276,9 @@ namespace hc::compare
         undo_->setEnabled(false); redo_->setEnabled(false);
         find_ = new FindBar(this); addToolBar(Qt::BottomToolBarArea, find_);
         editMenu->addSeparator();
-        auto* find = editMenu->addAction(tr("찾기"), this, [this] { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(0); else find_->Open(); });
-        auto* findNext = editMenu->addAction(tr("다음 찾기"), this, [this] { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(1); else find_->Find(false); });
-        auto* findPrevious = editMenu->addAction(tr("이전 찾기"), this, [this] { if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(-1); else find_->Find(true); });
+        auto* find = editMenu->addAction(tr("찾기"), this, [this] { if (auto* Hex = dynamic_cast<HexCompareView*>(extensionView_)) Hex->FindCommand(0); else if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(0); else find_->Open(); });
+        auto* findNext = editMenu->addAction(tr("다음 찾기"), this, [this] { if (auto* Hex = dynamic_cast<HexCompareView*>(extensionView_)) Hex->FindCommand(1); else if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(1); else find_->Find(false); });
+        auto* findPrevious = editMenu->addAction(tr("이전 찾기"), this, [this] { if (auto* Hex = dynamic_cast<HexCompareView*>(extensionView_)) Hex->FindCommand(-1); else if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) large->FindCommand(-1); else find_->Find(true); });
         auto* findAll = editMenu->addAction(tr("모두 찾기"), find_, &FindBar::FindAll);
         findActions_ = {find, findNext, findPrevious, findAll}; for (auto* action : findActions_) action->setEnabled(false);
         auto* closeFind = new QAction(this); closeFind->setShortcut(QKeySequence(hc::defaults::compare::AuxiliaryShortcut("find.close"))); closeFind->setEnabled(false); addAction(closeFind);
@@ -337,6 +351,7 @@ namespace hc::compare
             // current-item event would navigate and replace source selections.
             if (!Enabled && overview_->hasFocus()) overview_->FocusSource();
             Preferences{}.SetValue("view/overview", Enabled); overview_->setVisible(Enabled && scroll_);
+            if (extensionView_) extensionView_->SetOverviewVisible(Enabled);
         });
         // Theme: follow HyperCommander (default) or override light/dark here. "Dark" keeps its name and toggle;
         // turning either choice off means light.
@@ -787,7 +802,11 @@ namespace hc::compare
         {
             try
             {
-                if (result_.archive_) {
+                if (result_.binary_) {
+                    auto* View = new HexCompareView(request_, result_.binary_, centralWidget()); extensionView_ = View;
+                    View->openComparison_ = [](Request Input) { auto* Window = new CompareWindow(std::move(Input)); Window->setAttribute(Qt::WA_DeleteOnClose); Window->show(); };
+                    View->stateChanged_ = [this, View] { dirty_ = View->Dirty(); result_.binary_ = View->Comparison(); exitCode_ = result_.binary_->changeCount_ ? 1 : 0; updateMerge(); if (closing_ && !View->Busy()) QTimer::singleShot(0, this, [this] { close(); }); };
+                } else if (result_.archive_) {
                     auto* view = new ArchiveCompareView(request_, result_.archive_, centralWidget()); extensionView_ = view;
                     view->stateChanged_ = [this, view] { dirty_ = view->Dirty(); request_ = view->Input(); exitCode_ = dirty_ ? 3 : result_.exitCode_; updateMerge(); if (closing_ && !view->Busy()) QTimer::singleShot(0, this, [this] { close(); }); };
                     view->open_ = [](Request Input, QString Title) { auto* window = new CompareWindow(std::move(Input)); window->setWindowTitle(Title); window->setAttribute(Qt::WA_DeleteOnClose); window->show(); };
@@ -1071,7 +1090,8 @@ namespace hc::compare
         syncScroll_->setEnabled(scroll_ && !busy());
         alignRows_->setEnabled(scroll_ && !busy() && !multi_);
         alignAll_->setEnabled(currentPair() && editors_.size() >= 3 && !busy());
-        showOverview_->setEnabled(scroll_ != nullptr);
+        showOverview_->setEnabled(scroll_ != nullptr || (extensionView_ && extensionView_->HasOverview()));
+        if (extensionView_) extensionView_->SetOverviewVisible(showOverview_->isChecked());
         overview_->setVisible(scroll_ && showOverview_->isChecked()); overview_->setEnabled(scroll_ && !busy());
         if (scroll_) scroll_->SetEnabled(syncScroll_->isChecked() && !busy() && !multi_ && currentPair());
         if (multi_) multi_->SetEnabled(syncScroll_->isChecked() && !busy());
@@ -1086,6 +1106,13 @@ namespace hc::compare
         if (auto* archive = dynamic_cast<ArchiveCompareView*>(extensionView_)) {
             saveWork_->setEnabled(false); loadWork_->setEnabled(false); recoverWork_->setEnabled(false); reintegrate_->setEnabled(false); importDecisions_->setEnabled(false); exportDecisions_->setEnabled(false); exportReport_->setEnabled(!archive->Busy());
             save_->setVisible(true); save_->setText(tr("활성 압축 저장")); save_->setEnabled(archive->CanSave()); undo_->setEnabled(archive->CanUndo(false)); redo_->setEnabled(archive->CanUndo(true)); return;
+        }
+        if (auto* Hex = dynamic_cast<HexCompareView*>(extensionView_)) {
+            for (int I = 0; I < 3; ++I) findActions_[I]->setEnabled(!Hex->Busy());
+            save_->setVisible(true); save_->setText(tr("활성 Hex 저장")); save_->setEnabled(Hex->CanSave());
+            undo_->setEnabled(Hex->CanUndo(false)); redo_->setEnabled(Hex->CanUndo(true));
+            saveWork_->setEnabled(false); loadWork_->setEnabled(false); recoverWork_->setEnabled(false); reintegrate_->setEnabled(false);
+            importDecisions_->setEnabled(false); exportDecisions_->setEnabled(false); exportReport_->setEnabled(!Hex->Busy()); return;
         }
         const bool ready = merge_ && !busy();
         saveWork_->setEnabled(ready); loadWork_->setEnabled(ready); recoverWork_->setEnabled(ready); reintegrate_->setEnabled(ready);
@@ -1162,6 +1189,7 @@ namespace hc::compare
     }
     void CompareWindow::navigateBlock(int Direction)
     {
+        if (auto* Hex = dynamic_cast<HexCompareView*>(extensionView_)) { Hex->NavigateDifference(Direction); return; }
         if (busy()) return;
         if (directory_->isVisible()) { directory_->NavigateDifference(Direction); return; }
         const auto count = changes_->topLevelItemCount(); if (!count) return;
@@ -1171,6 +1199,7 @@ namespace hc::compare
     }
     void CompareWindow::save()
     {
+        if (auto* Hex = dynamic_cast<HexCompareView*>(extensionView_)) { Hex->SaveActive(); return; }
         if (auto* archive = dynamic_cast<ArchiveCompareView*>(extensionView_)) { archive->SaveActive(); return; }
         if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->SaveActive(); return; }
         if (sourceEditing_) { saveInput(activeInput_); return; }
@@ -1215,6 +1244,7 @@ namespace hc::compare
     }
     void CompareWindow::ExportReport(const QString& Path, bool ReplaceExisting)
     {
+        if (auto* Hex = dynamic_cast<HexCompareView*>(extensionView_)) { Hex->ExportReport(Path); return; }
         if (auto* archive = dynamic_cast<ArchiveCompareView*>(extensionView_)) { archive->ExportReport(Path, ReplaceExisting); return; }
         if (auto* large = dynamic_cast<LargeTextView*>(extensionView_)) { large->ExportReport(Path, ReplaceExisting); return; }
         if (Path.isEmpty() || !exportReport_->isEnabled() || busy() || (sourceEditing_ && (sourcePending_ || !sourceValid_))) return;

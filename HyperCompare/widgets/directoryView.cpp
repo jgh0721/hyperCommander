@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "directoryView.hpp"
+#include <QPointer>
 #include "compareCommands.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <QTimer>
@@ -404,6 +405,7 @@ namespace hc::compare
         if (!openable(item) || !open_) return;
         if (streaming_ && request_.directoryProgress_) request_.directoryProgress_->Prioritize(item["path"].toString());
         Request next; next.mode_ = "compare"; next.encoding_ = request_.encoding_; next.theme_ = request_.theme_;
+        next.nextDifferenceFile_ = [View = QPointer<DirectoryView>(this)](int Direction) { if (View && !View->Busy()) { View->NavigateDifference(Direction); View->OpenCurrent(); } };
         if (!request_.file3_.isEmpty()) {
             const auto path = [&](int Side) { return QDir(rootPath(request_, Side)).filePath(item[sideKeys[Side]].toObject()["path"].toString(item["path"].toString())); };
             if (file(item["left"].toObject()) && file(item["right"].toObject()) && file(item["base"].toObject())) { next.file1_ = path(0); next.file2_ = path(1); next.file3_ = path(2); next.inputEncodings_ = request_.inputEncodings_; }

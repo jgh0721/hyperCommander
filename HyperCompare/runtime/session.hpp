@@ -15,6 +15,7 @@
 
 namespace hc::compare
 {
+    struct BinaryComparison;
     struct LargeTextComparison;
     struct ArchiveSession;
     class SourceDocuments;
@@ -43,6 +44,9 @@ namespace hc::compare
         std::array<QString, 3> inputEncodings_;
         std::array<QString, 2> archivePasswordFiles_;
         QString archiveEngine_ = "native";
+        bool hex_ = false;
+        QString hexAlignment_ = "none";
+        std::function<void(int)> nextDifferenceFile_; // GUI directory child session only.
         std::array<QJsonArray, 2> archiveMembers_;
         std::function<QString(int, int, const Budget&)> archivePasswordPrompt_;
         bool readOnlyInputs_ = false;
@@ -81,6 +85,7 @@ namespace hc::compare
     };
     struct Result
     {
+        std::shared_ptr<BinaryComparison> binary_;
         std::shared_ptr<LargeTextComparison> largeText_;
         std::shared_ptr<ArchiveSession> archive_;
         int exitCode_ = 2;
