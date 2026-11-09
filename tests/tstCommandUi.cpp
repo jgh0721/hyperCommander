@@ -224,9 +224,17 @@ private slots:
     {
         const auto Keys=EffectiveShortcuts({}, {});
         const auto Command=[&](Qt::Key Key){return CommandId(Keys.value(QKeyCombination(Qt::ControlModifier|Qt::AltModifier,Key)));};
-        QCOMPARE(Command(Qt::Key_Up),"hc.audio.preview");QCOMPARE(Command(Qt::Key_Down),"hc.audio.stop");
+        QCOMPARE(Command(Qt::Key_Up),"hc.audio.playPause");QCOMPARE(Command(Qt::Key_Down),"hc.audio.stop");
         QCOMPARE(Command(Qt::Key_Left),"hc.audio.prev");QCOMPARE(Command(Qt::Key_Right),"hc.audio.next");
-        QVERIFY(CommandId(Keys.value(QKeyCombination(Qt::ControlModifier,Qt::Key_Return)))!="hc.audio.preview");
+        const auto Migrated = EffectiveShortcuts({}, {{"Ctrl+Alt+P", "hc.audio.preview"}});
+        QCOMPARE(CommandId(Migrated.value(QKeySequence("Ctrl+Alt+P")[0])), "hc.audio.playPause");
+        for (const auto& Entry : hc::defaults::Commands()) QVERIFY(QString(Entry.Name) != "hc.audio.preview");
+        QJsonObject Document{{"general", QJsonObject{{"globalShortcuts", QJsonObject{{"hc.audio.preview", false}}}}}};
+        hc::defaults::MigrateCommandSettings(Document);
+        const auto Global = Document["general"].toObject()["globalShortcuts"].toObject();
+        QVERIFY(!Global.contains("hc.audio.preview"));
+        QVERIFY(Global.contains("hc.audio.playPause"));
+        QVERIFY(!Global["hc.audio.playPause"].toBool());
     }
     void folderSizeSelection()
     {

@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* 오디오: 미리 듣기를 재생/일시정지로 통합하고 기본 전역 키 Ctrl+Alt+Up 적용. 키보드 설정의 전역 체크박스와 아래 줄의 등록 실패 표시를 중앙 정렬.
+
 * HyperEditor·HyperViewer: Scintilla 5.6.9 및 Lexilla 5.5.5 적용. 편집기 성능 개선과 구문 강조 수정 반영.
 
 * HyperEditor·HyperViewer: HWP/HWPX 엔진과 편집기를 rhwp 0.9.0으로 갱신.

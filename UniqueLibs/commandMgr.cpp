@@ -424,7 +424,7 @@ bool CCommandMgr::GlobalShortcutEnabled(const QString& Id) const
 {
     const auto Values = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["globalShortcuts"].toObject();
     const bool Default = Id == "hc.audio.next" || Id == "hc.audio.prev" || Id == "hc.audio.playPause"
-        || Id == "hc.audio.preview" || Id == "hc.audio.stop";
+        || Id == "hc.audio.stop";
     return Values.value(Id).toBool(Default);
 }
 

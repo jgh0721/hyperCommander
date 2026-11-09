@@ -305,12 +305,8 @@ DECLARE_CMD( BuiltInCMD_App_Update,               QObject::tr( "기타" ),    "h
              Qt::Key_unknown,                                           QObject::tr( "업데이트 확인" ) );
 
 // 제목표시줄 오디오 미리 듣기와 재생 제어의 제품 기본 단축키.
-DECLARE_CMD( BuiltInCMD_Audio_Preview,            QObject::tr( "오디오" ),  "hc.audio.preview",
-             Qt::ControlModifier | Qt::AltModifier | Qt::Key_Up,         QObject::tr( "오디오 미리 듣기" ) );
-DECLARE_CMD( BuiltInCMD_Audio_PreviewKeypad,      QObject::tr( "오디오" ),  "hc.audio.preview",
-             Qt::Key_unknown,                                           QObject::tr( "오디오 미리 듣기" ) );
 DECLARE_CMD( BuiltInCMD_Audio_PlayPause,          QObject::tr( "오디오" ),  "hc.audio.playPause",
-             Qt::Key_unknown,                                           QObject::tr( "재생/일시정지" ) );
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_Up,         QObject::tr( "재생/일시정지" ) );
 DECLARE_CMD( BuiltInCMD_Audio_Stop,               QObject::tr( "오디오" ),  "hc.audio.stop",
              Qt::ControlModifier | Qt::AltModifier | Qt::Key_Down,       QObject::tr( "정지" ) );
 DECLARE_CMD( BuiltInCMD_Audio_Next,               QObject::tr( "오디오" ),  "hc.audio.next",
@@ -507,8 +503,6 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_App_Exit,
     BuiltInCMD_App_About,
     BuiltInCMD_App_Update,
-    BuiltInCMD_Audio_Preview,
-    BuiltInCMD_Audio_PreviewKeypad,
     BuiltInCMD_Audio_PlayPause,
     BuiltInCMD_Audio_Stop,
     BuiltInCMD_Audio_Next,
@@ -608,6 +602,8 @@ namespace hc::defaults
 
     inline QString CommandId(const QString& Name)
     {
+        // 설정에 남은 이전 ID만 이전한다. 독립 명령으로는 등록하지 않는다.
+        if (Name == "hc.audio.preview") return "hc.audio.playPause";
         static const auto Aliases = CommandAliases();
         for (auto It = Aliases.cbegin(); It != Aliases.cend(); ++It)
             if (It.key().compare(Name, Qt::CaseInsensitive) == 0 || It.value().compare(Name, Qt::CaseInsensitive) == 0) return It.value();
@@ -630,6 +626,13 @@ namespace hc::defaults
         if( Document["general"].isObject() )
         {
             auto General = Document["general"].toObject();
+            auto Global = General["globalShortcuts"].toObject();
+            if (Global.contains("hc.audio.preview")) {
+                if (!Global.contains("hc.audio.playPause")) Global["hc.audio.playPause"] = Global["hc.audio.preview"];
+                Global.remove("hc.audio.preview");
+                General["globalShortcuts"] = Global;
+                Document["general"] = General;
+            }
             if( General["functionCommands"].isArray() )
             {
                 auto Commands = General["functionCommands"].toArray();
@@ -2002,11 +2005,6 @@ namespace hc::defaults
             "          \"id\": \"audio\",\n"
             "          \"label\": \"오디오 미리 듣기\",\n"
             "          \"items\": [\n"
-            "            {\n"
-            "              \"id\": \"audioPreview\",\n"
-            "              \"command\": \"hc.audio.preview\",\n"
-            "              \"label\": \"미리 듣기\"\n"
-            "            },\n"
             "            {\n"
             "              \"id\": \"audioPlayPause\",\n"
             "              \"command\": \"hc.audio.playPause\",\n"

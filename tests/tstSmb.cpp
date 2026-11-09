@@ -408,7 +408,7 @@ private slots:
         const auto Restore = qScopeGuard([&] { Settings.Replace(Original); Manager->Refresh(); });
         auto General = Settings.Read(hc::settings::Section::General).toObject(); General.remove("globalShortcuts");
         QVERIFY(Settings.Put(hc::settings::Section::General, General)); Manager->Refresh();
-        for (const auto* Id : {"hc.audio.preview", "hc.audio.next", "hc.audio.prev", "hc.audio.playPause", "hc.audio.stop"})
+        for (const auto* Id : {"hc.audio.next", "hc.audio.prev", "hc.audio.playPause", "hc.audio.stop"})
             QVERIFY(Manager->GlobalShortcutEnabled(Id));
         QVERIFY(!Manager->GlobalShortcutEnabled("hc.file.copy"));
         const auto Key = QKeySequence("Ctrl+Alt+Shift+F11")[0];
@@ -429,6 +429,13 @@ private slots:
         Table->item(Row, 4)->setCheckState(Qt::Checked);
         QVERIFY(!Manager->GlobalShortcutError("hc.audio.stop").isEmpty());
         QVERIFY(!Table->item(Row, 4)->text().isEmpty());
+        QStyleOptionViewItem Option;
+        Option.initFrom(Table); Option.rect = QRect(0, 0, 85, Table->rowHeight(Row));
+        const auto Cell = Table->model()->index(Row, 4);
+        const auto* Delegate = static_cast<hc::ui::GlobalShortcutDelegate*>(Table->itemDelegateForColumn(4));
+        const auto Check = Delegate->CheckRect(Option, Cell);
+        QVERIFY(qAbs(Check.center().x() - Option.rect.center().x()) <= 1);
+        QVERIFY(Check.bottom() + 3 + Option.fontMetrics.height() < Option.rect.height());
         UnregisterHotKey(nullptr, 0x3ffe); Manager->Refresh();
         QVERIFY(Manager->GlobalShortcutError("hc.audio.stop").isEmpty());
         auto* Action = Manager->Bridge()->Action("hc.audio.stop"); QVERIFY(Action); Action->setEnabled(true);
@@ -970,6 +977,18 @@ private slots:
         main_->raise(); main_->activateWindow();
         QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
         QVERIFY(QTest::qWaitForWindowActive(main_));
+        View->EnsureKeyboardFocusOnView();
+        QVERIFY(Bridge->ExecuteCommand("hc.audio.playPause", IndexOf(Names[1])));
+        QTRY_VERIFY(Audio->State() == SessionState::Paused);
+        QVERIFY(Bridge->ExecuteCommand("hc.audio.playPause", IndexOf(Names[1])));
+        QTRY_VERIFY(Audio->State() == SessionState::Playing);
+        QVERIFY(Bridge->ExecuteCommand("hc.audio.playPause", IndexOf(Names[0])));
+        QTRY_VERIFY(Audio->Current() && Audio->Current()->name_ == Names[0]);
+        QTRY_VERIFY(Audio->State() == SessionState::Playing);
+        Audio->Stop();
+        QVERIFY(Bridge->ExecuteCommand("hc.audio.playPause", IndexOf(Names[1])));
+        QTRY_VERIFY(Audio->Current() && Audio->Current()->name_ == Names[1]);
+        QTRY_VERIFY(Audio->State() == SessionState::Playing);
         QTRY_VERIFY(View->NowPlayingAnimating());
         auto* GridWidget = View->findChild<Qtitan::Grid*>(); QVERIFY(GridWidget);
         const auto PlayingCell = [&] {

@@ -1013,6 +1013,31 @@ QModelIndex CommandUiBridge::commandIndex() const
     return Row.isValid() && Row.type() == Qtitan::GridRow::DataRow ? Row.modelIndex(0) : QModelIndex{};
 }
 
+void CommandUiBridge::playPauseAudio()
+{
+    if (!audio_) return;
+    const auto* Focus = QApplication::focusWidget();
+    const bool PanelInput = QApplication::activeWindow() == main_
+        && activePanel_ && Focus && (Focus == activePanel_ || activePanel_->isAncestorOf(Focus));
+    // Windows 전역 키도 활성 파일 패널에서는 선택 곡을 사용한다.
+    // 다른 앱에 포커스가 있으면 현재 곡을 유지한 채 일시정지/재개한다.
+    if (!audio_->IsActive() || PanelInput) {
+        const auto Index = SourceIndex(commandIndex());
+        const auto* Model = qobject_cast<const CFSModel*>(Index.model());
+        const auto Item = Model && Index.isValid() ? Model->GetFileInfo(Index) : nullptr;
+        if (Item && Item->storageEntry_ && !(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)
+            && hc::audio::IsPlayable(Item->Name_, audio_->Extensions())) {
+            const auto* Current = audio_->Current();
+            if (!Current || Current->key_ != hc::workspace::SelectionKey(*Item->storageEntry_)
+                || Current->path_ != Model->GetFileFullPath(Index)) {
+                StartAudioPreview(activePanel_, Index);
+                return;
+            }
+        }
+    }
+    audio_->PlayPause();
+}
+
 bool CommandUiBridge::StartAudioPreview(CmpPanel* Panel, const QModelIndex& Index)
 {
     if (!audio_ || !Panel) return false;
@@ -1081,7 +1106,8 @@ void CommandUiBridge::refreshNowPlayingAnimation()
 void CommandUiBridge::refreshAudioActions()
 {
     const bool Active = audio_ && audio_->IsActive();
-    for (const auto* Id : {"hc.audio.playPause", "hc.audio.stop", "hc.audio.next", "hc.audio.prev", "hc.audio.seekForward", "hc.audio.seekBack", "hc.audio.locate"})
+    if (auto* Command = Action("hc.audio.playPause")) Command->setEnabled(true);
+    for (const auto* Id : {"hc.audio.stop", "hc.audio.next", "hc.audio.prev", "hc.audio.seekForward", "hc.audio.seekBack", "hc.audio.locate"})
         if (auto* Command = Action(Id)) Command->setEnabled(Active);
 }
 
@@ -1261,7 +1287,7 @@ void CommandUiBridge::refreshActionState()
             || Model->WorkspaceLocation().kind_ == LocatorKind::Smb
             || (Model->WorkspaceLocation().kind_ == LocatorKind::Plugin && Model->GetRoot()->WriteProvider())));
     if (auto* Command = Action("hc.search.openLocation")) Command->setEnabled(Ready && Model->IsSearchResults());
-    if (auto* Command = Action("hc.audio.preview")) {
+    if (auto* Command = Action("hc.audio.playPause")) {
         bool Playable = false;
         if (Ready && audio_) {
             const auto Index = SourceIndex(commandIndex());
@@ -1271,7 +1297,7 @@ void CommandUiBridge::refreshActionState()
                 if (const auto Item = Model->GetFileInfo(Index))
                     Playable = Item->storageEntry_ && !(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) && hc::audio::IsPlayable(Item->Name_, audio_->Extensions());
         }
-        Command->setEnabled(Playable);
+        Command->setEnabled(Playable || (audio_ && audio_->IsActive()));
     }
     if (auto* Command = Action("hc.file.ads.allowInternetBlock"))
         Command->setEnabled(Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb));
@@ -1361,8 +1387,7 @@ void CommandUiBridge::createCommandUi()
         QMetaObject::invokeMethod(Window, "SubmitCommandLine", Qt::DirectConnection, Q_ARG(bool, true));
     });
     // 오디오 미리 듣기. 목록 루프의 기본 처리(InvokeCommand)로 빠지지 않도록 먼저 만든다.
-    Add("hc.audio.preview", tr("오디오 미리 듣기"), [this] { StartAudioPreview(activePanel_, commandIndex()); });
-    Add("hc.audio.playPause", tr("재생/일시정지"), [this] { audio_->PlayPause(); });
+    Add("hc.audio.playPause", tr("재생/일시정지"), [this] { playPauseAudio(); });
     Add("hc.audio.stop", tr("정지"), [this] { audio_->Stop(); });
     Add("hc.audio.next", tr("다음 곡"), [this] { audio_->Next(); });
     Add("hc.audio.prev", tr("이전 곡"), [this] { audio_->Previous(); });
@@ -1444,7 +1469,7 @@ void CommandUiBridge::createCommandUi()
     Add("hc.search.focus", tr("설정 범위에서 찾기"), [QuickFind] { QuickFind->FocusStandard(); });
     Add("hc.search.everything", tr("Everything에서 찾기"), [QuickFind] { QuickFind->FocusEverything(); });
     Add("hc.search.openLocation", tr("검색 결과의 원본 위치 열기"), [this] { if (activePanel_) activePanel_->OpenSearchLocation(); });
-    // 오디오 조작은 명령행·팝오버에 포커스가 있어도 동작한다. 미리 듣기는 패널 커서 대상이라 넣지 않는다.
+    // 오디오 조작은 명령행·팝오버에 포커스가 있어도 동작한다.
     for (const auto* Id : {"hc.search.focus", "hc.search.everything", "hc.navigate.back", "hc.navigate.forward", "hc.commandLine.activate",
                            "hc.audio.playPause", "hc.audio.stop", "hc.audio.next", "hc.audio.prev", "hc.audio.seekForward", "hc.audio.seekBack", "hc.audio.locate"}) {
         auto* Key = new QShortcut(Window); Key->setContext(Qt::WindowShortcut);

@@ -89,6 +89,7 @@ private:
     void finishCreatedFolderNavigation();
     void finishCreatedFileFocus();
     void submitInlineRename(const QModelIndex& Index, const QString& Name, std::function<void(bool)> Completion);
+    void playPauseAudio();
     QModelIndex commandIndex() const;
     void openDataPlugin(bool Metadata, bool Dopus = false);
     void openIso(bool Inspect);

@@ -33,6 +33,48 @@ public:
         auto Size = QStyledItemDelegate::sizeHint(Option, Index); Size.setHeight(qMax(26, Size.height())); return Size;
     }
 };
+class GlobalShortcutDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QRect CheckRect(const QStyleOptionViewItem& Option, const QModelIndex& Index) const {
+        const auto* Style = Option.widget ? Option.widget->style() : QApplication::style();
+        const int Width = Style->pixelMetric(QStyle::PM_IndicatorWidth, nullptr, Option.widget);
+        const int Height = Style->pixelMetric(QStyle::PM_IndicatorHeight, nullptr, Option.widget);
+        const int TextHeight = Index.data().toString().isEmpty() ? 0 : Option.fontMetrics.height() + 3;
+        return QRect(Option.rect.center().x() - Width / 2, Option.rect.center().y() - (Height + TextHeight) / 2, Width, Height);
+    }
+    void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
+        QStyleOptionViewItem Background(Option); initStyleOption(&Background, Index);
+        Background.text.clear(); Background.features &= ~QStyleOptionViewItem::HasCheckIndicator;
+        const auto* Style = Option.widget ? Option.widget->style() : QApplication::style();
+        Style->drawControl(QStyle::CE_ItemViewItem, &Background, Painter, Option.widget);
+        if (!Index.data(Qt::CheckStateRole).isValid()) return;
+        QStyleOptionButton Check; Check.rect = CheckRect(Option, Index);
+        Check.state = (Index.flags().testFlag(Qt::ItemIsEnabled) ? QStyle::State_Enabled : QStyle::State_None)
+            | (Index.data(Qt::CheckStateRole).toInt() == Qt::Checked ? QStyle::State_On : QStyle::State_Off);
+        Style->drawPrimitive(QStyle::PE_IndicatorCheckBox, &Check, Painter, Option.widget);
+        const QRect Text(Option.rect.left(), Check.rect.bottom() + 4, Option.rect.width(), Option.fontMetrics.height());
+        Style->drawItemText(Painter, Text, Qt::AlignCenter, Option.palette, true, Index.data().toString(),
+            Option.state.testFlag(QStyle::State_Selected) ? QPalette::HighlightedText : QPalette::Text);
+    }
+    QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override {
+        auto Size = QStyledItemDelegate::sizeHint(Option, Index);
+        Size.setHeight(qMax(Size.height(), CheckRect(Option, Index).height() + 8
+            + (Index.data().toString().isEmpty() ? 0 : Option.fontMetrics.height() + 3)));
+        return Size;
+    }
+    bool editorEvent(QEvent* Event, QAbstractItemModel* Model, const QStyleOptionViewItem& Option, const QModelIndex& Index) override {
+        if (!(Index.flags() & Qt::ItemIsEnabled) || !(Index.flags() & Qt::ItemIsUserCheckable)) return false;
+        if (Event->type() == QEvent::MouseButtonRelease) {
+            const auto* Mouse = static_cast<QMouseEvent*>(Event);
+            if (Mouse->button() != Qt::LeftButton || !CheckRect(Option, Index).contains(Mouse->position().toPoint())) return false;
+        } else if (Event->type() == QEvent::KeyPress) {
+            const auto* Key = static_cast<QKeyEvent*>(Event);
+            if (Key->key() != Qt::Key_Space && Key->key() != Qt::Key_Select) return false;
+        } else return false;
+        return Model->setData(Index, Index.data(Qt::CheckStateRole).toInt() == Qt::Checked ? Qt::Unchecked : Qt::Checked, Qt::CheckStateRole);
+    }
+};
 class KeyboardSettingsPage final : public QWidget {
     enum Column { ScopeColumn, CommandColumn, DescriptionColumn, CurrentKeyColumn, GlobalColumn, ColumnCount };
     // 범위 콤보의 순서. 앞의 일곱 개는 기존 순서를 유지한다(설정·시험이 색인을 쓴다).
@@ -58,6 +100,7 @@ public:
         preset_->setItemData(2, tr("제품 기본값 · Ctrl+C 복사 · F2/Ctrl+R 이름 변경 · Ctrl+M 이동 · Ctrl+Alt+R 다중 이름 변경 · Ctrl+K 새 폴더 · Ctrl+A 압축 · Ctrl+X 압축 해제"), Qt::ToolTipRole);
         table_ = new QTableWidget(Page); table_->setObjectName("hc.keys.commands"); table_->setColumnCount(ColumnCount); table_->setHorizontalHeaderLabels({tr("범위"), tr("명령"), tr("설명"), tr("현재 키 · 기본값"), tr("글로벌")});
         table_->setItemDelegateForColumn(CurrentKeyColumn, new CombinedKeyDelegate(table_));
+        table_->setItemDelegateForColumn(GlobalColumn, new GlobalShortcutDelegate(table_));
         table_->setSelectionBehavior(QAbstractItemView::SelectRows); table_->setSelectionMode(QAbstractItemView::SingleSelection); table_->setEditTriggers(QAbstractItemView::NoEditTriggers); table_->verticalHeader()->hide();
         // Current and default keys share the expanding column.
         // The global checkbox keeps a compact width.
@@ -106,6 +149,7 @@ public:
             const QSignalBlocker Block(table_);
             Item->setText(M->GlobalShortcutError(Id).isEmpty() ? QString{} : tr("실패"));
             Item->setToolTip(M->GlobalShortcutError(Id).isEmpty() ? tr("다른 앱 사용 중에도 현재 키로 실행합니다.") : M->GlobalShortcutError(Id));
+            table_->resizeRowToContents(Item->row());
         });
         connect(search_, &QLineEdit::textChanged, this, [this] { filter(); }); connect(scope_, &QComboBox::currentIndexChanged, this, [this] { filter(); });
         connect(table_, &QTableWidget::currentCellChanged, this, [this](int Row) {
@@ -205,6 +249,7 @@ public:
         }
         { const QSignalBlocker Block(selector_); selector_->SetCommand(Id); }
         editScope_ = Id.isEmpty() || !ScopeAccepts(KeepScope, Id) ? HomeScope(Id) : KeepScope;
+        table_->resizeRowsToContents();
         filter(); updateConflict();
     }
 private:
