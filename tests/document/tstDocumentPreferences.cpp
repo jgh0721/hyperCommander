@@ -443,6 +443,30 @@ private slots:
         QVERIFY(!Toolbar->findChild<QComboBox*>("textLanguage"));
         Text.setLanguage("Python"); QCOMPARE(Text.currentLanguage(), QString("Python"));
     }
+    void textColorsFollowWorkspace()
+    {
+        QTemporaryDir Temp;
+        auto& Theme = fm::style::ThemeManager::instance();
+        const auto OldScheme = Theme.scheme();
+        const auto Restore = qScopeGuard([&] { Theme.setScheme(OldScheme); });
+        Theme.setScheme(fm::style::ThemeManager::Scheme::Light);
+        const auto Path = UnifiedConfig::FileName(Temp.path());
+        DocumentSettingsDialog Dialog(Path, {});
+        auto* Mode = Dialog.findChild<QComboBox*>("textColorTheme");
+        QVERIFY(Mode); QCOMPARE(Mode->currentData().toString(), QString("product"));
+        Dialog.findChild<QLineEdit*>("textColor/text.background")->setText("#123456");
+        Theme.setScheme(fm::style::ThemeManager::Scheme::Dark);
+        auto* Background = Dialog.findChild<QLineEdit*>("textColor/text.background");
+        QVERIFY(Background); QVERIFY(Background->text().isEmpty());
+        Background->setText("#654321");
+        QVERIFY(Dialog.Apply());
+        const auto Config = QJsonDocument::fromJson(Read(Path)).object();
+        QCOMPARE(UnifiedConfig::Value(Config, {"documentViews", "textView", "colors", "light", "text.background"}).toString(), QString("#123456"));
+        QCOMPARE(UnifiedConfig::Value(Config, {"documentViews", "textView", "colors", "dark", "text.background"}).toString(), QString("#654321"));
+        QVERIFY(UnifiedConfig::Value(Config, {"documentViews", "textView", "colors", "product"}).isUndefined());
+        Theme.setScheme(fm::style::ThemeManager::Scheme::Light);
+        QCOMPARE(Dialog.findChild<QLineEdit*>("textColor/text.background")->text(), QString("#123456"));
+    }
     void textColorTabsAndPersistence()
     {
         QTemporaryDir Temp; const auto Previous = qApp->property("documentViewsConfigDir");
@@ -451,7 +475,7 @@ private slots:
         const auto Path = UnifiedConfig::FileName(Temp.path());
         Write(Path, QJsonDocument(QJsonObject{{"schemaVersion", 2}}).toJson()); const auto Before = Read(Path);
         DocumentSettingsDialog Dialog(Path, {});
-        auto* Tabs = Dialog.findChild<QTabWidget*>("textViewerTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 2);
+        auto* Tabs = Dialog.findChild<QTabWidget*>("textViewerTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 3);
         QCOMPARE(Tabs->tabText(0), QString::fromUtf8("공통")); QCOMPARE(Tabs->tabText(1), QString::fromUtf8("색상"));
         Dialog.findChild<QListWidget*>("settingsCategories")->setCurrentRow(1); Tabs->setCurrentIndex(1);
         auto* Mode = Dialog.findChild<QComboBox*>("textColorTheme"); auto* Language = Dialog.findChild<QComboBox*>("textColorLanguage");
@@ -1667,7 +1691,7 @@ private slots:
         const QString Key="documentViews/imageView/comic/coverAlone";
         {DocumentSettingsDialog Dialog(Path,{});
             auto* Tabs=Dialog.findChild<QTabWidget*>("imageViewerTabs");QVERIFY(Tabs);QCOMPARE(Tabs->tabText(0),QString::fromUtf8("코믹"));
-            auto* Cover=Dialog.findChild<QCheckBox*>(Key);QVERIFY(Cover);QVERIFY(Cover->isChecked());
+            auto* Cover=Dialog.findChild<QCheckBox*>(Key);QVERIFY(Cover);QVERIFY(!Cover->isChecked());
             Cover->setChecked(false);QVERIFY(Dialog.Apply());}
         const auto Saved=Read(Path);
         {DocumentSettingsDialog Dialog(Path,{});auto* Cover=Dialog.findChild<QCheckBox*>(Key);QVERIFY(!Cover->isChecked());Cover->setChecked(true);Dialog.reject();}

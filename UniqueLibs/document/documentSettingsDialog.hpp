@@ -30,6 +30,7 @@ private:
     QJsonObject values() const;
     QWidget* createTextColorPage();
     void loadTextColors();
+    QString textColorMode() const;
     void refreshTextColorRows();
     void refreshTextColorPreview();
     QColor textDraftColor(const QString& Key) const;

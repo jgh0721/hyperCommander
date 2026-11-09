@@ -46,6 +46,7 @@
 #include "core/ThemeManager.h"
 #include <Scintilla.h>
 #include <fmstyle/StyleProps.h>
+#include <fmstyle/ThemeManager.h>
 #include <fmwidgets/DialogHeader.h>
 
 namespace hc::document {
@@ -112,16 +113,16 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     };
     auto* General = Page(tr("공통"), tr("테마와 메뉴·도구모음 표시, 창 동작과 설정 파일을 관리합니다."));
     auto* Display = Card(General, tr("화면"));
-    Combo(Display, "appearance/documentWorkspace/themeMode", tr("밝기"), {tr("본체 따르기"), tr("시스템"), tr("밝게"), tr("어둡게")}, {"product", "system", "light", "dark"});
+    Combo(Display, "appearance/documentWorkspace/themeMode", tr("테마"), {tr("본체 따르기"), tr("시스템"), tr("밝게"), tr("어둡게")}, {"product", "system", "light", "dark"});
     Note(Display, tr("색과 강조색은 HyperCommander 설정을 따릅니다. 밝게·어둡게만 편집기에서 따로 고를 수 있습니다."));
     for (const auto& Key : {QString("mainMenuMode"), QString("mainToolbarMode")})
-        Combo(Display, "appearance/documentWorkspace/" + Key, Key == "mainMenuMode" ? tr("메뉴 표시") : tr("도구모음 표시"), {tr("뷰 권장값"), tr("표시"), tr("숨기기")}, {"recommended", "show", "hide"});
+        Combo(Display, "appearance/documentWorkspace/" + Key, Key == "mainMenuMode" ? tr("메뉴 표시") : tr("도구모음 표시"), {tr("자동"), tr("표시"), tr("숨기기")}, {"recommended", "show", "hide"});
     auto* WindowCard = Card(General, tr("창"));
     Check(WindowCard, "documentViews/common/closeViewerOnEscape", tr("ESC 키를 눌러 창 닫기 (HyperViewer 전용)"));
     Combo(WindowCard, "documentViews/common/newDocumentAction", tr("Ctrl+N 동작"),
-        {tr("종류 선택 창 표시"), tr("텍스트 문서 바로 만들기"), tr("Markdown 문서 바로 만들기")}, {"ask", "text", "markdown"});
-    Note(WindowCard, tr("종류 선택 창은 마지막으로 만든 종류를 먼저 고릅니다. 열린 채 Ctrl+N을 다시 누르면 고른 종류를 만듭니다. "
-        "종류별 명령(새 텍스트 문서 · 새 Markdown 문서 · 새 EPUB 책 · 새 이미지)은 단축키 페이지에서 키를 지정할 수 있습니다."));
+        {tr("형식 선택 창 표시"), tr("텍스트 문서 바로 만들기"), tr("Markdown 문서 바로 만들기")}, {"ask", "text", "markdown"});
+    Note(WindowCard, tr("형식 선택 창은 마지막으로 만든 형식을 먼저 고릅니다. 열린 채 Ctrl+N을 다시 누르면 고른 형식을 만듭니다. "
+        "형식별 명령(새 텍스트 문서 · 새 Markdown 문서 · 새 EPUB 책 · 새 이미지)은 단축키 페이지에서 키를 지정할 수 있습니다."));
     auto* Recent = Card(General, tr("최근 항목"));
     Check(Recent, "documentViews/recent/enabled", tr("최근 항목 기록"));
     {
@@ -149,7 +150,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     });
     auto* Text = Page(tr("텍스트 편집기"), tr("글꼴과 편집 화면, 들여쓰기·줄바꿈, 새 문서 저장과 외부 파일 변경 처리를 설정합니다."));
     auto* FileSearch = Card(Text, tr("파일에서 찾기·바꾸기"));
-    Combo(FileSearch, "documentViews/textView/findInFiles/openLocation", tr("열기 위치(&L)"), {tr("하단 패널 (기본)"), tr("콘텐츠 탭")}, {"bottom", "tab"});
+    Combo(FileSearch, "documentViews/textView/findInFiles/openLocation", tr("열기 위치(&L)"), {tr("하단 패널"), tr("콘텐츠 탭 (기본)")}, {"bottom", "tab"});
     auto* Fonts = Card(Text, tr("글꼴"));
     FontField(Fonts, "fontFamily", tr("글꼴"));
     Spin(Fonts, "fontSize", tr("글꼴 크기 (pt)"), 6, 72);
@@ -388,7 +389,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     connect(Buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { Apply(); });
     connect(Buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, [this, List] {
         if (List->currentRow() == 1 && findChild<QTabWidget*>("textViewerTabs")->currentIndex() == 1) {
-            auto Mode = colorTheme_->currentData().toString(); auto Colors = textColors_[Mode].toObject();
+            auto Mode = textColorMode(); auto Colors = textColors_[Mode].toObject();
             for (const auto& Key : Colors.keys()) Colors[Key] = QJsonValue::Null;
             const auto Legacy = legacyTextColors_[Mode].toObject();
             for (const auto& Key : Legacy.keys()) if (Key.startsWith("text.lexer.")) Colors[Key] = QJsonValue::Null;
@@ -423,15 +424,16 @@ QWidget* DocumentSettingsDialog::createTextColorPage()
     Layout->setContentsMargins(0, 12, 8, 0); Layout->setSpacing(8);
     auto* Form = new QFormLayout; Layout->addLayout(Form);
     colorTheme_ = new QComboBox(Page); colorTheme_->setObjectName("textColorTheme");
+    colorTheme_->addItem(tr("본체 따르기"), "product");
     colorTheme_->addItem(tr("밝은 테마"), "light"); colorTheme_->addItem(tr("어두운 테마"), "dark");
-    colorTheme_->setCurrentIndex(ThemeManager::instance().currentTheme() == ThemeManager::Dark ? 1 : 0);
+    colorTheme_->setCurrentIndex(0);
     Form->addRow(tr("테마"), colorTheme_);
     colorLanguage_ = new QComboBox(Page); colorLanguage_->setObjectName("textColorLanguage");
     colorLanguage_->addItem(tr("공통 색상"), QString{});
     const auto& Registry = TextLexerRegistry::instance();
     for (const auto& Name : Registry.displayNames()) if (Registry.lexerKeyForDisplayName(Name) != "none") colorLanguage_->addItem(Name, Name);
     colorLanguage_->setMaxVisibleItems(20); Form->addRow(tr("언어 / 렉서"), colorLanguage_);
-    auto* Help = new QLabel(tr("테마별로 저장됩니다. 언어 색상을 비워 두면 공통 구문 색상을 따릅니다."), Page); Help->setWordWrap(true); Layout->addWidget(Help);
+    auto* Help = new QLabel(tr("본체 따르기는 현재 화면 테마의 색상을 편집합니다. 색상은 밝은·어두운 테마별로 저장됩니다. 언어 색상을 비워 두면 공통 구문 색상을 따릅니다."), Page); Help->setWordWrap(true); Layout->addWidget(Help);
     colorTable_ = new QTableWidget(Page); colorTable_->setObjectName("textColorTable"); colorTable_->setColumnCount(2);
     colorTable_->setHorizontalHeaderLabels({tr("항목"), tr("색상")}); colorTable_->verticalHeader()->hide();
     colorTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -447,7 +449,19 @@ QWidget* DocumentSettingsDialog::createTextColorPage()
     colorPreview_->setReadOnly(true); Layout->addWidget(colorPreview_->widget());
     connect(colorTheme_, &QComboBox::currentIndexChanged, this, &DocumentSettingsDialog::refreshTextColorRows);
     connect(colorLanguage_, &QComboBox::currentIndexChanged, this, &DocumentSettingsDialog::refreshTextColorRows);
+    connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed, this, [this] {
+        if (colorTheme_->currentData().toString() == "product") refreshTextColorRows();
+    });
     return Page;
+}
+
+QString DocumentSettingsDialog::textColorMode() const
+{
+    const auto Mode = colorTheme_->currentData().toString();
+    // The selector edits a palette; store overrides in the renderer's light/dark bucket.
+    return Mode == "product"
+        ? (fm::style::isDarkVariant(fm::style::ThemeManager::instance().effectiveVariant()) ? QStringLiteral("dark") : QStringLiteral("light"))
+        : Mode;
 }
 
 void DocumentSettingsDialog::loadTextColors()
@@ -460,7 +474,7 @@ void DocumentSettingsDialog::loadTextColors()
 
 QColor DocumentSettingsDialog::textDraftColor(const QString& Key) const
 {
-    const auto Mode = colorTheme_->currentData().toString();
+    const auto Mode = textColorMode();
     const auto Colors = textColors_[Mode].toObject();
     const auto Value = Colors.value(Key);
     if (Value.isString() && QColor(Value.toString()).isValid()) return QColor(Value.toString());
@@ -483,7 +497,7 @@ QColor DocumentSettingsDialog::textDraftColor(const QString& Key) const
 void DocumentSettingsDialog::refreshTextColorRows()
 {
     if (!colorTable_) return;
-    const auto Mode = colorTheme_->currentData().toString();
+    const auto Mode = textColorMode();
     const auto Language = colorLanguage_->currentData().toString();
     const auto* Profile = Language.isEmpty() ? nullptr : TextLexerRegistry::instance().profileForDisplayName(Language);
     QList<QPair<QString, QString>> Rows;
