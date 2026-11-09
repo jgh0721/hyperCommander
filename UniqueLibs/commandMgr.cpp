@@ -206,6 +206,7 @@ bool CCommandMgr::InvokeCommand( const QString& Id, const QModelIndex& CursorInd
         { QLatin1String( "hc.file.delete" ),           &CCommandMgr::FileDelete },
         { QLatin1String( "hc.file.normalize" ),        &CCommandMgr::FileNormalize },
         { QLatin1String( "hc.file.attributes" ),       &CCommandMgr::FileAttributes },
+        { QLatin1String( "hc.file.ads.allowInternetBlock" ), &CCommandMgr::AllowInternetBlock },
         { QLatin1String( "hc.selection.invert" ),      &CCommandMgr::SelectionInvert },
         { QLatin1String( "hc.file.batchRename" ),      &CCommandMgr::FileBatchRename },
         { QLatin1String( "hc.file.new" ),              &CCommandMgr::FileNew },
@@ -324,6 +325,11 @@ DEFINE_HC_COMMAND( CCommandMgr, FileDelete )
 DEFINE_HC_COMMAND( CCommandMgr, FileNormalize )
 {
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
+}
+
+DEFINE_HC_COMMAND( CCommandMgr, AllowInternetBlock )
+{
+    if (bridge_) bridge_->AllowInternetBlock(CursorIndex);
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, FileAttributes )

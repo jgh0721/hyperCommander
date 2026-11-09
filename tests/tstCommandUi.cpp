@@ -12,6 +12,7 @@
 #include "commonLibs/Qt/elidedLabel.hpp"
 #include <QVBoxLayout>
 #include <QPushButton>
+#include "UniqueLibs/internetFile.hpp"
 
 using namespace hc::ui;
 namespace {
@@ -408,13 +409,14 @@ private slots:
         using hc::settings::FileColorRules;
         const auto Fresh = hc::defaults::FileGroups(), Existing = hc::defaults::FileGroups(true);
         QVERIFY2(FileColorRules::Validate(Fresh).isEmpty(), qPrintable(FileColorRules::Validate(Fresh)));
-        QCOMPARE(Fresh["mode"].toString(), QString("merge")); QCOMPARE(Fresh["groups"].toArray().size(), 28);
+        QCOMPARE(Fresh["mode"].toString(), QString("merge")); QCOMPARE(Fresh["groups"].toArray().size(), 29);
         QVERIFY(Existing["groups"].toArray().isEmpty());
         QCOMPARE(hc::defaults::Settings()["options"].toObject()["fileColorRules"].toObject(), Fresh);
         QCOMPARE(hc::defaults::Settings(true)["options"].toObject()["fileColorRules"].toObject(), Existing);
         QHash<QString, QString> Owners;
         for (const auto Value : Fresh["groups"].toArray()) {
-            const auto G = Value.toObject(); QVERIFY(G["id"].toString().startsWith("default.")); QVERIFY(!G["autoDark"].toBool());
+            const auto G = Value.toObject(); QVERIFY(G["id"].toString().startsWith("default."));
+            QCOMPARE(G["autoDark"].toBool(), G["id"] == "default.internet");
             for (const auto C : G["conditions"].toArray()) if (C.toObject()["type"] == "extension")
                 for (const auto& Ext : FileColorRules::Extensions(C.toObject()["value"].toString())) {
                     QVERIFY2(!Owners.contains(Ext), qPrintable(Ext + ": " + Owners.value(Ext) + " / " + G["name"].toString()));
@@ -423,7 +425,17 @@ private slots:
         }
         QCOMPARE(Owners.size(), 443);
         FileColorRules Rules; QVERIFY(Rules.Load(Fresh).isEmpty());
-        const auto Style = [&](const QString& Name, quint32 Attributes = 0, quint64 Size = 1, bool Dark = false) { return Rules.Evaluate({Name, Attributes, Size, Dark}); };
+        const auto Style = [&](const QString& Name, quint32 Attributes = 0, quint64 Size = 1, bool Dark = false) {
+            hc::settings::FileRuleInput Input{Name, Attributes, Size, Dark};
+            Input.fields_.append(hc::columns::CellValue::Missing(hc::columns::ValueState::Empty));
+            return Rules.Evaluate(Input);
+        };
+        QCOMPARE(Rules.RequiredFields(), QStringList{"file.alternateDataStream.zone"});
+        hc::settings::FileRuleInput Internet{"download.txt", 0, 1, false};
+        Internet.fields_.append(hc::columns::CellValue::Ready(quint64(3)));
+        QCOMPARE(Rules.Evaluate(Internet).font_.value("border").toString(), QString("dash"));
+        Internet.fields_[0] = hc::columns::CellValue::Ready(quint64(2));
+        QVERIFY(!Rules.Evaluate(Internet).font_.contains("border"));
         const auto Disguised = Style("report.pdf.exe");
         QCOMPARE(Disguised.foreground_, QColor("#B8231A")); QCOMPARE(Disguised.background_, QColor("#FBE9E7")); QVERIFY(Disguised.font_.value("bold").toBool());
         QCOMPARE(Style(QString("photo") + QChar(0x202E) + "gpj.exe", 0, 1, true).background_, QColor("#3A1E1B"));
@@ -436,6 +448,23 @@ private slots:
         QCOMPARE(Style("id_ed25519").foreground_, QColor("#8F4A05")); QVERIFY(Style("~$report.docx").font_.value("italic").toBool());
         QVERIFY(Style(QString("한글.txt").normalized(QString::NormalizationForm_D)).font_.value("underline").toBool());
         QVERIFY(!Style("model.stl").matched_);
+    }
+    void internetBlockRemovalPreservesOtherData()
+    {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Path = Directory.filePath("download.txt");
+        QVERIFY(Write(Path, "original body"));
+        QVERIFY(Write(Path + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n"));
+        QVERIFY(Write(Path + ":note", "keep"));
+        bool Changed = false;
+        QCOMPARE(hc::files::RemoveInternetBlock(Path, Changed), DWORD(ERROR_SUCCESS));
+        QVERIFY(Changed);
+        QFile Marker(Path + ":Zone.Identifier"); QVERIFY(!Marker.open(QIODevice::ReadOnly));
+        QFile Body(Path); QVERIFY(Body.open(QIODevice::ReadOnly)); QCOMPARE(Body.readAll(), QByteArray("original body"));
+        QFile Note(Path + ":note"); QVERIFY(Note.open(QIODevice::ReadOnly)); QCOMPARE(Note.readAll(), QByteArray("keep"));
+        QCOMPARE(hc::files::RemoveInternetBlock(Path, Changed), DWORD(ERROR_SUCCESS)); QVERIFY(!Changed);
+        QVERIFY(hc::files::RemoveInternetBlock(Directory.filePath("missing.txt"), Changed) != ERROR_SUCCESS);
+        QVERIFY(!Changed);
     }
     void shortFunctionCaptionsKeepCommandIdentity()
     {
@@ -467,7 +496,8 @@ private slots:
         const auto Values = EffectiveShortcuts(General, {});
         const QMap<QString, QString> Requested{{"Ctrl+C", "hc.file.copy"}, {"F2", "hc.file.rename"},
             {"Ctrl+R", "hc.file.rename"}, {"Ctrl+M", "hc.file.move"}, {"Ctrl+Alt+R", "hc.file.batchRename"},
-            {"Ctrl+K", "hc.file.mkdir"}, {"Ctrl+A", "hc.archive.create"}, {"Ctrl+X", "hc.archive.extract"}};
+            {"Ctrl+K", "hc.file.mkdir"}, {"Ctrl+A", "hc.archive.create"}, {"Ctrl+X", "hc.archive.extract"},
+            {"Ctrl+Alt+B", "hc.file.ads.allowInternetBlock"}};
         for (auto It = Requested.cbegin(); It != Requested.cend(); ++It)
             QCOMPARE(CommandId(Values.value(QKeySequence::fromString(It.key(), QKeySequence::PortableText)[0])), It.value());
         QCOMPARE(CommandId(Values.value(QKeyCombination(Qt::Key_F5))), "hc.navigate.refresh");

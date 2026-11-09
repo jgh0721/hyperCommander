@@ -43,6 +43,8 @@
 #include "builtInFsModel.hpp"
 #include "fileJobUi.hpp"
 #include "HyperCommander/UIs/fileAttributesDialog.hpp"
+#include "internetFile.hpp"
+#include <QProgressDialog>
 #include "nativeWritableStorage.hpp"
 #include "storageProviders.hpp"
 #include "qtSearch.hpp"
@@ -1271,6 +1273,8 @@ void CommandUiBridge::refreshActionState()
         }
         Command->setEnabled(Playable);
     }
+    if (auto* Command = Action("hc.file.ads.allowInternetBlock"))
+        Command->setEnabled(Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb));
     if (auto* Command = Action("hc.file.attributes")) {
         const bool Native = Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb);
         Command->setEnabled(Native);
@@ -2860,6 +2864,65 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
     QStringList Paths;
     for (const auto& At : SelectedEntries(Model, Context)) if (At.isValid()) Paths.append(Model->GetFileFullPath(At));
     hc::ui::BatchRenameDialog Dialog(Paths, Supported, main_, Context.selectionManifest_, fileJobs_); Dialog.onChanged_ = Refresh; Dialog.exec();
+}
+
+void CommandUiBridge::AllowInternetBlock(const QModelIndex& Index)
+{
+    const auto Context = captureFiles(Index, false);
+    auto* Model = findModel(Context.tabId_);
+    if (!Model || !Model->GetRoot() || !Model->CanUseSnapshot()
+        || (Context.location_.kind_ != LocatorKind::Local && Context.location_.kind_ != LocatorKind::Smb)) return;
+    std::vector<EntrySnapshot> Entries;
+    if (!Context.selectionManifest_) for (const auto& At : SelectedEntries(Model, Context)) {
+        const auto Entry = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+        if (Entry && Entry->storageEntry_ && Entry->Name_ != "..") Entries.push_back(*Entry->storageEntry_);
+    }
+    if (Entries.empty() && !Context.selectionManifest_) return;
+    auto Reader = Model->SnapshotProvider();
+    if (!Reader) Reader = MakeNativeReadProvider(Context.location_.kind_);
+    const auto Stop = std::make_shared<std::stop_source>();
+    auto* Progress = new QProgressDialog(tr("인터넷 파일 차단을 해제하고 있습니다…"), tr("중지"), 0, 0, main_);
+    Progress->setWindowTitle(tr("인터넷 파일 차단 해제"));
+    Progress->setWindowModality(Qt::WindowModal);
+    Progress->setMinimumDuration(0);
+    Progress->show();
+    connect(Progress, &QProgressDialog::canceled, this, [Stop] { Stop->request_stop(); });
+    connect(this, &QObject::destroyed, Progress, [Stop] { Stop->request_stop(); });
+    struct Outcome { int changed_ = 0, unchanged_ = 0, failed_ = 0; QStringList errors_; };
+    auto* Watcher = new QFutureWatcher<Outcome>(this);
+    connect(Watcher, &QFutureWatcher<Outcome>::finished, this, [this, Watcher, Progress = QPointer<QProgressDialog>(Progress), Stop, Location = Context.location_] {
+        const auto Result = Watcher->result(); Watcher->deleteLater();
+        if (Progress) { const QSignalBlocker Block(Progress); Progress->close(); Progress->deleteLater(); }
+        if (Result.changed_) for (auto* M : main_->findChildren<CFSModel*>())
+            if (M->GetRoot() && M->WorkspaceLocation() == Location) M->ForceRefresh();
+        const auto Summary = tr("인터넷 파일 차단 해제: 변경 %1개 · 표시 없음 %2개 · 실패/제외 %3개%4")
+            .arg(Result.changed_).arg(Result.unchanged_).arg(Result.failed_).arg(Stop->stop_requested() ? tr(" · 중지됨") : QString{});
+        if (auto* Window = qobject_cast<QMainWindow*>(main_.data())) Window->statusBar()->showMessage(Summary, 8000);
+        if (Result.failed_) hc::ui::MessageDialog::warning(main_, tr("인터넷 파일 차단 해제"), Summary + "\n\n" + Result.errors_.join('\n'));
+    });
+    Watcher->setFuture(QtConcurrent::run([Entries = std::move(Entries), Reader, Manifest = Context.selectionManifest_, Stop]() mutable {
+        Outcome Result;
+        OperationContext Operation; Operation.stopToken_ = Stop->get_token();
+        const auto Plan = hc::attributes::Collect(std::move(Entries), Reader, false, Operation,
+            [](const EntrySnapshot&, bool) { return hc::attributes::Decision::Skip; }, Manifest);
+        for (const auto& Issue : Plan.issues_) {
+            ++Result.failed_;
+            if (Result.errors_.size() < 10) Result.errors_.append(QString::fromStdString(Issue.entry_.locator_.root_) + ": " + Issue.detail_);
+        }
+        if (Plan.blocked_ || Plan.cancelled_) return Result;
+        for (const auto& Entry : Plan.entries_) {
+            if (Stop->stop_requested()) break;
+            const auto Path = QString::fromStdString(Entry.locator_.root_);
+            bool Changed = false;
+            const auto Error = hc::files::RemoveInternetBlock(Path, Changed);
+            if (Error == ERROR_SUCCESS) { if (Changed) ++Result.changed_; else ++Result.unchanged_; }
+            else {
+                ++Result.failed_;
+                if (Result.errors_.size() < 10) Result.errors_.append(tr("%1: Windows 오류 %2").arg(Path).arg(Error));
+            }
+        }
+        return Result;
+    }));
 }
 
 void CommandUiBridge::PromptFileAttributes(const QModelIndex& Index)

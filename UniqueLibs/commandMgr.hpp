@@ -74,6 +74,7 @@ class CCommandMgr : public QObject, public QAbstractNativeEventFilter
     DECLARE_HC_COMMAND( FileDelete );
     DECLARE_HC_COMMAND( FileNormalize );
     DECLARE_HC_COMMAND( FileAttributes );
+    DECLARE_HC_COMMAND( AllowInternetBlock );
 
     DECLARE_HC_COMMAND( SelectionInvert );
 

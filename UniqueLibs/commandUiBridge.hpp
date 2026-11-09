@@ -40,6 +40,7 @@ public:
     void PromptFileOperation(const QString& Id, const QString& Source, const QModelIndex& Index = {});
     void PromptFileTools(bool Rename, const QModelIndex& Index = {});
     void PromptFileAttributes(const QModelIndex& Index = {});
+    void AllowInternetBlock(const QModelIndex& Index = {});
     void PromptArchive(bool Extract, const QModelIndex& Index = {});
     hc::storage::Result<QStringList> CompareArguments(const QModelIndex& Index = {});
     bool ExecuteCommand(const QString& Id, const QModelIndex& Index = {});

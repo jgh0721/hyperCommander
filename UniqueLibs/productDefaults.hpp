@@ -114,6 +114,9 @@ DECLARE_CMD( BuiltInCMD_OPs_UnicodeNormalization, QObject::tr( "동작" ),    "h
 DECLARE_CMD( BuiltInCMD_OPs_SetAttrib,            QObject::tr( "동작" ),    "hc.file.attributes",
              Qt::ControlModifier | Qt::Key_Z,                           QObject::tr( "속성 변경" ) );
 
+DECLARE_CMD( BuiltInCMD_OPs_AllowInternetBlock, QObject::tr("동작"), "hc.file.ads.allowInternetBlock",
+             Qt::ControlModifier | Qt::AltModifier | Qt::Key_B, QObject::tr("인터넷 파일 차단 해제") );
+
 DECLARE_CMD( BuiltInCMD_Sel_Inverse,              QObject::tr( "선택" ),    "hc.selection.invert",
              Qt::Key_Space,                                             QObject::tr( "파일 선택을 반전하고 다음으로 이동" ) );
 DECLARE_CMD( BuiltInCMD_Sel_Select, QObject::tr("선택"), "hc.selection.select",
@@ -416,6 +419,7 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_OPs_DeleteOnKeypad,
     BuiltInCMD_OPs_UnicodeNormalization,
     BuiltInCMD_OPs_SetAttrib,
+    BuiltInCMD_OPs_AllowInternetBlock,
 
     BuiltInCMD_Sel_Inverse,
     BuiltInCMD_Sel_Select, BuiltInCMD_Sel_SelectKeypad,
@@ -1046,6 +1050,13 @@ namespace hc::defaults
              Colors( "#B8231A", "#FBE9E7" ),
              Colors( "#FF8A80", "#3A1E1B" ),
              Bold );
+        Add("internet", QObject::tr("인터넷 파일"),
+            {QJsonObject{{"type", "field"}, {"field", "file.alternateDataStream.zone"},
+                {"valueType", "unsigned"}, {"op", "eq"}, {"value", "3"}}},
+            {}, {}, {{"dim", false}, {"border", "dash"}});
+        auto Internet = Result.last().toObject();
+        Internet["autoDark"] = true;
+        Result[Result.size() - 1] = Internet;
         // 다음 다섯 그룹은 글자색·굵게·기울임·배경 중 하나만 써서 종류 색과 함께 보인다.
         Add( "hidden", QObject::tr( "숨김·시스템" ), { C( "attributes", "any", "6" ) }, Colors( "#6C6961" ), Colors( "#97948B" ), { { "dim", true } } );
         Add( "recent", QObject::tr( "최근 변경" ), { C( "modified", "within", "24", "hours" ) }, {}, {}, Bold );
@@ -1183,7 +1194,7 @@ namespace hc::defaults
         // groups: id, name, enabled, join(any/all), conditions, light/dark, autoDark, font.
         if( ExistingInstallation )
             return { { "version", 2 }, { "mode", "first" }, { "groups", QJsonArray{} } };
-        return { { "version", 2 }, { "mode", "merge" }, { "groups", DefaultFileGroups() } };
+        return { { "version", 4 }, { "mode", "merge" }, { "groups", DefaultFileGroups() } };
     }
     inline QJsonArray LegacyFileSets()
     {
