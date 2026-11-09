@@ -219,6 +219,8 @@ struct Archive {
     Com<Input> input_{new Input(state_)};
     Com<IInArchive> archive_;
     UInt32 count_ = 0;
+    std::map<UInt32, QString> nsisNames_;
+    std::map<UInt32, uint64_t> nsisSizes_;
     ~Archive() { if (archive_.value_) archive_->Close(); }
     Result<ArchiveHeader> Header(UInt32 Index) {
         ArchiveHeader Header;
@@ -230,9 +232,11 @@ struct Archive {
         auto Name = Path.Text(); Name.replace('\\', '/');
         if (Name.isEmpty() || Name.startsWith('/') || Name.contains(':') || Name.contains(QChar::Null)) return Failure("7zip-entry-path", ErrorCategory::InvalidRequest);
         for (const auto& Part : Name.split('/')) if (Part == ".." || Part == ".") return Failure("7zip-entry-path", ErrorCategory::InvalidRequest);
+        if (const auto Found = nsisNames_.find(Index); Found != nsisNames_.end()) Name = Found->second;
         if (Anti.Boolean())
             return Failure("7zip-special-entry", ErrorCategory::Unsupported);
         Header.name_ = Name.toStdString(); Header.size_ = Size.Number(); Header.packedSize_ = Packed.Number(); Header.directory_ = Dir.Boolean();
+        if (const auto Found = nsisSizes_.find(Index); Found != nsisSizes_.end()) Header.size_ = Found->second;
         Header.metadataRename_ = (format_ == "7z" || format_ == "zip") && !state_->volumeSet_ && !IsZipx(QString::fromStdString(state_->archive_));
         Header.encrypted_ = Encrypted.Boolean(); Header.attributes_ = uint32_t(Attr.Number()); Header.crc_ = uint32_t(Crc.Number());
         Property Posix; if (!Read(kpidPosixAttrib, Posix)) return Failure("7zip-entry-properties");
@@ -246,6 +250,41 @@ struct Archive {
             || (Header.size_ - 1) / PackedBytes >= state_->context_.workload_.automaticExpansionRatio_))
             return Failure("automatic-expansion-budget", ErrorCategory::BudgetExceeded);
         return Header;
+    }
+    Result<Unit> PrepareNsisNames() {
+        if (format_ != "nsis") return Unit{};
+        // NSIS File instructions can target the same path with different data.
+        // Our navigation locators are paths, so assign stable aliases while the
+        // SDK ordinals remain unchanged for single, streaming and batch reads.
+        // Reserve all original paths (including implicit directories) first:
+        // a generated alias must not hide a later member or directory.
+        std::vector<QString> Names;
+        std::map<QString, unsigned> Counts;
+        std::set<QString> Reserved;
+        for (UInt32 Index = 0; Index < count_; ++Index) {
+            if (state_->Check() != S_OK) return state_->Result(E_ABORT);
+            auto H = Header(Index); if (!H.HasValue()) return H.Failure();
+            auto Name = QString::fromStdString(H.Value().name_);
+            Names.push_back(Name); ++Counts[Name.toCaseFolded()];
+            Reserved.insert(Name.toCaseFolded());
+            for (auto Slash = Name.lastIndexOf('/'); Slash >= 0; Slash = Name.lastIndexOf('/', Slash - 1)) {
+                Reserved.insert(Name.left(Slash).toCaseFolded());
+                if (!Slash) break;
+            }
+        }
+        for (UInt32 Index = 0; Index < count_; ++Index) {
+            const auto& Name = Names[Index];
+            if (Counts[Name.toCaseFolded()] < 2) continue;
+            const auto Dot = Name.lastIndexOf('.');
+            const auto Split = Dot > Name.lastIndexOf('/') + 1 ? Dot : Name.size();
+            const auto Stem = Name.left(Split), Extension = Name.mid(Split);
+            auto Alias = Stem + " [NSIS " + QString::number(Index) + ']' + Extension;
+            unsigned Collision = 0;
+            while (!Reserved.insert(Alias.toCaseFolded()).second)
+                Alias = Stem + " [NSIS " + QString::number(Index) + '-' + QString::number(++Collision) + ']' + Extension;
+            nsisNames_.emplace(Index, std::move(Alias));
+        }
+        return Unit{};
     }
 };
 class Output final : public ISequentialOutStream {
@@ -348,6 +387,31 @@ Result<Unit> Extract(Archive& Archive, UInt32 Index, const ArchiveHeader& Header
     if (!Test && Output->written_ != Header.size_) return Failure("7zip-extracted-size");
     return Unit{};
 }
+Result<Unit> PrepareNsisSizes(Archive& Value) {
+    if (Value.format_ != "nsis") return Unit{};
+    // Non-solid compressed NSIS members can omit unpacked sizes. A missing
+    // property is not a zero-byte file: count decoded bytes without staging
+    // data before exposing the exact-size storage contract to the provider.
+    for (UInt32 Index = 0; Index < Value.count_; ++Index) {
+        if (Value.state_->Check() != S_OK) return Value.state_->Result(E_ABORT);
+        Property Size;
+        if (Value.archive_->GetProperty(Index, kpidSize, &Size) != S_OK) return Failure("7zip-entry-properties");
+        if (Size.vt == VT_UI4 || Size.vt == VT_UI8) continue;
+        auto Limit = UINT64_MAX;
+        const auto& Work = Value.state_->context_.workload_;
+        if (Work.IsAutomatic()) {
+            Limit = Work.automaticFileBytes_;
+            if (Work.automaticExpansionRatio_ && Value.input_->Size() <= UINT64_MAX / Work.automaticExpansionRatio_)
+                Limit = std::min<uint64_t>(Limit, Value.input_->Size() * Work.automaticExpansionRatio_);
+        }
+        Com<Output> Counter{new Output(nullptr, Limit, Value.state_)};
+        Com<ExtractCallback> Callback{new ExtractCallback(Value.state_, Counter.value_, Index)};
+        const auto Code = Value.archive_->Extract(&Index, 1, 0, Callback.value_);
+        if (Code != S_OK || Value.state_->error_) return Value.state_->Result(Code);
+        Value.nsisSizes_.emplace(Index, Counter->written_);
+    }
+    return Unit{};
+}
 Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, OperationContext Context, unsigned FirstAttempt = 0) {
     if (const auto Stop = Context.Check({"7zip"})) return *Stop;
     const auto SelectedPath = QString::fromStdString(Path);
@@ -377,10 +441,13 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
     UInt32 Count = 0; if (Formats(&Count) != S_OK) return Failure("7zip-formats");
     // Probe signatures at offset zero before allowing SFX scanning. Otherwise a
     // stored RAR/7z member inside a ZIP can be mistaken for the outer archive.
+    // Then recognize the outer NSIS installer before scanning generic SFX
+    // payloads: NSIS may itself contain an uncompressed 7z/ZIP member.
     const UInt64 StartOnly = 0;
-    for (unsigned Scan = 0; Scan < 2; ++Scan) for (UInt32 Index = 0; Index < Count; ++Index) {
+    for (unsigned Scan = 0; Scan < 3; ++Scan) for (UInt32 Index = 0; Index < Count; ++Index) {
         Property Name, Id; if (Get(Index, NArchive::NHandlerPropID::kName, &Name) != S_OK || Get(Index, NArchive::NHandlerPropID::kClassID, &Id) != S_OK) return Failure("7zip-format-property");
-        if (!QStringList{"7z", "zip", "Rar", "Rar5", "Compound", "Cab"}.contains(Name.Text(), Qt::CaseInsensitive)) continue;
+        if (!QStringList{"7z", "zip", "Rar", "Rar5", "Compound", "Cab", "Nsis"}.contains(Name.Text(), Qt::CaseInsensitive)) continue;
+        if (Scan && ((Scan == 1) != (Name.Text().compare("Nsis", Qt::CaseInsensitive) == 0))) continue;
         if (Id.vt != VT_BSTR || SysStringByteLen(Id.bstrVal) != sizeof(GUID)) return Failure("7zip-format-guid");
         auto Value = std::make_unique<Archive>(); Value->format_ = Name.Text().toLower(); Value->state_->context_ = Context; Value->state_->archive_ = Path;
         Value->state_->volumeSet_ = Volume.kind_ != ArchiveVolumeKind::None; Value->state_->attempts_ = FirstAttempt;
@@ -421,6 +488,8 @@ Result<std::unique_ptr<Archive>> Open(HMODULE Module, std::string Path, Operatio
                 return Failure("7zip-volume-not-in-set", ErrorCategory::InvalidRequest);
         }
         if (Value->count_ > Context.EnumerationLimit()) return Failure("7zip-enumeration-budget", ErrorCategory::BudgetExceeded);
+        auto Sizes = PrepareNsisSizes(*Value); if (!Sizes.HasValue()) return Sizes.Failure();
+        auto Names = Value->PrepareNsisNames(); if (!Names.HasValue()) return Names.Failure();
         return Value;
     }
     return Failure("7zip-format-not-recognized", ErrorCategory::Unsupported);

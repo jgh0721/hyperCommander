@@ -11641,6 +11641,9 @@ private slots:
         const auto Zip=Read(Directory.filePath("base.zip"));
         for(const auto* Name:{"sample.vsix","sample.blob","extensionless","wrong.iso","wrong.egg"})QVERIFY(Put(Directory.filePath(Name),Zip));
         QVERIFY(Put(Directory.filePath("ordinary.txt"),"not an archive"));QVERIFY(Put(Directory.filePath("external.blob"),"HCWCX01"));QVERIFY(Put(Directory.filePath("slow.blob"),"HCWCX01H"));QVERIFY(Put(Directory.filePath("corrupt.blob"),"HCWCX01G"));
+        const auto Nsis = QJsonDocument::fromJson(Read(QFINDTESTDATA("fixtures/nsis-duplicates.json"))).object()["cases"].toArray();
+        QVERIFY(!Nsis.isEmpty());
+        QVERIFY(Put(Directory.filePath("installer.exe"), QByteArray::fromBase64(Nsis[0].toObject()["data"].toString().toLatin1())));
         QVERIFY(Put(Input.filePath("inner.vsix"),Zip));Create.archive_=Directory.filePath("outer.zip").toStdString();Create.add_={"inner.vsix"};QVERIFY(Backend->Update(Create,{}).HasValue());
         auto* Panel=panels_.front();auto* Model=static_cast<CFSModel*>(model(Panel));Model->SetProviderEnabled(true);Panel->sig_NotifyPanelActivated();
         const auto Saved=hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
@@ -11671,6 +11674,12 @@ private slots:
                 QCOMPARE(Reopened.WorkspaceLocation(),Tab.location_);
             }
         }
+        QVERIFY(Home()); QVERIFY(Enter("installer.exe")); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);
+        QVERIFY2(!Model->LastNavigationError(),Model->LastNavigationError()?Model->LastNavigationError()->code_.c_str():"");
+        QCOMPARE(Model->WorkspaceLocation().kind_,LocatorKind::Archive);
+        for (const auto* Name : {"app [NSIS 0-1].bin", "app [NSIS 1].bin", "app [NSIS 0].bin", "empty.bin", "[NSIS].nsi"})
+            QVERIFY2(Find(Name).isValid(), Name);
+        QCOMPARE(dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get())->GetWCX()->PluginPath(), BuiltinSevenZipOptions().binaryPath_);
         QVERIFY(Home());QVERIFY(Enter("external.blob"));QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(),15000);QVERIFY(names(Model).contains("alpha.txt"));
         QCOMPARE(dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get())->GetWCX()->PluginPath(),Wcx["path"].toString());
         QVERIFY(!dynamic_cast<nsHC::CFSPack*>(Model->GetRoot().get())->GetWCX()->WritePolicy().HasValue());

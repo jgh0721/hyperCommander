@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* NSIS: 공식 7-Zip 스크립트 복원 기능 활성화. Ctrl+PgDn으로 설치 파일을 열고 스크립트·내장 파일 추출 지원. 같은 경로의 파일은 NSIS 항목 번호를 붙여 구분하고 개별·전체 추출 시 보존.
+
 * EPUB: 실행 파일을 HyperCommander와 같은 폴더에 배치하고 Qt·WebEngine 파일 공유. 전용 번들은 Libs/epub-bundle에 배치하여 중복 설치 제거.
 
 * Markdown: 렌더러를 HyperCommander와 같은 폴더에 배치하고 Qt DLL·WebEngine 리소스·플러그인을 공유하여 중복 설치 제거.

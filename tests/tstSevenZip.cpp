@@ -74,6 +74,120 @@ class SevenZipTests : public QObject {
     QJsonArray cases_;
     QString root_;
 private slots:
+    void nsisStoredArchiveIsOuter() {
+        const auto Case = QJsonDocument::fromJson(Read(QFINDTESTDATA("fixtures/nsis-duplicates.json")))["storedArchive"].toObject();
+        QTemporaryDir Directory;
+        const auto Path = Directory.filePath("outer.exe");
+        const auto Bytes = QByteArray::fromBase64(Case["data"].toString().toLatin1());
+        QCOMPARE(QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex(), Case["sha256"].toString().toLatin1());
+        QVERIFY(Put(Path, Bytes));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());
+        auto Listed = Backend->Enumerate(Path.toStdString(), false, {}); QVERIFY(Listed.HasValue());
+        auto Page = Listed.Value()->Next(32, {}); QVERIFY(Page.HasValue());
+        QCOMPARE(Page.Value().entries_.size(), size_t(5));
+        QVERIFY(std::any_of(Page.Value().entries_.begin(), Page.Value().entries_.end(), [](const auto& H) { return H.name_ == "[NSIS].nsi"; }));
+        const auto Header = Page.Value().entries_.front(); Listed.Value().reset();
+        auto Extracted = Backend->Extract(Path.toStdString(), Header, Directory.filePath("inner.7z").toStdString(), {});
+        QVERIFY(Extracted.HasValue());
+        QCOMPARE(QCryptographicHash::hash(Read(Directory.filePath("inner.7z")), QCryptographicHash::Sha256).toHex(), Case["payloadSha256"].toString().toLatin1());
+    }
+    void nsisDuplicates_data() {
+        QTest::addColumn<QJsonObject>("Case");
+        const auto Fixture = QJsonDocument::fromJson(Read(QFINDTESTDATA("fixtures/nsis-duplicates.json"))).object();
+        for (const auto& Value : Fixture["cases"].toArray()) {
+            const auto Case = Value.toObject(); QTest::newRow(qPrintable(Case["name"].toString())) << Case;
+        }
+    }
+    void nsisDuplicates() {
+        QFETCH(QJsonObject, Case);
+        QTemporaryDir Input, Individual, Batch, Selected, Copied;
+        const auto Path = Input.filePath("installer.exe");
+        const auto Installer = QByteArray::fromBase64(Case["data"].toString().toLatin1());
+        QCOMPARE(QCryptographicHash::hash(Installer, QCryptographicHash::Sha256).toHex(), Case["sha256"].toString().toLatin1());
+        QVERIFY(Put(Path, Installer));
+        auto Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions()); OperationContext Context;
+        auto Listing = Backend->Enumerate(Path.toStdString(), false, Context);
+        QVERIFY2(Listing.HasValue(), Listing.HasValue() ? "" : Listing.Failure().code_.c_str());
+        std::vector<ArchiveHeader> Headers; std::set<std::string> Names;
+        for (;;) {
+            auto Page = Listing.Value()->Next(1, Context); QVERIFY(Page.HasValue());
+            for (const auto& H : Page.Value().entries_) { QVERIFY(Names.insert(H.name_).second); Headers.push_back(H); }
+            if (Page.Value().end_) break;
+        }
+        Listing.Value().reset(); QCOMPARE(Headers.size(), size_t(5));
+        std::vector<uint32_t> Ordinals; QMap<uint32_t, QByteArray> Contents;
+        const auto Payloads = QJsonDocument::fromJson(Read(QFINDTESTDATA("fixtures/nsis-duplicates.json")))["payloads"].toObject();
+        std::multiset<QByteArray> Expected, Actual;
+        for (const auto& Key : Payloads.keys()) Expected.insert(Payloads[Key].toString().toUtf8());
+        bool Script = false, AliasCollision = false;
+        for (uint32_t I = 0; I < Headers.size(); ++I) {
+            const auto& H = Headers[I]; QVERIFY(!H.directory_); Ordinals.push_back(I);
+            auto Done = Backend->Extract(Path.toStdString(), H, Individual.filePath(QString::number(I)).toStdString(), Context);
+            QVERIFY2(Done.HasValue(), Done.HasValue() ? "" : Done.Failure().code_.c_str());
+            const auto Bytes = Read(Individual.filePath(QString::number(I))); Contents[I] = Bytes;
+            QCOMPARE(H.size_, uint64_t(Bytes.size()));
+            if (H.name_ == "[NSIS].nsi") { Script = true; QVERIFY(Bytes.contains("File")); QVERIFY(Bytes.contains("app.bin")); }
+            else {
+                Actual.insert(Bytes);
+                if (Bytes == Payloads["collision.bin"].toString().toUtf8()) QVERIFY(H.name_.ends_with("app [NSIS 0].bin"));
+                if (Bytes == Payloads["x86.bin"].toString().toUtf8()) { QVERIFY(H.name_.ends_with("app [NSIS 0-1].bin")); AliasCollision = true; }
+            }
+        }
+        QVERIFY(Script); QVERIFY(AliasCollision); QVERIFY(Actual == Expected);
+        auto All = Backend->ExtractAll(Path.toStdString(), Batch.path().toStdString(), Context);
+        QVERIFY2(All.HasValue(), All.HasValue() ? "" : All.Failure().code_.c_str());
+        auto Picked = Backend->ExtractSelected(Path.toStdString(), Selected.path().toStdString(), {1}, Context);
+        QVERIFY2(Picked.HasValue(), Picked.HasValue() ? "" : Picked.Failure().code_.c_str());
+        QCOMPARE(Read(Selected.filePath("1.bin")), Contents[1]); QVERIFY(!QFileInfo::exists(Selected.filePath("0.bin")));
+        auto Stream = Backend->OpenReadSession(Path.toStdString(), Ordinals, Context); QVERIFY(Stream.HasValue());
+        for (const auto I : Ordinals) {
+            QCOMPARE(Read(Batch.filePath(QString::number(I) + ".bin")), Contents[I]);
+            QByteArray Bytes;
+            for (;;) {
+                auto Chunk = Stream.Value()->Read(I, 257, Context); QVERIFY2(Chunk.HasValue(), Chunk.HasValue() ? "" : Chunk.Failure().code_.c_str());
+                Bytes.append(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()), qsizetype(Chunk.Value().bytes_.size()));
+                if (Chunk.Value().eof_) break;
+                QVERIFY(!Chunk.Value().bytes_.empty());
+            }
+            QCOMPARE(Bytes, Contents[I]);
+        }
+        Stream.Value().reset();
+        // Exercise navigation identity, preview reads and the real copy job,
+        // not just the SDK adapter. Equal original names must reach distinct outputs.
+        const Locator Root{LocatorKind::Archive, Path.toStdString(), {{"wcx", "/"}}};
+        auto Provider = MakeWcxReadProvider({}, Root, {}, Backend);
+        auto Cursor = Provider->Enumerate(Root, Context).get(); QVERIFY(Cursor.HasValue());
+        auto Page = Cursor.Value()->Next(32, Context).get(); QVERIFY(Page.HasValue()); Cursor.Value().reset();
+        hc::operations::FileOperationRequest Request;
+        Request.destination_ = {LocatorKind::Local, Copied.path().toStdString()};
+        Request.destinationWriter_ = MakeNativeWritableStorage(LocatorKind::Local, MakeNativeReadProvider(LocatorKind::Local));
+        for (uint32_t I = 0; I < Headers.size(); ++I) {
+            auto At = Root; At.nesting_.back().entry_ = '/' + Headers[I].name_;
+            auto Entry = Provider->Resolve(At, Context).get(); QVERIFY(Entry.HasValue());
+            QCOMPARE(Entry.Value().hints_.at("ordinal"), std::to_string(I));
+            auto Reader = Provider->OpenRead(Entry.Value().id_, Context).get(); QVERIFY(Reader.HasValue());
+            QByteArray Bytes;
+            for (;;) { auto Chunk = Reader.Value()->Read(257, Context).get(); QVERIFY(Chunk.HasValue());
+                Bytes.append(reinterpret_cast<const char*>(Chunk.Value().bytes_.data()), qsizetype(Chunk.Value().bytes_.size()));
+                if (Chunk.Value().eof_) break; QVERIFY(!Chunk.Value().bytes_.empty()); }
+            QCOMPARE(Bytes, Contents[I]); Reader.Value().reset();
+            Request.sources_.push_back({Entry.Value(), Provider, {}});
+        }
+        auto Prepared = hc::operations::PrepareFileOperation(std::move(Request), Context); QVERIFY(Prepared.HasValue());
+        hc::operations::JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 1);
+        auto Job = Scheduler.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)); QVERIFY(Job.HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+        const auto Result = Job.Value().completion_.get();
+        QVERIFY2(Result.snapshot_.state_ == hc::operations::JobState::Completed, Result.snapshot_.error_ ? Result.snapshot_.error_->code_.c_str() : "incomplete NSIS extraction");
+        QVERIFY(Result.cleanupErrors_.empty());
+        for (uint32_t I = 0; I < Headers.size(); ++I)
+            QCOMPARE(Read(Copied.filePath(QFileInfo(QString::fromStdString(Headers[I].name_)).fileName())), Contents[I]);
+        auto Tested = Backend->Enumerate(Path.toStdString(), true, Context); QVERIFY(Tested.HasValue());
+        auto Verified = Tested.Value()->Next(32, Context); QVERIFY(Verified.HasValue()); Tested.Value().reset();
+        auto Changed = Backend->Update({Path.toStdString(), Input.path().toStdString(), {}, {Headers[0].name_}}, Context);
+        QVERIFY(!Changed.HasValue()); QCOMPARE(Changed.Failure().category_, ErrorCategory::Unsupported);
+        QCOMPARE(Read(Path), Installer);
+    }
     void smbArchiveMetadata() {
         using namespace hc::operations;
         const auto Target = qEnvironmentVariable("HC_SMB_EXTRACT_ROOT");

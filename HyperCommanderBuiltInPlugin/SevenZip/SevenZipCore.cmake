@@ -61,5 +61,6 @@ qt_add_library(hc_sevenzip_core SHARED ${SOURCES})
 set_target_properties(hc_sevenzip_core PROPERTIES AUTOMOC OFF AUTOUIC OFF OUTPUT_NAME 7z CXX_STANDARD 17)
 set_property(TARGET hc_sevenzip_core PROPERTY HC_SOURCE_DIRECTORY "${HC_7ZIP_SOURCE}")
 set_property(TARGET hc_sevenzip_core PROPERTY HC_SOURCE_ARCHIVE "${HC_7ZIP_ARCHIVE}")
-target_compile_definitions(hc_sevenzip_core PRIVATE UNICODE _UNICODE Z7_EXTERNAL_CODECS)
+# Include upstream's reconstructed NSIS script and license entries in the isolated engine.
+target_compile_definitions(hc_sevenzip_core PRIVATE UNICODE _UNICODE Z7_EXTERNAL_CODECS NSIS_SCRIPT)
 target_link_libraries(hc_sevenzip_core PRIVATE oleaut32 advapi32 user32)
