@@ -28,19 +28,23 @@ HyperCommander
    * 압축 플러그인( ALZ / EGG ) 
 * 시스템 기능 : 
 * 작업 관리자( 프로세스 관리 / 서비스 관리 )
+* 유니코드 지원( NFC, NFD 한글 파일이름 처리 )
+* 오디오 재생
 
 HyperViewer/HyperEditor
 -----------------------
 
 * PDF 뷰어 / 편집
 * 텍스트 뷰어 / 편집
+* Markdown 뷰어 / 편집
 * 이미지 뷰어 / 편집 ( 코믹 모드 / 웹툰 모드 지원 )
-* EPUB 뷰어 / 편집
+* EPUB 뷰어 / 편집( 생성 포함 )
 
 HyperCompare
 ------------
 
 * 2way 파일 / 폴더 비교
+* 이진 파일 비교 ( Hex Compare )
 * 3way 파일 비교
 
 개발 환경
