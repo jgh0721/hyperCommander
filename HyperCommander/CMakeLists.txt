@@ -94,6 +94,8 @@ set(PROJECT_UI_SRC
         UIs/dlgMain.hpp
         UIs/dlgMain.ui
         UIs/dlgOpts.cpp
+        UIs/columnProfileSync.cpp
+        UIs/columnProfileSync.hpp
         UIs/dlgOpts.hpp
         UIs/dlgOpts.ui
         UIs/audioTitleWidget.cpp
@@ -179,6 +181,7 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/settings/appSettings.hpp
         ../UniqueLibs/columnWidthSettings.hpp
         ../UniqueLibs/qtitanColumnAdapter.hpp
+        ../UniqueLibs/qtitanGrouping.hpp
         ../UniqueLibs/columnAutoSelection.hpp
         ../UniqueLibs/qtColumnProfileEditor.cpp
         ../UniqueLibs/qtColumnProfileEditor.hpp
@@ -227,6 +230,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/solAdminWIthIPC.hpp
         ../UniqueLibs/solFavoriteDirMgr.cpp
         ../UniqueLibs/solFavoriteDirMgr.hpp
+        ../UniqueLibs/shellFolderToken.cpp
+        ../UniqueLibs/shellFolderToken.hpp
         ../UniqueLibs/solMultiLang_Defs.hpp
         ../UniqueLibs/solTCPluginMgr.cpp
         ../UniqueLibs/solTCPluginMgr.hpp

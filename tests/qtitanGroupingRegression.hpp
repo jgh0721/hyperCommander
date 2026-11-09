@@ -4,6 +4,68 @@
 
 namespace hc::tests
 {
+inline void GridGroupingSummaryExperiment()
+{
+    constexpr auto RawRole = Qt::ItemDataRole(Qt::UserRole + 20);
+    QStandardItemModel Model;
+    for (int I = 1; I <= 3; ++I) {
+        auto* Group = new QStandardItem("caption");
+        Group->setData("key", Qt::UserRole + 10);
+        Group->setData(0, Qt::UserRole + 11);
+        Group->setData("caption", Qt::UserRole + 12);
+        auto* Size = new QStandardItem("formatted size");
+        Size->setData(I * 100, RawRole);
+        Model.appendRow({Group, Size});
+    }
+    Qtitan::Grid Grid; Grid.setViewType(Qtitan::Grid::BandedTableView);
+    auto* View = Grid.view<Qtitan::GridBandedTableView>();
+    View->options().setAutoCreateColumns(false); View->setModel(&Model); View->addBand("files");
+    auto* Group = View->addColumn(0, "group"); Group->setBandIndex(0);
+    auto* Size = View->addColumn(1, "size"); Size->setBandIndex(0); Size->setWidth(560);
+    Group->dataBinding()->setGroupingRoles(Qt::UserRole + 10, Qt::UserRole + 11, Qt::UserRole + 12);
+    Size->dataBinding()->setSummaryRole(RawRole); Size->setGroupSummary(Group, Qtitan::GridSummary::Sum);
+    QSignalSpy Changed(View, SIGNAL(groupingChanged()));
+    Group->setGroupIndex(0); Group->setVisible(false);
+    View->options().setGroupSummaryPlace(Qtitan::GridViewOptions::SummaryRow);
+    View->modelController()->refresh(); View->expandAll();
+    QCOMPARE(View->modelController()->groupRows().size(), 1);
+    QVERIFY(!Group->isVisible()); QVERIFY(Changed.count() > 0);
+    auto* Row = View->getRow(0).modelGroup();
+    const auto& Summary = View->modelController()->summary()->getGroupSummaryValue(Row, Size->dataBinding());
+    QCOMPARE(Summary.role, RawRole); QCOMPARE(Summary.value.toLongLong(), 600);
+    QCOMPARE(View->getRow(0).groupText().toString(), QString("caption"));
+    Grid.resize(640, 300); Grid.show(); QVERIFY(QTest::qWaitForWindowExposed(&Grid));
+    QVERIFY(!View->groupCaptionProvider());
+    const auto Legacy = Grid.viewport()->grab().toImage(); QVERIFY(!Legacy.isNull());
+    int CaptionCalls = 0;
+    View->setGroupCaptionProvider([&](const Qtitan::GridRow&) { ++CaptionCalls; return QString("CUSTOM SUMMARY 600"); });
+    const auto Custom = Grid.viewport()->grab().toImage(); QVERIFY(CaptionCalls > 0); QVERIFY(Custom != Legacy);
+    View->setGroupCaptionProvider({}); QVERIFY(!View->groupCaptionProvider());
+    QCOMPARE(Grid.viewport()->grab().toImage(), Legacy);
+    qInfo("P4 experiment: raw Sum=600, hidden group column, SummaryRow, groupingChanged, caption provider and unchanged legacy fallback passed.");
+}
+inline void GridNestedGroupingRegression()
+{
+    QStandardItemModel Model;
+    const auto Append = [&](const QString& Parent, const QString& Child, int Id) {
+        Model.appendRow({new QStandardItem(Parent), new QStandardItem(Child), new QStandardItem(QString::number(Id))});
+    };
+    Append("a", "same", 1); Append("a", "other", 2); Append("b", "same", 3);
+    Qtitan::Grid Grid; Grid.setViewType(Qtitan::Grid::BandedTableView);
+    auto* View = Grid.view<Qtitan::GridBandedTableView>(); View->options().setAutoCreateColumns(false);
+    View->setModel(&Model); View->addBand("files");
+    for (int I = 0; I < 3; ++I) View->addColumn(I, QString::number(I))->setBandIndex(0);
+    View->beginUpdate(); static_cast<Qtitan::GridColumn*>(View->getColumnByModelColumn(0))->setGroupIndex(0); static_cast<Qtitan::GridColumn*>(View->getColumnByModelColumn(1))->setGroupIndex(1); View->endUpdate();
+    auto* Controller = View->modelController(); Controller->setIncrementalSortThreshold(1.0); View->expandAll();
+    QCOMPARE(Controller->groupRows().size(), 5);
+    QVERIFY(Controller->setGroupExpanded(1, false));
+    Append("b", "other", 4);
+    const auto Inserted = GridGroupSnapshot(View); Controller->refresh(); QCOMPARE(GridGroupSnapshot(View), Inserted);
+    Model.setData(Model.index(0, 0), "b");
+    const auto Moved = GridGroupSnapshot(View); Controller->refresh(); QCOMPARE(GridGroupSnapshot(View), Moved);
+    Model.removeRow(1);
+    const auto Removed = GridGroupSnapshot(View); Controller->refresh(); QCOMPARE(GridGroupSnapshot(View), Removed);
+}
 inline void GridIndependentGroupingRegression()
 {
     constexpr int KeyRole = Qt::UserRole + 10, OrderRole = Qt::UserRole + 11, TextRole = Qt::UserRole + 12;

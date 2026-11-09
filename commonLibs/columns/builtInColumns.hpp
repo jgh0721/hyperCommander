@@ -2,6 +2,7 @@
 #include "UniqueLibs/productDefaults.hpp"
 #include "columnContracts.hpp"
 #include "metadataColumns.hpp"
+#include "columnProfileStorage.hpp"
 
 namespace hc::columns
 {
@@ -10,10 +11,18 @@ namespace hc::columns
     inline const QUuid& ReferenceProfileId = hc::defaults::columnPolicy::ReferenceProfileId;
     inline const QUuid& ReferenceTwoLineProfileId = hc::defaults::columnPolicy::ReferenceTwoLineProfileId;
     inline ColumnProfile DefaultProfile() { return hc::defaults::columnPolicy::DefaultColumnProfile(); }
+    inline const QUuid& DownloadsProfileId = hc::defaults::columnPolicy::DownloadsProfileId;
+    inline ColumnProfile DownloadsProfile() { return hc::defaults::columnPolicy::DownloadsColumnProfile(); }
+    inline QJsonObject WithBuiltInProfiles(QJsonObject Library)
+    {
+        for (const auto& Profile : {DefaultProfile(), DownloadsProfile()})
+            if (!Library.contains(IdText(Profile.id_))) Library[IdText(Profile.id_)] = EncodeProfile(Profile);
+        return Library;
+    }
     inline ColumnProfile ReferenceProfile(bool TwoLine = false) { return hc::defaults::columnPolicy::ReferenceColumnProfile(TwoLine); }
     inline bool IsBuiltInProfile(const QUuid& Id)
     {
-        return Id == BuiltInProfileId || Id == ReferenceProfileId || Id == ReferenceTwoLineProfileId;
+        return Id == BuiltInProfileId || Id == DownloadsProfileId || Id == ReferenceProfileId || Id == ReferenceTwoLineProfileId;
     }
     struct FileSnapshot
     {

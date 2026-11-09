@@ -20,18 +20,23 @@ public:
     const hc::columns::ColumnProfile& Profile() const { return draft_; }
     QJsonObject Library() const;
     bool Dirty() const { return dirty_; }
-    bool NewTabDefault() const;
-    bool ApplyCurrent() const { return scope_->currentIndex() != 3; }
-    bool BothPanels() const { return scope_->currentIndex() == 2; }
+    struct ApplyTargets { bool current_, opposite_, defaultThis_, defaultOpposite_, automatic_, sync_; };
+    ApplyTargets Targets() const;
+    bool TargetsTouched() const { return targetsTouched_; }
+    void SetPanes(const QString& This, const QString& Opposite);
+    void SetSyncCount(int Count) { syncCount_ = Count; updateApplySummary(); }
     bool ValidateDraft();
     void LoadAutoSelection(const QJsonObject& Policy, const QJsonObject& Colors, bool AutomaticTab);
     QJsonObject AutoSelection() const;
     void SetAutoColors(const QJsonObject& Colors);
-    bool AutomaticTab() const { return automaticTab_->isChecked(); }
+    void SetCurrentLocation(const QString& Path) { currentLocation_ = Path; refreshAutoVerdict(); }
+    bool AutomaticTab() const { return applyAuto_->isChecked(); }
     void SetPreviewWidth(int Width) { previewWidth_->setValue(Width); }
     void SetSamples(QVector<hc::columns::PreviewSample> Current, QVector<hc::columns::PreviewSample> Selected);
     void SetContextFields(QVector<hc::columns::FieldDefinition> Fields);
-    void MarkSaved() { dirty_ = false; }
+    void MarkSaved() { dirty_ = targetsTouched_ = false; updateApplySummary(); }
+signals:
+    void ProfileSelected();
 protected:
     void resizeEvent(QResizeEvent* Event) override;
     bool eventFilter(QObject* Watched, QEvent* Event) override;
@@ -64,10 +69,31 @@ private:
     hc::columns::QueryEngine::Loader previewLoader() const;
     void cloneProfile();
     void refreshProfiles();
+    void updateApplySummary();
+    bool targetsTouched_ = false;
+    int syncCount_ = 0;
+    QUuid currentProfileId_;
+    QCheckBox *applyCurrent_, *applyOpposite_, *applyDefaultThis_, *applyDefaultOpposite_, *applySync_;
+    QRadioButton *applyAuto_, *applyFixed_;
+    QLabel *applySummary_, *applyTitle_;
     void appendAutoRule(const QJsonObject& Rule);
+    enum AutoColumn { AutoEnabled, AutoProfile, AutoPath, AutoResolved, AutoGroup, AutoPercent };
+    void refreshAutoVerdict();
+    QString currentLocation_;
+    QLabel* autoVerdict_ = nullptr;
+    QTimer autoResolveTimer_;
     QVector<hc::columns::FieldDefinition> availableFields() const;
     QVector<hc::columns::FieldDefinition> contextFields_;
     void refreshSorts(int Row = 0);
+    void loadGrouping();
+    void storeGrouping();
+    QComboBox *groupColumn_ = nullptr, *groupMode_ = nullptr, *groupOrder_ = nullptr;
+    QButtonGroup* groupExpand_ = nullptr;
+    QCheckBox* hideGroupedColumn_ = nullptr;
+    QCheckBox *groupCount_ = nullptr, *groupSize_ = nullptr, *groupLatest_ = nullptr, *groupsHeader_ = nullptr;
+    QVector<QComboBox*> groupColumns_, groupModes_, groupOrders_;
+    QVector<QWidget*> extraGroupRows_;
+    QPushButton* addGroup_ = nullptr;
     void refreshFields();
     void refreshScripts(int Row = 0);
     void loadScript();
@@ -82,14 +108,14 @@ private:
     bool dirty_ = false;
     bool writable_ = true;
     int row_ = -1;
-    QComboBox *scope_, *layout_, *field_, *alignment_, *sizeFormat_, *dateFormat_, *unit_, *widthMode_, *sort_, *sortOrder_;
+    QComboBox *layout_, *field_, *alignment_, *sizeFormat_, *dateFormat_, *unit_, *widthMode_, *sort_, *sortOrder_;
     QLineEdit *profileTitle_, *title_, *template_;
     QComboBox* sortField_;
     QListWidget* sortRules_;
     QSpinBox* precision_;
     QDoubleSpinBox *width_, *minimum_, *maximum_;
     QCheckBox *primary_, *visible_, *splitNameExtension_;
-    QCheckBox *autoSelection_, *automaticTab_;
+    QCheckBox *autoSelection_;
     QTableWidget* autoRules_;
     QJsonObject autoPolicy_, autoColors_;
     QListWidget* columns_;

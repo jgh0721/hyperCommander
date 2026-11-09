@@ -25,7 +25,7 @@
     },
     {
       "id": "HC-QTN-010",
-      "purpose": "Independent group identity, order and caption; stable incremental grouping without changing file sort roles"
+      "purpose": "Independent group identity, order and caption; stable incremental grouping; optional application group caption provider"
     },
     {
       "id": "HC-QTN-011",
@@ -46,7 +46,10 @@
         "setCutRows",
         "isRowCut",
         "setSortOrder(Qtitan::SortOrder order, bool Numeric)",
-        "setCaptionIndent"
+        "setCaptionIndent",
+        "GroupCaptionProvider",
+        "setGroupCaptionProvider",
+        "groupCaptionProvider() const"
       ],
       "src/grid/QtnGridModelController.h": [
         "setIncrementalSortThreshold",

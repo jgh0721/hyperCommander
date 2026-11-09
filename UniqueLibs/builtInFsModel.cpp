@@ -278,7 +278,7 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
     });
     if (GroupOnly) {
         const auto& Definition = columnView_.VecColumns[Col].definition_;
-        const auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, grouping_.mode_, readField(vecNode_[Row], Definition.fieldId_, false), groupingDate_, groupingZone_);
+        const auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, groupingModes_.value(Definition.id_, "value"), readField(vecNode_[Row], Definition.fieldId_, false), groupingDate_, groupingZone_);
         for (auto& Role : roleDataSpan) Role.setData(Role.role() == GroupKeyRole ? QVariant(Value.key_)
             : Role.role() == GroupOrderRole ? Value.order_ : QVariant(Value.text_));
         return;
@@ -297,9 +297,12 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
         switch( Role )
         {
+            case hc::columns::GroupEntryRole: RoleWith.setData(Item->Name_ != ".."); break;
+            case hc::columns::GroupSizeRole: RoleWith.setData(readField(Item, "file.size", false).Raw()); break;
+            case hc::columns::GroupLatestRole: RoleWith.setData(readField(Item, "file.modified", false).Raw()); break;
             case GroupKeyRole: case GroupOrderRole: case GroupTextRole: {
                 const auto& Definition = columnView_.VecColumns[Col].definition_;
-                const auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, grouping_.mode_, readField(Item, Definition.fieldId_, false), groupingDate_, groupingZone_);
+                const auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, groupingModes_.value(Definition.id_, "value"), readField(Item, Definition.fieldId_, false), groupingDate_, groupingZone_);
                 RoleWith.setData(Role == GroupKeyRole ? QVariant(Value.key_) : Role == GroupOrderRole ? Value.order_ : QVariant(Value.text_));
             } break;
             case GridSortRole: {
@@ -2604,9 +2607,15 @@ void CFSModel::ResumeColumnQueries()
 
 void CFSModel::SetGrouping(const hc::columns::GroupingState& State)
 {
-    if (grouping_ == State) return;
+    SetGroupingLevels(State.enabled_ ? QVector<hc::columns::GroupingState>{State} : QVector<hc::columns::GroupingState>{});
+}
+void CFSModel::SetGroupingLevels(const QVector<hc::columns::GroupingState>& Levels)
+{
+    QHash<QUuid, QString> Modes; for (const auto& Level : Levels) Modes[Level.columnId_] = Level.mode_;
+    const auto State = Levels.isEmpty() ? hc::columns::GroupingState{} : Levels.front();
+    if (grouping_ == State && groupingModes_ == Modes) return;
     emit ColumnValuesChanging();
-    grouping_ = State; groupingDate_ = QDate::currentDate(); groupingZone_ = QTimeZone::systemTimeZone();
+    grouping_ = State; groupingModes_ = Modes; groupingDate_ = QDate::currentDate(); groupingZone_ = QTimeZone::systemTimeZone();
     refreshColumnSortRanks();
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GroupKeyRole, GroupOrderRole, GroupTextRole, GridSortRole});
     emit ColumnValuesChanged();

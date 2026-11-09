@@ -3,6 +3,7 @@
 #include "UniqueLibs/productDefaults.hpp"
 #include "startupTrace.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
+#include "UniqueLibs/columnAutoSelection.hpp"
 
 #include "colorSchemeMgr.hpp"
 #include "UniqueLibs/commandUiBridge.hpp"
@@ -759,6 +760,20 @@ void QMainUI::initialize()
     });
     setActivePanel(currentPanelIndex);
 
+    auto& ColumnSettings = hc::settings::AppSettings();
+    if (!ColumnSettings.Editing()) {
+        const auto Previous = ColumnSettings.Object();
+        auto Columns = ColumnSettings.Read(hc::settings::Section::Columns).toObject();
+        QHash<QString, QString> ResolvedFolders;
+        for (const auto& Value : Columns[hc::columns::AutoSelectionKey].toObject()["rules"].toArray()) {
+            const auto Token = hc::shell::ParseFolderToken(Value.toObject()["path"].toString());
+            if (!ResolvedFolders.contains(Token.token_) && Token.kind_ != hc::shell::FolderToken::Kind::None && Token.kind_ != hc::shell::FolderToken::Kind::Invalid)
+                ResolvedFolders[Token.token_] = hc::shell::ResolveFolderToken(Token).path_;
+        }
+        if (hc::columns::MigrateDownloadsColumnSet(Columns, hc::shell::ResolveKnownFolderPath(QUuid("{374DE290-123F-4565-9164-39C4925E467B}")), ResolvedFolders)) {
+            if (!ColumnSettings.Put(hc::settings::Section::Columns, Columns) || !ColumnSettings.Commit()) ColumnSettings.Replace(Previous);
+        }
+    }
     workspace_ = hc::workspace::Load(hc::settings::WorkspaceSettings()); workspaceLoaded_ = true;
     if (workspace_.exists_ && workspace_.writable_ && hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["restoreWorkspace"].toBool(hc::defaults::DefaultValue("general/restoreWorkspace").toBool())) RestoreWorkspace(workspace_.state_);
     else {

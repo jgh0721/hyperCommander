@@ -32,6 +32,7 @@
 
 #include "Components/cmpView.hpp"
 #include "cmpPanel.hpp"
+#include "columnProfileSync.hpp"
 #include "UniqueLibs/qtitanColumnAdapter.hpp"
 #include "UniqueLibs/qtColumnProfileEditor.hpp"
 #include "UniqueLibs/columnAutoSelection.hpp"
@@ -341,6 +342,7 @@ void QMainOpts::SetListView(CGridView* View)
         .arg(View->ListModeOverride() == "inherit" ? tr("설정 기본값 따름") : View->ListMode()) :
         tr("기본값은 이를 따르는 탭과 새 탭에 적용합니다. 패널 버튼에서 선택한 보기는 탭별로 유지합니다."));
     const auto* Model = View ? qobject_cast<CFSModel*>(View->BaseModel()) : nullptr;
+    columnEditor_->SetCurrentLocation(Model ? Model->GetCurrentPathWithRoot() : QString{});
     QStringList Selected = View ? View->CaptureSelection() : QStringList{};
     if (Selected.isEmpty() && View && !View->CaptureFocus().isEmpty()) Selected.append(View->CaptureFocus());
     columnEditor_->SetSamples(Model ? Model->ColumnSamples() : QVector<hc::columns::PreviewSample>{}, Model && !Selected.isEmpty() ? Model->ColumnSamples(Selected) : QVector<hc::columns::PreviewSample>{});
@@ -357,6 +359,11 @@ void QMainOpts::SetListView(CGridView* View)
         View && View->ColumnWidths()->Writable());
     columnEditor_->LoadAutoSelection(hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()[hc::columns::AutoSelectionKey].toObject(),
         fileColors_->Document(), View ? View->AutomaticColumns() : true);
+    bool Right = false;
+    if (View && parentWidget()) for (auto* Panel : parentWidget()->window()->findChildren<CmpPanel*>())
+        if (Panel->isAncestorOf(View)) Right = Panel->objectName() == "cmpRightPanel";
+    columnEditor_->SetPanes(Right ? tr("오른쪽") : tr("왼쪽"), Right ? tr("왼쪽") : tr("오른쪽"));
+    emit columnEditor_->ProfileSelected();
 }
 
 void QMainOpts::ShowListSettingsPage()
@@ -425,25 +432,35 @@ bool QMainOpts::SaveSettings()
     Options["showJobDetails"] = findChild<QCheckBox*>("hc.settings.showJobDetails")->isChecked();
     hc::settings::AppSettings().Put(hc::settings::Section::Options, Options);
     const bool ColumnsChanged = listView_ && columnEditor_->Dirty();
-    QVector<QPointer<CGridView>> Targets; QVector<hc::columns::ColumnProfile> PreviousProfiles;
-    if (ColumnsChanged && columnEditor_->ApplyCurrent()) {
-        Targets.append(listView_);
-        if (columnEditor_->BothPanels() && parentWidget()) for (auto* Panel : parentWidget()->window()->findChildren<CmpPanel*>()) {
+    const bool ColumnsRequested = listView_ && (ColumnsChanged || columnEditor_->TargetsTouched());
+    const auto Apply = columnEditor_->Targets();
+    QVector<QPointer<CGridView>> Targets; QVector<hc::columns::ViewSnapshot> PreviousViews;
+    QHash<QUuid, hc::columns::ColumnProfile> ChangedProfiles;
+    CGridView* Opposite = nullptr;
+    if (listView_ && parentWidget()) for (auto* Panel : parentWidget()->window()->findChildren<CmpPanel*>())
+        if (!Panel->isAncestorOf(listView_)) {
             auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
-            if (View && View != listView_) Targets.append(View);
+            if (View && View != listView_) { Opposite = View; break; }
         }
-        for (const auto& View : Targets) {
-            if (!View || !View->BaseModel() || !View->ColumnWidths()->Writable()) { ShowListSettingsPage(); return false; }
-            PreviousProfiles.append(View->ColumnProfile());
-        }
+    if (ColumnsRequested) {
+        if (Apply.current_) Targets.append(listView_);
+        if (Apply.opposite_ && Opposite) Targets.append(Opposite);
+        for (const auto& View : Targets) if (View) hc::columns::CaptureView(View, PreviousViews);
     }
-    if (ColumnsChanged) {
+    if (ColumnsRequested) {
         columnEditor_->SetAutoColors(fileColors_->Document());
         if (!columnEditor_->ValidateDraft()) { ShowListSettingsPage(); return false; }
         auto Columns = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject();
-        Columns["ColumnsV2/Profiles"] = columnEditor_->Library();
-        Columns[hc::columns::AutoSelectionKey] = columnEditor_->AutoSelection();
-        if (columnEditor_->NewTabDefault()) Columns["ColumnsV2/Defaults/" + listView_->ColumnWidths()->PaneKey()] = hc::columns::EncodeProfile(columnEditor_->Profile());
+        if (ColumnsChanged) {
+            const auto Before = hc::columns::WithBuiltInProfiles(PreviousSettings["columns"].toObject()["ColumnsV2/Profiles"].toObject());
+            const auto After = columnEditor_->Library();
+            for (auto It = After.begin(); It != After.end(); ++It) if (Before[It.key()] != It.value())
+                if (const auto Profile = hc::columns::DecodeProfile(It.value().toObject())) ChangedProfiles.insert(Profile->id_, *Profile);
+            Columns["ColumnsV2/Profiles"] = After;
+            Columns[hc::columns::AutoSelectionKey] = columnEditor_->AutoSelection();
+        }
+        if (Apply.defaultThis_) Columns["ColumnsV2/Defaults/" + listView_->ColumnWidths()->PaneKey()] = hc::columns::EncodeProfile(columnEditor_->Profile());
+        if (Apply.defaultOpposite_ && Opposite) Columns["ColumnsV2/Defaults/" + Opposite->ColumnWidths()->PaneKey()] = hc::columns::EncodeProfile(columnEditor_->Profile());
         hc::settings::AppSettings().Put(hc::settings::Section::Columns, Columns);
     }
     auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
@@ -543,9 +560,12 @@ bool QMainOpts::SaveSettings()
             hc::ui::MessageDialog::warning(this, tr("설정 복구 실패"), tr("비밀번호 저장 실패 후 기존 설정을 복구하지 못했습니다. 디스크에서 다시 읽어 주세요."));
         return false;
     }
-    if (ColumnsChanged) {
-        for (int Index = 0; Index < Targets.size(); ++Index) if (!Targets[Index] || !Targets[Index]->ApplyColumnProfile(columnEditor_->Profile())) {
-            for (int Restore = 0; Restore < Index; ++Restore) if (Targets[Restore]) Targets[Restore]->ApplyColumnProfile(PreviousProfiles[Restore]);
+    if (ColumnsRequested) {
+        QSet<CGridView*> Skip; for (const auto& View : Targets) if (View) Skip.insert(View);
+        bool Applied = !Apply.sync_ || hc::columns::SyncOpenViews(parentWidget() ? parentWidget()->window() : nullptr, ChangedProfiles, Skip, PreviousViews);
+        if (Applied) for (const auto& View : Targets) if (!View || !View->ApplyColumnProfile(columnEditor_->Profile())) { Applied = false; break; }
+        if (!Applied) {
+            hc::columns::RestoreViews(PreviousViews);
             const bool Restored = hc::settings::AppSettings().Replace(PreviousSettings) && hc::settings::AppSettings().Commit();
             hc::ui::MessageDialog::warning(this, tr("컬럼 적용 실패"), Restored ? tr("기존 설정을 복구했습니다. 편집 내용을 확인한 후 다시 적용하세요.") : tr("패널 적용 및 설정 복구에 실패했습니다. 디스크 설정을 다시 읽어 주세요.")); return false;
         }
@@ -553,14 +573,14 @@ bool QMainOpts::SaveSettings()
 
     }
     if (menuSettings_ && !menuSettings_->CommitPrepared()) {
-        for (int I = 0; I < Targets.size(); ++I) if (Targets[I]) Targets[I]->ApplyColumnProfile(PreviousProfiles[I]);
+        hc::columns::RestoreViews(PreviousViews);
         const bool Restored = hc::settings::AppSettings().Replace(PreviousSettings) && hc::settings::AppSettings().Commit();
         hc::ui::MessageDialog::warning(this, tr("메뉴 저장 실패"), Restored ? tr("기존 설정과 메뉴를 유지했습니다. 메뉴 페이지에서 오류를 확인하세요.") : tr("메뉴 저장 및 설정 복구에 실패했습니다. 디스크 설정을 확인하세요.")); return false;
     }
     TyStFileSetMgr::GetInstance()->Refresh(); TyStPlugInMgr::GetInstance()->Refresh();
     TyStCommandMgr::GetInstance()->Refresh();
     if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge()) { Bridge->ReloadMenu(); Bridge->RefreshShortcutLabels(); Bridge->RefreshFunctionBar(); }
-    if (ColumnsChanged) columnEditor_->MarkSaved();
+    if (ColumnsRequested) columnEditor_->MarkSaved();
     if (resetListModeDraft_ && listView_) { listView_->SetListMode("inherit"); resetListModeDraft_ = false; }
     if (thumbnailSettings_->ClearRequested()) {
         for (auto* View : parentWidget()->window()->findChildren<CGridView*>()) View->ClearThumbnailCache();
@@ -785,6 +805,17 @@ void QMainOpts::initialize()
     auto* ColumnsScroll = new QScrollArea(ui.pgCustomColumns); ColumnsScroll->setObjectName("hc.settings.columnsScroll");
     ColumnsScroll->setWidgetResizable(true); ColumnsScroll->setFrameShape(QFrame::NoFrame);
     columnEditor_ = new QtColumnProfileEditor; ColumnsScroll->setWidget(columnEditor_);
+    connect(columnEditor_, &QtColumnProfileEditor::ProfileSelected, this, [this] {
+        int Count = 0; const auto Apply = columnEditor_->Targets(); CGridView* Opposite = nullptr;
+        if (listView_ && parentWidget()) {
+            for (auto* Panel : parentWidget()->window()->findChildren<CmpPanel*>()) if (!Panel->isAncestorOf(listView_))
+                Opposite = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+            for (auto* View : parentWidget()->window()->findChildren<CGridView*>())
+                if (View->ColumnProfile().id_ == columnEditor_->Profile().id_
+                    && !(Apply.current_ && View == listView_) && !(Apply.opposite_ && View == Opposite)) ++Count;
+        }
+        columnEditor_->SetSyncCount(Count);
+    });
     ui.pgCustomColumns->layout()->addWidget(ColumnsScroll);
 
     auto* NavigationPage = new QWidget(ui.stkOpts); NavigationPage->setObjectName("hc.settings.navigation");

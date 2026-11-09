@@ -212,6 +212,9 @@ void CmpPanel::materializeTab(int Index)
     Model->setProperty("hc.tabId", State->workspace_.id_);
     connect(View, &CViewT::sig_NotifyViewActivated, this, &CmpPanel::sig_NotifyPanelActivated);
     connect(View, &CGridView::sigViewSettingsChanged, this, &CmpPanel::sigViewSettingsChanged);
+    connect(View, &CGridView::sigViewSettingsChanged, this, [this, View] {
+        if (retrieveFocusState() && retrieveFocusState()->View == View) processPanelStatusText();
+    });
     connect(View, &CGridView::sigListPresentationChanged, this, [this, View] {
         if (retrieveFocusState() && retrieveFocusState()->View == View) syncPanelChrome();
     });
@@ -1923,11 +1926,14 @@ void CmpPanel::processPanelStatusText()
                            .arg( GetFormattedSizeText( State->SelectedSize, SizeStyle ) ).arg( GetFormattedSizeText( State->footerTotalSize_, SizeStyle ) )
                            .arg( State->SelectedFileCount ).arg( State->footerFileCount_ )
                            .arg( State->SelectedDirectoryCount ).arg( State->footerDirectoryCount_ ) );
+    const auto ColumnSource = static_cast<CGridView*>(State->View)->ColumnSourceText();
+    ui.lblStatus->setText(ui.lblStatus->text() + "\n" + ColumnSource);
     if (status_) {
         const auto* SearchModel = static_cast<CFSModel*>(State->Model);
         if (SearchModel->IsSearchResults()) {
             status_->setLeftText(SearchModel->EverythingStatus());
-            status_->setRightText(tr("%1개 선택").arg(State->SelectedFileCount + State->SelectedDirectoryCount));
+            status_->setRightText(tr("%1개 선택 · %2").arg(State->SelectedFileCount + State->SelectedDirectoryCount).arg(ColumnSource));
+            status_->setToolTip(ui.lblStatus->text());
             return;
         }
         const auto Model = static_cast<CFSModel*>(State->Model);
@@ -1938,7 +1944,7 @@ void CmpPanel::processPanelStatusText()
             ? (Model->LastNavigationError()->category_ == hc::storage::ErrorCategory::Cancelled ? tr("목록 조회 취소 · 다시 시도하십시오") : tr("목록 조회 실패 · 다시 시도하십시오")) :
             tr("파일 %1 / %2개 선택 · %3 / %4").arg(State->SelectedFileCount).arg(State->footerFileCount_)
             .arg(GetFormattedSizeText(State->SelectedSize, SizeStyle), GetFormattedSizeText(State->footerTotalSize_, SizeStyle)));
-        status_->setRightText(Search().isEmpty() ? tr("폴더 %1개").arg(FolderCount) : tr("검색 결과 %1개").arg(std::max(0, State->ProxyModel->rowCount() - ParentCount)));
+        status_->setRightText((Search().isEmpty() ? tr("폴더 %1개").arg(FolderCount) : tr("검색 결과 %1개").arg(std::max(0, State->ProxyModel->rowCount() - ParentCount))) + " · " + ColumnSource);
         status_->setToolTip(ui.lblStatus->text());
     }
 }

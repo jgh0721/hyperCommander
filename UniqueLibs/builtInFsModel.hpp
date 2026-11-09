@@ -67,10 +67,11 @@ public:
     void SetColumnSorts(const QVector<hc::columns::SortDefinition>& Sorts);
     const QVector<hc::columns::SortDefinition>& ColumnSorts() const { return columnSorts_; }
     void SetGrouping(const hc::columns::GroupingState& State);
+    void SetGroupingLevels(const QVector<hc::columns::GroupingState>& Levels);
     void RefreshGroupingDate();
-    static constexpr int GroupKeyRole = Qt::UserRole + 70;
-    static constexpr int GroupOrderRole = Qt::UserRole + 71;
-    static constexpr int GroupTextRole = Qt::UserRole + 72;
+    static constexpr int GroupKeyRole = hc::columns::GroupKeyRole;
+    static constexpr int GroupOrderRole = hc::columns::GroupOrderRole;
+    static constexpr int GroupTextRole = hc::columns::GroupTextRole;
     void CancelColumnQueries();
     void ResumeColumnQueries();
     QVector<hc::columns::FieldDefinition> AvailableColumns() const;
@@ -299,6 +300,7 @@ private:
     mutable bool requestOnlyValues_ = false;
     QVector<int>                    nameSortRanks_, columnSortRanks_;
     hc::columns::GroupingState grouping_;
+    QHash<QUuid, QString> groupingModes_;
     QDate groupingDate_ = QDate::currentDate();
     QTimeZone groupingZone_ = QTimeZone::systemTimeZone();
     QVector<hc::columns::SortDefinition> columnSorts_, completedSorts_, pageSorts_;

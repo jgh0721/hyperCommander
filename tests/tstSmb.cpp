@@ -126,6 +126,7 @@
 #include <AclAPI.h>
 #include "driveProbeFixture.hpp"
 #include "qtitanRegression.hpp"
+#include "qtitanGroupingRegression.hpp"
 #include "filePanelGroupingUi.hpp"
 #include "inlineRenameGeometryUi.hpp"
 #include "colorSchemeMgr.hpp"
@@ -337,6 +338,14 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnQueryOverlayUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "zoneQueryBenchmark"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "columnShellFolderConditionUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "columnProfileGroupingUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "columnRealDownloadsUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "columnGroupingSummaryExperimentUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "columnMultiLevelGroupingUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "columnApplyBarSyncUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "columnGroupingSaveAsDefaultUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "columnDownloadsAutoSwitchUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingViewerUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "realWlxQuickPreviewUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "quickPreviewIndependentDocumentUi"
@@ -5444,6 +5453,278 @@ private slots:
         QTRY_VERIFY(!model(Left)->IsLoading() && !model(Right)->IsLoading());
         QCOMPARE(QDir::cleanPath(Left->CurrentPath()), Directory.path()); QCOMPARE(QDir::cleanPath(Right->CurrentPath()), ActivePane == 1 ? Directory.path() : Other.path());
     }
+    void columnApplyBarSyncUi()
+    {
+        using namespace hc::columns; using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto Columns = Settings.Read(Section::Columns).toObject();
+        auto AutoPolicy = EmptyAutoSelection(); AutoPolicy["enabled"] = true;
+        AutoPolicy["rules"] = QJsonArray{QJsonObject{{"enabled", true}, {"profile", IdText(BuiltInProfileId)}, {"path", "*"}, {"group", ""}, {"percent", 50}}};
+        Columns[AutoSelectionKey] = AutoPolicy; Columns["ColumnsV2/Profiles"] = WithBuiltInProfiles({});
+        QVERIFY(Settings.Put(Section::Columns, Columns)); QVERIFY(Settings.Commit());
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel");
+        hc::workspace::TabState Tab; Tab.id_ = "sync-0"; Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; auto RightTab = Tab; RightTab.id_ = "sync-right"; Pane.tabs_ = {RightTab}; Right->RestoreWorkspace(Pane); Pane.tabs_ = {Tab};
+        Tab.id_ = "sync-1"; Pane.tabs_.append(Tab); Tab.id_ = "sync-2"; Pane.tabs_.append(Tab); Left->RestoreWorkspace(Pane);
+        auto* Tabs = Left->findChild<QTabWidget*>("tabWidget"); QVERIFY(Tabs);
+        QVector<CGridView*> Views;
+        for (int I = 0; I < 3; ++I) { Tabs->setCurrentIndex(I); auto* View = static_cast<CGridView*>(Left->GetFocusView(I)); QVERIFY(View); QTRY_VERIFY(!View->BaseModel()->IsLoading()); Views.append(View); }
+        Tabs->setCurrentIndex(0); auto* Current = Views[0]; auto* Sync = Views[1]; auto* Other = Views[2];
+        auto* Opposite = static_cast<CGridView*>(Right->GetFocusView(0)); QTRY_VERIFY(!Opposite->BaseModel()->IsLoading());
+        const auto Profile = DefaultProfile();
+        QVERIFY(Current->ApplyColumnProfile(Profile)); QVERIFY(Sync->ApplyColumnProfile(Profile)); QVERIFY(Opposite->ApplyColumnProfile(Profile)); QVERIFY(Other->ApplyColumnProfile(ReferenceProfile()));
+        Sync->SetAutomaticColumns(true); Opposite->SetAutomaticColumns(false);
+        const GroupingState Override{true, Profile.columns_[5].id_, "value", Qt::DescendingOrder}; QVERIFY(Sync->SetGrouping(Override));
+        auto Width = Sync->ColumnWidths()->Policies().value(IdText(Profile.columns_[0].id_)); Width.unit_ = hc::view::WidthUnit::Pixels; Width.minimum_.reset(); Width.maximum_.reset(); Width.value_ = 333;
+        QVERIFY(Sync->ColumnWidths()->SetPolicy(IdText(Profile.columns_[0].id_), Width, false));
+        const auto OtherBefore = Other->CaptureWorkspaceView();
+        { QMainOpts Dialog(main_); Dialog.SetListView(Current); Dialog.LoadSettings(); auto* Editor = Dialog.findChild<QtColumnProfileEditor*>();
+          const auto Before = Current->CaptureWorkspaceView(); QVERIFY(!Editor->Dirty()); QVERIFY(!Editor->TargetsTouched());
+          QVERIFY(Dialog.SaveSettings()); QCOMPARE(Current->CaptureWorkspaceView(), Before); Dialog.reject(); }
+        { QMainOpts Dialog(main_); Dialog.SetListView(Current); Dialog.LoadSettings(); auto* Editor = Dialog.findChild<QtColumnProfileEditor*>();
+          auto* Title = Editor->findChild<QLineEdit*>("hc.columns.title"); Title->setFocus(); Title->selectAll(); QTest::keyClicks(Title, "Synced name"); Editor->findChild<QPushButton*>("hc.columns.add")->click();
+          const auto Added = Editor->Profile().columns_.back();
+          Editor->findChild<QCheckBox*>("hc.columns.applyDefaultOpposite")->setChecked(true); QVERIFY(Dialog.SaveSettings());
+          QCOMPARE(Sync->ColumnProfile().columns_[0].title_, QString("Synced name")); QCOMPARE(Opposite->ColumnProfile().columns_[0].title_, QString("Synced name"));
+          QTest::qWait(250); QCOMPARE(Sync->ColumnWidths()->Policies().value(IdText(Profile.columns_[0].id_)).value_, Width.value_);
+          QCOMPARE(Sync->ColumnWidths()->Policies().value(IdText(Added.id_)), Added.widths_[int(Editor->Profile().mode_)]);
+          QVERIFY(Sync->AutomaticColumns()); QVERIFY(!Opposite->AutomaticColumns()); QCOMPARE(Sync->Grouping(), Override); QCOMPARE(Other->CaptureWorkspaceView(), OtherBefore);
+          const auto Defaults = Settings.Read(Section::Columns).toObject()["ColumnsV2/Defaults/" + Opposite->ColumnWidths()->PaneKey()].toObject();
+          QCOMPARE(DecodeProfile(Defaults)->columns_[0].title_, QString("Synced name")); Dialog.reject(); }
+        { QMainOpts Dialog(main_); Dialog.SetListView(Current); Dialog.LoadSettings(); auto* Editor = Dialog.findChild<QtColumnProfileEditor*>();
+          const auto Library = Settings.Read(Section::Columns).toObject()["ColumnsV2/Profiles"];
+          Editor->findChild<QRadioButton*>("hc.columns.applyAuto")->setChecked(true);
+          QVERIFY(!Editor->Dirty()); QVERIFY(Editor->TargetsTouched()); QVERIFY(Dialog.SaveSettings()); QVERIFY(Current->AutomaticColumns());
+          QCOMPARE(Settings.Read(Section::Columns).toObject()["ColumnsV2/Profiles"], Library); Dialog.reject(); }
+        // A read-only target fails after sync and must restore every changed view.
+        auto Invalid = Opposite->ColumnWidths()->WorkspaceLayout(); Invalid["version"] = 99;
+        Opposite->ColumnWidths()->RestoreWorkspaceLayout({{WorkspaceKey, Invalid}}); QVERIFY(!Opposite->ColumnWidths()->Writable());
+        const auto BeforeCurrent = Current->CaptureWorkspaceView(), BeforeSync = Sync->CaptureWorkspaceView(); const auto BeforeSettings = Settings.Object();
+        { QMainOpts Dialog(main_); Dialog.SetListView(Current); Dialog.LoadSettings(); auto* Editor = Dialog.findChild<QtColumnProfileEditor*>();
+          auto* Title = Editor->findChild<QLineEdit*>("hc.columns.title"); Title->setFocus(); Title->selectAll(); QTest::keyClicks(Title, "Must roll back"); Editor->findChild<QCheckBox*>("hc.columns.applyOpposite")->setChecked(true);
+          QTimer Close; connect(&Close, &QTimer::timeout, &Dialog, [] { for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Message = qobject_cast<QMessageBox*>(Widget)) Message->reject(); }); Close.start(10);
+          QVERIFY(!Dialog.SaveSettings()); Close.stop(); QCOMPARE(Current->CaptureWorkspaceView(), BeforeCurrent); QCOMPARE(Sync->CaptureWorkspaceView(), BeforeSync);
+          QCOMPARE(Settings.CommittedObject(), BeforeSettings); Dialog.reject(); }
+    }
+    void columnGroupingSaveAsDefaultUi()
+    {
+        using namespace hc::columns; using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel");
+        Left->ChangeCurrentPath(Directory.path(), {}); Right->ChangeCurrentPath(Directory.path(), {});
+        auto* View = static_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex())); auto* Other = static_cast<CGridView*>(Right->GetFocusView(Right->CurrentTabIndex()));
+        QTRY_VERIFY(!View->BaseModel()->IsLoading() && !Other->BaseModel()->IsLoading());
+        auto Profile = DownloadsProfile(); auto Columns = Settings.Read(Section::Columns).toObject(); Columns["ColumnsV2/Profiles"] = WithBuiltInProfiles({}); Columns[AutoSelectionKey] = EmptyAutoSelection();
+        QVERIFY(Settings.Put(Section::Columns, Columns)); QVERIFY(Settings.Commit()); QVERIFY(View->ApplyColumnProfile(Profile)); QVERIFY(Other->ApplyColumnProfile(Profile));
+        const GroupingState Override{true, Profile.columns_[2].id_, "value", Qt::AscendingOrder}; QVERIFY(View->SetGrouping(Override));
+        auto OtherGroup = Override; OtherGroup.order_ = Qt::DescendingOrder; QVERIFY(Other->SetGrouping(OtherGroup));
+        const auto SaveAction = [&](QMenu& Menu) {
+            Qtitan::ContextMenuEventArgs Args(View->BaseView(), &Menu, Qtitan::GridHitInfo(Qtitan::GridHitInfo::Column, View->BaseView(), QRect{}, -1, 0)); View->BaseView()->contextMenu(&Args);
+            return Menu.findChild<QAction*>("hc.grouping.saveAsProfileDefault");
+        };
+        { QMainOpts Dialog(main_); Dialog.SetListView(View); QMenu Menu; QVERIFY(SaveAction(Menu)); QVERIFY(!SaveAction(Menu)->isEnabled()); Dialog.reject(); }
+        QTimer Answer; connect(&Answer, &QTimer::timeout, main_, [] { for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Message = qobject_cast<QMessageBox*>(Widget)) {
+            if (Message->standardButtons().testFlag(QMessageBox::Yes)) Message->button(QMessageBox::Yes)->click(); else Message->accept();
+        }}); Answer.start(10);
+        { QMenu Menu; auto* Action = SaveAction(Menu); QVERIFY(Action && Action->isEnabled()); Action->trigger(); }
+        QTRY_COMPARE(Other->Grouping(), Override); QVERIFY(Other->CaptureWorkspaceView()["groupingBySetV1"].toArray().isEmpty()); QVERIFY(View->CaptureWorkspaceView()["groupingBySetV1"].toArray().isEmpty());
+        Profile = *DecodeProfile(Settings.Read(Section::Columns).toObject()["ColumnsV2/Profiles"].toObject()[IdText(Profile.id_)].toObject()); QCOMPARE(DefaultGrouping(Profile), Override);
+        Columns = Settings.Read(Section::Columns).toObject(); Columns["ColumnsV2/Defaults/" + Other->ColumnWidths()->PaneKey()] = EncodeProfile(Profile); QVERIFY(Settings.Put(Section::Columns, Columns)); QVERIFY(Settings.Commit());
+        Other->RestoreWorkspaceView({}); QCOMPARE(Other->Grouping(), Override);
+        QVERIFY(View->SetGrouping({})); const auto Before = Settings.Object(); const auto ViewBefore = View->CaptureWorkspaceView(), OtherBefore = Other->CaptureWorkspaceView();
+        { QLockFile Lock(Settings.FileName() + ".lock"); Lock.setStaleLockTime(0); QVERIFY(Lock.tryLock(0));
+          QMenu Menu; auto* Action = SaveAction(Menu); QVERIFY(Action->isEnabled()); Action->trigger(); }
+        QCOMPARE(Settings.Object(), Before); QCOMPARE(View->CaptureWorkspaceView(), ViewBefore); QCOMPARE(Other->CaptureWorkspaceView(), OtherBefore); Answer.stop();
+    }
+    void columnProfileGroupingUi()
+    {
+        using namespace hc::columns;
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (int I = 0; I < 3; ++I) { QFile File(Directory.filePath(QString("file%1.txt").arg(I))); QVERIFY(File.open(QIODevice::ReadWrite)); File.write("x"); QVERIFY(File.setFileTime(QDateTime(QDate::currentDate().addDays(-I), QTime(12, 0)), QFileDevice::FileModificationTime)); }
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); Panel->ChangeCurrentPath(Directory.path(), {});
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QTRY_VERIFY(!View->BaseModel()->IsLoading());
+        auto Profile = DownloadsProfile();
+        QtColumnProfileEditor Editor; Editor.Load(Profile, WithBuiltInProfiles({})); Editor.show();
+        auto* Group = Editor.findChild<QComboBox*>("hc.columns.groupColumn"); QVERIFY(Group);
+        QCOMPARE(Group->currentData().toString(), IdText(Profile.columns_[1].id_));
+        Group->setCurrentIndex(Group->findData(IdText(Profile.columns_[2].id_))); QVERIFY(Editor.ValidateDraft());
+        QCOMPARE(DefaultGrouping(Editor.Profile()).columnId_, Profile.columns_[2].id_);
+        auto* Preview = Editor.findChild<Qtitan::Grid*>("hc.columns.previewGrid");
+        QTRY_COMPARE(Preview->view<Qtitan::GridBandedTableView>()->groupColumnCount(), 1);
+        Editor.Load(Profile, WithBuiltInProfiles({}));
+        Editor.findChild<QButtonGroup*>("hc.columns.groupExpand")->button(2)->click();
+        Profile = Editor.Profile(); QVERIFY(View->ApplyColumnProfile(Profile)); QTRY_VERIFY(View->GroupingActive());
+        QCOMPARE(View->Grouping(), DefaultGrouping(Profile));
+        QTRY_VERIFY(View->BaseView()->modelController()->groupRows().size() >= 2);
+        QCOMPARE(View->BaseView()->modelController()->groupRows()[0].expanded, true);
+        QCOMPARE(View->BaseView()->modelController()->groupRows()[1].expanded, false);
+        const GroupingState Override{true, Profile.columns_[2].id_, "value", Qt::AscendingOrder};
+        QVERIFY(View->SetGrouping(Override));
+        const auto Saved = View->CaptureWorkspaceView(); QCOMPARE(Saved["groupingBySetV1"].toArray().size(), 1);
+        QVERIFY(View->ApplyColumnProfile(DefaultProfile())); QTRY_VERIFY(!View->GroupingActive());
+        QVERIFY(View->ApplyColumnProfile(Profile)); QTRY_COMPARE(View->Grouping(), Override);
+        View->RestoreWorkspaceView(Saved); QTRY_COMPARE(View->Grouping(), Override);
+        auto Legacy = Saved; Legacy.remove("groupingBySetV1"); View->RestoreWorkspaceView(Legacy);
+        QCOMPARE(View->CaptureWorkspaceView()["groupingBySetV1"].toArray().size(), 1);
+        QMenu Menu; Qtitan::ContextMenuEventArgs Args(View->BaseView(), &Menu, Qtitan::GridHitInfo(Qtitan::GridHitInfo::Column, View->BaseView(), QRect{}, -1, 0)); View->BaseView()->contextMenu(&Args);
+        auto* Revert = Menu.findChild<QAction*>("hc.grouping.profileDefault"); QVERIFY(Revert); QVERIFY(Revert->isEnabled()); Revert->trigger();
+        QTRY_COMPARE(View->Grouping(), DefaultGrouping(Profile)); QVERIFY(View->CaptureWorkspaceView()["groupingBySetV1"].toArray().isEmpty());
+        // A new tab starts from its saved default, with no per-set memories.
+        auto Columns = Settings.Read(hc::settings::Section::Columns).toObject();
+        Columns["ColumnsV2/Defaults/" + View->ColumnWidths()->PaneKey()] = EncodeProfile(Profile); QVERIFY(Settings.Put(hc::settings::Section::Columns, Columns));
+        View->RestoreWorkspaceView({}); QCOMPARE(View->Grouping(), DefaultGrouping(Profile)); QVERIFY(View->CaptureWorkspaceView()["groupingBySetV1"].toArray().isEmpty());
+        for (int I = 0; I < 18; ++I) {
+            auto Other = Profile; Other.id_ = QUuid::createUuid(); QVERIFY(View->ApplyColumnProfile(Other)); QVERIFY(View->SetGrouping(Override));
+        }
+        QCOMPARE(View->CaptureWorkspaceView()["groupingBySetV1"].toArray().size(), 16);
+        Editor.Load(Profile, WithBuiltInProfiles({}));
+        auto* List = Editor.findChild<QListWidget*>("hc.columns.list"); List->setCurrentRow(1);
+        Editor.findChild<QPushButton*>("hc.columns.remove")->click();
+        QVERIFY(Editor.Profile().grouping_->levels_.isEmpty());
+        QVERIFY(Editor.findChild<QLabel*>("hc.columns.error")->text().contains("그룹 기준 열"));
+        Editor.Load(Profile, WithBuiltInProfiles({}));
+        Editor.findChild<QPushButton*>("hc.columns.cloneProfile")->click(); QVERIFY(Editor.ValidateDraft());
+        QVERIFY(Editor.Profile().id_ != Profile.id_); QCOMPARE(DefaultGrouping(Editor.Profile()).columnId_, Editor.Profile().columns_[1].id_);
+        auto Broken = Profile; Broken.grouping_->raw_ = QJsonArray{QStringLiteral("unknown")};
+        Editor.Load(Broken, WithBuiltInProfiles({})); QVERIFY(!Editor.ValidateDraft());
+        QCOMPARE(EncodeProfile(Editor.Profile()), EncodeProfile(Broken));
+        QVERIFY(!Editor.findChild<QComboBox*>("hc.columns.groupColumn")->isEnabled());
+        QVERIFY(View->ApplyColumnProfile(Profile)); QVERIFY(View->SetGrouping(Override));
+        auto Changed = Profile; Changed.grouping_->levels_ = {Override};
+        QVERIFY(View->ApplyColumnProfile(Changed)); QTRY_COMPARE(View->Grouping(), Override);
+        QVERIFY(View->CaptureWorkspaceView()["groupingBySetV1"].toArray().size() <= 15);
+        Editor.close();
+    }
+    void columnDownloadsAutoSwitchUi()
+    {
+        using namespace hc::columns; using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(QDir(Directory.path()).mkdir("downloads")); QVERIFY(QDir(Directory.filePath("downloads")).mkdir("child")); QVERIFY(QDir(Directory.path()).mkdir("other"));
+        QJsonObject Columns; QVERIFY(MigrateDownloadsColumnSet(Columns, Directory.filePath("downloads")));
+        auto Policy = Columns[AutoSelectionKey].toObject(); auto Rules = Policy["rules"].toArray(); auto Rule = Rules[0].toObject();
+        Rule["path"] = Directory.filePath("downloads") + "/*"; Rules[0] = Rule; Policy["rules"] = Rules; Columns[AutoSelectionKey] = Policy;
+        QVERIFY(Settings.Put(Section::Columns, Columns)); QVERIFY(Settings.Commit());
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); Panel->ChangeCurrentPath(Directory.filePath("other"), {});
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QTRY_VERIFY(!View->BaseModel()->IsLoading());
+        const auto Base = DefaultProfile(); QVERIFY(View->ApplyColumnProfile(Base));
+        const GroupingState Override{true, Base.columns_[5].id_, "value", Qt::AscendingOrder}; QVERIFY(View->SetGrouping(Override));
+        View->SetAutomaticColumns(true); Panel->ChangeCurrentPath(Directory.filePath("downloads"), {});
+        QTRY_COMPARE_WITH_TIMEOUT(View->ColumnProfile().id_, DownloadsProfileId, 10000);
+        QTRY_VERIFY(View->ColumnSourceText().contains("자동 · 1번 조건"));
+        QTRY_COMPARE(View->Grouping(), DefaultGrouping(DownloadsProfile()));
+        Panel->ChangeCurrentPath(Directory.filePath("downloads/child"), {}); QTRY_VERIFY(!View->BaseModel()->IsLoading()); QCOMPARE(View->ColumnProfile().id_, DownloadsProfileId);
+        Panel->ChangeCurrentPath(Directory.filePath("other"), {}); QTRY_COMPARE(View->ColumnProfile().id_, Base.id_); QTRY_COMPARE(View->Grouping(), Override);
+        QVERIFY(View->ApplyColumnProfile(Base)); Panel->ChangeCurrentPath(Directory.filePath("downloads"), {}); QTRY_VERIFY(!View->BaseModel()->IsLoading()); QTest::qWait(250); QCOMPARE(View->ColumnProfile().id_, Base.id_);
+        QVERIFY(View->ColumnSourceText().contains("고정"));
+        Policy["rules"] = QJsonArray{}; Columns[AutoSelectionKey] = Policy; QVERIFY(Settings.Put(Section::Columns, Columns)); QVERIFY(Settings.Commit());
+        QVERIFY(!MigrateDownloadsColumnSet(Columns, Directory.filePath("downloads"))); QVERIFY(Columns[AutoSelectionKey].toObject()["rules"].toArray().isEmpty());
+    }
+    void columnMultiLevelGroupingUi()
+    {
+        using namespace hc::columns;
+        hc::tests::GridNestedGroupingRegression();
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (int I = 0; I < 4; ++I) { QFile File(Directory.filePath(QString("file%1.%2").arg(I).arg(I % 2 ? "txt" : "bin"))); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("12345"), qint64(5)); }
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); Panel->ChangeCurrentPath(Directory.path(), {});
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QTRY_VERIFY(!View->BaseModel()->IsLoading());
+        auto Profile = DefaultProfile(); Profile.grouping_ = ProfileGrouping{};
+        Profile.grouping_->levels_ = {{true, Profile.columns_[4].id_, "relativeDate", Qt::DescendingOrder}};
+        QtColumnProfileEditor Editor; Editor.Load(Profile, WithBuiltInProfiles({})); Editor.show();
+        auto* Add = Editor.findChild<QPushButton*>("hc.columns.addGroup"); QVERIFY(Add); Add->click(); Add->click();
+        QCOMPARE(Editor.Profile().grouping_->levels_.size(), 3); QVERIFY(!Add->isEnabled());
+        Editor.findChild<QCheckBox*>("hc.columns.groupSizeTotal")->setChecked(true);
+        Editor.findChild<QCheckBox*>("hc.columns.groupLatest")->setChecked(true);
+        Editor.findChild<QCheckBox*>("hc.columns.groupsHeader")->setChecked(true);
+        QVERIFY(Editor.ValidateDraft()); Profile = Editor.Profile();
+        auto* Preview = Editor.findChild<Qtitan::Grid*>("hc.columns.previewGrid")->view<Qtitan::GridBandedTableView>();
+        QTRY_COMPARE(Preview->groupColumnCount(), 3); QVERIFY(Preview->options().groupsHeader());
+        QVERIFY(View->ApplyColumnProfile(Profile)); QTRY_COMPARE(View->BaseView()->groupColumnCount(), 3);
+        QCOMPARE(View->GroupingLevels(), Profile.grouping_->levels_); QVERIFY(View->ColumnSourceText().contains("세트 기본값"));
+        auto* Native = View->BaseView(); QTRY_VERIFY(Native->getRowCount() > 0); QVERIFY(Native->groupCaptionProvider());
+        const auto Caption = [&] {
+            for (int I = 0; I < Native->getRowCount(); ++I) if (Native->getRow(I).type() == Qtitan::GridRow::GroupRow)
+                return Native->groupCaptionProvider()(Native->getRow(I));
+            return QString{};
+        };
+        QTRY_VERIFY(Caption().contains("크기")); QTRY_VERIFY(Caption().contains("최근")); QTRY_VERIFY(Caption().contains("4개"));
+        const auto Saved = View->CaptureWorkspaceView(); View->RestoreWorkspaceView(Saved); QTRY_COMPARE(View->GroupingLevels(), Profile.grouping_->levels_);
+        auto Levels = Profile.grouping_->levels_; Levels.removeLast(); QVERIFY(View->SetGroupingLevels(Levels));
+        QVERIFY(View->ColumnSourceText().contains("이 탭에서 변경"));
+        // Native groupingChanged is the same path used by a header drag.
+        static_cast<Qtitan::GridColumn*>(Native->getColumnByModelColumn(0))->setGroupIndex(2);
+        QTRY_COMPARE(Native->groupColumnCount(), 2); QCOMPARE(View->GroupingLevels(), Levels);
+        static_cast<Qtitan::GridColumn*>(Native->getColumnByModelColumn(4))->setGroupIndex(-1);
+        QTRY_COMPARE(View->GroupingLevels().size(), 1);
+        const auto Memory = View->CaptureWorkspaceView(); View->RestoreWorkspaceView(Memory); QTRY_COMPARE(View->GroupingLevels().size(), 1);
+        Editor.close();
+    }
+    void columnRealDownloadsUi()
+    {
+        using namespace hc::columns; using namespace hc::settings;
+        const auto Path = hc::shell::ResolveKnownFolderPath(QUuid("{374DE290-123F-4565-9164-39C4925E467B}"));
+        if (Path.isEmpty() || !QDir(Path).exists()) QSKIP("Actual Downloads folder is unavailable");
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QJsonObject Columns; QVERIFY(MigrateDownloadsColumnSet(Columns, Path));
+        QVERIFY(Settings.Put(Section::Columns, Columns)); QVERIFY(Settings.Commit());
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel");
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QVERIFY(View->ApplyColumnProfile(DefaultProfile())); View->SetAutomaticColumns(true);
+        Panel->ChangeCurrentPath(Path, {});
+        QTRY_VERIFY_WITH_TIMEOUT(!View->BaseModel()->IsLoading(), 30000);
+        QTRY_COMPARE_WITH_TIMEOUT(View->ColumnProfile().id_, DownloadsProfileId, 10000);
+        QTRY_COMPARE(View->Grouping(), DefaultGrouping(DownloadsProfile()));
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.LoadSettings(); Dialog.show();
+        auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); QVERIFY(Editor);
+        auto* Rules = Editor->findChild<QTableWidget*>("hc.columns.autoRules"); QVERIFY(Rules);
+        QTRY_VERIFY(Rules->item(0, 3)->text().contains(Path));
+        qInfo() << "Actual Downloads folder automatic profile/group and resolved condition verified:" << Path;
+        Dialog.reject();
+    }
+    void columnShellFolderConditionUi()
+    {
+        using namespace hc::columns; using namespace hc::settings; using namespace hc::storage;
+        const QString LocalAppData = "{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}";
+        const auto Base = hc::shell::ResolveKnownFolderPath(QUuid(LocalAppData));
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        if (Base.isEmpty() || !QDir::fromNativeSeparators(Directory.path()).startsWith(QDir::fromNativeSeparators(Base) + "/Temp/", Qt::CaseInsensitive))
+            QSKIP("Temporary directory is outside LocalAppData/Temp");
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); main_->SaveWorkspace(); });
+        const auto Profile = ReferenceProfile();
+        QJsonObject Library{{IdText(Profile.id_), EncodeProfile(Profile)}, {IdText(BuiltInProfileId), EncodeProfile(DefaultProfile())}};
+        QJsonObject Rule{{"enabled", true}, {"profile", IdText(Profile.id_)}, {"path", LocalAppData + "\\Temp\\*"}, {"group", ""}, {"percent", 50}};
+        auto Policy = EmptyAutoSelection(); Policy["enabled"] = true; Policy["rules"] = QJsonArray{Rule};
+        auto Columns = Settings.Read(Section::Columns).toObject(); Columns["ColumnsV2/Profiles"] = Library; Columns[AutoSelectionKey] = Policy;
+        QVERIFY(Settings.Put(Section::Columns, Columns)); QVERIFY(Settings.Commit());
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel");
+        hc::workspace::TabState Tab; Tab.id_ = "column-shell"; Tab.location_ = {LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Left->RestoreWorkspace(Pane);
+        QTRY_VERIFY(!model(Left)->IsLoading());
+        auto* View = static_cast<CGridView*>(Left->GetFocusView(0)); View->SetAutomaticColumns(true);
+        QTRY_COMPARE_WITH_TIMEOUT(View->ColumnProfile().id_, Profile.id_, 10000);
+        QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.show(); Dialog.LoadSettings(); Dialog.ShowListSettingsPage();
+        auto* Editor = Dialog.findChild<QtColumnProfileEditor*>("hc.columns.editor"); QVERIFY(Editor);
+        auto* Table = Editor->findChild<QTableWidget*>("hc.columns.autoRules"); QVERIFY(Table);
+        auto* Path = Table->cellWidget(0, 2)->findChild<QLineEdit*>("hc.columns.autoPath"); QVERIFY(Path);
+        QTRY_VERIFY(Table->item(0, 3)->text().contains(Base));
+        QVERIFY(Editor->findChild<QLabel*>("hc.columns.autoVerdict"));
+        Path->setText("{bad}"); QVERIFY(!Editor->ValidateDraft());
+        QVERIFY(Editor->findChild<QLabel*>("hc.columns.error")->text().contains("GUID"));
+        Path->setText(LocalAppData + "\\Temp\\*"); QVERIFY(Editor->ValidateDraft());
+        QTRY_VERIFY(Table->item(0, 3)->text().contains(Base));
+        QCOMPARE(Editor->AutoSelection()["rules"].toArray()[0].toObject()["path"].toString(), Path->text());
+        Dialog.reject();
+    }
     void r13AutomaticColumnsUi()
     {
         using namespace hc::columns; using namespace hc::settings; using namespace hc::storage;
@@ -5474,10 +5755,10 @@ private slots:
               const auto BeforeFont = Dialog.font(); auto Large = BeforeFont; Large.setPointSize(18); Dialog.setFont(Large); QTest::qWait(50); QVERIFY(Dialog.grab().save(QDir(Output).filePath("r13-auto-columns-large.png"))); Dialog.setFont(BeforeFont);
           }
           auto* Editor = Dialog.findChild<QtColumnProfileEditor*>("hc.columns.editor"); QVERIFY(Editor);
-          auto* RulesTable = Editor->findChild<QTableWidget*>("hc.columns.autoRules"); QVERIFY(RulesTable); QCOMPARE(qobject_cast<QComboBox*>(RulesTable->cellWidget(0, 3))->currentText(), QString("텍스트"));
+          auto* RulesTable = Editor->findChild<QTableWidget*>("hc.columns.autoRules"); QVERIFY(RulesTable); QVERIFY(RulesTable->verticalHeader()->isHidden()); QCOMPARE(RulesTable->selectionBehavior(), QAbstractItemView::SelectRows); QCOMPARE(RulesTable->selectionMode(), QAbstractItemView::SingleSelection); QCOMPARE(qobject_cast<QComboBox*>(RulesTable->cellWidget(0, 4))->currentText(), QString("텍스트"));
           auto* Profiles = Editor->findChild<QListWidget*>("hc.columns.profileList");
           for (int Index = 0; Index < Profiles->count(); ++Index) if (Profiles->item(Index)->data(Qt::UserRole).toString() == IdText(ReferenceTwoLineProfileId)) Profiles->setCurrentRow(Index);
-          QVERIFY(!Editor->AutomaticTab()); Dialog.reject(); }
+          QVERIFY(Editor->AutomaticTab()); Dialog.reject(); }
         QVERIFY(View->AutomaticColumns());
         // Search/page visibility does not alter the folder's denominator.
         Left->SetSearch("c.bin"); QTest::qWait(150); QCOMPARE(View->ColumnProfile().id_, ReferenceProfileId); Left->SetSearch({});
@@ -6697,7 +6978,7 @@ private slots:
             auto* Editor = Dialog.findChild<QtColumnProfileEditor*>(); QVERIFY(Editor);
             QVERIFY(!Dialog.findChild<QDialog*>("hc.columnWidthsDialog"));
             Editor->findChild<QComboBox*>("hc.columns.layout")->setCurrentIndex(1);
-            Editor->findChild<QComboBox*>("hc.columns.scope")->setCurrentIndex(1);
+            Editor->findChild<QCheckBox*>("hc.columns.applyDefaultThis")->setChecked(true);
             Editor->findChild<QTabWidget*>("hc.columns.pages")->setCurrentIndex(0);
             auto* Choice = Editor->findChild<QComboBox*>("hc.columns.widthMode");
             Dialog.activateWindow(); QTest::qWait(150); QVERIFY(Choice->isVisible());
@@ -8796,6 +9077,7 @@ private slots:
         Dialog.reject();
     }
 
+    void columnGroupingSummaryExperimentUi() { hc::tests::GridGroupingSummaryExperiment(); }
     void qtitanCacheAndSortUi() { hc::tests::GridCacheAndSortRegression(); }
     void qtitanFileManagerUi() { hc::tests::GridFileManagerRegression(); }
 
@@ -9177,9 +9459,11 @@ private slots:
         Mode->setCurrentIndex(3); Editor->findChild<QLineEdit*>("hc.columns.samplePath")->setText(Directory.filePath("picture.png"));
         Editor->findChild<QPushButton*>("hc.columns.readSample")->click(); QTRY_COMPARE(Preview->rowCount(), 1); QTRY_COMPARE(Preview->item(0, 0)->text(), QString("picture.png"));
         Calculate->click(); QTRY_COMPARE(Preview->item(0, 1)->text(), QString("+128")); Editor->findChild<QPushButton*>("hc.columns.stopPreview")->click();
-        Editor->findChild<QComboBox*>("hc.columns.scope")->setCurrentIndex(2); QVERIFY(Dialog.SaveSettings());
+        Editor->findChild<QCheckBox*>("hc.columns.applyOpposite")->setChecked(true); QVERIFY(Dialog.SaveSettings());
         QVERIFY(View->ColumnProfile() == Other->ColumnProfile()); QCOMPARE(View->CaptureSelection(), QStringList{Key});
-        const auto Applied = View->ColumnProfile(); Editor->findChild<QComboBox*>("hc.columns.scope")->setCurrentIndex(3);
+        const auto Applied = View->ColumnProfile(); Editor->findChild<QCheckBox*>("hc.columns.applyCurrent")->setChecked(false);
+        Editor->findChild<QCheckBox*>("hc.columns.applyOpposite")->setChecked(false); Editor->findChild<QCheckBox*>("hc.columns.applyDefaultThis")->setChecked(true);
+        Editor->findChild<QCheckBox*>("hc.columns.applySync")->setChecked(false);
         auto* Title = Editor->findChild<QLineEdit*>("hc.columns.title"); Title->setFocus(); Title->selectAll(); QTest::keyClicks(Title, "New tab only");
         QVERIFY(Dialog.SaveSettings()); QVERIFY(View->ColumnProfile() == Applied); QVERIFY(Other->ColumnProfile() == Applied);
         const auto Default = DecodeProfile(Settings.Read(hc::settings::Section::Columns).toObject()["ColumnsV2/Defaults/" + View->ColumnWidths()->PaneKey()].toObject());
@@ -9634,7 +9918,7 @@ private slots:
         Editor->findChild<QDoubleSpinBox*>("hc.columns.width")->setValue(220);
         Editor->findChild<QComboBox*>("hc.columns.layout")->setCurrentIndex(2);
         QCOMPARE(Editor->findChild<QTableWidget*>("hc.columns.preview")->rowCount(), 3);
-        Editor->findChild<QComboBox*>("hc.columns.scope")->setCurrentIndex(1);
+        Editor->findChild<QCheckBox*>("hc.columns.applyDefaultThis")->setChecked(true);
         QCOMPARE(model(Left)->columnCount(), 8); QCOMPARE(View->CaptureWorkspaceView(), Before);
         QVERIFY(Editor->ValidateDraft()); QVERIFY(Dialog.SaveSettings());
         QCOMPARE(model(Left)->columnCount(), 10); QCOMPARE(Adapter->LayoutMode(), QString("name-last"));

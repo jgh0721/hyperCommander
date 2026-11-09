@@ -7,10 +7,101 @@
 #include "commonLibs/columns/columnQueryEngine.hpp"
 #include "commonLibs/storage/entryIndex.hpp"
 #include "settings/fileColorRules.hpp"
+#include "shellFolderToken.hpp"
 
 namespace hc::columns {
 inline constexpr auto AutoSelectionKey = "ColumnsV2/AutoSelection";
 inline QJsonObject EmptyAutoSelection() { return hc::defaults::DefaultValue("columnAutoSelection").toObject(); }
+inline QString NormalizeFolderConditionPath(QString Path) {
+    Path.replace('\\', '/');
+    while (Path.endsWith('/') && Path.size() > 1 && !(Path.size() == 3 && Path[1] == ':')) Path.chop(1);
+    return Path;
+}
+inline bool MatchFolderCondition(const QString& Pattern, const QString& Path, const QHash<QString, QString>& Resolved = {}) {
+    const auto Token = hc::shell::ParseFolderToken(Pattern);
+    if (Token.kind_ == hc::shell::FolderToken::Kind::Invalid) return false;
+    const auto Candidate = NormalizeFolderConditionPath(Path);
+    const auto Wildcard = [](const QString& Text) {
+        return QRegularExpression::wildcardToRegularExpression(Text,
+            QRegularExpression::NonPathWildcardConversion | QRegularExpression::UnanchoredWildcardConversion);
+    };
+    QString Prefix, Rest;
+    if (Token.kind_ == hc::shell::FolderToken::Kind::None) Rest = NormalizeFolderConditionPath(Pattern.trimmed());
+    else {
+        const auto Base = Resolved.value(Token.token_);
+        if (Base.isEmpty()) return false;
+        Prefix = QRegularExpression::escape(NormalizeFolderConditionPath(Base));
+        Rest = Token.rest_;
+        // A redirected drive root already supplies the separator.
+        if (Base.endsWith('/') || Base.endsWith('\\')) {
+            const auto Normal = NormalizeFolderConditionPath(Base);
+            if (Normal.endsWith('/') && Rest.startsWith('/')) Rest.remove(0, 1);
+        }
+        Rest = NormalizeFolderConditionPath(Rest);
+        if (Rest == "/") Rest.clear();
+    }
+    const auto Matches = [&](const QString& Tail) {
+        return QRegularExpression("\\A" + Prefix + Wildcard(Tail) + "\\z", QRegularExpression::CaseInsensitiveOption).match(Candidate).hasMatch();
+    };
+    if (Matches(Rest)) return true;
+    if (Rest.endsWith("/*")) return Matches(NormalizeFolderConditionPath(Rest.left(Rest.size() - 2)));
+    return false;
+}
+inline bool MigrateDownloadsColumnSet(QJsonObject& Columns, const QString& DownloadsPath, const QHash<QString, QString>& ResolvedFolders = {}) {
+    auto Migrations = Columns.value("ColumnsV2/Migrations").toArray();
+    if (Migrations.contains("downloads-set-1")) return false;
+    auto Library = Columns.value("ColumnsV2/Profiles").toObject();
+    auto Policy = Columns.contains(AutoSelectionKey) ? Columns[AutoSelectionKey].toObject() : EmptyAutoSelection();
+    auto Rules = Policy["rules"].toArray(); const auto Id = IdText(DownloadsProfileId);
+    bool Exists = Library.contains(Id), UserMatches = false;
+    for (const auto& Value : Rules) {
+        const auto Rule = Value.toObject(); Exists |= Rule["profile"] == QJsonValue(Id);
+        const auto Pattern = Rule["path"].toString();
+        auto Resolved = ResolvedFolders;
+        const auto Token = hc::shell::ParseFolderToken(Pattern);
+        if (Token.id_ == QUuid("{374DE290-123F-4565-9164-39C4925E467B}") || Token.name_.compare("Downloads", Qt::CaseInsensitive) == 0)
+            Resolved[Token.token_] = DownloadsPath;
+        if (!DownloadsPath.isEmpty() && !Pattern.trimmed().isEmpty() && MatchFolderCondition(Pattern, DownloadsPath, Resolved)) UserMatches = true;
+    }
+    if (!Exists && Policy["version"] == QJsonValue(1) && Policy["rules"].isArray() && Rules.size() < 128) {
+        const QJsonObject Rule{{"enabled", true}, {"profile", Id}, {"path", "{374DE290-123F-4565-9164-39C4925E467B}\\*"}, {"group", ""}, {"percent", 50}};
+        if (Rules.isEmpty()) Policy["enabled"] = true;
+        if (UserMatches) Rules.append(Rule); else Rules.prepend(Rule);
+        Policy["rules"] = Rules; Columns[AutoSelectionKey] = Policy; Columns["ColumnsV2/Profiles"] = WithBuiltInProfiles(Library);
+    }
+    Migrations.append("downloads-set-1"); Columns["ColumnsV2/Migrations"] = Migrations;
+    return true;
+}
+inline QString ProfileRuleSummary(const QUuid& Id, const QJsonObject& Policy, const QJsonObject& Colors,
+    const QVector<hc::shell::KnownFolderChoice>& Choices) {
+    QStringList Parts;
+    if (IsBuiltInProfile(Id)) Parts.append(QObject::tr("기본 제공"));
+    QString First; int Count = 0;
+    if (Policy["enabled"].toBool()) for (const auto& Value : Policy["rules"].toArray()) {
+        const auto Rule = Value.toObject();
+        if (!Rule["enabled"].toBool() || QUuid(Rule["profile"].toString()) != Id) continue;
+        ++Count; if (Count != 1) continue;
+        QStringList Conditions;
+        auto Path = Rule["path"].toString(); const auto Token = hc::shell::ParseFolderToken(Path);
+        for (const auto& Choice : Choices) if ((Token.id_ == Choice.folder_ && !Token.id_.isNull())
+            || (Token.kind_ == hc::shell::FolderToken::Kind::KnownFolderName && Token.name_.compare(Choice.id_, Qt::CaseInsensitive) == 0)) {
+            Path = (Choice.id_ == "downloads" ? QObject::tr("사용자 다운로드 폴더") : Choice.label_)
+                + (Token.rest_.isEmpty() || Token.rest_ == "/*" ? QString{} : Token.rest_); break;
+        }
+        if (!Path.isEmpty()) Conditions.append(Path);
+        const auto GroupId = Rule["group"].toString();
+        if (!GroupId.isEmpty()) {
+            QString Name = GroupId;
+            for (const auto& Value : Colors["groups"].toArray()) if (Value.toObject()["id"].toString() == GroupId)
+                Name = Value.toObject()["name"].toString(GroupId);
+            Conditions.append(QObject::tr("%1 %2% 이상").arg(Name).arg(Rule["percent"].toInt()));
+        }
+        First = QObject::tr("자동: %1").arg(Conditions.join(" · "));
+    }
+    Parts.append(Count ? First : QObject::tr("수동"));
+    if (Count > 1) Parts.append(QObject::tr("외 %1개").arg(Count - 1));
+    return Parts.join(" · ");
+}
 inline QString ValidateAutoSelection(const QJsonObject& Policy, const QJsonObject& Library, const QJsonObject& Colors) {
     if (Policy["version"] != QJsonValue(1) || !Policy["enabled"].isBool() || !Policy["rules"].isArray()) return QObject::tr("자동 선택의 설정 형식을 확인하세요.");
     if (Policy["rules"].toArray().size() > 128) return QObject::tr("자동 조건은 최대 128개입니다.");
@@ -27,6 +118,7 @@ inline QString ValidateAutoSelection(const QJsonObject& Policy, const QJsonObjec
         const auto Path = Rule["path"].toString().trimmed(), Group = Rule["group"].toString();
         if (Path.isEmpty() && Group.isEmpty()) return QObject::tr("폴더 경로 또는 파일 그룹 조건을 입력하세요.");
         if (Path.size() > 4096 || Path.contains(QChar::Null)) return QObject::tr("폴더 경로 조건이 너무 길거나 올바르지 않습니다.");
+        if (hc::shell::ParseFolderToken(Path).kind_ == hc::shell::FolderToken::Kind::Invalid) return QObject::tr("셸 폴더 GUID 형식을 확인하세요.");
         if (!Group.isEmpty() && !Groups.contains(Group)) return QObject::tr("자동 조건의 파일 그룹이 삭제되었거나 비활성입니다.");
         const auto Percent = Rule["percent"].toDouble();
         if (Percent < 1 || Percent > 100 || Percent != int(Percent)) return QObject::tr("파일 그룹 비율은 1~100% 정수입니다.");
@@ -35,8 +127,10 @@ inline QString ValidateAutoSelection(const QJsonObject& Policy, const QJsonObjec
 }
 inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(const QJsonObject& Policy,
     const QJsonObject& Library, const QJsonObject& Colors, QString Path,
-    const std::shared_ptr<hc::storage::IEntryIndex>& Index, const hc::storage::OperationContext& Context = {}) {
+    const std::shared_ptr<hc::storage::IEntryIndex>& Index, const hc::storage::OperationContext& Context = {},
+    const QHash<QString, QString>& Resolved = {}, int* MatchedRule = nullptr) {
     using namespace hc::storage;
+    if (MatchedRule) *MatchedRule = -1;
     if (!Policy["enabled"].toBool(hc::defaults::DefaultValue("columnAutoSelection/enabled").toBool())) return std::optional<ColumnProfile>{};
     if (!ValidateAutoSelection(Policy, Library, Colors).isEmpty()) return Error{ErrorCategory::InvalidRequest, "invalid-auto-column-policy"};
     Path = QDir::fromNativeSeparators(Path); QMap<QString, hc::settings::FileColorRules> Groups;
@@ -83,12 +177,13 @@ inline hc::storage::Result<std::optional<ColumnProfile>> SelectAutomaticColumns(
             Offset += Page.Value().entries_.size();
         }
     }
-    for (const auto& Value : Rules) {
-        const auto Rule = Value.toObject(); if (!Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool())) continue;
+    for (int RuleIndex = 0; RuleIndex < Rules.size(); ++RuleIndex) {
+        const auto Rule = Rules[RuleIndex].toObject(); if (!Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool())) continue;
         const auto Pattern = QDir::fromNativeSeparators(Rule["path"].toString().trimmed());
-        if (!Pattern.isEmpty() && !QRegularExpression(QRegularExpression::wildcardToRegularExpression(Pattern, QRegularExpression::NonPathWildcardConversion), QRegularExpression::CaseInsensitiveOption).match(Path).hasMatch()) continue;
+        if (!Pattern.isEmpty() && !MatchFolderCondition(Pattern, Path, Resolved)) continue;
         const auto Group = Rule["group"].toString();
         if (!Group.isEmpty() && (!Files || 100.0L * Hits[Group] / Files < Rule["percent"].toDouble())) continue;
+        if (MatchedRule) *MatchedRule = RuleIndex;
         return DecodeProfile(Library[Rule["profile"].toString()].toObject());
     }
     return std::optional<ColumnProfile>{};

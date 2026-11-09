@@ -2,6 +2,7 @@
 #include "UniqueLibs/productDefaults.hpp"
 #include <QJsonArray>
 #include "columnContracts.hpp"
+#include "columnGrouping.hpp"
 #include "commonLibs/view/columnWidthCodec.hpp"
 
 namespace hc::columns
@@ -33,6 +34,7 @@ namespace hc::columns
             {"primaryName", IdText(Profile.primaryNameId_)}, {"mode", ModeName(Profile.mode_)}, {"columns", Columns}, {"sorts", Sorts}, {"scripts", Scripts}};
         // Keep the legacy JSON shape unchanged unless a profile opts in.
         if (Profile.splitNameExtension_) Result["splitNameExtension"] = true;
+        if (Profile.grouping_) Result["grouping"] = EncodeProfileGrouping(*Profile.grouping_);
         return Result;
     }
     inline std::optional<ColumnProfile> DecodeProfile(const QJsonObject& Object)
@@ -46,6 +48,7 @@ namespace hc::columns
         Profile.title_ = Object.value("title").toString();
         Profile.primaryNameId_ = QUuid(Object.value("primaryName").toString());
         Profile.mode_ = *Mode;
+        if (Object.contains("grouping")) Profile.grouping_ = DecodeProfileGrouping(Object["grouping"]);
         if (Object.contains("splitNameExtension") && !Object["splitNameExtension"].isBool()) return {};
         Profile.splitNameExtension_ = Object["splitNameExtension"].toBool(hc::defaults::DefaultValue("columnPresentation/splitNameExtension").toBool());
         for (const auto& Value : Object.value("columns").toArray()) {

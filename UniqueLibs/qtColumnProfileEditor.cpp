@@ -6,6 +6,7 @@
 #include <fmwidgets/Card.h>
 #include <fmstyle/StyleProps.h>
 #include "qtColumnProfileEditor.hpp"
+#include "qtitanGrouping.hpp"
 #include "cmnHCUtils.hpp"
 #include <QScrollArea>
 #include <QFileIconProvider>
@@ -24,6 +25,28 @@ using namespace hc::columns;
 
 namespace
 {
+    class ProfileListDelegate final : public QStyledItemDelegate
+    {
+    public:
+        using QStyledItemDelegate::QStyledItemDelegate;
+        QSize sizeHint(const QStyleOptionViewItem& Option, const QModelIndex& Index) const override
+        { auto Size = QStyledItemDelegate::sizeHint(Option, Index); Size.setHeight(Option.fontMetrics.height() * 2 + 14); return Size; }
+        void paint(QPainter* Painter, const QStyleOptionViewItem& Option, const QModelIndex& Index) const override
+        {
+            QStyleOptionViewItem Item(Option); initStyleOption(&Item, Index); Item.text.clear();
+            (Item.widget ? Item.widget->style() : QApplication::style())->drawControl(QStyle::CE_ItemViewItem, &Item, Painter, Item.widget);
+            Painter->save(); Painter->setClipRect(Option.rect);
+            Painter->setPen(Option.palette.color(Option.state.testFlag(QStyle::State_Selected) ? QPalette::HighlightedText : QPalette::Text));
+            auto Rect = Option.rect.adjusted(14, 5, -5, -5); Rect.setHeight(Option.fontMetrics.height());
+            Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Option.fontMetrics.elidedText(Index.data().toString(), Qt::ElideRight, Rect.width()));
+            if (Index.data(Qt::UserRole + 2).toBool()) {
+                Painter->setBrush(Painter->pen().color()); Painter->drawEllipse(QPoint(Option.rect.left() + 6, Rect.center().y()), 2, 2);
+            }
+            Rect.translate(0, Option.fontMetrics.height() + 3);
+            Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Option.fontMetrics.elidedText(Index.data(Qt::UserRole + 1).toString(), Qt::ElideRight, Rect.width()));
+            Painter->restore();
+        }
+    };
     // Keep the list's native selection, checkbox and keyboard behavior while
     // showing a compact summary of each column, including hidden columns.
     class ColumnListDelegate final : public QStyledItemDelegate
@@ -116,6 +139,7 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     auto* ProfileRows = new QVBoxLayout(ProfileCard); ProfileRows->setContentsMargins(8, 8, 8, 10); Body->addWidget(ProfileCard);
     Body->setSpacing(12);
     profileList_ = new QListWidget(ProfileCard); profileList_->setObjectName("hc.columns.profileList");
+    profileList_->setItemDelegate(new ProfileListDelegate(profileList_));
     profileList_->setTextElideMode(Qt::ElideRight); profileList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     ProfileRows->addWidget(profileList_, 1);
     profileTitle_ = new QLineEdit(ProfileCard); profileTitle_->setObjectName("hc.columns.profileTitle");
@@ -162,13 +186,19 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
         if (draft_.columns_[row_].id_ == draft_.primaryNameId_) { error_->setText(tr("다른 이름 컬럼을 주 이름으로 지정한 후 제거하세요.")); return; }
         const auto Id = draft_.columns_[row_].id_; draft_.columns_.removeAt(row_);
         draft_.sorts_.erase(std::remove_if(draft_.sorts_.begin(), draft_.sorts_.end(), [&](const auto& Sort) { return Sort.columnId_ == Id; }), draft_.sorts_.end());
+        bool RemovedGroup = false;
+        if (draft_.grouping_) {
+            auto& Levels = draft_.grouping_->levels_;
+            RemovedGroup = Levels.removeIf([&](const auto& Level) { return Level.columnId_ == Id; }) > 0;
+        }
         dirty_ = true; rebuildList(std::min(row_, int(draft_.columns_.size()) - 1));
+        if (RemovedGroup) error_->setText(tr("그룹 기준 열을 제거해 그룹 기본값을 지웠습니다."));
     });
     for (int Direction : {-1, 1}) Button(Direction < 0 ? tr("위로") : tr("아래로"), Direction < 0 ? "hc.columns.up" : "hc.columns.down", 1, Direction < 0 ? 0 : 1, [this, Direction] {
         const int Next = row_ + Direction; if (row_ < 0 || Next < 0 || Next >= draft_.columns_.size()) return;
         draft_.columns_.swapItemsAt(row_, Next); dirty_ = true; rebuildList(Next);
     });
-    Button(tr("기본값"), "hc.columns.reset", 1, 2, [this] { const auto Id = draft_.id_; const auto Title = draft_.title_; draft_ = Id == ReferenceProfileId ? ReferenceProfile() : Id == ReferenceTwoLineProfileId ? ReferenceProfile(true) : DefaultProfile(); draft_.id_ = Id; draft_.title_ = Title; dirty_ = true; rebuildList(0); });
+    Button(tr("기본값"), "hc.columns.reset", 1, 2, [this] { const auto Id = draft_.id_; const auto Title = draft_.title_; draft_ = Id == DownloadsProfileId ? DownloadsProfile() : Id == ReferenceProfileId ? ReferenceProfile() : Id == ReferenceTwoLineProfileId ? ReferenceProfile(true) : DefaultProfile(); draft_.id_ = Id; draft_.title_ = Title; dirty_ = true; rebuildList(0); });
     auto* ListHeader = new QWidget(Left); auto* ListHeaderRows = new QHBoxLayout(ListHeader);
     ListHeaderRows->setContentsMargins(30, 2, 6, 2); ListHeaderRows->setSpacing(0);
     const QStringList Captions{tr("제목"), tr("필드"), tr("너비"), tr("글자 정렬")};
@@ -253,8 +283,60 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     Split->setStretchFactor(0, 3); Split->setStretchFactor(1, 2); Split->setChildrenCollapsible(false); Split->setSizes({650, 340});
     Work->setStretchFactor(0, 3); Work->setStretchFactor(1, 2); Work->setChildrenCollapsible(false); Work->setSizes({300, 230});
     auto* SortingPage = new QWidget; auto* SortingLayout = new QVBoxLayout(SortingPage);
+    auto* GroupBox = new QGroupBox(tr("그룹"), SortingPage); auto* GroupForm = new QFormLayout(GroupBox); SortingLayout->addWidget(GroupBox);
+    groupColumn_ = Choice(GroupBox, "hc.columns.groupColumn", {});
+    groupMode_ = Choice(GroupBox, "hc.columns.groupMode", {});
+    groupOrder_ = Choice(GroupBox, "hc.columns.groupOrder", {});
+    GroupForm->addRow(tr("그룹 기준"), groupColumn_); GroupForm->addRow(tr("방식"), groupMode_); GroupForm->addRow(tr("순서"), groupOrder_);
+    groupExpand_ = new QButtonGroup(this); groupExpand_->setObjectName("hc.columns.groupExpand");
+    auto* Expand = new QHBoxLayout;
+    const QStringList ExpandTitles{tr("모두 펼침"), tr("모두 접기"), tr("첫 그룹만 펼침")};
+    for (int Index = 0; Index < ExpandTitles.size(); ++Index) {
+        auto* Radio = new QRadioButton(ExpandTitles[Index], GroupBox); groupExpand_->addButton(Radio, Index); Expand->addWidget(Radio);
+    }
+    GroupForm->addRow(tr("처음 열 때"), Expand);
+    hideGroupedColumn_ = new QCheckBox(tr("그룹 기준 열 숨기기"), GroupBox); hideGroupedColumn_->setObjectName("hc.columns.hideGroupedColumn"); GroupForm->addRow(hideGroupedColumn_);
+    groupColumns_.append(groupColumn_); groupModes_.append(groupMode_); groupOrders_.append(groupOrder_);
+    for (int Index = 1; Index < 3; ++Index) {
+        auto* Row = new QWidget(GroupBox); auto* Layout = new QHBoxLayout(Row); Layout->setContentsMargins(0, 0, 0, 0);
+        Layout->addWidget(new QLabel(tr("%1단계").arg(Index + 1), Row));
+        auto* Column = new QComboBox(Row); Column->setObjectName("hc.columns.groupColumn" + QString::number(Index + 1));
+        auto* Mode = new QComboBox(Row); Mode->setObjectName("hc.columns.groupMode" + QString::number(Index + 1));
+        auto* Order = new QComboBox(Row); Order->setObjectName("hc.columns.groupOrder" + QString::number(Index + 1));
+        groupColumns_.append(Column); groupModes_.append(Mode); groupOrders_.append(Order);
+        Layout->addWidget(Column, 1); Layout->addWidget(Mode); Layout->addWidget(Order);
+        auto* Remove = new QPushButton(tr("제거"), Row); Remove->setObjectName("hc.columns.removeGroup" + QString::number(Index + 1)); Layout->addWidget(Remove);
+        connect(Remove, &QPushButton::clicked, this, [this, Index] {
+            if (!draft_.grouping_ || Index >= draft_.grouping_->levels_.size()) return;
+            draft_.grouping_->levels_.removeAt(Index); dirty_ = true; loadGrouping(); updatePreview();
+        });
+        for (auto* Combo : {Column, Mode, Order}) connect(Combo, &QComboBox::currentIndexChanged, this, &QtColumnProfileEditor::storeGrouping);
+        extraGroupRows_.append(Row); GroupForm->addRow(Row);
+    }
+    addGroup_ = new QPushButton(tr("2단계 그룹 추가"), GroupBox); addGroup_->setObjectName("hc.columns.addGroup"); GroupForm->addRow(addGroup_);
+    connect(addGroup_, &QPushButton::clicked, this, [this] {
+        auto State = draft_.grouping_.value_or(ProfileGrouping{}); if (State.levels_.size() >= 3 || !State.raw_.isUndefined()) return;
+        for (const auto& Column : draft_.columns_) if (SupportsGrouping(Column)
+            && std::none_of(State.levels_.begin(), State.levels_.end(), [&](const auto& Level) { return Level.columnId_ == Column.id_; })) {
+            const bool Date = IsGroupingDate(Column.fieldId_); State.levels_.append({true, Column.id_, Date ? "relativeDate" : "value", Date ? Qt::DescendingOrder : Qt::AscendingOrder});
+            draft_.grouping_ = State; dirty_ = true; loadGrouping(); updatePreview(); break;
+        }
+    });
+    auto* Titles = new QHBoxLayout;
+    groupCount_ = new QCheckBox(tr("항목 수"), GroupBox); groupCount_->setObjectName("hc.columns.groupCount");
+    groupSize_ = new QCheckBox(tr("크기 합계"), GroupBox); groupSize_->setObjectName("hc.columns.groupSizeTotal");
+    groupLatest_ = new QCheckBox(tr("가장 최근 수정일"), GroupBox); groupLatest_->setObjectName("hc.columns.groupLatest");
+    for (auto* Check : {groupCount_, groupSize_, groupLatest_}) { Titles->addWidget(Check); connect(Check, &QCheckBox::toggled, this, &QtColumnProfileEditor::storeGrouping); }
+    GroupForm->addRow(tr("그룹 제목에 표시"), Titles);
+    groupsHeader_ = new QCheckBox(tr("열 머리글 위 그룹 영역 표시"), GroupBox); groupsHeader_->setObjectName("hc.columns.groupsHeader"); GroupForm->addRow(groupsHeader_);
+    connect(groupsHeader_, &QCheckBox::toggled, this, &QtColumnProfileEditor::storeGrouping);
+    for (auto* Combo : {groupColumn_, groupMode_, groupOrder_}) connect(Combo, &QComboBox::currentIndexChanged, this, &QtColumnProfileEditor::storeGrouping);
+    connect(groupExpand_, &QButtonGroup::idClicked, this, &QtColumnProfileEditor::storeGrouping);
+    connect(hideGroupedColumn_, &QCheckBox::toggled, this, &QtColumnProfileEditor::storeGrouping);
+    SortingLayout->addWidget(new QLabel(tr("그룹 안 정렬 · 폴더를 먼저 표시하는 설정은 각 그룹 안에서 적용됩니다."), SortingPage));
     auto* Sorting = new QHBoxLayout;
     sort_ = Choice(this, "hc.columns.sort", {}); sortOrder_ = Choice(this, "hc.columns.sortOrder", {tr("오름차순"), tr("내림차순")});
+    sort_->setFixedWidth(112); sortOrder_->setFixedWidth(96);
     Sorting->addWidget(new QLabel(tr("정렬 기준"))); Sorting->addWidget(sort_, 1); Sorting->addWidget(sortOrder_); SortingLayout->addLayout(Sorting);
     auto* AddSort = new QPushButton(tr("정렬 추가"), this); AddSort->setObjectName("hc.columns.addSort"); Sorting->addWidget(AddSort);
     auto* RemoveSort = new QPushButton(tr("정렬 제거"), this); Sorting->addWidget(RemoveSort);
@@ -281,18 +363,23 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
         if (loading_ || Row < 0 || Row >= draft_.sorts_.size()) return;
         const QSignalBlocker One(sort_), Two(sortOrder_); sort_->setCurrentIndex(sort_->findData(IdText(draft_.sorts_[Row].columnId_))); sortOrder_->setCurrentIndex(draft_.sorts_[Row].order_ == Qt::DescendingOrder);
     });
-    AddPage(SortingPage, tr("정렬"));
+    AddPage(SortingPage, tr("정렬 · 그룹"));
     auto* Policy = new fm::ui::Card(this); auto* PolicyRows = new QVBoxLayout(Policy);
     autoSelection_ = new QCheckBox(tr("열 세트 자동 적용 · 폴더 경로 또는 그룹 비율"), Policy); autoSelection_->setObjectName("hc.columns.autoEnabled"); PolicyRows->addWidget(autoSelection_);
-    automaticTab_ = new QCheckBox(tr("적용할 탭에서 자동 선택 사용 · 수동 선택 해제"), Policy); automaticTab_->setObjectName("hc.columns.automaticTab"); PolicyRows->addWidget(automaticTab_);
-    autoRules_ = new QTableWidget(Policy); autoRules_->setObjectName("hc.columns.autoRules"); autoRules_->setColumnCount(5); autoRules_->setHorizontalHeaderLabels({tr("사용"), tr("열 세트"), tr("폴더 경로 (* · ?)"), tr("파일 그룹"), tr("비율 이상")});
+    autoRules_ = new QTableWidget(Policy); autoRules_->setObjectName("hc.columns.autoRules"); autoRules_->setColumnCount(6); autoRules_->setHorizontalHeaderLabels({tr("사용"), tr("열 세트"), tr("폴더 조건"), tr("해석된 경로"), tr("파일 그룹"), tr("비율 이상")});
+    autoRules_->verticalHeader()->hide();
+    autoRules_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    autoRules_->setSelectionMode(QAbstractItemView::SingleSelection);
     autoRules_->setProperty("hc.cellControls", true); autoRules_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents); autoRules_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch); autoRules_->setMinimumHeight(100);  PolicyRows->addWidget(autoRules_, 1);
+    autoVerdict_ = new QLabel(Policy); autoVerdict_->setObjectName("hc.columns.autoVerdict"); autoVerdict_->setWordWrap(true); PolicyRows->addWidget(autoVerdict_);
+    autoResolveTimer_.setSingleShot(true); autoResolveTimer_.setInterval(150);
+    connect(&autoResolveTimer_, &QTimer::timeout, this, &QtColumnProfileEditor::refreshAutoVerdict);
     auto* RuleActions = new QHBoxLayout; PolicyRows->addLayout(RuleActions);
     const auto RuleAction = [&](const QString& Text, const QString& Name, std::function<void()> Action) {
         auto* Button = new QPushButton(Text, Policy); Button->setObjectName(Name); Button->setAutoDefault(false); RuleActions->addWidget(Button); connect(Button, &QPushButton::clicked, this, Action);
     };
     RuleAction(tr("조건 추가"), "hc.columns.autoAdd", [this] { if (autoRules_->rowCount() < 128) { appendAutoRule({{"enabled", true}, {"profile", IdText(draft_.id_)}, {"path", "*"}, {"group", ""}, {"percent", 50}}); dirty_ = true; } });
-    RuleAction(tr("조건 삭제"), "hc.columns.autoRemove", [this] { if (autoRules_->currentRow() >= 0) { autoRules_->removeRow(autoRules_->currentRow()); dirty_ = true; } });
+    RuleAction(tr("조건 삭제"), "hc.columns.autoRemove", [this] { if (autoRules_->currentRow() >= 0) { autoRules_->removeRow(autoRules_->currentRow()); dirty_ = true; autoResolveTimer_.start(); } });
     const auto Move = [this](int Direction) {
         const int Row = autoRules_->currentRow(), Next = Row + Direction; if (Row < 0 || Next < 0 || Next >= autoRules_->rowCount()) return;
         const auto Saved = AutoSelection(); auto Values = Saved["rules"].toArray(); const auto Current = Values[Row]; Values[Row] = Values[Next]; Values[Next] = Current;
@@ -300,8 +387,8 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     };
     RuleAction(tr("위로"), "hc.columns.autoUp", [Move] { Move(-1); }); RuleAction(tr("아래로"), "hc.columns.autoDown", [Move] { Move(1); }); RuleActions->addStretch();
     connect(autoSelection_, &QCheckBox::toggled, this, [this] { if (!loading_) dirty_ = true; });
-    connect(automaticTab_, &QCheckBox::toggled, this, [this] { if (!loading_) dirty_ = true; });
-    auto* PolicyNote = new QLabel(tr("위에서 처음 일치하는 조건을 적용합니다. 경로와 그룹을 함께 지정하면 둘 다 만족해야 합니다. 비율은 폴더 전체 파일 기준이며 하위 폴더는 제외합니다. 수동 선택한 탭은 자동 전환하지 않습니다."), Policy); PolicyNote->setWordWrap(true); PolicyRows->addWidget(PolicyNote); pages_->addTab(Policy, tr("자동 전환"));
+    connect(autoSelection_, &QCheckBox::toggled, this, [this] { autoResolveTimer_.start(); });
+    auto* PolicyNote = new QLabel(tr("위에서 처음 일치하는 조건을 적용합니다. 폴더 조건은 {GUID}, shell:Downloads, ::{CLSID}를 지원합니다. 끝의 \\*는 기준 폴더와 하위 폴더를 포함합니다. 경로와 파일 그룹을 함께 지정하면 둘 다 만족해야 합니다. 비율은 폴더 전체 파일 기준이며 하위 폴더는 제외합니다. 고정 탭은 자동 전환하지 않습니다."), Policy); PolicyNote->setWordWrap(true); PolicyRows->addWidget(PolicyNote); pages_->addTab(Policy, tr("자동 전환"));
     auto* Lua = new QWidget; auto* LuaForm = new QFormLayout(Lua); LuaForm->setRowWrapPolicy(QFormLayout::WrapAllRows); LuaForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     scripts_ = Choice(Lua, "hc.columns.scripts", {});
     auto* ScriptBar = new QHBoxLayout; ScriptBar->addWidget(scripts_, 1);
@@ -391,11 +478,25 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     valueDetail_ = new QLabel(PreviewPanel); valueDetail_->setObjectName("hc.columns.valueDetail"); valueDetail_->setWordWrap(true); valueDetail_->setTextInteractionFlags(Qt::TextSelectableByMouse); PreviewRows->addWidget(valueDetail_); valueDetail_->hide();
     connect(DetailToggle, &QToolButton::toggled, this, [this, DetailToggle](bool Open) { valueDetail_->setVisible(Open); DetailToggle->setArrowType(Open ? Qt::DownArrow : Qt::RightArrow); });
     connect(preview_, &QTableWidget::currentCellChanged, this, [this](int Row, int Column) { if (const auto* Cell = preview_->item(Row, Column)) valueDetail_->setText(Cell->toolTip()); });
-    auto* Footer = new QHBoxLayout; Outer->addLayout(Footer);
-    scope_ = Choice(this, "hc.columns.scope", {tr("현재 탭"), tr("현재 탭 + 이 패널의 새 탭 기본값"), tr("양쪽 패널의 현재 탭"), tr("이 패널의 새 탭 기본값만")});
-    scope_->setMinimumWidth(210);
-    Footer->addWidget(new QLabel(tr("적용 대상"), this)); Footer->addWidget(scope_);
-    summary_ = new QLabel(this); summary_->setObjectName("hc.columns.summary"); summary_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); Footer->addWidget(summary_, 1);
+    summary_ = new QLabel(this); summary_->setObjectName("hc.columns.summary"); summary_->setWordWrap(true); Outer->addWidget(summary_);
+    auto* Footer = new QGridLayout; Outer->addLayout(Footer); Footer->setColumnStretch(1, 1); Footer->setColumnStretch(2, 1);
+    applyTitle_ = new QLabel(this); applyTitle_->setWordWrap(true); Footer->addWidget(applyTitle_, 0, 0, 2, 1);
+    const auto Target = [&](const char* Name, int Row, int Column) {
+        auto* Check = new QCheckBox(this); Check->setObjectName(QString("hc.columns.") + Name); Footer->addWidget(Check, Row, Column); return Check;
+    };
+    applyCurrent_ = Target("applyCurrent", 0, 1); applyOpposite_ = Target("applyOpposite", 0, 2);
+    applyDefaultThis_ = Target("applyDefaultThis", 1, 1); applyDefaultOpposite_ = Target("applyDefaultOpposite", 1, 2);
+    Footer->addWidget(new QLabel(tr("대상 탭의 세트 선택"), this), 2, 0, 2, 1);
+    applyAuto_ = new QRadioButton(tr("자동 — 조건에 맞으면 조건의 세트, 아니면 이 세트"), this); applyAuto_->setObjectName("hc.columns.applyAuto");
+    applyFixed_ = new QRadioButton(tr("고정 — 항상 이 세트"), this); applyFixed_->setObjectName("hc.columns.applyFixed");
+    auto* Selection = new QButtonGroup(this); Selection->addButton(applyAuto_); Selection->addButton(applyFixed_);
+    Footer->addWidget(applyAuto_, 2, 1, 1, 2); Footer->addWidget(applyFixed_, 3, 1, 1, 2);
+    applySync_ = Target("applySync", 4, 1); Footer->removeWidget(applySync_); Footer->addWidget(applySync_, 4, 1, 1, 2);
+    applySync_->setText(tr("같은 세트를 쓰는 열린 탭에도 변경 내용 반영"));
+    applySummary_ = new QLabel(this); applySummary_->setObjectName("hc.columns.applySummary"); applySummary_->setWordWrap(true); Footer->addWidget(applySummary_, 5, 0, 1, 3);
+    SetPanes(tr("왼쪽"), tr("오른쪽"));
+    for (auto* Button : QList<QAbstractButton*>{applyCurrent_, applyOpposite_, applyDefaultThis_, applyDefaultOpposite_, applyAuto_, applyFixed_, applySync_})
+        connect(Button, &QAbstractButton::toggled, this, [this] { if (!loading_) targetsTouched_ = true; updateApplySummary(); emit ProfileSelected(); });
     error_ = new QLabel(this); error_->setObjectName("hc.columns.error"); error_->setWordWrap(true); Outer->addWidget(error_);
     connect(profileList_, &QListWidget::currentRowChanged, this, [this](int Row) {
         if (loading_ || Row < 0) return;
@@ -414,7 +515,7 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
             return;
         }
         library_[IdText(draft_.id_)] = EncodeProfile(draft_);
-        draft_ = *Next; automaticTab_->setChecked(false); dirty_ = true; refreshProfiles(); rebuildList(0);
+        draft_ = *Next; targetsTouched_ = true; refreshProfiles(); rebuildList(0); emit ProfileSelected();
     });
     connect(fieldSearch_, &QLineEdit::textChanged, this, [this] { refreshFields(); loadColumn(row_); });
     connect(fieldCategory_, &QComboBox::currentIndexChanged, this, [this] { refreshFields(); loadColumn(row_); });
@@ -429,7 +530,7 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
         if (Width.hidden_ == Hidden) return;
         Width.hidden_ = Hidden; dirty_ = true;
         if (Row == row_) { const QSignalBlocker Block(visible_); visible_->setChecked(!Hidden); }
-        updatePreview();
+        loadGrouping(); updatePreview();
     });
     for (auto* Combo : {field_, alignment_, sizeFormat_, unit_, widthMode_, sortField_}) connect(Combo, &QComboBox::currentIndexChanged, this, [this] { storeColumn(); });
     connect(dateFormat_, &QComboBox::currentTextChanged, this, [this] { storeColumn(); });
@@ -439,7 +540,6 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     for (auto* Number : {width_, minimum_, maximum_}) connect(Number, &QDoubleSpinBox::valueChanged, this, [this] { storeColumn(); });
     for (auto* Check : {primary_, visible_}) connect(Check, &QCheckBox::toggled, this, [this] { storeColumn(); });
     connect(layout_, &QComboBox::currentIndexChanged, this, [this](int Index) { if (loading_) return; draft_.mode_ = static_cast<LayoutMode>(Index); dirty_ = true; loadColumn(row_); });
-    connect(scope_, &QComboBox::currentIndexChanged, this, [this] { if (!loading_) dirty_ = true; });
     for (auto* Combo : {sort_, sortOrder_}) connect(Combo, &QComboBox::currentIndexChanged, this, [this] {
         if (loading_) return;
         const auto Id = QUuid(sort_->currentData().toString()); const int Row = sortRules_->currentRow();
@@ -458,7 +558,7 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     });
     connect(Copy, &QPushButton::clicked, this, &QtColumnProfileEditor::cloneProfile);
     connect(Delete, &QPushButton::clicked, this, [this] {
-        library_.remove(IdText(draft_.id_)); draft_ = DecodeProfile(library_[IdText(BuiltInProfileId)].toObject()).value_or(DefaultProfile()); library_[IdText(draft_.id_)] = EncodeProfile(draft_); dirty_ = true; refreshProfiles(); rebuildList(0);
+        library_.remove(IdText(draft_.id_)); draft_ = DecodeProfile(library_[IdText(BuiltInProfileId)].toObject()).value_or(DefaultProfile()); library_[IdText(draft_.id_)] = EncodeProfile(draft_); dirty_ = true; refreshProfiles(); rebuildList(0); emit ProfileSelected();
     });
     auto* Reload = new QPushButton(tr("플러그인 필드 새로 읽기"), this); Reload->setObjectName("hc.columns.reloadProviders"); AdvancedForm->addRow(Reload);
     connect(Reload, &QPushButton::clicked, &PluginFields::Instance(), &PluginFields::Refresh);
@@ -482,10 +582,11 @@ void QtColumnProfileEditor::SetContextFields(QVector<FieldDefinition> Fields)
 
 void QtColumnProfileEditor::Load(const ColumnProfile& Profile, const QJsonObject& Library, bool Writable)
 {
-    draft_ = Profile; library_ = Library; writable_ = Writable; dirty_ = false;
-    // New libraries offer Details only; saved reference/custom sets stay intact.
-    if (!library_.contains(IdText(BuiltInProfileId))) library_[IdText(BuiltInProfileId)] = EncodeProfile(DefaultProfile());
-    { const QSignalBlocker Block(scope_); scope_->setCurrentIndex(0); }
+    draft_ = Profile; currentProfileId_ = Profile.id_; library_ = Library; writable_ = Writable; dirty_ = targetsTouched_ = false;
+    library_ = WithBuiltInProfiles(library_);
+    { const QScopedValueRollback Loading(loading_, true);
+      applyCurrent_->setChecked(true); applyOpposite_->setChecked(false); applyDefaultThis_->setChecked(false);
+      applyDefaultOpposite_->setChecked(false); applyAuto_->setChecked(true); applySync_->setChecked(true); }
     library_[IdText(draft_.id_)] = EncodeProfile(draft_);
     refreshProfiles(); rebuildList(0); setEnabled(Writable);
     if (!Writable) error_->setText(tr("지원하지 않는 컬럼 설정을 보존하고 있습니다. 편집할 수 없습니다."));
@@ -498,6 +599,10 @@ void QtColumnProfileEditor::refreshProfiles()
     for (auto It = library_.begin(); It != library_.end(); ++It)
         if (const auto Profile = DecodeProfile(It.value().toObject()); Profile && IsSupportedProfile(*Profile)) {
             auto* Item = new QListWidgetItem(Profile->title_, profileList_); Item->setData(Qt::UserRole, It.key());
+            const auto Summary = ProfileRuleSummary(Profile->id_, AutoSelection(), autoColors_, hc::shell::KnownFolderChoices());
+            Item->setData(Qt::UserRole + 1, Summary); Item->setData(Qt::UserRole + 2, Profile->id_ == currentProfileId_);
+            Item->setData(Qt::AccessibleTextRole, Profile->title_ + " · " + Summary + (Profile->id_ == currentProfileId_ ? tr(" · 현재 탭") : QString{}));
+            Item->setToolTip(Item->data(Qt::AccessibleTextRole).toString());
             if (Profile->id_ == draft_.id_) profileList_->setCurrentItem(Item);
         }
 }
@@ -513,7 +618,7 @@ void QtColumnProfileEditor::rebuildList(int Row)
         sort_->addItem(Column.title_, IdText(Column.id_));
     }
     if (!draft_.sorts_.isEmpty()) { sort_->setCurrentIndex(sort_->findData(IdText(draft_.sorts_.front().columnId_))); sortOrder_->setCurrentIndex(draft_.sorts_.front().order_ == Qt::DescendingOrder); }
-    columns_->setCurrentRow(Row); loading_ = false; refreshSorts(); loadColumn(Row);
+    columns_->setCurrentRow(Row); loading_ = false; refreshSorts(); loadGrouping(); loadColumn(Row);
 }
 
 void QtColumnProfileEditor::loadColumn(int Row)
@@ -553,7 +658,7 @@ void QtColumnProfileEditor::loadColumn(int Row)
     unit_->setCurrentIndex(int(Width.unit_)); widthMode_->setCurrentIndex(int(Width.mode_)); width_->setValue(Width.value_);
     minimum_->setValue(Width.minimum_.value_or(-1)); maximum_->setValue(Width.maximum_.value_or(-1)); visible_->setChecked(!Width.hidden_);
     for (int Index = 0; Index < draft_.columns_.size(); ++Index) refreshColumnItem(Index);
-    loading_ = false; updatePreview();
+    loading_ = false; loadGrouping(); updatePreview();
 }
 
 void QtColumnProfileEditor::refreshColumnItem(int Row)
@@ -624,11 +729,72 @@ void QtColumnProfileEditor::storeColumn()
     refreshColumnItem(row_); columnTitle_->setText(tr("%1 열 편집").arg(Column.title_)); dirty_ = true;
     const auto SortRow = sort_->findData(IdText(Column.id_)); if (SortRow >= 0) sort_->setItemText(SortRow, Column.title_);
     if (Validate(draft_).isEmpty()) error_->clear();
+    loadGrouping();
     if (FieldChanged || NewPrimary) loadColumn(row_); else updatePreview();
+}
+
+void QtColumnProfileEditor::loadGrouping()
+{
+    if (!groupColumn_) return;
+    const QScopedValueRollback Loading(loading_, true);
+    const auto State = draft_.grouping_.value_or(ProfileGrouping{}); const bool Supported = State.raw_.isUndefined();
+    for (int Index = 0; Index < 3; ++Index) {
+        const auto Level = Index < State.levels_.size() ? State.levels_[Index] : GroupingState{};
+        auto* ColumnBox = groupColumns_[Index]; auto* ModeBox = groupModes_[Index]; auto* OrderBox = groupOrders_[Index];
+        ColumnBox->clear(); ColumnBox->addItem(tr("없음"), QString{}); QHash<QString, int> Counts;
+        for (const auto& Column : draft_.columns_) {
+            auto Title = Column.title_; const int Number = ++Counts[Title]; if (Number > 1) Title += tr(" (%1)").arg(Number);
+            if (Column.widths_[int(draft_.mode_)].hidden_) Title += tr(" (숨김)");
+            ColumnBox->addItem(Title, IdText(Column.id_));
+            const bool Duplicate = std::any_of(State.levels_.begin(), State.levels_.end(), [&](const auto& Other) { return Other.columnId_ == Column.id_ && Other.columnId_ != Level.columnId_; });
+            if (!SupportsGrouping(Column) || Duplicate) {
+                auto* Item = qobject_cast<QStandardItemModel*>(ColumnBox->model())->item(ColumnBox->count() - 1);
+                Item->setEnabled(false); Item->setToolTip(Duplicate ? tr("다른 단계에서 사용 중입니다.") : tr("이 열은 그룹화를 지원하지 않습니다."));
+            }
+        }
+        ColumnBox->setCurrentIndex(Level.enabled_ ? ColumnBox->findData(IdText(Level.columnId_)) : 0);
+        const auto It = std::find_if(draft_.columns_.begin(), draft_.columns_.end(), [&](const auto& Column) { return Column.id_ == Level.columnId_; });
+        const bool Date = It != draft_.columns_.end() && IsGroupingDate(It->fieldId_);
+        ModeBox->clear();
+        if (Date) { ModeBox->addItem(tr("상대 날짜"), "relativeDate"); ModeBox->addItem(tr("날짜"), "date"); ModeBox->addItem(tr("월"), "month"); }
+        else ModeBox->addItem(tr("값"), "value");
+        ModeBox->setCurrentIndex(std::max(0, ModeBox->findData(Level.mode_)));
+        OrderBox->clear(); OrderBox->addItems(Date ? QStringList{tr("오래된 것 먼저"), tr("최신 먼저")} : QStringList{tr("가→하"), tr("하→가")}); OrderBox->setCurrentIndex(Level.order_ == Qt::DescendingOrder);
+        ColumnBox->setEnabled(Supported); ModeBox->setEnabled(Supported && Level.enabled_ && Date); OrderBox->setEnabled(Supported && Level.enabled_);
+        if (Index) extraGroupRows_[Index - 1]->setVisible(Index < State.levels_.size());
+    }
+    groupExpand_->button(int(State.expand_))->setChecked(true); hideGroupedColumn_->setChecked(State.hideGroupedColumn_);
+    groupCount_->setChecked(State.count_); groupSize_->setChecked(State.sizeTotal_); groupLatest_->setChecked(State.latest_); groupsHeader_->setChecked(State.groupsHeader_);
+    for (auto* Button : groupExpand_->buttons()) Button->setEnabled(Supported);
+    for (auto* Check : {hideGroupedColumn_, groupCount_, groupSize_, groupLatest_, groupsHeader_}) Check->setEnabled(Supported);
+    addGroup_->setText(State.levels_.size() >= 3 ? tr("최대 3단계") : tr("%1단계 그룹 추가").arg(State.levels_.size() + 1));
+    const bool HasUnused = std::any_of(draft_.columns_.begin(), draft_.columns_.end(), [&](const auto& Column) {
+        return SupportsGrouping(Column) && std::none_of(State.levels_.begin(), State.levels_.end(), [&](const auto& Level) { return Level.columnId_ == Column.id_; });
+    });
+    addGroup_->setEnabled(Supported && State.levels_.size() < 3 && HasUnused);
+}
+void QtColumnProfileEditor::storeGrouping()
+{
+    if (loading_ || (draft_.grouping_ && !draft_.grouping_->raw_.isUndefined())) return;
+    auto State = draft_.grouping_.value_or(ProfileGrouping{}); const auto Before = State.levels_; State.levels_.clear();
+    for (int Index = 0; Index < 3; ++Index) {
+        const QUuid Id(groupColumns_[Index]->currentData().toString());
+        const auto It = std::find_if(draft_.columns_.begin(), draft_.columns_.end(), [&](const auto& Column) { return Column.id_ == Id; });
+        if (It == draft_.columns_.end() || !SupportsGrouping(*It)) continue;
+        auto Mode = groupModes_[Index]->currentData().toString(); const bool Date = IsGroupingDate(It->fieldId_);
+        const bool Changed = Index >= Before.size() || Before[Index].columnId_ != Id;
+        if (!SupportsGroupingMode(It->fieldId_, Mode)) Mode = Date ? "relativeDate" : "value";
+        State.levels_.append({true, Id, Mode, Changed && Date ? Qt::DescendingOrder : groupOrders_[Index]->currentIndex() == 1 ? Qt::DescendingOrder : Qt::AscendingOrder});
+    }
+    State.expand_ = static_cast<ProfileGrouping::Expand>(std::max(0, groupExpand_->checkedId())); State.hideGroupedColumn_ = hideGroupedColumn_->isChecked();
+    State.count_ = groupCount_->isChecked(); State.sizeTotal_ = groupSize_->isChecked(); State.latest_ = groupLatest_->isChecked(); State.groupsHeader_ = groupsHeader_->isChecked();
+    draft_.grouping_ = State; dirty_ = true; loadGrouping(); updatePreview();
 }
 
 bool QtColumnProfileEditor::ValidateDraft()
 {
+    const auto GroupError = ValidateGrouping(draft_);
+    if (!GroupError.isEmpty()) { error_->setText(GroupError); return false; }
     if (autoSelection_->isEnabled()) {
         const auto AutoError = ValidateAutoSelection(AutoSelection(), Library(), autoColors_);
         if (!AutoError.isEmpty()) { error_->setText(AutoError); return false; }
@@ -673,9 +839,22 @@ QVector<PreviewSample> QtColumnProfileEditor::previewSamples() const
     Files[0].name_ = "archive.tar.gz"; Files[0].size_ = 1536; Files[0].attributes_ = 0x20;
     Files[1].name_ = ".config"; Files[1].size_ = 1048576; Files[1].attributes_ = 2;
     Files[2].name_ = tr("문서"); Files[2].directory_ = true; Files[2].attributes_ = 0x10;
+    const bool Grouped = DefaultGrouping(draft_).enabled_;
+    if (Grouped) {
+        Files.resize(7);
+        const QStringList Names{"report.pdf", "photo.jpg", "archive.zip", "notes.txt", "installer.exe", "music.flac", "old-backup.zip"};
+        for (int Index = 0; Index < Files.size(); ++Index) {
+            Files[Index].name_ = Names[Index]; Files[Index].directory_ = false; Files[Index].size_ = quint64(1024) * (Index + 1);
+        }
+    }
+    const auto Today = QDate::currentDate();
+    const QList<QDate> Dates{Today, Today.addDays(-1), Today.addDays(-6), Today.addDays(-9),
+        QDate(Today.year(), Today.month(), 1), QDate(Today.year(), Today.month(), 1).addMonths(-1), Today.addYears(-1)};
+    int SampleIndex = 0;
     QVector<PreviewSample> Samples;
     for (auto& File : Files) {
         File.parentPath_ = "C:\\Projects"; File.created_ = File.modified_ = File.accessed_ = QDateTime(QDate(2026, 10, 2), QTime(10, 30));
+        if (Grouped) File.created_ = File.modified_ = File.accessed_ = QDateTime(Dates[SampleIndex++], QTime(10, 30));
         PreviewSample Sample; Sample.identity_ = "example:" + File.name_; Sample.name_ = File.name_; Sample.directory_ = File.directory_;
         for (const auto& Field : BuiltInFields()) if (Field.cost_ == EvaluationCost::Snapshot) Sample.values_[Field.id_] = Resolve(Field.id_, File);
         Samples.append(Sample);
@@ -811,6 +990,13 @@ void QtColumnProfileEditor::updatePreview()
         if (Column.fieldId_ == "file.attributes" && Value.State() == ValueState::Ready) Text = GetFormattedAttrText(quint32(Value.Raw().toULongLong()), false);
         if (Column.fieldId_ == "file.size" && Value.State() == ValueState::OnDemand && Sample.directory_) Text = tr("<폴더>");
         auto* Cell = new QTableWidgetItem(Text); Cell->setTextAlignment(Column.alignment_ | Qt::AlignVCenter);
+        Cell->setData(GroupEntryRole, Sample.name_ != "..");
+        Cell->setData(GroupSizeRole, readSample(Sample, "file.size").Raw());
+        Cell->setData(GroupLatestRole, readSample(Sample, "file.modified").Raw());
+        for (const auto& Group : DefaultGroupingLevels(draft_)) if (Group.columnId_ == Column.id_) {
+            const auto Value = MakeGroupValue(Column.fieldId_, Group.mode_, readSample(Sample, Column.fieldId_));
+            Cell->setData(GroupKeyRole, Value.key_); Cell->setData(GroupOrderRole, Value.order_); Cell->setData(GroupTextRole, Value.text_);
+        }
         Cell->setToolTip(tr("%1 · %2\n원래 값: %3\n표시: %4\n정렬 값: %5 · %6%7").arg(Sample.name_, StateText(Value.State()), Value.Raw().toString(), Text, Sort.Raw().toString(), StateText(Sort.State()), Value.Error().isEmpty() ? QString{} : "\n" + Value.Error()));
         return Cell;
     };
@@ -841,6 +1027,28 @@ void QtColumnProfileEditor::updatePreview()
     for (int Position = 0; Position < draft_.columns_.size(); ++Position) for (const auto& Bound : Binding.VecColumns)
         if (Bound.definition_.id_ == draft_.columns_[Position].id_) Native->getColumnByModelColumn(Bound.Index)->setVisualIndex(Position);
     previewAdapter_->Bind(Binding); previewAdapter_->UseProfileWidths(); previewAdapter_->Apply(); Native->endUpdate();
+    const auto Group = DefaultGrouping(draft_);
+    if (Group.enabled_) {
+        Native->beginUpdate();
+        Native->options().setColumnHidingOnGroupingEnabled(draft_.grouping_->hideGroupedColumn_);
+        Native->options().setGroupKeepLevelExpanded(0);
+        const auto Levels = DefaultGroupingLevels(draft_);
+        for (int Level = 0; Level < Levels.size(); ++Level) for (const auto& Bound : Binding.VecColumns) if (Bound.definition_.id_ == Levels[Level].columnId_) {
+            auto* Column = static_cast<Qtitan::GridColumn*>(Native->getColumnByModelColumn(Bound.Index));
+            ApplyNativeGroup(Native, Column, Levels[Level], Level);
+        }
+        Native->endUpdate();
+        if (draft_.grouping_->expand_ == ProfileGrouping::Expand::All) Native->expandAll();
+        else {
+            Native->collapseAll();
+            if (draft_.grouping_->expand_ == ProfileGrouping::Expand::First && !Native->modelController()->groupRows().isEmpty()) Native->modelController()->setGroupExpanded(0, true);
+        }
+    }
+    const auto GroupOptions = draft_.grouping_.value_or(ProfileGrouping{});
+    Native->options().setGroupsHeader(GroupOptions.groupsHeader_);
+    QVector<int> GroupColumns; for (const auto& Level : DefaultGroupingLevels(draft_)) for (const auto& Bound : Binding.VecColumns)
+        if (Bound.definition_.id_ == Level.columnId_) GroupColumns.append(Bound.Index);
+    ConfigureGroupCaptions(Native, GroupColumns, GroupOptions);
     const int SelectedColumn = previewColumnIds_.indexOf(SelectedId);
     if (SelectedColumn >= 0 && row_ >= 0 && !draft_.columns_[row_].widths_[int(draft_.mode_)].hidden_) {
         Native->setFocusedColumnIndex(SelectedColumn);
@@ -854,6 +1062,8 @@ void QtColumnProfileEditor::updatePreview()
         .arg(Virtual ? tr(" · 가상 파일 %1개, 최대 %2 MiB 읽기").arg(Virtual).arg(double(Bytes) / 1048576, 0, 'f', 2) : QString{}));
     int Count = 0; for (const auto& Column : draft_.columns_) if (!Column.widths_[int(draft_.mode_)].hidden_) ++Count;
     summary_->setText(tr("%1 · %2 · 표시 열 %3개").arg(draft_.title_, layout_->currentText()).arg(Count));
+    if (Group.enabled_) summary_->setText(summary_->text() + tr(" · 그룹: %1(%2)").arg(groupColumn_->currentText(), groupMode_->currentText()));
+    updateApplySummary();
 }
 
 void QtColumnProfileEditor::cloneProfile()
@@ -865,12 +1075,37 @@ void QtColumnProfileEditor::cloneProfile()
         const auto Old = Column.id_; Column.id_ = QUuid::createUuid();
         if (draft_.primaryNameId_ == Old) draft_.primaryNameId_ = Column.id_;
         for (auto& Sort : draft_.sorts_) if (Sort.columnId_ == Old) Sort.columnId_ = Column.id_;
+        if (draft_.grouping_) for (auto& Level : draft_.grouping_->levels_) if (Level.columnId_ == Old) Level.columnId_ = Column.id_;
     }
-    library_[IdText(draft_.id_)] = EncodeProfile(draft_); dirty_ = true; refreshProfiles(); rebuildList(0);
+    library_[IdText(draft_.id_)] = EncodeProfile(draft_); dirty_ = true; refreshProfiles(); rebuildList(0); emit ProfileSelected();
 }
 
 QJsonObject QtColumnProfileEditor::Library() const { auto Result = library_; Result[IdText(draft_.id_)] = EncodeProfile(draft_); return Result; }
-bool QtColumnProfileEditor::NewTabDefault() const { return scope_->currentIndex() == 1 || scope_->currentIndex() == 3; }
+QtColumnProfileEditor::ApplyTargets QtColumnProfileEditor::Targets() const
+{
+    return {applyCurrent_->isChecked(), applyOpposite_->isChecked(), applyDefaultThis_->isChecked(),
+        applyDefaultOpposite_->isChecked(), applyAuto_->isChecked(), applySync_->isChecked()};
+}
+void QtColumnProfileEditor::SetPanes(const QString& This, const QString& Opposite)
+{
+    applyCurrent_->setText(tr("현재 탭 (%1)").arg(This)); applyOpposite_->setText(tr("현재 반대 탭 (%1)").arg(Opposite));
+    applyDefaultThis_->setText(tr("새 탭 기본값: %1").arg(This)); applyDefaultOpposite_->setText(tr("새 탭 기본값: %1").arg(Opposite));
+}
+void QtColumnProfileEditor::updateApplySummary()
+{
+    if (!applySummary_) return;
+    applyTitle_->setText(tr("선택한 세트 ‘%1’를").arg(draft_.title_));
+    if (!dirty_ && !targetsTouched_) { applySummary_->setText(tr("변경 없음 · 열린 탭을 다시 적용하지 않습니다.")); return; }
+    const auto Apply = Targets(); QStringList Parts;
+    if (dirty_) Parts.append(tr("‘%1’ 정의 저장(전역)").arg(draft_.title_));
+    const auto Mode = Apply.automatic_ ? tr("자동") : tr("고정");
+    if (Apply.current_) Parts.append(tr("현재 탭 적용(%1)").arg(Mode));
+    if (Apply.opposite_) Parts.append(tr("반대 탭 적용(%1)").arg(Mode));
+    if (Apply.defaultThis_) Parts.append(applyDefaultThis_->text());
+    if (Apply.defaultOpposite_) Parts.append(applyDefaultOpposite_->text());
+    if (dirty_ && Apply.sync_) Parts.append(tr("열린 탭 %1개 반영").arg(syncCount_));
+    applySummary_->setText(tr("저장하면 · %1").arg(Parts.join(" · ")));
+}
 void QtColumnProfileEditor::layoutPreview()
 {
     if (!previewGrid_ || !previewFrame_) return;
@@ -956,48 +1191,115 @@ void QtColumnProfileEditor::LoadAutoSelection(const QJsonObject& Policy, const Q
     const QScopedValueRollback Loading(loading_, true);
     autoPolicy_ = Policy.isEmpty() ? EmptyAutoSelection() : Policy; autoColors_ = Colors;
     const bool Supported = autoPolicy_["version"] == QJsonValue(1);
-    autoSelection_->setEnabled(Supported); autoRules_->setEnabled(Supported); automaticTab_->setEnabled(Supported);
+    autoSelection_->setEnabled(Supported); autoRules_->setEnabled(Supported);
     for (const auto* Name : {"hc.columns.autoAdd", "hc.columns.autoRemove", "hc.columns.autoUp", "hc.columns.autoDown"}) findChild<QPushButton*>(Name)->setEnabled(Supported);
-    autoSelection_->setChecked(autoPolicy_["enabled"].toBool()); automaticTab_->setChecked(AutomaticTab);
+    autoSelection_->setChecked(autoPolicy_["enabled"].toBool()); applyAuto_->setChecked(AutomaticTab); applyFixed_->setChecked(!AutomaticTab);
     autoRules_->setRowCount(0); for (const auto& Value : autoPolicy_["rules"].toArray()) appendAutoRule(Value.toObject());
+    refreshProfiles(); updateApplySummary();
 }
 QJsonObject QtColumnProfileEditor::AutoSelection() const
 {
     if (!autoSelection_->isEnabled()) return autoPolicy_;
     auto Result = autoPolicy_; Result["version"] = 1; Result["enabled"] = autoSelection_->isChecked(); QJsonArray Rules;
     for (int Row = 0; Row < autoRules_->rowCount(); ++Row) {
-        auto Rule = autoRules_->item(Row, 0)->data(Qt::UserRole).toJsonObject();
-        Rule["enabled"] = autoRules_->item(Row, 0)->checkState() == Qt::Checked;
-        Rule["profile"] = qobject_cast<QComboBox*>(autoRules_->cellWidget(Row, 1))->currentData().toString();
-        Rule["path"] = qobject_cast<QLineEdit*>(autoRules_->cellWidget(Row, 2))->text().trimmed();
-        Rule["group"] = qobject_cast<QComboBox*>(autoRules_->cellWidget(Row, 3))->currentData().toString();
-        Rule["percent"] = qobject_cast<QSpinBox*>(autoRules_->cellWidget(Row, 4))->value(); Rules.append(Rule);
+        auto Rule = autoRules_->item(Row, AutoEnabled)->data(Qt::UserRole).toJsonObject();
+        Rule["enabled"] = autoRules_->item(Row, AutoEnabled)->checkState() == Qt::Checked;
+        Rule["profile"] = qobject_cast<QComboBox*>(autoRules_->cellWidget(Row, AutoProfile))->currentData().toString();
+        Rule["path"] = autoRules_->cellWidget(Row, AutoPath)->findChild<QLineEdit*>("hc.columns.autoPath")->text();
+        Rule["group"] = qobject_cast<QComboBox*>(autoRules_->cellWidget(Row, AutoGroup))->currentData().toString();
+        Rule["percent"] = qobject_cast<QSpinBox*>(autoRules_->cellWidget(Row, AutoPercent))->value(); Rules.append(Rule);
     }
     Result["rules"] = Rules; return Result;
 }
 void QtColumnProfileEditor::appendAutoRule(const QJsonObject& Rule)
 {
     const int Row = autoRules_->rowCount(); autoRules_->insertRow(Row);
-    auto* Enabled = new QTableWidgetItem; Enabled->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable); Enabled->setCheckState(Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool()) ? Qt::Checked : Qt::Unchecked); Enabled->setData(Qt::UserRole, Rule); autoRules_->setItem(Row, 0, Enabled);
-    auto* Profile = new QComboBox(autoRules_); autoRules_->setCellWidget(Row, 1, Profile);
+    auto* Enabled = new QTableWidgetItem; Enabled->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable); Enabled->setCheckState(Rule["enabled"].toBool(hc::defaults::DefaultValue("columnAutoRule/enabled").toBool()) ? Qt::Checked : Qt::Unchecked); Enabled->setData(Qt::UserRole, Rule); autoRules_->setItem(Row, AutoEnabled, Enabled);
+    auto* Profile = new QComboBox(autoRules_); autoRules_->setCellWidget(Row, AutoProfile, Profile);
     const auto Profiles = Library(); for (auto It = Profiles.begin(); It != Profiles.end(); ++It) if (const auto Value = DecodeProfile(It.value().toObject())) Profile->addItem(Value->title_, It.key());
     if (Profile->findData(Rule["profile"].toString()) < 0) Profile->addItem(tr("사용할 수 없는 열 세트"), Rule["profile"].toString()); Profile->setCurrentIndex(Profile->findData(Rule["profile"].toString()));
-    auto* Path = new QLineEdit(QDir::toNativeSeparators(Rule["path"].toString()), autoRules_); Path->setMaxLength(4096); Path->setAccessibleName(tr("폴더 경로 조건")); autoRules_->setCellWidget(Row, 2, Path);
-    auto* Group = new QComboBox(autoRules_); Group->addItem(tr("사용 안 함"), ""); autoRules_->setCellWidget(Row, 3, Group);
+    auto* PathCell = new QWidget(autoRules_); auto* PathLayout = new QHBoxLayout(PathCell); PathLayout->setContentsMargins(0, 0, 0, 0);
+    auto* Path = new QLineEdit(Rule["path"].toString(), PathCell); Path->setObjectName("hc.columns.autoPath"); Path->setMaxLength(4096); Path->setAccessibleName(tr("폴더 조건"));
+    auto* Browse = new QToolButton(PathCell); Browse->setObjectName("hc.columns.autoPathMenu"); Browse->setText(tr("▾")); Browse->setAccessibleName(tr("셸 폴더 선택")); Browse->setPopupMode(QToolButton::InstantPopup);
+    auto* Menu = new QMenu(Browse); Browse->setMenu(Menu);
+    for (const auto& Choice : hc::shell::KnownFolderChoices()) {
+        auto* Action = Menu->addAction(Choice.label_); Action->setToolTip(Choice.folder_.toString());
+        connect(Action, &QAction::triggered, Path, [Path, Choice] { Path->setText(Choice.folder_.toString()); });
+    }
+    Menu->addSeparator();
+    auto* Children = Menu->addAction(tr("하위 폴더 포함 (\\* 붙이기)")); Children->setCheckable(true);
+    connect(Menu, &QMenu::aboutToShow, this, [Children, Path] { Children->setChecked(Path->text().endsWith("\\*") || Path->text().endsWith("/*")); });
+    connect(Children, &QAction::triggered, Path, [Path](bool On) {
+        auto Text = Path->text();
+        if (Text.endsWith("\\*") || Text.endsWith("/*")) Text.chop(2);
+        if (On) { while (Text.endsWith('/') || Text.endsWith('\\')) Text.chop(1); Text += "\\*"; }
+        Path->setText(Text);
+    });
+    auto* Current = Menu->addAction(tr("현재 탭 폴더 넣기"));
+    connect(Current, &QAction::triggered, Path, [this, Path] { Path->setText(QDir::toNativeSeparators(currentLocation_)); });
+    auto* Choose = Menu->addAction(tr("폴더 찾아보기…"));
+    connect(Choose, &QAction::triggered, Path, [this, Path] {
+        const auto Directory = QFileDialog::getExistingDirectory(this, tr("폴더 조건"), currentLocation_);
+        if (!Directory.isEmpty()) Path->setText(QDir::toNativeSeparators(Directory));
+    });
+    PathLayout->addWidget(Path, 1); PathLayout->addWidget(Browse); autoRules_->setCellWidget(Row, AutoPath, PathCell);
+    auto* Resolved = new QTableWidgetItem; Resolved->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable); autoRules_->setItem(Row, AutoResolved, Resolved);
+    auto* Group = new QComboBox(autoRules_); Group->addItem(tr("사용 안 함"), ""); autoRules_->setCellWidget(Row, AutoGroup, Group);
     for (const auto& Value : autoColors_["groups"].toArray()) if (Value.toObject()["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool())) Group->addItem(Value.toObject()["name"].toString(), Value.toObject()["id"].toString());
     if (Group->findData(Rule["group"].toString()) < 0) Group->addItem(tr("사용할 수 없는 파일 그룹"), Rule["group"].toString()); Group->setCurrentIndex(Group->findData(Rule["group"].toString()));
-    auto* Percent = new QSpinBox(autoRules_); Percent->setRange(1, 100); Percent->setSuffix("%"); Percent->setValue(Rule["percent"].toInt(hc::defaults::DefaultValue("columnAutoRule/percent").toInt())); Percent->setAccessibleName(tr("파일 그룹 최소 비율")); autoRules_->setCellWidget(Row, 4, Percent);
+    auto* Percent = new QSpinBox(autoRules_); Percent->setRange(1, 100); Percent->setSuffix("%"); Percent->setValue(Rule["percent"].toInt(hc::defaults::DefaultValue("columnAutoRule/percent").toInt())); Percent->setAccessibleName(tr("파일 그룹 최소 비율")); autoRules_->setCellWidget(Row, AutoPercent, Percent);
     connect(Profile, &QComboBox::currentIndexChanged, this, [this] { if (!loading_) dirty_ = true; }); connect(Path, &QLineEdit::textChanged, this, [this] { if (!loading_) dirty_ = true; }); connect(Group, &QComboBox::currentIndexChanged, this, [this] { if (!loading_) dirty_ = true; }); connect(Percent, &QSpinBox::valueChanged, this, [this] { if (!loading_) dirty_ = true; });
     if (!autoRules_->property("hc.connected").toBool()) {
         autoRules_->setProperty("hc.connected", true); connect(autoRules_, &QTableWidget::itemChanged, this, [this] { if (!loading_) dirty_ = true; });
+        connect(autoRules_, &QTableWidget::itemChanged, this, [this] { if (!loading_) autoResolveTimer_.start(); });
     }
+    for (auto* Combo : {Profile, Group}) connect(Combo, &QComboBox::currentIndexChanged, this, [this] { autoResolveTimer_.start(); });
+    connect(Path, &QLineEdit::textChanged, this, [this] { autoResolveTimer_.start(); });
+    connect(Percent, &QSpinBox::valueChanged, this, [this] { autoResolveTimer_.start(); });
+    autoResolveTimer_.start();
+}
+
+void QtColumnProfileEditor::refreshAutoVerdict()
+{
+    if (!autoVerdict_) return;
+    const QSignalBlocker Block(autoRules_);
+    QHash<QString, QString> Resolved;
+    QHash<QString, hc::shell::ResolvedFolder> Cache;
+    int First = -1; bool Deferred = false;
+    for (int Row = 0; Row < autoRules_->rowCount(); ++Row) {
+        const auto Pattern = autoRules_->cellWidget(Row, AutoPath)->findChild<QLineEdit*>("hc.columns.autoPath")->text();
+        const auto Token = hc::shell::ParseFolderToken(Pattern);
+        QString Text;
+        if (Token.kind_ == hc::shell::FolderToken::Kind::None) Text = Pattern.trimmed().isEmpty() || Pattern.trimmed() == "*" ? tr("모든 폴더") : tr("일반 경로");
+        else if (Token.kind_ == hc::shell::FolderToken::Kind::Invalid) Text = tr("⚠ 셸 폴더 GUID 형식을 확인하세요.");
+        else {
+            if (!Cache.contains(Token.token_)) Cache[Token.token_] = hc::shell::ResolveFolderToken(Token);
+            const auto Folder = Cache[Token.token_]; Resolved[Token.token_] = Folder.path_;
+            Text = Folder.error_.isEmpty() ? Folder.label_ + " · " + QDir::toNativeSeparators(Folder.path_) : tr("⚠ %1").arg(Folder.error_);
+        }
+        auto* Item = autoRules_->item(Row, AutoResolved);
+        Item->setText(Text); Item->setToolTip(Text); Item->setData(Qt::AccessibleTextRole, Text);
+        const bool Enabled = autoRules_->item(Row, AutoEnabled)->checkState() == Qt::Checked;
+        const bool PathMatches = Pattern.trimmed().isEmpty() || MatchFolderCondition(Pattern, currentLocation_, Resolved);
+        if (First < 0 && Enabled && PathMatches) {
+            First = Row;
+            Deferred = !qobject_cast<QComboBox*>(autoRules_->cellWidget(Row, AutoGroup))->currentData().toString().isEmpty();
+        }
+        Item->setBackground(First == Row ? palette().brush(QPalette::AlternateBase) : QBrush{});
+    }
+    QString Verdict = tr("조건 불일치 · 기준 세트");
+    if (!autoSelection_->isChecked()) Verdict = tr("자동 전환 사용 안 함");
+    else if (First >= 0) Verdict = Deferred ? tr("%1번 조건 · 파일 그룹은 저장 후 판정").arg(First + 1)
+        : tr("%1번 조건 ‘%2’ 적용").arg(First + 1).arg(qobject_cast<QComboBox*>(autoRules_->cellWidget(First, AutoProfile))->currentText());
+    autoVerdict_->setText(tr("현재 탭 %1 → %2").arg(QDir::toNativeSeparators(currentLocation_), Verdict));
+    refreshProfiles(); updateApplySummary();
 }
 
 void QtColumnProfileEditor::SetAutoColors(const QJsonObject& Colors)
 {
     autoColors_ = Colors;
     for (int Row = 0; Row < autoRules_->rowCount(); ++Row) {
-        auto* Group = qobject_cast<QComboBox*>(autoRules_->cellWidget(Row, 3));
+        auto* Group = qobject_cast<QComboBox*>(autoRules_->cellWidget(Row, AutoGroup));
         const auto Selected = Group->currentData().toString(); const QSignalBlocker Block(Group);
         Group->clear(); Group->addItem(tr("사용 안 함"), "");
         for (const auto& Value : Colors["groups"].toArray()) if (Value.toObject()["enabled"].toBool(hc::defaults::DefaultValue("fileColorGroup/enabled").toBool())) Group->addItem(Value.toObject()["name"].toString(), Value.toObject()["id"].toString());

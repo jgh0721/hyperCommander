@@ -5,6 +5,8 @@
 #include <QObject>
 #include <QSet>
 #include <QMap>
+#include <QJsonValue>
+#include <optional>
 #include <QUuid>
 #include <QVariant>
 #include <QVector>
@@ -119,6 +121,24 @@ namespace hc::columns
         bool operator==(const ScriptDefinition&) const = default;
     };
     inline QString ScriptPrefix(const ScriptDefinition& Script) { return "lua." + Script.id_.toString(QUuid::Id128) + "."; }
+    struct GroupingState
+    {
+        bool enabled_ = false;
+        QUuid columnId_;
+        QString mode_ = "value";
+        Qt::SortOrder order_ = Qt::AscendingOrder;
+        bool operator==(const GroupingState&) const = default;
+    };
+    struct ProfileGrouping
+    {
+        QVector<GroupingState> levels_;
+        enum class Expand { All, None, First } expand_ = Expand::All;
+        bool count_ = true, sizeTotal_ = false, latest_ = false;
+        bool groupsHeader_ = false, hideGroupedColumn_ = false;
+        // Preserve even non-object future/corrupt values without rejecting the column set.
+        QJsonValue raw_ = QJsonValue::Undefined;
+        bool operator==(const ProfileGrouping&) const = default;
+    };
     struct ColumnProfile
     {
         QUuid id_ = QUuid::createUuid();
@@ -130,6 +150,7 @@ namespace hc::columns
         QVector<ColumnDefinition> columns_;
         QVector<SortDefinition> sorts_;
         QVector<ScriptDefinition> scripts_;
+        std::optional<ProfileGrouping> grouping_;
         bool operator==(const ColumnProfile&) const = default;
     };
     inline QString DisplayField(const ColumnProfile& Profile, const ColumnDefinition& Column)

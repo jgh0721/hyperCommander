@@ -11,12 +11,199 @@
 #include "commonLibs/columns/fieldCondition.hpp"
 #include "commonLibs/columns/columnProfileStorage.hpp"
 #include "commonLibs/view/listIconSize.hpp"
+#include "UniqueLibs/columnAutoSelection.hpp"
 using namespace hc::view;
 
 class ColumnTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void folderConditionTokens()
+    {
+        using namespace hc::shell;
+        const QString Guid = "{374DE290-123F-4565-9164-39C4925E467B}";
+        for (const auto& Text : {Guid, "shell:" + Guid, " SHELL:" + Guid + " "}) {
+            const auto Token = ParseFolderToken(Text);
+            QCOMPARE(Token.kind_, FolderToken::Kind::KnownFolder); QCOMPARE(Token.id_, QUuid(Guid));
+        }
+        QCOMPARE(ParseFolderToken(Guid + "\\*").rest_, QString("/*"));
+        QCOMPARE(ParseFolderToken("shell:Personal\\Projects\\*").name_, QString("Personal"));
+        QCOMPARE(ParseFolderToken("shell:Personal").kind_, FolderToken::Kind::KnownFolderName);
+        QCOMPARE(ParseFolderToken("::" + Guid).kind_, FolderToken::Kind::Namespace);
+        QCOMPARE(ParseFolderToken("shell:::" + Guid).kind_, FolderToken::Kind::Namespace);
+        for (const auto& Text : {QString("{abc}"), QString("shell:"), Guid + "bad", QString("::{bad}")})
+            QCOMPARE(ParseFolderToken(Text).kind_, FolderToken::Kind::Invalid);
+        QCOMPARE(ParseFolderToken("D:\\Work\\*").kind_, FolderToken::Kind::None);
+    }
+    void profileGroupingRoundTrip()
+    {
+        using namespace hc::columns;
+        for (const auto& Profile : {DefaultProfile(), ReferenceProfile(), ReferenceProfile(true)}) {
+            const auto Before = EncodeProfile(Profile); QVERIFY(!Before.contains("grouping"));
+            QCOMPARE(QJsonDocument(EncodeProfile(*DecodeProfile(Before))).toJson(QJsonDocument::Compact), QJsonDocument(Before).toJson(QJsonDocument::Compact));
+        }
+        auto Profile = DefaultProfile(); Profile.grouping_ = ProfileGrouping{};
+        Profile.grouping_->levels_ = {{true, Profile.columns_[4].id_, "relativeDate", Qt::DescendingOrder}};
+        Profile.grouping_->expand_ = ProfileGrouping::Expand::First; Profile.grouping_->hideGroupedColumn_ = true;
+        const auto Encoded = EncodeProfile(Profile); const auto Decoded = DecodeProfile(Encoded); QVERIFY(Decoded);
+        QCOMPARE(Decoded->grouping_, Profile.grouping_); QVERIFY(ValidateGrouping(*Decoded).isEmpty());
+        const QList<QJsonValue> Invalid{QJsonObject{{"version", 99}}, QJsonObject{}, QJsonArray{1, "future"}, QJsonValue("future"), QJsonValue(QJsonValue::Null), QJsonValue(17)};
+        for (const auto& Raw : Invalid) {
+            auto Object = EncodeProfile(DefaultProfile()); Object["grouping"] = Raw;
+            const auto Loaded = DecodeProfile(Object); QVERIFY(Loaded); QVERIFY(Loaded->grouping_);
+            QCOMPARE(Loaded->grouping_->raw_, Raw); QVERIFY(Loaded->grouping_->levels_.isEmpty());
+            QVERIFY(IsSupportedProfile(*Loaded)); QVERIFY(!ValidateGrouping(*Loaded).isEmpty());
+            QVERIFY(!DefaultGrouping(*Loaded).enabled_);
+            QCOMPARE(QJsonDocument(EncodeProfile(*Loaded)).toJson(QJsonDocument::Compact), QJsonDocument(Object).toJson(QJsonDocument::Compact));
+        }
+    }
+    void profileGroupingValidation()
+    {
+        using namespace hc::columns;
+        auto Profile = DefaultProfile(); Profile.grouping_ = ProfileGrouping{};
+        auto& Levels = Profile.grouping_->levels_;
+        Levels = {{true, QUuid::createUuid(), "value"}}; QVERIFY(!ValidateGrouping(Profile).isEmpty());
+        Levels = {{true, Profile.columns_[0].id_, "value"}}; QVERIFY(!ValidateGrouping(Profile).isEmpty());
+        Levels = {{true, Profile.columns_[4].id_, "value"}}; QVERIFY(!ValidateGrouping(Profile).isEmpty());
+        Levels[0].mode_ = "date"; QVERIFY(ValidateGrouping(Profile).isEmpty());
+        Profile.columns_[4].template_ = "{file.modified}"; QVERIFY(!ValidateGrouping(Profile).isEmpty()); Profile.columns_[4].template_.clear();
+        Levels.append(Levels.front()); QVERIFY(!ValidateGrouping(Profile).isEmpty());
+        QVERIFY(IsSupportedProfile(Profile));
+    }
+    void groupSummaryAndLevels()
+    {
+        using namespace hc::columns;
+        GroupSummary Summary; ProfileGrouping Options;
+        const auto Older = QDateTime(QDate(2026, 1, 1), QTime(12, 0), QTimeZone::UTC);
+        const auto Newer = Older.addDays(1);
+        Summary.Add(QVariant::fromValue(quint64(1024)), Older); Summary.Add({}, Newer);
+        Summary.Add(QVariant::fromValue(quint64(2048)), {});
+        QCOMPARE(Summary.count_, quint64(3)); QCOMPARE(Summary.size_, quint64(3072)); QCOMPARE(Summary.unknown_, quint64(1)); QCOMPARE(Summary.latest_, Newer);
+        Options.count_ = false; Options.sizeTotal_ = false; Options.latest_ = false;
+        QCOMPARE(Summary.Caption("title", Options), QString("title"));
+        Options.count_ = true; QVERIFY(Summary.Caption("title", Options).contains("3개"));
+        Options.sizeTotal_ = true; QVERIFY(Summary.Caption("title", Options).contains("미확인 1개"));
+        Options.latest_ = true; QVERIFY(Summary.Caption("title", Options).contains(Newer.toLocalTime().toString("yyyy-MM-dd HH:mm")));
+        Summary.Add(QVariant::fromValue(std::numeric_limits<quint64>::max()), Older); QVERIFY(Summary.overflow_);
+        auto Profile = DefaultProfile(); Profile.grouping_ = ProfileGrouping{};
+        for (const auto& Definition : Profile.columns_) if (SupportsGrouping(Definition) && Profile.grouping_->levels_.size() < 3)
+            Profile.grouping_->levels_.append({true, Definition.id_, IsGroupingDate(Definition.fieldId_) ? "date" : "value"});
+        QCOMPARE(Profile.grouping_->levels_.size(), 3); QVERIFY(ValidateGrouping(Profile).isEmpty());
+        QCOMPARE(*DecodeGroupingLevels(EncodeGroupingLevels(Profile.grouping_->levels_)), Profile.grouping_->levels_);
+        Profile.grouping_->levels_.append(Profile.grouping_->levels_.front()); QVERIFY(!ValidateGrouping(Profile).isEmpty());
+        QVERIFY(!DecodeGroupingLevels(EncodeGroupingLevels(Profile.grouping_->levels_)));
+        QVERIFY(GroupPathKey({"a|b", "c"}) != GroupPathKey({"a", "b|c"})); QCOMPARE(GroupPathKey({"old/key"}), QString("old/key"));
+    }
+    void downloadsProfileDefaults()
+    {
+        using namespace hc::columns;
+        const auto Profile = DownloadsProfile(); QVERIFY(Validate(Profile).isEmpty()); QVERIFY(IsSupportedProfile(Profile));
+        QVERIFY(ValidateGrouping(Profile).isEmpty()); QVERIFY(IsBuiltInProfile(Profile.id_));
+        QCOMPARE(Profile.columns_.size(), 6); QSet<QUuid> Ids;
+        for (const auto& Column : Profile.columns_) { QVERIFY(!Ids.contains(Column.id_)); Ids.insert(Column.id_); }
+        QCOMPARE(Profile.columns_[5].fieldId_, QString("file.alternateDataStream.zone"));
+        for (const auto& Width : Profile.columns_[5].widths_) QVERIFY(Width.hidden_);
+        QCOMPARE(Profile.sorts_[0].columnId_, Profile.columns_[1].id_); QCOMPARE(Profile.sorts_[0].order_, Qt::DescendingOrder);
+        QCOMPARE(DefaultGrouping(Profile).mode_, QString("relativeDate"));
+        QVERIFY(!EmptyAutoSelection()["enabled"].toBool()); QVERIFY(EmptyAutoSelection()["rules"].toArray().isEmpty());
+        QJsonObject Columns; QVERIFY(MigrateDownloadsColumnSet(Columns, "D:/Downloads"));
+        QVERIFY(ValidateAutoSelection(Columns[AutoSelectionKey].toObject(), WithBuiltInProfiles({}), {}).isEmpty());
+    }
+    void profileRuleSummary()
+    {
+        using namespace hc::columns;
+        const auto Id = DownloadsProfileId;
+        const QVector<hc::shell::KnownFolderChoice> Choices{{"downloads", "사용자 다운로드 폴더", QUuid("{374DE290-123F-4565-9164-39C4925E467B}")}};
+        auto Policy = EmptyAutoSelection();
+        QCOMPARE(ProfileRuleSummary(Id, Policy, {}, Choices), QString("기본 제공 · 수동"));
+        Policy["enabled"] = true;
+        QJsonObject Rule{{"enabled", true}, {"profile", IdText(Id)}, {"path", "{374DE290-123F-4565-9164-39C4925E467B}\\*"}, {"group", ""}, {"percent", 50}};
+        Policy["rules"] = QJsonArray{Rule};
+        QCOMPARE(ProfileRuleSummary(Id, Policy, {}, Choices), QString("기본 제공 · 자동: 사용자 다운로드 폴더"));
+        auto Other = Rule; Other["path"] = ""; Other["group"] = "images"; Other["percent"] = 70;
+        Policy["rules"] = QJsonArray{Other, Rule};
+        const QJsonObject Colors{{"groups", QJsonArray{QJsonObject{{"id", "images"}, {"name", "사진"}}}}};
+        QCOMPARE(ProfileRuleSummary(Id, Policy, Colors, Choices), QString("기본 제공 · 자동: 사진 70% 이상 · 외 1개"));
+        Other["enabled"] = false; Policy["rules"] = QJsonArray{Other, Rule};
+        QVERIFY(ProfileRuleSummary(Id, Policy, Colors, Choices).endsWith("사용자 다운로드 폴더"));
+        QCOMPARE(ProfileRuleSummary(QUuid::createUuid(), Policy, Colors, Choices), QString("수동"));
+    }
+    void downloadsColumnSetMigration()
+    {
+        using namespace hc::columns;
+        const auto Id = IdText(DownloadsProfileId);
+        QJsonObject Columns; QVERIFY(MigrateDownloadsColumnSet(Columns, "D:/Downloads"));
+        QVERIFY(Columns["ColumnsV2/Profiles"].toObject().contains(Id));
+        QVERIFY(Columns[AutoSelectionKey].toObject()["enabled"].toBool());
+        QCOMPARE(Columns[AutoSelectionKey].toObject()["rules"].toArray().size(), 1);
+        const auto Saved = Columns; QVERIFY(!MigrateDownloadsColumnSet(Columns, "D:/Elsewhere")); QCOMPARE(Columns, Saved);
+        auto Policy = EmptyAutoSelection(); Columns = {{AutoSelectionKey, Policy}};
+        QVERIFY(MigrateDownloadsColumnSet(Columns, "D:/Downloads")); QVERIFY(Columns[AutoSelectionKey].toObject()["enabled"].toBool());
+        QJsonObject User{{"enabled", true}, {"profile", IdText(BuiltInProfileId)}, {"path", "E:/Other/*"}, {"group", ""}, {"percent", 50}};
+        for (const bool Matching : {false, true}) {
+            User["path"] = Matching ? "D:/Downloads/*" : "E:/Other/*"; Policy["rules"] = QJsonArray{User};
+            Columns = {{AutoSelectionKey, Policy}}; QVERIFY(MigrateDownloadsColumnSet(Columns, "D:/Downloads"));
+            const auto Result = Columns[AutoSelectionKey].toObject(); QVERIFY(!Result["enabled"].toBool());
+            QCOMPARE(Result["rules"].toArray()[Matching ? 0 : 1].toObject(), User);
+        }
+        User["path"] = "shell:Profile/*"; Policy["rules"] = QJsonArray{User}; Columns = {{AutoSelectionKey, Policy}};
+        const auto ProfileToken = hc::shell::ParseFolderToken(User["path"].toString());
+        QVERIFY(MigrateDownloadsColumnSet(Columns, "D:/User/Downloads", {{ProfileToken.token_, "D:/User"}}));
+        QCOMPARE(Columns[AutoSelectionKey].toObject()["rules"].toArray()[0].toObject(), User);
+        for (const bool HasProfile : {false, true}) {
+            Columns = {};
+            if (HasProfile) Columns["ColumnsV2/Profiles"] = QJsonObject{{Id, EncodeProfile(DownloadsProfile())}};
+            else { Policy["rules"] = QJsonArray{QJsonObject{{"profile", Id}}}; Columns[AutoSelectionKey] = Policy; }
+            const auto Before = Columns; QVERIFY(MigrateDownloadsColumnSet(Columns, "D:/Downloads"));
+            auto WithoutMarker = Columns; WithoutMarker.remove("ColumnsV2/Migrations"); QCOMPARE(WithoutMarker, Before);
+        }
+        for (const bool Future : {false, true}) {
+            Policy = EmptyAutoSelection();
+            if (Future) Policy["version"] = 2;
+            else { QJsonArray Full; for (int I = 0; I < 128; ++I) Full.append(User); Policy["rules"] = Full; }
+            Columns = {{AutoSelectionKey, Policy}}; QVERIFY(MigrateDownloadsColumnSet(Columns, "D:/Downloads"));
+            QCOMPARE(Columns[AutoSelectionKey].toObject(), Policy); QVERIFY(!Columns.contains("ColumnsV2/Profiles"));
+        }
+        Columns = Saved; auto Removed = Columns[AutoSelectionKey].toObject(); Removed["rules"] = QJsonArray{}; Columns[AutoSelectionKey] = Removed;
+        QVERIFY(!MigrateDownloadsColumnSet(Columns, "D:/Downloads")); QVERIFY(Columns[AutoSelectionKey].toObject()["rules"].toArray().isEmpty());
+    }
+    void folderConditionMatching()
+    {
+        using namespace hc::columns;
+        const QString Guid = "{374de290-123f-4565-9164-39c4925e467b}";
+        const QHash<QString, QString> Resolved{{Guid, "D:\\user[1]\\Down*loads"}};
+        QVERIFY(MatchFolderCondition(Guid, "d:/user[1]/Down*loads/", Resolved));
+        QVERIFY(MatchFolderCondition(Guid + "\\*", "D:/user[1]/Down*loads", Resolved));
+        QVERIFY(MatchFolderCondition(Guid + "\\*", "D:/user[1]/Down*loads/child/grandchild", Resolved));
+        QVERIFY(!MatchFolderCondition(Guid, "D:/user1/Downloads", Resolved));
+        QVERIFY(!MatchFolderCondition(Guid, "D:/user[1]/Down*loads"));
+        QVERIFY(!MatchFolderCondition(Guid + "\\*", "D:/user[1]/Down*loads-other", Resolved));
+        QVERIFY(MatchFolderCondition("D:\\Work\\*", "d:/work"));
+        QVERIFY(MatchFolderCondition("D:\\Work\\*", "d:/work/child/grandchild"));
+        QVERIFY(!MatchFolderCondition("D:\\Work\\*", "d:/work-other"));
+        QVERIFY(MatchFolderCondition("D:/W?rk/*", "d:/Work/child"));
+        QVERIFY(MatchFolderCondition("*Work*", "d:/Work/child"));
+        QVERIFY(MatchFolderCondition(Guid + "\\*", "D:/", {{Guid, "D:\\"}}));
+        QVERIFY(MatchFolderCondition(Guid, "D:/new", {{Guid, "D:/new"}}));
+        QVERIFY(!MatchFolderCondition(Guid, "D:/old", {{Guid, "D:/new"}}));
+    }
+    void autoSelectionShellValidation()
+    {
+        using namespace hc::columns;
+        auto Policy = EmptyAutoSelection(); Policy["enabled"] = true;
+        const auto Profile = DefaultProfile();
+        const QJsonObject Library{{IdText(Profile.id_), EncodeProfile(Profile)}};
+        QJsonObject Rule{{"enabled", true}, {"profile", IdText(Profile.id_)}, {"path", "{abc}"}, {"group", ""}, {"percent", 50}};
+        Policy["rules"] = QJsonArray{Rule};
+        QVERIFY(ValidateAutoSelection(Policy, Library, {}).contains("GUID"));
+        Rule["path"] = "{11111111-1111-1111-1111-111111111111}"; Policy["rules"] = QJsonArray{Rule};
+        QVERIFY(ValidateAutoSelection(Policy, Library, {}).isEmpty());
+        auto Miss = Rule; Miss["path"] = "D:/Other"; Rule["path"] = "D:/Downloads/*";
+        Policy["rules"] = QJsonArray{Miss, Rule}; int MatchedRule = 77;
+        const auto Match = SelectAutomaticColumns(Policy, Library, {}, "D:/Downloads", {}, {}, {}, &MatchedRule);
+        QVERIFY(Match.HasValue()); QVERIFY(Match.Value()); QCOMPARE(MatchedRule, 1);
+        QVERIFY(SelectAutomaticColumns(Policy, Library, {}, "E:/Elsewhere", {}, {}, {}, &MatchedRule).HasValue()); QCOMPARE(MatchedRule, -1);
+    }
     void detailsDefaultUsesAutomaticSizeUnits()
     {
         using namespace hc::columns;
@@ -68,6 +255,9 @@ private slots:
         QCOMPARE(Group(Today.addDays(-1)).key_, QString("relativeDate/yesterday"));
         QCOMPARE(Group(QDate(2026, 2, 25)).key_, QString("relativeDate/lastWeek"));
         QCOMPARE(Group(QDate(2026, 2, 15)).key_, QString("relativeDate/lastMonth"));
+        QCOMPARE(Group(QDate(2026, 1, 1)).key_, QString("relativeDate/thisYear"));
+        QCOMPARE(Group(QDate(2025, 12, 31)).key_, QString("relativeDate/older"));
+        QCOMPARE(Group(QDate(2025, 12, 31)).text_, QString::fromUtf8("오래 전"));
         QCOMPARE(Group(Today.addDays(1)).key_, QString("relativeDate/future"));
         QVERIFY(Group(Today).order_.toInt() > Group(Today.addDays(-1)).order_.toInt());
         QVERIFY(!MakeGroupValue("file.modified", "date", CellValue::Missing(ValueState::Empty)).order_.isValid());

@@ -45,6 +45,7 @@
 #include <fmfilelist/ThumbnailView.h>
 #include <fmfilelist/FileRoles.h>
 #include "thumbnailModel.hpp"
+#include "qtitanGrouping.hpp"
 #include <fmstyle/StylePaint.h>
 #include <fmstyle/ThemeManager.h>
 
@@ -1142,6 +1143,7 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             GridColumn->setMinWidth( 30 );
             // GridColumn->setWidth( 100 );
             GridColumn->setTextAlignment( Column.definition_.alignment_ );
+              GridColumn->setProperty("hc.columnId", Column.definition_.id_);
               GridColumn->setProperty("hc.everything.path", Column.definition_.fieldId_ == "file.parentPath");
             GridColumn->dataBinding()->setSortRole(static_cast<Qt::ItemDataRole>(CFSModel::GridSortRole));
             if (Column.definition_.id_ == Columns->profile_.primaryNameId_)
@@ -1484,11 +1486,16 @@ hc::columns::ColumnProfile CGridView::ColumnProfile() const
     return Profile;
 }
 
-bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile)
+bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile, ApplyReason Reason)
 {
-    if (!model_ || !hc::columns::IsSupportedProfile(Profile)) return false;
+    if (!model_ || !hc::columns::IsSupportedProfile(Profile) || (!restoringPresentation_ && columnAdapter_ && !columnAdapter_->Writable())) return false;
+    const auto PreviousProfile = ColumnProfile();
     const auto Selected = CaptureSelection(); const auto Focus = CaptureFocus();
-    if (!restoringPresentation_ && !applyingAutoColumns_) {
+    if (Reason == ApplyReason::Sync) {
+        automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
+        if (automaticColumnsBase_ && automaticColumnsBase_->id_ == Profile.id_) automaticColumnsBase_ = Profile;
+    }
+    if (!restoringPresentation_ && !applyingAutoColumns_ && Reason != ApplyReason::Sync) {
         manualColumns_ = true; automaticColumnsBase_.reset(); automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
     }
     if (!restoringPresentation_ && !everythingPresentation_) {
@@ -1503,6 +1510,12 @@ bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile)
     columnAdapter_->UseProfileWidths();
     columnAdapter_->Apply();
     view_->endUpdate();
+    if (!restoringPresentation_) {
+        if (PreviousProfile.id_ == Profile.id_ && PreviousProfile.grouping_ != Profile.grouping_) {
+            groupingBySet_.remove(Profile.id_); groupingBySetOrder_.removeAll(Profile.id_);
+        }
+        applySetGrouping(Profile);
+    }
     groupingTimer_.start(0); RestoreSelection(Selected, Focus);
     return true;
 }
@@ -1525,7 +1538,10 @@ QJsonObject CGridView::CaptureWorkspaceView() const
     Layout["manualSelection"] = manualColumns_;
     if (automaticColumnsBase_) Layout["automaticBase"] = hc::columns::EncodeProfile(*automaticColumnsBase_);
     if (columnAdapter_->Writable()) Layout["definition"] = hc::columns::EncodeProfile(ColumnProfile());
-    return {{"groupingV1", unsupportedGrouping_.isEmpty() ? hc::columns::EncodeGrouping(grouping_) : unsupportedGrouping_}, {"listPresentation", capturePresentation()}, {"mode", "details"}, {hc::columns::WorkspaceKey, Layout}, {"columnOrderV2", Columns},
+    QJsonArray GroupMemory;
+    for (const auto& Id : groupingBySetOrder_) if (groupingBySet_.contains(Id) && GroupMemory.size() < 16)
+        GroupMemory.append(QJsonObject{{"set", hc::columns::IdText(Id)}, {"grouping", hc::columns::EncodeGrouping(groupingBySet_[Id].isEmpty() ? hc::columns::GroupingState{} : groupingBySet_[Id].front())}, {"levels", hc::columns::EncodeGroupingLevels(groupingBySet_[Id])}});
+    return {{"groupingLevelsV1", hc::columns::EncodeGroupingLevels(groupingLevels_)}, {"groupingBySetV1", GroupMemory}, {"groupingV1", unsupportedGrouping_.isEmpty() ? hc::columns::EncodeGrouping(grouping_) : unsupportedGrouping_}, {"listPresentation", capturePresentation()}, {"mode", "details"}, {hc::columns::WorkspaceKey, Layout}, {"columnOrderV2", Columns},
         {"hiddenSystem", Proxy && Proxy->GetHiddenSystem()}, {"search", Proxy ? Proxy->Search() : QString{}}, {"searchMatch", Proxy ? Proxy->SearchMatch() : QString{}}};
 }
 
@@ -1536,6 +1552,10 @@ void CGridView::RestoreWorkspaceView(const QJsonObject& View)
     const auto DecodedGrouping = hc::columns::DecodeGrouping(SavedGrouping);
     if (DecodedGrouping) { grouping_ = *DecodedGrouping; unsupportedGrouping_ = {}; }
     else { grouping_ = {}; unsupportedGrouping_ = SavedGrouping; }
+    groupingLevels_ = grouping_.enabled_ ? QVector<hc::columns::GroupingState>{grouping_} : QVector<hc::columns::GroupingState>{};
+    if (View.contains("groupingLevelsV1")) if (const auto Levels = hc::columns::DecodeGroupingLevels(View["groupingLevelsV1"])) {
+        groupingLevels_ = *Levels; grouping_ = Levels->isEmpty() ? hc::columns::GroupingState{} : Levels->front();
+    }
     const auto Layout = View.value(hc::columns::WorkspaceKey).toObject();
     manualColumns_ = Layout["manualSelection"].toBool(Layout.contains("definition"));
     automaticColumnsBase_ = hc::columns::DecodeProfile(Layout["automaticBase"].toObject());
@@ -1550,6 +1570,21 @@ void CGridView::RestoreWorkspaceView(const QJsonObject& View)
         ApplyColumnProfile(*Definition);
         if (!Layout.isEmpty()) columnAdapter_->RestoreWorkspaceLayout(View);
     } else columnAdapter_->RestoreWorkspaceLayout(View);
+    groupingBySet_.clear(); groupingBySetOrder_.clear();
+    for (const auto& Value : View["groupingBySetV1"].toArray()) {
+        const auto Item = Value.toObject(); const QUuid Id(Item["set"].toString());
+        const auto Saved = hc::columns::DecodeGrouping(Item["grouping"].toObject());
+        if (Id.isNull() || !Item["grouping"].isObject() || !Saved || groupingBySet_.contains(Id) || groupingBySetOrder_.size() >= 16) continue;
+        auto Levels = Saved->enabled_ ? QVector<hc::columns::GroupingState>{*Saved} : QVector<hc::columns::GroupingState>{};
+        if (Item.contains("levels")) { const auto Decoded = hc::columns::DecodeGroupingLevels(Item["levels"]); if (!Decoded) continue; Levels = *Decoded; }
+        groupingBySet_[Id] = Levels; groupingBySetOrder_.append(Id);
+    }
+    if (!View.contains("groupingBySetV1") && View.contains("groupingV1") && DecodedGrouping) rememberGrouping();
+    const auto Profile = ColumnProfile();
+    if ((Layout.isEmpty() || View.contains("groupingBySetV1")) && DecodedGrouping) applySetGrouping(Profile);
+    else if (Profile.grouping_ && hc::columns::ValidateGrouping(Profile).isEmpty()) {
+        expandPolicy_ = Profile.grouping_->expand_; hideGroupedColumn_ = Profile.grouping_->hideGroupedColumn_;
+    }
     QList<QJsonObject> Sorted;
     for (const auto& Value : View.value("columnOrderV2").toArray()) Sorted.append(Value.toObject());
     std::stable_sort(Sorted.begin(), Sorted.end(), [](const auto& A, const auto& B) {
@@ -1591,7 +1626,7 @@ QString CGridView::CaptureFocus() const
 {
     if (!model_ || !view_) return {};
     const auto Row = view_->focusedRow(); if (!Row.isValid()) return {};
-    if (Row.type() == Qtitan::GridRow::GroupRow) return "@group:" + Row.groupValue().toString();
+    if (Row.type() == Qtitan::GridRow::GroupRow) return "@group:" + hc::columns::NativeGroupKey(view_->modelController(), Row.modelGroup());
     return sourceSelectionKey(Row.modelIndex(0));
 }
 
@@ -1610,7 +1645,7 @@ QJsonObject CGridView::CaptureScrollState() const
     const auto Row = view_->getRow(Low);
     const bool Group = Row.type() == Qtitan::GridRow::GroupRow;
     State["kind"] = Group ? "group" : "entry";
-    State["anchor"] = Group ? Row.groupValue().toString() : sourceSelectionKey(Row.modelIndex(0));
+    State["anchor"] = Group ? hc::columns::NativeGroupKey(view_->modelController(), Row.modelGroup()) : sourceSelectionKey(Row.modelIndex(0));
     State["offset"] = Scroll - Layout->getRowScrollPos(Low);
     return State;
 }
@@ -1622,7 +1657,7 @@ void CGridView::RestoreScrollState(const QJsonObject& State)
     int Position = -1;
     const auto Anchor = State["anchor"].toString();
     if (State["kind"] == QJsonValue("group")) {
-        for (const auto& Group : view_->modelController()->groupRows()) if (Group._groupValue.toString() == Anchor) { Position = Group.rowIndex; break; }
+        for (const auto& Group : view_->modelController()->groupRows()) if (hc::columns::NativeGroupKey(view_->modelController(), &Group) == Anchor) { Position = Group.rowIndex; break; }
     } else if (!Anchor.isEmpty()) for (const auto& Index : SelectionCandidates()) {
         if (sourceSelectionKey(Index) != Anchor) continue;
         const auto Visible = proxy_ ? proxy_->mapFromSource(Index) : Index;
@@ -1662,7 +1697,7 @@ void CGridView::RestoreSelection(const QStringList& Selection, const QString& Fo
         if (!Key.isEmpty() && Key == Focus) { FocusRow = Row.rowIndex(); FocusIndex = Visible; }
     }
     if (Focus.startsWith("@group:")) for (const auto& Group : view_->modelController()->groupRows())
-        if (Group._groupValue.toString() == Focus.mid(7)) { FocusRow = Group.rowIndex; break; }
+        if (hc::columns::NativeGroupKey(view_->modelController(), &Group) == Focus.mid(7)) { FocusRow = Group.rowIndex; break; }
     std::sort(SelectedRows.begin(), SelectedRows.end());
     const auto* First = view_->getFirstColumn(); const auto* Last = view_->getLastColumn();
     for (int At = 0; At < SelectedRows.size();) {
@@ -2902,6 +2937,7 @@ void CQuickView::EnsureKeyboardFocusOnView() const
 
 void CGridView::SetAutomaticColumns(bool Automatic)
 {
+    automaticColumnRule_ = -1;
     manualColumns_ = !Automatic; automaticColumnsSignature_.clear();
     automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
     requestPresentation(); emit sigViewSettingsChanged();
@@ -2914,35 +2950,57 @@ void CGridView::requestAutomaticColumns()
     const auto Committed = hc::settings::AppSettings().CommittedObject();
     const auto Columns = Committed["columns"].toObject();
     const auto Policy = Columns[hc::columns::AutoSelectionKey].toObject();
-    const auto Library = Columns["ColumnsV2/Profiles"].toObject();
+    const auto Library = hc::columns::WithBuiltInProfiles(Columns["ColumnsV2/Profiles"].toObject());
     const auto Colors = Committed["options"].toObject()["fileColorRules"].toObject();
     const auto Path = QString::fromStdString(Model->WorkspaceLocation().root_);
-    const auto Signature = QByteArray::number(Model->DirectoryGeneration()) + Path.toUtf8() + QJsonDocument(Policy).toJson(QJsonDocument::Compact) + QJsonDocument(Library).toJson(QJsonDocument::Compact) + QJsonDocument(Colors).toJson(QJsonDocument::Compact);
+    QHash<QString, QString> Resolved;
+    QJsonObject ResolvedSignature;
+    for (const auto& Value : Policy["rules"].toArray()) {
+        const auto Rule = Value.toObject();
+        if (!Rule["enabled"].toBool()) continue;
+        const auto Token = hc::shell::ParseFolderToken(Rule["path"].toString());
+        if (Token.kind_ == hc::shell::FolderToken::Kind::None || Token.kind_ == hc::shell::FolderToken::Kind::Invalid || Resolved.contains(Token.token_)) continue;
+        Resolved[Token.token_] = hc::shell::ResolveFolderToken(Token).path_;
+        ResolvedSignature[Token.token_] = Resolved[Token.token_];
+    }
+    const auto Signature = QByteArray::number(Model->DirectoryGeneration()) + Path.toUtf8() + QJsonDocument(Policy).toJson(QJsonDocument::Compact) + QJsonDocument(Library).toJson(QJsonDocument::Compact) + QJsonDocument(Colors).toJson(QJsonDocument::Compact) + QJsonDocument(ResolvedSignature).toJson(QJsonDocument::Compact);
     if (Signature == automaticColumnsSignature_) return;
     automaticColumnsSignature_ = Signature; automaticColumnsStop_.request_stop(); automaticColumnsStop_ = std::stop_source{};
     const auto Generation = ++automaticColumnsGeneration_;
-    using AutoResult = hc::storage::Result<std::optional<hc::columns::ColumnProfile>>;
+    using AutoResult = std::pair<hc::storage::Result<std::optional<hc::columns::ColumnProfile>>, int>;
     auto* Watcher = new QFutureWatcher<AutoResult>(this);
     const auto DirectoryGeneration = Model->DirectoryGeneration();
     connect(Watcher, &QFutureWatcher<AutoResult>::finished, this, [this, Watcher, Generation, DirectoryGeneration] {
-        const auto Result = Watcher->result(); Watcher->deleteLater();
+        const auto [Result, MatchedRule] = Watcher->result(); Watcher->deleteLater();
         auto* Current = qobject_cast<CFSModel*>(model_);
         if (Generation != automaticColumnsGeneration_ || manualColumns_ || !Current || Current->IsLoading() || Current->DirectoryGeneration() != DirectoryGeneration) return;
         if (IsEditing()) { automaticColumnsSignature_.clear(); requestPresentation(); return; }
         if (!Result.HasValue()) { setProperty("hc.columns.autoError", QString::fromStdString(Result.Failure().code_)); return; }
         setProperty("hc.columns.autoError", QVariant{});
+        const bool SourceChanged = automaticColumnRule_ != MatchedRule;
+        automaticColumnRule_ = MatchedRule;
         auto Next = Result.Value();
         if (Next && !automaticColumnsBase_) automaticColumnsBase_ = ColumnProfile();
         if (!Next && automaticColumnsBase_) Next = automaticColumnsBase_;
-        if (Next && hc::columns::EncodeProfile(*Next) != hc::columns::EncodeProfile(ColumnProfile())) {
+        auto Comparable = ColumnProfile();
+        // Re-evaluating the same automatic set must not undo tab width overlays
+        // retained by a settings synchronization. Widths are not set identity.
+        if (Next && Next->id_ == Comparable.id_) for (auto& Definition : Comparable.columns_)
+            for (const auto& Expected : Next->columns_) if (Definition.id_ == Expected.id_) for (int Mode = 0; Mode < 3; ++Mode) {
+                const bool Hidden = Definition.widths_[Mode].hidden_; Definition.widths_[Mode] = Expected.widths_[Mode]; Definition.widths_[Mode].hidden_ = Hidden;
+            }
+        if (Next && hc::columns::EncodeProfile(*Next) != hc::columns::EncodeProfile(Comparable)) {
             const QScopedValueRollback Guard(applyingAutoColumns_, true);
             ApplyColumnProfile(*Next); emit sigViewSettingsChanged();
         }
         if (!Result.Value()) automaticColumnsBase_.reset();
+        if (SourceChanged) emit sigViewSettingsChanged();
     });
     const auto Index = Model->DirectoryEntries();
     hc::storage::OperationContext Context; Context.stopToken_ = automaticColumnsStop_.get_token();
-    Watcher->setFuture(QtConcurrent::run([Policy, Library, Colors, Path, Index, Context] {
-        return hc::columns::SelectAutomaticColumns(Policy, Library, Colors, Path, Index, Context);
+    Watcher->setFuture(QtConcurrent::run([Policy, Library, Colors, Path, Index, Context, Resolved] {
+        int MatchedRule = -1;
+        auto Result = hc::columns::SelectAutomaticColumns(Policy, Library, Colors, Path, Index, Context, Resolved, &MatchedRule);
+        return AutoResult{std::move(Result), MatchedRule};
     }));
 }

@@ -120,7 +120,8 @@ public:
     CFsModelT*                      BaseModel() const;
     QtitanColumnAdapter*            ColumnWidths() const { return columnAdapter_; }
     void                           ConfigureColumns();
-    bool                           ApplyColumnProfile(const hc::columns::ColumnProfile& Profile);
+    enum class ApplyReason { Manual, Sync };
+    bool                           ApplyColumnProfile(const hc::columns::ColumnProfile& Profile, ApplyReason Reason = ApplyReason::Manual);
     hc::columns::ColumnProfile      ColumnProfile() const;
     bool AutomaticColumns() const { return !manualColumns_; }
     void SetAutomaticColumns(bool Automatic);
@@ -133,6 +134,9 @@ public:
     void                           RestoreSelection(const QStringList& Selection, const QString& Focus);
     void                           RemoveSelection(const QStringList& Selection);
     bool SetGrouping(const hc::columns::GroupingState& State);
+    bool SetGroupingLevels(const QVector<hc::columns::GroupingState>& Levels);
+    const QVector<hc::columns::GroupingState>& GroupingLevels() const { return groupingLevels_; }
+    QString ColumnSourceText() const;
     hc::columns::GroupingState Grouping() const { return grouping_; }
     bool GroupingActive() const;
     bool IsGroupFocused() const;
@@ -173,11 +177,19 @@ private:
     bool startupInput_=false; QString startupInputFocus_; QTimer startupTraceTimer_;
     void initializeGrouping();
     void applyGrouping();
+    void applySetGrouping(const hc::columns::ColumnProfile& Profile);
+    void rememberGrouping();
+    QHash<QUuid, QVector<hc::columns::GroupingState>> groupingBySet_;
+    QList<QUuid> groupingBySetOrder_;
+    hc::columns::ProfileGrouping::Expand expandPolicy_ = hc::columns::ProfileGrouping::Expand::All;
+    bool hideGroupedColumn_ = false;
     void applyGroupExpansion();
     void projectGroupedSelection();
     QString sourceSelectionKey(QModelIndex Index) const;
     void showGroupingMenu(Qtitan::ContextMenuEventArgs* Args);
     hc::columns::GroupingState grouping_;
+    QVector<hc::columns::GroupingState> groupingLevels_;
+    int automaticColumnRule_ = -1;
     QJsonObject unsupportedGrouping_, groupExpansion_;
     QSet<QString> groupedSelection_;
     QHash<QString, QString> groupLastFocus_;

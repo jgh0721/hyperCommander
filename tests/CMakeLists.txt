@@ -569,7 +569,7 @@ qt_add_executable(hc_column_tests tstColumnWidths.cpp
     ../commonLibs/view/columnWidthCodec.hpp ../commonLibs/view/columnWidthPolicy.hpp ../commonLibs/view/listIconSize.hpp ../UniqueLibs/columnWidthSettings.hpp)
 target_include_directories(hc_column_tests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_options(hc_column_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-target_link_libraries(hc_column_tests PRIVATE hc_script_runtime Qt6::Test Qt6::Concurrent)
+target_link_libraries(hc_column_tests PRIVATE hc_script_runtime Qt6::Test Qt6::Concurrent Qt6::Gui)
 add_test(NAME hc.columns COMMAND hc_column_tests)
 set_tests_properties(hc.columns PROPERTIES TIMEOUT 30)
 
@@ -731,7 +731,11 @@ if(TARGET hc_smb_tests AND HC_ENABLE_LOCAL_TEST_TOOLS AND EXISTS "${PROJECT_SOUR
 endif()
 
 foreach(HC_TEST_TARGET IN ITEMS hc_path_tests hc_storage_tests hc_command_tests hc_column_tests hc_job_tests hc_write_tests hc_materialization_tests hc_wcx_tests)
-    hc_enable_qt_deployment(${HC_TEST_TARGET} TEST)
+    if(HC_TEST_TARGET STREQUAL "hc_column_tests")
+        hc_enable_qt_deployment(${HC_TEST_TARGET} TEST PLUGINS)
+    else()
+        hc_enable_qt_deployment(${HC_TEST_TARGET} TEST)
+    endif()
 endforeach()
 
 

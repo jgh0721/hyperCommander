@@ -1568,6 +1568,33 @@ namespace hc::defaults
         Profile.sorts_.append({Profile.primaryNameId_, Qt::AscendingOrder});
         return Profile;
     }
+    inline const QUuid DownloadsProfileId{"eb944f3e-dc9f-4f93-9a6c-f441dacde45a"};
+    inline hc::columns::ColumnProfile DownloadsColumnProfile()
+    {
+        ColumnProfile Profile; Profile.id_ = DownloadsProfileId; Profile.title_ = QObject::tr("다운로드");
+        const std::array<const char*, 6> Ids{{"2e2ee6e9-df5f-4866-a399-43fb8e3a053b", "8128e900-abd9-4e3c-a184-63d09652ea35",
+            "0a3cb16b-0e85-43b2-b5e2-be2990668d4e", "75af229d-085a-417f-954a-52aa243cf468",
+            "fee1aa9e-f0c2-4ea8-a9f7-9b513dbfc95d", "d366e688-b09a-4d52-b19d-6b2257b7b7e4"}};
+        const QStringList Fields{"file.name", "file.modified", "file.type", "file.size", "file.extension", "file.alternateDataStream.zone"};
+        const QStringList Titles{QObject::tr("이름"), QObject::tr("수정한 날짜"), QObject::tr("종류"), QObject::tr("크기"), QObject::tr("확장자"), QObject::tr("인터넷 존")};
+        const std::array<double, 6> One{{46, 24, 18, 12, 0, 0}}, Two{{100, 36, 34, 18, 0, 0}};
+        for (int Index = 0; Index < int(Ids.size()); ++Index) {
+            ColumnDefinition Column; Column.id_ = QUuid(Ids[Index]); Column.fieldId_ = Fields[Index]; Column.title_ = Titles[Index];
+            Column.alignment_ = Index == 3 ? Qt::AlignRight : Index == 1 || Index >= 4 ? Qt::AlignCenter : Qt::AlignLeft;
+            if (Index == 1) Column.format_.datePattern_ = "yyyy-MM-dd HH:mm";
+            if (Index == 3) { Column.format_.size_ = SizeFormat::Adaptive; Column.format_.precision_ = 1; }
+            for (int Mode = 0; Mode < 3; ++Mode) {
+                auto& Width = Column.widths_[Mode]; Width.unit_ = hc::view::WidthUnit::Percent; Width.mode_ = hc::view::WidthMode::Flexible;
+                Width.value_ = Mode ? Two[Index] : One[Index]; Width.hidden_ = Index >= 4;
+            }
+            Profile.columns_.append(Column);
+        }
+        Profile.primaryNameId_ = Profile.columns_[0].id_;
+        Profile.sorts_ = {{Profile.columns_[1].id_, Qt::DescendingOrder}, {Profile.primaryNameId_, Qt::AscendingOrder}};
+        Profile.grouping_ = ProfileGrouping{};
+        Profile.grouping_->levels_ = {{true, Profile.columns_[1].id_, "relativeDate", Qt::DescendingOrder}};
+        return Profile;
+    }
     inline const QUuid ReferenceProfileId{"5ff35fcb-93ae-47ac-9a4b-c4e723991e38"};
     inline const QUuid ReferenceTwoLineProfileId{"7dac5cda-e87a-43c7-af0b-58c6a1c8e5da"};
     inline hc::columns::ColumnProfile ReferenceColumnProfile(bool TwoLine = false)

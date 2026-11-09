@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "solFavoriteDirMgr.hpp"
+#include "shellFolderToken.hpp"
 #include "UniqueLibs/productDefaults.hpp"
 
 #include "commandMgr.hpp"
@@ -277,12 +278,8 @@ QString CFavoriteDirMgr::ResolveShellPath(const QString& Id)
     for (const auto& Entry : ShellFolders) {
         if (Id != QLatin1String(Entry.Id)) continue;
         if (Entry.ParsingName) return QString::fromLatin1(Entry.ParsingName);
-        PWSTR Buffer = nullptr;
         // Resolve the redirected current location on every activation; persist only the folder ID.
-        const auto Result = SHGetKnownFolderPath(*Entry.Folder, KF_FLAG_DONT_VERIFY, nullptr, &Buffer);
-        const auto Path = SUCCEEDED(Result) && Buffer ? QString::fromWCharArray(Buffer) : QString{};
-        CoTaskMemFree(Buffer);
-        return Path;
+        return hc::shell::ResolveKnownFolderPath(QUuid(*Entry.Folder));
     }
     return {};
 }
