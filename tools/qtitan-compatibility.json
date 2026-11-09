@@ -30,6 +30,14 @@
     {
       "id": "HC-QTN-011",
       "purpose": "Preserve external search and rename keyboard focus during logical file-manager cursor updates in Qtitan 10.0"
+    },
+    {
+      "id": "HC-QTN-012",
+      "purpose": "Keep the root primitive as key target when the focused group row primitive is hidden or deleted by a relayout"
+    },
+    {
+      "id": "HC-QTN-013",
+      "purpose": "Page up/down from and into pinned rows such as the file manager parent row"
     }
   ],
   "integrated": {

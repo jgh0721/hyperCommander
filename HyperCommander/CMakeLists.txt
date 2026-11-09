@@ -232,6 +232,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/solFavoriteDirMgr.hpp
         ../UniqueLibs/shellFolderToken.cpp
         ../UniqueLibs/shellFolderToken.hpp
+        ../UniqueLibs/inputGate.cpp
+        ../UniqueLibs/inputGate.hpp
         ../UniqueLibs/solMultiLang_Defs.hpp
         ../UniqueLibs/solTCPluginMgr.cpp
         ../UniqueLibs/solTCPluginMgr.hpp

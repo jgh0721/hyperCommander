@@ -297,7 +297,12 @@ private:
     bool                            plainLeftClick_ = false;
     QTimer                          columnSortTimer_;
     void                            positionColumnStatus();
+    void                            showColumnStatus();
     QLabel*                         columnStatus_ = nullptr;
+    // The query overlay appears only for checks still running after this delay.
+    static constexpr int            ColumnStatusDelayMs = 400;
+    QTimer                          columnStatusDelay_;
+    QString                         columnStatusText_;
     QStringList                     querySelection_;
     QString                         queryFocus_;
     QJsonObject queryScroll_;

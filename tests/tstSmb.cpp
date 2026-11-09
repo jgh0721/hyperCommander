@@ -108,6 +108,7 @@
 #include <QPdfWriter>
 #include <QPainter>
 #include <QtnGridEditors.h>
+#include <QtnGridGraphics.h>
 #include <fpdfview.h>
 #include <fpdf_edit.h>
 #include "qtViewerHost.hpp"
@@ -341,6 +342,11 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnShellFolderConditionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnProfileGroupingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnRealDownloadsUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "downloadsGroupingInputUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewRefreshInputUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "groupedParentPageKeysUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "groupCaptionHeightUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "smallFolderNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnGroupingSummaryExperimentUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnMultiLevelGroupingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnApplyBarSyncUi"
@@ -5709,6 +5715,339 @@ private slots:
         qInfo() << "Actual Downloads folder automatic profile/group and resolved condition verified:" << Path;
         Dialog.reject();
     }
+    void downloadsGroupingInputUi_data()
+    {
+        QTest::addColumn<bool>("Streaming");
+        QTest::newRow("settled") << false;   // keys after the cursor settled: none may be dropped
+        QTest::newRow("streaming") << true;  // keys while zone and color results arrive: none may queue
+    }
+    void downloadsGroupingInputUi()
+    {
+        // A grouped Downloads-like listing relayouts its rows while zone and color results stream in.
+        // Qtitan's focused group row primitive is hidden by those relayouts (HC-QTN-012); real keyboard
+        // input must still move the cursor, and must not wait behind streamed results in the queue.
+        QFETCH(bool, Streaming);
+        using namespace hc::columns; using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        // HC_INPUT_FLOOD_REAL=1 measures the user's actual Downloads folder read-only instead of a fixture.
+        const bool Real = qEnvironmentVariableIntValue("HC_INPUT_FLOOD_REAL") == 1;
+        const auto Location = Real ? hc::shell::ResolveKnownFolderPath(QUuid("{374DE290-123F-4565-9164-39C4925E467B}")) : Directory.path();
+        if (Real && (Location.isEmpty() || !QDir(Location).exists())) QSKIP("Actual Downloads folder is unavailable");
+        const int Count = Real ? int(QDir(Location).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System).size())
+            : qEnvironmentVariableIsSet("HC_INPUT_FLOOD_COUNT") ? qEnvironmentVariableIntValue("HC_INPUT_FLOOD_COUNT") : 3000;
+        const auto Now = QDateTime::currentDateTime();
+        for (int Index = 0; !Real && Index < Count; ++Index) {
+            const auto Path = Directory.filePath(QString("d%1.bin").arg(Index, 5, 10, QChar('0')));
+            { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("x"); }
+            if (Index % 3 == 0) { QFile Marker(Path + ":Zone.Identifier"); QVERIFY(Marker.open(QIODevice::WriteOnly)); Marker.write("[ZoneTransfer]\r\nZoneId=3\r\n"); }
+            // Spread over a year so every relative-date bucket is present.
+            QFile File(Path); QVERIFY(File.open(QIODevice::Append)); QVERIFY(File.setFileTime(Now.addSecs(-qint64(Index) * 3 * 3600), QFileDevice::FileModificationTime));
+        }
+        auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = hc::defaults::FileGroups();
+        QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit());
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel");
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        View->SetAutomaticColumns(false); QVERIFY(View->ApplyColumnProfile(DownloadsProfile()));
+        auto* Grid = View->findChild<Qtitan::Grid*>()->view<Qtitan::GridBandedTableView>();
+        auto* Model = qobject_cast<CFSModel*>(View->BaseModel()); QVERIFY(Model);
+        QElapsedTimer Clock; Clock.start();
+        int Depth = 0, Batches = 0, LongGaps = 0; qint64 BatchStart = 0, Busy = 0, Longest = 0, LastBeat = 0, MaxGap = 0, Blocked = 0;
+        QString Status;
+        QList<QMetaObject::Connection> Probes;
+        Probes << connect(Model, &CFSModel::ColumnValuesChanging, this, [&] { if (Depth++ == 0) BatchStart = Clock.nsecsElapsed(); });
+        Probes << connect(Model, &CFSModel::ColumnValuesChanged, this, [&] {
+            if (Depth > 0 && --Depth == 0) { const auto Spent = Clock.nsecsElapsed() - BatchStart; ++Batches; Busy += Spent; Longest = qMax(Longest, Spent); }
+        });
+        Probes << connect(Model, &CFSModel::ColumnQueryStatus, this, [&](const QString& Text) { Status = Text; });
+        const auto Disconnect = qScopeGuard([&] { for (const auto& Probe : Probes) disconnect(Probe); });
+        QTimer Heartbeat; Heartbeat.setInterval(1);
+        connect(&Heartbeat, &QTimer::timeout, this, [&] {
+            const auto Beat = Clock.nsecsElapsed();
+            if (LastBeat) { const auto Gap = Beat - LastBeat; MaxGap = qMax(MaxGap, Gap); if (Gap >= 100000000) { ++LongGaps; Blocked += Gap; } }
+            LastBeat = Beat;
+        });
+        Panel->ChangeCurrentPath(Location, {});
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() >= Count, 60000);
+        QTRY_VERIFY(View->GroupingActive());
+        const auto Listed = Clock.elapsed();
+        main_->raise(); main_->activateWindow(); View->EnsureKeyboardFocusOnView();
+        const auto Window = reinterpret_cast<HWND>(main_->winId());
+        // A desktop in use can refuse foreground ownership. Then the key messages go to this window's
+        // queue only, so no other application receives them.
+        const bool Foreground = ActivateTestWindow(Window);
+        View->EnsureKeyboardFocusOnView();
+        qInfo() << "input-flood mode" << (Foreground ? "SendInput" : "postEvent") << (Real ? "real-downloads" : "fixture") << "entries" << Count;
+        const auto Describe = [&](int Position) {
+            if (Position < 0 || Position >= Grid->getRowCount()) return QString("none");
+            const auto Row = Grid->getRow(Position);
+            if (Row.type() == Qtitan::GridRow::GroupRow) return QString("group:%1:%2").arg(Row.groupText().toString(), Row.isGroupExpanded() ? "open" : "closed");
+            const auto Name = Row.modelIndex(0).data().toString();
+            return QString("data:%1").arg(Name == ".." ? Name : QString("entry"));
+        };
+        // Qtitan routes keys through its focused graphic primitive; a null one drops them silently.
+        auto* Control = dynamic_cast<Qtitan::GraphicControl*>(View->findChild<Qtitan::Grid*>()->viewport()); QVERIFY(Control);
+        const auto Primitives = [&] {
+            const auto Name = [](const Qtitan::GraphicPrimitive* Primitive) { return Primitive ? QString::fromLatin1(typeid(*Primitive).name()).section(':', -1) : QString("null"); };
+            return QString("focusedGP=%1 activeGP=%2").arg(Name(Control->focusedGP()), Name(Control->activeGP()));
+        };
+        // The grouping projection moves the cursor once after publication. The settled variant starts
+        // where it settles; the streaming variant types at once, while results still arrive.
+        // Window activation alone delays the first key by about 150 ms, with or without results.
+        // Let it finish; zone and color results keep arriving for about half a second after this.
+        if (Streaming) { QTRY_VERIFY(QApplication::activeWindow() == main_); QTest::qWait(200); }
+        const bool StillStreaming = !Status.isEmpty();
+        if (!Streaming) { QElapsedTimer Settle, Stable; Settle.start(); Stable.start(); int Last = Grid->focusedRowIndex();
+          while (Settle.elapsed() < 10000 && Stable.elapsed() < 500) { QTest::qWait(10); if (Grid->focusedRowIndex() != Last) { Last = Grid->focusedRowIndex(); Stable.restart(); } } }
+        qInfo() << "input-flood before keys row" << Grid->focusedRowIndex() << Describe(Grid->focusedRowIndex()) << Primitives();
+        // Separates queue delay (key not yet read from the OS) from handling delay.
+        struct KeyArrival final : QObject {
+            QElapsedTimer* clock_ = nullptr; qint64 at_ = 0;
+            bool eventFilter(QObject*, QEvent* Event) override { if (Event->type() == QEvent::KeyPress && !at_) at_ = clock_->nsecsElapsed(); return false; }
+        } Arrival; Arrival.clock_ = &Clock; qApp->installEventFilter(&Arrival);
+        const auto RemoveArrival = qScopeGuard([&] { qApp->removeEventFilter(&Arrival); });
+        Heartbeat.start();
+        QList<qint64> Latency, Arrived; int Lost = 0;
+        for (int Press = 0; Press < 6; ++Press) {
+            const int Before = Grid->focusedRowIndex(); const auto Sent = Clock.nsecsElapsed(); Arrival.at_ = 0;
+            if (Foreground) {
+                INPUT Inputs[2]{}; Inputs[0].type = Inputs[1].type = INPUT_KEYBOARD; Inputs[0].ki.wVk = Inputs[1].ki.wVk = VK_DOWN; Inputs[1].ki.dwFlags = KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY; Inputs[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
+                QCOMPARE(SendInput(2, Inputs, sizeof(INPUT)), UINT(2));
+            } else {
+                // Posted after the batches already queued, like a key arriving while they run.
+                auto* Target = QApplication::focusWidget() ? QApplication::focusWidget() : static_cast<QWidget*>(View->findChild<Qtitan::Grid*>());
+                QCoreApplication::postEvent(Target, new QKeyEvent(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier));
+                QCoreApplication::postEvent(Target, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Down, Qt::NoModifier));
+            }
+            // The key must first reach the application, then move the cursor.
+            const bool Reached = QTest::qWaitFor([&] { return Arrival.at_ != 0; }, 3000);
+            Arrived.append(Reached ? (Arrival.at_ - Sent) / 1000000 : 3000);
+            QElapsedTimer Wait; Wait.start();
+            while (Grid->focusedRowIndex() == Before && Wait.elapsed() < 2000) QTest::qWait(1);
+            if (Grid->focusedRowIndex() == Before) ++Lost;
+            Latency.append((Clock.nsecsElapsed() - Sent) / 1000000);
+            qInfo() << "input-flood key" << Press << "row" << Before << Describe(Before) << "->" << Grid->focusedRowIndex() << Describe(Grid->focusedRowIndex()) << "latency-ms" << Latency.last()
+                    << "arrived-ms" << (Arrival.at_ ? (Arrival.at_ - Sent) / 1000000 : -1)
+                    << "batches" << Batches << Primitives();
+            QTest::qWait(40);
+        }
+        const auto InputDone = Clock.elapsed();
+        QTRY_VERIFY_WITH_TIMEOUT(Status.isEmpty(), 120000);
+        Heartbeat.stop();
+        qInfo() << "input-flood files" << Count << "listed-ms" << Listed << "input-ms" << InputDone - Listed << "settled-ms" << Clock.elapsed()
+                << "batches" << Batches << "busy-ms" << Busy / 1000000 << "longest-batch-ms" << Longest / 1000000 << "max-ui-gap-ms" << MaxGap / 1000000
+                << "gaps>=100ms" << LongGaps << "blocked-ms" << Blocked / 1000000 << "key-latency-ms" << Latency << "lost" << Lost;
+        auto Sorted = Arrived; std::sort(Sorted.begin(), Sorted.end());
+        const auto P95 = Sorted[(Sorted.size() - 1) * 95 / 100], MaxArrived = Sorted.back();
+        qInfo() << "input-flood arrival-ms" << Arrived << "p95" << P95 << "max" << MaxArrived << "query-jobs" << Model->ColumnQueryJobs()
+                << "streaming" << Streaming << "results-pending-at-first-key" << StillStreaming;
+        // Every key must move the cursor, including from group rows whose primitives were recreated.
+        QCOMPARE(Lost, 0);
+        QVERIFY2(*std::max_element(Latency.begin(), Latency.end()) < 2000, "A navigation key was not handled");
+        // Keys must not queue behind streamed results. Before stage 3 the first key had not arrived
+        // after 925 ms (about 150 ms of that was activation); now about 20-60 ms.
+        QVERIFY2(MaxArrived <= 150, qPrintable(QString("A key reached the application after %1 ms").arg(MaxArrived)));
+    }
+    void groupedParentPageKeysUi()
+    {
+        // Grouping pins ".." at the top and entering a folder puts the cursor there. PgDn/PgUp from
+        // that pinned row must page (HC-QTN-013), also after PgDn was held while entering.
+        using namespace hc::columns; using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Now = QDateTime::currentDateTime();
+        for (int Index = 0; Index < 300; ++Index) {
+            QFile File(Directory.filePath(QString("p%1.bin").arg(Index, 4, 10, QChar('0')))); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("x");
+            QVERIFY(File.setFileTime(Now.addSecs(-qint64(Index) * 6 * 3600), QFileDevice::FileModificationTime));
+        }
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel");
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        View->SetAutomaticColumns(false); QVERIFY(View->ApplyColumnProfile(DownloadsProfile()));
+        auto* Grid = View->findChild<Qtitan::Grid*>()->view<Qtitan::GridBandedTableView>();
+        main_->raise(); main_->activateWindow();
+        if (!ActivateTestWindow(reinterpret_cast<HWND>(main_->winId()))) QSKIP("Another window keeps the foreground");
+        View->EnsureKeyboardFocusOnView();
+        const auto Key = [](WORD Vk, bool Up) {
+            INPUT Input{}; Input.type = INPUT_KEYBOARD; Input.ki.wVk = Vk; Input.ki.dwFlags = KEYEVENTF_EXTENDEDKEY | (Up ? KEYEVENTF_KEYUP : 0);
+            return SendInput(1, &Input, sizeof(INPUT)) == 1;
+        };
+        // PgDn held while entering: key-down repeats without a release until the listing is shown.
+        Panel->ChangeCurrentPath(Directory.path(), {});
+        for (int Repeat = 0; Repeat < 6; ++Repeat) { QVERIFY(Key(VK_NEXT, false)); QTest::qWait(30); }
+        QVERIFY(Key(VK_NEXT, true));
+        auto* Model = qobject_cast<CFSModel*>(View->BaseModel()); QVERIFY(Model);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 301, 30000);
+        QTRY_VERIFY(View->GroupingActive());
+        QTRY_COMPARE(Grid->modelController()->getPinnedGridRowAtBeginningCount(), 1);
+        QTest::qWait(300);
+        View->EnsureKeyboardFocusOnView(); QVERIFY(Grid->setFocusedRowIndex(0));
+        QCOMPARE(Grid->getRow(0).modelIndex(0).data().toString(), QString(".."));
+        QVERIFY(Key(VK_NEXT, false)); QVERIFY(Key(VK_NEXT, true));
+        QTRY_VERIFY2(Grid->focusedRowIndex() > 1, "PgDn from the pinned parent row did not page");
+        const int Paged = Grid->focusedRowIndex();
+        QVERIFY(Key(VK_NEXT, false)); QVERIFY(Key(VK_NEXT, true));
+        QTRY_VERIFY(Grid->focusedRowIndex() > Paged);
+        for (int Press = 0; Press < 3; ++Press) { QVERIFY(Key(VK_PRIOR, false)); QVERIFY(Key(VK_PRIOR, true)); QTest::qWait(50); }
+        QTRY_COMPARE(Grid->focusedRowIndex(), 0); // PgUp continues from the first scrolling row into ".."
+        qInfo() << "pinned-page-keys first-page-row" << Paged;
+    }
+    void groupCaptionHeightUi()
+    {
+        // Qtitan draws a group caption inset by PM_HeaderMargin on every side; with a large list
+        // font the group row must still hold the whole caption height.
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel");
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        auto* Widget = View->findChild<Qtitan::Grid*>(); auto* Grid = Widget->view<Qtitan::GridBandedTableView>();
+        const auto Original = Widget->font(); const auto Restore = qScopeGuard([&] { Widget->setFont(Original); });
+        const int Margin = Widget->style()->pixelMetric(QStyle::PM_HeaderMargin, nullptr, Widget);
+        for (const int Point : {10, 16, 24}) {
+            QFont Font(Original); Font.setPointSize(Point); Widget->setFont(Font);
+            QTRY_VERIFY2(Grid->options().groupRowHeight() - 2 * Margin >= QFontMetrics(Grid->options().groupRowFont(0)).height(),
+                qPrintable(QString("pt %1 row %2 margin %3 text %4").arg(Point).arg(Grid->options().groupRowHeight()).arg(Margin)
+                    .arg(QFontMetrics(Grid->options().groupRowFont(0)).height())));
+        }
+    }
+    void smallFolderNavigationUi_data()
+    {
+        QTest::addColumn<bool>("InternetRule"); QTest::addColumn<bool>("AutoSwitch");
+        QTest::newRow("default-rules") << true << false;
+        QTest::newRow("without-internet-rule") << false << false;
+        QTest::newRow("auto-switch") << true << true;   // the installed policy: Downloads {GUID}\* → Downloads set
+    }
+    void smallFolderNavigationUi()
+    {
+        // Entering a folder with a few subfolders must cost the same with the default internet
+        // file group (an ADS zone condition) as without it. Measures publication, final colors,
+        // GUI gaps and refreshes while idle.
+        QFETCH(bool, InternetRule); QFETCH(bool, AutoSwitch);
+        using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        // A listing model reads color rules when its scheme is applied, not on a settings commit.
+        const auto ApplyRules = [this, Colors] {
+            auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel");
+            if (auto* Current = qobject_cast<CFSModel*>(static_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex()))->BaseModel()))
+                Current->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        };
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); ApplyRules(); main_->RestoreWorkspace(Workspace); });
+        // HC_SMALL_FOLDER_ROOT places the fixture on another volume (the default is the temp folder).
+        const auto Root = qEnvironmentVariable("HC_SMALL_FOLDER_ROOT");
+        QTemporaryDir Directory(Root.isEmpty() ? QDir::tempPath() + "/hc-small-XXXXXX" : QDir(Root).filePath("hc-small-XXXXXX")); QVERIFY(Directory.isValid());
+        const auto Small = Directory.filePath("small");
+        for (const auto* Name : {"alpha", "beta", "gamma"}) QVERIFY(QDir().mkpath(Small + "/" + Name));
+        for (const auto* Name : {"a.txt", "b.zip"}) { QFile File(Small + "/" + Name); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("x"); }
+        auto Rules = hc::defaults::FileGroups(); auto Groups = Rules["groups"].toArray();
+        const auto Before = Groups.size();
+        if (!InternetRule) for (int Index = Groups.size() - 1; Index >= 0; --Index) if (Groups[Index].toObject()["id"].toString() == "default.internet") Groups.removeAt(Index);
+        QCOMPARE(Groups.size(), InternetRule ? Before : Before - 1);
+        Rules["groups"] = Groups;
+        auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = Rules;
+        QVERIFY(Settings.Put(Section::Options, Options));
+        const auto Downloads = hc::shell::ResolveKnownFolderPath(QUuid("{374DE290-123F-4565-9164-39C4925E467B}"));
+        if (AutoSwitch) {
+            if (Downloads.isEmpty() || !QDir(Downloads).exists()) QSKIP("Actual Downloads folder is unavailable");
+            QJsonObject Columns; QVERIFY(hc::columns::MigrateDownloadsColumnSet(Columns, Downloads));
+            QVERIFY(Settings.Put(Section::Columns, Columns));
+        }
+        QVERIFY(Settings.Commit());
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel");
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        View->SetAutomaticColumns(false); QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile()));
+        View->SetAutomaticColumns(AutoSwitch);
+        auto* Model = qobject_cast<CFSModel*>(View->BaseModel()); QVERIFY(Model);
+        ApplyRules(); QCOMPARE(Model->HasSlowFileRuleFields(), InternetRule);
+        int SettingsChanges = 0;
+        const auto SettingsCounter = connect(View, &CGridView::sigViewSettingsChanged, this, [&] { ++SettingsChanges; });
+        const auto DisconnectSettings = qScopeGuard([&] { disconnect(SettingsCounter); });
+        Panel->ChangeCurrentPath(Directory.path(), {}); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 10000);
+        QElapsedTimer Clock; Clock.start(); qint64 LastBeat = 0, MaxGap = 0; int Refreshes = 0;
+        QTimer Heartbeat; Heartbeat.setInterval(1);
+        connect(&Heartbeat, &QTimer::timeout, this, [&] { const auto Beat = Clock.nsecsElapsed(); if (LastBeat) MaxGap = qMax(MaxGap, Beat - LastBeat); LastBeat = Beat; });
+        QString Status; int Overlays = 0;
+        const auto Counter = connect(Model, &CFsModelT::sigRefreshCompleted, this, [&] { ++Refreshes; });
+        const auto Watch = connect(Model, &CFSModel::ColumnQueryStatus, this, [&](const QString& Text) { if (Status.isEmpty() && !Text.isEmpty()) ++Overlays; Status = Text; });
+        const auto JobsBefore = Model->ColumnQueryJobs();
+        const auto Disconnect = qScopeGuard([&] { disconnect(Counter); disconnect(Watch); });
+        Heartbeat.start();
+        QList<qint64> Published, Colored; QStringList Transitions;
+        const auto Same = [](const QString& A, const QString& B) {
+            return QDir::cleanPath(QDir::fromNativeSeparators(A)).compare(QDir::cleanPath(QDir::fromNativeSeparators(B)), Qt::CaseInsensitive) == 0;
+        };
+        const auto Targets = AutoSwitch ? QStringList{Downloads, Small, Directory.path()} : QStringList{Small, Directory.path()};
+        // A row whose style waits for a field shows the pending marker until the value arrives.
+        const auto PendingRows = [&] {
+            int Count = 0;
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->index(Row, 0).data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker")) ++Count;
+            return Count;
+        };
+        quint64 FolderOnlyJobs = 0;
+        for (int Cycle = 0; Cycle < 8; ++Cycle) {
+            for (const auto& Target : Targets) {
+                const auto Start = Clock.nsecsElapsed(); const int Changes = SettingsChanges; const auto JobsAtStart = Model->ColumnQueryJobs();
+                const auto Expected = AutoSwitch && Same(Target, Downloads) ? hc::columns::DownloadsProfileId : hc::columns::DefaultProfile().id_;
+                Status.clear(); Panel->ChangeCurrentPath(Target, {});
+                QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Same(QString::fromStdString(Model->WorkspaceLocation().root_), Target), 10000);
+                const auto Shown = (Clock.nsecsElapsed() - Start) / 1000000;
+                // Settled: the expected column set is applied, every visible row decided, no query left.
+                QTRY_VERIFY_WITH_TIMEOUT(View->ColumnProfile().id_ == Expected
+                    && Model->AreFileColorsReady(View->VisibleSourceRows()) && Status.isEmpty(), 10000);
+                QTest::qWait(30); // a late automatic re-apply would land here
+                const auto Settled = (Clock.nsecsElapsed() - Start) / 1000000;
+                // Folders decide a zone condition without a query; nothing may stay pending (E:\Clouds case).
+                QTRY_COMPARE_WITH_TIMEOUT(PendingRows(), 0, 3000);
+                if (Target == Directory.path()) FolderOnlyJobs += Model->ColumnQueryJobs() - JobsAtStart;
+                if (Target == Small) { Published.append(Shown); Colored.append(Settled); }
+                if (Cycle == 1) Transitions.append(QString("%1:%2/%3ms/sets+%4").arg(Same(Target, Downloads) ? "downloads" : Target == Small ? "small" : "parent")
+                    .arg(Shown).arg(Settled).arg(SettingsChanges - Changes));
+            }
+        }
+        const int BeforeIdle = Refreshes; QTest::qWait(2000); const int IdleRefreshes = Refreshes - BeforeIdle;
+        Heartbeat.stop();
+        auto Median = [](QList<qint64> Values) { std::sort(Values.begin(), Values.end()); return Values[Values.size() / 2]; };
+        qInfo() << "small-folder internet-rule" << InternetRule << "auto-switch" << AutoSwitch << "transitions" << Transitions
+                << "view-settings-changes" << SettingsChanges << "published-ms" << Published << "median" << Median(Published)
+                << "colored-ms" << Colored << "median" << Median(Colored) << "max-ui-gap-ms" << MaxGap / 1000000
+                << "refreshes" << BeforeIdle << "idle-refreshes" << IdleRefreshes << "query-jobs" << Model->ColumnQueryJobs() - JobsBefore
+                << "status-overlays" << Overlays << "folder-only-jobs" << FolderOnlyJobs << "root" << QDir::toNativeSeparators(Directory.path());
+        QCOMPARE(IdleRefreshes, 0);
+        QCOMPARE(FolderOnlyJobs, quint64(0)); // the parent holds only a folder: no query at all
+    }
+    void systemViewRefreshInputUi()
+    {
+        // The process view refreshes every second. Each refresh relayouts the Qtitan rows under a
+        // steady cursor; real keyboard input after those refreshes must still move the cursor.
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); QVERIFY(Panel);
+        auto* System = Panel->ShowSystemView(int(CSystemView::Kind::Processes)); QVERIFY(System);
+        const auto Hide = qScopeGuard([Panel] { Panel->HideSystemView(); });
+        auto* Widget = System->findChild<Qtitan::TreeGrid*>("hc.system.grid"); QVERIFY(Widget);
+        auto* View = Widget->view<Qtitan::GridTreeView>(); QVERIFY(View);
+        auto* Control = dynamic_cast<Qtitan::GraphicControl*>(Widget->viewport()); QVERIFY(Control);
+        QTRY_VERIFY_WITH_TIMEOUT(View->getRowCount() > 8, 15000);
+        main_->raise(); main_->activateWindow();
+        if (!ActivateTestWindow(reinterpret_cast<HWND>(main_->winId()))) QSKIP("Another window keeps the foreground");
+        Widget->setFocus(Qt::OtherFocusReason); View->setFocusedRowIndex(0);
+        QTRY_VERIFY(Widget->hasFocus());
+        const auto Identity = [View] {
+            const auto Row = View->focusedRow(); QStringList Parts;
+            for (int Column = 0; Row.isValid() && Column < 3; ++Column) Parts.append(Row.modelIndex(Column).data().toString());
+            return Parts.join('|');
+        };
+        int Lost = 0;
+        for (int Press = 0; Press < 4; ++Press) {
+            QTest::qWait(2200); // At least two sample refreshes under the unchanged cursor.
+            const auto Before = Identity();
+            const bool Target = Control->focusedGP() != nullptr;
+            INPUT Inputs[2]{}; Inputs[0].type = Inputs[1].type = INPUT_KEYBOARD; Inputs[0].ki.wVk = Inputs[1].ki.wVk = VK_DOWN;
+            Inputs[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY; Inputs[1].ki.dwFlags = KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY;
+            QCOMPARE(SendInput(2, Inputs, sizeof(INPUT)), UINT(2));
+            const bool Moved = QTest::qWaitFor([&] { return Identity() != Before; }, 2000);
+            if (!Moved) ++Lost;
+            qInfo() << "system-view key" << Press << "focusedGP-before" << Target << "moved" << Moved;
+        }
+        QCOMPARE(Lost, 0);
+    }
     void columnShellFolderConditionUi()
     {
         using namespace hc::columns; using namespace hc::settings; using namespace hc::storage;
@@ -9438,8 +9777,12 @@ private slots:
         const auto Resume = qScopeGuard([Model] { Model->ResumeColumnQueries(); });
         Model->ColumnQueryStatus({}); QCoreApplication::processEvents();
         const auto Geometry = Grid->geometry(); const auto Position = Grid->mapToGlobal(QPoint(0, 0));
+        // A check that ends at once never shows the overlay; a longer one shows it after the delay.
+        Model->ColumnQueryStatus(QStringLiteral("색상 조건 확인 중 · 남은 항목 1개")); QCoreApplication::processEvents();
+        QVERIFY(!Overlay->isVisible()); Model->ColumnQueryStatus({}); QTest::qWait(500); QVERIFY(!Overlay->isVisible());
         Model->ColumnQueryStatus(QStringLiteral("색상 조건 확인 중 · 남은 항목 100개")); QCoreApplication::processEvents();
-        QVERIFY(Overlay->isVisible()); QCOMPARE(Grid->geometry(), Geometry); QCOMPARE(Grid->mapToGlobal(QPoint(0, 0)), Position);
+        QVERIFY(!Overlay->isVisible()); QTRY_VERIFY(Overlay->isVisible());
+        QCOMPARE(Grid->geometry(), Geometry); QCOMPARE(Grid->mapToGlobal(QPoint(0, 0)), Position);
         QCOMPARE(Overlay->width(), Overlay->parentWidget()->width());
         Model->ColumnQueryStatus({}); QCoreApplication::processEvents();
         QVERIFY(!Overlay->isVisible()); QCOMPARE(Grid->geometry(), Geometry); QCOMPARE(Grid->mapToGlobal(QPoint(0, 0)), Position);

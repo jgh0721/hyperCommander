@@ -391,7 +391,8 @@ private slots:
             QVERIFY(CompileTemplate("${" + Id + "}").Valid());
         }
         for (const auto& Id : Link) { QCOMPARE(QueryFamily(Id), QString("link")); QVERIFY(QueriesFolders(Id)); }
-        for (const auto& Id : Streams) { QCOMPARE(QueryFamily(Id), Id.endsWith(".zone") ? QString("zone") : QString("streams")); QVERIFY(QueriesFolders(Id)); }
+        // Folders carry no Mark of the Web; the zone is never queried for them.
+        for (const auto& Id : Streams) { QCOMPARE(QueryFamily(Id), Id.endsWith(".zone") ? QString("zone") : QString("streams")); QCOMPARE(QueriesFolders(Id), !Id.endsWith(".zone")); }
         // Allocation and link count share one read; a folder has neither.
         QCOMPARE(QueryFamily("file.hardlink.count"), QueryFamily("file.allocatedSize"));
         QVERIFY(!QueriesFolders("file.hardlink.count")); QVERIFY(!QueriesFolders("file.fileVersion")); QVERIFY(!QueriesFolders("file.name"));

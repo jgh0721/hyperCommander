@@ -153,6 +153,8 @@ public:
     // values already known; Pending when a query is still needed. Never queues anything.
     hc::columns::CellValue RuleFieldValue(const nsHC::TySpFileSource& Item, const QString& Field) const { return ruleFieldValue(Item, Field); }
     QString FieldQueryPath(const nsHC::TySpFileSource& Item) const { return queryPath(Item); }
+    // Column and rule queries submitted by this listing's engine (diagnostics and tests).
+    quint64 ColumnQueryJobs() const { return columnQueries_->Started(); }
     // Values a selection scan read are kept for colors too; repaints pick them up.
     void ShareRuleFieldValues(const QString& Path, const hc::columns::FieldValues& Values);
 
@@ -230,6 +232,14 @@ private:
     hc::columns::CellValue evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort = false) const;
     QString queryPath(const nsHC::TySpFileSource& Item) const;
     void columnResultsReady(const QSet<QString>& Paths);
+    // Query families read by a column's value, template or sort field.
+    static QSet<QString> bindingFamilies(const Column& Binding);
+    // True when a value of these families can move rows: sort, grouping or their templates use it.
+    bool orderUsesFamilies(const QSet<QString>& Families) const;
+    // Rows by query path, rebuilt after structural changes; a stale or missing hit rebuilds once.
+    void rebuildQueryRows();
+    QHash<QString, QVector<int>> queryRows_;
+    bool queryRowsValid_ = false;
     hc::settings::FileRuleInput fileRuleInput(const nsHC::TySpFileSource& Item) const;
     // Drawn: the row is being painted or is in the viewport; other rows only ask for slow values ahead.
     hc::settings::FileRuleResult fileRuleStyle(int Row, bool Drawn = true) const;
@@ -272,6 +282,8 @@ private:
     static constexpr std::size_t FileRuleSeedRows = 4096;
     static constexpr int FileRuleSeedBudgetMs = 25;
     static std::vector<hc::settings::FileRuleResult> seedFileRuleStyles(const hc::settings::FileColorRules& Rules, const std::vector<hc::storage::EntrySnapshot>& Entries, bool Dark, std::stop_token Token);
+    // A queried field the listing attributes already decide as Empty; never queried or left pending.
+    static bool KnownEmptyField(quint32 Attributes, const QString& Field, bool Search);
     bool fileRuleSeedsUsable(quint64 RuleGeneration, bool Dark) const;
     void pumpFileRules();
     void resetFileRules();
@@ -305,6 +317,8 @@ private:
     QDate groupingDate_ = QDate::currentDate();
     QTimeZone groupingZone_ = QTimeZone::systemTimeZone();
     QVector<hc::columns::SortDefinition> columnSorts_, completedSorts_, pageSorts_;
+    // Sort rules of the last GridSortRole notification; with them unchanged only moved ranks are sent.
+    QVector<hc::columns::SortDefinition> notifiedRankSorts_;
     void refreshColumnSortRanks(int First = 0);
     QVector<hc::columns::SortRow> searchSortRows_;
     QVector<int> searchSortOrder_;

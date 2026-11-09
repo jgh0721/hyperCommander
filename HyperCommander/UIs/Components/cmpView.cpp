@@ -3,6 +3,7 @@
 #include "UniqueLibs/productDefaults.hpp"
 #include "startupTrace.hpp"
 #include "UniqueLibs/columnAutoSelection.hpp"
+#include "UniqueLibs/inputGate.hpp"
 #include "commonLibs/view/listIconSize.hpp"
 #include <QtConcurrent/QtConcurrentRun>
 #include <QFutureWatcher>
@@ -423,6 +424,13 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     auto* QueryWidget = new QWidget(grid_); QueryWidget->setObjectName("hc.columns.queryOverlay");
     QueryBar->setContentsMargins(6, 2, 6, 2);
     QueryWidget->setAutoFillBackground(true); QueryWidget->setLayout(QueryBar); QueryWidget->hide();
+    columnStatusDelay_.setSingleShot(true); columnStatusDelay_.setInterval(ColumnStatusDelayMs);
+    connect(&columnStatusDelay_, &QTimer::timeout, this, [this] {
+        if (columnStatusText_.isEmpty()) return;
+        // While a key is held, results wait on purpose (InputGate); that is not a slow check.
+        if (hc::ui::InputGate::Busy()) { columnStatusDelay_.start(); return; }
+        showColumnStatus();
+    });
     presentationStack_ = new QStackedWidget(this);
     presentationStack_->addWidget(grid_);
     QueryWidget->setParent(presentationStack_); presentationStack_->installEventFilter(this);
@@ -924,7 +932,11 @@ void CGridView::applyPresentation()
     view_->beginUpdate();
     view_->options().setRowAutoHeight(false);
     view_->options().setCellHeight(recordGeometry_.cellHeight());
-    view_->options().setGroupRowHeight(QFontMetrics(grid_->font()).height() + 12);
+    // Qtitan insets the group caption by PM_HeaderMargin on every side. The row must hold the group
+    // font plus both insets, or a large list font clips the caption's lower part.
+    const int GroupText = QFontMetrics(view_->options().groupRowFont(0)).height();
+    const int GroupMargin = grid_->style()->pixelMetric(QStyle::PM_HeaderMargin, nullptr, grid_);
+    view_->options().setGroupRowHeight(qMax(GroupText + 12, GroupText + 2 * GroupMargin + 2));
     auto GroupPalette = grid_->palette();
     GroupPalette.setColor(QPalette::All, QPalette::Base, recordColors_[fm::style::Token::Head]);
     GroupPalette.setColor(QPalette::All, QPalette::Window, recordColors_[fm::style::Token::Head]);
@@ -1090,7 +1102,14 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
                 if (Restore) { applyGroupExpansion(); RestoreSelection(querySelection_, queryFocus_); RestoreScrollState(queryScroll_); }
             }
         });
-        connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) { columnStatus_->setText(Text); columnStatus_->setToolTip(Text); positionColumnStatus(); columnStatus_->parentWidget()->setVisible(!Text.isEmpty()); columnStatus_->parentWidget()->raise(); });
+        connect(Native, &CFSModel::ColumnQueryStatus, this, [this](const QString& Text) {
+            // Checks that finish within a moment never flash the overlay on folder entry;
+            // a visible overlay follows the text at once and hides as soon as nothing is left.
+            columnStatusText_ = Text;
+            if (Text.isEmpty()) { columnStatusDelay_.stop(); columnStatus_->parentWidget()->setVisible(false); return; }
+            if (columnStatus_->parentWidget()->isVisible()) showColumnStatus();
+            else if (!columnStatusDelay_.isActive()) columnStatusDelay_.start();
+        });
         connect(Native, &CFSModel::ColumnSortCancelled, this, [this, Native] {
             view_->beginUpdate();
             for (int Index = 0; Index < model_->columnCount(); ++Index) static_cast<Qtitan::GridTableColumn*>(view_->getColumnByModelColumn(Index))->setSortOrder(Qtitan::SortNone);
@@ -1724,6 +1743,12 @@ void CGridView::RemoveSelection(const QStringList& Selection)
     // Clear those marks too, before modelAboutToBeReset captures them again.
     auto Current = CaptureSelection(); Remove(Current);
     RestoreSelection(Current, CaptureFocus());
+}
+
+void CGridView::showColumnStatus()
+{
+    columnStatus_->setText(columnStatusText_); columnStatus_->setToolTip(columnStatusText_); positionColumnStatus();
+    columnStatus_->parentWidget()->setVisible(true); columnStatus_->parentWidget()->raise();
 }
 
 void CGridView::EnsureKeyboardFocusOnView() const

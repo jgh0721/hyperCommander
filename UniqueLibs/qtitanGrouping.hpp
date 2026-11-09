@@ -4,10 +4,12 @@
 /// UIs
 /// 기타 헤더파일
 /// 고유 라이브러리
+#include "UniqueLibs/inputGate.hpp"
 /// 공통 라이브러리
 #include "commonLibs/columns/columnGrouping.hpp"
 /// 외부 라이브러리
 #include <QtitanGrid.h>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QTimer>
 /// 선언 헤더파일들
@@ -33,7 +35,7 @@ namespace hc::columns
         explicit GroupCaptionCache(Qtitan::GridBandedTableView* View) : QObject(View), view_(View) {
             setObjectName("hc.groupCaptionCache"); timer_.setSingleShot(true);
             connect(&timer_, &QTimer::timeout, this, [this] { rebuild(); });
-            connect(View, &Qtitan::GridViewBase::groupingChanged, this, [this] { timer_.start(); });
+            connect(View, &Qtitan::GridViewBase::groupingChanged, this, [this] { schedule(0); });
             const QPointer<GroupCaptionCache> Self(this);
             View->setGroupCaptionProvider([Self](const Qtitan::GridRow& Row) {
                 if (!Self) return Row.groupText().toString();
@@ -47,22 +49,37 @@ namespace hc::columns
                 for (const auto& Connection : connections_) disconnect(Connection);
                 connections_.clear(); model_ = view_->model();
                 if (model_) {
-                    const auto Schedule = [this] { timer_.start(); };
-                    connections_.append(connect(model_, &QAbstractItemModel::modelReset, this, Schedule));
-                    connections_.append(connect(model_, &QAbstractItemModel::rowsInserted, this, Schedule));
-                    connections_.append(connect(model_, &QAbstractItemModel::rowsRemoved, this, Schedule));
-                    connections_.append(connect(model_, &QAbstractItemModel::layoutChanged, this, Schedule));
+                    const auto Structure = [this] { schedule(0); };
+                    connections_.append(connect(model_, &QAbstractItemModel::modelReset, this, Structure));
+                    connections_.append(connect(model_, &QAbstractItemModel::rowsInserted, this, Structure));
+                    connections_.append(connect(model_, &QAbstractItemModel::rowsRemoved, this, Structure));
+                    connections_.append(connect(model_, &QAbstractItemModel::layoutChanged, this, Structure));
+                    // Only group keys, sizes and dates feed a summary; streamed column text and
+                    // colors (zone, version, plugin values) do not, and are not re-counted.
                     connections_.append(connect(model_, &QAbstractItemModel::dataChanged, this,
                         [this](const QModelIndex&, const QModelIndex&, const QList<int>& Roles) {
                             if (Roles.isEmpty() || Roles.contains(GroupKeyRole) || Roles.contains(GroupSizeRole)
-                                || Roles.contains(GroupLatestRole) || Roles.contains(Qt::DisplayRole)) timer_.start();
+                                || Roles.contains(GroupLatestRole)) schedule(ValueDelayMs);
                         }));
                 }
             }
-            timer_.start();
+            schedule(0);
         }
     private:
+        static constexpr int ValueDelayMs = 100, MaxDeferMs = 500;
+        // Structural changes count at once; value changes are batched. A pending earlier rebuild is kept.
+        void schedule(int Delay) {
+            structural_ |= Delay == 0;
+            if (!timer_.isActive() || timer_.remainingTime() > Delay) timer_.start(Delay);
+        }
         void rebuild() {
+            // Re-counting changed values reads every row; it waits (bounded) while the user types or
+            // clicks. New or regrouped rows are counted at once so captions never show without totals.
+            if (!structural_ && hc::ui::InputGate::Busy()) {
+                if (!deferred_.isValid()) deferred_.start();
+                if (deferred_.elapsed() < MaxDeferMs) { timer_.start(ValueDelayMs); return; }
+            }
+            deferred_.invalidate(); structural_ = false;
             summaries_.clear();
             if (model_ && !columns_.isEmpty()) for (int Row = 0; Row < model_->rowCount(); ++Row) {
                 const auto Index = model_->index(Row, 0);
@@ -83,6 +100,8 @@ namespace hc::columns
         ProfileGrouping options_;
         QHash<QString, GroupSummary> summaries_;
         QTimer timer_;
+        QElapsedTimer deferred_;
+        bool structural_ = false;
     };
     inline void ConfigureGroupCaptions(Qtitan::GridBandedTableView* View, const QVector<int>& Columns, const ProfileGrouping& Options)
     {
