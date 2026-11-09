@@ -2,7 +2,7 @@
   "source": {
     "defaults": "https://www.scintilla.org/scite567.zip",
     "sha256": "017ada7525c1fd2d50611fcdca88572807be730d7c548f31ede0f35dd950d8f5",
-    "styles": "externalLibs/Lexilla/include/LexicalStyles.iface (5.5.4)",
+    "styles": "externalLibs/Lexilla/include/LexicalStyles.iface (5.5.5)",
     "license": "License for Lexilla, Scintilla, and SciTE\n\nCopyright 1998-2021 by Neil Hodgson <neilh@scintilla.org>\n\nAll Rights Reserved\n\nPermission to use, copy, modify, and distribute this software and its documentation for any purpose and without fee is hereby granted, provided that the above copyright notice appear in all copies and that both that copyright notice and this permission notice appear in supporting documentation.\n\nNEIL HODGSON DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL NEIL HODGSON BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE."
   },
   "languages": [

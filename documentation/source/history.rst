@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* HyperEditor·HyperViewer: Scintilla 5.6.9 및 Lexilla 5.5.5 적용. 편집기 성능 개선과 구문 강조 수정 반영.
+
 * HyperEditor·HyperViewer: HWP/HWPX 엔진과 편집기를 rhwp 0.9.0으로 갱신.
 
 * HyperCompare: 대용량 Hex 파일의 읽기·바이트 비교·차이 색인 진행률과 처리량 표시. Hex 작업 중 취소 버튼 활성화, 시간 제한 없는 세션의 후속 작업 시간 초과 수정. 빌드 산출물 불일치로 비교 완료 시 종료되던 문제 해소.

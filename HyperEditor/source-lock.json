@@ -197,20 +197,23 @@
     }
   ],
   "scintilla": {
-    "url": "https://github.com/missdeer/scintilla",
-    "commit": "c439d2d450c3af517b1a6832711e1de9e0bbb5e4",
-    "version": "5.6.7",
-    "tag": "rel-5-6-7",
-    "normalizedTreeSha256": "6d41b2a8493299b739b789bb3160e9e32bb31b4b697b67359d63b65c4fa08583",
-    "treeHashFormat": "Sorted UTF-8 relative path + NUL + content (UTF-8 BOM removed, CRLF to LF; non-UTF-8 binary unchanged) + NUL, for every archive file"
+    "url": "https://www.scintilla.org/scintilla569.zip",
+    "commit": "69bed9304d290ba16399e493ab6fe4b1a3fb4b5f",
+    "version": "5.6.9",
+    "tag": "rel-5-6-9",
+    "normalizedTreeSha256": "ff0526345b7722a276bd518ffa30fd234afea427df361e60fea61b44c4872524",
+    "treeHashFormat": "Sorted UTF-8 relative path + NUL + content (UTF-8 BOM removed, CRLF to LF; non-UTF-8 binary unchanged) + NUL, for every archive file except .hg_archival.txt",
+    "sha256": "fddc637afa6e3a9205a5ad67c777d711a921ed2797d792f3034010c1be1539d6",
+    "revisionSystem": "Mercurial"
   },
   "lexilla": {
-    "url": "https://github.com/ScintillaOrg/lexilla",
-    "commit": "8fe5438b65cffc34340ecd60357ce5a6f72eecbe",
-    "version": "5.5.4",
-    "tag": "rel-5-5-4",
-    "normalizedTreeSha256": "030646e60f4bdfa7f4ef5cadba84a18b19cbdb1756e5ecc2613e47c422d299db",
-    "treeHashFormat": "Sorted UTF-8 relative path + NUL + content (UTF-8 BOM removed, CRLF to LF; non-UTF-8 binary unchanged) + NUL, for every archive file"
+    "url": "https://www.scintilla.org/lexilla555.zip",
+    "commit": "e67537693bfb1ae4e6f643dcab725a38ffeac3e3",
+    "version": "5.5.5",
+    "tag": "rel-5-5-5",
+    "normalizedTreeSha256": "6c3e7cb407daf09b9886135c0f308d15031cba07c099d25319ceb31eac6c496e",
+    "treeHashFormat": "Sorted UTF-8 relative path + NUL + content (UTF-8 BOM removed, CRLF to LF; non-UTF-8 binary unchanged) + NUL, for every archive file except .hg_archival.txt",
+    "sha256": "713ada097b7da0594638e2c5723d8dea486653c23ec2e0c12631df7e5b7f0991"
   },
   "pdfium": {
     "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8111/pdfium-win-x64.tgz",
