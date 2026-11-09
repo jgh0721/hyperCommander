@@ -30,10 +30,10 @@ new QWebChannel(qt.webChannelTransport, channel => {
             QByteArray(Hang?"document.title='deferred-running';while(true){}":"bridge.Report(JSON.stringify({...identity,type:'ViewFailed'}));") + "});},600);})");
         return Result;
     }
-    // Official @rhwp/core 0.8.7 npm assets, gitHead 1a76570e833917d15817415a53c09ad61ab3203f.
+    // Official @rhwp/core 0.9.0 npm assets, gitHead c9095c5f67632e6721e800ccc7fb43ea49d26682.
     // Test-only pins; package integrity receipt is tools/rhwp/engine-lock.json.
-    inline const QByteArray EngineJsSha("70cde06a369fa7fd4fc8bc8f3d6acaee158596ba1a116a2c72159002b0b5654e");
-    inline const QByteArray EngineWasmSha("54cf95014312e605c51b98eb9021247ea79ef2bbd0a7080e11c011d0246e3989");
+    inline const QByteArray EngineJsSha("02dcb4a17782f65814129c7971c81c05237e93e67327b205cfdb00b3a3ac0568");
+    inline const QByteArray EngineWasmSha("c3b0632b84881f81f2c80be7c2f9e44a4086cb01e05a6a9107a3b3c6350abc1d");
     // Local adapter updated by 34539d6 (tabbed HWP viewer); upstream engine pins stay unchanged.
     inline const QByteArray AdapterSha("ebf883b5f6ac9d40c2ee43803cda8adc70cc0499cc538470be17b7f10043214a");
     inline const QByteArray EnginePage("<!doctype html><script type='module' src='app.js'></script>");

@@ -585,7 +585,7 @@ private slots:
             for (auto At = Runtime.sha256_.cbegin(); At != Runtime.sha256_.cend(); ++At)
                 Entries.append(QJsonObject{{"path", At.key()}, {"sha256", QString::fromLatin1(At.value())}});
             const QJsonObject Inventory{{"schemaVersion", 1}, {"profile", "native-read-only"},
-                {"sourceCommit", "1a76570e833917d15817415a53c09ad61ab3203f"}, {"releaseEligible", true},
+                {"sourceCommit", "c9095c5f67632e6721e800ccc7fb43ea49d26682"}, {"releaseEligible", true},
                 {"assetManifestSha256", QString::fromLatin1(Hash(BundleManifest))}, {"files", Entries}};
             const auto InventoryBytes = QJsonDocument(Inventory).toJson(QJsonDocument::Compact);
             QVERIFY(Write(Dir.filePath("runtime-inventory.json"), InventoryBytes));
@@ -897,7 +897,7 @@ private slots:
     {
         QTemporaryDir Dir; QString Error; QVERIFY(Write(Dir.filePath("index.html"), Html));
         QJsonObject Manifest{{"schemaVersion", 1}, {"releaseEligible", false},
-            {"sourceCommit", "1a76570e833917d15817415a53c09ad61ab3203f"},
+            {"sourceCommit", "c9095c5f67632e6721e800ccc7fb43ea49d26682"},
             {"files", QJsonArray{QJsonObject{{"path", "index.html"}, {"sha256", QString::fromLatin1(Hash(Html))}}}}};
         auto Bytes = QJsonDocument(Manifest).toJson(QJsonDocument::Compact);
         QVERIFY(Write(Dir.filePath("asset-manifest.json"), Bytes));

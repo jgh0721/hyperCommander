@@ -99,7 +99,7 @@ namespace hc::document
                     return Fail("rhwp-runtime-not-approved");
             } else if (Object.value("schemaVersion") != QJsonValue(1)
                 || (Object.value("profile") != QJsonValue("native-read-only") && Object.value("profile") != QJsonValue("native-editor"))
-                || Object.value("sourceCommit") != QJsonValue("1a76570e833917d15817415a53c09ad61ab3203f")
+                || Object.value("sourceCommit") != QJsonValue("c9095c5f67632e6721e800ccc7fb43ea49d26682")
                 || Object.value("releaseEligible") != QJsonValue(true))
                 return Fail("rhwp-runtime-not-approved");
             const auto EpubBundle = ProductEpub ? QStringLiteral("Libs/epub-bundle/") : QStringLiteral("bundle/");

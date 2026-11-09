@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "purpose": "H0-01 diagnostic baseline; not a product release bundle",
+  "upstream": {
+    "repository": "https://github.com/edwardkim/rhwp.git",
+    "tag": "v0.9.0",
+    "commit": "c9095c5f67632e6721e800ccc7fb43ea49d26682",
+    "tree": "2602e8ea112ce1f205b5a89e9545128f035b9a0a"
+  },
+  "toolchain": {
+    "rust": "1.93.1",
+    "target": "wasm32-unknown-unknown",
+    "wasmPack": "0.15.0",
+    "wasmBindgen": "0.2.127",
+    "node": "24.19.0",
+    "npm": "11.17.0"
+  },
+  "build": {
+    "wasm": [
+      "scripts/wasm-pack-locked.ps1",
+      "--target",
+      "web",
+      "--out-dir",
+      "pkg",
+      "--no-opt"
+    ],
+    "cargoTargetDirectory": "target/pr-review",
+    "profile": "release / wasm-opt disabled for Windows diagnostic build",
+    "studio": {
+      "externalWebFonts": false,
+      "hwpctrl": false,
+      "pwa": false,
+      "documentAgent": false,
+      "remoteDocumentUrl": false,
+      "base": "./"
+    },
+    "releaseEligible": false
+  },
+  "sparsePatterns": [
+    "/*",
+    "!/*/",
+    "/.github/",
+    "!/.github/*/",
+    "/bindings/",
+    "!/bindings/*/",
+    "/tools/",
+    "!/tools/*/",
+    "/tools/llm_verifier/",
+    "!/tools/llm_verifier/*/",
+    "/.cargo/",
+    "/.github/actions/",
+    "/assets/",
+    "/bindings/Native/",
+    "/crates/",
+    "/npm/",
+    "/rhwp-shared/",
+    "/rhwp-studio/",
+    "/scripts/",
+    "/src/",
+    "/tools/batch-convert/",
+    "/tools/llm_verifier/claim_bind/",
+    "/tools/llm_verifier/criteria_decomp/",
+    "/tools/llm_verifier/verdict_protocol/",
+    "/tools/rhwp-subsecond/",
+    "/ttfs/",
+    "/vendor/",
+    "",
+    "/saved/blank2010.hwp"
+  ],
+  "criticalFiles": [
+    {
+      "path": "Cargo.toml",
+      "gitBlob": "decf1b4d333f67acb4d10bbdfd96953412050d2b",
+      "sha256": "f9b27a36d6feb82f66e456489398b6406b48e6ebbe1c8d2dc4c7f960edb5c505",
+      "bytes": 22398
+    },
+    {
+      "path": "Cargo.lock",
+      "gitBlob": "349a7f70cde6316f25cc46599f9ee3c364e9c67e",
+      "sha256": "6184ebd0c4d86f71314b11e756f1e910001b8eac7f4fc7d4cbd2acfac393c86f",
+      "bytes": 98965
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "gitBlob": "262bc86af74777a65ee87ac929fc13b319bd390d",
+      "sha256": "a4e0fa252c4ca8f5dcc75288ac7c4ead972ce5755d7aa3a9c895eabc922bc24f",
+      "bytes": 123
+    },
+    {
+      "path": "Dockerfile",
+      "gitBlob": "c19c22eb21c9c6d9be569394091ff3085de41849",
+      "sha256": "cdc37b6abe59e80163b2d901109d8871f6bb4ee464c318e422b86492a01d7d3a",
+      "bytes": 1257
+    },
+    {
+      "path": "scripts/wasm-pack-locked.ps1",
+      "gitBlob": "485fe41b4e405646238d06db83e35e75078a3873",
+      "sha256": "265f0681abf7655ad45558c8bd9191b301aa514ccd549434ddb0aed644a1b6ee",
+      "bytes": 3003
+    },
+    {
+      "path": ".github/actions/install-wasm-pack/action.yml",
+      "gitBlob": "630c0f8db33f00a9391c59244f9af7eb81b7d7c4",
+      "sha256": "1622957ca9e4ffcdcb61f52f7965ad2f352a84db4e2a9b23fc3c20aaf4275895",
+      "bytes": 2406
+    },
+    {
+      "path": "rhwp-studio/package.json",
+      "gitBlob": "7808379c7122d814927cdece9426d8e8e6c256ad",
+      "sha256": "adfec70989aec443f0471033f59706eb83afef53dbcac37aa90c185410926294",
+      "bytes": 10270
+    },
+    {
+      "path": "rhwp-studio/package-lock.json",
+      "gitBlob": "319851ae3d914ff8d78fc845b1bd6848427a768d",
+      "sha256": "61993c57784ad01524554d9c637395a65f1a2430b945a34b59e25a3d501678a2",
+      "bytes": 247976
+    },
+    {
+      "path": "rhwp-studio/src/main.ts",
+      "gitBlob": "7049ad6696200bdacb7c195a683d729b42db2875",
+      "sha256": "52bdd906913b711483a4aaa5e83d61fe5d0d7b9344a2598f2db281f072bb677e",
+      "bytes": 105580
+    },
+    {
+      "path": "rhwp-studio/src/core/extension-settings.ts",
+      "gitBlob": "b63dd5a653870910da1fb3dc8ff6d1090b17ca26",
+      "sha256": "f65e556cce4461251094ecd01ace28873b273f8d1be125f4d6271d944c5a4722",
+      "bytes": 4358
+    },
+    {
+      "path": "rhwp-studio/vite.config.ts",
+      "gitBlob": "58c83bddd6dabf315bd787e26b44125107b657de",
+      "sha256": "22cf601711ea98fec4acd75805bcc959cf522d7e9ddd095c15d09a0dbc32dfe4",
+      "bytes": 8280
+    },
+    {
+      "path": "LICENSE",
+      "gitBlob": "ce1af1c38f99275435ca0459477560c49daaf8d8",
+      "sha256": "1c3a7d5643b163a3ead4965e1bea33b832caee5bfca265efe42afcd7bc696b5b",
+      "bytes": 1072
+    },
+    {
+      "path": "THIRD_PARTY_LICENSES.md",
+      "gitBlob": "fbcccdef09dd1246aacaff422d535f1504d24c2e",
+      "sha256": "3360ab04d9f65a08366f0592f8299cfbd8b14588027f05c5dc3fc4e349892dba",
+      "bytes": 32997
+    },
+    {
+      "path": "assets/fonts/FONTS.md",
+      "gitBlob": "5d0cd84947b10d447ac247fb7680bac256e1ec00",
+      "sha256": "1b8973e8e66417a434427c0d34bfd7f9089298389a1c45dd29bec8ee67f424a8",
+      "bytes": 11059
+    },
+    {
+      "path": "saved/blank2010.hwp",
+      "gitBlob": "e8b886f370f6801188696aede9115fea31433774",
+      "sha256": "43f472751fafefb8c66b0f831660ebed51e443a46bebe44c75bba918154ce4c9",
+      "bytes": 13824
+    },
+    {
+      "path": "rhwp-studio/src/embed/protocol.ts",
+      "gitBlob": "678571962c188874e0a8c46094115e9efd0cfbd3",
+      "sha256": "c8e119df02c9d466f54547d26bda1ee41cd35c8d2ecb1f580f90fab6a141bae5",
+      "bytes": 3196
+    }
+  ],
+  "distributionReview": {
+    "status": "pending before product packaging",
+    "reason": "Upstream notice versions differ from lockfile; per-font notices and selected dependency notices must be completed for distribution."
+  }
+}

@@ -115,7 +115,7 @@ private slots:
             Files.append(QJsonObject{{"path", Path}, {"sha256", Mode == "bad-sha" ? QString("x") : QString::fromLatin1(Hash("x"))}});
         }
         QJsonObject Manifest{{"schemaVersion", 1}, {"profile", Mode == "wrong-profile" ? "editor" : "native-read-only"},
-            {"sourceCommit", Mode == "wrong-source" ? "wrong" : "1a76570e833917d15817415a53c09ad61ab3203f"},
+            {"sourceCommit", Mode == "wrong-source" ? "wrong" : "c9095c5f67632e6721e800ccc7fb43ea49d26682"},
             {"releaseEligible", Mode != "candidate"}, {"assetManifestSha256", QString::fromLatin1(Hash(Mode == "bundle-mismatch" ? "wrong" : "fixture bundle"))}, {"files", Files}};
         if(Epub) {
             Manifest = {{"schemaVersion", 2}, {"profile", Mode == "wrong-profile" ? "native-read-only" : "epub-passive-read-only-poc"},

@@ -30,7 +30,7 @@ namespace hc::document
         if (Parse.error != QJsonParseError::NoError || !Json.isObject()) return Fail("rhwp-package-manifest-json");
         const auto Object = Json.object();
         if (Object.value("schemaVersion") != QJsonValue(1)
-            || Object.value("sourceCommit") != QJsonValue("1a76570e833917d15817415a53c09ad61ab3203f"))
+            || Object.value("sourceCommit") != QJsonValue("c9095c5f67632e6721e800ccc7fb43ea49d26682"))
             return Fail("rhwp-package-source");
         if (Object.value("releaseEligible") != QJsonValue(true)) return Fail("rhwp-package-not-release-eligible");
         if (!Object.value("files").isArray()) return Fail("rhwp-package-files");

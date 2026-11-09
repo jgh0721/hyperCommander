@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "package": "@rhwp/core",
+  "version": "0.9.0",
+  "sourceCommit": "c9095c5f67632e6721e800ccc7fb43ea49d26682",
+  "tarball": "https://registry.npmjs.org/@rhwp/core/-/core-0.9.0.tgz",
+  "integrity": "sha512-dEe9gtEM5QXAoJjX+fwgbN5KIo0a6X/wgwEg0LDcq9oY1ga5lD5vNkediFSSX4Xxs8VfFk//dbk71aMQ8J1uAQ==",
+  "files": {
+    "rhwp.js": "02dcb4a17782f65814129c7971c81c05237e93e67327b205cfdb00b3a3ac0568",
+    "rhwp_bg.wasm": "c3b0632b84881f81f2c80be7c2f9e44a4086cb01e05a6a9107a3b3c6350abc1d"
+  },
+  "releaseEligible": false
+}

@@ -27,7 +27,7 @@ function TestSchemaVersion($Value) {
     return (($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) -and $Value -eq 1)
 }
 if (-not (TestSchemaVersion $Manifest.schemaVersion) -or $Manifest.profile -cnotin @('native-read-only','native-editor') -or
-    $Manifest.sourceCommit -cne '1a76570e833917d15817415a53c09ad61ab3203f' -or
+    $Manifest.sourceCommit -cne 'c9095c5f67632e6721e800ccc7fb43ea49d26682' -or
     $Manifest.releaseEligible -isnot [bool] -or -not $Manifest.releaseEligible -or
     $Manifest.bundleStorage -cne 'qt-resource' -or $Manifest.assetManifestSha256 -cnotmatch '^[0-9a-f]{64}$' -or
     $Manifest.files -isnot [array] -or @($Manifest.files).Count -lt 1 -or @($Manifest.files).Count -gt 511) { throw 'RHWP package is not eligible for product deployment.' }
