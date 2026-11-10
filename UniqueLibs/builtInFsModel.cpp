@@ -1337,12 +1337,12 @@ void CFSModel::StopFlatListing(bool Leave)
     emit SearchResultsChanged();
 }
 
-void CFSModel::SetFlatPresentation(bool DepthSort, bool GroupLeaf, bool GroupRecent)
+void CFSModel::SetFlatPresentation(bool PathSort, bool GroupLeaf, bool GroupRecent)
 {
-    const bool SortChanged = flatDepthSort_ != DepthSort;
+    const bool SortChanged = flatPathSort_ != PathSort;
     const bool GroupChanged = flatGroupLeaf_ != GroupLeaf || flatGroupRecent_ != GroupRecent;
     const bool Recount = GroupRecent && !flatGroupRecent_;
-    flatDepthSort_ = DepthSort; flatGroupLeaf_ = GroupLeaf; flatGroupRecent_ = GroupRecent;
+    flatPathSort_ = PathSort; flatGroupLeaf_ = GroupLeaf; flatGroupRecent_ = GroupRecent;
     if (!IsFlatListing()) return;
     if (Recount) { flatFolderLatest_.clear(); for (const auto& Item : vecNode_) noteFlatFolder(Item); }
     if (GroupChanged && rowCount() && columnCount()) {
@@ -3120,13 +3120,13 @@ void CFSModel::refreshColumnSortRanks(int First)
     const auto TextOptions = sortTextOptions();
     // 작업 스레드가 앞쪽 행을 이미 갖고 있으면 새 묶음만 보낸다.
     const bool Merge = searchResults_ && First > 0 && sortSubmitted_ == First && sortSubmittedSorts_ == columnSorts_ && sortSubmittedOptions_ == TextOptions;
-    // 평면 보기의 이름 정렬은 깊이(상대 경로 구간 수)를 먼저 비교한다. 방향은 이름 열을 따른다.
-    QVector<bool> DepthFirst(Bindings.size(), false);
-    if (IsFlatListing() && flatDepthSort_)
-        for (int Index = 0; Index < Bindings.size(); ++Index) {
+    // 평면 보기의 이름 정렬은 상대 부모 폴더를 구간 단위 경로 순으로 먼저 비교한다(폴더별로 모인다). 방향은 이름 열을 따른다.
+    int PathIndex = -1;
+    if (IsFlatListing() && flatPathSort_ && !flatTree_)
+        for (int Index = 0; Index < Bindings.size() && PathIndex < 0; ++Index) {
             const auto& Definition = Bindings[Index]->definition_;
-            DepthFirst[Index] = Definition.template_.isEmpty() && Definition.sortField_.isEmpty()
-                && (Definition.fieldId_ == "file.name" || Definition.fieldId_ == "file.stem");
+            if (Definition.template_.isEmpty() && Definition.sortField_.isEmpty() && (Definition.fieldId_ == "file.name" || Definition.fieldId_ == "file.stem"))
+                PathIndex = Index;
         }
     QSet<QString> Families;
     for (const auto* Binding : Bindings) {
@@ -3142,9 +3142,9 @@ void CFSModel::refreshColumnSortRanks(int First)
         const auto& Item = vecNode_[ItemRow];
         SortRow Row; Row.parent_ = Item->Name_ == ".."; Row.directory_ = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
         Row.id_ = Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : Item->Name_;
+        if (PathIndex >= 0 && Item->storageEntry_) Row.folder_ = hc::flat::RelativeParent(flatBase_, QString::fromStdString(Item->storageEntry_->locator_.root_));
         for (int Index = 0; Index < Bindings.size(); ++Index) {
             const auto* Binding = Bindings[Index];
-            if (DepthFirst[Index]) Row.values_.append(CellValue::Ready(quint64(flatDepth(Item))));
             if (Index == 0 && flatTree_ && IsFlatListing() && Item->storageEntry_) {
                 // 트리 순서: 상대 부모 폴더 구간 + 이름. 정렬 작업 스레드가 같은 부모 안에서 폴더 먼저로 비교한다.
                 const auto Path = QString::fromStdString(Item->storageEntry_->locator_.root_);
@@ -3171,16 +3171,11 @@ void CFSModel::refreshColumnSortRanks(int First)
     }
     if (searchResults_) {
         // 정렬 키 계산과 병합은 작업 스레드에서 한다. 순위가 올 때까지 새 행은 도착 순서대로 맨 뒤에 둔다.
-        QVector<Qt::SortOrder> WorkerOrders;
-        for (int Index = 0; Index < Orders.size(); ++Index) {
-            if (DepthFirst[Index]) WorkerOrders.append(Orders[Index]);
-            WorkerOrders.append(Orders[Index]);
-        }
         const int Start = Merge ? First : 0;
         if (!Merge) { ++sortGeneration_; sortRanked_ = 0; }
         if (!sortWorker_) sortWorker_ = std::make_unique<SortRankWorker>([this](quint64 Generation, int Count, QVector<int> Ranks) {
             applySortRanks(Generation, Count, std::move(Ranks)); });
-        sortWorker_->Submit(sortGeneration_, !Merge, WorkerOrders, TextOptions, Start, std::move(Rows));
+        sortWorker_->Submit(sortGeneration_, !Merge, Orders, TextOptions, Start, std::move(Rows), PathIndex);
         sortSubmitted_ = vecNode_.size(); sortSubmittedSorts_ = columnSorts_; sortSubmittedOptions_ = TextOptions;
         if (columnSortRanks_.size() == Start) for (int Row = Start; Row < vecNode_.size(); ++Row) columnSortRanks_.append(Row);
         else if (columnSortRanks_.size() != vecNode_.size()) { columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0); }

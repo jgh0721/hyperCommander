@@ -1618,7 +1618,7 @@ bool CGridView::ApplyFlatProfile(const hc::columns::FlatProfile& Profile, const 
         if (!ApplyColumnProfile(Effective.columns_, ApplyReason::Flat)) { flatProfile_.reset(); flatSource_.clear(); return false; }
     }
     flatPrefixDim_ = Effective.prefixDim_;
-    Model->SetFlatPresentation(Effective.depthSort_, Effective.groupTitleLeaf_, Effective.groupOrderRecent_);
+    Model->SetFlatPresentation(Effective.pathSort_, Effective.groupTitleLeaf_, Effective.groupOrderRecent_);
     flatTree_ = Effective.tree_; flatTreeLines_ = Effective.presentation_.treeLines_;
     flatSections_ = Effective.sections_; flatLeafTitles_ = Effective.presentation_.groupTitleLeaf_;
     flatChips_ = Effective.thumbnails_ && !Effective.sections_ && Effective.presentation_.tileFolderChip_;

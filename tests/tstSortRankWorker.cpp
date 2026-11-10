@@ -146,6 +146,47 @@ private slots:
             QCOMPARE(Ordered, Expected);
         }
     }
+    void pathOrder()
+    {
+        // 평면 경로 순: 상대 부모 폴더를 구간 단위로 비교(상위 폴더가 하위 폴더보다 먼저) → 같은 폴더 안에서 폴더 먼저 → 이름.
+        // "Books2"가 "Books\Sub"보다 뒤인 것은 문자열 비교가 아니라 구간 비교이기 때문이다. 방향은 폴더 순서와 이름에 함께 적용된다.
+        const QList<QPair<QString, bool>> Items{{"Code\\b.txt", false}, {"Books2\\a.txt", false}, {"z.txt", false}, {"Books\\Sub\\c.txt", false},
+            {"Books", true}, {"Books\\b.epub", false}, {"Code\\A.md", false}, {"Books\\Sub", true}, {"a.txt", false}, {"Books\\a.epub", false},
+            {"Code", true}, {"books\\x.txt", false}};
+        QVector<SortRow> Rows;
+        for (const auto& [Path, Folder] : Items) {
+            SortRow Row; Row.id_ = Path; Row.directory_ = Folder; Row.folder_ = Path.contains('\\') ? Path.section('\\', 0, -2) : QString{};
+            // 이름 → 크기: 경로 비교는 이름 기준(0번) 앞에 끼어든다.
+            Row.values_.append(CellValue::Ready(Path.section('\\', -1))); Row.values_.append(CellValue::Ready(quint64(1)));
+            Rows.append(Row);
+        }
+        for (const bool Locale : {true, false})
+            for (const bool Descending : {false, true}) {
+                const auto Order = Descending ? Qt::DescendingOrder : Qt::AscendingOrder;
+                Received Last;
+                SortRankWorker Worker([&](quint64 Generation, int Count, QVector<int> Ranks) { Last.generation_ = Generation; Last.rows_ = Count; Last.ranks_ = std::move(Ranks); });
+                // 새 폴더가 뒤 묶음에 처음 나와도 앞 묶음의 순서와 이어져야 한다.
+                const SortTextOptions Options{Locale, true, Qt::CaseInsensitive};
+                Worker.Submit(1, true, {Order, Qt::AscendingOrder}, Options, 0, Rows.mid(0, 3), 0);
+                Worker.Submit(1, false, {Order, Qt::AscendingOrder}, Options, 3, Rows.mid(3, 5), 0);
+                Worker.Submit(1, false, {Order, Qt::AscendingOrder}, Options, 8, Rows.mid(8), 0);
+                QTRY_COMPARE(Last.rows_, int(Rows.size()));
+                QStringList Ordered(Rows.size());
+                for (int Row = 0; Row < Rows.size(); ++Row) Ordered[Last.ranks_[Row]] = Rows[Row].id_;
+                // 대소문자만 다른 "books"는 "Books" 바로 뒤의 별개 폴더다(대소문자 구분 파일 시스템).
+                const QStringList Ascending{"Books", "Code", "a.txt", "z.txt", "Books\\Sub", "Books\\a.epub", "Books\\b.epub", "books\\x.txt",
+                    "Books\\Sub\\c.txt", "Books2\\a.txt", "Code\\A.md", "Code\\b.txt"};
+                const QStringList Expected = Descending ? QStringList{"Code\\b.txt", "Code\\A.md", "Books2\\a.txt", "Books\\Sub\\c.txt", "books\\x.txt",
+                    "Books\\Sub", "Books\\b.epub", "Books\\a.epub", "Code", "Books", "z.txt", "a.txt"} : Ascending;
+                QCOMPARE(Ordered, Expected);
+            }
+        // 경로 순을 끄면(PathIndex -1) 폴더가 섞여 이름순이다.
+        Received Last;
+        SortRankWorker Worker([&](quint64 Generation, int Count, QVector<int> Ranks) { Last.generation_ = Generation; Last.rows_ = Count; Last.ranks_ = std::move(Ranks); });
+        Worker.Submit(2, true, {Qt::AscendingOrder, Qt::AscendingOrder}, {}, 0, Rows);
+        QTRY_COMPARE(Last.rows_, int(Rows.size()));
+        QCOMPARE(Last.ranks_, reference(Rows, {Qt::AscendingOrder, Qt::AscendingOrder}, {}));
+    }
     void destroyedWorkerIsSilent()
     {
         const auto Rows = sampleRows(40000, 3);

@@ -114,8 +114,8 @@ public:
     void SetFlatFolderExpanded(int Row, bool Expanded);
     // 행의 트리 부모(상대 부모 폴더 행). 없으면 -1.
     int FlatTreeParent(int Row) const;
-    // 평면 폴더 세트의 정렬 · 그룹 표시: 이름 정렬에 깊이 비교, 폴더 그룹 제목을 마지막 폴더 이름으로, 그룹 순서를 최근 수정 먼저로.
-    void SetFlatPresentation(bool DepthSort, bool GroupLeaf, bool GroupRecent);
+    // 평면 폴더 세트의 정렬 · 그룹 표시: 이름 정렬에 경로 순 비교, 폴더 그룹 제목을 마지막 폴더 이름으로, 그룹 순서를 최근 수정 먼저로.
+    void SetFlatPresentation(bool PathSort, bool GroupLeaf, bool GroupRecent);
     // 파일 작업이 끝난 폴더만 다시 확인한다: 사라진 행은 빼고, 새로 생긴 항목은 그 폴더 아래만 다시 열거해 더한다.
     void RefreshFlatLocations(const QStringList& Folders);
     // 여러 위치 결과에서 행을 뺀다(정렬 순위는 작업 스레드에서 다시 계산).
@@ -278,7 +278,7 @@ private:
     QString flatBase_;
     std::string flatBaseUtf8_;
     hc::storage::LocatorKind flatKind_ = hc::storage::LocatorKind::Local;
-    bool flatDepthSort_ = true, flatGroupLeaf_ = false, flatGroupRecent_ = false;
+    bool flatPathSort_ = true, flatGroupLeaf_ = false, flatGroupRecent_ = false;
     // 상대 부모 경로(소문자) → 그 폴더 파일의 가장 최근 수정 시각. 폴더 그룹의 "최근 수정 먼저" 순서에 쓴다.
     QHash<QString, qint64> flatFolderLatest_;
     bool flatTree_ = false, flatTreeTotal_ = true;

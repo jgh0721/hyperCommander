@@ -7,7 +7,8 @@
 namespace hc::columns
 {
     // tree_: 평면 보기 트리의 경로 구간(상대 부모 폴더들 + 이름). 비어 있지 않으면 정렬 작업 스레드가 트리 순서로 비교한다.
-    struct SortRow { QString id_; bool parent_ = false; bool directory_ = false; QVector<CellValue> values_; QStringList tree_; };
+    // folder_: 평면 보기 경로 순 정렬의 상대 부모 폴더('\' 구분, 기준 폴더는 빈 문자열). 정렬 작업 스레드가 경로 순 비교를 켰을 때만 쓴다.
+    struct SortRow { QString id_; bool parent_ = false; bool directory_ = false; QVector<CellValue> values_; QStringList tree_; QString folder_; };
     // Comparison never invokes a provider. Missing values stay last in either
     // direction; parent/folder grouping and stable identity precede tie breaking.
     inline auto TextCompare(bool Locale = true, bool Numeric = true, Qt::CaseSensitivity Case = Qt::CaseInsensitive)

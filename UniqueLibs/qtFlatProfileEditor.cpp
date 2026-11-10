@@ -48,7 +48,7 @@ QtFlatProfileEditor::QtFlatProfileEditor(QWidget* Parent) : QWidget(Parent)
     thumbStructure_ = segment({tr("없음"), tr("폴더 구획")}, "hc.flat.thumbStructure");
     location_ = segment({tr("이름 앞"), tr("별도 열"), tr("둘째 줄")}, "hc.flat.location");
     prefixLook_ = segment({tr("흐리게"), tr("이름과 같은 색")}, "hc.flat.prefixLook");
-    prefixSort_ = segment({tr("경로 깊이 → 이름"), tr("파일 이름만")}, "hc.flat.prefixSort");
+    prefixSort_ = segment({tr("경로 → 이름"), tr("파일 이름만")}, "hc.flat.prefixSort");
     columnPlace_ = segment({tr("이름 다음"), tr("마지막")}, "hc.flat.columnPlace");
     secondRight_ = segment({tr("수정한 날짜"), tr("크기"), tr("비움")}, "hc.flat.secondRight");
     groupTitle_ = segment({tr("상대 경로 전체"), tr("마지막 폴더 이름")}, "hc.flat.groupTitle");
@@ -112,7 +112,7 @@ QtFlatProfileEditor::QtFlatProfileEditor(QWidget* Parent) : QWidget(Parent)
     SortRow->addWidget(sortColumn_, 1); SortRow->addWidget(sortOrder_);
     ColumnForm->addRow(tr("정렬"), Sorts);
     auto* ColumnNote = new QLabel(tr("시작한 탭의 열 세트를 쓰면 열 · 너비 · 정렬은 그 세트를 따르고, 이 세트는 표시 방식만 정합니다. "
-        "이름 정렬의 경로 깊이 비교는 표시 방식의 \"이름 정렬\"에서 정합니다. 폴더는 항상 파일보다 먼저입니다."), Columns);
+        "이름 정렬의 경로 순 비교는 표시 방식의 \"이름 정렬\"에서 정합니다. 폴더는 파일보다 먼저입니다(경로 순이면 같은 폴더 안에서)."), Columns);
     ColumnNote->setWordWrap(true); ColumnForm->addRow(ColumnNote);
     connect(baseSet_, &QComboBox::currentIndexChanged, this, [this] {
         if (loading_ || draft_.columnsFrom_ != FlatProfile::ColumnsFrom::Self) return;
@@ -340,7 +340,7 @@ void QtFlatProfileEditor::store()
     if (Value.view_ == P::View::Thumbnails) Value.structure_ = thumbStructure_->currentIndex() == 1 ? P::Structure::Folder : P::Structure::None;
     else Value.structure_ = static_cast<P::Structure>(std::clamp(structure_->currentIndex(), 0, 3));
     Value.location_ = static_cast<P::Location>(std::clamp(location_->currentIndex(), 0, 2));
-    Value.prefixDim_ = prefixLook_->currentIndex() == 0; Value.prefixSortDepth_ = prefixSort_->currentIndex() == 0;
+    Value.prefixDim_ = prefixLook_->currentIndex() == 0; Value.prefixSortPath_ = prefixSort_->currentIndex() == 0;
     Value.columnLast_ = columnPlace_->currentIndex() == 1;
     Value.secondRight_ = static_cast<P::SecondRight>(std::clamp(secondRight_->currentIndex(), 0, 2));
     Value.groupTitleLeaf_ = groupTitle_->currentIndex() == 1; Value.groupOrderRecent_ = groupOrder_->currentIndex() == 1;
@@ -371,7 +371,7 @@ void QtFlatProfileEditor::syncCascade()
     const auto Set = [](fm::ui::SegmentedControl* Control, int Index) { const QSignalBlocker Block(Control); Control->setCurrentIndex(Index); };
     Set(view_, Value.view_ == P::View::Thumbnails ? 1 : 0);
     Set(structure_, int(Value.structure_)); Set(thumbStructure_, Value.structure_ == P::Structure::Folder ? 1 : 0);
-    Set(location_, int(Value.location_)); Set(prefixLook_, Value.prefixDim_ ? 0 : 1); Set(prefixSort_, Value.prefixSortDepth_ ? 0 : 1);
+    Set(location_, int(Value.location_)); Set(prefixLook_, Value.prefixDim_ ? 0 : 1); Set(prefixSort_, Value.prefixSortPath_ ? 0 : 1);
     Set(columnPlace_, Value.columnLast_ ? 1 : 0); Set(secondRight_, int(Value.secondRight_));
     Set(groupTitle_, Value.groupTitleLeaf_ ? 1 : 0); Set(groupOrder_, Value.groupOrderRecent_ ? 1 : 0);
     static const QStringList Fields{"file.modified", "file.created", "file.extension", "file.type"};
@@ -545,11 +545,10 @@ void QtFlatProfileEditor::updatePreview()
         Line("▾ docs"); Line("&nbsp;&nbsp;&nbsp;guide.pdf", Samples[1].size_); Line("&nbsp;&nbsp;&nbsp;▾ images"); Line("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cover.png", Samples[2].size_);
         Line("▾ src"); Line("&nbsp;&nbsp;&nbsp;main.cpp", Samples[3].size_); Line("readme.md", Samples[0].size_);
     } else {
+        // 예제는 경로 순(기준 폴더 → docs → docs\images → src → src\ui)으로 적혀 있다. "파일 이름만"이면 이름순으로 섞는다.
         auto Ordered = Samples;
-        if (Value.structure_ == P::Structure::None && Value.location_ == P::Location::Prefix && Value.prefixSortDepth_)
-            std::stable_sort(Ordered.begin(), Ordered.end(), [](const Sample& A, const Sample& B) {
-                const int DA = A.folder_.isEmpty() ? 0 : int(A.folder_.count('\\')) + 1, DB = B.folder_.isEmpty() ? 0 : int(B.folder_.count('\\')) + 1;
-                return DA != DB ? DA < DB : A.name_ < B.name_; });
+        if (Value.structure_ == P::Structure::None && Value.location_ == P::Location::Prefix && !Value.prefixSortPath_)
+            std::stable_sort(Ordered.begin(), Ordered.end(), [](const Sample& A, const Sample& B) { return A.name_.compare(B.name_, Qt::CaseInsensitive) < 0; });
         QString Group;
         for (const auto& Item : Ordered) {
             if (Value.structure_ == P::Structure::Folder || Value.structure_ == P::Structure::Column) {

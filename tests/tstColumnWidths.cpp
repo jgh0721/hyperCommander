@@ -642,7 +642,7 @@ private slots:
         const auto Origin = DefaultProfile();
         auto Flat = FlatDefaultProfile();
         auto Effective = ComposeFlatProfile(Flat, Origin);
-        QVERIFY(Effective.prefix_); QVERIFY(Effective.depthSort_); QVERIFY(!Effective.columns_.grouping_);
+        QVERIFY(Effective.prefix_); QVERIFY(Effective.pathSort_); QVERIFY(!Effective.columns_.grouping_);
         QCOMPARE(Effective.columns_.id_, FlatBuiltInProfileId); QCOMPARE(Effective.columns_.mode_, LayoutMode::Details);
         QVERIFY(IsSupportedProfile(Effective.columns_));
         Flat.presentation_.location_ = P::Location::Column;

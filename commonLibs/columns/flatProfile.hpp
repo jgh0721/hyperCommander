@@ -28,8 +28,9 @@ namespace hc::columns
         // 묶음 없음 · 열 값 그룹에서 상대 경로를 보이는 자리.
         Location location_ = Location::Prefix;
         int lines_ = 1;
-        // 이름 앞: 경로를 흐리게(또는 이름과 같은 색), 이름 정렬을 경로 깊이 → 이름(또는 파일 이름만)으로.
-        bool prefixDim_ = true, prefixSortDepth_ = true;
+        // 이름 앞: 경로를 흐리게(또는 이름과 같은 색), 이름 정렬을 상대 경로 → 이름(또는 파일 이름만)으로.
+        // 상대 경로는 구간 단위로 비교하므로 결과가 폴더별로 모이고, 상위 폴더가 하위 폴더보다 먼저다.
+        bool prefixDim_ = true, prefixSortPath_ = true;
         // 별도 열: 이름 다음(또는 마지막).
         bool columnLast_ = false;
         // 둘째 줄: 오른쪽 값.
@@ -154,7 +155,7 @@ namespace hc::columns
         Result["structure"] = FlatName(Value.structure_, StructureNames);
         Result["location"] = FlatName(Value.location_, LocationNames);
         Result["lines"] = Value.lines_;
-        Result["prefixDim"] = Value.prefixDim_; Result["prefixSortDepth"] = Value.prefixSortDepth_;
+        Result["prefixDim"] = Value.prefixDim_; Result["prefixSortPath"] = Value.prefixSortPath_; Result.remove("prefixSortDepth");
         Result["columnLast"] = Value.columnLast_;
         Result["secondRight"] = FlatName(Value.secondRight_, SecondRightNames);
         Result["groupTitleLeaf"] = Value.groupTitleLeaf_; Result["groupOrderRecent"] = Value.groupOrderRecent_;
@@ -176,7 +177,9 @@ namespace hc::columns
         if (const auto Parsed = FlatParse<FlatPresentation::SecondRight>(Object["secondRight"], SecondRightNames)) Value.secondRight_ = *Parsed;
         if (const auto Parsed = FlatParse<ProfileGrouping::Expand>(Object["expand"], ExpandNames)) Value.expand_ = *Parsed;
         Value.lines_ = Object["lines"].toInt(Value.lines_);
-        Value.prefixDim_ = Object["prefixDim"].toBool(Value.prefixDim_); Value.prefixSortDepth_ = Object["prefixSortDepth"].toBool(Value.prefixSortDepth_);
+        Value.prefixDim_ = Object["prefixDim"].toBool(Value.prefixDim_);
+        // "prefixSortDepth"(경로 깊이 → 이름)는 경로 순으로 바뀌기 전의 같은 선택이다.
+        Value.prefixSortPath_ = Object["prefixSortPath"].toBool(Object["prefixSortDepth"].toBool(Value.prefixSortPath_));
         Value.columnLast_ = Object["columnLast"].toBool(Value.columnLast_);
         Value.groupTitleLeaf_ = Object["groupTitleLeaf"].toBool(Value.groupTitleLeaf_); Value.groupOrderRecent_ = Object["groupOrderRecent"].toBool(Value.groupOrderRecent_);
         const auto Group = Object["group"].toObject();
@@ -272,7 +275,7 @@ namespace hc::columns
     {
         ColumnProfile columns_;
         FlatPresentation presentation_;
-        bool prefix_ = false, prefixDim_ = true, depthSort_ = false;
+        bool prefix_ = false, prefixDim_ = true, pathSort_ = false;
         bool thumbnails_ = false, tree_ = false, sections_ = false;
         bool groupTitleLeaf_ = false, groupOrderRecent_ = false;
     };
@@ -327,7 +330,7 @@ namespace hc::columns
         // 묶음 없음 · 열 값 그룹: 경로 위치.
         if (Value.structure_ == P::Structure::None || Value.structure_ == P::Structure::Column) {
             if (Value.location_ == P::Location::Prefix) {
-                Result.prefix_ = true; Result.prefixDim_ = Value.prefixDim_; Result.depthSort_ = Value.prefixSortDepth_;
+                Result.prefix_ = true; Result.prefixDim_ = Value.prefixDim_; Result.pathSort_ = Value.prefixSortPath_;
             } else if (Value.location_ == P::Location::Column) {
                 ShowColumn(EnsureRelative(Value.columnLast_ ? int(Columns.columns_.size()) : Name + 1));
             } else {

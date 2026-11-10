@@ -9167,14 +9167,14 @@ private slots:
         const auto SrcKey = KeyOf("src"); QVERIFY(!SrcKey.isEmpty());
         View->RestoreSelection({}, SrcKey);
         QVERIFY(Panel->CanStartFlatView());
-        // Ctrl+B 명령: 현재 폴더 아래 파일만, 깊이 → 이름 순(시안 D 기본 제공 세트).
+        // Ctrl+B 명령: 현재 폴더 아래 파일만, 상대 경로 → 이름 순(시안 D 기본 제공 세트). 폴더별로 모이고 상위 폴더가 먼저다.
         auto* Toggle = TyStCommandMgr::GetInstance()->Bridge()->Action("hc.view.flat.toggle"); QVERIFY(Toggle); QVERIFY(Toggle->isCheckable());
         QTRY_VERIFY(Toggle->isEnabled()); Toggle->trigger();
         QTRY_VERIFY(Model->IsFlatListing());
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsFlatRunning(), 15000);
         QTRY_COMPARE(Model->rowCount(), 5);
         QTRY_VERIFY(!Model->SortRanksPending());
-        QTRY_COMPARE(Visible(), (QStringList{"readme.md", "docs\\guide.pdf", "src\\main.cpp", "docs\\images\\cover.png", "src\\ui\\panel.cpp"}));
+        QTRY_COMPARE(Visible(), (QStringList{"readme.md", "docs\\guide.pdf", "docs\\images\\cover.png", "src\\main.cpp", "src\\ui\\panel.cpp"}));
         QVERIFY(View->FlatPresentation()); QVERIFY(View->FlatPrefixVisible());
         QVERIFY(View->ActiveFlatProfile()); QCOMPARE(View->ActiveFlatProfile()->id_, hc::columns::FlatBuiltInProfileId);
         for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetFileInfo(Model->index(Row, 0))->Name_ == "cover.png")
@@ -9189,6 +9189,10 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsFlatRunning() && Model->rowCount() == 3, 15000);
         Panel->SetFlatOptions(hc::flat::Items::FilesAndFolders, std::numeric_limits<int>::max(), false);
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsFlatRunning() && Model->rowCount() == 10, 15000);
+        // 폴더도 보이면 같은 폴더 안에서 폴더가 먼저다.
+        QTRY_VERIFY(!Model->SortRanksPending());
+        QTRY_COMPARE(Visible(), (QStringList{"docs", "empty", "src", "readme.md", "docs\\images", "docs\\guide.pdf", "docs\\images\\cover.png",
+            "src\\ui", "src\\main.cpp", "src\\ui\\panel.cpp"}));
         Panel->SetFlatOptions(hc::flat::Items::Files, std::numeric_limits<int>::max(), false);
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsFlatRunning() && Model->rowCount() == 5, 15000);
         // 평면 폴더 세트: 경로 열(시안 A)과 트리(시안 E).
