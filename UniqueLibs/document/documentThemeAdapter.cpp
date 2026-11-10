@@ -86,10 +86,25 @@ namespace hc::document
             return QJsonDocument::fromJson(File.readAll()).object();
         }
     }
+    QStringList DocumentThemeAdapter::ProductThemeFiles(const QString& Directory)
+    {
+        return {hc::defaults::SettingsFile(Directory), hc::defaults::edit::SettingsFile(Directory)};
+    }
+    QJsonObject DocumentThemeAdapter::ReadProductTheme(const QString& Directory)
+    {
+        const auto Files = ProductThemeFiles(Directory);
+        auto Root = ReadRoot(Files[0]);
+        if (Root.isEmpty()) Root = ReadRoot(Files[1]);
+        if (Root.isEmpty()) return {};
+        // The product file is large; only these two sections reach the GUI thread.
+        return {{"appearance", Root["appearance"]}, {"general", Root["general"]}};
+    }
     bool DocumentThemeAdapter::LoadProductTheme(const QString& Directory)
     {
-        auto Root = ReadRoot(hc::defaults::SettingsFile(Directory));
-        if (Root.isEmpty()) Root = ReadRoot(hc::defaults::edit::SettingsFile(Directory));
+        return ApplyProductTheme(ReadProductTheme(Directory));
+    }
+    bool DocumentThemeAdapter::ApplyProductTheme(const QJsonObject& Root)
+    {
         if (Root.isEmpty()) return false;
         const auto Appearance = Root["appearance"].toObject(); const auto General = Root["general"].toObject();
         const QJsonObject Product{{"scheme", Appearance["watercolorTheme"]}, {"mode", General["themeMode"]}, {"mono", General["monoFontFamily"]},

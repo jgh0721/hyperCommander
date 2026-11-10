@@ -227,6 +227,9 @@ private:
     QFutureWatcher<epub::EditOutput> previewWorker_;QTimer previewTimer_;
     EpubProcessView *previewView_=nullptr,*previewCandidate_=nullptr;QList<QPointer<EpubProcessView>> previewRetiring_;
     std::shared_ptr<std::atomic_bool> previewCancel_;QByteArray previewWorkToken_,previewCandidateToken_,previewActiveToken_;
+    // Content identity the current previewEpoch_ was opened for. Changed without a new identity
+    // (flush on save or chapter switch) keeps the epoch and the preview work in flight.
+    QByteArray previewEpochToken_;
     quint64 previewEpoch_=0,previewWorkEpoch_=0,previewCandidateEpoch_=0;bool previewClosing_=false,previewPending_=false,previewSyncing_=false;
     QString previewError_,previewSettings_;int previewChapter_=-1,previewPreferredChapter_=-1,previewRestoreChapter_=-1,previewWidth_=0;qint64 previewNavigationSerial_=-1,previewCandidateSerial_=-2;
     bool previewCandidateInputRequested_=false,previewRecoveryPosition_=false;

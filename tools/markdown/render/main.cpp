@@ -14,6 +14,41 @@
 #include <QTimer>
 #include <QReadWriteLock>
 #include <QShortcut>
+#include <QAbstractNativeEventFilter>
+#include "UniqueLibs/document/documentWebProcess.hpp"
+#include "UniqueLibs/document/documentStallTrace.hpp"
+#include <qt_windows.h>
+
+// The host posts WebSurfaceResizeMessage instead of resizing this window from its own thread:
+// the two GUI threads share one input queue, and a synchronous resize made the editor wait for
+// a render here. The size is the current parent's client area; the message carries none.
+class SurfaceResize final : public QAbstractNativeEventFilter
+{
+  public:
+    explicit SurfaceResize(QWidget &Window)
+        : window_(Window), message_(RegisterWindowMessageW(hc::document::WebSurfaceResizeMessage))
+    {
+    }
+    bool nativeEventFilter(const QByteArray &Type, void *Message, qintptr *) override
+    {
+        const auto *Msg = static_cast<const MSG *>(Message);
+        if (Type != "windows_generic_MSG" || !message_ || Msg->message != message_)
+            return false;
+        const auto Window = reinterpret_cast<HWND>(window_.winId());
+        if (Msg->hwnd != Window)
+            return false;
+        RECT Parent{}, Own{};
+        const auto Host = GetParent(Window);
+        if (Host && GetClientRect(Host, &Parent) && GetClientRect(Window, &Own)
+            && (Own.right != Parent.right || Own.bottom != Parent.bottom))
+            SetWindowPos(Window, nullptr, 0, 0, Parent.right, Parent.bottom, SWP_NOACTIVATE | SWP_NOZORDER);
+        return true;
+    }
+
+  private:
+    QWidget &window_;
+    UINT message_ = 0;
+};
 
 class MarkdownBridge final : public QObject
 {
@@ -89,6 +124,8 @@ int main(int Argc, char **Argv)
 {
     QApplication App(Argc, Argv);
     App.setQuitOnLastWindowClosed(true);
+    // On only while the editor records (HC_UI_STALL_TRACE is inherited); writes under TEMP.
+    hc::document::DocumentStallTrace::InstallHelper(QStringLiteral("markdown"));
     const auto Args = App.arguments();
     if (Args.size() != 3)
         return 2;
@@ -106,6 +143,8 @@ int main(int Argc, char **Argv)
                      [](QWebEngineDownloadRequest *Download) { Download->cancel(); });
     QWebEngineView View;
     View.resize(800, 600);
+    SurfaceResize Resize(View);
+    App.installNativeEventFilter(&Resize);
     auto *Escape = new QShortcut(QKeySequence(Qt::Key_Escape), &View);
     Escape->setObjectName("previewEscape");
     Escape->setContext(Qt::WindowShortcut);

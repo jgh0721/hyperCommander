@@ -645,6 +645,31 @@ class MarkdownTests final : public QObject
         QVERIFY(Probe.check("caret after an unrendered edit"));
         QTest::keyClick(Backend->widget(),Qt::Key_Down);QVERIFY(Probe.check("next row after an unrendered edit"));
     }
+    void unchangedInputIsNotRenderedAgain()
+    {
+        // A render replaces the whole page and keeps the helper's GUI thread busy, and that thread
+        // shares its input queue with the editor. Reloads with unchanged options and an edit undone
+        // back to the rendered text send nothing; real edits and the explicit refresh still render.
+        {AppSettings S;S.setValue("markdown/autoPreview",true);S.sync();}
+        DocumentViewPane Pane;Pane.resize(1100,800);
+        QVERIFY(Pane.Load(input(),true,true));Pane.show();QVERIFY(Pane.RunViewCommand("markdown.split"));
+        auto* Md=Pane.findChild<MarkdownDocumentView*>();QVERIFY(Md);
+        const auto Settled=[&]{return Md->State()["renderedRevision"].toInteger(-2)==Md->State()["revision"].toInteger(-1);};
+        const auto Requested=[&]{return Md->State()["requestedRevision"].toInteger();};
+        QTRY_VERIFY_WITH_TIMEOUT(Settled(),30000);
+        const auto First=Requested();
+        Md->ReloadPreferences();Md->Refresh();
+        QCOMPARE(Requested(),First);QVERIFY(Settled());
+        auto* Text=Pane.findChild<QTextView*>();QVERIFY(Text);
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(Text->Backend());
+        Backend->Send(SCI_DOCUMENTEND);Backend->replace("x");QVERIFY(!Settled());Backend->Send(SCI_UNDO);
+        QTRY_VERIFY_WITH_TIMEOUT(Settled(),5000);
+        QCOMPARE(Requested(),First);QCOMPARE(Md->State()["lineShifts"].toInt(),0);
+        Backend->replace("y");
+        QTRY_VERIFY_WITH_TIMEOUT(Requested()>First,5000);QTRY_VERIFY_WITH_TIMEOUT(Settled(),30000);
+        const auto Second=Requested();
+        Md->Refresh(true);QVERIFY(Requested()>Second);QTRY_VERIFY_WITH_TIMEOUT(Settled(),30000);
+    }
     void viewerEscapeSetting_data()
     {
         QTest::addColumn<bool>("Close");QTest::newRow("enabled")<<true;QTest::newRow("disabled")<<false;

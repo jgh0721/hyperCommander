@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "markdownProcessView.hpp"
+#include "documentWebProcess.hpp"
 #include <QLocalSocket>
 #include <QProcess>
 #include <QCoreApplication>
@@ -180,7 +181,7 @@ void MarkdownProcessView::receive()
             child_ = quintptr(Window);
             ready_ = true;
             startup_.stop();
-            resizeChild();
+            resizeChild(true);
             ShowWindow(Window, SW_SHOWNOACTIVATE);
             Send({{"type", "attached"}});
             // A pending request remains valid only while the preview still owns Qt focus.
@@ -202,15 +203,20 @@ void MarkdownProcessView::receive()
             emit Reported(Message);
     }
 }
-void MarkdownProcessView::resizeChild()
+void MarkdownProcessView::resizeChild(bool Now)
 {
-    if (child_)
-    {
-        RECT R{};
-        if (GetClientRect(reinterpret_cast<HWND>(winId()), &R))
-            SetWindowPos(reinterpret_cast<HWND>(child_), nullptr, 0, 0, R.right, R.bottom,
-                         SWP_NOACTIVATE | SWP_NOZORDER);
-    }
+    if (!child_)
+        return;
+    const auto Child = reinterpret_cast<HWND>(child_);
+    // The preview window belongs to the helper's GUI thread, and Windows joins that thread's
+    // input queue with this one's. SetWindowPos on it waits until the helper has handled the
+    // move; while the helper renders, keys typed in the source wait with it.
+    static const auto Message = RegisterWindowMessageW(WebSurfaceResizeMessage);
+    if (!Now && Message && PostMessageW(Child, Message, 0, 0))
+        return;
+    RECT R{};
+    if (GetClientRect(reinterpret_cast<HWND>(winId()), &R))
+        SetWindowPos(Child, nullptr, 0, 0, R.right, R.bottom, SWP_NOACTIVATE | SWP_NOZORDER);
 }
 void MarkdownProcessView::resizeEvent(QResizeEvent *Event)
 {

@@ -567,7 +567,7 @@ namespace hc::document
         settingsWatcher_ = new QFileSystemWatcher(this);
         auto* Reload = new QTimer(this); Reload->setSingleShot(true); Reload->setInterval(80);
         connect(settingsWatcher_, &QFileSystemWatcher::directoryChanged, Reload, qOverload<>(&QTimer::start));
-        connect(Reload, &QTimer::timeout, this, &DocumentWorkspaceWidget::refreshPreferences);
+        connect(Reload, &QTimer::timeout, this, [this] { if (settingsChanged()) refreshPreferencesAsync(); });
         recent_ = new RecentDocumentStore(Override.isValid() ? Override.toString() : hc::settings::DocumentPaths().directory_, this);
         recent_->Load();
         // Another process (HyperViewer or a second HyperEditor) changes the file in the same folder.
@@ -581,7 +581,7 @@ namespace hc::document
             connect(startPage_, &DocumentStartPage::FilesDropped, this, [this](const QStringList& Paths) { for (const auto& Path : Paths) open(Path, false, {}, false); });
             setAcceptDrops(true);
         }
-        connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) { if (State == Qt::ApplicationActive) refreshPreferences(); });
+        connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) { if (State == Qt::ApplicationActive && settingsChanged()) refreshPreferencesAsync(); });
         externalWatcher_ = new mrst::ExternalChangeWatcher(this);
         connect(externalWatcher_, &mrst::ExternalChangeWatcher::sigFileChanged, this, [this](const QString& Path) { externalChange(Path, false); });
         connect(externalWatcher_, &mrst::ExternalChangeWatcher::sigFileVanished, this, [this](const QString& Path) { externalChange(Path, true); });
@@ -863,15 +863,78 @@ namespace hc::document
             Dialog->raise(); Dialog->activateWindow(); return;
         }
     }
-    void DocumentWorkspaceWidget::refreshPreferences()
+    QString DocumentWorkspaceWidget::settingsSignature() const
+    {
+        auto Files = DocumentThemeAdapter::ProductThemeFiles(QFileInfo(settingsPath_).absolutePath());
+        Files.prepend(settingsPath_);
+        QStringList Parts;
+        for (const auto& File : Files) {
+            const auto Print = mrst::ExternalChangeWatcher::fingerprintOf(File);
+            Parts.append(QStringLiteral("%1:%2:%3").arg(Print.exists).arg(Print.size).arg(Print.lastModifiedUtcMs));
+        }
+        return Parts.join('|');
+    }
+    bool DocumentWorkspaceWidget::settingsChanged() const
+    {
+        // A settings folder created after start is watched only once refreshPreferences() runs.
+        const auto Directory = QFileInfo(settingsPath_).absolutePath();
+        return settingsSignature() != settingsSignature_ || (QDir(Directory).exists() && !settingsWatcher_->directories().contains(Directory));
+    }
+    namespace
+    {
+        // Everything refreshPreferences() reads from disk; parsed off the GUI thread when it can be.
+        struct PreferencesInput
+        {
+            QJsonObject product_, root_;
+            bool loaded_ = false;
+            QString error_;
+        };
+        PreferencesInput ReadPreferences(const QString& SettingsPath)
+        {
+            PreferencesInput Input;
+            // The watcher sees HyperCommander.json in the same folder, so product theme edits reach open windows.
+            Input.product_ = DocumentThemeAdapter::ReadProductTheme(QFileInfo(SettingsPath).absolutePath());
+            Input.loaded_ = hc::settings::UnifiedConfig::Load(SettingsPath, Input.root_, Input.error_);
+            return Input;
+        }
+    }
+    void DocumentWorkspaceWidget::watchSettingsFolder()
     {
         auto Directory = QFileInfo(settingsPath_).absolutePath();
         while (!QDir(Directory).exists()) { const auto Parent = QFileInfo(Directory).absolutePath(); if (Parent == Directory) break; Directory = Parent; }
         if (QDir(Directory).exists() && !settingsWatcher_->directories().contains(Directory)) settingsWatcher_->addPath(Directory);
-        // The watcher sees HyperCommander.json in the same folder, so product theme edits reach open windows.
-        DocumentThemeAdapter::LoadProductTheme(QFileInfo(settingsPath_).absolutePath());
-        QJsonObject Root; QString Error;
-        if (!hc::settings::UnifiedConfig::Load(settingsPath_, Root, Error)) { ShowShellError(tr("설정을 읽지 못했습니다: %1\n%2").arg(QDir::toNativeSeparators(settingsPath_), Error)); return; }
+    }
+    void DocumentWorkspaceWidget::refreshPreferences()
+    {
+        // Taken before reading: a write during the read is seen by the next check.
+        settingsSignature_ = settingsSignature();
+        // A read still in flight is older than this one and is dropped.
+        ++preferencesGeneration_;
+        watchSettingsFolder();
+        const auto Input = ReadPreferences(settingsPath_);
+        applyPreferences(Input.product_, Input.loaded_, Input.root_, Input.error_);
+    }
+    void DocumentWorkspaceWidget::refreshPreferencesAsync()
+    {
+        // The settings watcher and window activation: the product file is hundreds of KiB, and
+        // reading and parsing it here stalled typing. A change during a read runs one more read.
+        if (preferencesReading_) { preferencesAgain_ = true; return; }
+        settingsSignature_ = settingsSignature();
+        watchSettingsFolder();
+        preferencesReading_ = true;
+        const auto Generation = ++preferencesGeneration_;
+        auto* Watcher = new QFutureWatcher<PreferencesInput>(this);
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation] {
+            const auto Input = Watcher->result(); Watcher->deleteLater(); preferencesReading_ = false;
+            if (Generation == preferencesGeneration_) applyPreferences(Input.product_, Input.loaded_, Input.root_, Input.error_);
+            if (std::exchange(preferencesAgain_, false) && settingsChanged()) refreshPreferencesAsync();
+        });
+        Watcher->setFuture(QtConcurrent::run([Path = settingsPath_] { return ReadPreferences(Path); }));
+    }
+    void DocumentWorkspaceWidget::applyPreferences(const QJsonObject& Product, bool Loaded, const QJsonObject& Root, const QString& Error)
+    {
+        DocumentThemeAdapter::ApplyProductTheme(Product);
+        if (!Loaded) { ShowShellError(tr("설정을 읽지 못했습니다: %1\n%2").arg(QDir::toNativeSeparators(settingsPath_), Error)); return; }
         closeViewerOnEscape_ = Root["documentViews"].toObject()["common"].toObject()["closeViewerOnEscape"].toBool(hc::defaults::edit::ViewValue("common/closeViewerOnEscape").toBool());
         if (viewerEscape_) viewerEscape_->setEnabled(closeViewerOnEscape_);
         const auto Chrome = Root["appearance"].toObject()["documentWorkspace"].toObject();
@@ -895,6 +958,7 @@ namespace hc::document
         for(const auto& Tab:documents_)Tab->pane_->SetEpubRecoveryEnabled(Root["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(hc::defaults::edit::ViewValue("textView/recoveryEnabled").toBool()));
         const auto Bindings = Root["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
         const auto ShortcutError = shortcutRouter_->Apply(Bindings);
+        EpubProcessView::SetDefaultBindings(settingsPath_, Bindings);
         for(auto* Epub:findChildren<EpubProcessView*>())Epub->ReaderAction("bindings",Bindings);
         for(const auto& Tab:documents_)Tab->pane_->SetShortcutBindings(shortcutRouter_->Bindings());
         if (!ShortcutError.isEmpty()) ShowShellError(tr("단축키 설정 오류 · 기본값을 사용합니다: %1").arg(ShortcutError));
@@ -3157,7 +3221,8 @@ namespace hc::document
     {
         if (!hosted_ || QApplication::activeModalWidget() || QApplication::activePopupWidget()
             || (preferences_ && preferences_->isVisible())) return;
-        { hc::document::startup::Scope Trace("editor.preferences"); refreshPreferences(); }
+        // The Escape setting must be current, but an unchanged settings file is not read again.
+        if (settingsChanged()) { hc::document::startup::Scope Trace("editor.preferences"); refreshPreferences(); }
         if (closeViewerOnEscape_ && RequestClose()) finishWindowClose();
     }
     void DocumentWorkspaceWidget::finishWindowClose()

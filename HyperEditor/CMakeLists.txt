@@ -123,6 +123,7 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/documentStatusPickers.cpp
     ../UniqueLibs/document/documentStatusPopup.cpp ../UniqueLibs/document/documentStatusPopup.hpp
     ../UniqueLibs/document/documentProgressOverlay.cpp ../UniqueLibs/document/documentProgressOverlay.hpp
+    ../UniqueLibs/document/documentStallTrace.hpp
     ../UniqueLibs/document/recentDocuments.cpp ../UniqueLibs/document/recentDocuments.hpp
     ../UniqueLibs/document/recentDocumentsDialog.cpp ../UniqueLibs/document/recentDocumentsDialog.hpp
     ../UniqueLibs/document/documentStartPage.cpp ../UniqueLibs/document/documentStartPage.hpp

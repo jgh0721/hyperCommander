@@ -106,6 +106,21 @@ class MarkdownDocumentView final : public QWidget
         Current,
         Partial
     };
+    // One anchor message per frame; held keys repeat faster than that.
+    static constexpr int SampleFrameMs = 16;
+    // Upper bound of the delay that follows the last render's duration.
+    static constexpr int MaxRenderDelayMs = 1500;
+    // How long input may hold back a due render.
+    static constexpr int MaxInputDeferMs = 2000;
+    // Delay after an edit: the configured debounce, longer while renders take long.
+    int renderDelay() const;
+    // Keys queued for this thread, or typed within the configured debounce.
+    bool inputPending() const;
+    // The debounce expired: render unless the user is still typing.
+    void renderWhenIdle();
+    void scheduleSample();
+    // The outline of the rendered revision's headings_, down to outlineDepth_.
+    void rebuildOutline();
     void mode(const QString &Mode);
     void alignPreview();
     void report(const QJsonObject &Value);
@@ -153,8 +168,19 @@ class MarkdownDocumentView final : public QWidget
     QMap<QString, QAction *> actions_;
     QTimer debounce_, sample_, sampleSoon_;
     QElapsedTimer suppress_;
+    // lastInput_: last key or IME event in the source. deferredSince_: a due render first waited
+    // for input. renderClock_: the render request in flight. lastSampleSent_: last anchor message.
+    QElapsedTimer lastInput_, deferredSince_, renderClock_, lastSampleSent_;
+    int debounceMs_ = 250, outlineDepth_ = 6;
+    qint64 lastRenderMs_ = 0;
+    // Input of the last render request. A request with the same text, path and options is not
+    // sent again: the preview already shows it, or is rendering it.
+    QByteArray sentText_;
+    QString sentPath_;
+    QJsonObject sentOptions_;
+    bool sentValid_ = false;
     QJsonObject options_, previewScroll_, lastSourceAnchor_, diagnostics_, bindings_;
-    QJsonArray problemDetails_;
+    QJsonArray problemDetails_, headings_;
     QDateTime renderedAt_;
     RenderState render_ = RenderState::Waiting;
     bool previewActive_ = false;

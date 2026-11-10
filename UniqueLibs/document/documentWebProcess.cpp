@@ -392,6 +392,10 @@ namespace hc::document
             Environment.append("HC_RHWP_STARTUP_TRACE_CHILD=1");
             Environment.append("HC_RHWP_STARTUP_TRACE_ID="+qEnvironmentVariable("HC_RHWP_STARTUP_TRACE_ID"));
         }
+        // The EPUB helper records its own GUI thread stalls under its TEMP (documentStallTrace.hpp)
+        // while the editor records; only the request crosses, never the editor's trace path.
+        if(Runtime.kind_ != WebProcessKind::Rhwp && !qEnvironmentVariableIsEmpty("HC_UI_STALL_TRACE"))
+            Environment.append("HC_UI_STALL_TRACE_CHILD=1");
         Environment.sort(Qt::CaseInsensitive); std::wstring Block;
         for(const auto& Item:Environment) { Block+=Item.toStdWString(); Block.push_back(0); } Block.push_back(0);
         STARTUPINFOW Startup{}; Startup.cb=sizeof(Startup); Startup.dwFlags=STARTF_USESHOWWINDOW; Startup.wShowWindow=SW_HIDE;

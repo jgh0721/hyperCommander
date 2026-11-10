@@ -13,6 +13,7 @@
 #include "text/QTextView.h"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
+#include "UniqueLibs/document/epubProcessView.hpp"
 #include "UniqueLibs/document/epubSourceTabs.hpp"
 #include "UniqueLibs/document/epubLineShifts.hpp"
 #include "text/ColumnRulerWidget.h"
@@ -1188,6 +1189,45 @@ private slots:
         const auto Small=Tabs->FilenameFont();QVERIFY((Small.pixelSize()>0?Small.pixelSize():Small.pointSizeF())<(Tabs->font().pixelSize()>0?Tabs->font().pixelSize():Tabs->font().pointSizeF()));
         QVERIFY(Editor.Execute({{"action","epub.edit.layout"},{"orientation","vertical"}})["accepted"].toBool());
         QTRY_VERIFY(Header->height()<=Header->findChild<QWidget*>("epubPreviewControls")->height()+5);
+    }
+    void epubFlushKeepsPreviewEpoch()
+    {
+        // flush() on save and on chapter switches moves the draft into the model; the content
+        // identity stays. Opening a new preview epoch for it retired the preview in flight and
+        // started another helper process, which stalled typing while it started and closed.
+        QTemporaryDir Temp;const auto OldConfig=qApp->property("documentViewsConfigDir"),OldWorkspace=qApp->property("epubWorkspaceDirectory");
+        qApp->setProperty("documentViewsConfigDir",Temp.path());qApp->setProperty("epubWorkspaceDirectory",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",OldConfig);qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);});
+        EpubSourceEditor Editor(workspaceBook(),Temp.filePath("flush.epub"));Editor.SetRecoveryEnabled(false);
+        Editor.findChild<QAction*>("epubAutoPreview")->setChecked(false);Editor.ConfigurePreview({});Editor.resize(1280,650);Editor.show();
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);
+        const auto Epoch=[&]{return Editor.Snapshot()["preview"].toObject()["epoch"].toInteger(-1);};
+        const auto Select=[&](const QString& Path){return Editor.Execute({{"action","epub.edit.select"},{"resource",Path}})["accepted"].toBool();};
+        QVERIFY(Select("EPUB/one.xhtml"));
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend());
+        const auto Before=Epoch();QVERIFY(Before>=0);
+        Backend->replace(" ");QCOMPARE(Epoch(),Before+1);
+        const auto Token=Editor.Token();
+        QSignalSpy Flushed(&Editor,&EpubSourceEditor::Changed);
+        QVERIFY(Select("EPUB/two.xhtml"));
+        QVERIFY(Flushed.count()>0);QCOMPARE(Editor.Token(),Token);QCOMPARE(Epoch(),Before+1);
+        Backend->replace(" ");QCOMPARE(Epoch(),Before+2);
+    }
+    void epubProxyBelongsToParkingThread()
+    {
+        // A helper's surface is a child of its proxy, and Windows joins the helper's input queue
+        // with the proxy owner's. A proxy owned by the GUI thread held the editor's keys while a
+        // helper started (WebEngine initialisation) and while a retired one closed.
+        WebProcessRuntime Runtime;Runtime.kind_=WebProcessKind::EpubReadOnly;
+        {
+            EpubProcessView View(Runtime,{0,0,20000});View.resize(320,240);View.show();
+            QVERIFY(View.Load(workspaceBook()));
+            QCOMPARE(View.ViewState()["proxyOwner"].toString(),QString("parking"));
+            // No pinned runtime: the launch fails and the proxy is destroyed on its own thread.
+            QTRY_VERIFY_WITH_TIMEOUT(View.ViewState()["retired"].toBool(),15000);
+            QCOMPARE(View.ViewState()["proxyOwner"].toString(),QString("none"));
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),15000);
     }
     void epubWrapMenuFollowsSourceSettings()
     {

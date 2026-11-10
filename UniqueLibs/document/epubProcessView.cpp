@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubProcessView.hpp"
+#include "documentParkingThread.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -18,6 +19,7 @@
 #include <QDeadlineTimer>
 #include <QEvent>
 #include <QElapsedTimer>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QPointer>
@@ -65,8 +67,13 @@ namespace hc::document
         QPointer<EpubProcessView> host_;
         HWND hostWindow_ = nullptr, proxy_ = nullptr;
         std::shared_ptr<Work> work_;
-        bool valid_ = true, retired_ = false, attached_ = false;
+        bool valid_ = true, retired_ = false, attached_ = false, geometryApplied_ = false;
     };
+    namespace
+    {
+        // Settings file -> the bindings a workspace applied from it.
+        std::optional<std::pair<QString, QJsonObject>>& DefaultBindings() { static std::optional<std::pair<QString, QJsonObject>> Value; return Value; }
+    }
     class EpubProcessView::Registry final : public QObject
     {
     public:
@@ -91,12 +98,8 @@ namespace hc::document
             Entry->hostWindow_ = HostWindow; Entry->work_ = Work;
             // Launch only against a stable parking-owned proxy. The view can die
             // during startup without freeing/recycling the HWND sent to Start.
-            Entry->proxy_ = CreateWindowExW(WS_EX_NOPARENTNOTIFY, L"STATIC", L"", WS_CHILD | WS_CLIPCHILDREN,
-                0, 0, Host->width(), Host->height(), parking_, nullptr, GetModuleHandleW(nullptr), nullptr);
+            Entry->proxy_ = parkingThread_.CreateProxy(Host->width(), Host->height(), property_, reinterpret_cast<HANDLE>(Entry.get()));
             if(!Entry->proxy_) return {};
-            if(!SetPropW(Entry->proxy_, property_, reinterpret_cast<HANDLE>(Entry.get()))) {
-                DestroyWindow(Entry->proxy_); return {};
-            }
             Work->parent_ = reinterpret_cast<std::uintptr_t>(Entry->proxy_);
             entries_.push_back(Entry); timer_.start(); return Entry;
         }
@@ -121,12 +124,31 @@ namespace hc::document
             for(const auto& Entry : entries_) Invalidate(Entry);
         }
         bool Drained() const { return entries_.empty(); }
+        void Resize(const std::shared_ptr<BindingState>& Entry)
+        {
+            RECT Host{}, Proxy{};
+            if(!GetClientRect(Entry->hostWindow_, &Host) || !GetClientRect(Entry->proxy_, &Proxy)) { Invalidate(Entry); return; }
+            // SetWindowPos dispatches native layout/paint messages even at rest, and an attached
+            // proxy shares the GUI thread's input queue. Apply only a real size change, including
+            // the first attachment.
+            if(Entry->geometryApplied_ && Host.right == Proxy.right && Host.bottom == Proxy.bottom) return;
+            if(!SetWindowPos(Entry->proxy_, nullptr, 0, 0, Host.right, Host.bottom, SWP_NOACTIVATE | SWP_NOZORDER)) { Invalidate(Entry); return; }
+            Entry->geometryApplied_ = true;
+            const auto& Snapshot = Entry->work_->snapshot_;
+            const auto Child = reinterpret_cast<HWND>(Snapshot.childWindow_);
+            DWORD Pid = 0; GetWindowThreadProcessId(Child, &Pid);
+            if(Pid != Snapshot.processId_ || GetParent(Child) != Entry->proxy_) { Invalidate(Entry); return; }
+            // Never enter the helper's GUI thread synchronously: it fits its surface to the proxy
+            // when this arrives. Its 100 ms parent poll stays the fallback.
+            static const auto Message = RegisterWindowMessageW(WebSurfaceResizeMessage);
+            if(Message) PostMessageW(Child, Message, 0, 0);
+        }
         ~Registry() override
         {
             // QApplication::exit()/destruction without a drained event loop is a
             // caller contract violation. Never turn it into a successful ACK.
             Q_ASSERT(entries_.empty());
-            if(parking_) DestroyWindow(parking_);
+            parkingThread_.Stop();
         }
     protected:
         bool eventFilter(QObject* Object, QEvent* Event) override
@@ -144,8 +166,7 @@ namespace hc::document
         }
         Registry() : QObject(qApp)
         {
-            parking_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"STATIC", L"", WS_POPUP,
-                0, 0, 0, 0, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+            parking_ = parkingThread_.Start();
             qApp->installEventFilter(this); timer_.setInterval(10);
             connect(&timer_, &QTimer::timeout, this, [this] { collect(); });
         }
@@ -169,12 +190,7 @@ namespace hc::document
                         Entry->attached_ = true; Entry->work_->attached_.store(true, std::memory_order_release);
                     }
                 }
-                if(Entry->valid_ && Entry->attached_) {
-                    RECT Rect{};
-                    if(!GetClientRect(Entry->hostWindow_, &Rect)
-                        || !SetWindowPos(Entry->proxy_, nullptr, 0, 0, Rect.right, Rect.bottom, SWP_NOACTIVATE | SWP_NOZORDER))
-                        Invalidate(Entry);
-                }
+                if(Entry->valid_ && Entry->attached_) Resize(Entry);
                 if(!Entry->work_->done_.load(std::memory_order_acquire)) { ++At; continue; }
                 auto& Worker = Entry->work_->worker_;
                 if(Worker.joinable()) {
@@ -182,7 +198,7 @@ namespace hc::document
                     Worker.join(); // Already signalled: no live worker wait on the GUI.
                 }
                 if(Entry->valid_) { Entry->valid_ = false; ++Entry->token_.generation_; }
-                if(owns(*Entry)) { RemovePropW(Entry->proxy_, property_); DestroyWindow(Entry->proxy_); }
+                if(owns(*Entry)) parkingThread_.DestroyProxy(Entry->proxy_, property_);
                 Entry->proxy_ = nullptr; Entry->retired_ = true; At = entries_.erase(At);
             }
             if(entries_.empty()) {
@@ -191,6 +207,7 @@ namespace hc::document
             }
         }
         static constexpr const wchar_t* property_ = L"HyperCommander.EpubProxyOwner";
+        DocumentParkingThread parkingThread_;
         HWND parking_ = nullptr;
         QTimer timer_;
         std::vector<std::shared_ptr<BindingState>> entries_;
@@ -297,7 +314,16 @@ namespace hc::document
         Result["settingsResult"] = work_->settingsResult_;
         Result["attached"] = native_ && native_->valid_ && native_->attached_;
         Result["retired"] = native_ ? native_->retired_ : work_->done_.load();
+        // The proxy belongs to the parking thread; a GUI-owned proxy would join every helper's
+        // input queue with the GUI thread from launch to teardown.
+        const auto Proxy = native_ ? native_->proxy_ : nullptr;
+        Result["proxyOwner"] = !Proxy || !IsWindow(Proxy) ? "none"
+            : GetWindowThreadProcessId(Proxy, nullptr) == GetCurrentThreadId() ? "gui" : "parking";
         return Result;
+    }
+    void EpubProcessView::SetDefaultBindings(const QString& SettingsFile, const QJsonObject& Bindings)
+    {
+        DefaultBindings() = std::pair{QFileInfo(SettingsFile).absoluteFilePath(), Bindings};
     }
     bool EpubProcessView::Load(QByteArray Bytes, qint64 Generation,const QString& SettingsDirectory,bool InitiallyInteractive,bool SourceLines)
     {
@@ -311,10 +337,18 @@ namespace hc::document
         if(Config.isEmpty()) Config = hc::settings::DocumentPaths().directory_;
         work_->globalSettingsPath_ = hc::defaults::edit::EpubReadingFile(Config);
         work_->settingsPath_ = hc::defaults::edit::EpubReadingFile(SettingsDirectory.isEmpty()?Config:SettingsDirectory);
-        QJsonObject Preferences;QString PreferencesError;
-        if(hc::settings::UnifiedConfig::Load(hc::settings::UnifiedConfig::FileName(Config),Preferences,PreferencesError)) {
-            bindings_=Preferences["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
+        // A workspace hands over the bindings it applied; every editor preview refresh starts a
+        // view, and reading the settings file here stalled the GUI thread each time.
+        const auto SettingsFile=hc::settings::UnifiedConfig::FileName(Config);
+        if(const auto& Defaults=DefaultBindings(); Defaults && Defaults->first==QFileInfo(SettingsFile).absoluteFilePath()) {
+            bindings_=Defaults->second;
             work_->settingsRequests_.push_back({{"kind","reader-action"},{"action","bindings"},{"value",bindings_}});
+        } else {
+            QJsonObject Preferences;QString PreferencesError;
+            if(hc::settings::UnifiedConfig::Load(SettingsFile,Preferences,PreferencesError)) {
+                bindings_=Preferences["documentViews"].toObject()["shortcuts"].toObject()["bindings"].toObject();
+                work_->settingsRequests_.push_back({{"kind","reader-action"},{"action","bindings"},{"value",bindings_}});
+            }
         }
         if((runtime_.kind_ != WebProcessKind::EpubPrototype && runtime_.kind_ != WebProcessKind::EpubReadOnly) || Generation < 1 || Generation > 9007199254740991LL
             || Bytes.isEmpty() || Bytes.size() > epub::InputLimit) {

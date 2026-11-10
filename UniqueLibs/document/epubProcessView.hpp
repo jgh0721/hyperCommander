@@ -26,6 +26,9 @@ namespace hc::document
         bool IsLoaded() const { return loaded_; }
         // Shortcut bindings last sent to the reader, for the key text of host menus.
         QJsonObject ShortcutBindings() const { return bindings_; }
+        // Bindings the workspace applied from SettingsFile. New views using that file send them to
+        // the reader instead of reading it on the GUI thread; other views read their file as before.
+        static void SetDefaultBindings(const QString& SettingsFile, const QJsonObject& Bindings);
         static void InitializeLifecycle();
         static void RequestShutdown();
         static bool IsDrained();

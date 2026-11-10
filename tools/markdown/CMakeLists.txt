@@ -14,6 +14,8 @@ find_package(Qt6 6.12.0 REQUIRED COMPONENTS WebEngineWidgets WebChannel Network)
 qt_add_executable(hc-markdown-render WIN32 render/main.cpp render/stdafx.h)
 set_target_properties(hc-markdown-render PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
 target_precompile_headers(hc-markdown-render PRIVATE render/stdafx.h)
+# documentWebProcess.hpp: the resize message shared with the host.
+target_include_directories(hc-markdown-render PRIVATE "${PROJECT_SOURCE_DIR}")
 target_link_libraries(hc-markdown-render PRIVATE Qt6::WebEngineWidgets Qt6::WebChannel Qt6::Network)
 target_compile_options(hc-markdown-render PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 file(GLOB_RECURSE MARKDOWN_ASSETS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/web/*")

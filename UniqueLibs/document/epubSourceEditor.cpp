@@ -353,7 +353,10 @@ storage::Result<QByteArray> EpubSourceEditor::Export(const QString& Destination,
     if(!IsValidated())return storage::Error{storage::ErrorCategory::InvalidRequest,"epub-edit-validation-required"};return validatedBytes_;
 }
 void EpubSourceEditor::validate(bool SaveAfter,bool Standard) {
-    ReloadValidationSettings();
+    // The workspace pushes every settings change through ApplyValidationSettings, and the
+    // save worker re-reads the policy before it trusts a verdict. Reading the settings file
+    // here only stalled the GUI thread at the start of every save.
+    reloadValidationSettingsAsync();
     if(sourceComposing_ || !ready_ || draftReader_.isRunning() || pendingRecovery_ || !pendingRecoveryPath_.isEmpty() || nativeValidating_ || checkerState_=="running" || structuring_)return;checkerRequested_=Standard || standardValidationRequired();validatedBytes_.clear();validationToken_=Token();saveAfter_=SaveAfter;report(tr("패키지·XML·CSS 괄호·참조·이미지를 검사하고 있습니다…"));auto Model=model_;const auto Draft=draft();
     if(previewWorker_.isRunning() && previewWorkToken_==validationToken_ && previewCancel_ && !previewCancel_->load()) {
         validationCancel_=previewCancel_;nativeValidating_=true;++exportJoins_;validation_.setFuture(previewWorker_.future());emit StateChanged();return;

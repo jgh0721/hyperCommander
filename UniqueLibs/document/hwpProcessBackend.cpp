@@ -4,6 +4,7 @@
 #include <Windows.h>
 #include "hwpProcessBackend.hpp"
 #include "hwpInputSender.hpp"
+#include "documentParkingThread.hpp"
 #include <QDeadlineTimer>
 #include <QFileInfo>
 #include <QJsonParseError>
@@ -79,12 +80,10 @@ namespace hc::document
             Entry->hostWindow_ = HostWindow; Entry->work_ = Work;
             // Launch only against a stable parking-owned proxy. The SDI can die
             // during startup without freeing/recycling the HWND sent to Start.
-            Entry->proxy_ = CreateWindowExW(WS_EX_NOPARENTNOTIFY, L"STATIC", L"", WS_CHILD | WS_CLIPCHILDREN,
-                0, 0, Host->width(), Host->height(), parking_, nullptr, GetModuleHandleW(nullptr), nullptr);
+            // The parking thread owns the proxy: a starting or retiring helper never shares the
+            // GUI thread's input queue (documentParkingThread.hpp).
+            Entry->proxy_ = parkingThread_.CreateProxy(Host->width(), Host->height(), property_, reinterpret_cast<HANDLE>(Entry.get()));
             if(!Entry->proxy_) return {};
-            if(!SetPropW(Entry->proxy_, property_, reinterpret_cast<HANDLE>(Entry.get()))) {
-                DestroyWindow(Entry->proxy_); return {};
-            }
             Work->parent_ = reinterpret_cast<std::uintptr_t>(Entry->proxy_);
             entries_.push_back(Entry); timer_.start(); return Entry;
         }
@@ -137,7 +136,7 @@ namespace hc::document
             // QApplication::exit()/destruction without a drained event loop is a
             // caller contract violation. Never turn it into a successful ACK.
             Q_ASSERT(entries_.empty());
-            if(parking_) DestroyWindow(parking_);
+            parkingThread_.Stop();
         }
     protected:
         bool eventFilter(QObject* Object, QEvent* Event) override
@@ -155,8 +154,7 @@ namespace hc::document
         }
         Registry() : QObject(qApp)
         {
-            parking_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"STATIC", L"", WS_POPUP,
-                0, 0, 0, 0, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+            parking_ = parkingThread_.Start();
             qApp->installEventFilter(this); timer_.setInterval(10);
             connect(&timer_, &QTimer::timeout, this, [this] { collect(); });
         }
@@ -188,7 +186,7 @@ namespace hc::document
                     Worker.join(); // Already signalled: no live worker wait on the GUI.
                 }
                 if(Entry->valid_) { Entry->valid_ = false; ++Entry->token_.generation_; }
-                if(owns(*Entry)) { RemovePropW(Entry->proxy_, property_); DestroyWindow(Entry->proxy_); }
+                if(owns(*Entry)) parkingThread_.DestroyProxy(Entry->proxy_, property_);
                 Entry->proxy_ = nullptr; Entry->retired_ = true; At = entries_.erase(At);
             }
             if(entries_.empty()) {
@@ -197,6 +195,7 @@ namespace hc::document
             }
         }
         static constexpr const wchar_t* property_ = L"HyperCommander.RhwpProxyOwner";
+        DocumentParkingThread parkingThread_;
         HWND parking_ = nullptr;
         QTimer timer_;
         std::vector<std::shared_ptr<BindingState>> entries_;

@@ -32,6 +32,11 @@ template<class Char, class Visit> bool ScanMarkup(const Char* Data, qsizetype Si
     return true;
 }
 }
+// Chapter patch of an editing preview (host EpubSourceEditor::patchPreview and HyperEpubWeb). A
+// patch replaces the chapter inside the running reader; a refused one rebuilds the preview in a
+// new helper process. The text travels in one reader action of at most 512 KiB JSON.
+inline constexpr qsizetype PreviewPatchUnitLimit = 256 * 1024;      // UTF-16 units of the chapter text
+inline constexpr qsizetype PreviewPatchAnnotatedLimit = 384 * 1024; // UTF-8 bytes with line attributes
 struct SourceLines {
     QByteArray bytes_;
     QString skipped_;   // Why the original bytes were kept; empty when annotated.

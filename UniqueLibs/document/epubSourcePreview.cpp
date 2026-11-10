@@ -4,6 +4,7 @@
 #include <Windows.h>
 #include "epubProcessView.hpp"
 #include "epubSourceTabs.hpp"
+#include "commonLibs/document/epub/epubSourceLines.hpp"
 #include "core/AppSettings.h"
 #include "text/QTextView.h"
 #include <QAction>
@@ -109,6 +110,16 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
     connect(qApp,&QGuiApplication::applicationStateChanged,this,[this]{suspendInactivePreview();});
     connect(&previewTimer_,&QTimer::timeout,this,[this]{requestPreview();});
     connect(this,&EpubSourceEditor::Changed,this,[this]{
+        // flush() moves the draft into the model on save and on chapter switches; the content
+        // identity stays the same. Retiring the candidate then would restart a helper process
+        // whose input queue is joined with this thread's while it starts and while it closes.
+        const auto Identity=Token();
+        if(Identity==previewEpochToken_) {
+            // requestPreview() still settles a preview that is not current; it never retires one that is.
+            if(action("epubAutoPreview")->isChecked() && !previewClosing_ && !previewPanel_->isHidden())previewTimer_.start();
+            updateStatus();return;
+        }
+        previewEpochToken_=Identity;
         ++previewEpoch_;previewPending_=action("epubAutoPreview")->isChecked();if(previewCancel_ && (!nativeValidating_ || validationToken_!=Token() || previewCancel_!=validationCancel_))previewCancel_->store(true);
         if(previewCandidate_){auto* Old=std::exchange(previewCandidate_,nullptr);retirePreview(Old);}
         if(action("epubAutoPreview")->isChecked() && !previewClosing_ && !previewPanel_->isHidden())previewTimer_.start();updateStatus();
@@ -154,11 +165,20 @@ bool EpubSourceEditor::patchPreview() {
     auto Changes=previewChanges();auto Before=previewChanges_,After=Changes;
     Before.remove(current_);After.remove(current_);if(Before!=After)return false;
     const auto Bytes=Changes.contains(current_)?Changes.value(current_):model_.Read(current_);
-    if(Bytes.isEmpty() || Bytes.size()>64*1024)return false;
+    // A refused patch rebuilds the preview in a new helper process, whose start and teardown
+    // cost far more than patching the running reader. The helper's limits are shared
+    // (epubSourceLines.hpp); the annotation is estimated here on the source bytes with a
+    // margin, and a chapter the helper still refuses falls back to the full rebuild.
+    const auto Text=QString::fromUtf8(Bytes);
+    if(Bytes.isEmpty() || Text.size()>epub::PreviewPatchUnitLimit || Bytes.size()>epub::PreviewPatchAnnotatedLimit)return false;
+    if(Bytes.size()>64*1024) {
+        const auto Lines=epub::AnnotateSourceLines(Bytes);
+        if(!Lines.skipped_.isEmpty() || Lines.bytes_.size()>epub::PreviewPatchAnnotatedLimit-8*1024)return false;
+    }
     previewPatchToken_=Token();
     auto Scroll=scrollSyncActive()?sourceScrollTarget(false):QJsonObject{};
     if(!Scroll.isEmpty())Scroll["serial"]=++sourceScrollSerial_;
-    const QJsonObject Patch{{"serial",++previewPatchSerial_},{"chapter",Chapter},{"path",current_},{"text",QString::fromUtf8(Bytes)},{"scroll",Scroll}};
+    const QJsonObject Patch{{"serial",++previewPatchSerial_},{"chapter",Chapter},{"path",current_},{"text",Text},{"scroll",Scroll}};
     if(!previewView_->ReaderAction("preview-chapter",Patch))return false;
     previewPatchShiftCounts_.clear();for(auto At=sourceBuffers_.cbegin();At!=sourceBuffers_.cend();++At)previewPatchShiftCounts_[At.key()]=At->shifts_.size();
     previewPatchChanges_=std::move(Changes);previewPatchPending_=true;previewPatchClock_.start();++previewPatchRuns_;
@@ -312,7 +332,7 @@ void EpubSourceEditor::syncPreviewSource(bool Force) {
     previewSyncing_=true;openResource(Path);previewSyncing_=false;
 }
 QJsonObject EpubSourceEditor::previewSnapshot()const {
-    return {{"configured",previewRuntime_.has_value()},{"busy",previewPatchPending_||previewWorker_.isRunning()||previewCandidate_!=nullptr},{"performance",QJsonObject{{"patchRuns",previewPatchRuns_},{"exportMs",previewExportMs_},{"readyMs",previewReadyMs_}}},{"waitingForFocus",previewPending_ && !previewOwnerActive()},{"candidate",previewCandidate_?previewCandidate_->ViewState():QJsonObject{}},{"error",previewError_},{"current",previewView_ && previewActiveToken_==Token()},{"ready",previewView_ && previewView_->IsLoaded()},{"token",QString::fromLatin1(previewActiveToken_.toHex())},{"state",previewView_?previewView_->ViewState():QJsonObject{}},{"retiring",previewRetiring_.size()},{"hidden",previewPanel_->isHidden()},{"width",previewWidth_}};
+    return {{"configured",previewRuntime_.has_value()},{"epoch",qint64(previewEpoch_)},{"busy",previewPatchPending_||previewWorker_.isRunning()||previewCandidate_!=nullptr},{"performance",QJsonObject{{"patchRuns",previewPatchRuns_},{"exportMs",previewExportMs_},{"readyMs",previewReadyMs_}}},{"waitingForFocus",previewPending_ && !previewOwnerActive()},{"candidate",previewCandidate_?previewCandidate_->ViewState():QJsonObject{}},{"error",previewError_},{"current",previewView_ && previewActiveToken_==Token()},{"ready",previewView_ && previewView_->IsLoaded()},{"token",QString::fromLatin1(previewActiveToken_.toHex())},{"state",previewView_?previewView_->ViewState():QJsonObject{}},{"retiring",previewRetiring_.size()},{"hidden",previewPanel_->isHidden()},{"width",previewWidth_}};
 }
 bool EpubSourceEditor::RequestPreviewClose() {
     previewClosing_=true;previewPatchPending_=false;previewTimer_.stop();if(previewCancel_ && (!nativeValidating_ || previewCancel_!=validationCancel_))previewCancel_->store(true);

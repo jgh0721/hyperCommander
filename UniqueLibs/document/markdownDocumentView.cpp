@@ -159,13 +159,13 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     outline_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(outline_, &QWidget::customContextMenuRequested, this, &MarkdownDocumentView::showOutlineMenu);
     debounce_.setSingleShot(true);
-    connect(&debounce_, &QTimer::timeout, this, [this] { Refresh(); });
+    connect(&debounce_, &QTimer::timeout, this, &MarkdownDocumentView::renderWhenIdle);
     connect(source_, &QTextView::ContentChanged, this, [this] {
         ++revision_;
         status_ = tr("갱신 대기");
         render_ = RenderState::Waiting;
         if (options_["autoPreview"].toBool(hc::defaults::edit::ViewValue("markdown/autoPreview").toBool()))
-            debounce_.start();
+            debounce_.start(renderDelay());
         emit Changed();
     });
     connect(preview_, &MarkdownProcessView::Reported, this, &MarkdownDocumentView::report);
@@ -178,8 +178,8 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     // loop turn are sent once. Nothing is computed while the editor is idle.
     sampleSoon_.setSingleShot(true);
     connect(&sampleSoon_, &QTimer::timeout, this, &MarkdownDocumentView::sampleSource);
-    connect(source_->Backend(), &ITextEditorBackend::cursorPositionChanged, this, [this] { sampleSoon_.start(0); });
-    connect(source_->Backend(), &ITextEditorBackend::viewportScrolled, this, [this] { sampleSoon_.start(0); });
+    connect(source_->Backend(), &ITextEditorBackend::cursorPositionChanged, this, &MarkdownDocumentView::scheduleSample);
+    connect(source_->Backend(), &ITextEditorBackend::viewportScrolled, this, &MarkdownDocumentView::scheduleSample);
     connect(source_->Backend(), &ITextEditorBackend::linesShifted, this, [this](int Line, int Delta) {
         if (shifts_.size() < 256) shifts_.append({Line, Delta}); else shiftsOverflow_ = true;
     });
@@ -460,13 +460,57 @@ void MarkdownDocumentView::ReloadPreferences()
     actions_["markdown.toggleToc"]->setChecked(
         S.value(editor_ ? "markdown/editorOutline" : "markdown/viewerOutline").toBool());
     syncControls();
-    debounce_.setInterval(qBound(100, S.value("markdown/debounceMs").toInt(), 3000));
+    debounceMs_ = qBound(100, S.value("markdown/debounceMs").toInt(), 3000);
+    debounce_.setInterval(debounceMs_);
+    // report() rebuilds the outline after every render; it must not read the settings file there.
+    // A new depth applies to the headings already rendered: the page itself does not change.
+    if (const int Depth = qBound(1, S.value("markdown/outlineDepth").toInt(), 6); Depth != outlineDepth_)
+    {
+        outlineDepth_ = Depth;
+        rebuildOutline();
+    }
     if (!mode_.isEmpty())
         Refresh();
+}
+int MarkdownDocumentView::renderDelay() const
+{
+    // A long render keeps the helper's GUI thread busy, and that thread shares its input queue
+    // with this one: wait longer before starting the next one.
+    return qMax(debounceMs_, int(qMin<qint64>(lastRenderMs_ * 2, MaxRenderDelayMs)));
+}
+bool MarkdownDocumentView::inputPending() const
+{
+    if (HIWORD(GetQueueStatus(QS_KEY)) != 0)
+        return true;
+    return lastInput_.isValid() && lastInput_.elapsed() < debounceMs_;
+}
+void MarkdownDocumentView::renderWhenIdle()
+{
+    // Arrow keys and IME events do not restart the debounce as edits do. Starting a render
+    // while they arrive makes the helper busy exactly when the editor needs the shared queue.
+    if (inputPending() && (!deferredSince_.isValid() || deferredSince_.elapsed() < MaxInputDeferMs))
+    {
+        if (!deferredSince_.isValid())
+            deferredSince_.start();
+        const qint64 Quiet = lastInput_.isValid() ? debounceMs_ - lastInput_.elapsed() : 0;
+        debounce_.start(int(qBound(qint64(SampleFrameMs), Quiet, qint64(debounceMs_))));
+        return;
+    }
+    Refresh();
+}
+void MarkdownDocumentView::scheduleSample()
+{
+    // The caret and viewport signals of one key arrive in one event loop turn, and a pending
+    // run (also the scroll guard's) already samples the latest state.
+    if (sampleSoon_.isActive())
+        return;
+    const qint64 Since = lastSampleSent_.isValid() ? lastSampleSent_.elapsed() : SampleFrameMs;
+    sampleSoon_.start(Since >= SampleFrameMs ? 0 : int(SampleFrameMs - Since));
 }
 void MarkdownDocumentView::Refresh(bool Force)
 {
     debounce_.stop();
+    deferredSince_.invalidate();
     const auto Text = source_->Content();
     if (!Force && Text.size() > 2 * 1024 * 1024)
     {
@@ -475,11 +519,36 @@ void MarkdownDocumentView::Refresh(bool Force)
         emit Changed();
         return;
     }
-    if (Text.toUtf8().size() > 8 * 1024 * 1024)
+    const auto Utf8 = Text.toUtf8();
+    if (Utf8.size() > 8 * 1024 * 1024)
     {
         error_ = tr("미리보기는 8 MiB 이하 문서를 지원합니다. 소스 편집은 계속할 수 있습니다.");
         message_->setText(error_);
         message_->show();
+        emit Changed();
+        return;
+    }
+    options_["dark"] = palette().color(QPalette::Window).lightness() < 128;
+    // Theme and settings reloads, an undo back to the rendered text and outline clicks ask again
+    // for what the preview already shows. A render replaces the whole page and keeps the
+    // helper's GUI thread busy; only the explicit refresh (Force) repeats one.
+    if (!Force && sentValid_ && error_.isEmpty() && Utf8 == sentText_ && path_ == sentPath_ && options_ == sentOptions_)
+    {
+        // The source is that revision again: its line map is the identity.
+        revision_ = renderRequested_;
+        shifts_.clear();
+        shiftsOverflow_ = false;
+        const bool Partial = source_->isContentTruncated();
+        if (rendered_ == renderRequested_)
+        {
+            status_ = Partial ? tr("부분 미리보기") : tr("최신");
+            render_ = Partial ? RenderState::Partial : RenderState::Current;
+        }
+        else
+        {
+            status_ = Partial ? tr("부분 미리보기 갱신 중") : tr("갱신 중");
+            render_ = RenderState::Rendering;
+        }
         emit Changed();
         return;
     }
@@ -492,7 +561,11 @@ void MarkdownDocumentView::Refresh(bool Force)
     message_->hide();
     status_ = source_->isContentTruncated() ? tr("부분 미리보기 갱신 중") : tr("갱신 중");
     render_ = RenderState::Rendering;
-    options_["dark"] = palette().color(QPalette::Window).lightness() < 128;
+    sentText_ = Utf8;
+    sentPath_ = path_;
+    sentOptions_ = options_;
+    sentValid_ = true;
+    renderClock_.start();
     preview_->Send({{"type", "render"},
                     {"revision", revision_},
                     {"text", Text},
@@ -556,6 +629,8 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
         return;
     if (Type == "error")
     {
+        // A failed or restarted helper shows nothing: the next request must be sent.
+        sentValid_ = false;
         error_ = Value["message"].toString();
         status_ = tr("갱신 실패");
         message_->setText(error_);
@@ -569,36 +644,17 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
                   : source_->isContentTruncated() ? RenderState::Partial
                                                   : RenderState::Current;
         renderedAt_ = QDateTime::currentDateTime();
+        if (renderClock_.isValid())
+            lastRenderMs_ = renderClock_.elapsed();
+        renderClock_.invalidate();
         // The new frame has its own layout: send the current anchor to it.
         lastSourceAnchor_ = {};
         lastPosition_ = -1;
         sampleSoon_.start(0);
         problems_ = Value["problems"].toInt();
         problemDetails_ = Value["details"].toArray();
-        outline_->clear();
-        QList<QTreeWidgetItem *> Parents(7, nullptr);
-        AppSettings S;
-        const int Depth = qBound(1, S.value("markdown/outlineDepth").toInt(), 6);
-        for (const auto V : Value["headings"].toArray())
-        {
-            const auto H = V.toObject();
-            const int Level = qBound(1, H["level"].toInt(), 6);
-            if (Level > Depth)
-                continue;
-            QTreeWidgetItem *Parent = nullptr;
-            for (int I = Level - 1; I > 0; --I)
-                if (Parents[I])
-                {
-                    Parent = Parents[I];
-                    break;
-                }
-            auto *Item = Parent ? new QTreeWidgetItem(Parent) : new QTreeWidgetItem(outline_);
-            Item->setText(0, H["text"].toString());
-            Item->setData(0, Qt::UserRole, H["line"].toInt());
-            Parents[Level] = Item;
-            for (int I = Level + 1; I < 7; ++I)
-                Parents[I] = nullptr;
-        }
+        headings_ = Value["headings"].toArray();
+        rebuildOutline();
         // The foreign preview can leave Qt's logical source focus intact while
         // reparenting changes the native keyboard receiver. Repair that mismatch
         // only while the source still owns focus in the foreground editor.
@@ -617,8 +673,6 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
                     Source->setFocus(Qt::OtherFocusReason);SetFocus(reinterpret_cast<HWND>(Source->effectiveWinId()));
                 }
             });
-        outline_->expandAll();
-        if(auto* Filter=findChild<QLineEdit*>("markdownOutlineFilter"))QMetaObject::invokeMethod(Filter,"textChanged",Qt::DirectConnection,Q_ARG(QString,Filter->text()));
     }
     else if (Type == "position" && actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_)
     {
@@ -663,6 +717,34 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
     else if (Type == "link")
         openLink(Value["url"].toString(), {});
     emit Changed();
+}
+void MarkdownDocumentView::rebuildOutline()
+{
+    outline_->clear();
+    QList<QTreeWidgetItem *> Parents(7, nullptr);
+    for (const auto V : headings_)
+    {
+        const auto H = V.toObject();
+        const int Level = qBound(1, H["level"].toInt(), 6);
+        if (Level > outlineDepth_)
+            continue;
+        QTreeWidgetItem *Parent = nullptr;
+        for (int I = Level - 1; I > 0; --I)
+            if (Parents[I])
+            {
+                Parent = Parents[I];
+                break;
+            }
+        auto *Item = Parent ? new QTreeWidgetItem(Parent) : new QTreeWidgetItem(outline_);
+        Item->setText(0, H["text"].toString());
+        Item->setData(0, Qt::UserRole, H["line"].toInt());
+        Parents[Level] = Item;
+        for (int I = Level + 1; I < 7; ++I)
+            Parents[I] = nullptr;
+    }
+    outline_->expandAll();
+    if (auto *Filter = findChild<QLineEdit *>("markdownOutlineFilter"))
+        QMetaObject::invokeMethod(Filter, "textChanged", Qt::DirectConnection, Q_ARG(QString, Filter->text()));
 }
 void MarkdownDocumentView::openLink(const QString &Link, const QString &Fragment)
 {
@@ -814,12 +896,14 @@ void MarkdownDocumentView::sampleSource()
         lastPosition_ = Position;
         lastLine_ = source_->currentLine();
         sendPosition(toPreviewLine(lastLine_), false);
+        lastSampleSent_.restart();
     }
     const auto Anchor = sourceScrollAnchor();
     if (Anchor != lastSourceAnchor_)
     {
         lastSourceAnchor_ = Anchor;
         sendPosition(Anchor["top"].toBool() || Anchor["end"].toBool() ? Anchor["line"].toDouble() : toPreviewLine(Anchor["line"].toDouble()), true, Anchor);
+        lastSampleSent_.restart();
     }
 }
 void MarkdownDocumentView::RequestDiagnostics(QJsonObject Request)
@@ -846,6 +930,8 @@ bool MarkdownDocumentView::eventFilter(QObject *, QEvent *Event)
         sampleSoon_.start(0);
     if (Event->type() == QEvent::InputMethod)
         composing_ = !static_cast<QInputMethodEvent *>(Event)->preeditString().isEmpty();
+    if (Event->type() == QEvent::KeyPress || Event->type() == QEvent::InputMethod)
+        lastInput_.restart();
     return false;
 }
 QList<DocumentStatusField> MarkdownDocumentView::StatusFields() const
@@ -946,7 +1032,9 @@ void MarkdownDocumentView::goToHeadingLine(int Line)
     if (rendered_ != revision_)
     {
         Refresh();
-        return;
+        // An undo back to the rendered text needs no render: the preview is current again.
+        if (rendered_ != revision_)
+            return;
     }
     if (SourceVisible() && (!previewActive_ || actions_["markdown.syncScroll"]->isChecked()))
         source_->goToLine(int(fromPreviewLine(Line)));

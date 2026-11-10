@@ -15,6 +15,7 @@
 #include <QJsonDocument>
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/document/hwpStartupTrace.hpp"
+#include "UniqueLibs/document/documentStallTrace.hpp"
 #include "hwpProductPolicy.hpp"
 #include "UniqueLibs/document/hwpOpenWindow.hpp"
 #include <QApplication>
@@ -63,6 +64,8 @@ int main(int Argc, char** Argv)
     QApplication App(Argc, Argv); App.setOrganizationName("HyperCommander"); App.setApplicationName("HyperEditor"); hc::ui::InstallQtTranslation(App);
     hc::document::startup::Scope ResourcesTrace("editor.resources"); InitializePortedViewResources(); ResourcesTrace.End(); App.setWindowIcon(QIcon(":/icons/app/hypereditor.svg"));
     hc::document::startup::Data().End(QtStart);
+    // HC_UI_STALL_TRACE=<file>: GUI thread stalls and delayed key input, for diagnosis only.
+    hc::document::DocumentStallTrace::Install();
     QCommandLineParser Parser; Parser.addHelpOption();
     Parser.addOption(QCommandLineOption("new-hwpx", "Create a new HWPX document in edit mode"));
     Parser.addOption(QCommandLineOption("rhwp-edit", "Edit one HWP/HWPX document"));

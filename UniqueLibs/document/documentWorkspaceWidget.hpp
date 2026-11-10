@@ -130,7 +130,14 @@ namespace hc::document
         QPointer<QWidget> searchEpubHost_;
         void syncSearchHost();
         std::unique_ptr<DocumentWindowSize> windowSize_;
+        // Synchronous: startup, a saved settings dialog and Escape need the result at once.
         void refreshPreferences();
+        // Reads and parses on a worker, then applies here; for the folder watcher and activation.
+        void refreshPreferencesAsync();
+        void applyPreferences(const QJsonObject& Product, bool Loaded, const QJsonObject& Root, const QString& Error);
+        void watchSettingsFolder();
+        bool preferencesReading_ = false, preferencesAgain_ = false;
+        quint64 preferencesGeneration_ = 0;
         void externalChange(const QString& Path, bool Missing);
         mrst::ExternalChangeWatcher* externalWatcher_ = nullptr;
         void showPreferences();
@@ -159,6 +166,12 @@ namespace hc::document
         QString settingsPath_;
         QJsonObject appliedPreferences_;
         QFileSystemWatcher* settingsWatcher_ = nullptr;
+        // Existence, size and modification time of the files refreshPreferences() reads, as of its
+        // last run. The folder watcher also fires for recent documents and EPUB workspaces, which
+        // are written on every save; those must not re-read and parse the settings on the GUI thread.
+        QString settingsSignature_;
+        QString settingsSignature() const;
+        bool settingsChanged() const;
         struct LocalSave;
         std::shared_ptr<Tab> active() const;
         std::shared_ptr<Tab> find(const QString& Id) const;

@@ -22,10 +22,13 @@ class HwpProcessTests final : public QObject
 {
     Q_OBJECT
 private:
+    // Proxies belong to the parking thread, not this one: search every window of the process.
     HWND findProxy()
     {
         HWND Found = nullptr;
-        EnumThreadWindows(GetCurrentThreadId(), [](HWND Window, LPARAM Context) -> BOOL {
+        EnumWindows([](HWND Window, LPARAM Context) -> BOOL {
+            DWORD Pid = 0; GetWindowThreadProcessId(Window, &Pid);
+            if(Pid != GetCurrentProcessId()) return TRUE;
             EnumChildWindows(Window, [](HWND Child, LPARAM Out) -> BOOL {
                 if(GetPropW(Child, L"HyperCommander.RhwpProxyOwner")) {
                     *reinterpret_cast<HWND*>(Out) = Child; return FALSE;
@@ -93,6 +96,8 @@ private slots:
         HwpProcessBackend Backend(Runtime, limits()); QWidget Other;
         Backend.Load(33, {}, {}); const auto Old = Backend.NativeBinding();
         const auto Proxy = findProxy(); QVERIFY(Proxy); QVERIFY(Backend.IsCurrentBinding(Old));
+        // A GUI-owned proxy would join the starting helper's input queue with this thread's.
+        QVERIFY(GetWindowThreadProcessId(Proxy, nullptr) != GetCurrentThreadId());
         QVERIFY(SetParent(Proxy, reinterpret_cast<HWND>(Other.winId())));
         QVERIFY(!Backend.IsCurrentBinding(Old));
         QTRY_VERIFY_WITH_TIMEOUT(HwpProcessBackend::IsDrained(), 10000);

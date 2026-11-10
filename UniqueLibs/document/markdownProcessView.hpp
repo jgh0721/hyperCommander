@@ -29,7 +29,9 @@ class MarkdownProcessView final : public QWidget
   private:
     void start();
     void receive();
-    void resizeChild();
+    // Now sizes the preview window synchronously (attachment only). Otherwise the helper is
+    // asked to fit itself, so this thread never waits for the helper's busy GUI thread.
+    void resizeChild(bool Now = false);
     QLocalServer server_;
     QPointer<QLocalSocket> socket_;
     QPointer<QProcess> process_;
