@@ -315,6 +315,7 @@ void BatchRenameDialog::run(bool Undo) {
         auto Started = jobs_->SubmitRename(std::move(Prepared.Value()), Undo ? undone_ ? tr("이름 변경 다시 실행") : tr("이름 변경 실행 취소") : tr("다중 이름 변경"));
         if (!Started.HasValue()) { busy_ = false; controls_->setEnabled(true); queued_->setEnabled(true); preview(); SetMessage(hc::ui::ErrorText(Started.Failure()), true); return; }
         const auto Handle = Started.Value(); jobId_ = Handle.id_;
+        if (onSubmitted_) onSubmitted_(jobId_);
         if (cancelWhenReady_) jobs_->RenameScheduler().Cancel(jobId_);
         else if (queued_->isChecked()) { QDialog::accept(); return; }
         background_->setEnabled(true); SetMessage(tr("작업 관리자에서 이름을 변경하고 있습니다. 백그라운드로 보내도 작업은 계속됩니다."));

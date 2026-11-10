@@ -130,6 +130,7 @@ private:
     hc::storage::Result<std::string> captureDocument(const hc::commands::CommandInvocation& Invocation, CFSModel* Model);
     hc::storage::Result<hc::commands::CommandOutcome> executeDocument(const hc::commands::CommandInvocation& Invocation, CFSModel* Model);
     void refreshPreview();
+    std::function<void()> captureSelectionRemoval(const hc::storage::CommandContext& Context) const;
     void rememberJobSelection(const std::string& Id, const hc::storage::CommandContext& Context);
     void closeQuick();
     void returnQuickFocus();
@@ -160,8 +161,7 @@ private:
     // saved proxy index before action-state updates map it back to the source.
     QPersistentModelIndex commandIndex_;
     std::map<std::string, std::vector<hc::storage::Locator>> affectedLocations_;
-    struct JobSelection { QPointer<CGridView> view_; QPointer<CFSModel> model_; QString location_; QStringList keys_; };
-    std::map<std::string, JobSelection> jobSelections_;
+    std::map<std::string, std::function<void()>> jobSelections_;
     std::map<std::string, std::function<void(bool)>> inlineRenameCompletions_;
     struct CreatedFolderNavigation { std::string tab_; hc::storage::Locator source_, target_; QPointer<CFSModel> model_; bool ready_ = false; };
     std::map<std::string, CreatedFolderNavigation> createdFolderNavigation_;

@@ -45,6 +45,7 @@ public:
         std::shared_ptr<storage::ISelectionManifest> Selection = {}, filetools::RenameJobController* Jobs = nullptr);
     ~BatchRenameDialog() override;
     std::function<void()> onChanged_;
+    std::function<void(const std::string&)> onSubmitted_;
 protected:
     void accept() override;
     void reject() override;

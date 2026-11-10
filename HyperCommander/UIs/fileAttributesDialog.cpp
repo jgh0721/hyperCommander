@@ -195,6 +195,9 @@ namespace hc::ui
         for (const auto& Issue : state_->plan_.issues_) Lines << Issue.state_ + " · " + QString::fromStdString(Issue.entry_.locator_.root_) + " · " + Issue.detail_;
         if (applying_) {
             result_ = true; const auto& Result = state_->outcome_; changed_ |= Result.changed_ > 0 || Result.failed_ > 0;
+            if (onApplied_ && !state_->stop_.stop_requested() && state_->plan_.issues_.empty()
+                && !state_->plan_.blocked_ && !state_->plan_.cancelled_ && Result.changed_ + Result.unchanged_ > 0
+                && !Result.failed_ && !Result.skipped_ && !Result.pending_) onApplied_();
             showDetails_->setText(tr("처리 결과 접기")); showDetails_->setChecked(true);
             static_cast<hc::qt::ElidedLabel*>(summary_)->SetText(tr("성공 %1 · 변경 없음 %2 · 실패 %3 · 건너뜀 %4 · 미처리 %5\n수집 단계 제외·실패 %6건 (조회 불가 폴더의 하위 개수는 미확인)")
                 .arg(Result.changed_).arg(Result.unchanged_).arg(Result.failed_).arg(Result.skipped_).arg(Result.pending_).arg(state_->plan_.issues_.size()));

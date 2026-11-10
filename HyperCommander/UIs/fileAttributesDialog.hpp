@@ -21,6 +21,7 @@ namespace hc::ui
             std::shared_ptr<const storage::ISelectionManifest> Manifest, QWidget* Parent = nullptr);
         ~FileAttributesDialog() override;
         bool Changed() const { return changed_; }
+        std::function<void()> onApplied_;
     protected:
         void accept() override;
         void reject() override;

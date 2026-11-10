@@ -389,6 +389,8 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "archiveCreationLayoutUi"
                 || (QStringList{"r24MoveProgressControlsUi", "r24ExtractOptionsUi", "r24ExtractOptionsJobUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobSelectionUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "internetBlockSelectionUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "fileToolSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "nativeParallelSelectionUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileClipboardUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileColorRtlUi"
@@ -2638,6 +2640,7 @@ private slots:
             QTRY_COMPARE(Bridge->FileJobs()->Scheduler().Snapshot(Created.Value().jobId_).Value().state_, JobState::Completed);
             QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(Created.Value().jobId_));
             QTRY_COMPARE(FocusedName(), Path.section('/', 0, 0));
+            QVERIFY(View->CaptureSelection().isEmpty());
             QCOMPARE(QDir::cleanPath(Panel->CurrentPath()), QDir::cleanPath(QDir::toNativeSeparators(Directory.path())));
             QVERIFY(QFileInfo::exists(Directory.filePath(Path)));
         }
@@ -4489,7 +4492,7 @@ private slots:
     void fileJobSelectionUi_data()
     {
         QTest::addColumn<int>("Mode");
-        const QStringList Names{"copy", "move", "delete", "cancel", "skip", "new-selection", "navigate", "failure", "refresh"};
+        const QStringList Names{"copy", "move", "delete", "cancel", "skip", "new-selection", "navigate", "failure-cancel", "refresh", "rename", "mkdir", "new-file", "drop-copy", "drop-move", "drop-shortcut"};
         for (int Mode = 0; Mode < Names.size(); ++Mode) QTest::newRow(qPrintable(Names[Mode])) << Mode;
     }
     void fileJobSelectionUi()
@@ -4514,13 +4517,25 @@ private slots:
         const auto Key = hc::workspace::SelectionKey(*Model->GetFileInfo(Source)->storageEntry_);
         const auto OtherKey = hc::workspace::SelectionKey(*Model->GetFileInfo(Other)->storageEntry_);
         View->RestoreSelection({Key}, Key); QCOMPARE(View->CaptureSelection(), QStringList{Key});
-        QVariantMap Parameters{{"queued", true}};
+        const bool Deferred = Mode != 2 && Mode != 9 && Mode != 10 && Mode < 12;
+        QVariantMap Parameters; if (Deferred) Parameters["queued"] = true;
         if (Mode == 2) { Parameters.remove("queued"); Parameters["deleteMode"] = QString("permanent"); Parameters["confirmed"] = true; }
         else { Parameters["destination"] = Directory.filePath(Mode == 7 ? "not-a-directory" : "target"); Parameters["conflict"] = Mode == 4 ? "skip" : "replace"; }
-        auto Submitted = Bridge->Dispatch(Mode == 1 ? "hc.file.move" : Mode == 2 ? "hc.file.delete" : "hc.file.copy", Parameters, "test", Source);
-        QTRY_VERIFY(Submitted.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
-        auto Started = Submitted.get(); QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str()); const auto Id = Started.Value().jobId_;
-        if (Mode != 2) QVERIFY(Scheduler.Snapshot(Id).Value().deferred_);
+        if (Mode == 9 || Mode == 10) { Parameters.remove("conflict"); Parameters["destination"] = Directory.filePath(Mode == 9 ? "renamed.txt" : "created-folder"); }
+        if (Mode == 11) { Parameters.remove("destination"); Parameters.remove("conflict"); Parameters["name"] = QString("created.txt"); }
+        std::string Id;
+        if (Mode < 12) {
+            auto Submitted = Bridge->Dispatch(Mode == 1 ? "hc.file.move" : Mode == 2 ? "hc.file.delete" : Mode == 9 ? "hc.file.rename"
+                : Mode == 10 ? "hc.file.mkdir" : Mode == 11 ? "hc.file.new" : "hc.file.copy", Parameters, "test", Source);
+            QTRY_VERIFY(Submitted.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready);
+            auto Started = Submitted.get(); QVERIFY2(Started.HasValue(), Started.HasValue() ? "" : Started.Failure().code_.c_str()); Id = Started.Value().jobId_;
+            if (Deferred) QVERIFY(Scheduler.Snapshot(Id).Value().deferred_);
+        } else {
+            std::set<std::string> BeforeJobs; for (const auto& Job : Scheduler.Snapshots()) BeforeJobs.insert(Job.id_);
+            Bridge->DropFiles({Directory.filePath("source.txt")}, Directory.filePath("target"), Mode == 12 ? Qt::CopyAction : Mode == 13 ? Qt::MoveAction : Qt::LinkAction);
+            const auto FindJob = [&] { for (const auto& Job : Scheduler.Snapshots()) if (!BeforeJobs.contains(Job.id_)) return Job.id_; return std::string{}; };
+            QTRY_VERIFY(!FindJob().empty()); Id = FindJob();
+        }
         QStringList Expected;
         if (Mode == 3 || Mode == 4 || Mode == 7) Expected = {Key};
         if (Mode == 5) { View->RestoreSelection({Key, OtherKey}, Key); Expected = {OtherKey}; }
@@ -4534,15 +4549,160 @@ private slots:
             Model->Refresh(); QVERIFY(Model->IsLoading()); View->RemoveSelection({Key});
             QVERIFY(View->CaptureSelection().isEmpty());
         }
-        if (Mode == 3) QVERIFY(Scheduler.Cancel(Id).HasValue()); else if (Mode != 2) QVERIFY(Scheduler.Control({Id}, JobControl::Start).HasValue());
+        if (Mode == 3) QVERIFY(Scheduler.Cancel(Id).HasValue()); else if (Deferred) QVERIFY(Scheduler.Control({Id}, JobControl::Start).HasValue());
+        if (Mode == 7) {
+            // Native errors now wait for the user's retry/skip/cancel decision.
+            QTRY_COMPARE(Scheduler.Snapshot(Id).Value().state_, JobState::WaitingForUser);
+            QCOMPARE(View->CaptureSelection(), QStringList{Key});
+            const auto Failure = Scheduler.Snapshot(Id).Value(); QVERIFY(Failure.interaction_);
+            QVERIFY(Scheduler.Reply(Id, {Failure.interaction_->id_, InteractionChoice::Cancel}).HasValue());
+        }
         QTRY_VERIFY(IsTerminal(Scheduler.Snapshot(Id).Value().state_));
-        QCOMPARE(Scheduler.Snapshot(Id).Value().state_, Mode == 3 ? JobState::Cancelled : Mode == 7 ? JobState::Failed : JobState::Completed);
+        QCOMPARE(Scheduler.Snapshot(Id).Value().state_, Mode == 3 || Mode == 7 ? JobState::Cancelled : JobState::Completed);
         QTest::qWait(350); QTRY_VERIFY(!Model->IsLoading());
         Expected.sort();
         const auto Current = [&] { auto Keys = View->CaptureSelection(); Keys.sort(); return Keys; };
         QTRY_COMPARE(Current(), Expected);
-        if (Mode == 0 || Mode == 1 || Mode == 5 || Mode == 6 || Mode == 8) QVERIFY(QFile::exists(Directory.filePath("target/source.txt")));
-        if (Mode == 1 || Mode == 2) QVERIFY(!QFile::exists(Directory.filePath("source.txt")));
+        if (Mode == 0 || Mode == 1 || Mode == 5 || Mode == 6 || Mode == 8 || Mode == 12 || Mode == 13) QVERIFY(QFile::exists(Directory.filePath("target/source.txt")));
+        if (Mode == 1 || Mode == 2 || Mode == 13) QVERIFY(!QFile::exists(Directory.filePath("source.txt")));
+        if (Mode == 14) QCOMPARE(QDir(Directory.filePath("target")).entryList({"*.lnk"}, QDir::Files).size(), 1);
+        if (Mode == 9) QVERIFY(QFile::exists(Directory.filePath("renamed.txt")));
+        if (Mode == 10) QVERIFY(QFileInfo(Directory.filePath("created-folder")).isDir());
+        if (Mode == 11) QVERIFY(QFile::exists(Directory.filePath("created.txt")));
+    }
+
+    void internetBlockSelectionUi_data()
+    {
+        QTest::addColumn<int>("Mode");
+        const QStringList Names{"shortcut", "already-unblocked", "failure", "cancel", "new-selection", "navigate", "refresh", "thumbnails"};
+        for (int Mode = 0; Mode < Names.size(); ++Mode) QTest::newRow(qPrintable(Names[Mode])) << Mode;
+    }
+    void internetBlockSelectionUi()
+    {
+        QFETCH(int, Mode);
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(QDir().mkpath(Directory.filePath("target")));
+        for (const auto* Name : {"first.txt", "second.txt", "other.txt", "target/other.txt"}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("body"), 4);
+            if (Mode != 1) { QFile Zone(Directory.filePath(Name) + ":Zone.Identifier"); QVERIFY(Zone.open(QIODevice::WriteOnly)); Zone.write("[ZoneTransfer]\r\nZoneId=3\r\n"); }
+        }
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
+        QVERIFY(View->SetListMode(Mode == 7 ? "thumbnails" : "one-line"));
+        const auto IndexFor = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
+        const auto KeyFor = [&](const QString& Name) { return hc::workspace::SelectionKey(*Model->GetFileInfo(IndexFor(Name))->storageEntry_); };
+        const QStringList Selected{KeyFor("first.txt"), KeyFor("second.txt")}; const auto Other = KeyFor("other.txt");
+        View->RestoreSelection(Selected, Selected.front()); QCOMPARE(View->CaptureSelection().size(), 2);
+        emit Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        // Hold the worker so cancellation, navigation and later selection are deterministic.
+        auto* Pool = QThreadPool::globalInstance(); const int BeforeWorkers = Pool->maxThreadCount(); Pool->setMaxThreadCount(1);
+        std::promise<void> Release; auto Gate = Release.get_future().share(); std::atomic<bool> Entered{false}; bool Released = false;
+        auto Blocker = QtConcurrent::run([&] { Entered = true; Gate.wait(); });
+        const auto RestorePool = qScopeGuard([&] { if (!Released) Release.set_value(); Blocker.waitForFinished(); Pool->setMaxThreadCount(BeforeWorkers); });
+        QTRY_VERIFY(Entered.load());
+        const auto Stream = QDir::toNativeSeparators(Directory.filePath("first.txt") + ":Zone.Identifier").toStdWString();
+        const HANDLE Locked = Mode == 2 ? CreateFileW(Stream.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr) : INVALID_HANDLE_VALUE;
+        const auto Unlock = qScopeGuard([&] { if (Locked != INVALID_HANDLE_VALUE) CloseHandle(Locked); });
+        if (Mode == 2) QVERIFY(Locked != INVALID_HANDLE_VALUE);
+        if (Mode == 0) {
+            main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_)); View->EnsureKeyboardFocusOnView();
+            QTest::keyClick(QApplication::focusWidget(), Qt::Key_B, Qt::ControlModifier | Qt::AltModifier);
+        } else QVERIFY(Bridge->ExecuteCommand("hc.file.ads.allowInternetBlock"));
+        QTRY_VERIFY(main_->findChild<QProgressDialog*>());
+        QPointer<QProgressDialog> Progress = main_->findChild<QProgressDialog*>();
+        QStringList Expected;
+        if (Mode == 2 || Mode == 3) Expected = Selected;
+        if (Mode == 3) Progress->canceled();
+        if (Mode == 4) { View->RestoreSelection(Selected + QStringList{Other}, Selected.front()); Expected = {Other}; }
+        Release.set_value(); Released = true;
+        if (Mode == 5) {
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.filePath("target")), {}); QTRY_VERIFY(!Model->IsLoading());
+            Expected = {KeyFor("other.txt")}; View->RestoreSelection(Expected, Expected.front());
+        }
+        if (Mode == 6) Model->Refresh();
+        bool Warning = false; QTimer CloseWarning; CloseWarning.setInterval(10);
+        connect(&CloseWarning, &QTimer::timeout, this, [&] { for (auto* Dialog : main_->findChildren<QDialog*>())
+            if (Dialog->isVisible() && Dialog->windowTitle() == QStringLiteral("인터넷 파일 차단 해제") && !qobject_cast<QProgressDialog*>(Dialog)) { Warning = true; Dialog->accept(); } });
+        CloseWarning.start(); QTRY_VERIFY_WITH_TIMEOUT(!Progress, 10000); CloseWarning.stop();
+        QTRY_VERIFY(!Model->IsLoading());
+        Expected.sort(); const auto Current = [&] { auto Keys = View->CaptureSelection(); Keys.sort(); return Keys; };
+        QTRY_COMPARE(Current(), Expected); QCOMPARE(Warning, Mode == 2);
+        for (const auto* Name : {"first.txt", "second.txt"}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), QByteArray("body"));
+            QCOMPARE(QFile::exists(Directory.filePath(Name) + ":Zone.Identifier"), Mode == 3 || (Mode == 2 && QString(Name) == "first.txt"));
+        }
+    }
+
+    void fileToolSelectionUi_data()
+    {
+        QTest::addColumn<int>("Mode"); QTest::addColumn<bool>("Cancel");
+        const QStringList Names{"attributes", "new-file", "link", "queued-rename"};
+        for (int Mode = 0; Mode < Names.size(); ++Mode) for (const bool Cancel : {false, true})
+            QTest::newRow(qPrintable(Names[Mode] + (Cancel ? "-cancel" : "-success"))) << Mode << Cancel;
+    }
+    void fileToolSelectionUi()
+    {
+        QFETCH(int, Mode); QFETCH(bool, Cancel); using namespace hc::operations;
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] {
+            for (auto* Dialog : main_->findChildren<QDialog*>()) if (Dialog->objectName().startsWith("hc.jobs") || Dialog->objectName() == "hc.fileJobs") Dialog->hide();
+            main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(QDir().mkpath(Directory.filePath("target")));
+        for (const auto* Name : {"first.txt", "second.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("body"); }
+        for (auto* Panel : panels_) { Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!model(Panel)->IsLoading()); }
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View); QVERIFY(View->SetListMode("one-line"));
+        QStringList Selected;
+        for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)).endsWith(".txt"))
+            Selected.append(hc::workspace::SelectionKey(*Model->GetFileInfo(Model->index(Row, 0))->storageEntry_));
+        QCOMPARE(Selected.size(), 2); View->RestoreSelection(Selected, Selected.front()); emit Panel->sig_NotifyPanelActivated();
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); auto& Scheduler = Bridge->FileJobs()->Scheduler();
+        std::set<std::string> BeforeJobs; for (const auto& Job : Scheduler.Snapshots()) BeforeJobs.insert(Job.id_);
+        const QStringList DialogNames{"hc.fileAttributes", "hc.newFile", "hc.mklink.dialog", "hc.batchRename"};
+        bool Opened = false, Done = false, TimedOut = false; int Step = 0; QElapsedTimer Elapsed; Elapsed.start();
+        QTimer Driver; Driver.setInterval(15);
+        connect(&Driver, &QTimer::timeout, this, [&] {
+            for (auto* Dialog : main_->findChildren<QDialog*>()) if (Dialog->isVisible() && Dialog->objectName() == DialogNames[Mode]) {
+                auto* Shell = static_cast<hc::ui::DialogShell*>(Dialog);
+                if (!Opened) { Opened = true; connect(Dialog, &QDialog::finished, &Driver, [&](int) { Done = true; }); }
+                if (Elapsed.elapsed() > 12000) { TimedOut = true; Dialog->reject(); return; }
+                if (Cancel) { Dialog->reject(); return; }
+                if (Step == 0) {
+                    if (Mode == 0) Dialog->findChild<QComboBox*>("hc.attributes.value3")->setCurrentIndex(2);
+                    if (Mode == 1) Dialog->findChild<QLineEdit*>("hc.newFile.name")->setText("created.txt");
+                    if (Mode == 2) Dialog->findChild<QLineEdit*>("hc.mklink.editor")->setText(Directory.filePath("target") + '/');
+                    if (Mode == 3) {
+                        Dialog->findChild<QLineEdit*>("hc.rename.mask")->setText("[N]_renamed");
+                        Dialog->findChild<QCheckBox*>("hc.rename.queued")->setChecked(true);
+                    }
+                    Step = 1; return;
+                }
+                if (Step == 1 && Shell->AcceptButton()->isEnabled()) { Step = 2; Shell->AcceptButton()->click(); }
+                if (Mode == 0 && Step == 2 && Dialog->findChild<QLabel*>("hc.attributes.summary")->text().contains(QStringLiteral("성공"))) Dialog->accept();
+            }
+        });
+        const QStringList Commands{"hc.file.attributes", "hc.file.new", "hc.file.mklink", "hc.file.batchRename"};
+        Driver.start(); QVERIFY(Bridge->ExecuteCommand(Commands[Mode])); QTRY_VERIFY_WITH_TIMEOUT(Done, 15000); Driver.stop(); QVERIFY(Opened); QVERIFY(!TimedOut);
+        if (!Cancel && Mode != 0) {
+            const auto FindJob = [&] { for (const auto& Job : Scheduler.Snapshots()) if (!BeforeJobs.contains(Job.id_)) return Job.id_; return std::string{}; };
+            QTRY_VERIFY(!FindJob().empty()); const auto Id = FindJob();
+            if (Mode == 3) {
+                QCOMPARE(View->CaptureSelection().size(), 2); QVERIFY(Scheduler.Snapshot(Id).Value().deferred_);
+                QVERIFY(Scheduler.Control({Id}, JobControl::Start).HasValue());
+            }
+            QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Id).Value().state_), 15000);
+            QCOMPARE(Scheduler.Snapshot(Id).Value().state_, JobState::Completed);
+        }
+        QTRY_VERIFY(!Model->IsLoading());
+        if (Cancel) { auto Current = View->CaptureSelection(); Current.sort(); Selected.sort(); QCOMPARE(Current, Selected); }
+        else QTRY_VERIFY(View->CaptureSelection().isEmpty());
+        if (!Cancel && Mode == 1) QVERIFY(QFile::exists(Directory.filePath("created.txt")));
+        if (!Cancel && Mode == 2) for (const auto* Name : {"first.txt", "second.txt"}) QVERIFY(QFile::exists(Directory.filePath(QString("target/") + Name)));
+        if (!Cancel && Mode == 3) for (const auto* Name : {"first_renamed.txt", "second_renamed.txt"}) QVERIFY(QFile::exists(Directory.filePath(Name)));
     }
 
     void fileJobDesignUi()

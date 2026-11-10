@@ -1844,6 +1844,12 @@ void CGridView::RestoreSelection(const QStringList& Selection, const QString& Fo
     // A saved file index can resolve to its group header before the queued
     // grouping projection expands the rows. Finish that projection first.
     if (groupingTimer_.isActive() && !groupingProjection_ && !groupingUpdateDepth_) applyGrouping();
+    // An explicit cursor move must also replace focus saved by an in-flight
+    // reset/column update, or its completion can move back to the previous file.
+    if (!Focus.isEmpty()) {
+        if (!resetPath_.isEmpty()) resetFocus_ = Focus;
+        if (groupingUpdateDepth_ > 0) queryFocus_ = Focus;
+    }
     const QSet<QString> Keys(Selection.begin(), Selection.end());
     const auto Previous = groupedSelection_;
     QScopedValueRollback Guard(groupingProjection_, true);

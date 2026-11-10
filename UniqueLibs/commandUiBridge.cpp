@@ -388,11 +388,9 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         if (!Guard || !Guard->main_) return;
         if (auto Selection = Guard->jobSelections_.find(Result.snapshot_.id_); Selection != Guard->jobSelections_.end()) {
             const auto Saved = std::move(Selection->second); Guard->jobSelections_.erase(Selection);
-            if (Saved.view_ && Saved.model_ && Saved.view_->BaseModel() == Saved.model_
-                && Saved.location_ == Saved.model_->property("hc.snapshotLocation").toString()
-                && Result.snapshot_.state_ == hc::operations::JobState::Completed && !Result.snapshot_.cancelRequested_
+            if (Saved && Result.snapshot_.state_ == hc::operations::JobState::Completed && !Result.snapshot_.cancelRequested_
                 && Result.snapshot_.completedItems_ > 0 && !Result.snapshot_.skippedItems_ && !Result.snapshot_.failedItems_
-                && !Result.snapshot_.error_ && Result.cleanupErrors_.empty()) Saved.view_->RemoveSelection(Saved.keys_);
+                && !Result.snapshot_.error_ && Result.cleanupErrors_.empty()) Saved();
         }
         if (auto Move = Guard->clipboardMoves_.find(Result.snapshot_.id_); Move != Guard->clipboardMoves_.end()) {
             const auto Token = Move->second; Guard->clipboardMoves_.erase(Move);
@@ -481,10 +479,10 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
 
 CommandUiBridge::~CommandUiBridge() { clipboardImportStop_.request_stop(); }
 
-void CommandUiBridge::rememberJobSelection(const std::string& Id, const CommandContext& Context)
+std::function<void()> CommandUiBridge::captureSelectionRemoval(const CommandContext& Context) const
 {
     auto* Model = findModel(Context.tabId_);
-    if (!Model || !main_) return;
+    if (!Model || !main_) return {};
     std::set<std::string> Ids;
     for (const auto& Entry : Context.selection_) Ids.insert(Serialize(Entry));
     for (auto* View : main_->findChildren<CGridView*>()) if (View->BaseModel() == Model) {
@@ -494,9 +492,21 @@ void CommandUiBridge::rememberJobSelection(const std::string& Id, const CommandC
             if (Entry && Entry->storageEntry_ && (Context.selectionManifest_ || Ids.contains(Serialize(Entry->storageEntry_->id_))))
                 Keys.append(hc::workspace::SelectionKey(*Entry->storageEntry_));
         }
-        if (!Keys.isEmpty()) jobSelections_[Id] = {View, Model, Model->property("hc.snapshotLocation").toString(), std::move(Keys)};
-        return;
+        if (Keys.isEmpty()) return {};
+        // Capture before a dialog/worker can change the selection or refresh the
+        // panel. Completion removes only the original marks at the same location.
+        return [View = QPointer<CGridView>(View), Model = QPointer<CFSModel>(Model),
+            Location = Model->property("hc.snapshotLocation").toString(), Keys = std::move(Keys)] {
+            if (View && Model && View->BaseModel() == Model
+                && Location == Model->property("hc.snapshotLocation").toString()) View->RemoveSelection(Keys);
+        };
     }
+    return {};
+}
+
+void CommandUiBridge::rememberJobSelection(const std::string& Id, const CommandContext& Context)
+{
+    if (auto Completion = captureSelectionRemoval(Context)) jobSelections_[Id] = std::move(Completion);
 }
 
 void CommandUiBridge::bindModels()
@@ -1687,7 +1697,9 @@ void CommandUiBridge::finishCreatedFileFocus()
             const auto Source = Model->index(Row,0); const auto Entry = Model->GetFileInfo(Source);
             if (!Entry || Entry->Name_ != Intent.name_) continue;
             if (Entry->storageEntry_) {
-                const auto Key = hc::workspace::SelectionKey(*Entry->storageEntry_); View->RestoreSelection({Key}, Key);
+                const auto Key = hc::workspace::SelectionKey(*Entry->storageEntry_);
+                // Creation moves the cursor without marking the new entry.
+                View->RestoreSelection(View->CaptureSelection(), Key);
             }
             break;
         }
@@ -2908,12 +2920,25 @@ void CommandUiBridge::DropFiles(const QStringList& Paths, const QString& Destina
     const auto Kind = Target.startsWith("\\\\?\\UNC\\", Qt::CaseInsensitive) || (Target.startsWith("\\\\") && !Target.startsWith("\\\\?\\"))
         ? LocatorKind::Smb : LocatorKind::Local;
     const Locator At{Kind, Target.toStdString()};
+    const auto PathKey = [](const QString& Path) { return QDir::cleanPath(QDir::fromNativeSeparators(Path)).toCaseFolded(); };
+    QSet<QString> SourcePaths; for (const auto& Path : Paths) SourcePaths.insert(PathKey(Path));
+    std::vector<std::function<void()>> Selections;
+    for (auto* View : main_->findChildren<CGridView*>()) if (auto* Model = qobject_cast<CFSModel*>(View->BaseModel())) {
+        CommandContext Context; Context.tabId_ = Model->property("hc.tabId").toString().toStdString();
+        for (const auto& Index : View->SelectedSourceIndexes()) {
+            const auto Entry = Model->GetFileInfo(Index);
+            if (Entry && Entry->storageEntry_ && SourcePaths.contains(PathKey(Model->GetFileFullPath(Index))))
+                Context.selection_.push_back(Entry->storageEntry_->id_);
+        }
+        if (auto Completion = captureSelectionRemoval(Context)) Selections.push_back(std::move(Completion));
+    }
+    const auto RemoveSelection = [Selections = std::move(Selections)] { for (const auto& Completion : Selections) Completion(); };
     if (Action == Qt::LinkAction) {
         PreparedJob Job; Job.request_.maxRetries_ = 0; Job.request_.resourceLanes_ = {FileOperationLane(At)};
         Job.request_.metadata_.source_ = Paths.front().toStdString(); Job.request_.metadata_.destination_ = At.root_;
         Job.task_ = std::make_unique<ShortcutDropTask>(Paths, Target);
         auto Started = fileJobs_->Submit(std::move(Job), tr("바로 가기 만들기"));
-        if (Started.HasValue()) affectedLocations_[Started.Value().id_] = {At};
+        if (Started.HasValue()) { affectedLocations_[Started.Value().id_] = {At}; jobSelections_[Started.Value().id_] = RemoveSelection; }
         else hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), hc::ui::ErrorText(Started.Failure()));
         return;
     }
@@ -2921,7 +2946,7 @@ void CommandUiBridge::DropFiles(const QStringList& Paths, const QString& Destina
     QList<QUrl> Urls; for (const auto& Path : Paths) Urls.append(QUrl::fromLocalFile(Path));
     using ImportResult = Result<FileOperationRequest>;
     auto* Watcher = new QFutureWatcher<ImportResult>(this);
-    connect(Watcher, &QFutureWatcher<ImportResult>::finished, this, [this, Watcher, At, Options] {
+    connect(Watcher, &QFutureWatcher<ImportResult>::finished, this, [this, Watcher, At, Options, RemoveSelection] {
         auto Loaded = Watcher->result(); Watcher->deleteLater();
         if (!Loaded.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), tr("파일을 확인할 수 없습니다: %1").arg(hc::ui::ErrorText(Loaded.Failure()))); return; }
         auto Request = std::move(Loaded.Value()); Request.destination_ = At;
@@ -2934,7 +2959,7 @@ void CommandUiBridge::DropFiles(const QStringList& Paths, const QString& Destina
             auto Parent = Source.entry_.locator_; Parent.root_ = QFileInfo(QString::fromStdString(Parent.root_)).absolutePath().toStdString(); Affected.push_back(std::move(Parent));
         }
         auto Started = fileJobs_->Submit(std::move(Request), OperationContext{});
-        if (Started.HasValue()) affectedLocations_[Started.Value().id_] = std::move(Affected);
+        if (Started.HasValue()) { affectedLocations_[Started.Value().id_] = std::move(Affected); jobSelections_[Started.Value().id_] = RemoveSelection; }
         else hc::ui::MessageDialog::warning(main_, tr("끌어다 놓기"), hc::ui::ErrorText(Started.Failure()));
     });
     // Resolve immutable source paths away from the GUI thread; navigation and
@@ -3135,6 +3160,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("새 파일 · %1").arg(Name)); if (!Submitted.HasValue()) return Submitted.Failure();
         affectedLocations_[Submitted.Value().id_] = {Invocation.context_.location_};
         createdFileFocus_[Submitted.Value().id_] = {Invocation.context_.tabId_, Invocation.context_.location_, Model, Name, false};
+        rememberJobSelection(Submitted.Value().id_, Invocation.context_);
         CommandOutcome Outcome; Outcome.jobId_ = Submitted.Value().id_; return Outcome;
     }
     FileOperationRequest Request;
@@ -3399,6 +3425,7 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
     auto* Model = findModel(Context.tabId_);
     if (!Model || !Model->GetRoot() || !Model->CanUseSnapshot()) return;
     if (!Rename && Model->IsSearchResults()) return;
+    const auto RemoveSelection = captureSelectionRemoval(Context);
     const auto Folder = QString::fromStdString(Context.location_.root_);
     const bool Supported = Model->IsSearchResults() || Context.location_.kind_ == LocatorKind::Local || Context.location_.kind_ == LocatorKind::Smb;
     // The location and selection are immutable across the nested dialog loop.
@@ -3413,10 +3440,14 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
         if (Supported && !Reader) Reader = MakeNativeReadProvider(Kind);
         auto Writer = Kind == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider() : Supported ? MakeNativeWritableStorage(Kind, Reader) : nullptr;
         hc::ui::NewFileDialog Dialog(Folder, bool(Writer), main_);
-        if (Writer) Dialog.SetProvider(Writer, Context.location_, [this, Context, ModelGuard = QPointer<CFSModel>(Model)](hc::operations::PreparedJob Job) {
+        if (Writer) Dialog.SetProvider(Writer, Context.location_, [this, Context, RemoveSelection, ModelGuard = QPointer<CFSModel>(Model)](hc::operations::PreparedJob Job) {
             const auto Name = QFileInfo(QString::fromStdString(Job.request_.metadata_.destination_)).fileName();
             auto Submitted = fileJobs_->Submit(std::move(Job), tr("새 파일 · %1").arg(Name));
-            if (Submitted.HasValue()) { affectedLocations_[Submitted.Value().id_] = {Context.location_}; createdFileFocus_[Submitted.Value().id_] = {Context.tabId_, Context.location_, ModelGuard, Name, false}; }
+            if (Submitted.HasValue()) {
+                affectedLocations_[Submitted.Value().id_] = {Context.location_};
+                createdFileFocus_[Submitted.Value().id_] = {Context.tabId_, Context.location_, ModelGuard, Name, false};
+                if (RemoveSelection) jobSelections_[Submitted.Value().id_] = RemoveSelection;
+            }
             return Submitted;
         }, [this](const std::string& Id) { fileJobs_->Scheduler().Cancel(Id); });
         if (Dialog.exec() != QDialog::Accepted) return;
@@ -3431,7 +3462,9 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
     }
     QStringList Paths;
     for (const auto& At : SelectedEntries(Model, Context)) if (At.isValid()) Paths.append(Model->GetFileFullPath(At));
-    hc::ui::BatchRenameDialog Dialog(Paths, Supported, main_, Context.selectionManifest_, fileJobs_); Dialog.onChanged_ = Refresh; Dialog.exec();
+    hc::ui::BatchRenameDialog Dialog(Paths, Supported, main_, Context.selectionManifest_, fileJobs_);
+    Dialog.onSubmitted_ = [this, RemoveSelection](const std::string& Id) { if (RemoveSelection) jobSelections_[Id] = RemoveSelection; };
+    Dialog.onChanged_ = Refresh; Dialog.exec();
 }
 
 void CommandUiBridge::PromptLinkCreation(const QModelIndex& Index)
@@ -3454,8 +3487,9 @@ void CommandUiBridge::PromptLinkCreation(const QModelIndex& Index)
         if (Item && Item->storageEntry_ && Item->Name_ != "..") Entries.push_back(*Item->storageEntry_);
     }
     using Loaded = Result<std::vector<EntrySnapshot>>;
+    const auto RemoveSelection = captureSelectionRemoval(Context);
     auto* Watcher = new QFutureWatcher<Loaded>(this);
-    connect(Watcher, &QFutureWatcher<Loaded>::finished, this, [this, Watcher, Destination, Base] {
+    connect(Watcher, &QFutureWatcher<Loaded>::finished, this, [this, Watcher, Destination, Base, RemoveSelection] {
         auto Result = Watcher->result(); Watcher->deleteLater();
         if (!Result.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("링크 만들기"), hc::ui::ErrorText(Result.Failure())); return; }
         if (Result.Value().empty()) return;
@@ -3475,6 +3509,7 @@ void CommandUiBridge::PromptLinkCreation(const QModelIndex& Index)
         auto Submitted = fileJobs_->Submit(hc::links::Prepare(Request), tr("링크 만들기"));
         if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("링크 만들기"), hc::ui::ErrorText(Submitted.Failure())); return; }
         affectedLocations_[Submitted.Value().id_] = {Affected};
+        if (RemoveSelection) jobSelections_[Submitted.Value().id_] = RemoveSelection;
         hc::ui::FileOperationDialog::RememberTarget(Affected.kind_ == LocatorKind::Smb ? "smb" : "local", Request.destination_);
     });
     Watcher->setFuture(QtConcurrent::run([Entries = std::move(Entries), Manifest = Context.selectionManifest_]() mutable -> Loaded {
@@ -3510,11 +3545,13 @@ void CommandUiBridge::AllowInternetBlock(const QModelIndex& Index)
     Progress->show();
     connect(Progress, &QProgressDialog::canceled, this, [Stop] { Stop->request_stop(); });
     connect(this, &QObject::destroyed, Progress, [Stop] { Stop->request_stop(); });
-    struct Outcome { int changed_ = 0, unchanged_ = 0, failed_ = 0; QStringList errors_; };
+    struct Outcome { int changed_ = 0, unchanged_ = 0, failed_ = 0; bool complete_ = false; QStringList errors_; };
     auto* Watcher = new QFutureWatcher<Outcome>(this);
-    connect(Watcher, &QFutureWatcher<Outcome>::finished, this, [this, Watcher, Progress = QPointer<QProgressDialog>(Progress), Stop, Location = Context.location_] {
+    connect(Watcher, &QFutureWatcher<Outcome>::finished, this, [this, Watcher, Progress = QPointer<QProgressDialog>(Progress), Stop,
+        Location = Context.location_, RemoveSelection = captureSelectionRemoval(Context)] {
         const auto Result = Watcher->result(); Watcher->deleteLater();
         if (Progress) { const QSignalBlocker Block(Progress); Progress->close(); Progress->deleteLater(); }
+        if (Result.complete_ && !Stop->stop_requested() && RemoveSelection) RemoveSelection();
         if (Result.changed_) for (auto* M : main_->findChildren<CFSModel*>())
             if (M->GetRoot() && M->WorkspaceLocation() == Location) M->ForceRefresh();
         const auto Summary = tr("인터넷 파일 차단 해제: 변경 %1개 · 표시 없음 %2개 · 실패/제외 %3개%4")
@@ -3543,6 +3580,7 @@ void CommandUiBridge::AllowInternetBlock(const QModelIndex& Index)
                 if (Result.errors_.size() < 10) Result.errors_.append(tr("%1: Windows 오류 %2").arg(Path).arg(Error));
             }
         }
+        Result.complete_ = !Stop->stop_requested() && !Result.failed_ && Result.changed_ + Result.unchanged_ > 0;
         return Result;
     }));
 }
@@ -3569,7 +3607,9 @@ void CommandUiBridge::PromptFileAttributes(const QModelIndex& Index)
         }
     }
     const QPointer<CmpPanel> Panel = PanelOf(Model);
+    const auto RemoveSelection = captureSelectionRemoval(Context);
     hc::ui::FileAttributesDialog Dialog(std::move(Entries), Reader, Context.selectionManifest_, main_);
+    Dialog.onApplied_ = RemoveSelection;
     Dialog.exec();
     if (Dialog.Changed()) {
         const auto Folder = hc::attributes::Key(Context.location_);
