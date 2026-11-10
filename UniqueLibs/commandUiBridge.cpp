@@ -5,6 +5,7 @@
 #include "qtMessageDialog.hpp"
 #include "builtinPluginCatalog.hpp"
 #include "HyperCommander/UIs/dialogShell.hpp"
+#include "HyperCommander/UIs/linkCreationDialog.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
 #include "HyperCommander/UIs/permissionDialogs.hpp"
 #include "archive/creationDialog.hpp"
@@ -953,7 +954,7 @@ void CommandUiBridge::createActions()
     }
     const std::vector<std::pair<QString, QString>> FileActions{
         {"hc.file.copy", tr("복사")}, {"hc.file.move", tr("이동")}, {"hc.file.rename", tr("이름 변경")},
-        {"hc.file.mkdir", tr("새 폴더")}, {"hc.file.delete", tr("삭제")}
+        {"hc.file.mkdir", tr("새 폴더")}, {"hc.file.mklink", tr("링크 만들기…")}, {"hc.file.delete", tr("삭제")}
     };
     for (const auto& [Id, Label] : FileActions)
     {
@@ -1268,7 +1269,7 @@ void CommandUiBridge::refreshActionState()
     if (auto* Command = Action("hc.file.folderSize")) Command->setEnabled(Ready && Model->ProviderEnabled());
     for (const auto* Id : {"hc.file.shellMenu", "hc.file.context"})
         if (auto* Command = Action(Id)) Command->setEnabled(Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb));
-    for (const auto* Id : {"hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete", "hc.file.new", "hc.file.batchRename",
+    for (const auto* Id : {"hc.file.mklink", "hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete", "hc.file.new", "hc.file.batchRename",
         "hc.file.compare", "hc.file.edit", "hc.viewer.open", "hc.viewer.quick", "hc.file.permissions", "hc.archive.create", "hc.archive.extract", "hc.iso.create"})
         if (auto* Command = Action(Id)) Command->setEnabled(Ready);
     // These legacy handlers are still empty. Keep their IDs for old settings,
@@ -2176,6 +2177,7 @@ CommandContext CommandUiBridge::captureFiles(const QModelIndex& Index, bool Sing
 
 void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Source, const QModelIndex& Index)
 {
+    if (Id == "hc.file.mklink") { PromptLinkCreation(Index); return; }
     // Capture before showing a dialog: a nested Qt event loop can change tabs.
     CommandInvocation Invocation;
     Invocation.id_ = Id.toStdString(); Invocation.source_ = Source.toStdString();
@@ -2889,6 +2891,60 @@ void CommandUiBridge::PromptFileTools(bool Rename, const QModelIndex& Index)
     QStringList Paths;
     for (const auto& At : SelectedEntries(Model, Context)) if (At.isValid()) Paths.append(Model->GetFileFullPath(At));
     hc::ui::BatchRenameDialog Dialog(Paths, Supported, main_, Context.selectionManifest_, fileJobs_); Dialog.onChanged_ = Refresh; Dialog.exec();
+}
+
+void CommandUiBridge::PromptLinkCreation(const QModelIndex& Index)
+{
+    const auto Context = captureFiles(Index, false);
+    auto* Model = findModel(Context.tabId_);
+    if (!Model || !Model->GetRoot() || !Model->CanUseSnapshot()) return;
+    QString Destination, Base;
+    if (!Model->IsSearchResults() && (Context.location_.kind_ == LocatorKind::Local || Context.location_.kind_ == LocatorKind::Smb))
+        Base = QString::fromStdString(Context.location_.root_);
+    for (auto* Other : main_->findChildren<CmpPanel*>()) if (Other != PanelOf(Model))
+        if (auto* Target = PanelModel(Other); Target && Target->GetRoot() && !Target->IsSearchResults()) {
+            const auto Location = Target->GetRoot()->ReadLocation(Target->GetCurrentPathWithRoot());
+            if (Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb)
+                Destination = QDir::fromNativeSeparators(QString::fromStdString(Location.root_)) + '/';
+        }
+    std::vector<EntrySnapshot> Entries;
+    if (!Context.selectionManifest_) for (const auto& At : SelectedEntries(Model, Context)) {
+        const auto Item = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+        if (Item && Item->storageEntry_ && Item->Name_ != "..") Entries.push_back(*Item->storageEntry_);
+    }
+    using Loaded = Result<std::vector<EntrySnapshot>>;
+    auto* Watcher = new QFutureWatcher<Loaded>(this);
+    connect(Watcher, &QFutureWatcher<Loaded>::finished, this, [this, Watcher, Destination, Base] {
+        auto Result = Watcher->result(); Watcher->deleteLater();
+        if (!Result.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("링크 만들기"), hc::ui::ErrorText(Result.Failure())); return; }
+        if (Result.Value().empty()) return;
+        hc::links::Request Request; Request.destination_ = Destination; int Directories = 0;
+        for (const auto& Entry : Result.Value()) {
+            if ((Entry.locator_.kind_ != LocatorKind::Local && Entry.locator_.kind_ != LocatorKind::Smb)
+                || !Entry.locator_.nesting_.empty() || (Entry.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                hc::ui::MessageDialog::warning(main_, tr("링크 만들기"), tr("실제 파일과 폴더만 지원합니다. 기존 링크·압축 내부·가상 항목을 제외하세요.")); return;
+            }
+            Request.sources_.append(QString::fromStdString(Entry.locator_.root_)); if (Entry.directory_) ++Directories;
+        }
+        hc::ui::LinkCreationDialog Dialog(Request, Directories, Base, main_);
+        if (Dialog.exec() != QDialog::Accepted) return;
+        Request = Dialog.Request(); Request.elevation_ = fileJobs_->ElevationService();
+        const auto Folder = Request.targetIsName_ ? QFileInfo(Request.destination_).absolutePath() : Request.destination_;
+        Locator Affected{Folder.startsWith("//") || Folder.startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local, Folder.toStdString()};
+        auto Submitted = fileJobs_->Submit(hc::links::Prepare(Request), tr("링크 만들기"));
+        if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("링크 만들기"), hc::ui::ErrorText(Submitted.Failure())); return; }
+        affectedLocations_[Submitted.Value().id_] = {Affected};
+        hc::ui::FileOperationDialog::RememberTarget(Affected.kind_ == LocatorKind::Smb ? "smb" : "local", Request.destination_);
+    });
+    Watcher->setFuture(QtConcurrent::run([Entries = std::move(Entries), Manifest = Context.selectionManifest_]() mutable -> Loaded {
+        if (Manifest) for (uint64_t Offset = 0; Offset < Manifest->Count();) {
+            auto Page = Manifest->Read(Offset, 256, {}); if (!Page.HasValue()) return Page.Failure();
+            if (Page.Value().entries_.empty()) return Error{ErrorCategory::StaleRevision, "link-selection-changed"};
+            Offset += Page.Value().entries_.size();
+            Entries.insert(Entries.end(), Page.Value().entries_.begin(), Page.Value().entries_.end());
+        }
+        return Entries;
+    }));
 }
 
 void CommandUiBridge::AllowInternetBlock(const QModelIndex& Index)

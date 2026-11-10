@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "HyperCommander/UIs/dialogShell.hpp"
+#include "HyperCommander/UIs/linkCreationDialog.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/qtPathRow.hpp"
 #include "HyperCommander/UIs/fileToolsDialogs.hpp"
@@ -36,6 +37,131 @@ class DialogFoundationTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void linkCreationDialogRules()
+    {
+        QTemporaryDir Temp; QVERIFY(Temp.isValid());
+        const auto Source = Temp.filePath("source.txt"); QFile File(Source); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("content"); File.close();
+        hc::links::Request Request; Request.sources_ = {Source}; Request.destination_ = Temp.filePath("links/");
+        hc::ui::LinkCreationDialog Dialog(Request, 0, Temp.path()); Dialog.show();
+        auto* Parents = Dialog.findChild<QCheckBox*>("hc.mklink.parents"); QVERIFY(Parents); QVERIFY(Parents->isChecked());
+        QVERIFY(Dialog.findChild<QRadioButton*>("hc.mklink.hard")->isChecked());
+        auto* Relative = Dialog.findChild<QRadioButton*>("hc.mklink.relative"); QVERIFY(!Relative->isVisible());
+        QTRY_VERIFY(Dialog.AcceptButton()->isEnabled());
+        QCOMPARE(Dialog.Request().kind_, hc::links::Kind::Hard); QVERIFY(!Dialog.Request().targetIsName_);
+        Dialog.activateWindow(); QTest::qWait(50);
+        QTest::keyClick(&Dialog, Qt::Key_S, Qt::AltModifier);
+        QTRY_VERIFY(Dialog.findChild<QRadioButton*>("hc.mklink.symbolic")->isChecked());
+        QVERIFY(Relative->isVisible()); Relative->setChecked(true);
+        QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); QVERIFY(Dialog.Request().relative_);
+        const auto Capture = qEnvironmentVariable("HC_LINK_CAPTURE_DIRECTORY");
+        if (!Capture.isEmpty()) {
+            QVERIFY(QDir().mkpath(Capture));
+            QVERIFY(Dialog.grab().save(QDir(Capture).filePath("symbolic-dialog.png")));
+        }
+        Parents->setChecked(false); QTRY_VERIFY(Dialog.findChild<QLabel*>("hc.mklink.preview")->text().isEmpty()); QVERIFY(!Dialog.AcceptButton()->isEnabled());
+        Parents->setChecked(true); auto* Editor = Dialog.findChild<QLineEdit*>("hc.mklink.editor"); Editor->setText(Temp.filePath("named.txt"));
+        QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); QVERIFY(Dialog.Request().targetIsName_);
+        Editor->setText(Source); QTRY_VERIFY(!Dialog.AcceptButton()->isEnabled());
+        QDir().mkdir(Temp.filePath("folder"));
+        Request.sources_.append(Temp.filePath("folder"));
+        hc::ui::LinkCreationDialog Mixed(Request, 1, Temp.path());
+        QVERIFY(!Mixed.findChild<QRadioButton*>("hc.mklink.hard")); QVERIFY(!Mixed.findChild<QRadioButton*>("hc.mklink.junction"));
+        QVERIFY(Mixed.findChild<QRadioButton*>("hc.mklink.symbolic")->isChecked());
+        QCOMPARE(Mixed.findChild<QComboBox*>("hc.mklink.mode")->count(), 2);
+        Request.sources_ = {Temp.filePath("folder")};
+        hc::ui::LinkCreationDialog FolderDialog(Request, 1, Temp.path());
+        QVERIFY(!FolderDialog.findChild<QRadioButton*>("hc.mklink.hard"));
+        QVERIFY(FolderDialog.findChild<QRadioButton*>("hc.mklink.junction")->isChecked());
+    }
+    void nativeLinkCreation()
+    {
+        QTemporaryDir Temp; QVERIFY(Temp.isValid());
+        const auto Source = Temp.filePath("source.txt"), Hard = Temp.filePath("hard.txt"), Symbolic = Temp.filePath("symbolic.txt");
+        QFile File(Source); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("initial"); File.close();
+        QCOMPARE(hc::links::Create(Source, Hard, hc::links::Kind::Hard), DWORD(ERROR_SUCCESS));
+        QCOMPARE(hc::filetools::Inspect(Source).identity_, hc::filetools::Inspect(Hard).identity_);
+        QVERIFY(File.open(QIODevice::WriteOnly)); File.write("changed"); File.close();
+        QFile Alias(Hard); QVERIFY(Alias.open(QIODevice::ReadOnly)); QCOMPARE(Alias.readAll(), QByteArray("changed")); Alias.close();
+        QVERIFY(hc::links::Create(Source, Hard, hc::links::Kind::Hard) != ERROR_SUCCESS);
+        const auto SymlinkCode = hc::links::Create(Source, Symbolic, hc::links::Kind::Symbolic, true);
+        qInfo() << "Relative symbolic-link creation Windows result:" << SymlinkCode;
+        if (SymlinkCode == ERROR_SUCCESS) {
+            QFile Linked(Symbolic); QVERIFY(Linked.open(QIODevice::ReadOnly)); QCOMPARE(Linked.readAll(), QByteArray("changed")); Linked.close();
+            const auto Native = hc::filetools::NativePath(Symbolic);
+            hc::filetools::Handle Handle(CreateFileW(reinterpret_cast<LPCWSTR>(Native.utf16()), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+            QByteArray Buffer(MAXIMUM_REPARSE_DATA_BUFFER_SIZE, '\0'); DWORD Bytes = 0;
+            QVERIFY(DeviceIoControl(Handle.value_, FSCTL_GET_REPARSE_POINT, nullptr, 0, Buffer.data(), DWORD(Buffer.size()), &Bytes, nullptr));
+            DWORD Flags = 0; memcpy(&Flags, Buffer.constData() + 16, 4); QCOMPARE(Flags, DWORD(1));
+        } else QCOMPARE(SymlinkCode, DWORD(ERROR_PRIVILEGE_NOT_HELD));
+        const auto Folder = Temp.filePath("folder"), Junction = Temp.filePath("junction"); QVERIFY(QDir().mkdir(Folder));
+        QCOMPARE(hc::links::Create(Folder, Junction, hc::links::Kind::Junction), DWORD(ERROR_SUCCESS));
+        QFile Child(QDir(Junction).filePath("child.txt")); const bool Opened = Child.open(QIODevice::WriteOnly); Child.close();
+        const bool Shared = QFileInfo::exists(QDir(Folder).filePath("child.txt"));
+        const bool Removed = RemoveDirectoryW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(Junction).utf16()));
+        QVERIFY(Opened); QVERIFY(Shared); QVERIFY(Removed); QVERIFY(QDir(Folder).exists());
+        QCOMPARE(hc::links::Validate(Folder, QDir(Folder).filePath("loop"), hc::links::Kind::Junction, false), DWORD(ERROR_INVALID_PARAMETER));
+        QCOMPARE(hc::links::Validate(Temp.path().left(3), Temp.filePath("root-loop"), hc::links::Kind::Junction, false), DWORD(ERROR_INVALID_PARAMETER));
+    }
+    void linkJobCollisionAndCancellation()
+    {
+        using namespace hc::operations;
+        QTemporaryDir Temp; QVERIFY(Temp.isValid());
+        const auto Source = Temp.filePath("source.txt"); QFile File(Source);
+        QVERIFY(File.open(QIODevice::WriteOnly)); File.write("keep"); File.close();
+        hc::links::Request Request; Request.sources_ = {Source}; Request.targetIsName_ = true; Request.kind_ = hc::links::Kind::Hard;
+        Request.destination_ = Temp.filePath("copy.txt"); QVERIFY(QFile::copy(Source, Request.destination_));
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Prepared = hc::links::Prepare(Request);
+        const auto Job = Scheduler.Submit(std::move(Prepared.request_), std::move(Prepared.task_));
+        QVERIFY(Job.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().state_, JobState::WaitingForUser);
+        const auto Ask = Scheduler.Snapshot(Job.Value().id_).Value().interaction_;
+        QVERIFY(Ask); QCOMPARE(Ask->kind_, InteractionKind::Overwrite);
+        QVERIFY(std::find(Ask->choices_.begin(), Ask->choices_.end(), InteractionChoice::Replace) == Ask->choices_.end());
+        QVERIFY(Scheduler.Reply(Job.Value().id_, {Ask->id_, InteractionChoice::RenameIncoming}).HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Job.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QCOMPARE(Job.Value().completion_.get().snapshot_.completedItems_, uint64_t(1));
+        QVERIFY(QFileInfo::exists(Temp.filePath("copy (2).txt")));
+        QFile Existing(Request.destination_); QVERIFY(Existing.open(QIODevice::ReadOnly)); QCOMPARE(Existing.readAll(), QByteArray("keep"));
+        Prepared = hc::links::Prepare(Request);
+        const auto Cancelled = Scheduler.Submit(std::move(Prepared.request_), std::move(Prepared.task_));
+        QVERIFY(Cancelled.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Cancelled.Value().id_).Value().state_, JobState::WaitingForUser);
+        QVERIFY(Scheduler.Cancel(Cancelled.Value().id_).HasValue());
+        QVERIFY(Cancelled.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Cancelled.Value().completion_.get().snapshot_.state_, JobState::Cancelled);
+    }
+    void linkJobCommitFailureRetry()
+    {
+        using namespace hc::operations;
+        QTemporaryDir Temp; QVERIFY(Temp.isValid());
+        const auto Source = Temp.filePath("source.txt"); QFile File(Source);
+        QVERIFY(File.open(QIODevice::WriteOnly)); File.write("retry"); File.close();
+        // A missing destination parent passes lexical validation but fails native creation.
+        // Disable automatic parent creation to exercise recovery after the commit gate.
+        hc::links::Request Request; Request.sources_ = {Source}; Request.destination_ = Temp.filePath("missing/created.txt");
+        Request.targetIsName_ = true; Request.kind_ = hc::links::Kind::Hard; Request.createParents_ = false;
+        QCOMPARE(hc::links::Validate(Source, Request.destination_, Request.kind_, false), DWORD(0));
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        auto Prepared = hc::links::Prepare(Request);
+        const auto Job = Scheduler.Submit(std::move(Prepared.request_), std::move(Prepared.task_));
+        QVERIFY(Job.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Job.Value().id_).Value().state_, JobState::WaitingForUser);
+        const auto Ask = Scheduler.Snapshot(Job.Value().id_).Value().interaction_;
+        QVERIFY(Ask); QCOMPARE(Ask->kind_, InteractionKind::RetryFailure);
+        QVERIFY(Ask->reason_.starts_with("win32:"));
+        const auto Presented = hc::ui::DescribeError(QString::fromStdString(Ask->reason_));
+        QCOMPARE(Presented.domain_, hc::ui::ErrorDomain::Win32); QVERIFY(Presented.nativeCode_.has_value());
+        QVERIFY(!Presented.description_.isEmpty()); QVERIFY(!QFileInfo::exists(Request.destination_));
+        QVERIFY(QDir().mkpath(Temp.filePath("missing")));
+        QVERIFY(Scheduler.Reply(Job.Value().id_, {Ask->id_, InteractionChoice::Retry}).HasValue());
+        QVERIFY(Job.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        QCOMPARE(Job.Value().completion_.get().snapshot_.state_, JobState::Completed);
+        QCOMPARE(Job.Value().completion_.get().snapshot_.completedItems_, uint64_t(1));
+        QVERIFY(QFileInfo::exists(Request.destination_));
+    }
     void compactPathRows_data()
     {
         QTest::addColumn<QString>("Path"); QTest::addColumn<QString>("Name");
@@ -123,7 +249,7 @@ private slots:
             Dialog.AcceptButton()->setFocus(); QTest::keyClick(Dialog.AcceptButton(), Key);
             QCOMPARE(Dialog.result(), int(Key == Qt::Key_C ? QDialog::Rejected : QDialog::Accepted)); QVERIFY(!Dialog.isVisible());
         }
-        for (const auto Key : {Qt::Key_C, Qt::Key_S}) {
+        for (const auto Key : {Qt::Key_C, Qt::Key_X}) {
             hc::ui::ArchiveExtractDialog Dialog({"sample.zip"}, Temp.filePath("target"), false);
             Dialog.show(); QVERIFY(QTest::qWaitForWindowExposed(&Dialog)); QApplication::setActiveWindow(&Dialog);
             QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); Dialog.AcceptButton()->setFocus(); QTest::keyClick(Dialog.AcceptButton(), Key);

@@ -34,7 +34,7 @@ namespace hc::operations
     };
     enum class JobKind { Unknown, Copy, Move, Delete, Recycle, Extract, ArchiveCreate, ArchiveSeparate, IsoCreate,
         ArchiveAdd, ArchiveMove, ArchiveDelete, ArchiveRename, ArchiveMakeDirectory, Rename, BatchRename,
-        RenameUndo, RenameRedo, RenameResume, RenameRestore, MakeFile, MakeDirectory, SecurityChange, SecurityRestore };
+        RenameUndo, RenameRedo, RenameResume, RenameRestore, MakeFile, MakeDirectory, SecurityChange, SecurityRestore, MakeLink };
     enum class JobPhase { None, Preparing, Copying, Verifying, RemovingSource, PreparingInputs, BuildingArchive,
         SavingOutput, RewritingArchive, Committing, Inspecting, TemporaryNames, ApplyingNames, RestoringNames,
         Creating, BackingUpSecurity, ApplyingSecurity, RestoringSecurity, Deleting };

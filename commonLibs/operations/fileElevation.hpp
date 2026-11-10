@@ -4,7 +4,7 @@
 
 namespace hc::operations
 {
-    enum class FileElevationAction { Copy, Remove, Recycle, Rename, MakeDirectory, CreateContent, SecurityChange, SecurityRestore, Metadata };
+    enum class FileElevationAction { Copy, Remove, Recycle, Rename, MakeDirectory, CreateContent, SecurityChange, SecurityRestore, Metadata, HardLink, SymbolicLink, Junction };
     struct FileElevationRequest
     {
         std::string jobId_;
@@ -26,6 +26,7 @@ namespace hc::operations
         // Security changes are independent, explicit jobs, never a side effect
         // of selecting Elevate for a copy, move, delete or create operation.
         bool grantAccess_ = false;
+        bool relativeLink_ = false;
         std::string backupPath_, backupIdentity_, securityDigest_;
     };
     struct FileElevationStatus

@@ -90,7 +90,7 @@ namespace hc::operations
             const auto Metadata = Object["metadata"].toObject();
             Snapshot.metadata_ = {Metadata["label"].toString().toStdString(), Metadata["source"].toString().toStdString(), Metadata["destination"].toString().toStdString(), Metadata["options"].toString().toStdString(), Metadata["retryOf"].toString().toStdString()};
             const auto Kind = Metadata["kind"].toInt();
-            if (Kind >= 0 && Kind <= int(JobKind::SecurityRestore)) Snapshot.metadata_.kind_ = JobKind(Kind);
+            if (Kind >= 0 && Kind <= int(JobKind::MakeLink)) Snapshot.metadata_.kind_ = JobKind(Kind);
             Snapshot.progress_.source_ = Object["currentSource"].toString().toStdString();
             Snapshot.progress_.destination_ = Object["currentDestination"].toString().toStdString();
             const auto Phase = Object["phase"].toInt();

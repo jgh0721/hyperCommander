@@ -61,6 +61,8 @@ set(PROJECT_UI_SRC
         ../UniqueLibs/archiveExtractJob.cpp
         ../UniqueLibs/archiveExtractJob.hpp
         ../UniqueLibs/fileBatchOperations.hpp
+        UIs/linkCreationDialog.cpp
+        ../UniqueLibs/linkCreation.cpp
         UIs/dialogShell.cpp
         UIs/nativePathCompletion.cpp
         UIs/nativePathCompletion.hpp

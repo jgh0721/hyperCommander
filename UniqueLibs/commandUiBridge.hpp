@@ -38,6 +38,7 @@ public:
     hc::storage::CommandContext Capture(const QModelIndex& Index = {});
     bool DispatchFolder(const QModelIndex& Index);
     void PromptFileOperation(const QString& Id, const QString& Source, const QModelIndex& Index = {});
+    void PromptLinkCreation(const QModelIndex& Index = {});
     void PromptFileTools(bool Rename, const QModelIndex& Index = {});
     void PromptFileAttributes(const QModelIndex& Index = {});
     void AllowInternetBlock(const QModelIndex& Index = {});

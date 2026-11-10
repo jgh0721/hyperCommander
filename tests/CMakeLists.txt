@@ -779,6 +779,8 @@ qt_add_executable(hc_dialog_foundation_tests
     ../UniqueLibs/nativeFileElevation.cpp ../UniqueLibs/nativeWritableStorage.cpp
     ../UniqueLibs/storageProviders.cpp ../commonLibs/operations/fileOperation.cpp
     ../HyperCommander/UIs/renameHistoryDialog.cpp
+    ../HyperCommander/UIs/linkCreationDialog.cpp
+    ../UniqueLibs/linkCreation.cpp
     tstDialogFoundation.cpp
     ../HyperCommander/UIs/fileToolsDialogs.cpp
     ../HyperCommander/UIs/fileToolsDialogs.hpp

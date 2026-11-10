@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "nativeFileElevation.hpp"
+#include "nativeLinks.hpp"
 #include "permissionService.hpp"
 #include "storageProviders.hpp"
 #include "nativeWritableStorage.hpp"
@@ -185,7 +186,7 @@ void Run(const std::shared_ptr<SessionState>& S) {
         for(const auto& E:(*Message)["cleanup"].toArray())Status.cleanupErrors_.push_back(DecodeError(E.toObject()));
         if((*Message).contains("destination")) {auto Reader=MakeNativeReadProvider(LocatorKind::Local);auto Out=Verify((*Message)["destination"].toObject(),Reader,{});if(Out.HasValue())Status.destination_=Out.Value();else if(!Status.error_)Status.error_=Out.Failure();}
         if(Status.finished_) {
-            const auto Record=QJsonObject{{"utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},{"operation",QStringList{QObject::tr("복사"),QObject::tr("삭제"),QObject::tr("휴지통"),QObject::tr("이름 변경"),QObject::tr("폴더 생성"),QObject::tr("파일 생성"),QObject::tr("소유권·권한 변경"),QObject::tr("원래 권한 복원")}.value(S->request_["action"].toInt())},
+            const auto Record=QJsonObject{{"utc",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},{"operation",QStringList{QObject::tr("복사"),QObject::tr("삭제"),QObject::tr("휴지통"),QObject::tr("이름 변경"),QObject::tr("폴더 생성"),QObject::tr("파일 생성"),QObject::tr("소유권·권한 변경"),QObject::tr("원래 권한 복원"),QObject::tr("속성 변경"),QObject::tr("하드링크 생성"),QObject::tr("소프트링크 생성"),QObject::tr("정션 생성")}.value(S->request_["action"].toInt())},
                 {"target",S->request_["destination"]},{"jobId",S->request_["jobId"]},{"code",Status.error_?1:0},{"error",Status.error_?Text(Status.error_->code_):QString()},{"detail",Text(Status.detail_)}};
             if(!AppendHistory(Record))Status.cleanupErrors_.push_back(Failure(ERROR_WRITE_FAULT,"permission-history-save-failed"));
             {std::lock_guard Lock(S->mutex_);S->status_=Status;S->done_=true;S->changed_.notify_all();}return;
@@ -247,6 +248,8 @@ class Service final:public IFileElevationService {
 public:
     explicit Service(FileElevationLauncher Launcher):launcher_(std::move(Launcher)){}
     bool CanExecute(const FileElevationRequest& R) const override {
+        if ((R.action_ == FileElevationAction::HardLink || R.action_ == FileElevationAction::SymbolicLink || R.action_ == FileElevationAction::Junction)
+            && (!R.source_ || (R.source_->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) || R.expected_.exists_)) return false;
         if (R.recursiveRemoval_ && (!R.source_ || !R.source_->directory_
             || (R.source_->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) || !R.source_->id_.revision_
             || R.destination_ != R.source_->locator_ || !R.maxEntries_
@@ -274,6 +277,7 @@ public:
             {"content",QString::fromLatin1(QByteArray(reinterpret_cast<const char*>(R.content_.data()),qsizetype(R.content_.size())).toBase64())}};
         const bool Streamed=R.source_&&(R.source_->locator_.kind_!=LocatorKind::Local||!Local(Text(R.source_->locator_.root_)));
         Object["streamed"]=Streamed;
+        Object["relativeLink"] = R.relativeLink_;
         if (R.action_ == FileElevationAction::Metadata) {
             Object["setMask"] = int(R.metadataPatch_.setMask_); Object["clearMask"] = int(R.metadataPatch_.clearMask_);
             if (R.metadataPatch_.modifiedUtcMs_) Object["mtime"] = QString::number(*R.metadataPatch_.modifiedUtcMs_);
@@ -350,7 +354,7 @@ DWORD ExecuteFileElevation(const QJsonObject& Bootstrap) {
     if (!FullRequest) return ERROR_INVALID_DATA;
     R = *FullRequest;
     if (!Local(R["destination"].toString()) || R["jobId"].toString().isEmpty()) return ERROR_INVALID_PARAMETER;
-    const int ActionValue=R["action"].toInt(-1);if(ActionValue<0||ActionValue>int(FileElevationAction::Metadata))return ERROR_NOT_SUPPORTED;
+    const int ActionValue=R["action"].toInt(-1);if(ActionValue<0||ActionValue>int(FileElevationAction::Junction))return ERROR_NOT_SUPPORTED;
     const auto Action=FileElevationAction(ActionValue);
     if((Action==FileElevationAction::SecurityChange||Action==FileElevationAction::SecurityRestore)&&R["callerSid"].toString()!=Sid(Parent.value_))return ERROR_INVALID_OWNER;
     FileElevationStatus Status;std::vector<std::unique_ptr<filetools::Handle>> Pins;DWORD PinError=0;
@@ -430,6 +434,8 @@ DWORD ExecuteFileElevation(const QJsonObject& Bootstrap) {
         const auto Data=QByteArray::fromBase64(R["content"].toString().toLatin1(),QByteArray::AbortOnBase64DecodingErrors);
         if(Data.size()>8192)Status.error_=Failure(ERROR_INVALID_PARAMETER,"elevation-content");else Task=std::make_unique<filetools::CreateTask>(Writer,Destination,Data);
     } else if(!Status.error_&&(Action==FileElevationAction::Remove||Action==FileElevationAction::Recycle||Action==FileElevationAction::Rename||Action==FileElevationAction::SecurityChange||Action==FileElevationAction::SecurityRestore)&&!Source)Status.error_=Failure(ERROR_INVALID_PARAMETER,"elevation-source-required");
+    const bool LinkAction = Action == FileElevationAction::HardLink || Action == FileElevationAction::SymbolicLink || Action == FileElevationAction::Junction;
+    if (LinkAction && (!Source || R["expectedExists"].toBool() || (Source->attributes_ & FILE_ATTRIBUTE_REPARSE_POINT))) Status.error_ = Failure(ERROR_INVALID_PARAMETER, "link-source-required");
     auto NextAdvance=std::chrono::steady_clock::time_point::min();
     bool Gate=false;JobState Final=JobState::Failed;const auto End=std::chrono::steady_clock::now()+std::chrono::minutes(15);
     while(std::chrono::steady_clock::now()<End&&WaitForSingleObject(Parent.value_,0)!=WAIT_OBJECT_0) {
@@ -463,7 +469,12 @@ DWORD ExecuteFileElevation(const QJsonObject& Bootstrap) {
                     }
                     if(!Status.error_&&Source){auto Checked=Verify(R["source"].toObject(),Reader,Context,LeafRemoval);if(!Checked.HasValue())Status.error_=Checked.Failure();}
                     if(!Status.error_) {
-                        if(Action==FileElevationAction::Metadata){auto Done=Writer->PatchMetadata(*Source,Patch,Context);if(!Done.HasValue())Status.error_=Done.Failure();else Status.destinationCommitted_=true;}
+                        if (LinkAction) {
+                            const auto Type = Action == FileElevationAction::HardLink ? links::Kind::Hard : Action == FileElevationAction::Junction ? links::Kind::Junction : links::Kind::Symbolic;
+                            const auto Code = links::Create(Text(Source->locator_.root_), Text(Destination.root_), Type, R["relativeLink"].toBool());
+                            if (Code) Status.error_ = Failure(Code, "link-create"); else Status.destinationCommitted_ = true;
+                        }
+                        else if(Action==FileElevationAction::Metadata){auto Done=Writer->PatchMetadata(*Source,Patch,Context);if(!Done.HasValue())Status.error_=Done.Failure();else Status.destinationCommitted_=true;}
                         else if(Action==FileElevationAction::MakeDirectory){auto Done=Writer->MakeDirectory(Destination,Context);if(!Done.HasValue())Status.error_=Done.Failure();else Status.destinationCommitted_=true;}
                         else if(Action==FileElevationAction::Rename){auto Done=Writer->Rename(*Source,Destination,Context);if(!Done.HasValue())Status.error_=Done.Failure();else Status.destinationCommitted_=Status.sourceRemoved_=true;}
                         else if(Action==FileElevationAction::Recycle){auto Done=Writer->Recycle(*Source,Context);if(!Done.HasValue())Status.error_=Done.Failure();else {Status.sourceRemoved_=true;Status.cleanupErrors_=Done.Value().cleanupErrors_;}}

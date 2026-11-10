@@ -165,7 +165,15 @@ namespace hc::ui
                 if (Code.startsWith(QLatin1String(Prefix))) Code.remove(0, qsizetype(qstrlen(Prefix)));
             const auto Presented = DescribeError(Code);
             messageText_.replace(Presented.Text(), Presented.Summary());
-            ErrorDetails = tr("%1 (%2)").arg(Presented.description_.simplified(), Presented.code_);
+            if (snapshot_.metadata_.kind_ == JobKind::MakeLink) {
+                // Keep the native description in the wrapping body; the footer must not
+                // hide the diagnostic code behind an elided path or translated message.
+                messageText_ = Presented.Summary();
+                if (Presented.domain_ == ErrorDomain::Win32
+                    && Presented.nativeCode_ == ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS)
+                    messageText_ += tr("\n클라우드 동기화 정책과 호환되지 않는 하드링크입니다. 작업을 취소한 뒤 소프트링크를 선택하거나, 동기화 서비스가 허용하는 위치를 사용하세요.");
+                ErrorDetails = tr("오류 코드: %1").arg(Presented.code_);
+            } else ErrorDetails = tr("%1 (%2)").arg(Presented.description_.simplified(), Presented.code_);
         }
         auto* Layout = new QVBoxLayout(this); Layout->setSpacing(16); Layout->setAlignment(Qt::AlignTop);
         heading_ = new QLabel(headingText_, this); heading_->setObjectName("hc.jobs.interaction.heading"); heading_->setWordWrap(true); heading_->setTextFormat(Qt::PlainText);
@@ -343,7 +351,8 @@ namespace hc::ui
                 auto* Options = addButton(Secondary, tr("옵션(&M)"), "hc.jobs.conflictOptions", [] {});
                 auto* Menu = new QMenu(Options);
                 if (has(InteractionChoice::RenameIncoming)) {
-                    auto* Action = Menu->addAction(tr("자동 이름 변경: 복사할 파일(&F)"));
+                    auto* Action = Menu->addAction(snapshot_.metadata_.kind_ == JobKind::MakeLink
+                        ? tr("자동 이름 변경: 만들 링크(&F)") : tr("자동 이름 변경: 복사할 파일(&F)"));
                     connect(Action, &QAction::triggered, this, [this] { choose(InteractionChoice::RenameIncoming); });
                     new QShortcut(QKeySequence(hc::defaults::AuxiliaryShortcut("conflict.renameIncoming")), actions_, [this] { choose(InteractionChoice::RenameIncoming); });
                 }

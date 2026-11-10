@@ -120,6 +120,7 @@ namespace
         case JobKind::RenameRedo: return QObject::tr("이름 변경 다시 실행");
         case JobKind::RenameResume: return QObject::tr("중단된 이름 변경 이어 실행");
         case JobKind::RenameRestore: return QObject::tr("중단된 이름 변경 원래 이름 복구");
+        case JobKind::MakeLink: return QObject::tr("링크 만들기");
         case JobKind::MakeFile: return QObject::tr("새 파일");
         case JobKind::MakeDirectory: return QObject::tr("새 폴더");
         case JobKind::SecurityChange: return QObject::tr("소유권·권한 변경");
@@ -164,7 +165,7 @@ namespace
         case JobKind::RenameResume: case JobKind::RenameRestore:
             return {JobPhase::Inspecting, JobPhase::TemporaryNames,
                 Kind == JobKind::RenameUndo || Kind == JobKind::RenameRestore ? JobPhase::RestoringNames : JobPhase::ApplyingNames};
-        case JobKind::MakeFile: case JobKind::MakeDirectory:
+        case JobKind::MakeLink: case JobKind::MakeFile: case JobKind::MakeDirectory:
             return {JobPhase::Preparing, JobPhase::Creating, JobPhase::Verifying};
         case JobKind::SecurityChange: return {JobPhase::BackingUpSecurity, JobPhase::ApplyingSecurity, JobPhase::Verifying};
         case JobKind::SecurityRestore: return {JobPhase::Inspecting, JobPhase::RestoringSecurity, JobPhase::Verifying};
@@ -178,7 +179,7 @@ namespace
         const auto& Progress = Snapshot.progress_;
         if (Kind == JobKind::Delete || (Kind == JobKind::Unknown && Progress.deletedFiles_))
             return Progress.deletedFiles_ ? RateMode::Files : RateMode::Items;
-        if (Kind == JobKind::Recycle || Kind == JobKind::Rename || Kind == JobKind::BatchRename
+        if (Kind == JobKind::MakeLink || Kind == JobKind::Recycle || Kind == JobKind::Rename || Kind == JobKind::BatchRename
             || Kind == JobKind::RenameUndo || Kind == JobKind::RenameRedo || Kind == JobKind::RenameResume || Kind == JobKind::RenameRestore)
             return RateMode::Items;
         if (Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate || Kind == JobKind::IsoCreate)
@@ -1113,7 +1114,7 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const bool Delete = deletionJob(Snapshot) || Kind == JobKind::ArchiveDelete;
     const bool Rename = Kind == JobKind::Rename || Kind == JobKind::ArchiveRename || Kind == JobKind::BatchRename
         || Kind == JobKind::RenameUndo || Kind == JobKind::RenameRedo || Kind == JobKind::RenameResume || Kind == JobKind::RenameRestore;
-    const bool Create = Kind == JobKind::MakeFile || Kind == JobKind::MakeDirectory || Kind == JobKind::ArchiveMakeDirectory;
+    const bool Create = Kind == JobKind::MakeLink || Kind == JobKind::MakeFile || Kind == JobKind::MakeDirectory || Kind == JobKind::ArchiveMakeDirectory;
     const bool Security = Kind == JobKind::SecurityChange || Kind == JobKind::SecurityRestore;
     const bool ArchiveCreation = Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate || Kind == JobKind::IsoCreate;
     const auto ActivePhase=ArchiveCreation&&Progress.phase_==JobPhase::PreparingInputs&&Progress.currentTotal_?tr("입력 파일 준비"):PhaseText(Progress.phase_, Kind);

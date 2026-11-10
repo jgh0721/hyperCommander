@@ -94,6 +94,8 @@ DECLARE_CMD( BuiltInCMD_Clipboard_Paste, QObject::tr("클립보드"), "hc.clipbo
 
 DECLARE_CMD( BuiltInCMD_OPs_FileCopy,             QObject::tr( "동작" ),    "hc.file.copy",
              Qt::ControlModifier | Qt::Key_C,                           QObject::tr( "다른 패널로 복사" ) );
+DECLARE_CMD( BuiltInCMD_OPs_MkLink, QObject::tr("동작"), "hc.file.mklink",
+             Qt::ControlModifier | Qt::Key_L, QObject::tr("링크 만들기") );
 DECLARE_CMD( BuiltInCMD_OPs_RenameSingleFile,     QObject::tr( "동작" ),    "hc.file.rename",
              Qt::Key_F2,                                                QObject::tr( "이름 변경 · 대화상자 또는 목록에서 편집" ) );
 DECLARE_CMD( BuiltInCMD_OPs_Lister,               QObject::tr( "동작" ),    "hc.viewer.open",
@@ -416,6 +418,7 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_OPs_UnicodeNormalization,
     BuiltInCMD_OPs_SetAttrib,
     BuiltInCMD_OPs_AllowInternetBlock,
+    BuiltInCMD_OPs_MkLink,
 
     BuiltInCMD_Sel_Inverse,
     BuiltInCMD_Sel_Select, BuiltInCMD_Sel_SelectKeypad,
@@ -1714,6 +1717,11 @@ namespace hc::defaults
             "          \"id\": \"mkdir\",\n"
             "          \"command\": \"hc.file.mkdir\",\n"
             "          \"label\": \"새 폴더\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"mklink\",\n"
+            "          \"command\": \"hc.file.mklink\",\n"
+            "          \"label\": \"링크 만들기…\"\n"
             "        },\n"
             "        {\n"
             "          \"id\": \"newfile\",\n"
