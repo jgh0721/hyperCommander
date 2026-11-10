@@ -216,7 +216,6 @@ bool CCommandMgr::InvokeCommand( const QString& Id, const QModelIndex& CursorInd
         { QLatin1String( "hc.navigate.refresh" ),      &CCommandMgr::NavigateRefresh },
         { QLatin1String( "hc.navigate.favorites" ),    &CCommandMgr::NavigateFavorites },
         { QLatin1String( "hc.panel.switch" ),          &CCommandMgr::PanelSwitch },
-        { QLatin1String( "hc.file.context" ),          &CCommandMgr::FileContext },
         { QLatin1String( "hc.file.edit" ),             &CCommandMgr::FileEdit },
     };
     const auto CommandId = hc::ui::CommandId( Id );
@@ -394,11 +393,6 @@ DEFINE_HC_COMMAND_EX( CCommandMgr, NavigatePath )
 }
 
 DEFINE_HC_COMMAND( CCommandMgr, PanelSwitch )
-{
-    QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
-}
-
-DEFINE_HC_COMMAND( CCommandMgr, FileContext )
 {
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ) );
 }

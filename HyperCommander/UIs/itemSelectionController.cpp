@@ -632,4 +632,9 @@ ItemSelectionController::ItemSelectionController(CGridView* View) : QObject(View
 }
 ItemSelectionController::~ItemSelectionController() = default;
 void ItemSelectionController::Execute(const QString& Command) { state_->execute(Command.section('.', 2)); }
+void ItemSelectionController::RememberPrevious(const QStringList& Keys)
+{
+    if (Keys.isEmpty()) return;
+    state_->previous_ = Keys; state_->hasPrevious_ = true; state_->historyLocation_ = state_->locationKey();
+}
 } // namespace hc::ui

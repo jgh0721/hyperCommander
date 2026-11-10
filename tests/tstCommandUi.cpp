@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 #include <QPushButton>
 #include "UniqueLibs/internetFile.hpp"
+#include "UniqueLibs/fileContextProbes.hpp"
 
 using namespace hc::ui;
 namespace {
@@ -298,8 +299,10 @@ private slots:
                 const QKeyCombination Key(Qt::ControlModifier | Qt::AltModifier, Item.second);
                 QCOMPARE(CommandId(EffectiveShortcuts(General, {}).value(Key)), Item.first);
                 QCOMPARE(QString(FindCommand(Item.first).Name), Item.first);
+                // 단축키로는 매개변수 없이 실행된다. 붙여넣기의 destination(문맥 메뉴 "이 폴더에 붙여넣기")은 선택 매개변수다.
                 QCOMPARE(std::count_if(Descriptors.begin(), Descriptors.end(), [&](const auto& Descriptor) {
-                    return Descriptor.id_ == Item.first.toStdString() && Descriptor.parameters_.empty();
+                    return Descriptor.id_ == Item.first.toStdString() && std::none_of(Descriptor.parameters_.begin(), Descriptor.parameters_.end(),
+                        [](const auto& Parameter) { return Parameter.second.required_; });
                 }), 1);
                 const auto Text = QKeySequence(Key).toString(QKeySequence::PortableText);
                 QVERIFY(!EffectiveShortcuts(General, {{Text, QJsonValue::Null}}).contains(Key));
@@ -367,6 +370,120 @@ private slots:
             QCOMPARE(CommandId(Override.value(Return)), QString("hc.file.copy"));
             QVERIFY(!EffectiveShortcuts(General, {{"Shift+Return", QJsonValue::Null}}).contains(Return));
         }
+    }
+    void fileContextMenuCommands()
+    {
+        // 설계 261110 3절: hc.file.context → hc.file.contextMenu, TC cm_ContextMenu 는 탐색기 메뉴.
+        QVERIFY(!FindCommand("hc.file.contextMenu").Name.isEmpty());
+        QCOMPARE(CommandId("hc.file.context"), QString("hc.file.contextMenu"));
+        QCOMPARE(CommandId("HC.FILE.CONTEXT"), QString("hc.file.contextMenu"));
+        QCOMPARE(CommandId("cm_ContextMenu"), QString("hc.file.shellMenu"));
+        QCOMPARE(QString(FindCommand("hc.file.context").Name), QString("hc.file.contextMenu"));
+        for (const auto& Preset : {QString("legacy"), QString("prototype"), QString("product")}) {
+            const auto Keys = EffectiveShortcuts({{"shortcutPreset", Preset}}, {});
+            QCOMPARE(CommandId(Keys.value(QKeyCombination(Qt::Key_Menu))), QString("hc.file.contextMenu"));
+            QCOMPARE(CommandId(Keys.value(QKeyCombination(Qt::ShiftModifier, Qt::Key_F10))), QString("hc.file.contextMenu"));
+            QCOMPARE(CommandId(Keys.value(QKeyCombination(Qt::ShiftModifier, Qt::Key_Return))), QString("hc.file.shellMenu"));
+        }
+        QJsonObject Document{{"shortcuts", QJsonObject{{"Ctrl+Alt+M", "hc.file.context"}, {"Ctrl+Alt+N", "cm_ContextMenu"}}},
+            {"general", QJsonObject{{"functionCommands", QJsonArray{"hc.file.context"}}, {"globalShortcuts", QJsonObject{{"hc.file.context", "Ctrl+Alt+Shift+M"}}}}}};
+        hc::defaults::MigrateCommandSettings(Document);
+        QCOMPARE(Document["shortcuts"].toObject()["Ctrl+Alt+M"].toString(), QString("hc.file.contextMenu"));
+        QCOMPARE(Document["shortcuts"].toObject()["Ctrl+Alt+N"].toString(), QString("hc.file.shellMenu"));
+        QCOMPARE(Document["general"].toObject()["functionCommands"].toArray()[0].toString(), QString("hc.file.contextMenu"));
+        const auto Global = Document["general"].toObject()["globalShortcuts"].toObject();
+        QVERIFY(!Global.contains("hc.file.context")); QCOMPARE(Global["hc.file.contextMenu"].toString(), QString("Ctrl+Alt+Shift+M"));
+        for (const auto* Id : {"hc.clipboard.copyPath", "hc.navigate.linkTarget", "hc.file.runAsAdmin", "hc.file.openWith", "hc.file.properties", "hc.file.hash", "hc.menu.contextEdit"})
+            QVERIFY2(!FindCommand(Id).Name.isEmpty(), Id);
+        QCOMPARE(hc::defaults::DefaultValue("general/filePanel/rightClickMenu").toString(), QString("hc"));
+    }
+    void fileContextEvaluation()
+    {
+        // 설계 261110 5절 · 11.1절 4~5: 이름 · 속성 · 태그 · Zone → 기본 동작 · 제안 순서 · 상한 · 칩 · 가속 문자.
+        using namespace hc::filecontext;
+        ProbeInputs Inputs;
+        Inputs.archive_ = [](const QString& Name) { return Extension(Name) == "zip" || Extension(Name) == "iso"; };
+        Inputs.playable_ = [](const QString& Name) { return Extension(Name) == "flac"; };
+        const auto Item = [](const QString& Name, quint32 Attributes = 0) {
+            TargetItem Value; Value.name_ = Name; Value.path_ = "C:\\t\\" + Name; Value.attributes_ = Attributes; Value.directory_ = Attributes & 0x10u; Value.size_ = 10; return Value;
+        };
+        const auto One = [](const TargetItem& Value, Place At = Place::Local) { ContextTarget Target; Target.place_ = At; Target.items_ = {Value}; Target.totalCount_ = 1; return Target; };
+        QHash<QString, QChar> Mnemonics; QStringList Unstable;
+        const auto Ids = [&Mnemonics, &Unstable](const ProbeResult& Result) {
+            QStringList Values;
+            for (const auto& Suggestion : Result.suggestions_) {
+                Values << Suggestion.commandId_;
+                if (Mnemonics.contains(Suggestion.commandId_) && Mnemonics.value(Suggestion.commandId_) != Suggestion.mnemonic_) Unstable << Suggestion.commandId_;
+                Mnemonics.insert(Suggestion.commandId_, Suggestion.mnemonic_);
+            }
+            return Values;
+        };
+        auto Exe = Item("setup-tool.exe"); Exe.zone_ = Probe::Ready; Exe.zoneValue_ = 3;
+        auto Result = EvaluateContext(One(Exe), Inputs);
+        QCOMPARE(Result.default_.kind_, DefaultKind::Run);
+        QCOMPARE(Ids(Result), (QStringList{"hc.file.ads.allowInternetBlock", "hc.file.runAsAdmin"}));
+        QVERIFY(Result.suggestions_.front().toolTip_.contains(QObject::tr("출처를 확인한 뒤 해제하세요")));
+        QCOMPARE(Result.badges_.front().tone_, Tone::Warn);
+        Exe.zoneValue_ = 2; QCOMPARE(Ids(EvaluateContext(One(Exe), Inputs)), QStringList{"hc.file.runAsAdmin"});
+        Exe.zone_ = Probe::Pending; Result = EvaluateContext(One(Exe), Inputs);
+        QVERIFY(Result.waiting_); QCOMPARE(Result.pending_.size(), size_t(1)); QCOMPARE(Result.pending_.front().field_, ZoneField);
+        Result = EvaluateContext(One(Exe, Place::Archive), Inputs); QVERIFY(!Result.waiting_); QVERIFY(Result.pending_.empty());
+        auto Cloud = Exe; Cloud.attributes_ = 0x00400000u; QVERIFY(EvaluateContext(One(Cloud), Inputs).pending_.empty());
+        Result = EvaluateContext(One(Item("bundle.zip")), Inputs);
+        QCOMPARE(Result.default_.kind_, DefaultKind::Archive); QCOMPARE(Ids(Result), QStringList{"hc.archive.extract"});
+        QCOMPARE(Ids(EvaluateContext(One(Item("disk.iso")), Inputs)), (QStringList{"hc.archive.extract", "hc.iso.inspect"}));
+        QCOMPARE(Ids(EvaluateContext(One(Item("disk.iso"), Place::Plugin), Inputs)), QStringList{});
+        Result = EvaluateContext(One(Item("song.flac")), Inputs);
+        QCOMPARE(Result.default_.kind_, DefaultKind::Open); QCOMPARE(Ids(Result), QStringList{"hc.audio.playPause"});
+        Inputs.audioOpensInternally_ = true; Result = EvaluateContext(One(Item("song.flac")), Inputs);
+        QCOMPARE(Result.default_.kind_, DefaultKind::Audio); QVERIFY(Result.suggestions_.empty()); Inputs.audioOpensInternally_ = false;
+        auto Junction = Item("data", 0x10u | 0x400u); Junction.reparseTag_ = 0xA0000003u; Junction.link_ = Probe::Pending;
+        Result = EvaluateContext(One(Junction), Inputs);
+        QCOMPARE(Result.default_.kind_, DefaultKind::Folder); QCOMPARE(Ids(Result), QStringList{"hc.navigate.linkTarget"});
+        QCOMPARE(Result.pending_.size(), size_t(1)); QCOMPARE(Result.pending_.front().field_, LinkField);
+        Junction.link_ = Probe::Ready; Junction.linkTarget_ = "D:\\data"; Result = EvaluateContext(One(Junction), Inputs);
+        QVERIFY(Result.pending_.empty()); QVERIFY(Result.badges_.front().text_.endsWith("D:\\data"));
+        QCOMPARE(LinkKindOf(0x400u, 0xA000000Cu, "x"), LinkKind::Symlink);
+        QCOMPARE(LinkKindOf(0, 0, "a.LNK"), LinkKind::Shortcut);
+        QCOMPARE(LinkKindOf(0x400u, 0x9000001Au, "cloud.txt"), LinkKind::None);
+        auto Search = One(Item("hit.txt")); Search.searchResults_ = true;
+        QCOMPARE(Ids(EvaluateContext(Search, Inputs)), QStringList{"hc.search.openLocation"});
+        ContextTarget Many; Many.totalCount_ = 3;
+        for (const auto* Name : {"a.exe", "b.txt", "c.txt"}) { auto Value = Item(Name); Value.zone_ = Probe::Ready; Value.zoneValue_ = Name[0] == 'c' ? 0u : 3u; Many.items_.push_back(Value); }
+        Inputs.compareAvailable_ = true; Result = EvaluateContext(Many, Inputs);
+        QCOMPARE(Ids(Result), (QStringList{"hc.file.ads.allowInternetBlock", "hc.file.compare"}));
+        QVERIFY(Result.suggestions_.front().label_.contains(QObject::tr(" (%1개 중 %2개)").arg(3).arg(2)));
+        // 후보가 다섯이면 우선순위가 가장 낮은 관리자 권한 실행이 빠진다(5.3절).
+        auto Linked = Item("tool.exe", 0x400u); Linked.reparseTag_ = 0xA000000Cu; Linked.zone_ = Probe::Ready; Linked.zoneValue_ = 3;
+        auto Five = One(Linked); Five.searchResults_ = true; Result = EvaluateContext(Five, Inputs);
+        QCOMPARE(Ids(Result), (QStringList{"hc.file.ads.allowInternetBlock", "hc.navigate.linkTarget", "hc.file.compare", "hc.search.openLocation"}));
+        auto All = Many; All.selectAll_ = true; Result = EvaluateContext(All, Inputs);
+        QVERIFY(Result.suggestions_.empty()); QVERIFY(Result.pending_.empty()); QVERIFY(!Result.default_.label_.isEmpty());
+        ContextTarget Background; Background.background_ = true; Background.folder_ = "C:\\t";
+        QVERIFY(EvaluateContext(Background, Inputs).suggestions_.empty());
+        QCOMPARE(DescribeTarget(Background).title_, QString("C:\\t"));
+        QCOMPARE(DescribeTarget(One(Item("a.txt"))).title_, QString("a.txt"));
+        QCOMPARE(DescribeTarget(Many).title_, QObject::tr("%1개 항목").arg(QLocale().toString(3)));
+        // 가속 문자: 제안끼리, 그리고 고정 영역(4.4절)과 겹치지 않는다.
+        const QString Fixed = "OVETCPYMRLZDHAIX";
+        QSet<QChar> Seen;
+        for (auto It = Mnemonics.cbegin(); It != Mnemonics.cend(); ++It) {
+            QVERIFY2(!Fixed.contains(It.value()), qPrintable(It.key()));
+            QVERIFY2(!Seen.contains(It.value()), qPrintable(It.key())); Seen.insert(It.value());
+        }
+        QCOMPARE(Mnemonics.size(), 8); QVERIFY2(Unstable.isEmpty(), qPrintable(Unstable.join(", ")));
+        // contextMenu.json 의 when 조건(10절 P2).
+        const auto Text = One(Item("a.txt"));
+        QVERIFY(MatchesWhen({}, Text));
+        QVERIFY(MatchesWhen(QJsonObject{{"extensions", QJsonArray{"TXT"}}, {"count", "single"}}, Text));
+        QVERIFY(!MatchesWhen(QJsonObject{{"extensions", QJsonArray{"md"}}}, Text));
+        QVERIFY(!MatchesWhen(QJsonObject{{"kinds", QJsonArray{"folder"}}}, Text));
+        QVERIFY(!MatchesWhen(QJsonObject{{"count", "multiple"}}, Text));
+        QVERIFY(!MatchesWhen(QJsonObject{{"count", "sometimes"}}, Text));
+        QVERIFY(!MatchesWhen(QJsonObject{{"locations", QJsonArray{"smb"}}}, Text));
+        QVERIFY(MatchesWhen(QJsonObject{{"locations", QJsonArray{"search"}}}, Search));
+        QVERIFY(!MatchesWhen({}, Background));
+        QVERIFY(MatchesWhen(QJsonObject{{"kinds", QJsonArray{"background"}}}, Background));
     }
     void renameSelectionAndDefaults()
     {

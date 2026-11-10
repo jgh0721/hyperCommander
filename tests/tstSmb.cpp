@@ -172,6 +172,65 @@ private:
     HMENU menu_ = nullptr;
 };
 
+// HC 문맥 메뉴(설계 261110)가 열리면 항목을 기록하고, Choose가 돌려준 항목을 Enter로 고르거나 메뉴를 닫는다.
+// Ready가 거짓인 동안은 지연 판정 결과를 기다린다(최대 3초). 메뉴의 exec 루프 안에서도 Qt 타이머는 돈다.
+// 첫 메뉴만 맡는다(같은 범위의 다음 프로브가 다음 메뉴를 받도록). Count면 이후 메뉴도 세고 닫는다(한 번만 열리는지 확인).
+class ContextMenuProbe final
+{
+public:
+    using Choose = std::function<QAction*(QMenu*)>;
+    explicit ContextMenuProbe(Choose Pick = {}, std::function<bool(QMenu*)> Ready = {}, bool Count = false)
+        : choose_(std::move(Pick)), ready_(std::move(Ready)), count_(Count)
+    {
+        timer_.setInterval(15);
+        QObject::connect(&timer_, &QTimer::timeout, [this] { tick(); });
+        timer_.start(); age_.start();
+    }
+    static QAction* Find(QMenu* Menu, const QString& Name)
+    {
+        for (auto* Action : Menu->actions()) {
+            if (Action->objectName() == Name) return Action;
+            if (Action->menu()) if (auto* Found = Find(Action->menu(), Name)) return Found;
+        }
+        return nullptr;
+    }
+    int opened_ = 0;
+    QStringList names_;
+    QHash<QString, bool> enabled_;
+    QHash<QString, QString> text_, tips_;
+    QString menuName_;
+    QRect geometry_;
+private:
+    void collect(QMenu* Menu)
+    {
+        for (auto* Action : Menu->actions()) {
+            if (!Action->objectName().isEmpty() && Action->isVisible()) {
+                names_ << Action->objectName(); enabled_[Action->objectName()] = Action->isEnabled();
+                text_[Action->objectName()] = Action->text(); tips_[Action->objectName()] = Action->toolTip();
+            }
+            if (Action->menu()) collect(Action->menu());
+        }
+    }
+    void tick()
+    {
+        auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        if (!Menu || !Menu->isVisible() || !Menu->objectName().startsWith("hc.fileContextMenu") || Menu == last_) return;
+        if (opened_ && !count_) { timer_.stop(); return; }
+        if (ready_ && !ready_(Menu) && age_.elapsed() < 3000) return;
+        last_ = Menu; ++opened_; names_.clear(); enabled_.clear(); text_.clear(); tips_.clear();
+        collect(Menu); menuName_ = Menu->objectName(); geometry_ = Menu->geometry();
+        auto* Chosen = choose_ ? choose_(Menu) : nullptr;
+        if (Chosen && Chosen->isEnabled()) { Menu->setActiveAction(Chosen); QTest::keyClick(Menu, Qt::Key_Return); }
+        else Menu->close();
+    }
+    Choose choose_;
+    std::function<bool(QMenu*)> ready_;
+    bool count_ = false;
+    QTimer timer_;
+    QElapsedTimer age_;
+    QPointer<QMenu> last_;
+};
+
 // OLE does not continuously pump Qt timers while the physical mouse is idle.
 class NativeDragProbe final
 {
@@ -320,6 +379,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "driveListOrderUi"
                 || (QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi" || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragNativeFormatsUi")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileDropUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "contextMenuUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "firstRunProductDefaultsUi"
@@ -8380,7 +8440,8 @@ private slots:
         QVERIFY(Press.x() >= 0);
         QTRY_VERIFY(!Model->IsLoading()); Panel->sig_NotifyPanelActivated(); Grid->setFocus(); QCoreApplication::processEvents();
         for (const int Gesture : {0, 1, 2}) {
-            ShellMenuProbe Probe;
+            // 오른쪽 클릭은 설정에 따라 HC 문맥 메뉴나 탐색기 메뉴를 연다(설계 261110 9.1절). 끌기 동작은 둘 다 열지 않는다.
+            ShellMenuProbe Probe; ContextMenuProbe Menu;
             const auto Global = Grid->viewport()->mapToGlobal(Press);
             QMouseEvent Down(QEvent::MouseButtonPress, Press, Global, Qt::RightButton, Qt::RightButton, Qt::NoModifier);
             QApplication::sendEvent(Grid->viewport(), &Down);
@@ -8394,8 +8455,10 @@ private slots:
             QApplication::sendEvent(Grid->viewport(), &Up);
             QContextMenuEvent Context(QContextMenuEvent::Mouse, Press, Grid->viewport()->mapToGlobal(Press));
             QApplication::sendEvent(Grid->viewport(), &Context);
-            if (Gesture == 0 && !Probe.opened_) qInfo() << "Stationary context diagnostics:" << Model->IsLoading() << View->IsEditing() << View->ShellMenuPaths(IndexFor("marker.txt"), false) << View->window()->objectName();
-            QCOMPARE(Probe.opened_, Gesture == 0);
+            const bool Opened = Probe.opened_ || Menu.opened_ > 0;
+            if (Gesture == 0 && !Opened) qInfo() << "Stationary context diagnostics:" << Model->IsLoading() << View->IsEditing() << View->ShellMenuPaths(IndexFor("marker.txt"), false) << View->window()->objectName();
+            QCOMPARE(Opened, Gesture == 0);
+            if (Gesture == 0) QCOMPARE(Probe.opened_, CGridView::RightClickOpensShellMenu());
         }
     }
 
@@ -8436,7 +8499,8 @@ private slots:
         auto Selected = View->ShellMenuPaths(); Selected.sort(); QCOMPARE(Selected, Expected);
         QCOMPARE(View->ShellMenuPaths(IndexFor("한글 이름.txt"), false), QStringList{Directory.filePath("한글 이름.txt")});
         { ShellMenuProbe Probe; QVERIFY(Bridge->ExecuteCommand("hc.file.shellMenu")); QVERIFY(Probe.opened_); QVERIFY(Probe.items_ > 0); }
-        { ShellMenuProbe Probe; QVERIFY(Bridge->ExecuteCommand("hc.file.context")); QVERIFY(Probe.opened_); }
+        // 이전 ID hc.file.context 는 HC 문맥 메뉴로 이전되었다(설계 261110 3절).
+        { ShellMenuProbe Probe; ContextMenuProbe Menu; QVERIFY(Bridge->ExecuteCommand("hc.file.context")); QVERIFY(!Probe.opened_); QCOMPARE(Menu.opened_, 1); }
         View->RestoreSelection({}, KeyFor("first.txt"));
         { ShellMenuProbe Probe; QVERIFY(View->ShowShellMenu(IndexFor("first.txt"), true)); QVERIFY(Probe.opened_); }
         { ShellMenuProbe Probe; QVERIFY(View->ShowShellMenu({}, true)); QVERIFY(Probe.opened_); }
@@ -8449,6 +8513,184 @@ private slots:
         QVERIFY(!OpenShellContextMenuForObjects({Directory.filePath("first.txt"), Other.path()}, 0, 0, Owner));
         QVERIFY(!OpenShellContextMenuForObjects({Directory.path()}, 0, 0, nullptr));
         QCOMPARE(QDir(Directory.path()).entryList(QDir::Files).size(), 3);
+    }
+
+    void contextMenuUi()
+    {
+        // 설계 261110 11.2절: HC 문맥 메뉴의 항목 · 제안 · 대상 결정 · 입력 · 실행.
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto SavedGeneral = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
+        const auto Restore = qScopeGuard([&] {
+            hc::settings::AppSettings().Put(hc::settings::Section::General, SavedGeneral); main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Native = [&](const QString& Name) { return QDir::toNativeSeparators(Directory.filePath(Name)); };
+        for (const auto* Name : {"notes.txt", "setup.exe", "bundle.zip", "disk.iso", "song.flac"}) {
+            QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("context menu fixture");
+        }
+        { QFile Marker(Directory.filePath("setup.exe") + ":Zone.Identifier"); QVERIFY(Marker.open(QIODevice::WriteOnly)); Marker.write("[ZoneTransfer]\r\nZoneId=3\r\n"); }
+        QVERIFY(QDir(Directory.path()).mkdir("folder"));
+        QCOMPARE(QProcess::execute("cmd", {"/c", "mklink", "/J", Native("junction"), Native("folder")}), 0);
+        const auto Unlink = qScopeGuard([&] { RemoveDirectoryW(Native("junction").toStdWString().c_str()); });
+        hc::workspace::TabState Tab; Tab.id_ = "context-menu";
+        Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab};
+        auto* Panel = panels_.front(); Panel->RestoreWorkspace(Pane);
+        auto* Model = model(Panel); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 8, 10000);
+        auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(0)); QVERIFY(View);
+        auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge);
+        const auto IndexFor = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        // 고정 파일을 만든 직후의 감시 이벤트로 목록이 다시 읽힐 수 있다. 행이 자리 잡은 뒤에 키를 읽는다.
+        const auto Settled = [&](const QString& Name) {
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 8 && IndexFor(Name).isValid(), 10000);
+        };
+        const auto KeyFor = [&](const QString& Name) {
+            const auto Item = Model->GetFileInfo(IndexFor(Name));
+            return Item && Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : QString{};
+        };
+        const auto Focus = [&] { Panel->sig_NotifyPanelActivated(); Grid->setFocus(); QCoreApplication::processEvents(); };
+        const auto Suggestion = [](const QString& Id) { return "hc.fileContext." + Id + ".suggest"; };
+        // 커서를 Name에 두고 명령(메뉴 키와 같은 경로)으로 연다.
+        const auto Open = [&](const QString& Name, ContextMenuProbe& Probe) {
+            Settled(Name);
+            View->RestoreSelection({}, Name == ".." ? QString{} : KeyFor(Name)); Focus();
+            // 명령 활성 상태는 250 ms 주기로 다시 정해진다. 새로 고침 직후에는 켜질 때까지 기다린다.
+            QTRY_VERIFY_WITH_TIMEOUT(Bridge->Action("hc.file.contextMenu")->isEnabled(), 5000);
+            QVERIFY(Bridge->ExecuteCommand("hc.file.contextMenu", View->ViewIndex(IndexFor(Name))));
+            QTRY_VERIFY2_WITH_TIMEOUT(Probe.opened_ == 1, qPrintable("menu for " + Name), 5000);
+        };
+        {
+            // 인터넷에서 받은 실행 파일: 기본 동작 "실행", 첫 제안은 차단 해제(지연 판정을 기다린다).
+            ContextMenuProbe Probe({}, [&](QMenu* Menu) { return ContextMenuProbe::Find(Menu, Suggestion("hc.file.ads.allowInternetBlock")) != nullptr; });
+            Open("setup.exe", Probe);
+            QCOMPARE(Probe.menuName_, QString("hc.fileContextMenu"));
+            QVERIFY2(Probe.names_.contains(Suggestion("hc.file.ads.allowInternetBlock")), qPrintable(Probe.names_.join(", ")));
+            QVERIFY(Probe.text_.value("hc.fileContext.hc.navigate.open").startsWith("실행"));
+            QVERIFY(Probe.names_.contains(Suggestion("hc.file.runAsAdmin")));
+            for (const auto* Fixed : {"hc.viewer.open", "hc.file.edit", "hc.clipboard.cut", "hc.clipboard.copy", "hc.clipboard.paste", "hc.file.copy", "hc.file.move",
+                                      "hc.file.rename", "hc.file.delete", "hc.file.attributes", "hc.file.shellMenu", "hc.clipboard.copyPath.full", "hc.file.hash"})
+                QVERIFY2(Probe.names_.contains(QString("hc.fileContext.") + Fixed), Fixed);
+            QVERIFY(!Probe.enabled_.value("hc.fileContext.hc.clipboard.paste") || Bridge->HasFileClipboard());
+            QVERIFY(!Probe.names_.contains("hc.fileContext.pending"));
+        }
+        {
+            ContextMenuProbe Probe; Open("disk.iso", Probe);
+            QVERIFY2(Probe.names_.contains(Suggestion("hc.iso.inspect")), qPrintable(Probe.names_.join(", ")));
+        }
+        {
+            ContextMenuProbe Probe; Open("bundle.zip", Probe);
+            if (!TyStPlugInMgr::GetInstance()->RetrieveWCXByExts("zip", "bundle.zip").isEmpty()) {
+                QVERIFY(Probe.text_.value("hc.fileContext.hc.navigate.open").startsWith("압축 내부 열기"));
+                QVERIFY(Probe.names_.contains(Suggestion("hc.archive.extract")));
+            }
+        }
+        if (auto* Audio = Bridge->Audio(); Audio && hc::audio::IsPlayable("song.flac", Audio->Extensions()) && !Audio->OpenInternally()) {
+            ContextMenuProbe Probe; Open("song.flac", Probe);
+            QVERIFY(Probe.names_.contains(Suggestion("hc.audio.playPause")));
+        }
+        {
+            // 폴더: 편집은 숨기지 않고 이유와 함께 끈다(4.1절).
+            ContextMenuProbe Probe; Open("folder", Probe);
+            QVERIFY(Probe.text_.value("hc.fileContext.hc.navigate.open").startsWith("열기"));
+            QVERIFY(Probe.names_.contains("hc.fileContext.hc.file.edit")); QVERIFY(!Probe.enabled_.value("hc.fileContext.hc.file.edit"));
+            QCOMPARE(Probe.tips_.value("hc.fileContext.hc.file.edit"), QString("폴더는 편집할 수 없습니다."));
+        }
+        {
+            // 정션: "링크 대상 위치로 이동"을 고르면 대상 폴더로 이동한다.
+            ContextMenuProbe Probe([&](QMenu* Menu) { return ContextMenuProbe::Find(Menu, Suggestion("hc.navigate.linkTarget")); });
+            Open("junction", Probe);
+            QVERIFY2(Probe.names_.contains(Suggestion("hc.navigate.linkTarget")), qPrintable(Probe.names_.join(", ")));
+            QTRY_VERIFY_WITH_TIMEOUT(QDir::cleanPath(Model->GetCurrentPathWithRoot()).compare(QDir::cleanPath(Directory.filePath("folder")), Qt::CaseInsensitive) == 0, 5000);
+            // 같은 탭 · 모델로 돌아온다(RestoreWorkspace는 탭을 다시 만들어 위의 Model · View 포인터를 무효로 만든다).
+            Panel->ChangeCurrentPath(Directory.path(), {}); Settled("notes.txt");
+        }
+        {
+            // 폴더 배경 메뉴: 경로 복사가 현재 폴더 경로를 클립보드에 넣는다.
+            ContextMenuProbe Probe([&](QMenu* Menu) { return ContextMenuProbe::Find(Menu, "hc.fileContext.hc.clipboard.copyPath.folder"); });
+            Open("..", Probe);
+            QCOMPARE(Probe.menuName_, QString("hc.fileContextMenu.background"));
+            for (const auto* Item : {"hc.clipboard.paste", "hc.file.mkdir", "hc.file.new", "hc.navigate.refresh", "hc.file.shellMenu"})
+                QVERIFY2(Probe.names_.contains(QString("hc.fileContext.") + Item), Item);
+            QTRY_COMPARE(QApplication::clipboard()->text(), QDir::toNativeSeparators(Directory.path()));
+        }
+        {
+            // 메뉴 키 · Shift+F10은 메뉴를 한 번만 열고, 커서 행 아래에 연다(9.1절).
+            // 실제 입력은 Windows가 뒤따라 만드는 WM_CONTEXTMENU까지 거친다. 전경 창이 아니면 Qt 키 이벤트로 대신한다.
+            Settled("notes.txt"); View->RestoreSelection({}, KeyFor("notes.txt")); main_->raise(); main_->activateWindow(); Focus();
+            const auto Anchor = View->MenuAnchor(View->ViewIndex(IndexFor("notes.txt")));
+            const bool Foreground = GetForegroundWindow() == reinterpret_cast<HWND>(main_->winId());
+            const auto Press = [&](std::initializer_list<WORD> Keys, Qt::Key Fallback, Qt::KeyboardModifiers Modifiers) {
+                if (!Foreground) {
+                    // 플랫폼이 보내는 것처럼 목록에 키 이벤트만 보낸다(QTest::keyClick 의 단축키 우선 처리는 거치지 않는다).
+                    QKeyEvent Down(QEvent::KeyPress, Fallback, Modifiers); QApplication::sendEvent(Grid, &Down);
+                    QKeyEvent Up(QEvent::KeyRelease, Fallback, Modifiers); QApplication::sendEvent(Grid, &Up);
+                    return;
+                }
+                std::vector<INPUT> Inputs;
+                for (const auto Key : Keys) { INPUT Down{}; Down.type = INPUT_KEYBOARD; Down.ki.wVk = Key; Inputs.push_back(Down); }
+                for (auto It = std::rbegin(Keys); It != std::rend(Keys); ++It) { INPUT Up{}; Up.type = INPUT_KEYBOARD; Up.ki.wVk = *It; Up.ki.dwFlags = KEYEVENTF_KEYUP; Inputs.push_back(Up); }
+                SendInput(UINT(Inputs.size()), Inputs.data(), sizeof(INPUT));
+            };
+            if (!Foreground) qInfo() << "contextMenuUi: main window is not foreground; Menu key uses Qt key events";
+            {
+                ContextMenuProbe Probe({}, {}, true); Press({VK_APPS}, Qt::Key_Menu, Qt::NoModifier);
+                QTRY_COMPARE_WITH_TIMEOUT(Probe.opened_, 1, 5000); QTest::qWait(700); QCOMPARE(Probe.opened_, 1);
+                QVERIFY2(qAbs(Probe.geometry_.top() - Anchor.y()) <= 4 || qAbs(Probe.geometry_.bottom() - Anchor.y()) <= 4,
+                    qPrintable(QString("%1 vs %2").arg(Probe.geometry_.top()).arg(Anchor.y())));
+            }
+            QCOMPARE(hc::ui::CommandId(TyStCommandMgr::GetInstance()->Retrieve().value(QKeyCombination(Qt::ShiftModifier, Qt::Key_F10))), QString("hc.file.contextMenu"));
+            ContextMenuProbe ShiftF10({}, {}, true); Focus(); Press({VK_SHIFT, VK_F10}, Qt::Key_F10, Qt::ShiftModifier);
+            QTRY_COMPARE_WITH_TIMEOUT(ShiftF10.opened_, 1, 5000); QTest::qWait(700); QCOMPARE(ShiftF10.opened_, 1);
+        }
+        const auto RightClick = [&](const QString& Name, Qt::KeyboardModifiers Modifiers) {
+            QPoint Press(-1, -1);
+            for (const auto& Hit : Grid->hitInfoAll()) if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.modelIndex().data().toString() == Name) { Press = Hit.rect().center(); break; }
+            QVERIFY(Press.x() >= 0);
+            const auto Global = Grid->viewport()->mapToGlobal(Press);
+            QMouseEvent Down(QEvent::MouseButtonPress, Press, Global, Qt::RightButton, Qt::RightButton, Modifiers);
+            QApplication::sendEvent(Grid->viewport(), &Down);
+            QMouseEvent Up(QEvent::MouseButtonRelease, Press, Global, Qt::RightButton, Qt::NoButton, Modifiers);
+            QApplication::sendEvent(Grid->viewport(), &Up);
+            QContextMenuEvent Context(QContextMenuEvent::Mouse, Press, Global, Modifiers);
+            QApplication::sendEvent(Grid->viewport(), &Context);
+        };
+        QVERIFY(View->SetListMode("one-line")); QTest::qWait(150);
+        {
+            // 선택 밖의 행을 오른쪽 클릭하면 그 행이 대상이 되고, 이전 선택은 복원할 수 있다(6절).
+            Settled("setup.exe"); const QStringList Before{KeyFor("notes.txt"), KeyFor("song.flac")};
+            View->RestoreSelection(Before, KeyFor("notes.txt")); Focus();
+            ContextMenuProbe Probe; RightClick("setup.exe", Qt::NoModifier);
+            QTRY_COMPARE_WITH_TIMEOUT(Probe.opened_, 1, 5000);
+            QVERIFY(View->CaptureSelection().isEmpty()); QCOMPARE(View->CaptureFocus(), KeyFor("setup.exe"));
+            QVERIFY(Probe.names_.contains(Suggestion("hc.file.runAsAdmin")));
+            QVERIFY(Bridge->ExecuteCommand("hc.selection.restore"));
+            QTRY_VERIFY_WITH_TIMEOUT([&] { auto Now = View->CaptureSelection(); Now.sort(); auto Expected = Before; Expected.sort(); return Now == Expected; }(), 5000);
+        }
+        {
+            // Shift+오른쪽 클릭은 탐색기 메뉴, 설정이 "shell"이면 반대로(9.1절).
+            Settled("notes.txt"); View->RestoreSelection({}, KeyFor("notes.txt")); Focus();
+            { ShellMenuProbe Shell; ContextMenuProbe Menu; RightClick("notes.txt", Qt::ShiftModifier); QVERIFY(Shell.opened_); QCOMPARE(Menu.opened_, 0); }
+            auto General = SavedGeneral; auto FilePanel = General["filePanel"].toObject(); FilePanel["rightClickMenu"] = "shell"; General["filePanel"] = FilePanel;
+            QVERIFY(hc::settings::AppSettings().Put(hc::settings::Section::General, General)); QVERIFY(CGridView::RightClickOpensShellMenu());
+            { ShellMenuProbe Shell; ContextMenuProbe Menu; RightClick("notes.txt", Qt::NoModifier); QVERIFY(Shell.opened_); QCOMPARE(Menu.opened_, 0); }
+            { ShellMenuProbe Shell; ContextMenuProbe Menu; RightClick("notes.txt", Qt::ShiftModifier); QTRY_COMPARE_WITH_TIMEOUT(Menu.opened_, 1, 5000); QVERIFY(!Shell.opened_); }
+            QVERIFY(hc::settings::AppSettings().Put(hc::settings::Section::General, SavedGeneral));
+        }
+        {
+            // 차단 해제를 고르면 Zone.Identifier가 지워지고, 다시 연 메뉴에는 제안이 없다(11.2절 11).
+            ContextMenuProbe Probe([&](QMenu* Menu) { return ContextMenuProbe::Find(Menu, Suggestion("hc.file.ads.allowInternetBlock")); },
+                [&](QMenu* Menu) { return ContextMenuProbe::Find(Menu, Suggestion("hc.file.ads.allowInternetBlock")) != nullptr; });
+            Open("setup.exe", Probe);
+            QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(Directory.filePath("setup.exe") + ":Zone.Identifier"), 10000);
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 8, 10000);
+            ContextMenuProbe Again({}, [&](QMenu* Menu) { return !ContextMenuProbe::Find(Menu, "hc.fileContext.pending") || !ContextMenuProbe::Find(Menu, "hc.fileContext.pending")->isVisible(); });
+            Open("setup.exe", Again);
+            QVERIFY2(!Again.names_.contains(Suggestion("hc.file.ads.allowInternetBlock")), qPrintable(Again.names_.join(", ")));
+        }
     }
 
     void backgroundMetadataNavigationUi()

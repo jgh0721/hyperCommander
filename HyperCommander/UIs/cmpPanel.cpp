@@ -948,20 +948,6 @@ void CmpPanel::ReturnOnCurrentTab( const QModelIndex& SrcIndex )
     }
 }
 
-void CmpPanel::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
-{
-    const auto State = retrieveFocusState();
-    const auto View = retrieveFocusView();
-    Q_ASSERT( View != nullptr );
-    if( View == nullptr )
-        return;
-
-    if( View->GetViewMode() != CViewT::VM_GRID )
-        return;
-
-    ( ( CGridView* )View )->ContextMenuOnCurrentTab( SrcIndex );
-}
-
 void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
 {
     /*!

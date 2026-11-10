@@ -19,11 +19,14 @@ class FileJobUi;
 class QtViewerHost;
 class CQuickView;
 class QAction;
+class QJsonArray;
 namespace hc::document { class DocumentOpenController; }
 namespace hc::audio { class AudioSession; }
 namespace hc::ui { class AudioPopover; }
 namespace hc::ui { class UserMenu; }
 namespace hc::sys { class SystemCommands; }
+namespace hc::ui { struct CommandState; }
+namespace hc::filecontext { struct ContextTarget; }
 
 std::shared_ptr<hc::commands::IExecutor> MakeQtExecutor(QObject* Owner);
 
@@ -46,6 +49,11 @@ public:
     hc::storage::Result<QStringList> CompareArguments(const QModelIndex& Index = {});
     bool ExecuteCommand(const QString& Id, const QModelIndex& Index = {});
     void ShowShellMenu(const QModelIndex& Index = {});
+    // HC 문맥 메뉴(설계 261110). 명령으로 열면 커서 행 아래에 연다.
+    void ShowContextMenu(const QModelIndex& Index = {});
+    // View의 목록에서 메뉴를 열고 고른 항목을 실행한다. Cursor는 원본 모델 색인, Anchor는 전역 논리 좌표.
+    // Background면 현재 폴더 메뉴. Keyboard면 로컬 고정 디스크의 지연 판정을 잠깐 기다린다.
+    bool ExecFileContextMenu(CGridView* View, const QModelIndex& Cursor, bool Background, const QPoint& Anchor, bool Keyboard);
     QAction* Action(const QString& Id) const;
     void RefreshShortcutLabels();
     bool ReloadMenu();
@@ -83,6 +91,19 @@ private:
     std::vector<hc::storage::Locator> clipboardLocations_;
     std::map<std::string, QByteArray> clipboardMoves_;
     hc::storage::Result<QStringList> compareArguments(const hc::storage::CommandContext& Context, CFSModel* Model);
+    hc::ui::CommandState contextCommandState(const QString& Id, const QVariantMap& Parameters, const hc::filecontext::ContextTarget& Target,
+        CGridView* View, bool CompareAvailable);
+    QJsonArray userContextItems();
+    QString contextMenuFile() const;
+    void editContextMenuFile();
+    // 선택(없으면 커서 행)의 로컬 · SMB 경로. Files면 폴더를 빼고, Limit을 넘거나 네이티브가 아닌 항목이 있으면 빈 목록.
+    QStringList nativeTargetPaths(const QModelIndex& Index, bool Files, int Limit, QString* Reason = nullptr);
+    void navigateLinkTarget(const QModelIndex& Index);
+    void runAsAdmin(const QModelIndex& Index);
+    void openWith(const QModelIndex& Index);
+    void showProperties(const QModelIndex& Index);
+    void computeHashes(const QModelIndex& Index);
+    void statusMessage(const QString& Text, int Timeout = 6000);
     void bindModels();
     void createActions();
     void createCommandUi();

@@ -166,6 +166,9 @@ set(UNIQUELIBS_SRC
         ../commonLibs/commands/commandBus.hpp
         ../UniqueLibs/commandUiBridge.cpp
         ../UniqueLibs/commandUiBridge.hpp
+        ../UniqueLibs/fileContextMenu.cpp
+        ../UniqueLibs/fileContextMenu.hpp
+        ../UniqueLibs/fileContextProbes.hpp
         ../UniqueLibs/nativeFileElevation.cpp
         ../UniqueLibs/nativeFileElevation.hpp
         ../UniqueLibs/fileJobUi.cpp

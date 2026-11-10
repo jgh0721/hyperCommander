@@ -240,8 +240,25 @@ DECLARE_CMD( BuiltInCMD_Nav_GotoDriveZ, QObject::tr( "탐색" ), "hc.navigate.go
 DECLARE_CMD( BuiltInCMD_Etc_SwitchPanel,          QObject::tr( "기타" ),    "hc.panel.switch",
              Qt::Key_Tab,                                               QObject::tr( "반대편 패널로 전환" ) );
 
-DECLARE_CMD( BuiltInCMD_Etc_ContextMenu,          QObject::tr( "기타" ),    "hc.file.context",
-             Qt::Key_unknown,                                          QObject::tr( "상황메뉴" ) );
+// HC 문맥 메뉴(설계 261110). 이전 ID hc.file.context 는 CommandId()가 이 ID로 바꾼다.
+DECLARE_CMD( BuiltInCMD_OPs_ContextMenu,          QObject::tr( "동작" ),    "hc.file.contextMenu",
+             Qt::Key_Menu,                                              QObject::tr( "문맥 메뉴" ) );
+DECLARE_CMD( BuiltInCMD_OPs_ContextMenuShiftF10,  QObject::tr( "동작" ),    "hc.file.contextMenu",
+             Qt::ShiftModifier | Qt::Key_F10,                           QObject::tr( "문맥 메뉴" ) );
+DECLARE_CMD( BuiltInCMD_Clipboard_CopyPath,       QObject::tr( "클립보드" ), "hc.clipboard.copyPath",
+             Qt::Key_unknown,                                           QObject::tr( "경로 복사" ) );
+DECLARE_CMD( BuiltInCMD_Nav_LinkTarget,           QObject::tr( "탐색" ),    "hc.navigate.linkTarget",
+             Qt::Key_unknown,                                           QObject::tr( "링크 대상 위치로 이동" ) );
+DECLARE_CMD( BuiltInCMD_OPs_RunAsAdmin,           QObject::tr( "동작" ),    "hc.file.runAsAdmin",
+             Qt::Key_unknown,                                           QObject::tr( "관리자 권한으로 실행" ) );
+DECLARE_CMD( BuiltInCMD_OPs_OpenWith,             QObject::tr( "동작" ),    "hc.file.openWith",
+             Qt::Key_unknown,                                           QObject::tr( "연결 프로그램 선택" ) );
+DECLARE_CMD( BuiltInCMD_OPs_Properties,           QObject::tr( "동작" ),    "hc.file.properties",
+             Qt::Key_unknown,                                           QObject::tr( "Windows 속성" ) );
+DECLARE_CMD( BuiltInCMD_OPs_Hash,                 QObject::tr( "동작" ),    "hc.file.hash",
+             Qt::Key_unknown,                                           QObject::tr( "해시 계산" ) );
+DECLARE_CMD( BuiltInCMD_Menu_ContextEdit,         QObject::tr( "기타" ),    "hc.menu.contextEdit",
+             Qt::Key_unknown,                                           QObject::tr( "문맥 메뉴 파일 열기" ) );
 DECLARE_CMD( BuiltInCMD_OPs_ShellMenu,            QObject::tr( "동작" ),    "hc.file.shellMenu",
              Qt::ShiftModifier | Qt::Key_Return,                        QObject::tr( "탐색기 메뉴" ) );
 DECLARE_CMD( BuiltInCMD_OPs_ShellMenuOnKeypad,    QObject::tr( "동작" ),    "hc.file.shellMenu",
@@ -472,7 +489,15 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_Nav_GotoDriveZ,
 
     BuiltInCMD_Etc_SwitchPanel,
-    BuiltInCMD_Etc_ContextMenu,
+    BuiltInCMD_OPs_ContextMenu,
+    BuiltInCMD_OPs_ContextMenuShiftF10,
+    BuiltInCMD_Clipboard_CopyPath,
+    BuiltInCMD_Nav_LinkTarget,
+    BuiltInCMD_OPs_RunAsAdmin,
+    BuiltInCMD_OPs_OpenWith,
+    BuiltInCMD_OPs_Properties,
+    BuiltInCMD_OPs_Hash,
+    BuiltInCMD_Menu_ContextEdit,
     BuiltInCMD_OPs_ShellMenu,
     BuiltInCMD_OPs_ShellMenuOnKeypad,
     BuiltInCMD_File_Compare,
@@ -586,7 +611,8 @@ namespace hc::defaults
             { "cm_DirectoryHotList",     "hc.navigate.favorites" },
             { "cm_GotoDrive",            "hc.navigate.path" },
             { "cm_SwitchPanel",          "hc.panel.switch" },
-            { "cm_ContextMenu",          "hc.file.context" },
+            // TC의 cm_ContextMenu 는 탐색기 문맥 메뉴다. HC 문맥 메뉴(hc.file.contextMenu)와 구분한다.
+            { "cm_ContextMenu",          "hc.file.shellMenu" },
             { "cm_ExternalEditorMenu",   "hc.file.edit" },
             { "cm_NavigateBack",         "hc.navigate.back" },
             { "cm_NavigateForward",      "hc.navigate.forward" },
@@ -607,6 +633,7 @@ namespace hc::defaults
     {
         // 설정에 남은 이전 ID만 이전한다. 독립 명령으로는 등록하지 않는다.
         if (Name == "hc.audio.preview") return "hc.audio.playPause";
+        if (Name.compare("hc.file.context", Qt::CaseInsensitive) == 0) return "hc.file.contextMenu";
         static const auto Aliases = CommandAliases();
         for (auto It = Aliases.cbegin(); It != Aliases.cend(); ++It)
             if (It.key().compare(Name, Qt::CaseInsensitive) == 0 || It.value().compare(Name, Qt::CaseInsensitive) == 0) return It.value();
@@ -630,12 +657,14 @@ namespace hc::defaults
         {
             auto General = Document["general"].toObject();
             auto Global = General["globalShortcuts"].toObject();
-            if (Global.contains("hc.audio.preview")) {
-                if (!Global.contains("hc.audio.playPause")) Global["hc.audio.playPause"] = Global["hc.audio.preview"];
-                Global.remove("hc.audio.preview");
-                General["globalShortcuts"] = Global;
-                Document["general"] = General;
-            }
+            for (const auto& [Old, New] : {std::pair{QStringLiteral("hc.audio.preview"), QStringLiteral("hc.audio.playPause")},
+                                           std::pair{QStringLiteral("hc.file.context"), QStringLiteral("hc.file.contextMenu")}})
+                if (Global.contains(Old)) {
+                    if (!Global.contains(New)) Global[New] = Global[Old];
+                    Global.remove(Old);
+                    General["globalShortcuts"] = Global;
+                    Document["general"] = General;
+                }
             if( General["functionCommands"].isArray() )
             {
                 auto Commands = General["functionCommands"].toArray();
@@ -671,7 +700,10 @@ namespace hc::defaults
                  { "hc.file.compare" },
                  { "hc.clipboard.cut" },
                  { "hc.clipboard.copy" },
-                 { "hc.clipboard.paste", 1, {}, "file-write" },
+                 // destination: 현재 목록의 하위 폴더에 붙여넣는다(문맥 메뉴의 "이 폴더에 붙여넣기").
+                 { "hc.clipboard.paste", 1, { { "destination", { ParameterType::String, false } } }, "file-write" },
+                 // format: full · name · parent, scope: selection(기본) · folder(현재 폴더)
+                 { "hc.clipboard.copyPath", 1, { { "format", { ParameterType::String, false } }, { "scope", { ParameterType::String, false } } } },
                  { "hc.viewer.quick" },
                  { "hc.viewer.preview" },
                  { "hc.viewer.close" },
@@ -1249,7 +1281,9 @@ namespace hc::defaults
                  { "nameElide",               "keep-extension" },
                  // Field conditions of file color rules and item selection on UNC paths and mapped
                  // network drives: "off", "builtIn" (no plugin fields) or "all".
-                 { "networkFieldConditions",  "builtIn" } };
+                 { "networkFieldConditions",  "builtIn" },
+                 // 목록 오른쪽 클릭이 여는 메뉴: "hc"(HC 문맥 메뉴) · "shell"(탐색기 메뉴). Shift+오른쪽 클릭은 반대 메뉴.
+                 { "rightClickMenu",          "hc" } };
     }
     inline QJsonObject Thumbnails()
     {

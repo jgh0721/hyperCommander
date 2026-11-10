@@ -45,6 +45,15 @@
 #include "fileJobUi.hpp"
 #include "HyperCommander/UIs/fileAttributesDialog.hpp"
 #include "internetFile.hpp"
+#include "fileContextMenu.hpp"
+#include <QFontDatabase>
+#include <QPlainTextEdit>
+#include <QPromise>
+#include <QSaveFile>
+#include <QScopeGuard>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <wrl/client.h>
 #include <QProgressDialog>
 #include "nativeWritableStorage.hpp"
 #include "storageProviders.hpp"
@@ -968,7 +977,8 @@ void CommandUiBridge::createActions()
     connect(RenameBatch, &QAction::triggered, this, [this] { PromptFileTools(true); });
     auto* Permissions=Files->addAction(tr("선택 항목 권한 확인…")); Permissions->setObjectName("hc.menu.permissions");
     connect(Permissions,&QAction::triggered,this,[this] {
-        const auto Context=captureFiles({},false); auto* Model=findModel(Context.tabId_); if(!Model||(!Model->IsSearchResults()&&Context.location_.kind_!=LocatorKind::Local))return;
+        const auto Context=captureFiles(commandIndex(),false); auto* Model=findModel(Context.tabId_); if(!Model)return;
+        if(!Model->IsSearchResults()&&Context.location_.kind_!=LocatorKind::Local){statusMessage(tr("권한 확인은 로컬 파일 · 폴더와 검색 결과에서 사용할 수 있습니다."));return;}
         QStringList Paths; for(int Row=0;Row<Model->rowCount()&&Paths.size()<256;++Row){const auto E=Model->GetFileInfo(Model->index(Row,0));if(E&&E->storageEntry_&&std::find(Context.selection_.begin(),Context.selection_.end(),E->storageEntry_->id_)!=Context.selection_.end())Paths.append(Model->GetFileFullPath(Model->index(Row,0)));}
         if(Paths.isEmpty()&&!Model->IsSearchResults())Paths.append(QString::fromStdString(Context.location_.root_)); if(!Paths.isEmpty())hc::ui::ShowPermissionInspection(Paths,main_);
     });
@@ -1155,6 +1165,428 @@ void CommandUiBridge::ShowShellMenu(const QModelIndex& Index)
             Window->statusBar()->showMessage(tr("이 위치 또는 선택 항목에서는 탐색기 메뉴를 열 수 없습니다."), 6000);
 }
 
+void CommandUiBridge::statusMessage(const QString& Text, int Timeout)
+{
+    if (auto* Window = qobject_cast<QMainWindow*>(main_.data())) Window->statusBar()->showMessage(Text, Timeout);
+}
+
+void CommandUiBridge::ShowContextMenu(const QModelIndex& Index)
+{
+    const auto Context = Capture(Index);
+    const auto Model = findModel(Context.tabId_);
+    const auto Panel = Model ? PanelOf(Model) : nullptr;
+    const auto View = Panel ? qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())) : nullptr;
+    if (!View || !View->ShowContextMenu(Index, CGridView::MenuOrigin::Keyboard))
+        statusMessage(tr("지금은 문맥 메뉴를 열 수 없습니다. 목록을 읽는 중이면 끝난 뒤 다시 여세요."));
+}
+
+QString CommandUiBridge::contextMenuFile() const { return QDir(hc::settings::Paths().directory_).filePath("contextMenu.json"); }
+
+QJsonArray CommandUiBridge::userContextItems()
+{
+    // 사용자 정의 메뉴(설계 10절 P2): 메뉴 바 JSON 형식에 when 조건을 더한 schemaVersion 2. 작은 로컬 파일이므로 열 때마다 읽는다.
+    QFile File(contextMenuFile());
+    if (!File.exists()) return {};
+    if (!File.open(QIODevice::ReadOnly)) { statusMessage(tr("문맥 메뉴 파일을 읽을 수 없습니다: %1").arg(File.errorString())); return {}; }
+    QJsonParseError Error{};
+    const auto Document = QJsonDocument::fromJson(File.read(1024 * 1024), &Error);
+    if (Error.error != QJsonParseError::NoError || !Document.isObject() || Document.object().value("schemaVersion").toInt() != 2) {
+        statusMessage(tr("문맥 메뉴 파일 형식이 올바르지 않습니다(schemaVersion 2 · items 배열): %1").arg(QDir::toNativeSeparators(contextMenuFile())), 8000);
+        return {};
+    }
+    return Document.object().value("items").toArray();
+}
+
+void CommandUiBridge::editContextMenuFile()
+{
+    const auto Path = contextMenuFile();
+    if (!QFile::exists(Path)) {
+        // 형식을 보여 주는 예시 하나로 시작한다. 지우거나 바꾸면 다음에 메뉴를 열 때 반영된다.
+        const QJsonObject Example{{"id", "example-text"}, {"label", tr("예: 텍스트 파일 편집")}, {"command", "hc.file.edit"},
+            {"when", QJsonObject{{"kinds", QJsonArray{"file"}}, {"extensions", QJsonArray{"txt", "log", "md"}}, {"count", "single"}}}};
+        const auto Bytes = QJsonDocument(QJsonObject{{"schemaVersion", 2}, {"items", QJsonArray{Example}}}).toJson();
+        QSaveFile Save(Path);
+        if (!QDir().mkpath(QFileInfo(Path).absolutePath()) || !Save.open(QIODevice::WriteOnly) || Save.write(Bytes) != Bytes.size() || !Save.commit()) {
+            statusMessage(tr("문맥 메뉴 파일을 만들 수 없습니다: %1").arg(QDir::toNativeSeparators(Path))); return;
+        }
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(Path))) statusMessage(tr("문맥 메뉴 파일을 열 수 없습니다: %1").arg(QDir::toNativeSeparators(Path)));
+}
+
+hc::ui::CommandState CommandUiBridge::contextCommandState(const QString& Id, const QVariantMap& Parameters, const hc::filecontext::ContextTarget& Target,
+    CGridView* View, bool CompareAvailable)
+{
+    using hc::filecontext::Place;
+    hc::ui::CommandState State;
+    auto* Command = Action(Id);
+    if (!Command && Id != "hc.view.columns") { State.available_ = false; return State; }
+    if (Command) { State.key_ = Command->property("hc.keyLabel").toString(); State.enabled_ = Command->isEnabled(); }
+    const auto Deny = [&State](const QString& Reason) { State.enabled_ = false; State.reason_ = Reason; };
+    const auto Allow = [&State](bool Enabled, const QString& Reason) { State.enabled_ = Enabled; if (!Enabled) State.reason_ = Reason; };
+    const bool Native = hc::filecontext::IsNative(Target.place_);
+    const int Count = Target.totalCount_;
+    const auto* Cursor = Target.items_.empty() ? nullptr : &Target.items_[size_t(qBound(0, Target.cursor_, int(Target.items_.size()) - 1))];
+    const bool Single = Count == 1 && Cursor;
+    const bool Folders = std::any_of(Target.items_.begin(), Target.items_.end(), [](const auto& Item) { return Item.directory_; });
+    const bool Links = std::any_of(Target.items_.begin(), Target.items_.end(), [](const auto& Item) { return (Item.attributes_ & FILE_ATTRIBUTE_REPARSE_POINT) != 0; });
+    const bool Complete = !Target.selectAll_ && int(Target.items_.size()) == Count;
+    if (!State.enabled_) State.reason_ = tr("이 위치나 지금 상태에서는 사용할 수 없습니다.");
+    // 핸들러마다 흩어진 실행 조건을 메뉴에서 미리 보인다(설계 8.3절).
+    if (Id == "hc.viewer.open" || Id == "hc.file.edit") {
+        if (Id == "hc.file.edit" && Single && Cursor->directory_) Deny(tr("폴더는 편집할 수 없습니다."));
+        else if (Target.selectAll_ || Count > 16) Deny(tr("16개 이하를 선택했을 때 사용할 수 있습니다."));
+    } else if (Id == "hc.clipboard.paste") {
+        const bool Into = Parameters.contains("destination");
+        if (!clipboard_ || !ownsFileClipboard()) Deny(tr("클립보드에 HyperCommander로 복사하거나 잘라낸 파일이 없습니다."));
+        else if (Target.searchResults_) Deny(tr("검색 결과에는 붙여넣을 수 없습니다."));
+        else if (Into) Allow(Native, tr("로컬 또는 SMB 폴더에만 붙여넣을 수 있습니다."));
+        else if (!Target.writable_ || Target.place_ == Place::Archive || Target.place_ == Place::Shell) Deny(tr("이 위치에는 붙여넣을 수 없습니다."));
+    } else if (Id == "hc.clipboard.cut") {
+        if (!State.enabled_) State.reason_ = Target.place_ == Place::Archive ? tr("압축 파일 안의 항목은 잘라낼 수 없습니다. 복사한 뒤 붙여넣으세요.")
+                                                                             : tr("이 위치의 항목은 잘라낼 수 없습니다.");
+    } else if (Id == "hc.file.mklink") {
+        if (!Native && !Target.searchResults_) Deny(tr("로컬 또는 SMB 파일 · 폴더에서 사용할 수 있습니다."));
+        else if (Links) Deny(tr("기존 링크는 대상으로 쓸 수 없습니다."));
+    } else if (Id == "hc.archive.extract") {
+        if (!Native && Target.place_ != Place::Archive && !Target.searchResults_) Deny(tr("로컬 · SMB · 압축 내부 · 검색 결과에서 사용할 수 있습니다."));
+    } else if (Id == "hc.iso.inspect") {
+        Allow(Single && !Cursor->directory_ && hc::filecontext::Extension(Cursor->name_) == "iso" && Native, tr("로컬 또는 SMB의 ISO 파일 하나를 고르면 사용할 수 있습니다."));
+    } else if (Id == "hc.file.attributes" || Id == "hc.file.ads.allowInternetBlock") {
+        if (!Native) Deny(tr("로컬 또는 SMB 파일 · 폴더에서 사용할 수 있습니다."));
+    } else if (Id == "hc.file.permissions") {
+        if (!(Target.place_ == Place::Local || Target.searchResults_)) Deny(tr("로컬 파일 · 폴더와 검색 결과에서 사용할 수 있습니다. SMB 위치의 권한은 확인할 수 없습니다."));
+    } else if (Id == "hc.file.shellMenu") {
+        Allow(Native || Target.searchResults_, tr("탐색기 메뉴는 로컬 · SMB · 검색 결과에서 열 수 있습니다."));
+    } else if (Id == "hc.file.compare") {
+        Allow(CompareAvailable, tr("파일 2~3개, 폴더 2개, 또는 양쪽 패널에서 하나씩 고르면 비교할 수 있습니다."));
+    } else if (Id == "hc.file.runAsAdmin") {
+        Allow(Single && !Cursor->directory_ && hc::filecontext::IsRunnableName(Cursor->name_) && Native, tr("로컬 또는 SMB의 실행 파일 하나를 고르면 사용할 수 있습니다."));
+    } else if (Id == "hc.file.openWith") {
+        Allow(Single && !Cursor->directory_ && (Native || Target.searchResults_), tr("로컬 또는 SMB 파일 하나를 고르면 사용할 수 있습니다."));
+    } else if (Id == "hc.file.properties") {
+        Allow(Complete && Count > 0 && (Native || Target.searchResults_), tr("로컬 · SMB · 검색 결과에서 %1개 이하를 고르면 사용할 수 있습니다.").arg(hc::filecontext::MaxDetailed));
+    } else if (Id == "hc.file.hash") {
+        if (Folders) Deny(tr("파일만 계산할 수 있습니다. 폴더를 선택에서 빼세요."));
+        else Allow(Complete && Count > 0 && (Native || Target.searchResults_), tr("로컬 · SMB · 검색 결과의 파일 %1개 이하에서 사용할 수 있습니다.").arg(hc::filecontext::MaxDetailed));
+    } else if (Id == "hc.navigate.linkTarget") {
+        Allow(Single && Native && hc::filecontext::LinkKindOf(Cursor->attributes_, Cursor->reparseTag_, Cursor->name_) != hc::filecontext::LinkKind::None,
+            tr("심볼릭 링크 · 정션 · 바로 가기 하나를 고르면 사용할 수 있습니다."));
+    } else if (Id == "hc.view.hidden") {
+        State.checkable_ = true; State.checked_ = View && View->ShowsHiddenItems();
+    } else if (Id == "hc.view.columns" || Id == "hc.clipboard.copyPath") {
+        State.enabled_ = true; State.reason_.clear();
+    }
+    if (State.enabled_) State.reason_.clear();
+    return State;
+}
+
+bool CommandUiBridge::ExecFileContextMenu(CGridView* View, const QModelIndex& Cursor, bool Background, const QPoint& Anchor, bool Keyboard)
+{
+    using namespace hc::filecontext;
+    auto* Model = View ? qobject_cast<CFSModel*>(View->BaseModel()) : nullptr;
+    if (!Model || !Model->GetRoot() || Model->HasNavigationFallback() || !Model->CanUseSnapshot()) return false;
+    // 메뉴 항목은 활성 패널을 대상으로 실행된다. 다른 패널의 목록에서 열었으면 먼저 그 패널을 활성화한다.
+    if (auto* Panel = PanelOf(Model); Panel && Panel != activePanel_) emit Panel->sig_NotifyPanelActivated();
+    bindModels();
+    const auto TabId = Model->property("hc.tabId").toString().toStdString();
+    const auto Location = Model->WorkspaceLocation();
+    const auto PlaceOf = [](LocatorKind Kind) {
+        switch (Kind) {
+        case LocatorKind::Local: return Place::Local;
+        case LocatorKind::Smb: return Place::Smb;
+        case LocatorKind::Archive: return Place::Archive;
+        case LocatorKind::Plugin: return Place::Plugin;
+        default: return Place::Shell;
+        }
+    };
+    ContextTarget Target;
+    Target.place_ = PlaceOf(Location.kind_);
+    Target.searchResults_ = Model->IsSearchResults();
+    Target.background_ = Background;
+    Target.folder_ = QDir::toNativeSeparators(Model->GetCurrentPathWithRoot());
+    Target.writable_ = Location.kind_ == LocatorKind::Local || Location.kind_ == LocatorKind::Smb
+        || (Location.kind_ == LocatorKind::Plugin && Model->GetRoot()->WriteProvider());
+    if (clipboard_ && ownsFileClipboard())
+        Target.clipboardCount_ = clipboard_->selection_ ? int(clipboard_->selection_->Count()) : int(clipboard_->sources_.size());
+    std::vector<ResourceId> Ids;
+    QModelIndex CursorSource = SourceIndex(Cursor);
+    if (!Background) {
+        Target.selectAll_ = Model->UsesIndexedOrder() && Model->property("hc.selectAllEntries").toBool();
+        QList<QModelIndex> Selected;
+        for (const auto& At : View->SelectedSourceIndexes()) Selected.push_back(At);
+        if (Selected.isEmpty() && CursorSource.isValid()) Selected.push_back(CursorSource);
+        for (const auto& At : Selected) {
+            const auto Item = At.isValid() && At.model() == Model ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+            if (!Item || Item->Name_ == "..") continue;
+            ++Target.totalCount_;
+            Ids.push_back(Item->storageEntry_ ? Item->storageEntry_->id_ : ResourceId{{"legacy"}, Item->Name_.toStdString(), IdentityScope::NavigationSession, {}});
+            if (int(Target.items_.size()) >= MaxDetailed) continue;
+            TargetItem Entry;
+            Entry.name_ = Item->Name_; Entry.path_ = QDir::toNativeSeparators(Model->GetFileFullPath(At)); Entry.probePath_ = Model->FieldQueryPath(Item);
+            Entry.attributes_ = Item->Attributes_; Entry.reparseTag_ = Item->Reserved0_;
+            Entry.directory_ = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
+            Entry.size_ = Entry.directory_ ? (Item->directorySize_ ? qint64(*Item->directorySize_) : -1) : Item->Size_;
+            Entry.modified_ = Item->Modified_;
+            // 검색 결과는 항목마다 원래 위치가 있다. 첫 항목의 위치로 메뉴 위치를 정한다.
+            if (Target.searchResults_ && Target.items_.empty() && Item->storageEntry_) Target.place_ = PlaceOf(Item->storageEntry_->locator_.kind_);
+            // 모델 캐시만 본다(I/O 없음). 색상 규칙 · 열이 이미 읽은 값은 그대로 쓰고, 없으면 메뉴가 지연 조회한다(7.2절).
+            const auto Cached = [&](const QString& Field, Probe& State) {
+                const auto Value = Model->RuleFieldValue(Item, Field);
+                switch (Value.State()) {
+                case hc::columns::ValueState::Ready: State = Probe::Ready; break;
+                case hc::columns::ValueState::Pending: case hc::columns::ValueState::OnDemand: State = Probe::Pending; break;
+                case hc::columns::ValueState::Unsupported: State = Probe::Unsupported; break;
+                default: State = Probe::Empty; break;
+                }
+                return Value;
+            };
+            if (!Entry.directory_ && !IsCloudOnly(Entry.attributes_) && !Target.selectAll_) {
+                const auto Zone = Cached(ZoneField, Entry.zone_); if (Entry.zone_ == Probe::Ready) Entry.zoneValue_ = quint32(Zone.Raw().toULongLong());
+            }
+            if (const auto Link = LinkKindOf(Entry.attributes_, Entry.reparseTag_, Entry.name_); Link == LinkKind::Symlink || Link == LinkKind::Junction) {
+                const auto Value = Cached(LinkField, Entry.link_); if (Entry.link_ == Probe::Ready) Entry.linkTarget_ = Value.Raw().toString();
+            }
+            if (At == CursorSource) Target.cursor_ = int(Target.items_.size());
+            Target.items_.push_back(std::move(Entry));
+        }
+        if (Target.selectAll_) Target.totalCount_ = std::max(Target.totalCount_, int(Model->rowCount()) - 1);
+        if (Target.items_.empty()) Target.background_ = Background = true;
+    }
+    ProbeInputs Inputs;
+    if (audio_) {
+        Inputs.audioOpensInternally_ = audio_->OpenInternally();
+        Inputs.playable_ = [Extensions = audio_->Extensions()](const QString& Name) { return hc::audio::IsPlayable(Name, Extensions); };
+    }
+    // 규칙 JSON을 매번 해석하는 함수이므로 이름마다 한 번만 부른다(5.1절).
+    auto Archives = std::make_shared<QHash<QString, bool>>();
+    Inputs.archive_ = [Archives](const QString& Name) {
+        if (const auto Found = Archives->constFind(Name); Found != Archives->cend()) return *Found;
+        const bool Supported = !TyStPlugInMgr::GetInstance()->RetrieveWCXByExts(QFileInfo(Name).suffix(), Name).isEmpty();
+        Archives->insert(Name, Supported); return Supported;
+    };
+    const auto CursorView = View->ViewIndex(CursorSource);
+    Inputs.compareAvailable_ = !Target.background_ && !Target.selectAll_ && Target.totalCount_ <= 3
+        && (IsNative(Target.place_) || Target.searchResults_) && CompareArguments(CursorView).HasValue();
+    const QPointer<CGridView> Owner(View); const QPointer<CFSModel> Listing(Model);
+    auto* Menu = new hc::ui::FileContextMenu(Target, Inputs, [this, Owner, Target, Compare = Inputs.compareAvailable_](const QString& Id, const QVariantMap& Parameters) {
+        return contextCommandState(Id, Parameters, Target, Owner, Compare);
+    }, View);
+    Menu->SetShare([Listing](const QString& Path, const QString& Field, const hc::columns::CellValue& Value) {
+        if (Listing) Listing->ShareRuleFieldValues(Path, {{Field, Value}});
+    });
+    Menu->SetUserItems(userContextItems());
+    const QPointer<hc::ui::FileContextMenu> Guard(Menu);
+    // 로컬 고정 디스크에서만 지연 판정을 잠깐 기다린다(7.2절). SMB · 이동식 · 네트워크 드라이브는 기다리지 않는다.
+    bool Wait = Target.place_ == Place::Local && !Target.items_.empty();
+    if (Wait) {
+        const auto Root = Target.items_.front().path_.left(3);
+        Wait = Root.size() == 3 && Root[1] == ':' && GetDriveTypeW(reinterpret_cast<LPCWSTR>(Root.utf16())) == DRIVE_FIXED;
+    }
+    const auto Choice = Menu->Exec(Anchor, Wait);
+    if (Guard) Guard->deleteLater();
+    if (!Choice) return true;
+    // 메뉴가 열린 동안 목록이 바뀌었으면 실행하지 않는다(6절).
+    if (!Listing || !Owner || Listing->WorkspaceLocation() != Location || Listing->property("hc.tabId").toString().toStdString() != TabId) {
+        statusMessage(tr("메뉴가 열린 동안 대상이 바뀌어 실행하지 않았습니다.")); return true;
+    }
+    if (!Target.background_ && !Target.selectAll_) {
+        const auto Now = captureFiles(CursorView, false);
+        if (Now.selection_ != Ids) { statusMessage(tr("메뉴가 열린 동안 대상이 바뀌어 실행하지 않았습니다.")); return true; }
+    }
+    const auto& Id = Choice->commandId_;
+    if (Id == "hc.file.shellMenu") {
+        const auto Paths = Target.background_ ? QStringList{QDir::fromNativeSeparators(Listing->GetCurrentPathWithRoot())} : Owner->ShellMenuPaths(CursorView, true);
+        if (!Owner->OpenShellMenuAt(Paths, Anchor, CursorView)) statusMessage(tr("이 위치 또는 선택 항목에서는 탐색기 메뉴를 열 수 없습니다."));
+        return true;
+    }
+    if (!Choice->parameters_.isEmpty() || !Action(Id)) {
+        // 매개변수가 있는 항목은 명령 버스로 보낸다. JSON 숫자(double)는 정수로 바꾼다.
+        QVariantMap Parameters;
+        for (auto It = Choice->parameters_.cbegin(); It != Choice->parameters_.cend(); ++It)
+            Parameters[It.key()] = It.value().metaType().id() == QMetaType::Double && std::trunc(It.value().toDouble()) == It.value().toDouble()
+                ? QVariant(qint64(It.value().toDouble())) : It.value();
+        const auto Outcome = Dispatch(Id, Parameters, "contextMenu", CursorView);
+        Q_UNUSED(Outcome);
+        return true;
+    }
+    // 단축키와 같은 경로: 브리지 액션, 없으면 CCommandMgr 핸들러(설계 8.2절).
+    if (!ExecuteCommand(Id, CursorView)) TyStCommandMgr::GetInstance()->InvokeCommand(Id, CursorView);
+    return true;
+}
+
+QStringList CommandUiBridge::nativeTargetPaths(const QModelIndex& Index, bool Files, int Limit, QString* Reason)
+{
+    const auto Fail = [Reason](const QString& Text) { if (Reason) *Reason = Text; return QStringList{}; };
+    const auto Context = captureFiles(Index, false);
+    auto* Model = findModel(Context.tabId_);
+    if (!Model || !Model->GetRoot() || !Model->CanUseSnapshot()) return Fail(tr("목록을 읽는 중입니다."));
+    if (Context.selectionManifest_) return Fail(tr("전체 선택 목록에서는 사용할 수 없습니다. 항목을 %1개 이하로 고르세요.").arg(Limit));
+    if (Context.selection_.empty()) return Fail(tr("대상 항목이 없습니다."));
+    if (int(Context.selection_.size()) > Limit) return Fail(tr("%1개 이하를 고르세요.").arg(Limit));
+    QStringList Paths;
+    for (const auto& At : SelectedEntries(Model, Context)) {
+        const auto Item = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
+        if (!Item || Item->Name_ == "..") continue;
+        const auto Kind = Item->storageEntry_ ? Item->storageEntry_->locator_.kind_ : Context.location_.kind_;
+        if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb) return Fail(tr("로컬 또는 SMB 항목에서만 사용할 수 있습니다."));
+        if (Files && (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)) return Fail(tr("파일만 고르세요."));
+        const auto Path = QDir::toNativeSeparators(Model->GetFileFullPath(At));
+        if (!QDir::isAbsolutePath(Path) || Path.contains(QChar::Null)) return Fail(tr("경로를 확인할 수 없습니다."));
+        Paths.append(Path);
+    }
+    if (Paths.size() != int(Context.selection_.size())) return Fail(tr("선택이 바뀌었습니다. 다시 실행하세요."));
+    return Paths;
+}
+
+void CommandUiBridge::navigateLinkTarget(const QModelIndex& Index)
+{
+    QString Reason;
+    const auto Paths = nativeTargetPaths(Index, false, 1, &Reason);
+    if (Paths.size() != 1) { statusMessage(Reason.isEmpty() ? tr("링크 하나를 고르세요.") : Reason); return; }
+    const auto Kind = Paths.front().startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local;
+    struct Resolved { QString target_; bool directory_ = false, exists_ = false; };
+    auto* Watcher = new QFutureWatcher<Resolved>(this);
+    connect(Watcher, &QFutureWatcher<Resolved>::finished, this, [this, Watcher, Kind] {
+        const auto Found = Watcher->result(); Watcher->deleteLater();
+        if (Found.target_.isEmpty()) { statusMessage(tr("링크가 아니거나 대상을 읽을 수 없습니다.")); return; }
+        if (!Found.exists_) { statusMessage(tr("링크 대상이 없습니다: %1").arg(Found.target_), 8000); return; }
+        if (!activePanel_) return;
+        if (Found.directory_) { activePanel_->ChangeCurrentPath(Found.target_, {}); return; }
+        // 파일이면 상위 폴더로 이동하고 그 파일에 커서를 둔다.
+        activePanel_->RevealItem(QFileInfo(Found.target_).absolutePath(), hc::workspace::LocationKey(Locator{Kind, Found.target_.toStdString()}));
+    });
+    // 링크 대상 읽기는 SMB에서 왕복이 생긴다. 작업 스레드에서 읽는다.
+    Watcher->setFuture(QtConcurrent::run([Path = Paths.front()]() -> Resolved {
+        const QFileInfo Link(Path);
+        auto Target = Link.isJunction() ? Link.junctionTarget() : Link.symLinkTarget();
+        if (Target.isEmpty()) return {};
+        Target = QDir::toNativeSeparators(QDir::cleanPath(Target));
+        const QFileInfo Destination(Target);
+        return {Target, Destination.isDir(), Destination.exists()};
+    }));
+}
+
+void CommandUiBridge::runAsAdmin(const QModelIndex& Index)
+{
+    QString Reason;
+    const auto Paths = nativeTargetPaths(Index, true, 1, &Reason);
+    if (Paths.size() != 1 || !hc::filecontext::IsRunnableName(QFileInfo(Paths.front()).fileName())) {
+        statusMessage(Reason.isEmpty() ? tr("실행 파일(exe · com · bat · cmd · msi) 하나를 고르세요.") : Reason); return;
+    }
+    const auto File = Paths.front().toStdWString();
+    const auto Folder = QDir::toNativeSeparators(QFileInfo(Paths.front()).absolutePath()).toStdWString();
+    SHELLEXECUTEINFOW Info{sizeof(Info)};
+    Info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI; Info.hwnd = main_ ? reinterpret_cast<HWND>(main_->winId()) : nullptr;
+    Info.lpVerb = L"runas"; Info.lpFile = File.c_str(); Info.lpDirectory = Folder.c_str(); Info.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&Info))
+        if (const auto Error = GetLastError(); Error != ERROR_CANCELLED)
+            statusMessage(tr("관리자 권한으로 실행할 수 없습니다: %1").arg(qt_error_string(int(Error))), 8000);
+}
+
+void CommandUiBridge::openWith(const QModelIndex& Index)
+{
+    QString Reason;
+    const auto Paths = nativeTargetPaths(Index, true, 1, &Reason);
+    if (Paths.size() != 1) { statusMessage(Reason.isEmpty() ? tr("파일 하나를 고르세요.") : Reason); return; }
+    const auto File = Paths.front().toStdWString();
+    OPENASINFO Info{File.c_str(), nullptr, OPEN_AS_INFO_FLAGS(OAIF_ALLOW_REGISTRATION | OAIF_EXEC)};
+    const auto Result = SHOpenWithDialog(main_ ? reinterpret_cast<HWND>(main_->winId()) : nullptr, &Info);
+    if (FAILED(Result) && Result != HRESULT_FROM_WIN32(ERROR_CANCELLED))
+        statusMessage(tr("연결 프로그램 선택 창을 열 수 없습니다(0x%1).").arg(quint32(Result), 8, 16, QChar('0')), 8000);
+}
+
+void CommandUiBridge::showProperties(const QModelIndex& Index)
+{
+    QString Reason;
+    const auto Paths = nativeTargetPaths(Index, false, hc::filecontext::MaxDetailed, &Reason);
+    if (Paths.isEmpty()) { statusMessage(Reason); return; }
+    const auto Owner = main_ ? reinterpret_cast<HWND>(main_->winId()) : nullptr;
+    if (Paths.size() == 1) {
+        const auto Path = Paths.front().toStdWString();
+        if (!SHObjectProperties(Owner, SHOP_FILEPATH, Path.c_str(), nullptr)) statusMessage(tr("Windows 속성 창을 열 수 없습니다."));
+        return;
+    }
+    // 여러 항목: 같은 폴더의 항목을 하나의 데이터 개체로 묶어 탐색기와 같은 합계 속성 창을 연다.
+    std::vector<PIDLIST_ABSOLUTE> Items; const auto Free = qScopeGuard([&Items] { for (auto* Item : Items) CoTaskMemFree(Item); });
+    for (const auto& Path : Paths) {
+        PIDLIST_ABSOLUTE Item = nullptr;
+        if (FAILED(SHParseDisplayName(reinterpret_cast<LPCWSTR>(Path.utf16()), nullptr, &Item, 0, nullptr)) || !Item) { statusMessage(tr("Windows 속성 창을 열 수 없습니다.")); return; }
+        Items.push_back(Item);
+    }
+    Microsoft::WRL::ComPtr<IShellItemArray> Array;
+    Microsoft::WRL::ComPtr<IDataObject> Data;
+    std::vector<PCIDLIST_ABSOLUTE> Lists(Items.begin(), Items.end());
+    if (FAILED(SHCreateShellItemArrayFromIDLists(UINT(Lists.size()), Lists.data(), Array.GetAddressOf()))
+        || FAILED(Array->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(Data.GetAddressOf()))) || FAILED(SHMultiFileProperties(Data.Get(), 0)))
+        statusMessage(tr("Windows 속성 창을 열 수 없습니다."));
+}
+
+void CommandUiBridge::computeHashes(const QModelIndex& Index)
+{
+    QString Reason;
+    const auto Paths = nativeTargetPaths(Index, true, hc::filecontext::MaxDetailed, &Reason);
+    if (Paths.isEmpty()) { statusMessage(Reason); return; }
+    struct Digest { QString path_; QByteArray md5_, sha1_, sha256_; QString error_; };
+    using Digests = QList<Digest>;
+    auto* Progress = new QProgressDialog(tr("해시를 계산하는 중…"), tr("취소"), 0, 1000, main_);
+    Progress->setWindowTitle(tr("해시 계산")); Progress->setObjectName("hc.hashProgress"); Progress->setMinimumDuration(400);
+    Progress->setAttribute(Qt::WA_DeleteOnClose); Progress->setWindowModality(Qt::WindowModal);
+    auto* Watcher = new QFutureWatcher<Digests>(this);
+    connect(Watcher, &QFutureWatcher<Digests>::progressValueChanged, Progress, &QProgressDialog::setValue);
+    connect(Progress, &QProgressDialog::canceled, Watcher, &QFutureWatcher<Digests>::cancel);
+    connect(Watcher, &QFutureWatcher<Digests>::finished, this, [this, Watcher, Progress = QPointer<QProgressDialog>(Progress)] {
+        Watcher->deleteLater(); if (Progress) Progress->close();
+        if (Watcher->isCanceled() || Watcher->future().resultCount() == 0) { statusMessage(tr("해시 계산을 취소하였습니다.")); return; }
+        const auto Results = Watcher->result();
+        QStringList Lines;
+        for (const auto& Item : Results) {
+            Lines << QDir::toNativeSeparators(Item.path_);
+            if (!Item.error_.isEmpty()) Lines << "  " + tr("오류: %1").arg(Item.error_);
+            else Lines << "  SHA-256  " + QString::fromLatin1(Item.sha256_.toHex()) << "  SHA-1    " + QString::fromLatin1(Item.sha1_.toHex())
+                       << "  MD5      " + QString::fromLatin1(Item.md5_.toHex());
+            Lines << QString{};
+        }
+        QDialog Box(main_); Box.setWindowTitle(tr("해시 계산")); Box.setObjectName("hc.hashResult"); Box.resize(720, 360);
+        auto* Layout = new QVBoxLayout(&Box);
+        auto* Text = new QPlainTextEdit(Lines.join('\n').trimmed(), &Box); Text->setReadOnly(true); Text->setObjectName("hc.hashText");
+        Text->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont)); Text->setLineWrapMode(QPlainTextEdit::NoWrap); Layout->addWidget(Text);
+        auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Close, &Box); Layout->addWidget(Buttons);
+        Buttons->button(QDialogButtonBox::Close)->setText(tr("닫기"));
+        auto* Copy = Buttons->addButton(tr("모두 복사"), QDialogButtonBox::ActionRole); Copy->setObjectName("hc.hashCopy");
+        connect(Copy, &QPushButton::clicked, &Box, [Text] { QApplication::clipboard()->setText(Text->toPlainText()); });
+        connect(Buttons, &QDialogButtonBox::rejected, &Box, &QDialog::reject);
+        hc::ui::ApplyDialogFrame(&Box, Buttons);
+        Box.exec();
+    });
+    // 파일 내용을 읽는다. 한 번 읽으면서 세 알고리즘을 함께 계산하고, 1 MiB마다 취소를 확인한다.
+    Watcher->setFuture(QtConcurrent::run([Paths](QPromise<Digests>& Promise) {
+        Promise.setProgressRange(0, 1000);
+        qint64 Total = 0, Done = 0;
+        for (const auto& Path : Paths) Total += qMax<qint64>(0, QFileInfo(Path).size());
+        Digests Results;
+        QByteArray Buffer(1 << 20, Qt::Uninitialized);
+        for (const auto& Path : Paths) {
+            Digest Item; Item.path_ = Path;
+            QFile File(Path);
+            if (!File.open(QIODevice::ReadOnly)) { Item.error_ = File.errorString(); Results << Item; continue; }
+            QCryptographicHash Md5(QCryptographicHash::Md5), Sha1(QCryptographicHash::Sha1), Sha256(QCryptographicHash::Sha256);
+            for (;;) {
+                if (Promise.isCanceled()) return;
+                const auto Read = File.read(Buffer.data(), Buffer.size());
+                if (Read < 0) { Item.error_ = File.errorString(); break; }
+                if (Read == 0) break;
+                const QByteArrayView Chunk(Buffer.constData(), Read);
+                Md5.addData(Chunk); Sha1.addData(Chunk); Sha256.addData(Chunk);
+                Done += Read; Promise.setProgressValue(Total > 0 ? int(qMin<qint64>(1000, Done * 1000 / Total)) : 0);
+            }
+            if (Item.error_.isEmpty()) { Item.md5_ = Md5.result(); Item.sha1_ = Sha1.result(); Item.sha256_ = Sha256.result(); }
+            Results << Item;
+        }
+        Promise.setProgressValue(1000);
+        Promise.addResult(Results);
+    }));
+}
+
 void CommandUiBridge::RefreshFunctionBar() {
     auto* Window = qobject_cast<QMainWindow*>(main_.data()); if (!Window) return;
     auto* Layout = qobject_cast<QVBoxLayout*>(Window->centralWidget()->layout()); if (!Layout) return;
@@ -1267,7 +1699,7 @@ void CommandUiBridge::refreshActionState()
     for (auto It = actions_.cbegin(); It != actions_.cend(); ++It)
         if (It.key().startsWith("hc.selection.") && It.value()) It.value()->setEnabled(Ready);
     if (auto* Command = Action("hc.file.folderSize")) Command->setEnabled(Ready && Model->ProviderEnabled());
-    for (const auto* Id : {"hc.file.shellMenu", "hc.file.context"})
+    for (const auto* Id : {"hc.file.shellMenu"})
         if (auto* Command = Action(Id)) Command->setEnabled(Ready && (Model->WorkspaceLocation().kind_ == LocatorKind::Local || Model->WorkspaceLocation().kind_ == LocatorKind::Smb));
     for (const auto* Id : {"hc.file.mklink", "hc.file.copy", "hc.file.move", "hc.file.rename", "hc.file.mkdir", "hc.file.delete", "hc.file.new", "hc.file.batchRename",
         "hc.file.compare", "hc.file.edit", "hc.viewer.open", "hc.viewer.quick", "hc.file.permissions", "hc.archive.create", "hc.archive.extract", "hc.iso.create"})
@@ -1277,6 +1709,15 @@ void CommandUiBridge::refreshActionState()
     for (const auto* Id : {"hc.file.normalize"}) if (auto* Command = Action(Id)) Command->setEnabled(false);
     for (const auto* Id : {"hc.file.new", "hc.file.mkdir"})
         if (auto* Command = Action(Id)) Command->setEnabled(Ready && !Model->IsSearchResults());
+    // HC 문맥 메뉴는 모든 위치에서 열린다. 쓸 수 없는 항목은 메뉴가 항목마다 이유와 함께 끈다(설계 8.3절).
+    const bool NativeLocation = Ready && (Model->IsSearchResults() || Model->WorkspaceLocation().kind_ == LocatorKind::Local
+        || Model->WorkspaceLocation().kind_ == LocatorKind::Smb);
+    for (const auto* Id : {"hc.file.contextMenu", "hc.clipboard.copyPath"}) if (auto* Command = Action(Id)) Command->setEnabled(Ready);
+    for (const auto* Id : {"hc.navigate.linkTarget", "hc.file.runAsAdmin", "hc.file.openWith", "hc.file.properties", "hc.file.hash"})
+        if (auto* Command = Action(Id)) Command->setEnabled(NativeLocation);
+    // 권한 확인은 로컬과 검색 결과만 지원한다. SMB에서 켜 둔 채 아무 안내 없이 끝나지 않게 한다.
+    if (auto* Command = Action("hc.file.permissions"))
+        Command->setEnabled(Ready && (Model->IsSearchResults() || Model->WorkspaceLocation().kind_ == LocatorKind::Local));
     const bool ClipboardSource = Ready && Model->ProviderEnabled() && Model->SnapshotProvider();
     if (auto* Command = Action("hc.clipboard.copy")) Command->setEnabled(ClipboardSource);
     if (auto* Command = Action("hc.clipboard.cut")) Command->setEnabled(ClipboardSource
@@ -1377,7 +1818,14 @@ void CommandUiBridge::createCommandUi()
     Add("hc.file.folderSize", tr("하위 폴더 점유 공간 계산"), [this] {
         if (auto* Model = PanelModel(activePanel_)) Model->RequestDirectorySizes();
     });
-    Add("hc.file.context", tr("상황메뉴"), [this] { ShowShellMenu(commandIndex()); });
+    // HC 문맥 메뉴와 메뉴의 새 명령(설계 261110). 단축키 · 메뉴 바 · 자동화에서도 같은 ID로 쓴다.
+    Add("hc.file.contextMenu", tr("문맥 메뉴"), [this] { ShowContextMenu(commandIndex()); });
+    Add("hc.navigate.linkTarget", tr("링크 대상 위치로 이동"), [this] { navigateLinkTarget(commandIndex()); });
+    Add("hc.file.runAsAdmin", tr("관리자 권한으로 실행"), [this] { runAsAdmin(commandIndex()); });
+    Add("hc.file.openWith", tr("연결 프로그램 선택…"), [this] { openWith(commandIndex()); });
+    Add("hc.file.properties", tr("Windows 속성…"), [this] { showProperties(commandIndex()); });
+    Add("hc.file.hash", tr("해시 계산…"), [this] { computeHashes(commandIndex()); });
+    Add("hc.menu.contextEdit", tr("문맥 메뉴 파일 열기"), [this] { editContextMenuFile(); });
     Add("hc.commandLine.activate", tr("명령행 입력 활성화"), [Window] {
         QMetaObject::invokeMethod(Window, "ActivateCommandLine", Qt::DirectConnection);
     });
@@ -2479,6 +2927,35 @@ bool CommandUiBridge::CancelClipboard()
 Result<CommandOutcome> CommandUiBridge::executeClipboard(const CommandInvocation& Invocation, CFSModel* Model)
 {
     using namespace hc::operations;
+    const auto Text = [&Invocation](const char* Key, const char* Fallback) {
+        const auto Found = Invocation.parameters_.find(Key);
+        return Found != Invocation.parameters_.end() && std::holds_alternative<std::string>(Found->second)
+            ? QString::fromStdString(std::get<std::string>(Found->second)) : QString::fromLatin1(Fallback);
+    };
+    if (Invocation.id_ == "hc.clipboard.copyPath") {
+        // 경로 복사(설계 4.3절). 호환 탐색에서도 목록의 표시 경로를 쓴다. 여러 항목은 한 줄에 하나.
+        if (!Model->CanUseSnapshot()) return Error{ErrorCategory::Unavailable, "navigation-in-progress"};
+        if (Invocation.context_.location_ != Model->WorkspaceLocation()) return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
+        const auto Format = Text("format", "full");
+        if (Format != "full" && Format != "name" && Format != "parent") return Error{ErrorCategory::InvalidRequest, "copy-path-format-unknown"};
+        QStringList Lines;
+        const auto Add = [&](const QString& Path, const QString& Name) {
+            const auto Native = QDir::toNativeSeparators(Path);
+            Lines << (Format == "name" ? Name : Format == "parent" ? QDir::toNativeSeparators(QFileInfo(Path).absolutePath()) : Native);
+        };
+        if (Text("scope", "selection") == "folder") Add(Model->GetCurrentPathWithRoot(), QFileInfo(Model->GetCurrentPathWithRoot()).fileName());
+        else {
+            if (Invocation.context_.selectionManifest_) return Error{ErrorCategory::InvalidRequest, "copy-path-select-all-unsupported"};
+            for (const auto& At : SelectedEntries(Model, Invocation.context_))
+                if (const auto Item = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{}; Item && Item->Name_ != "..")
+                    Add(Model->GetFileFullPath(At), Item->Name_);
+        }
+        if (Lines.isEmpty()) return Error{ErrorCategory::InvalidRequest, "copy-path-selection-empty"};
+        Lines.removeDuplicates();
+        QApplication::clipboard()->setText(Lines.join("\r\n"));
+        statusMessage(Lines.size() == 1 ? tr("복사함: %1").arg(Lines.front()) : tr("경로 %1개를 복사했습니다.").arg(Lines.size()), 4000);
+        return CommandOutcome{};
+    }
     if (!Model->CanUseSnapshot() || !Model->ProviderEnabled() || !Model->SnapshotProvider())
         return Error{ErrorCategory::Unavailable, "clipboard-provider-not-ready"};
     if (Invocation.context_.location_ != Model->WorkspaceLocation())
@@ -2493,6 +2970,18 @@ Result<CommandOutcome> CommandUiBridge::executeClipboard(const CommandInvocation
             return Error{ErrorCategory::Unavailable, "clipboard-move-in-progress"};
         auto Request = *clipboard_;
         Request.destination_ = Invocation.context_.location_;
+        // "이 폴더에 붙여넣기": 현재 목록에 보이는 하위 폴더만 받는다. 임의 경로로 쓰지 않는다.
+        if (const auto Into = Text("destination", ""); !Into.isEmpty()) {
+            if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb) return Error{ErrorCategory::Unsupported, "clipboard-destination-not-writable"};
+            bool Listed = false;
+            for (int Row = 0; Row < Model->rowCount() && !Listed; ++Row) {
+                const auto At = Model->index(Row, 0); const auto Item = Model->GetFileInfo(At);
+                Listed = Item && Item->Name_ != ".." && (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)
+                    && QDir::toNativeSeparators(Model->GetFileFullPath(At)).compare(QDir::toNativeSeparators(Into), Qt::CaseInsensitive) == 0;
+            }
+            if (!Listed) return Error{ErrorCategory::StaleRevision, "paste-destination-not-listed"};
+            Request.destination_ = Locator{Kind, QDir::toNativeSeparators(Into).toStdString()};
+        }
         Request.destinationWriter_ = Kind == LocatorKind::Plugin ? Model->GetRoot()->WriteProvider()
             : MakeNativeWritableStorage(Kind, MakeNativeReadProvider(Kind));
         if (!Request.destinationWriter_) return Error{ErrorCategory::Unsupported, "clipboard-destination-not-writable"};
@@ -2503,9 +2992,11 @@ Result<CommandOutcome> CommandUiBridge::executeClipboard(const CommandInvocation
         Request.copyOptions_.acl_ = Options["copyAcl"].toBool(hc::defaults::DefaultValue("options/copyAcl").toBool());
         Request.copyOptions_.streams_ = Options["copyStreams"].toBool(hc::defaults::DefaultValue("options/copyStreams").toBool());
         Request.bytesPerSecondLimit_ = quint64(qBound(0, Options["copySpeedMiB"].toInt(hc::defaults::DefaultValue("options/copySpeedMiB").toInt()), 1048576)) * 1024 * 1024;
+        const auto Destination = Request.destination_;
         auto Started = fileJobs_->Submit(std::move(Request), Invocation.operation_);
         if (!Started.HasValue()) return Started.Failure();
         auto Affected = clipboardLocations_; Affected.push_back(Invocation.context_.location_);
+        if (Destination != Invocation.context_.location_) Affected.push_back(Destination);
         affectedLocations_[Started.Value().id_] = std::move(Affected);
         if (const auto Selection = jobSelections_.find("clipboard"); Selection != jobSelections_.end()) jobSelections_[Started.Value().id_] = Selection->second;
         if (clipboard_->operation_ == hc::operations::FileOperation::Move) clipboardMoves_[Started.Value().id_] = clipboardToken_;

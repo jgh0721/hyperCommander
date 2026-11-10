@@ -109,7 +109,19 @@ public:
     void                            EnsureKeyboardFocusOnView() const override;
 
     nsHC::TySpFileSource            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown, bool& IsSelected );
-    void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
+    // 목록 문맥 메뉴(설계 261110 6절 · 9절). Shell이면 탐색기 메뉴, 아니면 HC 문맥 메뉴를 연다.
+    // 마우스로 선택 밖의 행을 열면 선택을 그 행으로 바꾼다(이전 선택은 hc.selection.restore).
+    enum class MenuOrigin { Mouse, Keyboard };
+    bool ShowContextMenu(const QModelIndex& Index, MenuOrigin Origin, bool Shell = false);
+    // general.filePanel.rightClickMenu 가 "shell"이면 오른쪽 클릭이 탐색기 메뉴를 연다.
+    static bool RightClickOpensShellMenu();
+    // 커서 행(없으면 목록 왼쪽 위)의 아래 모서리. 키보드로 연 메뉴의 기준점이며 전역 논리 좌표다.
+    QPoint MenuAnchor(const QModelIndex& Index);
+    // Global(전역 논리 좌표)에 Paths의 탐색기 메뉴를 연다. Source가 오디오 파일 하나면 "오디오 재생"을 더한다.
+    bool OpenShellMenuAt(const QStringList& Paths, const QPoint& Global, const QModelIndex& Source = {});
+    // 원본 모델 색인을 목록(프록시) 색인으로. 명령 경로의 CursorIndex 와 같은 종류다.
+    QModelIndex ViewIndex(const QModelIndex& Source) const;
+    bool ShowsHiddenItems() const;
     QStringList DragPaths(const QModelIndex& Index) const;
     QString FileDropDirectory(const QModelIndex& Index, bool SameView) const;
     Qt::DropAction ChooseFileDropAction(int Count, const QString& Destination, Qt::DropActions Allowed, const QPoint& Position);
@@ -292,6 +304,12 @@ private:
     QPointF                         rightPressGlobalPosition_;
     bool                            rightPressActive_ = false;
     bool                            suppressMouseContextMenu_ = false;
+    // 메뉴 키 · Shift+F10이 명령으로 연 메뉴가 닫힌 시각. 같은 키에서 뒤따라 온 키보드 문맥 메뉴 이벤트를 삼킨다.
+    QElapsedTimer                   keyboardMenuClosed_;
+    QPoint                          contextGlobal_;    // 마지막 마우스 문맥 메뉴 이벤트의 전역 위치와 수정 키
+    Qt::KeyboardModifiers           contextModifiers_;
+    QPoint anchorInViewport(const QModelIndex& Source, QWidget*& Viewport);
+    QList<QPair<QString, std::function<void()>>> shellExtras(const QStringList& Paths, const QModelIndex& Source) const;   // ShellMenuExtras
     bool                            rightDrop_ = false;
     QPoint                          renamePressPosition_;
     bool                            plainLeftClick_ = false;

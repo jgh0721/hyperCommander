@@ -131,7 +131,6 @@ public:
     void                            RefreshSource( int TabIndex );
     void                            SelectRowOnCurrentTab( const QModelIndex& SrcIndex, bool IsMoveDown );
     void                            ReturnOnCurrentTab( const QModelIndex& SrcIndex );
-    void                            ContextMenuOnCurrentTab( const QModelIndex& SrcIndex );
     void                            ExternalEditorMenu( const QModelIndex& SrcIndex );
     void                            ChangeVolume( const QString& Drive );
     void                            ChangeCurrentPath( const QString& Path, const QString& Parameter );

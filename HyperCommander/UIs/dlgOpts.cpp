@@ -161,6 +161,16 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
         "계산하지 않는 필드는 지원 안 함으로 보고 조건에 일치하지 않습니다. 열 값 표시는 이 설정과 무관합니다."), FieldCard);
     FieldHelp->setWordWrap(true); FieldRows->addRow(FieldHelp);
     SizeRows->addWidget(FieldCard);
+    // 설계 261110 9.1절: 오른쪽 클릭이 여는 메뉴. Shift+오른쪽 클릭은 반대 메뉴를 연다.
+    auto* MenuCard = new QGroupBox(tr("문맥 메뉴"), SizeBody); MenuCard->setObjectName("hc.settings.contextMenuCard");
+    auto* MenuRows = new QFormLayout(MenuCard); MenuRows->setContentsMargins(14, 12, 14, 14); MenuRows->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    rightClickMenu_ = new QComboBox(MenuCard); rightClickMenu_->setObjectName("hc.settings.rightClickMenu");
+    rightClickMenu_->addItem(tr("HyperCommander 문맥 메뉴"), "hc"); rightClickMenu_->addItem(tr("Windows 탐색기 메뉴"), "shell");
+    MenuRows->addRow(tr("오른쪽 클릭(&R)"), rightClickMenu_);
+    auto* MenuHelp = new QLabel(tr("Shift+오른쪽 클릭은 다른 메뉴를 엽니다. 메뉴 키 · Shift+F10은 키보드 설정의 '문맥 메뉴' 명령을 따르고, "
+        "Shift+Enter는 탐색기 메뉴를 엽니다. 문맥 메뉴에 사용자 항목을 더하려면 '문맥 메뉴 파일 열기' 명령으로 contextMenu.json을 편집하세요."), MenuCard);
+    MenuHelp->setWordWrap(true); MenuRows->addRow(MenuHelp);
+    SizeRows->addWidget(MenuCard);
     ui.widget_4->hide();
     SizeRows->addStretch(); DisplayRows->addStretch();
     ui.lstOptCate->setStyleSheet({});
@@ -265,6 +275,9 @@ void QMainOpts::LoadSettings()
     networkFieldConditions_->setCurrentIndex(std::max(0, networkFieldConditions_->findData(Panel.value("networkFieldConditions")
         .toString(hc::defaults::DefaultValue("general/filePanel/networkFieldConditions").toString()))));
     networkFieldConditions_->setEnabled(filePanelSupported_);
+    rightClickMenu_->setCurrentIndex(std::max(0, rightClickMenu_->findData(Panel.value("rightClickMenu")
+        .toString(hc::defaults::DefaultValue("general/filePanel/rightClickMenu").toString()))));
+    rightClickMenu_->setEnabled(filePanelSupported_);
     listAutoWidth_->setValue(Presentation.appearance_.autoWidth);
     listAutoPercent_->setValue(Presentation.appearance_.autoPercent);
     resetListModeDraft_ = false;
@@ -505,6 +518,7 @@ bool QMainOpts::SaveSettings()
         Panel["nameElide"] = QStringList{"keep-extension", "end", "middle"}.value(listElide_->currentIndex(), "keep-extension");
         Panel["autoWidthDip"] = listAutoWidth_->value(); Panel["autoClippedPercent"] = listAutoPercent_->value();
         Panel["networkFieldConditions"] = networkFieldConditions_->currentData().toString();
+        Panel["rightClickMenu"] = rightClickMenu_->currentData().toString();
         General["filePanel"] = Panel;
     }
     if (keyboardSettings_ && !keyboardSettings_->SaveFunctions(General)) return false;

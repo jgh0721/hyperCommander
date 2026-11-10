@@ -27,6 +27,7 @@
 #include "commonLibs/document/documentFormatSupport.hpp"
 #include "Modules/mdlFileModel.hpp"
 #include "UIs/cmpPanel.hpp"
+#include "UIs/itemSelectionController.hpp"
 
 #include <QtitanGrid.h>
 #include <QtnGridViewGraphics.h>
@@ -531,7 +532,9 @@ void CGridView::ensureThumbnails()
         if (suppressMouseContextMenu_) return;
         const auto Tile = thumbnails_->listView()->indexAt(Point);
         if (Tile.isValid()) thumbnails_->setCursorRow(Tile.row());
-        ShowShellMenu(Tile.isValid() ? thumbnailModel_->SourceIndex(Tile.row()) : QModelIndex{}, true);
+        const bool Shift = (contextGlobal_.isNull() ? QGuiApplication::keyboardModifiers() : contextModifiers_).testFlag(Qt::ShiftModifier);
+        contextGlobal_ = thumbnails_->listView()->viewport()->mapToGlobal(Point);
+        ShowContextMenu(Tile.isValid() ? thumbnailModel_->SourceIndex(Tile.row()) : QModelIndex{}, MenuOrigin::Mouse, RightClickOpensShellMenu() != Shift);
     });
     thumbnails_->setFont(thumbnailFont_);
     thumbnails_->listView()->setPalette(QApplication::palette());
@@ -1939,9 +1942,128 @@ void CGridView::syncSelectionInputActivity()
         Native->SetSelectionInputActive(selectionHeldKey_ != 0 || processingSelectionKey_ || !pendingSelectionKeys_.isEmpty());
 }
 
-void CGridView::ContextMenuOnCurrentTab( const QModelIndex& SrcIndex )
+bool CGridView::RightClickOpensShellMenu()
 {
-    ShowShellMenu(SrcIndex);
+    const auto Panel = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["filePanel"].toObject();
+    return Panel["rightClickMenu"].toString(hc::defaults::DefaultValue("general/filePanel/rightClickMenu").toString()) == "shell";
+}
+
+QModelIndex CGridView::ViewIndex(const QModelIndex& Source) const
+{
+    auto At = Source;
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(At.model())) At = Proxy->mapToSource(At);
+    if (!At.isValid() || At.model() != model_) return {};
+    return proxy_ ? proxy_->mapFromSource(At) : At;
+}
+
+bool CGridView::ShowsHiddenItems() const
+{
+    bool Shown = false;
+    if (proxy_) QMetaObject::invokeMethod(proxy_, "GetHiddenSystem", qReturnArg(Shown));
+    return Shown;
+}
+
+QPoint CGridView::anchorInViewport(const QModelIndex& Source, QWidget*& Viewport)
+{
+    Viewport = grid_->viewport();
+    QPoint Anchor(8, 8);
+    if (IsThumbnailMode()) {
+        Viewport = thumbnails_->listView()->viewport();
+        const auto Rect = thumbnails_->listView()->visualRect(thumbnails_->listView()->currentIndex());
+        if (Rect.isValid()) Anchor = Rect.bottomLeft();
+    } else if (Source.isValid() && Source.model() == model_) {
+        const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
+        const auto Row = view_->getRow(Visible);
+        if (Row.isValid()) {
+            view_->scrollToIndex(Visible, false);
+            for (const auto& Hit : grid_->hitInfoAll())
+                if (Hit.info() == GridHitInfo::Cell && Hit.row().rowIndex() == Row.rowIndex() && Hit.modelIndex().column() == 0) {
+                    Anchor = Hit.rect().bottomLeft(); break;
+                }
+        }
+    }
+    Anchor.setX(qBound(0, Anchor.x(), qMax(0, Viewport->width() - 1)));
+    Anchor.setY(qBound(0, Anchor.y(), qMax(0, Viewport->height() - 1)));
+    return Anchor;
+}
+
+QPoint CGridView::MenuAnchor(const QModelIndex& Index)
+{
+    auto Source = Index.isValid() ? Index : retrieveCursorIndex();
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+    QWidget* Viewport = nullptr;
+    const auto Local = anchorInViewport(Source, Viewport);
+    return Viewport->mapToGlobal(Local);
+}
+
+bool CGridView::ShowContextMenu(const QModelIndex& Index, MenuOrigin Origin, bool Shell)
+{
+    const auto Pointer = std::exchange(contextGlobal_, QPoint{});
+    if (IsEditing() || !model_) return false;
+    // 키보드는 커서 행 기준이고, 마우스는 누른 행(빈 영역이면 폴더 배경) 기준이다.
+    auto Source = Index.isValid() || Origin == MenuOrigin::Mouse ? Index : retrieveCursorIndex();
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+    if (Source.isValid() && Source.model() != model_) return false;
+    if (Shell) {
+        const bool Shown = ShowShellMenu(Source.isValid() ? ViewIndex(Source) : QModelIndex{}, Origin == MenuOrigin::Mouse);
+        if (Origin == MenuOrigin::Keyboard) keyboardMenuClosed_.start();
+        return Shown;
+    }
+    auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+    if (!Bridge) return false;
+    const auto Item = Source.isValid() ? model_->GetFileInfo(Source) : nsHC::TySpFileSource{};
+    bool Background = !Item || Item->Name_ == "..";
+    if (Origin == MenuOrigin::Mouse && !Background && !IsSourceSelected(Source)) {
+        // 보이는 대상과 실행 대상을 맞춘다(6절): 선택 밖의 행은 선택을 풀고 그 행을 커서 행으로 둔다.
+        const auto Key = sourceSelectionKey(Source);
+        const auto Before = CaptureSelection();
+        if (!Key.isEmpty()) {
+            if (!Before.isEmpty())
+                if (auto* Selection = hc::ui::ItemSelectionController::For(this)) Selection->RememberPrevious(Before);
+            RestoreSelection({}, Key);
+            if (!Before.isEmpty())
+                if (auto* Window = qobject_cast<QMainWindow*>(window()))
+                    Window->statusBar()->showMessage(tr("선택한 %1개 대신 이 항목을 대상으로 합니다. '이전 선택 복원'으로 되돌릴 수 있습니다.").arg(Before.size()), 6000);
+        }
+    }
+    const auto Anchor = Origin == MenuOrigin::Mouse ? (Pointer.isNull() ? QCursor::pos() : Pointer) : MenuAnchor(Source);
+    // 키보드로 열 때 선택이 있으면 커서가 ".."이어도 선택을 대상으로 한다.
+    if (Origin == MenuOrigin::Keyboard && Background && !SelectedSourceIndexes().isEmpty()) { Background = false; Source = {}; }
+    viewClickTimer_.stop();
+    const QPointer<CGridView> Alive(this);
+    const bool Shown = Bridge->ExecFileContextMenu(this, Source, Background, Anchor, Origin == MenuOrigin::Keyboard);
+    if (Alive && Origin == MenuOrigin::Keyboard) keyboardMenuClosed_.start();
+    return Shown;
+}
+
+QList<QPair<QString, std::function<void()>>> CGridView::shellExtras(const QStringList& Paths, const QModelIndex& Source) const
+{
+    // 오디오 파일 하나면 셸 메뉴 맨 위에 "오디오 재생"을 둔다(재생/일시정지 명령과 같은 동작).
+    ShellMenuExtras Extras;
+    auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+    if (Bridge && Bridge->Audio() && Paths.size() == 1 && Source.isValid() && Source.model() == model_)
+        if (const auto Item = model_->GetFileInfo(Source); Item && !(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)
+            && hc::audio::IsPlayable(Item->Name_, Bridge->Audio()->Extensions())) {
+            CmpPanel* Panel = nullptr;
+            for (auto* Parent = parent(); Parent && !Panel; Parent = Parent->parent()) Panel = qobject_cast<CmpPanel*>(Parent);
+            if (Panel) Extras.append({tr("오디오 재생"), [Bridge = QPointer<CommandUiBridge>(Bridge), Panel = QPointer<CmpPanel>(Panel), Source = QPersistentModelIndex(Source)] {
+                if (Bridge && Panel && Source.isValid()) Bridge->StartAudioPreview(Panel, Source);
+            }});
+        }
+    return Extras;
+}
+
+bool CGridView::OpenShellMenuAt(const QStringList& Paths, const QPoint& Global, const QModelIndex& Source)
+{
+    if (Paths.isEmpty()) return false;
+    auto* Viewport = IsThumbnailMode() ? thumbnails_->listView()->viewport() : grid_->viewport();
+    const auto Local = Viewport->mapFromGlobal(Global);
+    const auto Scale = Viewport->devicePixelRatioF();
+    POINT Position{qRound(Local.x() * Scale), qRound(Local.y() * Scale)};
+    if (!ClientToScreen(reinterpret_cast<HWND>(Viewport->winId()), &Position)) return false;
+    auto At = Source;
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(At.model())) At = Proxy->mapToSource(At);
+    return OpenShellContextMenuForObjects(Paths, Position.x, Position.y, reinterpret_cast<void*>(window()->winId()), shellExtras(Paths, At));
 }
 
 QStringList CGridView::DragPaths(const QModelIndex& Index) const
@@ -2046,39 +2168,14 @@ bool CGridView::ShowShellMenu(const QModelIndex& Index, bool AtCursor)
     // Remote/input desktops can deny GetCursorPos even while the file panel
     // receives mouse events. Keep the menu usable at the focused row instead.
     if (!AtCursor || !GetCursorPos(&Position)) {
-        auto* Viewport = grid_->viewport();
-        QPoint Anchor(8, 8);
-        if (IsThumbnailMode()) {
-            Viewport = thumbnails_->listView()->viewport();
-            const auto Rect = thumbnails_->listView()->visualRect(thumbnails_->listView()->currentIndex());
-            if (Rect.isValid()) Anchor = Rect.bottomLeft();
-        } else if (Row.isValid()) {
-            view_->scrollToIndex(Visible, false);
-            for (const auto& Hit : grid_->hitInfoAll())
-                if (Hit.info() == GridHitInfo::Cell && Hit.row().rowIndex() == Row.rowIndex() && Hit.modelIndex().column() == 0) {
-                    Anchor = Hit.rect().bottomLeft(); break;
-                }
-        }
-        Anchor.setX(qBound(0, Anchor.x(), qMax(0, Viewport->width() - 1)));
-        Anchor.setY(qBound(0, Anchor.y(), qMax(0, Viewport->height() - 1)));
+        QWidget* Viewport = nullptr;
+        const auto Anchor = anchorInViewport(Row.isValid() ? Source : QModelIndex{}, Viewport);
         const auto Scale = Viewport->devicePixelRatioF();
         Position = {qRound(Anchor.x() * Scale), qRound(Anchor.y() * Scale)};
         if (!ClientToScreen(reinterpret_cast<HWND>(Viewport->winId()), &Position)) return false;
     }
     viewClickTimer_.stop();
-    // 오디오 파일 하나면 셸 메뉴 맨 위에 "미리 듣기"를 둔다.
-    ShellMenuExtras Extras;
-    auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
-    if (Bridge && Bridge->Audio() && Paths.size() == 1 && Source.isValid())
-        if (const auto Item = model_->GetFileInfo(Source); Item && !(Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY)
-            && hc::audio::IsPlayable(Item->Name_, Bridge->Audio()->Extensions())) {
-            CmpPanel* Panel = nullptr;
-            for (auto* Parent = parent(); Parent && !Panel; Parent = Parent->parent()) Panel = qobject_cast<CmpPanel*>(Parent);
-            if (Panel) Extras.append({tr("미리 듣기"), [Bridge = QPointer<CommandUiBridge>(Bridge), Panel = QPointer<CmpPanel>(Panel), Source = QPersistentModelIndex(Source)] {
-                if (Bridge && Panel && Source.isValid()) Bridge->StartAudioPreview(Panel, Source);
-            }});
-        }
-    return OpenShellContextMenuForObjects(Paths, Position.x, Position.y, reinterpret_cast<void*>(window()->winId()), Extras);
+    return OpenShellContextMenuForObjects(Paths, Position.x, Position.y, reinterpret_cast<void*>(window()->winId()), shellExtras(Paths, Source));
 }
 
 Qtitan::GridViewBase* CGridView::BaseView() const
@@ -2101,7 +2198,9 @@ void CGridView::oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args )
     const auto Type = Info.info();
     if (Type == GridHitInfo::Column || Type == GridHitInfo::GroupRow || Type == GridHitInfo::GroupBranchButton) { showGroupingMenu(Args); return; }
     if (Type != GridHitInfo::Cell && Type != GridHitInfo::Rows) return;
-    ShowShellMenu(Type == GridHitInfo::Cell ? Info.modelIndex() : QModelIndex{}, true);
+    // 오른쪽 클릭은 설정의 메뉴, Shift+오른쪽 클릭은 반대 메뉴(설계 261110 9.1절).
+    const bool Shift = (contextGlobal_.isNull() ? QGuiApplication::keyboardModifiers() : contextModifiers_).testFlag(Qt::ShiftModifier);
+    ShowContextMenu(Type == GridHitInfo::Cell ? Info.modelIndex() : QModelIndex{}, MenuOrigin::Mouse, RightClickOpensShellMenu() != Shift);
     Args->setHandled( true );
 }
 
@@ -2282,8 +2381,16 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
     const bool FileSurface = GridViewport || TileViewport || Watched == grid_ || (thumbnails_ && Watched == thumbnails_->listView());
     if (FileSurface && Event->type() == QEvent::ContextMenu) {
         const auto* Context = static_cast<QContextMenuEvent*>(Event);
-        if (Context->reason() == QContextMenuEvent::Keyboard) suppressMouseContextMenu_ = false;
-        else if (suppressMouseContextMenu_ || rightPressActive_) { Event->accept(); return true; }
+        if (Context->reason() == QContextMenuEvent::Keyboard) {
+            suppressMouseContextMenu_ = false; Event->accept();
+            // 메뉴 키 · Shift+F10이 hc.file.contextMenu 로 메뉴를 연 직후 같은 키가 만든 이벤트는 삼킨다.
+            // 키를 해제한 사용자는 이 이벤트로 설정의 메뉴를 커서 행 아래에 연다(9.1절).
+            if (keyboardMenuClosed_.isValid() && keyboardMenuClosed_.elapsed() < 500) return true;
+            ShowContextMenu({}, MenuOrigin::Keyboard, RightClickOpensShellMenu());
+            return true;
+        }
+        if (suppressMouseContextMenu_ || rightPressActive_) { Event->accept(); return true; }
+        contextGlobal_ = Context->globalPos(); contextModifiers_ = Context->modifiers();
     }
     if (FileSurface && Event->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(Event)->key() == Qt::Key_Escape && rightPressActive_) {
         rightPressActive_ = false; suppressMouseContextMenu_ = true; dragPaths_.clear();

@@ -66,7 +66,6 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     DECLARE_HC_COMMAND_EX( NavigatePath );
 
     DECLARE_HC_COMMAND( PanelSwitch );
-    DECLARE_HC_COMMAND( FileContext );
     DECLARE_HC_COMMAND( FileEdit );
 
   protected slots:

@@ -91,7 +91,6 @@ class CCommandMgr : public QObject, public QAbstractNativeEventFilter
     DECLARE_HC_COMMAND_EX( NavigatePath );
 
     DECLARE_HC_COMMAND( PanelSwitch );
-    DECLARE_HC_COMMAND( FileContext );
     DECLARE_HC_COMMAND( FileEdit );
 
   private:

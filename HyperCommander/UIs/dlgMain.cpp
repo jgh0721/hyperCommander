@@ -525,16 +525,6 @@ DEFINE_HC_COMMAND( QMainUI, PanelSwitch )
     }
 }
 
-DEFINE_HC_COMMAND( QMainUI, FileContext )
-{
-    const auto Pane = retrieveSrcPanel();
-    Q_ASSERT( Pane != nullptr );
-    if( Pane == nullptr )
-        return;
-
-    Pane->ContextMenuOnCurrentTab( CursorIndex );
-}
-
 DEFINE_HC_COMMAND( QMainUI, FileEdit )
 {
     const auto Pane = retrieveSrcPanel();
