@@ -16,7 +16,7 @@ bool CGridView::GroupingActive() const { return view_ && view_->groupColumnCount
 QString CGridView::ColumnSourceText() const
 {
     const auto Profile = ColumnProfile();
-    const auto Source = manualColumns_ ? tr("고정") : automaticColumnRule_ >= 0 ? tr("자동 · %1번 조건").arg(automaticColumnRule_ + 1) : tr("자동");
+    const auto Source = flatProfile_ ? tr("평면 · %1").arg(flatSource_) : manualColumns_ ? tr("고정") : automaticColumnRule_ >= 0 ? tr("자동 · %1번 조건").arg(automaticColumnRule_ + 1) : tr("자동");
     QStringList Groups;
     for (const auto& Level : groupingLevels_) for (const auto& Definition : Profile.columns_) if (Definition.id_ == Level.columnId_) {
         const auto Mode = Level.mode_ == "relativeDate" ? tr("상대 날짜") : Level.mode_ == "date" ? tr("날짜") : Level.mode_ == "month" ? tr("월") : tr("값");

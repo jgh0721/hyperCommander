@@ -3,6 +3,7 @@
 #include "columnContracts.hpp"
 #include "metadataColumns.hpp"
 #include "columnProfileStorage.hpp"
+#include <QDir>
 
 namespace hc::columns
 {
@@ -34,6 +35,8 @@ namespace hc::columns
         QDateTime modified_;
         QDateTime accessed_;
         QString parentPath_;
+        // 평면 보기의 기준 폴더. 비어 있으면 file.relativePath는 값이 없다.
+        QString basePath_;
         QString typeDescription_;
     };
     inline QString Extension(const FileSnapshot& File)
@@ -45,6 +48,18 @@ namespace hc::columns
     inline CellValue Resolve(const QString& FieldId, const FileSnapshot& File)
     {
         if (FieldId == "file.parentPath") return File.parentPath_.isEmpty() ? CellValue::Missing(ValueState::Empty) : CellValue::Ready(File.parentPath_);
+        if (FieldId == "file.relativePath") {
+            if (File.basePath_.isEmpty() || File.parentPath_.isEmpty()) return CellValue::Missing(ValueState::Empty);
+            // 기준 폴더의 항목은 빈 문자열이다. 구분자는 네이티브(\)로 맞춘다.
+            auto Base = QDir::toNativeSeparators(File.basePath_), Parent = QDir::toNativeSeparators(File.parentPath_);
+            while (Base.size() > 3 && Base.endsWith(u'\\')) Base.chop(1);
+            while (Parent.size() > 3 && Parent.endsWith(u'\\')) Parent.chop(1);
+            if (Parent.compare(Base, Qt::CaseInsensitive) == 0) return CellValue::Ready(QString{});
+            const auto Prefix = Base.endsWith(u'\\') ? Base.size() : Base.size() + 1;
+            if (!Parent.startsWith(Base, Qt::CaseInsensitive) || Parent.size() <= Prefix || (!Base.endsWith(u'\\') && Parent[Base.size()] != u'\\'))
+                return CellValue::Missing(ValueState::Empty);
+            return CellValue::Ready(Parent.mid(Prefix));
+        }
         if (FieldId == "file.parentName") {
             auto Path = File.parentPath_; Path.replace('\\', '/');
             while (Path.endsWith('/') && Path.size() > 1) Path.chop(1);

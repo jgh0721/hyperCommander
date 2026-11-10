@@ -2,6 +2,8 @@
 #include "columnPreview.hpp"
 #include <functional>
 #include <QSet>
+#include <QWinEventNotifier>
+#include <QElapsedTimer>
 
 #include "columnMgr.hpp"
 #include "commonLibs/columns/columnQueryEngine.hpp"
@@ -13,6 +15,8 @@
 #include "cmnTypeDefs.hpp"
 
 #include "Modules/mdlFileModel.hpp"
+#include "flatListingSession.hpp"
+#include "commonLibs/columns/sortRankWorker.hpp"
 namespace hc::permissions { class DirectoryElevationSession; }
 namespace hc::search { class EverythingSession; }
 
@@ -86,6 +90,43 @@ public:
     QString EverythingQuery() const { return everythingQuery_; }
     QString EverythingStatus() const { return everythingStatus_; }
     bool IsEverythingRunning() const;
+    // 여러 위치 결과의 공급원. Everything 검색과 평면 보기는 같은 결과 모드(IsSearchResults)를 쓴다.
+    enum class ResultSource { None, Everything, Flat };
+    ResultSource ResultSourceKind() const { return searchResults_ ? resultSource_ : ResultSource::None; }
+    // 평면 보기: 기준 폴더 아래 항목을 한 목록에 모은다. 열거가 끝나거나 중지되어도 평면 상태는 유지된다.
+    void StartFlatListing(hc::flat::ListingOptions Options);
+    // Leave가 false면 열거만 멈추고 그때까지의 결과를 남긴다.
+    void StopFlatListing(bool Leave = false);
+    bool IsFlatListing() const { return searchResults_ && resultSource_ == ResultSource::Flat; }
+    bool IsFlatRunning() const { return flatSession_ && flatSession_->Running(); }
+    const QString& FlatBase() const { return flatBase_; }
+    const hc::flat::ListingOptions& FlatOptions() const { return flatOptions_; }
+    const hc::flat::Status& FlatStatus() const { return flatStatus_; }
+    // 평면 보기 중 기준 폴더 아래가 바뀌었는지(로컬만 감시). 자동으로 합치지 않고 상태 표시줄에 F5를 안내한다.
+    bool FlatChanged() const { return flatChanged_; }
+    // 평면 보기 트리(시안 E): 같은 그리드에서 트리 순서로 정렬하고, 폴더 행을 접으면 그 아래 행을 숨긴다.
+    // ExpandLevel: -1 모두 펼침 · 1 첫 단계만 · 0 모두 접기. FolderTotal: 폴더 행 크기에 하위 파일 합계.
+    void SetFlatTree(bool Tree, int ExpandLevel = -1, bool FolderTotal = true);
+    bool FlatTree() const { return IsFlatListing() && flatTree_; }
+    int FlatTreeDepth(int Row) const;
+    bool FlatTreeHidden(int Row) const;
+    bool FlatFolderCollapsed(int Row) const;
+    void SetFlatFolderExpanded(int Row, bool Expanded);
+    // 행의 트리 부모(상대 부모 폴더 행). 없으면 -1.
+    int FlatTreeParent(int Row) const;
+    // 평면 폴더 세트의 정렬 · 그룹 표시: 이름 정렬에 깊이 비교, 폴더 그룹 제목을 마지막 폴더 이름으로, 그룹 순서를 최근 수정 먼저로.
+    void SetFlatPresentation(bool DepthSort, bool GroupLeaf, bool GroupRecent);
+    // 파일 작업이 끝난 폴더만 다시 확인한다: 사라진 행은 빼고, 새로 생긴 항목은 그 폴더 아래만 다시 열거해 더한다.
+    void RefreshFlatLocations(const QStringList& Folders);
+    // 여러 위치 결과에서 행을 뺀다(정렬 순위는 작업 스레드에서 다시 계산).
+    void RemoveSearchRows(QVector<int> Rows);
+    // 이름 앞에 그리는 상대 부모 경로(열 0, 평면 보기에서만 값이 있다).
+    static constexpr int FlatPrefixRole = Qt::UserRole + 76;
+    // 평면 트리: 들여쓰기 깊이와 접기 표시(없음 · 0 펼침 · 1 접힘).
+    static constexpr int FlatTreeDepthRole = Qt::UserRole + 77;
+    static constexpr int FlatTreeExpanderRole = Qt::UserRole + 78;
+    // 시험용: 정렬 작업 스레드가 아직 순위를 계산 중인지.
+    bool SortRanksPending() const { return searchResults_ && sortRanked_ < sortSubmitted_; }
     std::shared_ptr<hc::storage::IStorageProvider> ProviderFor(const hc::storage::EntrySnapshot& Entry) const;
     static constexpr int FileColorOverrideRole = Qt::UserRole + 66;
     static constexpr int GridSortRole = Qt::UserRole + 65;
@@ -180,7 +221,8 @@ public:
 
     // Resource IDs belong to the provider that published the displayed rows.
     // Another tab may refresh the provider cached by a shared filesystem root.
-    std::shared_ptr<hc::storage::IStorageProvider> SnapshotProvider() const { return searchResults_ ? searchLocal_ : acceptedProvider_; }
+    std::shared_ptr<hc::storage::IStorageProvider> SnapshotProvider() const
+    { return !searchResults_ ? acceptedProvider_ : IsFlatListing() && flatKind_ == hc::storage::LocatorKind::Smb ? searchSmb_ : searchLocal_; }
 
 signals:
     void DirectoryReadStarted(const QString& Path, bool Archive);
@@ -196,6 +238,7 @@ signals:
     void PageChanged();
     void SearchResultsChanged();
     void SearchRefreshRequested();
+    void FlatTreeChanged();
 protected:
     void                            doRefresh() override;
 
@@ -228,6 +271,42 @@ private:
     QString everythingQuery_, everythingStatus_;
     std::unique_ptr<hc::search::EverythingSession> everythingSession_;
     std::shared_ptr<hc::storage::IStorageProvider> searchLocal_, searchSmb_;
+    ResultSource resultSource_ = ResultSource::None;
+    std::unique_ptr<hc::flat::ListingSession> flatSession_;
+    hc::flat::ListingOptions flatOptions_;
+    hc::flat::Status flatStatus_;
+    QString flatBase_;
+    std::string flatBaseUtf8_;
+    hc::storage::LocatorKind flatKind_ = hc::storage::LocatorKind::Local;
+    bool flatDepthSort_ = true, flatGroupLeaf_ = false, flatGroupRecent_ = false;
+    // 상대 부모 경로(소문자) → 그 폴더 파일의 가장 최근 수정 시각. 폴더 그룹의 "최근 수정 먼저" 순서에 쓴다.
+    QHash<QString, qint64> flatFolderLatest_;
+    bool flatTree_ = false, flatTreeTotal_ = true;
+    int flatTreeExpand_ = -1;
+    QSet<QString> flatCollapsed_;
+    QString flatRelative(const nsHC::TySpFileSource& Item, bool Self) const;
+    void refreshFlatTreeTotals();
+    // 파일 작업 뒤 영향받은 폴더만 다시 열거하는 보조 세션.
+    std::unique_ptr<hc::flat::ListingSession> flatRescan_;
+    // 기준 폴더 하위 포함 변경 알림(FindFirstChangeNotificationW, bWatchSubtree=TRUE).
+    void* flatWatchHandle_ = nullptr;
+    std::unique_ptr<QWinEventNotifier> flatWatch_;
+    bool flatChanged_ = false;
+    QElapsedTimer flatOwnChange_;
+    void startFlatWatch();
+    void stopFlatWatch();
+    int flatDepth(const nsHC::TySpFileSource& Item) const;
+    void noteFlatFolder(const nsHC::TySpFileSource& Item);
+    // 여러 위치 결과의 열 정렬은 작업 스레드에서 병합한다(정렬 키 사전 계산).
+    std::unique_ptr<hc::columns::SortRankWorker> sortWorker_;
+    quint64 sortGeneration_ = 0;
+    int sortSubmitted_ = 0, sortRanked_ = 0;
+    QVector<hc::columns::SortDefinition> sortSubmittedSorts_;
+    hc::columns::SortTextOptions sortSubmittedOptions_;
+    hc::columns::SortTextOptions sortTextOptions() const;
+    void resetSortWorker();
+    void applySortRanks(quint64 Generation, int Rows, QVector<int> Ranks);
+    void notifySortRanks(const QVector<int>& Previous);
     hc::columns::CellValue readField(const nsHC::TySpFileSource& Item, const QString& Field, bool Request, bool Urgent = true) const;
     hc::columns::CellValue evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort = false) const;
     QString queryPath(const nsHC::TySpFileSource& Item) const;
@@ -320,9 +399,6 @@ private:
     // Sort rules of the last GridSortRole notification; with them unchanged only moved ranks are sent.
     QVector<hc::columns::SortDefinition> notifiedRankSorts_;
     void refreshColumnSortRanks(int First = 0);
-    QVector<hc::columns::SortRow> searchSortRows_;
-    QVector<int> searchSortOrder_;
-    QVector<hc::columns::SortDefinition> searchSorts_;
     QJsonObject                     displaySettings_;
     quint64                         iconGeneration_ = 0;
     int                             iconPixels_ = 32;

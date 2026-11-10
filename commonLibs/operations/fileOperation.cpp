@@ -187,7 +187,8 @@ namespace hc::operations
                 rootFiles_.resize(request_.sources_.size());
                 renameRoots_.resize(request_.sources_.size());
                 for (std::size_t Root = 0; auto& Source : request_.sources_) {
-                    PlannedItem Item{Source, request_.operation_ == FileOperation::Rename ? request_.destination_ : Child(request_.destination_, request_.destinationName_.empty() ? Source.entry_.name_ : request_.destinationName_)};
+                    PlannedItem Item{Source, request_.operation_ == FileOperation::Rename ? request_.destination_ : Child(Source.relativeParent_.empty() ? request_.destination_ : Child(request_.destination_, Source.relativeParent_),
+                        request_.destinationName_.empty() ? Source.entry_.name_ : request_.destinationName_)};
                     Item.root_ = Root++; pending_.push_back(std::move(Item));
                 }
                 if (incrementalDelete_ && request_.confirmDelete_) phase_ = Phase::Confirm;
@@ -2265,6 +2266,21 @@ namespace hc::operations
             return Error{ErrorCategory::InvalidRequest, "invalid-file-operation-policy"};
         if (!IsValidCopyPattern(Request.includePattern_) || Request.bytesPerSecondLimit_ > (1ull << 40))
             return Error{ErrorCategory::InvalidRequest, "invalid-copy-options"};
+        // 상대 폴더는 대상 폴더 아래의 안전한 이름 구간만 허용한다(.. · 절대 경로 · 다른 드라이브 금지).
+        for (const auto& Source : Request.sources_) {
+            if (Source.relativeParent_.empty()) continue;
+            if ((Request.operation_ != FileOperation::Copy && Request.operation_ != FileOperation::Move) || Request.selection_ || !Request.destinationName_.empty()
+                || (Request.destination_.kind_ != LocatorKind::Local && Request.destination_.kind_ != LocatorKind::Smb))
+                return Error{ErrorCategory::InvalidRequest, "invalid-relative-parent"};
+            std::size_t Begin = 0;
+            for (;;) {
+                const auto End = Source.relativeParent_.find('\\', Begin);
+                if (!SafeName(Source.relativeParent_.substr(Begin, End == std::string::npos ? std::string::npos : End - Begin)))
+                    return Error{ErrorCategory::InvalidRequest, "invalid-relative-parent"};
+                if (End == std::string::npos) break;
+                Begin = End + 1;
+            }
+        }
         if (Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move) {
             if (!Request.destinationWriter_) return Error{ErrorCategory::InvalidRequest, "missing-destination-writer"};
             const auto Support = Request.destinationWriter_->CopySupport();
@@ -2315,7 +2331,8 @@ namespace hc::operations
                 return Error{ErrorCategory::InvalidRequest, "invalid-operation-source"};
             if (Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move)
             {
-                const auto Target = Child(Request.destination_, Request.destinationName_.empty() ? Source.entry_.name_ : Request.destinationName_);
+                const auto Target = Child(Source.relativeParent_.empty() ? Request.destination_ : Child(Request.destination_, Source.relativeParent_),
+                    Request.destinationName_.empty() ? Source.entry_.name_ : Request.destinationName_);
                 if (SameOrWithin(Target, Source.entry_.locator_)) return Error{ErrorCategory::InvalidRequest, "destination-inside-source"};
             }
             if (Request.operation_ == FileOperation::Rename && Source.entry_.directory_ && SameOrWithin(Request.destination_, Source.entry_.locator_)) return Error{ErrorCategory::InvalidRequest, "destination-inside-source"};
@@ -2323,8 +2340,14 @@ namespace hc::operations
         }
         const bool Parents = Request.createParents_;
         const auto At = Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move ? Request.destination_ : DirectoryPreparation::ParentOf(Request.destination_);
+        // 폴더 구조를 유지하는 복사 · 이동: 원본마다의 상대 폴더를 대상 아래에 미리 만든다(이미 있으면 건너뜀).
+        std::set<std::string> Relative;
+        if (Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move)
+            for (const auto& Source : Request.sources_) if (!Source.relativeParent_.empty()) Relative.insert(Source.relativeParent_);
+        const auto Destination = Request.destination_;
         const auto Writer = Request.destinationWriter_; std::unique_ptr<IJobTask> Task = std::make_unique<FileTask>(std::move(Request));
-        if (Parents) Task = std::make_unique<DirectoryPreparation>(At, Writer, std::move(Task));
+        for (auto It = Relative.rbegin(); It != Relative.rend(); ++It) Task = std::make_unique<DirectoryPreparation>(Child(Destination, *It), Writer, std::move(Task));
+        if (Parents && Relative.empty()) Task = std::make_unique<DirectoryPreparation>(At, Writer, std::move(Task));
         return PreparedJob{std::move(Job), std::move(Task)};
     }
     Result<JobHandle> SubmitFileOperation(JobScheduler& Scheduler, FileOperationRequest Request, OperationContext Context)

@@ -112,6 +112,8 @@ struct FileOperationDialogRequest
     bool copyEngine_ = true;
     QString providerKey_;
     QString relativeBase_;
+    // 평면 보기: 선택 항목이 기준 폴더 아래 하위 폴더에 있는 수. 0보다 크면 "폴더 구조 유지 · 한 폴더로 모으기"를 보인다.
+    int flatFolders_ = 0;
 };
 class FileOperationDialog final : public DialogShell
 {
@@ -131,6 +133,7 @@ public:
     quint64 SpeedLimit() const;
     bool CreateParents() const;
     bool OpenCreatedFolder() const;
+    bool KeepStructure() const { return keepStructure_ && keepStructure_->isChecked(); }
     bool Recycle() const;
     bool AllowReadOnly() const;
     static QStringList RecentTargets(const QString& Provider);
@@ -152,6 +155,7 @@ private:
     FileOperationDialogRequest request_;
     QComboBox* targetMode_ = nullptr;
     QCheckBox* parents_ = nullptr;
+    QRadioButton* keepStructure_ = nullptr;
     QCheckBox* openCreated_ = nullptr;
     QCheckBox* readonly_ = nullptr;
     QRadioButton* recycle_ = nullptr;

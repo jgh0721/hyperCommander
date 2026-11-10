@@ -18,7 +18,7 @@ namespace hc::columns
     inline bool SupportsGrouping(const ColumnDefinition& Column)
     {
         return Column.template_.isEmpty() && (IsGroupingDate(Column.fieldId_) || Column.fieldId_ == "file.extension"
-            || Column.fieldId_ == "file.type" || Column.fieldId_ == "file.parentPath");
+            || Column.fieldId_ == "file.type" || Column.fieldId_ == "file.parentPath" || Column.fieldId_ == "file.relativePath");
     }
     inline bool SupportsGroupingMode(const QString& Field, const QString& Mode)
     {
@@ -180,6 +180,8 @@ namespace hc::columns
         auto Key = Text.toCaseFolded();
         if (Field == "file.extension") {
             Text = Text.isEmpty() ? GroupText("확장자 없음") : Text.toUpper();
+        } else if (Field == "file.relativePath" && Text.isEmpty()) {
+            Text = GroupText("기준 폴더");
         } else if (Text.isEmpty()) Text = GroupText("값 없음");
         return {Field + "/" + Key, Text, Key};
     }

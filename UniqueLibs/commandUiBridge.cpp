@@ -436,7 +436,16 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         }
         const auto It = Guard->affectedLocations_.find(Result.snapshot_.id_);
         if (It == Guard->affectedLocations_.end()) return;
-        for (auto* Model : Guard->main_->findChildren<CFSModel*>())
+        for (auto* Model : Guard->main_->findChildren<CFSModel*>()) {
+            // 평면 보기는 영향받은 폴더만 다시 확인한다. 기준 폴더 전체를 다시 열거하지 않는다.
+            if (Model->IsFlatListing()) {
+                QStringList Folders;
+                for (const auto& At : It->second)
+                    if ((At.kind_ == LocatorKind::Local || At.kind_ == LocatorKind::Smb) && At.nesting_.empty())
+                        Folders.append(QDir::toNativeSeparators(QString::fromStdString(At.root_)));
+                Model->RefreshFlatLocations(Folders);
+                continue;
+            }
             if (Model->GetRoot() && Model->ProviderEnabled() && !Model->IsLoading())
                 for (const auto& At : It->second)
                 {
@@ -456,6 +465,7 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
                         QDir::cleanPath(QString::fromStdString(Current.root_)), Qt::CaseInsensitive) == 0)
                     { Model->Refresh(); break; }
                 }
+        }
         Guard->affectedLocations_.erase(It);
     };
     fileJobs_->onResubmitted_ = [this](const std::string& Id, const hc::operations::FileOperationRequest& Request) {
@@ -816,6 +826,9 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
     }
     if (!NavigateToPath && !(Invocation.context_.location_ == Model->WorkspaceLocation()))
         return Error{ErrorCategory::StaleRevision, "navigation-context-changed"};
+    // 평면 보기에서 상위 폴더는 평면을 끝내고 기준 폴더(시작 전 상태)로 돌아간다. 중지는 열거만 멈춘다.
+    if (Model->IsFlatListing() && Id == "hc.navigate.parent") { Panel->StopFlatView(true); return CommandOutcome{}; }
+    if (Model->IsFlatListing() && Id == "hc.navigate.cancel") { Model->StopFlatListing(false); return CommandOutcome{}; }
     if (Id.starts_with("hc.navigate.") && Id != "hc.navigate.refresh" && Id != "hc.navigate.forceRefresh"
         && Id != "hc.navigate.cancel" && Id != "hc.navigate.open" && Id != "hc.navigate.enterFile" && Model->IsSearchResults())
         Panel->StopEverythingSearch(false);
@@ -1708,7 +1721,7 @@ void CommandUiBridge::refreshActionState()
     // but don't advertise an operation which cannot change anything yet.
     for (const auto* Id : {"hc.file.normalize"}) if (auto* Command = Action(Id)) Command->setEnabled(false);
     for (const auto* Id : {"hc.file.new", "hc.file.mkdir"})
-        if (auto* Command = Action(Id)) Command->setEnabled(Ready && !Model->IsSearchResults());
+        if (auto* Command = Action(Id)) Command->setEnabled(Ready && (!Model->IsSearchResults() || (Model->IsFlatListing() && QString(Id) == "hc.file.mkdir")));
     // HC 문맥 메뉴는 모든 위치에서 열린다. 쓸 수 없는 항목은 메뉴가 항목마다 이유와 함께 끈다(설계 8.3절).
     const bool NativeLocation = Ready && (Model->IsSearchResults() || Model->WorkspaceLocation().kind_ == LocatorKind::Local
         || Model->WorkspaceLocation().kind_ == LocatorKind::Smb);
@@ -1729,6 +1742,14 @@ void CommandUiBridge::refreshActionState()
             || Model->WorkspaceLocation().kind_ == LocatorKind::Smb
             || (Model->WorkspaceLocation().kind_ == LocatorKind::Plugin && Model->GetRoot()->WriteProvider())));
     if (auto* Command = Action("hc.search.openLocation")) Command->setEnabled(Ready && Model->IsSearchResults());
+    if (auto* Command = Action("hc.view.flat.toggle")) {
+        const bool Flat = Model && Model->IsFlatListing();
+        if (Command->isChecked() != Flat) Command->setChecked(Flat);
+        const bool Enabled = Flat || (activePanel_ && activePanel_->CanStartFlatView());
+        if (Command->isEnabled() != Enabled) Command->setEnabled(Enabled);
+        const auto Tip = Enabled ? QString{} : tr("로컬 · 네트워크 드라이브 폴더에서만 사용할 수 있습니다.");
+        if (Command->toolTip() != Tip) Command->setToolTip(Tip);
+    }
     if (auto* Command = Action("hc.audio.playPause")) {
         bool Playable = false;
         if (Ready && audio_) {
@@ -1845,6 +1866,12 @@ void CommandUiBridge::createCommandUi()
     Add("hc.audio.locate", tr("재생 중인 파일 위치 보기"), [this] { LocateAudio(); });
     createAudioUi(Window);
     system_ = new hc::sys::SystemCommands(Window, this, [this] { return activePanel_.data(); });
+    Add("hc.view.flat.toggle", tr("평면 보기"), [this] {
+        if (!activePanel_) return;
+        if (activePanel_->SystemView()) activePanel_->HideSystemView();
+        activePanel_->ToggleFlatView();
+    });
+    if (auto* Flat = Action("hc.view.flat.toggle")) Flat->setCheckable(true);
     for (const auto& Command : GlobalBuiltInCMDs) {
         const auto Id = hc::ui::CommandId(Command.Name);
         if (actions_.contains(Id)) continue;
@@ -2634,7 +2661,8 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     Invocation.correlationId_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
     auto* Model = findModel(Invocation.context_.tabId_);
     if (!Model || !Model->GetRoot()) return;
-    if (Model->IsSearchResults() && Id == "hc.file.mkdir") {
+    // 평면 보기의 새 폴더는 커서가 있는 폴더(없으면 기준 폴더)에 만든다. Everything 결과에는 목적지가 없다.
+    if (Model->IsSearchResults() && !Model->IsFlatListing() && Id == "hc.file.mkdir") {
         hc::ui::MessageDialog::information(main_, tr("새 폴더"), tr("검색 결과에는 기본 목적지가 없습니다. 실제 폴더를 연 뒤 실행하세요.")); return;
     }
     if (Id == "hc.file.rename") {
@@ -2657,13 +2685,19 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
     DialogRequest.manifestSelection_ = bool(Invocation.context_.selectionManifest_);
     DialogRequest.nativeSource_ = Invocation.context_.location_.kind_ == LocatorKind::Local || Invocation.context_.location_.kind_ == LocatorKind::Smb;
     if (Model->IsSearchResults()) DialogRequest.nativeSource_ = true;
+    QSet<QString> FlatFolders;
     for (const auto& At : SelectedEntries(Model, Invocation.context_)) {
         const auto Entry = At.isValid() ? Model->GetFileInfo(At) : nsHC::TySpFileSource{};
         if (!Entry || !Entry->storageEntry_) continue;
         if (Model->IsSearchResults() && DialogRequest.names_.isEmpty())
             DialogRequest.source_ = QFileInfo(QString::fromStdString(Entry->storageEntry_->locator_.root_)).absolutePath();
         DialogRequest.names_.append(Model->IsSearchResults() && Id != "hc.file.rename" ? Model->GetFileFullPath(At) : Entry->Name_);
+        if (Model->IsFlatListing() && (Id == "hc.file.copy" || Id == "hc.file.move")) {
+            const auto Relative = hc::flat::RelativeParent(Model->FlatBase(), QString::fromStdString(Entry->storageEntry_->locator_.root_));
+            if (!Relative.isEmpty()) FlatFolders.insert(Relative.toCaseFolded());
+        }
     }
+    DialogRequest.flatFolders_ = int(FlatFolders.size());
     if (Id == "hc.file.delete") {
         hc::ui::FileOperationDialog Dialog(DialogRequest, main_);
         if (Dialog.exec() != QDialog::Accepted) return;
@@ -2713,6 +2747,7 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
         }
         Invocation.parameters_["targetIsName"] = Dialog.TargetIsName();
         Invocation.parameters_["openCreated"] = Dialog.OpenCreatedFolder();
+        if (DialogRequest.flatFolders_ > 0) Invocation.parameters_["keepStructure"] = Dialog.KeepStructure();
 
         if (!NameOnly) Invocation.parameters_["conflict"] = Dialog.Conflict().toStdString();
         if (Destination.kind_ == LocatorKind::Plugin)
@@ -2912,6 +2947,17 @@ void CommandUiBridge::refreshClipboardVisuals()
     if (main_) for (auto* Model : main_->findChildren<CFSModel*>()) Model->SetClipboardCut(cutKeys_, cutRoot_);
 }
 
+void CommandUiBridge::ShowColumnSettings(CGridView* View, const QUuid& FlatProfile)
+{
+    if (!View) return;
+    QMainOpts Settings(main_); Settings.SetListView(View); Settings.ShowListSettingsPage(FlatProfile); Settings.exec();
+}
+
+bool CommandUiBridge::CancelFlatListing()
+{
+    return activePanel_ && !activePanel_->SystemView() && activePanel_->StopFlatEnumeration();
+}
+
 bool CommandUiBridge::CancelClipboard()
 {
     if (!HasFileClipboard()) return false;
@@ -3108,6 +3154,8 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
     }
     if (!IsValidCopyPattern(Request.includePattern_)) return Error{ErrorCategory::InvalidRequest, "invalid-copy-pattern"};
     Request.createParents_ = Flag("createParents");
+    const bool KeepStructure = Flag("keepStructure") && Model->IsFlatListing()
+        && (Request.operation_ == hc::operations::FileOperation::Copy || Request.operation_ == hc::operations::FileOperation::Move);
     Request.confirmDelete_ = !Flag("confirmed");
     Request.readOnly_ = Flag("allowReadOnly") ? ReadOnlyPolicy::Allow : ReadOnlyPolicy::Ask;
     if (const auto Mode = Invocation.parameters_.find("deleteMode"); Mode != Invocation.parameters_.end()) {
@@ -3121,7 +3169,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
             return Error{ErrorCategory::InvalidRequest, "invalid-conflict-policy"};
         Request.conflict_ = Policy == "replace" ? ConflictPolicy::Replace : Policy == "skip" ? ConflictPolicy::Skip : ConflictPolicy::Ask;
     }
-    const auto Kind = Model->IsSearchResults() ? LocatorKind::Local : Invocation.context_.location_.kind_;
+    const auto Kind = Model->IsFlatListing() ? Model->WorkspaceLocation().kind_ : Model->IsSearchResults() ? LocatorKind::Local : Invocation.context_.location_.kind_;
     if (Kind != LocatorKind::Local && Kind != LocatorKind::Smb && Kind != LocatorKind::Archive && Kind != LocatorKind::Plugin)
         return Error{ErrorCategory::Unsupported, "file-operation-provider-required"};
     auto Reader = Model->SnapshotProvider();
@@ -3139,6 +3187,8 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
             auto EntryReader = Model->ProviderFor(*Entry->storageEntry_);
             auto EntryWriter = Model->IsSearchResults() ? MakeNativeWritableStorage(Entry->storageEntry_->locator_.kind_, EntryReader) : Writer;
             Request.sources_.push_back({*Entry->storageEntry_, EntryReader, EntryWriter});
+            // 평면 보기 "폴더 구조 유지": 기준 폴더에 대한 상대 폴더를 대상 아래에 다시 만든다.
+            if (KeepStructure) Request.sources_.back().relativeParent_ = hc::flat::RelativeParent(Model->FlatBase(), QString::fromStdString(Entry->storageEntry_->locator_.root_)).toStdString();
         }
     if (Request.operation_ != hc::operations::FileOperation::Delete)
     {

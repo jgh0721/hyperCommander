@@ -25,6 +25,9 @@ namespace hc::operations
         storage::EntrySnapshot entry_;
         std::shared_ptr<storage::IStorageProvider> reader_;
         std::shared_ptr<storage::IWritableStorage> writer_;
+        // 복사 · 이동: 대상 폴더 아래에 둘 상대 폴더(\ 구분, 끝 구분자 없음). 평면 보기의 "폴더 구조 유지"가 채운다.
+        // 비어 있으면 대상 폴더 바로 아래다. 없는 중간 폴더는 작업이 만든다.
+        std::string relativeParent_;
     };
     struct FileOperationRequest
     {

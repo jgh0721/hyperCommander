@@ -12,6 +12,7 @@
 #include "commonLibs/columns/columnProfileStorage.hpp"
 #include "commonLibs/view/listIconSize.hpp"
 #include "UniqueLibs/columnAutoSelection.hpp"
+#include "commonLibs/columns/flatProfile.hpp"
 using namespace hc::view;
 
 class ColumnTests : public QObject
@@ -606,6 +607,90 @@ private slots:
         // Local metadata can use the full model budget; the provider queue reserves no idle workers.
         QVERIFY(Shared->slow.load() == Limit + 2);
     }
+    void flatProfileRoundTripAndRules()
+    {
+        using namespace hc::columns;
+        using P = FlatPresentation;
+        // 모르는 키는 다시 저장해도 남는다(다음 버전의 설정을 지우지 않는다).
+        auto Profile = FlatDefaultProfile(); Profile.title_ = "시험";
+        Profile.presentation_.structure_ = P::Structure::Column; Profile.presentation_.location_ = P::Location::SecondLine;
+        Profile.presentation_.groupField_ = "file.extension"; Profile.presentation_.groupMode_ = "relativeDate";
+        auto Encoded = EncodeFlatProfile(Profile);
+        QCOMPARE(Encoded["presentation"].toObject()["lines"].toInt(), 2);
+        QCOMPARE(Encoded["presentation"].toObject()["group"].toObject()["mode"].toString(), QString("value"));
+        Encoded["future"] = "keep"; auto Presentation = Encoded["presentation"].toObject(); Presentation["futureKey"] = 3; Encoded["presentation"] = Presentation;
+        auto Decoded = DecodeFlatProfile(Encoded); QVERIFY(Decoded);
+        QCOMPARE(Decoded->presentation_.lines_, 2);
+        QCOMPARE(Decoded->presentation_.groupMode_, QString("value"));
+        const auto Again = EncodeFlatProfile(*Decoded);
+        QCOMPARE(Again["future"].toString(), QString("keep"));
+        QCOMPARE(Again["presentation"].toObject()["futureKey"].toInt(), 3);
+        QVERIFY(!DecodeFlatProfile(QJsonObject{{"version", 2}, {"id", IdText(QUuid::createUuid())}, {"title", "x"}}));
+        // 단계 규칙: 썸네일은 묶음 없음 · 폴더 구획만, 트리는 한 줄, 폴더 그룹은 경로 위치 고정.
+        P Value; Value.view_ = P::View::Thumbnails; Value.structure_ = P::Structure::Tree; Value.lines_ = 2;
+        Value = NormalizeFlatPresentation(Value);
+        QCOMPARE(Value.structure_, P::Structure::None); QCOMPARE(Value.lines_, 1);
+        Value = {}; Value.structure_ = P::Structure::Tree; Value.lines_ = 2; Value.location_ = P::Location::Column;
+        Value = NormalizeFlatPresentation(Value);
+        QCOMPARE(Value.lines_, 1); QCOMPARE(Value.location_, P::Location::Prefix);
+        QVERIFY(FlatRows(Value).tree_); QVERIFY(FlatRows(Value).linesFixed_); QVERIFY(!FlatRows(Value).location_);
+        Value = {}; Value.structure_ = P::Structure::Folder; Value.location_ = P::Location::Column;
+        QCOMPARE(NormalizeFlatPresentation(Value).location_, P::Location::Prefix);
+        Value = {}; Value.tileSize_ = 100; Value.treeExpandLevel_ = 7;
+        QCOMPARE(NormalizeFlatPresentation(Value).tileSize_, 96); QCOMPARE(NormalizeFlatPresentation(Value).treeExpandLevel_, -1);
+        // 합성: 시안 D · A · C · B · 열 값 그룹.
+        const auto Origin = DefaultProfile();
+        auto Flat = FlatDefaultProfile();
+        auto Effective = ComposeFlatProfile(Flat, Origin);
+        QVERIFY(Effective.prefix_); QVERIFY(Effective.depthSort_); QVERIFY(!Effective.columns_.grouping_);
+        QCOMPARE(Effective.columns_.id_, FlatBuiltInProfileId); QCOMPARE(Effective.columns_.mode_, LayoutMode::Details);
+        QVERIFY(IsSupportedProfile(Effective.columns_));
+        Flat.presentation_.location_ = P::Location::Column;
+        Effective = ComposeFlatProfile(Flat, Origin);
+        QVERIFY(!Effective.prefix_);
+        QCOMPARE(Effective.columns_.columns_[FlatNameColumn(Effective.columns_) + 1].fieldId_, QString("file.relativePath"));
+        Flat.presentation_.columnLast_ = true;
+        Effective = ComposeFlatProfile(Flat, Origin);
+        QCOMPARE(Effective.columns_.columns_.back().fieldId_, QString("file.relativePath"));
+        Flat.presentation_.location_ = P::Location::SecondLine; Flat.presentation_.secondRight_ = P::SecondRight::Size;
+        Effective = ComposeFlatProfile(Flat, Origin);
+        QCOMPARE(Effective.columns_.mode_, LayoutMode::NameFirst);
+        const auto Size = FlatFieldColumn(Effective.columns_, "file.size");
+        QVERIFY(Size >= 0); QVERIFY(!Effective.columns_.columns_[Size].widths_[1].hidden_);
+        Flat.presentation_ = {}; Flat.presentation_.structure_ = P::Structure::Folder; Flat.presentation_.groupTitleLeaf_ = true;
+        Effective = ComposeFlatProfile(Flat, Origin);
+        QVERIFY(Effective.columns_.grouping_); QVERIFY(Effective.groupTitleLeaf_);
+        const auto Relative = FlatFieldColumn(Effective.columns_, "file.relativePath");
+        QCOMPARE(Effective.columns_.grouping_->levels_.front().columnId_, Effective.columns_.columns_[Relative].id_);
+        QVERIFY(ValidateGrouping(Effective.columns_).isEmpty());
+        Flat.presentation_ = {}; Flat.presentation_.structure_ = P::Structure::Column; Flat.presentation_.groupField_ = "file.extension";
+        Effective = ComposeFlatProfile(Flat, Origin);
+        QVERIFY(Effective.columns_.grouping_); QCOMPARE(Effective.columns_.grouping_->levels_.front().mode_, QString("value"));
+        QVERIFY(ValidateGrouping(Effective.columns_).isEmpty());
+        // 적용 조건: 조건 순서대로, 잘못된 세트는 건너뛰고, 맞지 않으면 기본 세트 → 기본 제공 세트.
+        auto Other = FlatDefaultProfile(); Other.id_ = QUuid::createUuid(); Other.title_ = "다른";
+        QJsonObject Library{{IdText(Other.id_), EncodeFlatProfile(Other)}};
+        QJsonObject Selection = DefaultFlatSelection();
+        Selection["rules"] = QJsonArray{QJsonObject{{"enabled", true}, {"path", "D:/Photos/*"}, {"profile", IdText(QUuid::createUuid())}},
+            QJsonObject{{"enabled", true}, {"path", "D:/Photos/*"}, {"profile", IdText(Other.id_)}}};
+        const auto Match = [](const QString& Pattern, const QString& Path) { return MatchFolderCondition(Pattern, Path); };
+        int Rule = -1;
+        QCOMPARE(SelectFlatProfile(Selection, Library, "D:/Photos/2026", Match, &Rule).id_, Other.id_); QCOMPARE(Rule, 1);
+        QCOMPARE(SelectFlatProfile(Selection, Library, "C:/Work", Match, &Rule).id_, FlatBuiltInProfileId); QCOMPARE(Rule, -1);
+        Selection["defaultProfile"] = IdText(Other.id_);
+        QCOMPARE(SelectFlatProfile(Selection, Library, "C:/Work", Match).id_, Other.id_);
+        QVERIFY(!ValidateFlatSelection(Selection, Library).isEmpty());
+        Selection["rules"] = QJsonArray{QJsonObject{{"enabled", true}, {"path", "D:/Photos/*"}, {"profile", IdText(Other.id_)}}};
+        QVERIFY(ValidateFlatSelection(Selection, Library).isEmpty());
+        // 이관은 한 번만 하고, 반복해도 같다.
+        QJsonObject Columns;
+        QVERIFY(MigrateFlatColumnSets(Columns));
+        const auto First = Columns;
+        QVERIFY(!MigrateFlatColumnSets(Columns));
+        QCOMPARE(Columns, First);
+        QVERIFY(DecodeFlatProfile(Columns[FlatProfilesKey].toObject()[IdText(FlatBuiltInProfileId)].toObject()));
+        QVERIFY(Columns[FlatSelectionKey].isObject());
+    }
     void pathFlagsAndFormats()
     {
         using namespace hc::columns;
@@ -623,6 +708,27 @@ private slots:
         FormatOptions Size; Size.size_ = SizeFormat::MiB; Size.precision_ = 1;
         QCOMPARE(Format(Resolve("file.size", File), Size), QLocale().toString(1.0, 'f', 1) + " MiB");
         QCOMPARE(Resolve("file.size", File).Raw().toULongLong(), quint64(1048576));
+        // 평면 보기의 상대 경로: 기준 폴더가 없으면 값이 없고, 기준 폴더의 항목은 빈 문자열이다.
+        QCOMPARE(Resolve("file.relativePath", File).State(), ValueState::Empty);
+        File.basePath_ = "C:\\Projects";
+        QCOMPARE(Resolve("file.relativePath", File).Raw().toString(), QString("docs"));
+        File.basePath_ = "c:/projects/"; File.parentPath_ = "C:/Projects/docs/2026";
+        QCOMPARE(Resolve("file.relativePath", File).Raw().toString(), QString("docs\\2026"));
+        File.basePath_ = "C:\\Projects\\docs\\2026";
+        QCOMPARE(Resolve("file.relativePath", File).State(), ValueState::Ready);
+        QVERIFY(Resolve("file.relativePath", File).Raw().toString().isEmpty());
+        File.basePath_ = "C:\\"; File.parentPath_ = "C:\\Projects\\docs";
+        QCOMPARE(Resolve("file.relativePath", File).Raw().toString(), QString("Projects\\docs"));
+        // 접두가 같아도 다른 폴더(C:\Proj와 C:\Projects)는 상대 경로가 아니다.
+        File.basePath_ = "C:\\Proj";
+        QCOMPARE(Resolve("file.relativePath", File).State(), ValueState::Empty);
+        File.basePath_ = "\\\\server\\share"; File.parentPath_ = "\\\\server\\share\\a\\b";
+        QCOMPARE(Resolve("file.relativePath", File).Raw().toString(), QString("a\\b"));
+        File.basePath_.clear();
+        QCOMPARE(MakeGroupValue("file.relativePath", "value", CellValue::Ready(QString())).text_, GroupText("기준 폴더"));
+        QCOMPARE(MakeGroupValue("file.relativePath", "value", CellValue::Ready(QString("A\\b"))).key_, MakeGroupValue("file.relativePath", "value", CellValue::Ready(QString("a\\B"))).key_);
+        ColumnDefinition Relative; Relative.fieldId_ = "file.relativePath";
+        QVERIFY(SupportsGrouping(Relative));
         File.parentPath_ = "\\\\server\\share\\";
         QCOMPARE(Resolve("file.path", File).Raw().toString(), QString("\\\\server\\share\\report.tar.gz"));
         QCOMPARE(Resolve("file.parentName", File).Raw().toString(), QString("share"));

@@ -27,12 +27,17 @@ public:
     int FullNameLines(int Width, const QFont& Font) const;
     double TargetPercent() const;
     fm::filelist::ThumbnailProvider* Provider() const { return provider_; }
+    // 평면 보기 썸네일(시안 F): 상대 폴더별 구획 머리글 행, 또는 타일 아래 폴더 칩.
+    void SetFlatPresentation(bool Sections, bool Chips, bool LeafTitles);
+    void ToggleSection(int Row);
 private:
     struct Tile {
         QPersistentModelIndex index_;
         hc::storage::EntrySnapshot entry_;
         QString key_, name_, path_;
         bool up_ = false;
+        bool header_ = false;
+        QString section_, folder_;
     };
     CGridView* owner_;
     fm::filelist::ThumbnailProvider* provider_;
@@ -40,4 +45,6 @@ private:
     QTimer rebuildTimer_;
     QVector<QMetaObject::Connection> connections_;
     bool enabled_ = false;
+    bool sections_ = false, chips_ = false, leafTitles_ = false;
+    QSet<QString> collapsed_;
 };

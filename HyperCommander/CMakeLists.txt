@@ -190,6 +190,9 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/columnAutoSelection.hpp
         ../UniqueLibs/qtColumnProfileEditor.cpp
         ../UniqueLibs/qtColumnProfileEditor.hpp
+        ../UniqueLibs/qtFlatProfileEditor.cpp
+        ../UniqueLibs/qtFlatProfileEditor.hpp
+        ../commonLibs/columns/flatProfile.hpp
         ../UniqueLibs/qtitanColumnAdapter.cpp
         ../commonLibs/storage/storage.hpp
         ../UniqueLibs/storageProviders.cpp
@@ -199,6 +202,8 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/builtInFsModel.cpp
         ../UniqueLibs/builtInFsModel.hpp
         ../UniqueLibs/everythingSearchSession.hpp
+        ../UniqueLibs/flatListingSession.hpp
+        ../commonLibs/columns/sortRankWorker.hpp
         ../UniqueLibs/builtInVolumeModel.cpp
         ../UniqueLibs/builtInVolumeModel.hpp
         ../UniqueLibs/cmnHCModelUtils.cpp

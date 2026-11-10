@@ -59,6 +59,10 @@ public:
     bool ReloadMenu();
     void RefreshFunctionBar();
     bool CancelClipboard();
+    // 평면 보기 열거 중이면 열거만 멈춘다(Esc). 결과는 남는다.
+    bool CancelFlatListing();
+    // 열 · 사용자 정의 열 설정을 연다. FlatProfile이 있으면 그 평면 폴더 세트를 고른 상태로 연다.
+    void ShowColumnSettings(CGridView* View, const QUuid& FlatProfile = {});
     void DropFiles(const QStringList& Paths, const QString& Destination, Qt::DropAction Action);
     bool HasFileClipboard() const { return clipboard_.has_value() || clipboardImporting_; }
     FileJobUi* FileJobs() const { return fileJobs_; }

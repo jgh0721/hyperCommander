@@ -6,6 +6,9 @@
 #include "panelPathBar.hpp"
 #include "UniqueLibs/quickFindSettings.hpp"
 #include "UniqueLibs/qtWorkspaceRestore.hpp"
+#include "UniqueLibs/shellDriveSort.hpp"
+#include "UniqueLibs/columnAutoSelection.hpp"
+#include "commonLibs/columns/flatProfile.hpp"
 #include <fmwidgets/PanelTabStrip.h>
 #include <fmwidgets/BreadcrumbBar.h>
 #include <fmwidgets/DriveButton.h>
@@ -218,6 +221,9 @@ void CmpPanel::materializeTab(int Index)
     connect(View, &CGridView::sigListPresentationChanged, this, [this, View] {
         if (retrieveFocusState() && retrieveFocusState()->View == View) syncPanelChrome();
     });
+    connect(View, &CGridView::sigFlatExitRequested, this, [this, View] {
+        if (retrieveFocusState() && retrieveFocusState()->View == View) StopFlatView(true);
+    });
     const auto UpdateSelectionSizes = [this, State] {
         State->SelectedSize = 0; State->SelectedFileCount = State->SelectedDirectoryCount = 0;
         for (const auto& Index : static_cast<CGridView*>(State->View)->SelectedSourceIndexes()) {
@@ -236,10 +242,17 @@ void CmpPanel::materializeTab(int Index)
     connect(Model, &CFSModel::SearchResultsChanged, this, [this, Model] {
         if (retrieveFocusState() && retrieveFocusState()->Model == Model) {
             processPanelStatusText();
-            if (Model->IsSearchResults()) path_->setFullPath(tr("Everything · %1").arg(Model->EverythingQuery()));
+            if (Model->ResultSourceKind() == CFSModel::ResultSource::Everything) path_->setFullPath(tr("Everything · %1").arg(Model->EverythingQuery()));
+            syncFlatChrome();
         }
     });
     connect(Model, &CFSModel::SearchRefreshRequested, this, [this, Model] {
+        if (Model->IsFlatListing()) {
+            // 새로 고침(F5)은 같은 옵션으로 다시 열거한다. 보관한 원래 상태는 그대로 둔다.
+            auto Options = Model->FlatOptions(); Model->StartFlatListing(std::move(Options));
+            if (retrieveFocusState() && retrieveFocusState()->Model == Model) processPanelStatusText();
+            return;
+        }
         if (retrieveFocusState() && retrieveFocusState()->Model == Model) {
             const auto Config = hc::quickfind::Settings::FromJson(hc::settings::AppSettings().CommittedObject()["general"].toObject()["quickFind"].toObject());
             StartEverythingSearch(Model->EverythingQuery(), Config.everythingKorean_ ? "korean:" + Config.match_ : Config.match_, Config.everythingDisplayIntervalMs_);
@@ -385,8 +398,9 @@ hc::workspace::PaneState CmpPanel::CaptureWorkspace(int OnlyTab) const
         const auto Model = static_cast<CFSModel*>(State->Model);
         const auto View = static_cast<CGridView*>(State->View);
         if (State->searchOrigin_) {
+            // 평면 상태는 저장하지 않는다. 평면 탭은 기준 폴더의 원래 상태(목록 모드 포함)로 저장한다.
             Tab = *State->searchOrigin_;
-            Tab.view_["listPresentation"] = View->CaptureWorkspaceView()["listPresentation"];
+            if (!Model->IsFlatListing()) Tab.view_["listPresentation"] = View->CaptureWorkspaceView()["listPresentation"];
             Result.tabs_.append(std::move(Tab)); continue;
         }
         if (!State->pending_) {
@@ -448,8 +462,10 @@ void CmpPanel::restoreTab(int Index)
     if (Index < 0 || Index >= vecTabStates.size()) return;
     materializeTab(Index);
     const auto State = vecTabStates[Index]; State->pending_ = false;
-    static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true); State->searchOrigin_.reset();
-    static_cast<CGridView*>(State->View)->SetEverythingPresentation(false);
+    static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true); static_cast<CFSModel*>(State->Model)->StopFlatListing(true);
+    State->searchOrigin_.reset();
+    static_cast<CGridView*>(State->View)->SetEverythingPresentation(false); static_cast<CGridView*>(State->View)->SetFlatPresentation(false);
+    static_cast<CGridView*>(State->View)->ClearFlatProfile();
     // Reuse discovered volumes, retaining their cached labels and capabilities
     // without another filesystem-information query during workspace restore.
     nsHC::TySpFileSystem Native;
@@ -1221,7 +1237,11 @@ void CmpPanel::on_tabWidget_currentChanged(int Index)
         // 보이지 않는 탭의 시스템 보기는 수집을 멈춘다(설정에 따라).
         if (auto* System = qobject_cast<CSystemView*>(vecTabStates[Candidate]->SystemView)) System->SetShown(Candidate == Index);
         if (!vecTabStates[Candidate]->Model) continue;
-        if (Candidate != Index) static_cast<CFSModel*>(vecTabStates[Candidate]->Model)->StopEverythingSearch();
+        // 보이지 않게 된 탭의 Everything 검색 · 평면 열거는 멈추고 그때까지의 결과를 남긴다.
+        if (auto* Other = static_cast<CFSModel*>(vecTabStates[Candidate]->Model); Candidate != Index) {
+            Other->StopEverythingSearch();
+            if (Other->IsFlatRunning()) Other->StopFlatListing(false);
+        }
         static_cast<CFSModel*>(vecTabStates[Candidate]->Model)->SetWatchEnabled(Candidate == Index);
     }
     if (WasPending) restoreSystemView(Index);
@@ -1363,6 +1383,20 @@ void CmpPanel::initializeUIs()
     viewMode_->setCurrentIndex(0);
     viewMode_->setItemToolTips({tr("한 줄 목록"), tr("이름 우선 두 줄 목록"), tr("설정의 패널 폭과 잘린 이름 비율로 1줄/2줄을 전환합니다."), tr("이미지 타일 보기 · Ctrl+휠로 크기를 변경합니다.")});
     ui.horizontalLayout->insertWidget(ui.horizontalLayout->count() - 1, viewMode_);
+    flatButton_ = new QToolButton(ui.frmHDR); flatButton_->setObjectName("hc.panelFlat");
+    flatButton_->setText(tr("평면")); flatButton_->setCheckable(true); flatButton_->setAutoRaise(true);
+    // 머리글 높이를 바꾸지 않는다(목록 모드 전환과 같은 높이). 높이가 늘면 목록 영역이 줄어든다.
+    flatButton_->setFixedHeight(viewMode_->sizeHint().height());
+    flatButton_->setToolTip(tr("평면 보기 · 하위 폴더의 파일을 한 목록으로 봅니다 (Ctrl+B)"));
+    flatButton_->setAccessibleName(tr("평면 보기"));
+    ui.horizontalLayout->insertWidget(ui.horizontalLayout->count() - 1, flatButton_);
+    connect(flatButton_, &QToolButton::clicked, this, [this] {
+        emit sig_NotifyPanelActivated(); ToggleFlatView(); SetFocusView(CurrentTabIndex());
+    });
+    // ▾: 평면 보기 옵션(표시 대상 · 깊이 · 정션)과 평면 폴더 세트. 평면 중이면 바꾸는 즉시 다시 열거한다.
+    flatButton_->setPopupMode(QToolButton::MenuButtonPopup);
+    auto* FlatMenu = new QMenu(flatButton_); FlatMenu->setObjectName("hc.panelFlatMenu"); flatButton_->setMenu(FlatMenu);
+    connect(FlatMenu, &QMenu::aboutToShow, this, [this, FlatMenu] { populateFlatMenu(FlatMenu); });
     connect(viewMode_, &fm::ui::SegmentedControl::currentIndexChanged, this, [this](int Index) {
         if (Index < 0 || Index > 3) return;
         emit sig_NotifyPanelActivated();
@@ -1390,7 +1424,11 @@ void CmpPanel::initializeUIs()
             connect(Action, &QAction::triggered, this, [this, Index] { navigateHistoryIndex(Index); });
         }
     });
-    Layout->addWidget(path_, 1); Layout->addWidget(historyButton_);
+    flatChip_ = new QToolButton(Controls); flatChip_->setObjectName("hc.panelFlatChip");
+    flatChip_->setAutoRaise(true); flatChip_->setCursor(Qt::PointingHandCursor); flatChip_->hide();
+    flatChip_->setFixedHeight(24);  // 방문 기록 단추와 같은 높이: 경로 줄 높이를 바꾸지 않는다.
+    connect(flatChip_, &QToolButton::clicked, this, [this] { emit sig_NotifyPanelActivated(); StopFlatView(true); SetFocusView(CurrentTabIndex()); });
+    Layout->addWidget(path_, 1); Layout->addWidget(flatChip_); Layout->addWidget(historyButton_);
     navigationProgress_ = new fm::ui::ProgressBar(path_);
     navigationProgress_->setObjectName("hc.navigation.progress");
     navigationProgress_->setThickness(fm::ui::ProgressBar::ThinBar); navigationProgress_->setCompact(true);
@@ -1507,16 +1545,292 @@ void CmpPanel::stopEverythingSearch(int Index, bool Restore)
     if (Index < 0 || Index >= vecTabStates.size()) return;
     const auto State = vecTabStates[Index]; if (!State || !State->searchOrigin_) return;
     const auto Origin = *State->searchOrigin_; State->searchOrigin_.reset();
-    static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true);
+    State->flatChosen_ = {};
+    // Everything 검색과 평면 보기는 같은 원래 상태를 쓴다. 어느 쪽이든 여기서 끝낸다.
+    // 평면 세트는 목록 모드까지 바꾸므로 평면을 끝낼 때는 원래 목록 모드로 돌린다. Everything은 지금 모드를 이어 쓴다.
+    const bool WasFlat = static_cast<CFSModel*>(State->Model)->IsFlatListing();
+    static_cast<CFSModel*>(State->Model)->StopEverythingSearch(true); static_cast<CFSModel*>(State->Model)->StopFlatListing(true);
     auto* View = static_cast<CGridView*>(State->View);
-    View->SetEverythingPresentation(false);
+    View->SetEverythingPresentation(false); View->SetFlatPresentation(false); View->ClearFlatProfile();
     const auto Presentation = View->CaptureWorkspaceView().value("listPresentation");
     State->workspace_ = Origin;
-    auto Settings = Origin.view_; Settings["listPresentation"] = Presentation;
+    auto Settings = Origin.view_; if (!WasFlat) Settings["listPresentation"] = Presentation;
     View->RestoreWorkspaceView(Settings);
     if (Restore) { State->restoreSearchGroups_ = true; State->restoreSelection_ = true; restoreTab(Index); }
     else { State->searchScroll_ = {}; State->searchGroups_ = {}; State->restoreSearchGroups_ = false; }
     if (Index == CurrentTabIndex()) syncPanelChrome();
+}
+
+namespace {
+// 평면 보기를 시작할 수 있는 위치: 로컬 · SMB(네트워크 드라이브)의 실제 폴더. 압축 파일 · 셸 · 플러그인,
+// 드라이브 목록과 서버(공유 목록)는 제외한다.
+bool FlatLocationAllowed(const hc::storage::Locator& Location)
+{
+    using hc::storage::LocatorKind;
+    if ((Location.kind_ != LocatorKind::Local && Location.kind_ != LocatorKind::Smb) || !Location.nesting_.empty() || Location.root_.empty()) return false;
+    if (hc::ui::IsDriveList(Location)) return false;
+    const auto Root = QDir::toNativeSeparators(QString::fromStdString(Location.root_));
+    if (Root.startsWith("\\\\") && !Root.startsWith("\\\\?\\") && Root.count('\\') < 3) return false;
+    return QDir::isAbsolutePath(Root);
+}
+}
+
+bool CmpPanel::CanStartFlatView()
+{
+    const auto State = retrieveFocusState();
+    if (!State || !State->Model || !State->View || State->pending_ || State->QuickView) return false;
+    const auto* Model = static_cast<const CFSModel*>(State->Model);
+    if (Model->ResultSourceKind() != CFSModel::ResultSource::Everything && Model->IsLoading()) return false;
+    return FlatLocationAllowed(State->searchOrigin_ ? State->searchOrigin_->location_ : Model->WorkspaceLocation());
+}
+
+bool CmpPanel::IsFlatView()
+{
+    const auto State = retrieveFocusState();
+    return State && State->Model && static_cast<const CFSModel*>(State->Model)->IsFlatListing();
+}
+
+void CmpPanel::StartFlatView(const QStringList& Folders)
+{
+    const auto State = retrieveFocusState(); const int Index = CurrentTabIndex();
+    if (!CanStartFlatView() || Index < 0) return;
+    if (State->SystemView) HideSystemView(Index);
+    auto* Model = static_cast<CFSModel*>(State->Model);
+    auto* View = static_cast<CGridView*>(State->View);
+    if (Model->ResultSourceKind() == CFSModel::ResultSource::Everything && State->searchOrigin_) {
+        // Everything 결과에서 시작하면 검색 전 상태를 그대로 원래 상태로 삼는다. 검색용 열 배치는 걷어 낸다.
+        const auto Origin = State->searchOrigin_; const auto Scroll = State->searchScroll_, Groups = State->searchGroups_;
+        stopEverythingSearch(Index, false);
+        State->searchOrigin_ = Origin; State->searchScroll_ = Scroll; State->searchGroups_ = Groups;
+    }
+    if (!State->searchOrigin_) {
+        State->searchOrigin_ = CaptureWorkspace().tabs_[Index];
+        State->searchScroll_ = View->CaptureScrollState();
+        State->searchGroups_ = View->CaptureGroupExpansion();
+    }
+    const auto Location = State->searchOrigin_->location_;
+    hc::flat::ListingOptions Options;
+    Options.base_ = QString::fromStdString(Location.root_);
+    Options.items_ = flatItems_; Options.maxDepth_ = flatMaxDepth_; Options.followReparse_ = flatFollowReparse_;
+    if (Folders.isEmpty()) Options.roots_ = {Location};
+    else for (const auto& Folder : Folders) Options.roots_.push_back({Location.kind_, QDir::toNativeSeparators(Folder).toStdString()});
+    View->SetFlatPresentation(true);
+    State->ProxyModel->SetSearch({});
+    { const QSignalBlocker Block(search_); search_->clear(); }
+    // 평면 폴더 세트는 기준 폴더로 판정한다(파일 I/O 없음). 이미 평면이면 고른 세트를 유지한다.
+    if (!View->ActiveFlatProfile()) applyFlatProfile(State, Options.base_);
+    // 트리는 폴더 행이 있어야 계층을 그린다.
+    if (View->FlatTreeVisible()) Options.items_ = hc::flat::Items::FilesAndFolders;
+    Model->StartFlatListing(std::move(Options));
+    syncPanelChrome(); processPanelStatusText(); emit sigNavigationStateChanged();
+}
+
+void CmpPanel::applyFlatProfile(const TySpTabState& State, const QString& Base, const QUuid& Chosen)
+{
+    auto* View = static_cast<CGridView*>(State->View);
+    const auto Columns = hc::settings::AppSettings().CommittedObject()["columns"].toObject();
+    const auto Library = hc::columns::WithBuiltInFlatProfiles(Columns[hc::columns::FlatProfilesKey].toObject());
+    const auto Selection = Columns[hc::columns::FlatSelectionKey].isObject() ? Columns[hc::columns::FlatSelectionKey].toObject() : hc::columns::DefaultFlatSelection();
+    std::optional<hc::columns::FlatProfile> Profile;
+    QString Source;
+    if (!Chosen.isNull()) {
+        Profile = hc::columns::DecodeFlatProfile(Library[hc::columns::IdText(Chosen)].toObject());
+        Source = tr("수동");
+    }
+    if (!Profile) {
+        QHash<QString, QString> Resolved;
+        for (const auto& Value : Selection["rules"].toArray()) {
+            const auto Token = hc::shell::ParseFolderToken(Value.toObject()["path"].toString());
+            if (!Resolved.contains(Token.token_) && Token.kind_ != hc::shell::FolderToken::Kind::None && Token.kind_ != hc::shell::FolderToken::Kind::Invalid)
+                Resolved[Token.token_] = hc::shell::ResolveFolderToken(Token).path_;
+        }
+        int Matched = -1;
+        Profile = hc::columns::SelectFlatProfile(Selection, Library, QDir::fromNativeSeparators(Base),
+            [&](const QString& Pattern, const QString& Path) { return hc::columns::MatchFolderCondition(QDir::fromNativeSeparators(Pattern), Path, Resolved); }, &Matched);
+        Source = Matched >= 0 ? tr("자동 · %1번 조건").arg(Matched + 1) : tr("기본 세트");
+    }
+    // 원래 상태의 열 세트가 평면 세트의 "열 출처: 현재 탭" 기준이다.
+    auto Origin = View->ActiveFlatProfile() ? View->FlatOriginProfile() : View->ColumnProfile();
+    if (State->searchOrigin_) {
+        const auto Layout = State->searchOrigin_->view_.value(hc::columns::WorkspaceKey).toObject();
+        if (const auto Saved = hc::columns::DecodeProfile(Layout.value("definition").toObject()); Saved && hc::columns::IsSupportedProfile(*Saved)) Origin = *Saved;
+    }
+    if (!View->ApplyFlatProfile(*Profile, Origin, Source)) View->SetFlatPresentation(true);
+    auto* Model = static_cast<CFSModel*>(State->Model);
+    if (View->FlatTreeVisible() && Model->IsFlatListing() && Model->FlatOptions().items_ != hc::flat::Items::FilesAndFolders) {
+        auto Options = Model->FlatOptions(); Options.items_ = hc::flat::Items::FilesAndFolders; Model->StartFlatListing(std::move(Options));
+    }
+}
+
+void CmpPanel::RefreshFlatProfiles()
+{
+    // 설정 저장 후: 평면 보기 중인 탭은 고른 세트(없으면 조건 판정)를 다시 적용한다.
+    for (const auto& State : vecTabStates) {
+        if (!State || !State->Model || !State->View || !static_cast<CFSModel*>(State->Model)->IsFlatListing()) continue;
+        applyFlatProfile(State, static_cast<CFSModel*>(State->Model)->FlatBase(), State->flatChosen_);
+    }
+    processPanelStatusText();
+}
+
+void CmpPanel::SetFlatOptions(hc::flat::Items Items, int MaxDepth, bool FollowReparse)
+{
+    flatItems_ = Items; flatMaxDepth_ = MaxDepth; flatFollowReparse_ = FollowReparse;
+    const auto State = retrieveFocusState();
+    auto* Model = State && State->Model ? static_cast<CFSModel*>(State->Model) : nullptr;
+    if (!Model || !Model->IsFlatListing()) return;
+    // 표시 대상 · 깊이는 열 세트를 다시 판정하지 않고 같은 기준 폴더를 다시 열거한다.
+    auto Options = Model->FlatOptions();
+    Options.items_ = Items; Options.maxDepth_ = MaxDepth; Options.followReparse_ = FollowReparse;
+    Model->StartFlatListing(std::move(Options));
+    syncPanelChrome(); processPanelStatusText();
+}
+
+void CmpPanel::ShowFlatSkipped()
+{
+    const auto State = retrieveFocusState();
+    const auto* Model = State && State->Model ? static_cast<const CFSModel*>(State->Model) : nullptr;
+    if (!Model || !Model->IsFlatListing()) return;
+    const auto& Skipped = Model->FlatStatus().skipped_;
+    QStringList Lines;
+    for (const auto& Item : Skipped) Lines.append(QStringLiteral("%1\t%2").arg(QDir::toNativeSeparators(Item.path_), Item.reason_));
+    hc::ui::MessageDialog Box(QMessageBox::Information, tr("건너뛴 폴더"),
+        Skipped.empty() ? tr("건너뛴 폴더가 없습니다.") : tr("열거하지 못한 폴더 %1개가 있습니다. 이 폴더의 항목은 목록에 없습니다.").arg(Skipped.size()),
+        QMessageBox::Ok, this);
+    Box.setObjectName("hc.flatSkipped"); Box.setDetailedText(Lines.join('\n')); Box.TranslateStandardButtons(); Box.exec();
+}
+
+void CmpPanel::populateFlatMenu(QMenu* Menu)
+{
+    Menu->clear();
+    const auto State = retrieveFocusState();
+    const auto* Model = State && State->Model ? static_cast<const CFSModel*>(State->Model) : nullptr;
+    const bool Flat = Model && Model->IsFlatListing();
+    const auto Current = Flat ? Model->FlatOptions() : hc::flat::ListingOptions{};
+    const auto Items = Flat ? Current.items_ : flatItems_;
+    const int Depth = Flat ? Current.maxDepth_ : flatMaxDepth_;
+    const bool Follow = Flat ? Current.followReparse_ : flatFollowReparse_;
+    auto* Toggle = Menu->addAction(tr("평면 보기"), this, [this] { ToggleFlatView(); });
+    Toggle->setCheckable(true); Toggle->setChecked(Flat); Toggle->setEnabled(Flat || CanStartFlatView());
+    Menu->addSeparator();
+    auto* Show = Menu->addMenu(tr("표시 대상")); auto* ShowGroup = new QActionGroup(Show);
+    for (const auto& [Value, Label] : std::initializer_list<std::pair<hc::flat::Items, QString>>{
+             {hc::flat::Items::Files, tr("파일만")}, {hc::flat::Items::FilesAndFolders, tr("파일과 폴더")}, {hc::flat::Items::Folders, tr("폴더만")}}) {
+        auto* Action = Show->addAction(Label, this, [this, Value, Depth, Follow] { SetFlatOptions(Value, Depth, Follow); });
+        Action->setCheckable(true); Action->setChecked(Items == Value); ShowGroup->addAction(Action);
+    }
+    auto* DepthMenu = Menu->addMenu(tr("깊이")); auto* DepthGroup = new QActionGroup(DepthMenu);
+    for (const int Value : {std::numeric_limits<int>::max(), 1, 2, 3, 5}) {
+        auto* Action = DepthMenu->addAction(Value == std::numeric_limits<int>::max() ? tr("전체") : tr("%1단계").arg(Value),
+            this, [this, Items, Value, Follow] { SetFlatOptions(Items, Value, Follow); });
+        Action->setCheckable(true); Action->setChecked(Depth == Value); DepthGroup->addAction(Action);
+    }
+    auto* Reparse = Menu->addAction(tr("정션 · 심볼릭 링크 폴더 따라가기"), this, [this, Items, Depth, Follow] { SetFlatOptions(Items, Depth, !Follow); });
+    Reparse->setCheckable(true); Reparse->setChecked(Follow);
+    Reparse->setToolTip(tr("링크가 가리키는 폴더도 열거합니다. 같은 폴더는 한 번만 방문합니다."));
+    Menu->addSeparator();
+    auto* Sets = Menu->addMenu(tr("평면 폴더 세트")); Sets->setEnabled(Flat);
+    if (Flat) {
+        auto* SetGroup = new QActionGroup(Sets);
+        const auto Columns = hc::settings::AppSettings().CommittedObject()["columns"].toObject();
+        const auto Library = hc::columns::WithBuiltInFlatProfiles(Columns[hc::columns::FlatProfilesKey].toObject());
+        const auto* View = static_cast<const CGridView*>(State->View);
+        const auto Active = View->ActiveFlatProfile() ? View->ActiveFlatProfile()->id_ : QUuid{};
+        QVector<hc::columns::FlatProfile> Profiles;
+        for (auto It = Library.begin(); It != Library.end(); ++It) if (const auto Profile = hc::columns::DecodeFlatProfile(It.value().toObject())) Profiles.append(*Profile);
+        std::stable_sort(Profiles.begin(), Profiles.end(), [](const auto& A, const auto& B) {
+            if (hc::columns::IsBuiltInFlatProfile(A.id_) != hc::columns::IsBuiltInFlatProfile(B.id_)) return hc::columns::IsBuiltInFlatProfile(A.id_);
+            return A.title_.localeAwareCompare(B.title_) < 0; });
+        for (const auto& Profile : Profiles) {
+            const auto Id = Profile.id_;
+            auto* Action = Sets->addAction(Profile.title_, this, [this, Id] { ChooseFlatProfile(Id); });
+            Action->setCheckable(true); Action->setChecked(Id == Active); SetGroup->addAction(Action);
+        }
+    }
+    Menu->addAction(tr("열 세트 편집…"), this, [this] {
+        const auto Focus = retrieveFocusState(); auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        if (!Focus || !Bridge) return;
+        auto* Grid = static_cast<CGridView*>(Focus->View);
+        Bridge->ShowColumnSettings(Grid, Grid->ActiveFlatProfile() ? Grid->ActiveFlatProfile()->id_ : hc::columns::FlatBuiltInProfileId);
+    });
+    const auto Skipped = Flat ? Model->FlatStatus().skipped_.size() : 0;
+    auto* Skip = Menu->addAction(Skipped ? tr("건너뛴 폴더 %1개 보기…").arg(Skipped) : tr("건너뛴 폴더 보기…"), this, [this] { ShowFlatSkipped(); });
+    Skip->setEnabled(Skipped > 0);
+}
+
+void CmpPanel::ChooseFlatProfile(const QUuid& Id)
+{
+    const auto State = retrieveFocusState();
+    if (!State || !State->Model || !static_cast<CFSModel*>(State->Model)->IsFlatListing()) return;
+    State->flatChosen_ = Id;
+    applyFlatProfile(State, static_cast<CFSModel*>(State->Model)->FlatBase(), Id);
+    processPanelStatusText();
+}
+
+void CmpPanel::StopFlatView(bool Restore)
+{
+    const auto State = retrieveFocusState();
+    if (!State || !State->Model || !static_cast<CFSModel*>(State->Model)->IsFlatListing()) return;
+    stopEverythingSearch(CurrentTabIndex(), Restore);
+    syncPanelChrome(); processPanelStatusText(); emit sigNavigationStateChanged();
+}
+
+void CmpPanel::ToggleFlatView()
+{
+    if (IsFlatView()) { StopFlatView(true); return; }
+    const auto State = retrieveFocusState(); if (!State || !State->Model || !State->View) return;
+    // 폴더를 고른 상태면 그 폴더들만 평면으로 본다(상대 경로는 현재 폴더 기준이므로 폴더 이름부터 나온다).
+    QStringList Folders;
+    auto* Model = static_cast<CFSModel*>(State->Model);
+    if (!Model->IsSearchResults())
+        for (const auto& Index : static_cast<CGridView*>(State->View)->SelectedSourceIndexes()) {
+            const auto Item = Model->GetFileInfo(Index);
+            if (!Item || !Item->storageEntry_ || Item->Name_ == ".." || !Item->storageEntry_->directory_) continue;
+            Folders.append(QString::fromStdString(Item->storageEntry_->locator_.root_));
+        }
+    StartFlatView(Folders);
+}
+
+bool CmpPanel::StopFlatEnumeration()
+{
+    const auto State = retrieveFocusState();
+    auto* Model = State && State->Model ? static_cast<CFSModel*>(State->Model) : nullptr;
+    if (!Model || !Model->IsFlatRunning()) return false;
+    Model->StopFlatListing(false); processPanelStatusText(); syncFlatChrome();
+    return true;
+}
+
+QString CmpPanel::flatStatusText(const CFSModel* Model) const
+{
+    const auto& Status = Model->FlatStatus();
+    QString Text;
+    if (!Status.failure_.isEmpty()) Text = tr("평면 · %1").arg(Status.failure_);
+    else if (Model->IsFlatRunning()) Text = tr("평면 · 폴더 %1개 탐색 중 · Esc 중지").arg(Status.folders_);
+    else if (Status.cancelled_) Text = tr("평면 · 중지됨, 부분 결과 · F5 다시 탐색");
+    else Text = tr("평면 · 폴더 %1개").arg(Status.folders_);
+    if (!Status.skipped_.empty()) Text += tr(" · 건너뛴 폴더 %1개").arg(Status.skipped_.size());
+    if (Model->FlatChanged()) Text += tr(" · 변경됨, F5 다시 탐색");
+    return Text;
+}
+
+void CmpPanel::syncFlatChrome()
+{
+    if (!flatButton_ || !flatChip_) return;
+    const auto State = retrieveFocusState();
+    const auto* Model = State && State->Model && !State->SystemView ? static_cast<const CFSModel*>(State->Model) : nullptr;
+    const bool Flat = Model && Model->IsFlatListing();
+    { QSignalBlocker Blocker(flatButton_); flatButton_->setChecked(Flat); }
+    flatButton_->setEnabled(Flat || CanStartFlatView());
+    flatChip_->setVisible(Flat);
+    if (!Flat) return;
+    const auto& Options = Model->FlatOptions();
+    QStringList Parts{tr("평면")};
+    if (Options.roots_.size() > 1 || (Options.roots_.size() == 1
+        && QString::fromStdString(Options.roots_.front().root_).compare(Model->FlatBase(), Qt::CaseInsensitive) != 0))
+        Parts.append(tr("선택한 폴더 %1개").arg(Options.roots_.size()));
+    Parts.append(Options.maxDepth_ == std::numeric_limits<int>::max() ? tr("깊이 전체") : tr("깊이 %1").arg(Options.maxDepth_));
+    Parts.append(Options.items_ == hc::flat::Items::Files ? tr("파일만") : Options.items_ == hc::flat::Items::Folders ? tr("폴더만") : tr("파일과 폴더"));
+    flatChip_->setText(Parts.join(" · ") + QStringLiteral("  ✕"));
+    flatChip_->setToolTip(tr("평면 보기를 끝내고 기준 폴더로 돌아갑니다 (Backspace)"));
 }
 
 void CmpPanel::RevealItem( const QString& Folder, const QString& Key )
@@ -1599,9 +1913,12 @@ void CmpPanel::syncPanelChrome()
     if (!State || !State->Model || !State->View) return;
     const auto* SearchModel = static_cast<CFSModel*>(State->Model);
     const auto Kind = SearchModel->WorkspaceLocation().kind_;
-    path_->SetBreadcrumbsEnabled(!SearchModel->IsSearchResults()
+    // 평면 보기는 기준 폴더 경로를 그대로 보이고 옆의 상태 칩으로 표시한다.
+    const bool Everything = SearchModel->ResultSourceKind() == CFSModel::ResultSource::Everything;
+    path_->SetBreadcrumbsEnabled(!Everything
         && (Kind == hc::storage::LocatorKind::Local || Kind == hc::storage::LocatorKind::Smb));
-    path_->setFullPath(SearchModel->IsSearchResults() ? tr("Everything · %1").arg(SearchModel->EverythingQuery()) : CurrentPath(), !SearchModel->IsSearchResults());
+    path_->setFullPath(Everything ? tr("Everything · %1").arg(SearchModel->EverythingQuery()) : CurrentPath(), !Everything);
+    syncFlatChrome();
     { QSignalBlocker ViewBlocker(viewMode_);
       auto* View = static_cast<CGridView*>(retrieveFocusState()->View);
       viewMode_->setCurrentIndex(QStringList{"one-line", "two-line", "auto", "thumbnails"}.indexOf(View->ListMode()));
@@ -1916,6 +2233,13 @@ void CmpPanel::processPanelStatusText()
     ui.lblStatus->setText(ui.lblStatus->text() + "\n" + ColumnSource);
     if (status_) {
         const auto* SearchModel = static_cast<CFSModel*>(State->Model);
+        if (SearchModel->IsFlatListing()) {
+            status_->setLeftText(tr("파일 %1 / %2개 선택 · %3 / %4").arg(State->SelectedFileCount).arg(State->footerFileCount_)
+                .arg(GetFormattedSizeText(State->SelectedSize, SizeStyle), GetFormattedSizeText(State->footerTotalSize_, SizeStyle)));
+            status_->setRightText(flatStatusText(SearchModel) + " · " + ColumnSource);
+            status_->setToolTip(ui.lblStatus->text());
+            return;
+        }
         if (SearchModel->IsSearchResults()) {
             status_->setLeftText(SearchModel->EverythingStatus());
             status_->setRightText(tr("%1개 선택 · %2").arg(State->SelectedFileCount + State->SelectedDirectoryCount).arg(ColumnSource));

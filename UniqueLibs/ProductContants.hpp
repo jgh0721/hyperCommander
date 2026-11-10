@@ -27,4 +27,7 @@ namespace hc::product
     inline constexpr int jobConcurrencyDefault = 4;
 
     static_assert(jobConcurrencyMin <= jobConcurrencyDefault && jobConcurrencyDefault <= jobConcurrencyMax);
+
+    // 평면 보기 결과를 목록에 반영하는 주기. 첫 묶음과 마지막 묶음은 기다리지 않는다.
+    inline constexpr int flatViewDisplayIntervalMs = 500;
 }

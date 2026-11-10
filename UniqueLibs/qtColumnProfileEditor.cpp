@@ -20,6 +20,7 @@
 #include "column_Defs.hpp"
 #include <QtitanGrid.h>
 #include "commonLibs/columns/columnSort.hpp"
+#include "qtFlatProfileEditor.hpp"
 
 using namespace hc::columns;
 
@@ -147,7 +148,10 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     auto* ProfileActions = new QHBoxLayout; ProfileRows->addLayout(ProfileActions);
     auto* Copy = new QPushButton(tr("복제"), ProfileCard); Copy->setObjectName("hc.columns.cloneProfile"); ProfileActions->addWidget(Copy);
     auto* Delete = new QPushButton(tr("삭제"), ProfileCard); deleteProfile_ = Delete; ProfileActions->addWidget(Delete);
-    pages_ = new QTabWidget(this); pages_->setObjectName("hc.columns.pages"); Body->addWidget(pages_, 1);
+    // 오른쪽: 일반 세트는 기존 탭, 평면 세트는 평면 세트 편집기로 통째로 바꾼다.
+    rightStack_ = new QStackedWidget(this); rightStack_->setObjectName("hc.columns.rightStack"); Body->addWidget(rightStack_, 1);
+    pages_ = new QTabWidget(rightStack_); pages_->setObjectName("hc.columns.pages"); rightStack_->addWidget(pages_);
+    flatEditor_ = new QtFlatProfileEditor(rightStack_); rightStack_->addWidget(flatEditor_);
     const auto AddPage = [this](QWidget* Page, const QString& Title) {
         auto* Scroll = new QScrollArea(pages_); Scroll->setWidgetResizable(true); Scroll->setFrameShape(QFrame::NoFrame);
         Scroll->setWidget(Page); pages_->addTab(Scroll, Title);
@@ -479,7 +483,8 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     connect(DetailToggle, &QToolButton::toggled, this, [this, DetailToggle](bool Open) { valueDetail_->setVisible(Open); DetailToggle->setArrowType(Open ? Qt::DownArrow : Qt::RightArrow); });
     connect(preview_, &QTableWidget::currentCellChanged, this, [this](int Row, int Column) { if (const auto* Cell = preview_->item(Row, Column)) valueDetail_->setText(Cell->toolTip()); });
     summary_ = new QLabel(this); summary_->setObjectName("hc.columns.summary"); summary_->setWordWrap(true); Outer->addWidget(summary_);
-    auto* Footer = new QGridLayout; Outer->addLayout(Footer); Footer->setColumnStretch(1, 1); Footer->setColumnStretch(2, 1);
+    footer_ = new QWidget(this); footer_->setObjectName("hc.columns.footer"); Outer->addWidget(footer_);
+    auto* Footer = new QGridLayout(footer_); Footer->setContentsMargins(0, 0, 0, 0); Footer->setColumnStretch(1, 1); Footer->setColumnStretch(2, 1);
     applyTitle_ = new QLabel(this); applyTitle_->setWordWrap(true); Footer->addWidget(applyTitle_, 0, 0, 2, 1);
     const auto Target = [&](const char* Name, int Row, int Column) {
         auto* Check = new QCheckBox(this); Check->setObjectName(QString("hc.columns.") + Name); Footer->addWidget(Check, Row, Column); return Check;
@@ -500,6 +505,26 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
     error_ = new QLabel(this); error_->setObjectName("hc.columns.error"); error_->setWordWrap(true); Outer->addWidget(error_);
     connect(profileList_, &QListWidget::currentRowChanged, this, [this](int Row) {
         if (loading_ || Row < 0) return;
+        const auto Kind = profileList_->item(Row)->data(Qt::UserRole + 3).toString();
+        const auto Restore = [this] {
+            const QSignalBlocker Blocker(profileList_);
+            const auto Current = IdText(flatSelected_ ? flatEditor_->Profile().id_ : draft_.id_);
+            for (int Index = 0; Index < profileList_->count(); ++Index)
+                if (profileList_->item(Index)->data(Qt::UserRole).toString() == Current) { profileList_->setCurrentRow(Index); break; }
+        };
+        if (Kind == "header") { Restore(); return; }
+        // 지금 고친 초안이 유효해야 다른 세트로 넘어간다(일반 · 평면 모두).
+        if (flatSelected_) {
+            if (const auto Error = flatEditor_->Validate(); !Error.isEmpty()) { Restore(); error_->setText(Error); return; }
+        } else if (const auto Error = Validate(draft_); !Error.isEmpty() && Kind == "flat") {
+            Restore(); ValidateDraft(); if (Error == "width") minimum_->setFocus(Qt::OtherFocusReason); return;
+        }
+        if (Kind == "flat") {
+            if (!flatSelected_) library_[IdText(draft_.id_)] = EncodeProfile(draft_);
+            if (!flatEditor_->Select(QUuid(profileList_->item(Row)->data(Qt::UserRole).toString()))) { Restore(); return; }
+            showFlat(true); refreshProfiles(); return;
+        }
+        if (flatSelected_) showFlat(false);
         const auto Next = DecodeProfile(library_[profileList_->item(Row)->data(Qt::UserRole).toString()].toObject());
         if (!Next || !IsSupportedProfile(*Next)) return;
         const auto Error = Validate(draft_);
@@ -552,13 +577,40 @@ QtColumnProfileEditor::QtColumnProfileEditor(QWidget* Parent) : QWidget(Parent)
         dirty_ = true; refreshSorts(std::max(0, Row)); updatePreview();
     });
     connect(profileTitle_, &QLineEdit::textEdited, this, [this](const QString& Text) {
-        draft_.title_ = Text;
         if (auto* Item = profileList_->currentItem()) Item->setText(Text);
+        if (flatSelected_) { flatEditor_->SetTitle(Text); return; }
+        draft_.title_ = Text;
         dirty_ = true; updatePreview();
     });
-    connect(Copy, &QPushButton::clicked, this, &QtColumnProfileEditor::cloneProfile);
+    connect(Copy, &QPushButton::clicked, this, [this] {
+        if (!flatSelected_) { cloneProfile(); return; }
+        if (const auto Error = flatEditor_->Validate(); !Error.isEmpty()) { error_->setText(Error); return; }
+        flatEditor_->Add(flatEditor_->Profile().id_); refreshProfiles(); profileTitle_->setText(flatEditor_->Profile().title_);
+    });
     connect(Delete, &QPushButton::clicked, this, [this] {
+        if (flatSelected_) { flatEditor_->Remove(); refreshProfiles(); profileTitle_->setText(flatEditor_->Profile().title_); deleteProfile_->setEnabled(false); return; }
         library_.remove(IdText(draft_.id_)); draft_ = DecodeProfile(library_[IdText(BuiltInProfileId)].toObject()).value_or(DefaultProfile()); library_[IdText(draft_.id_)] = EncodeProfile(draft_); dirty_ = true; refreshProfiles(); rebuildList(0); emit ProfileSelected();
+    });
+    // 추가 ▾: 용도(일반 폴더 · 평면 폴더)를 고른다. 만든 세트의 용도는 바꾸지 않는다.
+    auto* AddMenu = new QMenu(Copy);
+    AddMenu->addAction(tr("일반 폴더 세트"), this, [this] {
+        if (flatSelected_) { if (const auto Error = flatEditor_->Validate(); !Error.isEmpty()) { error_->setText(Error); return; } showFlat(false); }
+        cloneProfile();
+    });
+    AddMenu->addAction(tr("평면 폴더 세트"), this, [this] {
+        if (!flatSelected_ && !ValidateDraft()) return;
+        if (!flatSelected_) library_[IdText(draft_.id_)] = EncodeProfile(draft_);
+        flatEditor_->Add(); showFlat(true); refreshProfiles();
+    });
+    auto* AddButton = new QToolButton(Copy->parentWidget()); AddButton->setObjectName("hc.columns.addProfile"); AddButton->setText(tr("추가"));
+    AddButton->setPopupMode(QToolButton::InstantPopup); AddButton->setMenu(AddMenu); ProfileActions->insertWidget(0, AddButton);
+    connect(flatEditor_, &QtFlatProfileEditor::Changed, this, [this] {
+        if (!flatSelected_) return;
+        if (auto* Item = profileList_->currentItem()) {
+            Item->setText(flatEditor_->Profile().title_);
+            Item->setData(Qt::UserRole + 1, flatEditor_->Summary(flatEditor_->Profile().id_));
+        }
+        error_->setText(flatEditor_->Validate());
     });
     auto* Reload = new QPushButton(tr("플러그인 필드 새로 읽기"), this); Reload->setObjectName("hc.columns.reloadProviders"); AdvancedForm->addRow(Reload);
     connect(Reload, &QPushButton::clicked, &PluginFields::Instance(), &PluginFields::Refresh);
@@ -582,6 +634,7 @@ void QtColumnProfileEditor::SetContextFields(QVector<FieldDefinition> Fields)
 
 void QtColumnProfileEditor::Load(const ColumnProfile& Profile, const QJsonObject& Library, bool Writable)
 {
+    if (flatSelected_) { flatSelected_ = false; rightStack_->setCurrentWidget(pages_); footer_->show(); summary_->show(); }
     draft_ = Profile; currentProfileId_ = Profile.id_; library_ = Library; writable_ = Writable; dirty_ = targetsTouched_ = false;
     library_ = WithBuiltInProfiles(library_);
     { const QScopedValueRollback Loading(loading_, true);
@@ -596,15 +649,64 @@ void QtColumnProfileEditor::refreshProfiles()
 {
     const QScopedValueRollback Loading(loading_, true);
     profileList_->clear();
+    // 용도 구획: "일반 폴더"와 "평면 폴더" 머리글은 고를 수 없는 항목이다.
+    const auto Header = [this](const QString& Text) {
+        auto* Item = new QListWidgetItem(Text, profileList_); Item->setData(Qt::UserRole + 3, "header");
+        Item->setFlags(Qt::NoItemFlags); auto Font = Item->font(); Font.setBold(true); Item->setFont(Font);
+        Item->setData(Qt::AccessibleTextRole, tr("%1 구획").arg(Text));
+    };
+    Header(tr("일반 폴더"));
     for (auto It = library_.begin(); It != library_.end(); ++It)
         if (const auto Profile = DecodeProfile(It.value().toObject()); Profile && IsSupportedProfile(*Profile)) {
-            auto* Item = new QListWidgetItem(Profile->title_, profileList_); Item->setData(Qt::UserRole, It.key());
+            auto* Item = new QListWidgetItem(Profile->title_, profileList_); Item->setData(Qt::UserRole, It.key()); Item->setData(Qt::UserRole + 3, "normal");
             const auto Summary = ProfileRuleSummary(Profile->id_, AutoSelection(), autoColors_, hc::shell::KnownFolderChoices());
             Item->setData(Qt::UserRole + 1, Summary); Item->setData(Qt::UserRole + 2, Profile->id_ == currentProfileId_);
             Item->setData(Qt::AccessibleTextRole, Profile->title_ + " · " + Summary + (Profile->id_ == currentProfileId_ ? tr(" · 현재 탭") : QString{}));
             Item->setToolTip(Item->data(Qt::AccessibleTextRole).toString());
-            if (Profile->id_ == draft_.id_) profileList_->setCurrentItem(Item);
+            if (!flatSelected_ && Profile->id_ == draft_.id_) profileList_->setCurrentItem(Item);
         }
+    Header(tr("평면 폴더"));
+    for (const auto& Profile : flatEditor_->Profiles()) {
+        auto* Item = new QListWidgetItem(Profile.title_, profileList_); Item->setData(Qt::UserRole, IdText(Profile.id_)); Item->setData(Qt::UserRole + 3, "flat");
+        const auto Summary = flatEditor_->Summary(Profile.id_);
+        Item->setData(Qt::UserRole + 1, Summary);
+        Item->setData(Qt::AccessibleTextRole, tr("평면 폴더 세트 %1 · %2").arg(Profile.title_, Summary));
+        Item->setToolTip(Item->data(Qt::AccessibleTextRole).toString());
+        if (flatSelected_ && Profile.id_ == flatEditor_->Profile().id_) profileList_->setCurrentItem(Item);
+    }
+    if (flatSelected_) { profileTitle_->setText(flatEditor_->Profile().title_); deleteProfile_->setEnabled(!IsBuiltInFlatProfile(flatEditor_->Profile().id_)); }
+}
+
+void QtColumnProfileEditor::showFlat(bool Flat)
+{
+    flatSelected_ = Flat;
+    rightStack_->setCurrentWidget(Flat ? static_cast<QWidget*>(flatEditor_) : pages_);
+    // 적용 대상(현재 탭 · 기본값 · 자동/고정)은 일반 세트에만 있다. 평면 세트는 탭에 고정하지 않는다.
+    footer_->setVisible(!Flat); summary_->setVisible(!Flat);
+    profileTitle_->setText(Flat ? flatEditor_->Profile().title_ : draft_.title_);
+    deleteProfile_->setEnabled(Flat ? !IsBuiltInFlatProfile(flatEditor_->Profile().id_) : !IsBuiltInProfile(draft_.id_));
+    error_->setText(Flat ? flatEditor_->Validate() : QString{});
+    emit ProfileSelected();
+}
+
+void QtColumnProfileEditor::LoadFlat(const QJsonObject& Library, const QJsonObject& Selection)
+{
+    flatEditor_->Load(Library, Selection, library_);
+    flatEditor_->SetCurrentLocation(currentLocation_);
+    if (flatSelected_) showFlat(false);
+    refreshProfiles();
+}
+QJsonObject QtColumnProfileEditor::FlatLibrary() const { return flatEditor_->Library(); }
+QJsonObject QtColumnProfileEditor::FlatSelection() const { return flatEditor_->Selection(); }
+bool QtColumnProfileEditor::FlatDirty() const { return flatEditor_->Dirty(); }
+void QtColumnProfileEditor::MarkSaved() { dirty_ = targetsTouched_ = false; flatEditor_->MarkSaved(); updateApplySummary(); }
+bool QtColumnProfileEditor::SelectFlatProfile(const QUuid& Id)
+{
+    if (!flatSelected_ && !Validate(draft_).isEmpty()) return false;
+    if (!flatSelected_) library_[IdText(draft_.id_)] = EncodeProfile(draft_);
+    if (!flatEditor_->Select(Id)) return false;
+    showFlat(true); refreshProfiles();
+    return true;
 }
 
 void QtColumnProfileEditor::rebuildList(int Row)
@@ -791,8 +893,19 @@ void QtColumnProfileEditor::storeGrouping()
     draft_.grouping_ = State; dirty_ = true; loadGrouping(); updatePreview();
 }
 
+void QtColumnProfileEditor::SetCurrentLocation(const QString& Path)
+{
+    currentLocation_ = Path; refreshAutoVerdict();
+    if (flatEditor_) flatEditor_->SetCurrentLocation(Path);
+}
+
 bool QtColumnProfileEditor::ValidateDraft()
 {
+    // 평면 세트 초안 · 적용 조건도 저장 전에 확인한다. 잘못되면 그 세트를 보인다.
+    if (const auto FlatError = flatEditor_->Validate(); !FlatError.isEmpty()) {
+        if (!flatSelected_) SelectFlatProfile(flatEditor_->Profile().id_);
+        error_->setText(FlatError); return false;
+    }
     const auto GroupError = ValidateGrouping(draft_);
     if (!GroupError.isEmpty()) { error_->setText(GroupError); return false; }
     if (autoSelection_->isEnabled()) {

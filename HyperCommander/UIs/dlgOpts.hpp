@@ -22,7 +22,8 @@ public:
 
     ~QMainOpts() override;
     void SetListView(CGridView* View);
-    void ShowListSettingsPage();
+    // FlatProfile이 있으면 그 평면 폴더 세트를 고른 상태로 연다.
+    void ShowListSettingsPage(const QUuid& FlatProfile = {});
     void ShowPluginSettingsPage(const QString& Binary = {}, bool Review = false);
 
     Q_INVOKABLE void                    LoadSettings();

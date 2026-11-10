@@ -573,6 +573,20 @@ target_link_libraries(hc_column_tests PRIVATE hc_script_runtime Qt6::Test Qt6::C
 add_test(NAME hc.columns COMMAND hc_column_tests)
 set_tests_properties(hc.columns PROPERTIES TIMEOUT 30)
 
+qt_add_executable(hc_sort_rank_tests tstSortRankWorker.cpp ../commonLibs/columns/sortRankWorker.hpp ../commonLibs/columns/columnSort.hpp)
+target_include_directories(hc_sort_rank_tests PRIVATE ${PROJECT_SOURCE_DIR})
+target_compile_options(hc_sort_rank_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_sort_rank_tests PRIVATE Qt6::Test Qt6::Core Qt6::Gui)
+add_test(NAME hc.sortRanks COMMAND hc_sort_rank_tests)
+set_tests_properties(hc.sortRanks PROPERTIES TIMEOUT 120)
+
+qt_add_executable(hc_flat_listing_tests tstFlatListing.cpp ../UniqueLibs/flatListingSession.hpp ../UniqueLibs/storageProviders.cpp ../UniqueLibs/storageProviders.hpp)
+target_include_directories(hc_flat_listing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/UniqueLibs ${PROJECT_SOURCE_DIR}/commonLibs ${PROJECT_SOURCE_DIR}/HyperCommander)
+target_compile_options(hc_flat_listing_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_flat_listing_tests PRIVATE Qt6::Test Qt6::Concurrent)
+add_test(NAME hc.flatListing COMMAND hc_flat_listing_tests)
+set_tests_properties(hc.flatListing PROPERTIES TIMEOUT 60)
+
 qt_add_executable(hc_command_tests tstCommands.cpp ../commonLibs/commands/commandBus.hpp)
 target_include_directories(hc_command_tests PRIVATE ${PROJECT_SOURCE_DIR})
 target_compile_options(hc_command_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

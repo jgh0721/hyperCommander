@@ -303,7 +303,13 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
             case hc::columns::GroupLatestRole: RoleWith.setData(readField(Item, "file.modified", false).Raw()); break;
             case GroupKeyRole: case GroupOrderRole: case GroupTextRole: {
                 const auto& Definition = columnView_.VecColumns[Col].definition_;
-                const auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, groupingModes_.value(Definition.id_, "value"), readField(Item, Definition.fieldId_, false), groupingDate_, groupingZone_);
+                auto Value = hc::columns::MakeGroupValue(Definition.fieldId_, groupingModes_.value(Definition.id_, "value"), readField(Item, Definition.fieldId_, false), groupingDate_, groupingZone_);
+                // 평면 보기의 폴더별 그룹: 제목을 마지막 폴더 이름으로, 순서를 그 폴더의 최근 수정 먼저로 바꿀 수 있다.
+                if (IsFlatListing() && Definition.fieldId_ == "file.relativePath" && Definition.template_.isEmpty()) {
+                    const auto Folder = Value.order_.toString();
+                    if (flatGroupLeaf_ && !Folder.isEmpty()) Value.text_ = Value.text_.mid(Value.text_.lastIndexOf('\\') + 1);
+                    if (flatGroupRecent_) Value.order_ = -flatFolderLatest_.value(Folder);
+                }
                 RoleWith.setData(Role == GroupKeyRole ? QVariant(Value.key_) : Role == GroupOrderRole ? Value.order_ : QVariant(Value.text_));
             } break;
             case GridSortRole: {
@@ -314,6 +320,16 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
                 } else RoleWith.setData(Row);
             } break;
             case ColumnStateRole: { RoleWith.setData(int(evaluateColumn(Item, columnView_.VecColumns[Col], false).State())); } break;
+            case FlatTreeDepthRole: RoleWith.setData(FlatTree() ? flatDepth(Item) : 0); break;
+            case FlatTreeExpanderRole: {
+                if (FlatTree() && Col == 0 && Item->storageEntry_ && Item->storageEntry_->directory_)
+                    RoleWith.setData(flatCollapsed_.contains(flatRelative(Item, true)) ? 1 : 0);
+                else RoleWith.clearData();
+            } break;
+            case FlatPrefixRole: {
+                RoleWith.setData(Col == 0 && IsFlatListing() && Item->storageEntry_
+                    ? hc::flat::RelativeParent(flatBase_, QString::fromStdString(Item->storageEntry_->locator_.root_)) : QString{});
+            } break;
             case Qt::ToolTipRole: {
                 if (recoveryLocation_ && navigationError_ && Item->Name_ == "..") {
                     const auto Text = hc::ui::DescribeNavigationError(*navigationError_, QString::fromStdString(recoveryLocation_->root_));
@@ -777,6 +793,7 @@ CFSModel::~CFSModel()
     fileRuleStop_.request_stop();
     hc::icons::FileIconService::Instance().Unsubscribe(this);
     everythingSession_.reset();
+    flatSession_.reset(); flatRescan_.reset(); sortWorker_.reset(); stopFlatWatch();
     navigationStop_.request_stop(); iconStop_.request_stop(); pageStop_.request_stop(); directorySizeStop_.request_stop();
     if (FsIconGatherer_)
     {
@@ -1254,13 +1271,14 @@ QString LegacyIconBase(const CFSModel* Model)
 
 void CFSModel::StartEverythingSearch(const QString& Query, const QString& Match, int Interval)
 {
-    StopEverythingSearch(); CancelNavigation(); recoveryLocation_.reset(); navigationError_.reset();
-    searchResults_ = true; everythingQuery_ = Query;
+    StopEverythingSearch(); StopFlatListing(true); CancelNavigation(); recoveryLocation_.reset(); navigationError_.reset();
+    searchResults_ = true; resultSource_ = ResultSource::Everything; everythingQuery_ = Query;
     pageSource_.reset(); pageView_.reset(); index_.Publish({});
     columnQueries_->Reset(); clearRuleFields(); iconStop_.request_stop(); ++iconGeneration_;
     SetWatchEnabled(watchEnabled_);
     if (!searchLocal_) searchLocal_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
     if (!searchSmb_) searchSmb_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
+    resetSortWorker();
     beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); nameSortRanks_.clear(); columnSortRanks_.clear();
     fileCount_ = directoryCount_ = 0; totalSize_ = 0; endResetModel();
     everythingSession_ = std::make_unique<hc::search::EverythingSession>(this, searchLocal_, searchSmb_);
@@ -1272,8 +1290,319 @@ void CFSModel::StartEverythingSearch(const QString& Query, const QString& Match,
 void CFSModel::StopEverythingSearch(bool Leave)
 {
     if (everythingSession_) { everythingSession_->Cancel(); everythingSession_.reset(); }
-    if (Leave) { searchResults_ = false; everythingQuery_.clear(); everythingStatus_.clear(); }
+    if (resultSource_ != ResultSource::Everything) return;
+    if (Leave) { searchResults_ = false; resultSource_ = ResultSource::None; everythingQuery_.clear(); everythingStatus_.clear(); resetSortWorker(); }
     else if (searchResults_) { everythingStatus_ = tr("Everything 검색 중단 · %1개 표시").arg(vecNode_.size()); emit SearchResultsChanged(); }
+}
+
+void CFSModel::StartFlatListing(hc::flat::ListingOptions Options)
+{
+    StopEverythingSearch(true); StopFlatListing(true); CancelNavigation(); recoveryLocation_.reset(); navigationError_.reset();
+    Options.base_ = hc::flat::NormalizedBase(Options.base_);
+    searchResults_ = true; resultSource_ = ResultSource::Flat;
+    flatBase_ = Options.base_; flatBaseUtf8_ = flatBase_.toStdString(); flatOptions_ = Options; flatStatus_ = {};
+    flatFolderLatest_.clear();
+    flatKind_ = Options.roots_.empty() ? hc::storage::LocatorKind::Local : Options.roots_.front().kind_;
+    pageSource_.reset(); pageView_.reset(); index_.Publish({});
+    columnQueries_->Reset(); clearRuleFields(); iconStop_.request_stop(); ++iconGeneration_;
+    SetWatchEnabled(watchEnabled_);
+    if (!searchLocal_) searchLocal_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
+    if (!searchSmb_) searchSmb_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
+    resetSortWorker();
+    beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); nameSortRanks_.clear(); columnSortRanks_.clear();
+    fileCount_ = directoryCount_ = 0; totalSize_ = 0; endResetModel();
+    flatSession_ = std::make_unique<hc::flat::ListingSession>(this, flatKind_ == hc::storage::LocatorKind::Smb ? searchSmb_ : searchLocal_, std::move(Options));
+    flatSession_->append_ = [this](auto Entries) { appendSearchResults(std::move(Entries)); };
+    flatSession_->status_ = [this](const hc::flat::Status& Status) { flatStatus_ = Status; emit SearchResultsChanged(); };
+    flatSession_->Start(property("hc.flat.interval").isValid() ? property("hc.flat.interval").toInt() : hc::product::flatViewDisplayIntervalMs);
+    flatStatus_ = flatSession_->CurrentStatus();
+    flatChanged_ = false; startFlatWatch();
+    emit SearchResultsChanged();
+}
+
+void CFSModel::StopFlatListing(bool Leave)
+{
+    if (flatSession_) {
+        if (Leave) flatSession_->Cancel(); else flatSession_->Stop();
+        flatStatus_ = flatSession_->CurrentStatus(); flatSession_.reset();
+    }
+    if (Leave && flatRescan_) { flatRescan_->Cancel(); flatRescan_.reset(); }
+    if (Leave) { stopFlatWatch(); flatChanged_ = false; }
+    if (resultSource_ != ResultSource::Flat) return;
+    if (Leave) {
+        searchResults_ = false; resultSource_ = ResultSource::None;
+        flatBase_.clear(); flatBaseUtf8_.clear(); flatOptions_ = {}; flatStatus_ = {}; flatFolderLatest_.clear();
+        resetSortWorker();
+    }
+    emit SearchResultsChanged();
+}
+
+void CFSModel::SetFlatPresentation(bool DepthSort, bool GroupLeaf, bool GroupRecent)
+{
+    const bool SortChanged = flatDepthSort_ != DepthSort;
+    const bool GroupChanged = flatGroupLeaf_ != GroupLeaf || flatGroupRecent_ != GroupRecent;
+    const bool Recount = GroupRecent && !flatGroupRecent_;
+    flatDepthSort_ = DepthSort; flatGroupLeaf_ = GroupLeaf; flatGroupRecent_ = GroupRecent;
+    if (!IsFlatListing()) return;
+    if (Recount) { flatFolderLatest_.clear(); for (const auto& Item : vecNode_) noteFlatFolder(Item); }
+    if (GroupChanged && rowCount() && columnCount()) {
+        emit ColumnValuesChanging();
+        emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GroupKeyRole, GroupOrderRole, GroupTextRole});
+        emit ColumnValuesChanged();
+    }
+    if (SortChanged) { sortSubmitted_ = 0; refreshColumnSortRanks(); }
+}
+
+void CFSModel::RemoveSearchRows(QVector<int> Rows)
+{
+    if (!searchResults_ || Rows.isEmpty()) return;
+    std::sort(Rows.begin(), Rows.end()); Rows.erase(std::unique(Rows.begin(), Rows.end()), Rows.end());
+    Rows.erase(std::remove_if(Rows.begin(), Rows.end(), [this](int Row) { return Row < 0 || Row >= vecNode_.size(); }), Rows.end());
+    if (Rows.isEmpty()) return;
+    emit ColumnValuesChanging();
+    // 남는 행의 기존 순서를 지킨다. 새 순위는 작업 스레드가 계산하기 전까지의 임시 값이다.
+    QVector<int> Keep; QVector<int> OldRanks;
+    {
+        QVector<bool> Drop(vecNode_.size(), false); for (const int Row : Rows) Drop[Row] = true;
+        for (int Row = 0; Row < vecNode_.size(); ++Row) if (!Drop[Row]) { Keep.append(Row); OldRanks.append(columnSortRanks_.size() == vecNode_.size() ? columnSortRanks_[Row] : Row); }
+    }
+    for (int Index = int(Rows.size()) - 1; Index >= 0;) {
+        int Last = Rows[Index], First = Last;
+        while (Index > 0 && Rows[Index - 1] == First - 1) First = Rows[--Index];
+        --Index;
+        beginRemoveRows({}, First, Last);
+        for (int Row = First; Row <= Last; ++Row) {
+            const auto& Item = vecNode_[Row];
+            if (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) --directoryCount_;
+            else { --fileCount_; totalSize_ -= std::min<quint64>(totalSize_, quint64(Item->Size_)); }
+        }
+        vecNode_.erase(vecNode_.begin() + First, vecNode_.begin() + Last + 1);
+        vecRowColors_.erase(vecRowColors_.begin() + First, vecRowColors_.begin() + Last + 1);
+        // 아직 끝나지 않은 삭제 구간 동안 Qtitan이 읽는 정렬 값은 행 번호다(크기 불일치).
+        endRemoveRows();
+    }
+    QVector<int> Order(Keep.size()); std::iota(Order.begin(), Order.end(), 0);
+    std::stable_sort(Order.begin(), Order.end(), [&](int A, int B) { return OldRanks[A] < OldRanks[B]; });
+    columnSortRanks_.resize(Keep.size()); for (int Rank = 0; Rank < Order.size(); ++Rank) columnSortRanks_[Order[Rank]] = Rank;
+    nameSortRanks_.clear(); queryRowsValid_ = false; displayedFileRules_.clear();
+    std::vector<hc::storage::EntrySnapshot> Entries; Entries.reserve(vecNode_.size());
+    for (const auto& Item : vecNode_) if (Item->storageEntry_) Entries.push_back(*Item->storageEntry_);
+    index_.Publish(Entries);
+    if (flatGroupRecent_ && IsFlatListing()) { flatFolderLatest_.clear(); for (const auto& Item : vecNode_) noteFlatFolder(Item); }
+    sortSubmitted_ = 0; refreshColumnSortRanks();
+    if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {GridSortRole});
+    emit ColumnValuesChanged(); emit SearchResultsChanged();
+}
+
+void CFSModel::RefreshFlatLocations(const QStringList& Folders)
+{
+    if (!IsFlatListing() || Folders.isEmpty()) return;
+    const auto Base = flatBase_;
+    flatOwnChange_.start();
+    // 작업 중에 온 알림은 이 작업의 변경이다. 영향받은 폴더를 다시 확인하므로 "변경됨"을 지운다.
+    flatChanged_ = false;
+    const auto Inside = [&](const QString& Path) {
+        return Path.compare(Base, Qt::CaseInsensitive) == 0 || Path.startsWith(Base.endsWith('\\') ? Base : Base + '\\', Qt::CaseInsensitive);
+    };
+    QStringList Targets;
+    for (auto Folder : Folders) {
+        Folder = hc::flat::NormalizedBase(Folder);
+        if (Inside(Folder) && !Targets.contains(Folder, Qt::CaseInsensitive)) Targets.append(Folder);
+    }
+    if (Targets.isEmpty()) return;
+    // 1) 그 폴더 아래에서 더는 없는 행을 뺀다.
+    QVector<int> Gone;
+    for (int Row = 0; Row < vecNode_.size(); ++Row) {
+        const auto& Item = vecNode_[Row]; if (!Item->storageEntry_) continue;
+        const auto Path = QString::fromStdString(Item->storageEntry_->locator_.root_);
+        const bool Under = std::any_of(Targets.begin(), Targets.end(), [&](const QString& Folder) {
+            return Path.startsWith(Folder.endsWith('\\') ? Folder : Folder + '\\', Qt::CaseInsensitive); });
+        if (Under && !QFileInfo::exists(Path)) Gone.append(Row);
+    }
+    RemoveSearchRows(Gone);
+    // 2) 그 폴더 아래를 다시 열거해 목록에 없는 항목만 더한다(복사 · 이동 · 이름 바꾸기로 생긴 항목).
+    auto Options = flatOptions_; Options.roots_.clear();
+    for (const auto& Folder : Targets) Options.roots_.push_back({flatKind_, Folder.toStdString()});
+    // 깊이 한도는 기준 폴더에서 센다. 다시 볼 폴더가 이미 내려간 만큼 줄인다.
+    if (Options.maxDepth_ != std::numeric_limits<int>::max()) {
+        int Shallowest = std::numeric_limits<int>::max();
+        for (const auto& Folder : Targets) Shallowest = std::min(Shallowest, Folder.compare(Base, Qt::CaseInsensitive) == 0 ? 0 : hc::flat::RelativeDepth(flatBaseUtf8_.size(), (Folder + "\\x").toStdString()));
+        Options.maxDepth_ = std::max(0, Options.maxDepth_ - Shallowest);
+    }
+    if (flatRescan_) flatRescan_->Cancel();
+    flatRescan_ = std::make_unique<hc::flat::ListingSession>(this, flatKind_ == hc::storage::LocatorKind::Smb ? searchSmb_ : searchLocal_, std::move(Options));
+    flatRescan_->append_ = [this](auto Entries) {
+        QSet<QString> Known; Known.reserve(vecNode_.size());
+        for (const auto& Item : vecNode_) if (Item->storageEntry_) Known.insert(hc::workspace::SelectionKey(*Item->storageEntry_));
+        std::vector<hc::storage::EntrySnapshot> Fresh;
+        for (auto& Entry : Entries) if (!Known.contains(hc::workspace::SelectionKey(Entry))) Fresh.push_back(std::move(Entry));
+        if (!Fresh.empty()) appendSearchResults(std::move(Fresh));
+    };
+    flatRescan_->Start(0);
+}
+
+QString CFSModel::flatRelative(const nsHC::TySpFileSource& Item, bool Self) const
+{
+    // Self: 항목 자신의 상대 경로(폴더 행의 키). 아니면 상대 부모 경로. 비교용으로 소문자로 접는다.
+    if (!Item->storageEntry_) return {};
+    const auto Path = QString::fromStdString(Item->storageEntry_->locator_.root_);
+    const auto Parent = hc::flat::RelativeParent(flatBase_, Path);
+    if (!Self) return Parent.toCaseFolded();
+    const auto Name = Path.mid(Path.lastIndexOf('\\') + 1);
+    return (Parent.isEmpty() ? Name : Parent + '\\' + Name).toCaseFolded();
+}
+
+void CFSModel::SetFlatTree(bool Tree, int ExpandLevel, bool FolderTotal)
+{
+    const bool Changed = flatTree_ != Tree || flatTreeExpand_ != ExpandLevel;
+    flatTree_ = Tree; flatTreeExpand_ = ExpandLevel; flatTreeTotal_ = FolderTotal;
+    if (!Changed) { if (Tree) refreshFlatTreeTotals(); return; }
+    flatCollapsed_.clear();
+    if (Tree && ExpandLevel >= 0)
+        for (const auto& Item : vecNode_) if (Item->storageEntry_ && Item->storageEntry_->directory_ && flatDepth(Item) >= ExpandLevel) flatCollapsed_.insert(flatRelative(Item, true));
+    if (IsFlatListing()) { refreshFlatTreeTotals(); sortSubmitted_ = 0; refreshColumnSortRanks(); }
+    emit FlatTreeChanged();
+}
+
+int CFSModel::FlatTreeDepth(int Row) const
+{
+    return FlatTree() && Row >= 0 && Row < vecNode_.size() ? flatDepth(vecNode_[Row]) : 0;
+}
+
+bool CFSModel::FlatTreeHidden(int Row) const
+{
+    if (!FlatTree() || flatCollapsed_.isEmpty() || Row < 0 || Row >= vecNode_.size()) return false;
+    // 상대 부모 경로의 각 조상 폴더 중 하나라도 접혀 있으면 숨긴다.
+    auto Parent = flatRelative(vecNode_[Row], false);
+    while (!Parent.isEmpty()) {
+        if (flatCollapsed_.contains(Parent)) return true;
+        const auto Slash = Parent.lastIndexOf('\\');
+        Parent = Slash < 0 ? QString{} : Parent.left(Slash);
+    }
+    return false;
+}
+
+bool CFSModel::FlatFolderCollapsed(int Row) const
+{
+    return FlatTree() && Row >= 0 && Row < vecNode_.size() && vecNode_[Row]->storageEntry_ && vecNode_[Row]->storageEntry_->directory_
+        && flatCollapsed_.contains(flatRelative(vecNode_[Row], true));
+}
+
+void CFSModel::SetFlatFolderExpanded(int Row, bool Expanded)
+{
+    if (!FlatTree() || Row < 0 || Row >= vecNode_.size() || !vecNode_[Row]->storageEntry_ || !vecNode_[Row]->storageEntry_->directory_) return;
+    const auto Key = flatRelative(vecNode_[Row], true);
+    const bool Collapsed = flatCollapsed_.contains(Key);
+    if (Expanded != Collapsed) return;
+    if (Expanded) flatCollapsed_.remove(Key); else flatCollapsed_.insert(Key);
+    if (columnCount()) emit dataChanged(index(Row, 0), index(Row, 0), {Qt::DisplayRole});
+    emit FlatTreeChanged();
+}
+
+int CFSModel::FlatTreeParent(int Row) const
+{
+    if (!FlatTree() || Row < 0 || Row >= vecNode_.size()) return -1;
+    const auto Parent = flatRelative(vecNode_[Row], false);
+    if (Parent.isEmpty()) return -1;
+    for (int Other = 0; Other < vecNode_.size(); ++Other)
+        if (vecNode_[Other]->storageEntry_ && vecNode_[Other]->storageEntry_->directory_ && flatRelative(vecNode_[Other], true) == Parent) return Other;
+    return -1;
+}
+
+void CFSModel::refreshFlatTreeTotals()
+{
+    if (!FlatTree() || !flatTreeTotal_) return;
+    // 폴더 행의 크기 = 그 아래 모든 파일 크기의 합(열거된 범위). 목록 값으로 바로 계산한다(파일 I/O 없음).
+    QHash<QString, quint64> Totals;
+    for (const auto& Item : vecNode_) {
+        if (!Item->storageEntry_ || Item->storageEntry_->directory_) continue;
+        auto Parent = flatRelative(Item, false);
+        while (!Parent.isEmpty()) {
+            Totals[Parent] += Item->storageEntry_->size_;
+            const auto Slash = Parent.lastIndexOf('\\');
+            Parent = Slash < 0 ? QString{} : Parent.left(Slash);
+        }
+    }
+    bool Changed = false;
+    for (const auto& Item : vecNode_) if (Item->storageEntry_ && Item->storageEntry_->directory_) {
+        const auto Total = Totals.value(flatRelative(Item, true));
+        if (!Item->directorySize_ || *Item->directorySize_ != Total) { Item->directorySize_ = Total; Changed = true; }
+    }
+    if (Changed && rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1), {Qt::DisplayRole});
+}
+
+void CFSModel::startFlatWatch()
+{
+    stopFlatWatch();
+    // 네트워크 경로의 하위 포함 감시는 서버 부담이 크고 응답이 늦을 수 있어 로컬만 감시한다(SMB는 F5).
+    if (flatKind_ != hc::storage::LocatorKind::Local || flatBase_.isEmpty()) return;
+    const auto Path = QDir::toNativeSeparators(flatBase_).toStdWString();
+    const auto Handle = FindFirstChangeNotificationW(Path.c_str(), TRUE,
+        FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE);
+    if (Handle == INVALID_HANDLE_VALUE) return;
+    flatWatchHandle_ = Handle;
+    flatWatch_ = std::make_unique<QWinEventNotifier>(Handle);
+    connect(flatWatch_.get(), &QWinEventNotifier::activated, this, [this] {
+        if (!flatWatchHandle_) return;
+        FindNextChangeNotification(static_cast<HANDLE>(flatWatchHandle_));
+        // 이 목록이 방금 한 파일 작업의 알림은 부분 갱신으로 이미 반영했다.
+        if (flatOwnChange_.isValid() && flatOwnChange_.elapsed() < 2000) return;
+        if (!flatChanged_ && IsFlatListing()) { flatChanged_ = true; emit SearchResultsChanged(); }
+    });
+}
+
+void CFSModel::stopFlatWatch()
+{
+    flatWatch_.reset();
+    if (flatWatchHandle_) { FindCloseChangeNotification(static_cast<HANDLE>(flatWatchHandle_)); flatWatchHandle_ = nullptr; }
+}
+
+void CFSModel::noteFlatFolder(const nsHC::TySpFileSource& Item)
+{
+    if (!Item->storageEntry_) return;
+    const auto Folder = hc::flat::RelativeParent(flatBase_, QString::fromStdString(Item->storageEntry_->locator_.root_)).toCaseFolded();
+    auto& Latest = flatFolderLatest_[Folder];
+    Latest = std::max(Latest, Item->storageEntry_->modifiedUtcMs_);
+}
+
+int CFSModel::flatDepth(const nsHC::TySpFileSource& Item) const
+{
+    return Item->storageEntry_ ? hc::flat::RelativeDepth(flatBaseUtf8_.size(), Item->storageEntry_->locator_.root_) : 0;
+}
+
+hc::columns::SortTextOptions CFSModel::sortTextOptions() const
+{
+    hc::columns::SortTextOptions Options;
+    Options.locale_ = displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool());
+    Options.numeric_ = displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool());
+    Options.case_ = displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    return Options;
+}
+
+void CFSModel::resetSortWorker()
+{
+    // 이전 결과의 순위가 늦게 도착해도 새 목록에 쓰지 않는다. 정렬 키 메모리도 해제한다.
+    ++sortGeneration_; sortSubmitted_ = sortRanked_ = 0; sortSubmittedSorts_.clear();
+    if (sortWorker_) sortWorker_->Clear(sortGeneration_);
+}
+
+void CFSModel::applySortRanks(quint64 Generation, int Rows, QVector<int> Ranks)
+{
+    if (!searchResults_ || Generation != sortGeneration_) return;
+    if (Ranks.isEmpty() || Rows > vecNode_.size()) { sortSubmitted_ = 0; refreshColumnSortRanks(); return; }
+    // 그 사이 정렬 규칙이 바뀌었으면(취소로 되돌림 등) 지금 규칙으로 다시 계산한다.
+    if (sortSubmittedSorts_ != columnSorts_) { sortSubmitted_ = 0; refreshColumnSortRanks(); return; }
+    sortRanked_ = Rows;
+    const auto Previous = columnSortRanks_;
+    // 순위가 바뀌면 그리드가 다시 정렬한다. 보기가 선택 · 커서 · 스크롤을 보존하도록 값 변경 구간으로 감싼다.
+    emit ColumnValuesChanging();
+    columnSortRanks_ = std::move(Ranks);
+    // 아직 작업 스레드에 반영되지 않은 뒤쪽 행은 도착 순서대로 맨 뒤에 둔다.
+    for (int Row = Rows; Row < vecNode_.size(); ++Row) columnSortRanks_.append(Row);
+    completedSorts_ = columnSorts_;
+    emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{});
+    notifySortRanks(Previous);
+    emit ColumnValuesChanged();
 }
 
 bool CFSModel::IsEverythingRunning() const
@@ -1347,9 +1676,17 @@ void CFSModel::appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entri
         vecRowColors_.push_back(Color);
         if (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ++directoryCount_;
         else { ++fileCount_; totalSize_ += quint64(Item->Size_); }
+        if (flatGroupRecent_ && IsFlatListing()) noteFlatFolder(Item);
+        // 트리의 처음 펼침: 새 폴더 행은 설정한 단계부터 접힌 채로 들어온다.
+        if (flatTree_ && flatTreeExpand_ >= 0 && IsFlatListing() && Item->storageEntry_ && Item->storageEntry_->directory_ && flatDepth(Item) >= flatTreeExpand_)
+            flatCollapsed_.insert(flatRelative(Item, true));
         vecNode_.push_back(std::move(Item));
     }
-    refreshNameSortRanks(int(First)); endInsertRows(); refreshColumnSortRanks(int(First)); refreshDisplayIcons(int(First));
+    // 여러 위치 결과의 순서는 열 정렬 순위가 정한다. 이름 순위(USR_ROLE_SORT)는 일반 폴더에서만 쓴다.
+    endInsertRows(); refreshColumnSortRanks(int(First)); refreshDisplayIcons(int(First));
+    // 폴더 그룹의 "최근 수정 먼저": 새 행이 폴더의 최근 시각을 바꿨을 수 있으므로 앞쪽 행의 그룹 순서를 다시 읽게 한다.
+    if (flatGroupRecent_ && IsFlatListing() && First > 0 && columnCount()) emit dataChanged(index(0, 0), index(int(First) - 1, columnCount() - 1), {GroupOrderRole});
+    if (flatTree_ && IsFlatListing()) { refreshFlatTreeTotals(); if (flatTreeExpand_ >= 0) emit FlatTreeChanged(); }
     emit ColumnValuesChanged(); emit SearchResultsChanged();
 }
 
@@ -1666,6 +2003,8 @@ void CFSModel::RequestDirectorySizes(const QModelIndexList& Entries, bool Automa
 void CFSModel::refreshNameSortRanks(int First)
 {
     hc::startup::Span Trace("listing.nameRanks");
+    // 검색 · 평면 결과는 열 정렬 순위(작업 스레드)만 쓴다. 수십만 행을 UI 스레드에서 다시 정렬하지 않는다.
+    if (searchResults_) { nameSortRanks_.clear(); return; }
     // Supply numeric ranks to the grid so locale and natural-number options
     // remain independent, without relying on its locale-only numeric comparator.
     const bool Locale = displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool());
@@ -2459,8 +2798,13 @@ void CFSProxyModel::SetSearch(const QString& Query, const QString& Match)
 
 void CFSProxyModel::setSourceModel(QAbstractItemModel* Source)
 {
+    if (auto* Previous = qobject_cast<CFSModel*>(sourceModel())) disconnect(Previous, &CFSModel::FlatTreeChanged, this, nullptr);
     QSortFilterProxyModel::setSourceModel(Source);
-    if (auto* Model = qobject_cast<CFSModel*>(Source)) Model->SetPageFilter(search_, IsShowHiddenSystem_, searchMatch_);
+    if (auto* Model = qobject_cast<CFSModel*>(Source)) {
+        Model->SetPageFilter(search_, IsShowHiddenSystem_, searchMatch_);
+        // 평면 트리의 접기 · 펼치기는 행을 숨기는 필터 변경이다.
+        connect(Model, &CFSModel::FlatTreeChanged, this, [this] { invalidateRowsFilter(); });
+    }
 }
 
 bool CFSProxyModel::GetHiddenSystem() const
@@ -2475,6 +2819,7 @@ bool CFSProxyModel::filterAcceptsRow( int source_row, const QModelIndex& source_
     if( Index.isValid() && !source_parent.isValid() )
     {
         if (const auto Model = qobject_cast<const CFSModel*>(sourceModel()); Model && Model->UsesIndexedOrder()) return true;
+        if (const auto Model = qobject_cast<const CFSModel*>(sourceModel()); Model && Model->FlatTreeHidden(source_row)) return false;
         const auto Attr = Index.data( CFSModel::USR_ROLE_ATTRIBUTE ).toUInt();
         if (!IsShowHiddenSystem_ && (FlagOn(Attr, FILE_ATTRIBUTE_HIDDEN) || FlagOn(Attr, FILE_ATTRIBUTE_SYSTEM))) return false;
         const auto Model = qobject_cast<const CFSModel*>(sourceModel());
@@ -2575,7 +2920,7 @@ hc::columns::CellValue CFSModel::readField(const nsHC::TySpFileSource& Item, con
         return Value;
     }
     const auto Native = queryPath(Item);
-    return CColumnMgr::GetFieldValue(Field, Item.get(), Native.isEmpty() ? GetCurrentPathWithRoot() : QFileInfo(Native).absolutePath());
+    return CColumnMgr::GetFieldValue(Field, Item.get(), Native.isEmpty() ? GetCurrentPathWithRoot() : QFileInfo(Native).absolutePath(), IsFlatListing() ? flatBase_ : QString{});
 }
 
 hc::columns::CellValue CFSModel::evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort) const
@@ -2772,8 +3117,17 @@ void CFSModel::refreshColumnSortRanks(int First)
         Orders.append(Sort.order_); Bindings.append(&*It);
     }
     if (Bindings.isEmpty()) return;
-    const bool Merge = searchResults_ && First > 0 && searchSortRows_.size() == First && searchSortOrder_.size() == First && searchSorts_ == columnSorts_;
-    if (Merge) Rows = searchSortRows_;
+    const auto TextOptions = sortTextOptions();
+    // 작업 스레드가 앞쪽 행을 이미 갖고 있으면 새 묶음만 보낸다.
+    const bool Merge = searchResults_ && First > 0 && sortSubmitted_ == First && sortSubmittedSorts_ == columnSorts_ && sortSubmittedOptions_ == TextOptions;
+    // 평면 보기의 이름 정렬은 깊이(상대 경로 구간 수)를 먼저 비교한다. 방향은 이름 열을 따른다.
+    QVector<bool> DepthFirst(Bindings.size(), false);
+    if (IsFlatListing() && flatDepthSort_)
+        for (int Index = 0; Index < Bindings.size(); ++Index) {
+            const auto& Definition = Bindings[Index]->definition_;
+            DepthFirst[Index] = Definition.template_.isEmpty() && Definition.sortField_.isEmpty()
+                && (Definition.fieldId_ == "file.name" || Definition.fieldId_ == "file.stem");
+        }
     QSet<QString> Families;
     for (const auto* Binding : Bindings) {
         auto Fields = Binding->compiled_.dependencies_;
@@ -2788,7 +3142,16 @@ void CFSModel::refreshColumnSortRanks(int First)
         const auto& Item = vecNode_[ItemRow];
         SortRow Row; Row.parent_ = Item->Name_ == ".."; Row.directory_ = Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY;
         Row.id_ = Item->storageEntry_ ? hc::workspace::SelectionKey(*Item->storageEntry_) : Item->Name_;
-        for (const auto* Binding : Bindings) {
+        for (int Index = 0; Index < Bindings.size(); ++Index) {
+            const auto* Binding = Bindings[Index];
+            if (DepthFirst[Index]) Row.values_.append(CellValue::Ready(quint64(flatDepth(Item))));
+            if (Index == 0 && flatTree_ && IsFlatListing() && Item->storageEntry_) {
+                // 트리 순서: 상대 부모 폴더 구간 + 이름. 정렬 작업 스레드가 같은 부모 안에서 폴더 먼저로 비교한다.
+                const auto Path = QString::fromStdString(Item->storageEntry_->locator_.root_);
+                const auto Parent = hc::flat::RelativeParent(flatBase_, Path);
+                Row.tree_ = Parent.isEmpty() ? QStringList{} : Parent.split(u'\\');
+                Row.tree_.append(Path.mid(Path.lastIndexOf(u'\\') + 1));
+            }
             auto Value = evaluateColumn(Item, *Binding, false, true);
             if (Value.State() == ValueState::Pending) {
                 ++Pending;
@@ -2806,20 +3169,29 @@ void CFSModel::refreshColumnSortRanks(int First)
         for (const auto& Item : vecNode_) for (const auto* Binding : Bindings) evaluateColumn(Item, *Binding, true, true);
         emit ColumnQueryStatus(tr("정렬 값을 조회 중… 남은 값 %1개").arg(Pending)); return;
     }
-    const auto Previous = columnSortRanks_;
     if (searchResults_) {
-        const auto Compare = SortLess(Orders, displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()), displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()),
-            displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive);
-        auto Order = Merge ? searchSortOrder_ : QVector<int>{};
-        const auto Start = Order.size();
-        for (int Row = Start; Row < Rows.size(); ++Row) Order.append(Row);
-        const auto Less = [&](int A, int B) { return Compare(Rows[A], Rows[B]); };
-        std::stable_sort(Order.begin() + Start, Order.end(), Less);
-        if (Merge) std::inplace_merge(Order.begin(), Order.begin() + Start, Order.end(), Less);
-        columnSortRanks_.resize(Order.size());
-        for (int Rank = 0; Rank < Order.size(); ++Rank) columnSortRanks_[Order[Rank]] = Rank;
-        searchSortRows_ = std::move(Rows); searchSortOrder_ = std::move(Order); searchSorts_ = columnSorts_;
-    } else columnSortRanks_ = SortRanks(Rows, Orders, displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()), displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()),
+        // 정렬 키 계산과 병합은 작업 스레드에서 한다. 순위가 올 때까지 새 행은 도착 순서대로 맨 뒤에 둔다.
+        QVector<Qt::SortOrder> WorkerOrders;
+        for (int Index = 0; Index < Orders.size(); ++Index) {
+            if (DepthFirst[Index]) WorkerOrders.append(Orders[Index]);
+            WorkerOrders.append(Orders[Index]);
+        }
+        const int Start = Merge ? First : 0;
+        if (!Merge) { ++sortGeneration_; sortRanked_ = 0; }
+        if (!sortWorker_) sortWorker_ = std::make_unique<SortRankWorker>([this](quint64 Generation, int Count, QVector<int> Ranks) {
+            applySortRanks(Generation, Count, std::move(Ranks)); });
+        sortWorker_->Submit(sortGeneration_, !Merge, WorkerOrders, TextOptions, Start, std::move(Rows));
+        sortSubmitted_ = vecNode_.size(); sortSubmittedSorts_ = columnSorts_; sortSubmittedOptions_ = TextOptions;
+        if (columnSortRanks_.size() == Start) for (int Row = Start; Row < vecNode_.size(); ++Row) columnSortRanks_.append(Row);
+        else if (columnSortRanks_.size() != vecNode_.size()) { columnSortRanks_.resize(vecNode_.size()); std::iota(columnSortRanks_.begin(), columnSortRanks_.end(), 0); }
+        columnQueries_->EndSnapshot();
+        // 임시 순위를 같은 값 변경 구간 안에서 그리드에 알린다. Qtitan은 전체 알림을 받아야 행 위치를 바로 다시 계산한다
+        // (부분 알림은 정렬을 미뤄, 구간 끝의 선택 복원이 행을 찾지 못한다). 이전 동기 병합 경로와 같은 알림이다.
+        if (vecNode_.size() && columnCount()) emit dataChanged(index(0, 0), index(int(vecNode_.size()) - 1, columnCount() - 1), {GridSortRole});
+        return;
+    }
+    const auto Previous = columnSortRanks_;
+    columnSortRanks_ = SortRanks(Rows, Orders, displaySettings_["sortLocaleAware"].toBool(hc::defaults::DefaultValue("general/sortLocaleAware").toBool()), displaySettings_["sortNumericAware"].toBool(hc::defaults::DefaultValue("general/sortNumericAware").toBool()),
         displaySettings_["sortCaseSensitive"].toBool(hc::defaults::DefaultValue("general/sortCaseSensitive").toBool()) ? Qt::CaseSensitive : Qt::CaseInsensitive);
     // Synthetic archive entry stays immediately after the parent row for every
     // column sort; it is an alternate view, not a member ordered by file metadata.
@@ -2831,6 +3203,11 @@ void CFSModel::refreshColumnSortRanks(int First)
     }
     columnQueries_->EndSnapshot();
     completedSorts_ = columnSorts_; emit ColumnQueryStatus(columnQueries_->Pending() ? tr("컬럼 조회 중… %1건").arg(columnQueries_->Pending()) : requestOnlyValues_ ? tr("요청형 값이 있습니다. 다시 조회를 누르면 계산합니다.") : QString{});
+    notifySortRanks(Previous);
+}
+
+void CFSModel::notifySortRanks(const QVector<int>& Previous)
+{
     if (!rowCount() || !columnCount()) return;
     // Qtitan caches each row's sort value and re-reads every row on a full notification. With the
     // same rules, rows whose rank did not move keep a valid value; many moves fall back to one full read.

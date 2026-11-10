@@ -71,6 +71,8 @@ class CmpPanel : public QWidget
         std::optional<hc::workspace::TabState> searchOrigin_;
         QJsonObject searchScroll_, searchGroups_;
         bool restoreSearchGroups_ = false;
+        // 평면 보기 중 패널 메뉴에서 고른 평면 폴더 세트. 평면을 끝내면 지운다.
+        QUuid flatChosen_;
         bool                       pending_ = false, restoreSelection_ = false;
 
         CViewT::TyEnViewMode        GetViewMode() const { return QuickView != nullptr ? QuickView->GetViewMode() : SystemView ? SystemView->GetViewMode() : View ? View->GetViewMode() : CViewT::VM_GRID; }
@@ -98,8 +100,29 @@ public:
     void StartEverythingSearch(const QString& Query, const QString& Match, int Interval);
     void StopEverythingSearch(bool Restore = true);
     void StopEverythingSearchForModel(CFsModelT* Model);
+    // 평면 보기(Ctrl+B): 현재 폴더 아래 항목을 한 목록에 모은다. Folders가 있으면 그 폴더들만 열거한다.
+    // 시작 전 탭 상태(위치 · 선택 · 스크롤 · 그룹 펼침)는 Everything 검색과 같은 경로로 보관 · 복원한다.
+    void StartFlatView(const QStringList& Folders = {});
+    void StopFlatView(bool Restore = true);
+    // 선택한 폴더가 있으면 그 폴더들만, 없으면 현재 폴더 전체.
+    void ToggleFlatView();
+    bool CanStartFlatView();
+    bool IsFlatView();
+    // 열거 중이면 열거만 멈추고 그때까지의 결과를 남긴다(Esc).
+    bool StopFlatEnumeration();
+    // 평면 보기 중인 탭에 평면 폴더 세트를 고른다(패널 메뉴). 그 평면 보기가 끝날 때까지 유지한다.
+    void ChooseFlatProfile(const QUuid& Id);
+    // 평면 보기 옵션. 평면 중이면 같은 기준 폴더를 다시 열거하고, 아니면 다음 평면 보기에 쓴다.
+    void SetFlatOptions(hc::flat::Items Items, int MaxDepth, bool FollowReparse);
+    void ShowFlatSkipped();
+    // 설정 저장 후 평면 보기 중인 탭에 평면 폴더 세트를 다시 적용한다.
+    void RefreshFlatProfiles();
 private:
     void stopEverythingSearch(int Index, bool Restore);
+    void syncFlatChrome();
+    void populateFlatMenu(QMenu* Menu);
+    void applyFlatProfile(const TySpTabState& State, const QString& Base, const QUuid& Chosen = {});
+    QString flatStatusText(const CFSModel* Model) const;
 public:
     void OpenSearchLocation();
     // Folder로 이동해 선택 키 Key 항목에 커서를 둔다. 이미 그 폴더면 커서만 옮긴다.
@@ -197,6 +220,13 @@ private:
     fm::ui::SegmentedControl*        viewMode_ = nullptr;
     fm::ui::PanelStatusBar*          status_ = nullptr;
     QToolButton*                    historyButton_ = nullptr;
+    // 평면 보기 토글(목록 모드 옆)과 경로 옆 상태 칩(누르면 평면 보기 종료).
+    QToolButton*                    flatButton_ = nullptr;
+    QToolButton*                    flatChip_ = nullptr;
+    // 패널별 평면 보기 옵션(저장하지 않는다).
+    hc::flat::Items flatItems_ = hc::flat::Items::Files;
+    int flatMaxDepth_ = std::numeric_limits<int>::max();
+    bool flatFollowReparse_ = false;
     quint64                         capacityGeneration_ = 0;
     QLineEdit*                      search_ = nullptr;
     QLabel*                         workspaceStatus_ = nullptr;

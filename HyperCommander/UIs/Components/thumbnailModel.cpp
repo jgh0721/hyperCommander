@@ -64,12 +64,28 @@ void ThumbnailModel::Rebuild()
             if (Value.entry_.locator_.kind_ == hc::storage::LocatorKind::Local || Value.entry_.locator_.kind_ == hc::storage::LocatorKind::Smb)
                 Value.path_ = QString::fromStdString(Value.entry_.locator_.root_);
         }
+        if (const auto* Flat = qobject_cast<const CFSModel*>(Model); Flat && Flat->IsFlatListing() && Item->storageEntry_)
+            Value.folder_ = hc::flat::RelativeParent(Flat->FlatBase(), QString::fromStdString(Item->storageEntry_->locator_.root_));
         Tiles.append(std::move(Value));
+    }
+    if (sections_) {
+        // 평면 보기의 폴더 구획: 상대 폴더 순서로 묶고 머리글 행을 앞에 둔다. 구획 안은 목록 순서 그대로다.
+        QMap<QString, QVector<Tile>> Sections;
+        for (auto& Value : Tiles) Sections[Value.folder_.toCaseFolded()].append(std::move(Value));
+        Tiles.clear();
+        for (auto It = Sections.begin(); It != Sections.end(); ++It) {
+            const auto& Folder = It.value().front().folder_;
+            Tile Header; Header.header_ = true; Header.section_ = It.key();
+            const auto Title = Folder.isEmpty() ? tr("기준 폴더") : leafTitles_ ? Folder.mid(Folder.lastIndexOf('\\') + 1) : Folder;
+            Header.name_ = tr("%1 · %2개").arg(Title).arg(It.value().size());
+            Tiles.append(Header);
+            if (!collapsed_.contains(It.key())) for (auto& Value : It.value()) Tiles.append(std::move(Value));
+        }
     }
     bool Changed = Tiles.size() != tiles_.size();
     for (int Row = 0; !Changed && Row < Tiles.size(); ++Row) {
         const auto& A = Tiles[Row]; const auto& B = tiles_[Row];
-        Changed = A.index_ != B.index_ || A.key_ != B.key_ || A.name_ != B.name_ || A.path_ != B.path_ ||
+        Changed = A.index_ != B.index_ || A.key_ != B.key_ || A.name_ != B.name_ || A.path_ != B.path_ || A.header_ != B.header_ || A.folder_ != B.folder_ ||
             A.entry_.modifiedUtcMs_ != B.entry_.modifiedUtcMs_ || A.entry_.size_ != B.entry_.size_;
     }
     if (Changed) {
@@ -81,6 +97,15 @@ QVariant ThumbnailModel::data(const QModelIndex& Index, int Role) const
 {
     if (!Index.isValid() || Index.row() >= tiles_.size()) return {};
     const auto& Tile = tiles_[Index.row()];
+    if (Tile.header_) {
+        switch (Role) {
+        case Qt::DisplayRole: case FullNameRole: case Qt::ToolTipRole: return Tile.name_;
+        case SectionHeaderRole: return true;
+        case SectionCollapsedRole: return collapsed_.contains(Tile.section_);
+        case MarkedRole: case IsUpRole: case IsDirRole: return false;
+        default: return {};
+        }
+    }
     if (!Tile.index_.isValid()) return {};
     const auto& Entry = Tile.entry_;
     const bool Directory = Tile.up_ || Entry.directory_;
@@ -129,6 +154,7 @@ QVariant ThumbnailModel::data(const QModelIndex& Index, int Role) const
         return QVariant::fromValue(Style);
     }
     case FilePathRole: return Tile.path_;
+    case SecondaryTextRole: return chips_ ? Tile.folder_ : QString{};
     case SizeBytesRole: return Directory ? qint64(-1) : qint64(Entry.size_);
     case SizeTextRole: return Directory ? QString{} : formatSize(Entry.size_);
     case ModifiedRole: return QDateTime::fromMSecsSinceEpoch(Entry.modifiedUtcMs_);
@@ -207,4 +233,19 @@ double ThumbnailModel::TargetPercent() const
             (!provider_->skipsSlowVolumes() || !ThumbnailProvider::isSlowVolume(Tile.path_))) ++Targets;
     }
     return Count ? 100.0 * Targets / Count : 0;
+}
+void ThumbnailModel::SetFlatPresentation(bool Sections, bool Chips, bool LeafTitles)
+{
+    if (sections_ == Sections && chips_ == Chips && leafTitles_ == LeafTitles) return;
+    sections_ = Sections; chips_ = Chips; leafTitles_ = LeafTitles;
+    if (!Sections) collapsed_.clear();
+    Schedule(); Repaint();
+}
+void ThumbnailModel::ToggleSection(int Row)
+{
+    if (Row < 0 || Row >= tiles_.size() || !tiles_[Row].header_) return;
+    const auto Key = tiles_[Row].section_;
+    if (!collapsed_.remove(Key)) collapsed_.insert(Key);
+    // 접기는 구획 안 타일을 빼고 다시 만든다. 머리글 행 자리는 그대로라 커서가 머리글에 남는다.
+    Rebuild();
 }

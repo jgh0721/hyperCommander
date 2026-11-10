@@ -539,6 +539,16 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
         parents_->setObjectName("hc.operation.parents"); parents_->setEnabled(Request.nativeDestination_); BodyLayout()->addWidget(parents_);
         parents_->setToolTip(tr("끝이 \\ 또는 /인 경로, 폴더로 지정한 대상, 자동 모드의 여러 항목 대상은 필요한 폴더를 만듭니다. 이 옵션은 새 이름으로 지정한 파일의 상위 폴더도 만듭니다."));
     }
+    // 평면 보기에서 여러 폴더의 항목을 복사 · 이동할 때만: 기준 폴더 아래의 폴더 구조를 대상에 유지하거나 한 폴더로 모은다.
+    if (!Mkdir && !Rename && Request.flatFolders_ > 0) {
+        auto* Structure = new QWidget(this); auto* Row = new QHBoxLayout(Structure); Row->setContentsMargins(0, 0, 0, 0);
+        keepStructure_ = new QRadioButton(tr("폴더 구조 유지(&S)"), Structure); keepStructure_->setObjectName("hc.operation.keepStructure");
+        auto* Gather = new QRadioButton(tr("한 폴더로 모으기(&J)"), Structure); Gather->setObjectName("hc.operation.gather");
+        keepStructure_->setChecked(true); Row->addWidget(keepStructure_); Row->addWidget(Gather); Row->addStretch();
+        keepStructure_->setToolTip(tr("평면 보기 기준 폴더에 대한 상대 폴더(%1개)를 대상 아래에 만들고 그 안에 둡니다.").arg(Request.flatFolders_));
+        Gather->setToolTip(tr("모든 항목을 대상 폴더 바로 아래에 둡니다. 이름이 같으면 충돌 처리 방식을 따릅니다."));
+        BodyLayout()->addWidget(Structure);
+    }
     targetSummary_ = Mkdir ? Label({}) : new hc::qt::ElidedLabel(this);
     if (!Mkdir) BodyLayout()->addWidget(targetSummary_);
     targetSummary_->setText(Request.nativeDestination_ ? tr("대상 볼륨 조회 중…") : tr("공급자 대상은 실행 시 검사합니다."));

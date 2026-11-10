@@ -173,6 +173,9 @@ DECLARE_CMD( BuiltInCMD_View_RereadSource,        QObject::tr( "보기" ),    "h
 
 DECLARE_CMD( BuiltInCMD_View_ForceRefresh, QObject::tr( "보기" ), "hc.navigate.forceRefresh",
              Qt::ControlModifier | Qt::Key_F5, QObject::tr( "아이콘을 포함하여 강제 새로 고침" ) );
+// 평면 보기: 현재 폴더(또는 선택한 폴더) 아래 파일을 한 목록으로 본다. 다시 누르면 원래 폴더로 돌아간다.
+DECLARE_CMD( BuiltInCMD_View_FlatToggle, QObject::tr( "보기" ), "hc.view.flat.toggle",
+             Qt::ControlModifier | Qt::Key_B, QObject::tr( "평면 보기" ) );
 
 DECLARE_CMD( BuiltInCMD_Nav_FavoriteDir,          QObject::tr( "탐색" ),    "hc.navigate.favorites",
              Qt::ControlModifier | Qt::Key_G,                           QObject::tr( "즐겨찾기 폴더 목록" ) );
@@ -456,6 +459,7 @@ inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
     BuiltInCMD_View_SwitchHidSys,
     BuiltInCMD_View_RereadSource,
     BuiltInCMD_View_ForceRefresh,
+    BuiltInCMD_View_FlatToggle,
 
     BuiltInCMD_Nav_FavoriteDir,
     BuiltInCMD_Nav_GotoDrive,
@@ -715,6 +719,7 @@ namespace hc::defaults
                      { "destinationLocation",     { ParameterType::String, false } },
                      { "conflict",                { ParameterType::String, false } },
                      { "createParents",           { ParameterType::Boolean, false } },
+                     { "keepStructure",           { ParameterType::Boolean, false } },
                      { "targetIsName",            { ParameterType::Boolean, false } },
                      { "openCreated",             { ParameterType::Boolean, false } },
                      { "recentProvider",          { ParameterType::String, false } },
@@ -733,6 +738,7 @@ namespace hc::defaults
                      { "destinationLocation",     { ParameterType::String, false } },
                      { "conflict",                { ParameterType::String, false } },
                      { "createParents",           { ParameterType::Boolean, false } },
+                     { "keepStructure",           { ParameterType::Boolean, false } },
                      { "targetIsName",            { ParameterType::Boolean, false } },
                      { "openCreated",             { ParameterType::Boolean, false } },
                      { "recentProvider",          { ParameterType::String, false } },
@@ -1515,6 +1521,7 @@ namespace hc::defaults
         Group(QObject::tr("경로"), {{"file.path", QObject::tr("전체 경로"), FieldType::Text},
             {"file.parentPath", QObject::tr("폴더 경로"), FieldType::Text},
             {"file.parentName", QObject::tr("부모 폴더명"), FieldType::Text},
+            {"file.relativePath", QObject::tr("상대 경로"), FieldType::Text},
             {"file.pathLength", QObject::tr("경로 길이"), FieldType::UnsignedInteger}});
         Group(QObject::tr("속성"), {{"file.attributes", QObject::tr("속성"), FieldType::UnsignedInteger},
             {"file.readOnly", QObject::tr("읽기 전용"), FieldType::Boolean},
@@ -1928,6 +1935,11 @@ namespace hc::defaults
             "          \"id\": \"hidden\",\n"
             "          \"command\": \"hc.view.hidden\",\n"
             "          \"label\": \"숨김·시스템 파일 표시 전환\"\n"
+            "        },\n"
+            "        {\n"
+            "          \"id\": \"flat\",\n"
+            "          \"command\": \"hc.view.flat.toggle\",\n"
+            "          \"label\": \"평면 보기\"\n"
             "        }\n"
             "      ]\n"
             "    },\n"

@@ -7,6 +7,7 @@
 #include <fmfilelist/RecordPainting.h>
 #include "filePanelSettings.hpp"
 #include "commonLibs/columns/columnGrouping.hpp"
+#include "commonLibs/columns/flatProfile.hpp"
 
 #include "cmnTypeDefs.hpp"
 #include "Modules/mdlFileSystem.hpp"
@@ -69,6 +70,16 @@ public:
     bool SetListMode(const QString& Mode);
     void SetEverythingPresentation(bool Enabled);
     bool EverythingPresentation() const { return everythingPresentation_; }
+    // 평면 보기: 이름 앞에 상대 경로를 그린다. 목록 모드 · 썸네일은 사용자 설정을 유지한다.
+    void SetFlatPresentation(bool Enabled);
+    bool FlatPresentation() const { return flatPresentation_; }
+    // 이름 앞 상대 경로(시안 D). 다른 평면 세트(경로 열 · 둘째 줄 · 그룹)에서는 그리지 않는다.
+    bool FlatPrefixVisible() const { return flatPresentation_ && flatPrefix_; }
+    bool FlatPrefixDim() const { return flatPrefixDim_; }
+    // 평면 트리(시안 E): 이름 칸 들여쓰기 한 단계의 폭.
+    static constexpr int FlatTreeStep = 16;
+    bool FlatTreeVisible() const { return flatPresentation_ && flatTree_; }
+    bool FlatTreeLines() const { return flatTreeLines_; }
     QString ListMode() const;
     void MoveQuickFindCursor(const QString& Query, const QString& Match, int Direction = 0);
     void CancelQuickFind();
@@ -132,7 +143,8 @@ public:
     CFsModelT*                      BaseModel() const;
     QtitanColumnAdapter*            ColumnWidths() const { return columnAdapter_; }
     void                           ConfigureColumns();
-    enum class ApplyReason { Manual, Sync };
+    // Flat: 평면 폴더 세트 적용. 수동 고정(manualColumns_)을 켜지 않고, 종료 시 원래 상태 복원으로 되돌린다.
+    enum class ApplyReason { Manual, Sync, Flat };
     bool                           ApplyColumnProfile(const hc::columns::ColumnProfile& Profile, ApplyReason Reason = ApplyReason::Manual);
     hc::columns::ColumnProfile      ColumnProfile() const;
     bool AutomaticColumns() const { return !manualColumns_; }
@@ -149,6 +161,12 @@ public:
     bool SetGroupingLevels(const QVector<hc::columns::GroupingState>& Levels);
     const QVector<hc::columns::GroupingState>& GroupingLevels() const { return groupingLevels_; }
     QString ColumnSourceText() const;
+    // 평면 폴더 세트를 이 탭에 적용한다. Origin은 평면 보기를 시작한 탭의 일반 세트다. Source는 상태 표시줄의 출처 문구다.
+    bool ApplyFlatProfile(const hc::columns::FlatProfile& Profile, const hc::columns::ColumnProfile& Origin, const QString& Source);
+    void ClearFlatProfile();
+    const std::optional<hc::columns::FlatProfile>& ActiveFlatProfile() const { return flatProfile_; }
+    // 평면 세트를 적용하기 전의 일반 세트(열 출처 "시작한 탭"의 기준).
+    const hc::columns::ColumnProfile& FlatOriginProfile() const { return flatOrigin_; }
     hc::columns::GroupingState Grouping() const { return grouping_; }
     bool GroupingActive() const;
     bool IsGroupFocused() const;
@@ -165,6 +183,8 @@ signals:
     void sigThumbnailSelectionChanged();
     void sigSelectionIdentityChanged();
     void sigPreviewSelectionChanged();
+    // 평면 보기에서 Backspace · 썸네일의 상위 이동: 패널이 평면을 끝내고 기준 폴더로 돌아간다.
+    void sigFlatExitRequested();
 
 protected slots:
     void                            oo_grid_contextMenu( Qtitan::ContextMenuEventArgs* Args );
@@ -262,6 +282,16 @@ private:
     void restorePresentation(const QJsonObject& View);
     QString listModeOverride_;
     bool everythingPresentation_ = false;
+    bool flatPresentation_ = false;
+    bool flatPrefix_ = true, flatPrefixDim_ = true, flatTree_ = false, flatTreeLines_ = true;
+    // 평면 썸네일(시안 F): 폴더 구획 · 타일 아래 폴더 칩 · 구획 제목을 마지막 폴더 이름으로.
+    bool flatSections_ = false, flatChips_ = false, flatLeafTitles_ = false;
+    // 트리 접기 표시를 누른 위치면 그 행을 펼치거나 접는다.
+    bool toggleFlatTreeAt(const QPoint& Position);
+    bool flatTreeKey(int Key);
+    std::optional<hc::columns::FlatProfile> flatProfile_;
+    hc::columns::ColumnProfile flatOrigin_;
+    QString flatSource_;
     std::optional<bool> nameBelowOverride_;
     QJsonObject unsupportedPresentation_;
     fm::filelist::ListAppearance listAppearance_;

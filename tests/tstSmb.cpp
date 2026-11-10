@@ -371,7 +371,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"contentContainerNavigationUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -9134,6 +9134,102 @@ private slots:
         QTest::qWait(Settle); QVERIFY(!View->IsEditing());
     }
     void inlineRenameGeometryUi() { hc::tests::InlineRenameGeometryUi(main_, panels_.front()); }
+    void flatViewUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Before); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        QTemporaryDir Dir(QDir(qEnvironmentVariable("HC_UI_LOCAL_ROOT", QDir::tempPath())).filePath("flat-view-XXXXXX")); QVERIFY(Dir.isValid());
+        QDir Root(Dir.path());
+        for (const auto* Folder : {"docs/images", "src/ui", "empty"}) QVERIFY(Root.mkpath(Folder));
+        for (const auto* File : {"readme.md", "docs/guide.pdf", "docs/images/cover.png", "src/main.cpp", "src/ui/panel.cpp"}) {
+            QFile Out(Root.filePath(File)); QVERIFY(Out.open(QIODevice::WriteOnly)); Out.write(QByteArray(File));
+        }
+        auto* Panel = panels_.front(); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Dir.path()), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading());
+        auto* Model = static_cast<CFSModel*>(model(Panel)); auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        Model->setProperty("hc.flat.interval", 20);
+        const auto KeyOf = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (const auto Item = Model->GetFileInfo(Model->index(Row, 0)); Item && Item->Name_ == Name && Item->storageEntry_)
+                return hc::workspace::SelectionKey(*Item->storageEntry_);
+            return QString{};
+        };
+        const auto Visible = [&] {
+            QStringList Names;
+            for (int Row = 0; Row < View->BaseView()->getRowCount(); ++Row) {
+                const auto GridRow = View->BaseView()->getRow(Row); if (GridRow.type() != Qtitan::GridRow::DataRow) continue;
+                auto Source = GridRow.modelIndex(0);
+                while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+                const auto Prefix = Source.data(CFSModel::FlatPrefixRole).toString();
+                Names.append((Prefix.isEmpty() ? QString{} : Prefix + "\\") + Model->GetFileInfo(Source)->Name_);
+            }
+            return Names;
+        };
+        const auto SrcKey = KeyOf("src"); QVERIFY(!SrcKey.isEmpty());
+        View->RestoreSelection({}, SrcKey);
+        QVERIFY(Panel->CanStartFlatView());
+        // Ctrl+B 명령: 현재 폴더 아래 파일만, 깊이 → 이름 순(시안 D 기본 제공 세트).
+        auto* Toggle = TyStCommandMgr::GetInstance()->Bridge()->Action("hc.view.flat.toggle"); QVERIFY(Toggle); QVERIFY(Toggle->isCheckable());
+        QTRY_VERIFY(Toggle->isEnabled()); Toggle->trigger();
+        QTRY_VERIFY(Model->IsFlatListing());
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsFlatRunning(), 15000);
+        QTRY_COMPARE(Model->rowCount(), 5);
+        QTRY_VERIFY(!Model->SortRanksPending());
+        QTRY_COMPARE(Visible(), (QStringList{"readme.md", "docs\\guide.pdf", "src\\main.cpp", "docs\\images\\cover.png", "src\\ui\\panel.cpp"}));
+        QVERIFY(View->FlatPresentation()); QVERIFY(View->FlatPrefixVisible());
+        QVERIFY(View->ActiveFlatProfile()); QCOMPARE(View->ActiveFlatProfile()->id_, hc::columns::FlatBuiltInProfileId);
+        for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetFileInfo(Model->index(Row, 0))->Name_ == "cover.png")
+            QCOMPARE(Model->RuleFieldValue(Model->GetFileInfo(Model->index(Row, 0)), "file.relativePath").Raw().toString(), QString("docs\\images"));
+        QVERIFY(View->ColumnSourceText().contains(hc::columns::FlatDefaultProfile().title_));
+        // 작업 공간에는 평면 상태를 저장하지 않는다: 기준 폴더의 원래 상태로 기록된다.
+        const auto Saved = Panel->CaptureWorkspace().tabs_[Panel->CurrentTabIndex()];
+        QCOMPARE(QDir::cleanPath(QString::fromStdString(Saved.location_.root_)), QDir::cleanPath(Dir.path()));
+        QCOMPARE(Saved.focus_, SrcKey);
+        // 표시 대상 · 깊이: 1단계면 기준 폴더와 바로 아래 폴더의 파일만.
+        Panel->SetFlatOptions(hc::flat::Items::Files, 1, false);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsFlatRunning() && Model->rowCount() == 3, 15000);
+        Panel->SetFlatOptions(hc::flat::Items::FilesAndFolders, std::numeric_limits<int>::max(), false);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsFlatRunning() && Model->rowCount() == 10, 15000);
+        Panel->SetFlatOptions(hc::flat::Items::Files, std::numeric_limits<int>::max(), false);
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsFlatRunning() && Model->rowCount() == 5, 15000);
+        // 평면 폴더 세트: 경로 열(시안 A)과 트리(시안 E).
+        auto ColumnSet = hc::columns::FlatDefaultProfile(); ColumnSet.id_ = QUuid::createUuid(); ColumnSet.title_ = "경로 열";
+        ColumnSet.presentation_.location_ = hc::columns::FlatPresentation::Location::Column;
+        auto TreeSet = hc::columns::FlatDefaultProfile(); TreeSet.id_ = QUuid::createUuid(); TreeSet.title_ = "트리";
+        TreeSet.presentation_.structure_ = hc::columns::FlatPresentation::Structure::Tree;
+        auto Columns = Settings.Read(hc::settings::Section::Columns).toObject();
+        Columns[hc::columns::FlatProfilesKey] = QJsonObject{{hc::columns::IdText(ColumnSet.id_), hc::columns::EncodeFlatProfile(ColumnSet)}, {hc::columns::IdText(TreeSet.id_), hc::columns::EncodeFlatProfile(TreeSet)}};
+        QVERIFY(Settings.Put(hc::settings::Section::Columns, Columns)); QVERIFY(Settings.Commit());
+        Panel->ChooseFlatProfile(ColumnSet.id_);
+        QVERIFY(!View->FlatPrefixVisible());
+        const auto Effective = View->ColumnProfile();
+        const auto Relative = hc::columns::FlatFieldColumn(Effective, "file.relativePath");
+        QVERIFY(Relative > 0); QCOMPARE(Relative, hc::columns::FlatNameColumn(Effective) + 1);
+        Panel->ChooseFlatProfile(TreeSet.id_);
+        QVERIFY(View->FlatTreeVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsFlatRunning() && Model->rowCount() == 10, 15000);
+        QTRY_VERIFY(!Model->SortRanksPending());
+        QTRY_COMPARE(Visible(), (QStringList{"docs", "docs\\images", "docs\\images\\cover.png", "docs\\guide.pdf", "empty",
+            "src", "src\\ui", "src\\ui\\panel.cpp", "src\\main.cpp", "readme.md"}));
+        int Docs = -1; for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetFileInfo(Model->index(Row, 0))->Name_ == "docs") Docs = Row;
+        QVERIFY(Docs >= 0); QVERIFY(!Model->FlatFolderCollapsed(Docs));
+        Model->SetFlatFolderExpanded(Docs, false);
+        QTRY_COMPARE(Visible(), (QStringList{"docs", "empty", "src", "src\\ui", "src\\ui\\panel.cpp", "src\\main.cpp", "readme.md"}));
+        Model->SetFlatFolderExpanded(Docs, true);
+        QTRY_COMPARE(Visible().size(), 10);
+        // 폴더 행 크기 = 하위 파일 합계.
+        QCOMPARE(Model->GetFileInfo(Model->index(Docs, 0))->directorySize_.value_or(0), quint64(QByteArray("docs/guide.pdf").size() + QByteArray("docs/images/cover.png").size()));
+        // Backspace: 평면을 끝내고 시작 전 커서 · 목록 모드로 돌아간다.
+        main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_));
+        View->EnsureKeyboardFocusOnView();
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Backspace);
+        QTRY_VERIFY(!Model->IsFlatListing()); QVERIFY(!View->FlatPresentation()); QVERIFY(!View->ActiveFlatProfile());
+        QTRY_VERIFY(!Model->IsLoading());
+        QTRY_COMPARE(View->CaptureFocus(), SrcKey);
+        QVERIFY(hc::columns::FlatFieldColumn(View->ColumnProfile(), "file.relativePath") < 0);
+        // 빈 폴더에서도 시작할 수 있다(결과 0개).
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Root.filePath("empty")), {});
+        QTRY_VERIFY(!model(Panel)->IsLoading()); QVERIFY(Panel->CanStartFlatView());
+    }
     void inlineRenameUi()
     {
         using namespace hc::settings;

@@ -24,7 +24,7 @@ hc::columns::CellValue CColumnMgr::GetValue(const hc::columns::ColumnDefinition&
     return GetFieldValue(Column.fieldId_, Info, ParentPath);
 }
 
-hc::columns::CellValue CColumnMgr::GetFieldValue(const QString& Field, const nsHC::CFileSourceT* Info, const QString& ParentPath)
+hc::columns::CellValue CColumnMgr::GetFieldValue(const QString& Field, const nsHC::CFileSourceT* Info, const QString& ParentPath, const QString& BasePath)
 {
     using namespace hc::columns;
     if (!Info) return CellValue::Missing(ValueState::Empty);
@@ -41,6 +41,7 @@ hc::columns::CellValue CColumnMgr::GetFieldValue(const QString& Field, const nsH
     File.parentPath_ = ParentPath;
     if (Info->storageEntry_ && Info->storageEntry_->hints_.contains("filesystemPath"))
         File.parentPath_ = QFileInfo(QString::fromStdString(Info->storageEntry_->hints_.at("filesystemPath"))).absolutePath();
+    File.basePath_ = BasePath;
     if (Info->storageEntry_) {
         const auto& Hints = Info->storageEntry_->hints_;
         if (const auto It = Hints.find("accessedUtcMs"); It != Hints.end()) {
@@ -64,7 +65,7 @@ QString CColumnMgr::FormatValue(const hc::columns::ColumnDefinition& Column, con
     if (Info && Column.fieldId_ == "file.size" && Value.State() == hc::columns::ValueState::OnDemand)
         return Info->Attributes_ & FILE_ATTRIBUTE_REPARSE_POINT ? QObject::tr("<링크>") : QObject::tr("<폴더>");
     const auto Text = hc::columns::Format(Value, Column.format_);
-    if (Column.template_.isEmpty() && (Column.fieldId_ == "file.path" || Column.fieldId_ == "file.parentPath"))
+    if (Column.template_.isEmpty() && (Column.fieldId_ == "file.path" || Column.fieldId_ == "file.parentPath" || Column.fieldId_ == "file.relativePath"))
         return QDir::toNativeSeparators(Text);
     return Text;
 }

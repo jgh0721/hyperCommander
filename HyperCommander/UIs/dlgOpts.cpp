@@ -367,11 +367,17 @@ void QMainOpts::SetListView(CGridView* View)
     // available in its options without inheriting the live panel's full width.
     columnEditor_->SetPreviewWidth(0);
     columnEditor_->SetContextFields(Model ? Model->AvailableColumns() : QVector<hc::columns::FieldDefinition>{});
-    columnEditor_->Load(View ? View->ColumnProfile() : hc::columns::DefaultProfile(),
+    // 평면 보기 중인 탭은 평면 세트로 합성한 열을 보이므로, 일반 세트 편집은 평면을 시작한 탭의 세트로 한다.
+    const auto Flat = View ? View->ActiveFlatProfile() : std::optional<hc::columns::FlatProfile>{};
+    columnEditor_->Load(View ? (Flat ? View->FlatOriginProfile() : View->ColumnProfile()) : hc::columns::DefaultProfile(),
         hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()["ColumnsV2/Profiles"].toObject(),
         View && View->ColumnWidths()->Writable());
     columnEditor_->LoadAutoSelection(hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject()[hc::columns::AutoSelectionKey].toObject(),
         fileColors_->Document(), View ? View->AutomaticColumns() : true);
+    const auto ColumnsSection = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject();
+    columnEditor_->LoadFlat(ColumnsSection[hc::columns::FlatProfilesKey].toObject(),
+        ColumnsSection[hc::columns::FlatSelectionKey].isObject() ? ColumnsSection[hc::columns::FlatSelectionKey].toObject() : hc::columns::DefaultFlatSelection());
+    if (Flat) columnEditor_->SelectFlatProfile(Flat->id_);
     bool Right = false;
     if (View && parentWidget()) for (auto* Panel : parentWidget()->window()->findChildren<CmpPanel*>())
         if (Panel->isAncestorOf(View)) Right = Panel->objectName() == "cmpRightPanel";
@@ -379,9 +385,10 @@ void QMainOpts::SetListView(CGridView* View)
     emit columnEditor_->ProfileSelected();
 }
 
-void QMainOpts::ShowListSettingsPage()
+void QMainOpts::ShowListSettingsPage(const QUuid& FlatProfile)
 {
     for (int Row = 0; Row < ui.lstOptCate->count(); ++Row) if (ui.lstOptCate->item(Row)->data(Qt::UserRole).toInt() == ui.stkOpts->indexOf(ui.pgCustomColumns)) ui.lstOptCate->setCurrentRow(Row);
+    if (!FlatProfile.isNull() && columnEditor_) columnEditor_->SelectFlatProfile(FlatProfile);
 }
 
 void QMainOpts::ShowPluginSettingsPage(const QString& Binary, bool Review)
@@ -445,6 +452,8 @@ bool QMainOpts::SaveSettings()
     Options["showJobDetails"] = findChild<QCheckBox*>("hc.settings.showJobDetails")->isChecked();
     hc::settings::AppSettings().Put(hc::settings::Section::Options, Options);
     const bool ColumnsChanged = listView_ && columnEditor_->Dirty();
+    // 평면 폴더 세트는 별도 키에 저장하고, 적용 대상(현재 탭 등)과 무관하게 평면 보기 중인 탭에 다시 적용한다.
+    const bool FlatChanged = listView_ && columnEditor_->FlatDirty();
     const bool ColumnsRequested = listView_ && (ColumnsChanged || columnEditor_->TargetsTouched());
     const auto Apply = columnEditor_->Targets();
     QVector<QPointer<CGridView>> Targets; QVector<hc::columns::ViewSnapshot> PreviousViews;
@@ -460,7 +469,7 @@ bool QMainOpts::SaveSettings()
         if (Apply.opposite_ && Opposite) Targets.append(Opposite);
         for (const auto& View : Targets) if (View) hc::columns::CaptureView(View, PreviousViews);
     }
-    if (ColumnsRequested) {
+    if (ColumnsRequested || FlatChanged) {
         columnEditor_->SetAutoColors(fileColors_->Document());
         if (!columnEditor_->ValidateDraft()) { ShowListSettingsPage(); return false; }
         auto Columns = hc::settings::AppSettings().Read(hc::settings::Section::Columns).toObject();
@@ -472,8 +481,9 @@ bool QMainOpts::SaveSettings()
             Columns["ColumnsV2/Profiles"] = After;
             Columns[hc::columns::AutoSelectionKey] = columnEditor_->AutoSelection();
         }
-        if (Apply.defaultThis_) Columns["ColumnsV2/Defaults/" + listView_->ColumnWidths()->PaneKey()] = hc::columns::EncodeProfile(columnEditor_->Profile());
-        if (Apply.defaultOpposite_ && Opposite) Columns["ColumnsV2/Defaults/" + Opposite->ColumnWidths()->PaneKey()] = hc::columns::EncodeProfile(columnEditor_->Profile());
+        if (FlatChanged) { Columns[hc::columns::FlatProfilesKey] = columnEditor_->FlatLibrary(); Columns[hc::columns::FlatSelectionKey] = columnEditor_->FlatSelection(); }
+        if (ColumnsRequested && Apply.defaultThis_) Columns["ColumnsV2/Defaults/" + listView_->ColumnWidths()->PaneKey()] = hc::columns::EncodeProfile(columnEditor_->Profile());
+        if (ColumnsRequested && Apply.defaultOpposite_ && Opposite) Columns["ColumnsV2/Defaults/" + Opposite->ColumnWidths()->PaneKey()] = hc::columns::EncodeProfile(columnEditor_->Profile());
         hc::settings::AppSettings().Put(hc::settings::Section::Columns, Columns);
     }
     auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
@@ -594,7 +604,8 @@ bool QMainOpts::SaveSettings()
     TyStFileSetMgr::GetInstance()->Refresh(); TyStPlugInMgr::GetInstance()->Refresh();
     TyStCommandMgr::GetInstance()->Refresh();
     if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge()) { Bridge->ReloadMenu(); Bridge->RefreshShortcutLabels(); Bridge->RefreshFunctionBar(); }
-    if (ColumnsRequested) columnEditor_->MarkSaved();
+    if (FlatChanged && parentWidget()) for (auto* Panel : parentWidget()->window()->findChildren<CmpPanel*>()) Panel->RefreshFlatProfiles();
+    if (ColumnsRequested || FlatChanged) columnEditor_->MarkSaved();
     if (resetListModeDraft_ && listView_) { listView_->SetListMode("inherit"); resetListModeDraft_ = false; }
     if (thumbnailSettings_->ClearRequested()) {
         for (auto* View : parentWidget()->window()->findChildren<CGridView*>()) View->ClearThumbnailCache();

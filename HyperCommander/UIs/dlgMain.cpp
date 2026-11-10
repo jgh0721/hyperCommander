@@ -4,6 +4,7 @@
 #include "startupTrace.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/columnAutoSelection.hpp"
+#include "commonLibs/columns/flatProfile.hpp"
 
 #include "colorSchemeMgr.hpp"
 #include "UniqueLibs/commandUiBridge.hpp"
@@ -763,7 +764,10 @@ void QMainUI::initialize()
             if (!ResolvedFolders.contains(Token.token_) && Token.kind_ != hc::shell::FolderToken::Kind::None && Token.kind_ != hc::shell::FolderToken::Kind::Invalid)
                 ResolvedFolders[Token.token_] = hc::shell::ResolveFolderToken(Token).path_;
         }
-        if (hc::columns::MigrateDownloadsColumnSet(Columns, hc::shell::ResolveKnownFolderPath(QUuid("{374DE290-123F-4565-9164-39C4925E467B}")), ResolvedFolders)) {
+        // 다운로드 세트와 평면 폴더 기본 제공 세트는 각각 한 번만 이관한다.
+        const bool Downloads = hc::columns::MigrateDownloadsColumnSet(Columns, hc::shell::ResolveKnownFolderPath(QUuid("{374DE290-123F-4565-9164-39C4925E467B}")), ResolvedFolders);
+        const bool Flat = hc::columns::MigrateFlatColumnSets(Columns);
+        if (Downloads || Flat) {
             if (!ColumnSettings.Put(hc::settings::Section::Columns, Columns) || !ColumnSettings.Commit()) ColumnSettings.Replace(Previous);
         }
     }

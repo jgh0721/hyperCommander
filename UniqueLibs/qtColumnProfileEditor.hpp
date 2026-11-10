@@ -6,6 +6,7 @@
 
 namespace Qtitan { class Grid; }
 class QtitanColumnAdapter;
+class QtFlatProfileEditor;
 
 // A settings draft: this widget never mutates the live view or the repository.
 class QtColumnProfileEditor final : public QWidget
@@ -29,12 +30,20 @@ public:
     void LoadAutoSelection(const QJsonObject& Policy, const QJsonObject& Colors, bool AutomaticTab);
     QJsonObject AutoSelection() const;
     void SetAutoColors(const QJsonObject& Colors);
-    void SetCurrentLocation(const QString& Path) { currentLocation_ = Path; refreshAutoVerdict(); }
+    void SetCurrentLocation(const QString& Path);
     bool AutomaticTab() const { return applyAuto_->isChecked(); }
     void SetPreviewWidth(int Width) { previewWidth_->setValue(Width); }
     void SetSamples(QVector<hc::columns::PreviewSample> Current, QVector<hc::columns::PreviewSample> Selected);
     void SetContextFields(QVector<hc::columns::FieldDefinition> Fields);
-    void MarkSaved() { dirty_ = targetsTouched_ = false; updateApplySummary(); }
+    void MarkSaved();
+    // 평면 폴더 세트(별도 키). 목록의 "평면 폴더" 구획에 보이고, 고르면 오른쪽이 평면 세트 편집기로 바뀐다.
+    void LoadFlat(const QJsonObject& Library, const QJsonObject& Selection);
+    QJsonObject FlatLibrary() const;
+    QJsonObject FlatSelection() const;
+    bool FlatDirty() const;
+    bool SelectFlatProfile(const QUuid& Id);
+    bool FlatSelected() const { return flatSelected_; }
+    QtFlatProfileEditor* FlatEditor() const { return flatEditor_; }
 signals:
     void ProfileSelected();
 protected:
@@ -131,4 +140,9 @@ private:
     QSpinBox* previewWidth_ = nullptr;
     QLabel* error_;
     QPushButton* deleteProfile_;
+    QtFlatProfileEditor* flatEditor_ = nullptr;
+    QStackedWidget* rightStack_ = nullptr;
+    QWidget* footer_ = nullptr;
+    bool flatSelected_ = false;
+    void showFlat(bool Flat);
 };

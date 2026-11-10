@@ -78,6 +78,23 @@ QRect ProductNameTextRect(const CGridView* Owner, const QRect& Cell, bool HasIco
     else if (HasIcon) Rect.setLeft(Rect.left() + Owner->ListIconSize() + hc::view::ListIconTextGap(false));
     return Rect;
 }
+// 이름 앞 접두. Everything 결과는 "→ ", 평면 보기는 기준 폴더에 대한 상대 경로 + "\"다.
+// 그리기와 이름 바꾸기 편집기 위치가 같은 계산을 쓴다. 접두가 길면 접두만 가운데를 줄이고 이름 몫을 남긴다.
+struct ProductPrefix { QString text_; int width_ = 0; };
+ProductPrefix ProductNamePrefix(const CGridView* Owner, const QModelIndex& Cell, const QFontMetrics& Metrics, int Available)
+{
+    if (Owner->EverythingPresentation()) { const auto Text = QStringLiteral("→ "); return {Text, Metrics.horizontalAdvance(Text)}; }
+    if (!Owner->FlatPrefixVisible() || !Cell.isValid()) return {};
+    const auto Relative = Cell.siblingAtColumn(0).data(CFSModel::FlatPrefixRole).toString();
+    if (Relative.isEmpty()) return {};
+    const auto Separator = QStringLiteral("\\");
+    auto Text = Relative + Separator;
+    const int Name = Metrics.horizontalAdvance(Cell.siblingAtColumn(0).data(Qt::DisplayRole).toString());
+    const int Limit = std::max(Available - Name, Available / 3);
+    if (Metrics.horizontalAdvance(Text) > Limit)
+        Text = Metrics.elidedText(Relative, Qt::ElideMiddle, std::max(0, Limit - Metrics.horizontalAdvance(Separator))) + Separator;
+    return {Text, Metrics.horizontalAdvance(Text)};
+}
 // QIcon::paint never enlarges a smaller pixmap, so pixmaps are drawn to fill the icon slot.
 void PaintListIcon(QPainter* Painter, const QVariant& Value, const QRect& Rect)
 {
@@ -194,6 +211,29 @@ public:
         Painter->save(); Painter->setFont(Font); Painter->setPen(Foreground);
         const auto Effects = Cell.data(CFSModel::FileEffectsRole).toJsonObject();
         const QFontMetrics Metrics(Font);
+        // 평면 트리(시안 E): 이름 칸을 깊이만큼 들여 쓰고, 폴더 행에는 접기 표시를 그린다.
+        auto NameCell = Option.rect;
+        if (Name && owner_->FlatTreeVisible()) {
+            const int Depth = Cell.data(CFSModel::FlatTreeDepthRole).toInt();
+            const int Step = CGridView::FlatTreeStep;
+            const int Left = Option.rect.left() + 8 + Geometry.sideMargin;
+            if (owner_->FlatTreeLines()) {
+                auto Guide = Foreground; Guide.setAlphaF(Guide.alphaF() * 0.25); Painter->setPen(Guide);
+                for (int Level = 0; Level < Depth; ++Level) { const int X = Left + Level * Step + Step / 2; Painter->drawLine(X, Option.rect.top(), X, Option.rect.bottom()); }
+                Painter->setPen(Foreground);
+            }
+            if (const auto Expander = Cell.data(CFSModel::FlatTreeExpanderRole); Expander.isValid()) {
+                // 0 펼침 · 1 접힘. 삼각형은 글꼴과 무관하게 직접 그린다.
+                const QRect Box(Left + Depth * Step, Geometry.block(Option.rect).center().y() - Step / 2, Step, Step);
+                QPolygonF Arrow;
+                if (Expander.toInt() == 1) Arrow << QPointF(Box.left() + Step * 0.35, Box.top() + Step * 0.25) << QPointF(Box.left() + Step * 0.7, Box.center().y() + 0.5) << QPointF(Box.left() + Step * 0.35, Box.top() + Step * 0.75);
+                else Arrow << QPointF(Box.left() + Step * 0.25, Box.top() + Step * 0.38) << QPointF(Box.left() + Step * 0.75, Box.top() + Step * 0.38) << QPointF(Box.center().x() + 0.5, Box.top() + Step * 0.72);
+                Painter->save(); Painter->setRenderHint(QPainter::Antialiasing); auto Fill = Foreground; Fill.setAlphaF(Fill.alphaF() * 0.75);
+                Painter->setPen(Qt::NoPen); Painter->setBrush(Fill); Painter->drawPolygon(Arrow); Painter->restore();
+            }
+            NameCell.setLeft(NameCell.left() + (Depth + 1) * Step);
+            Rect.setLeft(Rect.left() + (Depth + 1) * Step);
+        }
         if (Name) {
             const auto Icon = Cell.data(Qt::DecorationRole);
             const bool HasIcon = ProductHasIcon(Icon);
@@ -209,12 +249,14 @@ public:
                     Painter->setOpacity(1.0);
                 }
             }
-            Rect = ProductNameTextRect(owner_, Option.rect, HasIcon);
+            Rect = ProductNameTextRect(owner_, NameCell, HasIcon);
             const bool Directory = (Cell.data(CFsModelT::USR_ROLE_ATTRIBUTE).toUInt() & FILE_ATTRIBUTE_DIRECTORY) != 0;
-            if (owner_->EverythingPresentation()) {
-                const auto Prefix = QStringLiteral("→ ");
-                Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Prefix);
-                Rect.setLeft(Rect.left() + Metrics.horizontalAdvance(Prefix));
+            if (const auto Prefix = ProductNamePrefix(owner_, Cell, Metrics, Rect.width()); !Prefix.text_.isEmpty()) {
+                // 평면 보기의 상대 경로는 이름보다 흐리게 그린다. Everything의 "→ "는 이름 색 그대로다.
+                if (owner_->FlatPrefixVisible() && owner_->FlatPrefixDim()) { auto Dim = Foreground; Dim.setAlphaF(Dim.alphaF() * 0.6); Painter->setPen(Dim); }
+                Painter->drawText(Rect, Qt::AlignLeft | Qt::AlignVCenter, Prefix.text_);
+                Painter->setPen(Foreground);
+                Rect.setLeft(Rect.left() + Prefix.width_);
             }
             const auto Shown = ElideFileName(Cell.data().toString(), Metrics, Rect.width(), Appearance.nameElide, Directory);
             if (Effects["dim"].toBool()) Painter->setOpacity(0.55);
@@ -491,6 +533,10 @@ void CGridView::ensureThumbnails()
     thumbnails_ = new fm::filelist::ThumbnailView(this); thumbnails_->setObjectName("hc.thumbnails");
     thumbnails_->listView()->setObjectName("hc.thumbnailTiles"); thumbnails_->listView()->setModelColumn(0);
     thumbnailModel_ = new ThumbnailModel(this); thumbnails_->setModel(thumbnailModel_);
+    // 평면 보기 썸네일의 폴더 구획: 머리글을 누르면 그 구획을 접거나 편다.
+    connect(thumbnails_, &fm::filelist::ThumbnailView::sectionToggled, this, [this](int Row) { thumbnailModel_->ToggleSection(Row); });
+    thumbnailModel_->SetFlatPresentation(flatPresentation_ && flatSections_, flatPresentation_ && flatChips_, flatLeafTitles_);
+    thumbnails_->setSectionsEnabled(flatPresentation_ && flatSections_);
     auto* Tiles = thumbnails_->listView(); Tiles->setItemDelegate(new ProductThumbnailDelegate(Tiles->itemDelegate(), this, Tiles));
     thumbnails_->listView()->installEventFilter(this);
     thumbnails_->listView()->viewport()->installEventFilter(this);
@@ -512,6 +558,7 @@ void CGridView::ensureThumbnails()
         TyStCommandMgr::GetInstance()->ProcessKeyPressEvent(&Event, thumbnailModel_->SourceIndex(Index.row()));
     });
     connect(thumbnails_, &fm::filelist::ThumbnailView::upRequested, this, [this] {
+        if (flatPresentation_) { emit sigFlatExitRequested(); return; }
         QKeyEvent Event(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier);
         auto* Commands = TyStCommandMgr::GetInstance();
         if (!Commands->ProcessKeyPressEvent(&Event, retrieveCursorIndex()) && Commands->Bridge())
@@ -660,6 +707,7 @@ void CGridView::applyThumbnailPresentation()
     if (thumbnailSizeOverride_) Appearance.size = *thumbnailSizeOverride_;
     if (Appearance.nameLines == 0) Appearance.nameLines = thumbnailModel_->FullNameLines(Appearance.tileWidth() - 20, fm::style::pixelFont(font(), 12.5));
     Appearance.invertCursor = listAppearance_.invertCursor; Appearance.invertSelection = listAppearance_.invertSelection;
+    Appearance.secondaryLine = flatPresentation_ && flatChips_;
     thumbnails_->setAppearance(Appearance); thumbnails_->setPaneActive(panelActive_);
     const auto Profile = ColumnProfile(); QStringList Sorts;
     for (const auto& Sort : Profile.sorts_) for (const auto& Column : Profile.columns_)
@@ -699,6 +747,12 @@ void CGridView::SetEverythingPresentation(bool Enabled)
 {
     if (everythingPresentation_ == Enabled) return;
     everythingPresentation_ = Enabled; requestPresentation(); emit sigListPresentationChanged();
+}
+void CGridView::SetFlatPresentation(bool Enabled)
+{
+    if (flatPresentation_ == Enabled) return;
+    flatPresentation_ = Enabled; grid_->viewport()->update();
+    if (renameEditor_) positionRenameEditor();
 }
 QJsonObject CGridView::capturePresentation() const
 {
@@ -1404,7 +1458,15 @@ void CGridView::positionRenameEditor()
     const auto Row = view_->getRow(Visible);
     for (const auto& Hit : grid_->hitInfoAll()) {
         if (Hit.info() != Qtitan::GridHitInfo::Cell || Hit.row().rowIndex() != Row.rowIndex() || Hit.modelIndex().column() != 0) continue;
-        auto Rect = ProductNameTextRect(this, Hit.rect(), ProductHasIcon(Visible.data(Qt::DecorationRole))).adjusted(0, 1, 0, -1);
+        auto NameCell = Hit.rect();
+        if (FlatTreeVisible()) NameCell.setLeft(NameCell.left() + (renameIndex_.data(CFSModel::FlatTreeDepthRole).toInt() + 1) * FlatTreeStep);
+        auto Rect = ProductNameTextRect(this, NameCell, ProductHasIcon(Visible.data(Qt::DecorationRole))).adjusted(0, 1, 0, -1);
+        // 이름 앞 접두(→ · 평면 상대 경로)는 편집 대상이 아니다. 그리기와 같은 계산으로 그만큼 비킨다.
+        if (EverythingPresentation() || FlatPrefixVisible()) {
+            auto Font = QModelIndex(renameIndex_).siblingAtColumn(0).data(Qt::FontRole).value<QFont>();
+            if (Font.family().isEmpty()) Font = font();
+            Rect.setLeft(Rect.left() + ProductNamePrefix(this, renameIndex_, QFontMetrics(Font), Rect.width()).width_);
+        }
         if (IsTwoLine()) Rect.setHeight(qMin(Rect.height(), renameEditor_->sizeHint().height()));
         Rect = Rect.intersected(grid_->viewport()->rect());
         if (!Rect.isValid()) { CancelRename(); return; }
@@ -1517,9 +1579,11 @@ bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile, Ap
         automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
         if (automaticColumnsBase_ && automaticColumnsBase_->id_ == Profile.id_) automaticColumnsBase_ = Profile;
     }
-    if (!restoringPresentation_ && !applyingAutoColumns_ && Reason != ApplyReason::Sync) {
+    if (!restoringPresentation_ && !applyingAutoColumns_ && Reason == ApplyReason::Manual) {
         manualColumns_ = true; automaticColumnsBase_.reset(); automaticColumnsStop_.request_stop(); ++automaticColumnsGeneration_;
     }
+    // 평면 보기 중 사용자가 세트를 직접 고르면 평면 세트 대신 그 세트를 쓴다(평면 상태는 유지).
+    if (Reason == ApplyReason::Manual && !restoringPresentation_ && flatProfile_) { flatProfile_.reset(); flatSource_.clear(); }
     if (!restoringPresentation_ && !everythingPresentation_) {
         listModeOverride_ = Profile.mode_ == hc::columns::LayoutMode::Details ? "one-line" : "two-line";
         nameBelowOverride_ = Profile.mode_ == hc::columns::LayoutMode::NameLast;
@@ -1540,6 +1604,85 @@ bool CGridView::ApplyColumnProfile(const hc::columns::ColumnProfile& Profile, Ap
     }
     groupingTimer_.start(0); RestoreSelection(Selected, Focus);
     return true;
+}
+
+bool CGridView::ApplyFlatProfile(const hc::columns::FlatProfile& Profile, const hc::columns::ColumnProfile& Origin, const QString& Source)
+{
+    auto* Model = qobject_cast<CFSModel*>(model_);
+    if (!Model) return false;
+    const auto Effective = hc::columns::ComposeFlatProfile(Profile, Origin);
+    if (!hc::columns::IsSupportedProfile(Effective.columns_)) return false;
+    flatProfile_ = Profile; flatSource_ = Source; flatOrigin_ = Origin;
+    {
+        const QScopedValueRollback Guard(applyingAutoColumns_, true);
+        if (!ApplyColumnProfile(Effective.columns_, ApplyReason::Flat)) { flatProfile_.reset(); flatSource_.clear(); return false; }
+    }
+    flatPrefixDim_ = Effective.prefixDim_;
+    Model->SetFlatPresentation(Effective.depthSort_, Effective.groupTitleLeaf_, Effective.groupOrderRecent_);
+    flatTree_ = Effective.tree_; flatTreeLines_ = Effective.presentation_.treeLines_;
+    flatSections_ = Effective.sections_; flatLeafTitles_ = Effective.presentation_.groupTitleLeaf_;
+    flatChips_ = Effective.thumbnails_ && !Effective.sections_ && Effective.presentation_.tileFolderChip_;
+    if (Effective.thumbnails_) thumbnailSizeOverride_ = Effective.presentation_.tileSize_;
+    if (thumbnailModel_) thumbnailModel_->SetFlatPresentation(flatSections_, flatChips_, flatLeafTitles_);
+    if (thumbnails_) thumbnails_->setSectionsEnabled(flatSections_);
+    Model->SetFlatTree(Effective.tree_, Effective.presentation_.treeExpandLevel_, Effective.presentation_.treeFolderTotal_);
+    if (Effective.thumbnails_) listModeOverride_ = "thumbnails";
+    SetFlatPresentation(true);
+    flatPrefix_ = Effective.prefix_;
+    grid_->viewport()->update(); requestPresentation();
+    emit sigListPresentationChanged(); emit sigViewSettingsChanged();
+    return true;
+}
+
+bool CGridView::toggleFlatTreeAt(const QPoint& Position)
+{
+    auto* Model = qobject_cast<CFSModel*>(model_);
+    if (!Model || !FlatTreeVisible()) return false;
+    const auto Hit = grid_->hitInfo(Position);
+    if (Hit.info() != Qtitan::GridHitInfo::Cell || Hit.modelIndex().column() != 0) return false;
+    auto Source = Hit.modelIndex();
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+    if (!Source.isValid() || Source.model() != model_ || !Source.data(CFSModel::FlatTreeExpanderRole).isValid()) return false;
+    const int Depth = Source.data(CFSModel::FlatTreeDepthRole).toInt();
+    const int Left = Hit.rect().left() + 8 + RecordGeometry().sideMargin + Depth * FlatTreeStep;
+    if (Position.x() < Left || Position.x() >= Left + FlatTreeStep) return false;
+    Model->SetFlatFolderExpanded(Source.row(), Model->FlatFolderCollapsed(Source.row()));
+    return true;
+}
+
+bool CGridView::flatTreeKey(int Key)
+{
+    auto* Model = qobject_cast<CFSModel*>(model_);
+    if (!Model || !FlatTreeVisible()) return false;
+    // +/- 는 선택 명령(숫자 키패드)과 겹치므로 쓰지 않는다.
+    if (Key != Qt::Key_Left && Key != Qt::Key_Right) return false;
+    const auto Cursor = retrieveCursorIndex(); if (!Cursor.isValid()) return false;
+    auto Source = Cursor;
+    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Source.model())) Source = Proxy->mapToSource(Source);
+    if (!Source.isValid() || Source.model() != model_) return false;
+    const int Row = Source.row();
+    const bool Folder = Source.siblingAtColumn(0).data(CFSModel::FlatTreeExpanderRole).isValid();
+    const bool Collapsed = Folder && Model->FlatFolderCollapsed(Row);
+    if (Key == Qt::Key_Right && Folder && Collapsed) { Model->SetFlatFolderExpanded(Row, true); return true; }
+    if (Key == Qt::Key_Left && Folder && !Collapsed) { Model->SetFlatFolderExpanded(Row, false); return true; }
+    if (Key == Qt::Key_Left) {
+        // 파일이거나 이미 접힌 폴더면 부모 폴더 행으로 커서를 옮긴다.
+        const int Parent = Model->FlatTreeParent(Row);
+        if (Parent < 0) return true;
+        if (const auto Item = Model->GetFileInfo(Model->index(Parent, 0)); Item && Item->storageEntry_)
+            RestoreSelection(CaptureSelection(), hc::workspace::SelectionKey(*Item->storageEntry_));
+        return true;
+    }
+    return Key == Qt::Key_Right;
+}
+
+void CGridView::ClearFlatProfile()
+{
+    flatProfile_.reset(); flatSource_.clear(); flatPrefix_ = true; flatPrefixDim_ = true; flatTree_ = false;
+    flatSections_ = flatChips_ = flatLeafTitles_ = false;
+    if (thumbnailModel_) thumbnailModel_->SetFlatPresentation(false, false, false);
+    if (thumbnails_) thumbnails_->setSectionsEnabled(false);
+    if (auto* Model = qobject_cast<CFSModel*>(model_)) { Model->SetFlatPresentation(true, false, false); Model->SetFlatTree(false); }
 }
 
 QJsonObject CGridView::CaptureWorkspaceView() const
@@ -2090,7 +2233,12 @@ QString CGridView::FileDropDirectory(const QModelIndex& Index, bool SameView) co
         const auto Item = model_->GetFileInfo(Source);
         if (Item && (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY))
             return QDir::cleanPath(QDir::fromNativeSeparators(Native->GetFileFullPath(Source)));
+        // 평면 보기: 파일 위에 놓으면 그 파일이 있는 폴더다.
+        if (Item && Item->storageEntry_ && Native->IsFlatListing())
+            return QDir::cleanPath(QFileInfo(QDir::fromNativeSeparators(QString::fromStdString(Item->storageEntry_->locator_.root_))).absolutePath());
     }
+    // 평면 보기의 빈 곳은 기준 폴더다. Everything 결과는 목적지가 없다.
+    if (!SameView && Native->IsFlatListing()) return QDir::cleanPath(QDir::fromNativeSeparators(Native->FlatBase()));
     // Search results have no background destination; same-view drops require a folder.
     if (SameView || Native->IsSearchResults()) return {};
     return QDir::cleanPath(QDir::fromNativeSeparators(Native->GetCurrentPathWithRoot()));
@@ -2455,9 +2603,11 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
         const auto* Key = static_cast<QKeyEvent*>(Event);
         const auto Id = hc::ui::ShortcutCommand(*Key, TyStCommandMgr::GetInstance()->Retrieve());
         const auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+        const auto* Flat = qobject_cast<const CFSModel*>(model_);
         if (Id == "hc.navigate.enterFile" || Id.startsWith("hc.clipboard.")
             || (Key->key() == Qt::Key_Escape && Key->modifiers() == Qt::NoModifier && Bridge
-                && (Bridge->HasFileClipboard() || Bridge->HasAudioPreview()))) {
+                && (Bridge->HasFileClipboard() || Bridge->HasAudioPreview() || (Flat && Flat->IsFlatRunning())))
+            || (Key->key() == Qt::Key_Backspace && Key->modifiers() == Qt::NoModifier && flatPresentation_)) {
             Event->accept(); return true;
         }
     }
@@ -2479,7 +2629,17 @@ bool CGridView::eventFilter( QObject* Watched, QEvent* Event )
             if (!Key->isAutoRepeat()) selectionHeldKey_ = Key->key();
             queueSelectionKey(Key->keyCombination()); return true;
         }
+        // 평면 트리: → 펼치기, ← 접기(이미 접혔거나 파일이면 부모 폴더로).
+        if (FlatTreeVisible() && Modifiers == Qt::NoModifier && flatTreeKey(Key->key())) { Event->accept(); return true; }
+        // 평면 보기에서 Backspace는 상위 폴더 대신 평면 보기를 끝내고 기준 폴더로 돌아간다.
+        if (flatPresentation_ && Key->key() == Qt::Key_Backspace && Modifiers == Qt::NoModifier) {
+            Event->accept(); emit sigFlatExitRequested(); return true;
+        }
     }
+    if (Watched == grid_->viewport() && FlatTreeVisible()
+        && (Event->type() == QEvent::MouseButtonPress || Event->type() == QEvent::MouseButtonDblClick)
+        && static_cast<QMouseEvent*>(Event)->button() == Qt::LeftButton
+        && toggleFlatTreeAt(static_cast<QMouseEvent*>(Event)->position().toPoint())) { Event->accept(); return true; }
     if (Watched == grid_->viewport()
         && (Event->type() == QEvent::MouseButtonPress || Event->type() == QEvent::MouseButtonDblClick)) {
         const auto* Mouse = static_cast<QMouseEvent*>(Event);
@@ -3078,7 +3238,7 @@ void CGridView::requestAutomaticColumns()
 {
     auto* Model = qobject_cast<CFSModel*>(model_);
     if (!Model || Model->IsLoading() || Model->HasPlaceholder() || !columnAdapter_ || !columnAdapter_->Writable()
-        || manualColumns_ || applyingAutoColumns_ || IsEditing()) return;
+        || manualColumns_ || applyingAutoColumns_ || IsEditing() || flatPresentation_ || Model->IsSearchResults()) return;
     const auto Committed = hc::settings::AppSettings().CommittedObject();
     const auto Columns = Committed["columns"].toObject();
     const auto Policy = Columns[hc::columns::AutoSelectionKey].toObject();

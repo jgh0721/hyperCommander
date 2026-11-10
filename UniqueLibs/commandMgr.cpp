@@ -173,7 +173,7 @@ bool CCommandMgr::ProcessKeyPressEvent( QKeyEvent* KeyEvent, const QModelIndex& 
 {
     // Esc 는 패널에 걸린 일시 상태를 한 번에 하나씩 끝낸다. 방금 켠 미리 듣기가 클립보드 표시보다 먼저다.
     if (bridge_ && KeyEvent->key() == Qt::Key_Escape && KeyEvent->modifiers() == Qt::NoModifier
-        && (bridge_->CancelAudioPreview() || bridge_->CancelClipboard())) {
+        && (bridge_->CancelAudioPreview() || bridge_->CancelClipboard() || bridge_->CancelFlatListing())) {
         KeyEvent->accept(); return true;
     }
     const bool Executed = hc::ui::InvokeShortcut(*KeyEvent, *retrieve(), [this, &CursorIndex](const QString& Id) {
