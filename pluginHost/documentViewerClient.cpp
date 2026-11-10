@@ -76,9 +76,9 @@ namespace hc::plugins
         const auto Edit=state_["editRequest"].toObject();
         // A new EPUB from HyperViewer's Ctrl+N: no document and no path cross this boundary.
         // HyperEditor shows the dialog and creates the file itself (--new-epub).
-        if(Edit["format"]=="epub-new"){
+        if(Edit["format"]=="epub-new" || Edit["format"]=="hwpx-new"){
             const auto Program=QCoreApplication::applicationDirPath()+"/HyperEditor.exe";
-            QStringList Args{"--config-dir",hc::settings::DocumentPaths().directory_,"--new-epub"};
+            QStringList Args{"--config-dir",hc::settings::DocumentPaths().directory_,Edit["format"]=="hwpx-new" ? "--new-hwpx" : "--new-epub"};
             const auto Appearance=QJsonDocument(Edit["appearance"].toObject()).toJson(QJsonDocument::Compact).toBase64();
             if(!Edit["appearance"].toObject().isEmpty() && Appearance.size()<=16384)Args<<"--document-appearance"<<QString::fromLatin1(Appearance);
             auto Start=std::make_shared<std::promise<bool>>();auto Result=Start->get_future();

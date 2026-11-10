@@ -627,7 +627,7 @@ namespace hc::document
         const quint32 Saving = All & ~Reading;
         // 파일
         fileMenu_ = menu_->addMenu(tr("파일(&F)")); fileMenu_->setObjectName("documentFileMenu");
-        if (!hosted_) fileMenu_->addAction(scoped(A("newDocument"), Of({K::None, K::Text, K::MarkdownPreview, K::MarkdownEdit})));
+        if (!hosted_) fileMenu_->addAction(scoped(A("newDocument"), Of({K::None, K::Text, K::MarkdownPreview, K::MarkdownEdit, K::EpubRead, K::EpubEdit})));
         fileMenu_->addAction(A("openDocument"));
         fileMenu_->addAction(scoped(A("reloadDocument"), Documents));
         fileMenu_->addAction(A("editHwpDocument"));
@@ -956,6 +956,15 @@ namespace hc::document
             Spec.width_ = Settings.value("common/newImageWidth").toInt(); Spec.height_ = Settings.value("common/newImageHeight").toInt();
             Spec.background_ = Settings.value("common/newImageBackground").toString();
             return newImage(Spec);
+        }
+        if (Kind == NewDocumentKind::Hwpx) {
+            if (hosted_) {
+                if (!editRequest_.isEmpty()) return Error("document-edit-busy");
+                editRequest_ = {{"token", QUuid::createUuid().toString(QUuid::Id128)}, {"format", "hwpx-new"}};
+                update();
+            } else if (!QProcess::startDetached(QCoreApplication::applicationDirPath() + "/HyperEditor.exe",
+                {"--new-hwpx", "--config-dir", QFileInfo(settingsPath_).absolutePath()})) return Error("document-editor-start-failed");
+            return {{"accepted", true}};
         }
         if (Kind == NewDocumentKind::Epub) {
             // HyperViewer never edits an EPUB: like "편집", the host starts HyperEditor (--new-epub).
@@ -2063,7 +2072,7 @@ namespace hc::document
         if(Action=="editResult"){
             if(editRequest_.isEmpty()||Request["token"]!=editRequest_["token"])return Error("document-edit-token");
             if(auto Target=find(editRequest_["documentId"].toString());Target&&!Request["accepted"].toBool())Target->error_="document-editor-start-failed";
-            else if(editRequest_["format"]=="epub-new"&&!Request["accepted"].toBool())ShowShellError(tr("HyperEditor를 시작하지 못했습니다."));
+            else if((editRequest_["format"]=="epub-new" || editRequest_["format"]=="hwpx-new")&&!Request["accepted"].toBool())ShowShellError(tr("HyperEditor를 시작하지 못했습니다."));
             editRequest_={};update();return {{"accepted",true}};
         }
         if (Action == "prepareClose") { for (const auto& Tab : documents_) if (Tab->Dirty()) return {{"canClose", false}}; return {{"canClose", IsIdle()}}; }

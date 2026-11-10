@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QMessageBox>
 #include <QLabel>
+#include <QMenu>
 #include <QPointer>
 #include <QPushButton>
 #include <QSpinBox>
@@ -28,6 +29,8 @@
 #include "UniqueLibs/document/markdownDocumentView.hpp"
 #include "UniqueLibs/document/newDocumentChooser.hpp"
 #include "UniqueLibs/document/newEpubDialog.hpp"
+#include "UniqueLibs/document/hwpInputInspection.hpp"
+#include "UniqueLibs/document/documentViewKind.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 
 using namespace hc::document;
@@ -225,6 +228,9 @@ private slots:
         QPointer<NewDocumentChooser> Chooser; QTRY_VERIFY((Chooser = Visible(static_cast<NewDocumentChooser*>(nullptr))));
         // The product dialog frame: header, cards, footer buttons.
         QVERIFY(Chooser->findChild<QWidget*>("hc.dialog.header")); QVERIFY(Chooser->findChild<QWidget*>("hc.dialog.footer"));
+        QVERIFY(Chooser->findChild<QAbstractButton*>("newDocument.hwpx"));
+        QCOMPARE(NewDocumentKindFrom("hwpx"), NewDocumentKind::Hwpx);
+        QCOMPARE(NewDocumentKindId(NewDocumentKind::Epub), QString("epub"));
         // A single click only selects (dialog convention); the button then names what follows.
         auto* Epub = Chooser->findChild<QAbstractButton*>("newDocument.epub"); QVERIFY(Epub);
         QTest::mouseClick(Epub, Qt::LeftButton); QVERIFY(Epub->isChecked()); QVERIFY(Chooser->isVisible());
@@ -240,7 +246,7 @@ private slots:
         QCOMPARE(Name(Widget, Documents(Widget).last().toObject()["documentId"].toString()), QObject::tr("새 문서 %1.md").arg(2));
         // Image: chosen in ‘새 문서’, it continues in its own ‘새 이미지’ dialog; Enter creates the remembered size.
         New->trigger(); QTRY_VERIFY((Chooser = Visible(static_cast<NewDocumentChooser*>(nullptr))));
-        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_4);
+        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_5);
         QPointer<NewImageDialog> Image; QTRY_VERIFY((Image = Visible(static_cast<NewImageDialog*>(nullptr))));
         QVERIFY(Image->findChild<QSpinBox*>("newImageWidth")); QVERIFY(!Image->findChild<QSpinBox*>("newImageWidth")->isEnabled());
         QTest::keyClick(Image->focusWidget() ? Image->focusWidget() : Image.data(), Qt::Key_Return);
@@ -266,6 +272,38 @@ private slots:
             if (!Folder.isEmpty()) { QTest::qWait(150); QVERIFY(Dialog->grab().save(QDir(Folder).filePath(Dialog->objectName() + ".png"))); }
         }
         for (auto* Dialog : {static_cast<QDialog*>(Chooser), static_cast<QDialog*>(Image), static_cast<QDialog*>(Epub)}) Dialog->reject();
+    }
+    void epubFileMenuOffersNewDocument()
+    {
+        Profile Settings; DocumentWorkspaceWidget Widget(Settings.Path("recovery"));
+        auto* New = Widget.findChild<QAction*>("newDocument");
+        auto* FileMenu = Widget.findChild<QMenu*>("documentFileMenu");
+        QVERIFY(New && FileMenu && FileMenu->actions().contains(New));
+        QVERIFY(viewKinds::Applies(New, DocumentViewKind::EpubEdit));
+        QVERIFY(viewKinds::Applies(New, DocumentViewKind::EpubRead));
+    }
+    void blankHwpxTemplateIsEditable()
+    {
+        Profile Settings; DocumentWorkspaceWidget Widget(Settings.Path("recovery"));
+        const auto Template = Bytes(":/templates/blank.hwpx");
+        QVERIFY(!Template.isEmpty());
+        const auto Inspection = InspectHwpInput(Template, "hwpx");
+        QVERIFY2(Inspection.accepted_ && !Inspection.restricted_, qPrintable(Inspection.error_));
+    }
+    void hwpxChooserRequestsDedicatedEditor()
+    {
+        Profile Settings; DocumentWorkspaceWidget Widget(Settings.Path("recovery"), true); Widget.show();
+        Widget.findChild<QAction*>("newDocument")->trigger();
+        QPointer<NewDocumentChooser> Chooser = Widget.findChild<NewDocumentChooser*>(); QVERIFY(Chooser);
+        QTest::keyClick(Chooser, Qt::Key_3);
+        QTRY_VERIFY(!Chooser);
+        const auto Request = Widget.Snapshot()["editRequest"].toObject();
+        QCOMPARE(Request["format"].toString(), QString("hwpx-new"));
+        QVERIFY(!Request["token"].toString().isEmpty());
+        QVERIFY(Documents(Widget).isEmpty());
+        QVERIFY(Widget.Handle({{"action", "new"}, {"kind", "hwpx"}}).contains("error"));
+        QVERIFY(!Widget.Handle({{"action", "editResult"}, {"token", Request["token"]}, {"accepted", true}}).contains("error"));
+        QVERIFY(Widget.Snapshot()["editRequest"].toObject().isEmpty());
     }
     void chooserSettingSkipsPopup()
     {

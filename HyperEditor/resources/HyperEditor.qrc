@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
+        <file>templates/blank.hwpx</file>
         <file>icons/app/hypereditor.svg</file>
         <file>icons/app/hyperviewer.svg</file>
         <file>icons/toolbar/annotation-freetext.svg</file>

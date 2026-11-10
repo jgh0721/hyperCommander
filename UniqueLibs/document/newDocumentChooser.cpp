@@ -41,7 +41,7 @@ namespace hc::document
     {
         using fm::style::Token;
         constexpr qint64  PixelLimit = 128LL * 1024 * 1024;
-        const QStringList KindIds{ "text", "markdown", "epub", "image" };
+        const QStringList KindIds{ "text", "markdown", "hwpx", "epub", "image" };
 
         // The dialog message line: secondary text, or the danger colour for a problem (as in 새 EPUB 만들기).
         void Tint( QLabel* Label, Token Which )
@@ -94,6 +94,7 @@ namespace hc::document
         const QList< Row > Rows{
             { tr( "텍스트 문서" ), QStringLiteral( ".txt" ), fm::ui::ChoiceCard::DocKind },
             { tr( "Markdown 문서" ), QStringLiteral( ".md" ), fm::ui::ChoiceCard::CodeKind },
+            { tr( "아래한글 문서" ), QStringLiteral( ".hwpx" ), fm::ui::ChoiceCard::DocKind },
             { tr( "EPUB 책…" ), QStringLiteral( ".epub" ), fm::ui::ChoiceCard::ArchiveKind },
             { tr( "이미지…" ), QStringLiteral( ".png" ), fm::ui::ChoiceCard::ImageKind } };
         auto* Group = new QButtonGroup( this ); Group->setExclusive( true );
@@ -115,7 +116,7 @@ namespace hc::document
         Layout->addWidget( Buttons );
         connect( Buttons, &QDialogButtonBox::accepted, this, &NewDocumentChooser::accept );
         connect( Buttons, &QDialogButtonBox::rejected, this, &NewDocumentChooser::reject );
-        hc::ui::ApplyDialogFrame( this, Buttons, { {}, tr( "만들 문서의 종류를 고릅니다. 1 – 4 키나 두 번 누르기로 바로 만들 수 있습니다." ), fm::ui::glyph::NewFile } );
+        hc::ui::ApplyDialogFrame( this, Buttons, { {}, tr( "만들 문서의 종류를 고릅니다. 1 – 5 키나 두 번 누르기로 바로 만들 수 있습니다." ), fm::ui::glyph::NewFile } );
         refreshNote();
         resize( 480, sizeHint().height() );
         if( auto* Card = kinds_.value( checkedKind() ) ) Card->setFocus( Qt::OtherFocusReason );
@@ -140,6 +141,8 @@ namespace hc::document
                 note_->setText( options_.viewer_
                     ? tr( "‘새 문서 %1.md’ 탭을 소스 보기로 엽니다." ).arg( options_.nextDocument_ )
                     : tr( "‘새 문서 %1.md’ 탭으로 엽니다. 소스와 미리보기를 나란히 봅니다." ).arg( options_.nextDocument_ ) ); break;
+            case NewDocumentKind::Hwpx:
+                note_->setText( tr( "새 창을 HWPX 편집 모드로 엽니다. 저장할 때 이름과 위치를 정합니다." ) ); break;
             case NewDocumentKind::Epub:
                 note_->setText( options_.viewer_
                     ? tr( "HyperEditor 새 창에서 제목 · 저자 · 저장 위치를 정해 만들고 편집합니다. HyperViewer는 EPUB을 편집하지 않습니다." )
@@ -184,7 +187,7 @@ namespace hc::document
     void NewDocumentChooser::keyPressEvent( QKeyEvent* Event )
     {
         if( Repeats( options_.repeatKey_, Event ) ) { if( !Event->isAutoRepeat() ) ActivateCurrent(); Event->accept(); return; }
-        if( !( Event->modifiers() & ~Qt::KeypadModifier ) && Event->key() >= Qt::Key_1 && Event->key() <= Qt::Key_4 ) {
+        if( !( Event->modifiers() & ~Qt::KeypadModifier ) && Event->key() >= Qt::Key_1 && Event->key() <= Qt::Key_5 ) {
             if( !Event->isAutoRepeat() ) { kinds_[ Event->key() - Qt::Key_1 ]->setChecked( true ); choose( Event->key() - Qt::Key_1 ); }
             Event->accept(); return;
         }

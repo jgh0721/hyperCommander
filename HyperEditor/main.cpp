@@ -24,6 +24,8 @@
 #include <QCloseEvent>
 #include <QStandardPaths>
 #include <QFileInfo>
+#include <QFile>
+#include <QTemporaryDir>
 #include <QMessageBox>
 #include <memory>
 #include <vector>
@@ -62,6 +64,7 @@ int main(int Argc, char** Argv)
     hc::document::startup::Scope ResourcesTrace("editor.resources"); InitializePortedViewResources(); ResourcesTrace.End(); App.setWindowIcon(QIcon(":/icons/app/hypereditor.svg"));
     hc::document::startup::Data().End(QtStart);
     QCommandLineParser Parser; Parser.addHelpOption();
+    Parser.addOption(QCommandLineOption("new-hwpx", "Create a new HWPX document in edit mode"));
     Parser.addOption(QCommandLineOption("rhwp-edit", "Edit one HWP/HWPX document"));
     Parser.addOption(QCommandLineOption("rhwp-edit-copy", "Edit a provider copy with Save As only"));
     Parser.addOption(QCommandLineOption("rhwp-view", "Open one HWP/HWPX in the isolated read-only viewer"));
@@ -94,7 +97,14 @@ int main(int Argc, char** Argv)
     }
     if (Parser.isSet("verify-epub-runtime")) return VerifyEpubRuntime(QFileInfo(Parser.value("verify-epub-runtime")).absoluteFilePath());
     if (Parser.isSet("verify-runtime")) { hc::fonts::RegisterBundledFonts(); return VerifyDocumentRuntime(); }
-    const bool RhwpEdit = Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy");
+    // Keep the template input alive until the dedicated editor has drained and closed.
+    QTemporaryDir NewHwpxDirectory;
+    const bool NewHwpx = Parser.isSet("new-hwpx");
+    if (NewHwpx && (Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy") || Parser.isSet("rhwp-view")
+        || Parser.isSet("epub-edit") || Parser.isSet("new-epub") || Parser.isSet("find-in-files")
+        || Parser.isSet("document-copy") || Parser.isSet("epub-locator") || Parser.isSet("epub-chapter")
+        || !Parser.positionalArguments().isEmpty())) return 10;
+    const bool RhwpEdit = NewHwpx || Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy");
     const bool EpubEdit=Parser.isSet("epub-edit");
     // HyperViewer's Ctrl+N › EPUB: HyperEditor shows the dialog and creates the file; no path is passed in.
     const bool NewEpub=Parser.isSet("new-epub");
@@ -116,8 +126,13 @@ int main(int Argc, char** Argv)
         || (!EpubLocator.isEmpty() && (!EpubLocator.startsWith("epubcfi(") || !EpubLocator.endsWith(')') || EpubLocator.contains(QChar::Null))))))return 10;
     if (Parser.isSet("rhwp-view") || RhwpEdit) {
         if ((Parser.isSet("rhwp-view") && RhwpEdit) || (Parser.isSet("rhwp-edit") && Parser.isSet("rhwp-edit-copy"))) return 10;
-        if (Parser.positionalArguments().size() != 1) return 10;
-        const auto Path = QFileInfo(Parser.positionalArguments().first()).absoluteFilePath();
+        if (!NewHwpx && Parser.positionalArguments().size() != 1) return 10;
+        const auto Path = NewHwpx ? NewHwpxDirectory.filePath(QObject::tr("새 문서.hwpx"))
+            : QFileInfo(Parser.positionalArguments().first()).absoluteFilePath();
+        if (NewHwpx && (!NewHwpxDirectory.isValid() || !QFile::copy(":/templates/blank.hwpx", Path))) {
+            hc::ui::MessageDialog::warning(nullptr, QObject::tr("새 문서"), QObject::tr("새 아래한글 문서를 만들지 못했습니다."));
+            return 11;
+        }
         const auto Format = QFileInfo(Path).suffix().toLower();
         if (Format != "hwp" && Format != "hwpx") return 10;
         if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
@@ -133,7 +148,7 @@ int main(int Argc, char** Argv)
             Window.Handle({{"action","open"},{"path",Path}});return App.exec();
         }
         hc::document::HwpOpenWindow Window(Path,
-            hc::defaults::edit::HwpCacheDirectory(), std::move(Runtime), {}, RhwpEdit, !Parser.isSet("rhwp-edit-copy"));
+            hc::defaults::edit::HwpCacheDirectory(), std::move(Runtime), {}, RhwpEdit, !NewHwpx && !Parser.isSet("rhwp-edit-copy"));
         QObject::connect(&Window, &hc::document::HwpOpenWindow::Closed, &App, &QCoreApplication::quit);
         QObject::connect(&App,&QCoreApplication::aboutToQuit,&App,[] {
             // The Ready observation has completed; all owners drain before normal quit.
