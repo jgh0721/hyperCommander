@@ -398,6 +398,7 @@ namespace
                     if(Result["frameId"]!=latest_["frameId"] && !Detailed)detailPending_=true;
                     if(!Detailed){auto Merged=latest_;for(auto At=Result.begin();At!=Result.end();++At)Merged[At.key()]=At.value();Result=std::move(Merged);}
                     latest_ = Result;
+                    previewReported();
                     // Frame clicks are relative to the web view; the host places its menu in this window.
                     const auto Context=Result.value("contextRequest").toObject();const auto ContextSerial=Context["serial"].toInteger();
                     if(ContextSerial>0 && ContextSerial!=pageContextSeen_) {
@@ -471,14 +472,20 @@ namespace
             hostAppearance_=Value;const auto Palette=fm::style::ThemeManager::instance().colors().toPalette();QApplication::setPalette(Palette);setPalette(Palette);fitNavigationWidth();sendProfile();return true;
         }
         ~Window() override { finished_ = true; poll_.stop(); delete view_; view_ = nullptr; delete profile_; profile_ = nullptr; }
-        QByteArray Control(const QByteArray& Bytes)
+        // A reader made by a reload answers to the identity the owner opened the helper with.
+        void SetControlIdentity(const QString& DocumentId,qint64 Generation) { controlId_=DocumentId; controlGeneration_=Generation; }
+        // Serials the owner compares across replacement keep growing in the new reader.
+        void InheritCounters(const Window& Old) {
+            escapeRequests_=Old.escapeRequests_;fullscreenRequests_=Old.fullscreenRequests_;
+            contextSerial_=Old.contextSerial_;contextRequest_=QJsonObject{{"serial",contextSerial_}};
+        }
+        QJsonObject Control(const QJsonObject& Request)
         {
-            QJsonParseError Parse;
-            const auto Request = QJsonDocument::fromJson(Bytes, &Parse).object();
-            QJsonObject Reply{{"protocolVersion", 1}, {"documentId", documentId_}, {"generation", generation_}};
-            const auto Fail = [&](const QString& Error) { Reply["error"] = Error; return QJsonDocument(Reply).toJson(QJsonDocument::Compact); };
-            if(Parse.error != QJsonParseError::NoError || Request["protocolVersion"] != QJsonValue(1)
-                || Request["documentId"] != documentId_ || Request["generation"] != QJsonValue(generation_)) return Fail("epub-control-identity");
+            const auto& Id=controlId_.isEmpty()?documentId_:controlId_;const auto Generation=controlId_.isEmpty()?generation_:controlGeneration_;
+            QJsonObject Reply{{"protocolVersion", 1}, {"documentId", Id}, {"generation", Generation}};
+            const auto Fail = [&](const QString& Error) { Reply["error"] = Error; return Reply; };
+            if(Request["protocolVersion"] != QJsonValue(1)
+                || Request["documentId"] != Id || Request["generation"] != QJsonValue(Generation)) return Fail("epub-control-identity");
             const auto Kind = Request["kind"].toString();
             if(Kind == "snapshot" || Kind == "snapshot-delta") {
                 auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = latest_["readerFocused"].toBool();
@@ -491,6 +498,8 @@ namespace
                 // Host chrome: chapter list, button availability, screens as the reader counts them, menus and messages.
                 // Unchanged values, such as the chapter list, are not repeated in deltas.
                 State["toc"]=toc_;State["readerMessage"]=readerMessage_;State["contextRequest"]=contextRequest_;
+                // The editing preview's request state: accepted, checked and shown revisions of the chapter.
+                if(editingPreview_)State["previewPatch"]=previewResult_;
                 for(const auto* Key:{"canBack","atStart","atEnd"})State[QLatin1String(Key)]=latest_.value(QLatin1String(Key)).toBool();
                 if(latest_.contains("chapterPages")){State["chapterScreen"]=screens(latest_,"chapterPage");State["chapterScreens"]=screens(latest_,"chapterPages");}
                 if(Kind=="snapshot-delta") {
@@ -535,7 +544,7 @@ namespace
             }
             else return Fail("epub-control-command");
             Reply["accepted"] = true;
-            return QJsonDocument(Reply).toJson(QJsonDocument::Compact);
+            return Reply;
         }
     protected:
         // The reading row cannot be hidden from a context menu; the host owns that chrome.
@@ -598,31 +607,7 @@ namespace
             scrollActive_.restart();if(poll_.interval()>33)poll_.start(33);return true;
         }
         bool readAction(const QString& Action,const QJsonValue& Value) {
-            if(Action=="preview-chapter") {
-                const auto Patch=Value.toObject();const auto Path=Patch["path"].toString();
-                const auto Asset=previewAssets_.value("/book/"+Path);
-                if(!editingPreview_ || patchBusy_ || !started_ || Patch.size()!=5 || !Patch["scroll"].isObject()
-                    || !Patch["text"].isString() || Patch["text"].toString().size()>hc::document::epub::PreviewPatchUnitLimit
-                    || Patch["serial"].toInteger(-1)<1 || Patch["chapter"].toInt(-1)<0
-                    || !Asset.store || Asset.mime!="application/xhtml+xml")return false;
-                patchBusy_=true;
-                auto* Watcher=new QFutureWatcher<hc::document::epub::ResourceResult>(this);
-                connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Patch]() mutable {
-                    const auto Result=Watcher->result();Watcher->deleteLater();patchBusy_=false;
-                    auto Message=Patch;Message.remove("text");
-                    if(!Result)Message["error"]=Result.error_;
-                    else Message["text"]=QString::fromUtf8(Result.bytes_);
-                    command("preview-chapter",Message);
-                });
-                Watcher->setFuture(QtConcurrent::run([Session=Asset.store->Session(),Path,Bytes=Patch["text"].toString().toUtf8()] {
-                    auto Result=Session->PreviewChapter(Path,Bytes);
-                    if(Result){const auto Lines=hc::document::epub::AnnotateSourceLines(Result.bytes_);
-                        if(!Lines.skipped_.isEmpty() || Lines.bytes_.size()>hc::document::epub::PreviewPatchAnnotatedLimit)return hc::document::epub::ResourceResult{{},"preview-full-required",Path};
-                        Result.bytes_=Lines.bytes_;}
-                    return Result;
-                }));
-                return true;
-            }
+            if(Action=="preview-chapter" || Action=="preview-edit")return previewSource(Action,Value.toObject());
             if(Action=="enable-input"){if(!Value.isBool() || !windowHandle())return false;interactive_=Value.toBool();view_->setFocusPolicy(interactive_?Qt::StrongFocus:Qt::NoFocus);windowHandle()->setFlag(Qt::WindowDoesNotAcceptFocus,!interactive_);return true;}
             if(Action=="fullscreen"){++fullscreenRequests_;return true;}
             // The host shows the body menu. It enables it on load, possibly while the saved position is
@@ -659,7 +644,85 @@ namespace
             auto Args = QJsonDocument(QJsonArray{Name, Value}).toJson(QJsonDocument::Compact);
             Args = Args.mid(1, Args.size() - 2);
             page_->runJavaScript("window.hcCommand && window.hcCommand(" + QString::fromUtf8(Args) + ")");
-            if(started_ && (Name=="read" || Name=="profile" || Name=="chapter"))poll_.start(16);
+            if(started_ && (Name=="read" || Name=="profile" || Name=="chapter" || Name=="preview-chapter"))poll_.start(16);
+        }
+        // Editing preview: the owner sends a chapter once ("preview-chapter") and then the bytes that
+        // changed ("preview-edit", UTF-8 offsets into the accepted text). The helper keeps the text,
+        // checks the whole chapter off the GUI thread and sends the reader the top-level elements that
+        // changed, or the chapter when that is not possible. One request is in flight at a time.
+        bool previewSource(const QString& Action,const QJsonObject& Patch) {
+            const auto Path=Patch["path"].toString();const auto Asset=previewAssets_.value("/book/"+Path);
+            const auto Serial=Patch["serial"].toInteger(-1),Revision=Patch["revision"].toInteger(-1);
+            const bool Replace=Action=="preview-chapter";
+            if(!editingPreview_ || !started_ || previewResult_["status"]!="done" || Serial<=previewResult_["serial"].toInteger()
+                || Revision<0 || Revision>9007199254740991LL || Patch["chapter"].toInt(-1)<0 || !Patch["scroll"].isObject()
+                || !Asset.store || Asset.mime!="application/xhtml+xml" || Patch.size()!=(Replace?6:10) || !Patch[Replace?"text":"inserted"].isString())return false;
+            const auto Finish=[this,Serial,Path](const QString& Error) {
+                const auto& Source=previewSources_[Path];
+                previewResult_={{"serial",Serial},{"status","done"},{"path",Path},{"accepted",Source.accepted_},{"validated",Source.validated_},{"rendered",Source.rendered_}};
+                if(!Error.isEmpty())previewResult_["error"]=Error;
+            };
+            auto& Source=previewSources_[Path];
+            if(Replace)Source.bytes_=Patch["text"].toString().toUtf8();
+            else {
+                const auto Base=Patch["baseRevision"].toInteger(-2),Length=Patch["baseLength"].toInteger(-1),Start=Patch["start"].toInteger(-1),Removed=Patch["removed"].toInteger(-1);
+                // An edit applies only to the exact text it was computed on; anything else asks for the chapter.
+                if(Base<0 || Base!=Source.accepted_ || Length!=Source.bytes_.size() || Start<0 || Removed<0 || Start>Length-Removed || Revision<=Base){Finish("preview-resync");return true;}
+                Source.bytes_.replace(Start,Removed,Patch["inserted"].toString().toUtf8());
+            }
+            Source.accepted_=Revision;
+            if(Source.bytes_.isEmpty() || Source.bytes_.size()>hc::document::epub::InputLimit){Finish("xml-limit");return true;}
+            previewResult_={{"serial",Serial},{"status","checking"},{"path",Path},{"accepted",Revision},{"validated",Source.validated_},{"rendered",Source.rendered_}};
+            // Element patches need a scrolled, horizontal, reflowable chapter without user CSS; the reader checks its frame again.
+            const auto Profile=settings_->Profile();const auto Modes=latest_["writingModes"].toArray();
+            const bool Elements=Source.rendered_>=0 && Profile["layout"]=="scroll" && !Profile["cssEnabled"].toBool()
+                && latest_["contentLayout"]!="pre-paginated" && !Modes.contains("vertical-rl") && !Modes.contains("vertical-lr");
+            auto* Watcher=new QFutureWatcher<PreviewWork>(this);
+            connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher,Patch,Serial,Path,Revision,Finish]{
+                auto Work=Watcher->result();Watcher->deleteLater();
+                if(finished_ || previewResult_["serial"].toInteger()!=Serial)return;
+                // An invalid revision stays accepted, so the next edit applies to it; the reader keeps its last good frame.
+                // The owner compares this digest with its buffer once no edit followed (verifyPreviewSource).
+                if(!Work.checked_){Finish(Work.checked_.error_);previewResult_["sha256"]=QString::fromLatin1(Work.sha256_);return;}
+                previewSources_[Path].validated_=Revision;previewResult_["sha256"]=QString::fromLatin1(Work.sha256_);
+                QJsonObject Message{{"serial",Serial},{"attempt",1},{"chapter",Patch["chapter"]},{"path",Path},{"scroll",Patch["scroll"]}};
+                if(Work.elements_.valid_) {
+                    const auto& Change=Work.elements_;
+                    Message["elements"]=QJsonObject{{"from",Change.from_},{"removed",Change.removed_},{"inserted",Change.inserted_},{"blocks",Change.blocks_},
+                        {"previous",Change.blocks_-Change.inserted_+Change.removed_},{"html",QString::fromUtf8(Change.html_)},{"namespaces",QString::fromUtf8(Change.namespaces_)},{"shift",Change.shift_}};
+                } else Message["text"]=QString::fromUtf8(Work.annotated_);
+                previewChecked_=std::move(Work.checked_.bytes_);previewAnnotated_=std::move(Work.annotated_);
+                previewMessage_=Message;previewResult_["status"]="rendering";previewResult_["validated"]=Revision;
+                command("preview-chapter",Message);
+            });
+            Watcher->setFuture(QtConcurrent::run([Session=Asset.store->Session(),Path,Bytes=Source.bytes_,Rendered=Elements?Source.renderedSource_:QByteArray{}] {
+                PreviewWork Work;Work.sha256_=QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256).toHex();
+                Work.checked_=Session->PreviewChapter(Path,Bytes);if(!Work.checked_)return Work;
+                // A chapter that cannot be annotated is shown without source lines, as the first build serves it.
+                auto Lines=hc::document::epub::AnnotateSourceLines(Work.checked_.bytes_);const bool Annotated=Lines.skipped_.isEmpty();
+                Work.annotated_=Annotated?std::move(Lines.bytes_):Work.checked_.bytes_;
+                if(!Rendered.isEmpty() && Annotated)Work.elements_=hc::document::epub::DiffBodyElements(Rendered,Work.checked_.bytes_,Work.annotated_);
+                return Work;
+            }));
+            return true;
+        }
+        // The reader's answer to the request in flight. A refused element patch is retried once with the chapter.
+        void previewReported() {
+            if(previewResult_["status"]!="rendering")return;
+            const auto Reported=latest_["previewPatch"].toObject();
+            if(Reported["serial"].toInteger(-1)!=previewResult_["serial"].toInteger() || Reported["attempt"]!=previewMessage_["attempt"])return;
+            auto& Source=previewSources_[previewResult_["path"].toString()];
+            if(Reported.contains("error") && previewMessage_.contains("elements")) {
+                auto Message=previewMessage_;Message.remove("elements");Message["text"]=QString::fromUtf8(previewAnnotated_);Message["attempt"]=2;
+                previewMessage_=Message;previewResult_["elementsRefused"]=Reported["error"];command("preview-chapter",Message);return;
+            }
+            previewResult_["status"]="done";
+            if(Reported.contains("error"))previewResult_["error"]=Reported["error"];
+            else {
+                Source.rendered_=previewResult_["accepted"].toInteger();Source.renderedSource_=previewChecked_;
+                previewResult_["rendered"]=Source.rendered_;previewResult_["mode"]=Reported["mode"];previewResult_["ms"]=Reported["ms"];
+            }
+            previewChecked_.clear();previewAnnotated_.clear();previewMessage_={};
         }
         void sendProfile()
         {
@@ -739,8 +802,8 @@ namespace
                 });
             });
         }
-        QString evidence_, documentId_, expectedBookFont_;
-        qint64 annotationClickSeen_=0;
+        QString evidence_, documentId_, expectedBookFont_, controlId_;
+        qint64 annotationClickSeen_=0, controlGeneration_=0;
         qint64 generation_ = 1;
         QJsonObject latest_{{"status", "loading"}},sentState_;
         QElapsedTimer detailClock_,scrollActive_;bool detailPending_=true;qint64 scrollSerialSeen_=-1;int detailSnapshots_=0;
@@ -766,7 +829,14 @@ namespace
         QWebEngineProfile* profile_ = nullptr;
         Page* page_ = nullptr;
         Filter* filter_ = nullptr;
-        Assets previewAssets_;bool patchBusy_=false;
+        Assets previewAssets_;
+        // accepted_: the owner's last revision of a chapter; validated_: the last that passed the chapter
+        // checks; rendered_: the one the reader holds, whose text (renderedSource_) element patches start from.
+        struct PreviewSource {QByteArray bytes_,renderedSource_;qint64 accepted_=-1,validated_=-1,rendered_=-1;};
+        struct PreviewWork {hc::document::epub::ResourceResult checked_;QByteArray annotated_,sha256_;hc::document::epub::ElementPatch elements_;};
+        QHash<QString,PreviewSource> previewSources_;
+        QJsonObject previewResult_{{"serial",0},{"status","done"}},previewMessage_;
+        QByteArray previewChecked_,previewAnnotated_;
         QJsonArray pendingBookmarks_;
         QTimer debounce_, poll_;
         bool pending_ = false, testing_ = false, finished_ = false;
@@ -781,8 +851,8 @@ namespace
     {
     public:
         OwnerController(QString Bundle, QWindow* Parent) : bundle_(std::move(Bundle)), nativeParent_(Parent)
-        { connect(&timer_, &QTimer::timeout, this, [this] { transfer_.Expire(); }); timer_.start(100); }
-        ~OwnerController() override { cancellation_->store(true); delete reader_; }
+        { connect(&timer_, &QTimer::timeout, this, [this] { transfer_.Expire(); advanceReload(); }); timer_.start(100); }
+        ~OwnerController() override { cancellation_->store(true); if(reload_.cancel_) reload_.cancel_->store(true); delete candidate_; delete reader_; }
         std::uintptr_t ReaderWindow() const { return nativeReader_; }
         void Refresh(QSize PhysicalSize)
         {
@@ -790,20 +860,53 @@ namespace
             if(!reader_ || !nativeReader_ || !PhysicalSize.isValid()) return;
             const auto Dpr = reader_->devicePixelRatioF();
             const QRect Geometry(0, 0, qRound(PhysicalSize.width() / Dpr), qRound(PhysicalSize.height() / Dpr));
-            if(reader_->geometry() != Geometry) reader_->setGeometry(Geometry);
-            if(reader_->windowHandle()->geometry() != Geometry) reader_->windowHandle()->setGeometry(Geometry);
+            for(auto* Each : {reader_, candidate_}) {
+                if(!Each) continue;
+                if(Each->geometry() != Geometry) Each->setGeometry(Geometry);
+                if(Each->windowHandle()->geometry() != Geometry) Each->windowHandle()->setGeometry(Geometry);
+            }
         }
-        QByteArray Control(const QByteArray& Bytes)
+        // RequestId: the frame being answered. A request too large for one frame arrives as an envelope.
+        QByteArray Control(const QByteArray& Bytes, std::uint64_t RequestId)
         {
             QJsonParseError Parse; const auto Document = QJsonDocument::fromJson(Bytes, &Parse);
             QJsonObject Reply;
             if(Parse.error != QJsonParseError::NoError || !Document.isObject()) Reply = {{"error", "epub-input-json"}};
-            else Reply = handle(Document.object(), Bytes);
+            else if(Document.object()["kind"] == "payload") Reply = unwrap(Document.object(), RequestId);
+            else Reply = handle(Document.object());
             return QJsonDocument(Reply).toJson(QJsonDocument::Compact);
         }
     private:
         struct Prepared { QJsonObject publication; Assets assets; QString error; };
-        QJsonObject handle(const QJsonObject& Request, const QByteArray& Bytes)
+        static bool hashText(const QString& Text)
+        { const auto Bytes = Text.toLatin1(); return Text.size() == 64 && QString::fromLatin1(Bytes) == Text && QByteArray::fromHex(Bytes).toHex() == Bytes; }
+        // The owner wrote the request to a section duplicated read-only into this process. The envelope is
+        // bound to this frame's request id and to the open document; the request inside names the same
+        // document, is a reader action and never another envelope. The handle is closed on every path once
+        // the envelope is well formed.
+        QJsonObject unwrap(const QJsonObject& Envelope, std::uint64_t RequestId)
+        {
+            const auto Length = Envelope["byteLength"].toInteger(-1);
+            bool Valid = false; const auto RawHandle = Envelope["handle"].toString().toULongLong(&Valid);
+            if(Envelope.size() != 8 || !transfer_.Matches(Envelope) || Envelope["requestId"].toInteger(-1) != qint64(RequestId)
+                || Length <= qint64(hc::document::HostInlineLimit) || quint64(Length) > hc::document::HostEnvelopeLimit
+                || !hashText(Envelope["sha256"].toString()) || !Valid || !RawHandle || RawHandle > quintptr(-1)
+                || QString::number(RawHandle) != Envelope["handle"].toString()) return {{"error", "epub-payload-admission"}};
+            QJsonObject Reply{{"protocolVersion", 1}, {"documentId", Envelope["documentId"]}, {"generation", Envelope["generation"]}};
+            const auto Mapping = reinterpret_cast<HANDLE>(quintptr(RawHandle));
+            const auto* View = MapViewOfFile(Mapping, FILE_MAP_READ, 0, 0, SIZE_T(Length));
+            QByteArray Bytes;
+            if(View) { try { Bytes = QByteArray(static_cast<const char*>(View), qsizetype(Length)); } catch(...) {} UnmapViewOfFile(View); }
+            CloseHandle(Mapping);
+            if(Bytes.size() != Length) { Reply["error"] = "epub-payload-mapping"; return Reply; }
+            if(QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex() != Envelope["sha256"].toString().toLatin1()) { Reply["error"] = "epub-payload-integrity"; return Reply; }
+            QJsonParseError Parse; const auto Inner = QJsonDocument::fromJson(Bytes, &Parse).object();
+            if(Parse.error != QJsonParseError::NoError || Inner["kind"] != "reader-action"
+                || Inner["protocolVersion"] != QJsonValue(1) || Inner["documentId"] != Envelope["documentId"] || Inner["generation"] != Envelope["generation"])
+            { Reply["error"] = "epub-payload-request"; return Reply; }
+            return handle(Inner);
+        }
+        QJsonObject handle(const QJsonObject& Request)
         {
             const auto Kind = Request["kind"].toString();
 #ifdef HC_EPUB_PRODUCT_HELPER
@@ -831,6 +934,8 @@ namespace
                 if((Kind == "input-commit" || Kind=="input-map") && Reply["accepted"].toBool()) {
                     auto Input = transfer_.Take();
                     if(!Input) return {{"error", "epub-input-state"}};
+                    // Every later reader of this helper answers to the identity of this input.
+                    controlId_ = Input->documentId; controlGeneration_ = Input->generation;
                     preparing_ = true;
                     auto* Watcher = new QFutureWatcher<Prepared>(this);
                     connect(Watcher, &QFutureWatcher<Prepared>::finished, this,
@@ -865,7 +970,17 @@ namespace
                 return Reply;
             }
             if(!transfer_.Matches(Request)) return {{"error", "epub-control-identity"}};
-            if(reader_) return QJsonDocument::fromJson(reader_->Control(Bytes)).object();
+            if(Kind == "reload") return reload(Request);
+            if(reader_) {
+                auto Reply = reader_->Control(Request);
+                const bool Accepted = Reply["accepted"].toBool();
+                // A reload replays the editing preview's reader settings into the new reader.
+                if(Accepted && Kind == "appearance") appearance_ = Request["appearance"].toObject();
+                if(Accepted && Kind == "reader-action" && QStringList{"bindings", "annotations-transient", "context-menu", "preview-width", "enable-input"}.contains(Request["action"].toString()))
+                    sticky_[Request["action"].toString()] = Request["value"];
+                if(Kind == "snapshot" || Kind == "snapshot-delta") Reply["reload"] = QJsonObject{{"serial", reload_.serial_}, {"status", reload_.status_}, {"error", reload_.error_}};
+                return Reply;
+            }
             if(Kind != "snapshot" && Kind != "snapshot-delta") return {{"error", "epub-control-not-ready"}};
             auto State = transfer_.Status();
             if(cancelled_) State["status"] = "cancelled";
@@ -873,6 +988,156 @@ namespace
             else if(preparing_) State["status"] = "preparing";
             return {{"protocolVersion", 1}, {"documentId", Request["documentId"]}, {"generation", Request["generation"]}, {"state", State}};
         }
+        // Reload of an editing preview after a change outside the shown chapter (package, styles, images,
+        // another chapter). The new publication opens in a second reader below the shown one, inside this
+        // helper. It takes over only after the reading settings, the chapter and the source position are
+        // restored; a failure keeps the shown reader and is reported as a refresh error.
+        QJsonObject reload(const QJsonObject& Request)
+        {
+            QJsonObject Reply{{"protocolVersion", 1}, {"documentId", Request["documentId"]}, {"generation", Request["generation"]}};
+            const auto Serial = Request["reloadSerial"].toInteger(-1), Length = Request["byteLength"].toInteger(-1), Chapter = Request["chapter"].toInteger(-2);
+            bool Valid = false; const auto RawHandle = Request["handle"].toString().toULongLong(&Valid);
+            const auto Scroll = Request["scroll"].toObject();
+            if(Request.size() != 11 || Serial <= reload_.serial_ || Serial > 9007199254740991LL || Length < 1 || Length > hc::document::epub::InputLimit
+                || !hashText(Request["sha256"].toString()) || !Valid || !RawHandle || RawHandle > quintptr(-1) || QString::number(RawHandle) != Request["handle"].toString()
+                || Chapter < -1 || Chapter > 65535 || !Request["locator"].isString() || Request["locator"].toString().size() > 4096
+                || !Request["scroll"].isObject() || (!Scroll.isEmpty() && !hc::document::epub::ValidSourceScrollRequest(Scroll)))
+            { Reply["error"] = "epub-reload-admission"; return Reply; }
+            const auto Mapping = reinterpret_cast<HANDLE>(quintptr(RawHandle));
+            if(!reader_ || !sourceLines_) { CloseHandle(Mapping); Reply["error"] = "epub-reload-state"; return Reply; }
+            discardCandidate();
+            reload_ = {}; reload_.serial_ = Serial; reload_.status_ = "preparing"; reload_.cancel_ = std::make_shared<std::atomic_bool>(false);
+            reload_.chapter_ = int(Chapter); reload_.locator_ = Request["locator"].toString(); reload_.scroll_ = Scroll;
+            auto* Watcher = new QFutureWatcher<Prepared>(this);
+            connect(Watcher, &QFutureWatcher<Prepared>::finished, this, [this, Watcher, Serial] {
+                auto Result = Watcher->result(); Watcher->deleteLater();
+                if(Serial != reload_.serial_ || reload_.status_ != "preparing") return;
+                if(!Result.error.isEmpty()) { failReload(Result.error); return; }
+                reload_.prepared_ = std::move(Result); reload_.status_ = "loading"; advanceReload();
+            });
+            Watcher->setFuture(QtConcurrent::run([Mapping, Length, Sha = Request["sha256"].toString().toLatin1(), Bundle = bundle_, Cancel = reload_.cancel_] {
+                Prepared Result; QByteArray Bytes;
+                if(const auto* View = MapViewOfFile(Mapping, FILE_MAP_READ, 0, 0, SIZE_T(Length))) {
+                    try { Bytes = QByteArray(static_cast<const char*>(View), qsizetype(Length)); } catch(...) {}
+                    UnmapViewOfFile(View);
+                }
+                CloseHandle(Mapping);
+                try {
+                    if(Bytes.size() != Length) throw QString("epub-reload-mapping");
+                    if(QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex() != Sha) throw QString("epub-reload-integrity");
+                    const auto Session = hc::document::epub::PublicationSession::Open(std::move(Bytes), [Cancel] { return Cancel->load(); });
+                    const auto Index = Session->Index();
+                    if(!Index) throw Index.error_ + ": " + Index.location_;
+                    Result.publication = Index.publication_;
+                    if(Result.publication["sourceSha256"].toString().toLatin1() != Sha) throw QString("epub-publication-identity");
+                    Result.assets = loadAssets(Result.publication, Bundle, Session);
+                } catch(const QString& Error) { Result.error = Error; }
+                catch(const std::bad_alloc&) { Result.error = "memory-limit"; }
+                return Result;
+            }));
+            Reply["accepted"] = true; Reply["reloadSerial"] = Serial; return Reply;
+        }
+        QJsonObject candidateRequest(QJsonObject Request) const
+        {
+            Request["protocolVersion"] = 1; Request["documentId"] = controlId_; Request["generation"] = controlGeneration_;
+            return candidate_->Control(Request);
+        }
+        bool candidateAction(const QString& Action, const QJsonValue& Value) const
+        { return candidateRequest({{"kind", "reader-action"}, {"action", Action}, {"value", Value}})["accepted"].toBool(); }
+        void advanceReload()
+        {
+            if(reload_.status_ != "loading" || !reader_) return;
+            if(!candidate_) {
+                // As for the first reader: a background owner gets no new native window, which could activate.
+                const auto Parent = reinterpret_cast<HWND>(nativeParent_->winId());
+                if(!IsWindowVisible(Parent) || GetAncestor(GetForegroundWindow(), GA_ROOT) != GetAncestor(Parent, GA_ROOT)) return;
+                auto Result = std::move(*reload_.prepared_); reload_.prepared_.reset();
+                candidate_ = new Window(Result.assets, Result.publication, "epubjs", "light", {}, settingsPath_, preparedGeneration_, false, sourceLines_, globalSettingsPath_, hostChrome_);
+                candidate_->SetControlIdentity(controlId_, controlGeneration_);
+                if(!appearance_.isEmpty()) candidate_->Appearance(appearance_);
+                candidate_->setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
+                candidate_->winId(); candidate_->windowHandle()->setParent(nativeParent_); candidate_->setAttribute(Qt::WA_ShowWithoutActivating);
+                candidate_->setGeometry(reader_->geometry()); candidate_->windowHandle()->setGeometry(reader_->windowHandle()->geometry());
+                candidate_->show();
+                // Below the shown reader: it lays out and paints unseen until it takes over.
+                SetWindowPos(reinterpret_cast<HWND>(candidate_->winId()), reinterpret_cast<HWND>(reader_->winId()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                reload_.clock_.start(); return;
+            }
+            if(reload_.clock_.elapsed() > 30000) { failReload("epub-reload-timeout"); return; }
+            const auto State = candidateRequest({{"kind", "snapshot"}})["state"].toObject();
+            if(State["status"] == "error") { failReload(State["message"].toString("epub-reload-render")); return; }
+            if(State["status"] != "ready" || State["readerBusy"].toBool() || State["settingsBusy"].toBool() || !State["readingStateLoaded"].toBool()) return;
+            // Input is enabled here, below the shown reader: changing a visible window's focus flag can
+            // lay out and display the frame again, which must happen before the position is restored.
+            if(reload_.stage_ == 0) {
+                for(const auto* Name : {"bindings", "annotations-transient", "context-menu", "preview-width", "enable-input"})
+                    if(sticky_.contains(QLatin1String(Name))) candidateAction(QLatin1String(Name), sticky_[QLatin1String(Name)]);
+                reload_.stage_ = 1; return;
+            }
+            if(reload_.stage_ == 1) {
+                if(sticky_.value("annotations-transient").toBool() && !State["annotationsTransient"].toBool()) return;
+                if(sticky_.contains("enable-input") && State["inputEnabled"].toBool() != sticky_.value("enable-input").toBool()) return;
+                // The frame those settings may have displayed again stays the same for a moment first.
+                const auto Frame = State["frameId"].toString();
+                if(Frame.isEmpty() || Frame != reload_.frame_) { reload_.frame_ = Frame; reload_.frameClock_.start(); return; }
+                if(reload_.frameClock_.elapsed() < 600) return;
+                // The owner names the chapter of the source it edits; otherwise the shown reader's position is kept.
+                const int Old = reader_->Control(QJsonObject{{"protocolVersion", 1}, {"documentId", controlId_}, {"generation", controlGeneration_}, {"kind", "snapshot"}})["state"].toObject()["chapterIndex"].toInt(-1);
+                const auto Chapter = reload_.chapter_; const auto& Locator = reload_.locator_;
+                const bool Located = Chapter >= 0 && (Chapter != Old || (Locator.isEmpty() && Chapter != State["chapterIndex"].toInt(-1)))
+                    ? candidateAction("chapter", Chapter) : !Locator.isEmpty() ? candidateAction("preview-location", Locator) : false;
+                reload_.action_ = Located ? State["readerAction"].toObject()["serial"].toInteger() + 1 : -1; reload_.stage_ = 2; return;
+            }
+            if(reload_.stage_ == 2) {
+                if(reload_.action_ >= 0 && State["readerAction"].toObject()["serial"].toInteger() < reload_.action_) return;
+                reload_.stage_ = 4;
+                if(!reload_.scroll_.isEmpty() && State["chapterIndex"].toInt(-1) == reload_.chapter_ && State["previewScroll"].toObject()["supported"].toBool()
+                    && candidateRequest({{"kind", "source-scroll"}, {"value", reload_.scroll_}})["accepted"].toBool()) { reload_.stage_ = 3; reload_.scrollClock_.start(); return; }
+            }
+            if(reload_.stage_ == 3) {
+                // Never show a frame whose source position has not been restored.
+                if(State["previewScroll"].toObject()["applied"].toInteger() < reload_.scroll_["serial"].toInteger()) {
+                    if(reload_.scrollClock_.elapsed() > 5000) failReload("epub-preview-scroll-timeout");
+                    return;
+                }
+            }
+            swapReader();
+        }
+        void swapReader()
+        {
+            auto* Old = std::exchange(reader_, candidate_); candidate_ = nullptr;
+            reader_->InheritCounters(*Old);
+            // The input queue is shared with the owner: GetFocus names the owner's window while its editor
+            // has the keyboard. Only a reader that holds it passes it on.
+            const auto OldWindow = reinterpret_cast<HWND>(Old->winId()), Focus = GetFocus();
+            const bool Focused = Focus && (Focus == OldWindow || IsChild(OldWindow, Focus));
+            SetWindowPos(reinterpret_cast<HWND>(reader_->winId()), HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            nativeReader_ = static_cast<std::uintptr_t>(reader_->winId());
+            if(Focused) candidateRequestTo(reader_, {{"kind", "focus"}});
+            Old->hide(); Old->deleteLater();
+            reload_.status_ = "ready"; reload_.cancel_.reset();
+        }
+        QJsonObject candidateRequestTo(Window* Target, QJsonObject Request) const
+        {
+            Request["protocolVersion"] = 1; Request["documentId"] = controlId_; Request["generation"] = controlGeneration_;
+            return Target->Control(Request);
+        }
+        void failReload(const QString& Error) { discardCandidate(); reload_.status_ = "failed"; reload_.error_ = Error; }
+        void discardCandidate()
+        {
+            if(reload_.cancel_) reload_.cancel_->store(true);
+            reload_.prepared_.reset();
+            if(candidate_) { candidate_->hide(); candidate_->deleteLater(); candidate_ = nullptr; }
+        }
+        struct Reload {
+            qint64 serial_ = 0, action_ = -1; int chapter_ = -1, stage_ = 0;
+            QString status_ = "idle", error_, locator_, frame_; QJsonObject scroll_;
+            std::shared_ptr<std::atomic_bool> cancel_; std::optional<Prepared> prepared_;
+            QElapsedTimer clock_, scrollClock_, frameClock_;
+        } reload_;
+        Window* candidate_ = nullptr;
+        QJsonObject sticky_;
+        QString controlId_; qint64 controlGeneration_ = 0;
         void installPrepared() {
             if(!prepared_ || cancelled_ || reader_)return;
             const auto Parent=reinterpret_cast<HWND>(nativeParent_->winId());
@@ -954,7 +1219,7 @@ int main(int Argc, char** Argv)
 #else
             OwnerController Controller(Root + "/bundle", NativeParent.get());
 #endif
-            if(!Peer.Ready(Surface.Window(), [&Controller](const QByteArray& Request) { return Controller.Control(Request); }, [] { qApp->quit(); }))
+            if(!Peer.Ready(Surface.Window(), [&Controller, &Peer](const QByteArray& Request) { return Controller.Control(Request, Peer.CurrentRequest()); }, [] { qApp->quit(); }))
                 throw QString("Owner native attachment failed");
             const auto FitParent = [&Surface, &Controller] {
                 if(!Surface.Refresh(Controller.ReaderWindow())) qApp->quit();

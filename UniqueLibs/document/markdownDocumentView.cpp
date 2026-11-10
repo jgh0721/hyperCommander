@@ -183,6 +183,13 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     connect(source_->Backend(), &ITextEditorBackend::linesShifted, this, [this](int Line, int Delta) {
         if (shifts_.size() < 256) shifts_.append({Line, Delta}); else shiftsOverflow_ = true;
     });
+    // Bytes changed since the text the renderer holds; a document swapped behind the editor has no common base.
+    connect(source_->Backend(), &ITextEditorBackend::textEdited, this, [this](qint64 Position, qint64 Removed, qint64 Inserted) {
+        if (editsDocument_ != qintptr(static_cast<ScintillaQtDirectBackend *>(source_->Backend())->Send(SCI_GETDOCPOINTER)))
+            edits_.Invalidate();
+        else
+            edits_.Apply(Position, Removed, Inserted);
+    });
     connect(splitter_, &QSplitter::splitterMoved, this, [this] { sampleSoon_.start(0); });
     // The preview's native focus has no Qt signal in this process.
     sample_.setInterval(250);
@@ -507,33 +514,54 @@ void MarkdownDocumentView::scheduleSample()
     const qint64 Since = lastSampleSent_.isValid() ? lastSampleSent_.elapsed() : SampleFrameMs;
     sampleSoon_.start(Since >= SampleFrameMs ? 0 : int(SampleFrameMs - Since));
 }
+bool MarkdownDocumentView::sourceMatchesSent() const
+{
+    if (!edits_.Changed())
+        return true;
+    const auto Start = edits_.Start(), Removed = edits_.Removed(), Inserted = edits_.InsertedEnd() - Start;
+    if (Removed != Inserted || Removed > 1024 * 1024 || Start + Removed > sentText_.size())
+        return false;
+    auto *Backend = static_cast<ScintillaQtDirectBackend *>(source_->Backend());
+    QByteArray Bytes(Inserted + 1, Qt::Uninitialized);
+    Sci_TextRangeFull Range{};
+    Range.chrg.cpMin = Start;
+    Range.chrg.cpMax = Start + Inserted;
+    Range.lpstrText = Bytes.data();
+    Backend->Send(SCI_GETTEXTRANGEFULL, 0, reinterpret_cast<qintptr>(&Range));
+    return QByteArrayView(Bytes.constData(), Inserted) == QByteArrayView(sentText_).sliced(Start, Removed);
+}
 void MarkdownDocumentView::Refresh(bool Force)
 {
     debounce_.stop();
     deferredSince_.invalidate();
-    const auto Text = source_->Content();
-    if (!Force && Text.size() > 2 * 1024 * 1024)
+    auto *Backend = static_cast<ScintillaQtDirectBackend *>(source_->Backend());
+    const qint64 Length = Backend->Send(SCI_GETLENGTH);
+    if (!Force && Length > AutoRenderBytes)
     {
         status_ = tr("대용량 · 수동 갱신 필요");
         render_ = RenderState::Manual;
         emit Changed();
         return;
     }
-    const auto Utf8 = Text.toUtf8();
-    if (Utf8.size() > 8 * 1024 * 1024)
+    if (Length > PreviewBytes)
     {
-        error_ = tr("미리보기는 8 MiB 이하 문서를 지원합니다. 소스 편집은 계속할 수 있습니다.");
+        error_ = tr("미리보기는 16 MiB 이하 문서를 지원합니다. 소스 편집은 계속할 수 있습니다.");
         message_->setText(error_);
         message_->show();
         emit Changed();
         return;
     }
     options_["dark"] = palette().color(QPalette::Window).lightness() < 128;
+    // The renderer holds the text of helperRevision_ while the editor's document and its edit range are
+    // continuous with it; then a request carries only the changed bytes.
+    const auto Document = qintptr(Backend->Send(SCI_GETDOCPOINTER));
+    const bool Synced = sentValid_ && error_.isEmpty() && helperRevision_ >= 0 && path_ == sentPath_ && Document == editsDocument_
+        && edits_.Valid() && edits_.Length() == Length && sentText_.size() == edits_.BaseLength();
     // Theme and settings reloads, an undo back to the rendered text and outline clicks ask again
-    // for what the preview already shows. A render replaces the whole page and keeps the
-    // helper's GUI thread busy; only the explicit refresh (Force) repeats one.
-    if (!Force && sentValid_ && error_.isEmpty() && Utf8 == sentText_ && path_ == sentPath_ && options_ == sentOptions_)
+    // for what the preview already shows. Only the explicit refresh (Force) repeats a render.
+    if (!Force && Synced && options_ == sentOptions_ && sourceMatchesSent())
     {
+        edits_.Reset(Length);
         // The source is that revision again: its line map is the identity.
         revision_ = renderRequested_;
         shifts_.clear();
@@ -561,19 +589,47 @@ void MarkdownDocumentView::Refresh(bool Force)
     message_->hide();
     status_ = source_->isContentTruncated() ? tr("부분 미리보기 갱신 중") : tr("갱신 중");
     render_ = RenderState::Rendering;
-    sentText_ = Utf8;
+    QJsonObject Message{{"type", "render"},
+                        {"revision", revision_},
+                        {"path", path_},
+                        {"baseUrl", QUrl::fromLocalFile(QFileInfo(path_).absolutePath() + "/").toString()},
+                        {"options", options_},
+                        {"scroll", SourceVisible() && actions_["markdown.syncScroll"]->isChecked()
+                            && source_->Backend()->widget()->hasFocus() && !preview_->HasFocus() ? sourceScrollAnchor() : QJsonObject{}}};
+    if (Synced && !Force)
+    {
+        // UTF-8 offsets into the renderer's text; bytes that are not UTF-8 would change on the way.
+        const auto Start = edits_.Start(), End = edits_.InsertedEnd();
+        QByteArray Inserted(End - Start + 1, Qt::Uninitialized);
+        Sci_TextRangeFull Range{};
+        Range.chrg.cpMin = Start;
+        Range.chrg.cpMax = End;
+        Range.lpstrText = Inserted.data();
+        Backend->Send(SCI_GETTEXTRANGEFULL, 0, reinterpret_cast<qintptr>(&Range));
+        Inserted.resize(End - Start);
+        const auto Text = QString::fromUtf8(Inserted);
+        if (Text.toUtf8() == Inserted)
+        {
+            Message["edit"] = QJsonObject{{"base", helperRevision_}, {"baseLength", edits_.BaseLength()}, {"start", Start},
+                                          {"removed", edits_.Removed()}, {"inserted", Text}};
+            sentText_.replace(Start, edits_.Removed(), Inserted);
+            ++editRenders_;
+        }
+    }
+    if (!Message.contains("edit"))
+    {
+        sentText_ = QByteArray(reinterpret_cast<const char *>(Backend->Send(SCI_GETCHARACTERPOINTER)), Length);
+        Message["text"] = QString::fromUtf8(sentText_);
+        fullRevision_ = revision_;
+    }
+    edits_.Reset(Length);
+    editsDocument_ = Document;
+    helperRevision_ = revision_;
     sentPath_ = path_;
     sentOptions_ = options_;
     sentValid_ = true;
     renderClock_.start();
-    preview_->Send({{"type", "render"},
-                    {"revision", revision_},
-                    {"text", Text},
-                    {"path", path_},
-                    {"baseUrl", QUrl::fromLocalFile(QFileInfo(path_).absolutePath() + "/").toString()},
-                    {"options", options_},
-                    {"scroll", SourceVisible() && actions_["markdown.syncScroll"]->isChecked()
-                        && source_->Backend()->widget()->hasFocus() && !preview_->HasFocus() ? sourceScrollAnchor() : QJsonObject{}}});
+    preview_->Send(Message);
     emit Changed();
 }
 void MarkdownDocumentView::report(const QJsonObject &Value)
@@ -623,6 +679,18 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
         diagnostics_ = Value;
         return;
     }
+    if (Type == "resync")
+    {
+        // The renderer lacked the text an edit was based on (a restarted helper, a dropped message).
+        // The next request sends the whole text; a refusal of an edit sent before it changes nothing.
+        if (Value["revision"].toInteger(-1) > fullRevision_)
+        {
+            helperRevision_ = -1;
+            ++resyncs_;
+            QTimer::singleShot(0, this, [this] { Refresh(); });
+        }
+        return;
+    }
     // Reports describe the requested revision. Edits made since then are mapped
     // through shifts_, so the preview stays synchronised while it waits for a render.
     if (Type != "error" && Value["revision"].toInteger(-1) != renderRequested_)
@@ -653,6 +721,7 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
         sampleSoon_.start(0);
         problems_ = Value["problems"].toInt();
         problemDetails_ = Value["details"].toArray();
+        renderBlocks_ = Value["blocks"].toObject();
         headings_ = Value["headings"].toArray();
         rebuildOutline();
         // The foreign preview can leave Qt's logical source focus intact while
@@ -1155,6 +1224,9 @@ QJsonObject MarkdownDocumentView::State() const
     return {{"mode", mode_},
             {"revision", revision_},
             {"renderedRevision", rendered_},
+            {"editRenders", editRenders_},
+            {"blocks", renderBlocks_},
+            {"resyncs", resyncs_},
             {"status", status_},
             {"previewScroll", previewScroll_},
             {"sourceAnchor", sourceScrollAnchor()},

@@ -16,6 +16,7 @@
 #define NOMINMAX
 #include <Windows.h>
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QDeadlineTimer>
 #include <QEvent>
 #include <QElapsedTimer>
@@ -57,6 +58,11 @@ namespace hc::document
         std::deque<QJsonObject> settingsRequests_;
         std::optional<QJsonObject> sourceScroll_;
         QJsonObject settingsResult_;
+        // Editing previews: a new export opened in the same helper (EpubProcessView::Reload).
+        struct ReloadRequest { QByteArray bytes_; QJsonObject position_; qint64 serial_ = 0; };
+        std::optional<ReloadRequest> reload_;
+        qint64 reloadSerial_ = 0;
+        QJsonObject reloadState_;
         void Metrics(QJsonObject Value) { std::lock_guard Lock(mutex_); metrics_ = std::move(Value); }
         std::thread worker_;
         void Update(QJsonObject Value) { std::lock_guard Lock(mutex_); state_ = std::move(Value); }
@@ -291,9 +297,12 @@ namespace hc::document
         return QWidget::event(Event);
     }
     bool EpubProcessView::ReaderAction(const QString& Action,const QJsonValue& Value) {
-        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"toggle-notes","focus-notes","annotation-select","annotation-link","annotation-add","annotation-update","annotation-remove","annotation-go","annotation-reload","annotations-import","annotation-transfer-cancel","annotations-transient","toggle-toc","toggle-search","toggle-bookmarks","toggle-settings","fullscreen","focus-bookmarks","bindings","focus-settings","cycle-focus","next","previous","back","chapter","next-chapter","previous-chapter","toc","focus-toc","search","locate","preview-location","source-position","enable-input","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search","context-menu","preview-width","preview-chapter"}.contains(Action)
-            || (Action=="preview-chapter" && !work_->sourceLines_)
-            || QJsonDocument(QJsonArray{Value}).toJson(QJsonDocument::Compact).size()>(Action=="preview-chapter"?512*1024:16384))return false;
+        // Chapter text of an editing preview has no transport limit: a request above one pipe frame
+        // travels through a section (DocumentWebProcess::Exchange). Other actions stay small.
+        const bool Source=Action=="preview-chapter" || Action=="preview-edit";
+        if(!work_ || closed_ || failed_ || !bound_ || !QStringList{"toggle-notes","focus-notes","annotation-select","annotation-link","annotation-add","annotation-update","annotation-remove","annotation-go","annotation-reload","annotations-import","annotation-transfer-cancel","annotations-transient","toggle-toc","toggle-search","toggle-bookmarks","toggle-settings","fullscreen","focus-bookmarks","bindings","focus-settings","cycle-focus","next","previous","back","chapter","next-chapter","previous-chapter","toc","focus-toc","search","locate","preview-location","source-position","enable-input","bookmark-add","bookmark-remove","image","footnote","close-popup","focus-search","context-menu","preview-width","preview-chapter","preview-edit"}.contains(Action)
+            || (Source && (!work_->sourceLines_ || Value.toObject()[Action=="preview-chapter"?"text":"inserted"].toString().size()>epub::InputLimit/3))
+            || (!Source && QJsonDocument(QJsonArray{Value}).toJson(QJsonDocument::Compact).size()>16384))return false;
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready" || work_->settingsRequests_.size()>=16)return false;
         work_->settingsRequests_.push_back({{"kind","reader-action"},{"action",Action},{"value",Value.isUndefined()?QJsonValue(QJsonValue::Null):Value}});work_->wake_.notify_one();
         if(Action=="bindings" && Value.isObject())bindings_=Value.toObject();
@@ -304,6 +313,16 @@ namespace hc::document
         // Only the newest target matters; an unsent older one is replaced rather than queued behind reader commands.
         std::lock_guard Lock(work_->mutex_);if(work_->state_["status"]!="ready")return false;
         work_->sourceScroll_=Value;work_->wake_.notify_one();return true;
+    }
+    qint64 EpubProcessView::Reload(QByteArray Bytes, const QJsonObject& Position)
+    {
+        if(!work_ || closed_ || failed_ || !bound_ || !loaded_ || !work_->sourceLines_ || Bytes.isEmpty() || Bytes.size() > epub::InputLimit) return 0;
+        std::lock_guard Lock(work_->mutex_);
+        if(work_->state_["status"] != "ready") return 0;
+        const auto Serial = ++work_->reloadSerial_;
+        work_->reload_ = Work::ReloadRequest{std::move(Bytes), Position, Serial};
+        work_->reloadState_ = {{"serial", Serial}, {"status", "sending"}};
+        work_->wake_.notify_one(); return Serial;
     }
     QJsonObject EpubProcessView::ViewState() const
     {
@@ -461,8 +480,12 @@ namespace hc::document
                     {std::lock_guard Lock(State->mutex_);if(DocumentReady && !State->settingsRequests_.empty()){Settings=std::move(State->settingsRequests_.front());State->settingsRequests_.pop_front();}}
                     if(!Settings.isEmpty()) {
                         Settings["protocolVersion"]=1;Settings["documentId"]=Id;Settings["generation"]=State->generation_;
-                        QByteArray Reply;
-                        if(!Owner->Exchange(QJsonDocument(Settings).toJson(QJsonDocument::Compact),Reply,5000,Error)){Failure=Error.code_;return;}
+                        QByteArray Reply;const WebProcessIdentity Identity{Id,State->generation_};
+                        if(!Owner->Exchange(QJsonDocument(Settings).toJson(QJsonDocument::Compact),Reply,5000,Error,&Identity)) {
+                            // A request refused before sending (too large for any transport) fails alone.
+                            if(!Error.kept_){Failure=Error.code_;return;}
+                            std::lock_guard Lock(State->mutex_);State->settingsResult_={{"action",Settings["action"]},{"error",Error.code_}};
+                        } else {
                         QJsonParseError SettingsError;const auto SettingsDocument=QJsonDocument::fromJson(Reply,&SettingsError);
                         auto Result=SettingsDocument.object();
                         if(SettingsError.error!=QJsonParseError::NoError || !SettingsDocument.isObject()
@@ -470,6 +493,26 @@ namespace hc::document
                             || Result["generation"]!=QJsonValue(State->generation_)) {Failure="epub-settings-reply-identity";return;}
                         Result["action"]=Settings["action"];
                         {std::lock_guard Lock(State->mutex_);State->settingsResult_=Result;}
+                        }
+                    }
+                    std::optional<Work::ReloadRequest> Reload;
+                    {std::lock_guard Lock(State->mutex_);if(DocumentReady && State->reload_){Reload=std::move(State->reload_);State->reload_.reset();}}
+                    if(Reload) {
+                        // The helper maps, checks and opens the copy off its GUI thread; this side keeps no handle.
+                        QJsonObject Outcome{{"serial",Reload->serial_},{"status","preparing"}};
+                        const auto Sha=QString::fromLatin1(QCryptographicHash::hash(Reload->bytes_,QCryptographicHash::Sha256).toHex());
+                        const auto Handle=Owner->SharePayload(Reload->bytes_,Error);
+                        if(Handle.isEmpty())Outcome={{"serial",Reload->serial_},{"status","failed"},{"error",Error.code_}};
+                        else {
+                            const auto Position=Reload->position_;
+                            const auto Message=QJsonDocument(QJsonObject{{"protocolVersion",1},{"documentId",Id},{"generation",State->generation_},{"kind","reload"},
+                                {"reloadSerial",Reload->serial_},{"byteLength",Reload->bytes_.size()},{"sha256",Sha},{"handle",Handle},
+                                {"chapter",Position["chapter"].toInt(-1)},{"locator",Position["locator"].toString()},{"scroll",Position["scroll"].toObject()}}).toJson(QJsonDocument::Compact);
+                            QByteArray Reply;if(!Owner->Exchange(Message,Reply,5000,Error)){Failure=Error.code_;return;}
+                            const auto Result=QJsonDocument::fromJson(Reply).object();
+                            if(!Result["accepted"].toBool())Outcome={{"serial",Reload->serial_},{"status","failed"},{"error",Result["error"].toString("epub-reload-rejected")}};
+                        }
+                        std::lock_guard Lock(State->mutex_);if(State->reloadState_["serial"].toInteger()==Reload->serial_)State->reloadState_=Outcome;
                     }
                     QByteArray Bytes;
                     if(!Owner->Exchange(Request, Bytes, 5000, Error)) { Failure = Error.code_; return; }
@@ -520,12 +563,18 @@ namespace hc::document
                     }
                     View["focusAcknowledged"] = FocusAcknowledged;
                     View["processId"] = int(State->snapshot_.processId_);
+                    {
+                        // The helper reports the newest reload it received; a newer one may still be on its way.
+                        std::lock_guard Lock(State->mutex_);const auto Helper=Reply["reload"].toObject();
+                        if(!Helper.isEmpty() && Helper["serial"].toInteger()>=State->reloadState_["serial"].toInteger() && State->reloadState_["status"]!="sending")State->reloadState_=Helper;
+                        if(!State->reloadState_.isEmpty())View["reload"]=State->reloadState_;
+                    }
                     State->Update(std::move(View));
                     if(!DocumentReady && Deadline.hasExpired()) { Failure = "epub-view-load-timeout"; return; }
                     std::unique_lock Lock(State->mutex_);
                     const bool Scrolling=ScrollActive.isValid() && ScrollActive.elapsed()<500;
                     State->wake_.wait_for(Lock,std::chrono::milliseconds(!DocumentReady || Scrolling?(DocumentReady?33:20):100),[&]{
-                        return Cancelled() || State->appearance_!=Applied || (DocumentReady && (!State->settingsRequests_.empty() || State->sourceScroll_.has_value()
+                        return Cancelled() || State->appearance_!=Applied || (DocumentReady && (!State->settingsRequests_.empty() || State->sourceScroll_.has_value() || State->reload_.has_value()
                             || (State->focusRequested_.load() && IsWindowVisible(reinterpret_cast<HWND>(State->parent_)))));
                     });
                 }

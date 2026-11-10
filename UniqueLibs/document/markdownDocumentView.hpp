@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "documentStatusBar.hpp"
 #include "epubLineShifts.hpp"
+#include "documentEditRange.hpp"
 #include <QWidget>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -112,6 +113,10 @@ class MarkdownDocumentView final : public QWidget
     static constexpr int MaxRenderDelayMs = 1500;
     // How long input may hold back a due render.
     static constexpr int MaxInputDeferMs = 2000;
+    // Source bytes up to which edits render by themselves, and up to which the preview renders at all. An edit
+    // sends only its bytes; the renderer still parses the whole text, so larger documents refresh on request.
+    static constexpr qint64 AutoRenderBytes = 8LL * 1024 * 1024;
+    static constexpr qint64 PreviewBytes = 16LL * 1024 * 1024;
     // Delay after an edit: the configured debounce, longer while renders take long.
     int renderDelay() const;
     // Keys queued for this thread, or typed within the configured debounce.
@@ -173,14 +178,22 @@ class MarkdownDocumentView final : public QWidget
     QElapsedTimer lastInput_, deferredSince_, renderClock_, lastSampleSent_;
     int debounceMs_ = 250, outlineDepth_ = 6;
     qint64 lastRenderMs_ = 0;
-    // Input of the last render request. A request with the same text, path and options is not
-    // sent again: the preview already shows it, or is rendering it.
+    // The renderer keeps the text of helperRevision_ (sentText_ here); edits_ are the bytes changed in the
+    // editor since then, so a request carries only those. A request with the same text, path and options
+    // is not sent again: the preview already shows it, or is rendering it.
     QByteArray sentText_;
+    DocumentEditRange edits_;
+    qintptr editsDocument_ = 0;
+    qint64 helperRevision_ = -1, fullRevision_ = -1, editRenders_ = 0, resyncs_ = 0;
+    // The editor's text is the one the renderer holds (an edit undone back to it).
+    bool sourceMatchesSent() const;
     QString sentPath_;
     QJsonObject sentOptions_;
     bool sentValid_ = false;
     QJsonObject options_, previewScroll_, lastSourceAnchor_, diagnostics_, bindings_;
     QJsonArray problemDetails_, headings_;
+    // Top-level blocks the last render built and kept: {reused, built}.
+    QJsonObject renderBlocks_;
     QDateTime renderedAt_;
     RenderState render_ = RenderState::Waiting;
     bool previewActive_ = false;

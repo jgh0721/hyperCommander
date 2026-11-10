@@ -41,7 +41,10 @@ namespace hc::document
         std::uint64_t memoryBytes_ = 0;
         std::uint32_t startupMs_ = 5000;
     };
-    struct WebProcessError { QString code_; std::uint32_t native_ = 0; std::optional<std::uint32_t> childExitCode_; };
+    // kept_: the request was refused before anything was sent; the connection stays usable.
+    struct WebProcessError { QString code_; std::uint32_t native_ = 0; std::optional<std::uint32_t> childExitCode_; bool kept_ = false; };
+    // Document a large request belongs to. The helper checks the envelope and the request inside against it.
+    struct WebProcessIdentity { QString documentId_; qint64 generation_ = 0; };
     struct WebProcessSnapshot
     {
         std::uint32_t processId_ = 0, activeProcesses_ = 0;
@@ -67,11 +70,18 @@ namespace hc::document
             std::unique_ptr<DocumentWebProcess>* PendingRetirement = nullptr,
             const std::function<bool()>& Cancelled = {});
         ~DocumentWebProcess();
-        bool Exchange(const QByteArray& Request, QByteArray& Reply, std::uint32_t TimeoutMs, WebProcessError& Error);
+        // With Identity (EPUB helpers only), a request above HostInlineLimit is written to a read-only
+        // section for this request alone and the frame carries only the envelope. Without it a request
+        // travels inline, up to HostPayloadLimit.
+        bool Exchange(const QByteArray& Request, QByteArray& Reply, std::uint32_t TimeoutMs, WebProcessError& Error,
+            const WebProcessIdentity* Identity = nullptr);
         WebProcessSnapshot Snapshot() const;
         // One read-only EPUB snapshot, duplicated only into this authenticated
         // child. The returned decimal handle is meaningful only in that child.
         QString ShareEpubInput(const QByteArray& Bytes, WebProcessError& Error);
+        // A read-only copy for one request (a preview reload). The section lives as long as the
+        // helper's handle; this side keeps none. The decimal handle is meaningful only in the child.
+        QString SharePayload(const QByteArray& Bytes, WebProcessError& Error);
         // False retains the Job and runtime leases; retry until retirement is proved.
         bool Close(std::uint32_t TimeoutMs = 5000);
         DocumentWebProcess(const DocumentWebProcess&) = delete;

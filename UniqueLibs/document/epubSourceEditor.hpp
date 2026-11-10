@@ -5,6 +5,7 @@
 #include "commonLibs/storage/storage.hpp"
 #include "documentWebProcess.hpp"
 #include "epubLineShifts.hpp"
+#include "documentEditRange.hpp"
 #include "commonLibs/document/epub/epubSourceMap.hpp"
 #include "documentStatusBar.hpp"
 #include "documentStorageAdapter.hpp"
@@ -155,6 +156,23 @@ private:
     void suspendInactivePreview();
     QMap<QString,QByteArray> previewChanges()const;
     bool patchPreview();void finishPreviewPatch();
+    // The helper keeps the text of each chapter it was sent (previewSource in HyperEpubWeb). Per chapter:
+    // the revision it accepted and the buffer edits since then, so a patch carries only the changed bytes.
+    struct PreviewSync {qint64 revision_=-1;qintptr document_=0;DocumentEditRange range_;};
+    QHash<QString,PreviewSync> previewSync_;const EpubProcessView* previewSyncView_=nullptr;
+    qint64 previewSourceRevision_=0,previewPatchRevision_=-1,previewPatchEdits_=0;QString previewPatchPath_;
+    void previewSourceEdited(qint64 Position,qint64 Removed,qint64 Inserted);
+    // After a patch with no edit since, the helper's text is compared with the buffer off the GUI thread.
+    void verifyPreviewSource(const QString& Path,qint64 Revision,const QString& Sha256);
+    QFutureWatcher<QByteArray> previewVerify_;QString previewVerifyPath_,previewVerifySha_;qint64 previewVerifyRevision_=-1,previewResyncs_=0;
+    // A chapter the helper found invalid: the preview waits for the next edit instead of exporting the book.
+    QByteArray previewPatchInvalid_;
+    // A new export opened in the shown preview's helper, replacing its reader (EpubProcessView::Reload).
+    bool reloadPreview(const QByteArray& Bytes);void finishPreviewReload();
+    qint64 previewReloadSerial_=0,previewReloadRuns_=0;bool previewReloadPending_=false;QByteArray previewReloadToken_;
+    QMap<QString,QByteArray> previewReloadChanges_;QString previewReloadEdition_;
+    // Since the last reload began or took over: a focus loss then is repaired like a candidate's.
+    QElapsedTimer previewReloadFocus_;
     QMap<QString,QByteArray> previewChanges_,previewWorkChanges_,previewCandidateChanges_,previewPatchChanges_;
     QString previewEdition_,previewWorkEdition_,previewCandidateEdition_;
     QByteArray previewPatchToken_,previewPatchRejected_;

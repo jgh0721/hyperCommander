@@ -22,6 +22,10 @@ namespace hc::document
         bool ReaderAction(const QString& Action,const QJsonValue& Value={});
         // Latest-wins scroll target {chapter, line, ratio, end, serial}; a newer request replaces one not yet sent.
         bool RequestSourceScroll(const QJsonObject& Value);
+        // Editing previews: opens Bytes (a new export of the same book) in this helper and replaces the shown
+        // reader once it reached Position {chapter, locator, scroll}. Returns the reload serial, 0 when refused.
+        // ViewState()["reload"] = {serial, status: preparing|loading|ready|failed, error}.
+        qint64 Reload(QByteArray Bytes, const QJsonObject& Position);
         QJsonObject ViewState() const;
         bool IsLoaded() const { return loaded_; }
         // Shortcut bindings last sent to the reader, for the key text of host menus.

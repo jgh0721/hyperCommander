@@ -3,8 +3,8 @@
   "files": [
     {
       "path": "web/bundle.js",
-      "bytes": 3277680,
-      "sha256": "d9941a78821093ed1b580ee6ca08d33cecc77aa84041ee0c89ef2fb6ac88aacf"
+      "bytes": 3281035,
+      "sha256": "ac61ecf4b583a619b720714a14c9794cfa75ffd930ece410c33bb6d07c9247fa"
     },
     {
       "path": "web/bundle.js.LEGAL.txt",
@@ -318,8 +318,8 @@
     },
     {
       "path": "web/renderer.js",
-      "bytes": 32364,
-      "sha256": "cd5462b2e117cc8c0632fc90a7f29354fc9aca961f07c0f16919b69c6195afc2"
+      "bytes": 40281,
+      "sha256": "156197e96c6d57d28ca8c758de90bec87fa826df7aa58a59c3f3ce4e33779ba7"
     },
     {
       "path": "web/shell.html",

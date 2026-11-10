@@ -437,16 +437,49 @@ namespace hc::document
         S->authenticated_=true;S->startupMetrics_["launchHandshakeMs"]=StartupClock.elapsed()-LaunchStart;S->startupMetrics_["totalMs"]=StartupClock.elapsed();
         return std::unique_ptr<DocumentWebProcess>(new DocumentWebProcess(std::move(S)));
     }
-    bool DocumentWebProcess::Exchange(const QByteArray& Request,QByteArray& Reply,std::uint32_t TimeoutMs,WebProcessError& Error)
+    namespace
+    {
+        // Writes Bytes to a new section and duplicates a read-only handle into Process. The child's
+        // handle keeps the section alive; the owner's closes on return, so nothing accumulates here.
+        QString shareSection(HANDLE Process,const QByteArray& Bytes,WebProcessError& Error)
+        {
+            Handle Mapping;
+            const auto Size=quint64(Bytes.size());
+            Mapping.value_=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,DWORD(Size>>32),DWORD(Size),nullptr);
+            if(!Mapping.Valid()) { Error={"web-payload-create",GetLastError()}; return {}; }
+            auto* View=MapViewOfFile(Mapping.value_,FILE_MAP_WRITE,0,0,SIZE_T(Size));
+            if(!View) { Error={"web-payload-view",GetLastError()}; return {}; }
+            memcpy(View,Bytes.constData(),size_t(Size)); UnmapViewOfFile(View);
+            HANDLE Remote=nullptr;
+            if(!DuplicateHandle(GetCurrentProcess(),Mapping.value_,Process,&Remote,FILE_MAP_READ,FALSE,0)) { Error={"web-payload-duplicate",GetLastError()}; return {}; }
+            return QString::number(quintptr(Remote));
+        }
+    }
+    bool DocumentWebProcess::Exchange(const QByteArray& Request,QByteArray& Reply,std::uint32_t TimeoutMs,WebProcessError& Error,const WebProcessIdentity* Identity)
     {
         auto& S=*state_; std::lock_guard Lock(S.mutex_); Error={}; Reply.clear();
         if(!S.authenticated_ || S.closed_) { Error.code_="web-owner-closed"; return false; }
-        if(Request.size()>HostPayloadLimit || !TimeoutMs || TimeoutMs>30000) { Error.code_="web-owner-request-budget"; return false; }
+        const auto Refuse=[&](const char* Code) { Error.code_=QString::fromLatin1(Code); Error.kept_=true; return false; };
+        if(!TimeoutMs || TimeoutMs>30000) return Refuse("web-owner-request-budget");
         if(S.sequence_==UINT64_MAX) { S.close(); Error.code_="web-owner-sequence-exhausted"; return false; }
-        HostFrame Frame; Frame.connection_=S.connection_; Frame.requestId_=++S.sequence_; Frame.length_=std::uint32_t(Request.size());
+        // A chapter of an editing preview can exceed one frame. It goes through a section for this
+        // request alone: the envelope names the request id, document and digest the helper checks.
+        // Requests without an identity (the chunked input transfer) keep the inline frame.
+        QByteArray Envelope;
+        if(Request.size()>HostInlineLimit && Identity) {
+            if(!S.epub_ || Identity->documentId_.isEmpty() || quint64(Request.size())>HostEnvelopeLimit) return Refuse("web-owner-request-budget");
+            const auto Remote=shareSection(S.process_.value_,Request,Error);
+            if(Remote.isEmpty()) { Error.kept_=true; return false; }
+            Envelope=QJsonDocument(QJsonObject{{"protocolVersion",1},{"kind","payload"},{"requestId",qint64(S.sequence_+1)},
+                {"documentId",Identity->documentId_},{"generation",Identity->generation_},{"byteLength",Request.size()},
+                {"sha256",QString::fromLatin1(QCryptographicHash::hash(Request,QCryptographicHash::Sha256).toHex())},{"handle",Remote}}).toJson(QJsonDocument::Compact);
+        }
+        const auto& Payload=Envelope.isEmpty()?Request:Envelope;
+        if(Payload.size()>HostPayloadLimit) return Refuse("web-owner-request-budget");
+        HostFrame Frame; Frame.connection_=S.connection_; Frame.requestId_=++S.sequence_; Frame.length_=std::uint32_t(Payload.size());
         const auto Deadline=GetTickCount64()+TimeoutMs; HostFrame Response;
         bool Ok=Transfer(S.pipe_.value_,S.process_.value_,&Frame,sizeof(Frame),true,Deadline)
-            && Transfer(S.pipe_.value_,S.process_.value_,const_cast<char*>(Request.constData()),Frame.length_,true,Deadline)
+            && Transfer(S.pipe_.value_,S.process_.value_,const_cast<char*>(Payload.constData()),Frame.length_,true,Deadline)
             && Transfer(S.pipe_.value_,S.process_.value_,&Response,sizeof(Response),false,Deadline)
             && ValidFrame(Response,S.connection_) && Response.type_==2 && Response.requestId_==Frame.requestId_ && !Response.window_;
         if(Ok) { Reply.resize(Response.length_); Ok=Transfer(S.pipe_.value_,S.process_.value_,Reply.data(),Response.length_,false,Deadline); }
@@ -473,6 +506,12 @@ namespace hc::document
         }
         state_->epubShared_=true;
         return QString::number(quintptr(Remote));
+    }
+    QString DocumentWebProcess::SharePayload(const QByteArray& Bytes, WebProcessError& Error)
+    {
+        std::lock_guard Lock(state_->mutex_); Error={};
+        if(!state_->authenticated_ || state_->closed_ || !state_->epub_ || Bytes.isEmpty() || quint64(Bytes.size())>HostEnvelopeLimit) { Error.code_="web-payload-admission"; return {}; }
+        return shareSection(state_->process_.value_,Bytes,Error);
     }
 
     WebProcessSnapshot DocumentWebProcess::Snapshot() const

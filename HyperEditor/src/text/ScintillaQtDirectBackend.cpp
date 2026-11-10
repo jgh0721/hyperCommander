@@ -233,12 +233,13 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 			});
     // Folding, markers and styling are view changes, not document edits.
     connect(m_editor, &ScintillaEditBase::modified, this,
-        [this](Scintilla::ModificationFlags Type, Scintilla::Position Position, Scintilla::Position,
+        [this](Scintilla::ModificationFlags Type, Scintilla::Position Position, Scintilla::Position Length,
                Scintilla::Position LinesAdded, const QByteArray& ChangedText, Scintilla::Position,
                Scintilla::FoldLevel, Scintilla::FoldLevel) {
             const bool Inserted = (static_cast<int>(Type) & SC_MOD_INSERTTEXT) != 0;
             const bool Deleted = (static_cast<int>(Type) & SC_MOD_DELETETEXT) != 0;
             if (!Inserted && !Deleted) return;
+            emit textEdited(qint64(Position), Deleted ? qint64(Length) : 0, Inserted ? qint64(Length) : 0);
             if (characterCount_ >= 0) {
                 const int Delta = static_cast<int>(QString::fromUtf8(ChangedText).size());
                 characterCount_ += Inserted ? Delta : -Delta;

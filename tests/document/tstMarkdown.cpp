@@ -32,6 +32,7 @@
 #include <QTimer>
 #include <QApplication>
 #include <functional>
+#include <random>
 #include <algorithm>
 #include <limits>
 #include <iostream>
@@ -669,6 +670,66 @@ class MarkdownTests final : public QObject
         QTRY_VERIFY_WITH_TIMEOUT(Requested()>First,5000);QTRY_VERIFY_WITH_TIMEOUT(Settled(),30000);
         const auto Second=Requested();
         Md->Refresh(true);QVERIFY(Requested()>Second);QTRY_VERIFY_WITH_TIMEOUT(Settled(),30000);
+    }
+    void editsTravelAsBytes()
+    {
+        // After the first render an edit sends only its UTF-8 bytes, and the renderer rebuilds only the
+        // top-level blocks whose HTML or inner lines changed. Edits at random places, with Korean text,
+        // CRLF-free and multi-byte boundaries, leave the page equal to a whole render of the same text.
+        // A helper that lost its text asks once for the whole text again.
+        {AppSettings S;S.setValue("markdown/autoPreview",true);S.sync();}
+        QTemporaryDir Temp;TextInput I=input();I.path_=Temp.filePath("edits.md");I.text_="# 편집 전송\n\n";
+        for(int N=0;N<240;++N) {
+            if(N%40==0)I.text_+=QString("## 구역 %1\n\n").arg(N/40);
+            if(N%60==30)I.text_+="- 항목 하나\n- 항목 둘\n\n> 인용 문단\n\n";
+            I.text_+=QString("문단 %1 — 바이트만 보내는 편집과 블록 비교를 확인하는 한국어 문장입니다. \u2603\n\n").arg(N);
+        }
+        I.bytes_=I.text_.toUtf8();DocumentViewPane Pane;Pane.resize(1200,800);QVERIFY(Pane.Load(I,true,true));Pane.show();
+        QVERIFY(Pane.RunViewCommand("markdown.split"));
+        SyncProbe Probe(Pane);QVERIFY(Probe.valid());auto* Md=Probe.md_;auto* Backend=Probe.backend_;
+        const auto Settled=[&]{return Md->State()["renderedRevision"].toInteger(-2)==Md->State()["revision"].toInteger(-1);};
+        const auto Consistent=[&](const char* Step){
+            const auto Page=Probe.measure({{"page",true}})["page"].toObject();
+            if(Page["lines"].toBool() && Page["text"].toBool())return true;
+            qWarning().noquote()<<Step<<QString::fromUtf8(QJsonDocument(Page).toJson(QJsonDocument::Compact));return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Settled(),30000);QVERIFY(Consistent("first"));
+        const auto Edits=Md->State()["editRenders"].toInteger();
+        // One paragraph in the middle: one block built, the others kept.
+        const auto Middle=QByteArray(I.text_.left(I.text_.indexOf("문단 120 ")).toUtf8()).size();
+        Backend->Send(SCI_INSERTTEXT,quintptr(Middle),reinterpret_cast<qintptr>("수정 "));
+        QTRY_VERIFY_WITH_TIMEOUT(Settled(),30000);
+        QVERIFY(Md->State()["editRenders"].toInteger()>Edits);
+        const auto Blocks=Md->State()["blocks"].toObject();
+        QVERIFY2(Blocks["built"].toInt()==1 && Blocks["reused"].toInt()>200,qPrintable(QString::fromUtf8(QJsonDocument(Blocks).toJson(QJsonDocument::Compact))));
+        QVERIFY(Consistent("middle"));
+        // A new line near the top moves every later block by one line without building them again.
+        Backend->Send(SCI_INSERTTEXT,quintptr(QByteArray("# 편집 전송\n").size()),reinterpret_cast<qintptr>("\n"));
+        QTRY_VERIFY_WITH_TIMEOUT(Settled(),30000);
+        QVERIFY(Md->State()["blocks"].toObject()["built"].toInt()<=1);QVERIFY(Consistent("shift"));
+        // Random insertions and deletions at character boundaries, several per render.
+        std::mt19937 Random(20261110);
+        for(int Round=0;Round<12;++Round) {
+            for(int Step=0;Step<4;++Step) {
+                const auto Length=qint64(Backend->Send(SCI_GETLENGTH));
+                const auto At=qint64(Backend->Send(SCI_POSITIONBEFORE,quintptr(Random()%quint32(Length+1))));
+                if(Random()%3==0) {
+                    auto End=At;for(int N=int(Random()%12);N>0 && End<Length;--N)End=qint64(Backend->Send(SCI_POSITIONAFTER,quintptr(End)));
+                    Backend->Send(SCI_DELETERANGE,quintptr(At),End-At);
+                } else {
+                    static const char* Pieces[]{"가","\n\n## 새 제목\n\n","- 목록\n","**굵게**","\u2603 ","\n> 인용\n\n"};
+                    Backend->Send(SCI_INSERTTEXT,quintptr(At),reinterpret_cast<qintptr>(Pieces[Random()%6]));
+                }
+            }
+            QTRY_VERIFY_WITH_TIMEOUT(Settled(),30000);
+            QVERIFY(Consistent(qPrintable(QString("round %1").arg(Round))));
+        }
+        QCOMPARE(Md->State()["resyncs"].toInteger(),0);
+        // A restarted helper receives the last request, an edit of a text it no longer has.
+        const auto Before=Md->State()["editRenders"].toInteger();
+        Backend->Send(SCI_DOCUMENTEND);Backend->replace("끝");QTRY_VERIFY_WITH_TIMEOUT(Md->State()["editRenders"].toInteger()>Before,5000);
+        Probe.preview_->Restart();
+        QTRY_VERIFY_WITH_TIMEOUT(Md->State()["resyncs"].toInteger()>=1 && Settled(),30000);QVERIFY(Consistent("restart"));
     }
     void viewerEscapeSetting_data()
     {

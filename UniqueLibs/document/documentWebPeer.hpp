@@ -18,6 +18,8 @@ namespace hc::document
         bool Connect(const QString& Pipe, const QByteArray& ConnectionHex,
             std::uint32_t OwnerPid, std::uintptr_t ParentWindow);
         bool Ready(std::uintptr_t ChildWindow, Handler Request, std::function<void()> Disconnected);
+        // Id of the frame the handler is answering; an envelope for a large request must name it.
+        std::uint64_t CurrentRequest() const { return lastRequest_; }
     private:
         void receive();
         void fail();

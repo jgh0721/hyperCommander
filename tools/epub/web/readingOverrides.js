@@ -23,18 +23,39 @@ export function applyReadingOverrides(doc, profile, foreground, background, cust
         record.owned.clear(); record.base.cssText = record.original || "";
     }
     if (!profile.override) return "";
-    const remember = (node, property) => {
+    const remember = rememberer(doc, state);
+    const set = (node, name, value) => { remember(node, name); node.style.removeProperty(name); node.style.setProperty(name, value, "important"); };
+    const nodes = [...doc.body.querySelectorAll("*")].filter(textNode);
+    if (nodes.length > 32768) throw Error("Reading override element budget exceeded");
+    for (const node of [doc.documentElement, doc.body]) set(node, "background-color", profile.background && profile.background !== "theme" ? "transparent" : background);
+    styleNodes(nodes, profile, foreground, remember);
+    const error = applyCustomCss(doc, custom, remember, profile.cssForce !== false);
+    for (const [node, record] of state) record.applied = node.getAttribute("style");
+    return error || "";
+}
+// Elements added to a document that already has its overrides (an editing preview's element patch).
+// They join the same state, so the next profile restores them with the rest. Custom CSS is not
+// extended: a chapter with it is patched whole.
+export function extendReadingOverrides(doc, roots, profile, foreground) {
+    const state = states.get(doc);
+    if (!state || !profile.override) return;
+    const remember = rememberer(doc, state);
+    const nodes = roots.flatMap(root => [root, ...root.querySelectorAll("*")]).filter(textNode);
+    styleNodes(nodes, profile, foreground, remember);
+    for (const node of nodes) state.get(node).applied = node.getAttribute("style");
+}
+const textNode = node => node.namespaceURI === "http://www.w3.org/1999/xhtml"
+    && !node.closest("rt, rp, svg, math, img, video, audio, script, style") && (node.matches(textSelector) || node.closest(textSelector));
+function rememberer(doc, state) {
+    return (node, property) => {
         if (!state.has(node)) {
             const original = node.getAttribute("style"); const base = doc.createElementNS("http://www.w3.org/1999/xhtml", "span").style;
             base.cssText = original || ""; state.set(node, { original, base, owned: new Set(), applied: original });
         }
         state.get(node).owned.add(property);
     };
-    const set = (node, name, value) => { remember(node, name); node.style.removeProperty(name); node.style.setProperty(name, value, "important"); };
-    const nodes = [...doc.body.querySelectorAll("*")].filter(node => node.namespaceURI === "http://www.w3.org/1999/xhtml"
-        && !node.closest("rt, rp, svg, math, img, video, audio, script, style") && (node.matches(textSelector) || node.closest(textSelector)));
-    if (nodes.length > 32768) throw Error("Reading override element budget exceeded");
-    for (const node of [doc.documentElement, doc.body]) set(node, "background-color", profile.background && profile.background !== "theme" ? "transparent" : background);
+}
+function styleNodes(nodes, profile, foreground, remember) {
     const values = { "font-family": JSON.stringify(profile.font), "font-size": `${profile.size}px`,
             "line-height": String(profile.line), "letter-spacing": `${profile.letter}em`, "word-spacing": `${profile.word}em`, "text-align": profile.align, color: foreground };
     // Set the reading weight on text blocks. Inline elements inherit it unless
@@ -50,7 +71,4 @@ export function applyReadingOverrides(doc, profile, foreground, background, cust
         for (const name of Object.keys(paragraph ? paragraphValues : block ? blockValues : values)) remember(node, name);
         node.style.cssText += ";" + (paragraph ? paragraphStyle : block ? blockStyle : textStyle);
     }
-    const error = applyCustomCss(doc, custom, remember, profile.cssForce !== false);
-    for (const [node, record] of state) record.applied = node.getAttribute("style");
-    return error || "";
 }

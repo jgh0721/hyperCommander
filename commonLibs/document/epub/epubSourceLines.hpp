@@ -32,11 +32,19 @@ template<class Char, class Visit> bool ScanMarkup(const Char* Data, qsizetype Si
     return true;
 }
 }
-// Chapter patch of an editing preview (host EpubSourceEditor::patchPreview and HyperEpubWeb). A
-// patch replaces the chapter inside the running reader; a refused one rebuilds the preview in a
-// new helper process. The text travels in one reader action of at most 512 KiB JSON.
-inline constexpr qsizetype PreviewPatchUnitLimit = 256 * 1024;      // UTF-16 units of the chapter text
-inline constexpr qsizetype PreviewPatchAnnotatedLimit = 384 * 1024; // UTF-8 bytes with line attributes
+// Element patch of an editing preview (HyperEpubWeb): the top-level elements of <body> that differ
+// between the chapter the reader shows and its new revision. The reader replaces only those and moves
+// the line attributes of the elements after them. valid_ is false when the change is not expressible
+// that way (text or comments directly in <body>, a different <head> or <body> tag, unbalanced markup).
+struct ElementPatch {
+    bool valid_ = false;
+    int from_ = 0, removed_ = 0, inserted_ = 0, blocks_ = 0;   // blocks_: element count of the new body
+    QByteArray html_;         // Annotated markup of the inserted elements, gaps between them included.
+    QByteArray namespaces_;   // xmlns declarations of <html> and <body>, for parsing html_ alone.
+    qint64 shift_ = 0;        // Line change of the elements after the replaced ones.
+};
+// OldSource and NewSource are unannotated chapters; NewAnnotated is AnnotateSourceLines(NewSource).
+ElementPatch DiffBodyElements(const QByteArray& OldSource, const QByteArray& NewSource, const QByteArray& NewAnnotated);
 struct SourceLines {
     QByteArray bytes_;
     QString skipped_;   // Why the original bytes were kept; empty when annotated.

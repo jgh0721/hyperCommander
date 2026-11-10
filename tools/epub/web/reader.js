@@ -7,7 +7,7 @@ import { createReaderTools } from "./readerTools.js";
 import ePub from "epubjs";
 import { compileCss } from "./customCss.js";
 import { buildBookFontCatalog, applyBookFont, activeBookFonts, releaseBookFonts } from "./bookFontCatalog.js";
-import { applyReadingOverrides, releaseReadingOverrides } from "./readingOverrides.js";
+import { applyReadingOverrides, extendReadingOverrides, releaseReadingOverrides } from "./readingOverrides.js";
 import { EpubNavigator, EpubPreferences, Injector } from "@readium/navigator";
 import { Manifest, Publication, HttpFetcher, Locator } from "@readium/shared";
 import { typographyProbe } from "./typographyProbe.js";
@@ -118,30 +118,80 @@ let resizeQueued = false;
 let startupTimings = {};
 let pageTurn = {};
 let previewPatch={serial:0};
+// Editing preview: the newest annotated document of each patched chapter, before EPUB.js hooks and
+// reader styles. EPUB.js loads a patched section from here, and element patches change it in place.
 const previewChapters=new Map();
 async function readResourceText(url,options) {
     const key=new URL(url,root).href.split("#")[0];
-    if(previewChapters.has(key))return previewChapters.get(key);
+    if(previewChapters.has(key))return new XMLSerializer().serializeToString(previewChapters.get(key));
     const response=await fetch(url,options);
     if(!response.ok)throw Error("Resource unavailable");
     return response.text();
 }
+const sourceBlocks=doc=>[...(doc?.body?.children || [])].filter(node=>node.hasAttribute("data-hc-l"));
+// The top-level body elements the helper found changed (DiffBodyElements) replace their old copies in
+// the stored document, EPUB.js's section cache and the frame showing the chapter; the elements after
+// them only move their source lines. Anything unexpected throws, and the helper sends the chapter.
+async function patchElements(section,url,value) {
+    const change=value.elements,stored=previewChapters.get(url),manager=rendition.manager;
+    if(profile.layout!=="scroll" || profile.cssEnabled || rendition._layout?.name==="pre-paginated")throw Error("layout");
+    if(!stored)throw Error("no-base");
+    const parsed=new DOMParser().parseFromString(`<body${change.namespaces}>${change.html}</body>`,"application/xhtml+xml");
+    if(parsed.querySelector("parsererror"))throw Error("invalid-fragment");
+    const fragment=[...parsed.documentElement.childNodes];
+    if(fragment.filter(node=>node.nodeType===Node.ELEMENT_NODE).length!==change.inserted)throw Error("fragment-count");
+    const frames=manager.views.all().filter(view=>view.section?.index===section.index && view.document?.body);
+    if(frames.some(view=>getComputedStyle(view.document.documentElement).writingMode.startsWith("vertical")))throw Error("vertical");
+    const documents=[stored,...(section.document && section.document!==stored?[section.document]:[]),...frames.map(view=>view.document)];
+    // Every copy must hold the revision the helper diffed against; a partial patch would mix revisions.
+    if(documents.some(doc=>sourceBlocks(doc).length!==change.previous))throw Error("block-count");
+    // The first element on screen keeps its place unless it is one of those replaced.
+    const frame=frames[0],container=manager.container,paneTop=container?.getBoundingClientRect().top ?? 0;
+    const outerTop=node=>frame.iframe.getBoundingClientRect().top+node.getBoundingClientRect().top;
+    const shown=frame?sourceBlocks(frame.document):[],first=shown.findIndex(node=>outerTop(node)+node.getBoundingClientRect().height>paneTop);
+    const keep=first>=0 && (first<change.from || first>=change.from+change.removed)?shown[first]:null,keepTop=keep?outerTop(keep):0;
+    const added=new Map();
+    for(const doc of documents) {
+        const blocks=sourceBlocks(doc),body=doc.body,nodes=fragment.map(node=>doc.importNode(node,true));
+        for(let index=change.from;index<change.from+change.removed;++index)blocks[index].remove();
+        const before=blocks[change.from+change.removed] || null;let after=before?null:blocks[change.from-1] || null;
+        for(const node of nodes) {
+            if(before)body.insertBefore(node,before);
+            else if(after){after.after(node);after=node;}
+            else{body.prepend(node);after=node;}
+        }
+        if(change.shift)for(const block of blocks.slice(change.from+change.removed))for(const node of [block,...block.querySelectorAll("[data-hc-l]")]) {
+            node.setAttribute("data-hc-l",String(Number(node.getAttribute("data-hc-l"))+change.shift));
+            if(node.hasAttribute("data-hc-e"))node.setAttribute("data-hc-e",String(Number(node.getAttribute("data-hc-e"))+change.shift));
+        }
+        added.set(doc,nodes.filter(node=>node.nodeType===Node.ELEMENT_NODE));
+    }
+    if(!frames.length)return "stored";
+    for(const view of frames){applyDocumentNodes(view.document,added.get(view.document));view.expand();}
+    tools.previewScroll.invalidate();
+    // Without a source position, the element above the change keeps its place on screen.
+    if(keep?.isConnected && container)container.scrollTop+=outerTop(keep)-keepTop;
+    await settleFrame();
+    if(value.scroll?.serial){tools.previewScroll.invalidate();tools.previewScroll.apply(value.scroll);pendingScroll=null;await settleFrame();}
+    rendition.reportLocation();
+    return "elements";
+}
 async function patchChapter(value) {
-    const started=performance.now();
+    const started=performance.now(),done=extra=>{previewPatch={serial:value.serial,attempt:value.attempt,ms:performance.now()-started,...extra};};
     const section=book?.spine.get(value.chapter),manager=rendition?.manager;
-    if(value.error){previewPatch={serial:value.serial,error:value.error};return;}
-    if(!section || publication.spine[value.chapter]?.path!==value.path || !manager
-        || readingLocation().chapterIndex!==value.chapter){previewPatch={serial:value.serial,error:"preview-full-required"};return;}
+    if(!section || publication.spine[value.chapter]?.path!==value.path || !manager){done({error:"preview-full-required"});return;}
     const url=new URL(section.url,root).href;
+    if(value.elements){try{done({mode:await patchElements(section,url,value)});}catch(error){done({error:"preview-elements: "+String(error?.message || error)});}return;}
+    const doc=new DOMParser().parseFromString(value.text,"application/xhtml+xml");
+    if(doc.querySelector("parsererror")){done({error:"invalid-xml"});return;}
+    // A chapter that is not shown is only stored: EPUB.js loads it from here when it is displayed.
+    if(readingLocation().chapterIndex!==value.chapter){previewChapters.set(url,doc);section.unload();done({mode:"stored"});return;}
     const old=previewChapters.get(url),oldDocument=section.document,oldContents=section.contents,locator=getLocator();
-    const total=[...previewChapters].reduce((n,[key,text])=>n+(key===url?0:text.length*2),value.text.length*2);
-    if(total>4*1024*1024){previewPatch={serial:value.serial,error:"preview-full-required"};return;}
     try {
-        const doc=new DOMParser().parseFromString(value.text,"application/xhtml+xml");
-        if(doc.querySelector("parsererror"))throw Error("invalid-xml");
-        await section.hooks.content.trigger(doc,section);
+        const shown=doc.cloneNode(true);
+        await section.hooks.content.trigger(shown,section);
         // Validation and parsing finish before the last good frame is retired.
-        previewChapters.set(url,value.text);section.document=doc;section.contents=doc.documentElement;
+        previewChapters.set(url,doc);section.document=shown;section.contents=shown.documentElement;
         manager.clear();
         // A CFI can disappear when its element was edited away. Render the
         // section first, then restore only if the old locator still resolves.
@@ -161,12 +211,12 @@ async function patchChapter(value) {
             tools.previewScroll.invalidate();tools.previewScroll.apply(value.scroll);pendingScroll=null;
             await settleFrame();
         }
-        previewPatch={serial:value.serial,ms:performance.now()-started};
+        done({mode:"chapter"});
     } catch(error) {
         if(old===undefined)previewChapters.delete(url);else previewChapters.set(url,old);
         section.document=oldDocument;section.contents=oldContents;
         manager.rollbackTransition();
-        previewPatch={serial:value.serial,error:String(error)};
+        done({error:String(error)});
     }
 }
 // EPUB.js clears in-flight iframe views on automatic window resize. Fixed pixel
@@ -295,6 +345,12 @@ function applyDocument(doc) {
     ` : "";
     style.textContent+="a:focus-visible, img:focus-visible { outline:2px solid currentColor!important; outline-offset:3px; }";
     appliedProfiles.set(doc,profileKey);
+}
+
+// Reader styles for elements an editing preview patch added to an already styled frame (patchElements).
+function applyDocumentNodes(doc,nodes) {
+    const effective=fixedDocument(doc)?{...profile,override:false,cssEnabled:false}:profile;
+    extendReadingOverrides(doc,nodes,effective,profile.textColor || colors[profile.theme][1]);
 }
 
 async function applyProfile(next = {}) {
@@ -511,8 +567,9 @@ async function start(name) {
         window.hcEvidence.stage = "book-ready";
         await book.ready;
         const request=book.request.bind(book);
+        // EPUB.js runs its hooks on what it loads; the stored document stays untouched for later patches.
         book.request=(url,...args)=>previewChapters.has(new URL(url,root).href)
-            ?Promise.resolve(new DOMParser().parseFromString(previewChapters.get(new URL(url,root).href),"application/xhtml+xml"))
+            ?Promise.resolve(previewChapters.get(new URL(url,root).href).cloneNode(true))
             :request(url,...args);
         measured("bookReadyMs");
         renditionSize = { width: Math.max(1, pane.clientWidth), height: Math.max(1, pane.clientHeight) };

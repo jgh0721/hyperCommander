@@ -4,6 +4,7 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/epubProcessView.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
+#include "commonLibs/document/documentHostProtocol.hpp"
 #include "UniqueLibs/document/epubResourceTree.hpp"
 #include <QTreeView>
 #include "commonLibs/document/epub/epubDraftStore.hpp"
@@ -401,6 +402,33 @@ private slots:
             QVERIFY(!Reader.hasError());QCOMPARE(Checked,Lines.elements_);
         }
     }
+    // Element patches (DiffBodyElements): the changed top-level body elements, their annotated markup and the
+    // line move of the elements after them; anything else in <body> or around it needs the whole chapter.
+    void bodyElementDiff_data() {
+        QTest::addColumn<QByteArray>("Old");QTest::addColumn<QByteArray>("New");QTest::addColumn<bool>("Valid");
+        QTest::addColumn<int>("From");QTest::addColumn<int>("Removed");QTest::addColumn<int>("Inserted");QTest::addColumn<qint64>("Shift");QTest::addColumn<QByteArray>("Html");
+        const QByteArray Head="<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\n<body>\n";
+        const QByteArray A="<p>가</p>\n<p>나</p>\n<p>다</p>\n",Tail="</body></html>\n";
+        QTest::newRow("text")<<Head+A+Tail<<Head+"<p>가</p>\n<p>나나</p>\n<p>다</p>\n"+Tail<<true<<1<<1<<1<<qint64(0)<<QByteArray("<p data-hc-l=\"4\">나나</p>");
+        QTest::newRow("split")<<Head+A+Tail<<Head+"<p>가</p>\n<p>나</p>\n<p>둘</p>\n<p>다</p>\n"+Tail<<true<<2<<0<<1<<qint64(1)<<QByteArray("<p data-hc-l=\"5\">둘</p>");
+        QTest::newRow("multi-line")<<Head+A+Tail<<Head+"<p>가</p>\n<p>나\n이어짐</p>\n<p>다</p>\n"+Tail<<true<<1<<1<<1<<qint64(1)<<QByteArray("<p data-hc-l=\"4\" data-hc-e=\"5\">나\n이어짐</p>");
+        QTest::newRow("removed")<<Head+A+Tail<<Head+"<p>가</p>\n<p>다</p>\n"+Tail<<true<<1<<1<<0<<qint64(-1)<<QByteArray();
+        QTest::newRow("gap-only")<<Head+A+Tail<<Head+"<p>가</p>\n\n<p>나</p>\n<p>다</p>\n"+Tail<<true<<1<<0<<0<<qint64(1)<<QByteArray();
+        QTest::newRow("nested")<<Head+"<div><p>가</p><p>나</p></div>\n<p>다</p>\n"+Tail<<Head+"<div><p>가</p><p>나!</p></div>\n<p>다</p>\n"+Tail<<true<<0<<1<<1<<qint64(0)
+            <<QByteArray("<div data-hc-l=\"3\"><p data-hc-l=\"3\">가</p><p data-hc-l=\"3\">나!</p></div>");
+        QTest::newRow("body-text")<<Head+A+Tail<<Head+"<p>가</p>\n글자\n<p>나</p>\n<p>다</p>\n"+Tail<<false<<0<<0<<0<<qint64(0)<<QByteArray();
+        QTest::newRow("head")<<Head+A+Tail<<QByteArray(Head).replace("<title>t</title>","<title>u</title>")+A+Tail<<false<<0<<0<<0<<qint64(0)<<QByteArray();
+        QTest::newRow("comment")<<Head+A+Tail<<Head+"<p>가</p>\n<!-- 메모 -->\n<p>나</p>\n<p>다</p>\n"+Tail<<false<<0<<0<<0<<qint64(0)<<QByteArray();
+        QTest::newRow("unbalanced")<<Head+A+Tail<<Head+"<p>가</p>\n<p>나\n<p>다</p>\n"+Tail<<false<<0<<0<<0<<qint64(0)<<QByteArray();
+    }
+    void bodyElementDiff() {
+        QFETCH(QByteArray,Old);QFETCH(QByteArray,New);QFETCH(bool,Valid);QFETCH(int,From);QFETCH(int,Removed);QFETCH(int,Inserted);QFETCH(qint64,Shift);QFETCH(QByteArray,Html);
+        const auto Annotated=epub::AnnotateSourceLines(New);
+        const auto Patch=epub::DiffBodyElements(Old,New,Annotated.skipped_.isEmpty()?Annotated.bytes_:New);
+        QCOMPARE(Patch.valid_,Valid);if(!Valid)return;
+        QCOMPARE(Patch.from_,From);QCOMPARE(Patch.removed_,Removed);QCOMPARE(Patch.inserted_,Inserted);QCOMPARE(Patch.shift_,Shift);QCOMPARE(Patch.html_,Html);
+        QVERIFY(Patch.namespaces_.contains("xmlns=\"http://www.w3.org/1999/xhtml\"") && Patch.namespaces_.contains("xmlns:epub="));
+    }
     void sourceLineInjectionCost() {
         // A chapter at the editor's 2 MiB limit is annotated well inside one frame budget.
         QByteArray Html="<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\n<body>\n";
@@ -703,17 +731,18 @@ private slots:
             for(int Sample=0;Sample<6;++Sample){QTest::qWait(50);QCOMPARE(Backend->firstVisibleLine(),First);
                 QVERIFY(qAbs(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-Landed)<2);}
         }
-        // The replacement preview is admitted only after it reaches the same
+        // The reader a refresh opens in the same helper takes over only after it reaches the same
         // image position, so refreshing cannot expose the chapter top.
         const auto ImageOffset=previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble();
         const auto ImageFirst=Backend->firstVisibleLine();const auto OldPid=previewPage(*Editor)["processId"].toInteger();
+        const auto Reloads=[&]{return Editor->Snapshot()["preview"].toObject()["performance"].toObject()["reloads"].toInteger();};const auto OldReloads=Reloads();
         Editor->findChild<QAction*>("epubPreviewRefresh")->trigger();
         QElapsedTimer Refresh;Refresh.start();
-        while(Refresh.elapsed()<30000 && (previewPage(*Editor)["processId"].toInteger()==OldPid || Editor->Snapshot()["preview"].toObject()["busy"].toBool())){
+        while(Refresh.elapsed()<30000 && (Reloads()==OldReloads || Editor->Snapshot()["preview"].toObject()["busy"].toBool())){
             QTest::qWait(50);QCOMPARE(Backend->firstVisibleLine(),ImageFirst);
             QVERIFY(qAbs(previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble()-ImageOffset)<3);
         }
-        QVERIFY(Refresh.elapsed()<30000);
+        QVERIFY(Refresh.elapsed()<30000);QCOMPARE(previewPage(*Editor)["processId"].toInteger(),OldPid);
         const int Before=Backend->firstVisibleLine();QVERIFY(wheelOver(Window,Input,2));QTRY_VERIFY_WITH_TIMEOUT(Backend->firstVisibleLine()>Before && Applied(),5000);
         QTest::qWait(600);
         const double Scrolled=previewPage(*Editor)["scrollState"].toObject()["offset"].toDouble();
@@ -821,10 +850,13 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(Editor.IsValidated(),15000);
             const auto Output=Editor.Export(Temp.filePath(QString("copy-%1.epub").arg(Pass)));QVERIFY(Output.HasValue());
             Editor.Commit(Temp.filePath(QString("copy-%1.epub").arg(Pass)),Output.Value());
+            // The explicit refresh reloads the book inside the running helper; no process starts.
             const auto Pid=Editor.PreviewView()->ViewState()["processId"].toInteger();
+            const auto Reloads=Editor.Snapshot()["preview"].toObject()["performance"].toObject()["reloads"].toInteger();
             Editor.findChild<QAction*>("epubPreviewRefresh")->trigger();
-            QTRY_VERIFY_WITH_TIMEOUT(Editor.PreviewView() && Editor.PreviewView()->ViewState()["processId"].toInteger()!=Pid
-                && Editor.Snapshot()["preview"].toObject()["current"].toBool(),60000);
+            QTRY_VERIFY_WITH_TIMEOUT(Editor.PreviewView() && Editor.Snapshot()["preview"].toObject()["performance"].toObject()["reloads"].toInteger()>Reloads
+                && Editor.Snapshot()["preview"].toObject()["current"].toBool() && !Editor.Snapshot()["preview"].toObject()["busy"].toBool(),60000);
+            QCOMPARE(Editor.PreviewView()->ViewState()["processId"].toInteger(),Pid);
             QTRY_VERIFY_WITH_TIMEOUT(Input->hasFocus(),3000);
             QTRY_COMPARE_WITH_TIMEOUT(GetFocus(),reinterpret_cast<HWND>(Input->effectiveWinId()),3000);
             // Send real keyboard input without clicking or repairing focus in the test.
@@ -868,15 +900,16 @@ private slots:
         QCOMPARE(Preview()["token"].toString(),Good);QCOMPARE(Editor.PreviewView()->ViewState()["processId"].toInteger(),Pid);
         QTRY_VERIFY_WITH_TIMEOUT(Editor.RequestPreviewClose(),30000);
     }
-    // A Korean chapter over the former 64 KiB cut (3 UTF-8 bytes a character) is patched in the
-    // running reader: no export and no new helper process, whose start and teardown stalled typing.
+    // A Korean chapter larger than one pipe frame (768 KiB) is patched in the running reader: the first
+    // patch travels through a section, later edits carry only the changed bytes, and the reader replaces
+    // only the changed elements. No export and no new helper process, whose start and teardown stalled typing.
     void largeChapterPatchesInPlace() {
         const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");
         QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));epub::EditModel Model;QVERIFY(Model.Load(File.readAll()));
         const auto First=Model.Publication()["spine"].toArray().first().toObject()["path"].toString();
-        QString Body;for(int N=0;N<900;++N)Body+=QStringLiteral("<p>%1 번째 문단입니다. 미리보기는 큰 장도 새 도우미 프로세스 없이 제자리에서 고칩니다.</p>\n").arg(N);
+        QString Body;for(int N=0;N<8000;++N)Body+=QStringLiteral("<p>%1 번째 문단입니다. 미리보기는 큰 장도 새 도우미 프로세스 없이 제자리에서 고칩니다.</p>\n").arg(N);
         const auto Chapter=(QStringLiteral("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Large</title></head><body>\n")+Body+QStringLiteral("</body></html>\n")).toUtf8();
-        QVERIFY(Chapter.size()>96*1024 && Chapter.size()<epub::PreviewPatchAnnotatedLimit-32*1024);
+        QVERIFY(Chapter.size()>qsizetype(hc::document::HostPayloadLimit) && Chapter.size()<2*1024*1024);
         QVERIFY(Model.Replace(First,Chapter).isEmpty());const auto Book=Model.Export();QVERIFY(Book);
         QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());const auto Saved=Temp.filePath("large.epub");QVERIFY(writeBook(Saved,Book.bytes_));
         EpubSourceEditor Editor(Book.bytes_,Saved);Editor.SetRecoveryEnabled(false);Editor.resize(1300,850);Editor.show();QVERIFY(foreground(Editor));
@@ -896,6 +929,18 @@ private slots:
         QCOMPARE(Editor.Snapshot()["exportWork"].toObject()["runs"].toInteger(),Exports);
         QVERIFY(Preview()["performance"].toObject()["patchRuns"].toInteger()>Patches);
         QVERIFY(Editor.PreviewView()->ReaderAction("search","HC_LARGE_CHAPTER_PATCH"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Editor.PreviewView()->ViewState()["readerSearch"].toObject()["hits"].toArray().isEmpty(),15000);
+        // A small edit in the middle: the changed bytes travel, and one paragraph is replaced in the frame.
+        const auto Edits=Preview()["performance"].toObject()["editPatches"].toInteger();
+        const auto Middle=sourceText(Editor).indexOf(QStringLiteral("<p>4000 번째"));QVERIFY(Middle>0);
+        QVERIFY(setSourceCursor(Editor,int(Middle)+3));QVERIFY(insertSource(Editor,QStringLiteral("HC_ELEMENT_PATCH ")));
+        QTRY_VERIFY2_WITH_TIMEOUT(Preview()["current"].toBool() && !Preview()["busy"].toBool(),qPrintable(QString::fromUtf8(QJsonDocument(Preview()).toJson(QJsonDocument::Compact)).left(600)),30000);
+        QVERIFY(Preview()["performance"].toObject()["editPatches"].toInteger()>Edits);
+        const auto Patch=Editor.PreviewView()->ViewState()["previewPatch"].toObject();
+        QVERIFY2(Patch["mode"]=="elements" && Patch["error"].isUndefined(),qPrintable(QString::fromUtf8(QJsonDocument(Patch).toJson(QJsonDocument::Compact))));
+        QCOMPARE(Editor.PreviewView()->ViewState()["processId"].toInteger(),Pid);
+        QCOMPARE(Editor.Snapshot()["exportWork"].toObject()["runs"].toInteger(),Exports);
+        QVERIFY(Editor.PreviewView()->ReaderAction("search","HC_ELEMENT_PATCH"));
         QTRY_VERIFY_WITH_TIMEOUT(!Editor.PreviewView()->ViewState()["readerSearch"].toObject()["hits"].toArray().isEmpty(),15000);
     }
     void sourceTheme() {
@@ -1335,7 +1380,13 @@ private slots:
         QVERIFY(foreground(Window));Other.hide();QVERIFY2(BackgroundPreserved,"A passive EPUB preview activated its owner over the selected window");
         QImage Image(4,4,QImage::Format_RGB32);Image.fill(Qt::blue);QByteArray Pixels;QBuffer Buffer(&Pixels);QVERIFY(Buffer.open(QIODevice::WriteOnly));QVERIFY(Image.save(&Buffer,"PNG"));QVERIFY(!Window.Handle({{"action","epub.edit.replace"},{"documentId",Id},{"resource",Png},{"base64",QString::fromLatin1(Pixels.toBase64())}}).contains("error"));
         const auto HasImage=[&]{for(const auto& Value:Page()["images"].toArray())if(Value.toObject()["naturalWidth"].toInt()==4)return true;return false;};QTRY_VERIFY_WITH_TIMEOUT(Preview()["current"].toBool() && HasImage() && !Preview()["busy"].toBool(),45000);QCOMPARE(Page()["paragraphs"].toArray().first().toObject()["after"].toString(),QString("31px"));QCOMPARE(Editor()["current"].toString(),Png);
-        QVERIFY(selectResource(*Live,First));const auto Stable=Page()["frameId"].toString();QVERIFY(replaceSource(*Live,"<html>unfinished"));QTRY_VERIFY_WITH_TIMEOUT(!Preview()["error"].toString().isEmpty() && !Preview()["busy"].toBool(),15000);QCOMPARE(Page()["frameId"].toString(),Stable);QVERIFY(!Preview()["current"].toBool());QVERIFY(document(Window,Id)["dirty"].toBool());
+        // The chapter shown after the image reload settles before its frame is compared: the editor's
+        // layout around the preview can still move once, and a new size displays the chapter again.
+        QVERIFY(selectResource(*Live,First));QTRY_VERIFY_WITH_TIMEOUT(Page()["chapterIndex"].toInt()==0 && !Page()["readerBusy"].toBool() && !Preview()["busy"].toBool(),15000);
+        {QElapsedTimer Settle,Quiet;Settle.start();Quiet.start();QString Frame=Page()["frameId"].toString();
+         while(Settle.elapsed()<10000 && Quiet.elapsed()<1000){QTest::qWait(50);const auto Now=Page()["frameId"].toString();if(Now!=Frame || Page()["readerBusy"].toBool()){Frame=Now;Quiet.restart();}}
+         QVERIFY(Quiet.elapsed()>=1000);}
+        const auto Stable=Page()["frameId"].toString();QVERIFY(replaceSource(*Live,"<html>unfinished"));QTRY_VERIFY_WITH_TIMEOUT(!Preview()["error"].toString().isEmpty() && !Preview()["busy"].toBool(),15000);QCOMPARE(Page()["frameId"].toString(),Stable);QVERIFY(!Preview()["current"].toBool());QVERIFY(document(Window,Id)["dirty"].toBool());
         QVERIFY(replaceSource(*Live,Html.replace("검증 문단","두 번째 문단")));QTRY_VERIFY_WITH_TIMEOUT(Preview()["current"].toBool() && Page()["text"].toString().contains("두 번째 문단") && !Preview()["busy"].toBool(),45000);
         auto* EditAction=Window.findChild<QAction*>("epubEdit");QVERIFY(EditAction && EditAction->isChecked());EditAction->trigger();QVERIFY(!Editor()["sourceVisible"].toBool());QCOMPARE(View()["epubMode"].toString(),QString("reader"));QVERIFY(View()["readOnly"].toBool());QVERIFY(Window.Handle({{"action","epub.edit.replace"},{"documentId",Id},{"resource",First},{"text",Html}}).contains("error"));QVERIFY(!Window.Handle({{"action","epub.reader.next-chapter"},{"documentId",Id}}).contains("error"));QTRY_VERIFY_WITH_TIMEOUT(Page()["chapterIndex"].toInt()==1 && !Page()["readerBusy"].toBool(),15000);QTRY_COMPARE_WITH_TIMEOUT(Editor()["current"].toString(),Spine[1].toObject()["path"].toString(),15000);EditAction->trigger();QVERIFY(Editor()["sourceVisible"].toBool());
         const auto Evidence=qEnvironmentVariable("HC_EPUB_PREVIEW_OUTPUT");if(!Evidence.isEmpty()){QDir().mkpath(Evidence);for(const auto& Theme:QStringList{"light","dark"}){auto Appearance=Window.ChromeSettings();Appearance["themeMode"]=Theme;QVERIFY(Window.ApplyChromeSettings(Appearance));const QJsonValue Variant=hc::document::epubui::Appearance()["variant"];QTRY_VERIFY_WITH_TIMEOUT(Page()["appearance"].toObject()["variant"]==Variant && !Page()["readerBusy"].toBool(),10000);QCOMPARE(Page()["profile"].toObject()["theme"].toString(),QString("light"));const auto ExpectedWindow=fm::style::ThemeManager::instance().colors().toPalette().color(QPalette::Window).name();QCOMPARE(Page()["chromeWindowColor"].toString(),ExpectedWindow);QCOMPARE(Page()["toolbarWindowColor"].toString(),ExpectedWindow);QTest::qWait(150);const auto Point=Window.mapToGlobal(QPoint{});QVERIFY(Window.screen()->grabWindow(0,Point.x(),Point.y(),Window.width(),Window.height()).save(QDir(Evidence).filePath("preview-"+Theme+".png")));}}

@@ -91,6 +91,52 @@ function scrollCause() {
 addEventListener('focus', () => report({type: 'focus', focused: true}));
 addEventListener('blur', () => report({type: 'focus', focused: false}));
 
+// ---- Source text ---------------------------------------------------------------------------
+// The host sends the whole text once, then the bytes that changed: UTF-8 offsets into the text of
+// the revision it sent before (MarkdownDocumentView::Refresh). An edit that does not fit that text is
+// refused with "resync" and the host sends the whole text again. utf8Marks map byte offsets to
+// UTF-16 indices; the ones before an edit stay valid, later ones are found again when needed.
+let source = '', sourceBytes = 0, sourceRevision = -1, utf8Marks = [{byte: 0, index: 0}];
+const MARK_UNITS = 65536;
+function utf8Length(text) {
+    let bytes = 0;
+    for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        if (c < 0x80) bytes += 1; else if (c < 0x800) bytes += 2;
+        else if (c >= 0xd800 && c < 0xdc00 && i + 1 < text.length) { bytes += 4; i++; } else bytes += 3;
+    }
+    return bytes;
+}
+// UTF-16 index of a UTF-8 byte offset in source; -1 inside a character or past the end.
+function utf16Index(byte) {
+    let low = 0, high = utf8Marks.length - 1;
+    while (low < high) { const middle = (low + high + 1) >> 1; if (utf8Marks[middle].byte <= byte) low = middle; else high = middle - 1; }
+    const frontier = low === utf8Marks.length - 1;
+    let at = utf8Marks[low].byte, index = utf8Marks[low].index;
+    while (at < byte && index < source.length) {
+        const c = source.charCodeAt(index);
+        if (c < 0x80) { at += 1; index += 1; } else if (c < 0x800) { at += 2; index += 1; }
+        else if (c >= 0xd800 && c < 0xdc00 && index + 1 < source.length) { at += 4; index += 2; } else { at += 3; index += 1; }
+        if (frontier && index - utf8Marks[utf8Marks.length - 1].index >= MARK_UNITS) utf8Marks.push({byte: at, index});
+    }
+    return at === byte ? index : -1;
+}
+function acceptSource(request) {
+    if (typeof request.text === 'string') {
+        source = request.text; sourceBytes = utf8Length(source); sourceRevision = request.revision; utf8Marks = [{byte: 0, index: 0}];
+        return true;
+    }
+    const edit = request.edit;
+    if (!edit || edit.base !== sourceRevision || edit.baseLength !== sourceBytes || typeof edit.inserted !== 'string'
+        || !(edit.start >= 0) || !(edit.removed >= 0) || edit.start + edit.removed > sourceBytes) return false;
+    const from = utf16Index(edit.start), to = from < 0 ? -1 : utf16Index(edit.start + edit.removed);
+    if (from < 0 || to < 0) return false;
+    source = source.slice(0, from) + edit.inserted + source.slice(to);
+    sourceBytes += utf8Length(edit.inserted) - edit.removed; sourceRevision = request.revision;
+    while (utf8Marks.length > 1 && utf8Marks[utf8Marks.length - 1].byte > edit.start) utf8Marks.pop();
+    return true;
+}
+
 // ---- Source lines --------------------------------------------------------------------------
 function setSource(text) {
     sourceText = text || ''; lineStarts = [0];
@@ -346,9 +392,24 @@ function emitPosition() {
         progress: max <= 0 ? 100 : Math.round(scrollY / max * 100), heading: h?.textContent || '', headingLine: Number(h?.dataset.line || 0)});
 }
 // Measurements for tests only; nothing here runs unless the host asks.
+// The page against a whole render of the same text: element source lines and text. Diagrams are left out,
+// as the page holds their drawings.
+function pageCheck() {
+    const md = parser(), env = {}, tokens = md.parse(source, env);
+    for (const t of tokens) if (t.map) { t.attrSet('data-line', String(t.map[0] + 1)); t.attrSet('data-end', String(t.map[1] + 1)); }
+    const template = document.createElement('template'); template.innerHTML = md.renderer.render(tokens, md.options, env);
+    const lines = from => [...from.querySelectorAll('[data-line]')].map(e => `${e.tagName}:${e.dataset.line}:${e.dataset.end || ''}`);
+    const text = from => { const copy = document.createElement('div'); copy.append(...[...from.childNodes].map(n => n.cloneNode(true)));
+        copy.querySelectorAll('.mermaid').forEach(e => e.remove()); return copy.textContent.replace(/\s+/g, ' ').trim(); };
+    const expected = lines(template.content), actual = lines(root);
+    const first = expected.findIndex((value, index) => value !== actual[index]);
+    return {lines: first < 0 && expected.length === actual.length, text: text(template.content) === text(root), firstDifference: first,
+        expected: first >= 0 ? expected[first] || '' : '', actual: first >= 0 ? actual[first] || '' : '', revision: sourceRevision, bytes: sourceBytes};
+}
 function diagnostics(request) {
     const result = {type: 'diagnostics', id: request.id ?? 0, viewportHeight: innerHeight, documentHeight: document.documentElement.scrollHeight,
         viewportWidth: document.documentElement.clientWidth, scrollY, tokens: {}, images: {}};
+    if (request.page) result.page = pageCheck();
     if (request.textRows) {
         let rows = 0;
         for (const block of root.querySelectorAll('p,pre code')) {
@@ -372,25 +433,64 @@ function diagnostics(request) {
     }
     report(result);
 }
-function fonts(f={},target=root) {
+// Inner: also the headings and code inside target; a page that kept its blocks only updates its own box.
+function fonts(f={},target=root,inner=true) {
     target.style.fontFamily=f.enabled&&f.mode==='user'?f.bodyFamily:'';
     target.style.fontSize=f.enabled&&f.mode==='user'?`${f.bodySizePt||11}pt`:'';
     target.style.lineHeight=f.enabled&&f.mode!=='document'?String(f.lineHeight||1.7):'';
+    if(!inner)return;
     target.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(e=>e.style.fontFamily=f.enabled&&f.mode!=='document'&&f.headings?target.style.fontFamily:'Segoe UI, Malgun Gothic, sans-serif');
     target.querySelectorAll('pre:not(.mermaid) code, p>code, li>code').forEach(e=>{e.style.fontFamily=f.enabled&&f.mode==='user'?f.codeFamily:'';e.style.fontSize=f.enabled&&f.mode==='user'?`${f.codeSizePt||10}pt`:''});
 }
+// ---- Blocks of the page ----------------------------------------------------------------------
+// The displayed page as top-level blocks: each with its source line, its nodes and a key made of its
+// HTML without source lines and the lines inside it relative to its start. A render parses the whole
+// text, builds only the blocks whose key is new, and moves the line attributes of the others.
+let committed = [], committedOptions = '';
+function topBlocks(tokens) {
+    const out = []; let start = -1;
+    for (let i = 0; i < tokens.length; i++) {
+        if (start < 0) start = i;
+        if (tokens[i].level === 0 && tokens[i].nesting !== 1) { out.push([start, i + 1]); start = -1; }
+    }
+    if (start >= 0) out.push([start, tokens.length]);
+    return out;
+}
+function shiftLines(nodes, delta) {
+    for (const node of nodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        for (const element of [node, ...node.querySelectorAll('[data-line]')]) {
+            if (!element.hasAttribute('data-line')) continue;
+            element.dataset.line = String(Number(element.dataset.line) + delta);
+            if (element.dataset.end) element.dataset.end = String(Number(element.dataset.end) + delta);
+        }
+    }
+}
 async function render(request) {
     const generation=++serial;revision=request.revision;options=request.options||{};
+    const text=source;
     sourceAnchor=Number.isFinite(request.scroll?.line)?request.scroll:null;
     document.documentElement.dataset.theme=options.dark?'dark':'light';
     document.getElementById('base').href=request.baseUrl||'qrc:/markdown/';
-    const md=parser(),tokens=md.parse(request.text,{}),outline=[],slugs=new Map();
+    const md=parser(),env={},tokens=md.parse(text,env),outline=[],slugs=new Map();
     for(let i=0;i<tokens.length;i++){const t=tokens[i];if(t.map){t.attrSet('data-line',String(t.map[0]+1));t.attrSet('data-end',String(t.map[1]+1))}if(t.type==='heading_open'){const title=(tokens[i+1].children||[]).filter(x=>['text','code_inline'].includes(x.type)).map(x=>x.content).join('');const slug=title.trim().toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu,'').replace(/\s+/g,'-')||'heading';const count=slugs.get(slug)||0;slugs.set(slug,count+1);const id=slug+(count?'-'+count:'');t.attrSet('id',id);outline.push({text:title,level:Number(t.tag[1]),line:t.map[0]+1,id});}}
-    // Keep the displayed document intact while asynchronous diagrams and resources settle.
+    // Rendering block by block gives the same HTML as the whole stream: every rule reads only tokens of its own block.
+    const optionsKey=JSON.stringify(options),reuse=optionsKey===committedOptions?committed:[];
+    const parts=topBlocks(tokens).map(([from,to])=>{
+        const slice=tokens.slice(from,to),html=md.renderer.render(slice,md.options,env);
+        const line=(slice.find(t=>t.map)?.map[0] ?? 0)+1;
+        const shape=slice.filter(t=>t.map).map(t=>`${t.map[0]+1-line},${t.map[1]+1-line}`).join(';');
+        return {html,line,key:shape+'\u0000'+html.replace(/ data-(?:line|end)="\d+"/g,''),nodes:null};
+    });
+    let prefix=0;while(prefix<reuse.length && prefix<parts.length && reuse[prefix].key===parts[prefix].key)prefix++;
+    let suffix=0;while(suffix<reuse.length-prefix && suffix<parts.length-prefix && reuse[reuse.length-1-suffix].key===parts[parts.length-1-suffix].key)suffix++;
+    const fresh=parts.slice(prefix,parts.length-suffix);
+    // Keep the displayed document intact while asynchronous diagrams and resources of the new blocks settle.
     const next=document.createElement('main');next.className='markdown-content';next.dataset.previewStaging='true';
     const bounds=root.getBoundingClientRect();
     Object.assign(next.style,{position:'fixed',left:`${bounds.left}px`,top:'0',width:`${bounds.width}px`,visibility:'hidden',pointerEvents:'none'});
-    next.innerHTML=md.renderer.render(tokens,md.options,{});document.body.append(next);
+    for(const part of fresh){const template=document.createElement('template');template.innerHTML=part.html;part.nodes=[...template.content.childNodes];next.append(...part.nodes);}
+    document.body.append(next);
     const deadline=promise=>Promise.race([promise,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Preview resources did not settle')),10000);promise.finally(()=>clearTimeout(timer)).catch(()=>{});})]);
     try {
         next.querySelectorAll('blockquote').forEach(e=>{const p=e.firstElementChild,m=p?.textContent.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/);if(m){e.classList.add('alert');e.dataset.kind=m[1];}});
@@ -410,20 +510,32 @@ async function render(request) {
         // Chromium can suspend animation callbacks in an occluded native preview.
         await new Promise(resolve=>{const timer=setTimeout(resolve,100);requestAnimationFrame(()=>requestAnimationFrame(()=>{clearTimeout(timer);resolve();}));});
         if(generation!==serial)return;
-        // Reuse unchanged top-level nodes, including already rendered diagrams and loaded images.
-        const available=[...root.childNodes];const children=[...next.childNodes].map(node=>{const at=available.findIndex(old=>old.isEqualNode(node));return at<0?node:available.splice(at,1)[0];});
         // Capture the displayed position at commit time: the user may have
         // scrolled while images and diagrams for this revision were loading.
         const previous=scrollY<=1||displayedRevision<0?{line:1,top:true}:previewAnchor();
         suppression=Date.now()+300;
-        root.replaceChildren(...children);fonts(options.previewFonts);
-        setSource(request.text);displayedRevision=revision;collectBlocks();applyScroll(sourceAnchor||previous);
+        // Only the changed blocks leave and enter the page; unchanged ones keep their nodes, diagrams
+        // and loaded images, and those that moved get their new source lines.
+        if(!reuse.length)root.replaceChildren(...fresh.flatMap(part=>part.nodes));
+        else {
+            const before=reuse[reuse.length-suffix]?.nodes.find(node=>node.parentNode===root) || null;
+            for(const part of reuse.slice(prefix,reuse.length-suffix))for(const node of part.nodes)node.remove();
+            for(const part of fresh)for(const node of part.nodes)root.insertBefore(node,before);
+        }
+        for(const [old,part] of [...reuse.slice(0,prefix).map((old,i)=>[old,parts[i]]),...reuse.slice(reuse.length-suffix).map((old,i)=>[old,parts[parts.length-suffix+i]])]) {
+            if(part.line!==old.line)shiftLines(old.nodes,part.line-old.line);
+            part.nodes=old.nodes;
+        }
+        committed=parts;committedOptions=optionsKey;
+        if(reuse.length)fonts(options.previewFonts,root,false);else fonts(options.previewFonts);
+        setSource(text);displayedRevision=revision;collectBlocks();applyScroll(sourceAnchor||previous);
         const details=[...root.querySelectorAll('.problem')].map(e=>({kind:e.classList.contains('mermaid')?'Mermaid':'KaTeX',line:Number(e.closest('[data-line]')?.dataset.line||1),message:e.title||e.textContent}));
-        report({type:'rendered',headings:outline,problems:details.length,details});emitPosition();
+        report({type:'rendered',headings:outline,problems:details.length,details,blocks:{reused:parts.length-fresh.length,built:fresh.length}});emitPosition();
     } catch(error) {if(generation===serial)throw error;} finally {next.remove();}
 }
 function scrollToLine(line,ratio=0.2,end=false){applyScroll({line,ratio,end});}
-window.hcMarkdown={render,scrollToLine,diagnostics:request=>{diagnostics(request);}};
+// Diagnostics and tests render requests as the bridge does: the text, or an edit of the last one.
+window.hcMarkdown={render:request=>acceptSource(request)?render(request):Promise.reject(Error('preview-resync')),scrollToLine,diagnostics:request=>{diagnostics(request);}};
 let scheduled=false;addEventListener('scroll',()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;emitPosition()})});
 addEventListener('resize',layoutChanged);
 document.fonts?.addEventListener?.('loadingdone',layoutChanged);
@@ -452,7 +564,11 @@ if(window.qt)new QWebChannel(qt.webChannelTransport,channel=>{
     bridge=channel.objects.markdown;
     bridge.request.connect(s=>{
         const r=JSON.parse(s);
-        if(r.type==='render')render(r).catch(e=>report({type:'error',message:String(e)}));
+        if(r.type==='render'){
+            // The text changes in arrival order; a render that a newer one supersedes stops early.
+            if(!acceptSource(r)){bridge.report(JSON.stringify({type:'resync',revision:r.revision}));return;}
+            render(r).catch(e=>report({type:'error',message:String(e)}));
+        }
         else if(r.type==='diagnostics')diagnostics(r);
         else if(r.revision!==revision)return;
         else if(r.type==='scroll'){

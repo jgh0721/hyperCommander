@@ -10,6 +10,10 @@ namespace hc::document
     constexpr std::uint32_t HostMagic = 0x30445648;
     constexpr std::uint32_t HostVersion = 2;
     constexpr std::uint32_t HostPayloadLimit = 768 * 1024;
+    // A larger EPUB request travels in a read-only section duplicated into the helper; the frame
+    // carries only a small envelope bound to its request id and document (DocumentWebProcess::Exchange).
+    constexpr std::uint32_t HostInlineLimit = 256 * 1024;
+    constexpr std::uint64_t HostEnvelopeLimit = 64ULL * 1024 * 1024;
     // Large Scintilla loads stay on the GUI owner and are slower in Debug.
     // Control replies get a bounded grace interval distinct from long saves.
     constexpr std::uint32_t HostExchangeTimeoutMs = 10000;

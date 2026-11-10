@@ -113,6 +113,9 @@ signals:
 	void viewportScrolled();
 	// 0-based line of an edit and the lines it added (negative when removed).
 	void linesShifted(int line, int delta);
+	// Byte offset of one insertion or deletion in the document text and its byte length; undo and redo
+	// included. Previews that keep a copy of the text send only what changed (DocumentEditRange).
+	void textEdited(qint64 position, qint64 removed, qint64 inserted);
 };
 
 

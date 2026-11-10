@@ -146,6 +146,23 @@ private slots:
         if (Mode == "approved") {
             QVERIFY2(Owner, qPrintable(Error.code_)); QByteArray Reply;
             QVERIFY(Owner->Exchange("hello", Reply, 1000, Error)); QCOMPARE(Reply, QByteArray("hello"));
+            if(Epub) {
+                // A request above one frame travels through a section; the echo fixture returns the envelope
+                // the frame carried. Refusals before sending keep the connection.
+                const QByteArray Large(qsizetype(HostInlineLimit) + 1, 'x'); const WebProcessIdentity Identity{QString(64, 'a'), 7};
+                // Without an identity it stays inline (the chunked input transfer), up to one frame.
+                QVERIFY(Owner->Exchange(Large, Reply, 1000, Error)); QCOMPARE(Reply, Large);
+                QVERIFY(!Owner->Exchange(QByteArray(qsizetype(HostPayloadLimit) + 1, 'x'), Reply, 1000, Error)); QVERIFY(Error.kept_);
+                QVERIFY2(Owner->Exchange(Large, Reply, 1000, Error, &Identity), qPrintable(Error.code_));
+                const auto Envelope = QJsonDocument::fromJson(Reply).object();
+                QCOMPARE(Envelope["kind"].toString(), QString("payload")); QCOMPARE(Envelope.size(), 8);
+                QCOMPARE(Envelope["byteLength"].toInteger(), Large.size()); QCOMPARE(Envelope["sha256"].toString().toLatin1(), Hash(Large));
+                QCOMPARE(Envelope["documentId"].toString(), Identity.documentId_); QCOMPARE(Envelope["generation"].toInteger(), 7);
+                QCOMPARE(Envelope["requestId"].toInteger(), 3); QVERIFY(Envelope["handle"].toString().toULongLong() > 0);
+                QByteArray Huge(qsizetype(HostEnvelopeLimit) + 1, Qt::Uninitialized);
+                QVERIFY(!Owner->Exchange(Huge, Reply, 1000, Error, &Identity)); QVERIFY(Error.kept_);
+                QVERIFY(Owner->Exchange("hello", Reply, 1000, Error)); QCOMPARE(Reply, QByteArray("hello"));
+            }
             QVERIFY(!Write(Directory.filePath(Inventory), "changed"));
             QVERIFY(!Write(Directory.filePath(BundlePath), "changed"));
             QVERIFY(Owner->Close()); QVERIFY(Write(Directory.filePath(Inventory), Bytes));
