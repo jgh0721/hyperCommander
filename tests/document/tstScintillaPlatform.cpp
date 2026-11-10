@@ -11,6 +11,7 @@
 
 #include <ScintillaEditBase.h>
 #include <Scintilla.h>
+#include <PlatQt.h>
 
 #include "thirdparty/scintilla-qt/PlatQtMetrics.hpp"
 #include "thirdparty/scintilla-qt/PlatQtTextRendering.hpp"
@@ -56,8 +57,64 @@ private slots:
     void                                textMaskCompositionAndScroll_data();
     void                                textMaskCompositionAndScroll();
     void                                textMaskCacheEviction();
+    void                                backgroundFillsCoverDevicePixels_data();
+    void                                backgroundFillsCoverDevicePixels();
 };
 
+void ScintillaTextMetricsTest::backgroundFillsCoverDevicePixels_data()
+{
+    QTest::addColumn<double>("Dpr");
+    QTest::addColumn<bool>("Dark");
+    QTest::addColumn<bool>("Translucent");
+    for (const double Dpr : {1.0, 1.25, 1.5, 1.75, 2.0})
+        for (const bool Dark : {false, true})
+            for (const bool Translucent : {false, true})
+                QTest::newRow(qPrintable(QString("%1-%2-%3").arg(Dpr)
+                    .arg(Dark ? "dark" : "light").arg(Translucent ? "alpha" : "opaque")))
+                    << Dpr << Dark << Translucent;
+}
+
+void ScintillaTextMetricsTest::backgroundFillsCoverDevicePixels()
+{
+    using namespace Scintilla::Internal;
+    QFETCH(double, Dpr);
+    QFETCH(bool, Dark);
+    QFETCH(bool, Translucent);
+    const QColor Background(Dark ? 32 : 255, Dark ? 32 : 255, Dark ? 32 : 255, Translucent ? 128 : 255);
+    const Fill BackgroundFill(ColourRGBA(Background.red(), Background.green(), Background.blue(), Background.alpha()));
+    // These odd logical dimensions put shared edges between device pixels at
+    // fractional scaling. Old frame contents must not leak through the seams.
+    constexpr int Width = 4 * 73;
+    constexpr int Height = 8 * 21;
+    QImage Initial(QSize(qRound(Width * Dpr), qRound(Height * Dpr)), QImage::Format_ARGB32_Premultiplied);
+    Initial.setDevicePixelRatio(Dpr);
+    Initial.fill(QColor(173, 37, 83));
+    QImage Expected = Initial;
+    {
+        QPainter Painter(&Expected);
+        Painter.fillRect(QRectF(0, 0, Width, Height), Background);
+    }
+    for (const bool Aligned : {false, true}) {
+        QImage Actual = Initial;
+        QPainter Painter(&Actual);
+        SurfaceImpl Surface;
+        Surface.Init(&Actual, nullptr);
+        Surface.GetPainter();
+        const auto Hints = Painter.renderHints();
+        QVERIFY(Hints.testFlag(QPainter::Antialiasing));
+        QVERIFY(Hints.testFlag(QPainter::TextAntialiasing));
+        for (int Row = 0; Row < 8; ++Row)
+            for (int Column = 0; Column < 4; ++Column) {
+                const PRectangle Rect(Column * 73, Row * 21, (Column + 1) * 73, (Row + 1) * 21);
+                if (Aligned) Surface.FillRectangleAligned(Rect, BackgroundFill);
+                else Surface.FillRectangle(Rect, BackgroundFill);
+            }
+        QCOMPARE(Painter.renderHints(), Hints);
+        Surface.Release();
+        Painter.end();
+        QCOMPARE(Actual, Expected);
+    }
+}
 void ScintillaTextMetricsTest::textMaskCompositionAndScroll_data()
 {
     QTest::addColumn<bool>("dark");

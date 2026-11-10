@@ -182,8 +182,8 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
 	m_editor->viewport()->setAttribute(Qt::WA_NoSystemBackground);
 	m_editor->setAutoFillBackground(true);
 
-	// Windows DirectWrite 렌더링: 안티앨리어싱 격자 아티팩트 방지
-	m_editor->send(sciMessage(SCI_SETTECHNOLOGY), 4 );
+	// The Qt port uses Qt's font engine. SCI_SETTECHNOLOGY selects a renderer
+	// only in the Win32 port and has no effect here.
 	m_editor->send(sciMessage(SCI_SETBUFFEREDDRAW), 0);
 	m_editor->send(sciMessage(SCI_SETFONTQUALITY),
 		static_cast<sptr_t>(Scintilla::FontQuality::QualityAntialiased));

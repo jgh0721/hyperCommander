@@ -508,7 +508,14 @@ void SurfaceImpl::RectangleFrame(PRectangle rc, Stroke stroke) {
 
 void SurfaceImpl::FillRectangle(PRectangle rc, Fill fill)
 {
-	GetPainter()->fillRect(QRectFFromPRect(rc), QColorFromColourRGBA(fill.colour));
+	QPainter* Painter = GetPainter();
+	// Logical pixel alignment still lands on fractional device pixels at 125/150%.
+	// Antialiased background edges retain old frame pixels and leave a grid between
+	// rows/style runs. Tile backgrounds without edge blending; keep text AA intact.
+	const bool Antialiasing = Painter->testRenderHint(QPainter::Antialiasing);
+	Painter->setRenderHint(QPainter::Antialiasing, false);
+	Painter->fillRect(QRectFFromPRect(rc), QColorFromColourRGBA(fill.colour));
+	Painter->setRenderHint(QPainter::Antialiasing, Antialiasing);
 }
 
 void SurfaceImpl::FillRectangleAligned(PRectangle rc, Fill fill)
