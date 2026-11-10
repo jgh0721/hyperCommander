@@ -793,6 +793,22 @@ private slots:
         QVERIFY(!Session->PreviewChapter("unknown.xhtml",Changed));
         QCOMPARE(Session->ReadValidatedResource(Resource).bytes_,Original.bytes_);
     }
+    // Without real input: a malformed source keeps the last good frame of a running preview, with
+    // the resize wake to the helper and the content-identity Changed guard in place.
+    void previewKeepsFrameOnMalformedSource() {
+        const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");
+        QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        EpubSourceEditor Editor(File.readAll(),Path);Editor.SetRecoveryEnabled(false);Editor.resize(1300,850);Editor.show();QVERIFY(foreground(Editor));
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),15000);Editor.ConfigurePreview(testEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")),0);
+        const auto Preview=[&]{return Editor.Snapshot()["preview"].toObject();};const auto Page=[&]{return Preview()["state"].toObject();};
+        QTRY_VERIFY_WITH_TIMEOUT(Preview()["current"].toBool() && Preview()["ready"].toBool() && !Preview()["busy"].toBool(),60000);
+        epub::EditModel Model;File.seek(0);QVERIFY(Model.Load(File.readAll()));const auto First=Model.Publication()["spine"].toArray().first().toObject()["path"].toString();
+        QVERIFY(selectResource(Editor,First));QTest::qWait(1500);
+        const auto Stable=Page()["frameId"].toString();QVERIFY(!Stable.isEmpty());
+        QVERIFY(replaceSource(Editor,"<html>unfinished"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Preview()["error"].toString().isEmpty() && !Preview()["busy"].toBool(),15000);
+        QCOMPARE(Page()["frameId"].toString(),Stable);
+    }
     void previewSaveFocus() {
         const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");
         QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
@@ -851,6 +867,36 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!Preview()["error"].toString().isEmpty(),30000);
         QCOMPARE(Preview()["token"].toString(),Good);QCOMPARE(Editor.PreviewView()->ViewState()["processId"].toInteger(),Pid);
         QTRY_VERIFY_WITH_TIMEOUT(Editor.RequestPreviewClose(),30000);
+    }
+    // A Korean chapter over the former 64 KiB cut (3 UTF-8 bytes a character) is patched in the
+    // running reader: no export and no new helper process, whose start and teardown stalled typing.
+    void largeChapterPatchesInPlace() {
+        const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");
+        QFile File(Path);QVERIFY(File.open(QIODevice::ReadOnly));epub::EditModel Model;QVERIFY(Model.Load(File.readAll()));
+        const auto First=Model.Publication()["spine"].toArray().first().toObject()["path"].toString();
+        QString Body;for(int N=0;N<900;++N)Body+=QStringLiteral("<p>%1 번째 문단입니다. 미리보기는 큰 장도 새 도우미 프로세스 없이 제자리에서 고칩니다.</p>\n").arg(N);
+        const auto Chapter=(QStringLiteral("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Large</title></head><body>\n")+Body+QStringLiteral("</body></html>\n")).toUtf8();
+        QVERIFY(Chapter.size()>96*1024 && Chapter.size()<epub::PreviewPatchAnnotatedLimit-32*1024);
+        QVERIFY(Model.Replace(First,Chapter).isEmpty());const auto Book=Model.Export();QVERIFY(Book);
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());const auto Saved=Temp.filePath("large.epub");QVERIFY(writeBook(Saved,Book.bytes_));
+        EpubSourceEditor Editor(Book.bytes_,Saved);Editor.SetRecoveryEnabled(false);Editor.resize(1300,850);Editor.show();QVERIFY(foreground(Editor));
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),30000);Editor.ConfigurePreview(testEpubRuntime(qEnvironmentVariable("HC_EPUB_PRODUCT_APPLICATION")),0);
+        const auto ClosePreview=qScopeGuard([&]{QElapsedTimer Timer;Timer.start();while(!Editor.RequestPreviewClose() && Timer.elapsed()<30000)QTest::qWait(50);});
+        const auto Preview=[&]{if(Editor.Snapshot()["preview"].toObject()["waitingForFocus"].toBool())foreground(Editor);return Editor.Snapshot()["preview"].toObject();};
+        QTRY_VERIFY_WITH_TIMEOUT(Preview()["current"].toBool() && !Preview()["busy"].toBool(),60000);
+        QVERIFY(selectResource(Editor,First));
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.PreviewView()->ViewState()["processId"].toInteger()>0 && !Editor.PreviewView()->ViewState()["readerBusy"].toBool(),15000);
+        const auto Pid=Editor.PreviewView()->ViewState()["processId"].toInteger();
+        const auto Exports=Editor.Snapshot()["exportWork"].toObject()["runs"].toInteger();
+        const auto Patches=Preview()["performance"].toObject()["patchRuns"].toInteger();
+        auto Changed=sourceText(Editor);QVERIFY(Changed.toUtf8().size()>64*1024);Changed.replace("</body>","<p>HC_LARGE_CHAPTER_PATCH</p></body>");
+        Editor.SourceInput()->setFocus();QVERIFY(replaceSource(Editor,Changed));
+        QTRY_VERIFY2_WITH_TIMEOUT(Preview()["current"].toBool() && !Preview()["busy"].toBool(),qPrintable(QString::fromUtf8(QJsonDocument(Preview()).toJson(QJsonDocument::Compact)).left(600)),30000);
+        QCOMPARE(Editor.PreviewView()->ViewState()["processId"].toInteger(),Pid);
+        QCOMPARE(Editor.Snapshot()["exportWork"].toObject()["runs"].toInteger(),Exports);
+        QVERIFY(Preview()["performance"].toObject()["patchRuns"].toInteger()>Patches);
+        QVERIFY(Editor.PreviewView()->ReaderAction("search","HC_LARGE_CHAPTER_PATCH"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Editor.PreviewView()->ViewState()["readerSearch"].toObject()["hits"].toArray().isEmpty(),15000);
     }
     void sourceTheme() {
         const auto Path=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Path.isEmpty())QSKIP("Owned EPUB corpus required");

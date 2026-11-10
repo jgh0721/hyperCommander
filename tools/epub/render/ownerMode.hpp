@@ -2,6 +2,7 @@
 #include <QStringList>
 #include <QSize>
 #include <cstdint>
+#include <functional>
 #include <memory>
 namespace hc::epub::poc
 {
@@ -23,6 +24,9 @@ namespace hc::epub::poc
         std::uintptr_t Window() const;
         QSize Size() const;
         bool Refresh(std::uintptr_t Reader = 0);
+        // Runs when the owner posts WebSurfaceResizeMessage after resizing the parent. The owner
+        // never resizes this window from its own thread; the 100 ms parent poll is the fallback.
+        void SetResizeHandler(std::function<void()> Handler);
     private:
         struct State;
         std::unique_ptr<State> state_;

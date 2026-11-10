@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubPackage.hpp"
 #include "epubArchive.hpp"
+#include "epubSourceLines.hpp"
 #include <QSize>
 
 /// Framework headers
@@ -435,7 +436,9 @@ namespace hc::document::epub
     ResourceResult PublicationSession::PreviewChapter(const QString& Path,const QByteArray& Bytes) const
     {
         try {
-            if(Bytes.isEmpty() || Bytes.size()>64*1024) detail::Reject("preview-full-required",Path);
+            // The editor and the helper share this bound (epubSourceLines.hpp): a larger chapter
+            // is rebuilt in a new helper process instead of patched in the running reader.
+            if(Bytes.isEmpty() || Bytes.size()>PreviewPatchAnnotatedLimit) detail::Reject("preview-full-required",Path);
             bool Reflow=false;
             for(const auto& Item:state_->index_.publication_["spine"].toArray())
                 if(Item.toObject()["path"]==Path && Item.toObject()["layout"]=="reflowable")Reflow=true;

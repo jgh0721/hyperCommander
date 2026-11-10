@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "ownerMode.hpp"
+#include "UniqueLibs/document/documentWebProcess.hpp"
 
 /// Platform/framework headers
 #define WIN32_LEAN_AND_MEAN
@@ -13,12 +14,19 @@ namespace hc::epub::poc
     {
         HWND window = nullptr;
         OwnerMode owner;
+        std::function<void()> resize;
         static LRESULT CALLBACK windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
         {
             auto* Self = reinterpret_cast<State*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
             if(Message == WM_NCCREATE) {
                 Self = static_cast<State*>(reinterpret_cast<CREATESTRUCTW*>(LParam)->lpCreateParams);
                 Self->window = Window; SetWindowLongPtrW(Window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(Self));
+            }
+            // A wake only: the size is read from the authenticated parent, never from the message.
+            static const auto ResizeMessage = RegisterWindowMessageW(hc::document::WebSurfaceResizeMessage);
+            if(Self && ResizeMessage && Message == ResizeMessage) {
+                if(Self->resize) Self->resize();
+                return 0;
             }
             if(Message == WM_NCDESTROY && Self) { Self->window = nullptr; SetWindowLongPtrW(Window, GWLP_USERDATA, 0); }
             return DefWindowProcW(Window, Message, WParam, LParam);
@@ -41,6 +49,7 @@ namespace hc::epub::poc
         ShowWindow(state_->window, SW_SHOWNOACTIVATE); return true;
     }
     std::uintptr_t OwnerSurface::Window() const { return reinterpret_cast<std::uintptr_t>(state_->window); }
+    void OwnerSurface::SetResizeHandler(std::function<void()> Handler) { state_->resize = std::move(Handler); }
     QSize OwnerSurface::Size() const
     { RECT Rect{}; return state_->window && GetClientRect(state_->window, &Rect) ? QSize(Rect.right, Rect.bottom) : QSize(); }
     bool OwnerSurface::Refresh(std::uintptr_t Reader)
@@ -87,9 +96,12 @@ namespace hc::epub::poc
         const auto Window = reinterpret_cast<HWND>(Child), Parent = reinterpret_cast<HWND>(Owner.parentWindow);
         DWORD ParentPid = 0, ChildPid = 0;
         GetWindowThreadProcessId(Parent, &ParentPid); GetWindowThreadProcessId(Window, &ChildPid);
-        RECT Rect{};
-        return ParentPid == Owner.processId && ChildPid == GetCurrentProcessId() && GetParent(Window) == Parent
-            && GetClientRect(Parent, &Rect)
-            && SetWindowPos(Window, nullptr, 0, 0, Rect.right, Rect.bottom, SWP_NOACTIVATE | SWP_NOZORDER);
+        RECT Rect{}, Own{};
+        if(ParentPid != Owner.processId || ChildPid != GetCurrentProcessId() || GetParent(Window) != Parent
+            || !GetClientRect(Parent, &Rect) || !GetClientRect(Window, &Own)) return false;
+        // SetWindowPos dispatches layout and paint messages even at the same size; the poll runs
+        // every 100 ms on a thread whose input queue is joined with the owner's while attached.
+        if(Own.right == Rect.right && Own.bottom == Rect.bottom) return true;
+        return SetWindowPos(Window, nullptr, 0, 0, Rect.right, Rect.bottom, SWP_NOACTIVATE | SWP_NOZORDER) != FALSE;
     }
 }

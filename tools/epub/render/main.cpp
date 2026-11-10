@@ -25,6 +25,7 @@
 #include <QtConcurrentRun>
 #include "UniqueLibs/document/documentWebPeer.hpp"
 #include "UniqueLibs/document/documentShortcutRouter.hpp"
+#include "UniqueLibs/document/documentStallTrace.hpp"
 #include <QAbstractSpinBox>
 #include <QAbstractItemView>
 
@@ -601,7 +602,7 @@ namespace
                 const auto Patch=Value.toObject();const auto Path=Patch["path"].toString();
                 const auto Asset=previewAssets_.value("/book/"+Path);
                 if(!editingPreview_ || patchBusy_ || !started_ || Patch.size()!=5 || !Patch["scroll"].isObject()
-                    || !Patch["text"].isString() || Patch["text"].toString().size()>64*1024
+                    || !Patch["text"].isString() || Patch["text"].toString().size()>hc::document::epub::PreviewPatchUnitLimit
                     || Patch["serial"].toInteger(-1)<1 || Patch["chapter"].toInt(-1)<0
                     || !Asset.store || Asset.mime!="application/xhtml+xml")return false;
                 patchBusy_=true;
@@ -616,7 +617,7 @@ namespace
                 Watcher->setFuture(QtConcurrent::run([Session=Asset.store->Session(),Path,Bytes=Patch["text"].toString().toUtf8()] {
                     auto Result=Session->PreviewChapter(Path,Bytes);
                     if(Result){const auto Lines=hc::document::epub::AnnotateSourceLines(Result.bytes_);
-                        if(!Lines.skipped_.isEmpty() || Lines.bytes_.size()>128*1024)return hc::document::epub::ResourceResult{{},"preview-full-required",Path};
+                        if(!Lines.skipped_.isEmpty() || Lines.bytes_.size()>hc::document::epub::PreviewPatchAnnotatedLimit)return hc::document::epub::ResourceResult{{},"preview-full-required",Path};
                         Result.bytes_=Lines.bytes_;}
                     return Result;
                 }));
@@ -922,6 +923,8 @@ int main(int Argc, char** Argv)
     // multi-gigabyte desktop-browser heap. Publisher scripts remain disabled.
     qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--js-flags=--max-old-space-size=64");
     QApplication App(Argc, Argv);
+    // On only when the owner passed HC_UI_STALL_TRACE_CHILD=1; writes under the helper's TEMP.
+    hc::document::DocumentStallTrace::InstallHelper(QStringLiteral("epub"));
     hc::document::DocumentThemeAdapter::Install(App);
     QCommandLineParser Parser; Parser.addHelpOption();
     Parser.addOptions({{{"p", "publication"}, "Prepared P0-B JSON", "path"}, {{"b", "bundle"}, "Verified developer bundle", "directory"},
@@ -953,11 +956,14 @@ int main(int Argc, char** Argv)
 #endif
             if(!Peer.Ready(Surface.Window(), [&Controller](const QByteArray& Request) { return Controller.Control(Request); }, [] { qApp->quit(); }))
                 throw QString("Owner native attachment failed");
-            QTimer ParentTimer;
-            QObject::connect(&ParentTimer, &QTimer::timeout, &Controller, [&Surface, &Controller] {
+            const auto FitParent = [&Surface, &Controller] {
                 if(!Surface.Refresh(Controller.ReaderWindow())) qApp->quit();
                 else Controller.Refresh(Surface.Size());
-            }); ParentTimer.start(100);
+            };
+            // The owner posts a wake after each resize of the parent; the poll is the fallback.
+            Surface.SetResizeHandler(FitParent);
+            QTimer ParentTimer;
+            QObject::connect(&ParentTimer, &QTimer::timeout, &Controller, FitParent); ParentTimer.start(100);
             return App.exec();
         }
 #ifndef HC_EPUB_PRODUCT_HELPER
