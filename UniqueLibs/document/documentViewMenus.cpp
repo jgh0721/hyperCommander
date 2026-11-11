@@ -249,9 +249,8 @@ namespace hc::document
             QObject::connect(Fold->addAction(QObject::tr("전체 펼치기") + QLatin1Char('\t') + KeyText(Bindings, "text.unfoldAll")), &QAction::triggered, Text, [Text] { Text->FoldAll(false); });
             Items << Fold->menuAction();
             auto* Ruler = new QAction(QObject::tr("눈금자"), Owner); Ruler->setCheckable(true); Ruler->setChecked(Text->isRulerVisible());
-            QObject::connect(Ruler, &QAction::triggered, Text, [Text](bool On) {
-                Text->setRulerVisible(On); AppSettings Settings; Settings.setValue("textView/showRuler", On);
-            });
+            QObject::connect(Ruler, &QAction::triggered, Text, &QTextView::setRulerVisible);
+            QObject::connect(Text, &QTextView::statusChanged, Ruler, [Ruler, Text] { const QSignalBlocker Block(Ruler); Ruler->setChecked(Text->isRulerVisible()); });
             Items << Ruler;
             Items << MinimapMenu(Owner, Text, Bindings, "textViewMinimapMenu")->menuAction();
         }

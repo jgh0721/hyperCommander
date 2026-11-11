@@ -852,7 +852,9 @@ void QTextView::setFontRenderingMode(ScintillaEditorSettings::FontRenderingMode 
 
 bool QTextView::isRulerVisible() const
 {
-    return m_ruler && m_ruler->isVisible();
+    // Menus are built before the window is shown and while other document tabs are hidden.
+    // Report the ruler's own visibility preference, independent of its ancestors.
+    return m_ruler && !m_ruler->isHidden();
 }
 
 void QTextView::setRulerVisible(bool visible)
@@ -862,6 +864,7 @@ void QTextView::setRulerVisible(bool visible)
 
     AppSettings settings;
     settings.setValue("textView/showRuler", visible);
+    emit statusChanged();
 }
 
 bool QTextView::isWhitespaceVisible() const

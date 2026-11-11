@@ -435,6 +435,66 @@ private slots:
         QCOMPARE(Backend.Send(SCI_GETANCHOR), qintptr(0));
         QCOMPARE(Backend.text(), Line + QStringLiteral("\r\nnext\r\n"));
     }
+    void rulerMenuFollowsVisibilityPreference_data()
+    {
+        QTest::addColumn<bool>("Hosted");
+        QTest::addColumn<int>("Stored");
+        for (const bool Hosted : {false, true}) {
+            const auto Prefix = Hosted ? QByteArray("viewer-") : QByteArray("editor-");
+            QTest::newRow((Prefix + "default").constData()) << Hosted << -1;
+            QTest::newRow((Prefix + "off").constData()) << Hosted << 0;
+            QTest::newRow((Prefix + "on").constData()) << Hosted << 1;
+        }
+    }
+    void rulerMenuFollowsVisibilityPreference()
+    {
+        QFETCH(bool, Hosted);
+        QFETCH(int, Stored);
+        QTemporaryDir Temp;
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        if (Stored >= 0) { ::AppSettings Settings; Settings.setValue("textView/showRuler", bool(Stored)); }
+        const bool Expected = Stored != 0;
+        const auto Path = Temp.filePath("ruler.txt");
+        Write(Path, "ruler\r\n");
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"), Hosted);
+        QVERIFY(!Window.Handle({{"action", "open"}, {"path", Path}}).contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 15000);
+        auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text);
+        auto* Pane = Window.findChild<DocumentViewPane*>(); QVERIFY(Pane);
+        auto* Ruler = Text->findChild<QWidget*>("columnRuler"); QVERIFY(Ruler);
+        QAction* Action = nullptr;
+        for (auto* Item : Pane->Contribution().viewActions_)
+            if (Item->text() == QStringLiteral("눈금자")) Action = Item;
+        QVERIFY(Action); QVERIFY(Action->isCheckable());
+        // Chrome is built before the workspace is shown; ancestor visibility must not clear the check.
+        QVERIFY(!Window.isVisible());
+        QCOMPARE(Text->isRulerVisible(), Expected);
+        QCOMPARE(Action->isChecked(), Expected);
+        Window.show(); QVERIFY(QTest::qWaitForWindowExposed(&Window));
+        QTRY_COMPARE(Ruler->isVisible(), Expected);
+        QCOMPARE(Action->isChecked(), Expected);
+        for (const bool On : {!Expected, Expected}) {
+            Action->trigger();
+            QCOMPARE(Ruler->isVisible(), On);
+            QCOMPARE(Action->isChecked(), On);
+            ::AppSettings Settings; QCOMPARE(Settings.value("textView/showRuler").toBool(), On);
+        }
+        Window.hide();
+        for (const bool On : {!Expected, Expected}) {
+            { ::AppSettings Settings; Settings.setValue("textView/showRuler", On); }
+            Text->ReloadPreferences();
+            QCOMPARE(Text->isRulerVisible(), On);
+            QCOMPARE(Action->isChecked(), On);
+        }
+        Window.show();
+        QTRY_COMPARE(Ruler->isVisible(), Expected);
+        Text->setRulerVisible(!Expected);
+        QCOMPARE(Ruler->isVisible(), !Expected);
+        QCOMPARE(Action->isChecked(), !Expected);
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(), 15000);
+    }
     void productDefaultsPreserveStoredValues()
     {
         QTemporaryDir Temp; const auto Previous = qApp->property("documentViewsConfigDir");
