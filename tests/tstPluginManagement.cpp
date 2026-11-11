@@ -239,6 +239,27 @@ private slots:
         QVERIFY(Items[0].toObject()["hostEnabled"].toBool()); QVERIFY(Items[0].toObject()["hostReviewed"].toObject().isEmpty());
         QVERIFY(Page.Save(Settings)); QCOMPARE(Settings.Read(hc::settings::Section::Plugins).toObject()["wlx"].toArray().size(), 1);
     }
+    void wlxRelativeDefaultDirectory_data() {
+        QTest::addColumn<QByteArray>("DefaultDirectory"); QTest::addColumn<QString>("Source");
+        QTest::newRow("backslash") << QByteArray("Plugins\\wlx\\SQLiteViewer") << QString{};
+        QTest::newRow("slash") << QByteArray("Plugins/wlx/SQLiteViewer") << QString{};
+        const auto Source = qEnvironmentVariable("HC_SQLITE_VIEWER_PACKAGE");
+        if (!Source.isEmpty()) QTest::newRow("sqliteviewer-actual-package") << QByteArray{} << Source;
+    }
+    void wlxRelativeDefaultDirectory() {
+        QFETCH(QByteArray, DefaultDirectory); QFETCH(QString, Source); QTemporaryDir Root;
+        if (Source.isEmpty()) {
+            Source = Root.filePath("viewer.zip");
+            QVERIFY(package(Source, {{"pluginst.inf", QByteArray("[plugininstall]\ntype=wlx\nfile=SQLiteViewer.wlx\ndefaultdir=") + DefaultDirectory + '\n'},
+                {"SQLiteViewer.wlx", "32-bit placeholder"}, {"SQLiteViewer.wlx64", fixture("hc_wlx_fixture.wlx64")}}));
+        }
+        const auto Installed = install(Source, Root.path());
+        QVERIFY2(Installed.HasValue(), Installed.HasValue() ? "" : Installed.Failure().code_.c_str());
+        QCOMPARE(Installed.Value().group_, QString("wlx")); const auto Binary = Installed.Value().binary_;
+        QCOMPARE(Binary, Root.filePath("Addons/WLX/SQLiteViewer/SQLiteViewer.wlx64"));
+        QVERIFY(hc::plugins::tcPackage::Binary64(Binary));
+        QVERIFY(!QFileInfo::exists(Root.filePath("Plugins")));
+    }
     void zipWithoutMetadataAndWrappedPackage() {
         QTemporaryDir Root;
         const auto Plain = Root.filePath("plain.zip"); QVERIFY(package(Plain, {{"viewer.wlx64", fixture("hc_wlx_fixture.wlx64")}, {"readme.txt", "notes"}}));
@@ -258,6 +279,8 @@ private slots:
         QTest::newRow("trailing-dot") << "data." << Good;
         QTest::newRow("case-collision") << "SAMPLE.WCX64" << Good;
         QTest::newRow("unsafe-defaultdir") << "safe.txt" << QByteArray("[plugininstall]\ntype=wcx\nfile=sample.wcx64\ndefaultdir=../outside\n");
+        for (const auto& Directory : {"Plugins/../outside", "Plugins\\..\\outside", "C:/Plugins/Sample", "/Plugins/Sample", "\\\\server\\share\\Sample", "Plugins/NUL/Sample", "Plugins//Sample", "Plugins./Sample"})
+            QTest::newRow(Directory) << "safe.txt" << QByteArray("[plugininstall]\ntype=wcx\nfile=sample.wcx64\ndefaultdir=") + Directory + '\n';
         QTest::newRow("unsupported-type") << "safe.txt" << QByteArray("[plugininstall]\ntype=prg\nfile=sample.wcx64\ndefaultdir=Sample\n");
         QTest::newRow("missing-binary") << "safe.txt" << QByteArray("[plugininstall]\ntype=wcx\nfile=absent.wcx64\ndefaultdir=Sample\n");
     }

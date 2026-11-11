@@ -191,8 +191,11 @@ inline storage::Result<TcPluginInstallation> InstallTcPluginPackage(const QStrin
         }
     }
     if (Selected < 0) return Failure("plugin-package-binary-missing");
-    const auto Folder = Manifest >= 0 ? Meta.value("defaultdir") : QFileInfo(Source).completeBaseName();
-    if (!Segment(Folder)) return Failure("plugin-package-directory");
+    // TC packages can suggest a relative defaultdir such as Plugins\wlx\SQLiteViewer.
+    // Validate every component, then keep only the leaf under our own Addons/<type> root.
+    const auto FolderHint = Member(Manifest >= 0 ? Meta.value("defaultdir") : QFileInfo(Source).completeBaseName());
+    if (FolderHint.isEmpty()) return Failure("plugin-package-directory");
+    const auto Folder = QFileInfo(FolderHint).fileName();
     static const QRegularExpression ExtensionSeparator("[,;|\\s]+");
     for (auto Extension : Meta.value("defaultextension").split(ExtensionSeparator, Qt::SkipEmptyParts)) {
         Extension = Extension.toLower(); if (Extension.startsWith("*.")) Extension.remove(0, 2); else if (Extension.startsWith('.')) Extension.remove(0, 1);
