@@ -382,7 +382,8 @@ private slots:
                 || (QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi" || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragNativeFormatsUi")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileDropUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "contextMenuUi"
-                || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
+                  || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
+                  || QString::fromLatin1(QTest::currentTestFunction()) == "archiveNavigationAndGroupingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "firstRunProductDefaultsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobInteractionUi"
@@ -7257,7 +7258,9 @@ private slots:
             } else QTest::keyClick(Target, Qt::Key_PageDown, Qt::ControlModifier);
             QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && ((Model->GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK) || Model->LastNavigationError()), 15000);
             QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
-            QVERIFY(Model->GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK); QVERIFY(ArchiveProgress); QVERIFY(Busy->isHidden());
+            QVERIFY(Model->GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK); QVERIFY(ArchiveProgress); QTRY_VERIFY(Busy->isHidden());
+            auto* PathBar = Panel->findChild<hc::ui::PanelPathBar*>("hc.panelPath"); QVERIFY(PathBar);
+            QTRY_COMPARE(PathBar->accessibleName(), QDir::toNativeSeparators(ArchivePath + '/'));
             QVERIFY(Find("file000.txt").isValid());
             QVERIFY(TyStCommandMgr::GetInstance()->Bridge()->ExecuteCommand("hc.navigate.parent"));
             QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && !(Model->GetRoot()->GetFeatures() & nsHC::FS_FEA_PACK), 15000);
@@ -12836,6 +12839,77 @@ private slots:
         const auto Hold = qEnvironmentVariableIntValue("HC_PLUGIN_CAPTURE_HOLD_MS"); if (Hold > 0) QTest::qWait(qMin(Hold, 60000));
         Dialog.reject(); QCOMPARE(Settings.Read(hc::settings::Section::Plugins), Original);
     }
+    void archiveNavigationAndGroupingUi()
+    {
+        using namespace hc::plugins; using namespace hc::storage;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, true));
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Restore = qScopeGuard([&] {
+            Settings.Replace(Original); Settings.Commit(); TyStPlugInMgr::GetInstance()->Refresh(); main_->RestoreWorkspace(Workspace);
+        });
+        Settings.SetPlugins("wcx", {}); SetPluginField(Settings, "wcx", 0, "path", Spec.FileFullPath);
+        SetPluginField(Settings, "wcx", 0, "extensions", QJsonArray{"hcwcx", "exe"});
+        SetPluginField(Settings, "wcx", 0, "hostEnabled", true); SetPluginField(Settings, "wcx", 0, "hostManifest", Spec.hostManifest_);
+        SetPluginField(Settings, "wcx", 0, "hostReviewed", hc::settings::JsonObject(EncodeManifest(Spec.hostApproval_.reviewed_)));
+        auto General = Settings.Read(hc::settings::Section::General).toObject(); General["focusPreviousDirectory"] = true;
+        Settings.Put(hc::settings::Section::General, General); Settings.Commit(); TyStPlugInMgr::GetInstance()->Refresh();
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel)); Model->SetProviderEnabled(true);
+        Panel->ChangeCurrentPath(Directory.path(), {}); QTRY_VERIFY(!Model->IsLoading()); Model->SetWatchEnabled(false);
+        auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
+        QVERIFY(View->ApplyColumnProfile(hc::columns::DefaultProfile())); QVERIFY(View->SetListMode("one-line"));
+        QVERIFY(View->SetGrouping({true, hc::tests::GroupColumnId(View, "file.modified"), "relativeDate", Qt::DescendingOrder}));
+        auto* Native = View->BaseView(); auto* Grid = View->findChild<Qtitan::Grid*>(); QVERIFY(Grid);
+        auto* Path = Panel->findChild<hc::ui::PanelPathBar*>("hc.panelPath"); QVERIFY(Path);
+        const auto Find = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        const auto FocusName = [&] {
+            const auto Row = Native->focusedRow();
+            return Row.isValid() && Row.type() == Qtitan::GridRow::DataRow ? Model->GetName(hc::tests::GroupSource(Row.modelIndex(0))) : QString{};
+        };
+        main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_)); emit Panel->sig_NotifyPanelActivated();
+        for (const auto* Name : {"navigation.hcwcx", "navigation.exe"}) {
+            const auto Archive = Directory.filePath(Name);
+            { QFile File(Archive); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("HCWCX01"), 7); }
+            Model->Refresh(); QTRY_VERIFY(!Model->IsLoading()); QVERIFY(Find(Name).isValid());
+            const auto Item = Model->GetFileInfo(Find(Name)); QVERIFY(Item && Item->storageEntry_);
+            View->RestoreSelection({}, hc::workspace::SelectionKey(*Item->storageEntry_)); View->EnsureKeyboardFocusOnView();
+            QTest::keyClick(Grid->viewport(), QString(Name).endsWith(".exe") ? Qt::Key_PageDown : Qt::Key_Return,
+                QString(Name).endsWith(".exe") ? Qt::ControlModifier : Qt::NoModifier);
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->WorkspaceLocation().kind_ == LocatorKind::Archive, 15000);
+            QVERIFY(!Model->LastNavigationError()); QTRY_VERIFY(!View->IsGroupFocused()); QVERIFY(!FocusName().isEmpty()); QVERIFY(FocusName() != "..");
+            QTRY_COMPARE(Path->accessibleName(), QDir::toNativeSeparators(Archive + '/'));
+            const auto Reader = Model->SnapshotProvider(); QVERIFY(Reader);
+            Path->EditPath(); auto* Editor = Path->findChild<QLineEdit*>(); QVERIFY(Editor);
+            QTest::keyClick(Editor, Qt::Key_Return); QTRY_VERIFY(!Editor->isVisible());
+            QVERIFY(!Model->IsLoading()); QCOMPARE(Model->SnapshotProvider(), Reader);
+            QElapsedTimer Clock; Clock.start();
+            for (int Repeat = 0; Repeat < 4; ++Repeat) {
+                Model->ChangeDirectory("sub"); QTRY_VERIFY(!Model->IsLoading()); QVERIFY(!Model->LastNavigationError());
+                QCOMPARE(names(Model), QStringList{QStringLiteral("한글.txt")}); QCOMPARE(Model->SnapshotProvider(), Reader);
+                QTRY_COMPARE(Path->accessibleName(), QDir::toNativeSeparators(Archive + "/sub"));
+                QTRY_COMPARE(FocusName(), QStringLiteral("한글.txt"));
+                Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading()); QCOMPARE(Model->SnapshotProvider(), Reader);
+                QTRY_COMPARE(FocusName(), QString("sub"));
+            }
+            qInfo() << "Archive eight cached folder moves ms:" << Clock.elapsed();
+            // An explicit refresh must still see container changes and keep file focus.
+            Model->Refresh(); QTRY_VERIFY(!Model->IsLoading()); QVERIFY(Model->SnapshotProvider() != Reader);
+            QTRY_COMPARE(FocusName(), QString("sub"));
+            const auto Refreshed = Model->SnapshotProvider();
+            { QFile File(Archive); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write("x"), 1); }
+            Model->ChangeDirectory("sub"); QTRY_VERIFY(!Model->IsLoading()); QVERIFY(!Model->LastNavigationError());
+            QVERIFY(Model->SnapshotProvider() != Refreshed); QTRY_COMPARE(FocusName(), QStringLiteral("한글.txt"));
+            Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading());
+            // Collapsed groups must not absorb the restored file cursor on exit.
+            View->SetGroupsExpanded(false); Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading());
+            QTRY_COMPARE(FocusName(), QString(Name)); QVERIFY(!View->IsGroupFocused());
+            QTRY_COMPARE(Path->accessibleName(), QDir::toNativeSeparators(Directory.path()));
+        }
+    }
     void configuredHostNavigation()
     {
         using namespace hc::plugins; using namespace hc::storage;
@@ -12906,6 +12980,8 @@ private slots:
         QVERIFY(Index(Inner).isValid()); Model->ChangeDirectory(Index(Inner)); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000);
         QVERIFY2(!Model->LastNavigationError(), Model->LastNavigationError() ? Model->LastNavigationError()->code_.c_str() : "");
         QVERIFY(!names(Model).empty()); QCOMPARE(Model->WorkspaceLocation().nesting_.size(), 2);
+        auto* PathBar = Panel->findChild<hc::ui::PanelPathBar*>("hc.panelPath"); QVERIFY(PathBar);
+        QTRY_COMPARE(PathBar->accessibleName(), QDir::toNativeSeparators(Path + '/' + Inner + '/'));
         Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && Index(Inner).isValid());
         Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading() && Index(Name).isValid());
     }

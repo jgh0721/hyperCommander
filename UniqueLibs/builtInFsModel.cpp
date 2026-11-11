@@ -465,7 +465,13 @@ void CFSModel::doRefresh()
     }
     if (placeholder_ && !GetRoot()) { emit RetryRequested(); return; }
     placeholder_.reset();
-    if (const auto Root = GetRoot()) Root->RefreshReadProvider();
+    if (const auto Root = GetRoot()) {
+        // Folder navigation reuses the mounted archive index (including the
+        // reader already prepared by EnterFile). An explicit refresh of the
+        // published directory still discards it after archive mutations.
+        if (!providerEnabled_ || property("hc.snapshotLocation").toString()
+            == hc::workspace::LocationKey(Root->ReadLocation(retrieveRootWithPath()))) Root->RefreshReadProvider();
+    }
     if (providerEnabled_)
     {
         refreshProvider();
@@ -895,6 +901,7 @@ void CFSModel::refreshProvider()
     if (!Root) return;
     const auto Location = Root->ReadLocation(retrieveRootWithPath());
     const auto Provider = Root->ReadProvider();
+    const bool ReusedArchive = Location.kind_ == LocatorKind::Archive && Provider == acceptedProvider_;
     const auto Session = Location.kind_ == LocatorKind::Local && elevatedDirectorySession_
         && elevatedDirectorySession_->Contains(QString::fromStdString(Location.root_)) ? elevatedDirectorySession_ : nullptr;
     if (!acceptedRoots_.isEmpty())
@@ -932,7 +939,7 @@ void CFSModel::refreshProvider()
     }
     const auto Query = pageQuery_; const auto Match = pageMatch_; const auto ShowHidden = pageShowHidden_;
     auto* Watcher = new QFutureWatcher<ReadResult>(this);
-    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, Match, ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark] {
+    connect(Watcher, &QFutureWatcher<ReadResult>::finished, this, [this, Watcher, Generation, TargetRoots, TargetPath, Provider, Location, Query, Match, ShowHidden, Sorts, Fallback, Display, Append, RuleGeneration, Dark, ReusedArchive] {
         auto Result = Watcher->future().takeResult();
         Watcher->deleteLater();
         if (Generation != generation_) return;
@@ -940,6 +947,12 @@ void CFSModel::refreshProvider()
         loading_ = false;
         if (!Result.HasValue())
         {
+            // A changed container invalidates the mounted index. Retry once
+            // with a new reader; old published entries retain their old reader.
+            if (ReusedArchive && Result.Failure().category_ == ErrorCategory::StaleRevision) {
+                vecFs_ = TargetRoots; path_ = TargetPath;
+                GetRoot()->RefreshReadProvider(); refreshProvider(); return;
+            }
             navigationError_ = Result.Failure();
             failedNavigationRetry_ = [this, TargetRoots, TargetPath] {
                 vecFs_ = TargetRoots;

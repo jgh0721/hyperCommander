@@ -49,6 +49,17 @@
 #include "Modules/mdlFileEngine.hpp"
 
 namespace {
+QString ArchiveDisplayPath(const hc::storage::Locator& Location)
+{
+    auto Path = QString::fromStdString(Location.root_);
+    for (const auto& Hop : Location.nesting_) {
+        if (!Path.endsWith('/') && !Path.endsWith('\\')) Path += '/';
+        auto Entry = QString::fromStdString(Hop.entry_);
+        while (Entry.startsWith('/') || Entry.startsWith('\\')) Entry.remove(0, 1);
+        Path += Entry;
+    }
+    return QDir::toNativeSeparators(Path);
+}
 struct VolumeDiscovery {
     DWORD mask_ = 0;
     QElapsedTimer age_;
@@ -1087,9 +1098,12 @@ void CmpPanel::ChangeCurrentPath( const QString& Path, const QString& Parameter 
         return;
     }
     if (Location.kind_ == hc::storage::LocatorKind::Archive && Model->GetRoot()) {
-        const auto Root = Model->GetRoot()->GetRoot();
-        if (Path.startsWith(Root, Qt::CaseInsensitive) && Path.size() > Root.size() && (Path[Root.size()] == '/' || Path[Root.size()] == '\\')) {
-            Model->ChangeDirectory(Path.mid(Root.size())); return;
+        auto Container = Location; Container.nesting_.back().entry_ = "/";
+        auto Root = ArchiveDisplayPath(Container); Root.chop(1);
+        const auto Target = QDir::toNativeSeparators(Path);
+        if (Target.startsWith(Root, Qt::CaseInsensitive) && Target.size() > Root.size() && Target[Root.size()] == '\\') {
+            if (Target != ArchiveDisplayPath(Location)) Model->ChangeDirectory(Target.mid(Root.size()));
+            return;
         }
     }
     if ((Location.kind_ == hc::storage::LocatorKind::Plugin || Location.kind_ == hc::storage::LocatorKind::Archive)
@@ -1918,7 +1932,13 @@ void CmpPanel::syncPanelChrome()
     const bool Everything = SearchModel->ResultSourceKind() == CFSModel::ResultSource::Everything;
     path_->SetBreadcrumbsEnabled(!Everything
         && (Kind == hc::storage::LocatorKind::Local || Kind == hc::storage::LocatorKind::Smb));
-    path_->setFullPath(Everything ? tr("Everything · %1").arg(SearchModel->EverythingQuery()) : CurrentPath(), !Everything);
+    auto DisplayPath = CurrentPath();
+    if (Kind == hc::storage::LocatorKind::Archive) {
+        // CurrentPath is relative to the innermost container for storage I/O.
+        // Show every container boundary so even its root has a visible path.
+        DisplayPath = ArchiveDisplayPath(SearchModel->WorkspaceLocation());
+    }
+    path_->setFullPath(Everything ? tr("Everything · %1").arg(SearchModel->EverythingQuery()) : DisplayPath, !Everything);
     syncFlatChrome();
     { QSignalBlocker ViewBlocker(viewMode_);
       auto* View = static_cast<CGridView*>(retrieveFocusState()->View);

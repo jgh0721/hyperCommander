@@ -1081,6 +1081,10 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     disconnect(selectionRestore_);
     selectionRestore_ = connect(Source, &CFsModelT::sigRefreshCompleted, this, [this] {
         const auto Path = model_->property("hc.snapshotLocation").toString();
+        const bool ChangedDirectory = !resetPath_.isEmpty() && resetPath_ != Path;
+        // Native reset initially targets row zero, which can be a group header.
+        // Finish grouping before resolving any new-directory or parent cursor.
+        if (ChangedDirectory && groupingTimer_.isActive() && !groupingProjection_ && !groupingUpdateDepth_) applyGrouping();
         const auto* SavedScroll = !resetPath_.isEmpty() && resetPath_ != Path ? navigationScroll_.object(Path) : nullptr;
         const auto ReturnScroll = SavedScroll ? *SavedScroll : QJsonObject{};
         bool ParentFocused = false;
@@ -1098,6 +1102,18 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
                 }
             }
             RestoreSelection(resetSelection_, Focus);
+            // A refresh restores a saved entry after the new native grouping
+            // settles. Explicit group-collapse commands retain their header.
+            if (!Focus.isEmpty() && !Focus.startsWith("@group:")) {
+                for (const auto& Source : SelectionCandidates()) {
+                    if (sourceSelectionKey(Source) != Focus) continue;
+                    const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
+                    QScopedValueRollback Guard(groupingProjection_, true);
+                    const auto Position = view_->modelController()->ensureVisible(Visible);
+                    if (Position >= 0) view_->setFocusedRowIndex(Position, Qt::ControlModifier);
+                    break;
+                }
+            }
             if (!Focus.isEmpty() && Focus != resetFocus_) {
                 const auto Row = view_->focusedRow();
                 bool Visible = false;
@@ -1122,8 +1138,13 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         model_->setProperty("hc.parentFocusPath", QVariant{});
         model_->setProperty("hc.parentFocusName", QVariant{}); model_->setProperty("hc.parentNavigation", false);
         const auto Native = qobject_cast<CFSModel*>(model_);
-        if (!ParentNavigation || (Native && Native->LastNavigationError())) return;
-        if (view_->getRowCount()) view_->setFocusedRowIndex(0);
+        if (Native && Native->LastNavigationError()) return;
+        if (!ParentNavigation) {
+            // New locations start on a real entry; an empty folder uses '..'.
+            if (ChangedDirectory) focusFirstEntry();
+            return;
+        }
+        focusFirstEntry(true);
         if (!hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["focusPreviousDirectory"].toBool(hc::defaults::DefaultValue("general/focusPreviousDirectory").toBool())) return;
         for (int Index = 0; (!Previous.isEmpty() || !PreviousRoot.isEmpty()) && Index < model_->rowCount(); ++Index) {
             const auto Source = model_->index(Index, 0);
@@ -1140,8 +1161,11 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
             } else if (model_->GetName(Source) != Previous) continue;
             const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
             if (!Visible.isValid()) break;
-            const auto Row = view_->getRow(Visible);
-            if (Row.isValid()) { view_->setFocusedRowIndex(Row.rowIndex()); ParentFocused = true; }
+            const auto Position = view_->modelController()->ensureVisible(Visible);
+            const auto Row = view_->getRow(Position);
+            if (Row.isValid() && Row.type() == Qtitan::GridRow::DataRow) {
+                RestoreSelection(CaptureSelection(), sourceSelectionKey(Source)); ParentFocused = true;
+            }
             break;
         }
     });

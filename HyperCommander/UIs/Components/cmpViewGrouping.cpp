@@ -195,6 +195,33 @@ void CGridView::applySetGrouping(const hc::columns::ColumnProfile& Profile)
     }
     groupingLevels_ = Next; grouping_ = Next.isEmpty() ? hc::columns::GroupingState{} : Next.front(); unsupportedGrouping_ = {};
 }
+void CGridView::focusFirstEntry(bool IncludeParent)
+{
+    QScopedValueRollback Guard(groupingProjection_, true);
+    const auto Focus = [this](const QModelIndex& Source, int Position) {
+        const auto Key = sourceSelectionKey(Source);
+        if (groupingUpdateDepth_ && !Key.isEmpty()) queryFocus_ = Key;
+        view_->setFocusedRowIndex(Position, Qt::ControlModifier);
+    };
+    // Respect the visible sort/group order before opening a collapsed group.
+    for (int Position = 0; Position < view_->getRowCount(); ++Position) {
+        const auto Row = view_->getRow(Position);
+        if (Row.type() != Qtitan::GridRow::DataRow) continue;
+        const auto Source = proxy_ ? proxy_->mapToSource(Row.modelIndex(0)) : Row.modelIndex(0);
+        if (IncludeParent || model_->GetName(Source) != "..") { Focus(Source, Position); return; }
+    }
+    QModelIndex Parent;
+    for (const auto& Source : SelectionCandidates()) {
+        const auto Visible = proxy_ ? proxy_->mapFromSource(Source) : Source;
+        if (model_->GetName(Source) == "..") { Parent = Visible; continue; }
+        const auto Position = view_->modelController()->ensureVisible(Visible);
+        if (Position >= 0) { Focus(Source, Position); return; }
+    }
+    if (Parent.isValid()) {
+        const auto Position = view_->modelController()->ensureVisible(Parent);
+        if (Position >= 0) view_->setFocusedRowIndex(Position, Qt::ControlModifier);
+    }
+}
 void CGridView::applyGrouping()
 {
     if (!model_ || groupingUpdateDepth_ || groupingProjection_) return;

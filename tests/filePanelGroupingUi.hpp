@@ -137,6 +137,10 @@ inline void FilePanelGroupingUi(QMainUI* Main, CmpPanel* Panel)
     QVERIFY2(Copied.HasValue(), Copied.HasValue() ? "" : Copied.Failure().code_.c_str());
     QTRY_COMPARE(Bridge->FileJobs()->Scheduler().Snapshot(Copied.Value().jobId_).Value().state_, hc::operations::JobState::Completed);
     QCOMPARE(QDir(Out).entryList(QDir::Files).size(), 2);
+    // Successful file operations clear their original marks. Restore a fresh
+    // selection after completion before testing layout/refresh preservation.
+    QTRY_VERIFY(View->CaptureSelection().isEmpty()); QTRY_VERIFY(!Model->IsLoading());
+    View->RestoreSelection(Selected, Selected.front()); QCOMPARE(View->CaptureSelection().size(), 2);
     for (const auto& Mode : {"one-line", "two-line", "auto"}) {
         QVERIFY(View->SetListMode(Mode)); QTest::qWait(150); QVERIFY(View->GroupingActive());
         QCOMPARE(View->CaptureSelection().size(), 2); QCOMPARE(Native->modelController()->groupRows().size(), 3);
@@ -222,6 +226,27 @@ inline void FilePanelGroupingUi(QMainUI* Main, CmpPanel* Panel)
                 for (int X = qRound(TextRect.left() * Dpr); X <= qRound(TextRect.right() * Dpr); ++X)
                     if (Shot.pixelColor(X, Y) == Foreground) ++TextPixels;
             QVERIFY2(TextPixels > 5, "Focused group title must remain readable against its cursor background");
+            auto OutlineScheme = CursorScheme; OutlineScheme.IsInverseCursor = false; emit Colors->sigColorSchemeChanged(OutlineScheme);
+            QTest::qWait(80); QCOMPARE(Native->focusedRowIndex(), GroupPosition);
+            const auto Outline = Grid->viewport()->grab().toImage();
+            int OutlinePixels = 0;
+            const auto HeadColor = View->RecordColors()[fm::style::Token::Head];
+            const auto Distance = [](const QColor& A, const QColor& B) {
+                return qAbs(A.red() - B.red()) + qAbs(A.green() - B.green()) + qAbs(A.blue() - B.blue());
+            };
+            // A 1 px logical outline straddles physical pixels at 150% scale.
+            // Check the edge strip's contrast instead of one exact color row.
+            const int Contrast = Distance(HeadColor, View->RecordColors()[fm::style::Token::Fg]);
+            const QList<int> EdgeRows{qFloor(GroupRect.top() * Dpr), qFloor((GroupRect.bottom() - 2) * Dpr)};
+            for (const int Edge : EdgeRows) for (int Y = Edge; Y < qMin(Outline.height(), Edge + qCeil(3 * Dpr)); ++Y) {
+                int Pixels = 0;
+                for (int X = qRound((GroupRect.left() + 40) * Dpr); X < qRound((GroupRect.right() - 40) * Dpr); ++X)
+                    if (Distance(Outline.pixelColor(X, Y), HeadColor) > Contrast / 3) ++Pixels;
+                OutlinePixels = qMax(OutlinePixels, Pixels);
+            }
+            if (!Capture.isEmpty()) QVERIFY(Outline.save(QDir(Capture).filePath(QString("grouping-outline-%1-%2.png").arg(Dark ? "dark" : "light", Mode))));
+            QVERIFY2(OutlinePixels > 8, "A group cursor must have a visible outline with inverse cursor disabled");
+            emit Colors->sigColorSchemeChanged(CursorScheme); QTest::qWait(80);
             if (!Capture.isEmpty()) QVERIFY(View->grab().save(QDir(Capture).filePath(QString("grouping-%1-%2.png").arg(Dark ? "dark" : "light", Mode))));
         }
     }
