@@ -384,6 +384,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "contextMenuUi"
                   || QString::fromLatin1(QTest::currentTestFunction()) == "backgroundMetadataNavigationUi"
                   || QString::fromLatin1(QTest::currentTestFunction()) == "archiveNavigationAndGroupingUi"
+                  || QString::fromLatin1(QTest::currentTestFunction()) == "archiveFileColorPendingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileIconRefreshUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "firstRunProductDefaultsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileJobInteractionUi"
@@ -12838,6 +12839,62 @@ private slots:
         const auto Capture = qEnvironmentVariable("HC_PLUGIN_PRODUCT_CAPTURE"); if (!Capture.isEmpty()) { QTest::qWait(100); QVERIFY(Dialog.grab().save(Capture)); }
         const auto Hold = qEnvironmentVariableIntValue("HC_PLUGIN_CAPTURE_HOLD_MS"); if (Hold > 0) QTest::qWait(qMin(Hold, 60000));
         Dialog.reject(); QCOMPARE(Settings.Read(hc::settings::Section::Plugins), Original);
+    }
+    void archiveFileColorPendingUi_data()
+    {
+        QTest::addColumn<bool>("Hosted");
+        QTest::newRow("in-process") << false;
+        QTest::newRow("isolated") << true;
+    }
+    void archiveFileColorPendingUi()
+    {
+        QFETCH(bool, Hosted);
+        using namespace hc::settings; using namespace hc::storage;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
+        const auto ApplyRules = [&] { Model->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); };
+        const auto Restore = qScopeGuard([&] {
+            Settings.Replace(Original); Settings.Commit(); TyStPlugInMgr::GetInstance()->Refresh(); ApplyRules(); main_->RestoreWorkspace(Workspace);
+        });
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        TyPlugInWCX Spec; QVERIFY(configureWcx(Spec, Directory, Hosted));
+        Settings.SetPlugins("wcx", {}); SetPluginField(Settings, "wcx", 0, "path", Spec.FileFullPath);
+        SetPluginField(Settings, "wcx", 0, "extensions", QJsonArray{"hcwcx"});
+        SetPluginField(Settings, "wcx", 0, "hostEnabled", Hosted);
+        if (Hosted) {
+            SetPluginField(Settings, "wcx", 0, "hostManifest", Spec.hostManifest_);
+            SetPluginField(Settings, "wcx", 0, "hostReviewed", hc::settings::JsonObject(hc::plugins::EncodeManifest(Spec.hostApproval_.reviewed_)));
+        }
+        auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = hc::defaults::FileGroups();
+        QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit()); TyStPlugInMgr::GetInstance()->Refresh(); ApplyRules();
+        const auto Archive = Directory.filePath("colors.hcwcx");
+        { QFile File(Archive); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("HCWCX01"), 7); }
+        Model->SetProviderEnabled(true); Panel->ChangeCurrentPath(Directory.path(), {}); QTRY_VERIFY(!Model->IsLoading());
+        const auto Find = [&](const QString& Name) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0);
+            return QModelIndex{};
+        };
+        QVERIFY(Find("colors.hcwcx").isValid()); Model->ChangeDirectory(Find("colors.hcwcx"));
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->WorkspaceLocation().kind_ == LocatorKind::Archive, 15000);
+        const auto Jobs = Model->ColumnQueryJobs();
+        const auto PendingRows = [&] {
+            int Count = 0;
+            for (int Row = 0; Row < Model->rowCount(); ++Row)
+                if (Model->index(Row, 0).data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker")) ++Count;
+            return Count;
+        };
+        // Seeded rows cannot query native fields inside an archive. No completion will arrive to
+        // clear a pending seed, including after refresh and after entering an archive subfolder.
+        for (int Step = 0; Step < 3; ++Step) {
+            QVERIFY(!Model->LastNavigationError()); QVERIFY(Model->rowCount() > 0);
+            QTRY_VERIFY(!Model->InFileRuleGrace());
+            QTRY_COMPARE_WITH_TIMEOUT(PendingRows(), 0, 3000);
+            QCOMPARE(Model->PendingColumnQueries(), 0); QCOMPARE(Model->ColumnQueryJobs(), Jobs);
+            if (Step == 0) Model->Refresh();
+            else if (Step == 1) Model->ChangeDirectory("sub");
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 15000);
+        }
     }
     void archiveNavigationAndGroupingUi()
     {

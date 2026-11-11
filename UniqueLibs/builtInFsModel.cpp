@@ -1200,10 +1200,15 @@ std::vector<hc::settings::FileRuleResult> CFSModel::seedFileRuleStyles(const hc:
         if (const auto Tag = Entry.hints_.find("reparseTag"); Tag != Entry.hints_.end()) {
             if (const auto Value = QString::fromStdString(Tag->second).toUInt()) Input.reparseTag_ = Value;
         }
+        // Match ruleFieldValue/queryPath: archive and other virtual entries cannot issue native
+        // field queries. A Pending seed cached under their final Unsupported key would never
+        // receive a completion and would keep the row's pending marker indefinitely.
+        const bool NativeFields = !Entry.locator_.root_.empty()
+            && (Entry.locator_.kind_ == hc::storage::LocatorKind::Local || Entry.locator_.kind_ == hc::storage::LocatorKind::Smb);
         Input.fields_.reserve(Rules.RequiredFields().size());
         for (const auto& Field : Rules.RequiredFields())
-            Input.fields_.append(hc::columns::CellValue::Missing(KnownEmptyField(Entry.attributes_, Field, false)
-                ? hc::columns::ValueState::Empty : hc::columns::ValueState::Pending));
+            Input.fields_.append(hc::columns::CellValue::Missing(!NativeFields ? hc::columns::ValueState::Unsupported
+                : KnownEmptyField(Entry.attributes_, Field, false) ? hc::columns::ValueState::Empty : hc::columns::ValueState::Pending));
         Input.referenceUtcMs_ = Reference;
         Styles.push_back(Rules.EvaluateStyle(Input, &Context));
     }
