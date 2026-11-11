@@ -46,6 +46,7 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
+#include "commonLibs/document/epub/epubTemplate.hpp"
 #include "UniqueLibs/document/documentHostBroker.hpp"
 #include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include "UniqueLibs/qtPluginViewerSurface.hpp"
@@ -215,6 +216,62 @@ void quickPreviewReusesAndExpiresHost()
     Surface->Open(Choice, Content(Second));
     QVERIFY(Wait([&] { return Surface->IsReady(); }, 30000)); QVERIFY(Surface->Details().host_.processId_ != Process);
     Controller.CloseAll(); QVERIFY(Wait([&] { return Controller.IsIdle(); })); delete Surface;
+}
+void quickPreviewEpubReopens_data()
+{
+    QTest::addColumn<bool>("ReplaceSurface");
+    QTest::newRow("same-surface") << false;
+    QTest::newRow("new-surface") << true;
+}
+void quickPreviewEpubReopens()
+{
+    QFETCH(bool, ReplaceSurface);
+    QTemporaryDir Root;
+    const auto Book = epub::CreateBook({"Preview reopen", {}, "en", "Preview chapter"});
+    QVERIFY2(Book.error_.isEmpty(), qPrintable(Book.error_));
+    const auto Path = Root.filePath("reopen.epub");
+    QVERIFY(Put(Path, Book.bytes_));
+    QWidget Main; Main.resize(900, 600); Main.show();
+    QtPluginViewerController Controller(&Main, [&] { return MakeNativeMaterializer(Root.path().toStdString()); }, 30000);
+    auto Choice = Options(); Choice.purpose_ = hc::viewer::ViewerPurpose::QuickPreview;
+    auto Surface = std::make_unique<QtPluginViewerSurface>(&Controller, &Main);
+    const auto Cleanup = qScopeGuard([&] { Surface->Close(); Controller.CloseAll(); Wait([&] { return Controller.IsIdle(); }, 30000); });
+    const auto ReaderReady = [&] {
+        const auto Documents = Surface->Details().documentState_["documents"].toArray();
+        if (!Surface->IsReady() || Documents.size() != 1) return false;
+        const auto View = Documents[0].toObject()["view"].toObject();
+        return View["ready"].toBool() && !View["epub"].toObject()["text"].toString().trimmed().isEmpty();
+    };
+    quint32 PreviewProcess = 0;
+    for (int Cycle = 0; Cycle < 3; ++Cycle) {
+        Surface->resize(Main.size()); Surface->show(); Surface->Open(Choice, Content(Path));
+        Wait([&] { return ReaderReady() || Surface->Snapshot().status_ == hc::viewer::ViewerStatus::Failed; }, 30000);
+        const bool Loaded = ReaderReady();
+        if (!Loaded) {
+            const auto State = Surface->Snapshot();
+            qWarning() << "EPUB preview failed at cycle" << Cycle << "error"
+                << (State.error_ ? QString::fromStdString(State.error_->code_) : QString{});
+            qWarning().noquote() << QJsonDocument(Surface->Details().documentState_).toJson(QJsonDocument::Compact);
+        }
+        QVERIFY(Loaded);
+        const auto Details = Surface->Details();
+        if (Cycle == 0) PreviewProcess = Details.host_.processId_;
+        QCOMPARE(Details.host_.processId_, PreviewProcess);
+        const auto Child = reinterpret_cast<HWND>(Details.child_.toULongLong(nullptr, 16));
+        QVERIFY2(IsWindowVisible(GetWindow(Child, GW_CHILD)),
+            "Reopened EPUB workspace must cover the native Opening container");
+        const auto View = Details.documentState_["documents"].toArray()[0].toObject()["view"].toObject();
+        QCOMPARE(View["viewId"].toString(), QString("epub"));
+        QVERIFY(!View["epub"].toObject()["text"].toString().trimmed().isEmpty());
+        qInfo() << "EPUB preview cycle" << Cycle << "host" << Details.host_.processId_
+            << "visible" << bool(IsWindowVisible(GetWindow(Child, GW_CHILD)));
+        // Ctrl+Q first lets the workspace finish its asynchronous document close.
+        QVERIFY(Surface->SendDocument({{"action", "requestViewerClose"}}).HasValue());
+        QVERIFY(Wait([&] { return Surface->Details().documentState_["closeRequested"].toBool(); }, 30000));
+        Surface->Close();
+        if (ReplaceSurface) Surface = std::make_unique<QtPluginViewerSurface>(&Controller, &Main);
+        QTest::qWait(500);
+    }
 }
 void statusBarMeasuredLayout(){
     DocumentStatusBar Bar;Bar.resize(1400,32);Bar.show();

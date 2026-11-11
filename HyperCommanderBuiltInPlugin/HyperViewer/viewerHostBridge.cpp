@@ -77,7 +77,12 @@ namespace hc::document
         QObject::connect(state_->window_.get(), &DocumentWorkspaceWidget::StateChanged,
             state_->window_.get(), [this] {
                 if (!state_->window_->Snapshot()["closeRequested"].toBool()) {
+                    // Ctrl+Q retains the closed preview host. Opening the next document
+                    // clears its close request, but the embedded workspace is still hidden.
+                    // Restore it without activating the full-viewer presentation path.
+                    const bool ReopenPreview = state_->preview_ && state_->closeHandled_;
                     state_->closeHandled_ = state_->closeForeground_ = false;
+                    if (ReopenPreview) { Resize(); state_->window_->show(); }
                     return;
                 }
                 if (state_->closeHandled_) return;
