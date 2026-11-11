@@ -1,5 +1,8 @@
 ﻿#include <QtTest>
 #include "UniqueLibs/nativeMaterializer.hpp"
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "UniqueLibs/storageProviders.hpp"
 #include "memoryStorage.hpp"
 #include "commonLibs/storage/resourceQuota.hpp"
@@ -58,10 +61,166 @@ namespace
     };
 }
 
+namespace {
+    bool Put(const QString& Path, const QByteArray& Bytes)
+    { QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); }
+    Result<std::shared_ptr<IMaterializedFileLease>> PrivateLease(IMaterializer& Service, std::vector<MaterializationAuxiliary> Auxiliaries = {{"-wal", 0}, {"-shm", 32}})
+    { return MaterializePrivateContent(Service, {Content("data", "snapshot.db"), {}, {}, std::move(Auxiliaries)}, {}).get(); }
+    bool MakeJunction(const QString& LinkPath, const QString& TargetPath)
+    {
+        const auto Link = QDir::toNativeSeparators(LinkPath).toStdWString(), Target = QDir::toNativeSeparators(TargetPath).toStdWString();
+        const auto Substitute = std::wstring(L"\\??\\") + Target;
+        struct JunctionData { DWORD tag_; WORD size_, reserved_, substituteOffset_, substituteLength_, printOffset_, printLength_; wchar_t paths_[1]; };
+        const auto PathBytes = (Substitute.size() + Target.size() + 2) * sizeof(wchar_t); std::vector<std::byte> Buffer(16 + PathBytes);
+        auto* Data = reinterpret_cast<JunctionData*>(Buffer.data()); Data->tag_ = IO_REPARSE_TAG_MOUNT_POINT; Data->size_ = static_cast<WORD>(8 + PathBytes);
+        Data->substituteLength_ = static_cast<WORD>(Substitute.size() * sizeof(wchar_t)); Data->printOffset_ = Data->substituteLength_ + sizeof(wchar_t); Data->printLength_ = static_cast<WORD>(Target.size() * sizeof(wchar_t));
+        std::memcpy(Data->paths_, Substitute.c_str(), Data->substituteLength_ + sizeof(wchar_t));
+        std::memcpy(reinterpret_cast<std::byte*>(Data->paths_) + Data->printOffset_, Target.c_str(), Data->printLength_ + sizeof(wchar_t));
+        const auto Handle = CreateFileW(Link.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (Handle == INVALID_HANDLE_VALUE) return false;
+        DWORD Returned = 0; const auto Made = DeviceIoControl(Handle, FSCTL_SET_REPARSE_POINT, Buffer.data(), static_cast<DWORD>(Buffer.size()), nullptr, 0, &Returned, nullptr); CloseHandle(Handle); return bool(Made);
+    }
+}
 class MaterializationTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void auxiliaryDeclarationsAndUnsupportedRequests()
+    {
+        QTemporaryDir Root; auto Service = Manager(Root.path()); QVERIFY(Service);
+        const auto Ordinary = Service->Materialize({Content("x"), {}, {}, {{"-wal", 0}}}, {}).get();
+        QVERIFY(!Ordinary.HasValue()); QCOMPARE(Ordinary.Failure().category_, ErrorCategory::Unsupported);
+        class Unsupported final : public IMaterializer {
+        public:
+            unsigned calls_ = 0;
+            Task<std::shared_ptr<IMaterializedFileLease>> Materialize(MaterializationRequest, OperationContext) override
+            { ++calls_; return Ready<std::shared_ptr<IMaterializedFileLease>>(Error{ErrorCategory::Internal, "must-not-be-called"}); }
+            MaterializationCleanup Recover() override { return {}; }
+            MaterializationCleanup DrainCleanup() override { return {}; }
+        } Other;
+        const auto Rejected = PrivateLease(Other); QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().category_, ErrorCategory::Unsupported); QCOMPARE(Other.calls_, 0u);
+        const std::vector<std::vector<MaterializationAuxiliary>> Bad{
+            {{"../outside", 0}}, {{"-wal:stream", 0}}, {{"-wal.", 0}}, {{std::string("-a\0b", 4), 0}},
+            {{"-wal", 0}, {"-WAL", 0}}, {{"-shm", UINT64_MAX}}, {{"-a", 700000}, {"-b", 700000}},
+            {{"-a", 0}, {"-b", 0}, {"-c", 0}, {"-d", 0}, {"-e", 0}}, {{std::string(40, 'a'), 0}}
+        };
+        for (const auto& Values : Bad) { const auto Made = PrivateLease(*Service, Values); QVERIFY(!Made.HasValue()); QVERIFY(LeaseDirectories(Root.path()).isEmpty()); }
+        auto OverflowSource = std::make_shared<FaultContent>(); OverflowSource->entry_.size_ = UINT64_MAX;
+        const auto Overflow = MaterializePrivateContent(*Service, {OverflowSource, {}, {}, {{"-cache", 1}}}, {}).get();
+        QVERIFY(!Overflow.HasValue()); QCOMPARE(Overflow.Failure().code_, std::string("materialization-total-budget")); QVERIFY(LeaseDirectories(Root.path()).isEmpty());
+    }
+    void auxiliaryRetirementAndLiveLeaseExclusion()
+    {
+        QTemporaryDir Root; auto Service = Manager(Root.path()); QVERIFY(Service);
+        auto Made = PrivateLease(*Service); QVERIFY(Made.HasValue()); const auto Path = QString::fromUtf8(Made.Value()->LocalPath());
+        QFile Owner(QFileInfo(Path).dir().filePath("owner.lock")); QVERIFY(!Owner.open(QIODevice::ReadOnly));
+        QVERIFY(Put(Path + "-wal", {})); QVERIFY(Put(Path + "-shm", QByteArray(32, 'i')));
+        auto Other = Manager(Root.path()); const auto Live = Other->Recover(); QCOMPARE(Live.busy_, 1u); QVERIFY(Live.errors_.empty());
+        Made.Value().reset(); const auto Retired = Service->DrainCleanup(); QVERIFY(Retired.errors_.empty()); QCOMPARE(Retired.busy_, 0u);
+        QVERIFY(!QFileInfo::exists(Path)); QVERIFY(!QFileInfo::exists(Path + "-wal")); QVERIFY(!QFileInfo::exists(Path + "-shm")); QVERIFY(LeaseDirectories(Root.path()).isEmpty());
+        auto Missing = PrivateLease(*Service); QVERIFY(Missing.HasValue()); Missing.Value().reset(); QVERIFY(Service->DrainCleanup().errors_.empty());
+    }
+    void auxiliaryInvalidEntryPreservesWorkspace_data()
+    {
+        QTest::addColumn<QString>("Mode");
+        for (const auto* Mode : {"unknown", "oversize", "directory", "reparse", "hardlink", "identity-alias", "locked", "readonly-cache"}) QTest::newRow(Mode) << QString(Mode);
+    }
+    void auxiliaryInvalidEntryPreservesWorkspace()
+    {
+        QFETCH(QString, Mode); QTemporaryDir Root; MaterializationLimits Limits; Limits.maxTotalBytes_ = 36;
+        auto Service = Manager(Root.path(), Limits); QVERIFY(Service); auto Made = PrivateLease(*Service); QVERIFY(Made.HasValue());
+        const auto Path = QString::fromUtf8(Made.Value()->LocalPath()), Wal = Path + "-wal", Shm = Path + "-shm";
+        const auto Owner = QFileInfo(Path).dir().filePath("owner.lock"), Unknown = QFileInfo(Path).dir().filePath("unexpected.keep"), Sentinel = Root.filePath("sentinel");
+        QVERIFY(Put(Wal, {})); QVERIFY(Put(Sentinel, "original"));
+        HANDLE Locked = INVALID_HANDLE_VALUE;
+        if (Mode == "unknown") { QVERIFY(Put(Shm, QByteArray(32, 'i'))); QVERIFY(Put(Unknown, "keep")); }
+        else if (Mode == "oversize") QVERIFY(Put(Shm, QByteArray(33, 'i')));
+        else if (Mode == "directory" || Mode == "reparse") {
+            QVERIFY(QDir().mkdir(Shm));
+            if (Mode == "reparse") { QVERIFY(QDir().mkdir(Root.filePath("target"))); QVERIFY(Put(Root.filePath("target/keep"), "original")); QVERIFY(MakeJunction(Shm, Root.filePath("target"))); }
+        }
+        else if (Mode == "hardlink" || Mode == "identity-alias") {
+            const auto Target = Mode == "hardlink" ? Sentinel : Wal;
+            QVERIFY(CreateHardLinkW(reinterpret_cast<LPCWSTR>(Shm.utf16()), reinterpret_cast<LPCWSTR>(Target.utf16()), nullptr));
+        } else if (Mode == "readonly-cache") {
+            QVERIFY(Put(Shm, QByteArray(32, 'i'))); QVERIFY(SetFileAttributesW(reinterpret_cast<LPCWSTR>(Shm.utf16()), FILE_ATTRIBUTE_READONLY));
+        } else {
+            QVERIFY(Put(Shm, QByteArray(32, 'i')));
+            Locked = CreateFileW(reinterpret_cast<LPCWSTR>(Shm.utf16()), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr); QVERIFY(Locked != INVALID_HANDLE_VALUE);
+        }
+        const auto Unlock = qScopeGuard([&] { if (Locked != INVALID_HANDLE_VALUE) CloseHandle(Locked); });
+        Made.Value().reset(); const auto Failed = Service->DrainCleanup(); QVERIFY(!Failed.errors_.empty());
+        QVERIFY(QFileInfo::exists(Path)); QVERIFY(QFileInfo::exists(Owner)); QVERIFY(QFileInfo::exists(Shm));
+        if (Mode != "readonly-cache") QVERIFY(QFileInfo::exists(Wal));
+        else qInfo() << "Late cache disposition failure; earlier cache already retired" << !QFileInfo::exists(Wal);
+        QFile Original(Sentinel); QVERIFY(Original.open(QIODevice::ReadOnly)); QCOMPARE(Original.readAll(), QByteArray("original")); Original.close();
+        const auto Full = Service->Materialize({Content("x")}, {}).get(); QVERIFY(!Full.HasValue()); QCOMPARE(Full.Failure().code_, std::string("materialization-total-budget"));
+        if (Mode == "unknown") QVERIFY(QFile::remove(Unknown));
+        else if (Mode == "directory" || Mode == "reparse") QVERIFY(RemoveDirectoryW(reinterpret_cast<LPCWSTR>(Shm.utf16())));
+        else if (Mode == "locked") { CloseHandle(Locked); Locked = INVALID_HANDLE_VALUE; }
+        else if (Mode == "readonly-cache") QVERIFY(SetFileAttributesW(reinterpret_cast<LPCWSTR>(Shm.utf16()), FILE_ATTRIBUTE_NORMAL));
+        else QVERIFY(QFile::remove(Shm));
+        const auto Cleaned = Service->DrainCleanup(); QVERIFY(Cleaned.errors_.empty()); QVERIFY(LeaseDirectories(Root.path()).isEmpty());
+        auto Again = Service->Materialize({Content("x")}, {}).get(); QVERIFY(Again.HasValue()); Again.Value().reset(); QVERIFY(Service->DrainCleanup().errors_.empty());
+        QVERIFY(QFileInfo::exists(Sentinel));
+        if (Mode == "reparse") QVERIFY(QFileInfo::exists(Root.filePath("target/keep")));
+    }
+    void auxiliaryCrashRecoveryAndForgedManifest()
+    {
+        QTemporaryDir Root; QProcess Child;
+        Child.start(QCoreApplication::applicationFilePath(), {"--crash-auxiliary-lease", Root.path()}); QVERIFY(Child.waitForStarted(5000)); QVERIFY(Child.waitForFinished(15000)); QCOMPARE(Child.exitCode(), 97);
+        const auto Directories = LeaseDirectories(Root.path()); QCOMPARE(Directories.size(), 1);
+        const auto Directory = QDir(Root.path() + "/hc-materialized-v1").filePath(Directories.front());
+        QFile File(Directory + "/owner.lock"); QVERIFY(File.open(QIODevice::ReadOnly)); const auto Bytes = File.readAll(); File.close();
+        auto Object = QJsonDocument::fromJson(Bytes).object(); QCOMPARE(Object["schema"].toInt(), 2);
+        const auto Valid = Object;
+        std::vector<QJsonArray> InvalidArrays{
+            {QJsonObject{{"name", "../../sentinel"}, {"maxBytes", "0"}}}, {QJsonObject{{"name", "content.db"}, {"maxBytes", "0"}}},
+            {QJsonObject{{"name", "content.db-shm"}, {"maxBytes", "18446744073709551616"}}},
+            {QJsonObject{{"name", "content.db-" + QString(40, 'a')}, {"maxBytes", "0"}}},
+            {QJsonObject{{"name", "content.db-a"}, {"maxBytes", "700000"}}, QJsonObject{{"name", "content.db-b"}, {"maxBytes", "700000"}}}
+        };
+        QJsonArray TooMany; for (int Index = 0; Index < 5; ++Index) TooMany.append(QJsonObject{{"name", "content.db-" + QString::number(Index)}, {"maxBytes", "0"}}); InvalidArrays.push_back(TooMany);
+        for (const auto& Bad : InvalidArrays) {
+            Object = Valid; Object["auxiliaries"] = Bad; QVERIFY(Put(File.fileName(), QJsonDocument(Object).toJson(QJsonDocument::Compact)));
+            auto Service = Manager(Root.path()); const auto Invalid = Service->Recover(); QVERIFY(!Invalid.errors_.empty()); QVERIFY(QFileInfo::exists(File.fileName())); QVERIFY(QFileInfo::exists(Directory + "/content.db-wal"));
+        }
+        for (const auto* Reserved : {"0", "+36", "18446744073709551616"}) {
+            Object = Valid; Object["reservedBytes"] = QString(Reserved); QVERIFY(Put(File.fileName(), QJsonDocument(Object).toJson(QJsonDocument::Compact)));
+            auto Service = Manager(Root.path()); QVERIFY(!Service->Recover().errors_.empty()); QVERIFY(QFileInfo::exists(Directory + "/content.db-wal"));
+        }
+        QVERIFY(Put(File.fileName(), QByteArray(4097, ' '))); { auto Service = Manager(Root.path()); QVERIFY(!Service->Recover().errors_.empty()); QVERIFY(QFileInfo::exists(Directory + "/content.db-wal")); }
+        QVERIFY(Put(File.fileName(), Bytes)); auto Service = Manager(Root.path()); const auto Recovered = Service->Recover(); QVERIFY(Recovered.errors_.empty()); QCOMPARE(Recovered.removed_, 1u); QVERIFY(LeaseDirectories(Root.path()).isEmpty());
+    }
+    void auxiliaryRecoveryFailureRetainsQuota()
+    {
+        QTemporaryDir Root; QProcess Child; Child.start(QCoreApplication::applicationFilePath(), {"--crash-auxiliary-lease", Root.path()});
+        QVERIFY(Child.waitForStarted(5000)); QVERIFY(Child.waitForFinished(15000)); QCOMPARE(Child.exitCode(), 97);
+        const auto Names = LeaseDirectories(Root.path()); QCOMPARE(Names.size(), 1);
+        const auto Directory = QDir(Root.path() + "/hc-materialized-v1").filePath(Names.front()), Unknown = Directory + "/keep";
+        QVERIFY(Put(Unknown, "unregistered")); MaterializationLimits Limits; Limits.maxTotalBytes_ = 36;
+        auto Service = Manager(Root.path(), Limits); const auto Failed = Service->Recover(); QVERIFY(!Failed.errors_.empty());
+        QVERIFY(QFileInfo::exists(Directory + "/content.db")); QVERIFY(QFileInfo::exists(Directory + "/owner.lock")); QVERIFY(QFileInfo::exists(Directory + "/content.db-wal"));
+        const auto Full = Service->Materialize({Content("x")}, {}).get(); QVERIFY(!Full.HasValue()); QCOMPARE(Full.Failure().code_, std::string("materialization-total-budget"));
+        QVERIFY(QFile::remove(Unknown)); QVERIFY(Service->DrainCleanup().errors_.empty()); QVERIFY(LeaseDirectories(Root.path()).isEmpty());
+        auto Again = Service->Materialize({Content("x")}, {}).get(); QVERIFY(Again.HasValue()); Again.Value().reset(); QVERIFY(Service->DrainCleanup().errors_.empty());
+    }
+    void auxiliaryUnderreportedContentIsPreserved()
+    {
+        QTemporaryDir Root; QProcess Child; Child.start(QCoreApplication::applicationFilePath(), {"--crash-auxiliary-lease", Root.path()});
+        QVERIFY(Child.waitForStarted(5000)); QVERIFY(Child.waitForFinished(15000)); QCOMPARE(Child.exitCode(), 97);
+        const auto Names = LeaseDirectories(Root.path()); QCOMPARE(Names.size(), 1);
+        const auto Directory = QDir(Root.path() + "/hc-materialized-v1").filePath(Names.front()), Path = Directory + "/content.db", Owner = Directory + "/owner.lock";
+        QFile File(Owner); QVERIFY(File.open(QIODevice::ReadOnly)); const auto Original = File.readAll(); File.close(); auto Manifest = QJsonDocument::fromJson(Original).object();
+        Manifest["reservedBytes"] = "35"; QVERIFY(Put(Owner, QJsonDocument(Manifest).toJson(QJsonDocument::Compact)));
+        MaterializationLimits Limits; Limits.maxTotalBytes_ = 35; auto Service = Manager(Root.path(), Limits);
+        const auto Rejected = Service->Recover(); QVERIFY(!Rejected.errors_.empty()); QCOMPARE(Rejected.errors_.front().code_, std::string("invalid-lease-file"));
+        QVERIFY(QFileInfo::exists(Owner)); QVERIFY(QFileInfo::exists(Path + "-wal")); QVERIFY(QFileInfo::exists(Path + "-shm"));
+        QFile ContentFile(Path); QVERIFY(ContentFile.open(QIODevice::ReadOnly)); QCOMPARE(ContentFile.readAll(), QByteArray("data")); ContentFile.close();
+        const auto Full = Service->Materialize({Content("x")}, {}).get(); QVERIFY(!Full.HasValue()); QCOMPARE(Full.Failure().code_, std::string("materialization-total-budget"));
+        Service.reset(); QVERIFY(QFileInfo::exists(Owner)); QVERIFY(QFileInfo::exists(Path));
+        QVERIFY(Put(Owner, Original)); auto RecoveredService = Manager(Root.path()); const auto Recovered = RecoveredService->Recover(); QVERIFY(Recovered.errors_.empty()); QVERIFY(LeaseDirectories(Root.path()).isEmpty());
+    }
     void explicitPolicyAndConcurrentReservations()
     {
         OperationContext Context; QCOMPARE(Context.EnumerationLimit(), SIZE_MAX);
@@ -418,10 +577,12 @@ private slots:
 int main(int Argc, char** Argv)
 {
     QCoreApplication App(Argc, Argv);
-    if (App.arguments().size() == 3 && App.arguments()[1] == "--crash-lease")
+    if (App.arguments().size() == 3 && (App.arguments()[1] == "--crash-lease" || App.arguments()[1] == "--crash-auxiliary-lease"))
     {
         auto Service = Manager(App.arguments()[2]); if (!Service) return 2;
-        auto Made = Service->Materialize({Content("crash-recovery")}, {}).get(); if (!Made.HasValue()) return 3;
+        const bool Auxiliary = App.arguments()[1] == "--crash-auxiliary-lease";
+        auto Made = Auxiliary ? PrivateLease(*Service) : Service->Materialize({Content("crash-recovery")}, {}).get(); if (!Made.HasValue()) return 3;
+        if (Auxiliary) { const auto Path = QString::fromUtf8(Made.Value()->LocalPath()); if (!Put(Path + "-wal", {}) || !Put(Path + "-shm", QByteArray(32, 'i'))) return 5; }
         TerminateProcess(GetCurrentProcess(), 97); return 4;
     }
     MaterializationTests Tests; return QTest::qExec(&Tests, Argc, Argv);

@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <deque>
 #include <thread>
+#include <algorithm>
 
 #pragma comment(lib, "advapi32")
 
@@ -103,12 +104,33 @@ namespace hc::storage
         }
         using Identity = std::array<DWORD, 3>;
         Identity FileIdentity(const BY_HANDLE_FILE_INFORMATION& Info) { return {Info.dwVolumeSerialNumber, Info.nFileIndexHigh, Info.nFileIndexLow}; }
+        constexpr std::size_t MaximumAuxiliaries = 4, MaximumAuxiliarySuffix = 32;
+        constexpr std::uint64_t MaximumAuxiliaryBytes = 1024 * 1024;
+        constexpr DWORD MaximumManifestBytes = 4096;
+        Result<std::uint64_t> AuxiliaryReservation(const std::vector<MaterializationAuxiliary>& Values)
+        {
+            if (Values.size() > MaximumAuxiliaries) return Error{ErrorCategory::InvalidRequest, "invalid-lease-auxiliaries"};
+            std::uint64_t Total = 0; QStringList Names;
+            for (const auto& Value : Values) {
+                const auto Suffix = QString::fromUtf8(Value.suffix_);
+                if (Value.suffix_.empty() || Value.suffix_.size() > MaximumAuxiliarySuffix || Suffix.toUtf8().toStdString() != Value.suffix_
+                    || !QRegularExpression("^[-.][A-Za-z0-9_.-]+$").match(Suffix).hasMatch() || Suffix.contains("..") || Suffix.endsWith('.')
+                    || Names.contains(Suffix, Qt::CaseInsensitive) || Value.maxBytes_ > MaximumAuxiliaryBytes - Total)
+                    return Error{ErrorCategory::InvalidRequest, "invalid-lease-auxiliaries"};
+                Names.push_back(Suffix); Total += Value.maxBytes_;
+            }
+            return Total;
+        }
+        struct Auxiliary { QString name_; std::uint64_t maxBytes_; };
         struct Record
         {
             QString directory_, content_;
             Handle owner_, file_;
             std::vector<Handle> pins_;
             Identity identity_{};
+            std::optional<Identity> contentIdentity_;
+            std::optional<std::uint64_t> contentLimit_;
+            std::vector<Auxiliary> auxiliaries_;
             std::uint64_t bytes_ = 0;
             bool accounted_ = false;
             bool created_ = false;
@@ -116,6 +138,10 @@ namespace hc::storage
         Result<Unit> Cleanup(Record& Item)
         {
             Item.file_.Close();
+            BY_HANDLE_FILE_INFORMATION DirectoryInfo{};
+            if (Item.pins_.empty() || !GetFileInformationByHandle(Item.pins_.back().value_, &DirectoryInfo)
+                || FileIdentity(DirectoryInfo) != Item.identity_ || (DirectoryInfo.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                return Error{ErrorCategory::StaleRevision, "lease-directory-replaced"};
             // A producer can leave a private workspace after a crash. Preserve
             // its ownership manifest until all unexpected entries are resolved;
             // never recursively remove a tree based only on its location.
@@ -127,25 +153,52 @@ namespace hc::storage
                 for (;;)
                 {
                     const auto Name = QString::fromWCharArray(Found.cFileName);
-                    if (Name != "." && Name != ".." && Name != "owner.lock" && Name != QFileInfo(Item.content_).fileName())
+                    const auto Declared = std::any_of(Item.auxiliaries_.begin(), Item.auxiliaries_.end(), [&](const auto& Auxiliary) { return Auxiliary.name_ == Name; });
+                    if (Name != "." && Name != ".." && Name != "owner.lock" && Name != QFileInfo(Item.content_).fileName() && !Declared)
                         return Error{ErrorCategory::InvalidRequest, "unexpected-lease-entry", {}, {}, false, "preserved-workspace:" + Item.directory_.toStdString()};
                     if (!FindNextFileW(Search, &Found)) { if (GetLastError() != ERROR_NO_MORE_FILES) return WinError(Item.directory_); break; }
                 }
             }
             else if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) return WinError(Item.directory_);
-            if (!Item.content_.isEmpty())
-            {
-                Handle Data(CreateFileW(Native(Item.content_).c_str(), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
-                    nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
-                if (Data.Valid())
-                {
-                    BY_HANDLE_FILE_INFORMATION Info{};
-                    if (!GetFileInformationByHandle(Data.value_, &Info)) return WinError(Item.content_);
-                    if (Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return Error{ErrorCategory::InvalidRequest, "unexpected-lease-directory"};
-                    const auto Deleted = Dispose(Data.value_, Item.content_); if (!Deleted.HasValue()) return Deleted;
-                }
-                else if (GetLastError() != ERROR_FILE_NOT_FOUND) return WinError(Item.content_);
+            // Validate the entire set and retain the same handles through
+            // disposition. Unknown/locked/invalid entries never start deletion.
+            // Later filesystem failures can leave some known caches retired;
+            // content/owner and quota remain until auxiliary retirement succeeds.
+            std::vector<Identity> Identities;
+            if (Item.owner_.Valid()) {
+                BY_HANDLE_FILE_INFORMATION Info{};
+                if (!GetFileInformationByHandle(Item.owner_.value_, &Info)) return WinError(Item.directory_);
+                if (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) || Info.nNumberOfLinks != 1)
+                    return Error{ErrorCategory::InvalidRequest, "invalid-lease-manifest"};
+                Identities.push_back(FileIdentity(Info));
             }
+            const auto Open = [&](const QString& Path, std::uint64_t Limit, std::optional<Identity> Expected = {}) -> Result<Handle> {
+                Handle File(CreateFileW(Native(Path).c_str(), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                    FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+                if (!File.Valid()) { const auto Code = GetLastError(); if (Code == ERROR_FILE_NOT_FOUND) return std::move(File); return WinError(Path, Code); }
+                BY_HANDLE_FILE_INFORMATION Info{};
+                if (!GetFileInformationByHandle(File.value_, &Info)) return WinError(Path);
+                const auto Id = FileIdentity(Info); const auto Bytes = (std::uint64_t(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow;
+                if (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) || Info.nNumberOfLinks != 1
+                    || GetFileType(File.value_) != FILE_TYPE_DISK || Info.dwVolumeSerialNumber != Item.identity_[0] || Bytes > Limit || (Expected && Id != *Expected)
+                    || std::find(Identities.begin(), Identities.end(), Id) != Identities.end())
+                    return Error{ErrorCategory::InvalidRequest, "invalid-lease-file", {}, {}, false, "preserved-workspace:" + Item.directory_.toStdString()};
+                Identities.push_back(Id); return std::move(File);
+            };
+            Handle Data;
+            if (!Item.content_.isEmpty()) {
+                auto Opened = Open(Item.content_, Item.contentLimit_.value_or(UINT64_MAX), Item.contentIdentity_); if (!Opened.HasValue()) return Opened.Failure(); Data = std::move(Opened.Value());
+            }
+            std::vector<Handle> Auxiliaries;
+            for (const auto& Auxiliary : Item.auxiliaries_) {
+                auto Opened = Open(QDir(Item.directory_).filePath(Auxiliary.name_), Auxiliary.maxBytes_);
+                if (!Opened.HasValue()) return Opened.Failure(); Auxiliaries.push_back(std::move(Opened.Value()));
+            }
+            for (std::size_t Index = 0; Index < Auxiliaries.size(); ++Index) if (Auxiliaries[Index].Valid()) {
+                const auto Deleted = Dispose(Auxiliaries[Index].value_, QDir(Item.directory_).filePath(Item.auxiliaries_[Index].name_)); if (!Deleted.HasValue()) return Deleted;
+            }
+            Auxiliaries.clear();
+            if (Data.Valid()) { const auto Deleted = Dispose(Data.value_, Item.content_); if (!Deleted.HasValue()) return Deleted; Data.Close(); }
             if (Item.owner_.Valid())
             {
                 const auto Deleted = Dispose(Item.owner_.value_, Item.directory_); if (!Deleted.HasValue()) return Deleted;
@@ -178,16 +231,21 @@ namespace hc::storage
             Result<std::shared_ptr<IMaterializedFileLease>> Produce(EntrySnapshot Entry,
                 std::vector<std::shared_ptr<IMaterializedFileLease>> Parents, std::optional<std::uint64_t> CompressedBytes,
                 OperationContext Context, std::function<Result<Unit>(const std::string&, OperationContext)> Producer, ProducedSize Size) override;
-            Result<std::unique_ptr<Record>> Create(const EntrySnapshot& Entry)
+            Result<std::unique_ptr<Record>> Create(const EntrySnapshot& Entry, const std::vector<MaterializationAuxiliary>& Auxiliaries = {})
             {
+                const auto Extra = AuxiliaryReservation(Auxiliaries); if (!Extra.HasValue()) return Extra.Failure();
+                if (std::any_of(Auxiliaries.begin(), Auxiliaries.end(), [&](const auto& Auxiliary) { return Auxiliary.maxBytes_ > limits_.maxFileBytes_; }))
+                    return Error{ErrorCategory::BudgetExceeded, "materialization-file-budget"};
+                if (Entry.size_ > UINT64_MAX - Extra.Value()) return Error{ErrorCategory::BudgetExceeded, "materialization-total-budget"};
+                const auto Reserved = Entry.size_ + Extra.Value();
                 std::lock_guard Maintenance(maintenance_);
                 {
                     std::lock_guard Lock(mutex_);
-                    if (active_ >= limits_.maxActiveFiles_ || Entry.size_ > limits_.maxTotalBytes_ - bytes_)
+                    if (active_ >= limits_.maxActiveFiles_ || Reserved > limits_.maxTotalBytes_ - bytes_)
                         return Error{ErrorCategory::BudgetExceeded, "materialization-total-budget"};
-                    ++active_; bytes_ += Entry.size_;
+                    ++active_; bytes_ += Reserved;
                 }
-                auto Item = std::make_unique<Record>(); Item->bytes_ = Entry.size_; Item->accounted_ = true;
+                auto Item = std::make_unique<Record>(); Item->bytes_ = Reserved; Item->accounted_ = true;
                 const auto Release = qScopeGuard([&] {
                     if (!Item) return;
                     if (!Item->created_ || Cleanup(*Item).HasValue()) release(*Item);
@@ -197,7 +255,7 @@ namespace hc::storage
                 if (!Gate.HasValue()) return Gate.Failure();
                 ULARGE_INTEGER Available{};
                 if (!GetDiskFreeSpaceExW(Native(root_).c_str(), &Available, nullptr, nullptr)) return WinError(root_);
-                if (Entry.size_ > Available.QuadPart) return Error{ErrorCategory::BudgetExceeded, "materialization-disk-space"};
+                if (Reserved > Available.QuadPart) return Error{ErrorCategory::BudgetExceeded, "materialization-disk-space"};
                 Item->directory_ = root_ + "/hc-lease-v1-" + QUuid::createUuid().toString(QUuid::Id128);
                 auto Made = PrivateDirectory(Item->directory_); if (!Made.HasValue()) return Made.Failure();
                 Item->created_ = true;
@@ -211,7 +269,20 @@ namespace hc::storage
                 const auto Extension = QRegularExpression("\\.[A-Za-z0-9]{1,16}$").match(QString::fromStdString(Entry.name_)).captured();
                 const auto Leaf = "content" + Extension;
                 Item->content_ = Item->directory_ + '/' + Leaf;
-                const auto Manifest = QJsonDocument(QJsonObject{{"schema", 1}, {"directory", QFileInfo(Item->directory_).fileName()}, {"file", Leaf}}).toJson(QJsonDocument::Compact);
+                QJsonObject Object{{"schema", Auxiliaries.empty() ? 1 : 2}, {"directory", QFileInfo(Item->directory_).fileName()}, {"file", Leaf}};
+                if (!Auxiliaries.empty()) {
+                    Item->contentLimit_ = Entry.size_;
+                    QJsonArray Values;
+                    for (const auto& Auxiliary : Auxiliaries) {
+                        const auto Name = Leaf + QString::fromUtf8(Auxiliary.suffix_);
+                        Item->auxiliaries_.push_back({Name, Auxiliary.maxBytes_});
+                        Values.append(QJsonObject{{"name", Name}, {"maxBytes", QString::number(Auxiliary.maxBytes_)}});
+                    }
+                    Object["auxiliaries"] = Values;
+                    Object["reservedBytes"] = QString::number(Reserved);
+                }
+                const auto Manifest = QJsonDocument(Object).toJson(QJsonDocument::Compact);
+                if (Manifest.size() > MaximumManifestBytes) return Error{ErrorCategory::InvalidRequest, "invalid-lease-manifest"};
                 DWORD Written = 0;
                 if (!WriteFile(Item->owner_.value_, Manifest.data(), static_cast<DWORD>(Manifest.size()), &Written, nullptr)
                     || Written != Manifest.size() || !FlushFileBuffers(Item->owner_.value_)) return WinError(Item->directory_);
@@ -260,18 +331,51 @@ namespace hc::storage
                     else
                     {
                         Item.owner_ = std::move(Owner.Value());
-                        std::array<char, 513> Bytes{}; DWORD Read = 0;
-                        if (!ReadFile(Item.owner_.value_, Bytes.data(), 513, &Read, nullptr) || Read > 512)
+                        std::array<char, MaximumManifestBytes + 1> Bytes{}; DWORD Read = 0;
+                        if (!ReadFile(Item.owner_.value_, Bytes.data(), DWORD(Bytes.size()), &Read, nullptr) || Read > MaximumManifestBytes)
                         { Report.errors_.push_back({ErrorCategory::InvalidRequest, "invalid-lease-manifest"}); continue; }
                         const auto Manifest = QJsonDocument::fromJson(QByteArray(Bytes.data(), Read)).object();
                         const auto Leaf = Manifest.value("file").toString();
-                        if (Manifest.value("schema").toInt() != 1 || Manifest.value("directory").toString() != Name
+                        const auto Schema = Manifest.value("schema").toInt();
+                        if ((Schema != 1 && Schema != 2) || (Schema == 1 && Read > 512) || Manifest.value("directory").toString() != Name
                             || !QRegularExpression("^content(?:\\.[A-Za-z0-9]{1,16})?$").match(Leaf).hasMatch())
                         { Report.errors_.push_back({ErrorCategory::InvalidRequest, "invalid-lease-manifest"}); continue; }
                         Item.content_ = Item.directory_ + '/' + Leaf;
+                        if (Schema == 2) {
+                            bool Valid = Manifest.size() == 5 && Manifest["auxiliaries"].isArray();
+                            const auto Values = Manifest["auxiliaries"].toArray(); std::vector<MaterializationAuxiliary> Declarations;
+                            if (!Valid || Values.isEmpty() || Values.size() > MaximumAuxiliaries) { Report.errors_.push_back({ErrorCategory::InvalidRequest, "invalid-lease-manifest"}); continue; }
+                            for (const auto& Value : Values) {
+                                const auto Object = Value.toObject(); const auto AuxiliaryName = Object["name"].toString();
+                                bool Parsed = false; const auto Text = Object["maxBytes"].toString(); const auto Limit = Text.toULongLong(&Parsed);
+                                if (Object.size() != 2 || !AuxiliaryName.startsWith(Leaf) || !Parsed
+                                    || !QRegularExpression("^(?:0|[1-9][0-9]{0,6})$").match(Text).hasMatch()) Valid = false;
+                                Declarations.push_back({AuxiliaryName.mid(Leaf.size()).toStdString(), Limit});
+                            }
+                            const auto Reservation = AuxiliaryReservation(Declarations);
+                            bool Parsed = false; const auto Text = Manifest["reservedBytes"].toString(); const auto Reserved = Text.toULongLong(&Parsed);
+                            if (!Valid || !Reservation.HasValue() || !Parsed || !QRegularExpression("^(?:0|[1-9][0-9]{0,19})$").match(Text).hasMatch()
+                                || Reserved < Reservation.Value() || Reserved - Reservation.Value() > limits_.maxFileBytes_
+                                || std::any_of(Declarations.begin(), Declarations.end(), [&](const auto& Declaration) { return Declaration.maxBytes_ > limits_.maxFileBytes_; }))
+                            { Report.errors_.push_back({ErrorCategory::InvalidRequest, "invalid-lease-manifest"}); continue; }
+                            for (const auto& Declaration : Declarations) Item.auxiliaries_.push_back({Leaf + QString::fromUtf8(Declaration.suffix_), Declaration.maxBytes_});
+                            Item.contentLimit_ = Reserved - Reservation.Value();
+                            // Keep the bounded reservation while a recovered
+                            // workspace is retired or retained for cleanup retry.
+                            { std::lock_guard Lock(mutex_);
+                                if (active_ >= limits_.maxActiveFiles_ || Reserved > limits_.maxTotalBytes_ - bytes_) {
+                                    Report.errors_.push_back({ErrorCategory::BudgetExceeded, "materialization-total-budget"}); continue;
+                                }
+                                ++active_; bytes_ += Reserved; Item.bytes_ = Reserved; Item.accounted_ = true;
+                            }
+                        }
                     }
                     const auto Removed = Cleanup(Item);
-                    if (Removed.HasValue()) ++Report.removed_; else Report.errors_.push_back(Removed.Failure());
+                    if (Removed.HasValue()) { release(Item); ++Report.removed_; }
+                    else {
+                        Report.errors_.push_back(Removed.Failure());
+                        if (Item.accounted_) { std::lock_guard Lock(mutex_); failed_.push_back(std::make_unique<Record>(std::move(Item))); }
+                    }
                 }
                 return Report;
             }
@@ -395,6 +499,7 @@ namespace hc::storage
             if (!Item->file_.Valid()) return Fail(WinError(Item->content_));
             BY_HANDLE_FILE_INFORMATION Info{};
             if (!GetFileInformationByHandle(Item->file_.value_, &Info)) return Fail(WinError(Item->content_));
+            Item->contentIdentity_ = FileIdentity(Info);
             const auto Bytes = (static_cast<std::uint64_t>(Info.nFileSizeHigh) << 32) | Info.nFileSizeLow;
             if (Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) || Info.nNumberOfLinks != 1
                 || (Size == ProducedSize::Exact ? Bytes != Entry.size_ : Bytes > Entry.size_))
@@ -435,7 +540,7 @@ namespace hc::storage
                     if (entry_.directory_ || (entry_.attributes_ & 0x400)) return fail({ErrorCategory::Unsupported, "materialization-file-required"});
                     if (const auto Policy = CheckMaterialization(entry_, depth_, request_.compressedBytes_, Limits, Context.operation_)) return fail(*Policy);
                     const auto Verified = request_.source_->Verify(Context.operation_).get(); if (!Verified.HasValue()) return fail(Verified.Failure());
-                    auto Created = store_->Create(entry_);
+                    auto Created = store_->Create(entry_, request_.auxiliaries_);
                     if (!Created.HasValue())
                     {
                         if (Created.Failure().retryable_ && Context.retryAttempt_ < 3)
@@ -471,6 +576,9 @@ namespace hc::storage
                 item_->file_ = Handle(CreateFileW(Native(item_->content_).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                     OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
                 if (!item_->file_.Valid()) return fail(WinError(item_->content_));
+                BY_HANDLE_FILE_INFORMATION IdentityInfo{};
+                if (!GetFileInformationByHandle(item_->file_.value_, &IdentityInfo)) return fail(WinError(item_->content_));
+                item_->contentIdentity_ = FileIdentity(IdentityInfo);
                 ready_ = true; Step.next_ = JobState::Completed; return Step;
             }
             std::vector<Error> Finalize(operations::JobState State) override
@@ -506,7 +614,7 @@ namespace hc::storage
             std::size_t depth_ = 0;
             bool ready_ = false;
         };
-        class Materializer final : public IMaterializer
+        class Materializer final : public IMaterializer, public IPrivateAuxiliaryMaterializer
         {
         public:
             explicit Materializer(std::shared_ptr<Store> Store) : store_(std::move(Store))
@@ -538,6 +646,16 @@ namespace hc::storage
             }
             Task<std::shared_ptr<IMaterializedFileLease>> Materialize(MaterializationRequest Request, OperationContext Context) override
             {
+                if (!Request.auxiliaries_.empty()) return Ready<std::shared_ptr<IMaterializedFileLease>>(Error{ErrorCategory::Unsupported, "materialization-auxiliaries-require-private-owner"});
+                return materialize(std::move(Request), std::move(Context));
+            }
+            Task<std::shared_ptr<IMaterializedFileLease>> MaterializeWithAuxiliaries(MaterializationRequest Request, OperationContext Context) override
+            { return materialize(std::move(Request), std::move(Context)); }
+            MaterializationCleanup Recover() override { return store_->Recover(); }
+            MaterializationCleanup DrainCleanup() override { return store_->Drain(); }
+        private:
+            Task<std::shared_ptr<IMaterializedFileLease>> materialize(MaterializationRequest Request, OperationContext Context)
+            {
                 if (!Request.source_ || !Context.maxReadBytes_)
                     return Ready<std::shared_ptr<IMaterializedFileLease>>(Error{ErrorCategory::InvalidRequest, "invalid-materialization-request"});
                 std::lock_guard Lock(mutex_);
@@ -554,9 +672,6 @@ namespace hc::storage
                 if (!Started.HasValue()) Promise->set_value(Started.Failure()); else jobs_.push_back(Started.Value().id_);
                 return Future;
             }
-            MaterializationCleanup Recover() override { return store_->Recover(); }
-            MaterializationCleanup DrainCleanup() override { return store_->Drain(); }
-        private:
             std::shared_ptr<Store> store_;
             std::unique_ptr<operations::JobScheduler> scheduler_;
             std::mutex mutex_;

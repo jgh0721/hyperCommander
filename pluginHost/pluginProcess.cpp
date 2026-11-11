@@ -1,4 +1,5 @@
-﻿#include "pluginProcess.hpp"
+﻿#include "stdafx.h"
+#include "pluginProcess.hpp"
 #include "UniqueLibs/productDefaults.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "commonLibs/layout/productLayout.hpp"
@@ -6,6 +7,8 @@
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "pipeChannel.hpp"
 #include "sessionClient.hpp"
+#include "viewerRuntimeClient.hpp"
+#include "viewerHostRuntime.hpp"
 #include "archiveCodec.hpp"
 #include <cstring>
 #include <sddl.h>
@@ -28,26 +31,6 @@ namespace hc::plugins
     {
         OperationContext Bound(OperationContext Context, std::uint32_t Milliseconds)
         { Context.deadline_ = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::milliseconds(Milliseconds)); return Context; }
-        bool ResponsiveViewerModal(DWORD Process)
-        {
-            struct Search { DWORD process_; HWND dialog_ = nullptr, owner_ = nullptr; } State{Process};
-            EnumWindows([](HWND Window, LPARAM Context) -> BOOL {
-                auto& Search = *reinterpret_cast<struct Search*>(Context);
-                DWORD Pid = 0; GetWindowThreadProcessId(Window, &Pid);
-                if (Pid != Search.process_ || !IsWindowVisible(Window) || !IsWindowEnabled(Window)) return TRUE;
-                const auto Owner = GetAncestor(GetWindow(Window, GW_OWNER), GA_ROOT);
-                DWORD OwnerPid = 0; if (Owner) GetWindowThreadProcessId(Owner, &OwnerPid);
-                if (OwnerPid != Search.process_ || IsWindowEnabled(Owner)) return TRUE;
-                Search.dialog_ = Window; Search.owner_ = Owner; return FALSE;
-            }, reinterpret_cast<LPARAM>(&State));
-            if (!State.dialog_) return false;
-            DWORD_PTR Reply = 0;
-            // Check both the dialog and viewer UI thread; a responsive helper
-            // dialog alone must not conceal an otherwise hung viewer.
-            const auto Flags = SMTO_ABORTIFHUNG | SMTO_BLOCK | SMTO_ERRORONEXIT;
-            return SendMessageTimeoutW(State.dialog_, WM_NULL, 0, 0, Flags, 100, &Reply)
-                && SendMessageTimeoutW(State.owner_, WM_NULL, 0, 0, Flags, 100, &Reply);
-        }
         std::wstring Quote(const QString& Value)
         {
             std::wstring Out = L"\""; unsigned Slashes = 0;
@@ -91,14 +74,17 @@ namespace hc::plugins
         mutable std::timed_mutex mutex_;
         mutable std::mutex snapshotMutex_;
         mutable HostSnapshot lastSnapshot_;
-        WinHandle pipe_, job_, process_;
+        WinHandle pipe_, control_, job_, process_;
+        std::unique_ptr<ViewerRuntimeClient> runtime_;
         HostLimits limits_;
         std::unique_ptr<QTemporaryDir> helperConfig_;
         bool helpers_ = false;
         QString helperPath_;
         DWORD pid_ = 0;
-        bool viewer_ = false;
+        bool viewer_ = false, dopusViewer_ = false;
         HWND viewerParent_ = nullptr, viewerRoot_ = nullptr;
+        // Only the exact grants that predated the last detached replacement.
+        std::optional<std::pair<HWND, HWND>> detachedOpenGrants_;
         bool documentViewer_ = false;
         std::uint64_t sequence_ = 0;
         std::optional<Error> failure_;
@@ -116,7 +102,7 @@ namespace hc::plugins
         {
             // A queued call must honour its own cancellation/deadline even while
             // another long archive call owns the pipe. A plain mutex ignores both.
-            Context = Bound(Context, limits_.requestMs_);
+            if (!runtime_) Context = Bound(Context, limits_.requestMs_);
             std::unique_lock Lock(mutex_, std::defer_lock);
             for (;;) {
                 if (const auto Stop = Context.Check({"plugin-host"})) return *Stop;
@@ -138,6 +124,7 @@ namespace hc::plugins
         {
             if (failure_) return *failure_;
             if (closed_) return HostError("host-closed");
+            if (runtime_) return runtime_->Call(Kind, ++sequence_, Payload, Context);
             // In-process WCX writers also stream and verify multi-GiB images.
             // The write budget is independent of permission to spawn helpers.
             const auto RequestBudget = Context.passwordPrompt_ ? std::max(limits_.requestMs_, 180000u) : limits_.requestMs_;
@@ -158,10 +145,7 @@ namespace hc::plugins
             {
                 Sent = WriteFrame(pipe_.Get(), process_.Get(), Kind, Sequence, Payload, Context);
                 if (!Sent.HasValue()) { fail(Sent.Failure()); return *failure_; }
-                // Only the reviewed builtin viewer may pause its response
-                // deadline for a live, responsive modal user interaction.
-                Reply = ReadFrame(pipe_.Get(), process_.Get(), Context, false,
-                    documentViewer_ ? std::function<bool()>{[this] { return ResponsiveViewerModal(pid_); }} : std::function<bool()>{});
+                Reply = ReadFrame(pipe_.Get(), process_.Get(), Context);
             }
             unsigned Prompts = 0;
             while (Reply.HasValue() && Reply.Value().header_.kind_ == WireKind::ArchivePassword)
@@ -283,6 +267,7 @@ namespace hc::plugins
             || Limits.cancelGraceMs_ < 100 || Limits.cancelGraceMs_ > 60000
             || Limits.heartbeatMs_ < 100 || Limits.heartbeatMs_ > 60000)
             return HostError("host-invalid-limits");
+        const auto CallerContext = Context;
         Context = Bound(Context, Limits.startupMs_);
         auto Inspected = InspectManifestFile(ManifestPath, Context); if (!Inspected.HasValue()) return Inspected.Failure();
         const auto Format = Inspected.Value().manifest_.format_;
@@ -315,6 +300,14 @@ namespace hc::plugins
         }
         S.limits_ = Limits; S.pipe_ = std::move(Pipe.Value()); S.job_.Reset(CreateJobObjectW(nullptr, nullptr));
         S.viewer_ = Inspected.Value().manifest_.format_ == PluginFormat::Wlx || Inspected.Value().manifest_.format_ == PluginFormat::DopusViewer;
+        S.dopusViewer_ = Inspected.Value().manifest_.format_ == PluginFormat::DopusViewer;
+        const bool UiRuntime = S.viewer_ || Limits.purpose_ == HostPurpose::Configuration;
+        QString ControlName, RuntimeEpoch, RuntimeNonce;
+        if (UiRuntime) {
+            ControlName = "\\\\.\\pipe\\hyperCommander-" + QUuid::createUuid().toString(QUuid::Id128);
+            RuntimeEpoch = QUuid::createUuid().toString(QUuid::Id128); RuntimeNonce = QUuid::createUuid().toString(QUuid::Id128);
+            auto Control = ServerPipe(ControlName); if (!Control.HasValue()) return Control.Failure(); S.control_ = std::move(Control.Value());
+        }
         if (!S.job_.Valid()) return HostError("host-job-create", GetLastError());
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION Job{};
         Job.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
@@ -461,6 +454,40 @@ namespace hc::plugins
             else if (Error != ERROR_PIPE_CONNECTED) return HostError("host-pipe-connect", Error);
         }
         ULONG Peer = 0; if (!GetNamedPipeClientProcessId(S.pipe_.Get(), &Peer) || Peer != S.pid_) return HostError("host-pipe-peer");
+        if (UiRuntime) {
+            const auto Hello = RuntimeJson({{"profile", "viewer-ui/1"}, {"control", ControlName}, {"epoch", RuntimeEpoch},
+                {"nonce", RuntimeNonce}, {"heartbeatMs", int(Limits.heartbeatMs_)}});
+            auto Sent = WriteFrame(S.pipe_.Get(), S.process_.Get(), WireKind::RuntimeHello, 1, Hello, Context);
+            if (!Sent.HasValue()) return HostError("host-runtime-unsupported");
+            ResetEvent(Event.Get()); OVERLAPPED Connect{}; Connect.hEvent = Event.Get();
+            if (!ConnectNamedPipe(S.control_.Get(), &Connect)) {
+                const auto Code = GetLastError();
+                if (Code == ERROR_IO_PENDING) {
+                    auto Wait = WaitPipe(S.control_.Get(), Connect, S.process_.Get(), Context);
+                    if (!Wait.HasValue()) {
+                        if (Context.stopToken_.stop_requested()) return *Context.Check({"plugin-host"});
+                        return HostError(WaitForSingleObject(S.process_.Get(), 0) == WAIT_OBJECT_0 ? "host-runtime-unsupported" : "host-runtime-handshake-timeout");
+                    }
+                } else if (Code != ERROR_PIPE_CONNECTED) return HostError("host-control-connect", Code);
+            }
+            if (!GetNamedPipeClientProcessId(S.control_.Get(), &Peer) || Peer != S.pid_) return HostError("host-control-peer");
+            auto ControlHello = ReadFrame(S.control_.Get(), S.process_.Get(), Context, false, ViewerControlLimit, 1000);
+            if (!ControlHello.HasValue()) return ControlHello.Failure();
+            auto Declaration = RuntimeObject(ControlHello.Value().payload_);
+            if (!Declaration.HasValue() || ControlHello.Value().header_.kind_ != WireKind::ControlHello || ControlHello.Value().header_.sequence_ != 1
+                || ControlHello.Value().header_.version_ != ProtocolVersion{1, 0} || Declaration.Value().size() != 4
+                || Declaration.Value()["epoch"] != RuntimeEpoch || Declaration.Value()["nonce"] != RuntimeNonce
+                || Declaration.Value()["profile"] != "viewer-ui/1" || Declaration.Value()["processId"].toInteger() != S.pid_) return HostError("host-control-hello");
+            Sent = WriteFrame(S.control_.Get(), S.process_.Get(), WireKind::Response, 1, RuntimeJson({{"epoch", RuntimeEpoch}}), Context);
+            if (!Sent.HasValue()) return Sent.Failure();
+            auto Reply = ReadFrame(S.pipe_.Get(), S.process_.Get(), Context, false, ViewerControlLimit, 1000);
+            if (!Reply.HasValue()) return HostError("host-runtime-unsupported");
+            if (Reply.Value().header_.kind_ != WireKind::Response || Reply.Value().header_.sequence_ != 1 || Reply.Value().header_.version_ != ProtocolVersion{1, 0}
+                || Reply.Value().payload_ != RuntimeJson({{"profile", "viewer-ui/1"}, {"epoch", RuntimeEpoch}})) return HostError("host-runtime-hello");
+            S.sequence_ = 1;
+            try { S.runtime_ = std::make_unique<ViewerRuntimeClient>(S.pipe_.Get(), S.control_.Get(), S.process_.Get(), S.job_.Get(), RuntimeEpoch, Limits); }
+            catch (const std::system_error&) { return HostError("host-runtime-worker-start"); }
+        }
         QJsonObject Declaration{{"manifestPath", QFileInfo(ManifestPath).absoluteFilePath()},
             {"manifest", QJsonDocument::fromJson(EncodeManifest(Inspected.Value().manifest_)).object()}};
         if (Limits.purpose_ == HostPurpose::Configuration) Declaration["configuration"] = true;
@@ -471,7 +498,18 @@ namespace hc::plugins
             Declaration.insert("defaultIni", QDir::cleanPath(Ini));
         }
         const auto Hello = QJsonDocument(Declaration).toJson(QJsonDocument::Compact);
-        auto Ready = S.call(WireKind::Hello, Hello, Context); if (!Ready.HasValue()) return Ready.Failure();
+        auto Ready = S.call(WireKind::Hello, Hello, UiRuntime ? CallerContext : Context);
+        if (!Ready.HasValue()) {
+            if (UiRuntime && Ready.Failure().code_ == "host-caller-detached") {
+                // Initialization has not received an input document yet. Keep
+                // its package/INI/runtime owner until the SDK returns or the
+                // independent watchdog reaps it, even if Start's caller left.
+                auto Pending = std::shared_ptr<PluginProcess>(std::move(Owner));
+                try { std::thread([Pending] { Pending->AwaitPending(); Pending->Close(); }).detach(); }
+                catch (const std::system_error&) { Pending->AwaitPending(); Pending->Close(); }
+            }
+            return Ready.Failure();
+        }
         if (!Ready.Value()["inJob"].toBool() || !Ready.Value()["adminDenied"].toBool() || !Ready.Value()["privilegesRemoved"].toBool()) return HostError("host-restriction-verification");
         S.ready_ = true;
         S.archiveOptionsVersion_ = unsigned(Ready.Value()["archiveOptionsVersion"].toInt(0));
@@ -482,7 +520,7 @@ namespace hc::plugins
             S.sessionState_ = ProviderSessionState::Ready;
         }
         Owner->Snapshot(); // Seed observations before monitoring can own the channel.
-        S.heartbeat_ = std::jthread([State = &S](std::stop_token Stop) {
+        if (!S.runtime_) S.heartbeat_ = std::jthread([State = &S](std::stop_token Stop) {
             while (!Stop.stop_requested())
             {
                 { std::unique_lock SleepLock(State->sleepMutex_); State->sleep_.wait_for(SleepLock, Stop, std::chrono::milliseconds(State->limits_.heartbeatMs_), [] { return false; }); }
@@ -503,6 +541,23 @@ namespace hc::plugins
     { auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure(); return state_->call(WireKind::Probe, {}, Context); }
     Result<QJsonObject> PluginProcess::Ping(OperationContext Context)
     { auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure(); return state_->call(WireKind::Ping, {}, Context); }
+    Result<QJsonObject> PluginProcess::AwaitPending(OperationContext Context)
+    {
+        auto& S = *state_; auto Lock = S.acquire(Context); if (!Lock.HasValue()) return Lock.Failure();
+        if (!S.runtime_) return Error{ErrorCategory::Unsupported, "host-runtime-required"};
+        WireKind Kind = WireKind::Hello; auto Result = S.runtime_->AwaitPending(Context, &Kind);
+        if (Kind == WireKind::ViewerOpen && !Result.HasValue() && Result.Failure().code_ != "host-caller-detached") {
+            const bool UntouchedReplacement = Result.Failure().code_ == "host-cancelled-before-start" && S.detachedOpenGrants_
+                && S.detachedOpenGrants_->first == S.viewerParent_ && S.detachedOpenGrants_->second == S.viewerRoot_;
+            if (!UntouchedReplacement) {
+                if (S.viewerRoot_) UserHandleGrantAccess(S.viewerRoot_, S.job_.Get(), FALSE);
+                if (S.viewerParent_) UserHandleGrantAccess(S.viewerParent_, S.job_.Get(), FALSE);
+                S.viewerRoot_ = S.viewerParent_ = nullptr;
+            }
+        }
+        if (Kind == WireKind::ViewerOpen && (Result.HasValue() || Result.Failure().code_ != "host-caller-detached")) S.detachedOpenGrants_.reset();
+        return Result;
+    }
     Result<QJsonObject> PluginProcess::ArchiveCall(WireKind Kind, QJsonObject Request, OperationContext Context)
     {
         if (!IsArchiveCommand(Kind)) return HostError("host-archive-command");
@@ -513,22 +568,25 @@ namespace hc::plugins
         if (!IsViewerCommand(Kind)) return HostError("host-viewer-command");
         auto Lock = state_->acquire(Context); if (!Lock.HasValue()) return Lock.Failure(); auto& S = *state_;
         if (!S.viewer_ || S.closed_ || S.failure_) return HostError("host-viewer-unavailable");
+        std::optional<std::pair<HWND, HWND>> ExistingReplacementGrants;
         if (Kind == WireKind::ViewerOpen)
         {
-            if (S.viewerParent_) return HostError("host-viewer-already-open");
             bool Parsed = false; const auto Value = Request["parent"].toString().toULongLong(&Parsed, 16);
             const auto Parent = reinterpret_cast<HWND>(static_cast<quintptr>(Value)); DWORD Owner = 0;
             if (!Parsed || !Parent || !GetWindowThreadProcessId(Parent, &Owner) || Owner != GetCurrentProcessId()) return HostError("host-viewer-parent");
+            const bool Replacing = S.viewerParent_ && S.runtime_ && S.dopusViewer_ && Parent == S.viewerParent_;
+            if (S.viewerParent_ && !Replacing) return HostError("host-viewer-already-open");
+            if (Replacing) ExistingReplacementGrants = std::make_pair(S.viewerParent_, S.viewerRoot_);
             JOBOBJECT_BASIC_UI_RESTRICTIONS Ui{};
             if(!QueryInformationJobObject(S.job_.Get(),JobObjectBasicUIRestrictions,&Ui,sizeof(Ui),nullptr))return HostError("host-viewer-ui-policy",GetLastError());
             const bool Restricted=(Ui.UIRestrictionsClass&JOB_OBJECT_UILIMIT_HANDLES)!=0;
             // A grant is valid only for a Job with HANDLES restrictions. The
             // RHWP-enabled built-in workspace has native desktop UI access.
-            if(Restricted){
+            if(Restricted && !Replacing){
                 if(!UserHandleGrantAccess(Parent,S.job_.Get(),TRUE))return HostError("host-viewer-parent-grant",GetLastError());
                 S.viewerParent_=Parent;
             }
-            if (Restricted && S.documentViewer_) {
+            if (Restricted && !Replacing && S.documentViewer_) {
                 // The embedded Qt window needs its native activation root. The
                 // user-authorized exception grants only this caller-owned root;
                 // every other desktop window remains behind HANDLES restrictions.
@@ -543,12 +601,19 @@ namespace hc::plugins
             }
         }
         auto Result = S.call(Kind, QJsonDocument(Request).toJson(QJsonDocument::Compact), Context);
-        if ((Kind == WireKind::ViewerOpen && !Result.HasValue()) || (Kind == WireKind::ViewerClose && Result.HasValue()))
+        if (Kind == WireKind::ViewerOpen && !Result.HasValue() && Result.Failure().code_ == "host-caller-detached") S.detachedOpenGrants_ = ExistingReplacementGrants;
+        // A queued cancellation never ran prepare_, so its pre-existing viewer
+        // and exact grants remain live. Every initial or after-prepare failure
+        // still retires the grants; this does not grant another parent/root.
+        const bool UntouchedReplacement = Kind == WireKind::ViewerOpen && !Result.HasValue() && Result.Failure().code_ == "host-cancelled-before-start"
+            && ExistingReplacementGrants && ExistingReplacementGrants->first == S.viewerParent_ && ExistingReplacementGrants->second == S.viewerRoot_;
+        if ((Kind == WireKind::ViewerOpen && !Result.HasValue() && Result.Failure().code_ != "host-caller-detached" && !UntouchedReplacement) || (Kind == WireKind::ViewerClose && Result.HasValue()))
         {
             if (S.viewerRoot_) UserHandleGrantAccess(S.viewerRoot_, S.job_.Get(), FALSE);
             S.viewerRoot_ = nullptr;
             if (S.viewerParent_) UserHandleGrantAccess(S.viewerParent_, S.job_.Get(), FALSE);
             S.viewerParent_ = nullptr;
+            S.detachedOpenGrants_.reset();
         }
         return Result;
     }
@@ -567,6 +632,7 @@ namespace hc::plugins
     unsigned PluginProcess::ArchiveOptionsVersion() const { return state_->archiveOptionsVersion_; }
     HostSnapshot PluginProcess::Snapshot() const
     {
+        if (state_->runtime_) return state_->runtime_->Snapshot();
         std::unique_lock Lock(state_->mutex_, std::try_to_lock);
         if (!Lock.owns_lock()) {
             // Status observation must never wait for a stalled plugin request.
@@ -581,9 +647,22 @@ namespace hc::plugins
         { std::lock_guard Observation(state_->snapshotMutex_); state_->lastSnapshot_ = Snapshot; }
         return Snapshot;
     }
+    std::function<HostSnapshot()> PluginProcess::Observe() const
+    { return state_->runtime_ ? state_->runtime_->Observe() : std::function<HostSnapshot()>{}; }
+    std::function<void()> PluginProcess::ForceStopSource() const
+    { return state_->runtime_ ? state_->runtime_->ForceStopSource() : std::function<void()>{}; }
     void PluginProcess::Close()
     {
         auto& S = *state_;
+        if (S.runtime_) {
+            S.runtime_->Close();
+            std::lock_guard Lock(S.mutex_); if (S.closed_) return;
+            if (S.viewerRoot_) UserHandleGrantAccess(S.viewerRoot_, S.job_.Get(), FALSE);
+            if (S.viewerParent_) UserHandleGrantAccess(S.viewerParent_, S.job_.Get(), FALSE);
+            S.viewerRoot_ = S.viewerParent_ = nullptr;
+            S.closed_ = true; S.sessionState_ = ProviderSessionState::Closed; S.pipe_.Reset(); S.control_.Reset();
+            return;
+        }
         S.heartbeat_.request_stop(); if (S.heartbeat_.joinable()) S.heartbeat_.join();
         std::lock_guard Lock(S.mutex_); if (S.closed_) return;
         if (S.ready_ && !S.failure_ && S.process_.Valid() && WaitForSingleObject(S.process_.Get(), 0) == WAIT_TIMEOUT)

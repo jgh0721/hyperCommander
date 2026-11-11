@@ -12,6 +12,9 @@ BOOL WINAPI DllMain(HINSTANCE, DWORD Reason, LPVOID)
 #elif HC_HOST_FAULT == 6
 BOOL WINAPI DllMain(HINSTANCE, DWORD Reason, LPVOID)
 { if (Reason == DLL_PROCESS_ATTACH) Sleep(INFINITE); return TRUE; }
+#elif HC_HOST_FAULT == 7
+BOOL WINAPI DllMain(HINSTANCE, DWORD Reason, LPVOID)
+{ if (Reason == DLL_THREAD_DETACH) Sleep(INFINITE); return TRUE; }
 #endif
 
 extern "C" __declspec(dllexport) HANDLE __stdcall OpenArchiveW(tOpenArchiveDataW*) { return nullptr; }
@@ -30,6 +33,11 @@ extern "C" __declspec(dllexport) int __stdcall GetPackerCaps()
     STARTUPINFOW Startup{}; Startup.cb = sizeof(Startup); PROCESS_INFORMATION Child{};
     if (CreateProcessW(Path.c_str(), Command, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &Startup, &Child))
     { TerminateProcess(Child.hProcess, 1); WaitForSingleObject(Child.hProcess, 1000); CloseHandle(Child.hThread); CloseHandle(Child.hProcess); return 1; }
+#elif HC_HOST_FAULT == 7
+    // Pin from an SDK call, outside DllMain's loader lock, like HyperViewer.
+    HMODULE Pinned = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+        reinterpret_cast<LPCWSTR>(&GetPackerCaps), &Pinned);
 #endif
     return 0;
 }

@@ -10,9 +10,12 @@ namespace hc::plugins
         {
             return IsArchiveCommand(Kind) || IsViewerCommand(Kind) || IsDataCommand(Kind) || IsSessionCommand(Kind)
                 || Kind == WireKind::Hello || Kind == WireKind::Ping || Kind == WireKind::Probe || Kind == WireKind::Close
-                || Kind == WireKind::Response || Kind == WireKind::Failure || Kind == WireKind::ArchivePassword || Kind == WireKind::PluginConfigure;
+                || Kind == WireKind::Response || Kind == WireKind::Failure || Kind == WireKind::ArchivePassword || Kind == WireKind::PluginConfigure
+                || Kind == WireKind::RuntimeHello || IsRuntimeControl(Kind);
         }
     }
+    bool IsRuntimeControl(WireKind Kind)
+    { return Kind >= WireKind::ControlHello && Kind <= WireKind::ControlStop; }
     bool IsArchiveCommand(WireKind Kind)
     {
         switch (Kind) { case WireKind::ArchiveOpen: case WireKind::ArchiveNext: case WireKind::ArchiveRelease:
@@ -39,6 +42,7 @@ namespace hc::plugins
     {
         if (Header.version_ != ProtocolVersion{1, 0} && Header.version_ != ProtocolVersion{2, 0}) return Invalid("host-wire-version");
         if (Header.version_.major_ == 1 && IsSessionCommand(Header.kind_)) return Invalid("host-wire-version");
+        if (Header.version_.major_ != 1 && (Header.kind_ == WireKind::RuntimeHello || IsRuntimeControl(Header.kind_))) return Invalid("host-wire-version");
         if (!ValidKind(Header.kind_) || !Header.sequence_) return Invalid("host-wire-envelope");
         if (Header.length_ > WirePayloadLimit) return Invalid("host-wire-budget");
         std::vector<std::byte> Bytes(WireHeaderBytes);

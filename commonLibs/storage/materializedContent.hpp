@@ -112,12 +112,20 @@ namespace hc::storage
         virtual EntrySnapshot Describe() const = 0;
         virtual std::size_t Depth() const = 0;
     };
+    struct MaterializationAuxiliary
+    {
+        // Exact suffix of the generated private content basename, never a path.
+        // These are disposable caches, not a writable document transaction.
+        std::string suffix_;
+        std::uint64_t maxBytes_ = 0;
+    };
     struct MaterializationRequest
     {
         std::shared_ptr<IContentSource> source_;
         // Retain the complete container lifetime until this child lease closes.
         std::vector<std::shared_ptr<IMaterializedFileLease>> parents_;
         std::optional<std::uint64_t> compressedBytes_;
+        std::vector<MaterializationAuxiliary> auxiliaries_;
     };
     struct MaterializationCleanup
     {
@@ -135,4 +143,21 @@ namespace hc::storage
         virtual MaterializationCleanup Recover() = 0;
         virtual MaterializationCleanup DrainCleanup() = 0;
     };
+    // Optional private-copy capability. Existing materializer and lease vtables
+    // stay unchanged; ordinary/direct sources cannot silently adopt auxiliaries.
+    class IPrivateAuxiliaryMaterializer
+    {
+    public:
+        virtual ~IPrivateAuxiliaryMaterializer() = default;
+        virtual Task<std::shared_ptr<IMaterializedFileLease>> MaterializeWithAuxiliaries(
+            MaterializationRequest Request, OperationContext Context) = 0;
+    };
+    inline Task<std::shared_ptr<IMaterializedFileLease>> MaterializePrivateContent(
+        IMaterializer& Materializer, MaterializationRequest Request, OperationContext Context)
+    {
+        if (Request.auxiliaries_.empty()) return Materializer.Materialize(std::move(Request), std::move(Context));
+        const auto Owner = dynamic_cast<IPrivateAuxiliaryMaterializer*>(&Materializer);
+        if (!Owner) return Ready<std::shared_ptr<IMaterializedFileLease>>(Error{ErrorCategory::Unsupported, "materialization-auxiliaries-unsupported"});
+        return Owner->MaterializeWithAuxiliaries(std::move(Request), std::move(Context));
+    }
 }

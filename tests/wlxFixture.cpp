@@ -7,6 +7,30 @@ namespace
 {
     HINSTANCE instance_ = nullptr;
     struct Viewer { std::wstring file_; DWORD thread_; unsigned ticks_ = 0; };
+    INT_PTR CALLBACK SettingsProc(HWND Window, UINT Message, WPARAM, LPARAM)
+    {
+        if (Message == WM_INITDIALOG)
+        {
+            SetWindowTextW(Window, L"WLX fixture settings");
+            return TRUE;
+        }
+        if (Message == WM_APP + 81) { Sleep(INFINITE); return TRUE; }
+        if (Message == WM_CLOSE) { EndDialog(Window, 0); return TRUE; }
+        return FALSE;
+    }
+    void OpenSettings(HWND Window)
+    {
+        // The plugin owns a top-level modal parent. The application's root is
+        // foreign to this restricted Job and cannot serve as its dialog owner.
+        const auto Owner = CreateWindowExW(WS_EX_TOOLWINDOW, L"STATIC", L"", WS_OVERLAPPED,
+            0, 0, 10, 10, nullptr, nullptr, instance_, nullptr);
+        if (!Owner) return;
+        struct Template { DLGTEMPLATE dialog_; WORD menu_ = 0, class_ = 0, title_ = 0; } Dialog{};
+        Dialog.dialog_.style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME;
+        Dialog.dialog_.cx = 180; Dialog.dialog_.cy = 80;
+        DialogBoxIndirectParamW(instance_, &Dialog.dialog_, Owner, SettingsProc, 0);
+        DestroyWindow(Owner);
+    }
     LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
     {
         auto* State = reinterpret_cast<Viewer*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
@@ -14,6 +38,15 @@ namespace
         {
             State = static_cast<Viewer*>(reinterpret_cast<CREATESTRUCTW*>(LParam)->lpCreateParams);
             SetWindowLongPtrW(Window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(State));
+        }
+        if (Message == WM_APP + 80) { OpenSettings(Window); return 0; }
+        if (Message == WM_APP + 81) { SetWindowLongPtrW(Window, GWLP_ID, 81); Sleep(INFINITE); return 0; }
+        if (Message == WM_APP + 83) { PostQuitMessage(0); return 0; }
+        if (Message == WM_APP + 82) {
+            const auto Menu = CreatePopupMenu(); AppendMenuW(Menu, MF_STRING, 1, L"Settings option");
+            POINT Point{}; ClientToScreen(Window, &Point);
+            TrackPopupMenu(Menu, TPM_RETURNCMD, Point.x, Point.y, 0, Window, nullptr);
+            DestroyMenu(Menu); return 0;
         }
         if (Message == WM_TIMER && State)
         {
@@ -68,6 +101,7 @@ extern "C" __declspec(dllexport) int __stdcall ListSendCommand(HWND Window, int 
 {
     auto* State = reinterpret_cast<Viewer*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
     if (!State || State->thread_ != GetCurrentThreadId()) return 1;
+    if (Command == 4 && Parameter == 78) { OpenSettings(Window); return 0; }
     if (Command == 4 && Parameter == 77) {
         const auto File = CreateFileW(State->file_.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);

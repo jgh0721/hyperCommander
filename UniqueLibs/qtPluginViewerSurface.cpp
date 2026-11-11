@@ -353,6 +353,15 @@ void QtPluginViewerSurface::poll()
 {
     if (!session_) return;
     const auto Details = session_->Details();
+    QString Activity;
+    if (Details.resultUnknown_) Activity = tr("요청 결과를 확인할 수 없습니다");
+    else if (Details.uiSuspect_) Activity = tr("뷰어 응답 확인 중");
+    else if (Details.host_.callerDetached_) Activity = tr("요청 결과를 기다리는 중");
+    else if (Details.waitingResponsive_) Activity = tr("뷰어에서 작업을 마칠 때까지 기다리는 중");
+    if (activity_ != Activity) {
+        activity_ = Activity; setStatusTip(Activity); setAccessibleDescription(Activity);
+        emit ActivityChanged(Activity);
+    }
     if (archiveCloseSequence_) {
         if (Details.commandSequence_ < archiveCloseSequence_) return;
         archiveCloseSequence_ = 0;
@@ -572,6 +581,12 @@ bool QtPluginViewerSurface::WasInteracted() const
 void QtPluginViewerSurface::Execute(const QString& Command)
 {
     if (!session_) return;
+    if (Command == "force-stop") {
+        if (hc::ui::MessageDialog::question(this, tr("뷰어 강제 종료"),
+            tr("저장하지 않은 변경 내용과 실행 중인 요청의 결과를 잃을 수 있습니다. 이 뷰어를 강제로 종료하시겠습니까?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) session_->ForceStop();
+        return;
+    }
     if (Command == "cancel") { Close(); return; }
     if (session_->Details().documentChannel_) {
         auto State = session_->Details().documentState_;

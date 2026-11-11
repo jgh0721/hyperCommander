@@ -12,7 +12,9 @@ namespace hc::plugins
         StreamOpen, StreamRead, StreamSeek, StreamClose, StreamData, ArchiveUpdateBinary,
         SessionPause = 75,
         DocumentCommand = 96,
-        PluginConfigure = 128 };
+        PluginConfigure = 128,
+        RuntimeHello = 160, ControlHello, ControlPing, ControlQuery, ControlCancel, ControlStop };
+    bool IsRuntimeControl(WireKind Kind);
     bool IsArchiveCommand(WireKind Kind);
     bool IsViewerCommand(WireKind Kind);
     bool IsDataCommand(WireKind Kind);

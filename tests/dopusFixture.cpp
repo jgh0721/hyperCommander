@@ -11,6 +11,7 @@ using namespace hc::plugins::dopus;
 namespace
 {
     HMODULE Module;
+    DWORD ModuleThread = 0;
     bool Initialized = false;
     unsigned Instances = 0;
     struct Instance { long error_ = 0; unsigned cursors_ = 0, files_ = 0; std::filesystem::path cache_; };
@@ -70,16 +71,26 @@ namespace
         auto Tail = Value.substr(Root.size()); while (!Tail.empty() && Tail.front() == L'\\') Tail.erase(Tail.begin()); return (Cache / Tail).wstring();
     }
 }
-BOOL WINAPI DllMain(HINSTANCE Instance, DWORD Reason, void*) { if (Reason == DLL_PROCESS_ATTACH) Module = Instance; return TRUE; }
+BOOL WINAPI DllMain(HINSTANCE Instance, DWORD Reason, void*) { if (Reason == DLL_PROCESS_ATTACH) { Module = Instance; ModuleThread = GetCurrentThreadId(); } return TRUE; }
 API BOOL VFS_Init(InitData* Init) { Require(Init->size_ == sizeof(*Init) && !Initialized); Initialized = true; return TRUE; }
 API void VFS_Uninit() { Require(Initialized && !Instances); Initialized = false; }
 namespace
 {
     bool ViewerInitialized = false;
     unsigned ViewerWindows = 0;
-    struct NativeViewerState { DWORD flags_; HANDLE abort_ = nullptr; };
+    unsigned DocumentCompletions = 0;
+    DWORD ViewerThread = 0;
+    void RequireViewerThread()
+    {
+        APTTYPE Apartment; APTTYPEQUALIFIER Qualifier;
+        Require(GetCurrentThreadId() == ViewerThread && GetCurrentThreadId() == ModuleThread
+            && SUCCEEDED(CoGetApartmentType(&Apartment, &Qualifier)) && (Apartment == APTTYPE_STA || Apartment == APTTYPE_MAINSTA));
+    }
+    unsigned ViewerIdentifications = 0;
+    struct NativeViewerState { DWORD flags_; HANDLE abort_ = nullptr; HWND modal_ = nullptr; bool slowClose_ = false, releaseClose_ = false, releaseWork_ = false; };
     LRESULT CALLBACK ViewerProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
     {
+        RequireViewerThread();
         if (Message == WM_CREATE)
         {
             auto* State = new NativeViewerState{DWORD(reinterpret_cast<CREATESTRUCTW*>(LParam)->lpCreateParams ? ViewerPreview : 0)};
@@ -89,15 +100,49 @@ namespace
         }
         auto* State = reinterpret_cast<NativeViewerState*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
         if (Message == ViewerSetAbort) { Require(State); State->abort_ = reinterpret_cast<HANDLE>(LParam); return TRUE; }
+        if (Message == WM_APP + 95) { Require(State && State->abort_); return WaitForSingleObject(State->abort_, 0) == WAIT_OBJECT_0; }
+        if (Message == WM_APP + 96) { Require(State); State->releaseClose_ = true; return TRUE; }
+        if (Message == WM_APP + 97) return ViewerIdentifications;
+        if (Message == WM_APP + 98) { Require(State); State->releaseWork_ = true; return TRUE; }
+        if (Message == WM_APP + 99) {
+            Require(State); const auto Previous = GetWindowLongPtrW(Window, GWLP_ID);
+            struct { DLGTEMPLATE dialog_; WORD menu_, class_, title_; } Template{};
+            Template.dialog_.style = WS_POPUP | WS_CAPTION | DS_MODALFRAME; Template.dialog_.cx = 100; Template.dialog_.cy = 50;
+            DialogBoxIndirectParamW(Module, &Template.dialog_, Window, [](HWND Dialog, UINT Message, WPARAM, LPARAM Param) -> INT_PTR {
+                if (Message == WM_INITDIALOG) {
+                    const auto Viewer = reinterpret_cast<HWND>(Param);
+                    auto* State = reinterpret_cast<NativeViewerState*>(GetWindowLongPtrW(Viewer, GWLP_USERDATA)); Require(State); State->modal_ = Dialog;
+                    SetWindowLongPtrW(Viewer, GWLP_ID, 99);
+                    SetWindowLongPtrW(Dialog, DWLP_USER, Param); PostMessageW(Dialog, WM_APP + 101, 0, 0);
+                    SetTimer(Dialog, 1, 5000, nullptr); return TRUE;
+                }
+                // An integer marker survives the restricted Job's atom-table
+                // isolation and is published only after modal initialization.
+                if (Message == WM_APP + 101) { SetWindowLongPtrW(reinterpret_cast<HWND>(GetWindowLongPtrW(Dialog, DWLP_USER)), GWLP_ID, 101); return TRUE; }
+                if (Message == WM_TIMER || Message == WM_CLOSE) { EndDialog(Dialog, 0); return TRUE; } return FALSE;
+            }, reinterpret_cast<LPARAM>(Window));
+            State->modal_ = nullptr; SetWindowLongPtrW(Window, GWLP_ID, Previous); return TRUE;
+        }
+        if (Message == WM_APP + 100) { Require(State); if (State->modal_) EndDialog(State->modal_, 0); return TRUE; }
         if (Message == WM_DESTROY)
         {
             Require(State && State->abort_ && WaitForSingleObject(State->abort_, 0) == WAIT_OBJECT_0);
+            if (State->slowClose_) {
+                SetWindowLongPtrW(Window, GWLP_ID, 96);
+                const auto Until = GetTickCount64() + 5000;
+                while (!State->releaseClose_ && GetTickCount64() < Until) {
+                    MSG Next{};
+                    while (PeekMessageW(&Next, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&Next); DispatchMessageW(&Next); }
+                    Sleep(1);
+                }
+            }
             delete State; SetWindowLongPtrW(Window, GWLP_USERDATA, 0); --ViewerWindows;
         }
         if (Message == ViewerLoadW)
         {
             auto* Name = reinterpret_cast<wchar_t*>(LParam); Fail(Name);
             Require(State && State->abort_ && WaitForSingleObject(State->abort_, 0) == WAIT_TIMEOUT);
+            State->slowClose_ = wcsstr(Name, L"slowclose") != nullptr;
             if (wcsstr(Name, L"preview")) Require(State->flags_ == ViewerPreview);
             if (wcsstr(Name, L"full")) Require(State->flags_ == 0);
             SetWindowTextW(Window, Name); return wcsstr(Name, L"reject") ? FALSE : TRUE;
@@ -106,18 +151,29 @@ namespace
         return DefWindowProcW(Window, Message, WParam, LParam);
     }
 }
-API BOOL DVP_InitEx(InitData* Init) { Require(!ViewerInitialized && Init->size_ == sizeof(*Init)); ViewerInitialized = true; return TRUE; }
+API BOOL DVP_InitEx(InitData* Init) { ViewerThread = GetCurrentThreadId(); RequireViewerThread(); Require(!ViewerInitialized && Init->size_ == sizeof(*Init)); ViewerInitialized = true; return TRUE; }
 API BOOL DVP_Init() { Require(false); return FALSE; } // InitEx must take precedence.
-API void DVP_Uninit() { Require(ViewerInitialized && !ViewerWindows); ViewerInitialized = false; }
+API void DVP_Uninit() { RequireViewerThread(); Require(ViewerInitialized && !ViewerWindows); ViewerInitialized = false; }
 API BOOL DVP_IdentifyW(ViewerInfo<wchar_t>* Info)
 {
+    RequireViewerThread();
     Require(ViewerInitialized && Info->size_ == sizeof(*Info));
     wcscpy_s(Info->name_, Info->nameCapacity_, L"DOpus viewer fixture");
     wcscpy_s(Info->extensions_, Info->extensionsCapacity_, L".bitmap;.native;.text"); return TRUE;
 }
-API BOOL DVP_IdentifyFileW(HWND, wchar_t* Name, ViewerFileInfo<wchar_t>* Info, HANDLE Abort)
+API BOOL DVP_IdentifyFileW(HWND Parent, wchar_t* Name, ViewerFileInfo<wchar_t>* Info, HANDLE Abort)
 {
+    RequireViewerThread();
+    ++ViewerIdentifications;
     Require(ViewerInitialized && Info->size_ == sizeof(*Info) && Abort && WaitForSingleObject(Abort, 0) == WAIT_TIMEOUT); Fail(Name);
+    if (wcsstr(Name, L"cooperative")) {
+        if (Parent) SetWindowTextW(Parent, L"cooperative SDK entered");
+        const auto Until = GetTickCount64() + 5000;
+        while (GetTickCount64() < Until && WaitForSingleObject(Abort, 5) == WAIT_TIMEOUT) {
+            MSG Message{}; while (PeekMessageW(&Message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&Message); DispatchMessageW(&Message); }
+        }
+        if (WaitForSingleObject(Abort, 0) == WAIT_OBJECT_0) return FALSE;
+    }
     if (wcsstr(Name, L"unknown")) return FALSE;
     Info->flags_ = wcsstr(Name, L".native") ? ViewerWindow : wcsstr(Name, L".text") ? ViewerText : ViewerBitmap;
     Info->imageSize_ = {2, 2}; Info->bits_ = 32; Info->majorType_ = 1; Info->minorType_ = 42;
@@ -126,6 +182,7 @@ API BOOL DVP_IdentifyFileW(HWND, wchar_t* Name, ViewerFileInfo<wchar_t>* Info, H
 }
 API HBITMAP DVP_LoadBitmapW(HWND, wchar_t*, ViewerFileInfo<wchar_t>* Info, SIZE*, HANDLE)
 {
+    RequireViewerThread();
     Require(Info->privateData_[0] == 0x12345678);
     BITMAPINFO Data{}; Data.bmiHeader = {sizeof(BITMAPINFOHEADER), 2, -2, 1, 32, BI_RGB};
     void* Pixels = nullptr; auto Bitmap = CreateDIBSection(nullptr, &Data, DIB_RGB_COLORS, &Pixels, nullptr, 0);
@@ -133,17 +190,46 @@ API HBITMAP DVP_LoadBitmapW(HWND, wchar_t*, ViewerFileInfo<wchar_t>* Info, SIZE*
 }
 API HWND DVP_CreateViewer(HWND Parent, RECT* Rect, DWORD Flags)
 {
+    RequireViewerThread();
     Require(ViewerInitialized && (Flags == 0 || Flags == ViewerPreview)); WNDCLASSW Class{}; Class.lpfnWndProc = ViewerProc; Class.hInstance = Module; Class.lpszClassName = L"HC.Dopus.Fixture";
     RegisterClassW(&Class); return CreateWindowExW(0, Class.lpszClassName, L"", WS_CHILD, Rect->left, Rect->top, Rect->right - Rect->left, Rect->bottom - Rect->top, Parent, nullptr, Module, reinterpret_cast<void*>(ULONG_PTR(Flags)));
 }
 API BOOL DVP_LoadTextW(LoadTextData<wchar_t>* Data)
 {
+    RequireViewerThread();
     Require(ViewerInitialized && Data->size_ == sizeof(*Data) && !Data->output_ && WaitForSingleObject(Data->abort_, 0) == WAIT_TIMEOUT);
     if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &Data->output_))) return FALSE;
     const bool Large = wcsstr(Data->file_, L"large");
     std::string Bytes = Large ? std::string(600 * 1024, 'x') : "converted fixture text";
     Data->textType_ = wcsstr(Data->file_, L"html") ? 2 : wcsstr(Data->file_, L"rich") ? 1 : 0;
     ULONG Written = 0; return SUCCEEDED(Data->output_->Write(Bytes.data(), ULONG(Bytes.size()), &Written)) && Written == Bytes.size();
+}
+API BOOL HC_DocumentCommand(HWND Window, const char* Request, UINT Length, char* Output, UINT* Capacity)
+{
+    RequireViewerThread();
+    Require(ViewerInitialized && Window && Request && Output && Capacity);
+    auto* State = reinterpret_cast<NativeViewerState*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
+    Require(State && State->abort_);
+    const std::string Input(Request, Length);
+    const bool Large = Input.find("fixtureLarge") != std::string::npos;
+    if (Large) {
+        const bool Wait = Input.find("fixtureLargeWait") != std::string::npos;
+        SetWindowTextW(Window, L"fixture document command running");
+        const auto Until = GetTickCount64() + (Wait ? 5000 : 500);
+        while (GetTickCount64() < Until && (!Wait || !State->releaseWork_)) {
+            MSG Message{};
+            while (PeekMessageW(&Message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&Message); DispatchMessageW(&Message); }
+            Sleep(1);
+        }
+        State->releaseWork_ = false;
+        ++DocumentCompletions;
+    }
+    const bool Signalled = WaitForSingleObject(State->abort_, 0) == WAIT_OBJECT_0;
+    std::string Reply = "{\"completed\":" + std::to_string(DocumentCompletions) + ",\"abortSignaled\":" + (Signalled ? "true" : "false");
+    if (Large) Reply += ",\"padding\":\"" + std::string(700 * 1024, 'x') + '"';
+    Reply += '}';
+    if (*Capacity < Reply.size()) return FALSE;
+    memcpy(Output, Reply.data(), Reply.size()); *Capacity = UINT(Reply.size()); return TRUE;
 }
 API BOOL VFS_IdentifyW(VfsInfo<wchar_t>* Info)
 {

@@ -73,6 +73,7 @@ signals:
     void NoMatch();
     void CloseRequested();
     void ReturnFocusRequested();
+    void ActivityChanged(const QString& Text);
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
     void focusInEvent(QFocusEvent* Event) override;
@@ -99,6 +100,6 @@ private:
     std::uint64_t preparedSequence_ = 0;
     std::uint64_t archiveCloseSequence_ = 0;
     QByteArray previewFiles_;
-    QString lastSearch_, clipboardToken_;
+    QString lastSearch_, clipboardToken_, activity_;
     QKeyCombination returnKey_;
 };

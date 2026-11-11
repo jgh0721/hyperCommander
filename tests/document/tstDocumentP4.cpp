@@ -400,6 +400,46 @@ private slots:
         Input->changed_ = false; Input->release_ = false; Token = Controller.Capture(Request); QVERIFY(Controller.Open(Token)); QTRY_VERIFY(Input->verifies_ >= 2); Current = false; Input->release_ = true; QTRY_COMPARE(Finished.size(), 2); QCOMPARE(Finished.back()[1].toString(), QString("rejected")); QCOMPARE(Launches, 0);
         Current = true; Input->release_ = false; Token = Controller.Capture(Request); QVERIFY(Controller.Open(Token)); QTRY_VERIFY(Input->verifies_ >= 3); Candidates = Catalog({}); Input->release_ = true; QTRY_COMPARE(Finished.size(), 3); QCOMPARE(Finished.back()[2].toString(), QString("document-handler-changed")); QCOMPARE(Launches, 0);
     }
+    void parentClosePreservesStandaloneSavePrompt() {
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path()); const auto Path = Temp.filePath("dirty.txt");
+        { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("original"), qint64(8)); }
+        auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Entry = Reader->Resolve({LocatorKind::Local, Path.toStdString()}, {}).get(); QVERIFY(Entry.HasValue());
+        QWidget Main; Main.show(); QVERIFY(QTest::qWaitForWindowExposed(&Main)); QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Main.winId())));
+        QtViewerHost Host(&Main, [] { return MakeNativeMaterializer(QDir::tempPath().toStdString()); });
+        const auto Drain = qScopeGuard([&] { Host.CloseAll(); while (!Host.IsIdle()) QTest::qWait(10); });
+        auto Options = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath()).targets_.at("builtin.hyperviewer").plugin_;
+        Options.limits_.heartbeatMs_ = 200;
+        bool Ready = false; auto* Window = Host.OpenPlugin(Options, {{std::make_shared<ProviderContentSource>(Reader, Entry.Value()), {}}}, "Dirty F3", [&](bool Ok, const QString&) { Ready = Ok; });
+        QVERIFY(Window); QTRY_VERIFY_WITH_TIMEOUT(Ready, 20000); auto* Surface = Window->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
+        const auto Pid = Surface->Details().host_.processId_; const auto Id = Surface->Details().documentState_["activeDocumentId"].toString(); QVERIFY(!Id.isEmpty());
+        const auto Edit = Surface->SendDocument({{"action", "replaceText"}, {"documentId", Id}, {"text", "changed"}}); QVERIFY(Edit.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->Details().commandSequence_ >= Edit.Value(), 3000);
+        QVERIFY(!Main.close()); QVERIFY(Main.isVisible());
+        HWND Dialog = nullptr;
+        const auto Find = [&] {
+            struct DialogSearch { DWORD pid_; HWND window_ = nullptr; } Search{Pid};
+            EnumWindows([](HWND Candidate, LPARAM Param) -> BOOL {
+                auto& Value = *reinterpret_cast<DialogSearch*>(Param); DWORD Owner = 0; GetWindowThreadProcessId(Candidate, &Owner);
+                wchar_t Title[128]{}; GetWindowTextW(Candidate, Title, 128);
+                if (Owner == Value.pid_ && IsWindowVisible(Candidate) && QString::fromWCharArray(Title) == QString::fromUtf8("변경 내용 저장")) { Value.window_ = Candidate; return FALSE; }
+                return TRUE;
+            }, reinterpret_cast<LPARAM>(&Search));
+            Dialog = Search.window_; return Dialog != nullptr;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Find(), 3000); QTest::qWait(1200);
+        QVERIFY(IsWindowVisible(Dialog)); QVERIFY(Surface->Details().host_.running_); QVERIFY(!Surface->Details().host_.failure_);
+        QVERIFY(PostMessageW(Dialog, WM_CLOSE, 0, 0)); // Cancel the save decision.
+        QTRY_VERIFY_WITH_TIMEOUT(!IsWindow(Dialog) || !IsWindowVisible(Dialog), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->Details().commandSequence_ > Edit.Value(), 3000);
+        QVERIFY(!Surface->Details().documentState_["closeRequested"].toBool());
+        QVERIFY(Surface->Details().documentState_["documents"].toArray()[0].toObject()["dirty"].toBool());
+        { QFile File(Path); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), QByteArray("original")); }
+        const auto Save = Surface->SendDocument({{"action", "save"}, {"documentId", Id}}); QVERIFY(Save.HasValue());
+        QTRY_VERIFY_WITH_TIMEOUT(Surface->Details().commandSequence_ >= Save.Value(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!Surface->Details().documentState_["documents"].toArray()[0].toObject()["dirty"].toBool(), 3000);
+        QVERIFY(!Main.close()); QTRY_VERIFY_WITH_TIMEOUT(Host.IsIdle(), 5000);
+        QVERIFY(Main.close()); { QFile File(Path); QVERIFY(File.open(QIODevice::ReadOnly)); QCOMPARE(File.readAll(), QByteArray("changed")); }
+    }
     void preparedViewerAdoption() {
         QTemporaryDir Config;
         const auto PreviousConfig=qApp->property("documentViewsConfigDir");

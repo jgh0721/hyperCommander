@@ -26,6 +26,7 @@ namespace hc::plugins
         QString window_, child_;
         bool idle_ = false;
         bool noMatch_ = false;
+        bool waitingResponsive_ = false, uiSuspect_ = false, resultUnknown_ = false;
         std::optional<std::size_t> selectedCandidate_;
         struct CandidateFailure { std::size_t index_; storage::Error error_; };
         std::vector<CandidateFailure> candidateFailures_;
@@ -60,6 +61,7 @@ namespace hc::plugins
         std::vector<std::string> Commands() const override;
         void Cancel() override;
         void Close() override;
+        void ForceStop();
         PluginViewerDetails Details() const;
         storage::Result<storage::Unit> Resize(std::uint32_t Width, std::uint32_t Height);
         storage::Result<storage::Unit> Focus();

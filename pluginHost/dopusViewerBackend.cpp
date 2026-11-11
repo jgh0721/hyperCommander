@@ -21,7 +21,8 @@ namespace hc::plugins
         { if constexpr (std::is_same_v<Char, wchar_t>) return Wide; else return Ansi; }
         constexpr qsizetype TextBudget = 512 * 1024; // Base64 reply fits the 1 MiB wire budget.
     }
-    DopusViewerBackend::DopusViewerBackend(HMODULE Module) : module_(Module), abort_(CreateEventW(nullptr, TRUE, FALSE, nullptr))
+    DopusViewerBackend::DopusViewerBackend(HMODULE Module) : module_(Module), abort_(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+        dataAbort_(CreateEventW(nullptr, TRUE, FALSE, nullptr))
     { com_ = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)); }
     DopusViewerBackend::~DopusViewerBackend()
     {
@@ -32,7 +33,7 @@ namespace hc::plugins
     Result<Unit> DopusViewerBackend::Initialize()
     {
         if (initialized_) return Invalid("dopus-viewer-already-initialized");
-        if (!abort_.Get() || !com_) return HostError("dopus-viewer-initialize");
+        if (!abort_.Get() || !dataAbort_.Get() || !com_) return HostError("dopus-viewer-initialize");
         if (auto Init = Export<dopus::Init>(module_, "DVP_InitEx"))
         {
             wchar_t Language[] = L"english"; dopus::InitData Data{sizeof(Data), nullptr, 9, 0, Language};
@@ -86,8 +87,10 @@ namespace hc::plugins
     }
     Result<HWND> DopusViewerBackend::Prepare(HWND Parent, int Width, int Height)
     {
-        Close();
-        if (!ResetEvent(abort_.Get())) return HostError("dopus-viewer-reset-abort", GetLastError());
+        if (!managedViewer_) {
+            Close();
+            if (!ResetEvent(abort_.Get())) return HostError("dopus-viewer-reset-abort", GetLastError());
+        }
         auto Create = Export<dopus::CreateViewer>(module_, "DVP_CreateViewer");
         if (!Create) return Unsupported("dopus-viewer-create-export");
         RECT Rect{0, 0, Width, Height}; auto Window = Create(Parent, &Rect, 0); DWORD Process = 0;
@@ -99,8 +102,10 @@ namespace hc::plugins
     }
     Result<HWND> DopusViewerBackend::Open(HWND Parent, const QString& File, int Width, int Height, bool Preview)
     {
-        Close();
-        if (!ResetEvent(abort_.Get())) return HostError("dopus-viewer-reset-abort", GetLastError());
+        if (!managedViewer_) {
+            Close();
+            if (!ResetEvent(abort_.Get())) return HostError("dopus-viewer-reset-abort", GetLastError());
+        }
         preview_ = Preview;
         auto Result = unicode_ ? process<wchar_t>(Parent, File, Width, Height, true, false) : process<char>(Parent, File, Width, Height, true, false);
         if (!Result.HasValue()) { Close(); return Result.Failure(); } return window_;
@@ -133,13 +138,14 @@ namespace hc::plugins
         std::array<Char, 4096> Description{};
         dopus::ViewerFileInfo<Char> Info{}; Info.size_ = sizeof(Info); Info.fileSize_ = QFileInfo(File).size();
         Info.description_ = Description.data(); Info.descriptionCapacity_ = Description.size(); if (!View && !Convert) Info.flags_ = 1u << 6;
-        const bool Identified = FromStream ? IdentifyFromStream(Parent, Stream, Name.data(), &Info, 0) : Identify(Parent, Name.data(), &Info, abort_.Get());
+        const auto Abort = View ? abort_.Get() : dataAbort_.Get();
+        const bool Identified = FromStream ? IdentifyFromStream(Parent, Stream, Name.data(), &Info, 0) : Identify(Parent, Name.data(), &Info, Abort);
         if (!Identified) return Unsupported("host-viewer-load-rejected");
         if (std::find(Description.begin(), Description.end(), Char{}) == Description.end()) return Invalid("dopus-viewer-description-unterminated");
         if (Stream && FAILED(Stream->Seek({}, STREAM_SEEK_SET, nullptr))) return HostError("dopus-viewer-stream-seek");
         if (Convert || (View && (Info.flags_ & dopus::ViewerText)))
         {
-            auto Loaded = loadText(Parent, Name.data(), Stream, FromStream); if (!Loaded.HasValue()) return Loaded.Failure();
+            auto Loaded = loadText(Parent, Name.data(), Stream, FromStream, Abort); if (!Loaded.HasValue()) return Loaded.Failure();
             if (!View) return Loaded;
             // Keep markup inert. Rich text/HTML are returned as typed conversion
             // results, and are not injected into an active browser surface.
@@ -178,19 +184,19 @@ namespace hc::plugins
             auto Load = Export<BitmapStream>(module_, Pick<Char>("DVP_LoadBitmapStreamW", "DVP_LoadBitmapStreamA"));
             if (Load) Bitmap = Load(Parent, Stream, Name.data(), &Info, &Desired, 0);
         }
-        else if (auto Load = Export<dopus::LoadBitmap<Char>>(module_, Pick<Char>("DVP_LoadBitmapW", "DVP_LoadBitmapA"))) Bitmap = Load(Parent, Name.data(), &Info, &Desired, abort_.Get());
+        else if (auto Load = Export<dopus::LoadBitmap<Char>>(module_, Pick<Char>("DVP_LoadBitmapW", "DVP_LoadBitmapA"))) Bitmap = Load(Parent, Name.data(), &Info, &Desired, Abort);
         if (!Bitmap) return Unsupported("host-viewer-load-rejected");
         if (Info.flags_ & (dopus::ViewerJpegStream | dopus::ViewerPngStream))
         { LocalFree(reinterpret_cast<HLOCAL>(Bitmap)); return Unsupported("dopus-viewer-encoded-bitmap"); }
         auto Shown = showBitmap(Parent, Bitmap, Info.flags_, Info.transparent_); if (!Shown.HasValue()) return Shown.Failure();
         window_ = Shown.Value(); return QJsonObject{};
     }
-    template<class Char> Result<QJsonObject> DopusViewerBackend::loadText(HWND Parent, Char* Name, IStream* Input, bool FromStream)
+    template<class Char> Result<QJsonObject> DopusViewerBackend::loadText(HWND Parent, Char* Name, IStream* Input, bool FromStream, HANDLE Abort)
     {
         auto Load = Export<dopus::LoadText<Char>>(module_, Pick<Char>("DVP_LoadTextW", "DVP_LoadTextA"));
         if (!Load) return Unsupported("dopus-viewer-convert-export");
         dopus::LoadTextData<Char> Data{}; Data.size_ = sizeof(Data); Data.parent_ = Parent; Data.file_ = Name; Data.input_ = Input;
-        Data.flags_ = FromStream ? 1 : 0; Data.abort_ = abort_.Get();
+        Data.flags_ = FromStream ? 1 : 0; Data.abort_ = Abort;
         const auto Loaded = Load(&Data); const auto Release = qScopeGuard([&] { if (Data.output_) Data.output_->Release(); });
         if (!Loaded || !Data.output_) return Unsupported("dopus-viewer-convert-rejected");
         if (Data.textType_ < 0 || Data.textType_ > 2) return Invalid("dopus-viewer-convert-type");
@@ -219,15 +225,25 @@ namespace hc::plugins
         const bool Convert = Kind == WireKind::ContentConvert;
         if ((!Convert && (Request.size() != 5 || Action != "value" || Request["unit"].toInt(-1) != 0 || !Request["defer"].isBool()))
             || (Convert && Request.size() != 1) || !Request["path"].isString()) return Invalid("dopus-viewer-data-fields");
-        // Close signals the event before native destruction. Each subsequent
-        // synchronous data operation starts with a fresh cancellation state.
-        if (!ResetEvent(abort_.Get())) return HostError("dopus-viewer-reset-abort", GetLastError());
+        // A metadata query must never reset or signal an open viewer's event.
+        if (!managedData_ && !ResetEvent(dataAbort_.Get())) return HostError("dopus-viewer-reset-abort", GetLastError());
         auto Info = unicode_ ? process<wchar_t>(nullptr, Request["path"].toString(), 0, 0, false, Convert) : process<char>(nullptr, Request["path"].toString(), 0, 0, false, Convert);
         if (!Info.HasValue()) return Info.Failure(); if (Convert) return Info;
         const auto Field = Request["field"].toInt(-1); const QStringList Names{"description", "width", "height", "bits", "majorType", "minorType"};
         if (Field < 0 || Field >= Names.size() || Request["field"].toDouble() != Field) return Invalid("dopus-viewer-metadata-index");
         return QJsonObject{{"type", Field ? 1 : 8}, {"value", Field ? QString::number(Info.Value()[Names[Field]].toInt()) : Info.Value()[Names[Field]].toString()}};
     }
+    Result<HANDLE> DopusViewerBackend::ArmWork(WireKind Kind)
+    {
+        HANDLE Event = nullptr;
+        if (Kind == WireKind::ViewerOpen) { managedViewer_ = true; Event = abort_.Get(); }
+        else if (Kind == WireKind::MetadataQuery || Kind == WireKind::ContentConvert) { managedData_ = true; Event = dataAbort_.Get(); }
+        // Called under the runtime Work lock, after old-viewer teardown and the
+        // cancellation latch check. No subsequent SDK entry resets this event.
+        if (Event && !ResetEvent(Event)) return HostError("dopus-viewer-reset-abort", GetLastError());
+        return Event;
+    }
+    void DopusViewerBackend::FinishWork() { managedViewer_ = managedData_ = false; }
     Result<HWND> DopusViewerBackend::showBitmap(HWND Parent, HBITMAP Bitmap, DWORD Flags, COLORREF Transparent)
     {
         const auto Delete = qScopeGuard([&] { DeleteObject(Bitmap); }); BITMAP Object{};

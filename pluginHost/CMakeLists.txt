@@ -18,6 +18,7 @@ target_link_libraries(hc-plugin-inspect PRIVATE hc_plugin_manifest)
 target_compile_options(hc-plugin-inspect PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 hc_enable_qt_deployment(hc-plugin-inspect)
 qt_add_library(hc_plugin_process STATIC pipeChannel.cpp pipeChannel.hpp pluginProcess.cpp pluginProcess.hpp
+    viewerRuntimeClient.cpp viewerRuntimeClient.hpp viewerRuntimeProtocol.cpp viewerHostRuntime.hpp
     hostSession.cpp hostSession.hpp sessionClient.cpp sessionClient.hpp
     ../commonLibs/storage/providerSession.hpp ../commonLibs/storage/resourceQuota.hpp
 )
@@ -35,7 +36,7 @@ endif()
 target_compile_definitions(hc_plugin_process PRIVATE UNICODE _UNICODE)
 target_compile_options(hc_plugin_process PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 qt_add_executable(hc-plugin-host-x64 hostMain.cpp)
-target_link_libraries(hc-plugin-host-x64 PRIVATE hc_startup_fonts)
+target_sources(hc-plugin-host-x64 PRIVATE viewerHostRuntime.cpp viewerUiDispatcher.cpp viewerUiDispatcher.hpp)
 qt_add_library(hc_wcx_backend STATIC
     ../UniqueLibs/wcxBackend.cpp
     ../UniqueLibs/wcxBackend.hpp
@@ -51,6 +52,12 @@ target_sources(hc-plugin-host-x64 PRIVATE dopusViewerBackend.cpp dopusViewerBack
 target_link_libraries(hc-plugin-host-x64 PRIVATE hc_plugin_process hc_wcx_backend Qt6::Widgets advapi32 ole32 shlwapi gdi32)
 target_compile_definitions(hc-plugin-host-x64 PRIVATE UNICODE _UNICODE)
 target_compile_options(hc-plugin-host-x64 PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+# The shared native host uses standard-entropy ASLR for legacy SDK DLLs which
+# truncate pointer-sized callback cookies. Retain relocation, DEP and the full
+# 64-bit address space for every host profile; DLLs and admission stay intact.
+if(MSVC)
+    target_link_options(hc-plugin-host-x64 PRIVATE /HIGHENTROPYVA:NO /DYNAMICBASE /NXCOMPAT /LARGEADDRESSAWARE)
+endif()
 hc_enable_qt_deployment(hc-plugin-host-x64 PLUGINS)
 qt_add_library(hc_plugin_viewer_sessions STATIC hostedViewerSession.cpp hostedViewerSession.hpp documentViewerClient.cpp documentViewerClient.hpp)
 target_precompile_headers(hc_plugin_viewer_sessions PRIVATE stdafx.h)

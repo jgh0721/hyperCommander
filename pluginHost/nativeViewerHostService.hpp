@@ -17,6 +17,9 @@ namespace hc::plugins
         storage::Result<storage::Unit> Initialize(const QString& DefaultIniPath);
         storage::Result<QJsonObject> Probe();
         storage::Result<QJsonObject> Handle(WireKind Kind, const QJsonObject& Request);
+        void PrepareWork(WireKind Kind);
+        storage::Result<HANDLE> ArmWork(WireKind Kind);
+        void FinishWork(WireKind Kind, bool Cancelled);
         bool nativeEventFilter(const QByteArray& Type, void* Message, qintptr* Result) override;
     private:
         static LRESULT CALLBACK windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam);
@@ -28,6 +31,7 @@ namespace hc::plugins
         std::unique_ptr<DopusViewerBackend> dopus_;
         std::unique_ptr<WlxViewerBackend> wlx_;
         DWORD parentProcess_;
+        DWORD thread_ = GetCurrentThreadId();
         DWORD inputThread_ = 0;
         HWND container_ = nullptr, viewer_ = nullptr;
         HHOOK inputHook_ = nullptr;

@@ -8,6 +8,7 @@
 #include "tcDataHostService.hpp"
 #include "dopusVfsHostService.hpp"
 #include "hostSession.hpp"
+#include "viewerHostRuntime.hpp"
 #include <QUuid>
 #include <QApplication>
 #include <QDir>
@@ -17,8 +18,8 @@
 #include <QScopeGuard>
 #include <thread>
 #include <QWidget>
-#include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include <QEventLoop>
+#include <objbase.h>
 
 namespace
 {
@@ -71,12 +72,17 @@ namespace
         DWORD parentProcess_ = 0;
         PluginManifest manifest_;
         ~LoadedPlugin() { Close(); }
-        void Close()
+        void CloseServices()
         {
-            streams_.clear(); dopusVfs_.reset(); data_.reset(); viewer_.reset(); archives_.reset(); if (module_) FreeLibrary(module_);
+            streams_.clear(); dopusVfs_.reset(); data_.reset(); viewer_.reset(); archives_.reset();
+        }
+        void Unload()
+        {
+            if (module_) FreeLibrary(module_);
             for (auto At = dependencies_.rbegin(); At != dependencies_.rend(); ++At) FreeLibrary(*At);
             module_ = nullptr; dependencies_.clear(); locks_.clear();
         }
+        void Close() { CloseServices(); Unload(); }
         Result<Unit> Open(const QJsonObject& Hello, DWORD ParentProcess)
         {
             const bool HasIni = Hello.contains("defaultIni");
@@ -275,16 +281,20 @@ namespace
 }
 int main(int Argc, char** Argv)
 {
-    // The native-plugin process also hosts the Qt-based HyperViewer widgets.
-    hc::fonts::StartupFontWarmup FontWarmup(Argc, Argv);
+    // Host-owned background workers must not exit behind a loaded plugin's
+    // back: DLL_THREAD_DETACH can run arbitrary SDK code. Keep detached font
+    // warmup in the application processes, outside this native DLL lifetime.
     static_assert(sizeof(void*) == 8, "hc-plugin-host-x64 requires an x64 build");
     using namespace hc::plugins;
     using namespace hc::storage;
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR)) return 2;
     QApplication App(Argc, Argv);
-    FontWarmup.WatchFirstWindow();
     App.setQuitOnLastWindowClosed(false);
+    // Keep an explicit STA reference from before DLL load until after service
+    // teardown and unload; do not rely on a Qt platform plugin's COM lifetime.
+    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) return 2;
+    const auto Apartment = qScopeGuard([] { CoUninitialize(); });
     if ((App.arguments().size() != 3 && App.arguments().size() != 4) || !App.arguments()[1].startsWith("\\\\.\\pipe\\hyperCommander-")) return 2;
     bool Parsed = false; const auto ParentId = App.arguments()[2].toUInt(&Parsed); if (!Parsed || !ParentId) return 2;
     WinHandle Parent;
@@ -321,6 +331,37 @@ int main(int Argc, char** Argv)
         // an idle receive deadline must not expire when that dialog returns.
         auto Frame = ReadFrame(Pipe.Get(), Parent.Get(), Plugin.viewer_ ? OperationContext{} : Deadline(120000), Plugin.viewer_ != nullptr); if (!Frame.HasValue()) return 6;
         const auto& Header = Frame.Value().header_;
+        if (Header.kind_ == WireKind::RuntimeHello)
+        {
+            if (Ready || LastSequence || Session) return 7;
+            ViewerRuntimeCallbacks Callbacks;
+            Callbacks.execute_ = [&](WireKind Kind, const QJsonObject& Request) -> hc::storage::Result<QJsonObject> {
+                if (Kind == WireKind::Hello) {
+                    const auto Policy = Restrictions();
+                    if (!Policy["inJob"].toBool() || !Policy["adminDenied"].toBool() || !Policy["privilegesRemoved"].toBool()) return HostError("host-restriction-verification");
+                    auto Expected = ParseManifest(QJsonDocument(Request["manifest"].toObject()).toJson());
+                    if (!Expected.HasValue()) return Expected.Failure();
+                    if (!Request["configuration"].toBool() && Expected.Value().format_ != PluginFormat::Wlx
+                        && Expected.Value().format_ != PluginFormat::DopusViewer) return HostError("host-runtime-purpose");
+                    auto Opened = Plugin.Open(Request, ParentId); if (!Opened.HasValue()) return Opened.Failure();
+                    auto Reply = Policy; Reply["archiveOptionsVersion"] = 2;
+                    Reply["viewerCancellation"] = Plugin.viewer_ && Expected.Value().format_ == PluginFormat::DopusViewer;
+                    return Reply;
+                }
+                if (Kind == WireKind::Probe && Request.isEmpty()) return Plugin.Probe();
+                if (Kind == WireKind::Ping && Request.isEmpty()) return Restrictions();
+                if (Kind == WireKind::PluginConfigure) return Plugin.Configure(Request);
+                if (Plugin.viewer_ && (IsViewerCommand(Kind) || Kind == WireKind::MetadataQuery || Kind == WireKind::ContentConvert))
+                    return Plugin.viewer_->Handle(Kind, Request);
+                return HostError("host-runtime-command");
+            };
+            Callbacks.prepare_ = [&](WireKind Kind) { if (Plugin.viewer_) Plugin.viewer_->PrepareWork(Kind); };
+            Callbacks.arm_ = [&](WireKind Kind) -> hc::storage::Result<HANDLE> { return Plugin.viewer_ ? Plugin.viewer_->ArmWork(Kind) : hc::storage::Result<HANDLE>(static_cast<HANDLE>(nullptr)); };
+            Callbacks.finish_ = [&](WireKind Kind, bool Cancelled) { if (Plugin.viewer_) Plugin.viewer_->FinishWork(Kind, Cancelled); };
+            Callbacks.cleanup_ = [&] { Plugin.CloseServices(); };
+            Callbacks.unload_ = [&] { Plugin.Unload(); };
+            return RunViewerHostRuntime(Pipe.Get(), Parent.Get(), ParentId, Frame.Value(), std::move(Callbacks));
+        }
         // Completion can cross an already-sent cancel/prompt reply on the
         // duplex pipe. Retire that control for the completed invocation; it
         // must neither cancel the next invocation nor poison its sequence.

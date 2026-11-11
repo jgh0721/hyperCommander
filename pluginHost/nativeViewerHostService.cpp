@@ -5,6 +5,7 @@
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include <commctrl.h>
 #include "wlxWindowMessage.hpp"
+#include "viewerUiDispatcher.hpp"
 
 namespace hc::plugins
 {
@@ -30,19 +31,24 @@ namespace hc::plugins
     { return dopus_ ? dopus_->Probe() : wlx_->Probe(); }
     void NativeViewerHostService::close()
     {
+        Q_ASSERT(GetCurrentThreadId() == thread_);
         if (QCoreApplication::instance()) QCoreApplication::instance()->removeNativeEventFilter(this);
         if (inputHook_) UnhookWindowsHookEx(std::exchange(inputHook_, nullptr));
         if (inputOwner_ == this) inputOwner_ = nullptr;
+        // A plugin's close/uninit may block. Release the application's input
+        // queue before entering that SDK teardown, on the owning UI thread.
+        if (inputThread_) AttachThreadInput(GetCurrentThreadId(), std::exchange(inputThread_, 0), FALSE);
+        ViewerUiDispatcher::SetInputAttached(false);
         const auto Viewer = std::exchange(viewer_, nullptr);
         if (dopus_) dopus_->Close();
         else if (Viewer && IsWindow(Viewer)) wlx_->Close(Viewer);
         if (container_) DestroyWindow(std::exchange(container_, nullptr));
-        if (inputThread_) AttachThreadInput(GetCurrentThreadId(), std::exchange(inputThread_, 0), FALSE);
         returnKey_ = returnModifiers_ = returnMessage_ = interactionMessage_ = 0;
         preview_ = interacted_ = false;
     }
     LRESULT CALLBACK NativeViewerHostService::inputHook(int Code, WPARAM WParam, LPARAM LParam)
     {
+        ViewerUiDispatcher::NativeCallback Callback;
         auto* Self = inputOwner_;
         if (Code == HC_ACTION && WParam == PM_REMOVE && Self && Self->viewer_)
             Self->filterInput(reinterpret_cast<MSG*>(LParam));
@@ -50,6 +56,7 @@ namespace hc::plugins
     }
     bool NativeViewerHostService::nativeEventFilter(const QByteArray& Type, void* Message, qintptr* Result)
     {
+        ViewerUiDispatcher::NativeCallback Callback;
         if (viewer_ && (Type == "windows_generic_MSG" || Type == "windows_dispatcher_MSG")
             && filterInput(static_cast<MSG*>(Message))) { if (Result) *Result = 0; return true; }
         return false;
@@ -94,6 +101,7 @@ namespace hc::plugins
     }
     LRESULT CALLBACK NativeViewerHostService::windowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
     {
+        ViewerUiDispatcher::NativeCallback Callback;
         auto* Self = reinterpret_cast<NativeViewerHostService*>(GetWindowLongPtrW(Window, GWLP_USERDATA));
         if (Message == WM_NCCREATE)
         {
@@ -106,6 +114,10 @@ namespace hc::plugins
             && reinterpret_cast<NMHDR*>(LParam)->code == UINT(0 - 2000)) return RGB(32, 32, 32);
         if (Self && Self->viewer_)
         {
+            if (Message == WM_SHOWWINDOW && !WParam && Self->inputThread_) {
+                AttachThreadInput(GetCurrentThreadId(), std::exchange(Self->inputThread_, 0), FALSE);
+                ViewerUiDispatcher::SetInputAttached(false);
+            }
             if (Message == WM_SIZE) { if (Self->dopus_) Self->dopus_->Resize(LOWORD(LParam), HIWORD(LParam)); else MoveWindow(Self->viewer_, 0, 0, LOWORD(LParam), HIWORD(LParam), TRUE); return 0; }
             if (Message == WM_SETFOCUS) { SetFocus(Self->viewer_); return 0; }
             if ((Message == WM_COMMAND || Message == WM_NOTIFY) && Self->wlx_)
@@ -118,6 +130,7 @@ namespace hc::plugins
     }
     Result<QJsonObject> NativeViewerHostService::Handle(WireKind Kind, const QJsonObject& Request)
     {
+        Q_ASSERT(GetCurrentThreadId() == thread_);
         if (Kind == WireKind::MetadataQuery || Kind == WireKind::ContentConvert)
         {
             const auto Required = Kind == WireKind::MetadataQuery ? Extension::Metadata : Extension::ContentConvert;
@@ -190,7 +203,10 @@ namespace hc::plugins
         if (!container_ || !viewer_ || !IsWindow(container_) || !IsWindow(viewer_)) return HostError("host-viewer-not-open");
         // A hidden viewer is kept warm for reuse and has no input target. Leave
         // HC's input queue; the next explicit focus request joins it again.
-        if (inputThread_ && !IsWindowVisible(container_)) AttachThreadInput(GetCurrentThreadId(), std::exchange(inputThread_, 0), FALSE);
+        if (inputThread_ && !IsWindowVisible(container_)) {
+            AttachThreadInput(GetCurrentThreadId(), std::exchange(inputThread_, 0), FALSE);
+            ViewerUiDispatcher::SetInputAttached(false);
+        }
         if (Kind == WireKind::ViewerResize)
         {
             if (Request.size() != 2 || !Dimension(Request["width"]) || !Dimension(Request["height"])) return Invalid("host-viewer-size");
@@ -225,6 +241,7 @@ namespace hc::plugins
                 if (!AttachThreadInput(GetCurrentThreadId(), Thread, TRUE))
                     return HostError("host-viewer-input-attach", GetLastError());
                 inputThread_ = Thread;
+                ViewerUiDispatcher::SetInputAttached(true);
             }
             SetFocus(viewer_); return QJsonObject{{"focused", GetFocus() == viewer_ || IsChild(viewer_, GetFocus())}};
         }
@@ -253,5 +270,19 @@ namespace hc::plugins
             return wlx_->HandleCommand(viewer_, Request);
         }
         return Invalid("host-viewer-command");
+    }
+    void NativeViewerHostService::PrepareWork(WireKind Kind)
+    {
+        Q_ASSERT(GetCurrentThreadId() == thread_);
+        if (dopus_ && Kind == WireKind::ViewerOpen) close();
+    }
+    Result<HANDLE> NativeViewerHostService::ArmWork(WireKind Kind)
+    { Q_ASSERT(GetCurrentThreadId() == thread_); return dopus_ ? dopus_->ArmWork(Kind) : Result<HANDLE>(static_cast<HANDLE>(nullptr)); }
+    void NativeViewerHostService::FinishWork(WireKind Kind, bool Cancelled)
+    {
+        Q_ASSERT(GetCurrentThreadId() == thread_);
+        if (!dopus_) return;
+        dopus_->FinishWork();
+        if (Cancelled && Kind == WireKind::ViewerOpen) close();
     }
 }

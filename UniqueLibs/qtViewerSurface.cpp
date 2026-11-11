@@ -254,6 +254,7 @@ void QtViewerSurface::ConfigurePlugins(QtPluginViewerController* Controller, Vie
     S.pluginChoices_ = std::move(Choices); S.pluginViewer_ = new QtPluginViewerSurface(Controller, S.pages_); S.pages_->addWidget(S.pluginViewer_);
     S.pluginSelection_ = std::move(Selection);
     connect(S.pluginViewer_, &QtPluginViewerSurface::ReturnFocusRequested, this, &QtViewerSurface::ReturnFocusRequested);
+    connect(S.pluginViewer_, &QtPluginViewerSurface::ActivityChanged, this, &QtViewerSurface::ActivityChanged);
     S.pluginMenu_->menuAction()->setVisible(true);
     connect(S.pluginViewer_, &QtPluginViewerSurface::Ready, this, [this](const QString& Id) {
         auto& S = *state_; if ((!S.selectedPlugin_ && !S.automaticPlugin_) || QString::fromStdString(S.pluginViewer_->Snapshot().id_) != Id) return;
@@ -338,6 +339,14 @@ void QtViewerSurface::refreshPluginMenu()
         });
     }
     if (Choices.empty()) S.pluginMenu_->addAction(tr("호스트 사용으로 설정된 플러그인이 없습니다."))->setEnabled(false);
+    if (S.pluginViewer_) {
+        const auto Details = S.pluginViewer_->Details();
+        if (Details.host_.running_ && !Details.idle_) {
+            S.pluginMenu_->addSeparator();
+            auto* Stop = S.pluginMenu_->addAction(tr("플러그인 강제 종료…")); Stop->setObjectName("hc.viewer.plugin.forceStop");
+            connect(Stop, &QAction::triggered, this, [this] { state_->pluginViewer_->Execute("force-stop"); });
+        }
+    }
 }
 void QtViewerSurface::Open(std::shared_ptr<hc::storage::IContentSource> Source, ViewerPurpose Purpose)
 {

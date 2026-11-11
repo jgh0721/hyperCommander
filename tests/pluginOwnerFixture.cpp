@@ -12,10 +12,12 @@ int main(int Argc, char** Argv)
     // Test-only owner: approval is created explicitly for this local fixture.
     hc::plugins::PluginApproval Approval; Approval.reviewed_ = Manifest.Value().manifest_;
     Approval.approved_ = true; Approval.granted_ = Approval.reviewed_.permissions_;
-    auto Started = hc::plugins::PluginProcess::Start(App.arguments()[1], App.arguments()[2], Approval);
+    const bool Configuration = App.arguments().value(3) == "--configuration";
+    hc::plugins::HostLimits Limits; if (Configuration) Limits.purpose_ = hc::plugins::HostPurpose::Configuration;
+    auto Started = hc::plugins::PluginProcess::Start(App.arguments()[1], App.arguments()[2], Approval, Limits);
     if (!Started.HasValue()) { std::cerr << Started.Failure().code_ << std::endl; return 4; }
     std::cout << Started.Value()->Snapshot().processId_ << std::endl;
-    if (App.arguments().size() == 4)
+    if (App.arguments().size() == 4 && !Configuration)
     {
         const auto Path = App.arguments()[3]; auto Backend = hc::plugins::MakeHostedArchiveBackend(std::shared_ptr<hc::plugins::PluginProcess>(std::move(Started.Value())));
         auto Result = Backend->Update({Path.toStdString(), QFileInfo(Path).absolutePath().toStdString(), {"new.txt"}}, {});

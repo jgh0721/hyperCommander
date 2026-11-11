@@ -37,6 +37,7 @@ signals:
     void CloseRequested();
     void ReturnFocusRequested();
     void FollowSelectionRequested();
+    void ActivityChanged(const QString& Text);
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
 private:

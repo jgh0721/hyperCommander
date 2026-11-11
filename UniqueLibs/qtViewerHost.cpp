@@ -21,10 +21,19 @@
 #include "qtPluginReview.hpp"
 
 namespace {
+void ViewerActivity(QWidget* Window, const QString& Text)
+{
+    const auto Previous = Window->property("hc.viewer.activity").toString();
+    auto Title = Window->windowTitle();
+    if (!Previous.isEmpty() && Title.endsWith(" · " + Previous)) Title.chop(Previous.size() + 3);
+    Window->setProperty("hc.viewer.activity", Text);
+    Window->setWindowTitle(Text.isEmpty() ? Title : Title + " · " + Text);
+}
 class ViewerDialog final : public QDialog {
 public:
     using QDialog::QDialog;
     std::function<void()> escape_;
+    std::function<bool()> closeRequested_;
     void RememberPreviousWindow() {
         previousWindow_ = GetForegroundWindow();
         previousFocus_ = QApplication::focusWidget();
@@ -37,6 +46,10 @@ public:
     // Connections of one use (warm or document). Replacing it disconnects them.
     QObject* NewPhase() { delete phase_.data(); phase_ = new QObject(this); return phase_; }
 protected:
+    void closeEvent(QCloseEvent* Event) override {
+        if (closeRequested_ && !closeRequested_()) { Event->ignore(); return; }
+        QDialog::closeEvent(Event);
+    }
     void keyPressEvent(QKeyEvent* Event) override {
         if (Event->key() == Qt::Key_Escape && Event->modifiers() == Qt::NoModifier && escape_) {
             if (!Event->isAutoRepeat()) escape_();
@@ -137,6 +150,7 @@ QDialog* QtViewerHost::OpenFull(std::shared_ptr<hc::storage::IContentSource> Sou
     auto* Layout = new QVBoxLayout(Window); Layout->setContentsMargins(0, 0, 0, 0);
     auto* Surface = CreateSurface(Window); Layout->addWidget(Surface);
     connect(Surface, &QtViewerSurface::CloseRequested, Window, &QDialog::close);
+    connect(Surface, &QtViewerSurface::ActivityChanged, Window, [Window](const QString& Text) { ViewerActivity(Window, Text); });
     connect(Window, &QDialog::finished, Surface, [Surface] { Surface->Close(); });
     connect(Surface, &QtViewerSurface::Ready, Window, [Window, Surface] { Window->setWindowTitle(QString::fromStdString(Surface->Snapshot().source_.name_) + tr(" — 읽기 전용")); });
     Surface->Open(std::move(Source)); Window->show(); return Window;
@@ -172,7 +186,7 @@ bool QtViewerHost::matchesPrepared(const hc::plugins::PluginViewerOptions& Optio
 void QtViewerHost::parkPrepared(QDialog* Dialog, QtPluginViewerSurface* Surface)
 {
     auto* Window = static_cast<ViewerDialog*>(Dialog); auto* Phase = Window->NewPhase();
-    Window->escape_ = {}; Window->setObjectName("hc.document.prepared");
+    Window->escape_ = {}; Window->closeRequested_ = {}; Window->setObjectName("hc.document.prepared");
     // Warm windows stay hidden and are deleted explicitly; the surface destructor closes the session.
     Window->setAttribute(Qt::WA_DeleteOnClose, false); Window->setAttribute(Qt::WA_ShowWithoutActivating);
     preparedWindow_ = Window; preparedSurface_ = Surface;
@@ -236,6 +250,15 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
     }
     if (Options.approval_.reviewed_.compatibility_ == "hyperviewer-v1")
         Window->escape_ = [Surface] { if (Surface->IsReady()) Surface->SendDocument({{"action", "escape"}}); };
+    Window->closeRequested_ = [Surface, Sequence = std::uint64_t(0)]() mutable {
+        const auto Details = Surface->Details();
+        if (!Details.documentChannel_ || Details.idle_ || (Details.host_.processId_ && !Details.host_.running_)
+            || Details.documentState_["closeRequested"].toBool()) return true;
+        if (Sequence && Details.commandSequence_ < Sequence) return false;
+        const auto Sent = Surface->SendDocument({{"action", "requestViewerClose"}});
+        if (Sent.HasValue()) Sequence = Sent.Value();
+        return false;
+    };
     const auto Expected = Inputs.size();
     auto PreparedInputs = Prepared || Pending ? Inputs : std::vector<hc::plugins::HostedViewerSession::DocumentInput>{};
     Options.writer_ = Inputs.front().writer_; auto First = Inputs.front().source_; Inputs.erase(Inputs.begin());
@@ -248,6 +271,7 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
         Window->Dismiss(!Standalone || Surface->Details().documentState_["closeForeground"].toBool());
         retirePlugin(Window, Surface, Recyclable);
     });
+    connect(Surface, &QtPluginViewerSurface::ActivityChanged, Phase, [Window](const QString& Text) { ViewerActivity(Window, Text); });
     connect(Surface, &QtPluginViewerSurface::Failed, Phase, [this, Window, Completion, EpubStandalone, Binary = Options.binaryPath_](const QString& Code) {
         Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg(Code)); if (Completion) Completion(false, Code);
         if (EpubStandalone) Window->show();
@@ -379,6 +403,15 @@ bool QtViewerHost::eventFilter(QObject* Object, QEvent* Event)
                 static_cast<QCloseEvent*>(Event)->ignore();
                 return true;
             }
+        }
+        // F3's standalone helpers have hidden transport dialogs rather than a
+        // QtViewerSurface. They own editable documents too: ask their document
+        // channel before graceful runtime stop, including while a save prompt
+        // is already open. A rejected close leaves every runtime and lease alive.
+        for (auto* Window : main_->findChildren<QDialog*>("hc.document.workspace")) {
+            auto* Surface = Window->findChild<QtPluginViewerSurface*>();
+            if (!Surface || !Surface->Details().documentChannel_) continue;
+            if (!Window->close()) { static_cast<QCloseEvent*>(Event)->ignore(); return true; }
         }
         CloseAll();
         if (!IsIdle())

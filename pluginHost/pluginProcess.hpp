@@ -23,12 +23,15 @@ namespace hc::plugins
         bool running_ = false;
         bool busy_ = false; // Cached observation while another IPC call owns the channel.
         bool forcedTermination_ = false;
+        bool callerDetached_ = false;
+        QJsonObject runtime_;
         std::optional<std::uint32_t> exitCode_;
         std::optional<storage::Error> failure_;
     };
     // Blocking worker-side owner; never construct/call/destroy on the GUI thread.
-    // Calls serialize with the idle heartbeat. Destruction requires callers to
-    // have returned; Close cancels monitoring and deterministically reaps the job.
+    // Viewer/configuration calls use independent command and control I/O owners;
+    // archive/data v2 retains its session transport. Destruction requires callers
+    // to have returned; Close deterministically reaps the runtime and its Job.
     class PluginProcess final : public storage::IProviderSession
     {
     public:
@@ -38,6 +41,8 @@ namespace hc::plugins
         ~PluginProcess();
         storage::Result<QJsonObject> Probe(storage::OperationContext Context = {});
         storage::Result<QJsonObject> Ping(storage::OperationContext Context = {});
+        // Rejoin the last detached subscription; never retries an SDK call.
+        storage::Result<QJsonObject> AwaitPending(storage::OperationContext Context = {});
         storage::Result<QJsonObject> ArchiveCall(WireKind Kind, QJsonObject Request, storage::OperationContext Context = {});
         storage::Result<QJsonObject> ViewerCall(WireKind Kind, QJsonObject Request, storage::OperationContext Context = {});
         storage::Result<QJsonObject> DataCall(WireKind Kind, QJsonObject Request, storage::OperationContext Context = {});
@@ -47,6 +52,9 @@ namespace hc::plugins
         storage::Result<storage::ReadChunk> ReadStream(const QString& Token, std::size_t Count, storage::OperationContext Context = {});
         storage::Result<QJsonObject> ArchiveData(QJsonObject Request, const QByteArray& Bytes, storage::OperationContext Context = {});
         HostSnapshot Snapshot() const;
+        // Value-only status source; safe after this owner has closed/died.
+        std::function<HostSnapshot()> Observe() const;
+        std::function<void()> ForceStopSource() const;
         unsigned ArchiveOptionsVersion() const;
         storage::Result<QJsonObject> Configure(std::uint64_t Owner, storage::OperationContext Context = {});
         void Close();

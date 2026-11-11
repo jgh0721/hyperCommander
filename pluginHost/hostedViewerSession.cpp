@@ -26,6 +26,7 @@
 #include <deque>
 #include <thread>
 #include <future>
+#include <cstring>
 
 namespace hc::plugins
 {
@@ -106,9 +107,9 @@ namespace hc::plugins
                 return Error{ErrorCategory::Unsupported, "wlx-detect-extension-encoding", {"wlx"}};
             Bytes.chop(1); return Bytes;
         }
-        Result<QByteArray> ReadDetectionPrefix(IContentSource& Source, const EntrySnapshot& Entry, OperationContext Context)
+        Result<QByteArray> ReadDetectionPrefix(IContentSource& Source, const EntrySnapshot& Entry, OperationContext Context, std::size_t Maximum = 8192)
         {
-            const auto Required = static_cast<std::size_t>(std::min<std::uint64_t>(Entry.size_, 8192));
+            const auto Required = static_cast<std::size_t>(std::min<std::uint64_t>(Entry.size_, Maximum));
             if (const auto* Provider = dynamic_cast<ProviderContentSource*>(&Source)) {
                 const auto Cached = Provider->Prefix();
                 if (Cached.size() >= Required) {
@@ -170,6 +171,8 @@ namespace hc::plugins
         std::condition_variable changed_;
         std::stop_source stop_;
         PluginViewerDetails details_;
+        std::function<HostSnapshot()> observation_;
+        std::function<void()> forceStop_;
         bool closed_ = false, cancelled_ = false, commands_ = false, search_ = false, focus_ = false;
         std::optional<std::pair<std::uint32_t, std::uint32_t>> size_;
         std::optional<QJsonObject> inputBinding_;
@@ -190,7 +193,18 @@ namespace hc::plugins
     HostedViewerSession::HostedViewerSession(std::shared_ptr<State> State) : state_(std::move(State)) {}
     HostedViewerSession::~HostedViewerSession() { Close(); }
     ViewerSnapshot HostedViewerSession::Snapshot() const { std::lock_guard Lock(state_->mutex_); return state_->details_.viewer_; }
-    PluginViewerDetails HostedViewerSession::Details() const { std::lock_guard Lock(state_->mutex_); return state_->details_; }
+    PluginViewerDetails HostedViewerSession::Details() const
+    {
+        PluginViewerDetails Value; std::function<HostSnapshot()> Observation;
+        { std::lock_guard Lock(state_->mutex_); Value = state_->details_; Observation = state_->observation_; }
+        if (Observation) { auto Host = Observation(); if (Host.processId_) Value.host_ = std::move(Host); }
+        const auto Runtime = Value.host_.runtime_;
+        Value.uiSuspect_ = Runtime["probeFailures"].toInt() > 0;
+        Value.waitingResponsive_ = (Runtime["workState"] == "Running" || Runtime["workState"] == "Queued")
+            && Runtime["workAgeMs"].toInteger() >= 2000 && !Value.uiSuspect_;
+        Value.resultUnknown_ = Runtime["workState"] == "Lost" || (Value.commandError_ && Value.commandError_->userAction_ == "result-unknown");
+        return Value;
+    }
     std::vector<std::string> HostedViewerSession::Commands() const
     {
         std::lock_guard Lock(state_->mutex_); auto Commands = state_->commands_ ? std::vector<std::string>{"copy", "wrap", "select-all", "set-percent"} : std::vector<std::string>{};
@@ -198,6 +212,12 @@ namespace hc::plugins
     }
     void HostedViewerSession::Cancel() { state_->stop(false); }
     void HostedViewerSession::Close() { state_->stop(true); }
+    void HostedViewerSession::ForceStop()
+    {
+        std::function<void()> Stop;
+        { std::lock_guard Lock(state_->mutex_); Stop = state_->forceStop_; }
+        if (Stop) Stop();
+    }
     Result<std::uint64_t> HostedViewerSession::CloseArchive(int Decision)
     {
         std::lock_guard Lock(state_->mutex_);
@@ -329,6 +349,7 @@ namespace hc::plugins
     {
         std::stop_callback External(Context.stopToken_, [&] { State->stop(false); });
         Context.stopToken_ = State->stop_.get_token();
+        const auto UiContext = Context;
         const auto PreparationStage=[State](const QString& Stage){std::lock_guard Lock(State->mutex_);State->details_.preparationStage_=Stage;State->details_.preparationProgress_.reset();};
         // Progress belongs to one input preparation, never to renderer startup.
         const auto PreparationContext = [State](OperationContext Calls, const EntrySnapshot& Entry) {
@@ -361,7 +382,7 @@ namespace hc::plugins
         const auto CloseHost = [&] {
             if (!Host) { ArchiveBroker.reset(); return; }
             Host->Close(); ArchiveBroker.reset(); Document.reset(); const auto Final = Host->Snapshot();
-            { std::lock_guard Lock(State->mutex_); State->details_.host_ = Final; }
+            { std::lock_guard Lock(State->mutex_); State->details_.host_ = Final; State->observation_ = {}; }
             Host.reset();
         };
         const auto Work = [&]() -> Result<Unit> {
@@ -371,6 +392,28 @@ namespace hc::plugins
                 Context.deadline_ = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(30));
                 Context.denyConcurrentMutation_ = true;
             }
+            const auto UiCall = [&](auto&& Function) {
+                const auto Started = std::chrono::steady_clock::now();
+                auto Value = Function(UiContext);
+                if constexpr (!std::is_same_v<decltype(Value), Result<std::unique_ptr<PluginProcess>>>) {
+                    if (!Value.HasValue() && Value.Failure().code_ == "host-caller-detached" && Host && !State->stop_.stop_requested()) {
+                        // The session owns the input lease after this caller's
+                        // absolute wait ended. Rejoin its terminal slot before
+                        // retiring a failed open; never kill a responsive SDK
+                        // merely because the opening subscriber timed out.
+                        OperationContext Wait; Wait.stopToken_ = State->stop_.get_token();
+                        auto Terminal = Host->AwaitPending(Wait);
+                        Value = Terminal.HasValue() ? decltype(Value)(Error{ErrorCategory::Unavailable, "host-caller-wait-expired", {"plugin-host"}, {}, false, "completed-after-detach"})
+                            : decltype(Value)(Terminal.Failure());
+                    }
+                }
+                // The automatic-selection budget measures input preparation.
+                // UI calls receive the original absolute caller deadline; a
+                // responsive modal does not consume the preparation allowance.
+                if (Policy && Context.deadline_ != std::chrono::steady_clock::time_point::max())
+                    Context.deadline_ = std::min(UiContext.deadline_, Context.deadline_ + (std::chrono::steady_clock::now() - Started));
+                return Value;
+            };
             std::optional<EntrySnapshot> Entry;
             WlxDetectionInput Detection; bool PrefixReady = false, ExtensionReady = false, FatalContent = false;
             const auto Materialize = [&]() -> Result<Unit> {
@@ -407,7 +450,21 @@ namespace hc::plugins
                 }
                 auto Created = Factory(); if (!Created.HasValue()) return Created.Failure(); Materializer = std::move(Created.Value());
                 if (!Materializer) return Invalid("viewer-materializer-required");
-                auto Materialized = Materializer->Materialize({Source, {}, {}}, PreparationContext(Context, Source->Describe())).get();
+                MaterializationRequest Input{Source, {}, {}};
+                QByteArray PrivatePrefix = Detection.prefix_;
+                if (!PrefixReady) {
+                    auto Prefix = ReadDetectionPrefix(*Source, Source->Describe(), PreparationContext(Context, Source->Describe()), std::min<std::size_t>(20, Context.maxReadBytes_));
+                    if (!Prefix.HasValue()) return Prefix.Failure(); PrivatePrefix = std::move(Prefix.Value());
+                }
+                // Readonly WAL connections may leave an empty WAL and a shared
+                // memory index. Declare these disposable caches only for our
+                // generated private copy, never for a borrowed source path.
+                // A nonempty WAL or larger/unknown output is preserved by the
+                // lease owner, rather than discarding a possible transaction.
+                if (PrivatePrefix.size() >= 20 && std::memcmp(PrivatePrefix.constData(), "SQLite format 3\0", 16) == 0
+                    && PrivatePrefix[18] == 2 && PrivatePrefix[19] == 2)
+                    Input.auxiliaries_ = {{"-wal", 0}, {"-shm", 32768}};
+                auto Materialized = MaterializePrivateContent(*Materializer, std::move(Input), PreparationContext(Context, Source->Describe())).get();
                 ClearPreparation();
                 if (!Materialized.HasValue()) return Materialized.Failure(); Lease = std::move(Materialized.Value());
                 if (!Lease) return Invalid("viewer-content-lease-required");
@@ -438,22 +495,24 @@ namespace hc::plugins
                         Context, Options.defaultIniPath_, ArchiveBroker->Endpoint());
                     if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
                     ArchiveBroker->BindClient(Host->Snapshot().processId_);
-                    auto Probe = Host->Probe(Context); if (!Probe.HasValue()) return Probe.Failure();
+                    auto Probe = UiCall([&](OperationContext Calls) { return Host->Probe(Calls); }); if (!Probe.HasValue()) return Probe.Failure();
                     std::pair<std::uint32_t, std::uint32_t> Size;
                     { std::lock_guard Lock(State->mutex_); Size = *State->size_; }
-                    auto Opened = Host->ViewerCall(WireKind::ViewerOpen, {{"parent", ParentWindow}, {"file", ""},
+                    auto Opened = UiCall([&](OperationContext Calls) { return Host->ViewerCall(WireKind::ViewerOpen, {{"parent", ParentWindow}, {"file", ""},
                         {"width", int(Size.first)}, {"height", int(Size.second)}, {"flags", Options.flags_},
-                        {"preview", false}, {"prepareOnly", true}}, Context);
+                        {"preview", false}, {"prepareOnly", true}}, Calls); });
                     if (!Opened.HasValue()) return Opened.Failure();
                     Document = std::make_unique<DocumentViewerClient>(*Host);
-                    auto Hello = Document->Hello(Context); if (!Hello.HasValue()) return Hello.Failure();
-                    auto Prepared = Document->Execute({{"action", "prepareViewer"}}, Context);
+                    auto Hello = UiCall([&](OperationContext Calls) { return Document->Hello(Calls); }); if (!Hello.HasValue()) return Hello.Failure();
+                    auto Prepared = UiCall([&](OperationContext Calls) { return Document->Execute({{"action", "prepareViewer"}}, Calls); });
                     if (!Prepared.HasValue()) return Prepared.Failure();
-                    auto Current = Document->Call("DocumentState", {}, {}, {}, Context);
+                    auto Current = UiCall([&](OperationContext Calls) { return Document->Call("DocumentState", {}, {}, {}, Calls); });
                     if (!Current.HasValue()) return Current.Failure();
                     if (!Current.Value()["documents"].toArray().isEmpty()) return Invalid("viewer-prepare-has-documents");
                     std::lock_guard Lock(State->mutex_);
                     State->details_.host_ = Host->Snapshot();
+                    State->observation_ = Host->Observe();
+                    State->forceStop_ = Host->ForceStopSource();
                     if (State->size_ && *State->size_ == Size) State->size_.reset();
                     State->details_.window_ = Opened.Value()["window"].toString();
                     State->details_.child_ = Opened.Value()["viewer"].toString();
@@ -519,11 +578,11 @@ namespace hc::plugins
                 if (DirectInputAllowed) InputPreparation = std::async(std::launch::async, Materialize);
                 const auto PreparedInput = [&]() -> Result<Unit> { return InputPreparation.valid() ? InputPreparation.get() : Materialize(); };
                 PreparationStage("host");
-                auto Started = [&]{hc::document::ImageTraceSpan Stage("viewer.host-start");return PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_,ArchiveBroker?ArchiveBroker->Endpoint():QJsonObject{});}();
+                auto Started = UiCall([&](OperationContext Calls){hc::document::ImageTraceSpan Stage("viewer.host-start");return PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Calls, Options.defaultIniPath_,ArchiveBroker?ArchiveBroker->Endpoint():QJsonObject{});});
                 if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
                 const auto StartedState = Host->Snapshot();if(ArchiveBroker)ArchiveBroker->BindClient(StartedState.processId_);
-                { std::lock_guard Lock(State->mutex_); State->details_.host_ = StartedState; }
-                auto Probe = [&]{hc::document::ImageTraceSpan Stage("viewer.plugin-probe");return Host->Probe(Context);}(); if (!Probe.HasValue()) return Probe.Failure();
+                { std::lock_guard Lock(State->mutex_); State->details_.host_ = StartedState; State->observation_ = Host->Observe(); State->forceStop_ = Host->ForceStopSource(); }
+                auto Probe = UiCall([&](OperationContext Calls){hc::document::ImageTraceSpan Stage("viewer.plugin-probe");return Host->Probe(Calls);}); if (!Probe.HasValue()) return Probe.Failure();
                 if ((Policy || Options.detectionOverride_) && !Dopus)
                 {
                     if (Probe.Value()["ansiCodePage"].toInt(-1) != static_cast<int>(GetACP()))
@@ -592,7 +651,7 @@ namespace hc::plugins
                 QJsonObject OpenRequest{{"parent", ParentWindow}, {"file", ExternalDraft ? ExternalPath : QString::fromStdString(Lease->LocalPath())},
                     {"width", static_cast<int>(Size.first)}, {"height", static_cast<int>(Size.second)}, {"flags", Options.flags_}, {"preview", Options.purpose_ == ViewerPurpose::QuickPreview}};
                 if (DirectInputAllowed) { const auto Prefix = ReadPrefix(Source); if (!Prefix.isEmpty()) OpenRequest["readPrefix"] = Prefix; }
-                auto Opened = Host->ViewerCall(WireKind::ViewerOpen, OpenRequest, Context);
+                auto Opened = UiCall([&](OperationContext Calls){ return Host->ViewerCall(WireKind::ViewerOpen, OpenRequest, Calls); });
                 if (!Opened.HasValue())
                 {
                     if (Policy && Opened.Failure().code_ == "host-viewer-load-rejected") return false;
@@ -600,17 +659,19 @@ namespace hc::plugins
                 }
                 if (Inspected.Value().manifest_.compatibility_ == "hyperviewer-v1") {
                     Document = std::make_unique<DocumentViewerClient>(*Host);
-                    auto Ready = Document->Hello(Context); if (!Ready.HasValue()) return Ready.Failure();
+                    auto Ready = UiCall([&](OperationContext Calls){ return Document->Hello(Calls); }); if (!Ready.HasValue()) return Ready.Failure();
                     { std::lock_guard Lock(State->mutex_);
                       State->details_.documentChannel_ = true;
                       State->details_.window_ = Opened.Value()["window"].toString();
                       State->details_.child_ = Opened.Value()["viewer"].toString(); }
                     // Ready negotiates the channel; the asynchronous SDK Load
                     // can still be parsing. Bind only after its slot is stable.
-                    const auto Deadline = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(15));
+                    auto Deadline = std::min(Context.deadline_, std::chrono::steady_clock::now() + std::chrono::seconds(15));
                     auto WaitTrace=std::make_unique<hc::document::ImageTraceSpan>("viewer.initial-content");
                     for (;;) {
-                        auto Current = Document->Call("DocumentState", {}, {}, {}, Context); if (!Current.HasValue()) return Current.Failure();
+                        const auto PollStarted = std::chrono::steady_clock::now();
+                        auto Current = UiCall([&](OperationContext Calls) { return Document->Call("DocumentState", {}, {}, {}, Calls); }); if (!Current.HasValue()) return Current.Failure();
+                        Deadline = std::min(Context.deadline_, Deadline + (std::chrono::steady_clock::now() - PollStarted));
                         { std::lock_guard Lock(State->mutex_); State->details_.documentState_=Current.Value(); }
                         const auto Slots = Current.Value()["documents"].toArray();
                         // An empty helper is idle before the queued SDK load starts.
@@ -643,7 +704,7 @@ namespace hc::plugins
                     // The approved reader already hashed the exact snapshot while loading it.
                     // Re-reading an SMB/RDP input here doubles first-open network traffic.
                     QByteArray Hash;
-                    const auto Loaded = Document->Call("DocumentState", {}, {}, {}, Context);
+                    const auto Loaded = UiCall([&](OperationContext Calls) { return Document->Call("DocumentState", {}, {}, {}, Calls); });
                     if (!Loaded.HasValue()) return Loaded.Failure();
                     for (const auto& Item : Loaded.Value()["documents"].toArray())
                         if (Item.toObject()["hostSlot"].toBool()) Hash = QByteArray::fromHex(Item.toObject()["inputSha256"].toString().toLatin1());
@@ -652,8 +713,8 @@ namespace hc::plugins
                     const auto Writeback = ArchiveSource ? ArchiveSource->GetArchiveWriteback() : ProviderContentSource::ArchiveWriteback{};
                     const auto Token = Document->Bind(*Entry, Writer, Lease, Hash, Writeback);
                     if (Token.isEmpty()) return Invalid("document-source-binding");
-                    auto Bound = Document->Call("OpenDocuments", {{"documents", QJsonArray{QJsonObject{{"path", QString::fromStdString(Lease->LocalPath())},
-                        {"displayName", QString::fromUtf8(Entry->name_)}, {"readingSource",ReadingSource(*Entry)}, {"sourceToken", Token}, {"broker", bool(Writer) || bool(Writeback)}, {"hostSlot", true}, {"bindExistingHost", true}, {"readOnlyBook",DirectBook}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Context);
+                    auto Bound = UiCall([&](OperationContext Calls) { return Document->Call("OpenDocuments", {{"documents", QJsonArray{QJsonObject{{"path", QString::fromStdString(Lease->LocalPath())},
+                        {"displayName", QString::fromUtf8(Entry->name_)}, {"readingSource",ReadingSource(*Entry)}, {"sourceToken", Token}, {"broker", bool(Writer) || bool(Writeback)}, {"hostSlot", true}, {"bindExistingHost", true}, {"readOnlyBook",DirectBook}, {"sha256", QString::fromLatin1(Hash.toHex())}}}}}, {}, {}, Calls); });
                     if (!Bound.HasValue()) return Bound.Failure();
                     std::lock_guard Lock(State->mutex_); State->details_.documentChannel_ = true;
                 }
@@ -825,7 +886,7 @@ namespace hc::plugins
         if (Host)
         {
             Host->Close(); auto FinalHost = Host->Snapshot();
-            { std::lock_guard Lock(State->mutex_); State->details_.host_ = FinalHost; }
+              { std::lock_guard Lock(State->mutex_); State->details_.host_ = FinalHost; State->observation_ = {}; }
             Host.reset();
         }
         ArchiveBroker.reset(); Document.reset(); Lease.reset(); Source.reset();

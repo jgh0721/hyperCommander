@@ -64,14 +64,54 @@ namespace {
 bool Foreground(HWND Window){
     // Give the test the same activation permission as a real title-bar click.
     // Merely calling SetForegroundWindow does not create last-input ownership.
+    if(!IsWindow(Window))return false;
     const bool WasTopmost=(GetWindowLongPtrW(Window,GWL_EXSTYLE)&WS_EX_TOPMOST)!=0;
-    SetWindowPos(Window,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW);
-    RECT Bounds{};POINT Cursor{};GetCursorPos(&Cursor);if(!GetWindowRect(Window,&Bounds))return false;
-    SetCursorPos(Bounds.left+std::min<LONG>(100,(Bounds.right-Bounds.left)/2),Bounds.top+12);
-    INPUT Click[2]{};Click[0].type=Click[1].type=INPUT_MOUSE;Click[0].mi.dwFlags=MOUSEEVENTF_LEFTDOWN;Click[1].mi.dwFlags=MOUSEEVENTF_LEFTUP;
-    SendInput(2,Click,sizeof(INPUT));QTest::qWait(30);SetCursorPos(Cursor.x,Cursor.y);
-    if(!WasTopmost)SetWindowPos(Window,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
-    return GetAncestor(GetForegroundWindow(),GA_ROOT)==GetAncestor(Window,GA_ROOT);
+    POINT Cursor{};const bool HadCursor=GetCursorPos(&Cursor);
+    const auto Restore=qScopeGuard([&]{
+        if(HadCursor)SetCursorPos(Cursor.x,Cursor.y);
+        if(IsWindow(Window)&&!WasTopmost)SetWindowPos(Window,HWND_NOTOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+    });
+    using DwmAttribute=HRESULT(WINAPI*)(HWND,DWORD,PVOID,DWORD);
+    const auto Dwm=GetModuleHandleW(L"dwmapi.dll");
+    const auto Attribute=Dwm?reinterpret_cast<DwmAttribute>(GetProcAddress(Dwm,"DwmGetWindowAttribute")):nullptr;
+    RECT Bounds{},Clip{};POINT Target{},Actual{};HWND Hit=nullptr;DWORD InputError=0,CursorError=0;UINT Inserted=0;int Cloaked=-1;unsigned Attempts=0;
+    QElapsedTimer Timer;Timer.start();
+    // A previous row's native dialog/activation events may still be settling.
+    // Keep retrying actual input for a short bound; never relax foreground checks.
+    while(Timer.elapsed()<1800){
+        QTest::qWait(50);
+        if(!IsWindow(Window))break;
+        if(IsIconic(Window))ShowWindow(Window,SW_RESTORE);
+        Cloaked=-1;if(Attribute){DWORD Value=0;if(SUCCEEDED(Attribute(Window,14,&Value,sizeof(Value))))Cloaked=int(Value);}
+        if(!IsWindowVisible(Window)||!IsWindowEnabled(Window)||Cloaked>0||!GetWindowRect(Window,&Bounds)||Bounds.right-Bounds.left<40||Bounds.bottom-Bounds.top<30)continue;
+        SetWindowPos(Window,HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW);
+        QTest::qWait(30);
+        // Separate retry points so a second activation click is not a caption
+        // double-click that would maximize/restore the test window.
+        Target={Bounds.left+std::min<LONG>(100+LONG(Attempts%3)*24,(Bounds.right-Bounds.left)/2),Bounds.top+12};
+        Hit=WindowFromPoint(Target);
+        if(GetAncestor(Hit,GA_ROOT)!=GetAncestor(Window,GA_ROOT))continue;
+        SetLastError(0);const auto Positioned=SetCursorPos(Target.x,Target.y);CursorError=Positioned?0:GetLastError();if(!Positioned)continue;
+        if(!GetCursorPos(&Actual))continue;Hit=WindowFromPoint(Actual);
+        if(GetAncestor(Hit,GA_ROOT)!=GetAncestor(Window,GA_ROOT))continue;
+        INPUT Click[2]{};Click[0].type=Click[1].type=INPUT_MOUSE;Click[0].mi.dwFlags=MOUSEEVENTF_LEFTDOWN;Click[1].mi.dwFlags=MOUSEEVENTF_LEFTUP;
+        SetLastError(0);Inserted=SendInput(2,Click,sizeof(INPUT));InputError=Inserted==2?0:GetLastError();++Attempts;
+        if(Inserted!=2){INPUT Release{};Release.type=INPUT_MOUSE;Release.mi.dwFlags=MOUSEEVENTF_LEFTUP;SendInput(1,&Release,sizeof(INPUT));}
+        const auto Until=std::min<qint64>(1800,Timer.elapsed()+200);
+        do{
+            QTest::qWait(20);
+            if(Inserted==2&&GetAncestor(GetForegroundWindow(),GA_ROOT)==GetAncestor(Window,GA_ROOT))return true;
+        }while(Timer.elapsed()<Until);
+    }
+    const auto Current=GetForegroundWindow();DWORD Pid=0;const auto Thread=GetWindowThreadProcessId(Current,&Pid);
+    wchar_t Class[128]{},Title[256]{};GetClassNameW(Current,Class,128);GetWindowTextW(Current,Title,256);
+    GUITHREADINFO Gui{sizeof(Gui)};const auto GotGui=GetGUIThreadInfo(Thread,&Gui);
+    GetClipCursor(&Clip);
+    qWarning()<<"Activation setup failed"<<"window"<<quintptr(Window)<<"valid/visible/enabled/iconic"<<bool(IsWindow(Window))<<bool(IsWindowVisible(Window))<<bool(IsWindowEnabled(Window))<<bool(IsIconic(Window))
+        <<"cloaked"<<Cloaked<<"bounds"<<Bounds.left<<Bounds.top<<Bounds.right<<Bounds.bottom<<"hit"<<quintptr(Hit)<<"attempts/input/error/cursorError"<<Attempts<<Inserted<<InputError<<CursorError
+        <<"target/actual/clip"<<Target.x<<Target.y<<Actual.x<<Actual.y<<Clip.left<<Clip.top<<Clip.right<<Clip.bottom
+        <<"foreground/pid/class/title"<<quintptr(Current)<<Pid<<QString::fromWCharArray(Class)<<QString::fromWCharArray(Title)<<"gui"<<GotGui<<Gui.flags<<quintptr(Gui.hwndActive)<<quintptr(Gui.hwndFocus)<<quintptr(Gui.hwndMenuOwner);
+    return false;
 }
 bool NativeKey(WORD Key,bool Control=false){
     std::vector<INPUT> Keys;const auto Add=[&](WORD Value,bool Up){INPUT I{};I.type=INPUT_KEYBOARD;I.ki.wVk=Value;I.ki.dwFlags=(Up?KEYEVENTF_KEYUP:0)|((Value>=VK_PRIOR&&Value<=VK_DOWN)?KEYEVENTF_EXTENDEDKEY:0);Keys.push_back(I);};
@@ -82,7 +122,7 @@ bool Put(const QString& Path,const QByteArray& Bytes){QFile File(Path);return Fi
 QByteArray Read(const QString& Path){QFile File(Path);return File.open(QIODevice::ReadOnly)?File.readAll():QByteArray{};}
 bool Wait(std::function<bool()> Predicate,int Timeout=15000){QElapsedTimer Timer;Timer.start();do{if(Predicate())return true;QTest::qWait(20);}while(Timer.elapsed()<Timeout);return false;}
 QJsonObject Doc(QJsonObject State,QString Id){for(const auto& Item:State["documents"].toArray())if(Item.toObject()["documentId"].toString()==Id)return Item.toObject();return {};}
-QString Fixture(QString Name){return QString(HC_DOCUMENT_FIXTURES)+"/"+Name;}
+QString Fixture(QString Name){return qEnvironmentVariable("HC_DOCUMENT_FIXTURE_ROOT",QString(HC_DOCUMENT_FIXTURES))+"/"+Name;}
 class Native final {
 public:
     QWidget parent_; HMODULE module_=nullptr; HWND viewer_=nullptr;
@@ -1079,7 +1119,8 @@ void isolatedFileDialogsRemainResponsive(){
     QTemporaryDir Root;const auto Path=Root.filePath(Modal&&!Preview?"dialog.txt":"dialog.png");
     QImage Page(40,60,QImage::Format_RGB32);Page.fill(Qt::green);
     if(Modal&&!Preview)QVERIFY(Put(Path,"original"));else QVERIFY(Page.save(Path));
-    QWidget Main;Main.resize(900,650);Main.show();Main.activateWindow();QVERIFY(QTest::qWaitForWindowActive(&Main));
+    QWidget Main;Main.resize(900,650);Main.show();QVERIFY(QTest::qWaitForWindowExposed(&Main));
+    QVERIFY(Foreground(reinterpret_cast<HWND>(Main.winId())));QVERIFY(QTest::qWaitForWindowActive(&Main));
     auto Live=std::make_shared<std::atomic<int>>(0);
     QtViewerHost Host(&Main,[Live]()->Result<std::shared_ptr<IMaterializer>>{
         auto Item=std::make_shared<Materializer>();Item->live_=Live;return std::shared_ptr<IMaterializer>(Item);});
@@ -1122,10 +1163,37 @@ void isolatedFileDialogsRemainResponsive(){
         return State.found_;};
     QVERIFY(Launch());HWND Dialog=nullptr;QVERIFY(Wait([&]{Dialog=FindDialog();return Dialog!=nullptr;}));
     const auto Closed=qScopeGuard([&]{if(IsWindow(Dialog))PostMessageW(Dialog,WM_CLOSE,0,0);});
+    QString Phase="first-dialog",Selected;const auto FirstDialog=Dialog;bool Completed=false;
+    const auto ClassName=[](HWND Native){wchar_t Text[128]{};GetClassNameW(Native,Text,128);return QString::fromWCharArray(Text);};
+    const auto NativeText=[](HWND Native){wchar_t Text[1024]{};DWORD_PTR Count=0;
+        if(!SendMessageTimeoutW(Native,WM_GETTEXT,std::size(Text),reinterpret_cast<LPARAM>(Text),SMTO_BLOCK|SMTO_ABORTIFHUNG|SMTO_ERRORONEXIT,100,&Count))return QString{};
+        return QString::fromWCharArray(Text,int(std::min<DWORD_PTR>(Count,std::size(Text)-1)));};
+    const auto DialogReady=[&]{DWORD OwnerPid=0;const auto Thread=GetWindowThreadProcessId(Dialog,&OwnerPid);GUITHREADINFO Info{sizeof(Info)};
+        return OwnerPid==Pid&&IsWindowVisible(Dialog)&&IsWindowEnabled(Dialog)&&GetAncestor(GetForegroundWindow(),GA_ROOT)==GetAncestor(Dialog,GA_ROOT)
+            &&GetGUIThreadInfo(Thread,&Info)&&GetAncestor(Info.hwndActive,GA_ROOT)==GetAncestor(Dialog,GA_ROOT)
+            &&Info.hwndFocus&&(Info.hwndFocus==Dialog||IsChild(Dialog,Info.hwndFocus));};
+    const std::function<QJsonObject(HWND)> Describe=[&](HWND Native){DWORD OwnerPid=0;const auto Thread=GetWindowThreadProcessId(Native,&OwnerPid);GUITHREADINFO Info{sizeof(Info)};const auto Gui=GetGUIThreadInfo(Thread,&Info);
+        return QJsonObject{{"hwnd",QString::number(quintptr(Native),16)},{"owner",QString::number(quintptr(GetWindow(Native,GW_OWNER)),16)},{"pid",qint64(OwnerPid)},{"thread",qint64(Thread)},
+            {"class",ClassName(Native)},{"text",OwnerPid==Pid?NativeText(Native):QString{}},{"visible",bool(IsWindowVisible(Native))},{"enabled",bool(IsWindowEnabled(Native))},
+            {"gui",bool(Gui)},{"flags",qint64(Info.flags)},{"active",QString::number(quintptr(Info.hwndActive),16)},{"focus",QString::number(quintptr(Info.hwndFocus),16)},
+            {"focusClass",ClassName(Info.hwndFocus)},{"focusText",OwnerPid==Pid?NativeText(Info.hwndFocus):QString{}}};};
+    const auto Evidence=qScopeGuard([&]{if(Completed)return;
+        qWarning()<<"Native dialog failure phase"<<Phase<<"selected"<<Selected<<"first"<<Describe(FirstDialog)<<"current"<<Describe(Dialog)<<"foreground"<<Describe(GetForegroundWindow());
+        struct NativeDialogDump{DWORD pid_;unsigned remaining_=20;const std::function<QJsonObject(HWND)>* describe_;QJsonArray values_;};NativeDialogDump DumpState{Pid,20,&Describe,{}};
+        EnumWindows([](HWND Candidate,LPARAM Param)->BOOL{auto& Value=*reinterpret_cast<NativeDialogDump*>(Param);DWORD OwnerPid=0;GetWindowThreadProcessId(Candidate,&OwnerPid);
+            if(OwnerPid!=Value.pid_||!IsWindowVisible(Candidate))return TRUE;if(!Value.remaining_)return FALSE;--Value.remaining_;Value.values_.append((*Value.describe_)(Candidate));
+            EnumChildWindows(Candidate,[](HWND Child,LPARAM Param)->BOOL{auto& Value=*reinterpret_cast<NativeDialogDump*>(Param);if(!IsWindowVisible(Child))return TRUE;
+                if(!Value.remaining_)return FALSE;--Value.remaining_;Value.values_.append((*Value.describe_)(Child));return TRUE;},Param);return Value.remaining_!=0;},reinterpret_cast<LPARAM>(&DumpState));
+        qWarning()<<"Native dialog visible windows"<<DumpState.values_;
+        const auto Shot=QDir(QCoreApplication::applicationDirPath()).filePath(QString("dialog-%1-%2.png").arg(QString::fromLatin1(QTest::currentDataTag()),Phase));
+        if(Main.screen())qWarning()<<"Native dialog screenshot"<<Shot<<Main.screen()->grabWindow(0).save(Shot);
+    });
     // Exercise native directory browsing, including a redirected drive when
     // explicitly supplied by a connected RDP test session.
     if(!Modal){const auto Browse=qEnvironmentVariable("HC_FILE_DIALOG_TEST_DIR",Root.path());
+        Phase="first-dialog-input";QVERIFY(Foreground(Dialog));QVERIFY(Wait(DialogReady,3000));
         QVERIFY(Press('D',VK_MENU));QVERIFY(Type(QDir::toNativeSeparators(Browse)));QVERIFY(Press(VK_RETURN));}
+    Phase="first-dialog-hold";
     QTest::qWait(18500);
     QCOMPARE(WaitForSingleObject(Process.Get(),0),DWORD(WAIT_TIMEOUT));
     QVERIFY2(Surface,qPrintable(Failure));
@@ -1133,27 +1201,36 @@ void isolatedFileDialogsRemainResponsive(){
     QVERIFY2(Details.host_.running_,Details.host_.failure_?Details.host_.failure_->code_.c_str():"Host exited while browsing files");
     QVERIFY(IsWindow(Dialog));QVERIFY(IsWindowVisible(Dialog));
     if(CancelHost){Host.CloseAll();QVERIFY(Wait([&]{return Host.IsIdle();},5000));
-        QCOMPARE(WaitForSingleObject(Process.Get(),0),DWORD(WAIT_OBJECT_0));QCOMPARE(Read(Path),QByteArray("original"));return;}
-    if(Modal){QVERIFY(PostMessageW(Dialog,WM_CLOSE,0,0));QVERIFY(Wait([&]{return !IsWindow(Dialog)||!IsWindowVisible(Dialog);}));}
+        QCOMPARE(WaitForSingleObject(Process.Get(),0),DWORD(WAIT_OBJECT_0));QCOMPARE(Read(Path),QByteArray("original"));Completed=true;return;}
+    if(Modal){SetLastError(0);const auto Posted=PostMessageW(Dialog,WM_CLOSE,0,0);const auto Error=GetLastError();
+        QVERIFY2(Posted,qPrintable(QString("dialog close error=%1 valid=%2 visible=%3").arg(Error).arg(bool(IsWindow(Dialog))).arg(bool(IsWindowVisible(Dialog)))));
+        QVERIFY(Wait([&]{return !IsWindow(Dialog)||!IsWindowVisible(Dialog);}));}
     const auto Sequence=Surface->SendDocument({{"action","state"}});QVERIFY(Sequence.HasValue());
     QVERIFY(Wait([&]{return Surface&&Surface->Details().commandSequence_>=Sequence.Value();},3000));
     QVERIFY(!Surface->Details().commandError_);
     if(Modal){QCOMPARE(Surface->Details().documentState_["documents"].toArray().size(),1);
-        if(!Preview)QCOMPARE(Read(Path),QByteArray("original"));else QVERIFY(!QImage(Path).isNull());return;}
+        if(!Preview)QCOMPARE(Read(Path),QByteArray("original"));else QVERIFY(!QImage(Path).isNull());Completed=true;return;}
+    Phase="first-dialog-cancel";
     QVERIFY(PostMessageW(Dialog,WM_CLOSE,0,0));
     QVERIFY(Wait([&]{return !IsWindow(Dialog)||!IsWindowVisible(Dialog);}));
     QVERIFY(Surface->IsReady());
     QCOMPARE(Surface->Details().documentState_["documents"].toArray().size(),1);
-    const auto Selected=Root.filePath(SaveAs?"saved.png":"picked.png");
+    Selected=Root.filePath(SaveAs?"saved.png":"picked.png");
     if(!SaveAs)QVERIFY(Page.save(Selected));
     QVERIFY(Wait([&]{return IsWindowEnabled(Viewer);}));
-    SetForegroundWindow(Viewer);QVERIFY(Wait([&]{return GetForegroundWindow()==Viewer;}));QTest::qWait(200);
-    QVERIFY(Launch());QVERIFY(Wait([&]{Dialog=FindDialog();return Dialog!=nullptr;}));
-    QVERIFY(Press('N',VK_MENU));QVERIFY(Press('A',VK_CONTROL));QVERIFY(Type(QDir::toNativeSeparators(Selected)));QVERIFY(Press(VK_RETURN));
+    QVERIFY(Foreground(Viewer));QVERIFY(Wait([&]{return GetForegroundWindow()==Viewer;}));QTest::qWait(200);
+    Phase="second-dialog-launch";QVERIFY(Launch());QVERIFY(Wait([&]{Dialog=FindDialog();return Dialog!=nullptr;}));
+    Phase="second-dialog-focus";QVERIFY(Foreground(Dialog));QVERIFY(Wait(DialogReady,3000));QVERIFY(Press('N',VK_MENU));
+    HWND Filename=nullptr;QVERIFY(Wait([&]{GUITHREADINFO Info{sizeof(Info)};if(!DialogReady()||!GetGUIThreadInfo(GetWindowThreadProcessId(Dialog,nullptr),&Info))return false;
+        Filename=Info.hwndFocus;return IsChild(Dialog,Filename)&&ClassName(Filename).contains("Edit",Qt::CaseInsensitive);},3000));
+    Phase="second-dialog-filename";QVERIFY(Press('A',VK_CONTROL));QVERIFY(Type(QDir::toNativeSeparators(Selected)));
+    QVERIFY(Wait([&]{return DialogReady()&&NativeText(Filename)==QDir::toNativeSeparators(Selected);},3000));
+    qInfo()<<"Native dialog exact filename verified"<<ClassName(Filename)<<NativeText(Filename);
+    Phase="second-dialog-accept";QVERIFY(Press(VK_RETURN));
     QVERIFY(Wait([&]{return !IsWindow(Dialog)||!IsWindowVisible(Dialog);}));
-    QVERIFY(Wait([&]{if(!Surface)return false;for(const auto& Item:Surface->Details().documentState_["documents"].toArray()){
+    Phase="second-dialog-document";QVERIFY(Wait([&]{if(!Surface)return false;for(const auto& Item:Surface->Details().documentState_["documents"].toArray()){
         const auto Document=Item.toObject();if(Document["path"].toString()==Selected&&Document["lifecycle"]=="ready"&&!Document["loading"].toBool())return true;}return false;}));
-    QVERIFY(!QImage(Selected).isNull());
+    QVERIFY(!QImage(Selected).isNull());Completed=true;
 }
 void isolatedImageSiblingKeyboardNavigation_data(){
     QTest::addColumn<bool>("Direct");

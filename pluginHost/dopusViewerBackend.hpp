@@ -19,14 +19,18 @@ namespace hc::plugins
         void Close();
         void Resize(int Width, int Height);
         storage::Result<QJsonObject> Data(WireKind Kind, const QJsonObject& Request);
+        storage::Result<HANDLE> ArmWork(WireKind Kind);
+        void FinishWork();
     private:
         template<class Char> storage::Result<QJsonObject> identifyPlugin();
         template<class Char> storage::Result<QJsonObject> process(HWND Parent, const QString& File, int Width, int Height, bool View, bool Convert);
-        template<class Char> storage::Result<QJsonObject> loadText(HWND Parent, Char* Name, IStream* Input, bool FromStream);
+        template<class Char> storage::Result<QJsonObject> loadText(HWND Parent, Char* Name, IStream* Input, bool FromStream, HANDLE Abort);
         storage::Result<HWND> showBitmap(HWND Parent, HBITMAP Bitmap, DWORD Flags, COLORREF Transparent);
         static LRESULT CALLBACK bitmapProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam);
         HMODULE module_;
         WinHandle abort_;
+        WinHandle dataAbort_;
+        bool managedViewer_ = false, managedData_ = false;
         bool preview_ = false;
         bool initialized_ = false, unicode_ = false, native_ = false, com_ = false;
         HWND window_ = nullptr;
