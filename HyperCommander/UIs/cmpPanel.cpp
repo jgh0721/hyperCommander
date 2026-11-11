@@ -1383,19 +1383,20 @@ void CmpPanel::initializeUIs()
     viewMode_->setCurrentIndex(0);
     viewMode_->setItemToolTips({tr("한 줄 목록"), tr("이름 우선 두 줄 목록"), tr("설정의 패널 폭과 잘린 이름 비율로 1줄/2줄을 전환합니다."), tr("이미지 타일 보기 · Ctrl+휠로 크기를 변경합니다.")});
     ui.horizontalLayout->insertWidget(ui.horizontalLayout->count() - 1, viewMode_);
-    flatButton_ = new QToolButton(ui.frmHDR); flatButton_->setObjectName("hc.panelFlat");
-    flatButton_->setText(tr("평면")); flatButton_->setCheckable(true); flatButton_->setAutoRaise(true);
-    // 머리글 높이를 바꾸지 않는다(목록 모드 전환과 같은 높이). 높이가 늘면 목록 영역이 줄어든다.
-    flatButton_->setFixedHeight(viewMode_->sizeHint().height());
-    flatButton_->setToolTip(tr("평면 보기 · 하위 폴더의 파일을 한 목록으로 봅니다 (Ctrl+B)"));
-    flatButton_->setAccessibleName(tr("평면 보기"));
-    ui.horizontalLayout->insertWidget(ui.horizontalLayout->count() - 1, flatButton_);
-    connect(flatButton_, &QToolButton::clicked, this, [this] {
-        emit sig_NotifyPanelActivated(); ToggleFlatView(); SetFocusView(CurrentTabIndex());
-    });
+    // 평면: 목록 방식 조각 오른쪽 끝의 켜고 끄는 조각(굵은 구분선 뒤)과 ▾ 조각. 목록 방식과 별개로 켜진다.
     // ▾: 평면 보기 옵션(표시 대상 · 깊이 · 정션)과 평면 폴더 세트. 평면 중이면 바꾸는 즉시 다시 열거한다.
-    flatButton_->setPopupMode(QToolButton::MenuButtonPopup);
-    auto* FlatMenu = new QMenu(flatButton_); FlatMenu->setObjectName("hc.panelFlatMenu"); flatButton_->setMenu(FlatMenu);
+    auto* FlatMenu = new QMenu(viewMode_); FlatMenu->setObjectName("hc.panelFlatMenu");
+    viewMode_->setToggleItem(tr("평면"), tr("평면 보기 · 하위 폴더의 파일을 한 목록으로 봅니다 (Ctrl+B)"), FlatMenu);
+    if (auto* Toggle = viewMode_->toggleButton()) { Toggle->setObjectName("hc.panelFlat"); Toggle->setAccessibleName(tr("평면 보기")); }
+    if (auto* Arrow = viewMode_->toggleMenuButton()) {
+        Arrow->setObjectName("hc.panelFlatMenuButton"); Arrow->setAccessibleName(tr("평면 보기 옵션"));
+        Arrow->setToolTip(tr("평면 보기 옵션 · 표시 대상 · 깊이 · 평면 폴더 세트 (Alt+↓)"));
+    }
+    connect(viewMode_, &fm::ui::SegmentedControl::toggleClicked, this, [this] {
+        emit sig_NotifyPanelActivated(); ToggleFlatView();
+        // 시작하지 못했으면 조각이 눌린 상태로 남지 않게 실제 상태로 되돌린다.
+        syncFlatChrome(); SetFocusView(CurrentTabIndex());
+    });
     connect(FlatMenu, &QMenu::aboutToShow, this, [this, FlatMenu] { populateFlatMenu(FlatMenu); });
     connect(viewMode_, &fm::ui::SegmentedControl::currentIndexChanged, this, [this](int Index) {
         if (Index < 0 || Index > 3) return;
@@ -1814,12 +1815,12 @@ QString CmpPanel::flatStatusText(const CFSModel* Model) const
 
 void CmpPanel::syncFlatChrome()
 {
-    if (!flatButton_ || !flatChip_) return;
+    if (!viewMode_ || !flatChip_) return;
     const auto State = retrieveFocusState();
     const auto* Model = State && State->Model && !State->SystemView ? static_cast<const CFSModel*>(State->Model) : nullptr;
     const bool Flat = Model && Model->IsFlatListing();
-    { QSignalBlocker Blocker(flatButton_); flatButton_->setChecked(Flat); }
-    flatButton_->setEnabled(Flat || CanStartFlatView());
+    viewMode_->setToggleChecked(Flat);
+    viewMode_->setToggleEnabled(Flat || CanStartFlatView());
     flatChip_->setVisible(Flat);
     if (!Flat) return;
     const auto& Options = Model->FlatOptions();

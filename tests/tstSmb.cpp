@@ -9340,6 +9340,35 @@ private slots:
         for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetFileInfo(Model->index(Row, 0))->Name_ == "cover.png")
             QCOMPARE(Model->RuleFieldValue(Model->GetFileInfo(Model->index(Row, 0)), "file.relativePath").Raw().toString(), QString("docs\\images"));
         QVERIFY(View->ColumnSourceText().contains(hc::columns::FlatDefaultProfile().title_));
+        // 평면 단추는 목록 방식 세그먼트의 오른쪽 끝 조각이다: 굵은 구분선 뒤 켜고 끄는 조각 + ▾ 메뉴 조각.
+        auto* Segment = Panel->findChild<fm::ui::SegmentedControl*>("hc.panelViewMode"); QVERIFY(Segment);
+        auto* FlatToggle = Panel->findChild<QAbstractButton*>("hc.panelFlat"); auto* FlatArrow = Panel->findChild<QAbstractButton*>("hc.panelFlatMenuButton");
+        QVERIFY(FlatToggle); QVERIFY(FlatArrow);
+        QCOMPARE(FlatToggle->parentWidget(), static_cast<QWidget*>(Segment)); QCOMPARE(Segment->toggleButton(), FlatToggle);
+        QVERIFY(FlatToggle->isChecked()); QVERIFY(!FlatArrow->isCheckable());
+        QVERIFY(FlatToggle->property("fmSegmentBreak").toBool()); QCOMPARE(FlatArrow->property("fmSegment").toString(), QString("last"));
+        // 목록 방식 조각을 바꿔도 평면은 유지된다.
+        const QStringList Modes{"one-line", "two-line", "auto", "thumbnails"};
+        const int ModeBefore = Segment->currentIndex(); const int ModeOther = ModeBefore == 3 ? 0 : 3;
+        Segment->setCurrentIndex(ModeOther);
+        QTRY_COMPARE(View->ListMode(), Modes[ModeOther]); QVERIFY(Model->IsFlatListing()); QVERIFY(FlatToggle->isChecked());
+        Segment->setCurrentIndex(ModeBefore);
+        QTRY_COMPARE(View->ListMode(), Modes[ModeBefore]); QVERIFY(Model->IsFlatListing());
+        // ▾: 평면 메뉴를 평면 조각 아래에 열고, 열린 동안 ▾를 눌린 모양으로 둔다.
+        auto* FlatMenu = Panel->findChild<QMenu*>("hc.panelFlatMenu"); QVERIFY(FlatMenu);
+        bool MenuShown = false, ArrowDown = false; QStringList MenuTexts; QPoint MenuAt;
+        QTimer Closer; Closer.setInterval(20);
+        connect(&Closer, &QTimer::timeout, &Closer, [&] {
+            if (!FlatMenu->isVisible()) return;
+            MenuShown = true; ArrowDown = FlatArrow->isDown(); MenuAt = FlatMenu->pos();
+            for (auto* Action : FlatMenu->actions()) MenuTexts.append(Action->text());
+            Closer.stop(); FlatMenu->close();
+        });
+        Closer.start(); QTest::mouseClick(FlatArrow, Qt::LeftButton); Closer.stop();
+        QVERIFY(MenuShown); QVERIFY(ArrowDown); QVERIFY(!FlatArrow->isDown());
+        QVERIFY(MenuTexts.contains(QString("평면 보기"))); QVERIFY(Model->IsFlatListing());
+        QVERIFY2(qAbs(MenuAt.x() - FlatToggle->mapToGlobal(QPoint(0, 0)).x()) <= 2 || MenuAt.x() < FlatToggle->mapToGlobal(QPoint(0, 0)).x(),
+            "The flat menu opens at the flat segment's left edge (or is shifted left to fit the screen)");
         // 작업 공간에는 평면 상태를 저장하지 않는다: 기준 폴더의 원래 상태로 기록된다.
         const auto Saved = Panel->CaptureWorkspace().tabs_[Panel->CurrentTabIndex()];
         QCOMPARE(QDir::cleanPath(QString::fromStdString(Saved.location_.root_)), QDir::cleanPath(Dir.path()));
@@ -9390,9 +9419,17 @@ private slots:
         QTRY_VERIFY(!Model->IsLoading());
         QTRY_COMPARE(View->CaptureFocus(), SrcKey);
         QVERIFY(hc::columns::FlatFieldColumn(View->ColumnProfile(), "file.relativePath") < 0);
-        // 빈 폴더에서도 시작할 수 있다(결과 0개).
+        QVERIFY(!FlatToggle->isChecked());
+        // 빈 폴더에서도 시작할 수 있다(결과 0개). 평면 조각 클릭으로 시작하고 끝낸다.
         Panel->ChangeCurrentPath(QDir::toNativeSeparators(Root.filePath("empty")), {});
         QTRY_VERIFY(!model(Panel)->IsLoading()); QVERIFY(Panel->CanStartFlatView());
+        auto* EmptyModel = static_cast<CFSModel*>(model(Panel));
+        QTRY_VERIFY(FlatToggle->isEnabled());
+        QTest::mouseClick(FlatToggle, Qt::LeftButton);
+        QTRY_VERIFY(EmptyModel->IsFlatListing()); QVERIFY(FlatToggle->isChecked());
+        QTRY_VERIFY_WITH_TIMEOUT(!EmptyModel->IsFlatRunning(), 15000);
+        QTest::mouseClick(FlatToggle, Qt::LeftButton);
+        QTRY_VERIFY(!EmptyModel->IsFlatListing()); QVERIFY(!FlatToggle->isChecked());
     }
     void inlineRenameUi()
     {

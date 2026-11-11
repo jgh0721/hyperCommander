@@ -221,7 +221,6 @@ private:
     fm::ui::PanelStatusBar*          status_ = nullptr;
     QToolButton*                    historyButton_ = nullptr;
     // 평면 보기 토글(목록 모드 옆)과 경로 옆 상태 칩(누르면 평면 보기 종료).
-    QToolButton*                    flatButton_ = nullptr;
     QToolButton*                    flatChip_ = nullptr;
     // 패널별 평면 보기 옵션(저장하지 않는다).
     hc::flat::Items flatItems_ = hc::flat::Items::Files;
