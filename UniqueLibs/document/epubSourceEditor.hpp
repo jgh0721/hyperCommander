@@ -65,6 +65,8 @@ public:
     bool RequestPreviewClose();
     bool IsPreviewClosed()const;
     QTextView* SourceView()const{return text_;}
+    // Scintilla ids of the validation marks in the source view (the minimap reads the same problems by line).
+    static constexpr int DiagnosticIndicator=26,WarningMarker=10,ErrorMarker=11,DiagnosticMargin=3;
     QWidget* SourceInput()const;
     // Commands shared by the toolbar, menus, context menus and the workspace shortcut router.
     QList<QAction*> ToolbarActions()const;

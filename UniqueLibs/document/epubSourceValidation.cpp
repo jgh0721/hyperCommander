@@ -28,10 +28,8 @@
 #include <QUrl>
 #include <Scintilla.h>
 #include <QtConcurrentRun>
+#include <QScopeGuard>
 namespace hc::document {
-namespace {
-constexpr int DiagnosticIndicator=26,WarningMarker=10,ErrorMarker=11,DiagnosticMargin=3;
-}
 void EpubSourceEditor::ReloadValidationSettings() {
     auto Config=qApp->property("documentViewsConfigDir").toString();if(Config.isEmpty())Config=hc::settings::DocumentPaths().directory_;
     QJsonObject Root;QString Error;
@@ -91,14 +89,16 @@ void EpubSourceEditor::setDiagnostics(QJsonArray Rows) {
     if(!diagnosticRows_.isEmpty())problems_->setCurrentWidget(diagnostics_);if(resourceModel_)resourceModel_->Refresh();markDiagnostics();updateStatus();
 }
 void EpubSourceEditor::markDiagnostics() {
-    if(!sourceShown())return;auto* Backend=static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+    if(!sourceShown()){if(text_)text_->SetProblemLines({});return;}auto* Backend=static_cast<ScintillaQtDirectBackend*>(text_->Backend());
     Backend->Send(SCI_SETINDICATORCURRENT,DiagnosticIndicator);Backend->Send(SCI_INDICATORCLEARRANGE,0,Backend->Send(SCI_GETLENGTH));Backend->Send(SCI_MARKERDELETEALL,WarningMarker);Backend->Send(SCI_MARKERDELETEALL,ErrorMarker);
-    bool Any=false;
+    bool Any=false;QVector<QPair<int,bool>> Lines;
+    // The minimap shows the same lines; it keeps them in step with edits until the next validation.
+    const auto Publish=qScopeGuard([this,&Lines]{text_->SetProblemLines(Lines);});
     for(const auto& Value:diagnosticRows_) {
         const auto Row=Value.toObject();const int Line=Row["line"].toInt(-1);if(Row["resource"].toString()!=current_ || Line<1 || Line>Backend->Send(SCI_GETLINECOUNT))continue;
         const auto Start=Backend->Send(SCI_POSITIONFROMLINE,Line-1),End=Backend->Send(SCI_GETLINEENDPOSITION,Line-1);auto First=Start;
         if(Row["column"].toInt(-1)>1)First=qMin(End,Backend->Send(SCI_POSITIONRELATIVECODEUNITS,Start,Row["column"].toInt()-1));else while(First<End && QChar(char(Backend->Send(SCI_GETCHARAT,First))).isSpace())++First;
-        const auto Severity=Row["severity"].toString();Backend->Send(SCI_MARKERADD,Line-1,Severity=="ERROR" || Severity=="FATAL"?ErrorMarker:WarningMarker);
+        const auto Severity=Row["severity"].toString();Backend->Send(SCI_MARKERADD,Line-1,Severity=="ERROR" || Severity=="FATAL"?ErrorMarker:WarningMarker);Lines.append({Line-1,Severity=="ERROR" || Severity=="FATAL"});
         if(End>First)Backend->Send(SCI_INDICATORFILLRANGE,First,End-First);Any=true;
     }
     Backend->Send(SCI_SETMARGINWIDTHN,DiagnosticMargin,Any?10:0);

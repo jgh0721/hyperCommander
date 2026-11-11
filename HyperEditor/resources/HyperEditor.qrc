@@ -59,6 +59,7 @@
         <file>icons/toolbar/view-source.svg</file>
         <file>icons/toolbar/view-split.svg</file>
         <file>icons/toolbar/word-wrap.svg</file>
+        <file>icons/toolbar/minimap.svg</file>
         <file>icons/toolbar/search.svg</file>
         <file>icons/toolbar/zoom-in.svg</file>
         <file>icons/toolbar/zoom-out.svg</file>

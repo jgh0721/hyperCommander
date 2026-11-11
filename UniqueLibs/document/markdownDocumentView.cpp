@@ -259,16 +259,17 @@ void MarkdownDocumentView::SetSourceTools(QToolBar *Tools)
     auto *Replace = Take("textToolbar.replace", "text.replaceBar");
     auto *Wrap = Take("textToolbar.wordWrap", "text.wordWrap");
     auto *Whitespace = Take("textToolbar.whitespace", "text.whitespace");
-    // After 찾기: 바꾸기 | 줄바꿈 · 공백 문자.
+    auto *Minimap = Take("textToolbar.minimap", "text.minimap");
+    // After 찾기: 바꾸기 | 줄바꿈 · 공백 문자 · 미니맵.
     if (Replace)
         sourceActions_ << Replace;
-    if (Wrap || Whitespace)
+    if (Wrap || Whitespace || Minimap)
     {
         auto *Gap = new QAction(toolbar_);
         Gap->setSeparator(true);
         sourceActions_ << Gap;
     }
-    for (auto *A : {Wrap, Whitespace})
+    for (auto *A : {Wrap, Whitespace, Minimap})
         if (A)
             sourceActions_ << A;
     for (auto *A : sourceActions_)
@@ -317,6 +318,9 @@ bool MarkdownDocumentView::CanRun(const QString &Id) const
 }
 bool MarkdownDocumentView::RunPreviewCommand(const QString &Id)
 {
+    // The minimap toggle belongs to the source editor even while the preview has focus.
+    if (Id == QLatin1String("text.minimap"))
+        return false;
     if (SourceVisible() && !preview_->HasFocus())
         return false;
     if (Id == "edit.copy" || Id == "edit.selectAll")

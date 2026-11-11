@@ -6,6 +6,7 @@
 /// UIs
 #include "text/QTextView.h"
 #include "text/TextLexerRegistry.h"
+#include "text/TextMinimap.h"
 #include "markdownDocumentView.hpp"
 #include "pdf/QPDFView.h"
 #include "image/QImageView.h"
@@ -38,6 +39,7 @@
 /// 플랫폼/프레임워크 헤더파일( Windows, Boost, Qt, ... )
 #include <QActionGroup>
 #include <QKeySequence>
+#include <QPointer>
 #include <QMenu>
 #include <QSignalBlocker>
 
@@ -194,6 +196,26 @@ namespace hc::document
     namespace
     {
         // 보기 menu items shared by plain text and Markdown source editing.
+        // 보기 › 미니맵. Built when opened from the shared settings; Source returns the editor it applies to (null
+        // or hidden: a resource without a text source, so every item is disabled).
+        QMenu* MinimapMenu(QWidget* Owner, std::function<QTextView*()> Source, const QJsonObject& Bindings, const char* Name)
+        {
+            auto* Menu = new QMenu(QObject::tr("미니맵"), Owner); Menu->setObjectName(QLatin1String(Name));
+            Menu->menuAction()->setProperty("documentIconName", "minimap");
+            QObject::connect(Menu, &QMenu::aboutToShow, Menu, [Menu, Source = std::move(Source), Bindings] {
+                auto* Text = Source();
+                TextMinimap::PopulateMenu(Menu, Text);
+                if (auto* Show = Menu->findChild<QAction*>(QStringLiteral("minimapMenu.show")); Show && !KeyText(Bindings, "text.minimap").isEmpty())
+                    Show->setText(Show->text() + QLatin1Char('\t') + KeyText(Bindings, "text.minimap"));
+                if (!Text || !Text->isVisible())
+                    for (auto* Action : Menu->actions()) Action->setEnabled(false);
+            });
+            return Menu;
+        }
+        QMenu* MinimapMenu(QWidget* Owner, QTextView* Text, const QJsonObject& Bindings, const char* Name)
+        {
+            return MinimapMenu(Owner, [Guard = QPointer<QTextView>(Text)] { return Guard.data(); }, Bindings, Name);
+        }
         void AppendTextViewItems(QMenu* Owner, QList<QAction*>& Items, QTextView* Text, std::function<QAction*(const QString&, const QString&, std::function<void()>, const QString&)> Make, bool Zoom, const QJsonObject& Bindings)
         {
             if (Zoom) {
@@ -231,6 +253,7 @@ namespace hc::document
                 Text->setRulerVisible(On); AppSettings Settings; Settings.setValue("textView/showRuler", On);
             });
             Items << Ruler;
+            Items << MinimapMenu(Owner, Text, Bindings, "textViewMinimapMenu")->menuAction();
         }
     }
     void DocumentViewPane::refreshChrome()
@@ -758,6 +781,8 @@ namespace hc::document
         auto* Wrap = Item(tr("자동 줄바꿈"), "epubView.wrap", Edit, {}); Wrap->setCheckable(true);
         connect(Wrap, &QAction::triggered, this, [this](bool On) { if (epubEditor_ && epubEditor_->SourceView()) epubEditor_->SourceView()->setWordWrap(On); });
         View << Wrap;
+        View << Scoped(MinimapMenu(modeMenu_, [this]() -> QTextView* { return epubEditor_ ? epubEditor_->SourceView() : nullptr; },
+                                   shortcutBindings_, "epubViewMinimapMenu")->menuAction(), Edit);
         for (auto* Action : View) if (viewKinds::Has(Action)) Action->setVisible(viewKinds::Applies(Action, K::EpubRead));
         contribution_.viewActions_ = View;
         contribution_.menu_ = modeMenu_;

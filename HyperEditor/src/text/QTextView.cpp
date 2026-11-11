@@ -17,6 +17,8 @@
 #include "text/ITextEditorBackend.h"
 #include "text/TextEditorBackendFactory.h"
 #include "text/TextLexerRegistry.h"
+#include "text/TextMinimap.h"
+#include "text/TextMinimapSettings.h"
 #include "text/TextShadowBackupStore.h"
 #include "utils/EncodingDetector.h"
 #include "utils/FileLoadHelper.h"
@@ -195,6 +197,12 @@ QTextView::QTextView(QWidget* parent)
     // The workspace shortcut router owns this binding.
     connect(goToLineAction, &QAction::triggered, this, &QTextView::showGoToLineDialog);
     addAction(goToLineAction);
+
+    auto* minimapAction = new QAction(this);
+    minimapAction->setObjectName(QStringLiteral("text.minimap"));
+    // The workspace shortcut router owns this binding (Ctrl+Alt+M). The setting is shared by all editors.
+    connect(minimapAction, &QAction::triggered, this, [] { TextMinimap::ToggleEnabled(); });
+    addAction(minimapAction);
 }
 
 QTextView::~QTextView() = default;
@@ -946,6 +954,8 @@ void QTextView::setTheme(Theme theme)
         m_editor->applyThemeColors(theme == Dark);
         updateSearchIndicatorColors();
     }
+    if (m_minimap)
+        m_minimap->ThemeChanged();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -986,11 +996,19 @@ QToolBar* QTextView::createToolBar()
     Whitespace->setObjectName(QStringLiteral("textToolbar.whitespace"));
     Whitespace->setChecked(isWhitespaceVisible());
     connect(Whitespace, &QAction::triggered, this, &QTextView::setWhitespaceVisible);
+    auto* Minimap = MV_CREATE_TOOLBAR_ACTION(tb, "text.minimap");
+    Minimap->setObjectName(QStringLiteral("textToolbar.minimap"));
+    Minimap->setChecked(IsMinimapEnabled());
+    connect(Minimap, &QAction::triggered, this, [this](bool On) { SetMinimapEnabled(On); });
+    connect(&TextMinimapSettingsNotifier::Instance(), &TextMinimapSettingsNotifier::Changed, Minimap, [this, Minimap] {
+        const QSignalBlocker Block(Minimap); Minimap->setChecked(IsMinimapEnabled());
+    });
     auto* roAction = MV_CREATE_TOOLBAR_ACTION(tb, "text.readOnly");
     roAction->setChecked(isReadOnly());
     connect(roAction, &QAction::toggled, this, &QTextView::setReadOnly);
-    connect(this, &QTextView::statusChanged, tb, [this, roAction, Wrap, Whitespace] {
-        for (const auto& Item : {std::pair{roAction, isReadOnly()}, std::pair{Wrap, isWordWrapEnabled()}, std::pair{Whitespace, isWhitespaceVisible()}}) {
+    connect(this, &QTextView::statusChanged, tb, [this, roAction, Wrap, Whitespace, Minimap] {
+        for (const auto& Item : {std::pair{roAction, isReadOnly()}, std::pair{Wrap, isWordWrapEnabled()}, std::pair{Whitespace, isWhitespaceVisible()},
+                                 std::pair{Minimap, IsMinimapEnabled()}}) {
             const QSignalBlocker Block(Item.first); Item.first->setChecked(Item.second);
         }
     });
@@ -1103,6 +1121,17 @@ bool QTextView::ensureEditorBackend()
     m_editor->applyThemeColors(currentTheme() == Dark);
     updateMetrics();
     updateCopyAvailability();
+
+    if (auto* Direct = dynamic_cast<ScintillaQtDirectBackend*>(m_editor.data())) {
+        m_minimap = new TextMinimap(this, Direct);
+        // Searches over large documents finish in slices; the find bar count follows when they do.
+        connect(m_minimap, &TextMinimap::SearchFinished, this, [this](int Count) {
+            if (!m_findWidget || !m_findWidget->isVisible())
+                return;
+            m_findWidget->setMatchCount(Count);
+            updateExcludedCount();
+        });
+    }
     return true;
 }
 
@@ -1140,6 +1169,8 @@ void QTextView::ReloadPreferences()
         m_ruler->setEditorFont(Font);
         m_ruler->setVisible(Settings.value("textView/showRuler").toBool());
     }
+    if (m_minimap)
+        m_minimap->ReloadSettings();
     emit statusChanged();
 }
 
@@ -1401,6 +1432,8 @@ void QTextView::hideFindBar()
         m_searchDebounceTimer->stop();
     clearCurrentMatchHighlight();
     clearExcludedRanges();
+    if (m_minimap)
+        m_minimap->ClearSearch();
 
     // 에디터로 포커스 반환
     if (m_editor && m_editor->widget())
@@ -1821,6 +1854,20 @@ void QTextView::updateMatchCount()
     if (text.isEmpty()) {
         m_findWidget->setMatchCount(0);
         m_findWidget->setExcludedCount(0);
+        if (m_minimap)
+            m_minimap->ClearSearch();
+        return;
+    }
+
+    if (m_minimap) {
+        // One pass counts for the find bar and collects positions for the minimap. Zero-length matches are not
+        // counted, as the find bar cannot select them. Documents over 4 MiB report through SearchFinished.
+        const bool InSelection = m_findWidget->isSearchInSelection();
+        const int Count = m_minimap->RunSearch(text, currentSearchFlags(), InSelection ? m_findWidget->selectionRangeStart() : 0,
+                                               InSelection ? m_findWidget->selectionRangeEnd() : -1);
+        if (Count >= 0)
+            m_findWidget->setMatchCount(Count);
+        updateExcludedCount();
         return;
     }
 

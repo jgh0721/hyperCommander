@@ -40,6 +40,12 @@ public:
     qintptr RowTextCharacter(qintptr Position) const;
     // Replaces the theme colors until the next applyThemeColors(), e.g. for a settings preview.
     void SetCurrentLineColors(const CurrentLineColors& Colors);
+    // Keeps Left/Right logical pixels of the scroll area free beside the viewport (minimap column). Scintilla lays
+    // out, wraps and scrolls inside the smaller viewport; the reserved strip belongs to the caller's widgets.
+    void SetViewportReserve(int Left, int Right);
+    // History markers stay queryable (SCI_MARKERGET) in every change history mode except Off. In the body-only mode
+    // they are defined as SC_MARK_EMPTY so they neither take a margin nor tint the line background.
+    bool ChangeHistoryQueryable() const;
 	explicit ScintillaQtDirectBackend(QWidget* editorParent, QObject* parent = nullptr);
 	~ScintillaQtDirectBackend() override;
 
@@ -124,10 +130,33 @@ public:
 	bool applyLanguage(const QString& displayName) override;
 	void applyThemeColors(bool dark) override;
 
+signals:
+    // Lexer output changed for [Position, Position + Length). Coalesced to one signal per event loop turn.
+    void StylesChanged(qint64 Position, qint64 Length);
+    // Markers were added or removed; Line is the first line touched in this turn.
+    void MarkersChanged(int Line);
+    void IndicatorsChanged(qint64 Position, qint64 Length);
+    // The view shows other text: SetTextUtf8() replaced it or AttachDocument() switched documents.
+    void DocumentReset();
+
 protected:
 	bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    struct PendingRange
+    {
+        qint64 start = -1;
+        qint64 end = -1;
+        void Add(qint64 Start, qint64 End) { start = start < 0 ? Start : qMin(start, Start); end = qMax(end, End); }
+        bool Empty() const { return start < 0; }
+    };
+    void queueDecorationSignals();
+    void flushDecorationSignals();
+    PendingRange pendingStyles_;
+    PendingRange pendingIndicators_;
+    int pendingMarkerLine_ = -1;
+    bool decorationFlushQueued_ = false;
+    bool historyQueryable_ = false;
     // Viewport rectangles of the current line. Wrapped sub-lines are included.
     struct CurrentLineBand
     {

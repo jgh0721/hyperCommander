@@ -57,6 +57,7 @@
     { "key": "text.find", "iconName": "search", "toolTip": "찾기", "checkable": false },
     { "key": "text.replaceBar", "iconName": "replace", "toolTip": "바꾸기", "checkable": false },
     { "key": "text.whitespace", "iconName": "whitespace", "toolTip": "탭 · 공백 · 줄 끝 표시", "checkable": true },
+    { "key": "text.minimap", "iconName": "minimap", "toolTip": "미니맵", "checkable": true },
 
     { "key": "markdown.preview", "iconName": "view-preview", "toolTip": "미리보기 모드", "checkable": true },
     { "key": "markdown.source", "iconName": "view-source", "toolTip": "소스 모드", "checkable": true },

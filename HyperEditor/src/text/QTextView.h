@@ -147,6 +147,15 @@ public:
     bool isWhitespaceVisible() const;
     void setWhitespaceVisible(bool visible);
 
+    // ── 미니맵 ──
+    // The minimap setting is shared by every editor in the process (textView/minimap/enabled).
+    bool IsMinimapEnabled() const;
+    void SetMinimapEnabled(bool On);
+    // Problem lines shown on the minimap and the scroll bar: 0-based line, true for an error. The list moves with
+    // edits until the next call.
+    void SetProblemLines(const QVector<QPair<int, bool>>& Lines);
+    class TextMinimap* Minimap() const;
+
     // ── 코드 폴딩 ──
     bool isCodeFoldingEnabled() const;
     void setCodeFoldingEnabled(bool enabled);
@@ -203,6 +212,7 @@ private:
 
     QPointer<ITextEditorBackend> m_editor = nullptr;
     class ColumnRulerWidget*  m_ruler = nullptr;
+    class TextMinimap*        m_minimap = nullptr;
     FindReplaceWidget*        m_findWidget = nullptr;
     TextFileSession       m_fileSession;
     ScintillaDocument     m_document;

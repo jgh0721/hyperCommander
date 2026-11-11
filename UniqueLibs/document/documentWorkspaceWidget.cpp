@@ -194,7 +194,7 @@ namespace hc::document
                 {"tab.next", "chevron-right"}, {"tab.previous", "chevron-left"}, {"view.fullscreen", "fullscreen"},
                 {"edit.cut", "cut"}, {"edit.copy", "copy"}, {"edit.paste", "paste"}, {"edit.selectAll", "select-all"},
                 {"text.find", "search-next"}, {"text.findNext", "search-next"}, {"text.findPrev", "search-prev"},
-                {"text.replace", "replace"}, {"text.goToLine", "toc-toggle"}, {"text.wordWrap", "word-wrap"},
+                {"text.replace", "replace"}, {"text.goToLine", "toc-toggle"}, {"text.wordWrap", "word-wrap"}, {"text.minimap", "minimap"},
                 {"text.foldAll", "code-folding"}, {"text.unfoldAll", "code-folding"}};
             for (auto* Action : Workspace.findChildren<QAction*>()) {
                 const auto NamedIcon = Action->property("documentIconName").toString();
@@ -548,8 +548,10 @@ namespace hc::document
             const bool EpubEditing = Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing() && Tab->pane_->isAncestorOf(Focus);
             if (Scope == "epub") return Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing() && !qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus);
             if(Scope=="markdown")return Tab && !Tab->loading_ && Tab->pane_->IsMarkdown() && Tab->pane_->CanRunViewCommand(Id);
-            if (Scope == "text" && Tab && Tab->pane_->IsMarkdown())return !Tab->loading_ && Tab->pane_->MarkdownSourceVisible() && InText;
-            if (Scope == "text") return Tab && !Tab->loading_ && (Tab->pane_->ViewId() == "text" || (EpubEditing && InText));
+            // The minimap toggle is a view setting: it works while the source is shown, whichever pane has focus.
+            const bool Minimap = Id == QLatin1String("text.minimap");
+            if (Scope == "text" && Tab && Tab->pane_->IsMarkdown())return !Tab->loading_ && Tab->pane_->MarkdownSourceVisible() && (InText || Minimap);
+            if (Scope == "text") return Tab && !Tab->loading_ && (Tab->pane_->ViewId() == "text" || (EpubEditing && (InText || Minimap)));
             if (Scope == "edit") {
                 auto* Input = Tab ? Tab->pane_->InputWidget() : nullptr;
                 return Input && !Tab->loading_ && (Focus == Input || Input->isAncestorOf(Focus));

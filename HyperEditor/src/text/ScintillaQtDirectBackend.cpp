@@ -39,6 +39,9 @@ public:
 
 	explicit CurrentLineEditBase(QWidget* Parent) : ScintillaEditBase(Parent) {}
 	void SetOverlayPainter(OverlayPainter Painter) { overlayPainter_ = std::move(Painter); }
+	// setViewportMargins() is protected in QAbstractScrollArea. Widgets placed in the freed strip must be children of
+	// this scroll area, not of the viewport: ScintillaQt::ScrollText() blits the viewport with viewport()->scroll().
+	void SetViewportReserve(int Left, int Right) { setViewportMargins(qMax(0, Left), 0, qMax(0, Right), 0); }
 
 protected:
 	void paintEvent(QPaintEvent* Event) override
@@ -238,6 +241,13 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
                Scintilla::FoldLevel, Scintilla::FoldLevel) {
             const bool Inserted = (static_cast<int>(Type) & SC_MOD_INSERTTEXT) != 0;
             const bool Deleted = (static_cast<int>(Type) & SC_MOD_DELETETEXT) != 0;
+            // Lexing, markers and indicators reach the minimap through separate, coalesced signals.
+            if ((static_cast<int>(Type) & SC_MOD_CHANGESTYLE) != 0) { pendingStyles_.Add(qint64(Position), qint64(Position + Length)); queueDecorationSignals(); }
+            if ((static_cast<int>(Type) & SC_MOD_CHANGEINDICATOR) != 0) { pendingIndicators_.Add(qint64(Position), qint64(Position + Length)); queueDecorationSignals(); }
+            if ((static_cast<int>(Type) & SC_MOD_CHANGEMARKER) != 0) {
+                const int Line = static_cast<int>(Send(SCI_LINEFROMPOSITION, Position));
+                pendingMarkerLine_ = pendingMarkerLine_ < 0 ? Line : qMin(pendingMarkerLine_, Line); queueDecorationSignals();
+            }
             if (!Inserted && !Deleted) return;
             emit textEdited(qint64(Position), Deleted ? qint64(Length) : 0, Inserted ? qint64(Length) : 0);
             if (characterCount_ >= 0) {
@@ -327,6 +337,14 @@ void ScintillaQtDirectBackend::applySettings(const ScintillaEditorSettings& sett
 	m_editor->send(sciMessage(SCI_SETCHANGEHISTORY), changeHistoryFlags);
 
 	const bool historyMarkersEnabled = (changeHistoryFlags & SC_CHANGE_HISTORY_MARKERS) != 0;
+	// SCI_MARKERGET reports history only while the Markers option is set (EditModel::GetMark). The body-only mode adds
+	// it with empty symbols: an Empty marker leaves the line background mask, so the text area looks unchanged.
+	historyQueryable_ = settings.changeHistoryMode != ScintillaEditorSettings::ChangeHistoryOff;
+	const bool hiddenHistoryMarkers = historyQueryable_ && !historyMarkersEnabled;
+	for (int Marker = SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN; Marker <= SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED; ++Marker)
+		m_editor->send(sciMessage(SCI_MARKERDEFINE), Marker, hiddenHistoryMarkers ? SC_MARK_EMPTY : SC_MARK_BAR);
+	if (hiddenHistoryMarkers)
+		m_editor->send(sciMessage(SCI_SETCHANGEHISTORY), changeHistoryFlags | SC_CHANGE_HISTORY_MARKERS);
 	m_editor->send(sciMessage(SCI_SETMARGINTYPEN), 2, SC_MARGIN_SYMBOL);
 	m_editor->send(sciMessage(SCI_SETMARGINMASKN), 2, SC_MASK_HISTORY);
 	m_editor->send(sciMessage(SCI_SETMARGINWIDTHN), 2, historyMarkersEnabled ? 4 : 0);
@@ -376,6 +394,38 @@ void ScintillaQtDirectBackend::SetTextUtf8(const QByteArray& utf8)
 		m_editor->send(sciMessage(SCI_SETCHANGEHISTORY), changeHistoryFlags);
 	syncLineCountState(false);
 	m_forcedModified = false;
+	emit DocumentReset();
+}
+
+void ScintillaQtDirectBackend::SetViewportReserve(int Left, int Right)
+{
+	if (m_editor)
+		static_cast<CurrentLineEditBase*>(m_editor.data())->SetViewportReserve(Left, Right);
+}
+
+bool ScintillaQtDirectBackend::ChangeHistoryQueryable() const
+{
+	return historyQueryable_ && Send(SCI_GETCHANGEHISTORY) != SC_CHANGE_HISTORY_DISABLED;
+}
+
+void ScintillaQtDirectBackend::queueDecorationSignals()
+{
+	if (decorationFlushQueued_)
+		return;
+	decorationFlushQueued_ = true;
+	// Idle lexing reports thousands of small style ranges; listeners see one merged range per event loop turn.
+	QMetaObject::invokeMethod(this, [this] { flushDecorationSignals(); }, Qt::QueuedConnection);
+}
+
+void ScintillaQtDirectBackend::flushDecorationSignals()
+{
+	decorationFlushQueued_ = false;
+	const PendingRange Styles = std::exchange(pendingStyles_, {});
+	const PendingRange Indicators = std::exchange(pendingIndicators_, {});
+	const int MarkerLine = std::exchange(pendingMarkerLine_, -1);
+	if (!Styles.Empty()) emit StylesChanged(Styles.start, Styles.end - Styles.start);
+	if (!Indicators.Empty()) emit IndicatorsChanged(Indicators.start, Indicators.end - Indicators.start);
+	if (MarkerLine >= 0) emit MarkersChanged(MarkerLine);
 }
 
 void ScintillaQtDirectBackend::AttachDocument(qintptr Document)
@@ -390,6 +440,7 @@ void ScintillaQtDirectBackend::AttachDocument(qintptr Document)
 	m_forcedModified = m_editor->send(sciMessage(SCI_GETMODIFY)) != 0;
 	syncLineCountState(false);
 	updateBraceHighlight();
+	emit DocumentReset();
 }
 
 QString ScintillaQtDirectBackend::text() const

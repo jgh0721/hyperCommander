@@ -64,6 +64,7 @@ namespace hc::defaults::edit
             {"text.findPrev", QObject::tr("이전 찾기"), "Shift+F3", "text"},
             {"text.goToLine", QObject::tr("줄 이동"), "Ctrl+G", "text"},
             {"text.wordWrap", QObject::tr("자동 줄바꿈 전환"), "Alt+Z", "text"},
+            {"text.minimap", QObject::tr("미니맵 표시 전환"), "Ctrl+Alt+M", "text"},
             {"text.foldAll", QObject::tr("전체 접기"), "Ctrl+Shift+-", "text"},
             {"text.unfoldAll", QObject::tr("전체 펼치기"), "Ctrl+Shift++", "text"},
             {"epub.next", QObject::tr("EPUB 다음 화면"), "PgDown", "epub"},
@@ -165,6 +166,16 @@ namespace hc::defaults::edit
             {"textView/largeFileMB", 2}, {"textView/externalChangeAction", 1},
             {"textView/externalChangeDetection", 0}, {"textView/externalChangePollSeconds", 3},
             {"textView/mask/enabled", true}, {"textView/mask/gamma", 1.2}, {"textView/mask/strength", 1.1},
+            // Minimap: auto = document thumbnail, outline from largeLines lines or largeBytes bytes, scroll bar marks only
+            // when the editor viewport is narrower than narrowWidth logical pixels.
+            {"textView/minimap/enabled", true}, {"textView/minimap/kind", "auto"}, {"textView/minimap/side", "right"},
+            {"textView/minimap/width", 104}, {"textView/minimap/scale", 1}, {"textView/minimap/render", "chars"},
+            {"textView/minimap/slider", "always"}, {"textView/minimap/layers/search", true},
+            {"textView/minimap/layers/selection", true}, {"textView/minimap/layers/changes", true},
+            {"textView/minimap/layers/caret", true}, {"textView/minimap/layers/problems", true},
+            {"textView/minimap/labels", true}, {"textView/minimap/peek", true}, {"textView/minimap/peekDelayMs", 300},
+            {"textView/minimap/largeLines", 20000}, {"textView/minimap/largeBytes", qint64(16) * 1024 * 1024},
+            {"textView/minimap/narrowWidth", 480},
             {"markdown/viewerMode", "preview"}, {"markdown/editorMode", "split"},
             {"markdown/viewerOutline", true}, {"markdown/editorOutline", true},
             {"markdown/outlineDepth", 6}, {"markdown/scrollSync", true},
@@ -344,6 +355,23 @@ namespace hc::defaults::edit
     c.insert(QStringLiteral("text.foldMarker"), T[Token::Fg3]);
     c.insert(QStringLiteral("text.braceMatch"), T[Token::Accent]);
     c.insert(QStringLiteral("text.braceMismatch"), T[Token::Danger]);
+    // Minimap and scroll bar marks. Change history uses Scintilla's margin marker colours so both read alike.
+    c.insert(QStringLiteral("text.minimap.background"), T[Token::Surface]);
+    c.insert(QStringLiteral("text.minimap.separator"), T[Token::Grid]);
+    c.insert(QStringLiteral("text.minimap.slider"), Alpha(T[Token::Fg], 0x1A));
+    c.insert(QStringLiteral("text.minimap.sliderHover"), Alpha(T[Token::Fg], 0x29));
+    c.insert(QStringLiteral("text.minimap.sliderActive"), Alpha(T[Token::Fg], 0x38));
+    c.insert(QStringLiteral("text.minimap.bracket"), T[Token::Fg]);
+    c.insert(QStringLiteral("text.minimap.search"), WantDark ? Color(QStringLiteral("#F2C94C")) : Color(QStringLiteral("#D99A0B")));
+    c.insert(QStringLiteral("text.minimap.selection"), Alpha(T[Token::Accent], WantDark ? 0x6B : 0x4D));
+    c.insert(QStringLiteral("text.minimap.caret"), T[Token::AccentFg]);
+    c.insert(QStringLiteral("text.minimap.error"), T[Token::Danger]);
+    c.insert(QStringLiteral("text.minimap.warning"), T[Token::Warn]);
+    c.insert(QStringLiteral("text.minimap.changeModified"), Color(QStringLiteral("#FF8000")));
+    c.insert(QStringLiteral("text.minimap.changeSaved"), Color(QStringLiteral("#00A000")));
+    c.insert(QStringLiteral("text.minimap.outline"), Alpha(T[Token::Fg], WantDark ? 0x6B : 0x5C));
+    c.insert(QStringLiteral("text.minimap.label"), T[Token::Fg]);
+    c.insert(QStringLiteral("text.minimap.labelMinor"), T[Token::Fg2]);
 
     // Keep syntax text at 4.5:1 against the Paper Fluent body surface. The current line adds no fill, so
     // the body is the only surface under syntax text. Explicit user syntax overrides are applied separately.

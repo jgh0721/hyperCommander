@@ -163,6 +163,21 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     for (const auto& Item : ViewChecks) Check(View, "documentViews/textView/" + Item.first, Item.second);
     Combo(View, "documentViews/textView/indentGuideStyle", tr("들여쓰기 안내선 모드"), {tr("실제 들여쓰기"), tr("다음 줄 참조"), tr("앞뒤 줄 참조")}, {1, 2, 3});
     Combo(View, "documentViews/textView/changeHistoryMode", tr("변경 이력 표시"), {tr("끄기"), tr("여백 표시"), tr("본문 표시"), tr("모두")}, {0, 1, 2, 3});
+    auto* Minimap = Card(Text, tr("미니맵"));
+    Check(Minimap, "documentViews/textView/minimap/enabled", tr("미니맵 표시"));
+    Combo(Minimap, "documentViews/textView/minimap/kind", tr("형태"), {tr("자동 (권장)"), tr("문서 축소판"), tr("윤곽"), tr("개요 막대만")}, {"auto", "document", "outline", "overview"});
+    Combo(Minimap, "documentViews/textView/minimap/side", tr("위치"), {tr("오른쪽"), tr("왼쪽")}, {"right", "left"});
+    Spin(Minimap, "minimap/width", tr("너비 (px)"), 48, 220);
+    Combo(Minimap, "documentViews/textView/minimap/scale", tr("배율"), {tr("1× (줄당 2px)"), tr("2× (줄당 4px)")}, {1, 2});
+    Combo(Minimap, "documentViews/textView/minimap/render", tr("글자 표현"), {tr("문자"), tr("블록")}, {"chars", "blocks"});
+    Combo(Minimap, "documentViews/textView/minimap/slider", tr("현재 화면 표시"), {tr("항상"), tr("마우스를 올렸을 때"), tr("괄호선")}, {"always", "hover", "bracket"});
+    const QList<QPair<QString, QString>> MinimapChecks{{"layers/search", tr("검색 결과 표식")}, {"layers/selection", tr("선택 영역 표식")},
+        {"layers/changes", tr("변경 이력 표식")}, {"layers/caret", tr("현재 줄 표식")}, {"layers/problems", tr("문제 표식 (오류 · 경고)")},
+        {"labels", tr("머리글 이름표")}, {"peek", tr("호버 미리보기")}};
+    for (const auto& Item : MinimapChecks) Check(Minimap, "documentViews/textView/minimap/" + Item.first, Item.second);
+    Spin(Minimap, "minimap/largeLines", tr("윤곽으로 바꾸는 줄 수"), 1000, 10000000);
+    Spin(Minimap, "minimap/narrowWidth", tr("개요 막대만 남기는 편집 폭 (px)"), 0, 2000);
+    Note(Minimap, tr("변경 이력 표식은 '변경 이력 표시'가 꺼져 있으면 나타나지 않습니다. 보기 메뉴와 단축키로도 표시를 전환할 수 있습니다."));
     auto* Indent = Card(Text, tr("들여쓰기 · 줄바꿈"));
     Spin(Indent, "tabWidth", tr("탭 너비"), 1, 16);
     Check(Indent, "documentViews/textView/autoIndent", tr("자동 들여쓰기"));
