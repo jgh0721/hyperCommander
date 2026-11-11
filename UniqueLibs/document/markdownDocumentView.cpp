@@ -199,6 +199,10 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     AppSettings S;
     splitter_->restoreState(QByteArray::fromBase64(
         S.value(QString("markdown/layout/") + (editor_ ? "editor" : "viewer")).toString().toLatin1()));
+    // The preview is a foreign WebEngine window: each live resize exposes its backing surface
+    // before Chromium has drawn the new layout. Keep both panes still until the handle is released.
+    // restoreState also restores opaqueResize, so override old saved layouts here.
+    splitter_->setOpaqueResize(false);
     mode(S.value(QString("markdown/") + (editor_ ? "editorMode" : "viewerMode"))
              .toString());
     QTimer::singleShot(0, this, [this] { Refresh(); });

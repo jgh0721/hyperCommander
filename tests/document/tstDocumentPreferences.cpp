@@ -12,6 +12,7 @@
 #include "UniqueLibs/document/imageFullscreen.hpp"
 #include "text/QTextView.h"
 #include "UniqueLibs/document/documentViewPane.hpp"
+#include "UniqueLibs/document/markdownDocumentView.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
 #include "UniqueLibs/document/epubProcessView.hpp"
 #include "UniqueLibs/document/epubSourceTabs.hpp"
@@ -72,6 +73,7 @@
 #include <QThreadPool>
 #include <QThread>
 #include <QSemaphore>
+#include <QSplitter>
 #include "UniqueLibs/document/documentTextCodec.hpp"
 #include "commonLibs/document/epub/epubScrollRequest.hpp"
 static_assert(!std::is_invocable_v<decltype(&AppSettings::value), AppSettings*, const QString&, const QVariant&>);
@@ -95,6 +97,97 @@ class DocumentPreferencesTests : public QObject {
         return Zip.status()==QZipWriter::NoError?Bytes:QByteArray{};
     }
 private slots:
+    void previewSplitterDrag_data()
+    {
+        QTest::addColumn<QString>("Format");
+        QTest::newRow("markdown-viewer") << QString("viewer");
+        QTest::newRow("markdown-editor") << QString("editor");
+        QTest::newRow("epub-horizontal") << QString("horizontal");
+        QTest::newRow("epub-vertical") << QString("vertical");
+    }
+    void previewSplitterDrag()
+    {
+        QFETCH(QString, Format);
+        QTemporaryDir Temp;
+        const auto OldConfig = qApp->property("documentViewsConfigDir"), OldWorkspace = qApp->property("epubWorkspaceDirectory");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        qApp->setProperty("epubWorkspaceDirectory", Temp.path());
+        const auto Restore = qScopeGuard([&] {
+            qApp->setProperty("documentViewsConfigDir", OldConfig);
+            qApp->setProperty("epubWorkspaceDirectory", OldWorkspace);
+        });
+        const bool Markdown = Format == "viewer" || Format == "editor";
+        // Exercise layouts persisted by older versions, which explicitly enabled live resizing.
+        const auto SaveOldLayout = [](const QString& Key, Qt::Orientation Orientation, int Count) {
+            QSplitter Old(Orientation);
+            for(int I = 0; I < Count; ++I) Old.addWidget(new QWidget);
+            Old.setSizes(QList<int>(Count, 240));
+            Old.setOpaqueResize(true);
+            ::AppSettings Settings;
+            Settings.setValue(Key, QString::fromLatin1(Old.saveState().toBase64()));
+        };
+        if(Markdown) SaveOldLayout("markdown/layout/" + Format, Qt::Horizontal, 3);
+        else {
+            SaveOldLayout("epubEditor/layout/outer", Qt::Horizontal, 2);
+            SaveOldLayout("epubEditor/layout/work", Qt::Vertical, 2);
+            SaveOldLayout("epubEditor/layout/main", Format == "vertical" ? Qt::Vertical : Qt::Horizontal, 2);
+        }
+        std::unique_ptr<QWidget> Window;
+        if(Markdown) {
+            auto Pane = std::make_unique<DocumentViewPane>();
+            TextInput Input; Input.path_ = Temp.filePath("split.md"); Input.text_ = "# Splitter\n\nPreview remains visible while dragging.\n";
+            Input.bytes_ = Input.text_.toUtf8(); Input.encoding_ = "UTF-8"; Input.eol_ = "LF";
+            QVERIFY(Pane->Load(Input, true, Format == "editor"));
+            QVERIFY(Pane->RunViewCommand("markdown.split"));
+            Window = std::move(Pane);
+        } else {
+            auto Editor = std::make_unique<EpubSourceEditor>(workspaceBook(), Temp.filePath("split.epub"));
+            Editor->SetRecoveryEnabled(false);
+            Editor->findChild<QAction*>("epubAutoPreview")->setChecked(false);
+            Editor->ConfigurePreview({});
+            QTRY_VERIFY_WITH_TIMEOUT(Editor->IsReady(), 15000);
+            QVERIFY(Editor->Execute({{"action", "epub.edit.layout"}, {"orientation", Format},
+                {"tree", true}, {"problems", true}, {"preview", true}})["accepted"].toBool());
+            Window = std::move(Editor);
+        }
+        Window->resize(1280, 900); Window->show();
+        QVERIFY(QTest::qWaitForWindowExposed(Window.get()));
+        QTest::qWait(250);
+        if(Markdown) {
+            const auto* View = Window->findChild<MarkdownDocumentView*>();
+            QTRY_VERIFY_WITH_TIMEOUT(View->State()["renderedRevision"].toInteger(-2)
+                == View->State()["revision"].toInteger(-1), 30000);
+        }
+        const auto Splitters = Markdown ? Window->findChild<MarkdownDocumentView*>()->findChildren<QSplitter*>()
+                                       : Window->findChildren<QSplitter*>();
+        QVERIFY(!Splitters.isEmpty());
+        int Drags = 0;
+        for(auto* Splitter : Splitters) {
+            for(int I = 1; I < Splitter->count(); ++I) {
+                auto* Handle = Splitter->handle(I);
+                if(!Handle->isVisible() || !Splitter->widget(I - 1)->isVisible() || !Splitter->widget(I)->isVisible()) continue;
+                QList<QRect> Before;
+                for(int J = 0; J < Splitter->count(); ++J) Before.append(Splitter->widget(J)->geometry());
+                QSignalSpy Moved(Splitter, &QSplitter::splitterMoved);
+                const auto Start = Handle->rect().center();
+                QTest::mousePress(Handle, Qt::LeftButton, Qt::NoModifier, Start);
+                QPoint End;
+                for(int Step = 1; Step <= 6; ++Step) {
+                    End = Start + (Splitter->orientation() == Qt::Horizontal ? QPoint(10 * Step, 0) : QPoint(0, 10 * Step));
+                    QMouseEvent Move(QEvent::MouseMove, End, Handle->mapToGlobal(End), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(Handle, &Move);
+                    QTest::qWait(20);
+                    for(int J = 0; J < Splitter->count(); ++J) QCOMPARE(Splitter->widget(J)->geometry(), Before[J]);
+                    QCOMPARE(Moved.count(), 0);
+                }
+                QTest::mouseRelease(Handle, Qt::LeftButton, Qt::NoModifier, End);
+                QCOMPARE(Moved.count(), 1);
+                QVERIFY(Splitter->widget(I - 1)->geometry() != Before[I - 1]);
+                ++Drags;
+            }
+        }
+        QVERIFY(Drags > 0);
+    }
     void smallTextStartupAcceptsInputAndSaves()
     {
         QTemporaryDir Temp;

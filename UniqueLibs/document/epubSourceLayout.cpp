@@ -348,7 +348,10 @@ void EpubSourceEditor::restoreLayout() {
     // Restored quietly: a saved toggle alone must not request or move the preview.
     for(const auto& [Key,Name]:previewToggles()){const auto Value=Settings.value(QString("epubEditor/layout/")+Key);if(!Value.isValid())continue;const QSignalBlocker Block(action(Name));action(Name)->setChecked(Value.toBool());}
     applyOrientation(Orientation=="vertical"?Qt::Vertical:Orientation=="horizontal"?Qt::Horizontal:window()->width()<980?Qt::Vertical:Qt::Horizontal,false);
-    for(const auto& [Key,Splitter]:{std::pair{QString("outer"),static_cast<QSplitter*>(outerSplitter_)},std::pair{QString("work"),static_cast<QSplitter*>(workSplitter_)},std::pair{QString("main"),static_cast<QSplitter*>(previewSplitter_)}}){const auto State=QByteArray::fromBase64(Settings.value("epubEditor/layout/"+Key).toString().toLatin1());if(!State.isEmpty())Splitter->restoreState(State);}
+    // Every splitter here changes the foreign WebEngine surface's size, including tree/problems.
+    // Apply the new geometry once on release to avoid repeated blank frames during the drag.
+    // Saved QSplitter states include opaqueResize; enforce this after restoring old layouts.
+    for(const auto& [Key,Splitter]:{std::pair{QString("outer"),static_cast<QSplitter*>(outerSplitter_)},std::pair{QString("work"),static_cast<QSplitter*>(workSplitter_)},std::pair{QString("main"),static_cast<QSplitter*>(previewSplitter_)}}){const auto State=QByteArray::fromBase64(Settings.value("epubEditor/layout/"+Key).toString().toLatin1());if(!State.isEmpty())Splitter->restoreState(State);Splitter->setOpaqueResize(false);}
     for(const auto& Panel:{QString("tree"),QString("preview"),QString("problems")}){const auto Value=Settings.value("epubEditor/layout/"+Panel);if(Value.isValid())setPanelVisible(Panel,Value.toBool());}
     layoutRestored_=true;
 }
