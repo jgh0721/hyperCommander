@@ -102,13 +102,20 @@ inline storage::Result<TcPluginInstallation> InstallTcPluginPackage(const QStrin
     constexpr quint64 MaxBytes = 512ULL * 1024 * 1024;
     constexpr qsizetype MaxEntries = 10000;
     if (const auto Stop = Context.Check({"tc-plugin-package"})) return *Stop;
-    QFile Zip(Source);
-    if (!Zip.open(QIODevice::ReadOnly) || Zip.size() <= 0 || quint64(Zip.size()) > MaxBytes || Zip.read(2) != "PK")
-        return Failure("plugin-package-not-zip");
-    Zip.close();
+    QFile Package(Source);
+    if (!Package.open(QIODevice::ReadOnly) || Package.size() <= 0 || quint64(Package.size()) > MaxBytes)
+        return Failure("plugin-package-invalid");
+    const auto PrefixBytes = Package.read(8);
+    QString Format;
+    if (PrefixBytes.startsWith("PK")) Format = "zip";
+    else if (PrefixBytes.startsWith(QByteArray::fromHex("526172211a0700"))
+        || PrefixBytes.startsWith(QByteArray::fromHex("526172211a070100"))) Format = "rar";
+    else if (PrefixBytes.startsWith(QByteArray::fromHex("377abcaf271c"))) Format = "7z";
+    else return Failure("plugin-package-format");
+    Package.close();
     QTemporaryDir Scratch;
     if (!Scratch.isValid()) return Failure("plugin-package-staging");
-    const auto Archive = Scratch.filePath("package.zip");
+    const auto Archive = Scratch.filePath("package." + Format);
     if (!QFile::copy(Source, Archive)) return Failure("plugin-package-copy");
     if (quint64(QFileInfo(Archive).size()) > MaxBytes) return Failure("plugin-package-size-limit");
     if (!Backend) Backend = MakeApprovedWcxBackend(BuiltinSevenZipOptions());

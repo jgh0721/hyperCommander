@@ -51,7 +51,7 @@ public:
     QDialogButtonBox* buttons_;
     explicit PackageProgressDialog(QWidget* Parent) : QDialog(Parent) {
         setObjectName("pluginPackageProgress"); setWindowTitle(tr("플러그인 설치"));
-        auto* Layout = new QVBoxLayout(this); label_ = new QLabel(tr("ZIP에서 플러그인을 설치하고 있습니다."), this); Layout->addWidget(label_);
+        auto* Layout = new QVBoxLayout(this); label_ = new QLabel(tr("압축 파일에서 플러그인을 설치하고 있습니다."), this); Layout->addWidget(label_);
         auto* Progress = new QProgressBar(this); Progress->setRange(0, 0); Layout->addWidget(Progress);
         buttons_ = new QDialogButtonBox(QDialogButtonBox::Cancel, this); Layout->addWidget(buttons_);
         connect(buttons_, &QDialogButtonBox::rejected, this, [this] { reject(); });
@@ -362,7 +362,7 @@ void QPluginManagementPage::State::add() {
     QObject::connect(&Buttons, &QDialogButtonBox::accepted, &Dialog, &QDialog::accept); QObject::connect(&Buttons, &QDialogButtonBox::rejected, &Dialog, &QDialog::reject);
     if (Dialog.exec() != QDialog::Accepted) return;
     const auto Index = Format.currentData().toInt();
-    const auto Filter = Index < 0 ? QStringLiteral("토탈 커맨더 플러그인 및 ZIP (*.wcx *.wcx64 *.wlx *.wlx64 *.wfx *.wfx64 *.wdx *.wdx64 *.zip);;ZIP 패키지 (*.zip);;모든 파일 (*)")
+    const auto Filter = Index < 0 ? QStringLiteral("토탈 커맨더 플러그인 및 압축 파일 (*.wcx *.wcx64 *.wlx *.wlx64 *.wfx *.wfx64 *.wdx *.wdx64 *.zip *.rar *.7z);;플러그인 압축 패키지 (*.zip *.rar *.7z);;모든 파일 (*)")
         : QStringLiteral("x64 플러그인 (*.dll);;모든 파일 (*)");
     const auto Path = QFileDialog::getOpenFileName(owner_, QStringLiteral("플러그인 파일 선택"), {}, Filter); if (Path.isEmpty()) return;
     if (Index < 0) { addTc(Path, true); return; }
@@ -382,11 +382,11 @@ bool QPluginManagementPage::State::registerFile(const QString& Path, int Index, 
 bool QPluginManagementPage::State::addTc(const QString& Source, bool Review) {
     if (!validate()) return false; storeHosts();
     QString Path = QFileInfo(Source).absoluteFilePath(), Group; QStringList Extensions;
-    if (QFileInfo(Path).suffix().compare("zip", Qt::CaseInsensitive) == 0) {
+    if (QStringList{"zip", "rar", "7z"}.contains(QFileInfo(Path).suffix(), Qt::CaseInsensitive)) {
         auto Installed = installPackage(owner_, Path, root_);
         if (!Installed.HasValue()) {
             if (Installed.Failure().category_ != hc::storage::ErrorCategory::Cancelled)
-                hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 설치 실패"), QStringLiteral("ZIP에서 설치할 64비트 토탈 커맨더 플러그인을 확인하지 못했거나 설치 경로에 쓸 수 없습니다.\n%1").arg(hc::ui::ErrorText(Installed.Failure())));
+                hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 설치 실패"), QStringLiteral("압축 파일에서 설치할 64비트 토탈 커맨더 플러그인을 확인하지 못했거나 설치 경로에 쓸 수 없습니다.\n%1").arg(hc::ui::ErrorText(Installed.Failure())));
             return false;
         }
         Path = Installed.Value().binary_; Group = Installed.Value().group_; Extensions = Installed.Value().extensions_;
@@ -394,7 +394,7 @@ bool QPluginManagementPage::State::addTc(const QString& Source, bool Review) {
         Group = hc::plugins::TcPluginGroup(Path);
         if (!Group.isEmpty() && Path.endsWith('.' + Group, Qt::CaseInsensitive)) Path += "64";
         if (Group.isEmpty() || !hc::plugins::tcPackage::Binary64(Path)) {
-            hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 추가"), QStringLiteral("64비트 WCX·WLX·WFX·WDX 파일 또는 플러그인 ZIP 패키지를 선택하세요. 32비트 파일을 선택한 경우 같은 위치의 64비트 파일이 필요합니다.")); return false;
+            hc::ui::MessageDialog::warning(owner_, QStringLiteral("플러그인 추가"), QStringLiteral("64비트 WCX·WLX·WFX·WDX 파일 또는 ZIP·RAR·7Z 플러그인 패키지를 선택하세요. 32비트 파일을 선택한 경우 같은 위치의 64비트 파일이 필요합니다.")); return false;
         }
     }
     for (int Index = 0; Index < int(Formats.size()); ++Index)

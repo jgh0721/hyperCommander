@@ -173,6 +173,45 @@ private slots:
         if (Group == "wcx") Page.findChild<QLineEdit*>("pluginRegisteredExtensions")->setText("abc");
         QVERIFY(Page.AddTotalCommanderPlugin(Path, false)); QCOMPARE(Page.Document()[Group].toArray().size(), 1);
     }
+    void archivePackagesRegisterIntoSettingsDraft_data() {
+        QTest::addColumn<QString>("Suffix"); QTest::addColumn<QByteArray>("Archive"); QTest::addColumn<QByteArray>("Binary");
+        QFile File(QFINDTESTDATA("fixtures/tc-plugin-packages.json")); QVERIFY(File.open(QIODevice::ReadOnly));
+        const auto Fixtures = QJsonDocument::fromJson(File.readAll()).object();
+        const auto Binary = QByteArray::fromBase64(Fixtures["binary"].toString().toLatin1());
+        QVERIFY(!Binary.isEmpty()); QCOMPARE(Fixtures["cases"].toArray().size(), 3);
+        for (const auto& Value : Fixtures["cases"].toArray()) {
+            const auto Case = Value.toObject(); const auto Format = Case["format"].toString();
+            const auto Archive = QByteArray::fromBase64(Case["data"].toString().toLatin1());
+            for (const auto& Suffix : {Format, Format.toUpper()}) QTest::newRow(qPrintable(Suffix)) << Suffix << Archive << Binary;
+        }
+    }
+    void archivePackagesRegisterIntoSettingsDraft() {
+        QFETCH(QString, Suffix); QFETCH(QByteArray, Archive); QFETCH(QByteArray, Binary);
+        QTemporaryDir Root, Config; const auto Path = Root.filePath("download." + Suffix);
+        QFile Package(Path); QVERIFY(Package.open(QIODevice::WriteOnly)); QCOMPARE(Package.write(Archive), Archive.size()); Package.close();
+        hc::settings::Repository Settings(Config.path()); QVERIFY(Settings.Put(hc::settings::Section::Plugins, QJsonObject{{"future", true}}));
+        const auto Before = Settings.Object();
+        QPluginManagementPage Page(nullptr, Root.path()); Page.Load(Settings); QVERIFY(Page.AddTotalCommanderPlugin(Path, false));
+        QCOMPARE(Settings.Object(), Before);
+        const auto Items = Page.Document()["wcx"].toArray(); QCOMPARE(Items.size(), 1);
+        const auto Record = Items[0].toObject();
+        QCOMPARE(Record["path"].toString(), Root.filePath("Addons/WCX/ArchiveSample/sample.wcx64"));
+        QCOMPARE(Record["extensions"].toArray(), (QJsonArray{"abc", "def"}));
+        QVERIFY(Record["hostEnabled"].toBool()); QVERIFY(Record["hostReviewed"].toObject().isEmpty());
+        QFile Installed(Record["path"].toString()); QVERIFY(Installed.open(QIODevice::ReadOnly)); QCOMPARE(Installed.readAll(), Binary);
+        QFile Language(Root.filePath("Addons/WCX/ArchiveSample/language/ko.txt"));
+        QVERIFY(Language.open(QIODevice::ReadOnly)); QCOMPARE(Language.readAll(), QByteArray("Korean"));
+        QVERIFY(!QFileInfo::exists(Root.filePath("Addons/WCX/ArchiveSample/pluginst.inf")));
+        QVERIFY(QDir(Root.filePath("Addons/WCX")).entryList({".install-*"}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
+        QVERIFY(Page.Save(Settings)); QCOMPARE(Settings.Read(hc::settings::Section::Plugins).toObject()["wcx"].toArray().size(), 1);
+    }
+    void unsupportedPackageFormat() {
+        QTemporaryDir Root; const auto Path = Root.filePath("invalid.rar");
+        QFile Package(Path); QVERIFY(Package.open(QIODevice::WriteOnly)); Package.write("not an archive"); Package.close();
+        const auto Result = install(Path, Root.path()); QVERIFY(!Result.HasValue());
+        QCOMPARE(Result.Failure().code_, std::string("plugin-package-format"));
+        QVERIFY(!QFileInfo::exists(Root.filePath("Addons")));
+    }
     void zipMetadataInstallsAndPreservesExisting() {
         QTemporaryDir Root; const auto Path = Root.filePath("download.zip"); const auto Binary = fixture(); QVERIFY(!Binary.isEmpty());
         QVERIFY(package(Path, {{"PLUGINST.INF", "[PluginInstall]\r\nTYPE=WCX\r\nFILE=sample.wcx\r\nDEFAULTDIR=Sample\r\nDEFAULTEXTENSION=abc,def\r\n"},
