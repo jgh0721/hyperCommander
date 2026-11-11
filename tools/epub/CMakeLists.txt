@@ -60,6 +60,7 @@ foreach(HC_EPUB_RENDER_TARGET IN LISTS HC_EPUB_RENDER_TARGETS)
         "${PROJECT_SOURCE_DIR}/UniqueLibs/document/documentThemeAdapter.cpp"
     )
     target_precompile_headers(${HC_EPUB_RENDER_TARGET} PRIVATE render/stdafx.h)
+    target_link_libraries(${HC_EPUB_RENDER_TARGET} PRIVATE hc_startup_fonts)
     # render/ first: shared UniqueLibs sources open with #include "stdafx.h" and get the helper's header.
     target_include_directories(${HC_EPUB_RENDER_TARGET} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/render" "${PROJECT_SOURCE_DIR}")
     target_link_libraries(${HC_EPUB_RENDER_TARGET} PRIVATE hc_epub_package Qt6::Widgets Qt6::WebEngineWidgets Qt6::Concurrent Qt6::Network Fm::style Fm::widgets shell32)

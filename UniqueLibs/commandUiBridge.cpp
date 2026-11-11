@@ -1643,12 +1643,22 @@ bool CommandUiBridge::ReloadMenu() { return !userMenu_ || userMenu_->Reload(); }
 
 void CommandUiBridge::RefreshShortcutLabels()
 {
-    const auto Values = TyStCommandMgr::GetInstance()->Retrieve();
+    const auto* Manager = TyStCommandMgr::GetInstance();
+    const auto Global = hc::ui::IndexCommandKeys(Manager->Retrieve());
+    const auto CommandLine = hc::ui::IndexCommandKeys(Manager->RetrieveForScope(hc::ui::InputScope::CommandLine));
+    const auto Process = hc::ui::IndexCommandKeys(Manager->RetrieveForScope(hc::ui::InputScope::ProcessView));
+    const auto Service = hc::ui::IndexCommandKeys(Manager->RetrieveForScope(hc::ui::InputScope::ServiceView));
     for (auto It = actions_.begin(); It != actions_.end(); ++It) {
         if (!It.value()) continue;
         auto* Command = It.value().data();
-        const auto Keys = hc::ui::CommandKeys(hc::ui::IsCommandLineShortcut(It.key()) || hc::ui::IsViewScopedCommand(It.key())
-            ? TyStCommandMgr::GetInstance()->RetrieveForCommand(It.key()) : Values, It.key());
+        const hc::ui::TyCommandKeyIndex* Index = &Global;
+        switch (hc::ui::HomeScope(It.key())) {
+        case hc::ui::InputScope::CommandLine: Index = &CommandLine; break;
+        case hc::ui::InputScope::ProcessView: Index = &Process; break;
+        case hc::ui::InputScope::ServiceView: Index = &Service; break;
+        default: break;
+        }
+        const auto Keys = Index->value(hc::ui::CommandId(It.key()));
         QStringList Labels;
         for (const auto& Key : Keys) Labels.append(Key.toString(QKeySequence::NativeText));
         const auto Label = Labels.value(0);
@@ -1915,7 +1925,8 @@ void CommandUiBridge::createCommandUi()
         It.value()->setProperty("hc.baseLabel", It.value()->text().section('\t', 0, 0));
     }
     connect(TyStCommandMgr::GetInstance(), &CCommandMgr::ShortcutsChanged, this, [this] { RefreshShortcutLabels(); });
-    RefreshShortcutLabels();
+    // SetMainUI emits ShortcutsChanged after construction, once every action
+    // (including the navigation/search replacements below) is installed.
     Add("hc.navigate.back", tr("뒤로"), [this] { if (activePanel_) activePanel_->NavigateHistory(-1); });
     Add("hc.navigate.forward", tr("앞으로"), [this] { if (activePanel_) activePanel_->NavigateHistory(1); });
     auto* Toolbar = Window->findChild<QToolBar*>("hc.navigationToolbar"); Toolbar->clear();
@@ -1976,7 +1987,6 @@ void CommandUiBridge::createCommandUi()
             if (Item->objectName() == "hc.menu.automation") Sections.insert("automation", Menu);
         }
     }
-    RefreshShortcutLabels();
     const auto BuiltInMenu = hc::defaults::MenuBarDefaults();
     const auto MenuPath = hc::defaults::MenuBarFile(hc::settings::Paths().directory_);
     MigrateToolsMenu(MenuPath, BuiltInMenu, "audio-1", "audio", "hc.audio.");

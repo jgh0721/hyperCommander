@@ -17,6 +17,7 @@
 #include <QScopeGuard>
 #include <thread>
 #include <QWidget>
+#include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include <QEventLoop>
 
 namespace
@@ -274,12 +275,15 @@ namespace
 }
 int main(int Argc, char** Argv)
 {
+    // The native-plugin process also hosts the Qt-based HyperViewer widgets.
+    hc::fonts::StartupFontWarmup FontWarmup(Argc, Argv);
     static_assert(sizeof(void*) == 8, "hc-plugin-host-x64 requires an x64 build");
     using namespace hc::plugins;
     using namespace hc::storage;
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR)) return 2;
     QApplication App(Argc, Argv);
+    FontWarmup.WatchFirstWindow();
     App.setQuitOnLastWindowClosed(false);
     if ((App.arguments().size() != 3 && App.arguments().size() != 4) || !App.arguments()[1].startsWith("\\\\.\\pipe\\hyperCommander-")) return 2;
     bool Parsed = false; const auto ParentId = App.arguments()[2].toUInt(&Parsed); if (!Parsed || !ParentId) return 2;

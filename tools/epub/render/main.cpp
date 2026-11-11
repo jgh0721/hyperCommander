@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "readingSettings.hpp"
+#include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "readingNavigation.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
@@ -1169,6 +1170,7 @@ namespace
 
 int main(int Argc, char** Argv)
 {
+    hc::fonts::StartupFontWarmup FontWarmup(Argc, Argv);
     hc::epub::poc::OwnerMode Owner;
     try {
         if(!qEnvironmentVariableIsEmpty("QTWEBENGINE_DISABLE_SANDBOX")
@@ -1188,6 +1190,7 @@ int main(int Argc, char** Argv)
     // multi-gigabyte desktop-browser heap. Publisher scripts remain disabled.
     qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--js-flags=--max-old-space-size=64");
     QApplication App(Argc, Argv);
+    FontWarmup.WatchFirstWindow();
     // On only when the owner passed HC_UI_STALL_TRACE_CHILD=1; writes under the helper's TEMP.
     hc::document::DocumentStallTrace::InstallHelper(QStringLiteral("epub"));
     hc::document::DocumentThemeAdapter::Install(App);

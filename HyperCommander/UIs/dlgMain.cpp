@@ -95,6 +95,14 @@ QMainUI::QMainUI( QWidget* parent, Qt::WindowFlags flags )
     resize(std::min(1360, Available.width() * 9 / 10), std::min(850, Available.height() * 9 / 10));
     ui.splitter->setSizes({1, 1});
 
+    // Restore the native window and splitter before the caller's first show().
+    // Panel tabs still start in initialize(), after commands and signals exist.
+    workspace_ = hc::workspace::Load(hc::settings::WorkspaceSettings());
+    restoreWorkspaceOnStartup_ = workspace_.exists_ && workspace_.writable_
+        && hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["restoreWorkspace"]
+            .toBool(hc::defaults::DefaultValue("general/restoreWorkspace").toBool());
+    if (restoreWorkspaceOnStartup_) restoreWindowState(workspace_.state_);
+
     QMetaObject::invokeMethod( this, "initialize", Qt::QueuedConnection );
 }
 
@@ -771,8 +779,11 @@ void QMainUI::initialize()
             if (!ColumnSettings.Put(hc::settings::Section::Columns, Columns) || !ColumnSettings.Commit()) ColumnSettings.Replace(Previous);
         }
     }
-    workspace_ = hc::workspace::Load(hc::settings::WorkspaceSettings()); workspaceLoaded_ = true;
-    if (workspace_.exists_ && workspace_.writable_ && hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["restoreWorkspace"].toBool(hc::defaults::DefaultValue("general/restoreWorkspace").toBool())) RestoreWorkspace(workspace_.state_);
+    workspaceLoaded_ = true;
+    if (restoreWorkspaceOnStartup_) {
+        restoreWorkspacePanels(workspace_.state_);
+        if (!workspaceWindowWarning_.isEmpty()) statusBar()->showMessage(workspaceWindowWarning_);
+    }
     else {
         hc::workspace::State Initial;
         hc::workspace::TabState Home; Home.id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -794,9 +805,27 @@ hc::workspace::State QMainUI::CaptureWorkspace() const
 
 void QMainUI::RestoreWorkspace(const hc::workspace::State& State)
 {
+    restoreWindowState(State);
+    restoreWorkspacePanels(State);
+}
+
+void QMainUI::restoreWindowState(const hc::workspace::State& State)
+{
+    workspaceWindowWarning_.clear();
+    if (!State.geometry_.isEmpty() && !restoreGeometry(State.geometry_))
+        workspaceWindowWarning_ = tr("저장된 창 위치가 올바르지 않아 기본 위치를 사용합니다.");
+    // Hidden widgets have not received their first resize/layout pass yet.
+    // Give the splitter the restored client width before it distributes sizes.
+    if (layout()) layout()->activate();
+    if (ui.centralwidget->layout()) ui.centralwidget->layout()->activate();
+    if (!State.layout_.isEmpty() && !ui.splitter->restoreState(State.layout_))
+        workspaceWindowWarning_ = tr("저장된 패널 배치가 올바르지 않아 기본 배치를 사용합니다.");
+    if (!workspaceWindowWarning_.isEmpty()) statusBar()->showMessage(workspaceWindowWarning_);
+}
+
+void QMainUI::restoreWorkspacePanels(const hc::workspace::State& State)
+{
     commandLine_->SetHistory(State.commandHistory_);
-    if (!State.geometry_.isEmpty() && !restoreGeometry(State.geometry_)) statusBar()->showMessage(tr("저장된 창 위치가 올바르지 않아 기본 위치를 사용합니다."));
-    if (!State.layout_.isEmpty() && !ui.splitter->restoreState(State.layout_)) statusBar()->showMessage(tr("저장된 패널 배치가 올바르지 않아 기본 배치를 사용합니다."));
     setActivePanel(State.activePane_);
     // Dispatch the command source's listing first, with its final pane size.
     if (State.activePane_ == 1) {

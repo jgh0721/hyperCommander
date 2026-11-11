@@ -83,6 +83,7 @@ target_link_libraries(hc_compare_widgets PUBLIC hc_compare_runtime Qt6::Widgets 
 target_precompile_headers(hc_compare_widgets PRIVATE stdafx.h)
 
 qt_add_executable(HyperCompare WIN32 main.cpp)
+target_link_libraries(HyperCompare PRIVATE hc_startup_fonts)
 include("${PROJECT_SOURCE_DIR}/cmake/BundledFonts.cmake")
 hc_add_bundled_fonts(HyperCompare)
 target_link_libraries(HyperCompare PRIVATE hc_compare_widgets fmstyle Fm::widgets)

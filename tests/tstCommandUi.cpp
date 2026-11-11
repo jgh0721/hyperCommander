@@ -17,6 +17,26 @@
 
 using namespace hc::ui;
 namespace {
+QString LinearCommandId(const QString& Name)
+{
+    if (Name == "hc.audio.preview") return "hc.audio.playPause";
+    if (Name.compare("hc.file.context", Qt::CaseInsensitive) == 0) return "hc.file.contextMenu";
+    static const auto Aliases = hc::defaults::CommandAliases();
+    for (auto It = Aliases.cbegin(); It != Aliases.cend(); ++It)
+        if (It.key().compare(Name, Qt::CaseInsensitive) == 0 || It.value().compare(Name, Qt::CaseInsensitive) == 0) return It.value();
+    for (const auto& Command : hc::defaults::Commands())
+        if (QString(Command.Name).compare(Name, Qt::CaseInsensitive) == 0) return Command.Name;
+    return Name;
+}
+
+TyHC_COMMAND LinearFindCommand(const QString& Name)
+{
+    const auto Id = LinearCommandId(Name);
+    for (const auto& Command : hc::defaults::Commands())
+        if (LinearCommandId(Command.Name) == Id) return Command;
+    return {};
+}
+
 QByteArray MenuBytes(const QString& Command = "hc.file.copy", const QString& Label = "복사")
 {
     const QJsonArray Items{QJsonObject{{"id", "copy"}, {"command", Command}, {"label", Label}},
@@ -32,6 +52,64 @@ bool Write(const QString& Path, const QByteArray& Bytes)
 class CommandUiTests : public QObject {
     Q_OBJECT
 private slots:
+    void indexedCommandLookup_data()
+    {
+        QTest::addColumn<QString>("Name");
+        QStringList Inputs{QString{}, QStringLiteral(""), "hc.unknown.MixedCase", "cm_Unknown", " hc.file.copy",
+            "hc.file.copy ", "hc.file.copy/extra", QString::fromUtf8("hc.알수없음.😀"),
+            "hc.audio.preview", "hc.file.context", QString::fromUtf8("hc.ſyſtem.refreſhPauſe"),
+            QString::fromUtf8("hc.search.focuſ"), QString::fromUtf8("hc.COMMANDLİNE.execute"),
+            QString::fromUtf8("hc.commandlıne.execute"), QString::fromUtf8("hc.ﬁle.copy")};
+        for (const auto& Command : hc::defaults::Commands()) Inputs.append(Command.Name);
+        const auto Aliases = hc::defaults::CommandAliases();
+        for (auto It = Aliases.cbegin(); It != Aliases.cend(); ++It) { Inputs.append(It.key()); Inputs.append(It.value()); }
+        int Row = 0;
+        for (const auto& Input : Inputs) {
+            auto Mixed = Input;
+            for (qsizetype Index = 0; Index < Mixed.size(); ++Index)
+                Mixed[Index] = Index % 2 ? Mixed[Index].toUpper() : Mixed[Index].toLower();
+            for (const auto& Name : {Input, Input.toLower(), Input.toUpper(), Mixed})
+                QTest::newRow(qPrintable(QString::number(Row++))) << Name;
+        }
+    }
+    void indexedCommandLookup()
+    {
+        QFETCH(QString, Name);
+        const auto ExpectedId = LinearCommandId(Name);
+        QCOMPARE(hc::defaults::CommandId(Name), ExpectedId);
+        QCOMPARE(hc::defaults::CommandId(Name).isNull(), ExpectedId.isNull());
+        const auto Expected = LinearFindCommand(Name);
+        const auto Actual = FindCommand(Name);
+        QCOMPARE(Actual.Name, Expected.Name);
+        QCOMPARE(Actual.Default, Expected.Default);
+        QCOMPARE(Actual.Desc, Expected.Desc);
+    }
+    void indexedShortcutKeys()
+    {
+        // Exercise aliases, overrides/removals, unknown extensions and all four
+        // scopes against the existing per-command key collection/sort contract.
+        const QJsonObject Overrides{{"Ctrl+Alt+Y", "cm_CopyOtherPanel"}, {"F5", QJsonValue::Null},
+            {"Ctrl+F12", "hc.audio.preview"}, {"commandLine", QJsonObject{{"Ctrl+R", "hc.commandLine.execute"}}},
+            {"processView", QJsonObject{{"F2", QJsonValue::Null}, {"Ctrl+Alt+P", "hc.process.properties"}}},
+            {"serviceView", QJsonObject{{"Ctrl+Alt+S", "hc.service.start"}}}};
+        for (const auto& General : {QJsonObject{}, QJsonObject{{"shortcutPreset", "product"}},
+                QJsonObject{{"useBuiltInShortcuts", false}}}) {
+            for (const auto Scope : {InputScope::Global, InputScope::CommandLine, InputScope::ProcessView, InputScope::ServiceView}) {
+                auto Values = Scope == InputScope::Global ? EffectiveShortcuts(General, Overrides) : EffectiveScopeShortcuts(Overrides, Scope);
+                Values[QKeySequence("Ctrl+Shift+F12")[0]] = QLatin1String("hc.extension.Unknown");
+                const auto Index = IndexCommandKeys(Values);
+                for (const auto& Command : hc::defaults::Commands())
+                    QCOMPARE(Index.value(CommandId(Command.Name)), CommandKeys(Values, Command.Name));
+                QCOMPARE(Index.value("hc.extension.Unknown"), CommandKeys(Values, "hc.extension.Unknown"));
+            }
+        }
+        const TyMapShortcutToCMDStr Multiple{{QKeySequence("Ctrl+F5")[0], QLatin1String("hc.file.copy")},
+            {QKeySequence("F5")[0], QLatin1String("cm_CopyOtherPanel")}, {QKeySequence("Alt+C")[0], QLatin1String("hc.file.copy")},
+            {QKeySequence("Ctrl+C")[0], QLatin1String("hc.file.copy")}};
+        const auto Keys = IndexCommandKeys(Multiple).value("hc.file.copy");
+        QCOMPARE(Keys.front(), QKeySequence("F5"));
+        QCOMPARE(Keys, CommandKeys(Multiple, "hc.file.copy"));
+    }
     void commandLinePromptElision()
     {
         QCOMPARE(CommandLinePrompt("C:\\work"), QString("C:\\work>"));

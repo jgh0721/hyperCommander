@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include <QWebEngineView>
+#include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include <QWebEnginePage>
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
@@ -122,7 +123,9 @@ class MarkdownPage final : public QWebEnginePage
 };
 int main(int Argc, char **Argv)
 {
+    hc::fonts::StartupFontWarmup FontWarmup(Argc, Argv);
     QApplication App(Argc, Argv);
+    FontWarmup.WatchFirstWindow();
     App.setQuitOnLastWindowClosed(true);
     // On only while the editor records (HC_UI_STALL_TRACE is inherited); writes under TEMP.
     hc::document::DocumentStallTrace::InstallHelper(QStringLiteral("markdown"));

@@ -273,6 +273,7 @@ include("${PROJECT_SOURCE_DIR}/cmake/BundledFonts.cmake")
 hc_add_bundled_fonts(HyperCommander)
 
 target_precompile_headers( HyperCommander PRIVATE stdafx.h )
+target_link_libraries(HyperCommander PRIVATE hc_startup_fonts)
 
 # Export the actual target inputs so the legacy VS project can be checked for drift.
 set(HC_SOURCE_INVENTORY "")

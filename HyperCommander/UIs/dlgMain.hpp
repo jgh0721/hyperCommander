@@ -87,6 +87,8 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     void             updateWindowFrame();
     void             requestInputFocusRestore();
     void             restoreInputFocus();
+    void             restoreWindowState(const hc::workspace::State& State);
+    void             restoreWorkspacePanels(const hc::workspace::State& State);
     Q_INVOKABLE void initialize();
     void             setActivePanel( int Index );
     void             updateCommandLinePrompt(const QString& Path);
@@ -105,6 +107,8 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     Ui::dlgMain           ui;
     hc::workspace::Loaded workspace_;
     bool                  workspaceLoaded_ = false;
+    bool                  restoreWorkspaceOnStartup_ = false;
+    QString               workspaceWindowWarning_;
     hc::update::UpdateController* update_ = nullptr;
     bool canRestartForUpdate() const;
 };

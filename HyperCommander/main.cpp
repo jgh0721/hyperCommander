@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "HyperCommander.hpp"
+#include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include "UniqueLibs/startupTrace.hpp"
 #include "HyperCommanderUpdater/updateTransaction.hpp"
 #include <QtWidgets/QApplication>
@@ -13,6 +14,7 @@
 
 int main( int argc, char* argv[] )
 {
+    hc::fonts::StartupFontWarmup FontWarmup(argc, argv);
     hc::startup::Record("main.enter");
     if (!hc::update::StartupAllowed(hc::update::ExecutableRoot())) {
         MessageBoxW(nullptr, L"업데이트가 진행 중이거나 복구가 필요합니다. 모든 제품 창을 닫고 HyperCommanderUpdater.exe --recover <설치 폴더>를 실행하십시오.", L"HyperCommander 업데이트", MB_OK | MB_ICONWARNING);
@@ -26,6 +28,7 @@ int main( int argc, char* argv[] )
     QCoreApplication::setAttribute( Qt::AA_UseHighDpiPixmaps, true );
 
     HyperCommanderApp app( argc, argv );
+    FontWarmup.WatchFirstWindow();
 
     do
     {

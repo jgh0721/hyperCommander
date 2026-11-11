@@ -638,12 +638,25 @@ namespace hc::defaults
         // 설정에 남은 이전 ID만 이전한다. 독립 명령으로는 등록하지 않는다.
         if (Name == "hc.audio.preview") return "hc.audio.playPause";
         if (Name.compare("hc.file.context", Qt::CaseInsensitive) == 0) return "hc.file.contextMenu";
-        static const auto Aliases = CommandAliases();
-        for (auto It = Aliases.cbegin(); It != Aliases.cend(); ++It)
-            if (It.key().compare(Name, Qt::CaseInsensitive) == 0 || It.value().compare(Name, Qt::CaseInsensitive) == 0) return It.value();
-        for( const auto& Command : Commands() )
-            if( QString( Command.Name ).compare( Name, Qt::CaseInsensitive ) == 0 ) return Command.Name;
-        return Name;
+        static const auto Index = [] {
+            QHash<QString, QString> Result;
+            const auto Aliases = CommandAliases();
+            // Keep the first alias in the original traversal ahead of command
+            // names. Case folding matches QString's case-insensitive comparison,
+            // including non-ASCII inputs (lowercasing alone does not).
+            const auto Insert = [&Result](const QString& Key, const QString& Id) {
+                const auto Folded = Key.toCaseFolded();
+                if (!Result.contains(Folded)) Result.insert(Folded, Id);
+            };
+            for (auto It = Aliases.cbegin(); It != Aliases.cend(); ++It) {
+                Insert(It.key(), It.value());
+                Insert(It.value(), It.value());
+            }
+            for (const auto& Command : Commands()) Insert(Command.Name, Command.Name);
+            return Result;
+        }();
+        const auto It = Index.constFind(Name.toCaseFolded());
+        return It == Index.cend() ? Name : It.value();
     }
 
     // Convert stored command references without changing keys, disabled bindings,

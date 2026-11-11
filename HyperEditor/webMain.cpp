@@ -1,5 +1,6 @@
 ﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include <Windows.h>
 #include <shellapi.h>
 #include "UniqueLibs/document/documentWebPeer.hpp"
@@ -140,6 +141,7 @@ namespace
 }
 int main(int Argc, char** Argv)
 {
+    hc::fonts::StartupFontWarmup FontWarmup(Argc, Argv);
     using namespace hc::document;
     startup::Initialize("helper");startup::Data().Begin("helper.entryToTransportReady");
     // Inspect the original wide argv before Qt can consume WebEngine switches.
@@ -175,6 +177,7 @@ int main(int Argc, char** Argv)
     if (!ValidPid || !OwnerPid || !RegisterHwpScheme()) return 2;
     startup::Scope QtStartup("helper.qtApplication");
     QApplication App(Argc, Argv);
+    FontWarmup.WatchFirstWindow();
     QtStartup.End();
     App.setOrganizationName("HyperCommander"); App.setApplicationName("HyperEditorWeb");
     App.setQuitOnLastWindowClosed(false);

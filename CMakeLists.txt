@@ -28,6 +28,7 @@ option(HC_BUILD_HYPERCOMPARE_ONLY "Configure only the standalone compare utility
 if(HC_BUILD_HYPERCOMPARE_ONLY)
     find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Widgets Svg Concurrent Network)
     qt_standard_project_setup(REQUIRES 6.12)
+    add_subdirectory(UniqueLibs/fonts)
     set(FMSTYLE_WITH_QTITAN OFF CACHE BOOL "" FORCE)
     foreach(Option IN ITEMS DEMO LABS GALLERY DESIGNER_PLUGIN EXAMPLES TESTS)
         set(FMSTYLE_BUILD_${Option} OFF CACHE BOOL "" FORCE)
@@ -58,6 +59,7 @@ find_package(Qt6 6.12 REQUIRED COMPONENTS
     Multimedia
 )
 qt_standard_project_setup(REQUIRES 6.12)
+add_subdirectory(UniqueLibs/fonts)
 
 include_directories( ${CMAKE_CURRENT_LIST_DIR} )
 include_directories( ${CMAKE_CURRENT_LIST_DIR}/UniqueLibs )

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "runtimeVerification.hpp"
@@ -55,6 +56,7 @@ namespace
 }
 int main(int Argc, char** Argv)
 {
+    hc::fonts::StartupFontWarmup FontWarmup(Argc, Argv);
     if (!hc::update::StartupAllowed(hc::update::ExecutableRoot())) {
         MessageBoxW(nullptr, L"업데이트가 진행 중이거나 복구가 필요합니다. HyperCommanderUpdater.exe --recover <설치 폴더>로 복구하십시오.", L"HyperEditor", MB_OK | MB_ICONWARNING); return ERROR_BUSY;
     }
@@ -62,6 +64,7 @@ int main(int Argc, char** Argv)
     hc::document::startup::Data().Begin("editor.entryToTitle");
     const auto QtStart = hc::document::startup::Data().Begin("editor.qtApplication");
     QApplication App(Argc, Argv); App.setOrganizationName("HyperCommander"); App.setApplicationName("HyperEditor"); hc::ui::InstallQtTranslation(App);
+    FontWarmup.WatchFirstWindow();
     hc::document::startup::Scope ResourcesTrace("editor.resources"); InitializePortedViewResources(); ResourcesTrace.End(); App.setWindowIcon(QIcon(":/icons/app/hypereditor.svg"));
     hc::document::startup::Data().End(QtStart);
     // HC_UI_STALL_TRACE=<file>: GUI thread stalls and delayed key input, for diagnosis only.

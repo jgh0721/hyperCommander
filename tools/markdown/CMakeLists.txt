@@ -12,6 +12,7 @@ foreach(INDEX RANGE 0 ${MARKDOWN_ASSET_LAST})
 endforeach()
 find_package(Qt6 6.12.0 REQUIRED COMPONENTS WebEngineWidgets WebChannel Network)
 qt_add_executable(hc-markdown-render WIN32 render/main.cpp render/stdafx.h)
+target_link_libraries(hc-markdown-render PRIVATE hc_startup_fonts)
 set_target_properties(hc-markdown-render PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
 target_precompile_headers(hc-markdown-render PRIVATE render/stdafx.h)
 # documentWebProcess.hpp: the resize message shared with the host.

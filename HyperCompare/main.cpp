@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "runtime/session.hpp"
+#include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include "UniqueLibs/productDefaults.hpp"
 #include "UniqueLibs/bundledFonts.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -29,6 +30,7 @@ namespace
 }
 int main(int argc, char** argv)
 {
+    hc::fonts::StartupFontWarmup FontWarmup(argc, argv);
     QCoreApplication::setApplicationName("HyperCompare"); QCoreApplication::setOrganizationName("HyperCommander");
     QCoreApplication::setApplicationVersion("0.1.0");
     int count = 0; auto** wide = CommandLineToArgvW(GetCommandLineW(), &count); QStringList arguments;
@@ -54,6 +56,7 @@ int main(int argc, char** argv)
         if (!error.isEmpty()) print(error.toUtf8() + '\n', stderr); return code;
     }
     QApplication app(argc, argv);
+    FontWarmup.WatchFirstWindow();
     hc::fonts::RegisterBundledFonts();
     hc::ui::InstallQtTranslation(app);
     auto& theme = fm::style::ThemeManager::instance(); theme.setDesign(hc::theme::ProductDesign); theme.install(app);

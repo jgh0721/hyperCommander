@@ -20,9 +20,15 @@ inline QString CommandId( const QString& Name )
 inline TyHC_COMMAND FindCommand(const QString& Name)
 {
     const auto Id = CommandId(Name);
-    for (const auto& Command : hc::defaults::Commands())
-        if (CommandId(Command.Name) == Id) return Command;
-    return {};
+    static const auto Index = [] {
+        QHash<QString, TyHC_COMMAND> Result;
+        for (const auto& Command : hc::defaults::Commands()) {
+            const auto Canonical = CommandId(Command.Name);
+            if (!Result.contains(Canonical)) Result.insert(Canonical, Command);
+        }
+        return Result;
+    }();
+    return Index.value(Id);
 }
 
 inline bool IsCommandLineShortcut(const QString& Id)
@@ -246,11 +252,8 @@ inline QString FunctionCaptionFor(const QJsonObject& General, FunctionBarKind Ki
     return Labels.value(CommandId(Id), Fallback);
 }
 
-inline QList<QKeySequence> CommandKeys(const TyMapShortcutToCMDStr& Values, const QString& Id)
+inline void SortCommandKeys(QList<QKeySequence>& Keys, const QString& Id)
 {
-    QList<QKeySequence> Keys;
-    for (auto It = Values.cbegin(); It != Values.cend(); ++It)
-        if (CommandId(It.value()) == CommandId(Id)) Keys.append(QKeySequence(It.key()));
     const auto Primary = FindCommand(Id).Default;
     std::sort(Keys.begin(), Keys.end(), [Primary](const auto& Left, const auto& Right) {
         // A plain function key is the representative when aliases coexist.
@@ -260,6 +263,26 @@ inline QList<QKeySequence> CommandKeys(const TyMapShortcutToCMDStr& Values, cons
         if ((Left[0] == Primary) != (Right[0] == Primary)) return Left[0] == Primary;
         return Left.toString(QKeySequence::PortableText) < Right.toString(QKeySequence::PortableText);
     });
+}
+
+using TyCommandKeyIndex = QHash<QString, QList<QKeySequence>>;
+
+inline TyCommandKeyIndex IndexCommandKeys(const TyMapShortcutToCMDStr& Values)
+{
+    TyCommandKeyIndex Result;
+    for (auto It = Values.cbegin(); It != Values.cend(); ++It)
+        Result[CommandId(It.value())].append(QKeySequence(It.key()));
+    for (auto It = Result.begin(); It != Result.end(); ++It) SortCommandKeys(It.value(), It.key());
+    return Result;
+}
+
+inline QList<QKeySequence> CommandKeys(const TyMapShortcutToCMDStr& Values, const QString& Id)
+{
+    QList<QKeySequence> Keys;
+    const auto Canonical = CommandId(Id);
+    for (auto It = Values.cbegin(); It != Values.cend(); ++It)
+        if (CommandId(It.value()) == Canonical) Keys.append(QKeySequence(It.key()));
+    SortCommandKeys(Keys, Id);
     return Keys;
 }
 

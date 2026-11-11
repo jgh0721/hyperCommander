@@ -35,6 +35,7 @@ endif()
 target_compile_definitions(hc_plugin_process PRIVATE UNICODE _UNICODE)
 target_compile_options(hc_plugin_process PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 qt_add_executable(hc-plugin-host-x64 hostMain.cpp)
+target_link_libraries(hc-plugin-host-x64 PRIVATE hc_startup_fonts)
 qt_add_library(hc_wcx_backend STATIC
     ../UniqueLibs/wcxBackend.cpp
     ../UniqueLibs/wcxBackend.hpp

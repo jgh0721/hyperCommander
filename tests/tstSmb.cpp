@@ -376,6 +376,8 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardGlobalShortcuts"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "startupShortcutLabelsUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "workspaceBeforeShowUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "driveListOrderUi"
                 || (QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragUi" || QString::fromLatin1(QTest::currentTestFunction()) == "externalFileDragNativeFormatsUi")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileDropUi"
@@ -528,6 +530,97 @@ private slots:
             Dialog.reject();
         }
         QVERIFY(Manager->GlobalShortcutEnabled("hc.audio.stop"));
+    }
+
+    void startupShortcutLabelsUi()
+    {
+        auto* Manager = TyStCommandMgr::GetInstance();
+        QCOMPARE(main_->property("hc.shortcutRevision").toInt(), 1);
+        const auto Check = [&](bool CheckTooltips) {
+            for (const auto& Definition : hc::defaults::Commands()) {
+                auto* Action = Manager->Bridge()->Action(Definition.Name); QVERIFY(Action);
+                const auto Keys = hc::ui::CommandKeys(Manager->RetrieveForCommand(Definition.Name), Definition.Name);
+                QStringList Labels;
+                for (const auto& Key : Keys) Labels.append(Key.toString(QKeySequence::NativeText));
+                const auto Label = Labels.value(0);
+                const auto Base = Action->property("hc.baseLabel").toString();
+                QCOMPARE(Action->property("hc.keyLabel").toString(), Label);
+                QCOMPARE(Action->text(), Base + (Label.isEmpty() ? QString{} : "\t" + Label));
+                if (CheckTooltips)
+                    QCOMPARE(Action->toolTip(), Base + (Labels.isEmpty() ? QStringLiteral(" · 단축키 없음") : " · " + Labels.join(", ")));
+            }
+        };
+        // Running action-state updates can supply contextual tooltips. Check
+        // the label refresh's tooltip contract synchronously after its signal.
+        Check(false);
+        Manager->Refresh();
+        QCOMPARE(main_->property("hc.shortcutRevision").toInt(), 2);
+        Check(true);
+    }
+
+    void workspaceBeforeShowUi()
+    {
+        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
+        auto& Store = hc::settings::WorkspaceSettings(); const auto OriginalStore = Store.Object();
+        const auto Restore = qScopeGuard([&] {
+            Store.Replace(OriginalStore); Store.DiscardEdit(); Settings.Replace(Original);
+        });
+        auto General = Settings.Read(hc::settings::Section::General).toObject(); General["restoreWorkspace"] = true;
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        Store.BeginEdit();
+        auto Saved = main_->CaptureWorkspace();
+        QMainUI Reference;
+        const auto Available = main_->screen()->availableGeometry().size();
+        const QSize RestoredSize(std::min(1500, Available.width() * 9 / 10), std::min(740, Available.height() * 9 / 10));
+        Reference.setWindowState(Qt::WindowNoState); Reference.setGeometry(QRect(QPoint(80, 90), RestoredSize));
+        // Inspect the first show in isolation. These temporary windows must not
+        // run initialize() and replace the real test window's command bridge.
+        QCoreApplication::removePostedEvents(&Reference, QEvent::MetaCall);
+        Reference.show();
+        Reference.layout()->activate(); Reference.centralWidget()->layout()->activate();
+        auto* ReferenceSplitter = Reference.findChild<QSplitter*>("splitter");
+        ReferenceSplitter->setSizes({1000, 500});
+        const auto ExpectedSizes = ReferenceSplitter->sizes();
+        Saved.geometry_ = Reference.saveGeometry();
+        Saved.layout_ = ReferenceSplitter->saveState();
+        Reference.hide();
+        auto Document = Store.Object();
+        const auto SetState = [&] {
+            Document["workspace"] = hc::settings::JsonObject(hc::workspace::Encode(Saved));
+            return Store.Replace(Document);
+        };
+        QVERIFY(SetState());
+        {
+            QMainUI Window;
+            QVERIFY(!Window.isVisible()); QCOMPARE(Window.size(), RestoredSize); QCOMPARE(Window.pos(), Reference.pos()); QVERIFY(!Window.isMaximized());
+            auto* Splitter = Window.findChild<QSplitter*>("splitter");
+            QCOMPARE(Splitter->saveState(), Saved.layout_);
+            QCoreApplication::removePostedEvents(&Window, QEvent::MetaCall);
+            Window.show(); Window.layout()->activate(); Window.centralWidget()->layout()->activate();
+            const auto Sizes = Splitter->sizes();
+            QCOMPARE(Sizes, ExpectedSizes); QVERIFY(Sizes[0] != Sizes[1]);
+            QVERIFY(!Window.SaveWorkspace()); // Panel tabs have not been initialized.
+        }
+        Reference.setWindowState(Qt::WindowMaximized); Reference.show();
+        Reference.layout()->activate(); Reference.centralWidget()->layout()->activate();
+        Saved.geometry_ = Reference.saveGeometry(); Saved.layout_ = ReferenceSplitter->saveState();
+        const auto MaximizedSizes = ReferenceSplitter->sizes(); Reference.hide(); QVERIFY(SetState());
+        {
+            QMainUI Window; QVERIFY(!Window.isVisible()); QVERIFY(Window.isMaximized());
+            QCoreApplication::removePostedEvents(&Window, QEvent::MetaCall);
+            Window.show(); Window.layout()->activate(); Window.centralWidget()->layout()->activate();
+            QCOMPARE(Window.findChild<QSplitter*>("splitter")->sizes(), MaximizedSizes);
+        }
+        General["restoreWorkspace"] = false; QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        const QSize Default(std::min(1360, Available.width() * 9 / 10), std::min(850, Available.height() * 9 / 10));
+        { QMainUI Window; QCOMPARE(Window.size(), Default); QVERIFY(!Window.isMaximized()); }
+        General["restoreWorkspace"] = true; QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        Saved.geometry_ = "invalid-geometry"; Saved.layout_ = "invalid-layout"; QVERIFY(SetState());
+        { QMainUI Window; QCOMPARE(Window.size(), Default); QVERIFY(Window.statusBar()->currentMessage().contains("패널 배치")); }
+        Document.remove("workspace"); QVERIFY(Store.Replace(Document));
+        { QMainUI Window; QCOMPARE(Window.size(), Default); QVERIFY(!Window.isMaximized()); }
+        Document["workspace"] = QJsonObject{{"invalid", true}}; QVERIFY(Store.Replace(Document));
+        { QMainUI Window; QCOMPARE(Window.size(), Default); QVERIFY(!Window.isMaximized()); }
     }
 
     void keyboardCommandColumnsUi()
