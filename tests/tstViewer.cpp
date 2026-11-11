@@ -179,6 +179,8 @@ private slots:
         QTest::newRow("utf32-be") << QByteArray::fromHex("0000feff000000410000ac000001f642") << QString::fromUtf8("A가🙂") << "utf-32be";
         QTest::newRow("cp949") << QByteArray::fromHex("c7d1b1db") << QString::fromUtf8("한글") << "cp949";
         QTest::newRow("empty") << QByteArray{} << QString{} << "utf-8";
+        const QByteArray Source = "/* source */\n#define SQLITE_ONE 8\n#define SQLITE_TWO 2\nstatic unsigned char values[] = { 0x00, 0xff };\n";
+        QTest::newRow("source-with-numeric-defines") << Source << QString::fromUtf8(Source) << "utf-8";
     }
     void text()
     {

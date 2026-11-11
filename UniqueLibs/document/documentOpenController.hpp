@@ -32,6 +32,10 @@ struct DocumentOpenRequest {
     std::vector<hc::plugins::HostedViewerSession::DocumentInput> documents_;
     std::function<bool()> stillCurrent_;
 };
+// Worker-only: narrow plugin candidates using application rules and the WLX
+// SDK detect expression against each original provider revision, before menus.
+storage::Result<HandlerSelection> ProbeDocumentHandlers(const DocumentHandlerCatalog& Catalog,
+    const DocumentOpenRequest& Request, HandlerSelection Selection, storage::OperationContext Context, const QString& HiddenParent = {});
 class DocumentOpenController final : public QObject {
     Q_OBJECT
 public:
@@ -51,10 +55,11 @@ signals:
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
 private:
-    bool selectHandler(const QString& Token, DocumentOpenRequest Request, HandlerSelection Selection);
+    bool selectHandler(const QString& Token, DocumentOpenRequest Request, HandlerSelection Selection, DocumentHandlerCatalog Catalog);
     void prepare(const QString& Token, DocumentOpenRequest Request, DocumentHandlerTarget Target, HandlerSelection Selection);
     void report(const QString& Token, const QString& Status, const QString& Reason = {});
     QPointer<QWidget> main_;
+    QPointer<QWidget> probeAnchor_;
     Catalog catalog_;
     PluginLaunch launch_;
     QHash<QString, DocumentOpenRequest> requests_;

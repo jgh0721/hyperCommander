@@ -1,6 +1,8 @@
 ﻿#include "documentOpenController.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "documentHandlerMenu.hpp"
+#include "pluginHost/wlxDetectionSettings.hpp"
+#include "pluginHost/pluginApplicationRule.hpp"
 #include "commonLibs/document/documentFormatSupport.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "UniqueLibs/nativeMaterializer.hpp"
@@ -15,7 +17,9 @@
 #include <qt_windows.h>
 #include <QCloseEvent>
 #include <QTimer>
+#include <QScopeGuard>
 #include <algorithm>
+#include "externalLibs/TotalCommander/tc_listplug.h"
 namespace hc::document {
 using namespace hc::storage;
 namespace {
@@ -25,6 +29,25 @@ struct PreparedOpen {
     std::vector<std::shared_ptr<IMaterializedFileLease>> leases_;
     std::shared_ptr<IMaterializer> materializer_;
 };
+Result<bool> TryUndeclaredWlx(const hc::plugins::PluginViewerOptions& Options,
+    const std::shared_ptr<IContentSource>& Source, const QString& HiddenParent, OperationContext Context) {
+    if (HiddenParent.isEmpty()) return false;
+    auto Factory = MakeNativeMaterializer(QDir::tempPath().toStdString()); if (!Factory.HasValue()) return Factory.Failure();
+    // ListLoad may inspect or edit its argument. Probe only a private copy,
+    // never the user's original, and retain it until the isolated host exits.
+    auto Lease = Factory.Value()->Materialize({Source}, Context).get(); if (!Lease.HasValue()) return Lease.Failure();
+    const auto Path = QString::fromStdString(Lease.Value()->LocalPath());
+    const auto Permissions = QFile::permissions(Path);
+    if (!QFile::setPermissions(Path, QFileDevice::ReadOwner | QFileDevice::ReadUser)) return false;
+    const auto Restore = qScopeGuard([&] { QFile::setPermissions(Path, Permissions); });
+    auto Started = hc::plugins::PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_, Context, Options.defaultIniPath_);
+    if (!Started.HasValue()) return Started.Failure(); auto Host = std::move(Started.Value());
+    auto Probed = Host->Probe(Context); if (!Probed.HasValue()) return Probed.Failure();
+    auto Opened = Host->ViewerCall(hc::plugins::WireKind::ViewerOpen,
+        {{"parent", HiddenParent}, {"file", Path}, {"width", 640}, {"height", 480}, {"flags", Options.flags_ & ~lcp_forceshow}}, Context);
+    if (Opened.HasValue()) Host->ViewerCall(hc::plugins::WireKind::ViewerClose, {}, Context);
+    Host->Close(); return Opened.HasValue();
+}
 bool LooksLikeText(const QByteArray& Sample) {
     // A prefix can end inside a UTF-8/CP949 sequence; trim only that boundary.
     for (int Trim = 0; Trim <= 3 && Trim <= Sample.size(); ++Trim) {
@@ -44,13 +67,6 @@ bool LooksLikeText(const QByteArray& Sample) {
         });
     }
     return false;
-}
-bool LooksLikeLocalText(const storage::EntrySnapshot& Entry) {
-    if (Entry.locator_.kind_ != LocatorKind::Local || Entry.directory_) return false;
-    QFile File(QString::fromStdString(Entry.locator_.root_));
-    if (!File.open(QIODevice::ReadOnly)) return false;
-    const auto Sample = File.read(64 * 1024);
-    return File.error() == QFileDevice::NoError && (!Sample.isEmpty() || !File.size()) && LooksLikeText(Sample);
 }
 }
 bool ProbeDocumentText(IContentSource& Source, OperationContext Context) {
@@ -74,6 +90,57 @@ bool ProbeDocumentText(IContentSource& Source, OperationContext Context) {
         }
     }
     return false;
+}
+Result<HandlerSelection> ProbeDocumentHandlers(const DocumentHandlerCatalog& Catalog,
+    const DocumentOpenRequest& Request, HandlerSelection Selection, OperationContext Context, const QString& HiddenParent) {
+    using hc::plugins::PluginApplicationRule;
+    for (const auto& [Id, Target] : Catalog.targets_) {
+        if (Target.descriptor_.kind_ != HandlerKind::Plugin || Id.starts_with("builtin.")) continue;
+        auto& Matches = Selection.handlerMatches_[Id]; Matches.assign(Selection.names_.size(), false);
+        const auto Application = PluginApplicationRule::Parse(Target.plugin_.applicationRule_);
+        if (!Application.HasValue() || !Application.Value().Enabled()) continue;
+        std::optional<PluginApplicationRule> Detection;
+        bool Inspected = false, Usable = true, NeedsLoad = false;
+        for (std::size_t Index = 0; Index < Selection.names_.size(); ++Index) {
+            if (const auto Stop = Context.Check({"document"})) return *Stop;
+            if (!DocumentHandlerResolver::Supports(Target.descriptor_, Request.intent_, {Selection.names_[Index]})) continue;
+            auto& Source = *Request.documents_[Index].source_;
+            auto Applies = Application.Value().MatchesSource(Source, Context);
+            if (!Applies.HasValue() || !Applies.Value()) continue;
+            if (!Inspected && Target.plugin_.approval_.reviewed_.format_ == hc::plugins::PluginFormat::Wlx) {
+                Inspected = true;
+                auto Definition = hc::plugins::ReadWlxDetection(Target.plugin_, Context);
+                if (!Definition.HasValue()) Usable = false;
+                else {
+                    const auto Text = Target.plugin_.detectionOverride_.value_or(Definition.Value());
+                    // Without a declaration, TC calls ListLoad and continues if
+                    // it returns NULL. Do that behind a hidden parent before
+                    // advertising a candidate in the handler menu.
+                    NeedsLoad = Text.trimmed().isEmpty();
+                    if (!Text.trimmed().isEmpty()) {
+                        auto Parsed = PluginApplicationRule::Parse(QJsonObject{{"version", 1}, {"mode", "tc"}, {"expression", Text}});
+                        if (!Parsed.HasValue()) Usable = false;
+                        else Detection = std::move(Parsed.Value());
+                    }
+                }
+            }
+            if (!Usable) continue;
+            if (Detection) {
+                auto Detected = Detection->MatchesSource(Source, Context);
+                if (!Detected.HasValue() || !Detected.Value()) continue;
+            }
+            if (NeedsLoad) {
+                auto Loaded = TryUndeclaredWlx(Target.plugin_, Request.documents_[Index].source_, HiddenParent, Context);
+                if (!Loaded.HasValue() || !Loaded.Value()) continue;
+            }
+            Matches[Index] = true;
+        }
+    }
+    for (const auto& Input : Request.documents_) {
+        if (const auto Stop = Context.Check({"document"})) return *Stop;
+        auto Verified = Input.source_->Verify(Context).get(); if (!Verified.HasValue()) return Verified.Failure();
+    }
+    return Selection;
 }
 DocumentOpenController::DocumentOpenController(QWidget* Main, Catalog Candidates, PluginLaunch Launch)
     : QObject(Main), main_(Main), catalog_(std::move(Candidates)), launch_(std::move(Launch)) {
@@ -99,28 +166,36 @@ bool DocumentOpenController::Open(const QString& Token) {
     for (const auto& Input : Request.documents_) {
         if (!Input.source_) { Selection.providerSupported_ = false; break; }
         const auto Entry = Input.source_->Describe(); Selection.names_.push_back(Entry.name_); Selection.directory_ |= Entry.directory_;
-        const auto Ext = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
-        const bool Known = std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) != DocumentExtensions.end();
-        Selection.textContent_.push_back(!Known && LooksLikeLocalText(Entry));
+        Selection.textContent_.push_back(false);
     }
-    bool ProbeSmb = false;
+    auto Catalog = catalog_();
+    if (Selection.directory_ || !Selection.providerSupported_ || Selection.names_.empty())
+        return selectHandler(Token, std::move(Request), std::move(Selection), std::move(Catalog));
+    bool NeedProbe = false;
     for (const auto& Input : Request.documents_) if (Input.source_) {
         const auto Entry = Input.source_->Describe();
         const auto Ext = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
-        ProbeSmb |= Entry.locator_.kind_ == LocatorKind::Smb && !Entry.directory_
-            && std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) == DocumentExtensions.end();
+        NeedProbe |= std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) == DocumentExtensions.end();
     }
-    if (!ProbeSmb) return selectHandler(Token, std::move(Request), std::move(Selection));
+    for (const auto& [Id, Target] : Catalog.targets_)
+        NeedProbe |= Target.descriptor_.kind_ == HandlerKind::Plugin && !Id.starts_with("builtin.") && Target.descriptor_.available_;
+    if (!NeedProbe) return selectHandler(Token, std::move(Request), std::move(Selection), std::move(Catalog));
+    if (!probeAnchor_) {
+        probeAnchor_ = new QWidget(main_); probeAnchor_->setObjectName("hc.document.detectAnchor");
+        probeAnchor_->resize(640, 480); probeAnchor_->hide();
+    }
+    const auto HiddenParent = QString::number(probeAnchor_->winId(), 16);
     // Read only a bounded prefix on a worker. A slow share must not block the panel.
     const auto Stop = std::make_shared<std::stop_source>(); pending_.insert(Token, Stop);
-    auto* Watcher = new QFutureWatcher<HandlerSelection>(this);
-    connect(Watcher, &QFutureWatcher<HandlerSelection>::finished, this, [this, Watcher, Token, Request] {
-        auto Selection = Watcher->result(); Watcher->deleteLater(); pending_.remove(Token);
+    auto* Watcher = new QFutureWatcher<Result<HandlerSelection>>(this);
+    connect(Watcher, &QFutureWatcher<Result<HandlerSelection>>::finished, this, [this, Watcher, Token, Request, Catalog] {
+        auto Probed = Watcher->result(); Watcher->deleteLater(); pending_.remove(Token);
         if (cancelled_.contains(Token)) { report(Token, "cancelled"); return; }
         if (!main_ || !Request.stillCurrent_()) { report(Token, "rejected", "document-context-changed"); return; }
-        selectHandler(Token, Request, std::move(Selection));
+        if (!Probed.HasValue()) { report(Token, "failed", QString::fromStdString(Probed.Failure().code_)); return; }
+        selectHandler(Token, Request, std::move(Probed.Value()), Catalog);
     });
-    Watcher->setFuture(QtConcurrent::run([Request, Selection = std::move(Selection), Stop]() mutable {
+    Watcher->setFuture(QtConcurrent::run([Request, Catalog, Selection = std::move(Selection), Stop, HiddenParent]() mutable -> Result<HandlerSelection> {
         OperationContext Context; Context.stopToken_ = Stop->get_token();
         Context.deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         Context.maxReadBytes_ = 64 * 1024;
@@ -129,16 +204,14 @@ bool DocumentOpenController::Open(const QString& Token) {
             const auto& Source = Request.documents_[Index].source_;
             const auto Entry = Source->Describe();
             const auto Ext = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
-            if (Entry.locator_.kind_ != LocatorKind::Smb || Entry.directory_
-                || std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) != DocumentExtensions.end()) continue;
+            if (std::find(DocumentExtensions.begin(), DocumentExtensions.end(), Ext) != DocumentExtensions.end()) continue;
             Selection.textContent_[Index] = ProbeDocumentText(*Source, Context);
         }
-        return Selection;
+        return ProbeDocumentHandlers(Catalog, Request, std::move(Selection), Context, HiddenParent);
     }));
     return true;
 }
-bool DocumentOpenController::selectHandler(const QString& Token, DocumentOpenRequest Request, HandlerSelection Selection) {
-    auto Catalog = catalog_();
+bool DocumentOpenController::selectHandler(const QString& Token, DocumentOpenRequest Request, HandlerSelection Selection, DocumentHandlerCatalog Catalog) {
     auto Default = Request.intent_ == DocumentIntent::View ? Catalog.defaultView_ : Catalog.defaultEdit_;
     if (!Selection.names_.empty()) {
         const auto Name = QString::fromStdString(Selection.names_.front()); const auto Ext = QFileInfo(Name).suffix().toLower();
@@ -163,6 +236,8 @@ bool DocumentOpenController::selectHandler(const QString& Token, DocumentOpenReq
         Inputs.push_back(Request.documents_.at(Index));
         ChosenSelection.names_.push_back(Selection.names_.at(Index));
         ChosenSelection.textContent_.push_back(Index < Selection.textContent_.size() && Selection.textContent_[Index]);
+        if (const auto At = Selection.handlerMatches_.find(Choice.handler_); At != Selection.handlerMatches_.end())
+            ChosenSelection.handlerMatches_[Choice.handler_].push_back(Index < At->second.size() && At->second[Index]);
     }
     Request.documents_ = std::move(Inputs);
     if (!Request.stillCurrent_()) { report(Token, "rejected", "document-context-changed"); return true; }
@@ -194,7 +269,9 @@ void DocumentOpenController::prepare(const QString& Token, DocumentOpenRequest R
         if (!main_ || !Request.stillCurrent_()) { report(Token, "rejected", "document-context-changed"); return; }
         const auto Fresh = catalog_(); const auto At = Fresh.targets_.find(Target.descriptor_.stableId_);
         std::vector<std::string> Names; for (const auto& Input : Request.documents_) Names.push_back(Input.source_->Describe().name_);
-        if (At == Fresh.targets_.end() || !DocumentHandlerResolver::Supports(At->second.descriptor_, Request.intent_, Names, Selection.textContent_)
+        const auto Detected = Selection.handlerMatches_.find(Target.descriptor_.stableId_);
+        if (At == Fresh.targets_.end() || !DocumentHandlerResolver::Supports(At->second.descriptor_, Request.intent_, Names, Selection.textContent_,
+                Detected == Selection.handlerMatches_.end() ? std::vector<bool>{} : Detected->second)
             || At->second.executable_ != Target.executable_ || At->second.arguments_ != Target.arguments_ || At->second.rhwpEditor_ != Target.rhwpEditor_
             || At->second.plugin_.binaryPath_ != Target.plugin_.binaryPath_
             || At->second.plugin_.applicationRule_ != Target.plugin_.applicationRule_

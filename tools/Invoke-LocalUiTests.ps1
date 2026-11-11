@@ -91,6 +91,9 @@ Write-Host "Shared verified Qt runtime DLL snapshots: $SharedQtFiles"
 foreach ($Name in @('hc_wcx_fixture.wcx64', 'hc_wlx_fixture.wlx64', 'hc-plugin-host-x64.exe', 'hc-search-index.exe')) {
     Copy-Item -LiteralPath (Join-Path $RuntimeDir $Name) -Destination $RunDir
 }
+if (Test-Path -LiteralPath (Join-Path $RuntimeDir 'hc_wlx_sdk_fixture.wlx64')) {
+    Copy-Item -LiteralPath (Join-Path $RuntimeDir 'hc_wlx_sdk_fixture.wlx64') -Destination $RunDir
+}
 Copy-Item -LiteralPath (Join-Path $RuntimeDir 'HyperEditor.exe') -Destination $RunDir
 foreach ($Compare in @('HyperCompare.exe','HyperCompareCli.exe')) { Copy-Item -LiteralPath (Join-Path $RuntimeDir $Compare) -Destination $RunDir }
 $AdminHelper = Join-Path $RuntimeDir 'HyperCommanderAdmin.exe'

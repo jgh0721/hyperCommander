@@ -1,10 +1,12 @@
 ﻿#include <QtTest>
 #include <QTemporaryDir>
+#include <QCryptographicHash>
 #include <QMenu>
 #include <QTimer>
 #include <QProcess>
 #include <atomic>
 #include <thread>
+#include <future>
 #include <QApplication>
 #include <QScopeGuard>
 #include <QImage>
@@ -17,6 +19,8 @@
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/document/documentOpenController.hpp"
+#include "pluginHost/manifestFile.hpp"
+#include "pluginHost/wlxDetectionSettings.hpp"
 #include "UniqueLibs/commandUiConfig.hpp"
 using namespace hc::document;
 using namespace hc::storage;
@@ -55,7 +59,124 @@ QMenu* Menu() { return qobject_cast<QMenu*>(QApplication::activePopupWidget()); 
 }
 class DocumentP4Tests final : public QObject {
     Q_OBJECT
+private:
+    bool wlxTarget(const QString& Directory, const QByteArray& Expression, DocumentHandlerTarget& Target, const QByteArray& Mode = "normal") {
+        using namespace hc::plugins;
+        if (!QDir().mkpath(Directory)) return false;
+        PluginViewerOptions Options; const auto Root = QCoreApplication::applicationDirPath();
+        Options.executable_ = Root + "/hc-plugin-host-x64.exe";
+        Options.binaryPath_ = Directory + "/test.wlx64"; Options.manifestPath_ = Directory + "/plugin.json";
+        Options.defaultIniPath_ = Directory + "/lsplugin.ini";
+        const auto RealRoot = qEnvironmentVariable("HC_WLX_REAL_PLUGIN_ROOT");
+        const auto PluginName = QFileInfo(Directory).fileName();
+        const auto BinaryPath = RealRoot.isEmpty() ? Root + "/hc_wlx_sdk_fixture.wlx64"
+            : QDir(RealRoot).filePath(PluginName + '/' + PluginName + ".wlx64");
+        if (!QFile::copy(BinaryPath, Options.binaryPath_)) return false;
+        QFile Binary(Options.binaryPath_); if (!Binary.open(QIODevice::ReadOnly)) return false;
+        auto& Manifest = Options.approval_.reviewed_; Manifest.id_ = "hc.test.document-detection"; Manifest.version_ = "1.0";
+        Manifest.binary_ = "test.wlx64"; Manifest.format_ = PluginFormat::Wlx; Manifest.extensions_ = {Extension::Viewer};
+        Manifest.permissions_ = {Permission::ReadContent, Permission::UserInterface};
+        Manifest.sha256_ = QCryptographicHash::hash(Binary.readAll(), QCryptographicHash::Sha256).toHex().toStdString();
+        Options.approval_.approved_ = true; Options.approval_.granted_ = Manifest.permissions_;
+        QFile File(Options.manifestPath_); if (!File.open(QIODevice::WriteOnly) || File.write(EncodeManifest(Manifest)) <= 0) return false;
+        QFile Ini(Options.defaultIniPath_);
+        if (!Ini.open(QIODevice::WriteOnly) || Ini.write("[fixture]\r\nvalue=123\r\nmode=" + Mode + "\r\nexpression=" + Expression + "\r\n") <= 0) return false;
+        File.close(); Ini.close();
+        if (!RealRoot.isEmpty()) {
+            const auto Definition = std::async(std::launch::async, [&] { return ReadWlxDetection(Options); }).get();
+            if (!Definition.HasValue()) return false;
+            qInfo() << PluginName << "native detect:" << Definition.Value();
+        }
+        Target = BuildPluginViewerTarget(PluginName, Options, {}); return true;
+    }
 private slots:
+    void undeclaredWlxUsesHiddenLoad() {
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path()); DocumentHandlerTarget Accept, Reject;
+        QVERIFY(wlxTarget(Temp.filePath("accept"), {}, Accept));
+        QVERIFY(wlxTarget(Temp.filePath("reject"), {}, Reject, "reject"));
+        auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Accept, Reject});
+        auto Input = Source(); Input->entry_.size_ = Input->bytes_.size();
+        DocumentOpenRequest Request{DocumentIntent::View, {{Input, {}}}, [] { return true; }};
+        QWidget Parent; Parent.resize(640, 480); Parent.hide(); const auto HiddenParent = QString::number(Parent.winId(), 16);
+        HandlerSelection Selection; Selection.names_ = {Input->entry_.name_};
+        auto Future = std::async(std::launch::async, [&] { return ProbeDocumentHandlers(Candidates, Request, Selection, {}, HiddenParent); });
+        while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) QTest::qWait(5);
+        auto Probed = Future.get(); QVERIFY(Probed.HasValue()); QVERIFY(Parent.isHidden());
+        QVERIFY(Probed.Value().handlerMatches_.at(Accept.descriptor_.stableId_)[0]);
+        QVERIFY(!Probed.Value().handlerMatches_.at(Reject.descriptor_.stableId_)[0]);
+        QCOMPARE(DocumentHandlerResolver::Resolve(Candidates.registry_, DocumentIntent::View, Probed.Value()).candidates_.size(), size_t(2));
+    }
+    void wlxNativeDetectionBeforeSelection() {
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());
+        DocumentHandlerTarget Pe, Sql;
+        QVERIFY(wlxTarget(Temp.filePath("PEViewer"), "[0]=\"M\" & [1]=\"Z\"", Pe));
+        QVERIFY(wlxTarget(Temp.filePath("SQLiteViewer"), "[0]=\"S\" & FIND(\"SQLite format 3\")", Sql));
+        auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Pe, Sql});
+        auto Input = Source("sqlite3-see-aes256-cryptoapi.c"); Input->bytes_ = "/* source */\n#define SQLITE_ONE 8\n#define SQLITE_TWO 2\n";
+        Input->entry_.size_ = Input->bytes_.size(); Input->entry_.locator_.kind_ = LocatorKind::Archive;
+        DocumentOpenRequest Request{DocumentIntent::View, {{Input, {}}}, [] { return true; }};
+        const auto Detect = [&] {
+            HandlerSelection Selection; Selection.names_ = {Input->entry_.name_};
+            return std::async(std::launch::async, [&] { return ProbeDocumentHandlers(Candidates, Request, Selection, {}); }).get();
+        };
+        auto Probed = Detect(); QVERIFY(Probed.HasValue());
+        QCOMPARE(DocumentHandlerResolver::Resolve(Candidates.registry_, DocumentIntent::View, Probed.Value()).candidates_,
+            std::vector<std::string>{"builtin.hyperviewer"});
+        Input->entry_.name_ = "database.unknown"; Input->bytes_ = QByteArray("SQLite format 3\0", 16); Input->entry_.size_ = Input->bytes_.size();
+        Probed = Detect(); QVERIFY(Probed.HasValue());
+        QCOMPARE(DocumentHandlerResolver::Resolve(Candidates.registry_, DocumentIntent::View, Probed.Value()).candidates_,
+            std::vector<std::string>{Sql.descriptor_.stableId_});
+        // The content decision belongs to the original name/revision, including virtual files.
+        Input->entry_.name_ = "renamed.c"; Input->bytes_ = "MZ executable"; Input->entry_.size_ = Input->bytes_.size();
+        Probed = Detect(); QVERIFY(Probed.HasValue());
+        const auto Multiple = DocumentHandlerResolver::Resolve(Candidates.registry_, DocumentIntent::View, Probed.Value()).candidates_;
+        QCOMPARE(Multiple.size(), size_t(2)); QVERIFY(std::find(Multiple.begin(), Multiple.end(), Pe.descriptor_.stableId_) != Multiple.end());
+        Pe.plugin_.detectionOverride_ = "EXT=\"TXT\"";
+        Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Pe, Sql});
+        Probed = Detect(); QVERIFY(Probed.HasValue());
+        QCOMPARE(DocumentHandlerResolver::Resolve(Candidates.registry_, DocumentIntent::View, Probed.Value()).candidates_, std::vector<std::string>{"builtin.hyperviewer"});
+        Input->changed_ = true; QVERIFY(!Detect().HasValue());
+    }
+    void pluginMasksSurviveMixedSelections() {
+        auto Candidates = Catalog({Handler("pe", {"exe"}), Handler("sql", {"db"})});
+        HandlerSelection Selection; Selection.names_ = {"valid.exe", "invalid.exe", "valid.db"};
+        Selection.handlerMatches_ = {{"pe", {true, false, false}}, {"sql", {false, false, true}}};
+        const auto Mixed = DocumentHandlerResolver::Resolve(Candidates.registry_, DocumentIntent::View, Selection);
+        QVERIFY(Mixed.candidates_.empty()); QCOMPARE(Mixed.groups_.size(), size_t(2));
+        HandlerSelection Subset; Subset.names_ = {"valid.exe", "invalid.exe"}; Subset.handlerMatches_["pe"] = {true, false};
+        QVERIFY(DocumentHandlerResolver::Resolve(Candidates.registry_, DocumentIntent::View, Subset).candidates_.empty());
+        Subset.names_ = {"valid.exe"}; Subset.handlerMatches_["pe"] = {true};
+        QCOMPARE(DocumentHandlerResolver::Resolve(Candidates.registry_, DocumentIntent::View, Subset).candidates_, std::vector<std::string>{"pe"});
+    }
+    void wlxSingleCandidateSkipsMenu() {
+        QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path()); DocumentHandlerTarget Pe, Sql;
+        QVERIFY(wlxTarget(Temp.filePath("PEViewer"), "[0]=\"M\" & [1]=\"Z\"", Pe));
+        QVERIFY(wlxTarget(Temp.filePath("SQLiteViewer"), "FIND(\"SQLite format 3\")", Sql));
+        auto Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Pe, Sql});
+        auto Input = Source("source.c"); Input->entry_.size_ = Input->bytes_.size();
+        QWidget Window; std::string Selected;
+        DocumentOpenController Controller(&Window, [&] { return Candidates; }, [&](const auto& Target, auto, auto Completion) {
+            Selected = Target.descriptor_.stableId_; Completion(true, {}); return true;
+        });
+        QTimer Guard; Guard.setInterval(20); connect(&Guard, &QTimer::timeout, &Window, [] { if (Menu()) { QTest::qFail("unexpected handler menu", __FILE__, __LINE__); Menu()->close(); } }); Guard.start();
+        QVERIFY(Controller.Open(Controller.Capture({DocumentIntent::View, {{Input, {}}}, [] { return true; }})));
+        QTRY_COMPARE_WITH_TIMEOUT(Selected, std::string("builtin.hyperviewer"), 10000);
+        Guard.stop(); Selected.clear();
+        Pe.plugin_.detectionOverride_ = "EXT=\"C\"";
+        Candidates = BuildDocumentHandlerCatalog(Settings, QCoreApplication::applicationDirPath(), {Pe, Sql});
+        bool MenuSeen = false;
+        QTimer Choose; Choose.setInterval(20); connect(&Choose, &QTimer::timeout, &Window, [&] {
+            auto* Popup = Menu(); if (!Popup || MenuSeen) return; MenuSeen = true;
+            const auto Close = qScopeGuard([&] { if (Menu()) Menu()->close(); });
+            QVERIFY(Popup->findChild<QAction*>("hc.document.handler." + QString::fromStdString(Pe.descriptor_.stableId_)));
+            QVERIFY(!Popup->findChild<QAction*>("hc.document.handler." + QString::fromStdString(Sql.descriptor_.stableId_)));
+            auto* Builtin = Popup->findChild<QAction*>("hc.document.handler.builtin.hyperviewer"); QVERIFY(Builtin);
+            Popup->setActiveAction(Builtin); QTest::keyClick(Popup, Qt::Key_Return);
+        }); Choose.start();
+        QVERIFY(Controller.Open(Controller.Capture({DocumentIntent::View, {{Input, {}}}, [] { return true; }})));
+        QTRY_VERIFY_WITH_TIMEOUT(MenuSeen, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(Selected, std::string("builtin.hyperviewer"), 10000);
+    }
     void builtinExclusionFallsThrough() {
         QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());
         const QJsonObject Rule{{"version", 1}, {"enabled", true}, {"mode", "excludeExtensions"}, {"extensions", QJsonArray{"PDF", "foo", "tar.gz"}}};

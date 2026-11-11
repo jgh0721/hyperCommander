@@ -96,8 +96,11 @@ namespace hc::plugins
                 if (source_[at_] == '"') { append({Op::String, 0, string()}); return; }
                 if (source_[at_] >= '0' && source_[at_] <= '9') { append({Op::Number, number()}); return; }
                 const auto Start = at_;
-                while (at_ < source_.size() && source_[at_] >= 'A' && source_[at_] <= 'Z') ++at_;
-                const auto Name = source_.mid(Start, at_ - Start);
+                while (at_ < source_.size() && ((source_[at_] >= 'A' && source_[at_] <= 'Z')
+                    || (source_[at_] >= 'a' && source_[at_] <= 'z'))) ++at_;
+                // Real WLX declarations also use ext/size/find. Fold only the
+                // identifier; byte strings and case-sensitive FIND stay intact.
+                const auto Name = source_.mid(Start, at_ - Start).toUpper();
                 if (Name == "EXT") append({Op::Extension});
                 else if (Name == "SIZE") append({Op::Size});
                 else if (Name == "FORCE") append({Op::Force});

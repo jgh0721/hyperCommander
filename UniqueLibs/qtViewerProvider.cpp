@@ -1,5 +1,6 @@
 ﻿#include "qtViewerProvider.hpp"
 #include <QBuffer>
+#include "commonLibs/document/documentFormatSupport.hpp"
 #include <QFileInfo>
 #include <QImageReader>
 #include <QStringDecoder>
@@ -9,12 +10,13 @@
 namespace hc::viewer
 {
     using namespace storage;
-    bool CanViewBuiltinMultimedia(const EntrySnapshot&, std::span<const std::byte> Prefix)
+    bool CanViewBuiltinMultimedia(const EntrySnapshot& Source, std::span<const std::byte> Prefix)
     {
         QByteArray Data(reinterpret_cast<const char*>(Prefix.data()), static_cast<qsizetype>(Prefix.size()));
         QBuffer Buffer(&Data); Buffer.open(QIODevice::ReadOnly);
         QImageReader Reader(&Buffer); Reader.setDecideFormatFromContent(true);
-        return Reader.canRead();
+        return Reader.canRead() && hc::document::DocumentImageFormatMatches(Reader.format().toStdString(),
+            QFileInfo(QString::fromStdString(Source.name_)).suffix().toLower().toStdString());
     }
     namespace
     {
@@ -128,7 +130,7 @@ namespace hc::viewer
                 if (kind_ == ViewerKind::Image)
                 {
                     QBuffer Buffer(&Data); Buffer.open(QIODevice::ReadOnly); QImageReader Reader(&Buffer); Reader.setDecideFormatFromContent(true);
-                    if (Reader.canRead()) return 100;
+                    if (Reader.canRead() && hc::document::DocumentImageFormatMatches(Reader.format().toStdString(), Ext.toStdString())) return 100;
                     return QStringList{"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff", "ppm", "pgm", "pbm", "xbm", "xpm"}.contains(Ext) ? 80 : 0;
                 }
                 if (QStringList{"pdf", "exe", "dll", "zip", "7z", "rar", "wcx64", "wlx64"}.contains(Ext)) return 0;

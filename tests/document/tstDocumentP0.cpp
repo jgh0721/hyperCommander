@@ -23,6 +23,7 @@
 #include <future>
 #include <TlHelp32.h>
 #include <QSet>
+#include <QImageReader>
 
 using namespace hc::document;
 using namespace hc::storage;
@@ -88,6 +89,34 @@ class DocumentP0Tests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void ambiguousCSourceIsText_data()
+    {
+        QTest::addColumn<QString>("Suffix"); QTest::addColumn<QString>("View");
+        for (const auto* Suffix : {"c", "C", "h", "cpp", "txt"})
+            QTest::newRow(Suffix) << QString(Suffix) << QString("text");
+        QTest::newRow("actual-xbm") << QString("xbm") << QString("image");
+    }
+    void ambiguousCSourceIsText()
+    {
+        QFETCH(QString, Suffix); QFETCH(QString, View);
+        QTemporaryDir Root; const auto Path = Root.filePath("sqlite3-see-aes256-cryptoapi." + Suffix);
+        const QByteArray Bytes = "/* C source */\n#define SQLITE_ONE 8\n#define SQLITE_TWO 2\n"
+            "static unsigned char sqlite_values[] = { 0x00, 0xff };\n";
+        QVERIFY(Put(Path, Bytes));
+        QImageReader Probe(Path); QVERIFY(Probe.canRead()); QCOMPARE(Probe.format(), QByteArray("xbm"));
+        auto Opened = Worker([&] { return ReadDocumentFile(Path); });
+        QVERIFY2(Opened.HasValue(), Opened.HasValue() ? "" : Opened.Failure().code_.c_str());
+        QCOMPARE(Opened.Value().viewId_, View);
+        if (View == "text") { QCOMPARE(Opened.Value().text_, QString::fromUtf8(Bytes)); QVERIFY(Opened.Value().image_.isNull()); }
+        else QCOMPARE(Opened.Value().image_.size(), QSize(8, 2));
+    }
+    void binaryImageWithSourceSuffixUsesContent()
+    {
+        QTemporaryDir Root; const auto Path = Root.filePath("renamed.c");
+        QImage Image(3, 2, QImage::Format_RGB32); Image.fill(Qt::red); QVERIFY(Image.save(Path, "PNG"));
+        auto Opened = Worker([&] { return ReadDocumentFile(Path); }); QVERIFY(Opened.HasValue());
+        QCOMPARE(Opened.Value().viewId_, QString("image")); QCOMPARE(Opened.Value().image_.size(), Image.size());
+    }
     void utf8SavePreservesBomEolAndOriginalOnConflict()
     {
         QTemporaryDir Root(QDir(qEnvironmentVariable("HC_DOCUMENT_SAVE_TEST_ROOT",QDir::tempPath())).filePath("hc-document-save-XXXXXX")); QVERIFY(Root.isValid()); const auto Path = Root.filePath("한글 파일.txt");

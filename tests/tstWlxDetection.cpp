@@ -16,6 +16,8 @@ private slots:
             QTest::newRow(Name) << Expression << Extension << Bytes << Size << Force << Expected << Multimedia;
         };
         Row("extensions", "EXT=\"WAV\" | EXT=\"AVI\"", "avi", {}, 0, false, 1);
+        Row("lowercase-extension", "MULTIMEDIA & ext=\"DB\"|ext=\"DB3\"", "db", {}, 0, false, 1, true);
+        Row("mixed-keywords", "sIzE=3 & !(fOrCe) & fInDi(\"ABC\") & fInD(\"aBc\")", {}, "aBc", 3, false, 1);
         Row("extension-case-literal", "EXT=\"txt\"", "txt", {}, 0, false, 0);
         Row("wave-header", "EXT=\"WAV\" & [0]=\"R\" & [1]=\"I\" & [2]=\"F\" & [3]=\"F\" & FIND(\"WAVEfmt\")", "wav", "RIFF....WAVEfmt", 15, false, 1);
         Row("size-force-small", "EXT=\"WAV\" & (SIZE<1000000 | FORCE)", "wav", {}, 999999, false, 1);
@@ -65,7 +67,7 @@ private slots:
     }
     void invalidSyntax()
     {
-        for (const auto* Source : {"1 |", "& 1", "()", "!1", "!(1", "[8192]=1", "[-1]=0", "[a]=0", "EXT=TXT", "ext=\"TXT\"", "UNKNOWN", "FIND(1)", "FIND(\"a\"", "\"open", "1==1", "1<=1", "1>=1", "1=1=1", "1 + 2", "18446744073709551616", "SIZE=1junk", "1 || 0", "0 && 1", "1 | BAD"})
+        for (const auto* Source : {"1 |", "& 1", "()", "!1", "!(1", "[8192]=1", "[-1]=0", "[a]=0", "EXT=TXT", "UNKNOWN", "FIND(1)", "FIND(\"a\"", "\"open", "1==1", "1<=1", "1>=1", "1=1=1", "1 + 2", "18446744073709551616", "SIZE=1junk", "1 || 0", "0 && 1", "1 | BAD"})
             QVERIFY2(!WlxDetectionExpression::Parse(Source).HasValue(), Source);
         QVERIFY(!WlxDetectionExpression::Parse(QByteArray("1\0|0", 4)).HasValue());
         QVERIFY(!WlxDetectionExpression::Parse(QByteArray(2048, ' ')).HasValue());

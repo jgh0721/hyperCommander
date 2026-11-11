@@ -1,5 +1,6 @@
 ﻿#include "documentStorageAdapter.hpp"
 #include "commonLibs/document/epub/epubPackage.hpp"
+#include "commonLibs/document/documentFormatSupport.hpp"
 #include "imagePerformance.hpp"
 #include "imageDecodeCache.hpp"
 #include "imagePartialDecoder.hpp"
@@ -107,7 +108,7 @@ namespace hc::document
             ImageTraceSpan ProbeTrace("image.probe",Path);
             const auto Header=ProbeFile.peek(2);
             QImageReader Probe(&ProbeFile); Probe.setDecideFormatFromContent(true);
-            ImageContent = Probe.canRead();
+            ImageContent = Probe.canRead() && DocumentImageFormatMatches(Probe.format().toStdString(), QFileInfo(Path).suffix().toLower().toStdString());
             if(ImageContent&&Header.size()==2&&Header[0]=='P'&&Header[1]>='1'&&Header[1]<='6')ImageContent=!Probe.size().isEmpty();
         }
         if (QStringList{"pdf", "hwp", "hwpx", "epub"}.contains(QFileInfo(Path).suffix().toLower())) TextPreview = {};
@@ -156,7 +157,7 @@ namespace hc::document
             ImageDecodeCache::Remember(Canonical,{Input.bytes_,Input.hash_,Revision,Input.image_});Input.viewId_="image";return Input;
         }
         QBuffer Buffer(&Input.bytes_);Buffer.open(QIODevice::ReadOnly);QImageReader ImageReader(&Buffer);
-        if(ImageReader.canRead()) {
+        if(ImageReader.canRead() && DocumentImageFormatMatches(ImageReader.format().toStdString(), Suffix.toStdString())) {
             const auto Size=ImageReader.size();
             // The PBM plugin recognizes a plain-text line beginning with P4.
             // An invalid image header must fall through to TEXT; explicit image

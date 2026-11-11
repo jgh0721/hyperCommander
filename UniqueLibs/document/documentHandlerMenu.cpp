@@ -27,6 +27,8 @@ DocumentHandlerChoice DocumentHandlerMenu::Choose(QWidget* Parent, const Documen
         HandlerSelection Subset; for (auto I : Indexes) {
             Subset.names_.push_back(Selection.names_[I]);
             Subset.textContent_.push_back(I < Selection.textContent_.size() && Selection.textContent_[I]);
+            for (const auto& [Id, Matches] : Selection.handlerMatches_)
+                Subset.handlerMatches_[Id].push_back(I < Matches.size() && Matches[I]);
         }
         const auto Resolved = DocumentHandlerResolver::Resolve(Catalog.registry_, Intent, Subset, Default);
         Add(*Group, Catalog, Resolved.candidates_, Indexes, Default, Choices);

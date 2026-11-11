@@ -22,11 +22,12 @@ std::string Extension(const std::string& Name) {
 }
 }
 bool DocumentHandlerResolver::Supports(const HandlerDescriptor& Handler, DocumentIntent Intent, const std::vector<std::string>& Names,
-    const std::vector<bool>& TextContent) {
+    const std::vector<bool>& TextContent, const std::vector<bool>& HandlerMatches) {
     if (!Handler.available_ || Names.empty() || Names.size() > Handler.maxFiles_
         || (Intent == DocumentIntent::View ? !Handler.view_ : !Handler.edit_ || !Handler.editable_)) return false;
     return std::all_of(Names.begin(), Names.end(), [&](const auto& Name) {
         const auto Index = std::size_t(&Name - Names.data());
+        if (!HandlerMatches.empty() && (Index >= HandlerMatches.size() || !HandlerMatches[Index])) return false;
         const auto Ext = Extension(Name);
         if (std::any_of(Handler.excludedExtensions_.begin(), Handler.excludedExtensions_.end(), [&](const auto& Value) { return Lower(Name).ends_with('.' + Lower(Value)); })) return false;
         const auto Matches = [&](const std::vector<std::string>& Patterns) {
@@ -46,8 +47,11 @@ HandlerResolution DocumentHandlerResolver::Resolve(const DocumentHandlerRegistry
     if (Selection.directory_) { Result.reason_ = "document-directory"; return Result; }
     if (!Selection.providerSupported_) { Result.reason_ = "document-provider-unsupported"; return Result; }
     if (Selection.names_.empty()) { Result.reason_ = "document-selection-empty"; return Result; }
-    for (const auto& Handler : Registry.Handlers())
-        if (Supports(Handler, Intent, Selection.names_, Selection.textContent_)) Result.candidates_.push_back(Handler.stableId_);
+    for (const auto& Handler : Registry.Handlers()) {
+        const auto At = Selection.handlerMatches_.find(Handler.stableId_);
+        if (Supports(Handler, Intent, Selection.names_, Selection.textContent_,
+            At == Selection.handlerMatches_.end() ? std::vector<bool>{} : At->second)) Result.candidates_.push_back(Handler.stableId_);
+    }
     const auto Default = std::find(Result.candidates_.begin(), Result.candidates_.end(), DefaultId);
     if (Default != Result.candidates_.end()) std::rotate(Result.candidates_.begin(), Default, Default + 1);
     if (!Result.candidates_.empty()) return Result;
