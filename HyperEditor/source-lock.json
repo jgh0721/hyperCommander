@@ -216,9 +216,9 @@
     "sha256": "713ada097b7da0594638e2c5723d8dea486653c23ec2e0c12631df7e5b7f0991"
   },
   "pdfium": {
-    "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8111/pdfium-win-x64.tgz",
-    "sha256": "3452d11031050ec65e57f180215b57b9e6d465e3fbedafa8a77ad90885c7d23e",
-    "version": "158.0.8111.0"
+    "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8152/pdfium-win-x64.tgz",
+    "sha256": "cee2b0e9990bc67c0721774932961b9dbf2766046c10eec925acd4cfba6fdfe3",
+    "version": "159.0.8152.0"
   },
   "policy": "MainWindow, application settings, direct writes and shadow backup are replaced by HC services; original vendor naming retained inside this isolated port.",
   "features": [

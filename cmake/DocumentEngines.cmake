@@ -3,8 +3,8 @@ include(FetchContent)
 include(${CMAKE_CURRENT_LIST_DIR}/TextEditorEngines.cmake)
 # PDFium is deliberately a DLL. Only its documented C API crosses the CRT boundary.
 FetchContent_Declare(hc_pdfium
-    URL "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8111/pdfium-win-x64.tgz"
-    URL_HASH SHA256=3452d11031050ec65e57f180215b57b9e6d465e3fbedafa8a77ad90885c7d23e
+    URL "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8152/pdfium-win-x64.tgz"
+    URL_HASH SHA256=cee2b0e9990bc67c0721774932961b9dbf2766046c10eec925acd4cfba6fdfe3
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(hc_pdfium)
 add_library(hc_pdfium_runtime SHARED IMPORTED GLOBAL)
