@@ -87,6 +87,9 @@ namespace hc::plugins
         // Service methods use one owner thread; session methods are thread-safe.
         explicit PluginViewerService(MaterializerFactory Factory, std::size_t MaxSessions = 8);
         ~PluginViewerService();
+        // Prepare the approved built-in viewer without a content source or document.
+        storage::Result<std::shared_ptr<HostedViewerSession>> Prepare(PluginViewerOptions Options, QString ParentWindow,
+            std::uint32_t Width, std::uint32_t Height, storage::OperationContext Context = {});
         storage::Result<std::shared_ptr<HostedViewerSession>> Open(PluginViewerOptions Options,
             std::shared_ptr<storage::IContentSource> Source, QString ParentWindow,
             std::uint32_t Width, std::uint32_t Height, storage::OperationContext Context = {});
@@ -100,7 +103,7 @@ namespace hc::plugins
         struct Task;
         storage::Result<std::shared_ptr<HostedViewerSession>> open(std::vector<PluginViewerOptions> Candidates,
             std::optional<PluginViewerSelectionPolicy> Policy, std::shared_ptr<storage::IContentSource> Source,
-            QString ParentWindow, std::uint32_t Width, std::uint32_t Height, storage::OperationContext Context);
+            QString ParentWindow, std::uint32_t Width, std::uint32_t Height, storage::OperationContext Context, bool Preparing = false);
         static void run(const std::shared_ptr<HostedViewerSession::State>& State, std::vector<PluginViewerOptions> Candidates,
             std::optional<PluginViewerSelectionPolicy> Policy,
             std::shared_ptr<storage::IContentSource> Source, QString ParentWindow,

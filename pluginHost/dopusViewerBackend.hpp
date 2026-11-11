@@ -14,6 +14,7 @@ namespace hc::plugins
         ~DopusViewerBackend();
         storage::Result<storage::Unit> Initialize();
         storage::Result<QJsonObject> Probe();
+        storage::Result<HWND> Prepare(HWND Parent, int Width, int Height);
         storage::Result<HWND> Open(HWND Parent, const QString& File, int Width, int Height, bool Preview);
         void Close();
         void Resize(int Width, int Height);

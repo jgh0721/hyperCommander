@@ -14,6 +14,7 @@
 #include <QFileInfo>
 #include <QColorSpace>
 #include <QSignalBlocker>
+#include <QToolBar>
 qintptr ScintillaQtDirectBackend::Send(unsigned int Message, quintptr W, qintptr L) const
 { return m_editor ? m_editor->send(Message,W,L) : 0; }
 ITextEditorBackend* QTextView::Backend() const { return m_editor; }
@@ -95,6 +96,22 @@ bool QPDFView::AddAnnotation(int Page, const QString& Kind,const QRectF& Rect,co
 void QPDFView::CommitContent() { m_modified=false; }
 
 void InitializePortedViewResources() { Q_INIT_RESOURCE(HyperEditor); }
+
+void PrepareDocumentTextRuntime(QWidget* Parent)
+{
+    // Initialize Scintilla, fonts, styles and toolbar resources once on the GUI
+    // thread. No path, session, file read, recent entry or recovery document exists.
+    static const bool Prepared = [Parent] {
+        QTextView View(Parent);
+        View.setHotExitEnabled(false);
+        View.ensurePolished();
+        View.Backend()->widget()->ensurePolished();
+        std::unique_ptr<QToolBar> Toolbar(View.createToolBar());
+        if (Toolbar) Toolbar->ensurePolished();
+        return true;
+    }();
+    Q_UNUSED(Prepared);
+}
 
 void InitializeDocumentPdfium(){static const bool Initialized=[] {FPDF_InitLibrary();return true;}();Q_UNUSED(Initialized);}
 

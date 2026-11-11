@@ -14,6 +14,8 @@ class QtPluginViewerController final : public QObject
 public:
     QtPluginViewerController(QWidget* Main, hc::plugins::PluginViewerService::MaterializerFactory Factory, int PreviewIdleMs = 60000);
     ~QtPluginViewerController() override;
+    hc::storage::Result<std::shared_ptr<hc::plugins::HostedViewerSession>> Prepare(QWidget* Anchor,
+        hc::plugins::PluginViewerOptions Options);
     hc::storage::Result<std::shared_ptr<hc::plugins::HostedViewerSession>> Open(QWidget* Anchor,
         hc::plugins::PluginViewerOptions Options, std::shared_ptr<hc::storage::IContentSource> Source);
     hc::storage::Result<std::shared_ptr<hc::plugins::HostedViewerSession>> OpenAutomatic(QWidget* Anchor,
@@ -47,6 +49,7 @@ class QtPluginViewerSurface final : public QWidget
 public:
     explicit QtPluginViewerSurface(QtPluginViewerController* Controller, QWidget* Parent = nullptr);
     ~QtPluginViewerSurface() override;
+    void Prepare(hc::plugins::PluginViewerOptions Options);
     void Open(hc::plugins::PluginViewerOptions Options, std::shared_ptr<hc::storage::IContentSource> Source);
     void OpenAutomatic(std::vector<hc::plugins::PluginViewerOptions> Candidates,
         std::shared_ptr<hc::storage::IContentSource> Source, hc::plugins::PluginViewerSelectionPolicy Policy);
@@ -75,7 +78,7 @@ protected:
     void focusInEvent(QFocusEvent* Event) override;
 private:
     void open(std::vector<hc::plugins::PluginViewerOptions> Candidates,
-        std::shared_ptr<hc::storage::IContentSource> Source, std::optional<hc::plugins::PluginViewerSelectionPolicy> Policy);
+        std::shared_ptr<hc::storage::IContentSource> Source, std::optional<hc::plugins::PluginViewerSelectionPolicy> Policy, bool Preparing = false);
     void beginPreparation(const QString& Name);
     void poll();
     void resizeNative();
@@ -90,7 +93,7 @@ private:
     std::shared_ptr<hc::plugins::HostedViewerSession> session_;
     std::unique_ptr<hc::document::ImageTraceSpan> presentationTrace_;
     bool appearancePending_ = true;
-    bool ready_ = false;
+    bool ready_ = false, preparing_ = false;
     bool preview_ = false, interacted_ = false;
     std::optional<hc::plugins::PluginViewerOptions> previewOptions_;
     std::uint64_t preparedSequence_ = 0;

@@ -111,6 +111,7 @@
 #include <fmstyle/ThemeManager.h>
 #include "core/ExternalChangeWatcher.h"
 void InitializePortedViewResources();
+void PrepareDocumentTextRuntime(QWidget* Parent);
 
 namespace hc::document
 {
@@ -2122,6 +2123,12 @@ namespace hc::document
                 }
             }
             return {{"accepted",true}};
+        }
+        if (Action == "prepareViewer") {
+            if (!hosted_ || !documents_.empty()) return Error("viewer-prepare-not-empty");
+            PrepareDocumentTextRuntime(this);
+            viewerCloseRequested_ = false;
+            return {{"accepted", true}};
         }
         if (Action == "open" || Action == "openHost") {
             const auto Reply=open(Request["path"].toString(), Action == "openHost", Request["sourceToken"].toString(), Request["broker"].toBool(), {}, {}, Request["readPrefix"].toObject());

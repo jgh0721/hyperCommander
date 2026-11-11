@@ -129,8 +129,12 @@ namespace hc::plugins
         {
             if (container_) return Invalid("host-viewer-already-open");
             preview_ = Request["preview"].toBool();
+            const bool Preparing = Request["prepareOnly"].toBool();
+            if (Request.contains("prepareOnly") && (!Preparing || !dopus_ || manifest_.id_ != "builtin.hyperviewer"
+                || manifest_.compatibility_ != "hyperviewer-v1" || preview_ || Request["file"].toString().size()))
+                return Invalid("host-viewer-prepare-fields");
             const bool HasPrefix = Request.contains("readPrefix");
-            const auto FieldCount = Request.size() - (HasPrefix ? 1 : 0);
+            const auto FieldCount = Request.size() - (HasPrefix ? 1 : 0) - (Preparing ? 1 : 0);
             if (HasPrefix && (manifest_.id_ != "builtin.hyperviewer" || !Request["readPrefix"].isObject()
                 || Request["readPrefix"].toObject()["bytes"].toString().size() > 87384)) return Invalid("host-viewer-prefix");
             if ((FieldCount != 5 && FieldCount != 6) || (FieldCount == 6 && !Request["preview"].isBool())
@@ -141,8 +145,8 @@ namespace hc::plugins
             // Width and height are physical pixels at this Win32 boundary.
             // The Qt presentation adapter performs the logical/DPR conversion.
             const auto File = Request["file"].toString();
-            if (File.isEmpty() || File.size() > 32767 || File.contains(QChar(0)) || !QFileInfo(File).isAbsolute()) return Invalid("host-viewer-file");
-            if (!QFileInfo(File).isFile()) return Error{ErrorCategory::NotFound, "host-viewer-file-missing", {"plugin-viewer"}};
+            if (!Preparing && (File.isEmpty() || File.size() > 32767 || File.contains(QChar(0)) || !QFileInfo(File).isAbsolute())) return Invalid("host-viewer-file");
+            if (!Preparing && !QFileInfo(File).isFile()) return Error{ErrorCategory::NotFound, "host-viewer-file-missing", {"plugin-viewer"}};
             bool Parsed = false; const auto ParentValue = Request["parent"].toString().toULongLong(&Parsed, 16);
             const auto Parent = reinterpret_cast<HWND>(static_cast<quintptr>(ParentValue)); DWORD Process = 0;
             if (!Parsed || !Parent || !GetWindowThreadProcessId(Parent, &Process) || Process != parentProcess_) return Invalid("host-viewer-parent");
@@ -158,7 +162,8 @@ namespace hc::plugins
             if (dopus_)
             {
                 if (QCoreApplication::instance()) QCoreApplication::instance()->setProperty("hc.readPrefix", Request["readPrefix"].toObject());
-                auto Opened = dopus_->Open(container_, File, Request["width"].toInt(), Request["height"].toInt(), Request["preview"].toBool());
+                auto Opened = Preparing ? dopus_->Prepare(container_, Request["width"].toInt(), Request["height"].toInt())
+                    : dopus_->Open(container_, File, Request["width"].toInt(), Request["height"].toInt(), Request["preview"].toBool());
                 if (!Opened.HasValue()) { close(); return Opened.Failure(); } viewer_ = Opened.Value();
             }
             else viewer_ = wlx_->Open(container_, File, Flags);

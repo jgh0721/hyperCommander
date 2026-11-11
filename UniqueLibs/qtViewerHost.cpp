@@ -10,8 +10,6 @@
 #include <QVBoxLayout>
 #include <QJsonArray>
 #include <QElapsedTimer>
-#include <QTemporaryDir>
-#include <QFile>
 #include <QCoreApplication>
 #include "storageProviders.hpp"
 #include "pluginHost/manifestFile.hpp"
@@ -154,24 +152,12 @@ void QtViewerHost::PreparePlugin(hc::plugins::PluginViewerOptions Options)
     // keeps its native parent for adoption, so no reparenting or new HWND grant
     // is needed on F3. CloseAll cancels it like every other viewer session.
     preparedOptions_ = Options;
-    auto Source = preparedSource(); if (!Source) return;
     auto* Window = new ViewerDialog(main_); Window->resize(1100,760);
     Window->winId(); // Pin the hidden dialog root before granting native access.
     auto* Layout = new QVBoxLayout(Window); Layout->setContentsMargins(0,0,0,0);
     auto* Surface = new QtPluginViewerSurface(pluginViewer_.get(),Window); Layout->addWidget(Surface);
     parkPrepared(Window, Surface);
-    Surface->Open(std::move(Options), std::move(Source));
-}
-std::shared_ptr<hc::storage::IContentSource> QtViewerHost::preparedSource()
-{
-    if (!preparedDirectory_) preparedDirectory_ = std::make_unique<QTemporaryDir>();
-    if (!preparedDirectory_->isValid()) return {};
-    const auto Path = preparedDirectory_->filePath("prepare.txt");
-    QFile Empty(Path); if (!Empty.open(QIODevice::WriteOnly)) return {}; Empty.close();
-    auto Provider = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
-    auto Entry = Provider->Resolve({hc::storage::LocatorKind::Local, Path.toStdString()}, {}).get();
-    if (!Entry.HasValue()) return {};
-    return std::make_shared<hc::storage::ProviderContentSource>(Provider, Entry.Value());
+    Surface->Prepare(std::move(Options));
 }
 bool QtViewerHost::matchesPrepared(const hc::plugins::PluginViewerOptions& Options) const
 {
@@ -202,11 +188,12 @@ void QtViewerHost::retirePlugin(QDialog* Window, QtPluginViewerSurface* Surface,
     const auto Details = Surface->Details();
     if (Recyclable && !closing_ && Surface->IsReady() && Details.documentChannel_
         && Details.documentState_["closeRequested"].toBool() && (!preparedSurface_ || !preparedSurface_->IsReady()))
-        if (auto Source = preparedSource()) {
+        {
             if (preparedWindow_) preparedWindow_->deleteLater(); // A slower, still starting warm viewer.
             parkPrepared(Window, Surface);
-            if (Surface->OpenPrepared({{std::move(Source), {}}})) return;
-            preparedWindow_ = nullptr; preparedSurface_ = nullptr;
+            // ESC already closed the documents. Keep that empty workspace; the next
+            // OpenDocuments clears closeRequested without inventing a placeholder.
+            return;
         }
     Surface->Close(); Window->deleteLater();
 }
@@ -269,7 +256,7 @@ QDialog* QtViewerHost::OpenPlugin(hc::plugins::PluginViewerOptions Options,
     connect(Surface, &QtPluginViewerSurface::Ready, Phase, [Surface, Window, Phase, Expected, Completion, Standalone, EpubStandalone, Waiting = Pending,
         PreparedInputs, Inputs = std::move(Inputs)](const QString&) mutable {
         if (std::exchange(Waiting, false)) {
-            // The adopted warm viewer finished starting on its placeholder.
+            // The adopted empty viewer finished initializing its document channel.
             if (Surface->OpenPrepared(std::exchange(PreparedInputs, {}))) return;
             Window->setWindowTitle(QObject::tr("문서를 열 수 없습니다: %1").arg("document-channel-not-ready"));
             if (EpubStandalone) Window->show();

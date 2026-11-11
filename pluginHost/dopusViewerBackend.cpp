@@ -84,6 +84,19 @@ namespace hc::plugins
         if (native_) SendMessageW(window_, dopus::ViewerResize, 0, MAKELPARAM(Width, Height));
         else InvalidateRect(window_, nullptr, FALSE);
     }
+    Result<HWND> DopusViewerBackend::Prepare(HWND Parent, int Width, int Height)
+    {
+        Close();
+        if (!ResetEvent(abort_.Get())) return HostError("dopus-viewer-reset-abort", GetLastError());
+        auto Create = Export<dopus::CreateViewer>(module_, "DVP_CreateViewer");
+        if (!Create) return Unsupported("dopus-viewer-create-export");
+        RECT Rect{0, 0, Width, Height}; auto Window = Create(Parent, &Rect, 0); DWORD Process = 0;
+        if (!Window || !GetWindowThreadProcessId(Window, &Process) || Process != GetCurrentProcessId() || !IsChild(Parent, Window))
+            return Invalid("dopus-viewer-window-parent");
+        window_ = Window; native_ = true; preview_ = false;
+        SendMessageW(Window, dopus::ViewerSetAbort, 0, reinterpret_cast<LPARAM>(abort_.Get()));
+        return Window;
+    }
     Result<HWND> DopusViewerBackend::Open(HWND Parent, const QString& File, int Width, int Height, bool Preview)
     {
         Close();

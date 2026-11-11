@@ -86,6 +86,14 @@ QtPluginViewerController::~QtPluginViewerController()
     for (auto& Record : records_) delete Record.anchor_.data();
     records_.clear(); delete parking_.data();
 }
+Result<std::shared_ptr<HostedViewerSession>> QtPluginViewerController::Prepare(QWidget* Anchor, PluginViewerOptions Options)
+{
+    if (!Anchor || !service_) return Error{ErrorCategory::InvalidRequest, "viewer-parent-required", {"wlx"}};
+    auto Prepared = service_->Prepare(std::move(Options), QString::number(Anchor->winId(), 16),
+        qRound(Anchor->width() * Anchor->devicePixelRatioF()), qRound(Anchor->height() * Anchor->devicePixelRatioF()));
+    if (Prepared.HasValue()) records_.push_back({Anchor, Prepared.Value()});
+    return Prepared;
+}
 Result<std::shared_ptr<HostedViewerSession>> QtPluginViewerController::Open(QWidget* Anchor, PluginViewerOptions Options, std::shared_ptr<IContentSource> Source)
 {
     if (!Anchor || !service_) return Error{ErrorCategory::InvalidRequest, "viewer-parent-required", {"wlx"}};
@@ -213,15 +221,18 @@ QtPluginViewerSurface::QtPluginViewerSurface(QtPluginViewerController* Controlle
     timer_ = new QTimer(this); timer_->setInterval(16); connect(timer_, &QTimer::timeout, this, &QtPluginViewerSurface::poll);
 }
 QtPluginViewerSurface::~QtPluginViewerSurface() { Close(); }
+void QtPluginViewerSurface::Prepare(PluginViewerOptions Options)
+{ open({std::move(Options)}, {}, {}, true); }
 void QtPluginViewerSurface::Open(PluginViewerOptions Options, std::shared_ptr<IContentSource> Source)
 { open({std::move(Options)}, std::move(Source), {}); }
 void QtPluginViewerSurface::OpenAutomatic(std::vector<PluginViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, PluginViewerSelectionPolicy Policy)
 { open(std::move(Candidates), std::move(Source), std::move(Policy)); }
 PluginViewerDetails QtPluginViewerSurface::Details() const
 { return session_ ? session_->Details() : PluginViewerDetails{}; }
-void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, std::optional<PluginViewerSelectionPolicy> Policy)
+void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, std::shared_ptr<IContentSource> Source, std::optional<PluginViewerSelectionPolicy> Policy, bool Preparing)
 {
     Close();
+    preparing_ = Preparing;
     preview_ = !Candidates.empty() && Candidates.front().purpose_ == ViewerPurpose::QuickPreview;
     if (!controller_) { status_->setText(tr("뷰어를 사용할 수 없습니다.")); emit Failed("viewer-host-unavailable"); return; }
     presentationTrace_=std::make_unique<hc::document::ImageTraceSpan>("viewer.prepare-to-present");
@@ -263,7 +274,8 @@ void QtPluginViewerSurface::open(std::vector<PluginViewerOptions> Candidates, st
         if (OpenPrepared({{Source, previewOptions_->writer_}})) { SetReturnKey(returnKey_); return; }
         Close(); open(std::move(Candidates), std::move(Source), std::move(Policy)); return;
     }
-    auto Opened = Policy ? controller_->OpenAutomatic(anchor_, std::move(Candidates), std::move(Source), std::move(*Policy))
+    auto Opened = Preparing ? controller_->Prepare(anchor_, std::move(Candidates.front()))
+        : Policy ? controller_->OpenAutomatic(anchor_, std::move(Candidates), std::move(Source), std::move(*Policy))
         : controller_->Open(anchor_, std::move(Candidates.front()), std::move(Source));
     if (!Opened.HasValue())
     {
@@ -317,6 +329,7 @@ bool QtPluginViewerSurface::OpenPrepared(std::vector<HostedViewerSession::Docume
     const auto Name = Inputs.empty() || !Inputs.front().source_ ? QString{} : QString::fromStdString(Inputs.front().source_->Describe().name_);
     auto Queued = session_->OpenDocuments(std::move(Inputs), true);
     if (!Queued.HasValue()) return false;
+    preparing_ = false;
     preparedSequence_ = Queued.Value(); ready_ = false; timer_->start();
     beginPreparation(Name);
     static_cast<QStackedLayout*>(layout())->setCurrentWidget(preparation_);
@@ -468,7 +481,8 @@ void QtPluginViewerSurface::poll()
         }
     }
     if(ContentReady&&Details.documentChannel_){
-        const auto Documents=Details.documentState_["documents"].toArray();ContentReady=!Documents.isEmpty();
+        const auto Documents=Details.documentState_["documents"].toArray();
+        ContentReady=preparing_ ? Documents.isEmpty() && Details.documentState_["idle"].toBool() : !Documents.isEmpty();
         for(const auto& Item:Documents){
             const auto Record=Item.toObject();
             const bool EpubSource=Record["view"].toObject()["viewId"]=="epub" && Record["sourceReady"].toBool()

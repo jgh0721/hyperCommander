@@ -272,6 +272,9 @@ namespace hc::plugins
     PluginViewerService::PluginViewerService(MaterializerFactory Factory, std::size_t MaxSessions)
         : factory_(std::move(Factory)), maxSessions_(MaxSessions) {}
     PluginViewerService::~PluginViewerService() { CancelAll(); tasks_.clear(); }
+    Result<std::shared_ptr<HostedViewerSession>> PluginViewerService::Prepare(PluginViewerOptions Options,
+        QString ParentWindow, std::uint32_t Width, std::uint32_t Height, OperationContext Context)
+    { return open({std::move(Options)}, {}, {}, std::move(ParentWindow), Width, Height, Context, true); }
     Result<std::shared_ptr<HostedViewerSession>> PluginViewerService::Open(PluginViewerOptions Options,
         std::shared_ptr<IContentSource> Source, QString ParentWindow, std::uint32_t Width, std::uint32_t Height, OperationContext Context)
     { return open({std::move(Options)}, {}, std::move(Source), std::move(ParentWindow), Width, Height, Context); }
@@ -281,14 +284,15 @@ namespace hc::plugins
     { return open(std::move(Candidates), Policy, std::move(Source), std::move(ParentWindow), Width, Height, Context); }
     Result<std::shared_ptr<HostedViewerSession>> PluginViewerService::open(std::vector<PluginViewerOptions> Candidates,
         std::optional<PluginViewerSelectionPolicy> Policy, std::shared_ptr<IContentSource> Source, QString ParentWindow,
-        std::uint32_t Width, std::uint32_t Height, OperationContext Context)
+        std::uint32_t Width, std::uint32_t Height, OperationContext Context, bool Preparing)
     {
-        if (!factory_ || !Source || ParentWindow.isEmpty() || Width > 32768 || Height > 32768 || Candidates.size() > 1000
+        if (!factory_ || (!Source && !Preparing) || ParentWindow.isEmpty() || Width > 32768 || Height > 32768 || Candidates.size() > 1000
             || std::any_of(Candidates.begin(), Candidates.end(), [](const auto& Item) { return Item.flags_ < 0 || Item.flags_ > 511; }))
             return Invalid("invalid-wlx-session-request");
         if (!maxSessions_ || maxSessions_ > 16) return Invalid("invalid-wlx-session-budget");
         const bool BuiltinViewer=Candidates.size()==1&&Candidates.front().approval_.reviewed_.id_=="builtin.hyperviewer"
             &&Candidates.front().approval_.reviewed_.compatibility_=="hyperviewer-v1";
+        if (Preparing && (!BuiltinViewer || Source || Policy)) return Invalid("viewer-prepare-builtin-required");
         Collect(); if (!BuiltinViewer&&tasks_.size() >= maxSessions_) return Error{ErrorCategory::BudgetExceeded, "viewer-session-budget", {"wlx"}};
         auto State = std::make_shared<HostedViewerSession::State>(); State->size_ = {Width, Height};
         State->details_.viewer_.id_ = QUuid::createUuid().toString(QUuid::Id128).toStdString();
@@ -422,6 +426,43 @@ namespace hc::plugins
                     return Error{ErrorCategory::AccessDenied, "plugin-configured-binary-mismatch", {"wlx"}};
                 HostProfile Profile; Profile.formats_ = {PluginFormat::Wlx, PluginFormat::DopusViewer}; Profile.extensions_ = {Extension::Viewer, Extension::Metadata, Extension::ContentConvert}; Profile.supportsIsolation_ = true;
                 auto Admission = Admit(Inspected.Value().manifest_, Options.approval_, Profile); if (!Admission.HasValue()) return Admission.Failure();
+                if (!Source) {
+                    // Preparation owns a process/window/channel, never an input lease or document.
+                    // Keep the same inspected manifest and admission checks as a real open.
+                    if (!Dopus || Inspected.Value().manifest_.id_ != "builtin.hyperviewer"
+                        || Inspected.Value().manifest_.compatibility_ != "hyperviewer-v1") return Invalid("viewer-prepare-builtin-required");
+                    auto Broker = ImageArchiveBroker::Start(); if (!Broker.HasValue()) return Broker.Failure();
+                    ArchiveBroker = std::move(Broker.Value());
+                    PreparationStage("host");
+                    auto Started = PluginProcess::Start(Options.executable_, Options.manifestPath_, Options.approval_, Options.limits_,
+                        Context, Options.defaultIniPath_, ArchiveBroker->Endpoint());
+                    if (!Started.HasValue()) return Started.Failure(); Host = std::move(Started.Value());
+                    ArchiveBroker->BindClient(Host->Snapshot().processId_);
+                    auto Probe = Host->Probe(Context); if (!Probe.HasValue()) return Probe.Failure();
+                    std::pair<std::uint32_t, std::uint32_t> Size;
+                    { std::lock_guard Lock(State->mutex_); Size = *State->size_; }
+                    auto Opened = Host->ViewerCall(WireKind::ViewerOpen, {{"parent", ParentWindow}, {"file", ""},
+                        {"width", int(Size.first)}, {"height", int(Size.second)}, {"flags", Options.flags_},
+                        {"preview", false}, {"prepareOnly", true}}, Context);
+                    if (!Opened.HasValue()) return Opened.Failure();
+                    Document = std::make_unique<DocumentViewerClient>(*Host);
+                    auto Hello = Document->Hello(Context); if (!Hello.HasValue()) return Hello.Failure();
+                    auto Prepared = Document->Execute({{"action", "prepareViewer"}}, Context);
+                    if (!Prepared.HasValue()) return Prepared.Failure();
+                    auto Current = Document->Call("DocumentState", {}, {}, {}, Context);
+                    if (!Current.HasValue()) return Current.Failure();
+                    if (!Current.Value()["documents"].toArray().isEmpty()) return Invalid("viewer-prepare-has-documents");
+                    std::lock_guard Lock(State->mutex_);
+                    State->details_.host_ = Host->Snapshot();
+                    if (State->size_ && *State->size_ == Size) State->size_.reset();
+                    State->details_.window_ = Opened.Value()["window"].toString();
+                    State->details_.child_ = Opened.Value()["viewer"].toString();
+                    State->details_.documentChannel_ = true;
+                    State->details_.documentState_ = Current.Value();
+                    State->details_.viewer_.status_ = ViewerStatus::Ready;
+                    State->details_.selectedCandidate_ = Index;
+                    return true;
+                }
                 if (!Entry)
                 {
                     Entry = Source->Describe();

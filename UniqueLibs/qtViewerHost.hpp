@@ -4,7 +4,6 @@
 
 class QDialog;
 class QTimer;
-class QTemporaryDir;
 class QtViewerHost final : public QObject
 {
 public:
@@ -24,7 +23,6 @@ public:
 protected:
     bool eventFilter(QObject* Object, QEvent* Event) override;
 private:
-    std::shared_ptr<hc::storage::IContentSource> preparedSource();
     bool matchesPrepared(const hc::plugins::PluginViewerOptions& Options) const;
     void parkPrepared(QDialog* Window, QtPluginViewerSurface* Surface);
     void retirePlugin(QDialog* Window, QtPluginViewerSurface* Surface, bool Recyclable);
@@ -32,7 +30,6 @@ private:
     QPointer<QDialog> preparedWindow_;
     QPointer<QtPluginViewerSurface> preparedSurface_;
     std::optional<hc::plugins::PluginViewerOptions> preparedOptions_;
-    std::unique_ptr<QTemporaryDir> preparedDirectory_;
     bool closing_ = false;
     std::unique_ptr<hc::viewer::ViewerService> service_;
     std::vector<QPointer<QtViewerSurface>> surfaces_;

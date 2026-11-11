@@ -280,6 +280,11 @@ private slots:
         Current = true; Input->release_ = false; Token = Controller.Capture(Request); QVERIFY(Controller.Open(Token)); QTRY_VERIFY(Input->verifies_ >= 3); Candidates = Catalog({}); Input->release_ = true; QTRY_COMPARE(Finished.size(), 3); QCOMPARE(Finished.back()[2].toString(), QString("document-handler-changed")); QCOMPARE(Launches, 0);
     }
     void preparedViewerAdoption() {
+        QTemporaryDir Config;
+        const auto PreviousConfig=qApp->property("documentViewsConfigDir");
+        const auto PreviousEnvironment=qgetenv("HC_DOCUMENT_CONFIG_DIR");
+        qApp->setProperty("documentViewsConfigDir",Config.path());qputenv("HC_DOCUMENT_CONFIG_DIR",Config.path().toUtf8());
+        const auto RestoreConfig=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",PreviousConfig);qputenv("HC_DOCUMENT_CONFIG_DIR",PreviousEnvironment);});
         QTemporaryDir Temp;hc::settings::Repository Settings(Temp.path());
         const auto RealFile=qEnvironmentVariable("HC_F3_INPUT_FILE");
         const auto Path=RealFile.isEmpty()?Temp.filePath("tiny.txt"):RealFile;
@@ -289,7 +294,8 @@ private slots:
         auto Source=std::make_shared<ProviderContentSource>(Provider,Entry.Value());
         QWidget Main; QVBoxLayout Layout(&Main); QLineEdit Input; Layout.addWidget(&Input);
         Main.show(); Input.setFocus(); QVERIFY(QTest::qWaitForWindowActive(&Main));
-        QtViewerHost Host(&Main,[]{return MakeNativeMaterializer(QDir::tempPath().toStdString());});
+        std::atomic<int> Materializations{0};
+        QtViewerHost Host(&Main,[&]{++Materializations;return MakeNativeMaterializer(QDir::tempPath().toStdString());});
         auto Drain=qScopeGuard([&]{Host.CloseAll();while(!Host.IsIdle())QTest::qWait(10);});
         const auto Options=BuildDocumentHandlerCatalog(Settings,QCoreApplication::applicationDirPath()).targets_.at("builtin.hyperviewer").plugin_;
         SetActiveWindow(reinterpret_cast<HWND>(Main.winId()));const auto Active=GetActiveWindow();Host.PreparePlugin(Options);
@@ -297,7 +303,13 @@ private slots:
         auto* Surface=Prepared->findChild<QtPluginViewerSurface*>();QVERIFY(Surface);
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(),15000);QVERIFY(Prepared->isHidden());QVERIFY(GetActiveWindow()==Active||!GetActiveWindow());
         const auto Pid=Surface->Details().host_.processId_;
-        const auto InitialToken=Surface->Details().documentState_["documents"].toArray()[0].toObject()["sourceToken"].toString();
+        QCOMPARE(Materializations.load(),0);
+        QVERIFY(Surface->Details().documentChannel_);
+        QVERIFY(Surface->Details().documentState_["documents"].toArray().isEmpty());
+        QVERIFY(Surface->Snapshot().source_.name_.empty());
+        QCOMPARE(Surface->Snapshot().bytesRead_,std::uint64_t(0));
+        const auto RecentPath=qApp->property("documentViewsConfigDir").toString()+"/recent-documents.json";
+        QVERIFY(!QFileInfo::exists(RecentPath));
         QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Main.winId()))); Input.setFocus();
         bool Completed=false;QElapsedTimer Timer;Timer.start();
         auto* Opened=Host.OpenPlugin(Options,{{Source,{}}},"Prepared F3",[&](bool Ok,const QString&){Completed=Ok;});
@@ -306,7 +318,7 @@ private slots:
         QCOMPARE(Surface->Details().documentState_["documents"].toArray().size(),1);
         QCOMPARE(Surface->Snapshot().source_.name_,Entry.Value().name_);
         const auto Loaded=Surface->Details().documentState_["documents"].toArray()[0].toObject();
-        QVERIFY(Loaded["sourceToken"].toString()!=InitialToken);QVERIFY(!Loaded["view"].toObject()["readOnly"].toBool());
+        QVERIFY(!Loaded["sourceToken"].toString().isEmpty());QVERIFY(!Loaded["view"].toObject()["readOnly"].toBool());
         if(!RealFile.isEmpty()) {
             QCOMPARE(Loaded["view"].toObject()["viewId"].toString(),QString("image"));
             QTRY_VERIFY_WITH_TIMEOUT(!Surface->Details().documentState_["documents"].toArray()[0].toObject()["view"].toObject()["rendering"].toBool(),30000);
@@ -382,8 +394,7 @@ private slots:
         Host.PreparePlugin(Options);
         auto* Warm=Main.findChild<QDialog*>("hc.document.prepared");QVERIFY(Warm);
         auto* Surface=Warm->findChild<QtPluginViewerSurface*>();QVERIFY(Surface);
-        QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(),15000);
-        const auto Pid=Surface->Details().host_.processId_;
+        QVERIFY(!Surface->IsReady()); // F3 may arrive before initialization finishes.
         const auto Open=[&](const QString& Name) {
             bool Done=false,Ok=false;QString Error;QElapsedTimer Timer;Timer.start();
             auto* Window=Host.OpenPlugin(Options,Input(Name),Name,[&](bool Result,const QString& Code){Done=true;Ok=Result;Error=Code;});
@@ -395,12 +406,13 @@ private slots:
             QPointer<QDialog> Guard=Window;QTest::keyClick(Window,Qt::Key_Escape);
             [&]{QTRY_VERIFY_WITH_TIMEOUT(Guard&&Guard->isHidden()&&Guard->objectName()=="hc.document.prepared",10000);}();
         };
-        // The re-warm scheduled by the first open is still starting when ESC
-        // arrives, so the closed viewer becomes the warm viewer instead.
+        // ESC keeps the same empty viewer without loading another document.
         auto* First=Open("first.txt");QCOMPARE(First,Warm);
+        const auto Pid=Surface->Details().host_.processId_;QVERIFY(Pid);
         Escape(First);if(QTest::currentTestFailed())return;
         QCOMPARE(Main.findChildren<QDialog*>("hc.document.prepared").size(),1);
-        // F3 right after ESC adopts the viewer while it still resets.
+        QTRY_VERIFY(Surface->Details().documentState_["documents"].toArray().isEmpty());
+        // F3 right after ESC reuses the empty process and native window.
         auto* Second=Open("second.txt");QCOMPARE(Second,Warm);
         QCOMPARE(Surface->Details().host_.processId_,Pid);
         auto Documents=Surface->Details().documentState_["documents"].toArray();
@@ -426,7 +438,7 @@ private slots:
         auto* Surface=Prepared->findChild<QtPluginViewerSurface*>(); QVERIFY(Surface);
         QTRY_VERIFY_WITH_TIMEOUT(Surface->IsReady(),15000);
         auto Source=std::make_shared<ProviderContentSource>(Provider,Entry.Value());
-        // Until the replacing open completes, the state still describes the placeholder.
+        // The empty prepared workspace must be replaced by the real image.
         bool Completed=false;
         auto* Opened=Host.OpenPlugin(Options,{{Source,{}}},"Oversized F3",[&](bool,const QString&){Completed=true;}); QCOMPARE(Opened,Prepared);
         QTRY_VERIFY_WITH_TIMEOUT(Completed, 30000);
@@ -502,6 +514,9 @@ int main(int Argc, char** Argv) {
         QCoreApplication App(Argc, Argv); QJsonArray Values; for (const auto& Arg : App.arguments()) Values.append(Arg);
         QFile File(QString::fromLocal8Bit(Argv[2])); if (!File.open(QIODevice::WriteOnly)) return 2; File.write(QJsonDocument(Values).toJson()); File.close(); QThread::msleep(700); return 0;
     }
-    QApplication App(Argc, Argv); DocumentP4Tests Tests; return QTest::qExec(&Tests, Argc, Argv);
+    QApplication App(Argc, Argv);
+    QTemporaryDir Config; App.setProperty("documentViewsConfigDir",Config.path());
+    qputenv("HC_DOCUMENT_CONFIG_DIR",Config.path().toUtf8());
+    DocumentP4Tests Tests; return QTest::qExec(&Tests, Argc, Argv);
 }
 #include "tstDocumentP4.moc"
