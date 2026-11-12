@@ -24,7 +24,7 @@ class QTabWidget;
 class QFormLayout;
 class QTreeWidget;
 class QPushButton;
-namespace fm::ui { class SegmentedControl; }
+namespace fm::ui { class SegmentedControl; class Tag; }
 namespace Qtitan { class TreeGrid; class GridTreeView; }
 namespace hc::system { class ServiceMonitor; class ProcessCollector; }
 
@@ -84,8 +84,11 @@ public:
     void Refresh();
     void TogglePause();
     bool Paused() const { return paused_; }
+    // 사용자가 고른 보기 방식. 트리로 돌아갈 때 숫자 열 정렬은 트리에서 쓰던 정렬로 되돌린다.
     void SetFlat( bool Flat );
     bool Flat() const;
+    // 숫자 열 정렬 때문에 목록으로 바뀐 상태인가
+    bool AutoFlat() const { return autoFlat_; }
     void SetIncludeDrivers( bool Include );
     bool IncludeDrivers() const { return includeDrivers_; }
     // 바로 가기 메뉴. Global이 비어 있으면 커서 행 근처에 연다.
@@ -105,9 +108,20 @@ protected:
     bool eventFilter( QObject* Watched, QEvent* Event ) override;
 
 private:
+    struct SortKey
+    {
+        int column = -1;   // 모델 열
+        int order = 0;     // Qtitan::SortOrder
+    };
     void buildProcessBar( QWidget* Bar );
     void buildServiceBar( QWidget* Bar );
     void configureGrid();
+    SortKey primarySort() const;
+    void applySortMode();
+    void applyFlat( bool Flat );
+    void restoreTreeSort();
+    void updateAutoFlatTag();
+    void fitColumns();
     void applyCursorColors();
     void sample();
     void startMonitor();
@@ -137,6 +151,18 @@ private:
     bool                               panelActive_ = false;
     bool                               includeDrivers_ = false;
     bool                               expandedOnce_ = false;
+    // 숫자 열 정렬로 목록이 된 상태. 그 정렬이 풀리면 트리로 돌아간다.
+    bool                               autoFlat_ = false;
+    // 트리에서 마지막으로 쓴 정렬(숫자 열 제외). [트리]로 돌아갈 때 되살린다.
+    SortKey                            treeSort_;
+    // 머리글 클릭은 정렬 지우기·설정으로 sortingChanged를 두 번 낸다. 다음 차례에 한 번만 판단한다.
+    QTimer                             sortModeTimer_;
+    // 글자 열이 남는 너비를 나눌 비율(모델 열 → 선호 너비). 사용자가 열을 끌어 바꾸면 그때의 너비로 바꾼다.
+    QHash<int, int>                    preferredWidths_;
+    // 마지막으로 맞춘 글자 열 너비. 지금 너비와 다르면 사용자가 바꾼 것이다.
+    QHash<int, int>                    fittedWidths_;
+    QTimer                             fitTimer_;
+    bool                               fitting_ = false;
     hc::sys::Settings                  settings_;
     QLabel*                            summary_ = nullptr;
     QLabel*                            notice_ = nullptr;
@@ -146,6 +172,7 @@ private:
     QComboBox*                         searchScope_ = nullptr;
     QCheckBox*                         keepAncestors_ = nullptr;
     fm::ui::SegmentedControl*          mode_ = nullptr;
+    fm::ui::Tag*                       autoFlatTag_ = nullptr;
     fm::ui::SegmentedControl*          stateFilter_ = nullptr;
     QComboBox*                         interval_ = nullptr;
     QToolButton*                       pause_ = nullptr;

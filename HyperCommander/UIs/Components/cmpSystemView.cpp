@@ -21,6 +21,7 @@
 #include <QtitanGrid.h>
 #include <fmstyle/ThemeManager.h>
 #include <fmwidgets/SegmentedControl.h>
+#include <fmwidgets/Tag.h>
 
 /// 프레임워크
 #include <QCheckBox>
@@ -42,6 +43,28 @@ using hc::sys::ServiceListModel;
 
 namespace {
 CommandUiBridge* Bridge() { return TyStCommandMgr::GetInstance()->Bridge(); }
+
+// 프로세스 보기의 숫자 열. 오른쪽 정렬하고 너비를 고정하며, 이 열로 정렬하면 목록으로 바꾼다.
+bool IsNumericColumn( int Column )
+{
+    switch( Column )
+    {
+        case ProcessTreeModel::Pid: case ProcessTreeModel::Cpu: case ProcessTreeModel::PrivateBytes: case ProcessTreeModel::WorkingSet:
+        case ProcessTreeModel::Threads: case ProcessTreeModel::Handles: case ProcessTreeModel::Session: case ProcessTreeModel::Io:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Qtitan 머리글(paint_column_header_contents)에서 글자 칸이 잃는 너비: 좌우 여백, 정렬 아이콘과 그 간격,
+// 글자 칸(CE_ToolBoxTabLabel)의 안쪽 여백 4 + 8. 모자라면 정렬한 'CPU'가 'C...'로 잘린다.
+// 필터 단추 자리(GridColumn::extraWidth)는 Qtitan이 최소 너비에 따로 더하므로 넣지 않는다.
+int HeaderChrome( const QWidget* Grid )
+{
+    const auto* Style = Grid->style();
+    return 3 * Style->pixelMetric( QStyle::PM_HeaderMargin, nullptr, Grid ) + Style->pixelMetric( QStyle::PM_SmallIconSize, nullptr, Grid ) + 12;
+}
 
 class Sparkline final : public QWidget
 {
@@ -290,6 +313,10 @@ CSystemView::CSystemView( Kind Value, QWidget* Parent )
         // 한 표본의 행 추가·삭제·값 변경을 Qtitan이 한 번에 처리하게 한다.
         connect( processes_, &ProcessTreeModel::sigBatchStarted, this, [this] { view_->beginUpdate(); } );
         connect( processes_, &ProcessTreeModel::sigBatchFinished, this, [this] { view_->endUpdate(); } );
+        sortModeTimer_.setSingleShot( true );
+        sortModeTimer_.setInterval( 0 );
+        connect( &sortModeTimer_, &QTimer::timeout, this, &CSystemView::applySortMode );
+        connect( view_, &Qtitan::GridViewBase::sortingChanged, this, [this] { sortModeTimer_.start(); } );
         branchStyle_ = new TreeBranchStyle( this );
         branchStyle_->lines_ = settings_.treeLines;
         grid_->setStyle( branchStyle_ );
@@ -310,6 +337,11 @@ CSystemView::CSystemView( Kind Value, QWidget* Parent )
         connect( services_, &ServiceListModel::sigBatchFinished, this, [this] { view_->endUpdate(); } );
     }
     configureGrid();
+    // 크기·열 구성이 바뀌면 다음 차례에 한 번 너비를 맞춘다(뷰포트 Resize는 eventFilter에서).
+    fitTimer_.setSingleShot( true );
+    fitTimer_.setInterval( 0 );
+    connect( &fitTimer_, &QTimer::timeout, this, &CSystemView::fitColumns );
+    connect( view_, &Qtitan::GridViewBase::columnsUpdated, this, [this] { if( !fitting_ ) fitTimer_.start(); } );
     Layout->addWidget( grid_, 1 );
     grid_->installEventFilter( this );
     grid_->viewport()->installEventFilter( this );
@@ -397,6 +429,11 @@ void CSystemView::buildProcessBar( QWidget* Bar )
     mode_->setCurrentIndex( 0 );
     mode_->setItemToolTips( { tr( "부모-자식 트리" ), tr( "평면 목록" ) } );
     connect( mode_, &fm::ui::SegmentedControl::currentIndexChanged, this, [this]( int Index ) { SetFlat( Index == 1 ); } );
+    autoFlatTag_ = new fm::ui::Tag( {}, fm::ui::Tag::Info, Bar );
+    autoFlatTag_->setObjectName( "hc.system.autoFlat" );
+    autoFlatTag_->setCompact( true );
+    autoFlatTag_->setToolTip( tr( "숫자 열로 정렬하는 동안 목록으로 보입니다. 다른 열로 정렬하거나 [트리]를 누르면 트리로 돌아갑니다." ) );
+    autoFlatTag_->hide();
     interval_ = new QComboBox( Bar );
     interval_->setObjectName( "hc.system.interval" );
     for( const int Ms : { 500, 1000, 2000, 5000 } )
@@ -411,6 +448,7 @@ void CSystemView::buildProcessBar( QWidget* Bar )
     pause_->setToolTip( tr( "갱신 일시 정지·재개 (Pause)" ) );
     connect( pause_, &QToolButton::toggled, this, [this]( bool Checked ) { if( Checked != paused_ ) TogglePause(); } );
     Layout->addWidget( summary_, 1 );
+    Layout->addWidget( autoFlatTag_ );
     Layout->addWidget( mode_ );
     Layout->addWidget( interval_ );
     Layout->addWidget( pause_ );
@@ -504,18 +542,22 @@ void CSystemView::configureGrid()
         Specs = { { ServiceListModel::Name, 170, true },     { ServiceListModel::DisplayName, 250, true }, { ServiceListModel::State, 140, true },
                   { ServiceListModel::StartType, 150, true }, { ServiceListModel::Account, 130, true },     { ServiceListModel::Pid, 64, true },
                   { ServiceListModel::Description, 320, true }, { ServiceListModel::Type, 200, false },    { ServiceListModel::ImagePath, 320, false } };
+    const QFontMetrics Metrics( grid_->font() );
+    const int Chrome = HeaderChrome( grid_ );
     for( const auto& Item : Specs )
     {
-        auto* Column = static_cast<Qtitan::GridTableColumn*>( view_->addColumn( Item.column, Model->headerData( Item.column, Qt::Horizontal, Qt::DisplayRole ).toString() ) );
-        Column->setWidth( Item.width );
+        const auto Caption = Model->headerData( Item.column, Qt::Horizontal, Qt::DisplayRole ).toString();
+        auto* Column = static_cast<Qtitan::GridTableColumn*>( view_->addColumn( Item.column, Caption ) );
+        const bool Numeric = kind_ == Kind::Processes ? IsNumericColumn( Item.column ) : Item.column == ServiceListModel::Pid;
+        // 머리글 글자와 정렬 표시가 잘리지 않는 너비
+        const int HeaderWidth = Metrics.horizontalAdvance( Caption ) + Chrome;
+        Column->setMinWidth( Numeric ? HeaderWidth : std::max( HeaderWidth, 72 ) );
+        Column->setWidth( std::max( Item.width, HeaderWidth ) );
+        // 열이 패널 너비를 채운다. 숫자 열은 정한 너비를 지키고, 글자 열이 남는 너비를 이 비율로 나눈다(fitColumns).
+        if( !Numeric )
+            preferredWidths_.insert( Item.column, Item.width );
         Column->setVisible( Item.visible );
-        const auto Alignment = Qt::Alignment( Model->index( 0, Item.column ).data( Qt::TextAlignmentRole ).toInt() );
-        const bool Right = ( kind_ == Kind::Processes && ( Item.column == ProcessTreeModel::Pid || Item.column == ProcessTreeModel::Cpu || Item.column == ProcessTreeModel::PrivateBytes
-                                                           || Item.column == ProcessTreeModel::WorkingSet || Item.column == ProcessTreeModel::Threads
-                                                           || Item.column == ProcessTreeModel::Handles || Item.column == ProcessTreeModel::Session || Item.column == ProcessTreeModel::Io ) )
-                           || ( kind_ == Kind::Services && Item.column == ServiceListModel::Pid );
-        Q_UNUSED( Alignment );
-        Column->setTextAlignment( ( Right ? Qt::AlignRight : Qt::AlignLeft ) | Qt::AlignVCenter );
+        Column->setTextAlignment( ( Numeric ? Qt::AlignRight : Qt::AlignLeft ) | Qt::AlignVCenter );
         Column->dataBinding()->setSortRole( Qt::ItemDataRole( Role ) );
     }
     if( kind_ == Kind::Services )
@@ -689,7 +731,21 @@ QString CSystemView::Search() const
 
 void CSystemView::SetFlat( bool Flat )
 {
-    if( !processes_ || processes_->Flat() == Flat )
+    if( !processes_ )
+        return;
+    autoFlat_ = false;
+    // 트리에는 숫자 열 정렬을 두지 않는다. 형제끼리만 비교하므로 바쁜 프로세스가 조상의 순위에 묶여 묻힌다.
+    if( !Flat && IsNumericColumn( primarySort().column ) )
+        restoreTreeSort();
+    applyFlat( Flat );
+    updateAutoFlatTag();
+}
+
+bool CSystemView::Flat() const { return processes_ && processes_->Flat(); }
+
+void CSystemView::applyFlat( bool Flat )
+{
+    if( processes_->Flat() == Flat )
         return;
     const auto Current = CurrentProcess();
     processes_->SetFlat( Flat );
@@ -699,7 +755,130 @@ void CSystemView::SetFlat( bool Flat )
     emit sigSummaryChanged();
 }
 
-bool CSystemView::Flat() const { return processes_ && processes_->Flat(); }
+CSystemView::SortKey CSystemView::primarySort() const
+{
+    // 머리글 클릭은 정렬을 지우고 새로 더하며, Shift+클릭은 뒤에 붙인다. 첫 규칙이 주 정렬이다.
+    const auto* Rules = view_->modelController()->sortRules();
+    const auto* Rule = Rules && Rules->sortRulesCount() > 0 ? Rules->sortRule( 0 ) : nullptr;
+    if( !Rule || !Rule->dataBinding )
+        return {};
+    return { Rule->dataBinding->column(), int( Rule->order ) };
+}
+
+void CSystemView::applySortMode()
+{
+    if( !processes_ )
+        return;
+    const auto Sort = primarySort();
+    if( IsNumericColumn( Sort.column ) )
+    {
+        if( !processes_->Flat() )
+        {
+            autoFlat_ = true;
+            applyFlat( true );
+        }
+    }
+    else
+    {
+        if( !processes_->Flat() )
+            treeSort_ = Sort;
+        // 자동 전환의 이유(숫자 열 정렬)가 사라졌다. 지금 정렬을 트리에 그대로 쓴다.
+        if( std::exchange( autoFlat_, false ) )
+        {
+            treeSort_ = Sort;
+            applyFlat( false );
+        }
+    }
+    updateAutoFlatTag();
+}
+
+void CSystemView::restoreTreeSort()
+{
+    view_->beginUpdate();
+    for( int Index = 0; Index < view_->getColumnCount(); ++Index )
+        if( auto* Column = static_cast<Qtitan::GridTableColumn*>( view_->getColumn( Index ) ); Column->sortOrder() != Qtitan::SortNone )
+            Column->setSortOrder( Qtitan::SortNone );
+    if( treeSort_.column >= 0 && treeSort_.order != Qtitan::SortNone )
+        if( auto* Column = static_cast<Qtitan::GridTableColumn*>( view_->getColumnByModelColumn( treeSort_.column ) ) )
+            Column->setSortOrder( Qtitan::SortOrder( treeSort_.order ) );
+    view_->endUpdate();
+}
+
+void CSystemView::fitColumns()
+{
+    // Qtitan의 열 자동 너비는 줄인 너비를 열에 그대로 써 두어, 한 번 좁아지면(창을 띄우기 전의 작은 영역 포함)
+    // 글자 열의 비율을 잃었다(사용자 열이 설명 열만큼 넓어졌다). 선호 너비의 비율로 남는 너비를 직접 나눈다.
+    const int Area = grid_->viewport()->width();
+    if( Area <= 0 || fitting_ )
+        return;
+    QVector<Qtitan::GridTableColumn*> Texts;
+    int Fixed = 0;
+    bool Dragged = false;
+    for( int Index = 0; Index < view_->getColumnCount(); ++Index )
+    {
+        auto* Column = static_cast<Qtitan::GridTableColumn*>( view_->getColumn( Index ) );
+        if( !Column->isVisible() )
+            continue;
+        const int Model = Column->dataBinding()->column();
+        if( !preferredWidths_.contains( Model ) )
+        {
+            Fixed += Column->width();
+            continue;
+        }
+        Texts.append( Column );
+        if( const auto Fitted = fittedWidths_.constFind( Model ); Fitted != fittedWidths_.cend() && *Fitted != Column->width() )
+            Dragged = true;
+    }
+    if( Texts.isEmpty() )
+        return;
+    // 사용자가 글자 열을 끌어 바꿨으면 지금의 비율을 새 기준으로 삼는다.
+    if( Dragged )
+        for( auto* Column : Texts )
+            preferredWidths_[Column->dataBinding()->column()] = Column->width();
+    fitting_ = true;
+    view_->beginUpdate();
+    // 최소 너비에 걸리는 열을 하나씩 빼고, 남는 너비를 나머지 열에 비율로 나눈다(나머지 픽셀은 마지막 열에).
+    auto Free = Texts;
+    int Rest = Area - Fixed;
+    for( bool Clamped = true; Clamped && !Free.isEmpty(); )
+    {
+        Clamped = false;
+        qint64 Weight = 0;
+        for( auto* Column : Free )
+            Weight += std::max( 1, preferredWidths_.value( Column->dataBinding()->column() ) );
+        int Left = Rest;
+        for( int Index = 0; Index < Free.size(); ++Index )
+        {
+            auto* Column = Free[Index];
+            const qint64 Share = std::max( 1, preferredWidths_.value( Column->dataBinding()->column() ) );
+            const int Want = Index + 1 == Free.size() ? Left : int( qint64( Left ) * Share / Weight );
+            Left -= Want;
+            Weight -= Share;
+            Column->setWidth( std::max( 1, Want ) );
+            if( Column->width() > Want )
+            {
+                Rest -= Column->width();
+                Free.removeAt( Index );
+                Clamped = true;
+                break;
+            }
+        }
+    }
+    view_->endUpdate();
+    fittedWidths_.clear();
+    for( auto* Column : Texts )
+        fittedWidths_.insert( Column->dataBinding()->column(), Column->width() );
+    fitting_ = false;
+}
+
+void CSystemView::updateAutoFlatTag()
+{
+    if( !autoFlatTag_ )
+        return;
+    if( autoFlat_ )
+        autoFlatTag_->setText( tr( "%1 정렬로 자동 전환" ).arg( processes_->headerData( primarySort().column, Qt::Horizontal, Qt::DisplayRole ).toString() ) );
+    autoFlatTag_->setVisible( autoFlat_ );
+}
 
 void CSystemView::SetIncludeDrivers( bool Include )
 {
@@ -977,6 +1156,8 @@ QJsonObject CSystemView::CaptureState() const
     if( processes_ )
     {
         State["flat"] = processes_->Flat();
+        State["autoFlat"] = autoFlat_;
+        State["treeSort"] = QJsonObject{ { "column", treeSort_.column }, { "order", treeSort_.order } };
         State["searchScopes"] = processProxy_->Scopes();
         State["keepAncestors"] = processProxy_->KeepAncestors();
     }
@@ -989,7 +1170,9 @@ QJsonObject CSystemView::CaptureState() const
     for( int Index = 0; Index < view_->getColumnCount(); ++Index )
     {
         auto* Column = static_cast<Qtitan::GridTableColumn*>( view_->getColumn( Index ) );
-        Columns.append( QJsonObject{ { "column", Column->dataBinding()->column() }, { "width", Column->width() }, { "visible", Column->isVisible() },
+        // 글자 열은 패널 너비에 맞춘 값이 아니라 비율의 기준(선호 너비)을 남긴다. 좁을 때 저장해도 비율을 잃지 않는다.
+        const int Model = Column->dataBinding()->column();
+        Columns.append( QJsonObject{ { "column", Model }, { "width", preferredWidths_.value( Model, Column->width() ) }, { "visible", Column->isVisible() },
                                      { "order", Column->visualIndex() }, { "sort", int( Column->sortOrder() ) } } );
     }
     State["columns"] = Columns;
@@ -1021,6 +1204,25 @@ void CSystemView::RestoreState( const QJsonObject& State )
         if( Sort >= 0 && Sort <= 2 ) Column->setSortOrder( Qtitan::SortOrder( Sort ) );
     }
     view_->endUpdate();
+    // 저장된 글자 열 너비를 비율의 기준으로 삼아 지금 패널 너비에 다시 맞춘다.
+    fittedWidths_.clear();
+    for( const auto& Value : State["columns"].toArray() )
+    {
+        const auto Item = Value.toObject();
+        if( const int Model = Item["column"].toInt( -1 ); preferredWidths_.contains( Model ) && Item["width"].toInt() >= 24 )
+            preferredWidths_[Model] = std::min( Item["width"].toInt(), 2000 );
+    }
+    fitTimer_.start();
+    // 저장 당시 숫자 열 정렬로 목록이 되어 있었으면 그 상태를 잇는다. 정렬과 맞지 않으면 applySortMode가 바로잡는다.
+    if( processes_ )
+    {
+        const auto Tree = State["treeSort"].toObject();
+        const int Order = Tree["order"].toInt();
+        if( Tree.contains( "column" ) && !IsNumericColumn( Tree["column"].toInt( -1 ) ) && Order >= 0 && Order <= 2 )
+            treeSort_ = { Tree["column"].toInt( -1 ), Order };
+        autoFlat_ = State["autoFlat"].toBool() && processes_->Flat();
+        updateAutoFlatTag();
+    }
 }
 
 QString CSystemView::PathText() const
@@ -1156,6 +1358,8 @@ bool CSystemView::handleKey( QKeyEvent* Event )
 
 bool CSystemView::eventFilter( QObject* Watched, QEvent* Event )
 {
+    if( Watched == grid_->viewport() && Event->type() == QEvent::Resize )
+        fitTimer_.start();
     // Ctrl+클릭은 커서를 옮기며 그 행의 표시를 바꾼다(파일 목록과 같다).
     if( Watched == grid_->viewport() && Event->type() == QEvent::MouseButtonPress )
     {

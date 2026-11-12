@@ -410,6 +410,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnRealDownloadsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "downloadsGroupingInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewRefreshInputUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewSortModeUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "groupedParentPageKeysUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "groupCaptionHeightUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "smallFolderNavigationUi"
@@ -6362,6 +6363,156 @@ private slots:
             qInfo() << "system-view key" << Press << "focusedGP-before" << Target << "moved" << Moved;
         }
         QCOMPARE(Lost, 0);
+    }
+    void systemViewSortModeUi()
+    {
+        // 트리는 형제끼리만 정렬하므로 숫자 열로 정렬하면 목록으로 바꾼다. 그 정렬이 풀리거나 [트리]를 누르면 트리로 돌아간다.
+        // 열은 패널 너비를 채우고, 숫자 열은 머리글이 잘리지 않는 너비를 지킨다.
+        using hc::sys::ProcessTreeModel;
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); QVERIFY(Panel);
+        auto* System = Panel->ShowSystemView(int(CSystemView::Kind::Processes)); QVERIFY(System);
+        const auto Hide = qScopeGuard([Panel] { Panel->HideSystemView(); });
+        auto* Widget = System->findChild<Qtitan::TreeGrid*>("hc.system.grid"); QVERIFY(Widget);
+        auto* View = Widget->view<Qtitan::GridTreeView>(); QVERIFY(View);
+        auto* Mode = System->findChild<fm::ui::SegmentedControl*>("hc.system.mode"); QVERIFY(Mode);
+        auto* Tag = System->findChild<QWidget*>("hc.system.autoFlat"); QVERIFY(Tag);
+        QTRY_VERIFY_WITH_TIMEOUT(System->Processes()->HasPid(GetCurrentProcessId()) && View->getRowCount() > 8, 15000);
+        // 첫 표본은 기준점이라 CPU가 비어 있다. 두 번째 표본 뒤에 값을 고정해 순서를 비교한다.
+        QTRY_VERIFY_WITH_TIMEOUT(System->Processes()->Totals().cpu >= 0, 15000);
+        System->TogglePause(); QTRY_VERIFY(System->Paused());
+        const auto Resume = qScopeGuard([System] { if (System->Paused()) System->TogglePause(); });
+        const auto ColumnOf = [View](int ModelColumn) { return static_cast<Qtitan::GridTableColumn*>(View->getColumnByModelColumn(ModelColumn)); };
+        auto* Name = ColumnOf(ProcessTreeModel::Name); auto* Cpu = ColumnOf(ProcessTreeModel::Cpu); auto* Memory = ColumnOf(ProcessTreeModel::PrivateBytes);
+        QVERIFY(Name && Cpu && Memory);
+        // 머리글 클릭과 같은 순서로 sortingChanged가 두 번 난다: 정렬을 지우고 한 열을 정한다.
+        const auto Click = [View](Qtitan::GridTableColumn* Column, Qtitan::SortOrder Order) {
+            for (int Index = 0; Index < View->getColumnCount(); ++Index)
+                static_cast<Qtitan::GridTableColumn*>(View->getColumn(Index))->setSortOrder(Qtitan::SortNone);
+            Column->setSortOrder(Order);
+        };
+        const auto Settle = [] { QTest::qWait(100); };
+        QCOMPARE(System->Flat(), false);
+
+        // 트리에서 이름 순 정렬은 트리에 남는다.
+        Click(Name, Qtitan::SortAscending); Settle();
+        QVERIFY(!System->Flat()); QVERIFY(!System->AutoFlat()); QVERIFY(Tag->isHidden());
+
+        // CPU 정렬 → 목록. 위에서부터 CPU가 줄어든다.
+        Click(Cpu, Qtitan::SortDescending);
+        QTRY_VERIFY(System->Flat()); QVERIFY(System->AutoFlat()); QCOMPARE(Mode->currentIndex(), 1);
+        QTRY_VERIFY(Tag->isVisible()); QVERIFY(Tag->property("text").toString().contains("CPU"));
+        if (!qEnvironmentVariableIsEmpty("HC_UI_ARTIFACT_DIR")) {
+            QTest::qWait(300);
+            QVERIFY(System->grab().save(QDir(qEnvironmentVariable("HC_UI_ARTIFACT_DIR")).filePath("system-processes-autoflat.png")));
+        }
+        {
+            const int Rows = std::min(40, View->getRowCount()); QVERIFY(Rows > 8);
+            double Previous = std::numeric_limits<double>::max();
+            for (int Row = 0; Row < Rows; ++Row) {
+                const auto Index = View->getRow(Row).modelIndex(ProcessTreeModel::Cpu);
+                QVERIFY2(!Index.parent().isValid(), "목록 보기에는 자식 행이 없다");
+                const double Value = Index.data(ProcessTreeModel::SortRole).toDouble();
+                QVERIFY2(Value <= Previous, qPrintable(QString("row %1: %2 > %3").arg(Row).arg(Value).arg(Previous)));
+                Previous = Value;
+            }
+        }
+        // 다른 숫자 열로 바꿔도 목록에 남고, 표시가 그 열을 가리킨다.
+        Click(Memory, Qtitan::SortDescending); Settle();
+        QVERIFY(System->Flat()); QVERIFY(System->AutoFlat());
+        QTRY_VERIFY(Tag->property("text").toString().contains(QStringLiteral("개인 바이트")));
+
+        // 이름 열로 정렬하면 트리로 돌아가고 그 정렬을 쓴다.
+        Click(Name, Qtitan::SortAscending);
+        QTRY_VERIFY(!System->Flat()); QVERIFY(!System->AutoFlat()); QTRY_VERIFY(Tag->isHidden());
+        QCOMPARE(Mode->currentIndex(), 0); QCOMPARE(Name->sortOrder(), Qtitan::SortAscending);
+
+        // [트리]는 숫자 열 정렬을 버리고 트리에서 쓰던 정렬(이름 오름차순)을 되살린다.
+        Click(Cpu, Qtitan::SortDescending); QTRY_VERIFY(System->AutoFlat());
+        QTest::mouseClick(Mode->button(0), Qt::LeftButton);
+        QTRY_VERIFY(!System->Flat()); QVERIFY(!System->AutoFlat());
+        QCOMPARE(Cpu->sortOrder(), Qtitan::SortNone); QCOMPARE(Name->sortOrder(), Qtitan::SortAscending);
+        Settle(); QVERIFY(!System->Flat()); QVERIFY(Tag->isHidden());
+
+        // 사용자가 고른 목록은 숫자 열 정렬이 풀려도 목록이다.
+        QTest::mouseClick(Mode->button(1), Qt::LeftButton); QTRY_VERIFY(System->Flat());
+        Click(Cpu, Qtitan::SortDescending); Settle(); QVERIFY(!System->AutoFlat()); QVERIFY(Tag->isHidden());
+        Click(Name, Qtitan::SortAscending); Settle(); QVERIFY(System->Flat());
+
+        // 작업공간에 자동 전환 상태가 남고, 복원하면 이어진다.
+        QTest::mouseClick(Mode->button(0), Qt::LeftButton); QTRY_VERIFY(!System->Flat());
+        Click(Cpu, Qtitan::SortDescending); QTRY_VERIFY(System->AutoFlat());
+        const auto State = System->CaptureState();
+        QVERIFY(State["flat"].toBool()); QVERIFY(State["autoFlat"].toBool());
+        QCOMPARE(State["treeSort"].toObject()["column"].toInt(), int(ProcessTreeModel::Name));
+        QTest::mouseClick(Mode->button(0), Qt::LeftButton); QTRY_VERIFY(!System->Flat());
+        System->RestoreState(State); Settle();
+        QVERIFY(System->Flat()); QVERIFY(System->AutoFlat()); QCOMPARE(Cpu->sortOrder(), Qtitan::SortDescending);
+        Click(Name, Qtitan::SortAscending); QTRY_VERIFY(!System->Flat());
+
+        // 열이 패널 너비를 채우고 넘치지 않는다(수정 전에는 보이는 열 합계가 968 px로 고정이었다).
+        // 숫자 열은 너비를 지키고 글자 열이 남는 너비를 나눈다.
+        const QSet<int> Numeric{ProcessTreeModel::Pid, ProcessTreeModel::Cpu, ProcessTreeModel::PrivateBytes, ProcessTreeModel::WorkingSet,
+                                ProcessTreeModel::Threads, ProcessTreeModel::Handles, ProcessTreeModel::Session, ProcessTreeModel::Io};
+        const auto IsText = [&](Qtitan::GridTableColumn* Column) { return !Numeric.contains(Column->dataBinding()->column()); };
+        const auto Widths = [&] {
+            int Total = 0, Minimum = 0; QStringList Parts;
+            for (int Index = 0; Index < View->getColumnCount(); ++Index)
+                if (auto* Column = static_cast<Qtitan::GridTableColumn*>(View->getColumn(Index)); Column->isVisible()) {
+                    Total += Column->width(); Minimum += Column->minWidth();
+                    Parts << QString("%1=%2(min %3%4)").arg(Column->caption()).arg(Column->width()).arg(Column->minWidth()).arg(IsText(Column) ? ",text" : "");
+                }
+            return std::tuple{Total, Minimum, Parts.join(' ')};
+        };
+        // 넘치는 경우는 글자 열이 모두 바닥(최소 너비 + Qtitan의 필터 단추 자리)까지 줄었을 때뿐이다.
+        const auto AtFloor = [&] {
+            for (int Index = 0; Index < View->getColumnCount(); ++Index)
+                if (auto* Column = static_cast<Qtitan::GridTableColumn*>(View->getColumn(Index)); Column->isVisible() && IsText(Column) && Column->width() > Column->minWidth() + 24) return false;
+            return true;
+        };
+        const bool Fits = QTest::qWaitFor([&] {
+            const auto [Total, Minimum, Text] = Widths(); const int Area = Widget->viewport()->width();
+            return Total >= Area - 32 && (Total <= Area || AtFloor());
+        }, 3000);
+        {
+            const auto [Total, Minimum, Text] = Widths();
+            qInfo().noquote() << "system columns: viewport" << Widget->viewport()->width() << "total" << Total << "minimum" << Minimum
+                              << Text;
+        }
+        QVERIFY(Fits);
+        // 넓은 패널에서는 글자 열이 늘어나 오른쪽에 빈 곳이 남지 않는다.
+        {
+            const auto Geometry = main_->geometry(); const bool Maximized = main_->isMaximized();
+            const auto Back = qScopeGuard([&] { if (Maximized) main_->showMaximized(); else main_->setGeometry(Geometry); });
+            if (Maximized) main_->showNormal();
+            main_->resize(std::max(Geometry.width(), 2400), Geometry.height());
+            // 창은 화면 너비까지만 넓어진다. 높은 배율에서 패널이 충분히 넓어지지 않으면 이 검사를 건너뛴다.
+            QTest::qWait(300);
+            if (Widget->viewport()->width() <= 900) { qInfo("system columns (wide): skipped, viewport %d", Widget->viewport()->width()); }
+            else {
+                const bool Wide = QTest::qWaitFor([&] {
+                    const auto [Total, Minimum, Text] = Widths(); const int Area = Widget->viewport()->width();
+                    return Total >= Area - 32 && Total <= Area;
+                }, 3000);
+                const auto [Total, Minimum, Text] = Widths();
+                qInfo().noquote() << "system columns (wide): viewport" << Widget->viewport()->width() << "total" << Total << Text;
+                if (!qEnvironmentVariableIsEmpty("HC_UI_ARTIFACT_DIR"))
+                    QVERIFY(System->grab().save(QDir(qEnvironmentVariable("HC_UI_ARTIFACT_DIR")).filePath("system-processes-wide.png")));
+                QVERIFY(Wide);
+                // 글자 열은 처음 정한 비율(이름 260 : 사용자 140 : 설명 260)을 지킨다. 전에는 사용자 열이 설명 열만큼 넓어졌다.
+                auto* User = ColumnOf(ProcessTreeModel::User); auto* Description = ColumnOf(ProcessTreeModel::Description); QVERIFY(User && Description);
+                QVERIFY2(Description->width() > User->width() * 3 / 2, qPrintable(QString("%1 vs %2").arg(Description->width()).arg(User->width())));
+                QVERIFY2(qAbs(Name->width() - Description->width()) <= 2, qPrintable(QString("%1 vs %2").arg(Name->width()).arg(Description->width())));
+            }
+        }
+        // 숫자 열 머리글(정렬 표시 포함)이 잘리지 않는다: 이전에는 'CPU'가 'C...'로 보였다.
+        // Qtitan 글자 칸 = 너비 - (좌우 여백 + 정렬 아이콘과 간격 + 글자 칸 안쪽 여백 12 + 필터 단추 자리(여백 + 단추 15)).
+        {
+            auto* Style = Widget->style(); const int Margin = Style->pixelMetric(QStyle::PM_HeaderMargin, nullptr, Widget);
+            const int Reserved = 4 * Margin + Style->pixelMetric(QStyle::PM_SmallIconSize, nullptr, Widget) + 12 + 15;
+            for (auto* Column : {Cpu, Memory})
+                QVERIFY2(Column->width() - Reserved >= Widget->fontMetrics().horizontalAdvance(Column->caption()),
+                         qPrintable(QString("%1: %2 - %3").arg(Column->caption()).arg(Column->width()).arg(Reserved)));
+        }
     }
     void columnShellFolderConditionUi()
     {
