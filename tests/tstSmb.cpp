@@ -12928,6 +12928,17 @@ private slots:
             return Row.isValid() && Row.type() == Qtitan::GridRow::DataRow ? Model->GetName(hc::tests::GroupSource(Row.modelIndex(0))) : QString{};
         };
         main_->raise(); main_->activateWindow(); QVERIFY(QTest::qWaitForWindowActive(main_)); emit Panel->sig_NotifyPanelActivated();
+        // Entering a folder starts on '..', which grouping pins above its headers.
+        QVERIFY(QDir(Directory.path()).mkpath("plain/inner")); { QFile File(Directory.filePath("plain/a.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); }
+        Model->Refresh(); QTRY_VERIFY(!Model->IsLoading()); QVERIFY(Find("plain").isValid());
+        for (const bool Grouped : {false, true}) {
+            QVERIFY(View->SetGrouping({Grouped, hc::tests::GroupColumnId(View, "file.modified"), "relativeDate", Qt::DescendingOrder}));
+            const auto Plain = Model->GetFileInfo(Find("plain")); QVERIFY(Plain && Plain->storageEntry_);
+            View->RestoreSelection({}, hc::workspace::SelectionKey(*Plain->storageEntry_)); View->EnsureKeyboardFocusOnView();
+            QTest::keyClick(Grid->viewport(), Qt::Key_Return); QTRY_VERIFY(!Model->IsLoading() && Find("a.txt").isValid());
+            QTRY_COMPARE(FocusName(), QString("..")); QVERIFY(!View->IsGroupFocused());
+            Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading()); QTRY_COMPARE(FocusName(), QString("plain"));
+        }
         for (const auto* Name : {"navigation.hcwcx", "navigation.exe"}) {
             const auto Archive = Directory.filePath(Name);
             { QFile File(Archive); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("HCWCX01"), 7); }
@@ -12937,7 +12948,7 @@ private slots:
             QTest::keyClick(Grid->viewport(), QString(Name).endsWith(".exe") ? Qt::Key_PageDown : Qt::Key_Return,
                 QString(Name).endsWith(".exe") ? Qt::ControlModifier : Qt::NoModifier);
             QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->WorkspaceLocation().kind_ == LocatorKind::Archive, 15000);
-            QVERIFY(!Model->LastNavigationError()); QTRY_VERIFY(!View->IsGroupFocused()); QVERIFY(!FocusName().isEmpty()); QVERIFY(FocusName() != "..");
+            QVERIFY(!Model->LastNavigationError()); QTRY_VERIFY(!View->IsGroupFocused()); QTRY_COMPARE(FocusName(), QString(".."));
             QTRY_COMPARE(Path->accessibleName(), QDir::toNativeSeparators(Archive + '/'));
             const auto Reader = Model->SnapshotProvider(); QVERIFY(Reader);
             Path->EditPath(); auto* Editor = Path->findChild<QLineEdit*>(); QVERIFY(Editor);
@@ -12948,7 +12959,7 @@ private slots:
                 Model->ChangeDirectory("sub"); QTRY_VERIFY(!Model->IsLoading()); QVERIFY(!Model->LastNavigationError());
                 QCOMPARE(names(Model), QStringList{QStringLiteral("한글.txt")}); QCOMPARE(Model->SnapshotProvider(), Reader);
                 QTRY_COMPARE(Path->accessibleName(), QDir::toNativeSeparators(Archive + "/sub"));
-                QTRY_COMPARE(FocusName(), QStringLiteral("한글.txt"));
+                QTRY_COMPARE(FocusName(), QString(".."));
                 Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading()); QCOMPARE(Model->SnapshotProvider(), Reader);
                 QTRY_COMPARE(FocusName(), QString("sub"));
             }
@@ -12959,7 +12970,7 @@ private slots:
             const auto Refreshed = Model->SnapshotProvider();
             { QFile File(Archive); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write("x"), 1); }
             Model->ChangeDirectory("sub"); QTRY_VERIFY(!Model->IsLoading()); QVERIFY(!Model->LastNavigationError());
-            QVERIFY(Model->SnapshotProvider() != Refreshed); QTRY_COMPARE(FocusName(), QStringLiteral("한글.txt"));
+            QVERIFY(Model->SnapshotProvider() != Refreshed); QTRY_COMPARE(FocusName(), QString(".."));
             Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading());
             // Collapsed groups must not absorb the restored file cursor on exit.
             View->SetGroupsExpanded(false); Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading());

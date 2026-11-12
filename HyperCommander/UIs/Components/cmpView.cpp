@@ -1140,11 +1140,12 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         const auto Native = qobject_cast<CFSModel*>(model_);
         if (Native && Native->LastNavigationError()) return;
         if (!ParentNavigation) {
-            // New locations start on a real entry; an empty folder uses '..'.
+            // Entering a location starts on '..' (pinned above group headers);
+            // locations without one start on their first visible entry.
             if (ChangedDirectory) focusFirstEntry();
             return;
         }
-        focusFirstEntry(true);
+        focusFirstEntry();
         if (!hc::settings::AppSettings().Read(hc::settings::Section::General).toObject()["focusPreviousDirectory"].toBool(hc::defaults::DefaultValue("general/focusPreviousDirectory").toBool())) return;
         for (int Index = 0; (!Previous.isEmpty() || !PreviousRoot.isEmpty()) && Index < model_->rowCount(); ++Index) {
             const auto Source = model_->index(Index, 0);

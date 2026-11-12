@@ -209,7 +209,7 @@ private:
     bool startupInput_=false; QString startupInputFocus_; QTimer startupTraceTimer_;
     void initializeGrouping();
     void applyGrouping();
-    void focusFirstEntry(bool IncludeParent = false);
+    void focusFirstEntry();
     void applySetGrouping(const hc::columns::ColumnProfile& Profile);
     void rememberGrouping();
     QHash<QUuid, QVector<hc::columns::GroupingState>> groupingBySet_;
