@@ -38,6 +38,10 @@
     {
       "id": "HC-QTN-013",
       "purpose": "Page up/down from and into pinned rows such as the file manager parent row"
+    },
+    {
+      "id": "HC-QTN-014",
+      "purpose": "Lay out pinned rows when no scrollable row exists, such as the parent row of an empty grouped folder"
     }
   ],
   "integrated": {

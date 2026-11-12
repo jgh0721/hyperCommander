@@ -12938,6 +12938,21 @@ private slots:
             QTest::keyClick(Grid->viewport(), Qt::Key_Return); QTRY_VERIFY(!Model->IsLoading() && Find("a.txt").isValid());
             QTRY_COMPARE(FocusName(), QString("..")); QVERIFY(!View->IsGroupFocused());
             Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading()); QTRY_COMPARE(FocusName(), QString("plain"));
+            // An empty folder holds only the pinned '..'; it must still be laid out (HC-QTN-014).
+            // A short name whose "ab..." minimum is wider than the name must not need tab scrolling.
+            QVERIFY(QDir(Directory.path()).mkpath(".oit")); Model->ChangeDirectory(".oit"); QTRY_VERIFY(!Model->IsLoading());
+            QCOMPARE(Native->getRowCount(), 1); QTRY_COMPARE(FocusName(), QString(".."));
+            const auto ParentLaidOut = [&] {
+                for (const auto& Hit : Grid->hitInfoAll())
+                    if (Hit.info() == Qtitan::GridHitInfo::Cell && Hit.row().rowIndex() == 0) return true;
+                return false;
+            };
+            QTRY_VERIFY2(ParentLaidOut(), "The pinned '..' of an empty folder must be laid out");
+            auto* Strip = Panel->findChild<fm::ui::PanelTabStrip*>("hc.panelTabs"); QVERIFY(Strip);
+            QTRY_COMPARE(Strip->tabBar()->tabText(Strip->tabBar()->currentIndex()), QString(".oit"));
+            for (const auto* Scroll : Strip->tabBar()->findChildren<QToolButton*>()) QVERIFY2(!Scroll->isVisible(), "A short tab name must not show tab scroll buttons");
+            Model->ChangeDirectory(".."); QTRY_VERIFY(!Model->IsLoading()); QTRY_COMPARE(FocusName(), QString(".oit"));
+            QVERIFY(QDir(Directory.path()).rmdir(".oit")); Model->Refresh(); QTRY_VERIFY(!Model->IsLoading());
         }
         for (const auto* Name : {"navigation.hcwcx", "navigation.exe"}) {
             const auto Archive = Directory.filePath(Name);
