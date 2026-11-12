@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/scratchSession.hpp"
 #include <QApplication>
 #include <Windows.h>
 #include "epubProcessView.hpp"
@@ -155,7 +156,9 @@ void EpubSourceEditor::ConfigurePreview(const WebProcessRuntime& Runtime,int Cha
     // Preview navigation state lives in a private directory. Reading appearance
     // follows the global settings through the helper configuration. No
     // candidate publication can add entries to the user's reading history.
-    previewDirectory_=std::make_unique<QTemporaryDir>(QDir::tempPath()+"/HyperCommander-epub-preview-XXXXXX");previewDirectory_->setAutoRemove(false);
+    // In the process's owner-locked scratch folder: kept while the helper may still read it, removed at the
+    // latest by the next start after this process ended.
+    previewDirectory_=std::make_unique<QTemporaryDir>(hc::scratch::Session::Current().Template("epub-preview"));previewDirectory_->setAutoRemove(false);
     if(!previewDirectory_->isValid()){previewError_="epub-preview-directory";reportPreview(tr("미리보기 임시 폴더를 만들지 못했습니다. 소스 편집은 계속할 수 있습니다."));return;}
     previewSettings_=previewDirectory_->path();
     if(ready_)requestPreview();

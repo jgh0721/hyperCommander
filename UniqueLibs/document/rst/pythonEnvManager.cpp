@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "pythonEnvManager.hpp"
+#include "UniqueLibs/scratchSession.hpp"
 
 /// 모듈
 #include "rstSettings.hpp"
@@ -268,7 +269,9 @@ QString PythonEnvManager::previewBuilderScript() const
 
 QString PythonEnvManager::shadowDir() const
 {
-    return QDir( runtimeRoot() ).filePath( QStringLiteral( "shadow" ) );
+    // 저장하지 않은 버퍼의 사본이다. 프로세스의 임시 폴더( 소유 잠금 )에 두어 빌드 중 강제 종료되어도
+    // 다음 실행이 지운다. 예전 위치 rst-runtime/shadow 에 남은 것은 시작 시 정리( temporaryCleanup )가 지운다.
+    return hc::scratch::Session::Current().Folder( QStringLiteral( "rst-shadow" ) );
 }
 
 QString PythonEnvManager::cacheDir() const

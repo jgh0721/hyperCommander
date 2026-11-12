@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "solTypeDefs_Ver.hpp"
 #include "UniqueLibs/productDefaults.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
+#include "UniqueLibs/temporaryCleanup.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
 #include "qtMessageDialog.hpp"
 #include "builtinPluginCatalog.hpp"
@@ -338,6 +340,17 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
     fileJobs_->SetBeforeMutation([Session = QPointer<hc::audio::AudioSession>(audio_)](const QStringList& Paths) { if (Session) Session->ReleaseIfTarget(Paths); });
     // 강제 종료로 남은 미리 듣기 임시 파일은 시작이 끝난 뒤 정리한다(계획 D20).
     QTimer::singleShot(3000, audio_, [Session = audio_] { Session->RecoverTemporaryFiles(); });
+    // The same for the viewers: ended processes' scratch folders, older releases' %TEMP% folders and lease copies
+    // of archive/remote/HWP files whose viewer died. Only the product process, never a test that builds this bridge.
+    if (!QStandardPaths::isTestModeEnabled() && QCoreApplication::applicationName() == "HyperCommander")
+        QTimer::singleShot(3000, this, [] {
+            (void)QtConcurrent::run([] {
+                const auto Temp = QDir::tempPath();
+                hc::scratch::RunStartupCleanup({Temp + "/hc-viewer-content", Temp,
+                    QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/HyperCommander/HyperViewer/cache/rhwp"},
+                    QDir(hc::defaults::edit::RstRuntimeDirectory()).filePath("shadow"));
+            });
+        });
     viewers_ = new QtViewerHost(Main, [] {
         const auto Base=QDir::tempPath()+"/hc-viewer-content";QDir().mkpath(Base);
         MaterializationLimits Limits;Limits.maxActiveFiles_=std::numeric_limits<std::size_t>::max();

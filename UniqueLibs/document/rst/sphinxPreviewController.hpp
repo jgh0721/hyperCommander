@@ -5,6 +5,7 @@
 #include "sphinxDiagnostics.hpp"
 #include "sphinxScanner.hpp"
 
+#include <QLockFile>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -189,6 +190,11 @@ private:
     qint64                              buildStartedAtMs_ = 0;
     /// 이번 요청에서 이미 번들로 한 번 물러섰는가 (무한 재시도 방지).
     bool                                usedFallbackPython_ = false;
+    /// 출력 디렉터리( 프로젝트당 하나, 여러 프로세스가 공유 )의 빌드 잠금. 빌드하는 동안만 쥔다.
+    std::unique_ptr< QLockFile >        buildLock_;
+    /// 다른 프로세스가 같은 출력 디렉터리를 빌드하는 중이라 다시 시도를 예약했는가.
+    bool                                lockRetryScheduled_ = false;
+    bool                                waitingForLock_ = false;
 };
 
 }  // namespace hc::rst

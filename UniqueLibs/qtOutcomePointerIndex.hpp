@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "qtPagedStorage.hpp"
 #include "operationMetrics.hpp"
+#include "scratchSession.hpp"
 #include <QTemporaryFile>
 #include <QDir>
 #include <array>
@@ -14,7 +15,8 @@ namespace hc::operations {
 class OutcomePointerIndex final {
 public:
     using Pointer = std::pair<std::uint64_t,std::uint64_t>;
-    explicit OutcomePointerIndex(bool Buffered) : buffered_(Buffered), file_(QDir::temp().filePath("hc-outcome-index-XXXXXX")) {}
+    // In the process's scratch folder: a crash leaves nothing directly in %TEMP%.
+    explicit OutcomePointerIndex(bool Buffered) : buffered_(Buffered), file_(hc::scratch::Session::Current().Template("outcome-index")) {}
     storage::Result<storage::Unit> Open() {
         if (buffered_) { if (!file_.open()) return failure(); }
         else { auto Created=storage::DiskRecords::Create(); if (!Created.HasValue()) return Created.Failure(); legacy_=Created.Value(); }

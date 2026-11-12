@@ -2,7 +2,7 @@
 #include "sphinxVirtualProject.hpp"
 
 /// 모듈
-#include "rstProcessReaper.hpp"
+#include "UniqueLibs/scratchSession.hpp"
 
 /// UIs
 
@@ -99,36 +99,12 @@ QString sanitizedThemeName( const QString& theme )
     return allowed.match( trimmed ).hasMatch() ? trimmed : QStringLiteral( "alabaster" );
 }
 
-/// 임시 디렉터리 이름에 PID 를 넣는다. 크래시나 강제 종료로 남은 것을
-/// 다음 실행 때 정리하되, 지금 돌고 있는 다른 인스턴스 것은 건드리지 않기 위함.
+/// 프로세스의 임시 폴더( 소유 잠금, hc::scratch ) 안에 둔다. 강제 종료로 남은 것은 다음 실행의
+/// 시작 정리가 소유 잠금으로 판정해 지운다 — PID 로 판정하면 권한이 다른 인스턴스나 재사용된 PID 를
+/// 잘못 볼 수 있다. 예전 위치( %TEMP%\mrst-virtual-<pid>-* )는 같은 시작 정리가 하루 뒤에 지운다.
 QString virtualDirTemplate()
 {
-    return QDir( QDir::tempPath() )
-        .filePath( QStringLiteral( "mrst-virtual-%1-XXXXXX" )
-                      .arg( QCoreApplication::applicationPid() ) );
-}
-
-/// 죽은 인스턴스가 남긴 임시 디렉터리를 지운다.
-void sweepAbandonedDirs()
-{
-    static const QRegularExpression pattern( QStringLiteral( "^mrst-virtual-(\\d+)-" ) );
-
-    QDir temp( QDir::tempPath() );
-    const QFileInfoList entries =
-        temp.entryInfoList( { QStringLiteral( "mrst-virtual-*" ) }, QDir::Dirs | QDir::NoDotAndDotDot );
-
-    for( const QFileInfo& entry : entries )
-    {
-        const QRegularExpressionMatch match = pattern.match( entry.fileName() );
-        if( !match.hasMatch() )
-            continue;
-
-        const qint64 ownerPid = match.captured( 1 ).toLongLong();
-        if( ownerPid == QCoreApplication::applicationPid() || isProcessRunning( ownerPid ) )
-            continue;
-
-        QDir( entry.absoluteFilePath() ).removeRecursively();
-    }
+    return hc::scratch::Session::Current().Template( QStringLiteral( "mrst-virtual" ) );
 }
 
 }  // namespace
@@ -136,9 +112,6 @@ void sweepAbandonedDirs()
 VirtualProjectManager::VirtualProjectManager( QObject* parent )
     : QObject( parent )
 {
-    // QTemporaryDir 은 소멸자에서만 지운다. 강제 종료되면 남으므로 시작할 때
-    // 죽은 인스턴스가 남긴 것들을 치운다.
-    sweepAbandonedDirs();
 }
 
 VirtualProjectManager::~VirtualProjectManager()
@@ -185,7 +158,7 @@ const SphinxProject* VirtualProjectManager::projectFor( const QString& filePath 
         emit logMessage( tr( "가상 프로젝트용 임시 디렉터리를 만들 수 없습니다." ) );
         return nullptr;
     }
-    // 앱이 비정상 종료해도 남지 않도록 자동 삭제를 켜 둔다.
+    // 정상 종료나 테마 변경으로 이 관리자가 놓을 때 지운다. 비정상 종료로 남은 것은 위의 임시 폴더 정리가 맡는다.
     directory->setAutoRemove( true );
 
     const QString confDir = directory->path();

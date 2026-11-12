@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
+#include "UniqueLibs/scratchSession.hpp"
 #include "epubResourceTree.hpp"
 #ifdef Q_OS_WIN
 #include <Windows.h>
@@ -121,7 +122,7 @@ void EpubSourceEditor::startEpubCheck() {
     checkerVerifiedToken_.clear();checkerWorkToken_=validationToken_;checkerLog_.clear();checkerOutput_->clear();checkerReason_.clear();checkerState_="running";
     auto Java=checkerSettings_["javaPath"].toString().trimmed();if(Java.isEmpty())Java=QStandardPaths::findExecutable("java");const auto Jar=checkerSettings_["epubcheckJar"].toString().trimmed();
     if(Java.isEmpty() || !QFileInfo(Java).isFile() || !QFileInfo(Java).isAbsolute() || !QFileInfo(Jar).isFile() || !QFileInfo(Jar).isAbsolute() || QFileInfo(Jar).suffix().compare("jar",Qt::CaseInsensitive)!=0){checkerReason_="configure-java-and-epubcheck";finishEpubCheck(-1,false);return;}
-    checkerDirectory_=std::make_unique<QTemporaryDir>();
+    checkerDirectory_=std::make_unique<QTemporaryDir>(hc::scratch::Session::Current().Template("epubcheck"));
     if(!checkerDirectory_->isValid()){checkerReason_="temporary-directory";finishEpubCheck(-1,false);return;}
     const auto Candidate=QDir(checkerDirectory_->path()).filePath("candidate.epub");QSaveFile File(Candidate);
     if(!File.open(QIODevice::WriteOnly) || File.write(validatedBytes_)!=validatedBytes_.size() || !File.commit()){checkerReason_="temporary-publication";finishEpubCheck(-1,false);return;}

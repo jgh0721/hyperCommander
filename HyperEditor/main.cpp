@@ -2,6 +2,8 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/documentRecoveryMaintenance.hpp"
 #include "UniqueLibs/document/recoveryPromptDialog.hpp"
+#include "UniqueLibs/temporaryCleanup.hpp"
+#include <QtConcurrentRun>
 #include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -107,9 +109,11 @@ int main(int Argc, char** Argv)
     }
     if (Parser.isSet("verify-epub-runtime")) return VerifyEpubRuntime(QFileInfo(Parser.value("verify-epub-runtime")).absoluteFilePath());
     if (Parser.isSet("verify-runtime")) { hc::fonts::RegisterBundledFonts(); return VerifyDocumentRuntime(); }
-    // Keep the template input alive until the dedicated editor has drained and closed.
-    QTemporaryDir NewHwpxDirectory;
     const bool NewHwpx = Parser.isSet("new-hwpx");
+    // Keep the template input alive until the dedicated editor has drained and closed. Only --new-hwpx needs
+    // it; created unconditionally, every start left an empty %TEMP%\HyperEditor-XXXXXX after a crash.
+    std::optional<QTemporaryDir> NewHwpxDirectory;
+    if (NewHwpx) NewHwpxDirectory.emplace(hc::scratch::Session::Current().Template("new-hwpx"));
     if (NewHwpx && (Parser.isSet("rhwp-edit") || Parser.isSet("rhwp-edit-copy") || Parser.isSet("rhwp-view")
         || Parser.isSet("epub-edit") || Parser.isSet("new-epub") || Parser.isSet("find-in-files")
         || Parser.isSet("document-copy") || Parser.isSet("epub-locator") || Parser.isSet("epub-chapter")
@@ -137,9 +141,9 @@ int main(int Argc, char** Argv)
     if (Parser.isSet("rhwp-view") || RhwpEdit) {
         if ((Parser.isSet("rhwp-view") && RhwpEdit) || (Parser.isSet("rhwp-edit") && Parser.isSet("rhwp-edit-copy"))) return 10;
         if (!NewHwpx && Parser.positionalArguments().size() != 1) return 10;
-        const auto Path = NewHwpx ? NewHwpxDirectory.filePath(QObject::tr("새 문서.hwpx"))
+        const auto Path = NewHwpx ? NewHwpxDirectory->filePath(QObject::tr("새 문서.hwpx"))
             : QFileInfo(Parser.positionalArguments().first()).absoluteFilePath();
-        if (NewHwpx && (!NewHwpxDirectory.isValid() || !QFile::copy(":/templates/blank.hwpx", Path))) {
+        if (NewHwpx && (!NewHwpxDirectory->isValid() || !QFile::copy(":/templates/blank.hwpx", Path))) {
             hc::ui::MessageDialog::warning(nullptr, QObject::tr("새 문서"), QObject::tr("새 아래한글 문서를 만들지 못했습니다."));
             return 11;
         }
@@ -362,5 +366,12 @@ int main(int Argc, char** Argv)
     });
     hc::document::startup::Data().EndNamed("editor.entryToTitle");
     QTimer::singleShot(0, &App, [] { hc::document::startup::Data().Aggregate("editor.eventLoopReached", hc::document::startup::Data().Now()); });
+    // Temporary files a crash left behind: ended processes' scratch folders, older releases' %TEMP% folders and
+    // HWP lease copies. After start-up, off the GUI thread; only the product executable does this.
+    QTimer::singleShot(3000, &App, [] {
+        (void)QtConcurrent::run([] {
+            hc::scratch::RunStartupCleanup({hc::defaults::edit::HwpCacheDirectory()}, QDir(hc::defaults::edit::RstRuntimeDirectory()).filePath("shadow"));
+        });
+    });
     return App.exec();
 }

@@ -62,8 +62,12 @@ private slots:
         auto Lease = DiskRecords::Create(); QVERIFY(Lease.HasValue());
         const auto First = Lease.Value()->Directory();
         QDir WatchRoot(First);
+        // %TEMP%\HyperCommander\scratch\s-<pid>-<id>\indexes-XXXXXX\hc-index-XXXXXX: the process's owner-locked
+        // scratch folder, so a crash's indexes are removed at the next start.
         QVERIFY(WatchRoot.cdUp()); const auto Session = WatchRoot.path();
-        QVERIFY(WatchRoot.cdUp()); QCOMPARE(WatchRoot.dirName(), QString("TransientIndexes"));
+        QVERIFY(WatchRoot.dirName().startsWith("indexes-"));
+        QVERIFY(WatchRoot.cdUp()); QVERIFY(WatchRoot.dirName().startsWith("s-"));
+        QVERIFY(WatchRoot.cdUp()); QCOMPARE(WatchRoot.dirName(), QString("scratch"));
         QVERIFY(WatchRoot.cdUp()); QCOMPARE(WatchRoot.dirName(), QString("HyperCommander"));
         QCOMPARE(QDir::cleanPath(WatchRoot.absolutePath()), QDir::cleanPath(QDir(QDir::tempPath()).filePath("HyperCommander")));
         const auto Native = QDir::toNativeSeparators(WatchRoot.path());

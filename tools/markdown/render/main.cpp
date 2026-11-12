@@ -124,6 +124,8 @@ class MarkdownPage final : public QWebEnginePage
 int main(int Argc, char **Argv)
 {
     hc::fonts::StartupFontWarmup FontWarmup(Argc, Argv);
+    // Qt's cache folder follows the application identity; without one it was %LOCALAPPDATA%\hc-markdown-render.
+    QCoreApplication::setOrganizationName(QStringLiteral("HyperCommander")); QCoreApplication::setApplicationName(QStringLiteral("hc-markdown-render"));
     QApplication App(Argc, Argv);
     FontWarmup.WatchFirstWindow();
     App.setQuitOnLastWindowClosed(true);

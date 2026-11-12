@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "documentSearchEngine.hpp"
 #include "core/bodyProjection.hpp"
+#include "UniqueLibs/scratchSession.hpp"
 
 /// 모듈
 #include "UniqueLibs/document/documentTextCodec.hpp"
@@ -52,7 +53,7 @@ bool Engine::initialize() {
         return Library->load();
     }();
     if (!SqliteReady) return false;
-    directory_ = std::make_unique<QTemporaryDir>(QDir::tempPath() + "/hc-document-search-XXXXXX");
+    directory_ = std::make_unique<QTemporaryDir>(hc::scratch::Session::Current().Template("document-search"));
     if (!directory_->isValid()) return false;
     errorLog_=std::make_unique<QFile>(directory_->filePath("search-errors.log"));
     if(!errorLog_->open(QIODevice::WriteOnly|QIODevice::Truncate))return false;

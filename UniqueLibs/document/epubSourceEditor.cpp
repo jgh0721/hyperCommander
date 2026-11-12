@@ -3,6 +3,7 @@
 #include "documentTextCodec.hpp"
 #include "UniqueLibs/settings/unifiedConfig.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
+#include "UniqueLibs/scratchSession.hpp"
 #include "epubResourceTree.hpp"
 #include "text/QTextView.h"
 #include "text/ITextEditorBackend.h"
@@ -293,7 +294,7 @@ DocumentEncoder EpubSourceEditor::CaptureSave(const QString& Destination,bool Sa
             const auto Jar=Settings["epubcheckJar"].toString().trimmed();
             if(!QFileInfo(Java).isAbsolute() || !QFileInfo(Java).isFile() || !QFileInfo(Jar).isAbsolute() || !QFileInfo(Jar).isFile()
                 || QFileInfo(Jar).suffix().compare("jar",Qt::CaseInsensitive)!=0)return Error{ErrorCategory::InvalidRequest,"epubcheck-configure-java-and-epubcheck"};
-            QTemporaryDir Directory;if(!Directory.isValid())return Error{ErrorCategory::Unavailable,"epubcheck-temporary-directory"};
+            QTemporaryDir Directory(hc::scratch::Session::Current().Template("epubcheck"));if(!Directory.isValid())return Error{ErrorCategory::Unavailable,"epubcheck-temporary-directory"};
             const auto Candidate=Directory.filePath("candidate.epub");QSaveFile File(Candidate);File.setDirectWriteFallback(false);
             if(!File.open(QIODevice::WriteOnly) || File.write(Output.bytes_)!=Output.bytes_.size() || !File.commit())return Error{ErrorCategory::Unavailable,"epubcheck-temporary-publication"};
             QProcess Checker;Checker.setProcessChannelMode(QProcess::MergedChannels);

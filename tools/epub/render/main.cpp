@@ -1202,6 +1202,8 @@ int main(int Argc, char** Argv)
     // Match V8 collection pressure to this helper's bounded job instead of a
     // multi-gigabyte desktop-browser heap. Publisher scripts remain disabled.
     qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--js-flags=--max-old-space-size=64");
+    // Qt's cache folder follows the application identity; without one it was %LOCALAPPDATA%\HyperEpubWeb.
+    QCoreApplication::setOrganizationName(QStringLiteral("HyperCommander")); QCoreApplication::setApplicationName(QStringLiteral("HyperEpubWeb"));
     QApplication App(Argc, Argv);
     FontWarmup.WatchFirstWindow();
     // On only when the owner passed HC_UI_STALL_TRACE_CHILD=1; writes under the helper's TEMP.

@@ -217,6 +217,8 @@ QString widthScript( const bool Enabled )
 int main( int Argc, char** Argv )
 {
     hc::fonts::StartupFontWarmup FontWarmup( Argc, Argv );
+    // Qt 의 캐시 폴더는 앱 이름을 따른다. 정하지 않으면 %LOCALAPPDATA%\hc-rst-preview 가 생겼다.
+    QCoreApplication::setOrganizationName( QStringLiteral( "HyperCommander" ) ); QCoreApplication::setApplicationName( QStringLiteral( "hc-rst-preview" ) );
     QApplication App( Argc, Argv );
     FontWarmup.WatchFirstWindow();
     App.setQuitOnLastWindowClosed( true );

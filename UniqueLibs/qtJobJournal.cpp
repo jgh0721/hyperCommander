@@ -148,7 +148,8 @@ namespace hc::operations
                     if (auto Existing=stores_[JobId].lock()) return Existing;
                     // Bounded, session-only result pages retain review and undo
                     // without authoritative frames or durability barriers.
-                    auto Opened=PagedItemOutcomeStore::Create(QDir::tempPath());
+                    // No parent: the per-process index folder, not %TEMP% itself (a crash would leave hc-index-* there).
+                    auto Opened=PagedItemOutcomeStore::Create({});
                     if (Opened.HasValue()) stores_[JobId]=Opened.Value();
                     return Opened;
                 }

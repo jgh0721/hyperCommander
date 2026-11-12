@@ -80,8 +80,10 @@ bool isProcessRunning( const qint64 processId )
         return false;
 
     HANDLE process = OpenProcess( SYNCHRONIZE, FALSE, static_cast< DWORD >( processId ) );
+    // 권한이 모자라 열 수 없는 프로세스( 관리자 권한으로 실행한 다른 인스턴스 등 )도 살아 있다.
+    // 이것을 "없음" 으로 보면 그 인스턴스가 쓰는 폴더를 지우게 된다.
     if( process == nullptr )
-        return false;
+        return GetLastError() == ERROR_ACCESS_DENIED;
 
     // 핸들이 열려도 이미 끝난 프로세스일 수 있다 (좀비). 대기 상태로 구분한다.
     const DWORD wait = WaitForSingleObject( process, 0 );

@@ -27,6 +27,9 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/recoveryPromptDialog.hpp"
 #include "UniqueLibs/settings/unifiedConfig.hpp"
+#include "UniqueLibs/temporaryCleanup.hpp"
+#include "UniqueLibs/document/rst/sphinxPreviewController.hpp"
+#include <QSignalSpy>
 
 using namespace hc::document;
 namespace
@@ -303,6 +306,84 @@ private slots:
         QCOMPARE(recovery::PolicyFrom(Saved).retentionDays_, 7);
         Dialog.findChild<QDialogButtonBox*>("settingsButtons")->button(QDialogButtonBox::RestoreDefaults)->click();
         QCOMPARE(Days->currentData().toInt(), 30);
+    }
+    void scratchSessionsAndSweep()
+    {
+        QTemporaryDir Temp; const auto Root = Temp.filePath("scratch");
+        QString LivePath;
+        {
+            hc::scratch::Session Live(Root); QVERIFY(Live.IsValid()); LivePath = Live.Path();
+            QVERIFY(QFileInfo(Live.Template("epubcheck")).absolutePath() == LivePath);
+            QVERIFY(QFileInfo(Live.Folder("rst-shadow")).isDir());
+            // Another process's folder without a lock yet (just created) and a stale one an hour old.
+            const auto Fresh = Root + "/s-1-0123456789ab", Stale = Root + "/s-2-0123456789ac", Foreign = Root + "/s-not-ours";
+            for (const auto& Path : {Fresh, Stale, Foreign}) QVERIFY(QDir().mkpath(Path));
+            QVERIFY(Put(Stale + "/x.tmp", "x"));
+            // A folder whose owner still runs keeps its lock.
+            const auto Held = Root + "/s-3-0123456789ad"; QVERIFY(QDir().mkpath(Held));
+            QLockFile Owner(Held + "/owner.lock"); QVERIFY(Owner.tryLock());
+            QCOMPARE(hc::scratch::SweepAbandoned(Root), 0);
+            // Folders without a lock are left alone for an hour: age them by sweeping with the clock moved on is
+            // not possible here, so check the rule on a released lock instead.
+            // An ended owner's lock file stays behind as QLockFile wrote it, with a PID that cannot exist on Windows.
+            // Its host lines are kept as written: on Windows QLockFile compares %COMPUTERNAME%, not the DNS name.
+            QFile Written(Held + "/owner.lock"); QVERIFY(Written.open(QIODevice::ReadOnly)); auto Lines = Written.readAll().split('\n'); Written.close();
+            Owner.unlock(); Lines[0] = "999999"; QVERIFY(Put(Held + "/owner.lock", Lines.join('\n')));
+            QCOMPARE(hc::scratch::SweepAbandoned(Root), 1);
+            QVERIFY(!QFileInfo::exists(Held)); QVERIFY(QFileInfo::exists(LivePath)); QVERIFY(QFileInfo::exists(Foreign));
+            QVERIFY(QFileInfo::exists(Fresh)); QVERIFY(QFileInfo::exists(Stale));
+        }
+        QVERIFY(!QFileInfo::exists(LivePath));   // a normal exit removes the session folder
+    }
+    void legacyTemporaryFolders()
+    {
+        QTemporaryDir Temp, Local, Shadow;
+        const auto Dir = [&](const QString& Name) { QVERIFY(QDir().mkpath(Temp.filePath(Name))); };
+        for (const auto& Name : {"HyperCommander-epub-preview-AbCdEf", "hc-index-AbCdEf", "hc-document-search-AbCdEf", "HyperEditor-AbCdEf",
+                 "HyperViewer-AbCdEf", "HyperEditor-TooLong7", "mrst-virtual-0-AbCdEf", "keep-me", "HyperCommander/TransientIndexes/session-AbCdEf"}) Dir(Name);
+        Dir(QStringLiteral("mrst-virtual-%1-AbCdEf").arg(QCoreApplication::applicationPid()));
+        QVERIFY(Put(Temp.filePath("HyperEditor-AbCdEf/candidate.epub"), "copy")); QVERIFY(Put(Temp.filePath("hc-outcome-index-AbCdEf"), "x"));
+        QVERIFY(Put(Shadow.filePath("preview-AbCdEf.shadow"), "unsaved")); QVERIFY(Put(Shadow.filePath("notes.txt"), "keep"));
+        QVERIFY(QDir().mkpath(Local.filePath("HyperEpubWeb/cache/qtpipelinecache-x")));
+        QVERIFY(Put(Local.filePath("hc-rst-preview/cache/data.bin"), "keep"));
+        // Nothing younger than a day goes.
+        QCOMPARE(hc::scratch::SweepLegacy(Temp.path(), Shadow.path(), Local.path(), QDateTime::currentDateTime()), 1);   // only the empty helper folder
+        const auto Removed = hc::scratch::SweepLegacy(Temp.path(), Shadow.path(), Local.path(), QDateTime::currentDateTime().addDays(2));
+        QCOMPARE(Removed, 9);
+        for (const auto& Name : {"HyperCommander-epub-preview-AbCdEf", "hc-index-AbCdEf", "hc-document-search-AbCdEf", "HyperEditor-AbCdEf",
+                 "HyperViewer-AbCdEf", "mrst-virtual-0-AbCdEf", "hc-outcome-index-AbCdEf", "HyperCommander/TransientIndexes"})
+            QVERIFY2(!QFileInfo::exists(Temp.filePath(Name)), Name);
+        for (const auto& Name : {"HyperEditor-TooLong7", "keep-me"}) QVERIFY2(QFileInfo::exists(Temp.filePath(Name)), Name);
+        QVERIFY(QFileInfo::exists(Temp.filePath(QStringLiteral("mrst-virtual-%1-AbCdEf").arg(QCoreApplication::applicationPid()))));
+        QVERIFY(!QFileInfo::exists(Shadow.filePath("preview-AbCdEf.shadow"))); QVERIFY(QFileInfo::exists(Shadow.filePath("notes.txt")));
+        QVERIFY(!QFileInfo::exists(Local.filePath("HyperEpubWeb"))); QVERIFY(QFileInfo::exists(Local.filePath("hc-rst-preview/cache/data.bin")));
+    }
+    void previewBuildWaitsForOtherProcess()
+    {
+        QTemporaryDir Temp;
+        QVERIFY(Put(Temp.filePath("conf.py"), "project = 't'\n")); QVERIFY(Put(Temp.filePath("index.rst"), "Title\n=====\n"));
+        QVERIFY(Put(Temp.filePath("builder.py"), "# not run\n"));
+        hc::rst::PreviewBuildRequest Request;
+        Request.project.projectId = L"lock-test";
+        Request.project.rootPath = Request.project.sourcePath = Temp.path().toStdWString();
+        Request.project.confPath = Temp.filePath("conf.py").toStdWString();
+        Request.project.buildPath = Temp.filePath("_build").toStdWString();
+        // Any executable stands in for Python: the build fails, which is enough to see the lock taken and released.
+        Request.pythonExe = QDir(qEnvironmentVariable("SystemRoot")).filePath("System32/whoami.exe");
+        Request.builderScript = Temp.filePath("builder.py"); Request.sourceFile = Temp.filePath("index.rst");
+        const auto Lock = QDir(hc::rst::SphinxPreviewController::outputDirFor(Request.project)).filePath(".mrr-build.lock");
+        QVERIFY(QDir().mkpath(QFileInfo(Lock).absolutePath()));
+        QLockFile Other(Lock); QVERIFY(Other.tryLock());   // another window building the same project
+        hc::rst::SphinxPreviewController Controller;
+        QSignalSpy Started(&Controller, &hc::rst::SphinxPreviewController::buildStarted), Finished(&Controller, &hc::rst::SphinxPreviewController::buildFinished);
+        QStringList Messages; connect(&Controller, &hc::rst::SphinxPreviewController::logMessage, this, [&](const QString& Text) { Messages.append(Text); });
+        Controller.buildNow(Request);
+        QTest::qWait(1200);
+        QCOMPARE(Started.count(), 0); QVERIFY(Messages.join('\n').contains(QString::fromUtf8("다른 창에서")));
+        Other.unlock();
+        QTRY_COMPARE_WITH_TIMEOUT(Started.count(), 1, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(Finished.count() >= 1, 15000);
+        QLockFile After(Lock); QVERIFY(After.tryLock());   // released when the build ended
     }
 };
 

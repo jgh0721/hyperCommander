@@ -328,6 +328,32 @@ void SphinxPreviewController::startBuild()
 
     const QString buildRoot = toCanonicalQString( active_.project.buildPath );
     activeOutDir_ = outputDir();
+
+    // 출력 디렉터리는 프로젝트마다 하나라 HyperEditor 와 HyperViewer 가 같은 프로젝트를 미리보면 함께 쓴다.
+    // 빌더는 남아 있는 .mrr-building 을 "중단된 빌드의 잔해" 로 보고 HTML 을 지우므로, 두 빌드가 겹치면
+    // 서로의 결과를 지운다. 잠금을 쥔 쪽만 빌드하고, 다른 쪽은 잠금이 풀린 뒤 이어서 빌드한다
+    // ( 같은 입력이면 증분이라 금방 끝나고, 미저장 버퍼가 다르면 그 내용으로 다시 만든다 ).
+    auto lock = std::make_unique< QLockFile >( QDir( activeOutDir_ ).filePath( QStringLiteral( ".mrr-build.lock" ) ) );
+    lock->setStaleLockTime( 0 );   // 끝난 프로세스의 잠금은 PID 로 바로 회수한다.
+    if( !lock->tryLock( 0 ) )
+    {
+        pending_ = active_;
+        hasPending_ = true;
+        if( !waitingForLock_ )
+        {
+            waitingForLock_ = true;
+            emit logMessage( tr( "다른 창에서 이 프로젝트의 미리보기를 빌드하고 있습니다. 끝나면 이어서 빌드합니다." ) );
+        }
+        if( !lockRetryScheduled_ )
+        {
+            lockRetryScheduled_ = true;
+            QTimer::singleShot( 500, this, [ this ] { lockRetryScheduled_ = false; startBuild(); } );
+        }
+        return;
+    }
+    waitingForLock_ = false;
+    buildLock_ = std::move( lock );
+
     activeReportPath_ = QDir( activeOutDir_ ).filePath( QStringLiteral( ".mrr-build.json" ) );
     ++buildSerial_;
 
@@ -405,6 +431,8 @@ void SphinxPreviewController::startBuild()
 void SphinxPreviewController::finishBuild( const int exitCode, const bool crashed, const bool cancelled,
                                            const QString& output )
 {
+    // 빌더 프로세스가 끝났으므로 출력 디렉터리를 놓는다. 아래에서 바로 다시 빌드하면 다시 쥔다.
+    buildLock_.reset();
     const bool brokenPython = !cancelled && !usedFallbackPython_
         && !active_.fallbackPythonExe.isEmpty()
         && active_.fallbackPythonExe != active_.pythonExe

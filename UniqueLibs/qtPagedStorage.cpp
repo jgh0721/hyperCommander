@@ -1,5 +1,6 @@
 ﻿#include "qtPagedStorage.hpp"
 #include "operationMetrics.hpp"
+#include "scratchSession.hpp"
 #include <QDataStream>
 #include <QDir>
 #include <QFile>
@@ -16,12 +17,13 @@ namespace
     std::shared_ptr<QTemporaryDir> IndexSession()
     {
         // Watching TEMP must not observe the indexes used to enumerate TEMP.
-        // Keep per-process records below two stable directories; native panel
+        // Keep per-process records below stable directories; native panel
         // watchers are non-recursive. The session lease outlives every store.
+        // The process's scratch folder is owner-locked, so a crash's indexes go at the next start.
         static const auto Session = [] {
-            const auto Parent = QDir(QDir::tempPath()).filePath("HyperCommander/TransientIndexes");
-            if (!QDir().mkpath(Parent)) return std::shared_ptr<QTemporaryDir>{};
-            return std::make_shared<QTemporaryDir>(QDir(Parent).filePath("session-XXXXXX"));
+            const auto Template = hc::scratch::Session::Current().Template("indexes");
+            if (!QDir().mkpath(QFileInfo(Template).absolutePath())) return std::shared_ptr<QTemporaryDir>{};
+            return std::make_shared<QTemporaryDir>(Template);
         }();
         return Session;
     }
