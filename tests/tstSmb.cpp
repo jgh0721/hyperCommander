@@ -372,7 +372,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "windowSwitchFocusUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -8306,7 +8306,7 @@ private slots:
         QCOMPARE(GetForegroundWindow(), MainWindow);
         // Native embedding can promote the same Qt input to a new HWND.
         QCOMPARE(QApplication::focusWidget(), InitialInput.data());
-        QCOMPARE(GetFocus(), reinterpret_cast<HWND>(InitialInput->effectiveWinId()));
+        QVERIFY(NativeFocusReaches(InitialInput));
         QVERIFY(Preview->Snapshot().id_ != FullSession);
         const auto Details = Preview->Details();
         const auto Child = reinterpret_cast<HWND>(quintptr(Details.child_.toULongLong(nullptr, 16)));
@@ -8550,6 +8550,204 @@ private slots:
             if (Target == 2) QTRY_COMPARE(Command->lineEdit()->text(), QString("x"));
             else QTRY_COMPARE(View->BaseView()->focusedRowIndex(), 3);
         }
+    }
+
+    // Real switching: the system Alt+Tab switcher and clicks on HC areas, not
+    // SetForegroundWindow from the harness. The panel views already own HWNDs
+    // ("as-created"); "native-grid" also gives the grid one, as asking the
+    // viewport for winId() used to. A click on the other panel while
+    // activating HC left the keys in the previous panel's HWND.
+    void windowSwitchFocusUi_data()
+    {
+        QTest::addColumn<bool>("NativePanels");
+        QTest::newRow("as-created") << false;
+        QTest::newRow("native-grid") << true;
+    }
+
+    void windowSwitchFocusUi()
+    {
+        QFETCH(bool, NativePanels);
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Workspace = main_->CaptureWorkspace();
+        const auto Geometry = main_->geometry();
+        const auto Restore = qScopeGuard([&] { main_->setGeometry(Geometry); main_->RestoreWorkspace(Workspace); });
+        for (int I = 0; I < 40; ++I) {
+            QFile File(Directory.filePath(QString("entry%1.txt").arg(I, 2, 10, QChar('0'))));
+            QVERIFY(File.open(QIODevice::WriteOnly)); File.write("switch fixture");
+        }
+        for (auto* Panel : panels_) {
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+            QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(model(Panel)->rowCount(), 41);
+        }
+        const auto Root = reinterpret_cast<HWND>(main_->winId());
+        main_->showNormal();
+        const auto Available = main_->screen()->availableGeometry();
+        main_->setGeometry(Available.x() + 16, Available.y() + 16, std::min(1200, Available.width() - 320), std::min(760, Available.height() - 240));
+        QVERIFY(ActivateTestWindow(Root));
+        auto* Left = panels_[0]; auto* Right = panels_[1];
+        auto* LeftView = qobject_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex())); QVERIFY(LeftView);
+        auto* RightView = qobject_cast<CGridView*>(Right->GetFocusView(Right->CurrentTabIndex())); QVERIFY(RightView);
+        auto* LeftGrid = LeftView->findChild<Qtitan::Grid*>(); QVERIFY(LeftGrid);
+        auto* RightGrid = RightView->findChild<Qtitan::Grid*>(); QVERIFY(RightGrid);
+        if (NativePanels) LeftGrid->viewport()->winId();
+        qInfo() << "Panel HWNDs (view/grid):" << LeftView->internalWinId() << LeftGrid->internalWinId();
+        // Name widgets by panel; the trace below is printed for failed switches only.
+        const auto Side = [&](const QWidget* Widget) -> QString {
+            if (!Widget) return "none";
+            const auto Name = QString("%1(%2)").arg(Widget->metaObject()->className(), Widget->objectName());
+            if (Widget == Left || Left->isAncestorOf(Widget)) return "L:" + Name;
+            if (Widget == Right || Right->isAncestorOf(Widget)) return "R:" + Name;
+            return Name;
+        };
+        struct Trace : QObject, QAbstractNativeEventFilter {
+            QStringList lines_; QElapsedTimer clock_; HWND root_ = nullptr; bool on_ = false;
+            std::function<QString(const QWidget*)> side_;
+            QString name(HWND Window) const { return side_(QWidget::find(reinterpret_cast<WId>(Window))) + "#" + QString::number(quintptr(Window)); }
+            bool nativeEventFilter(const QByteArray&, void* Message, qintptr*) override {
+                const auto* Msg = static_cast<MSG*>(Message);
+                if (!on_ || !Msg->hwnd || !(Msg->hwnd == root_ || IsChild(root_, Msg->hwnd))) return false;
+                const char* Kind = nullptr;
+                switch (Msg->message) {
+                case WM_ACTIVATE: Kind = "WM_ACTIVATE"; break; case WM_ACTIVATEAPP: Kind = "WM_ACTIVATEAPP"; break;
+                case WM_MOUSEACTIVATE: Kind = "WM_MOUSEACTIVATE"; break; case WM_SETFOCUS: Kind = "WM_SETFOCUS"; break;
+                case WM_KILLFOCUS: Kind = "WM_KILLFOCUS"; break; case WM_LBUTTONDOWN: Kind = "WM_LBUTTONDOWN"; break;
+                case WM_LBUTTONUP: Kind = "WM_LBUTTONUP"; break; case WM_KEYDOWN: Kind = "WM_KEYDOWN"; break;
+                case WM_SYSKEYDOWN: Kind = "WM_SYSKEYDOWN"; break; case WM_SYSKEYUP: Kind = "WM_SYSKEYUP"; break;
+                default: break;
+                }
+                if (Kind) lines_ << QString("%1ms %2 %3 w=%4 focus=%5").arg(clock_.elapsed()).arg(Kind).arg(name(Msg->hwnd))
+                    .arg(quintptr(Msg->wParam)).arg(name(GetFocus()));
+                return false;
+            }
+            bool eventFilter(QObject* Object, QEvent* Event) override {
+                if (on_ && Object->isWidgetType() && (Event->type() == QEvent::FocusIn || Event->type() == QEvent::FocusOut))
+                    lines_ << QString("%1ms %2 %3 reason=%4 native=%5 app=%6").arg(clock_.elapsed())
+                        .arg(Event->type() == QEvent::FocusIn ? "FocusIn" : "FocusOut").arg(side_(static_cast<QWidget*>(Object)))
+                        .arg(static_cast<QFocusEvent*>(Event)->reason()).arg(name(GetFocus())).arg(int(QGuiApplication::applicationState()));
+                if (on_ && Object->isWidgetType() && (Event->type() == QEvent::MouseButtonPress))
+                    lines_ << QString("%1ms MouseButtonPress %2").arg(clock_.elapsed()).arg(side_(static_cast<QWidget*>(Object)));
+                return false;
+            }
+        } Tracer;
+        Tracer.root_ = Root; Tracer.side_ = Side; Tracer.clock_.start();
+        qApp->installNativeEventFilter(&Tracer); qApp->installEventFilter(&Tracer);
+        const auto RemoveTracer = qScopeGuard([&] { qApp->removeNativeEventFilter(&Tracer); qApp->removeEventFilter(&Tracer); });
+
+        QProcess Peer;
+        Peer.start(QCoreApplication::applicationFilePath(), {"--focus-peer"});
+        QTRY_VERIFY(Peer.canReadLine());
+        const auto PeerWindow = reinterpret_cast<HWND>(Peer.readLine().trimmed().toULongLong()); QVERIFY(IsWindow(PeerWindow));
+        const auto StopPeer = qScopeGuard([&] {
+            SendMessageW(PeerWindow, WM_APP + 117, reinterpret_cast<WPARAM>(Root), 0);
+            Peer.kill(); Peer.waitForFinished(); QTest::qWait(100);
+        });
+        MONITORINFO Monitor{sizeof(MONITORINFO)}; QVERIFY(GetMonitorInfoW(MonitorFromWindow(Root, MONITOR_DEFAULTTONEAREST), &Monitor));
+        SetWindowPos(PeerWindow, nullptr, Monitor.rcWork.right - 280, Monitor.rcWork.bottom - 200, 260, 180, SWP_NOZORDER | SWP_NOACTIVATE);
+        // The shell lists a new window in Alt+Tab asynchronously; before that the
+        // switcher skips the peer (seen landing on the runner's console).
+        QVERIFY(ActivateTestWindow(PeerWindow)); QTest::qWait(1000);
+
+        const auto Describe = [&] {
+            const auto Foreground = GetForegroundWindow();
+            const auto Native = GetFocus();
+            wchar_t Class[64]{}; if (Native) GetClassNameW(Native, Class, 64);
+            GUITHREADINFO Thread{sizeof(GUITHREADINFO)}; GetGUIThreadInfo(GetWindowThreadProcessId(Foreground, nullptr), &Thread);
+            auto* Bar = main_->findChild<QMenuBar*>();
+            wchar_t ForegroundClass[64]{}; DWORD ForegroundProcess = 0;
+            if (Foreground) { GetClassNameW(Foreground, ForegroundClass, 64); GetWindowThreadProcessId(Foreground, &ForegroundProcess); }
+            return QString("fg=%1[%12 pid %13] root=%2 gaRoot=%3 getFocus=%4 %5[%6] threadFocus=%7 qtFocus=%8 focusWindow=%9 active=%10 menuActive=%11")
+                .arg(quintptr(Foreground)).arg(quintptr(Root)).arg(quintptr(GetAncestor(Foreground, GA_ROOT)))
+                .arg(quintptr(Native)).arg(QString::fromWCharArray(Class)).arg(Side(QWidget::find(reinterpret_cast<WId>(Native))))
+                .arg(quintptr(Thread.hwndFocus)).arg(Side(QApplication::focusWidget()))
+                .arg(QGuiApplication::focusWindow() ? quintptr(QGuiApplication::focusWindow()->winId()) : 0)
+                .arg(Side(QApplication::activeWindow())).arg(Bar && Bar->activeAction() ? QString("yes") : QString("-"))
+                .arg(QString::fromWCharArray(ForegroundClass)).arg(ForegroundProcess == GetCurrentProcessId() ? QString("self") : QString::number(ForegroundProcess));
+        };
+        const auto AltTab = [] {
+            INPUT Keys[4]{}; for (auto& Key : Keys) Key.type = INPUT_KEYBOARD;
+            Keys[0].ki.wVk = VK_MENU; Keys[1].ki.wVk = VK_TAB;
+            Keys[2].ki.wVk = VK_TAB; Keys[2].ki.dwFlags = KEYEVENTF_KEYUP;
+            Keys[3].ki.wVk = VK_MENU; Keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
+            if (SendInput(1, Keys, sizeof(INPUT)) != 1) return false;
+            QTest::qWait(30);
+            if (SendInput(2, Keys + 1, sizeof(INPUT)) != 2) return false;
+            QTest::qWait(80);
+            return SendInput(1, Keys + 3, sizeof(INPUT)) == 1;
+        };
+        const auto ClickWidget = [&](QWidget* Widget, const QPoint& Local) {
+            const auto Scale = main_->devicePixelRatioF();
+            const auto InWindow = Widget->mapTo(main_, Local);
+            POINT Point{qRound(InWindow.x() * Scale), qRound(InWindow.y() * Scale)};
+            if (!ClientToScreen(Root, &Point)) return false;
+            RECT PeerRect{}; GetWindowRect(PeerWindow, &PeerRect);
+            if (PtInRect(&PeerRect, Point)) { qWarning() << "Click point is under the peer" << Point.x << Point.y; return false; }
+            INPUT Events[3]{}; for (auto& Event : Events) Event.type = INPUT_MOUSE;
+            Events[0].mi.dx = MulDiv(Point.x - GetSystemMetrics(SM_XVIRTUALSCREEN), 65535, GetSystemMetrics(SM_CXVIRTUALSCREEN) - 1);
+            Events[0].mi.dy = MulDiv(Point.y - GetSystemMetrics(SM_YVIRTUALSCREEN), 65535, GetSystemMetrics(SM_CYVIRTUALSCREEN) - 1);
+            Events[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+            Events[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN; Events[2].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+            return SendInput(3, Events, sizeof(INPUT)) == 3;
+        };
+        const auto HcForeground = [&] { return GetAncestor(GetForegroundWindow(), GA_ROOT) == Root; };
+        auto* Chrome = main_->findChild<fm::ui::WindowChrome*>(); QVERIFY(Chrome);
+        // The foreground peer grants activation, as the taskbar does; the harness's
+        // own forced activation (thread input attachment) can hand it back later.
+        const auto PeerActivatesHc = [&] { return SendMessageW(PeerWindow, WM_APP + 117, reinterpret_cast<WPARAM>(Root), 0) != 0; };
+
+        enum class Leave { AltTab, Activate };
+        enum class Back { AltTab, Peer, Caption, Grid, OtherGrid };
+        struct Method { const char* name_; Leave leave_; Back back_; };
+        const Method Methods[]{
+            {"alttab", Leave::AltTab, Back::AltTab}, {"taskbar", Leave::Activate, Back::Peer},
+            {"caption", Leave::AltTab, Back::Caption}, {"grid", Leave::AltTab, Back::Grid},
+            {"other-grid", Leave::AltTab, Back::OtherGrid}, {"activate-alttab", Leave::Activate, Back::AltTab},
+            {"activate-caption", Leave::Activate, Back::Caption}, {"activate-other-grid", Leave::Activate, Back::OtherGrid},
+        };
+        QStringList Failures; int Runs = 0;
+        for (const auto& Way : Methods) {
+            for (int Cycle = 0; Cycle < 4; ++Cycle) {
+                ++Runs;
+                const auto Tag = QString("%1#%2").arg(Way.name_).arg(Cycle);
+                // Start from HC with the left grid as the user's input and the
+                // peer directly behind it, so Alt+Tab alternates the two.
+                if (GetForegroundWindow() != PeerWindow) QVERIFY(ActivateTestWindow(PeerWindow));
+                QVERIFY(PeerActivatesHc()); QTRY_VERIFY(HcForeground());
+                Left->sig_NotifyPanelActivated(); LeftView->EnsureKeyboardFocusOnView();
+                LeftView->BaseView()->setFocusedRowIndex(2);
+                QTRY_VERIFY(QApplication::focusWidget() && (QApplication::focusWidget() == LeftGrid || LeftGrid->isAncestorOf(QApplication::focusWidget())));
+                QTest::qWait(150);
+                if (Way.leave_ == Leave::AltTab) QVERIFY(AltTab()); else QVERIFY(ActivateTestWindow(PeerWindow));
+                if (!QTest::qWaitFor([&] { return GetForegroundWindow() == PeerWindow; }, 2000)) {
+                    Failures << Tag + " leave: " + Describe(); QVERIFY(ActivateTestWindow(PeerWindow));
+                }
+                QTest::qWait(150);
+                auto* Expected = Way.back_ == Back::OtherGrid ? RightView : LeftView;
+                Tracer.lines_.clear(); Tracer.clock_.restart(); Tracer.on_ = true;
+                switch (Way.back_) {
+                case Back::AltTab: QVERIFY(AltTab()); break;
+                case Back::Peer: QVERIFY(PeerActivatesHc()); break;
+                case Back::Caption: QVERIFY(ClickWidget(Chrome, {Chrome->width() / 3, Chrome->height() / 2})); break;
+                case Back::Grid: QVERIFY(ClickWidget(LeftGrid, {LeftGrid->width() / 3, LeftGrid->height() / 3})); break;
+                case Back::OtherGrid: QVERIFY(ClickWidget(RightGrid, {RightGrid->width() / 3, RightGrid->height() / 3})); break;
+                }
+                const auto PrintTrace = [&] { for (const auto& Line : Tracer.lines_) qInfo().noquote() << "    " << Line; };
+                if (!QTest::qWaitFor(HcForeground, 2000)) { Tracer.on_ = false; PrintTrace(); Failures << Tag + " return: " + Describe(); continue; }
+                QTest::qWait(300);
+                const auto State = Describe();
+                const auto Row = Expected->BaseView()->focusedRowIndex();
+                const auto LeftRow = LeftView->BaseView()->focusedRowIndex(), RightRow = RightView->BaseView()->focusedRowIndex();
+                INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
+                Keys[0].ki.wVk = Keys[1].ki.wVk = VK_DOWN; Keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+                QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2));
+                const bool Moved = QTest::qWaitFor([&] { return Expected->BaseView()->focusedRowIndex() == Row + 1; }, 1500);
+                Tracer.on_ = false;
+                qInfo().noquote() << (Moved ? "OK  " : "FAIL") << Tag << "row" << Row << "->" << Expected->BaseView()->focusedRowIndex()
+                    << "L" << LeftRow << "->" << LeftView->BaseView()->focusedRowIndex() << "R" << RightRow << "->" << RightView->BaseView()->focusedRowIndex() << State;
+                if (!Moved) { PrintTrace(); Failures << Tag + ": " + State; }
+            }
+        }
+        qInfo() << "Window switch runs:" << Runs << "failures:" << Failures.size();
+        QVERIFY2(Failures.isEmpty(), qPrintable(Failures.join('\n')));
     }
 
     void commandLineFocusReturnUi()

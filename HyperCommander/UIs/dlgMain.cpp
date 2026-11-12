@@ -152,18 +152,28 @@ void QMainUI::restoreInputFocus()
         && Previous->isVisible() && Previous->isEnabled();
     activationFocusRestorePending_ = false;
     if (Native && IsWindowVisible(Native) && (Native == Root || IsChild(Root, Native))) {
-        DWORD Process = 0; GetWindowThreadProcessId(Native, &Process);
-        if ((CurrentValid && !RestorePrevious) || Process != GetCurrentProcessId()) return; // Preserve an embedded native viewer too.
+        // Keys sent to an HWND reach the focus widget inside that HWND's own
+        // widget. The main window HWND reaches every widget, but a native child
+        // (the panel tree has HWNDs) keeps them inside its subtree: a click that
+        // moved Qt focus to the other panel while activating HC left the native
+        // focus, and every key, in the previous panel.
+        const QWidget* Owner = Native == Root ? this : QWidget::find(reinterpret_cast<WId>(Native));
+        if (!Owner) {
+            DWORD Process = 0; GetWindowThreadProcessId(Native, &Process);
+            if ((CurrentValid && !RestorePrevious) || Process != GetCurrentProcessId()) return; // Preserve an embedded native viewer too.
+        } else if (CurrentValid && !RestorePrevious && (Owner == Current || Owner->isAncestorOf(Current))) return;
     }
     // Activation may have selected a valid fallback (the command line) while
     // restoring a native panel child. Prefer the user's last input widget.
     QPointer<QWidget> Target = RestorePrevious ? Previous : CurrentValid ? Current : Previous;
-    if (Target && Target->window() == this && Target->isVisible() && Target->isEnabled()) {
-        // setFocus alone can be a no-op when Qt remembers the widget but the
-        // native input queue has lost its HWND after a dialog/host disappears.
-        SetFocus(reinterpret_cast<HWND>(Target->effectiveWinId()));
-        if (Target) Target->setFocus(Qt::OtherFocusReason);
-    } else if (auto* Panel = retrieveSrcPanel()) Panel->SetFocusView(Panel->CurrentTabIndex());
+    // setFocus alone can be a no-op when Qt remembers the widget but the native
+    // input queue has lost its receiver after a dialog/host disappears. Give the
+    // keyboard to the main window HWND, as Qt itself does when focusing a widget;
+    // the native child that contains the widget would keep it there once Qt
+    // moves focus elsewhere before it sees the native focus change.
+    if (GetFocus() != Root) SetFocus(Root);
+    if (Target && Target->window() == this && Target->isVisible() && Target->isEnabled()) Target->setFocus(Qt::OtherFocusReason);
+    else if (auto* Panel = retrieveSrcPanel()) Panel->SetFocusView(Panel->CurrentTabIndex());
 }
 
 bool QMainUI::nativeEventFilter(const QByteArray& Type, void* Message, qintptr* Result)

@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <Windows.h>
 #include <QtTest>
+#include <QWidget>
 
 // Test-only input-queue attachment grants foreground ownership to the fixture.
 // Do not send a key unless this returns true; production focus code stays separate.
@@ -32,4 +33,13 @@ inline HWND VisibleTestProcessWindow(DWORD Process)
         return TRUE;
     }, reinterpret_cast<LPARAM>(&Result));
     return Result.count == 1 ? Result.window : nullptr;
+}
+
+// Keys sent to the native focus reach Input: Qt hands them to the focus widget
+// inside the HWND's own widget, so the HWND must belong to Input or an ancestor
+// (the main window HWND reaches every widget).
+inline bool NativeFocusReaches(const QWidget* Input)
+{
+    const auto* Owner = QWidget::find(reinterpret_cast<WId>(GetFocus()));
+    return Input && Owner && (Owner == Input || Owner->isAncestorOf(Input));
 }

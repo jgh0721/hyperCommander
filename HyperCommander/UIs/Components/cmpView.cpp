@@ -65,6 +65,18 @@ QString FilePanelDragToken(QWidget* View)
     if (Token.isEmpty()) { Token = QUuid::createUuid().toString(QUuid::WithoutBraces); Owner->setProperty("hc.filePanelDragToken", Token); }
     return Token;
 }
+// Physical screen point for a widget-local point, measured through the
+// top-level HWND. Asking the widget itself for winId() would make it native,
+// and Qt then makes every ancestor and their siblings native as well: the
+// whole panel tree gets HWNDs that each keep keyboard input to themselves.
+bool NativeScreenPoint(const QWidget* Widget, const QPoint& Local, POINT& Position)
+{
+    const auto* Window = Widget->window();
+    const auto InWindow = Widget->mapTo(Window, Local);
+    const auto Scale = Window->devicePixelRatioF();
+    Position = {qRound(InWindow.x() * Scale), qRound(InWindow.y() * Scale)};
+    return ClientToScreen(reinterpret_cast<HWND>(Window->winId()), &Position);
+}
 bool ProductHasIcon(const QVariant& Value)
 {
     return Value.metaType() == QMetaType::fromType<QPixmap>() ? !Value.value<QPixmap>().isNull() : !Value.value<QIcon>().isNull();
@@ -2231,10 +2243,8 @@ bool CGridView::OpenShellMenuAt(const QStringList& Paths, const QPoint& Global, 
 {
     if (Paths.isEmpty()) return false;
     auto* Viewport = IsThumbnailMode() ? thumbnails_->listView()->viewport() : grid_->viewport();
-    const auto Local = Viewport->mapFromGlobal(Global);
-    const auto Scale = Viewport->devicePixelRatioF();
-    POINT Position{qRound(Local.x() * Scale), qRound(Local.y() * Scale)};
-    if (!ClientToScreen(reinterpret_cast<HWND>(Viewport->winId()), &Position)) return false;
+    POINT Position{};
+    if (!NativeScreenPoint(Viewport, Viewport->mapFromGlobal(Global), Position)) return false;
     auto At = Source;
     while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(At.model())) At = Proxy->mapToSource(At);
     return OpenShellContextMenuForObjects(Paths, Position.x, Position.y, reinterpret_cast<void*>(window()->winId()), shellExtras(Paths, At));
@@ -2349,9 +2359,7 @@ bool CGridView::ShowShellMenu(const QModelIndex& Index, bool AtCursor)
     if (!AtCursor || !GetCursorPos(&Position)) {
         QWidget* Viewport = nullptr;
         const auto Anchor = anchorInViewport(Row.isValid() ? Source : QModelIndex{}, Viewport);
-        const auto Scale = Viewport->devicePixelRatioF();
-        Position = {qRound(Anchor.x() * Scale), qRound(Anchor.y() * Scale)};
-        if (!ClientToScreen(reinterpret_cast<HWND>(Viewport->winId()), &Position)) return false;
+        if (!NativeScreenPoint(Viewport, Anchor, Position)) return false;
     }
     viewClickTimer_.stop();
     return OpenShellContextMenuForObjects(Paths, Position.x, Position.y, reinterpret_cast<void*>(window()->winId()), shellExtras(Paths, Source));
