@@ -2,6 +2,7 @@
 
 /// 모듈
 #include "documentStatusBar.hpp"
+#include "documentToolPanel.hpp"
 #include "rst/rstOutlineService.hpp"
 #include "rst/sphinxDiagnostics.hpp"
 
@@ -113,9 +114,17 @@ namespace hc::document
         /// 명령을 실행한다. 켜고 끄는 명령은 단추를 누른 것처럼 상태를 바꾼다.
         void                            Trigger( const QString& Id );
         [[nodiscard]] bool              IsPreviewOnly() const { return previewOnly_; }
+        /// 도킹 작업 공간: 개요 · 진단 · 빌드 로그 칸을 넘긴다( 한 번만 ). 넘긴 뒤 켜기 · 끄기는 도구 창을 연다 · 닫는다.
+        QList< DocumentToolPanelItem >  TakeToolPanels();
+        /// 옆에 미리보기 열기: 미리보기 칸을 넘긴다. 보기 방식은 나란히로 두고 바꾸지 못한다. ReturnPreview 로 되돌린다.
+        QWidget*                        TakePreview();
+        void                            ReturnPreview();
+        [[nodiscard]] bool              IsPreviewTaken() const { return previewTaken_; }
 
     signals:
         void                            Changed();
+        /// 넘긴 패널을 보여 달라( "outline" · "problems" · "output" ).
+        void                            ToolPanelRequested( const QString& Kind );
         void                            OpenRequested( const QString& Path );
         /// 다른 파일을 열고 그 줄( 1부터 )로 간다.
         void                            OpenAtRequested( const QString& Path, int Line );
@@ -219,6 +228,10 @@ namespace hc::document
         QTabWidget*                     problems_ = nullptr;
         QTreeWidget*                    diagnostics_ = nullptr;
         QPlainTextEdit*                 log_ = nullptr;
+        /// 작업 공간에 넘긴 칸( 이 화면이 지울 때 함께 지운다 ).
+        QList< QPointer< QWidget > >    takenPanels_;
+        bool                            panelsTaken_ = false, previewTaken_ = false;
+        QString                         modeBeforeTaken_;
 
         QVector< hc::rst::OutlineSymbol > documentOutline_;
         QVector< hc::rst::OutlineDocumentEntry > projectOutline_;

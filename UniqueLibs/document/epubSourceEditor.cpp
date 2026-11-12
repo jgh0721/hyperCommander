@@ -88,6 +88,8 @@ EpubSourceEditor::~EpubSourceEditor(){
     saveWorkspace();saveLayout();for(const auto& Path:sourceBuffers_.keys())releaseSource(Path);
     // The workspace may have adopted the strip into its status row.
     if(statusStrip_ && statusStrip_->parent()!=this)delete statusStrip_;
+    // 도구 창으로 넘긴 칸(책 구조 · 문제 · EPUBCheck 출력)도 이 편집기 것이다.
+    for(const auto& Panel:takenPanels_)delete Panel.data();
 }
 void EpubSourceEditor::load(QByteArray Bytes) {
     saveSourceState();bookUndoPriority_=bookRedoPriority_=false;ready_=false;setEnabled(false);report(tr("EPUB 편집 구조를 검사하고 있습니다…"));cancel_=std::make_shared<std::atomic_bool>(false);auto Cancel=cancel_;
@@ -199,7 +201,7 @@ QJsonObject EpubSourceEditor::Snapshot()const {
     QJsonArray Rows;for(const auto& Value:model_.Publication()["resources"].toArray()){const auto Row=Value.toObject();if(model_.IsEditable(Row["path"].toString()))Rows.append(QJsonObject{{"path",Row["path"]},{"mediaType",Row["mediaType"]}});}
     const auto State=sourceBuffers_.value(current_);
     const QJsonObject Source{{"resource",current_},{"buffer",QString::number(State.serial_)},{"shown",sourceShown()},{"modified",ready_ && sourceShown() && sourceModified()},{"readOnly",sourceReadOnly_},{"language",text_->currentLanguage()}};
-    const QJsonObject Layout{{"orientation",previewSplitter_->orientation()==Qt::Horizontal?"horizontal":"vertical"},{"tree",!treePanel_->isHidden()},{"preview",!previewPanel_->isHidden()},{"problems",!problemsPanel_->isHidden()}};
+    const QJsonObject Layout{{"orientation",previewSplitter_->orientation()==Qt::Horizontal?"horizontal":"vertical"},{"tree",panelsTaken_?treePanel_->isVisible():!treePanel_->isHidden()},{"preview",!previewPanel_->isHidden()},{"problems",panelsTaken_?diagnostics_->isVisible():!problemsPanel_->isHidden()}};
     const QJsonObject Status{{"message",message_},{"draft",draftMessage_},{"preview",previewMessage_},{"validation",statusValidation_->text()}};
     return {{"sourceCache",QJsonObject{{"reads",sourceReads_},{"maps",sourceMapBuilds_}}},{"workspaceError",workspaceError_},{"workspaceFile",workspaceFile_},{"workspaceSaving",workspaceWriter_.isRunning()},{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",false},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_},{"target",lastScrollTarget_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
 }

@@ -32,6 +32,7 @@
 #include <Windows.h>
 #include "commonLibs/document/documentWorkspace.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "documentTabsProbe.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -460,7 +461,9 @@ private slots:
         const auto ExpectedDpr = qEnvironmentVariable("HC_DOCUMENT_EXPECT_DPR").toDouble();
         if (ExpectedDpr > 0) QVERIFY(qAbs(Widget.devicePixelRatioF() - ExpectedDpr) < 0.01);
         auto Id = Widget.Handle({{"action", "open"}, {"path", Path}})["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Id));
-        QVERIFY(Widget.findChild<QTabWidget*>("documentTabs")->isHidden()); QVERIFY(!Widget.SetTabbed(true));
+        // Tabless: the one document dock has no tab (NoTab), so no tab strip shows.
+        { test::DocumentTabs Tabs(&Widget); QCOMPARE(Tabs.count(), 1); QVERIFY(Tabs.dock(0)->features().testFlag(fm::dock::DockWidget::NoTab)); QVERIFY(!Tabs.tabButton(0)); }
+        QVERIFY(!Widget.SetTabbed(true));
         auto* Pane = Widget.findChild<DocumentViewPane*>(); QVERIFY(Pane); QVERIFY(Pane->findChild<QToolBar*>("viewToolbar"));
         auto Settings = Widget.ChromeSettings(); Settings["mainMenuMode"] = "hide"; Settings["mainToolbarMode"] = "hide";
         QVERIFY(Widget.ApplyChromeSettings(Settings)); QVERIFY(Widget.findChild<QMenuBar*>("mainMenu")->isHidden());
@@ -596,25 +599,25 @@ private slots:
         QVERIFY(Result["boundExistingHost"].toBool()); QCOMPARE(Result["documentId"].toString(),Id);
         QCOMPARE(Pane->InputWidget(),Input.data()); QCOMPARE(Widget.Snapshot()["documents"].toArray().size(),1);
         QVERIFY(Document(Widget,Id)["canSave"].toBool());
-        auto* Tabs=Widget.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs);
-        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),DisplayName);
+        test::DocumentTabs Tabs(&Widget); QVERIFY(Tabs);
+        QCOMPARE(Tabs.tabText(Tabs.currentIndex()),DisplayName);
         QCOMPARE(Document(Widget,Id)["path"].toString(),Path);
         Widget.Handle({{"action","reload"},{"documentId",Id}}); QTRY_VERIFY(Widget.IsIdle());
-        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),DisplayName);
+        QCOMPARE(Tabs.tabText(Tabs.currentIndex()),DisplayName);
         auto Invalid=Binding; Invalid["displayName"]="../wrong.txt";
         QCOMPARE(Send("OpenDocuments",{{"documents",QJsonArray{Invalid}}})["messageType"].toString(),QString("Error"));
-        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),DisplayName);
+        QCOMPARE(Tabs.tabText(Tabs.currentIndex()),DisplayName);
         // The SDK can reload this slot; a mismatched snapshot must take the full open path.
         Widget.Handle({{"action","openHost"},{"path",Path}}); QTRY_VERIFY(Widget.IsIdle());
         Binding["sha256"]=QString(64,'0'); Binding["sourceToken"]=QString(32,'b');
         const auto Reopened=Send("OpenDocuments",{{"documents",QJsonArray{Binding}}})["payload"].toObject()["documents"].toArray()[0].toObject();
         QVERIFY(!Reopened["boundExistingHost"].toBool()); QVERIFY(Reopened["documentId"].toString()!=Id);
         QTRY_VERIFY(Widget.IsIdle());
-        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),DisplayName);
+        QCOMPARE(Tabs.tabText(Tabs.currentIndex()),DisplayName);
         const auto NewId=Reopened["documentId"].toString();
         const auto Copy=Root.filePath("renamed.txt");
         QVERIFY(!Widget.Handle({{"action","saveAs"},{"documentId",NewId},{"path",Copy}}).contains("error")); QTRY_VERIFY(Widget.IsIdle());
-        QCOMPARE(Tabs->tabText(Tabs->currentIndex()),QString("renamed.txt")); QCOMPARE(Bytes(Copy),Original);
+        QCOMPARE(Tabs.tabText(Tabs.currentIndex()),QString("renamed.txt")); QCOMPARE(Bytes(Copy),Original);
     }
     void helperNativeKeyboardRoute()
     {

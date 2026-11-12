@@ -272,7 +272,8 @@ namespace hc::document
         problems_->setObjectName( "rstProblems" ); problems_->setDocumentMode( true ); problems_->setMinimumHeight( 90 );
         diagnostics_ = new QTreeWidget( problems_ );
         diagnostics_->setObjectName( "rstDiagnostics" ); diagnostics_->setRootIsDecorated( false ); diagnostics_->setUniformRowHeights( true );
-        diagnostics_->setHeaderLabels( { tr( "심각도" ), tr( "파일" ), tr( "줄" ), tr( "메시지" ), tr( "출처" ) } );
+        // EPUB 문제와 같은 열 — 둘 다 작업 공간의 ‘문제’ 도구 창에 들어간다.
+        diagnostics_->setHeaderLabels( { tr( "수준" ), tr( "파일" ), tr( "줄" ), tr( "설명" ), tr( "출처" ) } );
         diagnostics_->header()->setStretchLastSection( false );
         diagnostics_->header()->setSectionResizeMode( 3, QHeaderView::Stretch );
         diagnostics_->setColumnWidth( 0, 70 ); diagnostics_->setColumnWidth( 1, 170 ); diagnostics_->setColumnWidth( 2, 52 ); diagnostics_->setColumnWidth( 4, 100 );
@@ -389,7 +390,10 @@ namespace hc::document
         } );
         connect( workspace_, &WorkspaceController::projectBuildStarted, this, [ this ] {
             projectBuilding_ = true;
-            if( isActive() ) { setProblemsVisible( true, false ); problems_->setCurrentWidget( log_ ); }
+            if( isActive() ) {
+                setProblemsVisible( true, false ); problems_->setCurrentWidget( log_ );
+                if( panelsTaken_ ) emit ToolPanelRequested( QStringLiteral( "output" ) );
+            }
             emit Changed();
         } );
         connect( workspace_, &WorkspaceController::projectBuildFinished, this,
@@ -458,6 +462,47 @@ namespace hc::document
             workspace_->forgetPreviewSurface( preview_ );
             workspace_->detachDocument( editor_ );
         }
+        // 도구 창 · 옆 미리보기로 넘긴 칸은 이 화면 것이다.
+        for( const auto& Panel : takenPanels_ ) delete Panel.data();
+    }
+
+    QList< DocumentToolPanelItem > RstDocumentView::TakeToolPanels()
+    {
+        if( panelsTaken_ ) return {};
+        panelsTaken_ = true;
+        // 진단 · 빌드 로그는 문제 · 출력 도구 창이 따로 보인다. 빈 탭 묶음은 숨긴다. 부모는 작업 공간이 바꾼다.
+        problems_->removeTab( problems_->indexOf( log_ ) );
+        problems_->removeTab( problems_->indexOf( diagnostics_ ) );
+        problems_->hide();
+        takenPanels_ << outlinePanel_ << diagnostics_ << log_;
+        return { DocumentToolPanelItem{ QStringLiteral( "outline" ), outlinePanel_, {}, actions_[ "rst.toggleToc" ] },
+                 DocumentToolPanelItem{ QStringLiteral( "problems" ), diagnostics_, {}, actions_[ "rst.toggleProblems" ] },
+                 DocumentToolPanelItem{ QStringLiteral( "output" ), log_, tr( "빌드 로그" ), {} } };
+    }
+
+    QWidget* RstDocumentView::TakePreview()
+    {
+        if( previewTaken_ || previewOnly_ ) return nullptr;
+        // 미리보기는 옆 탭에 있고 이 화면은 소스만 보인다. 보기 방식은 나란히로 두어 빌드 · 스크롤 동기화가 그대로 돈다.
+        // 다른 프로세스 창을 품으므로 부모 없이 두지 않는다 — 작업 공간이 도크로 바로 옮긴다.
+        modeBeforeTaken_ = mode_;
+        mode( QStringLiteral( "split" ) );
+        previewTaken_ = true;
+        takenPanels_ << previewPanel_;
+        for( const auto& Id : { "rst.preview", "rst.source", "rst.split", "rst.toggleSource" } ) actions_[ QString::fromLatin1( Id ) ]->setEnabled( false );
+        emit Changed();
+        return previewPanel_;
+    }
+
+    void RstDocumentView::ReturnPreview()
+    {
+        if( !previewTaken_ ) return;
+        previewTaken_ = false;
+        takenPanels_.removeAll( QPointer< QWidget >( previewPanel_ ) );
+        splitter_->addWidget( previewPanel_ );
+        splitter_->setStretchFactor( splitter_->indexOf( previewPanel_ ), 1 );
+        for( const auto& Id : { "rst.preview", "rst.source", "rst.split", "rst.toggleSource" } ) actions_[ QString::fromLatin1( Id ) ]->setEnabled( true );
+        mode( modeBeforeTaken_.isEmpty() ? QStringLiteral( "split" ) : modeBeforeTaken_ );
     }
 
     bool RstDocumentView::SourceVisible() const { return mode_ != QLatin1String( "preview" ); }
@@ -584,7 +629,8 @@ namespace hc::document
         mode_ = QStringList{ "source", "preview", "split" }.contains( Value ) ? Value : QStringLiteral( "split" );
         source_->setVisible( SourceVisible() );
         for( auto* A : sourceActions_ ) A->setVisible( SourceVisible() );
-        previewPanel_->setVisible( PreviewVisible() );
+        // 옆에 둔 미리보기는 그 탭이 보이기를 정한다.
+        if( !previewTaken_ ) previewPanel_->setVisible( PreviewVisible() );
         for( const auto& Id : { "source", "preview", "split" } ) actions_[ "rst." + QString( Id ) ]->setChecked( mode_ == QLatin1String( Id ) );
         syncPanels();
         if( isVisible() && Previous != mode_ ) {
@@ -598,8 +644,11 @@ namespace hc::document
 
     void RstDocumentView::syncPanels()
     {
-        outlinePanel_->setVisible( !previewOnly_ && actions_[ "rst.toggleToc" ]->isChecked() );
-        problems_->setVisible( !previewOnly_ && actions_[ "rst.toggleProblems" ]->isChecked() );
+        // 넘긴 칸은 작업 공간의 도구 창이 보이기를 정한다.
+        if( !panelsTaken_ ) {
+            outlinePanel_->setVisible( !previewOnly_ && actions_[ "rst.toggleToc" ]->isChecked() );
+            problems_->setVisible( !previewOnly_ && actions_[ "rst.toggleProblems" ]->isChecked() );
+        }
         for( const auto& Id : { "rst.zoomIn", "rst.zoomOut", "rst.zoomReset", "rst.zoomSet", "rst.openInBrowser", "rst.fullScreen" } )
             actions_[ QString::fromLatin1( Id ) ]->setEnabled( PreviewVisible() || QLatin1String( Id ) == QLatin1String( "rst.fullScreen" ) );
         for( const auto& Id : { "rst.complete", "rst.goToReference", "rst.showInPreview" } )
@@ -618,6 +667,7 @@ namespace hc::document
         if( Toggle->isChecked() != Visible ) { const QSignalBlocker Block( Toggle ); Toggle->setChecked( Visible ); }
         if( Remember ) problemsClosedByUser_ = !Visible;
         syncPanels();
+        if( panelsTaken_ && Visible ) emit ToolPanelRequested( QStringLiteral( "problems" ) );
     }
 
     void RstDocumentView::SetPreviewOnly( const bool On )
@@ -691,7 +741,10 @@ namespace hc::document
             if( outlineDocument_->currentItem() ) outlineDocument_->scrollToItem( outlineDocument_->currentItem() );
         }
         else if( Id == "rst.problems" ) { setProblemsVisible( true, true ); problems_->setCurrentWidget( diagnostics_ ); diagnostics_->setFocus(); }
-        else if( Id == "rst.showLog" ) { setProblemsVisible( true, true ); problems_->setCurrentWidget( log_ ); }
+        else if( Id == "rst.showLog" ) {
+            setProblemsVisible( true, true ); problems_->setCurrentWidget( log_ );
+            if( panelsTaken_ ) emit ToolPanelRequested( QStringLiteral( "output" ) );
+        }
         else if( Id == "rst.find" ) {
             if( mode_ == QLatin1String( "source" ) || ( SourceVisible() && !preview_->HasFocus() && source_->Backend()->widget()->hasFocus() ) ) source_->showFindBar();
             else {
@@ -1422,7 +1475,7 @@ namespace hc::document
                  { "diagnostics", int( shownDiagnostics_.size() ) },
                  { "outlineVisible", outlinePanel_->isVisible() },
                  { "outlineHeadings", outlineDocument_->topLevelItemCount() },
-                 { "problemsVisible", problems_->isVisible() },
+                 { "problemsVisible", panelsTaken_ ? diagnostics_->isVisible() : problems_->isVisible() },
                  { "banner", bannerKind_ == Banner::None ? QString() : banner_->text() } };
     }
 }

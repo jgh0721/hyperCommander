@@ -85,7 +85,9 @@ void EpubSourceEditor::setDiagnostics(QJsonArray Rows) {
         if(!problemFilter_.isEmpty() && !problemFilter_.contains(Severity=="FATAL"?"ERROR":Severity=="ERROR" || Severity=="WARNING"?Severity:"INFO"))continue;
         if(!problemResource_.isEmpty() && Path!=problemResource_)continue;
         const auto Level=Severity=="ERROR" || Severity=="FATAL"?tr("오류"):Severity=="WARNING"?tr("경고"):tr("정보");
-        auto* Item=new QTreeWidgetItem(diagnostics_,{Level,Path,Line>0?QString::number(Line):QStringLiteral("—"),Row["code"].toString()+" · "+Row["message"].toString()});Item->setData(0,Qt::UserRole,I);Item->setToolTip(0,Severity);Item->setToolTip(3,Row["message"].toString());
+        // 열은 reST 진단과 같다(수준 · 파일 · 줄 · 설명 · 출처) — 둘 다 작업 공간의 ‘문제’ 도구 창에 들어간다.
+        const auto Source=Row["code"].toString()==QLatin1String("BASIC")?tr("기본 검사"):tr("EPUBCheck");
+        auto* Item=new QTreeWidgetItem(diagnostics_,{Level,Path,Line>0?QString::number(Line):QStringLiteral("—"),Row["code"].toString()+" · "+Row["message"].toString(),Source});Item->setData(0,Qt::UserRole,I);Item->setToolTip(0,Severity);Item->setToolTip(3,Row["message"].toString());
     }
     if(!diagnosticRows_.isEmpty())problems_->setCurrentWidget(diagnostics_);if(resourceModel_)resourceModel_->Refresh();markDiagnostics();updateStatus();
 }

@@ -917,6 +917,19 @@ add_test(NAME hc.document.new COMMAND hc_new_document_tests -o "${CMAKE_BINARY_D
 set_tests_properties(hc.document.new PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
 add_dependencies(hc_check hc_new_document_tests)
 
+# HyperEditor docking (fmdock 2): document docks, tool windows, preview beside, saved layouts.
+qt_add_executable(hc_document_docking_tests document/tstDocumentDocking.cpp)
+target_link_libraries(hc_document_docking_tests PRIVATE hc_document_widgets hc_document_search_core Qt6::Test)
+target_include_directories(hc_document_docking_tests PRIVATE "${PROJECT_SOURCE_DIR}/UniqueLibs/document/search/core")
+add_dependencies(hc_document_docking_tests hc-search-index)
+target_compile_options(hc_document_docking_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_document_docking_tests hc_hyperviewer_package)
+hc_enable_qt_deployment(hc_document_docking_tests TEST PLUGINS)
+hc_deploy_document_engine(hc_document_docking_tests)
+add_test(NAME hc.document.docking COMMAND hc_document_docking_tests -o "${CMAKE_BINARY_DIR}/document-docking-$<CONFIG>.txt,txt")
+set_tests_properties(hc.document.docking PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+add_dependencies(hc_check hc_document_docking_tests)
+
 # reStructuredText: lexer, folding and the headless Sphinx services. Each class registers itself
 # (HC_RST_REGISTER_TEST) and rstTestMain.cpp runs them all; HC_RST_TEST_CLASS selects one.
 file(GLOB HC_RST_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/rst/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/rst/*.hpp")

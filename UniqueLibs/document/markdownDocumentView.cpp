@@ -211,6 +211,46 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
 MarkdownDocumentView::~MarkdownDocumentView()
 {
     source_->Backend()->widget()->removeEventFilter(this);
+    // 도구 창 · 옆 미리보기로 넘긴 칸은 이 화면 것이다.
+    for (const auto &Panel : takenPanels_)
+        delete Panel.data();
+}
+QList<DocumentToolPanelItem> MarkdownDocumentView::TakeToolPanels()
+{
+    if (panelsTaken_)
+        return {};
+    panelsTaken_ = true;
+    // 부모는 작업 공간이 도구 창에 넣을 때 바꾼다. 부모 없이 두면 최상위 창이 되므로 여기서는 떼지 않는다.
+    takenPanels_.append(outlinePanel_);
+    return {DocumentToolPanelItem{QStringLiteral("outline"), outlinePanel_, {}, actions_["markdown.toggleToc"]}};
+}
+QWidget *MarkdownDocumentView::TakePreview()
+{
+    if (previewTaken_ || previewOnly_)
+        return nullptr;
+    // 미리보기는 따로 둔 탭에 있고 이 화면은 소스만 보인다. 보기 방식은 나란히로 두어 미리보기 갱신 · 스크롤
+    // 동기화가 그대로 돈다.
+    modeBeforeTaken_ = mode_;
+    mode("split");
+    previewTaken_ = true;
+    // 미리보기는 다른 프로세스 창을 품는다. 최상위 창을 거치면 그 창이 부서지므로 작업 공간이 도크로 바로 옮긴다.
+    takenPanels_.append(previewPanel_);
+    for (const auto &Id : {"markdown.preview", "markdown.source", "markdown.split", "markdown.toggleSource"})
+        actions_[QString::fromLatin1(Id)]->setEnabled(false);
+    emit Changed();
+    return previewPanel_;
+}
+void MarkdownDocumentView::ReturnPreview()
+{
+    if (!previewTaken_)
+        return;
+    previewTaken_ = false;
+    takenPanels_.removeAll(QPointer<QWidget>(previewPanel_));
+    splitter_->addWidget(previewPanel_);
+    splitter_->setStretchFactor(splitter_->indexOf(previewPanel_), 1);
+    for (const auto &Id : {"markdown.preview", "markdown.source", "markdown.split", "markdown.toggleSource"})
+        actions_[QString::fromLatin1(Id)]->setEnabled(true);
+    mode(modeBeforeTaken_.isEmpty() ? QStringLiteral("split") : modeBeforeTaken_);
 }
 bool MarkdownDocumentView::SourceVisible() const
 {
@@ -296,8 +336,12 @@ void MarkdownDocumentView::mode(const QString &Value)
     source_->setVisible(SourceVisible());
     for (auto *A : sourceActions_)
         A->setVisible(SourceVisible());
-    previewPanel_->setVisible(mode_ != "source");
-    preview_->setVisible(mode_ != "source");
+    // 옆에 둔 미리보기는 그 탭이 보이기를 정한다.
+    if (!previewTaken_)
+    {
+        previewPanel_->setVisible(mode_ != "source");
+        preview_->setVisible(mode_ != "source");
+    }
     QTimer::singleShot(0, this, &MarkdownDocumentView::alignPreview);
     for (const auto &Id : {"source", "preview", "split"})
         actions_["markdown." + QString(Id)]->setChecked(mode_ == Id);
@@ -306,7 +350,9 @@ void MarkdownDocumentView::mode(const QString &Value)
 }
 void MarkdownDocumentView::syncControls()
 {
-    outlinePanel_->setVisible(!previewOnly_ && actions_["markdown.toggleToc"]->isChecked());
+    // 넘긴 개요는 작업 공간의 도구 창이 보이기를 정한다.
+    if (!panelsTaken_)
+        outlinePanel_->setVisible(!previewOnly_ && actions_["markdown.toggleToc"]->isChecked());
 }
 void MarkdownDocumentView::SetPreviewOnly(bool On)
 {
@@ -360,7 +406,7 @@ bool MarkdownDocumentView::Run(const QString &Id, const QJsonValue &Value)
         return true;
     }
     // 전체 화면에서는 보기 방식을 바꾸지 않는다. 나가면 들어가기 전의 방식으로 돌아간다.
-    if (previewOnly_ && (Id == "markdown.source" || Id == "markdown.preview" || Id == "markdown.split" || Id == "markdown.toggleSource"))
+    if ((previewOnly_ || previewTaken_) && (Id == "markdown.source" || Id == "markdown.preview" || Id == "markdown.split" || Id == "markdown.toggleSource"))
         return false;
     if (Id == "markdown.source" || Id == "markdown.preview" || Id == "markdown.split")
     {
@@ -403,6 +449,8 @@ bool MarkdownDocumentView::Run(const QString &Id, const QJsonValue &Value)
     {
         actions_["markdown.toggleToc"]->setChecked(true);
         syncControls();
+        if (panelsTaken_)
+            emit ToolPanelRequested(QStringLiteral("outline"));
         if (outline_->currentItem())
             outline_->scrollToItem(outline_->currentItem());
     }

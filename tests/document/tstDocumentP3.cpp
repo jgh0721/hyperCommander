@@ -44,6 +44,7 @@
 #include <fpdf_text.h>
 #include <atomic>
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "documentTabsProbe.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
 #include "commonLibs/document/epub/epubTemplate.hpp"
@@ -468,8 +469,8 @@ void pdfTabNavigationFocus(){
     auto* Pdf=Viewer.findChild<QPDFView*>();QVERIFY(Pdf);
     const auto Second=Viewer.Handle({{"action","open"},{"path",SecondPath}})["documentId"].toString();
     QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Second)["lifecycle"]=="ready";}));
-    auto* Tabs=Viewer.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);QCOMPARE(Tabs->count(),2);
-    QTest::mouseClick(Tabs->tabBar(),Qt::LeftButton,Qt::NoModifier,Tabs->tabBar()->tabRect(0).center());
+    test::DocumentTabs Tabs(&Viewer);QVERIFY(Tabs);QCOMPARE(Tabs.count(),2);
+    QVERIFY(Tabs.tabButton(0));QTest::mouseClick(Tabs.tabButton(0),Qt::LeftButton,Qt::NoModifier,Tabs.tabButton(0)->rect().center());
     QTRY_VERIFY(Pdf->hasFocus());QTest::keyClick(QApplication::focusWidget(),Qt::Key_End);QTRY_COMPARE(Pdf->currentPage(),1);
     QCOMPARE(Doc(Viewer.Snapshot(),Second)["view"].toObject()["page"].toInt(),0);
 }
@@ -486,8 +487,8 @@ void hwpNavigationKeys(){
     auto* Window=Viewer.findChild<HwpOpenWindow*>();QVERIFY(Window);QCOMPARE(Window->focusProxy(),Window->Document());
     HwpProcessBackend* Backend=nullptr;for(auto* W:Window->findChildren<QWidget*>())if(auto* B=dynamic_cast<HwpProcessBackend*>(W))Backend=B;
     QVERIFY(Backend);QCOMPARE(Window->Document()->focusProxy(),Backend);QCOMPARE(Backend->focusPolicy(),Qt::StrongFocus);
-    auto* Tabs=Viewer.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);
-    Tabs->setCurrentIndex(0);Tabs->setCurrentIndex(1);QTRY_VERIFY(Backend->hasFocus());
+    test::DocumentTabs Tabs(&Viewer);QVERIFY(Tabs);
+    Tabs.setCurrentIndex(0);Tabs.setCurrentIndex(1);QTRY_VERIFY(Backend->hasFocus());
     int Acks=0;connect(Backend,&HwpSdiBackend::EditorReply,&Viewer,[&](quint64,QJsonObject Reply){if(Reply["requestType"]=="DocumentNavigate"&&Reply["ok"].toBool())++Acks;});
     for(const auto Key:{Qt::Key_PageDown,Qt::Key_PageUp,Qt::Key_End,Qt::Key_Home,Qt::Key_Down,Qt::Key_Up})QTest::keyClick(QApplication::focusWidget(),Key);
     QTRY_COMPARE_WITH_TIMEOUT(Acks,6,10000);
@@ -527,17 +528,17 @@ void mixedPdfHwpTabs(){
     Viewer.show();
     const auto Pdf=Viewer.Handle({{"action","open"},{"path",Fixture("basic.pdf")}})["documentId"].toString();
     QVERIFY(Wait([&]{return Doc(Viewer.Snapshot(),Pdf)["lifecycle"]=="ready";}));
-    auto* Tabs=Viewer.findChild<QTabWidget*>("documentTabs");auto* Edit=Viewer.findChild<QAction*>("editHwpDocument");
+    test::DocumentTabs Tabs(&Viewer);auto* Edit=Viewer.findChild<QAction*>("editHwpDocument");
     QVERIFY(Tabs);QVERIFY(Edit);QVERIFY(!Edit->isVisible());QStringList Ids;
     for(const auto& Name:{QString("c02.hwp"),QString("c05.hwpx")}){
         const auto Path=Corpus+'/'+Name;const auto Before=Read(Path);QVERIFY(!Before.isEmpty());
         const auto Id=Viewer.Handle({{"action","open"},{"path",Path}})["documentId"].toString();QVERIFY(!Id.isEmpty());Ids<<Id;
         QVERIFY2(Wait([&]{return Doc(Viewer.Snapshot(),Id)["lifecycle"]!="opening";},45000),"RHWP load timed out");
         const auto State=Doc(Viewer.Snapshot(),Id);QVERIFY2(State["lifecycle"]=="ready",QJsonDocument(State).toJson().constData());
-        QCOMPARE(Tabs->count(),int(Ids.size()+1));QVERIFY(Edit->isVisible());QTRY_VERIFY(Edit->isEnabled());
+        QCOMPARE(Tabs.count(),int(Ids.size()+1));QVERIFY(Edit->isVisible());QTRY_VERIFY(Edit->isEnabled());
         QVERIFY(Viewer.findChild<QToolBar*>("mainToolbar")->actions().contains(Edit));
         QVERIFY(!State["canSave"].toBool());QVERIFY(!State["canSaveAs"].toBool());
-        auto* Window=Tabs->currentWidget()->findChild<HwpOpenWindow*>();QVERIFY(Window);QVERIFY(!Window->isWindow());
+        auto* Window=Tabs.currentWidget()->findChild<HwpOpenWindow*>();QVERIFY(Window);QVERIFY(!Window->isWindow());
         QVERIFY(Window->Document());
         for (auto* Embedded : {static_cast<QWidget*>(Window), static_cast<QWidget*>(Window->Document())}) {
             QVERIFY(!Embedded->isWindow());

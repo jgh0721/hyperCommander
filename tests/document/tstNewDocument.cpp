@@ -27,6 +27,7 @@
 #include "commonLibs/document/epub/epubTemplate.hpp"
 #include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "documentTabsProbe.hpp"
 #include "UniqueLibs/document/markdownDocumentView.hpp"
 #include "UniqueLibs/document/rstDocumentView.hpp"
 #include "UniqueLibs/document/rstProjectDialogs.hpp"
@@ -135,8 +136,8 @@ private slots:
         const auto Image = Widget.Handle({{"action", "new"}, {"kind", "image"}})["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Image));
         QCOMPARE(Name(Widget, Image), QObject::tr("새 이미지 %1").arg(1)); QVERIFY(!Document(Widget, Image)["dirty"].toBool());
         for (const auto& Item : Documents(Widget)) QVERIFY2(!Item.toObject()["displayName"].toString().contains("untitled"), qPrintable(Item.toObject()["displayName"].toString()));
-        auto* Tabs = Widget.findChild<QTabWidget*>("documentTabs");
-        for (int I = 0; I < Tabs->count(); ++I) QVERIFY(!Tabs->tabText(I).contains("untitled"));
+        test::DocumentTabs Tabs(&Widget);
+        for (int I = 0; I < Tabs.count(); ++I) QVERIFY(!Tabs.tabText(I).contains("untitled"));
     }
     void untitledSaveAsAdoptsFile()
     {

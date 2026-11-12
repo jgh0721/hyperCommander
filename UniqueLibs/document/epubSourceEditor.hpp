@@ -9,6 +9,7 @@
 #include "commonLibs/document/epub/epubSourceMap.hpp"
 #include "documentStatusBar.hpp"
 #include "documentStorageAdapter.hpp"
+#include "documentToolPanel.hpp"
 #include <QWidget>
 #include <QFutureWatcher>
 #include <QTimer>
@@ -82,7 +83,9 @@ public:
     QWidget* DetachSearchPanel();
     void SetSearchPanelTitle(const QString& Title);
     QWidget* AttachedSearchPanel()const{return searchPanel_;}
-signals:void SearchPanelReleased(QWidget* Panel);void StatusChanged();void Changed();void StateChanged();void SaveRequested(bool SaveAs);void PreviewCommitted();void EscapeRequested();void FullscreenRequested();void SearchRequested(const QString& Query);void HostCommandRequested(const QString& Id);
+    // 도킹 작업 공간: 책 구조 · 문제 · EPUBCheck 출력 칸을 넘긴다(한 번만). 넘긴 뒤 패널 켜기 · 끄기는 도구 창을 연다 · 닫는다.
+    QList<DocumentToolPanelItem> TakeToolPanels();
+signals:void ToolPanelRequested(const QString& Kind);void SearchPanelReleased(QWidget* Panel);void StatusChanged();void Changed();void StateChanged();void SaveRequested(bool SaveAs);void PreviewCommitted();void EscapeRequested();void FullscreenRequested();void SearchRequested(const QString& Query);void HostCommandRequested(const QString& Id);
 protected:bool eventFilter(QObject* Object,QEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();
@@ -138,6 +141,8 @@ private:
     void startEpubCheck();void cancelEpubCheck(const QString& Reason);void finishEpubCheck(int Code,bool Normal);void stopEpubCheck();
     QJsonObject validationSnapshot()const;
     QProcess* checkerProcess_=nullptr;QTreeWidget* diagnostics_=nullptr;QPlainTextEdit* checkerOutput_=nullptr;QPointer<QWidget> searchPanel_;QTabWidget* problems_=nullptr;QLabel* problemsSummary_=nullptr;QWidget* problemsPanel_=nullptr;
+    // 작업 공간에 넘긴 칸(이 편집기가 지울 때 함께 지운다). 문제 칸은 요약 줄과 검사 결과를 묶은 것이다.
+    QList<QPointer<QWidget>> takenPanels_;bool panelsTaken_=false;
     QTimer checkerTimer_;QElapsedTimer checkerElapsed_;std::unique_ptr<QTemporaryDir> checkerDirectory_;
     QJsonObject checkerSettings_;QJsonArray diagnosticRows_;QByteArray checkerWorkToken_,checkerVerifiedToken_,checkerLog_;
     QString checkerSettingsFile_;

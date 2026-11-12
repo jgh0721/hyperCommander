@@ -9,6 +9,7 @@
 #include "UniqueLibs/document/documentSettingsDialog.hpp"
 #include "tools/epub/render/readingSettings.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "documentTabsProbe.hpp"
 #include "UniqueLibs/document/imageFullscreen.hpp"
 #include "text/QTextView.h"
 #include "UniqueLibs/document/documentViewPane.hpp"
@@ -1179,9 +1180,9 @@ private slots:
         QCOMPARE(Read(Temp.filePath("new.txt")), QByteArray::fromHex("feff0041000d0042"));
         const QByteArray Original("existing\r\nline\n"); Write(Temp.filePath("old.txt"), Original);
         Window.Handle({{"action", "open"}, {"path", Temp.filePath("old.txt")}}); QTRY_VERIFY(Window.IsIdle());
-        auto* Tabs = Window.findChild<QTabWidget*>("documentTabs"); auto* Pane = Tabs->currentWidget()->findChild<QTextView*>(); QVERIFY(Pane);
+        test::DocumentTabs Tabs(&Window); auto* Pane = Tabs.currentWidget()->findChild<QTextView*>(); QVERIFY(Pane);
         QCOMPARE(Pane->Content().toUtf8(), Original);
-        auto* Document = qobject_cast<DocumentViewPane*>(Tabs->currentWidget()); QVERIFY(Document);
+        auto* Document = qobject_cast<DocumentViewPane*>(Tabs.currentWidget()); QVERIFY(Document);
         QCOMPARE(Document->Content(), Original);
     }
     void externalReloadProtectsDirtyDocument()
@@ -1963,14 +1964,14 @@ private slots:
         Window.Handle({{"action", "saveAs"}, {"documentId", First}, {"path", Temp.filePath("saved.txt")}}); QTRY_VERIFY(Window.IsIdle());
         QCOMPARE(Read(Temp.filePath("saved.txt")), QByteArray::fromHex("efbbbf") + Text->Content().toUtf8());
         const auto Second = Window.Handle({{"action", "new"}})["documentId"].toString(); QTRY_VERIFY(Window.IsIdle());
-        auto* Tabs = Window.findChild<QTabWidget*>("documentTabs"); QCOMPARE(Tabs->count(), 2);
-        auto* OtherText = Tabs->currentWidget()->findChild<QTextView*>(); QVERIFY(OtherText && OtherText != Text);
+        test::DocumentTabs Tabs(&Window); QCOMPARE(Tabs.count(), 2);
+        auto* OtherText = Tabs.currentWidget()->findChild<QTextView*>(); QVERIFY(OtherText && OtherText != Text);
         auto* OtherInput = OtherText->Backend()->widget(); OtherInput->setFocus();
         QSignalSpy OtherFind(OtherText->findChild<QAction*>("text.find"), &QAction::triggered);
         QTest::keyClick(OtherInput, Qt::Key_K, Qt::ControlModifier); QTest::keyClick(OtherInput, Qt::Key_F, Qt::ControlModifier); QTRY_COMPARE(OtherFind.count(), 1); QCOMPARE(Find.count(), 1);
-        OtherText->hideFindBar(); OtherInput->setFocus(); const int BeforeTab = Tabs->currentIndex();
-        QTest::keyClick(OtherInput, Qt::Key_Tab, Qt::ControlModifier); QCOMPARE(Tabs->currentIndex(), BeforeTab);
-        QTest::keyClick(OtherInput, Qt::Key_J, Qt::ControlModifier | Qt::AltModifier); QTRY_VERIFY(Tabs->currentIndex() != BeforeTab);
+        OtherText->hideFindBar(); OtherInput->setFocus(); const int BeforeTab = Tabs.currentIndex();
+        QTest::keyClick(OtherInput, Qt::Key_Tab, Qt::ControlModifier); QCOMPARE(Tabs.currentIndex(), BeforeTab);
+        QTest::keyClick(OtherInput, Qt::Key_J, Qt::ControlModifier | Qt::AltModifier); QTRY_VERIFY(Tabs.currentIndex() != BeforeTab);
         Input->setFocus(); Window.SetClipboardBroker(true); Text->Backend()->setSelectionByPos(0, 2);
         QTest::keyClick(Input, Qt::Key_C, Qt::ControlModifier); QVERIFY(Window.Snapshot()["clipboard"].toObject().isEmpty());
         QTest::keyClick(Input, Qt::Key_C, Qt::ControlModifier | Qt::AltModifier); QTRY_VERIFY(!Window.Snapshot()["clipboard"].toObject().isEmpty());

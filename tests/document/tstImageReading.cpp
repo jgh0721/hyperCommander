@@ -50,6 +50,7 @@
 #include <QTabWidget>
 #include <QScopeGuard>
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "documentTabsProbe.hpp"
 #include "UniqueLibs/document/imageResampler.hpp"
 #include "UniqueLibs/nativeStorageRevision.hpp"
 #include "UniqueLibs/document/imageDecodeCache.hpp"
@@ -1233,10 +1234,10 @@ class ImageReadingTests : public QObject
         Pane->Focus();QTest::keyClick(Reader,Qt::Key_BracketRight);
         QTRY_COMPARE_WITH_TIMEOUT(Document(W)["path"].toString(),Root.filePath("comic 2.cbz"),20000);
         QCOMPARE(Document(W)["documentId"].toString(),Id);QVERIFY(!Reader->State()["cover"].toBool());
-        auto* Tabs=W.findChild<QTabWidget*>();if(Tabs)QCOMPARE(Tabs->tabText(Tabs->currentIndex()),QString("comic 2.cbz"));
+        test::DocumentTabs Tabs(&W);if(Tabs)QCOMPARE(Tabs.tabText(Tabs.currentIndex()),QString("comic 2.cbz"));
         QTest::keyClick(Reader,Qt::Key_BracketLeft);
         QTRY_COMPARE_WITH_TIMEOUT(Document(W)["path"].toString(),Root.filePath("comic 1.cbz"),20000);
-        if(Tabs)QCOMPARE(Tabs->tabText(Tabs->currentIndex()),QString("comic 1.cbz"));
+        if(Tabs)QCOMPARE(Tabs.tabText(Tabs.currentIndex()),QString("comic 1.cbz"));
         ImageReadingView Reopened;auto Book=OpenImageBook(Root.filePath("comic 1.cbz"));QVERIFY(Book.HasValue());Reopened.Load(Book.Value());
         QVERIFY(!Reopened.State()["cover"].toBool());
         {AppSettings Settings;Settings.setValue("shortcuts/bindings/image.volumeNext","Ctrl+Alt+N");Settings.sync();}
@@ -1319,7 +1320,7 @@ class ImageReadingTests : public QObject
             auto* Image=W.findChild<QImageView*>();QVERIFY(Image);
             Image->SetDisplayFilter("spline64");QVERIFY(Image->IsRendering());
             if(CloseWindow){W.RequestViewerClose();QTRY_VERIFY_WITH_TIMEOUT(W.Snapshot()["closeRequested"].toBool(),20000);}
-            else{auto* Tabs=W.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);emit Tabs->tabCloseRequested(0);}
+            else{test::DocumentTabs Tabs(&W);QVERIFY(Tabs);Tabs.requestClose(0);}
             QCOMPARE(W.Snapshot()["documents"].toArray().size(),0);
             QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
         }
@@ -1333,12 +1334,12 @@ class ImageReadingTests : public QObject
         auto* Image=W.findChild<QImageView*>();QVERIFY(Image);
         QVERIFY(Image->ApplyResize(QSize(200,300),"spline16"));QVERIFY(Image->IsEditing());
         int Prompts=0;W.SetClosePrompt([&](const QString&){++Prompts;return int(QMessageBox::Cancel);});
-        auto* Tabs=W.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);emit Tabs->tabCloseRequested(0);
+        test::DocumentTabs Tabs(&W);QVERIFY(Tabs);Tabs.requestClose(0);
         QCOMPARE(W.Snapshot()["documents"].toArray().size(),1);
         QTRY_COMPARE_WITH_TIMEOUT(Prompts,1,20000);
         QVERIFY(Document(W)["dirty"].toBool());
         QTest::qWait(50);QCOMPARE(Prompts,1);
-        W.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});emit Tabs->tabCloseRequested(0);
+        W.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});Tabs.requestClose(0);
         QCOMPARE(W.Snapshot()["documents"].toArray().size(),0);
     }
     void tabCloseDuringSaveCompletesTheWrite()
@@ -1350,7 +1351,7 @@ class ImageReadingTests : public QObject
         const auto Id=Document(W)["documentId"].toString();
         W.Handle({{"action","image.rotate"},{"angle",90},{"documentId",Id}});
         W.Handle({{"action","save"},{"documentId",Id}});QVERIFY(Document(W)["saving"].toBool());
-        auto* Tabs=W.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);emit Tabs->tabCloseRequested(0);
+        test::DocumentTabs Tabs(&W);QVERIFY(Tabs);Tabs.requestClose(0);
         QCOMPARE(W.Snapshot()["documents"].toArray().size(),1);
         QTRY_COMPARE_WITH_TIMEOUT(W.Snapshot()["documents"].toArray().size(),0,20000);
         QCOMPARE(QImage(Root.filePath("1.png")).size(),QSize(120,80));

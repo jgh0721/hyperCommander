@@ -11,7 +11,7 @@
 #include <QWidget>
 #include <QJsonObject>
 #include <QPlainTextEdit>
-#include <QTabWidget>
+#include <QMap>
 #include <QPointer>
 #include <memory>
 
@@ -32,9 +32,11 @@ class QResizeEvent;
 class QDragEnterEvent;
 class QDropEvent;
 namespace mrst { class ExternalChangeWatcher; }
+namespace fm::dock { class DockManager; class DockWidget; class DockArea; }
 namespace hc::document
 {
     namespace search { class Panel; }
+    class DocumentToolHost;
     class DocumentStatusBar;
     class DocumentProgressOverlay;
     class RecentDocumentStore;
@@ -118,7 +120,6 @@ namespace hc::document
         bool toolbarVisible_ = true;
         void syncToolbarRow();
         void showChromeMenu(const QPoint& Global, bool Toolbar);
-        void showTabMenu(const QPoint& Global, int Index);
         void showStatusMenu(const QPoint& Global);
         // id · text of the fields the active view offers (before hiding), for the status bar menu.
         QList<QPair<QString, QString>> statusFieldNames_;
@@ -129,14 +130,37 @@ namespace hc::document
         QJsonArray searchSources() const;
         void navigateSearch(const QJsonObject& Row);
         search::Panel* searchPanel_ = nullptr;
-        QMainWindow* searchHost_ = nullptr;
-        QDockWidget* searchDock_ = nullptr;
         QString searchDocument_, searchPlacement_;
-        // The EPUB editor whose problems panel hosts 파일에서 찾기 ("epubProblems" placement).
-        QPointer<QWidget> searchEpubHost_;
-        void syncSearchHost();
-        // The configured place of 파일에서 찾기 ("tab", "bottom"); the product default when unset.
+        // The configured place of 파일에서 찾기 ("tab", "bottom", "floating"); the product default when unset.
         QString searchLocation() const;
+        // 도킹(fmdock 2): 문서는 중앙 영역의 도크, 파일에서 찾기 · 개요 · 책 구조 · 문제 · 출력은 도구 창.
+        fm::dock::DockManager* docks_ = nullptr;
+        QPointer<fm::dock::DockWidget> currentDock_;
+        fm::dock::DockWidget* searchTool_ = nullptr;
+        QMap<QString, fm::dock::DockWidget*> tools_;
+        QMap<QString, DocumentToolHost*> toolHosts_;
+        QByteArray dockDefaultLayout_;
+        QString layoutName_;
+        bool toolSyncing_ = false, dockRestored_ = false;
+        void buildDocks();
+        fm::dock::DockWidget* makeTool(const QString& Kind, const QString& Title, QWidget* Content);
+        void watchArea(fm::dock::DockArea* Area);
+        void setCurrentDocument(fm::dock::DockWidget* Dock);
+        void pickCurrentDocument();
+        void collectToolPanels();
+        void syncToolHosts();
+        void showTool(const QString& Kind, bool Show, bool Front = false);
+        bool showDocumentMenu(fm::dock::DockWidget* Dock, const QPoint& Global);
+        void fillToolMenu(QMenu* Menu);
+        void fillLayoutMenu(QMenu* Menu);
+        void applyLayout(const QString& Name);
+        void storeDockSettings();
+        void restoreDockSettings(const QJsonObject& Settings);
+        void openPreviewBeside(const QString& Id);
+        void closePreviewBeside(const QString& Id);
+        QPointer<QMenu> toolMenu_, layoutMenu_;
+        QTimer* nativeFocus_ = nullptr;
+        void pollNativeFocus();
         bool triggerCommand(const QString& Id);
         bool focusReleased_ = false;
         std::unique_ptr<DocumentWindowSize> windowSize_;
@@ -185,8 +209,8 @@ namespace hc::document
         struct LocalSave;
         std::shared_ptr<Tab> active() const;
         std::shared_ptr<Tab> find(const QString& Id) const;
-        // Where an opened 파일에서 찾기 panel goes for Tab: a bottom panel of a book being edited is its problems panel.
-        QString searchPlace(const std::shared_ptr<Tab>& Tab, const QString& Location) const;
+        // The document of a dock: its own dock or its ‘옆에 미리보기’ dock.
+        std::shared_ptr<Tab> tabOf(const fm::dock::DockWidget* Dock) const;
         // Before Tab's pane is hidden: takes the keyboard from its out-of-process view. The tab shown
         // next then takes the keyboard (focusReleased_, consumed by currentChanged).
         void releaseFocusFrom(const std::shared_ptr<Tab>& Tab);
@@ -225,7 +249,6 @@ namespace hc::document
         DocumentWorkspace workspace_;
         std::shared_ptr<DocumentRecoveryStore> recovery_;
         WorkspaceChromeController* chrome_;
-        QStackedWidget* singlePane_;
         std::function<int(const QString&)> closePrompt_;
         QString shellError_;
         void toggleEpubFullscreen();
@@ -276,7 +299,6 @@ namespace hc::document
         int recoveryWorkers_ = 0;
         QMenuBar* menu_;
         QToolBar* toolbar_;
-        QTabWidget* tabs_;
         DocumentStatusBar* statusBar_ = nullptr;
         // File read and write progress over the left of the status bar; follows the active tab.
         DocumentProgressOverlay* progressOverlay_ = nullptr;

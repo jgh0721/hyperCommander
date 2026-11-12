@@ -130,6 +130,25 @@ void EpubSourceEditor::setupResources(QWidget* Panel) {
     connect(tree_,&QTreeView::customContextMenuRequested,this,&EpubSourceEditor::showTreeMenu);
     auto* AddMenu=new QMenu(Add);Add->setMenu(AddMenu);connect(AddMenu,&QMenu::aboutToShow,this,[this,AddMenu]{AddMenu->clear();for(const auto& Name:{"epubAddChapter","epubAddImage","epubImportResource"})AddMenu->addAction(action(Name));});
 }
+QList<DocumentToolPanelItem> EpubSourceEditor::TakeToolPanels() {
+    if(panelsTaken_ || !problems_)return {};
+    panelsTaken_=true;
+    // 문제 칸 = 요약 줄 + 검사 결과. EPUBCheck 출력은 출력 도구 창이 따로 보인다. 부모는 작업 공간이 바꾼다
+    // (부모 없이 두면 최상위 창이 된다). 빈 탭 묶음과 책 구조의 ‘접기’ 단추는 도구 창이 맡으므로 숨긴다.
+    auto* Problems=new QWidget(problemsPanel_);Problems->setObjectName("epubProblemsTool");
+    auto* Layout=new QVBoxLayout(Problems);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
+    problems_->setCornerWidget(nullptr,Qt::TopRightCorner);problemsSummary_->setParent(Problems);problemsSummary_->setContentsMargins(8,4,8,4);problemsSummary_->show();Layout->addWidget(problemsSummary_);
+    problems_->removeTab(problems_->indexOf(diagnostics_));problems_->removeTab(problems_->indexOf(checkerOutput_));
+    diagnostics_->setParent(Problems);Layout->addWidget(diagnostics_,1);diagnostics_->show();
+    problemsPanel_->hide();
+    if(auto* Hide=treePanel_->findChild<QToolButton*>("epubResourceHide"))Hide->hide();
+    takenPanels_<<treePanel_<<Problems<<checkerOutput_;
+    // EPUB 편집이 시작되면 책 구조 · 문제를 연다(시안). 사용자가 끈 패널도 편집을 새로 시작하면 다시 연다.
+    for(const auto& Name:{"epubToggleTree","epubToggleProblems"}){const QSignalBlocker Block(action(Name));action(Name)->setChecked(true);}
+    return {DocumentToolPanelItem{QStringLiteral("bookTree"),treePanel_,{},action("epubToggleTree")},
+            DocumentToolPanelItem{QStringLiteral("problems"),Problems,{},action("epubToggleProblems")},
+            DocumentToolPanelItem{QStringLiteral("output"),checkerOutput_,tr("EPUBCheck 출력"),{}}};
+}
 void EpubSourceEditor::AttachSearchPanel(QWidget* Panel) {
     if(!Panel || !problems_ || searchPanel_==Panel)return;
     if(searchPanel_)DetachSearchPanel();
@@ -148,7 +167,7 @@ void EpubSourceEditor::setupProblems(QWidget* Panel) {
     auto* Layout=new QVBoxLayout(Panel);Layout->setContentsMargins(0,0,0,0);Layout->setSpacing(0);
     problems_=new QTabWidget(Panel);problems_->setObjectName("epubProblemTabs");problems_->setDocumentMode(true);Layout->addWidget(problems_);
     problemsSummary_=new QLabel(problems_);problemsSummary_->setObjectName("epubProblemSummary");problemsSummary_->setTextFormat(Qt::PlainText);problemsSummary_->setContentsMargins(0,0,8,0);problemsSummary_->setForegroundRole(QPalette::PlaceholderText);problems_->setCornerWidget(problemsSummary_,Qt::TopRightCorner);
-    diagnostics_=new QTreeWidget(problems_);diagnostics_->setObjectName("epubEditDiagnostics");diagnostics_->setAccessibleName(tr("EPUB 소스 검사 결과"));diagnostics_->setHeaderLabels({tr("수준"),tr("리소스"),tr("행"),tr("설명")});diagnostics_->setRootIsDecorated(false);diagnostics_->setColumnWidth(0,70);diagnostics_->setColumnWidth(1,220);diagnostics_->setColumnWidth(2,50);diagnostics_->setContextMenuPolicy(Qt::CustomContextMenu);problems_->addTab(diagnostics_,tr("문제"));
+    diagnostics_=new QTreeWidget(problems_);diagnostics_->setObjectName("epubEditDiagnostics");diagnostics_->setAccessibleName(tr("EPUB 소스 검사 결과"));diagnostics_->setHeaderLabels({tr("수준"),tr("파일"),tr("줄"),tr("설명"),tr("출처")});diagnostics_->setRootIsDecorated(false);diagnostics_->setColumnWidth(0,70);diagnostics_->setColumnWidth(1,220);diagnostics_->setColumnWidth(2,50);diagnostics_->setColumnWidth(3,420);diagnostics_->setContextMenuPolicy(Qt::CustomContextMenu);problems_->addTab(diagnostics_,tr("문제"));
     checkerOutput_=new QPlainTextEdit(problems_);checkerOutput_->setObjectName("epubCheckerOutput");checkerOutput_->setReadOnly(true);checkerOutput_->setAccessibleName(tr("EPUBCheck 출력"));checkerOutput_->setLineWrapMode(QPlainTextEdit::NoWrap);problems_->addTab(checkerOutput_,tr("EPUBCheck 출력"));
     connect(diagnostics_,&QTreeWidget::customContextMenuRequested,this,&EpubSourceEditor::showProblemMenu);
 }
@@ -293,7 +312,7 @@ void EpubSourceEditor::updateStatus() {
     else if(ready_ && validatedToken_==Token() && !validatedBytes_.isEmpty())Validation=tr("✓ 기본 검사 통과")+(checkerState_=="passed"?(Warnings?tr(" · EPUBCheck 경고 %1").arg(Warnings):tr(" · EPUBCheck 통과")):checkerState_=="failed"?tr(" · EPUBCheck 오류 %1").arg(Errors):QString{});
     else if(!error_.isEmpty())Validation=tr("⚠ 검사 실패");else Validation=tr("검사 전");
     statusValidation_->setText(Validation);statusValidation_->setToolTip(validationSnapshot()["state"].toString());
-    statusProblems_->setText(tr("문제 %1").arg(diagnosticRows_.size()));statusProblems_->setVisible(problemsPanel_ && problemsPanel_->isHidden());
+    statusProblems_->setText(tr("문제 %1").arg(diagnosticRows_.size()));statusProblems_->setVisible(panelsTaken_?!action("epubToggleProblems")->isChecked():problemsPanel_ && problemsPanel_->isHidden());
     const auto Message=!previewError_.isEmpty() && message_.isEmpty()?previewMessage_:message_;statusMessage_->setText(QFontMetrics(statusMessage_->font()).elidedText(QString(Message).replace('\n',' '),Qt::ElideRight,qMax(80,statusMessage_->width())));statusMessage_->setToolTip(Message);
     statusDraft_->setText(!recoveryEnabled_?tr("자동 복구 꺼짐"):draftSavedAt_>0?tr("초안 자동 보관 %1").arg(QDateTime::fromMSecsSinceEpoch(draftSavedAt_).toString("HH:mm")):tr("자동 복구 켜짐"));statusDraft_->setToolTip(draftMessage_);
     if(sourceShown()){statusCaret_->setText(tr("줄 %1, 열 %2").arg(text_->currentLine()).arg(text_->currentColumn()));const auto Eol=static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_GETEOLMODE);statusFormat_->setText(QString("UTF-8 · %1 · %2").arg(Eol==SC_EOL_CRLF?"CRLF":Eol==SC_EOL_CR?"CR":"LF",text_->currentLanguage()));}
@@ -369,10 +388,16 @@ void EpubSourceEditor::applyOrientation(Qt::Orientation Value,bool Save) {
 }
 void EpubSourceEditor::setPanelVisible(const QString& Panel,bool Visible) {
     auto* Toggle=action(Panel=="tree"?"epubToggleTree":Panel=="problems"?"epubToggleProblems":"epubTogglePreview");
+    // 넘긴 책 구조 · 문제는 작업 공간의 도구 창이 보이기를 정한다: 켜기 · 끄기를 알리고(막지 않음) 보여 달라고 한다.
+    if(panelsTaken_ && Panel!="preview"){
+        if(Toggle->isChecked()!=Visible)Toggle->setChecked(Visible);
+        if(Visible)emit ToolPanelRequested(Panel=="tree"?QStringLiteral("bookTree"):QStringLiteral("problems"));
+        updateStatus();if(layoutRestored_)layoutTimer_.start();return;
+    }
     {const QSignalBlocker Block(Toggle);Toggle->setChecked(Visible);}
     const bool Source=!sourcePanel_->isHidden(),WasPreview=!previewPanel_->isHidden();
     // Reader mode keeps only the preview. A hidden preview stays alive and only pauses automatic refresh.
-    treePanel_->setVisible(Source && action("epubToggleTree")->isChecked());problemsPanel_->setVisible(Source && action("epubToggleProblems")->isChecked());
+    if(!panelsTaken_){treePanel_->setVisible(Source && action("epubToggleTree")->isChecked());problemsPanel_->setVisible(Source && action("epubToggleProblems")->isChecked());}
     previewPanel_->setVisible(previewRuntime_.has_value() && (!Source || action("epubTogglePreview")->isChecked()));
     if(previewPanel_->isHidden())previewTimer_.stop();else if(!WasPreview && (action("epubAutoPreview")->isChecked() || previewMissing()) && previewActiveToken_!=Token())previewTimer_.start();
     for(auto* Widget:{treePanel_,problemsPanel_,previewPanel_})if(Widget->isHidden() && Widget->isAncestorOf(QApplication::focusWidget()))focusSource();

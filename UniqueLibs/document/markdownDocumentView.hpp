@@ -2,6 +2,8 @@
 #include "documentStatusBar.hpp"
 #include "epubLineShifts.hpp"
 #include "documentEditRange.hpp"
+#include "documentToolPanel.hpp"
+#include <QPointer>
 #include <QWidget>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -91,12 +93,23 @@ class MarkdownDocumentView final : public QWidget
     {
         return previewOnly_;
     }
+    // 도킹 작업 공간: 개요 칸을 떼어 넘긴다(한 번만). 넘긴 뒤 개요 켜기 · 끄기는 작업 공간의 도구 창을 연다 · 닫는다.
+    QList<DocumentToolPanelItem> TakeToolPanels();
+    // 옆에 미리보기 열기: 미리보기 칸을 떼어 넘긴다. 보기 방식은 나란히로 두고 바꾸지 못한다. ReturnPreview로 되돌린다.
+    QWidget *TakePreview();
+    void ReturnPreview();
+    bool IsPreviewTaken() const
+    {
+        return previewTaken_;
+    }
   signals:
     void Changed();
     void OpenRequested(const QString &Path);
     void EscapeRequested();
     // markdown.fullScreen: 문서 창이 전체 화면을 켜고 끈다.
     void FullScreenToggleRequested();
+    // 넘긴 패널을 보여 달라("outline").
+    void ToolPanelRequested(const QString &Kind);
 
   protected:
     bool eventFilter(QObject *, QEvent *) override;
@@ -176,6 +189,10 @@ class MarkdownDocumentView final : public QWidget
     QList<QAction *> sourceActions_;
     QWidget *outlinePanel_;
     QWidget *previewPanel_;
+    // 작업 공간에 넘긴 칸(이 화면이 지울 때 함께 지운다).
+    QList<QPointer<QWidget>> takenPanels_;
+    bool panelsTaken_ = false, previewTaken_ = false;
+    QString modeBeforeTaken_;
     QTreeWidget *outline_;
     QSplitter *splitter_;
     MarkdownProcessView *preview_;

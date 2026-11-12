@@ -5,6 +5,7 @@
 #include "documentStorageAdapter.hpp"
 #include "commonLibs/document/documentRecovery.hpp"
 #include "hwpOpenWindow.hpp"
+#include "documentToolPanel.hpp"
 #include <QWidget>
 #include <QJsonObject>
 #include <functional>
@@ -118,6 +119,13 @@ namespace hc::document
         // The view's own toolbar row (text, PDF, image, Markdown, EPUB); nullptr for HWP.
         QToolBar* PrimaryToolbar() const;
         EpubSourceEditor* EpubEditor() const { return epubEditor_; }
+        // 도킹 작업 공간이 가져갈 칸(개요 · 책 구조 · 문제 · 출력). 화면 · EPUB 편집기가 생긴 뒤 새로 생긴 칸만 돌려준다.
+        QList<DocumentToolPanelItem> TakeToolPanels();
+        // 옆에 미리보기 열기(Markdown · reST): 미리보기 칸을 넘기고 되돌린다.
+        bool CanTakePreview() const;
+        QWidget* TakePreview();
+        void ReturnPreview();
+        bool IsPreviewTaken() const;
         // Image, PDF and EPUB editing commands dispatched by the workspace shortcut router.
         bool RunViewCommand(const QString& Id);
         bool CanRunViewCommand(const QString& Id) const;
@@ -129,6 +137,8 @@ namespace hc::document
         QString SaveEncoding() const { return encoding_; }
         bool SaveBom() const { return bom_; }
     signals:
+        // 넘긴 칸을 보여 달라("outline" · "bookTree" · "problems" · "output").
+        void ToolPanelRequested(const QString& Kind);
         // "다시 읽기 (해석만)": the workspace re-decodes the loaded bytes.
         void ReinterpretRequested(const QString& Encoding);
         // A command such as Ctrl+G asks the workspace to open the picker of a status field.

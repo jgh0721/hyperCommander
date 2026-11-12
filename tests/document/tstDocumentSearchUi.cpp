@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/search/documentSearchPanel.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "documentTabsProbe.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
@@ -176,12 +177,14 @@ private slots:
             QVERIFY(!Table->model()->index(0,2).data(Qt::UserRole).toJsonObject().contains("replacement"));
             QTest::keyClick(&Window,Qt::Key_H,Qt::ControlModifier|Qt::ShiftModifier);QTRY_VERIFY(Query->hasFocus());QVERIFY(Replacement->isVisible());QCOMPARE(Replacement->text(),QString("world"));
             QTRY_VERIFY_WITH_TIMEOUT(Table->model()->index(0,2).data(Qt::UserRole).toJsonObject().contains("replacement"),10000);
-            auto* Dock = Window.findChild<QDockWidget*>("documentSearchDock"); QVERIFY(Dock); QVERIFY(!Dock->isFloating());
+            // 파일에서 찾기는 도구 창(fmdock 도크 "tool:search"): 위치 = 분리 창(떠 있는 창) · 콘텐츠 탭(중앙) · 하단 패널.
+            test::DocumentTabs Tabs(&Window); QVERIFY(Tabs);
+            auto* Dock = Tabs.tool("search"); QVERIFY(Dock); QVERIFY(!Dock->isFloating()); QVERIFY(Dock->isAncestorOf(Panel));
             Panel->PlacementRequested("floating"); QTRY_VERIFY(Dock->isFloating()); QCOMPARE(Table->model()->rowCount(), 3);
-            Panel->PlacementRequested("tab"); auto* Tabs = Window.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->currentWidget(), Panel); QCOMPARE(Table->model()->rowCount(), 3);
-            Panel->PlacementRequested("bottom"); QVERIFY(!Dock->isFloating()); QVERIFY(Panel->isVisible());
+            Panel->PlacementRequested("tab"); QTRY_VERIFY(!Dock->isFloating()); QVERIFY(Dock->isInCentralArea()); QVERIFY(Dock->isCurrentTab()); QCOMPARE(Table->model()->rowCount(), 3);
+            Panel->PlacementRequested("bottom"); QVERIFY(!Dock->isFloating()); QVERIFY(!Dock->isInCentralArea()); QVERIFY(Panel->isVisible());
             QTRY_COMPARE(Panel->window(),static_cast<QWidget*>(&Window));QTest::qWait(100);
-            QCOMPARE(Panel->parentWidget(),static_cast<QWidget*>(Dock));
+            QVERIFY(Dock->isAncestorOf(Panel));
             QVERIFY(Window.rect().contains(QRect(Panel->mapTo(&Window,QPoint{}),Panel->size())));
             QVERIFY(Panel->height()>200);QVERIFY(Table->height()>40);
             const auto Screenshot = qEnvironmentVariable("HC_DOCUMENT_SEARCH_SCREENSHOT"); if (!Screenshot.isEmpty()) QVERIFY(Window.grab().save(Screenshot));
@@ -220,9 +223,9 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 15000);
             QTest::keyClick(&Window, Qt::Key_F, Qt::ControlModifier | Qt::ShiftModifier);
             auto* Panel = Window.findChild<search::Panel*>(); QVERIFY(Panel); QTRY_VERIFY(Panel->isVisible());
-            auto* Tabs = Window.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs);
-            QCOMPARE(Tabs->currentWidget() == Panel, InTab);
-            QCOMPARE(Panel->parentWidget() == Window.findChild<QDockWidget*>("documentSearchDock"), !InTab);
+            test::DocumentTabs Tabs(&Window); QVERIFY(Tabs);
+            auto* Dock = Tabs.tool("search"); QVERIFY(Dock); QVERIFY(Dock->isAncestorOf(Panel));
+            QCOMPARE(Dock->isInCentralArea(), InTab); QVERIFY(Dock->isCurrentTab());
         }
         QTRY_VERIFY_WITH_TIMEOUT(search::Panel::AllStopped(), 10000);
     }
@@ -242,8 +245,8 @@ private slots:
             QVERIFY(!IdA.isEmpty() && !IdB.isEmpty()); QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 15000);
             const auto Root = reinterpret_cast<HWND>(Window.winId());
             QVERIFY2(ActivateTestWindow(Root), "An active input desktop is required for native focus coverage");
-            auto* Tabs = Window.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 2);
-            const auto PaneOf = [&](int Index) { return qobject_cast<DocumentViewPane*>(Tabs->widget(Index)); };
+            test::DocumentTabs Tabs(&Window); QVERIFY(Tabs); QCOMPARE(Tabs.count(), 2);
+            const auto PaneOf = [&](int Index) { return qobject_cast<DocumentViewPane*>(Tabs.widget(Index)); };
             QVERIFY(PaneOf(0) && PaneOf(1));
             // The stand-in reader: a child window created and pumped by its own thread inside pane A.
             auto* Host = new QWidget(PaneOf(0)); Host->setGeometry(0, 0, 240, 120); Host->show();
@@ -261,8 +264,8 @@ private slots:
             // Qt's focus widget sits outside the reader's page, as after a click into the reader.
             const auto EnterReader = [&] {
                 Window.Handle({{"action", "activate"}, {"documentId", IdA}});
-                if (Tabs->currentIndex() != 0 || !ActivateTestWindow(Root)) return false;
-                Tabs->tabBar()->setFocus(Qt::OtherFocusReason); SetFocus(Reader.load());
+                if (Tabs.currentIndex() != 0 || !ActivateTestWindow(Root)) return false;
+                Window.findChild<QWidget*>("mainToolbar")->setFocus(Qt::OtherFocusReason); SetFocus(Reader.load());
                 return GetFocus() == Reader.load();
             };
             const auto KeyboardInB = [&] {
@@ -270,16 +273,16 @@ private slots:
                 return Focus && GetWindowThreadProcessId(Focus, nullptr) == GetCurrentThreadId() && Widget && PaneOf(1)->isAncestorOf(Widget);
             };
             QVERIFY(EnterReader());
-            QTest::mouseClick(Tabs->tabBar(), Qt::LeftButton, {}, Tabs->tabBar()->tabRect(1).center());
-            QCOMPARE(Tabs->currentIndex(), 1); QTRY_VERIFY(KeyboardInB());
+            QVERIFY(Tabs.tabButton(1)); QTest::mouseClick(Tabs.tabButton(1), Qt::LeftButton, {}, Tabs.tabButton(1)->rect().center());
+            QCOMPARE(Tabs.currentIndex(), 1); QTRY_VERIFY(KeyboardInB());
             QVERIFY(EnterReader());
             Window.Handle({{"action", "activate"}, {"documentId", IdB}}); QTRY_VERIFY(KeyboardInB());
             // A switch that did not release first (a wheel over the tab bar) repairs afterwards.
             QVERIFY(EnterReader());
-            Tabs->setCurrentIndex(1); QTRY_VERIFY(KeyboardInB());
+            Tabs.setCurrentIndex(1); QTRY_VERIFY(KeyboardInB());
             QVERIFY(EnterReader());
             QTest::keyClick(&Window, Qt::Key_F, Qt::ControlModifier | Qt::ShiftModifier);
-            auto* Panel = Window.findChild<search::Panel*>(); QVERIFY(Panel); QTRY_COMPARE(Tabs->currentWidget(), static_cast<QWidget*>(Panel));
+            auto* Panel = Window.findChild<search::Panel*>(); QVERIFY(Panel); QTRY_VERIFY(Panel->isVisible() && Tabs.tool("search")->isCurrentTab());
             auto* Query = Panel->findChild<QLineEdit*>("documentSearchQuery"); QVERIFY(Query);
             QTRY_VERIFY(Query->hasFocus() && GetFocus() && GetWindowThreadProcessId(GetFocus(), nullptr) == GetCurrentThreadId());
         }

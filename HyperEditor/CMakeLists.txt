@@ -162,6 +162,8 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/documentRecoveryMaintenance.cpp ../UniqueLibs/document/documentRecoveryMaintenance.hpp
     ../UniqueLibs/document/recoveryPromptDialog.cpp ../UniqueLibs/document/recoveryPromptDialog.hpp
     ../UniqueLibs/document/recoveryManagerDialog.cpp ../UniqueLibs/document/recoveryManagerDialog.hpp
+    ../UniqueLibs/document/documentToolPanel.cpp
+    ../UniqueLibs/document/documentToolPanel.hpp
     ../UniqueLibs/document/documentWorkspaceWidget.cpp
     ../UniqueLibs/document/documentWorkspaceWidget.hpp
     ../UniqueLibs/document/documentSettingsDialog.cpp
@@ -184,6 +186,8 @@ target_link_libraries(hc_document_widgets PRIVATE hc_update_core)
 target_link_libraries(hc_document_widgets PUBLIC hc_rst_core)
 target_link_libraries(hc_document_widgets PUBLIC hc_document_core hc_document_broker hc_document_sdi hc_hypereditor Qt6::Widgets fmstyle PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
 target_link_libraries(hc_document_widgets PRIVATE Qt6::ZlibPrivate hc_epub_host hc_builtin_sevenzip hc_image_archive_transport hc_passwords Fm::widgets)
+# Document area and tool windows dock with fmdock 2 (waterColorStyle).
+target_link_libraries(hc_document_widgets PUBLIC Fm::dock)
 target_compile_options(hc_document_widgets PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY "" CACHE PATH "Qualified shared RHWP runtime to include in product installation")
 if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND NOT HC_RHWP_APPROVED_INVENTORY_SHA256)

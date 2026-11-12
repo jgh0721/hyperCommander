@@ -13,6 +13,7 @@
 #include <iostream>
 #include <QMenu>
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "documentTabsProbe.hpp"
 #include "UniqueLibs/document/documentHostBroker.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include "UniqueLibs/nativeWritableStorage.hpp"
@@ -165,20 +166,20 @@ private slots:
         auto* Toolbar = Workspace.findChild<QToolBar*>("mainToolbar"); QVERIFY(Toolbar);
         const int MenuIndex = Layout->indexOf(Menu); QVERIFY(MenuIndex >= 0);
         QCOMPARE(Layout->indexOf(Toolbar), MenuIndex + 1);
-        QCOMPARE(Layout->indexOf(Workspace.findChild<QWidget*>("documentTabs")), MenuIndex + 2);
+        QCOMPARE(Layout->indexOf(Workspace.findChild<QWidget*>("documentDocks")), MenuIndex + 2);
         QCOMPARE(Workspace.findChildren<QToolBar*>("viewToolbar").size(), 2);
         Workspace.activateWindow(); Workspace.raise();
-        auto* Tabs = Workspace.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs);
-        auto* Editor = qobject_cast<DocumentViewPane*>(Tabs->currentWidget())->InputWidget(); QVERIFY(Editor);
+        test::DocumentTabs Tabs(&Workspace); QVERIFY(Tabs); QCOMPARE(Tabs.count(), 2);
+        auto* Editor = qobject_cast<DocumentViewPane*>(Tabs.currentWidget())->InputWidget(); QVERIFY(Editor);
         Editor->setFocus(); QTest::keyClick(Editor, Qt::Key_Tab, Qt::ControlModifier);
         QCOMPARE(Workspace.Snapshot()["activeDocumentId"].toString(), One);
         QTest::keyClick(Editor, Qt::Key_Tab, Qt::ControlModifier | Qt::ShiftModifier);
         QCOMPARE(Workspace.Snapshot()["activeDocumentId"].toString(), Two);
-        Editor = qobject_cast<DocumentViewPane*>(Tabs->currentWidget())->InputWidget(); Editor->setFocus();
+        Editor = qobject_cast<DocumentViewPane*>(Tabs.currentWidget())->InputWidget(); Editor->setFocus();
         QInputMethodEvent InputMethod; InputMethod.setCommitString("한글 조합 입력");
         QCoreApplication::sendEvent(Editor, &InputMethod);
-        QVERIFY(qobject_cast<DocumentViewPane*>(Tabs->currentWidget())->Content().contains(QString("한글 조합 입력").toUtf8()));
-        qobject_cast<DocumentViewPane*>(Tabs->currentWidget())->Undo(); QVERIFY(!Document(Workspace.Snapshot(), Two)["dirty"].toBool());
+        QVERIFY(qobject_cast<DocumentViewPane*>(Tabs.currentWidget())->Content().contains(QString("한글 조합 입력").toUtf8()));
+        qobject_cast<DocumentViewPane*>(Tabs.currentWidget())->Undo(); QVERIFY(!Document(Workspace.Snapshot(), Two)["dirty"].toBool());
         QVERIFY(!Workspace.Handle({{"action", "replaceText"}, {"documentId", One}, {"text", "changed\n"}}).contains("error"));
         QVERIFY(Document(Workspace.Snapshot(), One)["dirty"].toBool()); QVERIFY(!Document(Workspace.Snapshot(), Two)["dirty"].toBool());
         QVERIFY(Workspace.Handle({{"action", "close"}, {"documentId", One}}).contains("error"));

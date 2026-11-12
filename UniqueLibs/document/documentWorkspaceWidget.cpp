@@ -39,14 +39,15 @@
 #include <QRegularExpression>
 #include <atomic>
 #include "documentViewPane.hpp"
+#include "documentToolPanel.hpp"
 #include "search/documentSearchPanel.hpp"
-#include <QMainWindow>
-#include <QDockWidget>
+#include <fmdock/DockManager.h>
 #include "imageFullscreen.hpp"
 #include "imageReadingView.hpp"
 #include "documentThemeAdapter.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "documentSettingsDialog.hpp"
+#include <fmwidgets/Menu.h>
 #include <fmwidgets/ToolTip.h>
 #include <fmwidgets/WindowChrome.h>
 #include "documentShortcutRouter.hpp"
@@ -221,6 +222,11 @@ namespace hc::document
     };
     struct DocumentWorkspaceWidget::Tab
     {
+        // 중앙 영역의 문서 도크(내용 = pane_)와 ‘옆에 미리보기 열기’로 연 미리보기 도크.
+        fm::dock::DockWidget* dock_ = nullptr;
+        QPointer<fm::dock::DockWidget> previewDock_;
+        // 도구 창에 넘긴 이 문서의 칸.
+        QList<DocumentToolPanelItem> toolPanels_;
         QString id_ = QUuid::createUuid().toString(QUuid::Id128), path_, error_;
         QString sourceToken_, pendingToken_, recoveredName_, temporarySource_, displayName_;
         // "새 문서 N" / "새 이미지 N" while the document has no file of its own; 0 otherwise.
@@ -294,8 +300,7 @@ namespace hc::document
         menu_ = new QMenuBar(this); toolbar_ = new QToolBar(tr("공통 도구모음"), this);
         menu_->setObjectName("mainMenu"); toolbar_->setObjectName("mainToolbar");
         toolbar_->setToolButtonStyle(Qt::ToolButtonIconOnly); toolbar_->setIconSize(QSize(24, 24));
-        tabs_ = new QTabWidget(this); tabs_->setObjectName("documentTabs"); tabs_->setTabsClosable(true);
-        singlePane_ = new QStackedWidget(this); singlePane_->setObjectName("singleDocument"); singlePane_->hide();
+        buildDocks();
         BasicTrace.End();
         // The standalone editor uses the product title bar; a hosted viewer keeps its host's frame.
         if (!Hosted && !Parent) {
@@ -326,7 +331,7 @@ namespace hc::document
         });
         auto* StatusRefresh = new QTimer(this); StatusRefresh->setObjectName("documentStatusRefresh");StatusRefresh->setSingleShot(true);StatusRefresh->setInterval(50);
         connect(StatusRefresh,&QTimer::timeout,this,[this]{update();tryFinishClose();});
-        Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(tabs_, 1); Layout->addWidget(StatusRow);
+        Layout->addWidget(menu_); Layout->addWidget(toolbar_); Layout->addWidget(docks_, 1); Layout->addWidget(StatusRow);
         chrome_ = new WorkspaceChromeController(menu_, toolbar_, this);
         chrome_->SetStatusWidget(StatusRow);
         chrome_->SetToolbarRowProvider([this](bool Visible) { toolbarVisible_ = Visible; syncToolbarRow(); });
@@ -462,39 +467,24 @@ namespace hc::document
         connect(EpubReopen,&QAction::triggered,this,[this]{if(auto Tab=active())if(auto* Reopen=Tab->pane_->findChild<QAction*>("epubReopen"))Reopen->trigger();});
         Restore->setObjectName("documentRecovery");
         connect(Restore, &QAction::triggered, this, [this] { ShowRecoveryManager(); });
-        connect(tabs_, &QTabWidget::tabCloseRequested, this, [this](int Index) {
-            if (searchPanel_ && tabs_->widget(Index) == searchPanel_) { tabs_->removeTab(Index); searchPanel_->hide(); return; }
-            auto* Pane = tabs_->widget(Index); for (std::size_t At = 0; At < documents_.size(); ++At) if (documents_[At]->pane_ == Pane) { closeTab(int(At)); break; }
-        });
-        // A click switches the tab after this signal: the shown pane gives up the keyboard while still visible.
-        connect(tabs_, &QTabWidget::tabBarClicked, this, [this](int Index) { if (Index >= 0 && Index != tabs_->currentIndex()) releaseFocusFrom(active()); });
-        connect(tabs_, &QTabWidget::currentChanged, this, [this] {
-            bool Refocus = std::exchange(focusReleased_, false);
-            // Fallback for switches that did not release first: a hidden foreign view that kept the Win32
-            // focus still receives every key, including the ones that would switch back.
-            const auto Native = reinterpret_cast<HWND>(window()->winId()); const auto Root = GetAncestor(Native, GA_ROOT);
-            if (const auto Focus = GetFocus(); Root && Focus && !IsWindowVisible(Focus) && GetWindowThreadProcessId(Focus, nullptr) != GetCurrentThreadId()
-                && GetAncestor(GetForegroundWindow(), GA_ROOT) == Root && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
-                QApplication::setActiveWindow(window());
-                if (GetWindowThreadProcessId(Root, nullptr) == GetCurrentThreadId()) SetActiveWindow(Root);
-                SetFocus(Native); Refocus = true;
-            }
-            if(auto Tab=active()){
-                setFocusProxy(Tab->pane_->InputWidget());
-                if(Refocus || Tab->pane_->ViewId()=="pdf" || Tab->pane_->IsProcessDocument())Tab->pane_->Focus();
-            } else if (Refocus && searchPanel_ && tabs_->currentWidget() == searchPanel_) searchPanel_->setFocus(Qt::OtherFocusReason);
-            update();
-        });
         for (const auto& Item : {std::pair{QString("tab.next"), 1}, std::pair{QString("tab.previous"), -1}}) {
             auto* Action = new QAction(Item.second == 1 ? tr("다음 탭") : tr("이전 탭"), this); Action->setObjectName(Item.first); addAction(Action);
             connect(Action, &QAction::triggered, this, [this, Step = Item.second] {
-                if (!tabbed_) return; const auto Count = tabs_->count();
-                if (Count > 1) releaseFocusFrom(active());
-                if (Count) tabs_->setCurrentIndex((tabs_->currentIndex() + Step + Count) % Count);
-                if (auto Tab = active()) Tab->pane_->Focus();
+                // 포커스 문서가 든 묶음 안에서 돈다.
+                auto Tab = active(); auto* Area = Tab ? Tab->dock_->dockArea() : nullptr;
+                if (!tabbed_ || !Area) return;
+                QList<fm::dock::DockWidget*> Open; for (auto* Dock : Area->openDockWidgets()) if (tabOf(Dock) && Dock == tabOf(Dock)->dock_) Open.append(Dock);
+                const auto Count = Open.size(); if (Count < 2) return;
+                releaseFocusFrom(Tab);
+                const auto Next = tabOf(Open[(Open.indexOf(Tab->dock_) + Step + Count) % Count]);
+                activate(Next); Next->pane_->Focus();
                 focusReleased_ = false;
             });
         }
+        // 옆에 미리보기 열기(Markdown · reST): 미리보기만 따로 문서 탭으로 열어 옆 묶음에 둔다.
+        auto* Beside = new QAction(tr("옆에 미리보기 열기"), this); Beside->setObjectName("view.previewBeside"); addAction(Beside);
+        Beside->setProperty("documentIconName", "view-split");
+        connect(Beside, &QAction::triggered, this, [this] { if (auto Tab = active()) openPreviewBeside(Tab->id_); });
         auto* EpubMenu=new QMenu(tr("EPUB"),this);EpubMenu->setObjectName("epubCommands");
         EpubMenu->menuAction()->setProperty("documentIconName","toc-toggle");
         for(const auto& Command:DocumentShortcutRegistry::Commands())if(Command.scope_=="epub") {
@@ -612,6 +602,8 @@ namespace hc::document
             connect(startPage_, &DocumentStartPage::ShowAllRequested, this, &DocumentWorkspaceWidget::showRecentDialog);
             connect(startPage_, &DocumentStartPage::FilesDropped, this, [this](const QStringList& Paths) { for (const auto& Path : Paths) open(Path, false, {}, false); });
             setAcceptDrops(true);
+            // 문서가 하나도 없는 중앙 영역에 보인다(도구 창은 그대로).
+            docks_->setCentralPlaceholderWidget(startPage_);
         }
         connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) { if (State == Qt::ApplicationActive && settingsChanged()) refreshPreferencesAsync(); });
         externalWatcher_ = new mrst::ExternalChangeWatcher(this);
@@ -711,6 +703,7 @@ namespace hc::document
         // 보기: the view inserts its items before the common tail.
         viewMenu_ = menu_->addMenu(tr("보기(&V)")); viewMenu_->setObjectName("documentViewMenu");
         auto* ViewAnchor = viewMenu_->addSeparator();
+        viewMenu_->addAction(scoped(A("view.previewBeside"), viewKinds::Markup));
         auto* Fullscreen = A("view.fullscreen"); Fullscreen->setText(tr("전체 화면") + QStringLiteral("\tF11"));
         viewMenu_->addAction(scoped(Fullscreen, All & ~viewKinds::Markup));
         chromeMenu_ = viewMenu_->addMenu(tr("화면 구성")); chromeMenu_->setObjectName("documentChromeMenu");
@@ -746,6 +739,14 @@ namespace hc::document
             const auto Mode = chrome_->Settings()["themeMode"].toString("product");
             for (auto* Action : themeMenu_->actions()) Action->setChecked(Action->data().toString() == Mode);
         });
+        // 도구 창 켜기 · 끄기와 창 배치(이름 붙인 배치 · 잠금). EPUB 보기의 ‘배치’와 겹치지 않게 ‘창 배치’.
+        viewMenu_->addSeparator();
+        toolMenu_ = viewMenu_->addMenu(tr("도구 창")); toolMenu_->setObjectName("documentToolMenu");
+        toolMenu_->menuAction()->setProperty("documentIconName", "toc-toggle");
+        connect(toolMenu_, &QMenu::aboutToShow, this, [this] { fillToolMenu(toolMenu_); });
+        layoutMenu_ = viewMenu_->addMenu(tr("창 배치")); layoutMenu_->setObjectName("documentLayoutMenu");
+        layoutMenu_->menuAction()->setProperty("documentIconName", "view-split");
+        connect(layoutMenu_, &QMenu::aboutToShow, this, [this] { fillLayoutMenu(layoutMenu_); });
         viewMenu_->addSeparator();
         viewMenu_->addAction(scoped(A("tab.next"), Documents));
         viewMenu_->addAction(scoped(A("tab.previous"), Documents));
@@ -775,6 +776,16 @@ namespace hc::document
         Tool(A("redoDocument"), tr("다시 실행"), History);
         auto* Hwp = A("editHwpDocument"); toolbar_->addAction(Hwp);
         if (auto* Button = qobject_cast<QToolButton*>(toolbar_->widgetForAction(Hwp))) Button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        // 오른쪽 끝: 창 배치 고르개(보기 › 창 배치와 같은 메뉴). 임베드에는 두지 않는다.
+        if (!hosted_) {
+            auto* Spacer = new QWidget(toolbar_); Spacer->setObjectName("documentToolbarSpacer"); Spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+            toolbar_->addWidget(Spacer);
+            auto* LayoutButton = new QToolButton(toolbar_); LayoutButton->setObjectName("documentLayoutButton");
+            LayoutButton->setToolButtonStyle(Qt::ToolButtonTextOnly); LayoutButton->setPopupMode(QToolButton::InstantPopup);
+            LayoutButton->setMenu(layoutMenu_); LayoutButton->setText(tr("창 배치: %1").arg(tr("기본")));
+            LayoutButton->setToolTip(tr("창 배치 — 도구 창의 자리를 이름 붙여 저장하고 바꿉니다."));
+            toolbar_->addWidget(LayoutButton);
+        }
         applyKind(DocumentViewKind::None);
     }
     DocumentViewKind DocumentWorkspaceWidget::CurrentKind() const
@@ -827,11 +838,7 @@ namespace hc::document
         if (Within(statusSlot_)) { showStatusMenu(Event->globalPos()); return; }
         if (Within(menu_)) { showChromeMenu(Event->globalPos(), false); return; }
         if (Within(toolbar_)) { showChromeMenu(Event->globalPos(), true); return; }
-        if (tabbed_ && Within(tabs_->tabBar())) {
-            const int Index = tabs_->tabBar()->tabAt(tabs_->tabBar()->mapFrom(this, Event->pos()));
-            if (Index >= 0) showTabMenu(Event->globalPos(), Index);
-            return;
-        }
+        // 문서 탭의 메뉴는 도킹 관리자가 연결점(showDocumentMenu)으로 부른다.
         for (const auto& Each : documents_)
             if (Each->pane_ && Within(Each->pane_->PrimaryToolbar())) { showChromeMenu(Event->globalPos(), true); return; }
     }
@@ -980,7 +987,7 @@ namespace hc::document
             // A closed panel stays closed and opens at the new place next time.
             if (searchPanel_->property("configuredLocation").toString() != Location) {
                 searchPanel_->setProperty("configuredLocation", Location);
-                if (searchPanel_->isVisible()) placeSearch(searchPlace(active(), Location));
+                if (searchPanel_->isVisible()) placeSearch(Location);
             }
         }
         if (externalWatcher_) externalWatcher_->reloadSettings();
@@ -1140,8 +1147,11 @@ namespace hc::document
             previewFullscreen_ = true;
             // 제목 표시줄 · 메뉴 · 도구모음 · 탭 · 상태 표시줄을 감춘다. 개요 · 소스 · 진단 패널은 보기가 감춘다.
             chrome_->SetSuppressed(true);
-            QList<QWidget*> Chrome{tabbed_ ? static_cast<QWidget*>(tabs_->tabBar()) : nullptr, findChild<QWidget*>("documentWindowChrome", Qt::FindDirectChildrenOnly),
-                findChild<QWidget*>("documentStatusRow", Qt::FindDirectChildrenOnly)};
+            // 도구 창 · 다른 묶음은 문서 도크만 남기고 감춘다(보이는 것만, 나올 때 되돌림).
+            QList<QWidget*> Chrome{findChild<QWidget*>("documentWindowChrome", Qt::FindDirectChildrenOnly), findChild<QWidget*>("documentStatusRow", Qt::FindDirectChildrenOnly)};
+            if (auto* Area = Tab->dock_->dockArea()) Chrome.append(Area->findChild<QWidget*>(QStringLiteral("fmDockAreaTitleBar"), Qt::FindDirectChildrenOnly));
+            for (auto* Dock : docks_->dockWidgets()) if (Dock != Tab->dock_ && Dock->dockArea() && Dock->dockArea() != Tab->dock_->dockArea() && !Dock->isFloating()) Chrome.append(Dock->dockArea());
+            for (auto* Bar : docks_->findChildren<QWidget*>(QRegularExpression(QStringLiteral("^fmDockSideBar")), Qt::FindDirectChildrenOnly)) Chrome.append(Bar);
             for (auto* Widget : Chrome) if (Widget && !Widget->isHidden()) { previewHidden_.append(Widget); Widget->hide(); }
             Tab->pane_->SetPreviewOnly(true);
             Root->showFullScreen();
@@ -1388,17 +1398,20 @@ namespace hc::document
         if (!Folder.isEmpty() && QFileInfo(Folder).isAbsolute() && QFileInfo(Folder).isDir()) return Folder;
         return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
     }
-    QWidget* DocumentWorkspaceWidget::currentPane() const { if (searchPanel_ && tabs_->isVisible() && tabs_->currentWidget() == searchPanel_) return nullptr; return tabbed_ ? tabs_->currentWidget() : singlePane_->currentWidget(); }
+    QWidget* DocumentWorkspaceWidget::currentPane() const { const auto Tab = active(); return Tab ? Tab->pane_ : nullptr; }
     std::shared_ptr<DocumentWorkspaceWidget::Tab> DocumentWorkspaceWidget::active() const
-    { for (const auto& Tab : documents_) if (Tab->pane_ == currentPane()) return Tab; return {}; }
+    { if (!currentDock_) return {}; for (const auto& Tab : documents_) if (Tab->dock_ == currentDock_ && !Tab->closed_) return Tab; return {}; }
+    std::shared_ptr<DocumentWorkspaceWidget::Tab> DocumentWorkspaceWidget::tabOf(const fm::dock::DockWidget* Dock) const
+    { if (!Dock) return {}; for (const auto& Tab : documents_) if (!Tab->closed_ && (Tab->dock_ == Dock || Tab->previewDock_ == Dock)) return Tab; return {}; }
     std::shared_ptr<DocumentWorkspaceWidget::Tab> DocumentWorkspaceWidget::find(const QString& Id) const
     { for (const auto& Tab : documents_) if (Tab->id_ == Id && !Tab->closed_) return Tab; return {}; }
     void DocumentWorkspaceWidget::activate(const std::shared_ptr<Tab>& Tab)
     {
         if (const auto Previous = active(); Previous && Previous != Tab) releaseFocusFrom(Previous);
-        if (!tabbed_ && tabs_->indexOf(singlePane_) >= 0) tabs_->setCurrentWidget(singlePane_);
-        if (tabbed_) tabs_->setCurrentWidget(Tab->pane_); else singlePane_->setCurrentWidget(Tab->pane_);
-        // The single pane has no currentChanged handler.
+        // 묶음에서 앞으로 꺼내고(떠 있는 창이면 그 창을 올린다) 포커스 문서로 삼는다.
+        Tab->dock_->setAsCurrentTab();
+        if (auto* Floating = Tab->dock_->floatingWindow()) Floating->raise();
+        setCurrentDocument(Tab->dock_);
         if (std::exchange(focusReleased_, false) && active() == Tab) Tab->pane_->Focus();
         workspace_.Activate(Tab->id_.toStdString()); update();
     }
@@ -1435,16 +1448,15 @@ namespace hc::document
     bool DocumentWorkspaceWidget::SetTabbed(bool Enabled)
     {
         if (!documents_.empty()) return false;
-        if (Enabled == tabbed_) return true;
-        auto* Layout = qobject_cast<QVBoxLayout*>(layout()); Layout->removeWidget(tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_);
-        tabs_->hide(); singlePane_->hide(); tabbed_ = Enabled;
-        Layout->insertWidget(Layout->indexOf(toolbar_) + 1, tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_, 1);
-        (tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_)->show(); return true;
+        // Single-document mode: one document, no tab strip, no splitting or floating (open() sets the features).
+        tabbed_ = Enabled; return true;
     }
     bool DocumentWorkspaceWidget::ApplyChromeSettings(const QJsonObject& Settings)
     {
         if (Settings.contains("themeMode") && !QStringList{"product", "system", "light", "dark"}.contains(Settings["themeMode"].toString())) return false;
         if (!chrome_->ApplySettings(Settings)) return false;
+        // 도킹 배치(도구 창 자리 · 이름 붙인 배치 · 잠금)는 같은 설정에 함께 있다.
+        if (Settings.contains("dockLayout") || Settings.contains("dockPerspectives")) restoreDockSettings(Settings);
         if (Settings.contains("themeMode")) DocumentThemeAdapter::SetMode(Settings["themeMode"].toString()); return true;
     }
     QJsonObject DocumentWorkspaceWidget::ChromeSettings() const { return chrome_->Settings(); }
@@ -1497,8 +1509,25 @@ namespace hc::document
         // Authority follows the source: SDK slots have no original-provider link,
         // while explicitly opened local files are writable in either product.
         Tab->originalAuthority_ = !HostSlot && !Broker && SourceToken.isEmpty() && !Tab->recovered_; Tab->originalSave_ = Tab->originalAuthority_;
-        auto* Pane = new DocumentViewPane(tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_);
+        // 문서 도크: 내용은 문서 칸이다. 닫기 단추는 저장 확인을 거치도록 closeRequested만 보낸다.
+        using fm::dock::DockWidget;
+        auto* Dock = new DockWidget(QStringLiteral("doc:") + Tab->id_, tr("여는 중…"), this);
+        Dock->setDocument(true);
+        DockWidget::Features Features = DockWidget::Closable | DockWidget::Focusable | DockWidget::CustomCloseHandling;
+        if (tabbed_) Features |= DockWidget::Movable | DockWidget::Floatable; else Features |= DockWidget::NoTab;
+        Dock->setFeatures(Features);
+        Tab->dock_ = Dock;
+        connect(Dock, &DockWidget::closeRequested, this, [this, Tab] {
+            const auto At = std::find(documents_.begin(), documents_.end(), Tab);
+            if (At != documents_.end()) { activate(Tab); closeTab(int(std::distance(documents_.begin(), At))); }
+        });
+        auto* Pane = new DocumentViewPane(Dock);
         Pane->setProperty("hc.previewPath", Path);
+        connect(Pane, &DocumentViewPane::ToolPanelRequested, this, [this, Tab](const QString& Kind) {
+            if (Tab->closed_ || active() != Tab) return;
+            for (const auto& Item : Tab->toolPanels_) if (Item.kind_ == Kind && Item.widget_) toolHosts_.value(Kind)->ShowPanel(Item.widget_);
+            showTool(Kind, true, true);
+        });
         Pane->SetUnlimitedBytes(hosted_);
         Pane->SetShortcutBindings(shortcutRouter_->Bindings());
         Tab->pane_ = Pane;
@@ -1594,7 +1623,8 @@ namespace hc::document
         });
         connect(Pane,&DocumentViewPane::StatusPickerRequested,this,[this,Tab](const QString& Id){if(active()==Tab)openStatusPicker(Id);});
         documents_.push_back(Tab); workspace_.Add(Tab->session_);
-        if (tabbed_) tabs_->addTab(Pane, tr("여는 중…")); else singlePane_->addWidget(Pane);
+        Dock->setWidget(Pane, DockWidget::InsertMode::ForceNoScrollArea);
+        docks_->addDockWidgetToCentral(Dock);
         activate(Tab); load(Tab, false, RecoveryPath); return {{"documentId", Tab->id_}, {"loading", true}};
     }
     void DocumentWorkspaceWidget::navigateImage(const std::shared_ptr<Tab>& Tab, const QString& Path)
@@ -2439,12 +2469,18 @@ namespace hc::document
             for (const auto& Tab : documents_) if (!Tab->closed_ && !Tab->loading_ && Tab->originalAuthority_ && !Tab->broker_ && Tab->sourceToken_.isEmpty()) Paths.append(Tab->path_);
             externalWatcher_->setWatchedFiles(Paths);
         }
-        for (const auto& Tab : documents_) if (tabbed_) {
-            const auto Index = tabs_->indexOf(Tab->pane_); if (Index < 0) continue;
+        for (const auto& Tab : documents_) {
+            if (Tab->closed_ || !Tab->dock_) continue;
             const auto Name = documentName(*Tab);
-            tabs_->setTabText(Index, Name + (Tab->Dirty() ? " *" : "") + (Tab->loading_ ? tr(" · 여는 중") : "")
+            Tab->dock_->setTitle(Name + (Tab->Dirty() ? " *" : "") + (Tab->loading_ ? tr(" · 여는 중") : "")
                 + (Tab->session_->Snapshot().error_ || !Tab->error_.isEmpty() ? tr(" · 오류") : ""));
+            Tab->dock_->setToolTip(Tab->temporarySource_.isEmpty() ? QDir::toNativeSeparators(Tab->path_) : Name);
+            // 다른 프로세스 창(미리보기 · EPUB · 한글)은 끄는 동안 grab()으로 그릴 수 없다: 끌기 미리보기는 틀만.
+            Tab->dock_->setNativeContent(Tab->pane_->IsProcessDocument() || Tab->pane_->HasPreview());
+            if (Tab->previewDock_) Tab->previewDock_->setTitle(tr("%1 미리보기").arg(Name));
+            for (auto* Host : std::as_const(toolHosts_)) Host->RenameOwner(Tab->id_, Name);
         }
+        collectToolPanels();
         auto Tab = active();
         if(epubFullscreen_ && (!Tab || !Tab->pane_->IsEpub()))toggleEpubFullscreen();
         // 미리보기 전체 화면: 옮겨 간 탭이 Markdown 이나 reST 면 그 미리보기를 이어서 보여 주고, 아니면 나온다.
@@ -2463,9 +2499,8 @@ namespace hc::document
                 chrome_->SetActive(std::move(Contribution));
             }
         }
-        // Search is an auxiliary tab: retain the document's chrome policy.
-        else if (!searchPanel_ || tabs_->currentWidget() != searchPanel_) chrome_->SetActive({});
-        if (Tab || !searchPanel_ || tabs_->currentWidget() != searchPanel_) applyKind(Tab ? Tab->pane_->Kind() : DocumentViewKind::None);
+        else chrome_->SetActive({});
+        applyKind(Tab ? Tab->pane_->Kind() : DocumentViewKind::None);
         updateTitle();
         if (auto* Conflict = findChild<QAction*>("resolveDocumentConflict", Qt::FindDirectChildrenOnly))
             Conflict->setVisible(Tab && Tab->session_->Snapshot().saveState_ == DocumentSaveState::Conflict);
@@ -2510,7 +2545,10 @@ namespace hc::document
             // HyperViewer hands a new EPUB to HyperEditor: no tab of its own.
             if (Id == "file.newEpub") Action->setEnabled(!epubCreating_ && (hosted_ || ((documents_.size() < 16) && (tabbed_ || documents_.empty()))));
             if(Tab&&Tab->pane_->HasPreview()&&!Tab->pane_->PreviewSourceVisible()&&(Id.startsWith("text.")||Id.startsWith("edit.")))Action->setEnabled(Id=="text.find"||Id=="edit.copy"||Id=="edit.selectAll");
-            if (Id == "tab.next" || Id == "tab.previous") Action->setEnabled(tabbed_ && tabs_->count() > 1);
+            if (Id == "tab.next" || Id == "tab.previous") {
+                int Open = 0; if (auto* Area = Tab ? Tab->dock_->dockArea() : nullptr) for (auto* Dock : Area->openDockWidgets()) Open += tabOf(Dock) && tabOf(Dock)->dock_ == Dock;
+                Action->setEnabled(tabbed_ && Open > 1);
+            }
         }
         QList<DocumentStatusField> Fields;
         // The overlay follows the active tab: a switch shows that tab's operation at once, or clears.
@@ -2558,7 +2596,9 @@ namespace hc::document
             if(!Hidden.isEmpty())Fields.erase(std::remove_if(Fields.begin(),Fields.end(),[&Hidden](const auto& Field){return Field.id_!="mode"&&Field.id_!="state"&&Hidden.contains(Field.id_);}),Fields.end());
         }
         statusBar_->SetFields(Fields);statusSlot_->show();
-        placeStartPage(); syncToolbarRow(); syncSearchHost();
+        placeStartPage(); syncToolbarRow();
+        if (auto* Beside = findChild<QAction*>("view.previewBeside", Qt::FindDirectChildrenOnly))
+            Beside->setEnabled(Tab && !Tab->loading_ && tabbed_ && (Tab->pane_->CanTakePreview() || Tab->previewDock_));
         findChild<ImageFullscreen*>("imageFullscreen")->UpdateStatus();
         emit StateChanged();
     }
@@ -2660,7 +2700,8 @@ namespace hc::document
     void DocumentWorkspaceWidget::syncToolbarRow()
     {
         if (!chrome_ || !toolbar_) return;
-        const bool Single = chrome_->Settings()["toolbarLayout"].toString(QStringLiteral("single")) != QLatin1String("split");
+        // 문서 묶음이 여럿이면 공통 동작을 합칠 문서 도구모음을 하나로 정할 수 없다: 공통 도구모음은 창 위 한 줄로 둔다.
+        const bool Single = false;
         const auto Layout = Single ? QStringLiteral("single") : QStringLiteral("split");
         const auto Tab = active();
         QToolBar* ActiveBar = Tab && Tab->pane_ && !Tab->loading_ ? Tab->pane_->PrimaryToolbar() : nullptr;
@@ -2696,37 +2737,55 @@ namespace hc::document
             Menu.addSeparator();
             for (const auto* Name : {"view.chromeViewOnly", "view.chromeReset"})
                 if (auto* Action = findChild<QAction*>(QString::fromLatin1(Name))) Menu.addAction(Action);
-            Menu.addSeparator();
-            auto* Split = Menu.addAction(tr("도구모음 두 줄로 표시"));
-            Split->setCheckable(true); Split->setChecked(chrome_->Settings()["toolbarLayout"].toString() == QLatin1String("split"));
-            connect(Split, &QAction::toggled, this, [this](bool On) {
-                auto Settings = chrome_->Settings(); Settings["toolbarLayout"] = On ? QStringLiteral("split") : QStringLiteral("single");
-                if (chrome_->ApplySettings(Settings)) { syncToolbarRow(); emit ChromeSettingsChanged(chrome_->Settings()); }
-            });
         }
         Menu.exec(Global);
     }
-    void DocumentWorkspaceWidget::showTabMenu(const QPoint& Global, int Index)
+    bool DocumentWorkspaceWidget::showDocumentMenu(fm::dock::DockWidget* Dock, const QPoint& Global)
     {
-        auto* Pane = tabs_->widget(Index);
-        std::shared_ptr<Tab> Target; for (const auto& Each : documents_) if (Each->pane_ == Pane) Target = Each;
-        if (!Target) return;
+        // 도구 창과 ‘옆에 미리보기’ 탭은 도킹 관리자의 기본 메뉴(떼어 내기 · 자동 숨김 · 닫기)를 쓴다.
+        using fm::dock::DropArea;
+        const auto Target = tabOf(Dock);
+        if (!Target || Target->dock_ != Dock) return false;
         activate(Target);
-        QMenu Menu(this);
-        if (auto* Close = findChild<QAction*>("closeDocument")) Menu.addAction(Close);
-        auto* Others = Menu.addAction(tr("다른 탭 닫기"), this, [this, Target] {
-            for (const auto& Each : std::vector<std::shared_ptr<Tab>>(documents_)) if (Each != Target) {
-                const auto At = std::find(documents_.begin(), documents_.end(), Each); if (At != documents_.end()) closeTab(int(std::distance(documents_.begin(), At)));
+        auto* Area = Dock->dockArea();
+        QList<fm::dock::DockWidget*> Group; if (Area) for (auto* Each : Area->openDockWidgets()) if (tabOf(Each)) Group.append(Each);
+        const auto CloseDocks = [this](const QList<fm::dock::DockWidget*>& Docks) {
+            for (auto* Each : Docks) if (auto Tab = tabOf(Each)) {
+                if (Tab->dock_ != Each) { closePreviewBeside(Tab->id_); continue; }
+                const auto At = std::find(documents_.begin(), documents_.end(), Tab); if (At != documents_.end()) closeTab(int(std::distance(documents_.begin(), At)));
             }
-        });
-        Others->setEnabled(documents_.size() > 1);
-        const int Position = tabs_->indexOf(Target->pane_);
-        auto* Right = Menu.addAction(tr("오른쪽 탭 닫기"), this, [this, Position] {
-            std::vector<std::shared_ptr<Tab>> Targets;
-            for (const auto& Each : documents_) if (tabs_->indexOf(Each->pane_) > Position) Targets.push_back(Each);
-            for (const auto& Each : Targets) { const auto At = std::find(documents_.begin(), documents_.end(), Each); if (At != documents_.end()) closeTab(int(std::distance(documents_.begin(), At))); }
-        });
-        Right->setEnabled(Position >= 0 && Position < tabs_->count() - 1);
+        };
+        fm::ui::Menu Menu(this); Menu.setObjectName("documentTabMenu");
+        if (auto* Close = findChild<QAction*>("closeDocument")) Menu.addAction(Close);
+        const int Position = int(Group.indexOf(Dock));
+        auto* Others = Menu.addAction(tr("다른 탭 닫기"), this, [CloseDocks, Group, Dock] { auto Rest = Group; Rest.removeAll(Dock); CloseDocks(Rest); });
+        Others->setEnabled(Group.size() > 1);
+        auto* Right = Menu.addAction(tr("오른쪽 탭 닫기"), this, [CloseDocks, Group, Position] { CloseDocks(Group.mid(Position + 1)); });
+        Right->setEnabled(Position >= 0 && Position < Group.size() - 1);
+        // 묶음 나누기 · 옮기기 · 떼어 내기: 끌어 놓기와 같은 결과를 메뉴로.
+        Menu.addSeparator();
+        const bool Movable = tabbed_ && Dock->hasFeature(fm::dock::DockWidget::Movable);
+        const bool Splittable = Movable && Area && Area->openDockWidgetsCount() > 1;
+        Menu.addAction(tr("오른쪽으로 분할"), this, [this, Dock] { if (auto* From = Dock->dockArea()) docks_->moveDockWidget(Dock, DropArea::Right, From); })->setEnabled(Splittable);
+        Menu.addAction(tr("아래로 분할"), this, [this, Dock] { if (auto* From = Dock->dockArea()) docks_->moveDockWidget(Dock, DropArea::Bottom, From); })->setEnabled(Splittable);
+        auto* Move = Menu.addMenu(tr("다른 묶음으로 옮기기"));
+        QList<fm::dock::DockArea*> Targets;
+        for (auto* Container : docks_->dockContainers()) for (auto* Each : Container->openedDockAreas())
+            if (Each != Area && std::any_of(Each->openDockWidgets().cbegin(), Each->openDockWidgets().cend(), [this](auto* D) { return tabOf(D) != nullptr; })) Targets.append(Each);
+        for (auto* Each : Targets) {
+            auto* Current = Each->currentDockWidget();
+            const auto Label = Current ? Current->title() : tr("묶음");
+            Move->addAction(Each->dockContainer() && Each->dockContainer()->isFloating() ? tr("%1 (떠 있는 창)").arg(Label) : Label, this,
+                [this, Dock, Guard = QPointer<fm::dock::DockArea>(Each)] { if (Guard) docks_->moveDockWidget(Dock, DropArea::Center, Guard); });
+        }
+        Move->setEnabled(Movable && !Targets.isEmpty());
+        Menu.addAction(tr("새 창으로 떼어 내기"), this, [Dock] { Dock->setFloating(); })
+            ->setEnabled(Movable && Dock->hasFeature(fm::dock::DockWidget::Floatable) && !docks_->testConfigFlag(fm::dock::DockManager::NoTopLevelWindows)
+                && !(Dock->isFloating() && Dock->dockContainer() && Dock->dockContainer()->openedDockWidgets().size() == 1));
+        if (Target->pane_->HasPreview()) {
+            Menu.addSeparator();
+            if (auto* Beside = findChild<QAction*>("view.previewBeside", Qt::FindDirectChildrenOnly)) Menu.addAction(Beside);
+        }
         Menu.addSeparator();
         const bool Local = Target->temporarySource_.isEmpty() && !Target->path_.isEmpty();
         const auto Native = QDir::toNativeSeparators(Target->path_);
@@ -2739,6 +2798,7 @@ namespace hc::document
         Menu.addSeparator();
         if (auto* Reload = findChild<QAction*>("reloadDocument")) Menu.addAction(Reload);
         Menu.exec(Global);
+        return true;
     }
     void DocumentWorkspaceWidget::showStatusMenu(const QPoint& Global)
     {
@@ -2769,11 +2829,9 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::placeStartPage()
     {
+        // 시작 페이지는 중앙 영역의 빈 자리 위젯이다(DockManager::setCentralPlaceholderWidget): 중앙 영역이
+        // 비면 저절로 보인다. 여기서는 최근 항목만 새로 읽힌 것으로 맞춘다.
         if (!startPage_) return;
-        const bool Show = documents_.empty();
-        auto* Area = tabbed_ ? static_cast<QWidget*>(tabs_) : static_cast<QWidget*>(singlePane_);
-        if (Show) { startPage_->setGeometry(Area->geometry()); startPage_->show(); startPage_->raise(); }
-        else startPage_->hide();
     }
     void DocumentWorkspaceWidget::resizeEvent(QResizeEvent* Event)
     {
@@ -2834,8 +2892,12 @@ namespace hc::document
             : Discard ? CloseDisposition::Discard : CloseDisposition::KeepChanges;
         if (!workspace_.Remove(Tab->id_.toStdString(), Disposition).HasValue()) return;
         Tab->cancellation_->request_stop(); Tab->closed_ = true; Tab->pane_->Cancel();
-        if (tabbed_) tabs_->removeTab(tabs_->indexOf(Tab->pane_)); else singlePane_->removeWidget(Tab->pane_);
+        // 옆 미리보기 · 문서 도크를 닫아 탭을 바로 없앤다. 지우기는 나중에(칸과 함께).
+        if (auto* Preview = Tab->previewDock_.data()) { Tab->previewDock_.clear(); Preview->toggleView(false); Preview->deleteLater(); }
+        const bool WasCurrent = currentDock_ == Tab->dock_;
+        Tab->dock_->toggleView(false); Tab->dock_->deleteLater();
         Tab->pane_->deleteLater(); std::erase(documents_, Tab);
+        if (WasCurrent) { currentDock_.clear(); pickCurrentDocument(); }
         if(!Tab->temporarySource_.isEmpty())QFile::remove(Tab->temporarySource_);
         if (!PreserveRecovery) cleanupRecovery(Tab, Tab->Revision());
     }
@@ -3312,6 +3374,8 @@ namespace hc::document
     }
     bool DocumentWorkspaceWidget::RequestClose()
     {
+        // 창을 닫는 모든 길(X · HotExit · 빠른 보기 닫기)이 여기를 지난다: 다음에 열 때 도구 창 자리를 그대로.
+        storeDockSettings();
         if (hotExitReady_) {
             const auto Tabs = documents_; for (const auto& Tab : Tabs) retire(Tab, true, !hotExitDiscard_.contains(Tab->id_));
             return documents_.empty() && IsIdle();
@@ -3399,11 +3463,9 @@ void DocumentWorkspaceWidget::openSearch(bool Replace) {
     if(Replace && !hosted_ && Tab->pane_->IsEpub() && !Tab->pane_->EpubEditor())Tab->pane_->Execute({{"action","epub.edit.begin"}});
     const bool ChangedBook=Tab->pane_->IsEpub() && searchDocument_!=Tab->id_;searchDocument_ = Tab->id_;
     if (!searchPanel_) {
-        auto* Layout = qobject_cast<QVBoxLayout*>(layout()); auto* Content = tabbed_ ? static_cast<QWidget*>(tabs_) : singlePane_;
-        const auto Position = Layout->indexOf(Content); Layout->removeWidget(Content);
-        searchHost_ = new QMainWindow(this,Qt::Widget); searchHost_->setWindowFlags(Qt::Widget); searchHost_->setObjectName("documentSearchHost"); searchHost_->setDockOptions({}); searchHost_->setCentralWidget(Content); Layout->insertWidget(Position, searchHost_, 1);searchHost_->show();Content->show();
-        searchDock_ = new QDockWidget(tr("파일에서 찾기 / 바꾸기"), searchHost_); searchDock_->setObjectName("documentSearchDock"); searchDock_->setAllowedAreas(Qt::BottomDockWidgetArea); searchHost_->addDockWidget(Qt::BottomDockWidgetArea, searchDock_);
-        searchPanel_ = new search::Panel(searchDock_); searchDock_->setWidget(searchPanel_); shortcutRouter_->AddScope(searchDock_);
+        // The ‘파일에서 찾기’ tool window exists from the start (its place is part of the saved layout); the panel joins it now.
+        auto* Host = searchTool_->widget();
+        searchPanel_ = new search::Panel(Host); Host->layout()->addWidget(searchPanel_); shortcutRouter_->AddScope(searchTool_);
         searchPanel_->SetSources([this] { return searchSources(); });
         searchPanel_->SetBookSources([this] { const auto Target = find(searchDocument_); return Target ? Target->pane_->CaptureBookSearchSources(Target->id_) : std::function<QJsonArray()>{}; });
         connect(searchPanel_, &search::Panel::Navigate, this, &DocumentWorkspaceWidget::navigateSearch);
@@ -3425,87 +3487,56 @@ void DocumentWorkspaceWidget::openSearch(bool Replace) {
             searchPanel_->FinishBuffer(Ticket, Error);
         });
         connect(searchPanel_, &search::Panel::PlacementRequested, this, &DocumentWorkspaceWidget::placeSearch);
-        connect(searchPanel_, &search::Panel::SummaryChanged, this, [this](const QString& Summary) {
-            if (auto* Editor = qobject_cast<EpubSourceEditor*>(searchEpubHost_.data())) Editor->SetSearchPanelTitle(Summary);
-        });
-        connect(searchPanel_, &search::Panel::CloseRequested, this, [this] {
-            const auto Index = tabs_->indexOf(searchPanel_); if (Index >= 0) tabs_->removeTab(Index);
-            searchDock_->hide(); searchPanel_->hide();
-        });
+        connect(searchPanel_, &search::Panel::SummaryChanged, this, [this](const QString& Summary) { searchTool_->setToolTip(Summary); });
+        connect(searchPanel_, &search::Panel::CloseRequested, this, [this] { searchTool_->toggleView(false); });
     }
     const auto Location = searchLocation();
     searchPanel_->setProperty("configuredLocation", Location);
-    // The configured place applies to a book being edited too; a bottom panel there is its problems panel (plan 8.7).
-    if (const auto Place = searchPlace(Tab, Location); Place == QLatin1String("epubProblems")) placeSearch(Place);
-    else if (searchPlacement_.isEmpty() || searchPlacement_ == QLatin1String("epubProblems") || !searchPanel_->isVisible()) placeSearch(Location);
+    // The configured place applies the first time; afterwards the tool window reopens where the user left it.
+    if (searchPlacement_.isEmpty()) placeSearch(Location);
+    else { searchTool_->toggleView(true); searchTool_->bringToFront(); }
     searchPanel_->SetReadOnly(hosted_);
     searchPanel_->Open(Replace, Tab->pane_->IsEpub() ? Tab->path_ : QFileInfo(Tab->path_).absolutePath(), Tab->pane_->IsEpub(), searchSources());
     if(ChangedBook)searchPanel_->SourcesChanged();
 }
 void DocumentWorkspaceWidget::placeSearch(const QString& Requested) {
-    if (!searchPanel_) return;
-    auto Location = Requested;
-    const auto Configured = searchLocation();
-    if (auto* Host = qobject_cast<EpubSourceEditor*>(searchEpubHost_.data())) Host->DetachSearchPanel();
-    searchEpubHost_.clear(); searchPanel_->SetEmbedded(false);
-    if (Location == QLatin1String("epubProblems")) {
-        auto Tab = active(); auto* Editor = Tab && Tab->pane_->IsEpubEditing() ? Tab->pane_->EpubEditor() : nullptr;
-        if (Editor) {
-            searchPlacement_ = Location;
-            const auto Index = tabs_->indexOf(searchPanel_); if (Index >= 0) tabs_->removeTab(Index);
-            if (searchDock_->widget() == searchPanel_) searchDock_->setWidget(nullptr);
-            searchDock_->hide();
-            Editor->AttachSearchPanel(searchPanel_); searchPanel_->SetEmbedded(true); Editor->SetSearchPanelTitle(searchPanel_->Summary());
-            searchEpubHost_ = Editor;
-            if (!Editor->property("searchReleaseConnected").toBool()) {
-                Editor->setProperty("searchReleaseConnected", true);
-                // The editor hands the panel back before it is destroyed; the panel returns to its configured place.
-                connect(Editor, &EpubSourceEditor::SearchPanelReleased, this, [this](QWidget*) {
-                    searchEpubHost_.clear(); searchPanel_->SetEmbedded(false);
-                    placeSearch(searchLocation());
-                });
-            }
-            searchPanel_->show(); return;
-        }
-        Location = Configured;
-    }
+    if (!searchPanel_ || !searchTool_) return;
+    using fm::dock::DropArea;
+    // ‘위치’: 하단 패널 = 아래 도구 창(문제 · 출력과 같은 묶음), 콘텐츠 탭 = 중앙 문서 탭, 분리 창 = 떠 있는 창.
+    // 임베드(최상위 창 없음)에서는 분리 창 대신 하단 패널이다.
+    auto Location = Requested == QLatin1String("epubProblems") ? QStringLiteral("bottom") : Requested;
+    if (Location == QLatin1String("floating") && docks_->testConfigFlag(fm::dock::DockManager::NoTopLevelWindows)) Location = QStringLiteral("bottom");
     searchPlacement_ = Location;
-    const auto Index = tabs_->indexOf(searchPanel_); if (Index >= 0) tabs_->removeTab(Index);
-    if(searchDock_->widget()==searchPanel_)searchDock_->setWidget(nullptr);
-    searchPanel_->setParent(this);
-    if (Location == "tab") {
+    if (searchTool_->isAutoHidden()) docks_->setAutoHidden(searchTool_, false);
+    if (Location == QLatin1String("tab")) {
         // The panel's tab hides the document; a reader there gives up the keyboard first.
         releaseFocusFrom(active());
-        searchDock_->hide();
-        if (!tabbed_ && tabs_->indexOf(singlePane_) < 0) {
-            searchHost_->takeCentralWidget(); tabs_->addTab(singlePane_, tr("문서")); searchHost_->setCentralWidget(tabs_); tabs_->show(); singlePane_->show();
-        }
-        tabs_->addTab(searchPanel_, tr("파일에서 찾기 / 바꾸기")); tabs_->setCurrentWidget(searchPanel_);
+        auto Tab = active(); auto* Area = Tab ? Tab->dock_->dockArea() : nullptr;
+        if (Area && Area->dockContainer() == docks_->dockContainer()) docks_->moveDockWidget(searchTool_, DropArea::Center, Area);
+        else docks_->moveDockWidget(searchTool_, DropArea::Center);
+    } else if (Location == QLatin1String("floating")) {
+        const auto Size = QSize(1000, 600);
+        const auto Center = mapToGlobal(rect().center());
+        if (!searchTool_->isFloating()) docks_->addFloatingDockWidget(searchTool_, QRect(Center - QPoint(Size.width() / 2, Size.height() / 2), Size));
     } else {
-        if (!tabbed_ && tabs_->indexOf(singlePane_) >= 0) { tabs_->removeTab(tabs_->indexOf(singlePane_)); searchHost_->takeCentralWidget(); tabs_->setParent(this); tabs_->hide(); searchHost_->setCentralWidget(singlePane_); singlePane_->show(); }
-        searchDock_->setWidget(searchPanel_); searchDock_->setFloating(false);searchHost_->addDockWidget(Qt::BottomDockWidgetArea,searchDock_);searchDock_->setFloating(Location == "floating"); searchDock_->show();
-        if (Location == "floating") searchDock_->resize(1000, 600);
-        else searchHost_->resizeDocks({searchDock_}, {qBound(360,height()*55/100,560)}, Qt::Vertical);
+        fm::dock::DockArea* Bottom = nullptr;
+        for (const auto& Kind : {QStringLiteral("problems"), QStringLiteral("output")})
+            if (auto* Tool = tools_.value(Kind); Tool && !Tool->isClosed() && !Tool->isAutoHidden() && !Tool->isFloating() && Tool->dockArea() && !Tool->dockArea()->isCentral()) { Bottom = Tool->dockArea(); break; }
+        if (Bottom) docks_->moveDockWidget(searchTool_, DropArea::Center, Bottom, 0);
+        else {
+            docks_->moveDockWidget(searchTool_, DropArea::Bottom);
+            if (searchTool_->dockArea()) docks_->setAreaSize(searchTool_->dockArea(), Qt::Vertical, qBound(220, height() * 30 / 100, 420));
+        }
     }
-    searchPanel_->show();
+    searchTool_->toggleView(true); searchTool_->bringToFront(); searchPanel_->show();
 }
 void DocumentWorkspaceWidget::OpenSearchContext(const QJsonObject& Context) {
     openSearch(true); if(searchPanel_)searchPanel_->RestoreContext(Context);
-}
-void DocumentWorkspaceWidget::syncSearchHost() {
-    // The docked panel follows its book: leaving edit mode returns it to the configured place.
-    if (!searchPanel_ || searchPlacement_ != QLatin1String("epubProblems")) return;
-    bool Live = false;
-    for (const auto& Each : documents_) if (Each->pane_ && Each->pane_->EpubEditor() == searchEpubHost_.data() && Each->pane_->IsEpubEditing()) Live = true;
-    if (!Live) placeSearch(searchLocation());
 }
 QString DocumentWorkspaceWidget::searchLocation() const {
     const auto Value = appliedPreferences_["documentViews"].toObject()["textView"].toObject()["findInFiles"].toObject()["openLocation"].toString();
     // Same default as the settings dialog shows: a file written before this key existed opens a content tab.
     return Value.isEmpty() ? hc::defaults::edit::ViewValue("textView/findInFiles/openLocation").toString() : Value;
-}
-QString DocumentWorkspaceWidget::searchPlace(const std::shared_ptr<Tab>& Tab, const QString& Location) const {
-    return Location == QLatin1String("bottom") && Tab && Tab->pane_->IsEpubEditing() && Tab->pane_->EpubEditor() ? QStringLiteral("epubProblems") : Location;
 }
 void DocumentWorkspaceWidget::navigateSearch(const QJsonObject& Row) {
     auto Tab = find(Row["document"].toString());
@@ -3527,5 +3558,326 @@ void DocumentWorkspaceWidget::navigateSearch(const QJsonObject& Row) {
             else if(Row["chapter"].toInt(-1)>=0)Current->pane_->Execute({{"action","epub.reader.chapter"},{"value",Row["chapter"]}});
         } else Current->pane_->SelectSearchRange(Row["start"].toInteger(), Row["length"].toInteger()); Wait->deleteLater();
     }); Wait->start();
+}
+}
+
+// ============================================================================================ 도킹
+namespace hc::document {
+namespace {
+// 배치 상태의 판(fmdock saveState userVersion). 도구 창 구성이 바뀌면 올린다 — 옛 상태는 기본 배치가 된다.
+constexpr int DockLayoutVersion = 1;
+constexpr fm::dock::DockWidget::Features LayoutLock = fm::dock::DockWidget::Movable | fm::dock::DockWidget::Floatable | fm::dock::DockWidget::Pinnable;
+}
+void DocumentWorkspaceWidget::buildDocks()
+{
+    using namespace fm::dock;
+    docks_ = new DockManager(this); docks_->setObjectName("documentDocks");
+    // 임베드(HyperViewer 빠른 보기)는 다른 창 안에 있다: 떠 있는 창을 만들지 않는다(07 §7.2).
+    if (hosted_) docks_->setConfigFlag(DockManager::NoTopLevelWindows);
+    docks_->setShortcutSource(this);
+    docks_->setDockMenuHook([this](DockWidget* Dock, const QPoint& Global) { return showDocumentMenu(Dock, Global); });
+    connect(docks_, &DockManager::focusedDockWidgetChanged, this, [this](DockWidget*, DockWidget* Now) { if (auto Tab = tabOf(Now)) setCurrentDocument(Tab->dock_); });
+    connect(docks_, &DockManager::dockAreaCreated, this, &DocumentWorkspaceWidget::watchArea);
+    docks_->ensureCentralArea();
+    toolHosts_.insert(QStringLiteral("outline"), new DocumentToolHost(tr("이 문서에는 개요가 없습니다."), false));
+    toolHosts_.insert(QStringLiteral("bookTree"), new DocumentToolHost(tr("EPUB을 편집하면 책 구조가 여기에 나옵니다."), false));
+    toolHosts_.insert(QStringLiteral("problems"), new DocumentToolHost(tr("이 문서에는 문제 목록이 없습니다."), false));
+    toolHosts_.insert(QStringLiteral("output"), new DocumentToolHost(tr("빌드 로그 · EPUBCheck 출력이 여기에 나옵니다."), true));
+    for (auto At = toolHosts_.cbegin(); At != toolHosts_.cend(); ++At) At.value()->setObjectName(QStringLiteral("documentTool.") + At.key());
+    tools_.insert(QStringLiteral("outline"), makeTool(QStringLiteral("outline"), tr("개요"), toolHosts_["outline"]));
+    tools_.insert(QStringLiteral("bookTree"), makeTool(QStringLiteral("bookTree"), tr("책 구조"), toolHosts_["bookTree"]));
+    tools_.insert(QStringLiteral("problems"), makeTool(QStringLiteral("problems"), tr("문제"), toolHosts_["problems"]));
+    tools_.insert(QStringLiteral("output"), makeTool(QStringLiteral("output"), tr("출력"), toolHosts_["output"]));
+    auto* SearchHost = new QWidget; SearchHost->setObjectName("documentSearchHost");
+    auto* SearchLayout = new QVBoxLayout(SearchHost); SearchLayout->setContentsMargins(0, 0, 0, 0); SearchLayout->setSpacing(0);
+    searchTool_ = makeTool(QStringLiteral("search"), tr("파일에서 찾기"), SearchHost);
+    if (hosted_) {
+        // 좁은 패널: 도구 창은 사이드바(자동 숨김)에서 시작한다. 개요 · 파일에서 찾기만 처음부터 탭이 보인다.
+        docks_->addAutoHideDockWidget(SideBarLocation::Left, tools_["outline"]);
+        docks_->addAutoHideDockWidget(SideBarLocation::Left, tools_["bookTree"]);
+        docks_->addAutoHideDockWidget(SideBarLocation::Bottom, searchTool_);
+        docks_->addAutoHideDockWidget(SideBarLocation::Bottom, tools_["problems"]);
+        docks_->addAutoHideDockWidget(SideBarLocation::Bottom, tools_["output"]);
+        for (auto* Dock : {tools_["bookTree"], tools_["problems"], tools_["output"]}) Dock->toggleView(false);
+    } else {
+        // 시안: 아래 = 파일에서 찾기 | 문제(문서 열 아래), 왼쪽 = 개요 | 책 구조, 출력 = 아래 자동 숨김.
+        // 처음에는 출력 말고 닫혀 있다. 문서가 원할 때(개요 켜짐 · EPUB 편집 · 찾기) 그 자리에 열린다.
+        auto* Bottom = docks_->addDockWidget(DropArea::Bottom, searchTool_);
+        docks_->addDockWidgetTab(tools_["problems"], Bottom);
+        auto* Left = docks_->addDockWidget(DropArea::Left, tools_["outline"]);
+        docks_->addDockWidgetTab(tools_["bookTree"], Left);
+        docks_->setAreaSize(Bottom, Qt::Vertical, 200);
+        docks_->setAreaSize(Left, Qt::Horizontal, 230);
+        docks_->addAutoHideDockWidget(SideBarLocation::Bottom, tools_["output"]);
+        for (auto* Dock : {tools_["outline"], tools_["bookTree"], tools_["problems"], searchTool_}) Dock->toggleView(false);
+    }
+    dockDefaultLayout_ = docks_->saveState(DockLayoutVersion);
+    docks_->setDefaultLayout(dockDefaultLayout_);
+    // 다른 프로세스 창(미리보기 · EPUB · 한글)에 간 포커스는 Qt가 모른다: 그 창의 문서를 포커스 문서로 삼는다.
+    nativeFocus_ = new QTimer(this); nativeFocus_->setObjectName("documentNativeFocus"); nativeFocus_->setInterval(250);
+    connect(nativeFocus_, &QTimer::timeout, this, &DocumentWorkspaceWidget::pollNativeFocus);
+    nativeFocus_->start();
+}
+fm::dock::DockWidget* DocumentWorkspaceWidget::makeTool(const QString& Kind, const QString& Title, QWidget* Content)
+{
+    using fm::dock::DockWidget;
+    auto* Dock = new DockWidget(QStringLiteral("tool:") + Kind, Title, this);
+    Dock->setWidget(Content, DockWidget::InsertMode::ForceNoScrollArea);
+    Dock->setProperty("hc.toolKind", Kind);
+    connect(Dock, &DockWidget::viewToggled, this, [this, Kind](bool Open) {
+        if (toolSyncing_ || !docks_ || docks_->isRestoringState()) return;
+        // 사용자가 도구 창을 열거나 닫았다: 포커스 문서 화면의 켜기 · 끄기(개요 단추 등)를 맞춘다. 포커스 문서는 동작을
+        // 실행해 설정까지 남기고, 나머지 문서는 표시만 끈다(다른 문서로 옮겨도 다시 열리지 않게).
+        const QScopedValueRollback Guard(toolSyncing_, true);
+        const auto Current = active();
+        for (const auto& Tab : documents_) for (const auto& Item : Tab->toolPanels_) {
+            if (Item.kind_ != Kind || !Item.toggle_ || Item.toggle_->isChecked() == Open) continue;
+            if (Tab == Current) Item.toggle_->trigger();
+            else if (!Open) { const QSignalBlocker Block(Item.toggle_); Item.toggle_->setChecked(false); }
+        }
+    });
+    if (Kind == QLatin1String("search"))
+        connect(Dock, &DockWidget::visibilityChanged, this, [this](bool Visible) {
+            if (Visible && !searchPanel_) QTimer::singleShot(0, this, [this] { if (!searchPanel_) openSearch(false); });
+        });
+    return Dock;
+}
+void DocumentWorkspaceWidget::watchArea(fm::dock::DockArea* Area)
+{
+    if (!Area || Area->property("hc.watched").toBool()) return;
+    Area->setProperty("hc.watched", true);
+    connect(Area, &fm::dock::DockArea::currentChanged, this, [this, Guard = QPointer<fm::dock::DockArea>(Area)] {
+        if (!Guard || docks_->isRestoringState()) return;
+        // 포커스 문서가 든 묶음에서 탭을 바꿨거나(그 문서가 가려짐) 마지막으로 쓴 문서 묶음이면 그 앞 탭을 따른다.
+        const auto Tab = tabOf(Guard->currentDockWidget());
+        const bool Holds = currentDock_ && currentDock_->dockArea() == Guard;
+        if (Tab && (Holds || Guard == docks_->lastActiveCentralArea() || !currentDock_)) setCurrentDocument(Tab->dock_);
+        else if (Holds && !currentDock_->isCurrentTab()) pickCurrentDocument();
+    });
+}
+void DocumentWorkspaceWidget::setCurrentDocument(fm::dock::DockWidget* Dock)
+{
+    const auto Tab = tabOf(Dock);
+    if (!Tab || Tab->dock_ == currentDock_) return;
+    currentDock_ = Tab->dock_;
+    bool Refocus = std::exchange(focusReleased_, false);
+    // Fallback for switches that did not release first: a hidden foreign view that kept the Win32
+    // focus still receives every key, including the ones that would switch back.
+    const auto Native = reinterpret_cast<HWND>(window()->winId()); const auto Root = GetAncestor(Native, GA_ROOT);
+    if (const auto Focus = GetFocus(); Root && Focus && !IsWindowVisible(Focus) && GetWindowThreadProcessId(Focus, nullptr) != GetCurrentThreadId()
+        && GetAncestor(GetForegroundWindow(), GA_ROOT) == Root && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
+        QApplication::setActiveWindow(window());
+        if (GetWindowThreadProcessId(Root, nullptr) == GetCurrentThreadId()) SetActiveWindow(Root);
+        SetFocus(Native); Refocus = true;
+    }
+    setFocusProxy(Tab->pane_->InputWidget());
+    if (Refocus || (!Tab->loading_ && (Tab->pane_->ViewId() == "pdf" || Tab->pane_->IsProcessDocument()) && !Tab->pane_->isAncestorOf(QApplication::focusWidget())))
+        Tab->pane_->Focus();
+    syncToolHosts();
+    update();
+}
+void DocumentWorkspaceWidget::pickCurrentDocument()
+{
+    // 포커스 문서가 닫혔거나 가려졌다: 마지막 문서 묶음의 앞 탭, 없으면 보이는 아무 문서.
+    std::shared_ptr<Tab> Next;
+    if (auto* Area = docks_->lastActiveCentralArea()) Next = tabOf(Area->currentDockWidget());
+    if (!Next) for (const auto& Each : documents_) if (!Each->closed_ && !Each->dock_->isClosed() && Each->dock_->isCurrentTab()) { Next = Each; break; }
+    if (!Next) for (const auto& Each : documents_) if (!Each->closed_) { Next = Each; break; }
+    if (Next) { setCurrentDocument(Next->dock_); return; }
+    currentDock_.clear(); setFocusProxy(nullptr); syncToolHosts(); update();
+}
+void DocumentWorkspaceWidget::collectToolPanels()
+{
+    for (const auto& Tab : documents_) {
+        if (Tab->closed_ || Tab->loading_ || !Tab->pane_) continue;
+        const auto Items = Tab->pane_->TakeToolPanels();
+        if (Items.isEmpty()) continue;
+        const auto Name = documentName(*Tab);
+        for (const auto& Item : Items) {
+            auto* Host = toolHosts_.value(Item.kind_); if (!Host || !Item.widget_) continue;
+            Host->Add(Tab->id_, Name, Item.widget_, Item.label_);
+            // 화면의 켜기 · 끄기(개요 단추 · 진단 패널 · 책 구조 패널)는 이 문서가 포커스일 때 도구 창을 연다 · 닫는다.
+            if (Item.toggle_) connect(Item.toggle_.data(), &QAction::toggled, this, [this, Kind = Item.kind_, Id = Tab->id_](bool On) {
+                if (toolSyncing_) return;
+                const auto Owner = find(Id); if (!Owner || active() != Owner) return;
+                showTool(Kind, On, On);
+            });
+            Tab->toolPanels_.append(Item);
+        }
+        if (Tab == active()) syncToolHosts();
+    }
+}
+void DocumentWorkspaceWidget::syncToolHosts()
+{
+    const auto Tab = active();
+    for (auto* Host : std::as_const(toolHosts_)) Host->SetActiveOwner(Tab ? Tab->id_ : QString());
+    if (!Tab) return;
+    // 포커스 문서가 켜 둔 칸은 도구 창을 연다. 닫지는 않는다 — 다른 문서로 옮겨도 배치가 흔들리지 않게.
+    for (const auto& Item : Tab->toolPanels_) if (Item.toggle_ && Item.toggle_->isChecked()) showTool(Item.kind_, true);
+}
+void DocumentWorkspaceWidget::showTool(const QString& Kind, bool Show, bool Front)
+{
+    auto* Dock = Kind == QLatin1String("search") ? searchTool_ : tools_.value(Kind);
+    if (!Dock) return;
+    const QScopedValueRollback Guard(toolSyncing_, true);
+    if (!Show) { if (!Dock->isClosed()) Dock->toggleView(false); return; }
+    if (Dock->isClosed()) Dock->toggleView(true);
+    // 앞으로: 탭이면 그 탭을, 자동 숨김이면 펼친다.
+    if (Front) Dock->bringToFront();
+}
+void DocumentWorkspaceWidget::fillToolMenu(QMenu* Menu)
+{
+    Menu->clear();
+    const auto Tab = active();
+    const auto KeyOf = [this, Tab](const QString& Kind) -> QString {
+        if (Kind == QLatin1String("search")) { auto* Find = findChild<QAction*>("document.findInFiles", Qt::FindDirectChildrenOnly); return Find ? Find->shortcut().toString(QKeySequence::NativeText) : QString(); }
+        if (Tab) for (const auto& Item : Tab->toolPanels_) if (Item.kind_ == Kind && Item.toggle_) return Item.toggle_->shortcut().toString(QKeySequence::NativeText);
+        return {};
+    };
+    const std::array<std::pair<QString, QString>, 5> Items{{{QStringLiteral("outline"), tr("개요")}, {QStringLiteral("bookTree"), tr("책 구조")},
+        {QStringLiteral("problems"), tr("문제")}, {QStringLiteral("output"), tr("출력")}, {QStringLiteral("search"), tr("파일에서 찾기")}}};
+    for (const auto& [Kind, Label] : Items) {
+        auto* Dock = Kind == QLatin1String("search") ? searchTool_ : tools_.value(Kind);
+        const auto Key = KeyOf(Kind);
+        auto* Item = Menu->addAction(Key.isEmpty() ? Label : Label + QLatin1Char('\t') + Key);
+        Item->setObjectName(QStringLiteral("view.tool.") + Kind);
+        Item->setCheckable(true); Item->setChecked(Dock && !Dock->isClosed());
+        connect(Item, &QAction::triggered, this, [this, Kind](bool On) {
+            if (Kind == QLatin1String("search") && On) { openSearch(false); if (!searchPanel_) { searchTool_->toggleView(true); searchTool_->bringToFront(); } return; }
+            auto* Dock = Kind == QLatin1String("search") ? searchTool_ : tools_.value(Kind);
+            if (!Dock) return;
+            if (On) { Dock->toggleView(true); Dock->bringToFront(); } else Dock->toggleView(false);
+        });
+    }
+}
+void DocumentWorkspaceWidget::fillLayoutMenu(QMenu* Menu)
+{
+    Menu->clear();
+    auto* Group = new QActionGroup(Menu); Group->setExclusive(true);
+    const auto Add = [this, Menu, Group](const QString& Name, const QString& Label) {
+        auto* Item = Menu->addAction(Label); Item->setCheckable(true); Item->setChecked(layoutName_ == Name); Group->addAction(Item);
+        connect(Item, &QAction::triggered, this, [this, Name] { applyLayout(Name); });
+    };
+    Add(QString(), tr("기본"));
+    Add(QStringLiteral(":focus"), tr("집필"));
+    const auto Names = docks_->perspectiveNames();
+    if (!Names.isEmpty()) { Menu->addSeparator(); for (const auto& Name : Names) Add(Name, Name); }
+    Menu->addSeparator();
+    Menu->addAction(tr("현재 배치 저장…"), this, [this] {
+        bool Accepted = false;
+        const auto Name = hc::ui::InputDialog::getText(this, tr("배치 저장"), tr("배치 이름"), QLineEdit::Normal,
+            layoutName_.startsWith(QLatin1Char(':')) ? QString() : layoutName_, &Accepted).trimmed();
+        if (!Accepted || Name.isEmpty() || Name.startsWith(QLatin1Char(':'))) return;
+        docks_->addPerspective(Name); layoutName_ = Name; storeDockSettings();
+    });
+    auto* Remove = Menu->addMenu(tr("저장한 배치 삭제"));
+    for (const auto& Name : Names) Remove->addAction(Name, this, [this, Name] {
+        docks_->removePerspective(Name); if (layoutName_ == Name) layoutName_.clear(); storeDockSettings();
+    });
+    Remove->setEnabled(!Names.isEmpty());
+    Menu->addSeparator();
+    Menu->addAction(tr("기본 배치로 되돌리기"), this, [this] { applyLayout({}); });
+    auto* Lock = Menu->addAction(tr("배치 잠금")); Lock->setObjectName("view.layoutLock");
+    Lock->setCheckable(true); Lock->setChecked(docks_->lockedFeatures() != fm::dock::DockWidget::NoFeatures);
+    Lock->setToolTip(tr("끌어 놓기 · 떼어 내기 · 자동 숨김을 막습니다. 닫기와 탭 바꾸기는 그대로입니다."));
+    connect(Lock, &QAction::toggled, this, [this](bool On) { docks_->lockFeatures(On ? LayoutLock : fm::dock::DockWidget::NoFeatures); storeDockSettings(); });
+}
+void DocumentWorkspaceWidget::applyLayout(const QString& Name)
+{
+    if (Name.isEmpty()) docks_->resetToDefaultLayout();
+    else if (Name == QLatin1String(":focus")) {
+        // 집필: 열린 도구 창을 모두 가장자리 자동 숨김으로 접어 문서를 넓게 쓴다. 다시 기본을 고르면 돌아온다.
+        for (auto* Dock : docks_->dockWidgets())
+            if (Dock->property("hc.toolKind").isValid() && !Dock->isClosed() && !Dock->isAutoHidden() && !Dock->isFloating()) docks_->setAutoHidden(Dock, true);
+    } else if (!docks_->openPerspective(Name)) return;
+    layoutName_ = Name;
+    // 다시 짠 배치에서 포커스 문서의 도구 창 내용을 맞춘다.
+    pickCurrentDocument(); syncToolHosts();
+    storeDockSettings();
+}
+void DocumentWorkspaceWidget::storeDockSettings()
+{
+    if (!docks_ || !chrome_) return;
+    auto Settings = chrome_->Settings();
+    Settings["dockLayout"] = QString::fromLatin1(docks_->saveState(DockLayoutVersion).toBase64());
+    QJsonObject Perspectives;
+    const auto Saved = docks_->perspectives();
+    for (auto At = Saved.cbegin(); At != Saved.cend(); ++At) Perspectives[At.key()] = QString::fromLatin1(At.value().toBase64());
+    Settings["dockPerspectives"] = Perspectives;
+    Settings["dockLayoutName"] = layoutName_;
+    Settings["dockLocked"] = docks_->lockedFeatures() != fm::dock::DockWidget::NoFeatures;
+    Settings["dockSearchPlaced"] = !searchPlacement_.isEmpty();
+    if (auto* Button = findChild<QToolButton*>("documentLayoutButton"))
+        Button->setText(tr("창 배치: %1").arg(layoutName_.isEmpty() ? tr("기본") : layoutName_ == QLatin1String(":focus") ? tr("집필") : layoutName_));
+    // 바뀐 것이 없으면 설정 파일을 다시 쓰지 않는다(닫는 동안 여러 번 불린다).
+    if (Settings == chrome_->Settings()) return;
+    if (chrome_->ApplySettings(Settings)) emit ChromeSettingsChanged(chrome_->Settings());
+}
+void DocumentWorkspaceWidget::restoreDockSettings(const QJsonObject& Settings)
+{
+    // 시작할 때 한 번만(문서를 열기 전에). 설정 파일이 바뀌어 다시 읽혀도 쓰는 중인 배치는 그대로 둔다.
+    if (dockRestored_ || !docks_) return;
+    dockRestored_ = true;
+    QMap<QString, QByteArray> Perspectives;
+    const auto Saved = Settings["dockPerspectives"].toObject();
+    for (auto At = Saved.begin(); At != Saved.end(); ++At) if (!At.key().startsWith(QLatin1Char(':'))) Perspectives[At.key()] = QByteArray::fromBase64(At.value().toString().toLatin1());
+    docks_->setPerspectives(Perspectives);
+    const auto State = QByteArray::fromBase64(Settings["dockLayout"].toString().toLatin1());
+    if (!State.isEmpty() && documents_.empty() && docks_->restoreState(State, DockLayoutVersion)) {
+        layoutName_ = Settings["dockLayoutName"].toString();
+        if (Settings["dockSearchPlaced"].toBool()) searchPlacement_ = QStringLiteral("saved");
+    }
+    // 잠금은 상태 복원 뒤에(복원이 상태에 든 잠금으로 되돌린다).
+    docks_->lockFeatures(Settings["dockLocked"].toBool() ? LayoutLock : fm::dock::DockWidget::NoFeatures);
+    if (auto* Button = findChild<QToolButton*>("documentLayoutButton"))
+        Button->setText(tr("창 배치: %1").arg(layoutName_.isEmpty() ? tr("기본") : layoutName_ == QLatin1String(":focus") ? tr("집필") : layoutName_));
+}
+void DocumentWorkspaceWidget::openPreviewBeside(const QString& Id)
+{
+    using namespace fm::dock;
+    const auto Tab = find(Id);
+    if (!Tab || Tab->loading_) return;
+    if (Tab->previewDock_) { Tab->previewDock_->bringToFront(); return; }
+    if (!tabbed_ || !Tab->pane_->CanTakePreview()) return;
+    auto* Dock = new DockWidget(QStringLiteral("preview:") + Tab->id_, tr("%1 미리보기").arg(documentName(*Tab)), this);
+    Dock->setDocument(true); Dock->setNativeContent(true);
+    Dock->setFeatures(DockWidget::Closable | DockWidget::Movable | DockWidget::Floatable | DockWidget::Focusable | DockWidget::CustomCloseHandling);
+    Dock->setProperty("hc.previewOf", Tab->id_);
+    // 미리보기 칸은 다른 프로세스 창을 품는다: 문서 화면의 분할에서 이 도크로 바로 옮긴다(최상위 창을 거치지 않음).
+    auto* Panel = Tab->pane_->TakePreview();
+    if (!Panel) { delete Dock; return; }
+    Dock->setWidget(Panel, DockWidget::InsertMode::ForceNoScrollArea); Panel->show();
+    Tab->previewDock_ = Dock;
+    connect(Dock, &DockWidget::closeRequested, this, [this, Id] { closePreviewBeside(Id); });
+    if (auto* Area = Tab->dock_->dockArea(); Area && !Tab->dock_->isAutoHidden()) docks_->addDockWidget(DropArea::Right, Dock, Area);
+    else docks_->addDockWidgetToCentral(Dock);
+    update();
+}
+void DocumentWorkspaceWidget::closePreviewBeside(const QString& Id)
+{
+    const auto Tab = find(Id);
+    if (!Tab || !Tab->previewDock_) return;
+    auto* Dock = Tab->previewDock_.data(); Tab->previewDock_.clear();
+    // 미리보기 칸을 문서 화면의 분할로 돌려준 뒤(부모 → 부모) 빈 도크를 지운다.
+    Tab->pane_->ReturnPreview();
+    Dock->toggleView(false); Dock->deleteLater();
+    update();
+}
+void DocumentWorkspaceWidget::pollNativeFocus()
+{
+    if (!docks_ || documents_.empty() || !QApplication::activeWindow() || QApplication::activePopupWidget()) return;
+    const HWND Focus = GetFocus();
+    if (!Focus || QWidget::find(reinterpret_cast<WId>(Focus))) return;
+    // 다른 프로세스 창 → 그 창을 품은 우리 위젯 → 그 위젯이 든 문서 도크.
+    for (HWND Window = GetParent(Focus); Window; Window = GetParent(Window)) {
+        auto* Widget = QWidget::find(reinterpret_cast<WId>(Window));
+        if (!Widget) continue;
+        for (auto* At = Widget; At; At = At->parentWidget())
+            if (auto* Dock = qobject_cast<fm::dock::DockWidget*>(At)) {
+                if (const auto Tab = tabOf(Dock); Tab && Tab->dock_ != currentDock_) docks_->setFocusedDockWidget(Dock);
+                return;
+            }
+        return;
+    }
 }
 }

@@ -494,6 +494,20 @@ namespace hc::document
     QToolBar* DocumentViewPane::PrimaryToolbar() const { return toolbar_ ? toolbar_ : findChild<QToolBar*>("epubEditToolbar"); }
     bool DocumentViewPane::MarkdownSourceVisible()const{return markdown_ && markdown_->SourceVisible();}
     bool DocumentViewPane::PreviewSourceVisible()const{return markdown_?markdown_->SourceVisible():rst_ && rst_->SourceVisible();}
+    QList<DocumentToolPanelItem> DocumentViewPane::TakeToolPanels()
+    {
+        // 화면마다 한 번만 넘긴다(두 번째부터는 빈 목록). 보여 달라는 요청은 이 칸의 신호로 모은다.
+        QList<DocumentToolPanelItem> Items;
+        const auto Forward=[this](auto* Source){connect(Source,&std::remove_pointer_t<decltype(Source)>::ToolPanelRequested,this,&DocumentViewPane::ToolPanelRequested,Qt::UniqueConnection);};
+        if(markdown_){const auto Taken=markdown_->TakeToolPanels();if(!Taken.isEmpty()){Forward(markdown_);Items<<Taken;}}
+        if(rst_){const auto Taken=rst_->TakeToolPanels();if(!Taken.isEmpty()){Forward(rst_);Items<<Taken;}}
+        if(epubEditor_){const auto Taken=epubEditor_->TakeToolPanels();if(!Taken.isEmpty()){Forward(epubEditor_);Items<<Taken;}}
+        return Items;
+    }
+    bool DocumentViewPane::CanTakePreview()const{return (markdown_ && !markdown_->IsPreviewTaken() && !markdown_->IsPreviewOnly()) || (rst_ && !rst_->IsPreviewTaken() && !rst_->IsPreviewOnly());}
+    QWidget* DocumentViewPane::TakePreview(){return markdown_?markdown_->TakePreview():rst_?rst_->TakePreview():nullptr;}
+    void DocumentViewPane::ReturnPreview(){if(markdown_)markdown_->ReturnPreview();else if(rst_)rst_->ReturnPreview();}
+    bool DocumentViewPane::IsPreviewTaken()const{return (markdown_ && markdown_->IsPreviewTaken()) || (rst_ && rst_->IsPreviewTaken());}
     void DocumentViewPane::SetPreviewOnly(bool Enabled){if(markdown_)markdown_->SetPreviewOnly(Enabled);else if(rst_)rst_->SetPreviewOnly(Enabled);}
     bool DocumentViewPane::IsPreviewOnly()const{return markdown_?markdown_->IsPreviewOnly():rst_ && rst_->IsPreviewOnly();}
     void DocumentViewPane::GoToLine(int Line)
