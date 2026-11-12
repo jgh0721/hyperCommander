@@ -7,6 +7,20 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* 편집기·뷰어: reStructuredText(.rst · .rest) 문서 보기 추가. 소스 · 미리보기 · 나란히 보기, 개요(활성 문서 · 프로젝트), 진단 · 빌드 로그 패널, 소스와 미리보기의 양방향 스크롤 동기화 제공. 미리보기는 Sphinx로 빌드하며, 미리보기 안의 링크로 다른 문서 페이지로 이동하고 그 원본을 열 수 있음. conf.py가 없는 단독 문서는 가상 프로젝트로 미리보기. Sphinx 8에서 빌드를 깨는 html_style = '' 설정은 미리보기 빌드에서 자동 보정(conf.py가 BOM으로 시작해도 적용). 프로젝트는 문서에서 위로 올라가며 가장 가까운 conf.py로 판정하고, 프로젝트 폴더에는 빌드 산출물(_build/hypereditor)만 생성.
+
+* 편집기: reStructuredText 구문 강조 · 접기, 지시어 · 롤 · 경로 · 치환 · 용어집 자동 완성(Ctrl+Space), 참조로 이동(F12), Esbonio 언어 서버 진단 추가. 색은 설정 › 텍스트 편집기 › 색상에서 언어를 reStructuredText로 골라 변경.
+
+* 편집기·뷰어: reStructuredText용 Python 환경(Python · Sphinx · Esbonio)을 처음 쓸 때 구성. uv는 제품에 포함하지 않고 공식 배포처에서 고정 버전을 내려받아 SHA-256을 확인. 설정 › reStructuredText › Python 환경에서 재구성 · 삭제, uv 받는 방법과 직접 지정한 uv, 테마 · 확장 묶음 선택. 미리보기 빌드와 언어 서버는 프로젝트의 가상환경이나 pyproject.toml의 [tool.esbonio] 설정과 관계없이 이 환경에서 실행하고, 프로젝트가 쓰는 확장·테마가 없으면 프로젝트의 pyproject.toml · requirements · 가상환경에 적힌 버전 조건으로 설치를 안내한 뒤 설치하면 다시 빌드.
+
+* 편집기·뷰어: 새 문서 창에 Sphinx 프로젝트…와 reStructuredText 문서 추가(Markdown 아래, 1 – 7 키). 새 Sphinx 프로젝트는 이름 · 위치 · 언어 · 테마를 정해 conf.py와 index.rst를 생성. reST(R) 메뉴에서 프로젝트 빌드(html 등), conf.py 열기, 언어 서버 다시 시작 제공.
+
+* 편집기·뷰어: 미리보기 전체 화면(F11) 추가. Markdown과 reStructuredText에서 미리보기만 남기고 화면을 채우며, Esc 또는 F11로 들어가기 전 배치로 복귀.
+
+* 설정: reStructuredText 페이지(보기 · 미리보기, 자동완성 · 언어 서버, Python 환경)와 단축키의 reStructuredText 범위 추가. Ctrl+N 동작에 reStructuredText 문서 바로 만들기 추가.
+
+* 자동 업데이트: 업데이트 설치 확인이 끝나고 HyperCompare와 미리보기 프로그램을 설치 폴더로 옮긴 뒤 Libs/RootFiles의 운반본을 삭제. 이전 버전 업데이터로 업데이트한 뒤 HyperCommander보다 HyperEditor를 먼저 실행해도 Markdown·reStructuredText 미리보기 프로그램을 설치 폴더로 옮겨 미리보기를 표시.
+
 v2026.11.12.1 (2026-11-12)
 ----------------------------------------
 

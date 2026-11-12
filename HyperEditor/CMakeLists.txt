@@ -85,11 +85,33 @@ qt_add_library(hc_document_sdi STATIC
 target_link_libraries(hc_document_sdi PUBLIC hc_document_core Qt6::Widgets PRIVATE hc_document_broker Qt6::Concurrent Qt6::PrintSupport Fm::widgets)
 target_compile_options(hc_document_sdi PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
+# reStructuredText services without document-workspace widgets: Sphinx project resolution, the Python
+# environment (uv), Esbonio, preview builds, outline, diagnostics and completion. Ported from MultiRoot reST Editor.
+file(GLOB HC_RST_CORE_SOURCES CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/rst/*.cpp" "${PROJECT_SOURCE_DIR}/UniqueLibs/document/rst/*.hpp")
+qt_add_library(hc_rst_core STATIC ${HC_RST_CORE_SOURCES})
+# The environment definition and the preview builder are extracted into the runtime folder when it is configured.
+qt_add_resources(hc_rst_core "hc_rst_runtime" PREFIX "/rst/runtime" BASE "${PROJECT_SOURCE_DIR}/tools/rst/runtime" FILES
+    "${PROJECT_SOURCE_DIR}/tools/rst/runtime/pyproject.toml"
+    "${PROJECT_SOURCE_DIR}/tools/rst/runtime/uv.lock"
+    "${PROJECT_SOURCE_DIR}/tools/rst/runtime/mrr_sphinx_preview_build.py")
+target_include_directories(hc_rst_core PUBLIC "${PROJECT_SOURCE_DIR}/UniqueLibs/document/rst" PRIVATE
+    ${PROJECT_SOURCE_DIR}/HyperCommander
+    ${PROJECT_SOURCE_DIR}/commonLibs
+    ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include)
+target_link_libraries(hc_rst_core PUBLIC hc_document_core hc_hypereditor Qt6::Widgets Qt6::Network Qt6::Concurrent PRIVATE Qt6::ZlibPrivate)
+target_precompile_headers(hc_rst_core PRIVATE "${PROJECT_SOURCE_DIR}/HyperCommander/stdafx.h")
+target_compile_options(hc_rst_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+
 add_subdirectory("${PROJECT_SOURCE_DIR}/tools/markdown" "${CMAKE_BINARY_DIR}/markdown")
+add_subdirectory("${PROJECT_SOURCE_DIR}/tools/rst" "${CMAKE_BINARY_DIR}/rst-preview")
 qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/ProductDefaults_Edit.hpp
     ../UniqueLibs/document/markdownDocumentView.cpp ../UniqueLibs/document/markdownDocumentView.hpp
     ../UniqueLibs/document/markdownProcessView.cpp ../UniqueLibs/document/markdownProcessView.hpp
+    ../UniqueLibs/document/rstDocumentView.cpp ../UniqueLibs/document/rstDocumentView.hpp
+    ../UniqueLibs/document/rstPreviewProcess.cpp ../UniqueLibs/document/rstPreviewProcess.hpp
+    ../UniqueLibs/document/rstProjectDialogs.cpp ../UniqueLibs/document/rstProjectDialogs.hpp
     ../tools/epub/render/readingSettings.cpp ../tools/epub/render/readingSettings.hpp
     ../tools/epub/render/readingStore.cpp ../tools/epub/render/readingAssets.cpp
     ../tools/epub/render/readingProfiles.cpp ../tools/epub/render/readingProfiles.hpp
@@ -150,8 +172,12 @@ target_include_directories(hc_document_widgets PRIVATE
     ${PROJECT_SOURCE_DIR}/commonLibs
     ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include
 )
-add_dependencies(hc_document_widgets hc-markdown-render)
+add_dependencies(hc_document_widgets hc-markdown-render hc-rst-preview)
 target_link_libraries(hc_document_widgets PRIVATE Qt6::Network hc_document_search_core)
+# Preview helpers that an older updater delivered under Libs/RootFiles are copied beside the program
+# (updatePromotion) when a preview starts before HyperCommander did it.
+target_link_libraries(hc_document_widgets PRIVATE hc_update_core)
+target_link_libraries(hc_document_widgets PUBLIC hc_rst_core)
 target_link_libraries(hc_document_widgets PUBLIC hc_document_core hc_document_broker hc_document_sdi hc_hypereditor Qt6::Widgets fmstyle PRIVATE Qt6::Concurrent advapi32 shell32 ole32)
 target_link_libraries(hc_document_widgets PRIVATE Qt6::ZlibPrivate hc_epub_host hc_builtin_sevenzip hc_image_archive_transport hc_passwords Fm::widgets)
 target_compile_options(hc_document_widgets PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

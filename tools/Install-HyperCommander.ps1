@@ -55,7 +55,7 @@ $Hashes = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]:
 foreach ($Entry in $Product.files) {
     $Relative = [string]$Entry.path
     if ($Relative -match '(^/|^[A-Za-z]:|(^|/)\.\.(/|$))' -or $Relative.Contains('\') -or
-        ($Relative -notmatch '^(HyperCommander(?:Admin|Updater)?\.exe|HyperEditor\.exe|Libs/RootFiles/(?:HyperCompare(?:Cli)?|hc-markdown-render|HyperEpubWeb)\.exe|QtWebEngineProcess\.exe|hc-(?:plugin-host-x64|plugin-inspect|search-index)\.exe|(?:Qt6|vcruntime|msvcp|concrt|d3dcompiler_|opengl32sw|pdfium)[A-Za-z0-9_.]*\.dll|Libs/(?:platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport|multimedia|ffmpeg)/[A-Za-z0-9_.-]+\.dll|Libs/translations/[A-Za-z0-9_.-]+\.qm|Libs/(?:resources|translations/qtwebengine_locales)/[^:]+|Libs/Fonts/D2Coding\.rcc|Licenses/[^:]+|Addons/WCX/IsoImage/[^:]+|Addons/WLX/HyperViewer/[^:]+|Third-Party/(?:SevenZip|AlzEgg)/[^:]+)$' -and -not $RhwpPins.ContainsKey($Relative) -and -not $EpubPins.ContainsKey($Relative)) -or
+        ($Relative -notmatch '^(HyperCommander(?:Admin|Updater)?\.exe|HyperEditor\.exe|Libs/RootFiles/(?:HyperCompare(?:Cli)?|hc-markdown-render|hc-rst-preview|HyperEpubWeb)\.exe|QtWebEngineProcess\.exe|hc-(?:plugin-host-x64|plugin-inspect|search-index)\.exe|(?:Qt6|vcruntime|msvcp|concrt|d3dcompiler_|opengl32sw|pdfium)[A-Za-z0-9_.]*\.dll|Libs/(?:platforms|imageformats|iconengines|styles|generic|networkinformation|tls|sqldrivers|printsupport|multimedia|ffmpeg)/[A-Za-z0-9_.-]+\.dll|Libs/translations/[A-Za-z0-9_.-]+\.qm|Libs/(?:resources|translations/qtwebengine_locales)/[^:]+|Libs/Fonts/D2Coding\.rcc|Licenses/[^:]+|Addons/WCX/IsoImage/[^:]+|Addons/WLX/HyperViewer/[^:]+|Third-Party/(?:SevenZip|AlzEgg)/[^:]+)$' -and -not $RhwpPins.ContainsKey($Relative) -and -not $EpubPins.ContainsKey($Relative)) -or
         $Relative -match '(^|/)Qt6Test' -or $Entry.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or $Hashes.ContainsKey($Relative)) {
         throw "Invalid product inventory entry: $Relative"
     }
@@ -151,6 +151,19 @@ try {
     }
     throw
 }
+# The carried copies are read only until every ROOT copy is current and no update awaits its health
+# check; then they go, as the product removes them after an update (updatePromotion.cpp RetireCarriers).
+$Retired = [Collections.Generic.List[string]]::new()
+if (-not $Foreign.Count -and -not (Test-Path -LiteralPath (Join-Path $Destination '.update/active.json'))) {
+    foreach ($Name in $Bundle) {
+        $Relative = $Floor.carrier + $Name; $Carrier = Join-Path $Destination $Relative
+        if ((Test-Path -LiteralPath $Carrier -PathType Leaf) -and (Get-FileHash -LiteralPath $Carrier -Algorithm SHA256).Hash -eq $Hashes[$Relative]) {
+            try { Remove-Item -LiteralPath $Carrier; $Retired.Add($Relative) } catch { Write-Warning "Kept carried copy: $Relative ($($_.Exception.Message))" }
+        }
+    }
+    $CarrierFolder = Join-Path $Destination $Floor.carrier.TrimEnd('/')
+    if ((Test-Path -LiteralPath $CarrierFolder) -and -not (Get-ChildItem -LiteralPath $CarrierFolder -Force)) { Remove-Item -LiteralPath $CarrierFolder }
+}
 # Remove what the previous installation shipped and this one does not (e.g. an older directory layout).
 # Only files still matching their recorded hash are removed; user-modified files and user files stay.
 $Removed = [Collections.Generic.List[string]]::new()
@@ -178,9 +191,10 @@ if ($Previous -and $Previous.files) {
         if ((Test-Path -LiteralPath $Path) -and -not (Get-ChildItem -LiteralPath $Path -Force)) { Remove-Item -LiteralPath $Path }
     }
 }
-$Report = @{destination=$Destination; configuration='Release'; utc=[DateTime]::UtcNow.ToString('o'); files=$Inventory.ToArray(); promoted=$Promoted.ToArray(); removed=$Removed.ToArray()}
+$Report = @{destination=$Destination; configuration='Release'; utc=[DateTime]::UtcNow.ToString('o'); files=$Inventory.ToArray(); promoted=$Promoted.ToArray(); retired=$Retired.ToArray(); removed=$Removed.ToArray()}
 [IO.File]::WriteAllText((Join-Path $Evidence 'installed.json'), (($Report | ConvertTo-Json -Depth 5) -replace "`r?`n", "`r`n"), [Text.UTF8Encoding]::new($false))
 Write-Output "Installed $($Files.Count) product files: $Destination"
 if ($Promoted.Count) { Write-Output "Installation root copies match their carried files: $($Promoted -join ', ')" }
+if ($Retired.Count) { Write-Output "Removed the carried copies after copying them to the installation root: $($Retired.Count)" }
 if ($Removed.Count) { Write-Output "Removed $($Removed.Count) files the previous installation shipped" }
 Write-Output "Verified SHA256 inventory and overwritten-file backups: $Evidence"

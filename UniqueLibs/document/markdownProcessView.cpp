@@ -1,6 +1,9 @@
 ﻿#include "stdafx.h"
 #include "markdownProcessView.hpp"
 #include "documentWebProcess.hpp"
+#include "HyperCommanderUpdater/updatePromotion.hpp"
+#include "HyperCommanderUpdater/updateTransaction.hpp"
+#include <QFileInfo>
 #include <QLocalSocket>
 #include <QProcess>
 #include <QCoreApplication>
@@ -12,7 +15,13 @@
 
 namespace hc::document
 {
-MarkdownProcessView::MarkdownProcessView(QWidget *Parent) : QWidget(Parent)
+MarkdownProcessView::MarkdownProcessView(QWidget *Parent)
+    // A restarted helper starts at 100 %; the owner's zoom and menu coordinates assume the last value.
+    : MarkdownProcessView(QStringLiteral("hc-markdown-render"), {"render", "shortcuts", "zoom"}, Parent)
+{
+}
+MarkdownProcessView::MarkdownProcessView(const QString &Helper, const QStringList &Replayed, QWidget *Parent)
+    : QWidget(Parent), helper_(Helper), replayed_(Replayed)
 {
     setObjectName("markdownPreview");
     setFocusPolicy(Qt::StrongFocus);
@@ -43,12 +52,35 @@ MarkdownProcessView::~MarkdownProcessView()
 }
 void MarkdownProcessView::start()
 {
-    if (process_)
+    if (process_ || missing_)
         return;
     stopping_ = false;
+    // Updaters older than the helper deliver it under Libs/RootFiles, as does a new portable ZIP;
+    // HyperCommander copies it beside itself shortly after it starts. HyperEditor can open a
+    // document first, so make the same verified copy here. The carried copy is never run: its
+    // Qt runtime is the one beside the program.
+    const auto Program = QCoreApplication::applicationDirPath() + "/" + helper_ + ".exe";
+    if (!QFileInfo::exists(Program))
+    {
+        const auto Result = hc::update::PromoteRootFiles(hc::update::ExecutableRoot());
+        if (!QFileInfo::exists(Program))
+        {
+            missing_ = true;
+            const auto Name = helper_ + ".exe";
+            const auto Reason = Result.status_ == hc::update::PromotionStatus::Busy
+                ? tr("다른 미리보기나 HyperCompare가 실행 중이라 %1을 설치 폴더로 옮기지 못했습니다. 그 창을 닫은 뒤 다시 시도하세요.").arg(Name)
+                : Result.win32_ == ERROR_ACCESS_DENIED
+                ? tr("설치 폴더에 쓸 권한이 없어 %1을 옮기지 못했습니다. HyperCommander를 실행하면 관리자 권한으로 옮길 수 있습니다.").arg(Name)
+                : QFileInfo::exists(QCoreApplication::applicationDirPath() + "/Libs/RootFiles/" + Name)
+                ? tr("미리보기 프로그램 %1이 설치 폴더에 없습니다. HyperCommander를 한 번 실행하거나 Libs\\RootFiles의 %1을 설치 폴더로 복사한 뒤 다시 시도하세요.").arg(Name)
+                : tr("미리보기 프로그램 %1이 설치 폴더에 없습니다. 최신 Portable ZIP으로 다시 설치하세요.").arg(Name);
+            emit Reported({{"type", "error"}, {"message", Result.error_.empty() ? Reason : Reason + "\n" + QString::fromStdString(Result.error_)}});
+            return;
+        }
+    }
     token_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
     server_.setSocketOptions(QLocalServer::UserAccessOption);
-    if (!server_.listen("hc-markdown-" + token_))
+    if (!server_.listen(helper_ + "-" + token_))
     {
         emit Reported({{"type", "error"}, {"message", server_.errorString()}});
         return;
@@ -86,7 +118,7 @@ void MarkdownProcessView::start()
                 {{"type", "error"}, {"message", tr("미리보기가 종료되었습니다. 새로고침으로 다시 시도하세요.")}});
         Stop();
     });
-    Process->setProgram(QCoreApplication::applicationDirPath() + "/hc-markdown-render.exe");
+    Process->setProgram(Program);
     Process->setArguments({server_.serverName(), token_});
     Process->setProcessChannelMode(QProcess::ForwardedErrorChannel);
     startup_.start();
@@ -125,18 +157,14 @@ void MarkdownProcessView::Stop()
 }
 void MarkdownProcessView::Restart()
 {
+    missing_ = false;
     Stop();
     start();
 }
 void MarkdownProcessView::Send(const QJsonObject &Message)
 {
-    if (Message["type"] == "render")
-        pending_ = Message;
-    if (Message["type"] == "shortcuts")
-        shortcuts_ = Message;
-    // A restarted helper starts at 100 %; the owner's zoom and menu coordinates assume the last value.
-    if (Message["type"] == "zoom")
-        zoom_ = Message;
+    if (const auto Type = Message["type"].toString(); replayed_.contains(Type))
+        replay_[Type] = Message;
     if (!process_)
         start();
     if (ready_ && socket_ && socket_->bytesToWrite() < 32 * 1024 * 1024)
@@ -192,12 +220,9 @@ void MarkdownProcessView::receive()
                 SetFocus(Window);
                 Send({{"type", "focus"}});
             }
-            if (!pending_.isEmpty())
-                Send(pending_);
-            if (!shortcuts_.isEmpty())
-                Send(shortcuts_);
-            if (!zoom_.isEmpty())
-                Send(zoom_);
+            for (const auto &Type : std::as_const(replayed_))
+                if (const auto Kept = replay_.value(Type); !Kept.isEmpty())
+                    Send(Kept);
         }
         else
             emit Reported(Message);

@@ -32,9 +32,29 @@ namespace hc::defaults::edit
             {"markdown.find",QObject::tr("마크다운 찾기"),{},"markdown"},
             {"markdown.zoomIn",QObject::tr("미리보기 확대"),{},"markdown"},
             {"markdown.zoomOut",QObject::tr("미리보기 축소"),{},"markdown"},
+            {"markdown.fullScreen",QObject::tr("미리보기 전체 화면"),"F11","markdown"},
+            // reStructuredText: Markdown 과 같은 키. 두 범위는 함께 켜지지 않는다.
+            {"rst.toggleSource",QObject::tr("소스·미리보기 전환"),"Alt+O","rst"},
+            {"rst.preview",QObject::tr("미리보기"),{},"rst"},
+            {"rst.source",QObject::tr("소스 보기·편집"),{},"rst"},
+            {"rst.split",QObject::tr("나란히 보기"),{},"rst"},
+            {"rst.toggleToc",QObject::tr("개요 표시 전환"),"Ctrl+Alt+O","rst"},
+            {"rst.toggleProblems",QObject::tr("진단 패널 표시 전환"),"Ctrl+Alt+D","rst"},
+            {"rst.syncScroll",QObject::tr("스크롤 동기화"),{},"rst"},
+            {"rst.rebuild",QObject::tr("미리보기 다시 빌드"),"Ctrl+Alt+R","rst"},
+            {"rst.fullScreen",QObject::tr("미리보기 전체 화면"),"F11","rst"},
+            {"rst.focusOtherPane",QObject::tr("소스·미리보기 포커스 이동"),"F6","rst"},
+            {"rst.complete",QObject::tr("자동 완성"),"Ctrl+Space","rst"},
+            {"rst.goToReference",QObject::tr("참조로 이동"),"F12","rst"},
+            {"rst.buildProject",QObject::tr("프로젝트 빌드"),{},"rst"},
+            {"rst.find",QObject::tr("reStructuredText 찾기"),{},"rst"},
+            {"rst.zoomIn",QObject::tr("미리보기 확대"),{},"rst"},
+            {"rst.zoomOut",QObject::tr("미리보기 축소"),{},"rst"},
             {"file.new", QObject::tr("새 문서"), "Ctrl+N", "common"},
             {"file.newText", QObject::tr("새 텍스트 문서"), "", "common"},
             {"file.newMarkdown", QObject::tr("새 Markdown 문서"), "", "common"},
+            {"file.newRst", QObject::tr("새 reStructuredText 문서"), "", "common"},
+            {"file.newSphinxProject", QObject::tr("새 Sphinx 프로젝트"), "", "common"},
             {"file.newEpub", QObject::tr("새 EPUB 책"), "", "common"},
             {"file.newImage", QObject::tr("새 이미지"), "", "common"},
             {"file.openWorkspace", QObject::tr("문서 열기"), "Ctrl+O", "common"},
@@ -187,6 +207,30 @@ namespace hc::defaults::edit
             {"markdown/previewFonts/bodySizePt", 11}, {"markdown/previewFonts/codeFamily", "Consolas"},
             {"markdown/previewFonts/codeSizePt", 10}, {"markdown/previewFonts/lineHeight", 1.7},
             {"markdown/previewFonts/headings", true},
+            // reStructuredText: 보기 · 미리보기 빌드 · 자동완성 · 언어 서버 · Python 환경.
+            {"rst/viewerMode", "preview"}, {"rst/editorMode", "split"},
+            {"rst/viewerOutline", false}, {"rst/editorOutline", true},
+            {"rst/outlineTab", "auto"}, {"rst/outlineDepth", 3}, {"rst/scrollSync", true},
+            {"rst/problemsPanel", "auto"},
+            {"rst/autoPreview", true}, {"rst/debounceMs", 600},
+            {"rst/applyUnsavedEdits", true}, {"rst/unsavedEditMaxReadMs", 2000},
+            {"rst/stubDoxygenWhileTyping", true}, {"rst/skipUnchangedBuild", true},
+            {"rst/unlimitedWidth", false}, {"rst/allowRemoteContent", true}, {"rst/domMorph", true},
+            {"rst/virtualProjectTheme", ""},
+            {"rst/previewFonts/enabled", false}, {"rst/previewFonts/mode", "document"},
+            {"rst/previewFonts/bodyFamily", QStringLiteral("맑은 고딕")},
+            {"rst/previewFonts/bodySizePt", 11}, {"rst/previewFonts/codeFamily", "Consolas"},
+            {"rst/previewFonts/codeSizePt", 10}, {"rst/previewFonts/lineHeight", 1.7},
+            {"rst/previewFonts/headings", true},
+            {"rst/completion/autoTrigger", true}, {"rst/completion/imagePreview", true},
+            {"rst/completion/termHover", true},
+            {"rst/languageServer", true}, {"rst/maxLspProcesses", 3},
+            {"rst/buildDirName", "_build/hypereditor"},
+            // uv: ask (확인 후 내려받기) · auto (묻지 않고 내려받기) · never (직접 지정한 uv 만).
+            {"rst/python/uvAcquire", "ask"}, {"rst/python/useExternalUv", false},
+            {"rst/python/externalUvPath", ""},
+            {"rst/python/installOptionalThemes", true}, {"rst/python/installOptionalExtensions", true},
+            {"rst/build/lastBuilder", "html"}, {"rst/build/openWhenDone", true},
             {"epubEditor/javaPath", ""}, {"epubEditor/epubcheckJar", ""},
             {"epubEditor/requireEpubCheck", false},
             {"imageView/comic/coverAlone", false}, {"imageView/fullscreenRemember", true},
@@ -195,12 +239,13 @@ namespace hc::defaults::edit
             {"imageView/fullscreen", false},
             {"textView/detectIndent", true},
             {"recent/enabled", true}, {"recent/menuCount", 5},
-            // Ctrl+N: ask (종류 선택 팝업) · text · markdown. The popup starts on the last kind made.
+            // Ctrl+N: ask (종류 선택 팝업) · text · markdown · rst. The popup starts on the last kind made.
             {"common/newDocumentAction", "ask"}, {"common/newDocumentLastKind", "text"},
             {"common/newImagePreset", "fhd"}, {"common/newImageWidth", 1920}, {"common/newImageHeight", 1080},
             {"common/newImageBackground", "white"},
             // Untitled Save As starts here (else Documents); a new EPUB remembers its folder and author.
             {"common/lastSaveFolder", ""}, {"common/newEpubFolder", ""}, {"common/newEpubCreator", ""},
+            {"common/newSphinxFolder", ""}, {"common/newSphinxAuthor", ""},
             {"pdfView/annotationToolbar", false}
         };
         return Values;
@@ -416,10 +461,35 @@ namespace hc::defaults::edit
                      c.value(QStringLiteral("text.lexer.%1").arg(tokenKey)));
         }
     }
+    // reStructuredText has its own style set (container lexer). A directive or role is painted in one of three
+    // states: known, not in the project's list, or not known yet (the language server has not answered).
+    const QList<std::pair<const char*, const char*>> RstColors = WantDark
+        ? QList<std::pair<const char*, const char*>>{
+            {"title", "#66D9EF"}, {"transition", "#93907D"}, {"comment", "#93907D"}, {"explicitMarkup", "#9A9581"},
+            {"directiveValid", "#A6E22E"}, {"directiveInvalid", "#FF4388"}, {"directiveUnknown", "#A8A493"},
+            {"roleValid", "#FD971F"}, {"roleInvalid", "#FF4388"}, {"roleUnknown", "#A8A493"},
+            {"literal", "#E6DB74"}, {"inlineLiteral", "#E6DB74"}, {"emphasis", "#D8CFA0"}, {"strong", "#FD971F"},
+            {"interpreted", "#66D9EF"}, {"hyperlink", "#66D9EF"}, {"substitution", "#AE81FF"}, {"fieldName", "#FF4388"}}
+        : QList<std::pair<const char*, const char*>>{
+            {"title", "#00749F"}, {"transition", "#716D5A"}, {"comment", "#716D5A"}, {"explicitMarkup", "#716D5A"},
+            {"directiveValid", "#3B7D00"}, {"directiveInvalid", "#D0005F"}, {"directiveUnknown", "#77735F"},
+            {"roleValid", "#AB5500"}, {"roleInvalid", "#D0005F"}, {"roleUnknown", "#77735F"},
+            {"literal", "#856800"}, {"inlineLiteral", "#856800"}, {"emphasis", "#6B5A00"}, {"strong", "#AB5500"},
+            {"interpreted", "#00749F"}, {"hyperlink", "#0057B8"}, {"substitution", "#7444F5"}, {"fieldName", "#D0005F"}};
+    for (const auto& [Token, Hex] : RstColors)
+        c.insert(QStringLiteral("text.lexer.rst.%1").arg(QLatin1String(Token)), Color(QString::fromLatin1(Hex)));
+    // Squiggles under language diagnostics (reStructuredText).
+    c.insert(QStringLiteral("text.diagnostic.error"), T[Token::Danger]);
+    c.insert(QStringLiteral("text.diagnostic.warning"), T[Token::Warn]);
+    c.insert(QStringLiteral("text.diagnostic.info"), T[Token::AccentFg]);
     return c;
     }
 
     inline QJsonObject SettingsPreviewFont() { return {{"family", "Consolas"}, {"pointSize", 11}}; }
+    // Python runtime of the reStructuredText preview (uv, CPython, Sphinx, Esbonio). It is hundreds of MB and is
+    // not part of the product folder, which installation and updates manage; HyperEditor and HyperViewer share it.
+    inline QString RstRuntimeDirectory()
+    { return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/HyperCommander/rst-runtime"; }
     inline QString EpubWorkspaceFile(const QString& Directory) { return QDir(Directory).filePath("HyperEditor.epub-workspace.json"); }
     inline QString EpubStandaloneSettingsFile()
     { return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/HyperCommander/EpubPoc/reading-profiles.json"; }

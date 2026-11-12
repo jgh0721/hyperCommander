@@ -368,6 +368,37 @@
       }
     },
     {
+      "languageId": "rst",
+      "displayName": "reStructuredText",
+      "lexerKey": "rst-container",
+      "extensions": [
+        "rest",
+        "rst"
+      ],
+      "fileNames": [],
+      "keywords": [],
+      "styles": {
+        "1": "comment",
+        "2": "title",
+        "3": "transition",
+        "4": "directiveValid",
+        "5": "directiveInvalid",
+        "6": "directiveUnknown",
+        "7": "roleValid",
+        "8": "roleInvalid",
+        "9": "roleUnknown",
+        "10": "literal",
+        "11": "emphasis",
+        "12": "strong",
+        "13": "interpreted",
+        "14": "inlineLiteral",
+        "15": "hyperlink",
+        "16": "substitution",
+        "17": "fieldName",
+        "18": "explicitMarkup"
+      }
+    },
+    {
       "languageId": "xml",
       "displayName": "XML",
       "lexerKey": "xml",

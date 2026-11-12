@@ -101,7 +101,8 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
                                     std::pair{"markdown.problems", tr("렌더링 문제")},
                                     std::pair{"markdown.currentHeading", tr("현재 개요 항목")},
                                     std::pair{"markdown.zoomReset", tr("미리보기 원래 크기")},
-                                    std::pair{"markdown.zoomSet", tr("미리보기 배율")}})
+                                    std::pair{"markdown.zoomSet", tr("미리보기 배율")},
+                                    std::pair{"markdown.fullScreen", tr("미리보기 전체 화면")}})
         toolbar_->removeAction(Make(QString::fromLatin1(Id), Label));
     message_ = new QLabel(this);
     message_->setWordWrap(true);
@@ -305,7 +306,27 @@ void MarkdownDocumentView::mode(const QString &Value)
 }
 void MarkdownDocumentView::syncControls()
 {
-    outlinePanel_->setVisible(actions_["markdown.toggleToc"]->isChecked());
+    outlinePanel_->setVisible(!previewOnly_ && actions_["markdown.toggleToc"]->isChecked());
+}
+void MarkdownDocumentView::SetPreviewOnly(bool On)
+{
+    if (previewOnly_ == On)
+        return;
+    previewOnly_ = On;
+    if (On)
+    {
+        // 소스만 보던 중이면 미리보기로 바꿔 들어가고, 나올 때 소스 보기로 돌아온다.
+        modeBeforePreviewOnly_ = mode_;
+        toolbar_->hide();
+        mode("preview");
+        preview_->FocusInput();
+    }
+    else
+    {
+        toolbar_->show();
+        mode(modeBeforePreviewOnly_);
+        Focus();
+    }
 }
 void MarkdownDocumentView::saveToggle(const QString &Key, bool Value)
 {
@@ -332,6 +353,14 @@ bool MarkdownDocumentView::RunPreviewCommand(const QString &Id)
 bool MarkdownDocumentView::Run(const QString &Id, const QJsonValue &Value)
 {
     if (!CanRun(Id))
+        return false;
+    if (Id == "markdown.fullScreen")
+    {
+        emit FullScreenToggleRequested();
+        return true;
+    }
+    // 전체 화면에서는 보기 방식을 바꾸지 않는다. 나가면 들어가기 전의 방식으로 돌아간다.
+    if (previewOnly_ && (Id == "markdown.source" || Id == "markdown.preview" || Id == "markdown.split" || Id == "markdown.toggleSource"))
         return false;
     if (Id == "markdown.source" || Id == "markdown.preview" || Id == "markdown.split")
     {
@@ -645,7 +674,10 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
     const auto Type = Value["type"].toString();
     if (Type == "escape")
     {
-        emit EscapeRequested();
+        if (previewOnly_)
+            emit FullScreenToggleRequested();
+        else
+            emit EscapeRequested();
         return;
     }
     if (Type == "context")

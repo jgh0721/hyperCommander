@@ -21,6 +21,7 @@ namespace hc::document
 {
     class EpubProcessView;
     class MarkdownDocumentView;
+    class RstDocumentView;
     class EpubSourceEditor;
     class ImageReadingView;
     class ImageFramePlayer;
@@ -42,6 +43,15 @@ namespace hc::document
         bool CanEditEpub()const;bool CanSaveEpub()const;bool CanPrepareEpubSave()const;bool PrepareEpubSave(bool SaveAs);
         bool IsMarkdown() const { return markdown_ != nullptr; }
         bool MarkdownSourceVisible() const;
+        bool IsRst() const { return rst_ != nullptr; }
+        // Markdown · reStructuredText: 소스와 미리보기를 함께 가진 문서.
+        bool HasPreview() const { return markdown_ != nullptr || rst_ != nullptr; }
+        bool PreviewSourceVisible() const;
+        // 미리보기 전체 화면( .md · .rst ): 미리보기만 남기고, 끄면 들어가기 전의 보기로 돌아간다.
+        void SetPreviewOnly(bool Enabled);
+        bool IsPreviewOnly() const;
+        // 다른 문서에서 넘어온 위치: 줄( 1부터 )로 간다. 텍스트 계열 보기에서만 뜻이 있다.
+        void GoToLine(int Line);
         bool IsEpub() const { return viewId_ == "epub"; }
         bool IsProcessDocument() const { return IsHwp() || IsEpub(); }
         bool IsHwp() const { return viewId_ == "hwp" || viewId_ == "hwpx"; }
@@ -124,6 +134,12 @@ namespace hc::document
         void SearchRequested(const QString& Query);
         void ViewStateChanged();
         void OpenRequested(const QString& Path);
+        // 다른 파일을 열고 그 줄로 간다( reST 개요 · 진단 · 참조 · 미리보기 클릭 ).
+        void OpenAtRequested(const QString& Path, int Line);
+        // 미리보기 전체 화면을 켜고 끈다( .md · .rst ).
+        void PreviewFullScreenRequested();
+        // 창의 명령을 id 로 부른다( 새 Sphinx 프로젝트 · reST 설정 ).
+        void WorkspaceCommandRequested(const QString& Id);
         void SaveRequested();
         void EpubSaveRequested(bool SaveAs);
         void EncodingRequested(const QString& Encoding);
@@ -154,6 +170,11 @@ namespace hc::document
         void adoptTextPath(const QString& Path);
         void attachMarkdown(const QString& Path);
         void detachMarkdown();
+        // .rst/.rest: the same wrapping as Markdown, with the reST view (outline · source · Sphinx preview · problems).
+        void buildRstChrome();
+        void attachRst(const QString& Path);
+        void detachRst();
+        void syncRstChrome();
         bool markdownEditing_ = false;
         void syncMarkdownChrome();
         void buildPdfChrome();
@@ -178,6 +199,7 @@ namespace hc::document
         QBaseView* view_ = nullptr;
         QTextView* text_ = nullptr;
         MarkdownDocumentView* markdown_ = nullptr;
+        RstDocumentView* rst_ = nullptr;
         QPDFView* pdf_ = nullptr;
         QImageView* image_ = nullptr;
         ImageReadingView* reading_ = nullptr;

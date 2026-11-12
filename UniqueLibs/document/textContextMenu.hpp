@@ -16,6 +16,8 @@ namespace hc::document
         // 맨 위 항목(예: '미리보기에서 이 위치 보기')과 그 뒤 구분선. 글자가 비면 넣지 않는다.
         QString                 leadingText_;
         std::function< void() > leading_;
+        // 맨 위에 여러 항목을 직접 넣는다( reST 소스: 참조로 이동 · 진단 · 자동 완성 ). 구분선도 넣는 쪽이 붙인다.
+        std::function< void( QMenu& ) > prepend_;
         bool                    deleteItem_ = true;          // '삭제'
         bool                    findInSelection_ = true;     // '선택 영역에서 찾기…'
         bool                    fold_ = true;                // '접기 ▸'

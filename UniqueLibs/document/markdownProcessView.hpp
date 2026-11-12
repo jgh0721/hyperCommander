@@ -2,17 +2,25 @@
 #include <QWidget>
 #include <QJsonObject>
 #include <QLocalServer>
+#include <QHash>
 #include <QPointer>
+#include <QStringList>
 #include <QTimer>
 class QLocalSocket;
 class QProcess;
 namespace hc::document
 {
+// Hosts the window of a preview helper process: hc-markdown-render.exe by default, or another helper that
+// speaks the same attach protocol (ready · attached · focus), such as hc-rst-preview.exe. The helper sits
+// beside the application's executable.
 class MarkdownProcessView final : public QWidget
 {
     Q_OBJECT
   public:
     explicit MarkdownProcessView(QWidget *Parent = nullptr);
+    // Helper is the executable's base name. The last message of each type in Replayed is sent again, in that
+    // order, whenever a helper attaches (the first start, or a restart after it stopped).
+    MarkdownProcessView(const QString &Helper, const QStringList &Replayed, QWidget *Parent = nullptr);
     ~MarkdownProcessView() override;
     void Send(const QJsonObject &Message);
     void Restart();
@@ -37,11 +45,15 @@ class MarkdownProcessView final : public QWidget
     QPointer<QProcess> process_;
     QByteArray input_;
     QString token_;
+    QString helper_;
     // Replayed when the helper (re)attaches.
-    QJsonObject pending_, shortcuts_, zoom_;
+    QStringList replayed_;
+    QHash<QString, QJsonObject> replay_;
     QTimer startup_;
     quintptr child_ = 0;
     void *job_ = nullptr;
     bool ready_ = false, stopping_ = false, focusRequested_ = false;
+    // The helper is not beside the program and could not be copied there; Restart() tries again.
+    bool missing_ = false;
 };
 } // namespace hc::document

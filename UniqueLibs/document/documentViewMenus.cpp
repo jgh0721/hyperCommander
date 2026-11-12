@@ -8,6 +8,7 @@
 #include "text/TextLexerRegistry.h"
 #include "text/TextMinimap.h"
 #include "markdownDocumentView.hpp"
+#include "rstDocumentView.hpp"
 #include "pdf/QPDFView.h"
 #include "image/QImageView.h"
 #include "imageReadingView.hpp"
@@ -829,6 +830,7 @@ namespace hc::document
         View << Scoped(chromeAction(tr("미리보기 확대"), "markdownView.zoomIn", Command("markdown.zoomIn"), Key("markdown.zoomIn")), Both);
         View << Scoped(chromeAction(tr("미리보기 축소"), "markdownView.zoomOut", Command("markdown.zoomOut"), Key("markdown.zoomOut")), Both);
         View << Scoped(chromeAction(tr("미리보기 원래 크기"), "markdownView.zoomReset", Command("markdown.zoomReset"), {}), Both);
+        View << Scoped(chromeAction(tr("미리보기 전체 화면"), "markdownView.fullScreen", Command("markdown.fullScreen"), Key("markdown.fullScreen")), Both);
         contribution_.viewActions_ = View;
         contribution_.menu_ = modeMenu_;
         syncMarkdownChrome();
@@ -845,6 +847,123 @@ namespace hc::document
             else if (Action->objectName() == QLatin1String("markdownView.outline")) { if (auto* Own = markdown_->findChild<QAction*>("markdown.toggleToc")) Action->setChecked(Own->isChecked()); }
             else if (Action->objectName() == QLatin1String("markdownView.sync")) { if (auto* Own = markdown_->findChild<QAction*>("markdown.syncScroll")) Action->setChecked(Own->isChecked()); }
         }
+    }
+    void DocumentViewPane::buildRstChrome()
+    {
+        using K = DocumentViewKind;
+        const quint32 Preview = viewKinds::Of(K::RstPreview), Source = viewKinds::Of(K::RstEdit), Both = Preview | Source;
+        const auto Key = [this](const char* Id) { return KeyText(shortcutBindings_, QString::fromLatin1(Id)); };
+        const auto Scoped = [](QAction* Action, quint32 Kinds) { viewKinds::Set(Action, Kinds); return Action; };
+        const auto Command = [this](const char* Id) { return [this, Id = QString::fromLatin1(Id)] { RunViewCommand(Id); }; };
+        contribution_.menuTitle_ = tr("reST(&R)");
+        modeMenu_ = new QMenu(contribution_.menuTitle_, this); modeMenu_->setObjectName("rstModeMenu");
+        auto* Mode = modeMenu_;
+        Mode->addAction(Scoped(chromeAction(tr("미리보기 다시 빌드"), "rstMenu.rebuild", Command("rst.rebuild"), Key("rst.rebuild")), Both));
+        Mode->addAction(Scoped(chromeAction(tr("현재 개요 항목…"), "rstMenu.heading", Command("rst.currentHeading")), Both));
+        Mode->addAction(Scoped(chromeAction(tr("진단 목록…"), "rstMenu.problems", Command("rst.problems")), Both));
+        Scoped(Mode->addSeparator(), Both);
+        // 프로젝트 ▸ · Python 환경 ▸: 열 때마다 문서의 상태로 다시 채운다( 가상 프로젝트에서는 빌드와 conf.py 를 끈다 ).
+        const auto Row = [this](QMenu* Menu, const QString& Text, const char* Id, const QString& Shortcut = {}) {
+            auto* Action = Menu->addAction(Shortcut.isEmpty() ? Text : Text + QLatin1Char('\t') + Shortcut);
+            const auto Name = QString::fromLatin1(Id);
+            Action->setEnabled(CanRunViewCommand(Name));
+            connect(Action, &QAction::triggered, this, [this, Name] { RunViewCommand(Name); });
+            return Action;
+        };
+        auto* Project = RadioMenu(Mode, tr("프로젝트"), [this, Row, Key](QMenu* Menu) {
+            if (!rst_) return;
+            const auto State = rst_->State();
+            const auto Label = State["project"].toString();
+            auto* Head = Menu->addAction(Label.isEmpty() ? tr("프로젝트 없음") : State["virtual"].toBool() ? Label : tr("프로젝트 · %1").arg(Label));
+            Head->setEnabled(false);
+            const bool Building = rst_->CanRun(QStringLiteral("rst.cancelBuild"));
+            if (Building) Row(Menu, tr("프로젝트 빌드 취소"), "rst.cancelBuild"); else Row(Menu, tr("프로젝트 빌드…"), "rst.buildProject", Key("rst.buildProject"));
+            Row(Menu, tr("conf.py 열기"), "rst.openConf");
+            Menu->addSeparator();
+            Row(Menu, tr("프로젝트 폴더를 HyperCommander에서 보기"), "rst.openProjectFolder");
+            Row(Menu, tr("빌드 결과 폴더 열기"), "rst.openBuildFolder");
+            Menu->addSeparator();
+            Row(Menu, tr("프로젝트 다시 찾기"), "rst.rescanProjects");
+            auto* Create = Menu->addAction(tr("새 Sphinx 프로젝트…"));
+            connect(Create, &QAction::triggered, this, [this] { emit WorkspaceCommandRequested(QStringLiteral("file.newSphinxProject")); });
+        });
+        Project->setObjectName("rstProjectMenu");
+        Mode->addAction(Scoped(Project->menuAction(), Both));
+        auto* Environment = RadioMenu(Mode, tr("Python 환경"), [this, Row](QMenu* Menu) {
+            if (!rst_) return;
+            const auto State = rst_->State();
+            auto* Head = Menu->addAction(tr("Python 환경 · %1").arg(State["environment"].toString()));
+            Head->setEnabled(false);
+            Row(Menu, State["environmentReady"].toBool() ? tr("환경 재구성…") : tr("환경 구성…"), "rst.configureEnvironment");
+            Row(Menu, tr("언어 서버 다시 시작"), "rst.restartServer");
+            Menu->addSeparator();
+            Row(Menu, tr("구성 로그 보기"), "rst.showLog");
+            Row(Menu, tr("환경 폴더 열기"), "rst.openEnvironmentFolder");
+            Menu->addSeparator();
+            auto* Settings = Menu->addAction(tr("reStructuredText 설정…"));
+            connect(Settings, &QAction::triggered, this, [this] { emit WorkspaceCommandRequested(QStringLiteral("app.settings.rst")); });
+        });
+        Environment->setObjectName("rstEnvironmentMenu");
+        Mode->addAction(Scoped(Environment->menuAction(), Both));
+        // Source editing: 인코딩 · 줄 끝 · 들여쓰기 · 읽기 전용 · 편집기 글꼴 (the text menu without 언어).
+        Scoped(Mode->addSeparator(), Source);
+        const auto Before = Mode->actions().size();
+        buildTextChrome(Mode, false);
+        for (auto* Action : Mode->actions().mid(Before)) Scoped(Action, Source);
+        Scoped(Mode->addSeparator(), Both);
+        Mode->addAction(Scoped(chromeAction(tr("다른 창으로 포커스 이동"), "rstMenu.focus", Command("rst.focusOtherPane"), Key("rst.focusOtherPane")), Both));
+
+        // 편집: 자동 완성 · 참조로 이동( 소스가 보일 때 ).
+        QList<QAction*> Edit;
+        Edit << Scoped(chromeAction(tr("자동 완성"), "rstEdit.complete", Command("rst.complete"), Key("rst.complete")), Source);
+        Edit << Scoped(chromeAction(tr("참조로 이동"), "rstEdit.goToReference", Command("rst.goToReference"), Key("rst.goToReference")), Source);
+        contribution_.editActions_ = Edit;
+
+        QList<QAction*> View;
+        auto* Group = new QActionGroup(chromeOwner_);
+        for (const auto& [Label, Id, Icon] : {std::tuple{tr("미리보기"), "rst.preview", "view-preview"}, std::tuple{tr("소스 편집"), "rst.source", "view-source"},
+                 std::tuple{tr("나란히 보기"), "rst.split", "view-split"}}) {
+            auto* Item = Scoped(chromeAction(Label, QStringLiteral("rstView.") + QString::fromLatin1(Id).mid(4), Command(Id), Key(Id)), Both);
+            Item->setCheckable(true); Item->setProperty("rstMode", QString::fromLatin1(Id).mid(4)); Item->setProperty("documentIconName", QString::fromLatin1(Icon));
+            Group->addAction(Item); View << Item;
+        }
+        View << Scoped(chromeAction(tr("소스 · 미리보기 전환"), "rstView.toggle", Command("rst.toggleSource"), Key("rst.toggleSource")), Both);
+        auto* Gap = new QAction(chromeOwner_); Gap->setSeparator(true); View << Scoped(Gap, Both);
+        auto* Outline = Scoped(chromeAction(tr("개요"), "rstView.outline", Command("rst.toggleToc"), Key("rst.toggleToc")), Both); Outline->setCheckable(true);
+        auto* Problems = Scoped(chromeAction(tr("진단 패널"), "rstView.problems", Command("rst.toggleProblems"), Key("rst.toggleProblems")), Both); Problems->setCheckable(true);
+        auto* Sync = Scoped(chromeAction(tr("스크롤 동기화"), "rstView.sync", Command("rst.syncScroll"), Key("rst.syncScroll")), Both); Sync->setCheckable(true);
+        View << Outline << Problems << Sync;
+        auto* Gap2 = new QAction(chromeOwner_); Gap2->setSeparator(true); View << Scoped(Gap2, Both);
+        // Source editing view items (자동 줄바꿈 · 탭 · 공백 · 줄 끝 표시 · 코드 접기 · 눈금자 · 미니맵), without editor zoom.
+        const auto Saved = contribution_.viewActions_;
+        buildTextViewItems(false);
+        for (auto* Action : contribution_.viewActions_) View << Scoped(Action, Source);
+        contribution_.viewActions_ = Saved;
+        View << Scoped(chromeAction(tr("미리보기 확대"), "rstView.zoomIn", Command("rst.zoomIn"), Key("rst.zoomIn")), Both);
+        View << Scoped(chromeAction(tr("미리보기 축소"), "rstView.zoomOut", Command("rst.zoomOut"), Key("rst.zoomOut")), Both);
+        View << Scoped(chromeAction(tr("미리보기 원래 크기"), "rstView.zoomReset", Command("rst.zoomReset"), {}), Both);
+        View << Scoped(chromeAction(tr("미리보기 전체 화면"), "rstView.fullScreen", Command("rst.fullScreen"), Key("rst.fullScreen")), Both);
+        contribution_.viewActions_ = View;
+        contribution_.menu_ = modeMenu_;
+        syncRstChrome();
+    }
+    void DocumentViewPane::syncRstChrome()
+    {
+        if (!rst_ || !modeMenu_) return;
+        const auto Kind = this->Kind();
+        for (auto* Action : modeMenu_->actions() + contribution_.viewActions_ + contribution_.editActions_) if (viewKinds::Has(Action)) Action->setVisible(viewKinds::Applies(Action, Kind));
+        const auto Mode = rst_->State()["mode"].toString();
+        const auto Checked = [this](const char* Id) { auto* Own = rst_->Toolbar()->findChild<QAction*>(QString::fromLatin1(Id)); return Own && Own->isChecked(); };
+        for (auto* Action : contribution_.viewActions_) {
+            const QSignalBlocker Block(Action);
+            if (Action->property("rstMode").isValid()) Action->setChecked(Action->property("rstMode").toString() == Mode);
+            else if (Action->objectName() == QLatin1String("rstView.outline")) Action->setChecked(Checked("rst.toggleToc"));
+            else if (Action->objectName() == QLatin1String("rstView.problems")) Action->setChecked(Checked("rst.toggleProblems"));
+            else if (Action->objectName() == QLatin1String("rstView.sync")) Action->setChecked(Checked("rst.syncScroll"));
+            else if (Action->objectName() == QLatin1String("rstView.zoomIn") || Action->objectName() == QLatin1String("rstView.zoomOut")
+                || Action->objectName() == QLatin1String("rstView.zoomReset")) Action->setEnabled(rst_->PreviewVisible());
+        }
+        for (auto* Action : contribution_.editActions_) Action->setEnabled(rst_->SourceVisible() && !rst_->IsPreviewOnly());
     }
     void DocumentViewPane::buildTextViewItems(bool Zoom)
     {

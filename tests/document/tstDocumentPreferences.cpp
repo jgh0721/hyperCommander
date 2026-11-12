@@ -2083,6 +2083,62 @@ private slots:
         Action->trigger(); for (auto* Widget : QApplication::topLevelWidgets()) if (auto* Settings = qobject_cast<DocumentSettingsDialog*>(Widget)) Dialog = Settings;
         QVERIFY(Dialog); delete Window; QVERIFY(Dialog.isNull());
     }
+    void reStructuredTextSettingsPage()
+    {
+        // 시안 ⑤: 마크다운 아래 reStructuredText 페이지, 탭 셋( 보기 · 미리보기 / 자동완성 · 언어 서버 / Python 환경 ).
+        QTemporaryDir Temp, Runtime; qApp->setProperty("documentViewsConfigDir", Temp.path());
+        qputenv("HC_RST_RUNTIME_DIR", Runtime.path().toUtf8());
+        const auto Restore = qScopeGuard([] { qApp->setProperty("documentViewsConfigDir", QVariant()); qunsetenv("HC_RST_RUNTIME_DIR"); });
+        const auto Path = UnifiedConfig::FileName(Temp.path());
+        DocumentSettingsDialog Dialog(Path, {});
+        auto* List = Dialog.findChild<QListWidget*>("settingsCategories"); QVERIFY(List);
+        QCOMPARE(List->count(), 7); QCOMPARE(List->item(4)->text(), QObject::tr("마크다운")); QCOMPARE(List->item(5)->text(), QString("reStructuredText"));
+        Dialog.ShowPage("rst"); QCOMPARE(List->currentRow(), 5);
+        Dialog.ShowPage("image"); QCOMPARE(List->currentRow(), 6);
+        Dialog.ShowPage("rst");
+        auto* Tabs = Dialog.findChild<QTabWidget*>("rstSettingsTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 3);
+        // 기본값.
+        auto* Sync = Dialog.findChild<QCheckBox*>("documentViews/rst/scrollSync"); QVERIFY(Sync); QVERIFY(Sync->isChecked());
+        auto* Delay = Dialog.findChild<QSpinBox*>("documentViews/rst/debounceMs"); QVERIFY(Delay); QCOMPARE(Delay->value(), 600);
+        auto* Depth = Dialog.findChild<QSpinBox*>("documentViews/rst/outlineDepth"); QVERIFY(Depth); QCOMPARE(Depth->value(), 3);
+        auto* Acquire = Dialog.findChild<QComboBox*>("documentViews/rst/python/uvAcquire"); QVERIFY(Acquire); QCOMPARE(Acquire->currentData().toString(), QString("ask"));
+        auto* Build = Dialog.findChild<QLineEdit*>("documentViews/rst/buildDirName"); QVERIFY(Build); QCOMPARE(Build->text(), QString("_build/hypereditor"));
+        auto* Server = Dialog.findChild<QCheckBox*>("documentViews/rst/languageServer"); QVERIFY(Server); QVERIFY(Server->isChecked());
+        auto* Editor = Dialog.findChild<QComboBox*>("documentViews/rst/editorMode"); QVERIFY(Editor); QCOMPARE(Editor->currentData().toString(), QString("split"));
+        // 직접 지정한 uv 를 켜야 경로를 넣을 수 있다.
+        auto* UseUv = Dialog.findChild<QCheckBox*>("documentViews/rst/python/useExternalUv"); QVERIFY(UseUv); QVERIFY(!UseUv->isChecked());
+        auto* UvPath = Dialog.findChild<QLineEdit*>("documentViews/rst/python/externalUvPath"); QVERIFY(UvPath);
+        QTRY_VERIFY(!UvPath->isEnabled()); UseUv->setChecked(true); QVERIFY(UvPath->isEnabled()); UseUv->setChecked(false);
+        // Python 환경: 구성되지 않은 빈 폴더를 본다. 설정창을 여는 것만으로 그 폴더에 파일이 생기지 않는다.
+        auto* Folder = Dialog.findChild<QLabel*>("rstEnvFolder"); QVERIFY(Folder);
+        QTRY_COMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Folder->text())), QDir::cleanPath(Runtime.path()));
+        QVERIFY(Dialog.findChild<QPushButton*>("rstEnvConfigure")); QVERIFY(Dialog.findChild<QPushButton*>("rstEnvRemove"));
+        QVERIFY(QDir(Runtime.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
+        // 적용하면 파일에 적힌다.
+        Sync->setChecked(false); Delay->setValue(900); Acquire->setCurrentIndex(Acquire->findData("never")); Build->setText("_build/preview");
+        QVERIFY(Dialog.Apply());
+        {
+            ::AppSettings Stored;
+            QCOMPARE(Stored.value("rst/scrollSync").toBool(), false); QCOMPARE(Stored.value("rst/debounceMs").toInt(), 900);
+            QCOMPARE(Stored.value("rst/python/uvAcquire").toString(), QString("never")); QCOMPARE(Stored.value("rst/buildDirName").toString(), QString("_build/preview"));
+        }
+        // [기본값]은 이 페이지의 값만 되돌린다.
+        Dialog.findChild<QSpinBox*>("documentViews/textView/tabWidth")->setValue(7);
+        auto* Buttons = Dialog.findChild<QDialogButtonBox*>("settingsButtons"); QVERIFY(Buttons);
+        Buttons->button(QDialogButtonBox::RestoreDefaults)->click();
+        QVERIFY(Sync->isChecked()); QCOMPARE(Delay->value(), 600); QCOMPARE(Acquire->currentData().toString(), QString("ask")); QCOMPARE(Build->text(), QString("_build/hypereditor"));
+        QCOMPARE(Dialog.findChild<QSpinBox*>("documentViews/textView/tabWidth")->value(), 7);
+        // Ctrl+N 동작에 reStructuredText 문서 바로 만들기.
+        auto* NewAction = Dialog.findChild<QComboBox*>("documentViews/common/newDocumentAction"); QVERIFY(NewAction); QVERIFY(NewAction->findData("rst") >= 0);
+        // Captures for review against the prototype: set HC_PREFERENCES_SCREENSHOT_DIR to a folder.
+        if (const auto Shots = qEnvironmentVariable("HC_PREFERENCES_SCREENSHOT_DIR"); !Shots.isEmpty()) {
+            QDir().mkpath(Shots); Dialog.resize(1000, 900); Dialog.show(); Dialog.ShowPage("rst");
+            for (int Tab = 0; Tab < Tabs->count(); ++Tab) {
+                Tabs->setCurrentIndex(Tab); QTest::qWait(150);
+                QVERIFY(Dialog.grab().save(QDir(Shots).filePath(QString("rst-%1.png").arg(Tab))));
+            }
+        }
+    }
     void dialogCancelApplyAndLiveDocuments()
     {
         QTemporaryDir Temp; qApp->setProperty("documentViewsConfigDir", Temp.path());
@@ -2094,7 +2150,7 @@ private slots:
         QTRY_VERIFY(Window.IsIdle()); auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text);
         Window.Handle({{"action", "replaceText"}, {"documentId", Id}, {"text", "edited\r\ntext\r\n"}});
         const auto Content = Text->Content(); const auto Before = Read(Path);
-        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 6);
+        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 7);
           Dialog.findChild<QSpinBox*>("documentViews/textView/tabWidth")->setValue(7); Dialog.reject(); }
         QCOMPARE(Read(Path), Before);
         DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>());

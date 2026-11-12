@@ -21,7 +21,8 @@ private slots:
         QVERIFY(!Languages.isEmpty());
         for (const auto& Value : Languages) {
             const auto Key = Value.toObject()["lexerKey"].toString().toUtf8();
-            if (Key == "none") continue;
+            // "rst-container" is styled by the editor backend, not by a Lexilla lexer.
+            if (Key == "none" || Key == "rst-container") continue;
             auto* Lexer = CreateLexer(Key.constData());
             QVERIFY2(Lexer, Key.constData());
             Lexer->Release();

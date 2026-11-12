@@ -167,7 +167,9 @@ QVector<TextLexerProfile> TextLexerRegistry::fallbackProfiles()
         {QStringLiteral("batch"), QStringLiteral("Batch"), QStringLiteral("batch"), {QStringLiteral("bat"), QStringLiteral("cmd")}},
         {QStringLiteral("yaml"), QStringLiteral("YAML"), QStringLiteral("yaml"), {QStringLiteral("yaml"), QStringLiteral("yml")}},
         {QStringLiteral("sql"), QStringLiteral("SQL"), QStringLiteral("sql"), {QStringLiteral("sql")}},
-        {QStringLiteral("markdown"), QStringLiteral("Markdown"), QStringLiteral("markdown"), {QStringLiteral("md"), QStringLiteral("markdown")}}
+        {QStringLiteral("markdown"), QStringLiteral("Markdown"), QStringLiteral("markdown"), {QStringLiteral("md"), QStringLiteral("markdown")}},
+        // "rst-container" is not a Lexilla lexer: ScintillaQtDirectBackend styles reStructuredText itself.
+        {QStringLiteral("rst"), QStringLiteral("reStructuredText"), QStringLiteral("rst-container"), {QStringLiteral("rst"), QStringLiteral("rest")}}
     };
 }
 
@@ -180,7 +182,7 @@ void TextLexerRegistry::addAvailableLexers()
         Available.insert(QString::fromLatin1(Name));
     }
     m_profiles.erase(std::remove_if(m_profiles.begin(), m_profiles.end(), [&Available](const auto& Profile) {
-        return Profile.lexerKey != "none" && !Available.contains(Profile.lexerKey);
+        return Profile.lexerKey != "none" && Profile.lexerKey != "rst-container" && !Available.contains(Profile.lexerKey);
     }), m_profiles.end());
     for (const auto& Profile : std::as_const(m_profiles)) Registered.insert(Profile.lexerKey);
     for (const auto& Key : Available) {

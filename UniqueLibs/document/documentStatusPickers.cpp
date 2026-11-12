@@ -19,6 +19,7 @@
 #include "epubSourceEditor.hpp"
 #include "epubProcessView.hpp"
 #include "markdownDocumentView.hpp"
+#include "rstDocumentView.hpp"
 #include <QJsonArray>
 
 /// 고유 라이브러리
@@ -73,6 +74,8 @@ namespace hc::document
         if (!Anchor) return;
         QPointer<DocumentViewPane> Self(this);
         const auto Done = [Self] { if (Self) { emit Self->ViewStateChanged(); Self->Focus(); } };
+        // reST 의 칸( 프로젝트 · 미리보기 배율 · 빌드 상태 · 진단 · 환경 )은 그 보기가 연다.
+        if (rst_ && (Id.startsWith("rst") )) { rst_->OpenStatusPicker(Id, Anchor, Done); return; }
         if (epub_ && !IsEpubEditing()) {
             auto* View = currentEpub(); if (!View) return;
             const auto State = View->ViewState(); const auto Profile = State["profile"].toObject();

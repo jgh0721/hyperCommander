@@ -15,6 +15,7 @@ namespace hc::document
     {
         None = 1u << 0, Text = 1u << 1, MarkdownPreview = 1u << 2, MarkdownEdit = 1u << 3, Pdf = 1u << 4,
         Image = 1u << 5, Comic = 1u << 6, Webtoon = 1u << 7, EpubRead = 1u << 8, EpubEdit = 1u << 9, Hwp = 1u << 10,
+        RstPreview = 1u << 11, RstEdit = 1u << 12,
     };
 
     namespace viewKinds
@@ -26,9 +27,12 @@ namespace hc::document
             for (const auto Kind : Kinds) Mask |= static_cast<quint32>(Kind);
             return Mask;
         }
-        constexpr quint32 All = 0x7FFu;
+        constexpr quint32 All = 0x1FFFu;
         constexpr quint32 Documents = All & ~Of(DocumentViewKind::None);
-        constexpr quint32 TextEditing = Of({DocumentViewKind::Text, DocumentViewKind::MarkdownEdit, DocumentViewKind::EpubEdit});
+        constexpr quint32 TextEditing = Of({DocumentViewKind::Text, DocumentViewKind::MarkdownEdit, DocumentViewKind::RstEdit, DocumentViewKind::EpubEdit});
+        // 소스와 미리보기를 함께 가진 문서( Markdown · reStructuredText ).
+        constexpr quint32 Preview = Of({DocumentViewKind::MarkdownPreview, DocumentViewKind::RstPreview});
+        constexpr quint32 Markup = Of({DocumentViewKind::MarkdownPreview, DocumentViewKind::MarkdownEdit, DocumentViewKind::RstPreview, DocumentViewKind::RstEdit});
         constexpr quint32 Reading = Of({DocumentViewKind::Comic, DocumentViewKind::Webtoon, DocumentViewKind::EpubRead});
         constexpr quint32 Epub = Of({DocumentViewKind::EpubRead, DocumentViewKind::EpubEdit});
 
@@ -48,6 +52,7 @@ namespace hc::document
             case DocumentViewKind::Pdf: return "pdf"; case DocumentViewKind::Image: return "image"; case DocumentViewKind::Comic: return "comic";
             case DocumentViewKind::Webtoon: return "webtoon"; case DocumentViewKind::EpubRead: return "epubRead";
             case DocumentViewKind::EpubEdit: return "epubEdit"; case DocumentViewKind::Hwp: return "hwp";
+            case DocumentViewKind::RstPreview: return "rstPreview"; case DocumentViewKind::RstEdit: return "rstEdit";
             }
             return {};
         }

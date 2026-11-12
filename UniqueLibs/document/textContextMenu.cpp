@@ -55,6 +55,7 @@ namespace hc::document
         const auto Bindings = DocumentShortcutRegistry::Bindings( DocumentShortcutRegistry::Validate( Stored ).isEmpty() ? Stored : QJsonObject{} );
         const bool Selection = !Backend->selectedText().isEmpty();
         const bool Writable = !Options.readOnly_ && !Text->isReadOnly();
+        if ( Options.prepend_ ) Options.prepend_( Menu );
         if ( !Options.leadingText_.isEmpty() ) {
             Menu.addAction( Options.leadingText_, &Menu, [ Run = Options.leading_ ] { if ( Run ) Run(); } );
             Menu.addSeparator();

@@ -5,6 +5,7 @@
 #include "updateMessages.hpp"
 #include "updatePromotion.hpp"
 #include "updateTransaction.hpp"
+#include "commonLibs/layout/productLayout.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "UniqueLibs/settings/updateSettings.hpp"
 #include "UniqueLibs/solTypeDefs_Ver.hpp"
@@ -69,6 +70,11 @@ PromotionResult Promote(const Path& Root) {
     if (Result.status_ == PromotionStatus::Done) {
         RootFilesCurrent = true;
         for (const auto& Name : Result.promoted_) qCInfo(promoteLog) << "copied to the installation root:" << Text(Name);
+        // After the health check the carried copies are read by nothing; an update still awaiting
+        // its check keeps them until the next promotion.
+        const auto Retired = RetireCarriers(Root);
+        for (const auto& Name : Retired.removed_) qCInfo(promoteLog) << "removed the carried copy:" << Text(Name);
+        if (!Retired.error_.empty()) qCWarning(promoteLog) << "carried copies kept:" << Text(Retired.error_);
     } else qCWarning(promoteLog) << PromotionStatusName(Result.status_) << Text(Result.error_);
     return Result;
 }
@@ -114,14 +120,21 @@ bool PrepareRootFiles(const QString& Program, QWidget* Parent) {
     if (Result.status_ == PromotionStatus::Done) return true;
     // An existing copy still runs; the next start or update replaces it.
     if (QFileInfo::exists(Program)) { qCWarning(promoteLog) << "running the existing copy"; return true; }
+    // The carried copies are removed once installed; without them the files come from a reinstall.
+    const bool Carried = std::filesystem::exists(Root / Wide(std::string(layout::RootCarrier) + "/HyperCompare.exe"));
     QString Reason;
     switch (Result.status_) {
     case PromotionStatus::Pending: Reason = QObject::tr("업데이트 설치 확인이 진행 중입니다. 잠시 후 다시 시도하십시오."); break;
     case PromotionStatus::Busy: Reason = QObject::tr("다른 HyperCommander 창이 HyperCompare를 준비하고 있습니다. 잠시 후 다시 시도하십시오."); break;
-    case PromotionStatus::Foreign: Reason = QObject::tr("설치 폴더의 HyperCompare.exe 또는 HyperCompareCli.exe가 제품 파일이 아니어서 바꾸지 않았습니다. "
-        "그 파일을 옮긴 뒤 다시 시도하거나 Libs\\RootFiles의 두 파일을 설치 폴더로 복사하십시오."); break;
-    default: Reason = QObject::tr("HyperCompare를 설치 폴더로 옮기지 못했습니다. Libs\\RootFiles의 HyperCompare.exe와 HyperCompareCli.exe를 "
-        "설치 폴더로 복사하십시오.\n\n%1").arg(Text(Result.error_)); break;
+    case PromotionStatus::Foreign: Reason = Carried
+        ? QObject::tr("설치 폴더의 HyperCompare.exe 또는 HyperCompareCli.exe가 제품 파일이 아니어서 바꾸지 않았습니다. "
+            "그 파일을 옮긴 뒤 다시 시도하거나 Libs\\RootFiles의 두 파일을 설치 폴더로 복사하십시오.")
+        : QObject::tr("설치 폴더의 HyperCompare.exe 또는 HyperCompareCli.exe가 제품 파일이 아니어서 바꾸지 않았습니다. "
+            "그 파일을 옮긴 뒤 최신 Portable ZIP으로 다시 설치하십시오."); break;
+    default: Reason = (Carried
+        ? QObject::tr("HyperCompare를 설치 폴더로 옮기지 못했습니다. Libs\\RootFiles의 HyperCompare.exe와 HyperCompareCli.exe를 설치 폴더로 복사하십시오.")
+        : QObject::tr("설치 폴더에 HyperCompare.exe 또는 HyperCompareCli.exe가 없습니다. 최신 Portable ZIP으로 다시 설치하십시오."))
+        + QStringLiteral("\n\n") + Text(Result.error_); break;
     }
     hc::ui::MessageDialog::warning(Parent, QObject::tr("HyperCompare"), Reason);
     return false;

@@ -85,10 +85,18 @@ class MarkdownDocumentView final : public QWidget
     }
     // Scrolls the preview to the source caret, showing the preview beside the source when hidden.
     void ShowSourceLineInPreview();
+    // 미리보기 전체 화면: 미리보기만 남긴다. 끄면 들어가기 전의 보기 방식과 개요로 돌아간다.
+    void SetPreviewOnly(bool On);
+    bool IsPreviewOnly() const
+    {
+        return previewOnly_;
+    }
   signals:
     void Changed();
     void OpenRequested(const QString &Path);
     void EscapeRequested();
+    // markdown.fullScreen: 문서 창이 전체 화면을 켜고 끈다.
+    void FullScreenToggleRequested();
 
   protected:
     bool eventFilter(QObject *, QEvent *) override;
@@ -127,6 +135,8 @@ class MarkdownDocumentView final : public QWidget
     // The outline of the rendered revision's headings_, down to outlineDepth_.
     void rebuildOutline();
     void mode(const QString &Mode);
+    bool previewOnly_ = false;
+    QString modeBeforePreviewOnly_;
     void alignPreview();
     void report(const QJsonObject &Value);
     // Source -> preview: runs on editor signals, never on a timer.

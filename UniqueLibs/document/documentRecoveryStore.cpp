@@ -198,7 +198,7 @@ namespace hc::document
             if ((Json.size() != 9 && !Extended) || !TextValid(Json["encoding"], 128) || !Json["bom"].isBool() || !Json["untitled"].isBool()) return false;
             if (Extended) {
                 const auto Suffix = Json["suffix"].toString();
-                State.suffix_ = QStringList{"txt", "md", "markdown"}.contains(Suffix) ? Suffix.toStdString() : std::string("txt");
+                State.suffix_ = QStringList{"txt", "md", "markdown", "rst"}.contains(Suffix) ? Suffix.toStdString() : std::string("txt");
                 for (const auto& Field : {std::pair{"firstSubLine", &State.firstSubLine_}, {"untitledNumber", &State.untitledNumber_}}) {
                     std::uint64_t Value = 0;
                     if (!Unsigned(Json[Field.first], Value) || Value > 0x7fffffff) return false;

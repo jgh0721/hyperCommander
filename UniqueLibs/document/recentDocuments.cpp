@@ -205,6 +205,12 @@ namespace hc::document
             if( Document.markdownView_ == QLatin1String( "source" ) ) return RecentDocumentStore::tr( "Markdown · 소스 편집" );
             return RecentDocumentStore::tr( "Markdown · %1" ).arg( Folder );
         }
+        if( Kind == QLatin1String( "rst" ) ) {
+            if( Document.markdownView_ == QLatin1String( "split" ) ) return RecentDocumentStore::tr( "reStructuredText · 나란히 보기" );
+            if( Document.markdownView_ == QLatin1String( "preview" ) ) return RecentDocumentStore::tr( "reStructuredText · 미리보기" );
+            if( Document.markdownView_ == QLatin1String( "source" ) ) return RecentDocumentStore::tr( "reStructuredText · 소스 편집" );
+            return RecentDocumentStore::tr( "reStructuredText · %1" ).arg( Folder );
+        }
         if( Kind == QLatin1String( "pdf" ) ) {
             if( Document.pdfPage_ > 0 ) return RecentDocumentStore::tr( "PDF · %1쪽" ).arg( Document.pdfPage_ );
             return RecentDocumentStore::tr( "PDF · %1" ).arg( Folder );

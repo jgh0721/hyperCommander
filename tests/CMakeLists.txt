@@ -906,6 +906,32 @@ add_test(NAME hc.document.new COMMAND hc_new_document_tests -o "${CMAKE_BINARY_D
 set_tests_properties(hc.document.new PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
 add_dependencies(hc_check hc_new_document_tests)
 
+# reStructuredText: lexer, folding and the headless Sphinx services. Each class registers itself
+# (HC_RST_REGISTER_TEST) and rstTestMain.cpp runs them all; HC_RST_TEST_CLASS selects one.
+file(GLOB HC_RST_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/rst/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/rst/*.hpp")
+qt_add_executable(hc_rst_tests ${HC_RST_TEST_SOURCES})
+target_include_directories(hc_rst_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/rst")
+# hc_document_widgets: the editor classes the services attach to need the document module's symbols.
+target_link_libraries(hc_rst_tests PRIVATE hc_rst_core hc_document_widgets Qt6::Test Qt6::Concurrent)
+target_compile_options(hc_rst_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+hc_enable_qt_deployment(hc_rst_tests TEST PLUGINS)
+hc_deploy_document_engine(hc_rst_tests)
+add_test(NAME hc.document.rst COMMAND hc_rst_tests)
+set_tests_properties(hc.document.rst PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+add_dependencies(hc_check hc_rst_tests)
+
+# reStructuredText preview helper (hc-rst-preview.exe): scroll synchronisation in both directions and link
+# navigation, against pages stamped like the Sphinx builder's. Needs a real screen; skipped on offscreen.
+qt_add_executable(hc_rst_preview_tests document/tstRstPreviewProcess.cpp)
+target_link_libraries(hc_rst_preview_tests PRIVATE hc_document_widgets Qt6::Test Qt6::Concurrent)
+target_compile_options(hc_rst_preview_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_rst_preview_tests hc-rst-preview)
+hc_enable_qt_deployment(hc_rst_preview_tests TEST PLUGINS)
+hc_deploy_document_engine(hc_rst_preview_tests)
+add_test(NAME hc.document.rst_preview COMMAND hc_rst_preview_tests -o "${CMAKE_BINARY_DIR}/document-rst-preview-$<CONFIG>.txt,txt")
+set_tests_properties(hc.document.rst_preview PROPERTIES TIMEOUT 240 RUN_SERIAL TRUE)
+add_dependencies(hc_check hc_rst_preview_tests)
+
 qt_add_executable(hc_document_p2_tests document/tstDocumentP2.cpp)
 target_link_libraries(hc_document_p2_tests PRIVATE hc_document_widgets Qt6::Test Qt6::Concurrent)
 target_compile_options(hc_document_p2_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

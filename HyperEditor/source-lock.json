@@ -276,6 +276,11 @@
       "id": "markdown.webPreview",
       "status": "implemented",
       "implementation": "Scintilla source with isolated Qt WebEngine preview helper; pinned offline markdown-it, KaTeX, Mermaid and highlight.js assets in tools/markdown"
+    },
+    {
+      "id": "rst.sphinxPreview",
+      "status": "implemented",
+      "implementation": "reStructuredText container lexer and folding in the text engine; completion, outline, diagnostics, Esbonio language server and Sphinx preview builds in UniqueLibs/document/rst; isolated Qt WebEngine preview helper (hc-rst-preview) and the Python runtime project in tools/rst. uv is not bundled: a pinned release is downloaded from the official distribution and verified by SHA-256 on first use"
     }
   ],
   "textEditorPlatformPatch": {
@@ -316,20 +321,17 @@
       "P2 editing",
       "P3 file policies",
       "P4 rendering",
-      "P6 integration"
+      "P6 integration",
+      "P5 document language extensions (reStructuredText: lexer, completion, outline, diagnostics, LSP, Sphinx preview, virtual project)"
     ],
-    "deferred": [
-      "P5 document language extensions"
-    ],
+    "deferred": [],
     "excluded": [
       "Qt ADS",
       "Qlementine",
       "docking",
       "left folder tree",
-      "outline",
-      "LSP",
       "project search",
-      "web preview"
+      "workspace folder state (.multiroot)"
     ],
     "settings": {
       "file": "HyperEditor.json",

@@ -105,8 +105,8 @@ foreach ($Package in @('Addons/WLX/HyperViewer', 'Addons/WCX/IsoImage', 'Third-P
     [IO.Directory]::CreateDirectory($PackageDestination) | Out-Null
     foreach ($File in @(Get-ChildItem -LiteralPath (Join-Path $RuntimeDir $Package) -File -ErrorAction SilentlyContinue)) { Copy-Item -LiteralPath $File.FullName -Destination $PackageDestination }
 }
-# Markdown shares the root WebEngine executable, resources and locales.
-foreach ($Name in @('hc-markdown-render.exe', 'QtWebEngineProcess.exe')) {
+# Markdown and reStructuredText previews share the root WebEngine executable, resources and locales.
+foreach ($Name in @('hc-markdown-render.exe', 'hc-rst-preview.exe', 'QtWebEngineProcess.exe')) {
     Copy-Item -LiteralPath (Join-Path $RuntimeDir $Name) -Destination $RunDir
 }
 foreach ($Folder in @('Libs/resources', 'Libs/translations/qtwebengine_locales')) {

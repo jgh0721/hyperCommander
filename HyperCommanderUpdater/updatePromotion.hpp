@@ -18,4 +18,15 @@ struct PromotionResult {
 /// its health check (the copies join that transaction). Never throws.
 PromotionResult PromoteRootFiles(const Path& Root);
 const char* PromotionStatusName(PromotionStatus Status);
+struct RetireResult {
+    bool retired_ = false;               // every listed ROOT copy was current and no update awaits its check
+    std::vector<std::string> removed_;   // carried copies (inventory paths) this call deleted
+    std::string error_;                  // why the carried copies were kept, when it is an error
+};
+/// Deletes the carried copies under layout::RootCarrier once they are no longer read: no applied
+/// update awaits its health check (which verifies every inventory file, carriers included) and every
+/// ROOT copy matches its carried file (promotion copies from them). Rollback restores from the
+/// transaction's backups and the next update brings its own carriers, so neither needs them.
+/// A carrier that differs from the inventory is a user's file and stays. Never throws.
+RetireResult RetireCarriers(const Path& Root);
 }

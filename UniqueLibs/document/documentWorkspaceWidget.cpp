@@ -45,11 +45,14 @@
 #include "documentThemeAdapter.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "documentSettingsDialog.hpp"
+#include <fmwidgets/ToolTip.h>
 #include <fmwidgets/WindowChrome.h>
 #include "documentShortcutRouter.hpp"
 #include "epubProcessView.hpp"
 #include "epubSourceEditor.hpp"
 #include "markdownDocumentView.hpp"
+#include "rstDocumentView.hpp"
+#include "rstProjectDialogs.hpp"
 #include <QLineEdit>
 #include <QScopedValueRollback>
 #include "text/ScintillaQtDirectBackend.h"
@@ -153,8 +156,9 @@ namespace hc::document
         {
             // A text document whose start is .txt or .md offers that type first; other text keeps "all files".
             const auto TextSuffix=QFileInfo(Current).suffix().toLower();
-            const auto TextFilters=TextSuffix=="txt"?QObject::tr("텍스트 문서 (*.txt);;Markdown (*.md *.markdown);;모든 파일 (*.*)")
-                :TextSuffix=="md"||TextSuffix=="markdown"?QObject::tr("Markdown (*.md *.markdown);;텍스트 문서 (*.txt);;모든 파일 (*.*)"):QStringLiteral("Text files (*.*)");
+            const auto TextFilters=TextSuffix=="txt"?QObject::tr("텍스트 문서 (*.txt);;Markdown (*.md *.markdown);;reStructuredText (*.rst *.rest);;모든 파일 (*.*)")
+                :TextSuffix=="md"||TextSuffix=="markdown"?QObject::tr("Markdown (*.md *.markdown);;reStructuredText (*.rst *.rest);;텍스트 문서 (*.txt);;모든 파일 (*.*)")
+                :TextSuffix=="rst"||TextSuffix=="rest"?QObject::tr("reStructuredText (*.rst *.rest);;Markdown (*.md *.markdown);;텍스트 문서 (*.txt);;모든 파일 (*.*)"):QStringLiteral("Text files (*.*)");
             const auto Filters=ViewId=="image"?QStringLiteral("PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp);;TIFF (*.tif *.tiff);;WebP (*.webp)")
                 :ViewId=="pdf"?QStringLiteral("PDF (*.pdf)"):ViewId=="epub"?QStringLiteral("EPUB (*.epub)"):TextFilters;
             const auto Initial=ViewId=="epub"?QFileInfo(Current).dir().filePath(QFileInfo(Current).completeBaseName()+"-edited.epub"):Current;
@@ -222,6 +226,8 @@ namespace hc::document
         bool untitledImage_ = false;
         // Where Save As of a recovered copy starts (the original it came from), when known.
         QString suggestedSavePath_;
+        // A line to go to once the document has loaded (opened from another document's outline, diagnostics or preview).
+        int openLine_ = 0;
         // HotExit PDF restore: the original's SHA-256 at close, and the view position to reapply once loaded.
         QString recoveryBaseline_;
         QJsonObject restorePosition_;
@@ -329,6 +335,8 @@ namespace hc::document
         Add(tr("새 문서…"), "newDocument", [this] { requestNewDocument(nullptr); });
         Add(tr("새 텍스트 문서"), "file.newText", [this] { newDocument(NewDocumentKind::Text); });
         Add(tr("새 Markdown 문서"), "file.newMarkdown", [this] { newDocument(NewDocumentKind::Markdown); });
+        Add(tr("새 reStructuredText 문서"), "file.newRst", [this] { newDocument(NewDocumentKind::Rst); });
+        Add(tr("새 Sphinx 프로젝트…"), "file.newSphinxProject", [this] { newDocument(NewDocumentKind::SphinxProject); });
         Add(tr("새 EPUB 책…"), "file.newEpub", [this] { newDocument(NewDocumentKind::Epub); });
         Add(tr("새 이미지…"), "file.newImage", [this] { requestNewDocument(nullptr, true); });
         Add(tr("열기…"), "openDocument", [this] {
@@ -430,6 +438,7 @@ namespace hc::document
         connect(FullscreenAction,&QAction::triggered,this,[this,Fullscreen]{
             const auto Tab=active();
             if(epubFullscreen_ || (Tab && Tab->pane_->IsEpub()))toggleEpubFullscreen();
+            else if(previewFullscreen_ || (Tab && Tab->pane_->HasPreview() && !Fullscreen->Active()))togglePreviewFullscreen();
             else if(Fullscreen->Active() || (Tab && Tab->pane_->ViewId()=="image"))Fullscreen->Toggle();
             else if(auto* Window=window())Window->isFullScreen()?Window->showNormal():Window->showFullScreen();
         });
@@ -483,6 +492,7 @@ namespace hc::document
             connect(Action, &QAction::triggered, this, [this, Id = Command.id_] {
                 auto Tab = active(); if (!Tab || Tab->loading_) return;
                 if(auto* Markdown=Tab->pane_->findChild<MarkdownDocumentView*>();Markdown&&Markdown->RunPreviewCommand(Id))return;
+                if(auto* Rst=Tab->pane_->findChild<RstDocumentView*>();Rst&&Rst->RunPreviewCommand(Id))return;
                 auto* Text = Tab->pane_->findChild<QTextView*>();
                 // Copy and select-all also apply to PDF selections, images and process views.
                 if (!Text || (Tab->pane_->ViewId() != "text" && !Tab->pane_->IsEpubEditing())) { Tab->pane_->RunViewCommand(Id); return; }
@@ -527,7 +537,7 @@ namespace hc::document
         shortcutRouter_ = new DocumentShortcutRouter(this);
         // EPUB editing, image and PDF commands reach the active pane through window-level actions.
         for (const auto& Command : DocumentShortcutRegistry::Commands()) {
-            if (!QStringList{"epub-edit", "epub-edit.tree", "epub-edit.source", "image", "image.comic", "pdf", "markdown"}.contains(Command.scope_) && !Command.id_.startsWith("view.zoom")) continue;
+            if (!QStringList{"epub-edit", "epub-edit.tree", "epub-edit.source", "image", "image.comic", "pdf", "markdown", "rst"}.contains(Command.scope_) && !Command.id_.startsWith("view.zoom")) continue;
             auto* Action = new QAction(Command.label_, this); Action->setObjectName(Command.id_); addAction(Action);
             connect(Action, &QAction::triggered, this, [this, Id = Command.id_] { if (auto Tab = active(); Tab && !Tab->loading_) {if(Id=="image.fullscreen")findChild<ImageFullscreen*>("imageFullscreen")->Toggle();else Tab->pane_->RunViewCommand(Id);} });
         }
@@ -548,9 +558,10 @@ namespace hc::document
             const bool EpubEditing = Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing() && Tab->pane_->isAncestorOf(Focus);
             if (Scope == "epub") return Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing() && !qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus);
             if(Scope=="markdown")return Tab && !Tab->loading_ && Tab->pane_->IsMarkdown() && Tab->pane_->CanRunViewCommand(Id);
+            if(Scope=="rst")return Tab && !Tab->loading_ && Tab->pane_->IsRst() && Tab->pane_->CanRunViewCommand(Id);
             // The minimap toggle is a view setting: it works while the source is shown, whichever pane has focus.
             const bool Minimap = Id == QLatin1String("text.minimap");
-            if (Scope == "text" && Tab && Tab->pane_->IsMarkdown())return !Tab->loading_ && Tab->pane_->MarkdownSourceVisible() && (InText || Minimap);
+            if (Scope == "text" && Tab && Tab->pane_->HasPreview())return !Tab->loading_ && Tab->pane_->PreviewSourceVisible() && (InText || Minimap);
             if (Scope == "text") return Tab && !Tab->loading_ && (Tab->pane_->ViewId() == "text" || (EpubEditing && (InText || Minimap)));
             if (Scope == "edit") {
                 auto* Input = Tab ? Tab->pane_->InputWidget() : nullptr;
@@ -630,7 +641,7 @@ namespace hc::document
         const quint32 Saving = All & ~Reading;
         // 파일
         fileMenu_ = menu_->addMenu(tr("파일(&F)")); fileMenu_->setObjectName("documentFileMenu");
-        if (!hosted_) fileMenu_->addAction(scoped(A("newDocument"), Of({K::None, K::Text, K::MarkdownPreview, K::MarkdownEdit, K::EpubRead, K::EpubEdit})));
+        if (!hosted_) fileMenu_->addAction(scoped(A("newDocument"), Of({K::None, K::Text, K::MarkdownPreview, K::RstPreview, K::MarkdownEdit, K::RstEdit, K::EpubRead, K::EpubEdit})));
         fileMenu_->addAction(A("openDocument"));
         fileMenu_->addAction(scoped(A("reloadDocument"), Documents));
         fileMenu_->addAction(A("editHwpDocument"));
@@ -662,28 +673,28 @@ namespace hc::document
         editMenu_->addAction(scoped(A("redoDocument"), Undo));
         editMenu_->addSeparator();
         editMenu_->addAction(scoped(A("edit.cut"), Editing));
-        editMenu_->addAction(scoped(A("edit.copy"), Editing | Of({K::Pdf, K::EpubRead, K::MarkdownPreview})));
+        editMenu_->addAction(scoped(A("edit.copy"), Editing | Of({K::Pdf, K::EpubRead, K::MarkdownPreview, K::RstPreview})));
         editMenu_->addAction(scoped(MakeProxy(A("edit.copy"), tr("이미지 복사"), this, "edit.copyImage"), Of(K::Image)));
         editMenu_->addAction(scoped(MakeProxy(A("edit.copy"), tr("현재 쪽 이미지 복사"), this, "edit.copyPage"), Of(K::Comic)));
         editMenu_->addAction(scoped(MakeProxy(A("edit.copy"), tr("현재 이미지 복사"), this, "edit.copyStrip"), Of(K::Webtoon)));
         editMenu_->addAction(scoped(A("edit.paste"), Editing));
         editMenu_->addAction(scoped(A("edit.delete"), Editing));
-        editMenu_->addAction(scoped(A("edit.selectAll"), Editing | Of({K::Pdf, K::MarkdownPreview})));
+        editMenu_->addAction(scoped(A("edit.selectAll"), Editing | Of({K::Pdf, K::MarkdownPreview, K::RstPreview})));
         editMenu_->addSeparator();
-        editMenu_->addAction(scoped(A("text.find"), Editing | Of(K::MarkdownPreview)));
+        editMenu_->addAction(scoped(A("text.find"), Editing | Of({K::MarkdownPreview, K::RstPreview})));
         if (auto* Book = A("epub.focus-search")) editMenu_->addAction(scoped(MakeProxy(Book, tr("책에서 찾기…"), this, "epub.findInBook"), Of(K::EpubRead)));
         editMenu_->addAction(scoped(A("text.replace"), Editing));
         editMenu_->addAction(scoped(A("text.findNext"), Editing));
         editMenu_->addAction(scoped(A("text.findPrev"), Editing));
         editMenu_->addAction(scoped(A("text.goToLine"), Editing));
         auto* EditAnchor = scoped(Separator(editMenu_), All); editMenu_->addAction(EditAnchor);
-        editMenu_->addAction(scoped(A("document.findInFiles"), Of(K::None) | Editing | Of({K::EpubRead, K::MarkdownPreview})));
-        editMenu_->addAction(scoped(A("document.replaceInFiles"), Of(K::None) | Editing | Of({K::EpubRead, K::MarkdownPreview})));
+        editMenu_->addAction(scoped(A("document.findInFiles"), Of(K::None) | Editing | Of({K::EpubRead, K::MarkdownPreview, K::RstPreview})));
+        editMenu_->addAction(scoped(A("document.replaceInFiles"), Of(K::None) | Editing | Of({K::EpubRead, K::MarkdownPreview, K::RstPreview})));
         // 보기: the view inserts its items before the common tail.
         viewMenu_ = menu_->addMenu(tr("보기(&V)")); viewMenu_->setObjectName("documentViewMenu");
         auto* ViewAnchor = viewMenu_->addSeparator();
         auto* Fullscreen = A("view.fullscreen"); Fullscreen->setText(tr("전체 화면") + QStringLiteral("\tF11"));
-        viewMenu_->addAction(Fullscreen);
+        viewMenu_->addAction(scoped(Fullscreen, All & ~viewKinds::Markup));
         chromeMenu_ = viewMenu_->addMenu(tr("화면 구성")); chromeMenu_->setObjectName("documentChromeMenu");
         chromeMenu_->menuAction()->setProperty("documentIconName", "view-preview");
         chromeMenu_->addAction(A("workspaceDisplayOptions"));
@@ -736,11 +747,11 @@ namespace hc::document
             auto* Proxy = MakeProxy(Source, Label, this, QStringLiteral("toolbar.") + Source->objectName(), false);
             toolbar_->addAction(scoped(Proxy, Kinds)); return Proxy;
         };
-        Tool(A("newDocument"), tr("새 문서"), Of({K::None, K::Text, K::MarkdownPreview, K::MarkdownEdit}))->setVisible(!hosted_);
+        Tool(A("newDocument"), tr("새 문서"), Of({K::None, K::Text, K::MarkdownPreview, K::RstPreview, K::MarkdownEdit, K::RstEdit}))->setVisible(!hosted_);
         Tool(A("openDocument"), tr("열기"), All);
-        Tool(A("saveDocument"), tr("저장"), Of({K::None, K::Text, K::MarkdownPreview, K::MarkdownEdit, K::Pdf, K::Image, K::EpubEdit}));
+        Tool(A("saveDocument"), tr("저장"), Of({K::None, K::Text, K::MarkdownPreview, K::RstPreview, K::MarkdownEdit, K::RstEdit, K::Pdf, K::Image, K::EpubEdit}));
         Tool(A("printDocument"), tr("인쇄"), Of(K::Pdf));
-        const quint32 History = Of({K::None, K::Text, K::MarkdownEdit, K::Image, K::EpubEdit});
+        const quint32 History = Of({K::None, K::Text, K::MarkdownEdit, K::RstEdit, K::Image, K::EpubEdit});
         toolbar_->addAction(scoped(Separator(this), History));
         Tool(A("undoDocument"), tr("실행 취소"), History);
         Tool(A("redoDocument"), tr("다시 실행"), History);
@@ -956,6 +967,7 @@ namespace hc::document
         for(auto* Reader:findChildren<ImageReadingView*>())if(Reader->State()["cover"].toBool()!=Cover)Reader->SetCover(Cover);
         for (auto* View : findChildren<QTextView*>()) View->ReloadPreferences();
         for(auto* Markdown:findChildren<MarkdownDocumentView*>())Markdown->ReloadPreferences();
+        for(auto* Rst:findChildren<RstDocumentView*>())Rst->ReloadPreferences();
         // Root is already loaded; editors apply it without reading the file again.
         for(auto* Source:findChildren<EpubSourceEditor*>())Source->ApplyValidationSettings(Root["documentViews"].toObject()["epubEditor"].toObject());
         for(const auto& Tab:documents_)Tab->pane_->SetEpubRecoveryEnabled(Root["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(hc::defaults::edit::ViewValue("textView/recoveryEnabled").toBool()));
@@ -1042,20 +1054,81 @@ namespace hc::document
             }
             ShowNewEpubDialog(); return {{"accepted", true}};
         }
+        if (Kind == NewDocumentKind::SphinxProject) {
+            // conf.py 와 index.rst 는 제품이 직접 쓴다. HyperViewer 에서도 만들고 index.rst 를 그 창에서 연다.
+            if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
+            showNewSphinxProjectDialog(); return {{"accepted", true}};
+        }
         if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
-        const bool Markdown = Kind == NewDocumentKind::Markdown;
+        const bool Markdown = Kind == NewDocumentKind::Markdown, Rst = Kind == NewDocumentKind::Rst;
         // The GUID only keeps recovery files apart; the tab shows "새 문서 N" (documentName()).
-        const auto Path = recoveryRoot_ + "/untitled-" + QUuid::createUuid().toString(QUuid::Id128) + (Markdown ? ".md" : ".txt");
+        const auto Path = recoveryRoot_ + "/untitled-" + QUuid::createUuid().toString(QUuid::Id128) + (Markdown ? ".md" : Rst ? ".rst" : ".txt");
         if (!QDir().mkpath(recoveryRoot_) || !StoreCopy(Path, {})) return Error("document-new-file-failed");
         const auto Reply = open(Path, false, {}, false);
         if (auto Tab = find(Reply["documentId"].toString())) {
             Tab->originalAuthority_ = false; Tab->originalSave_ = false; Tab->temporarySource_ = Path;
             nameUntitled(Tab, false);
             // HyperViewer's default Markdown view (preview) would show an empty page: a new one starts in source.
-            if (Markdown && hosted_) { RecentDocument Start; Start.markdownView_ = QStringLiteral("source"); Tab->restore_ = Start; }
+            if ((Markdown || Rst) && hosted_) { RecentDocument Start; Start.markdownView_ = QStringLiteral("source"); Tab->restore_ = Start; }
             update();
         } else QFile::remove(Path);
         return Reply;
+    }
+    void DocumentWorkspaceWidget::showNewSphinxProjectDialog()
+    {
+        if (hotExitClosing_) return;
+        if (auto* Open = findChild<NewSphinxProjectDialog*>(QString(), Qt::FindDirectChildrenOnly)) { Open->raise(); Open->activateWindow(); return; }
+        AppSettings Settings;
+        QString Folder;
+        if (auto Tab = active(); Tab && Tab->originalAuthority_ && Tab->temporarySource_.isEmpty() && !Tab->broker_ && QFileInfo(Tab->path_).isAbsolute())
+            Folder = QFileInfo(Tab->path_).absolutePath();
+        if (Folder.isEmpty() || !QFileInfo(Folder).isDir()) Folder = Settings.value("common/newSphinxFolder").toString();
+        if (Folder.isEmpty() || !QFileInfo(Folder).isDir()) Folder = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        NewSphinxProjectDialog::Options Options;
+        Options.directory_ = Folder; Options.author_ = Settings.value("common/newSphinxAuthor").toString();
+        if (auto* Command = findChild<QAction*>("newDocument", Qt::FindDirectChildrenOnly)) Options.repeatKey_ = Command->shortcut();
+        auto* Dialog = new NewSphinxProjectDialog(this, Options);
+        Dialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(Dialog, &NewSphinxProjectDialog::Created, this, [this](const QString& Index, const SphinxProjectSpec& Spec) {
+            AppSettings Remember;
+            Remember.setValue("common/newSphinxFolder", Spec.directory_); Remember.setValue("common/newSphinxAuthor", Spec.author_); Remember.sync();
+            const auto Result = open(Index, false, {}, false);
+            if (Result.contains("error")) ShowShellError(Message(Result["error"].toString()));
+        });
+        Dialog->open();
+    }
+    void DocumentWorkspaceWidget::togglePreviewFullscreen()
+    {
+        auto* Root = window(); const auto Tab = active();
+        if (previewFullscreen_) {
+            previewFullscreen_ = false;
+            for (const auto& Item : documents_) if (Item->pane_->IsPreviewOnly()) Item->pane_->SetPreviewOnly(false);
+            for (const auto& Widget : std::exchange(previewHidden_, {})) if (Widget) Widget->show();
+            chrome_->SetSuppressed(false);
+            // 전체 화면인 채 닫아도 다음 실행은 보통 창이다: 들어가기 직전의 자리로 돌아간다.
+            Root->showNormal(); if (epubWasMaximized_) Root->showMaximized(); else Root->setGeometry(epubWindowGeometry_);
+            fm::ui::ToolTip::hideText();
+        } else {
+            if (!Tab || Tab->loading_ || !Tab->pane_->HasPreview() || epubFullscreen_ || findChild<ImageFullscreen*>("imageFullscreen")->Active()) return;
+            epubWasMaximized_ = Root->isMaximized(); epubWindowGeometry_ = Root->isMaximized() ? Root->normalGeometry() : Root->geometry();
+            previewFullscreen_ = true;
+            // 제목 표시줄 · 메뉴 · 도구모음 · 탭 · 상태 표시줄을 감춘다. 개요 · 소스 · 진단 패널은 보기가 감춘다.
+            chrome_->SetSuppressed(true);
+            QList<QWidget*> Chrome{tabbed_ ? static_cast<QWidget*>(tabs_->tabBar()) : nullptr, findChild<QWidget*>("documentWindowChrome", Qt::FindDirectChildrenOnly),
+                findChild<QWidget*>("documentStatusRow", Qt::FindDirectChildrenOnly)};
+            for (auto* Widget : Chrome) if (Widget && !Widget->isHidden()) { previewHidden_.append(Widget); Widget->hide(); }
+            Tab->pane_->SetPreviewOnly(true);
+            Root->showFullScreen();
+            // 들어갈 때 잠깐 뜨는 안내: 2초 뒤 사라진다.
+            QTimer::singleShot(150, this, [this] {
+                if (!previewFullscreen_) return;
+                const auto Area = window()->geometry();
+                fm::ui::ToolTip::showText(QPoint(Area.center().x() - 120, Area.top() + 28), tr("미리보기 전체 화면 · 나가기 Esc 또는 F11"), this);
+                QTimer::singleShot(2000, this, [] { fm::ui::ToolTip::hideText(); });
+            });
+        }
+        if (auto Current = active()) Current->pane_->Focus();
+        update();
     }
     void DocumentWorkspaceWidget::requestNewDocument(QWidget* Anchor, bool ImagePage)
     {
@@ -1070,8 +1143,8 @@ namespace hc::document
         if (auto* Command = findChild<QAction*>("newDocument", Qt::FindDirectChildrenOnly)) Repeat = Command->shortcut();
         if (ImagePage) { showNewImageDialog(); return; }
         const auto Mode = Settings.value("common/newDocumentAction").toString();
-        if (Mode == "text" || Mode == "markdown") {
-            const auto Result = newDocument(Mode == "markdown" ? NewDocumentKind::Markdown : NewDocumentKind::Text);
+        if (Mode == "text" || Mode == "markdown" || Mode == "rst") {
+            const auto Result = newDocument(Mode == "markdown" ? NewDocumentKind::Markdown : Mode == "rst" ? NewDocumentKind::Rst : NewDocumentKind::Text);
             if (Result.contains("error")) ShowShellError(Message(Result["error"].toString()));
             return;
         }
@@ -1239,6 +1312,7 @@ namespace hc::document
         if (Value.untitledNumber_ > 0) {
             if (Value.untitledImage_) return tr("새 이미지 %1").arg(Value.untitledNumber_);
             const auto Suffix = QFileInfo(Value.path_).suffix().toLower();
+            if (Suffix == "rst" || Suffix == "rest") return tr("새 문서 %1.rst").arg(Value.untitledNumber_);
             return Suffix == "md" || Suffix == "markdown" ? tr("새 문서 %1.md").arg(Value.untitledNumber_) : tr("새 문서 %1").arg(Value.untitledNumber_);
         }
         if (!Value.displayName_.isEmpty()) return Value.displayName_;
@@ -1248,6 +1322,7 @@ namespace hc::document
     {
         if (Value.untitledImage_) return tr("새 이미지 %1.png").arg(Value.untitledNumber_);
         const auto Suffix = QFileInfo(Value.path_).suffix().toLower();
+        if (Suffix == "rst" || Suffix == "rest") return tr("새 문서 %1.rst").arg(Value.untitledNumber_);
         return Suffix == "md" || Suffix == "markdown" ? tr("새 문서 %1.md").arg(Value.untitledNumber_) : tr("새 문서 %1.txt").arg(Value.untitledNumber_);
     }
     int DocumentWorkspaceWidget::nextUntitledNumber(bool Image, int Preferred) const
@@ -1401,7 +1476,22 @@ namespace hc::document
             if(searchPanel_)searchPanel_->SourcesChanged();
         });
         connect(Pane,&DocumentViewPane::ViewStateChanged,this,[this,Tab]{if(!Tab->closed_&&!Tab->loading_){auto* Timer=findChild<QTimer*>("documentStatusRefresh");if(!Timer->isActive())Timer->start();}});
-        connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_){if(epubFullscreen_)toggleEpubFullscreen();else escapeViewer();}});
+        connect(Pane,&DocumentViewPane::EscapeRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_){if(epubFullscreen_)toggleEpubFullscreen();else if(previewFullscreen_)togglePreviewFullscreen();else escapeViewer();}});
+        connect(Pane,&DocumentViewPane::PreviewFullScreenRequested,this,[this,Tab]{if(active()==Tab && !Tab->closed_)togglePreviewFullscreen();});
+        connect(Pane,&DocumentViewPane::WorkspaceCommandRequested,this,[this,Tab](const QString& Id){
+            if(active()!=Tab || Tab->closed_)return;
+            if(Id=="app.settings.rst"){showPreferences();if(preferences_)preferences_->ShowPage(QStringLiteral("rst"));return;}
+            // 미리보기에 포커스가 있을 때 눌린 창 단축키( 저장 · 새 문서 · 탭 이동 등 ).
+            for(auto* Action:findChildren<QAction*>(Qt::FindDirectChildrenOnly))
+                if(Action->property("documentCommandId").toString()==Id || Action->objectName()==Id){if(Action->isEnabled())Action->trigger();return;}
+        });
+        // 다른 파일을 열고 그 줄로 간다: 이미 열려 있으면 바로, 여는 중이면 다 읽은 뒤에.
+        connect(Pane,&DocumentViewPane::OpenAtRequested,this,[this,Tab](const QString& Path,int Line){
+            if(Tab->closed_)return;
+            const auto Reply=open(Path,false,{},false);
+            if(Reply.contains("error")){ShowShellError(Message(Reply["error"].toString()));return;}
+            if(auto Target=find(Reply["documentId"].toString())){if(Target->loading_)Target->openLine_=Line;else Target->pane_->GoToLine(Line);}
+        });
         // Images (and comic/webtoon books) use the image full screen overlay; EPUB has its own.
         connect(Pane,&DocumentViewPane::FullscreenRequested,this,[this,Tab]{if(active()!=Tab || Tab->closed_)return;if(Tab->pane_->ViewId()=="image")findChild<ImageFullscreen*>("imageFullscreen")->Toggle();else toggleEpubFullscreen();});
         connect(Pane,&DocumentViewPane::RetryRequested,this,[this,Tab]{if(!Tab->closed_){activate(Tab);findChild<QAction*>("reloadDocument")->trigger();}});
@@ -1635,9 +1725,11 @@ namespace hc::document
                     if(auto Restore=std::exchange(Tab->restore_,std::nullopt)) {
                         if(Restore->pdfPage_>0)Tab->pane_->Execute({{"action","pdf.page"},{"page",Restore->pdfPage_-1}});
                         if(!Restore->markdownView_.isEmpty()&&Tab->pane_->IsMarkdown())Tab->pane_->RunViewCommand("markdown."+Restore->markdownView_);
+                        if(!Restore->markdownView_.isEmpty()&&Tab->pane_->IsRst())Tab->pane_->RunViewCommand("rst."+Restore->markdownView_);
                         if(Restore->imageMode_=="webtoon"||Restore->imageMode_=="comic")Tab->pane_->Execute({{"action","reading.mode"},{"mode",Restore->imageMode_=="webtoon"?2:1}});
                         if(Restore->epubMode_=="edit"&&!hosted_)Tab->pane_->Execute({{"action","epub.edit.begin"}});
                     }
+                    if(const int Line=std::exchange(Tab->openLine_,0);Line>0)Tab->pane_->GoToLine(Line);
                     recordRecent(Tab);
                     if(auto* Input=Tab->pane_->InputWidget()){if(hosted_&&Tab->pane_->ViewId()=="text")Input->setAttribute(Qt::WA_NativeWindow);Input->installEventFilter(this);for(auto* Child:Input->findChildren<QWidget*>())Child->installEventFilter(this);}
                 }
@@ -1695,7 +1787,7 @@ namespace hc::document
                     auto Copy = Path;
                     if (Record.Value().text_ && QFileInfo(Path).fileName().startsWith("restored-")) {
                         const auto Suffix = QString::fromStdString(Record.Value().text_->suffix_);
-                        if (QStringList{"txt", "md", "markdown"}.contains(Suffix)) Copy = QFileInfo(Path).dir().filePath(QFileInfo(Path).completeBaseName() + "." + Suffix);
+                        if (QStringList{"txt", "md", "markdown", "rst"}.contains(Suffix)) Copy = QFileInfo(Path).dir().filePath(QFileInfo(Path).completeBaseName() + "." + Suffix);
                     }
                     if (!StoreCopy(Copy, QByteArray::fromStdString(Record.Value().bytes_))) return storage::Result<TextInput>{storage::Error{storage::ErrorCategory::Unavailable, "document-recovery-copy"}};
                     auto Input = ReadDocumentFile(Copy, Context, Unlimited);
@@ -2297,6 +2389,14 @@ namespace hc::document
         }
         auto Tab = active();
         if(epubFullscreen_ && (!Tab || !Tab->pane_->IsEpub()))toggleEpubFullscreen();
+        // 미리보기 전체 화면: 옮겨 간 탭이 Markdown 이나 reST 면 그 미리보기를 이어서 보여 주고, 아니면 나온다.
+        if(previewFullscreen_) {
+            if(!Tab || Tab->loading_ || !Tab->pane_->HasPreview())togglePreviewFullscreen();
+            else {
+                for(const auto& Item:documents_)if(Item!=Tab && Item->pane_->IsPreviewOnly())Item->pane_->SetPreviewOnly(false);
+                if(!Tab->pane_->IsPreviewOnly())Tab->pane_->SetPreviewOnly(true);
+            }
+        }
         if (Tab) {
             workspace_.Activate(Tab->id_.toStdString());
             if(!findChild<ImageFullscreen*>("imageFullscreen")->Active()) {
@@ -2334,12 +2434,12 @@ namespace hc::document
             findChild<QAction*>("saveDocument")->setEnabled(CanSave && Tab->originalSave_ || bool(Tab->activeSave_));findChild<QAction*>("saveDocumentAs")->setEnabled(CanSave);
         }
         if(auto* Reopen=findChild<QAction*>("epubReopenDocument"))Reopen->setVisible(Tab && Tab->pane_->IsEpub() && Tab->pane_->findChild<QAction*>("epubReopen"));
-        findChild<QAction*>("printDocument")->setEnabled(Tab&&(!Tab->pane_->IsMarkdown()||Tab->pane_->MarkdownSourceVisible())&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
-        findChild<QAction*>("previewDocument")->setEnabled(Tab&&(!Tab->pane_->IsMarkdown()||Tab->pane_->MarkdownSourceVisible())&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
+        findChild<QAction*>("printDocument")->setEnabled(Tab&&(!Tab->pane_->HasPreview()||Tab->pane_->PreviewSourceVisible())&&!Tab->pane_->IsEpub()&&!Tab->loading_&&!Tab->pane_->IsBusy()&&(!Hwp||Tab->pane_->ViewState()["ready"].toBool()));
+        findChild<QAction*>("previewDocument")->setEnabled(Tab&&(!Tab->pane_->HasPreview()||Tab->pane_->PreviewSourceVisible())&&!Tab->pane_->IsEpub()&&!Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy());
         for (auto* Action : findChildren<QAction*>()) {
             const auto Id = Action->property("documentCommandId").toString();
             const auto Scope=DocumentShortcutRegistry::ScopeOf(Id);
-            if(Scope=="markdown")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->CanRunViewCommand(Id));
+            if(Scope=="markdown" || Scope=="rst")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->CanRunViewCommand(Id));
             if(Scope=="epub")Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpub() && !Tab->pane_->IsEpubEditing());
             // Editor-owned actions retain their resource/selection eligibility during status polling.
             if(Scope.startsWith("epub-edit") && Action->parent()==this)Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing());
@@ -2347,11 +2447,11 @@ namespace hc::document
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
                 Action->setEnabled(Tab && !Tab->loading_ && ((Tab->pane_->ViewId() == "text"
                     && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->pane_->IsReadOnly())) || Tab->pane_->IsEpubEditing()));
-            if (Id == "file.new" || Id == "file.newText" || Id == "file.newMarkdown" || Id == "file.newImage")
+            if (Id == "file.new" || Id == "file.newText" || Id == "file.newMarkdown" || Id == "file.newRst" || Id == "file.newSphinxProject" || Id == "file.newImage")
                 Action->setEnabled((hosted_ || documents_.size() < 16) && (tabbed_ || documents_.empty()));
             // HyperViewer hands a new EPUB to HyperEditor: no tab of its own.
             if (Id == "file.newEpub") Action->setEnabled(!epubCreating_ && (hosted_ || ((documents_.size() < 16) && (tabbed_ || documents_.empty()))));
-            if(Tab&&Tab->pane_->IsMarkdown()&&!Tab->pane_->MarkdownSourceVisible()&&(Id.startsWith("text.")||Id.startsWith("edit.")))Action->setEnabled(Id=="text.find"||Id=="edit.copy"||Id=="edit.selectAll");
+            if(Tab&&Tab->pane_->HasPreview()&&!Tab->pane_->PreviewSourceVisible()&&(Id.startsWith("text.")||Id.startsWith("edit.")))Action->setEnabled(Id=="text.find"||Id=="edit.copy"||Id=="edit.selectAll");
             if (Id == "tab.next" || Id == "tab.previous") Action->setEnabled(tabbed_ && tabs_->count() > 1);
         }
         QList<DocumentStatusField> Fields;
@@ -2361,7 +2461,7 @@ namespace hc::document
             if(!Tab->loading_)Fields=Tab->pane_->StatusFields();
             const auto State=Tab->session_->Snapshot();const auto View=Tab->pane_->ViewState();
             const bool Reading=View.contains("reading") || (Tab->pane_->IsProcessDocument()&&!Tab->pane_->IsEpubEditing());
-            const bool ReadOnly=(Tab->pane_->IsMarkdown()&&!Tab->pane_->MarkdownSourceVisible()) || Reading || (Tab->pane_->ViewId()=="text"?View["readOnly"].toBool():!(Capability.save_||Capability.saveAs_));
+            const bool ReadOnly=(Tab->pane_->HasPreview()&&!Tab->pane_->PreviewSourceVisible()) || Reading || (Tab->pane_->ViewId()=="text"?View["readOnly"].toBool():!(Capability.save_||Capability.saveAs_));
             QString Mode=ReadOnly?tr("읽기 전용"):Tab->pane_->ViewId()=="pdf"?tr("주석 편집"):tr("편집");
             const auto Destination=Tab->pane_->IsEpub()?(Tab->originalSave_?tr("현재 EPUB에 저장"):tr("사본 · 다른 이름으로 저장")):Tab->broker_?tr("원본 공급자에 저장"):Tab->originalSave_?tr("로컬 파일"):tr("사본 · 다른 이름으로 저장");
             // Where a save goes only shows when it is not the file itself (prototype "편집 · 사본으로 저장").
@@ -2438,6 +2538,9 @@ namespace hc::document
         switch (Tab->pane_->Kind()) {
             case DocumentViewKind::MarkdownPreview: case DocumentViewKind::MarkdownEdit:
                 Document.kind_ = "markdown"; Document.markdownView_ = View["markdown"].toObject()["mode"].toString(); break;
+            case DocumentViewKind::RstPreview: case DocumentViewKind::RstEdit:
+                // 보기 방식은 Markdown 과 같은 칸( markdownView_ )에 적는다: preview · source · split.
+                Document.kind_ = "rst"; Document.markdownView_ = View["rst"].toObject()["mode"].toString(); break;
             case DocumentViewKind::Pdf: Document.kind_ = "pdf"; Document.pdfPage_ = View["page"].toInt() + 1; break;
             case DocumentViewKind::Image: Document.kind_ = "image"; Document.imageMode_ = "single"; break;
             case DocumentViewKind::Comic: case DocumentViewKind::Webtoon: {

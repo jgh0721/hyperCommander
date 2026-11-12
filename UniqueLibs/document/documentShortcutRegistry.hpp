@@ -39,6 +39,7 @@ public:
             {"edit", QObject::tr("편집 공통"), QObject::tr("문서의 입력 영역에서 동작합니다.")},
             {"text", QObject::tr("일반 텍스트 편집기"), QObject::tr("텍스트 문서와 EPUB 소스 편집기에서 동작합니다.")},
             {"markdown", QObject::tr("마크다운"), QObject::tr("마크다운 소스와 미리보기에서 동작합니다.")},
+            {"rst", QObject::tr("reStructuredText"), QObject::tr("reStructuredText 소스와 미리보기에서 동작합니다.")},
             {"epub", QObject::tr("EPUB 뷰어"), QObject::tr("EPUB 읽기 화면에서 동작합니다.")},
             {"epub-edit", QObject::tr("EPUB 편집"), QObject::tr("EPUB 편집 모드의 편집기 안 어디에서나 동작합니다. 소스 편집기에서는 텍스트 편집기 단축키와 함께 동작합니다.")},
             {"epub-edit.tree", QObject::tr("책 구조"), QObject::tr("EPUB 편집의 책 구조 트리에 포커스가 있을 때 동작합니다."), 1},
@@ -50,7 +51,7 @@ public:
     // Scopes active together for one focus position. Validation and routing share this table.
     static QList<QStringList> FocusContexts()
     {
-        return {{"common","edit","text","markdown"},{"common","edit","markdown"},{"common","edit","text"},{"common","edit","epub"},{"common","edit","epub-edit","epub-edit.tree"},
+        return {{"common","edit","text","markdown"},{"common","edit","markdown"},{"common","edit","text","rst"},{"common","edit","rst"},{"common","edit","text"},{"common","edit","epub"},{"common","edit","epub-edit","epub-edit.tree"},
             {"common","edit","text","epub-edit","epub-edit.source"},{"common","edit","epub-edit"},{"common","edit","image","image.comic"},{"common","edit","pdf"}};
     }
     static bool CoActive(const QString& A, const QString& B)
@@ -64,7 +65,7 @@ public:
         return Result;
     }
     // Scopes reachable while a text input owns the keyboard keep its editing keys.
-    static bool InputScope(const QString& Scope){return QStringList{"common","edit","text","markdown","epub-edit","epub-edit.source"}.contains(Scope);}
+    static bool InputScope(const QString& Scope){return QStringList{"common","edit","text","markdown","rst","epub-edit","epub-edit.source"}.contains(Scope);}
     static QString ScopeLabel(const QString& Scope){for(const auto& Item:Scopes())if(Item.id_==Scope)return Item.label_;return Scope;}
     // Routing asks for scopes on every key press and refresh; ids and scopes never change.
     static QString ScopeOf(const QString& Id)
@@ -131,7 +132,8 @@ public:
             }
             if (!Input && Focus.contains(First.key())) { Result.append({Item.id_, {}, QObject::tr("%1: 포커스·입력 기본키는 유지해야 합니다.").arg(Item.label_)}); continue; }
             bool Rejected = false;
-            if (Input) for (const auto& ReservedKey : Reserved) if (Overlaps(Key, QKeySequence(ReservedKey))) {
+            // A command keeps the key the product gave it by default (reST 자동 완성: Ctrl+Space); other commands may not take a reserved key.
+            if (Input && Key != QKeySequence(Item.key_)) for (const auto& ReservedKey : Reserved) if (Overlaps(Key, QKeySequence(ReservedKey))) {
                 Result.append({Item.id_, {}, QObject::tr("%1: 편집 기본키 또는 입력기 키 %2와 겹칩니다.").arg(Item.label_, ReservedKey)}); Rejected = true; break;
             }
             if (Rejected || Conflict(Item, Key, Item.label_)) continue;

@@ -1,0 +1,31 @@
+[project]
+name = "multiroot-rest-runtime"
+version = "1.0.0"
+description = "Sphinx/Esbonio runtime for MultiRoot-reST-CPP"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "esbonio>=2,<3",
+    "sphinx>=8,<9",
+    "docutils>=0.21",
+]
+
+[project.optional-dependencies]
+themes = [
+    "furo",
+    "sphinx-rtd-theme>=3",
+    "pydata-sphinx-theme>=0.16",
+    "sphinx-book-theme>=1.1",
+    "shibuya",
+    "piccolo-theme",
+    "sphinxawesome-theme",
+]
+extensions = [
+    "myst-parser>=4",
+    "sphinx-design>=0.6",
+    "sphinx-copybutton>=0.5",
+    "sphinxcontrib-mermaid>=1",
+    "sphinx-tabs>=3.4",
+]
+
+[tool.uv]
+package = false

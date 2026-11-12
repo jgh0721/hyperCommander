@@ -183,6 +183,14 @@ if($Carried.Count){
     $null=Invoke-Probe @('promote',$Root);$null=Invoke-Probe @('promote',$Root)
     foreach($Name in $Carried){if((Get-FileHash -LiteralPath (Join-Path $Root $Name)).Hash -ne (Get-FileHash -LiteralPath (Join-Path $Root ($Floor.carrier+$Name))).Hash){throw "Root copy differs from its carried file: $Name"}}
     Proof 'carried-root-files' ("Promoted and current: "+($Carried -join ', '))
+    # After the health check nothing reads the carriers: they are removed and the ROOT copies stay current.
+    $Listed=@{};foreach($File in (Get-Content -LiteralPath (Join-Path $Root 'product-inventory.json') -Raw -Encoding UTF8|ConvertFrom-Json).files){$Listed[$File.path]=$File.sha256}
+    $null=Invoke-Probe @('retire',$Root);$null=Invoke-Probe @('promote',$Root)
+    foreach($Name in $Carried){
+        if(Test-Path -LiteralPath (Join-Path $Root ($Floor.carrier+$Name))){throw "Carried copy was not removed: $Name"}
+        if((Get-FileHash -LiteralPath (Join-Path $Root $Name) -Algorithm SHA256).Hash -ne $Listed[$Floor.carrier+$Name]){throw "Root copy changed with its carrier removed: $Name"}
+    }
+    Proof 'carried-copies-retired' ("Removed after the health check; ROOT copies current: "+($Carried -join ', '))
 }
 $Parent.Dispose()
 if(-not (Test-Path -LiteralPath (Join-Path $Root 'HyperCommanderUpdater.exe')) -or (Test-Path -LiteralPath (Join-Path $Root 'hc-updater.exe'))){throw 'Updater executable name migration failed.'}

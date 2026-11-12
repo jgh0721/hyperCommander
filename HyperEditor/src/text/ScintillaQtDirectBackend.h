@@ -1,13 +1,18 @@
 ﻿#pragma once
 
 #include "text/ITextEditorBackend.h"
+#include "text/RstContainerLexer.h"
 
 #include <QColor>
 #include <QFont>
 #include <QPointer>
 #include <QRect>
 
+#include <memory>
+#include <vector>
+
 class QPaintEvent;
+class QTimer;
 class ScintillaEditBase;
 
 namespace Scintilla {
@@ -130,7 +135,36 @@ public:
 	bool applyLanguage(const QString& displayName) override;
 	void applyThemeColors(bool dark) override;
 
+    // ── Language services (reStructuredText) ──
+    // Lines are 0-based and positions are UTF-8 byte offsets. Columns are UTF-16 code units, as in LSP and QString.
+	int positionFromLine(int line) const;
+	int lineEndPosition(int line) const;
+	int lineFromPosition(int position) const;
+	int columnFromPosition(int position) const;
+	int positionFromLineColumn(int line, int column) const;
+	QByteArray textRangeUtf8(int startPos, int endPos) const;
+	QString lineText(int line) const;
+	QPoint pointFromPosition(int position) const;
+    // Viewport point -> document position; -1 when the point is not over a character.
+	int positionFromPoint(const QPoint& viewportPos) const;
+    // Unfolds the blocks that hide the line.
+	void ensureLineVisible(int line);
+    // Directive and role names the reST lexer has learned; nullptr unless the language is reStructuredText.
+    // Filling it turns names from "unknown yet" into known or invalid.
+	hc::rst::syntax::RstMetadataCache* rstMetadataCache() const;
+    // Restyles from the document start on the next paint; idle styling does the rest. SCI_COLOURISE is not used
+    // because with container lexing it styles the whole document in one synchronous pass.
+	void invalidateStyling();
+
 signals:
+    // The user typed a character (completion triggers).
+	void charAdded(int ch);
+    // The mouse rests over a character; viewportPos is in viewport coordinates.
+	void dwellStarted(int position, const QPoint& viewportPos);
+	void dwellEnded();
+    // Text was inserted or deleted, in LSP coordinates: 0-based line and UTF-8 bytes from the line start.
+    // An insertion has oldEnd == start and carries the text; a deletion carries the end before it and no text.
+	void documentEdited(int startLine, int startColumn, int oldEndLine, int oldEndColumn, const QByteArray& newText);
     // Lexer output changed for [Position, Position + Length). Coalesced to one signal per event loop turn.
     void StylesChanged(qint64 Position, qint64 Length);
     // Markers were added or removed; Line is the first line touched in this turn.
@@ -183,6 +217,20 @@ private:
 	void clearLexer();
 	void applySyntaxStyles(bool dark);
 	void setKeywordsForLexer(const QString& lexerKey);
+
+    // reStructuredText has no Lexilla lexer: styles come from SCN_STYLENEEDED and fold levels from the document.
+	enum class FoldSource { Lexer, RstContainer };
+	void handleStyleNeeded(int endPosition);
+	int literalSeedLine(int contextFirstLine) const;
+	void applyRstSyntaxStyles();
+	void updateContainerFoldLevels();
+	void scheduleContainerFoldUpdate();
+	void emitDocumentEdited(bool inserted, int position, int length, int linesAdded, const QByteArray& changedText);
+	std::unique_ptr<hc::rst::syntax::RstContainerLexer> m_rstLexer;
+	FoldSource          m_foldSource = FoldSource::Lexer;
+	QTimer*             m_containerFoldTimer = nullptr;
+    // Fold levels last sent, so only changed lines are sent again.
+	std::vector<int>    m_foldLevelCache;
 
 	QPointer<ScintillaEditBase> m_editor;
 	Scintilla::ILexer5*         m_currentLexer = nullptr; // Non-owning after SCI_SETILEXER while the editor is alive; cleared when the editor dies.

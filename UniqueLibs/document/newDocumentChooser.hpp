@@ -31,8 +31,8 @@ namespace fm::ui { class ChoiceCard; }
 
 namespace hc::document
 {
-    /// Ctrl+N 으로 만드는 문서 종류. 순서가 대화상자의 키(1 – 5)다.
-    enum class NewDocumentKind { Text, Markdown, Hwpx, Epub, Image };
+    /// Ctrl+N 으로 만드는 문서 종류. 순서가 대화상자의 키(1 – 7)다.
+    enum class NewDocumentKind { Text, Markdown, SphinxProject, Rst, Hwpx, Epub, Image };
 
     QString         NewDocumentKindId( NewDocumentKind Kind );
     NewDocumentKind NewDocumentKindFrom( const QString& Id, NewDocumentKind Fallback = NewDocumentKind::Text );
@@ -51,10 +51,10 @@ namespace hc::document
     /// 가로 · 세로 1 – 16384 px(‘출력 크기’ 상한), 전체 128 MP(32bit 512 MiB). 받을 수 있으면 빈 문자열.
     QString NewImageError( int Width, int Height );
 
-    /// ‘새 문서’ 대화상자(Ctrl+N). 제품 대화상자 틀(머리 · 본문 · 바닥)에 종류 카드 다섯 장을 둔다.
+    /// ‘새 문서’ 대화상자(Ctrl+N). 제품 대화상자 틀(머리 · 본문 · 바닥)에 종류 카드 일곱 장을 둔다.
     ///
-    /// - 카드를 누르면 고르기만 한다. [만들기] · Enter · 카드 두 번 누르기 · 1 – 5 · (열린 채) Ctrl+N 으로 만든다.
-    /// - 고른 종류는 Chosen() 으로 알리고 닫는다. EPUB · 이미지는 받는 쪽이 이어지는 대화상자를 연다.
+    /// - 카드를 누르면 고르기만 한다. [만들기] · Enter · 카드 두 번 누르기 · 1 – 7 · (열린 채) Ctrl+N 으로 만든다.
+    /// - 고른 종류는 Chosen() 으로 알리고 닫는다. Sphinx 프로젝트 · EPUB · 이미지는 받는 쪽이 이어지는 대화상자를 연다.
     /// - 호스트 펌프를 막지 않도록 open() 으로 연다. 닫히면 스스로 지워진다.
     class NewDocumentChooser final : public QDialog
     {

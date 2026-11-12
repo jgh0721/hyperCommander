@@ -8,6 +8,7 @@
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "epubProcessView.hpp"
 #include "markdownDocumentView.hpp"
+#include "rstDocumentView.hpp"
 #include "documentShortcutRegistry.hpp"
 #include "epubSourceEditor.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
@@ -164,6 +165,7 @@ namespace hc::document
         if(animation_){delete animation_;animation_=nullptr;}
         if(reading_){delete reading_;reading_=nullptr;}
         if(markdown_){delete markdown_;markdown_=nullptr;view_=nullptr;text_=nullptr;}
+        if(rst_){delete rst_;rst_=nullptr;view_=nullptr;text_=nullptr;}
         if(view_) {delete view_;view_=nullptr;text_=nullptr;pdf_=nullptr;image_=nullptr;}
         if(toolbar_) {delete toolbar_;toolbar_=nullptr;}
         if(hwp_){delete hwp_;hwp_=nullptr;}
@@ -274,6 +276,7 @@ namespace hc::document
             connect(Input,&QWidget::customContextMenuRequested,this,[this,Input](const QPoint& Position){
                 MoveCaretForContextMenu(text_,Position);QMenu Menu(this);TextMenuOptions Options;
                 if(markdown_){Options.deleteItem_=false;Options.findInSelection_=false;Options.leadingText_=tr("미리보기에서 이 위치 보기");Options.leading_=[this]{if(markdown_)markdown_->ShowSourceLineInPreview();};}
+                if(rst_){Options.deleteItem_=false;Options.findInSelection_=false;Options.prepend_=[this](QMenu& Top){if(rst_)rst_->PrependSourceMenu(Top);};}
                 FillTextContextMenu(Menu,text_,Options);Menu.exec(Input->mapToGlobal(Position));
             });
         }
@@ -379,6 +382,7 @@ namespace hc::document
         connect(view_,&QBaseView::SaveRequested,this,&DocumentViewPane::SaveRequested);
         markdownEditing_=ImageEditing;
         if(text_ && QStringList{"md","markdown"}.contains(QFileInfo(Input.path_).suffix().toLower()))attachMarkdown(Input.path_);
+        else if(text_ && QStringList{"rst","rest"}.contains(QFileInfo(Input.path_).suffix().toLower()))attachRst(Input.path_);
         if (Prefix && text_ && text_->Backend()) {
             auto* Backend = text_->Backend();
             Backend->restoreViewState(PrefixCaret, PrefixLine);
@@ -397,6 +401,7 @@ namespace hc::document
         markdown_->SetSourceTools(SourceBar);markdown_->SetShortcutBindings(DocumentShortcutRegistry::Bindings(shortcutBindings_));connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::ViewStateChanged);
         connect(markdown_,&MarkdownDocumentView::OpenRequested,this,&DocumentViewPane::OpenRequested);
         connect(markdown_,&MarkdownDocumentView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
+        connect(markdown_,&MarkdownDocumentView::FullScreenToggleRequested,this,&DocumentViewPane::PreviewFullScreenRequested);
         // 마크다운(M) replaces 텍스트(X); the text submenus join it for source editing.
         delete modeMenu_;modeMenu_=nullptr;contribution_.viewActions_.clear();buildMarkdownChrome();
         connect(markdown_,&MarkdownDocumentView::Changed,this,&DocumentViewPane::syncMarkdownChrome);
@@ -419,16 +424,53 @@ namespace hc::document
         buildTextChrome(modeMenu_,true);buildTextViewItems(true);contribution_.menu_=modeMenu_;
         contribution_.menuActions_=toolbar_->actions();applyTheme();
     }
+    void DocumentViewPane::attachRst(const QString& Path)
+    {
+        if(!text_ || rst_ || markdown_)return;
+        auto* SourceBar=toolbar_;layout()->removeWidget(SourceBar);SourceBar->hide();
+        layout()->removeWidget(text_);rst_=new RstDocumentView(text_,Path,markdownEditing_,this);
+        toolbar_=rst_->Toolbar();static_cast<QVBoxLayout*>(layout())->insertWidget(0,toolbar_);layout()->addWidget(rst_);
+        rst_->SetSourceTools(SourceBar);rst_->SetShortcutBindings(shortcutBindings_);rst_->SetReadOnly(readOnly_);
+        connect(rst_,&RstDocumentView::Changed,this,&DocumentViewPane::ViewStateChanged);
+        connect(rst_,&RstDocumentView::OpenRequested,this,&DocumentViewPane::OpenRequested);
+        connect(rst_,&RstDocumentView::OpenAtRequested,this,&DocumentViewPane::OpenAtRequested);
+        connect(rst_,&RstDocumentView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
+        connect(rst_,&RstDocumentView::FullScreenToggleRequested,this,&DocumentViewPane::PreviewFullScreenRequested);
+        connect(rst_,&RstDocumentView::WorkspaceCommandRequested,this,&DocumentViewPane::WorkspaceCommandRequested);
+        // reST(R) replaces 텍스트(X); the text submenus join it for source editing.
+        delete modeMenu_;modeMenu_=nullptr;contribution_.viewActions_.clear();contribution_.editActions_.clear();buildRstChrome();
+        connect(rst_,&RstDocumentView::Changed,this,&DocumentViewPane::syncRstChrome);
+    }
+    void DocumentViewPane::detachRst()
+    {
+        if(!text_ || !rst_)return;
+        auto* Rst=std::exchange(rst_,nullptr);auto* RstBar=toolbar_;toolbar_=nullptr;
+        layout()->removeWidget(RstBar);layout()->removeWidget(Rst);
+        for(auto* Bar:findChildren<QToolBar*>("viewToolbar",Qt::FindDirectChildrenOnly))delete Bar;
+        // Take the editor out of the reST splitter before the view goes (the same order as Load()).
+        text_->setParent(this);layout()->addWidget(text_);text_->show();
+        delete Rst;delete RstBar;
+        toolbar_=text_->createToolBar();if(!toolbar_)toolbar_=new QToolBar(this);
+        toolbar_->setObjectName("viewToolbar");static_cast<QVBoxLayout*>(layout())->insertWidget(0,toolbar_);toolbar_->show();
+        resetChrome();
+        contribution_.viewId_=viewId_;contribution_.menuTitle_=tr("텍스트(&X)");
+        modeMenu_=new QMenu(contribution_.menuTitle_,this);modeMenu_->setObjectName("textModeMenu");
+        buildTextChrome(modeMenu_,true);buildTextViewItems(true);contribution_.menu_=modeMenu_;
+        contribution_.menuActions_=toolbar_->actions();applyTheme();
+    }
     void DocumentViewPane::adoptTextPath(const QString& Path)
     {
         // Only views of the text family switch. A binary target (.epub, .pdf, images) keeps the text view.
         if(!text_ || Path.isEmpty())return;
         const auto Suffix=QFileInfo(Path).suffix().toLower();
         const bool Markdown=Suffix=="md" || Suffix=="markdown";
+        const bool Rst=Suffix=="rst" || Suffix=="rest";
         text_->SetFilePath(Path);
+        if(!Markdown && markdown_)detachMarkdown();
+        if(!Rst && rst_)detachRst();
         if(Markdown && !markdown_){attachMarkdown(Path);contribution_.menuActions_=toolbar_->actions();applyTheme();}
-        else if(!Markdown && markdown_)detachMarkdown();
-        else return;
+        else if(Rst && !rst_){attachRst(Path);contribution_.menuActions_=toolbar_->actions();applyTheme();}
+        else if(Markdown || Rst)return;
         if(InputWidget())InputWidget()->setFocus(Qt::OtherFocusReason);
         emit ViewStateChanged();
     }
@@ -448,11 +490,25 @@ namespace hc::document
     }
     QToolBar* DocumentViewPane::PrimaryToolbar() const { return toolbar_ ? toolbar_ : findChild<QToolBar*>("epubEditToolbar"); }
     bool DocumentViewPane::MarkdownSourceVisible()const{return markdown_ && markdown_->SourceVisible();}
+    bool DocumentViewPane::PreviewSourceVisible()const{return markdown_?markdown_->SourceVisible():rst_ && rst_->SourceVisible();}
+    void DocumentViewPane::SetPreviewOnly(bool Enabled){if(markdown_)markdown_->SetPreviewOnly(Enabled);else if(rst_)rst_->SetPreviewOnly(Enabled);}
+    bool DocumentViewPane::IsPreviewOnly()const{return markdown_?markdown_->IsPreviewOnly():rst_ && rst_->IsPreviewOnly();}
+    void DocumentViewPane::GoToLine(int Line)
+    {
+        if(rst_){rst_->GoToLine(Line);return;}
+        if(!text_ || !text_->Backend() || Line<1)return;
+        if(markdown_ && !markdown_->SourceVisible())markdown_->Run("markdown.source");
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+        const qintptr Last=qMax<qintptr>(0,Backend->Send(SCI_GETLINECOUNT)-1),Target=qMin<qintptr>(qMax<qintptr>(0,Line-1),Last);
+        Backend->Send(SCI_ENSUREVISIBLEENFORCEPOLICY,Target);Backend->Send(SCI_GOTOLINE,Target);Backend->Send(SCI_SCROLLCARET);
+        Backend->widget()->setFocus(Qt::OtherFocusReason);emit ViewStateChanged();
+    }
     DocumentViewKind DocumentViewPane::Kind() const
     {
         if (IsHwp()) return DocumentViewKind::Hwp;
         if (IsEpub()) return IsEpubEditing() ? DocumentViewKind::EpubEdit : DocumentViewKind::EpubRead;
         if (markdown_) return markdown_->SourceVisible() ? DocumentViewKind::MarkdownEdit : DocumentViewKind::MarkdownPreview;
+        if (rst_) return rst_->SourceVisible() ? DocumentViewKind::RstEdit : DocumentViewKind::RstPreview;
         if (viewId_ == "pdf") return DocumentViewKind::Pdf;
         if (viewId_ == "image") {
             // A book (archive/folder) read one page at a time is still a comic; only webtoon changes the vocabulary.
@@ -473,6 +529,7 @@ namespace hc::document
         // Copy of a PDF selection, the displayed image or the current reading page.
         if(Id=="edit.copy")return (reading_ && !reading_->isHidden()) ? !reading_->CurrentImage().isNull() : image_ ? !image_->Content().isNull() : (view_ && !text_ && view_->canCopy());
         if(Id.startsWith("markdown."))return markdown_ && markdown_->CanRun(Id);
+        if(Id.startsWith("rst."))return rst_ && rst_->CanRun(Id);
         if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return IsEpubEditing() && epubEditor_->CanRunCommand(Id);
         // Every image pane owns a reading view; a single image steps through its folder while it is hidden.
         if(Id=="image.fullscreen" || Id=="image.animation")return image_ != nullptr;
@@ -522,12 +579,13 @@ namespace hc::document
             return view_->copySelection();
         }
         if(Id.startsWith("markdown.")){auto* Action=markdown_->Toolbar()->findChild<QAction*>(Id);if(Action && Action->isCheckable())Action->trigger();else markdown_->Run(Id);return true;}
+        if(Id.startsWith("rst.")){rst_->Trigger(Id);return true;}
         if(Id.startsWith("epubEdit.") || Id.startsWith("epubTree.") || Id.startsWith("epubSource."))return epubEditor_->RunCommand(Id);
         if(Id=="image.animation"){if(auto* Play=findChild<QAction*>("imageAnimation"))Play->trigger();return true;}
         if(Id.startsWith("image."))return reading_ && !reading_->isHidden()?reading_->RunCommand(Id):image_->StepImage(Id=="image.next"?1:-1);
         if(Id=="pdf.pageNext")pdf_->nextPage();else if(Id=="pdf.pagePrevious")pdf_->previousPage();else if(Id=="pdf.first")pdf_->goToPage(0);else pdf_->goToPage(pdf_->totalPageCount()-1);return true;
     }
-    void DocumentViewPane::SetShortcutBindings(const QJsonObject& Bindings){shortcutBindings_=Bindings;if(markdown_)markdown_->SetShortcutBindings(Bindings);if(epubEditor_)epubEditor_->SetShortcutBindings(Bindings);}
+    void DocumentViewPane::SetShortcutBindings(const QJsonObject& Bindings){shortcutBindings_=Bindings;if(markdown_)markdown_->SetShortcutBindings(Bindings);if(rst_)rst_->SetShortcutBindings(Bindings);if(epubEditor_)epubEditor_->SetShortcutBindings(Bindings);}
     void DocumentViewPane::DiscardEpubRecovery(){if(epubEditor_)epubEditor_->DiscardRecovery();}
     void DocumentViewPane::SetEpubRecoveryEnabled(bool Enabled){if(epubEditor_)epubEditor_->SetRecoveryEnabled(Enabled);}
     void DocumentViewPane::CheckpointEpub(){if(epubEditor_)epubEditor_->Checkpoint();}
@@ -635,7 +693,7 @@ namespace hc::document
         State.firstLine_ = Backend->Send(SCI_DOCLINEFROMVISIBLE, Visible);
         State.firstSubLine_ = qMax<qintptr>(0, Visible - Backend->Send(SCI_VISIBLEFROMDOCLINE, State.firstLine_));
         // The restored copy's extension selects the view; Markdown must come back as Markdown.
-        State.suffix_ = markdown_ ? "md" : "txt";
+        State.suffix_ = markdown_ ? "md" : rst_ ? "rst" : "txt";
         State.xOffset_ = Backend->Send(SCI_GETXOFFSET); return State;
     }
     bool DocumentViewPane::RestoreTextRecovery(const RecoverySnapshot& Record)
@@ -711,6 +769,7 @@ namespace hc::document
         if(epubEditor_){epubEditor_->CommitSaved(Path,Content,Hash);epubBytes_=Bytes;epubPath_=Path;return;}
         adoptTextPath(Path);
         if(markdown_)markdown_->SetPath(Path);
+        if(rst_){rst_->SetPath(Path);rst_->NotifySaved();}
         // The session has compared the completed snapshot with current content.
         // Repeating that serialization here stalls source input on save completion.
         if(Current)Commit(Path,Bytes);
@@ -767,6 +826,7 @@ namespace hc::document
     {
         if(epubEditor_){epubEditor_->Commit(Path,Bytes);epubBytes_=Bytes;epubPath_=Path;}
         if(markdown_)markdown_->SetPath(Path);
+        if(rst_ && !Path.isEmpty())rst_->SetPath(Path);
         if(text_)text_->CommitContent();if(pdf_)pdf_->CommitContent();
         if(image_) {
             if (!Path.isEmpty() && !Bytes.isEmpty()) {
@@ -784,9 +844,10 @@ namespace hc::document
             SetActiveWindow(GetAncestor(Native,GA_ROOT));
         }
         if(markdown_){markdown_->Focus();return;}
+        if(rst_){rst_->Focus();return;}
         if(IsEpubEditing())epubEditor_->SourceInput()->isVisible()?epubEditor_->SourceInput()->setFocus():epubEditor_->setFocus();else if(epub_)currentEpub()->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
     }
-    void DocumentViewPane::SetReadOnly(bool Enabled){readOnly_=Enabled;if(markdown_)markdown_->SetReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
+    void DocumentViewPane::SetReadOnly(bool Enabled){readOnly_=Enabled;if(markdown_)markdown_->SetReadOnly(Enabled);if(rst_)rst_->SetReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
     {
         if(view_)view_->RestrictClipboard(Enabled);
@@ -807,6 +868,7 @@ namespace hc::document
         setPalette(Theme.colors().toPalette());
         const auto Dark=fm::style::isDarkVariant(Theme.effectiveVariant());
         if(markdown_)markdown_->ReloadPreferences();
+        if(rst_)rst_->ReloadPreferences();
         ThemeManager::instance().setTheme(Dark?ThemeManager::Dark:ThemeManager::Light);view_->setTheme(Dark?QBaseView::Dark:QBaseView::Light);
         // Actions are created before the workspace applies its palette. Refresh
         // normal/off glyphs too; a Light icon otherwise disappears on Dark.
@@ -825,6 +887,7 @@ namespace hc::document
     QList<DocumentStatusField> DocumentViewPane::StatusFields() const
     {
         if(markdown_&&!markdown_->SourceVisible())return markdown_->StatusFields();
+        if(rst_&&!rst_->SourceVisible())return rst_->StatusFields();
         QList<DocumentStatusField> Fields;
         const auto Add = [&](QString Id, QString Text, bool Essential = true, QString Compact = {}, QString Detail = {}, QString Command = {}) {
             if(!Text.isEmpty())Fields.append(DocumentStatusField{Id,Text,Compact,Detail,Command,Essential});
@@ -930,11 +993,19 @@ namespace hc::document
                 Fields.insert(Tail,Field);
             }
         }
+        if(rst_) {
+            // 시안( 소스 · 나란히 ): 줄 · 열 · 보기 방식 | 언어 · 인코딩 · … · 프로젝트 · 미리보기 · 진단 · 환경.
+            for(const auto& Field:rst_->StatusFields()) {
+                if(Field.id_!="rst.viewMode"){Fields.append(Field);continue;}
+                const auto Tail=std::find_if(Fields.begin(),Fields.end(),[](const DocumentStatusField& Item){return Item.trailing_;});
+                Fields.insert(Tail,Field);
+            }
+        }
         return Fields;
     }
     void DocumentViewPane::RunStatusCommand(const QString& Id)
     {
-        if(Id.startsWith("markdown.")){RunViewCommand(Id);return;}
+        if(Id.startsWith("markdown.") || Id.startsWith("rst.")){RunViewCommand(Id);return;}
         if(Id=="epub.status.problems"&&epubEditor_){epubEditor_->Execute({{"action","epub.edit.layout"},{"problems",true}});return;}
         if(Id=="text.goToLine"&&IsEpubEditing()) {if(auto* Action=epubEditor_->SourceView()->findChild<QAction*>("text.goToLine"))Action->trigger();return;}
         if(Id=="text.goToLine"){RunViewCommand(Id);return;}
@@ -958,6 +1029,7 @@ namespace hc::document
         QJsonObject State{{"viewId",viewId_},{"canUndo",CanUndo()},{"canRedo",CanRedo()},
             {"inputFocused",Input&&(Input->hasFocus()||Input->isAncestorOf(QApplication::focusWidget()))}};
         if(markdown_)State["markdown"]=markdown_->State();
+        if(rst_)State["rst"]=rst_->State();
         if(text_){State["encoding"]=encoding_;State["bom"]=bom_;State["language"]=text_->currentLanguage();State["readOnly"]=text_->isReadOnly();State["lineCount"]=text_->lineCount();}
         if(pdf_){State["page"]=pdf_->currentPage();State["pageCount"]=pdf_->totalPageCount();State["formsSupported"]=false;State["searchCount"]=pdf_->totalSearchResultCount();}
         if(image_){State["filter"]=image_->DisplayFilter();State["width"]=image_->Content().width();State["height"]=image_->Content().height();State["rendering"]=image_->IsRendering();State["renderError"]=image_->RenderError();}
@@ -1014,6 +1086,12 @@ namespace hc::document
         if(Action=="selectAll"&&pdf_){pdf_->SelectAllText();return {{"accepted",true}};}
         if(Action=="selectAll"&&text_){static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_SELECTALL);return {{"accepted",true}};}
         if(markdown_&&!markdown_->SourceVisible() && (Action=="print"||Action=="printToPdf"||Action=="printPreview"))return Error("markdown-source-print-only");
+        if(rst_&&!rst_->SourceVisible() && (Action=="print"||Action=="printToPdf"||Action=="printPreview"))return Error("rst-source-print-only");
+        if(Action.startsWith("rst.")) {
+            if(Action=="rst.zoomSet" && Request.contains("value"))return rst_ && rst_->Run(Action,Request["value"])?QJsonObject{{"accepted",true}}:Error("rst-command-unavailable");
+            return RunViewCommand(Action)?QJsonObject{{"accepted",true}}:Error("rst-command-unavailable");
+        }
+        if(Action=="text.find"&&rst_&&!rst_->SourceVisible()){rst_->Run("rst.find");return {{"accepted",true}};}
         if(Action.startsWith("markdown."))return RunViewCommand(Action)?QJsonObject{{"accepted",true}}:Error("markdown-command-unavailable");
         if(Action=="text.find"&&markdown_&&!markdown_->SourceVisible()){markdown_->Run("markdown.find");return {{"accepted",true}};}
         if(Action=="text.find"&&text_)text_->findText(Request["text"].toString(),Request["regex"].toBool(),Request["caseSensitive"].toBool(),Request["wholeWords"].toBool());
@@ -1084,11 +1162,12 @@ void DocumentViewPane::SelectSearchRange(qint64 Start, qint64 Length) {
     if (!text_) return; const auto Text = text_->Content();
     if (Start < 0 || Length < 0 || Start > Text.size() || Length > Text.size() - Start) return;
     if (markdown_) markdown_->Run("markdown.source");
+    if (rst_ && !rst_->SourceVisible()) rst_->Run("rst.source");
     auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
     const auto Begin = Text.left(Start).toUtf8().size(), End = Begin + Text.mid(Start, Length).toUtf8().size();
     Backend->Send(SCI_SETSEL, Begin, End); Backend->Send(SCI_SCROLLCARET); text_->setFocus();
 }
-QWidget* DocumentViewPane::InputWidget() const {if(markdown_)return markdown_->InputWidget();return IsEpubEditing()?static_cast<QWidget*>(epubEditor_):epub_?static_cast<QWidget*>(currentEpub()):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
+QWidget* DocumentViewPane::InputWidget() const {if(markdown_)return markdown_->InputWidget();if(rst_)return rst_->InputWidget();return IsEpubEditing()?static_cast<QWidget*>(epubEditor_):epub_?static_cast<QWidget*>(currentEpub()):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
 QJsonObject DocumentViewPane::CaptureSelection() const
 {
     if (pdf_) return pdf_->ClipboardContent();

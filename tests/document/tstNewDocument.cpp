@@ -21,12 +21,16 @@
 #include <QTabWidget>
 #include <QToolBar>
 #include "text/QTextView.h"
+#include "text/ScintillaQtDirectBackend.h"
 #include "core/AppSettings.h"
 #include "commonLibs/document/epub/epubEditModel.hpp"
 #include "commonLibs/document/epub/epubTemplate.hpp"
 #include "UniqueLibs/document/documentRecoveryStore.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/markdownDocumentView.hpp"
+#include "UniqueLibs/document/rstDocumentView.hpp"
+#include "UniqueLibs/document/rstProjectDialogs.hpp"
+#include "UniqueLibs/document/documentShortcutRegistry.hpp"
 #include "UniqueLibs/document/newDocumentChooser.hpp"
 #include "UniqueLibs/document/newEpubDialog.hpp"
 #include "UniqueLibs/document/hwpInputInspection.hpp"
@@ -246,7 +250,8 @@ private slots:
         QCOMPARE(Name(Widget, Documents(Widget).last().toObject()["documentId"].toString()), QObject::tr("새 문서 %1.md").arg(2));
         // Image: chosen in ‘새 문서’, it continues in its own ‘새 이미지’ dialog; Enter creates the remembered size.
         New->trigger(); QTRY_VERIFY((Chooser = Visible(static_cast<NewDocumentChooser*>(nullptr))));
-        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_5);
+        // 이미지는 일곱 번째 카드다( 텍스트 · Markdown · Sphinx 프로젝트 · reStructuredText · 아래한글 · EPUB · 이미지 ).
+        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_7);
         QPointer<NewImageDialog> Image; QTRY_VERIFY((Image = Visible(static_cast<NewImageDialog*>(nullptr))));
         QVERIFY(Image->findChild<QSpinBox*>("newImageWidth")); QVERIFY(!Image->findChild<QSpinBox*>("newImageWidth")->isEnabled());
         QTest::keyClick(Image->focusWidget() ? Image->focusWidget() : Image.data(), Qt::Key_Return);
@@ -257,6 +262,159 @@ private slots:
         Widget.findChild<QAction*>("file.newImage")->trigger(); QTRY_VERIFY((Image = Visible(static_cast<NewImageDialog*>(nullptr))));
         Image->reject(); QTRY_VERIFY(!Image); QCOMPARE(Documents(Widget).size(), 3);
     }
+    void reStructuredTextKindsFollowMarkdown()
+    {
+        // 시안 ⑥: Markdown 아래에 Sphinx 프로젝트 · reStructuredText 문서. 순서가 키( 1 – 7 )다.
+        QCOMPARE(int(NewDocumentKind::Markdown), 1); QCOMPARE(int(NewDocumentKind::SphinxProject), 2); QCOMPARE(int(NewDocumentKind::Rst), 3);
+        QCOMPARE(NewDocumentKindId(NewDocumentKind::SphinxProject), QString("sphinx")); QCOMPARE(NewDocumentKindFrom("rst"), NewDocumentKind::Rst);
+        QCOMPARE(NewDocumentKindFrom("image"), NewDocumentKind::Image);
+        // 미리보기 환경은 시험용 빈 폴더를 본다: 사용자의 실제 환경을 쓰거나 내려받지 않는다.
+        QTemporaryDir Runtime; QVERIFY(Runtime.isValid()); qputenv("HC_RST_RUNTIME_DIR", Runtime.path().toUtf8());
+        const auto Restore = qScopeGuard([] { qunsetenv("HC_RST_RUNTIME_DIR"); });
+        Profile Settings; DocumentWorkspaceWidget Widget(Settings.Path("recovery")); Widget.show(); QVERIFY(QTest::qWaitForWindowExposed(&Widget));
+        const auto Visible = [&Widget](auto* Type) -> decltype(Type) {
+            for (auto* Item : Widget.findChildren<std::remove_pointer_t<decltype(Type)>*>()) if (Item->isVisible()) return Item;
+            return nullptr;
+        };
+        auto* New = Widget.findChild<QAction*>("newDocument"); QVERIFY(New);
+        New->trigger();
+        QPointer<NewDocumentChooser> Chooser; QTRY_VERIFY((Chooser = Visible(static_cast<NewDocumentChooser*>(nullptr))));
+        QVERIFY(Chooser->findChild<QAbstractButton*>("newDocument.sphinx")); QVERIFY(Chooser->findChild<QAbstractButton*>("newDocument.rst"));
+        // 4: reStructuredText 문서. 이름은 '새 문서 N.rst', 보기는 reST 보기다.
+        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_4);
+        QTRY_COMPARE(Documents(Widget).size(), 1);
+        const auto Id = Documents(Widget).first().toObject()["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Id));
+        QCOMPARE(Name(Widget, Id), QObject::tr("새 문서 %1.rst").arg(1));
+        auto* Rst = Widget.findChild<RstDocumentView*>(); QVERIFY(Rst);
+        QCOMPARE(Rst->State()["mode"].toString(), QString("split")); QVERIFY(Rst->SourceVisible()); QVERIFY(Rst->PreviewVisible());
+        // 환경이 없으면 미리보기 자리에 구성 안내가 있고, 스스로 내려받지 않는다.
+        QVERIFY(!Rst->State()["environmentReady"].toBool());
+        // reST 명령은 그 보기에서만 켜진다.
+        auto* Source = Widget.findChild<QAction*>("rst.source"); QVERIFY(Source); QTRY_VERIFY(Source->isEnabled());
+        Source->trigger(); QTRY_COMPARE(Rst->State()["mode"].toString(), QString("source")); QVERIFY(!Rst->PreviewVisible());
+        // file.newRst 는 창 없이 바로 만든다.
+        Widget.findChild<QAction*>("file.newRst")->trigger(); QTRY_COMPARE(Documents(Widget).size(), 2);
+        QCOMPARE(Name(Widget, Documents(Widget).last().toObject()["documentId"].toString()), QObject::tr("새 문서 %1.rst").arg(2));
+        // 3: Sphinx 프로젝트는 이어지는 대화상자에서 만든다.
+        New->trigger(); QTRY_VERIFY((Chooser = Visible(static_cast<NewDocumentChooser*>(nullptr))));
+        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_3);
+        QPointer<NewSphinxProjectDialog> Sphinx; QTRY_VERIFY((Sphinx = Visible(static_cast<NewSphinxProjectDialog*>(nullptr))));
+        QVERIFY(Sphinx->findChild<QWidget*>("hc.dialog.header"));
+        Sphinx->reject(); QTRY_VERIFY(!Sphinx); QCOMPARE(Documents(Widget).size(), 2);
+    }
+    void reStructuredTextDocumentInWorkspace()
+    {
+        QTemporaryDir Runtime, Project; QVERIFY(Runtime.isValid() && Project.isValid());
+        qputenv("HC_RST_RUNTIME_DIR", Runtime.path().toUtf8());
+        const auto Restore = qScopeGuard([] { qunsetenv("HC_RST_RUNTIME_DIR"); });
+        // conf.py 가 있는 폴더: 그 아래의 .rst 는 그 프로젝트의 문서다( 워크스페이스 폴더 없이 파일에서 위로 찾는다 ).
+        QVERIFY(Put(Project.filePath("conf.py"), "project = 'Demo'\nhtml_theme = 'alabaster'\n"));
+        QVERIFY(Put(Project.filePath("index.rst"), "Demo\n====\n\n.. toctree::\n\n   guide/install\n\nSection\n-------\n\ntext\n"));
+        QVERIFY(QDir().mkpath(Project.filePath("guide")));
+        QVERIFY(Put(Project.filePath("guide/install.rst"), "Install\n=======\n\none\n\ntwo\n\nthree\n\nfour\n"));
+        Profile Settings; DocumentWorkspaceWidget Widget(Settings.Path("recovery")); Widget.resize(1100, 760); Widget.show(); QVERIFY(QTest::qWaitForWindowExposed(&Widget));
+        const auto Index = Widget.Handle({{"action", "open"}, {"path", Project.filePath("index.rst")}})["documentId"].toString(); QVERIFY(!Index.isEmpty());
+        QTRY_VERIFY(Ready(Widget, Index));
+        auto* Rst = Widget.findChild<RstDocumentView*>(); QVERIFY(Rst);
+        // 프로젝트를 찾았고 가상 프로젝트가 아니다. 프로젝트 폴더에는 아무것도 만들지 않는다( .multiroot 없음 ).
+        QTRY_VERIFY(!Rst->State()["projectId"].toString().isEmpty()); QVERIFY(!Rst->State()["virtual"].toBool());
+        QVERIFY(!QFileInfo::exists(Project.filePath(".multiroot")));
+        // 개요: 환경이 없어도 문서의 제목은 나온다.
+        QTRY_VERIFY(Rst->State()["outlineHeadings"].toInt() >= 1);
+        // reST(R) 메뉴와 편집 · 보기 항목.
+        QVERIFY(Widget.findChild<QMenu*>("rstModeMenu")); QVERIFY(Widget.findChild<QAction*>("rstEdit.complete")); QVERIFY(Widget.findChild<QAction*>("rstView.fullScreen"));
+        QVERIFY(!Widget.findChild<QMenu*>("markdownModeMenu"));
+        // 환경이 없으므로 빌드는 꺼져 있고, 프로젝트 폴더 열기는 켜져 있다.
+        QVERIFY(!Rst->CanRun("rst.buildProject")); QVERIFY(Rst->CanRun("rst.openConf"));
+
+        // 다른 문서의 줄로 열기( 개요 · 진단 · 참조 · 미리보기 클릭이 쓰는 길 ).
+        emit Rst->OpenAtRequested(Project.filePath("guide/install.rst"), 7);
+        QTRY_COMPARE(Documents(Widget).size(), 2);
+        const auto Install = Documents(Widget).last().toObject()["documentId"].toString(); QTRY_VERIFY(Ready(Widget, Install));
+        // 새 탭이 앞에 나오고 그 소스 편집기가 보인다.
+        QTextView* Text = nullptr;
+        const auto Shown = [&Widget, &Text] {
+            for (auto* View : Widget.findChildren<QTextView*>()) if (View->isVisible() && View->currentFilePath().endsWith("install.rst")) { Text = View; return true; }
+            return false;
+        };
+        QTRY_VERIFY(Shown());
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(Text->Backend());
+        QTRY_COMPARE(Backend->lineFromPosition(Backend->currentPos()) + 1, 7);
+        // 이미 열려 있는 문서면 탭을 더 만들지 않고 그 줄로 간다.
+        RstDocumentView* Active = nullptr;
+        for (auto* View : Widget.findChildren<RstDocumentView*>()) if (View->isVisible()) Active = View;
+        QVERIFY(Active); QVERIFY(Active != Rst);
+        emit Active->OpenAtRequested(Project.filePath("guide/install.rst"), 3);
+        QTRY_COMPARE(Backend->lineFromPosition(Backend->currentPos()) + 1, 3); QCOMPARE(Documents(Widget).size(), 2);
+
+        // 미리보기 전체 화면: 창이 전체 화면이 되고 그 탭의 미리보기만 남는다. 나오면 들어가기 전 보기로 돌아간다.
+        QCOMPARE(Active->State()["mode"].toString(), QString("split"));
+        auto* Full = Widget.findChild<QAction*>("rst.fullScreen"); QVERIFY(Full); QTRY_VERIFY(Full->isEnabled());
+        Full->trigger();
+        QTRY_VERIFY(Widget.window()->isFullScreen()); QVERIFY(Active->IsPreviewOnly()); QVERIFY(!Active->SourceVisible());
+        // 전체 화면에서는 보기 방식을 바꾸지 않는다.
+        QVERIFY(!Active->Run("rst.source")); QVERIFY(Active->IsPreviewOnly());
+        Full->trigger();
+        QTRY_VERIFY(!Widget.window()->isFullScreen()); QVERIFY(!Active->IsPreviewOnly()); QCOMPARE(Active->State()["mode"].toString(), QString("split"));
+        // 소스만 보던 중이면 미리보기로 바꿔 들어가고, 나올 때 소스 보기로 돌아온다.
+        QVERIFY(Active->Run("rst.source")); QCOMPARE(Active->State()["mode"].toString(), QString("source"));
+        Full->trigger(); QTRY_VERIFY(Widget.window()->isFullScreen()); QVERIFY(Active->PreviewVisible());
+        Full->trigger(); QTRY_VERIFY(!Widget.window()->isFullScreen()); QCOMPARE(Active->State()["mode"].toString(), QString("source"));
+
+        // Markdown 에도 같은 명령이 있다.
+        Widget.findChild<QAction*>("file.newMarkdown")->trigger(); QTRY_COMPARE(Documents(Widget).size(), 3);
+        QTRY_VERIFY(Ready(Widget, Documents(Widget).last().toObject()["documentId"].toString()));
+        MarkdownDocumentView* Markdown = nullptr;
+        const auto MarkdownShown = [&Widget, &Markdown] {
+            for (auto* View : Widget.findChildren<MarkdownDocumentView*>()) if (View->isVisible()) { Markdown = View; return true; }
+            return false;
+        };
+        QTRY_VERIFY(MarkdownShown());
+        auto* MdFull = Widget.findChild<QAction*>("markdown.fullScreen"); QVERIFY(MdFull); QTRY_VERIFY(MdFull->isEnabled());
+        MdFull->trigger(); QTRY_VERIFY(Widget.window()->isFullScreen()); QVERIFY(Markdown->IsPreviewOnly()); QVERIFY(!Markdown->SourceVisible());
+        MdFull->trigger(); QTRY_VERIFY(!Widget.window()->isFullScreen()); QVERIFY(!Markdown->IsPreviewOnly()); QVERIFY(Markdown->SourceVisible());
+    }
+    void sphinxProjectFilesAreWrittenOnce()
+    {
+        QTemporaryDir Root; QVERIFY(Root.isValid());
+        QCOMPARE(SphinxFolderName(QStringLiteral("Demo Docs 2")), QString("demo-docs-2"));
+        QCOMPARE(SphinxFolderName(QStringLiteral("문서")), QString("docs"));
+        SphinxProjectSpec Spec; Spec.name_ = QStringLiteral("Demo's Docs"); Spec.author_ = QStringLiteral("작성자"); Spec.directory_ = Root.path();
+        Spec.folder_ = QStringLiteral("demo"); Spec.theme_ = QStringLiteral("furo"); Spec.myst_ = true;
+        QVERIFY2(Spec.Error().isEmpty(), qPrintable(Spec.Error()));
+        QString Index; QCOMPARE(CreateSphinxProject(Spec, &Index), QString());
+        QCOMPARE(QDir::cleanPath(Index), QDir::cleanPath(Root.filePath("demo/index.rst")));
+        const auto Conf = QString::fromUtf8(Bytes(Root.filePath("demo/conf.py")));
+        QVERIFY(Conf.contains("html_theme = 'furo'")); QVERIFY(Conf.contains("extensions = ['myst_parser']")); QVERIFY(Conf.contains("language = 'ko'"));
+        // 이름의 작은따옴표는 Python 문자열을 끊지 않는다.
+        QVERIFY(Conf.contains("project = ")); QVERIFY(!Conf.contains("project = 'Demo's Docs'"));
+        QVERIFY(QFileInfo(Root.filePath("demo/_static")).isDir()); QVERIFY(QFileInfo(Root.filePath("demo/_templates")).isDir());
+        // 제목 밑줄은 제목보다 짧지 않다.
+        const auto Lines = QString::fromUtf8(Bytes(Index)).split(QLatin1Char(0x0a)); QVERIFY(Lines.size() > 2); QVERIFY(Lines[1].size() >= Lines[0].size());
+        // 이미 있는 프로젝트는 덮어쓰지 않는다.
+        QVERIFY(!Spec.Error().isEmpty()); QVERIFY(!CreateSphinxProject(Spec, nullptr).isEmpty());
+        // source · build 분리.
+        Spec.folder_ = QStringLiteral("split"); Spec.separate_ = true; QCOMPARE(CreateSphinxProject(Spec, &Index), QString());
+        QCOMPARE(QDir::cleanPath(Index), QDir::cleanPath(Root.filePath("split/source/index.rst"))); QVERIFY(QFileInfo(Root.filePath("split/build")).isDir());
+        // 위치가 없거나 이름이 비면 만들지 않는다.
+        Spec.directory_ = Root.filePath("missing"); QVERIFY(!Spec.Error().isEmpty());
+        Spec.directory_ = Root.path(); Spec.name_.clear(); QVERIFY(!Spec.Error().isEmpty());
+    }
+    void reStructuredTextShortcutsValidate()
+    {
+        // 기본 단축키는 충돌 없이 통과한다( 자동 완성 Ctrl+Space 는 제품이 정한 기본값이라 예약 목록 검사에서 빠진다 ).
+        QCOMPARE(DocumentShortcutRegistry::Validate({}), QString());
+        const auto Bindings = DocumentShortcutRegistry::Bindings({});
+        QCOMPARE(Bindings["rst.complete"].toString(), QString("Ctrl+Space")); QCOMPARE(Bindings["rst.fullScreen"].toString(), QString("F11"));
+        QCOMPARE(Bindings["markdown.fullScreen"].toString(), QString("F11")); QCOMPARE(Bindings["rst.toggleProblems"].toString(), QString("Ctrl+Alt+D"));
+        QCOMPARE(DocumentShortcutRegistry::ScopeOf("rst.rebuild"), QString("rst"));
+        // 마크다운 범위와 reST 범위는 함께 켜지지 않으므로 같은 키를 써도 충돌이 아니다. 텍스트 범위와는 함께 켜진다.
+        QVERIFY(!DocumentShortcutRegistry::CoActive("rst", "markdown")); QVERIFY(DocumentShortcutRegistry::CoActive("rst", "text"));
+        // 다른 명령은 여전히 예약 키를 가져갈 수 없다.
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"rst.rebuild", "Ctrl+Space"}}).isEmpty());
+        // reST 명령끼리의 충돌은 잡는다.
+        QVERIFY(!DocumentShortcutRegistry::Validate({{"rst.rebuild", "F11"}}).isEmpty());
+    }
     void dialogsShareTheProductFrame()
     {
         // Captures for review: set HC_NEW_DOCUMENT_CAPTURE to a folder.
@@ -265,13 +423,16 @@ private slots:
         auto* Chooser = new NewDocumentChooser(&Host, {}); Chooser->show(); QVERIFY(QTest::qWaitForWindowExposed(Chooser));
         auto* Image = new NewImageDialog(&Host, {QSize(617, 700), {}, 1, {}}); Image->show(); QVERIFY(QTest::qWaitForWindowExposed(Image));
         auto* Epub = new NewEpubDialog(&Host, Settings.root_.path(), {}, "ko"); Epub->show(); QVERIFY(QTest::qWaitForWindowExposed(Epub));
-        for (QWidget* Dialog : {static_cast<QWidget*>(Chooser), static_cast<QWidget*>(Image), static_cast<QWidget*>(Epub)}) {
+        NewSphinxProjectDialog::Options SphinxOptions; SphinxOptions.directory_ = Settings.root_.path();
+        auto* Sphinx = new NewSphinxProjectDialog(&Host, SphinxOptions); Sphinx->show(); QVERIFY(QTest::qWaitForWindowExposed(Sphinx));
+        auto* Build = new SphinxBuildDialog(QStringLiteral("Demo"), Settings.root_.path(), &Host); Build->show(); QVERIFY(QTest::qWaitForWindowExposed(Build));
+        for (QWidget* Dialog : {static_cast<QWidget*>(Chooser), static_cast<QWidget*>(Image), static_cast<QWidget*>(Epub), static_cast<QWidget*>(Sphinx), static_cast<QWidget*>(Build)}) {
             QVERIFY(Dialog->findChild<QWidget*>("hc.dialog.header")); QVERIFY(Dialog->findChild<QWidget*>("hc.dialog.footer"));
             // No label shows a raw "(&X)" mnemonic.
             for (auto* Label : Dialog->findChildren<QLabel*>()) if (Label->isVisible()) QVERIFY2(!(Label->text().contains("(&") && !Label->buddy()), qPrintable(Label->text()));
             if (!Folder.isEmpty()) { QTest::qWait(150); QVERIFY(Dialog->grab().save(QDir(Folder).filePath(Dialog->objectName() + ".png"))); }
         }
-        for (auto* Dialog : {static_cast<QDialog*>(Chooser), static_cast<QDialog*>(Image), static_cast<QDialog*>(Epub)}) Dialog->reject();
+        for (auto* Dialog : {static_cast<QDialog*>(Chooser), static_cast<QDialog*>(Image), static_cast<QDialog*>(Epub), static_cast<QDialog*>(Sphinx), static_cast<QDialog*>(Build)}) Dialog->reject();
     }
     void epubFileMenuOffersNewDocument()
     {
@@ -295,7 +456,8 @@ private slots:
         Profile Settings; DocumentWorkspaceWidget Widget(Settings.Path("recovery"), true); Widget.show();
         Widget.findChild<QAction*>("newDocument")->trigger();
         QPointer<NewDocumentChooser> Chooser = Widget.findChild<NewDocumentChooser*>(); QVERIFY(Chooser);
-        QTest::keyClick(Chooser, Qt::Key_3);
+        // 아래한글은 다섯 번째 카드다( Markdown 아래에 Sphinx 프로젝트 · reStructuredText 가 들어갔다 ).
+        QTest::keyClick(Chooser, Qt::Key_5);
         QTRY_VERIFY(!Chooser);
         const auto Request = Widget.Snapshot()["editRequest"].toObject();
         QCOMPARE(Request["format"].toString(), QString("hwpx-new"));

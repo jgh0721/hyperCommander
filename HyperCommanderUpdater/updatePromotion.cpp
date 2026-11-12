@@ -147,4 +147,49 @@ PromotionResult PromoteRootFiles(const Path& InputRoot) {
     }
     return Result;
 }
+RetireResult RetireCarriers(const Path& InputRoot) {
+    RetireResult Result;
+    try {
+        const auto Root = InstallRoot(InputRoot);
+        if (!Root.is_absolute()) throw std::runtime_error("update-install-root");
+        CheckPlainPath(Root);
+        // The same lock as promotion: another instance may be copying from these carriers.
+        Handle Mutex; Mutex.value_ = CreateMutexW(nullptr, FALSE, MutexName(Root).c_str());
+        if (!Mutex.value_) return Result;
+        const auto Waited = WaitForSingleObject(Mutex.value_, 15000);
+        if (Waited != WAIT_OBJECT_0 && Waited != WAIT_ABANDONED) return Result;
+        struct Release { HANDLE value_; ~Release() { ReleaseMutex(value_); } } Unlock{Mutex.value_};
+        // The health check of an applied update verifies every inventory file, carriers included.
+        if (std::filesystem::exists(Root / L".update/active.json")) return Result;
+        const auto Inventory = ParseJson(ReadBounded(Root / L"product-inventory.json", 1048576));
+        const auto& Files = Inventory.At("files", Json::Kind::Array).array_;
+        struct Listed { std::string relative_, hash_; };
+        std::vector<Listed> Carriers;
+        for (const auto Known : policy::CarriedRootFiles) {
+            const std::string Name(Known), Relative = std::string(layout::RootCarrier) + '/' + Name;
+            const auto Entry = std::ranges::find_if(Files, [&](const Json& Item) { return Item.At("path", Json::Kind::String).text_ == Relative; });
+            if (Entry == Files.end()) continue;
+            const auto Hash = Entry->At("sha256", Json::Kind::String).text_;
+            const auto Target = Root / Wide(Name); CheckPlainPath(Target);
+            // A carrier is the only source of its ROOT copy until that copy is current.
+            if (!std::filesystem::exists(Target) || HashFile(Target) != Hash) return Result;
+            Carriers.push_back({Relative, Hash});
+        }
+        for (const auto& Item : Carriers) {
+            const auto Carrier = Root / Wide(Item.relative_); CheckPlainPath(Carrier);
+            if (!std::filesystem::exists(Carrier) || HashFile(Carrier) != Item.hash_) continue;
+            // A scanner holding the file briefly is waited for; a lasting lock leaves it for the next start.
+            if (Retried([&] { return DeleteFileW(Carrier.c_str()) != FALSE; })) Result.removed_.push_back(Item.relative_);
+        }
+        std::error_code Ignored;
+        const auto Folder = Root / Wide(std::string(layout::RootCarrier));
+        if (std::filesystem::is_directory(Folder, Ignored) && std::filesystem::is_empty(Folder, Ignored)) std::filesystem::remove(Folder, Ignored);
+        Result.retired_ = true;
+    } catch (const std::exception& Error) {
+        Result.error_ = Error.what();
+    } catch (...) {
+        Result.error_ = "update-retire-failed";
+    }
+    return Result;
+}
 }

@@ -224,7 +224,30 @@ void Promotion(const QString& Directory, const QString& SignedRoot) {
     RecoverTransaction(Root);
     Require(HashFile(Gui) == Previous && !std::filesystem::exists(Cli) && ReadBounded(Root / L"product-inventory.json", 65536) == OldInventory
         && !std::filesystem::exists(Root / L".update/active.json"), "transaction-recovered");
-    std::cout << "Promotion: " << Passed << " passed (fresh, current, stale, temporary, foreign, busy, tampered, concurrent, read-only, active update and recovery)\n";
+    // The carriers stay while anything reads them: a ROOT copy that is not current is copied from
+    // them, and an update awaiting its health check verifies them. Then they go. The recovery above
+    // restored the empty inventory; list the carriers again.
+    std::ofstream(Root / L"product-inventory.json", std::ios::binary | std::ios::trunc) << InventoryBytes;
+    {   const auto Kept = RetireCarriers(Root);
+        Require(!Kept.retired_ && Kept.removed_.empty() && std::filesystem::exists(Carriers / L"HyperCompare.exe"), "retire-stale-kept"); }
+    Expect(PromotionStatus::Done, 2, "before-retire");
+    std::ofstream(Root / L".update/active.json", std::ios::binary) << "{\"transaction\":\"00000000-0000-4000-8000-0000000000a1\"}";
+    {   const auto Kept = RetireCarriers(Root);
+        Require(!Kept.retired_ && Kept.removed_.empty() && std::filesystem::exists(Carriers / L"HyperCompareCli.exe"), "retire-awaits-health-check"); }
+    std::filesystem::remove(Root / L".update/active.json");
+    // A carrier that differs from the inventory is the user's and stays with its folder.
+    Flip();
+    {   const auto Partial = RetireCarriers(Root);
+        Require(Partial.retired_ && Partial.removed_ == std::vector<std::string>{"Libs/RootFiles/HyperCompareCli.exe"}
+            && std::filesystem::exists(Carriers / L"HyperCompare.exe") && !std::filesystem::exists(Carriers / L"HyperCompareCli.exe"), "retire-user-file-kept"); }
+    Flip();
+    {   const auto Retired = RetireCarriers(Root);
+        Require(Retired.retired_ && Retired.removed_ == std::vector<std::string>{"Libs/RootFiles/HyperCompare.exe"} && !std::filesystem::exists(Carriers), "retired"); }
+    // Without carriers current ROOT copies are still done; a lost copy now needs a reinstall.
+    Expect(PromotionStatus::Done, 0, "retired-current");
+    std::filesystem::remove(Gui);
+    Expect(PromotionStatus::Failed, 0, "retired-missing");
+    std::cout << "Promotion: " << Passed << " passed (fresh, current, stale, temporary, foreign, busy, tampered, concurrent, read-only, active update, recovery and carrier retirement)\n";
 }
 }
 
@@ -279,6 +302,11 @@ int main(int Count, char** Arguments) {
             const auto Result = PromoteRootFiles(Native(Args[2]));
             std::cout << "Promotion: " << PromotionStatusName(Result.status_) << ", " << Result.promoted_.size() << " copied" << (Result.error_.empty() ? "" : ": " + Result.error_) << '\n';
             if (PromotionStatusName(Result.status_) != (Args.size() == 4 ? Args[3].toStdString() : std::string("done"))) throw std::runtime_error("promotion-status");
+        }
+        else if (Args.size() == 3 && Args[1] == "retire") {
+            const auto Result = RetireCarriers(Native(Args[2]));
+            std::cout << "Retire: " << (Result.retired_ ? "retired" : "kept") << ", " << Result.removed_.size() << " removed" << (Result.error_.empty() ? "" : ": " + Result.error_) << '\n';
+            if (!Result.retired_) throw std::runtime_error("retire-kept");
         }
         else if (Args.size() == 4 && Args[1] == "promotion") Promotion(Args[2], Args[3]);
         else throw std::runtime_error("test-arguments");

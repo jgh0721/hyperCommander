@@ -41,7 +41,7 @@ namespace hc::document
     {
         using fm::style::Token;
         constexpr qint64  PixelLimit = 128LL * 1024 * 1024;
-        const QStringList KindIds{ "text", "markdown", "hwpx", "epub", "image" };
+        const QStringList KindIds{ "text", "markdown", "sphinx", "rst", "hwpx", "epub", "image" };
 
         // The dialog message line: secondary text, or the danger colour for a problem (as in 새 EPUB 만들기).
         void Tint( QLabel* Label, Token Which )
@@ -94,6 +94,8 @@ namespace hc::document
         const QList< Row > Rows{
             { tr( "텍스트 문서" ), QStringLiteral( ".txt" ), fm::ui::ChoiceCard::DocKind },
             { tr( "Markdown 문서" ), QStringLiteral( ".md" ), fm::ui::ChoiceCard::CodeKind },
+            { tr( "Sphinx 프로젝트…" ), QStringLiteral( "conf.py" ), fm::ui::ChoiceCard::CodeKind },
+            { tr( "reStructuredText 문서" ), QStringLiteral( ".rst" ), fm::ui::ChoiceCard::CodeKind },
             { tr( "아래한글 문서" ), QStringLiteral( ".hwpx" ), fm::ui::ChoiceCard::DocKind },
             { tr( "EPUB 책…" ), QStringLiteral( ".epub" ), fm::ui::ChoiceCard::ArchiveKind },
             { tr( "이미지…" ), QStringLiteral( ".png" ), fm::ui::ChoiceCard::ImageKind } };
@@ -116,7 +118,7 @@ namespace hc::document
         Layout->addWidget( Buttons );
         connect( Buttons, &QDialogButtonBox::accepted, this, &NewDocumentChooser::accept );
         connect( Buttons, &QDialogButtonBox::rejected, this, &NewDocumentChooser::reject );
-        hc::ui::ApplyDialogFrame( this, Buttons, { {}, tr( "만들 문서의 종류를 고릅니다. 1 – 5 키나 두 번 누르기로 바로 만들 수 있습니다." ), fm::ui::glyph::NewFile } );
+        hc::ui::ApplyDialogFrame( this, Buttons, { {}, tr( "만들 문서의 종류를 고릅니다. 1 – 7 키나 두 번 누르기로 바로 만들 수 있습니다." ), fm::ui::glyph::NewFile } );
         refreshNote();
         resize( 480, sizeHint().height() );
         if( auto* Card = kinds_.value( checkedKind() ) ) Card->setFocus( Qt::OtherFocusReason );
@@ -132,8 +134,8 @@ namespace hc::document
     {
         if( !note_ || !create_ ) return;
         const auto Kind = NewDocumentKind( checkedKind() );
-        // EPUB and image continue in their own dialog: the button says so.
-        create_->setText( Kind == NewDocumentKind::Epub || Kind == NewDocumentKind::Image ? tr( "다음(&O)…" ) : tr( "만들기(&O)" ) );
+        // A Sphinx project, EPUB and image continue in their own dialog: the button says so.
+        create_->setText( Kind == NewDocumentKind::SphinxProject || Kind == NewDocumentKind::Epub || Kind == NewDocumentKind::Image ? tr( "다음(&O)…" ) : tr( "만들기(&O)" ) );
         switch( Kind ) {
             case NewDocumentKind::Text:
                 note_->setText( tr( "‘새 문서 %1’ 탭으로 엽니다. 저장할 때 이름과 위치를 정합니다." ).arg( options_.nextDocument_ ) ); break;
@@ -141,6 +143,12 @@ namespace hc::document
                 note_->setText( options_.viewer_
                     ? tr( "‘새 문서 %1.md’ 탭을 소스 보기로 엽니다." ).arg( options_.nextDocument_ )
                     : tr( "‘새 문서 %1.md’ 탭으로 엽니다. 소스와 미리보기를 나란히 봅니다." ).arg( options_.nextDocument_ ) ); break;
+            case NewDocumentKind::SphinxProject:
+                note_->setText( tr( "이름 · 위치 · 테마를 정해 conf.py와 index.rst를 만든 뒤 index.rst를 엽니다." ) ); break;
+            case NewDocumentKind::Rst:
+                note_->setText( options_.viewer_
+                    ? tr( "‘새 문서 %1.rst’ 탭을 소스 보기로 엽니다. 저장 전에는 가상 프로젝트로 미리보기합니다." ).arg( options_.nextDocument_ )
+                    : tr( "‘새 문서 %1.rst’ 탭으로 엽니다. 저장 전에는 가상 프로젝트로 미리보기합니다." ).arg( options_.nextDocument_ ) ); break;
             case NewDocumentKind::Hwpx:
                 note_->setText( tr( "새 창을 HWPX 편집 모드로 엽니다. 저장할 때 이름과 위치를 정합니다." ) ); break;
             case NewDocumentKind::Epub:
@@ -187,7 +195,7 @@ namespace hc::document
     void NewDocumentChooser::keyPressEvent( QKeyEvent* Event )
     {
         if( Repeats( options_.repeatKey_, Event ) ) { if( !Event->isAutoRepeat() ) ActivateCurrent(); Event->accept(); return; }
-        if( !( Event->modifiers() & ~Qt::KeypadModifier ) && Event->key() >= Qt::Key_1 && Event->key() <= Qt::Key_5 ) {
+        if( !( Event->modifiers() & ~Qt::KeypadModifier ) && Event->key() >= Qt::Key_1 && Event->key() < Qt::Key_1 + kinds_.size() ) {
             if( !Event->isAutoRepeat() ) { kinds_[ Event->key() - Qt::Key_1 ]->setChecked( true ); choose( Event->key() - Qt::Key_1 ); }
             Event->accept(); return;
         }

@@ -16,6 +16,7 @@
 #include <QPaintEvent>
 #include "UniqueLibs/document/imagePerformance.hpp"
 #include <QTextStream>
+#include <QTimer>
 #include <QWidget>
 
 #include <ScintillaEditBase.h>
@@ -250,6 +251,7 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
             }
             if (!Inserted && !Deleted) return;
             emit textEdited(qint64(Position), Deleted ? qint64(Length) : 0, Inserted ? qint64(Length) : 0);
+            emitDocumentEdited(Inserted, static_cast<int>(Position), static_cast<int>(Length), static_cast<int>(LinesAdded), ChangedText);
             if (characterCount_ >= 0) {
                 const int Delta = static_cast<int>(QString::fromUtf8(ChangedText).size());
                 characterCount_ += Inserted ? Delta : -Delta;
@@ -258,8 +260,22 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
             syncLineCountState(true);
             // Undo and redo arrive here too, so line maps kept by hosts stay in step.
             if (LinesAdded != 0) emit linesShifted(static_cast<int>(Send(SCI_LINEFROMPOSITION, Position)), static_cast<int>(LinesAdded));
+            scheduleContainerFoldUpdate();
             emit textChanged();
         });
+    // Container lexing (reStructuredText): Scintilla asks for styles up to a position, in idle styling chunks.
+    connect(m_editor, &ScintillaEditBase::styleNeeded, this,
+        [this](Scintilla::Position Position) { handleStyleNeeded(static_cast<int>(Position)); });
+    connect(m_editor, &ScintillaEditBase::charAdded, this, [this](int Ch) { emit charAdded(Ch); });
+    // 0 would be SC_TIME_FOREVER: no dwell notifications at all.
+    m_editor->send(sciMessage(SCI_SETMOUSEDWELLTIME), 400);
+    connect(m_editor, &ScintillaEditBase::dwellStart, this, [this](int X, int Y) {
+        const int Position = positionFromPoint(QPoint(X, Y));
+        if (Position >= 0) emit dwellStarted(Position, QPoint(X, Y));
+    });
+    connect(m_editor, &ScintillaEditBase::dwellEnd, this, [this](int, int) { emit dwellEnded(); });
+    // Another text: the fold levels kept here belong to the previous one.
+    connect(this, &ScintillaQtDirectBackend::DocumentReset, this, [this] { m_foldLevelCache.clear(); scheduleContainerFoldUpdate(); });
 	connect(m_editor, &ScintillaEditBase::updateUi,
 			this, [this](Scintilla::Update Updated) {
 				updateBraceHighlight();
@@ -1095,6 +1111,22 @@ bool ScintillaQtDirectBackend::applyLanguage(const QString& displayName)
 
 	const QString lexerKey = TextLexerRegistry::instance().lexerKeyForDisplayName(displayName);
 	m_editor->send(sciMessage(kSciSetLexer), SCLEX_NULL);
+	// reStructuredText: Lexilla has no lexer for it. Without an ILexer Scintilla asks for styles through
+	// SCN_STYLENEEDED and handleStyleNeeded() paints them; fold levels come from updateContainerFoldLevels().
+	if (lexerKey.compare(QStringLiteral("rst-container"), Qt::CaseInsensitive) == 0) {
+		m_rstLexer = std::make_unique<hc::rst::syntax::RstContainerLexer>();
+		m_foldSource = FoldSource::RstContainer;
+		m_editor->send(sciMessage(SCI_SETILEXER), 0, 0);
+		m_editor->sends(sciMessage(kSciSetLexerLanguage), 0, nullptr);
+		m_currentLexerKey = lexerKey;
+		m_currentLanguageName = displayName;
+		configureCodeFolding(m_codeFoldingEnabled);
+		applyThemeColors(m_darkTheme);
+		invalidateStyling();
+		updateContainerFoldLevels();
+		writeLexerTrace(displayName, lexerKey, true);
+		return true;
+	}
 	if (lexerKey.compare(QStringLiteral("none"), Qt::CaseInsensitive) == 0) {
 		m_editor->send(sciMessage(SCI_SETILEXER), 0, 0);
 		m_editor->sends(sciMessage(kSciSetLexerLanguage), 0, nullptr);
@@ -1284,6 +1316,17 @@ void ScintillaQtDirectBackend::updateBraceHighlight()
 
 void ScintillaQtDirectBackend::clearLexer()
 {
+	// The container lexer is not an ILexer; left alone it would keep computing reST fold levels for another language.
+	if (m_containerFoldTimer)
+		m_containerFoldTimer->stop();
+	if (m_rstLexer) {
+		m_rstLexer.reset();
+		m_currentLexerKey.clear();
+		m_currentLanguageName.clear();
+	}
+	m_foldSource = FoldSource::Lexer;
+	m_foldLevelCache.clear();
+
 	if (!m_currentLexer)
 		return;
 
@@ -1369,6 +1412,12 @@ void ScintillaQtDirectBackend::applySyntaxStyles(bool dark)
 {
 	if (!m_editor || m_currentLexerKey.isEmpty())
 		return;
+
+	// reST does not use Lexilla style numbers.
+	if (m_currentLexerKey == QStringLiteral("rst-container")) {
+		applyRstSyntaxStyles();
+		return;
+	}
 
 	auto colourToSci = [](unsigned int r, unsigned int g, unsigned int b) -> sptr_t {
 		return static_cast<sptr_t>(r | (g << 8) | (b << 16));
@@ -1755,4 +1804,295 @@ void ScintillaQtDirectBackend::FoldAll(bool Contract)
         Send(SCI_FOLDALL, Contract ? SC_FOLDACTION_CONTRACT : SC_FOLDACTION_EXPAND);
         emit viewportScrolled();
     }
+}
+
+// ── Language services (reStructuredText) ──────────────────────────────────
+
+int ScintillaQtDirectBackend::positionFromLine(int line) const
+{
+	if (!m_editor)
+		return 0;
+	const sptr_t safeLine = qBound(sptr_t(0), static_cast<sptr_t>(line), static_cast<sptr_t>(qMax(0, lineCount() - 1)));
+	return static_cast<int>(m_editor->send(sciMessage(SCI_POSITIONFROMLINE), safeLine));
+}
+
+int ScintillaQtDirectBackend::lineEndPosition(int line) const
+{
+	if (!m_editor)
+		return 0;
+	const sptr_t safeLine = qBound(sptr_t(0), static_cast<sptr_t>(line), static_cast<sptr_t>(qMax(0, lineCount() - 1)));
+	return static_cast<int>(m_editor->send(sciMessage(SCI_GETLINEENDPOSITION), safeLine));
+}
+
+int ScintillaQtDirectBackend::lineFromPosition(int position) const
+{
+	if (!m_editor)
+		return 0;
+	const sptr_t safePosition = qBound(sptr_t(0), static_cast<sptr_t>(position), static_cast<sptr_t>(documentLength()));
+	return static_cast<int>(m_editor->send(sciMessage(SCI_LINEFROMPOSITION), safePosition));
+}
+
+int ScintillaQtDirectBackend::columnFromPosition(int position) const
+{
+	if (!m_editor)
+		return 0;
+	// UTF-16 code units from the line start: SCI_GETCOLUMN would expand tabs.
+	const sptr_t safePosition = qBound(sptr_t(0), static_cast<sptr_t>(position), static_cast<sptr_t>(documentLength()));
+	const sptr_t line = m_editor->send(sciMessage(SCI_LINEFROMPOSITION), safePosition);
+	const sptr_t first = m_editor->send(sciMessage(SCI_POSITIONFROMLINE), line);
+	return static_cast<int>(m_editor->send(sciMessage(SCI_COUNTCODEUNITS), first, safePosition));
+}
+
+int ScintillaQtDirectBackend::positionFromLineColumn(int line, int column) const
+{
+	if (!m_editor)
+		return 0;
+	return static_cast<int>(positionFromLineIndex(m_editor, line, column));
+}
+
+QByteArray ScintillaQtDirectBackend::textRangeUtf8(int startPos, int endPos) const
+{
+	if (!m_editor)
+		return {};
+	const sptr_t length = documentLength();
+	const sptr_t start = qBound(sptr_t(0), static_cast<sptr_t>(startPos), length);
+	const sptr_t end = qBound(start, static_cast<sptr_t>(endPos), length);
+	if (end <= start)
+		return {};
+	QByteArray buffer(static_cast<qsizetype>(end - start) + 1, Qt::Uninitialized);
+	Sci_TextRangeFull range{};
+	range.chrg.cpMin = start;
+	range.chrg.cpMax = end;
+	range.lpstrText = buffer.data();
+	m_editor->send(sciMessage(SCI_GETTEXTRANGEFULL), 0, reinterpret_cast<sptr_t>(&range));
+	buffer.resize(static_cast<qsizetype>(end - start));
+	return buffer;
+}
+
+QString ScintillaQtDirectBackend::lineText(int line) const
+{
+	if (!m_editor || line < 0 || line >= lineCount())
+		return {};
+	const sptr_t length = m_editor->send(sciMessage(SCI_LINELENGTH), line);
+	if (length <= 0)
+		return {};
+	QByteArray buffer(static_cast<qsizetype>(length) + 1, Qt::Uninitialized);
+	m_editor->send(sciMessage(SCI_GETLINE), line, reinterpret_cast<sptr_t>(buffer.data()));
+	buffer.resize(static_cast<qsizetype>(length));
+	return QString::fromUtf8(buffer);
+}
+
+QPoint ScintillaQtDirectBackend::pointFromPosition(int position) const
+{
+	if (!m_editor)
+		return {};
+	const sptr_t safePosition = qBound(sptr_t(0), static_cast<sptr_t>(position), static_cast<sptr_t>(documentLength()));
+	const int x = static_cast<int>(m_editor->send(sciMessage(SCI_POINTXFROMPOSITION), 0, safePosition));
+	const int y = static_cast<int>(m_editor->send(sciMessage(SCI_POINTYFROMPOSITION), 0, safePosition));
+	return { x, y };
+}
+
+int ScintillaQtDirectBackend::positionFromPoint(const QPoint& viewportPos) const
+{
+	if (!m_editor)
+		return -1;
+	// The CLOSE variant returns -1 away from characters, so a hover over the margin picks nothing.
+	return static_cast<int>(m_editor->send(sciMessage(SCI_POSITIONFROMPOINTCLOSE), viewportPos.x(), viewportPos.y()));
+}
+
+void ScintillaQtDirectBackend::ensureLineVisible(int line)
+{
+	if (!m_editor || line < 0 || line >= lineCount())
+		return;
+	if (m_editor->send(sciMessage(SCI_GETLINEVISIBLE), line) != 0)
+		return;
+	m_editor->send(sciMessage(SCI_ENSUREVISIBLE), line);
+	// Unfolding moves the text below without a VScroll update.
+	emit viewportScrolled();
+}
+
+hc::rst::syntax::RstMetadataCache* ScintillaQtDirectBackend::rstMetadataCache() const
+{
+	return m_rstLexer ? &m_rstLexer->metadataCache() : nullptr;
+}
+
+void ScintillaQtDirectBackend::invalidateStyling()
+{
+	if (!m_editor)
+		return;
+	// The next paint asks for the visible range only (Editor::StyleAreaBounded); Editor::IdleStyle() takes the rest
+	// in PositionAfterMaxStyling steps. SCI_COLOURISE would turn into one SCN_STYLENEEDED for the whole document.
+	m_editor->send(sciMessage(SCI_STARTSTYLING), 0);
+	m_editor->update();
+}
+
+void ScintillaQtDirectBackend::emitDocumentEdited(const bool inserted, const int position, const int length,
+												  const int linesAdded, const QByteArray& changedText)
+{
+	if (!m_editor)
+		return;
+	const int startLine = lineFromPosition(position);
+	const int startColumn = position - positionFromLine(startLine);
+	int oldEndLine = startLine;
+	int oldEndColumn = startColumn;
+	if (!inserted) {
+		// The notification arrives after the deletion, so the old end is rebuilt from the deleted text it carries.
+		// linesAdded is negative for a deletion.
+		oldEndLine = startLine - linesAdded;
+		const int lastNewline = static_cast<int>(changedText.lastIndexOf('\n'));
+		oldEndColumn = (lastNewline < 0) ? (startColumn + length) : (length - lastNewline - 1);
+	}
+	// changedText is a non-owning view (QByteArray::fromRawData): pass a deep copy.
+	emit documentEdited(startLine, startColumn, oldEndLine, oldEndColumn,
+						inserted ? QByteArray(changedText.constData(), changedText.size()) : QByteArray());
+}
+
+int ScintillaQtDirectBackend::literalSeedLine(int contextFirstLine) const
+{
+	if (!m_editor || contextFirstLine <= 0)
+		return qMax(0, contextFirstLine);
+	// A literal block is state carried between lines. The window is widened upwards to a non-empty line at
+	// column 0: literal bodies are indented deeper than their introduction, so such a line is outside the block.
+	// The limit keeps a very long code-block from stretching the window; past it only the literal colour is lost.
+	constexpr int kMaxSeedWalk = 500;
+	int line = contextFirstLine;
+	for (int walked = 0; line > 0 && walked < kMaxSeedWalk; ++walked) {
+		const sptr_t first = m_editor->send(sciMessage(SCI_GETCHARAT), positionFromLine(line));
+		if (first != ' ' && first != '\t' && first != '\r' && first != '\n' && first != 0)
+			break;
+		--line;
+	}
+	return line;
+}
+
+void ScintillaQtDirectBackend::handleStyleNeeded(int endPosition)
+{
+	if (!m_editor || !m_rstLexer)
+		return;
+	const int documentEnd = documentLength();
+	const int startPosition = static_cast<int>(m_editor->send(sciMessage(SCI_GETENDSTYLED)));
+	if (endPosition <= startPosition || startPosition >= documentEnd)
+		return;
+
+	const int totalLines = qMax(1, lineCount());
+	const int firstLine = lineFromPosition(startPosition);
+	const int lastLine = qMin(lineFromPosition(qMin(endPosition, documentEnd)), totalLines - 1);
+	// A title spans up to three lines (overline, title, underline): repaint from two lines above the edit.
+	const int paintFirstLine = qMax(0, firstLine - 2);
+	// The lexer needs two lines of context on both sides to tell titles from transitions.
+	const int contextFirstLine = literalSeedLine(qMax(0, paintFirstLine - 2));
+	const int contextLastLine = qMin(totalLines - 1, lastLine + 2);
+	const int contextStart = positionFromLine(contextFirstLine);
+	const int contextEnd = (contextLastLine + 1 < totalLines) ? positionFromLine(contextLastLine + 1) : documentEnd;
+
+	const QByteArray chunk = textRangeUtf8(contextStart, contextEnd);
+	if (chunk.isEmpty())
+		return;
+	const std::vector<unsigned char> styles =
+		m_rstLexer->styleBytes(std::string(chunk.constData(), static_cast<std::size_t>(chunk.size())));
+
+	const int paintStart = positionFromLine(paintFirstLine);
+	const int paintEnd = (lastLine + 1 < totalLines) ? positionFromLine(lastLine + 1) : documentEnd;
+	const int offset = paintStart - contextStart;
+	const int length = paintEnd - paintStart;
+	if (offset < 0 || length <= 0 || static_cast<std::size_t>(offset + length) > styles.size())
+		return;
+
+	m_editor->send(sciMessage(SCI_STARTSTYLING), paintStart);
+	m_editor->send(sciMessage(SCI_SETSTYLINGEX), static_cast<uptr_t>(length),
+		reinterpret_cast<sptr_t>(styles.data() + offset));
+}
+
+void ScintillaQtDirectBackend::applyRstSyntaxStyles()
+{
+	if (!m_editor)
+		return;
+	using namespace hc::rst::syntax;
+	auto& theme = ThemeManager::instance();
+	const auto fore = [this, &theme](int style, const char* token) {
+		const QColor color = theme.color(QStringLiteral("text.lexer.rst.%1").arg(QLatin1String(token)));
+		if (color.isValid())
+			m_editor->send(sciMessage(SCI_STYLESETFORE), style,
+				static_cast<sptr_t>(color.red() | (color.green() << 8) | (color.blue() << 16)));
+	};
+	const auto bold = [this](int style) { m_editor->send(sciMessage(SCI_STYLESETBOLD), style, 1); };
+	const auto italic = [this](int style) { m_editor->send(sciMessage(SCI_STYLESETITALIC), style, 1); };
+
+	fore(STYLE_TITLE, "title"); bold(STYLE_TITLE);
+	fore(STYLE_TRANSITION, "transition");
+	fore(STYLE_COMMENT, "comment"); italic(STYLE_COMMENT);
+	fore(STYLE_EXPLICIT_MARKUP, "explicitMarkup");
+	fore(STYLE_DIRECTIVE_VALID, "directiveValid"); bold(STYLE_DIRECTIVE_VALID);
+	fore(STYLE_DIRECTIVE_INVALID, "directiveInvalid"); bold(STYLE_DIRECTIVE_INVALID);
+	// Not known yet (the language server has not answered): quiet and slanted, never an error colour.
+	fore(STYLE_DIRECTIVE_UNKNOWN, "directiveUnknown"); italic(STYLE_DIRECTIVE_UNKNOWN);
+	fore(STYLE_ROLE_VALID, "roleValid");
+	fore(STYLE_ROLE_INVALID, "roleInvalid");
+	fore(STYLE_ROLE_UNKNOWN, "roleUnknown"); italic(STYLE_ROLE_UNKNOWN);
+	fore(STYLE_LITERAL, "literal");
+	fore(STYLE_INLINE_LITERAL, "inlineLiteral");
+	fore(STYLE_EMPHASIS, "emphasis"); italic(STYLE_EMPHASIS);
+	fore(STYLE_STRONG, "strong"); bold(STYLE_STRONG);
+	fore(STYLE_INTERPRETED, "interpreted");
+	fore(STYLE_HYPERLINK, "hyperlink");
+	m_editor->send(sciMessage(SCI_STYLESETUNDERLINE), STYLE_HYPERLINK, 1);
+	fore(STYLE_SUBSTITUTION, "substitution");
+	fore(STYLE_FIELD_NAME, "fieldName"); bold(STYLE_FIELD_NAME);
+}
+
+void ScintillaQtDirectBackend::updateContainerFoldLevels()
+{
+	if (!m_editor || m_foldSource == FoldSource::Lexer)
+		return;
+	// A scheduled update is older than this one.
+	if (m_containerFoldTimer != nullptr)
+		m_containerFoldTimer->stop();
+
+	if (!m_codeFoldingEnabled) {
+		// The margin is gone; text folded before stays hidden unless everything is expanded.
+		m_editor->send(sciMessage(SCI_FOLDALL), SC_FOLDACTION_EXPAND);
+		return;
+	}
+
+	constexpr int kContainerFoldMaxLines = 200000;
+	constexpr int kMaxFoldDepth = 0x3FF;
+	const int totalLines = lineCount();
+	if (totalLines <= 0 || totalLines > kContainerFoldMaxLines)
+		return;
+
+	const QByteArray text = textRangeUtf8(0, documentLength());
+	const std::vector<hc::rst::syntax::FoldLine> folds =
+		hc::rst::syntax::computeFoldLevels(std::string(text.constData(), static_cast<std::size_t>(text.size())));
+	const int lines = qMin(totalLines, static_cast<int>(folds.size()));
+
+	// Only lines whose level changed are sent. A different line count means another text: send all.
+	if (static_cast<int>(m_foldLevelCache.size()) != lines)
+		m_foldLevelCache.assign(static_cast<std::size_t>(lines), -1);
+	for (int line = 0; line < lines; ++line) {
+		const hc::rst::syntax::FoldLine& fold = folds[static_cast<std::size_t>(line)];
+		int level = SC_FOLDLEVELBASE + qBound(0, fold.level, kMaxFoldDepth);
+		if (fold.header)
+			level |= SC_FOLDLEVELHEADERFLAG;
+		if (fold.blank)
+			level |= SC_FOLDLEVELWHITEFLAG;
+		int& cached = m_foldLevelCache[static_cast<std::size_t>(line)];
+		if (cached == level)
+			continue;
+		cached = level;
+		m_editor->send(sciMessage(SCI_SETFOLDLEVEL), line, level);
+	}
+}
+
+void ScintillaQtDirectBackend::scheduleContainerFoldUpdate()
+{
+	if (!m_editor || m_foldSource == FoldSource::Lexer)
+		return;
+	// One title adornment changes the depth of every section below it, so levels are computed per document.
+	if (m_containerFoldTimer == nullptr) {
+		m_containerFoldTimer = new QTimer(this);
+		m_containerFoldTimer->setSingleShot(true);
+		m_containerFoldTimer->setInterval(200);
+		connect(m_containerFoldTimer, &QTimer::timeout, this, &ScintillaQtDirectBackend::updateContainerFoldLevels);
+	}
+	m_containerFoldTimer->start();
 }

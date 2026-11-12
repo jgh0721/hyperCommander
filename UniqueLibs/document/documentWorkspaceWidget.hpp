@@ -212,6 +212,11 @@ namespace hc::document
         std::function<int(const QString&)> closePrompt_;
         QString shellError_;
         void toggleEpubFullscreen();
+        // 미리보기 전체 화면( .md · .rst ): 창을 전체 화면으로 하고 활성 탭의 미리보기만 남긴다.
+        void togglePreviewFullscreen();
+        void showNewSphinxProjectDialog();
+        bool previewFullscreen_=false;
+        QList<QPointer<QWidget>> previewHidden_;
         bool epubFullscreen_=false,epubWasMaximized_=false;
         QRect epubWindowGeometry_;
         bool hotExitEnabled() const;

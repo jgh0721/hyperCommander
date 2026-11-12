@@ -4,10 +4,17 @@
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentShortcutRegistry.hpp"
+#include "rstProjectDialogs.hpp"
+#include "rst/pythonEnvManager.hpp"
+#include "rst/rstWorkspaceController.hpp"
 #include "tools/epub/render/readingSettings.hpp"
 #include <QDir>
 #include <QFileInfo>
 #include <QLineEdit>
+#include <QDesktopServices>
+#include <QFontDatabase>
+#include <QPlainTextEdit>
+#include <QUrl>
 #include "UniqueLibs/settings/unifiedConfig.hpp"
 #include <QAction>
 #include <QCheckBox>
@@ -73,7 +80,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
     auto* Body = new QHBoxLayout; Body->setContentsMargins(12, 12, 4, 12); Body->setSpacing(12);
     auto* List = new QListWidget(this); List->setObjectName("settingsCategories");
-    List->addItems({tr("공통"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("이미지 뷰어")}); List->setFixedWidth(180);
+    List->addItems({tr("공통"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("reStructuredText"),tr("이미지 뷰어")}); List->setFixedWidth(180);
     List->setProperty(fm::style::props::kSoftSelection, true); List->setFrameShape(QFrame::NoFrame);
     for (int Row = 0; Row < List->count(); ++Row) List->item(Row)->setSizeHint(QSize(0, 30));
     auto* Pages = new QStackedWidget(this); Body->addWidget(List); Body->addWidget(Pages, 1); Layout->addLayout(Body, 1);
@@ -120,7 +127,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* WindowCard = Card(General, tr("창"));
     Check(WindowCard, "documentViews/common/closeViewerOnEscape", tr("ESC 키를 눌러 창 닫기 (HyperViewer 전용)"));
     Combo(WindowCard, "documentViews/common/newDocumentAction", tr("Ctrl+N 동작"),
-        {tr("형식 선택 창 표시"), tr("텍스트 문서 바로 만들기"), tr("Markdown 문서 바로 만들기")}, {"ask", "text", "markdown"});
+        {tr("형식 선택 창 표시"), tr("텍스트 문서 바로 만들기"), tr("Markdown 문서 바로 만들기"), tr("reStructuredText 문서 바로 만들기")}, {"ask", "text", "markdown", "rst"});
     Note(WindowCard, tr("형식 선택 창은 마지막으로 만든 형식을 먼저 고릅니다. 열린 채 Ctrl+N을 다시 누르면 고른 형식을 만듭니다. "
         "형식별 명령(새 텍스트 문서 · 새 Markdown 문서 · 새 EPUB 책 · 새 이미지)은 단축키 페이지에서 키를 지정할 수 있습니다."));
     auto* Recent = Card(General, tr("최근 항목"));
@@ -384,6 +391,201 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     MdSpin(MdRender,MdPrefix+"debounceMs",tr("입력 후 갱신 지연 (ms)"),100,3000);Check(MdRender,MdPrefix+"remoteImages",tr("외부 이미지 자동 다운로드"));
     Note(MdRender,tr("수식·다이어그램 렌더러와 글꼴은 내장되어 오프라인에서도 표시합니다. 원문 HTML은 텍스트로 표시하며 스크립트는 실행하지 않습니다."));
     Markdown->addStretch();QTimer::singleShot(0,this,UpdateFonts);
+    // ── reStructuredText: 보기 · 미리보기 / 자동완성 · 언어 서버 / Python 환경 ──
+    {
+        const QString RstPrefix = "documentViews/rst/", RstFonts = RstPrefix + "previewFonts/";
+        auto* RstTabs = new QTabWidget(Pages); RstTabs->setObjectName("rstSettingsTabs");
+        auto RstPage = [&](const QString& Title) {
+            auto* Scroll = new QScrollArea(RstTabs); Scroll->setWidgetResizable(true); Scroll->setFrameShape(QFrame::NoFrame);
+            auto* Content = new QWidget(Scroll); auto* Column = new QVBoxLayout(Content); Column->setContentsMargins(8, 12, 8, 8); Column->setSpacing(12);
+            Scroll->setWidget(Content); RstTabs->addTab(Scroll, Title); return Column;
+        };
+        auto RstSpin = [&](QFormLayout* Form, const QString& Key, const QString& Label, int Low, int High, int Step = 1) {
+            auto* Field = new QSpinBox(this); Field->setRange(Low, High); Field->setSingleStep(Step); Field->setObjectName(Key);
+            Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); controls_[Key] = Field; Form->addRow(Label, Field); return Field;
+        };
+        auto RstLine = [&](QFormLayout* Form, const QString& Key, const QString& Label, const QString& Placeholder = {}) {
+            auto* Field = new QLineEdit(this); Field->setObjectName(Key); Field->setPlaceholderText(Placeholder);
+            Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); controls_[Key] = Field;
+            if (!Label.isEmpty()) Form->addRow(Label, Field);
+            return Field;
+        };
+        // 1) 보기 · 미리보기
+        auto* ViewPage = RstPage(tr("보기 · 미리보기"));
+        auto* RstView = Card(ViewPage, tr("보기 · 개요"));
+        Combo(RstView, RstPrefix + "viewerMode", tr("HyperViewer 기본 보기"), {tr("미리보기"), tr("소스")}, {"preview", "source"});
+        Combo(RstView, RstPrefix + "editorMode", tr("HyperEditor 기본 보기"), {tr("나란히 보기"), tr("소스"), tr("미리보기")}, {"split", "source", "preview"});
+        Check(RstView, RstPrefix + "editorOutline", tr("HyperEditor에서 개요 표시"));
+        Combo(RstView, RstPrefix + "outlineTab", tr("개요 기본 탭"), {tr("자동"), tr("활성 문서"), tr("프로젝트")}, {"auto", "document", "project"});
+        RstSpin(RstView, RstPrefix + "outlineDepth", tr("개요 깊이 (0은 제한 없음)"), 0, 9)->setSuffix(tr(" 단계"));
+        Check(RstView, RstPrefix + "scrollSync", tr("스크롤 동기화"));
+        Combo(RstView, RstPrefix + "problemsPanel", tr("진단 패널"), {tr("문제가 있으면 열기"), tr("직접 열기")}, {"auto", "manual"});
+        auto* RstBuild = Card(ViewPage, tr("미리보기 빌드"));
+        Check(RstBuild, RstPrefix + "autoPreview", tr("입력 후 미리보기 자동 갱신"));
+        RstSpin(RstBuild, RstPrefix + "debounceMs", tr("갱신 지연"), 100, 5000, 50)->setSuffix(QStringLiteral(" ms"));
+        Check(RstBuild, RstPrefix + "applyUnsavedEdits", tr("저장하지 않은 편집을 미리보기에 반영"));
+        RstSpin(RstBuild, RstPrefix + "unsavedEditMaxReadMs", tr("재파싱 허용 시간 (0은 제한 없음)"), 0, 60000, 100)->setSuffix(QStringLiteral(" ms"));
+        Check(RstBuild, RstPrefix + "stubDoxygenWhileTyping", tr("타이핑 중에는 doxygen 지시어 생략"));
+        Check(RstBuild, RstPrefix + "skipUnchangedBuild", tr("바뀐 것이 없으면 빌드 생략"));
+        Check(RstBuild, RstPrefix + "unlimitedWidth", tr("본문 너비 제한 해제"));
+        Check(RstBuild, RstPrefix + "allowRemoteContent", tr("인터넷에서 스크립트 · 스타일 · 이미지 불러오기"));
+        Note(RstBuild, tr("끄면 미리보기가 외부로 요청을 보내지 않습니다. CDN으로 그리는 수식과 다이어그램은 원문 그대로 남습니다."));
+        auto* RstVirtual = Card(ViewPage, tr("가상 프로젝트"));
+        {
+            QStringList Labels{tr("다른 프로젝트와 동일")}; QVariantList Values{QString()};
+            for (const auto& Theme : SphinxThemeNames()) { Labels << Theme; Values << Theme; }
+            Combo(RstVirtual, RstPrefix + "virtualProjectTheme", tr("테마"), Labels, Values);
+        }
+        Note(RstVirtual, tr("conf.py가 없는 단독 문서는 임시 Sphinx 프로젝트로 미리보기합니다."));
+        auto* RstFont = Card(ViewPage, tr("미리보기 글꼴 (.RST)"));
+        Check(RstFont, RstFonts + "enabled", tr("글꼴 사용자 설정 사용"));
+        Combo(RstFont, RstFonts + "mode", tr("글꼴 적용"), {tr("문서 글꼴 (없으면 웹뷰 기본)"), tr("웹뷰 기본"), tr("사용자 글꼴")}, {"document", "web", "user"});
+        for (const auto& Pair : {std::pair{"bodyFamily", tr("본문 글꼴")}, std::pair{"codeFamily", tr("코드 글꼴")}}) {
+            auto* Field = new QFontComboBox(this); const QString Key = RstFonts + Pair.first; Field->setObjectName(Key);
+            Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key));
+            Field->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); Field->setMinimumContentsLength(12);
+            controls_[Key] = Field; RstFont->addRow(Pair.second, Field);
+        }
+        RstSpin(RstFont, RstFonts + "bodySizePt", tr("본문 크기 (pt)"), 8, 72); RstSpin(RstFont, RstFonts + "codeSizePt", tr("코드 크기 (pt)"), 8, 72);
+        auto* RstSpacing = new QDoubleSpinBox(this); RstSpacing->setRange(1., 3.); RstSpacing->setSingleStep(.1); RstSpacing->setDecimals(2);
+        RstSpacing->setObjectName(RstFonts + "lineHeight"); RstSpacing->setProperty("defaultValue", hc::defaults::edit::ViewValue("rst/previewFonts/lineHeight"));
+        controls_[RstSpacing->objectName()] = RstSpacing; RstFont->addRow(tr("본문 행간"), RstSpacing);
+        Check(RstFont, RstFonts + "headings", tr("제목에도 선택한 글꼴 적용"));
+        Note(RstFont, tr("미리보기에만 적용합니다. 문서 글꼴을 선택하거나 사용자 설정을 끄면 Sphinx 테마의 글꼴로 돌아갑니다."));
+        auto UpdateRstFonts = [this, RstFonts] {
+            const bool Enabled = qobject_cast<QCheckBox*>(controls_[RstFonts + "enabled"])->isChecked();
+            auto* Mode = qobject_cast<QComboBox*>(controls_[RstFonts + "mode"]); Mode->setEnabled(Enabled);
+            const bool Custom = Enabled && Mode->currentData() == "user", Override = Enabled && Mode->currentData() != "document";
+            for (const auto& Key : {"bodyFamily", "codeFamily", "bodySizePt", "codeSizePt"}) controls_[RstFonts + Key]->setEnabled(Custom);
+            for (const auto& Key : {"lineHeight", "headings"}) controls_[RstFonts + Key]->setEnabled(Override);
+        };
+        connect(qobject_cast<QCheckBox*>(controls_[RstFonts + "enabled"]), &QCheckBox::toggled, this, UpdateRstFonts);
+        connect(qobject_cast<QComboBox*>(controls_[RstFonts + "mode"]), &QComboBox::currentIndexChanged, this, UpdateRstFonts);
+        ViewPage->addStretch(); QTimer::singleShot(0, this, UpdateRstFonts);
+
+        // 2) 자동완성 · 언어 서버
+        auto* ServerPage = RstPage(tr("자동완성 · 언어 서버"));
+        auto* RstComplete = Card(ServerPage, tr("자동완성"));
+        Check(RstComplete, RstPrefix + "completion/autoTrigger", tr("입력 중 자동으로 제안"));
+        Check(RstComplete, RstPrefix + "completion/imagePreview", tr("경로 제안에 이미지 미리보기 표시"));
+        Check(RstComplete, RstPrefix + "completion/termHover", tr(":term: 위에서 용어 정의 표시"));
+        Note(RstComplete, tr("자동 완성 단축키로는 언제나 열 수 있습니다. 내장 표(지시어 · 롤)를 먼저 보여 주고 언어 서버 결과가 오면 바꿉니다."));
+        auto* RstServer = Card(ServerPage, tr("언어 서버 (Esbonio)"));
+        Check(RstServer, RstPrefix + "languageServer", tr("언어 서버 사용"));
+        RstSpin(RstServer, RstPrefix + "maxLspProcesses", tr("동시에 유지할 서버 수"), 1, 8);
+        RstLine(RstServer, RstPrefix + "buildDirName", tr("내부 빌드 폴더"), QStringLiteral("_build/hypereditor"));
+        Note(RstServer, tr("프로젝트마다 서버를 하나씩 띄웁니다. 개수를 넘으면 가장 오래 쓰지 않은 프로젝트의 서버를 끝냅니다. 끄면 진단은 Sphinx 빌드 결과만 나옵니다. 내부 빌드 폴더는 프로젝트 폴더 아래에 만들어지며 미리보기와 언어 서버의 산출물을 둡니다."));
+        auto* RstSyntax = Card(ServerPage, tr("구문 강조"));
+        Note(RstSyntax, tr("색은 텍스트 편집기 › 색상에서 언어를 reStructuredText로 고르면 바꿀 수 있습니다. 지시어와 롤은 확인됨 · 알 수 없음 · 아직 모름 세 상태를 따로 칠합니다."));
+        ServerPage->addStretch();
+
+        // 3) Python 환경
+        auto* EnvPage = RstPage(tr("Python 환경"));
+        auto* Environment = hc::rst::RstWorkspace()->pythonEnvironment();
+        auto* RstState = Card(EnvPage, tr("상태"));
+        const auto Value = [this, RstState](const QString& Label, const char* Name) {
+            auto* Field = new QLabel(this); Field->setObjectName(QString::fromLatin1(Name)); Field->setTextInteractionFlags(Qt::TextSelectableByMouse); Field->setWordWrap(true);
+            RstState->addRow(Label, Field); return Field;
+        };
+        auto* StateText = Value(tr("상태"), "rstEnvState"); auto* UvText = Value(tr("uv"), "rstEnvUv");
+        auto* PythonText = Value(tr("Python"), "rstEnvPython"); auto* SphinxText = Value(tr("Sphinx"), "rstEnvSphinx");
+        auto* EsbonioText = Value(tr("Esbonio"), "rstEnvEsbonio"); auto* FolderText = Value(tr("환경 폴더"), "rstEnvFolder");
+        auto* EnvButtons = new QHBoxLayout; EnvButtons->setSpacing(6);
+        auto* Configure = new QPushButton(this); Configure->setObjectName("rstEnvConfigure"); fm::style::setSmall(Configure);
+        auto* OpenFolder = new QPushButton(tr("환경 폴더 열기"), this); OpenFolder->setObjectName("rstEnvOpenFolder"); fm::style::setSmall(OpenFolder);
+        auto* Remove = new QPushButton(tr("환경 삭제…"), this); Remove->setObjectName("rstEnvRemove"); fm::style::setSmall(Remove);
+        EnvButtons->addWidget(Configure); EnvButtons->addWidget(OpenFolder); EnvButtons->addWidget(Remove); EnvButtons->addStretch();
+        RstState->addRow(EnvButtons);
+        auto* RstUv = Card(EnvPage, tr("uv"));
+        Combo(RstUv, RstPrefix + "python/uvAcquire", tr("uv 받는 방법"), {tr("확인 후 내려받기"), tr("묻지 않고 내려받기"), tr("내려받지 않음")}, {"ask", "auto", "never"});
+        Check(RstUv, RstPrefix + "python/useExternalUv", tr("직접 지정한 uv 사용"));
+        auto* UvPath = RstLine(RstUv, RstPrefix + "python/externalUvPath", {}, tr("uv.exe 경로"));
+        auto* UvBrowse = new QPushButton(tr("찾기…"), this); UvBrowse->setObjectName("rstUvBrowse"); fm::style::setSmall(UvBrowse);
+        auto* UvRow = new QHBoxLayout; UvRow->setSpacing(6); UvRow->addWidget(UvPath, 1); UvRow->addWidget(UvBrowse);
+        RstUv->addRow(tr("uv 경로"), UvRow);
+        Note(RstUv, tr("astral.sh 공식 배포처에서 고정 버전을 받아 해시를 확인합니다. 내려받지 않음을 고르면 직접 지정한 uv만 씁니다."));
+        auto* UseUv = qobject_cast<QCheckBox*>(controls_[RstPrefix + "python/useExternalUv"]);
+        const auto SyncUv = [UseUv, UvPath, UvBrowse] { UvPath->setEnabled(UseUv->isChecked()); UvBrowse->setEnabled(UseUv->isChecked()); };
+        connect(UseUv, &QCheckBox::toggled, this, SyncUv); QTimer::singleShot(0, this, SyncUv);
+        connect(UvBrowse, &QPushButton::clicked, this, [this, UvPath] {
+            const auto Path = QFileDialog::getOpenFileName(this, tr("uv 실행 파일"), UvPath->text(), tr("uv (uv.exe);;실행 파일 (*.exe)"));
+            if (!Path.isEmpty()) UvPath->setText(QDir::toNativeSeparators(Path));
+        });
+        auto* RstPackages = Card(EnvPage, tr("패키지"));
+        Check(RstPackages, RstPrefix + "python/installOptionalThemes", tr("테마 묶음 설치 (furo · sphinx-rtd-theme · pydata 등)"));
+        Check(RstPackages, RstPrefix + "python/installOptionalExtensions", tr("확장 묶음 설치 (myst-parser · sphinx-design 등)"));
+        auto* Extra = new QLabel(this); Extra->setObjectName("rstEnvExtraPackages"); Extra->setWordWrap(true); Extra->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        RstPackages->addRow(tr("추가 패키지"), Extra);
+        Note(RstPackages, tr("묶음을 바꾸면 다음 구성(재구성)부터 반영됩니다. 추가 패키지는 미리보기의 ‘설치’ 안내로 넣은 것입니다."));
+        auto* RstLog = Card(EnvPage, tr("구성 로그"));
+        auto* Log = new QPlainTextEdit(this); Log->setObjectName("rstEnvLog"); Log->setReadOnly(true); Log->setMaximumBlockCount(2000);
+        Log->setMinimumHeight(120); Log->setLineWrapMode(QPlainTextEdit::NoWrap); Log->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        Log->setPlaceholderText(tr("구성을 시작하면 진행 내용이 여기에 나옵니다."));
+        RstLog->addRow(Log);
+        EnvPage->addStretch();
+        // 설치된 배포판의 버전: site-packages 의 <이름>-<버전>.dist-info 폴더 이름에서 읽는다.
+        const auto Installed = [Environment](const QString& Name) {
+            const QDir Packages(Environment->venvDir() + QStringLiteral("/Lib/site-packages"));
+            const auto Found = Packages.entryList({Name + QStringLiteral("-*.dist-info")}, QDir::Dirs);
+            return Found.isEmpty() ? QString() : Found.first().mid(Name.size() + 1).chopped(10);
+        };
+        const auto PythonVersion = [Environment] {
+            QFile Config(Environment->venvDir() + QStringLiteral("/pyvenv.cfg"));
+            if (!Config.open(QIODevice::ReadOnly | QIODevice::Text)) return QString();
+            for (const auto& Line : QString::fromUtf8(Config.readAll()).split('\n'))
+                if (Line.startsWith(QLatin1String("version"))) return Line.section('=', 1).trimmed();
+            return QString();
+        };
+        const auto RefreshEnvironment = [=] {
+            const bool Ready = Environment->isReady(), Busy = Environment->isBusy();
+            const QString None = tr("—");
+            StateText->setText(Ready && Environment->configuredDate().isValid() ? tr("%1 · %2 구성").arg(Environment->stateText(), Environment->configuredDateText())
+                               : Environment->lastError().isEmpty() ? Environment->stateText() : Environment->stateText() + QStringLiteral(" · ") + Environment->lastError());
+            UvText->setText(Environment->uvDescription());
+            const auto Python = Ready ? PythonVersion() : QString(), Sphinx = Ready ? Installed(QStringLiteral("sphinx")) : QString(),
+                       Esbonio = Ready ? Installed(QStringLiteral("esbonio")) : QString();
+            PythonText->setText(Python.isEmpty() ? None : Python); SphinxText->setText(Sphinx.isEmpty() ? None : Sphinx); EsbonioText->setText(Esbonio.isEmpty() ? None : Esbonio);
+            FolderText->setText(QDir::toNativeSeparators(Environment->runtimeRoot()));
+            Extra->setText(Environment->extraPackages().isEmpty() ? tr("없음") : Environment->extraPackages().join(QStringLiteral(", ")));
+            Configure->setText(Busy ? tr("취소") : Ready ? tr("재구성") : tr("환경 구성"));
+            Remove->setEnabled(!Busy && QFileInfo(Environment->runtimeRoot()).isDir());
+        };
+        connect(Environment, &hc::rst::PythonEnvManager::stateChanged, this, RefreshEnvironment);
+        connect(Environment, &hc::rst::PythonEnvManager::bootstrapLog, Log, &QPlainTextEdit::appendPlainText);
+        connect(Environment, &hc::rst::PythonEnvManager::progressChanged, this, [StateText, Environment](const int Percent, const QString& Phase) {
+            if (Environment->isBusy()) StateText->setText(Percent >= 0 ? tr("%1 (%2%)").arg(Phase.isEmpty() ? Environment->stateText() : Phase).arg(Percent) : (Phase.isEmpty() ? Environment->stateText() : Phase));
+        });
+        connect(Configure, &QPushButton::clicked, this, [this, Environment] {
+            if (Environment->isBusy()) { Environment->cancel(); return; }
+            // 이 페이지에서 바꾼 uv · 묶음 설정은 저장해야 반영된다. 저장하지 않은 값으로 구성하지 않는다.
+            if (Environment->isReady() && hc::ui::MessageDialog::question(this, tr("Python 환경 재구성"),
+                    tr("Python · Sphinx · Esbonio 환경을 다시 구성합니다. 패키지를 다시 확인하고 필요한 것을 내려받습니다. 계속할까요?")) != QMessageBox::Yes) return;
+            if (!Environment->isReady() && Environment->needsUvDownload()
+                && hc::ui::MessageDialog::question(this, tr("Python 환경 구성"),
+                    tr("uv를 공식 배포처(astral.sh)에서 내려받고 Python · Sphinx · Esbonio를 설치합니다. 수백 MB를 내려받습니다. 계속할까요?")) != QMessageBox::Yes) return;
+            hc::rst::RstWorkspace()->stopLanguageServers();
+            Environment->configureEnvironmentAsync(Environment->isReady());
+        });
+        connect(OpenFolder, &QPushButton::clicked, this, [Environment] {
+            QDir().mkpath(Environment->runtimeRoot()); QDesktopServices::openUrl(QUrl::fromLocalFile(Environment->runtimeRoot()));
+        });
+        connect(Remove, &QPushButton::clicked, this, [this, Environment, RefreshEnvironment] {
+            if (hc::ui::MessageDialog::question(this, tr("환경 삭제"),
+                    tr("Python 환경 폴더를 삭제합니다. 내려받은 uv, Python, Sphinx · Esbonio 패키지가 모두 지워지고 미리보기와 언어 서버가 꺼집니다. 다시 쓰려면 환경을 새로 구성해야 합니다.\n\n%1\n\n삭제할까요?")
+                        .arg(QDir::toNativeSeparators(Environment->runtimeRoot()))) != QMessageBox::Yes) return;
+            hc::rst::RstWorkspace()->stopLanguageServers();
+            QString Error;
+            if (!Environment->removeEnvironment(&Error)) hc::ui::MessageDialog::warning(this, tr("환경 삭제"), Error);
+            RefreshEnvironment();
+        });
+        QTimer::singleShot(0, this, RefreshEnvironment);
+        // 머리글( 제목 · 설명 )은 다른 페이지와 같은 모양으로 탭 위에 둔다.
+        auto* RstHolder = new QWidget(Pages); auto* RstColumn = new QVBoxLayout(RstHolder); RstColumn->setContentsMargins(0, 0, 8, 0); RstColumn->setSpacing(12);
+        auto* RstHeader = new fm::ui::DialogHeader(RstHolder); RstHeader->setTitle(tr("reStructuredText"));
+        RstHeader->setSubtitle(tr("Sphinx 미리보기와 개요, 자동완성과 언어 서버, Python 환경을 설정합니다.")); RstHeader->setSubtitleWrap(true);
+        RstColumn->addWidget(RstHeader); RstColumn->addWidget(RstTabs, 1);
+        Pages->addWidget(RstHolder);
+    }
     auto* ImagePage = Page(tr("이미지 뷰어"), tr("이미지와 코믹 읽기 설정을 관리합니다."));
     auto* ComicCard = Card(ImagePage, tr("읽기 설정"));
     Check(ComicCard, "documentViews/imageView/comic/coverAlone", tr("표지 단독"));
@@ -419,7 +621,20 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
             }
             return;
         }
-        if(List->currentRow()==5){qobject_cast<QCheckBox*>(controls_["documentViews/imageView/comic/coverAlone"])->setChecked(hc::defaults::edit::ViewValue("imageView/comic/coverAlone").toBool());return;}
+        if(List->currentRow()==6){qobject_cast<QCheckBox*>(controls_["documentViews/imageView/comic/coverAlone"])->setChecked(hc::defaults::edit::ViewValue("imageView/comic/coverAlone").toBool());return;}
+        // reStructuredText: 이 페이지의 값만 기본값으로. 프로젝트별 Python 지정과 추가 패키지 · 창 배치는 남긴다.
+        if(List->currentRow()==5){
+            for(auto I=controls_.begin();I!=controls_.end();++I)if(I.key().startsWith("documentViews/rst/")){
+                const auto Default=hc::defaults::edit::SettingValue(I.key());
+                if(auto* Font=qobject_cast<QFontComboBox*>(I.value()))Font->setCurrentFont(QFont(Default.toString()));
+                else if(auto* Box=qobject_cast<QComboBox*>(I.value()))Box->setCurrentIndex(qMax(0,Box->findData(Default)));
+                else if(auto* Number=qobject_cast<QSpinBox*>(I.value()))Number->setValue(Default.toInt());
+                else if(auto* Real=qobject_cast<QDoubleSpinBox*>(I.value()))Real->setValue(Default.toDouble());
+                else if(auto* Toggle=qobject_cast<QCheckBox*>(I.value()))Toggle->setChecked(Default.toBool());
+                else if(auto* Line=qobject_cast<QLineEdit*>(I.value()))Line->setText(Default.toString());
+            }
+            return;
+        }
         if(List->currentRow()==4){const auto Original=base_;base_=values();settings::UnifiedConfig::Set(base_,{"documentViews","markdown"},QJsonObject{});loadControls();base_=Original;return;}
         if (List->currentRow() == 2) { for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control)) Field->setKeySequence(QKeySequence(Field->property("defaultValue").toString())); return; }
         imported_ = {}; const auto Original = base_; base_ = hc::defaults::edit::DefaultDocument(); loadControls(); base_ = Original;
@@ -496,6 +711,8 @@ QColor DocumentSettingsDialog::textDraftColor(const QString& Key) const
     if (Value.isUndefined() && Key.startsWith("text.lexer.")) {
         const QColor Legacy(legacyTextColors_[Mode].toObject()[Key].toString()); if (Legacy.isValid()) return Legacy;
     }
+    if (Key.startsWith("text.lexer.rst."))
+        return ThemeManager::defaultColors(Mode == "dark" ? ThemeManager::Dark : ThemeManager::Light).value(Key);
     if (Key.startsWith("text.lexer.") && Key.count('.') > 2) {
         const auto* Profile = TextLexerRegistry::instance().profileForDisplayName(colorLanguage_->currentData().toString());
         if (Profile && Profile->languageId != Profile->lexerKey) {
@@ -519,6 +736,10 @@ void DocumentSettingsDialog::refreshTextColorRows()
     if (!Profile) {
         for (const auto& Entry : ThemeManager::editableColorEntries())
             if (Entry.key.startsWith("text.") && Entry.key.count('.') <= 2) Rows.append({Entry.key, QString(Entry.label).remove("Text ").replace("편집기 배경", tr("본문 배경")).replace("Lexer ", tr("구문 · "))});
+    } else if (Profile->lexerKey == "rst-container") {
+        // The reST lexer has its own style set, listed in the order of ThemeManager::editableColorEntries().
+        for (const auto& Entry : ThemeManager::editableColorEntries())
+            if (Entry.key.startsWith("text.lexer.rst.")) Rows.append({Entry.key, QString(Entry.label).remove("reST ")});
     } else {
         QSet<QString> Tokens; for (const auto& Token : Profile->styles) Tokens.insert(Token);
         for (const auto& Entry : ThemeManager::editableColorEntries()) if (Entry.key.startsWith("text.lexer.") && Entry.key.count('.') == 2) {
@@ -576,6 +797,7 @@ void DocumentSettingsDialog::refreshTextColorPreview()
     else if (Lexer == "xml" || Lexer == "hypertext") Sample = "<!-- comment -->\n<book title=\"sample\">\n  <chapter>Text</chapter>\n</book>\n";
     else if (Lexer == "json") Sample = "{\n  \"name\": \"sample\",\n  \"count\": 42, \"ready\": true\n}\n";
     else if (Lexer == "yaml") Sample = "# comment\nname: sample\ncount: 42\nready: true\n";
+    else if (Lexer == "rst-container") Sample = QStringLiteral(".. _sample:\n\n제목\n====\n\n*강조*, **굵게**, ``리터럴``, :ref:`sample`, |release|, `링크 <https://example.com>`_\n\n.. note::\n   :class: tip\n\n   본문::\n\n      literal block\n\n----\n");
     colorPreview_->setReadOnly(false); colorPreview_->setText(Sample); colorPreview_->applyLanguage(PreviewLanguage);
     const auto TextSettings = settings::UnifiedConfig::Value(base_, {"documentViews", "textView"}).toObject();
     colorPreview_->setEditorFont(QFont(TextSettings["fontFamily"].toString(hc::defaults::edit::SettingsPreviewFont()["family"].toString()), qBound(9, TextSettings["fontSize"].toInt(hc::defaults::edit::SettingsPreviewFont()["pointSize"].toInt()), 16)));
@@ -608,7 +830,7 @@ void DocumentSettingsDialog::refreshTextColorPreview()
 
 void DocumentSettingsDialog::ShowPage(const QString& Key)
 {
-    static const QStringList Keys{"common", "text", "shortcuts", "epub", "markdown", "image"};
+    static const QStringList Keys{"common", "text", "shortcuts", "epub", "markdown", "rst", "image"};
     if (auto* List = findChild<QListWidget*>("settingsCategories"); List && Keys.contains(Key)) List->setCurrentRow(int(Keys.indexOf(Key)));
 }
 void DocumentSettingsDialog::loadControls()
