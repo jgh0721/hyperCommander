@@ -283,6 +283,14 @@ namespace hc::document
         }
         if(Escape && !Retired) {emit EscapeRequested();if(!Guard)return;}
         if(Fullscreen && !Retired){emit FullscreenRequested();if(!Guard)return;}
+        // The reader keeps its last few window shortcuts with growing serials: two presses between polls both arrive.
+        QStringList Commands;
+        for(const auto& Value:State["hostCommands"].toArray()) {
+            const auto Entry=Value.toObject();const auto Serial=Entry["serial"].toInteger();
+            if(Serial<=hostCommandSerial_ || !Entry["id"].isString())continue;
+            hostCommandSerial_=Serial;if(!Retired)Commands.append(Entry["id"].toString().left(64));
+        }
+        for(const auto& Id:Commands){emit HostCommandRequested(Id);if(!Guard)return;}
         // Serials only grow (the reader numbers frame and margin requests together); each one is shown once.
         const auto Context=State["contextRequest"].toObject();const auto ContextSerial=Context["serial"].toInteger();
         const bool ContextMenu=ContextSerial>contextSerial_ && !Retired;if(ContextSerial>contextSerial_)contextSerial_=ContextSerial;

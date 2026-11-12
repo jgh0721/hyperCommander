@@ -4,7 +4,12 @@
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/documentTextCodec.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
+#include "core/AppSettings.h"
+#include "../nativeTestInput.hpp"
 #include <QtCore/private/qzipwriter_p.h>
+#include <QTabBar>
+#include <atomic>
+#include <thread>
 #include <QComboBox>
 #include <QtTest>
 #include <QApplication>
@@ -194,6 +199,89 @@ private slots:
                 Undo->click();QTRY_VERIFY_WITH_TIMEOUT(!Panel->Busy(),15000);QCOMPARE(Pane->SearchText(),QString("hello hello\r\n"));
             }
             Window.Handle({{"action", "close"}, {"documentId", Id}, {"discard", true}});
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(search::Panel::AllStopped(), 10000);
+    }
+    // The settings dialog shows "콘텐츠 탭 (기본)" when the key is absent; the workspace opens the same place.
+    void findInFilesFollowsSetting_data() {
+        QTest::addColumn<QString>("Stored");QTest::addColumn<bool>("InTab");
+        QTest::newRow("absent")<<QString()<<true;QTest::newRow("tab")<<QString("tab")<<true;QTest::newRow("bottom")<<QString("bottom")<<false;
+    }
+    void findInFilesFollowsSetting() {
+        QFETCH(QString,Stored);QFETCH(bool,InTab);
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        qApp->setProperty("documentViewsConfigDir", Directory.filePath("settings"));
+        if (!Stored.isEmpty()) { AppSettings Settings; Settings.setValue("textView/findInFiles/openLocation", Stored); Settings.sync(); }
+        const auto Path = Directory.filePath("a.txt"); { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("alpha\r\n"); }
+        {
+            DocumentWorkspaceWidget Window(Directory.filePath("recovery")); Window.resize(1000, 700); Window.show();
+            Window.SetClosePrompt([](const QString&) { return 1; });
+            QVERIFY(!Window.Handle({{"action", "open"}, {"path", Path}})["documentId"].toString().isEmpty());
+            QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 15000);
+            QTest::keyClick(&Window, Qt::Key_F, Qt::ControlModifier | Qt::ShiftModifier);
+            auto* Panel = Window.findChild<search::Panel*>(); QVERIFY(Panel); QTRY_VERIFY(Panel->isVisible());
+            auto* Tabs = Window.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs);
+            QCOMPARE(Tabs->currentWidget() == Panel, InTab);
+            QCOMPARE(Panel->parentWidget() == Window.findChild<QDockWidget*>("documentSearchDock"), !InTab);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(search::Panel::AllStopped(), 10000);
+    }
+    // A window of another thread under a pane keeps the Win32 keyboard when its tab is hidden, as the EPUB
+    // reader process does. Qt never saw it as a focus widget, so each way of leaving the tab must hand it back.
+    void foreignFocusLeavesHiddenTab() {
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        qApp->setProperty("documentViewsConfigDir", Directory.filePath("settings"));
+        const auto Put = [](const QString& Path, const QByteArray& Bytes) { QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
+        const auto A = Directory.filePath("a.txt"), B = Directory.filePath("b.txt"); QVERIFY(Put(A, "alpha\r\n")); QVERIFY(Put(B, "beta\r\n"));
+        {
+            DocumentWorkspaceWidget Window(Directory.filePath("recovery")); Window.resize(1000, 700); Window.show();
+            Window.SetClosePrompt([](const QString&) { return 1; });
+            QVERIFY(QTest::qWaitForWindowExposed(&Window));
+            const auto IdA = Window.Handle({{"action", "open"}, {"path", A}})["documentId"].toString();
+            const auto IdB = Window.Handle({{"action", "open"}, {"path", B}})["documentId"].toString();
+            QVERIFY(!IdA.isEmpty() && !IdB.isEmpty()); QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 15000);
+            const auto Root = reinterpret_cast<HWND>(Window.winId());
+            QVERIFY2(ActivateTestWindow(Root), "An active input desktop is required for native focus coverage");
+            auto* Tabs = Window.findChild<QTabWidget*>("documentTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 2);
+            const auto PaneOf = [&](int Index) { return qobject_cast<DocumentViewPane*>(Tabs->widget(Index)); };
+            QVERIFY(PaneOf(0) && PaneOf(1));
+            // The stand-in reader: a child window created and pumped by its own thread inside pane A.
+            auto* Host = new QWidget(PaneOf(0)); Host->setGeometry(0, 0, 240, 120); Host->show();
+            const auto HostWindow = reinterpret_cast<HWND>(Host->winId());
+            std::atomic<HWND> Reader{}; std::atomic<bool> Stop{}, Stopped{};
+            std::thread Thread([&] {
+                Reader = CreateWindowExW(0, L"STATIC", L"foreign reader", WS_CHILD | WS_VISIBLE, 0, 0, 200, 100, HostWindow, nullptr, GetModuleHandleW(nullptr), nullptr);
+                MSG Message{}; while (!Stop) { while (PeekMessageW(&Message, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&Message); Sleep(2); }
+                if (Reader) DestroyWindow(Reader);
+                Stopped = true;
+            });
+            // DestroyWindow notifies the parent on this thread: keep pumping until the reader thread is done.
+            const auto Join = qScopeGuard([&] { Stop = true; (void)QTest::qWaitFor([&] { return Stopped.load(); }, 5000); Thread.join(); });
+            QTRY_VERIFY(Reader.load());
+            // Qt's focus widget sits outside the reader's page, as after a click into the reader.
+            const auto EnterReader = [&] {
+                Window.Handle({{"action", "activate"}, {"documentId", IdA}});
+                if (Tabs->currentIndex() != 0 || !ActivateTestWindow(Root)) return false;
+                Tabs->tabBar()->setFocus(Qt::OtherFocusReason); SetFocus(Reader.load());
+                return GetFocus() == Reader.load();
+            };
+            const auto KeyboardInB = [&] {
+                const auto Focus = GetFocus(); auto* Widget = QApplication::focusWidget();
+                return Focus && GetWindowThreadProcessId(Focus, nullptr) == GetCurrentThreadId() && Widget && PaneOf(1)->isAncestorOf(Widget);
+            };
+            QVERIFY(EnterReader());
+            QTest::mouseClick(Tabs->tabBar(), Qt::LeftButton, {}, Tabs->tabBar()->tabRect(1).center());
+            QCOMPARE(Tabs->currentIndex(), 1); QTRY_VERIFY(KeyboardInB());
+            QVERIFY(EnterReader());
+            Window.Handle({{"action", "activate"}, {"documentId", IdB}}); QTRY_VERIFY(KeyboardInB());
+            // A switch that did not release first (a wheel over the tab bar) repairs afterwards.
+            QVERIFY(EnterReader());
+            Tabs->setCurrentIndex(1); QTRY_VERIFY(KeyboardInB());
+            QVERIFY(EnterReader());
+            QTest::keyClick(&Window, Qt::Key_F, Qt::ControlModifier | Qt::ShiftModifier);
+            auto* Panel = Window.findChild<search::Panel*>(); QVERIFY(Panel); QTRY_COMPARE(Tabs->currentWidget(), static_cast<QWidget*>(Panel));
+            auto* Query = Panel->findChild<QLineEdit*>("documentSearchQuery"); QVERIFY(Query);
+            QTRY_VERIFY(Query->hasFocus() && GetFocus() && GetWindowThreadProcessId(GetFocus(), nullptr) == GetCurrentThreadId());
         }
         QTRY_VERIFY_WITH_TIMEOUT(search::Panel::AllStopped(), 10000);
     }

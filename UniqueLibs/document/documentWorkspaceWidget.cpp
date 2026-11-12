@@ -466,19 +466,33 @@ namespace hc::document
             if (searchPanel_ && tabs_->widget(Index) == searchPanel_) { tabs_->removeTab(Index); searchPanel_->hide(); return; }
             auto* Pane = tabs_->widget(Index); for (std::size_t At = 0; At < documents_.size(); ++At) if (documents_[At]->pane_ == Pane) { closeTab(int(At)); break; }
         });
+        // A click switches the tab after this signal: the shown pane gives up the keyboard while still visible.
+        connect(tabs_, &QTabWidget::tabBarClicked, this, [this](int Index) { if (Index >= 0 && Index != tabs_->currentIndex()) releaseFocusFrom(active()); });
         connect(tabs_, &QTabWidget::currentChanged, this, [this] {
+            bool Refocus = std::exchange(focusReleased_, false);
+            // Fallback for switches that did not release first: a hidden foreign view that kept the Win32
+            // focus still receives every key, including the ones that would switch back.
+            const auto Native = reinterpret_cast<HWND>(window()->winId()); const auto Root = GetAncestor(Native, GA_ROOT);
+            if (const auto Focus = GetFocus(); Root && Focus && !IsWindowVisible(Focus) && GetWindowThreadProcessId(Focus, nullptr) != GetCurrentThreadId()
+                && GetAncestor(GetForegroundWindow(), GA_ROOT) == Root && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
+                QApplication::setActiveWindow(window());
+                if (GetWindowThreadProcessId(Root, nullptr) == GetCurrentThreadId()) SetActiveWindow(Root);
+                SetFocus(Native); Refocus = true;
+            }
             if(auto Tab=active()){
                 setFocusProxy(Tab->pane_->InputWidget());
-                if(Tab->pane_->ViewId()=="pdf" || Tab->pane_->IsProcessDocument())Tab->pane_->Focus();
-            }
+                if(Refocus || Tab->pane_->ViewId()=="pdf" || Tab->pane_->IsProcessDocument())Tab->pane_->Focus();
+            } else if (Refocus && searchPanel_ && tabs_->currentWidget() == searchPanel_) searchPanel_->setFocus(Qt::OtherFocusReason);
             update();
         });
         for (const auto& Item : {std::pair{QString("tab.next"), 1}, std::pair{QString("tab.previous"), -1}}) {
             auto* Action = new QAction(Item.second == 1 ? tr("다음 탭") : tr("이전 탭"), this); Action->setObjectName(Item.first); addAction(Action);
             connect(Action, &QAction::triggered, this, [this, Step = Item.second] {
                 if (!tabbed_) return; const auto Count = tabs_->count();
+                if (Count > 1) releaseFocusFrom(active());
                 if (Count) tabs_->setCurrentIndex((tabs_->currentIndex() + Step + Count) % Count);
                 if (auto Tab = active()) Tab->pane_->Focus();
+                focusReleased_ = false;
             });
         }
         auto* EpubMenu=new QMenu(tr("EPUB"),this);EpubMenu->setObjectName("epubCommands");
@@ -962,8 +976,12 @@ namespace hc::document
         if (Relevant == appliedPreferences_) return;
         appliedPreferences_ = Relevant;
         if (searchPanel_) {
-            const auto Location = Views["textView"].toObject()["findInFiles"].toObject()["openLocation"].toString("bottom");
-            if (searchPanel_->property("configuredLocation").toString() != Location) { searchPanel_->setProperty("configuredLocation", Location); placeSearch(Location); }
+            const auto Location = searchLocation();
+            // A closed panel stays closed and opens at the new place next time.
+            if (searchPanel_->property("configuredLocation").toString() != Location) {
+                searchPanel_->setProperty("configuredLocation", Location);
+                if (searchPanel_->isVisible()) placeSearch(searchPlace(active(), Location));
+            }
         }
         if (externalWatcher_) externalWatcher_->reloadSettings();
         if (!Chrome.isEmpty() && !ApplyChromeSettings(Chrome)) ShowShellError(tr("문서 표시 설정이 올바르지 않습니다."));
@@ -1377,9 +1395,42 @@ namespace hc::document
     { for (const auto& Tab : documents_) if (Tab->id_ == Id && !Tab->closed_) return Tab; return {}; }
     void DocumentWorkspaceWidget::activate(const std::shared_ptr<Tab>& Tab)
     {
+        if (const auto Previous = active(); Previous && Previous != Tab) releaseFocusFrom(Previous);
         if (!tabbed_ && tabs_->indexOf(singlePane_) >= 0) tabs_->setCurrentWidget(singlePane_);
         if (tabbed_) tabs_->setCurrentWidget(Tab->pane_); else singlePane_->setCurrentWidget(Tab->pane_);
+        // The single pane has no currentChanged handler.
+        if (std::exchange(focusReleased_, false) && active() == Tab) Tab->pane_->Focus();
         workspace_.Activate(Tab->id_.toStdString()); update();
+    }
+    void DocumentWorkspaceWidget::releaseFocusFrom(const std::shared_ptr<Tab>& Tab)
+    {
+        if (Tab && !Tab->closed_ && Tab->pane_ && Tab->pane_->ReleaseNativeFocus()) focusReleased_ = true;
+    }
+    bool DocumentWorkspaceWidget::triggerCommand(const QString& Id)
+    {
+        for (auto* Action : findChildren<QAction*>(Qt::FindDirectChildrenOnly))
+            if (Action->property("documentCommandId").toString() == Id || Action->objectName() == Id) {
+                if (!Action->isEnabled()) return false;
+                Action->trigger(); return true;
+            }
+        return false;
+    }
+    void DocumentWorkspaceWidget::runHostCommand(const std::shared_ptr<Tab>& Tab, const QString& Id)
+    {
+        // The reader process reports only window shortcuts; anything else from it is ignored.
+        if (active() != Tab || Tab->closed_ || DocumentShortcutRegistry::ScopeOf(Id) != QLatin1String("common")
+            || QApplication::activeModalWidget() || QApplication::activePopupWidget()) return;
+        // The keyboard is still in the reader: take it back so the search field, a dialog or the next tab gets it.
+        const bool Released = Tab->pane_->ReleaseNativeFocus();
+        const QPointer<DocumentViewPane> Pane = Tab->pane_;
+        // A tab the command shows (next tab, closing this one) takes the keyboard.
+        focusReleased_ = focusReleased_ || Released;
+        triggerCommand(Id);
+        focusReleased_ = false;
+        // A command that left this book shown and gave the keyboard to nothing else (save, reload) returns it.
+        if (!Released || !Pane || active() != Tab || Tab->closed_ || QApplication::activeModalWidget() || QApplication::activePopupWidget()) return;
+        auto* Focus = QApplication::focusWidget();
+        if (!Focus || Focus == Pane || Pane->isAncestorOf(Focus)) Pane->Focus();
     }
     bool DocumentWorkspaceWidget::SetTabbed(bool Enabled)
     {
@@ -1490,9 +1541,9 @@ namespace hc::document
             if(active()!=Tab || Tab->closed_)return;
             if(Id=="app.settings.rst"){showPreferences();if(preferences_)preferences_->ShowPage(QStringLiteral("rst"));return;}
             // 미리보기에 포커스가 있을 때 눌린 창 단축키( 저장 · 새 문서 · 탭 이동 등 ).
-            for(auto* Action:findChildren<QAction*>(Qt::FindDirectChildrenOnly))
-                if(Action->property("documentCommandId").toString()==Id || Action->objectName()==Id){if(Action->isEnabled())Action->trigger();return;}
+            triggerCommand(Id);
         });
+        connect(Pane,&DocumentViewPane::HostCommandRequested,this,[this,Tab](const QString& Id){runHostCommand(Tab,Id);});
         // 다른 파일을 열고 그 줄로 간다: 이미 열려 있으면 바로, 여는 중이면 다 읽은 뒤에.
         connect(Pane,&DocumentViewPane::OpenAtRequested,this,[this,Tab](const QString& Path,int Line){
             if(Tab->closed_)return;
@@ -2774,6 +2825,8 @@ namespace hc::document
     void DocumentWorkspaceWidget::retire(std::shared_ptr<Tab> Tab, bool Discard, bool PreserveRecovery)
     {
         if(Discard && !PreserveRecovery)Tab->pane_->DiscardEpubRecovery();
+        // Closing parks a reader's window with the keyboard still in it.
+        if(active()==Tab)releaseFocusFrom(Tab);
         if(!Tab->pane_->RequestClose()){Tab->closeRequested_=true;return;}
         if(Tab->everReady_ && !Tab->loading_)recordRecent(Tab);
         if(editRequest_["documentId"]==Tab->id_)editRequest_={};
@@ -2792,7 +2845,10 @@ namespace hc::document
         if (hotExitClosing_ || closePromptActive_ || Index < 0 || Index >= int(documents_.size())) return;
         auto Target = documents_[Index];
         Target->closeRequested_ = true;
-        if(Target->pane_->IsProcessDocument()&&!Target->pane_->CanEditEpub()&&!Target->pane_->RequestClose())return;
+        if(Target->pane_->IsProcessDocument()&&!Target->pane_->CanEditEpub()){
+            if(active()==Target)releaseFocusFrom(Target);
+            if(!Target->pane_->RequestClose())return;
+        }
         if (Target->choosingSavePath_ || Target->saving_ || Target->composingSave_ || !Target->pendingToken_.isEmpty() || Target->checkpointing_ || Target->pane_->IsEditing()
             || (Target->pane_->ViewId() != "image" && Target->pane_->IsBusy())) return;
         Target->closeRequested_ = false;
@@ -3378,10 +3434,10 @@ void DocumentWorkspaceWidget::openSearch(bool Replace) {
             searchDock_->hide(); searchPanel_->hide();
         });
     }
-    const auto Location = appliedPreferences_["documentViews"].toObject()["textView"].toObject()["findInFiles"].toObject()["openLocation"].toString("bottom");
+    const auto Location = searchLocation();
     searchPanel_->setProperty("configuredLocation", Location);
-    // While a book is edited the results dock into its problems panel (plan 8.7).
-    if (Tab->pane_->IsEpubEditing() && Tab->pane_->EpubEditor()) placeSearch(QStringLiteral("epubProblems"));
+    // The configured place applies to a book being edited too; a bottom panel there is its problems panel (plan 8.7).
+    if (const auto Place = searchPlace(Tab, Location); Place == QLatin1String("epubProblems")) placeSearch(Place);
     else if (searchPlacement_.isEmpty() || searchPlacement_ == QLatin1String("epubProblems") || !searchPanel_->isVisible()) placeSearch(Location);
     searchPanel_->SetReadOnly(hosted_);
     searchPanel_->Open(Replace, Tab->pane_->IsEpub() ? Tab->path_ : QFileInfo(Tab->path_).absolutePath(), Tab->pane_->IsEpub(), searchSources());
@@ -3390,7 +3446,7 @@ void DocumentWorkspaceWidget::openSearch(bool Replace) {
 void DocumentWorkspaceWidget::placeSearch(const QString& Requested) {
     if (!searchPanel_) return;
     auto Location = Requested;
-    const auto Configured = searchPanel_->property("configuredLocation").toString().isEmpty() ? QStringLiteral("bottom") : searchPanel_->property("configuredLocation").toString();
+    const auto Configured = searchLocation();
     if (auto* Host = qobject_cast<EpubSourceEditor*>(searchEpubHost_.data())) Host->DetachSearchPanel();
     searchEpubHost_.clear(); searchPanel_->SetEmbedded(false);
     if (Location == QLatin1String("epubProblems")) {
@@ -3407,7 +3463,7 @@ void DocumentWorkspaceWidget::placeSearch(const QString& Requested) {
                 // The editor hands the panel back before it is destroyed; the panel returns to its configured place.
                 connect(Editor, &EpubSourceEditor::SearchPanelReleased, this, [this](QWidget*) {
                     searchEpubHost_.clear(); searchPanel_->SetEmbedded(false);
-                    placeSearch(searchPanel_->property("configuredLocation").toString().isEmpty() ? QStringLiteral("bottom") : searchPanel_->property("configuredLocation").toString());
+                    placeSearch(searchLocation());
                 });
             }
             searchPanel_->show(); return;
@@ -3419,6 +3475,8 @@ void DocumentWorkspaceWidget::placeSearch(const QString& Requested) {
     if(searchDock_->widget()==searchPanel_)searchDock_->setWidget(nullptr);
     searchPanel_->setParent(this);
     if (Location == "tab") {
+        // The panel's tab hides the document; a reader there gives up the keyboard first.
+        releaseFocusFrom(active());
         searchDock_->hide();
         if (!tabbed_ && tabs_->indexOf(singlePane_) < 0) {
             searchHost_->takeCentralWidget(); tabs_->addTab(singlePane_, tr("문서")); searchHost_->setCentralWidget(tabs_); tabs_->show(); singlePane_->show();
@@ -3440,7 +3498,15 @@ void DocumentWorkspaceWidget::syncSearchHost() {
     if (!searchPanel_ || searchPlacement_ != QLatin1String("epubProblems")) return;
     bool Live = false;
     for (const auto& Each : documents_) if (Each->pane_ && Each->pane_->EpubEditor() == searchEpubHost_.data() && Each->pane_->IsEpubEditing()) Live = true;
-    if (!Live) placeSearch(searchPanel_->property("configuredLocation").toString().isEmpty() ? QStringLiteral("bottom") : searchPanel_->property("configuredLocation").toString());
+    if (!Live) placeSearch(searchLocation());
+}
+QString DocumentWorkspaceWidget::searchLocation() const {
+    const auto Value = appliedPreferences_["documentViews"].toObject()["textView"].toObject()["findInFiles"].toObject()["openLocation"].toString();
+    // Same default as the settings dialog shows: a file written before this key existed opens a content tab.
+    return Value.isEmpty() ? hc::defaults::edit::ViewValue("textView/findInFiles/openLocation").toString() : Value;
+}
+QString DocumentWorkspaceWidget::searchPlace(const std::shared_ptr<Tab>& Tab, const QString& Location) const {
+    return Location == QLatin1String("bottom") && Tab && Tab->pane_->IsEpubEditing() && Tab->pane_->EpubEditor() ? QStringLiteral("epubProblems") : Location;
 }
 void DocumentWorkspaceWidget::navigateSearch(const QJsonObject& Row) {
     auto Tab = find(Row["document"].toString());

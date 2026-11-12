@@ -103,6 +103,9 @@ namespace hc::document
         void Commit(const QString& Path = {}, const QByteArray& Bytes = {});
         void Cancel();
         void Focus();
+        // Moves the Win32 keyboard focus from an out-of-process view in this pane (EPUB reader, HWP,
+        // previews) to this pane's window. Call before the pane is hidden; true when the focus was moved.
+        bool ReleaseNativeFocus();
         void SetReadOnly(bool Enabled);
         void SetClipboardBroker(bool Enabled);
         QJsonObject ViewState() const;
@@ -140,6 +143,8 @@ namespace hc::document
         void PreviewFullScreenRequested();
         // 창의 명령을 id 로 부른다( 새 Sphinx 프로젝트 · reST 설정 ).
         void WorkspaceCommandRequested(const QString& Id);
+        // A window shortcut (DocumentShortcutRegistry "common" scope) pressed in the EPUB reader process.
+        void HostCommandRequested(const QString& Id);
         void SaveRequested();
         void EpubSaveRequested(bool SaveAs);
         void EncodingRequested(const QString& Encoding);

@@ -337,6 +337,7 @@ void EpubSourceEditor::showPreview(const QByteArray& Bytes) {
     if(previewView_)previewStack_->setCurrentWidget(previewView_);else previewStack_->setCurrentWidget(Candidate);
     Candidate->show();reportPreview(tr("새 본문·내장 글꼴·이미지를 준비하고 있습니다…"));
     connect(Candidate,&EpubProcessView::EscapeRequested,this,&EpubSourceEditor::EscapeRequested);connect(Candidate,&EpubProcessView::FullscreenRequested,this,&EpubSourceEditor::FullscreenRequested);
+    connect(Candidate,&EpubProcessView::HostCommandRequested,this,&EpubSourceEditor::HostCommandRequested);
     connect(Candidate,&EpubProcessView::ViewStateChanged,this,[this,Candidate]{
         if(Candidate==previewCandidate_)admitPreview(Candidate);
         if(Candidate==previewView_){finishPreviewPatch();finishPreviewReload();syncPreviewSource();previewContextRequest(Candidate);previewScrolled(Candidate->ViewState()["previewScroll"].toObject());if(scrollSyncPending_)syncPreviewScroll();}

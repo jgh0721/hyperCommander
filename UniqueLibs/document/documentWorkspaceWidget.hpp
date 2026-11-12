@@ -135,6 +135,10 @@ namespace hc::document
         // The EPUB editor whose problems panel hosts 파일에서 찾기 ("epubProblems" placement).
         QPointer<QWidget> searchEpubHost_;
         void syncSearchHost();
+        // The configured place of 파일에서 찾기 ("tab", "bottom"); the product default when unset.
+        QString searchLocation() const;
+        bool triggerCommand(const QString& Id);
+        bool focusReleased_ = false;
         std::unique_ptr<DocumentWindowSize> windowSize_;
         // Synchronous: startup, a saved settings dialog and Escape need the result at once.
         void refreshPreferences();
@@ -181,6 +185,13 @@ namespace hc::document
         struct LocalSave;
         std::shared_ptr<Tab> active() const;
         std::shared_ptr<Tab> find(const QString& Id) const;
+        // Where an opened 파일에서 찾기 panel goes for Tab: a bottom panel of a book being edited is its problems panel.
+        QString searchPlace(const std::shared_ptr<Tab>& Tab, const QString& Location) const;
+        // Before Tab's pane is hidden: takes the keyboard from its out-of-process view. The tab shown
+        // next then takes the keyboard (focusReleased_, consumed by currentChanged).
+        void releaseFocusFrom(const std::shared_ptr<Tab>& Tab);
+        // A window shortcut pressed in the EPUB reader process of Tab.
+        void runHostCommand(const std::shared_ptr<Tab>& Tab, const QString& Id);
         QJsonObject open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
             const QString& RecoveryPath = {}, const QString& DisplayName = {}, QJsonObject ReadPrefix = {});
         void save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite = false, bool SaveEpubOriginal = false);

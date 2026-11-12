@@ -459,7 +459,17 @@ namespace
                 auto* Action=new QAction(Entry.label_,this);addAction(Action);shortcuts_->Register(Entry.id_,Action);
                 connect(Action,&QAction::triggered,this,[this,Name=Entry.id_.mid(5)]{readAction(Name,{});});
             }
-            shortcuts_->SetEligibility([this](const QString& Id,QWidget* Focus){return Id.startsWith("epub.") && !composing_
+            // Keys typed here never reach the host window, so its window shortcuts are reported for it to run.
+            for(const auto& Entry:hc::document::DocumentShortcutRegistry::Commands())if(Entry.scope_=="common") {
+                auto* Action=new QAction(Entry.label_,this);addAction(Action);shortcuts_->Register(Entry.id_,Action);
+                connect(Action,&QAction::triggered,this,[this,Id=Entry.id_]{
+                    hostCommands_.append(QJsonObject{{"serial",++hostCommandSerial_},{"id",Id}});
+                    while(hostCommands_.size()>8)hostCommands_.removeFirst();
+                });
+            }
+            shortcuts_->SetEligibility([this](const QString& Id,QWidget* Focus){
+                if(hc::document::DocumentShortcutRegistry::ScopeOf(Id)==QLatin1String("common"))return interactive_ && !composing_;
+                return Id.startsWith("epub.") && !composing_
                 && (latest_["popup"].isNull() || latest_["popup"].isUndefined() || Id=="epub.fullscreen")
                 && ((!qobject_cast<QLineEdit*>(Focus) && !qobject_cast<QPlainTextEdit*>(Focus) && !qobject_cast<QAbstractSpinBox*>(Focus) && !qobject_cast<QComboBox*>(Focus) && !qobject_cast<QAbstractItemView*>(Focus))
                     || Id=="epub.cycle-focus" || Id.startsWith("epub.focus-"));});
@@ -478,6 +488,7 @@ namespace
         // Serials the owner compares across replacement keep growing in the new reader.
         void InheritCounters(const Window& Old) {
             escapeRequests_=Old.escapeRequests_;fullscreenRequests_=Old.fullscreenRequests_;
+            hostCommandSerial_=Old.hostCommandSerial_;hostCommands_=Old.hostCommands_;
             contextSerial_=Old.contextSerial_;contextRequest_=QJsonObject{{"serial",contextSerial_}};
         }
         QJsonObject Control(const QJsonObject& Request)
@@ -490,7 +501,7 @@ namespace
             const auto Kind = Request["kind"].toString();
             if(Kind == "snapshot" || Kind == "snapshot-delta") {
                 auto State = latest_;const auto Navigation=navigation_->Snapshot();for(auto I=Navigation.begin();I!=Navigation.end();++I)State[I.key()]=I.value(); State["inputFocused"] = latest_["readerFocused"].toBool();
-                State["escapeRequests"]=escapeRequests_;State["fullscreenRequests"]=fullscreenRequests_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();State["inputEnabled"]=interactive_;
+                State["escapeRequests"]=escapeRequests_;State["fullscreenRequests"]=fullscreenRequests_;State["hostCommands"]=hostCommands_;State["appearance"] = hostAppearance_; State["settingsPersistent"] = !settingsPath_.isEmpty();State["inputEnabled"]=interactive_;
                 State["chromeWindowColor"]=palette().color(QPalette::Window).name();State["toolbarWindowColor"]=findChild<QToolBar*>("epubReadingToolbar")->palette().color(QPalette::Window).name();State["openPanel"]=openPanel();State["toolbarPreviousEnabled"]=findChild<QAction*>("epub.previous")->isEnabled();State["toolbarNextEnabled"]=findChild<QAction*>("epub.next")->isEnabled();State["toolbarAvailabilityChanges"]=toolbarAvailabilityChanges_;
                 State["readingToolbarVisible"]=findChild<QToolBar*>("epubReadingToolbar")->isVisible();
                 State["toolbarColumns"]=columnsChoice_->currentIndex();State["columnsControlEnabled"]=columnsChoice_->isEnabled();
@@ -818,6 +829,8 @@ namespace
         int toolbarAvailabilityChanges_=0;
         int escapeRequests_=0;
         int fullscreenRequests_=0;
+        // Window shortcuts for the host: the last few {serial, id}, serials growing across reader replacement.
+        qint64 hostCommandSerial_=0;QJsonArray hostCommands_;
         hc::epub::poc::ReadingSettings* settings_ = nullptr;
         QWebEngineView* view_ = nullptr;
         QLabel* location_=nullptr;

@@ -41,6 +41,8 @@ namespace hc::document
         void Loaded();
         void EscapeRequested();
         void FullscreenRequested();
+        // A window shortcut pressed in the reader, in order; Id is not checked here.
+        void HostCommandRequested(const QString& Id);
         void Failed(const QString& Error);
         void Closed();
         void ViewStateChanged();
@@ -66,6 +68,6 @@ namespace hc::document
         bool bound_ = false, loaded_ = false, failed_ = false, closed_ = false;
         QTimer* timer_ = nullptr;
         QJsonObject reported_, bindings_;
-        qint64 contextSerial_ = 0;
+        qint64 contextSerial_ = 0, hostCommandSerial_ = 0;
     };
 }

@@ -499,6 +499,55 @@ private slots:
         }
         QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
     }
+    void findInFilesWhileEditing_data() {
+        QTest::addColumn<QString>("Location");QTest::newRow("tab")<<QString("tab");QTest::newRow("bottom")<<QString("bottom");
+    }
+    // The configured place applies to a book being edited; a bottom panel there is the editor's problems panel.
+    void findInFilesWhileEditing() {
+        QFETCH(QString,Location);const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Reader corpus required");
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        {::AppSettings Settings;Settings.setValue("textView/findInFiles/openLocation",Location);Settings.sync();}
+        const auto Book=Temp.filePath("book.epub");QVERIFY(QFile::copy(Corpus,Book));
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));QString Id;QVERIFY(openReading(Window,Book,Id));
+        auto* Editor=beginEditing(Window,Id);QVERIFY(Editor);
+        QTest::keyClick(Editor->SourceInput(),Qt::Key_F,Qt::ControlModifier|Qt::ShiftModifier);
+        QWidget* Search=nullptr;QTRY_VERIFY((Search=Window.findChild<QWidget*>("documentSearchPanel")) && Search->isVisible());
+        auto* Tabs=Window.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);
+        if(Location=="tab"){QCOMPARE(Tabs->currentWidget(),Search);QVERIFY(Editor->AttachedSearchPanel()!=Search);}
+        else{QCOMPARE(Editor->AttachedSearchPanel(),Search);QVERIFY(Tabs->currentWidget()!=Search);}
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
+    // Keys typed in the reader reach its process only; the window's own shortcuts come back to the workspace,
+    // which takes the keyboard back before it runs them.
+    void readerForwardsWindowShortcuts() {
+        const auto Corpus=qEnvironmentVariable("HC_EPUB_READER_EPUB");if(Corpus.isEmpty())QSKIP("Reader corpus required");
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        {::AppSettings Settings;Settings.setValue("textView/findInFiles/openLocation","tab");Settings.sync();}
+        const auto Text=Temp.filePath("note.txt");{QFile File(Text);QVERIFY(File.open(QIODevice::WriteOnly));File.write("note\r\n");}
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));QString Id;QVERIFY(openReading(Window,Corpus,Id));
+        QVERIFY(!Window.Handle({{"action","open"},{"path",Text}})["documentId"].toString().isEmpty());QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(),15000);
+        auto* Tabs=Window.findChild<QTabWidget*>("documentTabs");QVERIFY(Tabs);auto* Process=Window.findChild<EpubProcessView*>();QVERIFY(Process);
+        const auto Own=[]{const auto Focus=GetFocus();return Focus && GetWindowThreadProcessId(Focus,nullptr)==GetCurrentThreadId();};
+        const auto EnterReader=[&]{
+            Window.Handle({{"action","activate"},{"documentId",Id}});
+            if(!foreground(Window) || !Process->isVisible() || !Process->FocusInput())return false;
+            return QTest::qWaitFor([&]{return document(Window,Id)["view"].toObject()["epub"].toObject()["readerFocused"].toBool() && !Own();},10000);
+        };
+        const auto Chord=[](const std::vector<WORD>& Keys){
+            std::vector<INPUT> Input;
+            for(const auto Key:Keys){INPUT Down{};Down.type=INPUT_KEYBOARD;Down.ki.wVk=Key;Input.push_back(Down);}
+            for(auto It=Keys.rbegin();It!=Keys.rend();++It){INPUT Up{};Up.type=INPUT_KEYBOARD;Up.ki.wVk=*It;Up.ki.dwFlags=KEYEVENTF_KEYUP;Input.push_back(Up);}
+            return SendInput(UINT(Input.size()),Input.data(),sizeof(INPUT))==UINT(Input.size());
+        };
+        QVERIFY(EnterReader());const auto Reading=Tabs->currentIndex();
+        QVERIFY(Chord({VK_CONTROL,VK_TAB}));
+        QTRY_VERIFY_WITH_TIMEOUT(Tabs->currentIndex()!=Reading,5000);QTRY_VERIFY(Own());
+        QVERIFY(EnterReader());
+        QVERIFY(Chord({VK_CONTROL,VK_SHIFT,WORD('F')}));
+        QWidget* Search=nullptr;QTRY_VERIFY_WITH_TIMEOUT((Search=Window.findChild<QWidget*>("documentSearchPanel")) && Tabs->currentWidget()==Search,5000);
+        auto* Query=Search->findChild<QLineEdit*>("documentSearchQuery");QVERIFY(Query);QTRY_VERIFY(Query->hasFocus() && Own());
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
+    }
     void scrollRegressionBook() {
         const auto Book=qEnvironmentVariable("HC_EPUB_SCROLL_REGRESSION_BOOK");if(Book.isEmpty())QSKIP("User reproduction EPUB required");
         QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());

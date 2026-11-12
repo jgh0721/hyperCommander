@@ -220,6 +220,8 @@ namespace hc::document
             buildEpubChrome(findChild<QToolBar*>("epubEditToolbar"));
             connect(epub_,&EpubProcessView::EscapeRequested,this,&DocumentViewPane::EscapeRequested);
             connect(epub_,&EpubProcessView::FullscreenRequested,this,&DocumentViewPane::FullscreenRequested);
+            // Queued: the command may close this tab, and the view emits from its polling slot.
+            connect(epub_,&EpubProcessView::HostCommandRequested,this,&DocumentViewPane::HostCommandRequested,Qt::QueuedConnection);
             connect(epub_,&EpubProcessView::ViewStateChanged,this,&DocumentViewPane::ViewStateChanged);
             connect(epub_,&EpubProcessView::Loaded,this,[this]{if(auto* Edit=findChild<QAction*>("epubEdit"))Edit->setEnabled(true);if(isVisible() && !IsEpubEditing())epub_->FocusInput();epub_->ReaderAction("context-menu",true);});
             // Reader right-click (plan 8.6): queued so the menu does not open inside the view's polling slot.
@@ -629,12 +631,14 @@ namespace hc::document
                 if(*InitialFocus && epubEditor_->IsReady()){
                     *InitialFocus=false;const auto Root=GetAncestor(reinterpret_cast<HWND>(window()->winId()),GA_ROOT);
                     bool SearchFocus=false;for(auto* Widget=QApplication::focusWidget();Widget;Widget=Widget->parentWidget())if(Widget->objectName()=="documentSearchPanel"){SearchFocus=true;break;}
-                    if(!SearchFocus && IsEpubEditing() && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root && !QApplication::activePopupWidget() && !QApplication::activeModalWidget())Focus();
+                    // A book whose tab was left while the editor loaded must not take the keyboard from the shown tab.
+                    if(!SearchFocus && isVisible() && IsEpubEditing() && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root && !QApplication::activePopupWidget() && !QApplication::activeModalWidget())Focus();
                 }
                 emit ViewStateChanged();
             });
             connect(epubEditor_,&EpubSourceEditor::SaveRequested,this,&DocumentViewPane::EpubSaveRequested);connect(epubEditor_,&EpubSourceEditor::PreviewCommitted,this,[this]{epubEditor_->show();epub_->hide();epub_->RequestClose();});
             connect(epubEditor_,&EpubSourceEditor::EscapeRequested,this,&DocumentViewPane::EscapeRequested);connect(epubEditor_,&EpubSourceEditor::FullscreenRequested,this,&DocumentViewPane::FullscreenRequested);
+            connect(epubEditor_,&EpubSourceEditor::HostCommandRequested,this,&DocumentViewPane::HostCommandRequested,Qt::QueuedConnection);
             // Editing commands join the EPUB toolbar after a marker; reader mode hides them.
             if(auto* Bar=findChild<QToolBar*>("epubEditToolbar")) {
                 Bar->addSeparator()->setObjectName("epubEditSeparator");bool Spaced=false;
@@ -846,6 +850,24 @@ namespace hc::document
         if(markdown_){markdown_->Focus();return;}
         if(rst_){rst_->Focus();return;}
         if(IsEpubEditing())epubEditor_->SourceInput()->isVisible()?epubEditor_->SourceInput()->setFocus():epubEditor_->setFocus();else if(epub_)currentEpub()->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
+    }
+    bool DocumentViewPane::ReleaseNativeFocus(){
+        // An out-of-process view is never Qt's focus widget, so hiding the pane moves nothing: Win32 leaves
+        // the keyboard in the hidden foreign window, and that process ignores the window's shortcuts.
+        // editEpub normalizes the same way before it hides a focused reader.
+        const auto Focus=GetFocus();
+        if(!Focus || GetWindowThreadProcessId(Focus,nullptr)==GetCurrentThreadId())return false;
+        QWidget* Owner=nullptr;const auto Desktop=GetDesktopWindow();
+        for(auto Window=Focus;Window && Window!=Desktop && !Owner;Window=GetAncestor(Window,GA_PARENT))Owner=QWidget::find(reinterpret_cast<WId>(Window));
+        if(!Owner || (Owner!=this && !isAncestorOf(Owner)))return false;
+        // The keyboard goes to this window, not its root: a hosted viewer's root is HyperCommander's window.
+        const auto Native=reinterpret_cast<HWND>(window()->winId());const auto Root=GetAncestor(Native,GA_ROOT);
+        // Another application in front keeps its keyboard.
+        if(!Root || GetAncestor(GetForegroundWindow(),GA_ROOT)!=Root || QApplication::activeModalWidget() || QApplication::activePopupWidget())return false;
+        QApplication::setActiveWindow(window());
+        if(GetWindowThreadProcessId(Root,nullptr)==GetCurrentThreadId())SetActiveWindow(Root);
+        SetFocus(Native);
+        return GetFocus()==Native;
     }
     void DocumentViewPane::SetReadOnly(bool Enabled){readOnly_=Enabled;if(markdown_)markdown_->SetReadOnly(Enabled);if(rst_)rst_->SetReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)

@@ -82,7 +82,7 @@ public:
     QWidget* DetachSearchPanel();
     void SetSearchPanelTitle(const QString& Title);
     QWidget* AttachedSearchPanel()const{return searchPanel_;}
-signals:void SearchPanelReleased(QWidget* Panel);void StatusChanged();void Changed();void StateChanged();void SaveRequested(bool SaveAs);void PreviewCommitted();void EscapeRequested();void FullscreenRequested();void SearchRequested(const QString& Query);
+signals:void SearchPanelReleased(QWidget* Panel);void StatusChanged();void Changed();void StateChanged();void SaveRequested(bool SaveAs);void PreviewCommitted();void EscapeRequested();void FullscreenRequested();void SearchRequested(const QString& Query);void HostCommandRequested(const QString& Id);
 protected:bool eventFilter(QObject* Object,QEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();
