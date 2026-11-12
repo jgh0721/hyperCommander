@@ -1797,11 +1797,9 @@ namespace hc::document
                 if(Tab->input_.viewId_=="image")findChild<ImageFullscreen*>("imageFullscreen")->Restore();
                 setFocusProxy(Tab->pane_->InputWidget());
                 const auto Native = reinterpret_cast<HWND>(winId());
-                const auto Focus = GetFocus();
                 // A visible embedded preview loads while the file panel keeps
                 // keyboard ownership. Only refocus after the user entered it.
-                const bool MayFocus = !property("hc.quickPreview").toBool()
-                    || (Focus && (Focus == Native || IsChild(Native, Focus)));
+                const bool MayFocus = !PreviewKeepsPanelKeyboard(this);
                 if (MayFocus && (!hosted_ || IsWindowVisible(Native))) Tab->pane_->Focus();
             }
             if (!restoredActive_.isEmpty() && IsIdle()) {
@@ -2260,7 +2258,8 @@ namespace hc::document
             // Showing a reparented Qt shell can briefly make that child the
             // foreground window. Permit repairing our own shell's activation,
             // but never steal focus from another application or a settings dialog.
-            if (hosted_ && Foreground != GetAncestor(NativeWindow, GA_ROOT) && Foreground != NativeWindow) return {{"accepted", false}};
+            // The host's own foreground can also be one of its child windows (HyperCommander's file list).
+            if (hosted_ && GetAncestor(Foreground, GA_ROOT) != GetAncestor(NativeWindow, GA_ROOT)) return {{"accepted", false}};
             if(auto Tab=active();Tab&&!Tab->loading_){
                 if(!QApplication::activePopupWidget()&&!QApplication::activeModalWidget()){
                     QApplication::setActiveWindow(this);setFocusProxy(Tab->pane_->InputWidget());

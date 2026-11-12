@@ -3064,6 +3064,12 @@ CQuickView::CQuickView( QWidget* Parent, Qt::WindowFlags f )
     vbox_->addWidget(Bar);
     connect(TyStCommandMgr::GetInstance(), &CCommandMgr::ShortcutsChanged, this, &CQuickView::refreshReturnKey);
     refreshReturnKey();
+    // The keyboard can enter an EPUB reader or a plugin process without a Qt focus change here; poll it.
+    foreignInputTimer_.setInterval(25);
+    connect(this, &CQuickView::ReturnFocusRequested, this, [this] { entered_ = false; });
+    connect(&foreignInputTimer_, &QTimer::timeout, this, &CQuickView::updateForeignReturnKey);
+    foreignInputTimer_.start();
+    qApp->installNativeEventFilter(this);
 }
 
 void CQuickView::refreshReturnKey()
@@ -3073,6 +3079,7 @@ void CQuickView::refreshReturnKey()
     for (auto It = Values.cbegin(); It != Values.cend(); ++It)
         if (hc::ui::CommandId(It.value()) == "hc.viewer.returnFocus") { Key = It.key(); break; }
     const auto Sequence = Key.key() == Qt::Key_unknown ? QKeySequence{} : QKeySequence(Key);
+    returnKey_ = Key; releaseForeignReturnKey(); foreignHotKeyRefused_ = false;
     returnAction_->setShortcut(Sequence);
     returnAction_->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     returnAction_->setToolTip(tr("파일 패널로: %1").arg(Sequence.isEmpty() ? tr("단축키 없음") : Sequence.toString(QKeySequence::NativeText)));
@@ -3138,7 +3145,7 @@ void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::ICo
     std::shared_ptr<hc::storage::IWritableStorage> Writer)
 {
     if (IsPinned() || !Source) return;
-    cancelProbe();
+    cancelProbe(); entered_ = false;
     const auto Entry = Source->Describe();
     const auto Extension = QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower().toStdString();
     const auto& Formats = hc::document::DocumentExtensions;
@@ -3162,7 +3169,63 @@ void CQuickView::SetContent(QtViewerHost& Host, std::shared_ptr<hc::storage::ICo
         return hc::document::ProbeDocumentText(*Source, Context);
     }));
 }
-CQuickView::~CQuickView() { cancelProbe(); }
+CQuickView::~CQuickView()
+{
+    qApp->removeNativeEventFilter(this); releaseForeignReturnKey();
+    cancelProbe();
+}
+void CQuickView::updateForeignReturnKey()
+{
+    const auto Root = isVisible() ? GetAncestor(reinterpret_cast<HWND>(window()->internalWinId()), GA_ROOT) : nullptr;
+    const auto Foreground = GetForegroundWindow();
+    // A click into a child of another process inside the preview enters it as Tab does: the click reaches neither
+    // HyperCommander nor the plugin host, and the EPUB reader takes no focus from it while HyperCommander is in front.
+    if (!entered_ && Root && Foreground && GetAncestor(Foreground, GA_ROOT) == Root
+        && ((GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON) | GetAsyncKeyState(VK_MBUTTON)) & 0x8000)) {
+        POINT Cursor{}; DWORD Process = 0;
+        const auto Under = GetCursorPos(&Cursor) ? WindowFromPoint(Cursor) : nullptr;
+        if (Under && GetWindowThreadProcessId(Under, &Process) && Process != GetCurrentProcessId()
+            && GetAncestor(Under, GA_ROOT) == Root && rect().contains(mapFromGlobal(QCursor::pos()))) { EnsureKeyboardFocusOnView(); return; }
+    }
+    // The reader can make its own child the foreground window, so compare roots. Another application keeps its keys.
+    bool Inside = false;
+    GUITHREADINFO Info{sizeof(GUITHREADINFO)};
+    if (returnKey_.key() != Qt::Key_unknown && Root && Foreground && GetAncestor(Foreground, GA_ROOT) == Root
+        && GetGUIThreadInfo(GetWindowThreadProcessId(Foreground, nullptr), &Info) && Info.hwndFocus) {
+        DWORD Process = 0; GetWindowThreadProcessId(Info.hwndFocus, &Process);
+        // HC's own widgets in the preview get returnAction_. A foreign child belongs to the HC widget nearest above it.
+        const auto Desktop = GetDesktopWindow();
+        for (auto Window = GetAncestor(Info.hwndFocus, GA_PARENT); Process != GetCurrentProcessId() && Window && Window != Desktop;
+             Window = GetAncestor(Window, GA_PARENT))
+            if (auto* Owner = QWidget::find(reinterpret_cast<WId>(Window))) { Inside = Owner == this || isAncestorOf(Owner); break; }
+    }
+    if (!Inside) { releaseForeignReturnKey(); foreignHotKeyRefused_ = false; return; }
+    // Neither Tab, a click nor a key in the plugin's window: the preview took the keyboard itself.
+    if (!entered_ && !(surface_ && surface_->WasInteracted())) { emit ReturnFocusRequested(); return; }
+    if (foreignHotKeyId_ || foreignHotKeyRefused_) return;
+    const auto Native = hc::ui::ToNativeHotKey(returnKey_);
+    // Ids below 0xC000 are the application's. The global shortcuts count up from 0x4000.
+    static int Next = 0;
+    const int Id = 0xB800 + (Next++ % 0x800);
+    // Refused when a global shortcut or another application already holds the key; that owner then gets it.
+    if (Native.virtualKey_ && RegisterHotKey(nullptr, Id, Native.modifiers_ | MOD_NOREPEAT, Native.virtualKey_)) foreignHotKeyId_ = Id;
+    else foreignHotKeyRefused_ = true;
+}
+void CQuickView::releaseForeignReturnKey()
+{
+    if (foreignHotKeyId_) UnregisterHotKey(nullptr, std::exchange(foreignHotKeyId_, 0));
+}
+bool CQuickView::nativeEventFilter(const QByteArray&, void* Message, qintptr* Result)
+{
+    const auto* Event = static_cast<MSG*>(Message);
+    if (Event->message != WM_HOTKEY || !foreignHotKeyId_ || int(Event->wParam) != foreignHotKeyId_) return false;
+    // Thread hotkeys arrive without result storage.
+    if (Result) *Result = 0;
+    releaseForeignReturnKey();
+    // Leave the dispatcher first: the receiver moves the Win32 focus and may close this view.
+    QTimer::singleShot(0, this, [this] { emit ReturnFocusRequested(); });
+    return true;
+}
 void CQuickView::cancelProbe()
 {
     probeStop_.request_stop(); probeStop_ = std::stop_source{}; ++probeGeneration_;
@@ -3242,7 +3305,7 @@ bool CQuickView::RequestClose() { return !surface_ || surface_->RequestClose(); 
 bool CQuickView::IsPinned() const { return surface_ && surface_->IsPinned(); }
 void CQuickView::CloseView() { cancelProbe(); if (surface_) surface_->Close(); if (information_) information_->hide(); }
 void CQuickView::EnsureKeyboardFocusOnView() const
-{ if (surface_ && surface_->isVisible()) surface_->Pin(); if (focusProxy()) focusProxy()->setFocus(); }
+{ entered_ = true; if (surface_ && surface_->isVisible()) surface_->Pin(); if (focusProxy()) focusProxy()->setFocus(); }
 
 ////int CmpPanel::InitializeGrid()
 ////{

@@ -982,7 +982,8 @@ add_test(NAME hc.document.p4 COMMAND hc_document_p4_tests -o "${CMAKE_BINARY_DIR
 set_tests_properties(hc.document.p4 PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
 
 if(TARGET hc_smb_tests)
-    target_link_libraries(hc_smb_tests PRIVATE hc_pdfium_runtime Qt6::PrintSupport)
+    # hc_epub_package: the Ctrl+Q keyboard test writes its EPUB with the product template.
+    target_link_libraries(hc_smb_tests PRIVATE hc_pdfium_runtime Qt6::PrintSupport hc_epub_package)
     add_dependencies(hc_smb_tests hc_hyperviewer_package)
     foreach(HC_DOCUMENT_DPR IN ITEMS 1 1.5)
         add_test(NAME hc.document.commands_dpr${HC_DOCUMENT_DPR} COMMAND "${HC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass

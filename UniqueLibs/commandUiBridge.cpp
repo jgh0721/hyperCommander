@@ -2429,9 +2429,16 @@ void CommandUiBridge::openDataPlugin(bool Metadata, bool Dopus)
 
 void CommandUiBridge::returnQuickFocus()
 {
-    if (!quickSource_ || !main_ || GetForegroundWindow() != reinterpret_cast<HWND>(main_->winId())) return;
+    if (!quickSource_ || !main_) return;
+    // A preview child of another process (the EPUB reader activates itself) can be the foreground window.
+    // Take back only HyperCommander's own window, never another application's.
+    const auto Root = reinterpret_cast<HWND>(main_->winId());
+    if (GetAncestor(GetForegroundWindow(), GA_ROOT) != Root) return;
     auto* Grid = qobject_cast<CGridView*>(quickSource_->GetFocusView(quickSource_->CurrentTabIndex()));
     if (!Grid) return;
+    // The preview shares this thread's input queue, so both calls apply to HyperCommander's window.
+    if (GetForegroundWindow() != Root) SetForegroundWindow(Root);
+    if (GetActiveWindow() != Root) SetActiveWindow(Root);
     QApplication::setActiveWindow(main_);
     if (auto* Focus = QApplication::focusWidget()) Focus->clearFocus();
     quickSource_->sig_NotifyPanelActivated();

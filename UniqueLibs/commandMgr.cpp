@@ -446,43 +446,12 @@ void CCommandMgr::refreshGlobalShortcuts()
     for (auto It = SpMapKeyToCMDText_->cbegin(); It != SpMapKeyToCMDText_->cend(); ++It) {
         const auto Id = hc::ui::CommandId(It.value());
         if (!GlobalShortcutEnabled(Id)) continue;
-        const auto Key = It.key(); const int Code = Key.key(); UINT Vk = 0, CharacterModifiers = 0;
-        if ((Code >= Qt::Key_A && Code <= Qt::Key_Z) || (Code >= Qt::Key_0 && Code <= Qt::Key_9)) Vk = Code;
-        else if (Code >= Qt::Key_F1 && Code <= Qt::Key_F24) Vk = VK_F1 + Code - Qt::Key_F1;
-        else switch (Code) {
-        case Qt::Key_Space: Vk = VK_SPACE; break; case Qt::Key_Tab: Vk = VK_TAB; break;
-        case Qt::Key_Return: case Qt::Key_Enter: Vk = VK_RETURN; break;
-        case Qt::Key_Escape: Vk = VK_ESCAPE; break; case Qt::Key_Backspace: Vk = VK_BACK; break;
-        case Qt::Key_Delete: Vk = VK_DELETE; break; case Qt::Key_Insert: Vk = VK_INSERT; break;
-        case Qt::Key_Home: Vk = VK_HOME; break; case Qt::Key_End: Vk = VK_END; break;
-        case Qt::Key_PageUp: Vk = VK_PRIOR; break; case Qt::Key_PageDown: Vk = VK_NEXT; break;
-        case Qt::Key_Left: Vk = VK_LEFT; break; case Qt::Key_Right: Vk = VK_RIGHT; break;
-        case Qt::Key_Up: Vk = VK_UP; break; case Qt::Key_Down: Vk = VK_DOWN; break;
-        case Qt::Key_MediaNext: Vk = VK_MEDIA_NEXT_TRACK; break; case Qt::Key_MediaPrevious: Vk = VK_MEDIA_PREV_TRACK; break;
-        case Qt::Key_MediaPlay: case Qt::Key_MediaTogglePlayPause: Vk = VK_MEDIA_PLAY_PAUSE; break;
-        case Qt::Key_MediaStop: Vk = VK_MEDIA_STOP; break;
-        default:
-            if (Code > 0 && Code < 0x10000) {
-                const auto Native = VkKeyScanW(wchar_t(Code));
-                if (Native != -1) {
-                    Vk = LOBYTE(Native);
-                    if (HIBYTE(Native) & 1) CharacterModifiers |= MOD_SHIFT;
-                    if (HIBYTE(Native) & 2) CharacterModifiers |= MOD_CONTROL;
-                    if (HIBYTE(Native) & 4) CharacterModifiers |= MOD_ALT;
-                }
-            }
-            break;
-        }
-        const auto Mods = Key.keyboardModifiers(); UINT Flags = MOD_NOREPEAT | CharacterModifiers;
-        if (Mods.testFlag(Qt::ControlModifier)) Flags |= MOD_CONTROL;
-        if (Mods.testFlag(Qt::AltModifier)) Flags |= MOD_ALT;
-        if (Mods.testFlag(Qt::ShiftModifier)) Flags |= MOD_SHIFT;
-        if (Mods.testFlag(Qt::MetaModifier)) Flags |= MOD_WIN;
-        if (!Vk || Mods.testFlag(Qt::KeypadModifier)) {
+        const auto Key = It.key(); const auto Native = hc::ui::ToNativeHotKey(Key);
+        if (!Native.virtualKey_) {
             globalErrors_[Id] += tr("%1: 글로벌 등록을 지원하지 않는 키입니다. ").arg(QKeySequence(Key).toString()); continue;
         }
         const int Number = NextId++;
-        if (RegisterHotKey(nullptr, Number, Flags, Vk)) globalKeys_.insert(Number, {Id, Key, Flags & ~MOD_NOREPEAT, Vk});
+        if (RegisterHotKey(nullptr, Number, Native.modifiers_ | MOD_NOREPEAT, Native.virtualKey_)) globalKeys_.insert(Number, {Id, Key, Native.modifiers_, Native.virtualKey_});
         else globalErrors_[Id] += tr("%1: Windows 등록 실패(%2). 다른 앱의 사용 여부를 확인하세요. ").arg(QKeySequence(Key).toString()).arg(GetLastError());
     }
 }

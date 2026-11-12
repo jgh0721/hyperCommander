@@ -165,6 +165,8 @@ namespace hc::document
         // A text position restored while hidden; applied on first show, when wrapped rows are known.
         std::optional<TextRecoveryState> pendingTextPosition_;
 
+        // A Ctrl+Q preview loads while the file panel keeps the keyboard; it may take it only after the user entered.
+        bool previewKeepsPanelKeyboard() const;
         bool editEpub(const QString& Locator={},int Chapter=-1);
         // Mode menu and View/Edit menu items per view kind (documentViewMenus.cpp).
         void buildTextChrome(QMenu* Menu, bool Language);

@@ -66,10 +66,12 @@ namespace hc::document
         state_->rhwp_ = std::make_unique<HwpHostSession>(
             QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/rhwp",
             MakeProductHwpRuntime(QCoreApplication::applicationDirPath(), QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));
+        // Qt hands WA_ShowWithoutActivating to the native window only when it creates it: set it first, or every
+        // show() of the preview (also the reopen of a cached host) activates the embedded shell.
+        if (state_->preview_) state_->window_->setAttribute(Qt::WA_ShowWithoutActivating);
         state_->window_->winId();
         if (state_->preview_) {
             // This is a newly created session. Never adopt a full viewer's window.
-            state_->window_->setAttribute(Qt::WA_ShowWithoutActivating);
             state_->parentWindow_.reset(QWindow::fromWinId(reinterpret_cast<WId>(state_->container_)));
             if (!state_->parentWindow_) { state_->failed_ = true; return; }
             state_->window_->windowHandle()->setParent(state_->parentWindow_.get());

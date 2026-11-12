@@ -233,7 +233,8 @@ namespace hc::plugins
                 return QJsonObject{{"focused", false}};
             const auto Parent = GetParent(container_);
             const auto Root = GetAncestor(container_, GA_ROOT);
-            if (!Root || GetForegroundWindow() != Root) return QJsonObject{{"focused", false}};
+            // HyperCommander's foreground can be reported as one of its child windows (its file list).
+            if (!Root || GetAncestor(GetForegroundWindow(), GA_ROOT) != Root) return QJsonObject{{"focused", false}};
             const auto Thread = GetWindowThreadProcessId(Parent, nullptr);
             // SetFocus in an isolated GUI thread otherwise only updates that
             // thread's inactive queue. Join the granted caller on explicit entry.

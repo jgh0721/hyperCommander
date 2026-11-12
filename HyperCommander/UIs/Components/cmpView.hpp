@@ -429,7 +429,7 @@ protected:
     QVBoxLayout*                    vbox_ = nullptr;
 };
 
-class CQuickView : public CViewT
+class CQuickView : public CViewT, public QAbstractNativeEventFilter
 {
     Q_OBJECT
 public:
@@ -452,11 +452,23 @@ signals:
 
 protected:
     void                            showEvent( QShowEvent* event ) override;
+    bool                            nativeEventFilter( const QByteArray& Type, void* Message, qintptr* Result ) override;
 
 private:
 
     bool                            isInitOnce_ = false;
     QtViewerSurface*                surface_ = nullptr;
+    // Keys typed into a preview child of another process (EPUB reader, plugin host) reach neither
+    // returnAction_ nor the host's hook. While such a child has the keyboard, the return key is a hotkey.
+    QTimer                          foreignInputTimer_;
+    // Tab or a click (EnsureKeyboardFocusOnView) entered the preview. Until then a child that takes the keyboard
+    // itself (the EPUB reader activates its window when created) gives it back to the file panel.
+    mutable bool                    entered_ = false;
+    QKeyCombination                 returnKey_{ Qt::Key_unknown };
+    int                             foreignHotKeyId_ = 0;
+    bool                            foreignHotKeyRefused_ = false;
+    void                            updateForeignReturnKey();
+    void                            releaseForeignReturnKey();
     QString                         filePath_;
     QWidget*                        information_ = nullptr;
     QString                         informationText_;

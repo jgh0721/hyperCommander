@@ -7,6 +7,7 @@
 #include <QDir>
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "epubProcessView.hpp"
+#include "documentFocusRestore.hpp"
 #include "markdownDocumentView.hpp"
 #include "rstDocumentView.hpp"
 #include "documentShortcutRegistry.hpp"
@@ -223,7 +224,7 @@ namespace hc::document
             // Queued: the command may close this tab, and the view emits from its polling slot.
             connect(epub_,&EpubProcessView::HostCommandRequested,this,&DocumentViewPane::HostCommandRequested,Qt::QueuedConnection);
             connect(epub_,&EpubProcessView::ViewStateChanged,this,&DocumentViewPane::ViewStateChanged);
-            connect(epub_,&EpubProcessView::Loaded,this,[this]{if(auto* Edit=findChild<QAction*>("epubEdit"))Edit->setEnabled(true);if(isVisible() && !IsEpubEditing())epub_->FocusInput();epub_->ReaderAction("context-menu",true);});
+            connect(epub_,&EpubProcessView::Loaded,this,[this]{if(auto* Edit=findChild<QAction*>("epubEdit"))Edit->setEnabled(true);if(isVisible() && !IsEpubEditing() && !previewKeepsPanelKeyboard())epub_->FocusInput();epub_->ReaderAction("context-menu",true);});
             // Reader right-click (plan 8.6): queued so the menu does not open inside the view's polling slot.
             connect(epub_,&EpubProcessView::ContextMenuRequested,this,[this](const QJsonObject& Request){
                 if(!epub_ || IsEpubEditing() || !epub_->isVisible())return;
@@ -841,6 +842,8 @@ namespace hc::document
         }
     }
     void DocumentViewPane::Focus(){
+        // Tab switches, loads and commands all end here; a Ctrl+Q preview the user has not entered keeps out.
+        if(previewKeepsPanelKeyboard())return;
         const auto Native=reinterpret_cast<HWND>(window()->internalWinId());
         if(isVisible() && Native && GetAncestor(GetForegroundWindow(),GA_ROOT)==GetAncestor(Native,GA_ROOT)
             && !QApplication::activeModalWidget() && !QApplication::activePopupWidget()){
@@ -850,6 +853,12 @@ namespace hc::document
         if(markdown_){markdown_->Focus();return;}
         if(rst_){rst_->Focus();return;}
         if(IsEpubEditing())epubEditor_->SourceInput()->isVisible()?epubEditor_->SourceInput()->setFocus():epubEditor_->setFocus();else if(epub_)currentEpub()->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
+    }
+    bool DocumentViewPane::previewKeepsPanelKeyboard() const
+    {
+        // The EPUB reader activates its own window when asked for the keyboard, which takes HyperCommander's;
+        // keys typed there never reach HyperCommander.
+        return PreviewKeepsPanelKeyboard(this);
     }
     bool DocumentViewPane::ReleaseNativeFocus(){
         // An out-of-process view is never Qt's focus widget, so hiding the pane moves nothing: Win32 leaves

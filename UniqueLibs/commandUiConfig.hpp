@@ -8,6 +8,7 @@
 #include <QKeyEvent>
 #include <functional>
 #include <algorithm>
+#include <qt_windows.h>
 
 namespace hc::ui {
 // IDs are stable across menus, buttons and persisted shortcut aliases. A single
@@ -343,5 +344,47 @@ inline QString CommandLinePrompt(const QString& Path, int MaxCharacters = 36)
     // Count Unicode code points so an emoji/supplementary character is intact.
     return QString::fromUcs4(Characters.constData(), Prefix) + "..."
         + QString::fromUcs4(Characters.constData() + Characters.size() - Suffix, Suffix);
+}
+
+// RegisterHotKey form of a key: virtual key and MOD_* flags without MOD_NOREPEAT. A punctuation key also
+// carries the modifiers VkKeyScan reports for its character. virtualKey_ is 0 when Windows cannot register it.
+struct NativeHotKey { UINT virtualKey_ = 0; UINT modifiers_ = 0; };
+inline NativeHotKey ToNativeHotKey(QKeyCombination Key)
+{
+    const int Code = Key.key(); UINT Vk = 0, CharacterModifiers = 0;
+    if ((Code >= Qt::Key_A && Code <= Qt::Key_Z) || (Code >= Qt::Key_0 && Code <= Qt::Key_9)) Vk = Code;
+    else if (Code >= Qt::Key_F1 && Code <= Qt::Key_F24) Vk = VK_F1 + Code - Qt::Key_F1;
+    else switch (Code) {
+    case Qt::Key_Space: Vk = VK_SPACE; break; case Qt::Key_Tab: Vk = VK_TAB; break;
+    case Qt::Key_Return: case Qt::Key_Enter: Vk = VK_RETURN; break;
+    case Qt::Key_Escape: Vk = VK_ESCAPE; break; case Qt::Key_Backspace: Vk = VK_BACK; break;
+    case Qt::Key_Delete: Vk = VK_DELETE; break; case Qt::Key_Insert: Vk = VK_INSERT; break;
+    case Qt::Key_Home: Vk = VK_HOME; break; case Qt::Key_End: Vk = VK_END; break;
+    case Qt::Key_PageUp: Vk = VK_PRIOR; break; case Qt::Key_PageDown: Vk = VK_NEXT; break;
+    case Qt::Key_Left: Vk = VK_LEFT; break; case Qt::Key_Right: Vk = VK_RIGHT; break;
+    case Qt::Key_Up: Vk = VK_UP; break; case Qt::Key_Down: Vk = VK_DOWN; break;
+    case Qt::Key_MediaNext: Vk = VK_MEDIA_NEXT_TRACK; break; case Qt::Key_MediaPrevious: Vk = VK_MEDIA_PREV_TRACK; break;
+    case Qt::Key_MediaPlay: case Qt::Key_MediaTogglePlayPause: Vk = VK_MEDIA_PLAY_PAUSE; break;
+    case Qt::Key_MediaStop: Vk = VK_MEDIA_STOP; break;
+    default:
+        if (Code > 0 && Code < 0x10000) {
+            const auto Native = VkKeyScanW(wchar_t(Code));
+            if (Native != -1) {
+                Vk = LOBYTE(Native);
+                if (HIBYTE(Native) & 1) CharacterModifiers |= MOD_SHIFT;
+                if (HIBYTE(Native) & 2) CharacterModifiers |= MOD_CONTROL;
+                if (HIBYTE(Native) & 4) CharacterModifiers |= MOD_ALT;
+            }
+        }
+        break;
+    }
+    const auto Mods = Key.keyboardModifiers();
+    if (!Vk || Mods.testFlag(Qt::KeypadModifier)) return {};
+    NativeHotKey Result{Vk, CharacterModifiers};
+    if (Mods.testFlag(Qt::ControlModifier)) Result.modifiers_ |= MOD_CONTROL;
+    if (Mods.testFlag(Qt::AltModifier)) Result.modifiers_ |= MOD_ALT;
+    if (Mods.testFlag(Qt::ShiftModifier)) Result.modifiers_ |= MOD_SHIFT;
+    if (Mods.testFlag(Qt::MetaModifier)) Result.modifiers_ |= MOD_WIN;
+    return Result;
 }
 } // namespace hc::ui

@@ -10,6 +10,33 @@
 #include <functional>
 
 namespace hc::document {
+// The window that receives keys now. GetFocus() answers for the calling thread's queue only: a viewer host
+// that has left HyperCommander's queue still names its own last window there.
+inline HWND KeyboardFocusWindow()
+{
+    GUITHREADINFO Info{sizeof(GUITHREADINFO)};
+    const auto Foreground = GetForegroundWindow();
+    return Foreground && GetGUIThreadInfo(GetWindowThreadProcessId(Foreground, nullptr), &Info) ? Info.hwndFocus : nullptr;
+}
+inline bool KeyboardInside(HWND Native)
+{
+    const auto Focus = KeyboardFocusWindow();
+    return Native && Focus && (Focus == Native || IsChild(Native, Focus));
+}
+// The Ctrl+Q preview shell (carries hc.quickPreview) containing Widget. Searched through the parents:
+// a view's window() can be an intermediate Qt::Window rather than the shell.
+inline const QWidget* QuickPreviewShell(const QWidget* Widget)
+{
+    for (auto* At = Widget; At; At = At->parentWidget()) if (At->property("hc.quickPreview").toBool()) return At;
+    return nullptr;
+}
+// A Ctrl+Q preview loads while the file panel keeps the keyboard.
+// Until the user enters it, nothing in the preview may take the keyboard.
+inline bool PreviewKeepsPanelKeyboard(const QWidget* Widget)
+{
+    const auto* Shell = QuickPreviewShell(Widget);
+    return Shell && !KeyboardInside(reinterpret_cast<HWND>(Shell->internalWinId()));
+}
 // Restore document input after Qt finishes its activation fallback. Repair the
 // native HWND too: setFocus alone can keep a stale native input destination.
 class DocumentFocusRestore final : public QObject, public QAbstractNativeEventFilter {
@@ -45,9 +72,10 @@ private:
             if(!scope_ || !scope_->isVisible() || !scope_->isEnabled() || scope_->window()->isMinimized()
                 || QApplication::activeModalWidget() || QApplication::activePopupWidget())return;
             const auto Native=reinterpret_cast<HWND>(scope_->internalWinId());
-            const auto Focus=GetFocus();
-            if(scope_->property("hc.quickPreview").toBool()
-                && (!Focus || (Focus!=Native && !IsChild(Native,Focus))))return;
+            if(PreviewKeepsPanelKeyboard(scope_))return;
+            // A shown view of another process inside this window (the EPUB reader) already has the keys.
+            if(const auto Focus=KeyboardFocusWindow();Native && Focus && IsChild(Native,Focus) && IsWindowVisible(Focus)
+                && GetWindowThreadProcessId(Focus,nullptr)!=GetCurrentThreadId())return;
             const auto Root=Native?GetAncestor(Native,GA_ROOT):nullptr;
             if(!Root || GetAncestor(GetForegroundWindow(),GA_ROOT)!=Root)return;
             if(QApplication::activeWindow()!=scope_->window())QApplication::setActiveWindow(scope_->window());

@@ -23,6 +23,8 @@ public:
     bool RequestClose();
     bool IsPinned() const;
     void Pin();
+    // A click or key in the plugin's window since the preview opened.
+    bool WasInteracted() const;
     void ResumeFollowing();
     void SetReturnKey(QKeyCombination Key);
     void OpenPreview(std::shared_ptr<hc::storage::IContentSource> Source, std::vector<PluginViewerChoice> Choices);

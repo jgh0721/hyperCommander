@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "epubProcessView.hpp"
 #include "documentParkingThread.hpp"
+#include "documentFocusRestore.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -48,6 +49,11 @@ namespace hc::document
         WebProcessSnapshot snapshot_;
         std::atomic<bool> cancel_ = false, done_ = false, ready_ = false, attached_ = false;
         std::atomic<bool> focusRequested_ = false;
+        // Ctrl+Q preview window: the reader activates itself when focused, so a request is sent only while
+        // the keyboard is already inside that window (the user entered the preview).
+        std::atomic<std::uintptr_t> previewShell_ = 0;
+        // The view's GUI thread, and the reader thread joined to its input for an entered preview (worker only).
+        DWORD ownerThread_ = 0, attachedReader_ = 0;
         mutable std::mutex mutex_;
         std::condition_variable wake_;
         QJsonObject state_{{"status", "opening"}};
@@ -251,7 +257,7 @@ namespace hc::document
     }
     bool EpubProcessView::FocusInput()
     {
-        if(!work_ || !isVisible() || work_->cancel_.load() || work_->done_.load()) return false;
+        if(!work_ || !isVisible() || work_->cancel_.load() || work_->done_.load() || PreviewKeepsPanelKeyboard(this)) return false;
         work_->focusRequested_.store(true);
         work_->wake_.notify_one();
         return true;
@@ -359,6 +365,8 @@ namespace hc::document
         timer_->start();
         work_ = std::make_shared<Work>();
         work_->initiallyInteractive_=InitiallyInteractive;work_->sourceLines_=SourceLines;
+        if(auto* Shell=QuickPreviewShell(this))work_->previewShell_=static_cast<std::uintptr_t>(Shell->internalWinId());
+        work_->ownerThread_=GetCurrentThreadId();
         work_->appearance_ = epubui::Appearance();
         auto Config = qApp->property("documentViewsConfigDir").toString();
         if(Config.isEmpty()) Config = hc::settings::DocumentPaths().directory_;
@@ -554,8 +562,20 @@ namespace hc::document
                     Metrics["peakObservedProcesses"] = int(PeakProcesses);
                     Metrics["activeProcesses"] = int(Usage.activeProcesses_);
                     State->Metrics(Metrics);
-                    if(DocumentReady && State->focusRequested_.exchange(false) && !Cancelled()
-                        && IsWindowVisible(reinterpret_cast<HWND>(State->parent_))) {
+                    const auto PreviewShell = reinterpret_cast<HWND>(State->previewShell_.load());
+                    // Queued reader actions go first, and a passive reader takes the focus only once it reports its
+                    // input on: activating a window whose focus flag is still being changed leaves the keyboard outside.
+                    bool SettingsPending = false;
+                    { std::lock_guard Lock(State->mutex_); SettingsPending = !State->settingsRequests_.empty(); }
+                    const bool InputEnabled = !View.contains("inputEnabled") || View["inputEnabled"].toBool();
+                    if(DocumentReady && !SettingsPending && InputEnabled && State->focusRequested_.exchange(false) && !Cancelled()
+                        && IsWindowVisible(reinterpret_cast<HWND>(State->parent_)) && (!PreviewShell || KeyboardInside(PreviewShell))) {
+                        // An entered Ctrl+Q preview: HyperCommander keeps the foreground, and the reader can set its own
+                        // focus only while its thread shares the input of this view's thread (joined to HyperCommander's).
+                        if(PreviewShell && !State->attachedReader_) {
+                            const auto Reader = GetWindowThreadProcessId(reinterpret_cast<HWND>(State->snapshot_.childWindow_), nullptr);
+                            if(Reader && State->ownerThread_ && AttachThreadInput(State->ownerThread_, Reader, TRUE)) State->attachedReader_ = Reader;
+                        }
                         auto Focus = QJsonDocument::fromJson(Request).object(); Focus["kind"] = "focus";
                         QByteArray FocusBytes;
                         if(!Owner->Exchange(QJsonDocument(Focus).toJson(QJsonDocument::Compact), FocusBytes, 5000, Error)) {
@@ -570,6 +590,7 @@ namespace hc::document
                         FocusAcknowledged = Ack["focusRequested"].toBool();
                     }
                     View["focusAcknowledged"] = FocusAcknowledged;
+                    View["readerInputJoined"] = State->attachedReader_ != 0;
                     View["processId"] = int(State->snapshot_.processId_);
                     {
                         // The helper reports the newest reload it received; a newer one may still be on its way.
@@ -596,6 +617,8 @@ namespace hc::document
             const auto Request=QJsonDocument(QJsonObject{{"protocolVersion",1},{"documentId",Id},{"generation",State->generation_},{"kind","flush-reading"}}).toJson(QJsonDocument::Compact);
             Metrics["readingFlushSaved"]=Owner->Exchange(Request,Reply,1000,FlushError) && QJsonDocument::fromJson(Reply).object()["accepted"].toBool();
         }
+        // Leave the reader's input before it is retired; a closing reader must not hold this thread's keys.
+        if(State->attachedReader_) AttachThreadInput(State->ownerThread_, std::exchange(State->attachedReader_, 0), FALSE);
         const auto ClosingAt = Elapsed.elapsed();
         State->Update({{"status", "closing"}});
         while((Owner && !Owner->Close(100)) || (Pending && !Pending->Close(100)))

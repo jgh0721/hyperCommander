@@ -114,6 +114,7 @@
 #include "qtViewerHost.hpp"
 #include "qtPluginViewerSurface.hpp"
 #include "UniqueLibs/document/documentOpenController.hpp"
+#include "commonLibs/document/epub/epubTemplate.hpp"
 #include "qtPluginHostSettings.hpp"
 #include "qtPluginManagementPage.hpp"
 #include "pluginHost/manifestFile.hpp"
@@ -423,6 +424,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingViewerUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "realWlxQuickPreviewUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "quickPreviewIndependentDocumentUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "quickPreviewKeyboardReturnUi"
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("filePanelGrouping"), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -8087,6 +8089,175 @@ private slots:
         QVERIFY(Bounds.right - Bounds.left > 100 && Bounds.bottom - Bounds.top > 100);
         if (!Shot.isEmpty()) { QTest::qWait(250); QVERIFY(main_->screen()->grabWindow(0).save(Shot)); }
         qInfo() << "F3 and CtrlQ independent native sessions, Tab entry and return shortcut passed" << QString::fromStdString(Native->Snapshot().provider_);
+    }
+    void quickPreviewKeyboardReturnUi()
+    {
+        // Ctrl+Q keeps the file panel's keyboard while the preview loads, also when the cached host reopens.
+        // Tab enters the preview and the return key (default Ctrl+Alt+F12) brings it back, from the views in
+        // the plugin host (text, PDF, image) and from the EPUB reader, which is a process of its own.
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
+        QVERIFY(Put("note.txt", QByteArray("Ctrl+Q keyboard return line\r\n").repeated(200)));
+        { QImage Picture(800, 600, QImage::Format_RGB32); Picture.fill(QColor(40, 100, 180)); QVERIFY(Picture.save(Directory.filePath("picture.png"))); }
+        {
+            QPdfWriter Writer(Directory.filePath("pages.pdf")); QPainter Painter(&Writer); QVERIFY(Painter.isActive());
+            for (int Page = 0; Page < 3; ++Page) { if (Page) QVERIFY(Writer.newPage()); Painter.drawText(400, 400, QString("page %1").arg(Page + 1)); }
+        }
+        const auto Book = hc::document::epub::CreateBook({"Keyboard return", {}, "en", "Keyboard chapter"});
+        QVERIFY2(Book.error_.isEmpty(), qPrintable(Book.error_)); QVERIFY(Put("book.epub", Book.bytes_));
+        auto* Source = panels_.front(); auto* Target = panels_.back();
+        for (auto* Panel : panels_) {
+            static_cast<CFSModel*>(model(Panel))->SetProviderEnabled(true);
+            Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 5000);
+        }
+        auto* Model = static_cast<CFSModel*>(model(Source));
+        auto* Grid = qobject_cast<CGridView*>(Source->GetFocusView(Source->CurrentTabIndex())); QVERIFY(Grid);
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge);
+        auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
+        // The closed preview keeps its host cached; later tests must start without it.
+        const auto Retire = qScopeGuard([Host] { Host->CloseAll(); QElapsedTimer Wait; Wait.start(); while (!Host->IsIdle() && Wait.elapsed() < 15000) QTest::qWait(20); });
+        const auto Main = reinterpret_cast<HWND>(main_->winId());
+        const auto Focus = [&](const QString& Name) {
+            for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
+                Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
+                while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
+                if (Index.model() == Model && Model->GetName(Index) == Name) { Grid->EnsureKeyboardFocusOnView(); return Index; }
+            }
+            return QModelIndex{};
+        };
+        const auto Dispatch = [&](const QString& Id, QModelIndex Index) {
+            auto Future = Bridge->Dispatch(Id, {}, "test", Index); QElapsedTimer Wait; Wait.start();
+            while (Future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) { if (Wait.elapsed() > 5000) return false; QTest::qWait(10); }
+            return Future.get().HasValue();
+        };
+        // The input queue is shared with the preview processes: this thread's focus names the window in any of them.
+        const auto Keyboard = [] { GUITHREADINFO Info{sizeof(Info)}; return GetGUIThreadInfo(GetCurrentThreadId(), &Info) ? Info.hwndFocus : HWND{}; };
+        const auto ProcessName = [](HWND Window) {
+            DWORD Id = 0; GetWindowThreadProcessId(Window, &Id); QString Name;
+            if (const auto Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, Id)) {
+                wchar_t Path[MAX_PATH]{}; DWORD Size = MAX_PATH;
+                if (QueryFullProcessImageNameW(Process, 0, Path, &Size)) Name = QFileInfo(QString::fromWCharArray(Path, int(Size))).fileName();
+                CloseHandle(Process);
+            }
+            return Name;
+        };
+        const auto Chain = [](HWND Window) {
+            QStringList Parts;
+            for (; Window; Window = GetAncestor(Window, GA_PARENT)) {
+                wchar_t Class[64]{}; GetClassNameW(Window, Class, 64);
+                Parts.append(QString("%1:%2%3").arg(quintptr(Window), 0, 16).arg(QString::fromWCharArray(Class))
+                    .arg((GetWindowLongPtrW(Window, GWL_STYLE) & WS_CHILD) ? "(child)" : ""));
+                if (Window == GetDesktopWindow() || Parts.size() > 12) break;
+            }
+            return Parts.join(" > ");
+        };
+        const auto Describe = [&] {
+            const auto Window = Keyboard(); const auto Foreground = GetForegroundWindow();
+            return QString("keyboard=%1 %2 foreground=%3 %4 qt=%5 main=%6 keyboardChain=[%7] foregroundChain=[%8]").arg(quintptr(Window), 0, 16).arg(ProcessName(Window))
+                .arg(quintptr(Foreground), 0, 16).arg(ProcessName(Foreground))
+                .arg(QApplication::focusWidget() ? QString::fromLatin1(QApplication::focusWidget()->metaObject()->className()) : QString("none"))
+                .arg(quintptr(Main), 0, 16).arg(Chain(Window), Chain(Foreground));
+        };
+        const auto InGrid = [&] {
+            // Keys go to a window of this process under the main window (Qt routes them to the focus widget),
+            // never to a preview process. HyperCommander's foreground can be one of its child windows; compare roots.
+            auto* Widget = QApplication::focusWidget(); const auto Window = Keyboard(); DWORD Process = 0; GetWindowThreadProcessId(Window, &Process);
+            return GetAncestor(GetForegroundWindow(), GA_ROOT) == Main && Window && Process == GetCurrentProcessId()
+                && GetAncestor(Window, GA_ROOT) == Main && Widget && (Widget == Grid || Grid->isAncestorOf(Widget));
+        };
+        const auto InPreviewProcess = [&](const QString& Process) {
+            const auto Window = Keyboard(); DWORD Id = 0; GetWindowThreadProcessId(Window, &Id);
+            return Window && Id != GetCurrentProcessId() && IsChild(Main, Window) && (Process.isEmpty() || ProcessName(Window).compare(Process, Qt::CaseInsensitive) == 0);
+        };
+        const auto Press = [](std::initializer_list<WORD> Codes) {
+            std::vector<INPUT> Keys;
+            for (const auto Code : Codes) { INPUT Key{}; Key.type = INPUT_KEYBOARD; Key.ki.wVk = Code; Keys.push_back(Key); }
+            for (auto At = std::rbegin(Codes); At != std::rend(Codes); ++At) { INPUT Key{}; Key.type = INPUT_KEYBOARD; Key.ki.wVk = *At; Key.ki.dwFlags = KEYEVENTF_KEYUP; Keys.push_back(Key); }
+            return SendInput(UINT(Keys.size()), Keys.data(), sizeof(INPUT)) == Keys.size();
+        };
+        // The second EPUB pass reopens the host cached by the first close.
+        int EpubPasses = 0;
+        for (const auto& Name : QStringList{"note.txt", "pages.pdf", "picture.png", "book.epub", "book.epub"}) {
+            const bool Epub = Name.endsWith(".epub");
+            const auto Index = Focus(Name); QVERIFY(Index.isValid());
+            Source->sig_NotifyPanelActivated(); QVERIFY(ActivateTestWindow(Main)); Grid->EnsureKeyboardFocusOnView();
+            QTRY_VERIFY2_WITH_TIMEOUT(InGrid(), qPrintable(Name + " before Ctrl+Q: " + Describe()), 5000);
+            // Keyboard owners from Ctrl+Q until the preview is shown, reported when the preview takes the keyboard.
+            QStringList Owners; QElapsedTimer Since; Since.start(); QString LastOwner;
+            QTimer Sampler; Sampler.setInterval(10);
+            connect(&Sampler, &QTimer::timeout, this, [&] {
+                const auto Window = Keyboard(); const auto Owner = QString("%1:%2").arg(ProcessName(Window)).arg(quintptr(Window), 0, 16);
+                if (Owner != LastOwner) { Owners.append(QString("%1ms %2").arg(Since.elapsed()).arg(Owner)); LastOwner = Owner; }
+            });
+            Sampler.start();
+            QVERIFY(Dispatch("hc.viewer.quick", Index));
+            QPointer<CQuickView> Quick = qobject_cast<CQuickView*>(Target->GetFocusView(Target->CurrentTabIndex())); QVERIFY(Quick);
+            QTRY_VERIFY_WITH_TIMEOUT(Quick->findChild<QtPluginViewerSurface*>(), 10000);
+            auto* Native = Quick->findChild<QtPluginViewerSurface*>();
+            const auto Record = [&] { const auto Documents = Native->Details().documentState_["documents"].toArray(); return Documents.isEmpty() ? QJsonObject{} : Documents[0].toObject(); };
+            QTRY_VERIFY2_WITH_TIMEOUT(Native->IsReady() && (!Epub || Record()["view"].toObject()["ready"].toBool()),
+                qPrintable([&] {
+                    const auto Details = Native->Details(); QStringList Labels;
+                    for (auto* Label : Quick->findChildren<QLabel*>()) if (Label->isVisible() && !Label->text().isEmpty())
+                        Labels.append(QString::fromLatin1(Label->text().left(300).toUtf8().toPercentEncoding()));
+                    return Name + " preview not ready: error=" + QString::fromStdString(Native->Snapshot().error_ ? Native->Snapshot().error_->code_ : "")
+                        + " status=" + QString::number(int(Details.viewer_.status_)) + " idle=" + QString::number(Details.idle_)
+                        + " stage=" + Details.preparationStage_ + " channel=" + QString::number(Details.documentChannel_)
+                        + " noMatch=" + QString::number(Details.noMatch_) + " failures=" + QString::number(int(Details.candidateFailures_.size()))
+                        + " commandError=" + QString::fromStdString(Details.commandError_ ? Details.commandError_->code_ : "")
+                        + " labels=[" + Labels.join(" | ") + "] state=" + QString::fromUtf8(QJsonDocument(Details.documentState_).toJson(QJsonDocument::Compact).left(3000));
+                }()), 60000);
+            // The EPUB reader activates its own window when the helper shows it. HyperCommander takes the keyboard
+            // back at once; it must never stay in a preview the user has not entered. Watch past that point.
+            QElapsedTimer Watch; Watch.start(); qint64 OutSince = -1; int Excursions = 0;
+            while (Watch.elapsed() < 3000) {
+                if (InGrid()) OutSince = -1;
+                else if (OutSince < 0) { OutSince = Watch.elapsed(); ++Excursions; }
+                QVERIFY2(OutSince < 0 || Watch.elapsed() - OutSince < 300, qPrintable(Name + " preview kept the keyboard: " + Describe().left(400) + " epub="
+                    + [&] { auto Epub = Record()["view"].toObject()["epub"].toObject();
+                        return QString("focusAcknowledged=%1 status=%2").arg(Epub["focusAcknowledged"].toBool()).arg(Epub["status"].toString()); }()
+                    + " owners=[" + Owners.join(", ") + "]"));
+                QTest::qWait(10);
+            }
+            Sampler.stop();
+            QTRY_VERIFY2_WITH_TIMEOUT(InGrid(), qPrintable(Name + " after load: " + Describe()), 1000);
+            qInfo() << Name << "keyboard owners after Ctrl+Q:" << Owners.join(", ") << "excursions" << Excursions;
+            // The second EPUB pass enters with a click straight into the reader: that is the user's entry too.
+            const bool Click = Epub && ++EpubPasses == 2;
+            Owners.clear(); LastOwner.clear(); Since.restart(); Sampler.start();
+            if (Click) {
+                const auto Center = Native->mapToGlobal(Native->rect().center()) * Native->devicePixelRatioF();
+                QVERIFY(SetCursorPos(Center.x(), Center.y()));
+                INPUT Button{}; Button.type = INPUT_MOUSE; Button.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+                QCOMPARE(SendInput(1, &Button, sizeof(INPUT)), UINT(1));
+                QTest::qWait(150); Button.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+                QCOMPARE(SendInput(1, &Button, sizeof(INPUT)), UINT(1));
+            } else QTest::keyClick(QApplication::focusWidget(), Qt::Key_Tab);
+            QTRY_VERIFY2_WITH_TIMEOUT(InPreviewProcess(Epub ? "HyperEpubWeb.exe" : QString()), qPrintable(Name + " Tab did not enter: " + Describe().left(300)
+                + [&] { const auto Epub = Record()["view"].toObject()["epub"].toObject();
+                    return QString(" epub focusAcknowledged=%1 inputEnabled=%2 inputFocused=%3 readerFocused=%4 joined=%5").arg(Epub["focusAcknowledged"].toBool())
+                        .arg(Epub["inputEnabled"].toBool()).arg(Epub["inputFocused"].toBool()).arg(Epub["readerFocused"].toBool()).arg(Epub["readerInputJoined"].toBool()); }()
+                + " owners=[" + Owners.join(", ") + "]"), 10000);
+            if (Click) { QTest::qWait(500); QVERIFY2(InPreviewProcess("HyperEpubWeb.exe"), qPrintable("click entry was taken back: owners=[" + Owners.join(", ") + "]")); }
+            Sampler.stop();
+            qInfo() << Name << "entered:" << Describe();
+            if (Name == "note.txt") {
+                QVERIFY(Press({'X'})); QTRY_VERIFY2_WITH_TIMEOUT(Record()["view"].toObject()["canUndo"].toBool(), qPrintable("typing: " + Describe()), 5000);
+                QVERIFY(Press({VK_CONTROL, 'Z'}));
+                QTRY_VERIFY_WITH_TIMEOUT(!Record()["view"].toObject()["canUndo"].toBool() && !Record()["dirty"].toBool(), 5000);
+            } else {
+                const auto Before = Record()["view"].toObject();
+                QVERIFY(Press({VK_NEXT})); QTest::qWait(500);
+                const auto After = Record()["view"].toObject();
+                qInfo() << Name << "PageDown page" << Before["page"].toInt(-1) << "->" << After["page"].toInt(-1)
+                        << "epub locator changed" << (Before["epub"].toObject()["lastReaderState"].toObject()["locator"] != After["epub"].toObject()["lastReaderState"].toObject()["locator"]);
+            }
+            QVERIFY2(InPreviewProcess(Epub ? "HyperEpubWeb.exe" : QString()), qPrintable(Name + " lost the preview keyboard: " + Describe()));
+            QVERIFY(Press({VK_CONTROL, VK_MENU, VK_F12}));
+            QTRY_VERIFY2_WITH_TIMEOUT(InGrid(), qPrintable(Name + " return key: " + Describe()), 5000);
+            QVERIFY(Dispatch("hc.viewer.close", Index)); QTRY_VERIFY_WITH_TIMEOUT(Quick.isNull(), 15000);
+            QTRY_VERIFY2_WITH_TIMEOUT(InGrid(), qPrintable(Name + " after close: " + Describe()), 5000);
+        }
     }
     void quickPreviewIndependentDocumentUi()
     {

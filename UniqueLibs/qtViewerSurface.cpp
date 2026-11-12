@@ -431,6 +431,7 @@ void QtViewerSurface::Close()
     S.markdown_->clear(); S.image_->SetDocument({}); S.stop_->setEnabled(false); S.fit_->setEnabled(false);
     S.status_->setText(tr("뷰어를 닫았습니다."));
 }
+bool QtViewerSurface::WasInteracted() const { return state_->pluginViewer_ && state_->pluginViewer_->WasInteracted(); }
 bool QtViewerSurface::IsPinned() const
 {
     auto& S = *state_;
@@ -443,12 +444,9 @@ bool QtViewerSurface::IsPinned() const
             if (Record["dirty"].toBool() || Record["saving"].toBool() || Record["archivePending"].toBool() || Record["archiveUpdating"].toBool()) S.previewPinned_ = true;
         }
     }
-    // Pin before editing, including native children for which Qt has no focus widget.
-    const auto Child = reinterpret_cast<HWND>(quintptr(Details.child_.toULongLong(nullptr, 16)));
-    GUITHREADINFO Info{sizeof(GUITHREADINFO)};
-    const auto Thread = Child ? GetWindowThreadProcessId(Child, nullptr) : 0;
-    if (Thread && GetGUIThreadInfo(Thread, &Info) && Info.hwndFocus
-        && (Info.hwndFocus == Child || IsChild(Child, Info.hwndFocus))) S.previewPinned_ = true;
+    // Entering the preview pins it (Pin: Tab, or a click into a child of another process; WasInteracted: a click or
+    // key in the plugin host). A native focus inside the child is no evidence: the EPUB reader and a reopened host
+    // take it themselves, and a host thread outside HyperCommander's input still reports its last own focus.
     if (S.previewPinned_) S.status_->setText(tr("편집 보호를 위해 현재 파일 유지 · 닫을 때 변경 내용을 확인합니다."));
     return S.previewPinned_;
 }
