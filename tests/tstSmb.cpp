@@ -410,6 +410,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnRealDownloadsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "downloadsGroupingInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewRefreshInputUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewCloseTabUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewSortModeUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "groupedParentPageKeysUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "groupCaptionHeightUi"
@@ -2347,16 +2348,23 @@ private slots:
         for (auto Position : {CFavoriteDirMgr::DRIVES_ON_TOP, CFavoriteDirMgr::DRIVES_ON_BOTTOM}) {
             QVERIFY(Favorites->ApplyConfiguration({{"entry", "cd C:/", "C:/"}}, Position, Position, {"downloads", "documents"}));
             QMenu Menu; Favorites->ConstructDirMenu(&Menu);
-            int Drive = -1, Shell = -1, Favorite = -1;
+            int Drive = -1, Shell = -1, Favorite = -1, System = -1;
             for (int Row = 0; Row < Menu.actions().size(); ++Row) {
                 auto* Action = Menu.actions()[Row];
                 if (Action->menu()) {
                     if (Action->menu()->objectName() == "hc.favorites.shellPathsMenu") { Shell = Row; QCOMPARE(Action->menu()->actions().size(), 2); }
+                    else if (Action->menu()->objectName() == "hc.favorites.systemToolsMenu") {
+                        System = Row; const auto Tools = Action->menu()->actions(); QCOMPARE(Tools.size(), 2);
+                        QCOMPARE(Tools[0]->objectName(), QString("hc.favorites.hc.navigate.systemProcesses"));
+                        QCOMPARE(Tools[1]->objectName(), QString("hc.favorites.hc.navigate.systemServices"));
+                    }
                     else Drive = Row;
                 } else if (Action->text().contains("entry")) Favorite = Row;
             }
             QVERIFY(Drive >= 0); QVERIFY(Shell > Drive);
             QVERIFY(Position == CFavoriteDirMgr::DRIVES_ON_TOP ? Shell < Favorite : Favorite < Drive);
+            // 시스템 도구는 드라이브·셸 경로 위치와 무관하게 목록의 마지막 묶음이다.
+            QVERIFY(System > std::max({Drive, Shell, Favorite}));
         }
         QVERIFY(!CFavoriteDirMgr::ResolveShellPath("profile").isEmpty());
         QCOMPARE(CFavoriteDirMgr::ResolveShellPath("computer"), QString("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"));
@@ -6363,6 +6371,48 @@ private slots:
             qInfo() << "system-view key" << Press << "focusedGP-before" << Target << "moved" << Moved;
         }
         QCOMPARE(Lost, 0);
+    }
+    void systemViewCloseTabUi()
+    {
+        // Ctrl+G의 시스템 도구는 현재 탭을 그 보기로 바꾸고, 시스템 보기에서도 Ctrl+W가 탭을 닫는다.
+        // 탭이 하나뿐이면 보기만 걷고 파일 목록으로 돌아간다.
+        auto* Bridge = TyStCommandMgr::GetInstance()->Bridge(); QVERIFY(Bridge);
+        const auto Workspace = main_->CaptureWorkspace();
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); QVERIFY(Panel);
+        const auto Restore = qScopeGuard([&] { Panel->HideSystemView(); main_->RestoreWorkspace(Workspace); });
+        auto* Tabs = Panel->findChild<QTabWidget*>("tabWidget"); QVERIFY(Tabs);
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        hc::workspace::TabState Tab; Tab.id_ = "system-close-tab";
+        Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
+        hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
+        QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 10000);
+        QCOMPARE(Tabs->count(), 1);
+        emit Panel->sig_NotifyPanelActivated();
+        const auto Pick = [](const QString& Id) {
+            QMenu Menu; TyStFavoriteDirMgr::GetInstance()->ConstructDirMenu(&Menu);
+            auto* Tools = Menu.findChild<QMenu*>("hc.favorites.systemToolsMenu");
+            auto* Action = Tools ? Tools->findChild<QAction*>("hc.favorites." + Id) : nullptr;
+            if (!Action || !Action->isEnabled()) return false;
+            Action->trigger(); return true;
+        };
+        const auto CtrlW = [Panel] {
+            auto* Grid = Panel->SystemView() ? Panel->SystemView()->findChild<Qtitan::TreeGrid*>("hc.system.grid") : nullptr;
+            if (!Grid) return false;
+            QTest::keyClick(Grid, Qt::Key_W, Qt::ControlModifier); return true;
+        };
+        QVERIFY(Pick("hc.navigate.systemProcesses"));
+        QTRY_VERIFY(Panel->SystemView() && Panel->SystemView()->ViewKind() == CSystemView::Kind::Processes);
+        QVERIFY(CtrlW());
+        QTRY_VERIFY(!Panel->SystemView()); QCOMPARE(Tabs->count(), 1);
+        QVERIFY(qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())));
+        Panel->AddTab(); QCOMPARE(Tabs->count(), 2); const int Added = Panel->CurrentTabIndex();
+        emit Panel->sig_NotifyPanelActivated();
+        QVERIFY(Pick("hc.navigate.systemServices"));
+        QTRY_VERIFY(Panel->SystemView() && Panel->SystemView()->ViewKind() == CSystemView::Kind::Services);
+        QCOMPARE(Panel->CurrentTabIndex(), Added);
+        QVERIFY(CtrlW());
+        QTRY_COMPARE(Tabs->count(), 1); QVERIFY(!Panel->SystemView());
+        QVERIFY(qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())));
     }
     void systemViewSortModeUi()
     {

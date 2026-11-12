@@ -473,7 +473,8 @@ DEFINE_HC_COMMAND( QMainUI, NavigateFavorites )
         // Keep the file grid's logical keyboard target while the popup owns input.
         Menu.setFocus(Qt::PopupFocusReason);
         for (auto* Action : Menu.actions()) {
-            if (Action->isVisible() && Action->isEnabled() && !Action->isSeparator()) {
+            // setActiveAction은 하위 메뉴(드라이브·셸 경로·시스템 도구)를 바로 펼친다. 첫 강조는 일반 항목에 둔다.
+            if (Action->isVisible() && Action->isEnabled() && !Action->isSeparator() && !Action->menu()) {
                 Menu.setActiveAction(Action);
                 break;
             }

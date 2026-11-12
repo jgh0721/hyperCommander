@@ -163,6 +163,9 @@ void CFavoriteDirMgr::ConstructDirMenu( QMenu* Menu )
 
     if( shellPathsOn_ == DRIVES_ON_BOTTOM ) createShellPaths(Menu);
 
+    // 즐겨찾기 목록의 마지막 묶음. 설정과 무관하게 늘 보인다.
+    createSystemTools( Menu );
+
     QAction* Ac = nullptr;
 
     Menu->addSeparator();
@@ -301,5 +304,25 @@ void CFavoriteDirMgr::createShellPaths(QMenu* Menu)
             }
             TyStCommandMgr::GetInstance()->ProcessFavoriteDir(QStringLiteral("cd ") + Path, {});
         });
+    }
+}
+
+void CFavoriteDirMgr::createSystemTools( QMenu* Menu )
+{
+    auto* Parent = Menu->addMenu( tr( "시스템 도구(&S)" ) );
+    Parent->setObjectName( "hc.favorites.systemToolsMenu" );
+    // 즐겨찾기 폴더처럼 현재 탭을 그 보기로 바꾼다. 키 표시는 같은 명령의 현재 키를 따른다.
+    const auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
+    for( const auto& [Id, Label] : { std::pair{ QStringLiteral( "hc.navigate.systemProcesses" ), tr( "프로세스 관리(&P)" ) },
+                                     std::pair{ QStringLiteral( "hc.navigate.systemServices" ), tr( "서비스 관리(&S)" ) } } )
+    {
+        const auto* Command = Bridge ? Bridge->Action( Id ) : nullptr;
+        const auto Key = Command ? Command->property( "hc.keyLabel" ).toString() : QString{};
+        auto* Action = Parent->addAction( Key.isEmpty() ? Label : Label + '\t' + Key );
+        Action->setObjectName( "hc.favorites." + Id );
+        Action->setEnabled( !Command || Command->isEnabled() );
+        connect( Action, &QAction::triggered, this, [Id] {
+            if( auto* Target = TyStCommandMgr::GetInstance()->Bridge() ) Target->ExecuteCommand( Id );
+        } );
     }
 }

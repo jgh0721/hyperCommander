@@ -50,6 +50,8 @@ protected:
 
 private:
     void createShellPaths(QMenu* Menu);
+    // 프로세스·서비스 보기로 가는 하위 메뉴
+    void createSystemTools( QMenu* Menu );
     TyEnDrivesOn shellPathsOn_ = DRIVES_ON_NONE;
     QStringList shellPaths_;
     void                            createDrives( QMenu* Menu );

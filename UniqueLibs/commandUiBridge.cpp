@@ -306,6 +306,7 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
             [Guard = QPointer<CommandUiBridge>(this)](const CommandInvocation& Invocation) {
                 const bool Available = Guard && (Guard->findModel(Invocation.context_.tabId_)
                     || ((Invocation.id_ == "hc.navigate.systemProcesses" || Invocation.id_ == "hc.navigate.systemServices") && Guard->activePanel_)
+                    || Guard->systemTabCommand(Invocation)
                     || Invocation.id_ == "hc.viewer.close" || (Invocation.id_ == "hc.viewer.quick" && Guard->quick_));
                 return SupportDecision{Available ? Availability::Supported : Availability::Unsupported, Available ? "tab-available" : "tab-closed"};
             },
@@ -800,6 +801,14 @@ bool CommandUiBridge::DispatchFolder(const QModelIndex& Index)
     return true;
 }
 
+bool CommandUiBridge::systemTabCommand(const CommandInvocation& Invocation) const
+{
+    // 프로세스·서비스 보기가 덮은 탭은 PanelModel이 거르므로 문맥에 탭 ID가 없다.
+    // 그래도 탭 명령은 파일 모델 없이 현재 패널에서 처리한다.
+    return Invocation.id_.starts_with("hc.tab.") && Invocation.context_.tabId_.empty()
+        && activePanel_ && activePanel_->SystemView();
+}
+
 CFSModel* CommandUiBridge::findModel(const std::string& TabId) const
 {
     if (!main_ || TabId.empty()) return nullptr;
@@ -820,6 +829,16 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
         if (!activePanel_) return Error{ErrorCategory::Cancelled, "panel-closed"};
         // 시스템 보기에는 파일 모델이 없다. 현재 패널의 현재 탭을 직접 전환한다.
         activePanel_->ShowSystemView(Invocation.id_ == "hc.navigate.systemServices" ? 1 : 0);
+        return CommandOutcome{};
+    }
+    if (systemTabCommand(Invocation))
+    {
+        const auto& Id = Invocation.id_;
+        if (Id == "hc.tab.new") { activePanel_->AddTab(); bindModels(); }
+        else if (Id == "hc.tab.close") activePanel_->CloseTab();
+        else if (Id == "hc.tab.next") activePanel_->NextTab();
+        else if (Id == "hc.tab.previous") activePanel_->PrevTab();
+        else return Error{ErrorCategory::NotFound, "unknown-command"};
         return CommandOutcome{};
     }
     if (Invocation.id_ == "hc.viewer.close" || (Invocation.id_ == "hc.viewer.quick" && quick_))

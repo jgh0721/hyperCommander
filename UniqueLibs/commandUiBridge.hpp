@@ -123,6 +123,8 @@ private:
     void extractArchive();
     void openSearch();
     CFSModel* findModel(const std::string& TabId) const;
+    // 시스템 보기가 덮은 현재 탭에 온 탭 명령(hc.tab.*)인가
+    bool systemTabCommand(const hc::commands::CommandInvocation& Invocation) const;
     hc::storage::Result<hc::commands::CommandOutcome> execute(const hc::commands::CommandInvocation& Invocation);
     hc::storage::CommandContext captureFiles(const QModelIndex& Index, bool Single);
     hc::storage::Result<hc::commands::CommandOutcome> executeFile(const hc::commands::CommandInvocation& Invocation, CFSModel* Model);

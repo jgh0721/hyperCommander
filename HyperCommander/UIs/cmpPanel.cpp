@@ -555,7 +555,12 @@ void CmpPanel::NextTab()
         ui.tabWidget->setCurrentIndex( Current + 1 );
 }
 
-void CmpPanel::CloseTab() { closeTabAt(ui.tabWidget->currentIndex()); }
+void CmpPanel::CloseTab()
+{
+    // 하나뿐인 탭은 닫지 않는다. 그 탭을 덮은 프로세스·서비스 보기만 걷어 파일 목록으로 돌아간다.
+    if( ui.tabWidget->count() == 1 && SystemView() ) { HideSystemView(); return; }
+    closeTabAt( ui.tabWidget->currentIndex() );
+}
 
 void CmpPanel::closeTabAt(int Current)
 {
