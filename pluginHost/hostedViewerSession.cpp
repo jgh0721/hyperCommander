@@ -8,6 +8,7 @@
 #include "UniqueLibs/nativeWritableStorage.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include "UniqueLibs/document/imagePerformance.hpp"
+#include "UniqueLibs/document/archiveDraftDirectory.hpp"
 #include <QFile>
 #include <QCryptographicHash>
 #include <QJsonArray>
@@ -375,7 +376,7 @@ namespace hc::plugins
         bool NoMatch = false, ArchiveIdle = false;
         bool DirectInputAllowed=false;
         bool DirectOriginal = false;
-        std::shared_ptr<QTemporaryDir> ExternalDraft;
+        std::shared_ptr<hc::document::ArchiveDraftDirectory> ExternalDraft;
         QString ExternalPath;
         QByteArray ExternalBaseline;
         ProviderContentSource::ArchiveWriteback ExternalWriteback;
@@ -629,7 +630,7 @@ namespace hc::plugins
                 const auto ArchiveSource = std::dynamic_pointer_cast<ProviderContentSource>(Source);
                 if (!DirectInputAllowed && ArchiveSource && ArchiveSource->GetArchiveWriteback()
                     && Options.approval_.granted_.contains(Permission::WriteContent)) {
-                    ExternalDraft = std::make_shared<QTemporaryDir>(QDir::tempPath() + "/hc-preview-external-XXXXXX");
+                    ExternalDraft = std::make_shared<hc::document::ArchiveDraftDirectory>(hc::document::ArchiveDraftRoot());
                     if (!ExternalDraft->isValid() || !QDir(ExternalDraft->path()).mkdir("content")) return Invalid("archive-draft-directory");
                     ExternalPath = ExternalDraft->filePath("content/" + QFileInfo(QString::fromUtf8(Entry->name_)).fileName());
                     if (!QFile::copy(QString::fromStdString(Lease->LocalPath()), ExternalPath)
@@ -638,11 +639,16 @@ namespace hc::plugins
                     ExternalBaseline = Hash.Value(); ExternalWriteback = ArchiveSource->GetArchiveWriteback();
                     // Preserve before granting the plugin write access, including crashes/forced shutdown.
                     ExternalDraft->setAutoRemove(false);
-                    QFile Recovery(ExternalDraft->filePath("recovery.json"));
-                    if (Recovery.open(QIODevice::WriteOnly)) Recovery.write(QJsonDocument(QJsonObject{
+                    // The plugin may write at any time, so the copy is pending from the start; the recovery
+                    // list drops a leftover whose content still equals baselineSha256.
+                    const auto& Locator = Entry->locator_;
+                    hc::document::WriteArchiveDraftManifest(ExternalDraft->path(), QJsonObject{{"schemaVersion", 2},
                         {"purpose", "external-archive-preview-edit"}, {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
                         {"owner", QString::fromStdString(State->details_.viewer_.id_)}, {"draft", ExternalPath},
-                        {"source", QString::fromStdString(Serialize(Entry->locator_))}, {"retention", "until-recovered-or-explicitly-discarded"}}).toJson());
+                        {"source", QString::fromStdString(Serialize(Locator))}, {"retention", "until-recovered-or-explicitly-discarded"},
+                        {"name", QFileInfo(ExternalPath).fileName()}, {"archivePath", Locator.kind_ == LocatorKind::Archive ? QString::fromUtf8(Locator.root_) : QString{}},
+                        {"entryPath", Locator.nesting_.empty() ? QString{} : QString::fromUtf8(Locator.nesting_.back().entry_)}, {"nesting", int(Locator.nesting_.size())},
+                        {"baselineSha256", QString::fromLatin1(ExternalBaseline.toHex())}, {"pending", true}});
                     std::lock_guard Lock(State->mutex_); State->details_.externalArchive_ = true; State->details_.externalArchiveDraft_ = ExternalPath;
                 }
                 std::pair<std::uint32_t, std::uint32_t> Size;

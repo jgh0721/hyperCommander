@@ -7,16 +7,19 @@ class QAction;
 class QLabel;
 class QWidget;
 class QComboBox;
+class QProgressBar;
+class QPushButton;
 class QTableWidget;
 class ScintillaQtDirectBackend;
 namespace hc::epub::poc {class ReadingSettings;}
+namespace hc::document::recovery { struct Policy; }
 namespace hc::document {
 class DocumentSettingsDialog final : public QDialog {
     Q_OBJECT
 public:
     explicit DocumentSettingsDialog(QString Path, const QList<QAction*>& Actions, QWidget* Parent = nullptr);
     bool Apply(bool ResolveConflicts = false);
-    // Selects a category: "common", "text", "shortcuts", "epub", "markdown", "image".
+    // Selects a category: "common", "recovery", "text", "shortcuts", "epub", "markdown", "rst", "image".
     void ShowPage(const QString& Key);
 signals:
     // '최근 항목 지우기': the workspace owns the recent list and confirms before clearing.
@@ -46,5 +49,15 @@ private:
     QTableWidget* colorTable_ = nullptr;
     ScintillaQtDirectBackend* colorPreview_ = nullptr;
     hc::epub::poc::ReadingSettings* epubSettings_=nullptr;
+    // 세션 · 복구: usage of <config>/recovery under the retention values currently chosen (not yet applied).
+    void refreshRecoveryUsage();
+    recovery::Policy recoveryPolicy() const;
+    QString recoveryRoot_;
+    QTableWidget* recoveryUsage_ = nullptr;
+    QLabel* recoveryMeter_ = nullptr;
+    QLabel* recoveryStatus_ = nullptr;
+    QProgressBar* recoveryBar_ = nullptr;
+    QPushButton* recoveryPurge_ = nullptr;
+    quint64 recoveryGeneration_ = 0;
 };
 }

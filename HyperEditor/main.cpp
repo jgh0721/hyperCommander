@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "UniqueLibs/document/documentRecoveryMaintenance.hpp"
+#include "UniqueLibs/document/recoveryPromptDialog.hpp"
 #include "UniqueLibs/fonts/startupFontWarmup.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -29,7 +31,9 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <QMessageBox>
+#include <QDateTime>
 #include <memory>
+#include <optional>
 #include <vector>
 #include "UniqueLibs/document/documentThemeAdapter.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
@@ -145,7 +149,7 @@ int main(int Argc, char** Argv)
         auto Runtime = hc::document::MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),
             QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256));
         if(!RhwpEdit){
-            Workspace Window(hc::defaults::edit::RecoveryDirectory(true),true);
+            Workspace Window(hc::defaults::edit::RecoveryDirectory(Config.directory_),true);
             Window.ConfigureHwp(std::move(Runtime));
             QObject::connect(&Window,&hc::document::DocumentWorkspaceWidget::StateChanged,&Window,[&Window]{
                 if(Window.Snapshot()["closeRequested"].toBool())Window.close();
@@ -181,7 +185,7 @@ int main(int Argc, char** Argv)
         QDir::cleanPath(Config.directory_).toCaseFolded()}).toJson(QJsonDocument::Compact);
     const auto ProfileId = QString::fromLatin1(QCryptographicHash::hash(Profile, QCryptographicHash::Sha256).toHex());
     App.setProperty("documentRecoveryProfile", ProfileId);
-    const auto RecoveryRoot = hc::defaults::edit::RecoveryDirectory(false);
+    const auto RecoveryRoot = hc::defaults::edit::RecoveryDirectory(Config.directory_);
     hc::settings::JsonStore Settings(hc::settings::UnifiedConfig::FileName(Config.directory_),
         {{"schemaVersion", 2}}, nullptr, hc::settings::JsonStore::Scope::Product);
     bool HotExitMigrationFailed = false;
@@ -198,7 +202,7 @@ int main(int Argc, char** Argv)
     if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
     SettingsTrace.End();
     std::vector<std::unique_ptr<Workspace>> Windows;
-    const auto OpenFiles=[&](QStringList Files, QString SessionId = {}){
+    const auto OpenFiles=[&](QStringList Files, QString SessionId = {}, std::optional<QStringList> Documents = std::nullopt){
     if (Files.isEmpty()) Files.append(QString{});
     Windows.reserve(Windows.size()+Files.size());
     for (const auto& File : Files) {
@@ -268,7 +272,7 @@ int main(int Argc, char** Argv)
         Current->show();
         ShowTrace.End();
         hc::document::startup::Scope OpenTrace("editor.openRequest");
-        if (!SessionId.isEmpty() && !Current->RestoreHotExit(SessionId)) continue;
+        if (!SessionId.isEmpty() && !Current->RestoreHotExit(SessionId, Documents)) continue;
         if (!File.isEmpty() && Current->Handle({{"action", "open"}, {"path", QFileInfo(File).absoluteFilePath()},{"copyOnly",Parser.isSet("document-copy")}}).contains("error"))
             Current->ShowShellError(QObject::tr("문서 한도 때문에 파일을 열지 못했습니다: %1").arg(File));
         Windows.push_back(std::move(Window));
@@ -278,24 +282,81 @@ int main(int Argc, char** Argv)
     // Show a shell first. Restoration itself reads snapshots off the GUI thread.
     QTimer::singleShot(0, &App, [&] {
         QSet<QString> RestoredPaths; bool Restored = false;
+        QStringList ArchiveCopies; QString Notice;
         const auto Text = Settings.Object()["documentViews"].toObject()["textView"].toObject();
-        if (!EpubEdit && !NewEpub && !Parser.isSet("document-copy") && !Parser.isSet("find-in-files") && Text["hotExitEnabled"].toBool(true)) {
+        if (!EpubEdit && !NewEpub && !Parser.isSet("document-copy") && !Parser.isSet("find-in-files")) {
+            namespace recovery = hc::document::recovery;
+            const bool HotExit = Text["hotExitEnabled"].toBool(true);
+            const auto Policy = recovery::PolicyFrom(Settings.Object());
+            // Copies from the pre-2026.11 locations first, then the retention clean-up, then the sessions.
+            // Only the executable's own configuration folder imports them; --config-dir folders never do.
+            if (QDir::cleanPath(Config.directory_).compare(QDir::cleanPath(hc::defaults::edit::ConfigDirectory(QCoreApplication::applicationDirPath())), Qt::CaseInsensitive) == 0)
+                recovery::MigrateLegacy(Config.directory_, ProfileId, hc::defaults::edit::LegacyRecoveryDirectories(), QDir::tempPath());
             hc::document::DocumentRecoveryStore Store(RecoveryRoot);
-            for (const auto& Id : Store.Sessions()) {
-                auto Session = Store.ReadSession(Id); if (!Session.HasValue() || Session.Value()["profileId"].toString() != ProfileId || Session.Value()["documents"].toArray().isEmpty()) continue;
-                const auto Before = Windows.size(); OpenFiles({}, Id);
-                if (Windows.size() > Before) {
-                    Restored = true;
-                    for (const auto& Item : Session.Value()["documents"].toArray()) {
-                        const auto Path = Item.toObject()["path"].toString();
-                        if (!Path.isEmpty()) RestoredPaths.insert(QDir::cleanPath(QFileInfo(Path).absoluteFilePath()).toCaseFolded());
-                    }
+            const auto Ours = [&](const QJsonObject& Session) { return Session["profileId"].toString() == ProfileId; };
+            // A HotExit session waits for HotExit; with HotExit turned off its copies stay in the recovery list.
+            if (!HotExit) for (const auto& Id : Store.Sessions()) {
+                const auto Session = Store.ReadSession(Id);
+                if (Session.HasValue() && Ours(Session.Value()) && Session.Value()["cleanShutdown"].toBool()) recovery::ReleaseSession(RecoveryRoot, Id);
+            }
+            recovery::Purge(RecoveryRoot, Policy, QDateTime::currentDateTime(), recovery::PurgeScope::Startup);
+            const auto Restore = [&](const QString& Id, std::optional<QStringList> Documents) {
+                const auto Session = Store.ReadSession(Id); if (!Session.HasValue()) return false;
+                const auto Before = Windows.size(); OpenFiles({}, Id, std::move(Documents));
+                if (Windows.size() <= Before) return false;
+                Restored = true;
+                for (const auto& Item : Session.Value()["documents"].toArray()) {
+                    const auto Path = Item.toObject()["path"].toString();
+                    if (!Path.isEmpty()) RestoredPaths.insert(QDir::cleanPath(QFileInfo(Path).absoluteFilePath()).toCaseFolded());
                 }
+                return true;
+            };
+            if (HotExit) for (const auto& Id : Store.Sessions()) {
+                const auto Session = Store.ReadSession(Id);
+                if (Session.HasValue() && Ours(Session.Value()) && Session.Value()["cleanShutdown"].toBool() && !Session.Value()["documents"].toArray().isEmpty()) Restore(Id, std::nullopt);
+            }
+            // Windows that ended abnormally. One with only unchanged documents reopens like HotExit (or just ends);
+            // the others are asked once, all together, also with HotExit off.
+            std::vector<recovery::PromptGroup> Asked;
+            for (auto& Group : recovery::CrashGroups(RecoveryRoot, ProfileId)) {
+                if (!Group.entries_.empty()) { Asked.push_back(std::move(Group)); continue; }
+                if (!HotExit || !Restore(Group.sessionId_, std::nullopt)) recovery::ReleaseSession(RecoveryRoot, Group.sessionId_);
+            }
+            if (!Asked.empty()) {
+                using Prompt = hc::document::RecoveryPromptDialog;
+                auto Choice = Prompt::Keep; QStringList Selected;
+                if (Policy.startupAction_ == "restore") { Choice = Prompt::Restore; for (const auto& Group : Asked) for (const auto& Entry : Group.entries_) Selected.append(Entry.key_); }
+                else if (Policy.startupAction_ == "ask") {
+                    Prompt Dialog(Asked, Policy.retentionDays_, Windows.empty() ? nullptr : Windows.front().get());
+                    Dialog.exec(); Choice = Dialog.Chosen(); Selected = Dialog.Selected();
+                }
+                int Kept = 0;
+                for (const auto& Group : Asked) {
+                    QStringList Mine; for (const auto& Entry : Group.entries_) if (Selected.contains(Entry.key_)) Mine.append(Entry.key_);
+                    Kept += int(Group.entries_.size()) - (Choice == Prompt::Keep ? 0 : int(Mine.size()));
+                    if (Group.sessionId_.isEmpty()) {
+                        // Archive copies are asked once; afterwards they wait in the recovery list.
+                        QStringList All; for (const auto& Entry : Group.entries_) All.append(Entry.key_);
+                        if (Choice == Prompt::Delete) for (const auto& Key : Mine) recovery::RemoveArchiveDraft(Key);
+                        if (Choice == Prompt::Restore) ArchiveCopies = Mine;
+                        recovery::KeepArchiveDrafts(All);
+                        continue;
+                    }
+                    if (Choice == Prompt::Restore && (!Mine.isEmpty() || Group.clean_) && Restore(Group.sessionId_, Mine)) continue;
+                    recovery::ReleaseSession(RecoveryRoot, Group.sessionId_, Choice == Prompt::Delete ? Mine : QStringList{});
+                }
+                if (Kept && Policy.startupAction_ == "keep")
+                    Notice = QObject::tr("강제 종료로 남은 문서 %1개를 복구 목록에 보관했습니다. 파일 › 복구 › 복구 목록에서 열 수 있습니다.").arg(Kept);
             }
         }
         QStringList Files; for (const auto& File : Parser.positionalArguments())
             if (!RestoredPaths.contains(QDir::cleanPath(QFileInfo(File).absoluteFilePath()).toCaseFolded())) Files.append(File);
         if (!Files.isEmpty() || !Restored) OpenFiles(Files);
+        if (!Windows.empty()) {
+            for (const auto& Directory : ArchiveCopies)
+                if (Windows.front()->OpenArchiveDraftCopy(Directory).contains("error")) Windows.front()->ShowShellError(QObject::tr("압축 파일 편집본을 열지 못했습니다. 복구 목록에 남아 있습니다."));
+            if (!Notice.isEmpty()) Windows.front()->ShowShellError(Notice);
+        }
         // Cancelling the dialog of a --new-epub window with nothing open closes that window.
         if (NewEpub && !Windows.empty()) Windows.back()->ShowNewEpubDialog(true);
     });

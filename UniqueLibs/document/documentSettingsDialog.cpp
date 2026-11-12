@@ -4,6 +4,7 @@
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "documentShortcutRegistry.hpp"
+#include "documentRecoveryMaintenance.hpp"
 #include "rstProjectDialogs.hpp"
 #include "rst/pythonEnvManager.hpp"
 #include "rst/rstWorkspaceController.hpp"
@@ -55,6 +56,12 @@
 #include <fmstyle/StyleProps.h>
 #include <fmstyle/ThemeManager.h>
 #include <fmwidgets/DialogHeader.h>
+#include <fmwidgets/Banner.h>
+#include <fmwidgets/Glyph.h>
+#include <QFutureWatcher>
+#include <QLocale>
+#include <QProgressBar>
+#include <QtConcurrentRun>
 
 namespace hc::document {
 namespace {
@@ -80,7 +87,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
     auto* Body = new QHBoxLayout; Body->setContentsMargins(12, 12, 4, 12); Body->setSpacing(12);
     auto* List = new QListWidget(this); List->setObjectName("settingsCategories");
-    List->addItems({tr("공통"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("reStructuredText"),tr("이미지 뷰어")}); List->setFixedWidth(180);
+    List->addItems({tr("공통"), tr("세션 · 복구"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("reStructuredText"),tr("이미지 뷰어")}); List->setFixedWidth(180);
     List->setProperty(fm::style::props::kSoftSelection, true); List->setFrameShape(QFrame::NoFrame);
     for (int Row = 0; Row < List->count(); ++Row) List->item(Row)->setSizeHint(QSize(0, 30));
     auto* Pages = new QStackedWidget(this); Body->addWidget(List); Body->addWidget(Pages, 1); Layout->addLayout(Body, 1);
@@ -155,6 +162,101 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
         for (auto It = Profile.begin(); It != Profile.end(); ++It) base_[It.key()] = It.value();
         loadControls(); base_ = Original; error_->clear();
     });
+    // 세션 · 복구: one page for every document kind (text, Markdown, reST, PDF, images, EPUB drafts, archive copies).
+    auto* RecoveryColumn = Page(tr("세션 · 복구"), tr("편집 중 복구 사본과 HotExit, 복구 사본을 얼마나 오래 어디에 둘지 정합니다. 모든 문서 종류에 함께 적용합니다."));
+    auto* Protection = Card(RecoveryColumn, tr("편집 중 보호"));
+    Check(Protection, "documentViews/textView/recoveryEnabled", tr("편집 중 복구 사본 만들기"));
+    Note(Protection, tr("예기치 않은 종료에 대비해 수정 내용을 주기적으로 보존합니다. EPUB 편집 초안에도 적용합니다."));
+    Combo(Protection, "documentViews/recovery/startupAction", tr("강제 종료 뒤 다시 시작할 때"),
+        {tr("복구할지 묻기"), tr("묻지 않고 복구"), tr("묻지 않고 목록에 보관")}, {"ask", "restore", "keep"});
+    auto* StartupNote = new QLabel(this); StartupNote->setWordWrap(true); StartupNote->setObjectName("recoveryStartupNote"); Protection->addRow(StartupNote);
+    auto* Startup = qobject_cast<QComboBox*>(controls_["documentViews/recovery/startupAction"]);
+    const auto RefreshStartup = [Startup, StartupNote] {
+        const auto Value = Startup->currentData().toString();
+        StartupNote->setText(Value == "restore" ? tr("남은 문서를 바로 엽니다. 원본 파일은 바꾸지 않습니다.")
+            : Value == "keep" ? tr("창을 열지 않고 복구 목록에만 남깁니다. 시작할 때 몇 개를 보관했는지 알려 줍니다.")
+            : tr("남은 문서를 보여 주고 복구, 목록에 보관, 삭제 중에서 고르게 합니다."));
+    };
+    connect(Startup, &QComboBox::currentIndexChanged, this, RefreshStartup); RefreshStartup();
+    auto* Session = Card(RecoveryColumn, tr("종료와 다시 시작"));
+    Check(Session, "documentViews/textView/hotExitEnabled", tr("창을 닫아도 다음 실행에서 이어서 편집 (HotExit)"));
+    Note(Session, tr("원본 파일은 저장하지 않습니다. 개별 탭을 닫을 때는 저장 여부를 확인합니다."));
+    Check(Session, "documentViews/textView/restoreCleanDocuments", tr("수정하지 않은 문서도 다시 열기"));
+    {
+        auto* HotExit = qobject_cast<QCheckBox*>(controls_["documentViews/textView/hotExitEnabled"]);
+        auto* Periodic = qobject_cast<QCheckBox*>(controls_["documentViews/textView/recoveryEnabled"]);
+        auto* Clean = controls_["documentViews/textView/restoreCleanDocuments"];
+        auto* Behavior = new QLabel(this); Behavior->setWordWrap(true); Behavior->setObjectName("hotExitBehavior");
+        Session->addRow(Behavior);
+        const auto Refresh = [HotExit, Periodic, Clean, Behavior] {
+            Clean->setEnabled(HotExit->isChecked());
+            Behavior->setText(HotExit->isChecked()
+                ? (Periodic->isChecked() ? tr("보존에 실패하면 창을 닫지 않습니다.") : tr("정상적으로 창을 닫을 때만 보존합니다. 실행 중 예기치 않게 종료되면 마지막 변경을 복구하지 못할 수 있습니다."))
+                : tr("창을 닫을 때 저장 여부를 확인합니다. 기존 복구 사본은 보존 기간이 끝날 때까지 유지합니다."));
+        };
+        connect(HotExit, &QCheckBox::toggled, this, Refresh); connect(Periodic, &QCheckBox::toggled, this, Refresh); Refresh();
+    }
+    auto* Retention = Card(RecoveryColumn, tr("보존 기간"));
+    Combo(Retention, "documentViews/recovery/retentionDays", tr("복구 사본 보존 기간"), {tr("7일"), tr("14일"), tr("30일 (기본)"), tr("90일"), tr("무제한")}, {7, 14, 30, 90, 0});
+    Combo(Retention, "documentViews/recovery/maxMiB", tr("최대 용량"), {tr("256 MiB"), tr("512 MiB"), tr("1 GiB (기본)"), tr("4 GiB"), tr("무제한")}, {256, 512, 1024, 4096, 0});
+    Note(Retention, tr("기간은 마지막으로 보존한 시각부터 셉니다. 기간이 지났거나 용량을 넘은 사본은 HyperEditor를 시작할 때 오래된 것부터 삭제합니다. "
+        "지금 열려 있는 창의 사본과 다음 실행에서 이어 갈 HotExit 세션은 삭제하지 않습니다."));
+    auto* Copies = Card(RecoveryColumn, tr("보존된 복구 사본"));
+    recoveryRoot_ = hc::defaults::edit::RecoveryDirectory(QFileInfo(path_).absolutePath());
+    if (const auto Notice = recovery::MigrationNotice(recoveryRoot_); !Notice.isEmpty()) {
+        QStringList Sources; for (const auto& Source : Notice["sources"].toArray()) Sources.append(Source.toString());
+        auto* Moved = new fm::ui::Banner(fm::ui::Banner::Info, fm::ui::glyph::Info,
+            tr("복구 사본을 옮겼습니다. 이전 위치(%1)의 사본 %2개를 설정 폴더로 옮겼습니다. 이 안내는 한 번만 표시합니다.").arg(Sources.join(", ")).arg(Notice["count"].toInt()), this);
+        Moved->setObjectName("recoveryMigrationNotice"); Copies->addRow(Moved);
+        recovery::DismissMigrationNotice(recoveryRoot_);
+    }
+    {
+        auto* Where = new QHBoxLayout; Where->setSpacing(8);
+        auto* PathLabel = new QLabel(QDir::toNativeSeparators(recoveryRoot_), this); PathLabel->setObjectName("recoveryLocation");
+        PathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse); PathLabel->setWordWrap(true);
+        auto* OpenFolder = new QPushButton(tr("폴더 열기"), this); OpenFolder->setObjectName("recoveryOpenFolder"); fm::style::setSmall(OpenFolder);
+        Where->addWidget(PathLabel, 1); Where->addWidget(OpenFolder); Copies->addRow(tr("저장 위치"), Where);
+        connect(OpenFolder, &QPushButton::clicked, this, [this] { QDir().mkpath(recoveryRoot_); QDesktopServices::openUrl(QUrl::fromLocalFile(recoveryRoot_)); });
+    }
+    recoveryUsage_ = new QTableWidget(4, 4, this); recoveryUsage_->setObjectName("recoveryUsage");
+    recoveryUsage_->setHorizontalHeaderLabels({tr("종류"), tr("개수"), tr("크기"), tr("가장 빠른 만료")});
+    recoveryUsage_->verticalHeader()->hide(); recoveryUsage_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    recoveryUsage_->setSelectionMode(QAbstractItemView::NoSelection); recoveryUsage_->setFocusPolicy(Qt::NoFocus);
+    recoveryUsage_->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    recoveryUsage_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    recoveryUsage_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff); recoveryUsage_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    recoveryUsage_->setFixedHeight(recoveryUsage_->horizontalHeader()->sizeHint().height() + 4 * recoveryUsage_->verticalHeader()->defaultSectionSize() + 4);
+    Copies->addRow(recoveryUsage_);
+    {
+        auto* Meter = new QHBoxLayout; Meter->setSpacing(10);
+        recoveryMeter_ = new QLabel(this); recoveryMeter_->setObjectName("recoveryMeter");
+        recoveryBar_ = new QProgressBar(this); recoveryBar_->setObjectName("recoveryCapacity"); recoveryBar_->setRange(0, 1000); recoveryBar_->setTextVisible(false); recoveryBar_->setMaximumHeight(8);
+        Meter->addWidget(recoveryMeter_); Meter->addWidget(recoveryBar_, 1); Copies->addRow(Meter);
+    }
+    auto* Manage = new QPushButton(tr("복구 사본 관리…"), this); Manage->setObjectName("manageRecoveryCopies");
+    recoveryPurge_ = new QPushButton(tr("기간이 지난 사본 없음"), this); recoveryPurge_->setObjectName("recoveryPurge"); recoveryPurge_->setEnabled(false);
+    auto* CopyButtons = new QHBoxLayout; CopyButtons->addWidget(Manage); CopyButtons->addWidget(recoveryPurge_); CopyButtons->addStretch(); Copies->addRow(CopyButtons);
+    recoveryStatus_ = new QLabel(this); recoveryStatus_->setObjectName("recoveryStatus"); recoveryStatus_->setWordWrap(true); recoveryStatus_->hide(); Copies->addRow(recoveryStatus_);
+    Note(Copies, tr("기능을 꺼도 기존 사본은 보존 기간이 끝날 때까지 유지합니다. 삭제한 사본은 되돌릴 수 없습니다."));
+    connect(Manage, &QPushButton::clicked, this, &DocumentSettingsDialog::RecoveryManagerRequested);
+    connect(recoveryPurge_, &QPushButton::clicked, this, [this] {
+        if (hc::ui::MessageDialog::question(this, tr("기간이 지난 사본 삭제"), tr("보존 기간이 지난 복구 사본을 지금 삭제합니다. 되돌릴 수 없습니다. 계속하시겠습니까?"),
+                QMessageBox::Yes | QMessageBox::Cancel) != QMessageBox::Yes) return;
+        recoveryPurge_->setEnabled(false);
+        auto* Watcher = new QFutureWatcher<recovery::PurgeReport>(this);
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher] {
+            const auto Report = Watcher->result(); Watcher->deleteLater();
+            recoveryStatus_->setText(Report.errors_.isEmpty() ? tr("기간이 지난 사본 %1개를 삭제했습니다.").arg(Report.removed_)
+                : tr("사본 %1개를 삭제했고 %2개는 삭제하지 못했습니다.").arg(Report.removed_).arg(Report.errors_.size()));
+            recoveryStatus_->show(); refreshRecoveryUsage();
+        });
+        Watcher->setFuture(QtConcurrent::run([Root = recoveryRoot_, Settings = recoveryPolicy()] {
+            return recovery::Purge(Root, Settings, QDateTime::currentDateTime(), recovery::PurgeScope::Expired);
+        }));
+    });
+    for (const auto* Key : {"documentViews/recovery/retentionDays", "documentViews/recovery/maxMiB"})
+        connect(qobject_cast<QComboBox*>(controls_[Key]), &QComboBox::currentIndexChanged, this, [this] { refreshRecoveryUsage(); });
+    RecoveryColumn->addStretch();
     auto* Text = Page(tr("텍스트 편집기"), tr("글꼴과 편집 화면, 들여쓰기·줄바꿈, 새 문서 저장과 외부 파일 변경 처리를 설정합니다."));
     auto* FileSearch = Card(Text, tr("파일에서 찾기·바꾸기"));
     Combo(FileSearch, "documentViews/textView/findInFiles/openLocation", tr("열기 위치(&L)"), {tr("하단 패널"), tr("콘텐츠 탭 (기본)")}, {"bottom", "tab"});
@@ -220,35 +322,11 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     };
     MaskSpin("gamma", tr("글자 마스크 감마"), 3.0); MaskSpin("strength", tr("글자 마스크 강도"), 2.0);
     Text->addStretch();
-    auto* TextCommon = Pages->widget(1); Pages->removeWidget(TextCommon);
+    // The text editor page sits after 공통 and 세션 · 복구.
+    auto* TextCommon = Pages->widget(2); Pages->removeWidget(TextCommon);
     auto* TextTabs = new QTabWidget(Pages); TextTabs->setObjectName("textViewerTabs");
     TextTabs->addTab(TextCommon, tr("공통")); TextTabs->addTab(createTextColorPage(), tr("색상"));
-    auto* RecoveryPage = new QWidget(TextTabs); auto* RecoveryLayout = new QVBoxLayout(RecoveryPage);
-    auto* Protection = Card(RecoveryLayout, tr("편집 중 보호"));
-    Check(Protection, "documentViews/textView/recoveryEnabled", tr("편집 중 복구 사본 만들기"));
-    Note(Protection, tr("예기치 않은 종료에 대비해 수정 내용을 주기적으로 보존합니다."));
-    auto* Session = Card(RecoveryLayout, tr("종료와 다시 시작"));
-    Check(Session, "documentViews/textView/hotExitEnabled", tr("창을 닫아도 다음 실행에서 이어서 편집 (HotExit)"));
-    Note(Session, tr("원본 파일은 저장하지 않습니다. 개별 탭을 닫을 때는 저장 여부를 확인합니다."));
-    Check(Session, "documentViews/textView/restoreCleanDocuments", tr("수정하지 않은 문서도 다시 열기"));
-    auto* HotExit = qobject_cast<QCheckBox*>(controls_["documentViews/textView/hotExitEnabled"]);
-    auto* Periodic = qobject_cast<QCheckBox*>(controls_["documentViews/textView/recoveryEnabled"]);
-    auto* Clean = controls_["documentViews/textView/restoreCleanDocuments"];
-    auto* Behavior = new QLabel(RecoveryPage); Behavior->setWordWrap(true); Behavior->setObjectName("hotExitBehavior");
-    Session->addRow(Behavior);
-    const auto Refresh = [HotExit, Periodic, Clean, Behavior] {
-        Clean->setEnabled(HotExit->isChecked());
-        Behavior->setText(HotExit->isChecked()
-            ? (Periodic->isChecked() ? tr("보존에 실패하면 창을 닫지 않습니다.") : tr("정상적으로 창을 닫을 때만 보존합니다. 실행 중 예기치 않게 종료되면 마지막 변경을 복구하지 못할 수 있습니다."))
-            : tr("창을 닫을 때 저장 여부를 확인합니다. 기존 복구 사본은 삭제하지 않습니다."));
-    };
-    connect(HotExit, &QCheckBox::toggled, this, Refresh); connect(Periodic, &QCheckBox::toggled, this, Refresh); Refresh();
-    auto* Copies = Card(RecoveryLayout, tr("보존된 복구 사본"));
-    Note(Copies, tr("기능을 꺼도 기존 사본은 삭제하지 않습니다."));
-    auto* Manage = new QPushButton(tr("복구 사본 관리…"), RecoveryPage); Manage->setObjectName("manageRecoveryCopies");
-    Copies->addRow(Manage); connect(Manage, &QPushButton::clicked, this, &DocumentSettingsDialog::RecoveryManagerRequested);
-    RecoveryLayout->addStretch(); TextTabs->addTab(RecoveryPage, tr("세션 · 복구"));
-    Pages->insertWidget(1, TextTabs);
+    Pages->insertWidget(2, TextTabs);
     Q_UNUSED(Actions);
     auto* ShortcutPage = Page(tr("단축키"), tr("명령이 동작하는 범위별로 단축키를 바꿉니다. 함께 동작할 수 있는 범위끼리만 충돌을 검사합니다."));
     auto* Diagnostics = new QLabel(this); Diagnostics->setObjectName("shortcutDiagnostics"); Diagnostics->setWordWrap(true); ShortcutPage->addWidget(Diagnostics);
@@ -326,12 +404,8 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     });
     Scopes->setCurrentRow(0);
     ShortcutPage->addStretch();
-    auto* EpubPage = Page(tr("EPUB"), tr("편집 초안 복구와 EPUBCheck 검사, 모든 책에 쓰는 읽기 기본값을 설정합니다."));
-    auto* Drafts = Card(EpubPage, tr("편집 초안"));
-    auto* EpubRecovery=new QCheckBox(tr("편집 초안 자동 복구 (텍스트 편집기와 공통 설정)"),this);EpubRecovery->setObjectName("epubRecoveryEnabled");Drafts->addRow(SwitchRow(EpubRecovery,Drafts->parentWidget()));
-    auto* TextRecovery=qobject_cast<QCheckBox*>(controls_["documentViews/textView/recoveryEnabled"]);
-    connect(TextRecovery,&QCheckBox::toggled,EpubRecovery,&QCheckBox::setChecked);connect(EpubRecovery,&QCheckBox::toggled,TextRecovery,&QCheckBox::setChecked);
-    EpubRecovery->setChecked(TextRecovery->isChecked());
+    // EPUB edit drafts follow 세션 · 복구 (편집 중 복구 사본 만들기) like every other document.
+    auto* EpubPage = Page(tr("EPUB"), tr("EPUBCheck 검사와 모든 책에 쓰는 읽기 기본값을 설정합니다."));
     auto* EpubForm = Card(EpubPage, tr("EPUBCheck 검사"));
     auto EpubTool=[&](const QString& Key,const QString& Label,const QString& Filter){
         auto* Row=new QWidget(this);auto* Fields=new QHBoxLayout(Row);Fields->setContentsMargins(0,0,0,0);
@@ -605,14 +679,24 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(Buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { Apply(); });
     connect(Buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, [this, List] {
-        if (List->currentRow() == 1 && findChild<QTabWidget*>("textViewerTabs")->currentIndex() == 1) {
+        // Rows: 공통 0 · 세션 · 복구 1 · 텍스트 편집기 2 · 단축키 3 · EPUB 4 · 마크다운 5 · reStructuredText 6 · 이미지 뷰어 7.
+        if (List->currentRow() == 1) {
+            for (const auto* Key : {"documentViews/textView/recoveryEnabled", "documentViews/textView/hotExitEnabled", "documentViews/textView/restoreCleanDocuments",
+                    "documentViews/recovery/startupAction", "documentViews/recovery/retentionDays", "documentViews/recovery/maxMiB"}) {
+                const auto Default = hc::defaults::edit::SettingValue(Key);
+                if (auto* Toggle = qobject_cast<QCheckBox*>(controls_[Key])) Toggle->setChecked(Default.toBool());
+                else if (auto* Box = qobject_cast<QComboBox*>(controls_[Key])) Box->setCurrentIndex(qMax(0, Box->findData(Default)));
+            }
+            return;
+        }
+        if (List->currentRow() == 2 && findChild<QTabWidget*>("textViewerTabs")->currentIndex() == 1) {
             auto Mode = textColorMode(); auto Colors = textColors_[Mode].toObject();
             for (const auto& Key : Colors.keys()) Colors[Key] = QJsonValue::Null;
             const auto Legacy = legacyTextColors_[Mode].toObject();
             for (const auto& Key : Legacy.keys()) if (Key.startsWith("text.lexer.")) Colors[Key] = QJsonValue::Null;
             textColors_[Mode] = Colors; refreshTextColorRows(); return;
         }
-        if (List->currentRow() == 3) {
+        if (List->currentRow() == 4) {
             epubSettings_->ResetDraft();
             for (auto I = controls_.begin(); I != controls_.end(); ++I) if (I.key().startsWith("documentViews/epubEditor/")) {
                 const auto Default = hc::defaults::edit::SettingValue(I.key());
@@ -621,9 +705,9 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
             }
             return;
         }
-        if(List->currentRow()==6){qobject_cast<QCheckBox*>(controls_["documentViews/imageView/comic/coverAlone"])->setChecked(hc::defaults::edit::ViewValue("imageView/comic/coverAlone").toBool());return;}
+        if(List->currentRow()==7){qobject_cast<QCheckBox*>(controls_["documentViews/imageView/comic/coverAlone"])->setChecked(hc::defaults::edit::ViewValue("imageView/comic/coverAlone").toBool());return;}
         // reStructuredText: 이 페이지의 값만 기본값으로. 프로젝트별 Python 지정과 추가 패키지 · 창 배치는 남긴다.
-        if(List->currentRow()==5){
+        if(List->currentRow()==6){
             for(auto I=controls_.begin();I!=controls_.end();++I)if(I.key().startsWith("documentViews/rst/")){
                 const auto Default=hc::defaults::edit::SettingValue(I.key());
                 if(auto* Font=qobject_cast<QFontComboBox*>(I.value()))Font->setCurrentFont(QFont(Default.toString()));
@@ -635,8 +719,8 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
             }
             return;
         }
-        if(List->currentRow()==4){const auto Original=base_;base_=values();settings::UnifiedConfig::Set(base_,{"documentViews","markdown"},QJsonObject{});loadControls();base_=Original;return;}
-        if (List->currentRow() == 2) { for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control)) Field->setKeySequence(QKeySequence(Field->property("defaultValue").toString())); return; }
+        if(List->currentRow()==5){const auto Original=base_;base_=values();settings::UnifiedConfig::Set(base_,{"documentViews","markdown"},QJsonObject{});loadControls();base_=Original;return;}
+        if (List->currentRow() == 3) { for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control)) Field->setKeySequence(QKeySequence(Field->property("defaultValue").toString())); return; }
         imported_ = {}; const auto Original = base_; base_ = hc::defaults::edit::DefaultDocument(); loadControls(); base_ = Original;
     });
     QString Error; valid_ = settings::UnifiedConfig::Load(path_, base_, Error);
@@ -644,6 +728,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     Buttons->button(QDialogButtonBox::Ok)->setEnabled(valid_); Buttons->button(QDialogButtonBox::Apply)->setEnabled(valid_);
     loadControls();
     initial_ = values();
+    refreshRecoveryUsage();
     for (auto* Control : controls_) if (auto* Field = qobject_cast<QKeySequenceEdit*>(Control))
         connect(Field, &QKeySequenceEdit::keySequenceChanged, this, &DocumentSettingsDialog::validateShortcuts);
     validateShortcuts();
@@ -830,7 +915,7 @@ void DocumentSettingsDialog::refreshTextColorPreview()
 
 void DocumentSettingsDialog::ShowPage(const QString& Key)
 {
-    static const QStringList Keys{"common", "text", "shortcuts", "epub", "markdown", "rst", "image"};
+    static const QStringList Keys{"common", "recovery", "text", "shortcuts", "epub", "markdown", "rst", "image"};
     if (auto* List = findChild<QListWidget*>("settingsCategories"); List && Keys.contains(Key)) List->setCurrentRow(int(Keys.indexOf(Key)));
 }
 void DocumentSettingsDialog::loadControls()
@@ -954,5 +1039,47 @@ bool DocumentSettingsDialog::Apply(bool ResolveConflicts)
     base_ = Saved; imported_ = {}; loadControls(); initial_ = values();
     if(!epubSettings_->CommitGlobal(Error)){error_->setText(tr("일반 설정은 적용되었으나 EPUB 설정을 적용하지 못했습니다. 입력은 유지됩니다.\n%1").arg(Error));emit PreferencesSaved();return false;}
     error_->clear(); emit PreferencesSaved(); return true;
+}
+recovery::Policy DocumentSettingsDialog::recoveryPolicy() const
+{
+    // The page's current choices, before 적용: the usage and the purge button follow what is on screen.
+    QJsonObject Configuration; auto Views = values()["documentViews"].toObject();
+    Configuration["documentViews"] = Views;
+    return recovery::PolicyFrom(Configuration);
+}
+void DocumentSettingsDialog::refreshRecoveryUsage()
+{
+    if (!recoveryUsage_) return;
+    const auto Generation = ++recoveryGeneration_; const auto Settings = recoveryPolicy();
+    auto* Watcher = new QFutureWatcher<recovery::Usage>(this);
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation, Settings] {
+        const auto Usage = Watcher->result(); Watcher->deleteLater();
+        if (Generation != recoveryGeneration_) return;
+        const auto Size = [](qint64 Bytes) { return Bytes >= 1024 * 1024 ? QStringLiteral("%1 MB").arg(Bytes / 1048576.0, 0, 'f', 1) : QStringLiteral("%1 KB").arg((Bytes + 1023) / 1024); };
+        const auto Expiry = [&Settings](const recovery::UsageRow& Row) {
+            if (!Row.count_) return QStringLiteral("—");
+            if (Row.expired_) return tr("기간 지남 %1개").arg(Row.expired_);
+            if (Row.expires_.isValid()) return QLocale().toString(Row.expires_.toLocalTime(), QStringLiteral("yyyy-MM-dd"));
+            return Settings.retentionDays_ > 0 ? tr("열려 있는 창에서 사용 중") : tr("무제한");
+        };
+        const QList<QPair<QString, recovery::UsageRow>> Rows{{tr("편집 사본"), Usage.edits_}, {tr("HotExit 세션"), Usage.hotExit_}, {tr("EPUB 편집 초안"), Usage.epub_}, {tr("압축 파일 편집본"), Usage.archive_}};
+        for (int Row = 0; Row < Rows.size(); ++Row) {
+            const auto& [Label, Value] = Rows[Row];
+            const auto Cell = [this, Row](int Column, const QString& Text, Qt::Alignment Align = Qt::AlignLeft | Qt::AlignVCenter) {
+                auto* Item = new QTableWidgetItem(Text); Item->setTextAlignment(Align); recoveryUsage_->setItem(Row, Column, Item); return Item;
+            };
+            Cell(0, Label); Cell(1, tr("%1개").arg(Value.count_), Qt::AlignRight | Qt::AlignVCenter); Cell(2, Size(Value.bytes_), Qt::AlignRight | Qt::AlignVCenter);
+            auto* Expires = Cell(3, Row == 1 ? (Value.count_ ? tr("만료 없음 · 다음 실행에서 이어 감") : QStringLiteral("—")) : Expiry(Value));
+            if (Value.expired_) Expires->setForeground(fm::style::themeColorsFor(recoveryUsage_)[fm::style::Token::Danger]);
+        }
+        const auto Capacity = Settings.maxBytes_ >= 1024LL * 1024 * 1024 && Settings.maxBytes_ % (1024LL * 1024 * 1024) == 0
+            ? QStringLiteral("%1 GiB").arg(Settings.maxBytes_ / (1024LL * 1024 * 1024)) : QStringLiteral("%1 MiB").arg(Settings.maxBytes_ / (1024 * 1024));
+        recoveryMeter_->setText(tr("합계 %1개 · %2").arg(Usage.Count()).arg(Size(Usage.Bytes())) + (Settings.maxBytes_ > 0 ? QStringLiteral(" / ") + Capacity : tr(" · 용량 무제한")));
+        recoveryBar_->setVisible(Settings.maxBytes_ > 0);
+        recoveryBar_->setValue(Settings.maxBytes_ > 0 ? int(qMin<qint64>(1000, Usage.Bytes() * 1000 / Settings.maxBytes_)) : 0);
+        recoveryPurge_->setEnabled(Usage.Expired() > 0);
+        recoveryPurge_->setText(Usage.Expired() > 0 ? tr("기간이 지난 사본 %1개 지금 삭제…").arg(Usage.Expired()) : tr("기간이 지난 사본 없음"));
+    });
+    Watcher->setFuture(QtConcurrent::run([Root = recoveryRoot_, Settings] { return recovery::Summarize(Root, Settings, QDateTime::currentDateTime()); }));
 }
 }

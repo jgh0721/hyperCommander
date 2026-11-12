@@ -1,4 +1,5 @@
 ﻿#include "documentHostBroker.hpp"
+#include "archiveDraftDirectory.hpp"
 #include "commonLibs/document/documentHostProtocol.hpp"
 #include <QCryptographicHash>
 #include <QUuid>
@@ -53,7 +54,9 @@ namespace hc::document
         retiredSaves_.insert(SaveToken);
         if (Binding.archiveWriteback_) {
             if (!Binding.draft_) {
-                Binding.draft_ = std::make_shared<QTemporaryDir>(QDir::tempPath() + "/hc-preview-edit-XXXXXX");
+                // The edited copy is the user's only one until the archive is updated: keep it with the
+                // other recovery copies (owner.lock tells a live session from one whose process ended).
+                Binding.draft_ = std::make_shared<ArchiveDraftDirectory>(ArchiveDraftRoot());
                 if (!Binding.draft_->isValid()) return Fail("archive-draft-directory");
                 if (!QDir(Binding.draft_->path()).mkdir("content")) return Fail("archive-draft-directory");
                 Binding.draftPath_ = Binding.draft_->filePath("content/" + QFileInfo(QString::fromUtf8(Binding.source_.name_)).fileName());
@@ -70,10 +73,12 @@ namespace hc::document
             Binding.archivePending_ = QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256) != Binding.archiveHash_;
             // A failed update or helper crash must not delete the user's only edited copy.
             Binding.draft_->setAutoRemove(!Binding.archivePending_);
-            QFile Manifest(Binding.draft_->filePath("recovery.json"));
-            if (Manifest.open(QIODevice::WriteOnly)) Manifest.write(QJsonDocument(QJsonObject{
-                {"purpose", "archive-preview-edit"}, {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}, {"owner", Token}, {"retention", "until-recovered-or-explicitly-discarded"}, {"source", QString::fromStdString(storage::Serialize(Binding.source_.locator_))},
-                {"draft", Binding.draftPath_}, {"pending", Binding.archivePending_}}).toJson());
+            const auto& Locator = Binding.source_.locator_;
+            WriteArchiveDraftManifest(Binding.draft_->path(), QJsonObject{{"schemaVersion", 2},
+                {"purpose", "archive-preview-edit"}, {"createdUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}, {"owner", Token}, {"retention", "until-recovered-or-explicitly-discarded"}, {"source", QString::fromStdString(storage::Serialize(Locator))},
+                {"name", QFileInfo(Binding.draftPath_).fileName()}, {"archivePath", Locator.kind_ == storage::LocatorKind::Archive ? QString::fromUtf8(Locator.root_) : QString{}},
+                {"entryPath", Locator.nesting_.empty() ? QString{} : QString::fromUtf8(Locator.nesting_.back().entry_)}, {"nesting", int(Locator.nesting_.size())},
+                {"baselineSha256", QString::fromLatin1(Binding.archiveHash_.toHex())}, {"draft", Binding.draftPath_}, {"pending", Binding.archivePending_}});
             Reply["committed"] = true; Reply["archivePending"] = Binding.archivePending_; Reply["draftPath"] = Binding.draftPath_;
             return Reply;
         }

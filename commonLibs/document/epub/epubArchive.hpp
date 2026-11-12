@@ -53,11 +53,16 @@ namespace hc::document::epub::detail
         int count_ = 0;
     };
 
+    // Epub: an EPUB container (mimetype entry, UTF-8 names, Rewrite emits the stored mimetype first).
+    // General: any ZIP within the same limits. Names without the UTF-8 flag decode with the local code page,
+    // there is no mimetype requirement, and Rewrite keeps the entry order as it is.
+    enum class ZipMode { Epub, General };
+
     // Implicitly shared immutable bytes and a value-owned cancellation callback.
     class Archive final
     {
     public:
-        Archive(const QByteArray& Bytes, const Cancellation& Cancel, qsizetype EntryLimit = 16 * 1024 * 1024);
+        Archive(const QByteArray& Bytes, const Cancellation& Cancel, qsizetype EntryLimit = 16 * 1024 * 1024, ZipMode Mode = ZipMode::Epub);
         qsizetype Size(const QString& Path) const { return entries_.contains(Path) ? entries_.value(Path).size_ : -1; }
         QByteArray Read(const QString& Path) const;
         bool Contains(const QString& Path) const { return entries_.contains(Path); }
@@ -72,5 +77,6 @@ namespace hc::document::epub::detail
         QMap<QString, Entry> entries_;
         QByteArray comment_;
         QStringList warnings_;
+        ZipMode mode_ = ZipMode::Epub;
     };
 }

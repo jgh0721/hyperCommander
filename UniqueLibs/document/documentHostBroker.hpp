@@ -4,10 +4,10 @@
 #include <QJsonObject>
 #include <map>
 #include <set>
-#include <QTemporaryDir>
 
 namespace hc::document
 {
+    class ArchiveDraftDirectory;
     // HC worker-side authority. Helper tokens never authorize an arbitrary path.
     // The binding owns its source/lease until save and session retirement finish.
     class DocumentHostBroker final
@@ -35,7 +35,7 @@ namespace hc::document
             std::shared_ptr<storage::IMaterializedFileLease> lease_;
             QByteArray hash_;
             storage::ProviderContentSource::ArchiveWriteback archiveWriteback_;
-            std::shared_ptr<QTemporaryDir> draft_;
+            std::shared_ptr<ArchiveDraftDirectory> draft_;
             QString draftPath_;
             QByteArray archiveHash_;
             bool archivePending_ = false;

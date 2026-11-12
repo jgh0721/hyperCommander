@@ -19,6 +19,7 @@ target_compile_options(hc_document_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC
 qt_add_library(hc_document_broker STATIC
     ../UniqueLibs/document/documentHostBroker.cpp
     ../UniqueLibs/document/documentHostBroker.hpp
+    ../UniqueLibs/document/archiveDraftDirectory.hpp
     ../UniqueLibs/document/hwpInputInspection.cpp ../UniqueLibs/document/hwpInputInspection.hpp
     ../UniqueLibs/document/hwpPrintSnapshot.cpp ../UniqueLibs/document/hwpPrintSnapshot.hpp
     ../UniqueLibs/document/hwpPrintBridge.cpp ../UniqueLibs/document/hwpPrintBridge.hpp
@@ -158,6 +159,9 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/workspaceChromeController.cpp ../UniqueLibs/document/workspaceChromeController.hpp
     ../UniqueLibs/document/documentThemeAdapter.cpp ../UniqueLibs/document/documentThemeAdapter.hpp
     ../UniqueLibs/document/documentRecoveryStore.cpp ../UniqueLibs/document/documentRecoveryStore.hpp
+    ../UniqueLibs/document/documentRecoveryMaintenance.cpp ../UniqueLibs/document/documentRecoveryMaintenance.hpp
+    ../UniqueLibs/document/recoveryPromptDialog.cpp ../UniqueLibs/document/recoveryPromptDialog.hpp
+    ../UniqueLibs/document/recoveryManagerDialog.cpp ../UniqueLibs/document/recoveryManagerDialog.hpp
     ../UniqueLibs/document/documentWorkspaceWidget.cpp
     ../UniqueLibs/document/documentWorkspaceWidget.hpp
     ../UniqueLibs/document/documentSettingsDialog.cpp

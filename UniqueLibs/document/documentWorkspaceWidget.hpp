@@ -15,6 +15,7 @@
 #include <QPointer>
 #include <memory>
 
+class QDialog;
 class QLockFile;
 class QProgressDialog;
 class QMenuBar;
@@ -53,8 +54,13 @@ namespace hc::document
         QJsonObject HandleMessage(const QJsonObject& Envelope);
         QJsonObject Snapshot() const;
         bool RequestClose();
-        bool RestoreHotExit(const QString& SessionId);
-        void ShowRecoveryManager();
+        // Reopens a session's documents. Documents limits the preserved edits to those document ids (unchanged
+        // documents always reopen); the others stay in the recovery list once this window publishes its session.
+        bool RestoreHotExit(const QString& SessionId, const std::optional<QStringList>& Documents = std::nullopt);
+        // Filter: all · documents · epub · archive.
+        void ShowRecoveryManager(const QString& Filter = {});
+        // Opens an archive copy (…/archive-drafts/<id>) as a separate document.
+        QJsonObject OpenArchiveDraftCopy(const QString& Directory);
         bool RequestViewerClose();
         bool IsIdle() const;
         bool SetTabbed(bool Enabled);
@@ -160,8 +166,8 @@ namespace hc::document
         QString lastSaveFolder() const;
         // Save As start: the file itself; for untitled and recovered copies a real folder and name, never the recovery folder.
         QString saveAsStart(const Tab& Value) const;
-        void showEpubRecovery();
         QJsonObject openEpubRecovery(const QString& Path);
+        QPointer<QDialog> recoveryManager_;
         DocumentShortcutRouter* shortcutRouter_ = nullptr;
         QString settingsPath_;
         QJsonObject appliedPreferences_;
@@ -220,6 +226,9 @@ namespace hc::document
         bool epubFullscreen_=false,epubWasMaximized_=false;
         QRect epubWindowGeometry_;
         bool hotExitEnabled() const;
+        // The window publishes its session for HotExit, and also for periodic recovery so that an
+        // abnormal exit is offered at the next start even with HotExit off.
+        bool sessionPublishing() const;
         bool hotExitEligible(const std::shared_ptr<Tab>& Tab) const;
         // D9 / D10: EPUB tabs keep unsaved edits in their EPUB draft; PDF tabs in a full-PDF snapshot.
         bool hotExitEpub(const std::shared_ptr<Tab>& Tab) const;

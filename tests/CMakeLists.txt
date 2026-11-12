@@ -896,6 +896,17 @@ endforeach()
 hc_deploy_document_engine(hc_document_p0_tests)
 hc_deploy_document_engine(hc_document_p1_tests)
 
+# Recovery copies in <config>/recovery: retention, migration, abnormal-exit prompt, archive write-back, settings page.
+qt_add_executable(hc_document_recovery_tests document/tstDocumentRecovery.cpp)
+target_link_libraries(hc_document_recovery_tests PRIVATE hc_document_widgets hc_epub_package Qt6::Test Qt6::Concurrent)
+target_compile_options(hc_document_recovery_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+add_dependencies(hc_document_recovery_tests hc_hyperviewer_package)
+hc_enable_qt_deployment(hc_document_recovery_tests TEST PLUGINS)
+add_test(NAME hc.document.recovery COMMAND hc_document_recovery_tests -o "${CMAKE_BINARY_DIR}/document-recovery-$<CONFIG>.txt,txt")
+set_tests_properties(hc.document.recovery PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+add_dependencies(hc_check hc_document_recovery_tests)
+hc_deploy_document_engine(hc_document_recovery_tests)
+
 qt_add_executable(hc_new_document_tests document/tstNewDocument.cpp)
 target_link_libraries(hc_new_document_tests PRIVATE hc_document_widgets hc_epub_package Qt6::Test Qt6::Concurrent)
 target_compile_options(hc_new_document_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)

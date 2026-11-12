@@ -64,7 +64,7 @@ namespace hc::document::epub::detail
         return Path;
     }
 
-    Archive::Archive(const QByteArray& Bytes, const Cancellation& Cancel, qsizetype EntryLimit) : bytes_(Bytes), cancel_(Cancel)
+    Archive::Archive(const QByteArray& Bytes, const Cancellation& Cancel, qsizetype EntryLimit, ZipMode Mode) : bytes_(Bytes), cancel_(Cancel), mode_(Mode)
     {
         Check(cancel_);
         if(Bytes.size() > InputLimit) Reject("input-limit");
@@ -129,9 +129,11 @@ namespace hc::document::epub::detail
             if((Flags & 0x10 || (Method==0 && (Flags & 6))) && !warnings_.contains("legacy-compression-hints"))warnings_.append("legacy-compression-hints");
             if(u16(Bytes, At + 34)) Reject("zip-multidisk-unsupported");
             const auto NameBytes = Bytes.mid(At + 46, NameSize);
-            if(!(Flags & 0x0800) && std::any_of(NameBytes.cbegin(), NameBytes.cend(), [](char C) { return static_cast<unsigned char>(C) >= 128; }))
-                Reject("zip-name-encoding-unsupported");
-            const auto Name = Utf8(NameBytes, "zip-name"), Path = Canonical(Name);
+            const bool Legacy = !(Flags & 0x0800) && std::any_of(NameBytes.cbegin(), NameBytes.cend(), [](char C) { return static_cast<unsigned char>(C) >= 128; });
+            if(Legacy && mode_ == ZipMode::Epub) Reject("zip-name-encoding-unsupported");
+            // A general ZIP from a Windows tool names its entries in the local code page. The raw
+            // name bytes are copied unchanged by Rewrite(); the decoded name only identifies the entry.
+            const auto Name = Legacy ? QString::fromLocal8Bit(NameBytes) : Utf8(NameBytes, "zip-name"), Path = Canonical(Name);
             if(entries_.contains(Path) || Folded.contains(Path.toCaseFolded())) Reject("duplicate-entry", Path);
             Folded.insert(Path.toCaseFolded());
             const auto Mode = u32(Bytes, At + 38) >> 16, Kind = Mode & 0170000;
@@ -181,22 +183,23 @@ namespace hc::document::epub::detail
         // A DEFLATE stream representing an empty directory still has compressed
         // bytes. Validate it exactly like file data, without exposing a resource.
         for(const auto& Item : entries_) if(Item.directory_) readEntry(Item);
-        if(Read("mimetype") != "application/epub+zip") Reject("invalid-mimetype-value");
+        if(mode_ == ZipMode::Epub && Read("mimetype") != "application/epub+zip") Reject("invalid-mimetype-value");
     }
 
     QByteArray Archive::Rewrite(const QMap<QString,QByteArray>& Replacements,const QMap<QString,QByteArray>& Additions,const QSet<QString>& Removals) const {
+        const bool Epub=mode_==ZipMode::Epub;
         QSet<QString> Names;
         for(const auto& Item:entries_)if(!Removals.contains(Item.path_))Names.insert(Item.path_.toCaseFolded());
-        for(const auto& Path:Removals)if(!entries_.contains(Path) || entries_[Path].directory_ || Path=="mimetype")Reject("edit-remove-denied",Path);
-        for(auto I=Replacements.begin();I!=Replacements.end();++I)if(!entries_.contains(I.key()) || entries_[I.key()].directory_ || I.key()=="mimetype" || Removals.contains(I.key()) || I.value().size()>16*1024*1024)Reject("edit-resource-denied",I.key());
-        for(auto I=Additions.begin();I!=Additions.end();++I){if(Canonical(I.key())!=I.key() || I.key().endsWith('/') || I.key()=="mimetype" || Names.contains(I.key().toCaseFolded()) || I.value().size()>16*1024*1024)Reject("edit-add-denied",I.key());Names.insert(I.key().toCaseFolded());}
+        for(const auto& Path:Removals)if(!entries_.contains(Path) || entries_[Path].directory_ || (Epub && Path=="mimetype"))Reject("edit-remove-denied",Path);
+        for(auto I=Replacements.begin();I!=Replacements.end();++I)if(!entries_.contains(I.key()) || entries_[I.key()].directory_ || (Epub && I.key()=="mimetype") || Removals.contains(I.key()) || I.value().size()>16*1024*1024)Reject("edit-resource-denied",I.key());
+        for(auto I=Additions.begin();I!=Additions.end();++I){if(Canonical(I.key())!=I.key() || I.key().endsWith('/') || (Epub && I.key()=="mimetype") || Names.contains(I.key().toCaseFolded()) || I.value().size()>16*1024*1024)Reject("edit-add-denied",I.key());Names.insert(I.key().toCaseFolded());}
         if(entries_.size()+Additions.size()-Removals.size()>4096)Reject("edit-entry-limit");
         auto Ordered=entries_.values();std::sort(Ordered.begin(),Ordered.end(),[](const Entry& A,const Entry& B){return A.offset_<B.offset_;});
         StoredZipWriter Writer(cancel_,comment_.size());
         // Every rewritten edition uses EPUB's required first, stored mimetype entry.
-        Writer.Add("mimetype",QByteArray("application/epub+zip"));
+        if(Epub)Writer.Add("mimetype",QByteArray("application/epub+zip"));
         for(const auto& Item:Ordered) {
-            if(Item.path_=="mimetype" || Removals.contains(Item.path_))continue;
+            if((Epub && Item.path_=="mimetype") || Removals.contains(Item.path_))continue;
             Check(cancel_);auto Record=Item.central_;put32(Record,42,Writer.Offset());
             if(!Replacements.contains(Item.path_))Writer.Append(bytes_.mid(Item.offset_,Item.end_-Item.offset_),Record);
             else {

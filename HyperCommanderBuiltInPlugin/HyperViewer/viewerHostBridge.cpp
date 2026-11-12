@@ -2,6 +2,8 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/documentThemeAdapter.hpp"
 #include "UniqueLibs/document/hwpHostSession.hpp"
+#include "UniqueLibs/document/archiveDraftDirectory.hpp"
+#include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "hwpProductPolicy.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include <QApplication>
@@ -55,7 +57,9 @@ namespace hc::document
         QApplication::setApplicationName("HyperViewer");
         const auto ConfigDirectory = qEnvironmentVariable("HC_DOCUMENT_CONFIG_DIR");
         if (!ConfigDirectory.isEmpty()) qApp->setProperty("documentViewsConfigDir", ConfigDirectory);
-        const auto Root = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recovery/viewer";
+        // HyperEditor and the viewer share <config>/recovery. Only HyperEditor imports older copies: this DLL
+        // also loads inside test and host processes whose configuration folder is not the product's.
+        const auto Root = hc::defaults::edit::RecoveryDirectory(hc::document::DocumentConfigDirectory());
         state_->window_ = std::make_unique<ViewerWindow>(Root);
         state_->window_->setProperty("hc.quickPreview", state_->preview_);
         state_->window_->ConfigureHwp(MakeProductHwpRuntime(QCoreApplication::applicationDirPath(),QByteArray(HC_RHWP_APPROVED_INVENTORY_SHA256)));

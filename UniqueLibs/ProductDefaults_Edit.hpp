@@ -183,6 +183,8 @@ namespace hc::defaults::edit
             {"textView/findInFiles/openLocation", "tab"},
             {"textView/saveEncoding", "UTF-8"}, {"textView/saveBomMode", 1},
             {"textView/recoveryEnabled", true}, {"textView/hotExitEnabled", true}, {"textView/hotExitPolicyVersion", 1}, {"textView/restoreCleanDocuments", true},
+            // After an abnormal exit: ask · restore · keep (list only). Retention in days and the size cap in MiB; 0 = unlimited.
+            {"recovery/startupAction", "ask"}, {"recovery/retentionDays", 30}, {"recovery/maxMiB", 1024},
             {"textView/largeFileMB", 2}, {"textView/externalChangeAction", 1},
             {"textView/externalChangeDetection", 0}, {"textView/externalChangePollSeconds", 3},
             {"textView/mask/enabled", true}, {"textView/mask/gamma", 1.2}, {"textView/mask/strength", 1.1},
@@ -287,8 +289,17 @@ namespace hc::defaults::edit
     inline QString ImageReadingFile(const QString& Directory) { return QDir(Directory).filePath(ImageReadingFileName); }
     inline QString EpubProfilesFile(const QString& Directory) { return QDir(Directory).filePath("epub-profiles.json"); }
     inline QString EpubStateDirectory(const QString& Directory) { return QDir(Directory).filePath("epub-state"); }
-    inline QString RecoveryDirectory(bool Viewer)
-    { return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + (Viewer ? "/recovery/viewer" : "/recovery/editor"); }
+    // Recovery copies stay beside the settings: one folder shared by HyperEditor, HyperViewer and --rhwp-view,
+    // so a portable folder carries its own copies and two installations never see each other's.
+    inline QString RecoveryDirectory(const QString& ConfigDirectory) { return QDir(ConfigDirectory).absoluteFilePath("recovery"); }
+    // Before 2026.11 the copies lived under %LOCALAPPDATA%, split by the process's application name.
+    inline QStringList LegacyRecoveryDirectories()
+    {
+        const auto Local = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/HyperCommander";
+        return {Local + "/HyperEditor/recovery/editor", Local + "/HyperEditor/recovery/viewer", Local + "/HyperViewer/recovery/viewer"};
+    }
+    // Edited copies of files inside an archive that are not yet written back into it.
+    inline QString ArchiveDraftDirectory(const QString& ConfigDirectory) { return RecoveryDirectory(ConfigDirectory) + "/archive-drafts"; }
     inline QString HwpCacheDirectory()
     { return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/rhwp"; }
     inline QString TextBackupDirectory()
@@ -528,7 +539,8 @@ namespace hc::defaults::edit
     inline QList<Qt::Key> EditingKeys() { return {Qt::Key_Delete, Qt::Key_Backspace, Qt::Key_Insert, Qt::Key_Left, Qt::Key_Right, Qt::Key_Up,
             Qt::Key_Down, Qt::Key_Home, Qt::Key_End, Qt::Key_PageUp, Qt::Key_PageDown}; }
 
-    inline QString EpubDraftDirectory(const QString& Directory) { return QDir(Directory).absoluteFilePath("epub-drafts"); }
+    inline QString EpubDraftDirectory(const QString& Directory) { return RecoveryDirectory(Directory) + "/epub-drafts"; }
+    inline QString LegacyEpubDraftDirectory(const QString& Directory) { return QDir(Directory).absoluteFilePath("epub-drafts"); }
 
     inline constexpr int NativeControl = 2 << 16, NativeKeyInsert = 309;
     inline constexpr std::array<int, 5> NativeBrokerClipboardKeys{{

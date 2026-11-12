@@ -11,6 +11,7 @@
 #include <QLockFile>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
 #include <QStringList>
 #include <QUuid>
 #include <set>
@@ -521,6 +522,175 @@ namespace hc::document
         if (!IdValid(Id.toStdString())) return false;
         const auto Path = root_ + "/sessions/" + Id + ".json";
         return !QFileInfo::exists(Path) || QFile::remove(Path);
+    }
+    Result<std::vector<StoredRecoveryDocument>> DocumentRecoveryStore::Documents() const
+    {
+        auto Entries = Index(root_); if (!Entries.HasValue()) return Entries.Failure();
+        std::map<DocumentId, StoredRecoveryDocument> Found;
+        // The P0 alias is rewritten with every generation, so a document's age comes from its snapshot
+        // files; an alias alone (a P0 store) dates the document only when there is no snapshot.
+        const auto Account = [this](StoredRecoveryDocument& Document, const QString& Name, bool Alias = false) {
+            const QFileInfo Info(root_ + "/" + Name); if (!Info.exists()) return;
+            Document.files_.append(Name); Document.bytes_ += Info.size();
+            if (Alias && Document.newest_.isValid()) return;
+            if (!Document.newest_.isValid() || Info.lastModified() > Document.newest_) Document.newest_ = Info.lastModified();
+        };
+        for (const auto& Value : Entries.Value()) {
+            const auto Item = Value.toObject(); const auto Id = Item["documentId"].toString().toStdString();
+            auto& Document = Found[Id]; Document.id_ = Id; Account(Document, Item["path"].toString());
+            std::uint64_t Generation = 1, Revision = 0;
+            if (Item.contains("generation")) Unsigned(Item["generation"], Generation);
+            Unsigned(Item["revision"], Revision);
+            if (std::pair{Generation, Revision} > std::pair{Document.generation_, Document.revision_}) { Document.generation_ = Generation; Document.revision_ = Revision; }
+        }
+        for (const auto& Name : QDir(root_).entryList({"*.json"}, QDir::Files)) {
+            if (!QRegularExpression("^[0-9a-f]{32}\\.json$").match(Name).hasMatch()) continue;
+            auto& Document = Found[Name.chopped(5).toStdString()]; Document.id_ = Name.chopped(5).toStdString(); Account(Document, Name, true);
+        }
+        std::vector<StoredRecoveryDocument> Result;
+        for (auto& [Id, Document] : Found) if (!Document.files_.isEmpty()) Result.push_back(std::move(Document));
+        return Result;
+    }
+    Result<Unit> DocumentRecoveryStore::Drop(const QStringList& Ids)
+    {
+        if (Ids.isEmpty()) return Unit{};
+        for (const auto& Id : Ids) if (!IdValid(Id.toStdString())) return Failure("document-recovery-id");
+        QLockFile Lock(root_ + "/index.lock"); if (!Lock.tryLock(2000)) return Failure("document-recovery-locked");
+        auto Entries = Index(root_); if (!Entries.HasValue()) return Entries.Failure();
+        QJsonArray Next; QStringList Removed;
+        for (const auto& Value : Entries.Value()) {
+            const auto Item = Value.toObject();
+            if (Ids.contains(Item["documentId"].toString())) Removed.append(Item["path"].toString()); else Next.append(Item);
+        }
+        if (Next.size() != Entries.Value().size() && !PutIndex(root_, Next)) return Failure("document-recovery-index-write");
+        bool Complete = true;
+        for (const auto& Name : Removed)
+            if (QFileInfo(Name).fileName() == Name && Name.endsWith(".snapshot.json") && QFileInfo::exists(root_ + "/" + Name) && !QFile::remove(root_ + "/" + Name)) Complete = false;
+        for (const auto& Id : Ids) for (const auto& Suffix : {QStringLiteral(".json"), QStringLiteral(".retired")}) {
+            const auto Path = root_ + "/" + Id + Suffix;
+            if (QFileInfo::exists(Path) && !QFile::remove(Path)) Complete = false;
+        }
+        return Complete ? Result<Unit>(Unit{}) : Result<Unit>(Failure("document-recovery-cleanup"));
+    }
+    namespace
+    {
+        // migrated.json of an older store: {"imports":[{"root", "utc", "files"}]}, what was copied where.
+        QJsonObject ImportMarker(const QString& Root)
+        {
+            QFile File(Root + "/migrated.json");
+            if (!File.open(QIODevice::ReadOnly) || File.size() > 4 * 1024 * 1024) return {};
+            return QJsonDocument::fromJson(File.readAll()).object();
+        }
+    }
+    Result<int> DocumentRecoveryStore::ImportFrom(const QString& Other, const QString& ProfileId)
+    {
+        if (!QFileInfo(Other).isDir() || QFileInfo(Other).canonicalFilePath() == QFileInfo(root_).canonicalFilePath()) return 0;
+        // A copy, never a move: the older store keeps everything until RetireImported, so an import into a
+        // folder that disappears later (a test's, a build output's) loses nothing.
+        const auto Destination = QFileInfo(root_).absoluteFilePath();
+        auto Marker = ImportMarker(Other); auto Imports = Marker["imports"].toArray();
+        for (const auto& Value : Imports) if (Value.toObject()["root"].toString().compare(Destination, Qt::CaseInsensitive) == 0) return 0;
+        if (!QDir().mkpath(root_ + "/sessions")) return Failure("document-recovery-directory");
+        // Both indexes are locked in the same order by every importer, so two processes cannot deadlock.
+        QLockFile Lock(root_ + "/index.lock"); if (!Lock.tryLock(2000)) return Failure("document-recovery-locked");
+        QLockFile OtherLock(Other + "/index.lock"); if (!OtherLock.tryLock(2000)) return Failure("document-recovery-locked");
+        auto Old = Index(Other); if (!Old.HasValue()) return Old.Failure();
+        auto Current = Index(root_); if (!Current.HasValue()) return Current.Failure();
+        const auto Held = [](const QString& Path) {
+            QLockFile Probe(Path); Probe.setStaleLockTime(0);
+            if (!Probe.tryLock(0)) return true;
+            Probe.unlock(); return false;
+        };
+        // Sessions: this profile's (or unnamed) ones come along, another installation's stay; live ones stay.
+        QSet<QString> Copying, Staying, Pinned;
+        DocumentRecoveryStore Source(Other);
+        for (const auto& Id : Source.Sessions()) {
+            if (Held(Source.SessionLockPath(Id))) { Staying.insert(Id); continue; }
+            const auto Session = Source.ReadSession(Id);
+            if (!Session.HasValue()) continue;
+            const auto Profile = Session.Value()["profileId"].toString();
+            if (!Profile.isEmpty() && Profile != ProfileId) { Staying.insert(Id); continue; }
+            Copying.insert(Id);
+            for (const auto& Item : Session.Value()["documents"].toArray()) Pinned.insert(Item.toObject()["snapshot"].toString());
+        }
+        const auto Owner = [&Other](const QString& Name) {
+            QFile File(Other + "/" + Name); if (!File.open(QIODevice::ReadOnly)) return QString{};
+            return QJsonDocument::fromJson(File.readAll()).object()["ownerWindow"].toString();
+        };
+        const auto Copy = [&](const QString& Name) {
+            return QFileInfo::exists(root_ + "/" + Name) || QFile::copy(Other + "/" + Name, root_ + "/" + Name);
+        };
+        std::set<std::pair<std::string, std::pair<std::uint64_t, std::uint64_t>>> Known;
+        for (const auto& Value : Current.Value()) {
+            const auto Item = Value.toObject(); std::uint64_t Generation = 1, Revision = 0;
+            if (Item.contains("generation")) Unsigned(Item["generation"], Generation);
+            Unsigned(Item["revision"], Revision); Known.insert({Item["documentId"].toString().toStdString(), {Generation, Revision}});
+        }
+        QJsonArray Next = Current.Value(); QStringList Copied; QSet<QString> CopiedIds, StayingIds; int Count = 0;
+        for (const auto& Value : Old.Value()) {
+            const auto Item = Value.toObject(); const auto Name = Item["path"].toString(); const auto Id = Item["documentId"].toString();
+            if (!Pinned.contains(Name) && Staying.contains(Owner(Name))) { StayingIds.insert(Id); continue; }
+            if (!QFileInfo::exists(Other + "/" + Name)) continue;
+            std::uint64_t Generation = 1, Revision = 0;
+            if (Item.contains("generation")) Unsigned(Item["generation"], Generation);
+            Unsigned(Item["revision"], Revision);
+            Copied.append(Name);
+            if (Known.contains({Id.toStdString(), {Generation, Revision}})) continue;   // an earlier, interrupted import
+            if (!Copy(Name)) return Failure("document-recovery-import");
+            Next.append(Item); if (!CopiedIds.contains(Id)) ++Count; CopiedIds.insert(Id);
+        }
+        // P0 aliases without an index entry are recoverable documents too.
+        for (const auto& Name : QDir(Other).entryList({"*.json"}, QDir::Files)) {
+            if (!QRegularExpression("^[0-9a-f]{32}\\.json$").match(Name).hasMatch()) continue;
+            const auto Id = Name.chopped(5);
+            if (StayingIds.contains(Id) || Staying.contains(Owner(Name))) continue;
+            Copied.append(Name);
+            if (!Copy(Name)) return Failure("document-recovery-import");
+            if (!CopiedIds.contains(Id)) ++Count;
+            CopiedIds.insert(Id);
+        }
+        for (const auto& Id : CopiedIds) {
+            const auto Fence = Id + ".retired";
+            if (QFileInfo::exists(Other + "/" + Fence)) { Copied.append(Fence); Copy(Fence); }
+        }
+        if (Next.size() != Current.Value().size() && !PutIndex(root_, Next)) return Failure("document-recovery-index-write");
+        // Sessions follow their snapshots; the count is of documents, not of windows.
+        for (const auto& Id : Copying) {
+            const auto Name = "sessions/" + Id + ".json"; Copied.append(Name);
+            if (!Copy(Name)) return Failure("document-recovery-import");
+        }
+        Imports.append(QJsonObject{{"root", Destination}, {"utc", QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}, {"files", QJsonArray::fromStringList(Copied)}});
+        Marker["imports"] = Imports;
+        // Without the marker the next start copies again; the copies above already skip what is there.
+        StoreBytes(Other + "/migrated.json", QJsonDocument(Marker).toJson(QJsonDocument::Compact));
+        return Count;
+    }
+    Result<int> DocumentRecoveryStore::RetireImported(const QDateTime& Before)
+    {
+        // On an older store: once every import is older than Before, the copied files leave this store.
+        // Copies nobody imported (another installation's sessions) stay for that installation.
+        const auto Imports = ImportMarker(root_)["imports"].toArray();
+        if (Imports.isEmpty()) return 0;
+        QSet<QString> Files;
+        for (const auto& Value : Imports) {
+            const auto When = QDateTime::fromString(Value.toObject()["utc"].toString(), Qt::ISODate);
+            if (!When.isValid() || When > Before) return 0;
+            for (const auto& Name : Value.toObject()["files"].toArray()) Files.insert(Name.toString());
+        }
+        QLockFile Lock(root_ + "/index.lock"); if (!Lock.tryLock(2000)) return Failure("document-recovery-locked");
+        auto Entries = Index(root_); if (!Entries.HasValue()) return Entries.Failure();
+        QJsonArray Next; for (const auto& Value : Entries.Value()) if (!Files.contains(Value.toObject()["path"].toString())) Next.append(Value);
+        if (!PutIndex(root_, Next)) return Failure("document-recovery-index-write");
+        static const QRegularExpression Session("^sessions/[0-9a-f]{32}\\.json$");
+        int Removed = 0;
+        for (const auto& Name : Files)
+            if ((QFileInfo(Name).fileName() == Name || Session.match(Name).hasMatch()) && QFile::remove(root_ + "/" + Name)) ++Removed;
+        QFile::remove(root_ + "/migrated.json");
+        // Nothing of anyone's left: the folder goes with its leftovers (fences, temporary originals).
+        if (Next.isEmpty() && Sessions().isEmpty()) {
+            Lock.unlock(); QDir(root_).removeRecursively(); QDir().rmdir(QFileInfo(root_).absolutePath());
+        }
+        return Removed;
     }
 
 }

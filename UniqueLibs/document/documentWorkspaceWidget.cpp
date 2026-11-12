@@ -14,6 +14,8 @@
 #include "newDocumentChooser.hpp"
 #include "newEpubDialog.hpp"
 #include "epubRestoreConflictDialog.hpp"
+#include "documentRecoveryMaintenance.hpp"
+#include "recoveryManagerDialog.hpp"
 #include "commonLibs/document/epub/epubDraftStore.hpp"
 #include "commonLibs/document/epub/epubTemplate.hpp"
 #include <QMimeData>
@@ -279,7 +281,9 @@ namespace hc::document
         InitializePortedViewResources();
         setWindowIcon(QIcon(Hosted ? ":/icons/app/hyperviewer.svg" : ":/icons/app/hypereditor.svg"));
         recovery_ = std::make_shared<DocumentRecoveryStore>(recoveryRoot_);
-        if (!Hosted && QDir().mkpath(recoveryRoot_ + "/sessions")) {
+        // A hosted viewer publishes no session, but its lock still marks the snapshots it writes as in use
+        // for the recovery list and the retention clean-up of other processes sharing the folder.
+        if (QDir().mkpath(recoveryRoot_ + "/sessions")) {
             hotExitLock_ = std::make_shared<QLockFile>(recovery_->SessionLockPath(workspaceId_));
             hotExitLock_->setStaleLockTime(0);
             if (!hotExitLock_->tryLock()) hotExitLock_.reset();
@@ -453,11 +457,11 @@ namespace hc::document
         setContextMenuPolicy(Qt::DefaultContextMenu);
         auto* Restore = new QAction(tr("복구 목록…"), this); addAction(Restore);
         auto* EpubRestore=new QAction(tr("EPUB 편집 초안 복구…"),this);EpubRestore->setObjectName("epubDraftRecovery");EpubRestore->setProperty("documentIconName","refresh");addAction(EpubRestore);
-        connect(EpubRestore,&QAction::triggered,this,&DocumentWorkspaceWidget::showEpubRecovery);
+        connect(EpubRestore,&QAction::triggered,this,[this]{ShowRecoveryManager("epub");});
         auto* EpubReopen=new QAction(tr("저장본 다시 열기"),this);EpubReopen->setObjectName("epubReopenDocument");EpubReopen->setProperty("documentIconName","open");addAction(EpubReopen);
         connect(EpubReopen,&QAction::triggered,this,[this]{if(auto Tab=active())if(auto* Reopen=Tab->pane_->findChild<QAction*>("epubReopen"))Reopen->trigger();});
         Restore->setObjectName("documentRecovery");
-        connect(Restore, &QAction::triggered, this, &DocumentWorkspaceWidget::ShowRecoveryManager);
+        connect(Restore, &QAction::triggered, this, [this] { ShowRecoveryManager(); });
         connect(tabs_, &QTabWidget::tabCloseRequested, this, [this](int Index) {
             if (searchPanel_ && tabs_->widget(Index) == searchPanel_) { tabs_->removeTab(Index); searchPanel_->hide(); return; }
             auto* Pane = tabs_->widget(Index); for (std::size_t At = 0; At < documents_.size(); ++At) if (documents_[At]->pane_ == Pane) { closeTab(int(At)); break; }
@@ -840,7 +844,7 @@ namespace hc::document
         preferences_ = Dialog; Dialog->setAttribute(Qt::WA_DeleteOnClose);
         connect(Dialog, &DocumentSettingsDialog::PreferencesSaved, this, &DocumentWorkspaceWidget::refreshPreferences);
         connect(Dialog, &DocumentSettingsDialog::ClearRecentRequested, this, &DocumentWorkspaceWidget::clearRecent);
-        connect(Dialog, &DocumentSettingsDialog::RecoveryManagerRequested, this, &DocumentWorkspaceWidget::ShowRecoveryManager);
+        connect(Dialog, &DocumentSettingsDialog::RecoveryManagerRequested, this, [this] { ShowRecoveryManager(); });
         if (!hosted_) Dialog->setWindowModality(Qt::WindowModal);
         const auto Available = screen()->availableGeometry();
         const auto Center = mapToGlobal(rect().center());
@@ -980,18 +984,22 @@ namespace hc::document
         else if (const auto Unknown = DocumentShortcutRegistry::Unknown(Bindings); !Unknown.isEmpty())
             ShowShellError(tr("지원하지 않는 단축키 항목을 보존했습니다: %1").arg(Unknown.join(", ")));
     }
-    void DocumentWorkspaceWidget::showEpubRecovery()
+    QJsonObject DocumentWorkspaceWidget::OpenArchiveDraftCopy(const QString& Directory)
     {
-        auto* Watcher=new QFutureWatcher<QList<epub::DraftInfo>>(this);++recoveryWorkers_;
-        connect(Watcher,&QFutureWatcherBase::finished,this,[this,Watcher]{
-            const auto Entries=Watcher->result();Watcher->deleteLater();--recoveryWorkers_;
-            if(closingWorkspace_){tryFinishClose();return;}
-            if(Entries.isEmpty()){ShowShellError(tr("복구할 EPUB 편집 초안이 없습니다."));return;}
-            QStringList Labels,Paths;for(const auto& Entry:Entries){Labels.append(QFileInfo(Entry.sourcePath_).fileName()+" · "+QFileInfo(Entry.path_).baseName().left(8)+(Entry.error_.isEmpty()?QString{}:tr(" · 손상 여부 확인 필요")));Paths.append(Entry.path_);}
-            auto* Dialog=new QInputDialog(this);Dialog->setAttribute(Qt::WA_DeleteOnClose);Dialog->setWindowTitle(tr("EPUB 편집 초안 복구"));Dialog->setLabelText(tr("원본이 이동·삭제되어도 보관된 판본으로 복구합니다."));Dialog->setComboBoxItems(Labels);Dialog->setComboBoxEditable(false);
-            connect(Dialog,&QDialog::accepted,this,[this,Dialog,Labels,Paths]{const auto Reply=openEpubRecovery(Paths.value(Labels.indexOf(Dialog->textValue())));if(Reply.contains("error"))ShowShellError(Reply["error"].toString());});Dialog->open();
-        });
-        Watcher->setFuture(QtConcurrent::run([Root=EpubSourceEditor::RecoveryDirectory()]{return epub::DraftStore::List(Root);}));
+        if (closingWorkspace_) return Error("document-workspace-closing");
+        // The copy opens like a recovered document: never the archive itself, and Save As starts
+        // from the file's own name.
+        const auto Content = recovery::ArchiveDraftContent(Directory);
+        if (Content.isEmpty() || !QFileInfo(Content).isFile()) return Error("archive-draft-read");
+        const auto Suffix = QFileInfo(Content).suffix();
+        const auto Copy = recoveryRoot_ + "/restored-" + QUuid::createUuid().toString(QUuid::Id128) + (Suffix.isEmpty() ? QString{} : "." + Suffix);
+        if (!QDir().mkpath(recoveryRoot_) || !QFile::copy(Content, Copy)) return Error("archive-draft-read");
+        const auto Reply = open(Copy, false, {}, false, {}, tr("복구 · %1").arg(QFileInfo(Content).fileName()));
+        auto Tab = find(Reply["documentId"].toString());
+        if (!Tab) { QFile::remove(Copy); return Reply.contains("error") ? Reply : Error("archive-draft-open"); }
+        Tab->temporarySource_ = Copy; Tab->originalAuthority_ = false; Tab->originalSave_ = false; Tab->recovered_ = true;
+        Tab->suggestedSavePath_ = QFileInfo(Content).fileName();
+        return Reply;
     }
     QJsonObject DocumentWorkspaceWidget::openEpubRecovery(const QString& Path)
     {
@@ -1999,7 +2007,7 @@ namespace hc::document
     void DocumentWorkspaceWidget::Checkpoint()
     {
         if (hotExitClosing_ || hotExitPublishing_) return;
-        if (hotExitEnabled() && IsIdle()) publishHotExitSession(false);
+        if (sessionPublishing() && IsIdle()) publishHotExitSession(false);
         if (!pendingHostOpen_.isEmpty()) for (const auto& Tab : documents_) if (Tab->hostSlot_) {
             if (Tab->loading_ || Tab->navigating_ || Tab->saving_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_ || Tab->pane_->IsBusy()) break;
             if (!Tab->Dirty() || Tab->checkpointedRevision_ == Tab->Revision()) {
@@ -2863,92 +2871,56 @@ namespace hc::document
     }
 
 
-    void DocumentWorkspaceWidget::ShowRecoveryManager()
+    void DocumentWorkspaceWidget::ShowRecoveryManager(const QString& Filter)
     {
         if (hotExitClosing_) return;
-        auto* Dialog = new QDialog(preferences_ ? static_cast<QWidget*>(preferences_.data()) : this);
-        Dialog->setAttribute(Qt::WA_DeleteOnClose); Dialog->setWindowTitle(tr("복구 사본 관리")); Dialog->resize(760, 440);
-        auto* Layout = new QVBoxLayout(Dialog); auto* Note = new QLabel(tr("복구 사본을 읽는 중입니다…"), Dialog); Note->setWordWrap(true); Layout->addWidget(Note);
-        auto* Table = new QTableWidget(0, 4, Dialog); Table->setObjectName("recoveryCopies");
-        Table->setHorizontalHeaderLabels({tr("문서"), tr("보존 시각"), tr("크기"), tr("상태")});
-        Table->setSelectionBehavior(QAbstractItemView::SelectRows); Table->setSelectionMode(QAbstractItemView::SingleSelection);
-        Table->setEditTriggers(QAbstractItemView::NoEditTriggers); Table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch); Layout->addWidget(Table);
-        auto* Buttons = new QDialogButtonBox(QDialogButtonBox::Close, Dialog);
-        auto* Restore = Buttons->addButton(tr("복구 사본으로 열기"), QDialogButtonBox::ActionRole);
-        auto* Delete = Buttons->addButton(tr("사본 삭제…"), QDialogButtonBox::ActionRole);
-        Restore->setEnabled(false); Delete->setEnabled(false); Layout->addWidget(Buttons);
-        connect(Buttons, &QDialogButtonBox::rejected, Dialog, &QDialog::reject);
-        auto Records = std::make_shared<std::vector<RecoverySnapshot>>();
-        const auto Owned = [this](const RecoverySnapshot& Record) {
-            if (find(QString::fromStdString(Record.document_.id_))) return true;
-            if (Record.ownerWindow_.empty()) return false;
-            QLockFile Lock(recovery_->SessionLockPath(QString::fromStdString(Record.ownerWindow_))); Lock.setStaleLockTime(0);
-            return !Lock.tryLock();
+        if (auto* Open = qobject_cast<RecoveryManagerDialog*>(recoveryManager_.data())) {
+            if (!Filter.isEmpty()) Open->SetFilter(Filter);
+            Open->Reload(); Open->raise(); Open->activateWindow(); return;
+        }
+        RecoveryManagerDialog::Hooks Hooks;
+        // This window's own documents are in use even before the next session publication says so.
+        Hooks.inUse_ = [this](const recovery::Item& Entry) {
+            if (Entry.kind_ == recovery::Kind::Epub) {
+                for (const auto& Tab : documents_)
+                    if (Tab->pane_->IsEpub() && QFileInfo(Tab->pane_->EpubDraftPath()).fileName() == QFileInfo(Entry.path_).fileName()) return true;
+                return false;
+            }
+            return Entry.kind_ != recovery::Kind::Archive && find(Entry.key_) != nullptr;
         };
-        connect(Table, &QTableWidget::itemSelectionChanged, Dialog, [Table, Restore, Delete, Records, Owned] {
-            const int Row = Table->currentRow(); const bool Valid = Row >= 0 && Row < int(Records->size());
-            const bool Busy = Valid && Owned((*Records)[Row]); Restore->setEnabled(Valid && !Busy); Delete->setEnabled(Valid && !Busy);
-        });
-        connect(Restore, &QPushButton::clicked, Dialog, [this, Table, Records, Owned, Dialog] {
-            const int Row = Table->currentRow(); if (Row < 0 || Row >= int(Records->size()) || Owned((*Records)[Row])) return;
-            std::shared_ptr<QLockFile> Lease;
-            const auto Owner = QString::fromStdString((*Records)[Row].ownerWindow_);
-            if (!Owner.isEmpty()) {
-                Lease = std::make_shared<QLockFile>(recovery_->SessionLockPath(Owner)); Lease->setStaleLockTime(0);
-                if (!Lease->tryLock()) return;
-            }
-            const auto Reply = Handle({{"action", "recover"}, {"path", QString::fromStdString((*Records)[Row].snapshotPath_)}});
-            if (!Reply.contains("error") && Lease) manualRecoveryLocks_.push_back(std::move(Lease));
-            if (Reply.contains("error")) ShowShellError(Reply["error"].toString()); else Dialog->accept();
-        });
-        connect(Delete, &QPushButton::clicked, Dialog, [this, Table, Records, Owned, Dialog, Note, Delete, Restore] {
-            const int Row = Table->currentRow(); if (Row < 0 || Row >= int(Records->size()) || Owned((*Records)[Row])) return;
-            const auto Record = (*Records)[Row];
-            if (hc::ui::MessageDialog::question(Dialog, tr("복구 사본 삭제"), tr("이 사본을 삭제하면 저장하지 않은 내용을 되돌릴 수 없습니다. 설정 화면에서 취소해도 삭제는 되돌릴 수 없습니다. 삭제하시겠습니까?"), QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) return;
-            Delete->setEnabled(false); Restore->setEnabled(false); Table->setEnabled(false);
-            auto Store = recovery_; auto* Worker = new QFutureWatcher<storage::Result<storage::Unit>>(Dialog);
-            connect(Worker, &QFutureWatcherBase::finished, Dialog, [Worker, Table, Records, Row, Note] {
-                const bool Success = Worker->result().HasValue(); Worker->deleteLater(); Table->setEnabled(true);
-                if (Success) { Records->erase(Records->begin() + Row); Table->removeRow(Row); Note->setText(tr("선택한 복구 사본을 삭제했습니다.")); }
-                else Note->setText(tr("복구 사본을 삭제하지 못했습니다. 다른 창에서 사용 중이거나 저장소를 변경할 수 없습니다."));
-            });
-            Worker->setFuture(QtConcurrent::run([Store, Record]()->storage::Result<storage::Unit> {
-                std::unique_ptr<QLockFile> Lock;
-                const auto Owner = QString::fromStdString(Record.ownerWindow_);
-                if (!Owner.isEmpty()) { Lock = std::make_unique<QLockFile>(Store->SessionLockPath(Owner)); Lock->setStaleLockTime(0); if (!Lock->tryLock()) return storage::Error{storage::ErrorCategory::Unavailable, "document-recovery-owned"}; }
-                auto Removed = Store->RemoveThrough(Record.document_.id_, Record.document_.generation_, Record.document_.revision_);
-                if (!Removed.HasValue()) return Removed.Failure();
-                if (!Owner.isEmpty()) {
-                    auto Session = Store->ReadSession(Owner);
-                    if (Session.HasValue()) {
-                        auto Json = Session.Value(); QJsonArray Items;
-                        for (const auto& Item : Json["documents"].toArray()) if (Item.toObject()["documentId"].toString().toStdString() != Record.document_.id_) Items.append(Item);
-                        Json["documents"] = Items; return Store->StoreSession(Owner, Json);
-                    }
+        Hooks.open_ = [this](const recovery::Item& Entry) -> QString {
+            QJsonObject Reply;
+            if (Entry.kind_ == recovery::Kind::Epub) Reply = openEpubRecovery(Entry.path_);
+            else if (Entry.kind_ == recovery::Kind::Archive) Reply = OpenArchiveDraftCopy(Entry.key_);
+            else {
+                // Hold the writing window's session while the copy is open here, so HotExit cannot reopen it twice.
+                std::shared_ptr<QLockFile> Lease;
+                if (!Entry.owner_.isEmpty()) {
+                    Lease = std::make_shared<QLockFile>(recovery_->SessionLockPath(Entry.owner_)); Lease->setStaleLockTime(0);
+                    if (!Lease->tryLock()) return tr("다른 창에서 사용 중입니다.");
                 }
-                return storage::Unit{};
-            }));
-        });
-        auto* Watcher = new QFutureWatcher<storage::Result<std::vector<RecoverySnapshot>>>(Dialog);
-        connect(Watcher, &QFutureWatcherBase::finished, Dialog, [Watcher, Records, Table, Note, Owned] {
-            auto Result = Watcher->result(); Watcher->deleteLater();
-            if (!Result.HasValue()) { Note->setText(tr("복구 사본을 읽지 못했습니다.")); return; }
-            *Records = std::move(Result.Value()); Table->setRowCount(int(Records->size()));
-            for (int Row = 0; Row < int(Records->size()); ++Row) {
-                const auto& Record = (*Records)[Row]; const auto Path = QString::fromStdString(Record.document_.source_.localPath_);
-                Table->setItem(Row, 0, new QTableWidgetItem(Path.isEmpty() ? tr("새 문서") : QDir::toNativeSeparators(Path)));
-                Table->setItem(Row, 1, new QTableWidgetItem(QDateTime::fromMSecsSinceEpoch(Record.utcMs_).toString("yyyy-MM-dd HH:mm")));
-                Table->setItem(Row, 2, new QTableWidgetItem(tr("%1 KiB").arg((Record.bytes_.size() + 1023) / 1024)));
-                Table->setItem(Row, 3, new QTableWidgetItem(Owned(Record) ? tr("사용 중") : tr("복구 가능")));
+                Reply = Handle({{"action", "recover"}, {"path", Entry.path_}});
+                if (!Reply.contains("error") && Lease) manualRecoveryLocks_.push_back(std::move(Lease));
             }
-            Note->setText(tr("원본을 덮어쓰지 않고 별도 문서로 복구합니다. 사용 중인 사본은 삭제할 수 없습니다."));
+            return Reply.contains("error") ? Message(Reply["error"].toString()) : QString{};
+        };
+        auto* Dialog = new RecoveryManagerDialog(recoveryRoot_, recovery::PolicyFrom(appliedPreferences_), std::move(Hooks),
+            preferences_ ? static_cast<QWidget*>(preferences_.data()) : this);
+        Dialog->setAttribute(Qt::WA_DeleteOnClose); recoveryManager_ = Dialog;
+        if (!Filter.isEmpty()) Dialog->SetFilter(Filter);
+        connect(Dialog, &RecoveryManagerDialog::SettingsRequested, this, [this] {
+            showPreferences(); if (preferences_) preferences_->ShowPage("recovery");
         });
-        auto Store = recovery_; Watcher->setFuture(QtConcurrent::run([Store] { return Store->List(); })); Dialog->open();
+        Dialog->open();
     }
     bool DocumentWorkspaceWidget::hotExitEnabled() const
     {
         const auto Text = appliedPreferences_["documentViews"].toObject()["textView"].toObject();
         return !hosted_ && Text["hotExitPolicyVersion"].toInt() == 1 && Text["hotExitEnabled"].toBool(true);
+    }
+    bool DocumentWorkspaceWidget::sessionPublishing() const
+    {
+        return !hosted_ && (hotExitEnabled() || !restoredOriginals_.empty() || PreferenceValue(appliedPreferences_, "textView/recoveryEnabled").toBool());
     }
     void DocumentWorkspaceWidget::nextEpubRestore()
     {
@@ -3066,7 +3038,7 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::publishHotExitSession(bool Closing)
     {
-        if (hotExitPublishing_ || !IsIdle() || (!Closing && !hotExitEnabled())) return;
+        if (hotExitPublishing_ || !IsIdle() || (!Closing && !sessionPublishing())) return;
         if (!hotExitLock_) { if (Closing) cancelHotExitClose(tr("복구 폴더 잠금을 얻지 못했습니다.")); return; }
         const bool Periodic = PreferenceValue(appliedPreferences_, "textView/recoveryEnabled").toBool();
         if (!Closing && !Periodic && restoredOriginals_.empty()) return;
@@ -3154,8 +3126,9 @@ namespace hc::document
             if (!Result.HasValue()) { if (Closing) cancelHotExitClose(QString::fromStdString(Result.Failure().code_)); else ShowShellError(tr("복구 세션 보존 실패: %1").arg(QString::fromStdString(Result.Failure().code_))); return; }
             publishedSession_ = Result.Value().first;
             for (const auto& Receipt : Result.Value().second) if (auto Tab = find(QString::fromStdString(Receipt.document_.id_))) Tab->checkpointReceipt_ = Receipt;
-            // The replacement manifest is durable before retiring the imported session's snapshots.
-            if (!restoredOriginals_.empty() && !restorationIncomplete_) {
+            // The replacement manifest is durable before retiring the imported session's snapshots. Only the
+            // restored documents' copies go; a document that did not restore keeps its copy in the recovery list.
+            if (!restoredOriginals_.empty()) {
                 restoringSessionId_.clear();
                 auto Originals = std::exchange(restoredOriginals_, {}); auto Store = recovery_;
                 auto* Cleanup = new QFutureWatcher<storage::Result<storage::Unit>>(this); ++recoveryWorkers_;
@@ -3185,7 +3158,9 @@ namespace hc::document
             }
         });
         auto Store = recovery_; const auto Id = workspaceId_;
-        const auto RetireSession = restorationIncomplete_ ? QString{} : restoringSessionId_;
+        // The previous session ends once this window's manifest is durable, also after a partial restore:
+        // keeping it would reopen the restored documents a second time at the next start.
+        const auto RetireSession = restoringSessionId_;
         Watcher->setFuture(QtConcurrent::run([Store, Id, RetireSession, Manifest, Captures = std::move(Captures)]() mutable ->storage::Result<Published> {
             std::vector<RecoverySnapshot> Receipts; auto Entries = Manifest["documents"].toArray();
             for (auto& Capture : Captures) {
@@ -3204,23 +3179,25 @@ namespace hc::document
             return Published{Manifest, std::move(Receipts)};
         }));
     }
-    bool DocumentWorkspaceWidget::RestoreHotExit(const QString& SessionId)
+    bool DocumentWorkspaceWidget::RestoreHotExit(const QString& SessionId, const std::optional<QStringList>& Documents)
     {
-        if (hosted_ || !documents_.empty() || !hotExitEnabled()) return false;
+        // The caller decides: HotExit reopens a cleanly closed window, the restart prompt an abnormally ended one.
+        if (hosted_ || !documents_.empty()) return false;
         auto Lock = std::make_shared<QLockFile>(recovery_->SessionLockPath(SessionId)); Lock->setStaleLockTime(0);
         if (recovery_->SessionLockPath(SessionId).isEmpty() || !Lock->tryLock()) return false;
         restoringLock_ = std::move(Lock); restoringSessionId_ = SessionId;
         auto Store = recovery_; ++recoveryWorkers_;
         auto* Watcher = new QFutureWatcher<storage::Result<QJsonObject>>(this);
-        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher] {
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Documents] {
             auto Result = Watcher->result(); Watcher->deleteLater(); --recoveryWorkers_;
             if (!Result.HasValue()) { restoringLock_.reset(); restoringSessionId_.clear(); ShowShellError(tr("복구 세션을 읽지 못했습니다: %1").arg(QString::fromStdString(Result.Failure().code_))); return; }
             const auto Manifest = Result.Value();
-            if (!Manifest["cleanShutdown"].toBool() && hc::ui::MessageDialog::question(this, tr("편집 내용 복구"),
-                tr("이전 편집이 정상적으로 종료되지 않았습니다. 보존된 내용을 복구하시겠습니까?"), QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) { restoringLock_.reset(); restoringSessionId_.clear(); return; }
             restoredActive_ = Manifest["activeDocumentId"].toString(); pendingHotExitRestore_ = true;
             for (const auto& Value : Manifest["documents"].toArray()) {
                 const auto Item = Value.toObject(); QJsonObject Reply; const auto Kind = Item["kind"].toString();
+                // Unchosen documents with preserved edits stay in the recovery list; unchanged ones reopen.
+                const bool Preserved = !Item["snapshot"].toString().isEmpty() || !Item["draft"].toString().isEmpty();
+                if (Documents && Preserved && !Documents->contains(Item["documentId"].toString())) continue;
                 if (Kind == "epub") {
                     // D9: an EPUB with a draft is compared with the file first (nextEpubRestore); others reopen in their mode.
                     if (!Item["draft"].toString().isEmpty()) { epubRestoreQueue_.append(Item); continue; }

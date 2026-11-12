@@ -629,9 +629,9 @@ private slots:
         const auto Path = UnifiedConfig::FileName(Temp.path());
         Write(Path, QJsonDocument(QJsonObject{{"schemaVersion", 2}}).toJson()); const auto Before = Read(Path);
         DocumentSettingsDialog Dialog(Path, {});
-        auto* Tabs = Dialog.findChild<QTabWidget*>("textViewerTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 3);
+        auto* Tabs = Dialog.findChild<QTabWidget*>("textViewerTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 2);
         QCOMPARE(Tabs->tabText(0), QString::fromUtf8("공통")); QCOMPARE(Tabs->tabText(1), QString::fromUtf8("색상"));
-        Dialog.findChild<QListWidget*>("settingsCategories")->setCurrentRow(1); Tabs->setCurrentIndex(1);
+        Dialog.findChild<QListWidget*>("settingsCategories")->setCurrentRow(2); Tabs->setCurrentIndex(1);
         auto* Mode = Dialog.findChild<QComboBox*>("textColorTheme"); auto* Language = Dialog.findChild<QComboBox*>("textColorLanguage");
         Mode->setCurrentIndex(Mode->findData("dark")); Language->setCurrentIndex(Language->findData("Batch"));
         auto* Keyword = Dialog.findChild<QLineEdit*>("textColor/text.lexer.batch.keyword"); QVERIFY(Keyword); Keyword->setText("#123456");
@@ -2092,9 +2092,9 @@ private slots:
         const auto Path = UnifiedConfig::FileName(Temp.path());
         DocumentSettingsDialog Dialog(Path, {});
         auto* List = Dialog.findChild<QListWidget*>("settingsCategories"); QVERIFY(List);
-        QCOMPARE(List->count(), 7); QCOMPARE(List->item(4)->text(), QObject::tr("마크다운")); QCOMPARE(List->item(5)->text(), QString("reStructuredText"));
-        Dialog.ShowPage("rst"); QCOMPARE(List->currentRow(), 5);
-        Dialog.ShowPage("image"); QCOMPARE(List->currentRow(), 6);
+        QCOMPARE(List->count(), 8); QCOMPARE(List->item(5)->text(), QObject::tr("마크다운")); QCOMPARE(List->item(6)->text(), QString("reStructuredText"));
+        Dialog.ShowPage("rst"); QCOMPARE(List->currentRow(), 6);
+        Dialog.ShowPage("image"); QCOMPARE(List->currentRow(), 7);
         Dialog.ShowPage("rst");
         auto* Tabs = Dialog.findChild<QTabWidget*>("rstSettingsTabs"); QVERIFY(Tabs); QCOMPARE(Tabs->count(), 3);
         // 기본값.
@@ -2150,7 +2150,7 @@ private slots:
         QTRY_VERIFY(Window.IsIdle()); auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text);
         Window.Handle({{"action", "replaceText"}, {"documentId", Id}, {"text", "edited\r\ntext\r\n"}});
         const auto Content = Text->Content(); const auto Before = Read(Path);
-        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 7);
+        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 8);
           Dialog.findChild<QSpinBox*>("documentViews/textView/tabWidth")->setValue(7); Dialog.reject(); }
         QCOMPARE(Read(Path), Before);
         DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>());
