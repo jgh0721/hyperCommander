@@ -58,6 +58,12 @@ scroll.quiet();container.scrollTop=420;onScroll();await sleep(80);assert.equal(s
 scroll.test.relayout();await sleep(70);assert.equal(container.scrollTop,420);
 await sleep(300);container.scrollTop=430;onScroll();await sleep(80);state=scroll.state();assert.equal(state.serial,4);assert.equal(state.intent,'scrollbar');
 function lineOf(y){return scroll.test.lineForY(y);}
+// A height that changed since the last scroll is a layout change nothing announced: the page settling.
+await sleep(300);container.scrollHeight=900;container.scrollTop=440;onScroll();await sleep(80);state=scroll.state();assert.equal(state.serial,5);assert.equal(state.user,false);
+await sleep(300);container.scrollTop=450;onScroll();await sleep(80);state=scroll.state();assert.equal(state.serial,6);assert.equal(state.user,true);assert.equal(state.intent,'scrollbar');
+// A height change a layout change announced is explained: once the page settled, a scroll is the user's again.
+scroll.test.relayout();container.scrollHeight=950;await sleep(300);container.scrollTop=460;onScroll();await sleep(80);state=scroll.state();assert.equal(state.serial,7);assert.equal(state.user,true);
+container.scrollHeight=800;
 
 // Paginated, fixed-layout and vertical chapters have no table, so the host keeps position sync only.
 layout.paginated=true;scroll.invalidate();assert.equal(scroll.state().supported,false);assert.equal(scroll.state().anchors,0);

@@ -8,39 +8,34 @@
 // the same ratio here, as in MultiRoot-reST's mrr_preview.js: measured element positions form a
 // table and lines between two measured points are interpolated.
 import { sourcePositionForNode } from "./sourcePositions.js";
+// What moved the page (the user, a request, the page settling): the rule shared with the Markdown and reST previews.
+import "./previewScrollIntent.js";
 
 const FEEDBACK_GUARD_MS = 250;     // our own scroll after a host request is not reported back
-const USER_INTENT_TAIL_MS = 400;   // only a scroll this soon after input counts as the user's
-const LAYOUT_SETTLE_MS = 250;      // a scroll this soon after a layout change is the page settling
 const REPORT_DELAY_MS = 60;
 const ANCHOR_RATIO = 0.5;
-const INPUT_EVENTS = {wheel: "wheel", keydown: "key", mousedown: "pointer", pointerdown: "pointer", pointermove: "pointer", touchstart: "touch", touchmove: "touch"};
 
 // documents(): chapter documents in view. container(): the scrolling element. chapter(): spine index.
 // layout(): {paginated, fixed}. Positions are in the container's scroll coordinates.
 export function createPreviewScroll({ documents, container, chapter, layout }) {
-    let table = null, measured = "", measureMs = 0, suppressUntil = 0, userIntentUntil = 0, intentKind = "", layoutAt = 0;
+    let table = null, measured = "", measureMs = 0;
     let timer = 0, serial = 0, attached = null, pinned = null, pending = null, queued = false;
     let report = { serial: 0, chapter: -1, line: 0, ratio: ANCHOR_RATIO, user: false, top: true, bottom: false, applied: 0, appliedLine: 0 };
     const now = () => performance.now();
     const invalidate = () => { table = null; };
-    const markIntent = (kind = "pointer") => { userIntentUntil = now() + USER_INTENT_TAIL_MS; intentKind = kind; pinned = null; };
+    // The user now places the preview: layout changes no longer re-apply the editor's placement.
+    const intent = globalThis.hcScrollIntent.create({ onInput: () => { pinned = null; } });
+    const markIntent = kind => intent.markInput(kind);
     // The reader's own moves for the host (a revealed source position, a restored location, another
     // chapter) are not the user's scroll, and they replace the placement the editor asked for.
-    const quiet = () => { suppressUntil = Math.max(suppressUntil, now() + FEEDBACK_GUARD_MS); pinned = null; };
-    // A page keeps scrolling by itself while images, fonts and layout settle. Those scrolls must not
-    // move the editor, and only the window that receives input can tell them apart from the user's.
-    const listenForInput = target => Object.keys(INPUT_EVENTS).forEach(type => target.addEventListener(type, event => {
-        if (type === "pointermove" && !event.buttons) return;
-        markIntent(INPUT_EVENTS[type]);
-    }, { passive: true, capture: true }));
+    const quiet = () => { intent.suppress(FEEDBACK_GUARD_MS); pinned = null; };
     // Late images, fonts and width changes move the layout under an applied anchor: apply it again,
     // unless the user has placed the preview since.
     const relayout = () => {
-        invalidate(); layoutAt = now();
-        if (pinned && now() >= userIntentUntil) queue({ ...pinned, reapply: true });
+        invalidate(); intent.layoutChanged();
+        if (pinned && !intent.inputActive()) queue({ ...pinned, reapply: true });
     };
-    if (typeof window !== "undefined") { listenForInput(window); window.addEventListener("resize", relayout); }
+    if (typeof window !== "undefined") { intent.listen(window); window.addEventListener("resize", relayout); }
 
     function supported() {
         const { paginated, fixed } = layout();
@@ -136,23 +131,21 @@ export function createPreviewScroll({ documents, container, chapter, layout }) {
         }
         return null;
     }
-    // What moved the page: "" for this script or settling layout, otherwise the user's input.
-    // Dragging or pressing the scrollbar delivers no page events; a scroll that no request,
-    // input or recent layout change explains is one of those.
+    // What moved the page: "" for a request or settling layout, otherwise the user's (previewScrollIntent.js).
+    // A scroll no input explains (a scrollbar drag) releases the editor's placement as input does.
     function scrollCause() {
-        const at = now();
-        if (at < suppressUntil) return "";
-        if (at < userIntentUntil) return intentKind;
-        if (at - layoutAt <= LAYOUT_SETTLE_MS) return "";
-        pinned = null;
-        return "scrollbar";
+        const cause = intent.cause();
+        if (cause === "scrollbar") pinned = null;
+        return cause;
     }
     function scrolled() {
-        if (now() < suppressUntil) return;
+        const scroller = container();
+        if (scroller && intent.scrolled(scroller.scrollHeight)) invalidate();
+        if (intent.suppressed()) return;
         clearTimeout(timer);
         timer = setTimeout(() => {
             const host = container();
-            if (!host || now() < suppressUntil) return;
+            if (!host || intent.suppressed()) return;
             const max = Math.max(0, host.scrollHeight - host.clientHeight), line = centerLine(host), cause = scrollCause();
             report = { ...report, serial: ++serial, chapter: chapter(), line: line ?? 0, ratio: ANCHOR_RATIO, user: cause !== "", intent: cause,
                 top: host.scrollTop <= 1, bottom: host.scrollTop >= max - 1, reference: referencePoint(host) };
@@ -181,7 +174,7 @@ export function createPreviewScroll({ documents, container, chapter, layout }) {
             }
             target = Math.max(0, Math.min(max, target));
         }
-        suppressUntil = now() + FEEDBACK_GUARD_MS;
+        intent.suppress(FEEDBACK_GUARD_MS);
         if (Math.abs(host.scrollTop - target) >= 1) host.scrollTo({ top: target, behavior: "instant" });
         pinned = request;
         if (request.reapply) return;
@@ -203,11 +196,11 @@ export function createPreviewScroll({ documents, container, chapter, layout }) {
     }
     return {
         hook(doc) {
-            listenForInput(doc);
+            intent.listen(doc);
             doc.addEventListener("load", relayout, true);
             doc.fonts?.addEventListener?.("loadingdone", relayout);
             // A newly shown document is a layout change: the page settles under it.
-            invalidate(); layoutAt = now(); attach();
+            invalidate(); intent.layoutChanged(); attach();
         },
         // request: {chapter, line, ratio, end, serial, anchor?, viewOffset?} in the source lines of this preview.
         apply(request) {

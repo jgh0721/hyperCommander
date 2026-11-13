@@ -62,7 +62,11 @@ void PreviewBridge::AttachTo( QWebEnginePage* Page )
     // 전송 계층은 문서가 만들어질 때, 동기화 스크립트는 DOM 이 선 뒤에 넣는다.
     insertScript( Page, QStringLiteral( "mrr_qwebchannel" ), readResourceText( QStringLiteral( ":/qtwebchannel/qwebchannel.js" ) ),
                   QWebEngineScript::DocumentCreation );
-    insertScript( Page, QStringLiteral( "mrr_preview" ), readResourceText( QStringLiteral( ":/rst/mrr_preview.js" ) ),
+    // 사용자 · 요청 · 페이지 스스로의 스크롤을 가르는 규칙은 Markdown · EPUB 미리보기와 같은 파일이다( 전역
+    // hcScrollIntent ). 한 스크립트로 이어 넣어 mrr_preview.js 보다 반드시 먼저 돌게 한다.
+    insertScript( Page, QStringLiteral( "mrr_preview" ),
+                  readResourceText( QStringLiteral( ":/rst/previewScrollIntent.js" ) ) + QStringLiteral( "\n" )
+                      + readResourceText( QStringLiteral( ":/rst/mrr_preview.js" ) ),
                   QWebEngineScript::DocumentReady );
 }
 

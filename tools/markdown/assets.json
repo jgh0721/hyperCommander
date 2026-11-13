@@ -3,8 +3,8 @@
   "files": [
     {
       "path": "web/bundle.js",
-      "bytes": 5664053,
-      "sha256": "aa380bc198f5377fbb6687a3bacc2c810118adbca9729970a9212e03cbefb8e9"
+      "bytes": 5664756,
+      "sha256": "63ca15353156ec79ef18d590794882aca5e15e02c6bf15aa8cc1e06b9e0aceca"
     },
     {
       "path": "web/bundle.js.LEGAL.txt",
@@ -318,8 +318,8 @@
     },
     {
       "path": "web/renderer.js",
-      "bytes": 40936,
-      "sha256": "ff17612b6b56c231f61dafbcbf4c3d3ebc5c3bb7f08cadb05fa823fe74f353bc"
+      "bytes": 40320,
+      "sha256": "d443d056c0de52fab7e149af4cec0eaee190a88b0a531306d9c5cb2f6f1a1750"
     },
     {
       "path": "web/shell.html",
@@ -930,6 +930,11 @@
       "path": "licenses/uc.micro-LICENSE.txt",
       "bytes": 1097,
       "sha256": "f996f6e050e6fc18086162b4b44e301bba345c87deca83f57a27e6d54195556e"
+    },
+    {
+      "path": "../epub/web/previewScrollIntent.js",
+      "bytes": 5355,
+      "sha256": "3a93d97b48bb7df57dcee5d260cd3a3f41f86c90c0706af6b10853736a45ad3b"
     }
   ]
 }

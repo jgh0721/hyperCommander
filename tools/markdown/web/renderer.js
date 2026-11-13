@@ -4,9 +4,11 @@ import tasks from 'markdown-it-task-lists';
 import katex from 'katex';
 import mermaid from 'mermaid';
 import hljs from 'highlight.js/lib/common';
+// What moved the page (the user, a request, the page settling): the rule shared with the reST and EPUB previews.
+import '../../epub/web/previewScrollIntent.js';
 
 // Only the fixed application shell owns the bridge. Document HTML is disabled.
-let revision = 0, options = {}, bridge, suppression = 0, serial = 0, displayedRevision = -1;
+let revision = 0, options = {}, bridge, serial = 0, displayedRevision = -1;
 // Source of the displayed revision: anchors are (line, column) in this text.
 let sourceText = '', lineStarts = [0];
 // sourceAnchor: latest source request for the rendering revision, applied at commit.
@@ -65,28 +67,15 @@ function parser() {
 }
 
 // ---- User intent -------------------------------------------------------------------------
-// Same events and rule as tools/epub/web/previewScroll.js: only a scroll soon after the user's
-// own input moves the editor. The page also scrolls by itself while images and fonts settle.
-const INTENT_TAIL_MS = 500, LAYOUT_SETTLE_MS = 250;
-const INTENT_KIND = {wheel:'wheel', keydown:'key', mousedown:'pointer', pointerdown:'pointer', pointermove:'pointer', touchstart:'touch', touchmove:'touch'};
-const intent = {until: 0, kind: ''};
-let layoutAt = 0;
-for (const type of Object.keys(INTENT_KIND)) addEventListener(type, event => {
-    if (type === 'pointermove' && !event.buttons) return;
-    intent.until = Date.now() + INTENT_TAIL_MS; intent.kind = INTENT_KIND[type];
-    // The user now places the preview; layout changes no longer re-apply the editor's anchor.
-    pinned = null;
-}, {capture: true, passive: true});
-// What moved the page: '' for this script or settling layout, otherwise the user's input.
-// Dragging or pressing the viewport scrollbar and autoscroll deliver no page events; a
-// scroll that no request, input or recent layout change explains is one of those.
+// The user now places the preview; layout changes no longer re-apply the editor's anchor.
+const intent = globalThis.hcScrollIntent.create({onInput: () => { pinned = null; }});
+intent.listen(window);
+// What moved the page: '' for a request or settling layout, otherwise the user's (previewScrollIntent.js).
+// A scroll no input explains (a scrollbar drag) releases the editor's anchor as input does.
 function scrollCause() {
-    const now = Date.now();
-    if (now <= suppression) return '';
-    if (now < intent.until) return intent.kind;
-    if (now - layoutAt <= LAYOUT_SETTLE_MS) return '';
-    pinned = null;
-    return 'scrollbar';
+    const cause = intent.cause();
+    if (cause === 'scrollbar') pinned = null;
+    return cause;
 }
 addEventListener('focus', () => report({type: 'focus', focused: true}));
 addEventListener('blur', () => report({type: 'focus', focused: false}));
@@ -169,7 +158,7 @@ function collectBlocks() {
     relayout();
 }
 // Layout moved: measured positions and text boxes are stale.
-function relayout() { anchorTable = null; alignments = new WeakMap(); layoutAt = Date.now(); }
+function relayout() { anchorTable = null; alignments = new WeakMap(); intent.layoutChanged(); }
 // The innermost block containing the line, or the last block starting before it.
 function blockFor(line) {
     let low = 0, high = blocks.length - 1, at = -1;
@@ -330,7 +319,7 @@ function sourceAt(x, y) {
 // CSS px height from the viewport top where the anchor character's line goes.
 function applyScroll(request) {
     if (!Number.isFinite(request.line)) return;
-    suppression = Date.now() + 300;
+    intent.suppress(300);
     const max = Math.max(0, document.documentElement.scrollHeight - innerHeight);
     let wanted = 0;
     if (request.end) wanted = max;
@@ -364,7 +353,7 @@ function layoutChanged() {
     if (relayoutQueued) return; relayoutQueued = true;
     const run = () => {
         if (!relayoutQueued) return; relayoutQueued = false;
-        if (pinned && displayedRevision === revision && Date.now() >= intent.until) applyScroll({...pinned, serial: undefined});
+        if (pinned && displayedRevision === revision && !intent.inputActive()) applyScroll({...pinned, serial: undefined});
         emitPosition();
     };
     requestAnimationFrame(run); setTimeout(run, 50);
@@ -519,7 +508,7 @@ async function render(request) {
         // Capture the displayed position at commit time: the user may have
         // scrolled while images and diagrams for this revision were loading.
         const previous=scrollY<=1||displayedRevision<0?{line:1,top:true}:previewAnchor();
-        suppression=Date.now()+300;
+        intent.suppress(300);
         // Only the changed blocks leave and enter the page; unchanged ones keep their nodes, diagrams
         // and loaded images, and those that moved get their new source lines.
         if(!reuse.length)root.replaceChildren(...fresh.flatMap(part=>part.nodes));
@@ -542,7 +531,7 @@ async function render(request) {
 function scrollToLine(line,ratio=0.2,end=false){applyScroll({line,ratio,end});}
 // Diagnostics and tests render requests as the bridge does: the text, or an edit of the last one.
 window.hcMarkdown={render:request=>acceptSource(request)?render(request):Promise.reject(Error('preview-resync')),scrollToLine,diagnostics:request=>{diagnostics(request);}};
-let scheduled=false;addEventListener('scroll',()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;emitPosition(true)})});
+let scheduled=false;addEventListener('scroll',()=>{if(intent.scrolled(document.documentElement.scrollHeight))relayout();if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;emitPosition(true)})});
 addEventListener('resize',layoutChanged);
 document.fonts?.addEventListener?.('loadingdone',layoutChanged);
 root.addEventListener('load',layoutChanged,true);

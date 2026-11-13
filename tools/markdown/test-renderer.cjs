@@ -61,7 +61,7 @@ const {chromium}=require(process.env.HC_PLAYWRIGHT_MODULE||'playwright');
  await bridged.waitForFunction(()=>Math.abs(document.getElementById('title').getBoundingClientRect().top)<=1);
  // The editor's caret (a position request with scroll sync on) does not move the page, so its report is not the user's
  // scroll. Called one, a page wholly in view reported "top" and the editor jumped to its first line on every caret move.
- // Waits out the page's own guards first: 300 ms after a request, 250 ms after layout, 500 ms after input.
+ // Waits out the page's own guards first: 300 ms after a request, 250 ms after layout, 400 ms after input.
  const caretReport=async(line,revision)=>{await bridged.waitForTimeout(700);await bridged.evaluate(()=>{__reports.length=0;});
   await bridged.evaluate(({line,revision})=>__request(JSON.stringify({type:'position',line,revision,reveal:false})),{line,revision});
   await bridged.waitForFunction(()=>__reports.some(r=>r.type==='scroll'));return bridged.evaluate(()=>__reports.find(r=>r.type==='scroll'));};
@@ -70,7 +70,7 @@ const {chromium}=require(process.env.HC_PLAYWRIGHT_MODULE||'playwright');
  await bridged.evaluate(async({origin})=>{await hcMarkdown.render({text:'# Short\n\nOne line.\n\nTwo lines.\n',revision:8,baseUrl:origin+'/markdown/',options:{}});},{origin});
  caret=await caretReport(5,8);assert.equal(caret.top,true,'Short page is not wholly in view');
  assert.equal(caret.user,false,`Caret report in a page wholly in view counted as the user's ${caret.intent}`);
- // A scroll that nothing explains (a scrollbar drag has no page events) is still the user's.
+ // A scroll that nothing explains is still the user's: a dragged scrollbar thumb moves the page with no page events.
  await bridged.evaluate(async({text,origin})=>{await hcMarkdown.render({text,revision:9,baseUrl:origin+'/markdown/',options:{}});},{text:menuText,origin});
  await bridged.waitForTimeout(700);await bridged.evaluate(()=>{__reports.length=0;scrollTo(0,300);});
  await bridged.waitForFunction(()=>__reports.some(r=>r.type==='scroll'));const dragged=await bridged.evaluate(()=>__reports.find(r=>r.type==='scroll'));

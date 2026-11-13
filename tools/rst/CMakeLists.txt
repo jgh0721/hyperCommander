@@ -13,6 +13,9 @@ target_compile_options(hc-rst-preview PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 qt_add_resources(hc-rst-preview "rst_preview_assets" PREFIX "/rst" BASE "${CMAKE_CURRENT_SOURCE_DIR}/web" FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/web/mrr_preview.js"
     "${CMAKE_CURRENT_SOURCE_DIR}/web/mrr_fonts.js")
+# The scroll-intent rule shared with the Markdown and EPUB previews; it lives with the EPUB sources (see the file).
+qt_add_resources(hc-rst-preview "rst_preview_shared" PREFIX "/rst" BASE "${PROJECT_SOURCE_DIR}/tools/epub/web" FILES
+    "${PROJECT_SOURCE_DIR}/tools/epub/web/previewScrollIntent.js")
 hc_add_version_resource(hc-rst-preview "reStructuredText preview")
 hc_enable_qt_deployment(hc-rst-preview PLUGINS)
 add_custom_command(TARGET hc-rst-preview POST_BUILD
