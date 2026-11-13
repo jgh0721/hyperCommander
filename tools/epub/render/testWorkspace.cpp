@@ -1317,15 +1317,24 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(([&]{auto P=View()["epubEditor"].toObject()["preview"].toObject();if(P["waitingForFocus"].toBool())foreground(Window);return P["ready"].toBool()&&!P["busy"].toBool();})(),60000);
         QVERIFY(foreground(Window));
         const auto Dpi=SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);const auto RestoreDpi=qScopeGuard([Dpi]{SetThreadDpiAwarenessContext(Dpi);});
-        const auto Root=reinterpret_cast<HWND>(Window.winId());RECT Bounds{};QVERIFY(GetWindowRect(Root,&Bounds));
-        const int Left=Bounds.left+2,Right=Bounds.right-2,Top=Bounds.top+2,Bottom=Bounds.bottom-2,MidX=(Left+Right)/2,MidY=(Top+Bottom)/2;
-        const QList<QPair<QPoint,int>> Edges{{{Left,MidY},HTLEFT},{{Right,MidY},HTRIGHT},{{MidX,Top},HTTOP},{{MidX,Bottom},HTBOTTOM},{{Left,Top},HTTOPLEFT},{{Right,Top},HTTOPRIGHT},{{Left,Bottom},HTBOTTOMLEFT},{{Right,Bottom},HTBOTTOMRIGHT}};
-        for(const auto& Edge:Edges) {
-            POINT Point{Edge.first.x(),Edge.first.y()};const auto Target=WindowFromPoint(Point);DWORD_PTR Hit=0;
-            QCOMPARE(GetAncestor(Target,GA_ROOT),Root);
-            QVERIFY(SendMessageTimeoutW(Target,WM_NCHITTEST,0,MAKELPARAM(Point.x,Point.y),SMTO_ABORTIFHUNG,2000,&Hit));
-            qInfo()<<"Native edge root/target/hit"<<quintptr(Root)<<quintptr(Target)<<Hit;QCOMPARE(int(Hit),Edge.second);
-        }
+        const auto Root=reinterpret_cast<HWND>(Window.winId());RECT Bounds{};
+        // Left, right and bottom resize borders are non-client, outside the visible edge; the caption is client area
+        // up to the window's top, where a band answers HTTOP. Content now reaches the edges without a host margin.
+        const auto CheckEdges=[&]{
+            QVERIFY(GetWindowRect(Root,&Bounds));RECT Client{};QVERIFY(GetClientRect(Root,&Client));MapWindowPoints(Root,HWND_DESKTOP,reinterpret_cast<POINT*>(&Client),2);
+            qInfo()<<"Native window/client"<<Bounds.left<<Bounds.top<<Bounds.right<<Bounds.bottom<<Client.left<<Client.top<<Client.right<<Client.bottom;
+            QCOMPARE(Client.top,Bounds.top);QVERIFY(Client.left>Bounds.left);QVERIFY(Client.right<Bounds.right);QVERIFY(Client.bottom<Bounds.bottom);
+            QCOMPARE(Window.layout()->contentsMargins(),QMargins{});
+            const int Left=Bounds.left+2,Right=Bounds.right-2,Top=Bounds.top+2,Bottom=Bounds.bottom-2,MidX=(Left+Right)/2,MidY=(Top+Bottom)/2;
+            const QList<QPair<QPoint,int>> Edges{{{Left,MidY},HTLEFT},{{Right,MidY},HTRIGHT},{{MidX,Top},HTTOP},{{MidX,Bottom},HTBOTTOM},{{Left,Top},HTTOPLEFT},{{Right,Top},HTTOPRIGHT},{{Left,Bottom},HTBOTTOMLEFT},{{Right,Bottom},HTBOTTOMRIGHT}};
+            for(const auto& Edge:Edges) {
+                POINT Point{Edge.first.x(),Edge.first.y()};const auto Target=WindowFromPoint(Point);DWORD_PTR Hit=0;
+                QCOMPARE(GetAncestor(Target,GA_ROOT),Root);
+                QVERIFY(SendMessageTimeoutW(Target,WM_NCHITTEST,0,MAKELPARAM(Point.x,Point.y),SMTO_ABORTIFHUNG,2000,&Hit));
+                qInfo()<<"Native edge root/target/hit"<<quintptr(Root)<<quintptr(Target)<<Hit;QCOMPARE(int(Hit),Edge.second);
+            }
+        };
+        CheckEdges();if(QTest::currentTestFailed())return;
         // A real non-client mouse drag exercises the path that QWidget::resize
         // bypasses. Release the mouse from a worker while Windows runs its modal loop.
         POINT Cursor{};GetCursorPos(&Cursor);const auto BeforeDrag=Window.size();bool Sent=false;
@@ -1340,10 +1349,13 @@ private slots:
         qInfo()<<"Edit initial size/min/max/hint"<<Window.size()<<Window.minimumSize()<<Window.maximumSize()<<Window.minimumSizeHint();        for(const auto Target:{QSize(1300,900),QSize(900,650),QSize(1100,750),QSize(800,600),QSize(1300,900)}) {
             Window.resize(Target);QTest::qWait(500);qInfo()<<"Resize target/actual/min"<<Target<<Window.size()<<Window.minimumSize();QCOMPARE(Window.size(),Target);
         }
+        // Maximized, the frame hangs off the monitor and the title bar starts at the work area's top.
         Window.showMaximized();QTest::qWait(250);QCOMPARE(Window.layout()->contentsMargins(),QMargins{});
-        Window.showNormal();QTest::qWait(250);QCOMPARE(Window.layout()->contentsMargins(),QMargins(6,6,6,6));
-        Window.showFullScreen();QTest::qWait(250);QCOMPARE(Window.layout()->contentsMargins(),QMargins{});
-        Window.showNormal();QTest::qWait(250);QCOMPARE(Window.layout()->contentsMargins(),QMargins(6,6,6,6));
+        {const auto Area=Window.screen()->availableGeometry(),Shown=Window.geometry();qInfo()<<"Maximized geometry/work area"<<Shown<<Area;
+         QVERIFY(qAbs(Shown.left()-Area.left())<=1&&qAbs(Shown.top()-Area.top())<=1&&qAbs(Shown.right()-Area.right())<=1&&qAbs(Shown.bottom()-Area.bottom())<=1);}
+        Window.showNormal();QTest::qWait(250);CheckEdges();if(QTest::currentTestFailed())return;
+        Window.showFullScreen();QTest::qWait(250);QCOMPARE(Window.layout()->contentsMargins(),QMargins{});QCOMPARE(Window.geometry(),Window.screen()->geometry());
+        Window.showNormal();QTest::qWait(250);CheckEdges();if(QTest::currentTestFailed())return;
         QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),30000);QTRY_VERIFY_WITH_TIMEOUT(EpubProcessView::IsDrained(),30000);
     }
     void sharedPreviewValidation() {

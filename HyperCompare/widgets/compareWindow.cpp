@@ -518,7 +518,7 @@ namespace hc::compare
         // Product title bar above the menu bar, as in HyperCommander's main window. The bar leaves the layout
         // before setMenuWidget, so QMainWindow keeps it; menuBar() must not be called after this point.
         if (!parentWidget()) {
-            auto* bar = menuBar(); setWindowFlag(Qt::FramelessWindowHint);
+            auto* bar = menuBar();
             auto* header = new QWidget(this); header->setObjectName("compareHeader");
             auto* headerLayout = new QVBoxLayout(header); headerLayout->setContentsMargins(0, 0, 0, 0); headerLayout->setSpacing(0);
             headerLayout->addWidget(new fm::ui::WindowChrome(this, header));

@@ -372,7 +372,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "windowSwitchFocusUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "windowSwitchFocusUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "mainWindowEdgeResizeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -7132,8 +7132,12 @@ private slots:
         const auto Handle = reinterpret_cast<HWND>(main_->winId());
         const auto Flags = GetWindowLongPtrW(Handle, GWL_STYLE);
         QVERIFY(Flags & WS_THICKFRAME); QVERIFY(Flags & WS_MAXIMIZEBOX); QVERIFY(GetSystemMenu(Handle, FALSE));
+        const auto Scale = main_->devicePixelRatioF();
+        // A restored window larger than the screen (the VM at scale 1.5) is clamped by Windows; read the button once
+        // Qt has laid out the clamped client width.
+        RECT ClientArea{}; QTRY_VERIFY(GetClientRect(Handle, &ClientArea) && qAbs(qRound(main_->width() * Scale) - ClientArea.right) <= 1);
         const auto Local = Maximize->mapTo(main_, Maximize->rect().center());
-        const auto Scale = main_->devicePixelRatioF(); POINT Native{qRound(Local.x() * Scale), qRound(Local.y() * Scale)}; ClientToScreen(Handle, &Native);
+        POINT Native{qRound(Local.x() * Scale), qRound(Local.y() * Scale)}; ClientToScreen(Handle, &Native);
         QCOMPARE(SendMessageW(Handle, WM_NCHITTEST, 0, MAKELPARAM(Native.x, Native.y)), LRESULT(HTMAXBUTTON));
         // Nonclient mouse input normally enters Qt through its event dispatcher.
         // Post it to the native queue instead of bypassing that route with SendMessage.
@@ -7141,6 +7145,79 @@ private slots:
         PostMessageW(Handle, WM_NCLBUTTONUP, HTMAXBUTTON, MAKELPARAM(Native.x, Native.y)); QTRY_VERIFY(main_->isMaximized());
         main_->showNormal();
         qInfo() << "R2: independent tab search, identity reorder/close, history branching, missing-path retry, shell cwd/exit, workspace restoration and maximize/restore passed";
+    }
+
+    // The main window's widgets own native HWNDs, and Windows asks the deepest child window under the cursor.
+    // The left, right and bottom resize borders are non-client, outside the visible edge; over the top band and
+    // the maximize button the child windows answer HTTRANSPARENT and the main window answers. WindowFromPoint
+    // follows that hand-over for windows of the calling thread, so it names the window Windows asks.
+    void mainWindowEdgeResizeUi()
+    {
+        const auto Geometry = main_->geometry();
+        const auto Restore = qScopeGuard([&] { main_->showNormal(); main_->setGeometry(Geometry); });
+        // Qt made the process per-monitor DPI aware, so native coordinates here and in the worker are physical.
+        main_->showNormal();
+        const auto Available = main_->screen()->availableGeometry();
+        main_->setGeometry(Available.x() + 60, Available.y() + 60, std::min(1100, Available.width() - 320), std::min(720, Available.height() - 240));
+        const auto Root = reinterpret_cast<HWND>(main_->winId());
+        QVERIFY(ActivateTestWindow(Root)); QTest::qWait(150);
+        int NativeChildren = 0;
+        EnumChildWindows(Root, [](HWND, LPARAM Count) -> BOOL { ++*reinterpret_cast<int*>(Count); return TRUE; }, reinterpret_cast<LPARAM>(&NativeChildren));
+        qInfo() << "Native child windows:" << NativeChildren; QVERIFY(NativeChildren > 0);
+        const auto Routed = [&](POINT Point) -> LRESULT {
+            const auto Target = WindowFromPoint(Point);
+            if (GetAncestor(Target, GA_ROOT) != Root) return -100;
+            return SendMessageW(Target, WM_NCHITTEST, 0, MAKELPARAM(Point.x, Point.y));
+        };
+        RECT Bounds{}, Client{};
+        const auto CheckEdges = [&] {
+            QVERIFY(GetWindowRect(Root, &Bounds)); QVERIFY(GetClientRect(Root, &Client));
+            MapWindowPoints(Root, HWND_DESKTOP, reinterpret_cast<POINT*>(&Client), 2);
+            QCOMPARE(Client.top, Bounds.top); QVERIFY(Client.left > Bounds.left); QVERIFY(Client.right < Bounds.right); QVERIFY(Client.bottom < Bounds.bottom);
+            const LONG Left = Bounds.left + 2, Right = Bounds.right - 2, Top = Bounds.top + 2, Bottom = Bounds.bottom - 2;
+            const LONG MidX = (Left + Right) / 2, MidY = (Top + Bottom) / 2;
+            const QList<QPair<POINT, LRESULT>> Edges{{{Left, MidY}, HTLEFT}, {{Right, MidY}, HTRIGHT}, {{MidX, Top}, HTTOP}, {{MidX, Bottom}, HTBOTTOM},
+                {{Left, Top}, HTTOPLEFT}, {{Right, Top}, HTTOPRIGHT}, {{Left, Bottom}, HTBOTTOMLEFT}, {{Right, Bottom}, HTBOTTOMRIGHT},
+                {{(Left + MidX) / 2, Top}, HTTOP}, {{Left, (Top + MidY) / 2}, HTLEFT}, {{(MidX + Right) / 2, Bottom}, HTBOTTOM}};
+            for (const auto& Edge : Edges) {
+                const auto Hit = Routed(Edge.first);
+                if (Hit != Edge.second) qWarning() << "Edge" << Edge.first.x << Edge.first.y << "target" << quintptr(WindowFromPoint(Edge.first)) << "hit" << Hit;
+                QCOMPARE(Hit, Edge.second);
+            }
+        };
+        CheckEdges(); if (QTest::currentTestFailed()) return;
+        // Inside, the panels stay client and the maximize button keeps HTMAXBUTTON (Windows 11 Snap layouts).
+        const qreal Scale = main_->devicePixelRatioF();
+        const auto Native = [&](const QWidget* Widget) {
+            const auto Local = Widget->mapTo(main_, Widget->rect().center());
+            return POINT{Client.left + qRound(Local.x() * Scale), Client.top + qRound(Local.y() * Scale)};
+        };
+        auto* Maximize = main_->findChild<QToolButton*>("fm.window.maximize"); QVERIFY(Maximize);
+        QCOMPARE(Routed(Native(Maximize)), LRESULT(HTMAXBUTTON));
+        QCOMPARE(Routed(Native(panels_[0])), LRESULT(HTCLIENT));
+        // A real drag on the right border outside the visible edge. Windows runs a modal sizing loop on this
+        // thread, so a worker releases the mouse.
+        POINT Cursor{}; GetCursorPos(&Cursor); const auto BeforeDrag = main_->size(); bool Sent = false;
+        std::thread Drag([&] {
+            const LONG Y = (Bounds.top + Bounds.bottom) / 2;
+            SetCursorPos(Bounds.right - 2, Y); Sleep(80);
+            INPUT Mouse{}; Mouse.type = INPUT_MOUSE; Mouse.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+            const auto Down = SendInput(1, &Mouse, sizeof(Mouse)); Sleep(100);
+            SetCursorPos(Bounds.right + 118, Y); Sleep(150);
+            Mouse.mi.dwFlags = MOUSEEVENTF_LEFTUP; Sent = SendInput(1, &Mouse, sizeof(Mouse)) == 1 && Down == 1;
+        });
+        QTest::qWait(650); Drag.join(); SetCursorPos(Cursor.x, Cursor.y); QVERIFY(Sent);
+        qInfo() << "Native resize drag before/after" << BeforeDrag << main_->size();
+        QVERIFY(main_->width() > BeforeDrag.width() + 20); QCOMPARE(main_->height(), BeforeDrag.height());
+        // Maximized, the frame hangs off the monitor: the title bar starts at the work area's top and no edge resizes.
+        main_->showMaximized(); QTRY_VERIFY(main_->isMaximized()); QTest::qWait(200);
+        const auto Area = main_->screen()->availableGeometry(), Shown = main_->geometry();
+        qInfo() << "Maximized geometry/work area" << Shown << Area;
+        QVERIFY(qAbs(Shown.left() - Area.left()) <= 1 && qAbs(Shown.top() - Area.top()) <= 1 && qAbs(Shown.right() - Area.right()) <= 1 && qAbs(Shown.bottom() - Area.bottom()) <= 1);
+        QVERIFY(GetClientRect(Root, &Client)); MapWindowPoints(Root, HWND_DESKTOP, reinterpret_cast<POINT*>(&Client), 2);
+        QCOMPARE(Routed(POINT{Client.left + (Client.right - Client.left) / 3, Client.top + 1}), LRESULT(HTCLIENT));
+        main_->showNormal(); QTRY_VERIFY(!main_->isMaximized()); QTest::qWait(200);
+        CheckEdges();
     }
 
     void fileIconRefreshUi()

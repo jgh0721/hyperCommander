@@ -81,7 +81,7 @@ namespace hc::document
         auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
         // Embedded views must never install top-level chrome: its native event filter
         // adds resize/system-menu styles even after a later reparent or hide.
-        if (isWindow()) { setWindowFlag(Qt::FramelessWindowHint); Layout->setSpacing(0); Layout->addWidget(new fm::ui::WindowChrome(this, this)); }
+        if (isWindow()) { Layout->setSpacing(0); Layout->addWidget(new fm::ui::WindowChrome(this, this)); }
         status_ = new QLabel(tr("문서를 준비하고 있습니다…"), this);
         status_->setAlignment(Qt::AlignCenter); status_->setWordWrap(true); Layout->addWidget(status_);
         connect(&preparation_, &QFutureWatcherBase::finished, this, &HwpOpenWindow::prepared);

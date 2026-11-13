@@ -10,6 +10,7 @@
 #include "documentTabsProbe.hpp"
 
 #include <fmdock/DockManager.h>
+#include <fmdock/FloatingWindow.h>
 
 #include <Windows.h>
 
@@ -19,10 +20,12 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLayout>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -77,6 +80,38 @@ namespace
     }
     bool Has(const QList<QPair<QString, bool>>& Rows, const QString& Text, bool Enabled)
     { for (const auto& Row : Rows) if (Row.first == Text) return Row.second == Enabled; return false; }
+    // The hit test as Windows routes it: WindowFromPoint names the deepest child window and skips same-thread
+    // children that answer HTTRANSPARENT; that window then answers WM_NCHITTEST.
+    LRESULT RoutedHit(HWND Root, POINT Point)
+    {
+        const auto Target = WindowFromPoint(Point);
+        if (GetAncestor(Target, GA_ROOT) != Root) return -100;
+        return SendMessageW(Target, WM_NCHITTEST, 0, MAKELPARAM(Point.x, Point.y));
+    }
+    // Left, right and bottom resize borders lie outside the client area, the visible edge; the caption is client
+    // area up to the window's top, where a band answers HTTOP. Returns what differs.
+    QString EdgeProblems(QWidget& Window)
+    {
+        const auto Root = reinterpret_cast<HWND>(Window.winId());
+        // WindowFromPoint needs the window on top at the probed points.
+        SetWindowPos(Root, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        const auto Restore = qScopeGuard([Root] { SetWindowPos(Root, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); });
+        QTest::qWait(100);
+        RECT Bounds{}, Client{};
+        GetWindowRect(Root, &Bounds); GetClientRect(Root, &Client); MapWindowPoints(Root, HWND_DESKTOP, reinterpret_cast<POINT*>(&Client), 2);
+        QStringList Problems;
+        if (Client.top != Bounds.top || Client.left <= Bounds.left || Client.right >= Bounds.right || Client.bottom >= Bounds.bottom)
+            Problems << QString("client %1,%2,%3,%4 in window %5,%6,%7,%8").arg(Client.left).arg(Client.top).arg(Client.right).arg(Client.bottom)
+                .arg(Bounds.left).arg(Bounds.top).arg(Bounds.right).arg(Bounds.bottom);
+        const LONG Left = Bounds.left + 2, Right = Bounds.right - 2, Top = Bounds.top + 2, Bottom = Bounds.bottom - 2;
+        const LONG MidX = (Left + Right) / 2, MidY = (Top + Bottom) / 2;
+        const QList<QPair<POINT, LRESULT>> Edges{{{Left, MidY}, HTLEFT}, {{Right, MidY}, HTRIGHT}, {{MidX, Top}, HTTOP}, {{MidX, Bottom}, HTBOTTOM},
+            {{Left, Top}, HTTOPLEFT}, {{Right, Top}, HTTOPRIGHT}, {{Left, Bottom}, HTBOTTOMLEFT}, {{Right, Bottom}, HTBOTTOMRIGHT}};
+        for (const auto& Edge : Edges)
+            if (const auto Hit = RoutedHit(Root, Edge.first); Hit != Edge.second)
+                Problems << QString("(%1,%2) hit %3, expected %4").arg(Edge.first.x).arg(Edge.first.y).arg(Hit).arg(Edge.second);
+        return Problems.join("; ");
+    }
 }
 class DocumentDockingTests final : public QObject
 {
@@ -135,6 +170,29 @@ private slots:
         QVERIFY(Tabs.manager()->moveDockWidget(Tabs.dock(0), DropArea::Center, Tabs.dock(1)->dockArea()));
         QTRY_VERIFY(!Tabs.dock(0)->isFloating()); QCOMPARE(Tabs.dock(0)->dockArea(), Tabs.dock(1)->dockArea());
         QTRY_VERIFY(Next->isEnabled());
+    }
+    // The title bar draws over the native frame. A native editor (Qt then makes its siblings and ancestors native)
+    // and a floating document window keep every resize border; the content reaches the window's edges.
+    void nativeWindowEdges()
+    {
+        if (QGuiApplication::platformName() != QLatin1String("windows")) QSKIP("needs real windows (QT_QPA_PLATFORM=windows)");
+        const auto Dpi = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        const auto RestoreDpi = qScopeGuard([Dpi] { SetThreadDpiAwarenessContext(Dpi); });
+        Profile Settings; QVERIFY(Put(Settings.Path("a.txt"), "alpha\r\n")); QVERIFY(Put(Settings.Path("b.txt"), "beta\r\n"));
+        DocumentWorkspaceWidget Widget(Settings.Path("recovery")); Widget.resize(1000, 700); Widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Widget));
+        QVERIFY(!Widget.windowFlags().testFlag(Qt::FramelessWindowHint)); QCOMPARE(Widget.layout()->contentsMargins(), QMargins{});
+        test::DocumentTabs Tabs(&Widget);
+        const auto A = Widget.Handle({{"action", "open"}, {"path", Settings.Path("a.txt")}})["documentId"].toString();
+        const auto B = Widget.Handle({{"action", "open"}, {"path", Settings.Path("b.txt")}})["documentId"].toString();
+        QTRY_VERIFY(Ready(Widget, A) && Ready(Widget, B));
+        Tabs.widget(0)->winId(); QTest::qWait(100);
+        const auto Problems = EdgeProblems(Widget); QVERIFY2(Problems.isEmpty(), qPrintable(Problems));
+        Tabs.dock(1)->setFloating(); QTRY_VERIFY(Tabs.dock(1)->isFloating());
+        auto* Floating = Tabs.dock(1)->floatingWindow(); QVERIFY(Floating && QTest::qWaitForWindowExposed(Floating));
+        QVERIFY(!Floating->windowFlags().testFlag(Qt::FramelessWindowHint));
+        Tabs.widget(1)->winId(); QTest::qWait(100);
+        const auto FloatingProblems = EdgeProblems(*Floating); QVERIFY2(FloatingProblems.isEmpty(), qPrintable(FloatingProblems));
     }
     void documentTabMenu()
     {

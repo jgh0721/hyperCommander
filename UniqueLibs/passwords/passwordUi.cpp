@@ -27,7 +27,6 @@ namespace hc::passwords
         QVBoxLayout* dialogRows(QDialog& Dialog)
         {
             closeWithPrompt(Dialog);
-            Dialog.setWindowFlag(Qt::FramelessWindowHint);
             auto* Outer = new QVBoxLayout(&Dialog); Outer->setContentsMargins(0, 0, 0, 0); Outer->setSpacing(0);
             Outer->addWidget(new fm::ui::WindowChrome(&Dialog, &Dialog, {false, true}));
             auto* Body = new QWidget(&Dialog); Outer->addWidget(Body);
