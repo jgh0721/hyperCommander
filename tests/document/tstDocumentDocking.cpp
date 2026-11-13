@@ -3,6 +3,8 @@
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/documentToolPanel.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
+#include "UniqueLibs/document/explorerPanel.hpp"
+#include "UniqueLibs/document/workspace/workspaceState.hpp"
 #include "UniqueLibs/document/markdownDocumentView.hpp"
 #include "UniqueLibs/document/markdownProcessView.hpp"
 #include "UniqueLibs/document/search/documentSearchPanel.hpp"
@@ -17,6 +19,8 @@
 #include <QAction>
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QDir>
+#include <QJsonDocument>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -401,6 +405,122 @@ private slots:
         const auto A = Viewer.Handle({{"action", "open"}, {"path", Settings.Path("a.txt")}})["documentId"].toString(); QTRY_VERIFY(Ready(Viewer, A));
         Tabs.dock(0)->setFloating(); QApplication::processEvents(); QVERIFY(!Tabs.dock(0)->isFloating());
         QVERIFY(!Viewer.findChild<QToolButton*>("documentLayoutButton"));
+    }
+    // 탐색기 · 워크스페이스(설계 5.1 · 6): 탐색기는 기본 기능이라 HyperEditor 의 왼쪽 위에 처음부터 열려 있다.
+    void explorerDefaultPlacement()
+    {
+        Profile Settings; QVERIFY(Put(Settings.Path("a.txt"), "alpha\r\n"));
+        DocumentWorkspaceWidget Widget(Settings.Path("recovery")); Widget.resize(1200, 800); Widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Widget));
+        test::DocumentTabs Tabs(&Widget);
+        auto* Explorer = Tabs.tool("explorer"); QVERIFY(Explorer); QVERIFY(!Explorer->isClosed()); QVERIFY(!Explorer->isAutoHidden());
+        QVERIFY(Widget.Explorer()); QVERIFY(Explorer->isAncestorOf(Widget.Explorer()));
+        auto* Placeholder = Tabs.manager()->dockContainer()->centralPlaceholder(); QVERIFY(Placeholder);
+        QVERIFY(Explorer->dockArea()->mapTo(&Widget, QPoint()).x() < Placeholder->mapTo(&Widget, QPoint()).x());
+        // 개요는 탐색기 아래 칸에 열린다.
+        auto* Outline = Tabs.tool("outline"); Outline->toggleView(true); QTRY_VERIFY(!Outline->isClosed());
+        QTRY_VERIFY(Outline->dockArea()->mapTo(&Widget, QPoint()).y() > Explorer->dockArea()->mapTo(&Widget, QPoint()).y());
+        // 문서 모드: 포커스 문서의 폴더를 따른다.
+        const auto A = Widget.Handle({{"action", "open"}, {"path", Settings.Path("a.txt")}})["documentId"].toString(); QTRY_VERIFY(Ready(Widget, A));
+        QTRY_COMPARE(Widget.Explorer()->CurrentMode(), ExplorerPanel::Mode::Document);
+        QCOMPARE(QDir::cleanPath(Widget.Explorer()->DocumentFolder()).toLower(), QDir::cleanPath(Settings.root_.path()).toLower());
+        // 보기 › 도구 창 맨 위 · 탐색기로 이동(Ctrl+Shift+X, Ctrl+Shift+E 는 EPUB 읽기 설정).
+        auto* Menu = Widget.findChild<QMenu*>("documentToolMenu"); QVERIFY(Menu); emit Menu->aboutToShow();
+        auto* Item = Menu->findChild<QAction*>("view.tool.explorer"); QVERIFY(Item); QVERIFY(Item->isChecked());
+        QCOMPARE(Menu->actions().first(), Item);
+        Item->trigger(); QTRY_VERIFY(Explorer->isClosed());
+        auto* Go = Widget.findChild<QAction*>("view.explorer"); QVERIFY(Go); QCOMPARE(Go->shortcut(), QKeySequence("Ctrl+Shift+X"));
+        Go->trigger(); QTRY_VERIFY(!Explorer->isClosed());
+    }
+    void hostedExplorerAndQuickView()
+    {
+        Profile Settings;
+        // F3 보기: 보기 전용 탐색기가 왼쪽 사이드바에 있다.
+        {
+            DocumentWorkspaceWidget Viewer(Settings.Path("recovery"), true); Viewer.resize(900, 600); Viewer.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&Viewer));
+            test::DocumentTabs Tabs(&Viewer);
+            auto* Explorer = Tabs.tool("explorer"); QVERIFY(Explorer); QVERIFY(Explorer->isAutoHidden()); QVERIFY(!Explorer->isClosed());
+            QVERIFY(!Viewer.findChild<QWidget*>("explorerNewFile") || !Viewer.findChild<QWidget*>("explorerNewFile")->isVisibleTo(Viewer.Explorer()));
+            QVERIFY(!Viewer.OpenWorkspace(Settings.root_.path()));
+        }
+        // Ctrl+Q 빠른 보기에는 탐색기가 없다.
+        DocumentWorkspaceWidget Quick(Settings.Path("recovery2"), true); Quick.resize(900, 600); Quick.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Quick));
+        Quick.setProperty("hc.quickPreview", true);
+        test::DocumentTabs Tabs(&Quick);
+        QTRY_VERIFY(!Tabs.tool("explorer")); QVERIFY(!Quick.Explorer());
+        auto* Menu = Quick.findChild<QMenu*>("documentToolMenu"); QVERIFY(Menu); emit Menu->aboutToShow();
+        QVERIFY(!Menu->findChild<QAction*>("view.tool.explorer"));
+    }
+    void workspaceStateRoundTrip()
+    {
+        Profile Settings;
+        const auto Root = Settings.Path("docs"); QVERIFY(QDir().mkpath(Root + "/guide"));
+        QVERIFY(Put(Root + "/index.rst", "Title\r\n=====\r\n")); QVERIFY(Put(Root + "/guide/a.txt", "alpha\r\n")); QVERIFY(Put(Root + "/guide/b.txt", "beta\r\n"));
+        {
+            DocumentWorkspaceWidget Widget(Settings.Path("recovery")); Widget.resize(1200, 800); Widget.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&Widget));
+            QVERIFY(Widget.OpenWorkspace(Root));
+            QCOMPARE(QDir::cleanPath(Widget.WorkspaceRoot()).toLower(), QDir::cleanPath(Root).toLower());
+            QCOMPARE(Widget.Snapshot()["workspaceRoot"].toString(), Widget.WorkspaceRoot());
+            QCOMPARE(Widget.Explorer()->CurrentMode(), ExplorerPanel::Mode::Workspace);
+            QVERIFY(Widget.windowTitle().contains("docs"));
+            QVERIFY(Widget.findChild<QAction*>("workspace.close")->isEnabled());
+            // 처음 연 폴더에도 상태 파일을 만든다.
+            QVERIFY(QFileInfo::exists(workspace::Store::FolderStatePath(Root)));
+            const auto A = Widget.Handle({{"action", "open"}, {"path", Root + "/guide/a.txt"}})["documentId"].toString();
+            const auto B = Widget.Handle({{"action", "open"}, {"path", Root + "/guide/b.txt"}})["documentId"].toString();
+            QTRY_VERIFY(Ready(Widget, A) && Ready(Widget, B));
+            Widget.Handle({{"action", "activate"}, {"documentId", A}}); QTRY_COMPARE(Active(Widget), A);
+            // 같은 폴더를 다시 열면 이 창 그대로.
+            QVERIFY(Widget.OpenWorkspace(Root + "/"));
+            Widget.RequestClose();
+        }
+        QFile State(workspace::Store::FolderStatePath(Root)); QVERIFY(State.open(QIODevice::ReadOnly));
+        const auto Json = QJsonDocument::fromJson(State.readAll()).object();
+        QCOMPARE(Json["schema"].toInt(), 1);
+        QStringList Stored; for (const auto& Item : Json["documents"].toArray()) Stored.append(Item.toObject()["path"].toString());
+        QCOMPARE(Stored, (QStringList{"guide/a.txt", "guide/b.txt"}));
+        // 새 창: 빈 창이면 지난 세션 문서와 활성 문서까지 되살린다.
+        DocumentWorkspaceWidget Next(Settings.Path("recovery2")); Next.resize(1200, 800); Next.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Next));
+        QVERIFY(Next.OpenWorkspace(Root));
+        QTRY_COMPARE(Next.Snapshot()["documents"].toArray().size(), 2);
+        QTRY_VERIFY(Document(Next, Active(Next))["path"].toString().endsWith("a.txt"));
+        // 워크스페이스 닫기: 문서를 닫고 문서 모드(빈 상태)로.
+        QVERIFY(Next.CloseWorkspace());
+        QVERIFY(Next.WorkspaceRoot().isEmpty()); QCOMPARE(Next.Snapshot()["documents"].toArray().size(), 0);
+        QVERIFY(!Next.findChild<QAction*>("workspace.close")->isEnabled());
+    }
+    void ancestorWorkspaceOpensAutomatically()
+    {
+        Profile Settings;
+        const auto Root = Settings.Path("book"); QVERIFY(QDir().mkpath(Root + "/.multiroot")); QVERIFY(QDir().mkpath(Root + "/part/ch1"));
+        QVERIFY(Put(Root + "/part/ch1/intro.txt", "intro\r\n"));
+        QVERIFY(Put(workspace::Store::FolderStatePath(Root), R"({"schema":1,"documents":[]})"));
+        DocumentWorkspaceWidget Widget(Settings.Path("recovery")); Widget.resize(1200, 800); Widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Widget));
+        // 명령줄 · 두 번째 프로세스로 연 파일(ancestors): 위 폴더의 워크스페이스가 하나면 자동으로 묶고 되돌리기를 보인다.
+        const auto Id = Widget.Handle({{"action", "open"}, {"path", Root + "/part/ch1/intro.txt"}, {"ancestors", "plain"}})["documentId"].toString();
+        QTRY_VERIFY(Ready(Widget, Id));
+        QTRY_COMPARE(QDir::cleanPath(Widget.WorkspaceRoot()).toLower(), QDir::cleanPath(Root).toLower());
+        QCOMPARE(Widget.Explorer()->NoticeId(), QStringLiteral("ancestorOpened"));
+        QCOMPARE(Active(Widget), Id);
+        // 되돌리기: 워크스페이스를 닫되 방금 연 파일은 남긴다.
+        emit Widget.Explorer()->NoticeAction(QStringLiteral("ancestorOpened"), 0);
+        QVERIFY(Widget.WorkspaceRoot().isEmpty()); QCOMPARE(Widget.Snapshot()["documents"].toArray().size(), 1);
+        // 후보가 둘이면 선택 카드(바로 위 폴더 · 워크스페이스 없이 포함).
+        QVERIFY(QDir().mkpath(Root + "/part/.multiroot"));
+        QVERIFY(Put(workspace::Store::FolderStatePath(Root + "/part"), R"({"schema":1,"documents":[]})"));
+        QVERIFY(Put(Root + "/part/ch1/two.txt", "two\r\n"));
+        const auto Two = Widget.Handle({{"action", "open"}, {"path", Root + "/part/ch1/two.txt"}, {"ancestors", "plain"}})["documentId"].toString();
+        QTRY_VERIFY(Ready(Widget, Two));
+        QTRY_VERIFY(Widget.Explorer()->PickVisible());
+        QVERIFY(Widget.WorkspaceRoot().isEmpty());
+        // 맨 위(가장 가까운 후보 part)를 고른다.
+        emit Widget.Explorer()->PickChosen(0, false);
+        QTRY_COMPARE(QDir::cleanPath(Widget.WorkspaceRoot()).toLower(), QDir::cleanPath(Root + "/part").toLower());
     }
 };
 QTEST_MAIN(DocumentDockingTests)

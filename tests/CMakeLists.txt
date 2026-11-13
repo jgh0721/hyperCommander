@@ -917,6 +917,15 @@ add_test(NAME hc.document.new COMMAND hc_new_document_tests -o "${CMAKE_BINARY_D
 set_tests_properties(hc.document.new PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
 add_dependencies(hc_check hc_new_document_tests)
 
+# 탐색기 · 워크스페이스 모드의 화면 없는 핵심(모델 · 필터 · 바깥 묶음 · 상태 파일 · MRE 가져오기 · 상위 찾기).
+qt_add_executable(hc_explorer_core_tests document/tstExplorerCore.cpp)
+target_link_libraries(hc_explorer_core_tests PRIVATE hc_document_explorer_core Qt6::Test)
+target_compile_options(hc_explorer_core_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+hc_enable_qt_deployment(hc_explorer_core_tests TEST PLUGINS)
+add_test(NAME hc.document.explorer.core COMMAND hc_explorer_core_tests -o "${CMAKE_BINARY_DIR}/document-explorer-core-$<CONFIG>.txt,txt")
+set_tests_properties(hc.document.explorer.core PROPERTIES TIMEOUT 120)
+add_dependencies(hc_check hc_explorer_core_tests)
+
 # HyperEditor docking (fmdock 2): document docks, tool windows, preview beside, saved layouts.
 qt_add_executable(hc_document_docking_tests document/tstDocumentDocking.cpp)
 target_link_libraries(hc_document_docking_tests PRIVATE hc_document_widgets hc_document_search_core Qt6::Test)

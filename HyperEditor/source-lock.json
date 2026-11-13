@@ -322,16 +322,15 @@
       "P3 file policies",
       "P4 rendering",
       "P6 integration",
-      "P5 document language extensions (reStructuredText: lexer, completion, outline, diagnostics, LSP, Sphinx preview, virtual project)"
+      "P5 document language extensions (reStructuredText: lexer, completion, outline, diagnostics, LSP, Sphinx preview, virtual project)",
+      "P7 explorer and workspace mode (folder tree on QFileSystemModel, .multiroot/hypereditor.json state, one-time workspace.json session import, projects.json cache, ancestor workspace detection)"
     ],
     "deferred": [],
     "excluded": [
       "Qt ADS",
       "Qlementine",
       "docking",
-      "left folder tree",
-      "project search",
-      "workspace folder state (.multiroot)"
+      "project search"
     ],
     "settings": {
       "file": "HyperEditor.json",

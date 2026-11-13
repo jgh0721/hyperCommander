@@ -58,6 +58,10 @@ namespace hc::defaults::edit
             {"file.newEpub", QObject::tr("새 EPUB 책"), "", "common"},
             {"file.newImage", QObject::tr("새 이미지"), "", "common"},
             {"file.openWorkspace", QObject::tr("문서 열기"), "Ctrl+O", "common"},
+            // 탐색기 · 워크스페이스 모드(설계 8절). file.openWorkspace 는 이미 ‘문서 열기’라 폴더 열기는 따로 둔다.
+            {"workspace.openFolder", QObject::tr("폴더 열기"), "Ctrl+Shift+O", "common"},
+            {"workspace.close", QObject::tr("워크스페이스 닫기"), "", "common"},
+            {"view.explorer", QObject::tr("탐색기로 이동"), "Ctrl+Shift+X", "common"},
             {"file.save", QObject::tr("저장"), "Ctrl+S", "common"},
             {"file.saveAs", QObject::tr("다른 이름으로 저장"), "Ctrl+Shift+S", "common"},
             {"file.reload", QObject::tr("다시 읽기"), "Ctrl+R", "common"},
@@ -160,7 +164,19 @@ namespace hc::defaults::edit
             {"pdf.zoomReset", QObject::tr("PDF 원래 크기"), "Ctrl+0", "pdf"},
             {"image.zoomIn", QObject::tr("이미지 확대"), "Ctrl++", "image"},
             {"image.zoomOut", QObject::tr("이미지 축소"), "Ctrl+-", "image"},
-            {"image.zoomReset", QObject::tr("이미지 원래 크기"), "Ctrl+0", "image"}
+            {"image.zoomReset", QObject::tr("이미지 원래 크기"), "Ctrl+0", "image"},
+            // 탐색기 트리에 포커스가 있을 때만(필터 칸 · 이름 입력 칸은 뺀다). Enter 는 트리가 직접 받는다.
+            {"explorer.open", QObject::tr("탐색기: 열기"), "", "explorer"},
+            {"explorer.openBeside", QObject::tr("탐색기: 옆에 열기"), "", "explorer"},
+            {"explorer.rename", QObject::tr("탐색기: 이름 바꾸기"), "F2", "explorer"},
+            {"explorer.recycle", QObject::tr("탐색기: 휴지통으로 삭제"), "Del", "explorer"},
+            {"explorer.delete", QObject::tr("탐색기: 영구 삭제"), "Shift+Del", "explorer"},
+            {"explorer.copyPath", QObject::tr("탐색기: 경로 복사"), "Ctrl+Shift+C", "explorer"},
+            {"explorer.copyRelativePath", QObject::tr("탐색기: 상대 경로 복사"), "", "explorer"},
+            {"explorer.newFile", QObject::tr("탐색기: 새 파일"), "", "explorer"},
+            {"explorer.newFolder", QObject::tr("탐색기: 새 폴더"), "", "explorer"},
+            {"explorer.collapseAll", QObject::tr("탐색기: 모두 접기"), "", "explorer"},
+            {"explorer.refresh", QObject::tr("탐색기: 새로 고침"), "F5", "explorer"}
         };
     }
 
@@ -248,7 +264,16 @@ namespace hc::defaults::edit
             // Untitled Save As starts here (else Documents); a new EPUB remembers its folder and author.
             {"common/lastSaveFolder", ""}, {"common/newEpubFolder", ""}, {"common/newEpubCreator", ""},
             {"common/newSphinxFolder", ""}, {"common/newSphinxAuthor", ""},
-            {"pdfView/annotationToolbar", false}
+            {"pdfView/annotationToolbar", false},
+            // 탐색기 · 워크스페이스 모드(설계 9절).
+            {"explorer/autoReveal", true}, {"explorer/showAllFiles", false}, {"explorer/showHidden", false},
+            {"explorer/showAllDrives", false}, {"explorer/confirmRecycle", true},
+            {"explorer/excludedFolders", QStringLiteral(".git; .multiroot; __pycache__; .venv; node_modules")}, {"explorer/font", ""},
+            // stateLocation: folder · profile. ancestorDetection: auto(하나면 자동 · 여럿이면 선택) · ask · off.
+            // routeFiles: workspace(그 워크스페이스 창으로) · newWindow.
+            {"workspace/stateLocation", "folder"}, {"workspace/restoreLayout", true}, {"workspace/reopenLast", true},
+            {"workspace/importMultiRoot", true}, {"workspace/routeFiles", "workspace"}, {"workspace/ancestorDetection", "auto"},
+            {"workspace/ancestorChoices", QStringList{}}, {"workspace/lastRoot", ""}
         };
         return Values;
     }

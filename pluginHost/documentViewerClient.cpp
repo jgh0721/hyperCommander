@@ -90,6 +90,24 @@ namespace hc::plugins
             auto Completed=Call("Execute",{{"action","editResult"},{"token",Edit["token"]},{"accepted",Started}},{},{},Context);
             if(!Completed.HasValue()&&Completed.Failure().code_!="document-edit-token")return Completed.Failure();
         }
+        // 탐색기의 ‘HyperEditor에서 편집’ · ‘HyperEditor에서 폴더 열기’: 로컬 파일 · 폴더 경로만 넘긴다.
+        // 워크스페이스 묶기 · 상위 찾기 · 열린 창 고르기는 HyperEditor 가 같은 규칙으로 한다.
+        else if(Edit["format"]=="explorer"){
+            const auto Path=Edit["path"].toString();const QFileInfo Info(Path);const bool Folder=Edit["folder"].toBool();
+            bool Started=false;
+            if(Info.isAbsolute() && !Path.contains(QChar::Null) && Path.size()<=32767 && (Folder?Info.isDir():Info.isFile())){
+                const auto Program=QCoreApplication::applicationDirPath()+"/HyperEditor.exe";
+                const QStringList Args{"--config-dir",hc::settings::DocumentPaths().directory_,"--",Info.absoluteFilePath()};
+                auto Start=std::make_shared<std::promise<bool>>();auto Result=Start->get_future();
+                std::thread([Program,Args,Start]{
+                    QProcess Process;Process.start(Program,Args);const bool Launched=Process.waitForStarted(5000);
+                    Start->set_value(Launched);if(Launched)Process.waitForFinished(-1);
+                }).detach();
+                Started=Result.get();
+            }
+            auto Completed=Call("Execute",{{"action","editResult"},{"token",Edit["token"]},{"accepted",Started}},{},{},Context);
+            if(!Completed.HasValue()&&Completed.Failure().code_!="document-edit-token")return Completed.Failure();
+        }
         else if(!Edit.isEmpty()){
             const bool Epub=Edit["format"]=="epub";
             const bool Search=Edit["format"]=="search";

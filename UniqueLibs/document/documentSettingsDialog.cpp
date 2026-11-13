@@ -87,7 +87,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
     auto* Body = new QHBoxLayout; Body->setContentsMargins(12, 12, 4, 12); Body->setSpacing(12);
     auto* List = new QListWidget(this); List->setObjectName("settingsCategories");
-    List->addItems({tr("공통"), tr("세션 · 복구"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("reStructuredText"),tr("이미지 뷰어")}); List->setFixedWidth(180);
+    List->addItems({tr("공통"), tr("세션 · 복구"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("reStructuredText"),tr("이미지 뷰어"),tr("탐색기 · 워크스페이스")}); List->setFixedWidth(180);
     List->setProperty(fm::style::props::kSoftSelection, true); List->setFrameShape(QFrame::NoFrame);
     for (int Row = 0; Row < List->count(); ++Row) List->item(Row)->setSizeHint(QSize(0, 30));
     auto* Pages = new QStackedWidget(this); Body->addWidget(List); Body->addWidget(Pages, 1); Layout->addLayout(Body, 1);
@@ -668,6 +668,43 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* ImageContent = Pages->widget(Pages->count()-1); Pages->removeWidget(ImageContent);
     auto* ImageTabs = new QTabWidget(Pages); ImageTabs->setObjectName("imageViewerTabs");
     ImageTabs->addTab(ImageContent, tr("코믹")); Pages->addWidget(ImageTabs);
+    // 탐색기 · 워크스페이스(설계 8.2). 표시 설정은 탐색기 ‘더 보기’ 메뉴에서 바꾼 값과 같은 키다.
+    auto* ExplorerPage = Page(tr("탐색기 · 워크스페이스"), tr("탐색기 도구 창의 표시와 폴더를 워크스페이스로 열 때의 동작을 정합니다."));
+    auto* ExplorerCard = Card(ExplorerPage, tr("탐색기"));
+    Check(ExplorerCard, "documentViews/explorer/autoReveal", tr("포커스 문서를 트리에서 자동으로 찾기"));
+    Check(ExplorerCard, "documentViews/explorer/showAllFiles", tr("모든 파일 보기 (끄면 열 수 있는 문서만)"));
+    Check(ExplorerCard, "documentViews/explorer/showHidden", tr("숨김 파일 보기"));
+    Check(ExplorerCard, "documentViews/explorer/showAllDrives", tr("문서 모드에서 모든 드라이브 보기"));
+    Check(ExplorerCard, "documentViews/explorer/confirmRecycle", tr("휴지통으로 보내기 전에 묻기"));
+    {
+        auto* Field = new QLineEdit(this); Field->setObjectName("documentViews/explorer/excludedFolders"); Field->setMaxLength(4096);
+        Field->setPlaceholderText(tr(".git; node_modules"));
+        Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Field->objectName())); controls_[Field->objectName()] = Field;
+        ExplorerCard->addRow(tr("숨길 폴더"), Field);
+    }
+    Note(ExplorerCard, tr("숨길 폴더는 이름을 ; 로 구분합니다. 필터 결과와 트리에서 빠지고, 파일에서 찾기에는 영향을 주지 않습니다."));
+    auto* WorkspaceCard = Card(ExplorerPage, tr("워크스페이스"));
+    Combo(WorkspaceCard, "documentViews/workspace/stateLocation", tr("상태 저장 위치"),
+        {tr("워크스페이스 폴더 (.multiroot)"), tr("설정 폴더")}, {"folder", "profile"});
+    Check(WorkspaceCard, "documentViews/workspace/restoreLayout", tr("도구 창 배치와 창 위치도 되살리기"));
+    Check(WorkspaceCard, "documentViews/workspace/reopenLast", tr("시작할 때 마지막 워크스페이스 다시 열기"));
+    Check(WorkspaceCard, "documentViews/workspace/importMultiRoot", tr("MultiRootRestCPP 세션 가져오기"));
+    Combo(WorkspaceCard, "documentViews/workspace/routeFiles", tr("다른 곳에서 연 파일"),
+        {tr("그 파일을 품은 워크스페이스 창에 탭으로"), tr("언제나 새 창")}, {"workspace", "newWindow"});
+    Note(WorkspaceCard, tr("설정 폴더에 두면 워크스페이스 폴더에 아무것도 만들지 않습니다. 폴더에 쓸 수 없을 때도 설정 폴더에 저장합니다."));
+    auto* AncestorCard = Card(ExplorerPage, tr("상위 워크스페이스 찾기"));
+    Combo(AncestorCard, "documentViews/workspace/ancestorDetection", tr("파일만 열었을 때"),
+        {tr("하나면 자동으로 열고 여럿이면 묻기"), tr("언제나 묻기"), tr("찾지 않기")}, {"auto", "ask", "off"});
+    {
+        auto* Remembered = new QListWidget(this); Remembered->setObjectName("workspaceAncestorChoices");
+        Remembered->setSelectionMode(QAbstractItemView::ExtendedSelection); Remembered->setMinimumHeight(96);
+        Remembered->setAccessibleName(tr("기억한 선택"));
+        auto* Forget = new QPushButton(tr("고른 항목 지우기"), this); Forget->setObjectName("workspaceAncestorForget");
+        connect(Forget, &QPushButton::clicked, Remembered, [Remembered] { qDeleteAll(Remembered->selectedItems()); });
+        AncestorCard->addRow(tr("기억한 선택"), Remembered); AncestorCard->addRow(QString(), Forget);
+    }
+    Note(AncestorCard, tr("선택 카드에서 ‘이 위치에서는 다시 묻지 않기’ 를 켜고 고른 것입니다. 지우면 다음에 다시 묻습니다."));
+    ExplorerPage->addStretch();
     auto* Footer = new QFrame(this); Footer->setObjectName("settingsFooter"); Footer->setFrameShape(QFrame::StyledPanel); fm::style::setFooter(Footer);
     auto* FooterRow = new QHBoxLayout(Footer); FooterRow->setContentsMargins(16, 8, 16, 8); FooterRow->setSpacing(8); Layout->addWidget(Footer);
     error_ = new QLabel(Footer); error_->setObjectName("settingsError"); error_->setWordWrap(true); error_->setTextInteractionFlags(Qt::TextSelectableByMouse); FooterRow->addWidget(error_, 1);
@@ -679,7 +716,17 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(Buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { Apply(); });
     connect(Buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, [this, List] {
-        // Rows: 공통 0 · 세션 · 복구 1 · 텍스트 편집기 2 · 단축키 3 · EPUB 4 · 마크다운 5 · reStructuredText 6 · 이미지 뷰어 7.
+        // Rows: 공통 0 · 세션 · 복구 1 · 텍스트 편집기 2 · 단축키 3 · EPUB 4 · 마크다운 5 · reStructuredText 6 · 이미지 뷰어 7 · 탐색기 · 워크스페이스 8.
+        // 탐색기 · 워크스페이스: 이 페이지의 값만. 기억한 선택은 ‘고른 항목 지우기’ 로 지운다.
+        if (List->currentRow() == 8) {
+            for (auto I = controls_.begin(); I != controls_.end(); ++I) if (I.key().startsWith("documentViews/explorer/") || I.key().startsWith("documentViews/workspace/")) {
+                const auto Default = hc::defaults::edit::SettingValue(I.key());
+                if (auto* Toggle = qobject_cast<QCheckBox*>(I.value())) Toggle->setChecked(Default.toBool());
+                else if (auto* Box = qobject_cast<QComboBox*>(I.value())) Box->setCurrentIndex(qMax(0, Box->findData(Default)));
+                else if (auto* Line = qobject_cast<QLineEdit*>(I.value())) Line->setText(Default.toString());
+            }
+            return;
+        }
         if (List->currentRow() == 1) {
             for (const auto* Key : {"documentViews/textView/recoveryEnabled", "documentViews/textView/hotExitEnabled", "documentViews/textView/restoreCleanDocuments",
                     "documentViews/recovery/startupAction", "documentViews/recovery/retentionDays", "documentViews/recovery/maxMiB"}) {
@@ -915,7 +962,7 @@ void DocumentSettingsDialog::refreshTextColorPreview()
 
 void DocumentSettingsDialog::ShowPage(const QString& Key)
 {
-    static const QStringList Keys{"common", "recovery", "text", "shortcuts", "epub", "markdown", "rst", "image"};
+    static const QStringList Keys{"common", "recovery", "text", "shortcuts", "epub", "markdown", "rst", "image", "explorer"};
     if (auto* List = findChild<QListWidget*>("settingsCategories"); List && Keys.contains(Key)) List->setCurrentRow(int(Keys.indexOf(Key)));
 }
 void DocumentSettingsDialog::loadControls()
@@ -945,6 +992,16 @@ void DocumentSettingsDialog::loadControls()
         else if (auto* Field = qobject_cast<QLineEdit*>(It.value())) Field->setText(Value.toString());
         else if (auto* Field = qobject_cast<QKeySequenceEdit*>(It.value())) Field->setKeySequence(QKeySequence::fromString(Value.toString(), QKeySequence::PortableText));
     }
+    // 기억한 상위 찾기 선택: "기준 루트|고른 루트" 줄(고른 루트가 none 이면 ‘워크스페이스 없이’).
+    if (auto* Remembered = findChild<QListWidget*>("workspaceAncestorChoices")) {
+        Remembered->clear();
+        for (const auto& Line : settings::UnifiedConfig::Decode(settings::UnifiedConfig::Value(Effective, {"documentViews", "workspace", "ancestorChoices"})).toStringList()) {
+            const auto At = Line.indexOf(QLatin1Char('|')); if (At <= 0) continue;
+            const auto Chosen = Line.mid(At + 1);
+            auto* Item = new QListWidgetItem(tr("%1 → %2").arg(QDir::toNativeSeparators(Line.left(At)), Chosen == QLatin1String("none") ? tr("워크스페이스 없이") : QDir::toNativeSeparators(Chosen)), Remembered);
+            Item->setData(Qt::UserRole, Line);
+        }
+    }
 }
 QJsonObject DocumentSettingsDialog::values() const
 {
@@ -960,6 +1017,10 @@ QJsonObject DocumentSettingsDialog::values() const
         else if (auto* Field = qobject_cast<QLineEdit*>(It.value())) Value = Field->text().trimmed();
         else if (auto* Field = qobject_cast<QKeySequenceEdit*>(It.value())) Value = Field->keySequence().toString(QKeySequence::PortableText);
         settings::UnifiedConfig::Set(Result, It.key().split('/'), settings::UnifiedConfig::Encode(Value));
+    }
+    if (auto* Remembered = findChild<QListWidget*>("workspaceAncestorChoices")) {
+        QStringList Lines; for (int Row = 0; Row < Remembered->count(); ++Row) Lines.append(Remembered->item(Row)->data(Qt::UserRole).toString());
+        settings::UnifiedConfig::Set(Result, {"documentViews", "workspace", "ancestorChoices"}, settings::UnifiedConfig::Encode(Lines));
     }
     settings::UnifiedConfig::Set(Result, {"documentViews", "shortcuts", "schemaVersion"}, 1);
     return Result;

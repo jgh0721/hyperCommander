@@ -7,6 +7,8 @@
 #include "hwpOpenWindow.hpp"
 #include "newDocumentChooser.hpp"
 #include "newEpubDialog.hpp"
+#include "workspace/workspaceDiscovery.hpp"
+#include "workspace/workspaceState.hpp"
 #include <functional>
 #include <QWidget>
 #include <QJsonObject>
@@ -46,6 +48,7 @@ namespace hc::document
     class DocumentShortcutRouter;
     class DocumentSettingsDialog;
     class DocumentWindowSize;
+    class ExplorerPanel;
     class DocumentWorkspaceWidget : public QWidget
     {
         Q_OBJECT
@@ -84,7 +87,18 @@ namespace hc::document
             const QString& Resource = {}, int Position = -1, const QString& DraftPath = {});
         // ‘새 EPUB 만들기’ (HyperEditor --new-epub, Ctrl+N › EPUB). Closing it with no document closes the window.
         void ShowNewEpubDialog(bool CloseWhenCancelled = false);
+        // 워크스페이스 모드(탐색기 · 워크스페이스 설계 6). 창 하나에 워크스페이스는 0 개 또는 1 개.
+        // Ancestor: 상위 찾기가 연 것(알림에 되돌리기). 이미 다른 창에 묶인 폴더면 그 창을 앞으로 가져온다.
+        enum class WorkspaceOrigin { User, Ancestor, Startup, HotExit };
+        bool OpenWorkspace(const QString& Root, WorkspaceOrigin Origin = WorkspaceOrigin::User);
+        // 상태를 저장하고 이 창의 문서를 닫은 뒤 묶음을 푼다. 닫기를 취소하면 false.
+        bool CloseWorkspace();
+        QString WorkspaceRoot() const { return workspaceRoot_; }
+        // 이 창에 다른 워크스페이스가 있을 때 새 창을 여는 길(HyperEditor main 이 창을 만든다). 없으면(시험) 이 창을 다시 묶는다.
+        static void SetWindowRequestHandler(std::function<bool(const QString& Root, const QStringList& Files)> Handler);
+        ExplorerPanel* Explorer() const { return explorer_; }
     protected:
+        bool event(QEvent* Event) override;
         bool eventFilter(QObject* Watched, QEvent* Event) override;
         // Surfaces own their context menus; anything else ends here instead of falling through to every action.
         void contextMenuEvent(QContextMenuEvent* Event) override;
@@ -125,7 +139,8 @@ namespace hc::document
         QList<QPair<QString, QString>> statusFieldNames_;
         DocumentViewKind appliedKind_ = DocumentViewKind::None;
         bool kindApplied_ = false;
-        void openSearch(bool Replace);
+        // Root: 찾을 폴더(탐색기 ‘이 폴더에서 찾기’). 비면 워크스페이스 루트, 없으면 문서 폴더.
+        void openSearch(bool Replace, const QString& Root = {});
         void placeSearch(const QString& Location);
         QJsonArray searchSources() const;
         void navigateSearch(const QJsonObject& Row);
@@ -308,5 +323,48 @@ namespace hc::document
         void finishProgress(const std::shared_ptr<Tab>& Tab, bool Success, const QString& Code = {});
         QWidget* statusSlot_ = nullptr;
         std::vector<std::shared_ptr<Tab>> documents_;
+        // 탐색기 도구 창 · 워크스페이스 모드(documentWorkspaceExplorer 절).
+        ExplorerPanel* explorer_ = nullptr;
+        fm::dock::DockWidget* explorerTool_ = nullptr;
+        QString workspaceRoot_;
+        QTimer* workspaceSave_ = nullptr;
+        bool workspaceFallbackNotified_ = false, workspaceRestoring_ = false, quickPreviewChecked_ = false;
+        quint64 ancestorGeneration_ = 0;
+        // 상위 찾기로 연 워크스페이스: 되돌리기에 쓴다(자동으로 되살린 문서 · 그 전에 있던 묶음 없음).
+        QStringList autoRestoredPaths_;
+        std::optional<workspace::State> pendingSession_;
+        // 읽은 상태에서 다시 쓸 것(모르는 키 · 파일에서 찾기 조건)과 refreshExplorer 가 같은 값을 다시 넘기지 않게 하는 지문.
+        QJsonObject workspaceExtra_, workspaceFind_;
+        QString explorerSignature_;
+        // 상위 찾기 선택 카드의 선택지(카드의 줄 순서). 루트가 비면 ‘워크스페이스 없이’, newWorkspace_ 면 바로 위 폴더.
+        struct AncestorPick { QString root_, file_, rememberKey_; bool newWorkspace_ = false; };
+        QList<AncestorPick> ancestorPicks_;
+        // 편집 넘기기(--epub-edit · --find-in-files · --document-copy)로 연 창: 묶기만 하고 지난 세션 문서는 ‘모두 열기’ 로 넘긴다.
+        bool bindOnly_ = false;
+        // 상위 찾기로 고른(또는 하나뿐인) 루트에 이 창을 묶고 되돌리기 알림을 띄운다.
+        void openAncestor(const QString& Root, const QString& Path, const QString& Mode);
+        void refreshExplorerRecent();
+        void buildExplorer();
+        void connectExplorer();
+        void refreshExplorer();
+        void applyExplorerPreferences();
+        void showOpenFolderDialog();
+        bool bindWorkspace(const QString& Root, WorkspaceOrigin Origin);
+        void unbindWorkspace();
+        void restoreWorkspaceDocuments(const workspace::State& State, bool Layout);
+        void scheduleWorkspaceSave();
+        void saveWorkspace();
+        workspace::State captureWorkspace() const;
+        workspace::Store workspaceStore() const;
+        void scanWorkspaceProjects();
+        void recordRecentWorkspace(const QString& Root);
+        void considerAncestors(const QString& Path, const QString& Mode);
+        void applyAncestorResult(const QString& Path, const QString& Mode, const QList<workspace::Candidate>& Candidates);
+        void undoAncestorWorkspace();
+        void openRemainingSessionDocuments();
+        void explorerRename(const QString& Path, const QString& NewName);
+        void openFromExplorer(const QString& Path, bool Beside);
+        // 사용자가 연 문서(명령줄 · 대화 상자 · 끌어 놓기 · 최근): 열고 나서 상위 워크스페이스를 찾는다.
+        QJsonObject openByUser(const QString& Path, const QString& AncestorMode = QStringLiteral("plain"));
     };
 }

@@ -40,6 +40,7 @@ namespace hc::document
     signals:
         void OpenRequested( const hc::document::RecentDocument& Document );
         void OpenFileRequested();
+        void OpenFolderRequested();
         void NewDocumentRequested();
         void ShowAllRequested();
         void FilesDropped( const QStringList& Paths );
@@ -78,6 +79,7 @@ namespace hc::document
         QLabel*                         header_     = nullptr;
         QLabel*                         empty_      = nullptr;
         QAbstractButton*                open_       = nullptr;
+        QAbstractButton*                folder_     = nullptr;
         QAbstractButton*                new_        = nullptr;
         QAbstractButton*                showAll_    = nullptr;
         QList< QAbstractButton* >       rows_;

@@ -15,6 +15,8 @@ public:
     explicit Panel(QWidget* Parent = nullptr);
     ~Panel() override;
     void Open(bool Replace, QString DefaultRoot, bool Book, QJsonArray Buffers);
+    // 찾을 폴더를 바꾼다(탐색기 ‘이 폴더에서 찾기’). 책 검색 중이면 무시한다.
+    void SetRoot(const QString& Folder);
     void SetSources(std::function<QJsonArray()> Provider) { sources_ = std::move(Provider); }
     void SetBookSources(std::function<std::function<QJsonArray()>()> Provider) { bookSources_ = std::move(Provider); }
     bool Busy() const { return applying_; }

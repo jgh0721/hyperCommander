@@ -204,6 +204,12 @@ void Panel::Open(bool Replace, QString DefaultRoot, bool Book, QJsonArray Buffer
     show(); query_->setFocus(); query_->selectAll(); if(Refresh)schedule();
 }
 void Panel::SetReadOnly(bool Value) { readOnly_ = Value; for (auto* Button : {selected_, file_, all_}) Button->setEnabled(true); undo_->setEnabled(!Value); }
+void Panel::SetRoot(const QString& Folder) {
+    if (book_ || Folder.isEmpty()) return;
+    const auto Native = QDir::toNativeSeparators(Folder);
+    if (root_->text() == Native) return;
+    root_->setText(Native); schedule();
+}
 void Panel::SetQuery(const QString& Text) { query_->setText(Text); query_->setFocus(); query_->selectAll(); }
 QJsonObject Panel::Context() const {
     return {{"query",query_->text()},{"replacement",replacement_->text()},{"root",root_->text()},

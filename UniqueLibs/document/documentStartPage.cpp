@@ -279,9 +279,13 @@ namespace hc::document
         Actions->setSpacing( 8 );
         open_ = new StartButton( StartButton::Kind::Action, tr( "열기…" ), QKeySequence( Qt::CTRL | Qt::Key_O ).toString( QKeySequence::NativeText ), box_ );
         open_->setObjectName( QStringLiteral( "startOpen" ) );
+        // 폴더를 워크스페이스로 연다(탐색기 · 워크스페이스 설계 6.2). Ctrl+O 는 문서 열기로 둔다.
+        folder_ = new StartButton( StartButton::Kind::Action, tr( "폴더 열기…" ), QKeySequence( Qt::CTRL | Qt::SHIFT | Qt::Key_O ).toString( QKeySequence::NativeText ), box_ );
+        folder_->setObjectName( QStringLiteral( "startOpenFolder" ) );
         new_ = new StartButton( StartButton::Kind::Action, tr( "새 문서" ), QKeySequence( Qt::CTRL | Qt::Key_N ).toString( QKeySequence::NativeText ), box_ );
         new_->setObjectName( QStringLiteral( "startNew" ) );
         Actions->addWidget( open_ );
+        Actions->addWidget( folder_ );
         Actions->addWidget( new_ );
         Actions->addStretch( 1 );
         Layout->addLayout( Actions );
@@ -312,6 +316,7 @@ namespace hc::document
         Layout->addWidget( empty_ );
 
         connect( open_, &QAbstractButton::clicked, this, &DocumentStartPage::OpenFileRequested );
+        connect( folder_, &QAbstractButton::clicked, this, &DocumentStartPage::OpenFolderRequested );
         connect( new_, &QAbstractButton::clicked, this, &DocumentStartPage::NewDocumentRequested );
         connect( showAll_, &QAbstractButton::clicked, this, &DocumentStartPage::ShowAllRequested );
         connect( probe_, &RecentPathProbe::Checked, this, &DocumentStartPage::refreshMissing );
@@ -529,6 +534,7 @@ namespace hc::document
         Tint( header_, Token::Fg3 );
         Tint( empty_, Token::Fg3 );
         open_->setIcon( ToolbarIcons::iconByName( QStringLiteral( "open" ) ) );
+        folder_->setIcon( ToolbarIcons::iconByName( QStringLiteral( "new-folder" ) ) );
         new_->setIcon( ToolbarIcons::iconByName( QStringLiteral( "new-file" ) ) );
         update();
         for( auto* Child : box_->findChildren< QWidget* >() ) Child->update();

@@ -33,6 +33,10 @@
         <file>icons/toolbar/missing-icon.svg</file>
         <file>icons/toolbar/manifest.json</file>
         <file>icons/toolbar/new-file.svg</file>
+        <file>icons/toolbar/new-folder.svg</file>
+        <file>icons/toolbar/locate.svg</file>
+        <file>icons/toolbar/collapse-all.svg</file>
+        <file>icons/toolbar/more.svg</file>
         <file>icons/toolbar/open.svg</file>
         <file>icons/toolbar/play.svg</file>
         <file>icons/toolbar/print-preview.svg</file>

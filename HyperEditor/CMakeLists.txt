@@ -104,6 +104,20 @@ target_link_libraries(hc_rst_core PUBLIC hc_document_core hc_hypereditor Qt6::Wi
 target_precompile_headers(hc_rst_core PRIVATE "${PROJECT_SOURCE_DIR}/HyperCommander/stdafx.h")
 target_compile_options(hc_rst_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
+# 탐색기 · 워크스페이스 모드의 화면 없는 핵심(MultiRoot reST Editor 에서 옮김): 탐색기 모델 · 필터 · 바깥 묶음,
+# 필터 걷기, 이름 검사, 워크스페이스 상태 파일 · MRE 가져오기 · 상위 찾기 · 창 등록부. 시험이 문서 위젯 없이 빌드된다.
+file(GLOB HC_DOCUMENT_EXPLORER_CORE_SOURCES CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/explorer/*.cpp" "${PROJECT_SOURCE_DIR}/UniqueLibs/document/explorer/*.hpp"
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/workspace/*.cpp" "${PROJECT_SOURCE_DIR}/UniqueLibs/document/workspace/*.hpp")
+qt_add_library(hc_document_explorer_core STATIC ${HC_DOCUMENT_EXPLORER_CORE_SOURCES})
+target_include_directories(hc_document_explorer_core PUBLIC ${PROJECT_SOURCE_DIR} PRIVATE
+    ${PROJECT_SOURCE_DIR}/HyperCommander
+    ${PROJECT_SOURCE_DIR}/commonLibs
+    ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include)
+target_link_libraries(hc_document_explorer_core PUBLIC Qt6::Widgets Qt6::Concurrent PRIVATE netapi32)
+target_precompile_headers(hc_document_explorer_core PRIVATE "${PROJECT_SOURCE_DIR}/HyperCommander/stdafx.h")
+target_compile_options(hc_document_explorer_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+
 add_subdirectory("${PROJECT_SOURCE_DIR}/tools/markdown" "${CMAKE_BINARY_DIR}/markdown")
 add_subdirectory("${PROJECT_SOURCE_DIR}/tools/rst" "${CMAKE_BINARY_DIR}/rst-preview")
 qt_add_library(hc_document_widgets STATIC
@@ -164,6 +178,10 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/recoveryManagerDialog.cpp ../UniqueLibs/document/recoveryManagerDialog.hpp
     ../UniqueLibs/document/documentToolPanel.cpp
     ../UniqueLibs/document/documentToolPanel.hpp
+    ../UniqueLibs/document/explorerFileOps.cpp
+    ../UniqueLibs/document/explorerFileOps.hpp
+    ../UniqueLibs/document/explorerPanel.cpp
+    ../UniqueLibs/document/explorerPanel.hpp
     ../UniqueLibs/document/documentWorkspaceWidget.cpp
     ../UniqueLibs/document/documentWorkspaceWidget.hpp
     ../UniqueLibs/document/documentSettingsDialog.cpp
@@ -188,6 +206,8 @@ target_link_libraries(hc_document_widgets PUBLIC hc_document_core hc_document_br
 target_link_libraries(hc_document_widgets PRIVATE Qt6::ZlibPrivate hc_epub_host hc_builtin_sevenzip hc_image_archive_transport hc_passwords Fm::widgets)
 # Document area and tool windows dock with fmdock 2 (waterColorStyle).
 target_link_libraries(hc_document_widgets PUBLIC Fm::dock)
+# 탐색기 도구 창 · 워크스페이스 모드.
+target_link_libraries(hc_document_widgets PUBLIC hc_document_explorer_core)
 target_compile_options(hc_document_widgets PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY "" CACHE PATH "Qualified shared RHWP runtime to include in product installation")
 if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND NOT HC_RHWP_APPROVED_INVENTORY_SHA256)

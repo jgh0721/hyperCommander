@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "UniqueLibs/document/workspace/workspaceDiscovery.hpp"
+#include "UniqueLibs/document/workspace/workspacePaths.hpp"
 #include "UniqueLibs/document/documentRecoveryMaintenance.hpp"
 #include "UniqueLibs/document/recoveryPromptDialog.hpp"
 #include "UniqueLibs/temporaryCleanup.hpp"
@@ -206,10 +208,7 @@ int main(int Argc, char** Argv)
     if (Parser.isSet("theme") && !hc::document::DocumentThemeAdapter::SetMode(Parser.value("theme"))) return 9;
     SettingsTrace.End();
     std::vector<std::unique_ptr<Workspace>> Windows;
-    const auto OpenFiles=[&](QStringList Files, QString SessionId = {}, std::optional<QStringList> Documents = std::nullopt){
-    if (Files.isEmpty()) Files.append(QString{});
-    Windows.reserve(Windows.size()+Files.size());
-    for (const auto& File : Files) {
+    const auto MakeWindow=[&]()->std::unique_ptr<Workspace>{
         hc::document::startup::Scope WindowTrace("editor.windowSetup");
         hc::document::startup::Scope ConstructorTrace("editor.workspaceConstructor");
         auto Window = std::make_unique<Workspace>(RecoveryRoot, false);
@@ -275,13 +274,58 @@ int main(int Argc, char** Argv)
         // show() activates a newly created top-level window; avoid redundant native activation.
         Current->show();
         ShowTrace.End();
+        return Window;
+    };
+    // 워크스페이스(탐색기 · 워크스페이스 설계 6.1 · 6.2). 폴더 인자는 그 폴더에 묶인 창이고, 그 뒤의 파일은 그 창의
+    // 탭이다(MRE 와 같음). 열린 워크스페이스 안의 파일은 그 창에 탭으로 연다(설정 workspace/routeFiles = newWindow 면 새 창).
+    // 편집 넘기기로 연 창은 상위 워크스페이스에 묶기만 하고 지난 세션 문서는 되살리지 않는다.
+    const auto WorkspaceValue=[&](const QString& Key){
+        const auto Value=hc::settings::UnifiedConfig::Value(Settings.Object()["documentViews"].toObject(),QStringList{"workspace",Key});
+        return Value.isUndefined()?hc::defaults::edit::ViewValue("workspace/"+Key):hc::settings::UnifiedConfig::Decode(Value);
+    };
+    const auto AncestorMode=(EpubEdit || Parser.isSet("find-in-files") || Parser.isSet("document-copy"))?QStringLiteral("bind"):QStringLiteral("plain");
+    const auto Raise=[](hc::document::DocumentWorkspaceWidget* Target){
+        auto* Window=Target->window(); if(Window->isMinimized())Window->showNormal();
+        Window->raise(); Window->activateWindow();
+    };
+    const auto OpenFiles=[&](QStringList Files, QString SessionId = {}, std::optional<QStringList> Documents = std::nullopt){
+    if (Files.isEmpty()) Files.append(QString{});
+    Windows.reserve(Windows.size()+Files.size());
+    hc::document::DocumentWorkspaceWidget* FolderWindow=nullptr;
+    const bool Route=WorkspaceValue("routeFiles").toString()!="newWindow";
+    for (const auto& File : Files) {
+        const QFileInfo Info(File);
+        if (!File.isEmpty() && SessionId.isEmpty() && Info.isDir()) {
+            auto& Registry=hc::document::workspace::Registry::Instance();
+            if(auto* Owner=qobject_cast<hc::document::DocumentWorkspaceWidget*>(Registry.WindowFor(hc::document::workspace::NormalizeRoot(Info.absoluteFilePath())))){
+                Raise(Owner); FolderWindow=Owner; continue;
+            }
+            auto Window=MakeWindow(); auto* Current=Window.get(); Windows.push_back(std::move(Window));
+            hc::document::startup::Scope OpenTrace("editor.openRequest");
+            Current->OpenWorkspace(Info.absoluteFilePath(), hc::document::DocumentWorkspaceWidget::WorkspaceOrigin::Startup);
+            FolderWindow=Current; continue;
+        }
+        if (!File.isEmpty() && SessionId.isEmpty()) {
+            auto* Target=FolderWindow;
+            if(!Target && Route) Target=qobject_cast<hc::document::DocumentWorkspaceWidget*>(hc::document::workspace::Registry::Instance().WindowContaining(Info.absoluteFilePath()));
+            if(Target){
+                if (Target->Handle({{"action", "open"}, {"path", Info.absoluteFilePath()},{"copyOnly",Parser.isSet("document-copy")}}).contains("error"))
+                    Target->ShowShellError(QObject::tr("문서 한도 때문에 파일을 열지 못했습니다: %1").arg(File));
+                Raise(Target); continue;
+            }
+        }
+        auto Window=MakeWindow(); auto* Current=Window.get();
         hc::document::startup::Scope OpenTrace("editor.openRequest");
         if (!SessionId.isEmpty() && !Current->RestoreHotExit(SessionId, Documents)) continue;
-        if (!File.isEmpty() && Current->Handle({{"action", "open"}, {"path", QFileInfo(File).absoluteFilePath()},{"copyOnly",Parser.isSet("document-copy")}}).contains("error"))
+        if (!File.isEmpty() && Current->Handle({{"action", "open"}, {"path", Info.absoluteFilePath()},{"copyOnly",Parser.isSet("document-copy")},{"ancestors",AncestorMode}}).contains("error"))
             Current->ShowShellError(QObject::tr("문서 한도 때문에 파일을 열지 못했습니다: %1").arg(File));
         Windows.push_back(std::move(Window));
     }
     };
+    // 워크스페이스가 있는 창에서 다른 폴더를 열면 새 창에 연다(지금 창의 탭을 닫지 않는다).
+    hc::document::DocumentWorkspaceWidget::SetWindowRequestHandler([&](const QString& Root, const QStringList& Files) {
+        const auto Before=Windows.size(); OpenFiles(QStringList{Root}+Files); return Windows.size()>Before || hc::document::workspace::Registry::Instance().WindowFor(Root);
+    });
     Instance.SetOpenHandler([&](const QStringList& Files) { OpenFiles(Files); });
     // Show a shell first. Restoration itself reads snapshots off the GUI thread.
     QTimer::singleShot(0, &App, [&] {
@@ -355,6 +399,9 @@ int main(int Argc, char** Argv)
         }
         QStringList Files; for (const auto& File : Parser.positionalArguments())
             if (!RestoredPaths.contains(QDir::cleanPath(QFileInfo(File).absoluteFilePath()).toCaseFolded())) Files.append(File);
+        // 인자도 HotExit 복원도 없으면 마지막 워크스페이스를 다시 연다(workspace/reopenLast).
+        if (Files.isEmpty() && !Restored && !EpubEdit && !NewEpub && WorkspaceValue("reopenLast").toBool())
+            if (const auto Last=WorkspaceValue("lastRoot").toString(); !Last.isEmpty() && QFileInfo(Last).isDir()) Files.append(Last);
         if (!Files.isEmpty() || !Restored) OpenFiles(Files);
         if (!Windows.empty()) {
             for (const auto& Directory : ArchiveCopies)

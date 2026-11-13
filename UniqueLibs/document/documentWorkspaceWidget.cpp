@@ -56,6 +56,12 @@
 #include "markdownDocumentView.hpp"
 #include "rstDocumentView.hpp"
 #include "rstProjectDialogs.hpp"
+#include "explorerPanel.hpp"
+#include "explorerFileOps.hpp"
+#include "workspace/workspacePaths.hpp"
+#include "rst/sphinxScanner.hpp"
+#include "commonLibs/document/documentFormatSupport.hpp"
+#include <fmwidgets/Banner.h>
 #include <QLineEdit>
 #include <QScopedValueRollback>
 #include "text/ScintillaQtDirectBackend.h"
@@ -352,7 +358,7 @@ namespace hc::document
             connect(Dialog, &QFileDialog::filesSelected, this, [this](const QStringList& Paths) {
                 QStringList Rejected;
                 for (const auto& Path : Paths)
-                    if (open(Path, false, {}, false).contains("error")) Rejected.append(Path);
+                    if (openByUser(Path).contains("error")) Rejected.append(Path);
                 ShowShellError(Rejected.isEmpty() ? QString{} : tr("문서 한도 때문에 열지 못한 파일: %1").arg(Rejected.join(", ")));
             });
             OpenFileDialog(Dialog);
@@ -527,6 +533,8 @@ namespace hc::document
                 if (auto Tab = active()) if (auto* Mode = Tab->pane_->findChild<QAction*>(Target)) if (Mode->isEnabled()) Mode->trigger();
             });
         }
+        // 탐색기 · 워크스페이스 명령(폴더 열기 · 워크스페이스 닫기 · 탐색기로 이동 · explorer.*).
+        connectExplorer();
         auto* Recovery = new QTimer(this); Recovery->setInterval(500);
         connect(Recovery, &QTimer::timeout, this, &DocumentWorkspaceWidget::Checkpoint); Recovery->start();
         const QMap<QString, QString> Commands{{"newDocument", "file.new"}, {"undoDocument", "edit.undo"}, {"redoDocument", "edit.redo"}, {"openDocument", "file.openWorkspace"}, {"saveDocument", "file.save"},
@@ -577,6 +585,10 @@ namespace hc::document
             if (Scope == "epub-edit.tree") return EpubEditing && Within([](QWidget* Widget) { return Widget->objectName() == "epubResourceTree"; });
             if (Scope == "epub-edit.source") return EpubEditing && InText;
             if (Id == "image.fullscreen") return Tab && !Tab->loading_ && Tab->pane_->ViewId() == "image";
+            // 탐색기: 트리에 포커스가 있을 때만(필터 칸 · 이름 입력 칸은 뺀다). 워크스페이스 명령은 HyperEditor 만.
+            if (Scope == "explorer") return explorer_ && explorer_->OwnsShortcutFocus(Focus);
+            if (Id.startsWith(QLatin1String("workspace."))) return !hosted_;
+            if (Id == QLatin1String("view.explorer")) return explorer_ != nullptr;
             if (Scope == "image" || Scope == "image.comic" || Scope == "pdf") return Tab && !Tab->loading_ && Tab->pane_->isAncestorOf(Focus) && !qobject_cast<QLineEdit*>(Focus)
                 && !qobject_cast<QAbstractSpinBox*>(Focus) && !qobject_cast<QComboBox*>(Focus) && Tab->pane_->CanRunViewCommand(Id);
             return true;
@@ -598,7 +610,10 @@ namespace hc::document
             connect(startPage_, &DocumentStartPage::OpenFileRequested, this, [this] { if (auto* Open = findChild<QAction*>("openDocument")) Open->trigger(); });
             connect(startPage_, &DocumentStartPage::NewDocumentRequested, this, [this] { requestNewDocument(startPage_ ? startPage_->findChild<QWidget*>("startNew") : nullptr); });
             connect(startPage_, &DocumentStartPage::ShowAllRequested, this, &DocumentWorkspaceWidget::showRecentDialog);
-            connect(startPage_, &DocumentStartPage::FilesDropped, this, [this](const QStringList& Paths) { for (const auto& Path : Paths) open(Path, false, {}, false); });
+            connect(startPage_, &DocumentStartPage::FilesDropped, this, [this](const QStringList& Paths) {
+                for (const auto& Path : Paths) { if (QFileInfo(Path).isDir()) OpenWorkspace(Path); else openByUser(Path); }
+            });
+            connect(startPage_, &DocumentStartPage::OpenFolderRequested, this, &DocumentWorkspaceWidget::showOpenFolderDialog);
             setAcceptDrops(true);
             // 문서가 하나도 없는 중앙 영역에 보인다(도구 창은 그대로).
             docks_->setCentralPlaceholderWidget(startPage_);
@@ -611,6 +626,7 @@ namespace hc::document
         connect(&fm::style::ThemeManager::instance(), &fm::style::ThemeManager::changed,
             this, [this] { RefreshWorkspaceIcons(*this); });
         WatchersTrace.End();
+        if (explorerTool_) shortcutRouter_->AddScope(explorerTool_);
         { hc::document::startup::Scope Trace("editor.preferences"); refreshPreferences(); }
         { hc::document::startup::Scope Trace("editor.icons"); RefreshWorkspaceIcons(*this); }
         { hc::document::startup::Scope Trace("editor.windowSize"); windowSize_ = std::make_unique<DocumentWindowSize>(this, hosted_, [this](const QString& Error) { ShowShellError(Error); }); }
@@ -651,6 +667,7 @@ namespace hc::document
         fileMenu_ = menu_->addMenu(tr("파일(&F)")); fileMenu_->setObjectName("documentFileMenu");
         if (!hosted_) fileMenu_->addAction(scoped(A("newDocument"), Of({K::None, K::Text, K::MarkdownPreview, K::RstPreview, K::MarkdownEdit, K::RstEdit, K::EpubRead, K::EpubEdit})));
         fileMenu_->addAction(A("openDocument"));
+        if (!hosted_) fileMenu_->addAction(A("workspace.openFolder"));
         fileMenu_->addAction(scoped(A("reloadDocument"), Documents));
         fileMenu_->addAction(A("editHwpDocument"));
         fileMenu_->addSeparator();
@@ -671,6 +688,7 @@ namespace hc::document
         fileMenu_->addAction(scoped(Recover->menuAction(), Epub));
         fileMenu_->addSeparator();
         fileMenu_->addAction(scoped(A("closeDocument"), Documents));
+        if (!hosted_) fileMenu_->addAction(A("workspace.close"));
         recentAnchor_ = fileMenu_->addSeparator();
         // The recent section is rebuilt from the in-memory list each time the menu opens (no disk access).
         connect(fileMenu_, &QMenu::aboutToShow, this, &DocumentWorkspaceWidget::refreshRecentMenu);
@@ -739,6 +757,7 @@ namespace hc::document
         });
         // 도구 창 켜기 · 끄기와 창 배치(이름 붙인 배치 · 잠금). EPUB 보기의 ‘배치’와 겹치지 않게 ‘창 배치’.
         viewMenu_->addSeparator();
+        if (auto* Explorer = A("view.explorer")) viewMenu_->addAction(Explorer);
         toolMenu_ = viewMenu_->addMenu(tr("도구 창")); toolMenu_->setObjectName("documentToolMenu");
         toolMenu_->menuAction()->setProperty("documentIconName", "toc-toggle");
         connect(toolMenu_, &QMenu::aboutToShow, this, [this] { fillToolMenu(toolMenu_); });
@@ -825,6 +844,11 @@ namespace hc::document
             const auto Mode = Kind == DocumentViewKind::EpubEdit ? tr("EPUB 편집") : Kind == DocumentViewKind::EpubRead ? tr("읽기") : QString();
             if (!Name.isEmpty()) Title = Name + (Mode.isEmpty() ? QString() : QStringLiteral(" — ") + Mode) + QStringLiteral(" — HyperEditor");
         }
+        // 워크스페이스 창: ‘문서 — 워크스페이스 — HyperEditor’.
+        if (!workspaceRoot_.isEmpty()) {
+            const auto Name = QFileInfo(workspaceRoot_).fileName().isEmpty() ? QDir::toNativeSeparators(workspaceRoot_) : QFileInfo(workspaceRoot_).fileName();
+            Title = Title == QLatin1String("HyperEditor") ? Name + QStringLiteral(" — HyperEditor") : Title.chopped(int(QStringLiteral(" — HyperEditor").size())) + QStringLiteral(" — ") + Name + QStringLiteral(" — HyperEditor");
+        }
         if (windowTitle() != Title) setWindowTitle(Title);
     }
     void DocumentWorkspaceWidget::contextMenuEvent(QContextMenuEvent* Event)
@@ -842,6 +866,8 @@ namespace hc::document
     }
     DocumentWorkspaceWidget::~DocumentWorkspaceWidget()
     {
+        // 사라지는 창이 다른 창의 라우팅(열린 워크스페이스 고르기)에 잡히지 않게 먼저 푼다.
+        workspace::Registry::Instance().Unbind(this);
         windowSize_->Save();
         delete preferences_.data();
         // Children can emit modified/history signals while their PDF or image
@@ -1006,6 +1032,7 @@ namespace hc::document
         if (!ShortcutError.isEmpty()) ShowShellError(tr("단축키 설정 오류 · 기본값을 사용합니다: %1").arg(ShortcutError));
         else if (const auto Unknown = DocumentShortcutRegistry::Unknown(Bindings); !Unknown.isEmpty())
             ShowShellError(tr("지원하지 않는 단축키 항목을 보존했습니다: %1").arg(Unknown.join(", ")));
+        applyExplorerPreferences();
     }
     QJsonObject DocumentWorkspaceWidget::OpenArchiveDraftCopy(const QString& Directory)
     {
@@ -2168,7 +2195,7 @@ namespace hc::document
             {"clipboard", clipboardRequest_}, {"editRequest",editRequest_}, {"recoveryList", recoveryList_}, {"activeDocumentId", active() ? active()->id_ : QString{}}, {"idle", IsIdle()},
             {"memoryPrivateBytes", QString::number(Memory.PrivateUsage)}, {"memoryPeakWorkingSetBytes", QString::number(Memory.PeakWorkingSetSize)}, {"memoryPeakPrivateBytes", QString::number(Memory.PeakPagefileUsage)},
             {"hotExitClosing", hotExitClosing_}, {"hotExitEnabled", hotExitEnabled()}, {"shellError", shellError_}, {"recoveryRoot", recoveryRoot_}, {"dpr", devicePixelRatioF()}, {"tabbed", tabbed_}, {"chrome", chrome_->Settings()},
-            {"closeViewerOnEscape", closeViewerOnEscape_}, {"closeRequested", viewerCloseRequested_}};
+            {"closeViewerOnEscape", closeViewerOnEscape_}, {"closeRequested", viewerCloseRequested_}, {"workspaceRoot", workspaceRoot_}};
     }
     QJsonObject DocumentWorkspaceWidget::HandleMessage(const QJsonObject& Envelope)
     {
@@ -2315,6 +2342,9 @@ namespace hc::document
         if (Action == "open" || Action == "openHost") {
             const auto Reply=open(Request["path"].toString(), Action == "openHost", Request["sourceToken"].toString(), Request["broker"].toBool(), {}, {}, Request["readPrefix"].toObject());
             if(!hosted_ && Request["copyOnly"].toBool())if(auto Tab=find(Reply["documentId"].toString())){Tab->originalAuthority_=false;Tab->originalSave_=false;}
+            // 사용자가 연 파일(명령줄 · 두 번째 프로세스): 위 폴더의 워크스페이스를 찾는다(설계 6.3).
+            if(!hosted_ && Action=="open" && !Reply.contains("error") && !Reply["duplicate"].toBool() && Request.contains("ancestors"))
+                considerAncestors(Request["path"].toString(), Request["ancestors"].toString());
             return Reply;
         }
         if (Action == "chrome") { if (!ApplyChromeSettings(Request["settings"].toObject())) return Error("document-chrome-settings"); emit ChromeSettingsChanged(chrome_->Settings()); return {{"accepted", true}}; }
@@ -2325,7 +2355,7 @@ namespace hc::document
         if(Action=="editResult"){
             if(editRequest_.isEmpty()||Request["token"]!=editRequest_["token"])return Error("document-edit-token");
             if(auto Target=find(editRequest_["documentId"].toString());Target&&!Request["accepted"].toBool())Target->error_="document-editor-start-failed";
-            else if((editRequest_["format"]=="epub-new" || editRequest_["format"]=="hwpx-new")&&!Request["accepted"].toBool())ShowShellError(tr("HyperEditor를 시작하지 못했습니다."));
+            else if((editRequest_["format"]=="epub-new" || editRequest_["format"]=="hwpx-new" || editRequest_["format"]=="explorer")&&!Request["accepted"].toBool())ShowShellError(tr("HyperEditor를 시작하지 못했습니다."));
             editRequest_={};update();return {{"accepted",true}};
         }
         if (Action == "prepareClose") { for (const auto& Tab : documents_) if (Tab->Dirty()) return {{"canClose", false}}; return {{"canClose", IsIdle()}}; }
@@ -2600,6 +2630,7 @@ namespace hc::document
         if (auto* Beside = findChild<QAction*>("view.previewBeside", Qt::FindDirectChildrenOnly))
             Beside->setEnabled(Tab && !Tab->loading_ && tabbed_ && (Tab->pane_->CanTakePreview() || Tab->previewDock_));
         findChild<ImageFullscreen*>("imageFullscreen")->UpdateStatus();
+        refreshExplorer();
         emit StateChanged();
     }
     void DocumentWorkspaceWidget::refreshRecentMenu()
@@ -2656,6 +2687,12 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::openRecent(const RecentDocument& Document)
     {
+        // 최근 워크스페이스(폴더): HyperEditor 는 워크스페이스로 열고, HyperViewer 는 HyperEditor 에 넘긴다.
+        if (Document.kind_ == QLatin1String("folder") && QFileInfo(Document.path_).isDir()) {
+            if (!hosted_) OpenWorkspace(Document.path_);
+            else if (editRequest_.isEmpty()) { editRequest_ = {{"token", QUuid::createUuid().toString(QUuid::Id128)}, {"format", "explorer"}, {"path", Document.path_}, {"folder", true}}; update(); }
+            return;
+        }
         if (!QFileInfo::exists(Document.path_)) {
             auto* Box = new hc::ui::MessageDialog(QMessageBox::Question, tr("최근 항목"),
                 tr("%1을(를) 찾을 수 없습니다 — 목록에서 제거할까요?").arg(QDir::toNativeSeparators(Document.path_)), QMessageBox::Yes | QMessageBox::No, this);
@@ -2665,7 +2702,7 @@ namespace hc::document
         }
         pendingOpenEncoding_ = CanonicalEncodingName(Document.encoding_);
         // HyperViewer replaces its current document; HyperEditor opens a tab (or goes to the open one).
-        const auto Reply = hosted_ ? open(Document.path_, true, {}, false) : open(Document.path_, false, {}, false);
+        const auto Reply = hosted_ ? open(Document.path_, true, {}, false) : openByUser(Document.path_);
         pendingOpenEncoding_.clear();
         if (Reply.contains("error")) { ShowShellError(Message(Reply["error"].toString())); return; }
         if (Reply["duplicate"].toBool()) return;
@@ -2770,8 +2807,11 @@ namespace hc::document
         Menu.addAction(tr("아래로 분할"), this, [this, Dock] { if (auto* From = Dock->dockArea()) docks_->moveDockWidget(Dock, DropArea::Bottom, From); })->setEnabled(Splittable);
         auto* Move = Menu.addMenu(tr("다른 묶음으로 옮기기"));
         QList<fm::dock::DockArea*> Targets;
-        for (auto* Container : docks_->dockContainers()) for (auto* Each : Container->openedDockAreas())
-            if (Each != Area && std::any_of(Each->openDockWidgets().cbegin(), Each->openDockWidgets().cend(), [this](auto* D) { return tabOf(D) != nullptr; })) Targets.append(Each);
+        for (auto* Container : docks_->dockContainers()) for (auto* Each : Container->openedDockAreas()) {
+            // openDockWidgets() 는 부를 때마다 새 목록이다: 한 목록의 처음과 끝을 써야 한다.
+            const auto Open = Each->openDockWidgets();
+            if (Each != Area && std::any_of(Open.cbegin(), Open.cend(), [this](auto* D) { return tabOf(D) != nullptr; })) Targets.append(Each);
+        }
         for (auto* Each : Targets) {
             auto* Current = Each->currentDockWidget();
             const auto Label = Current ? Current->title() : tr("묶음");
@@ -2791,7 +2831,16 @@ namespace hc::document
         const auto Native = QDir::toNativeSeparators(Target->path_);
         Menu.addAction(tr("경로 복사"), this, [Native] { QGuiApplication::clipboard()->setText(Native); })->setEnabled(Local);
         Menu.addAction(tr("파일 이름 복사"), this, [Native] { QGuiApplication::clipboard()->setText(QFileInfo(Native).fileName()); })->setEnabled(Local);
-        Menu.addAction(tr("탐색기에서 위치 열기"), this, [Native] {
+        if (!workspaceRoot_.isEmpty()) {
+            const auto Relative = workspace::RelativeTo(workspaceRoot_, Target->path_);
+            Menu.addAction(tr("상대 경로 복사"), this, [Relative] { QGuiApplication::clipboard()->setText(QDir::toNativeSeparators(Relative)); })->setEnabled(Local && !Relative.isEmpty());
+        }
+        Menu.addAction(tr("탐색기 패널에서 찾기"), this, [this, Path = Target->path_] {
+            if (!explorerTool_ || !explorer_) return;
+            explorerTool_->toggleView(true); explorerTool_->bringToFront();
+            explorer_->SetActiveDocument(Path); explorer_->RevealActive(true);
+        })->setEnabled(Local && explorer_ != nullptr);
+        Menu.addAction(tr("Windows 탐색기에서 위치 열기"), this, [Native] {
             // HyperCommander has no select-path command line contract yet; Explorer /select is the stand-in (plan 6.4).
             QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,") + Native});
         })->setEnabled(Local && QFileInfo::exists(Target->path_));
@@ -2847,8 +2896,12 @@ namespace hc::document
     {
         if (hosted_ || !Event->mimeData()->hasUrls()) return;
         QStringList Rejected;
-        for (const auto& Url : Event->mimeData()->urls())
-            if (Url.isLocalFile() && open(Url.toLocalFile(), false, {}, false).contains("error")) Rejected.append(Url.toLocalFile());
+        for (const auto& Url : Event->mimeData()->urls()) {
+            if (!Url.isLocalFile()) continue;
+            // 폴더는 워크스페이스로 연다(MRE 와 다름: 바로 아래 파일을 열지 않는다).
+            if (QFileInfo(Url.toLocalFile()).isDir()) { OpenWorkspace(Url.toLocalFile()); continue; }
+            if (openByUser(Url.toLocalFile()).contains("error")) Rejected.append(Url.toLocalFile());
+        }
         ShowShellError(Rejected.isEmpty() ? QString{} : tr("문서 한도 때문에 열지 못한 파일: %1").arg(Rejected.join(", ")));
         Event->acceptProposedAction();
     }
@@ -3227,6 +3280,8 @@ namespace hc::document
         }
         QJsonObject Manifest{{"profileId", qApp->property("documentRecoveryProfile").toString()}, {"documents", Items}, {"activeDocumentId", active() ? active()->id_ : QString{}},
             {"geometry", QString::fromLatin1(saveGeometry().toBase64())}, {"cleanShutdown", Closing}};
+        // 워크스페이스 창은 그 루트에 다시 묶인다(문서는 HotExit 가 되살리고, 워크스페이스 상태는 탐색기 · 배치만).
+        if (!workspaceRoot_.isEmpty()) Manifest["workspaceRoot"] = workspaceRoot_;
         if (!Closing && Manifest == publishedSession_) return;
         hotExitPublishing_ = true; ++recoveryWorkers_;
         using Published = std::pair<QJsonObject, std::vector<RecoverySnapshot>>;
@@ -3304,6 +3359,7 @@ namespace hc::document
             auto Result = Watcher->result(); Watcher->deleteLater(); --recoveryWorkers_;
             if (!Result.HasValue()) { restoringLock_.reset(); restoringSessionId_.clear(); ShowShellError(tr("복구 세션을 읽지 못했습니다: %1").arg(QString::fromStdString(Result.Failure().code_))); return; }
             const auto Manifest = Result.Value();
+            if (const auto Root = Manifest["workspaceRoot"].toString(); !Root.isEmpty() && QFileInfo(Root).isDir()) OpenWorkspace(Root, WorkspaceOrigin::HotExit);
             restoredActive_ = Manifest["activeDocumentId"].toString(); pendingHotExitRestore_ = true;
             for (const auto& Value : Manifest["documents"].toArray()) {
                 const auto Item = Value.toObject(); QJsonObject Reply; const auto Kind = Item["kind"].toString();
@@ -3371,6 +3427,8 @@ namespace hc::document
     {
         // 창을 닫는 모든 길(X · HotExit · 빠른 보기 닫기)이 여기를 지난다: 다음에 열 때 도구 창 자리를 그대로.
         storeDockSettings();
+        // 워크스페이스 상태는 문서를 닫기 전에 남긴다(닫기를 취소해도 해가 없다).
+        if (!workspaceRoot_.isEmpty() && !hotExitReady_) saveWorkspace();
         if (hotExitReady_) {
             const auto Tabs = documents_; for (const auto& Tab : Tabs) retire(Tab, true, !hotExitDiscard_.contains(Tab->id_));
             return documents_.empty() && IsIdle();
@@ -3451,12 +3509,15 @@ QJsonArray DocumentWorkspaceWidget::searchSources() const {
     }
     return Sources;
 }
-void DocumentWorkspaceWidget::openSearch(bool Replace) {
+void DocumentWorkspaceWidget::openSearch(bool Replace, const QString& Root) {
     auto Tab = active(); if (!Tab) Tab = find(searchDocument_);
-    if (!Tab || Tab->loading_) return;
-    if (Tab->pane_->ViewId() != "text" && !Tab->pane_->IsMarkdown() && !Tab->pane_->IsEpub()) return;
-    if(Replace && !hosted_ && Tab->pane_->IsEpub() && !Tab->pane_->EpubEditor())Tab->pane_->Execute({{"action","epub.edit.begin"}});
-    const bool ChangedBook=Tab->pane_->IsEpub() && searchDocument_!=Tab->id_;searchDocument_ = Tab->id_;
+    const bool Usable = Tab && !Tab->loading_ && (Tab->pane_->ViewId() == "text" || Tab->pane_->IsMarkdown() || Tab->pane_->IsEpub());
+    // EPUB 은 책 안에서 찾는다. 그 밖에는 고른 폴더 · 워크스페이스 루트 · 문서 폴더 순(워크스페이스는 문서 없이도 찾는다).
+    const bool Book = Usable && Root.isEmpty() && Tab->pane_->IsEpub();
+    const auto Folder = !Root.isEmpty() ? Root : Book ? QString() : !workspaceRoot_.isEmpty() ? workspaceRoot_ : Usable ? QFileInfo(Tab->path_).absolutePath() : QString();
+    if (!Book && Folder.isEmpty()) return;
+    if(Book && Replace && !hosted_ && !Tab->pane_->EpubEditor())Tab->pane_->Execute({{"action","epub.edit.begin"}});
+    const bool ChangedBook=Book && searchDocument_!=Tab->id_; if (Usable) searchDocument_ = Tab->id_;
     if (!searchPanel_) {
         // The ‘파일에서 찾기’ tool window exists from the start (its place is part of the saved layout); the panel joins it now.
         auto* Host = searchTool_->widget();
@@ -3491,7 +3552,8 @@ void DocumentWorkspaceWidget::openSearch(bool Replace) {
     if (searchPlacement_.isEmpty()) placeSearch(Location);
     else { searchTool_->toggleView(true); searchTool_->bringToFront(); }
     searchPanel_->SetReadOnly(hosted_);
-    searchPanel_->Open(Replace, Tab->pane_->IsEpub() ? Tab->path_ : QFileInfo(Tab->path_).absolutePath(), Tab->pane_->IsEpub(), searchSources());
+    searchPanel_->Open(Replace, Book ? Tab->path_ : Folder, Book, searchSources());
+    if (!Root.isEmpty()) searchPanel_->SetRoot(Root);
     if(ChangedBook)searchPanel_->SourcesChanged();
 }
 void DocumentWorkspaceWidget::placeSearch(const QString& Requested) {
@@ -3586,8 +3648,10 @@ void DocumentWorkspaceWidget::buildDocks()
     auto* SearchHost = new QWidget; SearchHost->setObjectName("documentSearchHost");
     auto* SearchLayout = new QVBoxLayout(SearchHost); SearchLayout->setContentsMargins(0, 0, 0, 0); SearchLayout->setSpacing(0);
     searchTool_ = makeTool(QStringLiteral("search"), tr("파일에서 찾기"), SearchHost);
+    buildExplorer();
     if (hosted_) {
-        // 좁은 패널: 도구 창은 사이드바(자동 숨김)에서 시작한다. 개요 · 파일에서 찾기만 처음부터 탭이 보인다.
+        // 좁은 패널: 도구 창은 사이드바(자동 숨김)에서 시작한다. 탐색기 · 개요 · 파일에서 찾기만 처음부터 탭이 보인다.
+        docks_->addAutoHideDockWidget(SideBarLocation::Left, explorerTool_);
         docks_->addAutoHideDockWidget(SideBarLocation::Left, tools_["outline"]);
         docks_->addAutoHideDockWidget(SideBarLocation::Left, tools_["bookTree"]);
         docks_->addAutoHideDockWidget(SideBarLocation::Bottom, searchTool_);
@@ -3595,14 +3659,15 @@ void DocumentWorkspaceWidget::buildDocks()
         docks_->addAutoHideDockWidget(SideBarLocation::Bottom, tools_["output"]);
         for (auto* Dock : {tools_["bookTree"], tools_["problems"], tools_["output"]}) Dock->toggleView(false);
     } else {
-        // 시안: 아래 = 파일에서 찾기 | 문제(문서 열 아래), 왼쪽 = 개요 | 책 구조, 출력 = 아래 자동 숨김.
-        // 처음에는 출력 말고 닫혀 있다. 문서가 원할 때(개요 켜짐 · EPUB 편집 · 찾기) 그 자리에 열린다.
+        // 시안: 아래 = 파일에서 찾기 | 문제(문서 열 아래), 왼쪽 위 = 탐색기, 왼쪽 아래 = 개요 | 책 구조, 출력 = 아래 자동 숨김.
+        // 탐색기는 기본 기능이라 처음부터 열려 있다. 나머지는 출력 말고 닫혀 있다가 문서가 원할 때(개요 켜짐 · EPUB 편집 · 찾기) 열린다.
         auto* Bottom = docks_->addDockWidget(DropArea::Bottom, searchTool_);
         docks_->addDockWidgetTab(tools_["problems"], Bottom);
-        auto* Left = docks_->addDockWidget(DropArea::Left, tools_["outline"]);
-        docks_->addDockWidgetTab(tools_["bookTree"], Left);
+        auto* Left = docks_->addDockWidget(DropArea::Left, explorerTool_);
+        auto* Below = docks_->addDockWidget(DropArea::Bottom, tools_["outline"], Left);
+        docks_->addDockWidgetTab(tools_["bookTree"], Below);
         docks_->setAreaSize(Bottom, Qt::Vertical, 200);
-        docks_->setAreaSize(Left, Qt::Horizontal, 230);
+        docks_->setAreaSize(Left, Qt::Horizontal, 260);
         docks_->addAutoHideDockWidget(SideBarLocation::Bottom, tools_["output"]);
         for (auto* Dock : {tools_["outline"], tools_["bookTree"], tools_["problems"], searchTool_}) Dock->toggleView(false);
     }
@@ -3729,11 +3794,14 @@ void DocumentWorkspaceWidget::fillToolMenu(QMenu* Menu)
         if (Tab) for (const auto& Item : Tab->toolPanels_) if (Item.kind_ == Kind && Item.toggle_) return Item.toggle_->shortcut().toString(QKeySequence::NativeText);
         return {};
     };
-    const std::array<std::pair<QString, QString>, 5> Items{{{QStringLiteral("outline"), tr("개요")}, {QStringLiteral("bookTree"), tr("책 구조")},
+    const std::array<std::pair<QString, QString>, 6> Items{{{QStringLiteral("explorer"), tr("탐색기")}, {QStringLiteral("outline"), tr("개요")}, {QStringLiteral("bookTree"), tr("책 구조")},
         {QStringLiteral("problems"), tr("문제")}, {QStringLiteral("output"), tr("출력")}, {QStringLiteral("search"), tr("파일에서 찾기")}}};
     for (const auto& [Kind, Label] : Items) {
         auto* Dock = Kind == QLatin1String("search") ? searchTool_ : tools_.value(Kind);
-        const auto Key = KeyOf(Kind);
+        // 빠른 보기에는 탐색기가 없다.
+        if (!Dock) continue;
+        auto Key = KeyOf(Kind);
+        if (Kind == QLatin1String("explorer")) if (auto* Go = findChild<QAction*>("view.explorer", Qt::FindDirectChildrenOnly)) Key = Go->shortcut().toString(QKeySequence::NativeText);
         auto* Item = Menu->addAction(Key.isEmpty() ? Label : Label + QLatin1Char('\t') + Key);
         Item->setObjectName(QStringLiteral("view.tool.") + Kind);
         Item->setCheckable(true); Item->setChecked(Dock && !Dock->isClosed());
@@ -3874,5 +3942,612 @@ void DocumentWorkspaceWidget::pollNativeFocus()
             }
         return;
     }
+}
+}
+// ============================================================================================ 탐색기 · 워크스페이스
+// 설계: documentation/source/261113_hypereditor_explorer_workspace_design.rst 5–6장.
+namespace hc::document {
+namespace {
+std::function<bool(const QString&, const QStringList&)>& WindowRequestHandler()
+{
+    static std::function<bool(const QString&, const QStringList&)> Handler;
+    return Handler;
+}
+QString FolderName(const QString& Root)
+{
+    const auto Name = QFileInfo(Root).fileName();
+    return Name.isEmpty() ? QDir::toNativeSeparators(Root) : Name;
+}
+void RememberSetting(const QString& Key, const QVariant& Value)
+{
+    AppSettings Settings; Settings.setValue(Key, Value); Settings.sync();
+}
+// 기억한 상위 찾기 선택(workspace/ancestorChoices): "기준 루트|고른 루트" 또는 "기준 루트|none" 줄의 목록.
+// '|' 는 Windows 경로에 올 수 없다. 설정 파일에서 사람이 읽고 지울 수 있게 문자열 배열로 둔다.
+QMap<QString, QString> AncestorChoices(const QJsonObject& Applied)
+{
+    QMap<QString, QString> Result;
+    for (const auto& Line : PreferenceValue(Applied, QStringLiteral("workspace/ancestorChoices")).toStringList())
+        if (const auto At = Line.indexOf(QLatin1Char('|')); At > 0) Result.insert(Line.left(At), Line.mid(At + 1));
+    return Result;
+}
+void StoreAncestorChoices(const QMap<QString, QString>& Choices)
+{
+    QStringList Lines;
+    for (auto At = Choices.cbegin(); At != Choices.cend(); ++At) Lines.append(At.key() + QLatin1Char('|') + At.value());
+    RememberSetting(QStringLiteral("workspace/ancestorChoices"), Lines);
+}
+}
+void DocumentWorkspaceWidget::SetWindowRequestHandler(std::function<bool(const QString& Root, const QStringList& Files)> Handler)
+{
+    WindowRequestHandler() = std::move(Handler);
+}
+bool DocumentWorkspaceWidget::event(QEvent* Event)
+{
+    // Ctrl+Q 빠른 보기에는 탐색기가 없다(설계 5.1): HyperViewer 가 창을 만든 뒤 hc.quickPreview 를 붙인다.
+    if (Event->type() == QEvent::DynamicPropertyChange && explorerTool_
+        && static_cast<QDynamicPropertyChangeEvent*>(Event)->propertyName() == "hc.quickPreview" && property("hc.quickPreview").toBool()) {
+        tools_.remove(QStringLiteral("explorer"));
+        auto* Tool = std::exchange(explorerTool_, nullptr); explorer_ = nullptr; explorerSignature_.clear();
+        docks_->removeDockWidget(Tool); Tool->deleteLater();
+        dockDefaultLayout_ = docks_->saveState(DockLayoutVersion); docks_->setDefaultLayout(dockDefaultLayout_);
+    }
+    return QWidget::event(Event);
+}
+void DocumentWorkspaceWidget::buildExplorer()
+{
+    explorer_ = new ExplorerPanel(hosted_);
+    explorer_->setObjectName("documentExplorer");
+    explorerTool_ = makeTool(QStringLiteral("explorer"), tr("탐색기"), explorer_);
+    tools_.insert(QStringLiteral("explorer"), explorerTool_);
+    workspaceSave_ = new QTimer(this); workspaceSave_->setObjectName("documentWorkspaceSave"); workspaceSave_->setSingleShot(true); workspaceSave_->setInterval(1500);
+    connect(workspaceSave_, &QTimer::timeout, this, &DocumentWorkspaceWidget::saveWorkspace);
+}
+void DocumentWorkspaceWidget::connectExplorer()
+{
+    const auto Add = [this](const QString& Label, const QString& Id, auto Callback) {
+        auto* Action = new QAction(Label, this); Action->setObjectName(Id); addAction(Action);
+        connect(Action, &QAction::triggered, this, Callback); return Action;
+    };
+    Add(tr("폴더 열기…"), QStringLiteral("workspace.openFolder"), [this] { showOpenFolderDialog(); })->setProperty("documentIconName", "open");
+    Add(tr("워크스페이스 닫기"), QStringLiteral("workspace.close"), [this] { CloseWorkspace(); })->setEnabled(false);
+    Add(tr("탐색기로 이동"), QStringLiteral("view.explorer"), [this] {
+        if (!explorerTool_ || !explorer_) return;
+        explorerTool_->toggleView(true); explorerTool_->bringToFront();
+        explorer_->RevealActive(true);
+    })->setProperty("documentIconName", "toc-toggle");
+    for (const auto& Command : DocumentShortcutRegistry::Commands()) {
+        if (Command.scope_ != QLatin1String("explorer")) continue;
+        Add(Command.label_, Command.id_, [this, Id = Command.id_] {
+            if (!explorer_) return;
+            if (Id == QLatin1String("explorer.open")) explorer_->OpenCurrent(false);
+            else if (Id == QLatin1String("explorer.openBeside")) explorer_->OpenCurrent(true);
+            else if (Id == QLatin1String("explorer.rename")) explorer_->RenameCurrent();
+            else if (Id == QLatin1String("explorer.recycle")) explorer_->DeleteCurrent(false);
+            else if (Id == QLatin1String("explorer.delete")) explorer_->DeleteCurrent(true);
+            else if (Id == QLatin1String("explorer.copyPath")) explorer_->CopyCurrentPath(false);
+            else if (Id == QLatin1String("explorer.copyRelativePath")) explorer_->CopyCurrentPath(true);
+            else if (Id == QLatin1String("explorer.newFile")) explorer_->NewFile();
+            else if (Id == QLatin1String("explorer.newFolder")) explorer_->NewFolder();
+            else if (Id == QLatin1String("explorer.collapseAll")) explorer_->CollapseAll();
+            else if (Id == QLatin1String("explorer.refresh")) explorer_->Refresh();
+        });
+    }
+    if (recent_) connect(recent_, &RecentDocumentStore::Changed, this, &DocumentWorkspaceWidget::refreshExplorerRecent);
+    if (!explorer_) return;
+    explorer_->SetShortcutText([this](const QString& Id) {
+        auto* Action = findChild<QAction*>(Id, Qt::FindDirectChildrenOnly);
+        return Action ? Action->shortcut().toString(QKeySequence::NativeText) : QString();
+    });
+    // HyperViewer 는 바꾸지 않는다: 편집 · 워크스페이스는 HyperEditor 에 넘긴다(editRequest format "explorer").
+    const auto ToEditor = [this](const QString& Path, bool Folder) {
+        if (!hosted_) { if (Folder) OpenWorkspace(Path); else openByUser(Path); return; }
+        if (!editRequest_.isEmpty()) return;
+        editRequest_ = {{"token", QUuid::createUuid().toString(QUuid::Id128)}, {"format", "explorer"}, {"path", QFileInfo(Path).absoluteFilePath()}, {"folder", Folder}};
+        update();
+    };
+    connect(explorer_, &ExplorerPanel::OpenRequested, this, &DocumentWorkspaceWidget::openFromExplorer);
+    connect(explorer_, &ExplorerPanel::OpenFolderRequested, this, &DocumentWorkspaceWidget::showOpenFolderDialog);
+    connect(explorer_, &ExplorerPanel::OpenWorkspaceRequested, this, [ToEditor](const QString& Folder) { ToEditor(Folder, true); });
+    connect(explorer_, &ExplorerPanel::EditInEditorRequested, this, [ToEditor](const QString& Path) { ToEditor(Path, false); });
+    connect(explorer_, &ExplorerPanel::OpenFolderInEditorRequested, this, [ToEditor](const QString& Folder) { ToEditor(Folder, true); });
+    connect(explorer_, &ExplorerPanel::FindInFolderRequested, this, [this](const QString& Folder) { openSearch(false, Folder); });
+    connect(explorer_, &ExplorerPanel::BuildRequested, this, [this](const QString& Folder) {
+        // 그 프로젝트의 reST 문서로 빌드한다: 열린 것이 있으면 그것, 없으면 루트 문서(index.rst)를 연다.
+        std::shared_ptr<Tab> Target;
+        for (const auto& Each : documents_) if (!Each->closed_ && Each->pane_ && Each->pane_->IsRst() && workspace::IsInside(Each->path_, Folder, false)) { Target = Each; break; }
+        if (!Target) {
+            const auto Index = QDir(Folder).filePath(QStringLiteral("index.rst"));
+            if (!QFileInfo(Index).isFile()) { ShowShellError(tr("빌드할 문서를 찾지 못했습니다. 프로젝트의 reST 문서를 연 뒤 빌드하십시오.")); return; }
+            Target = find(open(Index, false, {}, false)["documentId"].toString());
+        }
+        if (!Target) return;
+        activate(Target);
+        auto* Wait = new QTimer(this); Wait->setInterval(50); auto Attempts = std::make_shared<int>(0);
+        connect(Wait, &QTimer::timeout, this, [this, Wait, Id = Target->id_, Attempts] {
+            auto Current = find(Id); if (!Current || ++*Attempts > 600) { Wait->deleteLater(); return; }
+            if (Current->loading_) return;
+            Wait->deleteLater();
+            if (!Current->pane_->RunViewCommand(QStringLiteral("rst.buildProject"))) ShowShellError(tr("이 문서에서는 프로젝트를 빌드할 수 없습니다."));
+        });
+        Wait->start();
+    });
+    connect(explorer_, &ExplorerPanel::RenameRequested, this, &DocumentWorkspaceWidget::explorerRename);
+    connect(explorer_, &ExplorerPanel::Created, this, [this](const QString& Path, bool Folder) {
+        if (Folder || hosted_) return;
+        // 새 파일은 이름을 정하면 바로 연다.
+        openFromExplorer(Path, false);
+    });
+    connect(explorer_, &ExplorerPanel::NoticeAction, this, [this](const QString& Id, int Index) {
+        if (Id == QLatin1String("ancestorOpened")) { if (Index == 0) undoAncestorWorkspace(); else openRemainingSessionDocuments(); }
+        else if (Id == QLatin1String("sessionPending") && Index == 0) openRemainingSessionDocuments();
+        else if (Id == QLatin1String("alreadyOpen") || Id == QLatin1String("stateFallback") || Id == QLatin1String("mreImported")) explorer_->HideNotice(Id);
+    });
+    connect(explorer_, &ExplorerPanel::PickChosen, this, [this](int Index, bool Remember) {
+        if (Index < 0 || Index >= ancestorPicks_.size()) return;
+        const auto Pick = ancestorPicks_[Index]; ancestorPicks_.clear();
+        if (Remember && !Pick.rememberKey_.isEmpty()) {
+            auto Choices = AncestorChoices(appliedPreferences_);
+            Choices.insert(Pick.rememberKey_, Pick.root_.isEmpty() ? QStringLiteral("none") : Pick.root_);
+            StoreAncestorChoices(Choices); refreshPreferences();
+        }
+        if (!Pick.root_.isEmpty()) openAncestor(Pick.root_, Pick.file_, QStringLiteral("plain"));
+    });
+    connect(explorer_, &ExplorerPanel::StateChanged, this, &DocumentWorkspaceWidget::scheduleWorkspaceSave);
+    connect(explorer_, &ExplorerPanel::SettingChanged, this, [this](const QString& Key, bool Value) {
+        RememberSetting(QStringLiteral("explorer/") + Key, Value); refreshPreferences();
+    });
+    connect(explorer_, &ExplorerPanel::ShowSettingsRequested, this, [this] { showPreferences(); if (preferences_) preferences_->ShowPage(QStringLiteral("explorer")); });
+}
+void DocumentWorkspaceWidget::refreshExplorer()
+{
+    if (!explorer_) return;
+    const auto Current = active();
+    QList<ExplorerPanel::OpenDocument> Open; QStringList Parts;
+    // 복구 사본 · 새 문서 · 제공자 사본은 디스크의 자리가 아니다.
+    const auto Real = [](const std::shared_ptr<Tab>& Each) { return !Each->closed_ && !Each->path_.isEmpty() && Each->temporarySource_.isEmpty() && !Each->recovered_ && !Each->broker_ && Each->sourceToken_.isEmpty(); };
+    for (const auto& Each : documents_) {
+        if (!Real(Each)) continue;
+        const bool Dirty = Each->Dirty();
+        Open.append({Each->path_, Dirty}); Parts.append(Each->path_ + (Dirty ? QStringLiteral("*") : QString()));
+    }
+    const auto ActivePath = Current && Real(Current) ? Current->path_ : QString();
+    const auto Signature = Parts.join(QLatin1Char('\n')) + QLatin1Char('\n') + ActivePath + QLatin1Char('\n') + workspaceRoot_;
+    if (Signature == explorerSignature_) return;
+    explorerSignature_ = Signature;
+    explorer_->SetOpenDocuments(Open);
+    if (!ActivePath.isEmpty()) explorer_->SetDocumentFolder(QFileInfo(ActivePath).absolutePath());
+    else if (documents_.empty()) explorer_->SetDocumentFolder({});
+    explorer_->SetActiveDocument(ActivePath);
+    scheduleWorkspaceSave();
+}
+void DocumentWorkspaceWidget::refreshExplorerRecent()
+{
+    if (!explorer_ || !recent_) return;
+    QList<ExplorerPanel::RecentWorkspace> Items;
+    for (const auto& Entry : recent_->Entries()) {
+        if (Entry.kind_ != QLatin1String("folder")) continue;
+        Items.append({Entry.path_, FolderName(Entry.path_)});
+        if (Items.size() == 5) break;
+    }
+    explorer_->SetRecentWorkspaces(Items);
+}
+void DocumentWorkspaceWidget::applyExplorerPreferences()
+{
+    if (!explorer_) return;
+    ExplorerPanel::Settings Value;
+    const auto Bool = [this](const char* Key) { return PreferenceValue(appliedPreferences_, QStringLiteral("explorer/") + QLatin1String(Key)).toBool(); };
+    Value.autoReveal_ = Bool("autoReveal"); Value.showAllFiles_ = Bool("showAllFiles"); Value.showHidden_ = Bool("showHidden");
+    Value.showAllDrives_ = Bool("showAllDrives"); Value.confirmRecycle_ = Bool("confirmRecycle");
+    for (const auto& Name : PreferenceValue(appliedPreferences_, QStringLiteral("explorer/excludedFolders")).toString().split(QLatin1Char(';'), Qt::SkipEmptyParts))
+        if (const auto Trimmed = Name.trimmed(); !Trimmed.isEmpty()) Value.excluded_.append(Trimmed);
+    for (const auto Suffix : DocumentExtensions) Value.openableSuffixes_.append(QString::fromLatin1(Suffix.data(), qsizetype(Suffix.size())));
+    if (const auto Font = PreferenceValue(appliedPreferences_, QStringLiteral("explorer/font")).toString(); !Font.isEmpty()) Value.font_.fromString(Font);
+    else Value.font_ = QFont();
+    explorer_->ApplySettings(Value);
+    refreshExplorerRecent();
+}
+void DocumentWorkspaceWidget::showOpenFolderDialog()
+{
+    if (hosted_) return;
+    const auto Start = !workspaceRoot_.isEmpty() ? QFileInfo(workspaceRoot_).absolutePath() : explorer_ ? explorer_->DocumentFolder() : QString();
+    auto* Dialog = new QFileDialog(this, tr("폴더 열기"), Start);
+    Dialog->setFileMode(QFileDialog::Directory); Dialog->setOption(QFileDialog::ShowDirsOnly, true);
+    connect(Dialog, &QFileDialog::fileSelected, this, [this](const QString& Folder) { if (!Folder.isEmpty()) OpenWorkspace(Folder); });
+    OpenFileDialog(Dialog);
+}
+bool DocumentWorkspaceWidget::OpenWorkspace(const QString& Path, WorkspaceOrigin Origin)
+{
+    if (hosted_ || Path.isEmpty()) return false;
+    const auto Root = workspace::NormalizeRoot(QFileInfo(Path).absoluteFilePath());
+    if (!QFileInfo(Root).isDir()) { ShowShellError(tr("폴더를 찾을 수 없습니다: %1").arg(QDir::toNativeSeparators(Root))); return false; }
+    if (workspace::SamePath(Root, workspaceRoot_)) {
+        if (explorerTool_) { explorerTool_->toggleView(true); explorerTool_->bringToFront(); }
+        return true;
+    }
+    // 같은 폴더는 프로세스 안에서 한 창에만: 그 창을 앞으로 가져오고 알린다.
+    if (auto* Owner = qobject_cast<DocumentWorkspaceWidget*>(workspace::Registry::Instance().WindowFor(Root)); Owner && Owner != this) {
+        auto* Window = Owner->window(); if (Window->isMinimized()) Window->showNormal();
+        Window->raise(); Window->activateWindow();
+        if (Owner->explorer_) Owner->explorer_->ShowNotice(QStringLiteral("alreadyOpen"), fm::ui::Banner::Info, tr("이 창에 이미 열려 있는 워크스페이스입니다"), QDir::toNativeSeparators(Root));
+        return true;
+    }
+    // 이 창에 다른 워크스페이스가 있으면 새 창에 연다(지금 창의 탭은 닫지 않는다).
+    if (!workspaceRoot_.isEmpty()) {
+        if (const auto& Handler = WindowRequestHandler()) return Handler(Root, {});
+        if (!CloseWorkspace()) return false;
+    }
+    return bindWorkspace(Root, Origin);
+}
+bool DocumentWorkspaceWidget::CloseWorkspace()
+{
+    if (workspaceRoot_.isEmpty()) return true;
+    saveWorkspace();
+    // 지금의 닫기 확인을 거친다. 취소하거나 저장이 이어지면 워크스페이스는 그대로 둔다.
+    while (!documents_.empty()) {
+        const auto Count = documents_.size(); closeTab(int(Count - 1));
+        if (documents_.size() == Count) return false;
+    }
+    RememberSetting(QStringLiteral("workspace/lastRoot"), QString());
+    unbindWorkspace();
+    return true;
+}
+bool DocumentWorkspaceWidget::bindWorkspace(const QString& Root, WorkspaceOrigin Origin)
+{
+    if (!workspace::Registry::Instance().Bind(Root, this)) return false;
+    // 빈 창(상위 찾기는 방금 연 파일만 있는 창도)이면 지난 세션 문서까지 되살린다.
+    const bool Empty = documents_.empty() || (Origin == WorkspaceOrigin::Ancestor && documents_.size() == 1);
+    workspaceRoot_ = Root; workspaceFallbackNotified_ = false; pendingSession_.reset(); autoRestoredPaths_.clear();
+    workspaceExtra_ = {}; workspaceFind_ = {}; explorerSignature_.clear();
+    if (explorer_) { explorer_->HidePick(); explorer_->HideNotice(); explorer_->SetWorkspace(Root, FolderName(Root)); }
+    ancestorPicks_.clear(); ++ancestorGeneration_;
+    if (auto* Close = findChild<QAction*>("workspace.close", Qt::FindDirectChildrenOnly)) Close->setEnabled(true);
+    // 상태: 폴더 · 프로필 가운데 새 쪽. 없으면 MRE 세션을 한 번 가져온다(MRE 파일은 그대로 둔다).
+    const auto Loaded = workspaceStore().Load(Root);
+    std::optional<workspace::State> State; bool Imported = false;
+    if (Loaded.found_) State = Loaded.state_;
+    else if (PreferenceValue(appliedPreferences_, QStringLiteral("workspace/importMultiRoot")).toBool())
+        if (auto Session = workspace::ImportMultiRoot(Root)) { State = std::move(Session); Imported = true; }
+    const bool Layout = PreferenceValue(appliedPreferences_, QStringLiteral("workspace/restoreLayout")).toBool();
+    if (State) {
+        workspaceExtra_ = State->extra_; workspaceFind_ = State->findInFiles_;
+        if (Empty && !bindOnly_ && Origin != WorkspaceOrigin::HotExit) restoreWorkspaceDocuments(*State, Layout);
+        else {
+            // 묶기만: 탐색기 · (아직 문서가 없으면) 배치. 지난 세션 문서는 ‘모두 열기’ 로 넘긴다.
+            const QScopedValueRollback Guard(workspaceRestoring_, true);
+            if (Layout && documents_.empty() && !State->dockLayout_.isEmpty() && State->dockVersion_ == DockLayoutVersion) docks_->restoreState(State->dockLayout_, DockLayoutVersion);
+            if (explorer_) explorer_->RestoreExpansion(State->explorer_.expanded_, State->explorer_.selected_, State->explorer_.topItem_);
+            if (Origin != WorkspaceOrigin::HotExit && !State->documents_.isEmpty()) pendingSession_ = State;
+        }
+    }
+    if (explorer_) {
+        if (Loaded.found_ && Loaded.state_.newerSchema_)
+            explorer_->ShowNotice(QStringLiteral("newerSchema"), fm::ui::Banner::Warn, tr("더 새 판이 저장한 워크스페이스 상태입니다"),
+                tr("읽기만 하고 덮어쓰지 않습니다. 이 창의 상태는 저장되지 않습니다."));
+        else if (Imported)
+            explorer_->ShowNotice(QStringLiteral("mreImported"), fm::ui::Banner::Info, tr("MultiRootRestCPP 세션을 가져왔습니다"),
+                tr("%1 은(는) 그대로 둡니다.").arg(QDir::toNativeSeparators(workspace::MultiRootSessionPath(Root))));
+        else if (pendingSession_ && Origin != WorkspaceOrigin::Ancestor)
+            explorer_->ShowNotice(QStringLiteral("sessionPending"), fm::ui::Banner::Info, tr("지난 세션 문서 %1개").arg(pendingSession_->documents_.size()),
+                tr("이 창에 이미 문서가 있어 지난 세션 문서는 열지 않았습니다."), {tr("모두 열기")});
+    }
+    recordRecentWorkspace(Root);
+    RememberSetting(QStringLiteral("workspace/lastRoot"), Root);
+    scanWorkspaceProjects();
+    updateTitle(); update();
+    // 처음 연 폴더도 다음부터 워크스페이스로 보이게 상태 파일을 만든다(상태 위치 설정을 따름).
+    if (Origin != WorkspaceOrigin::HotExit) saveWorkspace();
+    return true;
+}
+void DocumentWorkspaceWidget::unbindWorkspace()
+{
+    workspace::Registry::Instance().Unbind(this);
+    workspaceRoot_.clear(); pendingSession_.reset(); autoRestoredPaths_.clear(); workspaceExtra_ = {}; workspaceFind_ = {};
+    ancestorPicks_.clear(); explorerSignature_.clear();
+    if (workspaceSave_) workspaceSave_->stop();
+    if (explorer_) { explorer_->HideNotice(); explorer_->HidePick(); explorer_->SetSphinxRoots({}); explorer_->SetWorkspace({}); }
+    if (auto* Close = findChild<QAction*>("workspace.close", Qt::FindDirectChildrenOnly)) Close->setEnabled(false);
+    updateTitle(); update();
+}
+void DocumentWorkspaceWidget::restoreWorkspaceDocuments(const workspace::State& State, bool Layout)
+{
+    const QScopedValueRollback Guard(workspaceRestoring_, true);
+    // 배치와 창 위치는 문서가 없을 때만(문서 도크 ID 는 세션마다 다르다).
+    if (Layout && documents_.empty()) {
+        if (!State.dockLayout_.isEmpty() && State.dockVersion_ == DockLayoutVersion) docks_->restoreState(State.dockLayout_, DockLayoutVersion);
+        if (!State.geometry_.isEmpty() && !parentWidget()) {
+            restoreGeometry(State.geometry_);
+            if (screen() && !screen()->availableGeometry().intersects(frameGeometry())) move(screen()->availableGeometry().topLeft());
+        }
+    }
+    const auto Current = active();
+    QStringList Opened;
+    for (const auto& Entry : State.documents_) {
+        if (!QFileInfo(Entry.path_).isFile()) continue;
+        if (std::any_of(documents_.cbegin(), documents_.cend(), [&Entry](const auto& Each) { return workspace::SamePath(Each->path_, Entry.path_); })) continue;
+        const auto Epub = Entry.view_[QStringLiteral("epub")].toObject();
+        const bool EpubEdit = Entry.kind_ == QLatin1String("epub") && Epub[QStringLiteral("mode")].toString() == QLatin1String("edit");
+        const auto Reply = EpubEdit ? OpenForEpubEdit(Entry.path_, Epub[QStringLiteral("locator")].toString()) : open(Entry.path_, false, {}, false);
+        if (Reply.contains("error")) { if (Reply["error"].toString() == QLatin1String("document-workspace-limit")) break; continue; }
+        auto Tab = find(Reply["documentId"].toString()); if (!Tab) continue;
+        if (Entry.position_) {
+            const auto& Position = *Entry.position_;
+            if (Position.IsLineColumn()) Tab->openLine_ = Position.caretLine_;
+            else if (Position.caret_ >= 0) {
+                TextRecoveryState Text;
+                Text.anchor_ = qMax<qint64>(0, Position.anchor_ < 0 ? Position.caret_ : Position.anchor_); Text.caret_ = Position.caret_;
+                Text.firstLine_ = qMax(0, Position.firstLine_); Text.firstSubLine_ = qMax(0, Position.firstSubLine_); Text.xOffset_ = qMax(0, Position.xOffset_);
+                Tab->cleanRestoreState_ = Text;
+            }
+        }
+        if (Entry.kind_ == QLatin1String("pdf") && Entry.view_[QStringLiteral("pdf")].isObject()) Tab->restorePosition_ = Entry.view_[QStringLiteral("pdf")].toObject();
+        else if (Entry.kind_ == QLatin1String("epub") && !EpubEdit && !Epub[QStringLiteral("locator")].toString().isEmpty())
+            Tab->restorePosition_ = QJsonObject{{"locator", Epub[QStringLiteral("locator")].toString()}};
+        if (const auto Mode = Entry.view_[QStringLiteral("mode")].toString(); !Mode.isEmpty()) {
+            RecentDocument Restore; Restore.path_ = Entry.path_; Restore.markdownView_ = Mode; Tab->restore_ = Restore;
+        }
+        Opened.append(Entry.path_);
+    }
+    // 활성 문서: 빈 창이면 지난 세션의 것, 아니면(상위 찾기) 방금 연 문서를 둔다.
+    if (Current) activate(Current);
+    else for (const auto& Each : documents_) if (!State.active_.isEmpty() && workspace::SamePath(Each->path_, State.active_)) { activate(Each); break; }
+    if (explorer_) explorer_->RestoreExpansion(State.explorer_.expanded_, State.explorer_.selected_, State.explorer_.topItem_);
+    autoRestoredPaths_ = Opened;
+}
+void DocumentWorkspaceWidget::scheduleWorkspaceSave()
+{
+    if (workspaceRoot_.isEmpty() || workspaceRestoring_ || !workspaceSave_) return;
+    workspaceSave_->start();
+}
+workspace::Store DocumentWorkspaceWidget::workspaceStore() const
+{
+    return workspace::Store(QFileInfo(settingsPath_).absolutePath());
+}
+workspace::State DocumentWorkspaceWidget::captureWorkspace() const
+{
+    workspace::State State;
+    State.root_ = workspaceRoot_; State.savedAt_ = QDateTime::currentDateTimeUtc(); State.extra_ = workspaceExtra_;
+    State.findInFiles_ = searchPanel_ ? searchPanel_->Context() : workspaceFind_;
+    for (const auto& Each : documents_) {
+        if (Each->closed_ || Each->path_.isEmpty() || !Each->temporarySource_.isEmpty() || Each->recovered_ || Each->broker_ || !Each->sourceToken_.isEmpty() || !Each->pane_) continue;
+        workspace::DocumentEntry Entry; Entry.path_ = Each->path_; Entry.kind_ = Each->pane_->ViewId();
+        Entry.outside_ = !workspace::IsInside(Each->path_, workspaceRoot_, false);
+        if (!Each->loading_) {
+            QByteArray Unused;
+            if (const auto Text = Each->pane_->CaptureTextRecovery(Unused, false)) {
+                workspace::Position Position;
+                Position.anchor_ = Text->anchor_; Position.caret_ = Text->caret_; Position.firstLine_ = int(Text->firstLine_);
+                Position.firstSubLine_ = int(Text->firstSubLine_); Position.xOffset_ = int(Text->xOffset_);
+                Entry.position_ = Position;
+            }
+            const auto View = Each->pane_->ViewState();
+            if (Each->pane_->ViewId() == QLatin1String("pdf")) Entry.view_[QStringLiteral("pdf")] = Each->pane_->PdfPosition();
+            if (Each->pane_->IsMarkdown()) Entry.view_[QStringLiteral("mode")] = View["markdown"].toObject()["mode"].toString();
+            if (Each->pane_->IsRst()) Entry.view_[QStringLiteral("mode")] = View["rst"].toObject()["mode"].toString();
+            if (Each->pane_->IsEpub()) Entry.view_[QStringLiteral("epub")] = QJsonObject{{"mode", Each->pane_->IsEpubEditing() ? "edit" : "read"},
+                {"locator", View["epub"].toObject()["locator"].toString()}};
+        } else if (Each->cleanRestoreState_) {
+            // 아직 읽는 중: 되살릴 위치를 그대로 남긴다.
+            workspace::Position Position; const auto& Text = *Each->cleanRestoreState_;
+            Position.anchor_ = Text.anchor_; Position.caret_ = Text.caret_; Position.firstLine_ = int(Text.firstLine_);
+            Position.firstSubLine_ = int(Text.firstSubLine_); Position.xOffset_ = int(Text.xOffset_);
+            Entry.position_ = Position;
+        }
+        State.documents_.append(Entry);
+    }
+    if (const auto Current = active(); Current && Current->temporarySource_.isEmpty()) State.active_ = Current->path_;
+    if (explorer_) { State.explorer_.expanded_ = explorer_->ExpandedPaths(); State.explorer_.selected_ = explorer_->SelectedPath(); State.explorer_.topItem_ = explorer_->TopPath(); }
+    if (docks_ && PreferenceValue(appliedPreferences_, QStringLiteral("workspace/restoreLayout")).toBool()) {
+        State.dockLayout_ = docks_->saveState(DockLayoutVersion); State.dockVersion_ = DockLayoutVersion;
+        if (!parentWidget()) State.geometry_ = saveGeometry();
+    }
+    return State;
+}
+void DocumentWorkspaceWidget::saveWorkspace()
+{
+    if (workspaceRoot_.isEmpty() || workspaceRestoring_ || hosted_) return;
+    if (workspaceSave_) workspaceSave_->stop();
+    const auto Preferred = PreferenceValue(appliedPreferences_, QStringLiteral("workspace/stateLocation")).toString() == QLatin1String("profile")
+        ? workspace::Location::Profile : workspace::Location::Folder;
+    const auto Result = workspaceStore().Save(workspaceRoot_, captureWorkspace(), Preferred);
+    workspace::MarkerCache::Instance().Invalidate(workspaceRoot_);
+    if (!explorer_) return;
+    if (Result.fellBack_ && !std::exchange(workspaceFallbackNotified_, true))
+        explorer_->ShowNotice(QStringLiteral("stateFallback"), fm::ui::Banner::Info, tr("워크스페이스 상태를 설정 폴더에 저장했습니다"),
+            tr("%1 에 쓸 수 없어 설정 폴더의 workspaces 에 저장합니다.").arg(QDir::toNativeSeparators(workspace::Store::FolderStatePath(workspaceRoot_))));
+    else if (!Result.ok_ && Result.error_ != QLatin1String("newer-schema") && !std::exchange(workspaceFallbackNotified_, true))
+        explorer_->ShowNotice(QStringLiteral("stateFailed"), fm::ui::Banner::Warn, tr("워크스페이스 상태를 저장하지 못했습니다"), Result.error_);
+}
+void DocumentWorkspaceWidget::scanWorkspaceProjects()
+{
+    if (workspaceRoot_.isEmpty() || !explorer_) return;
+    const auto Root = workspaceRoot_;
+    // 캐시(projects.json, MRE 와 같은 형식)를 먼저 보이고, 스캔이 끝나면 바꾼다.
+    QStringList Cached;
+    for (const auto& Record : workspace::ReadProjectsCache(Root)) Cached.append(QFileInfo(Record.confPath_).absolutePath());
+    explorer_->SetSphinxRoots(Cached);
+    // 상태를 프로필에 두는 설정이면 폴더에 아무것도 만들지 않는다.
+    const bool WriteCache = PreferenceValue(appliedPreferences_, QStringLiteral("workspace/stateLocation")).toString() != QLatin1String("profile");
+    auto* Watcher = new QFutureWatcher<QList<workspace::ProjectRecord>>(this);
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Root] {
+        const auto Projects = Watcher->result(); Watcher->deleteLater();
+        if (!explorer_ || !workspace::SamePath(Root, workspaceRoot_)) return;
+        QStringList Roots; for (const auto& Each : Projects) Roots.append(QFileInfo(Each.confPath_).absolutePath());
+        explorer_->SetSphinxRoots(Roots);
+    });
+    Watcher->setFuture(QtConcurrent::run([Root, WriteCache] {
+        QList<workspace::ProjectRecord> Records;
+        for (const auto& Project : hc::rst::ProjectScanner(hc::rst::toPath(Root)).scan()) {
+            workspace::ProjectRecord Record;
+            Record.projectId_ = QString::fromStdWString(Project.projectId); Record.rootPath_ = hc::rst::toQString(Project.rootPath);
+            Record.confPath_ = hc::rst::toQString(Project.confPath); Record.sourcePath_ = hc::rst::toQString(Project.sourcePath);
+            Record.rootDoc_ = QString::fromStdString(Project.rootDoc); Record.buildPath_ = hc::rst::toQString(Project.buildPath);
+            Record.mystMarkdown_ = Project.mystMarkdown;
+            Records.append(Record);
+        }
+        if (WriteCache && Records != workspace::ReadProjectsCache(Root)) workspace::WriteProjectsCache(Root, Records);
+        return Records;
+    }));
+}
+void DocumentWorkspaceWidget::recordRecentWorkspace(const QString& Root)
+{
+    if (!recent_ || !PreferenceValue(appliedPreferences_, QStringLiteral("recent/enabled")).toBool()) return;
+    RecentDocument Document;
+    Document.path_ = Root; Document.kind_ = QStringLiteral("folder"); Document.viewId_ = QStringLiteral("folder"); Document.openedAt_ = QDateTime::currentDateTime();
+    recent_->Record(std::move(Document));
+}
+QJsonObject DocumentWorkspaceWidget::openByUser(const QString& Path, const QString& AncestorMode)
+{
+    const auto Reply = open(Path, false, {}, false);
+    if (!hosted_ && !Reply.contains("error") && !Reply["duplicate"].toBool()) considerAncestors(Path, AncestorMode);
+    return Reply;
+}
+void DocumentWorkspaceWidget::considerAncestors(const QString& Path, const QString& Mode)
+{
+    if (hosted_ || Mode == QLatin1String("off") || !workspaceRoot_.isEmpty() || Path.isEmpty() || !QFileInfo(Path).isAbsolute()) return;
+    if (PreferenceValue(appliedPreferences_, QStringLiteral("workspace/ancestorDetection")).toString() == QLatin1String("off")) return;
+    // 열린 워크스페이스 창 안의 파일이면 찾지 않는다(그 창이 더 깊은 후보보다 이긴다).
+    if (workspace::Registry::Instance().WindowContaining(Path)) return;
+    // 기억한 선택: 파일을 품은 가장 깊은 기준 루트.
+    auto Choices = AncestorChoices(appliedPreferences_);
+    QString Base;
+    for (auto At = Choices.cbegin(); At != Choices.cend(); ++At)
+        if (At.key().size() > Base.size() && workspace::IsInside(Path, At.key(), false)) Base = At.key();
+    if (!Base.isEmpty()) {
+        const auto Chosen = Choices.value(Base);
+        if (Chosen == QLatin1String("none")) return;
+        if (QFileInfo(Chosen).isDir()) { openAncestor(Chosen, Path, Mode); return; }
+        // 기억한 루트가 사라졌다: 그 기억은 버리고 다시 찾는다.
+        Choices.remove(Base); StoreAncestorChoices(Choices); refreshPreferences();
+    }
+    const auto Generation = ++ancestorGeneration_;
+    auto Known = workspaceStore().ProfileRoots();
+    if (recent_) for (const auto& Entry : recent_->Entries()) if (Entry.kind_ == QLatin1String("folder")) Known.append(Entry.path_);
+    auto* Watcher = new QFutureWatcher<workspace::FindResult>(this);
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation, Path, Mode] {
+        const auto Result = Watcher->result(); Watcher->deleteLater();
+        if (Generation == ancestorGeneration_) applyAncestorResult(Path, Mode, Result.candidates_);
+    });
+    Watcher->setFuture(QtConcurrent::run([Path, Known] { return workspace::FindAncestorWorkspaces(Path, Known); }));
+}
+void DocumentWorkspaceWidget::applyAncestorResult(const QString& Path, const QString& Mode, const QList<workspace::Candidate>& Candidates)
+{
+    if (!workspaceRoot_.isEmpty() || Candidates.isEmpty() || !explorer_) return;
+    // 그동안 파일을 닫았으면 그만둔다.
+    if (std::none_of(documents_.cbegin(), documents_.cend(), [&Path](const auto& Each) { return workspace::SamePath(Each->path_, Path); })) return;
+    const bool Ask = PreferenceValue(appliedPreferences_, QStringLiteral("workspace/ancestorDetection")).toString() == QLatin1String("ask");
+    if (Candidates.size() == 1 && !Ask) { openAncestor(Candidates.first().root_, Path, Mode); return; }
+    // 둘 이상(또는 ‘묻기’): 탐색기 맨 위 선택 카드. 기본은 가장 최근에 저장한 후보, 없으면 가장 가까운 후보.
+    ancestorPicks_.clear();
+    QList<ExplorerPanel::PickChoice> Choices;
+    const auto Remember = Candidates.first().root_;
+    int Default = 0; QDateTime Newest;
+    for (int At = 0; At < Candidates.size(); ++At) {
+        const auto& Each = Candidates[At];
+        if (Each.savedAt_.isValid() && (!Newest.isValid() || Each.savedAt_ > Newest)) { Newest = Each.savedAt_; Default = At; }
+        ExplorerPanel::PickChoice Choice;
+        Choice.root_ = Each.root_; Choice.name_ = FolderName(Each.root_);
+        Choice.tag_ = Each.kind_ == workspace::Candidate::Kind::MultiRoot ? tr("MRE 세션") : tr("워크스페이스");
+        QStringList Detail{QDir::toNativeSeparators(Each.root_)};
+        if (Each.documentCount_ >= 0) Detail.append(tr("지난 세션 문서 %1개").arg(Each.documentCount_));
+        if (Each.savedAt_.isValid()) Detail.append(QLocale().toString(Each.savedAt_.toLocalTime(), QLocale::ShortFormat));
+        Choice.description_ = Detail.join(QStringLiteral(" · "));
+        Choices.append(Choice); ancestorPicks_.append({Each.root_, Path, Remember, false});
+    }
+    // 바로 위 폴더를 새 워크스페이스로(MRE 의 동작). 이미 후보면 뺀다.
+    const auto Parent = workspace::NormalizePath(QFileInfo(Path).absolutePath());
+    if (std::none_of(Candidates.cbegin(), Candidates.cend(), [&Parent](const auto& Each) { return workspace::SamePath(Each.root_, Parent); })) {
+        ExplorerPanel::PickChoice Choice; Choice.root_ = Parent; Choice.name_ = tr("바로 위 폴더를 새 워크스페이스로");
+        Choice.description_ = QDir::toNativeSeparators(Parent); Choice.newWorkspace_ = true;
+        Choices.append(Choice); ancestorPicks_.append({Parent, Path, Remember, true});
+    }
+    ExplorerPanel::PickChoice None; None.name_ = tr("워크스페이스 없이 열기"); None.description_ = tr("문서 모드로 둡니다.");
+    Choices.append(None); ancestorPicks_.append({QString(), Path, Remember, false});
+    Choices[Default].checked_ = true;
+    explorer_->ShowPick(QFileInfo(Path).fileName(), Choices);
+    // 탐색기가 닫혀 있거나 접혀 있으면 펼친다. 키보드 포커스는 옮기지 않는다.
+    if (explorerTool_) { if (explorerTool_->isClosed()) explorerTool_->toggleView(true); if (explorerTool_->isAutoHidden()) explorerTool_->bringToFront(); }
+}
+void DocumentWorkspaceWidget::openAncestor(const QString& Root, const QString& Path, const QString& Mode)
+{
+    if (!workspaceRoot_.isEmpty()) return;
+    {
+        const QScopedValueRollback Guard(bindOnly_, Mode == QLatin1String("bind"));
+        if (!bindWorkspace(workspace::NormalizeRoot(Root), WorkspaceOrigin::Ancestor)) return;
+    }
+    for (const auto& Each : documents_) if (workspace::SamePath(Each->path_, Path)) { activate(Each); break; }
+    if (!explorer_) return;
+    QStringList Actions{tr("되돌리기")};
+    if (pendingSession_ && !pendingSession_->documents_.isEmpty()) Actions.append(tr("모두 열기"));
+    explorer_->ShowNotice(QStringLiteral("ancestorOpened"), fm::ui::Banner::Info, tr("상위 폴더의 워크스페이스 %1을(를) 열었습니다").arg(FolderName(workspaceRoot_)),
+        QDir::toNativeSeparators(workspaceRoot_), Actions);
+}
+void DocumentWorkspaceWidget::undoAncestorWorkspace()
+{
+    if (workspaceRoot_.isEmpty()) return;
+    saveWorkspace();
+    // 방금 연 파일과 원래 있던 문서는 남기고, 자동으로 되살린 문서 가운데 고치지 않은 것만 닫는다.
+    for (const auto& Path : std::exchange(autoRestoredPaths_, {})) {
+        const auto At = std::find_if(documents_.begin(), documents_.end(), [&Path](const auto& Each) { return workspace::SamePath(Each->path_, Path); });
+        if (At != documents_.end() && !(*At)->Dirty()) closeTab(int(std::distance(documents_.begin(), At)));
+    }
+    RememberSetting(QStringLiteral("workspace/lastRoot"), QString());
+    unbindWorkspace();
+}
+void DocumentWorkspaceWidget::openRemainingSessionDocuments()
+{
+    if (explorer_) explorer_->HideNotice();
+    if (!pendingSession_) return;
+    const auto State = *std::exchange(pendingSession_, std::nullopt);
+    restoreWorkspaceDocuments(State, false);
+}
+void DocumentWorkspaceWidget::explorerRename(const QString& Path, const QString& NewName)
+{
+    if (!explorer_ || hosted_) return;
+    // 열린 문서(그 폴더 아래 포함)는 닫았다가 새 이름으로 다시 연다. 저장하지 않은 변경이 있으면 바꾸지 않는다.
+    QList<std::shared_ptr<Tab>> Affected;
+    for (const auto& Each : documents_) if (!Each->closed_ && !Each->path_.isEmpty() && Each->temporarySource_.isEmpty() && workspace::IsInside(Each->path_, Path, false)) Affected.append(Each);
+    for (const auto& Each : Affected) if (Each->Dirty() || Each->saving_ || Each->loading_) {
+        explorer_->FinishRename(Path, {}, tr("%1에 저장하지 않은 변경이 있습니다. 저장하거나 닫은 뒤 다시 바꾸십시오.").arg(documentName(*Each))); return;
+    }
+    const auto Current = active();
+    struct Reopen { QString path_; bool active_ = false; };
+    QList<Reopen> Again;
+    for (const auto& Each : Affected) {
+        Again.append({Each->path_, Each == Current});
+        const auto At = std::find(documents_.begin(), documents_.end(), Each);
+        if (At != documents_.end()) closeTab(int(std::distance(documents_.begin(), At)));
+        if (std::find(documents_.begin(), documents_.end(), Each) != documents_.end()) {
+            explorer_->FinishRename(Path, {}, tr("%1을(를) 닫지 못해 이름을 바꾸지 않았습니다.").arg(documentName(*Each))); return;
+        }
+    }
+    QString Renamed;
+    const auto Result = explorer::RenameEntry(Path, NewName, &Renamed);
+    const auto From = workspace::NormalizePath(Path);
+    std::shared_ptr<Tab> Focus;
+    for (const auto& Item : Again) {
+        const auto Target = Result.ok_ ? Renamed + workspace::NormalizePath(Item.path_).mid(From.size()) : Item.path_;
+        auto Opened = find(open(Target, false, {}, false)["documentId"].toString());
+        if (Item.active_) Focus = Opened;
+    }
+    if (Focus) activate(Focus);
+    explorer_->FinishRename(Path, Result.ok_ ? Renamed : QString(), Result.ok_ ? QString() : Result.error_);
+    update();
+}
+void DocumentWorkspaceWidget::openFromExplorer(const QString& Path, bool Beside)
+{
+    // HyperViewer 는 지금 문서를 바꾼다. HyperEditor 는 탭으로 연다(옆에 열기는 포커스 문서 묶음의 오른쪽).
+    if (hosted_) {
+        const auto Reply = open(Path, true, {}, false);
+        if (Reply.contains("error")) ShowShellError(Message(Reply["error"].toString()));
+        return;
+    }
+    const auto Before = active();
+    const auto Reply = open(Path, false, {}, false);
+    if (Reply.contains("error")) { ShowShellError(Message(Reply["error"].toString())); return; }
+    if (!Beside || !tabbed_) return;
+    const auto Opened = find(Reply["documentId"].toString());
+    if (Opened && Before && Opened != Before && Before->dock_ && Before->dock_->dockArea() && !Before->dock_->isAutoHidden())
+        docks_->moveDockWidget(Opened->dock_, fm::dock::DropArea::Right, Before->dock_->dockArea());
 }
 }

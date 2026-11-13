@@ -46,13 +46,15 @@ public:
             {"epub-edit.source", QObject::tr("소스 편집기"), QObject::tr("EPUB 소스 편집기에 포커스가 있을 때 동작합니다."), 1},
             {"image", QObject::tr("이미지 뷰어"), QObject::tr("이미지 문서와 만화·웹툰 보기, 이미지 전체 화면에서 동작합니다.")},
             {"image.comic", QObject::tr("코믹"), QObject::tr("코믹·웹툰 읽기 화면에서 동작합니다."), 1},
-            {"pdf", QObject::tr("PDF 뷰어"), QObject::tr("PDF 문서에서 동작합니다.")}};
+            {"pdf", QObject::tr("PDF 뷰어"), QObject::tr("PDF 문서에서 동작합니다.")},
+            {"explorer", QObject::tr("탐색기"), QObject::tr("탐색기 도구 창의 트리에 포커스가 있을 때 동작합니다. 필터 칸과 이름 입력 칸에서는 동작하지 않습니다.")}};
     }
     // Scopes active together for one focus position. Validation and routing share this table.
     static QList<QStringList> FocusContexts()
     {
         return {{"common","edit","text","markdown"},{"common","edit","markdown"},{"common","edit","text","rst"},{"common","edit","rst"},{"common","edit","text"},{"common","edit","epub"},{"common","edit","epub-edit","epub-edit.tree"},
-            {"common","edit","text","epub-edit","epub-edit.source"},{"common","edit","epub-edit"},{"common","edit","image","image.comic"},{"common","edit","pdf"}};
+            {"common","edit","text","epub-edit","epub-edit.source"},{"common","edit","epub-edit"},{"common","edit","image","image.comic"},{"common","edit","pdf"},
+            {"common","explorer"}};
     }
     static bool CoActive(const QString& A, const QString& B)
     {
