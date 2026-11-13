@@ -59,7 +59,24 @@ const {chromium}=require(process.env.HC_PLAYWRIGHT_MODULE||'playwright');
  await bridged.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight));assert(await bridged.evaluate(()=>scrollY>100),'Document too short to scroll');
  await bridged.evaluate(()=>__request(JSON.stringify({type:'anchor',id:'title',revision:7})));
  await bridged.waitForFunction(()=>Math.abs(document.getElementById('title').getBoundingClientRect().top)<=1);
+ // The editor's caret (a position request with scroll sync on) does not move the page, so its report is not the user's
+ // scroll. Called one, a page wholly in view reported "top" and the editor jumped to its first line on every caret move.
+ // Waits out the page's own guards first: 300 ms after a request, 250 ms after layout, 500 ms after input.
+ const caretReport=async(line,revision)=>{await bridged.waitForTimeout(700);await bridged.evaluate(()=>{__reports.length=0;});
+  await bridged.evaluate(({line,revision})=>__request(JSON.stringify({type:'position',line,revision,reveal:false})),{line,revision});
+  await bridged.waitForFunction(()=>__reports.some(r=>r.type==='scroll'));return bridged.evaluate(()=>__reports.find(r=>r.type==='scroll'));};
+ await bridged.evaluate(()=>scrollTo(0,400));let caret=await caretReport(9,7);assert.equal(caret.top,false,'Long page did not scroll');
+ assert.equal(caret.user,false,`Caret report in a scrolled page counted as the user's ${caret.intent}`);
+ await bridged.evaluate(async({origin})=>{await hcMarkdown.render({text:'# Short\n\nOne line.\n\nTwo lines.\n',revision:8,baseUrl:origin+'/markdown/',options:{}});},{origin});
+ caret=await caretReport(5,8);assert.equal(caret.top,true,'Short page is not wholly in view');
+ assert.equal(caret.user,false,`Caret report in a page wholly in view counted as the user's ${caret.intent}`);
+ // A scroll that nothing explains (a scrollbar drag has no page events) is still the user's.
+ await bridged.evaluate(async({text,origin})=>{await hcMarkdown.render({text,revision:9,baseUrl:origin+'/markdown/',options:{}});},{text:menuText,origin});
+ await bridged.waitForTimeout(700);await bridged.evaluate(()=>{__reports.length=0;scrollTo(0,300);});
+ await bridged.waitForFunction(()=>__reports.some(r=>r.type==='scroll'));const dragged=await bridged.evaluate(()=>__reports.find(r=>r.type==='scroll'));
+ assert.equal(dragged.user,true,'Unexplained scroll was not reported as the user\'s');assert.equal(dragged.intent,'scrollbar');
  assert.deepEqual(errors,[]);
+ console.log('PASS: caret position reports are not user scrolls (scrolled and wholly visible page); an unexplained scroll still is');
  console.log('PASS: context menu reports point, selection, link, fragment and source line; Chromium menu only without the bridge; anchor request');
  console.log('PASS: delayed font preserves last good frame');
  console.log('PASS: retained visible frame during delayed image, stable committed layout, unchanged diagram node');console.log('PASS: headings/front matter/fences, Korean/duplicate IDs, KaTeX, Mermaid, code highlighting, HTML isolation, remote images, partial errors, latest revision');

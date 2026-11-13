@@ -375,10 +375,14 @@ function currentHeading() {
     while (low <= high) { const middle = (low + high) >> 1; if (headings[middle].getBoundingClientRect().top < 100) { found = middle; low = middle + 1; } else high = middle - 1; }
     return headings[Math.max(0, found)] || null;
 }
-function emitPosition() {
+// scrolled: a scroll event led here. Only such a report can carry the user's scroll; the others
+// (the editor's caret, a render, a settled layout) describe a page that did not move. Calling a
+// caret report a scrollbar move made the editor follow a preview that never scrolled: with the
+// whole page in view that report always says "top", and the editor jumped to its first line.
+function emitPosition(scrolled = false) {
     if (!root.children.length || displayedRevision !== revision) return;
     const h = currentHeading(), marked = blockFor(currentPosition), box = marked?.e.getBoundingClientRect();
-    const anchor = previewAnchor(), max = document.documentElement.scrollHeight - innerHeight, cause = scrollCause();
+    const anchor = previewAnchor(), max = document.documentElement.scrollHeight - innerHeight, cause = scrolled ? scrollCause() : '';
     let applied = null;
     if (appliedAnchor) {
         const y = anchorY(appliedAnchor.line, appliedAnchor.column), top = y === null ? null : y - scrollY;
@@ -538,7 +542,7 @@ async function render(request) {
 function scrollToLine(line,ratio=0.2,end=false){applyScroll({line,ratio,end});}
 // Diagnostics and tests render requests as the bridge does: the text, or an edit of the last one.
 window.hcMarkdown={render:request=>acceptSource(request)?render(request):Promise.reject(Error('preview-resync')),scrollToLine,diagnostics:request=>{diagnostics(request);}};
-let scheduled=false;addEventListener('scroll',()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;emitPosition()})});
+let scheduled=false;addEventListener('scroll',()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;emitPosition(true)})});
 addEventListener('resize',layoutChanged);
 document.fonts?.addEventListener?.('loadingdone',layoutChanged);
 root.addEventListener('load',layoutChanged,true);

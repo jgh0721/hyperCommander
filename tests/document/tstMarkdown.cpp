@@ -609,6 +609,43 @@ class MarkdownTests final : public QObject
         QVERIFY2(QTest::qWaitFor([&]{return Probe.previewSynced();},3000),qPrintable(Probe.failure_));
         Probe.summary("Markdown scroll without page input");
     }
+    void caretMoveKeepsSourceWithWholePreviewInView()
+    {
+        // The source scrolls while the preview shows its whole page: consecutive lines join into one
+        // paragraph there. A caret move tells the preview the caret's line, and the preview answers with
+        // its position. That answer is not the user's scroll. Taken for one, it said "top" and the source
+        // jumped to its first line on the first key after a pause, leaving the caret below the visible rows.
+        AppSettings Settings;Settings.setValue("markdown/scrollSync",true);Settings.setValue("markdown/autoPreview",true);Settings.sync();
+        SyncFixture F;
+        {
+            F.input_.path_=F.temp_.filePath("short.md");F.input_.encoding_="UTF-8";F.input_.eol_="LF";F.input_.text_="# Short\n\n";
+            for(int N=0;N<90;++N)F.input_.text_+=QString("word%1\n").arg(N);
+            F.input_.bytes_=F.input_.text_.toUtf8();F.pane_=std::make_unique<DocumentViewPane>();F.pane_->resize(1300,700);
+            QVERIFY(F.pane_->Load(F.input_,true,true));F.pane_->show();F.pane_->activateWindow();
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(F.pane_->winId())));QVERIFY(QTest::qWaitForWindowActive(F.pane_.get()));
+            QVERIFY(F.pane_->RunViewCommand("markdown.split"));F.pane_->Focus();
+        }
+        SyncProbe Probe(*F.pane_);QVERIFY(Probe.valid());auto* Md=Probe.md_;auto* Backend=Probe.backend_;
+        QTRY_VERIFY_WITH_TIMEOUT(Md->State()["renderedRevision"].toInteger()>0
+            && Md->State()["renderedRevision"].toInteger()==Md->State()["revision"].toInteger(),30000);
+        QTRY_VERIFY(Backend->widget()->hasFocus());
+        const auto CaretShown=[&]{
+            const auto Y=Backend->Send(SCI_POINTYFROMPOSITION,0,Backend->Send(SCI_GETCURRENTPOS));
+            return Y>=0 && Y+Backend->textHeight(0)<=Probe.viewport_->height();
+        };
+        Backend->Send(SCI_DOCUMENTEND);
+        QTRY_VERIFY_WITH_TIMEOUT(Backend->firstVisibleLine()>0 && CaretShown(),5000);
+        QTRY_VERIFY_WITH_TIMEOUT(Md->State()["previewScroll"].toObject()["top"].toBool()
+            && Md->State()["previewScroll"].toObject()["bottom"].toBool(),5000);
+        for(int Step=0;Step<4;++Step){
+            // Each key comes after the preview's own guards (300 ms after a request, 500 ms after input) ran out.
+            QTest::qWait(700);const int Top=Backend->firstVisibleLine();
+            QTest::keyClick(Backend->widget(),Qt::Key_Up);QTest::qWait(500);
+            const auto Where=QString("step %1: first visible %2 -> %3, line %4, preview %5").arg(Step).arg(Top).arg(Backend->firstVisibleLine())
+                .arg(Probe.text_->currentLine()+1).arg(QString::fromUtf8(QJsonDocument(Md->State()["previewScroll"].toObject()).toJson(QJsonDocument::Compact)).left(400));
+            QVERIFY2(Backend->firstVisibleLine()==Top,qPrintable(Where));QVERIFY2(CaretShown(),qPrintable(Where));
+        }
+    }
     void previewAnchorTableIsCached()
     {
         // W5: scrolling measures one block per frame; the block table is built per layout.
