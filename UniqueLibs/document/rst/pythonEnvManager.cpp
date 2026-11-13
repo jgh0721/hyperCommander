@@ -52,11 +52,6 @@ QString scriptExe( const QString& venvDir, const QString& name )
 #endif
 }
 
-QString sha1Of( const QByteArray& bytes )
-{
-    return QString::fromLatin1( QCryptographicHash::hash( bytes, QCryptographicHash::Sha1 ).toHex() );
-}
-
 /// 리소스를 대상 경로로 복사한다. 내용이 같으면 건드리지 않는다.
 bool copyResourceFile( const QString& resourcePath, const QString& destinationPath,
                       const bool executable, QString* errorMessage )
@@ -466,12 +461,20 @@ bool PythonEnvManager::installedFilesPresent() const
         && QFileInfo::exists( esbonioExe() );
 }
 
-QString PythonEnvManager::embeddedPyprojectHash() const
+QString PythonEnvManager::embeddedManifestHash() const
 {
-    QFile source( QLatin1String( kResourceRoot ) + QStringLiteral( "pyproject.toml" ) );
-    if( !source.open( QIODevice::ReadOnly ) )
-        return {};
-    return sha1Of( source.readAll() );
+    // uv sync --frozen 은 uv.lock 의 버전을 설치한다. pyproject.toml 만 보면 잠금만 바뀐 앱 업데이트
+    // ( 의존성 보안 패치 )가 이미 구성된 환경에 닿지 않는다.
+    QCryptographicHash Hash( QCryptographicHash::Sha1 );
+    for( const char* Name : { "pyproject.toml", "uv.lock" } )
+    {
+        QFile Source( QLatin1String( kResourceRoot ) + QLatin1String( Name ) );
+        if( !Source.open( QIODevice::ReadOnly ) )
+            return {};
+        Hash.addData( QByteArrayView( Name, qstrlen( Name ) + 1 ) );   // 이름과 끝의 NUL 로 파일 경계를 남긴다.
+        Hash.addData( Source.readAll() );
+    }
+    return QString::fromLatin1( Hash.result().toHex() );
 }
 
 bool PythonEnvManager::markerMatchesEmbeddedManifest() const
@@ -480,15 +483,16 @@ bool PythonEnvManager::markerMatchesEmbeddedManifest() const
     if( marker.value( QStringLiteral( "schema" ) ).toInt() != RuntimeSchema )
         return false;
 
-    const QString expected = embeddedPyprojectHash();
-    return !expected.isEmpty() && marker.value( QStringLiteral( "pyprojectHash" ) ).toString() == expected;
+    // 예전 마커의 pyprojectHash 는 읽지 않는다. 그런 환경은 한 번 다시 동기화된다.
+    const QString expected = embeddedManifestHash();
+    return !expected.isEmpty() && marker.value( QStringLiteral( "manifestHash" ) ).toString() == expected;
 }
 
 void PythonEnvManager::writeReadyMarker() const
 {
     QSettings marker( readyMarker(), QSettings::IniFormat );
     marker.setValue( QStringLiteral( "schema" ), RuntimeSchema );
-    marker.setValue( QStringLiteral( "pyprojectHash" ), embeddedPyprojectHash() );
+    marker.setValue( QStringLiteral( "manifestHash" ), embeddedManifestHash() );
     marker.setValue( QStringLiteral( "configuredAt" ), QDateTime::currentDateTimeUtc().toString( Qt::ISODate ) );
     marker.sync();
 }

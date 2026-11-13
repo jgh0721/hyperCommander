@@ -43,7 +43,8 @@ class PythonEnvManager final : public QObject
     Q_OBJECT
 
 public:
-    /// ready.marker 스키마. 의존성이 바뀌면 올려서 재동기화를 유도한다.
+    /// ready.marker 스키마. 마커 형식이나 환경 구성 방식이 바뀌면 올린다.
+    /// 의존성( pyproject.toml · uv.lock ) 변화는 embeddedManifestHash() 가 잡는다.
     static constexpr int                RuntimeSchema = 2;
 
     explicit PythonEnvManager( QObject* parent = nullptr );
@@ -161,7 +162,8 @@ private:
     void                                updateProgressFromUvLine( const QString& line );
     [[nodiscard]] QStringList           syncArguments() const;
     [[nodiscard]] QProcessEnvironment   uvEnvironment() const;
-    [[nodiscard]] QString               embeddedPyprojectHash() const;
+    /// 내장 pyproject.toml 과 uv.lock 을 함께 해시한다. ready.marker 와 다르면 다시 동기화한다.
+    [[nodiscard]] QString               embeddedManifestHash() const;
     [[nodiscard]] bool                  markerMatchesEmbeddedManifest() const;
     [[nodiscard]] bool                  installedFilesPresent() const;
 
