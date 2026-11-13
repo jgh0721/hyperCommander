@@ -13,6 +13,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QImage>
 #include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -28,6 +29,7 @@
 
 #include <windows.h>
 #include <Scintilla.h>
+#include "tests/nativeTestInput.hpp"
 
 using hc::document::RstPreviewProcess;
 
@@ -78,11 +80,13 @@ private slots:
     void editorLineMovesThePreview();
     void topOfDocumentStaysAtTop();
     void wheelIsReportedAsUserScroll();
+    void scrollbarDragIsReportedAsUserScroll();
     void scrollRequestsAreNotReportedBack();
     void linkOpensAnotherDocumentPage();
     void clickOnOtherPageNamesItsSource();
     void returnsToTheDocumentPage();
     void filesOutsideTheOutputAreRefused();
+    void layoutSettlingIsNotReportedAsUserScroll();
     void sphinxPreviewEndToEnd();
     void missingExtensionFromProject();
     void cleanupTestCase();
@@ -95,7 +99,7 @@ private:
     QTemporaryDir                       root_;
     QWidget*                            host_ = nullptr;
     RstPreviewProcess*                  surface_ = nullptr;
-    QUrl                                pageA_, pageB_;
+    QUrl                                pageA_, pageB_, pageGrow_;
     bool                                usable_ = false;
 };
 
@@ -114,8 +118,20 @@ void TestPreviewProcess::initTestCase()
                                     "<a class=\"top\" id=\"out\" href=\"../../../../outside.html\">outside</a>" ) ) );
     QVERIFY( put( html + QStringLiteral( "/guide/b.html" ), page( 1, 5, 200, "<a class=\"top\" href=\"../a.html\">back</a>" ) ) );
     QVERIFY( put( root_.filePath( QStringLiteral( "outside.html" ) ), "<html><body>outside</body></html>" ) );
+    // 늦게 자리를 잡는 페이지: 조율자가 처음 내려보낸 뒤 0.8 초에 맨 위에 300 px 블록이, 다시 0.8 초 뒤에
+    // 300 px 이미지가 들어온다( Sphinx 페이지의 늦은 이미지 · 수식 · 도형처럼 ). 그 사이 입력은 없다.
+    QImage tall( 8, 300, QImage::Format_RGB32 );
+    tall.fill( Qt::darkGray );
+    QVERIFY( tall.save( html + QStringLiteral( "/tall.png" ) ) );
+    QVERIFY( put( html + QStringLiteral( "/grow.html" ),
+                  page( 2, 10, 200, "<script>addEventListener('scroll',function grow(){if(scrollY<2000)return;"
+                                    "removeEventListener('scroll',grow);setTimeout(function(){var d=document.createElement('div');"
+                                    "d.style.height='300px';document.body.insertBefore(d,document.body.firstChild);"
+                                    "setTimeout(function(){var i=new Image();i.src='tall.png';i.style.display='block';"
+                                    "document.body.insertBefore(i,document.body.firstChild);},800);},800);});</script>" ) ) );
     pageA_ = QUrl::fromLocalFile( html + QStringLiteral( "/a.html" ) );
     pageB_ = QUrl::fromLocalFile( html + QStringLiteral( "/guide/b.html" ) );
+    pageGrow_ = QUrl::fromLocalFile( html + QStringLiteral( "/grow.html" ) );
 
     host_ = new QWidget;
     host_->setWindowTitle( QStringLiteral( "hc_rst_tests preview" ) );
@@ -262,6 +278,77 @@ void TestPreviewProcess::wheelIsReportedAsUserScroll()
     QTRY_VERIFY_WITH_TIMEOUT( qAbs( probe( 0.5 )[ "line" ].toDouble() - scrolled.last().at( 1 ).toDouble() ) < 2.0, 5000 );
 }
 
+void TestPreviewProcess::scrollbarDragIsReportedAsUserScroll()
+{
+    if( !usable_ ) QSKIP( "화면 없음" );
+    // 스크롤바는 누르는 순간만 페이지에 입력으로 오고, 썸을 끄는 동안의 움직임은 아무 이벤트도 남기지 않는다.
+    // 천천히 끌면( 1.2 초 ) 입력 직후의 여운이 끝난 뒤에도 미리보기가 움직인다 — 그 보고도 사용자의 것이어야
+    // 편집기가 끝까지 따라온다. 진짜 마우스 입력이 필요하다: Qt 는 움직임의 단추 상태를 GetAsyncKeyState 로 읽어
+    // 창 메시지로 흉내 낸 끌기는 단추를 뗀 이동이 된다.
+    surface_->suppressScrollFeedback( 250 );
+    surface_->requestScrollToLine( 0, 1.0, 0.5 );
+    QTRY_COMPARE_WITH_TIMEOUT( probe( 0.5 )[ "scrollY" ].toDouble(), 0.0, 5000 );
+    QVERIFY( ActivateTestWindow( reinterpret_cast< HWND >( host_->winId() ) ) );
+    QTest::qWait( 700 );   // 앞 시험의 휠 여운과 요청 가드가 지나야 한다.
+
+    const QJsonObject before = probe( 0.5 );
+    const HWND window = child();
+    RECT client{};
+    QVERIFY( GetClientRect( window, &client ) );
+    // 창 오른쪽 끝의 세로 스크롤바: 위아래 화살표( 17 px ) 사이 트랙의 맨 위에 썸이 있다.
+    const double scale = host_->devicePixelRatioF();
+    const double height = before[ "height" ].toDouble(), total = before[ "total" ].toDouble();
+    const double arrow = 17.0, thumb = qMax( arrow, ( height - 2 * arrow ) * height / total );
+    POINT at{ client.right - qRound( 7 * scale ), qRound( ( arrow + thumb / 2 ) * scale ) };
+    ClientToScreen( window, &at );
+    DWORD process = 0;
+    GetWindowThreadProcessId( WindowFromPoint( at ), &process );
+    QVERIFY2( process != GetCurrentProcessId(), "스크롤바 자리가 미리보기 프로세스의 창 위가 아닙니다." );
+
+    const auto moveTo = []( const int x, const int y ) {
+        const int left = GetSystemMetrics( SM_XVIRTUALSCREEN ), top = GetSystemMetrics( SM_YVIRTUALSCREEN );
+        const int width = GetSystemMetrics( SM_CXVIRTUALSCREEN ), tall = GetSystemMetrics( SM_CYVIRTUALSCREEN );
+        INPUT input{};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        input.mi.dx = LONG( ( x - left ) * 65535.0 / qMax( 1, width - 1 ) );
+        input.mi.dy = LONG( ( y - top ) * 65535.0 / qMax( 1, tall - 1 ) );
+        return SendInput( 1, &input, sizeof( INPUT ) ) == 1;
+    };
+    const auto button = []( const DWORD flags ) {
+        INPUT input{};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = flags;
+        return SendInput( 1, &input, sizeof( INPUT ) ) == 1;
+    };
+    // 단추를 누른 채 시험이 끝나면 다음 시험과 사용자의 마우스가 묶인다.
+    bool pressed = false;
+    const auto release = qScopeGuard( [ & ] { if( pressed ) button( MOUSEEVENTF_LEFTUP ); } );
+
+    QSignalSpy scrolled( surface_, &hc::rst::PreviewSurface::previewScrollChanged );
+    QVERIFY( moveTo( at.x, at.y ) );
+    QTest::qWait( 80 );
+    QVERIFY( pressed = button( MOUSEEVENTF_LEFTDOWN ) );
+    for( int step = 1; step <= 12; ++step )
+    {
+        QTest::qWait( 100 );
+        QVERIFY( moveTo( at.x, at.y + qRound( 150 * scale * step / 12 ) ) );
+    }
+    QVERIFY( button( MOUSEEVENTF_LEFTUP ) );
+    pressed = false;
+    QTest::qWait( 600 );
+
+    QVERIFY2( probe( 0.5 )[ "scrollY" ].toDouble() > 0, "누른 자리가 스크롤바가 아니었습니다( 미리보기가 움직이지 않았습니다 )." );
+    QVERIFY2( scrolled.size() >= 4, qPrintable( QStringLiteral( "끄는 동안의 보고 %1 건" ).arg( scrolled.size() ) ) );
+    int byPage = 0;
+    for( const QList< QVariant >& report : scrolled )
+        byPage += report.at( 3 ).toBool() ? 0 : 1;
+    QVERIFY2( byPage == 0, qPrintable( QStringLiteral( "스크롤바를 끈 보고 %1 건 가운데 %2 건이 페이지가 스스로 움직인 것으로 판정됐습니다." )
+                                           .arg( scrolled.size() ).arg( byPage ) ) );
+    // 마지막 보고가 끈 자리다.
+    QVERIFY( qAbs( probe( 0.5 )[ "line" ].toDouble() - scrolled.last().at( 1 ).toDouble() ) < 2.0 );
+}
+
 void TestPreviewProcess::scrollRequestsAreNotReportedBack()
 {
     if( !usable_ ) QSKIP( "화면 없음" );
@@ -351,6 +438,32 @@ void TestPreviewProcess::filesOutsideTheOutputAreRefused()
     QTest::qWait( 300 );
     QCOMPARE( QFileInfo( surface_->url().toLocalFile() ).fileName(), QStringLiteral( "a.html" ) );
     QVERIFY( !surface_->IsOtherPage() );
+}
+
+void TestPreviewProcess::layoutSettlingIsNotReportedAsUserScroll()
+{
+    if( !usable_ ) QSKIP( "화면 없음" );
+    // 입력 없이 움직인 스크롤을 사용자의 것으로 읽는 대신( 스크롤바 끌기 ), 레이아웃이 방금 바뀐 뒤의 스크롤은
+    // 페이지가 자리를 잡는 것으로 걸러야 한다. 그러지 않으면 늦게 온 이미지 하나가 편집하던 줄을 밀어낸다.
+    QSignalSpy ready( surface_, &hc::rst::PreviewSurface::bridgeReady );
+    surface_->load( pageGrow_ );
+    QTRY_VERIFY_WITH_TIMEOUT( !ready.isEmpty(), 10000 );
+    QTest::qWait( 700 );
+
+    QSignalSpy scrolled( surface_, &hc::rst::PreviewSurface::previewScrollChanged );
+    surface_->suppressScrollFeedback( 250 );
+    surface_->requestScrollToLine( 2, 1000.0, 0.5 );
+    QTRY_VERIFY_WITH_TIMEOUT( qAbs( probe( 0.5 )[ "line" ].toDouble() - 1000.0 ) < 1.5, 5000 );
+    const double placed = probe( 0.5 )[ "scrollY" ].toDouble();
+    // 페이지가 블록과 이미지를 맨 위에 넣으면 스크롤 앵커링이 보이던 줄을 제자리에 두려고 그만큼 내려간다.
+    QTRY_VERIFY2_WITH_TIMEOUT( probe( 0.5 )[ "scrollY" ].toDouble() >= placed + 590,
+                               qPrintable( QStringLiteral( "scrollY %1 → %2" ).arg( placed ).arg( probe( 0.5 )[ "scrollY" ].toDouble() ) ),
+                               8000 );
+    QTest::qWait( 500 );
+    QVERIFY( qAbs( probe( 0.5 )[ "line" ].toDouble() - 1000.0 ) < 1.5 );
+    QVERIFY2( !scrolled.isEmpty(), "페이지가 스스로 움직였지만 위치 보고가 오지 않았습니다." );
+    for( const QList< QVariant >& report : scrolled )
+        QVERIFY2( !report.at( 3 ).toBool(), "레이아웃이 자리를 잡으며 움직인 스크롤이 사용자 스크롤로 보고됐습니다." );
 }
 
 /// 전체 흐름: uv 를 공식 배포처에서 내려받아 환경을 구성하고, Sphinx 로 미리보기를 만들고, 조율자가 편집기와

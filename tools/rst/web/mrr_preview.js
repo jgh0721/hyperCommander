@@ -27,17 +27,27 @@
     // C++ 이 우리를 스크롤시킨 직후 우리가 다시 C++ 에 보고하면 무한 왕복이 된다.
     var FEEDBACK_GUARD_MS = 250;
 
-    // 사용자 입력이 만들어 낸 스크롤의 꼬리. 이 시간이 지나도록 새 입력이 없으면
-    // 그다음 스크롤은 페이지가 스스로 움직인 것으로 본다.
+    // 사용자 입력이 만들어 낸 스크롤의 꼬리.
     //
-    // 휠·키 반복·스크롤바 드래그는 스크롤이 이어지는 동안 이벤트도 계속 오므로
-    // 이 값이 그 길이를 정하지 않는다. 마지막 입력과 그것이 만든 마지막 scroll
-    // 사이의 틈만 덮으면 된다.
+    // 휠·키 반복은 스크롤이 이어지는 동안 이벤트도 계속 오므로 이 값이 그 길이를
+    // 정하지 않는다. 마지막 입력과 그것이 만든 마지막 scroll 사이의 틈만 덮으면 된다.
+    //
+    // 스크롤바는 다르다. 누르는 순간은 입력으로 오지만( 썸이든 트랙이든 ) 썸을 끄는
+    // 동안의 움직임은 페이지에 아무 이벤트도 남기지 않는다. VM 실측( 2026-11-14 ):
+    // 1.2초 동안 끈 썸의 보고 12건 가운데 누른 뒤 이 꼬리 안의 3건만 사용자로 읽혀
+    // 편집기가 끌기 도중에 멈췄다. 그래서 입력이 없는 스크롤을 곧바로 페이지의 것으로
+    // 보지 않는다 — scrollIsUserDriven 참조.
     var USER_INTENT_TAIL_MS = 400;
+    // 레이아웃이 바뀐 뒤 이 시간 안의 스크롤은 페이지가 자리를 잡는 것이다( 스크롤
+    // 앵커링, 줄어든 문서에서 잘린 스크롤 ). Markdown · EPUB 미리보기와 같은 값.
+    var LAYOUT_SETTLE_MS = 250;
 
     var bridge = null;
     var suppressUntil = 0;
     var userIntentUntil = 0;
+    // 스크립트가 붙는 때( DocumentReady )에도 페이지는 아직 자리를 잡는 중이다.
+    var layoutAt = now();
+    var lastScrollHeight = 0;
     var scrollTimer = null;
     var cachedRanges = null;
     var cachedAnchors = null;
@@ -59,9 +69,21 @@
     /// 실측에서 1773줄 문서를 저장했을 때 로드가 끝나고 **32초 뒤까지** 스스로
     /// 움직였고, 그 사이 편집기가 네 번 밀렸다. 무시 구간을 그만큼 늘리면 그동안
     /// 사용자가 굴린 것까지 함께 버리게 된다. 구분의 근거는 시간이 아니라
-    /// **직전에 사용자 입력이 있었는가** 다.
+    /// **무엇이 이 스크롤을 설명하는가** 다.
+    ///
+    ///  - 직전에 사용자 입력이 있었다 → 사용자.
+    ///  - 방금 레이아웃이 바뀌었다 → 페이지. 페이지가 스스로 움직이는 것은 언제나
+    ///    무엇인가의 크기가 바뀐 직후다( invalidateCache 를 부르는 곳들 ).
+    ///  - 둘 다 아니다 → 사용자. 스크롤바를 끄는 동안이 이렇다. 요청으로 움직인 것은
+    ///    reportScroll 이 이미 걸렀다.
+    ///
+    /// Markdown( renderer.js ) · EPUB( previewScroll.js ) 미리보기와 같은 규칙이다.
     function scrollIsUserDriven() {
-        return now() < userIntentUntil;
+        var at = now();
+        if (at < userIntentUntil) {
+            return true;
+        }
+        return at - layoutAt > LAYOUT_SETTLE_MS;
     }
 
     function markUserIntent() {
@@ -81,9 +103,12 @@
             }, { passive: true, capture: true });
         });
 
+    /// 레이아웃이 바뀌었다. 캐시한 좌표를 버리고, 곧 따라올 스크롤은 페이지가 자리를
+    /// 잡는 것으로 본다.
     function invalidateCache() {
         cachedRanges = null;
         cachedAnchors = null;
+        layoutAt = now();
     }
 
     /// 창 너비가 바뀌면 자동 줄바꿈 위치가 달라져 모든 기준점 좌표가 무의미해진다.
@@ -300,17 +325,28 @@
         if (!bridge || now() < suppressUntil) {
             return;
         }
+        // 판정은 여기서 한다. C++ 에는 이 정보가 없다 — 저쪽에서 보이는 것은
+        // "프리뷰가 어느 줄에 있다" 뿐이고, 그것이 사용자의 뜻인지 페이지가
+        // 스스로 움직인 것인지는 입력 이벤트를 받는 이 창만 안다.
+        //
+        // 캐시를 확인하기 전에 판정한다. 처음 확인할 때는 너비를 아직 몰라 캐시를 버리고,
+        // 그것을 레이아웃 변화로 읽으면 안 된다. 실제 창 크기 변화는 resize 가 먼저 알린다.
+        var userDriven = scrollIsUserDriven();
         invalidateIfResized();
         var hit = lineForDocumentY(window.scrollY + window.innerHeight * ANCHOR_RATIO);
         if (hit) {
-            // 판정은 여기서 한다. C++ 에는 이 정보가 없다 — 저쪽에서 보이는 것은
-            // "프리뷰가 어느 줄에 있다" 뿐이고, 그것이 사용자의 뜻인지 페이지가
-            // 스스로 움직인 것인지는 입력 이벤트를 받는 이 창만 안다.
-            bridge.previewScrolled(hit.src, hit.line, ANCHOR_RATIO, scrollIsUserDriven());
+            bridge.previewScrolled(hit.src, hit.line, ANCHOR_RATIO, userDriven);
         }
     }
 
     window.addEventListener("scroll", function () {
+        // 테마가 html 의 높이를 창에 묶어 두면 내용이 자라도 ResizeObserver 가 울리지
+        // 않는다. 문서 높이가 지난 스크롤 때와 다르면 그 사이에 레이아웃이 바뀐 것이다.
+        var height = document.documentElement.scrollHeight;
+        if (lastScrollHeight && height !== lastScrollHeight) {
+            invalidateCache();
+        }
+        lastScrollHeight = height;
         if (now() < suppressUntil) {
             return;
         }
@@ -320,11 +356,19 @@
         scrollTimer = window.setTimeout(reportScroll, 60);
     }, { passive: true });
 
-    // 레이아웃이 바뀌면 캐시한 좌표가 무의미해진다.
+    // 레이아웃이 바뀌면 캐시한 좌표가 무의미해지고, 페이지가 스스로 스크롤한다.
+    // 늦게 도착한 이미지 · 폰트, 창 크기, html · body 의 크기.
     window.addEventListener("resize", invalidateCache);
+    document.addEventListener("load", invalidateCache, true);
+    if (document.fonts && document.fonts.addEventListener) {
+        document.fonts.addEventListener("loadingdone", invalidateCache);
+    }
     if (window.ResizeObserver) {
         var observer = new ResizeObserver(invalidateCache);
         observer.observe(document.documentElement);
+        if (document.body) {
+            observer.observe(document.body);
+        }
     }
 
     document.addEventListener("click", function (event) {
