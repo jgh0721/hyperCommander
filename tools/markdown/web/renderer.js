@@ -495,7 +495,9 @@ async function render(request) {
     try {
         next.querySelectorAll('blockquote').forEach(e=>{const p=e.firstElementChild,m=p?.textContent.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]/);if(m){e.classList.add('alert');e.dataset.kind=m[1];}});
         fonts(options.previewFonts,next);
-        mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:options.dark?'dark':'default',maxTextSize:50000,maxEdges:500,secure:['securityLevel','maxTextSize','maxEdges','startOnLoad']});
+        // Mermaid 12 appearance: ELK layout and the neo look stay at their defaults; the redux palettes are the
+        // themes drawn for them. A diagram's front matter can still choose layout, look and theme.
+        mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:options.dark?'redux-dark-color':'redux-color',maxTextSize:50000,maxEdges:500,secure:['securityLevel','maxTextSize','maxEdges','startOnLoad']});
         for(const e of next.querySelectorAll('.mermaid')) {
             if(generation!==serial)return;
             const source=e.textContent;const kept=[...root.querySelectorAll('.mermaid')].find(n=>n.dataset.source===source && n.dataset.dark===String(!!options.dark) && n.querySelector('svg'));

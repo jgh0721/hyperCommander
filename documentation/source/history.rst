@@ -7,6 +7,8 @@ HyperCommander 변경 이력
 다음 버전
 ----------------------------------------
 
+* 편집기·뷰어: Markdown 미리보기의 markdown-it을 15.0.3, Mermaid를 12.3.0으로 갱신해 보안 취약점 수정(긴 링크 참조 정의·자동 링크 처리 지연, Gantt·XY·레이더 차트 무한 루프, 다이어그램 CSS·HTML 주입 등). Mermaid 다이어그램은 새 기본 모양(ELK 레이아웃·neo 모양·redux 색)으로 그려 flowchart·state 등의 배치와 색이 바뀜. 다이어그램 앞부분(front matter) config에 layout: dagre, look: classic, theme: default를 적으면 이전 모양.
+
 * 뷰어: F3로 연 Markdown 문서를 소스 보기로 바꾸면 키 입력이 소스에 들어가지 않던 현상 수정(도구모음 · Alt+O · 창을 다시 활성화한 뒤 모두). reStructuredText 미리보기의 소스 전환에도 같은 수정 적용.
 
 * 편집기·뷰어: 임시 파일을 프로세스마다 소유 잠금이 있는 %TEMP%\\HyperCommander\\scratch 폴더에 모으고, 강제 종료로 남은 것은 다음 실행 때 정리. EPUB 소스 미리보기, EPUBCheck 검사 사본, 문서 검색 결과, 목록 인덱스, reStructuredText 단독 문서 미리보기와 저장 전 내용 사본이 대상. 이전 버전이 %TEMP%에 남긴 같은 종류의 폴더는 하루가 지나면 정리.

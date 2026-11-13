@@ -3,13 +3,13 @@
   "files": [
     {
       "path": "web/bundle.js",
-      "bytes": 3281035,
-      "sha256": "ac61ecf4b583a619b720714a14c9794cfa75ffd930ece410c33bb6d07c9247fa"
+      "bytes": 5664042,
+      "sha256": "fb9e6c2e6414065d652081908c5986e208743cccec0755b54f0f86589bdc66fe"
     },
     {
       "path": "web/bundle.js.LEGAL.txt",
-      "bytes": 2596,
-      "sha256": "586c1b311d76af5d052ef84195d4cda75d2a69e852ab7af3c02c5f3fb7d7dd4c"
+      "bytes": 1919,
+      "sha256": "49d1ef9e900384403be2fcd862f28b910d4b57985d618b3fa8b89ca8100ea412"
     },
     {
       "path": "web/fonts/KaTeX_AMS-Regular.ttf",
@@ -318,8 +318,8 @@
     },
     {
       "path": "web/renderer.js",
-      "bytes": 40281,
-      "sha256": "156197e96c6d57d28ca8c758de90bec87fa826df7aa58a59c3f3ce4e33779ba7"
+      "bytes": 40512,
+      "sha256": "b8690dc90d2e180857685cb9a584e1078297a2e24a9568b4a9b8d36b26d9c71c"
     },
     {
       "path": "web/shell.html",
@@ -547,14 +547,14 @@
       "sha256": "9906940f61b1f0b533fa7d99baf55178b2808fbe113ea51dfbfad8572ccd5f2b"
     },
     {
+      "path": "licenses/@upsetjs_venn.js-LICENSE",
+      "bytes": 1128,
+      "sha256": "3685bd7a797134934e4ca0e734f682ac454c8df59610855e63aec3b3daa65912"
+    },
+    {
       "path": "licenses/argparse-LICENSE",
       "bytes": 2474,
       "sha256": "8f96201c0fdea88f45aebde5873559aa6c91eb9a6c146092338f8f9c0d027dce"
-    },
-    {
-      "path": "licenses/chevrotain-allstar-LICENSE",
-      "bytes": 1068,
-      "sha256": "1db2cfbc7ce5fa3b82699b4ac4badce8984084d25b5308ece00f5c9b1381a0a5"
     },
     {
       "path": "licenses/chevrotain-LICENSE.txt",
@@ -594,62 +594,62 @@
     {
       "path": "licenses/d3-axis-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-brush-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-chord-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-color-LICENSE",
       "bytes": 744,
-      "sha256": "6d0f25780b7b1a8463b010672a3419229875bf66888da9a457295343d9d8e091"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-contour-LICENSE",
       "bytes": 744,
-      "sha256": "3ac5a8f26b16ea128dd2b22956f7fd971da8a01052403a2f9e31d7f0888ad3eb"
+      "sha256": "00fe21abd201512cd804cabd06e8e15d5cafb4dde89a0bfbb799bc102f1f9e60"
     },
     {
       "path": "licenses/d3-delaunay-LICENSE",
       "bytes": 771,
-      "sha256": "412623fea4dd6e1831c8b769698a4ed624e8b7e3467d305b140b37b6eb66fdc6"
+      "sha256": "71342b8cbc8c3785448a1b147601a195d476aaa54e124748d6d688e4cb909720"
     },
     {
       "path": "licenses/d3-dispatch-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-drag-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-dsv-LICENSE",
       "bytes": 744,
-      "sha256": "1a41f38f478c395a2e06e629ce9249486728a294cb928169f298cacfe7bc5a8b"
+      "sha256": "12513c2b29b0cb0c84ae99e93cb42c18565683e2496a385ef5a32550dea568e7"
     },
     {
       "path": "licenses/d3-ease-LICENSE",
       "bytes": 1532,
-      "sha256": "a9e9345968e97ed4c34e3489c389cda9fcb6aaf75412fa0ffc29552c9f86d9dc"
+      "sha256": "63019750dfcb4302b90e7e9c27045070da432b21d14abd30ea92400f6646a5f4"
     },
     {
       "path": "licenses/d3-fetch-LICENSE",
       "bytes": 744,
-      "sha256": "f9ecd0a464eb7a0677e7567431d80fa194d4e8ce455cdc8c682787d46c8896be"
+      "sha256": "82b3fb863461d0940a62e77439a688663eab510fff114078c3612b76a80093be"
     },
     {
       "path": "licenses/d3-force-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-format-LICENSE",
@@ -659,22 +659,22 @@
     {
       "path": "licenses/d3-geo-LICENSE",
       "bytes": 1891,
-      "sha256": "7c61ff197d07d2fbfad545f9444bfca448d4e3ee522e3d94c139efd799ea7958"
+      "sha256": "775e2daa5fda0ff2a2ccb37309c4e4a663b294b2929d422888a9bfb4a1fa5a31"
     },
     {
       "path": "licenses/d3-hierarchy-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-interpolate-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-LICENSE",
       "bytes": 744,
-      "sha256": "f54fe7383368c89c11dc059f093e04689f85b49dcdd4d622b309f1ef5e1f141c"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-path-LICENSE",
@@ -684,17 +684,17 @@
     {
       "path": "licenses/d3-polygon-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-quadtree-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-random-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-sankey-LICENSE",
@@ -704,47 +704,47 @@
     {
       "path": "licenses/d3-scale-chromatic-LICENSE",
       "bytes": 1451,
-      "sha256": "4b67cf0dbf99ddb88bb8ec9089d7214216cfe836f56b66ea909cd00baf4f319e"
+      "sha256": "71b82f6694f8949f70f203aa4b79838858479ecc2d8b398a7c679896b083fd40"
     },
     {
       "path": "licenses/d3-scale-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-selection-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-shape-LICENSE",
       "bytes": 744,
-      "sha256": "6d0f25780b7b1a8463b010672a3419229875bf66888da9a457295343d9d8e091"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-time-format-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-time-LICENSE",
       "bytes": 744,
-      "sha256": "6d0f25780b7b1a8463b010672a3419229875bf66888da9a457295343d9d8e091"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-timer-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-transition-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/d3-zoom-LICENSE",
       "bytes": 744,
-      "sha256": "e6f1c420da48b6f8f34f9471250e372048632f6fb70b16acc6f920aff1a11553"
+      "sha256": "900c0feb68e69241d4ae5edfb7b4f1db64a57a8643dd40e3cbb6cda4fc3090e5"
     },
     {
       "path": "licenses/dagre-d3-es-LICENSE.md",
@@ -767,9 +767,24 @@
       "sha256": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5"
     },
     {
+      "path": "licenses/elkjs-LICENSE.md",
+      "bytes": 14706,
+      "sha256": "5afc48e71b7fea7522cb0187a908d9a4036c6b5f0571a87a7357922fda5dd07b"
+    },
+    {
       "path": "licenses/entities-LICENSE",
       "bytes": 1271,
       "sha256": "cb71be5536b893e9f124a16f94689f086682e301b7ce3b5a2533323fb667897b"
+    },
+    {
+      "path": "licenses/es-toolkit-LICENSE",
+      "bytes": 1098,
+      "sha256": "2060461d770bed877691d9793fc2cfdae6a20634ba3c846d2c05f2e40c15d165"
+    },
+    {
+      "path": "licenses/es-toolkit-NOTICE",
+      "bytes": 1737,
+      "sha256": "0451049988f2c4e78e40f0267e4f4b0a5065da3c0f743b19a819879bdc42a1e4"
     },
     {
       "path": "licenses/esbuild-LICENSE.md",
@@ -810,11 +825,6 @@
       "path": "licenses/khroma-license",
       "bytes": 1126,
       "sha256": "af746e443224423e64c9187e5d460a1dcce0d0b52e049a2a7f387b433bd96e24"
-    },
-    {
-      "path": "licenses/langium-LICENSE",
-      "bytes": 1068,
-      "sha256": "f24a262102acce89ae43efd790defa297dbcaf5c77142d3a1770fda8b42f7d7a"
     },
     {
       "path": "licenses/layout-base-LICENSE",
@@ -920,41 +930,6 @@
       "path": "licenses/uc.micro-LICENSE.txt",
       "bytes": 1097,
       "sha256": "f996f6e050e6fc18086162b4b44e301bba345c87deca83f57a27e6d54195556e"
-    },
-    {
-      "path": "licenses/uuid-LICENSE.md",
-      "bytes": 1118,
-      "sha256": "46e2fd68e80871febcfc131e886253cc1247bcfd60bf449f7fd2d71e5a65500e"
-    },
-    {
-      "path": "licenses/vscode-jsonrpc-License.txt",
-      "bytes": 1106,
-      "sha256": "941d7e8c8757e6e9c090411ba8ad770cce20324d5df69743159b08d06dbcd07e"
-    },
-    {
-      "path": "licenses/vscode-languageserver-License.txt",
-      "bytes": 1106,
-      "sha256": "941d7e8c8757e6e9c090411ba8ad770cce20324d5df69743159b08d06dbcd07e"
-    },
-    {
-      "path": "licenses/vscode-languageserver-protocol-License.txt",
-      "bytes": 1106,
-      "sha256": "941d7e8c8757e6e9c090411ba8ad770cce20324d5df69743159b08d06dbcd07e"
-    },
-    {
-      "path": "licenses/vscode-languageserver-textdocument-License.txt",
-      "bytes": 1106,
-      "sha256": "941d7e8c8757e6e9c090411ba8ad770cce20324d5df69743159b08d06dbcd07e"
-    },
-    {
-      "path": "licenses/vscode-languageserver-types-License.txt",
-      "bytes": 1106,
-      "sha256": "941d7e8c8757e6e9c090411ba8ad770cce20324d5df69743159b08d06dbcd07e"
-    },
-    {
-      "path": "licenses/vscode-uri-LICENSE.md",
-      "bytes": 1078,
-      "sha256": "3b5e9a897a2d00cb3b2404f85e380419405c31f9740b023190a5148647ff82ad"
     }
   ]
 }

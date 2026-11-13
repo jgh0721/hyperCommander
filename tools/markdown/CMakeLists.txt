@@ -23,6 +23,8 @@ file(GLOB_RECURSE MARKDOWN_ASSETS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}
 qt_add_resources(hc-markdown-render "markdown_assets" PREFIX "/markdown" BASE "${CMAKE_CURRENT_SOURCE_DIR}/web" FILES ${MARKDOWN_ASSETS})
 hc_add_version_resource(hc-markdown-render "Markdown renderer")
 hc_enable_qt_deployment(hc-markdown-render PLUGINS)
+# Replace the folder rather than merge into it: notices of packages that left the bundle must not ship.
 add_custom_command(TARGET hc-markdown-render POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${CMAKE_BINARY_DIR}/$<CONFIG>/Licenses/Markdown"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/licenses" "${CMAKE_BINARY_DIR}/$<CONFIG>/Licenses/Markdown"
     VERBATIM)

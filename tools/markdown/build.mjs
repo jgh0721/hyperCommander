@@ -5,7 +5,8 @@ import crypto from 'node:crypto';
 await build({entryPoints:['web/renderer.js'],outfile:'web/bundle.js',bundle:true,minify:true,format:'iife',target:'chrome120',legalComments:'linked'});
 fs.copyFileSync('node_modules/katex/dist/katex.min.css','web/katex.min.css');
 fs.cpSync('node_modules/katex/dist/fonts','web/fonts',{recursive:true});
-fs.mkdirSync('licenses',{recursive:true});
+// Start from an empty folder so notices of packages that left the dependency tree do not linger.
+fs.rmSync('licenses',{recursive:true,force:true});fs.mkdirSync('licenses',{recursive:true});
 // Include transitive runtime license texts, not just top-level package notices.
 function licenses(dir){for(const d of fs.readdirSync(dir,{withFileTypes:true})){if(!d.isDirectory()||d.name.startsWith('.'))continue;const p=path.join(dir,d.name);if(d.name.startsWith('@')){licenses(p);continue;}const pkg=path.join(p,'package.json');if(!fs.existsSync(pkg))continue;const info=JSON.parse(fs.readFileSync(pkg));for(const f of fs.readdirSync(p))if(/^(licen[sc]e|copying|notice)(\.|$)/i.test(f)&&fs.statSync(path.join(p,f)).isFile())fs.copyFileSync(path.join(p,f),path.join('licenses',info.name.replaceAll('/','_')+'-'+f));if(fs.existsSync(path.join(p,'node_modules')))licenses(path.join(p,'node_modules'));}}
 licenses('node_modules');
