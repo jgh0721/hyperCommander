@@ -413,6 +413,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewRefreshInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewCloseTabUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewSortModeUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewTabSwitchUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "groupedParentPageKeysUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "groupCaptionHeightUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "smallFolderNavigationUi"
@@ -6416,6 +6417,80 @@ private slots:
         QTRY_COMPARE(Tabs->count(), 1); QVERIFY(!Panel->SystemView());
         QVERIFY(qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())));
     }
+    void systemViewTabSwitchUi_data()
+    {
+        QTest::addColumn<int>("Kind"); QTest::addColumn<bool>("SystemOnLeft");
+        QTest::newRow("processes-right") << int(CSystemView::Kind::Processes) << false;
+        QTest::newRow("services-right") << int(CSystemView::Kind::Services) << false;
+        QTest::newRow("processes-left") << int(CSystemView::Kind::Processes) << true;
+        QTest::newRow("services-left") << int(CSystemView::Kind::Services) << true;
+    }
+    void systemViewTabSwitchUi()
+    {
+        // Tab(반대편 패널로 전환)이 파일 패널에서 반대편의 프로세스 · 서비스 보기로, 다시 파일 패널로 키보드를 옮긴다.
+        // 실제 Tab · ↓ 키로 두 번 오가며 매번 옮겨 간 쪽의 커서가 움직이는지 본다.
+        QFETCH(int, Kind); QFETCH(bool, SystemOnLeft);
+        auto& Settings = hc::settings::AppSettings(); const auto Before = Settings.Object();
+        const auto Workspace = main_->CaptureWorkspace();
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel"); QVERIFY(Left && Right);
+        auto* SystemPanel = SystemOnLeft ? Left : Right; auto* FilePanel = SystemOnLeft ? Right : Left;
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        for (int Index = 0; Index < 12; ++Index) { QFile File(Directory.filePath(QString("tab-%1.txt").arg(Index, 2, 10, QChar('0')))); QVERIFY(File.open(QIODevice::WriteOnly)); }
+        const auto Restore = qScopeGuard([&] { Left->HideSystemView(); Right->HideSystemView(); Settings.Replace(Before); main_->RestoreWorkspace(Workspace); });
+        // 시험에서는 관리자 도우미를 자동으로 띄우지 않는다(UAC 확인 창).
+        {
+            auto General = Settings.Read(hc::settings::Section::General).toObject();
+            auto Process = General["processService"].toObject(); Process["autoStartHelper"] = false; General["processService"] = Process;
+            QVERIFY(Settings.Put(hc::settings::Section::General, General));
+        }
+        FilePanel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY_WITH_TIMEOUT(!model(FilePanel)->IsLoading(), 10000);
+        auto* System = SystemPanel->ShowSystemView(Kind); QVERIFY(System);
+        auto* Widget = System->findChild<Qtitan::TreeGrid*>("hc.system.grid"); QVERIFY(Widget);
+        auto* SystemRows = Widget->view<Qtitan::GridTreeView>(); QVERIFY(SystemRows);
+        QTRY_VERIFY_WITH_TIMEOUT(SystemRows->getRowCount() > 8, 15000);
+        // 표본 갱신이 행을 바꾸지 않게 멈춘다: 커서 이동만 본다.
+        System->TogglePause(); QTRY_VERIFY(System->Paused());
+        SystemRows->setFocusedRowIndex(0);
+        auto* Grid = qobject_cast<CGridView*>(FilePanel->GetFocusView(FilePanel->CurrentTabIndex())); QVERIFY(Grid);
+        auto* FileRows = Grid->BaseView(); QVERIFY(FileRows);
+        const auto Main = reinterpret_cast<HWND>(main_->winId());
+        emit FilePanel->sig_NotifyPanelActivated(); main_->raise(); main_->activateWindow();
+        if (!ActivateTestWindow(Main)) QSKIP("Another window keeps the foreground");
+        FileRows->setFocusedRowIndex(0); Grid->EnsureKeyboardFocusOnView();
+        const auto Press = [](WORD Code) {
+            INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD; Keys[0].ki.wVk = Keys[1].ki.wVk = Code;
+            const DWORD Extended = Code == VK_DOWN ? KEYEVENTF_EXTENDEDKEY : 0;
+            Keys[0].ki.dwFlags = Extended; Keys[1].ki.dwFlags = Extended | KEYEVENTF_KEYUP;
+            return SendInput(2, Keys, sizeof(INPUT)) == 2;
+        };
+        const auto Describe = [&] {
+            auto* Focus = QApplication::focusWidget(); const auto Native = GetFocus(); const auto* Owner = QWidget::find(reinterpret_cast<WId>(Native));
+            return QString("qt=%1/%2 native=%3 owner=%4 foreground=%5 main=%6 inSystem=%7 inGrid=%8")
+                .arg(QString::fromLatin1(Focus ? Focus->metaObject()->className() : "none"), Focus ? Focus->objectName() : QString())
+                .arg(quintptr(Native), 0, 16).arg(Owner ? QString::fromLatin1(Owner->metaObject()->className()) : QString("-"))
+                .arg(quintptr(GetForegroundWindow()), 0, 16).arg(quintptr(Main), 0, 16)
+                .arg(int(Focus && System->isAncestorOf(Focus))).arg(int(Focus && (Focus == Grid || Grid->isAncestorOf(Focus))));
+        };
+        // 키는 그 HWND의 위젯 아래 포커스 위젯에만 간다: 네이티브 포커스가 Qt 포커스 위젯을 담아야 한다.
+        const auto Holds = [&](QWidget* Area) {
+            auto* Focus = QApplication::focusWidget();
+            return GetAncestor(GetForegroundWindow(), GA_ROOT) == Main && Focus && (Focus == Area || Area->isAncestorOf(Focus)) && NativeFocusReaches(Focus);
+        };
+        QTRY_VERIFY2_WITH_TIMEOUT(Holds(Grid), qPrintable("start: " + Describe()), 5000);
+        for (int Round = 0; Round < 2; ++Round) {
+            QVERIFY(Press(VK_TAB));
+            QTRY_VERIFY2_WITH_TIMEOUT(Holds(System), qPrintable(QString("Tab %1 to the system view: ").arg(Round) + Describe()), 5000);
+            const int SystemRow = SystemRows->focusedRowIndex();
+            QVERIFY(Press(VK_DOWN));
+            QTRY_VERIFY2_WITH_TIMEOUT(SystemRows->focusedRowIndex() != SystemRow, qPrintable(QString("↓ in the system view %1: ").arg(Round) + Describe()), 3000);
+            QVERIFY(Press(VK_TAB));
+            QTRY_VERIFY2_WITH_TIMEOUT(Holds(Grid), qPrintable(QString("Tab %1 back to the file panel: ").arg(Round) + Describe()), 5000);
+            const int FileRow = FileRows->focusedRowIndex();
+            QVERIFY(Press(VK_DOWN));
+            QTRY_VERIFY2_WITH_TIMEOUT(FileRows->focusedRowIndex() != FileRow, qPrintable(QString("↓ in the file panel %1: ").arg(Round) + Describe()), 3000);
+        }
+        System->TogglePause();
+    }
     void systemViewSortModeUi()
     {
         // 트리는 형제끼리만 정렬하므로 숫자 열로 정렬하면 목록으로 바꾼다. 그 정렬이 풀리거나 [트리]를 누르면 트리로 돌아간다.
@@ -8098,6 +8173,7 @@ private slots:
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
         QVERIFY(Put("note.txt", QByteArray("Ctrl+Q keyboard return line\r\n").repeated(200)));
+        QVERIFY(Put("note.md", "# Keyboard\r\n\r\n" + QByteArray("Ctrl+Q Markdown paragraph\r\n\r\n").repeated(100)));
         { QImage Picture(800, 600, QImage::Format_RGB32); Picture.fill(QColor(40, 100, 180)); QVERIFY(Picture.save(Directory.filePath("picture.png"))); }
         {
             QPdfWriter Writer(Directory.filePath("pages.pdf")); QPainter Painter(&Writer); QVERIFY(Painter.isActive());
@@ -8177,7 +8253,7 @@ private slots:
         };
         // The second EPUB pass reopens the host cached by the first close.
         int EpubPasses = 0;
-        for (const auto& Name : QStringList{"note.txt", "pages.pdf", "picture.png", "book.epub", "book.epub"}) {
+        for (const auto& Name : QStringList{"note.txt", "note.md", "pages.pdf", "picture.png", "book.epub", "book.epub"}) {
             const bool Epub = Name.endsWith(".epub");
             const auto Index = Focus(Name); QVERIFY(Index.isValid());
             Source->sig_NotifyPanelActivated(); QVERIFY(ActivateTestWindow(Main)); Grid->EnsureKeyboardFocusOnView();
@@ -8241,7 +8317,20 @@ private slots:
             if (Click) { QTest::qWait(500); QVERIFY2(InPreviewProcess("HyperEpubWeb.exe"), qPrintable("click entry was taken back: owners=[" + Owners.join(", ") + "]")); }
             Sampler.stop();
             qInfo() << Name << "entered:" << Describe();
-            if (Name == "note.txt") {
+            if (Name == "note.md") {
+                // Tab entered the rendered preview (a helper process). Alt+O there switches to the source, which belongs to
+                // the plugin host: the keyboard must follow it, not stay in the hidden preview.
+                const auto View = [&] { return Record()["view"].toObject(); };
+                QVERIFY(Press({VK_MENU, 'O'}));
+                QTRY_VERIFY2_WITH_TIMEOUT(View()["markdown"].toObject()["mode"].toString() == "source", qPrintable("Alt+O: " + Describe()), 5000);
+                QTRY_VERIFY2_WITH_TIMEOUT(InPreviewProcess(QString()) && ProcessName(Keyboard()).compare("hc-markdown-render.exe", Qt::CaseInsensitive) != 0
+                    && View()["inputFocused"].toBool(), qPrintable("source keyboard: " + Describe()), 5000);
+                if (!View()["readOnly"].toBool()) {
+                    QVERIFY(Press({'X'})); QTRY_VERIFY2_WITH_TIMEOUT(View()["canUndo"].toBool(), qPrintable("typing in the source: " + Describe()), 5000);
+                    QVERIFY(Press({VK_CONTROL, 'Z'}));
+                    QTRY_VERIFY_WITH_TIMEOUT(!View()["canUndo"].toBool() && !Record()["dirty"].toBool(), 5000);
+                }
+            } else if (Name == "note.txt") {
                 QVERIFY(Press({'X'})); QTRY_VERIFY2_WITH_TIMEOUT(Record()["view"].toObject()["canUndo"].toBool(), qPrintable("typing: " + Describe()), 5000);
                 QVERIFY(Press({VK_CONTROL, 'Z'}));
                 QTRY_VERIFY_WITH_TIMEOUT(!Record()["view"].toObject()["canUndo"].toBool() && !Record()["dirty"].toBool(), 5000);

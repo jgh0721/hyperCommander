@@ -28,6 +28,7 @@
 #include <QAbstractScrollArea>
 #include <QMenu>
 #include <QToolBar>
+#include <QToolButton>
 #include <QClipboard>
 #include <QTimer>
 #include <QApplication>
@@ -746,6 +747,98 @@ class MarkdownTests final : public QObject
         INPUT Events[2]{};for(auto& E:Events){E.type=INPUT_KEYBOARD;E.ki.wVk=VK_ESCAPE;}Events[1].ki.dwFlags=KEYEVENTF_KEYUP;
         QCOMPARE(SendInput(2,Events,sizeof(INPUT)),UINT(2));QTest::qWait(600);QCOMPARE(Window.Snapshot()["closeRequested"].toBool(),Close);
         qApp->setProperty("documentViewsConfigDir",config_.path());
+    }
+    void documentKeyboard_data()
+    {
+        // Hosted: the F3 viewer shell (HyperViewer). Otherwise HyperEditor (F4).
+        QTest::addColumn<bool>("Hosted");QTest::addColumn<QString>("Name");QTest::addColumn<QString>("Switch");
+        QTest::newRow("viewer-markdown-toolbar")<<true<<"keys.md"<<"toolbar";
+        QTest::newRow("viewer-markdown-shortcut")<<true<<"keys.md"<<"shortcut";
+        QTest::newRow("viewer-markdown-reactivated")<<true<<"keys.md"<<"reactivate";
+        QTest::newRow("viewer-text")<<true<<"keys.txt"<<"";
+        QTest::newRow("editor-markdown-shortcut")<<false<<"keys.md"<<"shortcut";
+        QTest::newRow("editor-text")<<false<<"keys.txt"<<"";
+    }
+    // F3 (viewer shell) and F4 (HyperEditor): real keys reach the source after the document opens, after a Markdown preview
+    // switches to its source (toolbar button or Alt+O), after the window is activated again and after a round trip
+    // through the preview. The viewer gets HyperCommander's focus request once it is presented, as in the product: it
+    // used to park the keyboard on the preview's container, and the helper taking it from there left the application
+    // without an active window, so the switch to the source kept every key in the hidden preview.
+    void documentKeyboard()
+    {
+        QFETCH(bool,Hosted);QFETCH(QString,Name);QFETCH(QString,Switch);
+        QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",config_.path());});
+        QByteArray Text="# Keys\n\n";for(int N=0;N<120;++N)Text+="Paragraph "+QByteArray::number(N)+"\n\n";
+        QFile File(Temp.filePath(Name));QVERIFY(File.open(QIODevice::WriteOnly));File.write(Text);File.close();
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"),Hosted);Window.resize(1100,800);Window.show();
+        // ViewerHostBridge "present": restore, raise and activate.
+        ShowWindow(reinterpret_cast<HWND>(Window.winId()),SW_RESTORE);Window.raise();Window.activateWindow();
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window.winId())));QVERIFY(QTest::qWaitForWindowActive(&Window));
+        Window.Handle({{"action","open"},{"path",File.fileName()}});
+        // The keyboard owner, for failure messages.
+        const auto Owner=[]{
+            const auto Focus=GetFocus();const auto* Widget=QWidget::find(reinterpret_cast<WId>(Focus));wchar_t Class[64]{};GetClassNameW(Focus,Class,64);
+            DWORD Process=0;GetWindowThreadProcessId(Focus,&Process);
+            const auto* Qt=QApplication::focusWidget();const auto* Active=QApplication::activeWindow();const auto* FocusWindow=QGuiApplication::focusWindow();
+            return QString("active=%9 focusWindow=%10 native=%1 class=%2 pid=%3(self %4) widget=%5/%6 qtFocus=%7/%8").arg(quintptr(Focus),0,16).arg(QString::fromWCharArray(Class))
+                .arg(Process).arg(GetCurrentProcessId()).arg(Widget?Widget->metaObject()->className():"-").arg(Widget?Widget->objectName():"-")
+                .arg(Qt?Qt->metaObject()->className():"-").arg(Qt?Qt->objectName():"-")
+                .arg(Active?Active->metaObject()->className():"-").arg(FocusWindow?FocusWindow->objectName():"-");
+        };
+        const auto Key=[](WORD Code,WORD Modifier=0){
+            INPUT Events[4]{};int Count=0;
+            const auto Add=[&](WORD Vk,bool Up){auto& E=Events[Count++];E.type=INPUT_KEYBOARD;E.ki.wVk=Vk;E.ki.dwFlags=(Up?KEYEVENTF_KEYUP:0)|(Vk==VK_DOWN?KEYEVENTF_EXTENDEDKEY:0);};
+            if(Modifier)Add(Modifier,false);Add(Code,false);Add(Code,true);if(Modifier)Add(Modifier,true);
+            return SendInput(Count,Events,sizeof(INPUT))==UINT(Count);
+        };
+        // HyperCommander repeats the focus request once the presented viewer is in front (qtViewerHost.cpp).
+        const auto Present=[&]{if(Hosted)Window.Handle({{"action","focus"}});};
+        // Down keys move the source caret.
+        const auto Reaches=[&](QTextView* Source){
+            auto* Backend=static_cast<ScintillaQtDirectBackend*>(Source->Backend());QTest::qWait(300);
+            const auto Line=[Backend]{return Backend->Send(SCI_LINEFROMPOSITION,Backend->Send(SCI_GETCURRENTPOS));};
+            const auto Before=Line();
+            for(int N=0;N<5;++N){if(!Key(VK_DOWN))return false;QTest::qWait(40);}
+            return QTest::qWaitFor([&]{return Line()>Before;},2000);
+        };
+        if(!Name.endsWith(".md")){
+            QTextView* Source=nullptr;QTRY_VERIFY_WITH_TIMEOUT((Source=Window.findChild<QTextView*>()) && Source->isVisible(),30000);
+            Present();
+            QVERIFY2(Reaches(Source),qPrintable(Owner()));
+            return;
+        }
+        MarkdownDocumentView* Md=nullptr;MarkdownProcessView* Preview=nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT((Md=Window.findChild<MarkdownDocumentView*>()) && (Preview=Window.findChild<MarkdownProcessView*>()),30000);
+        // The viewer opens in the preview, the editor in its last mode: start from the preview.
+        if(Md->SourceVisible()){QTRY_VERIFY_WITH_TIMEOUT(Md->InputWidget()->hasFocus(),30000);QVERIFY(Key('O',VK_MENU));QTRY_VERIFY_WITH_TIMEOUT(!Md->SourceVisible(),5000);}
+        QTRY_VERIFY2_WITH_TIMEOUT(Preview->HasFocus(),qPrintable(Owner()),30000);
+        Present();QTest::qWait(300);
+        QVERIFY2(Preview->HasFocus(),qPrintable(Owner()));
+        if(Switch=="reactivate"){
+            // Another window in front, then the viewer again: the activation restores the preview's keyboard.
+            QWidget Other;Other.resize(300,200);Other.show();
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Other.winId())));QTRY_VERIFY(!Preview->HasFocus());
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window.winId())));
+            QTRY_VERIFY2_WITH_TIMEOUT(Preview->HasFocus(),qPrintable(Owner()),5000);
+        }
+        if(Switch=="toolbar"){
+            QToolButton* Button=nullptr;
+            for(auto* Each:Window.findChildren<QToolButton*>())if(Each->isVisible() && Each->defaultAction() && Each->defaultAction()->objectName()=="markdown.source"){Button=Each;break;}
+            QVERIFY(Button);
+            const auto* Top=Button->window();const auto At=Button->mapTo(Top,Button->rect().center());const auto Scale=Top->devicePixelRatioF();
+            POINT Position{qRound(At.x()*Scale),qRound(At.y()*Scale)};QVERIFY(ClientToScreen(reinterpret_cast<HWND>(Top->winId()),&Position));
+            QVERIFY(SetCursorPos(Position.x,Position.y));QTest::qWait(100);
+            sendMouse(MOUSEEVENTF_LEFTDOWN);QTest::qWait(30);sendMouse(MOUSEEVENTF_LEFTUP);
+        } else QVERIFY(Key('O',VK_MENU));
+        QTRY_VERIFY_WITH_TIMEOUT(Md->SourceVisible(),5000);
+        auto* Source=Md->findChild<QTextView*>();QVERIFY(Source);
+        QVERIFY2(Reaches(Source),qPrintable("after switching to the source: "+Owner()));
+        if(Switch!="shortcut")return;
+        // Round trip: Alt+O in the source shows the preview with the keyboard, Alt+O there returns to the source.
+        QVERIFY(Key('O',VK_MENU));QTRY_VERIFY2_WITH_TIMEOUT(!Md->SourceVisible() && Preview->HasFocus(),qPrintable(Owner()),5000);
+        QVERIFY(Key('O',VK_MENU));QTRY_VERIFY_WITH_TIMEOUT(Md->SourceVisible(),5000);
+        QVERIFY2(Reaches(Source),qPrintable("after the round trip: "+Owner()));
     }
     void settings()
     {

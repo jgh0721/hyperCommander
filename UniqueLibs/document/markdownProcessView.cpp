@@ -250,6 +250,10 @@ void MarkdownProcessView::resizeEvent(QResizeEvent *Event)
 }
 bool MarkdownProcessView::HasFocus() const
 {
+    // A hidden preview is never the input. Hiding it (switching to the source) leaves the Win32 focus in the
+    // helper's window; counting that would send the focus back into the hidden preview instead of the source.
+    if (!isVisible())
+        return false;
     GUITHREADINFO Info{sizeof(GUITHREADINFO)};
     const auto Window = reinterpret_cast<HWND>(child_);
     return Window && GetGUIThreadInfo(0, &Info) && (Info.hwndFocus == Window || IsChild(Window, Info.hwndFocus));

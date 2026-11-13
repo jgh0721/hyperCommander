@@ -83,7 +83,10 @@ private:
             QPointer<QWidget> Target=target_();
             while(Target && Target->focusProxy())Target=Target->focusProxy();
             if(!Target || !Target->isVisible() || !Target->isEnabled() || (Target!=scope_ && !scope_->isAncestorOf(Target)))return;
-            SetFocus(reinterpret_cast<HWND>(Target->effectiveWinId()));
+            // The window's HWND, from which Qt hands the keys to Target. The target's own HWND can be the container
+            // of another process's view (Markdown preview, EPUB reader, HWP): when that view takes the keyboard from
+            // its container in after_, Qt counts it as gone from the application and drops the active window.
+            SetFocus(reinterpret_cast<HWND>(Target->window()->internalWinId()));
             if(Target)Target->setFocus(Qt::OtherFocusReason);
             if(after_)after_();
         });

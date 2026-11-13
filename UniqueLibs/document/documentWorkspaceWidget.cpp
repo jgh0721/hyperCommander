@@ -2293,14 +2293,16 @@ namespace hc::document
             if(auto Tab=active();Tab&&!Tab->loading_){
                 if(!QApplication::activePopupWidget()&&!QApplication::activeModalWidget()){
                     QApplication::setActiveWindow(this);setFocusProxy(Tab->pane_->InputWidget());
-                    // Set the native focus on the helper GUI owner as well. The
-                    // SDK container runs on a different thread/process.
                     const auto Native=reinterpret_cast<HWND>(winId());
-                    const auto Target=Tab->pane_->InputWidget();
                     // Qt tracks this workspace as its active shell, while Win32
                     // must keep the containing HC window active for keyboard input.
                     if(hosted_)SetActiveWindow(GetAncestor(Native,GA_ROOT));
-                    SetFocus(Target?reinterpret_cast<HWND>(Target->winId()):Native);
+                    // The native focus stays on this window and Qt hands the keys to the view's input. Never on the
+                    // input's own HWND: a Markdown/reST preview or EPUB reader of another process then takes the
+                    // keyboard from that container, and Qt counts it as gone from the application (no active
+                    // window). A later switch to the source then has no focus to move, and keys stay in the
+                    // hidden preview.
+                    SetFocus(Native);
                     Tab->pane_->Focus();
                 }
             }
