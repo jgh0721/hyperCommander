@@ -109,12 +109,12 @@ namespace hc::document
         view_->Send( { { "type", "load" }, { "url", Url.toString() }, { "root", RootFor( Url ) }, { "allowRemote", allowRemote_ } } );
     }
 
-    void RstPreviewProcess::requestScrollToLine( const int SourceIndex, const double Line, const double Ratio )
+    void RstPreviewProcess::requestScrollToLine( const int SourceIndex, const double Line, const double Ratio, const int Edge )
     {
         // 링크로 넘어간 다른 문서의 페이지는 이 편집기의 줄과 상관이 없다. 그 페이지를 움직이지 않는다.
         if( IsOtherPage() ) return;
         // 준비 전의 요청은 프로세스가 마지막 하나를 기억했다가 페이지가 준비되면 보낸다.
-        if( !view_.isNull() ) view_->Send( { { "type", "scrollTo" }, { "src", SourceIndex }, { "line", Line }, { "ratio", Ratio } } );
+        if( !view_.isNull() ) view_->Send( { { "type", "scrollTo" }, { "src", SourceIndex }, { "line", Line }, { "ratio", Ratio }, { "edge", Edge } } );
     }
 
     void RstPreviewProcess::suppressScrollFeedback( const int Milliseconds )
@@ -156,7 +156,8 @@ namespace hc::document
             if( Before != url_ ) emit PageChanged();
         }
         else if( Type == "bridgeReady" ) { ready_ = true; emit bridgeReady(); }
-        else if( Type == "scrolled" ) emit previewScrollChanged( Message[ "src" ].toInt(), Message[ "line" ].toDouble(), Message[ "ratio" ].toDouble(), Message[ "user" ].toBool() );
+        else if( Type == "scrolled" ) emit previewScrollChanged( Message[ "src" ].toInt(), Message[ "line" ].toDouble(), Message[ "ratio" ].toDouble(), Message[ "user" ].toBool(),
+                                                               Message[ "edge" ].toInt() );
         else if( Type == "clicked" ) emit editorNavigationRequested( Message[ "src" ].toInt(), Message[ "line" ].toDouble(), Message[ "ratio" ].toDouble() );
         else if( Type == "hotSwapResult" ) emit hotSwapCompleted( Message[ "token" ].toInt(), Message[ "ok" ].toBool(), Message[ "message" ].toString() );
         else if( Type == "context" ) emit ContextRequested( Message );

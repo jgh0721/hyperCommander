@@ -70,6 +70,10 @@ public:
     /// 창 세로 Ratio 위치에 보이는 줄( 소수 ). 12.5 는 12번 줄의 세로 중간이다.
     [[nodiscard]] double                fractionalLineAtViewportRatio( double Ratio ) const;
     void                                scrollFractionalLineToViewportRatio( double FractionalLine, double Ratio );
+    /// 마지막 줄이 보이도록 끝까지 내려가 있는가.
+    [[nodiscard]] bool                  isScrolledToEnd() const;
+    /// 미리보기가 맨 위( Edge < 0 ) · 맨 끝( Edge > 0 )에 붙었을 때 편집기도 그 끝으로 옮긴다. 옮겼으면 true.
+    bool                                scrollToPreviewEdge( int Edge );
     /// 캐럿 바로 아래의 화면 좌표. 자동완성 목록의 기준점이다.
     [[nodiscard]] QPoint                caretGlobalPos() const;
     /// 캐럿 앞 BackspaceCount 글자를 지우고 InsertText 를 넣는다.

@@ -43,7 +43,8 @@ public:
     void                                ResetReady() { ready_ = false; }
 
     /// 준비 전이면 마지막 요청 하나를 기억했다가 준비되면 보낸다.
-    void                                RequestScrollToLine( int SourceIndex, double Line, double Ratio );
+    /// Edge: 편집기가 맨 위( -1 ) · 맨 끝( 1 )에 붙어 있다.
+    void                                RequestScrollToLine( int SourceIndex, double Line, double Ratio, int Edge );
     void                                SuppressScrollFeedback( int Milliseconds );
     void                                RequestHotSwap( const QString& DocumentHtml, const QString& BaseUrl,
                                                         bool AllowMorph, int Token );
@@ -51,12 +52,12 @@ public:
 public slots:   // 페이지가 부른다
     void                                ready( int ProtocolVersion );
     void                                sourceLocationClicked( int SourceIndex, double Line, double ViewportRatio );
-    void                                previewScrolled( int SourceIndex, double Line, double ViewportRatio, bool UserDriven );
+    void                                previewScrolled( int SourceIndex, double Line, double ViewportRatio, bool UserDriven, int Edge );
     void                                hotSwapResult( int Token, bool Ok, const QString& Message );
 
 signals:
     // → 페이지
-    void                                scrollToLineRequested( int SourceIndex, double Line, double Ratio );
+    void                                scrollToLineRequested( int SourceIndex, double Line, double Ratio, int Edge );
     void                                rebindRequested();
     void                                scrollFeedbackSuppressed( int Milliseconds );
     void                                hotSwapRequested( const QString& DocumentHtml, const QString& BaseUrl,
@@ -66,7 +67,7 @@ signals:
     void                                BridgeReady();
     void                                HotSwapCompleted( int Token, bool Ok, const QString& Message );
     void                                EditorNavigationRequested( int SourceIndex, double Line, double ViewportRatio );
-    void                                PreviewScrollChanged( int SourceIndex, double Line, double ViewportRatio, bool UserDriven );
+    void                                PreviewScrollChanged( int SourceIndex, double Line, double ViewportRatio, bool UserDriven, int Edge );
 
 private:
     bool                                ready_ = false;
@@ -74,6 +75,7 @@ private:
     int                                 pendingSourceIndex_ = 0;
     double                              pendingLine_ = 1.0;
     double                              pendingRatio_ = 0.5;
+    int                                 pendingEdge_ = 0;
 };
 
 }  // namespace hc::rst

@@ -268,8 +268,8 @@ int main( int Argc, char** Argv )
     // ── 페이지 → 호스트 ──
     QObject::connect( &Bridge, &hc::rst::PreviewBridge::BridgeReady, &App, [ & ] { Send( { { "type", "bridgeReady" } } ); } );
     QObject::connect( &Bridge, &hc::rst::PreviewBridge::PreviewScrollChanged, &App,
-        [ & ]( const int Source, const double Line, const double Ratio, const bool User ) {
-            Send( { { "type", "scrolled" }, { "src", Source }, { "line", Line }, { "ratio", Ratio }, { "user", User } } );
+        [ & ]( const int Source, const double Line, const double Ratio, const bool User, const int Edge ) {
+            Send( { { "type", "scrolled" }, { "src", Source }, { "line", Line }, { "ratio", Ratio }, { "user", User }, { "edge", Edge } } );
         } );
     QObject::connect( &Bridge, &hc::rst::PreviewBridge::EditorNavigationRequested, &App,
         [ & ]( const int Source, const double Line, const double Ratio ) {
@@ -363,7 +363,10 @@ int main( int Argc, char** Argv )
             Page->load( Url );
             return;
         }
-        if( Type == "scrollTo" ) { Bridge.RequestScrollToLine( Message[ "src" ].toInt(), Message[ "line" ].toDouble( 1 ), Message[ "ratio" ].toDouble( .5 ) ); return; }
+        if( Type == "scrollTo" ) {
+            Bridge.RequestScrollToLine( Message[ "src" ].toInt(), Message[ "line" ].toDouble( 1 ), Message[ "ratio" ].toDouble( .5 ), Message[ "edge" ].toInt() );
+            return;
+        }
         if( Type == "suppress" ) { Bridge.SuppressScrollFeedback( Message[ "ms" ].toInt() ); return; }
         if( Type == "hotSwap" ) {
             Bridge.RequestHotSwap( Message[ "html" ].toString(), Message[ "baseUrl" ].toString(), Message[ "allowMorph" ].toBool( true ), Message[ "token" ].toInt() );

@@ -79,9 +79,11 @@ private slots:
     void pageLoadsAndBridgeAttaches();
     void editorLineMovesThePreview();
     void topOfDocumentStaysAtTop();
+    void editorEdgesMoveThePreviewToItsEdges();
     void wheelIsReportedAsUserScroll();
     void scrollbarDragIsReportedAsUserScroll();
     void scrollRequestsAreNotReportedBack();
+    void previewEdgesAreReported();
     void linkOpensAnotherDocumentPage();
     void clickOnOtherPageNamesItsSource();
     void returnsToTheDocumentPage();
@@ -250,6 +252,23 @@ void TestPreviewProcess::topOfDocumentStaysAtTop()
     QTRY_COMPARE_WITH_TIMEOUT( probe( 0.5 )[ "scrollY" ].toDouble(), 0.0, 5000 );
 }
 
+void TestPreviewProcess::editorEdgesMoveThePreviewToItsEdges()
+{
+    if( !usable_ ) QSKIP( "화면 없음" );
+    // 편집기가 맨 끝이면 미리보기도 맨 끝이다. 가운데 줄( 1500 )만 맞추면 그 아래가 반 화면보다 길어 끝이 보이지 않는다.
+    const auto atBottom = [ this ] {
+        const QJsonObject at = probe( 0.5 );
+        return at[ "scrollY" ].toDouble() >= at[ "total" ].toDouble() - at[ "height" ].toDouble() - 1;
+    };
+    surface_->suppressScrollFeedback( 250 );
+    surface_->requestScrollToLine( 0, 1500.0, 0.5, 1 );
+    QTRY_VERIFY2_WITH_TIMEOUT( atBottom(), qPrintable( QStringLiteral( "맨 끝 요청 뒤 scrollY %1" ).arg( probe( 0.5 )[ "scrollY" ].toDouble() ) ), 5000 );
+    // 맨 위는 줄 번호와 상관없이 맨 위다.
+    surface_->suppressScrollFeedback( 250 );
+    surface_->requestScrollToLine( 0, 900.0, 0.5, -1 );
+    QTRY_COMPARE_WITH_TIMEOUT( probe( 0.5 )[ "scrollY" ].toDouble(), 0.0, 5000 );
+}
+
 void TestPreviewProcess::wheelIsReportedAsUserScroll()
 {
     if( !usable_ ) QSKIP( "화면 없음" );
@@ -274,6 +293,8 @@ void TestPreviewProcess::wheelIsReportedAsUserScroll()
     // 사용자가 굴린 것으로 판정돼야 편집기가 따라간다. 페이지가 스스로 움직인 것은 편집기를 옮기지 않는다.
     QVERIFY2( last.at( 3 ).toBool(), "휠로 굴린 스크롤이 사용자 입력으로 판정되지 않았습니다." );
     QVERIFY2( last.at( 1 ).toDouble() > 600.0, qPrintable( QString::number( last.at( 1 ).toDouble() ) ) );
+    // 맨 위도 맨 끝도 아니다.
+    QCOMPARE( last.at( 4 ).toInt(), 0 );
     // 보고된 줄은 지금 가운데에 놓인 줄이다.
     QTRY_VERIFY_WITH_TIMEOUT( qAbs( probe( 0.5 )[ "line" ].toDouble() - scrolled.last().at( 1 ).toDouble() ) < 2.0, 5000 );
 }
@@ -361,6 +382,50 @@ void TestPreviewProcess::scrollRequestsAreNotReportedBack()
     // 편집기가 옮긴 스크롤이 "사용자가 굴렸다" 로 되돌아오면 왕복이 생겨 스크롤이 튄다.
     for( const QList< QVariant >& report : scrolled )
         QVERIFY2( !report.at( 3 ).toBool(), "편집기가 만든 스크롤이 사용자 스크롤로 보고됐습니다." );
+}
+
+void TestPreviewProcess::previewEdgesAreReported()
+{
+    if( !usable_ ) QSKIP( "화면 없음" );
+    // 미리보기를 끝까지 굴리면 맨 끝( 1 ), 처음까지 굴리면 맨 위( -1 )를 함께 보고한다. 조율자는 편집기를 가운데 줄
+    // 대신 그 끝으로 옮긴다.
+    surface_->suppressScrollFeedback( 250 );
+    surface_->requestScrollToLine( 0, 1000.0, 0.5 );
+    QTRY_VERIFY_WITH_TIMEOUT( qAbs( probe( 0.5 )[ "line" ].toDouble() - 1000.0 ) < 1.5, 5000 );
+    QTest::qWait( 400 );   // 요청 가드가 지나야 한다.
+
+    const HWND window = child();
+    RECT client{};
+    QVERIFY( GetClientRect( window, &client ) );
+    POINT centre{ client.right / 2, client.bottom / 2 };
+    ClientToScreen( window, &centre );
+    // 휠 한 번이 갈 수 있는 거리에는 한도가 있다( 가운데에서 끝까지 닿지 못한 적이 있다 ). 두 번 보낸다.
+    const auto wheel = [ & ]( const int notches ) {
+        for( int repeat = 0; repeat < 2; ++repeat )
+            PostMessageW( window, WM_MOUSEWHEEL, MAKEWPARAM( 0, static_cast< WORD >( static_cast< short >( notches * WHEEL_DELTA ) ) ),
+                          MAKELPARAM( centre.x, centre.y ) );
+    };
+    QSignalSpy scrolled( surface_, &hc::rst::PreviewSurface::previewScrollChanged );
+    wheel( -100 );
+    QTRY_VERIFY2_WITH_TIMEOUT( !scrolled.isEmpty() && scrolled.last().at( 4 ).toInt() == 1,
+                               qPrintable( QStringLiteral( "보고 %1 건, 마지막 끝 %2" ).arg( scrolled.size() )
+                                               .arg( scrolled.isEmpty() ? 0 : scrolled.last().at( 4 ).toInt() ) ), 8000 );
+    QVERIFY( scrolled.last().at( 3 ).toBool() );
+    const QJsonObject bottom = probe( 0.5 );
+    QVERIFY( bottom[ "scrollY" ].toDouble() >= bottom[ "total" ].toDouble() - bottom[ "height" ].toDouble() - 1 );
+
+    // 맨 끝에서 맨 위까지는 휠 두 번으로도 멀다. 가운데에서 올린다.
+    surface_->suppressScrollFeedback( 250 );
+    surface_->requestScrollToLine( 0, 1000.0, 0.5 );
+    QTRY_VERIFY_WITH_TIMEOUT( qAbs( probe( 0.5 )[ "line" ].toDouble() - 1000.0 ) < 1.5, 5000 );
+    QTest::qWait( 400 );
+    scrolled.clear();
+    wheel( 100 );
+    QTRY_VERIFY2_WITH_TIMEOUT( !scrolled.isEmpty() && scrolled.last().at( 4 ).toInt() == -1,
+                               qPrintable( QStringLiteral( "보고 %1 건, 마지막 끝 %2" ).arg( scrolled.size() )
+                                               .arg( scrolled.isEmpty() ? 0 : scrolled.last().at( 4 ).toInt() ) ), 8000 );
+    QCOMPARE( probe( 0.5 )[ "scrollY" ].toDouble(), 0.0 );
+    QTest::qWait( 700 );   // 다음 시험 앞에 휠 여운이 지나야 한다.
 }
 
 void TestPreviewProcess::linkOpensAnotherDocumentPage()

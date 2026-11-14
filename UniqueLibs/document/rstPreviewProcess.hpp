@@ -70,7 +70,7 @@ namespace hc::document
         [[nodiscard]] QUrl              url() const override { return url_; }
         [[nodiscard]] bool              isReady() const override { return ready_; }
         void                            resetReady() override { ready_ = false; }
-        void                            requestScrollToLine( int SourceIndex, double Line, double Ratio ) override;
+        void                            requestScrollToLine( int SourceIndex, double Line, double Ratio, int Edge = 0 ) override;
         void                            suppressScrollFeedback( int Milliseconds ) override;
         void                            requestHotSwap( const QString& DocumentHtml, const QString& BaseUrl,
                                                         bool AllowMorph, int Token ) override;

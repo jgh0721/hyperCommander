@@ -18,6 +18,7 @@
 
 #include "rstEditor.hpp"
 #include "rstPreviewSurface.hpp"
+#include "UniqueLibs/document/previewScrollSync.hpp"
 class QTimer;
 
 namespace hc::rst {
@@ -356,8 +357,9 @@ private:
     // 있는 줄" 을 상대편의 같은 비율 위치로 보낸다.
     void                                syncPreviewFromEditor();
     /// userInitiated 는 프리뷰를 직접 클릭한 이동. 왕복 방지 가드를 넘긴다.
+    /// edge: 프리뷰가 맨 위( -1 ) · 맨 끝( 1 )에 붙어 있다. 편집기도 그 끝으로 간다.
     void                                syncEditorFromPreview( int sourceIndex, double line, double ratio,
-                                                               bool userInitiated = false );
+                                                               bool userInitiated = false, int edge = 0 );
     [[nodiscard]] int                   sourceIndexForPath( const QString& path ) const;
     [[nodiscard]] QString               pathForSourceIndex( int sourceIndex ) const;
 
@@ -436,23 +438,23 @@ private:
     /// 문서로 스크롤하므로 대입 지점을 이 함수 하나로 모은다.
     void                                setPreviewSources( const QStringList& sources );
 
-    /// 프리뷰로 마지막에 보낸 (소스 인덱스, 줄). 같은 값을 다시 보내지 않는다.
+    /// 프리뷰로 마지막에 보낸 (소스 인덱스, 줄, 끝). 같은 값을 다시 보내지 않는다. 프리뷰를 따라 편집기를
+    /// 옮긴 뒤에는 편집기가 놓인 자리로 바꿔 둔다 — 행 단위로 반올림된 그 자리를 되돌려 보내지 않는다.
     int                                 lastSyncedSourceIndex_ = -1;
     double                              lastSyncedLine_ = -1.0;
+    int                                 lastSyncedEdge_ = 0;
     QStringList                         previewProcessedSources_;  ///< 이번 빌드가 다시 읽은 파일들
     /// 마지막으로 빌드를 **요청한** 문서. 탭을 옮겼는데 프리뷰가 따라오지
     /// 않은 상태를 알아채는 기준이다.
     QString                             previewRequestedPath_;
     /// 프리뷰에 실제로 **표시된** 문서.
     QString                             previewPrimaryPath_;
-    /// 한쪽이 유발한 스크롤이 되돌아와 무한 왕복하는 것을 막는다.
-    qint64                              suppressSyncUntilMs_ = 0;
-    /// 에디터가 주도권을 쥔 구간. 이 동안 프리뷰의 스크롤 보고는 무시한다.
+    /// 한쪽이 유발한 스크롤이 되돌아와 무한 왕복하는 것을 막는다( Markdown · EPUB 과 같은 규칙 ).
     ///
-    /// **페이지가 스스로 움직인 스크롤을 막는 것은 이 값이 아니다.** 그 판정은
+    /// **페이지가 스스로 움직인 스크롤을 막는 것은 이것이 아니다.** 그 판정은
     /// 입력 이벤트를 받는 페이지 쪽에서 하고 `previewScrolled` 의 `userDriven`
     /// 으로 온다. 여기 남은 것은 "우리가 방금 프리뷰를 굴렸다" 는 왕복 차단뿐이다.
-    qint64                              previewDrivenIgnoreUntilMs_ = 0;
+    hc::document::PreviewScrollSync     previewSync_;
     /// 가드에 걸려 버려진 에디터->프리뷰 동기화를 가드 해제 후 되살린다.
     QTimer*                             previewSyncRetry_ = nullptr;
 

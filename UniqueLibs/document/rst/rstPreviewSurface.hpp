@@ -46,8 +46,8 @@ public:
     /// 새 페이지를 띄우기 직전에 부른다. 준비 신호를 다시 기다린다.
     virtual void                        resetReady() = 0;
     /// 원본 SourceIndex 의 Line( 소수 )이 창 높이의 Ratio 자리에 오게 한다. 준비 전이면 마지막 요청 하나를 기억했다
-    /// 준비되면 보낸다.
-    virtual void                        requestScrollToLine( int SourceIndex, double Line, double Ratio ) = 0;
+    /// 준비되면 보낸다. Edge: 편집기가 맨 위( -1 ) · 맨 끝( 1 )에 붙어 있으면 미리보기도 그 끝으로.
+    virtual void                        requestScrollToLine( int SourceIndex, double Line, double Ratio, int Edge ) = 0;
     /// 이 시간 동안 페이지가 스크롤 위치를 보고하지 않게 한다( 우리가 굴린 것이 되돌아오지 않게 ).
     virtual void                        suppressScrollFeedback( int Milliseconds ) = 0;
     /// 같은 문서를 다시 빌드했고 <head> 가 그대로일 때: 본문만 갈아 끼운다. 결과는 hotSwapCompleted().
@@ -64,7 +64,8 @@ signals:
     void                                loadFinished( bool Ok );
     void                                bridgeReady();
     /// 페이지가 스크롤되었다. UserDriven 이 거짓이면 페이지가 스스로 움직인 것이다( 이미지·글꼴이 자리를 잡는 중 ).
-    void                                previewScrollChanged( int SourceIndex, double Line, double ViewportRatio, bool UserDriven );
+    /// Edge: 페이지가 맨 위( -1 ) · 맨 끝( 1 )에 붙어 있다. 0 이면 그 사이.
+    void                                previewScrollChanged( int SourceIndex, double Line, double ViewportRatio, bool UserDriven, int Edge );
     /// 본문을 눌렀다: 그 원본 줄로 편집기를 옮긴다.
     void                                editorNavigationRequested( int SourceIndex, double Line, double ViewportRatio );
     void                                hotSwapCompleted( int Token, bool Ok, const QString& Message );

@@ -21,7 +21,8 @@
     window.__mrrPreviewInstalled = true;
 
     // 3: previewScrolled 에 "사용자가 만든 스크롤인가" 를 실어 보낸다
-    var PROTOCOL_VERSION = 3;
+    // 4: 맨 위( -1 ) · 맨 끝( 1 )을 양쪽에 싣는다( previewScrolled 의 edge, scrollToLineRequested 의 edge )
+    var PROTOCOL_VERSION = 4;
     // 스크롤 위치를 대표하는 기준점. 0.5 = 창의 정중앙.
     var ANCHOR_RATIO = 0.5;
     // C++ 이 우리를 스크롤시킨 직후 우리가 다시 C++ 에 보고하면 무한 왕복이 된다.
@@ -257,15 +258,23 @@
     }
 
     /// 프리뷰를 스크롤해 (src, line) 이 창의 ratio 위치에 오게 한다.
-    function scrollToSourceLine(src, line, ratio) {
+    /// edge: 편집기가 맨 위( -1 ) · 맨 끝( 1 )에 붙어 있다.
+    function scrollToSourceLine(src, line, ratio, edge) {
         invalidateIfResized();
 
         // 에디터가 문서 맨 위다. 첫 기준점은 테마 헤더나 여백만큼 아래에 있어서
         // 비율 보정을 태우면 0 보다 큰 값이 나오고, 그러면 제목이 화면 위로
         // 잘려 나간다. 문서 시작은 문서 시작으로 맞춘다.
-        if (line <= 1) {
+        if (edge < 0 || line <= 1) {
             intent.suppress(FEEDBACK_GUARD_MS);
             window.scrollTo(0, 0);
+            return;
+        }
+        // 끝도 끝으로. 편집기의 가운데 줄을 맞추면 그 아래 내용( 그림 · 긴 코드 블록 )이
+        // 반 화면보다 길 때 문서 끝이 보이지 않는다.
+        if (edge > 0) {
+            intent.suppress(FEEDBACK_GUARD_MS);
+            window.scrollTo(0, document.documentElement.scrollHeight);
             return;
         }
 
@@ -292,7 +301,10 @@
         invalidateIfResized();
         var hit = lineForDocumentY(window.scrollY + window.innerHeight * ANCHOR_RATIO);
         if (hit) {
-            bridge.previewScrolled(hit.src, hit.line, ANCHOR_RATIO, userDriven);
+            // 맨 위 · 맨 끝에 붙었으면 편집기도 그 끝으로 간다( 가운데 줄 대신 ).
+            var max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+            var edge = window.scrollY <= 1 ? -1 : window.scrollY >= max - 1 ? 1 : 0;
+            bridge.previewScrolled(hit.src, hit.line, ANCHOR_RATIO, userDriven, edge);
         }
     }
 
@@ -351,8 +363,8 @@
         if (!bridge) {
             return;
         }
-        bridge.scrollToLineRequested.connect(function (src, line, ratio) {
-            scrollToSourceLine(src, line, ratio);
+        bridge.scrollToLineRequested.connect(function (src, line, ratio, edge) {
+            scrollToSourceLine(src, line, ratio, edge);
         });
         bridge.rebindRequested.connect(function () {
             invalidateCache();

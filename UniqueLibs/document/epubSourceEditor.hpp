@@ -5,6 +5,7 @@
 #include "commonLibs/storage/storage.hpp"
 #include "documentWebProcess.hpp"
 #include "epubLineShifts.hpp"
+#include "previewScrollSync.hpp"
 #include "documentEditRange.hpp"
 #include "commonLibs/document/epub/epubSourceMap.hpp"
 #include "documentStatusBar.hpp"
@@ -199,7 +200,9 @@ private:
     void setupScrollSync();bool scrollSyncActive()const;void syncPreviewScroll();void previewScrolled(const QJsonObject& Report);
     QJsonObject sourceScrollTarget(bool Revision)const;QJsonObject sourceAnchor(qintptr Position)const;void placeSourceLine(int Position,double Ratio);int spineIndex(const QString& Path)const;
     double toPreviewLine(double Line)const;double fromPreviewLine(double Line)const;void clearLineShifts();
-    QTimer scrollRetryTimer_;qint64 previewDrivenIgnoreUntil_=0,suppressSyncUntil_=0,previewScrollSeen_=-1,sourceScrollSerial_=0,previewCandidateScrollSerial_=-1;
+    // The editor's side of scroll sync: when a preview report is followed, when the editor answers.
+    PreviewScrollSync scrollFollow_;
+    QTimer scrollRetryTimer_;qint64 previewScrollSeen_=-1,sourceScrollSerial_=0,previewCandidateScrollSerial_=-1;
     double lastScrollLine_=-1,lastScrollRatio_=-1;int lastScrollChapter_=-1;bool lastScrollEnd_=false,scrollSyncPending_=false;QElapsedTimer previewCandidateScrollClock_;
     // The source-map anchor names nodes of the previewed text; it is sent only while that is the current text.
     bool previewMatchesSource_=false;QJsonObject lastScrollTarget_;

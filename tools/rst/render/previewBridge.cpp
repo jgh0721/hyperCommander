@@ -70,16 +70,17 @@ void PreviewBridge::AttachTo( QWebEnginePage* Page )
                   QWebEngineScript::DocumentReady );
 }
 
-void PreviewBridge::RequestScrollToLine( const int SourceIndex, const double Line, const double Ratio )
+void PreviewBridge::RequestScrollToLine( const int SourceIndex, const double Line, const double Ratio, const int Edge )
 {
     if( !ready_ ) {
         hasPendingScroll_ = true;
         pendingSourceIndex_ = SourceIndex;
         pendingLine_ = Line;
         pendingRatio_ = Ratio;
+        pendingEdge_ = Edge;
         return;
     }
-    emit scrollToLineRequested( SourceIndex, Line, Ratio );
+    emit scrollToLineRequested( SourceIndex, Line, Ratio, Edge );
 }
 
 void PreviewBridge::SuppressScrollFeedback( const int Milliseconds )
@@ -103,7 +104,7 @@ void PreviewBridge::ready( int /*ProtocolVersion*/ )
     emit BridgeReady();
     if( hasPendingScroll_ ) {
         hasPendingScroll_ = false;
-        emit scrollToLineRequested( pendingSourceIndex_, pendingLine_, pendingRatio_ );
+        emit scrollToLineRequested( pendingSourceIndex_, pendingLine_, pendingRatio_, pendingEdge_ );
     }
 }
 
@@ -112,9 +113,10 @@ void PreviewBridge::sourceLocationClicked( const int SourceIndex, const double L
     emit EditorNavigationRequested( SourceIndex, Line, ViewportRatio );
 }
 
-void PreviewBridge::previewScrolled( const int SourceIndex, const double Line, const double ViewportRatio, const bool UserDriven )
+void PreviewBridge::previewScrolled( const int SourceIndex, const double Line, const double ViewportRatio, const bool UserDriven,
+                                     const int Edge )
 {
-    emit PreviewScrollChanged( SourceIndex, Line, ViewportRatio, UserDriven );
+    emit PreviewScrollChanged( SourceIndex, Line, ViewportRatio, UserDriven, Edge );
 }
 
 void PreviewBridge::hotSwapResult( const int Token, const bool Ok, const QString& Message )

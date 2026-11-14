@@ -834,7 +834,7 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
     else if (Type == "position" && actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_)
     {
         // A click places the caret at the clicked character and keeps its screen height.
-        suppress_.restart();
+        sync_.EditorFollowed();
         placeSource(fromPreviewLine(Value["line"].toDouble(1)), Value["column"].isDouble() ? Value["column"].toInt() : -1,
                     Value["offset"].toDouble(), true);
         lastSourceAnchor_ = sourceScrollAnchor();
@@ -854,19 +854,19 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
             }
         // Keys reach the preview only while it has focus. Wheel, pointer and touch scroll the
         // preview under the pointer even while the source keeps the focus, and the source follows.
-        // A scrollbar drag or press has no page input events; the preview reports it as such.
-        // Every user report is followed: a smooth scroll keeps reporting after the first one,
-        // and the preview never calls its own echo of an editor request a user scroll.
+        // A dragged scrollbar thumb moves the page with no input after the press; the preview reports
+        // that as "scrollbar". Every user report is followed (PreviewScrollSync), except one that may
+        // have left before the editor's last request: a smooth scroll keeps reporting after the first
+        // one, and the preview never calls its own echo of an editor request a user scroll.
         const auto Intent = Value["intent"].toString();
         const bool Positional = Intent == "wheel" || Intent == "pointer" || Intent == "touch" || Intent == "scrollbar";
-        if (Value["user"].toBool() && (Positional || preview_->HasFocus()) && actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_)
+        if (sync_.Follows(Value["user"].toBool()) && (Positional || preview_->HasFocus()) && actions_["markdown.syncScroll"]->isChecked() && SourceVisible() && !composing_)
         {
             auto *B = static_cast<ScintillaQtDirectBackend *>(source_->Backend());
-            suppress_.restart();
-            if (Value["top"].toBool()) B->Send(SCI_SETFIRSTVISIBLELINE, 0);
-            else if (Value["bottom"].toBool()) B->Send(SCI_SETFIRSTVISIBLELINE, quintptr(1) << 30);
-            else placeSource(fromPreviewLine(Value["line"].toDouble(1)), Value["column"].isDouble() ? Value["column"].toInt() : -1,
-                             Value["anchorOffset"].toDouble(), false);
+            sync_.EditorFollowed();
+            if (!PreviewScrollSync::PlaceAtPreviewEdge(B, Value["top"].toBool(), Value["bottom"].toBool()))
+                placeSource(fromPreviewLine(Value["line"].toDouble(1)), Value["column"].isDouble() ? Value["column"].toInt() : -1,
+                            Value["anchorOffset"].toDouble(), false);
             lastSourceAnchor_ = sourceScrollAnchor();
             lastPosition_ = B->Send(SCI_GETCURRENTPOS);
         }
@@ -933,6 +933,7 @@ void MarkdownDocumentView::sendPosition(double Line, bool Scroll, const QJsonObj
         Message["serial"] = ++scrollSerial_;
     }
     preview_->Send(Message);
+    sync_.EditorSent();
 }
 double MarkdownDocumentView::toPreviewLine(double Line) const
 {
@@ -1016,7 +1017,7 @@ void MarkdownDocumentView::placeSource(double Line, int Column, double Offset, b
     B->Send(SCI_SETFIRSTVISIBLELINE, quintptr(qMax<qintptr>(0, Line0 + Sub - RowsAbove)));
     // Rows above may wrap once they are shown; correct by the rows they added.
     Place();
-    QTimer::singleShot(0, this, [this, Place] { suppress_.restart(); Place(); });
+    QTimer::singleShot(0, this, [this, Place] { sync_.EditorFollowed(); Place(); });
     // Without word wrap the character may sit beside the visible part of a long line.
     if (!source_->isWordWrapEnabled())
         B->Send(SCI_SCROLLRANGE, quintptr(Position), Position);
@@ -1040,9 +1041,9 @@ void MarkdownDocumentView::sampleSource()
         return;
     // The preview has just moved the editor: answering now would bounce. Send the
     // final position once the guard ends.
-    if (suppress_.isValid() && suppress_.elapsed() < 300)
+    if (const int Delay = sync_.SendDelayMs(); Delay > 0)
     {
-        sampleSoon_.start(int(300 - suppress_.elapsed()) + 16);
+        sampleSoon_.start(Delay + 16);
         return;
     }
     ++anchorSyncs_;
@@ -1228,7 +1229,7 @@ void MarkdownDocumentView::showInSource(double Line, int Column, double Offset)
     const auto Place = [this, Line, Column, Offset] {
         // As a click in the preview: the character keeps its screen height, and the editor's own
         // anchor is not sent back.
-        suppress_.restart();
+        sync_.EditorFollowed();
         placeSource(fromPreviewLine(Line), Column, Offset, true);
         lastSourceAnchor_ = sourceScrollAnchor();
         lastPosition_ = static_cast<ScintillaQtDirectBackend *>(source_->Backend())->Send(SCI_GETCURRENTPOS);

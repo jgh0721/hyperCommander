@@ -55,12 +55,16 @@
 
 DECLARE_CMNLIBSV2_NAMESPACE
 namespace {
-/// 한쪽 스크롤이 상대를 움직이고, 그 움직임이 다시 되돌아오는 것을 막는 창.
-constexpr qint64 kSyncGuardMs = 250;
-
 /// 스크롤 동기화의 기준점. 0.5 = 창의 정중앙.
 /// 에디터 정중앙에 있는 줄이 프리뷰에서도 정중앙에 오게 한다.
 constexpr double kAnchorRatio = 0.5;
+
+/// 편집기가 맨 위( -1 ) · 맨 끝( 1 )에 붙어 있는가. 그 사이면 0.
+int editorEdge( const hc::rst::RstEditor& editor )
+{
+    return editor.firstVisibleLine() <= 1 ? -1 : editor.isScrolledToEnd() ? 1 : 0;
+}
+
 /// 이보다 큰 HTML 은 핫스왑 이득이 없다. 그냥 다시 로드한다.
 constexpr qsizetype kHotSwapMaxBytes = 4 * 1024 * 1024;
 
@@ -466,8 +470,8 @@ void WorkspaceController::restorePageState( const PageState& page )
     // 스크롤 기억은 화면을 갈아탈 때마다 버린다. 새 화면에는 반드시 한 번 보내야 한다.
     lastSyncedSourceIndex_ = -1;
     lastSyncedLine_ = -1.0;
-    suppressSyncUntilMs_ = 0;
-    previewDrivenIgnoreUntilMs_ = 0;
+    lastSyncedEdge_ = 0;
+    previewSync_.Reset();
     ++hotSwapToken_;
 }
 
@@ -561,7 +565,8 @@ void WorkspaceController::connectSurface( PreviewSurface* surface )
 
     // 미리보기 -> 에디터
     connect( surface, &PreviewSurface::previewScrollChanged, this,
-            [this, surface]( const int sourceIndex, const double line, const double ratio, const bool userDriven ) {
+            [this, surface]( const int sourceIndex, const double line, const double ratio, const bool userDriven,
+                             const int edge ) {
                 if( surface != previewView_ )
                     return;
                 if( !userDriven )
@@ -573,7 +578,7 @@ void WorkspaceController::connectSurface( PreviewSurface* surface )
                 }
                 if( !scrollSyncEnabled_ )
                     return;
-                syncEditorFromPreview( sourceIndex, line, ratio );
+                syncEditorFromPreview( sourceIndex, line, ratio, false, edge );
             } );
 
     // 미리보기 클릭 -> 에디터 이동 (클릭 지점 비율을 그대로 유지)
@@ -634,8 +639,7 @@ void WorkspaceController::syncPreviewFromEditor()
     if( previewView_.isNull() || activeView_.isNull() || !scrollSyncEnabled_ )
         return;
 
-    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-    if( nowMs < suppressSyncUntilMs_ )
+    if( const int delay = previewSync_.SendDelayMs(); delay > 0 )
     {
         // 프리뷰가 방금 에디터를 움직였다. 지금 되돌려 보내면 왕복이 된다.
         //
@@ -644,7 +648,7 @@ void WorkspaceController::syncPreviewFromEditor()
         // 이동을 하면 프리뷰가 도중에 멈춰 첫 문단과 제목이 보이지 않는
         // 상태로 남는다. 가드가 풀린 직후 현재 위치로 한 번 더 맞춘다.
         if( !previewSyncRetry_->isActive() )
-            previewSyncRetry_->start( static_cast< int >( suppressSyncUntilMs_ - nowMs ) + 16 );
+            previewSyncRetry_->start( delay + 16 );
         return;
     }
     previewSyncRetry_->stop();
@@ -664,9 +668,11 @@ void WorkspaceController::syncPreviewFromEditor()
     // 여러 화면 줄로 접히면 창 한가운데 보이는 줄은 여전히 문서 앞쪽이라
     // 프리뷰가 그 줄을 한가운데로 올리려다 제목을 화면 밖으로 밀어낸다.
     // 맨 위는 맨 위로 맞추는 것이 사용자가 기대하는 결과다.
-    const double anchorLine = activeView_->firstVisibleLine() <= 1
-                                  ? 1.0
-                                  : activeView_->fractionalLineAtViewportRatio( kAnchorRatio );
+    //
+    // 끝도 같다. 마지막 줄이 보이면 프리뷰도 끝까지 내린다. 창 가운데 줄을 맞추면 그 아래가
+    // 프리뷰에서 반 화면보다 길 때( 그림 · 긴 코드 블록 ) 문서 끝이 보이지 않는다.
+    const int edge = editorEdge( *activeView_ );
+    const double anchorLine = edge < 0 ? 1.0 : activeView_->fractionalLineAtViewportRatio( kAnchorRatio );
 
     // 보낼 값이 지난번과 같으면 아무것도 하지 않는다. **가드도 세우지 않는다** —
     // 보내지 않았으므로 프리뷰가 우리 때문에 움직일 일이 없고, 그런데도 가드를
@@ -678,23 +684,24 @@ void WorkspaceController::syncPreviewFromEditor()
     // 그대로 여기까지 내려온다. 그때마다 24 MB 프리뷰 페이지의 렌더러에
     // 스크롤 요청이 꽂히고 250 ms 가드 둘과 재시도 타이머가 다시 걸린다.
     // 실측으로 Alt+Z 연타 구간의 60 ms 대 정체가 여기서 왔다.
-    if( sourceIndex == lastSyncedSourceIndex_ && qFuzzyCompare( anchorLine, lastSyncedLine_ ) )
+    if( sourceIndex == lastSyncedSourceIndex_ && qFuzzyCompare( anchorLine, lastSyncedLine_ ) && edge == lastSyncedEdge_ )
         return;
 
     lastSyncedSourceIndex_ = sourceIndex;
     lastSyncedLine_ = anchorLine;
+    lastSyncedEdge_ = edge;
 
-    // 이 순간부터 잠깐은 에디터가 주도권을 갖는다. 프리뷰가 (우리 때문에
-    // 움직여서) 보고해 오는 위치로 에디터를 되돌리면 스크롤이 튄다.
-    previewDrivenIgnoreUntilMs_ = QDateTime::currentMSecsSinceEpoch() + kSyncGuardMs;
+    // 이 순간부터 잠깐은 에디터가 주도권을 갖는다. 프리뷰가 (우리 요청보다 먼저
+    // 떠나) 보고해 오는 위치로 에디터를 되돌리면 스크롤이 튄다.
+    previewSync_.EditorSent();
 
     // 프리뷰가 우리 때문에 움직인 것을 다시 우리에게 보고하지 않도록 막는다.
-    previewView_->suppressScrollFeedback( static_cast< int >( kSyncGuardMs ) );
-    previewView_->requestScrollToLine( sourceIndex, anchorLine, kAnchorRatio );
+    previewView_->suppressScrollFeedback( hc::document::PreviewScrollSync::GuardMs );
+    previewView_->requestScrollToLine( sourceIndex, anchorLine, kAnchorRatio, edge );
 }
 
 void WorkspaceController::syncEditorFromPreview( const int sourceIndex, const double line,
-                                                 const double ratio, const bool userInitiated )
+                                                 const double ratio, const bool userInitiated, const int edge )
 {
     if( activeView_.isNull() )
         return;
@@ -705,7 +712,7 @@ void WorkspaceController::syncEditorFromPreview( const int sourceIndex, const do
     // 굴린 것에만 왕복 가드를 적용한다. 에디터를 굴리는 중이면 프리뷰의 보고는
     // 우리가 방금 만든 스크롤의 결과일 수 있고, 그것으로 에디터를 되돌리면
     // 스크롤이 제자리에서 튄다. 눌러서 옮긴 것은 명백한 지시이므로 넘긴다.
-    if( !userInitiated && QDateTime::currentMSecsSinceEpoch() < previewDrivenIgnoreUntilMs_ )
+    if( !userInitiated && !previewSync_.Follows( true ) )
     {
         traceP( "sync.editor.skip", QStringLiteral( "editor-driving" ) );
         return;
@@ -724,13 +731,26 @@ void WorkspaceController::syncEditorFromPreview( const int sourceIndex, const do
 
     // 에디터를 움직이면 viewportScrolled 가 나오고, 그게 다시 프리뷰를
     // 스크롤시킨다. 그 왕복을 여기서 끊는다.
-    suppressSyncUntilMs_ = QDateTime::currentMSecsSinceEpoch() + kSyncGuardMs;
+    previewSync_.EditorFollowed();
     // "편집하던 줄이 눈앞에서 사라졌다" 는 이 한 줄에서 온다. 걸러지지 않은 이동만
     // 여기 닿으므로, 트레이스에 이 태그가 몇 번 찍히는지가 곧 판정의 측정이다.
     // `click` 은 프리뷰를 눌러서 옮긴 것(1)과 굴려서 옮긴 것(0)을 가른다.
     traceP( "sync.editor",
-           QStringLiteral( "line=%1 click=%2" ).arg( line, 0, 'f', 1 ).arg( userInitiated ? 1 : 0 ) );
-    activeView_->scrollFractionalLineToViewportRatio( line, ratio );
+           QStringLiteral( "line=%1 click=%2 edge=%3" ).arg( line, 0, 'f', 1 ).arg( userInitiated ? 1 : 0 ).arg( edge ) );
+    // 프리뷰가 맨 위 · 맨 끝에 붙었으면 편집기도 그 끝으로. 가운데 줄을 맞추면 첫 문단이 여러 행으로
+    // 접히는 문서에서 편집기가 맨 위에 닿지 않는다.
+    if( !activeView_->scrollToPreviewEdge( edge ) )
+        activeView_->scrollFractionalLineToViewportRatio( line, ratio );
+
+    // 편집기는 행 단위로 스크롤한다. 놓인 자리를 기억해 두지 않으면 가드가 풀린 뒤의 재시도가
+    // 반올림된 그 자리를 보내 사용자가 방금 놓은 프리뷰를 조금 밀어낸다.
+    const int landedSource = sourceIndexForPath( context->path );
+    if( landedSource >= 0 )
+    {
+        lastSyncedSourceIndex_ = landedSource;
+        lastSyncedEdge_ = editorEdge( *activeView_ );
+        lastSyncedLine_ = lastSyncedEdge_ < 0 ? 1.0 : activeView_->fractionalLineAtViewportRatio( kAnchorRatio );
+    }
 }
 
 void WorkspaceController::setPythonEnvironment( PythonEnvManager* manager )

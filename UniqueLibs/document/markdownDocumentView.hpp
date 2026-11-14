@@ -3,6 +3,7 @@
 #include "epubLineShifts.hpp"
 #include "documentEditRange.hpp"
 #include "documentToolPanel.hpp"
+#include "previewScrollSync.hpp"
 #include <QPointer>
 #include <QWidget>
 #include <QJsonObject>
@@ -199,7 +200,8 @@ class MarkdownDocumentView final : public QWidget
     QLabel *message_;
     QMap<QString, QAction *> actions_;
     QTimer debounce_, sample_, sampleSoon_;
-    QElapsedTimer suppress_;
+    // The editor's side of scroll sync: when a preview report is followed, when the editor answers.
+    PreviewScrollSync sync_;
     // lastInput_: last key or IME event in the source. deferredSince_: a due render first waited
     // for input. renderClock_: the render request in flight. lastSampleSent_: last anchor message.
     QElapsedTimer lastInput_, deferredSince_, renderClock_, lastSampleSent_;

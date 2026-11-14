@@ -4,7 +4,6 @@
 #include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
 #include <QAction>
-#include <QDateTime>
 #include <QJsonArray>
 #include <Scintilla.h>
 #include <QAbstractScrollArea>
@@ -13,11 +12,8 @@
 
 namespace hc::document {
 namespace {
-// After one side moves the other, the other side's echo of that move is ignored this long.
-constexpr qint64 SyncGuardMs=250;
 // The line at this height ratio of the editor is kept at the same ratio of the preview.
 constexpr double AnchorRatio=0.5;
-qint64 nowMs(){return QDateTime::currentMSecsSinceEpoch();}
 ScintillaQtDirectBackend* direct(QTextView* View){return static_cast<ScintillaQtDirectBackend*>(View->Backend());}
 }
 void EpubSourceEditor::setupScrollSync() {
@@ -66,7 +62,7 @@ void EpubSourceEditor::placeSourceRow(qintptr Position,double Y){
     const auto Sub=qMax<qintptr>(0,(Backend->Send(SCI_POINTYFROMPOSITION,0,Position)-Backend->Send(SCI_POINTYFROMPOSITION,0,Backend->Send(SCI_POSITIONFROMLINE,quintptr(Line))))/Row);
     Backend->Send(SCI_SETFIRSTVISIBLELINE,quintptr(qMax<qintptr>(0,Backend->Send(SCI_VISIBLEFROMDOCLINE,quintptr(Line))+Sub-qintptr(std::lround(Y/double(Row))))));
     Place();
-    QTimer::singleShot(0,this,[this,Place]{suppressSyncUntil_=nowMs()+SyncGuardMs;Place();});
+    QTimer::singleShot(0,this,[this,Place]{scrollFollow_.EditorFollowed();Place();});
 }
 bool EpubSourceEditor::scrollSyncActive()const{return action("epubPreviewScrollSync")->isChecked();}
 int EpubSourceEditor::spineIndex(const QString& Path)const{const auto Spine=model_.Publication()["spine"].toArray();for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==Path)return I;return -1;}
@@ -153,9 +149,8 @@ void EpubSourceEditor::syncPreviewScroll() {
     // Position sync brings the preview to this chapter first; while a sync is pending its state changes call back here.
     const auto State=previewView_->ViewState();
     if(State["chapterIndex"].toInt(-1)!=Chapter || !State["previewScroll"].toObject()["supported"].toBool())return;
-    const qint64 Now=nowMs();
     // The preview has just moved the editor, so answering now would bounce. Send the final position once the guard ends.
-    if(Now<suppressSyncUntil_){if(!scrollRetryTimer_.isActive())scrollRetryTimer_.start(int(suppressSyncUntil_-Now)+16);return;}
+    if(const int Delay=scrollFollow_.SendDelayMs();Delay>0){if(!scrollRetryTimer_.isActive())scrollRetryTimer_.start(Delay+16);return;}
     scrollRetryTimer_.stop();scrollSyncPending_=false;
     auto Target=sourceScrollTarget(true);const double Line=Target["line"].toDouble();const bool End=Target["end"].toBool();const double Ratio=Target["ratio"].toDouble();
     // Viewport signals also follow changes that keep the line, such as wrap toggles. An unchanged target sends
@@ -163,28 +158,29 @@ void EpubSourceEditor::syncPreviewScroll() {
     // The anchor character can change within a row (horizontal moves), so the whole target is compared.
     if(Chapter==lastScrollChapter_ && Target==lastScrollTarget_)return;
     lastScrollChapter_=Chapter;lastScrollEnd_=End;lastScrollLine_=Line;lastScrollRatio_=Ratio;lastScrollTarget_=Target;Target["serial"]=++sourceScrollSerial_;
-    if(previewView_->RequestSourceScroll(Target))previewDrivenIgnoreUntil_=Now+SyncGuardMs;
+    if(previewView_->RequestSourceScroll(Target))scrollFollow_.EditorSent();
 }
 void EpubSourceEditor::previewScrolled(const QJsonObject& Report) {
     const auto Serial=Report["serial"].toInteger(0);if(Serial<=previewScrollSeen_)return;previewScrollSeen_=Serial;
     // Only the user's scroll moves the editor; the page also scrolls by itself while images and fonts settle.
-    if(!scrollSyncActive() || !Report["user"].toBool() || !Report["supported"].toBool() || sourceComposing_ || !ready_ || !sourceShown())return;
-    const qint64 Now=nowMs();if(Now<previewDrivenIgnoreUntil_ || Report["chapter"].toInt(-1)!=spineIndex(current_))return;
-    suppressSyncUntil_=Now+SyncGuardMs;auto* Backend=direct(text_);
+    // A report right after the editor's own request may have left before it (PreviewScrollSync).
+    if(!scrollSyncActive() || !scrollFollow_.Follows(Report["user"].toBool()) || !Report["supported"].toBool() || sourceComposing_ || !ready_ || !sourceShown())return;
+    if(Report["chapter"].toInt(-1)!=spineIndex(current_))return;
+    scrollFollow_.EditorFollowed();auto* Backend=direct(text_);
     // The preview's reference character, by its source-map position, keeps its screen height here.
     const auto Reference=Report["reference"].toObject();const auto* Map=previewMatchesSource_?sourceMap():nullptr;
     const int Exact=Map && Reference["anchor"].isObject()?Map->Position(Reference["anchor"].toObject()):-1;
-    if(Report["top"].toBool())Backend->Send(SCI_SETFIRSTVISIBLELINE,0);
-    else if(Report["bottom"].toBool())Backend->Send(SCI_SETFIRSTVISIBLELINE,quintptr(Backend->Send(SCI_VISIBLEFROMDOCLINE,quintptr(Backend->lineCount()))));
-    else if(Exact>=0)placeSourceRow(fromUtf16(Exact),sourceYForViewOffset(Reference["viewOffset"].toDouble()));
-    else Backend->scrollFractionalLineToViewportRatio(fromPreviewLine(Report["line"].toDouble()),Report["ratio"].toDouble(AnchorRatio));
+    if(!PreviewScrollSync::PlaceAtPreviewEdge(Backend,Report["top"].toBool(),Report["bottom"].toBool())){
+        if(Exact>=0)placeSourceRow(fromUtf16(Exact),sourceYForViewOffset(Reference["viewOffset"].toDouble()));
+        else Backend->scrollFractionalLineToViewportRatio(fromPreviewLine(Report["line"].toDouble()),Report["ratio"].toDouble(AnchorRatio));
+    }
     // The editor scrolls whole rows. Remembering where it landed keeps the retry after the guard from
     // sending that rounded position back and nudging the preview the user just placed.
     const auto Landed=sourceScrollTarget(true);lastScrollChapter_=Landed["chapter"].toInt();lastScrollLine_=Landed["line"].toDouble();lastScrollEnd_=Landed["end"].toBool();lastScrollRatio_=Landed["ratio"].toDouble();lastScrollTarget_=Landed;
 }
 void EpubSourceEditor::placeSourceLine(int Position,double Ratio) {
     // A preview click keeps its height in the editor. The editor's resulting scroll must not echo back.
-    suppressSyncUntil_=nowMs()+SyncGuardMs;auto* Backend=direct(text_);
+    scrollFollow_.EditorFollowed();auto* Backend=direct(text_);
     Backend->scrollFractionalLineToViewportRatio(double(Backend->Send(SCI_LINEFROMPOSITION,quintptr(fromUtf16(Position))))+1,qBound(0.0,Ratio,0.9));
     const auto Landed=sourceScrollTarget(true);lastScrollChapter_=Landed["chapter"].toInt();lastScrollLine_=Landed["line"].toDouble();lastScrollEnd_=Landed["end"].toBool();lastScrollRatio_=Landed["ratio"].toDouble();lastScrollTarget_=Landed;
 }

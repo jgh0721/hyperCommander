@@ -7,6 +7,7 @@
 #include "text/QTextView.h"
 #include "text/RstStructure.h"
 #include "text/ScintillaQtDirectBackend.h"
+#include "UniqueLibs/document/previewScrollSync.hpp"
 
 /// 기타 헤더파일
 
@@ -132,6 +133,13 @@ double RstEditor::fractionalLineAtViewportRatio( const double Ratio ) const
 void RstEditor::scrollFractionalLineToViewportRatio( const double FractionalLine, const double Ratio )
 {
     if( !backend_.isNull() ) backend_->scrollFractionalLineToViewportRatio( FractionalLine, Ratio );
+}
+
+bool RstEditor::isScrolledToEnd() const { return !backend_.isNull() && backend_->isScrolledToEnd(); }
+
+bool RstEditor::scrollToPreviewEdge( const int Edge )
+{
+    return !backend_.isNull() && hc::document::PreviewScrollSync::PlaceAtPreviewEdge( backend_, Edge < 0, Edge > 0 );
 }
 
 QPoint RstEditor::caretGlobalPos() const
