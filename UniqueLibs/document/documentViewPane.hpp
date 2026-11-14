@@ -18,6 +18,7 @@ class QBaseView;
 class QTextView;
 class QPDFView;
 class QImageView;
+namespace hc::sqlite { class DocumentView; }
 namespace hc::document
 {
     class EpubProcessView;
@@ -56,6 +57,17 @@ namespace hc::document
         bool IsEpub() const { return viewId_ == "epub"; }
         bool IsProcessDocument() const { return IsHwp() || IsEpub(); }
         bool IsHwp() const { return viewId_ == "hwp" || viewId_ == "hwpx"; }
+        // SQLite 데이터베이스 작업 창(설계 261113). 저장 · 인쇄가 없고 문서 바이트를 읽지 않는다.
+        bool IsSqlite() const { return viewId_ == "sqlite"; }
+        // 설정 › SQLite › 글꼴을 다시 읽는다(문서 창의 설정 반영).
+        void ReloadSqlitePreferences();
+        // 단축키 범위 sqlite · sqlite.query · sqlite.grid · sqlite.schema 가 Focus 에서 켜지는가.
+        bool OwnsSqliteScope(const QString& Scope, QWidget* Focus) const;
+        // 다시 읽기(Ctrl+R): SQLite 는 문서를 다시 열지 않고 스키마 · 열린 표를 다시 읽는다.
+        bool RefreshSqlite();
+        // 커밋하지 않은 표 편집 · 열린 트랜잭션(설계 6.2 · 6.3). 저장(Ctrl+S)은 커밋, 탐색기 이름 바꾸기는 막는다(설계 4.6).
+        bool SqliteDirty() const;
+        bool CommitSqlite();
         bool RequestClose();
         void SetReadingSource(const QString& Path,const QString& Entry);
         QByteArray Content() const;
@@ -222,6 +234,8 @@ namespace hc::document
         ImageReadingView* reading_ = nullptr;
         ImageFramePlayer* animation_ = nullptr;
         HwpOpenWindow* hwp_ = nullptr;
+        hc::sqlite::DocumentView* sqlite_ = nullptr;
+        bool sqliteBroker_ = false;
         bool hwpFocusPending_ = false;
         WebProcessRuntime hwpRuntime_, epubRuntime_;
         bool epubConfigured_ = false;

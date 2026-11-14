@@ -1,5 +1,5 @@
 ﻿#include "stdafx.h"
-#include "rstCompletionDetailPopup.hpp"
+#include "completionDetailPopup.hpp"
 
 /// 모듈
 #include "core/ThemeManager.h"
@@ -24,7 +24,7 @@
 #include <QVBoxLayout>
 
 DECLARE_CMNLIBSV2_NAMESPACE
-namespace hc::rst {
+namespace hc::document {
 
 namespace {
 /// 패널 고정 폭. 목록 팝업(280~720)과 나란히 놓아도 화면을 잡아먹지 않는 값.
@@ -378,4 +378,4 @@ void CompletionDetailPopup::showNearPoint( const QPoint& globalPos )
     raise();
 }
 
-}  // namespace hc::rst
+}  // namespace hc::document

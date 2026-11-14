@@ -38,6 +38,10 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QVBoxLayout>
+#include "commonLibs/document/documentFormatSupport.hpp"
+#include "UniqueLibs/document/sqlite/sqliteHistory.hpp"
+#include "UniqueLibs/document/sqlite/sqliteKeyManager.hpp"
+#include "UniqueLibs/document/sqlite/sqliteRuntime.hpp"
 #include <QFrame>
 #include <QGroupBox>
 #include <QTabWidget>
@@ -58,6 +62,7 @@
 #include <fmwidgets/DialogHeader.h>
 #include <fmwidgets/Banner.h>
 #include <fmwidgets/Glyph.h>
+#include <fmwidgets/SegmentedControl.h>
 #include <QFutureWatcher>
 #include <QLocale>
 #include <QProgressBar>
@@ -87,7 +92,7 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
     auto* Body = new QHBoxLayout; Body->setContentsMargins(12, 12, 4, 12); Body->setSpacing(12);
     auto* List = new QListWidget(this); List->setObjectName("settingsCategories");
-    List->addItems({tr("공통"), tr("세션 · 복구"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("reStructuredText"),tr("이미지 뷰어"),tr("탐색기 · 워크스페이스")}); List->setFixedWidth(180);
+    List->addItems({tr("공통"), tr("세션 · 복구"), tr("텍스트 편집기"), tr("단축키"),tr("EPUB"),tr("마크다운"),tr("reStructuredText"),tr("이미지 뷰어"),tr("탐색기 · 워크스페이스"),tr("SQLite")}); List->setFixedWidth(180);
     List->setProperty(fm::style::props::kSoftSelection, true); List->setFrameShape(QFrame::NoFrame);
     for (int Row = 0; Row < List->count(); ++Row) List->item(Row)->setSizeHint(QSize(0, 30));
     auto* Pages = new QStackedWidget(this); Body->addWidget(List); Body->addWidget(Pages, 1); Layout->addLayout(Body, 1);
@@ -705,6 +710,229 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     }
     Note(AncestorCard, tr("선택 카드에서 ‘이 위치에서는 다시 묻지 않기’ 를 켜고 고른 것입니다. 지우면 다음에 다시 묻습니다."));
     ExplorerPage->addStretch();
+    // SQLite(설계 261113 4.5, 시안 ‘설정 창 · SQLite’): 편집기 · 글꼴 · 실행 · 기록 · 암호화 (SEE). 나머지 탭과 항목은 그 기능과 함께 더한다.
+    {
+        const QString SqliteFont = "documentViews/sqlite/font/";
+        const QString SqliteEditor = "documentViews/sqlite/editor/", SqliteRun = "documentViews/sqlite/run/";
+        auto* SqliteTabs = new QTabWidget(Pages); SqliteTabs->setObjectName("sqliteSettingsTabs");
+        auto SqlitePage = [&](const QString& Title) {
+            auto* Scroll = new QScrollArea(SqliteTabs); Scroll->setWidgetResizable(true); Scroll->setFrameShape(QFrame::NoFrame);
+            auto* Content = new QWidget(Scroll); auto* Column = new QVBoxLayout(Content); Column->setContentsMargins(8, 12, 8, 8); Column->setSpacing(12);
+            Scroll->setWidget(Content); SqliteTabs->addTab(Scroll, Title); return Column;
+        };
+        auto SqliteFamily = [&](QFormLayout* Form, const QString& Key, const QString& Label) {
+            auto* Field = new QFontComboBox(this); Field->setObjectName(Key); Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key));
+            Field->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); Field->setMinimumContentsLength(12);
+            controls_[Key] = Field; Form->addRow(Label, Field); return Field;
+        };
+        auto SqliteSize = [&](QFormLayout* Form, const QString& Key, const QString& Label) {
+            auto* Field = new QSpinBox(this); Field->setRange(6, 72); Field->setObjectName(Key); Field->setSuffix(tr(" pt"));
+            Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); controls_[Key] = Field; Form->addRow(Label, Field); return Field;
+        };
+        auto* EditorPage = SqlitePage(tr("편집기"));
+        const QString SqliteCompletion = "documentViews/sqlite/completion/";
+        auto* CompletionCard = Card(EditorPage, tr("자동 완성"));
+        Check(CompletionCard, SqliteCompletion + "auto", tr("입력 중 자동으로 제안"));
+        {
+            const auto Key = SqliteCompletion + "delayMs";
+            auto* Field = new QSpinBox(this); Field->setRange(0, 2000); Field->setSingleStep(50); Field->setSuffix(tr(" ms"));
+            Field->setObjectName(Key); Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); controls_[Key] = Field;
+            CompletionCard->addRow(tr("제안 지연"), Field);
+        }
+        Combo(CompletionCard, SqliteCompletion + "keywordCase", tr("키워드 대소문자"), {tr("대문자 (SELECT · FROM)"), tr("소문자 (select · from)")}, {"upper", "lower"});
+        Combo(CompletionCard, SqliteCompletion + "match", tr("이름 일치"), {tr("접두어, 그다음 머리 글자 (mi → MediaTypeId)"), tr("접두어만")}, {"initials", "prefix"});
+        Check(CompletionCard, SqliteCompletion + "joinFirst", tr("JOIN … ON 뒤에 외래 키 조건을 첫 줄로"));
+        Check(CompletionCard, SqliteCompletion + "callTips", tr("함수 매개변수 도움말 (콜팁)"));
+        Note(CompletionCard, tr("자동 완성 단축키(기본 Ctrl+Space)로는 언제나 엽니다. 문자열 · 주석 안에서는 열지 않습니다. 후보는 스키마 버전이 바뀔 때 다시 읽습니다."));
+        auto* HighlightCard = Card(EditorPage, tr("구문 강조"));
+        Check(HighlightCard, SqliteEditor + "schemaColors", tr("스키마에 있는 테이블 · 열 · 함수 이름을 따로 칠하기"));
+        Check(HighlightCard, SqliteEditor + "statementBar", tr("Ctrl+Enter 로 실행할 현재 문을 거터에 표시"));
+        Note(HighlightCard, tr("글꼴은 ‘글꼴’ 탭에서 정합니다. 들여쓰기 · 줄 번호는 텍스트 편집기 설정을 따르고, 색은 텍스트 편집기 › 색상에서 언어를 SQL 로 고르면 바꿀 수 있습니다."));
+        EditorPage->addStretch();
+        auto* FontPage = SqlitePage(tr("글꼴"));
+        auto* EditorCard = Card(FontPage, tr("쿼리 편집기 글꼴"));
+        Check(EditorCard, SqliteFont + "editorFollowText", tr("텍스트 편집기 글꼴 따르기"));
+        auto* EditorFamily = SqliteFamily(EditorCard, SqliteFont + "editorFamily", tr("글꼴"));
+        auto* EditorSize = SqliteSize(EditorCard, SqliteFont + "editorSizePt", tr("크기"));
+        Note(EditorCard, tr("켜 두면 텍스트 편집기 › 글꼴과 크기를 씁니다. 끄면 위 두 값을 씁니다."));
+        auto* GridCard = Card(FontPage, tr("결과 표 · 스키마 글꼴"));
+        Combo(GridCard, SqliteFont + "grid", tr("결과 표 글꼴"), {tr("화면 글꼴 따르기 (기본값)"), tr("쿼리 편집기 글꼴"), tr("사용자 글꼴")}, {"ui", "editor", "custom"});
+        auto* GridFamily = SqliteFamily(GridCard, SqliteFont + "gridFamily", tr("글꼴"));
+        auto* GridSize = SqliteSize(GridCard, SqliteFont + "gridSizePt", tr("크기"));
+        Check(GridCard, SqliteFont + "gridMonoValues", tr("숫자 · 16진 값은 쿼리 편집기 글꼴로"));
+        Combo(GridCard, SqliteFont + "schema", tr("스키마 트리 글꼴"), {tr("화면 글꼴 따르기 (기본값)"), tr("사용자 글꼴")}, {"ui", "custom"});
+        auto* SchemaFamily = SqliteFamily(GridCard, SqliteFont + "schemaFamily", tr("글꼴"));
+        auto* SchemaSize = SqliteSize(GridCard, SqliteFont + "schemaSizePt", tr("크기"));
+        Note(GridCard, tr("‘사용자 글꼴’ 을 고르면 글꼴 · 크기 칸이 나타납니다. 행 높이는 글꼴에 맞춥니다."));
+        auto* SampleCard = Card(FontPage, tr("견본"));
+        auto* SampleEditor = new QLabel(QStringLiteral("SELECT t.Name, t.Milliseconds FROM tracks AS t WHERE t.GenreId = 1;"), this);
+        SampleEditor->setObjectName("sqliteFontSampleEditor"); SampleEditor->setTextInteractionFlags(Qt::NoTextInteraction);
+        auto* SampleGrid = new QLabel(QStringLiteral("TrackId   Name                      Milliseconds\n      1   For Those About To Rock        343719"), this);
+        SampleGrid->setObjectName("sqliteFontSampleGrid");
+        SampleCard->addRow(SampleEditor); SampleCard->addRow(SampleGrid);
+        auto* FollowText = qobject_cast<QCheckBox*>(controls_[SqliteFont + "editorFollowText"]);
+        auto* GridMode = qobject_cast<QComboBox*>(controls_[SqliteFont + "grid"]);
+        auto* SchemaMode = qobject_cast<QComboBox*>(controls_[SqliteFont + "schema"]);
+        auto* MonoValues = qobject_cast<QCheckBox*>(controls_[SqliteFont + "gridMonoValues"]);
+        const auto RefreshFonts = [=, this] {
+            const bool Follow = FollowText->isChecked();
+            EditorFamily->setEnabled(!Follow); EditorSize->setEnabled(!Follow);
+            GridCard->setRowVisible(GridFamily, GridMode->currentData() == "custom"); GridCard->setRowVisible(GridSize, GridMode->currentData() == "custom");
+            GridCard->setRowVisible(SchemaFamily, SchemaMode->currentData() == "custom"); GridCard->setRowVisible(SchemaSize, SchemaMode->currentData() == "custom");
+            QFont Editor = font();
+            if (Follow) {
+                if (auto* Text = qobject_cast<QFontComboBox*>(controls_.value("documentViews/textView/fontFamily"))) Editor.setFamily(Text->currentFont().family());
+                if (auto* Size = qobject_cast<QSpinBox*>(controls_.value("documentViews/textView/fontSize"))) Editor.setPointSize(Size->value());
+            } else { Editor.setFamily(EditorFamily->currentFont().family()); Editor.setPointSize(EditorSize->value()); }
+            SampleEditor->setFont(Editor);
+            QFont Grid = font();
+            if (GridMode->currentData() == "editor") Grid = Editor;
+            else if (GridMode->currentData() == "custom") { Grid.setFamily(GridFamily->currentFont().family()); Grid.setPointSize(GridSize->value()); }
+            SampleGrid->setFont(MonoValues->isChecked() && GridMode->currentData() == "ui" ? Editor : Grid);
+        };
+        for (auto* Box : {EditorFamily, GridFamily, SchemaFamily}) connect(Box, &QFontComboBox::currentFontChanged, this, RefreshFonts);
+        for (auto* Size : {EditorSize, GridSize, SchemaSize}) connect(Size, &QSpinBox::valueChanged, this, RefreshFonts);
+        for (auto* Mode : {GridMode, SchemaMode}) connect(Mode, &QComboBox::currentIndexChanged, this, RefreshFonts);
+        for (auto* Toggle : {FollowText, MonoValues}) connect(Toggle, &QCheckBox::toggled, this, RefreshFonts);
+        QTimer::singleShot(0, this, RefreshFonts);
+        FontPage->addStretch();
+        auto* RunPage = SqlitePage(tr("실행 · 기록"));
+        auto* RunCard = Card(RunPage, tr("실행"));
+        Combo(RunCard, SqliteRun + "currentScope", tr("Ctrl+Enter 실행 범위"), {tr("선택 영역, 없으면 현재 문"), tr("언제나 현재 문")}, {"selection", "statement"});
+        Combo(RunCard, SqliteRun + "commitMode", tr("SQL 쓰기 커밋 모드"),
+              {tr("자동 (기본값) — 실행하면 바로 파일에 씁니다. 되돌릴 수 없고 다른 프로그램도 바로 봅니다."),
+               tr("수동 — Ctrl+S 로 커밋할 때 씁니다. 그 전엔 롤백할 수 있고, 다른 프로그램은 쓰기를 기다립니다.")}, {"auto", "manual"});
+        Note(RunCard, tr("쿼리 탭 도구 모음의 ‘자동 | 수동’ 으로 탭마다 바꿀 수 있습니다. 새 탭은 이 값으로 시작합니다."));
+        {
+            const auto Key = SqliteRun + "rowLimit";
+            auto* Field = new QSpinBox(this); Field->setRange(0, 1000000); Field->setSingleStep(100); Field->setGroupSeparatorShown(true);
+            Field->setSpecialValueText(tr("모두 (제한 없음)")); Field->setSuffix(tr(" 행"));
+            Field->setObjectName(Key); Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); controls_[Key] = Field;
+            RunCard->addRow(tr("결과 행 제한 (먼저 읽는 행)"), Field);
+        }
+        Check(RunCard, SqliteRun + "confirmUnboundedWrite", tr("WHERE 없는 UPDATE · DELETE 는 실행 전에 확인"));
+        Note(RunCard, tr("행 제한은 새 쿼리 탭부터 씁니다. 열린 탭은 막대의 ‘행 제한’ 값을 지킵니다. 끝까지 스크롤하면 그만큼 더 읽습니다."));
+        const QString SqliteHistory = "documentViews/sqlite/history/";
+        auto* HistoryCard = Card(RunPage, tr("기록 · 쿼리 탭"));
+        Check(HistoryCard, SqliteHistory + "enabled", tr("실행한 문 기록"));
+        {
+            const auto Key = SqliteHistory + "limit";
+            auto* Field = new QSpinBox(this); Field->setRange(1, 10000); Field->setSingleStep(50); Field->setGroupSeparatorShown(true); Field->setSuffix(tr(" 개"));
+            Field->setObjectName(Key); Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); controls_[Key] = Field;
+            HistoryCard->addRow(tr("파일마다 남길 개수"), Field);
+        }
+        Check(HistoryCard, SqliteHistory + "restoreTabs", tr("파일을 다시 열면 쿼리 탭 복원"));
+        {
+            auto* Clear = new QPushButton(tr("기록 지우기…"), this); Clear->setObjectName("sqliteHistoryClear");
+            connect(Clear, &QPushButton::clicked, this, [this] {
+                if (QMessageBox::question(this, tr("기록 지우기"), tr("모든 SQLite 데이터베이스의 실행 기록을 지울까요? 쿼리 탭 보관과 저장한 키는 그대로 둡니다."),
+                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
+                hc::sqlite::ProfileStore::ClearAllHistory(QFileInfo(path_).absolutePath());
+            });
+            HistoryCard->addRow(QString(), Clear);
+        }
+        Note(HistoryCard, tr("키를 넣는 PRAGMA(key · hexkey · textkey · rekey)와 키가 든 URI 는 기록하지 않고, 쿼리 탭을 보관할 때도 뺍니다."));
+        RunPage->addStretch();
+        // 결과 · 편집(설계 6.2 · 6.4).
+        const QString SqliteGrid = "documentViews/sqlite/grid/", SqliteEdit = "documentViews/sqlite/edit/", SqliteOpen = "documentViews/sqlite/open/";
+        auto* GridPage = SqlitePage(tr("결과 · 편집"));
+        auto* CellCard = Card(GridPage, tr("셀 표시"));
+        {
+            const auto Key = SqliteGrid + "nullText";
+            auto* Field = new QLineEdit(this); Field->setObjectName(Key); Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); Field->setMaxLength(24);
+            controls_[Key] = Field; CellCard->addRow(tr("NULL 표시"), Field);
+        }
+        Combo(CellCard, SqliteGrid + "blob", tr("BLOB 표시"), {tr("이미지면 미리보기, 아니면 크기 · 앞 바이트"), tr("크기 · 앞 바이트만")}, {"preview", "summary"});
+        {
+            const auto Key = SqliteGrid + "longText";
+            auto* Field = new QSpinBox(this); Field->setRange(32, 100000); Field->setSingleStep(64); Field->setSuffix(tr(" 자"));
+            Field->setObjectName(Key); Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); controls_[Key] = Field;
+            CellCard->addRow(tr("긴 텍스트를 줄이는 길이"), Field);
+        }
+        Check(CellCard, SqliteGrid + "mismatch", tr("선언 형식과 저장 형식(typeof)이 다르면 표시"));
+        Check(CellCard, SqliteGrid + "alignNumbers", tr("숫자를 오른쪽에 맞추기"));
+        Note(CellCard, tr("값 전체는 값 패널에서 봅니다. 이 길이보다 긴 글 · 여러 줄 글 · BLOB 은 셀에서 고치지 않고 값 패널로 엽니다. NULL 은 회색 기울임, 빈 문자열은 비워 둡니다."));
+        auto* EditCard = Card(GridPage, tr("표 편집"));
+        Check(EditCard, SqliteEdit + "showSql", tr("Ctrl+S 로 저장하기 전에 변경 SQL 보기"));
+        Check(EditCard, SqliteEdit + "confirmDelete", tr("행을 삭제하기 전에 확인"));
+        Check(EditCard, SqliteEdit + "backup", tr("테이블 수정(재작성) 전에 백업 사본 만들기"));
+        Note(EditCard, tr("표 편집은 저장하기 전까지 파일에 쓰지 않습니다. 구조 변경은 이 설정과 관계없이 언제나 SQL 미리보기를 먼저 보입니다."));
+        GridPage->addStretch();
+        // 열기(설계 3 · 9절).
+        auto* OpenPage = SqlitePage(tr("열기"));
+        auto* OpenCard = Card(OpenPage, tr("열기"));
+        {
+            QStringList Extensions;
+            for (const auto Suffix : hc::document::SqliteDocumentExtensions) Extensions.append(QLatin1Char('.') + QString::fromLatin1(Suffix.data(), qsizetype(Suffix.size())));
+            auto* Label = new QLabel(Extensions.join(QStringLiteral(" · ")), this); Label->setObjectName("sqliteOpenExtensions");
+            OpenCard->addRow(tr("SQLite 로 여는 확장자"), Label);
+        }
+        Check(OpenCard, SqliteOpen + "sniffHeader", tr("확장자가 달라도 머리말이 SQLite 이면 SQLite 로 열기"));
+        Combo(OpenCard, SqliteOpen + "countRows", tr("테이블 행 수 세기"), {tr("256 MiB 이하 파일만"), tr("언제나"), tr("세지 않음")}, {"small", "always", "never"});
+        {
+            const auto Key = SqliteOpen + "busyTimeoutMs";
+            auto* Field = new QSpinBox(this); Field->setRange(0, 600000); Field->setSingleStep(500); Field->setGroupSeparatorShown(true); Field->setSuffix(tr(" ms"));
+            Field->setObjectName(Key); Field->setProperty("defaultValue", hc::defaults::edit::SettingValue(Key)); controls_[Key] = Field;
+            OpenCard->addRow(tr("잠금 대기 (busy timeout)"), Field);
+        }
+        Check(OpenCard, SqliteOpen + "foreignKeys", tr("외래 키 검사 켜기 (PRAGMA foreign_keys)"));
+        Check(OpenCard, SqliteOpen + "loadExtension", tr("확장 모듈 불러오기 허용 (load_extension)"));
+        Note(OpenCard, tr("확장 모듈은 DLL 코드를 실행하므로 기본으로 막습니다. 쓸 수 없는 폴더의 WAL 파일은 다른 프로그램의 변경을 보지 못하는 상태로 엽니다. 바꾼 값은 다음에 여는 문서부터 씁니다."));
+        auto* QuickCard = Card(OpenPage, tr("빠른 보기 (Ctrl+Q)"));
+        Check(QuickCard, "documentViews/sqlite/quickView/useSavedKeys", tr("저장한 키가 있으면 암호화 파일도 보여 주기"));
+        Note(QuickCard, tr("빠른 보기는 언제나 읽기 전용으로 열고 키를 묻지 않습니다. 보이는 쪽(256행씩)만 읽습니다. SQL 실행과 편집은 F3 · F4 에서 합니다."));
+        OpenPage->addStretch();
+        // 암호화 (SEE): 위쪽 세그먼트로 ‘SEE 설정’ 과 ‘비밀번호 관리’(저장한 키, 설계 8.3)를 바꾼다(시안).
+        auto* SeeTab = SqlitePage(tr("암호화 (SEE)"));
+        auto* SeeSegments = new fm::ui::SegmentedControl(QStringList{tr("SEE 설정"), tr("비밀번호 관리")}, this);
+        SeeSegments->setObjectName("sqliteSeeSegments"); SeeSegments->setSegmentSize(fm::ui::SegmentedControl::Small);
+        SeeTab->addWidget(SeeSegments, 0, Qt::AlignLeft);
+        auto* SeeStack = new QStackedWidget(this); SeeStack->setObjectName("sqliteSeeStack"); SeeTab->addWidget(SeeStack, 1);
+        connect(SeeSegments, &fm::ui::SegmentedControl::currentIndexChanged, SeeStack, &QStackedWidget::setCurrentIndex);
+        auto* SeeSettings = new QWidget(SeeStack); auto* SeePage = new QVBoxLayout(SeeSettings); SeePage->setContentsMargins(0, 0, 0, 0); SeePage->setSpacing(12);
+        SeeStack->addWidget(SeeSettings);
+        auto* SeeCard = Card(SeePage, tr("SEE 상태"));
+        {
+            const auto See = hc::sqlite::Runtime::See();
+            auto* State = new QLabel(See == hc::sqlite::SeeState::Available
+                ? tr("포함 — AES-256 (Windows CryptoAPI) · SQLite %1").arg(hc::sqlite::Runtime::Version()) : hc::sqlite::Runtime::SeeText(See), this);
+            State->setObjectName("sqliteSeeState"); State->setWordWrap(true);
+            SeeCard->addRow(tr("SEE"), State);
+            auto* Algorithm = new QLabel(tr("AES-256 — 이 SEE 는 한 가지만 씁니다"), this); SeeCard->addRow(tr("알고리즘"), Algorithm);
+            Note(SeeCard, tr("AES-256 이 아닌 SEE 알고리즘(RC4 · AES-128 등)으로 만든 파일은 열지 못할 수 있습니다."));
+        }
+        const QString SqliteSee = "documentViews/sqlite/see/";
+        const bool SeeOn = hc::sqlite::Runtime::See() == hc::sqlite::SeeState::Available;
+        auto* KeyCard = Card(SeePage, tr("키 입력 · 변경"));
+        Combo(KeyCard, SqliteSee + "keyFormat", tr("키 형식 기본값"), {tr("암호문 (textkey)"), tr("문자열 (key)"), tr("16진 (hexkey)")}, {"textkey", "key", "hexkey"});
+        KeyCard->addRow(tr("알고리즘"), new QLabel(tr("AES-256 — 이 SEE 는 한 가지만 씁니다"), this));
+        Check(KeyCard, SqliteSee + "backupBeforeRekey", tr("키를 바꾸기 전에 백업 사본 만들기"));
+        auto* SaveCard = Card(SeePage, tr("키 저장"));
+        Check(SaveCard, SqliteSee + "saveByDefault", tr("키 대화에서 ‘키를 이 PC 에 저장’ 을 미리 켜 두기"));
+        Check(SaveCard, SqliteSee + "trySavedKeys", tr("열 때 저장한 키를 먼저 시도"));
+        Note(SaveCard, tr("저장한 키는 옆의 ‘비밀번호 관리’ 에서 보고 지웁니다. 빠른 보기는 저장한 키만 쓰고 키를 묻지 않습니다."));
+        // SEE 가 없는 빌드 · 라이브러리: 값은 두되 고칠 수 없게(시안 ‘see-off’).
+        for (auto* Form : {KeyCard, SaveCard}) Form->parentWidget()->setEnabled(SeeOn);
+        SeePage->addStretch();
+        auto* KeysWidget = new QWidget(SeeStack); auto* KeysPage = new QVBoxLayout(KeysWidget); KeysPage->setContentsMargins(0, 0, 0, 0); KeysPage->setSpacing(12);
+        SeeStack->addWidget(KeysWidget);
+        auto* KeysCard = Card(KeysPage, QString());
+        auto* Keys = new hc::sqlite::KeyManagerPage(QFileInfo(path_).absolutePath(), KeysWidget);
+        KeysCard->addRow(Keys);
+        auto* StoreCard = Card(KeysPage, tr("보관"));
+        {
+            auto* Where = new QLabel(tr("HyperEditor 설정 폴더 › sqlite-keys.dat"), this); Where->setObjectName("sqliteKeysLocation");
+            Where->setToolTip(QDir::toNativeSeparators(QDir(QFileInfo(path_).absolutePath()).filePath("sqlite-keys.dat")));
+            StoreCard->addRow(tr("저장 위치"), Where);
+            StoreCard->addRow(tr("보호"), new QLabel(tr("Windows DPAPI — 이 PC 의 현재 사용자만 풀 수 있음"), this));
+        }
+        Note(StoreCard, tr("설정 파일과 ‘기존 설정 가져오기’ 에는 들어가지 않습니다. 다른 PC · 다른 사용자 계정으로 옮기면 키를 다시 넣어야 합니다. ‘키 보기’ 는 Windows 로그인 확인 뒤에만 보입니다. 이 목록의 삭제 · 정리는 바로 저장되며 ‘취소’ 로 되돌리지 않습니다."));
+        auto* SqliteHolder = new QWidget(Pages); auto* SqliteColumn = new QVBoxLayout(SqliteHolder); SqliteColumn->setContentsMargins(0, 0, 8, 0); SqliteColumn->setSpacing(12);
+        auto* SqliteHeader = new fm::ui::DialogHeader(SqliteHolder); SqliteHeader->setTitle(tr("SQLite"));
+        SqliteHeader->setSubtitle(tr("SQLite 데이터베이스 작업 창의 쿼리 편집기 · 글꼴 · 실행과 암호화(SEE)를 설정합니다. F3 · F4 작업 창과 Ctrl+Q 빠른 보기가 같은 값을 읽습니다.")); SqliteHeader->setSubtitleWrap(true);
+        SqliteColumn->addWidget(SqliteHeader); SqliteColumn->addWidget(SqliteTabs, 1);
+        Pages->addWidget(SqliteHolder);
+    }
     auto* Footer = new QFrame(this); Footer->setObjectName("settingsFooter"); Footer->setFrameShape(QFrame::StyledPanel); fm::style::setFooter(Footer);
     auto* FooterRow = new QHBoxLayout(Footer); FooterRow->setContentsMargins(16, 8, 16, 8); FooterRow->setSpacing(8); Layout->addWidget(Footer);
     error_ = new QLabel(Footer); error_->setObjectName("settingsError"); error_->setWordWrap(true); error_->setTextInteractionFlags(Qt::TextSelectableByMouse); FooterRow->addWidget(error_, 1);
@@ -716,7 +944,19 @@ DocumentSettingsDialog::DocumentSettingsDialog(QString Path, const QList<QAction
     connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(Buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { Apply(); });
     connect(Buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, this, [this, List] {
-        // Rows: 공통 0 · 세션 · 복구 1 · 텍스트 편집기 2 · 단축키 3 · EPUB 4 · 마크다운 5 · reStructuredText 6 · 이미지 뷰어 7 · 탐색기 · 워크스페이스 8.
+        // Rows: 공통 0 · 세션 · 복구 1 · 텍스트 편집기 2 · 단축키 3 · EPUB 4 · 마크다운 5 · reStructuredText 6 · 이미지 뷰어 7 · 탐색기 · 워크스페이스 8 · SQLite 9.
+        // SQLite: 이 범주의 값만. 저장한 키와 실행 기록은 건드리지 않는다(설계 4.5).
+        if (List->currentRow() == 9) {
+            for (auto I = controls_.begin(); I != controls_.end(); ++I) if (I.key().startsWith("documentViews/sqlite/")) {
+                const auto Default = hc::defaults::edit::SettingValue(I.key());
+                if (auto* Font = qobject_cast<QFontComboBox*>(I.value())) Font->setCurrentFont(QFont(Default.toString()));
+                else if (auto* Box = qobject_cast<QComboBox*>(I.value())) Box->setCurrentIndex(qMax(0, Box->findData(Default)));
+                else if (auto* Number = qobject_cast<QSpinBox*>(I.value())) Number->setValue(Default.toInt());
+                else if (auto* Toggle = qobject_cast<QCheckBox*>(I.value())) Toggle->setChecked(Default.toBool());
+                else if (auto* Line = qobject_cast<QLineEdit*>(I.value())) Line->setText(Default.toString());
+            }
+            return;
+        }
         // 탐색기 · 워크스페이스: 이 페이지의 값만. 기억한 선택은 ‘고른 항목 지우기’ 로 지운다.
         if (List->currentRow() == 8) {
             for (auto I = controls_.begin(); I != controls_.end(); ++I) if (I.key().startsWith("documentViews/explorer/") || I.key().startsWith("documentViews/workspace/")) {
@@ -962,8 +1202,14 @@ void DocumentSettingsDialog::refreshTextColorPreview()
 
 void DocumentSettingsDialog::ShowPage(const QString& Key)
 {
-    static const QStringList Keys{"common", "recovery", "text", "shortcuts", "epub", "markdown", "rst", "image", "explorer"};
-    if (auto* List = findChild<QListWidget*>("settingsCategories"); List && Keys.contains(Key)) List->setCurrentRow(int(Keys.indexOf(Key)));
+    static const QStringList Keys{"common", "recovery", "text", "shortcuts", "epub", "markdown", "rst", "image", "explorer", "sqlite"};
+    // "sqlite-keys": SQLite › 암호화 (SEE) › 비밀번호 관리(데이터베이스 정보의 ‘저장한 키 › 관리…’).
+    const auto Page = Key == "sqlite-keys" ? QStringLiteral("sqlite") : Key;
+    if (auto* List = findChild<QListWidget*>("settingsCategories"); List && Keys.contains(Page)) List->setCurrentRow(int(Keys.indexOf(Page)));
+    if (Key == "sqlite-keys") {
+        if (auto* Tabs = findChild<QTabWidget*>("sqliteSettingsTabs")) Tabs->setCurrentIndex(Tabs->count() - 1);
+        if (auto* Segments = findChild<fm::ui::SegmentedControl*>("sqliteSeeSegments")) Segments->setCurrentIndex(1);
+    }
 }
 void DocumentSettingsDialog::loadControls()
 {

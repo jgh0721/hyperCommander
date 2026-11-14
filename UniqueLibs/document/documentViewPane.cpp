@@ -34,6 +34,8 @@
 #include "image/QImageView.h"
 #include "core/ThemeManager.h"
 #include "core/AppSettings.h"
+#include "UniqueLibs/document/sqlite/sqliteDocumentView.hpp"
+#include "UniqueLibs/bundledFonts.hpp"
 #include "core/ToolbarIcons.h"
 #include "core/PrintManager.h"
 #include <fmstyle/ThemeManager.h>
@@ -170,6 +172,7 @@ namespace hc::document
         if(view_) {delete view_;view_=nullptr;text_=nullptr;pdf_=nullptr;image_=nullptr;}
         if(toolbar_) {delete toolbar_;toolbar_=nullptr;}
         if(hwp_){delete hwp_;hwp_=nullptr;}
+        if(sqlite_){delete sqlite_;sqlite_=nullptr;}
         if(epub_){delete epub_;epub_=nullptr;}
         if(epubFailure_){delete epubFailure_;epubFailure_=nullptr;}
         epubClosing_=false;
@@ -251,6 +254,28 @@ namespace hc::document
             });
             connect(hwp_,&HwpOpenWindow::Closed,this,&DocumentViewPane::ViewStateChanged);
             QTimer::singleShot(0,hwp_,&HwpOpenWindow::Open);
+            return true;
+        }
+        if(IsSqlite()) {
+            // F4(HyperEditor)는 편집기, F3(HyperViewer)는 같은 작업 창, Ctrl+Q 빠른 보기는 열람만(설계 3 · 4.4절).
+            using SqliteView=hc::sqlite::DocumentView;
+            bool QuickPreview=false;
+            for(auto* Owner=parentWidget();Owner;Owner=Owner->parentWidget())if(Owner->property("hc.quickPreview").toBool()){QuickPreview=true;break;}
+            const auto Mode=!unlimitedBytes_?SqliteView::Mode::Editor:QuickPreview?SqliteView::Mode::QuickPreview:SqliteView::Mode::Viewer;
+            sqlite_=new SqliteView(Input.path_,Mode,this);
+            sqlite_->SetClipboardBrokered(sqliteBroker_);
+            ReloadSqlitePreferences();
+            if(!sqlite_->Actions().isEmpty()){
+                toolbar_=new QToolBar(this);toolbar_->setObjectName("viewToolbar");
+                toolbar_->addActions(sqlite_->Actions());layout()->addWidget(toolbar_);
+            }
+            layout()->addWidget(sqlite_);sqlite_->show();
+            contribution_={};contribution_.viewId_=viewId_;contribution_.menuTitle_=tr("데이터베이스(&D)");contribution_.menuActions_=sqlite_->MenuActions();
+            readOnly_=Mode==SqliteView::Mode::QuickPreview;
+            connect(sqlite_,&SqliteView::StateChanged,this,&DocumentViewPane::ViewStateChanged);
+            connect(sqlite_,&SqliteView::CopyRequested,this,[this]{emit ClipboardRequested("copy");});
+            connect(sqlite_,&SqliteView::SettingsRequested,this,[this](const QString& Page){emit WorkspaceCommandRequested(Page=="sqlite-keys"?"app.settings.sqliteKeys":"app.settings.sqlite");});
+            QTimer::singleShot(0,sqlite_,&SqliteView::Open);
             return true;
         }
         bool Success=true;
@@ -522,6 +547,7 @@ namespace hc::document
     }
     DocumentViewKind DocumentViewPane::Kind() const
     {
+        if (IsSqlite()) return DocumentViewKind::Sqlite;
         if (IsHwp()) return DocumentViewKind::Hwp;
         if (IsEpub()) return IsEpubEditing() ? DocumentViewKind::EpubEdit : DocumentViewKind::EpubRead;
         if (markdown_) return markdown_->SourceVisible() ? DocumentViewKind::MarkdownEdit : DocumentViewKind::MarkdownPreview;
@@ -544,6 +570,8 @@ namespace hc::document
         if(Id=="pdf.goToPage" || Id=="pdf.find" || Id=="pdf.findNext" || Id=="pdf.findPrev")return pdf_ != nullptr;
         if(Id=="image.goToPage" || Id=="image.bookmarkSave" || Id=="image.bookmarkOpen")return reading_ && !reading_->isHidden();
         // Copy of a PDF selection, the displayed image or the current reading page.
+        if(Id=="edit.copy" && sqlite_)return sqlite_->HasSelection();
+        if(Id.startsWith("sqlite."))return sqlite_ && sqlite_->CanRunCommand(Id);
         if(Id=="edit.copy")return (reading_ && !reading_->isHidden()) ? !reading_->CurrentImage().isNull() : image_ ? !image_->Content().isNull() : (view_ && !text_ && view_->canCopy());
         if(Id.startsWith("markdown."))return markdown_ && markdown_->CanRun(Id);
         if(Id.startsWith("rst."))return rst_ && rst_->CanRun(Id);
@@ -588,6 +616,11 @@ namespace hc::document
         if(Id=="pdf.findPrev"){pdf_->searchPrev();return true;}
         if(Id=="image.bookmarkSave"){reading_->Bookmark();return true;}
         if(Id=="image.bookmarkOpen"){reading_->OpenBookmark();return true;}
+        if(Id.startsWith("sqlite."))return sqlite_->RunCommand(Id);
+        if(Id=="edit.copy" && sqlite_) {
+            if(sqliteBroker_){emit ClipboardRequested("copy");return true;}
+            QGuiApplication::clipboard()->setText(sqlite_->SelectionText());return true;
+        }
         if(Id=="edit.copy") {
             if(view_ && view_->ClipboardRestricted()){emit ClipboardRequested("copy");return true;}
             if(reading_ && !reading_->isHidden()){QGuiApplication::clipboard()->setImage(reading_->CurrentImage());return true;}
@@ -827,6 +860,7 @@ namespace hc::document
     }
     bool DocumentViewPane::IsBusy() const {
         if(epub_){const auto State=currentEpub()->ViewState();if(epubEditor_ && epubEditor_->Snapshot()["recoveryBusy"].toBool())return true;if(CanEditEpub())return epubEditor_->Snapshot()["validating"].toBool() || (epubClosing_ && !epubEditor_->IsPreviewClosed());return !State["retired"].toBool()&&(epubClosing_||State["status"]!="ready");}
+        if(sqlite_)return sqlite_->IsBusy();
         if(hwp_&&!hwp_->IsClosed()) {
             const auto* Document=hwp_->Document();
             return hwp_->IsBusy()||(!Document&&hwp_->Error().isEmpty())
@@ -834,7 +868,7 @@ namespace hc::document
         }
         return (reading_&&!reading_->isHidden()&&reading_->IsBusy())||(image_&&image_->IsRendering())||(pdf_&&pdf_->IsRendering());
     }
-    bool DocumentViewPane::RequestClose(){if(epub_){epubClosing_=true;epub_->RequestClose();const bool PreviewClosed=!epubEditor_ || epubEditor_->RequestPreviewClose();return epub_->ViewState()["retired"].toBool() && PreviewClosed && (!epubEditor_ || !epubEditor_->Snapshot()["recoveryBusy"].toBool());}if(!hwp_)return true;hwp_->RequestClose();return hwp_->IsClosed();}
+    bool DocumentViewPane::RequestClose(){if(sqlite_)return sqlite_->RequestClose();if(epub_){epubClosing_=true;epub_->RequestClose();const bool PreviewClosed=!epubEditor_ || epubEditor_->RequestPreviewClose();return epub_->ViewState()["retired"].toBool() && PreviewClosed && (!epubEditor_ || !epubEditor_->Snapshot()["recoveryBusy"].toBool());}if(!hwp_)return true;hwp_->RequestClose();return hwp_->IsClosed();}
     bool DocumentViewPane::IsEditing() const {return image_&&image_->IsEditing();}
     bool DocumentViewPane::IsEpubEditing() const {return epubEditor_&&epubEditor_->IsSourceVisible();}
     bool DocumentViewPane::CanUndo() const {if(epubEditor_)return IsEpubEditing()&&epubEditor_->CanUndo();return text_?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_CANUNDO):image_&&image_->CanUndo();}
@@ -866,7 +900,7 @@ namespace hc::document
         }
         if(markdown_){markdown_->Focus();return;}
         if(rst_){rst_->Focus();return;}
-        if(IsEpubEditing())epubEditor_->SourceInput()->isVisible()?epubEditor_->SourceInput()->setFocus():epubEditor_->setFocus();else if(epub_)currentEpub()->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
+        if(IsEpubEditing())epubEditor_->SourceInput()->isVisible()?epubEditor_->SourceInput()->setFocus():epubEditor_->setFocus();else if(epub_)currentEpub()->FocusInput();else if(hwp_)hwp_->setFocus(Qt::OtherFocusReason);else if(sqlite_)sqlite_->FocusInput();else if(reading_&&!reading_->isHidden())reading_->setFocus();else if(text_)text_->Backend()->widget()->setFocus();else if(image_){image_->show();image_->setFocus(Qt::OtherFocusReason);}else if(view_)view_->setFocus();
     }
     bool DocumentViewPane::previewKeepsPanelKeyboard() const
     {
@@ -895,6 +929,7 @@ namespace hc::document
     void DocumentViewPane::SetReadOnly(bool Enabled){readOnly_=Enabled;if(markdown_)markdown_->SetReadOnly(Enabled);if(rst_)rst_->SetReadOnly(Enabled);if(text_)text_->setReadOnly(Enabled);if(view_&&!text_)view_->setEnabled(!Enabled);}
     void DocumentViewPane::SetClipboardBroker(bool Enabled)
     {
+        sqliteBroker_=Enabled;if(sqlite_)sqlite_->SetClipboardBrokered(Enabled);
         if(view_)view_->RestrictClipboard(Enabled);
         if(!Enabled||!text_)return;
         // The workspace intercepts brokered commands. Remove native Scintilla
@@ -905,6 +940,53 @@ namespace hc::document
         for(auto Key:hc::defaults::edit::NativeBrokerClipboardKeys)Backend->Send(SCI_CLEARCMDKEY,Key);
         Backend->widget()->setAcceptDrops(false);
     }
+    void DocumentViewPane::ReloadSqlitePreferences()
+    {
+        if(!sqlite_)return;
+        // 설정 › SQLite › 글꼴(설계 4.5): 결과 표 · 스키마는 화면 글꼴이 기본, 쿼리 편집기는 텍스트 편집기 글꼴을 따른다.
+        AppSettings Settings;
+        const auto FontFrom=[&](const QString& Family,int Size){QFont Font=font();if(!Family.isEmpty()){hc::fonts::RegisterBundledFonts(Family);Font.setFamily(Family);}if(Size>=6&&Size<=72)Font.setPointSize(Size);return Font;};
+        const bool FollowText=Settings.value("sqlite/font/editorFollowText").toBool();
+        const auto Editor=FollowText?FontFrom(Settings.value("textView/fontFamily").toString(),Settings.value("textView/fontSize").toInt())
+            :FontFrom(Settings.value("sqlite/font/editorFamily").toString(),Settings.value("sqlite/font/editorSizePt").toInt());
+        hc::sqlite::ViewFonts Fonts;Fonts.mono_=Editor;Fonts.monoValues_=Settings.value("sqlite/font/gridMonoValues").toBool();
+        const auto Grid=Settings.value("sqlite/font/grid").toString();
+        if(Grid=="editor"){Fonts.customGrid_=true;Fonts.grid_=Editor;}
+        else if(Grid=="custom"){Fonts.customGrid_=true;Fonts.grid_=FontFrom(Settings.value("sqlite/font/gridFamily").toString(),Settings.value("sqlite/font/gridSizePt").toInt());}
+        if(Settings.value("sqlite/font/schema").toString()=="custom"){Fonts.customSchema_=true;Fonts.schema_=FontFrom(Settings.value("sqlite/font/schemaFamily").toString(),Settings.value("sqlite/font/schemaSizePt").toInt());}
+        sqlite_->ApplyFonts(Fonts);
+        // 설정 › SQLite › 편집기 · 실행(설계 4.5).
+        hc::sqlite::QueryPreferences Query;
+        Query.schemaColors_=Settings.value("sqlite/editor/schemaColors").toBool();Query.statementBar_=Settings.value("sqlite/editor/statementBar").toBool();
+        Query.selectionFirst_=Settings.value("sqlite/run/currentScope").toString()!="statement";Query.confirmUnbounded_=Settings.value("sqlite/run/confirmUnboundedWrite").toBool();
+        Query.rowLimit_=qBound(0,Settings.value("sqlite/run/rowLimit").toInt(),1000000);
+        Query.autoComplete_=Settings.value("sqlite/completion/auto").toBool();Query.completeDelayMs_=qBound(0,Settings.value("sqlite/completion/delayMs").toInt(),2000);
+        Query.upperKeywords_=Settings.value("sqlite/completion/keywordCase").toString()!="lower";Query.initialsMatch_=Settings.value("sqlite/completion/match").toString()!="prefix";
+        Query.joinFirst_=Settings.value("sqlite/completion/joinFirst").toBool();Query.callTips_=Settings.value("sqlite/completion/callTips").toBool();
+        Query.historyEnabled_=Settings.value("sqlite/history/enabled").toBool();Query.historyLimit_=qBound(1,Settings.value("sqlite/history/limit").toInt(),10000);
+        Query.restoreTabs_=Settings.value("sqlite/history/restoreTabs").toBool();
+        Query.manualCommit_=Settings.value("sqlite/run/commitMode").toString()=="manual";
+        Query.cells_.nullText_=Settings.value("sqlite/grid/nullText").toString();if(Query.cells_.nullText_.isEmpty())Query.cells_.nullText_=QStringLiteral("NULL");
+        Query.cells_.longText_=qBound(32,Settings.value("sqlite/grid/longText").toInt(),100000);Query.cells_.mismatch_=Settings.value("sqlite/grid/mismatch").toBool();
+        Query.cells_.alignNumbers_=Settings.value("sqlite/grid/alignNumbers").toBool();Query.cells_.blobPreview_=Settings.value("sqlite/grid/blob").toString()!="summary";
+        Query.showSqlBeforeCommit_=Settings.value("sqlite/edit/showSql").toBool();Query.confirmDelete_=Settings.value("sqlite/edit/confirmDelete").toBool();
+        Query.backupBeforeRebuild_=Settings.value("sqlite/edit/backup").toBool();
+        Query.busyTimeoutMs_=qBound(0,Settings.value("sqlite/open/busyTimeoutMs").toInt(),600000);Query.foreignKeys_=Settings.value("sqlite/open/foreignKeys").toBool();
+        Query.loadExtension_=Settings.value("sqlite/open/loadExtension").toBool();
+        const auto Count=Settings.value("sqlite/open/countRows").toString();Query.countRows_=Count=="always"?1:Count=="never"?2:0;
+        // 암호화 (SEE) · 빠른 보기(설계 8). 키 저장소는 실행 기록과 같은 프로필 폴더의 sqlite-keys.dat.
+        const auto KeyFormat=Settings.value("sqlite/see/keyFormat").toString();
+        Query.seeFormat_=KeyFormat=="key"?hc::sqlite::KeyFormat::Raw:KeyFormat=="hexkey"?hc::sqlite::KeyFormat::Hex:hc::sqlite::KeyFormat::Text;
+        Query.backupBeforeRekey_=Settings.value("sqlite/see/backupBeforeRekey").toBool();Query.saveKeyDefault_=Settings.value("sqlite/see/saveByDefault").toBool();
+        Query.trySavedKeys_=Settings.value("sqlite/see/trySavedKeys").toBool();Query.previewSavedKeys_=Settings.value("sqlite/quickView/useSavedKeys").toBool();
+        // 실행 기록 · 쿼리 탭 보관은 문서 창 설정 파일 옆(sqlite/…)에 둔다(설계 5.5).
+        sqlite_->SetProfileDirectory(QFileInfo(Settings.fileName()).absolutePath());
+        sqlite_->ApplyQueryPreferences(Query);
+    }
+    bool DocumentViewPane::OwnsSqliteScope(const QString& Scope, QWidget* Focus) const { return sqlite_ && sqlite_->OwnsShortcutScope(Scope, Focus); }
+    bool DocumentViewPane::SqliteDirty() const { return sqlite_ && sqlite_->HasPending(); }
+    bool DocumentViewPane::CommitSqlite() { return sqlite_ && sqlite_->Commit(); }
+    bool DocumentViewPane::RefreshSqlite() { return sqlite_ && sqlite_->CanRunCommand(QStringLiteral("sqlite.refresh")) && sqlite_->RunCommand(QStringLiteral("sqlite.refresh")); }
     void DocumentViewPane::applyTheme()
     {
         if(!view_)return;const auto& Theme=fm::style::ThemeManager::instance();
@@ -1029,6 +1111,7 @@ namespace hc::document
             Add("format","EPUB",false);
             if(!State["readerMessage"].toString().isEmpty())Add("readerMessage",tr("⚠ 읽기 오류"),true,{},State["readerMessage"].toString());
         } else if(hwp_) Add("format",viewId_.toUpper());
+        else if(sqlite_) for(const auto& Item:sqlite_->StatusItems())Fields.append(DocumentStatusField{Item.id_,Item.text_,Item.compact_,Item.detail_,{},Item.essential_,Item.trailing_,false,Item.warning_});
         if(markdown_) {
             // Prototype (source · split): 줄 · 열 · 보기 방식 | 언어 · 인코딩 · … · 미리보기 배율 · 렌더링.
             // The view mode joins the leading group; the rest follows the text tail.
@@ -1086,6 +1169,7 @@ namespace hc::document
             State["ready"]=CanEditEpub() || (currentEpub()->IsLoaded()&&Epub["status"]=="ready"&&!epubClosing_&&Epub["attached"].toBool());
             State["error"]=!CanEditEpub() && Epub["status"]=="error"?Epub["message"].toString():QString();
         }
+        if(sqlite_){State["readOnly"]=sqlite_->IsReadOnly();State["closed"]=false;State["error"]=sqlite_->Error();State["ready"]=sqlite_->IsReady();State["locked"]=sqlite_->IsLocked();}
         if(hwp_){
             State["readOnly"]=true;State["closed"]=hwp_->IsClosed();State["error"]=hwp_->Error();
             const auto* Document=hwp_->Document();
@@ -1108,6 +1192,7 @@ namespace hc::document
                 ? QJsonObject{{"accepted",true}} : Error("epub-settings-not-ready");
             return Error("epub-read-only");
         }
+        if(sqlite_)return Error("document-view-command-unsupported");
         if(hwp_){
             if(Action!="print")return Error("document-view-command-unsupported");
             if(IsBusy()||!ViewState()["ready"].toBool())return Error("document-not-ready");
@@ -1212,9 +1297,10 @@ void DocumentViewPane::SelectSearchRange(qint64 Start, qint64 Length) {
     const auto Begin = Text.left(Start).toUtf8().size(), End = Begin + Text.mid(Start, Length).toUtf8().size();
     Backend->Send(SCI_SETSEL, Begin, End); Backend->Send(SCI_SCROLLCARET); text_->setFocus();
 }
-QWidget* DocumentViewPane::InputWidget() const {if(markdown_)return markdown_->InputWidget();if(rst_)return rst_->InputWidget();return IsEpubEditing()?static_cast<QWidget*>(epubEditor_):epub_?static_cast<QWidget*>(currentEpub()):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
+QWidget* DocumentViewPane::InputWidget() const {if(sqlite_)return sqlite_->InputWidget();if(markdown_)return markdown_->InputWidget();if(rst_)return rst_->InputWidget();return IsEpubEditing()?static_cast<QWidget*>(epubEditor_):epub_?static_cast<QWidget*>(currentEpub()):hwp_?static_cast<QWidget*>(hwp_):reading_&&!reading_->isHidden()?static_cast<QWidget*>(reading_):text_?text_->Backend()->widget():view_;}
 QJsonObject DocumentViewPane::CaptureSelection() const
 {
+    if (sqlite_) return {{"mime", "text/plain"}, {"text", sqlite_->SelectionText()}};
     if (pdf_) return pdf_->ClipboardContent();
     if(reading_&&!reading_->isHidden()){QByteArray Bytes;QBuffer B(&Bytes);if(!B.open(QIODevice::WriteOnly)||!reading_->CurrentImage().save(&B,"PNG"))return {};return {{"mime","image/png"},{"bytes",QString::fromLatin1(Bytes.toBase64())}};}
     if (image_) return image_->ClipboardContent();
@@ -1270,7 +1356,7 @@ void DocumentViewPane::ApplyClipboard(const QString& Mode, const QString& Text, 
 }
 }
 
-namespace hc::document {void DocumentViewPane::Cancel(){ShowLoadingPreview({});if(epub_){epubClosing_=true;epub_->RequestClose();if(epubEditor_)epubEditor_->RequestPreviewClose();}if(hwp_&&hwp_->Document())hwp_->Document()->Cancel();if(image_)image_->CancelWork();if(reading_)reading_->Cancel();if(animation_)animation_->Clear();}}
+namespace hc::document {void DocumentViewPane::Cancel(){ShowLoadingPreview({});if(epub_){epubClosing_=true;epub_->RequestClose();if(epubEditor_)epubEditor_->RequestPreviewClose();}if(hwp_&&hwp_->Document())hwp_->Document()->Cancel();if(sqlite_)sqlite_->Cancel();if(image_)image_->CancelWork();if(reading_)reading_->Cancel();if(animation_)animation_->Clear();}}
 
 namespace hc::document {
 DocumentViewPane::~DocumentViewPane(){

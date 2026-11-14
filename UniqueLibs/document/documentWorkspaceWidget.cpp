@@ -6,6 +6,7 @@
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "imageAsync.hpp"
 #include "documentFocusRestore.hpp"
+#include "UniqueLibs/document/sqlite/sqliteFormat.hpp"
 #include "documentProgressOverlay.hpp"
 #include "recentDocuments.hpp"
 #include "recentDocumentsDialog.hpp"
@@ -366,6 +367,8 @@ namespace hc::document
         Add(tr("저장"), "saveDocument", [this] {
             auto Tab = active(); if (!Tab) return;
             if (Tab->choosingSavePath_) return;
+            // SQLite: 저장은 커밋(설계 4.5 · 6.2). 문서 바이트를 쓰지 않는다.
+            if (Tab->pane_->IsSqlite()) { if (!Tab->loading_) Tab->pane_->CommitSqlite(); update(); return; }
             if(Tab->activeSave_){save(Tab,Tab->activeSave_->destination_,Tab->activeSave_->overwrite_,Tab->activeSave_->original_ && Tab->pane_->CanEditEpub());return;}
             if (Tab->broker_) { auto Result = prepareSave(Tab); if (Result.contains("error")) Tab->error_ = Result["error"].toString(); update(); }
             else if (Tab->originalSave_) save(Tab, Tab->path_, false, Tab->pane_->CanEditEpub());
@@ -399,6 +402,8 @@ namespace hc::document
         });
         Add(tr("다시 읽기"), "reloadDocument", [this] {
             auto Tab = active(); if (!Tab) return;
+            // SQLite: 연 데이터베이스는 스키마 · 열린 표 · 행 수만 다시 읽는다(쿼리 탭은 둔다). 열지 못한 문서는 다시 연다.
+            if (Tab->pane_->IsSqlite() && !Tab->loading_ && Tab->pane_->RefreshSqlite()) return;
             if (Tab->Dirty() && hc::ui::MessageDialog::question(this, tr("다시 읽기"), tr("편집 내용을 폐기하고 원본을 다시 읽으시겠습니까?"),
                 QMessageBox::Discard | QMessageBox::Cancel) != QMessageBox::Discard) return;
             load(Tab, true);
@@ -551,7 +556,8 @@ namespace hc::document
         shortcutRouter_ = new DocumentShortcutRouter(this);
         // EPUB editing, image and PDF commands reach the active pane through window-level actions.
         for (const auto& Command : DocumentShortcutRegistry::Commands()) {
-            if (!QStringList{"epub-edit", "epub-edit.tree", "epub-edit.source", "image", "image.comic", "pdf", "markdown", "rst"}.contains(Command.scope_) && !Command.id_.startsWith("view.zoom")) continue;
+            if (!QStringList{"epub-edit", "epub-edit.tree", "epub-edit.source", "image", "image.comic", "pdf", "markdown", "rst", "sqlite", "sqlite.query", "sqlite.grid", "sqlite.schema"}.contains(Command.scope_)
+                && !Command.id_.startsWith("view.zoom")) continue;
             auto* Action = new QAction(Command.label_, this); Action->setObjectName(Command.id_); addAction(Action);
             connect(Action, &QAction::triggered, this, [this, Id = Command.id_] { if (auto Tab = active(); Tab && !Tab->loading_) {if(Id=="image.fullscreen")findChild<ImageFullscreen*>("imageFullscreen")->Toggle();else Tab->pane_->RunViewCommand(Id);} });
         }
@@ -591,6 +597,8 @@ namespace hc::document
             if (Id == QLatin1String("view.explorer")) return explorer_ != nullptr;
             if (Scope == "image" || Scope == "image.comic" || Scope == "pdf") return Tab && !Tab->loading_ && Tab->pane_->isAncestorOf(Focus) && !qobject_cast<QLineEdit*>(Focus)
                 && !qobject_cast<QAbstractSpinBox*>(Focus) && !qobject_cast<QComboBox*>(Focus) && Tab->pane_->CanRunViewCommand(Id);
+            // SQLite: 작업 창이 포커스 자리(쿼리 편집기 · 그리드 · 스키마 트리)로 범위를 판정한다.
+            if (Scope == "sqlite" || Scope.startsWith(QLatin1String("sqlite."))) return Tab && !Tab->loading_ && Tab->pane_->OwnsSqliteScope(Scope, Focus) && Tab->pane_->CanRunViewCommand(Id);
             return true;
         });
         ActionsTrace.End(); hc::document::startup::Scope WatchersTrace("editor.watchers");
@@ -677,10 +685,11 @@ namespace hc::document
         fileMenu_->addAction(A("epubReopenDocument"));
         fileMenu_->addAction(A("resolveDocumentConflict"));
         fileMenu_->addSeparator();
-        fileMenu_->addAction(scoped(A("printDocument"), All & ~Epub));
-        fileMenu_->addAction(scoped(A("previewDocument"), All & ~Epub));
+        // SQLite 작업 창은 인쇄 · 복구 대상이 아니다(내보내기 · 커밋을 쓴다).
+        fileMenu_->addAction(scoped(A("printDocument"), All & ~Epub & ~Of(K::Sqlite)));
+        fileMenu_->addAction(scoped(A("previewDocument"), All & ~Epub & ~Of(K::Sqlite)));
         fileMenu_->addSeparator();
-        fileMenu_->addAction(scoped(A("documentRecovery"), All & ~Epub));
+        fileMenu_->addAction(scoped(A("documentRecovery"), All & ~Epub & ~Of(K::Sqlite)));
         auto* Recover = new QMenu(tr("복구"), fileMenu_); Recover->setObjectName("documentRecoveryMenu");
         Recover->menuAction()->setProperty("documentIconName", "refresh");
         Recover->addAction(MakeProxy(A("documentRecovery"), tr("복구 목록…"), Recover, {}, false));
@@ -1021,6 +1030,9 @@ namespace hc::document
         for (auto* View : findChildren<QTextView*>()) View->ReloadPreferences();
         for(auto* Markdown:findChildren<MarkdownDocumentView*>())Markdown->ReloadPreferences();
         for(auto* Rst:findChildren<RstDocumentView*>())Rst->ReloadPreferences();
+        // 설정 › SQLite › 열기: 확장자가 달라도 머리가 SQLite 면 SQLite 로(다음에 여는 파일부터).
+        hc::sqlite::SetHeaderSniffing(Views["sqlite"].toObject()["open"].toObject()["sniffHeader"].toBool(hc::defaults::edit::ViewValue("sqlite/open/sniffHeader").toBool()));
+        for(auto* Pane:findChildren<DocumentViewPane*>())Pane->ReloadSqlitePreferences();
         // Root is already loaded; editors apply it without reading the file again.
         for(auto* Source:findChildren<EpubSourceEditor*>())Source->ApplyValidationSettings(Root["documentViews"].toObject()["epubEditor"].toObject());
         for(const auto& Tab:documents_)Tab->pane_->SetEpubRecoveryEnabled(Root["documentViews"].toObject()["textView"].toObject()["recoveryEnabled"].toBool(hc::defaults::edit::ViewValue("textView/recoveryEnabled").toBool()));
@@ -1594,6 +1606,7 @@ namespace hc::document
         connect(Pane,&DocumentViewPane::WorkspaceCommandRequested,this,[this,Tab](const QString& Id){
             if(active()!=Tab || Tab->closed_)return;
             if(Id=="app.settings.rst"){showPreferences();if(preferences_)preferences_->ShowPage(QStringLiteral("rst"));return;}
+            if(Id=="app.settings.sqlite"||Id=="app.settings.sqliteKeys"){showPreferences();if(preferences_)preferences_->ShowPage(Id=="app.settings.sqlite"?QStringLiteral("sqlite"):QStringLiteral("sqlite-keys"));return;}
             // 미리보기에 포커스가 있을 때 눌린 창 단축키( 저장 · 새 문서 · 탭 이동 등 ).
             triggerCommand(Id);
         });
@@ -1782,8 +1795,10 @@ namespace hc::document
                 }
                 if (Tab->input_.recoveryOrigin_) Tab->recoveredName_ = tr("복구 · ") + QFileInfo(QString::fromStdString(Tab->input_.recoveryOrigin_->localPath_)).fileName();
                 const bool Hwp=Tab->input_.viewId_=="hwp"||Tab->input_.viewId_=="hwpx";
-                Tab->originalSave_ = !Hwp && Tab->originalAuthority_ && !Tab->input_.book_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
-                if(Hwp || Tab->input_.viewId_=="epub")Tab->broker_=false;
+                // SQLite 는 sqlite3 가 파일을 직접 쓴다(커밋). 문서 바이트 저장 · 중개 저장을 쓰지 않는다.
+                const bool Sqlite=Tab->input_.viewId_=="sqlite";
+                Tab->originalSave_ = !Hwp && !Sqlite && Tab->originalAuthority_ && !Tab->input_.book_ && !Tab->recovered_ && !(Tab->input_.source_.attributes_ & 1u);
+                if(Hwp || Sqlite || Tab->input_.viewId_=="epub")Tab->broker_=false;
                 if (Tab->input_.book_) Tab->broker_ = false;
                 SourceIdentity Source{Tab->input_.source_, {}, Tab->path_.toUtf8().toStdString(), Tab->sourceToken_.toStdString(),
                     (Tab->originalSave_ || Tab->broker_) && !Tab->recovered_};
@@ -2502,7 +2517,7 @@ namespace hc::document
         for (const auto& Tab : documents_) {
             if (Tab->closed_ || !Tab->dock_) continue;
             const auto Name = documentName(*Tab);
-            Tab->dock_->setTitle(Name + (Tab->Dirty() ? " *" : "") + (Tab->loading_ ? tr(" · 여는 중") : "")
+            Tab->dock_->setTitle(Name + (Tab->Dirty() || (!Tab->loading_ && Tab->pane_->SqliteDirty()) ? " *" : "") + (Tab->loading_ ? tr(" · 여는 중") : "")
                 + (Tab->session_->Snapshot().error_ || !Tab->error_.isEmpty() ? tr(" · 오류") : ""));
             Tab->dock_->setToolTip(Tab->temporarySource_.isEmpty() ? QDir::toNativeSeparators(Tab->path_) : Name);
             // 다른 프로세스 창(미리보기 · EPUB · 한글)은 끄는 동안 grab()으로 그릴 수 없다: 끌기 미리보기는 틀만.
@@ -2547,8 +2562,8 @@ namespace hc::document
         const bool Hwp=Tab&&Tab->pane_->IsHwp();
         auto* EditHwp=findChild<QAction*>("editHwpDocument");EditHwp->setVisible(Hwp);
         EditHwp->setEnabled(Hwp&&!Tab->loading_&&!Tab->pane_->IsBusy()&&Tab->pane_->ViewState()["ready"].toBool()&&editRequest_.isEmpty());
-        if(Hwp){
-            findChild<QAction*>("saveDocument")->setEnabled(false);findChild<QAction*>("saveDocumentAs")->setEnabled(false);
+        if(Hwp || (Tab && Tab->pane_->IsSqlite())){
+            findChild<QAction*>("saveDocument")->setEnabled(!Hwp && !Tab->loading_ && Tab->pane_->SqliteDirty());findChild<QAction*>("saveDocumentAs")->setEnabled(false);
         }
         if(Tab&&Tab->pane_->IsEpub()){
             // Both commands apply and validate; only an authoritative local source permits original Save.
@@ -2567,6 +2582,8 @@ namespace hc::document
             // Editor-owned actions retain their resource/selection eligibility during status polling.
             if(Scope.startsWith("epub-edit") && Action->parent()==this)Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsEpubEditing());
             if(Scope=="image" || Scope=="image.comic" || Scope=="pdf")Action->setEnabled(Tab && !Tab->loading_);
+            // 쿼리 탭 · 그리드 상태는 키를 누를 때 판정한다(라우터 조건 · RunViewCommand). 상태 갱신 타이머를 기다리지 않게 켜 둔다.
+            if(Scope=="sqlite" || Scope.startsWith(QLatin1String("sqlite.")))Action->setEnabled(Tab && !Tab->loading_ && Tab->pane_->IsSqlite());
             if (Id.startsWith("text.") || QStringList{"edit.cut", "edit.copy", "edit.paste", "edit.selectAll"}.contains(Id))
                 Action->setEnabled(Tab && !Tab->loading_ && ((Tab->pane_->ViewId() == "text"
                     && ((Id != "edit.cut" && Id != "edit.paste" && Id != "text.replace") || !Tab->pane_->IsReadOnly())) || Tab->pane_->IsEpubEditing()));
@@ -2600,7 +2617,8 @@ namespace hc::document
             }
             if(Tab->pane_->ViewId()=="text"&&Tab->input_.bytes_.size()>=qBound(1,appliedPreferences_["documentViews"].toObject()["textView"].toObject()["largeFileMB"].toInt(hc::defaults::edit::ViewValue("textView/largeFileMB").toInt()),16)*1024*1024)
                 Fields.append(DocumentStatusField{"largeFile",tr("대용량 문서"),{},tr("편집·검색에 시간이 걸릴 수 있습니다."),{},false});
-            Fields.append(DocumentStatusField{"mode",Mode,{},Destination,{},true,true});
+            // SQLite 작업 창은 저장 대상이 없다(sqlite3 가 커밋으로 쓴다). 읽기 전용 표시는 작업 창이 낸다.
+            if(!Tab->pane_->IsSqlite())Fields.append(DocumentStatusField{"mode",Mode,{},Destination,{},true,true});
             QString MessageText,Detail;
             using OverlayState=DocumentProgressOverlay::State;
             const auto Shown=progressOverlay_?progressOverlay_->CurrentState():OverlayState::Idle;
@@ -2681,6 +2699,7 @@ namespace hc::document
             case DocumentViewKind::EpubRead: case DocumentViewKind::EpubEdit:
                 Document.kind_ = "epub"; Document.epubMode_ = Tab->pane_->IsEpubEditing() ? "edit" : "read"; break;
             case DocumentViewKind::Hwp: Document.kind_ = "hwp"; break;
+            case DocumentViewKind::Sqlite: Document.kind_ = "sqlite"; break;
             default: Document.kind_ = "text"; break;
         }
         recent_->Record(std::move(Document));
@@ -4507,7 +4526,7 @@ void DocumentWorkspaceWidget::explorerRename(const QString& Path, const QString&
     // 열린 문서(그 폴더 아래 포함)는 닫았다가 새 이름으로 다시 연다. 저장하지 않은 변경이 있으면 바꾸지 않는다.
     QList<std::shared_ptr<Tab>> Affected;
     for (const auto& Each : documents_) if (!Each->closed_ && !Each->path_.isEmpty() && Each->temporarySource_.isEmpty() && workspace::IsInside(Each->path_, Path, false)) Affected.append(Each);
-    for (const auto& Each : Affected) if (Each->Dirty() || Each->saving_ || Each->loading_) {
+    for (const auto& Each : Affected) if (Each->Dirty() || Each->saving_ || Each->loading_ || Each->pane_->SqliteDirty()) {
         explorer_->FinishRename(Path, {}, tr("%1에 저장하지 않은 변경이 있습니다. 저장하거나 닫은 뒤 다시 바꾸십시오.").arg(documentName(*Each))); return;
     }
     const auto Current = active();

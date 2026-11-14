@@ -310,62 +310,6 @@ bool valueFitsSlot( const QString& value, const rstpath::Slot& slot )
 }
 }  // namespace
 
-bool fuzzyMatchCompletion( const QString& pattern, const QString& candidate, int* score,
-                           QVector< int >* matchedPositions )
-{
-    if( score != nullptr )
-        *score = 0;
-    if( matchedPositions != nullptr )
-        matchedPositions->clear();
-
-    if( pattern.isEmpty() )
-        return true;
-    if( pattern.length() > candidate.length() )
-        return false;
-
-    const QString foldedPattern = pattern.toCaseFolded();
-    const QString foldedCandidate = candidate.toCaseFolded();
-
-    QVector< int > positions;
-    positions.reserve( foldedPattern.length() );
-    int patternIndex = 0;
-    for( int index = 0; index < foldedCandidate.length() && patternIndex < foldedPattern.length(); ++index )
-    {
-        if( foldedCandidate.at( index ) == foldedPattern.at( patternIndex ) )
-        {
-            positions.push_back( index );
-            ++patternIndex;
-        }
-    }
-    if( patternIndex < foldedPattern.length() )
-        return false;
-
-    static const QString boundaryChars = QStringLiteral( "_-/\\ ." );
-    int total = 0;
-    int previous = -2;
-    for( int order = 0; order < positions.size(); ++order )
-    {
-        const int position = positions.at( order );
-        if( position == previous + 1 )
-            total += 5;
-        if( position == 0 )
-            total += 10;
-        else if( boundaryChars.contains( candidate.at( position - 1 ) ) )
-            total += 8;
-        if( order == position )
-            total += 3;
-        previous = position;
-    }
-    // 흩어져 있을수록 감점. "cb" 가 "code-block" 보다 "c...b" 를 이기지 않게.
-    total -= ( positions.last() - positions.first() + 1 ) - positions.size();
-
-    if( score != nullptr )
-        *score = total;
-    if( matchedPositions != nullptr )
-        *matchedPositions = positions;
-    return true;
-}
-
 QStringList knownDirectives()
 {
     QStringList names;

@@ -9,6 +9,8 @@
 #include <QStringList>
 #include <QList>
 #include <QCoreApplication>
+#include <fmstyle/ThemeColors.h>
+#include <fmstyle/ThemeManager.h>
 #include <QStyleOption>
 #include <QStylePainter>
 #include <functional>
@@ -22,6 +24,8 @@ namespace hc::document
         // A picker opens a popover through DocumentStatusBar::pickerRequested_ instead of running command_.
         // Kept last so existing aggregate initialisations keep their meaning.
         bool picker_ = false;
+        // 주의 색(주황, 테마의 Warn). SQLite 의 ‘커밋 대기’ · ‘트랜잭션 열림’.
+        bool warning_ = false;
         bool operator==(const DocumentStatusField&) const = default;
     };
     // A status field that runs a command or opens a picker. A picker keeps room for its '⌄' cue in
@@ -116,6 +120,16 @@ namespace hc::document
                 Item->setAccessibleDescription(Field.picker_
                     ? QCoreApplication::translate("hc::document::DocumentStatusBar", "눌러서 변경") : QString());
                 Item->setToolTip(Field.detail_.isEmpty() ? Field.text_ : Field.detail_);
+                if (Field.warning_ || Item->property("statusWarning").toBool()) {
+                    auto Palette = Field.warning_ ? Item->palette() : QPalette();
+                    if (Field.warning_) {
+                        const auto Warn = fm::style::themeColorsFor(this)[fm::style::Token::Warn];
+                        Palette.setColor(QPalette::WindowText, Warn);
+                        Palette.setColor(QPalette::ButtonText, Warn);
+                    }
+                    Item->setPalette(Palette);
+                    Item->setProperty("statusWarning", Field.warning_);
+                }
             }
             QStringList Details; for (const auto& Field : Fields) Details << (Field.detail_.isEmpty() ? Field.text_ : Field.detail_);
             setToolTip(Details.join("\n")); arrange();

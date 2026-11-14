@@ -43,6 +43,11 @@ UniqueLibs/solTypeDefs_Ver.hpp
 tools/CertWithEV.cmd
 tools/SignotaurTool.exe
 
+# ── SQLite SEE 활성화 문구 ─────────────────────────────────
+# Qt 키트의 sqlite3.dll 은 SQLITE_DLL=1 로 빌드되어 sqlite3_activate_see 로 켜야 SEE 가 동작한다.
+# 활성화 문구는 SEE 라이선스 대상이라 공개 저장소에 올리지 않는다. 파일이 없으면 SEE 없이 빌드된다.
+UniqueLibs/sqlite_see_activate.hpp
+
 # Public release signing and update scripts
 !tools/update/*.ps1
 !tools/Install-HyperCommander.ps1

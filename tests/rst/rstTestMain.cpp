@@ -1,5 +1,6 @@
 ﻿#include "rstTestRunner.hpp"
 
+#include <QApplication>
 #include <QCoreApplication>
 #include <QTest>
 #include <QTimer>
@@ -18,12 +19,18 @@ QList< QObject* >& registry()
 
 int main( int argc, char** argv )
 {
-    QCoreApplication app( argc, argv );
-    if (app.arguments().contains(QStringLiteral("--process-reaper-child")))
+    // 프로세스 정리 시험의 자식은 창 없이 기다리기만 한다.
+    for( int index = 1; index < argc; ++index )
     {
-        QTimer::singleShot(30'000, &app, &QCoreApplication::quit);
-        return app.exec();
+        if( qstrcmp( argv[ index ], "--process-reaper-child" ) == 0 )
+        {
+            QCoreApplication app( argc, argv );
+            QTimer::singleShot(30'000, &app, &QCoreApplication::quit);
+            return app.exec();
+        }
     }
+    // 자동완성 팝업 시험(tstRstCompletionPopup)은 위젯을 띄운다.
+    QApplication app( argc, argv );
 
     const QByteArray selectedClass = qgetenv("HC_RST_TEST_CLASS");
     int executed = 0;

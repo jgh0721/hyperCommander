@@ -926,6 +926,26 @@ add_test(NAME hc.document.explorer.core COMMAND hc_explorer_core_tests -o "${CMA
 set_tests_properties(hc.document.explorer.core PROPERTIES TIMEOUT 120)
 add_dependencies(hc_check hc_explorer_core_tests)
 
+# SQLite 문서(설계 261113 10.1): 키트 DLL · SEE 활성화, 머리 검사, 연결 · 문, SEE 왕복, 스키마, keyset 모델.
+file(GLOB HC_SQLITE_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sqlite/*.cpp")
+qt_add_executable(hc_sqlite_tests ${HC_SQLITE_TEST_SOURCES})
+# 쿼리 탭의 Scintilla 편집기(hc_hypereditor)는 문서 위젯 라이브러리의 이미지 확장자 표를 쓴다.
+target_link_libraries(hc_sqlite_tests PRIVATE hc_sqlite_core hc_document_widgets Qt6::Test)
+target_compile_options(hc_sqlite_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+hc_enable_qt_deployment(hc_sqlite_tests TEST PLUGINS)
+add_test(NAME hc.document.sqlite COMMAND hc_sqlite_tests -o "${CMAKE_BINARY_DIR}/document-sqlite-$<CONFIG>.txt,txt")
+set_tests_properties(hc.document.sqlite PROPERTIES TIMEOUT 180)
+add_dependencies(hc_check hc_sqlite_tests)
+# SQLite 문서가 문서 창에 붙는 길: 파일 분류, F4 편집기, F3 보기 창, Ctrl+Q 빠른 보기.
+qt_add_executable(hc_sqlite_view_tests document/tstSqliteView.cpp)
+target_link_libraries(hc_sqlite_view_tests PRIVATE hc_document_widgets Qt6::Test)
+target_compile_options(hc_sqlite_view_tests PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+hc_enable_qt_deployment(hc_sqlite_view_tests TEST PLUGINS)
+hc_deploy_document_engine(hc_sqlite_view_tests)
+add_test(NAME hc.document.sqlite.view COMMAND hc_sqlite_view_tests -o "${CMAKE_BINARY_DIR}/document-sqlite-view-$<CONFIG>.txt,txt")
+set_tests_properties(hc.document.sqlite.view PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+add_dependencies(hc_check hc_sqlite_view_tests)
+
 # HyperEditor docking (fmdock 2): document docks, tool windows, preview beside, saved layouts.
 qt_add_executable(hc_document_docking_tests document/tstDocumentDocking.cpp)
 target_link_libraries(hc_document_docking_tests PRIVATE hc_document_widgets hc_document_search_core Qt6::Test)

@@ -121,9 +121,11 @@ extern "C" BOOL DVP_IdentifyFileW(HWND, LPWSTR File, LPVIEWERPLUGINFILEINFOW Inf
     bool Image = false;
     for(const auto Item:hc::document::ImageDocumentExtensions){std::wstring Candidate=L".";Candidate.append(Item.begin(),Item.end());Image|=_wcsicmp(Ext,Candidate.c_str())==0;}
     if (!Supported && !Image && !(Supported = LooksLikeText(File, Abort))) return FALSE;
-    const bool Document=_wcsicmp(Ext,L".pdf")==0||_wcsicmp(Ext,L".hwp")==0||_wcsicmp(Ext,L".hwpx")==0||_wcsicmp(Ext,L".epub")==0;
+    bool Database=false;
+    for(const auto Item:hc::document::SqliteDocumentExtensions){std::wstring Candidate=L".";Candidate.append(Item.begin(),Item.end());Database|=_wcsicmp(Ext,Candidate.c_str())==0;}
+    const bool Document=Database||_wcsicmp(Ext,L".pdf")==0||_wcsicmp(Ext,L".hwp")==0||_wcsicmp(Ext,L".hwpx")==0||_wcsicmp(Ext,L".epub")==0;
     Info->dwFlags = DVPFIF_CanReturnViewer; Info->wMajorType = Document?DVPMajorType_Other:Image?DVPMajorType_Image:DVPMajorType_Text;
-    Copy(Info->lpszInfo, Info->cchInfoMax, L"PDF / HWP / HWPX / EPUB / text / image"); return TRUE;
+    Copy(Info->lpszInfo, Info->cchInfoMax, L"PDF / HWP / HWPX / EPUB / SQLite / text / image"); return TRUE;
 }
 extern "C" HWND DVP_CreateViewer(HWND Parent, LPRECT Rect, DWORD Flags)
 {

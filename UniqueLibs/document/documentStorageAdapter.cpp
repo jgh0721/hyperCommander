@@ -1,6 +1,7 @@
 ﻿#include "documentStorageAdapter.hpp"
 #include "commonLibs/document/epub/epubPackage.hpp"
 #include "commonLibs/document/documentFormatSupport.hpp"
+#include "UniqueLibs/document/sqlite/sqliteFormat.hpp"
 #include "imagePerformance.hpp"
 #include "imageDecodeCache.hpp"
 #include "imagePartialDecoder.hpp"
@@ -97,6 +98,27 @@ namespace hc::document
         const auto Location=nativeLocation(Canonical);auto Reader=MakeNativeReadProvider(Location.kind_);
         auto Before=Reader->Resolve(Location,Context).get();if(!Before.HasValue())return Before.Failure();
         documentReadRevision(Before.Value(),Canonical);
+        // SQLite 데이터베이스(설계 261113 3절): 내용은 sqlite3 가 파일을 직접 연다. 바이트를 읽지 않고 경로만 넘긴다.
+        // SQLite 확장자는 머리로 확인해 아니면 실패로(텍스트로 넘기지 않는다 — Thumbs.db 같은 OLE 파일), 문서 확장자가 아닌
+        // 파일은 머리가 평문 SQLite 일 때만 SQLite 로 연다.
+        {
+            const auto Suffix=QFileInfo(Canonical).suffix().toLower().toStdString();
+            const bool SqliteSuffix=std::find(SqliteDocumentExtensions.begin(),SqliteDocumentExtensions.end(),Suffix)!=SqliteDocumentExtensions.end();
+            const bool KnownSuffix=std::find(DocumentExtensions.begin(),DocumentExtensions.end(),Suffix)!=DocumentExtensions.end();
+            if(SqliteSuffix||(!KnownSuffix&&hc::sqlite::HeaderSniffing())){
+                const auto Header=hc::sqlite::InspectFile(Canonical);
+                const bool Sqlite=SqliteSuffix?(Header.kind_!=hc::sqlite::FileKind::NotSqlite&&Header.kind_!=hc::sqlite::FileKind::Unreadable):Header.kind_==hc::sqlite::FileKind::Plain;
+                if(Sqlite){
+                    if(auto Stop=Context.Check({"document"}))return *Stop;
+                    const QFileInfo Info(Canonical);
+                    TextInput Input;Input.path_=Canonical;Input.source_=Before.Value();Input.viewId_="sqlite";
+                    Input.hash_=QCryptographicHash::hash((Canonical+QString::number(Info.size())+QLatin1Char('/')
+                        +QString::number(Info.lastModified().toMSecsSinceEpoch())).toUtf8(),QCryptographicHash::Sha256);
+                    return Input;
+                }
+                if(SqliteSuffix&&Header.kind_==hc::sqlite::FileKind::NotSqlite)return Invalid("document-sqlite-not-database");
+            }
+        }
         if(const auto Cached=ImageDecodeCache::Find(Canonical)){
             auto After=Reader->Stat(Before.Value().id_,Context).get();if(!After.HasValue())return After.Failure();
             documentReadRevision(After.Value(),Canonical);

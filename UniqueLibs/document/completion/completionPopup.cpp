@@ -1,8 +1,8 @@
 ﻿#include "stdafx.h"
-#include "rstCompletionPopup.hpp"
+#include "completionPopup.hpp"
 
 /// 모듈
-#include "rstOfflineCompletions.hpp"
+#include "completionMatch.hpp"
 #include "core/ThemeManager.h"
 
 /// UIs
@@ -23,6 +23,7 @@
 #include <QGuiApplication>
 #include <QHideEvent>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QListWidget>
 #include <QPainter>
 #include <QScreen>
@@ -35,7 +36,7 @@
 #include <algorithm>
 
 DECLARE_CMNLIBSV2_NAMESPACE
-namespace hc::rst {
+namespace hc::document {
 namespace {
 
 constexpr int kRoleLabel = Qt::UserRole + 1;
@@ -43,6 +44,8 @@ constexpr int kRoleInsertText = Qt::UserRole + 2;
 constexpr int kRoleDetail = Qt::UserRole + 3;
 constexpr int kRoleKind = Qt::UserRole + 4;
 constexpr int kRoleMatches = Qt::UserRole + 5;
+constexpr int kRoleIcon = Qt::UserRole + 6;
+constexpr int kRoleDescription = Qt::UserRole + 7;
 
 constexpr int kMaxVisibleRows = 12;
 constexpr int kIconSize = 16;
@@ -77,9 +80,9 @@ KindIcon iconForKind( const int kind )
         case 17: return { QLatin1Char( 'F' ), "#8b5cf6" };   // File
         case 18: return { QLatin1Char( 'R' ), "#3b82f6" };   // Reference -> :ref: 대상
         case 19: return { QLatin1Char( '/' ), "#8b5cf6" };   // Folder — 'D' 보다 '/' 가 즉시 읽힌다
-        case rstcomplete::kKindImageFile:
+        case completion::KindImageFile:
                  return { QChar( 0x25A3 ), "#10b981" };      // 상세에 프리뷰가 뜨는 이미지
-        case rstcomplete::kKindSubstitution:
+        case completion::KindSubstitution:
                  return { QLatin1Char( '|' ), "#0ea5e9" };   // 치환 참조 |name|
         case 21: return { QLatin1Char( 'C' ), "#22c55e" };   // Constant
         case 22: return { QLatin1Char( 'S' ), "#e8a838" };   // Struct
@@ -87,14 +90,19 @@ KindIcon iconForKind( const int kind )
     }
 }
 
-/// [배지] 라벨 ............ 상세
+}  // namespace
+
+/// [배지 · 아이콘] 라벨 ............ 상세
 ///
-/// 일치한 글자를 굵게+강조색으로 칠한다. 어떤 글자 때문에 이 후보가 남았는지
+/// 일치한 글자를 굵게 · 밑줄 · 강조색으로 칠한다. 어떤 글자 때문에 이 후보가 남았는지
 /// 보이지 않으면 퍼지 매칭 결과가 임의로 느껴진다.
 class CompletionItemDelegate final : public QStyledItemDelegate
 {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
+
+    /// 오른쪽 열 글꼴. 비어 있으면 목록 글꼴보다 1pt 작게.
+    void setDetailFont( const QFont& font ) { detailFont_ = font; hasDetailFont_ = true; }
 
     void paint( QPainter* painter, const QStyleOptionViewItem& option,
                 const QModelIndex& index ) const override
@@ -112,29 +120,38 @@ public:
         const QRect rect = styled.rect;
         const QFont baseFont = styled.font;
 
-        // ── 종류 배지 ──
-        const KindIcon icon = iconForKind( index.data( kRoleKind ).toInt() );
+        // ── 종류: 공급자가 준 아이콘, 없으면 글자 배지 ──
         const QRect iconRect( rect.left() + kMargin,
                              rect.top() + ( rect.height() - kIconSize ) / 2,
                              kIconSize, kIconSize );
-        QColor accent( QLatin1String( icon.color ) );
-        QColor background = accent;
-        background.setAlpha( 48 );
-        painter->setPen( Qt::NoPen );
-        painter->setBrush( background );
-        painter->drawRoundedRect( iconRect, 3, 3 );
+        if( const QIcon custom = index.data( kRoleIcon ).value< QIcon >(); !custom.isNull() )
+        {
+            custom.paint( painter, iconRect );
+        }
+        else
+        {
+            const KindIcon icon = iconForKind( index.data( kRoleKind ).toInt() );
+            QColor accent( QLatin1String( icon.color ) );
+            QColor background = accent;
+            background.setAlpha( 48 );
+            painter->setPen( Qt::NoPen );
+            painter->setBrush( background );
+            painter->drawRoundedRect( iconRect, 3, 3 );
 
-        QFont letterFont = baseFont;
-        letterFont.setPointSize( qMax( baseFont.pointSize() - 2, 7 ) );
-        letterFont.setBold( true );
-        painter->setFont( letterFont );
-        painter->setPen( accent );
-        painter->drawText( iconRect, Qt::AlignCenter, QString( icon.letter ) );
+            QFont letterFont = baseFont;
+            letterFont.setPointSize( qMax( baseFont.pointSize() - 2, 7 ) );
+            letterFont.setBold( true );
+            painter->setFont( letterFont );
+            painter->setPen( accent );
+            painter->drawText( iconRect, Qt::AlignCenter, QString( icon.letter ) );
+        }
 
         // ── 상세는 오른쪽에 흐리게 ──
         const QString detail = index.data( kRoleDetail ).toString();
         QFont detailFont = baseFont;
         detailFont.setPointSize( qMax( baseFont.pointSize() - 1, 7 ) );
+        if( hasDetailFont_ )
+            detailFont = detailFont_;
         const QFontMetrics detailMetrics( detailFont );
         const int detailWidth = detail.isEmpty()
                                     ? 0
@@ -170,7 +187,7 @@ public:
             // "Resources/Novel/Pt1/Vol1" 과 "Resources/Novel/Pt5/Vol12" 가
             // 둘 다 "Resources/Novel/Pt..." 가 되어 구분이 완전히 사라진다.
             const int kind = index.data( kRoleKind ).toInt();
-            const bool pathLike = kind == 17 || kind == 19 || kind == rstcomplete::kKindImageFile;
+            const bool pathLike = kind == 17 || kind == 19 || kind == completion::KindImageFile;
             painter->drawText( detailRect, Qt::AlignVCenter | Qt::AlignRight,
                               detailMetrics.elidedText( detail,
                                                        pathLike ? Qt::ElideLeft : Qt::ElideRight,
@@ -210,6 +227,7 @@ private:
 
         QFont boldFont = font;
         boldFont.setBold( true );
+        boldFont.setUnderline( true );
 
         const QFontMetrics metrics( font );
         const int baseline = rect.center().y() + metrics.ascent() / 2 - 1;
@@ -232,9 +250,10 @@ private:
             x += QFontMetrics( painter->font() ).horizontalAdvance( label.at( index ) );
         }
     }
-};
 
-}  // namespace
+    QFont                               detailFont_;
+    bool                                hasDetailFont_ = false;
+};
 
 
 CompletionPopupWidget::CompletionPopupWidget( QWidget* parent )
@@ -257,12 +276,24 @@ CompletionPopupWidget::CompletionPopupWidget( QWidget* parent )
     list_->setVerticalScrollBarPolicy( Qt::ScrollBarAsNeeded );
     list_->setSelectionMode( QAbstractItemView::SingleSelection );
     list_->setUniformItemSizes( true );
-    list_->setItemDelegate( new CompletionItemDelegate( list_ ) );
+    delegate_ = new CompletionItemDelegate( list_ );
+    list_->setItemDelegate( delegate_ );
+    matcher_ = []( const QString& pattern, const QString& candidate, int* score, QVector< int >* matches ) {
+        return completion::FuzzyMatch( pattern, candidate, score, matches );
+    };
+
+    // 아래 설명 줄(SQLite: ‘tracks.Milliseconds · INTEGER NOT NULL’). 기본은 숨김.
+    footer_ = new QLabel( this );
+    footer_->setObjectName( QStringLiteral( "completionFooter" ) );
+    footer_->setContentsMargins( 8, 3, 8, 4 );
+    footer_->setTextFormat( Qt::PlainText );
+    footer_->hide();
 
     auto* layout = new QVBoxLayout( this );
     layout->setContentsMargins( 1, 1, 1, 1 );
     layout->setSpacing( 0 );
     layout->addWidget( list_ );
+    layout->addWidget( footer_ );
 
     connect( list_, &QListWidget::clicked, this, [ this ]( const QModelIndex& ) { acceptCurrent(); } );
     connect( list_, &QListWidget::currentItemChanged, this,
@@ -280,7 +311,38 @@ CompletionDisplayItem CompletionPopupWidget::currentItem() const
     item.insertText = current->data( kRoleInsertText ).toString();
     item.detail = current->data( kRoleDetail ).toString();
     item.kind = current->data( kRoleKind ).toInt();
+    item.icon = current->data( kRoleIcon ).value< QIcon >();
+    item.description = current->data( kRoleDescription ).toString();
     return item;
+}
+
+void CompletionPopupWidget::setMatcher( Matcher matcher )
+{
+    if( matcher )
+        matcher_ = std::move( matcher );
+}
+
+void CompletionPopupWidget::setDetailFont( const QFont& font )
+{
+    delegate_->setDetailFont( font );
+    list_->viewport()->update();
+}
+
+void CompletionPopupWidget::setFooterVisible( const bool visible )
+{
+    footerVisible_ = visible;
+    refreshFooter();
+}
+
+void CompletionPopupWidget::refreshFooter()
+{
+    const QString text = footerVisible_ ? currentItem().description : QString{};
+    const bool wasVisible = !footer_->isHidden();
+    footer_->setText( footer_->fontMetrics().elidedText( text, Qt::ElideRight, qMax( 80, width() - 18 ) ) );
+    footer_->setToolTip( text );
+    footer_->setVisible( !text.isEmpty() );
+    if( wasVisible != !text.isEmpty() && isVisible() )
+        resizeToRows();
 }
 
 void CompletionPopupWidget::setItems( const QList< CompletionDisplayItem >& items )
@@ -365,6 +427,7 @@ void CompletionPopupWidget::emitCurrentIfChanged()
     if( key == lastEmittedInsertText_ )
         return;
     lastEmittedInsertText_ = key;
+    refreshFooter();
     emit currentItemChanged( currentItem() );
 }
 
@@ -494,7 +557,7 @@ void CompletionPopupWidget::rebuild()
         const QString candidate = item.filterText.isEmpty() ? item.label : item.filterText;
         int score = 0;
         QVector< int > matches;
-        if( rstcomplete::fuzzyMatchCompletion( prefix_, candidate, &score, &matches ) )
+        if( matcher_( prefix_, candidate, &score, &matches ) )
             visible.push_back( { &item, score + item.scoreBias, matches } );
     }
 
@@ -524,6 +587,9 @@ void CompletionPopupWidget::rebuild()
                                                                         : scored.item->insertText );
         row->setData( kRoleDetail, scored.item->detail );
         row->setData( kRoleKind, scored.item->kind );
+        if( !scored.item->icon.isNull() )
+            row->setData( kRoleIcon, scored.item->icon );
+        row->setData( kRoleDescription, scored.item->description );
 
         QVariantList matches;
         // 강조 위치는 filterText 기준이므로 label 과 다르면 표시하지 않는다.
@@ -564,8 +630,9 @@ void CompletionPopupWidget::resizeToRows()
         widest = qMax( widest, labelWidth + qMin( detailWidth, kMaxDetailHint ) );
     }
     const int chrome = kIconSize + kMargin * 6 + list_->verticalScrollBar()->sizeHint().width();
+    const int footer = footer_->isHidden() ? 0 : footer_->sizeHint().height();
 
-    setFixedSize( qBound( 280, widest + chrome, 720 ), rowHeight * rows + 2 );
+    setFixedSize( qBound( 280, widest + chrome, 720 ), rowHeight * rows + 2 + footer );
 }
 
 QString CompletionPopupWidget::currentInsertText() const
@@ -596,4 +663,4 @@ void CompletionPopupWidget::selectFirst()
     list_->scrollToTop();
 }
 
-}  // namespace hc::rst
+}  // namespace hc::document

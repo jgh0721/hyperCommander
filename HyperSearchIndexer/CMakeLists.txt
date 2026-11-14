@@ -13,7 +13,7 @@ qt_add_library(hc_document_search_core STATIC
 )
 target_include_directories(hc_document_search_core PUBLIC "${PROJECT_SOURCE_DIR}"
     PRIVATE "${PROJECT_SOURCE_DIR}/UniqueLibs/document/search/core")
-target_link_libraries(hc_document_search_core PUBLIC Qt6::Core Qt6::Sql)
+target_link_libraries(hc_document_search_core PUBLIC Qt6::Core Qt6::Sql hc_sqlite_runtime)
 target_precompile_headers(hc_document_search_core PRIVATE "${PROJECT_SOURCE_DIR}/UniqueLibs/document/search/core/stdafx.h")
 target_compile_options(hc_document_search_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 

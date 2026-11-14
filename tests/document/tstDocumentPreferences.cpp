@@ -47,6 +47,8 @@
 #include "UniqueLibs/document/documentShortcutRegistry.hpp"
 #include "text/FindReplaceWidget.h"
 #include <QTabWidget>
+#include <QStackedWidget>
+#include <QTreeWidget>
 #include <QInputMethodEvent>
 #include <QMessageBox>
 #include <QAction>
@@ -2093,7 +2095,7 @@ private slots:
         const auto Path = UnifiedConfig::FileName(Temp.path());
         DocumentSettingsDialog Dialog(Path, {});
         auto* List = Dialog.findChild<QListWidget*>("settingsCategories"); QVERIFY(List);
-        QCOMPARE(List->count(), 8); QCOMPARE(List->item(5)->text(), QObject::tr("마크다운")); QCOMPARE(List->item(6)->text(), QString("reStructuredText"));
+        QCOMPARE(List->count(), 10); QCOMPARE(List->item(5)->text(), QObject::tr("마크다운")); QCOMPARE(List->item(6)->text(), QString("reStructuredText"));
         Dialog.ShowPage("rst"); QCOMPARE(List->currentRow(), 6);
         Dialog.ShowPage("image"); QCOMPARE(List->currentRow(), 7);
         Dialog.ShowPage("rst");
@@ -2151,9 +2153,28 @@ private slots:
         QTRY_VERIFY(Window.IsIdle()); auto* Text = Window.findChild<QTextView*>(); QVERIFY(Text);
         Window.Handle({{"action", "replaceText"}, {"documentId", Id}, {"text", "edited\r\ntext\r\n"}});
         const auto Content = Text->Content(); const auto Before = Read(Path);
-        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 9);
-          // 마지막 범주: 탐색기 · 워크스페이스(설계 8.2). ShowPage("explorer") 가 그 줄을 고른다.
+        { DocumentSettingsDialog Dialog(Path, Window.findChildren<QAction*>()); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->count(), 10);
+          // 탐색기 · 워크스페이스(설계 8.2)는 8, 마지막 범주 SQLite(설계 261113 4.5)는 9.
           Dialog.ShowPage("explorer"); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->currentRow(), 8);
+          Dialog.ShowPage("sqlite"); QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->currentRow(), 9);
+          QVERIFY(Dialog.findChild<QComboBox*>("documentViews/sqlite/font/grid")); QVERIFY(Dialog.findChild<QTabWidget*>("sqliteSettingsTabs"));
+          // 시안 순서: 편집기 · 글꼴 · 실행 · 기록 · … · 암호화 (SEE). 실행 탭의 행 제한 기본값은 1,000(0 = 모두).
+          { auto* Tabs = Dialog.findChild<QTabWidget*>("sqliteSettingsTabs"); QCOMPARE(Tabs->tabText(0), QString("편집기")); QCOMPARE(Tabs->tabText(1), QString("글꼴"));
+            QCOMPARE(Tabs->tabText(2), QString("실행 · 기록")); QCOMPARE(Tabs->tabText(Tabs->count() - 1), QString("암호화 (SEE)"));
+            auto* Limit = Dialog.findChild<QSpinBox*>("documentViews/sqlite/run/rowLimit"); QVERIFY(Limit); QCOMPARE(Limit->value(), 1000);
+            QVERIFY(Dialog.findChild<QCheckBox*>("documentViews/sqlite/run/confirmUnboundedWrite")->isChecked());
+            QCOMPARE(Dialog.findChild<QComboBox*>("documentViews/sqlite/run/currentScope")->currentData().toString(), QString("selection"));
+            // 암호화 (SEE): ‘SEE 설정’ · ‘비밀번호 관리’ 세그먼트(설계 4.5 · 8.3). ShowPage("sqlite-keys") 는 비밀번호 관리를 연다.
+            QCOMPARE(Dialog.findChild<QComboBox*>("documentViews/sqlite/see/keyFormat")->currentData().toString(), QString("textkey"));
+            QVERIFY(Dialog.findChild<QCheckBox*>("documentViews/sqlite/see/trySavedKeys")->isChecked());
+            QVERIFY(!Dialog.findChild<QCheckBox*>("documentViews/sqlite/see/saveByDefault")->isChecked());
+            QVERIFY(Dialog.findChild<QCheckBox*>("documentViews/sqlite/quickView/useSavedKeys")->isChecked());
+            auto* SeeStack = Dialog.findChild<QStackedWidget*>("sqliteSeeStack"); QVERIFY(SeeStack); QCOMPARE(SeeStack->currentIndex(), 0);
+            Dialog.ShowPage("explorer"); Dialog.ShowPage("sqlite-keys");
+            QCOMPARE(Dialog.findChild<QListWidget*>("settingsCategories")->currentRow(), 9); QCOMPARE(Tabs->currentIndex(), Tabs->count() - 1);
+            QCOMPARE(SeeStack->currentIndex(), 1); QVERIFY(Dialog.findChild<QTreeWidget*>("sqliteKeysList"));
+            QVERIFY(Dialog.findChild<QLabel*>("sqliteKeysTitle")->text().startsWith(QString("저장한 키"))); }
+          Dialog.ShowPage("explorer");
           QVERIFY(Dialog.findChild<QCheckBox*>("documentViews/explorer/autoReveal")); QVERIFY(Dialog.findChild<QComboBox*>("documentViews/workspace/stateLocation"));
           QVERIFY(Dialog.findChild<QListWidget*>("workspaceAncestorChoices"));
           Dialog.findChild<QSpinBox*>("documentViews/textView/tabWidth")->setValue(7); Dialog.reject(); }

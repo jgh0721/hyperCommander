@@ -12,8 +12,11 @@ inline constexpr auto DocumentExtensions = std::to_array<std::string_view>({
     "xml", "py", "js", "ts", "sql", "ini", "cfg", "conf", "csv", "tsv", "yaml", "yml", "html", "htm", "css", "ps1",
     "go", "rs", "java", "cs", "qss", "qml", "ui", "bat", "cmd", "sh", "toml", "pdf", "hwp", "hwpx", "epub",
     "png", "jpg", "jpeg", "jpe", "jfif", "bmp", "gif", "tif", "tiff", "webp", "ico", "svg", "svgz", "cur", "icns", "tga", "wbmp",
-    "pbm", "pgm", "ppm", "xbm", "xpm", "heic", "heif", "avif", "cbz", "cbr", "cb7", "zip", "rar", "7z"
+    "pbm", "pgm", "ppm", "xbm", "xpm", "heic", "heif", "avif", "cbz", "cbr", "cb7", "zip", "rar", "7z",
+    "db", "sqlite", "sqlite3", "db3", "s3db", "sl3"
 });
+// SQLite 데이터베이스(HyperEditor · HyperViewer 의 SQLite 작업 창). 확장자가 없는 파일은 머리 16바이트로 알아본다.
+inline constexpr auto SqliteDocumentExtensions = std::to_array<std::string_view>({"db", "sqlite", "sqlite3", "db3", "s3db", "sl3"});
 inline bool DocumentImageFormatMatches(std::string_view Format, std::string_view Extension)
 {
     // XBM/XPM are C source too. Qt's XBM reader accepts any two numeric

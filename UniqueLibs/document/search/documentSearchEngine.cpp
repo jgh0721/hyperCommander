@@ -2,6 +2,7 @@
 #include "documentSearchEngine.hpp"
 #include "core/bodyProjection.hpp"
 #include "UniqueLibs/scratchSession.hpp"
+#include "UniqueLibs/document/sqlite/sqliteRuntime.hpp"
 
 /// 모듈
 #include "UniqueLibs/document/documentTextCodec.hpp"
@@ -39,20 +40,9 @@ Engine::~Engine() {
 }
 bool Engine::initialize() {
     if (worker_) return database_.isOpen();
-    // The kit uses a separate SQLite runtime. Keep it in the updater-owned Libs
-    // tree and preload the exact path before Qt loads qsqlite.dll by plugin name.
-    static const bool SqliteReady = [] {
-        auto* Library = new QLibrary(QCoreApplication::applicationDirPath() + "/Libs/sqldrivers/" +
-#ifdef QT_DEBUG
-            "sqlite3d.dll"
-#else
-            "sqlite3.dll"
-#endif
-        );
-        Library->setLoadHints(QLibrary::PreventUnloadHint);
-        return Library->load();
-    }();
-    if (!SqliteReady) return false;
+    // The kit uses a separate SQLite runtime in the updater-owned Libs tree. The SQLite document
+    // view loads the same DLL; both preload the exact path before Qt loads qsqlite.dll by name.
+    if (!hc::sqlite::Runtime::Load()) return false;
     directory_ = std::make_unique<QTemporaryDir>(hc::scratch::Session::Current().Template("document-search"));
     if (!directory_->isValid()) return false;
     errorLog_=std::make_unique<QFile>(directory_->filePath("search-errors.log"));

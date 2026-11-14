@@ -47,6 +47,10 @@ public:
             {"image", QObject::tr("이미지 뷰어"), QObject::tr("이미지 문서와 만화·웹툰 보기, 이미지 전체 화면에서 동작합니다.")},
             {"image.comic", QObject::tr("코믹"), QObject::tr("코믹·웹툰 읽기 화면에서 동작합니다."), 1},
             {"pdf", QObject::tr("PDF 뷰어"), QObject::tr("PDF 문서에서 동작합니다.")},
+            {"sqlite", QObject::tr("SQLite 작업 창"), QObject::tr("SQLite 데이터베이스 문서 안 어디에서나 동작합니다.")},
+            {"sqlite.query", QObject::tr("쿼리 편집기"), QObject::tr("SQLite 쿼리 탭의 편집기에 포커스가 있을 때 동작합니다."), 1},
+            {"sqlite.grid", QObject::tr("결과 · 표"), QObject::tr("SQLite 결과 · 테이블 그리드에 포커스가 있을 때 동작합니다."), 1},
+            {"sqlite.schema", QObject::tr("스키마"), QObject::tr("SQLite 스키마 트리에 포커스가 있을 때 동작합니다. 데이터 보기는 Enter(고정)입니다."), 1},
             {"explorer", QObject::tr("탐색기"), QObject::tr("탐색기 도구 창의 트리에 포커스가 있을 때 동작합니다. 필터 칸과 이름 입력 칸에서는 동작하지 않습니다.")}};
     }
     // Scopes active together for one focus position. Validation and routing share this table.
@@ -54,6 +58,7 @@ public:
     {
         return {{"common","edit","text","markdown"},{"common","edit","markdown"},{"common","edit","text","rst"},{"common","edit","rst"},{"common","edit","text"},{"common","edit","epub"},{"common","edit","epub-edit","epub-edit.tree"},
             {"common","edit","text","epub-edit","epub-edit.source"},{"common","edit","epub-edit"},{"common","edit","image","image.comic"},{"common","edit","pdf"},
+            {"common","edit","text","sqlite","sqlite.query"},{"common","edit","sqlite","sqlite.grid"},{"common","edit","sqlite","sqlite.schema"},
             {"common","explorer"}};
     }
     static bool CoActive(const QString& A, const QString& B)
@@ -67,7 +72,7 @@ public:
         return Result;
     }
     // Scopes reachable while a text input owns the keyboard keep its editing keys.
-    static bool InputScope(const QString& Scope){return QStringList{"common","edit","text","markdown","rst","epub-edit","epub-edit.source"}.contains(Scope);}
+    static bool InputScope(const QString& Scope){return QStringList{"common","edit","text","markdown","rst","epub-edit","epub-edit.source","sqlite.query"}.contains(Scope);}
     static QString ScopeLabel(const QString& Scope){for(const auto& Item:Scopes())if(Item.id_==Scope)return Item.label_;return Scope;}
     // Routing asks for scopes on every key press and refresh; ids and scopes never change.
     static QString ScopeOf(const QString& Id)
@@ -132,7 +137,8 @@ public:
             if (InputKey || (First.key() < Qt::Key_Escape && !Modified && !Printable)) {
                 Result.append({Item.id_, {}, QObject::tr("%1: 문자 입력·이동·선택 기본키와 겹칩니다.").arg(Item.label_)}); continue;
             }
-            if (!Input && Focus.contains(First.key())) { Result.append({Item.id_, {}, QObject::tr("%1: 포커스·입력 기본키는 유지해야 합니다.").arg(Item.label_)}); continue; }
+            // Ctrl · Alt + Enter leaves Enter itself to the focused tree (SQLite 스키마: Ctrl+Enter 새 쿼리 탭에 SELECT).
+            if (!Input && Focus.contains(First.key()) && !(First.key() == Qt::Key_Enter && Modified)) { Result.append({Item.id_, {}, QObject::tr("%1: 포커스·입력 기본키는 유지해야 합니다.").arg(Item.label_)}); continue; }
             bool Rejected = false;
             // A command keeps the key the product gave it by default (reST 자동 완성: Ctrl+Space); other commands may not take a reserved key.
             if (Input && Key != QKeySequence(Item.key_)) for (const auto& ReservedKey : Reserved) if (Overlaps(Key, QKeySequence(ReservedKey))) {

@@ -86,6 +86,18 @@ qt_add_library(hc_document_sdi STATIC
 target_link_libraries(hc_document_sdi PUBLIC hc_document_core Qt6::Widgets PRIVATE hc_document_broker Qt6::Concurrent Qt6::PrintSupport Fm::widgets)
 target_compile_options(hc_document_sdi PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
+# 자동완성 목록 · 상세 창 · 일치 규칙(reST 편집기와 SQLite 쿼리 편집기 공용, SQLite 설계 261113 5.2). reST 에서 옮겼다.
+file(GLOB HC_DOCUMENT_COMPLETION_SOURCES CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/completion/*.cpp" "${PROJECT_SOURCE_DIR}/UniqueLibs/document/completion/*.hpp")
+qt_add_library(hc_document_completion STATIC ${HC_DOCUMENT_COMPLETION_SOURCES})
+target_include_directories(hc_document_completion PUBLIC ${PROJECT_SOURCE_DIR} PRIVATE
+    ${PROJECT_SOURCE_DIR}/HyperCommander
+    ${PROJECT_SOURCE_DIR}/commonLibs
+    ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include)
+target_link_libraries(hc_document_completion PUBLIC hc_hypereditor Qt6::Widgets)
+target_precompile_headers(hc_document_completion PRIVATE "${PROJECT_SOURCE_DIR}/HyperCommander/stdafx.h")
+target_compile_options(hc_document_completion PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+
 # reStructuredText services without document-workspace widgets: Sphinx project resolution, the Python
 # environment (uv), Esbonio, preview builds, outline, diagnostics and completion. Ported from MultiRoot reST Editor.
 file(GLOB HC_RST_CORE_SOURCES CONFIGURE_DEPENDS
@@ -100,7 +112,7 @@ target_include_directories(hc_rst_core PUBLIC "${PROJECT_SOURCE_DIR}/UniqueLibs/
     ${PROJECT_SOURCE_DIR}/HyperCommander
     ${PROJECT_SOURCE_DIR}/commonLibs
     ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include)
-target_link_libraries(hc_rst_core PUBLIC hc_document_core hc_hypereditor Qt6::Widgets Qt6::Network Qt6::Concurrent PRIVATE Qt6::ZlibPrivate)
+target_link_libraries(hc_rst_core PUBLIC hc_document_core hc_hypereditor hc_document_completion Qt6::Widgets Qt6::Network Qt6::Concurrent PRIVATE Qt6::ZlibPrivate)
 target_precompile_headers(hc_rst_core PRIVATE "${PROJECT_SOURCE_DIR}/HyperCommander/stdafx.h")
 target_compile_options(hc_rst_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
@@ -117,6 +129,37 @@ target_include_directories(hc_document_explorer_core PUBLIC ${PROJECT_SOURCE_DIR
 target_link_libraries(hc_document_explorer_core PUBLIC Qt6::Widgets Qt6::Concurrent PRIVATE netapi32)
 target_precompile_headers(hc_document_explorer_core PRIVATE "${PROJECT_SOURCE_DIR}/HyperCommander/stdafx.h")
 target_compile_options(hc_document_explorer_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+
+# SQLite 문서(설계 261113 8.4 · 9절). 제품은 Qt 키트의 sqlite3.dll(SEE 포함, SQLITE_DLL=1) 하나를 C API 로 쓴다.
+# 그 DLL 은 exe 옆이 아니라 Libs\sqldrivers 에 있으므로 지연 로드로 링크하고, hc::sqlite::Runtime::Load() 가 그 경로로
+# 먼저 불러 둔다(문서 검색의 QSQLITE 도 같은 함수). SEE 활성화 문구는 로컬 전용 UniqueLibs/sqlite_see_activate.hpp
+# (.gitignore)에만 있고, 없으면 SEE 없이 빌드된다.
+qt_add_library(hc_sqlite_runtime STATIC
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/sqlite/sqliteRuntime.cpp"
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/sqlite/sqliteRuntime.hpp"
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/sqlite/sqliteApi.hpp")
+# QtCore 만 쓰므로(문서 검색 코어 · hc-search-index 도 링크한다) 검색 코어의 가벼운 stdafx.h 를 쓴다.
+target_include_directories(hc_sqlite_runtime PUBLIC ${PROJECT_SOURCE_DIR} PRIVATE
+    ${PROJECT_SOURCE_DIR}/UniqueLibs/document/search/core)
+target_link_libraries(hc_sqlite_runtime PUBLIC Qt6::Core "$<TARGET_LINKER_FILE_DIR:Qt6::Core>/sqlite3$<$<CONFIG:Debug>:d>.lib" delayimp)
+# hc-search-index 처럼 SQLite C API 를 부르지 않는 대상은 지연 로드할 것이 없다(LNK4199).
+target_link_options(hc_sqlite_runtime INTERFACE "/DELAYLOAD:sqlite3$<$<CONFIG:Debug>:d>.dll" "/IGNORE:4199")
+target_precompile_headers(hc_sqlite_runtime PRIVATE "${PROJECT_SOURCE_DIR}/UniqueLibs/document/search/core/stdafx.h")
+target_compile_options(hc_sqlite_runtime PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+
+file(GLOB HC_SQLITE_CORE_SOURCES CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/UniqueLibs/document/sqlite/*.cpp" "${PROJECT_SOURCE_DIR}/UniqueLibs/document/sqlite/*.hpp")
+list(FILTER HC_SQLITE_CORE_SOURCES EXCLUDE REGEX "/sqlite(Runtime|Api)\\.(cpp|hpp)$")
+qt_add_library(hc_sqlite_core STATIC ${HC_SQLITE_CORE_SOURCES})
+target_include_directories(hc_sqlite_core PUBLIC ${PROJECT_SOURCE_DIR} PRIVATE
+    ${PROJECT_SOURCE_DIR}/HyperCommander
+    ${PROJECT_SOURCE_DIR}/commonLibs
+    ${PROJECT_SOURCE_DIR}/commonLibs/fmt-10.2.0/include)
+# crypt32: 키 저장소의 DPAPI(CryptProtectData, 설계 8.3). credui · secur32: 키 보기 전 Windows 로그인 확인.
+target_link_libraries(hc_sqlite_core PUBLIC hc_sqlite_runtime hc_hypereditor hc_document_completion Qt6::Widgets Qt6::Svg Qt6::Concurrent fmstyle Fm::widgets
+    PRIVATE crypt32 credui secur32 advapi32 ole32)
+target_precompile_headers(hc_sqlite_core PRIVATE "${PROJECT_SOURCE_DIR}/HyperCommander/stdafx.h")
+target_compile_options(hc_sqlite_core PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 
 add_subdirectory("${PROJECT_SOURCE_DIR}/tools/markdown" "${CMAKE_BINARY_DIR}/markdown")
 add_subdirectory("${PROJECT_SOURCE_DIR}/tools/rst" "${CMAKE_BINARY_DIR}/rst-preview")
@@ -208,6 +251,8 @@ target_link_libraries(hc_document_widgets PRIVATE Qt6::ZlibPrivate hc_epub_host 
 target_link_libraries(hc_document_widgets PUBLIC Fm::dock)
 # 탐색기 도구 창 · 워크스페이스 모드.
 target_link_libraries(hc_document_widgets PUBLIC hc_document_explorer_core)
+# SQLite 데이터베이스 작업 창(설계 261113).
+target_link_libraries(hc_document_widgets PUBLIC hc_sqlite_core)
 target_compile_options(hc_document_widgets PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 set(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY "" CACHE PATH "Qualified shared RHWP runtime to include in product installation")
 if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND NOT HC_RHWP_APPROVED_INVENTORY_SHA256)

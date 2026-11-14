@@ -235,6 +235,7 @@ namespace hc::document
             return RecentDocumentStore::tr( "EPUB 읽기 · %1" ).arg( Folder );
         }
         if( Kind == QLatin1String( "hwp" ) ) return RecentDocumentStore::tr( "한글 문서 · %1" ).arg( Folder );
+        if( Kind == QLatin1String( "sqlite" ) ) return RecentDocumentStore::tr( "SQLite 데이터베이스 · %1" ).arg( Folder );
         return Folder;
     }
 
