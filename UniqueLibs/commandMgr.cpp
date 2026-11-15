@@ -45,7 +45,7 @@ void CCommandMgr::SaveSettings()
     const auto Scoped = hc::ui::CommandLineShortcutOverrides(Current);
     if (!Scoped.isEmpty()) Overrides["commandLine"] = Scoped;
     // 보기 입력 범위의 사용자 지정은 전역 맵과 따로 저장되어 있다. 다시 만들 때 그대로 둔다.
-    for (const auto Scope : {hc::ui::InputScope::ProcessView, hc::ui::InputScope::ServiceView}) {
+    for (const auto Scope : {hc::ui::InputScope::ProcessView, hc::ui::InputScope::ServiceView, hc::ui::InputScope::RegistryView}) {
         const auto View = Current[hc::ui::ScopeKey(Scope)].toObject();
         if (!View.isEmpty()) Overrides[hc::ui::ScopeKey(Scope)] = View;
     }

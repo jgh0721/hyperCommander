@@ -16,6 +16,8 @@ class CFSProxyModel;
 class CFSModel;
 class CViewT;
 class CSystemView;
+class CRegistryView;
+class CRegistryDetailView;
 namespace hc::ui { class PanelPathBar; }
 
 namespace Qtitan
@@ -140,11 +142,15 @@ public:
     bool                            CloseQuickView( int TabIndex );
     // 반대 패널의 시스템 보기를 따라가는 상세 보기를 빠른 보기 자리에 연다.
     void                            OpenDetailView( int TabIndex, CSystemView* Source );
+    CRegistryDetailView*            OpenRegistryDetailView(int TabIndex, CRegistryView* Source);
 
     // 현재 탭을 프로세스(0)·서비스(1) 보기로 덮는다. 이미 같은 보기면 그대로 돌려준다.
     CSystemView*                    ShowSystemView( int Kind );
     void                            HideSystemView( int TabIndex = -1 );
     CSystemView*                    SystemView( int TabIndex = -1 ) const;
+    CRegistryView*                  RegistryView( int TabIndex = -1 ) const;
+    CRegistryView*                  ShowRegistryView();
+    bool                            HasSystemToolView( int TabIndex = -1 ) const;
     int                             FindSystemTab( int Kind ) const;
     // 위치 메뉴(드라이브·시스템 보기)를 드라이브 단추 아래에 연다.
     void                            ShowLocationMenu();
@@ -169,6 +175,7 @@ signals:
     void                            sig_NotifyPanelActivated();
     void                            sigViewSettingsChanged();
     void                            sigNavigationStateChanged();
+    void                            sigRegistryCommandRequested(const QString& Command);
     void                            sig_NotifyCurrentDirectory( const QString& CurrentPath );
 
 private:

@@ -3,6 +3,7 @@
 
 /// 내부 라이브러리
 #include "adminChannel.hpp"
+#include "registry/registryProtocol.hpp"
 
 /// 공통 라이브러리
 #include "commonLibs/system/processActions.hpp"
@@ -13,6 +14,7 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QUuid>
+#include <QSysInfo>
 
 namespace hc::admin {
 namespace {
@@ -28,6 +30,7 @@ QString      Text( const std::wstring& Value ) { return QString::fromStdWString(
 // 조회 요청은 결과를 모르는 채 끝나도(전송 실패) 다시 보내도 된다. 동작 요청만 Unknown으로 알린다.
 bool IsAction( const QString& Kind )
 {
+    if (Kind.startsWith("registry.")) return Kind == "registry.apply" || Kind == "registry.policyApply";
     return Kind != "ping" && Kind != "process.details" && Kind != "service.query";
 }
 
@@ -241,13 +244,18 @@ QJsonObject SystemSessionClient::Request( const QString& Kind, QJsonObject Paylo
     return Reply;
 }
 
-unsigned long ExecuteSystemSession( const QJsonObject& Bootstrap, const QString& ExpectedCaller, bool RequireElevation )
+unsigned long ExecuteSystemSession( const QJsonObject& Bootstrap, const QString& ExpectedCaller, bool RequireElevation, const QString& RegistryTestRoot )
 {
     if( RequireElevation && !Bootstrap["elevated"].toBool() )
         return ERROR_INVALID_PARAMETER;
     AcceptedChannel Channel;
     if( const auto Code = AcceptChannel( Bootstrap, Spec(), ExpectedCaller, Channel ) )
         return Code;
+    hc::registry::WinRegistryBackend RegistryBackend;
+    // AcceptChannel has checked this SID against the still-open parent process.
+    // In over-the-shoulder UAC the helper's HKCU belongs to a different account.
+    hc::registry::RegistrySessionServer Registry(RegistryBackend, Bootstrap["callerSid"].toString(),
+        QString::fromLatin1(QSysInfo::machineUniqueId().toHex()), RegistryTestRoot);
     const auto Idle = static_cast<unsigned long>( std::clamp( Bootstrap["idleMs"].toInt( 600000 ), 60000, 7200000 ) );
     QHash<QString, QJsonObject> Receipts;
     while( Channel.ParentAlive() )
@@ -263,7 +271,7 @@ unsigned long ExecuteSystemSession( const QJsonObject& Bootstrap, const QString&
             Reply = Receipts.value( RequestId );
         else
         {
-            Reply = Handle( Kind, *Request, Channel.parentPid );
+            Reply = Kind.startsWith("registry.") ? Registry.Handle(Kind, *Request) : Handle( Kind, *Request, Channel.parentPid );
             Reply["requestId"] = RequestId;
             if( Receipts.size() >= 256 )
                 Receipts.clear();

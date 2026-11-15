@@ -84,6 +84,18 @@
 #include <QStyleOptionSlider>
 #include "UniqueLibs/system/systemCommands.hpp"
 #include "HyperCommander/UIs/Components/cmpSystemView.hpp"
+#include "ui/registryViewUi.hpp"
+#include "ui/registryEditorUi.hpp"
+#include "ui/registryMutationUi.hpp"
+#include "ui/registryFocusUi.hpp"
+#include "ui/registryHistoryUi.hpp"
+#include "ui/registryPolicyUi.hpp"
+#include "ui/registryAutorunUi.hpp"
+#include "ui/registrySearchUi.hpp"
+#include "ui/registryImportUi.hpp"
+#include "ui/registryLinksUi.hpp"
+#include "ui/registryRestartUi.hpp"
+#include "ui/registryTreeUi.hpp"
 #include "qtitanColumnAdapter.hpp"
 #include "columnMgr.hpp"
 #include "qtColumnProfileEditor.hpp"
@@ -364,15 +376,15 @@ private slots:
         qInfo() << "Product UI DPR:" << main_->devicePixelRatioF();
         panels_ = main_->findChildren<CmpPanel*>();
         QCOMPARE(panels_.size(), 2);
-        QTRY_VERIFY_WITH_TIMEOUT(model(panels_.front()) && model(panels_.front())->GetRoot(), 5000);
-        for (auto* Panel : panels_) QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(panels_.front()->RegistryView() || (model(panels_.front()) && model(panels_.front())->GetRoot()), 5000);
+        for (auto* Panel : panels_) QTRY_VERIFY_WITH_TIMEOUT(Panel->RegistryView() || (model(Panel) && !model(Panel)->IsLoading()), 15000);
     }
 
     void init()
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "windowSwitchFocusUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "mainWindowEdgeResizeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"registryRegDocumentUi", "registryImportUi", "registrySearchUi", "registryLinksUi", "registryRestartUi", "registryPolicyUi", "registryAutorunUi", "registryHistoryUi", "registryTreeUi", "registryMutationUi", "registryFocusUi", "registryEditorUi", "registryViewUi", "registryNavigationUi", "registryAsyncSelectionUi", "contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "windowSwitchFocusUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "mainWindowEdgeResizeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -851,6 +863,21 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(Launched(), 15000);
         }
     }
+
+    void registryEditorUi() { RegistryEditorSmoke(main_); }
+    void registryHistoryUi() { RegistryHistorySmoke(main_); }
+    void registryPolicyUi() { RegistryPolicySmoke(main_); }
+    void registryImportUi() { RegistryImportSmoke(main_); }
+    void registrySearchUi() { RegistrySearchSmoke(main_); }
+    void registryAutorunUi() { RegistryAutorunSmoke(main_); }
+    void registryLinksUi() { RegistryLinksSmoke(main_); }
+    void registryRestartUi() { RegistryRestartSmoke(main_); }
+    void registryTreeUi() { RegistryTreeSmoke(main_); }
+    void registryMutationUi() { RegistryMutationSmoke(main_); }
+    void registryFocusUi() { RegistryFocusSmoke(main_, [](HWND Window) { return ActivateTestWindow(Window); }); }
+    void registryViewUi() { RegistryViewSmoke(); }
+    void registryNavigationUi() { RegistryPanelSmoke(main_); }
+    void registryAsyncSelectionUi() { RegistryAsyncSelectionSmoke(); }
 
     void systemViewUi()
     {
@@ -2492,6 +2519,8 @@ private slots:
         QVERIFY(Model->index(0, 0).data(Qt::ToolTipRole).toString().contains(QStringLiteral("드라이브 목록")));
         QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
         QPointer<QMessageBox> Failure = Panel->findChild<QMessageBox*>("hc.navigationError");
+        const auto CloseFailure = qScopeGuard([&] { if (Failure) Failure->reject(); });
+        QTRY_VERIFY(Failure && Failure->isVisible() && !Failure->grab().isNull());
         QTest::keyClick(Failure, Qt::Key_Escape); QTRY_VERIFY(Failure.isNull());
         QVERIFY(Model->LastNavigationError()); QVERIFY(Model->HasNavigationFallback());
         QCOMPARE(Panel->CaptureWorkspace().tabs_[0].location_, Tab.location_);
@@ -9091,6 +9120,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->LastNavigationError(), 10000);
         QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
         QPointer<QMessageBox> Failure = Panel->findChild<QMessageBox*>("hc.navigationError");
+        const auto CloseFailure = qScopeGuard([&] { if (Failure) Failure->reject(); });
+        QTRY_VERIFY(Failure && Failure->isVisible() && !Failure->grab().isNull());
         QVERIFY(Failure->text().contains(QStringLiteral("폴더를 찾을 수 없습니다")));
         QVERIFY(!Failure->informativeText().contains("win32:"));
         QVERIFY(Failure->detailedText().contains("win32:"));
@@ -11842,6 +11873,8 @@ private slots:
         QCOMPARE(QDir::cleanPath(QDir::fromNativeSeparators(Model->GetCurrentPathWithRoot())), Directory.path());
         QTRY_VERIFY(Panel->findChild<QMessageBox*>("hc.navigationError"));
         QPointer<QMessageBox> Failure = Panel->findChild<QMessageBox*>("hc.navigationError");
+        const auto CloseFailure = qScopeGuard([&] { if (Failure) Failure->reject(); });
+        QTRY_VERIFY(Failure && Failure->isVisible() && !Failure->grab().isNull());
         if (!hc::permissions::Elevated()) {
             auto* Elevate = Failure->findChild<QPushButton*>("hc.navigationElevate"); QVERIFY(Elevate);
             QCOMPARE(Elevate->text(), QStringLiteral("관리자 권한으로 재시도"));
@@ -11942,8 +11975,10 @@ private slots:
 
     void scopedSearchUi()
     {
+        const auto Saved = main_->CaptureWorkspace();
         QTemporaryDir Directory; QVERIFY(Directory.isValid()); QDir(Directory.path()).mkdir("nested");
         { QFile File(Directory.filePath("nested/found.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("result"); }
+        const auto Restore = qScopeGuard([&] { main_->RestoreWorkspace(Saved); });
         auto* Panel = panels_.front(); hc::workspace::TabState Tab; Tab.id_ = "m7-search";
         Tab.location_ = {hc::storage::LocatorKind::Local, Directory.path().toStdString()};
         hc::workspace::PaneState Pane; Pane.tabs_ = {Tab}; Panel->RestoreWorkspace(Pane);
@@ -13220,11 +13255,12 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(Window && Window->isVisible(),10000);QVERIFY(Window->windowTitle().contains(Error));
         Window->close();QTRY_VERIFY_WITH_TIMEOUT(Window.isNull(),15000);
     }
+    void registryRegDocumentUi() { documentCommandsUi(); }
     void documentCommandsUi() {
         auto& Settings = hc::settings::AppSettings(); const auto Saved = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         const auto Restore = qScopeGuard([&] { Settings.Replace(Saved); TyStCommandMgr::GetInstance()->Refresh(); main_->RestoreWorkspace(Workspace); });
         QVERIFY(Settings.Put(hc::settings::Section::Editors, QJsonArray{})); QVERIFY(Settings.SetPlugins("wlx", {})); QVERIFY(Settings.SetPlugins("dopusViewer", {}));
-        QTemporaryDir Directory; const auto Path = Directory.filePath("한글 문서.go"); QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("P4 document open"); File.close();
+        QTemporaryDir Directory; const QString Name = QByteArray(QTest::currentTestFunction()) == "registryRegDocumentUi" ? QStringLiteral("한글 문서.reg") : QStringLiteral("한글 문서.go"); const auto Path = Directory.filePath(Name); QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("P4 document open"); File.close();
         auto* Source = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Source)); Model->SetProviderEnabled(true);
         Source->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading());
         auto* Grid = qobject_cast<CGridView*>(Source->GetFocusView(Source->CurrentTabIndex())); QVERIFY(Grid);
@@ -13232,7 +13268,7 @@ private slots:
         for (int Row = 0; Row < Grid->BaseView()->modelController()->getGridRowCount(); ++Row) {
             Grid->BaseView()->setFocusedRowIndex(Row); auto Index = Grid->BaseView()->focusedRow().modelIndex(0);
             while (const auto Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);
-            if (Model->GetName(Index) == "한글 문서.go") { Selected = Index; break; }
+            if (Model->GetName(Index) == Name) { Selected = Index; break; }
         }
         QVERIFY(Selected.isValid()); Grid->EnsureKeyboardFocusOnView(); QVERIFY(QApplication::focusWidget());
         QTest::keyClick(QApplication::focusWidget(), Qt::Key_F3);

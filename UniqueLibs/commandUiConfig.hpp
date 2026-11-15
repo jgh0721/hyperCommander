@@ -48,7 +48,7 @@ inline TyMapShortcutToCMDStr DefaultCommandLineShortcuts()
 
 // 입력 범위. 명령행 입력처럼 포커스가 있는 보기의 키 맵을 전역 맵보다 먼저 찾는다.
 // 범위 키 맵은 settings의 shortcuts 객체 안에 범위 이름으로 둔다. 이름은 키로 해석되지 않아야 한다.
-enum class InputScope { Global, CommandLine, ProcessView, ServiceView };
+enum class InputScope { Global, CommandLine, ProcessView, ServiceView, RegistryView };
 
 inline QString ScopeKey(InputScope Scope)
 {
@@ -56,6 +56,7 @@ inline QString ScopeKey(InputScope Scope)
     case InputScope::CommandLine: return QStringLiteral("commandLine");
     case InputScope::ProcessView: return QStringLiteral("processView");
     case InputScope::ServiceView: return QStringLiteral("serviceView");
+    case InputScope::RegistryView: return QStringLiteral("registryView");
     default: return {};
     }
 }
@@ -65,6 +66,7 @@ inline InputScope ScopeFromKey(const QString& Key)
     if (Key == "commandLine") return InputScope::CommandLine;
     if (Key == "processView") return InputScope::ProcessView;
     if (Key == "serviceView") return InputScope::ServiceView;
+    if (Key == "registryView") return InputScope::RegistryView;
     return InputScope::Global;
 }
 
@@ -79,7 +81,7 @@ inline bool IsSharedViewCommand(const QString& Id)
 inline bool IsViewScopedCommand(const QString& Id)
 {
     const auto Command = CommandId(Id);
-    return (Command.startsWith("hc.process.") && Command != "hc.process.run") || Command.startsWith("hc.service.") || IsSharedViewCommand(Command);
+    return (Command.startsWith("hc.process.") && Command != "hc.process.run") || Command.startsWith("hc.service.") || Command.startsWith("hc.registry.") || IsSharedViewCommand(Command);
 }
 
 // 프로세스·서비스 보기에서도 그대로 실행하는 전역 명령. 나머지(파일 작업)는 덮인 파일 목록에 닿지 않도록
@@ -87,11 +89,11 @@ inline bool IsViewScopedCommand(const QString& Id)
 inline bool IsSystemViewGlobalCommand(const QString& Id)
 {
     const auto Command = CommandId(Id);
-    static const QStringList Prefixes{"hc.tab.", "hc.system.", "hc.service.", "hc.process.", "hc.audio.", "hc.panel.",
+    static const QStringList Prefixes{"hc.tab.", "hc.system.", "hc.service.", "hc.process.", "hc.registry.", "hc.audio.", "hc.panel.",
                                       "hc.navigate.gotoDrive", "hc.commandLine.", "hc.app.", "hc.menu."};
     for (const auto& Prefix : Prefixes)
         if (Command.startsWith(Prefix)) return true;
-    static const QStringList Exact{"hc.navigate.systemProcesses", "hc.navigate.systemServices",
+    static const QStringList Exact{"hc.navigate.systemProcesses", "hc.navigate.systemServices", "hc.navigate.systemRegistry",
                                    "hc.navigate.refresh", "hc.navigate.forceRefresh", "hc.navigate.back", "hc.navigate.forward",
                                    "hc.navigate.path", "hc.navigate.favorites", "hc.search.focus", "hc.search.everything",
                                    "hc.viewer.quick", "hc.viewer.close", "hc.settings.show", "hc.jobs.show", "hc.automation.show"};
@@ -105,6 +107,7 @@ inline bool ScopeAccepts(InputScope Scope, const QString& Id)
     case InputScope::CommandLine: return IsCommandLineShortcut(Command);
     case InputScope::ProcessView: return Command.startsWith("hc.process.") || IsSharedViewCommand(Command);
     case InputScope::ServiceView: return Command.startsWith("hc.service.") || IsSharedViewCommand(Command);
+    case InputScope::RegistryView: return Command.startsWith("hc.registry.");
     default: return !IsCommandLineShortcut(Command) && !IsViewScopedCommand(Command);
     }
 }
@@ -114,6 +117,7 @@ inline InputScope HomeScope(const QString& Id)
     const auto Command = CommandId(Id);
     if (IsCommandLineShortcut(Command)) return InputScope::CommandLine;
     if (Command.startsWith("hc.service.")) return InputScope::ServiceView;
+    if (Command.startsWith("hc.registry.")) return InputScope::RegistryView;
     if (IsViewScopedCommand(Command)) return InputScope::ProcessView;
     return InputScope::Global;
 }
@@ -207,10 +211,11 @@ inline TyMapShortcutToCMDStr EffectiveShortcuts(const QJsonObject& General, cons
 }
 
 // 기능 키 막대의 보기 종류. 파일 패널은 기존 functionCommands·functionCaptions를 쓴다.
-enum class FunctionBarKind { File, ProcessView, ServiceView };
+enum class FunctionBarKind { File, ProcessView, ServiceView, RegistryView };
 
 inline QString FunctionBarKey(FunctionBarKind Kind)
 {
+    if (Kind == FunctionBarKind::RegistryView) return QStringLiteral("registryView");
     return Kind == FunctionBarKind::ProcessView ? QStringLiteral("processView") : Kind == FunctionBarKind::ServiceView ? QStringLiteral("serviceView") : QString{};
 }
 
@@ -232,7 +237,7 @@ inline QString FunctionCaption(const QJsonObject& General, int Slot, const QStri
 inline QStringList FunctionCommandsFor(const QJsonObject& General, FunctionBarKind Kind)
 {
     if (Kind == FunctionBarKind::File) return FunctionCommands(General);
-    const auto Defaults = Kind == FunctionBarKind::ProcessView ? hc::defaults::ProcessFunctionCommands() : hc::defaults::ServiceFunctionCommands();
+    const auto Defaults = Kind == FunctionBarKind::RegistryView ? hc::defaults::RegistryFunctionCommands() : Kind == FunctionBarKind::ProcessView ? hc::defaults::ProcessFunctionCommands() : hc::defaults::ServiceFunctionCommands();
     const auto Items = General["functionBars"].toObject()[FunctionBarKey(Kind)].toObject()["commands"].toArray();
     if (Items.size() != 9) return Defaults;
     QStringList Result;

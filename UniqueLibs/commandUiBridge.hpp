@@ -25,6 +25,7 @@ namespace hc::audio { class AudioSession; }
 namespace hc::ui { class AudioPopover; }
 namespace hc::ui { class UserMenu; }
 namespace hc::sys { class SystemCommands; }
+namespace hc::registry { class RegistryCommands; }
 namespace hc::ui { struct CommandState; }
 namespace hc::filecontext { struct ContextTarget; }
 
@@ -48,6 +49,8 @@ public:
     void PromptArchive(bool Extract, const QModelIndex& Index = {});
     hc::storage::Result<QStringList> CompareArguments(const QModelIndex& Index = {});
     bool ExecuteCommand(const QString& Id, const QModelIndex& Index = {});
+    void OpenRegistryImport(CFSModel* Model, const QModelIndex& Index);
+    void OpenRegistrySourceEditor(const QString& Path);
     void ShowShellMenu(const QModelIndex& Index = {});
     // HC 문맥 메뉴(설계 261110). 명령으로 열면 커서 행 아래에 연다.
     void ShowContextMenu(const QModelIndex& Index = {});
@@ -157,6 +160,7 @@ private:
     QHash<QString, QPointer<QAction>> actions_;
     hc::ui::UserMenu* userMenu_ = nullptr;
     hc::sys::SystemCommands* system_ = nullptr;
+    hc::registry::RegistryCommands* registryCommands_ = nullptr;
     int functionBarKind_ = -2;              // 기능 키 막대가 보이는 보기 종류(-1 파일, 0 프로세스, 1 서비스)
     QSet<QString> systemDisabled_;          // 시스템 보기 때문에 끈 명령. 파일 보기로 돌아오면 다시 켠다
     // Modal commands process watcher refreshes; resets must invalidate the

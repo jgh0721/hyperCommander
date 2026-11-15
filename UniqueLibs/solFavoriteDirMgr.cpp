@@ -314,7 +314,8 @@ void CFavoriteDirMgr::createSystemTools( QMenu* Menu )
     // 즐겨찾기 폴더처럼 현재 탭을 그 보기로 바꾼다. 키 표시는 같은 명령의 현재 키를 따른다.
     const auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
     for( const auto& [Id, Label] : { std::pair{ QStringLiteral( "hc.navigate.systemProcesses" ), tr( "프로세스 관리(&P)" ) },
-                                     std::pair{ QStringLiteral( "hc.navigate.systemServices" ), tr( "서비스 관리(&S)" ) } } )
+                                     std::pair{ QStringLiteral( "hc.navigate.systemServices" ), tr( "서비스 관리(&S)" ) },
+                                     std::pair{ QStringLiteral( "hc.navigate.systemRegistry" ), tr( "레지스트리 편집기(&R)" ) } } )
     {
         const auto* Command = Bridge ? Bridge->Action( Id ) : nullptr;
         const auto Key = Command ? Command->property( "hc.keyLabel" ).toString() : QString{};

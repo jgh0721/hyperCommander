@@ -49,6 +49,6 @@ private:
 };
 
 // RequireElevation은 제품 진입점에서 항상 true다. 시험만 표준 권한 채널로 프로토콜을 검증한다.
-unsigned long ExecuteSystemSession( const QJsonObject& Bootstrap, const QString& ExpectedCaller = {}, bool RequireElevation = true );
+unsigned long ExecuteSystemSession( const QJsonObject& Bootstrap, const QString& ExpectedCaller = {}, bool RequireElevation = true, const QString& RegistryTestRoot = {} );
 
 } // namespace hc::admin

@@ -41,6 +41,21 @@ set(PROJECT_UI_SRC
         UIs/Components/cmpView.hpp
         UIs/Components/cmpSystemView.cpp
         UIs/Components/cmpSystemView.hpp
+        UIs/Components/treeBranchStyle.hpp
+        UIs/registryImportDialog.cpp
+        UIs/registryImportDialog.hpp
+        UIs/registryBatchDialog.cpp
+        UIs/registryBatchDialog.hpp
+        UIs/Components/cmpRegistryView.cpp
+        UIs/Components/cmpRegistryView.hpp
+        UIs/Components/cmpRegistryDetailView.cpp
+        UIs/Components/cmpRegistryDetailView.hpp
+        UIs/Components/registryNameOverlay.cpp
+        UIs/Components/registryNameOverlay.hpp
+        UIs/Components/registryGridState.cpp
+        UIs/Components/registryGridState.hpp
+        UIs/Components/registryLocationMenu.cpp
+        UIs/Components/registryLocationMenu.hpp
         UIs/systemDialogs.cpp
         UIs/systemDialogs.hpp
         UIs/processServiceSettingsPage.hpp
@@ -260,6 +275,10 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/system/serviceModel.hpp
         ../UniqueLibs/system/systemCommands.cpp
         ../UniqueLibs/system/systemCommands.hpp
+        ../UniqueLibs/commandRegistryTransfer.cpp
+        ../UniqueLibs/registry/registryTransferCommands.cpp
+        ../UniqueLibs/registry/registryCommands.cpp
+        ../UniqueLibs/registry/registryCommands.hpp
 )
 qt_add_executable(HyperCommander
         ${PROJECT_SOURCES}
@@ -310,6 +329,8 @@ set_target_properties(HyperCommander
 target_link_libraries(HyperCommander
         PRIVATE
         hc_script_runtime
+        hc_registry_models
+        hc_registry_editors
         Qtitan::Grid
         Fm::style
         Fm::widgets

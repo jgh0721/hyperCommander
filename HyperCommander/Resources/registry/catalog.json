@@ -1,0 +1,3557 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "builtin.001",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.001.title",
+      "descriptionKey": "builtin.001.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.002",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.002.title",
+      "descriptionKey": "builtin.002.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.003",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\InprocServer32",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.003.title",
+      "descriptionKey": "builtin.003.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.004",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\InprocServer32",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.004.title",
+      "descriptionKey": "builtin.004.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.005",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\LocalServer32",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.005.title",
+      "descriptionKey": "builtin.005.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.006",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\LocalServer32",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.006.title",
+      "descriptionKey": "builtin.006.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.007",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\ProgID",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.007.title",
+      "descriptionKey": "builtin.007.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.008",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\ProgID",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.008.title",
+      "descriptionKey": "builtin.008.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.009",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\VersionIndependentProgID",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.009.title",
+      "descriptionKey": "builtin.009.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.010",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\VersionIndependentProgID",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.010.title",
+      "descriptionKey": "builtin.010.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.011",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\TreatAs",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.011.title",
+      "descriptionKey": "builtin.011.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.012",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\TreatAs",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.012.title",
+      "descriptionKey": "builtin.012.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.013",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\AutoTreatAs",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.013.title",
+      "descriptionKey": "builtin.013.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.014",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\AutoTreatAs",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.014.title",
+      "descriptionKey": "builtin.014.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.015",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\TypeLib",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.015.title",
+      "descriptionKey": "builtin.015.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.016",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\TypeLib",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.016.title",
+      "descriptionKey": "builtin.016.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.017",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\Version",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.017.title",
+      "descriptionKey": "builtin.017.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.018",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\Version",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.018.title",
+      "descriptionKey": "builtin.018.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.019",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\DefaultIcon",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.019.title",
+      "descriptionKey": "builtin.019.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.020",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\DefaultIcon",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.020.title",
+      "descriptionKey": "builtin.020.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.023",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\Implemented Categories",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.023.title",
+      "descriptionKey": "builtin.023.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.024",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\Required Categories",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.024.title",
+      "descriptionKey": "builtin.024.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.025",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\InprocHandler32",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.025.title",
+      "descriptionKey": "builtin.025.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.026",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\InprocHandler32",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.026.title",
+      "descriptionKey": "builtin.026.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.027",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\Insertable",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.027.title",
+      "descriptionKey": "builtin.027.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.028",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\Control",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.028.title",
+      "descriptionKey": "builtin.028.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.029",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\ToolBoxBitmap32",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "COM",
+      "titleKey": "builtin.029.title",
+      "descriptionKey": "builtin.029.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.030",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\ToolBoxBitmap32",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "COM",
+      "titleKey": "builtin.030.title",
+      "descriptionKey": "builtin.030.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.031",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*\\InprocServer32",
+      "valueNamePattern": "ThreadingModel",
+      "types": [
+        1
+      ],
+      "category": "COM",
+      "titleKey": "builtin.031.title",
+      "descriptionKey": "builtin.031.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.032",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "CLSID\\*",
+      "valueNamePattern": "AppID",
+      "types": [
+        1
+      ],
+      "category": "COM",
+      "titleKey": "builtin.032.title",
+      "descriptionKey": "builtin.032.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/com/clsid-key-hklm"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.033",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": ".*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.033.title",
+      "descriptionKey": "builtin.033.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.034",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": ".*",
+      "valueNamePattern": "",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.034.title",
+      "descriptionKey": "builtin.034.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.035",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": ".*",
+      "valueNamePattern": "Content Type",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.035.title",
+      "descriptionKey": "builtin.035.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.036",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": ".*",
+      "valueNamePattern": "PerceivedType",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.036.title",
+      "descriptionKey": "builtin.036.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.037",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": ".*\\OpenWithProgids",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.037.title",
+      "descriptionKey": "builtin.037.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.038",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": ".*\\OpenWithList",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.038.title",
+      "descriptionKey": "builtin.038.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.039",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.039.title",
+      "descriptionKey": "builtin.039.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.040",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell",
+      "valueNamePattern": "",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.040.title",
+      "descriptionKey": "builtin.040.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.041",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell\\*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.041.title",
+      "descriptionKey": "builtin.041.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.042",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell\\*\\command",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.042.title",
+      "descriptionKey": "builtin.042.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.043",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell\\*\\command",
+      "valueNamePattern": "",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.043.title",
+      "descriptionKey": "builtin.043.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.044",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell\\*\\command",
+      "valueNamePattern": "DelegateExecute",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.044.title",
+      "descriptionKey": "builtin.044.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.045",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell\\*",
+      "valueNamePattern": "MUIVerb",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.045.title",
+      "descriptionKey": "builtin.045.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.046",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell\\*",
+      "valueNamePattern": "Icon",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.046.title",
+      "descriptionKey": "builtin.046.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.047",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell\\*",
+      "valueNamePattern": "Extended",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.047.title",
+      "descriptionKey": "builtin.047.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.048",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shell\\*",
+      "valueNamePattern": "LegacyDisable",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.048.title",
+      "descriptionKey": "builtin.048.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.049",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\DefaultIcon",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.049.title",
+      "descriptionKey": "builtin.049.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.050",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\CurVer",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.050.title",
+      "descriptionKey": "builtin.050.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.051",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Applications",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.051.title",
+      "descriptionKey": "builtin.051.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.052",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Applications\\*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.052.title",
+      "descriptionKey": "builtin.052.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.053",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Applications\\*\\SupportedTypes",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.053.title",
+      "descriptionKey": "builtin.053.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.054",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Applications\\*",
+      "valueNamePattern": "FriendlyAppName",
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.054.title",
+      "descriptionKey": "builtin.054.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.055",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "SystemFileAssociations",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.055.title",
+      "descriptionKey": "builtin.055.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.056",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "MIME\\Database\\Content Type",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "fileAssociation",
+      "titleKey": "builtin.056.title",
+      "descriptionKey": "builtin.056.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/fa-how-work"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.057",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shellex\\ContextMenuHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.057.title",
+      "descriptionKey": "builtin.057.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.058",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shellex\\PropertySheetHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.058.title",
+      "descriptionKey": "builtin.058.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.059",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "*\\shellex\\DragDropHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.059.title",
+      "descriptionKey": "builtin.059.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.060",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "AllFilesystemObjects\\shellex\\ContextMenuHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.060.title",
+      "descriptionKey": "builtin.060.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.061",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "AllFilesystemObjects\\shellex\\PropertySheetHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.061.title",
+      "descriptionKey": "builtin.061.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.062",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "AllFilesystemObjects\\shellex\\DragDropHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.062.title",
+      "descriptionKey": "builtin.062.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.063",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Directory\\shellex\\ContextMenuHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.063.title",
+      "descriptionKey": "builtin.063.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.064",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Directory\\shellex\\PropertySheetHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.064.title",
+      "descriptionKey": "builtin.064.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.065",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Directory\\shellex\\DragDropHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.065.title",
+      "descriptionKey": "builtin.065.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.066",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Directory\\Background\\shellex\\ContextMenuHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.066.title",
+      "descriptionKey": "builtin.066.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.067",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Directory\\Background\\shellex\\PropertySheetHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.067.title",
+      "descriptionKey": "builtin.067.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.068",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Directory\\Background\\shellex\\DragDropHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.068.title",
+      "descriptionKey": "builtin.068.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.069",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Folder\\shellex\\ContextMenuHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.069.title",
+      "descriptionKey": "builtin.069.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.070",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Folder\\shellex\\PropertySheetHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.070.title",
+      "descriptionKey": "builtin.070.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.071",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Folder\\shellex\\DragDropHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.071.title",
+      "descriptionKey": "builtin.071.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.072",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Drive\\shellex\\ContextMenuHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.072.title",
+      "descriptionKey": "builtin.072.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.073",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Drive\\shellex\\PropertySheetHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.073.title",
+      "descriptionKey": "builtin.073.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.074",
+      "hive": "HKCR",
+      "view": "both",
+      "pathPattern": "Drive\\shellex\\DragDropHandlers",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "shellExtension",
+      "titleKey": "builtin.074.title",
+      "descriptionKey": "builtin.074.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/reg-shell-exts"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.075",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "autorun",
+      "titleKey": "builtin.075.title",
+      "descriptionKey": "builtin.075.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.076",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "valueNamePattern": "*",
+      "types": [
+        1,
+        2
+      ],
+      "category": "autorun",
+      "titleKey": "builtin.076.title",
+      "descriptionKey": "builtin.076.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.077",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "autorun",
+      "titleKey": "builtin.077.title",
+      "descriptionKey": "builtin.077.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.078",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+      "valueNamePattern": "*",
+      "types": [
+        1,
+        2
+      ],
+      "category": "autorun",
+      "titleKey": "builtin.078.title",
+      "descriptionKey": "builtin.078.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.079",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.079.title",
+      "descriptionKey": "builtin.079.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/app-registration"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.080",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.080.title",
+      "descriptionKey": "builtin.080.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/app-registration"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.081",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\*",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "application",
+      "titleKey": "builtin.081.title",
+      "descriptionKey": "builtin.081.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/app-registration"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.082",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\*",
+      "valueNamePattern": "Path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "application",
+      "titleKey": "builtin.082.title",
+      "descriptionKey": "builtin.082.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/app-registration"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.083",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.083.title",
+      "descriptionKey": "builtin.083.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.084",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.084.title",
+      "descriptionKey": "builtin.084.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.085",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "autorun",
+      "titleKey": "builtin.085.title",
+      "descriptionKey": "builtin.085.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.086",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "valueNamePattern": "*",
+      "types": [
+        1,
+        2
+      ],
+      "category": "autorun",
+      "titleKey": "builtin.086.title",
+      "descriptionKey": "builtin.086.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.087",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "autorun",
+      "titleKey": "builtin.087.title",
+      "descriptionKey": "builtin.087.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.088",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+      "valueNamePattern": "*",
+      "types": [
+        1,
+        2
+      ],
+      "category": "autorun",
+      "titleKey": "builtin.088.title",
+      "descriptionKey": "builtin.088.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.089",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.089.title",
+      "descriptionKey": "builtin.089.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/app-registration"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.090",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.090.title",
+      "descriptionKey": "builtin.090.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/app-registration"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.091",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\*",
+      "valueNamePattern": "",
+      "types": [
+        1,
+        2
+      ],
+      "category": "application",
+      "titleKey": "builtin.091.title",
+      "descriptionKey": "builtin.091.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/app-registration"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.092",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\*",
+      "valueNamePattern": "Path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "application",
+      "titleKey": "builtin.092.title",
+      "descriptionKey": "builtin.092.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/shell/app-registration"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.093",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.093.title",
+      "descriptionKey": "builtin.093.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.094",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.094.title",
+      "descriptionKey": "builtin.094.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.095",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+      "valueNamePattern": "DisplayName",
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.095.title",
+      "descriptionKey": "builtin.095.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.096",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+      "valueNamePattern": "DisplayVersion",
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.096.title",
+      "descriptionKey": "builtin.096.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.097",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+      "valueNamePattern": "Publisher",
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.097.title",
+      "descriptionKey": "builtin.097.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.098",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+      "valueNamePattern": "UninstallString",
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.098.title",
+      "descriptionKey": "builtin.098.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.099",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+      "valueNamePattern": "InstallLocation",
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.099.title",
+      "descriptionKey": "builtin.099.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.100",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+      "valueNamePattern": "DisplayIcon",
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.100.title",
+      "descriptionKey": "builtin.100.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.101",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+      "valueNamePattern": "EstimatedSize",
+      "types": [],
+      "category": "application",
+      "titleKey": "builtin.101.title",
+      "descriptionKey": "builtin.101.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.102",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "environment",
+      "titleKey": "builtin.102.title",
+      "descriptionKey": "builtin.102.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.103",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "Path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "environment",
+      "titleKey": "builtin.103.title",
+      "descriptionKey": "builtin.103.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.104",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "TEMP",
+      "types": [
+        1,
+        2
+      ],
+      "category": "environment",
+      "titleKey": "builtin.104.title",
+      "descriptionKey": "builtin.104.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.105",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "TMP",
+      "types": [
+        1,
+        2
+      ],
+      "category": "environment",
+      "titleKey": "builtin.105.title",
+      "descriptionKey": "builtin.105.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.106",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "PATHEXT",
+      "types": [
+        1,
+        2
+      ],
+      "category": "environment",
+      "titleKey": "builtin.106.title",
+      "descriptionKey": "builtin.106.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.107",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "environment",
+      "titleKey": "builtin.107.title",
+      "descriptionKey": "builtin.107.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.108",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "Path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "environment",
+      "titleKey": "builtin.108.title",
+      "descriptionKey": "builtin.108.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.109",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "TEMP",
+      "types": [
+        1,
+        2
+      ],
+      "category": "environment",
+      "titleKey": "builtin.109.title",
+      "descriptionKey": "builtin.109.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.110",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "TMP",
+      "types": [
+        1,
+        2
+      ],
+      "category": "environment",
+      "titleKey": "builtin.110.title",
+      "descriptionKey": "builtin.110.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.111",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "PATHEXT",
+      "types": [
+        1,
+        2
+      ],
+      "category": "environment",
+      "titleKey": "builtin.111.title",
+      "descriptionKey": "builtin.111.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.112",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Volatile Environment",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "environment",
+      "titleKey": "builtin.112.title",
+      "descriptionKey": "builtin.112.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.113",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "autorun",
+      "titleKey": "builtin.113.title",
+      "descriptionKey": "builtin.113.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-server/user-profiles-and-logon/cannot-log-on-windows"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.114",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+      "valueNamePattern": "Shell",
+      "types": [
+        1,
+        2
+      ],
+      "category": "autorun",
+      "titleKey": "builtin.114.title",
+      "descriptionKey": "builtin.114.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-server/user-profiles-and-logon/cannot-log-on-windows"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.115",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+      "valueNamePattern": "Userinit",
+      "types": [
+        1,
+        2
+      ],
+      "category": "autorun",
+      "titleKey": "builtin.115.title",
+      "descriptionKey": "builtin.115.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-server/user-profiles-and-logon/cannot-log-on-windows"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.116",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.116.title",
+      "descriptionKey": "builtin.116.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.117",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.117.title",
+      "descriptionKey": "builtin.117.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.118",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "ImagePath",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.118.title",
+      "descriptionKey": "builtin.118.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.119",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "Start",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.119.title",
+      "descriptionKey": "builtin.119.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.120",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "Type",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.120.title",
+      "descriptionKey": "builtin.120.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.121",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "ErrorControl",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.121.title",
+      "descriptionKey": "builtin.121.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.122",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "DisplayName",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.122.title",
+      "descriptionKey": "builtin.122.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.123",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "Description",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.123.title",
+      "descriptionKey": "builtin.123.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.124",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "ObjectName",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.124.title",
+      "descriptionKey": "builtin.124.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.125",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "DependOnService",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.125.title",
+      "descriptionKey": "builtin.125.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.126",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "DependOnGroup",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.126.title",
+      "descriptionKey": "builtin.126.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.127",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Services\\*",
+      "valueNamePattern": "Group",
+      "types": [],
+      "category": "service",
+      "titleKey": "builtin.127.title",
+      "descriptionKey": "builtin.127.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.128",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "explorer",
+      "titleKey": "builtin.128.title",
+      "descriptionKey": "builtin.128.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.129",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": "Hidden",
+      "types": [
+        4
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.129.title",
+      "descriptionKey": "builtin.129.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.130",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": "HideFileExt",
+      "types": [
+        4
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.130.title",
+      "descriptionKey": "builtin.130.description",
+      "priority": 0,
+      "options": [
+        {
+          "value": "0",
+          "labelKey": "option.off"
+        },
+        {
+          "value": "1",
+          "labelKey": "option.on"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.131",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": "ShowSuperHidden",
+      "types": [
+        4
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.131.title",
+      "descriptionKey": "builtin.131.description",
+      "priority": 0,
+      "options": [
+        {
+          "value": "0",
+          "labelKey": "option.off"
+        },
+        {
+          "value": "1",
+          "labelKey": "option.on"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.132",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": "ShowInfoTip",
+      "types": [
+        4
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.132.title",
+      "descriptionKey": "builtin.132.description",
+      "priority": 0,
+      "options": [
+        {
+          "value": "0",
+          "labelKey": "option.off"
+        },
+        {
+          "value": "1",
+          "labelKey": "option.on"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.133",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": "ShowCompColor",
+      "types": [
+        4
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.133.title",
+      "descriptionKey": "builtin.133.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.134",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": "HideIcons",
+      "types": [
+        4
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.134.title",
+      "descriptionKey": "builtin.134.description",
+      "priority": 0,
+      "options": [
+        {
+          "value": "0",
+          "labelKey": "option.off"
+        },
+        {
+          "value": "1",
+          "labelKey": "option.on"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.135",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": "SeparateProcess",
+      "types": [
+        4
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.135.title",
+      "descriptionKey": "builtin.135.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.136",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": "ShowStatusBar",
+      "types": [
+        4
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.136.title",
+      "descriptionKey": "builtin.136.description",
+      "priority": 0,
+      "options": [
+        {
+          "value": "0",
+          "labelKey": "option.off"
+        },
+        {
+          "value": "1",
+          "labelKey": "option.on"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.137",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueNamePattern": "AutoCheckSelect",
+      "types": [
+        4
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.137.title",
+      "descriptionKey": "builtin.137.description",
+      "priority": 0,
+      "options": [
+        {
+          "value": "0",
+          "labelKey": "option.off"
+        },
+        {
+          "value": "1",
+          "labelKey": "option.on"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/a6ca3a17-1971-4b22-bf3b-e1a5d5c50fca"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.138",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "explorer",
+      "titleKey": "builtin.138.title",
+      "descriptionKey": "builtin.138.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/change-personal-folder-location-fails"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.139",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+      "valueNamePattern": "Desktop",
+      "types": [
+        1,
+        2
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.139.title",
+      "descriptionKey": "builtin.139.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/change-personal-folder-location-fails"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.140",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+      "valueNamePattern": "Personal",
+      "types": [
+        1,
+        2
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.140.title",
+      "descriptionKey": "builtin.140.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/change-personal-folder-location-fails"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.141",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+      "valueNamePattern": "My Pictures",
+      "types": [
+        1,
+        2
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.141.title",
+      "descriptionKey": "builtin.141.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/change-personal-folder-location-fails"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.142",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+      "valueNamePattern": "My Music",
+      "types": [
+        1,
+        2
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.142.title",
+      "descriptionKey": "builtin.142.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/change-personal-folder-location-fails"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.143",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+      "valueNamePattern": "My Video",
+      "types": [
+        1,
+        2
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.143.title",
+      "descriptionKey": "builtin.143.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/change-personal-folder-location-fails"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.144",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+      "valueNamePattern": "Favorites",
+      "types": [
+        1,
+        2
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.144.title",
+      "descriptionKey": "builtin.144.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/change-personal-folder-location-fails"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.145",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+      "valueNamePattern": "AppData",
+      "types": [
+        1,
+        2
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.145.title",
+      "descriptionKey": "builtin.145.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/change-personal-folder-location-fails"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.146",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
+      "valueNamePattern": "Local AppData",
+      "types": [
+        1,
+        2
+      ],
+      "category": "explorer",
+      "titleKey": "builtin.146.title",
+      "descriptionKey": "builtin.146.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/change-personal-folder-location-fails"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.147",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "autorun",
+      "titleKey": "builtin.147.title",
+      "descriptionKey": "builtin.147.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/previous-versions/windows/desktop/xperf/image-file-execution-options"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.148",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\*",
+      "valueNamePattern": null,
+      "types": [],
+      "category": "autorun",
+      "titleKey": "builtin.148.title",
+      "descriptionKey": "builtin.148.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/previous-versions/windows/desktop/xperf/image-file-execution-options"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.149",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\*",
+      "valueNamePattern": "Debugger",
+      "types": [
+        1,
+        2
+      ],
+      "category": "autorun",
+      "titleKey": "builtin.149.title",
+      "descriptionKey": "builtin.149.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/gflags-commands"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.150",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\*",
+      "valueNamePattern": "GlobalFlag",
+      "types": [],
+      "category": "autorun",
+      "titleKey": "builtin.150.title",
+      "descriptionKey": "builtin.150.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/example-13---listing-image-files-with-global-flags"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.151",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\*",
+      "valueNamePattern": "MitigationOptions",
+      "types": [],
+      "category": "autorun",
+      "titleKey": "builtin.151.title",
+      "descriptionKey": "builtin.151.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/defender-endpoint/exploit-protection-reference"
+      ],
+      "verifiedBuilds": []
+    },
+    {
+      "id": "builtin.152",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "Software\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\*",
+      "valueNamePattern": "TracingFlags",
+      "types": [
+        4
+      ],
+      "category": "autorun",
+      "titleKey": "builtin.152.title",
+      "descriptionKey": "builtin.152.description",
+      "priority": 0,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows; availability depends on installed components and OS version",
+      "effect": null,
+      "warnings": [
+        "warning.autorun"
+      ],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/previous-versions/windows/desktop/xperf/image-file-execution-options"
+      ],
+      "verifiedBuilds": []
+    }
+  ],
+  "knownLocations": [
+    {
+      "path": "HKCU\\Environment",
+      "titleKey": "known.userEnvironment"
+    },
+    {
+      "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "titleKey": "known.systemEnvironment"
+    },
+    {
+      "path": "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+      "titleKey": "known.ifeo"
+    },
+    {
+      "path": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "titleKey": "known.userRun"
+    },
+    {
+      "path": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "titleKey": "known.machineRun"
+    },
+    {
+      "path": "HKCR\\CLSID",
+      "titleKey": "known.com"
+    }
+  ]
+}

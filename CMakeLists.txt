@@ -150,6 +150,8 @@ if(HC_RHWP_PRODUCT_RUNTIME_DIRECTORY AND HC_RHWP_APPROVED_INVENTORY_SHA256)
     endif()
 endif()
 add_subdirectory(HyperSearchIndexer)
+add_subdirectory(commonLibs/system/registry)
+add_subdirectory(UniqueLibs/registry)
 # Process/service collection and control. Qt-free; Windows 10 APIs are allowed here
 # because UniqueLibs/HyperCommander still build with the Windows 7 SDK target.
 qt_add_library(hc_system STATIC
@@ -186,13 +188,14 @@ target_include_directories(hc_file_locks PRIVATE
     ${PROJECT_SOURCE_DIR}/HyperCommanderAdmin
     ${PROJECT_SOURCE_DIR}/commonLibs
 )
-target_link_libraries(hc_file_locks PUBLIC Qt6::Core hc_system PRIVATE advapi32 shell32 rstrtmgr)
+target_link_libraries(hc_file_locks PUBLIC Qt6::Core hc_system hc_registry_transactions PRIVATE advapi32 shell32 rstrtmgr)
 target_compile_definitions(hc_file_locks PRIVATE NOMINMAX UNICODE _UNICODE)
 target_compile_options(hc_file_locks PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_subdirectory(HyperCommanderAdmin)
 target_link_libraries(HyperCommanderAdmin PRIVATE hc_file_locks)
 target_link_libraries(HyperCommanderAdmin PRIVATE hc_update_core)
 add_subdirectory(HyperCommander)
+target_link_libraries(HyperCommanderAdmin PRIVATE hc_registry_core)
 foreach(HC_UPDATE_ENTRY IN ITEMS HyperCommander HyperCommanderAdmin HyperEditor)
     target_sources(${HC_UPDATE_ENTRY} PRIVATE "${PROJECT_SOURCE_DIR}/cmake/updateLongPaths.manifest")
 endforeach()

@@ -19,6 +19,8 @@
 #include "HyperCommander/UIs/itemSelectionController.hpp"
 #include "navigationError.hpp"
 #include "HyperCommander/UIs/dlgMain.hpp"
+#include "HyperCommander/UIs/Components/cmpRegistryView.hpp"
+#include "UniqueLibs/registry/registryCommands.hpp"
 #include <fmwidgets/FindBox.h>
 #include <fmwidgets/PanelTabStrip.h>
 #include <fmstyle/ThemeManager.h>
@@ -305,7 +307,7 @@ CommandUiBridge::CommandUiBridge(QWidget* Main) : QObject(Main), main_(Main), ex
         const auto Registered = registry_->Register(Descriptor, {
             [Guard = QPointer<CommandUiBridge>(this)](const CommandInvocation& Invocation) {
                 const bool Available = Guard && (Guard->findModel(Invocation.context_.tabId_)
-                    || ((Invocation.id_ == "hc.navigate.systemProcesses" || Invocation.id_ == "hc.navigate.systemServices") && Guard->activePanel_)
+                    || ((Invocation.id_ == "hc.navigate.systemProcesses" || Invocation.id_ == "hc.navigate.systemServices" || Invocation.id_ == "hc.navigate.systemRegistry" || Invocation.id_ == "hc.system.registry.open") && Guard->activePanel_)
                     || Guard->systemTabCommand(Invocation)
                     || Invocation.id_ == "hc.viewer.close" || (Invocation.id_ == "hc.viewer.quick" && Guard->quick_));
                 return SupportDecision{Available ? Availability::Supported : Availability::Unsupported, Available ? "tab-available" : "tab-closed"};
@@ -806,7 +808,7 @@ bool CommandUiBridge::systemTabCommand(const CommandInvocation& Invocation) cons
     // 프로세스·서비스 보기가 덮은 탭은 PanelModel이 거르므로 문맥에 탭 ID가 없다.
     // 그래도 탭 명령은 파일 모델 없이 현재 패널에서 처리한다.
     return Invocation.id_.starts_with("hc.tab.") && Invocation.context_.tabId_.empty()
-        && activePanel_ && activePanel_->SystemView();
+        && activePanel_ && activePanel_->HasSystemToolView();
 }
 
 CFSModel* CommandUiBridge::findModel(const std::string& TabId) const
@@ -824,11 +826,21 @@ Result<CommandOutcome> CommandUiBridge::execute(const CommandInvocation& Invocat
         returnQuickFocus();
         return CommandOutcome{};
     }
-    if (Invocation.id_ == "hc.navigate.systemProcesses" || Invocation.id_ == "hc.navigate.systemServices")
+    if (Invocation.id_ == "hc.navigate.systemProcesses" || Invocation.id_ == "hc.navigate.systemServices" || Invocation.id_ == "hc.navigate.systemRegistry" || Invocation.id_ == "hc.system.registry.open")
     {
         if (!activePanel_) return Error{ErrorCategory::Cancelled, "panel-closed"};
         // 시스템 보기에는 파일 모델이 없다. 현재 패널의 현재 탭을 직접 전환한다.
-        activePanel_->ShowSystemView(Invocation.id_ == "hc.navigate.systemServices" ? 1 : 0);
+        if (Invocation.id_ == "hc.navigate.systemRegistry" || Invocation.id_ == "hc.system.registry.open") {
+            QVariantMap Options;
+            for (const auto& [Name, Value] : Invocation.parameters_) {
+                if (const auto* Text = std::get_if<std::string>(&Value)) Options[QString::fromStdString(Name)] = QString::fromStdString(*Text);
+                else if (const auto* Number = std::get_if<std::int64_t>(&Value)) Options[QString::fromStdString(Name)] = qlonglong(*Number);
+            }
+            if (Options.contains("view") && Options["view"].toInt() != 32 && Options["view"].toInt() != 64)
+                return Error{ErrorCategory::InvalidRequest, "registry-view-must-be-32-or-64"};
+            registryCommands_->Open(Options);
+        }
+        else activePanel_->ShowSystemView(Invocation.id_ == "hc.navigate.systemServices" ? 1 : 0);
         return CommandOutcome{};
     }
     if (systemTabCommand(Invocation))
@@ -977,8 +989,13 @@ void CommandUiBridge::createActions()
             Menu->addAction(Action); Toolbar->addAction(Action);
             connect(Action, &QAction::triggered, this, [this, Id] {
                 // 시스템 보기의 새로 고침은 프로세스·서비스 목록을 다시 읽는다.
-                if ((Id == "hc.navigate.refresh" || Id == "hc.navigate.forceRefresh") && activePanel_ && activePanel_->SystemView())
+                if ((Id == "hc.navigate.refresh" || Id == "hc.navigate.forceRefresh") && activePanel_ && activePanel_->HasSystemToolView())
                 { activePanel_->RefreshSource(activePanel_->CurrentTabIndex()); return; }
+                if (auto* Registry = registryCommands_ ? registryCommands_->ActiveView() : nullptr) {
+                    if (Id == "hc.navigate.path") { Registry->EditAddress(); return; }
+                    if (Id == "hc.navigate.parent") { Registry->Up(); return; }
+                    if (Id == "hc.navigate.refresh" || Id == "hc.navigate.forceRefresh") { Registry->Refresh(); return; }
+                }
                 QVariantMap Parameters;
                 if (Id == "hc.navigate.path")
                 {
@@ -1010,6 +1027,8 @@ void CommandUiBridge::createActions()
     {
         auto* Action = Viewers->addAction(Item.second); Action->setObjectName("hc.menu." + Item.first);
         connect(Action, &QAction::triggered, this, [this, Id = Item.first] {
+            if (registryCommands_ && Id == "hc.viewer.quick" && (registryCommands_->DetailOpen() || registryCommands_->ActiveView())) { registryCommands_->ToggleDetail(); return; }
+            if (registryCommands_ && Id == "hc.viewer.close" && registryCommands_->CloseDetail()) return;
             // 시스템 보기에서 Ctrl+Q는 반대 패널 상세 보기를 열고 닫는다.
             if (system_ && Id == "hc.viewer.quick" && (system_->DetailOpen() || system_->ActiveKind() >= 0)) { system_->ToggleDetail(); return; }
             if (system_ && Id == "hc.viewer.close" && system_->CloseDetail()) return;
@@ -1648,8 +1667,8 @@ void CommandUiBridge::RefreshFunctionBar() {
     auto* Old = Window->findChild<fm::ui::FunctionKeyBar*>("hc.functionBar");
     const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
     // 활성 패널이 프로세스·서비스 보기면 그 보기의 기능 키 막대를 보인다.
-    functionBarKind_ = system_ ? system_->ActiveKind() : -1;
-    const auto Kind = functionBarKind_ == 0 ? hc::ui::FunctionBarKind::ProcessView : functionBarKind_ == 1 ? hc::ui::FunctionBarKind::ServiceView : hc::ui::FunctionBarKind::File;
+    functionBarKind_ = registryCommands_ && registryCommands_->Active() ? 2 : system_ ? system_->ActiveKind() : -1;
+    const auto Kind = functionBarKind_ == 2 ? hc::ui::FunctionBarKind::RegistryView : functionBarKind_ == 0 ? hc::ui::FunctionBarKind::ProcessView : functionBarKind_ == 1 ? hc::ui::FunctionBarKind::ServiceView : hc::ui::FunctionBarKind::File;
     const auto Desired = hc::ui::FunctionCommandsFor(General, Kind); QStringList Current;
     if (Old) for (auto* Button : Old->buttons()) Current.append(Button->property("hc.commandId").toString());
     if (Old && Current == Desired) {
@@ -1680,6 +1699,7 @@ void CommandUiBridge::RefreshShortcutLabels()
     const auto CommandLine = hc::ui::IndexCommandKeys(Manager->RetrieveForScope(hc::ui::InputScope::CommandLine));
     const auto Process = hc::ui::IndexCommandKeys(Manager->RetrieveForScope(hc::ui::InputScope::ProcessView));
     const auto Service = hc::ui::IndexCommandKeys(Manager->RetrieveForScope(hc::ui::InputScope::ServiceView));
+    const auto Registry = hc::ui::IndexCommandKeys(Manager->RetrieveForScope(hc::ui::InputScope::RegistryView));
     for (auto It = actions_.begin(); It != actions_.end(); ++It) {
         if (!It.value()) continue;
         auto* Command = It.value().data();
@@ -1688,6 +1708,7 @@ void CommandUiBridge::RefreshShortcutLabels()
         case hc::ui::InputScope::CommandLine: Index = &CommandLine; break;
         case hc::ui::InputScope::ProcessView: Index = &Process; break;
         case hc::ui::InputScope::ServiceView: Index = &Service; break;
+        case hc::ui::InputScope::RegistryView: Index = &Registry; break;
         default: break;
         }
         const auto Keys = Index->value(hc::ui::CommandId(It.key()));
@@ -1755,7 +1776,7 @@ void CommandUiBridge::refreshActionState()
     finishCreatedFileFocus();
     // 시스템 보기를 떠났을 때만 껐던 명령을 되돌린다. 아래 규칙이 파일 보기 기준으로 다시 정한다.
     // 시스템 보기에 머무는 동안에는 켰다 끄기를 반복하지 않는다(QAction::changed가 메뉴·기능 키 막대를 매번 다시 그린다).
-    const int SystemKind = system_ ? system_->ActiveKind() : -1;
+    const int SystemKind = registryCommands_ && registryCommands_->Active() ? 2 : system_ ? system_->ActiveKind() : -1;
     if (SystemKind < 0)
         for (const auto& Id : std::exchange(systemDisabled_, {})) if (auto* Command = Action(Id)) Command->setEnabled(true);
     if (auto* Back = Action("hc.navigate.back")) Back->setEnabled(activePanel_ && activePanel_->CanNavigateHistory(-1));
@@ -1825,9 +1846,16 @@ void CommandUiBridge::refreshActionState()
     }
     if (!system_) return;
     system_->RefreshState();
+    if (registryCommands_ && registryCommands_->ActiveView())
+        for (const auto& Id : {"hc.navigate.refresh", "hc.navigate.forceRefresh", "hc.navigate.path"})
+            if (auto* Command = Action(Id)) Command->setEnabled(true);
+    for (auto It = actions_.cbegin(); It != actions_.cend(); ++It)
+        if (It.value() && It.key().startsWith("hc.registry."))
+            It.value()->setEnabled(registryCommands_ && registryCommands_->ActiveView() && registryCommands_->ActiveView()->CanExecuteCommand(It.key()));
+    if (registryCommands_) registryCommands_->RefreshState();
     const int Kind = SystemKind;
     // Ctrl+Q는 시스템 보기에서 반대 패널 상세 보기를 연다.
-    if (auto* Command = Action("hc.viewer.quick")) Command->setEnabled(Ready || Kind >= 0 || system_->DetailOpen());
+    if (auto* Command = Action("hc.viewer.quick")) Command->setEnabled(Ready || Kind >= 0 || system_->DetailOpen() || (registryCommands_ && (registryCommands_->ActiveView() || registryCommands_->DetailOpen())));
     if (Kind >= 0) {
         // 덮인 파일 목록에 닿는 명령은 메뉴·도구 모음에서도 끈다.
         for (auto It = actions_.cbegin(); It != actions_.cend(); ++It)
@@ -1920,9 +1948,10 @@ void CommandUiBridge::createCommandUi()
     Add("hc.audio.locate", tr("재생 중인 파일 위치 보기"), [this] { LocateAudio(); });
     createAudioUi(Window);
     system_ = new hc::sys::SystemCommands(Window, this, [this] { return activePanel_.data(); });
+    registryCommands_ = new hc::registry::RegistryCommands(Window, this, [this] { return activePanel_.data(); });
     Add("hc.view.flat.toggle", tr("평면 보기"), [this] {
         if (!activePanel_) return;
-        if (activePanel_->SystemView()) activePanel_->HideSystemView();
+        if (activePanel_->HasSystemToolView()) activePanel_->HideSystemView();
         activePanel_->ToggleFlatView();
     });
     if (auto* Flat = Action("hc.view.flat.toggle")) Flat->setCheckable(true);
@@ -1930,12 +1959,15 @@ void CommandUiBridge::createCommandUi()
         const auto Id = hc::ui::CommandId(Command.Name);
         if (actions_.contains(Id)) continue;
         Add(Id, Command.Desc, [this, Id] {
-            if (Id == "hc.navigate.systemProcesses" || Id == "hc.navigate.systemServices") { Dispatch(Id, {}, "ui"); return; }
+            if (Id == "hc.navigate.systemProcesses" || Id == "hc.navigate.systemServices" || Id == "hc.navigate.systemRegistry") { Dispatch(Id, {}, "ui"); return; }
+            if (hc::registry::RegistryCommands::Handles(Id)) { registryCommands_->Execute(Id); return; }
             if (hc::sys::SystemCommands::Handles(Id)) { system_->Execute(Id); return; }
+            if (registryCommands_ && Id == "hc.viewer.quick" && (registryCommands_->DetailOpen() || registryCommands_->ActiveView())) { registryCommands_->ToggleDetail(); return; }
+            if (registryCommands_ && Id == "hc.viewer.close" && registryCommands_->CloseDetail()) return;
             // 시스템 보기에서 Ctrl+Q는 반대 패널 상세 보기를 열고 닫는다.
             if (Id == "hc.viewer.quick" && (system_->DetailOpen() || system_->ActiveKind() >= 0)) { system_->ToggleDetail(); return; }
             if (Id == "hc.viewer.close" && system_->CloseDetail()) return;
-            if (Id.startsWith("hc.navigate.gotoDrive") && activePanel_ && activePanel_->SystemView()) activePanel_->HideSystemView();
+            if (Id.startsWith("hc.navigate.gotoDrive") && activePanel_ && activePanel_->HasSystemToolView()) activePanel_->HideSystemView();
             if (Id.startsWith("hc.clipboard.")) { Dispatch(Id, {}, "ui", commandIndex()); return; }
             if (Id.startsWith("hc.selection.") && Id != "hc.selection.invert") {
                 auto* Panel = activePanel_.data();
@@ -1996,8 +2028,11 @@ void CommandUiBridge::createCommandUi()
     for (auto* Panel : Window->findChildren<CmpPanel*>()) connect(Panel, &CmpPanel::sigNavigationStateChanged, this, [this, SyncFind] {
         SyncFind(); refreshActionState();
     });
+    for (auto* Panel : Window->findChildren<CmpPanel*>()) connect(Panel, &CmpPanel::sigRegistryCommandRequested, this, [this, Panel](const QString& Id) {
+        if (Panel == activePanel_) ExecuteCommand(Id);
+    });
     if (auto* Main = qobject_cast<QMainUI*>(Window)) connect(Main, &QMainUI::sigActivePanelChanged, this, [this, SyncFind](CmpPanel* Panel) { activePanel_ = Panel; SyncFind(); refreshActionState(); });
-    Add("hc.search.focus", tr("설정 범위에서 찾기"), [QuickFind] { QuickFind->FocusStandard(); });
+    Add("hc.search.focus", tr("설정 범위에서 찾기"), [this, QuickFind] { if (registryCommands_ && registryCommands_->ActiveView()) registryCommands_->ActiveView()->OpenFind(); else QuickFind->FocusStandard(); });
     Add("hc.search.everything", tr("Everything에서 찾기"), [QuickFind] { QuickFind->FocusEverything(); });
     Add("hc.search.openLocation", tr("검색 결과의 원본 위치 열기"), [this] { if (activePanel_) activePanel_->OpenSearchLocation(); });
     // 오디오 조작은 명령행·팝오버에 포커스가 있어도 동작한다.
@@ -2009,7 +2044,7 @@ void CommandUiBridge::createCommandUi()
         connect(Key, &QShortcut::activated, this, [this, Id] { ExecuteCommand(Id); });
     }
     auto* FindButton = new QToolButton(Toolbar); FindButton->setText(tr("찾기")); Toolbar->addWidget(FindButton);
-    connect(FindButton, &QToolButton::clicked, QuickFind, [QuickFind] { QuickFind->FocusStandard(); });
+    connect(FindButton, &QToolButton::clicked, QuickFind, [this, QuickFind] { if (registryCommands_ && registryCommands_->ActiveView()) registryCommands_->ActiveView()->OpenFind(); else QuickFind->FocusStandard(); });
     RefreshFunctionBar();
     QHash<QString, QPointer<QMenu>> Sections;
     for (auto* Root : Window->findChild<QMenuBar*>("menubar")->actions()) {
@@ -3029,7 +3064,7 @@ void CommandUiBridge::ShowColumnSettings(CGridView* View, const QUuid& FlatProfi
 
 bool CommandUiBridge::CancelFlatListing()
 {
-    return activePanel_ && !activePanel_->SystemView() && activePanel_->StopFlatEnumeration();
+    return activePanel_ && !activePanel_->HasSystemToolView() && activePanel_->StopFlatEnumeration();
 }
 
 bool CommandUiBridge::CancelClipboard()

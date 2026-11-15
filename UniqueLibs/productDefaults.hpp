@@ -416,7 +416,96 @@ DECLARE_CMD( BuiltInCMD_Service_Menu,             QObject::tr( "서비스" ),  "
              Qt::Key_unknown,                                           QObject::tr( "서비스 바로 가기 메뉴" ) );
 
 // 해당 벡터를 순서대로 순회하며 환경설정 대화상자에 표시한다.
+DECLARE_CMD( BuiltInCMD_Navigate_Registry, QObject::tr("탐색"), "hc.navigate.systemRegistry", Qt::ControlModifier | Qt::AltModifier | Qt::Key_G, QObject::tr("레지스트리 보기") );
+DECLARE_CMD( BuiltInCMD_System_Registry, QObject::tr("시스템"), "hc.system.registry.open", Qt::Key_unknown, QObject::tr("레지스트리 보기 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_open, QObject::tr("레지스트리"), "hc.registry.open", Qt::Key_unknown, QObject::tr("열기") );
+DECLARE_CMD( BuiltInCMD_Registry_parent, QObject::tr("레지스트리"), "hc.registry.parent", Qt::Key_unknown, QObject::tr("상위 키") );
+DECLARE_CMD( BuiltInCMD_Registry_tree, QObject::tr("레지스트리"), "hc.registry.tree", Qt::Key_unknown, QObject::tr("키 트리") );
+DECLARE_CMD( BuiltInCMD_Registry_follow, QObject::tr("레지스트리"), "hc.registry.follow", Qt::Key_unknown, QObject::tr("연결 따라가기") );
+DECLARE_CMD( BuiltInCMD_Registry_address, QObject::tr("레지스트리"), "hc.registry.address", Qt::Key_unknown, QObject::tr("주소 입력") );
+DECLARE_CMD( BuiltInCMD_Registry_rename, QObject::tr("레지스트리"), "hc.registry.rename", Qt::Key_unknown, QObject::tr("이름 바꾸기") );
+DECLARE_CMD( BuiltInCMD_Registry_describe, QObject::tr("레지스트리"), "hc.registry.describe", Qt::Key_unknown, QObject::tr("설명") );
+DECLARE_CMD( BuiltInCMD_Registry_edit, QObject::tr("레지스트리"), "hc.registry.edit", Qt::Key_unknown, QObject::tr("값 편집") );
+DECLARE_CMD( BuiltInCMD_Registry_newValue, QObject::tr("레지스트리"), "hc.registry.newValue", Qt::Key_unknown, QObject::tr("새 값") );
+DECLARE_CMD( BuiltInCMD_Registry_newKey, QObject::tr("레지스트리"), "hc.registry.newKey", Qt::Key_unknown, QObject::tr("새 키") );
+DECLARE_CMD( BuiltInCMD_Registry_delete, QObject::tr("레지스트리"), "hc.registry.delete", Qt::Key_unknown, QObject::tr("삭제") );
+DECLARE_CMD( BuiltInCMD_Registry_copyPath, QObject::tr("레지스트리"), "hc.registry.copyPath", Qt::Key_unknown, QObject::tr("키 경로 복사") );
+DECLARE_CMD( BuiltInCMD_Registry_undo, QObject::tr("레지스트리"), "hc.registry.undo", Qt::Key_unknown, QObject::tr("되돌리기") );
+DECLARE_CMD( BuiltInCMD_Registry_redo, QObject::tr("레지스트리"), "hc.registry.redo", Qt::Key_unknown, QObject::tr("다시 실행") );
+DECLARE_CMD( BuiltInCMD_Registry_toggleAutorun, QObject::tr("레지스트리"), "hc.registry.toggleAutorun", Qt::Key_unknown, QObject::tr("사용 · 사용 안 함") );
+DECLARE_CMD( BuiltInCMD_Registry_copyName, QObject::tr("레지스트리"), "hc.registry.copyName", Qt::Key_unknown, QObject::tr("값 이름 복사") );
+DECLARE_CMD( BuiltInCMD_Registry_copyData, QObject::tr("레지스트리"), "hc.registry.copyData", Qt::Key_unknown, QObject::tr("데이터 복사") );
+DECLARE_CMD( BuiltInCMD_Registry_copyReg, QObject::tr("레지스트리"), "hc.registry.copyReg", Qt::Key_unknown, QObject::tr(".reg 형식 복사") );
+DECLARE_CMD( BuiltInCMD_Registry_export, QObject::tr("레지스트리"), "hc.registry.export", Qt::Key_unknown, QObject::tr("내보내기") );
+DECLARE_CMD( BuiltInCMD_Registry_importPreview, QObject::tr("레지스트리"), "hc.registry.importPreview", Qt::Key_unknown, QObject::tr("가져오기 미리 보기") );
+DECLARE_CMD( BuiltInCMD_Registry_compare, QObject::tr("레지스트리"), "hc.registry.compare", Qt::Key_unknown, QObject::tr("비교") );
+DECLARE_CMD( BuiltInCMD_Registry_findNextBatch, QObject::tr("레지스트리"), "hc.registry.findNextBatch", Qt::Key_unknown, QObject::tr("계속 찾기") );
+DECLARE_CMD( BuiltInCMD_Registry_stopFind, QObject::tr("레지스트리"), "hc.registry.stopFind", Qt::Key_unknown, QObject::tr("찾기 중지") );
+DECLARE_CMD( BuiltInCMD_Registry_replaceResults, QObject::tr("레지스트리"), "hc.registry.replaceResults", Qt::Key_unknown, QObject::tr("결과에서 바꾸기") );
+DECLARE_CMD( BuiltInCMD_Registry_exportResults, QObject::tr("레지스트리"), "hc.registry.exportResults", Qt::Key_unknown, QObject::tr("찾기 결과 내보내기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite, QObject::tr("레지스트리"), "hc.registry.favorite", Qt::Key_unknown, QObject::tr("즐겨찾기에 추가 · 제거") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite0, QObject::tr("레지스트리"), "hc.registry.favorite.0", Qt::Key_unknown, QObject::tr("즐겨찾기 0 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite1, QObject::tr("레지스트리"), "hc.registry.favorite.1", Qt::Key_unknown, QObject::tr("즐겨찾기 1 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite2, QObject::tr("레지스트리"), "hc.registry.favorite.2", Qt::Key_unknown, QObject::tr("즐겨찾기 2 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite3, QObject::tr("레지스트리"), "hc.registry.favorite.3", Qt::Key_unknown, QObject::tr("즐겨찾기 3 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite4, QObject::tr("레지스트리"), "hc.registry.favorite.4", Qt::Key_unknown, QObject::tr("즐겨찾기 4 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite5, QObject::tr("레지스트리"), "hc.registry.favorite.5", Qt::Key_unknown, QObject::tr("즐겨찾기 5 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite6, QObject::tr("레지스트리"), "hc.registry.favorite.6", Qt::Key_unknown, QObject::tr("즐겨찾기 6 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite7, QObject::tr("레지스트리"), "hc.registry.favorite.7", Qt::Key_unknown, QObject::tr("즐겨찾기 7 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite8, QObject::tr("레지스트리"), "hc.registry.favorite.8", Qt::Key_unknown, QObject::tr("즐겨찾기 8 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_favorite9, QObject::tr("레지스트리"), "hc.registry.favorite.9", Qt::Key_unknown, QObject::tr("즐겨찾기 9 열기") );
+DECLARE_CMD( BuiltInCMD_Registry_policyApply, QObject::tr("레지스트리"), "hc.registry.policyApply", Qt::Key_unknown, QObject::tr("정책 적용") );
+DECLARE_CMD( BuiltInCMD_Registry_browse, QObject::tr("레지스트리"), "hc.registry.browse", Qt::Key_unknown, QObject::tr("탐색") );
+DECLARE_CMD( BuiltInCMD_Registry_policies, QObject::tr("레지스트리"), "hc.registry.policies", Qt::Key_unknown, QObject::tr("적용된 정책") );
+DECLARE_CMD( BuiltInCMD_Registry_autoruns, QObject::tr("레지스트리"), "hc.registry.autoruns", Qt::Key_unknown, QObject::tr("자동 실행") );
+DECLARE_CMD( BuiltInCMD_Registry_history, QObject::tr("레지스트리"), "hc.registry.history", Qt::Key_unknown, QObject::tr("변경 기록") );
+DECLARE_CMD( BuiltInCMD_Registry_results, QObject::tr("레지스트리"), "hc.registry.results", Qt::Key_unknown, QObject::tr("찾기 결과") );
+
 inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
+    BuiltInCMD_Navigate_Registry,
+    BuiltInCMD_System_Registry,
+    BuiltInCMD_Registry_open,
+    BuiltInCMD_Registry_parent,
+    BuiltInCMD_Registry_tree,
+    BuiltInCMD_Registry_follow,
+    BuiltInCMD_Registry_address,
+    BuiltInCMD_Registry_rename,
+    BuiltInCMD_Registry_describe,
+    BuiltInCMD_Registry_edit,
+    BuiltInCMD_Registry_newValue,
+    BuiltInCMD_Registry_newKey,
+    BuiltInCMD_Registry_delete,
+    BuiltInCMD_Registry_copyPath,
+    BuiltInCMD_Registry_undo,
+    BuiltInCMD_Registry_redo,
+    BuiltInCMD_Registry_toggleAutorun,
+    BuiltInCMD_Registry_copyName,
+    BuiltInCMD_Registry_copyData,
+    BuiltInCMD_Registry_copyReg,
+    BuiltInCMD_Registry_export,
+    BuiltInCMD_Registry_importPreview,
+    BuiltInCMD_Registry_compare,
+    BuiltInCMD_Registry_findNextBatch,
+    BuiltInCMD_Registry_stopFind,
+    BuiltInCMD_Registry_replaceResults,
+    BuiltInCMD_Registry_exportResults,
+    BuiltInCMD_Registry_favorite,
+    BuiltInCMD_Registry_favorite0,
+    BuiltInCMD_Registry_favorite1,
+    BuiltInCMD_Registry_favorite2,
+    BuiltInCMD_Registry_favorite3,
+    BuiltInCMD_Registry_favorite4,
+    BuiltInCMD_Registry_favorite5,
+    BuiltInCMD_Registry_favorite6,
+    BuiltInCMD_Registry_favorite7,
+    BuiltInCMD_Registry_favorite8,
+    BuiltInCMD_Registry_favorite9,
+    BuiltInCMD_Registry_policyApply,
+    BuiltInCMD_Registry_browse,
+    BuiltInCMD_Registry_policies,
+    BuiltInCMD_Registry_autoruns,
+    BuiltInCMD_Registry_history,
+    BuiltInCMD_Registry_results,
     BuiltInCMD_Tab_New,
     BuiltInCMD_Tab_Prev,
     BuiltInCMD_Tab_Next,
@@ -706,6 +795,12 @@ namespace hc::defaults
                  { "hc.navigate.enterFile" },
                  { "hc.navigate.systemProcesses" },
                  { "hc.navigate.systemServices" },
+                 { "hc.navigate.systemRegistry" },
+                 { "hc.system.registry.open", 1, {
+                     { "path", { ParameterType::String, false } },
+                     { "view", { ParameterType::Integer, false } },
+                     { "value", { ParameterType::String, false } },
+                     { "valueName", { ParameterType::String, false } } } },
                  { "hc.navigate.provider",    1, { { "enabled", { ParameterType::Boolean } } } },
                  { "hc.tab.new" },
                  { "hc.tab.close" },
@@ -865,10 +960,35 @@ namespace hc::defaults
                  "hc.service.stop", "hc.service.pauseToggle", "hc.service.startType", "hc.viewer.quick" };
     }
 
+    inline QStringList RegistryFunctionCommands()
+    {
+        return {"hc.registry.describe", "hc.registry.edit", "hc.navigate.refresh", "hc.registry.compare", "hc.registry.newKey",
+                "hc.registry.delete", "hc.registry.export", "hc.registry.importPreview", "hc.viewer.quick"};
+    }
     // 보기 입력 범위의 기본 키(설계 7.5). F5는 제품 전체의 새로 고침이므로 범위에서 덮지 않는다.
     inline QList<QPair<QKeyCombination, QString>> ScopeShortcutDefaults( const QString& Scope )
     {
         using K = QKeyCombination;
+        if (Scope == "registryView")
+            return {{K(Qt::Key_Return), "hc.registry.open"}, {K(Qt::Key_Enter), "hc.registry.open"},
+                {K(Qt::ControlModifier, Qt::Key_0), "hc.registry.favorite.0"},
+                {K(Qt::ControlModifier, Qt::Key_1), "hc.registry.favorite.1"},
+                {K(Qt::ControlModifier, Qt::Key_2), "hc.registry.favorite.2"},
+                {K(Qt::ControlModifier, Qt::Key_3), "hc.registry.favorite.3"},
+                {K(Qt::ControlModifier, Qt::Key_4), "hc.registry.favorite.4"},
+                {K(Qt::ControlModifier, Qt::Key_5), "hc.registry.favorite.5"},
+                {K(Qt::ControlModifier, Qt::Key_6), "hc.registry.favorite.6"},
+                {K(Qt::ControlModifier, Qt::Key_7), "hc.registry.favorite.7"},
+                {K(Qt::ControlModifier, Qt::Key_8), "hc.registry.favorite.8"},
+                {K(Qt::ControlModifier, Qt::Key_9), "hc.registry.favorite.9"},
+                {K(Qt::Key_Backspace), "hc.registry.parent"}, {K(Qt::AltModifier, Qt::Key_F10), "hc.registry.tree"},
+                {K(Qt::ControlModifier, Qt::Key_Return), "hc.registry.follow"},
+                {K(Qt::ControlModifier, Qt::Key_L), "hc.registry.address"}, {K(Qt::AltModifier, Qt::Key_D), "hc.registry.address"},
+                {K(Qt::Key_F2), "hc.registry.rename"}, {K(Qt::Key_F3), "hc.registry.describe"}, {K(Qt::Key_F4), "hc.registry.edit"},
+                {K(Qt::ShiftModifier, Qt::Key_F4), "hc.registry.newValue"}, {K(Qt::Key_F7), "hc.registry.newKey"},
+                {K(Qt::Key_F8), "hc.registry.delete"}, {K(Qt::Key_Delete), "hc.registry.delete"},
+                {K(Qt::ControlModifier, Qt::Key_C), "hc.registry.copyPath"}, {K(Qt::ControlModifier, Qt::Key_Z), "hc.registry.undo"},
+                {K(Qt::ControlModifier, Qt::Key_Y), "hc.registry.redo"}, {K(Qt::Key_Space), "hc.registry.toggleAutorun"}};
         if( Scope == "processView" )
             return { { K( Qt::Key_F3 ), "hc.process.properties" },
                      { K( Qt::Key_F4 ), "hc.process.openLocation" },
@@ -2120,7 +2240,7 @@ namespace hc::defaults
             "        },\n"
             "        {\n"
             "          \"id\": \"system\",\n"
-            "          \"label\": \"프로세스·서비스\",\n"
+            "          \"label\": \"시스템 도구\",\n"
             "          \"items\": [\n"
             "            {\n"
             "              \"id\": \"systemProcesses\",\n"
@@ -2131,6 +2251,11 @@ namespace hc::defaults
             "              \"id\": \"systemServices\",\n"
             "              \"command\": \"hc.system.services.open\",\n"
             "              \"label\": \"서비스 보기\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"systemRegistry\",\n"
+            "              \"command\": \"hc.system.registry.open\",\n"
+            "              \"label\": \"레지스트리 편집기\"\n"
             "            },\n"
             "            {\n"
             "              \"type\": \"separator\"\n"
