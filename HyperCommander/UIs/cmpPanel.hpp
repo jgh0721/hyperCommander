@@ -16,6 +16,8 @@ class CFSProxyModel;
 class CFSModel;
 class CViewT;
 class CSystemView;
+class CEnvironmentView;
+class CEnvironmentDetailView;
 class CRegistryView;
 class CRegistryDetailView;
 namespace hc::ui { class PanelPathBar; }
@@ -150,6 +152,9 @@ public:
     CSystemView*                    SystemView( int TabIndex = -1 ) const;
     CRegistryView*                  RegistryView( int TabIndex = -1 ) const;
     CRegistryView*                  ShowRegistryView();
+    CEnvironmentView*               EnvironmentView(int TabIndex = -1) const;
+    CEnvironmentView*               ShowEnvironmentView();
+    CEnvironmentDetailView*         OpenEnvironmentDetailView(int TabIndex, CEnvironmentView* Source);
     bool                            HasSystemToolView( int TabIndex = -1 ) const;
     int                             FindSystemTab( int Kind ) const;
     // 위치 메뉴(드라이브·시스템 보기)를 드라이브 단추 아래에 연다.
@@ -176,6 +181,7 @@ signals:
     void                            sigViewSettingsChanged();
     void                            sigNavigationStateChanged();
     void                            sigRegistryCommandRequested(const QString& Command);
+    void                            sigEnvironmentCommandRequested(const QString& Command);
     void                            sig_NotifyCurrentDirectory( const QString& CurrentPath );
 
 private:

@@ -23,6 +23,7 @@ struct RegistryStep
     QString name;
     std::optional<RegistryValue> before, after;
     bool existedBefore = true, existsAfter = true;
+    bool sensitive = false; // Persist dependency-based redaction with the before/after images.
     QByteArray treeHash; // Rename guards the complete subtree, excluding timestamps/ACLs.
     QJsonArray treeBackup;
     // One policy transaction has Save / Refresh / Verify phases (0 / 1 / 2).

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "cmnProcess.hpp"
+#include "system/childEnvironment.hpp"
 
 namespace nsCmn
 {
@@ -34,13 +35,14 @@ namespace nsCmn
                 if( CMDLine.empty() == false )
                     wCMDLine = _wcsdup( CMDLine.c_str() );
 
+                auto Environment = hc::environment::NativeChildEnvironment();
                 if( CreateProcessW( nullptr,            // No module name (use command line).
                                     wCMDLine,           // Command line.
                                     NULL,               // Process handle not inheritable.
                                     NULL,               // Thread handle not inheritable.
                                     FALSE,              // Set handle inheritance to FALSE.
-                                    0,                  // No creation flags.
-                                    NULL,               // Use parent's environment block.
+                                    CREATE_UNICODE_ENVIRONMENT,
+                                    Environment.empty() ? nullptr : Environment.data(),
                                     NULL,               // Use parent's starting directory.
                                     &si,                // Pointer to STARTUPINFO structure.
                                     &pi                 // Pointer to PROCESS_INFORMATION structure.

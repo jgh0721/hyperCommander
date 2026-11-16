@@ -46,6 +46,12 @@ set(PROJECT_UI_SRC
         UIs/registryImportDialog.hpp
         UIs/registryBatchDialog.cpp
         UIs/registryBatchDialog.hpp
+        UIs/Components/cmpEnvironmentView.cpp
+        UIs/Components/cmpEnvironmentView.hpp
+        UIs/Components/cmpEnvironmentDetailView.cpp
+        UIs/Components/cmpEnvironmentDetailView.hpp
+        ../UniqueLibs/system/environmentCommands.cpp
+        ../UniqueLibs/system/environmentCommands.hpp
         UIs/Components/cmpRegistryView.cpp
         UIs/Components/cmpRegistryView.hpp
         UIs/Components/cmpRegistryDetailView.cpp
@@ -331,6 +337,7 @@ target_link_libraries(HyperCommander
         hc_script_runtime
         hc_registry_models
         hc_registry_editors
+        hc_environment_editors
         Qtitan::Grid
         Fm::style
         Fm::widgets

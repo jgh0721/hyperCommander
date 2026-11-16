@@ -1013,6 +1013,11 @@ void CSystemView::ShowContextMenu( QPoint Global )
     if( kind_ == Kind::Processes )
     {
         const auto Current = CurrentProcess();
+        auto* Environment = Menu.addAction(tr("환경 변수 비교")); Environment->setEnabled(Current.has_value());
+        Environment->setObjectName("hc.process.environment");
+        connect(Environment, &QAction::triggered, this, [B, Current] {
+            if (Current) B->ExecuteSystemCommand("hc.navigate.systemEnvironment", QVariantMap{{"pid", Current->key.pid}, {"created", QString::number(Current->key.createTime)}});
+        });
         Add( &Menu, "hc.process.properties" );
         Add( &Menu, "hc.process.openLocation" );
         Add( &Menu, "hc.process.openLocationNewTab" );

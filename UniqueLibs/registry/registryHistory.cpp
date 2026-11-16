@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "registryHistory.hpp"
 #include "commonLibs/system/registryLocalPolicy.hpp"
+#include "commonLibs/system/protectedData.hpp"
+#include "commonLibs/system/environmentTypes.hpp"
 
 /// 모듈
 /// UIs
@@ -37,6 +39,12 @@ bool SameValue(const RegistryValue& A, const RegistryValue& B)
     return A.name.compare(B.name, Qt::CaseInsensitive) == 0 && A.type == B.type && A.bytes == B.bytes;
 }
 bool ValidId(const QString& Id) { return Id.size() == 36 && !QUuid(Id).isNull() && !Id.contains('/') && !Id.contains('\\'); }
+bool SensitivePlan(const RegistryPlan& Plan)
+{
+    return std::any_of(Plan.steps.begin(), Plan.steps.end(), [](const auto& Step) {
+        return Step.sensitive || hc::environment::SensitiveName(Step.name.toStdWString());
+    });
+}
 QByteArray JsonBytes(const QJsonObject& Object) { return QJsonDocument(Object).toJson(QJsonDocument::Compact); }
 QByteArray Digest(const QByteArray& Bytes) { return QCryptographicHash::hash(Bytes, QCryptographicHash::Sha256).toHex(); }
 RegistryPlan NewPlan(const QString& Caller, const QString& Machine)
@@ -61,17 +69,25 @@ QJsonObject StepJson(const RegistryStep& Step)
         Checks.append(QJsonObject{{"location", RegistryLocationJson(Check.location)}, {"name", Check.name},
             {"observed", JsonValue(Check.observed)}, {"before", JsonValue(Check.before)}, {"after", JsonValue(Check.after)}});
     }
-    return {{"policyPhase", Step.policyPhase}, {"policyChecks", Checks}, {"kind", int(Step.kind)}, {"location", RegistryLocationJson(Step.location)}, {"name", Step.name},
+    QJsonObject Result{{"policyPhase", Step.policyPhase}, {"policyChecks", Checks}, {"kind", int(Step.kind)}, {"location", RegistryLocationJson(Step.location)}, {"name", Step.name},
         {"before", Step.before ? QJsonValue(RegistryValueJson(*Step.before)) : QJsonValue(QJsonValue::Null)},
         {"after", Step.after ? QJsonValue(RegistryValueJson(*Step.after)) : QJsonValue(QJsonValue::Null)},
         {"existedBefore", Step.existedBefore}, {"existsAfter", Step.existsAfter}, {"treeHash", QString::fromLatin1(Step.treeHash)}, {"treeBackup", Step.treeBackup}};
+    // Omit false to preserve hashes of existing version-1 receipts.
+    if (Step.sensitive) Result["sensitive"] = true;
+    return Result;
 }
 RegistryResult<RegistryHistoryRecord> ReadRecord(const QString& Directory)
 {
     RegistryResult<RegistryHistoryRecord> Result;
     QFile File(QDir(Directory).filePath("manifest.json"));
     if (!File.open(QIODevice::ReadOnly) || File.size() > PlanLimit) { Result.error = ERROR_READ_FAULT; return Result; }
-    QJsonParseError Parse; const auto Object = QJsonDocument::fromJson(File.readAll(), &Parse).object();
+    QJsonParseError Parse; auto Object = QJsonDocument::fromJson(File.readAll(), &Parse).object();
+    if (Parse.error == QJsonParseError::NoError && Object["protection"].toString() == "dpapi-user-v1") {
+        const auto Plain = hc::system::RevealUserData(QByteArray::fromBase64(Object["payload"].toString().toLatin1()));
+        if (Plain.isEmpty()) { Result.error = ERROR_ACCESS_DENIED; return Result; }
+        Object = QJsonDocument::fromJson(Plain, &Parse).object();
+    }
     if (Parse.error != QJsonParseError::NoError || Object["version"].toInt() != 1) { Result.error = ERROR_INVALID_DATA; return Result; }
     auto Plan = RegistryPlan::FromJson(Object["plan"].toObject());
     if (!Plan || Plan.value.Hash() != Object["planHash"].toString().toLatin1()) { Result.error = ERROR_INVALID_DATA; return Result; }
@@ -203,6 +219,8 @@ RegistryResult<RegistryPlan> RegistryPlan::FromJson(const QJsonObject& Object)
         Step.location = Location.value; Step.kind = StepKind(Kind); Step.name = Item["name"].toString();
         Step.existedBefore = Item["existedBefore"].toBool(); Step.existsAfter = Item["existsAfter"].toBool(); Step.treeHash = Item["treeHash"].toString().toLatin1();
         Step.treeBackup = Item["treeBackup"].toArray();
+        if (Item.contains("sensitive") && !Item["sensitive"].isBool()) return {{}, ERROR_INVALID_DATA};
+        Step.sensitive = Item["sensitive"].toBool();
         for (const auto& Pair : {std::pair{QString("before"), &Step.before}, std::pair{QString("after"), &Step.after}}) {
             if (Item[Pair.first].isNull()) continue;
             auto Value = RegistryValueFromJson(Item[Pair.first].toObject());
@@ -485,6 +503,11 @@ quint32 RegistryChangeStore::save(const RegistryHistoryRecord& Record) const
         || !Path.fileName().endsWith('-' + Record.plan.id) || !ValidId(Record.plan.id)) return ERROR_INVALID_NAME;
     const QJsonObject Object{{"version", 1}, {"plan", Record.plan.ToJson()}, {"planHash", QString::fromLatin1(Record.plan.Hash())},
         {"state", Record.state}, {"completed", Record.completed}, {"inFlight", Record.inFlight}, {"error", qint64(Record.error)}, {"redoAllowed", Record.redoAllowed}, {"sequence", QString::number(Record.sequence)}};
+    if (SensitivePlan(Record.plan)) {
+        const auto Protected = hc::system::ProtectUserData(JsonBytes(Object));
+        if (Protected.isEmpty()) return ERROR_ENCRYPTION_FAILED;
+        return WriteDurable(QDir(Record.directory).filePath("manifest.json"), JsonBytes({{"protection", "dpapi-user-v1"}, {"payload", QString::fromLatin1(Protected.toBase64())}}));
+    }
     return WriteDurable(QDir(Record.directory).filePath("manifest.json"), JsonBytes(Object));
 }
 RegistryResult<RegistryHistoryRecord> RegistryChangeStore::SavePrepared(const RegistryPlan& Plan)
@@ -497,8 +520,13 @@ RegistryResult<RegistryHistoryRecord> RegistryChangeStore::SavePrepared(const Re
     Result.value.directory = QDir(directory_).filePath(QDateTime::currentDateTimeUtc().toString("yyyyMMddTHHmmsszzzZ") + '-' + Plan.id);
     if (QFileInfo::exists(Result.value.directory) || !QDir().mkdir(Result.value.directory)) { Result.error = ERROR_ALREADY_EXISTS; return Result; }
     Result.value.state = "preparing"; Result.error = save(Result.value); if (Result.error) return Result;
-    Result.error = WriteDurable(QDir(Result.value.directory).filePath("before.reg"), RegFileWriter::Write(ExportSteps(Plan.steps, true)));
-    if (!Result.error) Result.error = WriteDurable(QDir(Result.value.directory).filePath("after.reg"), RegFileWriter::Write(ExportSteps(Plan.steps, false)));
+    const bool Protected = SensitivePlan(Plan);
+    for (const bool Before : {true, false}) {
+        if (Result.error) break;
+        auto Bytes = RegFileWriter::Write(ExportSteps(Plan.steps, Before));
+        if (Protected) { Bytes = hc::system::ProtectUserData(Bytes); if (Bytes.isEmpty()) { Result.error = ERROR_ENCRYPTION_FAILED; break; } }
+        Result.error = WriteDurable(QDir(Result.value.directory).filePath(QString(Before ? "before.reg" : "after.reg") + (Protected ? ".dpapi" : "")), Bytes);
+    }
     for (int I = 0; !Result.error && I < Plan.steps.size(); ++I) {
         const auto& Step = Plan.steps[I]; if (Step.kind != StepKind::PolicyFile || Step.policyPhase != 0) continue;
         Result.error = WriteDurable(QDir(Result.value.directory).filePath(QString("policy-%1-before.pol").arg(I)), Step.before->bytes);

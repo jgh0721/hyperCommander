@@ -315,7 +315,8 @@ void CFavoriteDirMgr::createSystemTools( QMenu* Menu )
     const auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
     for( const auto& [Id, Label] : { std::pair{ QStringLiteral( "hc.navigate.systemProcesses" ), tr( "프로세스 관리(&P)" ) },
                                      std::pair{ QStringLiteral( "hc.navigate.systemServices" ), tr( "서비스 관리(&S)" ) },
-                                     std::pair{ QStringLiteral( "hc.navigate.systemRegistry" ), tr( "레지스트리 편집기(&R)" ) } } )
+                                     std::pair{ QStringLiteral( "hc.navigate.systemRegistry" ), tr( "레지스트리 편집기(&R)" ) },
+                                     std::pair{ QStringLiteral( "hc.navigate.systemEnvironment" ), tr( "환경 변수(&E)" ) } } )
     {
         const auto* Command = Bridge ? Bridge->Action( Id ) : nullptr;
         const auto Key = Command ? Command->property( "hc.keyLabel" ).toString() : QString{};

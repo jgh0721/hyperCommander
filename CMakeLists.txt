@@ -152,6 +152,36 @@ endif()
 add_subdirectory(HyperSearchIndexer)
 add_subdirectory(commonLibs/system/registry)
 add_subdirectory(UniqueLibs/registry)
+qt_add_library(hc_environment_process STATIC UniqueLibs/system/environmentProcessProtocol.cpp UniqueLibs/system/environmentProcessProtocol.hpp)
+target_include_directories(hc_environment_process PUBLIC "${PROJECT_SOURCE_DIR}" PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/system/registry" "${PROJECT_SOURCE_DIR}/HyperCommanderAdmin" "${PROJECT_SOURCE_DIR}/commonLibs")
+target_precompile_headers(hc_environment_process PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/system/registry/stdafx.h")
+target_compile_definitions(hc_environment_process PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(hc_environment_process PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_environment_process PUBLIC hc_system Qt6::Core)
+qt_add_library(hc_environment STATIC UniqueLibs/system/environmentStorage.cpp UniqueLibs/system/environmentStorage.hpp
+    UniqueLibs/system/environmentSnapshot.cpp UniqueLibs/system/environmentSnapshot.hpp
+    UniqueLibs/system/environmentProfiles.cpp UniqueLibs/system/environmentProfiles.hpp
+    UniqueLibs/system/environmentModel.cpp UniqueLibs/system/environmentModel.hpp
+    UniqueLibs/system/environmentTransfer.cpp UniqueLibs/system/environmentTransfer.hpp
+    UniqueLibs/system/environmentSession.cpp UniqueLibs/system/environmentSession.hpp
+    UniqueLibs/system/environmentApplication.cpp UniqueLibs/system/environmentApplication.hpp
+    UniqueLibs/system/environmentRuntime.cpp UniqueLibs/system/environmentRuntime.hpp
+    UniqueLibs/system/environmentPathProbe.cpp UniqueLibs/system/environmentPathProbe.hpp)
+target_include_directories(hc_environment PUBLIC "${PROJECT_SOURCE_DIR}" PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/system/registry" "${PROJECT_SOURCE_DIR}/HyperCommanderAdmin" "${PROJECT_SOURCE_DIR}/commonLibs")
+target_precompile_headers(hc_environment PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/system/registry/stdafx.h")
+target_compile_definitions(hc_environment PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(hc_environment PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_environment PUBLIC hc_registry_models hc_registry_transactions hc_system hc_environment_process Qt6::Concurrent PRIVATE shell32 ole32 advapi32)
+qt_add_library(hc_environment_editors STATIC HyperCommander/UIs/environmentEditors.cpp HyperCommander/UIs/environmentEditors.hpp
+    HyperCommander/UIs/environmentDialogs.cpp HyperCommander/UIs/environmentDialogs.hpp
+    HyperCommander/UIs/environmentCommandFinder.cpp HyperCommander/UIs/environmentCommandFinder.hpp
+    HyperCommander/UIs/environmentProfileEditor.cpp HyperCommander/UIs/environmentProfileEditor.hpp)
+target_include_directories(hc_environment_editors PUBLIC "${PROJECT_SOURCE_DIR}" PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/system/registry" "${PROJECT_SOURCE_DIR}/commonLibs" "${PROJECT_SOURCE_DIR}/HyperCommanderAdmin")
+target_precompile_headers(hc_environment_editors PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/system/registry/stdafx.h")
+target_compile_definitions(hc_environment_editors PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(hc_environment_editors PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
+target_link_libraries(hc_environment_editors PUBLIC hc_environment hc_registry_editors PRIVATE Qtitan::Grid)
+
 # Process/service collection and control. Qt-free; Windows 10 APIs are allowed here
 # because UniqueLibs/HyperCommander still build with the Windows 7 SDK target.
 qt_add_library(hc_system STATIC
@@ -167,6 +197,13 @@ qt_add_library(hc_system STATIC
     commonLibs/system/imageInfo.hpp
     commonLibs/system/serviceControl.cpp
     commonLibs/system/serviceControl.hpp
+)
+target_sources(hc_system PUBLIC
+    commonLibs/system/environmentTypes.hpp
+    commonLibs/system/environmentBackend.hpp
+    commonLibs/system/environmentMerge.hpp
+    commonLibs/system/environmentAnalysis.hpp
+    commonLibs/system/processEnvironment.hpp
 )
 set_target_properties(hc_system PROPERTIES AUTOMOC OFF AUTOUIC OFF)
 target_include_directories(hc_system PUBLIC ${PROJECT_SOURCE_DIR})
@@ -188,7 +225,7 @@ target_include_directories(hc_file_locks PRIVATE
     ${PROJECT_SOURCE_DIR}/HyperCommanderAdmin
     ${PROJECT_SOURCE_DIR}/commonLibs
 )
-target_link_libraries(hc_file_locks PUBLIC Qt6::Core hc_system hc_registry_transactions PRIVATE advapi32 shell32 rstrtmgr)
+target_link_libraries(hc_file_locks PUBLIC Qt6::Core hc_system hc_registry_transactions hc_environment_process PRIVATE advapi32 shell32 rstrtmgr)
 target_compile_definitions(hc_file_locks PRIVATE NOMINMAX UNICODE _UNICODE)
 target_compile_options(hc_file_locks PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
 add_subdirectory(HyperCommanderAdmin)

@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "UniqueLibs/errorPresentation.hpp"
+#include "commonLibs/system/childEnvironment.hpp"
 
 #include <QDir>
 #include <QFileInfo>
@@ -84,9 +85,10 @@ inline QString Launch(const LaunchPlan& Plan, const QString& Directory)
     const auto Cwd = QDir::toNativeSeparators(Directory).toStdWString();
     STARTUPINFOW Startup{}; Startup.cb = sizeof(Startup);
     PROCESS_INFORMATION Process{};
+    auto Environment = hc::environment::NativeChildEnvironment();
     // Real console input/output; no application pipes or retained child handles.
     if (!CreateProcessW(Program.c_str(), Command.data(), nullptr, nullptr, FALSE,
-        CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT, nullptr, Cwd.c_str(), &Startup, &Process)) {
+        CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT, Environment.empty() ? nullptr : Environment.data(), Cwd.c_str(), &Startup, &Process)) {
         const auto Error = GetLastError();
         return hc::ui::DescribeWin32Error(Error, QObject::tr("명령 시작")).Text();
     }

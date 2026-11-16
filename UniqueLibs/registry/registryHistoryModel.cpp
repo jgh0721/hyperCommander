@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "registryHistoryModel.hpp"
+#include "commonLibs/system/environmentTypes.hpp"
 
 /// 모듈
 /// UIs
@@ -19,9 +20,10 @@ DECLARE_CMNLIBSV2_NAMESPACE
 Q_LOGGING_CATEGORY(lcRegistryHistoryModel, "hc.registry.historyModel")
 namespace hc::registry {
 namespace {
-QString ValueText(const std::optional<RegistryValue>& Value)
+QString ValueText(const std::optional<RegistryValue>& Value, bool Sensitive)
 {
     if (!Value) return QObject::tr("(없음)");
+    if (Sensitive || hc::environment::SensitiveName(Value->name.toStdWString())) return QStringLiteral("••••••••");
     const auto Decoded = RegistryValueCodec::DecodeText(*Value);
     const auto Number = RegistryValueCodec::DecodeNumber(*Value);
     QString Text = Decoded.lossless ? Decoded.text : Number ? QString::number(Number.value) : QString::fromLatin1(Value->bytes.left(48).toHex(' '));
@@ -133,7 +135,7 @@ QVariant RegistryHistoryModel::data(const QModelIndex& Index, int RoleValue) con
     if (Step.kind == StepKind::PolicyFile && Index.column() == Path) return Step.location.Path() + " › Registry.pol";
     if (Index.column() == Path) return Step.location.Path() + ((Step.kind == StepKind::Value || Step.kind == StepKind::ObserveValue) ? " › " + (Step.name.isEmpty() ? tr("(기본값)") : Step.name) : QString());
     if (Index.column() == Change) {
-        const auto First = Step.kind == StepKind::ObserveValue ? tr("원본 유지 · %1").arg(ValueText(Step.before)) : Step.kind == StepKind::PolicyFile ? (Step.policyPhase == 0 ? tr("Registry.pol 저장 · 원본/변경 파일 백업") : Step.policyPhase == 1 ? tr("정책 서비스 완료 대기") : tr("정책 파일과 실제 값 일치 확인")) : Step.kind == StepKind::Value ? ValueText(Step.before) + QStringLiteral(" → ") + ValueText(Step.after)
+        const auto First = Step.kind == StepKind::ObserveValue ? tr("원본 유지 · %1").arg(ValueText(Step.before, Step.sensitive)) : Step.kind == StepKind::PolicyFile ? (Step.policyPhase == 0 ? tr("Registry.pol 저장 · 원본/변경 파일 백업") : Step.policyPhase == 1 ? tr("정책 서비스 완료 대기") : tr("정책 파일과 실제 값 일치 확인")) : Step.kind == StepKind::Value ? ValueText(Step.before, Step.sensitive) + QStringLiteral(" → ") + ValueText(Step.after, Step.sensitive)
             : Step.kind == StepKind::RenameKey ? Step.location.key.section('\\', -1) + QStringLiteral(" → ") + Step.name
             : Step.existsAfter ? tr("키 만들기") : tr("키 삭제");
         return !Child && Record.plan.steps.size() > 1 ? First + tr(" · %1단계").arg(Record.plan.steps.size()) : First;

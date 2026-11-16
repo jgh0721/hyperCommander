@@ -461,7 +461,42 @@ DECLARE_CMD( BuiltInCMD_Registry_autoruns, QObject::tr("레지스트리"), "hc.r
 DECLARE_CMD( BuiltInCMD_Registry_history, QObject::tr("레지스트리"), "hc.registry.history", Qt::Key_unknown, QObject::tr("변경 기록") );
 DECLARE_CMD( BuiltInCMD_Registry_results, QObject::tr("레지스트리"), "hc.registry.results", Qt::Key_unknown, QObject::tr("찾기 결과") );
 
+DECLARE_CMD( BuiltInCMD_Navigate_Environment, QObject::tr("탐색"), "hc.navigate.systemEnvironment", Qt::ControlModifier | Qt::AltModifier | Qt::Key_E, QObject::tr("환경 변수 보기") );
+DECLARE_CMD( BuiltInCMD_Environment_moveUp, QObject::tr("환경 변수"), "hc.systemEnvironment.moveUp", Qt::Key_unknown, QObject::tr("폴더 항목 위로") );
+DECLARE_CMD( BuiltInCMD_Environment_moveDown, QObject::tr("환경 변수"), "hc.systemEnvironment.moveDown", Qt::Key_unknown, QObject::tr("폴더 항목 아래로") );
+DECLARE_CMD( BuiltInCMD_Environment_rename, QObject::tr("환경 변수"), "hc.systemEnvironment.rename", Qt::Key_unknown, QObject::tr("변수 이름 바꾸기") );
+DECLARE_CMD( BuiltInCMD_Environment_describe, QObject::tr("환경 변수"), "hc.systemEnvironment.describe", Qt::Key_unknown, QObject::tr("설명 보기") );
+DECLARE_CMD( BuiltInCMD_Environment_edit, QObject::tr("환경 변수"), "hc.systemEnvironment.edit", Qt::Key_unknown, QObject::tr("값 편집") );
+DECLARE_CMD( BuiltInCMD_Environment_new, QObject::tr("환경 변수"), "hc.systemEnvironment.new", Qt::Key_unknown, QObject::tr("새 변수") );
+DECLARE_CMD( BuiltInCMD_Environment_moveScope, QObject::tr("환경 변수"), "hc.systemEnvironment.moveScope", Qt::Key_unknown, QObject::tr("범위 옮기기") );
+DECLARE_CMD( BuiltInCMD_Environment_addEntry, QObject::tr("환경 변수"), "hc.systemEnvironment.addEntry", Qt::Key_unknown, QObject::tr("항목 추가") );
+DECLARE_CMD( BuiltInCMD_Environment_delete, QObject::tr("환경 변수"), "hc.systemEnvironment.delete", Qt::Key_unknown, QObject::tr("삭제") );
+DECLARE_CMD( BuiltInCMD_Environment_follow, QObject::tr("환경 변수"), "hc.systemEnvironment.follow", Qt::Key_unknown, QObject::tr("출처 따라가기") );
+DECLARE_CMD( BuiltInCMD_Environment_findCommand, QObject::tr("환경 변수"), "hc.systemEnvironment.findCommand", Qt::Key_unknown, QObject::tr("명령 찾기") );
+DECLARE_CMD( BuiltInCMD_Environment_scopeTree, QObject::tr("환경 변수"), "hc.systemEnvironment.scopeTree", Qt::Key_unknown, QObject::tr("범위 트리") );
+DECLARE_CMD( BuiltInCMD_Environment_copy, QObject::tr("환경 변수"), "hc.systemEnvironment.copy", Qt::Key_unknown, QObject::tr("이름=값 복사") );
+DECLARE_CMD( BuiltInCMD_Environment_undo, QObject::tr("환경 변수"), "hc.systemEnvironment.undo", Qt::Key_unknown, QObject::tr("되돌리기") );
+DECLARE_CMD( BuiltInCMD_Environment_redo, QObject::tr("환경 변수"), "hc.systemEnvironment.redo", Qt::Key_unknown, QObject::tr("다시 실행") );
+DECLARE_CMD( BuiltInCMD_Environment_profileToggle, QObject::tr("환경 변수"), "hc.systemEnvironment.profileToggle", Qt::Key_unknown, QObject::tr("프로필 사용·해제") );
+
 inline const QVector<TyHC_COMMAND> GlobalBuiltInCMDs = {
+    BuiltInCMD_Navigate_Environment,
+    BuiltInCMD_Environment_moveUp,
+    BuiltInCMD_Environment_moveDown,
+    BuiltInCMD_Environment_rename,
+    BuiltInCMD_Environment_describe,
+    BuiltInCMD_Environment_edit,
+    BuiltInCMD_Environment_new,
+    BuiltInCMD_Environment_moveScope,
+    BuiltInCMD_Environment_addEntry,
+    BuiltInCMD_Environment_delete,
+    BuiltInCMD_Environment_follow,
+    BuiltInCMD_Environment_findCommand,
+    BuiltInCMD_Environment_scopeTree,
+    BuiltInCMD_Environment_copy,
+    BuiltInCMD_Environment_undo,
+    BuiltInCMD_Environment_redo,
+    BuiltInCMD_Environment_profileToggle,
     BuiltInCMD_Navigate_Registry,
     BuiltInCMD_System_Registry,
     BuiltInCMD_Registry_open,
@@ -796,6 +831,7 @@ namespace hc::defaults
                  { "hc.navigate.systemProcesses" },
                  { "hc.navigate.systemServices" },
                  { "hc.navigate.systemRegistry" },
+                 { "hc.navigate.systemEnvironment" },
                  { "hc.system.registry.open", 1, {
                      { "path", { ParameterType::String, false } },
                      { "view", { ParameterType::Integer, false } },
@@ -886,7 +922,7 @@ namespace hc::defaults
                      { "confirmed",               { ParameterType::Boolean, false } } },
                    "file-write" } };
         for (const auto& Command : Commands())
-            if (QString(Command.Name).startsWith("hc.navigate.gotoDrive"))
+            if (QString(Command.Name).startsWith("hc.navigate.gotoDrive") || QString(Command.Name).startsWith("hc.systemEnvironment."))
                 Descriptors.push_back({QString(Command.Name).toStdString()});
         return Descriptors;
     }
@@ -960,6 +996,13 @@ namespace hc::defaults
                  "hc.service.stop", "hc.service.pauseToggle", "hc.service.startType", "hc.viewer.quick" };
     }
 
+    // Shared stable persistence key; UI scope and function-bar mappings reuse it.
+    inline const QString SystemEnvironmentScopeKey = QStringLiteral("systemEnvironmentView");
+    inline QStringList EnvironmentFunctionCommands()
+    {
+        return {"hc.systemEnvironment.describe", "hc.systemEnvironment.edit", "hc.navigate.refresh", "hc.systemEnvironment.moveScope",
+                "hc.systemEnvironment.addEntry", "hc.systemEnvironment.delete", "hc.systemEnvironment.moveUp", "hc.systemEnvironment.moveDown", "hc.viewer.quick"};
+    }
     inline QStringList RegistryFunctionCommands()
     {
         return {"hc.registry.describe", "hc.registry.edit", "hc.navigate.refresh", "hc.registry.compare", "hc.registry.newKey",
@@ -969,6 +1012,13 @@ namespace hc::defaults
     inline QList<QPair<QKeyCombination, QString>> ScopeShortcutDefaults( const QString& Scope )
     {
         using K = QKeyCombination;
+        if (Scope == SystemEnvironmentScopeKey)
+            return {{K(Qt::ControlModifier, Qt::Key_Up), "hc.systemEnvironment.moveUp"}, {K(Qt::ControlModifier, Qt::Key_Down), "hc.systemEnvironment.moveDown"},
+                {K(Qt::Key_F2), "hc.systemEnvironment.rename"}, {K(Qt::Key_F3), "hc.systemEnvironment.describe"}, {K(Qt::Key_F4), "hc.systemEnvironment.edit"},
+                {K(Qt::ShiftModifier, Qt::Key_F4), "hc.systemEnvironment.new"}, {K(Qt::Key_F6), "hc.systemEnvironment.moveScope"}, {K(Qt::Key_F7), "hc.systemEnvironment.addEntry"},
+                {K(Qt::Key_F8), "hc.systemEnvironment.delete"}, {K(Qt::Key_Delete), "hc.systemEnvironment.delete"}, {K(Qt::ControlModifier, Qt::Key_Return), "hc.systemEnvironment.follow"},
+                {K(Qt::AltModifier, Qt::Key_F10), "hc.systemEnvironment.scopeTree"}, {K(Qt::ControlModifier, Qt::Key_C), "hc.systemEnvironment.copy"},
+                {K(Qt::ControlModifier, Qt::Key_Z), "hc.systemEnvironment.undo"}, {K(Qt::ControlModifier, Qt::Key_Y), "hc.systemEnvironment.redo"}, {K(Qt::Key_Space), "hc.systemEnvironment.profileToggle"}};
         if (Scope == "registryView")
             return {{K(Qt::Key_Return), "hc.registry.open"}, {K(Qt::Key_Enter), "hc.registry.open"},
                 {K(Qt::ControlModifier, Qt::Key_0), "hc.registry.favorite.0"},
@@ -1041,7 +1091,8 @@ namespace hc::defaults
     }
     inline QJsonObject FunctionBars()
     {
-        return { { "processView", QJsonObject{ { "commands", QJsonArray::fromStringList( ProcessFunctionCommands() ) }, { "captions", QJsonArray{} } } },
+        return { { SystemEnvironmentScopeKey, QJsonObject{{"commands", QJsonArray::fromStringList(EnvironmentFunctionCommands())}, {"captions", QJsonArray{}}} },
+                 { "processView", QJsonObject{ { "commands", QJsonArray::fromStringList( ProcessFunctionCommands() ) }, { "captions", QJsonArray{} } } },
                  { "serviceView", QJsonObject{ { "commands", QJsonArray::fromStringList( ServiceFunctionCommands() ) }, { "captions", QJsonArray{} } } } };
     }
 
@@ -2251,6 +2302,11 @@ namespace hc::defaults
             "              \"id\": \"systemServices\",\n"
             "              \"command\": \"hc.system.services.open\",\n"
             "              \"label\": \"서비스 보기\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"id\": \"systemEnvironment\",\n"
+            "              \"command\": \"hc.navigate.systemEnvironment\",\n"
+            "              \"label\": \"환경 변수\"\n"
             "            },\n"
             "            {\n"
             "              \"id\": \"systemRegistry\",\n"

@@ -20,6 +20,7 @@
 #include "UniqueLibs/system/systemSupport.hpp"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include "UniqueLibs/systemSessionService.hpp"
+#include "UniqueLibs/system/environmentModel.hpp"
 /// 공통 라이브러리
 #include "commonLibs/system/processInfo.hpp"
 #include "commonLibs/system/registryValue.hpp"
@@ -121,7 +122,20 @@ bool RegistryCommands::Execute(const QString& Command, const QVariant& Argument)
         return true;
     }
     if (Command == "hc.registry.open" && View->SearchShown()) return View->ExecuteCommand(Command);
-    if (Command == "hc.registry.follow") { if (auto* Detail = openDetail(View)) Detail->ShowLinks(true); return true; }
+    if (Command == "hc.registry.follow") {
+        const auto Index = View->CurrentSource();
+        const auto Location = RegistryLocation::Parse(Index.data(RegistryTreeModel::LocationRole).toString(), View->SelectedRegistryView());
+        if (Location && Index.data(RegistryTreeModel::KindRole).toInt() == int(RegistryTreeModel::Kind::Value)) {
+            const bool User = Location->hive == Hive::CurrentUser && Location->key.compare("Environment", Qt::CaseInsensitive) == 0;
+            const bool System = Location->hive == Hive::LocalMachine && Location->key.compare("SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", Qt::CaseInsensitive) == 0;
+            if (User || System) {
+                const auto Scope = User ? hc::environment::EnvironmentViewScope::User : hc::environment::EnvironmentViewScope::System;
+                bridge_->ExecuteSystemCommand("hc.navigate.systemEnvironment", QVariantMap{{"scope", int(Scope)}, {"name", Index.data(RegistryTreeModel::ValueNameRole).toString()}});
+                return true;
+            }
+        }
+        if (auto* Detail = openDetail(View)) Detail->ShowLinks(true); return true;
+    }
     if (Command == "hc.registry.open") if (const auto Entry = View->CurrentAutorun()) {
         View->SetRegistryView(Entry->location.view); View->Navigate(Entry->location.Path(), Entry->value.name); return true;
     }

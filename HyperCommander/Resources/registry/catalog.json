@@ -3526,6 +3526,3164 @@
         "https://learn.microsoft.com/en-us/previous-versions/windows/desktop/xperf/image-file-execution-options"
       ],
       "verifiedBuilds": []
+    },
+    {
+      "id": "environment.path.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.path.title",
+      "descriptionKey": "environment.path.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "dir"
+      }
+    },
+    {
+      "id": "environment.path.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.path.title",
+      "descriptionKey": "environment.path.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "dir"
+      }
+    },
+    {
+      "id": "environment.pathext.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "pathext",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.pathext.title",
+      "descriptionKey": "environment.pathext.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "ext"
+      }
+    },
+    {
+      "id": "environment.pathext.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "pathext",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.pathext.title",
+      "descriptionKey": "environment.pathext.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "ext"
+      }
+    },
+    {
+      "id": "environment.temp.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "temp",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.temp.title",
+      "descriptionKey": "environment.temp.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.temp.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "temp",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.temp.title",
+      "descriptionKey": "environment.temp.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.tmp.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "tmp",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.tmp.title",
+      "descriptionKey": "environment.tmp.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.tmp.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "tmp",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.tmp.title",
+      "descriptionKey": "environment.tmp.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [
+        "https://learn.microsoft.com/en-us/windows/win32/procthread/environment-variables"
+      ],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.comspec.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "comspec",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.comspec.title",
+      "descriptionKey": "environment.comspec.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.comspec.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "바꾸면 설치 프로그램과 빌드 도구가 동작하지 않을 수 있습니다."
+      }
+    },
+    {
+      "id": "environment.comspec.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "comspec",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.comspec.title",
+      "descriptionKey": "environment.comspec.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.comspec.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "바꾸면 설치 프로그램과 빌드 도구가 동작하지 않을 수 있습니다."
+      }
+    },
+    {
+      "id": "environment.windir.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "windir",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.windir.title",
+      "descriptionKey": "environment.windir.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.windir.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "사용자 범위에 같은 이름을 만들면 일부 예약 작업이 다른 프로그램을 실행하게 되어, UAC 우회에 쓰인 적이 있습니다."
+      }
+    },
+    {
+      "id": "environment.windir.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "windir",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.windir.title",
+      "descriptionKey": "environment.windir.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.windir.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "사용자 범위에 같은 이름을 만들면 일부 예약 작업이 다른 프로그램을 실행하게 되어, UAC 우회에 쓰인 적이 있습니다."
+      }
+    },
+    {
+      "id": "environment.systemroot.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "systemroot",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.systemroot.title",
+      "descriptionKey": "environment.systemroot.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.systemroot.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "systemroot",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.systemroot.title",
+      "descriptionKey": "environment.systemroot.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.systemdrive.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "systemdrive",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.systemdrive.title",
+      "descriptionKey": "environment.systemdrive.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.systemdrive.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "systemdrive",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.systemdrive.title",
+      "descriptionKey": "environment.systemdrive.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.os.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "os",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.os.title",
+      "descriptionKey": "environment.os.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.os.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "os",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.os.title",
+      "descriptionKey": "environment.os.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.number_of_processors.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "number_of_processors",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.number_of_processors.title",
+      "descriptionKey": "environment.number_of_processors.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.number_of_processors.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "number_of_processors",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.number_of_processors.title",
+      "descriptionKey": "environment.number_of_processors.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.processor_architecture.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "processor_architecture",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.processor_architecture.title",
+      "descriptionKey": "environment.processor_architecture.description",
+      "priority": 20,
+      "options": [
+        {
+          "value": "AMD64",
+          "label": "x64"
+        },
+        {
+          "value": "ARM64",
+          "label": "ARM64"
+        },
+        {
+          "value": "x86",
+          "label": "32비트"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "opts": [
+          [
+            "AMD64",
+            "x64"
+          ],
+          [
+            "ARM64",
+            "ARM64"
+          ],
+          [
+            "x86",
+            "32비트"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "environment.processor_architecture.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "processor_architecture",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.processor_architecture.title",
+      "descriptionKey": "environment.processor_architecture.description",
+      "priority": 20,
+      "options": [
+        {
+          "value": "AMD64",
+          "label": "x64"
+        },
+        {
+          "value": "ARM64",
+          "label": "ARM64"
+        },
+        {
+          "value": "x86",
+          "label": "32비트"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "opts": [
+          [
+            "AMD64",
+            "x64"
+          ],
+          [
+            "ARM64",
+            "ARM64"
+          ],
+          [
+            "x86",
+            "32비트"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "environment.processor_identifier.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "processor_identifier",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.processor_identifier.title",
+      "descriptionKey": "environment.processor_identifier.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.processor_identifier.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "processor_identifier",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.processor_identifier.title",
+      "descriptionKey": "environment.processor_identifier.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.processor_level.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "processor_level",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.processor_level.title",
+      "descriptionKey": "environment.processor_level.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.processor_level.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "processor_level",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.processor_level.title",
+      "descriptionKey": "environment.processor_level.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.processor_revision.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "processor_revision",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.processor_revision.title",
+      "descriptionKey": "environment.processor_revision.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.processor_revision.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "processor_revision",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.processor_revision.title",
+      "descriptionKey": "environment.processor_revision.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.driverdata.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "driverdata",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.driverdata.title",
+      "descriptionKey": "environment.driverdata.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.driverdata.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "driverdata",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.driverdata.title",
+      "descriptionKey": "environment.driverdata.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.psmodulepath.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "psmodulepath",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.psmodulepath.title",
+      "descriptionKey": "environment.psmodulepath.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "dir"
+      }
+    },
+    {
+      "id": "environment.psmodulepath.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "psmodulepath",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.psmodulepath.title",
+      "descriptionKey": "environment.psmodulepath.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "dir"
+      }
+    },
+    {
+      "id": "environment.username.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "username",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.username.title",
+      "descriptionKey": "environment.username.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.username.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "username",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.username.title",
+      "descriptionKey": "environment.username.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.userdomain.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "userdomain",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.userdomain.title",
+      "descriptionKey": "environment.userdomain.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.userdomain.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "userdomain",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.userdomain.title",
+      "descriptionKey": "environment.userdomain.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.userdomain_roamingprofile.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "userdomain_roamingprofile",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.userdomain_roamingprofile.title",
+      "descriptionKey": "environment.userdomain_roamingprofile.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.userdomain_roamingprofile.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "userdomain_roamingprofile",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.userdomain_roamingprofile.title",
+      "descriptionKey": "environment.userdomain_roamingprofile.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.logonserver.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "logonserver",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.logonserver.title",
+      "descriptionKey": "environment.logonserver.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.logonserver.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "logonserver",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.logonserver.title",
+      "descriptionKey": "environment.logonserver.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.homedrive.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "homedrive",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.homedrive.title",
+      "descriptionKey": "environment.homedrive.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.homedrive.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "homedrive",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.homedrive.title",
+      "descriptionKey": "environment.homedrive.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.homepath.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "homepath",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.homepath.title",
+      "descriptionKey": "environment.homepath.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.homepath.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "homepath",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.homepath.title",
+      "descriptionKey": "environment.homepath.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.userprofile.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "userprofile",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.userprofile.title",
+      "descriptionKey": "environment.userprofile.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.userprofile.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "userprofile",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.userprofile.title",
+      "descriptionKey": "environment.userprofile.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.appdata.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "appdata",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.appdata.title",
+      "descriptionKey": "environment.appdata.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.appdata.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "appdata",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.appdata.title",
+      "descriptionKey": "environment.appdata.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.localappdata.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "localappdata",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.localappdata.title",
+      "descriptionKey": "environment.localappdata.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.localappdata.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "localappdata",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.localappdata.title",
+      "descriptionKey": "environment.localappdata.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.allusersprofile.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "allusersprofile",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.allusersprofile.title",
+      "descriptionKey": "environment.allusersprofile.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.allusersprofile.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "allusersprofile",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.allusersprofile.title",
+      "descriptionKey": "environment.allusersprofile.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.programdata.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "programdata",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.programdata.title",
+      "descriptionKey": "environment.programdata.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.programdata.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "programdata",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.programdata.title",
+      "descriptionKey": "environment.programdata.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.public.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "public",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.public.title",
+      "descriptionKey": "environment.public.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.public.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "public",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.public.title",
+      "descriptionKey": "environment.public.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.computername.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "computername",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.computername.title",
+      "descriptionKey": "environment.computername.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.computername.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "computername",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.computername.title",
+      "descriptionKey": "environment.computername.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.programfiles.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "programfiles",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.programfiles.title",
+      "descriptionKey": "environment.programfiles.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.programfiles.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "programfiles",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.programfiles.title",
+      "descriptionKey": "environment.programfiles.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.programfiles_x86_.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "programfiles(x86)",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.programfiles_x86_.title",
+      "descriptionKey": "environment.programfiles_x86_.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.programfiles_x86_.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "programfiles(x86)",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.programfiles_x86_.title",
+      "descriptionKey": "environment.programfiles_x86_.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.programw6432.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "programw6432",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.programw6432.title",
+      "descriptionKey": "environment.programw6432.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.programw6432.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "programw6432",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.programw6432.title",
+      "descriptionKey": "environment.programw6432.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.commonprogramfiles.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "commonprogramfiles",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.commonprogramfiles.title",
+      "descriptionKey": "environment.commonprogramfiles.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.commonprogramfiles.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "commonprogramfiles",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.commonprogramfiles.title",
+      "descriptionKey": "environment.commonprogramfiles.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.commonprogramfiles_x86_.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "commonprogramfiles(x86)",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.commonprogramfiles_x86_.title",
+      "descriptionKey": "environment.commonprogramfiles_x86_.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.commonprogramfiles_x86_.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "commonprogramfiles(x86)",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.commonprogramfiles_x86_.title",
+      "descriptionKey": "environment.commonprogramfiles_x86_.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.commonprogramw6432.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "commonprogramw6432",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.commonprogramw6432.title",
+      "descriptionKey": "environment.commonprogramw6432.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.commonprogramw6432.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "commonprogramw6432",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment.commonprogramw6432.title",
+      "descriptionKey": "environment.commonprogramw6432.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.onedrive.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "onedrive",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.onedrive.title",
+      "descriptionKey": "environment.onedrive.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.onedrive.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "onedrive",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.onedrive.title",
+      "descriptionKey": "environment.onedrive.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.java_home.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "java_home",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.java_home.title",
+      "descriptionKey": "environment.java_home.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true,
+        "expect": "bin\\java.exe"
+      }
+    },
+    {
+      "id": "environment.java_home.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "java_home",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.java_home.title",
+      "descriptionKey": "environment.java_home.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true,
+        "expect": "bin\\java.exe"
+      }
+    },
+    {
+      "id": "environment.qtdir.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "qtdir",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.qtdir.title",
+      "descriptionKey": "environment.qtdir.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true,
+        "expect": "bin\\qmake.exe"
+      }
+    },
+    {
+      "id": "environment.qtdir.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "qtdir",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.qtdir.title",
+      "descriptionKey": "environment.qtdir.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true,
+        "expect": "bin\\qmake.exe"
+      }
+    },
+    {
+      "id": "environment.cmake_generator.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "cmake_generator",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.cmake_generator.title",
+      "descriptionKey": "environment.cmake_generator.description",
+      "priority": 20,
+      "options": [
+        {
+          "value": "Ninja",
+          "label": "한 가지 구성 · 빠름"
+        },
+        {
+          "value": "Ninja Multi-Config",
+          "label": "여러 구성"
+        },
+        {
+          "value": "Visual Studio 18 2026",
+          "label": "Visual Studio 솔루션"
+        },
+        {
+          "value": "NMake Makefiles",
+          "label": "nmake"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "opts": [
+          [
+            "Ninja",
+            "한 가지 구성 · 빠름"
+          ],
+          [
+            "Ninja Multi-Config",
+            "여러 구성"
+          ],
+          [
+            "Visual Studio 18 2026",
+            "Visual Studio 솔루션"
+          ],
+          [
+            "NMake Makefiles",
+            "nmake"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "environment.cmake_generator.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "cmake_generator",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.cmake_generator.title",
+      "descriptionKey": "environment.cmake_generator.description",
+      "priority": 20,
+      "options": [
+        {
+          "value": "Ninja",
+          "label": "한 가지 구성 · 빠름"
+        },
+        {
+          "value": "Ninja Multi-Config",
+          "label": "여러 구성"
+        },
+        {
+          "value": "Visual Studio 18 2026",
+          "label": "Visual Studio 솔루션"
+        },
+        {
+          "value": "NMake Makefiles",
+          "label": "nmake"
+        }
+      ],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "opts": [
+          [
+            "Ninja",
+            "한 가지 구성 · 빠름"
+          ],
+          [
+            "Ninja Multi-Config",
+            "여러 구성"
+          ],
+          [
+            "Visual Studio 18 2026",
+            "Visual Studio 솔루션"
+          ],
+          [
+            "NMake Makefiles",
+            "nmake"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "environment.gopath.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "gopath",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.gopath.title",
+      "descriptionKey": "environment.gopath.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.gopath.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "gopath",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.gopath.title",
+      "descriptionKey": "environment.gopath.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.vcpkg_root.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "vcpkg_root",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.vcpkg_root.title",
+      "descriptionKey": "environment.vcpkg_root.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true,
+        "expect": "vcpkg.exe"
+      }
+    },
+    {
+      "id": "environment.vcpkg_root.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "vcpkg_root",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.vcpkg_root.title",
+      "descriptionKey": "environment.vcpkg_root.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true,
+        "expect": "vcpkg.exe"
+      }
+    },
+    {
+      "id": "environment.http_proxy.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "http_proxy",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.http_proxy.title",
+      "descriptionKey": "environment.http_proxy.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.http_proxy.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "http_proxy",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.http_proxy.title",
+      "descriptionKey": "environment.http_proxy.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.https_proxy.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "https_proxy",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.https_proxy.title",
+      "descriptionKey": "environment.https_proxy.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.https_proxy.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "https_proxy",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.https_proxy.title",
+      "descriptionKey": "environment.https_proxy.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.no_proxy.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "no_proxy",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.no_proxy.title",
+      "descriptionKey": "environment.no_proxy.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.no_proxy.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "no_proxy",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.no_proxy.title",
+      "descriptionKey": "environment.no_proxy.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.gh_token.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "gh_token",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Security",
+      "titleKey": "environment.gh_token.title",
+      "descriptionKey": "environment.gh_token.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.gh_token.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "환경 변수의 값은 이 사용자로 실행하는 모든 프로그램이 읽을 수 있습니다. 가능하면 자격 증명 관리자에 두세요."
+      }
+    },
+    {
+      "id": "environment.gh_token.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "gh_token",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Security",
+      "titleKey": "environment.gh_token.title",
+      "descriptionKey": "environment.gh_token.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.gh_token.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "환경 변수의 값은 이 사용자로 실행하는 모든 프로그램이 읽을 수 있습니다. 가능하면 자격 증명 관리자에 두세요."
+      }
+    },
+    {
+      "id": "environment.cor_enable_profiling.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "cor_enable_profiling",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Security",
+      "titleKey": "environment.cor_enable_profiling.title",
+      "descriptionKey": "environment.cor_enable_profiling.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.cor_enable_profiling.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "성능 · 진단 도구가 쓰는 방법이지만, 악성 코드가 다른 프로그램에 DLL을 넣는 데에도 씁니다 (ATT&CK T1574.012)."
+      }
+    },
+    {
+      "id": "environment.cor_enable_profiling.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "cor_enable_profiling",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Security",
+      "titleKey": "environment.cor_enable_profiling.title",
+      "descriptionKey": "environment.cor_enable_profiling.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.cor_enable_profiling.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "성능 · 진단 도구가 쓰는 방법이지만, 악성 코드가 다른 프로그램에 DLL을 넣는 데에도 씁니다 (ATT&CK T1574.012)."
+      }
+    },
+    {
+      "id": "environment.cor_profiler.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "cor_profiler",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Security",
+      "titleKey": "environment.cor_profiler.title",
+      "descriptionKey": "environment.cor_profiler.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.cor_profiler.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "cor_profiler",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Security",
+      "titleKey": "environment.cor_profiler.title",
+      "descriptionKey": "environment.cor_profiler.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.cor_profiler_path.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "cor_profiler_path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Security",
+      "titleKey": "environment.cor_profiler_path.title",
+      "descriptionKey": "environment.cor_profiler_path.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.cor_profiler_path.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "cor_profiler_path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Security",
+      "titleKey": "environment.cor_profiler_path.title",
+      "descriptionKey": "environment.cor_profiler_path.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.commander_path.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "commander_path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.commander_path.title",
+      "descriptionKey": "environment.commander_path.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.commander_path.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "commander_path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.commander_path.title",
+      "descriptionKey": "environment.commander_path.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.qt_enable_highdpi_scaling.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "qt_enable_highdpi_scaling",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.qt_enable_highdpi_scaling.title",
+      "descriptionKey": "environment.qt_enable_highdpi_scaling.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.qt_enable_highdpi_scaling.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "HyperCommander가 실행하는 다른 Qt 프로그램에도 그대로 이어집니다."
+      }
+    },
+    {
+      "id": "environment.qt_enable_highdpi_scaling.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "qt_enable_highdpi_scaling",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.qt_enable_highdpi_scaling.title",
+      "descriptionKey": "environment.qt_enable_highdpi_scaling.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [
+        "environment.qt_enable_highdpi_scaling.warning"
+      ],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "caution": "HyperCommander가 실행하는 다른 Qt 프로그램에도 그대로 이어집니다."
+      }
+    },
+    {
+      "id": "environment._c_.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "=c:",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment._c_.title",
+      "descriptionKey": "environment._c_.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment._c_.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "=c:",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment._c_.title",
+      "descriptionKey": "environment._c_.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment._exitcode.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "=exitcode",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment._exitcode.title",
+      "descriptionKey": "environment._exitcode.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment._exitcode.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "=exitcode",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Windows",
+      "titleKey": "environment._exitcode.title",
+      "descriptionKey": "environment._exitcode.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {}
+    },
+    {
+      "id": "environment.pythonhome.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "pythonhome",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.pythonhome.title",
+      "descriptionKey": "environment.pythonhome.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.pythonhome.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "pythonhome",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.pythonhome.title",
+      "descriptionKey": "environment.pythonhome.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.pythonpath.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "pythonpath",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.pythonpath.title",
+      "descriptionKey": "environment.pythonpath.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "dir"
+      }
+    },
+    {
+      "id": "environment.pythonpath.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "pythonpath",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.pythonpath.title",
+      "descriptionKey": "environment.pythonpath.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "dir"
+      }
+    },
+    {
+      "id": "environment.android_home.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "android_home",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.android_home.title",
+      "descriptionKey": "environment.android_home.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.android_home.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "android_home",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.android_home.title",
+      "descriptionKey": "environment.android_home.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.android_sdk_root.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "android_sdk_root",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.android_sdk_root.title",
+      "descriptionKey": "environment.android_sdk_root.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.android_sdk_root.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "android_sdk_root",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.android_sdk_root.title",
+      "descriptionKey": "environment.android_sdk_root.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.dotnet_root.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "dotnet_root",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.dotnet_root.title",
+      "descriptionKey": "environment.dotnet_root.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.dotnet_root.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "dotnet_root",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.dotnet_root.title",
+      "descriptionKey": "environment.dotnet_root.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.cargo_home.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "cargo_home",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.cargo_home.title",
+      "descriptionKey": "environment.cargo_home.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.cargo_home.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "cargo_home",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.cargo_home.title",
+      "descriptionKey": "environment.cargo_home.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.rustup_home.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "rustup_home",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.rustup_home.title",
+      "descriptionKey": "environment.rustup_home.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.rustup_home.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "rustup_home",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.rustup_home.title",
+      "descriptionKey": "environment.rustup_home.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "folder": true
+      }
+    },
+    {
+      "id": "environment.node_path.hkcu",
+      "hive": "HKCU",
+      "view": "both",
+      "pathPattern": "Environment",
+      "valueNamePattern": "node_path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.node_path.title",
+      "descriptionKey": "environment.node_path.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "dir"
+      }
+    },
+    {
+      "id": "environment.node_path.hklm",
+      "hive": "HKLM",
+      "view": "both",
+      "pathPattern": "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+      "valueNamePattern": "node_path",
+      "types": [
+        1,
+        2
+      ],
+      "category": "Application",
+      "titleKey": "environment.node_path.title",
+      "descriptionKey": "environment.node_path.description",
+      "priority": 20,
+      "options": [],
+      "defaultRule": null,
+      "appliesTo": "Windows or the named application",
+      "effect": null,
+      "warnings": [],
+      "linkRule": null,
+      "sourceUrls": [],
+      "verifiedBuilds": [],
+      "environmentEditor": {
+        "list": "dir"
+      }
     }
   ],
   "knownLocations": [

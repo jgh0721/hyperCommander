@@ -7,7 +7,7 @@ target_include_directories(hc_registry_transactions PUBLIC "${PROJECT_SOURCE_DIR
 target_precompile_headers(hc_registry_transactions PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/system/registry/stdafx.h")
 target_compile_definitions(hc_registry_transactions PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(hc_registry_transactions PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-target_link_libraries(hc_registry_transactions PUBLIC hc_registry_core Qt6::Core PRIVATE advapi32)
+target_link_libraries(hc_registry_transactions PUBLIC hc_registry_core Qt6::Core PRIVATE advapi32 crypt32)
 
 qt_add_library(hc_registry_models STATIC registryService.cpp registryService.hpp registryModels.cpp registryModels.hpp registryRootProxy.cpp registryRootProxy.hpp)
 target_sources(hc_registry_models PRIVATE registryNavigation.cpp registryNavigation.hpp
@@ -29,7 +29,7 @@ target_include_directories(hc_registry_editors PUBLIC "${PROJECT_SOURCE_DIR}" PR
 target_precompile_headers(hc_registry_editors PRIVATE "${PROJECT_SOURCE_DIR}/commonLibs/system/registry/stdafx.h")
 target_compile_definitions(hc_registry_editors PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(hc_registry_editors PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>)
-target_link_libraries(hc_registry_editors PUBLIC hc_registry_core Fm::widgets Qt6::Concurrent)
+target_link_libraries(hc_registry_editors PUBLIC hc_registry_core Fm::widgets Fm::filelist Qt6::Concurrent)
 
 qt_add_library(hc_registry_descriptions STATIC registryAdmx.cpp registryAdmx.hpp)
 target_include_directories(hc_registry_descriptions PUBLIC "${PROJECT_SOURCE_DIR}" PRIVATE
@@ -81,3 +81,6 @@ target_sources(hc_registry_models PRIVATE registryBatch.cpp registryBatch.hpp)
 target_sources(hc_registry_models PRIVATE registryImport.cpp registryImport.hpp)
 
 target_sources(hc_registry_models PRIVATE registryCompareLease.cpp registryCompareLease.hpp)
+
+target_sources(hc_registry_editors PRIVATE ../ui/systemChangePreview.cpp ../ui/systemChangePreview.hpp)
+target_link_libraries(hc_registry_editors PRIVATE Qtitan::Grid)

@@ -7,7 +7,7 @@
 /// 고유 라이브러리
 /// 공통 라이브러리
 /// 외부 라이브러리
-#include <fmwidgets/ReorderList.h>
+#include <fmfilelist/PathValueEditor.h>
 #include <fmwidgets/PathEntryDelegate.h>
 #include <fmwidgets/DialogWidgets.h>
 #include <fmwidgets/Button.h>
@@ -127,8 +127,8 @@ PathListEditor::PathListEditor(QWidget* Parent) : QWidget(Parent), model_(new Pa
 {
     auto* Layout = new QVBoxLayout(this); Layout->setContentsMargins(0, 0, 0, 0);
     pages_ = new QStackedWidget(this); Layout->addWidget(pages_, 1);
-    list_ = new fm::ui::ReorderListView(this); setFocusProxy(list_); list_->setObjectName("hc.pathList.rows"); list_->setModel(model_);
-    list_->SetMoveModifiers(Qt::ControlModifier); list_->setItemDelegate(new fm::ui::PathEntryDelegate(list_)); pages_->addWidget(list_);
+    list_ = new fm::filelist::PathValueEditor(this); setFocusProxy(list_); list_->setObjectName("hc.pathList.rows"); list_->setModel(model_);
+    pages_->addWidget(list_);
     auto* RawPage = new QWidget(this); auto* RawLayout = new QVBoxLayout(RawPage); RawLayout->setContentsMargins(0, 0, 0, 0);
     raw_ = new fm::ui::TextField(RawPage); raw_->setObjectName("hc.pathList.raw"); raw_->setMonospace(true); raw_->setMaxLength(32 * 1024 * 1024);
     RawLayout->addWidget(raw_); RawLayout->addStretch(); pages_->addWidget(RawPage);

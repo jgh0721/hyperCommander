@@ -78,7 +78,7 @@ public:
 class KeyboardSettingsPage final : public QWidget {
     enum Column { ScopeColumn, CommandColumn, DescriptionColumn, CurrentKeyColumn, GlobalColumn, ColumnCount };
     // 범위 콤보의 순서. 앞의 일곱 개는 기존 순서를 유지한다(설정·시험이 색인을 쓴다).
-    enum Category { AllCategory, FileCategory, PanelCategory, NavigateCategory, WindowCategory, CommandLineCategory, AudioCategory, ProcessCategory, ServiceCategory, RegistryCategory };
+    enum Category { AllCategory, FileCategory, PanelCategory, NavigateCategory, WindowCategory, CommandLineCategory, AudioCategory, ProcessCategory, ServiceCategory, RegistryCategory, EnvironmentCategory };
     static constexpr int InputScopeRole = Qt::UserRole + 1;
 public:
     explicit KeyboardSettingsPage(QWidget* Parent = nullptr) : QWidget(Parent) {
@@ -88,7 +88,7 @@ public:
         auto* Page = new QWidget; auto* Rows = new QVBoxLayout(Page); Tabs->addTab(Page, tr("단축키"));
         auto* Filter = new QHBoxLayout; Rows->addLayout(Filter);
         search_ = new fm::ui::SearchField(Page); search_->setObjectName("hc.keys.search"); search_->setPlaceholderText(tr("명령 또는 키 찾기")); Filter->addWidget(search_, 1);
-        scope_ = new QComboBox(Page); scope_->setObjectName("hc.keys.scope"); scope_->addItems({tr("전체"), tr("파일 작업"), tr("패널·탭"), tr("탐색"), tr("창·설정"), tr("명령행 입력"), tr("오디오"), tr("프로세스 보기"), tr("서비스 보기"), tr("레지스트리 보기")}); Filter->addWidget(scope_);
+        scope_ = new QComboBox(Page); scope_->setObjectName("hc.keys.scope"); scope_->addItems({tr("전체"), tr("파일 작업"), tr("패널·탭"), tr("탐색"), tr("창·설정"), tr("명령행 입력"), tr("오디오"), tr("프로세스 보기"), tr("서비스 보기"), tr("레지스트리 보기"), tr("환경 변수 보기")}); Filter->addWidget(scope_);
         scope_->setItemData(ProcessCategory, tr("프로세스 보기에 포커스가 있을 때만 쓰는 키. 같은 키의 전역 명령보다 먼저 처리합니다."), Qt::ToolTipRole);
         scope_->setItemData(ServiceCategory, tr("서비스 보기에 포커스가 있을 때만 쓰는 키. 같은 키의 전역 명령보다 먼저 처리합니다."), Qt::ToolTipRole);
         auto* PresetLabel = new QLabel(tr("기본 키:"), Page); Filter->addWidget(PresetLabel);
@@ -122,7 +122,7 @@ public:
         resetScope_->setToolTip(tr("프로세스 보기 또는 서비스 보기 범위의 사용자 키만 지웁니다. 다른 범위의 키는 그대로 둡니다."));
         auto* Functions = new QWidget; auto* FunctionForm = new QFormLayout(Functions); Tabs->addTab(Functions, tr("기능 키 막대"));
         functionKind_ = new QComboBox(Functions); functionKind_->setObjectName("hc.keys.functionScope");
-        functionKind_->addItems({tr("파일 패널"), tr("프로세스 보기"), tr("서비스 보기"), tr("레지스트리 보기")});
+        functionKind_->addItems({tr("파일 패널"), tr("프로세스 보기"), tr("서비스 보기"), tr("레지스트리 보기"), tr("환경 변수 보기")});
         functionKind_->setToolTip(tr("활성 패널의 보기 종류에 따라 기능 키 막대가 바뀝니다."));
         FunctionForm->addRow(tr("보기"), functionKind_);
         FunctionForm->addRow(new QLabel(tr("표시할 명령을 선택합니다. 각 명령의 키는 단축키 탭에서 변경합니다."), Functions));
@@ -145,6 +145,8 @@ public:
             if (Item->column() != GlobalColumn) return;
             auto* M = TyStCommandMgr::GetInstance();
             const auto Id = table_->item(Item->row(), CommandColumn)->data(Qt::UserRole).toString();
+            if (Id == "hc.navigate.systemEnvironment" && Item->checkState() == Qt::Checked)
+                hc::ui::MessageDialog::information(this, tr("글로벌 단축키"), tr("Ctrl+Alt+E를 글로벌로 등록하면 일부 키보드의 AltGr+E 문자(€·ę) 입력과 충돌할 수 있습니다. 필요하면 다른 키를 지정하세요."));
             M->SetGlobalShortcutEnabled(Id, Item->checkState() == Qt::Checked);
             const QSignalBlocker Block(table_);
             Item->setText(M->GlobalShortcutError(Id).isEmpty() ? QString{} : tr("실패"));
@@ -172,7 +174,7 @@ public:
         connect(preset_, &QComboBox::currentIndexChanged, this, [this](int I) { if (loading_) return; auto G = settings::AppSettings().Read(settings::Section::General).toObject(); G["shortcutPreset"] = hc::defaults::ShortcutPresetIds().value(I, "legacy"); settings::AppSettings().Put(settings::Section::General, G); Refresh(); });
         connect(Reset, &QPushButton::clicked, this, [this] { if (hc::ui::MessageDialog::question(this, tr("단축키 초기화"), tr("사용자 키를 지우고 선택한 기본값으로 되돌리시겠습니까?")) != QMessageBox::Yes) return; settings::AppSettings().Put(settings::Section::Shortcuts, QJsonObject{}); Refresh(); });
         connect(resetScope_, &QPushButton::clicked, this, [this] {
-            const auto Scope = scope_->currentIndex() == RegistryCategory ? InputScope::RegistryView : scope_->currentIndex() == ProcessCategory ? InputScope::ProcessView : InputScope::ServiceView;
+            const auto Scope = scope_->currentIndex() == EnvironmentCategory ? InputScope::SystemEnvironmentView : scope_->currentIndex() == RegistryCategory ? InputScope::RegistryView : scope_->currentIndex() == ProcessCategory ? InputScope::ProcessView : InputScope::ServiceView;
             if (hc::ui::MessageDialog::question(this, tr("단축키 초기화"), tr("%1 범위의 사용자 키를 지우고 기본값으로 되돌리시겠습니까?").arg(scope_->currentText())) != QMessageBox::Yes) return;
             TyStCommandMgr::GetInstance()->ResetScope(Scope); Refresh();
         });
@@ -181,7 +183,7 @@ public:
     void Load() {
         loading_ = true; const auto G = settings::AppSettings().Read(settings::Section::General).toObject();
         preset_->setCurrentIndex(qMax(0, hc::defaults::ShortcutPresetIds().indexOf(G["shortcutPreset"].toString(hc::defaults::DefaultValue("general/shortcutPreset").toString()))));
-        for (int Kind = 0; Kind < 4; ++Kind) {
+        for (int Kind = 0; Kind < int(FunctionBarKind::SystemEnvironmentView) + 1; ++Kind) {
             const auto Value = FunctionBarKind(Kind);
             drafts_[Kind].commands_ = FunctionCommandsFor(G, Value);
             const auto Captions = Kind == 0 ? G["functionCaptions"].toArray() : G["functionBars"].toObject()[FunctionBarKey(Value)].toObject()["captions"].toArray();
@@ -193,12 +195,12 @@ public:
     }
     bool SaveFunctions(QJsonObject& G) {
         storeFunctions(shownKind_);
-        for (int Kind = 0; Kind < 4; ++Kind)
+        for (int Kind = 0; Kind < int(FunctionBarKind::SystemEnvironmentView) + 1; ++Kind)
             for (const auto& Id : drafts_[Kind].commands_)
                 if (FindCommand(Id).Name.isEmpty()) { conflict_->setText(tr("기능 막대에 등록되지 않은 명령이 있습니다.")); return false; }
         G["functionCommands"] = QJsonArray::fromStringList(drafts_[0].commands_); G["functionCaptions"] = QJsonArray::fromStringList(drafts_[0].captions_);
         auto Bars = G["functionBars"].toObject();
-        for (int Kind = 1; Kind < 4; ++Kind) {
+        for (int Kind = 1; Kind < int(FunctionBarKind::SystemEnvironmentView) + 1; ++Kind) {
             QJsonObject Bar{{"commands", QJsonArray::fromStringList(drafts_[Kind].commands_)}, {"captions", QJsonArray::fromStringList(drafts_[Kind].captions_)}};
             Bars[FunctionBarKey(FunctionBarKind(Kind))] = Bar;
         }
@@ -221,7 +223,7 @@ public:
                 auto* Description = new QTableWidgetItem(Label); Description->setToolTip(Label); table_->setItem(Row, DescriptionColumn, Description);
                 const auto Join = [&](const auto& Keys) { QStringList Labels; for (const auto& K : CommandKeys(Keys, Command)) Labels.append(K.toString()); return Labels.join(", "); };
                 const bool CommandInput = IsCommandLineShortcut(Command);
-                const bool View = Scope == InputScope::ProcessView || Scope == InputScope::ServiceView || Scope == InputScope::RegistryView;
+                const bool View = Scope == InputScope::ProcessView || Scope == InputScope::ServiceView || Scope == InputScope::RegistryView || Scope == InputScope::SystemEnvironmentView;
                 const auto Current = View ? M->RetrieveForScope(Scope) : CommandInput ? M->RetrieveForCommand(Command) : Values;
                 auto* CurrentItem = new QTableWidgetItem(Join(Current)); table_->setItem(Row, CurrentKeyColumn, CurrentItem);
                 if (View) {
@@ -242,7 +244,7 @@ public:
                     Global->setToolTip(M->GlobalShortcutError(Command).isEmpty() ? tr("다른 앱 사용 중에도 현재 키로 실행합니다. 키가 없으면 등록하지 않습니다.") : M->GlobalShortcutError(Command));
                 } else { Global->setFlags(Qt::ItemIsSelectable); Global->setToolTip(tr("이 입력 범위에서만 실행하는 명령입니다.")); }
                 table_->setItem(Row, GlobalColumn, Global);
-                const int Category = View ? (Scope == InputScope::RegistryView ? RegistryCategory : Scope == InputScope::ProcessView ? ProcessCategory : ServiceCategory) : category(Command);
+                const int Category = View ? (Scope == InputScope::SystemEnvironmentView ? EnvironmentCategory : Scope == InputScope::RegistryView ? RegistryCategory : Scope == InputScope::ProcessView ? ProcessCategory : ServiceCategory) : category(Command);
                 table_->setItem(Row, ScopeColumn, new QTableWidgetItem(scope_->itemText(Category)));
                 table_->item(Row, ScopeColumn)->setData(Qt::UserRole, Category); table_->item(Row, ScopeColumn)->setData(InputScopeRole, int(Scope));
             }
@@ -254,13 +256,13 @@ public:
     }
 private:
     struct FunctionDraft { QStringList commands_, captions_; };
-    static int category(const QString& Id) { if (IsCommandLineShortcut(Id)) return CommandLineCategory; if (Id.startsWith("hc.process.") && Id != "hc.process.run") return ProcessCategory; if (Id.startsWith("hc.service.")) return ServiceCategory; if (Id.startsWith("hc.registry.")) return RegistryCategory; if (Id.startsWith("hc.audio.")) return AudioCategory; if (Id.startsWith("hc.file.") || Id.startsWith("hc.archive.") || Id.startsWith("hc.viewer.") || Id.startsWith("hc.jobs.")) return FileCategory; if (Id.startsWith("hc.panel.") || Id.startsWith("hc.tab.") || Id.startsWith("hc.view.") || Id.startsWith("hc.selection.")) return PanelCategory; if (Id.startsWith("hc.navigate.") || Id.startsWith("hc.search.")) return NavigateCategory; return WindowCategory; }
-    bool viewScope() const { return editScope_ == InputScope::ProcessView || editScope_ == InputScope::ServiceView || editScope_ == InputScope::RegistryView; }
+    static int category(const QString& Id) { if (IsCommandLineShortcut(Id)) return CommandLineCategory; if (Id.startsWith("hc.process.") && Id != "hc.process.run") return ProcessCategory; if (Id.startsWith("hc.service.")) return ServiceCategory; if (Id.startsWith("hc.registry.")) return RegistryCategory; if (Id.startsWith("hc.systemEnvironment.")) return EnvironmentCategory; if (Id.startsWith("hc.audio.")) return AudioCategory; if (Id.startsWith("hc.file.") || Id.startsWith("hc.archive.") || Id.startsWith("hc.viewer.") || Id.startsWith("hc.jobs.")) return FileCategory; if (Id.startsWith("hc.panel.") || Id.startsWith("hc.tab.") || Id.startsWith("hc.view.") || Id.startsWith("hc.selection.")) return PanelCategory; if (Id.startsWith("hc.navigate.") || Id.startsWith("hc.search.")) return NavigateCategory; return WindowCategory; }
+    bool viewScope() const { return editScope_ == InputScope::ProcessView || editScope_ == InputScope::ServiceView || editScope_ == InputScope::RegistryView || editScope_ == InputScope::SystemEnvironmentView; }
     TyMapShortcutToCMDStr scopeKeys(const QString& Id) const { auto* M = TyStCommandMgr::GetInstance(); return viewScope() ? M->RetrieveForScope(editScope_) : M->RetrieveForCommand(Id); }
     void filter() {
         const auto Text = search_->text().trimmed();
         for (int R = 0; R < table_->rowCount(); ++R) { QString Match; for (int C = 0; C < ColumnCount; ++C) Match += " " + table_->item(R, C)->text() + " " + table_->item(R, C)->data(CombinedKeyDelegate::DefaultRole).toString(); table_->setRowHidden(R, (scope_->currentIndex() && table_->item(R, ScopeColumn)->data(Qt::UserRole) != scope_->currentIndex()) || !Match.contains(Text, Qt::CaseInsensitive)); }
-        resetScope_->setVisible(scope_->currentIndex() == ProcessCategory || scope_->currentIndex() == ServiceCategory || scope_->currentIndex() == RegistryCategory);
+        resetScope_->setVisible(scope_->currentIndex() == ProcessCategory || scope_->currentIndex() == ServiceCategory || scope_->currentIndex() == RegistryCategory || scope_->currentIndex() == EnvironmentCategory);
     }
     void updateConflict() {
         const auto Key = key_->pending(); const auto Id = selector_->Command();
@@ -294,6 +296,6 @@ private:
         for (int I = 0; I < functions_.size(); ++I) { functions_[I]->SetCommand(drafts_[Kind].commands_.value(I)); captions_[I]->setText(drafts_[Kind].captions_.value(I)); }
     }
     QLineEdit* search_; QComboBox *scope_, *preset_, *functionKind_; QTableWidget* table_; CommandSelector* selector_; fm::ui::KeyCaptureEdit* key_; QLabel* conflict_; QPushButton *assign_, *reassign_, *resetScope_; QList<CommandSelector*> functions_; QList<QLineEdit*> captions_; bool loading_ = false;
-    InputScope editScope_ = InputScope::Global; int shownKind_ = 0; FunctionDraft drafts_[4];
+    InputScope editScope_ = InputScope::Global; int shownKind_ = 0; FunctionDraft drafts_[int(FunctionBarKind::SystemEnvironmentView) + 1];
 };
 }

@@ -9,7 +9,8 @@
 #include <memory>
 
 class QStackedWidget;
-namespace fm::ui { class ReorderListView; class TextField; class PathEdit; class Button; class Label; }
+namespace fm::ui { class TextField; class PathEdit; class Button; class Label; }
+namespace fm::filelist { class PathValueEditor; }
 namespace hc::ui {
 struct PathResolution {
     QString expanded;
@@ -64,7 +65,7 @@ signals:
 private:
     void syncEditor();
     PathEntryModel* model_;
-    fm::ui::ReorderListView* list_;
+    fm::filelist::PathValueEditor* list_;
     fm::ui::PathEdit* editor_;
     fm::ui::Button* remove_;
     fm::ui::Label* notice_;

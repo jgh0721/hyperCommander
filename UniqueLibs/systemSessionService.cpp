@@ -4,6 +4,7 @@
 /// 내부 라이브러리
 #include "adminChannel.hpp"
 #include "registry/registryProtocol.hpp"
+#include "system/environmentProcessProtocol.hpp"
 
 /// 공통 라이브러리
 #include "commonLibs/system/processActions.hpp"
@@ -30,6 +31,7 @@ QString      Text( const std::wstring& Value ) { return QString::fromStdWString(
 // 조회 요청은 결과를 모르는 채 끝나도(전송 실패) 다시 보내도 된다. 동작 요청만 Unknown으로 알린다.
 bool IsAction( const QString& Kind )
 {
+    if (Kind == "process.environment" || Kind.startsWith("process.environment.")) return false;
     if (Kind.startsWith("registry.")) return Kind == "registry.apply" || Kind == "registry.policyApply";
     return Kind != "ping" && Kind != "process.details" && Kind != "service.query";
 }
@@ -257,6 +259,7 @@ unsigned long ExecuteSystemSession( const QJsonObject& Bootstrap, const QString&
     hc::registry::RegistrySessionServer Registry(RegistryBackend, Bootstrap["callerSid"].toString(),
         QString::fromLatin1(QSysInfo::machineUniqueId().toHex()), RegistryTestRoot);
     const auto Idle = static_cast<unsigned long>( std::clamp( Bootstrap["idleMs"].toInt( 600000 ), 60000, 7200000 ) );
+    hc::environment::ProcessEnvironmentServer Environment;
     QHash<QString, QJsonObject> Receipts;
     while( Channel.ParentAlive() )
     {
@@ -271,11 +274,14 @@ unsigned long ExecuteSystemSession( const QJsonObject& Bootstrap, const QString&
             Reply = Receipts.value( RequestId );
         else
         {
-            Reply = Kind.startsWith("registry.") ? Registry.Handle(Kind, *Request) : Handle( Kind, *Request, Channel.parentPid );
+            const bool EnvironmentRead = Kind == "process.environment" || Kind.startsWith("process.environment.");
+            Reply = EnvironmentRead ? Environment.Handle(Kind, *Request) : Kind.startsWith("registry.") ? Registry.Handle(Kind, *Request) : Handle( Kind, *Request, Channel.parentPid );
             Reply["requestId"] = RequestId;
             if( Receipts.size() >= 256 )
                 Receipts.clear();
-            Receipts.insert( RequestId, Reply );
+            // Environment chunks may contain credentials: retain them only in
+            // the short-lived explicitly released snapshot, never in receipts.
+            if (!EnvironmentRead) Receipts.insert( RequestId, Reply );
         }
         if( !SendFrame( Channel.pipe, Reply, Spec(), Channel.nonce ) )
             return ERROR_BROKEN_PIPE;

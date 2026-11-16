@@ -99,18 +99,25 @@ void RegistryDescriptionTests::systemCatalogReadOnly()
 void RegistryDescriptionTests::builtinCatalog()
 {
     const auto Catalog = BuiltinRegistryCatalog::Bundled();
-    QCOMPARE(Catalog.Count(), 150); QVERIFY2(Catalog.Errors().isEmpty(), qPrintable(Catalog.Errors().join('\n')));
+    QCOMPARE(Catalog.Count(), 270); QVERIFY2(Catalog.Errors().isEmpty(), qPrintable(Catalog.Errors().join('\n')));
     QVERIFY(BuiltinRegistryCatalog::PathMatches("Software\\*\\Leaf", "software\\Vendor\\leaf"));
     QVERIFY(!BuiltinRegistryCatalog::PathMatches("Software\\*\\Leaf", "Software\\Vendor\\Sub\\Leaf"));
     QVERIFY(BuiltinRegistryCatalog::PathMatches("Software\\**\\Leaf", "Software\\Vendor\\Sub\\Leaf"));
     QVERIFY(BuiltinRegistryCatalog::PathMatches("Software\\**\\Leaf", "Software\\Leaf"));
     const auto Env = RegistryLocation::Parse("HKCU\\Environment").value();
     const auto Korean = Catalog.Find(Env, QString("Path"), REG_EXPAND_SZ, "ko-KR"); QVERIFY(Korean);
-    QVERIFY(Korean.title.contains(QStringLiteral("검색 경로"))); QVERIFY(!Korean.sourceUrls.isEmpty());
+    QVERIFY(Korean.title.contains(QStringLiteral("실행 파일"))); QVERIFY(!Korean.sourceUrls.isEmpty());
     const auto English = Catalog.Find(Env, QString("Path"), REG_EXPAND_SZ, "fr-FR"); QVERIFY(English);
-    QVERIFY(English.title.contains("search path"));
+    QVERIFY(English.title.contains("search directories"));
     QVERIFY(!Catalog.Find(Env, QString("Path"), REG_DWORD, "en-US"));
     QVERIFY(!Catalog.Find(Env, QString("NoSuchSetting"), REG_SZ, "en-US"));
+    for (const auto* Name : {"JAVA_HOME", "CMAKE_GENERATOR", "GH_TOKEN", "PYTHONHOME", "NODE_PATH", "ProgramFiles(x86)", "=c:"}) {
+        const auto Ko = Catalog.Find(Env, QString::fromLatin1(Name), REG_SZ, "ko-KR");
+        const auto En = Catalog.Find(Env, QString::fromLatin1(Name), REG_EXPAND_SZ, "en-US");
+        QVERIFY(Ko); QVERIFY(En); QVERIFY(Ko.title != En.title); QVERIFY(!Ko.text.isEmpty()); QVERIFY(!En.text.isEmpty());
+    }
+    const auto Generator = Catalog.Find(Env, QString("CMAKE_GENERATOR"), REG_SZ, "en-US");
+    QCOMPARE(Generator.metadata["options"].toArray().size(), 4);
     const auto Com = RegistryLocation::Parse("HKCR\\CLSID\\{123}\\DefaultIcon").value();
     const auto Icon = Catalog.Find(Com, {}, {}, "en-US"); QVERIFY(Icon); QCOMPARE(Icon.category, QString("COM"));
     QVERIFY(!Catalog.KnownLocations().isEmpty());

@@ -26,6 +26,7 @@ namespace hc::ui { class AudioPopover; }
 namespace hc::ui { class UserMenu; }
 namespace hc::sys { class SystemCommands; }
 namespace hc::registry { class RegistryCommands; }
+namespace hc::environment { class EnvironmentCommands; }
 namespace hc::ui { struct CommandState; }
 namespace hc::filecontext { struct ContextTarget; }
 
@@ -80,6 +81,7 @@ public:
     // 프로세스·서비스 명령. Source는 명령을 부른 시스템 보기나 상세 보기(없으면 활성 패널).
     bool ExecuteSystemCommand(const QString& Id, const QVariant& Argument = {}, QObject* Source = nullptr);
     hc::sys::SystemCommands* System() const { return system_; }
+    hc::environment::EnvironmentCommands* Environment() const { return environmentCommands_; }
     std::shared_ptr<hc::commands::EventHub> Events() const { return events_; }
     hc::automation::Host AutomationHost();
     std::shared_ptr<hc::script::IScriptHostApi> ScriptApi(std::set<std::string> Permissions);
@@ -161,6 +163,7 @@ private:
     hc::ui::UserMenu* userMenu_ = nullptr;
     hc::sys::SystemCommands* system_ = nullptr;
     hc::registry::RegistryCommands* registryCommands_ = nullptr;
+    hc::environment::EnvironmentCommands* environmentCommands_ = nullptr;
     int functionBarKind_ = -2;              // 기능 키 막대가 보이는 보기 종류(-1 파일, 0 프로세스, 1 서비스)
     QSet<QString> systemDisabled_;          // 시스템 보기 때문에 끈 명령. 파일 보기로 돌아오면 다시 켠다
     // Modal commands process watcher refreshes; resets must invalidate the

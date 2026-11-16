@@ -133,6 +133,32 @@ RegistryResult<KeyHandle> WinRegistryBackend::Open(const RegistryLocation& Locat
 {
     RegistryResult<KeyHandle> Result;
     if (!ValidLocation(Location)) { Result.error = ERROR_INVALID_PARAMETER; return Result; }
+    // Resolve only Windows' verified environment alias, never arbitrary links.
+    // All physical ancestors still pass the ordinary no-link traversal below.
+    if (!FollowLink && Location.hive == Hive::LocalMachine
+        && Location.key.compare(QStringLiteral("SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"), Qt::CaseInsensitive) == 0) {
+        const RegistryLocation Selection{Hive::LocalMachine, QStringLiteral("SYSTEM\\Select"), Location.view};
+        auto SelectedKey = Open(Selection, KEY_QUERY_VALUE);
+        if (!SelectedKey) { Result.error = SelectedKey.error; return Result; }
+        const auto Selected = ReadHandle(SelectedKey.value.Get(), QStringLiteral("Current"));
+        if (!Selected) { Result.error = Selected.error; return Result; }
+        DWORD Number = 0;
+        if (Selected.value.type != REG_DWORD || Selected.value.bytes.size() != sizeof(Number)) { Result.error = ERROR_INVALID_DATA; return Result; }
+        memcpy(&Number, Selected.value.bytes.constData(), sizeof(Number));
+        if (!Number || Number > 999) { Result.error = ERROR_INVALID_DATA; return Result; }
+        const auto ControlSet = QStringLiteral("ControlSet%1").arg(Number, 3, 10, QChar('0'));
+        const RegistryLocation Alias{Hive::LocalMachine, QStringLiteral("SYSTEM\\CurrentControlSet"), Location.view};
+        auto AliasKey = Open(Alias, KEY_QUERY_VALUE);
+        if (!AliasKey) { Result.error = AliasKey.error; return Result; }
+        const auto Link = ReadHandle(AliasKey.value.Get(), QStringLiteral("SymbolicLinkValue"));
+        const auto Expected = QStringLiteral("\\Registry\\Machine\\SYSTEM\\") + ControlSet;
+        if (!Link || Link.value.type != REG_LINK || Link.value.bytes.size() != Expected.size() * 2
+            || QString::fromUtf16(reinterpret_cast<const char16_t*>(Link.value.bytes.constData()), Link.value.bytes.size() / 2)
+                .compare(Expected, Qt::CaseInsensitive) != 0) { Result.error = ERROR_CANT_ACCESS_FILE; return Result; }
+        auto Physical = Location;
+        Physical.key = QStringLiteral("SYSTEM\\") + ControlSet + QStringLiteral("\\Control\\Session Manager\\Environment");
+        return Open(Physical, Access);
+    }
     const auto [Base, Path] = NativePath(Location);
     if (!FollowLink && Path.contains('\\')) {
         // REG_OPTION_OPEN_LINK only protects the final component. Walk ancestors
