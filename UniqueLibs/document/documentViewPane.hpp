@@ -18,7 +18,7 @@ class QBaseView;
 class QTextView;
 class QPDFView;
 class QImageView;
-namespace hc::sqlite { class DocumentView; }
+namespace hc::sqlite { class DocumentView; struct ProtectedKey; }
 namespace hc::document
 {
     class EpubProcessView;
@@ -38,7 +38,7 @@ namespace hc::document
         void ShowLoadingPreview(const QImage& Image,bool Partial=false);
         bool IsReadOnly() const { return readOnly_; }
         ViewUiContribution Contribution() const { return contribution_; }
-        bool Load(const TextInput& Input, bool Traverse, bool ImageEditing = true);
+        bool Load(const TextInput& Input, bool Traverse, bool ImageEditing = true, const sqlite::ProtectedKey* SqliteKey = nullptr);
         void ConfigureHwp(WebProcessRuntime Runtime) { hwpRuntime_ = std::move(Runtime); }
         void SetUnlimitedBytes(bool Enabled) { unlimitedBytes_ = Enabled; }
         void ConfigureEpub(WebProcessRuntime Runtime,bool Editing=false) { epubRuntime_ = std::move(Runtime);epubConfigured_=true;epubEditingAllowed_=Editing; }

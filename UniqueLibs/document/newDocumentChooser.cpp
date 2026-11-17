@@ -41,7 +41,7 @@ namespace hc::document
     {
         using fm::style::Token;
         constexpr qint64  PixelLimit = 128LL * 1024 * 1024;
-        const QStringList KindIds{ "text", "markdown", "sphinx", "rst", "hwpx", "epub", "image" };
+        const QStringList KindIds{ "text", "markdown", "sphinx", "rst", "hwpx", "epub", "image", "sqlite" };
 
         // The dialog message line: secondary text, or the danger colour for a problem (as in 새 EPUB 만들기).
         void Tint( QLabel* Label, Token Which )
@@ -98,9 +98,11 @@ namespace hc::document
             { tr( "reStructuredText 문서" ), QStringLiteral( ".rst" ), fm::ui::ChoiceCard::CodeKind },
             { tr( "아래한글 문서" ), QStringLiteral( ".hwpx" ), fm::ui::ChoiceCard::DocKind },
             { tr( "EPUB 책…" ), QStringLiteral( ".epub" ), fm::ui::ChoiceCard::ArchiveKind },
-            { tr( "이미지…" ), QStringLiteral( ".png" ), fm::ui::ChoiceCard::ImageKind } };
+            { tr( "이미지…" ), QStringLiteral( ".png" ), fm::ui::ChoiceCard::ImageKind },
+            { tr( "SQLite 데이터베이스…" ), QStringLiteral( ".sqlite3" ), fm::ui::ChoiceCard::SystemKind } };
         auto* Group = new QButtonGroup( this ); Group->setExclusive( true );
-        for( int I = 0; I < Rows.size(); ++I ) {
+        const auto Count = Rows.size() - ( options_.offerSqlite_ ? 0 : 1 );
+        for( int I = 0; I < Count; ++I ) {
             auto* Card = new fm::ui::ChoiceCard( Rows[ I ].name_, this );
             Card->setObjectName( "newDocument." + KindIds[ I ] );
             Card->setDetail( Rows[ I ].detail_ ); Card->setKeyHint( QString::number( I + 1 ) ); Card->setFileKind( Rows[ I ].kind_ );
@@ -109,7 +111,7 @@ namespace hc::document
             connect( Card, &QAbstractButton::toggled, this, [ this ]( bool On ) { if( On ) refreshNote(); } );
             kinds_.append( Card ); Layout->addWidget( Card );
         }
-        if( auto* Initial = kinds_.value( int( options_.initial_ ) ) ) Initial->setChecked( true );
+        kinds_.value( int( options_.initial_ ), kinds_.first() )->setChecked( true );
         note_ = Message( this, "newDocumentNote" ); Tint( note_, Token::Fg2 );
         Layout->addSpacing( 4 ); Layout->addWidget( note_ );
         auto* Buttons = new QDialogButtonBox( QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this );
@@ -118,7 +120,7 @@ namespace hc::document
         Layout->addWidget( Buttons );
         connect( Buttons, &QDialogButtonBox::accepted, this, &NewDocumentChooser::accept );
         connect( Buttons, &QDialogButtonBox::rejected, this, &NewDocumentChooser::reject );
-        hc::ui::ApplyDialogFrame( this, Buttons, { {}, tr( "만들 문서의 종류를 고릅니다. 1 – 7 키나 두 번 누르기로 바로 만들 수 있습니다." ), fm::ui::glyph::NewFile } );
+        hc::ui::ApplyDialogFrame( this, Buttons, { {}, tr( "만들 문서의 종류를 고릅니다. 1 – %1 키나 두 번 누르기로 바로 시작할 수 있습니다." ).arg( Count ), fm::ui::glyph::NewFile } );
         refreshNote();
         resize( 480, sizeHint().height() );
         if( auto* Card = kinds_.value( checkedKind() ) ) Card->setFocus( Qt::OtherFocusReason );
@@ -134,8 +136,8 @@ namespace hc::document
     {
         if( !note_ || !create_ ) return;
         const auto Kind = NewDocumentKind( checkedKind() );
-        // A Sphinx project, EPUB and image continue in their own dialog: the button says so.
-        create_->setText( Kind == NewDocumentKind::SphinxProject || Kind == NewDocumentKind::Epub || Kind == NewDocumentKind::Image ? tr( "다음(&O)…" ) : tr( "만들기(&O)" ) );
+        const bool HasOptions = Kind == NewDocumentKind::SphinxProject || Kind == NewDocumentKind::Epub || Kind == NewDocumentKind::Image || Kind == NewDocumentKind::Sqlite;
+        create_->setText( HasOptions ? tr( "다음(&O)…" ) : tr( "만들기(&O)" ) );
         switch( Kind ) {
             case NewDocumentKind::Text:
                 note_->setText( tr( "‘새 문서 %1’ 탭으로 엽니다. 저장할 때 이름과 위치를 정합니다." ).arg( options_.nextDocument_ ) ); break;
@@ -157,6 +159,8 @@ namespace hc::document
                     : tr( "제목 · 저자 · 저장 위치를 정해 파일을 만든 뒤 EPUB 편집 모드로 엽니다." ) ); break;
             case NewDocumentKind::Image:
                 note_->setText( tr( "크기와 배경을 고른 뒤 ‘새 이미지 %1’을 이미지 편집 모드로 엽니다." ).arg( options_.nextImage_ ) ); break;
+            case NewDocumentKind::Sqlite:
+                note_->setText( tr( "저장 위치와 암호화 여부를 정한 뒤 빈 SQLite 데이터베이스를 만들고 엽니다." ) ); break;
         }
     }
 

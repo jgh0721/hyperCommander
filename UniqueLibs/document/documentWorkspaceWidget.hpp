@@ -200,6 +200,8 @@ namespace hc::document
         QJsonObject newImage(const NewImageSpec& Spec);
         void createEpub(const NewEpubRequest& Request, bool CloseWhenCancelled);
         bool epubCreating_ = false;
+        void showNewSqliteDialog();
+        bool sqliteCreating_ = false;
         // Untitled documents: "새 문서 N" (text, Markdown) and "새 이미지 N" (images), numbered per window.
         struct Tab;
         QString documentName(const Tab& Value) const;

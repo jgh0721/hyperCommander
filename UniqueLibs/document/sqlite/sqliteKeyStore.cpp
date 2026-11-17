@@ -188,12 +188,16 @@ namespace hc::sqlite
 
     bool KeyStore::Save(const QString& Path, const QByteArray& Key, KeyFormat Format)
     {
-        const auto Protected = ProtectKey(Key);
-        if (Protected.isEmpty()) return false;
+        return SaveProtected(Path, {ProtectKey(Key), Format});
+    }
+
+    bool KeyStore::SaveProtected(const QString& Path, const ProtectedKey& Key)
+    {
+        if (Key.bytes_.isEmpty()) return false;
         const auto Now = QDateTime::currentDateTime();
         return update([&](QList<Entry>& Items) {
             Items.erase(std::remove_if(Items.begin(), Items.end(), [&](const Entry& Item) { return SamePath(Item.path_, Path); }), Items.end());
-            Items.append(Entry{QFileInfo(Path).absoluteFilePath(), FileIdentity(Path), Format, Now, Now, Protected});
+            Items.append(Entry{QFileInfo(Path).absoluteFilePath(), FileIdentity(Path), Key.format_, Now, Now, Key.bytes_});
             return true;
         });
     }

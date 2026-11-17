@@ -209,6 +209,7 @@ qt_add_library(hc_document_widgets STATIC
     ../UniqueLibs/document/documentStartPage.cpp ../UniqueLibs/document/documentStartPage.hpp
     ../UniqueLibs/document/newDocumentChooser.cpp ../UniqueLibs/document/newDocumentChooser.hpp
     ../UniqueLibs/document/newEpubDialog.cpp ../UniqueLibs/document/newEpubDialog.hpp
+    ../UniqueLibs/document/newSqliteDialog.cpp ../UniqueLibs/document/newSqliteDialog.hpp
     ../UniqueLibs/document/epubRestoreConflictDialog.cpp ../UniqueLibs/document/epubRestoreConflictDialog.hpp
     ../UniqueLibs/document/documentRecentMenu.cpp ../UniqueLibs/document/documentRecentMenu.hpp
     ../UniqueLibs/document/textContextMenu.cpp ../UniqueLibs/document/textContextMenu.hpp

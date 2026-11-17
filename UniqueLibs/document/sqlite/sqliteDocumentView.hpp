@@ -7,6 +7,7 @@
 #include "sqliteCompletion.hpp"
 #include "sqliteSchema.hpp"
 #include "sqliteSeeDialog.hpp"
+#include "sqliteKeyStore.hpp"
 #include "sqliteTransfer.hpp"
 #include "sqliteWorkTab.hpp"
 
@@ -64,7 +65,7 @@ namespace hc::sqlite
         ~DocumentView() override;
 
         // 파일 머리를 보고 연결 · 스키마를 연다. 한 번만 부른다(문서 창이 이벤트 루프에서 부른다).
-        void Open();
+        void Open(const ProtectedKey& InitialKey = {});
         Mode ViewMode() const { return mode_; }
         const QString& Path() const { return path_; }
         bool IsBusy() const;

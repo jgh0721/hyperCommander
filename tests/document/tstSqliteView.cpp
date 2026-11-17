@@ -2,16 +2,24 @@
 #include "UniqueLibs/document/documentStorageAdapter.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
+#include "UniqueLibs/document/newSqliteDialog.hpp"
 #include "UniqueLibs/document/sqlite/sqliteConnection.hpp"
 #include "UniqueLibs/document/sqlite/sqliteDocumentView.hpp"
 #include "UniqueLibs/document/sqlite/sqliteGrid.hpp"
 #include "UniqueLibs/document/sqlite/sqliteQueryTab.hpp"
 #include "UniqueLibs/document/sqlite/sqliteResultModel.hpp"
+#include "UniqueLibs/document/sqlite/sqliteFormat.hpp"
+#include "UniqueLibs/document/sqlite/sqliteRuntime.hpp"
 #include "text/ScintillaQtDirectBackend.h"
 
 #include <QAction>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QFile>
 #include <QJsonArray>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
@@ -61,6 +69,107 @@ class SqliteViewTests final : public QObject
 {
     Q_OBJECT
 private slots:
+    void createDatabase_data()
+    {
+        QTest::addColumn<bool>("Hosted");
+        QTest::addColumn<int>("Format");
+        QTest::addColumn<bool>("SaveKey");
+        QTest::newRow("editor-plain") << false << -1 << false;
+        QTest::newRow("viewer-plain") << true << -1 << false;
+        QTest::newRow("editor-see-textkey") << false << int(hc::sqlite::KeyFormat::Text) << false;
+        QTest::newRow("viewer-see-raw-key") << true << int(hc::sqlite::KeyFormat::Raw) << false;
+        QTest::newRow("viewer-see-hexkey-saved") << true << int(hc::sqlite::KeyFormat::Hex) << true;
+    }
+
+    void createDatabase()
+    {
+        QFETCH(bool, Hosted);
+        QFETCH(int, Format);
+        QFETCH(bool, SaveKey);
+        using namespace hc::sqlite;
+        const bool Encrypted = Format >= 0;
+        if (Encrypted && Runtime::See() != SeeState::Available)
+            QSKIP(qPrintable(Runtime::SeeText(Runtime::See())));
+        QTemporaryDir Root;
+        QVERIFY(Root.isValid());
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Root.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        DocumentWorkspaceWidget Window(Root.filePath(QStringLiteral("recovery")), Hosted);
+        Window.resize(960, 780);
+        Window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Window));
+        Window.activateWindow();
+        QTest::keyClick(Window.focusWidget() ? Window.focusWidget() : &Window, Qt::Key_N, Qt::ControlModifier);
+        QPointer<NewDocumentChooser> Chooser;
+        QTRY_VERIFY((Chooser = Window.findChild<NewDocumentChooser*>()));
+        QTest::keyClick(Chooser->focusWidget() ? Chooser->focusWidget() : Chooser.data(), Qt::Key_8);
+        QPointer<NewSqliteDialog> Dialog;
+        QTRY_VERIFY((Dialog = Window.findChild<NewSqliteDialog*>()));
+        QVERIFY(Dialog->findChild<QWidget*>("hc.dialog.header"));
+        auto* Path = Dialog->findChild<QLineEdit*>("newSqlite.path");
+        auto* Encrypt = Dialog->findChild<QCheckBox*>("newSqlite.encrypt");
+        auto* Create = Dialog->findChild<QPushButton*>("newSqlite.create");
+        auto* Status = Dialog->findChild<QLabel*>("newSqlite.message");
+        QVERIFY(Path && Encrypt && Create && Status);
+        QVERIFY(!Encrypt->isChecked());
+
+        if (!Encrypted) {
+            const auto Existing = Root.filePath(QStringLiteral("existing.sqlite3"));
+            QVERIFY(Put(Existing, "original"));
+            Path->setText(Existing);
+            Create->click();
+            QTRY_VERIFY(Create->isEnabled());
+            QVERIFY(!Status->text().isEmpty());
+            QFile Original(Existing);
+            QVERIFY(Original.open(QIODevice::ReadOnly));
+            QCOMPARE(Original.readAll(), QByteArray("original"));
+        } else {
+            QVERIFY(Encrypt->isEnabled());
+            Encrypt->setChecked(true);
+            auto* Formats = Dialog->findChild<QComboBox*>("newSqlite.keyFormat");
+            auto* Key = Dialog->findChild<QLineEdit*>("newSqlite.key");
+            auto* Confirm = Dialog->findChild<QLineEdit*>("newSqlite.confirm");
+            QVERIFY(Formats && Key && Confirm);
+            Formats->setCurrentIndex(Formats->findData(Format));
+            Dialog->findChild<QCheckBox*>("newSqlite.saveKey")->setChecked(SaveKey);
+            Key->setText(QStringLiteral("614243DC89"));
+            Confirm->setText(QStringLiteral("different"));
+            Create->click();
+            QVERIFY(Create->isEnabled());
+            QVERIFY(!Status->text().isEmpty());
+            Confirm->setText(Key->text());
+        }
+
+        const auto Base = Root.filePath(QStringLiteral("새 데이터"));
+        const auto File = Base + QStringLiteral(".sqlite3");
+        Path->setText(Base);
+        QVERIFY(!QFile::exists(File));
+        Create->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!Dialog || Create->isEnabled(), 15000);
+        if (Dialog && Dialog->isVisible()) QFAIL(qPrintable(Status->text()));
+        QPointer<DocumentView> View;
+        QTRY_VERIFY((View = Window.findChild<DocumentView*>()));
+        QTRY_VERIFY(View->IsReady());
+        QVERIFY(!View->IsLocked());
+        QVERIFY(!View->IsReadOnly());
+        QCOMPARE(View->IsEncrypted(), Encrypted);
+        QCOMPARE(View->ViewMode(), Hosted ? DocumentView::Mode::Viewer : DocumentView::Mode::Editor);
+        const auto* Main = View->Schema().Database(QStringLiteral("main"));
+        QVERIFY(Main && Main->objects_.isEmpty());
+        QCOMPARE(InspectFile(File).kind_, Encrypted ? FileKind::SeeEncrypted : FileKind::Plain);
+        QCOMPARE(KeyStore(Root.path()).Find(File).has_value(), SaveKey);
+        if (Encrypted) {
+            QString Error;
+            auto Db = Connection::Open(File, {}, &Error);
+            QVERIFY2(Db, qPrintable(Error));
+            QVERIFY(Db->Probe() != 0);
+            Db = Connection::Open(File, {}, &Error);
+            QVERIFY(Db && Db->ApplyKey("614243DC89", KeyFormat(Format)) == 0);
+            QCOMPARE(Db->Probe(&Error), 0);
+        }
+    }
+
     void classifiesDatabaseFiles()
     {
         QTemporaryDir Root;

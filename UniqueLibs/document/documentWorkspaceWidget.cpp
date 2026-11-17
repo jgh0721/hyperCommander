@@ -15,6 +15,8 @@
 #include "documentRecentMenu.hpp"
 #include "newDocumentChooser.hpp"
 #include "newEpubDialog.hpp"
+#include "newSqliteDialog.hpp"
+#include "UniqueLibs/document/sqlite/sqliteKeyStore.hpp"
 #include "epubRestoreConflictDialog.hpp"
 #include "documentRecoveryMaintenance.hpp"
 #include "recoveryManagerDialog.hpp"
@@ -95,6 +97,7 @@
 #include <QSaveFile>
 #include <QFile>
 #include <QFileInfo>
+#include <QTemporaryFile>
 #include <QDir>
 #include <QJsonArray>
 #include <QUuid>
@@ -193,6 +196,54 @@ namespace hc::document
             QSaveFile File(Path); File.setDirectWriteFallback(false);
             return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size() && File.commit();
         }
+
+        QString CreateSqliteFile(const NewSqliteRequest& Request)
+        {
+            using namespace hc::sqlite;
+            const auto& Path = Request.path_;
+            if (!QFileInfo(Path).dir().exists()) return QObject::tr("저장 위치 폴더를 찾을 수 없습니다.");
+            const auto Occupied = [&] {
+                if (QFileInfo::exists(Path)) return QObject::tr("같은 이름의 파일이 이미 있습니다.");
+                for (const auto Suffix : {"-journal", "-wal", "-shm"})
+                    if (QFileInfo::exists(Path + QLatin1String(Suffix)))
+                        return QObject::tr("같은 이름의 SQLite 보조 파일이 있습니다. 다른 이름을 지정하세요.");
+                return QString{};
+            };
+            if (const auto Error = Occupied(); !Error.isEmpty()) return Error;
+
+            QTemporaryFile Scratch(QDir::temp().filePath(QStringLiteral("hyper-sqlite-XXXXXX")));
+            if (!Scratch.open()) return Scratch.errorString();
+            Scratch.close();
+            QString Error;
+            auto Db = Connection::Open(Scratch.fileName(), {}, &Error);
+            if (!Db) return Error;
+            const bool Encrypted = !Request.key_.bytes_.isEmpty();
+            if (Encrypted && !ApplyProtectedKey(*Db, Request.key_.bytes_, Request.key_.format_, &Error))
+                return Error;
+            // SQLite는 파일을 열기만 하면 0바이트로 둔다. VACUUM으로 빈 스키마의 첫 페이지를 쓴다.
+            if (!Db->Exec(QStringLiteral("VACUUM"), &Error)) return Error;
+            Db.reset();
+
+            QFile File(Scratch.fileName());
+            if (!File.open(QIODevice::ReadOnly)) return File.errorString();
+            const auto Bytes = File.readAll();
+            if (File.error() != QFileDevice::NoError) return File.errorString();
+            if (InspectHeader(Bytes, Bytes.size()).kind_ != (Encrypted ? FileKind::SeeEncrypted : FileKind::Plain))
+                return QObject::tr("생성한 데이터베이스의 헤더 또는 암호화 상태가 올바르지 않습니다.");
+            if (const auto Problem = Occupied(); !Problem.isEmpty()) return Problem;
+            auto Saved = SaveTextFile(Path, Bytes, storage::DestinationExpectation{}, {}, {}, false, true);
+            if (!Saved.HasValue()) {
+                if (const auto Problem = Occupied(); !Problem.isEmpty()) return Problem;
+                return Message(QString::fromStdString(Saved.Failure().code_));
+            }
+            return {};
+        }
+
+        struct NewSqliteResult
+        {
+            QString error_;
+            bool keySaved_ = true;
+        };
         void RefreshWorkspaceIcons(QWidget& Workspace)
         {
             ThemeManager::instance().setTheme(fm::style::isDarkVariant(fm::style::ThemeManager::instance().effectiveVariant())
@@ -251,6 +302,7 @@ namespace hc::document
         QString readingPath_,readingEntry_, recoveryNotice_;
         QString navigationAfterSave_;
         QByteArray pendingHash_;
+        sqlite::ProtectedKey newSqliteKey_;
         std::shared_ptr<LocalSave> activeSave_, queuedSave_;
         bool composingSave_ = false;
         std::uint64_t checkpointedRevision_ = std::numeric_limits<std::uint64_t>::max();
@@ -676,7 +728,7 @@ namespace hc::document
         const quint32 Saving = All & ~Reading;
         // 파일
         fileMenu_ = menu_->addMenu(tr("파일(&F)")); fileMenu_->setObjectName("documentFileMenu");
-        if (!hosted_) fileMenu_->addAction(scoped(A("newDocument"), Of({K::None, K::Text, K::MarkdownPreview, K::RstPreview, K::MarkdownEdit, K::RstEdit, K::EpubRead, K::EpubEdit})));
+        if (!hosted_) fileMenu_->addAction(scoped(A("newDocument"), Of({K::None, K::Text, K::MarkdownPreview, K::RstPreview, K::MarkdownEdit, K::RstEdit, K::EpubRead, K::EpubEdit, K::Sqlite})));
         fileMenu_->addAction(A("openDocument"));
         if (!hosted_) fileMenu_->addAction(A("workspace.openFolder"));
         fileMenu_->addAction(scoped(A("reloadDocument"), Documents));
@@ -1162,6 +1214,11 @@ namespace hc::document
             showNewSphinxProjectDialog(); return {{"accepted", true}};
         }
         if ((!hosted_ && documents_.size() >= 16) || (!tabbed_ && !documents_.empty())) return Error("document-workspace-limit");
+        if (Kind == NewDocumentKind::Sqlite) {
+            if (property("hc.quickPreview").toBool() || closingWorkspace_) return Error("document-edit-unavailable");
+            showNewSqliteDialog();
+            return {{"accepted", true}};
+        }
         const bool Markdown = Kind == NewDocumentKind::Markdown, Rst = Kind == NewDocumentKind::Rst;
         // The GUID only keeps recovery files apart; the tab shows "새 문서 N" (documentName()).
         const auto Path = recoveryRoot_ + "/untitled-" + QUuid::createUuid().toString(QUuid::Id128) + (Markdown ? ".md" : Rst ? ".rst" : ".txt");
@@ -1257,6 +1314,7 @@ namespace hc::document
         NewDocumentChooser::Options Options;
         Options.initial_ = NewDocumentKindFrom(Settings.value("common/newDocumentLastKind").toString());
         Options.viewer_ = hosted_; Options.repeatKey_ = Repeat;
+        Options.offerSqlite_ = !property("hc.quickPreview").toBool();
         Options.nextDocument_ = nextUntitledNumber(false); Options.nextImage_ = nextUntitledNumber(true);
         chooser_ = new NewDocumentChooser(this, Options);
         connect(chooser_, &NewDocumentChooser::Chosen, this, [this](NewDocumentKind Kind) {
@@ -1267,6 +1325,54 @@ namespace hc::document
             if (Result.contains("error")) ShowShellError(Message(Result["error"].toString()));
         });
         chooser_->open();
+    }
+    void DocumentWorkspaceWidget::showNewSqliteDialog()
+    {
+        if (auto* Open = findChild<NewSqliteDialog*>(QString(), Qt::FindDirectChildrenOnly); Open && Open->isVisible()) {
+            Open->raise(); Open->activateWindow(); return;
+        }
+        AppSettings Settings;
+        QString Folder;
+        if (auto Tab = active(); Tab && Tab->originalAuthority_ && Tab->temporarySource_.isEmpty() && !Tab->broker_ && QFileInfo(Tab->path_).isAbsolute())
+            Folder = QFileInfo(Tab->path_).absolutePath();
+        if (!QFileInfo(Folder).isDir()) Folder = workspaceRoot_;
+        if (!QFileInfo(Folder).isDir()) Folder = Settings.value("common/lastSaveFolder").toString();
+        if (!QFileInfo(Folder).isDir()) Folder = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        const auto Format = Settings.value("sqlite/see/keyFormat").toString();
+        const auto Profile = QFileInfo(Settings.fileName()).absolutePath();
+        auto* Dialog = new NewSqliteDialog(this, Folder,
+            Format == "hexkey" ? sqlite::KeyFormat::Hex : Format == "key" ? sqlite::KeyFormat::Raw : sqlite::KeyFormat::Text,
+            Settings.value("sqlite/see/saveByDefault").toBool());
+        connect(Dialog, &NewSqliteDialog::Requested, this, [this, Dialog, Profile](const NewSqliteRequest& Request) {
+            sqliteCreating_ = true;
+            auto* Watcher = new QFutureWatcher<NewSqliteResult>(this);
+            connect(Watcher, &QFutureWatcherBase::finished, this, [this, Dialog, Watcher, Request] {
+                const auto Result = Watcher->result();
+                Watcher->deleteLater();
+                sqliteCreating_ = false;
+                if (closingWorkspace_ || hotExitClosing_) {
+                    Dialog->done(QDialog::Rejected);
+                    tryFinishClose();
+                    return;
+                }
+                if (!Result.error_.isEmpty()) {
+                    Dialog->ShowError(tr("데이터베이스를 만들지 못했습니다. %1").arg(Result.error_));
+                    return;
+                }
+                Dialog->done(QDialog::Accepted);
+                const auto Reply = open(Request.path_, false, {}, false);
+                if (auto Tab = find(Reply["documentId"].toString())) Tab->newSqliteKey_ = Request.key_;
+                else ShowShellError(tr("데이터베이스를 만들었습니다. %1").arg(Message(Reply["error"].toString())));
+                if (!Result.keySaved_) ShowShellError(tr("데이터베이스를 만들었지만 이 PC에 키를 저장하지 못했습니다."));
+            });
+            Watcher->setFuture(QtConcurrent::run([Request, Profile] {
+                NewSqliteResult Result{CreateSqliteFile(Request)};
+                if (Result.error_.isEmpty() && Request.saveKey_)
+                    Result.keySaved_ = sqlite::KeyStore(Profile).SaveProtected(Request.path_, Request.key_);
+                return Result;
+            }));
+        });
+        Dialog->open();
     }
     void DocumentWorkspaceWidget::showNewImageDialog()
     {
@@ -1537,7 +1643,7 @@ namespace hc::document
     void DocumentWorkspaceWidget::ShowShellError(const QString& Message) { shellError_ = Message; update(); }
     bool DocumentWorkspaceWidget::IsIdle() const
     {
-        return (!searchPanel_ || !searchPanel_->Busy()) && !recoveryWorkers_ && std::none_of(documents_.begin(), documents_.end(), [](const auto& Tab) {
+        return !sqliteCreating_ && (!searchPanel_ || !searchPanel_->Busy()) && !recoveryWorkers_ && std::none_of(documents_.begin(), documents_.end(), [](const auto& Tab) {
             return Tab->archiveUpdating_ || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || Tab->comparingText_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
         });
     }
@@ -1877,7 +1983,8 @@ namespace hc::document
                 Tab->pane_->SetReadingSource(Tab->readingPath_,Tab->readingEntry_);
                 Tab->pane_->ConfigureHwp(hwpRuntime_);
                 if (Tab->input_.viewId_ == "epub") Tab->pane_->ConfigureEpub(epubRuntime_ ? *epubRuntime_ : MakeProductEpubRuntime(QCoreApplication::applicationDirPath()),!hosted_);
-                const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_,!hosted_||!Tab->temporarySource_.isEmpty());
+                const auto SqliteKey = std::exchange(Tab->newSqliteKey_, {});
+                const bool Loaded=Tab->pane_->Load(Tab->input_,Tab->originalAuthority_,!hosted_||!Tab->temporarySource_.isEmpty(),&SqliteKey);
                 Tab->loading_=false;
                 if(!Loaded){Tab->session_->CompleteOpen(Generation,storage::Error{storage::ErrorCategory::InvalidRequest,"document-view-load"});Tab->error_="document-view-load";finishProgress(Tab,false,Tab->error_);}
                 else {

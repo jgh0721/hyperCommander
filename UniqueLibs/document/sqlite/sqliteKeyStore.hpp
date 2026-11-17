@@ -12,6 +12,12 @@
 
 namespace hc::sqlite
 {
+    struct ProtectedKey
+    {
+        QByteArray bytes_;
+        KeyFormat format_ = KeyFormat::Text;
+    };
+
     // 메모리의 키를 지운다(SecureZeroMemory, 설계 8.3).
     void WipeKey(QByteArray& Key);
     // DPAPI(CryptProtectData, 현재 사용자)로 감싸고 푼다. 실패하면 빈 값.
@@ -46,6 +52,7 @@ namespace hc::sqlite
         // 경로가 같은 항목, 없으면 파일 ID 가 같은 항목(경로를 고쳐 둔다).
         std::optional<Entry> Find(const QString& Path);
         bool Save(const QString& Path, const QByteArray& Key, KeyFormat Format);
+        bool SaveProtected(const QString& Path, const ProtectedKey& Key);
         bool Touch(const QString& Path);
         bool Remove(const QString& Path);
         bool ChangePath(const QString& From, const QString& To);

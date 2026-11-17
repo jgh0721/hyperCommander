@@ -141,7 +141,7 @@ namespace hc::document
         if(reading_&&!reading_->isHidden()&&reading_->State()["pageCount"].toInt()>0&&!Path.isEmpty()&&reading_->State()["book"].toString()!=Path)
             reading_->OpenPath(Path,Entry);
     }
-    bool DocumentViewPane::Load(const TextInput& Input,bool Traverse,bool ImageEditing)
+    bool DocumentViewPane::Load(const TextInput& Input,bool Traverse,bool ImageEditing,const sqlite::ProtectedKey* SqliteKey)
     {
         textSnapshot_.reset();
         auto* Prefix = HasTextLoadingPreview() ? static_cast<QPlainTextEdit*>(textLoadingPreview_) : nullptr;
@@ -279,7 +279,7 @@ namespace hc::document
             connect(sqlite_,&SqliteView::StateChanged,this,&DocumentViewPane::ViewStateChanged);
             connect(sqlite_,&SqliteView::CopyRequested,this,[this]{emit ClipboardRequested("copy");});
             connect(sqlite_,&SqliteView::SettingsRequested,this,[this](const QString& Page){emit WorkspaceCommandRequested(Page=="sqlite-keys"?"app.settings.sqliteKeys":"app.settings.sqlite");});
-            QTimer::singleShot(0,sqlite_,&SqliteView::Open);
+            QTimer::singleShot(0,sqlite_,[View=sqlite_, Key=SqliteKey?*SqliteKey:sqlite::ProtectedKey{}]{View->Open(Key);});
             return true;
         }
         bool Success=true;

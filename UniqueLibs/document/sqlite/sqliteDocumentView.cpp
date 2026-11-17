@@ -499,7 +499,7 @@ namespace hc::sqlite
         stack_->setCurrentWidget(failure_);
     }
 
-    void DocumentView::Open()
+    void DocumentView::Open(const ProtectedKey& InitialKey)
     {
         if (opened_) return;
         opened_ = true;
@@ -520,8 +520,13 @@ namespace hc::sqlite
             if (schemaPanel_) schemaPanel_->SetLocked(true);
             if (Runtime::See() != SeeState::Available) {
                 if (auto* Text = findChild<QLabel*>(QStringLiteral("sqliteLockText"))) Text->setText(Text->text() + QStringLiteral("\n") + Runtime::SeeText(Runtime::See()));
-            } else if (!tryStoredKey() && mode_ != Mode::QuickPreview) {
-                keyButton_->show();
+            } else {
+                if (!InitialKey.bytes_.isEmpty() && mode_ != Mode::QuickPreview) {
+                    auto Key = RevealKey(InitialKey.bytes_);
+                    if (!Key.isEmpty()) tryKey(Key, InitialKey.format_, false);
+                    WipeKey(Key);
+                }
+                if (locked_ && !tryStoredKey() && mode_ != Mode::QuickPreview) keyButton_->show();
             }
             break;
         case FileKind::Plain:
