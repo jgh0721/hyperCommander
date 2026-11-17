@@ -1,6 +1,8 @@
 ﻿#include "rstTestRunner.hpp"
 
 #include "rstOutlineService.hpp"
+#include "rstOutlineModel.hpp"
+#include <QAbstractItemModelTester>
 #include "text/RstStructure.h"
 #include "text/RstContainerLexer.h"
 #include "text/MarkdownStructure.h"
@@ -38,6 +40,8 @@ class TestRstOutline : public QObject
 
 private slots:
     void emptyTextHasNoSymbols();
+    void virtualOutlinePreservesHierarchyDepthAndFilter();
+    void virtualOutlineFindsCaretInLargeDocument();
     void findsUnderlineHeadings();
     /// docutils 는 밑줄 문자의 의미를 문서 안에서 **처음 나온 순서** 로 정한다.
     /// 고정 표(= 는 1단계, - 는 2단계 …)를 쓰면 문서마다 틀린다.
@@ -272,6 +276,43 @@ void TestRstOutline::mixedLineIndexPreservesOffsets()
     QCOMPARE(lines.line(2), std::string_view("c"));
     QCOMPARE(lines.line(3), std::string_view("d"));
     QVERIFY(lines.line(4).empty());
+}
+
+void TestRstOutline::virtualOutlinePreservesHierarchyDepthAndFilter()
+{
+    OutlineSymbol Root; Root.name = "parent"; Root.path = "book.rst"; Root.line = 10;
+    OutlineSymbol Child; Child.name = "child"; Child.path = Root.path; Child.line = 20; Root.children.append(Child);
+    OutlineSymbol Other; Other.name = "other"; Other.path = Root.path; Other.line = 100;
+    OutlineModel Model;
+    QAbstractItemModelTester Tester(&Model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+    Model.Publish(OutlineModel::Prepare({Root, Other}, 0, {}));
+    QCOMPARE(Model.rowCount(), 2); const auto Parent = Model.index(0, 0);
+    QCOMPARE(Model.rowCount(Parent), 1); QCOMPARE(Model.parent(Model.index(0, 0, Parent)), Parent);
+    QCOMPARE(Model.IndexForLine(30).data().toString(), QString("child"));
+    QVERIFY(!Model.IndexForLine(5).isValid());
+    Model.Publish(OutlineModel::Prepare({Root, Other}, 1, {}));
+    QCOMPARE(Model.rowCount(Model.index(0, 0)), 0);
+    QCOMPARE(Model.IndexForLine(30).data(OutlineModel::LineRole).toInt(), 10);
+    Model.Publish(OutlineModel::Prepare({Root, Other}, 0, "child"));
+    QCOMPARE(Model.rowCount(), 1); QCOMPARE(Model.rowCount(Model.index(0, 0)), 1);
+    QCOMPARE(Model.IndexForLine(100).data().toString(), QString("child"));
+    Model.Publish(OutlineModel::Prepare({}, 0, {}));
+    QCOMPARE(Model.rowCount(), 1); QVERIFY(!(Model.flags(Model.index(0, 0)) & Qt::ItemIsEnabled));
+}
+void TestRstOutline::virtualOutlineFindsCaretInLargeDocument()
+{
+    QVector<OutlineSymbol> Symbols; Symbols.reserve(100000);
+    for (int At = 99999; At >= 0; --At) {
+        OutlineSymbol Entry; Entry.name = QString::number(At); Entry.line = At * 5 + 1; Entry.path = "large.rst";
+        Symbols.append(std::move(Entry));
+    }
+    OutlineModel Model; Model.Publish(OutlineModel::Prepare(Symbols, 0, {}));
+    QCOMPARE(Model.rowCount(), 100000);
+    for (int At = 0; At < 100000; At += 7) {
+        const auto Index = Model.IndexForLine(At * 5 + 3);
+        QCOMPARE(Index.row(), 99999 - At); QCOMPARE(Index.data().toString(), QString::number(At));
+        QCOMPARE(Index.data(OutlineModel::LineRole).toInt(), At * 5 + 1);
+    }
 }
 
 HC_RST_REGISTER_TEST( TestRstOutline );

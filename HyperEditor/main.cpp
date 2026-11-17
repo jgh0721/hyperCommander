@@ -23,6 +23,7 @@
 #include "commonLibs/document/epub/epubAppearance.hpp"
 #include "UniqueLibs/document/hwpStartupTrace.hpp"
 #include "UniqueLibs/document/documentStallTrace.hpp"
+#include "UniqueLibs/startupTrace.hpp"
 #include "hwpProductPolicy.hpp"
 #include "UniqueLibs/document/hwpOpenWindow.hpp"
 #include <QApplication>
@@ -172,7 +173,9 @@ int main(int Argc, char** Argv)
             hc::document::startup::Write(Trace,"editor",QCoreApplication::applicationPid());
         });
         Window.show(); QTimer::singleShot(0, &Window, &hc::document::HwpOpenWindow::Open);
-        return App.exec();
+        const int Result = App.exec();
+        hc::startup::Flush();
+        return Result;
     }
     QObject::connect(&App, &QCoreApplication::aboutToQuit, &App, [] { hc::document::startup::Write(hc::document::startup::Data().Snapshot(), "editor", QCoreApplication::applicationPid()); });
     hc::document::startup::Scope InstanceTrace("editor.instance");
@@ -420,5 +423,7 @@ int main(int Argc, char** Argv)
             hc::scratch::RunStartupCleanup({hc::defaults::edit::HwpCacheDirectory()}, QDir(hc::defaults::edit::RstRuntimeDirectory()).filePath("shadow"));
         });
     });
-    return App.exec();
+    const int Result = App.exec();
+    hc::startup::Flush();
+    return Result;
 }

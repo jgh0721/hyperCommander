@@ -89,6 +89,20 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int)
             if(!CreateProcessW(Program,Command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&Startup,&Process)) Reply="failed";
             else { Reply=std::to_string(Process.dwProcessId); CloseHandle(Process.hProcess); CloseHandle(Process.hThread); }
         }
+        if(Request=="nested-token")
+        {
+            // Chromium duplicates the broker's token before creating its renderer.
+            // Exercise access through a real self-process handle, including when
+            // the owner was elevated and its Administrators SID is deny-only here.
+            HANDLE Self=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,GetCurrentProcessId());
+            HANDLE Token=nullptr, Restricted=nullptr;
+            const bool Ok=Self && OpenProcessToken(Self,TOKEN_QUERY|TOKEN_DUPLICATE,&Token)
+                && CreateRestrictedToken(Token,DISABLE_MAX_PRIVILEGE,0,nullptr,0,nullptr,0,nullptr,&Restricted);
+            Reply=Ok?"restricted":"failed:"+std::to_string(GetLastError());
+            if(Restricted)CloseHandle(Restricted);
+            if(Token)CloseHandle(Token);
+            if(Self)CloseHandle(Self);
+        }
         if(Request=="environment")
         {
             wchar_t Value[16]{}; Reply=GetEnvironmentVariableW(L"HC_TEST_SECRET",Value,16)?"leaked":"clean";

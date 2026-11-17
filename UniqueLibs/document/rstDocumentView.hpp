@@ -43,6 +43,7 @@ class QTabWidget;
 class QTextView;
 class QToolBar;
 class QTreeWidget;
+class QTreeView;
 class QTreeWidgetItem;
 
 namespace fm::ui
@@ -53,6 +54,7 @@ namespace fm::ui
 
 namespace hc::rst
 {
+    class OutlineModel;
     class RstEditor;
     class WorkspaceController;
 }
@@ -167,7 +169,7 @@ namespace hc::document
         void                            addOutlineSymbols( QTreeWidgetItem* Parent, QTreeWidget* Tree,
                                                            const QVector< hc::rst::OutlineSymbol >& Symbols, int Depth );
         void                            activateOutlineItem( QTreeWidgetItem* Item );
-        void                            showOutlineMenu( QTreeWidget* Tree, const QPoint& Position );
+        void                            showOutlineMenu( QTreeView* Tree, const QPoint& Position );
         void                            markCurrentOutlineItem();
 
         // 진단 · 로그
@@ -208,7 +210,11 @@ namespace hc::document
         QSplitter*                      vertical_ = nullptr;      // 위 | 진단 패널
         QWidget*                        outlinePanel_ = nullptr;
         QTabWidget*                     outlineTabs_ = nullptr;
-        QTreeWidget*                    outlineDocument_ = nullptr;
+        QTreeView*                      outlineDocument_ = nullptr;
+        hc::rst::OutlineModel*          outlineModel_ = nullptr;
+        quint64                         outlineGeneration_ = 0;
+        bool                            outlineBuilding_ = false;
+        QString                         outlineFilter_;
         QTreeWidget*                    outlineProject_ = nullptr;
         QWidget*                        previewPanel_ = nullptr;
         QStackedWidget*                 previewStack_ = nullptr;

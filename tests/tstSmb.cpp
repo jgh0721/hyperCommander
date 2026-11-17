@@ -1,4 +1,6 @@
 ﻿#include "stdafx.h"
+#include "UniqueLibs/inputGate.hpp"
+#include <QShortcut>
 #include "UniqueLibs/wcxStorage.hpp"
 #include "UniqueLibs/ProductContants.hpp"
 #include "pluginHost/pluginProcess.hpp"
@@ -9,6 +11,8 @@
 #include "UniqueLibs/archive/creationDialog.hpp"
 #include "msiBrowseFixture.hpp"
 #include "nativeTestInput.hpp"
+#include "UniqueLibs/startupTrace.hpp"
+#include <QAbstractNativeEventFilter>
 #include "UniqueLibs/fileDragMime.hpp"
 #include "UniqueLibs/qtJobJournal.hpp"
 #include "UniqueLibs/operationMetrics.hpp"
@@ -425,6 +429,8 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnProfileGroupingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnRealDownloadsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "downloadsGroupingInputUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "downloadsBackgroundRefreshFocusUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "gridPopulationSortCacheUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewRefreshInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewCloseTabUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewSortModeUi"
@@ -441,6 +447,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "realWlxQuickPreviewUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "quickPreviewIndependentDocumentUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "quickPreviewKeyboardReturnUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "navigationUpdateAfterShortcutUi"
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("filePanelGrouping"), "Local UI mode cannot execute an SMB scenario");
         }
     }
@@ -6079,7 +6086,8 @@ private slots:
     void downloadsGroupingInputUi_data()
     {
         QTest::addColumn<bool>("Streaming");
-        QTest::newRow("settled") << false;   // keys after the cursor settled: none may be dropped
+        if (!qEnvironmentVariableIsSet("HC_INPUT_FLOOD_STREAM_ONLY"))
+            QTest::newRow("settled") << false;   // keys after the cursor settled: none may be dropped
         QTest::newRow("streaming") << true;  // keys while zone and color results arrive: none may queue
     }
     void downloadsGroupingInputUi()
@@ -6088,6 +6096,12 @@ private slots:
         // Qtitan's focused group row primitive is hidden by those relayouts (HC-QTN-012); real keyboard
         // input must still move the cursor, and must not wait behind streamed results in the queue.
         QFETCH(bool, Streaming);
+        const auto FlushInputTrace = qScopeGuard([] { hc::startup::Flush(); });
+        // Native input has its own probes below. Startup color/readiness validation
+        // on every paint would add unrelated work to this sustained-input measurement.
+        const bool PreviousStartupDone = hc::startup::Data().done_;
+        if (hc::startup::Enabled() && qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM")) hc::startup::Data().done_ = true;
+        const auto RestoreStartupProbe = qScopeGuard([&] { hc::startup::Data().done_ = PreviousStartupDone; });
         using namespace hc::columns; using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
@@ -6100,8 +6114,8 @@ private slots:
             : qEnvironmentVariableIsSet("HC_INPUT_FLOOD_COUNT") ? qEnvironmentVariableIntValue("HC_INPUT_FLOOD_COUNT") : 3000;
         const auto Now = QDateTime::currentDateTime();
         for (int Index = 0; !Real && Index < Count; ++Index) {
-            const auto Path = Directory.filePath(QString("d%1.bin").arg(Index, 5, 10, QChar('0')));
-            { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("x"); }
+            const auto Path = Directory.filePath(QString("d%1.txt").arg(Index, 5, 10, QChar('0')));
+            { QFile File(Path); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("cursor latency fixture\r\n"); }
             if (Index % 3 == 0) { QFile Marker(Path + ":Zone.Identifier"); QVERIFY(Marker.open(QIODevice::WriteOnly)); Marker.write("[ZoneTransfer]\r\nZoneId=3\r\n"); }
             // Spread over a year so every relative-date bucket is present.
             QFile File(Path); QVERIFY(File.open(QIODevice::Append)); QVERIFY(File.setFileTime(Now.addSecs(-qint64(Index) * 3 * 3600), QFileDevice::FileModificationTime));
@@ -6110,7 +6124,13 @@ private slots:
         QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit());
         auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel");
         auto* View = static_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()));
-        View->SetAutomaticColumns(false); QVERIFY(View->ApplyColumnProfile(DownloadsProfile()));
+        auto Profile=DownloadsProfile();
+        // The default zone column is hidden. Force it visible in the overlap case
+        // so each retry requests new values through the real display path, rather
+        // than depending on a deferred colour-viewport notification to queue them.
+        if(qEnvironmentVariableIsSet("HC_INPUT_FLOOD_OVERLAP") || qEnvironmentVariableIsSet("HC_INPUT_FLOOD_SHOW_ZONE"))
+            for(auto& Column:Profile.columns_)if(Column.fieldId_=="file.alternateDataStream.zone")for(auto& Width:Column.widths_)Width.hidden_=false;
+        View->SetAutomaticColumns(false); QVERIFY(View->ApplyColumnProfile(Profile));
         auto* Grid = View->findChild<Qtitan::Grid*>()->view<Qtitan::GridBandedTableView>();
         auto* Model = qobject_cast<CFSModel*>(View->BaseModel()); QVERIFY(Model);
         QElapsedTimer Clock; Clock.start();
@@ -6138,6 +6158,7 @@ private slots:
         // A desktop in use can refuse foreground ownership. Then the key messages go to this window's
         // queue only, so no other application receives them.
         const bool Foreground = ActivateTestWindow(Window);
+        if (qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM")) QVERIFY(Foreground);
         View->EnsureKeyboardFocusOnView();
         qInfo() << "input-flood mode" << (Foreground ? "SendInput" : "postEvent") << (Real ? "real-downloads" : "fixture") << "entries" << Count;
         const auto Describe = [&](int Position) {
@@ -6147,6 +6168,53 @@ private slots:
             const auto Name = Row.modelIndex(0).data().toString();
             return QString("data:%1").arg(Name == ".." ? Name : QString("entry"));
         };
+        const bool Preview = Streaming && qEnvironmentVariableIsSet("HC_INPUT_FLOOD_PREVIEW");
+        auto* PreviewHost = Preview ? static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")) : nullptr;
+        const auto RetirePreview = qScopeGuard([&] {
+            if (!PreviewHost) return;
+            PreviewHost->CloseAll(); QElapsedTimer Wait; Wait.start();
+            while (!PreviewHost->IsIdle() && Wait.elapsed() < 15000) QTest::qWait(20);
+        });
+        if (Preview) {
+            QVERIFY(PreviewHost);
+            // Finish initial projection before opening the preview; fresh queries
+            // below deliberately overlap the measured keys after it becomes ready.
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->PendingColumnQueries() == 0, 30000);
+            QTest::qWait(250);
+            QModelIndex Index;
+            const auto FocusFile = [&] {
+                for (int Row = 0; Row < Grid->modelController()->getGridRowCount(); ++Row) {
+                    if(Grid->getRow(Row).type()==Qtitan::GridRow::GroupRow)continue;
+                    Grid->setFocusedRowIndex(Row);
+                    auto Candidate = Grid->focusedRow().modelIndex(0);
+                    while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Candidate.model())) Candidate = Proxy->mapToSource(Candidate);
+                    if (Candidate.model() == Model && !Model->GetName(Candidate).isEmpty() && Model->GetName(Candidate) != "..") {
+                        Index = Candidate; return true;
+                    }
+                }
+                return false;
+            };
+            QTRY_VERIFY_WITH_TIMEOUT(FocusFile(), 10000);
+            QVERIFY(Index.isValid()); Panel->sig_NotifyPanelActivated();
+            auto Future = TyStCommandMgr::GetInstance()->Bridge()->Dispatch("hc.viewer.quick", {}, "test", Index);
+            QTRY_VERIFY_WITH_TIMEOUT(Future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 10000);
+            QVERIFY(Future.get().HasValue());
+            auto* Other = main_->findChild<CmpPanel*>("cmpRightPanel"); QVERIFY(Other);
+            auto* Quick = qobject_cast<CQuickView*>(Other->GetFocusView(Other->CurrentTabIndex())); QVERIFY(Quick);
+            QTRY_VERIFY_WITH_TIMEOUT(Quick->findChild<QtPluginViewerSurface*>(), 10000);
+            const bool PreviewReady = QTest::qWaitFor([&] {
+                const auto* Surface = Quick->findChild<QtPluginViewerSurface*>(); return Surface && Surface->IsReady();
+            }, 30000);
+            if (!PreviewReady) {
+                if (const auto* Surface = Quick->findChild<QtPluginViewerSurface*>()) {
+                    qInfo() << "input-flood preview-focus" << Grid->focusedRowIndex() << Describe(Grid->focusedRowIndex());
+                    qInfo() << "input-flood preview-state" << Surface->Details().documentState_;
+                    for (const auto* Label : Quick->findChildren<QLabel*>()) qInfo() << Label->objectName() << Label->text();
+                }
+            }
+            QVERIFY(PreviewReady);
+            View->EnsureKeyboardFocusOnView();
+        }
         // Qtitan routes keys through its focused graphic primitive; a null one drops them silently.
         auto* Control = dynamic_cast<Qtitan::GraphicControl*>(View->findChild<Qtitan::Grid*>()->viewport()); QVERIFY(Control);
         const auto Primitives = [&] {
@@ -6158,7 +6226,36 @@ private slots:
         // Window activation alone delays the first key by about 150 ms, with or without results.
         // Let it finish; zone and color results keep arriving for about half a second after this.
         if (Streaming) { QTRY_VERIFY(QApplication::activeWindow() == main_); QTest::qWait(200); }
-        const bool StillStreaming = !Status.isEmpty();
+        const bool ForceOverlap = Streaming && qEnvironmentVariableIsSet("HC_INPUT_FLOOD_OVERLAP");
+        const auto QueueFreshValues = [&] {
+            hc::startup::Span Trace("input.commander.requery");
+            QSignalSpy Changed(Model, &QAbstractItemModel::dataChanged);
+            Model->ResumeColumnQueries();
+            // A zone retry must not invalidate the unchanged date/name snapshot columns
+            // or publish new sort ranks; that would synchronously rebuild the grouped grid.
+            for (const auto& Notification : Changed) {
+                const auto Roles = qvariant_cast<QList<int>>(Notification[2]);
+                QVERIFY(!Roles.contains(CFSModel::GridSortRole));
+                if (Roles.isEmpty() || Roles.contains(Qt::DisplayRole)) {
+                    QCOMPARE(qvariant_cast<QModelIndex>(Notification[0]).column(), Model->columnCount() - 1);
+                    QCOMPARE(qvariant_cast<QModelIndex>(Notification[1]).column(), Model->columnCount() - 1);
+                }
+            }
+            // Populate the visible/ahead window synchronously, without pumping completions.
+            // The first native key must overlap pending work instead of arriving after activation drained it.
+            hc::startup::Span Probe("input.commander.queueZoneValues");
+            // DownloadsProfile's final column is the queried zone field. Formatting every
+            // unrelated metadata cell here would add artificial synchronous work to the probe.
+            for (int Row = 0; Row < qMin(256, Model->rowCount()); ++Row)
+                (void)Model->data(Model->index(Row, Model->columnCount() - 1), Qt::DisplayRole);
+            if(!Model->PendingColumnQueries()) {
+                const auto Profile=View->ColumnProfile();
+                qInfo()<<"requery-empty"<<"loading"<<Model->IsLoading()<<"rows"<<Model->rowCount()<<"columns"<<Model->columnCount()<<"profile"<<Profile.id_<<"mode"<<int(Profile.mode_)<<"jobs"<<Model->ColumnQueryJobs();
+                for(const auto& Column:Profile.columns_)qInfo()<<"requery-column"<<Column.id_<<Column.fieldId_<<Column.widths_[int(Profile.mode_)].hidden_;
+            }
+        };
+        if (ForceOverlap) { QueueFreshValues(); QVERIFY(Model->PendingColumnQueries() > 0); }
+        const bool StillStreaming = Model->PendingColumnQueries() > 0;
         if (!Streaming) { QElapsedTimer Settle, Stable; Settle.start(); Stable.start(); int Last = Grid->focusedRowIndex();
           while (Settle.elapsed() < 10000 && Stable.elapsed() < 500) { QTest::qWait(10); if (Grid->focusedRowIndex() != Last) { Last = Grid->focusedRowIndex(); Stable.restart(); } } }
         qInfo() << "input-flood before keys row" << Grid->focusedRowIndex() << Describe(Grid->focusedRowIndex()) << Primitives();
@@ -6168,11 +6265,79 @@ private slots:
             bool eventFilter(QObject*, QEvent* Event) override { if (Event->type() == QEvent::KeyPress && !at_) at_ = clock_->nsecsElapsed(); return false; }
         } Arrival; Arrival.clock_ = &Clock; qApp->installEventFilter(&Arrival);
         const auto RemoveArrival = qScopeGuard([&] { qApp->removeEventFilter(&Arrival); });
+        struct NativeArrival final : QAbstractNativeEventFilter {
+            bool arrived_ = false; QElapsedTimer* clock_ = nullptr; qint64 at_ = 0;
+            int index_ = -1;
+            bool nativeEventFilter(const QByteArray&, void* Message, qintptr*) override {
+                const auto* Msg = static_cast<const MSG*>(Message);
+                if (Msg->message == WM_KEYDOWN && Msg->wParam == VK_DOWN && !arrived_) { arrived_ = true; at_ = clock_->nsecsElapsed(); }
+                if (hc::startup::Enabled() && (Msg->message == WM_SETFOCUS || Msg->message == WM_KILLFOCUS
+                    || Msg->message == WM_ACTIVATE || (Msg->message == WM_KEYDOWN && Msg->wParam == VK_DOWN)))
+                    hc::startup::Record("input.commander.nativeMessage", {{"index", index_}, {"message", int(Msg->message)},
+                        {"hwnd", QString::number(quintptr(Msg->hwnd))}, {"focus", QString::number(quintptr(GetFocus()))},
+                        {"foreground", QString::number(quintptr(GetForegroundWindow()))}});
+                return false;
+            }
+        } NativeProbe; NativeProbe.clock_ = &Clock;
+        qApp->installNativeEventFilter(&NativeProbe);
+        const auto RemoveNativeProbe = qScopeGuard([&] { qApp->removeNativeEventFilter(&NativeProbe); });
+        const auto ForegroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+            [](HWINEVENTHOOK, DWORD, HWND Window, LONG, LONG, DWORD, DWORD) {
+                if (!hc::startup::Enabled()) return;
+                DWORD OwnerId = 0; GetWindowThreadProcessId(Window, &OwnerId);
+                QString OwnerName;
+                if (const auto Process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, OwnerId)) {
+                    wchar_t Path[1024]{}; DWORD Length = DWORD(std::size(Path));
+                    if (QueryFullProcessImageNameW(Process, 0, Path, &Length)) OwnerName = QFileInfo(QString::fromWCharArray(Path, int(Length))).fileName();
+                    CloseHandle(Process);
+                }
+                hc::startup::Record("input.commander.foreground", {{"hwnd", QString::number(quintptr(Window))},
+                    {"pid", int(OwnerId)}, {"process", OwnerName}});
+            }, 0, 0, WINEVENT_OUTOFCONTEXT);
+        const auto RemoveForegroundHook = qScopeGuard([&] { if (ForegroundHook) UnhookWinEvent(ForegroundHook); });
         Heartbeat.start();
-        QList<qint64> Latency, Arrived; int Lost = 0;
-        for (int Press = 0; Press < 6; ++Press) {
+        QList<qint64> Latency, Arrived, NativeTimes, QtDelivery; int Lost = 0, PendingKeys = 0, NullFocusKeys = 0;
+        const int Samples = Streaming && qEnvironmentVariableIsSet("HC_INPUT_FLOOD_KEYS")
+            ? qBound(6, qEnvironmentVariableIntValue("HC_INPUT_FLOOD_KEYS"), 1000) : 6;
+        for (int Press = 0; Press < Samples; ++Press) {
+            if (ForceOverlap && Press && Press % 100 == 0) {
+                // The directory watcher can start a re-list during a long run.
+                // Loading deliberately suppresses queries against the old rows.
+                QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading(), 60000);
+                QueueFreshValues(); QVERIFY(Model->PendingColumnQueries() > 0);
+            }
+            PendingKeys += Model->PendingColumnQueries() > 0;
             const int Before = Grid->focusedRowIndex(); const auto Sent = Clock.nsecsElapsed(); Arrival.at_ = 0;
+            NativeProbe.arrived_ = false; NativeProbe.at_ = 0; NativeProbe.index_ = Press;
+            if (hc::startup::Enabled()) hc::startup::Record("input.commander.sent", {{"index", Press}, {"pending", Model->PendingColumnQueries()}});
             if (Foreground) {
+                if (qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM")) {
+                    GUITHREADINFO Info{sizeof(Info)}; QVERIFY(GetGUIThreadInfo(GetCurrentThreadId(), &Info));
+                    DWORD FocusProcess = 0; GetWindowThreadProcessId(Info.hwndFocus, &FocusProcess);
+                    // A null native focus is observable between Qt focus transitions. Deliver the key
+                    // to the verified foreground application and require actual arrival and row movement.
+                    // A non-null focus owned by a preview process is always a wrong input destination.
+                    if (Info.hwndFocus) QCOMPARE(FocusProcess, GetCurrentProcessId());
+                    else ++NullFocusKeys;
+                    const auto CurrentWindow = reinterpret_cast<HWND>(main_->winId());
+                    auto ForegroundRoot = GetAncestor(GetForegroundWindow(), GA_ROOT);
+                    // Windows may briefly return no foreground HWND during activation. Do not
+                    // steal focus to make the test pass: wait only for that null transition,
+                    // include the wait in latency, and reject any other foreground window.
+                    QElapsedTimer ForegroundWait; ForegroundWait.start();
+                    while (!ForegroundRoot && ForegroundWait.elapsed() < 150) {
+                        QTest::qWait(1);
+                        ForegroundRoot = GetAncestor(GetForegroundWindow(), GA_ROOT);
+                    }
+                    if (ForegroundRoot != Window && hc::startup::Enabled())
+                        hc::startup::Record("input.commander.nativeRoot", {{"index", Press}, {"initial", QString::number(quintptr(Window))},
+                            {"current", QString::number(quintptr(CurrentWindow))}, {"foreground", QString::number(quintptr(ForegroundRoot))}});
+                    QVERIFY2(ForegroundRoot == GetAncestor(CurrentWindow, GA_ROOT),
+                        qPrintable(QString("Foreground changed before key %1; initial=%2 current=%3 foreground=%4 native focus=%5 Qt focus=%6")
+                            .arg(Press).arg(quintptr(Window)).arg(quintptr(CurrentWindow)).arg(quintptr(ForegroundRoot))
+                            .arg(quintptr(Info.hwndFocus)).arg(QApplication::focusWidget()
+                                ? QString::fromLatin1(QApplication::focusWidget()->metaObject()->className()) : QString("none"))));
+                }
                 INPUT Inputs[2]{}; Inputs[0].type = Inputs[1].type = INPUT_KEYBOARD; Inputs[0].ki.wVk = Inputs[1].ki.wVk = VK_DOWN; Inputs[1].ki.dwFlags = KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY; Inputs[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
                 QCOMPARE(SendInput(2, Inputs, sizeof(INPUT)), UINT(2));
             } else {
@@ -6182,15 +6347,25 @@ private slots:
                 QCoreApplication::postEvent(Target, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Down, Qt::NoModifier));
             }
             // The key must first reach the application, then move the cursor.
-            const bool Reached = QTest::qWaitFor([&] { return Arrival.at_ != 0; }, 3000);
+            // qWaitFor sleeps for 10 ms between pumps, which becomes part of an OS-key arrival
+            // measurement. Use the same short event-loop pump as the editor's native input probe.
+            QElapsedTimer ArrivalWait; ArrivalWait.start();
+            while (!Arrival.at_ && ArrivalWait.elapsed() < 3000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 2); QTest::qWait(1);
+            }
+            const bool Reached = Arrival.at_ != 0;
             Arrived.append(Reached ? (Arrival.at_ - Sent) / 1000000 : 3000);
+            NativeTimes.append(NativeProbe.at_ ? (NativeProbe.at_ - Sent) / 1000000 : 3000);
+            QtDelivery.append(Reached && NativeProbe.at_ ? (Arrival.at_ - NativeProbe.at_) / 1000000 : 3000);
             QElapsedTimer Wait; Wait.start();
             while (Grid->focusedRowIndex() == Before && Wait.elapsed() < 2000) QTest::qWait(1);
             if (Grid->focusedRowIndex() == Before) ++Lost;
             Latency.append((Clock.nsecsElapsed() - Sent) / 1000000);
-            qInfo() << "input-flood key" << Press << "row" << Before << Describe(Before) << "->" << Grid->focusedRowIndex() << Describe(Grid->focusedRowIndex()) << "latency-ms" << Latency.last()
+            if (hc::startup::Enabled()) hc::startup::Record("input.commander.applied", {{"index", Press}, {"latencyMs", Latency.last()}, {"arrivalMs", Arrived.last()},
+                {"nativeArrived", NativeProbe.arrived_}, {"focus", QString::number(quintptr(GetFocus()))}, {"foreground", QString::number(quintptr(GetForegroundWindow()))}});
+            if (Press < 6 || Press % 100 == 0 || Latency.last() >= 100) qInfo() << "input-flood key" << Press << "row" << Before << Describe(Before) << "->" << Grid->focusedRowIndex() << Describe(Grid->focusedRowIndex()) << "latency-ms" << Latency.last()
                     << "arrived-ms" << (Arrival.at_ ? (Arrival.at_ - Sent) / 1000000 : -1)
-                    << "batches" << Batches << Primitives();
+                    << "native-ms" << NativeTimes.last() << "native-to-qt-ms" << QtDelivery.last() << "batches" << Batches << Primitives();
             QTest::qWait(40);
         }
         const auto InputDone = Clock.elapsed();
@@ -6202,13 +6377,174 @@ private slots:
         auto Sorted = Arrived; std::sort(Sorted.begin(), Sorted.end());
         const auto P95 = Sorted[(Sorted.size() - 1) * 95 / 100], MaxArrived = Sorted.back();
         qInfo() << "input-flood arrival-ms" << Arrived << "p95" << P95 << "max" << MaxArrived << "query-jobs" << Model->ColumnQueryJobs()
-                << "streaming" << Streaming << "results-pending-at-first-key" << StillStreaming;
+                << "streaming" << Streaming << "results-pending-at-first-key" << StillStreaming << "keys-with-pending-results" << PendingKeys << "keys-with-null-native-focus" << NullFocusKeys;
+        if (ForceOverlap) QVERIFY(PendingKeys >= (Samples + 99) / 100);
+        if (Samples >= 1000) {
+            auto Ordered = Latency; std::sort(Ordered.begin(), Ordered.end());
+            qInfo() << "input-flood native-summary" << Count << "samples" << Samples << "p50-ms" << Ordered[499]
+                << "p99-ms" << Ordered[989] << "max-ms" << Ordered.last() << "arrival-p99-ms" << Sorted[989] << "preview" << Preview;
+        }
+        if (Foreground) {
+            std::sort(NativeTimes.begin(), NativeTimes.end()); std::sort(QtDelivery.begin(), QtDelivery.end());
+            qInfo() << "input-flood stages" << "native-p99-ms" << NativeTimes[(Samples-1)*99/100] << "native-max-ms" << NativeTimes.last()
+                << "native-to-qt-p99-ms" << QtDelivery[(Samples-1)*99/100] << "native-to-qt-max-ms" << QtDelivery.last();
+        }
         // Every key must move the cursor, including from group rows whose primitives were recreated.
         QCOMPARE(Lost, 0);
         QVERIFY2(*std::max_element(Latency.begin(), Latency.end()) < 2000, "A navigation key was not handled");
         // Keys must not queue behind streamed results. Before stage 3 the first key had not arrived
         // after 925 ms (about 150 ms of that was activation); now about 20-60 ms.
         QVERIFY2(MaxArrived <= 150, qPrintable(QString("A key reached the application after %1 ms").arg(MaxArrived)));
+    }
+    void navigationUpdateAfterShortcutUi()
+    {
+        if (!qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM")) QSKIP("Native input is VM-only");
+        (void)hc::ui::InputGate::SinceInput();
+        struct Canvas final : QWidget {
+            QColor next_{Qt::blue}, painted_; int paints_ = 0;
+            void paintEvent(QPaintEvent*) override { QPainter Painter(this); Painter.fillRect(rect(), next_); painted_ = next_; ++paints_; }
+        } Window;
+        Window.setProperty("hc.navigationWindow", true); Window.resize(240, 160); Window.show();
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window.winId())));
+        QTRY_VERIFY(Window.paints_ > 0); QTest::qWait(30);
+        QShortcut Shortcut(QKeySequence(Qt::Key_Down), &Window);
+        QSignalSpy Activated(&Shortcut, &QShortcut::activated);
+        struct UpdateOnNative final : QAbstractNativeEventFilter {
+            Canvas* window_ = nullptr; bool seen_ = false;
+            bool nativeEventFilter(const QByteArray&, void* Message, qintptr*) override {
+                const auto* Native = static_cast<const MSG*>(Message);
+                if (Native->message == WM_KEYDOWN && Native->wParam == VK_DOWN) {
+                    seen_ = true; window_->next_ = Qt::red; window_->update();
+                }
+                return false;
+            }
+        } Native;
+        Native.window_ = &Window; qApp->installNativeEventFilter(&Native);
+        const auto Remove = qScopeGuard([&] { qApp->removeNativeEventFilter(&Native); });
+        INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
+        Keys[0].ki.wVk = Keys[1].ki.wVk = VK_DOWN;
+        Keys[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY; Keys[1].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
+        QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2));
+        QTRY_COMPARE_WITH_TIMEOUT(Activated.size(), 1, 2000); QVERIFY(Native.seen_);
+        // A shortcut consumes KeyPress, so only the bounded replay can finish an
+        // update deferred after native receipt. Observe paintEvent, not grab(),
+        // which could itself force a paint and conceal a stuck backing store.
+        QTRY_COMPARE_WITH_TIMEOUT(Window.painted_, QColor(Qt::red), 1000);
+        Window.next_ = Qt::green; Window.update();
+        QTRY_COMPARE_WITH_TIMEOUT(Window.painted_, QColor(Qt::green), 1000);
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+    }
+    void gridPopulationSortCacheUi()
+    {
+        // A reset fills the grid through a different path from a header sort.
+        // Count role reads to catch comparison-time model queries independently
+        // of VM load, and also verify every resulting row is correctly ordered.
+        struct CountingModel final : QAbstractTableModel {
+            int rows_ = 0; mutable int reads_ = 0;
+            int rowCount(const QModelIndex& Parent = {}) const override { return Parent.isValid() ? 0 : rows_; }
+            int columnCount(const QModelIndex& Parent = {}) const override { return Parent.isValid() ? 0 : 1; }
+            QVariant data(const QModelIndex& Index, int Role) const override {
+                if (!Index.isValid()) return {};
+                if (Role == Qt::UserRole + 1) { ++reads_; return rows_ - Index.row(); }
+                return Role == Qt::DisplayRole ? QVariant(QString::number(rows_ - Index.row())) : QVariant{};
+            }
+            void Reset(int Rows) { beginResetModel(); rows_ = Rows; reads_ = 0; endResetModel(); }
+        } Model;
+        Qtitan::Grid Widget;
+        Widget.setViewType(Qtitan::Grid::TableView);
+        auto* View = Widget.view<Qtitan::GridTableView>(); QVERIFY(View);
+        View->setModel(&Model);
+        auto* Column = static_cast<Qtitan::GridColumn*>(View->getColumnByModelColumn(0)); QVERIFY(Column);
+        Column->dataBinding()->setSortRole(static_cast<Qt::ItemDataRole>(Qt::UserRole + 1));
+        Column->setSortOrder(Qtitan::SortAscending);
+        for (const int Count : {0, 1, 3000, 30000}) {
+            Model.Reset(Count);
+            QCOMPARE(View->getRowCount(), Count);
+            const int Reads = Model.reads_;
+            qInfo() << "grid-population rows" << Count << "sort-role-reads" << Reads;
+            QVERIFY2(Reads <= Count * 4 + 16, "Initial sorting queried the model during comparisons");
+            for (int Row = 0; Row < Count; ++Row)
+                QCOMPARE(View->getRow(Row).modelIndex(0).row(), Count - Row - 1);
+        }
+        Column->setSortOrder(Qtitan::SortDescending);
+        for (int Row = 0; Row < Model.rows_; ++Row) QCOMPARE(View->getRow(Row).modelIndex(0).row(), Row);
+    }
+    void downloadsBackgroundRefreshFocusUi()
+    {
+        using namespace hc::columns; using namespace hc::settings;
+        auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
+        QTemporaryDir LeftFiles, RightFiles; QVERIFY(LeftFiles.isValid()); QVERIFY(RightFiles.isValid());
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); main_->RestoreWorkspace(Workspace); });
+        for (int Row = 0; Row < 40; ++Row) {
+            QFile File(LeftFiles.filePath(QString("other%1.txt").arg(Row))); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("x");
+            QVERIFY(File.setFileTime(QDateTime::currentDateTime().addDays(-Row - 1), QFileDevice::FileModificationTime));
+        }
+        const auto Download = LeftFiles.filePath("download.zip");
+        { QFile File(Download); QVERIFY(File.open(QIODevice::WriteOnly)); QCOMPARE(File.write("x"), 1); }
+        { QFile File(Download + ":Zone.Identifier"); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("[ZoneTransfer]\r\nZoneId=3\r\n"); }
+        for (int Row = 0; Row < 10; ++Row) {
+            QFile File(RightFiles.filePath(QString("right%1.txt").arg(Row))); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("x");
+        }
+        auto General = Settings.Read(Section::General).toObject(); hc::refresh::Settings Policy;
+        Policy.pauseInBackground = false; General["refresh"] = Policy.ToJson(); QVERIFY(Settings.Put(Section::General, General));
+        auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = hc::defaults::FileGroups();
+        QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit());
+        auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel"); auto* Right = main_->findChild<CmpPanel*>("cmpRightPanel");
+        auto* LeftView = qobject_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex())); QVERIFY(LeftView);
+        auto* RightView = qobject_cast<CGridView*>(Right->GetFocusView(Right->CurrentTabIndex())); QVERIFY(RightView);
+        auto* Model = qobject_cast<CFSModel*>(LeftView->BaseModel()); QVERIFY(Model);
+        auto* RightModel = qobject_cast<CFSModel*>(RightView->BaseModel()); QVERIFY(RightModel);
+        LeftView->SetAutomaticColumns(false); QVERIFY(LeftView->ApplyColumnProfile(DownloadsProfile()));
+        Model->ApplyRefreshSettings(); Left->ChangeCurrentPath(LeftFiles.path(), {}); Right->ChangeCurrentPath(RightFiles.path(), {});
+        QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() == 42 && !RightModel->IsLoading() && RightModel->rowCount() == 11, 30000);
+        const auto DownloadIndex = [&] { for (int Row = 0; Row < Model->rowCount(); ++Row) {
+            const auto Index = Model->index(Row, 0); if (Model->GetName(Index) == "download.zip") return Index;
+        } return QModelIndex{}; };
+        QTRY_VERIFY(LeftView->GroupingActive());
+        auto* Rows = LeftView->BaseView();
+        const auto* Proxy = qobject_cast<QAbstractProxyModel*>(Rows->model());
+        const auto VisibleDownload = Proxy ? Proxy->mapFromSource(DownloadIndex()) : DownloadIndex();
+        int Position = -1;
+        QTRY_VERIFY((Position = Rows->modelController()->ensureVisible(VisibleDownload)) >= 0);
+        Rows->setFocusedRowIndex(Position); Rows->scrollToIndex(VisibleDownload, false);
+        main_->raise(); main_->activateWindow(); QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(main_->winId())));
+        LeftView->EnsureKeyboardFocusOnView();
+        QTRY_COMPARE_WITH_TIMEOUT(Model->RuleFieldValue(Model->GetFileInfo(DownloadIndex()), "file.alternateDataStream.zone").State(), ValueState::Ready, 15000);
+        QTRY_VERIFY(!DownloadIndex().data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker"));
+        const auto LeftCursor = LeftView->CaptureFocus();
+        const auto Holds = [](QWidget* View) { const auto* Focus = QApplication::focusWidget(); return Focus && (Focus == View || View->isAncestorOf(Focus)); };
+        // Programmatic navigation of both panels does not imply a user click.
+        // Establish its active-panel state before sending the real Tab key.
+        emit Left->sig_NotifyPanelActivated(); LeftView->EnsureKeyboardFocusOnView();
+        QTRY_VERIFY(Holds(LeftView));
+        INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD; Keys[0].ki.wVk = Keys[1].ki.wVk = VK_TAB; Keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2)); QTRY_VERIFY(Holds(RightView));
+        int FocusSteals = 0, AutomaticRefreshes = 0, PendingRefreshes = 0, PendingSamples = 0;
+        const auto FocusProbe = connect(qApp, &QApplication::focusChanged, this, [&](QWidget*, QWidget* Now) {
+            if (Now && (Now == LeftView || LeftView->isAncestorOf(Now))) ++FocusSteals;
+        });
+        const auto RefreshProbe = connect(Model, &CFSModel::PageChanged, this, [&] {
+            if (!Model->IsAutomaticRefresh()) return;
+            ++AutomaticRefreshes;
+            PendingRefreshes += DownloadIndex().data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker");
+        });
+        const auto Disconnect = qScopeGuard([&] { disconnect(FocusProbe); disconnect(RefreshProbe); });
+        QTimer MarkerProbe; MarkerProbe.setInterval(25);
+        connect(&MarkerProbe, &QTimer::timeout, this, [&] {
+            const auto Index = DownloadIndex();
+            if (Index.isValid() && Index.data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker")) ++PendingSamples;
+        });
+        MarkerProbe.start();
+        for (int Cycle = 0; Cycle < 6; ++Cycle) {
+            { QFile File(Download); QVERIFY(File.open(QIODevice::Append)); QCOMPARE(File.write(QByteArray(4096, 'x')), 4096); }
+            QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->GetFileInfo(DownloadIndex())->Size_ == 1 + (Cycle + 1) * 4096, 15000);
+            QTest::qWait(650);
+            QVERIFY(Holds(RightView));
+        }
+        MarkerProbe.stop();
+        qInfo() << "download-background-refresh automatic" << AutomaticRefreshes << "focus-steals" << FocusSteals << "pending-at-publication" << PendingRefreshes << "pending-samples" << PendingSamples;
+        QVERIFY(AutomaticRefreshes >= 6); QCOMPARE(FocusSteals, 0); QCOMPARE(PendingRefreshes, 0); QCOMPARE(PendingSamples, 0);
+        QVERIFY(Holds(RightView)); QCOMPARE(LeftView->CaptureFocus(), LeftCursor);
     }
     void groupedParentPageKeysUi()
     {
@@ -6243,7 +6579,28 @@ private slots:
         QTRY_VERIFY(View->GroupingActive());
         QTRY_COMPARE(Grid->modelController()->getPinnedGridRowAtBeginningCount(), 1);
         QTest::qWait(300);
+        QLineEdit FocusSink(main_); FocusSink.show();
+        for (const int Row : {0, 1, 2, Grid->getRowCount() - 1}) {
+            Grid->setFocusedRowIndex(Row);
+            const int Before = Grid->focusedRowIndex();
+            const int Vertical = Grid->verticalScrollBar()->value(), Horizontal = Grid->horizontalScrollBar()->value();
+            const auto Selection = View->CaptureSelection();
+            FocusSink.setFocus();
+            QSignalSpy FocusChanges(Grid, &Qtitan::GridViewBase::focusRowChanged);
+            View->EnsureKeyboardFocusOnView();
+            QCOMPARE(Grid->focusedRowIndex(), Before);
+            QCOMPARE(FocusChanges.count(), 0);
+            QCOMPARE(Grid->verticalScrollBar()->value(), Vertical);
+            QCOMPARE(Grid->horizontalScrollBar()->value(), Horizontal);
+            QCOMPARE(View->CaptureSelection(), Selection);
+        }
+        FocusSink.hide();
         View->EnsureKeyboardFocusOnView(); QVERIFY(Grid->setFocusedRowIndex(0));
+        GUITHREADINFO NativeInfo{sizeof(NativeInfo)};QVERIFY(GetGUIThreadInfo(0,&NativeInfo));
+        auto* Surface=View->findChild<Qtitan::Grid*>()->viewport();
+        qInfo()<<"pinned-page-input"<<"native"<<quintptr(NativeInfo.hwndFocus)<<"foreground"<<quintptr(GetForegroundWindow())
+            <<"surface"<<quintptr(Surface->effectiveWinId())<<"qt-focus"<<(QApplication::focusWidget()?QApplication::focusWidget()->metaObject()->className():"none")
+            <<"active-window"<<(QApplication::activeWindow()?QApplication::activeWindow()->objectName():QString("none"));
         QCOMPARE(Grid->getRow(0).modelIndex(0).data().toString(), QString(".."));
         QVERIFY(Key(VK_NEXT, false)); QVERIFY(Key(VK_NEXT, true));
         QTRY_VERIFY2(Grid->focusedRowIndex() > 1, "PgDn from the pinned parent row did not page");
@@ -8282,16 +8639,30 @@ private slots:
         // Tab enters the preview and the return key (default Ctrl+Alt+F12) brings it back, from the views in
         // the plugin host (text, PDF, image) and from the EPUB reader, which is a process of its own.
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        const auto Workspace = main_->CaptureWorkspace();
+        // Leave the temporary folders before their owners remove them. Otherwise
+        // the following test restores deleted paths and a navigation dialog takes its keys.
+        const auto RestoreWorkspace = qScopeGuard([&] {
+            main_->RestoreWorkspace(Workspace);
+            QVERIFY(QTest::qWaitFor([&] { for (auto* Panel : panels_) if (model(Panel)->IsLoading()) return false; return true; }, 10000));
+        });
         const auto Put = [&](const QString& Name, const QByteArray& Bytes) { QFile File(Directory.filePath(Name)); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
         QVERIFY(Put("note.txt", QByteArray("Ctrl+Q keyboard return line\r\n").repeated(200)));
         QVERIFY(Put("note.md", "# Keyboard\r\n\r\n" + QByteArray("Ctrl+Q Markdown paragraph\r\n\r\n").repeated(100)));
+        QVERIFY(Put("note.rst", "Keyboard\r\n========\r\n\r\n" + QByteArray("Ctrl+Q RST paragraph\r\n\r\n").repeated(100)));
         { QImage Picture(800, 600, QImage::Format_RGB32); Picture.fill(QColor(40, 100, 180)); QVERIFY(Picture.save(Directory.filePath("picture.png"))); }
         {
             QPdfWriter Writer(Directory.filePath("pages.pdf")); QPainter Painter(&Writer); QVERIFY(Painter.isActive());
             for (int Page = 0; Page < 3; ++Page) { if (Page) QVERIFY(Writer.newPage()); Painter.drawText(400, 400, QString("page %1").arg(Page + 1)); }
         }
         const auto Book = hc::document::epub::CreateBook({"Keyboard return", {}, "en", "Keyboard chapter"});
-        QVERIFY2(Book.error_.isEmpty(), qPrintable(Book.error_)); QVERIFY(Put("book.epub", Book.bytes_));
+        QVERIFY2(Book.error_.isEmpty(), qPrintable(Book.error_));
+        hc::document::epub::EditModel BookModel; QVERIFY(BookModel.Load(Book.bytes_));
+        const QByteArray Chapter = "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Keyboard</title></head><body>"
+            + QByteArray("<p>Keyboard navigation through a long EPUB chapter. Repeated text fills multiple pages.</p>").repeated(300) + "</body></html>";
+        QVERIFY(BookModel.Replace(hc::document::epub::NewBookFirstChapter, Chapter).isEmpty());
+        const auto LongBook = BookModel.Export(); QVERIFY2(LongBook.error_.isEmpty(), qPrintable(LongBook.error_));
+        QVERIFY(Put("book.epub", LongBook.bytes_));
         auto* Source = panels_.front(); auto* Target = panels_.back();
         for (auto* Panel : panels_) {
             static_cast<CFSModel*>(model(Panel))->SetProviderEnabled(true);
@@ -8364,16 +8735,18 @@ private slots:
         };
         // The second EPUB pass reopens the host cached by the first close.
         int EpubPasses = 0;
-        for (const auto& Name : QStringList{"note.txt", "note.md", "pages.pdf", "picture.png", "book.epub", "book.epub"}) {
+        for (const auto& Name : QStringList{"note.txt", "note.md", "note.rst", "pages.pdf", "picture.png", "book.epub", "book.epub"}) {
             const bool Epub = Name.endsWith(".epub");
             const auto Index = Focus(Name); QVERIFY(Index.isValid());
             Source->sig_NotifyPanelActivated(); QVERIFY(ActivateTestWindow(Main)); Grid->EnsureKeyboardFocusOnView();
             QTRY_VERIFY2_WITH_TIMEOUT(InGrid(), qPrintable(Name + " before Ctrl+Q: " + Describe()), 5000);
             // Keyboard owners from Ctrl+Q until the preview is shown, reported when the preview takes the keyboard.
-            QStringList Owners; QElapsedTimer Since; Since.start(); QString LastOwner;
+            QStringList Owners; QElapsedTimer Since; Since.start(); QString LastOwner; int PassiveForeignSamples = 0;
             QTimer Sampler; Sampler.setInterval(10);
             connect(&Sampler, &QTimer::timeout, this, [&] {
-                const auto Window = Keyboard(); const auto Owner = QString("%1:%2").arg(ProcessName(Window)).arg(quintptr(Window), 0, 16);
+                const auto Window = Keyboard(); DWORD OwnerPid = 0; GetWindowThreadProcessId(Window, &OwnerPid);
+                if (OwnerPid && OwnerPid != GetCurrentProcessId()) ++PassiveForeignSamples;
+                const auto Owner = QString("%1:%2").arg(ProcessName(Window)).arg(quintptr(Window), 0, 16);
                 if (Owner != LastOwner) { Owners.append(QString("%1ms %2").arg(Since.elapsed()).arg(Owner)); LastOwner = Owner; }
             });
             Sampler.start();
@@ -8394,8 +8767,8 @@ private slots:
                         + " commandError=" + QString::fromStdString(Details.commandError_ ? Details.commandError_->code_ : "")
                         + " labels=[" + Labels.join(" | ") + "] state=" + QString::fromUtf8(QJsonDocument(Details.documentState_).toJson(QJsonDocument::Compact).left(3000));
                 }()), 60000);
-            // The EPUB reader activates its own window when the helper shows it. HyperCommander takes the keyboard
-            // back at once; it must never stay in a preview the user has not entered. Watch past that point.
+            // A passive preview must never take the keyboard, including the initial
+            // cross-process attachment and any delayed reader initialization.
             QElapsedTimer Watch; Watch.start(); qint64 OutSince = -1; int Excursions = 0;
             while (Watch.elapsed() < 3000) {
                 if (InGrid()) OutSince = -1;
@@ -8409,6 +8782,8 @@ private slots:
             Sampler.stop();
             QTRY_VERIFY2_WITH_TIMEOUT(InGrid(), qPrintable(Name + " after load: " + Describe()), 1000);
             qInfo() << Name << "keyboard owners after Ctrl+Q:" << Owners.join(", ") << "excursions" << Excursions;
+            if (Epub) qInfo() << "epub-passive-input-enabled" << Record()["view"].toObject()["epub"].toObject()["inputEnabled"].toBool();
+            QCOMPARE(PassiveForeignSamples, 0);
             // The second EPUB pass enters with a click straight into the reader: that is the user's entry too.
             const bool Click = Epub && ++EpubPasses == 2;
             Owners.clear(); LastOwner.clear(); Since.restart(); Sampler.start();
@@ -8419,7 +8794,7 @@ private slots:
                 QCOMPARE(SendInput(1, &Button, sizeof(INPUT)), UINT(1));
                 QTest::qWait(150); Button.mi.dwFlags = MOUSEEVENTF_LEFTUP;
                 QCOMPARE(SendInput(1, &Button, sizeof(INPUT)), UINT(1));
-            } else QTest::keyClick(QApplication::focusWidget(), Qt::Key_Tab);
+            } else QVERIFY(Press({VK_TAB}));
             QTRY_VERIFY2_WITH_TIMEOUT(InPreviewProcess(Epub ? "HyperEpubWeb.exe" : QString()), qPrintable(Name + " Tab did not enter: " + Describe().left(300)
                 + [&] { const auto Epub = Record()["view"].toObject()["epub"].toObject();
                     return QString(" epub focusAcknowledged=%1 inputEnabled=%2 inputFocused=%3 readerFocused=%4 joined=%5").arg(Epub["focusAcknowledged"].toBool())
@@ -8428,12 +8803,24 @@ private slots:
             if (Click) { QTest::qWait(500); QVERIFY2(InPreviewProcess("HyperEpubWeb.exe"), qPrintable("click entry was taken back: owners=[" + Owners.join(", ") + "]")); }
             Sampler.stop();
             qInfo() << Name << "entered:" << Describe();
-            if (Name == "note.md") {
+            if (Epub) {
+                // Both the surface and its native anchor can announce FocusIn.
+                // Repeated entry must retain the nested reader's real keyboard.
+                for (int Repeat = 0; Repeat < 3; ++Repeat) {
+                    QFocusEvent Entry(QEvent::FocusIn, Qt::TabFocusReason);
+                    QCoreApplication::sendEvent(Native, &Entry);
+                    QTest::qWait(150);
+                    QVERIFY2(InPreviewProcess("HyperEpubWeb.exe"), qPrintable("duplicate EPUB entry: " + Describe()));
+                }
+            }
+            if (Name == "note.md" || Name == "note.rst") {
                 // Tab entered the rendered preview (a helper process). Alt+O there switches to the source, which belongs to
                 // the plugin host: the keyboard must follow it, not stay in the hidden preview.
                 const auto View = [&] { return Record()["view"].toObject(); };
+                const auto Kind=Name.endsWith(".rst")?"rst":"markdown";
+                for(int Round=0;Round<3;++Round){
                 QVERIFY(Press({VK_MENU, 'O'}));
-                QTRY_VERIFY2_WITH_TIMEOUT(View()["markdown"].toObject()["mode"].toString() == "source", qPrintable("Alt+O: " + Describe()), 5000);
+                QTRY_VERIFY2_WITH_TIMEOUT(View()[Kind].toObject()["mode"].toString() == "source", qPrintable("Alt+O: " + Describe()), 5000);
                 QTRY_VERIFY2_WITH_TIMEOUT(InPreviewProcess(QString()) && ProcessName(Keyboard()).compare("hc-markdown-render.exe", Qt::CaseInsensitive) != 0
                     && View()["inputFocused"].toBool(), qPrintable("source keyboard: " + Describe()), 5000);
                 if (!View()["readOnly"].toBool()) {
@@ -8441,16 +8828,21 @@ private slots:
                     QVERIFY(Press({VK_CONTROL, 'Z'}));
                     QTRY_VERIFY_WITH_TIMEOUT(!View()["canUndo"].toBool() && !Record()["dirty"].toBool(), 5000);
                 }
+                QVERIFY(Press({VK_MENU, 'O'}));
+                QTRY_VERIFY2_WITH_TIMEOUT(View()[Kind].toObject()["mode"].toString()=="preview" && InPreviewProcess(Name.endsWith(".rst")?"hc-rst-preview.exe":"hc-markdown-render.exe"),qPrintable("return to preview: "+Describe()),10000);
+                }
             } else if (Name == "note.txt") {
                 QVERIFY(Press({'X'})); QTRY_VERIFY2_WITH_TIMEOUT(Record()["view"].toObject()["canUndo"].toBool(), qPrintable("typing: " + Describe()), 5000);
                 QVERIFY(Press({VK_CONTROL, 'Z'}));
                 QTRY_VERIFY_WITH_TIMEOUT(!Record()["view"].toObject()["canUndo"].toBool() && !Record()["dirty"].toBool(), 5000);
             } else {
+                if (Epub) QTRY_VERIFY_WITH_TIMEOUT(!Record()["view"].toObject()["epub"].toObject()["locator"].toString().isEmpty(), 5000);
                 const auto Before = Record()["view"].toObject();
                 QVERIFY(Press({VK_NEXT})); QTest::qWait(500);
+                if (Epub) QTRY_VERIFY_WITH_TIMEOUT(Record()["view"].toObject()["epub"].toObject()["locator"] != Before["epub"].toObject()["locator"], 5000);
                 const auto After = Record()["view"].toObject();
                 qInfo() << Name << "PageDown page" << Before["page"].toInt(-1) << "->" << After["page"].toInt(-1)
-                        << "epub locator changed" << (Before["epub"].toObject()["lastReaderState"].toObject()["locator"] != After["epub"].toObject()["lastReaderState"].toObject()["locator"]);
+                        << "epub locator changed" << (Before["epub"].toObject()["locator"] != After["epub"].toObject()["locator"]);
             }
             QVERIFY2(InPreviewProcess(Epub ? "HyperEpubWeb.exe" : QString()), qPrintable(Name + " lost the preview keyboard: " + Describe()));
             QVERIFY(Press({VK_CONTROL, VK_MENU, VK_F12}));
@@ -11506,6 +11898,25 @@ private slots:
         { QFile File(Directory.filePath("new.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("x"); }
         QTRY_VERIFY_WITH_TIMEOUT(Automatic, 15000); disconnect(Connection);
         QCOMPARE(Kept, QColor("#aa0000")); QVERIFY(!KeptPending);
+        // A growing download needs fresh metadata/field evaluation, but a brief
+        // recheck must not flash its previously painted colour or pending bar.
+        // The retained display must expire if that recheck cannot finish.
+        Automatic = false; KeptPending = true;
+        Connection = connect(Model, &CFSModel::PageChanged, main_, [&] {
+            if (Automatic || !Model->IsAutomaticRefresh()) return;
+            Automatic = true; Model->CancelColumnQueries();
+            const auto Index = IndexOf("f000.txt");
+            Kept = Index.data(Qt::ForegroundRole).value<QColor>();
+            KeptPending = Index.data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker");
+        });
+        { QFile File(Directory.filePath("f000.txt")); QVERIFY(File.open(QIODevice::Append)); File.write("growing"); }
+        QTRY_VERIFY_WITH_TIMEOUT(Automatic, 15000); disconnect(Connection);
+        QCOMPARE(Kept, QColor("#aa0000")); QVERIFY(!KeptPending);
+        QVERIFY(Zone(IndexOf("f000.txt")) != hc::columns::ValueState::Ready);
+        QTRY_VERIFY_WITH_TIMEOUT(IndexOf("f000.txt").data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker"), 2000);
+        Model->ResumeColumnQueries();
+        QTRY_COMPARE_WITH_TIMEOUT(IndexOf("f000.txt").data(Qt::ForegroundRole).value<QColor>(), QColor("#aa0000"), 10000);
+        QTRY_VERIFY(!IndexOf("f000.txt").data(CFSModel::FileEffectsRole).toJsonObject().contains("pendingMarker"));
         // A carried value is re-checked when drawn: a stream rewritten with its file's time put back
         // keeps the metadata the carry compares, and still changes colour once the re-check returns.
         QTRY_VERIFY(!Model->IsLoading());
@@ -17750,7 +18161,24 @@ int main(int Argc, char** Argv)
     };
     EnvironmentInputs.process_ = [](const hc::system::ProcessKey&) { return hc::environment::ProcessEnvironment{}; };
     hc::environment::EnvironmentApplication::ConfigureForTests(std::move(EnvironmentInputs));
-    int AppArgc = Arguments.size(); HyperCommanderApp App(AppArgc, Pointers.data());
+    class InputTraceApplication final : public HyperCommanderApp {
+    public:
+        using HyperCommanderApp::HyperCommanderApp;
+        bool notify(QObject* Receiver, QEvent* Event) override {
+            const auto Type = Event->type();
+            if (!hc::startup::Enabled() || !qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM")
+                || (Type != QEvent::Paint && Type != QEvent::Timer && Type != QEvent::MetaCall && Type != QEvent::KeyPress))
+                return HyperCommanderApp::notify(Receiver, Event);
+            const auto Class = QString::fromLatin1(Receiver->metaObject()->className());
+            const auto Name = Receiver->objectName(); QElapsedTimer Timer; Timer.start();
+            const bool Result = HyperCommanderApp::notify(Receiver, Event);
+            const auto Microseconds = Timer.nsecsElapsed() / 1000;
+            if (Microseconds >= 5000) hc::startup::Record("input.commander.slowEvent",
+                {{"type", int(Type)}, {"class", Class}, {"object", Name}, {"elapsedUs", Microseconds}});
+            return Result;
+        }
+    };
+    int AppArgc = Arguments.size(); InputTraceApplication App(AppArgc, Pointers.data());
     SmbTests Tests;
     const auto Result = QTest::qExec(&Tests, Argc, Argv);
     QThreadPool::globalInstance()->waitForDone();

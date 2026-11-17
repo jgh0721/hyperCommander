@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/markdownDocumentView.hpp"
+#include "UniqueLibs/document/rstDocumentView.hpp"
+#include "UniqueLibs/document/rst/pythonEnvManager.hpp"
 #include "UniqueLibs/document/markdownProcessView.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/documentSettingsDialog.hpp"
@@ -795,6 +797,10 @@ class MarkdownTests final : public QObject
         QTest::newRow("viewer-text")<<true<<"keys.txt"<<"";
         QTest::newRow("editor-markdown-shortcut")<<false<<"keys.md"<<"shortcut";
         QTest::newRow("editor-text")<<false<<"keys.txt"<<"";
+        QTest::newRow("viewer-rst-toolbar")<<true<<"keys.rst"<<"toolbar";
+        QTest::newRow("viewer-rst-shortcut")<<true<<"keys.rst"<<"shortcut";
+        QTest::newRow("viewer-rst-reactivated")<<true<<"keys.rst"<<"reactivate";
+        QTest::newRow("editor-rst-shortcut")<<false<<"keys.rst"<<"shortcut";
     }
     // F3 (viewer shell) and F4 (HyperEditor): real keys reach the source after the document opens, after a Markdown preview
     // switches to its source (toolbar button or Alt+O), after the window is activated again and after a round trip
@@ -804,6 +810,14 @@ class MarkdownTests final : public QObject
     void documentKeyboard()
     {
         QFETCH(bool,Hosted);QFETCH(QString,Name);QFETCH(QString,Switch);
+        if(Name.endsWith(".rst") && qEnvironmentVariableIsSet("HC_INPUT_RST_BOOTSTRAP")){
+            QVERIFY2(!qEnvironmentVariable("HC_RST_RUNTIME_DIR").isEmpty(),"RST runtime must be task-owned");
+            hc::rst::PythonEnvManager Environment;
+            Environment.setUvAcquire("auto");Environment.setInstallOptionalThemes(false);Environment.setInstallOptionalExtensions(false);
+            Environment.ensureEnvironmentAsync();
+            QTRY_VERIFY2_WITH_TIMEOUT(Environment.isReady() || Environment.state()==hc::rst::EnvState::Failed,qPrintable(Environment.lastError()),180000);
+            QVERIFY2(Environment.isReady(),qPrintable(Environment.lastError()));
+        }
         QTemporaryDir Temp;qApp->setProperty("documentViewsConfigDir",Temp.path());
         const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",config_.path());});
         QByteArray Text="# Keys\n\n";for(int N=0;N<120;++N)Text+="Paragraph "+QByteArray::number(N)+"\n\n";
@@ -833,22 +847,32 @@ class MarkdownTests final : public QObject
         const auto Present=[&]{if(Hosted)Window.Handle({{"action","focus"}});};
         // Down keys move the source caret.
         const auto Reaches=[&](QTextView* Source){
-            auto* Backend=static_cast<ScintillaQtDirectBackend*>(Source->Backend());QTest::qWait(300);
+            auto* Backend=static_cast<ScintillaQtDirectBackend*>(Source->Backend());
             const auto Line=[Backend]{return Backend->Send(SCI_LINEFROMPOSITION,Backend->Send(SCI_GETCURRENTPOS));};
+            if(!Hosted){
+                const auto Length=Backend->Send(SCI_GETLENGTH);
+                if(!Key('X') || !QTest::qWaitFor([&]{return Backend->Send(SCI_GETLENGTH)==Length+1;},2000))return false;
+                if(!Key('Z',VK_CONTROL) || !QTest::qWaitFor([&]{return Backend->Send(SCI_GETLENGTH)==Length;},2000))return false;
+            }
             const auto Before=Line();
             for(int N=0;N<5;++N){if(!Key(VK_DOWN))return false;QTest::qWait(40);}
             return QTest::qWaitFor([&]{return Line()>Before;},2000);
         };
-        if(!Name.endsWith(".md")){
+        if(!Name.endsWith(".md") && !Name.endsWith(".rst")){
             QTextView* Source=nullptr;QTRY_VERIFY_WITH_TIMEOUT((Source=Window.findChild<QTextView*>()) && Source->isVisible(),30000);
             Present();
             QVERIFY2(Reaches(Source),qPrintable(Owner()));
             return;
         }
-        MarkdownDocumentView* Md=nullptr;MarkdownProcessView* Preview=nullptr;
-        QTRY_VERIFY_WITH_TIMEOUT((Md=Window.findChild<MarkdownDocumentView*>()) && (Preview=Window.findChild<MarkdownProcessView*>()),30000);
+        const bool IsRst=Name.endsWith(".rst");
+        MarkdownDocumentView* Md=nullptr;RstDocumentView* Rst=nullptr;MarkdownProcessView* Preview=nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT((IsRst ? bool(Rst=Window.findChild<RstDocumentView*>()) : bool(Md=Window.findChild<MarkdownDocumentView*>()))
+            && (Preview=Window.findChild<MarkdownProcessView*>()),30000);
+        const auto SourceVisible=[&]{return Rst?Rst->SourceVisible():Md->SourceVisible();};
+        const auto InputWidget=[&]{return Rst?Rst->InputWidget():Md->InputWidget();};
+        auto* Document=Rst?static_cast<QWidget*>(Rst):static_cast<QWidget*>(Md);
         // The viewer opens in the preview, the editor in its last mode: start from the preview.
-        if(Md->SourceVisible()){QTRY_VERIFY_WITH_TIMEOUT(Md->InputWidget()->hasFocus(),30000);QVERIFY(Key('O',VK_MENU));QTRY_VERIFY_WITH_TIMEOUT(!Md->SourceVisible(),5000);}
+        if(SourceVisible()){QTRY_VERIFY_WITH_TIMEOUT(InputWidget()->hasFocus(),30000);QVERIFY(Key('O',VK_MENU));QTRY_VERIFY_WITH_TIMEOUT(!SourceVisible(),5000);}
         QTRY_VERIFY2_WITH_TIMEOUT(Preview->HasFocus(),qPrintable(Owner()),30000);
         Present();QTest::qWait(300);
         QVERIFY2(Preview->HasFocus(),qPrintable(Owner()));
@@ -861,21 +885,23 @@ class MarkdownTests final : public QObject
         }
         if(Switch=="toolbar"){
             QToolButton* Button=nullptr;
-            for(auto* Each:Window.findChildren<QToolButton*>())if(Each->isVisible() && Each->defaultAction() && Each->defaultAction()->objectName()=="markdown.source"){Button=Each;break;}
+            for(auto* Each:Window.findChildren<QToolButton*>())if(Each->isVisible() && Each->defaultAction() && Each->defaultAction()->objectName()==(IsRst?"rst.source":"markdown.source")){Button=Each;break;}
             QVERIFY(Button);
             const auto* Top=Button->window();const auto At=Button->mapTo(Top,Button->rect().center());const auto Scale=Top->devicePixelRatioF();
             POINT Position{qRound(At.x()*Scale),qRound(At.y()*Scale)};QVERIFY(ClientToScreen(reinterpret_cast<HWND>(Top->winId()),&Position));
             QVERIFY(SetCursorPos(Position.x,Position.y));QTest::qWait(100);
             sendMouse(MOUSEEVENTF_LEFTDOWN);QTest::qWait(30);sendMouse(MOUSEEVENTF_LEFTUP);
         } else QVERIFY(Key('O',VK_MENU));
-        QTRY_VERIFY_WITH_TIMEOUT(Md->SourceVisible(),5000);
-        auto* Source=Md->findChild<QTextView*>();QVERIFY(Source);
+        QTRY_VERIFY_WITH_TIMEOUT(SourceVisible(),5000);
+        auto* Source=Document->findChild<QTextView*>();QVERIFY(Source);
         QVERIFY2(Reaches(Source),qPrintable("after switching to the source: "+Owner()));
         if(Switch!="shortcut")return;
         // Round trip: Alt+O in the source shows the preview with the keyboard, Alt+O there returns to the source.
-        QVERIFY(Key('O',VK_MENU));QTRY_VERIFY2_WITH_TIMEOUT(!Md->SourceVisible() && Preview->HasFocus(),qPrintable(Owner()),5000);
-        QVERIFY(Key('O',VK_MENU));QTRY_VERIFY_WITH_TIMEOUT(Md->SourceVisible(),5000);
+        for(int Round=0;Round<3;++Round){
+        QVERIFY(Key('O',VK_MENU));QTRY_VERIFY2_WITH_TIMEOUT(!SourceVisible() && Preview->HasFocus(),qPrintable(Owner()),5000);
+        QVERIFY(Key('O',VK_MENU));QTRY_VERIFY_WITH_TIMEOUT(SourceVisible(),5000);
         QVERIFY2(Reaches(Source),qPrintable("after the round trip: "+Owner()));
+        }
     }
     void settings()
     {

@@ -80,6 +80,7 @@ namespace hc::document
         // with another revision's verdict.
         struct SessionSerialization { QByteArray bytes_; std::optional<storage::Error> error_; };
         SessionSerialization SerializeSession() const;
+        TextSnapshot CaptureTextSnapshot() const;
         QByteArray SessionContent() const;
         std::optional<TextRecoveryState> CaptureTextRecovery(QByteArray& Bytes, bool IncludeText = true) const;
         bool RestoreTextRecovery(const RecoverySnapshot& Record);
@@ -227,6 +228,9 @@ namespace hc::document
         QToolBar* toolbar_ = nullptr;
         QBaseView* view_ = nullptr;
         QTextView* text_ = nullptr;
+        mutable std::optional<TextSnapshot> textSnapshot_;
+        mutable QString snapshotEncoding_;
+        mutable bool snapshotBom_ = false;
         MarkdownDocumentView* markdown_ = nullptr;
         RstDocumentView* rst_ = nullptr;
         QPDFView* pdf_ = nullptr;

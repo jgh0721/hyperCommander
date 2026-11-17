@@ -1070,7 +1070,7 @@ namespace
                 candidate_->SetControlIdentity(controlId_, controlGeneration_);
                 if(!appearance_.isEmpty()) candidate_->Appearance(appearance_);
                 candidate_->setWindowFlags(Qt::Window | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
-                candidate_->winId(); candidate_->windowHandle()->setParent(nativeParent_); candidate_->setAttribute(Qt::WA_ShowWithoutActivating);
+                attachReader(candidate_);
                 candidate_->setGeometry(reader_->geometry()); candidate_->windowHandle()->setGeometry(reader_->windowHandle()->geometry());
                 candidate_->show();
                 // Below the shown reader: it lays out and paints unseen until it takes over.
@@ -1152,6 +1152,17 @@ namespace
         Window* candidate_ = nullptr;
         QJsonObject sticky_;
         QString controlId_; qint64 controlGeneration_ = 0;
+        void attachReader(Window* Reader)
+        {
+            Reader->setAttribute(Qt::WA_ShowWithoutActivating);
+            const auto Native = reinterpret_cast<HWND>(Reader->winId());
+            // Qt 6.12 calls SetParent before replacing the top-level style. During
+            // cross-process attachment that intermediate window can take focus.
+            // Apply the child style first for both initial and replacement readers.
+            const auto Style = GetWindowLongPtrW(Native, GWL_STYLE);
+            SetWindowLongPtrW(Native, GWL_STYLE, (Style & ~(WS_POPUP | WS_OVERLAPPEDWINDOW)) | WS_CHILD);
+            Reader->windowHandle()->setParent(nativeParent_);
+        }
         void installPrepared() {
             if(!prepared_ || cancelled_ || reader_)return;
             const auto Parent=reinterpret_cast<HWND>(nativeParent_->winId());
@@ -1164,7 +1175,7 @@ namespace
             reader_ = new Window(Result.assets,Result.publication,preparedEngine_,"light",{},settingsPath_,preparedGeneration_,initiallyInteractive_,sourceLines_,globalSettingsPath_,hostChrome_);
             if(!appearance_.isEmpty())reader_->Appearance(appearance_);
             reader_->setWindowFlags(Qt::Window | Qt::FramelessWindowHint | (initiallyInteractive_?Qt::WindowFlags{}:Qt::WindowFlags(Qt::WindowDoesNotAcceptFocus)));
-            reader_->winId();reader_->windowHandle()->setParent(nativeParent_);reader_->setAttribute(Qt::WA_ShowWithoutActivating);
+            attachReader(reader_);
             nativeReader_=static_cast<std::uintptr_t>(reader_->winId());reader_->show();preparing_=false;
         }
         std::optional<Prepared> prepared_;QString preparedEngine_;qint64 preparedGeneration_=1;

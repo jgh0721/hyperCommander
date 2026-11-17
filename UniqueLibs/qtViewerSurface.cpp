@@ -450,7 +450,12 @@ bool QtViewerSurface::IsPinned() const
     if (S.previewPinned_) S.status_->setText(tr("편집 보호를 위해 현재 파일 유지 · 닫을 때 변경 내용을 확인합니다."));
     return S.previewPinned_;
 }
-void QtViewerSurface::Pin() { if (state_->request_.purpose_ == ViewerPurpose::QuickPreview) state_->previewPinned_ = true; }
+void QtViewerSurface::Pin()
+{
+    if (state_->request_.purpose_ != ViewerPurpose::QuickPreview) return;
+    state_->previewPinned_ = true;
+    if (state_->pluginViewer_) state_->pluginViewer_->EnterPreview();
+}
 void QtViewerSurface::ResumeFollowing()
 {
     auto& S = *state_;

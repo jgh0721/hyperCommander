@@ -1,5 +1,7 @@
 ﻿#include <QtTest>
 #include "UniqueLibs/document/documentViewPane.hpp"
+#include "text/QTextView.h"
+#include <QMessageBox>
 #include "commonLibs/layout/productLayout.hpp"
 #include <QtConcurrent>
 #include <QJsonArray>
@@ -271,6 +273,41 @@ private slots:
         QVERIFY(!Workspace.Handle(Committed).contains("error")); QVERIFY(Document(Workspace.Snapshot(), Id)["dirty"].toBool()); QCOMPARE(Read(Path), QByteArray("saved revision\n"));
         QVERIFY(!Broker.Commit(Prepared)["committed"].toBool()); QVERIFY(Workspace.Handle(Committed).contains("error"));
         Broker.Close(); Prepared["saveToken"] = QString(32, 'a'); QVERIFY(!Broker.Commit(Prepared)["committed"].toBool());
+    }
+    void nativeBrokerSavePreparesOffThreadAndKeepsNewerEdits()
+    {
+        QTemporaryDir Root; const auto Path = Root.filePath("native-source.txt");
+        QVERIFY(Put(Path, QByteArray(60000, 'a')));
+        auto Input = ReadTextFile(Path); QVERIFY(Input.HasValue());
+        DocumentHostBroker Broker; auto Reader = MakeNativeReadProvider(LocatorKind::Local);
+        const auto Token = Broker.Bind(Input.Value().source_, MakeNativeWritableStorage(LocatorKind::Local, Reader), {}, Input.Value().hash_);
+        QVERIFY(!Token.isEmpty());
+        DocumentWorkspaceWidget Workspace(Root.filePath("recovery"));
+        Workspace.SetClosePrompt([](const QString&) { return int(QMessageBox::Discard); });
+        const auto Id = Workspace.Handle({{"action", "open"}, {"path", Path}, {"sourceToken", Token}, {"broker", true}})["documentId"].toString();
+        QTRY_VERIFY(Ready(Workspace.Snapshot(), Id));
+        auto* Source = Workspace.findChild<QTextView*>(); QVERIFY(Source);
+        const QString Saved = QString(60000, 'b'), Later = QString(60000, 'c');
+        Source->ReplaceContent(Saved);
+        auto* Save = Workspace.findChild<QAction*>("saveDocument"); QVERIFY(Save); QVERIFY(Save->isEnabled());
+        Save->trigger(); QVERIFY(Document(Workspace.Snapshot(), Id)["saving"].toBool());
+        Source->ReplaceContent(Later);
+        QTRY_COMPARE(Workspace.Snapshot()["pendingSaves"].toArray().size(), 1);
+        const auto Prepared = Workspace.Snapshot()["pendingSaves"].toArray().first().toObject();
+        const auto Chunk = Workspace.Handle({{"action", "saveRead"}, {"documentId", Id}, {"saveToken", Prepared["saveToken"]},
+            {"offset", "0"}, {"count", 60000}});
+        const auto Frozen = QByteArray::fromBase64(Chunk["bytes"].toString().toLatin1());
+        QCOMPARE(Frozen, Saved.toUtf8());
+        const auto Committed = Worker([&] { return Broker.CommitBytes(Prepared, Frozen); });
+        QVERIFY2(Committed["committed"].toBool(), qPrintable(Committed["error"].toString()));
+        QVERIFY(!Workspace.Handle(Committed).contains("error"));
+        QCOMPARE(Read(Path), Saved.toUtf8()); QCOMPARE(Source->Content(), Later);
+        QVERIFY(Document(Workspace.Snapshot(), Id)["dirty"].toBool());
+        Save->trigger(); Workspace.Handle({{"action", "cancel"}, {"documentId", Id}});
+        QTRY_VERIFY(!Document(Workspace.Snapshot(), Id)["saving"].toBool());
+        QVERIFY(Workspace.Snapshot()["pendingSaves"].toArray().isEmpty());
+        QCOMPARE(Read(Path), Saved.toUtf8()); QCOMPARE(Source->Content(), Later);
+        QTRY_VERIFY(Workspace.RequestClose());
     }
     void nativeSdkRhwpDocument_data()
     {

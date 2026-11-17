@@ -1,6 +1,10 @@
 ﻿#include "rstTestRunner.hpp"
 
 #include "esbonioLspClient.hpp"
+#include "lspWriteQueue.hpp"
+#include <QSemaphore>
+#include <QScopeGuard>
+#include <atomic>
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -33,6 +37,8 @@ private slots:
     void jsonRpcParserHandlesMultipleMessagesInOneRead();
     void workspaceUriMatchesEsbonioScope_data();
     void workspaceUriMatchesEsbonioScope();
+    void fullTextQueueCoalescesWithoutCrossingRequests();
+    void fullTextQueueRejectsPreviousProcessGeneration();
 };
 
 void TestLspMessageRouting::classifies_data()
@@ -160,6 +166,46 @@ void TestLspMessageRouting::workspaceUriMatchesEsbonioScope()
     QFETCH( QString, path );
     QFETCH( QString, expected );
     QCOMPARE( hc::rst::esbonioScopeUri( path ), expected );
+}
+
+void TestLspMessageRouting::fullTextQueueCoalescesWithoutCrossingRequests()
+{
+    auto Release = std::make_shared<QSemaphore>();
+    auto Started = std::make_shared<std::atomic<bool>>(false);
+    const auto Unblock = qScopeGuard([&] { Release->release(); });
+    QList<QByteArray> Sent;
+    LspWriteQueue Queue([&](const QByteArray& Frame) { Sent.append(Frame); });
+    Queue.Enqueue([Release, Started] {
+        Started->store(true); Release->tryAcquire(1, 5000); return QByteArray("open");
+    });
+    QTRY_VERIFY(Started->load());
+    Queue.Enqueue([] { return QByteArray("v2"); }, "document");
+    Queue.Enqueue([] { return QByteArray("v3"); }, "document");
+    Queue.Enqueue(QByteArray("completion"));
+    Queue.Enqueue([] { return QByteArray("v4"); }, "document");
+    Queue.Enqueue([] { return QByteArray("v5"); }, "document");
+    Queue.Enqueue(QByteArray("save")); Queue.Enqueue(QByteArray("close"));
+    QVERIFY(Sent.isEmpty()); Release->release();
+    QTRY_VERIFY(Queue.Idle());
+    QCOMPARE(Sent, QList<QByteArray>({"open", "v3", "completion", "v5", "save", "close"}));
+}
+void TestLspMessageRouting::fullTextQueueRejectsPreviousProcessGeneration()
+{
+    auto Release = std::make_shared<QSemaphore>();
+    auto Started = std::make_shared<std::atomic<bool>>(false);
+    auto Finished = std::make_shared<std::atomic<bool>>(false);
+    const auto Unblock = qScopeGuard([&] { Release->release(); });
+    QList<QByteArray> Sent;
+    LspWriteQueue Queue([&](const QByteArray& Frame) { Sent.append(Frame); });
+    Queue.Enqueue([Release, Started, Finished] {
+        Started->store(true); Release->tryAcquire(1, 5000); Finished->store(true); return QByteArray("old-open");
+    });
+    QTRY_VERIFY(Started->load());
+    Queue.Enqueue(QByteArray("old-request")); Queue.Reset();
+    Queue.Enqueue([] { return QByteArray("new-open"); }); Queue.Enqueue(QByteArray("new-request"));
+    QTRY_VERIFY(Queue.Idle()); Release->release(); QTRY_VERIFY(Finished->load());
+    QTest::qWait(30);
+    QCOMPARE(Sent, QList<QByteArray>({"new-open", "new-request"}));
 }
 
 HC_RST_REGISTER_TEST( TestLspMessageRouting );

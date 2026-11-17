@@ -45,7 +45,7 @@ void EpubSourceEditor::editMetadata() {
 void EpubSourceEditor::inspectImage(const QString& Path) {
     if(!ready_ || structuring_ || imageInspection_.isRunning() || !flush())return;
     if(!mediaOf(Path).startsWith("image/")){report(tr("사용 위치를 확인할 이미지 리소스를 선택해 주세요."));return;}
-    imageInspectionToken_=Token();auto Model=model_;report(tr("이미지의 사용 위치와 속성을 확인하고 있습니다…"));
+    imageInspectionToken_=RevisionToken();auto Model=model_;report(tr("이미지의 사용 위치와 속성을 확인하고 있습니다…"));
     const auto Cancel=cancel_;imageInspection_.setFuture(QtConcurrent::run([Model=std::move(Model),Path,Cancel]{return Model.InspectImage(Path,[Cancel]{return Cancel->load();});}));
 }
 void EpubSourceEditor::editImageProperties(const QJsonObject& Info) {

@@ -51,6 +51,10 @@ QModelIndexList CGridView::SelectionCandidates() const
 QModelIndexList CGridView::SelectedSourceIndexes() const
 {
     QModelIndexList Result;
+    // A cursor move does not select a file. In a grouped panel, resolving an
+    // empty selection used to enumerate and format every source identity just
+    // to produce an empty status-bar total (about 60 ms for 30,000 files).
+    if (GroupingActive() && groupedSelection_.isEmpty()) return Result;
     if (!GroupingActive()) {
         for (auto Index : view_->selection()->selectedRowIndexes()) {
             while (const auto* Proxy = qobject_cast<const QAbstractProxyModel*>(Index.model())) Index = Proxy->mapToSource(Index);

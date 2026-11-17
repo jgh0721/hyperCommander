@@ -1,5 +1,7 @@
-﻿#include "text/ScintillaQtDirectBackend.h"
+﻿#include "stdafx.h"
+#include "text/ScintillaQtDirectBackend.h"
 
+#include "UniqueLibs/startupTrace.hpp"
 #include "core/ThemeManager.h"
 #include "text/ScintillaEditorSettings.h"
 #include "text/TextLexerRegistry.h"
@@ -17,6 +19,8 @@
 #include "UniqueLibs/document/imagePerformance.hpp"
 #include <QTextStream>
 #include <QTimer>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QWidget>
 
 #include <ScintillaEditBase.h>
@@ -250,6 +254,11 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
                 pendingMarkerLine_ = pendingMarkerLine_ < 0 ? Line : qMin(pendingMarkerLine_, Line); queueDecorationSignals();
             }
             if (!Inserted && !Deleted) return;
+            if (textSnapshot_) {
+                textSnapshot_ = textSnapshot_->Replace(static_cast<std::size_t>(Position),
+                    Deleted ? static_cast<std::size_t>(Length) : 0,
+                    Inserted ? std::string(ChangedText.constData(), static_cast<std::size_t>(Length)) : std::string{});
+            }
             emit textEdited(qint64(Position), Deleted ? qint64(Length) : 0, Inserted ? qint64(Length) : 0);
             emitDocumentEdited(Inserted, static_cast<int>(Position), static_cast<int>(Length), static_cast<int>(LinesAdded), ChangedText);
             if (characterCount_ >= 0) {
@@ -260,6 +269,7 @@ ScintillaQtDirectBackend::ScintillaQtDirectBackend(QWidget* editorParent, QObjec
             syncLineCountState(true);
             // Undo and redo arrive here too, so line maps kept by hosts stay in step.
             if (LinesAdded != 0) emit linesShifted(static_cast<int>(Send(SCI_LINEFROMPOSITION, Position)), static_cast<int>(LinesAdded));
+            if (LinesAdded != 0) m_foldLevelCache.clear();
             scheduleContainerFoldUpdate();
             emit textChanged();
         });
@@ -444,12 +454,22 @@ void ScintillaQtDirectBackend::flushDecorationSignals()
 	if (MarkerLine >= 0) emit MarkersChanged(MarkerLine);
 }
 
+hc::document::TextSnapshot ScintillaQtDirectBackend::CaptureTextSnapshot() const
+{
+    if (!textSnapshot_) {
+        const auto Bytes = textRangeUtf8(0, documentLength());
+        textSnapshot_.emplace(std::string(Bytes.constData(), static_cast<std::size_t>(Bytes.size())));
+    }
+    return *textSnapshot_;
+}
+
 void ScintillaQtDirectBackend::AttachDocument(qintptr Document)
 {
 	if (!m_editor || !Document)
 		return;
 
 	m_editor->send(sciMessage(SCI_SETDOCPOINTER), 0, Document);
+    textSnapshot_.reset(); ++foldGeneration_;
 	// Code page and the cached counts belong to the document that was replaced.
 	m_editor->send(sciMessage(SCI_SETCODEPAGE), Scintilla::CpUtf8);
 	characterCount_ = -1;
@@ -1265,6 +1285,7 @@ void ScintillaQtDirectBackend::syncLineCountState(bool emitSignal)
 
 void ScintillaQtDirectBackend::emitCursorAndSelectionState()
 {
+    hc::startup::Span InputTrace("input.detail.emitCursorAndSelectionState");
 	if (!m_editor)
 		return;
 
@@ -1363,7 +1384,11 @@ void ScintillaQtDirectBackend::applyThemeColors(bool dark)
 
 	m_editor->send(sciMessage(SCI_STYLESETFORE), STYLE_DEFAULT, colourToSci(fg));
 	m_editor->send(sciMessage(SCI_STYLESETBACK), STYLE_DEFAULT, colourToSci(bg));
-	m_editor->send(sciMessage(SCI_STYLECLEARALL));
+	// Let Scintilla verify real advances before using its ASCII arithmetic path.
+    // This is a probe, not a font-family assumption; proportional fonts and
+    // ligatures that fail the probe retain exact Qt shaping and run caching.
+    m_editor->send(sciMessage(SCI_STYLESETCHECKMONOSPACED), STYLE_DEFAULT, 1);
+    m_editor->send(sciMessage(SCI_STYLECLEARALL));
 	m_editor->send(sciMessage(SCI_STYLESETFORE), STYLE_INDENTGUIDE, colourToSci(indentGuide));
 	m_editor->send(sciMessage(SCI_STYLESETBACK), STYLE_INDENTGUIDE, colourToSci(bg));
 
@@ -2042,49 +2067,58 @@ void ScintillaQtDirectBackend::applyRstSyntaxStyles()
 
 void ScintillaQtDirectBackend::updateContainerFoldLevels()
 {
-	if (!m_editor || m_foldSource == FoldSource::Lexer)
-		return;
-	// A scheduled update is older than this one.
-	if (m_containerFoldTimer != nullptr)
-		m_containerFoldTimer->stop();
+    if (!m_editor || m_foldSource == FoldSource::Lexer) return;
+    if (m_containerFoldTimer) m_containerFoldTimer->stop();
+    if (!m_codeFoldingEnabled) {
+        ++foldGeneration_;
+        m_editor->send(sciMessage(SCI_FOLDALL), SC_FOLDACTION_EXPAND);
+        return;
+    }
+    if (foldWorkerActive_) return; // completion schedules the latest revision
+    const int TotalLines = lineCount();
+    if (TotalLines <= 0 || TotalLines > 200000) return;
+    const auto Snapshot = CaptureTextSnapshot();
+    const auto Generation = ++foldGeneration_;
+    foldWorkerActive_ = true;
+    using Levels = std::shared_ptr<const std::vector<int>>;
+    auto* Watcher = new QFutureWatcher<Levels>(this);
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation] {
+        auto Result = Watcher->result(); Watcher->deleteLater(); foldWorkerActive_ = false;
+        if (Generation == foldGeneration_) applyContainerFolds(Generation, std::move(Result));
+        else scheduleContainerFoldUpdate();
+    });
+    Watcher->setFuture(QtConcurrent::run([Snapshot] {
+        hc::startup::Span InputTrace("input.rst.folds.compute");
+        const auto Folds = hc::rst::syntax::computeFoldLevels(Snapshot.Bytes());
+        auto Result = std::make_shared<std::vector<int>>();
+        Result->reserve(Folds.size());
+        for (const auto& Fold : Folds) {
+            int Level = SC_FOLDLEVELBASE + qBound(0, Fold.level, 0x3ff);
+            if (Fold.header) Level |= SC_FOLDLEVELHEADERFLAG;
+            if (Fold.blank) Level |= SC_FOLDLEVELWHITEFLAG;
+            Result->push_back(Level);
+        }
+        return Levels(std::move(Result));
+    }));
+}
 
-	if (!m_codeFoldingEnabled) {
-		// The margin is gone; text folded before stays hidden unless everything is expanded.
-		m_editor->send(sciMessage(SCI_FOLDALL), SC_FOLDACTION_EXPAND);
-		return;
-	}
-
-	constexpr int kContainerFoldMaxLines = 200000;
-	constexpr int kMaxFoldDepth = 0x3FF;
-	const int totalLines = lineCount();
-	if (totalLines <= 0 || totalLines > kContainerFoldMaxLines)
-		return;
-
-	const QByteArray text = textRangeUtf8(0, documentLength());
-	const std::vector<hc::rst::syntax::FoldLine> folds =
-		hc::rst::syntax::computeFoldLevels(std::string(text.constData(), static_cast<std::size_t>(text.size())));
-	const int lines = qMin(totalLines, static_cast<int>(folds.size()));
-
-	// Only lines whose level changed are sent. A different line count means another text: send all.
-	if (static_cast<int>(m_foldLevelCache.size()) != lines)
-		m_foldLevelCache.assign(static_cast<std::size_t>(lines), -1);
-	for (int line = 0; line < lines; ++line) {
-		const hc::rst::syntax::FoldLine& fold = folds[static_cast<std::size_t>(line)];
-		int level = SC_FOLDLEVELBASE + qBound(0, fold.level, kMaxFoldDepth);
-		if (fold.header)
-			level |= SC_FOLDLEVELHEADERFLAG;
-		if (fold.blank)
-			level |= SC_FOLDLEVELWHITEFLAG;
-		int& cached = m_foldLevelCache[static_cast<std::size_t>(line)];
-		if (cached == level)
-			continue;
-		cached = level;
-		m_editor->send(sciMessage(SCI_SETFOLDLEVEL), line, level);
-	}
+void ScintillaQtDirectBackend::applyContainerFolds(quint64 Generation,
+    std::shared_ptr<const std::vector<int>> Levels)
+{
+    if (Generation != foldGeneration_ || !m_editor || !m_codeFoldingEnabled || m_foldSource == FoldSource::Lexer) return;
+    hc::startup::Span InputTrace("input.rst.folds.apply");
+    if (m_foldLevelCache == *Levels) return;
+    // One bulk publication: no per-line notifications or intermediate visible
+    // trees. Each attached view preserves collapsed flags and its viewport anchor.
+    if (m_editor->ReplaceFoldLevels(Levels->data(), Levels->size())) {
+        m_foldLevelCache = *Levels;
+        emit MarkersChanged(0);
+    }
 }
 
 void ScintillaQtDirectBackend::scheduleContainerFoldUpdate()
 {
+    ++foldGeneration_;
 	if (!m_editor || m_foldSource == FoldSource::Lexer)
 		return;
 	// One title adornment changes the depth of every section below it, so levels are computed per document.

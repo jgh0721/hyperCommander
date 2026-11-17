@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/startupTrace.hpp"
 #include "epubResourceTree.hpp"
 #include "epubSourceTabs.hpp"
 #include "epubProcessView.hpp"
@@ -306,10 +307,11 @@ void EpubSourceEditor::setupStatus() {
     auto* Original=statusLabel(statusStrip_,"epubStatusOriginal");Original->setText(tr("저장 · 현재 파일 / 다른 이름 저장 · 사본"));Original->setForegroundRole(QPalette::PlaceholderText);Original->setToolTip(tr("변경 내용을 먼저 반영하고 검사합니다. 저장은 현재 EPUB을 갱신하고, 다른 이름 저장은 사본을 만듭니다."));Row->addWidget(Original);
 }
 void EpubSourceEditor::updateStatus() {
+    hc::startup::Span InputTrace("input.detail.updateStatus");
     if(!statusStrip_)return;
     QString Validation;int Errors=0,Warnings=0;for(const auto& Value:diagnosticRows_){const auto Severity=Value.toObject()["severity"].toString();if(Severity=="ERROR" || Severity=="FATAL")++Errors;else if(Severity=="WARNING")++Warnings;}
     if(nativeValidating_)Validation=tr("검사 중…");else if(checkerState_=="running")Validation=tr("EPUBCheck 검사 중…");
-    else if(ready_ && validatedToken_==Token() && !validatedBytes_.isEmpty())Validation=tr("✓ 기본 검사 통과")+(checkerState_=="passed"?(Warnings?tr(" · EPUBCheck 경고 %1").arg(Warnings):tr(" · EPUBCheck 통과")):checkerState_=="failed"?tr(" · EPUBCheck 오류 %1").arg(Errors):QString{});
+    else if(ready_ && validatedToken_==RevisionToken() && !validatedBytes_.isEmpty())Validation=tr("✓ 기본 검사 통과")+(checkerState_=="passed"?(Warnings?tr(" · EPUBCheck 경고 %1").arg(Warnings):tr(" · EPUBCheck 통과")):checkerState_=="failed"?tr(" · EPUBCheck 오류 %1").arg(Errors):QString{});
     else if(!error_.isEmpty())Validation=tr("⚠ 검사 실패");else Validation=tr("검사 전");
     statusValidation_->setText(Validation);statusValidation_->setToolTip(validationSnapshot()["state"].toString());
     statusProblems_->setText(tr("문제 %1").arg(diagnosticRows_.size()));statusProblems_->setVisible(panelsTaken_?!action("epubToggleProblems")->isChecked():problemsPanel_ && problemsPanel_->isHidden());
@@ -336,6 +338,7 @@ QString EpubSourceEditor::treeResource()const {
     const auto Override=property("epubActionTarget").toString();return Override.isEmpty()?current_:Override;
 }
 void EpubSourceEditor::updateActions() {
+    hc::startup::Span InputTrace("input.detail.updateActions");
     if(actions_.isEmpty())return;
     const bool Idle=ready_ && !structuring_,Editable=Idle && !sourceReadOnly_;const auto Target=treeResource();const auto Media=mediaOf(Target);const auto Publication=model_.Publication();
     const bool Package=Target==Publication["rootfile"].toString() || Media=="application/x-dtbncx+xml";const auto Spine=Publication["spine"].toArray();int Chapter=-1;for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==Target)Chapter=I;
@@ -349,7 +352,7 @@ void EpubSourceEditor::updateActions() {
     action("epubChapterUp")->setEnabled(Idle && Chapter>0);action("epubChapterDown")->setEnabled(Idle && Chapter>=0 && Chapter+1<Spine.size());action("epubPreviewChapter")->setEnabled(Idle && Chapter>=0 && previewView_);
     action("epubCopyPath")->setEnabled(!Target.isEmpty());action("epubCopyRelativePath")->setEnabled(!Target.isEmpty() && !current_.isEmpty() && Target!=current_);action("epubExportResource")->setEnabled(Idle && !Target.isEmpty());
     action("epubCloseTab")->setEnabled(tabs_->count()>0);action("epubCloseOtherTabs")->setEnabled(tabs_->count()>1);action("epubCloseRightTabs")->setEnabled(tabs_->currentIndex()+1<tabs_->count());action("epubRevertResource")->setEnabled(Editable && sourceShown() && sourceModified());
-    action("epubQuickFix")->setEnabled(Editable && sourceShown() && !quickFixAt(sourcePosition()).isEmpty());action("epubOpenLink")->setEnabled(Idle && sourceShown() && !linkAt(sourcePosition()).isEmpty());
+    action("epubQuickFix")->setEnabled(false);action("epubOpenLink")->setEnabled(false);scheduleContextHints();
     action("epubLocateSource")->setEnabled(Idle && sourceShown() && previewView_);action("epubPreviewRefresh")->setEnabled(Idle && previewRuntime_.has_value());
     for(const auto& Tag:{"em","strong","span","a","ruby","custom"})action(QString("epubWrap_")+Tag)->setEnabled(Editable && Selection && mediaOf(current_)=="application/xhtml+xml");
     action("epubRecoverDraft")->setEnabled(Idle && !recoveryEntries_.isEmpty());action("epubDraftMenuAction")->setEnabled(true);action("epubValidateMenuAction")->setEnabled(ready_);action("epubStructureMenuAction")->setEnabled(ready_);
@@ -399,7 +402,7 @@ void EpubSourceEditor::setPanelVisible(const QString& Panel,bool Visible) {
     // Reader mode keeps only the preview. A hidden preview stays alive and only pauses automatic refresh.
     if(!panelsTaken_){treePanel_->setVisible(Source && action("epubToggleTree")->isChecked());problemsPanel_->setVisible(Source && action("epubToggleProblems")->isChecked());}
     previewPanel_->setVisible(previewRuntime_.has_value() && (!Source || action("epubTogglePreview")->isChecked()));
-    if(previewPanel_->isHidden())previewTimer_.stop();else if(!WasPreview && (action("epubAutoPreview")->isChecked() || previewMissing()) && previewActiveToken_!=Token())previewTimer_.start();
+    if(previewPanel_->isHidden())previewTimer_.stop();else if(!WasPreview && (action("epubAutoPreview")->isChecked() || previewMissing()) && previewActiveToken_!=RevisionToken())previewTimer_.start();
     for(auto* Widget:{treePanel_,problemsPanel_,previewPanel_})if(Widget->isHidden() && Widget->isAncestorOf(QApplication::focusWidget()))focusSource();
     updateStatus();if(layoutRestored_)layoutTimer_.start();
 }
@@ -412,6 +415,7 @@ void EpubSourceEditor::selectResource(const QString& Path) {
     const QSignalBlocker Block(tree_->selectionModel());if(Index.isValid()){tree_->setCurrentIndex(Index);tree_->scrollTo(Index);}else tree_->clearSelection();resourceModel_->Refresh();
 }
 void EpubSourceEditor::refreshTabs() {
+    hc::startup::Span InputTrace("input.detail.refreshTabs");
     if(!tabs_)return;const bool Old=updating_;updating_=true;
     openResources_.removeIf([this](const QString& Path){return !model_.Publication().isEmpty() && !model_.IsEditable(Path);});
     bool Same=tabs_->count()==openResources_.size();for(int I=0;Same && I<tabs_->count();++I)Same=tabs_->tabData(I).toString()==openResources_[I];

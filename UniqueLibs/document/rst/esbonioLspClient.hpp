@@ -12,7 +12,10 @@
 
 #include <memory>
 
+namespace hc::document { class TextSnapshot; }
 namespace hc::rst {
+
+class LspWriteQueue;
 
 struct LspCompletionItem {
     QString label;
@@ -123,6 +126,9 @@ public:
     void stop(StopMode mode = StopMode::Immediate);
     void didOpen(const QString& path, const QString& text, const QString& languageId = QStringLiteral("rst"));
     void didChange(const QString& path, const QString& text);
+    void DidOpenSnapshot(const QString& Path, const hc::document::TextSnapshot& Text, const QString& Language);
+    void DidChangeSnapshot(const QString& Path, const hc::document::TextSnapshot& Text);
+    void DidSaveSnapshot(const QString& Path, const hc::document::TextSnapshot& Text);
     /// 편집 한 건만 보낸다. 좌표는 협상된 위치 인코딩 기준이며, 우리는 utf-8 을
     /// 선호로 선언하므로 성사되면 Scintilla 의 바이트 오프셋이 그대로 들어간다.
     ///
@@ -164,12 +170,15 @@ private:
     void handleResponse(const QJsonObject& message);
     void handleNotification(const QString& method, const QJsonObject& params);
     void write(const QByteArray& frame);
+    void writeNow(const QByteArray& Frame);
+    void queueText(const QString& Method, QJsonObject Identifier, hc::document::TextSnapshot Text);
     [[nodiscard]] QString pathToUri(const QString& path) const;
     [[nodiscard]] QJsonObject textDocumentIdentifier(const QString& path) const;
     [[nodiscard]] QJsonObject sphinxConfiguration() const;
     [[nodiscard]] QJsonValue configurationForSection(const QString& section) const;
 
     std::unique_ptr<QProcess> process_;
+    std::unique_ptr<LspWriteQueue> writeQueue_;
     JsonRpcWriter writer_;
     JsonRpcParser parser_;
     SphinxProject project_;

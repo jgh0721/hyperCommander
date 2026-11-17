@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QFontDatabase>
 #include <QClipboard>
+#include <QCryptographicHash>
 #include <QInputMethodEvent>
 #include <QStringList>
 #include <QTest>
@@ -45,6 +46,12 @@ class ScintillaTextMetricsTest : public QObject
     Q_OBJECT
 
 private slots:
+    void measuredRunCacheExact();
+    void measuredRunCacheBounded();
+    void measuredRunCacheFontRefresh();
+    void hiddenUnwrapUsesCurrentMode();
+    void longMixedLineKeepsUnchangedMeasurements();
+    void longMixedLineMatchesQtPositions();
     void                                screenLineEnd_data();
     void                                screenLineEnd();
     void                                rectangularMultiCaret_data();
@@ -60,6 +67,201 @@ private slots:
     void                                backgroundFillsCoverDevicePixels_data();
     void                                backgroundFillsCoverDevicePixels();
 };
+
+void ScintillaTextMetricsTest::measuredRunCacheExact()
+{
+    using namespace Scintilla;
+    using namespace Scintilla::Internal;
+    using namespace mrst::scintilla;
+    const bool Fast = monospaceFastPathEnabled();
+    const auto Restore = qScopeGuard([Fast] {
+        setMonospaceFastPathEnabled(Fast); setMeasuredRunCacheEnabled(true); clearMeasuredRunCache();
+    });
+    setMonospaceFastPathEnabled(false); clearMeasuredRunCache();
+    const QStringList Samples{
+        QStringLiteral("ASCII office ffi => != <=> repeated text with spaces                 "),
+        QStringLiteral("한글과 English 결합 e\u0301 한글 \u1100\u1161\u11A8 emoji \U0001F60A soft\u00adhyphen ").repeated(2),
+        QStringLiteral("Arabic العربية Hebrew עברית and Latin text with trailing spaces    ")
+    };
+    for (const auto* Family : {"Arial", "Consolas", "D2Coding ligature"}) {
+        const auto Font = Font::Allocate(FontParameters(Family, 17, FontWeight::Normal,
+            false, FontQuality::QualityAntialiased, Technology::Default, CharacterSet::Ansi, "en", FontStretch::Normal));
+        for (const int Dpi : {96, 144, 192}) {
+            QImage Device(400, 200, QImage::Format_ARGB32_Premultiplied);
+            Device.setDotsPerMeterX(qRound(Dpi / 0.0254)); Device.setDotsPerMeterY(qRound(Dpi / 0.0254));
+            Device.setDevicePixelRatio(Dpi / 96.0);
+            SurfaceImpl Surface; Surface.Init(&Device, nullptr); Surface.SetMode(SurfaceMode(SC_CP_UTF8, false));
+            for (const auto& Sample : Samples) {
+                const auto Bytes = Sample.toUtf8(); const std::string_view Text(Bytes.constData(), Bytes.size());
+                std::vector<XYPOSITION> Expected(Bytes.size()), First(Bytes.size()), Cached(Bytes.size());
+                setMeasuredRunCacheEnabled(false);
+                Surface.MeasureWidthsUTF8(Font.get(), Text, Expected.data());
+                setMeasuredRunCacheEnabled(true);
+                const auto Hits = measuredRunCacheHits();
+                Surface.MeasureWidthsUTF8(Font.get(), Text, First.data());
+                QCOMPARE(measuredRunCacheHits(), Hits); // New font/DPI/text must miss.
+                Surface.MeasureWidthsUTF8(Font.get(), Text, Cached.data());
+                QCOMPARE(measuredRunCacheHits(), Hits + 1);
+                QVERIFY(Expected == First); QVERIFY(Expected == Cached);
+                Surface.MeasureWidths(Font.get(), Text, Cached.data());
+                QVERIFY(Expected == Cached); // Both UTF-8 entry points agree.
+            }
+            Surface.Release();
+        }
+    }
+}
+
+void ScintillaTextMetricsTest::longMixedLineMatchesQtPositions()
+{
+    using namespace Scintilla;
+    using namespace Scintilla::Internal;
+    using namespace mrst::scintilla;
+    const bool Fast = monospaceFastPathEnabled();
+    const auto Restore = qScopeGuard([Fast] {
+        setMonospaceFastPathEnabled(Fast); setMeasuredRunCacheEnabled(true); clearMeasuredRunCache();
+    });
+    const auto Text = (QStringLiteral("0123456789abcdef").repeated(4)
+        + QStringLiteral(" e\u0301 한글 \U0001F60A emoji fi -> end ")).repeated(32).toUtf8();
+    for (const auto* Family : {"Consolas", "Arial"}) {
+        ScintillaEditBase Editor;
+        Editor.resize(1100, 720);
+        Editor.send(SCI_SETCODEPAGE, SC_CP_UTF8);
+        Editor.send(SCI_SETFONTQUALITY, SC_EFF_QUALITY_ANTIALIASED);
+        Editor.sends(SCI_STYLESETFONT, STYLE_DEFAULT, Family);
+        Editor.send(SCI_STYLESETSIZE, STYLE_DEFAULT, 17);
+        Editor.send(SCI_STYLESETCHECKMONOSPACED, STYLE_DEFAULT, 1);
+        Editor.send(SCI_STYLECLEARALL);
+        Editor.send(SCI_SETWRAPMODE, SC_WRAP_NONE);
+        Editor.sends(SCI_SETTEXT, 0, Text.constData());
+        const auto Font = Font::Allocate(FontParameters(Family, 17, FontWeight::Normal,
+            false, FontQuality::QualityAntialiased, Technology::Default, CharacterSet::Ansi, "en", FontStretch::Normal));
+        SurfaceImpl Surface; Surface.Init(static_cast<QPaintDevice*>(Editor.viewport()), nullptr);
+        std::vector<XYPOSITION> Expected(Text.size());
+        setMonospaceFastPathEnabled(false); setMeasuredRunCacheEnabled(false);
+        Surface.MeasureWidthsUTF8(Font.get(), std::string_view(Text.constData(), Text.size()), Expected.data());
+        Surface.Release();
+        setMonospaceFastPathEnabled(true); setMeasuredRunCacheEnabled(true);
+        const auto Origin = Editor.send(SCI_POINTXFROMPOSITION, 0, 0);
+        for (sptr_t At = Editor.send(SCI_POSITIONAFTER, 0); At <= Text.size();) {
+            const auto X = Editor.send(SCI_POINTXFROMPOSITION, 0, At) - Origin;
+            QVERIFY2(qAbs(double(X) - Expected[At - 1]) < 1.1,
+                qPrintable(QString("%1 byte %2: editor %3, Qt %4").arg(Family).arg(At).arg(X).arg(Expected[At - 1])));
+            if (At == Text.size()) break;
+            At = Editor.send(SCI_POSITIONAFTER, At);
+        }
+    }
+}
+
+void ScintillaTextMetricsTest::longMixedLineKeepsUnchangedMeasurements()
+{
+    using namespace mrst::scintilla;
+    clearMeasuredRunCache();
+    const auto Restore = qScopeGuard([] { clearMeasuredRunCache(); });
+    ScintillaEditBase Editor;
+    Editor.resize(1100, 720);
+    Editor.send(SCI_SETCODEPAGE, SC_CP_UTF8);
+    Editor.sends(SCI_STYLESETFONT, STYLE_DEFAULT, "Consolas");
+    Editor.send(SCI_STYLESETSIZE, STYLE_DEFAULT, 17);
+    Editor.send(SCI_STYLESETCHECKMONOSPACED, STYLE_DEFAULT, 1);
+    Editor.send(SCI_STYLECLEARALL);
+    Editor.send(SCI_SETWRAPMODE, SC_WRAP_NONE);
+    QByteArray Text;
+    const auto Suffix = QStringLiteral(" 한글 e\u0301 emoji \U0001F60A fi ->.</p>").toUtf8();
+    for (int Index = 0; Index < 10000; ++Index)
+        Text += "<p>" + QCryptographicHash::hash(QByteArray::number(Index), QCryptographicHash::Sha256).toHex() + Suffix;
+    Editor.sends(SCI_SETTEXT, 0, Text.constData());
+    const auto At = Text.indexOf("</p>", Text.size() / 2);
+    Editor.send(SCI_GOTOPOS, At);
+    unsigned long long Most = 0;
+    for (int Index = 0; Index < 30; ++Index) {
+        const auto Before = measuredRunShapeCount();
+        Editor.sends(SCI_REPLACESEL, 0, "x");
+        Most = qMax(Most, measuredRunShapeCount() - Before);
+    }
+    qInfo() << "long-line maximum newly shaped runs per edit" << Most;
+    // An edit near the middle must not reshape thousands of unchanged suffix runs.
+    QVERIFY2(Most <= 32, "Unchanged suffix partition shifted after a local edit");
+}
+
+void ScintillaTextMetricsTest::hiddenUnwrapUsesCurrentMode()
+{
+    ScintillaEditBase Editor;
+    Editor.resize(240, 180);
+    Editor.send(SCI_SETCODEPAGE, SC_CP_UTF8);
+    Editor.sends(SCI_STYLESETFONT, STYLE_DEFAULT, "Consolas");
+    Editor.send(SCI_STYLESETSIZE, STYLE_DEFAULT, 12);
+    Editor.send(SCI_STYLESETCHECKMONOSPACED, STYLE_DEFAULT, 1);
+    Editor.send(SCI_STYLECLEARALL);
+    Editor.send(SCI_SETWRAPMODE, SC_WRAP_WORD);
+    const QByteArray Text = QByteArray("long source line with spaces ").repeated(100);
+    const auto Document = Text + "\ntrailer";
+    Editor.sends(SCI_SETTEXT, 0, Document.constData());
+    Editor.show(); QTest::qWait(100);
+    const auto YStart = Editor.send(SCI_POINTYFROMPOSITION, 0, 0);
+    QVERIFY(Editor.send(SCI_POINTYFROMPOSITION, 0, Text.size()) > YStart);
+    Editor.hide();
+    Editor.send(SCI_SETWRAPMODE, SC_WRAP_NONE);
+    QCOMPARE(Editor.send(SCI_WRAPCOUNT, 0), sptr_t(1));
+    // No paint/event-loop turn may be required for a hidden pane's caret geometry.
+    QCOMPARE(Editor.send(SCI_POINTYFROMPOSITION, 0, Text.size()), YStart);
+    QVERIFY(Editor.send(SCI_POINTXFROMPOSITION, 0, Text.size()) > Editor.width() * 4);
+    QCOMPARE(Editor.send(SCI_POINTYFROMPOSITION, 0, Text.size() + 1), YStart + Editor.send(SCI_TEXTHEIGHT, 0));
+}
+
+void ScintillaTextMetricsTest::measuredRunCacheFontRefresh()
+{
+    using namespace Scintilla;
+    using namespace Scintilla::Internal;
+    using namespace mrst::scintilla;
+    const bool Fast = monospaceFastPathEnabled();
+    const auto Restore = qScopeGuard([Fast] { setMonospaceFastPathEnabled(Fast); clearMeasuredRunCache(); });
+    setMonospaceFastPathEnabled(false); clearMeasuredRunCache();
+    QImage Device(400, 200, QImage::Format_ARGB32_Premultiplied);
+    SurfaceImpl Surface; Surface.Init(&Device, nullptr);
+    const FontParameters Parameters("Arial", 17, FontWeight::Normal,
+        false, FontQuality::QualityAntialiased, Technology::Default, CharacterSet::Ansi, "en", FontStretch::Normal);
+    const QByteArray Bytes("same font after idle styling: office ffi -> = combining and spaces   ");
+    const std::string_view Text(Bytes.constData(), Bytes.size());
+    std::vector<XYPOSITION> Expected(Bytes.size()), Actual(Bytes.size());
+    { const auto Font = Font::Allocate(Parameters); Surface.MeasureWidthsUTF8(Font.get(), Text, Expected.data()); }
+    const auto Font = Font::Allocate(Parameters);
+    Surface.MeasureWidthsUTF8(Font.get(), Text, Actual.data());
+    QCOMPARE(measuredRunCacheHits(), 1ULL); QVERIFY(Expected == Actual);
+    QVERIFY(QMetaObject::invokeMethod(qApp, "fontDatabaseChanged", Qt::DirectConnection));
+    QCOMPARE(measuredRunCacheCost(), qsizetype(0));
+    Surface.MeasureWidthsUTF8(Font.get(), Text, Actual.data());
+    QCOMPARE(measuredRunCacheHits(), 1ULL); QVERIFY(Expected == Actual);
+    Surface.Release();
+}
+
+void ScintillaTextMetricsTest::measuredRunCacheBounded()
+{
+    using namespace Scintilla;
+    using namespace Scintilla::Internal;
+    using namespace mrst::scintilla;
+    const bool Fast = monospaceFastPathEnabled();
+    const auto Restore = qScopeGuard([Fast] {
+        setMonospaceFastPathEnabled(Fast); clearMeasuredRunCache();
+    });
+    setMonospaceFastPathEnabled(false); clearMeasuredRunCache();
+    QImage Device(400, 200, QImage::Format_ARGB32_Premultiplied);
+    SurfaceImpl Surface; Surface.Init(&Device, nullptr);
+    const auto Font = Font::Allocate(FontParameters("Arial", 12, FontWeight::Normal,
+        false, FontQuality::QualityAntialiased, Technology::Default, CharacterSet::Ansi, "en", FontStretch::Normal));
+    std::vector<XYPOSITION> Positions(96);
+    QByteArray First;
+    for (int Index = 0; Index < 60000; ++Index) {
+        const auto Bytes = QByteArray::number(Index).leftJustified(96, 'a');
+        if (Index == 0) First = Bytes;
+        Surface.MeasureWidthsUTF8(Font.get(), std::string_view(Bytes.constData(), Bytes.size()), Positions.data());
+    }
+    QVERIFY(measuredRunCacheCost() <= 32 * 1024 * 1024);
+    QVERIFY(measuredRunCacheCost() > 24 * 1024 * 1024);
+    const auto Hits = measuredRunCacheHits();
+    Surface.MeasureWidthsUTF8(Font.get(), std::string_view(First.constData(), First.size()), Positions.data());
+    QCOMPARE(measuredRunCacheHits(), Hits); // Oldest run was evicted.
+    Surface.Release();
+}
 
 void ScintillaTextMetricsTest::backgroundFillsCoverDevicePixels_data()
 {

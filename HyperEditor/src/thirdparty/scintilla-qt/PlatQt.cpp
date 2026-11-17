@@ -54,6 +54,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 #include <QApplication>
 #if QT_VERSION >= QT_VERSION_CHECK(5, 0, 0)
@@ -78,6 +79,8 @@
 #include <QVarLengthArray>
 #include <QScrollBar>
 #include <QTextLayout>
+#include <QCache>
+#include <QThread>
 #include <QTextLine>
 #include <QLibrary>
 #include <QtMath>
@@ -224,6 +227,10 @@ public:
 	// const Font* 로만 접근되므로 mutable 이다. ViewStyle::Refresh 가 폰트를
 	// 통째로 다시 만들기 때문에(fonts.clear()) 무효화는 저절로 된다.
 	mutable MonospaceWidths widths;
+    // Scintilla may recreate an identical font when idle styling refreshes the
+    // view. Key immutable font attributes, not its allocation, so the next key
+    // does not reshape the entire line after that refresh.
+    QString measureKey;
 	explicit FontAndCharacterSet(const FontParameters &fp) : characterSet(fp.characterSet) {
 		pfont = std::make_unique<QFont>();
 		pfont->setStyleStrategy(ChooseStrategy(fp.extraFontFlag));
@@ -232,6 +239,7 @@ public:
 		pfont->setBold(static_cast<int>(fp.weight) > 500);
 		pfont->setStretch(QStretchFromFontStretch(fp.stretch));
 		pfont->setItalic(fp.italic);
+        measureKey = pfont->key();
 	}
 };
 
@@ -242,6 +250,72 @@ const Supports SupportsQt[] = {
 	Supports::FractionalStrokeWidth,
 	Supports::TranslucentStroke,
 	Supports::PixelModification,
+};
+
+// Scintilla's position cache retains only runs shorter than 40 bytes. Long
+// unwrapped lines consist of thousands of longer runs: reshaping every unchanged
+// run on each caret reveal dominated input latency. Keep exact Qt results with a
+// byte budget across all fonts; never approximate ligatures or combining marks.
+struct MeasuredRunKey {
+    QString font;
+    int dpiX = 0, dpiY = 0, deviceType = 0, direction = 0;
+    qreal dpr = 1;
+    QByteArray bytes;
+    bool operator==(const MeasuredRunKey&) const = default;
+};
+size_t qHash(const MeasuredRunKey& Key, size_t Seed = 0) noexcept {
+    return qHashMulti(Seed, Key.font, Key.dpiX, Key.dpiY, Key.deviceType, Key.direction, Key.dpr, Key.bytes);
+}
+struct MeasuredRunCache {
+    QCache<MeasuredRunKey, std::vector<XYPOSITION>> runs{32 * 1024 * 1024};
+    quint64 hits = 0, shapes = 0;
+    bool enabled = true;
+    bool connected = false;
+};
+MeasuredRunCache& measuredRuns() {
+    // Qt surfaces do not advertise ThreadSafeMeasureWidths. Keeping the cache
+    // thread-local also prevents sharing mutable cache state if that changes.
+    static thread_local MeasuredRunCache Cache;
+    if (!Cache.connected && qApp && QThread::currentThread() == qApp->thread()) {
+        QObject::connect(qApp, &QGuiApplication::fontDatabaseChanged, qApp, [] {
+            measuredRuns().runs.clear();
+        });
+        Cache.connected = true;
+    }
+    return Cache;
+}
+class MeasuredRun {
+public:
+    MeasuredRun(const FontAndCharacterSet* Font, QPaintDevice* Device,
+                std::string_view Text, XYPOSITION* Positions) : positions_(Positions) {
+        if (!Device || !measuredRuns().enabled || Text.size() < 40 || Text.size() > 4096) return;
+        key_ = {Font->measureKey, Device->logicalDpiX(), Device->logicalDpiY(),
+            Device->devType(), int(QGuiApplication::layoutDirection()), Device->devicePixelRatioF(),
+            QByteArray::fromRawData(Text.data(), qsizetype(Text.size()))};
+        active_ = true;
+    }
+    bool Restore() const {
+        if (!active_) return false;
+        if (const auto* Cached = measuredRuns().runs.object(key_)) {
+            std::copy(Cached->begin(), Cached->end(), positions_);
+            ++measuredRuns().hits;
+            return true;
+        }
+        return false;
+    }
+    void Store() {
+        if (!active_) return;
+        // Lookup borrows the caller's bytes; retained keys must own their storage.
+        key_.bytes = QByteArray(key_.bytes.constData(), key_.bytes.size());
+        auto* Positions = new std::vector<XYPOSITION>(positions_, positions_ + key_.bytes.size());
+        const auto Cost = sizeof(MeasuredRunKey) + sizeof(*Positions) + 128
+            + key_.bytes.size() + key_.font.size() * sizeof(QChar) + Positions->capacity() * sizeof(XYPOSITION);
+        measuredRuns().runs.insert(key_, Positions, qsizetype(Cost));
+    }
+private:
+    MeasuredRunKey key_;
+    XYPOSITION* positions_;
+    bool active_ = false;
 };
 
 const FontAndCharacterSet *AsFontAndCharacterSet(const Font *f) {
@@ -930,6 +1004,12 @@ void LearnWidths(std::string_view text, const XYPOSITION *positions, MonospaceWi
 
 namespace mrst::scintilla {
 
+void setMeasuredRunCacheEnabled(bool Enabled) noexcept { Scintilla::Internal::measuredRuns().enabled = Enabled; }
+void clearMeasuredRunCache() noexcept { Scintilla::Internal::measuredRuns().runs.clear(); Scintilla::Internal::measuredRuns().hits = 0; Scintilla::Internal::measuredRuns().shapes = 0; }
+unsigned long long measuredRunCacheHits() noexcept { return Scintilla::Internal::measuredRuns().hits; }
+unsigned long long measuredRunShapeCount() noexcept { return Scintilla::Internal::measuredRuns().shapes; }
+qsizetype measuredRunCacheCost() noexcept { return Scintilla::Internal::measuredRuns().runs.totalCost(); }
+
 std::atomic<unsigned long long> &measureWidthsCallCount() noexcept
 {
 	static std::atomic<unsigned long long> counter{0};
@@ -947,7 +1027,8 @@ std::atomic<bool> &fastPathFlag() noexcept
 
 void setMonospaceFastPathEnabled(bool enabled) noexcept
 {
-	fastPathFlag().store(enabled, std::memory_order_relaxed);
+	if (fastPathFlag().exchange(enabled, std::memory_order_relaxed) != enabled)
+        clearMeasuredRunCache();
 }
 
 bool monospaceFastPathEnabled() noexcept
@@ -963,8 +1044,7 @@ void SurfaceImpl::MeasureWidths(const Font *font,
 				std::string_view text,
                                 XYPOSITION *positions)
 {
-	mrst::scintilla::measureWidthsCallCount().fetch_add(1, std::memory_order_relaxed);
-	if (!font) {
+	mrst::scintilla::measureWidthsCallCount().fetch_add(1, std::memory_order_relaxed);	if (!font) {
 		// 계약상 배열 전체를 채워야 한다. 원래 코드는 그냥 반환해서 호출자가
 		// 초기화되지 않은 값을 읽었다.
 		std::fill(positions, positions + text.length(), static_cast<XYPOSITION>(0));
@@ -980,6 +1060,9 @@ void SurfaceImpl::MeasureWidths(const Font *font,
 		if (mw->usable && FillMonospacePositions(text, positions, *mw))
 			return;
 	}
+	MeasuredRun Run(AsFontAndCharacterSet(font), GetPaintDevice(), mode.codePage == SC_CP_UTF8 ? text : std::string_view{}, positions);
+	if (Run.Restore()) return;
+    ++measuredRuns().shapes;
 	QString su = UnicodeFromText(codec, text);
 	QTextLayout tlay(su, *FontPointer(font), GetPaintDevice());
 	tlay.beginLayout();
@@ -1030,6 +1113,7 @@ void SurfaceImpl::MeasureWidths(const Font *font,
 	// 지름길을 탄다 — 한국어 문서의 ※ ○ → ℃ 같은 기호가 여기서 학습된다.
 	if (mw && mw->usable)
 		LearnWidths(text, positions, *mw);
+	Run.Store();
 }
 
 XYPOSITION SurfaceImpl::WidthText(const Font *font, std::string_view text)
@@ -1090,8 +1174,7 @@ void SurfaceImpl::MeasureWidthsUTF8(const Font *font,
 				std::string_view text,
 				XYPOSITION *positions)
 {
-	mrst::scintilla::measureWidthsCallCount().fetch_add(1, std::memory_order_relaxed);
-	if (!font) {
+	mrst::scintilla::measureWidthsCallCount().fetch_add(1, std::memory_order_relaxed);	if (!font) {
 		std::fill(positions, positions + text.length(), static_cast<XYPOSITION>(0));
 		return;
 	}
@@ -1101,6 +1184,9 @@ void SurfaceImpl::MeasureWidthsUTF8(const Font *font,
 		if (mw->usable && FillMonospacePositions(text, positions, *mw))
 			return;
 	}
+	MeasuredRun Run(AsFontAndCharacterSet(font), GetPaintDevice(), text, positions);
+	if (Run.Restore()) return;
+    ++measuredRuns().shapes;
 	QString su = QString::fromUtf8(text.data(), static_cast<int>(text.length()));
 	QTextLayout tlay(su, *FontPointer(font), GetPaintDevice());
 	tlay.beginLayout();
@@ -1133,6 +1219,7 @@ void SurfaceImpl::MeasureWidthsUTF8(const Font *font,
 	// 못한다 — 실제로 그렇게 만들어 놓고 한참 헤맸다.
 	if (mw && mw->usable)
 		LearnWidths(text, positions, *mw);
+	Run.Store();
 }
 
 XYPOSITION SurfaceImpl::WidthTextUTF8(const Font *font, std::string_view text)

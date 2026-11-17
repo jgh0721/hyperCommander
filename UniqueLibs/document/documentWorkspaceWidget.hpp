@@ -222,6 +222,7 @@ namespace hc::document
         QString settingsSignature() const;
         bool settingsChanged() const;
         struct LocalSave;
+        void verifyTextEquality(const std::shared_ptr<Tab>& Tab);
         std::shared_ptr<Tab> active() const;
         std::shared_ptr<Tab> find(const QString& Id) const;
         // The document of a dock: its own dock or its ‘옆에 미리보기’ dock.
@@ -244,6 +245,7 @@ namespace hc::document
         QWidget* currentPane() const;
         void activate(const std::shared_ptr<Tab>& Tab);
         QJsonObject prepareSave(const std::shared_ptr<Tab>& Tab);
+        void prepareSaveAsync(const std::shared_ptr<Tab>& Tab);
         void update();
         QJsonObject editHwp(const std::shared_ptr<Tab>& Tab);
         QJsonObject editEpub(const std::shared_ptr<Tab>& Tab);

@@ -66,6 +66,7 @@ namespace hc::document
         std::shared_ptr<Work> work_;
         std::shared_ptr<BindingState> native_;
         bool bound_ = false, loaded_ = false, failed_ = false, closed_ = false;
+        bool inputActivationRequested_ = false;
         QTimer* timer_ = nullptr;
         QJsonObject reported_, bindings_;
         qint64 contextSerial_ = 0, hostCommandSerial_ = 0;

@@ -87,6 +87,10 @@ ScintillaEditBase::ScintillaEditBase(QWidget *parent)
 
 ScintillaEditBase::~ScintillaEditBase() = default;
 
+bool ScintillaEditBase::ReplaceFoldLevels(const int *levels, size_t count) {
+	return sqt->ReplaceFoldLevels(levels, count);
+}
+
 sptr_t ScintillaEditBase::send(
 	unsigned int iMessage,
 	uptr_t wParam,

@@ -69,7 +69,7 @@ void EpubSourceEditor::setupRecovery() {
         if(Result && Result.path_==Own && !discardedRecovery_){recoveryPath_=Result.path_;draftWrittenToken_=draftWritingToken_;recoveryError_.clear();draftSavedAt_=QDateTime::currentMSecsSinceEpoch();reportDraft(tr("편집 초안을 자동 복구용으로 보관했습니다."));}
         else if(!Result && Result.error_!="epub-draft-cancelled"){recoveryError_=Result.error_;reportDraft(tr("초안 자동 보관 실패: %1 · 편집 내용은 유지됩니다.").arg(recoveryError_));report(draftMessage_);}
         if(!pendingRecoveryPath_.isEmpty()){const auto Path=std::exchange(pendingRecoveryPath_,{});if(Result)beginRecoveryRead(Path);else{setSourceReadOnly(false);report(tr("현재 편집 내용을 보관하지 못해 복원을 중단했습니다."));}}
-        else if(Result && ready_ && recoveryEnabled_ && !discardedRecovery_ && draftWrittenToken_!=Token())draftTimer_.start();
+        else if(Result && ready_ && recoveryEnabled_ && !discardedRecovery_ && draftWrittenToken_!=RevisionToken())draftTimer_.start();
         emit StateChanged();
     });
     connect(&draftReader_,&QFutureWatcher<epub::DraftRead>::finished,this,[this]{
@@ -79,6 +79,11 @@ void EpubSourceEditor::setupRecovery() {
     reportDraft(recoveryEnabled_?tr("편집 초안 자동 복구가 켜져 있습니다."):tr("편집 초안 자동 복구가 꺼져 있습니다. 기존 초안은 복구 목록에서 관리할 수 있습니다."));
 }
 void EpubSourceEditor::modelLoaded(epub::EditModel Model) {
+    const bool WasLoading = std::exchange(identityLoading_, true);
+    const auto IdentityGuard = qScopeGuard([&] {
+        identityLoading_ = WasLoading;
+        if (!WasLoading) { resetIdentityAfterLoad(); emit Changed(); emit StateChanged(); }
+    });
     const bool Restoring=pendingRecovery_.has_value();QString Error=Model.Error();
     if(Restoring && Error.isEmpty())Error=Model.RestoreStructuralBytes(pendingRecovery_->structuralBytes_);
     if(Restoring && Error.isEmpty())for(auto I=pendingRecovery_->changes_.begin();I!=pendingRecovery_->changes_.end();++I){Error=Model.Replace(I.key(),I.value());if(!Error.isEmpty())break;}
@@ -139,7 +144,7 @@ void EpubSourceEditor::refreshRecovery() {
 void EpubSourceEditor::Checkpoint() {
     draftTimer_.stop();if(!ready_ || !recoveryEnabled_ || discardedRecovery_ || draftWriter_.isRunning() || pendingRecovery_ || draftReader_.isRunning())return;
     if(!IsModified()) {if(!recoveryPath_.isEmpty()){DiscardRecovery();resetRecoverySession();}return;}
-    if(draftWrittenToken_==Token())return;
+    if(draftWrittenToken_==RevisionToken())return;
     epub::DraftSnapshot Snapshot;Snapshot.sourcePath_=sourcePath_;Snapshot.original_=model_.OriginalBytes();Snapshot.structuralBytes_=model_.StructuralBytes();Snapshot.changes_=model_.Changes();Snapshot.currentResource_=current_;Snapshot.locator_=recoveryLocator_;Snapshot.readingChapter_=previewRecoveryPosition_?previewRestoreChapter_:previewSnapshot()["state"].toObject()["chapterIndex"].toInt(previewRestoreChapter_);
     // Draft positions stay UTF-16 offsets of the decoded text. The scroll is the top document line;
     // drafts written before it held a display row and restore up to the wrapped rows above.
@@ -147,7 +152,7 @@ void EpubSourceEditor::Checkpoint() {
     const auto CursorSource=sourceShown()?sourceBytes():QByteArray{};
     const auto Cursor=sourceShown()?static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_GETCURRENTPOS):0;
     Snapshot.diskHash_=sourceHashAtOpen_;
-    draftWritingToken_=Token();reportDraft(tr("편집 초안을 자동 복구용으로 보관하고 있습니다…"));
+    draftWritingToken_=RevisionToken();reportDraft(tr("편집 초안을 자동 복구용으로 보관하고 있습니다…"));
     draftWriter_.setFuture(QtConcurrent::run([Root=recoveryRoot_,Session=recoverySession_,Snapshot=std::move(Snapshot),State=draftSession_,CursorSource,Cursor]() mutable {
         // Keep the persisted UTF-16 format without scanning the chapter on the GUI thread.
         Snapshot.cursor_=int(QString::fromUtf8(CursorSource.constData(),qBound(qsizetype(0),qsizetype(Cursor),CursorSource.size())).size());
@@ -171,7 +176,7 @@ void EpubSourceEditor::SetRecoveryEnabled(bool Enabled) {
 void EpubSourceEditor::restoreRecovery(const QString& Path) {
     if(structuring_){report(tr("구조 작업이 끝난 뒤 초안을 복원해 주세요."));return;}
     if(Path.isEmpty() || pendingRecovery_ || draftReader_.isRunning() || worker_.isRunning() || validation_.isRunning())return;
-    if(IsModified() && draftWrittenToken_!=Token()) {
+    if(IsModified() && draftWrittenToken_!=RevisionToken()) {
         if(!recoveryEnabled_){reportDraft(tr("현재 편집 내용이 있습니다. 사본을 저장하거나 자동 복구를 켠 뒤 복원하세요."));report(draftMessage_);return;}
         pendingRecoveryPath_=Path;setSourceReadOnly(true);if(!draftWriter_.isRunning())Checkpoint();return;
     }

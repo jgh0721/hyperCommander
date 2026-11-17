@@ -565,6 +565,62 @@ private slots:
         Disposable->Read("slow", "file.fileVersion"); QTRY_VERIFY(Started->load());
         QElapsedTimer Timer; Timer.start(); Disposable.reset(); QVERIFY(Timer.elapsed() < 100); QTest::qWait(200);
     }
+    void queryPublicationYieldsAndRejectsCancelledGeneration()
+    {
+        using namespace hc::columns;
+        auto Completed = std::make_shared<std::atomic<int>>(0);
+        QueryEngine Engine([Completed](const QString& Path, const QString&, std::stop_token) {
+            ++*Completed;
+            return FieldValues{{"file.fileVersion", CellValue::Ready(Path)}};
+        });
+        bool Busy = true;
+        Engine.DeferWhile = [&] { return Busy; };
+        int Largest = 0, Delivered = 0;
+        QSet<QString> Seen;
+        Engine.Changed = [&](const QSet<QString>& Paths) {
+            Largest = qMax(Largest, int(Paths.size()));
+            Delivered += int(Paths.size());
+            Seen.unite(Paths);
+        };
+        constexpr int Count = 257;
+        for (int At = 0; At < Count; ++At) Engine.Read(QString::number(At), "file.fileVersion");
+        QTRY_COMPARE(Completed->load(), Count);
+        // Results are complete while simulated navigation still owns the quiet window.
+        QCOMPARE(Delivered, 0);
+        QCOMPARE(Engine.Read("0", "file.fileVersion", false).State(), ValueState::Pending);
+        Busy = false;
+        QTRY_COMPARE(Delivered, Count);
+        QCOMPARE(Seen.size(), Count);
+        QVERIFY(Largest <= QueryEngine::MaxApplyItems);
+        QCOMPARE(Engine.Pending(), 0);
+
+        Busy = true;
+        Engine.Read("cancelled", "file.fileVersion");
+        QTRY_COMPARE(Completed->load(), Count + 1);
+        Engine.Cancel(); Engine.Resume(); Busy = false;
+        Engine.Read("new-listing", "file.fileVersion");
+        QTRY_COMPARE(Delivered, Count + 1);
+        QVERIFY(!Seen.contains("cancelled"));
+        QVERIFY(Seen.contains("new-listing"));
+    }
+    void queryPublicationMakesProgressDuringContinuousInput()
+    {
+        using namespace hc::columns;
+        QueryEngine Engine([](const QString&, const QString&, std::stop_token) {
+            return FieldValues{{"file.fileVersion", CellValue::Ready(QString("ready"))}};
+        });
+        Engine.DeferWhile = [] { return true; };
+        int Delivered = 0;
+        Engine.Changed = [&](const QSet<QString>& Paths) {
+            QVERIFY(Paths.size() <= QueryEngine::MaxApplyItems);
+            Delivered += int(Paths.size());
+        };
+        for (int At = 0; At < 129; ++At) Engine.Read(QString::number(At), "file.fileVersion");
+        // Nine small publications still finish during uninterrupted input; once input
+        // stops, the ordinary 16 ms drain handles the remaining queue without this delay.
+        QTRY_COMPARE_WITH_TIMEOUT(Delivered, 129, 6000);
+        QCOMPARE(Engine.Pending(), 0);
+    }
     void querySnapshotRetainsEarlyResults()
     {
         using namespace hc::columns;

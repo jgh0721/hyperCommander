@@ -49,6 +49,7 @@
 #include "HyperCommander/UIs/dlgOpts.hpp"
 #include "UIs/cmpPanel.hpp"
 #include "builtInFsModel.hpp"
+#include "inputGate.hpp"
 #include "fileJobUi.hpp"
 #include "HyperCommander/UIs/fileAttributesDialog.hpp"
 #include "internetFile.hpp"
@@ -2533,6 +2534,9 @@ void CommandUiBridge::closeQuick()
 
 void CommandUiBridge::refreshPreview()
 {
+    // Both selection changes and the 500 ms polling fallback reach this path.
+    // Neither may replace an embedded viewer while navigation is still active.
+    if (hc::ui::InputGate::Busy()) return;
     if (!quick_ || !quickSource_ || !quickPanel_ || !quick_->isVisible()) return;
     if (quick_->IsPinned()) return;
     if (quickPanel_->GetFocusView(quickPanel_->CurrentTabIndex()) != quick_) return;
@@ -2652,7 +2656,13 @@ Result<CommandOutcome> CommandUiBridge::executeViewer(const CommandInvocation& I
         if (auto* Grid = qobject_cast<CGridView*>(SourcePanel->GetFocusView(SourcePanel->CurrentTabIndex()))) {
             auto* SelectionTimer = new QTimer(quick_); SelectionTimer->setSingleShot(true); SelectionTimer->setInterval(35);
             connect(Grid, &CGridView::sigPreviewSelectionChanged, SelectionTimer, [SelectionTimer]() { SelectionTimer->start(); });
-            connect(SelectionTimer, &QTimer::timeout, this, &CommandUiBridge::refreshPreview);
+            connect(SelectionTimer, &QTimer::timeout, this, [this, SelectionTimer] {
+                // A 35 ms selection debounce alone launches a new viewer for
+                // every 40 ms navigation tap. Keep the last preview while input
+                // continues, then open only the final selection after quiet.
+                if (hc::ui::InputGate::Busy()) { SelectionTimer->start(); return; }
+                refreshPreview();
+            });
         }
         connect(quick_, &CQuickView::CloseRequested, this, [this] { Dispatch("hc.viewer.close", {}, "shortcut"); });
         connect(quick_, &CQuickView::FollowSelectionRequested, this, [this] { quickKey_.clear(); refreshPreview(); });

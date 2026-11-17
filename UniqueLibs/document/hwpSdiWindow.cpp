@@ -34,7 +34,7 @@ namespace hc::document
         connect(backend_, &HwpSdiBackend::ModelChanged, this, [this](quint64 Binding, ExternalModelRevision Model) {
             if (Binding != binding_ || stopped_ || closing_) return;
             const auto State = session_.Snapshot();
-            if (session_.ApplyModelChange(State.id_, State.generation_, std::move(Model), false, false)) updateState();
+            if (session_.ApplyModelChange(State.id_, State.generation_, std::move(Model), false, false)) { modelQuiet_.restart(); updateState(); }
         }, Qt::QueuedConnection);
         connect(backend_, &HwpSdiBackend::EditorReply, this, &HwpSdiWindow::editorReply, Qt::QueuedConnection);
         auto* Deadline = new QTimer(this); Deadline->setInterval(100);
@@ -51,7 +51,23 @@ namespace hc::document
                 const auto Code=print_->Error();failPrint(Code);return;
             }
             if (printCancelling_) backend_->EditorCommand({{"type","DocumentPrintCancel"},{"printIdentity",HwpPrintIdentity(*printTicket_)}});
-            if (export_ && export_->CurrentState() == HwpExportTransfer::State::Failed) failExport(export_->Error());
+            if (export_ && export_->CurrentState() == HwpExportTransfer::State::Failed) { failExport(export_->Error()); return; }
+            if (pendingSave_ && !export_ && !discardPending_ && !resumePending_ && !closing_ && !stopped_) {
+                if (saveRetryDeadline_.hasExpired()) {
+                    pendingSave_.reset();
+                    const QPointer<HwpSdiWindow> Guard(this); updateState();
+                    if (Guard) emit SaveFailed("rhwp-export-retry-timeout");
+                } else if (!modelQuiet_.isValid() || modelQuiet_.elapsed() >= 150) {
+                    // A rejected export owns no writable bytes. Wait for its discard
+                    // ACK and a brief input pause, then capture a fresh strict ticket.
+                    // Never disable the editor or relax export identity validation.
+                    const QPointer<HwpSdiWindow> Guard(this);
+                    if (!beginSave(*pendingSave_, pendingSaveFormat_) && Guard && pendingSave_) {
+                        pendingSave_.reset(); updateState();
+                        if (Guard) emit SaveFailed("rhwp-export-retry-unavailable");
+                    }
+                }
+            }
         }); Deadline->start();
         auto* Layout = new QVBoxLayout(this);
         Layout->setContentsMargins(0, 0, 0, 0); Layout->setSpacing(0);
@@ -127,7 +143,7 @@ namespace hc::document
     }
     bool HwpSdiWindow::IsBusy() const
     {
-        return session_.IsBusy() || discardPending_ || resumePending_ || (stopRequested_ && !stopped_);
+        return session_.IsBusy() || pendingSave_.has_value() || discardPending_ || resumePending_ || (stopRequested_ && !stopped_);
     }
     void HwpSdiWindow::loaded(quint64 Binding, const DocumentOperationTicket& Ticket, HwpLoadResult Result)
     {
@@ -230,6 +246,15 @@ namespace hc::document
     }
     bool HwpSdiWindow::Save(SaveRequest Request, const QString& Format)
     {
+        if (pendingSave_) return false;
+        pendingSave_ = Request; pendingSaveFormat_ = Format;
+        saveRetryDeadline_ = QDeadlineTimer(30000, Qt::PreciseTimer);
+        const QPointer<HwpSdiWindow> Guard(this);
+        if (beginSave(std::move(Request), Format)) return true;
+        if (Guard) pendingSave_.reset(); return false;
+    }
+    bool HwpSdiWindow::beginSave(SaveRequest Request, const QString& Format)
+    {
         if (closing_ || stopped_ || !closeSync_.isEmpty() || discardPending_ || resumePending_ || export_ || (Format != "hwp" && Format != "hwpx")) return false;
         auto Operation = session_.BeginExport(std::move(Request));
         if (!Operation.HasValue()) return false;
@@ -245,6 +270,14 @@ namespace hc::document
     {
         if (!exportTicket_) return;
         const bool Checkpoint = checkpoint_.has_value();
+        const bool Changed = session_.Snapshot().model_ != exportTicket_->model_;
+        const bool Retry = !Checkpoint && pendingSave_ && !closing_ && !stopped_
+            && !saveRetryDeadline_.hasExpired() && Changed
+            && (Error == "rhwp-export-rejected" || Error == "rhwp-edit-export-stale"
+                || Error == "document-export-revision-changed"
+                || Error == "rhwp-edit-renderer-failure:command"
+                || Error == "rhwp-edit-renderer-failure:transfer");
+        if (!Retry) pendingSave_.reset();
         const storage::Error Failure{storage::ErrorCategory::InvalidRequest, Error.toStdString()};
         if (Checkpoint) session_.CompleteCheckpoint(*exportTicket_, Failure);
         else session_.CompleteExport(*exportTicket_, Failure);
@@ -254,7 +287,7 @@ namespace hc::document
         discardPending_ = !stopped_; discardSent_ = discardAccepted_ = false;
         const QPointer<HwpSdiWindow> Guard(this);
         updateState();
-        if (Guard) { if (Checkpoint) emit CheckpointFailed(Error); else emit SaveFailed(Error); }
+        if (Guard && !Retry) { if (Checkpoint) emit CheckpointFailed(Error); else emit SaveFailed(Error); }
     }
     bool HwpSdiWindow::Print(const std::vector<int>& Pages)
     {
@@ -345,7 +378,7 @@ namespace hc::document
         }
         auto Prepared = export_->Admit(session_);
         if (!Prepared.HasValue()) { failExport(QString::fromStdString(Prepared.Failure().code_)); return; }
-        export_.reset(); exportTicket_.reset();
+        export_.reset(); exportTicket_.reset(); pendingSave_.reset();
         const QPointer<HwpSdiWindow> Guard(this);
         updateState();
         if (!Guard) return;
@@ -366,7 +399,7 @@ namespace hc::document
         if (!closing_ && session_.Snapshot().dirty_ && Disposition == CloseDisposition::KeepChanges) return;
         if (printTicket_ && Disposition != CloseDisposition::Discard) {CancelPrint();return;}
         if (IsBusy() && !pending_ && !closing_ && Disposition != CloseDisposition::Discard) return;
-        closeDisposition_ = Disposition; closing_ = true;
+        closeDisposition_ = Disposition; closing_ = true; pendingSave_.reset();
         if (pending_ && !session_.Snapshot().cancelRequested_) {
             session_.Cancel();
             backend_->Cancel(binding_, *pending_);
@@ -390,7 +423,7 @@ namespace hc::document
     void HwpSdiWindow::stopped(quint64 Binding)
     {
         if (Binding != binding_ || stopped_) return;
-        stopped_ = true; closeSync_.clear();
+        stopped_ = true; closeSync_.clear(); pendingSave_.reset();
         discardPending_ = discardSent_ = discardAccepted_ = resumePending_ = resumeSent_ = resumeAccepted_ = false;
         const QPointer<HwpSdiWindow> Guard(this);
         if (printTicket_) {CompletePrint(storage::Error{storage::ErrorCategory::InvalidRequest,"rhwp-backend-stopped"}); if(!Guard)return; emit PrintFailed("rhwp-backend-stopped");if(!Guard)return;}

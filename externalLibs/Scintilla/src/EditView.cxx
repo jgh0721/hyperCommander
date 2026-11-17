@@ -347,6 +347,14 @@ std::shared_ptr<LineLayout> EditView::RetrieveLineLayout(Sci::Line lineNumber, c
 
 namespace {
 
+// wrapWidth is updated by WrapLines during idle/paint and may still describe the
+// old wrapped view while a hidden pane is changing modes. Interactive geometry
+// must follow the current mode immediately. Printing and LinesSplit retain their
+// explicit widths and continue to call LayoutLine directly.
+int WrapWidthForView(const EditModel &model, const ViewStyle &vs) noexcept {
+    return vs.wrap.state == Wrap::None ? LineLayout::wrapWidthInfinite : model.wrapWidth;
+}
+
 constexpr XYPOSITION epsilon = 0.0001f;	// A small nudge to avoid floating point precision issues
 
 /**
@@ -668,7 +676,7 @@ Point EditView::LocationFromPosition(Surface *surface, const EditModel &model, S
 	}
 	std::shared_ptr<LineLayout> ll = RetrieveLineLayout(lineDoc, model);
 	if (surface && ll) {
-		LayoutLine(model, surface, vs, ll.get(), model.wrapWidth);
+		LayoutLine(model, surface, vs, ll.get(), WrapWidthForView(model, vs));
 		pt = ll->PointFromPosition(posInLine, vs.lineHeight, pe);
 		pt.x += vs.textStart - model.xOffset;
 
@@ -707,7 +715,7 @@ Range EditView::RangeDisplayLine(Surface *surface, const EditModel &model, Sci::
 	const Sci::Position positionLineStart = model.pdoc->LineStart(lineDoc);
 	std::shared_ptr<LineLayout> ll = RetrieveLineLayout(lineDoc, model);
 	if (surface && ll) {
-		LayoutLine(model, surface, vs, ll.get(), model.wrapWidth);
+		LayoutLine(model, surface, vs, ll.get(), WrapWidthForView(model, vs));
 		const Sci::Line lineStartSet = model.pcs->DisplayFromDoc(lineDoc);
 		const int subLine = static_cast<int>(lineVisible - lineStartSet);
 		if (subLine < ll->lines) {
@@ -738,7 +746,7 @@ SelectionPosition EditView::SPositionFromLocation(Surface *surface, const EditMo
 	const Sci::Position posLineStart = model.pdoc->LineStart(lineDoc);
 	std::shared_ptr<LineLayout> ll = RetrieveLineLayout(lineDoc, model);
 	if (surface && ll) {
-		LayoutLine(model, surface, vs, ll.get(), model.wrapWidth);
+		LayoutLine(model, surface, vs, ll.get(), WrapWidthForView(model, vs));
 		const Sci::Line lineStartSet = model.pcs->DisplayFromDoc(lineDoc);
 		const int subLine = static_cast<int>(visibleLine - lineStartSet);
 		if (subLine < ll->lines) {
@@ -791,7 +799,7 @@ SelectionPosition EditView::SPositionFromLineX(Surface *surface, const EditModel
 	std::shared_ptr<LineLayout> ll = RetrieveLineLayout(lineDoc, model);
 	if (surface && ll) {
 		const Sci::Position posLineStart = model.pdoc->LineStart(lineDoc);
-		LayoutLine(model, surface, vs, ll.get(), model.wrapWidth);
+		LayoutLine(model, surface, vs, ll.get(), WrapWidthForView(model, vs));
 		const Range rangeSubLine = ll->SubLineRange(0, LineLayout::Scope::visibleOnly);
 		const XYPOSITION subLineStart = ll->GetPosition(rangeSubLine.start);
 		const Sci::Position positionInLine = ll->FindPositionFromX(x + subLineStart, rangeSubLine, false);
@@ -817,7 +825,7 @@ Sci::Line EditView::DisplayFromPosition(Surface *surface, const EditModel &model
 	}
 	std::shared_ptr<LineLayout> ll = RetrieveLineLayout(lineDoc, model);
 	if (surface && ll) {
-		LayoutLine(model, surface, vs, ll.get(), model.wrapWidth);
+		LayoutLine(model, surface, vs, ll.get(), WrapWidthForView(model, vs));
 		lineDisplay--; // To make up for first increment ahead.
 		for (int subLine = 0; subLine < ll->lines; subLine++) {
 			if (posInLine >= ll->LineStart(subLine)) {
@@ -834,7 +842,7 @@ Sci::Position EditView::StartEndDisplayLine(Surface *surface, const EditModel &m
 	Sci::Position posRet = Sci::invalidPosition;
 	if (surface && ll) {
 		const Sci::Position posLineStart = model.pdoc->LineStart(line);
-		LayoutLine(model, surface, vs, ll.get(), model.wrapWidth);
+		LayoutLine(model, surface, vs, ll.get(), WrapWidthForView(model, vs));
 		const Sci::Position posInLine = pos - posLineStart;
 		if (posInLine <= ll->numCharsInLine) {
 			for (int subLine = 0; subLine < ll->lines; subLine++) {
@@ -2580,7 +2588,7 @@ void EditView::PaintText(Surface *surfaceWindow, const EditModel &model, const V
 #endif
 				if (lineDoc != lineDocPrevious) {
 					ll = RetrieveLineLayout(lineDoc, model);
-					LayoutLine(model, surface, vsDraw, ll.get(), model.wrapWidth);
+					LayoutLine(model, surface, vsDraw, ll.get(), WrapWidthForView(model, vsDraw));
 					lineDocPrevious = lineDoc;
 					if (ll && model.BidirectionalEnabled()) {
 						// Fill the line bidi data

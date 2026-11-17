@@ -172,6 +172,9 @@ namespace hc::plugins
             container_ = CreateWindowExW(0, WindowClass, L"", Standalone ? WS_OVERLAPPED : WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                 0, 0, Request["width"].toInt(), Request["height"].toInt(), Standalone ? nullptr : Parent, nullptr, Class.hInstance, this);
             if (!container_) return HostError("host-viewer-container", GetLastError());
+            // Qt may focus a newly shown/reparented child even with NOACTIVATE.
+            // Gate the plain Win32 parent; Qt cannot re-enable this HWND on show.
+            if (preview_ && manifest_.compatibility_ == "hyperviewer-v1") EnableWindow(container_, FALSE);
             if (dopus_)
             {
                 if (QCoreApplication::instance()) QCoreApplication::instance()->setProperty("hc.readPrefix", Request["readPrefix"].toObject());
@@ -244,7 +247,13 @@ namespace hc::plugins
                 inputThread_ = Thread;
                 ViewerUiDispatcher::SetInputAttached(true);
             }
-            SetFocus(viewer_); return QJsonObject{{"focused", GetFocus() == viewer_ || IsChild(viewer_, GetFocus())}};
+            // Surface and anchor FocusIn may queue the same entry twice. After
+            // the first request reached a nested reader, resetting focus to the
+            // plugin root would take its keyboard away again.
+            if (preview_ && manifest_.compatibility_ == "hyperviewer-v1") EnableWindow(container_, TRUE);
+            const auto Focus = GetFocus();
+            if (Focus != viewer_ && !IsChild(viewer_, Focus)) SetFocus(viewer_);
+            return QJsonObject{{"focused", GetFocus() == viewer_ || IsChild(viewer_, GetFocus())}};
         }
         if (Kind == WireKind::DocumentCommand)
         {
@@ -254,6 +263,8 @@ namespace hc::plugins
             if ((Action == "save" || Action == "saveAs" || Action == "prepareSave" || Action == "commitSave")
                 && !manifest_.permissions_.contains(Permission::WriteContent))
                 return Error{ErrorCategory::AccessDenied, "host-document-write-denied"};
+            if (preview_ && (Action == "open" || Action == "openHost" || Action == "conceal"
+                || Request["messageType"] == "OpenDocuments")) EnableWindow(container_, FALSE);
             using Call = BOOL (*)(HWND, const char*, UINT, char*, UINT*);
             const auto Invoke = reinterpret_cast<Call>(GetProcAddress(module_, "HC_DocumentCommand"));
             if (!Invoke) return Error{ErrorCategory::Unsupported, "host-document-export"};

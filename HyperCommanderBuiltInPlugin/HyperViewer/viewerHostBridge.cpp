@@ -74,6 +74,12 @@ namespace hc::document
             // This is a newly created session. Never adopt a full viewer's window.
             state_->parentWindow_.reset(QWindow::fromWinId(reinterpret_cast<WId>(state_->container_)));
             if (!state_->parentWindow_) { state_->failed_ = true; return; }
+            // Qt 6.12 calls SetParent before converting WS_POPUP/overlapped to
+            // WS_CHILD. Cross-process attachment can activate that intermediate
+            // top-level window. Make it a child before the native parent changes.
+            const auto Native = reinterpret_cast<HWND>(state_->window_->winId());
+            const auto Style = GetWindowLongPtrW(Native, GWL_STYLE);
+            SetWindowLongPtrW(Native, GWL_STYLE, (Style & ~(WS_POPUP | WS_OVERLAPPEDWINDOW)) | WS_CHILD);
             state_->window_->windowHandle()->setParent(state_->parentWindow_.get());
             Resize();
             state_->window_->show();

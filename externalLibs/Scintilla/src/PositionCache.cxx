@@ -1016,7 +1016,16 @@ TextSegment BreakFinder::Next() {
 	const int remaining = nextBreak - startSegment;
 	int lengthSegment = remaining;
 	if (lengthSegment > lengthEachSubdivision) {
-		lengthSegment = static_cast<int>(pdoc->SafeSegment(std::string_view(&ll->chars[startSegment], lengthEachSubdivision)));
+		// Prefer the first whitespace boundary in the upper half of the window.
+        // Picking the last boundary makes a local insertion shift the subdivision
+        // of an entire long suffix, defeating exact shaped-run caches. An early
+        // natural boundary lets the unchanged suffix regain its previous split.
+        // Keep SafeSegment's UTF-8/combined-character fallback for unspaced text.
+        const std::string_view text(&ll->chars[startSegment], lengthEachSubdivision);
+        const auto space = std::find_if(text.begin() + lengthEachSubdivision / 2, text.end(),
+            [](char ch) noexcept { return IsBreakSpace(ch); });
+        lengthSegment = static_cast<int>(space != text.end()
+            ? space - text.begin() : pdoc->SafeSegment(text));
 	}
 	if (lengthSegment < remaining) {
 		subBreak += lengthSegment;

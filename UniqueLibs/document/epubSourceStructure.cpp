@@ -25,7 +25,7 @@
 #include <QtConcurrentRun>
 namespace hc::document {
 void EpubSourceEditor::setupStructure() {
-    connect(&imageInspection_,&QFutureWatcherBase::finished,this,[this]{if(imageInspectionToken_!=Token()){report(tr("사용 위치 조사 중 내용이 변경되었습니다. 다시 확인해 주세요."));return;}editImageProperties(imageInspection_.result());});
+    connect(&imageInspection_,&QFutureWatcherBase::finished,this,[this]{if(imageInspectionToken_!=RevisionToken()){report(tr("사용 위치 조사 중 내용이 변경되었습니다. 다시 확인해 주세요."));return;}editImageProperties(imageInspection_.result());});
     connect(&structureWorker_,&QFutureWatcher<StructureOutput>::finished,this,[this]{
         const auto Result=structureWorker_.result();structuring_=false;setSourceReadOnly(false);structureError_=Result.error_;
         if(!structureError_.isEmpty())report(structureError_=="cancelled"?tr("구조 작업을 취소했습니다. 편집 내용은 유지됩니다."):tr("구조 작업을 반영하지 못했습니다. 편집 내용은 유지됩니다. %1").arg(structureError_));

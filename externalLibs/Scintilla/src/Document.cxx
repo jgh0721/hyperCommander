@@ -635,6 +635,17 @@ void Document::ClearLevels() {
 	Levels()->ClearLevels();
 }
 
+bool Document::ReplaceFoldLevels(const int *values, size_t count) {
+	if (count != static_cast<size_t>(LinesTotal())) return false;
+	Levels()->ReplaceLevels(values, count);
+	// All levels are visible together. Every attached view reconciles its own
+	// contraction state once, before the next paint; there are no partial trees.
+	DocModification mh(ModificationFlags::ChangeFold | ModificationFlags::ChangeMarker,
+		0, 0, 0, nullptr, -1);
+	NotifyModified(mh);
+	return true;
+}
+
 namespace {
 
 constexpr bool IsSubordinate(FoldLevel levelStart, FoldLevel levelTry) noexcept {
@@ -647,7 +658,7 @@ using CharBytes = std::array<unsigned char, UTF8MaxBytes>;
 
 }
 
-Sci::Line Document::GetLastChild(Sci::Line lineParent, std::optional<FoldLevel> level, Sci::Line lastLine) {
+Sci::Line Document::GetLastChild(Sci::Line lineParent, std::optional<FoldLevel> level, Sci::Line lastLine, bool ensureStyles) {
 	const FoldLevel levelStart = LevelNumberPart(level ? *level : GetFoldLevel(lineParent));
 	const Sci::Line maxLine = LinesTotal() - 1;
 	const Sci::Line lookLastLine = (lastLine != -1) ? std::min(maxLine, lastLine) : maxLine;
@@ -662,7 +673,7 @@ Sci::Line Document::GetLastChild(Sci::Line lineParent, std::optional<FoldLevel> 
 
 	while (lineMaxSubord < maxLine) {
 		const Sci::Position posNeedStyle = LineStart(lineMaxSubord + 2);
-		if (posNeedStyle > GetEndStyled()) {
+		if (ensureStyles && posNeedStyle > GetEndStyled()) {
 			EnsureStyledTo(LineStart(lineMaxSubord + linesToStyle + 1));
 			linesToStyle += std::max<Sci::Line>(1, linesToStyle / growthFraction);
 		}

@@ -51,9 +51,44 @@ namespace hc::document
         if (Command != "document.setText") return Invalid("document-command-unsupported");
         if (!Capabilities().edit_) return Invalid("document-edit-unavailable");
         if ((!unlimitedBytes_ && Text.size() > (binary_ ? DocumentByteLimit : TextByteLimit)) || (!binary_ && !ValidText(Text))) return Invalid("document-text-budget-or-nul");
+        // Explicit full replacement retires the native snapshot representation.
+        if (nativeText_) { text_ = nativeText_->SerializedBytes(); nativeText_.reset(); }
+        if (savedNativeText_) { savedText_ = savedNativeText_->SerializedBytes(); savedNativeText_.reset(); }
         if (Text != text_) { text_ = std::move(Text); ++snapshot_.revision_; }
         snapshot_.dirty_ = recoveryDirty_ || text_ != savedText_;
         return Unit{};
+    }
+    void DocumentSession::AdoptTextSnapshot(TextSnapshot Text)
+    {
+        // Called immediately after CompleteOpen: identical bytes, same generation/revision.
+        nativeText_ = savedNativeText_ = std::move(Text);
+        std::string{}.swap(text_); std::string{}.swap(savedText_);
+    }
+    bool DocumentSession::nativeTextDirty() const
+    {
+        if (recoveryDirty_ || !nativeText_ || !savedNativeText_) return true;
+        if (nativeText_->SameSerializedRoot(*savedNativeText_)) return false;
+        // Preserve immediate equality for small documents with strictly bounded work.
+        if (nativeText_->SerializedSize() <= 4096 && nativeText_->MayEqualSerialized(*savedNativeText_))
+            return nativeText_->SerializedBytes() != savedNativeText_->SerializedBytes();
+        return true;
+    }
+    Result<Unit> DocumentSession::ApplyTextSnapshot(TextSnapshot Text)
+    {
+        if (snapshot_.contentMode_ != DocumentContentMode::InlineBytes || !Capabilities().edit_ || !nativeText_)
+            return Invalid("document-edit-unavailable");
+        if (!unlimitedBytes_ && Text.SerializedSize() > TextByteLimit) return Invalid("document-text-budget-or-nul");
+        if (!nativeText_->SameSerializedRoot(Text)) { nativeText_ = std::move(Text); ++snapshot_.revision_; }
+        // Hashes only reject equality. An undo to identical bytes is verified off-thread.
+        snapshot_.dirty_ = nativeTextDirty();
+        return Unit{};
+    }
+    bool DocumentSession::ResolveTextEquality(std::uint64_t Generation, std::uint64_t Revision, const TextSnapshot& Baseline, bool Equal)
+    {
+        if (Generation != snapshot_.generation_ || Revision != snapshot_.revision_ || !nativeText_ || !savedNativeText_
+            || !savedNativeText_->SameSerializedRoot(Baseline)) return false;
+        snapshot_.dirty_ = recoveryDirty_ || !Equal;
+        return true;
     }
     Result<std::uint64_t> DocumentSession::BeginOpen(bool Discard)
     {
@@ -73,6 +108,7 @@ namespace hc::document
         snapshot_.source_ = std::move(Result.Value().source_);
         recoveryDirty_ = false; recoveryClose_.reset();
         text_ = savedText_ = std::move(Result.Value().text_);
+        nativeText_.reset(); savedNativeText_.reset();
         ++snapshot_.revision_; snapshot_.savedRevision_ = snapshot_.revision_;
         snapshot_.dirty_ = false; snapshot_.error_.reset(); snapshot_.cleanupErrors_.clear();
         snapshot_.saveState_ = DocumentSaveState::Idle; snapshot_.lifecycle_ = DocumentLifecycle::Ready;
@@ -80,7 +116,22 @@ namespace hc::document
     }
     Result<SaveTicket> DocumentSession::Save(SaveRequest Request)
     {
-        return SaveSnapshot(std::move(Request), snapshot_.revision_, text_);
+        // Generic byte writer compatibility; the GUI uses SaveTextSnapshot directly.
+        auto Started = SaveSnapshot(std::move(Request), snapshot_.revision_, Text());
+        if (Started.HasValue() && nativeText_) {
+            Started.Value().textSnapshot_ = nativeText_;
+            saving_ = Started.Value();
+        }
+        return Started;
+    }
+    Result<SaveTicket> DocumentSession::SaveTextSnapshot(SaveRequest Request, std::uint64_t Revision, TextSnapshot Text)
+    {
+        if (!unlimitedBytes_ && Text.SerializedSize() > TextByteLimit) return Invalid("document-text-budget-or-nul");
+        auto Started = SaveSnapshot(std::move(Request), Revision, {});
+        if (!Started.HasValue()) return Started;
+        Started.Value().textSnapshot_ = std::move(Text);
+        saving_ = Started.Value();
+        return Started;
     }
     Result<SaveTicket> DocumentSession::SaveSnapshot(SaveRequest Request, std::uint64_t Revision, std::string Text)
     {
@@ -103,11 +154,19 @@ namespace hc::document
         // Commit is authoritative even if cancellation or cleanup follows it.
         if (Result.committed_) {
             if (snapshot_.contentMode_ == DocumentContentMode::ExternalModel) snapshot_.savedModel_ = saving_->model_;
-            else { savedText_ = saving_->text_; recoveryDirty_ = false; }
+            else {
+                savedNativeText_ = saving_->textSnapshot_;
+                savedText_ = saving_->text_; recoveryDirty_ = false;
+                // An explicit byte replacement can retire native mode while a native save is running.
+                if (!nativeText_ && savedNativeText_) {
+                    savedText_ = savedNativeText_->SerializedBytes(); savedNativeText_.reset();
+                }
+            }
             snapshot_.savedRevision_ = saving_->revision_;
             if (Result.source_) snapshot_.source_ = std::move(*Result.source_);
             if (snapshot_.contentMode_ == DocumentContentMode::ExternalModel) updateModelDirty();
-            else snapshot_.dirty_ = recoveryDirty_ || text_ != savedText_;
+            else if (nativeText_ && savedNativeText_) snapshot_.dirty_ = nativeTextDirty();
+            else snapshot_.dirty_ = recoveryDirty_ || Text() != savedText_;
             snapshot_.saveState_ = DocumentSaveState::Idle;
             snapshot_.error_.reset(); snapshot_.cleanupErrors_ = std::move(Result.cleanupErrors_);
         }

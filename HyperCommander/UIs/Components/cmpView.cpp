@@ -479,6 +479,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     auto* QueryWidget = new QWidget(grid_); QueryWidget->setObjectName("hc.columns.queryOverlay");
     QueryBar->setContentsMargins(6, 2, 6, 2);
     QueryWidget->setAutoFillBackground(true); QueryWidget->setLayout(QueryBar); QueryWidget->hide();
+    columnStatusDelay_.setObjectName("columnStatusDelay_");
     columnStatusDelay_.setSingleShot(true); columnStatusDelay_.setInterval(ColumnStatusDelayMs);
     connect(&columnStatusDelay_, &QTimer::timeout, this, [this] {
         if (columnStatusText_.isEmpty()) return;
@@ -493,6 +494,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     vbox_->addWidget(presentationStack_, 1);
     connect(Stop, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->CancelColumnQueries(); });
     connect(Resume, &QPushButton::clicked, this, [this] { if (auto* Model = qobject_cast<CFSModel*>(model_)) Model->ResumeColumnQueries(); });
+    columnSortTimer_.setObjectName("columnSortTimer_");
     columnSortTimer_.setSingleShot(true);
     connect(view_, &Qtitan::GridViewBase::sortingChanged, this, [this] { columnSortTimer_.start(0); });
     connect(&columnSortTimer_, &QTimer::timeout, this, [this] {
@@ -511,6 +513,7 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     view_->bestFit( FitToHeader );
     columnAdapter_ = new QtitanColumnAdapter(this, grid_, view_);
     initializeGrouping();
+    selectionKeyTimer_.setObjectName("selectionKeyTimer_");
     selectionKeyTimer_.setSingleShot(true); selectionKeyTimer_.setInterval(10);
     connect(&selectionKeyTimer_, &QTimer::timeout, this, &CGridView::drainSelectionKeys);
     connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) {
@@ -521,12 +524,15 @@ CGridView::CGridView( QWidget* Parent, Qt::WindowFlags f )
     });
     columnAdapter_->SetViewportHandlers([this] { return CaptureScrollState(); }, [this](const auto& State) { RestoreScrollState(State); });
     recordPainter_ = new ProductRecordPainter(this); view_->setRecordPainter(recordPainter_);
+    selectionSummaryTimer_.setObjectName("selectionSummaryTimer_");
     selectionSummaryTimer_.setSingleShot(true);
     connect(&selectionSummaryTimer_, &QTimer::timeout, this, &CGridView::sigThumbnailSelectionChanged);
+    iconViewportTimer_.setObjectName("iconViewportTimer_");
     iconViewportTimer_.setSingleShot(true); iconViewportTimer_.setInterval(0);
     connect(&iconViewportTimer_, &QTimer::timeout, this, &CGridView::updateIconViewport);
     connect(view_->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { requestIconViewport(); });
     connect(view_->horizontalScrollBar(), &QScrollBar::valueChanged, this, [this] { requestIconViewport(); });
+    presentationTimer_.setObjectName("presentationTimer_");
     presentationTimer_.setSingleShot(true); presentationTimer_.setInterval(80);
     connect(&presentationTimer_, &QTimer::timeout, this, &CGridView::applyPresentation);
     columnAdapter_->SetLayoutObserver([this](const QString& Mode) {
@@ -702,6 +708,7 @@ void CGridView::hideEvent(QHideEvent* Event)
 }
 void CGridView::showEvent(QShowEvent* Event)
 {
+    window()->setProperty("hc.navigationWindow", true);
     CViewT::showEvent(Event); requestPresentation(); requestIconViewport();
 }
 void CGridView::applyThumbnailPresentation()
@@ -876,6 +883,7 @@ QModelIndexList CGridView::AheadSourceRows(int Screens) const
 }
 void CGridView::updateIconViewport()
 {
+    hc::startup::Span InputTrace("input.commander.viewport");
     auto* Model = qobject_cast<CFSModel*>(model_); if (!Model || !view_) return;
     // Design 6.3: slow rule values are asked for up to two screens below the viewport.
     Model->SetFileColorViewport(VisibleSourceRows(), isVisible() && panelActive_, Model->HasSlowFileRuleFields() ? AheadSourceRows(2) : QModelIndexList{});
@@ -946,6 +954,8 @@ void CGridView::requestPresentation()
 }
 void CGridView::applyPresentation()
 {
+    if (hc::ui::InputGate::Busy()) { presentationTimer_.start(80); return; }
+    hc::startup::Span InputTrace("input.commander.presentation");
     requestAutomaticColumns();
     if (!columnAdapter_ || !model_ || !isVisible()) return;
     if (IsEditing()) { presentationTimer_.start(150); return; }
@@ -1184,6 +1194,8 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
     });
     if (auto* Native = qobject_cast<CFSModel*>(model_); Native && !Native->property("hc.columnSignals").toBool()) {
         Native->setProperty("hc.columnSignals", true);
+        connect(Native, &CFSModel::ColumnDisplayChanging, this, [this] { view_->beginUpdate(); });
+        connect(Native, &CFSModel::ColumnDisplayChanged, this, [this] { view_->endUpdate(); });
         connect(Native, &CFSModel::ColumnValuesChanging, this, [this] {
             if (groupingUpdateDepth_++ == 0) {
                 querySelection_ = CaptureSelection(); queryFocus_ = CaptureFocus(); queryScroll_ = CaptureScrollState(); view_->beginUpdate();
@@ -1221,9 +1233,11 @@ void CGridView::SetModel( CFsModelT* Source, QAbstractProxyModel* Proxy, ColumnV
         connect(Source, &QAbstractItemModel::modelReset, this, Schedule);
         connect(Source, &QAbstractItemModel::modelReset, this, [this] { groupingTimer_.start(0); });
         connect(Source, &QAbstractItemModel::rowsInserted, this, Schedule);
-        connect(Source, &QAbstractItemModel::dataChanged, this, [this](const QModelIndex&, const QModelIndex&, const QList<int>& Roles) {
-            // Icons and colors repaint cells; they do not change layout or text widths.
-            if (Roles.isEmpty() || Roles.contains(Qt::DisplayRole) || Roles.contains(Qt::EditRole)) requestPresentation();
+        connect(Source, &QAbstractItemModel::dataChanged, this, [this](const QModelIndex& First, const QModelIndex& Last, const QList<int>& Roles) {
+            // Auto one/two-line layout samples names (column 0). A zone/metadata
+            // completion does not change that geometry or the directory policy.
+            if (First.column() <= 0 && Last.column() >= 0
+                && (Roles.isEmpty() || Roles.contains(Qt::DisplayRole) || Roles.contains(Qt::EditRole))) requestPresentation();
         });
         if (Proxy) {
             connect(Proxy, &QAbstractItemModel::modelReset, this, Schedule);
@@ -1951,20 +1965,12 @@ void CGridView::EnsureKeyboardFocusOnView() const
     grid_->viewport()->raise();
     grid_->viewport()->activateWindow();
 
-    if( view_->getRowCount() > 0 )
-    {
-        if( view_->focusedRowIndex() == view_->modelController()->getGridRowCount() - 1 )
-        {
-            // 가장 마지막임
-            view_->navigateUp();
-            view_->navigateDown();
-        }
-        else
-        {
-            view_->navigateDown();
-            view_->navigateUp();
-        }
-    }
+    // Focus restoration must not navigate: group headers/pinned rows make a
+    // down/up pair non-invertible, and each move also starts a preview selection
+    // request. Qtitan restores the active primitive on FocusIn; retain it and
+    // use the view root only when its row primitive was retired by a relayout.
+    if (auto* Control = qobject_cast<Qtitan::GraphicControl*>(grid_->viewport()); Control && !Control->focusedGP())
+        Control->setFocusGP(Control->activeGP() ? Control->activeGP() : Control->rootPrimitive());
 
     CViewT::EnsureKeyboardFocusOnView();
 }
@@ -2437,6 +2443,7 @@ void CGridView::oo_grid_rowDblClicked( Qtitan::RowClickEventArgs* Args )
 
 void CGridView::oo_grid_rowFocusChanged( int OldRowIndex, int NewRowIndex )
 {
+    hc::startup::Span InputTrace("input.commander.focusChanged");
     if (OldRowIndex != NewRowIndex) { resetRenameClicks(); emit sigPreviewSelectionChanged(); }
     if (renameEditor_ && !renameSubmitting_ && !renameAwaitingRefresh_ && OldRowIndex != NewRowIndex)
         CancelRename();

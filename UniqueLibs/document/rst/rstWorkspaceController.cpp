@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "rstWorkspaceController.hpp"
+#include "startupTrace.hpp"
 
 /// 모듈
 #include "rstLineUtils.hpp"
@@ -25,6 +26,8 @@
 #include "uvTaskRunner.hpp"
 #include "sphinxVirtualProject.hpp"
 #include "rstEditor.hpp"
+#include "text/QTextView.h"
+#include "text/ScintillaQtDirectBackend.h"
 #include "rstPhaseTrace.hpp"
 #include "sphinxDiagnosticsStore.hpp"
 
@@ -50,11 +53,17 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QThreadPool>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QTimer>
 #include <QUrl>
 
 DECLARE_CMNLIBSV2_NAMESPACE
 namespace {
+hc::document::TextSnapshot SourceSnapshot(hc::rst::RstEditor* View)
+{
+    return static_cast<ScintillaQtDirectBackend*>(View->view()->Backend())->CaptureTextSnapshot();
+}
 /// 스크롤 동기화의 기준점. 0.5 = 창의 정중앙.
 /// 에디터 정중앙에 있는 줄이 프리뷰에서도 정중앙에 오게 한다.
 constexpr double kAnchorRatio = 0.5;
@@ -835,13 +844,6 @@ bool WorkspaceController::repairPythonEnvironment( const QString& projectKey )
                                                        it->environmentPath );
 }
 
-std::shared_ptr<const PreviewShadowSnapshot> WorkspaceController::createShadowSnapshot( RstEditor* view ) const
-{
-    if( view == nullptr || pythonEnv_ == nullptr || !view->isModified() )
-        return {};
-    return PreviewShadowSnapshot::create(pythonEnv_->shadowDir(), view->text().toUtf8());
-}
-
 void WorkspaceController::requestPreviewBuild( const bool immediate, const bool forceRebuild )
 {
     if( shuttingDown_ )
@@ -872,6 +874,8 @@ void WorkspaceController::requestPreviewBuild( const bool immediate, const bool 
     if( previewController_ == nullptr || pythonEnv_ == nullptr )
         return;
 
+    if (shadowWriting_) { shadowAgain_ = true; shadowAgainForce_ |= forceRebuild; return; }
+
     // 런타임이 준비되기 전에는 조용히 넘어간다. 준비되면 다시 호출된다.
     if( !pythonEnv_->isReady() )
         return;
@@ -893,11 +897,7 @@ void WorkspaceController::requestPreviewBuild( const bool immediate, const bool 
     request.fallbackPythonExe = pythonEnv_->pythonExe();
     request.builderScript = pythonEnv_->previewBuilderScript();
     request.sourceFile = context->path;
-    if (previewApplyUnsavedEdits_) {
-        request.shadowSnapshot = createShadowSnapshot(view);
-        if (request.shadowSnapshot)
-            request.shadowFile = request.shadowSnapshot->filePath();
-    }
+    const bool Shadow = previewApplyUnsavedEdits_ && view->isModified();
     request.shadowMaxReadMs = previewUnsavedMaxReadMs_;
     request.stubDoxygenForShadow = previewStubDoxygenWhileTyping_;
     // 가상 프로젝트( 단독 파일 )는 지문을 남기지 않는다. 빌드 산출물이 QTemporaryDir 안이라 세션과 함께
@@ -924,6 +924,37 @@ void WorkspaceController::requestPreviewBuild( const bool immediate, const bool 
 
     // 입력이 하나도 안 바뀌었으면 python 을 아예 띄우지 않고 지난 산출물을 쓴다.
     // 사본(미저장 편집)이 걸린 요청과 사용자가 명시적으로 요청한 재빌드는 예외다.
+    if (Shadow) {
+        // The worker owns an immutable revision, including all edits up to this request.
+        // No QFile, full text conversion or hashing runs in the idle/first-key callback.
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(view->view()->Backend());
+        const auto Snapshot = Backend->CaptureTextSnapshot();
+        const auto Ticket = previewRequests_.ticket();
+        using ShadowPtr = std::shared_ptr<const PreviewShadowSnapshot>;
+        auto* Watcher = new QFutureWatcher<ShadowPtr>(this);
+        shadowWriting_ = true;
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Ticket, request, immediate]() mutable {
+            auto ShadowFile = Watcher->result(); Watcher->deleteLater(); shadowWriting_ = false;
+            if (!shuttingDown_ && previewRequests_.accepts(Ticket)) {
+                if (ShadowFile) {
+                    request.shadowSnapshot = std::move(ShadowFile);
+                    request.shadowFile = request.shadowSnapshot->filePath();
+                    if (immediate) previewController_->buildNow(request);
+                    else previewController_->requestBuild(request);
+                } else {
+                    setPreviewStatus({});
+                    emit previewBuildFailed(request.sourceFile);
+                }
+            }
+            const bool Force = std::exchange(shadowAgainForce_, false);
+            if (std::exchange(shadowAgain_, false) && !shuttingDown_) requestPreviewBuild(true, Force);
+        });
+        Watcher->setFuture(QtConcurrent::run([Snapshot, Directory = pythonEnv_->shadowDir()] {
+            hc::startup::Span InputTrace("input.rst.shadow");
+            return PreviewShadowSnapshot::create(Directory, QByteArray::fromStdString(Snapshot.Bytes()));
+        }));
+        return;
+    }
     if( previewSkipUnchangedBuild_ && request.shadowFile.isEmpty() && !forceRebuild )
     {
         tryServeFromLastBuild( request, immediate );
@@ -1241,7 +1272,7 @@ void WorkspaceController::nudgeInitialBuild( const QString& projectId )
             continue;
 
         context.nudgedInitialBuild = true;
-        client->didSave( context.path, context.view->text() );
+        client->DidSaveSnapshot(context.path, SourceSnapshot(context.view));
         emit logMessage( tr( "Esbonio 초기 빌드 요청: %1 (%2)" )
                             .arg( QFileInfo( context.path ).fileName(), projectId ) );
     }
@@ -1318,7 +1349,7 @@ void WorkspaceController::syncDocumentToServer( DocumentContext& context, const 
 
     if( forceOpen || !context.syncedToServer )
     {
-        client->didOpen( context.path, context.view->text(), languageId );
+        client->DidOpenSnapshot(context.path, SourceSnapshot(context.view), languageId);
         context.syncedToServer = true;
         client->documentSymbols( context.path );
         return;
@@ -1329,44 +1360,43 @@ void WorkspaceController::syncDocumentToServer( DocumentContext& context, const 
     if( client->supportsIncrementalSync() )
         return;
 
-    client->didChange( context.path, context.view->text() );
+    client->DidChangeSnapshot(context.path, SourceSnapshot(context.view));
 }
 
 // ── 개요 ──────────────────────────────────────────────────
 
 void WorkspaceController::refreshDocumentOutline()
 {
-    if( shuttingDown_ || activeView_.isNull() )
-    {
-        emit outlineCleared( tr( "열린 문서가 없습니다." ) );
-        return;
-    }
-
-    DocumentContext* context = contextFor( activeView_ );
-    if( context == nullptr || context->path.isEmpty() )
-    {
-        emit outlineCleared( tr( "열린 문서가 없습니다." ) );
-        return;
-    }
-
-    // text() 는 문서 전체를 QString 으로 복사한다. UTF-16 이라 677KB 문서에서 한 번에
-    // 1.3MB 다. 예전에는 폴백과 didChange 가 각각 불러 두 번 복사했다.
-    const QString documentText = activeView_->text();
-
-    // 폴백을 먼저 내보낸다. Esbonio 가 데워지기 전에도 개요가 비어 있지 않게.
-    emit documentOutlineReady( context->path, parseDocumentOutline( documentText, context->path ) );
-
-    // LSP 가 살아 있으면 더 정확한 결과로 덮어쓴다.
-    if( LspClient* client = lspPool_->clientFor( context->projectId );
-        client != nullptr && client->isRunning() && context->syncedToServer )
-    {
-        // 증분이 켜져 있으면 서버 사본은 이미 최신이다.
-        if( !client->supportsIncrementalSync() )
-            client->didChange( context->path, documentText );
-        client->documentSymbols( context->path );
-    }
+    if (shuttingDown_ || activeView_.isNull()) { emit outlineCleared({}); return; }
+    const auto* Context = contextFor(activeView_);
+    if (!Context || Context->path.isEmpty()) { emit outlineCleared({}); return; }
+    if (outlineComputing_) { outlineAgain_ = true; return; }
+    const auto View = activeView_;
+    const auto Path = Context->path;
+    const auto Snapshot = SourceSnapshot(View);
+    outlineComputing_ = true;
+    auto* Watcher = new QFutureWatcher<QVector<OutlineSymbol>>(this);
+    connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, View, Path, Snapshot] {
+        const auto Symbols = Watcher->result(); Watcher->deleteLater(); outlineComputing_ = false;
+        const auto* CurrentContext = View ? contextFor(View) : nullptr;
+        const bool Current = !shuttingDown_ && View && activeView_ == View && CurrentContext
+            && CurrentContext->path == Path && SourceSnapshot(View).SameRoot(Snapshot);
+        if (Current) {
+            const auto Project = CurrentContext->projectId;
+            const bool Synced = CurrentContext->syncedToServer;
+            emit documentOutlineReady(Path, Symbols);
+            if (auto* Client = lspPool_->clientFor(Project);
+                Client && Client->isRunning() && Synced && View && activeView_ == View)
+                Client->documentSymbols(Path); // the ordered writer flushes earlier changes first
+        }
+        const bool Again = std::exchange(outlineAgain_, false);
+        if (!shuttingDown_ && (Again || !Current)) outlineDebounce_->start();
+    });
+    Watcher->setFuture(QtConcurrent::run([Snapshot, Path] {
+        const auto Bytes = Snapshot.Bytes();
+        return parseDocumentOutline(QString::fromUtf8(Bytes.data(), qsizetype(Bytes.size())), Path);
+    }));
 }
-
 void WorkspaceController::requestReferenceNavigation()
 {
     const quint64 generation = ++referenceNavigationGeneration_;
@@ -2201,7 +2231,7 @@ void WorkspaceController::notifyDocumentSaved( RstEditor* view )
         if( LspClient* client = lspPool_->clientFor( context->projectId );
             client != nullptr && client->isRunning() )
         {
-            client->didSave( context->path, view->text() );
+            client->DidSaveSnapshot(context->path, SourceSnapshot(view));
         }
     }
 

@@ -11,6 +11,9 @@
 #include "UniqueLibs/nativeMaterializer.hpp"
 #include "UniqueLibs/storageProviders.hpp"
 #include <QDirIterator>
+#include <QDialog>
+#include <QLabel>
+#include <QTimer>
 #include <QBuffer>
 #include <QtCore/private/qzipwriter_p.h>
 #include <QEventLoop>
@@ -34,6 +37,8 @@
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <QScopeGuard>
+#include "tests/nativeTestInput.hpp"
+#include <algorithm>
 using namespace hc::document;
 namespace
 {
@@ -283,6 +288,137 @@ private slots:
             // Export only after both reports reach the native endpoint.
             return Status["editor"].toObject()["sequence"].toString().toULongLong() >= 2;
         })(), 5000);
+        QString NativeText;
+        if(qEnvironmentVariableIsSet("HC_INPUT_HWP_NATIVE")) {
+            QVERIFY2(qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM"),"Native input is VM-only");
+            auto* Window=EditorView->window();Window->resize(1100,800);Window->show();
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window->winId())));
+            EditorView->setFocus();
+            bool Armed=false;
+            EditorView->page()->runJavaScript(R"JS((()=>{
+                const I=document.querySelector('textarea');if(!I)return false;
+                I.focus();window.hcNativeTyped='';window.hcNativePaint=0;
+                I.addEventListener('input',E=>{if(E.isTrusted){window.hcNativeTyped+=E.data||'';const N=window.hcNativeTyped.length;requestAnimationFrame(()=>window.hcNativePaint=N);}});
+                return document.activeElement===I;
+            })())JS",[&](const QVariant& V){Armed=V.toBool();});
+            QTRY_VERIFY_WITH_TIMEOUT(Armed,5000);
+            QWidget Other;Other.resize(300,200);
+            QList<double> Latencies;
+            for(int Index=0;Index<1000;++Index){
+                if(Index%100==0)QTest::qWait(250);
+                if(Index%200==100){
+                    Other.show();QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Other.winId())));QTest::qWait(100);
+                    QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window->winId())));QTest::qWait(100);
+                }
+                QCOMPARE(GetForegroundWindow(),reinterpret_cast<HWND>(Window->winId()));
+                INPUT Keys[2]{};for(auto& Key:Keys){Key.type=INPUT_KEYBOARD;Key.ki.wScan=L'x';Key.ki.dwFlags=KEYEVENTF_UNICODE;}Keys[1].ki.dwFlags|=KEYEVENTF_KEYUP;
+                QElapsedTimer Clock;Clock.start();QCOMPARE(SendInput(2,Keys,sizeof(INPUT)),UINT(2));
+                auto Seen=std::make_shared<std::pair<int,bool>>(0,false);
+                while(Seen->first<Index+1 && Clock.elapsed()<5000){
+                    if(!Seen->second){Seen->second=true;EditorView->page()->runJavaScript("window.hcNativePaint||0",[Seen](const QVariant& V){Seen->first=V.toInt();Seen->second=false;});}
+                    QTest::qWait(1);
+                }
+                QTRY_VERIFY_WITH_TIMEOUT(!Seen->second,5000);QCOMPARE(Seen->first,Index+1);
+                Latencies.append(Clock.nsecsElapsed()/1e6);NativeText+='x';
+            }
+            std::sort(Latencies.begin(),Latencies.end());
+            qInfo().noquote()<<QString("hwp-native format=%1 keys=%2 key-to-browser-raf p50=%3 p99=%4 max=%5 ms").arg(Format).arg(Latencies.size()).arg(Latencies[500]).arg(Latencies[990]).arg(Latencies.last());
+            // The export below independently checks that the engine retained every OS input.
+            QTest::qWait(300);Status=Document.Handle(Command("DocumentStatus"));
+        }
+        const auto ProductRuntime = qEnvironmentVariable("HC_INPUT_HWP_PRODUCT_RUNTIME");
+        if (!ProductRuntime.isEmpty()) {
+            QVERIFY2(qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM"), "Product input is VM-only");
+            // Exercise the real product shell against an explicitly approved runtime,
+            // using an independent expected pin, never one read from the tested inventory.
+            WebProcessRuntime Runtime; Runtime.root_ = ProductRuntime;
+            Runtime.approvedInventorySha256_ = qgetenv("HC_INPUT_HWP_PRODUCT_PIN");
+            if (Runtime.approvedInventorySha256_->isEmpty())
+                Runtime.approvedInventorySha256_ = QByteArray("188f2cab7c326a345f058c9ec62eb06babb4e3bb3cc94de09e3c9a7daa3010dc");
+            QVERIFY(Runtime.approvedInventorySha256_->size() == 64);
+            QTemporaryDir Product; QVERIFY(Product.isValid());
+            const auto Path = Product.filePath("working." + Format); QVERIFY(Write(Path, InputBytes));
+            HwpOpenWindow ProductWindow(Path, Product.filePath("cache"), Runtime, {}, true, true);
+            const auto Retire = qScopeGuard([&] {
+                if (auto* Current = ProductWindow.Document()) {
+                    Current->RequestClose(CloseDisposition::Discard);
+                    QElapsedTimer Wait; Wait.start();
+                    while (!HwpProcessBackend::IsDrained() && Wait.elapsed() < 15000) QTest::qWait(10);
+                }
+            });
+            QStringList DialogErrors; QTimer DialogWatch; DialogWatch.setInterval(20);
+            connect(&DialogWatch, &QTimer::timeout, &ProductWindow, [&] {
+                auto* Dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                if (!Dialog) return;
+                auto* Owner = static_cast<QWidget*>(Dialog);
+                while (Owner && Owner != &ProductWindow) Owner = Owner->parentWidget();
+                if (!Owner) return;
+                for (auto* Label : Dialog->findChildren<QLabel*>()) if (!Label->text().isEmpty()) DialogErrors.append(Label->text());
+                qWarning() << "hwp-product-unexpected-dialog" << DialogErrors;
+                Dialog->reject();
+            });
+            DialogWatch.start();
+            ProductWindow.resize(1100, 800); ProductWindow.show(); ProductWindow.Open();
+            QTRY_VERIFY2_WITH_TIMEOUT(ProductWindow.Document() || !ProductWindow.Error().isEmpty(), qPrintable(ProductWindow.Error()), 30000);
+            QVERIFY2(ProductWindow.Document(), qPrintable(ProductWindow.Error()));
+            QTRY_COMPARE_WITH_TIMEOUT(ProductWindow.Document()->Snapshot().lifecycle_, DocumentLifecycle::Ready, 30000);
+            QVERIFY(ProductWindow.Document()->Capabilities().edit_);
+            auto* Backend = dynamic_cast<HwpProcessBackend*>(ProductWindow.findChild<HwpSdiBackend*>()); QVERIFY(Backend);
+            const auto Native = reinterpret_cast<HWND>(ProductWindow.winId());
+            QVERIFY(ActivateTestWindow(Native)); Backend->FocusInput();
+            const auto InputInside = [&] {
+                GUITHREADINFO Info{sizeof(Info)};
+                return GetGUIThreadInfo(GetWindowThreadProcessId(GetForegroundWindow(), nullptr), &Info)
+                    && Info.hwndFocus && IsChild(Native, Info.hwndFocus)
+                    && GetWindowThreadProcessId(Info.hwndFocus, nullptr) != GetCurrentThreadId();
+            };
+            QTRY_VERIFY_WITH_TIMEOUT(InputInside(), 10000);
+            QSignalSpy SaveFailures(ProductWindow.Document(), &HwpSdiWindow::SaveFailed);
+            connect(ProductWindow.Document(), &HwpSdiWindow::SaveFailed, &ProductWindow, [](const QString& Error) { qWarning() << "hwp-product-save-error" << Error; });
+            QWidget Other; Other.resize(320, 180);
+            int Saves = 0;
+            for (int At = 0; At < 100; ++At) {
+                if (At % 25 == 0) QTest::qWait(300);
+                if (At && At % 25 == 0) {
+                    Other.show(); QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Other.winId()))); QTest::qWait(100);
+                    QVERIFY(ActivateTestWindow(Native));
+                    // No repair request here: activating the product must restore input itself.
+                    QTRY_VERIFY_WITH_TIMEOUT(InputInside(), 5000);
+                }
+                if (At && At % 20 == 0) { ProductWindow.Save(); ++Saves; }
+                INPUT Keys[2]{};
+                for (auto& Key : Keys) { Key.type = INPUT_KEYBOARD; Key.ki.wScan = L'x'; Key.ki.dwFlags = KEYEVENTF_UNICODE; }
+                Keys[1].ki.dwFlags |= KEYEVENTF_KEYUP;
+                QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2)); QTest::qWait(15);
+            }
+            QTRY_VERIFY_WITH_TIMEOUT(!ProductWindow.IsBusy(), 30000);
+            QTest::qWait(300); ProductWindow.Save(); ++Saves;
+            QTRY_VERIFY_WITH_TIMEOUT(!ProductWindow.IsBusy() && !ProductWindow.Document()->Snapshot().dirty_, 30000);
+            QVERIFY2(DialogErrors.isEmpty(), qPrintable(DialogErrors.join(" | ")));
+            QCOMPARE(SaveFailures.size(), 0);
+            QFile Saved(Path); QVERIFY(Saved.open(QIODevice::ReadOnly)); const auto SavedBytes = Saved.readAll(); Saved.close();
+            const auto Encoded = QString::fromLatin1(SavedBytes.toBase64());
+            EditorView->page()->runJavaScript(QString(R"JS((async()=>{
+                try {const E=await import('rhwp://bundle/rhwp.js');await E.default();
+                    const D=new E.HwpDocument(Uint8Array.from(atob('%1'),C=>C.charCodeAt(0)));
+                    const Original=new E.HwpDocument(Uint8Array.from(atob('%2'),C=>C.charCodeAt(0)));
+                    try {const A=D.getTextFileText(),B=Original.getTextFileText();let P=0;
+                        while(P<B.length&&A[P]===B[P])++P;
+                        window.hcProductRoundtrip=A.length===B.length+100&&A.slice(P,P+100)==='x'.repeat(100)
+                            &&A.slice(P+100)===B.slice(P)?'ok':'missing-or-extra';
+                    }finally{D.free();Original.free();}
+                }catch(E){window.hcProductRoundtrip='failed:'+String(E);}
+            })())JS").arg(Encoded, QString::fromLatin1(InputBytes.toBase64())));
+            auto Verified = std::make_shared<QString>();
+            QTRY_VERIFY_WITH_TIMEOUT(([&] {
+                if (!Verified->isEmpty()) return true;
+                EditorView->page()->runJavaScript("window.hcProductRoundtrip||''", [Verified](const QVariant& V) { *Verified = V.toString(); });
+                return false;
+            })(), 10000);
+            QCOMPARE(*Verified, QString("ok"));
+            ProductWindow.RequestClose(); QTRY_VERIFY_WITH_TIMEOUT(ProductWindow.IsClosed(), 15000);
+            qInfo() << "hwp-product-native" << Format << "keys" << 100 << "saves" << Saves << "window-returns" << 3 << "saved-text-exact";
+        }
         // Qt/WebEngine event delivery is distinct from installed OS key acceptance.
         EditorView->window()->activateWindow();EditorView->setFocus();
         for(int Focus=0;Focus<2;++Focus) {
@@ -335,10 +471,10 @@ private slots:
                 const Engine = await import('rhwp://bundle/rhwp.js'); await Engine.default();
                 const Bytes = Uint8Array.from(atob('%1'), C => C.charCodeAt(0));
                 const Doc = new Engine.HwpDocument(Bytes);
-                try { window.hcRoundtrip = Doc.getTextFileText().includes('H2NativeEdit') ? 'ok' : 'missing'; }
+                try { window.hcRoundtrip = Doc.getTextFileText().includes('H2NativeEdit') && Doc.getTextFileText().includes('%2') ? 'ok' : 'missing'; }
                 finally { Doc.free(); }
             } catch (Error) { window.hcRoundtrip = 'failed:' + String(Error); }
-        })())JS").arg(Encoded));
+        })())JS").arg(Encoded,NativeText));
         const auto Roundtrip = std::make_shared<QString>();
         QTRY_VERIFY_WITH_TIMEOUT(([&] {
             if (!Roundtrip->isEmpty()) return true;

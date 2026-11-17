@@ -58,6 +58,14 @@ namespace hc::document
         Rect.setHeight(MainHeight);
         return Rect;
     }
+    void EpubSourceTabs::showEvent(QShowEvent* Event)
+    {
+        QTabBar::showEvent(Event);
+        // Tabs are populated while the asynchronous editor is still hidden.
+        // Re-publish the custom two-line size once polished and shown, before
+        // the first dirty marker otherwise causes the parent to reclaim its height.
+        updateGeometry();
+    }
     void EpubSourceTabs::paintEvent(QPaintEvent* Event)
     {
         QStylePainter Painter(this); Painter.setClipRegion(Event->region());

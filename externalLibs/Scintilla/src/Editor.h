@@ -617,6 +617,7 @@ protected:	// ScintillaBase subclass needs access to much of Editor
 	Sci::Line ContractedFoldNext(Sci::Line lineStart) const noexcept;
 	void EnsureLineVisible(Sci::Line lineDoc, bool enforcePolicy);
 	void FoldChanged(Sci::Line line, Scintilla::FoldLevel levelNow, Scintilla::FoldLevel levelPrev);
+	void FoldLevelsChanged();
 	void NeedShown(Sci::Position pos, Sci::Position len);
 	void FoldAll(Scintilla::FoldAction action);
 

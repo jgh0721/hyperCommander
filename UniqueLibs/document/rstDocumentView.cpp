@@ -10,6 +10,10 @@
 #include "rst/rstEditor.hpp"
 #include "rst/rstSettings.hpp"
 #include "rst/rstWorkspaceController.hpp"
+#include "rst/rstOutlineModel.hpp"
+#include <QFutureWatcher>
+#include <QtConcurrentRun>
+#include <type_traits>
 #include "rst/sphinxDiagnosticsStore.hpp"
 #include "rst/sphinxScanner.hpp"
 #include "rst/uvDownloader.hpp"
@@ -121,7 +125,9 @@ namespace hc::document
             };
             for( int I = 0; I < Tree->topLevelItemCount(); ++I ) Visit( Visit, Tree->topLevelItem( I ) );
         }
-        QWidget* OutlinePage( QTabWidget* Tabs, const QString& Title, const char* Name, QTreeWidget*& Tree )
+        template<typename TreeType>
+        QWidget* OutlinePage( QTabWidget* Tabs, const QString& Title, const char* Name, TreeType*& Tree,
+            std::function<void(const QString&)> FilterChanged = {} )
         {
             auto* Page = new QWidget( Tabs );
             auto* Layout = new QVBoxLayout( Page );
@@ -129,11 +135,14 @@ namespace hc::document
             auto* Filter = new QLineEdit( Page );
             Filter->setObjectName( QLatin1String( Name ) + QStringLiteral( "Filter" ) );
             Filter->setPlaceholderText( QObject::tr( "개요 검색" ) ); Filter->setClearButtonEnabled( true );
-            Tree = new QTreeWidget( Page );
+            Tree = new TreeType( Page );
             Tree->setObjectName( QLatin1String( Name ) );
             Tree->setHeaderHidden( true ); Tree->setContextMenuPolicy( Qt::CustomContextMenu );
             Layout->addWidget( Filter ); Layout->addWidget( Tree, 1 );
-            QObject::connect( Filter, &QLineEdit::textChanged, Tree, [ Tree ]( const QString& Text ) { FilterTree( Tree, Text ); } );
+            Tree->setUniformRowHeights(true);
+            if constexpr (std::is_same_v<TreeType, QTreeWidget>)
+                QObject::connect(Filter, &QLineEdit::textChanged, Tree, [Tree](const QString& Text) { FilterTree(Tree, Text); });
+            else QObject::connect(Filter, &QLineEdit::textChanged, Tree, std::move(FilterChanged));
             Tabs->addTab( Page, Title );
             return Page;
         }
@@ -208,16 +217,28 @@ namespace hc::document
         OutlineLayout->setContentsMargins( 0, 0, 0, 0 );
         outlineTabs_ = new QTabWidget( outlinePanel_ );
         outlineTabs_->setObjectName( "rstOutlineTabs" ); outlineTabs_->setDocumentMode( true );
-        OutlinePage( outlineTabs_, tr( "활성 문서" ), "rstOutlineDocument", outlineDocument_ );
+        OutlinePage( outlineTabs_, tr( "활성 문서" ), "rstOutlineDocument", outlineDocument_,
+            [this](const QString& Text) { outlineFilter_ = Text; fillDocumentOutline(); } );
+        outlineModel_ = new hc::rst::OutlineModel(outlineDocument_);
+        outlineDocument_->setModel(outlineModel_);
         OutlinePage( outlineTabs_, tr( "프로젝트" ), "rstOutlineProject", outlineProject_ );
         OutlineLayout->addWidget( outlineTabs_ );
         // 사용자가 직접 고른 탭은 문서가 바뀌어도 그대로 둔다.
         connect( outlineTabs_->tabBar(), &QTabBar::tabBarClicked, this, [ this ] { outlineTabChosen_ = true; } );
-        for( auto* Tree : { outlineDocument_, outlineProject_ } ) {
+        for( auto* Tree : { outlineProject_ } ) {
             connect( Tree, &QTreeWidget::itemClicked, this, [ this ]( QTreeWidgetItem* Item ) { activateOutlineItem( Item ); } );
             connect( Tree, &QTreeWidget::itemActivated, this, [ this ]( QTreeWidgetItem* Item ) { activateOutlineItem( Item ); } );
             connect( Tree, &QWidget::customContextMenuRequested, this, [ this, Tree ]( const QPoint& Position ) { showOutlineMenu( Tree, Position ); } );
         }
+
+        const auto ActivateOutline = [this](const QModelIndex& Index) {
+            if (Index.isValid() && Index.flags().testFlag(Qt::ItemIsEnabled))
+                goTo(Index.data(PathRole).toString(), Index.data(LineRole).toInt());
+        };
+        connect(outlineDocument_, &QTreeView::clicked, this, ActivateOutline);
+        connect(outlineDocument_, &QTreeView::activated, this, ActivateOutline);
+        connect(outlineDocument_, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& Position) { showOutlineMenu(outlineDocument_, Position); });
 
         splitter_->addWidget( source_ );
 
@@ -738,7 +759,7 @@ namespace hc::document
         else if( Id == "rst.currentHeading" ) {
             actions_[ "rst.toggleToc" ]->setChecked( true ); syncPanels();
             outlineTabs_->setCurrentIndex( 0 ); markCurrentOutlineItem();
-            if( outlineDocument_->currentItem() ) outlineDocument_->scrollToItem( outlineDocument_->currentItem() );
+            if (outlineDocument_->currentIndex().isValid()) outlineDocument_->scrollTo(outlineDocument_->currentIndex());
         }
         else if( Id == "rst.problems" ) { setProblemsVisible( true, true ); problems_->setCurrentWidget( diagnostics_ ); diagnostics_->setFocus(); }
         else if( Id == "rst.showLog" ) {
@@ -970,17 +991,28 @@ namespace hc::document
 
     void RstDocumentView::fillDocumentOutline()
     {
-        outlineDocument_->clear();
-        if( documentOutline_.isEmpty() ) {
-            auto* Note = new QTreeWidgetItem( outlineDocument_, { tr( "문서 제목이 없습니다." ) } );
-            Note->setFlags( Qt::NoItemFlags );
-            return;
-        }
-        addOutlineSymbols( nullptr, outlineDocument_, documentOutline_, 1 );
-        outlineDocument_->expandToDepth( 1 );
-        markCurrentOutlineItem();
+        const auto Generation = ++outlineGeneration_;
+        if (outlineBuilding_) return;
+        outlineBuilding_ = true;
+        using Model = hc::rst::OutlineModel;
+        auto* Watcher = new QFutureWatcher<Model::Snapshot>(this);
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation] {
+            const auto Rows = Watcher->result(); Watcher->deleteLater(); outlineBuilding_ = false;
+            if (Generation != outlineGeneration_) { fillDocumentOutline(); return; }
+            if (Rows != outlineModel_->Capture()) {
+                outlineModel_->Publish(Rows);
+                if (outlineFilter_.isEmpty()) outlineDocument_->expandToDepth(1);
+                else outlineDocument_->expandAll();
+            }
+            markCurrentOutlineItem();
+        });
+        Watcher->setFuture(QtConcurrent::run([Symbols = documentOutline_, Depth = outlineDepth_, Filter = outlineFilter_,
+            Previous = outlineModel_->Capture()] {
+            auto Rows = Model::Prepare(Symbols, Depth, Filter);
+            // Body edits and saving must not rebuild an unchanged heading tree.
+            return Previous && *Previous == *Rows ? Previous : Rows;
+        }));
     }
-
     void RstDocumentView::fillProjectOutline()
     {
         outlineProject_->clear();
@@ -1006,31 +1038,27 @@ namespace hc::document
 
     void RstDocumentView::markCurrentOutlineItem()
     {
-        if( !outlinePanel_->isVisible() || outlineDocument_->topLevelItemCount() == 0 ) return;
-        // 캐럿이 놓인 줄 위에서 가장 가까운 제목.
-        const int Line = editor_->caretLine();
-        QTreeWidgetItem* Best = nullptr;
-        for( QTreeWidgetItemIterator It( outlineDocument_ ); *It; ++It ) {
-            const int At = ( *It )->data( 0, LineRole ).toInt();
-            if( At > 0 && At <= Line && ( !Best || At >= Best->data( 0, LineRole ).toInt() ) ) Best = *It;
+        if (!outlinePanel_->isVisible()) return;
+        // A caret step must not traverse every heading in a large document.
+        const auto Best = outlineModel_->IndexForLine(editor_->caretLine());
+        if (Best.isValid() && Best != outlineDocument_->currentIndex()) {
+            const QSignalBlocker Block(outlineDocument_); outlineDocument_->setCurrentIndex(Best);
         }
-        if( Best && Best != outlineDocument_->currentItem() ) { const QSignalBlocker Block( outlineDocument_ ); outlineDocument_->setCurrentItem( Best ); }
     }
-
     void RstDocumentView::activateOutlineItem( QTreeWidgetItem* Item )
     {
         if( !Item || !( Item->flags() & Qt::ItemIsEnabled ) ) return;
         goTo( Item->data( 0, PathRole ).toString(), Item->data( 0, LineRole ).toInt() );
     }
 
-    void RstDocumentView::showOutlineMenu( QTreeWidget* Tree, const QPoint& Position )
+    void RstDocumentView::showOutlineMenu( QTreeView* Tree, const QPoint& Position )
     {
-        auto* Item = Tree->itemAt( Position );
-        const bool Usable = Item && ( Item->flags() & Qt::ItemIsEnabled );
-        const QString Path = Usable ? Item->data( 0, PathRole ).toString() : QString();
-        const int Line = Usable ? Item->data( 0, LineRole ).toInt() : 0;
-        const QString Text = Usable ? Item->text( 0 ) : QString();
-        const bool DocumentRow = Tree == outlineProject_ && Usable && !Item->parent();
+        const auto Item = Tree->indexAt(Position);
+        const bool Usable = Item.isValid() && Item.flags().testFlag(Qt::ItemIsEnabled);
+        const QString Path = Usable ? Item.data(PathRole).toString() : QString();
+        const int Line = Usable ? Item.data(LineRole).toInt() : 0;
+        const QString Text = Usable ? Item.data().toString() : QString();
+        const bool DocumentRow = Tree == outlineProject_ && Usable && !Item.parent().isValid();
         const bool Own = Path.isEmpty() || SamePath( Path, path_ );
         QMenu Menu( this );
         Menu.setObjectName( Tree == outlineProject_ ? "rstProjectOutlineMenu" : "rstOutlineMenu" );
@@ -1046,8 +1074,8 @@ namespace hc::document
             Menu.addAction( tr( "미리보기에서 보기" ), this, [ this, Line ] { showLineInPreview( Line ); } )->setEnabled( Usable && Own );
         }
         Menu.addSeparator();
-        Menu.addAction( tr( "모두 펼치기" ), Tree, &QTreeWidget::expandAll );
-        Menu.addAction( tr( "모두 접기" ), Tree, &QTreeWidget::collapseAll );
+        Menu.addAction( tr( "모두 펼치기" ), Tree, &QTreeView::expandAll );
+        Menu.addAction( tr( "모두 접기" ), Tree, &QTreeView::collapseAll );
         auto* Depth = Menu.addMenu( tr( "표시 깊이" ) );
         auto* Group = new QActionGroup( Depth );
         for( const int Value : { 1, 2, 3, 4, 6, 0 } ) {
@@ -1474,7 +1502,7 @@ namespace hc::document
                  { "warnings", warningCount_ },
                  { "diagnostics", int( shownDiagnostics_.size() ) },
                  { "outlineVisible", outlinePanel_->isVisible() },
-                 { "outlineHeadings", outlineDocument_->topLevelItemCount() },
+                 { "outlineHeadings", outlineModel_->rowCount() },
                  { "problemsVisible", panelsTaken_ ? diagnostics_->isVisible() : problems_->isVisible() },
                  { "banner", bannerKind_ == Banner::None ? QString() : banner_->text() } };
     }

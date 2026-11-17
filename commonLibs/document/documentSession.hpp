@@ -28,6 +28,12 @@ namespace hc::document
         storage::Result<SaveTicket> Save(SaveRequest Request) override;
         // The owner captured this content/revision while another save was running.
         storage::Result<SaveTicket> SaveSnapshot(SaveRequest Request, std::uint64_t Revision, std::string Text);
+        storage::Result<SaveTicket> SaveTextSnapshot(SaveRequest Request, std::uint64_t Revision, TextSnapshot Text);
+        storage::Result<storage::Unit> ApplyTextSnapshot(TextSnapshot Text);
+        void AdoptTextSnapshot(TextSnapshot Text);
+        const std::optional<TextSnapshot>& NativeText() const { return nativeText_; }
+        const std::optional<TextSnapshot>& SavedNativeText() const { return savedNativeText_; }
+        bool ResolveTextEquality(std::uint64_t Generation, std::uint64_t Revision, const TextSnapshot& Baseline, bool Equal);
         void Cancel() override;
         bool Cancel(const DocumentOperationTicket& Ticket);
         bool Cancel(const SaveTicket& Ticket);
@@ -65,7 +71,8 @@ namespace hc::document
         void MarkRecovered();
         void AdvanceRecoveryRevision() { ++snapshot_.revision_; }
         bool AuthorizeRecoveryClose(const RecoverySnapshot& Receipt);
-        const std::string& Text() const { return text_; }
+        std::string Text() const { return nativeText_ ? nativeText_->SerializedBytes() : text_; }
+        std::size_t ByteSize() const { return nativeText_ ? nativeText_->SerializedSize() : text_.size(); }
     private:
         struct PendingOperation
         {
@@ -76,12 +83,14 @@ namespace hc::document
         bool matches(const DocumentOperationTicket& Ticket, DocumentOperation Operation) const;
         void finishOperation();
         void updateModelDirty();
+        bool nativeTextDirty() const;
         storage::Result<DocumentOperationTicket> beginModelOperation(DocumentOperation Operation);
         DocumentSnapshot snapshot_;
         ExternalModelPolicy modelPolicy_;
         std::optional<PendingOperation> pending_;
         std::uint64_t nextOperation_ = 0;
         std::string text_, savedText_;
+        std::optional<TextSnapshot> nativeText_, savedNativeText_;
         std::optional<SaveTicket> saving_;
         std::uint64_t nextSave_ = 0;
         bool undo_ = false, redo_ = false, binary_ = false;

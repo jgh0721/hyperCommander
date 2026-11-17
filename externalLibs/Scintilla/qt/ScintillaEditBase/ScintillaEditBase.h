@@ -32,6 +32,7 @@
 #include <QAbstractScrollArea>
 #include <QMimeData>
 #include <QElapsedTimer>
+#include <cstddef>
 
 namespace Scintilla::Internal {
 
@@ -60,6 +61,7 @@ class EXPORT_IMPORT_API ScintillaEditBase : public QAbstractScrollArea {
 public:
 	explicit ScintillaEditBase(QWidget *parent = 0);
 	virtual ~ScintillaEditBase();
+	bool ReplaceFoldLevels(const int *levels, size_t count);
 
 	virtual sptr_t send(
 		unsigned int iMessage,

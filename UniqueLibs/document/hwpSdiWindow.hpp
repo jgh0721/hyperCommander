@@ -2,6 +2,7 @@
 #include "commonLibs/document/documentSession.hpp"
 #include <QWidget>
 #include <QJsonObject>
+#include <QElapsedTimer>
 #include <memory>
 #include "hwpExportTransfer.hpp"
 #include "hwpPrintBridge.hpp"
@@ -86,6 +87,7 @@ namespace hc::document
         void updateState();
         void editorReply(quint64 Binding, const QJsonObject& Reply);
         void failExport(const QString& Error);
+        bool beginSave(SaveRequest Request, const QString& Format);
         void failPrint(QString Code);
         DocumentSession session_;
         HwpSdiBackend* backend_;
@@ -97,6 +99,10 @@ namespace hc::document
         bool printCancelling_ = false;
         std::optional<DocumentOperationTicket> exportTicket_;
         std::unique_ptr<HwpExportTransfer> export_;
+        std::optional<SaveRequest> pendingSave_;
+        QString pendingSaveFormat_;
+        QElapsedTimer modelQuiet_;
+        QDeadlineTimer saveRetryDeadline_{QDeadlineTimer::Forever};
         std::optional<RecoverySnapshot> checkpoint_, recovery_;
         QByteArray recoveryPin_;
         QString recoveryFormat_;

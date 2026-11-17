@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "commonLibs/storage/materializedContent.hpp"
+#include "textSnapshot.hpp"
 
 namespace hc::document
 {
@@ -94,6 +95,8 @@ namespace hc::document
         SourceIdentity source_;
         DocumentContentMode contentMode_ = DocumentContentMode::InlineBytes;
         ExternalModelRevision model_;
+        // Native text saves retain a persistent encoded snapshot, not a content token.
+        std::optional<TextSnapshot> textSnapshot_;
     };
     struct LoadedExternalModel
     {

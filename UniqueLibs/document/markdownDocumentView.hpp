@@ -17,6 +17,7 @@ class QToolBar;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QSplitter;
+class QStackedWidget;
 class QLabel;
 class QAction;
 namespace hc::document
@@ -190,6 +191,7 @@ class MarkdownDocumentView final : public QWidget
     QList<QAction *> sourceActions_;
     QWidget *outlinePanel_;
     QWidget *previewPanel_;
+    QStackedWidget *previewStack_;
     // 작업 공간에 넘긴 칸(이 화면이 지울 때 함께 지운다).
     QList<QPointer<QWidget>> takenPanels_;
     bool panelsTaken_ = false, previewTaken_ = false;

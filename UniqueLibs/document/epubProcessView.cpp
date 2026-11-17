@@ -258,6 +258,14 @@ namespace hc::document
     bool EpubProcessView::FocusInput()
     {
         if(!work_ || !isVisible() || work_->cancel_.load() || work_->done_.load() || PreviewKeepsPanelKeyboard(this)) return false;
+        if (work_->previewShell_.load() && !inputActivationRequested_) {
+            // A passive Ctrl+Q reader starts without keyboard activation. Only
+            // explicit entry (checked above) enables it, before the focus command.
+            std::lock_guard Lock(work_->mutex_);
+            if (work_->settingsRequests_.size() >= 16) return false;
+            work_->settingsRequests_.push_front({{"kind","reader-action"},{"action","enable-input"},{"value",true}});
+            inputActivationRequested_ = true;
+        }
         work_->focusRequested_.store(true);
         work_->wake_.notify_one();
         return true;
@@ -364,7 +372,7 @@ namespace hc::document
         bound_ = true;
         timer_->start();
         work_ = std::make_shared<Work>();
-        work_->initiallyInteractive_=InitiallyInteractive;work_->sourceLines_=SourceLines;
+        work_->initiallyInteractive_=InitiallyInteractive && !QuickPreviewShell(this);work_->sourceLines_=SourceLines;
         if(auto* Shell=QuickPreviewShell(this))work_->previewShell_=static_cast<std::uintptr_t>(Shell->internalWinId());
         work_->ownerThread_=GetCurrentThreadId();
         work_->appearance_ = epubui::Appearance();

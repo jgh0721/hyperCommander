@@ -569,7 +569,8 @@ public:
 	int SCI_METHOD GetLevel(Sci_Position line) const override;
 	Scintilla::FoldLevel GetFoldLevel(Sci_Position line) const noexcept;
 	void ClearLevels();
-	Sci::Line GetLastChild(Sci::Line lineParent, std::optional<Scintilla::FoldLevel> level = {}, Sci::Line lastLine = -1);
+	bool ReplaceFoldLevels(const int *values, size_t count);
+	Sci::Line GetLastChild(Sci::Line lineParent, std::optional<Scintilla::FoldLevel> level = {}, Sci::Line lastLine = -1, bool ensureStyles = true);
 	Sci::Line GetFoldParent(Sci::Line line) const noexcept;
 	void GetHighlightDelimiters(HighlightDelimiter &highlightDelimiter, Sci::Line line, Sci::Line lastLine);
 

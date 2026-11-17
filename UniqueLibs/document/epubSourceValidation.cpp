@@ -119,7 +119,7 @@ bool EpubSourceEditor::selectDiagnostic(int Index) {
     text_->goToPosition(qMax(1,Row["line"].toInt(1)),qMax(1,Row["column"].toInt(1)));static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_SCROLLCARET);focusSource();return true;
 }
 bool EpubSourceEditor::standardValidationRequired()const{return checkerSettings_["requireEpubCheck"].toBool(hc::defaults::edit::ViewValue("epubEditor/requireEpubCheck").toBool());}
-bool EpubSourceEditor::standardValidationAccepted()const{return !standardValidationRequired() || checkerVerifiedToken_==Token();}
+bool EpubSourceEditor::standardValidationAccepted()const{return !standardValidationRequired() || checkerVerifiedToken_==RevisionToken();}
 void EpubSourceEditor::startEpubCheck() {
     checkerVerifiedToken_.clear();checkerWorkToken_=validationToken_;checkerLog_.clear();checkerOutput_->clear();checkerReason_.clear();checkerState_="running";
     auto Java=checkerSettings_["javaPath"].toString().trimmed();if(Java.isEmpty())Java=QStandardPaths::findExecutable("java");const auto Jar=checkerSettings_["epubcheckJar"].toString().trimmed();
@@ -143,7 +143,7 @@ void EpubSourceEditor::stopEpubCheck() {
 void EpubSourceEditor::finishEpubCheck(int Code,bool Normal) {
     if(checkerState_!="running")return;
     checkerTimer_.stop();if(checkerProcess_->isOpen())checkerLog_+=checkerProcess_->readAll();checkerOutput_->setPlainText(QString::fromUtf8(checkerLog_.left(128*1024)));
-    const bool Stale=checkerWorkToken_!=Token() || checkerReason_=="source-changed" || checkerReason_=="settings-changed";
+    const bool Stale=checkerWorkToken_!=RevisionToken() || checkerReason_=="source-changed" || checkerReason_=="settings-changed";
     QJsonArray Rows;bool HasErrors=false,ReportValid=false;QString Version;
     if(checkerReason_.isEmpty() && checkerDirectory_ && checkerLog_.size()<=128*1024) {
         QFile Report(QDir(checkerDirectory_->path()).filePath("report.json"));
@@ -180,6 +180,6 @@ void EpubSourceEditor::finishEpubCheck(int Code,bool Normal) {
     checkerVersion_=Version;emit StateChanged();if(!Stale && IsValidated() && saveAfter_)emit SaveRequested(saveAsAfter_);saveAfter_=false;
 }
 QJsonObject EpubSourceEditor::validationSnapshot()const {
-    return {{"required",standardValidationRequired()},{"state",checkerState_},{"version",checkerVersion_},{"reason",checkerReason_},{"current",!checkerVerifiedToken_.isEmpty() && checkerVerifiedToken_==Token()},{"diagnostics",diagnosticRows_}};
+    return {{"required",standardValidationRequired()},{"state",checkerState_},{"version",checkerVersion_},{"reason",checkerReason_},{"current",!checkerVerifiedToken_.isEmpty() && checkerVerifiedToken_==RevisionToken()},{"diagnostics",diagnosticRows_}};
 }
 }

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "documentViewPane.hpp"
+#include "startupTrace.hpp"
 #include <QPlainTextEdit>
 #include <QTextBlock>
 #include "UniqueLibs/document/imagePerformance.hpp"
@@ -142,6 +143,7 @@ namespace hc::document
     }
     bool DocumentViewPane::Load(const TextInput& Input,bool Traverse,bool ImageEditing)
     {
+        textSnapshot_.reset();
         auto* Prefix = HasTextLoadingPreview() ? static_cast<QPlainTextEdit*>(textLoadingPreview_) : nullptr;
         const auto PrefixCursor = Prefix ? Prefix->textCursor() : QTextCursor{};
         const int PrefixLine = Prefix ? Prefix->cursorForPosition(QPoint(0, 0)).blockNumber() : 0;
@@ -187,7 +189,9 @@ namespace hc::document
                     fm::style::setSegments({qobject_cast<QAbstractButton*>(Bar->widgetForAction(Read)),qobject_cast<QAbstractButton*>(Bar->widgetForAction(Edit))});
                     connect(Edit,&QAction::toggled,this,[this,Edit](bool Checked){
                         if(Checked && !editEpub()){const QSignalBlocker Block(Edit);Edit->setChecked(false);updateEpubMode();return;}
-                        if(epubEditor_){epubEditor_->SetSourceVisible(Checked);const bool UsePreview=Checked || epubEditor_->PreviewView();epubEditor_->setVisible(UsePreview);epub_->setVisible(!UsePreview);}else epub_->show();updateEpubMode();emit ViewStateChanged();
+                        // Keep the draft preview surface visible while its first frame is prepared.
+                        // Hiding it here prevents native attachment and leaves the original book on screen.
+                        if(epubEditor_){epubEditor_->SetSourceVisible(Checked);epubEditor_->show();epub_->hide();}else epub_->show();updateEpubMode();emit ViewStateChanged();
                     });
                     connect(Read,&QAction::triggered,this,[Read,Edit]{Read->setChecked(true);if(Edit->isChecked())Edit->setChecked(false);});
                     auto* Reopen=new QAction(tr("저장본 다시 열기"),Bar);Reopen->setObjectName("epubReopen");connect(Reopen,&QAction::triggered,this,[this]{if(epubEditor_ && !epubEditor_->Snapshot()["validating"].toBool())emit OpenRequested(epubPath_);});
@@ -293,6 +297,14 @@ namespace hc::document
         contribution_.viewId_=viewId_;contribution_.menuTitle_=viewId_=="pdf"?tr("PDF(&P)"):viewId_=="image"?tr("이미지(&I)"):tr("텍스트(&X)");
         contribution_.menuActions_=toolbar_->actions();
         if(text_) {
+            auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+            connect(Backend, &ITextEditorBackend::textEdited, this, [this, Backend](qint64 Position, qint64 Removed, qint64 Inserted) {
+                if (textSnapshot_) {
+                    const auto Bytes = Inserted ? Backend->textRangeUtf8(Position, Position + Inserted) : QByteArray{};
+                    textSnapshot_ = textSnapshot_->Replace(std::size_t(Position), std::size_t(Removed), Bytes.toStdString());
+                }
+            });
+            connect(Backend, &ScintillaQtDirectBackend::DocumentReset, this, [this] { textSnapshot_.reset(); });
             connect(text_,&QTextView::ContentChanged,this,[this]{emit ContentChanged();});
             connect(text_,&QTextView::statusChanged,this,&DocumentViewPane::ViewStateChanged);
             // Encoding, line ending and indentation are status-bar pickers and 텍스트(X) submenus (no toolbar combos).
@@ -708,24 +720,47 @@ namespace hc::document
         if(WasActive && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root)Focus();return true;
     }
     QByteArray DocumentViewPane::Content() const { return serializeContent(nullptr); }
+    TextSnapshot DocumentViewPane::CaptureTextSnapshot() const
+    {
+        if (!text_) return {};
+        if (!textSnapshot_ || snapshotEncoding_ != encoding_ || snapshotBom_ != bom_) {
+            auto* Backend = static_cast<ScintillaQtDirectBackend*>(text_->Backend());
+            const auto Source = Backend->CaptureTextSnapshot();
+            // UTF-8 and UTF-16 differ on empty-input BOM emission. Preserve the
+            // codec's empty representation separately from the nonempty prefix.
+            const auto Empty = EncodeDocumentText({}, encoding_, bom_);
+            const auto WithBom = EncodeDocumentText(QStringLiteral("A"), encoding_, bom_);
+            const auto WithoutBom = EncodeDocumentText(QStringLiteral("A"), encoding_, false);
+            const auto Prefix = WithBom.HasValue() && WithoutBom.HasValue()
+                ? WithBom.Value().left(WithBom.Value().size() - WithoutBom.Value().size()) : QByteArray{};
+            textSnapshot_.emplace(Source.Bytes(), [Encoding = encoding_](std::string_view Bytes) {
+                const auto Text = QString::fromUtf8(Bytes.data(), qsizetype(Bytes.size()));
+                auto Encoded = EncodeDocumentText(Text, Encoding, false);
+                return Encoded.HasValue() ? TextSnapshot::EncodingResult{Encoded.Value().toStdString(), {}}
+                    : TextSnapshot::EncodingResult{{}, Encoded.Failure().code_};
+            }, Prefix.toStdString(), Empty.HasValue() ? Empty.Value().toStdString() : std::string{});
+            snapshotEncoding_ = encoding_; snapshotBom_ = bom_;
+        }
+        const auto Eol = textSnapshot_->LineEndings();
+        statusEol_ = Eol && (Eol & (Eol - 1)) ? "MIXED" : Eol == 1 ? "CRLF" : Eol == 2 ? "CR" : Eol == 4 ? "LF"
+            : text_->detectedLineEnding() == QTextView::CRLF ? "CRLF" : text_->detectedLineEnding() == QTextView::CR ? "CR" : "LF";
+        return *textSnapshot_;
+    }
     QByteArray DocumentViewPane::serializeContent(std::optional<storage::Error>* Error) const
     {
         if(text_){
-            const auto Text=text_->Content();
-            // Reuse the serialization snapshot; cursor-only status updates never scan the document.
-            bool CrLf=false,Cr=false,Lf=false;
-            for(qsizetype I=0;I<Text.size();++I){if(Text[I]=='\r'){if(I+1<Text.size()&&Text[I+1]=='\n'){CrLf=true;++I;}else Cr=true;}else if(Text[I]=='\n')Lf=true;if(int(CrLf)+int(Cr)+int(Lf)>1)break;}
-            statusEol_=int(CrLf)+int(Cr)+int(Lf)>1?"MIXED":CrLf?"CRLF":Cr?"CR":Lf?"LF":text_->detectedLineEnding()==QTextView::CRLF?"CRLF":text_->detectedLineEnding()==QTextView::CR?"CR":"LF";
-            auto Bytes=EncodeDocumentText(Text,encoding_,bom_);
-            if(Bytes.HasValue())return Bytes.Value();
-            if(Error)*Error=Bytes.Failure();return Text.toUtf8();
+            const auto Snapshot = CaptureTextSnapshot();
+            const auto Failure = Snapshot.SerializationError();
+            if (Error && !Failure.empty()) *Error = storage::Error{storage::ErrorCategory::InvalidRequest, Failure};
+            return QByteArray::fromStdString(Snapshot.SerializedBytes());
         }
         return pdf_?pdf_->SerializeContent():image_?(image_->isModified()?image_->SerializeContent():originalImageBytes_):QByteArray{};
 }
     DocumentViewPane::SessionSerialization DocumentViewPane::SerializeSession() const
     {
+        hc::startup::Span InputTrace("input.text.serialize");
         SessionSerialization Result;
-        if(epub_)Result.bytes_="epub:"+(epubEditor_?epubEditor_->Token():epubSourceHash_).toHex();
+        if(epub_)Result.bytes_="epub:"+(epubEditor_?epubEditor_->SessionIdentity():epubSourceHash_).toHex();
         else if(!image_)Result.bytes_=serializeContent(&Result.error_);
         else if(!image_->isModified())Result.bytes_="image:"+originalImageHash_.toHex();
         else if(const auto Bytes=image_->SerializeContent();!Bytes.isEmpty())Result.bytes_="image:"+QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256).toHex();
@@ -797,9 +832,11 @@ namespace hc::document
             if(Error)return *Error;
             return Bytes;
         };
-        if(text_)return [Text=text_->Content(),Encoding=encoding_,Bom=bom_](storage::OperationContext Context)->storage::Result<QByteArray>{
+        if(text_)return [Snapshot=CaptureTextSnapshot()](storage::OperationContext Context)->storage::Result<QByteArray>{
             if(auto Stop=Context.Check({"document"}))return *Stop;
-            return EncodeDocumentText(Text,Encoding,Bom);
+            const auto Failure = Snapshot.SerializationError();
+            if (!Failure.empty()) return storage::Error{storage::ErrorCategory::InvalidRequest, Failure};
+            return QByteArray::fromStdString(Snapshot.SerializedBytes());
         };
         if(image_ || (reading_ && !reading_->isHidden())) {
             const bool KeepOriginal=image_ && !image_->isModified() && quality_<0 && QFileInfo(Destination).suffix().compare(QFileInfo(originalImagePath_).suffix(),Qt::CaseInsensitive)==0;

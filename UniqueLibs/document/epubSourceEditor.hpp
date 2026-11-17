@@ -7,6 +7,7 @@
 #include "epubLineShifts.hpp"
 #include "previewScrollSync.hpp"
 #include "documentEditRange.hpp"
+#include "commonLibs/document/textSnapshot.hpp"
 #include "commonLibs/document/epub/epubSourceMap.hpp"
 #include "documentStatusBar.hpp"
 #include "documentStorageAdapter.hpp"
@@ -31,7 +32,10 @@ public:
     ~EpubSourceEditor()override;
     QJsonObject Snapshot()const;
     QJsonObject Execute(const QJsonObject& Request);
+    // Exact content fingerprint for explicit integrity operations, never the typing path.
     QByteArray Token()const;
+    QByteArray RevisionToken()const;
+    QByteArray SessionIdentity()const;
     std::function<QJsonArray()> CaptureSearchSources(const QString& Document) const;
     static QJsonArray BuildSearchSources(const epub::EditModel& Model, const QMap<QString, QByteArray>& Draft, const QString& Document);
     QString ApplySearchBatch(const QJsonArray& Changes);
@@ -41,11 +45,11 @@ public:
     bool IsReady()const{return ready_;}
     // HotExit (D9): the draft that holds the unsaved edits, whether it is current, and the per-book workspace flush.
     QString DraftPath()const{return recoveryPath_;}
-    bool DraftCurrent()const{return !IsModified() || (!recoveryPath_.isEmpty() && draftWrittenToken_==Token());}
+    bool DraftCurrent()const{return !IsModified() || (!recoveryPath_.isEmpty() && draftWrittenToken_==RevisionToken());}
     bool DraftEnabled()const{return recoveryEnabled_;}
     void FlushWorkspace(){saveWorkspace();}
-    bool IsModified()const{return ready_ && Token()!=(savedToken_.isEmpty()?baseToken_:savedToken_);}
-    bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !nativeValidating_ && !structuring_ && validatedToken_==Token() && !validatedBytes_.isEmpty() && checkerState_!="running" && standardValidationAccepted();}
+    bool IsModified()const;
+    bool IsValidated()const{return ready_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty() && !nativeValidating_ && !structuring_ && validatedToken_==RevisionToken() && !validatedBytes_.isEmpty() && checkerState_!="running" && standardValidationAccepted();}
     static QString RecoveryDirectory();
     void Commit(const QString& Path,const QByteArray& Bytes);
     bool PrepareSave(bool SaveAs);
@@ -91,6 +95,21 @@ protected:bool eventFilter(QObject* Object,QEvent* Event)override;
 private:
     void load(QByteArray Bytes);void validate(bool SaveAfter,bool Standard=false);void select();bool flush();void importImage();
     QMap<QString,QByteArray> draft()const;
+    struct IdentitySnapshot;
+    std::shared_ptr<IdentitySnapshot> identitySnapshot() const;
+    void startIdentityWorker();
+    void retainIdentityAfterFlush();
+    void resetIdentityAfterLoad();
+    mutable std::shared_ptr<IdentitySnapshot> identity_, identityNext_;
+    std::shared_ptr<IdentitySnapshot> savedIdentity_;
+    QHash<QByteArray, std::shared_ptr<IdentitySnapshot>> savingIdentities_;
+    QFutureWatcher<std::shared_ptr<IdentitySnapshot>> identityWorker_;
+    bool identityWorkerActive_ = false, identityLoading_ = false;
+    quint64 sourceRevision_ = 0;
+    mutable quint64 identitySourceRevision_ = 0;
+    mutable QString identityEdition_;
+    mutable QMap<QString,QByteArray> identityChanges_;
+    mutable QByteArray identityBase_, identityReference_;
     void report(const QString& Text);void reportDraft(const QString& Text);void reportPreview(const QString& Text);
     // Layout, panels and commands.
     void setupLayout();void setupActions();void setupStatus();void setupProblems(QWidget* Panel);void setupResources(QWidget* Panel);
@@ -213,6 +232,10 @@ private:
     void editMetadata();void inspectImage(const QString& Path);void editImageProperties(const QJsonObject& Inspection);
     // Context menus and source tools.
     void showTreeMenu(const QPoint& Position);void showSourceMenu(const QPoint& Position);void showTabMenu(const QPoint& Position);void showProblemMenu(const QPoint& Position);
+    struct ContextHints {QByteArray token_;int position_=-1;bool quickFix_=false,link_=false;};
+    void setupContextHints();void scheduleContextHints();
+    QTimer contextTimer_;QFutureWatcher<ContextHints> contextWorker_;bool contextWorkerActive_=false;
+    QByteArray contextToken_;int contextPosition_=-1;ContextHints contextHints_;
     void quickFix();QJsonObject quickFixAt(int Position)const;QString linkAt(int Position)const;bool openLink();void wrapSelection(const QString& Tag);
     void findInResources(const QString& Text);void findSelectionInSource(const QString& Text);void copyPath(const QString& Path,bool Relative);
     void insertImageReference(const QString& Path);void exportResource(const QString& Path);void duplicateResource(const QString& Path);void importResources();

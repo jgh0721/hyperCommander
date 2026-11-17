@@ -508,7 +508,7 @@ void QtPluginViewerSurface::poll()
         ready_ = true;static_cast<QStackedLayout*>(layout())->setCurrentWidget(anchor_);layout()->activate(); resizeNative();
         // Focus may arrive while content is still being materialized; replay
         // the current Qt focus after the worker publishes the native window.
-        if (isVisible() && (hasFocus() || (anchor_ && anchor_->hasFocus()))) session_->Focus();
+        if ((!preview_ || interacted_) && isVisible() && (hasFocus() || (anchor_ && anchor_->hasFocus()))) session_->Focus();
         emit Ready(QString::fromStdString(Details.viewer_.id_)); return;
     }
     if (!Details.idle_) return;
@@ -534,12 +534,24 @@ bool QtPluginViewerSurface::eventFilter(QObject* Object, QEvent* Event)
     if (Object == anchor_)
     {
         if (Event->type() == QEvent::Resize || Event->type() == QEvent::DevicePixelRatioChange) resizeNative();
-        if (Event->type() == QEvent::FocusIn && session_ && ready_ && isVisible()) session_->Focus();
+        if (Event->type() == QEvent::MouseButtonPress && preview_) EnterPreview();
+        if (Event->type() == QEvent::FocusIn && session_ && ready_ && isVisible() && (!preview_ || interacted_)) session_->Focus();
     }
     return QWidget::eventFilter(Object, Event);
 }
 void QtPluginViewerSurface::focusInEvent(QFocusEvent* Event)
-{ if (session_ && ready_ && isVisible()) session_->Focus(); QWidget::focusInEvent(Event); }
+{
+    if (preview_ && (Event->reason() == Qt::TabFocusReason || Event->reason() == Qt::BacktabFocusReason
+        || Event->reason() == Qt::MouseFocusReason)) interacted_ = true;
+    if (session_ && ready_ && isVisible() && (!preview_ || interacted_)) session_->Focus();
+    QWidget::focusInEvent(Event);
+}
+void QtPluginViewerSurface::EnterPreview()
+{
+    if (!preview_) return;
+    interacted_ = true;
+    if (session_ && ready_ && isVisible()) session_->Focus();
+}
 void QtPluginViewerSurface::SetReturnKey(QKeyCombination Key)
 {
     returnKey_ = Key;

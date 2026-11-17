@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/startupTrace.hpp"
 #include "documentTextCodec.hpp"
 #include "UniqueLibs/settings/unifiedConfig.hpp"
 #include "UniqueLibs/nativeFilePath.hpp"
@@ -46,13 +47,19 @@ void EpubSourceEditor::protectSourcePath(const QString& Path){protectedPaths_.ap
 EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget* Parent,const QByteArray& SourceHash):QWidget(Parent) {
     protectSourcePath(Path);
     baseToken_=SourceHash.isEmpty()?QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256):SourceHash;sourceHashAtOpen_=baseToken_;sourcePath_=Path;
-    setupLayout();setupActions();setupStatus();setupScrollSync();
+    setupLayout();setupActions();setupStatus();setupContextHints();
+    connect(&identityWorker_, &QFutureWatcherBase::finished, this, [this] {
+        const auto Done = identityWorker_.result(); identityWorkerActive_ = false;
+        if (identityNext_ == Done) identityNext_.reset();
+        startIdentityWorker();
+        if (ready_ && !identityLoading_ && (identity_ == Done || savedIdentity_ == Done)) { emit Changed(); emit StateChanged(); }
+    });setupScrollSync();
     sourceSyncTimer_.setSingleShot(true);sourceSyncTimer_.setInterval(180);connect(&sourceSyncTimer_,&QTimer::timeout,this,[this]{locateSource();});
     connect(text_->Backend(),&ITextEditorBackend::cursorPositionChanged,this,[this]{if(!updating_ && SourceInput()->hasFocus() && action("epubPreviewScrollSync")->isChecked()){sourceSyncPending_=true;sourceSyncAttempts_=0;sourceSyncTimer_.start();}updateStatus();});
     connect(text_->Backend(),&ITextEditorBackend::selectionChanged,this,&EpubSourceEditor::updateActions);
     connect(text_,&QTextView::ContentChanged,this,[this]{
         invalidateSourceCache();
-        if(updating_ || !sourceShown())return;bookUndoPriority_=bookRedoPriority_=false;
+        if(updating_ || !sourceShown())return;++sourceRevision_;bookUndoPriority_=bookRedoPriority_=false;
         if(text_->Backend()->documentLength()>2*1024*1024){const QSignalBlocker Block(text_);static_cast<ScintillaQtDirectBackend*>(text_->Backend())->Send(SCI_UNDO);invalidateSourceCache();report(tr("소스 편집은 리소스당 2 MiB까지 지원합니다."));}
         refreshTabs();emit Changed();
     });
@@ -65,7 +72,7 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
     connect(this,&EpubSourceEditor::StateChanged,this,&EpubSourceEditor::scheduleWorkspace);
     connect(this,&EpubSourceEditor::Changed,this,&EpubSourceEditor::scheduleWorkspace);
     setupRecovery();setupValidation();setupStructure();
-    connect(this,&EpubSourceEditor::Changed,this,[this]{if(validationCancel_ && validationToken_!=Token())validationCancel_->store(true);});
+    connect(this,&EpubSourceEditor::Changed,this,[this]{if(validationCancel_ && validationToken_!=RevisionToken())validationCancel_->store(true);});
     connect(this,&EpubSourceEditor::StateChanged,this,[this]{updateActions();updateStatus();});
     connect(&worker_,&QFutureWatcher<LoadOutput>::finished,this,[this]{
         const auto Result=worker_.result();
@@ -73,7 +80,7 @@ EpubSourceEditor::EpubSourceEditor(QByteArray Bytes,const QString& Path,QWidget*
         modelLoaded(Result.model_);
     });
     connect(&validation_,&QFutureWatcher<epub::EditOutput>::finished,this,[this]{
-        const auto Result=validation_.result();nativeValidating_=false;if(validationToken_!=Token()){report(tr("검사 중 소스가 변경되었습니다. 다시 검사해 주세요."));emit StateChanged();return;}
+        const auto Result=validation_.result();nativeValidating_=false;if(validationToken_!=RevisionToken()){report(tr("검사 중 소스가 변경되었습니다. 다시 검사해 주세요."));emit StateChanged();return;}
         nativeDiagnostic(Result);
         if(!Result){error_=Result.error_+": "+Result.location_;report(Result.error_=="epub-edit-spine-repair-required"?tr("읽기 순서에 누락된 참조가 있어 저장할 수 없습니다. OPF에서 해당 참조를 수정한 후 다시 검사해 주세요. 원본은 변경하지 않았습니다."):tr("소스 검사를 통과하지 못했습니다. %1").arg(error_));validatedBytes_.clear();}
         else {cachedExport_=Result;cachedExportToken_=validationToken_;error_.clear();validatedToken_=validationToken_;validatedBytes_=Result.bytes_;report(tr("기본 구조·XML·CSS 괄호 검사 통과 · EPUBCheck 검사로 표준 오류를 확인할 수 있습니다."));}
@@ -115,7 +122,84 @@ QMap<QString,QByteArray> EpubSourceEditor::draft()const {
     if(ready_ && !current_.isEmpty() && sourceShown() && sourceBytes()!=sourceBuffers_.value(current_).applied_)return {{current_,sourceBytes()}};
     return {};
 }
-QByteArray EpubSourceEditor::Token()const {if(!ready_)return baseToken_;const auto Value=model_.Fingerprint(draft());return Value==reference_?baseToken_:Value;}
+// A revision record owns immutable input. Only workers flatten and fingerprint it;
+// readers observe the completed SHA atomically and never wait for a hash in progress.
+struct EpubSourceEditor::IdentitySnapshot {
+    epub::EditModel model_;
+    std::optional<TextSnapshot> source_;
+    QString path_;
+    QByteArray applied_, reference_, base_, key_;
+    mutable std::atomic<std::shared_ptr<const QByteArray>> fingerprint_;
+    QMap<QString,QByteArray> Draft() const {
+        if (!source_ || path_.isEmpty()) return {};
+        const auto Raw = source_->Bytes(); const QByteArray Bytes(Raw.data(), qsizetype(Raw.size()));
+        return Bytes == applied_ ? QMap<QString,QByteArray>{} : QMap<QString,QByteArray>{{path_, Bytes}};
+    }
+    QByteArray Fingerprint() const {
+        if (const auto Known = fingerprint_.load()) return *Known;
+        auto Model = model_; const auto Hash = Model.Fingerprint(Draft());
+        const auto Result = Hash == reference_ ? base_ : Hash;
+        fingerprint_.store(std::make_shared<const QByteArray>(Result));
+        return Result;
+    }
+};
+std::shared_ptr<EpubSourceEditor::IdentitySnapshot> EpubSourceEditor::identitySnapshot() const {
+    if (!ready_ || identityLoading_) return identity_;
+    const auto Edition = model_.Publication()["sourceSha256"].toString(); const auto Changes = model_.Changes();
+    if (identity_ && identitySourceRevision_ == sourceRevision_ && identityEdition_ == Edition
+        && identityChanges_ == Changes && identityBase_ == baseToken_ && identityReference_ == reference_) return identity_;
+    auto Next = std::make_shared<IdentitySnapshot>(); Next->model_ = model_; Next->reference_ = reference_; Next->base_ = baseToken_;
+    Next->key_ = "revision:" + QUuid::createUuid().toRfc4122();
+    if (sourceShown()) {
+        Next->path_ = current_; Next->source_ = static_cast<ScintillaQtDirectBackend*>(text_->Backend())->CaptureTextSnapshot();
+        Next->applied_ = sourceBuffers_.value(current_).applied_;
+    }
+    identity_ = Next; identityNext_ = Next;
+    identitySourceRevision_ = sourceRevision_; identityEdition_ = Edition; identityChanges_ = Changes;
+    identityBase_ = baseToken_; identityReference_ = reference_;
+    const_cast<EpubSourceEditor*>(this)->startIdentityWorker();
+    return Next;
+}
+void EpubSourceEditor::startIdentityWorker() {
+    if (identityWorkerActive_ || !identityNext_) return;
+    identityWorkerActive_ = true; const auto Work = identityNext_;
+    identityWorker_.setFuture(QtConcurrent::run([Work] { (void)Work->Fingerprint(); return Work; }));
+}
+void EpubSourceEditor::retainIdentityAfterFlush() {
+    // Moving the same draft into EditModel must not invalidate in-flight previews.
+    identityChanges_ = model_.Changes(); identityEdition_ = model_.Publication()["sourceSha256"].toString();
+    identitySourceRevision_ = sourceRevision_;
+}
+void EpubSourceEditor::resetIdentityAfterLoad() {
+    identity_.reset(); identityNext_.reset(); ++sourceRevision_;
+    if (!ready_) return;
+    const auto Current = identitySnapshot();
+    // Loading/restoring already inspects the selected resource. Establish its
+    // exact initial dirty state once, before accepting any keyboard input.
+    Current->fingerprint_.store(std::make_shared<const QByteArray>(Token()));
+}
+QByteArray EpubSourceEditor::RevisionToken() const {
+    if (!ready_ || identityLoading_) return baseToken_;
+    const auto Current = identitySnapshot(); return Current ? Current->key_ : baseToken_;
+}
+bool EpubSourceEditor::IsModified() const {
+    if (!ready_ || identityLoading_) return false;
+    const auto Current = identitySnapshot(); if (!Current || Current == savedIdentity_) return false;
+    const auto Hash = Current->fingerprint_.load();
+    const auto Saved = savedIdentity_ ? savedIdentity_->fingerprint_.load() : std::shared_ptr<const QByteArray>{};
+    if (!Hash || (savedIdentity_ && !Saved)) return true;
+    return *Hash != (Saved ? *Saved : savedToken_.isEmpty() ? baseToken_ : savedToken_);
+}
+QByteArray EpubSourceEditor::SessionIdentity() const {
+    return IsModified() ? RevisionToken() : savedToken_.isEmpty() ? baseToken_ : savedToken_;
+}
+QByteArray EpubSourceEditor::Token()const {
+    hc::startup::Span InputTrace("input.detail.Token");
+    if(!ready_)return baseToken_;
+    const auto Value=model_.Fingerprint(draft());const auto Result=Value==reference_?baseToken_:Value;
+    if(!identityLoading_)if(const auto Current=identitySnapshot())Current->fingerprint_.store(std::make_shared<const QByteArray>(Result));
+    return Result;
+}
 std::function<QJsonArray()> EpubSourceEditor::CaptureSearchSources(const QString& Document) const {
     const auto Model = model_; const auto Draft = draft();
     return [Model, Draft, Document] { return BuildSearchSources(Model, Draft, Document); };
@@ -158,9 +242,9 @@ void EpubSourceEditor::SelectSearchRange(const QString& Resource, qint64 Start, 
     Backend->Send(SCI_SETSEL, fromUtf16(int(Start)), fromUtf16(int(Start + Length))); Backend->Send(SCI_SCROLLCARET); focusSource();
 }
 bool EpubSourceEditor::flush(){
-    if(!ready_ || sourceComposing_)return false;const auto Draft=draft();saveSourceState();
+    if(!ready_ || sourceComposing_)return false;(void)RevisionToken();const auto Draft=draft();saveSourceState();
     for(auto I=Draft.begin();I!=Draft.end();++I){const auto Error=model_.Replace(I.key(),I.value());if(!Error.isEmpty()){report(Error);return false;}if(sourceBuffers_.contains(I.key()))sourceBuffers_[I.key()].applied_=I.value();touchedResources_.insert(I.key());}
-    if(!Draft.isEmpty()){text_->CommitContent();refreshTabs();if(resourceModel_)resourceModel_->Refresh();emit Changed();}return true;
+    if(!Draft.isEmpty()){retainIdentityAfterFlush();text_->CommitContent();refreshTabs();if(resourceModel_)resourceModel_->Refresh();emit Changed();}return true;
 }
 bool EpubSourceEditor::openResource(const QString& Path) {
     if(!ready_ || !model_.IsEditable(Path))return false;
@@ -203,7 +287,7 @@ QJsonObject EpubSourceEditor::Snapshot()const {
     const QJsonObject Source{{"resource",current_},{"buffer",QString::number(State.serial_)},{"shown",sourceShown()},{"modified",ready_ && sourceShown() && sourceModified()},{"readOnly",sourceReadOnly_},{"language",text_->currentLanguage()}};
     const QJsonObject Layout{{"orientation",previewSplitter_->orientation()==Qt::Horizontal?"horizontal":"vertical"},{"tree",panelsTaken_?treePanel_->isVisible():!treePanel_->isHidden()},{"preview",!previewPanel_->isHidden()},{"problems",panelsTaken_?diagnostics_->isVisible():!problemsPanel_->isHidden()}};
     const QJsonObject Status{{"message",message_},{"draft",draftMessage_},{"preview",previewMessage_},{"validation",statusValidation_->text()}};
-    return {{"sourceCache",QJsonObject{{"reads",sourceReads_},{"maps",sourceMapBuilds_}}},{"workspaceError",workspaceError_},{"workspaceFile",workspaceFile_},{"workspaceSaving",workspaceWriter_.isRunning()},{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",false},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_},{"target",lastScrollTarget_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==Token()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
+    return {{"sourceCache",QJsonObject{{"reads",sourceReads_},{"maps",sourceMapBuilds_}}},{"workspaceError",workspaceError_},{"workspaceFile",workspaceFile_},{"workspaceSaving",workspaceWriter_.isRunning()},{"exportWork",QJsonObject{{"runs",exportRuns_},{"joins",exportJoins_}}},{"ready",ready_},{"error",error_},{"resources",Rows},{"current",current_},{"tabs",QJsonArray::fromStringList(openResources_)},{"source",Source},{"layout",Layout},{"status",Status},{"canUndo",CanUndo()},{"canRedo",CanRedo()},{"saveAsOnly",false},{"structuring",structuring_},{"structureError",structureError_},{"validating",nativeValidating_ || checkerState_=="running" || structuring_},{"standardValidation",validationSnapshot()},{"validated",IsValidated()},{"preview",previewSnapshot()},{"scrollSync",QJsonObject{{"active",scrollSyncActive()},{"requests",sourceScrollSerial_},{"line",lastScrollLine_},{"pending",scrollSyncPending_},{"stale",sourceBuffers_.value(current_).shiftsOverflow_},{"target",lastScrollTarget_}}},{"sourceVisible",IsSourceVisible()},{"recoveryEnabled",recoveryEnabled_},{"recoveryBusy",draftWriter_.isRunning()||draftReader_.isRunning()||draftFinder_.isRunning()||pendingRecovery_.has_value()},{"recoverySaved",!recoveryPath_.isEmpty()&&draftWrittenToken_==RevisionToken()},{"recoveryPath",recoveryPath_},{"recoveryCandidates",recoveryEntries_.size()},{"recoveryError",recoveryError_},{"recoverySourceChanged",recoverySourceChanged_}};
 }
 QJsonObject EpubSourceEditor::Execute(const QJsonObject& Request) {
     const auto Action=Request["action"].toString();
@@ -263,17 +347,23 @@ bool EpubSourceEditor::PrepareSave(bool SaveAs) {
     if(!flush())return false;
     if(IsValidated())return true;
     saveAsAfter_=SaveAs;
-    if((nativeValidating_ || checkerState_=="running") && validationToken_==Token())saveAfter_=true;
+    if((nativeValidating_ || checkerState_=="running") && validationToken_==RevisionToken())saveAfter_=true;
     else validate(true);
     return false;
 }
 DocumentEncoder EpubSourceEditor::CaptureSave(const QString& Destination,bool SaveOriginal) {
     const bool Available=ready_ && !sourceComposing_ && !structuring_ && !draftReader_.isRunning() && !pendingRecovery_ && pendingRecoveryPath_.isEmpty();
-    return [Model=model_,Draft=draft(),Destination,SaveOriginal,Available,Paths=protectedPaths_,Ids=identities_,Source=sourcePath_,Settings=checkerSettings_,SettingsFile=checkerSettingsFile_,
-            RequiredDefault=hc::defaults::edit::ViewValue("epubEditor/requireEpubCheck").toBool(),Cached=cachedExportToken_==Token()?cachedExport_:epub::EditOutput{},
-            Checked=checkerVerifiedToken_==Token()](storage::OperationContext Context) mutable ->storage::Result<QByteArray> {
+    const auto Identity = identitySnapshot(); const auto Content = SessionIdentity(); savingIdentities_.insert(Content, Identity);
+    // A worker may resolve an undo as clean between session serialization and save capture.
+    // Both the stable revision and its clean alias name this same immutable input.
+    if(Identity)savingIdentities_.insert(Identity->key_,Identity);
+    return [Model=model_,Identity,Destination,SaveOriginal,Available,Paths=protectedPaths_,Ids=identities_,Source=sourcePath_,Settings=checkerSettings_,SettingsFile=checkerSettingsFile_,
+            RequiredDefault=hc::defaults::edit::ViewValue("epubEditor/requireEpubCheck").toBool(),Cached=cachedExportToken_==RevisionToken()?cachedExport_:epub::EditOutput{},
+            Checked=checkerVerifiedToken_==RevisionToken()](storage::OperationContext Context) mutable ->storage::Result<QByteArray> {
         using namespace storage;
         if(!Available)return Error{ErrorCategory::InvalidRequest,"epub-edit-save-busy"};
+        const auto Draft = Identity ? Identity->Draft() : QMap<QString,QByteArray>{};
+        if (Identity) (void)Identity->Fingerprint();
         if(QFileInfo(Destination).suffix().compare("epub",Qt::CaseInsensitive)!=0)return Error{ErrorCategory::Unsupported,"epub-edit-save-as-epub-required"};
         if(auto Stop=Context.Check({"document"}))return *Stop;
         // Read current validation policy in the worker too: config paths can be
@@ -331,7 +421,9 @@ DocumentEncoder EpubSourceEditor::CaptureSave(const QString& Destination,bool Sa
 }
 void EpubSourceEditor::CommitSaved(const QString& Path,const QByteArray& Content,const QByteArray& Hash) {
     if(Path!=sourcePath_)saveWorkspace();
-    savedToken_=QByteArray::fromHex(Content.mid(5));sourcePath_=Path;sourceHashAtOpen_=Hash;
+    savedToken_=QByteArray::fromHex(Content.mid(5)); savedIdentity_=savingIdentities_.take(savedToken_);
+    if(savedIdentity_)savingIdentities_.removeIf([this](const auto& Item){return Item.value()==savedIdentity_;});
+    sourcePath_=Path;sourceHashAtOpen_=Hash;
     const auto Target=QFileInfo(Path).absoluteFilePath().toCaseFolded();if(!protectedPaths_.contains(Target))protectedPaths_.append(Target);
     // Never reload the model/documents or move focus on save completion. A newer
     // draft and its recovery record remain owned by the current editor.
@@ -342,9 +434,11 @@ void EpubSourceEditor::CommitSaved(const QString& Path,const QByteArray& Content
     reloadValidationSettingsAsync();emit StateChanged();
 }
 void EpubSourceEditor::ReportSaveFailure(const QByteArray& Content,const QString& Error) {
+    const auto Failed=savingIdentities_.take(QByteArray::fromHex(Content.mid(5)));
+    if(Failed)savingIdentities_.removeIf([&](const auto& Item){return Item.value()==Failed;});
     // The failing snapshot can be older than the displayed source. Do not mark
     // the newer source invalid, but retain a visible failure for this request.
-    if(Content=="epub:"+Token().toHex())error_=Error;
+    if(Content=="epub:"+SessionIdentity().toHex())error_=Error;
     report(tr("저장 실패: %1 · 편집 내용은 유지됩니다. 소스와 검사 설정을 확인한 뒤 다시 저장하십시오.").arg(Error));reloadValidationSettingsAsync();emit StateChanged();
 }
 storage::Result<QByteArray> EpubSourceEditor::Export(const QString& Destination,bool SaveOriginal)const {
@@ -360,7 +454,7 @@ void EpubSourceEditor::validate(bool SaveAfter,bool Standard) {
     // save worker re-reads the policy before it trusts a verdict. Reading the settings file
     // here only stalled the GUI thread at the start of every save.
     reloadValidationSettingsAsync();
-    if(sourceComposing_ || !ready_ || draftReader_.isRunning() || pendingRecovery_ || !pendingRecoveryPath_.isEmpty() || nativeValidating_ || checkerState_=="running" || structuring_)return;checkerRequested_=Standard || standardValidationRequired();validatedBytes_.clear();validationToken_=Token();saveAfter_=SaveAfter;report(tr("패키지·XML·CSS 괄호·참조·이미지를 검사하고 있습니다…"));auto Model=model_;const auto Draft=draft();
+    if(sourceComposing_ || !ready_ || draftReader_.isRunning() || pendingRecovery_ || !pendingRecoveryPath_.isEmpty() || nativeValidating_ || checkerState_=="running" || structuring_)return;checkerRequested_=Standard || standardValidationRequired();validatedBytes_.clear();validationToken_=RevisionToken();saveAfter_=SaveAfter;report(tr("패키지·XML·CSS 괄호·참조·이미지를 검사하고 있습니다…"));auto Model=model_;const auto Draft=draft();
     if(previewWorker_.isRunning() && previewWorkToken_==validationToken_ && previewCancel_ && !previewCancel_->load()) {
         validationCancel_=previewCancel_;nativeValidating_=true;++exportJoins_;validation_.setFuture(previewWorker_.future());emit StateChanged();return;
     }

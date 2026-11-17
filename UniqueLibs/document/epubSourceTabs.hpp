@@ -17,5 +17,6 @@ namespace hc::document
         QSize tabSizeHint(int Index) const override;
         QSize minimumTabSizeHint(int Index) const override { return tabSizeHint(Index); }
         void paintEvent(QPaintEvent* Event) override;
+        void showEvent(QShowEvent* Event) override;
     };
 }

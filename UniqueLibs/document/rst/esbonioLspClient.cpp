@@ -1,5 +1,7 @@
 ﻿#include "stdafx.h"
 #include "esbonioLspClient.hpp"
+#include "lspWriteQueue.hpp"
+#include "commonLibs/document/textSnapshot.hpp"
 
 /// 모듈
 #include "rstProcessReaper.hpp"
@@ -257,7 +259,8 @@ QList<QJsonObject> JsonRpcParser::takeMessages()
     return messages;
 }
 
-LspClient::LspClient(QObject* parent) : QObject(parent) {}
+LspClient::LspClient(QObject* parent) : QObject(parent),
+    writeQueue_(std::make_unique<LspWriteQueue>([this](const QByteArray& Frame) { writeNow(Frame); })) {}
 
 LspClient::~LspClient() {
     stop();
@@ -338,6 +341,7 @@ void LspClient::start(const SphinxProject& project, const QString& pythonExe, co
 }
 
 void LspClient::stop(const StopMode mode) {
+    writeQueue_->Reset();
     if (process_ == nullptr) {
         return;
     }
@@ -372,6 +376,34 @@ void LspClient::stop(const StopMode mode) {
     documentVersions_.clear();
     pendingRequests_.clear();
     documentSymbolRequestPaths_.clear();
+}
+
+void LspClient::queueText(const QString& Method, QJsonObject Identifier, hc::document::TextSnapshot Text) {
+    const auto ReplaceKey = Method == "textDocument/didChange" ? Identifier["uri"].toString() : QString{};
+    writeQueue_->Enqueue([Method, Identifier = std::move(Identifier), Text = std::move(Text)]() mutable {
+        const auto Bytes = Text.Bytes();
+        const auto Content = QString::fromUtf8(Bytes.data(), qsizetype(Bytes.size()));
+        QJsonObject Params;
+        if (Method == "textDocument/didOpen") Identifier["text"] = Content;
+        else if (Method == "textDocument/didChange") Params["contentChanges"] = QJsonArray{QJsonObject{{"text", Content}}};
+        else Params["text"] = Content;
+        Params["textDocument"] = Identifier;
+        JsonRpcWriter Writer; return Writer.notify(Method, Params);
+    }, ReplaceKey);
+}
+void LspClient::DidOpenSnapshot(const QString& Path, const hc::document::TextSnapshot& Text, const QString& Language) {
+    if (!isRunning()) return;
+    const auto Uri = pathToUri(Path); documentVersions_[Uri] = 1;
+    queueText("textDocument/didOpen", {{"uri", Uri}, {"version", 1}, {"languageId", Language}}, Text);
+}
+void LspClient::DidChangeSnapshot(const QString& Path, const hc::document::TextSnapshot& Text) {
+    if (!isRunning()) return;
+    const auto Uri = pathToUri(Path); const auto Version = documentVersions_.value(Uri, 1) + 1;
+    documentVersions_[Uri] = Version;
+    queueText("textDocument/didChange", {{"uri", Uri}, {"version", Version}}, Text);
+}
+void LspClient::DidSaveSnapshot(const QString& Path, const hc::document::TextSnapshot& Text) {
+    if (isRunning()) queueText("textDocument/didSave", textDocumentIdentifier(Path), Text);
 }
 
 void LspClient::didOpen(const QString& path, const QString& text, const QString& languageId) {
@@ -772,6 +804,10 @@ void LspClient::setHtmlStyleOverride(const bool overrideToNull) {
 }
 
 void LspClient::write(const QByteArray& frame) {
+    writeQueue_->Enqueue(frame);
+}
+
+void LspClient::writeNow(const QByteArray& frame) {
     if (process_ != nullptr && process_->state() != QProcess::NotRunning) {
         traceLsp(">>", frame);
         // waitForBytesWritten 을 걸면 메시지마다 GUI 가 멈춘다.

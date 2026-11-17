@@ -253,6 +253,12 @@ void LineLevels::ClearLevels() {
 	levels.DeleteAll();
 }
 
+void LineLevels::ReplaceLevels(const int *values, size_t count) {
+	levels.DeleteAll();
+	levels.InsertFromArray(0, values, 0, static_cast<ptrdiff_t>(count));
+	levels.InsertValue(static_cast<ptrdiff_t>(count), 1, static_cast<int>(FoldLevel::Base));
+}
+
 int LineLevels::SetLevel(Sci::Line line, int level, Sci::Line lines) {
 	int prev = level;
 	if ((line >= 0) && (line < lines)) {

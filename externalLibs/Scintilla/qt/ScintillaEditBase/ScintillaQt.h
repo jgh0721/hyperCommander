@@ -86,6 +86,7 @@ class ScintillaQt : public QObject, public ScintillaBase {
 public:
 	explicit ScintillaQt(QAbstractScrollArea *parent);
 	virtual ~ScintillaQt();
+	bool ReplaceFoldLevels(const int *levels, size_t count) { return pdoc->ReplaceFoldLevels(levels, count); }
 
 signals:
 	void horizontalScrolled(int value);

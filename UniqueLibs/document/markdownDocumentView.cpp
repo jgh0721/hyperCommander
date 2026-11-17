@@ -20,6 +20,7 @@
 #include <QTreeWidgetItemIterator>
 #include <QHeaderView>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -104,10 +105,6 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
                                     std::pair{"markdown.zoomSet", tr("미리보기 배율")},
                                     std::pair{"markdown.fullScreen", tr("미리보기 전체 화면")}})
         toolbar_->removeAction(Make(QString::fromLatin1(Id), Label));
-    message_ = new QLabel(this);
-    message_->setWordWrap(true);
-    message_->hide();
-    Layout->addWidget(message_);
     splitter_ = new QSplitter(Qt::Horizontal, this);
     splitter_->setChildrenCollapsible(false);
     outlinePanel_ = new QWidget(splitter_);
@@ -141,8 +138,19 @@ MarkdownDocumentView::MarkdownDocumentView(QTextView *Source, const QString &Pat
     auto *PreviewLayout = new QVBoxLayout(previewPanel_);
     PreviewLayout->setContentsMargins(0, 0, 0, 0);
     PreviewLayout->setSpacing(0);
-    preview_ = new MarkdownProcessView(previewPanel_);
-    PreviewLayout->addWidget(preview_);
+    previewStack_ = new QStackedWidget(previewPanel_);
+    preview_ = new MarkdownProcessView(previewStack_);
+    previewStack_->addWidget(preview_);
+    // A delayed renderer error must not take height away from the source editor.
+    // Its page belongs to the preview, and its text cannot change the stack's minimum size.
+    message_ = new QLabel(previewStack_);
+    message_->setObjectName("markdownRenderError");
+    message_->setWordWrap(true);
+    message_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    message_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    message_->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    previewStack_->addWidget(message_);
+    PreviewLayout->addWidget(previewStack_);
     splitter_->addWidget(previewPanel_);
     Layout->addWidget(splitter_);
     splitter_->setStretchFactor(0, 0);
@@ -340,7 +348,7 @@ void MarkdownDocumentView::mode(const QString &Value)
     if (!previewTaken_)
     {
         previewPanel_->setVisible(mode_ != "source");
-        preview_->setVisible(mode_ != "source");
+        preview_->setVisible(mode_ != "source" && previewStack_->currentWidget() == preview_);
     }
     QTimer::singleShot(0, this, &MarkdownDocumentView::alignPreview);
     for (const auto &Id : {"source", "preview", "split"})
@@ -632,7 +640,8 @@ void MarkdownDocumentView::Refresh(bool Force)
     {
         error_ = tr("미리보기는 16 MiB 이하 문서를 지원합니다. 소스 편집은 계속할 수 있습니다.");
         message_->setText(error_);
-        message_->show();
+        message_->setToolTip(error_);
+        previewStack_->setCurrentWidget(message_);
         emit Changed();
         return;
     }
@@ -671,7 +680,7 @@ void MarkdownDocumentView::Refresh(bool Force)
     shifts_.clear();
     shiftsOverflow_ = false;
     error_.clear();
-    message_->hide();
+    previewStack_->setCurrentWidget(preview_);
     status_ = source_->isContentTruncated() ? tr("부분 미리보기 갱신 중") : tr("갱신 중");
     render_ = RenderState::Rendering;
     QJsonObject Message{{"type", "render"},
@@ -790,7 +799,8 @@ void MarkdownDocumentView::report(const QJsonObject &Value)
         error_ = Value["message"].toString();
         status_ = tr("갱신 실패");
         message_->setText(error_);
-        message_->show();
+        message_->setToolTip(error_);
+        previewStack_->setCurrentWidget(message_);
     }
     else if (Type == "rendered")
     {

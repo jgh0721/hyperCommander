@@ -1,8 +1,10 @@
 ﻿#include "stdafx.h"
 #include "epubSourceEditor.hpp"
+#include "UniqueLibs/startupTrace.hpp"
 #include "UniqueLibs/ProductDefaults_Edit.hpp"
 #include "UniqueLibs/settings/appSettings.hpp"
 #include "epubProcessView.hpp"
+#include "documentFocusRestore.hpp"
 #include "text/QTextView.h"
 #include "text/ScintillaQtDirectBackend.h"
 #include "commonLibs/document/epub/epubSourceMap.hpp"
@@ -39,6 +41,7 @@ qintptr EpubSourceEditor::bomBytes()const {
     return sourceBom_;
 }
 int EpubSourceEditor::toUtf16(qintptr Position)const {
+    hc::startup::Span InputTrace("input.detail.toUtf16");
     auto* Backend=direct(text_);const auto Bom=bomBytes();Position=qBound(qintptr(0),Position,Backend->Send(SCI_GETLENGTH));
     if(Position<=Bom)return 0;
     SourcePosition Nearest{Bom,0};
@@ -65,6 +68,7 @@ const epub::SourceMap* EpubSourceEditor::sourceMap()const {
     return sourceMapValid_?&sourceMapCache_:nullptr;
 }
 QByteArray EpubSourceEditor::sourceBytes()const {
+    hc::startup::Span InputTrace("input.detail.sourceBytes");
     if(sourceBytesCached_)return sourceBytesCache_;
     const auto Length=direct(text_)->Send(SCI_GETLENGTH);QByteArray Bytes(Length+1,Qt::Uninitialized);direct(text_)->Send(SCI_GETTEXT,quintptr(Length+1),reinterpret_cast<qintptr>(Bytes.data()));Bytes.resize(Length);sourceBytesCache_=std::move(Bytes);sourceBytesCached_=true;++sourceReads_;return sourceBytesCache_;
 }
@@ -94,7 +98,16 @@ void EpubSourceEditor::setScroll(ScrollTop Top,int Offset){
     Backend->Send(SCI_SETXOFFSET,quintptr(qMax(0,Offset)));
 }
 void EpubSourceEditor::setSourceReadOnly(bool ReadOnly){sourceReadOnly_=ReadOnly;text_->setReadOnly(ReadOnly);updateActions();}
-void EpubSourceEditor::focusSource(){if(sourceShown())SourceInput()->setFocus(Qt::OtherFocusReason);}
+void EpubSourceEditor::focusSource(){
+    if(!sourceShown() || !IsSourceVisible() || PreviewKeepsPanelKeyboard(this))return;
+    auto* Input=SourceInput();Input->setFocus(Qt::OtherFocusReason);
+    // As in Markdown/RST, Qt focus alone cannot release the foreign preview's
+    // native keyboard destination. Explicit source entry repairs that HWND too.
+    const auto Root=GetAncestor(reinterpret_cast<HWND>(window()->effectiveWinId()),GA_ROOT);
+    if(Input->isVisible() && Root && GetAncestor(GetForegroundWindow(),GA_ROOT)==Root
+        && !QApplication::activeModalWidget() && !QApplication::activePopupWidget())
+        SetFocus(reinterpret_cast<HWND>(Input->effectiveWinId()));
+}
 void EpubSourceEditor::insertSource(const QString& Text){const auto Bytes=Text.toUtf8();direct(text_)->Send(SCI_REPLACESEL,0,reinterpret_cast<qintptr>(Bytes.constData()));}
 void EpubSourceEditor::saveSourceState() {
     if(bufferResource_.isEmpty() || !sourceBuffers_.contains(bufferResource_) || sourceStack_->currentWidget()!=text_)return;
@@ -131,6 +144,8 @@ void EpubSourceEditor::activateSource(const QByteArray& Data,const QString& Medi
         State.subLine_=qMax(0,Saved["topSubLine"].toInt());
         State.offset_=qBound(0,Saved["horizontalOffset"].toInt(),1000000);
     }
+    // Initialize the immutable source root during resource activation, not on its first key.
+    (void)direct(text_)->CaptureTextSnapshot();
     const ScrollTop Top{State.line_,State.subLine_};
     text_->setReadOnly(sourceReadOnly_);setSourceSelection(State.anchor_,State.position_,false);setScroll(Top,State.offset_);
     const auto Resource=current_;const int Offset=State.offset_;
@@ -140,7 +155,7 @@ void EpubSourceEditor::activateSource(const QByteArray& Data,const QString& Medi
 void EpubSourceEditor::locateSource(bool Reveal) {
     sourceSyncReveal_|=Reveal;
     if(!sourceSyncPending_ || sourceComposing_ || !previewView_ || !ready_ || previewClosing_ || !sourceShown())return;
-    if(previewActiveToken_!=Token() || ++sourceSyncAttempts_>30){sourceSyncPending_=false;sourceSyncReveal_=false;return;}
+    if(previewActiveToken_!=RevisionToken() || ++sourceSyncAttempts_>30){sourceSyncPending_=false;sourceSyncReveal_=false;return;}
     const auto State=previewView_->ViewState();if(State["readerBusy"].toBool()){sourceSyncTimer_.start();return;}
     int Chapter=-1;const auto Spine=model_.Publication()["spine"].toArray();for(int I=0;I<Spine.size();++I)if(Spine[I].toObject()["path"]==current_)Chapter=I;if(Chapter<0){sourceSyncPending_=false;return;}
     if(State["chapterIndex"].toInt(-1)!=Chapter){previewView_->ReaderAction("chapter",Chapter);sourceSyncTimer_.start();return;}
@@ -153,7 +168,7 @@ void EpubSourceEditor::locateSource(bool Reveal) {
     previewView_->ReaderAction("source-position",Anchor);
 }
 bool EpubSourceEditor::selectPreviewSource(const QJsonObject& Requested) {
-    if(sourceComposing_ || !ready_ || !previewView_ || previewActiveToken_!=Token())return false;
+    if(sourceComposing_ || !ready_ || !previewView_ || previewActiveToken_!=RevisionToken())return false;
     auto Anchor=Requested;
     if(Anchor.isEmpty()){const auto State=previewView_->ViewState();Anchor=State["sourceSelection"].toObject();const auto Serial=Anchor["serial"].toInteger();if(Serial<=sourceSelectionSerial_)return false;sourceSelectionSerial_=Serial;}
     const auto Spine=model_.Publication()["spine"].toArray();const int Chapter=Anchor["chapter"].toInt(-1);if(Chapter<0 || Chapter>=Spine.size())return false;const auto Path=Spine[Chapter].toObject()["path"].toString();

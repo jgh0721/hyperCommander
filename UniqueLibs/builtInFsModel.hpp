@@ -231,6 +231,8 @@ signals:
     void RetryRequested();
     void MetadataChanged();
     void DirectorySizesChanged();
+    void ColumnDisplayChanging();
+    void ColumnDisplayChanged();
     void ColumnValuesChanging();
     void ColumnValuesChanged();
     void ColumnQueryStatus(const QString& Text);
@@ -311,6 +313,11 @@ private:
     hc::columns::CellValue evaluateColumn(const nsHC::TySpFileSource& Item, const Column& Binding, bool Request, bool Sort = false) const;
     QString queryPath(const nsHC::TySpFileSource& Item) const;
     void columnResultsReady(const QSet<QString>& Paths);
+    void notifyResumedColumns();
+    QTimer queryRefreshTimer_;
+    QElapsedTimer queryRefreshDeferred_;
+    QVector<int> queryRefreshColumns_;
+    int queryRefreshRow_ = 0;
     // Query families read by a column's value, template or sort field.
     static QSet<QString> bindingFamilies(const Column& Binding);
     // True when a value of these families can move rows: sort, grouping or their templates use it.
@@ -323,8 +330,10 @@ private:
     // Drawn: the row is being painted or is in the viewport; other rows only ask for slow values ahead.
     hc::settings::FileRuleResult fileRuleStyle(int Row, bool Drawn = true) const;
     // Keep a small display-only fallback while a field arrival re-keys a visible row.
-    struct DisplayedFileRule { nsHC::TySpFileSource item_; hc::settings::FileRuleResult style_; };
+    struct DisplayedFileRule { nsHC::TySpFileSource item_; hc::settings::FileRuleResult style_; qint64 expiresAt_ = 0; };
     mutable QCache<int, DisplayedFileRule> displayedFileRules_{256};
+    QElapsedTimer fileRuleDisplayClock_;
+    QTimer fileRuleDisplayTimer_;
     // Design 6.2: column field values used by file color rules, kept for the listing's lifetime
     // (the column cache expires after 30 s and a repaint must not re-query a decided row).
     mutable QHash<QString, hc::columns::FieldValues> ruleFields_;

@@ -1,7 +1,14 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/settings/appSettings.hpp"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include "../nativeTestInput.hpp"
+#include <QAbstractScrollArea>
 #include <type_traits>
 #include "HyperEditor/editorInstance.hpp"
+#include "UniqueLibs/startupTrace.hpp"
+#include "thirdparty/scintilla-qt/PlatQtMetrics.hpp"
 #include "UniqueLibs/productTheme.hpp"
 #include <future>
 #include <iostream>
@@ -14,6 +21,7 @@
 #include "text/QTextView.h"
 #include "UniqueLibs/document/documentViewPane.hpp"
 #include "UniqueLibs/document/markdownDocumentView.hpp"
+#include "UniqueLibs/document/markdownProcessView.hpp"
 #include "UniqueLibs/document/epubSourceEditor.hpp"
 #include "UniqueLibs/document/epubProcessView.hpp"
 #include "UniqueLibs/document/epubSourceTabs.hpp"
@@ -61,6 +69,7 @@
 #include <QJsonDocument>
 #include <QTableWidget>
 #include <QLineEdit>
+#include <QLabel>
 #include <QSet>
 #include <QCheckBox>
 #include <QComboBox>
@@ -82,6 +91,20 @@
 static_assert(!std::is_invocable_v<decltype(&AppSettings::value), AppSettings*, const QString&, const QVariant&>);
 using namespace hc::settings;
 using namespace hc::document;
+namespace {
+    bool WriteInputBaseline(const QString& Kind, qint64 Bytes, const QList<qint64>& Times,
+        const QString& Measurement = "synchronous-handler-nanoseconds")
+    {
+        const auto Path = qEnvironmentVariable("HC_INPUT_BASELINE_RESULTS");
+        if (Path.isEmpty()) return true;
+        QJsonArray Samples; for (const auto Value : Times) Samples.append(QString::number(Value));
+        const auto Record = QJsonDocument(QJsonObject{{"kind", Kind}, {"bytes", Bytes},
+            {"label", qEnvironmentVariable("HC_INPUT_BASELINE_LABEL")},
+            {"measurement", Measurement}, {"samples", Samples}}).toJson(QJsonDocument::Compact) + '\n';
+        QFile File(Path);
+        return File.open(QIODevice::WriteOnly | QIODevice::Append) && File.write(Record) == Record.size() && File.flush();
+    }
+}
 class DocumentPreferencesTests : public QObject {
     Q_OBJECT
     static QByteArray Read(const QString& Path) { QFile File(Path); if (!File.open(QIODevice::ReadOnly)) return {}; return File.readAll(); }
@@ -100,6 +123,242 @@ class DocumentPreferencesTests : public QObject {
         return Zip.status()==QZipWriter::NoError?Bytes:QByteArray{};
     }
 private slots:
+    void immutableTextSnapshotsFollowEdits()
+    {
+        using hc::document::TextSnapshot;
+        std::string Expected(4 * 1024 * 1024, 'a');
+        TextSnapshot Current(Expected);
+        const auto Original = Current;
+        quint32 Random = 17;
+        for (int Step = 0; Step < 1000; ++Step) {
+            Random = Random * 1664525u + 1013904223u;
+            const auto Position = Random % Expected.size();
+            const auto Removed = qMin(std::size_t(Step % 23), Expected.size() - Position);
+            const auto Inserted = std::to_string(Step) + "\r\n";
+            Current = Current.Replace(Position, Removed, Inserted);
+            Expected.replace(Position, Removed, Inserted);
+            QCOMPARE(Current.Size(), Expected.size());
+            QVERIFY(Current.Depth() < 32);
+            if (Step % 97 == 0) QCOMPARE(Current.Bytes(), Expected);
+        }
+        QCOMPARE(Current.Bytes(), Expected);
+        QCOMPARE(Original.Bytes(), std::string(4 * 1024 * 1024, 'a'));
+        QVERIFY(!Current.MayEqual(Original));
+        const auto Rebuilt = Current.Replace(0, Current.Size(), Original.Bytes());
+        QVERIFY(Rebuilt.MayEqual(Original));
+        QCOMPARE(Rebuilt.Bytes(), Original.Bytes());
+
+        QTextView View;
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(View.Backend());
+        Backend->SetTextUtf8("first\r\nsecond");
+        const auto Before = Backend->CaptureTextSnapshot();
+        Backend->Send(SCI_GOTOPOS, 5);
+        Backend->replace(QString::fromUtf8("\xed\x95\x9c\xf0\x9f\x98\x8a"));
+        QCOMPARE(Backend->CaptureTextSnapshot().Bytes(), View.Content().toUtf8().toStdString());
+        Backend->Send(SCI_UNDO);
+        QCOMPARE(Backend->CaptureTextSnapshot().Bytes(), Before.Bytes());
+        Backend->SetTextUtf8("replacement");
+        QCOMPARE(Backend->CaptureTextSnapshot().Bytes(), std::string("replacement"));
+        QCOMPARE(Before.Bytes(), std::string("first\r\nsecond"));
+    }
+    void rstFoldsRejectObsoleteSnapshot()
+    {
+        QTextView View;
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(View.Backend());
+        const auto Old = QByteArray("Title\n=====\n\nbody\n\n").repeated(2000);
+        Backend->SetTextUtf8(Old);
+        QVERIFY(Backend->applyLanguage("reStructuredText"));
+        QTest::qWait(210); // starts the idle fold job / bounded application
+        const auto Latest = QByteArray("Section\n-------\n\n.. note::\n\n    body\n\n").repeated(1000);
+        Backend->SetTextUtf8(Latest);
+        const auto Folds = hc::rst::syntax::computeFoldLevels(Latest.toStdString());
+        const auto Matches = [&] {
+            for (int Line = 0; Line < int(Folds.size()); ++Line) {
+                const auto& Fold = Folds[Line];
+                const int Expected = (SC_FOLDLEVELBASE + qBound(0, Fold.level, 0x3ff))
+                    | (Fold.header ? SC_FOLDLEVELHEADERFLAG : 0) | (Fold.blank ? SC_FOLDLEVELWHITEFLAG : 0);
+                if (Backend->Send(SCI_GETFOLDLEVEL, Line) != Expected) return false;
+            }
+            return true;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(Matches(), 5000);
+        QCOMPARE(Backend->CaptureTextSnapshot().Bytes(), Latest.toStdString());
+    }
+    void incrementalEncodingMatchesWholeDocument()
+    {
+        QTemporaryDir Temp;
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        const auto Mixed = QString::fromUtf8("ASCII\r\n\xed\x95\x9c\xea\xb8\x80 \xf0\x9f\x98\x8a e\xcc\x81\n").repeated(1500);
+        for (const QString Encoding : {"UTF-8", "UTF-16LE", "UTF-16BE", "CP949", "Shift_JIS", "GB18030", "ISO-8859-1"}) {
+            TextInput Input; Input.path_ = Temp.filePath("encoding.txt"); Input.encoding_ = Encoding;
+            Input.text_ = Mixed; Input.bytes_ = Mixed.toUtf8(); Input.bom_ = Encoding.startsWith("UTF-");
+            if (const auto Encoded = EncodeDocumentText(Mixed, Encoding, Input.bom_); Encoded.HasValue())
+                Input.bytes_ = Encoded.Value();
+            DocumentViewPane Pane; QVERIFY(Pane.Load(Input, false));
+            auto* View = Pane.findChild<QTextView*>(); QVERIFY(View);
+            auto* Backend = static_cast<ScintillaQtDirectBackend*>(View->Backend());
+            const auto Frozen = Pane.CaptureTextSnapshot();
+            const auto Check = [&] {
+                const auto Source = View->Content(); const auto Expected = EncodeDocumentText(Source, Encoding, Input.bom_);
+                const auto Snapshot = Pane.CaptureTextSnapshot();
+                QCOMPARE(Snapshot.Bytes(), Source.toUtf8().toStdString());
+                QCOMPARE(Snapshot.SerializedBytes(), (Expected.HasValue() ? Expected.Value() : Source.toUtf8()).toStdString());
+                QCOMPARE(Snapshot.SerializationError(), Expected.HasValue() ? std::string{} : Expected.Failure().code_);
+                QCOMPARE(Snapshot.SerializedSize(), Snapshot.SerializedBytes().size());
+            };
+            Check(); if (QTest::currentTestFailed()) return;
+            for (int At = 0; At < 30; ++At) {
+                Backend->Send(SCI_GOTOPOS, Backend->Send(SCI_POSITIONFROMLINE, At * 3));
+                Backend->replace(QString::fromUtf8("\xea\xb0\x80\r\n"));
+                Check(); if (QTest::currentTestFailed()) return;
+            }
+            QCOMPARE(Frozen.Bytes(), Mixed.toUtf8().toStdString());
+            Backend->Send(SCI_SELECTALL); Backend->replace("plain\r\ntext\n");
+            Check(); if (QTest::currentTestFailed()) return;
+            QCOMPARE(Pane.CaptureTextSnapshot().LineEndings(), 5u);
+            QVERIFY(Pane.CaptureTextSnapshot().SerializationError().empty());
+            Backend->Send(SCI_SELECTALL); Backend->replace("");
+            Check(); if (QTest::currentTestFailed()) return;
+        }
+    }
+    void rstFoldPublicationKeepsViewport_data()
+    {
+        QTest::addColumn<bool>("Wrap");
+        QTest::addColumn<bool>("Above");
+        QTest::newRow("wrapped-below") << true << false;
+        QTest::newRow("unwrapped-below") << false << false;
+        QTest::newRow("wrapped-above") << true << true;
+        QTest::newRow("unwrapped-above") << false << true;
+    }
+    void rstFoldPublicationKeepsViewport()
+    {
+        QFETCH(bool, Wrap);
+        QFETCH(bool, Above);
+        QTextView View; View.resize(540, 360); View.show();
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(View.Backend());
+        QByteArray Source;
+        for (int At = 0; At < 500; ++At) Source += "Title\n=====\n\n" + QByteArray("wrapped body text ").repeated(18) + "\n\n";
+        Backend->SetTextUtf8(Source); View.SetWordWrapMode(Wrap ? 2 : 0);
+        QVERIFY(Backend->applyLanguage("reStructuredText"));
+        QTRY_VERIFY(Backend->Send(SCI_GETFOLDLEVEL, 1) & SC_FOLDLEVELHEADERFLAG);
+        Backend->Send(SCI_FOLDLINE, 1, SC_FOLDACTION_CONTRACT);
+        Backend->Send(SCI_FOLDLINE, 11, SC_FOLDACTION_CONTRACT);
+        QVERIFY(!Backend->Send(SCI_GETLINEVISIBLE, 3));
+        const auto Position = Backend->Send(SCI_POSITIONFROMLINE, 103);
+        Backend->Send(SCI_SETSEL, Position + 3, Position + 7);
+        QTest::qWait(400); // finish initial wrapping before taking the viewport anchor
+        Backend->Send(SCI_SETFIRSTVISIBLELINE, Backend->Send(SCI_VISIBLEFROMDOCLINE, 103) + (Wrap ? 1 : 0));
+        if (!Wrap) Backend->Send(SCI_SETXOFFSET, 70);
+        const auto Top = Backend->Send(SCI_GETFIRSTVISIBLELINE);
+        const auto Line = Backend->Send(SCI_DOCLINEFROMVISIBLE, Top);
+        const auto SubLine = Top - Backend->Send(SCI_VISIBLEFROMDOCLINE, Line);
+        const auto Height = Backend->Send(SCI_TEXTHEIGHT, Line);
+        const auto Y = Backend->Send(SCI_POINTYFROMPOSITION, 0, Position + 3);
+        const auto Anchor = Backend->Send(SCI_GETANCHOR), Caret = Backend->Send(SCI_GETCURRENTPOS);
+        const auto Offset = Backend->Send(SCI_GETXOFFSET);
+        // Change fold metadata far below the viewport without moving the caret.
+        const auto Edit = Backend->Send(SCI_POSITIONFROMLINE, Above ? 1 : 2003);
+        Backend->Send(SCI_SETTARGETSTART, Edit); Backend->Send(SCI_SETTARGETEND, Edit + (Above ? 5 : 0));
+        Backend->Send(SCI_REPLACETARGET, Above ? 5 : 4, reinterpret_cast<qintptr>(Above ? "plain" : "    "));
+        const auto Expected = hc::rst::syntax::computeFoldLevels(Backend->CaptureTextSnapshot().Bytes());
+        for (int Tick = 0; Tick < 120; ++Tick) {
+            QTest::qWait(5);
+            const auto Now = Backend->Send(SCI_GETFIRSTVISIBLELINE);
+            QCOMPARE(Backend->Send(SCI_DOCLINEFROMVISIBLE, Now), Line);
+            QCOMPARE(Now - Backend->Send(SCI_VISIBLEFROMDOCLINE, Line), SubLine);
+            QCOMPARE(Backend->Send(SCI_TEXTHEIGHT, Line), Height);
+            QCOMPARE(Backend->Send(SCI_POINTYFROMPOSITION, 0, Position + 3), Y);
+            QCOMPARE(Backend->Send(SCI_GETANCHOR), Anchor); QCOMPARE(Backend->Send(SCI_GETCURRENTPOS), Caret);
+            QCOMPARE(Backend->Send(SCI_GETXOFFSET), Offset);
+            if (!Above) {
+                QVERIFY(!Backend->Send(SCI_GETFOLDEXPANDED, 1));
+                QVERIFY(!Backend->Send(SCI_GETLINEVISIBLE, 3));
+            }
+            QVERIFY(!Backend->Send(SCI_GETFOLDEXPANDED, 11));
+        }
+        // Require publication to have completed; a never-applied result must not pass stability checks.
+        QTRY_COMPARE(Backend->Send(SCI_GETFOLDLEVEL, 2003) & SC_FOLDLEVELNUMBERMASK,
+            SC_FOLDLEVELBASE + Expected[2003].level);
+        if (Above) {
+            QTRY_VERIFY(!(Backend->Send(SCI_GETFOLDLEVEL, 1) & SC_FOLDLEVELHEADERFLAG));
+            QVERIFY(Backend->Send(SCI_GETLINEVISIBLE, 3));
+        }
+    }
+    void textLayoutKeepsViewport_data()
+    {
+        QTest::addColumn<QString>("Language"); QTest::addColumn<int>("Wrap");
+        QTest::newRow("markdown-wrapped") << QString("Markdown") << 2;
+        QTest::newRow("markdown-unwrapped") << QString("Markdown") << 0;
+        QTest::newRow("text-wrapped") << QString{} << 2;
+        QTest::newRow("text-unwrapped") << QString{} << 0;
+    }
+    void textLayoutKeepsViewport()
+    {
+        QFETCH(QString, Language); QFETCH(int, Wrap);
+        QTextView View; View.resize(540, 360); View.show();
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(View.Backend());
+        const auto Source = (QByteArray("# Heading\n\n") + QByteArray("wrapped body text ").repeated(18) + "\n\n").repeated(500);
+        Backend->SetTextUtf8(Source); View.SetWordWrapMode(Wrap);
+        if (!Language.isEmpty()) QVERIFY(Backend->applyLanguage(Language));
+        Backend->Send(SCI_COLOURISE, 0, -1);
+        const auto Position = Backend->Send(SCI_POSITIONFROMLINE, 102);
+        Backend->Send(SCI_SETSEL, Position + 3, Position + 7);
+        QTest::qWait(400);
+        Backend->Send(SCI_SETFIRSTVISIBLELINE, Backend->Send(SCI_VISIBLEFROMDOCLINE, 102) + (Wrap ? 1 : 0));
+        if (!Wrap) Backend->Send(SCI_SETXOFFSET, 70);
+        const auto Top = Backend->Send(SCI_GETFIRSTVISIBLELINE);
+        const auto Height = Backend->Send(SCI_TEXTHEIGHT, 102);
+        const auto Y = Backend->Send(SCI_POINTYFROMPOSITION, 0, Position + 3);
+        const auto Offset = Backend->Send(SCI_GETXOFFSET);
+        const auto Edit = Backend->Send(SCI_POSITIONFROMLINE, 1802);
+        Backend->Send(SCI_SETTARGETSTART, Edit); Backend->Send(SCI_SETTARGETEND, Edit);
+        Backend->Send(SCI_REPLACETARGET, 4, reinterpret_cast<qintptr>("    "));
+        for (int Tick = 0; Tick < 120; ++Tick) {
+            QTest::qWait(5);
+            QCOMPARE(Backend->Send(SCI_GETFIRSTVISIBLELINE), Top);
+            QCOMPARE(Backend->Send(SCI_TEXTHEIGHT, 102), Height);
+            QCOMPARE(Backend->Send(SCI_POINTYFROMPOSITION, 0, Position + 3), Y);
+            QCOMPARE(Backend->Send(SCI_GETANCHOR), Position + 3);
+            QCOMPARE(Backend->Send(SCI_GETCURRENTPOS), Position + 7);
+            QCOMPARE(Backend->Send(SCI_GETXOFFSET), Offset);
+        }
+    }
+    void markdownRendererErrorKeepsSourceGeometry_data()
+    {
+        QTest::addColumn<QString>("Mode");
+        QTest::newRow("source") << QString("source");
+        QTest::newRow("split") << QString("split");
+    }
+    void markdownRendererErrorKeepsSourceGeometry()
+    {
+        QFETCH(QString, Mode);
+        QTemporaryDir Temp; QVERIFY(Temp.isValid());
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        auto* Source = new QTextView;
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(Source->Backend());
+        Backend->SetTextUtf8(QByteArray("# Heading\n\nBody text\n").repeated(100));
+        MarkdownDocumentView View(Source, Temp.filePath("layout.md"), true);
+        View.resize(900, 650); View.show(); QVERIFY(View.Run("markdown." + Mode));
+        QTest::qWait(150);
+        Backend->Send(SCI_GOTOPOS, 20); Backend->Send(SCI_SETFIRSTVISIBLELINE, 1);
+        const auto Geometry = Source->geometry(), WindowGeometry = View.geometry();
+        const auto Top = Backend->Send(SCI_GETFIRSTVISIBLELINE), Height = Backend->Send(SCI_TEXTHEIGHT, 1);
+        auto* Process = View.findChild<MarkdownProcessView*>(); QVERIFY(Process);
+        auto* Message = View.findChild<QLabel*>("markdownRenderError"); QVERIFY(Message);
+        const auto Error = QString("Renderer unavailable. Details remain inside the preview.\n").repeated(80);
+        Process->Reported({{"type", "error"}, {"message", Error}});
+        QTest::qWait(50);
+        QCOMPARE(Message->text(), Error);
+        QCOMPARE(Source->geometry(), Geometry); QCOMPARE(View.geometry(), WindowGeometry);
+        QCOMPARE(Backend->Send(SCI_GETFIRSTVISIBLELINE), Top); QCOMPARE(Backend->Send(SCI_TEXTHEIGHT, 1), Height);
+        View.Refresh(true); QTest::qWait(50);
+        QCOMPARE(Source->geometry(), Geometry); QCOMPARE(View.geometry(), WindowGeometry);
+        QCOMPARE(Backend->Send(SCI_GETFIRSTVISIBLELINE), Top);
+    }
     void previewSplitterDrag_data()
     {
         QTest::addColumn<QString>("Format");
@@ -1600,6 +1859,420 @@ private slots:
         Backend->Send(SCI_UNDO);QCOMPARE(Source->Content(),Saved);QVERIFY(!State()["dirty"].toBool());Backend->Send(SCI_REDO);QCOMPARE(Source->Content(),Live);
         Window.Checkpoint();QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(),15000);QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(),15000);
     }
+    void epubContextHintsFollowCaret()
+    {
+        QTemporaryDir Temp;const auto Old=qApp->property("epubWorkspaceDirectory");qApp->setProperty("epubWorkspaceDirectory",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("epubWorkspaceDirectory",Old);});
+        EpubSourceEditor Editor(workspaceBook(100),Temp.filePath("hints.epub"));Editor.SetRecoveryEnabled(false);
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),30000);
+        Editor.resize(1100,720);Editor.show();QTest::qWait(100);
+        auto* Backend=static_cast<ScintillaQtDirectBackend*>(Editor.SourceView()->Backend());
+        const auto Original=Editor.SourceView()->Content().toUtf8();const auto Position=Original.indexOf("</p>");QVERIFY(Position>=0);
+        Backend->Send(SCI_GOTOPOS,Position);Backend->replace("<img src=\"missing.png\"/>");Backend->Send(SCI_GOTOPOS,Position+5);
+        auto* Fix=Editor.findChild<QAction*>("epubQuickFix");QVERIFY(Fix);
+        const auto Reads=[&]{return Editor.Snapshot()["sourceCache"].toObject()["reads"].toInteger();};const auto Before=Reads();
+        QTRY_VERIFY_WITH_TIMEOUT(Fix->isEnabled(),5000);QCOMPARE(Reads(),Before);
+        // Move twice before a pending analysis completes. Only the final caret's hint applies.
+        Backend->Send(SCI_GOTOPOS,Position+6);Backend->Send(SCI_GOTOPOS,Position-1);
+        QTRY_VERIFY_WITH_TIMEOUT(!Fix->isEnabled(),5000);QTest::qWait(300);QVERIFY(!Fix->isEnabled());QCOMPARE(Reads(),Before);
+        Backend->Send(SCI_GOTOPOS,Position+5);QTRY_VERIFY_WITH_TIMEOUT(Fix->isEnabled(),5000);
+        Backend->replace("alt=\"present\" ");QTRY_VERIFY_WITH_TIMEOUT(!Fix->isEnabled(),5000);QTest::qWait(300);QVERIFY(!Fix->isEnabled());QCOMPARE(Reads(),Before);
+    }
+    void epubIdentityTypingAndSavedUndo()
+    {
+        QTemporaryDir Temp;
+        const auto OldConfig=qApp->property("documentViewsConfigDir"),OldWorkspace=qApp->property("epubWorkspaceDirectory");
+        qApp->setProperty("documentViewsConfigDir",Temp.path());qApp->setProperty("epubWorkspaceDirectory",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",OldConfig);qApp->setProperty("epubWorkspaceDirectory",OldWorkspace);});
+        EpubSourceEditor Editor(workspaceBook(20000),Temp.filePath("identity.epub"));Editor.SetRecoveryEnabled(false);
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(),30000);
+        Editor.ApplyValidationSettings({{"requireEpubCheck",false}});
+        auto* Source=Editor.SourceView();auto* Backend=static_cast<ScintillaQtDirectBackend*>(Source->Backend());
+        const auto Original=Source->Content().toUtf8();const auto Position=Original.lastIndexOf("</p>");QVERIFY(Position>=0);
+        const auto ReadCount=[&]{return Editor.Snapshot()["sourceCache"].toObject()["reads"].toInteger();};
+        const auto Before=ReadCount();Backend->Send(SCI_GOTOPOS,Position);Backend->Send(SCI_BEGINUNDOACTION);
+        for(int Index=0;Index<100;++Index){Backend->replace("x");(void)Editor.SessionIdentity();}
+        Backend->Send(SCI_ENDUNDOACTION);
+        QCOMPARE(ReadCount(),Before);QVERIFY(Editor.IsModified());
+        const auto SavedContent="epub:"+Editor.SessionIdentity().toHex();
+        auto Encoder=Editor.CaptureSave(Temp.filePath("saved.epub"),false);
+        QCOMPARE(ReadCount(),Before);
+        Backend->Send(SCI_BEGINUNDOACTION);Backend->replace("newer");Backend->Send(SCI_ENDUNDOACTION);
+        auto Work=QtConcurrent::run([Encoder]{return Encoder(hc::storage::OperationContext{});});
+        QTRY_VERIFY_WITH_TIMEOUT(Work.isFinished(),30000);QVERIFY(Work.result().HasValue());
+        const auto Bytes=Work.result().Value();epub::EditModel Saved;QVERIFY(Saved.Load(Bytes));
+        auto Expected=Original;Expected.insert(Position,QByteArray(100,'x'));
+        QCOMPARE(Saved.Read(Editor.Snapshot()["current"].toString()),Expected);
+        Editor.CommitSaved(Temp.filePath("saved.epub"),SavedContent,QCryptographicHash::hash(Bytes,QCryptographicHash::Sha256));
+        QVERIFY(Editor.IsModified());QVERIFY("epub:"+Editor.SessionIdentity().toHex()!=SavedContent);
+        Backend->Send(SCI_UNDO);QTRY_VERIFY_WITH_TIMEOUT(!Editor.IsModified(),15000);
+        QCOMPARE("epub:"+Editor.SessionIdentity().toHex(),SavedContent);
+        Backend->Send(SCI_UNDO);QTRY_VERIFY_WITH_TIMEOUT(Editor.IsModified(),15000);
+        Backend->Send(SCI_REDO);QTRY_VERIFY_WITH_TIMEOUT(!Editor.IsModified(),15000);
+        // A session ticket can carry the conservative revision identity while the
+        // worker proves that undo/redo reached the saved bytes before capture.
+        const auto PendingContent="epub:"+Editor.RevisionToken().toHex();
+        QVERIFY(PendingContent!="epub:"+Editor.SessionIdentity().toHex());
+        auto Again=Editor.CaptureSave(Temp.filePath("again.epub"),true);
+        auto SavedAgain=QtConcurrent::run([Again]{return Again(hc::storage::OperationContext{});});
+        QTRY_VERIFY_WITH_TIMEOUT(SavedAgain.isFinished(),30000);QVERIFY(SavedAgain.result().HasValue());
+        Editor.CommitSaved(Temp.filePath("again.epub"),PendingContent,QCryptographicHash::hash(SavedAgain.result().Value(),QCryptographicHash::Sha256));
+        QVERIFY(!Editor.IsModified());QCOMPARE("epub:"+Editor.SessionIdentity().toHex(),PendingContent);
+    }
+    void epubWorkspaceNativeKeyboard()
+    {
+        if(!qEnvironmentVariableIsSet("HC_INPUT_EPUB_NATIVE"))QSKIP("Native EPUB VM test is opt-in");
+        QVERIFY(qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM"));
+        QTemporaryDir Temp;QVERIFY(Temp.isValid());
+        const auto Previous=qApp->property("documentViewsConfigDir"),PreviousWorkspace=qApp->property("epubWorkspaceDirectory");
+        qApp->setProperty("documentViewsConfigDir",Temp.path());qApp->setProperty("epubWorkspaceDirectory",Temp.path());
+        const auto Restore=qScopeGuard([&]{qApp->setProperty("documentViewsConfigDir",Previous);qApp->setProperty("epubWorkspaceDirectory",PreviousWorkspace);});
+        ::AppSettings Settings;Settings.setValue("epubEditor/requireEpubCheck",false);Settings.sync();
+        const auto Path=Temp.filePath("workspace.epub"),Saved=Temp.filePath("saved.epub");
+        QVERIFY(QFile::copy(qEnvironmentVariable("HC_INPUT_EPUB"),Path));
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"),false);Window.resize(1200,850);
+        Window.SetClosePrompt([](const QString&){return int(QMessageBox::Discard);});
+        Window.ConfigureEpub(MakeProductEpubRuntime(qEnvironmentVariable("HC_INPUT_EPUB_RUNTIME",QCoreApplication::applicationDirPath())));
+        Window.show();QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window.winId())));
+        const auto Opened=Window.OpenForEpubEdit(Path,{},-1,qEnvironmentVariable("HC_INPUT_EPUB_RESOURCE"));
+        const auto Id=Opened["documentId"].toString();QVERIFY(!Id.isEmpty());
+        EpubSourceEditor* Editor=nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT((Editor=Window.findChild<EpubSourceEditor*>()) && Editor->IsReady(),30000);
+        QTRY_COMPARE_WITH_TIMEOUT(Editor->Snapshot()["current"].toString(),qEnvironmentVariable("HC_INPUT_EPUB_RESOURCE"),30000);
+        Editor->SetRecoveryEnabled(false);Editor->ApplyValidationSettings({{"requireEpubCheck",false}});
+        auto* Pane=Window.findChild<DocumentViewPane*>();QVERIFY(Pane);
+        auto* Source=Editor->SourceView();auto* Backend=static_cast<ScintillaQtDirectBackend*>(Source->Backend());
+        const auto Original=Source->Content().toUtf8();const int Position=Original.lastIndexOf("</p>");QVERIFY(Position>=0);
+        Backend->Send(SCI_SETEMPTYSELECTION,Position);
+        const auto Key=[](WORD Code,WORD Modifier=0){INPUT Keys[4]{};int Count=0;
+            const auto Add=[&](WORD Value,bool Up){auto& Input=Keys[Count++];Input.type=INPUT_KEYBOARD;Input.ki.wVk=Value;Input.ki.dwFlags=Up?KEYEVENTF_KEYUP:0;};
+            if(Modifier)Add(Modifier,false);Add(Code,false);Add(Code,true);if(Modifier)Add(Modifier,true);
+            return SendInput(Count,Keys,sizeof(INPUT))==UINT(Count);};
+        QTRY_VERIFY_WITH_TIMEOUT(NativeFocusReaches(Backend->widget()),10000);
+        for(int Index=0;Index<100;++Index){
+            if(Index%20==10){
+                QVERIFY(Pane->Execute({{"action","epub.edit.source-visible"},{"visible",false}})["accepted"].toBool());
+                QTRY_VERIFY2_WITH_TIMEOUT(Editor->PreviewView() && Editor->PreviewView()->IsLoaded(),qPrintable(QString::fromUtf8(QJsonDocument(Editor->Snapshot()).toJson(QJsonDocument::Compact))),30000);
+                QVERIFY(Editor->PreviewView()->FocusInput());
+                QVERIFY(Pane->Execute({{"action","epub.edit.source-visible"},{"visible",true}})["accepted"].toBool());
+                QTRY_VERIFY_WITH_TIMEOUT(NativeFocusReaches(Backend->widget()),5000);
+            }
+            if(Index%25==15){QWidget Other;Other.resize(200,100);Other.show();
+                QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Other.winId())));
+                QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window.winId())));
+                QTRY_VERIFY_WITH_TIMEOUT(NativeFocusReaches(Backend->widget()),5000);}
+            if(Index==25)Window.Handle({{"action","saveAs"},{"documentId",Id},{"path",Saved}});
+            QVERIFY(Key('X'));QTRY_COMPARE_WITH_TIMEOUT(Backend->Send(SCI_GETLENGTH),qintptr(Original.size()+Index+1),5000);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(),60000);
+        QVERIFY(QFileInfo::exists(Saved));QVERIFY(Key('S',VK_CONTROL));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle() && !Editor->IsModified(),60000);
+        auto Expected=Original;Expected.insert(Position,QByteArray(100,'x'));
+        QCOMPARE(Source->Content().toUtf8(),Expected);
+        epub::EditModel Reopened;QVERIFY(Reopened.Load(Read(Saved)));
+        QCOMPARE(Reopened.Read(Editor->Snapshot()["current"].toString()),Expected);
+        Window.RequestClose();QTRY_VERIFY_WITH_TIMEOUT(Window.Snapshot()["documents"].toArray().isEmpty(),30000);
+    }
+    void epubInputSerializationBaseline()
+    {
+        const bool Native = qEnvironmentVariableIsSet("HC_INPUT_EPUB_NATIVE");
+        if (Native) QVERIFY(qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM"));
+        const int Samples = Native ? 1000 : 30;
+        const auto Path = qEnvironmentVariable("HC_INPUT_EPUB");
+        if (Path.isEmpty()) QSKIP("Set HC_INPUT_EPUB to an isolated VM corpus copy");
+        QTemporaryDir Temp; QVERIFY(Temp.isValid());
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        const auto PreviousWorkspace = qApp->property("epubWorkspaceDirectory");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        qApp->setProperty("epubWorkspaceDirectory", Temp.path());
+        const auto Restore = qScopeGuard([&] {
+            qApp->setProperty("documentViewsConfigDir", Previous);
+            qApp->setProperty("epubWorkspaceDirectory", PreviousWorkspace);
+        });
+        const auto Book = Read(Path); QVERIFY(!Book.isEmpty());
+        EpubSourceEditor Editor(Book, Path); Editor.SetRecoveryEnabled(false);
+        QTRY_VERIFY_WITH_TIMEOUT(Editor.IsReady(), 30000);
+        const auto Resource = qEnvironmentVariable("HC_INPUT_EPUB_RESOURCE");
+        if (!Resource.isEmpty()) QVERIFY(Editor.Execute({{"action", "epub.edit.select"}, {"resource", Resource}})["accepted"].toBool());
+        auto* Source = Editor.SourceView(); QVERIFY(Source);
+        const int WrapMode = qBound(0, qEnvironmentVariableIntValue("HC_INPUT_WRAP_MODE"), 3);
+        Source->SetWordWrapMode(WrapMode);
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(Source->Backend());
+        if (qEnvironmentVariableIsSet("HC_INPUT_NO_LEXER")) Backend->applyLanguage("None");
+        const auto Original = Source->Content().toUtf8();
+        const bool Visible = Native || qEnvironmentVariableIsSet("HC_INPUT_VISIBLE");
+        if (Visible) { Editor.resize(1100, 720); Editor.show(); QTest::qWait(200); QVERIFY(Source->isVisible()); }
+        const auto Position = qEnvironmentVariableIsSet("HC_INPUT_MIDDLE")
+            ? Original.indexOf("</p>", Original.size() / 2) : Original.lastIndexOf("</p>");
+        QVERIFY2(Position >= 0, "Corpus initial resource must contain a paragraph");
+        qInfo() << "baseline-wrap" << Backend->Send(SCI_GETWRAPMODE) << "visible" << Source->isVisible();
+        QCOMPARE(Backend->Send(SCI_GETWRAPMODE), qintptr(WrapMode));
+        QTimer PreviewProbe;PreviewProbe.setInterval(10);
+        connect(&PreviewProbe,&QTimer::timeout,&Editor,[&]{
+            for(auto* View:Editor.findChildren<EpubProcessView*>())if(!View->property("inputFailureProbe").toBool()){
+                View->setProperty("inputFailureProbe",true);
+                connect(View,&EpubProcessView::Failed,&Editor,[View](const QString& Error){qInfo()<<"epub-input-renderer-failure"<<Error<<View->ViewState();});
+            }
+        });
+        const bool Preview = qEnvironmentVariableIsSet("HC_INPUT_EPUB_PREVIEW");
+        if (Preview) {
+            PreviewProbe.start();
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Editor.winId())));Backend->widget()->setFocus();
+            Editor.ConfigurePreview(MakeProductEpubRuntime(qEnvironmentVariable("HC_INPUT_EPUB_RUNTIME",QCoreApplication::applicationDirPath())));
+            Editor.findChild<QAction*>("epubAutoPreview")->setChecked(true);
+            QTRY_VERIFY_WITH_TIMEOUT((Editor.PreviewView() && Editor.PreviewView()->IsLoaded()) || !Editor.Snapshot()["preview"].toObject()["error"].toString().isEmpty(),60000);
+            QVERIFY2(Editor.PreviewView() && Editor.PreviewView()->IsLoaded(),qPrintable(Editor.Snapshot()["preview"].toObject()["error"].toString()));
+            PreviewProbe.stop();Editor.SetSourceVisible(true); QTest::qWait(200);
+        }
+        const auto OriginalToken = Editor.Token();
+        Backend->Send(SCI_GOTOPOS, Position);
+        struct PaintCounter final : QObject {
+            ScintillaQtDirectBackend* backend_ = nullptr; qintptr length_ = -1;
+            bool eventFilter(QObject*, QEvent* Event) override {
+                if (Event->type() == QEvent::Paint) length_ = backend_->Send(SCI_GETLENGTH);
+                return false;
+            }
+        } Paints;
+        Paints.backend_ = Backend;
+        const auto OriginalLength = Backend->Send(SCI_GETLENGTH);
+        if (Native) {
+            Backend->scrollArea()->viewport()->installEventFilter(&Paints);
+            Backend->Send(SCI_SCROLLCARET);
+            QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Editor.winId())));
+            Backend->widget()->setFocus(); QTest::qWait(100); QVERIFY(NativeFocusReaches(Backend->widget()));
+        }
+        QList<qint64> Times; QElapsedTimer Clock;
+        QWidget Other; Other.resize(220,120);
+        qInfo()<<"epub-geometry-before"<<Source->geometry();
+        for(auto* Widget:Editor.findChildren<QWidget*>())if(Widget->objectName()=="epubSourceTabs")qInfo()<<"epub-tabs-before"<<Widget->isVisible()<<Widget->geometry()<<Widget->sizeHint();
+        const auto SourceGeometry=Source->geometry();
+        const auto LineHeight=Backend->Send(SCI_TEXTHEIGHT,Backend->Send(SCI_LINEFROMPOSITION,Position));
+        mrst::scintilla::measureWidthsCallCount() = 0;
+        struct SaveResult {QByteArray bytes_,hash_;QString error_;};
+        QFutureWatcher<SaveResult> SaveWorker; bool Saving=false; QString SaveError;
+        QByteArray SaveContent, SavedExpected, SavedBytes; int Saves=0;
+        const auto SavedPath=Temp.filePath("native-saved.epub");
+        connect(&SaveWorker,&QFutureWatcherBase::finished,&Editor,[&] {
+            const auto Result=SaveWorker.result();Saving=false;
+            if(!Result.error_.isEmpty()){SaveError=Result.error_;return;}
+            SavedBytes=Result.bytes_;Editor.CommitSaved(SavedPath,SaveContent,Result.hash_);
+        });
+        const auto FinishSave=qScopeGuard([&]{SaveWorker.waitForFinished();});
+        const auto StartSave=[&](int Inserted) {
+            if(Saving)return;
+            SaveContent="epub:"+Editor.SessionIdentity().toHex();SavedExpected=Original;
+            SavedExpected.insert(Position,QByteArray(Inserted,'x'));Saving=true;++Saves;
+            auto Encoder=Editor.CaptureSave(SavedPath,true);
+            SaveWorker.setFuture(QtConcurrent::run([Encoder,SavedPath] {
+                SaveResult Result;const auto Export=Encoder(hc::storage::OperationContext{});
+                if(!Export.HasValue()){Result.error_=QString::fromStdString(Export.Failure().code_);return Result;}
+                Result.bytes_=Export.Value();Result.hash_=QCryptographicHash::hash(Result.bytes_,QCryptographicHash::Sha256);
+                QSaveFile File(SavedPath);
+                if(!File.open(QIODevice::WriteOnly)||File.write(Result.bytes_)!=Result.bytes_.size()||!File.commit())Result.error_="native-epub-save-write";
+                return Result;
+            }));
+        };
+        const bool SaveDuringInput=qEnvironmentVariableIsSet("HC_INPUT_EPUB_SAVE");
+        Editor.ApplyValidationSettings({{"requireEpubCheck",false}});
+        Backend->Send(SCI_BEGINUNDOACTION);
+        for (int Index = 0; Index < Samples; ++Index) {
+            if (Native && Index % 100 == 0) QTest::qWait(250);
+            if (Native && Index % 200 == 100) {
+                Other.show(); QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Other.winId())));
+                QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Editor.winId())));
+                Backend->widget()->setFocus(); Other.hide(); QVERIFY(NativeFocusReaches(Backend->widget()));
+            }
+            if(Preview && Native && Index % 200 == 150) {
+                Editor.SetSourceVisible(false);QTest::qWait(100);
+                QVERIFY(Editor.PreviewView() && Editor.PreviewView()->FocusInput());QTest::qWait(100);
+                Editor.SetSourceVisible(true);
+                QTRY_VERIFY_WITH_TIMEOUT(NativeFocusReaches(Backend->widget()),5000);
+            }
+            if(SaveDuringInput && Index % 200 == 50)StartSave(Index);
+            QVERIFY2(SaveError.isEmpty(),qPrintable(SaveError));
+            Clock.start(); { hc::startup::Span Trace("input.detail.replace");
+                if (Native) {
+                    QVERIFY(GetForegroundWindow() == reinterpret_cast<HWND>(Editor.winId()));
+                    QVERIFY(NativeFocusReaches(Backend->widget()));
+                    INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
+                    Keys[0].ki.wScan = Keys[1].ki.wScan = L'x';
+                    Keys[0].ki.dwFlags = KEYEVENTF_UNICODE; Keys[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+                    QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2));
+                    while (Paints.length_ != OriginalLength + Index + 1 && Clock.elapsed() < 5000) {
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 2); QTest::qWait(1);
+                    }
+                    QCOMPARE(Paints.length_, OriginalLength + Index + 1);
+                } else if (qEnvironmentVariableIsSet("HC_INPUT_NO_LAYOUT")) {
+                    const auto At = Backend->Send(SCI_GETCURRENTPOS);
+                    Backend->Send(SCI_SETTARGETRANGE, At, At);
+                    Backend->Send(SCI_REPLACETARGET, 1, reinterpret_cast<qintptr>("x"));
+                    Backend->Send(SCI_SETEMPTYSELECTION, At + 1);
+                } else Backend->replace("x");
+            } (void)Editor.SessionIdentity();
+            Times.append(Clock.nsecsElapsed());
+            if (Native) {
+                if(Source->geometry()!=SourceGeometry){
+                    qInfo()<<"epub-geometry-change index"<<Index<<"window"<<Editor.geometry()<<"source"<<Source->geometry();
+                    for(auto* Widget:Editor.findChildren<QWidget*>())if(Widget->isVisible() && (Widget->parentWidget()==&Editor || Widget->objectName().startsWith("epub")))qInfo()<<Widget->objectName()<<Widget->geometry()<<Widget->minimumSizeHint();
+                    Editor.grab().save(QDir::currentPath()+"/epub-geometry.png");
+                }
+                QCOMPARE(Source->geometry(),SourceGeometry);
+                QCOMPARE(Backend->Send(SCI_TEXTHEIGHT,Backend->Send(SCI_LINEFROMPOSITION,Backend->Send(SCI_GETCURRENTPOS))),LineHeight);
+            }
+            if (Visible && !Native) {
+                QTest::qWait(Index % 10 == 9 ? 800 : 10);
+            }
+        }
+        Backend->Send(SCI_ENDUNDOACTION);
+        if(SaveDuringInput) {
+            QTRY_VERIFY_WITH_TIMEOUT(!Saving,60000);QVERIFY2(SaveError.isEmpty(),qPrintable(SaveError));
+            StartSave(Samples);QTRY_VERIFY_WITH_TIMEOUT(!Saving,60000);QVERIFY2(SaveError.isEmpty(),qPrintable(SaveError));
+            QCOMPARE(Read(SavedPath),SavedBytes);epub::EditModel Reopened;QVERIFY(Reopened.Load(SavedBytes));
+            QCOMPARE(Reopened.Read(Editor.Snapshot()["current"].toString()),SavedExpected);
+            QTRY_VERIFY_WITH_TIMEOUT(!Editor.IsModified(),15000);QVERIFY(Saves>=2);
+            qInfo()<<"native-epub saves"<<Saves<<"preview"<<Preview;
+        }
+        auto Expected = Original; Expected.insert(Position, QByteArray(Samples, 'x'));
+        QCOMPARE(Source->Content().toUtf8(), Expected); QVERIFY(Editor.Token() != OriginalToken);
+        Backend->Send(SCI_UNDO);
+        QCOMPARE(Source->Content().toUtf8(), Original); QCOMPARE(Editor.Token(), OriginalToken);
+        qInfo() << "measure-cache hits" << mrst::scintilla::measuredRunCacheHits() << "cost" << mrst::scintilla::measuredRunCacheCost();
+        QVERIFY(WriteInputBaseline(Native ? "native-paint-epub" : "epub", Original.size(), Times,
+            Native ? "sendinput-through-qt-paint-nanoseconds" : "synchronous-handler-nanoseconds"));
+        std::sort(Times.begin(), Times.end());
+        qInfo() << "epub-input-baseline book-bytes" << Book.size() << "resource-bytes" << Original.size()
+                << "samples" << Times.size() << "p50-us" << Times[(Samples - 1) / 2] / 1000
+                << "max-us" << Times.last() / 1000;
+        if (Native) qInfo() << "native-epub-p99-us" << Times[989] / 1000;
+        if(Preview){Editor.RequestPreviewClose();QTRY_VERIFY_WITH_TIMEOUT(Editor.IsPreviewClosed(),30000);}
+    }
+    void inputSerializationBaseline_data()
+    {
+        QTest::addColumn<QString>("Extension");
+        QTest::addColumn<int>("Bytes");
+        for (const auto& Extension : {QString("txt"), QString("md"), QString("rst")})
+            for (const int Bytes : {16 * 1024, 1024 * 1024, 4 * 1024 * 1024})
+                QTest::newRow(qPrintable(Extension + "-" + QString::number(Bytes))) << Extension << Bytes;
+    }
+    void inputSerializationBaseline()
+    {
+        // Measure the complete workspace change handler, not CaptureSave after its
+        // expensive SessionContent call. This is synchronous handling time, not
+        // native key-to-paint latency; no performance threshold hides that distinction.
+        QFETCH(QString, Extension); QFETCH(int, Bytes);
+        QTemporaryDir Temp; QVERIFY(Temp.isValid());
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        ::AppSettings Settings;
+        Settings.setValue("markdown/editorMode", "source");
+        Settings.setValue("markdown/autoPreview", false); Settings.sync();
+        const auto Path = Temp.filePath("baseline." + Extension);
+        QByteArray Original; const QByteArray Line("Heading\n=======\n\nplain text line\n");
+        while (Original.size() < Bytes) Original += Line;
+        Write(Path, Original);
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery"));
+        Window.SetClosePrompt([](const QString&) { return int(QMessageBox::Discard); });
+        const auto Id = Window.Handle({{"action", "open"}, {"path", Path}})["documentId"].toString();
+        QVERIFY(!Id.isEmpty()); QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 30000);
+        auto* Source = Window.findChild<QTextView*>(); QVERIFY(Source);
+        Source->setWordWrap(false);
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(Source->Backend());
+        QList<qint64> Durations; QElapsedTimer Clock;
+        for (int Index = 0; Index < 30; ++Index) {
+            Backend->Send(SCI_GOTOPOS, Backend->Send(SCI_GETLENGTH));
+            Clock.start(); Backend->replace("x"); Durations.append(Clock.nsecsElapsed());
+            if (Index % 10 == 9) QTest::qWait(750); // Fold/recovery/idle callbacks may run.
+        }
+        QCOMPARE(Source->Content().toUtf8(), Original + QByteArray(30, 'x'));
+        QVERIFY(WriteInputBaseline(Extension, Original.size(), Durations));
+        std::sort(Durations.begin(), Durations.end());
+        qInfo() << "input-baseline" << Extension << "bytes" << Original.size()
+                << "samples" << Durations.size() << "handling-p50-us" << Durations[14] / 1000
+                << "handling-max-us" << Durations.last() / 1000;
+        Window.findChild<QAction*>("saveDocument")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 30000);
+        QCOMPARE(Read(Path), Original + QByteArray(30, 'x'));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(), 15000);
+    }
+    void nativeInputDuringIdleFocusAndSave_data()
+    {
+        QTest::addColumn<QString>("Extension");
+        for (const QString Extension : {"txt", "md", "rst"})
+            QTest::newRow(qPrintable(Extension)) << Extension;
+    }
+    void nativeInputDuringIdleFocusAndSave()
+    {
+        // Opt in on the guest. Never send a key without verifying foreground and focus.
+        if (!qEnvironmentVariableIsSet("HC_INPUT_NATIVE_VM")) QSKIP("Native input is enabled only in the isolated VM run");
+        QFETCH(QString, Extension);
+        QTemporaryDir Temp; QVERIFY(Temp.isValid());
+        const auto Previous = qApp->property("documentViewsConfigDir");
+        qApp->setProperty("documentViewsConfigDir", Temp.path());
+        const auto Restore = qScopeGuard([&] { qApp->setProperty("documentViewsConfigDir", Previous); });
+        ::AppSettings Settings; Settings.setValue("markdown/editorMode", "source");
+        Settings.setValue("markdown/autoPreview", false); Settings.sync();
+        const auto Path = Temp.filePath("native." + Extension);
+        QByteArray Original;
+        while (Original.size() < 4 * 1024 * 1024) Original += "Heading\n=======\n\nplain text line\n";
+        Write(Path, Original);
+        DocumentWorkspaceWidget Window(Temp.filePath("recovery")); Window.resize(900, 650); Window.show();
+        Window.SetClosePrompt([](const QString&) { return int(QMessageBox::Discard); });
+        QVERIFY(!Window.Handle({{"action", "open"}, {"path", Path}})["documentId"].toString().isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 30000);
+        auto* Source = Window.findChild<QTextView*>(); QVERIFY(Source); Source->setWordWrap(false);
+        auto* Backend = static_cast<ScintillaQtDirectBackend*>(Source->Backend());
+        auto* Input = Backend->widget(); QVERIFY(Input);
+        auto* Area = qobject_cast<QAbstractScrollArea*>(Input); QVERIFY(Area);
+        struct PaintCounter final : QObject {
+            ScintillaQtDirectBackend* backend_ = nullptr;
+            qintptr paintedLength_ = -1;
+            bool eventFilter(QObject*, QEvent* Event) override {
+                if (Event->type() == QEvent::Paint) paintedLength_ = backend_->Send(SCI_GETLENGTH);
+                return false;
+            }
+        } Paints;
+        Paints.backend_ = Backend;
+        Area->viewport()->installEventFilter(&Paints);
+        Backend->Send(SCI_GOTOPOS, Backend->Send(SCI_GETLENGTH)); Backend->Send(SCI_SCROLLCARET);
+        QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window.winId())));
+        Input->setFocus(); QTest::qWait(100); QVERIFY(NativeFocusReaches(Input));
+        const auto Geometry = Source->geometry();
+        const auto LineHeight = Backend->Send(SCI_TEXTHEIGHT, Backend->Send(SCI_LINEFROMPOSITION, Backend->Send(SCI_GETCURRENTPOS)));
+        QList<qint64> Durations; QElapsedTimer Clock;
+        QWidget Other; Other.resize(200, 100);
+        for (int Index = 0; Index < 1000; ++Index) {
+            if (Index % 100 == 0) QTest::qWait(250);
+            if (Index % 200 == 100) {
+                Other.show(); QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Other.winId())));
+                QVERIFY(ActivateTestWindow(reinterpret_cast<HWND>(Window.winId())));
+                Input->setFocus(); QVERIFY(NativeFocusReaches(Input)); Other.hide();
+            }
+            if (Index % 100 == 50) Window.findChild<QAction*>("saveDocument")->trigger();
+            QVERIFY(GetForegroundWindow() == reinterpret_cast<HWND>(Window.winId()));
+            QVERIFY(NativeFocusReaches(Input));
+            INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
+            Keys[0].ki.wScan = Keys[1].ki.wScan = L'x';
+            Keys[0].ki.dwFlags = KEYEVENTF_UNICODE; Keys[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+            Clock.start(); QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2));
+            while ((Backend->Send(SCI_GETLENGTH) != Original.size() + Index + 1 || Paints.paintedLength_ != Original.size() + Index + 1)
+                && Clock.elapsed() < 5000) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 2); QTest::qWait(1);
+            }
+            Durations.append(Clock.nsecsElapsed());
+            QCOMPARE(Backend->Send(SCI_GETLENGTH), Original.size() + Index + 1);
+            QCOMPARE(Paints.paintedLength_, Original.size() + Index + 1);
+            QCOMPARE(Source->geometry(), Geometry);
+            QCOMPARE(Backend->Send(SCI_TEXTHEIGHT, Backend->Send(SCI_LINEFROMPOSITION, Backend->Send(SCI_GETCURRENTPOS))), LineHeight);
+        }
+        QVERIFY(WriteInputBaseline("native-paint-" + Extension, Original.size(), Durations, "sendinput-through-qt-paint-nanoseconds"));
+        std::sort(Durations.begin(), Durations.end());
+        qInfo() << "native-input-paint" << Extension << "samples" << Durations.size()
+            << "p50-us" << Durations[499] / 1000 << "p99-us" << Durations[989] / 1000 << "max-us" << Durations.last() / 1000;
+        Window.findChild<QAction*>("saveDocument")->trigger(); QTRY_VERIFY_WITH_TIMEOUT(Window.IsIdle(), 30000);
+        QCOMPARE(Read(Path), Original + QByteArray(1000, 'x'));
+        QTRY_VERIFY_WITH_TIMEOUT(Window.RequestClose(), 15000);
+    }
     void markdownLargeSaveCapture()
     {
         QTemporaryDir Temp;const auto OldConfig=qApp->property("documentViewsConfigDir");qApp->setProperty("documentViewsConfigDir",Temp.path());
@@ -2221,6 +2894,7 @@ int main(int Argc, char** Argv)
     if (App.arguments().contains("--probe-dpr")) {
         std::cout << App.primaryScreen()->devicePixelRatio() << std::endl; return 0;
     }
-    DocumentPreferencesTests Tests; return QTest::qExec(&Tests, Argc, Argv);
+    DocumentPreferencesTests Tests; const int Result = QTest::qExec(&Tests, Argc, Argv);
+    hc::startup::Flush(); return Result;
 }
 #include "tstDocumentPreferences.moc"

@@ -258,7 +258,6 @@ private:
     void                                applyVirtualProjectTheme();
     void                                logProjectList();
     void                                onPreviewFinished( const PreviewBuildResult& result );
-    [[nodiscard]] std::shared_ptr<const PreviewShadowSnapshot> createShadowSnapshot( RstEditor* view ) const;
     /// 프리뷰가 **우리가 띄운** 페이지인가.
     ///
     /// 사용자가 프리뷰 안에서 외부 링크를 눌러 이동한 경우를 제외하려는 판정이다.
@@ -396,6 +395,11 @@ private:
     QSet< PreviewSurface* >             knownSurfaces_;
     SphinxPreviewController*            previewController_ = nullptr;
     DeferredPreviewWork                 previewBuildWork_;
+    bool                                shadowWriting_ = false;
+    bool                                shadowAgain_ = false;
+    bool                                shadowAgainForce_ = false;
+    bool                                outlineComputing_ = false;
+    bool                                outlineAgain_ = false;
     VirtualProjectManager*              virtualProjects_ = nullptr;
     DiagnosticsStore*                   diagnosticsStore_ = nullptr;
     LspServerPool*                      lspPool_ = nullptr;

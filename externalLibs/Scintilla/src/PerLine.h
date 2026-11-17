@@ -73,6 +73,7 @@ public:
 
 	void ExpandLevels(Sci::Line sizeNew=-1);
 	void ClearLevels();
+	void ReplaceLevels(const int *values, size_t count);
 	int SetLevel(Sci::Line line, int level, Sci::Line lines);
 	int GetLevel(Sci::Line line) const noexcept;
 	FoldLevel GetFoldLevel(Sci::Line line) const noexcept;

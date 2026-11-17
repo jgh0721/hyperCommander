@@ -19,6 +19,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSet>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QUuid>
 #include <algorithm>
@@ -355,7 +356,7 @@ namespace hc::document
         const auto SetupStart=StartupClock.elapsed();
         startup::Scope Setup("helper.spawnSetup");
         Handle Original, Token;
-        if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY|TOKEN_DUPLICATE|TOKEN_ASSIGN_PRIMARY,&Original.value_)) return Fail("web-owner-token");
+        if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY|TOKEN_DUPLICATE|TOKEN_ASSIGN_PRIMARY|TOKEN_ADJUST_DEFAULT,&Original.value_)) return Fail("web-owner-token");
         BYTE Admin[SECURITY_MAX_SID_SIZE]; DWORD SidSize=sizeof(Admin);
         if(!CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,Admin,&SidSize)) return Fail("web-owner-admin-sid");
         SID_AND_ATTRIBUTES Denied{Admin,0};
@@ -371,7 +372,19 @@ namespace hc::document
         const auto PipeName=QStringLiteral("\\\\.\\pipe\\hc-web-owner-")+QUuid::createUuid().toString(QUuid::Id128);
         S->pipe_.value_=CreateNamedPipeW(reinterpret_cast<LPCWSTR>(PipeName.utf16()),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED|FILE_FLAG_FIRST_PIPE_INSTANCE,
             PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,1,HostPayloadLimit,HostPayloadLimit,0,&Security);
-        LocalFree(Descriptor); if(!S->pipe_.Valid()) return Fail("web-owner-pipe");
+        // An elevated parent's default DACL may allow only Administrators/SYSTEM.
+        // Administrators is deny-only in the helper: Chromium must still open its
+        // own process/token to create its more restricted renderer sandbox.
+        // Match the plugin host's user-owned process/default-DACL policy; retain
+        // the denied group, removed privileges and nested Job restrictions.
+        const auto FreeDescriptor = qScopeGuard([&] { LocalFree(Descriptor); });
+        if(!S->pipe_.Valid()) return Fail("web-owner-pipe");
+        BOOL DaclPresent=FALSE, DaclDefaulted=FALSE; PACL DefaultAcl=nullptr;
+        if(!GetSecurityDescriptorDacl(Descriptor,&DaclPresent,&DefaultAcl,&DaclDefaulted) || !DaclPresent)
+            return Fail("web-owner-token-default-acl");
+        TOKEN_DEFAULT_DACL DefaultDacl{DefaultAcl};
+        if(!SetTokenInformation(Token.value_,TokenDefaultDacl,&DefaultDacl,sizeof(DefaultDacl)))
+            return Fail("web-owner-token-default-acl");
         const auto Nonce=QUuid::createUuid().toRfc4122(); std::memcpy(S->connection_.data(),Nonce.constData(),16);
         S->job_.value_=CreateJobObjectW(nullptr,nullptr);if(!S->job_.Valid()) return Fail("web-owner-job");
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION Job{};
@@ -404,7 +417,7 @@ namespace hc::document
         // Start in a per-user cache folder so the shared product ROOT stays clean.
         const auto Cache=QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
         const auto WorkingDirectory=!Cache.isEmpty() && QDir().mkpath(Cache+"/rhwp-web") ? QDir::toNativeSeparators(Cache+"/rhwp-web") : Root;
-        if(!CreateProcessAsUserW(Token.value_,reinterpret_cast<LPCWSTR>(Program.utf16()),Command.data(),nullptr,nullptr,FALSE,
+        if(!CreateProcessAsUserW(Token.value_,reinterpret_cast<LPCWSTR>(Program.utf16()),Command.data(),&Security,&Security,FALSE,
             CREATE_SUSPENDED|CREATE_NO_WINDOW|CREATE_UNICODE_ENVIRONMENT,Block.data(),reinterpret_cast<LPCWSTR>(WorkingDirectory.utf16()),&Startup,&Process)) return Fail("web-owner-create");
         S->process_.value_=Process.hProcess; S->pid_=Process.dwProcessId; Handle Thread; Thread.value_=Process.hThread;
         if(!AssignProcessToJobObject(S->job_.value_,S->process_.value_)) { const auto Code=GetLastError(); TerminateProcess(S->process_.value_,1); SetLastError(Code); return Fail("web-owner-assign"); }

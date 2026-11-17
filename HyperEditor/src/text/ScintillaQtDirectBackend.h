@@ -2,6 +2,7 @@
 
 #include "text/ITextEditorBackend.h"
 #include "text/RstContainerLexer.h"
+#include "commonLibs/document/textSnapshot.hpp"
 
 #include <QColor>
 #include <QFont>
@@ -9,6 +10,7 @@
 #include <QRect>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 class QPaintEvent;
@@ -26,6 +28,7 @@ class ScintillaQtDirectBackend : public ITextEditorBackend
 	Q_OBJECT
 
 public:
+    hc::document::TextSnapshot CaptureTextSnapshot() const;
     // Current line marking shared by HyperEditor and HyperViewer. Nothing fills the line; 1 px rules run
     // above and below its text area and the line number cell is tinted. Inactive colors apply without focus.
     struct CurrentLineColors
@@ -243,6 +246,10 @@ private:
 	bool                m_highlightCurrentLine = true;
 	bool                m_forcedModified = false;
     bool regexTarget_ = false;
+    mutable std::optional<hc::document::TextSnapshot> textSnapshot_;
+    quint64 foldGeneration_ = 0;
+    bool foldWorkerActive_ = false;
+    void applyContainerFolds(quint64 Generation, std::shared_ptr<const std::vector<int>> Levels);
 	int                 m_lineNumberMarginDigits = 0;
 	int                 m_lastKnownLineCount = 1;
 };

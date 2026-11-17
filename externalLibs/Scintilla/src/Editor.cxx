@@ -2941,14 +2941,15 @@ void Editor::NotifyModified(Document *, DocModification mh, void *) {
 		if ((!willRedrawAll) && ((paintState == PaintState::notPainting) || !PaintContainsMargin())) {
 			if (FlagSet(mh.modificationType, ModificationFlags::ChangeFold)) {
 				// Fold changes can affect the drawing of following lines so redraw whole margin
-				RedrawSelMargin(marginView.highlightDelimiter.IsEnabled() ? -1 : mh.line - 1, true);
+				RedrawSelMargin(marginView.highlightDelimiter.IsEnabled() || mh.line < 0 ? -1 : mh.line - 1, true);
 			} else {
 				RedrawSelMargin(mh.line);
 			}
 		}
 	}
-	if ((FlagSet(mh.modificationType, ModificationFlags::ChangeFold)) && (FlagSet(foldAutomatic, AutomaticFold::Change))) {
-		FoldChanged(mh.line, mh.foldLevelNow, mh.foldLevelPrev);
+	if (FlagSet(mh.modificationType, ModificationFlags::ChangeFold)) {
+		if (mh.line < 0) FoldLevelsChanged();
+		else if (FlagSet(foldAutomatic, AutomaticFold::Change)) FoldChanged(mh.line, mh.foldLevelNow, mh.foldLevelPrev);
 	}
 
 	// NOW pay the piper WRT "deferred" visual updates
@@ -5833,6 +5834,32 @@ void Editor::FoldAll(FoldAction action) {
 	Redraw();
 }
 
+void Editor::FoldLevelsChanged() {
+	Sci::Line anchor = pcs->DocFromDisplay(topLine);
+	const Sci::Line subLine = topLine - pcs->DisplayFromDoc(anchor);
+	std::vector<Sci::Line> contracted;
+	for (Sci::Line line = pcs->ContractedNext(0); line >= 0 && line < pdoc->LinesTotal(); line = pcs->ContractedNext(line + 1)) {
+		if (LevelIsHeader(pdoc->GetFoldLevel(line))) contracted.push_back(line);
+		else pcs->SetExpanded(line, true);
+	}
+	if (!contracted.empty() || pcs->HiddenLines()) {
+		pcs->SetVisible(0, pdoc->LinesTotal() - 1, true);
+		Sci::Line hiddenThrough = -1;
+		for (const Sci::Line line : contracted) {
+			if (line <= hiddenThrough) continue; // nested collapsed flags survive without rescanning the subtree
+			hiddenThrough = pdoc->GetLastChild(line, {}, -1, false);
+			if (hiddenThrough > line) pcs->SetVisible(line + 1, hiddenThrough, false);
+		}
+		// Retain the top document line and wrapped sub-line, not its old display index.
+		// Only a structurally removed/hidden anchor moves to the nearest visible parent.
+		while (anchor > 0 && !pcs->GetVisible(anchor)) --anchor;
+		SetScrollBars();
+		ScrollTo(pcs->DisplayFromDoc(anchor) + std::min(subLine, static_cast<Sci::Line>(pcs->GetHeight(anchor) - 1)));
+	}
+	RedrawSelMargin();
+	Redraw();
+}
+
 void Editor::FoldChanged(Sci::Line line, FoldLevel levelNow, FoldLevel levelPrev) {
 	if (LevelIsHeader(levelNow)) {
 		if (!LevelIsHeader(levelPrev)) {
@@ -5993,6 +6020,12 @@ std::unique_ptr<Surface> Editor::CreateDrawingSurface(SurfaceID sid, std::option
 }
 
 Sci::Line Editor::WrapCount(Sci::Line line) {
+    // The count is already known without wrapping. Status/current-line updates
+    // query this during edit notifications, before idle refreshes wrapWidth.
+    // Laying out a megabyte line here can both use an obsolete width and block
+    // input merely to answer "1".
+    if (!Wrapping())
+        return 1;
 	AutoSurface surface(this);
 	std::shared_ptr<LineLayout> ll = view.RetrieveLineLayout(line, *this);
 
@@ -7238,6 +7271,10 @@ sptr_t Editor::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 			xOffset = 0;
 			ContainerNeedsUpdate(Update::HScroll);
 			InvalidateStyleRedraw();
+			// Hidden panes also need their display-row map reset immediately.
+			// Unwrapping only updates line heights; it does not shape text.
+			if (!Wrapping())
+				WrapLines(WrapScope::wsAll);
 			ReconfigureScrollBars();
 		}
 		break;

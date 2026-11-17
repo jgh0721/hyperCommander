@@ -879,6 +879,37 @@ private slots:
         Window.DiscardAndClose(); QCOMPARE(Port->stops_, 1); QVERIFY(Window.IsBusy());
         Port->AckStop(); QTRY_COMPARE(Window.Snapshot().lifecycle_, DocumentLifecycle::Closed);
     }
+    void exportRetryRetainsDestinationAndStrictRevision()
+    {
+        auto Backend = std::make_unique<FakeBackend>(); auto* Port = Backend.get(); Port->editorEnabled_ = true;
+        HwpSdiWindow Window(std::string(32, 'e'), {}, std::move(Backend), true);
+        QVERIFY(Window.Open()); Port->Finish(); QTRY_VERIFY(!Window.IsBusy());
+        emit Port->ModelChanged(Port->binding_, ExternalModelRevision{1, 1, "first"});
+        QTRY_VERIFY(Window.Snapshot().dirty_);
+        const auto Saved = Window.Snapshot().savedModel_;
+        QSignalSpy Failed(&Window, &HwpSdiWindow::SaveFailed), Ready(&Window, &HwpSdiWindow::SavePrepared);
+        QVERIFY(Window.Save({SaveDisposition::SaveAs, "retry-destination.hwpx"}, "hwpx"));
+        const auto First = Port->command_["exportIdentity"].toObject();
+        emit Port->ModelChanged(Port->binding_, ExternalModelRevision{1, 2, "second"});
+        emit Port->EditorReply(Port->binding_, {{"requestType", "DocumentEditorExport"}, {"ok", false}});
+        QTRY_VERIFY_WITH_TIMEOUT(Port->command_["type"] == "DocumentEditorExport"
+            && Port->command_["exportIdentity"].toObject()["changeSequence"] == "2", 2000);
+        const auto Second = Port->command_["exportIdentity"].toObject();
+        QVERIFY(First["token"] != Second["token"]); QCOMPARE(Second["savepoint"].toString(), QString("second"));
+        QCOMPARE(Port->command_["format"].toString(), QString("hwpx"));
+        QCOMPARE(Failed.size(), 0); QCOMPARE(Ready.size(), 0);
+        QVERIFY(Window.IsBusy()); QVERIFY(Port->isEnabled());
+        QCOMPARE(Window.Snapshot().savedModel_, Saved);
+        // A real renderer/format error remains visible even after a newer edit.
+        emit Port->ModelChanged(Port->binding_, ExternalModelRevision{1, 3, "third"});
+        emit Port->EditorReply(Port->binding_, {{"editor", QJsonObject{{"error", "rhwp-edit-export-metadata-or-loss"}}}});
+        QTRY_COMPARE(Failed.size(), 1); QTRY_VERIFY(!Window.IsBusy());
+        QCOMPARE(Failed[0][0].toString(), QString("rhwp-edit-export-metadata-or-loss"));
+        QVERIFY(Window.Snapshot().dirty_); QCOMPARE(Window.Snapshot().savedModel_, Saved);
+        QCOMPARE(Ready.size(), 0);
+        Window.RequestClose(CloseDisposition::Discard); Port->AckStop();
+        QTRY_COMPARE(Window.Snapshot().lifecycle_, DocumentLifecycle::Closed);
+    }
     void exportFailureObserverMayDeleteWindow()
     {
         auto Backend = std::make_unique<FakeBackend>(); auto* Port = Backend.get(); Port->editorEnabled_ = true;

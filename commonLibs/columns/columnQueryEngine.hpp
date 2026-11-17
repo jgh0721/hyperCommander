@@ -65,6 +65,9 @@ namespace hc::columns
         // While this returns true, finished values wait (at most MaxDeferMs) so pending input is handled first.
         std::function<bool()> DeferWhile;
         static constexpr int MaxDeferMs = 500;
+        // Include the synchronous model/view notifications in the batch budget: 64
+        // completions took 63 ms in the VM while a navigation key was queued.
+        static constexpr int MaxApplyItems = 16;
         // Query families of the paths passed to the Changed call in progress.
         const QSet<QString>& ChangedFamilies() const { return reportedFamilies_; }
         int Pending() const { return int(pending_.size()); }
@@ -192,20 +195,30 @@ namespace hc::columns
         }
         void drain()
         {
+            bool HasFinished = false;
+            {
+                std::lock_guard Lock(shared_->lock_);
+                HasFinished = !shared_->done_.isEmpty();
+            }
+            // Defer cache publication too: thousands of completed values must not be
+            // installed in one timer callback while a navigation key waits.
+            if (HasFinished && DeferWhile && DeferWhile()) {
+                if (!deferred_.isValid()) deferred_.start();
+                if (deferred_.elapsed() < MaxDeferMs) return;
+            }
             QList<Done> Finished; quint64 Epoch = 0; int Loops = 0;
             {
                 std::lock_guard Lock(shared_->lock_);
-                Finished.swap(shared_->done_); Epoch = shared_->epoch_; Loops = shared_->loops_[0] + shared_->loops_[1];
+                const auto Count = qMin(qsizetype(MaxApplyItems), shared_->done_.size());
+                Finished.reserve(Count);
+                for (qsizetype At = 0; At < Count; ++At) Finished.append(shared_->done_.takeFirst());
+                Epoch = shared_->epoch_; Loops = shared_->loops_[0] + shared_->loops_[1];
             }
             for (auto& Item : Finished) {
                 if (Item.job_.epoch_ != Epoch) continue;
                 auto* Entry = new Cached{std::move(Item.values_), {}}; Entry->age_.start();
                 cache_.insert(Item.job_.key_, Entry); pending_.remove(Item.job_.key_);
                 changedPaths_.insert(Item.job_.path_); changedFamilies_.insert(Item.job_.family_);
-            }
-            if (!changedPaths_.isEmpty() && DeferWhile && DeferWhile()) {
-                if (!deferred_.isValid()) deferred_.start();
-                if (deferred_.elapsed() < MaxDeferMs) return;
             }
             if (!changedPaths_.isEmpty() || statusDirty_) {
                 deferred_.invalidate(); statusDirty_ = false;

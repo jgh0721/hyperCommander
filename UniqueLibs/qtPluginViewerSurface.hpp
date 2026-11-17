@@ -66,6 +66,7 @@ public:
     bool IsReady() const;
     void SetReturnKey(QKeyCombination Key);
     bool WasInteracted() const;
+    void EnterPreview();
     hc::viewer::ViewerSnapshot Snapshot() const;
 signals:
     void Ready(const QString& SessionId);

@@ -210,6 +210,7 @@ private slots:
         // Without SystemDrive, Shell creates a literal "%SystemDrive%" folder under the runtime directory.
         QVERIFY(Owner->Exchange("system-drive",Reply,1000,Error)); QCOMPARE(Reply,qEnvironmentVariable("SystemDrive").toLocal8Bit());
         QVERIFY(Owner->Exchange("policy",Reply,1000,Error)); QCOMPARE(Reply,QByteArray("0,4"));
+        QVERIFY(Owner->Exchange("nested-token",Reply,1000,Error)); QCOMPARE(Reply,QByteArray("restricted"));
         QFile Mutate(Directory.filePath("mode.txt")); QVERIFY(!Mutate.open(QIODevice::WriteOnly));
         QVERIFY(!QFile::rename(Directory.filePath("mode.txt"),Directory.filePath("changed.txt")));
         QVERIFY(Owner->Close()); QVERIFY(Owner->Close()); QVERIFY(!Owner->Snapshot().running_);

@@ -37,7 +37,7 @@ void EpubSourceEditor::setupScrollSync() {
         auto& State=sourceBuffers_[bufferResource_];if(State.shifts_.size()<256)State.shifts_.append({Line,Delta});else State.shiftsOverflow_=true;
     });
     connect(this,&EpubSourceEditor::Changed,this,[this]{
-        previewMatchesSource_=previewView_ && previewActiveToken_==Token();
+        previewMatchesSource_=previewView_ && previewActiveToken_==RevisionToken();
         if(previewMatchesSource_)clearLineShifts();
     });
 }

@@ -71,6 +71,43 @@ class DocumentP1Tests final : public QObject
     Q_OBJECT
 private slots:
 
+    void nativeSnapshotSaveAndStaleEquality()
+    {
+        SourceIdentity Source; Source.localPath_ = "snapshot.txt"; Source.originalWritable_ = true;
+        const TextSnapshot Original(std::string(64 * 1024, 'a'));
+        DocumentSession Session(std::string(32, 'e'));
+        QVERIFY(Session.CompleteOpen(1, OpenedDocument{Source, Original.Bytes()}));
+        Session.AdoptTextSnapshot(Original);
+        const auto Edited = Original.Replace(120, 1, "b");
+        QVERIFY(Session.ApplyTextSnapshot(Edited).HasValue());
+        const auto SavingRevision = Session.Snapshot().revision_;
+        auto Save = Session.SaveTextSnapshot({SaveDisposition::Original, "snapshot.txt"}, SavingRevision, Edited);
+        QVERIFY(Save.HasValue());
+        QVERIFY(Session.ApplyTextSnapshot(Edited.Replace(121, 1, "c")).HasValue());
+        QVERIFY(Session.CompleteSave(Save.Value(), {true}));
+        QVERIFY(Session.Snapshot().dirty_);
+        QCOMPARE(Session.SavedNativeText()->Bytes(), Edited.Bytes());
+        const auto Undo = Session.NativeText()->Replace(121, 1, "a");
+        QVERIFY(Session.ApplyTextSnapshot(Undo).HasValue());
+        const auto Comparing = Session.Snapshot();
+        QVERIFY(Undo.MayEqualSerialized(Edited)); QVERIFY(Session.Snapshot().dirty_);
+        QVERIFY(Session.ApplyTextSnapshot(Undo.Replace(122, 1, "d")).HasValue());
+        QVERIFY(!Session.ResolveTextEquality(Comparing.generation_, Comparing.revision_, Edited, true));
+        QVERIFY(Session.Snapshot().dirty_);
+        QVERIFY(Session.ApplyTextSnapshot(Undo).HasValue());
+        QVERIFY(Session.ResolveTextEquality(Session.Snapshot().generation_, Session.Snapshot().revision_, Edited,
+            Undo.SerializedBytes() == Edited.SerializedBytes()));
+        QVERIFY(!Session.Snapshot().dirty_);
+        // The save ticket remains immutable even when an explicit full replacement switches representations.
+        Save = Session.SaveTextSnapshot({SaveDisposition::Original, "snapshot.txt"}, Session.Snapshot().revision_, Undo);
+        QVERIFY(Save.HasValue());
+        QVERIFY(Session.Execute("document.setText", Undo.SerializedBytes()).HasValue());
+        QVERIFY(Session.CompleteSave(Save.Value(), {true}));
+        QVERIFY(!Session.Snapshot().dirty_);
+        QCOMPARE(Session.Text(), Edited.Bytes());
+        QCOMPARE(Original.Bytes(), std::string(64 * 1024, 'a'));
+    }
+
     void hotExitSettingsMigrationAndDependency()
     {
         QTemporaryDir Root; const auto Path = hc::settings::UnifiedConfig::FileName(Root.path());

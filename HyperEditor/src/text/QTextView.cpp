@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "text/QTextView.h"
+#include "UniqueLibs/startupTrace.hpp"
 #include "UniqueLibs/bundledFonts.hpp"
 #include "text/ScintillaQtDirectBackend.h"
 #include "UniqueLibs/qtMessageDialog.hpp"
@@ -1289,6 +1290,7 @@ void QTextView::showGoToLineDialog()
 
 void QTextView::updateMetrics()
 {
+    hc::startup::Span InputTrace("input.detail.updateMetrics");
     if (!m_editor)
         return;
 

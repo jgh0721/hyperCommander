@@ -4,6 +4,8 @@
 #include "text/ScintillaQtDirectBackend.h"
 #include "UniqueLibs/qtMessageDialog.hpp"
 #include <QApplication>
+#include <QAction>
+#include <QtConcurrentRun>
 #include <QClipboard>
 #include <QDir>
 #include <QFile>
@@ -35,21 +37,14 @@ QPair<int,int> tagAround(const QString& Text,int Position) {
     const int Open=Text.lastIndexOf('<',qMax(0,Position-1));if(Open<0 || Text.lastIndexOf('>',qMax(0,Position-1))>Open)return {-1,-1};
     const int Close=Text.indexOf('>',Open);if(Close<0 || Close+1<Position)return {-1,-1};return {Open,Close+1};
 }
-}
-QJsonObject EpubSourceEditor::quickFixAt(int Position)const {
-    if(!sourceShown() || mediaOf(current_)!="application/xhtml+xml")return {};const auto Text=sourceText();const auto Tag=tagAround(Text,Position);if(Tag.first<0)return {};
+QJsonObject quickFixFor(const QString& Text,int Position) {
+    const auto Tag=tagAround(Text,Position);if(Tag.first<0)return {};
     const auto Body=Text.mid(Tag.first,Tag.second-Tag.first);
     if(!QRegularExpression("^<img\\b",QRegularExpression::CaseInsensitiveOption).match(Body).hasMatch() || QRegularExpression("\\salt\\s*=",QRegularExpression::CaseInsensitiveOption).match(Body).hasMatch())return {};
-    return {{"kind","img-alt"},{"label",tr("alt 속성 추가")},{"insert",Tag.first+4}};
+    return {{"kind","img-alt"},{"label",EpubSourceEditor::tr("alt 속성 추가")},{"insert",Tag.first+4}};
 }
-void EpubSourceEditor::quickFix() {
-    const auto Fix=quickFixAt(sourcePosition());if(Fix.isEmpty() || sourceReadOnly_)return;bool Ok=false;
-    const auto Alt=hc::ui::InputDialog::getText(this,tr("빠른 수정: alt 속성 추가"),tr("대체 텍스트 · 장식 이미지는 빈 값"),QLineEdit::Normal,{},&Ok);if(!Ok)return;
-    const auto Insert=QString(" alt=\"%1\"").arg(escapeAttribute(Alt.left(2048))).toUtf8();
-    direct(text_)->Send(SCI_INSERTTEXT,quintptr(fromUtf16(Fix["insert"].toInt())),reinterpret_cast<qintptr>(Insert.constData()));report(tr("img 요소에 alt 속성을 추가했습니다. 다시 검사해 결과를 확인하세요."));
-}
-QString EpubSourceEditor::linkAt(int Position)const {
-    if(!sourceShown())return {};const auto Text=sourceText();const auto Media=mediaOf(current_);QString Value;
+QString linkFor(const QString& Text,int Position,const QString& Media,const QString& Current,const QJsonObject& Publication) {
+    QString Value;
     if(Media=="text/css") {
         const auto Line=Text.lastIndexOf('\n',qMax(0,Position-1))+1;auto Matches=QRegularExpression(R"(url\(\s*(['"]?)([^'")]+)\1\s*\))").globalMatch(Text.mid(Line,qMax(0,Text.indexOf('\n',Position)<0?int(Text.size())-Line:Text.indexOf('\n',Position)-Line)));
         while(Matches.hasNext()){const auto Match=Matches.next();if(Line+Match.capturedStart()<=Position && Position<=Line+Match.capturedEnd()){Value=Match.captured(2);break;}}
@@ -57,8 +52,52 @@ QString EpubSourceEditor::linkAt(int Position)const {
         const auto Tag=tagAround(Text,Position);if(Tag.first<0)return {};auto Matches=QRegularExpression(R"(\b(?:href|src|xlink:href)\s*=\s*(["'])(.*?)\1)").globalMatch(Text.mid(Tag.first,Tag.second-Tag.first));
         QString First;while(Matches.hasNext()){const auto Match=Matches.next();if(First.isEmpty())First=Match.captured(2);if(Tag.first+Match.capturedStart()<=Position && Position<=Tag.first+Match.capturedEnd()){Value=Match.captured(2);break;}}if(Value.isEmpty())Value=First;
     }
-    const auto Path=resolvePath(current_,Value.trimmed());if(Path.isEmpty())return {};
-    for(const auto& Resource:model_.Publication()["resources"].toArray())if(Resource.toObject()["path"]==Path)return Path;return {};
+    const auto Path=resolvePath(Current,Value.trimmed());if(Path.isEmpty())return {};
+    for(const auto& Resource:Publication["resources"].toArray())if(Resource.toObject()["path"]==Path)return Path;return {};
+}
+}
+QJsonObject EpubSourceEditor::quickFixAt(int Position)const {
+    return sourceShown() && mediaOf(current_)=="application/xhtml+xml"?quickFixFor(sourceText(),Position):QJsonObject{};
+}
+QString EpubSourceEditor::linkAt(int Position)const {
+    return sourceShown()?linkFor(sourceText(),Position,mediaOf(current_),current_,model_.Publication()):QString{};
+}
+void EpubSourceEditor::setupContextHints() {
+    contextTimer_.setSingleShot(true);contextTimer_.setInterval(100);
+    connect(&contextTimer_,&QTimer::timeout,this,[this]{
+        if(contextWorkerActive_ || !sourceShown())return;
+        const auto Source=direct(text_)->CaptureTextSnapshot();
+        const auto Token=contextToken_;const auto Position=contextPosition_;
+        const auto Media=mediaOf(current_),Path=current_;const auto Publication=model_.Publication();
+        contextWorkerActive_=true;
+        contextWorker_.setFuture(QtConcurrent::run([Source,Token,Position,Media,Path,Publication]{
+            const auto Bytes=Source.Bytes();const auto Text=QString::fromUtf8(Bytes.data(),qsizetype(Bytes.size()));
+            return ContextHints{Token,Position,Media=="application/xhtml+xml" && !quickFixFor(Text,Position).isEmpty(),!linkFor(Text,Position,Media,Path,Publication).isEmpty()};
+        }));
+    });
+    connect(&contextWorker_,&QFutureWatcherBase::finished,this,[this]{
+        contextWorkerActive_=false;const auto Result=contextWorker_.result();
+        if(sourceShown() && Result.token_==RevisionToken()+current_.toUtf8() && Result.position_==sourcePosition()){
+            contextHints_=Result;updateActions();
+        }else if(sourceShown())contextTimer_.start();
+    });
+}
+void EpubSourceEditor::scheduleContextHints() {
+    if(!sourceShown())return;
+    const auto Token=RevisionToken()+current_.toUtf8();const auto Position=sourcePosition();
+    if(contextToken_!=Token || contextPosition_!=Position){
+        contextToken_=Token;contextPosition_=Position;contextTimer_.start();
+    }
+    // The old caret's result must never enable a command for the new caret.
+    const bool Current=contextHints_.token_==Token && contextHints_.position_==Position;
+    action("epubQuickFix")->setEnabled(ready_ && !structuring_ && !sourceReadOnly_ && Current && contextHints_.quickFix_);
+    action("epubOpenLink")->setEnabled(ready_ && !structuring_ && Current && contextHints_.link_);
+}
+void EpubSourceEditor::quickFix() {
+    const auto Fix=quickFixAt(sourcePosition());if(Fix.isEmpty() || sourceReadOnly_)return;bool Ok=false;
+    const auto Alt=hc::ui::InputDialog::getText(this,tr("빠른 수정: alt 속성 추가"),tr("대체 텍스트 · 장식 이미지는 빈 값"),QLineEdit::Normal,{},&Ok);if(!Ok)return;
+    const auto Insert=QString(" alt=\"%1\"").arg(escapeAttribute(Alt.left(2048))).toUtf8();
+    direct(text_)->Send(SCI_INSERTTEXT,quintptr(fromUtf16(Fix["insert"].toInt())),reinterpret_cast<qintptr>(Insert.constData()));report(tr("img 요소에 alt 속성을 추가했습니다. 다시 검사해 결과를 확인하세요."));
 }
 bool EpubSourceEditor::openLink() {
     const auto Path=linkAt(sourcePosition());if(Path.isEmpty())return false;if(!model_.IsEditable(Path)){report(tr("%1은(는) 편집기에서 열 수 없는 리소스입니다.").arg(Path));return false;}

@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <atomic>
+#include <QtGlobal>
 
 /// PlatQt 의 폭 측정 호출 횟수.
 ///
@@ -18,6 +19,11 @@
 namespace mrst::scintilla {
 
 std::atomic< unsigned long long >& measureWidthsCallCount() noexcept;
+void setMeasuredRunCacheEnabled(bool Enabled) noexcept;
+void clearMeasuredRunCache() noexcept;
+unsigned long long measuredRunCacheHits() noexcept;
+unsigned long long measuredRunShapeCount() noexcept;
+qsizetype measuredRunCacheCost() noexcept;
 
 /// 등폭(ASCII + 전각 CJK) 지름길을 켜고 끈다. 기본은 켜짐.
 ///

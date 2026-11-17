@@ -1,4 +1,7 @@
 ﻿#pragma once
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -13,23 +16,23 @@ inline bool Enabled() { static const bool Value=!qEnvironmentVariableIsEmpty("HC
 inline bool Detail() { static const bool Value=qEnvironmentVariableIntValue("HC_STARTUP_DETAIL")!=0; return Value; }
 inline qint64 Tick() { LARGE_INTEGER Value; QueryPerformanceCounter(&Value); return Value.QuadPart; }
 inline qint64 Frequency() { LARGE_INTEGER Value; QueryPerformanceFrequency(&Value); return Value.QuadPart; }
-struct State { std::mutex mutex_; QJsonArray events_; bool ready_=false,done_=false; };
+struct State { std::mutex mutex_; QJsonArray events_; quint64 dropped_=0; bool ready_=false,done_=false; };
 inline State& Data() { static State Value; return Value; }
 inline void Record(const char* Name,QJsonObject Fields={}) {
     if(!Enabled())return;
     Fields["event"]=QString::fromLatin1(Name);Fields["qpc"]=QString::number(Tick());
     Fields["thread"]=QString::number(GetCurrentThreadId());
     auto& Value=Data();std::lock_guard Lock(Value.mutex_);
-    if(Value.events_.size()<20000)Value.events_.append(Fields);
+    if(Value.events_.size()<20000)Value.events_.append(Fields); else ++Value.dropped_;
 }
 inline void Flush() {
     if(!Enabled())return;
-    QJsonArray Events;{auto& Value=Data();std::lock_guard Lock(Value.mutex_);Events=Value.events_;}
+    QJsonArray Events; quint64 Dropped=0; {auto& Value=Data();std::lock_guard Lock(Value.mutex_);Events=Value.events_;Dropped=Value.dropped_;}
     QSaveFile File(qEnvironmentVariable("HC_STARTUP_TRACE"));
     if(File.open(QIODevice::WriteOnly)){
         File.write(QJsonDocument(QJsonObject{{"schemaVersion",1},{"clock","QueryPerformanceCounter"},
             {"frequency",QString::number(Frequency())},{"pid",int(GetCurrentProcessId())},
-            {"displayEvidence","uiPaint-only"},{"events",Events}}).toJson());File.commit();
+            {"displayEvidence","uiPaint-only"},{"droppedEvents",QString::number(Dropped)},{"events",Events}}).toJson());File.commit();
     }
 }
 inline void Signal(const char* Variable) {
@@ -44,8 +47,8 @@ inline void Used(QJsonObject Fields) {
 }
 class Span {
 public:
-    explicit Span(const char* Name):name_(Name){Record(name_,{{"phase","begin"}});}
-    ~Span(){Record(name_,{{"phase","end"}});}
+    explicit Span(const char* Name):name_(Name){if(Enabled())Record(name_,{{"phase","begin"}});}
+    ~Span(){if(Enabled())Record(name_,{{"phase","end"}});}
 private:const char* name_;
 };
 }

@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "qtitanColumnAdapter.hpp"
 #include "column_Defs.hpp"
+#include "startupTrace.hpp"
 #include "cmnTypeDefs.hpp"
 #include <QtitanGrid.h>
 #include <QtnGridViewGraphics.h>
@@ -20,9 +21,11 @@ QJsonObject EncodePolicies(const QMap<QString, ColumnWidthPolicy>& Policies)
 QtitanColumnAdapter::QtitanColumnAdapter(QWidget* Owner, Qtitan::Grid* Grid, Qtitan::GridBandedTableView* View, bool Transient)
     : QObject(Owner), owner_(Owner), grid_(Grid), view_(View), transient_(Transient)
 {
+    timer_.setObjectName("columnWidthApply");
     timer_.setSingleShot(true);
     timer_.setInterval(16);
     connect(&timer_, &QTimer::timeout, this, &QtitanColumnAdapter::Apply);
+    dragTimer_.setObjectName("columnWidthDrag");
     dragTimer_.setInterval(20);
     connect(&dragTimer_, &QTimer::timeout, this, [this] {
         // Qtitan may consume release in its temporary application drag filter.
@@ -327,6 +330,7 @@ QMap<QString, ColumnWidthResult> QtitanColumnAdapter::fittedWidths(int Available
 
 void QtitanColumnAdapter::Apply()
 {
+    hc::startup::Span Trace("input.columns.widthApply");
     if (applying_ || dragging_ || settings_.columns_.isEmpty()) return;
     const auto Available = AvailableWidth();
     if (Available <= 0) return;

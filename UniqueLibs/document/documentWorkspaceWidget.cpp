@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "documentWorkspaceWidget.hpp"
+#include "startupTrace.hpp"
 #include "hwpStartupTrace.hpp"
 #include "documentWindowSize.hpp"
 #include "UniqueLibs/errorPresentation.hpp"
@@ -223,6 +224,7 @@ namespace hc::document
     {
         QString destination_;
         std::string content_;
+        std::optional<TextSnapshot> textSnapshot_;
         std::uint64_t revision_ = 0;
         DocumentEncoder encoder_;
         bool original_ = false, overwrite_ = false;
@@ -257,6 +259,7 @@ namespace hc::document
         // the session text, never by a serialization that was rejected.
         std::optional<storage::Error> serializationError_;
         bool rejectingEdit_ = false;
+        bool comparingText_ = false;
         std::optional<SaveTicket> pending_;
         TextInput input_; QJsonObject readPrefix_;
         // "다른 인코딩으로 다시 읽기": later reloads of this tab decode with it too.
@@ -370,7 +373,7 @@ namespace hc::document
             // SQLite: 저장은 커밋(설계 4.5 · 6.2). 문서 바이트를 쓰지 않는다.
             if (Tab->pane_->IsSqlite()) { if (!Tab->loading_) Tab->pane_->CommitSqlite(); update(); return; }
             if(Tab->activeSave_){save(Tab,Tab->activeSave_->destination_,Tab->activeSave_->overwrite_,Tab->activeSave_->original_ && Tab->pane_->CanEditEpub());return;}
-            if (Tab->broker_) { auto Result = prepareSave(Tab); if (Result.contains("error")) Tab->error_ = Result["error"].toString(); update(); }
+            if (Tab->broker_) prepareSaveAsync(Tab);
             else if (Tab->originalSave_) save(Tab, Tab->path_, false, Tab->pane_->CanEditEpub());
             else {
                 Tab->choosingSavePath_ = true;
@@ -607,7 +610,7 @@ namespace hc::document
         settingsWatcher_ = new QFileSystemWatcher(this);
         auto* Reload = new QTimer(this); Reload->setSingleShot(true); Reload->setInterval(80);
         connect(settingsWatcher_, &QFileSystemWatcher::directoryChanged, Reload, qOverload<>(&QTimer::start));
-        connect(Reload, &QTimer::timeout, this, [this] { if (settingsChanged()) refreshPreferencesAsync(); });
+        connect(Reload, &QTimer::timeout, this, [this] { refreshPreferencesAsync(); });
         recent_ = new RecentDocumentStore(Override.isValid() ? Override.toString() : hc::settings::DocumentPaths().directory_, this);
         recent_->Load();
         // Another process (HyperViewer or a second HyperEditor) changes the file in the same folder.
@@ -626,7 +629,7 @@ namespace hc::document
             // 문서가 하나도 없는 중앙 영역에 보인다(도구 창은 그대로).
             docks_->setCentralPlaceholderWidget(startPage_);
         }
-        connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) { if (State == Qt::ApplicationActive && settingsChanged()) refreshPreferencesAsync(); });
+        connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState State) { if (State == Qt::ApplicationActive) refreshPreferencesAsync(); });
         externalWatcher_ = new mrst::ExternalChangeWatcher(this);
         connect(externalWatcher_, &mrst::ExternalChangeWatcher::sigFileChanged, this, [this](const QString& Path) { externalChange(Path, false); });
         connect(externalWatcher_, &mrst::ExternalChangeWatcher::sigFileVanished, this, [this](const QString& Path) { externalChange(Path, true); });
@@ -935,16 +938,34 @@ namespace hc::document
             Dialog->raise(); Dialog->activateWindow(); return;
         }
     }
+    namespace
+    {
+        QString SettingsSignature(const QString& Path)
+        {
+            hc::startup::Span InputTrace("input.settings.probe");
+            auto Files = DocumentThemeAdapter::ProductThemeFiles(QFileInfo(Path).absolutePath());
+            Files.prepend(Path);
+            QStringList Parts;
+            for (const auto& File : Files) {
+                const auto Print = mrst::ExternalChangeWatcher::fingerprintOf(File);
+                Parts.append(QStringLiteral("%1:%2:%3").arg(Print.exists).arg(Print.size).arg(Print.lastModifiedUtcMs));
+            }
+            return Parts.join('|');
+        }
+        QString SettingsWatchDirectory(const QString& Path)
+        {
+            auto Directory = QFileInfo(Path).absolutePath();
+            while (!QDir(Directory).exists()) {
+                const auto Parent = QFileInfo(Directory).absolutePath();
+                if (Parent == Directory) return {};
+                Directory = Parent;
+            }
+            return Directory;
+        }
+    }
     QString DocumentWorkspaceWidget::settingsSignature() const
     {
-        auto Files = DocumentThemeAdapter::ProductThemeFiles(QFileInfo(settingsPath_).absolutePath());
-        Files.prepend(settingsPath_);
-        QStringList Parts;
-        for (const auto& File : Files) {
-            const auto Print = mrst::ExternalChangeWatcher::fingerprintOf(File);
-            Parts.append(QStringLiteral("%1:%2:%3").arg(Print.exists).arg(Print.size).arg(Print.lastModifiedUtcMs));
-        }
-        return Parts.join('|');
+        return SettingsSignature(settingsPath_);
     }
     bool DocumentWorkspaceWidget::settingsChanged() const
     {
@@ -959,7 +980,8 @@ namespace hc::document
         {
             QJsonObject product_, root_;
             bool loaded_ = false;
-            QString error_;
+            QString error_, signature_, directory_;
+            bool changed_ = true;
         };
         PreferencesInput ReadPreferences(const QString& SettingsPath)
         {
@@ -972,9 +994,8 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::watchSettingsFolder()
     {
-        auto Directory = QFileInfo(settingsPath_).absolutePath();
-        while (!QDir(Directory).exists()) { const auto Parent = QFileInfo(Directory).absolutePath(); if (Parent == Directory) break; Directory = Parent; }
-        if (QDir(Directory).exists() && !settingsWatcher_->directories().contains(Directory)) settingsWatcher_->addPath(Directory);
+        const auto Directory = SettingsWatchDirectory(settingsPath_);
+        if (!Directory.isEmpty() && !settingsWatcher_->directories().contains(Directory)) settingsWatcher_->addPath(Directory);
     }
     void DocumentWorkspaceWidget::refreshPreferences()
     {
@@ -988,20 +1009,31 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::refreshPreferencesAsync()
     {
-        // The settings watcher and window activation: the product file is hundreds of KiB, and
-        // reading and parsing it here stalled typing. A change during a read runs one more read.
+        // Activation never stats a settings path on the input thread. Coalesce both
+        // probing and parsing: one immutable request in flight, at most one follow-up.
         if (preferencesReading_) { preferencesAgain_ = true; return; }
-        settingsSignature_ = settingsSignature();
-        watchSettingsFolder();
         preferencesReading_ = true;
         const auto Generation = ++preferencesGeneration_;
+        const auto Path = settingsPath_;
         auto* Watcher = new QFutureWatcher<PreferencesInput>(this);
-        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation] {
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Watcher, Generation, Path] {
             const auto Input = Watcher->result(); Watcher->deleteLater(); preferencesReading_ = false;
-            if (Generation == preferencesGeneration_) applyPreferences(Input.product_, Input.loaded_, Input.root_, Input.error_);
-            if (std::exchange(preferencesAgain_, false) && settingsChanged()) refreshPreferencesAsync();
+            if (Generation == preferencesGeneration_ && Path == settingsPath_) {
+                settingsSignature_ = Input.signature_;
+                if (!Input.directory_.isEmpty() && !settingsWatcher_->directories().contains(Input.directory_))
+                    settingsWatcher_->addPath(Input.directory_);
+                if (Input.changed_) applyPreferences(Input.product_, Input.loaded_, Input.root_, Input.error_);
+            }
+            if (std::exchange(preferencesAgain_, false)) refreshPreferencesAsync();
         });
-        Watcher->setFuture(QtConcurrent::run([Path = settingsPath_] { return ReadPreferences(Path); }));
+        Watcher->setFuture(QtConcurrent::run([Path, Previous = settingsSignature_] {
+            const auto Signature = SettingsSignature(Path); // before reading: a concurrent write is detected next time
+            auto Input = Signature == Previous ? PreferencesInput{} : ReadPreferences(Path);
+            Input.changed_ = Signature != Previous;
+            Input.signature_ = Signature;
+            Input.directory_ = SettingsWatchDirectory(Path);
+            return Input;
+        }));
     }
     void DocumentWorkspaceWidget::applyPreferences(const QJsonObject& Product, bool Loaded, const QJsonObject& Root, const QString& Error)
     {
@@ -1506,8 +1538,25 @@ namespace hc::document
     bool DocumentWorkspaceWidget::IsIdle() const
     {
         return (!searchPanel_ || !searchPanel_->Busy()) && !recoveryWorkers_ && std::none_of(documents_.begin(), documents_.end(), [](const auto& Tab) {
-            return Tab->archiveUpdating_ || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
+            return Tab->archiveUpdating_ || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || Tab->comparingText_ || Tab->checkpointing_ || !Tab->pendingToken_.isEmpty() || Tab->pane_->IsBusy();
         });
+    }
+    void DocumentWorkspaceWidget::verifyTextEquality(const std::shared_ptr<Tab>& Tab)
+    {
+        if (Tab->comparingText_ || Tab->closed_ || !Tab->Dirty() || !Tab->session_->NativeText() || !Tab->session_->SavedNativeText()) return;
+        const auto Current = *Tab->session_->NativeText();
+        const auto Baseline = *Tab->session_->SavedNativeText();
+        if (Current.SameSerializedRoot(Baseline) || !Current.MayEqualSerialized(Baseline)) return;
+        const auto State = Tab->session_->Snapshot();
+        Tab->comparingText_ = true;
+        auto* Watcher = new QFutureWatcher<bool>(this);
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, Baseline, State] {
+            const bool Equal = Watcher->result(); Watcher->deleteLater(); Tab->comparingText_ = false;
+            if (Tab->closed_) return;
+            if (!Tab->session_->ResolveTextEquality(State.generation_, State.revision_, Baseline, Equal)) verifyTextEquality(Tab);
+            update(); tryFinishClose();
+        });
+        Watcher->setFuture(QtConcurrent::run([Current, Baseline] { return Current.SerializedBytes() == Baseline.SerializedBytes(); }));
     }
     QJsonObject DocumentWorkspaceWidget::open(const QString& Path, bool HostSlot, const QString& SourceToken, bool Broker,
         const QString& RecoveryPath, const QString& DisplayName, QJsonObject ReadPrefix)
@@ -1524,7 +1573,7 @@ namespace hc::document
                 return {{"replacing", true}, {"documentId", Tab->id_}};
             }
             if (Tab->Dirty()) {
-                if (!hosted_ && Tab->session_->Text().size() > DocumentByteLimit) return Error("p0-text-byte-limit");
+                if (!hosted_ && Tab->session_->ByteSize() > DocumentByteLimit) return Error("p0-text-byte-limit");
                 // SDK owns one slot; a newer pending Load supersedes its predecessor.
                 pendingHostOpen_ = {{"path", Path}, {"sourceToken", SourceToken}, {"broker", Broker}, {"displayName", DisplayName}};
                 Tab->pane_->SetReadOnly(true); Checkpoint(); return {{"replacing", true}, {"documentId", Tab->id_}};
@@ -1572,6 +1621,27 @@ namespace hc::document
         connect(Pane, &DocumentViewPane::ClipboardRequested, this, [this, Tab](const QString& Mode) { clipboard(Tab, Mode); });
         connect(Pane,&DocumentViewPane::ContentChanged,this,[this,Tab] {
             if(Tab->loading_||Tab->closed_)return;
+            if (Tab->pane_->ViewId() == "text" && Tab->session_->NativeText()) {
+                const auto Capture = Tab->pane_->CaptureTextSnapshot();
+                if (!hosted_ && Capture.SerializedSize() > TextByteLimit) {
+                    Tab->error_ = "p0-text-byte-limit"; update();
+                    if (std::exchange(Tab->rejectingEdit_, true)) return;
+                    QTimer::singleShot(0, this, [this, Tab] {
+                        Tab->rejectingEdit_ = false; if (Tab->closed_ || !Tab->pane_) return;
+                        { const QSignalBlocker Block(Tab->pane_); Tab->pane_->Undo(); }
+                        Tab->session_->ApplyTextSnapshot(Tab->pane_->CaptureTextSnapshot());
+                        Tab->session_->SetHistoryState(Tab->pane_->CanUndo(), Tab->pane_->CanRedo());
+                        verifyTextEquality(Tab); Tab->error_ = "p0-text-byte-limit"; update();
+                    });
+                    return;
+                }
+                const auto Result = Tab->session_->ApplyTextSnapshot(Capture);
+                Tab->error_ = Result.HasValue() ? QString{} : QString::fromStdString(Result.Failure().code_);
+                Tab->session_->SetHistoryState(Tab->pane_->CanUndo(), Tab->pane_->CanRedo());
+                verifyTextEquality(Tab); update();
+                if (searchPanel_) searchPanel_->SourcesChanged();
+                return;
+            }
             auto Serialized=Tab->pane_->SerializeSession();const auto& Bytes=Serialized.bytes_;
             if(Tab->pane_->ViewId()=="text" && !hosted_ && Bytes.size()>TextByteLimit) {
                 Tab->error_="p0-text-byte-limit";update();
@@ -1709,6 +1779,7 @@ namespace hc::document
                     SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),{},Tab->originalSave_};
                     Tab->session_->SetBinaryContent(true);
                     {auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;Tab->session_->CompleteOpen(Started.Value(),OpenedDocument{std::move(Source),Serialized.bytes_.toStdString()});}
+                    if (Tab->pane_->ViewId()=="text") Tab->session_->AdoptTextSnapshot(Tab->pane_->CaptureTextSnapshot());
                     Tab->pane_->SetClipboardBroker(clipboardBroker_);
                     if(auto* Input=Tab->pane_->InputWidget()){Input->installEventFilter(this);for(auto* Child:Input->findChildren<QWidget*>())Child->installEventFilter(this);}
                     cleanupRecovery(Tab,Revision);
@@ -1819,8 +1890,11 @@ namespace hc::document
                         const auto Baseline = !PdfRecovery ? Serialized.bytes_.toStdString()
                             : Tab->input_.recoveryOriginalMatched_ ? Tab->input_.recoveryRecord_->bytes_ : std::string{};
                         Tab->session_->CompleteOpen(Generation,OpenedDocument{std::move(Source),Baseline});
+                        if (Tab->pane_->ViewId() == "text") Tab->session_->AdoptTextSnapshot(Tab->pane_->CaptureTextSnapshot());
                         if (PdfRecovery) {
-                            Tab->session_->Execute("document.setText", Serialized.bytes_.toStdString()); Tab->session_->MarkRecovered();
+                            if (Tab->session_->NativeText()) Tab->session_->ApplyTextSnapshot(Tab->pane_->CaptureTextSnapshot());
+                            else Tab->session_->Execute("document.setText", Serialized.bytes_.toStdString());
+                            Tab->session_->MarkRecovered();
                             if (Tab->hotExitRestore_) { auto Origin = *Tab->input_.recoveryRecord_; Origin.bytes_.clear(); restoredOriginals_.push_back(std::move(Origin)); }
                             Tab->input_.recoveryRecord_->bytes_.clear();
                             Tab->recoveryNotice_ = Tab->originalAuthority_ ? tr("저장하지 않은 주석을 복구했습니다. 원본 파일은 변경하지 않았습니다.")
@@ -1834,7 +1908,9 @@ namespace hc::document
                         Tab->loading_ = false;
                         if (Restored) {
                             auto Serialized = Tab->pane_->SerializeSession(); Tab->serializationError_ = Serialized.error_;
-                            Tab->session_->Execute("document.setText", Serialized.bytes_.toStdString()); Tab->session_->MarkRecovered();
+                            if (Tab->session_->NativeText()) Tab->session_->ApplyTextSnapshot(Tab->pane_->CaptureTextSnapshot());
+                            else Tab->session_->Execute("document.setText", Serialized.bytes_.toStdString());
+                            Tab->session_->MarkRecovered();
                             if (Tab->hotExitRestore_) { auto Origin = Record; Origin.bytes_.clear(); restoredOriginals_.push_back(std::move(Origin)); }
                             Tab->input_.recoveryRecord_->bytes_.clear();
                             // D8: an untitled document keeps its number (and .md, from the restored copy's extension).
@@ -1938,9 +2014,18 @@ namespace hc::document
         if(Tab&&Tab->pane_->IsProcessDocument())return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
         if (!Tab || Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || !Tab->pendingToken_.isEmpty()) return Error("document-save-busy-or-unavailable");
         if (!Tab->broker_ || Tab->sourceToken_.isEmpty()) return Error("document-source-token-required");
-        auto Started = Tab->session_->Save({SaveDisposition::Original, Tab->path_.toUtf8().toStdString()});
+        const auto Native = Tab->session_->NativeText();
+        auto Started = Native ? Tab->session_->SaveTextSnapshot({SaveDisposition::Original, Tab->path_.toUtf8().toStdString()}, Tab->Revision(), *Native)
+            : Tab->session_->Save({SaveDisposition::Original, Tab->path_.toUtf8().toStdString()});
         if (!Started.HasValue()) return Error(QString::fromStdString(Started.Failure().code_));
-        Tab->pending_ = Started.Value(); const auto Exported = Tab->pane_->Export(Tab->path_);
+        Tab->pending_ = Started.Value();
+        // Compatibility command replies are synchronous, but native text already owns exact encoded chunks.
+        const auto Exported = [&]() -> storage::Result<QByteArray> {
+            if (!Native) return Tab->pane_->Export(Tab->path_);
+            if (const auto Failure = Native->SerializationError(); !Failure.empty())
+                return storage::Error{storage::ErrorCategory::InvalidRequest, Failure};
+            return QByteArray::fromStdString(Native->SerializedBytes());
+        }();
         Tab->pendingBytes_ = Exported.HasValue() ? Exported.Value() : QByteArray{};
         if (!Exported.HasValue() || (!hosted_ && Tab->pendingBytes_.size() > DocumentByteLimit)) {
             const auto Failure = Exported.HasValue() ? storage::Error{storage::ErrorCategory::BudgetExceeded, "document-save-byte-budget"} : Exported.Failure();
@@ -1955,6 +2040,51 @@ namespace hc::document
             {"sha256", QString::fromLatin1(Tab->pendingHash_)}};
         if (Tab->pendingBytes_.size() <= HostChunkLimit) Result["bytes"] = QString::fromLatin1(Tab->pendingBytes_.toBase64());
         return Result;
+    }
+    void DocumentWorkspaceWidget::prepareSaveAsync(const std::shared_ptr<Tab>& Tab)
+    {
+        if (!Tab || !Tab->session_->NativeText()) {
+            const auto Result = prepareSave(Tab);
+            if (Tab && Result.contains("error")) Tab->error_ = Result["error"].toString();
+            update(); return;
+        }
+        if (Tab->loading_ || Tab->navigating_ || Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || !Tab->pendingToken_.isEmpty()) return;
+        if (!Tab->broker_ || Tab->sourceToken_.isEmpty()) { Tab->error_ = "document-source-token-required"; update(); return; }
+        const auto Snapshot = *Tab->session_->NativeText();
+        auto Started = Tab->session_->SaveTextSnapshot({SaveDisposition::Original, Tab->path_.toUtf8().toStdString()}, Tab->Revision(), Snapshot);
+        if (!Started.HasValue()) { Tab->error_ = QString::fromStdString(Started.Failure().code_); update(); return; }
+        const auto Ticket = Started.Value();
+        Tab->pending_ = Ticket; Tab->saving_ = true; Tab->error_.clear();
+        Tab->cancellation_ = std::make_shared<std::stop_source>();
+        const auto Cancellation = Tab->cancellation_;
+        struct Prepared { QByteArray bytes_, hash_; std::optional<storage::Error> error_; };
+        auto* Watcher = new QFutureWatcher<Prepared>(this);
+        connect(Watcher, &QFutureWatcherBase::finished, this, [this, Tab, Watcher, Ticket, Cancellation] {
+            auto Result = Watcher->result(); Watcher->deleteLater(); Tab->saving_ = false;
+            if (Tab->closed_ || Tab->session_->Snapshot().generation_ != Ticket.generation_) return;
+            if (Cancellation->stop_requested()) Result.error_ = storage::Error{storage::ErrorCategory::Cancelled, "cancelled"};
+            if (Result.error_) {
+                Tab->session_->CompleteSave(Ticket, {false, {}, Result.error_});
+                Tab->pending_.reset(); Tab->error_ = QString::fromStdString(Result.error_->code_);
+            } else {
+                Tab->pendingBytes_ = std::move(Result.bytes_); Tab->pendingHash_ = std::move(Result.hash_);
+                Tab->pendingToken_ = QUuid::createUuid().toString(QUuid::Id128);
+            }
+            update(); tryFinishClose();
+        });
+        Watcher->setFuture(QtConcurrent::run([Snapshot, Cancellation, Unlimited = hosted_] {
+            Prepared Result;
+            if (const auto Error = Snapshot.SerializationError(); !Error.empty())
+                Result.error_ = storage::Error{storage::ErrorCategory::InvalidRequest, Error};
+            else if (!Unlimited && Snapshot.SerializedSize() > DocumentByteLimit)
+                Result.error_ = storage::Error{storage::ErrorCategory::BudgetExceeded, "document-save-byte-budget"};
+            else if (!Cancellation->stop_requested()) {
+                Result.bytes_ = QByteArray::fromStdString(Snapshot.SerializedBytes());
+                Result.hash_ = QCryptographicHash::hash(Result.bytes_, QCryptographicHash::Sha256).toHex();
+            }
+            return Result;
+        }));
+        update();
     }
     void DocumentWorkspaceWidget::save(const std::shared_ptr<Tab>& Tab, const QString& Destination, bool Overwrite, bool SaveEpubOriginal)
     {
@@ -1979,17 +2109,21 @@ namespace hc::document
             Tab->error_="document-save-target-busy";update();return;
         }
         auto Request=std::make_shared<LocalSave>();Request->destination_=Destination;Request->original_=Original;Request->overwrite_=Overwrite;
-        Request->content_=Tab->session_->Text();Request->revision_=Tab->Revision();
+        Request->textSnapshot_ = Tab->session_->NativeText();
+        if (!Request->textSnapshot_) Request->content_=Tab->session_->Text();
+        Request->revision_=Tab->Revision();
         const auto Capture=[&]{
             std::optional<QByteArray> Content;std::optional<storage::Error> ContentError;
-            if(Tab->pane_->ViewId()=="text"){Content=QByteArray::fromStdString(Request->content_);ContentError=Tab->serializationError_;}
+            if(Tab->pane_->ViewId()=="text" && !Request->textSnapshot_){Content=QByteArray::fromStdString(Request->content_);ContentError=Tab->serializationError_;}
             return Tab->pane_->CaptureSave(Destination,Original && SaveEpubOriginal,std::move(Content),std::move(ContentError));
         };
         if(Tab->saving_) {
             if(!Tab->activeSave_ || Tab->activeSave_->destination_!=Destination || Tab->activeSave_->overwrite_!=Overwrite){Tab->error_="document-save-target-busy";update();return;}
             // A repeated request supersedes the single queued snapshot, including
             // an undo back to the in-flight content. No unrequested typing is saved.
-            if(Request->content_==Tab->activeSave_->content_)Tab->queuedSave_.reset();
+            if(Request->textSnapshot_ && Tab->activeSave_->textSnapshot_
+                ? Request->textSnapshot_->SameSerializedRoot(*Tab->activeSave_->textSnapshot_)
+                : !Request->textSnapshot_ && !Tab->activeSave_->textSnapshot_ && Request->content_==Tab->activeSave_->content_)Tab->queuedSave_.reset();
             else {Request->encoder_=Capture();Tab->queuedSave_=std::move(Request);}
             update();return;
         }
@@ -2002,7 +2136,9 @@ namespace hc::document
         const bool ExportOnly=Tab->pane_->ViewState().contains("reading");
         std::optional<SaveTicket> Ticket;
         if(!ExportOnly) {
-            auto Started=Tab->session_->SaveSnapshot({Request->original_?SaveDisposition::Original:SaveDisposition::SaveAs,Destination.toUtf8().toStdString()},Request->revision_,Request->content_);
+            SaveRequest Save{Request->original_?SaveDisposition::Original:SaveDisposition::SaveAs,Destination.toUtf8().toStdString()};
+            auto Started = Request->textSnapshot_ ? Tab->session_->SaveTextSnapshot(std::move(Save), Request->revision_, *Request->textSnapshot_)
+                : Tab->session_->SaveSnapshot(std::move(Save),Request->revision_,Request->content_);
             if(!Started.HasValue()){Tab->error_=QString::fromStdString(Started.Failure().code_);update();return;}
             Ticket=Started.Value();
         }
@@ -2046,6 +2182,7 @@ namespace hc::document
                     Completion.source_=SourceIdentity{Result.Value().source_,{},Destination.toUtf8().toStdString(),{},Result.Value().source_.id_.revision_.has_value() && !(Result.Value().source_.attributes_ & 1u)};
                 }
                 if(!Tab->session_->CompleteSave(*Ticket,std::move(Completion)))return;
+                verifyTextEquality(Tab);
             }
             if(!Committed) {
                 Tab->error_=Result.HasValue()?"document-not-committed":QString::fromStdString(Result.Failure().code_);
@@ -2125,6 +2262,7 @@ namespace hc::document
     }
     void DocumentWorkspaceWidget::Checkpoint()
     {
+        hc::startup::Span InputTrace("input.recovery.checkpoint");
         if (hotExitClosing_ || hotExitPublishing_) return;
         if (sessionPublishing() && IsIdle()) publishHotExitSession(false);
         if (!pendingHostOpen_.isEmpty()) for (const auto& Tab : documents_) if (Tab->hostSlot_) {
@@ -2140,11 +2278,12 @@ namespace hc::document
             // EPUB source drafts are tokens, not a recovery archive. Never persist them as EPUB bytes.
             if(Tab->pane_->IsEpub()){Tab->pane_->CheckpointEpub();continue;}
             if (Tab->loading_ || Tab->navigating_ || Tab->closed_ || Tab->checkpointing_ || !Tab->Dirty() || Tab->checkpointedRevision_ == Tab->Revision()) continue;
-            auto Bytes = Tab->pane_->ViewId() == "image" ? Tab->pane_->Content().toStdString() : Tab->session_->Text();
-            if (!hosted_ && Bytes.size() > DocumentByteLimit) { Tab->error_ = "document-recovery-budget"; continue; }
+            const auto Native = Tab->session_->NativeText();
+            auto Bytes = Native ? std::string{} : Tab->pane_->ViewId() == "image" ? Tab->pane_->Content().toStdString() : Tab->session_->Text();
+            if (!hosted_ && (Native ? qMax(Native->Size(), Native->SerializedSize()) : Bytes.size()) > DocumentByteLimit) { Tab->error_ = "document-recovery-budget"; continue; }
             RecoverySnapshot Record; Record.document_ = Tab->session_->Snapshot(); Record.bytes_ = std::move(Bytes);Record.viewId_=Tab->pane_->ViewId().toStdString();
             if (hotExitEligible(Tab)) {
-                QByteArray Utf8; Record.text_ = Tab->pane_->CaptureTextRecovery(Utf8);
+                QByteArray Utf8; Record.text_ = Tab->pane_->CaptureTextRecovery(Utf8, !Native);
                 if (Record.text_) {
                     Record.viewId_ = "text"; Record.bytes_ = Utf8.toStdString(); Record.ownerWindow_ = workspaceId_.toStdString();
                     Record.text_->untitled_ = !Tab->temporarySource_.isEmpty(); Record.text_->untitledNumber_ = Tab->untitledNumber_;
@@ -2171,7 +2310,10 @@ namespace hc::document
                 else if (!Tab->Dirty()) cleanupRecovery(Tab, Tab->session_->Snapshot().savedRevision_);
                 update(); tryFinishClose();
             });
-            auto Recovery = recovery_; Watcher->setFuture(QtConcurrent::run([Recovery, Record = std::move(Record)]() mutable { return Recovery->Store(std::move(Record)); }));
+            auto Recovery = recovery_; Watcher->setFuture(QtConcurrent::run([Recovery, Native, Record = std::move(Record)]() mutable {
+                if (Native) Record.bytes_ = Record.text_ ? Native->Bytes() : Native->SerializedBytes();
+                return Recovery->Store(std::move(Record));
+            }));
         }
     }
     QJsonObject DocumentWorkspaceWidget::Snapshot() const
@@ -2270,6 +2412,7 @@ namespace hc::document
                         Tab->displayName_=Item["displayName"].toString();
                         SourceIdentity Source{Tab->input_.source_,{},Tab->path_.toUtf8().toStdString(),Tab->sourceToken_.toStdString(),Tab->broker_};
                         {auto Serialized=Tab->pane_->SerializeSession();Tab->serializationError_=Serialized.error_;Tab->session_->CompleteOpen(Begun.Value(),OpenedDocument{std::move(Source),Serialized.bytes_.toStdString()});}
+                        if (Tab->pane_->ViewId() == "text") Tab->session_->AdoptTextSnapshot(Tab->pane_->CaptureTextSnapshot());
                         Results.append(QJsonObject{{"documentId",Tab->id_},{"boundExistingHost",true}});
                         update();Bound=true;break;
                     }
@@ -2413,7 +2556,7 @@ namespace hc::document
         if (Action == "reload") { if (Tab->Dirty() && !Request["discard"].toBool()) return Error("document-reload-dirty"); load(Tab, Request["discard"].toBool()); return {{"accepted", true}}; }
         if(Tab->pane_->IsProcessDocument()&& !(Tab->pane_->CanEditEpub() && (Action=="saveAs" || Action=="save")) && (Action=="save"||Action=="saveAs"||Action=="prepareSave"))return Error(Tab->pane_->IsEpub()?"epub-read-only":"document-edit-in-hypereditor");
         if (Action == "close") {
-            if (Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
+            if (Tab->choosingSavePath_ || Tab->saving_ || Tab->composingSave_ || Tab->comparingText_ || !Tab->pendingToken_.isEmpty() || Tab->checkpointing_) return Error("document-close-busy");
             if ((Tab->Dirty() || Tab->archivePending_) && !Request["discard"].toBool()) return Error("document-close-dirty");
             retire(Tab, Request["discard"].toBool()); update(); return {{"accepted", true}};
         }
@@ -2472,6 +2615,7 @@ namespace hc::document
             if (Request["cleanupWarning"].toBool()) Result.cleanupErrors_.push_back({storage::ErrorCategory::Unavailable, "document-saved-cleanup-warning"});
             const auto Revision = Tab->pending_->revision_;
             if (!Tab->session_->CompleteSave(*Tab->pending_, std::move(Result))) return Error("document-stale-save-token");
+            verifyTextEquality(Tab);
             Tab->pendingToken_.clear(); Tab->pendingBytes_.clear(); Tab->pending_.reset();
             if (Request["committed"].toBool()) {
                 Tab->archivePending_ = Request["archivePending"].toBool(); Tab->archiveDraft_ = Request["draftPath"].toString();
@@ -2982,7 +3126,7 @@ namespace hc::document
             if(active()==Target)releaseFocusFrom(Target);
             if(!Target->pane_->RequestClose())return;
         }
-        if (Target->choosingSavePath_ || Target->saving_ || Target->composingSave_ || !Target->pendingToken_.isEmpty() || Target->checkpointing_ || Target->pane_->IsEditing()
+        if (Target->choosingSavePath_ || Target->saving_ || Target->composingSave_ || Target->comparingText_ || !Target->pendingToken_.isEmpty() || Target->checkpointing_ || Target->pane_->IsEditing()
             || (Target->pane_->ViewId() != "image" && Target->pane_->IsBusy())) return;
         Target->closeRequested_ = false;
         if (Target->Dirty()) {
@@ -3163,7 +3307,7 @@ namespace hc::document
         // D10: the annotated PDF fits one recovery snapshot (64 MiB); larger ones keep asking.
         return !hosted_ && Tab->pane_->ViewId() == "pdf" && !Tab->loading_ && Tab->originalAuthority_ && Tab->temporarySource_.isEmpty()
             && !Tab->hostSlot_ && !Tab->broker_ && Tab->sourceToken_.isEmpty() && QFileInfo(Tab->path_).isAbsolute()
-            && Tab->session_->Text().size() <= DocumentByteLimit && !Tab->pane_->IsBusy();
+            && Tab->session_->ByteSize() <= DocumentByteLimit && !Tab->pane_->IsBusy();
     }
     bool DocumentWorkspaceWidget::hotExitEligible(const std::shared_ptr<Tab>& Tab) const
     {
@@ -3230,6 +3374,7 @@ namespace hc::document
             if (Closing) cancelHotExitClose(tr("복원에 실패한 문서를 먼저 확인하십시오. 기존 사본은 유지합니다.")); return;
         }
         QJsonArray Items; std::vector<RecoverySnapshot> Captures;
+        QHash<QString, TextSnapshot> TextCaptures;
         const bool RestoreClean = PreferenceValue(appliedPreferences_, "textView/restoreCleanDocuments").toBool();
         for (const auto& Tab : documents_) {
             if (hotExitDiscard_.contains(Tab->id_)) continue;
@@ -3269,16 +3414,18 @@ namespace hc::document
                 Items.append(Item); continue;
             }
             if (!hotExitEligible(Tab)) continue;
-            QByteArray Bytes; auto Text = Tab->pane_->CaptureTextRecovery(Bytes, Closing && Tab->Dirty());
+            const auto Native = Tab->session_->NativeText();
+            QByteArray Bytes; auto Text = Tab->pane_->CaptureTextRecovery(Bytes, Closing && Tab->Dirty() && !Native);
             if (!Text) { if (Closing && Tab->Dirty()) { cancelHotExitClose(tr("완전한 텍스트를 읽을 수 없습니다.")); return; } continue; }
             QJsonObject Item{{"documentId", Tab->id_}, {"path", Tab->temporarySource_.isEmpty() ? Tab->path_ : QString{}}};
             if (Tab->Dirty()) {
-                if (Bytes.size() > DocumentByteLimit) { if (Closing) cancelHotExitClose(tr("복구 사본 크기 제한을 초과했습니다.")); return; }
+                if ((Native ? Native->Size() : Bytes.size()) > DocumentByteLimit) { if (Closing) cancelHotExitClose(tr("복구 사본 크기 제한을 초과했습니다.")); return; }
                 if (Closing) {
                     // Caret/encoding are part of the final capture even without another content edit.
                     Tab->session_->AdvanceRecoveryRevision();
                     RecoverySnapshot Capture; Capture.document_ = Tab->session_->Snapshot(); Capture.text_ = Text;
                     Capture.bytes_ = Bytes.toStdString(); Capture.ownerWindow_ = workspaceId_.toStdString();
+                    if (Native) TextCaptures.insert(Tab->id_, *Native);
                     Capture.text_->untitled_ = !Tab->temporarySource_.isEmpty(); Capture.text_->untitledNumber_ = Tab->untitledNumber_;
                     Capture.text_->baselineSha256_ = Capture.text_->untitled_ ? std::string{} : Tab->input_.hash_.toHex().toStdString();
                     if (Capture.text_->untitled_) Capture.document_.source_.localPath_.clear();
@@ -3347,9 +3494,11 @@ namespace hc::document
         // The previous session ends once this window's manifest is durable, also after a partial restore:
         // keeping it would reopen the restored documents a second time at the next start.
         const auto RetireSession = restoringSessionId_;
-        Watcher->setFuture(QtConcurrent::run([Store, Id, RetireSession, Manifest, Captures = std::move(Captures)]() mutable ->storage::Result<Published> {
+        Watcher->setFuture(QtConcurrent::run([Store, Id, RetireSession, Manifest, Captures = std::move(Captures), TextCaptures = std::move(TextCaptures)]() mutable ->storage::Result<Published> {
             std::vector<RecoverySnapshot> Receipts; auto Entries = Manifest["documents"].toArray();
             for (auto& Capture : Captures) {
+                if (const auto Found = TextCaptures.constFind(QString::fromStdString(Capture.document_.id_)); Found != TextCaptures.cend())
+                    Capture.bytes_ = Found->Bytes();
                 auto Result = Store->Store(std::move(Capture)); if (!Result.HasValue()) return Result.Failure();
                 auto Receipt = std::move(Result.Value());
                 for (qsizetype At = 0; At < Entries.size(); ++At) {
