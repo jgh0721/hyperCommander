@@ -214,10 +214,11 @@ protected:
                     return true;
                 }
             }
-            if (quick_ && (Event->type() == QEvent::KeyPress || Event->type() == QEvent::ShortcutOverride)) {
+            if (Event->type() == QEvent::KeyPress || Event->type() == QEvent::ShortcutOverride) {
                 const auto* Key = static_cast<QKeyEvent*>(Event);
-                if (!composing_ && scope_ == "everything" && Key->modifiers() == Qt::NoModifier &&
-                    (Key->key() == Qt::Key_Home || Key->key() == Qt::Key_End || Key->key() == Qt::Key_PageUp || Key->key() == Qt::Key_PageDown)) {
+                if (!composing_ && Key->modifiers() == Qt::NoModifier &&
+                    (Key->key() == Qt::Key_PageUp || Key->key() == Qt::Key_PageDown ||
+                        (quick_ && scope_ == "everything" && (Key->key() == Qt::Key_Home || Key->key() == Qt::Key_End)))) {
                     Event->accept();
                     if (Event->type() == QEvent::KeyPress) if (auto* View = qobject_cast<CGridView*>(source_.data())) {
                         auto* Grid = View->BaseView();
@@ -227,7 +228,20 @@ protected:
                     }
                     return true;
                 }
-                if (!composing_ && (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter ||
+                // Function keys operate on the focused result, even while the query owns focus.
+                if (!composing_ && Key->key() >= Qt::Key_F1 && Key->key() <= Qt::Key_F35) {
+                    Event->accept();
+                    if (Event->type() == QEvent::KeyPress) {
+                        returnToList();
+                        auto* Target = QApplication::focusWidget();
+                        if (Target && Target != find_) {
+                            QKeyEvent Copy(QEvent::KeyPress, Key->key(), Key->modifiers(), Key->text(), Key->isAutoRepeat(), Key->count());
+                            QApplication::sendEvent(Target, &Copy);
+                        }
+                    }
+                    return true;
+                }
+                if (quick_ && !composing_ && (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter ||
                     ((scope_ == "everything" || cursor_) && (Key->key() == Qt::Key_Down || Key->key() == Qt::Key_Up)))) {
                     Event->accept();
                     if (Event->type() == QEvent::ShortcutOverride) return true;
