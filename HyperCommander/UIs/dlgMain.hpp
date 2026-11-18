@@ -30,6 +30,7 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
   public slots:
     void ActivateCommandLine();
     void SubmitCommandLine(bool KeepOpen);
+    bool NavigateFromSystemTool(const QString& Path);
 
     void OnDriveAdd( const QString& Root );
     void OnDriveRemoved( const QString& Root );

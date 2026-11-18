@@ -433,6 +433,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "gridPopulationSortCacheUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewRefreshInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewCloseTabUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "directoryHotListFromSystemToolUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewSortModeUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewTabSwitchUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "groupedParentPageKeysUi"
@@ -8341,6 +8342,73 @@ private slots:
                 QTRY_VERIFY(Seen);
             }
         }
+    }
+    void directoryHotListFromSystemToolUi_data()
+    {
+        QTest::addColumn<QString>("Tool");
+        QTest::newRow("processes") << QString("processes");
+        QTest::newRow("services") << QString("services");
+        QTest::newRow("registry") << QString("registry");
+        QTest::newRow("environment") << QString("environment");
+    }
+    void directoryHotListFromSystemToolUi()
+    {
+        QFETCH(QString, Tool);
+        auto* Panel = main_->findChild<CmpPanel*>("cmpLeftPanel"); QVERIFY(Panel);
+        auto* Other = main_->findChild<CmpPanel*>("cmpRightPanel"); QVERIFY(Other);
+        auto* Favorites = TyStFavoriteDirMgr::GetInstance();
+        auto& Settings = hc::settings::AppSettings();
+        const auto SavedFavorites = Settings.Read(hc::settings::Section::Favorites);
+        const auto Workspace = main_->CaptureWorkspace();
+        QTemporaryDir Directory; QVERIFY(Directory.isValid());
+        QVERIFY(QDir(Directory.path()).mkdir("favorite target"));
+        const auto Target = QDir::toNativeSeparators(Directory.filePath("favorite target"));
+        const auto Restore = qScopeGuard([&] {
+            Settings.Put(hc::settings::Section::Favorites, SavedFavorites);
+            Favorites->Refresh();
+            main_->RestoreWorkspace(Workspace);
+        });
+        QVERIFY(Favorites->ApplyConfiguration({{"test folder", QStringLiteral("cd \"%1\"").arg(Target), Target}},
+            CFavoriteDirMgr::DRIVES_ON_NONE, CFavoriteDirMgr::DRIVES_ON_NONE, {}));
+        Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {});
+        QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading(), 10000);
+        const auto PriorOtherPath = Other->CurrentPath();
+        const auto Tab = Panel->CurrentTabIndex();
+        const auto TabCount = Panel->findChild<QTabWidget*>("tabWidget")->count();
+        QApplication::setActiveWindow(main_);
+        if (Tool == "registry") QVERIFY(Panel->ShowRegistryView());
+        else if (Tool == "environment") QVERIFY(Panel->ShowEnvironmentView());
+        else QVERIFY(Panel->ShowSystemView(Tool == "services" ? 1 : 0));
+        QVERIFY(Panel->HasSystemToolView());
+        auto* View = Panel->GetFocusView(Tab); QVERIFY(View);
+        View->EnsureKeyboardFocusOnView();
+        auto* Input = QApplication::focusWidget();
+        QVERIFY(Input && (Input == View || View->isAncestorOf(Input)));
+
+        bool Selected = false;
+        QTimer SelectFavorite; SelectFavorite.setInterval(20);
+        connect(&SelectFavorite, &QTimer::timeout, main_, [&] {
+            auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+            if (!Menu || Menu->objectName() != "hc.directoryHotList") return;
+            auto* Action = Menu->activeAction();
+            if (!Action || Action->toolTip() != Target) return;
+            SelectFavorite.stop();
+            Selected = true;
+            QTest::keyClick(Menu, Qt::Key_Return);
+        });
+        QTimer ClosePopup; ClosePopup.setSingleShot(true);
+        connect(&ClosePopup, &QTimer::timeout, main_, [] {
+            if (auto* Popup = QApplication::activePopupWidget()) Popup->close();
+        });
+        SelectFavorite.start();
+        ClosePopup.start(3000);
+        QTest::keyClick(Input, Qt::Key_G, Qt::ControlModifier);
+        QTRY_VERIFY(Selected);
+        QTRY_VERIFY(!Panel->HasSystemToolView());
+        QTRY_COMPARE_WITH_TIMEOUT(QDir::cleanPath(Panel->CurrentPath()), QDir::cleanPath(Target), 10000);
+        QCOMPARE(Panel->CurrentTabIndex(), Tab);
+        QCOMPARE(Panel->findChild<QTabWidget*>("tabWidget")->count(), TabCount);
+        QCOMPARE(Other->CurrentPath(), PriorOtherPath);
     }
     void directoryHotListFocusUi()
     {

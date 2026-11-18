@@ -375,6 +375,7 @@ DEFINE_HC_COMMAND_EX( CCommandMgr, NavigateDrive )
     {
         auto Path = Parameter.toString();
         if (Path.size() == 1 && Path[0].isLetter()) Path += ":\\";
+        if (GetMainUIPtr()->NavigateFromSystemTool(Path)) return;
         bridge_->Dispatch("hc.navigate.path", {{"path", Path}}, "shortcut", CursorIndex);
         return;
     }
@@ -386,7 +387,9 @@ DEFINE_HC_COMMAND_EX( CCommandMgr, NavigatePath )
     if (bridge_)
     {
         const auto Paths = Parameter.toStringList();
-        bridge_->Dispatch("hc.navigate.path", {{"path", Paths.isEmpty() ? Parameter.toString() : Paths.front()}}, "legacy", CursorIndex);
+        const auto Path = Paths.isEmpty() ? Parameter.toString() : Paths.front();
+        if (GetMainUIPtr()->NavigateFromSystemTool(Path)) return;
+        bridge_->Dispatch("hc.navigate.path", {{"path", Path}}, "legacy", CursorIndex);
         return;
     }
     QMetaObject::invokeMethod( GetMainUIPtr(), __FUNCNAME__, Qt::QueuedConnection, Q_ARG( const QModelIndex&, CursorIndex ), Q_ARG( const QVariant&, Parameter ) );

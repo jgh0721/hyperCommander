@@ -513,6 +513,19 @@ DEFINE_HC_COMMAND( QMainUI, NavigateFavorites )
     }
 }
 
+bool QMainUI::NavigateFromSystemTool(const QString& Path)
+{
+    auto* Panel = retrieveSrcPanel();
+    const auto* View = Panel ? Panel->GetFocusView(Panel->CurrentTabIndex()) : nullptr;
+    if (!View || (View->GetViewMode() != CViewT::VM_SYSTEM && View->GetViewMode() != CViewT::VM_DETAIL))
+        return false;
+
+    // The command bridge requires a visible file model. The panel owns the
+    // underlying file tab and handles closing the tool or its detail editor.
+    Panel->ChangeCurrentPath(Path, {});
+    return true;
+}
+
 DEFINE_HC_COMMAND_EX( QMainUI, NavigateDrive )
 {
     const auto Pane = retrieveSrcPanel();
