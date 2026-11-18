@@ -371,6 +371,9 @@ protected:
         if (Copy.contains("deleteToRecycle") && !Copy["deleteToRecycle"].isBool()) { Copy["deleteToRecycle"] = hc::defaults::DefaultValue("options/deleteToRecycle"); Report("options.deleteToRecycle"); }
         if (Copy.contains("jobNotification") && !QStringList{"none", "status", "attention", "sound"}.contains(Copy["jobNotification"].toString())) { Copy["jobNotification"] = hc::defaults::DefaultValue("options/jobNotification"); Report("options.jobNotification"); }
         if (Copy.contains("queueInsertion") && !QStringList{"first", "last"}.contains(Copy["queueInsertion"].toString())) { Copy["queueInsertion"] = hc::defaults::DefaultValue("options/queueInsertion"); Report("options.queueInsertion"); }
+        if (Copy.contains("jobManagerAutoSize") && !Copy["jobManagerAutoSize"].isBool()) {
+            Copy["jobManagerAutoSize"] = hc::defaults::DefaultValue("options/jobManagerAutoSize"); Report("options.jobManagerAutoSize");
+        }
         if (Copy.contains("jobConcurrency") && (!Copy["jobConcurrency"].isDouble()
             || Copy["jobConcurrency"].toDouble() < hc::product::jobConcurrencyMin
             || Copy["jobConcurrency"].toDouble() > hc::product::jobConcurrencyMax

@@ -45,6 +45,9 @@
 #include <fmwidgets/ProgressBar.h>
 #include <fmwidgets/Label.h>
 #include <QGridLayout>
+#include <QAbstractNativeEventFilter>
+#include <shobjidl.h>
+#include <wrl/client.h>
 
 using namespace hc::operations;
 using namespace hc::storage;
@@ -196,6 +199,41 @@ namespace
     {
         return Snapshot.progress_.itemsDone_.value_or(Snapshot.completedItems_ + Snapshot.skippedItems_ + Snapshot.failedItems_);
     }
+    std::optional<double> JobFraction(const JobSnapshot& Snapshot)
+    {
+        if (Snapshot.state_ == JobState::Completed) return 1.0;
+        const auto& Progress = Snapshot.progress_;
+        const auto Fraction = [](uint64_t Done, uint64_t Total) { return double(std::min(Done, Total)) / double(Total); };
+        const auto Mode = ProgressRate(Snapshot);
+        const bool CountBytes = Progress.bytesTotal_.value_or(0) > 0 && (Mode == RateMode::Bytes || Mode == RateMode::None);
+        std::optional<double> PhaseFraction;
+        if (CountBytes)
+            PhaseFraction = Fraction(Progress.bytesDone_, *Progress.bytesTotal_);
+        else if (Progress.phaseItemsTotal_.value_or(0) > 0)
+            PhaseFraction = Fraction(Progress.phaseItemsDone_.value_or(0), *Progress.phaseItemsTotal_);
+
+        const auto Outputs = Progress.outputCount_.value_or(0);
+        if (Outputs > 0) {
+            if (Progress.phase_ == JobPhase::RemovingSource && Progress.plannedItems_.value_or(0) > 0)
+                return Fraction(Outputs + Progress.phaseItemsDone_.value_or(0), *Progress.plannedItems_);
+            // Archive byte counters describe the current output. Scale them by
+            // the number of outputs so a single archive cannot fill the batch bar.
+            const auto Finished = std::min(Snapshot.completedItems_ + Snapshot.skippedItems_, Outputs);
+            if (PhaseFraction || Finished > 0)
+                return std::min(1.0, (double(Finished) + PhaseFraction.value_or(0)) / double(Outputs));
+            return {};
+        }
+        if (CountBytes) return PhaseFraction;
+        if (Progress.plannedItems_.value_or(0) > 0) return Fraction(ProcessedItems(Snapshot), *Progress.plannedItems_);
+        return PhaseFraction;
+    }
+    QString DurationText(qint64 Seconds)
+    {
+        Seconds = std::max<qint64>(0, Seconds);
+        if (Seconds >= 3600) return QObject::tr("%1시간 %2분 %3초").arg(Seconds / 3600).arg(Seconds / 60 % 60).arg(Seconds % 60);
+        if (Seconds >= 60) return QObject::tr("%1분 %2초").arg(Seconds / 60).arg(Seconds % 60);
+        return QObject::tr("%1초").arg(Seconds);
+    }
     uint64_t RateValue(const JobSnapshot& Snapshot)
     {
         const auto Mode = ProgressRate(Snapshot);
@@ -214,6 +252,84 @@ namespace
     }
 }
 
+class FileJobUi::TaskbarProgress final : public QAbstractNativeEventFilter
+{
+public:
+    explicit TaskbarProgress(QWidget* Window) : window_(Window), buttonCreated_(RegisterWindowMessageW(L"TaskbarButtonCreated"))
+    {
+        qApp->installNativeEventFilter(this);
+    }
+
+    ~TaskbarProgress() override
+    {
+        qApp->removeNativeEventFilter(this);
+        if (taskbar_ && window_ && window_->internalWinId())
+            taskbar_->SetProgressState(reinterpret_cast<HWND>(window_->internalWinId()), TBPF_NOPROGRESS);
+    }
+
+    void Update(const std::vector<JobSnapshot>& Snapshots)
+    {
+        size_t Active = 0, Known = 0;
+        double Sum = 0;
+        for (const auto& Snapshot : Snapshots) {
+            if (IsTerminal(Snapshot.state_) || Snapshot.deferred_) continue;
+            ++Active;
+            if (const auto Fraction = JobFraction(Snapshot)) {
+                ++Known;
+                Sum += *Fraction;
+            }
+        }
+        // Average percentages so byte-counted and item-counted jobs can share
+        // the same bar. An unknown total makes the entire estimate indeterminate.
+        const auto State = !Active ? TBPF_NOPROGRESS : Known < Active ? TBPF_INDETERMINATE : TBPF_NORMAL;
+        publish(State, State == TBPF_NORMAL ? static_cast<int>(1000 * Sum / Active) : 0);
+    }
+
+private:
+    bool nativeEventFilter(const QByteArray& Type, void* Message, qintptr*) override
+    {
+        if (Type != "windows_generic_MSG" || !buttonCreated_ || !window_) return false;
+        const auto* Native = static_cast<MSG*>(Message);
+        if (Native->message == buttonCreated_ && Native->hwnd == reinterpret_cast<HWND>(window_->internalWinId())) {
+            taskbar_.Reset();
+            published_.reset();
+        }
+        return false;
+    }
+
+    void publish(TBPFLAG State, int Value)
+    {
+        const auto Window = window_ ? reinterpret_cast<HWND>(window_->internalWinId()) : nullptr;
+        if (!Window) return;
+        if (Window != hwnd_) {
+            hwnd_ = Window;
+            published_.reset();
+            if (buttonCreated_) ChangeWindowMessageFilterEx(Window, buttonCreated_, MSGFLT_ALLOW, nullptr);
+        }
+        const auto Progress = std::pair{State, Value};
+        if (published_ == Progress || (!taskbar_ && State == TBPF_NOPROGRESS)) return;
+        if (!taskbar_) {
+            if (FAILED(CoCreateInstance(__uuidof(TaskbarList), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(taskbar_.GetAddressOf())))) return;
+            if (FAILED(taskbar_->HrInit())) { taskbar_.Reset(); return; }
+        }
+        if ((!published_ || published_->first != State) && FAILED(taskbar_->SetProgressState(Window, State))) {
+            published_.reset();
+            return;
+        }
+        if (State == TBPF_NORMAL && FAILED(taskbar_->SetProgressValue(Window, Value, 1000))) {
+            published_.reset();
+            return;
+        }
+        published_ = Progress;
+    }
+
+    QPointer<QWidget> window_;
+    UINT buttonCreated_;
+    HWND hwnd_ = nullptr;
+    Microsoft::WRL::ComPtr<ITaskbarList3> taskbar_;
+    std::optional<std::pair<TBPFLAG, int>> published_;
+};
+
 FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Events)
     : QObject(Main), journal_(MakeFileJobJournal(QDir(QStandardPaths::isTestModeEnabled()
           ? QCoreApplication::applicationDirPath() : QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath("HyperCommander")).filePath("operation-journal"),false,true,false)),
@@ -224,6 +340,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     QCoreApplication::instance()->setProperty("hc.permission.controller",QVariant::fromValue<QObject*>(this));
     Main->installEventFilter(this);
     const auto Defaults = hc::settings::AppSettings().CommittedObject()["options"].toObject();
+    managerAutoSize_ = Defaults["jobManagerAutoSize"].toBool(hc::defaults::DefaultValue("options/jobManagerAutoSize").toBool());
     SetFileJobPersistence(journal_, Defaults["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()), Defaults["saveJobProgress"].toBool(hc::defaults::DefaultValue("options/saveJobProgress").toBool()));
     appliedConcurrency_ = Defaults["jobConcurrency"].toInt(hc::defaults::DefaultValue("options/jobConcurrency").toInt());
     scheduler_.SetConcurrencyLimit(appliedConcurrency_);
@@ -342,7 +459,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     jobList_->setRootIsDecorated(false); jobList_->setAlternatingRowColors(true);
     jobList_->setSelectionMode(QAbstractItemView::SingleSelection); jobList_->setUniformRowHeights(true);
     jobList_->header()->setSectionResizeMode(QHeaderView::Interactive); jobList_->setColumnWidth(0, 260); jobList_->setColumnWidth(1, 115);
-    jobList_->setColumnWidth(2, 170); jobList_->setColumnWidth(3, 110); jobList_->setMinimumHeight(100); ManagerLayout->addWidget(jobList_, 2);
+    jobList_->setColumnWidth(2, 215); jobList_->setColumnWidth(3, 110); jobList_->setMinimumHeight(100); ManagerLayout->addWidget(jobList_, 2);
     auto* Controls = new QScrollArea(manager_); Controls->setObjectName("hc.jobs.controls");
     Controls->setWidgetResizable(true); Controls->setFrameShape(QFrame::NoFrame); Controls->setMinimumHeight(120);
     auto* ControlBody = new QWidget(Controls); auto* ControlRows = new QVBoxLayout(ControlBody); ControlRows->setContentsMargins(0, 0, 0, 0);
@@ -438,6 +555,7 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
     connect(managerPause_, &QPushButton::clicked, this, [this] { controlSelected(true); });
     connect(managerCancel_, &QPushButton::clicked, this, [this] { controlSelected(false); });
     if (auto* Window = qobject_cast<QMainWindow*>(Main)) {
+        taskbarProgress_ = std::make_unique<TaskbarProgress>(Window);
         indicator_ = new fm::ui::Button(tr("파일 작업"), Window); indicator_->setObjectName("hc.jobs.indicator");
         Window->statusBar()->addPermanentWidget(indicator_);
         connect(indicator_, &QPushButton::clicked, this, [this] { Show(); });
@@ -710,6 +828,11 @@ Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::
 void FileJobUi::ApplyDefaults()
 {
     const auto Options = hc::settings::AppSettings().CommittedObject()["options"].toObject();
+    const bool AutoSize = Options["jobManagerAutoSize"].toBool(hc::defaults::DefaultValue("options/jobManagerAutoSize").toBool());
+    if (AutoSize != managerAutoSize_) {
+        managerAutoSize_ = AutoSize;
+        if (manager_->isVisible()) updateManager();
+    }
     SetFileJobPersistence(journal_, Options["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()), Options["saveJobProgress"].toBool(hc::defaults::DefaultValue("options/saveJobProgress").toBool()));
     const bool ShowRecords = Options["showJobDetails"].toBool(hc::defaults::DefaultValue("options/showJobDetails").toBool());
     if (ShowRecords != appliedShowRecords_) {
@@ -995,7 +1118,9 @@ void FileJobUi::updateJobs()
         }
         if (Stored->first == selectedId() && autoClose_->isChecked() && CloseFinishedJob(Stored->second)) dialog_->hide();
     }
-    recordSamples();
+    const auto Snapshots = scheduler_.Snapshots();
+    if (taskbarProgress_) taskbarProgress_->Update(Snapshots);
+    recordSamples(Snapshots);
     updateManager();
     // Snapshot polling recovers even when a bounded event subscriber drops progress.
     if (dialog_->isVisible() || manager_->isVisible()) updateSelection();
@@ -1256,20 +1381,23 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     const auto RateTotal = Mode == RateMode::Files ? (Progress.plannedItems_ ? Progress.discoveredFiles_ : std::optional<uint64_t>{})
         : Mode == RateMode::Items ? Progress.plannedItems_ : Progress.bytesTotal_;
     const auto RateDone = RateValue(Snapshot);
-    const auto Remaining = Active && Snapshot.state_ != JobState::Paused && Rate > 0 && RateTotal && *RateTotal > RateDone ? tr("약 %1초").arg((*RateTotal - RateDone) / Rate, 0, 'f', 0) : QStringLiteral("—");
+    QString Remaining = QStringLiteral("—");
+    if (Active && Snapshot.state_ != JobState::Paused && Rate > 0 && RateTotal && *RateTotal > RateDone) {
+        const auto Seconds = std::round((*RateTotal - RateDone) / Rate);
+        if (Seconds < double(INT64_MAX)) Remaining = tr("약 %1").arg(DurationText(qint64(Seconds)));
+    }
     const auto Now = IsTerminal(Snapshot.state_) ? Snapshot.updated_ : std::chrono::steady_clock::now();
     const auto Elapsed = Snapshot.submitted_ == std::chrono::steady_clock::time_point{} ? 0LL : std::chrono::duration_cast<std::chrono::seconds>(Now - Snapshot.submitted_).count();
     const auto RateText = ArchiveCreation&&Snapshot.state_==JobState::Paused?tr("일시 정지"):Bytes ? fm::ui::TransferGraph::formatRate(Rate) : QLocale().toString(Rate, 'f', 1) + (Mode == RateMode::Files ? tr(" 파일/초") : tr(" 항목/초"));
     metrics_->setText((Mode == RateMode::None ? QString{} : tr("속도 %1   ").arg(RateText))
-        + (ArchiveCreation ? tr("현재 단계 남은 시간 %1   경과 %2초") : tr("남은 시간 %1   경과 %2초")).arg(Remaining).arg(Elapsed));
+        + (ArchiveCreation ? tr("현재 단계 남은 시간 %1   경과 %2") : tr("남은 시간 %1   경과 %2")).arg(Remaining, DurationText(Elapsed)));
     // Counter digits and rate units change continuously; only available width
     // and the operation determine the row layout.
     const bool WrapMetrics = Kind == JobKind::Copy || Kind == JobKind::Move || dialog_->width() < qMax(760, metrics_->fontMetrics().height() * 44);
     metrics_->setToolTip(metrics_->text());
     metricsLayout_->setDirection(WrapMetrics ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-    // Ignored-width labels need the full row when stacked; layout alignment
-    // would otherwise reduce the ETA label to its zero-width size hint.
-    metricsLayout_->setAlignment(metrics_, WrapMetrics ? Qt::Alignment{} : Qt::AlignRight);
+    metricsLayout_->setStretch(1, WrapMetrics ? 0 : 1);
+    metrics_->setAlignment((WrapMetrics ? Qt::AlignLeft : Qt::AlignRight) | Qt::AlignVCenter);
     const bool HasGraph = ArchiveCreation || Kind == JobKind::Move || Mode != RateMode::None;
     graphToggle_->setVisible(HasGraph);
     graphToggle_->setText(detailed_ ? tr("그래프 숨김(&D)") : tr("그래프 표시(&D)"));
@@ -1284,9 +1412,9 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     }
 }
 
-void FileJobUi::recordSamples()
+void FileJobUi::recordSamples(const std::vector<JobSnapshot>& Snapshots)
 {
-    for (const auto& Snapshot : scheduler_.Snapshots()) {
+    for (const auto& Snapshot : Snapshots) {
         if (Snapshot.submitted_ == std::chrono::steady_clock::time_point{}) continue;
         auto& History = samples_[Snapshot.id_];
         const auto Now = IsTerminal(Snapshot.state_) ? Snapshot.updated_ : std::chrono::steady_clock::now();
@@ -1341,6 +1469,13 @@ void FileJobUi::updateManager()
         if (jobs_->findData(jobList_->topLevelItem(Row)->data(0, Qt::UserRole)) < 0) delete jobList_->takeTopLevelItem(Row);
     std::map<QString, QTreeWidgetItem*> Rows;
     for (int I = 0; I < jobList_->topLevelItemCount(); ++I) Rows[jobList_->topLevelItem(I)->data(0, Qt::UserRole).toString()] = jobList_->topLevelItem(I);
+    const QLocale Locale;
+    hc::columns::FormatOptions SizeFormat;
+    SizeFormat.size_ = hc::columns::SizeFormat::Adaptive;
+    const auto SizeText = [&](uint64_t Bytes) {
+        if (!managerAutoSize_ || Bytes < 1024) return tr("%1 B").arg(Locale.toString(qulonglong(Bytes)));
+        return hc::columns::Format(hc::columns::CellValue::Ready(quint64(Bytes)), SizeFormat);
+    };
     for (int Row = 0; Row < jobs_->count(); ++Row) {
         const auto Id = jobs_->itemData(Row).toString();
         const auto Found = Snapshots.find(Id.toStdString()); if (Found == Snapshots.end()) continue;
@@ -1370,8 +1505,21 @@ void FileJobUi::updateManager()
         }
         Delayed += Stalled; if (Stalled) Item->setText(1, Item->text(1) + tr(" · 지연"));
         const bool Delete = deletionJob(Snapshot);
-        Item->setText(2, Delete ? (Snapshot.progress_.deletedFiles_ ? tr("삭제한 파일 %1개 · %2") : tr("삭제한 항목 %1개 · %2")).arg(Snapshot.progress_.deletedFiles_.value_or(Snapshot.completedItems_)).arg(Snapshot.progress_.plannedItems_ ? tr("집계 완료") : tr("전체 집계 중"))
-            : tr("%1 / %2 B").arg(Snapshot.progress_.bytesDone_).arg(Snapshot.progress_.bytesTotal_ ? QString::number(*Snapshot.progress_.bytesTotal_) : tr("미상")));
+        const auto& Progress = Snapshot.progress_;
+        QString Amount;
+        if (Delete)
+            Amount = (Progress.deletedFiles_ ? tr("삭제한 파일 %1개") : tr("삭제한 항목 %1개")).arg(Progress.deletedFiles_.value_or(Snapshot.completedItems_));
+        else if (Mode == RateMode::Bytes || Progress.bytesDone_ > 0 || Progress.bytesTotal_)
+            Amount = tr("%1 / %2").arg(SizeText(Progress.bytesDone_), Progress.bytesTotal_ ? SizeText(*Progress.bytesTotal_) : tr("미상"));
+        else if (Progress.plannedItems_)
+            Amount = tr("%1 / %2개").arg(ProcessedItems(Snapshot)).arg(*Progress.plannedItems_);
+        else
+            Amount = tr("%1개 / 미상").arg(ProcessedItems(Snapshot));
+        const auto Fraction = JobFraction(Snapshot);
+        const auto Percent = Fraction ? tr("%1%").arg(*Fraction == 1.0 ? 100L : std::min(99L, std::lround(100 * *Fraction))) : QStringLiteral("—");
+        const auto ProgressText = tr("%1 · %2").arg(Amount, Percent);
+        Item->setText(2, ProgressText);
+        Item->setToolTip(2, ProgressText);
         const auto Rate = Mode == RateMode::Bytes ? fm::ui::TransferGraph::formatRate(measuredRate(Snapshot))
             : Mode == RateMode::None ? QStringLiteral("—") : QLocale().toString(measuredRate(Snapshot), 'f', 1) + (Mode == RateMode::Files ? tr(" 파일/초") : tr(" 항목/초"));
         Item->setText(3, (Snapshot.state_ == JobState::Running || Snapshot.state_ == JobState::Committing || (Delete && Snapshot.state_ == JobState::Preparing)) && !Snapshot.pauseRequested_ ? Rate : QStringLiteral("—"));

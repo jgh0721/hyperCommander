@@ -5389,17 +5389,21 @@ private slots:
     {
         using namespace hc::operations; using namespace hc::settings;
         auto& Settings=AppSettings(); const auto Original=Settings.Object(); const auto Restore=qScopeGuard([&]{Settings.DiscardEdit();Settings.Replace(Original);Settings.Commit();});
-        auto Options=Settings.Read(Section::Options).toObject(); Options.remove("jobCloseOnSuccess"); Options["saveJobProgress"]=false; Options["jobDetailed"]=true; QVERIFY(Settings.Put(Section::Options,Options)); QVERIFY(Settings.Commit());
-        struct Control { std::atomic<bool> commit_{false},unknown_{false},finish_{false}; };
+        auto Options=Settings.Read(Section::Options).toObject(); Options.remove("jobCloseOnSuccess"); Options.remove("jobManagerAutoSize"); Options["saveJobProgress"]=false; Options["jobDetailed"]=true; QVERIFY(Settings.Put(Section::Options,Options)); QVERIFY(Settings.Commit());
+        struct Control {
+            std::atomic<bool> commit_{false}, unknown_{false}, finish_{false};
+            std::atomic<uint64_t> total_{16 * 1024 * 1024};
+        };
         class Task final : public IJobTask {
         public:
             explicit Task(std::shared_ptr<Control> Control) : control_(std::move(Control)) {}
             JobStep Advance(JobStepContext) override {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 JobStep Step{control_->finish_?JobState::Completed:control_->commit_?JobState::Committing:JobState::Running};
-                const auto Done=std::min<uint64_t>(++count_*65536,16*1024*1024);
-                Step.progress_=JobProgress{Done,control_->unknown_?std::optional<uint64_t>{}:std::optional<uint64_t>{16*1024*1024},"sample.bin",Done,
-                    control_->unknown_?std::optional<uint64_t>{}:std::optional<uint64_t>{16*1024*1024},control_->unknown_?std::optional<uint64_t>{}:std::optional<uint64_t>{2}};
+                const auto Total = control_->unknown_ ? std::optional<uint64_t>{} : std::optional<uint64_t>{control_->total_.load()};
+                const auto Done = std::min<uint64_t>(++count_ * 65536, 16 * 1024 * 1024);
+                Step.progress_ = JobProgress{Done, Total, "sample.bin", Done, Total,
+                    Total ? std::optional<uint64_t>{2} : std::optional<uint64_t>{}};
                 return Step;
             }
             std::vector<hc::storage::Error> Finalize(JobState) override { return {}; }
@@ -5417,6 +5421,12 @@ private slots:
         QVERIFY(Dialog && Pause && Graph && AutoClose && Metrics && Details && Bar); QVERIFY(AutoClose->isChecked());
         QTRY_VERIFY(Graph->bytesDone()>0); QTRY_VERIFY(Bar->maximum()>0 && Bar->value()>0); QVERIFY(Graph->totalBytes()==16*1024*1024);
         QVERIFY(Dialog->findChild<QLabel*>("hc.jobs.overallMetrics")->text().contains("MiB")); QVERIFY(!Metrics->text().contains(QStringLiteral("미상"))); QVERIFY(!Details->isVisible());
+        QTRY_VERIFY(QRegularExpression(QStringLiteral("약 \\d+초.*경과 \\d+초")).match(Metrics->text()).hasMatch());
+        Control->total_ = 512ULL * 1024 * 1024;
+        QTRY_VERIFY(QRegularExpression(QStringLiteral("약 \\d+분 \\d+초")).match(Metrics->text()).hasMatch());
+        Control->total_ = 64ULL * 1024 * 1024 * 1024;
+        QTRY_VERIFY(QRegularExpression(QStringLiteral("약 \\d+시간 \\d+분 \\d+초")).match(Metrics->text()).hasMatch());
+        Control->total_ = 16 * 1024 * 1024;
                 auto* Destination = Dialog->findChild<QLabel*>("hc.jobs.destination.path"); QVERIFY(Destination);
         QVERIFY(QDir::fromNativeSeparators(Destination->text()).contains("D:/Qt/output")); QVERIFY(!Destination->text().contains("hc-job-"));
         const auto Top = [Dialog](QWidget* Item) { return Item->mapTo(Dialog, QPoint()).y(); };
@@ -5464,6 +5474,21 @@ private slots:
         QVERIFY(Bottom(Graph) < Top(Axis));
         AutoClose->setChecked(true); Control->finish_=true;
         QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_)); QTRY_VERIFY(!Dialog->isVisible());
+        Jobs.Show();
+        auto* List = Window.findChild<QTreeWidget*>("hc.jobs.list"); QVERIFY(List);
+        const auto Amount = [&] {
+            const auto Id = QString::fromStdString(Started.Value().id_);
+            for (int Index = 0; Index < List->topLevelItemCount(); ++Index) {
+                const auto* Item = List->topLevelItem(Index);
+                if (Item->data(0, Qt::UserRole).toString() == Id) return Item->text(2);
+            }
+            return QString{};
+        };
+        QTRY_VERIFY(Amount().contains("MiB") && Amount().endsWith("100%"));
+        Options["jobManagerAutoSize"] = false;
+        QVERIFY(Settings.Put(Section::Options, Options)); QVERIFY(Settings.Commit()); Jobs.ApplyDefaults();
+        QTRY_VERIFY(Amount().contains(" B") && Amount().endsWith("100%"));
+        QVERIFY(!Amount().contains("MiB"));
         fm::ui::TransferGraph Rolling; Rolling.resize(760,170); Rolling.setAxis(fm::ui::TransferGraph::Time); Rolling.start(100000000);
         for(qint64 Ms=0;Ms<=55000;Ms+=500) Rolling.addSample(Ms*1000+(Ms>30000?10000000:0),Ms);
         const auto Span=Rolling.timeWindowEndMs()-Rolling.timeWindowStartMs(); QCOMPARE(Span,60000ll); QCOMPARE(Rolling.timeWindowStartMs(),0ll);
@@ -5500,6 +5525,7 @@ private slots:
                 std::this_thread::sleep_for(std::chrono::milliseconds(20)); ++count_;
                 JobStep Step{control_->finish_ ? JobState::Completed : JobState::Preparing}; Step.progress_ = JobProgress{};
                 Step.progress_->deletedFiles_ = count_ / 2; Step.progress_->discoveredFiles_ = count_; Step.progress_->discoveredItems_ = count_ + 3;
+                Step.progress_->itemsDone_ = Step.progress_->deletedFiles_;
                 if (control_->planned_) Step.progress_->plannedItems_ = count_ + 3;
                 return Step;
             }
@@ -5508,19 +5534,19 @@ private slots:
         };
         QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false); FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
         auto Control = std::make_shared<struct Control>(); PreparedJob Work; Work.task_ = std::make_unique<Task>(Control);
-        Work.request_.metadata_ = {"qtbase", "D:/Qt/한글 경로/qtbase", "hcl11:00:", {}};
+        Work.request_.metadata_ = {"qtbase", "D:/Qt/한글 경로/qtbase", {}, {}, {}, JobKind::Delete};
         auto Started = Jobs.Submit(std::move(Work), QStringLiteral("삭제 진행 시험")); QVERIFY(Started.HasValue());
         auto* Dialog = Window.findChild<QDialog*>("hc.fileJobs"); auto* Graph = Window.findChild<fm::ui::TransferGraph*>("hc.jobs.graph");
         auto* Metrics = Window.findChild<QLabel*>("hc.jobs.metrics"); auto* Pause = Window.findChild<QPushButton*>("hc.jobs.pause");
         auto* Bar = Window.findChild<QProgressBar*>("hc.jobs.overallProgress"); QVERIFY(Dialog && Graph && Metrics && Pause && Bar);
         QTRY_VERIFY(Graph->bytesDone() > 0); QTRY_COMPARE(Bar->maximum(), 0); QCOMPARE(Graph->totalBytes(), 0ll);
-        auto* Header = Dialog->findChild<fm::ui::DialogHeader*>(); QVERIFY(Header);
-        QTRY_COMPARE(Header->title(), QStringLiteral("삭제 · D:/Qt/한글 경로/qtbase"));
-        QVERIFY(Header->subtitle().isEmpty()); QCOMPARE(Header->toolTip(), Header->title());
-        QVERIFY(Dialog->windowTitle().contains(Header->title()));
+        auto* Source = Dialog->findChild<QWidget*>("hc.jobs.source"); QVERIFY(Source);
+        QTRY_COMPARE(QDir::fromNativeSeparators(Source->toolTip()), QStringLiteral("D:/Qt/한글 경로/qtbase"));
+        QVERIFY(Dialog->windowTitle().startsWith(QStringLiteral("영구 삭제")));
         QVERIFY(Graph->formatValue(12).contains(QStringLiteral("파일/초"))); QVERIFY(!Metrics->text().contains("B/s"));
         QTRY_VERIFY(Metrics->text().contains(QRegularExpression(QStringLiteral("속도 [1-9]"))));
-        QVERIFY(Metrics->text().contains(QStringLiteral("확인한 항목"))); QVERIFY(Metrics->text().contains(QStringLiteral("전체 집계 중")));
+        auto* Overall = Dialog->findChild<QLabel*>("hc.jobs.overallMetrics"); QVERIFY(Overall);
+        QVERIFY(Overall->text().contains(QStringLiteral("확인한 항목"))); QVERIFY(Overall->text().contains(QStringLiteral("전체 집계 중")));
         QVERIFY(SaveR9Dialog(*Dialog, "delete-discovery-busy"));
         {
             auto& Theme = fm::style::ThemeManager::instance(); const auto OriginalDesign = Theme.design();
@@ -5535,6 +5561,17 @@ private slots:
         Pause->click(); QTRY_COMPARE(Jobs.Scheduler().Snapshot(Started.Value().id_).Value().state_, JobState::Paused);
         QTRY_VERIFY(Bar->maximum() > 0); QVERIFY(Graph->isPaused()); QVERIFY(SaveR9Dialog(*Dialog, "delete-discovery-paused"));
         Pause->click(); QTRY_COMPARE(Bar->maximum(), 0); Control->planned_ = true; QTRY_VERIFY(Bar->maximum() > 0);
+        Jobs.Show();
+        auto* List = Window.findChild<QTreeWidget*>("hc.jobs.list"); QVERIFY(List);
+        const auto Amount = [&] {
+            const auto Id = QString::fromStdString(Started.Value().id_);
+            for (int Index = 0; Index < List->topLevelItemCount(); ++Index) {
+                const auto* Item = List->topLevelItem(Index);
+                if (Item->data(0, Qt::UserRole).toString() == Id) return Item->text(2);
+            }
+            return QString{};
+        };
+        QTRY_VERIFY(QRegularExpression(QStringLiteral("삭제한 파일 \\d+개 · [1-9]\\d?%")).match(Amount()).hasMatch());
         Control->finish_ = true; QTRY_VERIFY(!Jobs.IsUiPending(Started.Value().id_));
         auto CancelControl = std::make_shared<struct Control>(); PreparedJob CancelWork; CancelWork.task_ = std::make_unique<Task>(CancelControl);
         auto CancelJob = Jobs.Submit(std::move(CancelWork), QStringLiteral("목록 확인 취소 시험")); QVERIFY(CancelJob.HasValue());
@@ -5737,6 +5774,8 @@ private slots:
           Dialog.findChild<QComboBox*>("hc.settings.jobNotification")->setCurrentIndex(0);
           Dialog.findChild<QComboBox*>("hc.settings.queueOrder")->setCurrentIndex(1);
           Dialog.findChild<QSpinBox*>("hc.settings.jobConcurrency")->setValue(1);
+          auto* ManagerSize = Dialog.findChild<QComboBox*>("hc.settings.jobManagerAutoSize"); QVERIFY(ManagerSize);
+          ManagerSize->setCurrentIndex(1);
           const auto Output = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
           if (!Output.isEmpty()) {
               QDir().mkpath(Output); auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
@@ -5764,6 +5803,8 @@ private slots:
               }
           }
           QVERIFY(Dialog.SaveSettings()); QCOMPARE(TyStCommandMgr::GetInstance()->Bridge()->FileJobs()->Scheduler().ConcurrencyLimit(), size_t(1));
+          const Repository Reload(QFileInfo(Settings.FileName()).absolutePath());
+          QCOMPARE(Reload.Read(Section::Options).toObject()["jobManagerAutoSize"], QJsonValue(false));
           const auto Saved = Settings.CommittedObject(); Dialog.findChild<QSpinBox*>("hc.settings.jobConcurrency")->setValue(2); Dialog.reject(); QCOMPARE(Settings.Object(), Saved); }
         QCOMPARE(Settings.Read(Section::General).toObject()["singleInstance"].toBool(), true);
         QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(QDir().mkdir(Directory.filePath("target")));
@@ -17632,7 +17673,9 @@ private slots:
             uint64_t count_ = 0;
             bool unknown_;
         };
-        QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false);
+        QMainWindow Window; Window.setAttribute(Qt::WA_QuitOnClose, false);
+        Window.setWindowTitle(QStringLiteral("Background file jobs"));
+        Window.show();
         FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
         PreparedJob First; First.request_.resourceLanes_ = {"p3-fixture-first"}; First.task_ = std::make_unique<MeasuredTask>(false);
         auto A = Jobs.Submit(std::move(First), QStringLiteral("P3 알려진 크기 작업")); QVERIFY(A.HasValue());

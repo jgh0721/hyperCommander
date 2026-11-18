@@ -70,7 +70,7 @@ private:
     void showProgress();
     void controlSelected(bool Pause);
     void updateGraph(const hc::operations::JobSnapshot& Snapshot);
-    void recordSamples();
+    void recordSamples(const std::vector<hc::operations::JobSnapshot>& Snapshots);
     void updateSelection();
     void updateProgressView(const hc::operations::JobSnapshot& Snapshot);
     void layoutProgressFooter();
@@ -88,6 +88,9 @@ private:
     int appliedConcurrency_ = hc::product::jobConcurrencyDefault;
     std::map<std::string, hc::operations::JobResult> results_;
     QPointer<QWidget> main_;
+    class TaskbarProgress;
+    std::unique_ptr<TaskbarProgress> taskbarProgress_;
+    bool managerAutoSize_ = true;
     QPointer<QObject> previousPermissionController_;
     QDialog* dialog_ = nullptr;
     QComboBox* jobs_ = nullptr;

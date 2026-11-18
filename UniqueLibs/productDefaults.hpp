@@ -1572,6 +1572,7 @@ namespace hc::defaults
                  { "jobNotification",         "attention" },
                  { "queueInsertion",          "last" },
                  { "jobConcurrency",          hc::product::jobConcurrencyDefault },
+                 { "jobManagerAutoSize",      true },
                  { "enableJobRecovery",       false },
                  { "saveJobProgress",         false },
                  { "showJobDetails",          false },

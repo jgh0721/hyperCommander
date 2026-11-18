@@ -242,6 +242,8 @@ void QMainOpts::LoadSettings()
         findChild<QComboBox*>("hc.settings.jobNotification")->setCurrentIndex(qMax(0, QStringList{"none", "status", "attention", "sound"}.indexOf(Options["jobNotification"].toString(hc::defaults::DefaultValue("options/jobNotification").toString()))));
         findChild<QComboBox*>("hc.settings.queueOrder")->setCurrentIndex(Options["queueInsertion"] == "first" ? 1 : 0);
         findChild<QSpinBox*>("hc.settings.jobConcurrency")->setValue(Options["jobConcurrency"].toInt(hc::defaults::DefaultValue("options/jobConcurrency").toInt()));
+        findChild<QComboBox*>("hc.settings.jobManagerAutoSize")->setCurrentIndex(
+            Options["jobManagerAutoSize"].toBool(hc::defaults::DefaultValue("options/jobManagerAutoSize").toBool()) ? 0 : 1);
         findChild<QCheckBox*>("hc.settings.enableJobRecovery")->setChecked(Options["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()));
         findChild<QCheckBox*>("hc.settings.saveJobProgress")->setEnabled(Options["enableJobRecovery"].toBool(hc::defaults::DefaultValue("options/enableJobRecovery").toBool()));
         findChild<QCheckBox*>("hc.settings.saveJobProgress")->setChecked(Options["saveJobProgress"].toBool(hc::defaults::DefaultValue("options/saveJobProgress").toBool()));
@@ -447,6 +449,7 @@ bool QMainOpts::SaveSettings()
     Options["jobNotification"] = QStringList{"none", "status", "attention", "sound"}.value(findChild<QComboBox*>("hc.settings.jobNotification")->currentIndex(), "attention");
     Options["queueInsertion"] = findChild<QComboBox*>("hc.settings.queueOrder")->currentIndex() == 1 ? "first" : "last";
     Options["jobConcurrency"] = findChild<QSpinBox*>("hc.settings.jobConcurrency")->value();
+    Options["jobManagerAutoSize"] = findChild<QComboBox*>("hc.settings.jobManagerAutoSize")->currentIndex() == 0;
     Options["enableJobRecovery"] = findChild<QCheckBox*>("hc.settings.enableJobRecovery")->isChecked();
     Options["saveJobProgress"] = findChild<QCheckBox*>("hc.settings.saveJobProgress")->isChecked();
     Options["showJobDetails"] = findChild<QCheckBox*>("hc.settings.showJobDetails")->isChecked();
@@ -1138,11 +1141,15 @@ void QMainOpts::initializeDesignPages()
     FolderForm->addRow(tr("자동 계산 범위(&A)"), FolderMode);
     auto* FolderHelp = new QLabel(tr("폴더 안의 파일 크기를 합산해 목록에 표시합니다. 링크·정션의 대상은 따라가지 않습니다.\nUNC·매핑된 네트워크 드라이브·RDP 리디렉션 경로도 수동 계산과 작업 전 집계에 포함하며, ‘자동: 모두’에서는 자동 계산합니다.\n네트워크 폴더는 직접 탐색합니다. 로컬에서 Everything을 사용할 수 없으면 직접 계산하며, ‘자동: Everything으로만’에서는 직접 탐색하지 않습니다. 수동 계산 단축키는 키보드 설정에서 변경할 수 있습니다."), FolderForm->parentWidget());
     FolderHelp->setWordWrap(true); FolderForm->addRow(FolderHelp);
-    auto* ProgressForm = JobGroup(CommonRows, tr("진행창 · 완료 알림"));
+    auto* ProgressForm = JobGroup(CommonRows, tr("진행 표시 · 완료 알림"));
     auto* Progress = ProgressForm->parentWidget();
     defaultDetailed_ = new QCheckBox(tr("처음 열 때 그래프 보이기"), Progress); defaultDetailed_->setObjectName("hc.settings.jobDetailed"); ProgressForm->addRow(SwitchRow(defaultDetailed_, Progress));
     defaultClose_ = new QCheckBox(tr("완료되면 창 닫기"), Progress); defaultClose_->setObjectName("hc.settings.jobCloseOnSuccess"); ProgressForm->addRow(SwitchRow(defaultClose_, Progress));
     auto* Notification = new QComboBox(Progress); Notification->setObjectName("hc.settings.jobNotification"); Notification->addItems({tr("알리지 않음"), tr("상태 표시줄"), tr("상태 표시줄 · 작업 표시줄"), tr("상태 표시줄 · 작업 표시줄 · 소리")}); ProgressForm->addRow(tr("백그라운드 작업 완료 알림"), Notification);
+    auto* ManagerSize = new QComboBox(Progress);
+    ManagerSize->setObjectName("hc.settings.jobManagerAutoSize");
+    ManagerSize->addItems({tr("자동"), tr("바이트 (B)")});
+    ProgressForm->addRow(tr("전송관리자 처리량 단위"), ManagerSize);
     auto* QueueForm = JobGroup(CommonRows, tr("대기열 · 동시 실행"));
     auto* Queue = QueueForm->parentWidget();
     auto* QueueOrder = new QComboBox(Queue); QueueOrder->setObjectName("hc.settings.queueOrder"); QueueOrder->addItems({tr("새 작업을 마지막에 추가"), tr("새 작업을 처음에 추가")}); QueueForm->addRow(tr("대기열 기본 순서"), QueueOrder);
