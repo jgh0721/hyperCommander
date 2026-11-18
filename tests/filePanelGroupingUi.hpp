@@ -229,23 +229,38 @@ inline void FilePanelGroupingUi(QMainUI* Main, CmpPanel* Panel)
             auto OutlineScheme = CursorScheme; OutlineScheme.IsInverseCursor = false; emit Colors->sigColorSchemeChanged(OutlineScheme);
             QTest::qWait(80); QCOMPARE(Native->focusedRowIndex(), GroupPosition);
             const auto Outline = Grid->viewport()->grab().toImage();
-            int OutlinePixels = 0;
-            const auto HeadColor = View->RecordColors()[fm::style::Token::Head];
-            const auto Distance = [](const QColor& A, const QColor& B) {
-                return qAbs(A.red() - B.red()) + qAbs(A.green() - B.green()) + qAbs(A.blue() - B.blue());
-            };
-            // A 1 px logical outline straddles physical pixels at 150% scale.
-            // Check the edge strip's contrast instead of one exact color row.
-            const int Contrast = Distance(HeadColor, View->RecordColors()[fm::style::Token::Fg]);
-            const QList<int> EdgeRows{qFloor(GroupRect.top() * Dpr), qFloor((GroupRect.bottom() - 2) * Dpr)};
-            for (const int Edge : EdgeRows) for (int Y = Edge; Y < qMin(Outline.height(), Edge + qCeil(3 * Dpr)); ++Y) {
-                int Pixels = 0;
-                for (int X = qRound((GroupRect.left() + 40) * Dpr); X < qRound((GroupRect.right() - 40) * Dpr); ++X)
-                    if (Distance(Outline.pixelColor(X, Y), HeadColor) > Contrast / 3) ++Pixels;
-                OutlinePixels = qMax(OutlinePixels, Pixels);
-            }
             if (!Capture.isEmpty()) QVERIFY(Outline.save(QDir(Capture).filePath(QString("grouping-outline-%1-%2.png").arg(Dark ? "dark" : "light", Mode))));
-            QVERIFY2(OutlinePixels > 8, "A group cursor must have a visible outline with inverse cursor disabled");
+            const auto FocusColor = View->RecordColors()[fm::style::Token::Focus];
+            const auto& Geometry = View->RecordGeometry();
+            // Each straight segment must have an uninterrupted run in the file-row focus color.
+            // Search a strip because the frame is inset and can land between physical pixels.
+            const auto HasSegment = [&](const QRect& Strip, Qt::Orientation Direction) {
+                const auto Pixels = QRect(qFloor(Strip.x() * Dpr), qFloor(Strip.y() * Dpr),
+                    qCeil(Strip.width() * Dpr), qCeil(Strip.height() * Dpr)).intersected(Outline.rect());
+                if (Pixels.isEmpty()) return false;
+                const bool Horizontal = Direction == Qt::Horizontal;
+                const int Length = Horizontal ? Pixels.width() : Pixels.height();
+                const int Across = Horizontal ? Pixels.height() : Pixels.width();
+                for (int A = 0; A < Across; ++A) {
+                    int Run = 0;
+                    for (int B = 0; B < Length; ++B) {
+                        const QPoint At = Pixels.topLeft() + (Horizontal ? QPoint(B, A) : QPoint(A, B));
+                        Run = Outline.pixelColor(At) == FocusColor ? Run + 1 : 0;
+                        if (Run > Length / 2) return true;
+                    }
+                }
+                return false;
+            };
+            const int StripWidth = Geometry.sideMargin + 20; // includes the vertical scrollbar
+            const int CenterX = GroupRect.left() + GroupRect.width() / 3;
+            const int CenterY = GroupRect.top() + GroupRect.height() / 3;
+            const int SegmentWidth = GroupRect.width() / 3;
+            const int SegmentHeight = GroupRect.height() / 3;
+            const int StripHeight = Geometry.gap + 5;
+            QVERIFY2(HasSegment(QRect(CenterX, GroupRect.top(), SegmentWidth, StripHeight), Qt::Horizontal), "Group focus top edge is missing");
+            QVERIFY2(HasSegment(QRect(CenterX, GroupRect.bottom() - StripHeight + 1, SegmentWidth, StripHeight), Qt::Horizontal), "Group focus bottom edge is missing");
+            QVERIFY2(HasSegment(QRect(GroupRect.left(), CenterY, StripWidth, SegmentHeight), Qt::Vertical), "Group focus left edge is missing");
+            QVERIFY2(HasSegment(QRect(GroupRect.right() - StripWidth + 1, CenterY, StripWidth, SegmentHeight), Qt::Vertical), "Group focus right edge is missing");
             emit Colors->sigColorSchemeChanged(CursorScheme); QTest::qWait(80);
             if (!Capture.isEmpty()) QVERIFY(View->grab().save(QDir(Capture).filePath(QString("grouping-%1-%2.png").arg(Dark ? "dark" : "light", Mode))));
         }

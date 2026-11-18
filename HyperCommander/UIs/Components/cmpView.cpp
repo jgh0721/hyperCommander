@@ -149,6 +149,15 @@ RecordState ProductRecordState(CGridView* Owner, int Row)
 class ProductRecordPainter final : public Qtitan::GridRecordPainter {
 public:
     explicit ProductRecordPainter(CGridView* Owner) : owner_(Owner) {}
+    bool paintGroupFocus(QPainter& Painter, const QRect& Rect, QWidget*) override
+    {
+        RecordState State;
+        State.active = owner_->IsPanelActive();
+        State.cursor = true;
+        if (State.active && !Rect.isEmpty())
+            paintRecordCursor(&Painter, Rect, owner_->RecordGeometry(), owner_->ListAppearance(), State, owner_->RecordColors());
+        return true;
+    }
     void paintBackground(QPainter& Painter, const Record& Value, QWidget*) override
     {
         const auto State = ProductRecordState(owner_, Value.rowIndex);
