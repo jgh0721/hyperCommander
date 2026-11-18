@@ -85,7 +85,7 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
 
   private:
     void             updateWindowFrame();
-    void             requestInputFocusRestore();
+    void             requestInputFocusRestore(bool Activating = false);
     void             restoreInputFocus();
     void             restoreWindowState(const hc::workspace::State& State);
     void             restoreWorkspacePanels(const hc::workspace::State& State);
@@ -103,7 +103,7 @@ class QMainUI : public QMainWindow, public QAbstractNativeEventFilter
     fm::ui::CommandLine*  commandLine_    = nullptr;
     QPointer<QWidget>     lastInputFocus_;
     bool                  inputFocusRestorePending_ = false;
-    bool                  activationFocusRestorePending_ = false;
+    CmpPanel*             activationFocusPanel_ = nullptr;
     Ui::dlgMain           ui;
     hc::workspace::Loaded workspace_;
     bool                  workspaceLoaded_ = false;

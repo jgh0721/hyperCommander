@@ -9059,8 +9059,8 @@ private slots:
         main_->showNormal(); QVERIFY(ActivateTestWindow(Root));
         Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
         View->BaseView()->setFocusedRowIndex(2);
-        if (Target == 2) { Command->lineEdit()->clear(); Command->lineEdit()->setFocus(); }
         QPointer<QWidget> Input = QApplication::focusWidget(); QVERIFY(Input);
+        if (Target == 2) { Command->lineEdit()->setFocus(); QCOMPARE(QApplication::focusWidget(), Command->lineEdit()); }
         QVERIFY(GetFocus());
         const auto Row = View->BaseView()->focusedRowIndex();
         const auto Trace = connect(qApp, &QApplication::focusChanged, this, [](QWidget* Before, QWidget* After) {
@@ -9096,13 +9096,10 @@ private slots:
             QTRY_COMPARE(QApplication::focusWidget(), Input.data());
             QTRY_VERIFY(GetFocus() && (GetFocus() == Root || IsChild(Root, GetFocus())));
             INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
-            Keys[0].ki.wVk = Keys[1].ki.wVk = Target == 2 ? 'X' : VK_DOWN;
+            Keys[0].ki.wVk = Keys[1].ki.wVk = VK_DOWN;
             Keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
             QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2));
-            if (Target == 2) {
-                auto* Editor = qobject_cast<QLineEdit*>(Input.data()); QVERIFY(Editor);
-                QTRY_COMPARE(Editor->text(), QString(Cycle + 1, 'x'));
-            } else QTRY_COMPARE(View->BaseView()->focusedRowIndex(), Row + Cycle + 1);
+            QTRY_COMPARE(View->BaseView()->focusedRowIndex(), Row + Cycle + 1);
         }
     }
 
@@ -9117,7 +9114,7 @@ private slots:
         }
         auto* Command = main_->findChild<fm::ui::CommandLine*>("hc.commandLine"); QVERIFY(Command); Command->show();
         const auto Root = reinterpret_cast<HWND>(main_->winId());
-        for (int Target = 0; Target < 3; ++Target) {
+        for (int Target = 0; Target < 4; ++Target) {
             auto* Panel = panels_[Target == 1 ? 1 : 0];
             Panel->ChangeCurrentPath(Directory.path(), {});
             QTRY_VERIFY(!model(Panel)->IsLoading()); QTRY_COMPARE(model(Panel)->rowCount(), 7);
@@ -9125,8 +9122,14 @@ private slots:
             QVERIFY(ActivateTestWindow(Root));
             Panel->sig_NotifyPanelActivated(); View->EnsureKeyboardFocusOnView();
             View->BaseView()->setFocusedRowIndex(2);
-            if (Target == 2) { Command->lineEdit()->clear(); Command->lineEdit()->setFocus(); }
             QPointer<QWidget> Input = QApplication::focusWidget(); QVERIFY(Input);
+            if (Target == 2) { Command->lineEdit()->setFocus(); QCOMPARE(QApplication::focusWidget(), Command->lineEdit()); }
+            auto* Preview = panels_.back();
+            if (Target == 3) {
+                Preview->OpenQuickView(Preview->CurrentTabIndex(), {});
+                QVERIFY(qobject_cast<CQuickView*>(Preview->GetFocusView(Preview->CurrentTabIndex())));
+                Preview->sig_NotifyPanelActivated();
+            }
             // Windows can reactivate the same HWND while Qt still remembers it
             // as inactive. A repeated native activation must repair both layers.
             QApplication::setActiveWindow(nullptr);
@@ -9136,19 +9139,16 @@ private slots:
             QTRY_COMPARE(QApplication::focusWidget(), Input.data());
             QVERIFY(GetFocus());
             INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
-            Keys[0].ki.wVk = Keys[1].ki.wVk = Target == 2 ? 'X' : VK_DOWN;
+            Keys[0].ki.wVk = Keys[1].ki.wVk = VK_DOWN;
             Keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
             QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2));
-            if (Target == 2) QTRY_COMPARE(Command->lineEdit()->text(), QString("x"));
-            else QTRY_COMPARE(View->BaseView()->focusedRowIndex(), 3);
+            QTRY_COMPARE(View->BaseView()->focusedRowIndex(), 3);
+            if (Target == 3) QVERIFY(Preview->CloseQuickView(Preview->CurrentTabIndex()));
         }
     }
 
-    // Real switching: the system Alt+Tab switcher and clicks on HC areas, not
-    // SetForegroundWindow from the harness. The panel views already own HWNDs
-    // ("as-created"); "native-grid" also gives the grid one, as asking the
-    // viewport for winId() used to. A click on the other panel while
-    // activating HC left the keys in the previous panel's HWND.
+    // Exercise the system Alt+Tab switcher and click-to-activate. The panel
+    // views already own HWNDs; "native-grid" also gives the grid viewport one.
     void windowSwitchFocusUi_data()
     {
         QTest::addColumn<bool>("NativePanels");
@@ -9282,6 +9282,12 @@ private slots:
         };
         const auto HcForeground = [&] { return GetAncestor(GetForegroundWindow(), GA_ROOT) == Root; };
         auto* Chrome = main_->findChild<fm::ui::WindowChrome*>(); QVERIFY(Chrome);
+        auto* Command = main_->findChild<fm::ui::CommandLine*>("hc.commandLine"); QVERIFY(Command); Command->show();
+        auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
+        auto* Mode = Right->findChild<fm::ui::SegmentedControl*>("hc.panelViewMode"); QVERIFY(Mode);
+        auto* Toolbar = main_->findChild<QToolBar*>("hc.navigationToolbar"); QVERIFY(Toolbar); Toolbar->show();
+        auto* RefreshAction = main_->findChild<QAction*>("hc.menu.hc.navigate.refresh"); QVERIFY(RefreshAction);
+        auto* Refresh = Toolbar->widgetForAction(RefreshAction); QVERIFY(Refresh);
         // The foreground peer grants activation, as the taskbar does; the harness's
         // own forced activation (thread input attachment) can hand it back later.
         const auto PeerActivatesHc = [&] { return SendMessageW(PeerWindow, WM_APP + 117, reinterpret_cast<WPARAM>(Root), 0) != 0; };
@@ -9297,23 +9303,40 @@ private slots:
         };
         QStringList Failures; int Runs = 0;
         for (const auto& Way : Methods) {
-            for (int Cycle = 0; Cycle < 4; ++Cycle) {
+            for (int Cycle = 0; Cycle < 5; ++Cycle) {
                 ++Runs;
                 const auto Tag = QString("%1#%2").arg(Way.name_).arg(Cycle);
-                // Start from HC with the left grid as the user's input and the
-                // peer directly behind it, so Alt+Tab alternates the two.
+                // Keep the peer directly behind HC so Alt+Tab alternates the two.
                 if (GetForegroundWindow() != PeerWindow) QVERIFY(ActivateTestWindow(PeerWindow));
                 QVERIFY(PeerActivatesHc()); QTRY_VERIFY(HcForeground());
-                Left->sig_NotifyPanelActivated(); LeftView->EnsureKeyboardFocusOnView();
-                LeftView->BaseView()->setFocusedRowIndex(2);
-                QTRY_VERIFY(QApplication::focusWidget() && (QApplication::focusWidget() == LeftGrid || LeftGrid->isAncestorOf(QApplication::focusWidget())));
+                QTest::qWait(100); // Let the queued activation finish before choosing the initial control.
+                auto* Expected = Cycle == 1 ? RightView : LeftView;
+                Expected->EnsureKeyboardFocusOnView();
+                Expected->BaseView()->setFocusedRowIndex(2);
+                QTRY_VERIFY(Expected->isAncestorOf(QApplication::focusWidget()));
+                if (Cycle == 1) {
+                    QVERIFY(ClickWidget(Command->lineEdit(), Command->lineEdit()->rect().center()));
+                    QTRY_COMPARE(QApplication::focusWidget(), Command->lineEdit());
+                } else if (Cycle == 2) {
+                    QVERIFY(ClickWidget(Find, Find->rect().center()));
+                    QTRY_COMPARE(QApplication::focusWidget(), Find);
+                } else if (Cycle == 3) {
+                    auto* Button = Mode->button(Mode->currentIndex() == 0 ? 1 : 0); QVERIFY(Button);
+                    QVERIFY(ClickWidget(Button, Button->rect().center()));
+                    QTRY_VERIFY(Right->property("hc.activePanel").toBool());
+                    Expected = RightView;
+                } else if (Cycle == 4) {
+                    QVERIFY(ClickWidget(Refresh, Refresh->rect().center()));
+                    QTRY_VERIFY(!model(Left)->IsLoading());
+                }
                 QTest::qWait(150);
                 if (Way.leave_ == Leave::AltTab) QVERIFY(AltTab()); else QVERIFY(ActivateTestWindow(PeerWindow));
                 if (!QTest::qWaitFor([&] { return GetForegroundWindow() == PeerWindow; }, 2000)) {
                     Failures << Tag + " leave: " + Describe(); QVERIFY(ActivateTestWindow(PeerWindow));
                 }
                 QTest::qWait(150);
-                auto* Expected = Way.back_ == Back::OtherGrid ? RightView : LeftView;
+                if (Way.back_ == Back::Grid) Expected = LeftView;
+                if (Way.back_ == Back::OtherGrid) Expected = RightView;
                 Tracer.lines_.clear(); Tracer.clock_.restart(); Tracer.on_ = true;
                 switch (Way.back_) {
                 case Back::AltTab: QVERIFY(AltTab()); break;
@@ -9326,6 +9349,8 @@ private slots:
                 if (!QTest::qWaitFor(HcForeground, 2000)) { Tracer.on_ = false; PrintTrace(); Failures << Tag + " return: " + Describe(); continue; }
                 QTest::qWait(300);
                 const auto State = Describe();
+                const auto* Focus = QApplication::focusWidget();
+                const bool TakesKeyboard = Expected->isAncestorOf(Focus) && NativeFocusReaches(Focus);
                 const auto Row = Expected->BaseView()->focusedRowIndex();
                 const auto LeftRow = LeftView->BaseView()->focusedRowIndex(), RightRow = RightView->BaseView()->focusedRowIndex();
                 INPUT Keys[2]{}; Keys[0].type = Keys[1].type = INPUT_KEYBOARD;
@@ -9333,9 +9358,9 @@ private slots:
                 QCOMPARE(SendInput(2, Keys, sizeof(INPUT)), UINT(2));
                 const bool Moved = QTest::qWaitFor([&] { return Expected->BaseView()->focusedRowIndex() == Row + 1; }, 1500);
                 Tracer.on_ = false;
-                qInfo().noquote() << (Moved ? "OK  " : "FAIL") << Tag << "row" << Row << "->" << Expected->BaseView()->focusedRowIndex()
+                qInfo().noquote() << (Moved && TakesKeyboard ? "OK  " : "FAIL") << Tag << "row" << Row << "->" << Expected->BaseView()->focusedRowIndex()
                     << "L" << LeftRow << "->" << LeftView->BaseView()->focusedRowIndex() << "R" << RightRow << "->" << RightView->BaseView()->focusedRowIndex() << State;
-                if (!Moved) { PrintTrace(); Failures << Tag + ": " + State; }
+                if (!Moved || !TakesKeyboard) { PrintTrace(); Failures << Tag + ": " + State; }
             }
         }
         qInfo() << "Window switch runs:" << Runs << "failures:" << Failures.size();
@@ -9361,8 +9386,6 @@ private slots:
         Shortcut[0].ki.wVk = Shortcut[3].ki.wVk = VK_CONTROL;
         Shortcut[1].ki.wVk = Shortcut[2].ki.wVk = VK_OEM_2;
         Shortcut[2].ki.dwFlags = Shortcut[3].ki.dwFlags = KEYEVENTF_KEYUP;
-        QCOMPARE(SendInput(4, Shortcut, sizeof(INPUT)), UINT(4));
-        QTRY_COMPARE(QApplication::focusWidget(), Editor);
         const auto TypeText = [](const QString& Text) {
             QList<INPUT> Keys;
             for (const auto Ch : Text) {
@@ -9379,6 +9402,8 @@ private slots:
             return SendInput(2, Keys, sizeof(INPUT)) == 2;
         };
         for (int Cycle = 0; Cycle < 3; ++Cycle) {
+            QCOMPARE(SendInput(4, Shortcut, sizeof(INPUT)), UINT(4));
+            QTRY_COMPARE(QApplication::focusWidget(), Editor);
             // A unique title identifies only the console owned by this test.
             const auto Title = QString("HC-command-focus-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
             HWND Console = nullptr;
@@ -9394,10 +9419,8 @@ private slots:
             QTRY_COMPARE(GetForegroundWindow(), Root);
             // Do not activate HC or repair either focus layer after console exit.
             QTRY_COMPARE(QApplication::activeWindow(), main_);
-            QTRY_COMPARE(QApplication::focusWidget(), Editor);
-            QVERIFY(GetFocus());
-            QVERIFY(TypeText("x"));
-            QTRY_COMPARE(Editor->text(), QString("x"));
+            QTRY_VERIFY(View->isAncestorOf(QApplication::focusWidget()));
+            QVERIFY(NativeFocusReaches(QApplication::focusWidget()));
         }
     }
 
@@ -9418,12 +9441,16 @@ private slots:
         auto* Command = main_->findChild<fm::ui::CommandLine*>("hc.commandLine"); QVERIFY(Command); Command->setFocus();
         QPointer<QWidget> CommandInput = QApplication::focusWidget(); QVERIFY(CommandInput);
         Dialog.show(); Dialog.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&Dialog)); Editor.setFocus();
-        Dialog.reject(); main_->activateWindow(); QTRY_COMPARE(QApplication::focusWidget(), CommandInput.data());
+        Dialog.reject(); main_->activateWindow();
+        QTRY_VERIFY(Grid->isAncestorOf(QApplication::focusWidget()));
         // Qt can retain its remembered widget after Windows loses the native
         // receiver during cancellation/host teardown. Normal Qt keyClick tests
         // bypass this condition, so explicitly exercise the Win32 boundary.
         main_->activateWindow(); SetForegroundWindow(reinterpret_cast<HWND>(main_->winId()));
         QTRY_COMPARE(GetForegroundWindow(), reinterpret_cast<HWND>(main_->winId()));
+        QCoreApplication::processEvents();
+        Command->setFocus();
+        QTRY_COMPARE(QApplication::focusWidget(), CommandInput.data());
         qInfo() << "Native focus loss setup (foreground/root/focus):" << GetForegroundWindow() << reinterpret_cast<HWND>(main_->winId()) << GetFocus();
         SetFocus(nullptr);
         QTRY_VERIFY2(GetFocus() != nullptr, "The active main window must recover a missing native keyboard receiver");

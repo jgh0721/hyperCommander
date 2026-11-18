@@ -25,6 +25,7 @@
 #include "UniqueLibs/commandUiConfig.hpp"
 #include <QToolButton>
 #include <QToolBar>
+#include <utility>
 #include "Components/cmpView.hpp"
 #include "UIs/dlgOpts.hpp"
 #include "UIs/dlgFavoriteDir.hpp"
@@ -125,8 +126,10 @@ void QMainUI::changeEvent( QEvent* Event )
         updateWindowFrame();
 }
 
-void QMainUI::requestInputFocusRestore()
+void QMainUI::requestInputFocusRestore(bool Activating)
 {
+    // Capture the command source before Qt restores its previous focus widget.
+    if (Activating && !activationFocusPanel_) activationFocusPanel_ = retrieveSrcPanel();
     if (inputFocusRestorePending_) return;
     inputFocusRestorePending_ = true;
     QTimer::singleShot(0, this, [this] { inputFocusRestorePending_ = false; restoreInputFocus(); });
@@ -147,11 +150,14 @@ void QMainUI::restoreInputFocus()
     const auto Current = QApplication::focusWidget();
     const auto Native = GetFocus();
     const bool CurrentValid = Current && Current != this && Current->window() == this && Current->isVisible() && Current->isEnabled();
-    const auto Previous = lastInputFocus_.data();
-    const bool RestorePrevious = activationFocusRestorePending_ && Previous && Previous->window() == this
-        && Previous->isVisible() && Previous->isEnabled();
-    activationFocusRestorePending_ = false;
-    if (Native && IsWindowVisible(Native) && (Native == Root || IsChild(Root, Native))) {
+    auto* Panel = std::exchange(activationFocusPanel_, nullptr);
+    if (Panel && !qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex()))) {
+        // The active pane may currently host a preview or a system tool.
+        auto* Other = Panel == ui.cmpLeftPanel ? ui.cmpRightPanel : ui.cmpLeftPanel;
+        auto* Files = qobject_cast<CGridView*>(Other->GetFocusView(Other->CurrentTabIndex()));
+        if (Files && Files->isVisible()) Panel = Other;
+    }
+    if (!Panel && Native && IsWindowVisible(Native) && (Native == Root || IsChild(Root, Native))) {
         // Keys sent to an HWND reach the focus widget inside that HWND's own
         // widget. The main window HWND reaches every widget, but a native child
         // (the panel tree has HWNDs) keeps them inside its subtree: a click that
@@ -160,20 +166,22 @@ void QMainUI::restoreInputFocus()
         const QWidget* Owner = Native == Root ? this : QWidget::find(reinterpret_cast<WId>(Native));
         if (!Owner) {
             DWORD Process = 0; GetWindowThreadProcessId(Native, &Process);
-            if ((CurrentValid && !RestorePrevious) || Process != GetCurrentProcessId()) return; // Preserve an embedded native viewer too.
-        } else if (CurrentValid && !RestorePrevious && (Owner == Current || Owner->isAncestorOf(Current))) return;
+            if (CurrentValid || Process != GetCurrentProcessId()) return; // Preserve an embedded native viewer too.
+        } else if (CurrentValid && (Owner == Current || Owner->isAncestorOf(Current))) return;
     }
-    // Activation may have selected a valid fallback (the command line) while
-    // restoring a native panel child. Prefer the user's last input widget.
-    QPointer<QWidget> Target = RestorePrevious ? Previous : CurrentValid ? Current : Previous;
+    QPointer<QWidget> Target = CurrentValid ? Current : lastInputFocus_.data();
     // setFocus alone can be a no-op when Qt remembers the widget but the native
     // input queue has lost its receiver after a dialog/host disappears. Give the
     // keyboard to the main window HWND, as Qt itself does when focusing a widget;
     // the native child that contains the widget would keep it there once Qt
     // moves focus elsewhere before it sees the native focus change.
     if (GetFocus() != Root) SetFocus(Root);
-    if (Target && Target->window() == this && Target->isVisible() && Target->isEnabled()) Target->setFocus(Qt::OtherFocusReason);
-    else if (auto* Panel = retrieveSrcPanel()) Panel->SetFocusView(Panel->CurrentTabIndex());
+    if (Panel) {
+        if (Panel != retrieveSrcPanel()) setActivePanel(Panel == ui.cmpRightPanel ? 1 : 0);
+        Panel->SetFocusView(Panel->CurrentTabIndex());
+        lastInputFocus_ = QApplication::focusWidget();
+    } else if (Target && Target->window() == this && Target->isVisible() && Target->isEnabled()) Target->setFocus(Qt::OtherFocusReason);
+    else if (auto* Source = retrieveSrcPanel()) Source->SetFocusView(Source->CurrentTabIndex());
 }
 
 bool QMainUI::nativeEventFilter(const QByteArray& Type, void* Message, qintptr* Result)
@@ -183,11 +191,11 @@ bool QMainUI::nativeEventFilter(const QByteArray& Type, void* Message, qintptr* 
     const auto Root = reinterpret_cast<HWND>(internalWinId());
     // Qt can suppress a duplicate activation for its remembered focus window.
     // Recover after native dispatch, including when no WindowActivate is sent.
-    if (Root && Native->hwnd == Root
-        && ((Native->message == WM_ACTIVATE && LOWORD(Native->wParam) != WA_INACTIVE)
-            || (Native->message == WM_ACTIVATEAPP && Native->wParam))) {
-        activationFocusRestorePending_ = true;
-        requestInputFocusRestore();
+    if (Root && Native->hwnd == Root) {
+        if (Native->message == WM_ACTIVATE && LOWORD(Native->wParam) == WA_INACTIVE)
+            activationFocusPanel_ = nullptr;
+        else if (Native->message == WM_ACTIVATE || (Native->message == WM_ACTIVATEAPP && Native->wParam))
+            requestInputFocusRestore(true);
     }
     if (Root && (Native->hwnd == Root || IsChild(Root, Native->hwnd))
         && (Native->message == WM_SETFOCUS || Native->message == WM_KILLFOCUS)) requestInputFocusRestore();
@@ -668,19 +676,22 @@ bool QMainUI::eventFilter( QObject* Object, QEvent* Event )
         if (Key->key() == Qt::Key_Return || Key->key() == Qt::Key_Enter) return true;
     }
     // QWidget dispatches activation/unblocking through event(), not changeEvent().
-    if (Object == this && (Event->type() == QEvent::WindowActivate || Event->type() == QEvent::WindowUnblocked)) {
-        if (Event->type() == QEvent::WindowActivate) activationFocusRestorePending_ = true;
-        requestInputFocusRestore();
+    if (Object == this) {
+        if (Event->type() == QEvent::WindowDeactivate) activationFocusPanel_ = nullptr;
+        else if (Event->type() == QEvent::WindowActivate || Event->type() == QEvent::WindowUnblocked)
+            requestInputFocusRestore(Event->type() == QEvent::WindowActivate);
     }
     const auto Widget = qobject_cast<QWidget*>(Object);
+    // A click that activates the window can explicitly choose the other pane.
+    if (activationFocusPanel_ && Event->type() == QEvent::MouseButtonPress && Widget && Widget->window() == this) {
+        if (ui.cmpLeftPanel->isAncestorOf(Widget)) activationFocusPanel_ = ui.cmpLeftPanel;
+        else if (ui.cmpRightPanel->isAncestorOf(Widget)) activationFocusPanel_ = ui.cmpRightPanel;
+    }
     if (Event->type() == QEvent::FocusIn) {
         if (Widget && Widget != this && Widget->window() == this) {
             // Qt's activation fallback is not a user request to switch input.
             const auto Reason = static_cast<QFocusEvent*>(Event)->reason();
-            if (Reason != Qt::ActiveWindowFocusReason || !lastInputFocus_) {
-                lastInputFocus_ = Widget;
-                activationFocusRestorePending_ = false;
-            }
+            if (Reason != Qt::ActiveWindowFocusReason || !lastInputFocus_) lastInputFocus_ = Widget;
         }
         if (Widget && (Widget == ui.cmpLeftPanel || ui.cmpLeftPanel->isAncestorOf(Widget))) setActivePanel(0);
         else if (Widget && (Widget == ui.cmpRightPanel || ui.cmpRightPanel->isAncestorOf(Widget))) setActivePanel(1);
