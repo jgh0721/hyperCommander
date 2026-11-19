@@ -203,6 +203,50 @@ private slots:
         QVERIFY(Scheduler.Cancel(Front.Value().id_).HasValue()); QVERIFY(Ready(Front.Value()));
         QVERIFY(Scheduler.Cancel(Background.back().id_).HasValue()); QVERIFY(Ready(Background.back()));
     }
+    void sharedSourceAndFileOutputs()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 3);
+        auto One = Lane("path:D:/out/one.txt"); One.readLanes_ = {"path:D:/source/file.txt"};
+        auto Two = Lane("path:D:/out/two.txt"); Two.readLanes_ = One.readLanes_;
+        auto A = Scheduler.Submit(One, std::make_unique<ScriptTask>(std::make_shared<Probe>(), [](auto) { return Prompt(); }));
+        auto B = Scheduler.Submit(Two, std::make_unique<ScriptTask>(std::make_shared<Probe>(), [](auto) { return Prompt(); }));
+        QVERIFY(A.HasValue() && B.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(A.Value().id_).Value().state_, JobState::WaitingForUser);
+        QTRY_COMPARE(Scheduler.Snapshot(B.Value().id_).Value().state_, JobState::WaitingForUser);
+        auto Parent = Scheduler.Submit(Lane("path:D:/out"), std::make_unique<ScriptTask>(std::make_shared<Probe>()));
+        auto Source = Scheduler.Submit(Lane("path:D:/source"), std::make_unique<ScriptTask>(std::make_shared<Probe>()));
+        QVERIFY(Parent.HasValue() && Source.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Parent.Value().id_).Value().wait_.reason_, JobWaitReason::Resource);
+        QTRY_COMPARE(Scheduler.Snapshot(Source.Value().id_).Value().wait_.reason_, JobWaitReason::Resource);
+        QVERIFY(Scheduler.Cancel(A.Value().id_).HasValue());
+        QVERIFY(Ready(A.Value()));
+        QTRY_COMPARE(Scheduler.Snapshot(Parent.Value().id_).Value().wait_.jobId_, B.Value().id_);
+        QCOMPARE(Scheduler.Snapshot(Source.Value().id_).Value().wait_.jobId_, B.Value().id_);
+        QVERIFY(Scheduler.Cancel(B.Value().id_).HasValue());
+        QVERIFY(Ready(Parent.Value()) && Ready(Source.Value()));
+    }
+    void dynamicTargetNeverStealsAnotherClaim()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);
+        auto Occupied = Scheduler.Submit(Lane("path:D:/out/busy.txt"),
+            std::make_unique<ScriptTask>(std::make_shared<Probe>(), [](auto) { return Prompt(); }));
+        QVERIFY(Occupied.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Occupied.Value().id_).Value().state_, JobState::WaitingForUser);
+        std::atomic_bool Kept{};
+        auto Changing = Scheduler.Submit(Lane("path:D:/out/old.txt"),
+            std::make_unique<ScriptTask>(std::make_shared<Probe>(), [&](const JobStepContext& Context) {
+                Kept = !Context.tryReserveWrite_("path:d:/out/BUSY.txt") && Context.tryReserveWrite_("path:D:/out/new.txt");
+                return Prompt();
+            }));
+        QVERIFY(Changing.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(Changing.Value().id_).Value().state_, JobState::WaitingForUser);
+        QVERIFY(Kept.load());
+        auto After = Scheduler.Submit(Lane("path:D:/out/new.txt"), std::make_unique<ScriptTask>(std::make_shared<Probe>()));
+        QVERIFY(After.HasValue());
+        QTRY_COMPARE(Scheduler.Snapshot(After.Value().id_).Value().wait_.jobId_, Changing.Value().id_);
+        QVERIFY(Scheduler.Cancel(Changing.Value().id_).HasValue());
+        QVERIFY(Ready(After.Value()));
+    }
     void concurrencyLimitRetainsJobsAcrossStepsAndFreesPrompt()
     {
         JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>(), 2);

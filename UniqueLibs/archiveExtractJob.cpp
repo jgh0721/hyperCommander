@@ -8,6 +8,16 @@
 namespace hc::operations {
 using namespace storage;
 namespace {
+Result<Locator> ExtractTarget(const ExtractRequest& Request, const EntrySnapshot& Source) {
+    auto Target = Request.destination_;
+    if (Request.separateFolders_) {
+        const auto Name = QFileInfo(QString::fromStdString(Source.name_)).completeBaseName();
+        if (Name.isEmpty() || Name == "." || Name == ".." || Name.contains('/') || Name.contains('\\'))
+            return Error{ErrorCategory::InvalidRequest, "extract-folder-name"};
+        Target.root_ = QDir(QString::fromStdString(Target.root_)).filePath(Name).toStdString();
+    }
+    return Target;
+}
 class EmptyExtract final : public IJobTask {
 public:
     JobStep Advance(JobStepContext) override { return JobStep{JobState::Completed}; }
@@ -76,12 +86,9 @@ public:
                 if (Last.category_ == ErrorCategory::Cancelled || Last.category_ == ErrorCategory::AccessDenied) break;
             }
             if (!reader_) return failed(Last);
-            target_ = request_.destination_;
-            if (request_.separateFolders_) {
-                const auto Name = QFileInfo(QString::fromStdString(Source.entry_.name_)).completeBaseName();
-                if (Name.isEmpty() || Name == "." || Name == ".." || Name.contains('/') || Name.contains('\\')) return failed({ErrorCategory::InvalidRequest, "extract-folder-name"});
-                target_.root_ = QDir(QString::fromStdString(target_.root_)).filePath(Name).toStdString();
-            }
+            auto Target = ExtractTarget(request_, Source.entry_);
+            if (!Target.HasValue()) return failed(Target.Failure());
+            target_ = std::move(Target.Value());
             return JobStep{JobState::Preparing};
         }
         if (!listed_) {
@@ -129,7 +136,16 @@ Result<PreparedJob> PrepareExtract(ExtractRequest Request, OperationContext Cont
     PreparedJob Out; Out.request_.operation_ = Context; Out.request_.maxItemResults_ = Context.EnumerationLimit();
     Out.request_.metadata_ = {"파일 압축 해제", Request.sourceRoot_.root_, Request.destination_.root_, Request.separateFolders_ ? "extract; separate-folders" : "extract; shared-folder"};
     Out.request_.metadata_.kind_ = JobKind::Extract;
-    Out.request_.resourceLanes_ = {FileOperationLane(Request.sourceRoot_), FileOperationLane(Request.destination_)};
+    // A split archive can read sibling volumes as well as the selected file.
+    auto& Sources = Request.sourceRoot_.kind_ == LocatorKind::Plugin ? Out.request_.resourceLanes_ : Out.request_.readLanes_;
+    Sources.push_back(FileOperationLane(Request.sourceRoot_));
+    if (Request.separateFolders_ && !Request.selection_) {
+        for (const auto& Source : Request.archives_) {
+            auto Target = ExtractTarget(Request, Source.entry_);
+            if (!Target.HasValue()) return Target.Failure();
+            Out.request_.resourceLanes_.push_back(FileOperationLane(Target.Value()));
+        }
+    } else Out.request_.resourceLanes_.push_back(FileOperationLane(Request.destination_));
     Out.task_ = std::make_unique<ProviderInteractionTask>(std::make_unique<ExtractTask>(std::move(Request)), "압축 내용을 준비·해독하는 중…"); return Out;
 }
 }

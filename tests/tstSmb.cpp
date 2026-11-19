@@ -1,6 +1,9 @@
 ﻿#include "stdafx.h"
 #include "UniqueLibs/inputGate.hpp"
 #include <QShortcut>
+#include <QAction>
+#include <QTabBar>
+#include <fmwidgets/ReorderList.h>
 #include "UniqueLibs/wcxStorage.hpp"
 #include "UniqueLibs/ProductContants.hpp"
 #include "pluginHost/pluginProcess.hpp"
@@ -17318,6 +17321,14 @@ private slots:
     void r7QueueAndRetryUi()
     {
         using namespace hc::operations; using namespace hc::storage;
+        class NoElevation final : public IFileElevationService {
+        public:
+            bool CanExecute(const FileElevationRequest&) const override { return false; }
+            Result<std::unique_ptr<IFileElevationSession>> Begin(FileElevationRequest, OperationContext) override
+            {
+                return Error{ErrorCategory::Unsupported, "test-elevation-unavailable"};
+            }
+        };
         QTemporaryDir Directory; QVERIFY(Directory.isValid()); QVERIFY(QDir().mkdir(Directory.filePath("target")));
         auto Reader = MakeNativeReadProvider(LocatorKind::Local); auto Writer = MakeNativeWritableStorage(LocatorKind::Local, Reader);
         const auto Put = [](const QString& Path, const QByteArray& Bytes) { QFile File(Path); return File.open(QIODevice::WriteOnly) && File.write(Bytes) == Bytes.size(); };
@@ -17344,16 +17355,34 @@ private slots:
         const auto Select = [&](const std::string& Id) { for (int Index = 0; Index < List->topLevelItemCount(); ++Index) if (List->topLevelItem(Index)->data(0, Qt::UserRole).toString().toStdString() == Id) List->setCurrentItem(List->topLevelItem(Index)); };
         QTRY_VERIFY(Manager->isVisible()); QTRY_VERIFY(List->topLevelItemCount() >= 3); QTest::qWait(100);
         for (int Index = 0; Index < 3; ++Index) { QVERIFY(Jobs.Scheduler().Snapshot(Queued[Index].id_).Value().deferred_); QVERIFY(!QFile::exists(Directory.filePath(QString("target/queued%1.txt").arg(Index)))); }
-        Select(Queued[2].id_); Window.findChild<QPushButton*>("hc.jobs.queueUp")->click(); Window.findChild<QPushButton*>("hc.jobs.queueUp")->click();
+        auto* Tabs = Manager->findChild<QTabBar*>("hc.jobs.filter"); QVERIFY(Tabs);
+        Tabs->setCurrentIndex(1);
+        auto* Order = Manager->findChild<fm::ui::ReorderListWidget*>("hc.jobs.queueList"); QVERIFY(Order);
+        QTRY_COMPARE(Order->count(), 3);
+        Order->setCurrentRow(2);
+        QTest::keyClick(Order, Qt::Key_Up, Qt::ControlModifier);
+        QCOMPARE(Order->currentRow(), 1);
+        const auto From = Order->HandleRect(1).center();
+        const auto To = Order->HandleRect(0).topLeft() + QPoint(15, 2);
+        const auto Send = [&](QEvent::Type Type, QPoint Pos, Qt::MouseButton Button, Qt::MouseButtons Buttons) {
+            QMouseEvent Event(Type, QPointF(Pos), QPointF(Order->viewport()->mapToGlobal(Pos)), Button, Buttons, Qt::NoModifier);
+            QCoreApplication::sendEvent(Order->viewport(), &Event);
+        };
+        Send(QEvent::MouseButtonPress, From, Qt::LeftButton, Qt::LeftButton);
+        Send(QEvent::MouseMove, To, Qt::NoButton, Qt::LeftButton);
+        Send(QEvent::MouseButtonRelease, To, Qt::LeftButton, Qt::NoButton);
+        QCOMPARE(Order->currentRow(), 0);
+        QCOMPARE(Order->currentItem()->data(Qt::UserRole).toString().toStdString(), Queued[2].id_);
         QVERIFY(Jobs.Scheduler().Snapshot(Queued[2].id_).Value().queueOrder_ < Jobs.Scheduler().Snapshot(Queued[0].id_).Value().queueOrder_);
         auto* Limit = Window.findChild<QSpinBox*>("hc.jobs.concurrency"); QVERIFY(Limit); Limit->setValue(1); QCOMPARE(Jobs.Scheduler().ConcurrencyLimit(), size_t(1));
         Save(Manager, "r7-queue-receipts");
-        Window.findChild<QPushButton*>("hc.jobs.all.1")->click(); Window.findChild<QPushButton*>("hc.jobs.startQueue")->click();
+        Window.findChild<QAction*>("hc.jobs.all.1")->trigger(); Window.findChild<QPushButton*>("hc.jobs.startQueue")->click();
         for (const auto& Handle : Queued) QTRY_COMPARE(Jobs.Scheduler().Snapshot(Handle.id_).Value().state_, JobState::Paused);
         QTest::qWait(300); QVERIFY(!QFile::exists(Directory.filePath("target/queued2.txt"))); Save(Manager, "r7-queue-paused");
-        Window.findChild<QPushButton*>("hc.jobs.all.2")->click();
+        Window.findChild<QAction*>("hc.jobs.all.2")->trigger();
         for (const auto& Handle : Queued) { QTRY_VERIFY(Handle.completion_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); QCOMPARE(Handle.completion_.get().snapshot_.state_, JobState::Completed); }
         FileOperationRequest Request; Request.destination_ = {LocatorKind::Local, Directory.filePath("target").toStdString()}; Request.destinationWriter_ = Writer; Request.conflict_ = ConflictPolicy::Replace;
+        Request.elevation_ = std::make_shared<NoElevation>();
         for (const auto& Name : {"first.txt", "failed.txt", "unattempted.txt"}) { QVERIFY(Put(Directory.filePath(Name), Name)); auto Entry = Reader->Resolve({LocatorKind::Local, Directory.filePath(Name).toStdString()}, {}).get(); QVERIFY(Entry.HasValue()); Request.sources_.push_back({Entry.Value(), Reader, Writer}); }
         QVERIFY(Put(Directory.filePath("target/failed.txt"), "locked"));
         const auto LockPath = hc::filetools::NativePath(Directory.filePath("target/failed.txt"));
@@ -17361,7 +17390,7 @@ private slots:
         const auto Unlock = qScopeGuard([&] { if (Locked != INVALID_HANDLE_VALUE) CloseHandle(Locked); });
         auto Failed = Jobs.Submit(Request, {}); QVERIFY(Failed.HasValue()); QTRY_VERIFY(!Jobs.IsUiPending(Failed.Value().id_));
         QCOMPARE(Failed.Value().completion_.get().snapshot_.state_, JobState::Failed); QCOMPARE(Read(Directory.filePath("target/first.txt")), QByteArray("first.txt"));
-        Jobs.Show(); Select(Failed.Value().id_); auto* Retry = Window.findChild<QPushButton*>("hc.jobs.managerRetry"); QVERIFY(Retry); QTRY_VERIFY(Retry->isEnabled()); Save(Manager, "r7-retry-failed");
+        Jobs.Show(); Tabs->setCurrentIndex(3); Select(Failed.Value().id_); auto* Retry = Window.findChild<QPushButton*>("hc.jobs.managerRetry"); QVERIFY(Retry); QTRY_VERIFY(Retry->isEnabled()); Save(Manager, "r7-retry-failed");
         CloseHandle(Locked); Locked = INVALID_HANDLE_VALUE; QVERIFY(QFile::remove(Directory.filePath("target/failed.txt"))); QVERIFY(Put(Directory.filePath("target/first.txt"), "completed-item-preserved"));
         Retry->click(); QTRY_VERIFY(!Jobs.Scheduler().Snapshot(Failed.Value().id_).Value().retriedAs_.empty());
         const auto RetryId = Jobs.Scheduler().Snapshot(Failed.Value().id_).Value().retriedAs_; QTRY_VERIFY(!Jobs.IsUiPending(RetryId));
@@ -17464,8 +17493,8 @@ private slots:
         auto* Scroll = Window.findChild<QScrollArea*>("hc.jobs.controls"); auto* Selected = Window.findChild<QLabel*>("hc.jobs.selectedSummary");
         auto* Pause = Window.findChild<QPushButton*>("hc.jobs.managerPause"); auto* Cancel = Window.findChild<QPushButton*>("hc.jobs.managerCancel");
         auto* Retry = Window.findChild<QPushButton*>("hc.jobs.managerRetry"); auto* Start = Window.findChild<QPushButton*>("hc.jobs.managerStart");
-        auto* Clear = Window.findChild<QPushButton*>("hc.jobs.clearHistory"); auto* AllPause = Window.findChild<QPushButton*>("hc.jobs.all.1");
-        auto* AllResume = Window.findChild<QPushButton*>("hc.jobs.all.2");
+        auto* Clear = Window.findChild<QAction*>("hc.jobs.clearHistory"); auto* AllPause = Window.findChild<QAction*>("hc.jobs.all.1");
+        auto* AllResume = Window.findChild<QAction*>("hc.jobs.all.2");
         QVERIFY(Manager && List && Scroll && Selected && Pause && Cancel && Retry && Start && Clear && AllPause && AllResume);
         Jobs.Show(); QVERIFY(!AllPause->isEnabled() && !AllResume->isEnabled() && !Clear->isEnabled());
         QVERIFY(AllPause->text().contains(QStringLiteral("일시 정지")));
@@ -17475,10 +17504,12 @@ private slots:
         auto QueueControl = std::make_shared<struct Control>(); PreparedJob Queue; Queue.request_.deferred_ = true;
         Queue.request_.metadata_ = {"대기 작업", "D:/대기 원본", "D:/대기 대상", {}}; Queue.task_ = std::make_unique<Task>(QueueControl);
         auto Queued = Jobs.Submit(std::move(Queue), QStringLiteral("대기 작업")); QVERIFY(Queued.HasValue()); Jobs.Show();
+        auto* Tabs = Manager->findChild<QTabBar*>("hc.jobs.filter"); QVERIFY(Tabs);
+        Tabs->setCurrentIndex(0);
         QTRY_VERIFY(List->topLevelItemCount() == 2); Select(Queued.Value().id_); QTRY_VERIFY(Start->isEnabled());
-        QVERIFY(!Window.findChild<QPushButton*>("hc.jobs.queueUp")->isEnabled()); QVERIFY(!Window.findChild<QPushButton*>("hc.jobs.queueDown")->isEnabled());
-        QTRY_VERIFY(Selected->text().contains(QStringLiteral("D:/대기 대상"))); QCOMPARE(QueueControl->advances_.load(), 0);
-        QTRY_VERIFY(Window.findChild<QLabel*>("hc.jobs.batchSummary")->text().contains(QStringLiteral("D:/대상/선택 작업 폴더")));
+        QVERIFY(!Window.findChild<QAction*>("hc.jobs.queueUp")->isEnabled()); QVERIFY(!Window.findChild<QAction*>("hc.jobs.queueDown")->isEnabled());
+        QTRY_VERIFY(Selected->text().contains(QStringLiteral("대기 대상"))); QCOMPARE(QueueControl->advances_.load(), 0);
+        QVERIFY(Window.findChild<QLabel*>("hc.jobs.backgroundUsage")->text().contains(QStringLiteral("백그라운드 실행")));
         Select(Running.Value().id_); QTRY_VERIFY(Pause->isEnabled()); QVERIFY(!Start->isEnabled());
         QCOMPARE(Selected->textFormat(), Qt::PlainText); QVERIFY(Selected->text().contains(QStringLiteral("<자료>&.txt")));
         Control->commit_ = true; QTRY_COMPARE(Jobs.Scheduler().Snapshot(Running.Value().id_).Value().state_, JobState::Committing);
@@ -17491,7 +17522,9 @@ private slots:
         QVERIFY(AllPause->isEnabled()); Search->clear(); Select(Running.Value().id_); QTRY_VERIFY(Cancel->isEnabled());
         QFont Large = Manager->font(); Large.setPointSize(18); Manager->setFont(Large); Manager->resize(640, 720); QTest::qWait(100);
         QCOMPARE(Manager->width(), 640); QCOMPARE(Scroll->horizontalScrollBar()->maximum(), 0);
-        for (const auto* Name : {"hc.jobs.selectedGroup", "hc.jobs.queueGroup", "hc.jobs.batchGroup", "hc.jobs.historyGroup"}) {
+        auto* Details = Manager->findChild<QPushButton*>("hc.jobs.managerOpen"); QVERIFY(Details && !Details->isChecked());
+        Details->click();
+        for (const auto* Name : {"hc.jobs.selectedGroup"}) {
             auto* Group = Manager->findChild<QGroupBox*>(Name); QVERIFY(Group && !Group->title().isEmpty());
             Scroll->ensureWidgetVisible(Group); QCoreApplication::processEvents(); QVERIFY(SaveR9Dialog(*Manager, QString::fromLatin1(Name)));
             for (auto* Button : Group->findChildren<QPushButton*>()) {
@@ -17508,7 +17541,7 @@ private slots:
         Control->commit_ = false; QTRY_VERIFY(Control->cleaning_.load()); QVERIFY(Jobs.IsUiPending(Running.Value().id_));
         Control->releaseCleanup_ = true; QTRY_VERIFY(!Jobs.IsUiPending(Running.Value().id_)); QTRY_VERIFY(Clear->isEnabled());
         QCOMPARE(Running.Value().completion_.get().snapshot_.state_, JobState::Cancelled); QCOMPARE(QueueControl->advances_.load(), 0);
-        Clear->click(); QTRY_COMPARE(List->topLevelItemCount(), 1); QVERIFY(Jobs.Scheduler().Snapshot(Queued.Value().id_).Value().deferred_);
+        Clear->trigger(); QTRY_COMPARE(List->topLevelItemCount(), 1); QVERIFY(Jobs.Scheduler().Snapshot(Queued.Value().id_).Value().deferred_);
         QVERIFY(Jobs.Scheduler().Cancel(Queued.Value().id_).HasValue()); QTRY_VERIFY(!Jobs.IsUiPending(Queued.Value().id_));
     }
     void todoBugRenameHistoryLiveStatesUi()
@@ -17590,6 +17623,13 @@ private slots:
     }
     void r11ResponsiveJobsUi()
     {
+        auto& Store = hc::settings::AppSettings();
+        const auto PreviousLayout = Store.Read(hc::settings::Section::Options).toObject().value("fileJobManagerLayout");
+        const auto Restore = qScopeGuard([&] {
+            auto Options = Store.Read(hc::settings::Section::Options).toObject();
+            Options.insert("fileJobManagerLayout", PreviousLayout);
+            Store.Put(hc::settings::Section::Options, Options);
+        });
         QWidget Window; Window.setAttribute(Qt::WA_QuitOnClose, false);
         FileJobUi Jobs(&Window, std::make_shared<hc::commands::EventHub>());
         Jobs.Show();
@@ -17613,8 +17653,27 @@ private slots:
             auto* Accessible = QAccessible::queryAccessibleInterface(Widget); QVERIFY(Accessible);
             QVERIFY2(!Accessible->text(QAccessible::Name).isEmpty(), Object);
         }
+        Manager->resize(665, 500);
+        auto* ShowDetails = Manager->findChild<QPushButton*>("hc.jobs.managerOpen"); QVERIFY(ShowDetails);
+        ShowDetails->setChecked(true);
+        QCoreApplication::processEvents();
+        const auto SavedSize = Manager->size();
         auto* Close = Manager->findChild<QPushButton*>("hc.jobs.close"); QVERIFY(Close);
         Close->setFocus(); QTRY_VERIFY(Close->hasFocus()); QTest::keyClick(Close, Qt::Key_Space); QTRY_VERIFY(!Manager->isVisible());
+        const auto Layout = Store.Read(hc::settings::Section::Options).toObject()["fileJobManagerLayout"].toObject();
+        QCOMPARE(QSize(Layout["width"].toInt(), Layout["height"].toInt()), SavedSize);
+        QVERIFY(Layout["details"].toBool());
+        QWidget RestoredWindow; RestoredWindow.setAttribute(Qt::WA_QuitOnClose, false);
+        FileJobUi RestoredJobs(&RestoredWindow, std::make_shared<hc::commands::EventHub>());
+        auto* RestoredManager = RestoredWindow.findChild<QDialog*>("hc.jobManager"); QVERIFY(RestoredManager);
+        QCOMPARE(RestoredManager->size(), SavedSize);
+        auto* RestoredDetails = RestoredManager->findChild<QPushButton*>("hc.jobs.managerOpen"); QVERIFY(RestoredDetails);
+        QVERIFY(RestoredDetails->isChecked());
+    }
+
+    void r11ResponsiveCopyOptionsUi()
+    {
+        QFont Large = QApplication::font(); Large.setPointSize(18);
         hc::ui::FileOperationDialogRequest Request; Request.command_ = "hc.file.copy";
         Request.source_ = QStringLiteral("D:/아주 긴 한글 경로/설계 검토/원본"); Request.initialValue_ = "D:/대상 폴더";
         Request.names_ = {QStringLiteral("적용 전후 비교와 검토를 위한 매우 긴 한글 파일 이름 <자료>&.txt")};

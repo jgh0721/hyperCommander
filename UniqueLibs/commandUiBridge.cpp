@@ -132,6 +132,10 @@ namespace
     {
     public:
         ShortcutDropTask(QStringList Paths, QString Destination) : paths_(std::move(Paths)), destination_(std::move(Destination)) {}
+        static QString targetPath(const QString& Destination, const QString& Name, int Suffix = 1)
+        {
+            return QDir(Destination).filePath(Name + (Suffix == 1 ? QString{} : QString(" (%1)").arg(Suffix)) + ".lnk");
+        }
         hc::operations::JobStep Advance(hc::operations::JobStepContext Context) override
         {
             using namespace hc::operations;
@@ -154,7 +158,8 @@ namespace
             QFile Shortcut(Temporary);
             bool Created = false;
             for (int Suffix = 1; Suffix <= 10000; ++Suffix) {
-                const auto Target = QDir(destination_).filePath(Name + (Suffix == 1 ? QString{} : QString(" (%1)").arg(Suffix)) + ".lnk");
+                const auto Target = targetPath(destination_, Name, Suffix);
+                if (Context.tryReserveWrite_ && !Context.tryReserveWrite_(FileOperationLane({LocatorKind::Local, Target.toStdString()}))) continue;
                 if (Shortcut.rename(Target)) { Created = true; break; }
                 const QFileInfo Existing(Target);
                 if (!Existing.exists() && !Existing.isSymbolicLink()) return Fail(QObject::tr("바로 가기를 저장할 수 없습니다: %1\n%2").arg(Target, Shortcut.errorString()));
@@ -3061,7 +3066,13 @@ void CommandUiBridge::DropFiles(const QStringList& Paths, const QString& Destina
     }
     const auto RemoveSelection = [Selections = std::move(Selections)] { for (const auto& Completion : Selections) Completion(); };
     if (Action == Qt::LinkAction) {
-        PreparedJob Job; Job.request_.maxRetries_ = 0; Job.request_.resourceLanes_ = {FileOperationLane(At)};
+        PreparedJob Job; Job.request_.maxRetries_ = 0;
+        for (const auto& Path : Paths) {
+            auto Output = At;
+            Output.root_ = ShortcutDropTask::targetPath(Target, QFileInfo(Path).fileName()).toStdString();
+            Job.request_.resourceLanes_.push_back(FileOperationLane(Output));
+            Job.request_.readLanes_.push_back(FileOperationLane({LocatorKind::Local, Path.toStdString()}));
+        }
         Job.request_.metadata_.source_ = Paths.front().toStdString(); Job.request_.metadata_.destination_ = At.root_;
         Job.task_ = std::make_unique<ShortcutDropTask>(Paths, Target);
         auto Started = fileJobs_->Submit(std::move(Job), tr("바로 가기 만들기"));

@@ -143,7 +143,9 @@ namespace hc::ui
         const auto Destination = !Request.destination_.empty() ? Request.destination_ : !snapshot_.progress_.destination_.empty() ? snapshot_.progress_.destination_ : snapshot_.metadata_.destination_;
         originalName_ = QFileInfo(Display(Destination)).fileName();
         headingText_ = Kind == InteractionKind::Overwrite ? tr("대상에 같은 이름의 항목이 있습니다.")
-            : Kind == InteractionKind::Rename ? tr("사용할 이름이 이미 있습니다. 다른 이름을 지정하세요.")
+            : Kind == InteractionKind::Rename ? Request.reason_ == "destination-reserved"
+                ? tr("다른 작업이 이 경로를 사용 중입니다. 다른 이름을 선택하거나 작업이 끝난 뒤 다시 입력하세요.")
+                : tr("사용할 이름이 이미 있습니다. 다른 이름을 지정하세요.")
             : Password ? tr("압축 파일의 암호를 입력하세요.")
             : Kind == InteractionKind::DeleteConfirmation ? Request.reason_ == "confirm-recycle-delete" ? tr("선택한 항목을 휴지통으로 이동하시겠습니까?") : tr("선택한 항목을 삭제하시겠습니까?")
             : Kind == InteractionKind::ReadOnlyRemoval ? tr("읽기 전용 항목의 삭제를 허용하시겠습니까?")

@@ -15,7 +15,8 @@ public:
             if (missing_.size() >= 128) return failed({storage::ErrorCategory::BudgetExceeded, "directory-depth-limit"});
             const auto Entry = writer_->Inspect(current_, Context.operation_); if (!Entry.HasValue()) return failed(Entry.Failure());
             if (Entry.Value()) {
-                if (!Entry.Value()->directory_) return failed({storage::ErrorCategory::InvalidRequest, "parent-is-not-directory", writer_->Id()});
+                if (!Entry.Value()->directory_ || (Entry.Value()->attributes_ & 0x400))
+                    return failed({storage::ErrorCategory::InvalidRequest, "parent-is-not-directory", writer_->Id()});
                 planning_ = false; return JobStep{JobState::Running};
             }
             missing_.push_back(current_); const auto Parent = ParentOf(current_);
@@ -25,11 +26,18 @@ public:
         if (!missing_.empty()) {
             const auto At = missing_.back();
             if (!Context.committing_) return JobStep{JobState::Committing};
-            const auto Existing = writer_->Inspect(At, Context.operation_); if (!Existing.HasValue()) return failed(Existing.Failure());
-            if (Existing.Value() && !Existing.Value()->directory_) return failed({storage::ErrorCategory::InvalidRequest, "parent-is-not-directory", writer_->Id()});
+            auto Existing = writer_->Inspect(At, Context.operation_); if (!Existing.HasValue()) return failed(Existing.Failure());
             if (!Existing.Value()) {
-                const auto Made = writer_->MakeDirectory(At, Context.operation_); if (!Made.HasValue()) return failed(Made.Failure());
+                const auto Made = writer_->MakeDirectory(At, Context.operation_);
+                if (!Made.HasValue()) {
+                    if (Made.Failure().code_ != "destination-exists") return failed(Made.Failure());
+                    Existing = writer_->Inspect(At, Context.operation_);
+                    if (!Existing.HasValue()) return failed(Existing.Failure());
+                    if (!Existing.Value()) return failed(Made.Failure());
+                }
             }
+            if (Existing.Value() && (!Existing.Value()->directory_ || (Existing.Value()->attributes_ & 0x400)))
+                return failed({storage::ErrorCategory::InvalidRequest, "parent-is-not-directory", writer_->Id()});
             missing_.pop_back(); ++parentOutcomes_; JobStep Step{JobState::Running};
             Step.item_ = ItemOutcome{storage::Serialize(At), Existing.Value() ? ItemOutcome::Status::Skipped : ItemOutcome::Status::Completed, {}, true, false};
             return Step;

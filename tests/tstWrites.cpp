@@ -28,7 +28,7 @@ using namespace hc::operations;
 
 namespace
 {
-    enum class WriteFault { Remove, Append, Metadata, Commit, AppendAndCleanup, Directory, Corrupt, PreserveRename, AutomaticInspect };
+    enum class WriteFault { Remove, Append, Metadata, Commit, AppendAndCleanup, Directory, ParentCreated, Corrupt, PreserveRename, AutomaticInspect };
     class FaultSession final : public IWriteSession
     {
     public:
@@ -180,7 +180,15 @@ namespace
             if (!Session.HasValue()) return Session.Failure();
             return std::unique_ptr<IWriteSession>(new FaultSession(std::move(Session.Value()), fault_));
         }
-        Result<Unit> MakeDirectory(Locator At, OperationContext Context) override { if (fault_ == WriteFault::Directory && made_++ == 1) return Error{ErrorCategory::AccessDenied, "injected-parent-create"}; return writer_->MakeDirectory(std::move(At), Context); }
+        Result<Unit> MakeDirectory(Locator At, OperationContext Context) override
+        {
+            if (fault_ == WriteFault::Directory && made_++ == 1) return Error{ErrorCategory::AccessDenied, "injected-parent-create"};
+            if (fault_ == WriteFault::ParentCreated && made_++ == 0) {
+                const auto Other = writer_->MakeDirectory(At, Context);
+                if (!Other.HasValue()) return Other.Failure();
+            }
+            return writer_->MakeDirectory(std::move(At), Context);
+        }
         void SetRemovalError(Error Error) { removalError_ = std::move(Error); }
         Result<Unit> Remove(EntrySnapshot, OperationContext) override { return removalError_; }
         Result<Unit> Rename(EntrySnapshot Entry, Locator To, OperationContext Context) override {
@@ -2616,6 +2624,23 @@ private slots:
         const auto Moved = Started.Value().completion_.get(); QVERIFY2(Moved.snapshot_.state_ == JobState::Completed, Moved.snapshot_.error_ ? Moved.snapshot_.error_->code_.c_str() : "named move failed");
         QVERIFY(!QFileInfo::exists(root_->filePath("r6-move.txt"))); QCOMPARE(read("r6-destination/new/renamed.txt"), QByteArray("move payload"));
         Request.destinationName_ = "../escape"; QVERIFY(!PrepareFileOperation(Request).HasValue());
+    }
+    void parentCreatedByAnotherJobIsReused()
+    {
+        JobScheduler Scheduler(std::make_shared<hc::commands::EventHub>());
+        FileOperationRequest Request;
+        Request.operation_ = hc::operations::FileOperation::MakeDirectory;
+        Request.createParents_ = true;
+        Request.destination_ = at("shared-parent/child");
+        Request.destinationWriter_ = std::make_shared<FailedRemoveWriter>(writer_, WriteFault::ParentCreated);
+        auto Started = SubmitFileOperation(Scheduler, Request);
+        QVERIFY(Started.HasValue());
+        QVERIFY(Started.Value().completion_.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+        const auto Result = Started.Value().completion_.get();
+        QCOMPARE(Result.snapshot_.state_, JobState::Completed);
+        QCOMPARE(Result.snapshot_.completedItems_, 1ULL);
+        QCOMPARE(Result.snapshot_.skippedItems_, 1ULL);
+        QVERIFY(QFileInfo(root_->filePath("shared-parent/child")).isDir());
     }
     void partialDirectoryFailureAndCancel()
     {

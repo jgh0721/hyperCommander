@@ -117,6 +117,24 @@ struct CreationPlanner::State {
 CreationPlanner::CreationPlanner(PlanRequest Request) : state_(std::make_unique<State>(std::move(Request))) {}
 CreationPlanner::~CreationPlanner() = default;
 std::vector<OutputPlan> CreationPlanner::Take() { return std::move(state_->outputs_); }
+Result<Locator> SeparateArchiveOutput(const EntrySnapshot& Entry, Locator Directory, const std::string& Format,
+    const std::map<std::string, std::string>& Names, std::set<QString>& UsedNames)
+{
+    const auto Extension = QString::fromStdString(Format);
+    auto FileName = SuggestedArchiveName(Entry, Extension);
+    const auto Custom = Names.find(Serialize(Entry.id_));
+    if (Custom != Names.end()) FileName = QString::fromStdString(Custom->second);
+    if (!IsSafeArchiveName(FileName) || QFileInfo(FileName).suffix().compare(Extension, Qt::CaseInsensitive))
+        return Invalid("archive-create-invalid-output-name");
+    const auto Base = FileName.left(FileName.size() - Extension.size() - 1);
+    unsigned Suffix = 2;
+    while (!UsedNames.insert(ArchivePathKey(FileName)).second) {
+        if (Custom != Names.end()) return Invalid("archive-create-output-name-collision");
+        FileName = Base + QString(" (%1).").arg(Suffix++) + Extension;
+    }
+    Directory.root_ = QDir(QString::fromStdString(Directory.root_)).filePath(FileName).toStdString();
+    return Directory;
+}
 JobStep CreationPlanner::Advance(JobStepContext Context)
 {
     auto& S = *state_; auto& R = S.request_;
@@ -146,20 +164,10 @@ JobStep CreationPlanner::Advance(JobStepContext Context)
             const auto Name = QString::fromStdString(Source.entry_.name_); if (!IsSafeArchiveName(Name)) return Failed(Invalid("archive-create-invalid-name"));
             size_t Group = 0;
             if (R.composition_.separateArchives_) {
-                auto Output = R.destination_; auto FileName = SuggestedArchiveName(Source.entry_, QString::fromStdString(R.format_));
-                const auto Custom = R.outputNames_.find(Serialize(Source.entry_.id_));
-                if (Custom != R.outputNames_.end()) FileName = QString::fromStdString(Custom->second);
-                if (!IsSafeArchiveName(FileName) || QFileInfo(FileName).suffix().compare(QString::fromStdString(R.format_), Qt::CaseInsensitive))
-                    return Failed(Invalid("archive-create-invalid-output-name"));
-                const auto Base = FileName.left(FileName.size() - R.format_.size() - 1);
-                unsigned Suffix = 2;
-                while (!S.outputNames_.insert(ArchivePathKey(FileName)).second) {
-                    if (Custom != R.outputNames_.end()) return Failed(Invalid("archive-create-output-name-collision"));
-                    FileName = Base + QString(" (%1).").arg(Suffix++) + QString::fromStdString(R.format_);
-                }
-                Output.root_ = QDir(QString::fromStdString(Output.root_)).filePath(FileName).toStdString();
-                if (R.completedOutputs_.contains(Serialize(Output))) continue;
-                Group = S.outputs_.size(); S.outputs_.push_back({Output});
+                auto Output = SeparateArchiveOutput(Source.entry_, R.destination_, R.format_, R.outputNames_, S.outputNames_);
+                if (!Output.HasValue()) return Failed(Output.Failure());
+                if (R.completedOutputs_.contains(Serialize(Output.Value()))) continue;
+                Group = S.outputs_.size(); S.outputs_.push_back({std::move(Output.Value())});
                 S.outputs_.back().source_ = Source.entry_.locator_;
             } else if (R.completedOutputs_.contains(Serialize(R.destination_))) continue;
             else S.outputs_[0].source_ = R.sources_.size() == 1 ? Source.entry_.locator_ : R.sourceRoot_;

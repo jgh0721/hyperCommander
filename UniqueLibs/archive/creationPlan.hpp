@@ -26,6 +26,9 @@ struct PlanRequest {
 };
 QString ArchivePathKey(QString Path);
 QString SuggestedArchiveName(const storage::EntrySnapshot& Entry, const QString& Format);
+storage::Result<storage::Locator> SeparateArchiveOutput(const storage::EntrySnapshot& Entry,
+    storage::Locator Directory, const std::string& Format, const std::map<std::string, std::string>& Names,
+    std::set<QString>& UsedNames);
 QString ResolveArchiveDestination(QString Input, QString BaseDirectory);
 bool IsSafeArchiveName(const QString& Name);
 storage::Result<storage::Unit> ValidateOutputLocation(const storage::Locator& Output,

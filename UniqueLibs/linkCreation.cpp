@@ -24,6 +24,10 @@ using namespace storage;
 Locator Location(const QString& Path) {
     return {Path.startsWith("//") || Path.startsWith("\\\\") ? LocatorKind::Smb : LocatorKind::Local, Path.toStdString()};
 }
+QString LinkTarget(const Request& Value, const QString& Source)
+{
+    return Value.targetIsName_ ? Value.destination_ : QDir(Value.destination_).filePath(QFileInfo(Source).fileName());
+}
 class LinkTask final : public IJobTask {
 public:
     explicit LinkTask(Request Value) : request_(std::move(Value)) {}
@@ -45,8 +49,7 @@ private:
         if (Context.operation_.stopToken_.stop_requested()) return {JobState::Cancelled};
         if (index_ >= request_.sources_.size()) return {JobState::Completed};
         const auto Source = request_.sources_[index_];
-        if (target_.isEmpty()) target_ = request_.targetIsName_ ? request_.destination_
-            : QDir(request_.destination_).filePath(QFileInfo(Source).fileName());
+        if (target_.isEmpty()) target_ = LinkTarget(request_, Source);
         if (session_) {
             auto Status = session_->Poll();
             if (!Status.HasValue()) { cleanupSession(); return fail(Status.Failure()); }
@@ -94,7 +97,9 @@ private:
                 for (int Number = 2; Number <= 10000; ++Number) {
                     const auto Name = Stem + QStringLiteral(" (%1)").arg(Number) + (Suffix.isEmpty() ? QString{} : '.' + Suffix);
                     const auto Candidate = QDir(Original.absolutePath()).filePath(Name);
-                    if (!exists(Candidate)) { target_ = Candidate; Found = true; break; }
+                    if (!exists(Candidate) && (!Context.tryReserveWrite_ || Context.tryReserveWrite_(FileOperationLane(Location(Candidate))))) {
+                        target_ = Candidate; Found = true; break;
+                    }
                 }
                 if (!Found) return error(ERROR_ALREADY_EXISTS, Context);
             } else return interaction(InteractionKind::Overwrite, QObject::tr("같은 이름의 항목이 있습니다. 기존 항목은 덮어쓰지 않습니다."),
@@ -191,8 +196,10 @@ operations::PreparedJob Prepare(Request Value) {
     Job.request_.metadata_.source_ = Value.sources_.value(0).toStdString();
     Job.request_.metadata_.destination_ = Value.destination_.toStdString();
     Job.request_.metadata_.options_ = KindName(Value.kind_).toStdString();
-    Job.request_.resourceLanes_.push_back(operations::FileOperationLane(Location(Value.destination_)));
-    for (const auto& Source : Value.sources_) Job.request_.resourceLanes_.push_back(operations::FileOperationLane(Location(Source)));
+    for (const auto& Source : Value.sources_) {
+        Job.request_.resourceLanes_.push_back(operations::FileOperationLane(Location(LinkTarget(Value, Source))));
+        Job.request_.readLanes_.push_back(operations::FileOperationLane(Location(Source)));
+    }
     Job.task_ = std::make_unique<LinkTask>(std::move(Value)); return Job;
 }
 }

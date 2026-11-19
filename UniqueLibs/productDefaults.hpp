@@ -275,7 +275,7 @@ DECLARE_CMD( BuiltInCMD_Etc_ExternalMenu,         QObject::tr( "기타" ),    "h
 DECLARE_CMD( BuiltInCMD_OPs_Move,                 QObject::tr( "동작" ),    "hc.file.move",
              Qt::Key_unknown,                                           QObject::tr( "다른 패널로 이동" ) );
 DECLARE_CMD( BuiltInCMD_Jobs,                     QObject::tr( "기타" ),    "hc.jobs.show",
-             Qt::Key_unknown,                                           QObject::tr( "작업관리자" ) );
+             Qt::ControlModifier | Qt::Key_J,                           QObject::tr( "작업관리자" ) );
 DECLARE_CMD( BuiltInCMD_Settings,                 QObject::tr( "기타" ),    "hc.settings.show",
              Qt::ControlModifier | Qt::Key_Comma,                       QObject::tr( "환경 설정" ) );
 DECLARE_CMD( BuiltInCMD_ReloadMenu,               QObject::tr( "기타" ),    "hc.menu.reload",

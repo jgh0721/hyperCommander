@@ -230,6 +230,16 @@ private slots:
         bool Found = false; for (const auto& Command : hc::defaults::BusCommands()) Found |= Command.id_ == "hc.file.compare";
         QVERIFY(Found);
     }
+    void jobsCommandShortcut()
+    {
+        const QKeyEvent Event(QEvent::KeyPress, Qt::Key_J, Qt::ControlModifier);
+        for (const auto& Preset : {"legacy", "prototype"}) {
+            const QJsonObject General{{"shortcutPreset", Preset}};
+            QCOMPARE(ShortcutCommand(Event, EffectiveShortcuts(General, {})), QString("hc.jobs.show"));
+            QCOMPARE(ShortcutCommand(Event, EffectiveShortcuts(General, {{"Ctrl+J", "hc.file.compare"}})), QString("hc.file.compare"));
+            QVERIFY(ShortcutCommand(Event, EffectiveShortcuts(General, {{"Ctrl+J", QJsonValue::Null}})).isEmpty());
+        }
+    }
     void itemSelectionConditionsAndGroups()
     {
         using namespace hc::selection;

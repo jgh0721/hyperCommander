@@ -34,6 +34,11 @@
 #include <QStatusBar>
 #include <QSignalBlocker>
 #include <QGroupBox>
+#include <QMenu>
+#include <QAction>
+#include <QSplitter>
+#include <QStackedWidget>
+#include <QTabBar>
 #include <fmstyle/ThemeManager.h>
 #include "qtDialogFrame.hpp"
 #include <QScrollArea>
@@ -44,6 +49,7 @@
 #include <fmwidgets/TransferGraph.h>
 #include <fmwidgets/ProgressBar.h>
 #include <fmwidgets/Label.h>
+#include <fmwidgets/ReorderList.h>
 #include <QGridLayout>
 #include <QAbstractNativeEventFilter>
 #include <shobjidl.h>
@@ -54,6 +60,8 @@ using namespace hc::storage;
 
 namespace
 {
+    enum ManagerTab { IncompleteTab, DeferredTab, ResponseTab, HistoryTab };
+    constexpr int managerWideWidth = 900;
     class FileProgressDialog final : public QDialog
     {
     public:
@@ -85,6 +93,9 @@ namespace
             if (Snapshot.deferred_) return Snapshot.pauseRequested_ ? QObject::tr("대기열 · 일시 정지 요청됨") : QObject::tr("대기열 · 시작 대기");
             if (Snapshot.pauseRequested_ && Snapshot.state_ != JobState::Paused)
                 return StateText(Snapshot.state_) + QObject::tr(" · 일시 정지 요청 중");
+            if (Snapshot.wait_.reason_ == JobWaitReason::BackgroundLimit) return QObject::tr("실행 슬롯 대기");
+            if (Snapshot.wait_.reason_ == JobWaitReason::Resource)
+                return Snapshot.wait_.resource_.starts_with("path:") ? QObject::tr("경로 대기") : QObject::tr("처리기 대기");
         }
         return StateText(Snapshot.state_);
     }
@@ -239,6 +250,18 @@ namespace
         const auto Mode = ProgressRate(Snapshot);
         return Mode == RateMode::Files ? Snapshot.progress_.deletedFiles_.value_or(0)
             : Mode == RateMode::Items ? ProcessedItems(Snapshot) : Snapshot.progress_.bytesDone_;
+    }
+    QString RemainingTime(const JobSnapshot& Snapshot, double Rate)
+    {
+        if (IsTerminal(Snapshot.state_) || Snapshot.state_ == JobState::Paused || Rate <= 0) return {};
+        const auto& Progress = Snapshot.progress_;
+        const auto Mode = ProgressRate(Snapshot);
+        const auto Total = Mode == RateMode::Files ? (Progress.plannedItems_ ? Progress.discoveredFiles_ : std::optional<uint64_t>{})
+            : Mode == RateMode::Items ? Progress.plannedItems_ : Progress.bytesTotal_;
+        const auto Done = RateValue(Snapshot);
+        if (!Total || *Total <= Done) return {};
+        const auto Seconds = std::round((*Total - Done) / Rate);
+        return Seconds < double(INT64_MAX) ? QObject::tr("약 %1").arg(DurationText(qint64(Seconds))) : QString{};
     }
     bool CloseFinishedJob(const JobResult& Result)
     {
@@ -438,137 +461,212 @@ FileJobUi::FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Even
         QWidget::setTabOrder(Hide, Toggle); QWidget::setTabOrder(Toggle, autoClose_);
         QWidget::setTabOrder(autoClose_, pause_); QWidget::setTabOrder(pause_, cancel_);
     }
-    manager_ = new QDialog(Main); manager_->setObjectName("hc.jobManager");
-    manager_->setWindowTitle(tr("백그라운드 작업 관리자")); manager_->resize(920, 780); manager_->setMinimumSize(640, 380);
+    manager_ = new QDialog(Main);
+    manager_->setObjectName("hc.jobManager");
+    manager_->setWindowTitle(tr("파일 작업 관리자"));
+    manager_->setMinimumSize(640, 360);
+    const auto SavedLayout = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["fileJobManagerLayout"].toObject();
+    QSize ManagerSize(SavedLayout["width"].toInt(1050), SavedLayout["height"].toInt(535));
     if (const auto* Screen = Main->screen()) {
-        const auto Available = Screen->availableGeometry().size();
-        manager_->resize(qMin(920, Available.width() - 40), qMin(780, Available.height() - 80));
+        ManagerSize = ManagerSize.boundedTo(Screen->availableGeometry().size() - QSize(40, 80));
     }
+    manager_->resize(ManagerSize.expandedTo(manager_->minimumSize()));
     auto* ManagerLayout = new QVBoxLayout(manager_);
-    auto* ManagerHeader = new fm::ui::DialogHeader(manager_); ManagerHeader->setTitle(tr("파일 작업 관리자"));
-    ManagerHeader->setSubtitle(tr("창을 닫아도 작업은 계속됩니다. 변경 확정 중에는 현재 저장을 마친 뒤 제어 요청을 처리합니다."));
-    ManagerLayout->addWidget(ManagerHeader);
-    summary_ = new QLabel(manager_); summary_->setObjectName("hc.jobs.summary"); summary_->setWordWrap(true); summary_->setTextFormat(Qt::PlainText); ManagerLayout->addWidget(summary_);
-    auto* FilterRow = new QHBoxLayout;
-    filter_ = new QComboBox(manager_); filter_->addItems({tr("전체"), tr("진행 중"), tr("응답 필요"), tr("완료"), tr("실패·취소")});
-    filter_->setAccessibleName(tr("작업 상태 필터")); filter_->setObjectName("hc.jobs.filter");
-    search_ = new QLineEdit(manager_); search_->setPlaceholderText(tr("작업 이름 또는 경로 검색")); search_->setAccessibleName(tr("작업 검색"));
-    search_->setObjectName("hc.jobs.search"); FilterRow->addWidget(filter_); FilterRow->addWidget(search_, 1); ManagerLayout->addLayout(FilterRow);
-    jobList_ = new QTreeWidget(manager_); jobList_->setObjectName("hc.jobs.list"); jobList_->setAccessibleName(tr("파일 작업 목록"));
-    jobList_->setHeaderLabels({tr("작업"), tr("상태"), tr("처리량"), tr("속도"), tr("현재 항목")});
-    jobList_->setRootIsDecorated(false); jobList_->setAlternatingRowColors(true);
-    jobList_->setSelectionMode(QAbstractItemView::SingleSelection); jobList_->setUniformRowHeights(true);
-    jobList_->header()->setSectionResizeMode(QHeaderView::Interactive); jobList_->setColumnWidth(0, 260); jobList_->setColumnWidth(1, 115);
-    jobList_->setColumnWidth(2, 215); jobList_->setColumnWidth(3, 110); jobList_->setMinimumHeight(100); ManagerLayout->addWidget(jobList_, 2);
-    auto* Controls = new QScrollArea(manager_); Controls->setObjectName("hc.jobs.controls");
-    Controls->setWidgetResizable(true); Controls->setFrameShape(QFrame::NoFrame); Controls->setMinimumHeight(120);
-    auto* ControlBody = new QWidget(Controls); auto* ControlRows = new QVBoxLayout(ControlBody); ControlRows->setContentsMargins(0, 0, 0, 0);
-    Controls->setWidget(ControlBody); ManagerLayout->addWidget(Controls, 3);
-    const auto Group = [&](const QString& Title, const char* Name, QLabel*& Summary) {
-        auto* Box = new QGroupBox(Title, ControlBody); Box->setObjectName(Name); auto* Rows = new QVBoxLayout(Box);
-        Summary = new hc::qt::ElidedLabel(Box); static_cast<hc::qt::ElidedLabel*>(Summary)->SetLineCount(2); Summary->setTextFormat(Qt::PlainText); Summary->setWordWrap(true);
-        Summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); Rows->addWidget(Summary); ControlRows->addWidget(Box);
-        return Rows;
-    };
-    auto* SelectedRows = Group(tr("선택한 작업"), "hc.jobs.selectedGroup", selectionSummary_); selectionSummary_->setObjectName("hc.jobs.selectedSummary"); static_cast<hc::qt::ElidedLabel*>(selectionSummary_)->SetLineCount(5);
-    auto* QueueRows = Group(tr("대기열"), "hc.jobs.queueGroup", queueSummary_); queueSummary_->setObjectName("hc.jobs.queueSummary");
-    auto* BatchRows = Group(tr("전체 작업"), "hc.jobs.batchGroup", batchSummary_); batchSummary_->setObjectName("hc.jobs.batchSummary");
-    auto* HistoryRows = Group(tr("이력 · 중단 작업 확인"), "hc.jobs.historyGroup", historySummary_); historySummary_->setObjectName("hc.jobs.historySummary");
-    ControlRows->addStretch();
-    auto* QueueControls = new fm::ui::WrapLayout;
-    auto* StartQueue = new fm::ui::Button(tr("대기열 시작(&S)"), manager_); StartQueue->setObjectName("hc.jobs.startQueue");
-    queueUp_ = new fm::ui::Button(tr("위로(&U)"), manager_); queueUp_->setObjectName("hc.jobs.queueUp");
-    queueDown_ = new fm::ui::Button(tr("아래로(&N)"), manager_); queueDown_->setObjectName("hc.jobs.queueDown");
-    for (auto* Button : {StartQueue, static_cast<fm::ui::Button*>(queueUp_), static_cast<fm::ui::Button*>(queueDown_)}) Button->setAutoDefault(false);
-    concurrency_ = new QSpinBox(manager_); concurrency_->setRange(hc::product::jobConcurrencyMin, hc::product::jobConcurrencyMax); concurrency_->setValue(static_cast<int>(scheduler_.ConcurrencyLimit()));
-    concurrency_->setObjectName("hc.jobs.concurrency"); concurrency_->setAccessibleName(tr("백그라운드 동시 실행 작업 수"));
-    concurrency_->setToolTip(tr("백그라운드 작업을 %1~%2개 실행합니다. 경로가 겹치지 않는 전경 작업은 이 한도와 별도로 실행합니다.").arg(hc::product::jobConcurrencyMin).arg(hc::product::jobConcurrencyMax));
-    QueueControls->addWidget(StartQueue); QueueControls->addWidget(queueUp_); QueueControls->addWidget(queueDown_);
-    auto* ConcurrencyGroup = new QWidget(manager_); auto* ConcurrencyLayout = new QHBoxLayout(ConcurrencyGroup);
-    ConcurrencyLayout->setContentsMargins(0, 0, 0, 0);
-    auto* ConcurrencyLabel = new QLabel(tr("백그라운드 동시 실행(&J)"), ConcurrencyGroup); ConcurrencyLabel->setBuddy(concurrency_);
-    ConcurrencyLayout->addWidget(ConcurrencyLabel); ConcurrencyLayout->addWidget(concurrency_); QueueControls->addWidget(ConcurrencyGroup);
-    QueueRows->addLayout(QueueControls);
-    connect(StartQueue, &QPushButton::clicked, this, [this] { controlAll(JobControl::Start); });
-    connect(queueUp_, &QPushButton::clicked, this, [this] { reorderSelected(-1); });
-    connect(queueDown_, &QPushButton::clicked, this, [this] { reorderSelected(1); });
+    auto* ManagerHeader = new fm::ui::DialogHeader(manager_);
+    ManagerHeader->setTitle(tr("파일 작업 관리자"));
+    auto* HeaderRow = new QHBoxLayout;
+    HeaderRow->addWidget(ManagerHeader, 1);
+    backgroundUsage_ = new fm::ui::Label({}, fm::ui::Label::Summary, manager_);
+    backgroundUsage_->setObjectName("hc.jobs.backgroundUsage");
+    HeaderRow->addWidget(backgroundUsage_);
+    concurrency_ = new QSpinBox(manager_);
+    concurrency_->setRange(hc::product::jobConcurrencyMin, hc::product::jobConcurrencyMax);
+    concurrency_->setValue(static_cast<int>(scheduler_.ConcurrencyLimit()));
+    concurrency_->setObjectName("hc.jobs.concurrency");
+    concurrency_->setAccessibleName(tr("백그라운드 동시 실행 한도"));
+    concurrency_->setToolTip(tr("백그라운드 동시 실행 한도"));
+    HeaderRow->addWidget(concurrency_);
+    ManagerLayout->addLayout(HeaderRow);
     connect(concurrency_, &QSpinBox::valueChanged, this, [this](int Value) { scheduler_.SetConcurrencyLimit(Value); });
-    auto* BatchControls = new fm::ui::WrapLayout;
-    for (const auto& Control : std::vector<std::pair<JobControl, QString>>{{JobControl::Pause, tr("모두 일시 정지(&A)")}, {JobControl::Resume, tr("일시 정지 모두 해제(&R)")}, {JobControl::Cancel, tr("모든 작업 취소(&X)")}}) {
-        auto* Button = new fm::ui::Button(Control.second, manager_); Button->setAutoDefault(false);
-        Button->setObjectName("hc.jobs.all." + QString::number(static_cast<int>(Control.first))); BatchControls->addWidget(Button);
-        Button->setToolTip(Control.first == JobControl::Cancel ? tr("완료된 변경은 유지하고 남은 작업을 취소합니다. 진행 중인 변경 확정과 정리가 끝나면 취소됩니다.")
-            : Control.first == JobControl::Pause ? tr("취소가 아닌 일시 정지를 요청합니다. 진행 중인 변경 확정이 끝난 안전한 시점에 멈춥니다.")
-            : tr("일시 정지 요청을 해제합니다. 시작 전 대기열은 대기열 시작으로 실행하며, 응답 대기 작업은 답변이 필요합니다."));
-        connect(Button, &QPushButton::clicked, this, [this, Kind = Control.first] { controlAll(Kind); });
-    }
-    BatchRows->addLayout(BatchControls);
+
+    auto* FilterRow = new QHBoxLayout;
+    filter_ = new QTabBar(manager_);
+    filter_->setObjectName("hc.jobs.filter");
+    filter_->setAccessibleName(tr("작업 상태 필터"));
+    filter_->setExpanding(false);
+    for (const auto& Text : {tr("미완료"), tr("시작 전"), tr("응답 필요"), tr("이력")}) filter_->addTab(Text);
+    search_ = new QLineEdit(manager_);
+    search_->setObjectName("hc.jobs.search");
+    search_->setAccessibleName(tr("작업 검색"));
+    search_->setPlaceholderText(tr("작업 이름 또는 경로 검색"));
+    search_->setClearButtonEnabled(true);
+    FilterRow->addWidget(filter_);
+    FilterRow->addStretch();
+    FilterRow->addWidget(search_, 1);
+    ManagerLayout->addLayout(FilterRow);
+
+    managerSplit_ = new QSplitter(Qt::Horizontal, manager_);
+    managerSplit_->setChildrenCollapsible(false);
+    managerLists_ = new QStackedWidget(managerSplit_);
+    jobList_ = new QTreeWidget(managerLists_);
+    jobList_->setObjectName("hc.jobs.list");
+    jobList_->setAccessibleName(tr("파일 작업 목록"));
+    jobList_->setHeaderLabels({tr("작업"), tr("상태"), tr("진행"), tr("속도"), tr("현재 항목")});
+    jobList_->setColumnHidden(4, true);
+    jobList_->setRootIsDecorated(false);
+    jobList_->setAlternatingRowColors(true);
+    jobList_->setUniformRowHeights(true);
+    jobList_->header()->setStretchLastSection(false);
+    jobList_->setColumnWidth(1, 130);
+    jobList_->setColumnWidth(2, 155);
+    jobList_->setColumnWidth(3, 95);
+    jobList_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    managerLists_->addWidget(jobList_);
+
+    auto* QueuePanel = new QGroupBox(tr("실행 순서"), managerLists_);
+    auto* QueueRows = new QVBoxLayout(QueuePanel);
+    queueList_ = new fm::ui::ReorderListWidget(QueuePanel);
+    queueList_->setObjectName("hc.jobs.queueList");
+    queueList_->setAccessibleName(tr("시작 전 작업 실행 순서"));
+    queueList_->SetMoveModifiers(Qt::ControlModifier);
+    queueList_->setAlternatingRowColors(true);
+    QueueRows->addWidget(queueList_, 1);
+    queueHint_ = new fm::ui::Label({}, fm::ui::Label::Meta, QueuePanel);
+    QueueRows->addWidget(queueHint_);
+    managerLists_->addWidget(QueuePanel);
+    managerSplit_->addWidget(managerLists_);
+
+    managerDetails_ = new QScrollArea(managerSplit_);
+    managerDetails_->setObjectName("hc.jobs.controls");
+    managerDetails_->setWidgetResizable(true);
+    managerDetails_->setFrameShape(QFrame::NoFrame);
+    managerDetails_->setMinimumWidth(295);
+    auto* Selected = new QGroupBox(tr("선택 작업"), managerDetails_);
+    Selected->setObjectName("hc.jobs.selectedGroup");
+    auto* SelectedRows = new QVBoxLayout(Selected);
+    auto* SelectedText = new hc::qt::ElidedLabel(Selected);
+    SelectedText->setObjectName("hc.jobs.selectedSummary");
+    selectionSummary_ = SelectedText;
+    SelectedRows->addWidget(selectionSummary_);
+    auto* SelectedProgress = new fm::ui::ProgressBar(Selected);
+    SelectedProgress->setObjectName("hc.jobs.managerFraction");
+    SelectedProgress->setTextVisible(false);
+    SelectedRows->addWidget(SelectedProgress);
+    const auto Button = [&](const QString& Text, const char* Name) {
+        auto* Item = new fm::ui::Button(Text, manager_);
+        Item->setObjectName(Name);
+        Item->setAutoDefault(false);
+        return Item;
+    };
+    managerBlocker_ = Button(tr("막고 있는 작업 보기"), "hc.jobs.managerBlocker");
+    SelectedRows->addWidget(managerBlocker_, 0, Qt::AlignLeft);
     auto* ManagerButtons = new fm::ui::WrapLayout;
-    managerOpen_ = new fm::ui::Button(tr("상세 보기(&D)"), manager_);
-    managerOpen_->setObjectName("hc.jobs.managerOpen");
-    managerPause_ = new fm::ui::Button(tr("일시 정지(&P)"), manager_); managerPause_->setObjectName("hc.jobs.managerPause");
-    managerCancel_ = new fm::ui::Button(tr("작업 취소(&C)"), manager_); managerCancel_->setObjectName("hc.jobs.managerCancel");
-    managerStart_ = new fm::ui::Button(tr("선택 작업 시작(&G)"), manager_); managerStart_->setObjectName("hc.jobs.managerStart");
-    managerRetry_ = new fm::ui::Button(tr("실패 항목 재시도(&T)"), manager_); managerRetry_->setObjectName("hc.jobs.managerRetry");
-    managerRetry_->setToolTip(tr("현재 세션의 일반 파일 복사·이동에서 목적지 저장 전 실패한 항목을 재검증합니다. 중단 기록·폴더·압축·삭제는 상세 결과를 확인하세요."));
+    managerProgress_ = Button(tr("진행 창(&V)"), "hc.jobs.managerProgress");
+    managerPause_ = Button(tr("일시 정지(&P)"), "hc.jobs.managerPause");
+    managerCancel_ = Button(tr("작업 취소(&C)"), "hc.jobs.managerCancel");
+    managerStart_ = Button(tr("선택 작업 시작(&G)"), "hc.jobs.managerStart");
+    managerRetry_ = Button(tr("실패 항목 재시도(&T)"), "hc.jobs.managerRetry");
+    for (auto* Item : {managerStart_, managerProgress_, managerPause_, managerCancel_, managerRetry_}) ManagerButtons->addWidget(Item);
+    SelectedRows->addLayout(ManagerButtons);
+    SelectedRows->addStretch();
+    managerDetails_->setWidget(Selected);
+    managerSplit_->addWidget(managerDetails_);
+    managerSplit_->setStretchFactor(0, 2);
+    managerSplit_->setStretchFactor(1, 1);
+    ManagerLayout->addWidget(managerSplit_, 1);
+
+    auto* ManagerFooter = new QHBoxLayout;
+    managerOpen_ = Button(tr("상세 보기(&D)"), "hc.jobs.managerOpen");
+    managerOpen_->setCheckable(true);
+    managerOpen_->setChecked(true);
+    startQueue_ = Button(tr("대기열 시작(&S)"), "hc.jobs.startQueue");
+    auto* More = Button(tr("추가 작업(&M)"), "hc.jobs.more");
+    auto* Menu = new QMenu(More);
+    const auto Action = [&](const QString& Text, const QString& Name, auto Callback) {
+        auto* Item = Menu->addAction(Text, this, Callback);
+        Item->setObjectName(Name);
+        return Item;
+    };
+    queueUp_ = Action(tr("선택 작업 위로"), "hc.jobs.queueUp", [this] { reorderSelected(-1); });
+    queueDown_ = Action(tr("선택 작업 아래로"), "hc.jobs.queueDown", [this] { reorderSelected(1); });
+    managerForeground_ = Action(tr("선택 작업을 전경으로"), "hc.jobs.foreground", [this] { showProgress(); });
+    Menu->addSeparator();
+    for (const auto& [Control, Text] : std::initializer_list<std::pair<JobControl, QString>>{
+        {JobControl::Pause, tr("모두 일시 정지")}, {JobControl::Resume, tr("일시 정지 모두 해제")}, {JobControl::Cancel, tr("모든 작업 취소")}})
+        Action(Text, "hc.jobs.all." + QString::number(static_cast<int>(Control)), [this, Control] { controlAll(Control); });
+    Menu->addSeparator();
+    Action(tr("이름 변경 이력"), "hc.jobs.renameHistory", [this] { hc::ui::RenameHistoryDialog History(this, manager_); History.exec(); });
+    clearHistory_ = Menu->addAction(tr("끝난 작업 이력 지우기"));
+    clearHistory_->setObjectName("hc.jobs.clearHistory");
+    clearHistory_->setToolTip(tr("완료·실패·취소 기록을 지웁니다. 실행 중인 작업이나 파일에는 영향을 주지 않습니다."));
+    More->setMenu(Menu);
+
+    summary_ = new hc::qt::ElidedLabel(manager_);
+    summary_->setObjectName("hc.jobs.summary");
+    summary_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    ManagerLayout->addWidget(summary_);
+
+    auto* ManagerActions = new fm::ui::WrapLayout;
+    for (auto* Item : {managerOpen_, startQueue_, static_cast<QPushButton*>(More)}) ManagerActions->addWidget(Item);
+    auto* CloseManager = Button(tr("닫기(&O)"), "hc.jobs.close");
+    ManagerFooter->addLayout(ManagerActions, 1);
+    ManagerFooter->addWidget(CloseManager, 0, Qt::AlignBottom);
+    ManagerLayout->addLayout(ManagerFooter);
+    hc::ui::DialogFrameOptions Frame;
+    Frame.header_ = false;
+    hc::ui::ApplyDialogFrame(manager_, Frame);
+
+    connect(CloseManager, &QPushButton::clicked, manager_, &QDialog::hide);
+    connect(managerOpen_, &QPushButton::toggled, managerDetails_, &QWidget::setVisible);
+    connect(startQueue_, &QPushButton::clicked, this, [this] { controlAll(JobControl::Start); });
+    connect(managerProgress_, &QPushButton::clicked, this, [this] { showProgress(false); });
     connect(managerStart_, &QPushButton::clicked, this, [this] {
-        auto Result = scheduler_.Control({selectedId()}, JobControl::Start);
+        const auto Result = scheduler_.Control({selectedId()}, JobControl::Start);
         if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("대기열 시작 실패"), hc::ui::ErrorText(Result.Failure()));
         updateManager(); updateSelection();
     });
+    connect(managerBlocker_, &QPushButton::clicked, this, [this] {
+        const auto Snapshot = scheduler_.Snapshot(selectedId());
+        if (Snapshot.HasValue() && !Snapshot.Value().wait_.jobId_.empty()) selectManagerJob(Snapshot.Value().wait_.jobId_);
+    });
     connect(managerRetry_, &QPushButton::clicked, this, [this] { retrySelected(); });
-    auto* RenameHistory = new fm::ui::Button(tr("이름 변경 이력(&L)"), manager_); RenameHistory->setObjectName("hc.jobs.renameHistory"); RenameHistory->setAutoDefault(false);
-    auto* HistoryControls = new fm::ui::WrapLayout; HistoryControls->addWidget(RenameHistory);
-    connect(RenameHistory, &QPushButton::clicked, this, [this] { hc::ui::RenameHistoryDialog History(this, manager_); History.exec(); });
-    auto* Clear = new fm::ui::Button(tr("끝난 작업 이력 지우기(&H)"), manager_); clearHistory_ = Clear; Clear->setObjectName("hc.jobs.clearHistory");
-    Clear->setAutoDefault(false);
-    Clear->setToolTip(tr("완료·실패·취소 기록을 지웁니다. 실행 중인 작업이나 파일에는 영향을 주지 않습니다."));
-    HistoryControls->addWidget(Clear); HistoryRows->addLayout(HistoryControls);
-    auto* CloseManager = new fm::ui::Button(tr("닫기(&O)"), manager_); CloseManager->setObjectName("hc.jobs.close");
-    for (auto* Button : {managerOpen_, managerStart_, managerPause_, managerCancel_, managerRetry_}) {
-        Button->setAutoDefault(false); ManagerButtons->addWidget(Button);
-    }
-    SelectedRows->addLayout(ManagerButtons);
-    auto* ManagerFooter = new QHBoxLayout; ManagerFooter->addStretch(); ManagerFooter->addWidget(CloseManager);
-    CloseManager->setAutoDefault(false); ManagerLayout->addLayout(ManagerFooter);
-    {
-        hc::ui::DialogFrameOptions Frame; Frame.header_ = false;
-        auto* Footer = hc::ui::ApplyDialogFrame(manager_, Frame);
-        hc::ui::PlaceHeaderBand(manager_, ManagerHeader);
-        hc::ui::MoveToFooter(Footer, CloseManager);
-    }
-    std::vector<QWidget*> FocusOrder{filter_, search_, jobList_, managerOpen_, managerStart_, managerPause_, managerCancel_, managerRetry_,
-        StartQueue, queueUp_, queueDown_, concurrency_};
-    for (const auto Control : {JobControl::Pause, JobControl::Resume, JobControl::Cancel})
-        FocusOrder.push_back(manager_->findChild<QPushButton*>("hc.jobs.all." + QString::number(static_cast<int>(Control))));
-    FocusOrder.insert(FocusOrder.end(), {RenameHistory, Clear, CloseManager});
-    for (size_t I = 1; I < FocusOrder.size(); ++I) QWidget::setTabOrder(FocusOrder[I - 1], FocusOrder[I]);
-    connect(CloseManager, &QPushButton::clicked, manager_, &QDialog::hide);
-    connect(managerOpen_, &QPushButton::clicked, this, [this] { showProgress(); });
-    connect(jobList_, &QTreeWidget::itemDoubleClicked, this, [this] { showProgress(); });
+    connect(managerPause_, &QPushButton::clicked, this, [this] { controlSelected(true); });
+    connect(managerCancel_, &QPushButton::clicked, this, [this] { controlSelected(false); });
+    connect(jobList_, &QTreeWidget::itemDoubleClicked, this, [this] { showProgress(false); });
     connect(jobList_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* Item) {
         if (Item) jobs_->setCurrentIndex(jobs_->findData(Item->data(0, Qt::UserRole)));
         updateSelection();
     });
-    connect(filter_, &QComboBox::currentIndexChanged, this, [this] { updateManager(); updateSelection(); });
+    connect(queueList_, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* Item) {
+        if (Item) jobs_->setCurrentIndex(jobs_->findData(Item->data(Qt::UserRole)));
+        updateSelection();
+    });
+    connect(queueList_->model(), &QAbstractItemModel::rowsMoved, this, [this] { applyQueueOrder(); });
+    connect(filter_, &QTabBar::currentChanged, this, [this] { updateManager(); updateSelection(); });
     connect(search_, &QLineEdit::textChanged, this, [this] { updateManager(); updateSelection(); });
-    connect(managerPause_, &QPushButton::clicked, this, [this] { controlSelected(true); });
-    connect(managerCancel_, &QPushButton::clicked, this, [this] { controlSelected(false); });
+    const std::array<QWidget*, 13> FocusOrder{concurrency_, filter_, search_, jobList_, queueList_, managerOpen_,
+        managerBlocker_, managerStart_, managerProgress_, managerPause_, managerCancel_, managerRetry_, startQueue_};
+    for (size_t Index = 1; Index < FocusOrder.size(); ++Index) QWidget::setTabOrder(FocusOrder[Index - 1], FocusOrder[Index]);
+    QWidget::setTabOrder(startQueue_, More);
+    QWidget::setTabOrder(More, CloseManager);
+    manager_->installEventFilter(this);
+    updateManagerLayout();
+    managerOpen_->setChecked(SavedLayout["details"].toBool(managerOpen_->isChecked()));
     if (auto* Window = qobject_cast<QMainWindow*>(Main)) {
         taskbarProgress_ = std::make_unique<TaskbarProgress>(Window);
         indicator_ = new fm::ui::Button(tr("파일 작업"), Window); indicator_->setObjectName("hc.jobs.indicator");
         Window->statusBar()->addPermanentWidget(indicator_);
         connect(indicator_, &QPushButton::clicked, this, [this] { Show(); });
     }
-    connect(Clear, &QPushButton::clicked, this, [this, Clear] {
+    connect(clearHistory_, &QAction::triggered, this, [this] {
         if (clearingHistory_) return;
         clearingHistory_ = true;
         std::vector<std::string> Ids;
         for (const auto& [Id, Result] : results_) Ids.push_back(Id);
-        Clear->setEnabled(false);
+        clearHistory_->setEnabled(false);
         using EraseResult = std::pair<std::vector<std::string>, std::optional<Error>>;
         auto* Watcher = new QFutureWatcher<EraseResult>(this);
-        connect(Watcher, &QFutureWatcher<EraseResult>::finished, this, [this, Watcher, Clear] {
+        connect(Watcher, &QFutureWatcher<EraseResult>::finished, this, [this, Watcher] {
             const auto Result = Watcher->result(); Watcher->deleteLater(); clearingHistory_ = false;
             for (const auto& Id : Result.first)
             {
@@ -822,7 +920,7 @@ Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::
     }
     autoClose_->setChecked(Defaults["jobCloseOnSuccess"].toBool(hc::defaults::DefaultValue("options/jobCloseOnSuccess").toBool()));
     if (detailed_ != Defaults["jobDetailed"].toBool(hc::defaults::DefaultValue("options/jobDetailed").toBool())) dialog_->findChild<QPushButton*>("hc.jobs.toggleDetails")->click();
-    if (Snapshot.HasValue() && Snapshot.Value().deferred_) Show();
+    if (Snapshot.HasValue() && Snapshot.Value().deferred_) { filter_->setCurrentIndex(DeferredTab); Show(); }
     else if (!Snapshot.HasValue() || Snapshot.Value().foreground_) showProgress();
     return Handle;
 }
@@ -873,9 +971,9 @@ bool FileJobUi::backgroundJob(const std::string& Id)
     return true;
 }
 void FileJobUi::Show() { updateManager(); manager_->show(); manager_->raise(); manager_->activateWindow(); updateSelection(); }
-void FileJobUi::showProgress() {
+void FileJobUi::showProgress(bool Foreground) {
     const auto Snapshot = scheduler_.Snapshot(selectedId());
-    if (Snapshot.HasValue() && !IsTerminal(Snapshot.Value().state_)) scheduler_.SetForeground(Snapshot.Value().id_, true);
+    if (Foreground && Snapshot.HasValue() && !IsTerminal(Snapshot.Value().state_)) scheduler_.SetForeground(Snapshot.Value().id_, true);
     const bool Opening = !dialog_->isVisible();
     updateSelection(); fitProgressDialog(); dialog_->show(); dialog_->raise(); dialog_->activateWindow(); updateSelection();
     if (Opening) cancel_->setFocus(Qt::OtherFocusReason);
@@ -907,18 +1005,39 @@ void FileJobUi::controlAll(JobControl Control)
 }
 void FileJobUi::reorderSelected(int Direction)
 {
-    auto Values = scheduler_.Snapshots();
-    std::erase_if(Values, [](const auto& Snapshot) { return !Snapshot.deferred_; });
-    std::sort(Values.begin(), Values.end(), [](const auto& A, const auto& B) { return A.queueOrder_ < B.queueOrder_; });
-    const auto Found = std::find_if(Values.begin(), Values.end(), [this](const auto& Snapshot) { return Snapshot.id_ == selectedId(); });
-    if (Found == Values.end()) return;
-    const auto Index = std::distance(Values.begin(), Found), Next = Index + Direction;
-    if (Next < 0 || Next >= static_cast<std::ptrdiff_t>(Values.size())) return;
-    std::swap(Values[Index], Values[Next]); std::vector<std::string> Ids;
-    for (const auto& Snapshot : Values) Ids.push_back(Snapshot.id_);
-    auto Result = scheduler_.ReorderQueued(Ids);
-    if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("순서 변경 실패"), hc::ui::ErrorText(Result.Failure()));
-    updateManager(); updateSelection();
+    if (managerLists_->currentWidget() == jobList_) return;
+    const auto Row = queueList_->currentRow();
+    queueList_->MoveRow(Row, Row + Direction);
+}
+void FileJobUi::applyQueueOrder()
+{
+    std::vector<std::string> Ids;
+    for (int Row = 0; Row < queueList_->count(); ++Row)
+        Ids.push_back(queueList_->item(Row)->data(Qt::UserRole).toString().toStdString());
+    const auto Result = scheduler_.ReorderQueued(Ids);
+    // Let the shared widget finish restoring its persistent selection before refreshing.
+    QTimer::singleShot(0, this, [this, Result] {
+        updateManager();
+        if (!Result.HasValue()) hc::ui::MessageDialog::warning(manager_, tr("순서 변경 실패"), hc::ui::ErrorText(Result.Failure()));
+    });
+}
+void FileJobUi::updateManagerLayout()
+{
+    const auto Orientation = manager_->width() >= managerWideWidth ? Qt::Horizontal : Qt::Vertical;
+    if (managerSplit_->orientation() == Orientation) return;
+    managerSplit_->setOrientation(Orientation);
+    managerOpen_->setChecked(Orientation == Qt::Horizontal);
+}
+void FileJobUi::selectManagerJob(const std::string& Id)
+{
+    const auto Row = jobs_->findData(QString::fromStdString(Id));
+    if (Row < 0) return;
+    filter_->setCurrentIndex(results_.contains(Id) ? HistoryTab : IncompleteTab);
+    search_->clear();
+    jobs_->setCurrentIndex(Row);
+    updateManager();
+    if (auto* Item = jobList_->currentItem()) jobList_->scrollToItem(Item);
+    jobList_->setFocus();
 }
 bool FileJobUi::canRetry(const std::string& Id) const
 {
@@ -1029,40 +1148,83 @@ bool FileJobUi::acceptsControl(const JobSnapshot& Snapshot, JobControl Control) 
 }
 void FileJobUi::updateManagerSelection(const JobSnapshot* Snapshot)
 {
-    const bool Visible = Snapshot && jobList_->currentItem() && !jobList_->currentItem()->isHidden()
-        && jobList_->currentItem()->data(0, Qt::UserRole).toString().toStdString() == Snapshot->id_;
-    managerOpen_->setEnabled(Visible); managerStart_->setEnabled(Visible && acceptsControl(*Snapshot, JobControl::Start));
+    const bool QueueView = managerLists_->currentWidget() != jobList_;
+    const auto Selected = QueueView
+        ? (queueList_->currentItem() ? queueList_->currentItem()->data(Qt::UserRole).toString() : QString{})
+        : (jobList_->currentItem() && !jobList_->currentItem()->isHidden()
+            ? jobList_->currentItem()->data(0, Qt::UserRole).toString() : QString{});
+    const bool Visible = Snapshot && !Selected.isEmpty() && Selected.toStdString() == Snapshot->id_;
+    managerStart_->setEnabled(Visible && acceptsControl(*Snapshot, JobControl::Start));
+    managerStart_->setVisible(managerStart_->isEnabled());
+    managerProgress_->setVisible(Visible && !Snapshot->deferred_);
+    managerProgress_->setText(Visible && Snapshot->state_ == JobState::WaitingForUser ? tr("응답하기(&V)") : tr("진행 창(&V)"));
+    managerForeground_->setEnabled(Visible && !Snapshot->deferred_ && !Snapshot->foreground_ && !IsTerminal(Snapshot->state_));
     managerPause_->setEnabled(Visible && (acceptsControl(*Snapshot, JobControl::Pause) || acceptsControl(*Snapshot, JobControl::Resume)));
-    managerPause_->setText(pause_->text()); managerCancel_->setEnabled(Visible && acceptsControl(*Snapshot, JobControl::Cancel));
+    managerPause_->setVisible(managerPause_->isEnabled());
+    managerPause_->setText(pause_->text());
+    managerCancel_->setEnabled(Visible && acceptsControl(*Snapshot, JobControl::Cancel));
+    managerCancel_->setVisible(managerCancel_->isEnabled());
     managerRetry_->setEnabled(Visible && canRetry(Snapshot->id_));
-    clearHistory_->setEnabled(!clearingHistory_ && preparingRetry_.empty() && !results_.empty());
+    managerRetry_->setVisible(managerRetry_->isEnabled() || (Visible && preparingRetry_ == Snapshot->id_));
     managerRetry_->setText(Visible && preparingRetry_ == Snapshot->id_ ? tr("재시도 확인 중…") : tr("실패 항목 재시도(&T)"));
-    std::vector<JobSnapshot> Queue;
-    for (const auto& Item : scheduler_.Snapshots()) if (acceptsControl(Item, JobControl::Start)) Queue.push_back(Item);
-    std::sort(Queue.begin(), Queue.end(), [](const auto& A, const auto& B) { return A.queueOrder_ < B.queueOrder_; });
-    const auto At = std::find_if(Queue.begin(), Queue.end(), [&](const auto& Item) { return Visible && Item.id_ == Snapshot->id_; });
-    queueUp_->setEnabled(At != Queue.end() && At != Queue.begin());
-    queueDown_->setEnabled(At != Queue.end() && std::next(At) != Queue.end());
-    static_cast<hc::qt::ElidedLabel*>(queueSummary_)->SetText(tr("시작 전 대기열 %1개 · 선택: %2").arg(Queue.size()).arg(At != Queue.end() ? QString::fromStdString(At->metadata_.label_) : tr("대기 작업을 선택하세요")));
-    if (!Visible) { static_cast<hc::qt::ElidedLabel*>(selectionSummary_)->SetText(tr("선택한 작업 없음 · 목록에서 작업을 선택하세요.")); return; }
+    const auto At = queueList_->currentRow();
+    queueUp_->setEnabled(Visible && QueueView && At > 0);
+    queueDown_->setEnabled(Visible && QueueView && At >= 0 && At + 1 < queueList_->count());
+    managerBlocker_->setVisible(Visible && !Snapshot->wait_.jobId_.empty());
+    const auto Fraction = Visible ? JobFraction(*Snapshot) : std::nullopt;
+    auto* Bar = managerDetails_->findChild<QProgressBar*>("hc.jobs.managerFraction");
+    Bar->setVisible(Fraction.has_value());
+    if (Fraction) Bar->setValue(static_cast<int>(std::clamp(*Fraction * 100, 0.0, 100.0)));
+    auto* Summary = static_cast<hc::qt::ElidedLabel*>(selectionSummary_);
+    if (!Visible) {
+        Summary->SetLineCount(1);
+        Summary->SetText(tr("선택한 작업 없음"));
+        return;
+    }
+
     QStringList Lines{QString::fromStdString(Snapshot->metadata_.label_), JobStatusText(*Snapshot)};
-    const auto Path = endpoints_.contains(Snapshot->id_) ? endpoints_.at(Snapshot->id_)
-        : DisplayPath(Snapshot->metadata_.source_) + (Snapshot->metadata_.destination_.empty() ? QString{} : QStringLiteral(" → ") + DisplayPath(Snapshot->metadata_.destination_));
-    if (!Path.isEmpty()) Lines.append(tr("대상: %1").arg(Path));
-    Lines.append(tr("선택 1개 작업 · 완료 %1 / 건너뜀 %2 / 실패 %3 · 전체 %4")
-        .arg(Snapshot->completedItems_).arg(Snapshot->skippedItems_).arg(Snapshot->failedItems_)
-        .arg(Snapshot->progress_.plannedItems_ ? tr("%1개 항목").arg(*Snapshot->progress_.plannedItems_) : tr("집계 중")));
-    if (!preparingRetry_.empty() && preparingRetry_ == Snapshot->id_) Lines.append(tr("실패 항목과 원본을 확인하고 있습니다. 확인 중에는 추가 재시도를 접수하지 않습니다."));
-    else if (Snapshot->cancelRequested_ && !IsTerminal(Snapshot->state_)) Lines.append(tr("현재 변경 확정과 정리를 마친 뒤 취소됩니다. 완료된 변경은 유지됩니다."));
-    else if (Snapshot->error_ && Snapshot->error_->code_ == "job-interrupted") Lines.append(tr("이전 실행이 중단되어 자동 실행하지 않습니다. 상세 결과를 확인하세요. 이름 변경은 이력에서 이어 실행하거나 원래 이름으로 복구할 수 있습니다."));
-    else if (Snapshot->state_ == JobState::Paused) Lines.append(tr("일시 정지되었습니다. 재개하면 남은 작업을 이어 실행합니다."));
-    else if (Snapshot->pauseRequested_) Lines.append(tr("안전한 시점에 일시 정지합니다. 요청을 해제하면 계속 진행합니다."));
-    else if (Snapshot->deferred_) Lines.append(tr("시작 전 대기 작업입니다. 선택 작업 시작 또는 대기열 시작으로 실행하세요."));
-    else if (Snapshot->state_ == JobState::WaitingForUser) Lines.append(tr("진행 창을 열어 안내 팝업에서 처리 방법을 선택하세요."));
-    else if (!Snapshot->retriedAs_.empty()) Lines.append(tr("재시도가 새 작업으로 접수되었습니다. 목록에서 후속 작업의 결과를 확인하세요."));
-    else if (Snapshot->state_ == JobState::Failed) Lines.append(canRetry(Snapshot->id_) ? tr("목적지 저장 전 실패한 항목만 원본을 다시 확인하여 재시도합니다. 완료 항목은 유지됩니다.") : tr("자동 재시도 대상이 아닙니다. 상세 결과와 원본·대상을 확인하세요."));
-    static_cast<hc::qt::ElidedLabel*>(selectionSummary_)->SetText(Lines.join('\n'));
-    managerCancel_->setToolTip(tr("선택한 작업의 남은 항목을 취소합니다. 이미 완료된 변경은 유지하고 현재 변경 확정 후 정리합니다."));
+    if (const auto Source = DisplayPath(Snapshot->metadata_.source_); !Source.isEmpty()) Lines.append(tr("원본  %1").arg(Source));
+    if (const auto Target = DisplayPath(Snapshot->metadata_.destination_); !Target.isEmpty()) Lines.append(tr("대상  %1").arg(Target));
+    if (!Snapshot->progress_.currentItem_.empty())
+        Lines.append(tr("현재  %1").arg(QString::fromStdString(Snapshot->progress_.currentItem_)));
+    if (const auto Phase = PhaseText(Snapshot->progress_.phase_, Snapshot->metadata_.kind_); !Phase.isEmpty() && !IsTerminal(Snapshot->state_))
+        Lines.append(Phase);
+    if (Fraction)
+        Lines.append(tr("진행 %1%").arg(*Fraction == 1.0 ? 100L : std::min(99L, std::lround(100 * *Fraction))));
+    if (!Snapshot->deferred_ && Snapshot->submitted_ != std::chrono::steady_clock::time_point{}) {
+        const auto End = IsTerminal(Snapshot->state_) ? Snapshot->updated_ : std::chrono::steady_clock::now();
+        const auto Seconds = std::chrono::duration_cast<std::chrono::seconds>(End - Snapshot->submitted_).count();
+        auto Time = tr("경과 %1").arg(DurationText(Seconds));
+        if (const auto Remaining = RemainingTime(*Snapshot, measuredRate(*Snapshot)); !Remaining.isEmpty()) {
+            const auto Kind = Snapshot->metadata_.kind_;
+            const bool Archive = Kind == JobKind::ArchiveCreate || Kind == JobKind::ArchiveSeparate || Kind == JobKind::IsoCreate;
+            Time += (Archive ? tr(" · 현재 단계 남은 시간 %1") : tr(" · 남은 시간 %1")).arg(Remaining);
+        }
+        Lines.append(Time);
+    }
+    if (!Snapshot->deferred_ && Snapshot->state_ != JobState::Queued)
+        Lines.append(tr("완료 %1 / 건너뜀 %2 / 실패 %3").arg(Snapshot->completedItems_).arg(Snapshot->skippedItems_).arg(Snapshot->failedItems_));
+
+    if (!preparingRetry_.empty() && preparingRetry_ == Snapshot->id_) Lines.append(tr("실패 항목과 원본을 확인하고 있습니다."));
+    else if (Snapshot->cancelRequested_ && !IsTerminal(Snapshot->state_)) Lines.append(tr("현재 변경 확정과 정리를 마친 뒤 취소됩니다."));
+    else if (Snapshot->error_ && Snapshot->error_->code_ == "job-interrupted") Lines.append(tr("이전 실행이 중단되었습니다. 이름 변경은 이력에서 이어 실행하거나 복구할 수 있습니다."));
+    else if (Snapshot->state_ == JobState::Paused) Lines.append(tr("재개하면 남은 작업을 이어 실행합니다."));
+    else if (Snapshot->pauseRequested_) Lines.append(tr("안전한 시점에 일시 정지합니다."));
+    else if (Snapshot->deferred_) Lines.append(tr("선택 작업 시작 또는 대기열 시작으로 실행하세요."));
+    else if (Snapshot->state_ == JobState::WaitingForUser) Lines.append(tr("응답하기를 눌러 처리 방법을 선택하세요."));
+    else if (Snapshot->wait_.reason_ == JobWaitReason::BackgroundLimit)
+        Lines.append(tr("백그라운드 실행 슬롯이 비면 자동으로 시작합니다."));
+    else if (Snapshot->wait_.reason_ == JobWaitReason::Resource) {
+        const auto Owner = scheduler_.Snapshot(Snapshot->wait_.jobId_);
+        const auto Label = Owner.HasValue() ? QString::fromStdString(Owner.Value().metadata_.label_) : QString{};
+        const auto& Resource = Snapshot->wait_.resource_;
+        const auto Separator = Resource.find(':');
+        Lines.append(tr("대기 대상  %1").arg(QString::fromStdString(Resource.substr(Separator == std::string::npos ? 0 : Separator + 1))));
+        if (!Label.isEmpty()) Lines.append(tr("‘%1’의 사용이 끝나면 자동으로 시작합니다.").arg(Label));
+    } else if (!Snapshot->retriedAs_.empty()) Lines.append(tr("재시도가 새 작업으로 접수되었습니다."));
+    else if (Snapshot->state_ == JobState::Failed) Lines.append(tr("진행 창에서 실패 내용을 확인하세요."));
+    Summary->SetLineCount(static_cast<int>(Lines.size()));
+    Summary->SetText(Lines.join('\n'));
 }
 
 void FileJobUi::updateJobs()
@@ -1386,14 +1548,8 @@ void FileJobUi::updateProgressView(const JobSnapshot& Snapshot)
     if (Delete && Progress.discoveredItems_ && !Progress.plannedItems_) Overall += tr(" · 확인한 항목 %1개 · 전체 집계 중").arg(*Progress.discoveredItems_);
     static_cast<hc::qt::ElidedLabel*>(overallMetrics_)->SetText(Overall);
     const auto Rate = measuredRate(Snapshot);
-    const auto RateTotal = Mode == RateMode::Files ? (Progress.plannedItems_ ? Progress.discoveredFiles_ : std::optional<uint64_t>{})
-        : Mode == RateMode::Items ? Progress.plannedItems_ : Progress.bytesTotal_;
-    const auto RateDone = RateValue(Snapshot);
-    QString Remaining = QStringLiteral("—");
-    if (Active && Snapshot.state_ != JobState::Paused && Rate > 0 && RateTotal && *RateTotal > RateDone) {
-        const auto Seconds = std::round((*RateTotal - RateDone) / Rate);
-        if (Seconds < double(INT64_MAX)) Remaining = tr("약 %1").arg(DurationText(qint64(Seconds)));
-    }
+    auto Remaining = RemainingTime(Snapshot, Rate);
+    if (Remaining.isEmpty()) Remaining = QStringLiteral("—");
     const auto Now = IsTerminal(Snapshot.state_) ? Snapshot.updated_ : std::chrono::steady_clock::now();
     const auto Elapsed = Snapshot.submitted_ == std::chrono::steady_clock::time_point{} ? 0LL : std::chrono::duration_cast<std::chrono::seconds>(Now - Snapshot.submitted_).count();
     const auto RateText = ArchiveCreation&&Snapshot.state_==JobState::Paused?tr("일시 정지"):Bytes ? fm::ui::TransferGraph::formatRate(Rate) : QLocale().toString(Rate, 'f', 1) + (Mode == RateMode::Files ? tr(" 파일/초") : tr(" 항목/초"));
@@ -1470,9 +1626,34 @@ void FileJobUi::updateManager()
     std::vector<JobSnapshot> Queue;
     for (const auto& [Id, Snapshot] : Snapshots) if (acceptsControl(Snapshot, JobControl::Start)) Queue.push_back(Snapshot);
     std::sort(Queue.begin(), Queue.end(), [](const auto& A, const auto& B) { return A.queueOrder_ < B.queueOrder_; });
+    const auto Needle = search_->text().trimmed();
+    const auto Filter = filter_->currentIndex();
+    managerLists_->setCurrentIndex(Filter == DeferredTab && Needle.isEmpty() ? 1 : 0);
+    search_->setToolTip(Filter == DeferredTab ? tr("검색어를 지우면 전체 대기열의 순서를 바꿀 수 있습니다.") : QString{});
+    queueHint_->setText(tr("손잡이를 끌거나 Ctrl+↑ / Ctrl+↓로 이동"));
+    {
+        const QSignalBlocker QueueBlock(queueList_);
+        bool Changed = size_t(queueList_->count()) != Queue.size();
+        for (int Row = 0; !Changed && Row < queueList_->count(); ++Row)
+            Changed = queueList_->item(Row)->data(Qt::UserRole).toString().toStdString() != Queue[Row].id_;
+        if (Changed) {
+            queueList_->clear();
+            for (const auto& Job : Queue)
+                (new QListWidgetItem(queueList_))->setData(Qt::UserRole, QString::fromStdString(Job.id_));
+        }
+        int Selected = -1;
+        for (int Row = 0; Row < queueList_->count(); ++Row) {
+            const auto& Job = Queue[Row];
+            auto* Item = queueList_->item(Row);
+            Item->setText(tr("%1.   %2").arg(Row + 1).arg(QString::fromStdString(Job.metadata_.label_)));
+            Item->setToolTip(DisplayPath(Job.metadata_.source_) + QStringLiteral(" → ") + DisplayPath(Job.metadata_.destination_));
+            if (Job.id_ == selectedId()) Selected = Row;
+        }
+        if (queueList_->currentRow() != Selected) queueList_->setCurrentRow(Selected);
+    }
     std::map<std::string, size_t> Positions;
     for (size_t Index = 0; Index < Queue.size(); ++Index) Positions[Queue[Index].id_] = Index + 1;
-    int Active = 0, Waiting = 0, Finished = 0, Failed = 0, Queued = 0, Delayed = 0; double TotalRate = 0, DeleteRate = 0, DeleteItemRate = 0;
+    int Active = 0, Waiting = 0, History = 0, Delayed = 0; double TotalRate = 0, DeleteRate = 0, DeleteItemRate = 0;
     for (int Row = jobList_->topLevelItemCount() - 1; Row >= 0; --Row)
         if (jobs_->findData(jobList_->topLevelItem(Row)->data(0, Qt::UserRole)) < 0) delete jobList_->takeTopLevelItem(Row);
     std::map<QString, QTreeWidgetItem*> Rows;
@@ -1489,19 +1670,23 @@ void FileJobUi::updateManager()
         const auto Found = Snapshots.find(Id.toStdString()); if (Found == Snapshots.end()) continue;
         const auto& Snapshot = Found->second;
         const bool Terminal = IsTerminal(Snapshot.state_);
-        Queued += acceptsControl(Snapshot, JobControl::Start);
         const auto Mode = ProgressRate(Snapshot);
         if (Mode == RateMode::Files) DeleteRate += measuredRate(Snapshot);
         else if (Mode == RateMode::Items) DeleteItemRate += measuredRate(Snapshot);
         else if (Mode == RateMode::Bytes) TotalRate += measuredRate(Snapshot);
         Active += !Terminal; Waiting += !Terminal && !Snapshot.cancelRequested_ && Snapshot.state_ == JobState::WaitingForUser;
-        Finished += Snapshot.state_ == JobState::Completed;
-        Failed += Snapshot.state_ == JobState::Failed || Snapshot.state_ == JobState::Cancelled;
+        History += Terminal;
         QTreeWidgetItem* Item = Rows.contains(Id) ? Rows.at(Id) : nullptr;
         if (!Item) { Item = new QTreeWidgetItem(jobList_); Item->setData(0, Qt::UserRole, Id); }
         Item->setText(0, (Positions.contains(Snapshot.id_) ? tr("대기 #%1 · ").arg(Positions.at(Snapshot.id_)) : QString{}) + jobs_->itemText(Row));
         Item->setData(0, Qt::UserRole + 2, QVariant::fromValue<qulonglong>(Snapshot.queueOrder_));
-        Item->setText(1, JobStatusText(Snapshot) + (IsTerminal(Snapshot.state_) ? QString{} : Snapshot.foreground_ ? tr(" · 전경") : tr(" · 백그라운드")));
+        const auto Status = JobStatusText(Snapshot);
+        Item->setText(1, Status);
+        const auto& Theme = fm::style::themeColorsFor(jobList_);
+        using Token = fm::style::Token;
+        Item->setForeground(1, Snapshot.wait_.reason_ != JobWaitReason::None || Snapshot.state_ == JobState::WaitingForUser
+            ? QBrush(Theme[Token::Warn]) : Snapshot.state_ == JobState::Running ? QBrush(Theme[Token::AccentFg]) : QBrush{});
+        Item->setToolTip(1, Terminal ? Status : Status + (Snapshot.foreground_ ? tr(" · 전경") : tr(" · 백그라운드")));
         bool Stalled = false;
         if (Snapshot.state_ == JobState::Running && !Snapshot.pauseRequested_ && samples_.contains(Snapshot.id_)) {
             const auto& History = samples_.at(Snapshot.id_);
@@ -1534,26 +1719,21 @@ void FileJobUi::updateManager()
         Item->setText(4, QString::fromStdString(Snapshot.progress_.currentItem_));
         const auto Endpoint = endpoints_.contains(Snapshot.id_) ? endpoints_.at(Snapshot.id_) : QString{};
         Item->setToolTip(0, jobs_->itemText(Row) + "\n" + Endpoint + "\n" + Id + "\n" + (Snapshot.submittedUtcMs_ ? QLocale().toString(QDateTime::fromMSecsSinceEpoch(Snapshot.submittedUtcMs_), QLocale::ShortFormat) : tr("이전 버전: 접수 시각 미상")));
-        const int Filter = filter_->currentIndex();
-        const bool Match = Filter == 0 || (Filter == 1 && !Terminal) || (Filter == 2 && Snapshot.state_ == JobState::WaitingForUser)
-            || (Filter == 3 && Snapshot.state_ == JobState::Completed) || (Filter == 4 && (Snapshot.state_ == JobState::Failed || Snapshot.state_ == JobState::Cancelled));
-        Item->setHidden(!Match || !(Item->text(0) + Item->text(4) + Endpoint).contains(search_->text(), Qt::CaseInsensitive));
+        const bool Match = (Filter == IncompleteTab && !Terminal) || (Filter == DeferredTab && acceptsControl(Snapshot, JobControl::Start))
+            || (Filter == ResponseTab && !Snapshot.cancelRequested_ && Snapshot.state_ == JobState::WaitingForUser) || (Filter == HistoryTab && Terminal);
+        Item->setHidden(!Match || !(Item->text(0) + Item->text(4) + Endpoint + DisplayPath(Snapshot.metadata_.source_)
+            + DisplayPath(Snapshot.metadata_.destination_)).contains(Needle, Qt::CaseInsensitive));
         if (Id.toStdString() == selectedId()) jobList_->setCurrentItem(Item);
     }
     summary_->setToolTip(tr("속도는 최근 2초의 실제 처리량입니다. 삭제는 파일 수, 복사·이동은 바이트로 집계합니다. 10초 이상 변화가 없으면 지연으로 표시하며, 실패를 뜻하지 않습니다. 그래프는 최근 600개 표본을 보관합니다."));
     auto Rates = fm::ui::TransferGraph::formatRate(TotalRate) + tr(" · 삭제 %1 파일/초").arg(QLocale().toString(DeleteRate, 'f', 1));
     if (DeleteItemRate > 0) Rates += tr(" · 항목 %1개/초").arg(QLocale().toString(DeleteItemRate, 'f', 1));
-    // Status counts as colored chips (board Prop-Jobs): active · queue · waiting · done · failed, then the rates.
-    const auto& ChipColors = fm::style::themeColorsFor(summary_);
-    const auto Chip = [&ChipColors](const QString& Text, int Count, fm::style::Token Fg, fm::style::Token Bg) {
-        return QString("<span style=\"background:%1;color:%2;\">&nbsp;%3 <b>%4</b>&nbsp;</span>").arg(ChipColors[Bg].name(), ChipColors[Fg].name(), Text.toHtmlEscaped()).arg(Count);
-    };
-    using fm::style::Token;
-    summary_->setTextFormat(Qt::RichText);
-    summary_->setText(Chip(tr("미완료"), Active, Token::AccentFg, Token::AccentSoft) + "&nbsp; " + Chip(tr("대기열"), Queued, Token::Fg2, Token::Alt) + "&nbsp; "
-        + Chip(tr("응답 필요"), Waiting, Token::Warn, Token::WarnBg) + "&nbsp; " + Chip(tr("완료"), Finished, Token::Ok, Token::OkBg) + "&nbsp; "
-        + Chip(tr("실패·취소"), Failed, Token::Danger, Token::DangerBg)
-        + "<br><span style=\"color:" + ChipColors[Token::Fg2].name() + ";\">" + tr("전체 속도 %1 · 10초 이상 진행 지연 %2").arg(Rates).arg(Delayed).toHtmlEscaped() + "</span>");
+    static_cast<hc::qt::ElidedLabel*>(summary_)->SetText(Delayed ? tr("%1 · 지연 %2").arg(Rates).arg(Delayed) : Rates);
+    backgroundUsage_->setText(tr("백그라운드 실행 %1 /").arg(scheduler_.BackgroundJobsInUse()));
+    filter_->setTabText(IncompleteTab, tr("미완료 %1").arg(Active));
+    filter_->setTabText(DeferredTab, tr("시작 전 %1").arg(Queue.size()));
+    filter_->setTabText(ResponseTab, tr("응답 필요 %1").arg(Waiting));
+    filter_->setTabText(HistoryTab, tr("이력 %1").arg(History));
     std::map<QTreeWidgetItem*, bool> Hidden;
     for (int Index = 0; Index < jobList_->topLevelItemCount(); ++Index) Hidden[jobList_->topLevelItem(Index)] = jobList_->topLevelItem(Index)->isHidden();
     std::vector<QTreeWidgetItem*> Ordered;
@@ -1562,24 +1742,13 @@ void FileJobUi::updateManager()
     for (auto* Item : Ordered) { jobList_->addTopLevelItem(Item); Item->setHidden(Hidden.at(Item)); }
     for (auto* Item : Ordered) if (Item->data(0, Qt::UserRole).toString().toStdString() == selectedId()) jobList_->setCurrentItem(Item);
     std::map<JobControl, int> Eligible;
-    int Paused = 0, Cleaning = 0; QStringList Running;
-    for (const auto& Snapshot : scheduler_.Snapshots()) {
+    for (const auto& [Id, Snapshot] : Snapshots) {
         for (const auto Control : {JobControl::Start, JobControl::Pause, JobControl::Resume, JobControl::Cancel}) Eligible[Control] += acceptsControl(Snapshot, Control);
-        if (IsTerminal(Snapshot.state_)) continue;
-        Paused += !Snapshot.cancelRequested_ && (Snapshot.pauseRequested_ || Snapshot.state_ == JobState::Paused);
-        Cleaning += Snapshot.cancelRequested_;
-        if (!Snapshot.deferred_ && !Snapshot.cancelRequested_ && !Snapshot.pauseRequested_
-            && (Snapshot.state_ == JobState::Preparing || Snapshot.state_ == JobState::Running || Snapshot.state_ == JobState::Committing)) {
-            const auto Path = Snapshot.metadata_.destination_.empty() ? Snapshot.metadata_.source_ : Snapshot.metadata_.destination_;
-            Running.append(QString::fromStdString(Snapshot.metadata_.label_) + (Path.empty() ? QString{} : QStringLiteral(" → ") + DisplayPath(Path)));
-        }
     }
-    static_cast<hc::qt::ElidedLabel*>(batchSummary_)->SetText(tr("전체 작업에 적용 · 실행 %1개 / 일시 정지·요청 %2개 / 응답 대기 %3개 / 취소 후 정리 %4개\n현재 실행: %5")
-        .arg(Running.size()).arg(Paused).arg(Waiting).arg(Cleaning).arg(Running.isEmpty() ? tr("없음") : Running.join(QStringLiteral(" · "))));
-    manager_->findChild<QPushButton*>("hc.jobs.startQueue")->setEnabled(Eligible[JobControl::Start] > 0);
+    startQueue_->setEnabled(Eligible[JobControl::Start] > 0);
+    startQueue_->setToolTip(Queue.empty() ? tr("시작 전 작업이 없습니다.") : tr("시작 전 작업 %1개를 실행합니다.").arg(Queue.size()));
     for (const auto Control : {JobControl::Pause, JobControl::Resume, JobControl::Cancel})
-        manager_->findChild<QPushButton*>("hc.jobs.all." + QString::number(static_cast<int>(Control)))->setEnabled(Eligible[Control] > 0);
-    static_cast<hc::qt::ElidedLabel*>(historySummary_)->SetText(tr("끝난 작업 %1개 · 기록만 지우며 파일은 유지합니다. 중단된 이름 변경의 이어 실행·원래 이름 복구는 이름 변경 이력에서 선택하세요.").arg(results_.size()));
+        manager_->findChild<QAction*>("hc.jobs.all." + QString::number(static_cast<int>(Control)))->setEnabled(Eligible[Control] > 0);
     clearHistory_->setEnabled(!clearingHistory_ && preparingRetry_.empty() && !results_.empty());
     if (indicator_) indicator_->setText(tr("파일 작업 %1 · 응답 필요 %2").arg(Active).arg(Waiting));
     const auto Current = Snapshots.find(selectedId());
@@ -1728,6 +1897,18 @@ void FileJobUi::answer(InteractionChoice Choice)
 
 bool FileJobUi::eventFilter(QObject* Object, QEvent* Event)
 {
+    if (Object == manager_ && Event->type() == QEvent::Resize) updateManagerLayout();
+    if (Object == manager_ && Event->type() == QEvent::Hide && !Event->spontaneous()) {
+        auto& Store = hc::settings::AppSettings();
+        if (!Store.Editing()) {
+            auto Options = Store.Read(hc::settings::Section::Options).toObject();
+            const QJsonObject Layout{{"width", manager_->width()}, {"height", manager_->height()}, {"details", managerOpen_->isChecked()}};
+            if (Options["fileJobManagerLayout"].toObject() != Layout) {
+                Options["fileJobManagerLayout"] = Layout;
+                Store.Put(hc::settings::Section::Options, Options);
+            }
+        }
+    }
     if (Object == dialog_ && Event->type() == QEvent::Hide && interaction_ && !passwordDialogOpen_) { interaction_->Dismiss(); interaction_.clear(); }
     if (Object == dialog_ && Event->type() == QEvent::FontChange && progressFooter_) {
         // Child font metrics settle after the parent's FontChange. Recompute the

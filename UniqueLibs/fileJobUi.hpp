@@ -21,7 +21,12 @@ class QCheckBox;
 class QSpinBox;
 class QGridLayout;
 class QBoxLayout;
-namespace fm::ui { class TransferGraph; class DialogHeader; }
+class QAction;
+class QScrollArea;
+class QSplitter;
+class QStackedWidget;
+class QTabBar;
+namespace fm::ui { class TransferGraph; class DialogHeader; class ReorderListWidget; }
 namespace hc::ui { class FileJobInteraction; }
 
 class FileJobUi : public QObject, public hc::permissions::JobController, public hc::filetools::RenameJobController
@@ -70,7 +75,10 @@ private:
     void updateManagerSelection(const hc::operations::JobSnapshot* Snapshot);
     void updateJobs();
     void updateManager();
-    void showProgress();
+    void showProgress(bool Foreground = true);
+    void applyQueueOrder();
+    void updateManagerLayout();
+    void selectManagerJob(const std::string& Id);
     void controlSelected(bool Pause);
     void updateGraph(const hc::operations::JobSnapshot& Snapshot);
     void recordSamples(const std::vector<hc::operations::JobSnapshot>& Snapshots);
@@ -122,11 +130,15 @@ private:
     bool closing_ = false;
     QDialog* manager_ = nullptr;
     QTreeWidget* jobList_ = nullptr;
-    QComboBox* filter_ = nullptr;
+    QTabBar* filter_ = nullptr;
     QLineEdit* search_ = nullptr;
     QLabel* summary_ = nullptr;
-    QLabel *queueSummary_ = nullptr, *batchSummary_ = nullptr, *selectionSummary_ = nullptr, *historySummary_ = nullptr;
-    QPushButton* clearHistory_ = nullptr;
+    QLabel *queueHint_ = nullptr, *selectionSummary_ = nullptr, *backgroundUsage_ = nullptr;
+    QSplitter* managerSplit_ = nullptr;
+    QStackedWidget* managerLists_ = nullptr;
+    QScrollArea* managerDetails_ = nullptr;
+    fm::ui::ReorderListWidget* queueList_ = nullptr;
+    QAction* clearHistory_ = nullptr;
     bool clearingHistory_ = false;
     std::string preparingRetry_;
     QLabel* metrics_ = nullptr;
@@ -135,8 +147,12 @@ private:
     QPushButton* managerCancel_ = nullptr;
     QPushButton* managerStart_ = nullptr;
     QPushButton* managerRetry_ = nullptr;
-    QPushButton* queueUp_ = nullptr;
-    QPushButton* queueDown_ = nullptr;
+    QAction* queueUp_ = nullptr;
+    QAction* queueDown_ = nullptr;
+    QAction* managerForeground_ = nullptr;
+    QPushButton* startQueue_ = nullptr;
+    QPushButton* managerProgress_ = nullptr;
+    QPushButton* managerBlocker_ = nullptr;
     QSpinBox* concurrency_ = nullptr;
     std::map<std::string, hc::operations::FileOperationRequest> retryRequests_;
     struct PreparedRetryRecord { PreparedRetry build_; std::function<void(const std::string&)> submitted_; };

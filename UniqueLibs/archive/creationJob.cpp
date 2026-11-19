@@ -274,9 +274,20 @@ Result<PreparedJob> PrepareCreation(CreateJobRequest Request, OperationContext C
     Request.value_.composition_.omitSelectedFolderRoot_ = Request.value_.composition_.OmitSelectedFolderRoot();
     JobRequest Job; Job.correlationId_ = Request.value_.correlationId_; Job.operation_ = Context;
     Job.deferred_ = Request.value_.schedule_ == plugins::ArchiveCreateSchedule::Queued;
-    Job.resourceLanes_ = {FileOperationLane(Request.value_.output_)};
-    if (Request.selection_) Job.resourceLanes_.push_back(FileOperationLane(Request.value_.sourceRoot_));
-    for (const auto& Source : Request.sources_) Job.resourceLanes_.push_back(FileOperationLane(Source.entry_.locator_));
+    if (Request.value_.composition_.separateArchives_ && !Request.selection_) {
+        std::set<QString> Names;
+        for (const auto& Source : Request.sources_) {
+            auto Output = SeparateArchiveOutput(Source.entry_, Request.value_.output_, Request.value_.format_, Request.value_.outputNames_, Names);
+            if (!Output.HasValue()) return Output.Failure();
+            if (!Request.completedOutputs_.contains(Serialize(Output.Value()))) Job.resourceLanes_.push_back(FileOperationLane(Output.Value()));
+        }
+    } else Job.resourceLanes_.push_back(FileOperationLane(Request.value_.output_));
+    const auto ReserveSource = [&](const Locator& At) {
+        auto& Claims = At.kind_ == LocatorKind::Plugin ? Job.resourceLanes_ : Job.readLanes_;
+        Claims.push_back(FileOperationLane(At));
+    };
+    if (Request.selection_) ReserveSource(Request.value_.sourceRoot_);
+    for (const auto& Source : Request.sources_) ReserveSource(Source.entry_.locator_);
     // External creators may share their mutable INI/package settings. Built-ins
     // create independent codec sessions and can run on disjoint paths together.
     if (Kind == plugins::ArchiveCreatorKind::Wcx || Kind == plugins::ArchiveCreatorKind::DopusVfs)

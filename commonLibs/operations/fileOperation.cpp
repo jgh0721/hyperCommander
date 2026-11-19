@@ -264,7 +264,7 @@ namespace hc::operations
                     readOnlyAnswered_ = true; phase_ = Phase::Begin; return progress();
                 }
                 if (phase_ == Phase::Conflict) return conflict(Context);
-                if (phase_ == Phase::AutomaticName) return automaticName(Context.operation_);
+                if (phase_ == Phase::AutomaticName) return automaticName(Context);
                 if (phase_ == Phase::Begin) {
                     if (!copies_.empty() || canStartCopies(Context.operation_)) return advanceCopies(std::move(Context));
                     return begin(Context.operation_);
@@ -1770,6 +1770,12 @@ namespace hc::operations
                     if (!SafeName(Context.answer_->value_)) return failed({ErrorCategory::InvalidRequest, "unsafe-destination-name"});
                     const auto Old = current().destination_;
                     const auto New = Child(Parent(Old), Context.answer_->value_);
+                    if (Context.tryReserveWrite_ && !Context.tryReserveWrite_(LaneFor(New))) {
+                        JobStep Step{JobState::WaitingForUser};
+                        Step.interaction_ = InteractionRequest{"", InteractionKind::Rename, "destination-reserved",
+                            {InteractionChoice::Rename, InteractionChoice::Cancel}, {}, {}, Serialize(New)};
+                        return Step;
+                    }
                     if (current().source_.entry_.directory_)
                     {
                         for (auto& Item : items_)
@@ -1788,7 +1794,7 @@ namespace hc::operations
                 phase_ = Phase::OpenRead;
                 return progress();
             }
-            JobStep automaticName(OperationContext Context)
+            JobStep automaticName(const JobStepContext& Context)
             {
                 // One provider lookup per advance keeps large collision sets cancellable.
                 if (automaticIndex_ > 100000) return failed({ErrorCategory::BudgetExceeded, "automatic-name-budget"});
@@ -1799,9 +1805,10 @@ namespace hc::operations
                 const auto Split = Dot == std::string::npos || Dot == 0 ? Name.size() : Dot;
                 const auto Candidate = Name.substr(0, Split) + " (" + std::to_string(automaticIndex_++) + ")" + Name.substr(Split);
                 automaticTarget_ = Child(Parent(Original), Candidate);
-                const auto Existing = request_.destinationWriter_->Inspect(automaticTarget_, Context);
+                const auto Existing = request_.destinationWriter_->Inspect(automaticTarget_, Context.operation_);
                 if (!Existing.HasValue()) return failed(Existing.Failure());
                 if (Existing.Value()) return progress();
+                if (Context.tryReserveWrite_ && !Context.tryReserveWrite_(LaneFor(automaticTarget_))) return progress();
                 if (!automaticExisting_) {
                     current().destination_ = automaticTarget_; expected_ = {};
                     phase_ = Phase::Begin; return progress();
@@ -2295,7 +2302,9 @@ namespace hc::operations
                 || (Request.operation_ != FileOperation::Delete && !Request.destinationWriter_))
                 return Error{ErrorCategory::InvalidRequest, "invalid-selection-batch"};
             JobRequest Job; Job.correlationId_ = Request.correlationId_; Job.operation_ = Context;
-            Job.resourceLanes_.push_back(LaneFor(Request.selectionRoot_));
+            auto& Sources = Request.operation_ == FileOperation::Copy && Request.selectionRoot_.kind_ != LocatorKind::Plugin
+                ? Job.readLanes_ : Job.resourceLanes_;
+            Sources.push_back(LaneFor(Request.selectionRoot_));
             if (Request.operation_ != FileOperation::Delete) Job.resourceLanes_.push_back(LaneFor(Request.destination_));
             return PreparedJob{std::move(Job), std::make_unique<SelectionTask>(std::move(Request))};
         }
@@ -2324,7 +2333,10 @@ namespace hc::operations
                     if (End && Roots.contains({Kind, Path.substr(0, End)}))
                         return Error{ErrorCategory::InvalidRequest, "overlapping-selection"};
         }
-        if (Request.operation_ != FileOperation::Delete) Job.resourceLanes_.push_back(LaneFor(Request.destination_));
+        const bool Transfer = Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move;
+        const bool FixedOutputs = Transfer && Request.preservePaths_
+            && (Request.destination_.kind_ == LocatorKind::Local || Request.destination_.kind_ == LocatorKind::Smb);
+        if (Request.operation_ != FileOperation::Delete && !FixedOutputs) Job.resourceLanes_.push_back(LaneFor(Request.destination_));
         for (const auto& Source : Request.sources_)
         {
             if (!Source.reader_ || !SafeName(Source.entry_.name_) || ((Request.operation_ == FileOperation::Delete || Request.operation_ == FileOperation::Move || Request.operation_ == FileOperation::Rename) && !Source.writer_))
@@ -2334,9 +2346,12 @@ namespace hc::operations
                 const auto Target = Child(Source.relativeParent_.empty() ? Request.destination_ : Child(Request.destination_, Source.relativeParent_),
                     Request.destinationName_.empty() ? Source.entry_.name_ : Request.destinationName_);
                 if (SameOrWithin(Target, Source.entry_.locator_)) return Error{ErrorCategory::InvalidRequest, "destination-inside-source"};
+                if (FixedOutputs) Job.resourceLanes_.push_back(LaneFor(Target));
             }
             if (Request.operation_ == FileOperation::Rename && Source.entry_.directory_ && SameOrWithin(Request.destination_, Source.entry_.locator_)) return Error{ErrorCategory::InvalidRequest, "destination-inside-source"};
-            Job.resourceLanes_.push_back(LaneFor(Source.entry_.locator_));
+            auto& Sources = Request.operation_ == FileOperation::Copy && Source.entry_.locator_.kind_ != LocatorKind::Plugin
+                ? Job.readLanes_ : Job.resourceLanes_;
+            Sources.push_back(LaneFor(Source.entry_.locator_));
         }
         const bool Parents = Request.createParents_;
         const auto At = Request.operation_ == FileOperation::Copy || Request.operation_ == FileOperation::Move ? Request.destination_ : DirectoryPreparation::ParentOf(Request.destination_);

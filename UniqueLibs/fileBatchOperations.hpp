@@ -227,7 +227,15 @@ public:
             if(!NameError(Name).isEmpty())return Fail(Error{ErrorCategory::InvalidRequest,"unsafe-destination-name"});
             const auto End=target_.root_.find_last_of("/\\");
             if(End==std::string::npos)return Fail(Error{ErrorCategory::InvalidRequest,"destination-parent-required"});
-            target_.root_.resize(End+1);target_.root_+=Name.toStdString();
+            auto Target=target_;
+            Target.root_.resize(End+1);Target.root_+=Name.toStdString();
+            if(Context.tryReserveWrite_ && !Context.tryReserveWrite_(FileOperationLane(Target))) {
+                JobStep Step{JobState::WaitingForUser};
+                Step.interaction_=InteractionRequest{"",InteractionKind::Rename,"destination-reserved",
+                    {InteractionChoice::Rename,InteractionChoice::Cancel},{},{},Serialize(Target)};
+                return Step;
+            }
+            target_=std::move(Target);
             phase_=0; return JobStep{JobState::Running};
         }
         if(phase_==100) {
@@ -297,7 +305,7 @@ inline storage::Result<operations::PreparedJob> PrepareCreate(std::shared_ptr<st
     if (!Target.root_.ends_with('/') && !Target.root_.ends_with('\\')) Target.root_ += '\\';
     Target.root_ += Name.toStdString();
     PreparedJob Job; Job.request_.operation_ = Context; Job.request_.maxItemResults_ = 256;
-    Job.request_.resourceLanes_ = {FileOperationLane(Parent)};
+    Job.request_.resourceLanes_ = {FileOperationLane(Target)};
     Job.request_.metadata_.destination_ = Target.root_; Job.request_.metadata_.options_ = "create-new; template=" + std::to_string(Type) + (Bom && Type ? "; UTF-8 BOM" : "; UTF-8");
     Job.request_.metadata_.kind_ = JobKind::MakeFile;
     Job.task_ = std::make_unique<CreateTask>(std::move(Writer), std::move(Target), Data, std::move(Elevation), AskForName); return Job;

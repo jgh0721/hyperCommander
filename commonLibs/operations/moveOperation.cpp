@@ -269,6 +269,11 @@ namespace hc::operations
             Copy = PrepareFileOperation(std::move(Native), Context);
         }
         if (!Copy.HasValue()) return Copy.Failure();
+        // The destination write is followed by removal, so source claims are exclusive.
+        auto& Claims = Copy.Value().request_;
+        Claims.resourceLanes_.insert(Claims.resourceLanes_.end(),
+            std::make_move_iterator(Claims.readLanes_.begin()), std::make_move_iterator(Claims.readLanes_.end()));
+        Claims.readLanes_.clear();
         if (SharedOuter) return std::move(Copy.Value());
         return PreparedJob{std::move(Copy.Value().request_), std::make_unique<MoveTask>(std::move(Request), std::move(Copy.Value().task_))};
     }

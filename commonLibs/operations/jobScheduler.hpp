@@ -74,6 +74,13 @@ namespace hc::operations
         JobKind kind_ = JobKind::Unknown;
     };
     enum class JobControl { Start, Pause, Resume, Cancel };
+    enum class JobWaitReason { None, BackgroundLimit, Resource };
+    struct JobWait
+    {
+        JobWaitReason reason_ = JobWaitReason::None;
+        std::string jobId_, resource_;
+        bool operator==(const JobWait&) const = default;
+    };
     struct JobSnapshot
     {
         std::string id_;
@@ -97,6 +104,7 @@ namespace hc::operations
         std::int64_t submittedUtcMs_ = 0;
         JobMetadata metadata_;
         std::string retriedAs_;
+        JobWait wait_;
     };
     struct JobResult
     {
@@ -120,6 +128,8 @@ namespace hc::operations
         JobMetadata metadata_;
         // Acquire all lanes together and retain them across pause/interaction.
         std::vector<std::string> resourceLanes_;
+        // Readers may overlap on native paths. Writers and opaque lanes retain exclusivity.
+        std::vector<std::string> readLanes_;
         storage::OperationContext operation_;
         std::size_t maxItemResults_ = std::numeric_limits<std::size_t>::max();
         std::uint32_t maxRetries_ = 3;
@@ -135,6 +145,9 @@ namespace hc::operations
         bool committing_ = false;
         // Publish while a provider call is still running on its continuation.
         std::function<void(const JobProgress&)> publishProgress_;
+        // Immediately reserve an additional write path before an operation changes
+        // its planned target. A rejected claim never waits while holding other paths.
+        std::function<bool(std::string)> tryReserveWrite_;
     };
     struct JobStep
     {
@@ -213,6 +226,7 @@ namespace hc::operations
         Result<storage::Unit> ReorderQueued(const std::vector<std::string>& Ids);
         Result<storage::Unit> SetConcurrencyLimit(std::size_t Limit);
         std::size_t ConcurrencyLimit() const;
+        std::size_t BackgroundJobsInUse() const;
         Result<storage::Unit> SetLaneLimit(std::string Lane, std::size_t Limit);
         // Foreground work bypasses the background limit, but retains path exclusion.
         Result<storage::Unit> SetForeground(const std::string& Id, bool Foreground);
