@@ -186,10 +186,10 @@ BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, Q
     connect(undoButton_, &QPushButton::clicked, this, [this] { run(true); }); connect(redoButton_, &QPushButton::clicked, this, [this] { run(true); });
     auto* HistoryButton = new fm::ui::Button(tr("이름 변경 이력(&L)"), this); HistoryButton->setObjectName("hc.rename.history"); HistoryButton->setAutoDefault(false); History->addWidget(HistoryButton);
     connect(HistoryButton, &QPushButton::clicked, this, [this] { RenameHistoryDialog History(jobs_, this); History.exec(); if (onChanged_) onChanged_(); });
-    auto* QueueRow = new QHBoxLayout; BodyLayout()->addLayout(QueueRow);
-    queued_ = new QCheckBox(tr("대기열에 추가(&Q)"), this); queued_->setObjectName("hc.rename.queued"); QueueRow->addWidget(queued_); QueueRow->addStretch();
-    background_ = new fm::ui::Button(tr("백그라운드로(&B)"), this); background_->setObjectName("hc.rename.background"); background_->setAutoDefault(false); background_->setEnabled(false); QueueRow->addWidget(background_);
-    connect(background_, &QPushButton::clicked, this, [this] { if (busy_ && !jobId_.empty()) QDialog::reject(); });
+    background_ = AddBackgroundButton("hc.rename.background", [this] {
+        if (!busy_) run(false, true);
+        else if (jobOwner_ && !jobId_.empty() && jobs_->BackgroundRename(jobId_)) QDialog::accept();
+    });
     auto* Note = new QLabel(tr("최대 100,000개를 계획하고 미리보기는 256개씩 표시합니다. 작업 관리자에서 일시 정지·취소할 수 있으며 이력은 재시작 후에도 유지됩니다. 중단된 작업은 이력에서 이어 실행하거나 원래 이름으로 복구하세요. 압축·플러그인 다중 이름 변경은 아직 지원하지 않습니다."), this); Note->setWordWrap(true); BodyLayout()->addWidget(Note);
     AcceptButton()->setText(tr("이름 바꾸기(&S)")); CancelButton()->setText(tr("닫기")); SetAcceptEnabled(false); controls_->setEnabled(false);
     const auto Count = Selection ? Selection->Count() : std::uint64_t(Paths.size());
@@ -296,29 +296,29 @@ void BatchRenameDialog::showPage() {
     previousPage_->setEnabled(!busy_ && page_ > 0); nextPage_->setEnabled(!busy_ && page_+1 < Pages);
 }
 void BatchRenameDialog::accept() { if (AcceptButton()->isEnabled()) run(false); }
-void BatchRenameDialog::run(bool Undo) {
+void BatchRenameDialog::run(bool Undo, bool Background) {
     if (!jobOwner_ || !ready_ || busy_ || metadataLoading_ || (Undo && (undo_.isEmpty() || recordId_.isEmpty()))) return;
     ++generation_; planStop_.request_stop(); previewTimer_->stop(); cancelWhenReady_ = false;
-    const auto Plan = Undo ? undo_ : plan_; busy_ = true; controls_->setEnabled(false); queued_->setEnabled(false);
+    const auto Plan = Undo ? undo_ : plan_; busy_ = true; controls_->setEnabled(false);
     SetAcceptEnabled(false); undoButton_->setEnabled(false); redoButton_->setEnabled(false); CancelButton()->setEnabled(true); previousPage_->setEnabled(false); nextPage_->setEnabled(false);
     SetMessage(tr("이름 변경 계획을 저장하고 작업 관리자에 접수하고 있습니다…"));
     using Prepared = storage::Result<operations::PreparedJob>; auto* Watcher = new QFutureWatcher<Prepared>(this);
-    connect(Watcher, &QFutureWatcher<Prepared>::finished, this, [this, Watcher, Plan, Undo] {
+    connect(Watcher, &QFutureWatcher<Prepared>::finished, this, [this, Watcher, Plan, Undo, Background] {
         auto Prepared = Watcher->future().takeResult(); Watcher->deleteLater();
         if (!Prepared.HasValue() || !jobOwner_) {
-            busy_ = false; controls_->setEnabled(true); queued_->setEnabled(true); preview();
+            busy_ = false; controls_->setEnabled(true); preview();
             undoButton_->setEnabled(!undo_.isEmpty() && !undone_); redoButton_->setEnabled(!undo_.isEmpty() && undone_);
             SetMessage(Prepared.HasValue() ? tr("작업 관리자가 종료되었습니다.") : hc::ui::ErrorText(Prepared.Failure()), true); return;
         }
         pendingRecordId_ = QString::fromStdString(Prepared.Value().request_.metadata_.options_).mid(14);
-        Prepared.Value().request_.deferred_ = queued_->isChecked() || cancelWhenReady_;
-        auto Started = jobs_->SubmitRename(std::move(Prepared.Value()), Undo ? undone_ ? tr("이름 변경 다시 실행") : tr("이름 변경 실행 취소") : tr("다중 이름 변경"));
-        if (!Started.HasValue()) { busy_ = false; controls_->setEnabled(true); queued_->setEnabled(true); preview(); SetMessage(hc::ui::ErrorText(Started.Failure()), true); return; }
+        Prepared.Value().request_.deferred_ = cancelWhenReady_;
+        auto Started = jobs_->SubmitRename(std::move(Prepared.Value()), Undo ? undone_ ? tr("이름 변경 다시 실행") : tr("이름 변경 실행 취소") : tr("다중 이름 변경"), Background);
+        if (!Started.HasValue()) { busy_ = false; controls_->setEnabled(true); preview(); SetMessage(hc::ui::ErrorText(Started.Failure()), true); return; }
         const auto Handle = Started.Value(); jobId_ = Handle.id_;
         if (onSubmitted_) onSubmitted_(jobId_);
         if (cancelWhenReady_) jobs_->RenameScheduler().Cancel(jobId_);
-        else if (queued_->isChecked()) { QDialog::accept(); return; }
-        background_->setEnabled(true); SetMessage(tr("작업 관리자에서 이름을 변경하고 있습니다. 백그라운드로 보내도 작업은 계속됩니다."));
+        else if (Background) { QDialog::accept(); return; }
+        background_->setEnabled(!cancelWhenReady_); SetMessage(tr("작업 관리자에서 이름을 변경하고 있습니다. 백그라운드로 보내도 작업은 계속됩니다."));
         auto* Timer = new QTimer(this);
         connect(Timer, &QTimer::timeout, this, [this, Timer, Handle, Plan, Undo] {
             if (Handle.completion_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
@@ -349,7 +349,7 @@ void BatchRenameDialog::run(bool Undo) {
     Watcher->setFuture(QtConcurrent::run([Plan, Undo, Id = recordId_, Directory = filetools::RenameJournalDirectory()] { return Undo ? filetools::PrepareRenameUndo(Directory, Id) : filetools::PrepareBatchRename(Directory, Plan); }));
 }
 void BatchRenameDialog::finish(const filetools::BatchResult& Result, const QList<filetools::RenameRow>& Plan, bool Undo) {
-    busy_ = false; controls_->setEnabled(true); queued_->setEnabled(true); CancelButton()->setEnabled(true);
+    busy_ = false; controls_->setEnabled(true); CancelButton()->setEnabled(true);
     if (Result.complete_) {
         recordId_ = pendingRecordId_;
         undo_.clear(); for (int I = 0; I < Plan.size(); ++I) undo_.append({Result.current_[I], Plan[I].source_.path_, {}});

@@ -2230,10 +2230,9 @@ void CommandUiBridge::extractArchive() {
         Prepared = hc::operations::PrepareExtract(std::move(Request), Operation);
     }
     if (!Prepared.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), hc::ui::ErrorText(Prepared.Failure())); return; }
-    Prepared.Value().request_.deferred_ = Dialog.Queued();
     Prepared.Value().request_.metadata_.source_ = Context.location_.root_; Prepared.Value().request_.metadata_.destination_ = Target.root_;
     Prepared.Value().request_.metadata_.kind_ = hc::operations::JobKind::Extract;
-    auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("파일 압축 해제"));
+    auto Submitted = fileJobs_->Submit(std::move(Prepared.Value()), tr("파일 압축 해제"), {}, {}, Dialog.Background());
     if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축 해제"), hc::ui::ErrorText(Submitted.Failure())); return; }
     auto Parent = Target; Parent.root_ = QFileInfo(Path).absolutePath().toStdString();
     affectedLocations_[Submitted.Value().id_] = {Target, Parent};
@@ -2282,11 +2281,11 @@ void CommandUiBridge::openArchive(std::string InitialFormat)
         [Request](const hc::operations::JobResult& Result, OperationContext RetryContext) mutable {
             Request = hc::archive::RetryCreation(std::move(Request), Result);
             return hc::archive::PrepareCreation(Request, std::move(RetryContext));
-        }, [Guard = QPointer<CommandUiBridge>(this), Affected](const std::string& Id) { if (Guard) Guard->affectedLocations_[Id] = {Affected}; });
+        }, [Guard = QPointer<CommandUiBridge>(this), Affected](const std::string& Id) { if (Guard) Guard->affectedLocations_[Id] = {Affected}; },
+        Dialog.Background());
     if (!Submitted.HasValue()) { hc::ui::MessageDialog::warning(main_, tr("파일 압축"), hc::ui::ErrorText(Submitted.Failure())); return; }
     affectedLocations_[Submitted.Value().id_] = {Affected};
     rememberJobSelection(Submitted.Value().id_, Context);
-    if(Dialog.Background())fileJobs_->Background();
 }
 
 void CommandUiBridge::openIso(bool Inspect)
@@ -2879,7 +2878,7 @@ void CommandUiBridge::PromptFileOperation(const QString& Id, const QString& Sour
         if (Dialog.exec() != QDialog::Accepted) return;
         const auto Input = Dialog.Input();
         Invocation.parameters_["createParents"] = Dialog.CreateParents();
-        if (!NameOnly) Invocation.parameters_["queued"] = Dialog.Queued();
+        if (!NameOnly) Invocation.parameters_["background"] = Dialog.Background();
         if (!NameOnly && DialogRequest.copyEngine_) {
             Invocation.parameters_["copyMetadata"] = Dialog.PreserveMetadata(); Invocation.parameters_["copyVerify"] = Dialog.VerifyCopy();
             Invocation.parameters_["copyAcl"] = Dialog.CopyAcl(); Invocation.parameters_["copyStreams"] = Dialog.CopyStreams();
@@ -3464,6 +3463,8 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
                 return MakeNativeWritableStorage(Request.destination_.kind_, MakeNativeReadProvider(Request.destination_.kind_));
             }
     };
+    const bool Deferred = Flag("queued");
+    const bool Background = Flag("background");
     Result<JobHandle> Started = Error{ErrorCategory::Unsupported, "file-operation-unavailable"};
     const bool CrossMove = Request.operation_ == hc::operations::FileOperation::Move && (Kind == LocatorKind::Archive || Request.destination_.kind_ == LocatorKind::Archive)
         && !SameArchiveContainer(Request.destination_, Invocation.context_.location_);
@@ -3494,7 +3495,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         }
         Move.maxBytes_ = std::min(Move.sourceArchive_ ? Move.sourceArchive_->limits_.maxInputBytes_ : UINT64_MAX,
             Move.destinationArchive_ ? Move.destinationArchive_->limits_.maxInputBytes_ : UINT64_MAX);
-        Started = fileJobs_->Submit(std::move(Move), Invocation.operation_, Flag("queued"));
+        Started = fileJobs_->Submit(std::move(Move), Invocation.operation_, Deferred, Background);
     }
     else if (ArchiveMutation)
     {
@@ -3514,7 +3515,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         Archive.operation_ = Request.operation_; Archive.archive_ = Target.Value().root_; Archive.destination_ = Request.destination_;
         Archive.limits_ = Target.Value().limits_;
         Archive.sources_ = std::move(Request.sources_); Archive.reader_ = Target.Value().reader_; Archive.begin_ = std::move(Target.Value().begin_); Archive.correlationId_ = Request.correlationId_;
-        Started = fileJobs_->Submit(std::move(Archive), Invocation.operation_, Flag("queued"));
+        Started = fileJobs_->Submit(std::move(Archive), Invocation.operation_, Deferred, Background);
     }
     else
     {
@@ -3522,7 +3523,7 @@ Result<CommandOutcome> CommandUiBridge::executeFile(const CommandInvocation& Inv
         {
             auto Writer = DestinationWriter(); if (!Writer.HasValue()) return Writer.Failure(); Request.destinationWriter_ = Writer.Value();
         }
-        Started = fileJobs_->Submit(std::move(Request), Invocation.operation_, Flag("queued"));
+        Started = fileJobs_->Submit(std::move(Request), Invocation.operation_, Deferred, Background);
     }
     if (!Started.HasValue()) return Started.Failure();
     affectedLocations_.emplace(Started.Value().id_, std::move(Affected));

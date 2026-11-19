@@ -30,23 +30,25 @@ public:
     FileJobUi(QWidget* Main, std::shared_ptr<hc::commands::EventHub> Events);
     ~FileJobUi() override;
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::FileOperationRequest Request,
-        hc::storage::OperationContext Context, bool Deferred = false);
+        hc::storage::OperationContext Context, bool Deferred = false, bool Background = false);
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::ArchiveOperationRequest Request,
-        hc::storage::OperationContext Context, bool Deferred = false);
+        hc::storage::OperationContext Context, bool Deferred = false, bool Background = false);
     hc::operations::JobScheduler& Scheduler() { return scheduler_; }
     bool IsUiPending(const std::string& Id) const { return pending_.contains(Id); }
     using PreparedRetry = std::function<hc::storage::Result<hc::operations::PreparedJob>(const hc::operations::JobResult&, hc::storage::OperationContext)>;
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::PreparedJob Job, const QString& Label,
-        PreparedRetry Retry = {}, std::function<void(const std::string&)> Resubmitted = {});
+        PreparedRetry Retry = {}, std::function<void(const std::string&)> Resubmitted = {}, bool Background = false);
     hc::storage::Result<hc::operations::JobHandle> Submit(hc::operations::MoveOperationRequest Request,
-        hc::storage::OperationContext Context, bool Deferred = false);
+        hc::storage::OperationContext Context, bool Deferred = false, bool Background = false);
     std::shared_ptr<hc::operations::IFileElevationService> ElevationService() const;
     // 삭제·이동·이름 변경 직전에 원본 경로를 알린다. 미리 듣기가 그 파일을 놓도록 쓴다.
     void SetBeforeMutation(std::function<void(const QStringList&)> Hook) { beforeMutation_ = std::move(Hook); }
     QString SubmitSecurityJob(const QString& Path,bool Grant,const QJsonObject& Restore={}) override;
     QObject* RenameOwner() override { return this; }
     hc::operations::JobScheduler& RenameScheduler() override { return scheduler_; }
-    hc::storage::Result<hc::operations::JobHandle> SubmitRename(hc::operations::PreparedJob Job, const QString& Label) override { return Submit(std::move(Job), Label); }
+    hc::storage::Result<hc::operations::JobHandle> SubmitRename(hc::operations::PreparedJob Job, const QString& Label, bool Background = false) override
+    { return Submit(std::move(Job), Label, {}, {}, Background); }
+    bool BackgroundRename(const std::string& Id) override { return backgroundJob(Id); }
     void Show();
     void Background();
     void ApplyDefaults();
@@ -58,6 +60,7 @@ private:
     hc::storage::Result<hc::operations::JobHandle> track(hc::storage::Result<hc::operations::JobHandle> Submitted,
         hc::operations::FileOperation Operation, const std::string& Label);
     void controlAll(hc::operations::JobControl Control);
+    bool backgroundJob(const std::string& Id);
     void reorderSelected(int Direction);
     void retrySelected();
     bool canRetry(const std::string& Id) const;

@@ -4789,7 +4789,7 @@ private slots:
     void fileToolSelectionUi_data()
     {
         QTest::addColumn<int>("Mode"); QTest::addColumn<bool>("Cancel");
-        const QStringList Names{"attributes", "new-file", "link", "queued-rename"};
+        const QStringList Names{"attributes", "new-file", "link", "background-rename"};
         for (int Mode = 0; Mode < Names.size(); ++Mode) for (const bool Cancel : {false, true})
             QTest::newRow(qPrintable(Names[Mode] + (Cancel ? "-cancel" : "-success"))) << Mode << Cancel;
     }
@@ -4827,11 +4827,14 @@ private slots:
                     if (Mode == 2) Dialog->findChild<QLineEdit*>("hc.mklink.editor")->setText(Directory.filePath("target") + '/');
                     if (Mode == 3) {
                         Dialog->findChild<QLineEdit*>("hc.rename.mask")->setText("[N]_renamed");
-                        Dialog->findChild<QCheckBox*>("hc.rename.queued")->setChecked(true);
                     }
                     Step = 1; return;
                 }
-                if (Step == 1 && Shell->AcceptButton()->isEnabled()) { Step = 2; Shell->AcceptButton()->click(); }
+                if (Step == 1 && Shell->AcceptButton()->isEnabled()) {
+                    Step = 2;
+                    if (Mode == 3) Dialog->findChild<QPushButton*>("hc.rename.background")->click();
+                    else Shell->AcceptButton()->click();
+                }
                 if (Mode == 0 && Step == 2 && Dialog->findChild<QLabel*>("hc.attributes.summary")->text().contains(QStringLiteral("성공"))) Dialog->accept();
             }
         });
@@ -4841,8 +4844,8 @@ private slots:
             const auto FindJob = [&] { for (const auto& Job : Scheduler.Snapshots()) if (!BeforeJobs.contains(Job.id_)) return Job.id_; return std::string{}; };
             QTRY_VERIFY(!FindJob().empty()); const auto Id = FindJob();
             if (Mode == 3) {
-                QCOMPARE(View->CaptureSelection().size(), 2); QVERIFY(Scheduler.Snapshot(Id).Value().deferred_);
-                QVERIFY(Scheduler.Control({Id}, JobControl::Start).HasValue());
+                const auto Snapshot = Scheduler.Snapshot(Id).Value();
+                QVERIFY(!Snapshot.deferred_ && !Snapshot.foreground_);
             }
             QTRY_VERIFY_WITH_TIMEOUT(IsTerminal(Scheduler.Snapshot(Id).Value().state_), 15000);
             QCOMPARE(Scheduler.Snapshot(Id).Value().state_, JobState::Completed);
@@ -13102,7 +13105,8 @@ hc.events.unsubscribe(sub)
             QVERIFY(SaveR9Dialog(*Dialog,"r17-compress-"+Format+(Encrypted?"-encrypted":""))); QTRY_VERIFY(Dialog->findChild<QPushButton*>("hc.archive.create.queue")->isEnabled()); Dialog->findChild<QPushButton*>("hc.archive.create.queue")->click();
         });
         QTest::keyClick(QApplication::focusWidget(),Qt::Key_A,Qt::ControlModifier); QVERIFY(Seen);
-        auto Id = LatestJob(Prior); QVERIFY(!Id.empty()); QVERIFY(!Scheduler.Snapshot(Id).Value().deferred_); QVERIFY(Finish(Id));
+        auto Id = LatestJob(Prior); QVERIFY(!Id.empty());
+        QVERIFY(!Scheduler.Snapshot(Id).Value().deferred_ && !Scheduler.Snapshot(Id).Value().foreground_); QVERIFY(Finish(Id));
         QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(Id));
         if (!Encrypted) QVERIFY(QFile::copy(Output,Directory.filePath("second."+Format)));
         Model->Refresh(); QTRY_VERIFY(!Model->IsLoading() && names(Model).contains(BaseName+"."+Format));
@@ -13119,19 +13123,22 @@ hc.events.unsubscribe(sub)
         Prior=ExistingJobs(); Seen=false; const auto Target=Format=="zip" ? Directory.path() : Directory.filePath("unpacked");
         const auto RelativeTarget=Format=="zip" ? QString(".") : Encrypted ? "../"+QFileInfo(Directory.path()).fileName()+"/unpacked" : QString(".\\unpacked");
         QTimer::singleShot(0,main_,[&] { auto* Dialog=static_cast<ArchiveExtractDialog*>(main_->findChild<QDialog*>("hc.archive.extract")); if(!Dialog)return; Seen=true;
-            auto* Path=Dialog->findChild<QLineEdit*>("hc.archive.extract.path"); QCOMPARE(Dialog->focusWidget(),Path); Path->setText(RelativeTarget); Dialog->findChild<QCheckBox*>("hc.archive.extract.queued")->setChecked(true);
+            const auto Close = qScopeGuard([&] { if (Dialog->isVisible()) Dialog->reject(); });
+            auto* Path=Dialog->findChild<QLineEdit*>("hc.archive.extract.path"); QCOMPARE(Dialog->focusWidget(),Path); Path->setText(RelativeTarget);
             Path->setFocus(); QTest::keyClick(Path,Qt::Key_A,Qt::ControlModifier); QCOMPARE(Path->selectedText(),RelativeTarget);
-            QVERIFY(SaveR9Dialog(*Dialog,"r17-extract-"+Format+(Encrypted?"-encrypted":""))); QTest::keyClick(Dialog->findChild<QLineEdit*>("hc.archive.extract.path"),Qt::Key_Return);
+            QVERIFY(SaveR9Dialog(*Dialog,"r17-extract-"+Format+(Encrypted?"-encrypted":""))); QTest::keyClick(Path,Qt::Key_F2);
+            QTRY_COMPARE_WITH_TIMEOUT(Dialog->result(), int(QDialog::Accepted), 1500);
         });
         QTest::keyClick(QApplication::focusWidget(),Qt::Key_X,Qt::ControlModifier); QVERIFY(Seen);
-        Id=LatestJob(Prior); QVERIFY(!Id.empty()); QVERIFY(Scheduler.Snapshot(Id).Value().deferred_); QVERIFY(Scheduler.Control({Id},JobControl::Start).HasValue()); QVERIFY(Finish(Id));
+        Id=LatestJob(Prior); QVERIFY(!Id.empty());
+        QVERIFY(!Scheduler.Snapshot(Id).Value().deferred_ && !Scheduler.Snapshot(Id).Value().foreground_); QVERIFY(Finish(Id));
         const auto Unpacked=QDir(Target).filePath(BaseName+"/input/한글.txt"); QFile Result(Unpacked); QVERIFY2(Result.open(QIODevice::ReadOnly),qPrintable(Unpacked)); QCOMPARE(Result.readAll(),QByteArray("R16 archive content")); Result.close(); QVERIFY(QDir(QDir(Target).filePath(BaseName+"/input/empty")).exists()); QVERIFY(QFileInfo::exists(Output));
         if(!Encrypted) QVERIFY(QFileInfo::exists(QDir(Target).filePath("second/input/한글.txt")));
         QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(Id));
         QMainOpts Options(main_); Options.show(); Options.LoadSettings(); auto* Table=Options.findChild<QTableWidget*>("hc.keys.commands"); QVERIFY(Table);
         for (const auto& Command : {"hc.archive.create","hc.archive.extract","hc.navigate.enterFile"}) {
-            bool Found=false; for(int R=0;R<Table->rowCount();++R) if(Table->item(R,0)->data(Qt::UserRole).toString()==Command) {Found=true; QVERIFY(!Table->item(R,1)->text().isEmpty());}
-            QVERIFY(Found);
+            bool Found=false; for(int R=0;R<Table->rowCount();++R) if(Table->item(R,1)->data(Qt::UserRole).toString()==Command) {Found=true; QVERIFY(!Table->item(R,3)->text().isEmpty());}
+            QVERIFY2(Found, Command);
         }
         auto* Categories=Options.findChild<QListWidget*>("lstOptCate"); for(int R=0;R<Categories->count();++R)if(Categories->item(R)->text()=="키보드")Categories->setCurrentRow(R);
         QVERIFY(SaveR9Dialog(Options,"r17-keyboard")); Options.reject();
@@ -13147,11 +13154,12 @@ hc.events.unsubscribe(sub)
             QTimer::singleShot(0,main_,[&] {
                 auto* Dialog=static_cast<ArchiveExtractDialog*>(main_->findChild<QDialog*>("hc.archive.extract")); if(!Dialog)return; Seen=true;
                 auto* Separate=Dialog->findChild<QCheckBox*>("hc.archive.extract.separate"); QVERIFY(!Separate->isEnabled()); QVERIFY(!Separate->isChecked());
-                Dialog->findChild<QLineEdit*>("hc.archive.extract.path")->setText("./inside"); Dialog->findChild<QCheckBox*>("hc.archive.extract.queued")->setChecked(true);
-                QVERIFY(SaveR9Dialog(*Dialog,"r17-extract-inside-"+Format)); QTest::keyClick(Dialog->findChild<QLineEdit*>("hc.archive.extract.path"),Qt::Key_Return);
+                Dialog->findChild<QLineEdit*>("hc.archive.extract.path")->setText("./inside");
+                QVERIFY(SaveR9Dialog(*Dialog,"r17-extract-inside-"+Format)); Dialog->findChild<QPushButton*>("hc.archive.extract.background")->click();
             });
             QTest::keyClick(QApplication::focusWidget(),Qt::Key_X,Qt::ControlModifier); QVERIFY(Seen);
-            Id=LatestJob(Prior); QVERIFY(!Id.empty()); QVERIFY(Scheduler.Control({Id},JobControl::Start).HasValue()); QVERIFY(Finish(Id));
+            Id=LatestJob(Prior); QVERIFY(!Id.empty());
+            QVERIFY(!Scheduler.Snapshot(Id).Value().deferred_ && !Scheduler.Snapshot(Id).Value().foreground_); QVERIFY(Finish(Id));
             QFile InsideResult(QDir(InsideTarget).filePath("input/한글.txt")); QVERIFY(InsideResult.open(QIODevice::ReadOnly)); QCOMPARE(InsideResult.readAll(),QByteArray("R16 archive content"));
             QVERIFY(QDir(QDir(InsideTarget).filePath("input/empty")).exists()); QVERIFY(QFileInfo::exists(Output)); QTRY_VERIFY(!Bridge->FileJobs()->IsUiPending(Id));
         }
@@ -14695,7 +14703,6 @@ private slots:
                 auto* Dialog = static_cast<hc::ui::ArchiveExtractDialog*>(main_->findChild<QDialog*>("hc.archive.extract")); if (!Dialog) return;
                 Seen = true; Answer.stop(); Dialog->findChild<QLineEdit*>("hc.archive.extract.path")->setText(Output.path());
                 auto* Separate = Dialog->findChild<QCheckBox*>("hc.archive.extract.separate"); QVERIFY(Separate->isEnabled()); Separate->setChecked(false);
-                Dialog->findChild<QCheckBox*>("hc.archive.extract.queued")->setChecked(false);
                 QTest::keyClick(Dialog->findChild<QLineEdit*>("hc.archive.extract.path"), Qt::Key_Return);
             });
             QTRY_VERIFY(Bridge->Action("hc.archive.extract")->isEnabled()); Answer.start(); QVERIFY(Bridge->ExecuteCommand("hc.archive.extract", Selected)); Answer.stop(); QVERIFY(Seen);
@@ -14743,7 +14750,6 @@ private slots:
                 auto* Dialog = static_cast<hc::ui::ArchiveExtractDialog*>(main_->findChild<QDialog*>("hc.archive.extract")); if (!Dialog) return;
                 Seen = true; Answer.stop(); Dialog->findChild<QLineEdit*>("hc.archive.extract.path")->setText(Output.path());
                 Dialog->findChild<QCheckBox*>("hc.archive.extract.separate")->setChecked(false);
-                Dialog->findChild<QCheckBox*>("hc.archive.extract.queued")->setChecked(false);
                 auto* Path = Dialog->findChild<QLineEdit*>("hc.archive.extract.path"); Path->setFocus(); QTest::keyClick(Path, Qt::Key_Return);
             });
             auto* Grid = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(Grid); Grid->BaseView()->deselectAll();
@@ -16951,12 +16957,13 @@ private slots:
         const auto Before = Jobs->Scheduler().Snapshots(); QSet<QString> Existing; for (const auto& Job : Before) Existing.insert(QString::fromStdString(Job.id_));
         BatchRenameDialog Dialog(Paths, true, main_, {}, Jobs); Dialog.show(); auto* Mask = Dialog.findChild<QLineEdit*>("hc.rename.mask"); QTRY_VERIFY(Mask->isEnabled());
         Mask->setText("renamed_[C]"); QTRY_VERIFY(Dialog.AcceptButton()->isEnabled()); QVERIFY(SaveR9Dialog(Dialog,"r15-rename-plan"));
-        Dialog.findChild<QCheckBox*>("hc.rename.queued")->setChecked(true); Dialog.AcceptButton()->click(); QTRY_VERIFY(!Dialog.isVisible());
+        Dialog.findChild<QPushButton*>("hc.rename.background")->click(); QTRY_VERIFY(!Dialog.isVisible());
         std::string JobId; QString RecordId;
         for (const auto& Job : Jobs->Scheduler().Snapshots()) if (!Existing.contains(QString::fromStdString(Job.id_)) && Job.metadata_.options_.starts_with("rename-record=")) { JobId = Job.id_; RecordId = QString::fromStdString(Job.metadata_.options_).mid(14); }
-        QVERIFY(!JobId.empty()); QVERIFY(Jobs->Scheduler().Snapshot(JobId).Value().deferred_); for (const auto& Path : Paths) QVERIFY(QFileInfo::exists(Path));
-        Jobs->Show(); auto* Manager = main_->findChild<QDialog*>("hc.jobManager"); QVERIFY(Manager); QVERIFY(SaveR9Dialog(*Manager,"r15-rename-queued"));
-        QVERIFY(Jobs->Scheduler().Control({JobId}, JobControl::Start).HasValue()); QTRY_COMPARE_WITH_TIMEOUT(Jobs->Scheduler().Snapshot(JobId).Value().state_, JobState::Completed, 30000);
+        QVERIFY(!JobId.empty());
+        const auto Snapshot = Jobs->Scheduler().Snapshot(JobId).Value(); QVERIFY(!Snapshot.deferred_ && !Snapshot.foreground_);
+        Jobs->Show(); auto* Manager = main_->findChild<QDialog*>("hc.jobManager"); QVERIFY(Manager); QVERIFY(SaveR9Dialog(*Manager,"r15-rename-background"));
+        QTRY_COMPARE_WITH_TIMEOUT(Jobs->Scheduler().Snapshot(JobId).Value().state_, JobState::Completed, 30000);
         QTRY_VERIFY(!Jobs->IsUiPending(JobId)); Manager->hide();
         for (const auto& Path : Paths) QVERIFY(!QFileInfo::exists(Path));
         RenameHistoryDialog History(Jobs, main_); History.show(); auto* List = History.findChild<QTreeWidget*>("hc.renameHistory.list"); QVERIFY(List);
@@ -16991,7 +16998,9 @@ private slots:
         RenameHistoryDialog RecoveryHistory(Jobs, main_); RecoveryHistory.show(); auto* RecoveryList = RecoveryHistory.findChild<QTreeWidget*>("hc.renameHistory.list"); QTreeWidgetItem* RecoveryItem = nullptr;
         QTRY_VERIFY(([&] { for (int I = 0; I < RecoveryList->topLevelItemCount(); ++I) if (RecoveryList->topLevelItem(I)->data(0,Qt::UserRole).toString() == RecoveryId) { RecoveryItem = RecoveryList->topLevelItem(I); return true; } return false; })());
         RecoveryList->setCurrentItem(RecoveryItem); auto* RestoreButton = RecoveryHistory.findChild<QPushButton*>("hc.renameHistory.restore"); QTRY_VERIFY(RestoreButton->isEnabled());
-        QVERIFY(RecoveryHistory.findChild<QPushButton*>("hc.renameHistory.resume")->isEnabled()); QVERIFY(SaveR9Dialog(RecoveryHistory,"r15-rename-interrupted")); RestoreButton->click();
+        QVERIFY(RecoveryHistory.findChild<QPushButton*>("hc.renameHistory.resume")->isEnabled()); QVERIFY(SaveR9Dialog(RecoveryHistory,"r15-rename-interrupted"));
+        auto* RestoreInBackground = RecoveryHistory.findChild<QCheckBox*>("hc.renameHistory.background");
+        QVERIFY(RestoreInBackground->isEnabled()); RestoreInBackground->setChecked(true); RestoreButton->click();
         QTRY_COMPARE_WITH_TIMEOUT(ReadRenameRecord(RenameJournalDirectory(), RecoveryId).Value().state_, RenameState::Restored, 15000);
         for (const auto& Row : RecoveryRows) QVERIFY(QFileInfo::exists(Row.source_.path_));
         QTRY_VERIFY_WITH_TIMEOUT(([&] { for (const auto& Snapshot : Jobs->Scheduler().Snapshots()) if (Snapshot.metadata_.source_ == Interrupted.path().toStdString() && !IsTerminal(Snapshot.state_)) return false; return true; })(), 15000);
@@ -17085,7 +17094,7 @@ private slots:
         };
         FileOperationDialogRequest Request; Request.command_ = "hc.file.copy"; Request.source_ = Directory.path(); Request.initialValue_ = Directory.filePath("target"); Request.names_ = {"sample.txt"}; Request.nativeDestination_ = true; Request.nativeSource_ = true;
         FileOperationDialog Existing(Request, main_); Existing.show(); QTest::qWait(80); QVERIFY(Existing.VerifyCopy() && Existing.CopyAcl() && Existing.CopyStreams()); QCOMPARE(Existing.SpeedLimit(), quint64(1024 * 1024));
-        auto* Filter = Existing.findChild<QLineEdit*>("hc.operation.filter"); Filter->setText("*.txt;"); QVERIFY(!Existing.AcceptButton()->isEnabled()); QVERIFY(!Existing.findChild<QPushButton*>("hc.operation.queue")->isEnabled()); Filter->setText("*.txt"); QTRY_VERIFY(Existing.AcceptButton()->isEnabled()); Save(&Existing, "r8-copy-options");
+        auto* Filter = Existing.findChild<QLineEdit*>("hc.operation.filter"); Filter->setText("*.txt;"); QVERIFY(!Existing.AcceptButton()->isEnabled()); QVERIFY(!Existing.findChild<QPushButton*>("hc.operation.background")->isEnabled()); Filter->setText("*.txt"); QTRY_VERIFY(Existing.AcceptButton()->isEnabled()); Save(&Existing, "r8-copy-options");
         { QMainOpts Dialog(main_); Dialog.show(); Dialog.LoadSettings(); auto* Category = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Category);
           for (int I = 0; I < Category->count(); ++I) if (Category->item(I)->text() == "파일 작업") Category->setCurrentRow(I);
           auto* Tabs = Dialog.findChild<QTabWidget*>("hc.settings.fileOperationsTabs"); QVERIFY(Tabs);
@@ -17268,19 +17277,40 @@ private slots:
             auto* Dialog = static_cast<hc::ui::FileOperationDialog*>(main_->findChild<QDialog*>("hc.dialog.fileOperation")); QVERIFY(Dialog);
             const auto Close = qScopeGuard([&] { if (!Accepted) Dialog->reject(); });
             Dialog->findChild<QLineEdit*>("hc.operation.editor")->setText(Directory.filePath("target")+"/"); QVERIFY(Dialog->VerifyCopy()); QVERIFY(Dialog->CopyStreams());
-            auto* Queue = Dialog->findChild<QPushButton*>("hc.operation.queue"); QTRY_VERIFY(Queue->isEnabled()); Accepted = true; Queue->click();
+            auto* Background = Dialog->findChild<QPushButton*>("hc.operation.background"); QTRY_VERIFY(Background->isEnabled()); Accepted = true; Background->click();
         });
         Bridge->PromptFileOperation("hc.file.copy", "test", IndexFor()); QVERIFY(Accepted);
         std::string Id; QTRY_VERIFY(([&] { for (const auto& Job : Scheduler.Snapshots()) if (!OldIds.contains(Job.id_)) { Id = Job.id_; return true; } return false; })());
-        auto Snapshot = Scheduler.Snapshot(Id); QVERIFY(Snapshot.HasValue() && Snapshot.Value().deferred_); QVERIFY(!QFile::exists(Directory.filePath("target/source.txt")));
+        auto Snapshot = Scheduler.Snapshot(Id); QVERIFY(Snapshot.HasValue() && !Snapshot.Value().deferred_ && !Snapshot.Value().foreground_);
         QVERIFY(QString::fromStdString(Snapshot.Value().metadata_.options_).contains("SHA-256: 검증")); const auto CapturedOptions = Snapshot.Value().metadata_.options_;
         Options["copyVerify"] = false; Options["copyStreams"] = false; Options["copyPattern"] = "*.bin"; Options["copySpeedMiB"] = 8; QVERIFY(Settings.Put(hc::settings::Section::Options, Options));
-        QCOMPARE(Scheduler.Snapshot(Id).Value().metadata_.options_, CapturedOptions); QVERIFY(Scheduler.Control({Id}, JobControl::Start).HasValue()); QTRY_COMPARE(Scheduler.Snapshot(Id).Value().state_, JobState::Completed);
+        QCOMPARE(Scheduler.Snapshot(Id).Value().metadata_.options_, CapturedOptions); QTRY_COMPARE(Scheduler.Snapshot(Id).Value().state_, JobState::Completed);
         QCOMPARE(Read(Directory.filePath("target/source.txt")), QByteArray(180000, 's')); QCOMPARE(Read(Directory.filePath("target/source.txt:notes")), QByteArray("ADS evidence"));
         QTRY_VERIFY(!Jobs->IsUiPending(Id)); QTRY_VERIFY(!Model->IsLoading());
         auto Invalid = Bridge->Dispatch("hc.file.copy", {{"destination", Directory.filePath("target")}, {"copySpeed", qint64(-1)}}, "test", IndexFor()); QTRY_VERIFY(Invalid.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); auto Rejected = Invalid.get(); QVERIFY(!Rejected.HasValue()); QCOMPARE(Rejected.Failure().code_, std::string("invalid-copy-speed"));
         auto Excluded = Bridge->Dispatch("hc.file.copy", {{"destination", Directory.filePath("excluded")}, {"copyPattern", QString("*.bin")}, {"copyVerify", true}}, "test", IndexFor()); QTRY_VERIFY(Excluded.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready); auto Submitted = Excluded.get(); QVERIFY2(Submitted.HasValue(), Submitted.HasValue() ? "" : Submitted.Failure().code_.c_str()); QTRY_COMPARE(Scheduler.Snapshot(Submitted.Value().jobId_).Value().state_, JobState::Completed); QCOMPARE(Scheduler.Snapshot(Submitted.Value().jobId_).Value().skippedItems_, uint64_t(1)); QVERIFY(!QFile::exists(Directory.filePath("excluded/source.txt")));
         QTRY_VERIFY(!Jobs->IsUiPending(Submitted.Value().jobId_)); QTRY_VERIFY(!Model->IsLoading());
+        if (auto* Progress = main_->findChild<QDialog*>("hc.fileJobs")) Progress->hide();
+        OldIds.clear(); for (const auto& Job : Scheduler.Snapshots()) OldIds.insert(Job.id_);
+        Accepted = false;
+        QTimer::singleShot(100, this, [&] {
+            auto* Dialog = static_cast<hc::ui::FileOperationDialog*>(main_->findChild<QDialog*>("hc.dialog.fileOperation")); QVERIFY(Dialog);
+            const auto Close = qScopeGuard([&] { if (Dialog->isVisible()) Dialog->reject(); });
+            auto* Editor = Dialog->findChild<QLineEdit*>("hc.operation.editor"); QVERIFY(Editor);
+            Editor->setText(Directory.filePath("excluded") + "/");
+            Dialog->findChild<QLineEdit*>("hc.operation.filter")->setText("*.txt");
+            auto* Background = Dialog->findChild<QPushButton*>("hc.operation.background"); QVERIFY(Background); QTRY_VERIFY(Background->isEnabled());
+            QTest::keyClick(Editor, Qt::Key_F2);
+            QTRY_COMPARE_WITH_TIMEOUT(Dialog->result(), int(QDialog::Accepted), 1500);
+            Accepted = true;
+        });
+        Bridge->PromptFileOperation("hc.file.move", "test", IndexFor()); QVERIFY(Accepted);
+        QTRY_VERIFY(([&] { for (const auto& Job : Scheduler.Snapshots()) if (!OldIds.contains(Job.id_)) { Id = Job.id_; return true; } return false; })());
+        Snapshot = Scheduler.Snapshot(Id); QVERIFY(Snapshot.HasValue() && !Snapshot.Value().deferred_ && !Snapshot.Value().foreground_);
+        QVERIFY(!main_->findChild<QDialog*>("hc.fileJobs")->isVisible());
+        QTRY_COMPARE(Scheduler.Snapshot(Id).Value().state_, JobState::Completed);
+        QCOMPARE(Read(Directory.filePath("excluded/source.txt")), QByteArray(180000, 's')); QVERIFY(!QFile::exists(Directory.filePath("source.txt")));
+        QTRY_VERIFY(!Jobs->IsUiPending(Id));
         Jobs->Show(); QTest::qWait(300); const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
         if (!Out.isEmpty()) { auto* Manager = main_->findChild<QDialog*>("hc.jobManager"); QVERIFY(Manager); auto& Theme = fm::style::ThemeManager::instance();
             for (const bool Dark : {false, true}) { Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light); QTest::qWait(100); QVERIFY(Manager->grab().save(QDir(Out).filePath(QString("r8-copy-result-") + (Dark ? "dark-" : "light-") + QString::number(Manager->devicePixelRatioF()) + ".png"))); } }
@@ -17382,7 +17412,7 @@ private slots:
         QVERIFY(Jobs.Scheduler().Cancel(Receipt.Value().id_).HasValue()); QTRY_VERIFY(!Jobs.IsUiPending(Receipt.Value().id_));
         hc::ui::FileOperationDialogRequest DialogRequest; DialogRequest.command_ = "hc.file.copy"; DialogRequest.source_ = Directory.path(); DialogRequest.initialValue_ = Directory.filePath("target"); DialogRequest.names_ = {"first.txt"}; DialogRequest.nativeDestination_ = true;
         hc::ui::FileOperationDialog Dialog(DialogRequest); Dialog.show(); QTRY_VERIFY(Dialog.AcceptButton()->isEnabled());
-        auto* Queue = Dialog.findChild<QPushButton*>("hc.operation.queue"); QVERIFY(Queue && Queue->isEnabled()); Save(&Dialog, "r7-copy-queue"); Queue->click(); QVERIFY(Dialog.Queued()); QCOMPARE(Dialog.result(), int(QDialog::Accepted));
+        auto* Background = Dialog.findChild<QPushButton*>("hc.operation.background"); QVERIFY(Background && Background->isEnabled()); Save(&Dialog, "r7-copy-background"); Background->click(); QVERIFY(Dialog.Background()); QCOMPARE(Dialog.result(), int(QDialog::Accepted));
     }
     void r7JobHistoryRestartUi()
     {
@@ -17722,12 +17752,22 @@ private slots:
         auto Front = Submit("foreground"); QVERIFY(Front.HasValue());
         QTRY_COMPARE(Jobs.Scheduler().Snapshot(Front.Value().id_).Value().state_, JobState::Running);
         auto* Progress = Window.findChild<QDialog*>("hc.fileJobs"); QVERIFY(Progress && Progress->isVisible());
+        Copy.destination_ = {LocatorKind::Local, Directory.filePath("background-copy").toStdString()};
+        QVERIFY(QDir().mkpath(Directory.filePath("background-copy")));
+        auto Waiting = Jobs.Submit(Copy, {}, false, true); QVERIFY(Waiting.HasValue());
+        const auto WaitingSnapshot = Jobs.Scheduler().Snapshot(Waiting.Value().id_).Value();
+        QVERIFY(!WaitingSnapshot.deferred_ && !WaitingSnapshot.foreground_); QCOMPARE(WaitingSnapshot.state_, JobState::Queued);
+        QVERIFY(Progress->isVisible());
+        QCOMPARE(Progress->findChild<QComboBox*>("hc.jobs.selection")->currentData().toString().toStdString(), Front.Value().id_);
         Progress->reject(); // Escape/window close obey the same limit as F2.
         QTRY_VERIFY(Window.findChild<QMessageBox*>("hc.jobs.backgroundLimit"));
         QVERIFY(Progress->isVisible()); QVERIFY(Jobs.Scheduler().Snapshot(Front.Value().id_).Value().foreground_);
         Window.findChild<QMessageBox*>("hc.jobs.backgroundLimit")->accept();
         QVERIFY(Jobs.Scheduler().Cancel(Background.front().id_).HasValue());
-        QTRY_VERIFY(!Jobs.IsUiPending(Background.front().id_)); Jobs.Background();
+        QTRY_VERIFY(!Jobs.IsUiPending(Background.front().id_));
+        QTRY_COMPARE(Jobs.Scheduler().Snapshot(Waiting.Value().id_).Value().state_, JobState::Completed);
+        QVERIFY(QFileInfo::exists(Directory.filePath("background-copy/delcert.exe")));
+        Jobs.Background();
         QVERIFY(!Progress->isVisible()); QVERIFY(!Jobs.Scheduler().Snapshot(Front.Value().id_).Value().foreground_);
         QTemporaryDir Package; QVERIFY(Package.isValid());
         const auto Runtime = QCoreApplication::applicationDirPath();

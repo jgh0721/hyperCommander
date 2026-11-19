@@ -6,7 +6,9 @@
 #include <optional>
 #include <QJsonObject>
 #include <QFutureWatcher>
+#include <functional>
 #include <stop_token>
+class QAbstractButton;
 class QTimer;
 class QRadioButton;
 class QScrollArea;
@@ -47,6 +49,8 @@ protected:
     void showEvent(QShowEvent* Event) override;
     bool eventFilter(QObject* Watched, QEvent* Event) override;
     void ResetBody();
+    QPushButton* AddBackgroundButton(const QString& ObjectName, std::function<void()> Submit);
+    static void SetBackgroundShortcut(QAbstractButton* Button);
 
 private:
     fm::ui::DialogHeader* header_ = nullptr;
@@ -54,6 +58,7 @@ private:
     QVBoxLayout* bodyLayout_ = nullptr;
     fm::ui::Button* accept_ = nullptr;
     fm::ui::Button* cancel_ = nullptr;
+    QPushButton* backgroundButton_ = nullptr;
     QPointer<QLineEdit> initialInput_;
     QScrollArea* bodyScroll_ = nullptr;
     QWidget* body_ = nullptr;
@@ -91,13 +96,14 @@ public:
     bool SeparateFolders() const;
     bool PreservePaths() const;
     QString IncludePattern() const;
-    bool Queued() const;
+    bool Background() const { return background_; }
 private:
     void validate();
     QString baseDirectory_;
     QLineEdit* destination_;
     QLineEdit* pattern_;
-    QCheckBox *separate_, *paths_, *overwrite_, *queued_;
+    QCheckBox *separate_, *paths_, *overwrite_;
+    bool background_ = false;
 };
 // Product request values are captured before entering the modal event loop.
 struct FileOperationDialogRequest
@@ -124,7 +130,7 @@ public:
     QString Conflict() const;
     QString ResolvedTarget() const;
     bool TargetIsName() const;
-    bool Queued() const { return queued_; }
+    bool Background() const { return background_; }
     bool PreserveMetadata() const;
     bool VerifyCopy() const;
     bool CopyAcl() const;
@@ -133,7 +139,7 @@ public:
     quint64 SpeedLimit() const;
     bool CreateParents() const;
     bool OpenCreatedFolder() const;
-    bool KeepStructure() const { return keepStructure_ && keepStructure_->isChecked(); }
+    bool KeepStructure() const;
     bool Recycle() const;
     bool AllowReadOnly() const;
     static QStringList RecentTargets(const QString& Provider);
@@ -151,7 +157,7 @@ private:
     QCheckBox* streams_ = nullptr;
     QLineEdit* filter_ = nullptr;
     QSpinBox* speed_ = nullptr;
-    bool queued_ = false;
+    bool background_ = false;
     FileOperationDialogRequest request_;
     QComboBox* targetMode_ = nullptr;
     QCheckBox* parents_ = nullptr;

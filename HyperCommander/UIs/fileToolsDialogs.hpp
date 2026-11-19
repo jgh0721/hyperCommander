@@ -55,7 +55,7 @@ private:
     void showPage();
     void loadDates();
     void done(int Result) override;
-    void run(bool Undo);
+    void run(bool Undo, bool Background = false);
     void finish(const filetools::BatchResult& Result, const QList<filetools::RenameRow>& Plan, bool Undo);
     filetools::Rules rules() const;
     QList<filetools::Entry> sources_;
@@ -77,7 +77,6 @@ private:
     QPointer<QObject> jobOwner_;
     QString recordId_, pendingRecordId_;
     std::string jobId_;
-    QCheckBox* queued_;
     QPushButton* background_;
     bool cancelWhenReady_ = false;
     bool metadataLoading_ = false;
@@ -99,7 +98,7 @@ private:
     QTreeWidget* list_;
     fm::ui::RenameComparisonView* comparison_;
     QPushButton *undo_, *resume_, *restore_, *refresh_;
-    QCheckBox* queued_;
+    QCheckBox* background_;
     QLabel* selectionSummary_;
     QList<filetools::RenameRecord> records_;
     quint64 generation_ = 0;

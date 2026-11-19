@@ -661,7 +661,7 @@ QString FileJobUi::SubmitSecurityJob(const QString& Path,bool Grant,const QJsonO
     return Started.HasValue()?QString():hc::ui::ErrorText(Started.Failure());
 }
 
-Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationContext Context, bool Deferred)
+Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationContext Context, bool Deferred, bool Background)
 {
     if (beforeMutation_ && (Request.operation_ == hc::operations::FileOperation::Move || Request.operation_ == hc::operations::FileOperation::Delete || Request.operation_ == hc::operations::FileOperation::Rename)) {
         QStringList Paths;
@@ -693,7 +693,7 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
     if(!Request.elevation_)Request.elevation_=ElevationService();
     auto Prepared = PrepareFileOperation(Request, Context); if (!Prepared.HasValue()) return Prepared.Failure();
     Prepared.Value().request_.deferred_ = Deferred;
-    Prepared.Value().request_.foreground_ = !Deferred;
+    Prepared.Value().request_.foreground_ = !Deferred && !Background;
     QString Options = tr("부모 폴더: %1").arg(Request.createParents_ ? tr("만듦") : tr("만들지 않음"));
     if (Operation == hc::operations::FileOperation::Copy || Operation == hc::operations::FileOperation::Move)
         Options += tr(" · 충돌: %1 · 대상 이름: %2")
@@ -724,7 +724,7 @@ Result<JobHandle> FileJobUi::Submit(FileOperationRequest Request, OperationConte
     return Submitted;
 }
 
-Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationContext Context, bool Deferred)
+Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationContext Context, bool Deferred, bool Background)
 {
     Context.providerInteractions_ = true;
     Context.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(hc::defaults::DefaultValue("options/delayedFileWrites").toBool());
@@ -735,7 +735,7 @@ Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationCo
     const auto Source = Request.sources_.empty() ? DisplayPath(Serialize(Request.selectionRoot_)) : DisplayPath(Serialize(Request.sources_.front().entry_.locator_));
     auto Prepared = PrepareArchiveOperation(Request, Context); if (!Prepared.HasValue()) return Prepared.Failure();
     Prepared.Value().request_.deferred_ = Deferred;
-    Prepared.Value().request_.foreground_ = !Deferred;
+    Prepared.Value().request_.foreground_ = !Deferred && !Background;
     Prepared.Value().request_.metadata_ = {Label, Source.toStdString(), Destination.toStdString(), "conflict=" + std::to_string(static_cast<int>(Request.conflict_)), {}};
     Prepared.Value().request_.metadata_.kind_ = Operation == hc::operations::FileOperation::Copy ? JobKind::ArchiveAdd
         : Operation == hc::operations::FileOperation::Move ? JobKind::ArchiveMove
@@ -746,7 +746,7 @@ Result<JobHandle> FileJobUi::Submit(ArchiveOperationRequest Request, OperationCo
     return Submitted;
 }
 
-Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationContext Context, bool Deferred)
+Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationContext Context, bool Deferred, bool Background)
 {
     if (beforeMutation_) {
         QStringList Paths;
@@ -761,7 +761,7 @@ Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationConte
     const auto Source = Request.sources_.empty() ? DisplayPath(Serialize(Request.selectionRoot_)) : DisplayPath(Serialize(Request.sources_.front().locator_));
     auto Prepared = PrepareMoveOperation(Request, Context); if (!Prepared.HasValue()) return Prepared.Failure();
     Prepared.Value().request_.deferred_ = Deferred;
-    Prepared.Value().request_.foreground_ = !Deferred;
+    Prepared.Value().request_.foreground_ = !Deferred && !Background;
     Prepared.Value().request_.metadata_ = {Label, Source.toStdString(), Destination.toStdString(), "conflict=" + std::to_string(static_cast<int>(Request.conflict_)), {}};
     Prepared.Value().request_.metadata_.kind_ = JobKind::Move;
     auto Submitted = track(scheduler_.Submit(std::move(Prepared.Value().request_), std::move(Prepared.Value().task_)), hc::operations::FileOperation::Move, Label);
@@ -769,7 +769,7 @@ Result<JobHandle> FileJobUi::Submit(MoveOperationRequest Request, OperationConte
     return Submitted;
 }
 
-Result<JobHandle> FileJobUi::Submit(PreparedJob Job, const QString& Label, PreparedRetry Retry, std::function<void(const std::string&)> Resubmitted)
+Result<JobHandle> FileJobUi::Submit(PreparedJob Job, const QString& Label, PreparedRetry Retry, std::function<void(const std::string&)> Resubmitted, bool Background)
 {
     Job.request_.operation_.providerInteractions_ = true;
     Job.request_.operation_.flushFileContents_ = !hc::settings::AppSettings().CommittedObject()["options"].toObject()["delayedFileWrites"].toBool(hc::defaults::DefaultValue("options/delayedFileWrites").toBool());
@@ -779,7 +779,7 @@ Result<JobHandle> FileJobUi::Submit(PreparedJob Job, const QString& Label, Prepa
     const bool Renaming = Presentation == JobKind::Rename || Presentation == JobKind::BatchRename || Presentation == JobKind::RenameUndo
         || Presentation == JobKind::RenameRedo || Presentation == JobKind::RenameResume || Presentation == JobKind::RenameRestore;
     const auto Kind = Renaming ? hc::operations::FileOperation::Rename : hc::operations::FileOperation::Copy;
-    Job.request_.foreground_ = !Job.request_.deferred_;
+    Job.request_.foreground_ = !Job.request_.deferred_ && !Background;
     const auto Context = Job.request_.operation_;
     auto Submitted = track(scheduler_.Submit(std::move(Job.request_), std::move(Job.task_)), Kind, Label.toStdString());
     if (Submitted.HasValue()) jobs_->setItemText(jobs_->findData(QString::fromStdString(Submitted.Value().id_)), Label);
@@ -802,10 +802,11 @@ Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::
     sizeFormats_[Handle.id_]=QJsonObject{{"size",int(SizeFormat.size_)},{"precision",SizeFormat.precision_},{"grouping",SizeFormat.grouping_}};
     jobs_->addItem(OperationLabel + " · " + QString::fromStdString(Label), QString::fromStdString(Handle.id_));
     jobs_->setItemData(jobs_->count() - 1, static_cast<int>(Operation), Qt::UserRole + 1);
-    jobs_->setCurrentIndex(jobs_->count() - 1);
     const auto Defaults = hc::settings::AppSettings().CommittedObject()["options"].toObject();
     notifications_[Handle.id_] = Defaults["jobNotification"].toString(hc::defaults::DefaultValue("options/jobNotification").toString());
     const auto Snapshot = scheduler_.Snapshot(Handle.id_);
+    if (!dialog_->isVisible() || !Snapshot.HasValue() || Snapshot.Value().foreground_ || Snapshot.Value().deferred_)
+        jobs_->setCurrentIndex(jobs_->count() - 1);
     if (Defaults["queueInsertion"] == "first" && Snapshot.HasValue() && Snapshot.Value().deferred_) {
         auto Queue = scheduler_.Snapshots();
         std::erase_if(Queue, [](const auto& Value) { return !Value.deferred_; });
@@ -821,7 +822,8 @@ Result<JobHandle> FileJobUi::track(Result<JobHandle> Submitted, hc::operations::
     }
     autoClose_->setChecked(Defaults["jobCloseOnSuccess"].toBool(hc::defaults::DefaultValue("options/jobCloseOnSuccess").toBool()));
     if (detailed_ != Defaults["jobDetailed"].toBool(hc::defaults::DefaultValue("options/jobDetailed").toBool())) dialog_->findChild<QPushButton*>("hc.jobs.toggleDetails")->click();
-    if (Snapshot.HasValue() && Snapshot.Value().deferred_) Show(); else showProgress();
+    if (Snapshot.HasValue() && Snapshot.Value().deferred_) Show();
+    else if (!Snapshot.HasValue() || Snapshot.Value().foreground_) showProgress();
     return Handle;
 }
 
@@ -849,20 +851,26 @@ void FileJobUi::ApplyDefaults()
 
 void FileJobUi::Background()
 {
-    const auto Id = selectedId(); const auto Snapshot = scheduler_.Snapshot(Id);
+    backgroundJob(selectedId());
+}
+
+bool FileJobUi::backgroundJob(const std::string& Id)
+{
+    const auto Snapshot = scheduler_.Snapshot(Id);
     if (Snapshot.HasValue() && !IsTerminal(Snapshot.Value().state_)) {
         const auto Changed = scheduler_.SetForeground(Id, false);
         if (!Changed.HasValue()) {
             const auto Current = scheduler_.Snapshot(Id);
             if (Current.HasValue() && !IsTerminal(Current.Value().state_)) {
-                if (auto* Existing = dialog_->findChild<QMessageBox*>("hc.jobs.backgroundLimit")) { Existing->raise(); return; }
+                if (auto* Existing = dialog_->findChild<QMessageBox*>("hc.jobs.backgroundLimit")) { Existing->raise(); return false; }
                 auto* Message = new hc::ui::MessageDialog(QMessageBox::Information, tr("백그라운드 실행 한도"),
                     tr("백그라운드 작업이 최대 %1개 실행 중입니다. 전경 작업을 유지합니다. 다른 작업이 끝난 뒤 다시 전환하세요.").arg(scheduler_.ConcurrencyLimit()), QMessageBox::Ok, dialog_);
-                Message->setObjectName("hc.jobs.backgroundLimit"); Message->setAttribute(Qt::WA_DeleteOnClose); Message->open(); return;
+                Message->setObjectName("hc.jobs.backgroundLimit"); Message->setAttribute(Qt::WA_DeleteOnClose); Message->open(); return false;
             }
         }
     }
-    dialog_->hide();
+    if (Id == selectedId()) dialog_->hide();
+    return true;
 }
 void FileJobUi::Show() { updateManager(); manager_->show(); manager_->raise(); manager_->activateWindow(); updateSelection(); }
 void FileJobUi::showProgress() {

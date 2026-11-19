@@ -11,6 +11,7 @@ public:
     virtual ~RenameJobController() = default;
     virtual QObject* RenameOwner() = 0;
     virtual operations::JobScheduler& RenameScheduler() = 0;
-    virtual storage::Result<operations::JobHandle> SubmitRename(operations::PreparedJob Job, const QString& Label) = 0;
+    virtual storage::Result<operations::JobHandle> SubmitRename(operations::PreparedJob Job, const QString& Label, bool Background = false) = 0;
+    virtual bool BackgroundRename(const std::string& Id) = 0;
 };
 }

@@ -16,6 +16,7 @@
 #include <fmwidgets/DialogHeader.h>
 #include <fmwidgets/DialogWidgets.h>
 #include <QHBoxLayout>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QGridLayout>
@@ -52,6 +53,36 @@
 
 namespace hc::ui {
 namespace {
+class BackgroundShortcut final : public QObject
+{
+public:
+    explicit BackgroundShortcut(QAbstractButton* Button)
+        : QObject(Button), button_(Button), shortcut_(hc::defaults::AuxiliaryShortcut("background"))
+    {
+        qApp->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject* Watched, QEvent* Event) override
+    {
+        if (Event->type() != QEvent::KeyPress && Event->type() != QEvent::ShortcutOverride) return false;
+        // Handle F2 within the dialog even when another shortcut opened its modal loop.
+        const auto* Key = static_cast<QKeyEvent*>(Event);
+        if (Key->keyCombination() != shortcut_ || QApplication::activePopupWidget()) return false;
+        const auto* Widget = qobject_cast<QWidget*>(Watched);
+        const auto* Window = button_->window();
+        const auto* Modal = QApplication::activeModalWidget();
+        if (!Widget || Widget->window() != Window || (Modal && Modal != Window) || !button_->isVisible()) return false;
+        Event->accept();
+        if (Event->type() == QEvent::KeyPress && button_->isEnabled() && !Key->isAutoRepeat()) button_->click();
+        return true;
+    }
+
+private:
+    QAbstractButton* button_;
+    QKeyCombination shortcut_;
+};
+
 // Paper Fluent separates the dialog header as a surface band above the window-colored body.
 class DialogHeaderBand final : public QWidget {
 public:
@@ -173,7 +204,32 @@ void DialogShell::SetMessage(const QString& Text, bool Error)
     message_->SetText(Text);
     message_->setVisible(!Text.isEmpty());
 }
-void DialogShell::SetAcceptEnabled(bool Enabled) { accept_->setEnabled(Enabled); if (auto* Queue = findChild<QPushButton*>("hc.operation.queue")) Queue->setEnabled(Enabled); }
+void DialogShell::SetAcceptEnabled(bool Enabled)
+{
+    accept_->setEnabled(Enabled);
+    if (backgroundButton_) backgroundButton_->setEnabled(Enabled);
+}
+
+void DialogShell::SetBackgroundShortcut(QAbstractButton* Button)
+{
+    const QKeySequence Shortcut(hc::defaults::AuxiliaryShortcut("background"));
+    Button->setText(tr("백그라운드로(%1)").arg(Shortcut.toString(QKeySequence::NativeText)));
+    Button->setShortcut(Shortcut);
+    new BackgroundShortcut(Button);
+}
+
+QPushButton* DialogShell::AddBackgroundButton(const QString& ObjectName, std::function<void()> Submit)
+{
+    backgroundButton_ = new fm::ui::Button({}, footer_);
+    backgroundButton_->setObjectName(ObjectName);
+    backgroundButton_->setToolTip(tr("작업을 백그라운드에서 실행합니다."));
+    backgroundButton_->setAutoDefault(false);
+    SetBackgroundShortcut(backgroundButton_);
+    backgroundButton_->setEnabled(accept_->isEnabled());
+    connect(backgroundButton_, &QPushButton::clicked, this, std::move(Submit));
+    qobject_cast<QHBoxLayout*>(footer_->layout())->insertWidget(0, backgroundButton_);
+    return backgroundButton_;
+}
 void DialogShell::SetInitialInput(QLineEdit* Input)
 {
     if (initialInput_) initialInput_->removeEventFilter(this);
@@ -511,21 +567,19 @@ FileOperationDialog::FileOperationDialog(const FileOperationDialogRequest& Reque
         connect(verify_, &QCheckBox::toggled, this, UpdateCompletion);
         UpdateCompletion();
     }
-    if (Copy) {
-        auto* Queue = new fm::ui::Button(tr("대기열에 추가(&Q)"), this);
-        Queue->setObjectName("hc.operation.queue");
-        Queue->setToolTip(tr("실행하지 않고 접수합니다. 작업관리자에서 순서를 정한 뒤 시작하세요."));
-        connect(Queue, &QPushButton::clicked, this, [this] {
-            if (AcceptButton()->isEnabled()) { queued_ = true; accept(); }
+    if (Transfer) {
+        AddBackgroundButton("hc.operation.background", [this] {
+            background_ = true;
+            accept();
         });
-        qobject_cast<QHBoxLayout*>(AcceptButton()->parentWidget()->layout())->insertWidget(0, Queue);
-    } else if (Mkdir) {
+    }
+    if (Mkdir) {
         Label(tr("만들어질 폴더"));
         plan_ = new fm::ui::FolderPlanView(this); BodyLayout()->addWidget(plan_);
         openCreated_ = new fm::ui::WrapCheckBox(tr("만든 후 마지막 폴더로 이동(&G)"), this);
         openCreated_->setObjectName("hc.operation.openCreated"); openCreated_->setEnabled(Request.nativeDestination_); BodyLayout()->addWidget(openCreated_);
         Label(tr("경로 구분자로 중첩 폴더를 만듭니다. 실패·취소 전에 만들어진 중간 폴더는 유지됩니다."));
-    } else {
+    } else if (!Copy) {
         if (Rename) {
             extension_ = new fm::ui::WrapCheckBox(tr("확장자 변경 허용(&X)"), this); BodyLayout()->addWidget(extension_);
             connect(extension_, &QCheckBox::toggled, this, [this] { validateInput(); });
@@ -720,6 +774,7 @@ bool FileOperationDialog::CreateParents() const
         || (targetMode_->currentData() == "auto" && (request_.manifestSelection_ || request_.names_.size() != 1));
 }
 bool FileOperationDialog::OpenCreatedFolder() const { return openCreated_ && openCreated_->isEnabled() && openCreated_->isChecked(); }
+bool FileOperationDialog::KeepStructure() const { return keepStructure_ && keepStructure_->isChecked(); }
 bool FileOperationDialog::Recycle() const { return recycle_ && recycle_->isEnabled() && recycle_->isChecked(); }
 bool FileOperationDialog::AllowReadOnly() const { return readonly_ && readonly_->isEnabled() && readonly_->isChecked(); }
 QString FileOperationDialog::ResolvedTarget() const
@@ -908,7 +963,10 @@ ArchiveExtractDialog::ArchiveExtractDialog(const QStringList& Names, const QStri
     pattern_ = new QLineEdit(QStringLiteral("*.*"), Card); pattern_->setObjectName("hc.archive.extract.pattern");
     auto* PatternLabel = new QLabel(tr("압축 해제할 파일(&F)"), Card); PatternLabel->setBuddy(pattern_); Form->addRow(PatternLabel, pattern_);
     connect(pattern_, &QLineEdit::textChanged, this, [this] { validate(); });
-    queued_ = new QCheckBox(tr("대기열에 추가(&Q)"), Card); queued_->setObjectName("hc.archive.extract.queued"); Form->addRow(queued_);
+    AddBackgroundButton("hc.archive.extract.background", [this] {
+        background_ = true;
+        accept();
+    });
     auto* Resolved = new hc::qt::ElidedLabel(this); Resolved->setObjectName("hc.archive.extract.resolved"); BodyLayout()->addWidget(Resolved);
     const auto UpdateResolved = [this, Resolved] { Resolved->SetText(tr("대상: %1").arg(QDir::toNativeSeparators(this->Destination()))); Resolved->setToolTip(tr("상대경로 기준: %1\n해석된 대상: %2").arg(QDir::toNativeSeparators(baseDirectory_),QDir::toNativeSeparators(this->Destination()))); };
     connect(destination_, &QLineEdit::textChanged, this, UpdateResolved); UpdateResolved();
@@ -922,7 +980,6 @@ QString ArchiveExtractDialog::Conflict() const { return overwrite_->isChecked() 
 bool ArchiveExtractDialog::PreservePaths() const { return paths_->isChecked(); }
 QString ArchiveExtractDialog::IncludePattern() const { return pattern_->text().trimmed(); }
 bool ArchiveExtractDialog::SeparateFolders() const { return separate_->isChecked(); }
-bool ArchiveExtractDialog::Queued() const { return queued_->isChecked(); }
 void ArchiveExtractDialog::validate() {
     const bool ValidPath = !Destination().isEmpty();
     const bool ValidPattern = hc::operations::IsValidCopyPattern(IncludePattern().toStdString());
