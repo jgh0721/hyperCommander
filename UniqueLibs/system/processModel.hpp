@@ -36,7 +36,7 @@ struct ProcessNode
     hc::system::Integrity     integrity = hc::system::Integrity::Unknown;
     quint32                   priorityClass = 0;
     bool                      elevated = false, wow64 = false, packaged = false, critical = false, protectedProcess = false, opened = false;
-    QIcon                     icon;
+    QIcon                     icon, listIcon;
     int                       newCycles = 0, exitCycles = 0;
     bool                      exiting = false;
     bool                      pseudo = false;          // 인터럽트 행
@@ -102,6 +102,10 @@ signals:
     void sigDetailsLoaded();
 
 private:
+    struct ProcessIcons
+    {
+        QIcon detail, list;
+    };
     struct DetailResult
     {
         hc::system::ProcessKey      key;
@@ -127,7 +131,7 @@ private:
     QVector<ProcessNode*>           roots_;
     QHash<quint32, ProcessNode*>    byPid_;
     QHash<quint32, QStringList>     services_;
-    QHash<QString, QIcon>           icons_;
+    QHash<QString, ProcessIcons>   icons_;
     QVector<hc::system::ProcessKey> pendingDetails_;
     bool                            detailsRunning_ = false;
     bool                            flat_ = false;

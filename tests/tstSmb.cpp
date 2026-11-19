@@ -434,6 +434,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewRefreshInputUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewCloseTabUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "directoryHotListFromSystemToolUi"
+                || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewProcessIconSizeUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewSortModeUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "systemViewTabSwitchUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "groupedParentPageKeysUi"
@@ -6924,6 +6925,42 @@ private slots:
         }
         System->TogglePause();
     }
+    void systemViewProcessIconSizeUi()
+    {
+        auto& Settings = hc::settings::AppSettings();
+        const auto Before = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.Replace(Before); });
+        auto General = Settings.Read(hc::settings::Section::General).toObject();
+        auto Process = General["processService"].toObject();
+        Process["autoStartHelper"] = false;
+        Process["allUsers"] = true;
+        General["processService"] = Process;
+        QVERIFY(Settings.Put(hc::settings::Section::General, General));
+
+        CSystemView View(CSystemView::Kind::Processes);
+        View.resize(640, 480);
+        View.show();
+        auto* Model = View.Processes();
+        QTRY_VERIFY_WITH_TIMEOUT(Model->HasPid(0), 10000);
+        View.SetFlat(true);
+
+        const auto FindIcon = [Model](bool Native) {
+            for (int Row = 0; Row < Model->rowCount(); ++Row) {
+                const auto Index = Model->index(Row, hc::sys::ProcessTreeModel::Name);
+                const auto* Node = Model->Node(Index);
+                if (Native ? !Node->icon.isNull() : Node->key.pid == 0)
+                    return Index.data(Qt::DecorationRole).value<QIcon>();
+            }
+            return QIcon();
+        };
+
+        const QSize CellSize(240, 32);
+        const QSize IconSize(16, 16);
+        QTRY_VERIFY_WITH_TIMEOUT(!FindIcon(true).isNull(), 15000);
+        QCOMPARE(FindIcon(true).actualSize(CellSize), IconSize);
+        QCOMPARE(FindIcon(false).actualSize(CellSize), IconSize);
+    }
+
     void systemViewSortModeUi()
     {
         // 트리는 형제끼리만 정렬하므로 숫자 열로 정렬하면 목록으로 바꾼다. 그 정렬이 풀리거나 [트리]를 누르면 트리로 돌아간다.

@@ -9,6 +9,7 @@
 
 /// 프레임워크
 #include <QApplication>
+#include <QIconEngine>
 #include <QStyle>
 
 #include <algorithm>
@@ -26,10 +27,32 @@ void Push( QVector<float>& History, float Value )
     History.append( Value );
 }
 
+// Qtitan reserves the width reported by actualSize() when laying out the process name.
+class ProcessListIcon final : public QIconEngine
+{
+public:
+    explicit ProcessListIcon( const QIcon& Source ) : source_( Source ) {}
+
+    ProcessListIcon* clone() const override { return new ProcessListIcon( *this ); }
+
+    QSize actualSize( const QSize& Size, QIcon::Mode, QIcon::State ) override
+    {
+        return Size.boundedTo( QSize( 16, 16 ) );
+    }
+
+    void paint( QPainter* Painter, const QRect& Rect, QIcon::Mode Mode, QIcon::State State ) override
+    {
+        source_.paint( Painter, Rect, Qt::AlignCenter, Mode, State );
+    }
+
+private:
+    QIcon source_;
+};
+
 QIcon GenericIcon( bool System )
 {
-    static const QIcon Program = QApplication::style()->standardIcon( QStyle::SP_FileIcon );
-    static const QIcon Machine = QApplication::style()->standardIcon( QStyle::SP_ComputerIcon );
+    static const QIcon Program( new ProcessListIcon( QApplication::style()->standardIcon( QStyle::SP_FileIcon ) ) );
+    static const QIcon Machine( new ProcessListIcon( QApplication::style()->standardIcon( QStyle::SP_ComputerIcon ) ) );
     return System ? Machine : Program;
 }
 } // namespace
@@ -553,8 +576,13 @@ void ProcessTreeModel::applyDetails( const QVector<DetailResult>& Results )
             Node->version = QString::fromStdWString( Result.version.version );
             const auto IconKey = Node->image.toLower();
             if( !Result.icon.isNull() )
-                icons_.insert( IconKey, QIcon( QPixmap::fromImage( Result.icon ) ) );
-            Node->icon = icons_.value( IconKey );
+            {
+                const QIcon Detail( QPixmap::fromImage( Result.icon ) );
+                icons_.insert( IconKey, { Detail, QIcon( new ProcessListIcon( Detail ) ) } );
+            }
+            const auto Icons = icons_.value( IconKey );
+            Node->icon = Icons.detail;
+            Node->listIcon = Icons.list;
         }
         if( Node->row >= 0 )
             emit dataChanged( indexOfNode( Node, 0 ), indexOfNode( Node, ColumnCount - 1 ) );
@@ -649,7 +677,7 @@ QVariant ProcessTreeModel::data( const QModelIndex& Index, int Role ) const
             }
         case Qt::DecorationRole:
             if( Column != Name ) return {};
-            if( !Node->icon.isNull() ) return Node->icon;
+            if( !Node->listIcon.isNull() ) return Node->listIcon;
             return GenericIcon( Node->pseudo || Node->key.pid <= 4 || Node->protectedProcess );
         case Qt::BackgroundRole:
         {
