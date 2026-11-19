@@ -1,5 +1,6 @@
 ﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include "commonLibs/document/epub/epubTemplate.hpp"
 #include "UniqueLibs/document/documentWorkspaceWidget.hpp"
 #include "UniqueLibs/document/documentToolPanel.hpp"
 #include "UniqueLibs/document/documentViewPane.hpp"
@@ -16,6 +17,7 @@
 
 #include <Windows.h>
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -31,11 +33,14 @@
 #include <QPointer>
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QStyle>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+
+#include <algorithm>
 
 // HyperEditor 도킹 통합(P6): 문서는 중앙 영역의 도크, 파일에서 찾기 · 개요 · 책 구조 · 문제 · 출력은 도구 창.
 using namespace hc::document;
@@ -120,6 +125,9 @@ namespace
 class DocumentDockingTests final : public QObject
 {
     Q_OBJECT
+public:
+    static void initMain() { QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings); }
+
 private slots:
     void documentsAreCentralDocks()
     {
@@ -257,6 +265,75 @@ private slots:
         Widget.SetClosePrompt([](const QString&) { return int(QMessageBox::Discard); });
         Tabs.requestClose(0); QTRY_COMPARE(Tabs.count(), 1);
         QTRY_VERIFY(!Panel); QVERIFY(!Host->CurrentPanel());
+    }
+    void epubAutoHideKeepsToolTitles()
+    {
+        Profile Settings;
+        epub::NewBook Book;
+        Book.title_ = "Docking";
+        Book.language_ = "ko";
+        Book.chapterTitle_ = "본문";
+        const auto Epub = epub::CreateBook(Book);
+        QVERIFY2(Epub, qPrintable(Epub.error_ + " " + Epub.location_));
+        const auto Path = Settings.Path("book.epub");
+        QVERIFY(Put(Path, Epub.bytes_));
+
+        DocumentWorkspaceWidget Widget(Settings.Path("recovery"));
+        Widget.ConfigureEpub(MakeProductEpubRuntime(QCoreApplication::applicationDirPath(), {}));
+        Widget.resize(1200, 800);
+        Widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&Widget));
+        test::DocumentTabs Tabs(&Widget);
+        auto* Manager = Tabs.manager();
+        QVERIFY(Manager);
+        // A restored output dock starts closed before an EPUB enters Edit mode.
+        QVERIFY(Manager->restoreState(Manager->saveState()));
+        const auto Id = Widget.OpenForEpubEdit(Path)["documentId"].toString();
+        QTRY_VERIFY(Ready(Widget, Id));
+
+        auto* Explorer = Tabs.tool("explorer");
+        auto* Tree = Tabs.tool("bookTree");
+        auto* Output = Tabs.tool("output");
+        QVERIFY(Explorer && Tree && Output);
+        QTRY_VERIFY(!Tree->isClosed() && !Output->isClosed());
+        auto* Area = Explorer->dockArea();
+        QVERIFY(Area);
+        Manager->addDockWidgetTab(Tree, Area);
+        Tree->bringToFront();
+        QCOMPARE(Area->currentDockWidget(), Tree);
+        QVERIFY(Manager->setAutoHidden(Tree, true, fm::dock::SideBarLocation::Left));
+        QCOMPARE(Area->currentDockWidget(), Explorer);
+        auto* ExplorerTitle = Area->findChild<QWidget*>("fmDockAreaTitleBar");
+        QVERIFY(ExplorerTitle);
+        auto ExplorerTabs = ExplorerTitle->findChildren<QWidget*>();
+        const auto ExplorerTab = std::ranges::find(ExplorerTabs, Explorer->title(), &QWidget::accessibleName);
+        QVERIFY(ExplorerTab != ExplorerTabs.end());
+        QTRY_VERIFY((*ExplorerTab)->isVisible() && !(*ExplorerTab)->rect().isEmpty());
+
+        auto* SideBar = Manager->findChild<QWidget*>("fmDockSideBarBottom");
+        QVERIFY(SideBar);
+        auto* OutputTab = SideBar->findChild<QAbstractButton*>();
+        QVERIFY(OutputTab);
+        QTRY_VERIFY(OutputTab->isVisible());
+        QCOMPARE(OutputTab->accessibleName(), Output->title());
+        const int Padding = OutputTab->style()->pixelMetric(QStyle::PM_TabBarTabHSpace, nullptr, OutputTab);
+        QTRY_VERIFY(OutputTab->width() >= OutputTab->fontMetrics().horizontalAdvance(Output->title()) + Padding);
+        QTest::mouseClick(OutputTab, Qt::LeftButton);
+        QTRY_COMPARE(Manager->expandedAutoHideDockWidget(), Output);
+        QTRY_VERIFY(Output->isVisible());
+        auto* Flyout = Output->parentWidget();
+        auto* FlyoutTitle = Flyout->findChild<QWidget*>("fmDockFlyoutTitle", Qt::FindDirectChildrenOnly);
+        QVERIFY(FlyoutTitle && FlyoutTitle->isVisible());
+        QVERIFY(FlyoutTitle->geometry().bottom() < Output->geometry().top());
+        QVERIFY(Flyout->mapTo(&Widget, Flyout->rect().bottomLeft()).y() < OutputTab->mapTo(&Widget, QPoint()).y());
+        QVERIFY((*ExplorerTab)->isVisible());
+        QVERIFY(!ExplorerTitle->testAttribute(Qt::WA_NativeWindow));
+        QVERIFY(!SideBar->testAttribute(Qt::WA_NativeWindow));
+
+        QTest::mouseClick(OutputTab, Qt::LeftButton);
+        QTRY_VERIFY(!Flyout->isVisible());
+        QVERIFY(!Manager->expandedAutoHideDockWidget());
+        QTRY_VERIFY_WITH_TIMEOUT(Widget.RequestClose(), 15000);
     }
     void previewBesideRoundTrip()
     {

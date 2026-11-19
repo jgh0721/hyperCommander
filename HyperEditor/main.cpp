@@ -72,6 +72,9 @@ int main(int Argc, char** Argv)
     hc::document::startup::Initialize("editor");
     hc::document::startup::Data().Begin("editor.entryToTitle");
     const auto QtStart = hc::document::startup::Data().Begin("editor.qtApplication");
+    // The preview and flyout need HWNDs. Keep adjacent dock chrome in Qt's backing store
+    // so it paints at the updated splitter and sidebar positions when a flyout opens.
+    QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
     QApplication App(Argc, Argv); App.setOrganizationName("HyperCommander"); App.setApplicationName("HyperEditor"); hc::ui::InstallQtTranslation(App);
     FontWarmup.WatchFirstWindow();
     hc::document::startup::Scope ResourcesTrace("editor.resources"); InitializePortedViewResources(); ResourcesTrace.End(); App.setWindowIcon(QIcon(":/icons/app/hypereditor.svg"));
