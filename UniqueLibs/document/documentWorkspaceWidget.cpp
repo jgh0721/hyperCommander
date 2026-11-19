@@ -2768,9 +2768,9 @@ namespace hc::document
         for (const auto& Tab : documents_) {
             if (Tab->closed_ || !Tab->dock_) continue;
             const auto Name = documentName(*Tab);
+            // The tab has its own tooltip. A tooltip on the dock would also appear over its contents.
             Tab->dock_->setTitle(Name + (Tab->Dirty() || (!Tab->loading_ && Tab->pane_->SqliteDirty()) ? " *" : "") + (Tab->loading_ ? tr(" · 여는 중") : "")
                 + (Tab->session_->Snapshot().error_ || !Tab->error_.isEmpty() ? tr(" · 오류") : ""));
-            Tab->dock_->setToolTip(Tab->temporarySource_.isEmpty() ? QDir::toNativeSeparators(Tab->path_) : Name);
             // 다른 프로세스 창(미리보기 · EPUB · 한글)은 끄는 동안 grab()으로 그릴 수 없다: 끌기 미리보기는 틀만.
             Tab->dock_->setNativeContent(Tab->pane_->IsProcessDocument() || Tab->pane_->HasPreview());
             if (Tab->previewDock_) Tab->previewDock_->setTitle(tr("%1 미리보기").arg(Name));

@@ -10,6 +10,7 @@
 #include <QToolBar>
 #include <QPainter>
 #include <QToolButton>
+#include <QToolTip>
 #include <QSlider>
 #include <QLabel>
 #include <QListWidget>
@@ -1550,6 +1551,47 @@ class ImageReadingTests : public QObject
         });
         QTest::mouseClick(Nav->findChild<QToolButton *>("imageNavigatorPages"), Qt::LeftButton);
         QVERIFY(Selected); QTRY_COMPARE(Reader->State()["page"].toInt(), 2);
+    }
+    void imageCanvasHasNoFilenameTooltip_data()
+    {
+        QTest::addColumn<int>("Mode");
+        QTest::newRow("image") << int(ImageReadingView::Single);
+        QTest::newRow("comic") << int(ImageReadingView::Comic);
+        QTest::newRow("webtoon") << int(ImageReadingView::Webtoon);
+    }
+    void imageCanvasHasNoFilenameTooltip()
+    {
+        QFETCH(int, Mode);
+        QTemporaryDir Root;
+        Fixture(Root.path());
+        DocumentWorkspaceWidget W(Root.filePath("recovery"), true);
+        W.resize(800, 600);
+        W.show();
+        const auto Opened = W.Handle({{"action", "open"}, {"path", Root.filePath("1.png")}});
+        QVERIFY(!Opened.contains("error"));
+        QTRY_VERIFY_WITH_TIMEOUT(Document(W)["lifecycle"] == "ready", 20000);
+        auto* Pane = W.findChild<DocumentViewPane*>();
+        QVERIFY(Pane);
+        const auto Changed = Pane->Execute({{"action", "reading.mode"}, {"mode", Mode}});
+        QVERIFY(!Changed.contains("error"));
+
+        QWidget* Canvas = Pane->findChild<QImageView*>();
+        if (Mode != ImageReadingView::Single) {
+            auto* Reader = Pane->findChild<ImageReadingView*>();
+            QVERIFY(Reader);
+            QTRY_COMPARE_WITH_TIMEOUT(Reader->State()["mode"].toInt(), Mode, 20000);
+            Canvas = Reader->viewport();
+        }
+        QTRY_VERIFY(Canvas && Canvas->isVisible());
+        const auto Center = Canvas->rect().center();
+        QHelpEvent Hover(QEvent::ToolTip, Center, Canvas->mapToGlobal(Center));
+        QApplication::sendEvent(Canvas, &Hover);
+        QVERIFY2(!QToolTip::isVisible(), qPrintable(QToolTip::text()));
+
+        test::DocumentTabs Tabs(&W);
+        auto* Tab = Tabs.tabButton(Tabs.currentIndex());
+        QVERIFY(Tab);
+        QCOMPARE(Tab->toolTip(), QStringLiteral("1.png"));
     }
     void fullscreenKeepsWorkspaceChromeHidden_data()
     {
