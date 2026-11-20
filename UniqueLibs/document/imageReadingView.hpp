@@ -93,6 +93,7 @@ class ImageReadingView final : public QAbstractScrollArea
         QRectF rect_;
         QRect crop_;
     };
+    QSizeF webtoonPageSize(const QSize &SourceSize) const;
     QList<Placement> placements(int Index = -1) const;
     int groupCount(int Index) const;
     bool layoutReady(int Index) const;
@@ -142,6 +143,7 @@ class ImageReadingView final : public QAbstractScrollArea
     std::shared_ptr<std::stop_source> bookStop_ = std::make_shared<std::stop_source>();
     int workers_ = 0, index_ = 0;
     int fit_ = hc::defaults::edit::ImageReading()["fit"].toInt();
+    int webtoonFit_ = 2;
     int splitPart_ = hc::defaults::edit::ImageReading()["part"].toInt();
     int gap_ = hc::defaults::edit::ImageReading()["gap"].toInt();
     Mode mode_ = Mode(hc::defaults::edit::ImageReading()["mode"].toInt());

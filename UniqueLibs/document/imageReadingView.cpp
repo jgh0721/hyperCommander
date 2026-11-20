@@ -110,8 +110,7 @@ ImageReadingView::ImageReadingView(QWidget *Parent) : QAbstractScrollArea(Parent
                     qreal Y = 0, Pos = scrollPosition();
                     for (int I = 0; I < sizes_.size(); ++I)
                     {
-                        const auto S = sizes_[I];
-                        const qreal H = (viewport()->width() * zoom_) * S.height() / qMax(1, S.width());
+                        const qreal H = webtoonPageSize(sizes_[I]).height();
                         if (Y + H > Pos)
                         {
                             index_ = I;
@@ -255,6 +254,8 @@ void ImageReadingView::Load(std::shared_ptr<ImageBook> Book, const QImage &First
         bookmark_ = Entry["bookmark"].toObject();
         gap_ = qBound(0, Entry["gap"].toInt(hc::defaults::edit::ImageReading()["gap"].toInt()), 200);
         fit_ = qBound(0, Entry["fit"].toInt(hc::defaults::edit::ImageReading()["fit"].toInt()), 3);
+        // Older records shared the comic fit, with only original size and fit to width in webtoon mode.
+        webtoonFit_ = qBound(0, Entry["webtoonFit"].toInt(fit_ == 0 ? 0 : 2), 2);
         brightness_ = qBound(-1., Entry["brightness"].toDouble(hc::defaults::edit::ImageReading()["brightness"].toDouble()), 1.);
         contrast_ = qBound(.1, Entry["contrast"].toDouble(hc::defaults::edit::ImageReading()["contrast"].toDouble()), 3.);
         gamma_ = qBound(.1, Entry["gamma"].toDouble(hc::defaults::edit::ImageReading()["gamma"].toDouble()), 5.);
@@ -386,7 +387,10 @@ void ImageReadingView::SetSplit(bool Enabled)
 }
 void ImageReadingView::SetFit(int Mode)
 {
-    fit_ = qBound(0, Mode, 3);
+    if (mode_ == Webtoon)
+        webtoonFit_ = qBound(0, Mode, 2);
+    else
+        fit_ = qBound(0, Mode, 3);
     zoom_ = 1;
     rebuild();
     changed();
@@ -448,6 +452,16 @@ void ImageReadingView::rememberSize(int Page, QSize Size)
     knownSizes_.insert(Page); sizes_[Page] = Size;
     if (ChangedSize && (mode_ == Webtoon || Page == index_ || Page == index_+1)) rebuild();
 }
+QSizeF ImageReadingView::webtoonPageSize(const QSize &SourceSize) const
+{
+    const qreal WidthScale = qreal(viewport()->width()) / qMax(1, SourceSize.width());
+    qreal Scale = 1.;
+    if (webtoonFit_ == 1)
+        Scale = qMin(WidthScale, qreal(viewport()->height()) / qMax(1, SourceSize.height()));
+    else if (webtoonFit_ == 2)
+        Scale = WidthScale;
+    return QSizeF(SourceSize) * (Scale * zoom_);
+}
 QList<ImageReadingView::Placement> ImageReadingView::placements(int Index) const
 {
     if (Index < 0) Index = index_;
@@ -462,7 +476,8 @@ QList<ImageReadingView::Placement> ImageReadingView::placements(int Index) const
         for (int I = 0; I < sizes_.size(); ++I)
         {
             const auto S = sizes_[I];
-            const qreal Width = W * zoom_, Height = Width * S.height() / qMax(1, S.width());
+            const auto Size = webtoonPageSize(S);
+            const qreal Width = Size.width(), Height = Size.height();
             if (Y + Height >= YScroll - H && Y <= YScroll + 3 * H)
             {
                 // Round shared document edges before scrolling. Adjacent images
@@ -470,7 +485,8 @@ QList<ImageReadingView::Placement> ImageReadingView::placements(int Index) const
                 // changes the render size/cache key by a pixel.
                 const qreal Dpr=devicePixelRatioF();
                 const auto Top=qRound64(Y*Dpr),Bottom=qRound64((Y+Height)*Dpr),Scroll=qRound64(YScroll*Dpr);
-                const auto Left=qRound64((qMax(qreal(0),(W-Width)/2)-XScroll)*Dpr);
+                const auto Overflow = qMax(qreal(0), Width - W);
+                const auto Left=qRound64((qMax(qreal(0),(W-Width)/2)-qMin(XScroll, Overflow))*Dpr);
                 Out << Placement{I,QRectF(Left/Dpr,(Top-Scroll)/Dpr,qRound64(Width*Dpr)/Dpr,(Bottom-Top)/Dpr),QRect(QPoint(),S)};
             }
             Y += Height + gap_;
@@ -523,9 +539,11 @@ void ImageReadingView::rebuild(bool KeepAnchor)
     {
         if (mode_ == Webtoon)
         {
-            for (const auto &S : sizes_)
-                extent_ += viewport()->width() * zoom_ * S.height() / qMax(1, S.width()) + gap_;
-            width_ = viewport()->width() * zoom_;
+            for (const auto &S : sizes_) {
+                const auto Size = webtoonPageSize(S);
+                extent_ += Size.height() + gap_;
+                width_ = qMax(width_, Size.width());
+            }
         }
         else
         {
@@ -844,9 +862,8 @@ void ImageReadingView::GoTo(int Index, double Relative)
     {
         qreal Y = 0;
         for (int I = 0; I < Index; ++I)
-            Y += viewport()->width() * zoom_ * sizes_[I].height() / qMax(1, sizes_[I].width()) + gap_;
-        Y += qBound(0., Relative, 1.) * viewport()->width() * zoom_ * sizes_[Index].height() /
-             qMax(1, sizes_[Index].width());
+            Y += webtoonPageSize(sizes_[I]).height() + gap_;
+        Y += relative_ * webtoonPageSize(sizes_[Index]).height();
         setScrollPosition(Y);
     }
     else
@@ -1126,18 +1143,9 @@ void ImageReadingView::ToggleAnimation()
 }
 QJsonObject ImageReadingView::State() const
 {
-    double Relative = 0;
-    if (book_ && !sizes_.isEmpty())
-    {
-        qreal Y = 0;
-        if (mode_ == Webtoon)
-            for (int I = 0; I < index_; ++I)
-                Y += viewport()->width() * zoom_ * sizes_[I].height() / qMax(1, sizes_[I].width()) + gap_;
-        const auto Height =
-            mode_ == Webtoon ? viewport()->width() * zoom_ * sizes_[index_].height() / qMax(1, sizes_[index_].width())
-                             : extent_;
-        Relative = Height > 0 ? qBound(0., (scrollPosition() - Y) / Height, 1.) : 0;
-    }
+    double Relative = relative_;
+    if (mode_ != Webtoon)
+        Relative = book_ && !sizes_.isEmpty() && extent_ > 0 ? qBound(0., scrollPosition() / extent_, 1.) : 0;
     int LastPage=index_;
     if(mode_!=Webtoon){const auto Places=placements();for(const auto& Place:Places)LastPage=qMax(LastPage,Place.page_);}
     return {{"presentedPage",presentedPage_},{"presentedLastPage",presentedLastPage_},
@@ -1153,7 +1161,7 @@ QJsonObject ImageReadingView::State() const
             {"book", book_ ? book_->path_ : QString{}},
             {"mode", int(mode_)},
             {"modeOrigin",modeOrigin_},{"readingAnalysis",book_?book_->readingAnalysis_.Json():QJsonObject{}},
-            {"relative", mode_ == Webtoon ? relative_ : Relative},
+            {"relative", Relative},
             {"rtl", rtl_},
             {"cover", cover_},
             {"split", split_},
@@ -1162,7 +1170,7 @@ QJsonObject ImageReadingView::State() const
             {"zoom", zoom_},
             {"automaticNext", automaticNext_},
             {"openingVolume", volumePending_},
-            {"fit", fit_},
+            {"fit", mode_ == Webtoon ? webtoonFit_ : fit_},
             {"gap", gap_},
             {"brightness", brightness_},
             {"contrast", contrast_},
@@ -1208,6 +1216,8 @@ void ImageReadingView::persist()
         Root = Doc.object();
     }
     auto Entry = State();
+    Entry["fit"] = fit_;
+    Entry["webtoonFit"] = webtoonFit_;
     Entry["revision"] = book_->revision_;
     Entry["pageId"] = book_->pages_[index_].id_;
     Entry["saved"] = double(QDateTime::currentMSecsSinceEpoch());
@@ -1343,9 +1353,8 @@ QMenu *ImageReadingView::CreateContextMenu(QWidget *Parent)
     auto *Fits = new QActionGroup(Fit);
     const QStringList FitNames{tr("원본 크기"), tr("창에 맞춤"), tr("너비 맞춤"), tr("높이 맞춤")};
     const char *FitIds[] = {"fitOriginal", "fitWindow", "fitWidth", "fitHeight"};
-    // A webtoon fills the width unless the original size was chosen.
-    const int CurrentFit = Strip ? (fit_ == 0 ? 0 : 2) : fit_;
-    for (const int Value : Strip ? QList<int>{2, 0} : QList<int>{1, 2, 3})
+    const int CurrentFit = Strip ? webtoonFit_ : fit_;
+    for (const int Value : Strip ? QList<int>{1, 2, 0} : QList<int>{1, 2, 3})
         Fits->addAction(Check(Fit, FitIds[Value], FitNames[Value], CurrentFit == Value, [this, Value](bool) { SetFit(Value); }));
     if (Strip)
     {

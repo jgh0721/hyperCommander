@@ -114,7 +114,7 @@ ImageReadingNavigator::ImageReadingNavigator(ImageReadingView *Reader) : QWidget
     previousVolume_ = Button("imageNavigatorPreviousVolume", tr("이전 권"), Glyph::PreviousVolume);
     previous_ = Button("imageNavigatorPrevious", tr("이전 쪽"), Glyph::Previous);
     fit_ = new QComboBox(this); fit_->setObjectName("imageNavigatorFit"); fit_->setAccessibleName(tr("이미지 맞춤"));
-    fit_->addItems({tr("원본 크기"), tr("창에 맞춤"), tr("너비 맞춤"), tr("높이 맞춤")}); Buttons->addWidget(fit_);
+    Buttons->addWidget(fit_);
     minus_ = Button("imageNavigatorZoomOut", tr("축소"), Glyph::Minus);
     plus_ = Button("imageNavigatorZoomIn", tr("확대"), Glyph::Plus);
     next_ = Button("imageNavigatorNext", tr("다음 쪽"), Glyph::Next);
@@ -136,7 +136,7 @@ ImageReadingNavigator::ImageReadingNavigator(ImageReadingView *Reader) : QWidget
         lastError_.clear(); message_.stop(); emit ModeRequested(Index + 1);
     });
     connect(this, &ImageReadingNavigator::ModeRequested, Reader, [Reader](int Mode) { Reader->SetMode(ImageReadingView::Mode(Mode)); });
-    connect(fit_, &QComboBox::activated, Reader, &ImageReadingView::SetFit);
+    connect(fit_, &QComboBox::activated, Reader, [this, Reader](int Row) { Reader->SetFit(fit_->itemData(Row).toInt()); });
     connect(pages_, &QToolButton::clicked, this, &ImageReadingNavigator::ShowPages);
     connect(pin_, &QToolButton::toggled, this, [this](bool On) {
         if (!reader_->State()["private"].toBool() && !qApp->property("privateReading").toBool())
@@ -214,8 +214,16 @@ void ImageReadingNavigator::Sync()
     if (!eligible_) { idle_.stop(); hide(); return; }
     const bool Webtoon = Mode == ImageReadingView::Webtoon;
     { const QSignalBlocker Block(mode_); mode_->setCurrentIndex(Mode - 1); }
-    { const QSignalBlocker Block(fit_); fit_->setCurrentIndex(Webtoon ? 2 : S["fit"].toInt()); }
-    fit_->setEnabled(!Webtoon);
+    {
+        const QSignalBlocker Block(fit_);
+        if (lastMode_ != Mode) {
+            const QStringList Names{tr("원본 크기"), tr("창에 맞춤"), tr("너비 맞춤"), tr("높이 맞춤")};
+            fit_->clear();
+            for (const int Fit : Webtoon ? QList<int>{1, 2, 0} : QList<int>{0, 1, 2, 3})
+                fit_->addItem(Names[Fit], Fit);
+        }
+        fit_->setCurrentIndex(fit_->findData(S["fit"].toInt()));
+    }
     if (!progress_->isSliderDown()) {
         const QSignalBlocker Block(progress_);
         progress_->setRange(0, Webtoon ? 1000000 : qMax(0, Count - 1));

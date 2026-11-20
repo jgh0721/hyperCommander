@@ -1471,6 +1471,47 @@ class ImageReadingTests : public QObject
         auto *Nav = Reader->findChild<ImageReadingNavigator *>(); QVERIFY(Nav); QTRY_VERIFY(Nav->isVisible());
         auto *Slider = Nav->findChild<QSlider *>("imageNavigatorProgress"); QVERIFY(Slider);
         auto *Pin = Nav->findChild<QToolButton *>("imageNavigatorPin"); QVERIFY(Pin); Pin->setChecked(true);
+        if (Webtoon) {
+            auto *Fit = Nav->findChild<QComboBox *>("imageNavigatorFit"); QVERIFY(Fit);
+            QCOMPARE(Fit->count(), 3);
+            QCOMPARE(Fit->itemText(0), QStringLiteral("창에 맞춤"));
+            QCOMPARE(Fit->currentText(), QStringLiteral("너비 맞춤"));
+            QCOMPARE(Fit->itemText(2), QStringLiteral("원본 크기"));
+            const auto ChooseFit = [Fit](int Row) {
+                QTest::mouseClick(Fit, Qt::LeftButton);
+                QTRY_VERIFY(Fit->view()->isVisible());
+                const auto Index = Fit->model()->index(Row, 0);
+                // The popup guards against selecting a row on the release that opened it.
+                QTest::qWait(QApplication::doubleClickInterval() + 1);
+                QTest::mouseClick(Fit->view()->viewport(), Qt::LeftButton, Qt::NoModifier, Fit->view()->visualRect(Index).center());
+                QTRY_VERIFY(!Fit->view()->isVisible());
+            };
+            const auto VisibleWidth = [Reader] {
+                const auto Image = Reader->viewport()->grab().toImage();
+                int Width = 0;
+                for (int X = 0; X < Image.width(); ++X) {
+                    const auto Pixel = Image.pixelColor(X, 4);
+                    if (Pixel.red() > 200 && Pixel.green() < 70 && Pixel.blue() < 70) ++Width;
+                }
+                return Width / Image.devicePixelRatio();
+            };
+            Reader->GoTo(0, .25);
+            QTRY_VERIFY(qAbs(VisibleWidth() - Reader->viewport()->width()) <= 2.);
+            ChooseFit(2);
+            QCOMPARE(Reader->State()["fit"].toInt(), 0);
+            QCOMPARE(Reader->State()["relative"].toDouble(), .25);
+            QTRY_VERIFY(qAbs(VisibleWidth() - Picture().width()) <= 2.);
+            ChooseFit(0);
+            QCOMPARE(Reader->State()["fit"].toInt(), 1);
+            const auto Source = Picture().size();
+            const qreal WindowWidth = qMin(qreal(Reader->viewport()->width()),
+                                          qreal(Reader->viewport()->height()) * Source.width() / Source.height());
+            QTRY_VERIFY(qAbs(VisibleWidth() - WindowWidth) <= 2.);
+            ChooseFit(1);
+            QCOMPARE(Reader->State()["fit"].toInt(), 2);
+            QCOMPARE(Fit->currentText(), QStringLiteral("너비 맞춤"));
+            QTRY_VERIFY(qAbs(VisibleWidth() - Reader->viewport()->width()) <= 2.);
+        }
         for (const auto *Name : {"imageNavigatorPreviousVolume", "imageNavigatorPrevious", "imageNavigatorNext", "imageNavigatorNextVolume"}) {
             auto *Button = Nav->findChild<QToolButton *>(Name); QVERIFY(Button); QVERIFY(Button->isVisible());
             QVERIFY(Button->text().isEmpty()); QVERIFY(!Button->icon().isNull()); QVERIFY(!Button->accessibleName().isEmpty());
@@ -1535,10 +1576,25 @@ class ImageReadingTests : public QObject
         Modes->setCurrentIndex(1); emit Modes->activated(1);
         QCOMPARE(Reader->State()["mode"].toInt(), int(ImageReadingView::Webtoon));
         QCOMPARE(Pane->findChild<QComboBox *>("imageReadingMode")->currentIndex(), 2);
+        QMenu *FitMenu = nullptr;
+        for (auto *Action : Pane->Contribution().viewActions_)
+            if (Action->text() == QStringLiteral("맞춤")) FitMenu = Action->menu();
+        QVERIFY(FitMenu);
+        emit FitMenu->aboutToShow();
+        const auto Fits = FitMenu->actions();
+        QCOMPARE(Fits.size(), 3);
+        QCOMPARE(Fits[0]->text(), QStringLiteral("창에 맞춤"));
+        QVERIFY(Fits[1]->isChecked());
+        Fits[0]->trigger();
+        QCOMPARE(Reader->State()["fit"].toInt(), 1);
         Modes->setCurrentIndex(0); emit Modes->activated(0);
         auto *Fit = Nav->findChild<QComboBox *>("imageNavigatorFit"); Fit->setCurrentIndex(3); emit Fit->activated(3);
         QCOMPARE(Reader->State()["fit"].toInt(), 3);
         QCOMPARE(Pane->findChild<QComboBox *>("imageReadingFit")->currentIndex(), 3);
+        Modes->setCurrentIndex(1); emit Modes->activated(1);
+        QCOMPARE(Reader->State()["fit"].toInt(), 1);
+        Modes->setCurrentIndex(0); emit Modes->activated(0);
+        QCOMPARE(Reader->State()["fit"].toInt(), 3);
         QTest::mouseClick(Nav->findChild<QToolButton *>("imageNavigatorZoomIn"), Qt::LeftButton);
         QVERIFY(Reader->State()["zoom"].toDouble() > 1);
         QCOMPARE(Nav->findChild<QToolButton *>("imageNavigatorMore")->menu(), Pane->findChild<QMenu *>("imageReadingOptions"));
@@ -1839,7 +1895,7 @@ class ImageReadingTests : public QObject
         const auto Sub = [&Items](QMenu *Of, const char *Name) {
             auto *Action = Of->findChild<QAction *>(QString::fromLatin1(Name)); return Action && Action->menu() ? Items(Action->menu()) : QStringList{"missing"};
         };
-        const QStringList Fits = Webtoon ? QStringList{QStringLiteral("너비 맞춤"), QStringLiteral("원본 크기")}
+        const QStringList Fits = Webtoon ? QStringList{QStringLiteral("창에 맞춤"), QStringLiteral("너비 맞춤"), QStringLiteral("원본 크기")}
                                          : QStringList{QStringLiteral("창에 맞춤"), QStringLiteral("너비 맞춤"), QStringLiteral("높이 맞춤")};
         const QStringList Corrections = Webtoon ? QStringList{QStringLiteral("회색조"), QStringLiteral("색 반전")}
                                                 : QStringList{QStringLiteral("회색조"), QStringLiteral("색 반전"), QStringLiteral("밝기…")};

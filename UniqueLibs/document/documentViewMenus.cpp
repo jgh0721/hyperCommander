@@ -485,7 +485,7 @@ namespace hc::document
             const bool Reader = Kind != DocumentViewKind::Image;
             const int Current = Reader ? Reading->State()["fit"].toInt() : int(Image->fitMode());
             const QStringList Names{tr("원본 크기"), tr("창에 맞춤"), tr("너비 맞춤"), tr("높이 맞춤"), tr("늘림")};
-            const QList<int> Order = Kind == DocumentViewKind::Webtoon ? QList<int>{2, 0} : Reader ? QList<int>{1, 2, 3, 0} : QList<int>{1, 2, 3, 0, 4};
+            const QList<int> Order = Kind == DocumentViewKind::Webtoon ? QList<int>{1, 2, 0} : Reader ? QList<int>{1, 2, 3, 0} : QList<int>{1, 2, 3, 0, 4};
             for (const int Fit : Order) {
                 auto* Row = Check(Menu, Names[Fit], Current == Fit); Group->addAction(Row);
                 QObject::connect(Row, &QAction::triggered, Menu, [Image, Reading, Reader, Fit] {
