@@ -416,7 +416,8 @@ namespace hc::document
                 auto* Popup = DocumentStatusPopup::Open(Anchor, Book ? tr("맞춤 — %1").arg(Fits.value(Current))
                     : tr("맞춤 — %1 · %2").arg(Fits.value(Current), Percent(Image->displayScalePercent())));
                 // Chips follow the prototype order (창에 맞춤 · 너비 · 높이 · 원본 · 늘림); values are FitMode.
-                const QList<int> Order = Book ? QList<int>{1, 2, 3, 0} : QList<int>{1, 2, 3, 0, 4};
+                const bool Webtoon = Book && State["mode"].toInt() == ImageReadingView::Webtoon;
+                const QList<int> Order = Webtoon ? QList<int>{1, 2, 0} : Book ? QList<int>{1, 2, 3, 0} : QList<int>{1, 2, 3, 0, 4};
                 QStringList Labels; for (const int Value : Order) Labels << Fits[Value];
                 Popup->AddChips(Popup->Root(), Labels, Order.indexOf(Current), [Image, Reading, Book, Order, Done](int Index) {
                     if (Book) Reading->SetFit(Order[Index]); else Image->setFitMode(static_cast<QImageView::FitMode>(Order[Index]));
