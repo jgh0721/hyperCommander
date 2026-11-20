@@ -118,13 +118,13 @@ BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, Q
     setObjectName("hc.batchRename"); resize(1150, 820); SetSummary(tr("%1개 · %2").arg(Selection ? Selection->Count() : Paths.size()).arg(Paths.isEmpty() ? QString() : QDir::toNativeSeparators(QFileInfo(Paths.first()).absolutePath())));
     RestoreToolGeometry(this, "batchRenameGeometry");
     previewTimer_ = new QTimer(this); previewTimer_->setSingleShot(true); previewTimer_->setInterval(80);
-    controls_ = new QWidget(this); auto* Cards = new QGridLayout(controls_); Cards->setContentsMargins(0,0,0,0); BodyLayout()->addWidget(controls_);
+    controls_ = new QWidget(this); auto* Cards = new QGridLayout(controls_); Cards->setContentsMargins(0,0,0,0); BodyLayout()->setSpacing(6); BodyLayout()->addWidget(controls_);
     const auto Card = [&](int Column, const QString& Title) { auto* W = new fm::ui::Card(controls_); auto* F = new QFormLayout(W); F->addRow(new QLabel(Title, W)); Cards->addWidget(W, 0, Column); return F; };
-    const auto Edit = [&](QFormLayout* Form, const QString& Label, const QString& Value, const char* Object) { auto* E = new QLineEdit(Value, controls_); E->setObjectName(Object); Form->addRow(Label, E); connect(E, &QLineEdit::textChanged, this, [this] { preview(); }); return E; };
+    const auto Edit = [&](QFormLayout* Form, const QString& Label, const QString& Value, const char* Object) { auto* E = new QLineEdit(Value, controls_); E->setObjectName(Object); E->setMinimumWidth(40); E->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); Form->addRow(Label, E); connect(E, &QLineEdit::textChanged, this, [this] { preview(); }); return E; };
     auto* Names = Card(0, tr("이름 마스크")); mask_ = Edit(Names, tr("이름(&M)"), "[N]", "hc.rename.mask"); extension_ = Edit(Names, tr("확장자(&E)"), "[E]", "hc.rename.extension");
     auto* Tokens = new QWidget(controls_); auto* TokenLayout = new QGridLayout(Tokens); TokenLayout->setContentsMargins(0,0,0,0);
     int T = 0; for (const auto& Token : {"[N]", "[E]", "[C]", "[P]", "[Y]", "[M]", "[D]", "[t]"}) {
-        auto* Button = new fm::ui::Button(Token, Tokens); Button->setAutoDefault(false); TokenLayout->addWidget(Button, T/4, T%4); ++T;
+        const QStringList Labels{tr("이름 [N]"), tr("확장자 [E]"), tr("번호 [C]"), tr("폴더 [P]"), tr("연도 [Y]"), tr("월 [M]"), tr("일 [D]"), tr("시각 [t]")}; auto* Button = new fm::ui::Button(Labels[T], Tokens); Button->setToolTip(tr("이름 마스크에 %1 삽입").arg(Labels[T])); Button->setAutoDefault(false); TokenLayout->addWidget(Button, T/4, T%4); ++T;
         connect(Button, &QPushButton::clicked, this, [this, Text = QString(Token)] { mask_->insert(Text); mask_->setFocus(); });
     } Names->addRow(Tokens);
     auto* Search = Card(1, tr("찾기 및 바꾸기")); find_ = Edit(Search, tr("찾기(&F)"), {}, "hc.rename.find"); replace_ = Edit(Search, tr("바꾸기(&R)"), {}, "hc.rename.replace");
@@ -136,12 +136,12 @@ BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, Q
     start_ = new QSpinBox(controls_); step_ = new QSpinBox(controls_); digits_ = new QSpinBox(controls_);
     start_->setRange(0, 100000000); step_->setRange(0, 100000); digits_->setRange(1, 12); start_->setValue(1); step_->setValue(1); digits_->setValue(3);
     start_->setObjectName("hc.rename.start"); step_->setObjectName("hc.rename.step"); digits_->setObjectName("hc.rename.digits");
-    Counter->addRow(tr("시작"), start_); Counter->addRow(tr("증가"), step_); Counter->addRow(tr("자릿수"), digits_);
-    auto* Dates = Card(3, tr("날짜 기준 · 프리셋")); dateSource_ = new QComboBox(controls_); dateSource_->setObjectName("hc.rename.dateSource"); dateSource_->addItems({tr("수정한 날짜"), tr("촬영한 날짜(EXIF · JPEG/TIFF)")}); Dates->addRow(dateSource_);
+    Counter->addRow(tr("시작(&B)"), start_); Counter->addRow(tr("증가(&G)"), step_); Counter->addRow(tr("자릿수(&D)"), digits_);
+    auto* Dates = Card(3, tr("날짜 기준 · 프리셋")); dateSource_ = new QComboBox(controls_); dateSource_->setObjectName("hc.rename.dateSource"); dateSource_->addItems({tr("수정한 날짜"), tr("촬영한 날짜(EXIF · JPEG/TIFF)")}); dateSource_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon); dateSource_->setMinimumContentsLength(10); Dates->addRow(dateSource_);
     dateOffset_ = new QSpinBox(controls_); dateOffset_->setObjectName("hc.rename.dateOffset"); dateOffset_->setRange(-864000,864000); Dates->addRow(tr("날짜 오프셋(초)"), dateOffset_);
-    date_ = Edit(Dates, tr("[date] 형식"), "yyyy-MM-dd", "hc.rename.date"); preset_ = new QComboBox(controls_); preset_->setEditable(true); preset_->setObjectName("hc.rename.preset"); Dates->addRow(tr("프리셋"), preset_);
+    date_ = Edit(Dates, tr("[date] 형식"), "yyyy-MM-dd", "hc.rename.date"); preset_ = new QComboBox(controls_); preset_->setEditable(true); preset_->setObjectName("hc.rename.preset"); Dates->addRow(tr("프리셋(&P)"), preset_);
     const auto Stored = hc::settings::AppSettings().Read(hc::settings::Section::Options).toObject()["renamePresets"].toObject(); preset_->addItems(Stored.keys());
-    auto* Save = new fm::ui::Button(tr("저장"), controls_); auto* Load = new fm::ui::Button(tr("불러오기"), controls_); auto* Delete = new fm::ui::Button(tr("삭제"), controls_);
+    auto* Save = new fm::ui::Button(tr("저장(&V)"), controls_); auto* Load = new fm::ui::Button(tr("불러오기(&W)"), controls_); auto* Delete = new fm::ui::Button(tr("삭제(&K)"), controls_);
     Save->setObjectName("hc.rename.presetSave"); Load->setObjectName("hc.rename.presetLoad"); Delete->setObjectName("hc.rename.presetDelete");
     auto* PresetButtons = new QWidget(controls_); auto* PresetLayout = new QHBoxLayout(PresetButtons); PresetLayout->setContentsMargins(0,0,0,0);
     for (auto* B : {Save, Load, Delete}) { B->setAutoDefault(false); PresetLayout->addWidget(B); } Dates->addRow(PresetButtons);
@@ -170,7 +170,7 @@ BatchRenameDialog::BatchRenameDialog(const QStringList& Paths, bool Supported, Q
     auto* Modes = new fm::ui::SegmentedControl({tr("1줄"), tr("2줄"), tr("자동")}, this); Modes->setObjectName("hc.rename.mode"); Modes->setCurrentIndex(2);
     auto* ViewOptions = new QHBoxLayout; BodyLayout()->addLayout(ViewOptions); ViewOptions->addWidget(Modes); ViewOptions->addStretch();
     auto* HelpButton = new fm::ui::Button(tr("마스크 도움말(&H)"), this); HelpButton->setAutoDefault(false); HelpButton->setObjectName("hc.rename.helpButton"); ViewOptions->addWidget(HelpButton);
-    comparison_ = new fm::ui::RenameComparisonView(this); comparison_->setObjectName("hc.rename.preview"); comparison_->setMinimumHeight(280); BodyLayout()->addWidget(comparison_, 1);
+    comparison_ = new fm::ui::RenameComparisonView(this); comparison_->setObjectName("hc.rename.preview"); comparison_->setMinimumHeight(60); comparison_->verticalHeader()->hide(); comparison_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents); BodyLayout()->addWidget(comparison_, 1);
     connect(Modes, &fm::ui::SegmentedControl::currentIndexChanged, this, [this](int Mode) { comparison_->SetMode(Mode); });
     summary_ = new hc::qt::ElidedLabel(this); summary_->setObjectName("hc.rename.summary"); BodyLayout()->addWidget(summary_);
     auto* Pages = new QHBoxLayout; BodyLayout()->addLayout(Pages);
