@@ -1346,9 +1346,6 @@ void CGridView::ApplyDisplaySettings()
 void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
 {
     startupPaints_.clear();
-    if( ColorScheme.Name.isEmpty() == true )
-        return;
-
     if( view_ == nullptr )
         return;
 
@@ -1386,13 +1383,6 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
     recordColors_ = fm::style::themeColorsFor(this);
     recordColors_.setColor(fm::style::Token::Surface, ColorScheme.FileList_BGColor);
     recordColors_.setColor(fm::style::Token::Fg, ColorScheme.FileList_FGColor);
-    // Legacy defaults used a neutral mark color. The record painter uses
-    // white-on-accent selection; only explicit user colors override its tokens.
-    if (ColorScheme.explicitColors_.contains("listSelection")) {
-        recordColors_.setColor(fm::style::Token::Sel, ColorScheme.FileList_Selected);
-        recordColors_.setColor(fm::style::Token::InvSel, ColorScheme.FileList_Selected);
-    }
-    if (ColorScheme.explicitColors_.contains("listCursor")) recordColors_.setColor(fm::style::Token::InvCur, ColorScheme.FileList_Cursor);
     listAppearance_.invertCursor = ColorScheme.IsInverseCursor;
     listAppearance_.invertSelection = ColorScheme.IsInverseSelect;
     BaseOpts.setTransparentBackground(false);
@@ -1415,11 +1405,8 @@ void CGridView::ApplyColorScheme( const TyColorScheme& ColorScheme )
 
     syncViewportBackground();
 
-    if( ColorScheme.FileList_Selected.isValid() == true )
-        BaseOpts.setSelectedBackgroundColor( ColorScheme.FileList_Selected );
-
-    if( ColorScheme.FileList_Cursor.isValid() == true )
-        BaseOpts.setRowFocusColor( ColorScheme.FileList_Cursor );
+    BaseOpts.setSelectedBackgroundColor(recordColors_[fm::style::Token::SelIn]);
+    BaseOpts.setRowFocusColor(recordColors_[fm::style::Token::InvCur]);
 
     view_->endUpdate();
     requestPresentation();
@@ -3278,9 +3265,7 @@ void CQuickView::openContent(QtViewerHost& Host, std::shared_ptr<hc::storage::IC
                 if (!Path.isEmpty()) handlerFiles_.insert(Path, Stamp(Path));
     }
     const auto& Catalog = *handlerCatalog_;
-    auto Default = Catalog.defaultView_;
-    const auto Override = Catalog.overrides_[QFileInfo(QString::fromStdString(Entry.name_)).suffix().toLower()].toObject()["view"].toString();
-    if (!Override.isEmpty()) Default = Override.toStdString();
+    const auto& Default = Catalog.defaultView_;
     hc::document::HandlerSelection Selection; Selection.names_ = {Entry.name_}; Selection.textContent_ = {TextContent};
     const auto Resolution = hc::document::DocumentHandlerResolver::Resolve(Catalog.registry_, hc::document::DocumentIntent::View, Selection, Default);
     std::vector<QtViewerSurface::PluginViewerChoice> Choices;

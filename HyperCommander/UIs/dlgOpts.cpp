@@ -16,7 +16,6 @@
 #include "menuBarSettingsPage.hpp"
 #include "themeSettingsPage.hpp"
 #include "keyboardSettingsPage.hpp"
-#include "legacySettingsPage.hpp"
 #include "UniqueLibs/passwords/passwordUi.hpp"
 #include <QDir>
 #include <QStyleHints>
@@ -73,7 +72,6 @@ QWidget* SwitchRow(QCheckBox* Check, QWidget* Parent)
     return Row;
 }
 }
-#include "fileSetMgr.hpp"
 
 QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     : QBaseUI( parent, flags )
@@ -82,7 +80,7 @@ QMainOpts::QMainOpts( QWidget* parent, Qt::WindowFlags flags )
     hc::settings::AppSettings().BeginEdit();
     connect(this, &QDialog::finished, this, [] {
         hc::settings::AppSettings().DiscardEdit();
-        TyStColorSchemeMgr::GetInstance()->Refresh(); TyStFileSetMgr::GetInstance()->Refresh();
+        TyStColorSchemeMgr::GetInstance()->Refresh();
         TyStPlugInMgr::GetInstance()->Refresh(); TyStCommandMgr::GetInstance()->Refresh();
     });
     ui.setupUi( this );
@@ -210,7 +208,7 @@ QMainOpts::~QMainOpts()
 {
     if (hc::settings::AppSettings().Editing()) {
         hc::settings::AppSettings().DiscardEdit();
-        TyStColorSchemeMgr::GetInstance()->Refresh(); TyStFileSetMgr::GetInstance()->Refresh();
+        TyStColorSchemeMgr::GetInstance()->Refresh();
         TyStPlugInMgr::GetInstance()->Refresh(); TyStCommandMgr::GetInstance()->Refresh();
     }
 }
@@ -307,14 +305,9 @@ void QMainOpts::LoadSettings()
         else if (auto* Seconds = findChild<QSpinBox*>(Name)) Seconds->setValue(It.value().toInt());
         else if (auto* Text = findChild<QLineEdit*>(Name)) Text->setText(It.value().toString());
     }
-    if (auto* Preset = findChild<QComboBox*>("hc.settings.shortcutPreset")) {
-        const QSignalBlocker Block(Preset); Preset->setCurrentIndex(qMax(0, hc::defaults::ShortcutPresetIds().indexOf(General["shortcutPreset"].toString(hc::defaults::DefaultValue("general/shortcutPreset").toString()))));
-    }
     StColorSchemeMgr->Refresh();
-    TyStFileSetMgr::GetInstance()->Refresh();
 
-    const auto SelectedScheme = StColorSchemeMgr->GetCurrentColorScheme();
-    RefreshColorScheme(SelectedScheme);
+    loadDisplayAppearance(StColorSchemeMgr->Current());
     thumbnailSettings_->Load(General.value("thumbnails").toObject());
     processServiceSettings_->Load(General.value("processService").toObject());
     audioSettings_->Load(General.value("audioPreview").toObject(),
@@ -322,7 +315,7 @@ void QMainOpts::LoadSettings()
     const auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
     themeSettings_->LoadLibrary(Appearance["watercolorPresets"].toObject());
     themeSettings_->Load(Appearance["watercolorTheme"].toObject());
-    if (auto* Theme = findChild<QComboBox*>("hc.settings.theme")) { const QSignalBlocker Block(Theme); const int Mode = General["themeMode"] == "system" ? 2 : StColorSchemeMgr->GetColorScheme(SelectedScheme).IsDarkMode ? 1 : 0; Theme->setCurrentIndex(Mode); if (auto* Card = findChild<fm::ui::ThemeModeCard*>("hc.settings.themeCard" + QString::number(Mode))) Card->setChecked(true); }
+    if (auto* Theme = findChild<QComboBox*>("hc.settings.theme")) { const QSignalBlocker Block(Theme); const int Mode = General["themeMode"] == "system" ? 2 : StColorSchemeMgr->Current().IsDarkMode ? 1 : 0; Theme->setCurrentIndex(Mode); if (auto* Card = findChild<fm::ui::ThemeModeCard*>("hc.settings.themeCard" + QString::number(Mode))) Card->setChecked(true); }
     findChild<fm::ui::AccentPicker*>("hc.settings.accent")->setEnabled(themeSettings_->isEnabled());
     findChild<QCheckBox*>("hc.settings.systemAccent")->setEnabled(themeSettings_->isEnabled());
     findChild<fm::ui::AccentPicker*>("hc.settings.accent")->setCurrent(themeSettings_->Scheme().seeds.accent);
@@ -342,10 +335,8 @@ void QMainOpts::LoadSettings()
 
     RefreshPluginList();
     TyStCommandMgr::GetInstance()->Refresh();
-    RefreshShortcuts();
     if (keyboardSettings_) keyboardSettings_->Load();
     if (passwordSettings_) passwordSettings_->Load();
-    if (legacySettings_) legacySettings_->Load(hc::settings::AppSettings().Object(), hc::settings::WorkspaceSettings().Object()["workspace"].toObject());
     themeModeEdited_ = false;
 }
 
@@ -402,11 +393,6 @@ void QMainOpts::ShowPluginSettingsPage(const QString& Binary, bool Review)
 
 bool QMainOpts::SaveSettings()
 {
-    if (legacySettings_ && !legacySettings_->Prepare()) {
-        for (int Row = 0; Row < ui.lstOptCate->count(); ++Row)
-            if (ui.lstOptCate->item(Row)->data(Qt::UserRole).toInt() == ui.stkOpts->indexOf(legacySettings_)) ui.lstOptCate->setCurrentRow(Row);
-        return false;
-    }
     if (pluginManagement_ && !pluginManagement_->Validate()) return false;
     const auto PreviousSettings = committedSettings_;
     if (menuSettings_ && !menuSettings_->Prepare()) {
@@ -555,23 +541,12 @@ bool QMainOpts::SaveSettings()
     // 열린 프로세스·서비스 보기에 새 설정을 바로 반영한다.
     hc::sys::AdminSession().SetIdleTimeout(hc::sys::Settings::Load().helperIdleMinutes * 60000);
     if (auto* Main = parentWidget()) for (auto* View : Main->findChildren<CSystemView*>()) View->ApplySettings();
-    SaveSettings_ColorScheme();
-    auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject(); Appearance["watercolorTheme"] = themeSettings_->Save(); Appearance["watercolorPresets"] = themeSettings_->SaveLibrary(); hc::settings::AppSettings().Put(hc::settings::Section::Appearance, Appearance);
-    TyStColorSchemeMgr::GetInstance()->Refresh();
-    RefreshColorScheme(selectedScheme_);
-    TyStFileSetMgr::GetInstance()->SaveSettings(); SaveSettings_PluginList();
-    TyStCommandMgr::GetInstance()->SaveSettings();
-    if (legacySettings_) {
-        auto Draft = hc::settings::AppSettings().Object();
-        if (!legacySettings_->Apply(Draft)) {
-            for (int Row = 0; Row < ui.lstOptCate->count(); ++Row)
-                if (ui.lstOptCate->item(Row)->data(Qt::UserRole).toInt() == ui.stkOpts->indexOf(legacySettings_)) ui.lstOptCate->setCurrentRow(Row);
-            return false;
-        }
-        if (!hc::settings::AppSettings().Replace(Draft)) return false;
-        TyStColorSchemeMgr::GetInstance()->Refresh();
-        RefreshColorScheme(TyStColorSchemeMgr::GetInstance()->GetCurrentColorScheme());
-    }
+    auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
+    storeDisplayAppearance(Appearance);
+    Appearance["watercolorTheme"] = themeSettings_->Save();
+    Appearance["watercolorPresets"] = themeSettings_->SaveLibrary();
+    if (!hc::settings::AppSettings().Put(hc::settings::Section::Appearance, Appearance)) return false;
+    SaveSettings_PluginList();
     if (!hc::settings::AppSettings().Commit()) {
         hc::ui::MessageDialog Message(QMessageBox::Warning, tr("설정 저장 실패"),
             tr("편집 내용은 창에 유지됩니다. 다시 읽으면 디스크의 설정으로 돌아갑니다.\n%1").arg(hc::settings::AppSettings().Error()), QMessageBox::Close, this);
@@ -604,7 +579,7 @@ bool QMainOpts::SaveSettings()
         const bool Restored = hc::settings::AppSettings().Replace(PreviousSettings) && hc::settings::AppSettings().Commit();
         hc::ui::MessageDialog::warning(this, tr("메뉴 저장 실패"), Restored ? tr("기존 설정과 메뉴를 유지했습니다. 메뉴 페이지에서 오류를 확인하세요.") : tr("메뉴 저장 및 설정 복구에 실패했습니다. 디스크 설정을 확인하세요.")); return false;
     }
-    TyStFileSetMgr::GetInstance()->Refresh(); TyStPlugInMgr::GetInstance()->Refresh();
+    TyStPlugInMgr::GetInstance()->Refresh();
     TyStCommandMgr::GetInstance()->Refresh();
     if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge()) { Bridge->ReloadMenu(); Bridge->RefreshShortcutLabels(); Bridge->RefreshFunctionBar(); }
     if (FlatChanged && parentWidget()) for (auto* Panel : parentWidget()->window()->findChildren<CmpPanel*>()) Panel->RefreshFlatProfiles();
@@ -615,8 +590,10 @@ bool QMainOpts::SaveSettings()
         thumbnailSettings_->MarkApplied();
     }
     hc::columns::PluginFields::Instance().RefreshIfChanged();
-    const auto Scheme = TyStColorSchemeMgr::GetInstance()->GetColorScheme(selectedScheme_);
-    emit TyStColorSchemeMgr::GetInstance()->sigColorSchemeChanged(Scheme);
+    auto* Colors = TyStColorSchemeMgr::GetInstance();
+    Colors->Refresh();
+    const auto Scheme = Colors->Current();
+    emit Colors->sigColorSchemeChanged(Scheme);
     emit NotifyColorSchemeChanged(Scheme);
     if (auto* Bridge = TyStCommandMgr::GetInstance()->Bridge()) Bridge->FileJobs()->ApplyDefaults();
     if (auto* Owner = parentWidget()) for (auto* Model : Owner->findChildren<CFSModel*>()) {
@@ -625,8 +602,6 @@ bool QMainOpts::SaveSettings()
             hc::settings::AppSettings().CommittedObject()["general"].toObject()["quickFind"].toObject()).everythingDisplayIntervalMs_);
     }
     committedSettings_ = hc::settings::AppSettings().Object();
-    if (legacySettings_) legacySettings_->Load(committedSettings_, hc::settings::WorkspaceSettings().Object()["workspace"].toObject());
-    if (PreviousSettings["general"].toObject()["useBuiltInShortcuts"] != committedSettings_["general"].toObject()["useBuiltInShortcuts"] && keyboardSettings_) keyboardSettings_->Load();
     if (auto* Theme = findChild<QComboBox*>("hc.settings.theme")) {
         const QSignalBlocker Block(Theme);
         const auto Mode = committedSettings_["general"].toObject()["themeMode"].toString(hc::defaults::DefaultValue("general/themeMode").toString());
@@ -639,24 +614,18 @@ bool QMainOpts::SaveSettings()
     return true;
 }
 
-void QMainOpts::SaveSettings_ColorScheme()
+void QMainOpts::storeDisplayAppearance(QJsonObject& Appearance) const
 {
-    auto* Manager = TyStColorSchemeMgr::GetInstance();
-    auto Scheme = Manager->GetColorScheme(selectedScheme_);
-    if (Scheme.Name.isEmpty()) return;
-    // Start with the complete saved scheme so removing the legacy editor never
-    // discards its colors, override intent, fonts or file-set mappings.
-    const int Mode = findChild<QComboBox*>("hc.settings.theme")->currentIndex();
-    Scheme.IsDarkMode = Mode == 1 || (Mode == 2 && qApp->styleHints()->colorScheme() == Qt::ColorScheme::Dark);
-    Scheme.IsInverseCursor = inverseCursor_->isChecked();
-    Scheme.IsInverseSelect = inverseSelection_->isChecked();
-    Scheme.Menu_Font = findChild<QFontComboBox*>("hc.settings.menuFont")->currentFont();
-    Scheme.Menu_Font.setPointSize(findChild<QSpinBox*>("hc.settings.menuFontSize")->value());
-    Scheme.Dialog_Font = findChild<QFontComboBox*>("hc.settings.dialogFont")->currentFont();
-    Scheme.Dialog_Font.setPointSize(findChild<QSpinBox*>("hc.settings.dialogFontSize")->value());
-    Scheme.FileList_Font = findChild<QFontComboBox*>("hc.settings.listFont")->currentFont();
-    Scheme.FileList_Font.setPointSize(findChild<QSpinBox*>("hc.settings.listFontSize")->value());
-    Manager->UpsertColorScheme(Scheme, true);
+    Appearance["inverseCursor"] = inverseCursor_->isChecked();
+    Appearance["inverseSelection"] = inverseSelection_->isChecked();
+    auto Fonts = Appearance["fonts"].toObject();
+    for (const auto& Role : {QStringLiteral("menu"), QStringLiteral("dialog"), QStringLiteral("list")}) {
+        auto Font = Fonts[Role].toObject();
+        Font["family"] = findChild<QFontComboBox*>("hc.settings." + Role + "Font")->currentFont().family();
+        Font["pointSize"] = findChild<QSpinBox*>("hc.settings." + Role + "FontSize")->value();
+        Fonts[Role] = Font;
+    }
+    Appearance["fonts"] = Fonts;
 }
 
 void QMainOpts::SaveSettings_PluginList()
@@ -665,11 +634,8 @@ void QMainOpts::SaveSettings_PluginList()
     TyStPlugInMgr::GetInstance()->Refresh();
 }
 
-void QMainOpts::RefreshColorScheme(const QString& SchemeName)
+void QMainOpts::loadDisplayAppearance(const TyColorScheme& Scheme)
 {
-    const auto Scheme = TyStColorSchemeMgr::GetInstance()->GetColorScheme(SchemeName);
-    if (Scheme.Name.isEmpty()) return;
-    selectedScheme_ = Scheme.Name;
     inverseCursor_->setChecked(Scheme.IsInverseCursor);
     inverseSelection_->setChecked(Scheme.IsInverseSelect);
     const QFont Fonts[]{Scheme.Menu_Font, Scheme.Dialog_Font, Scheme.FileList_Font};
@@ -698,34 +664,6 @@ void QMainOpts::RefreshPluginList()
     }
 }
 
-void QMainOpts::RefreshShortcuts()
-{
-    const auto StCommandMgr = TyStCommandMgr::GetInstance();
-    StCommandMgr->Refresh();
-
-    ui.tblShortCut->clearContents();
-    ui.tblShortCut->setRowCount( 0 );
-
-    const auto Map = StCommandMgr->Retrieve();
-    auto Keys = Map.keys();
-    std::sort(Keys.begin(), Keys.end(), [](auto Left, auto Right) { return QKeySequence(Left).toString() < QKeySequence(Right).toString(); });
-    for( const auto Key : Keys )
-    {
-        const auto CMD = Map[ Key ];
-        const auto CMD_Default = StCommandMgr->GetDefaultCMD( CMD );
-
-        const auto Row = ui.tblShortCut->rowCount();
-
-        ui.tblShortCut->setRowCount( Row + 1 );
-        ui.tblShortCut->setItem( Row, 0, new QTableWidgetItem( CMD ) );
-        const auto Defaults = hc::ui::DefaultShortcuts(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject());
-        const bool IsDefault = Defaults.value(Key) == CMD;
-        ui.tblShortCut->setItem(Row, 1, new QTableWidgetItem(IsDefault ? QKeySequence(Key).toString() : QString{}));
-        ui.tblShortCut->setItem(Row, 2, new QTableWidgetItem(IsDefault ? QString{} : QKeySequence(Key).toString()));
-        ui.tblShortCut->setItem( Row, 3, new QTableWidgetItem( CMD_Default.Desc ) );
-    }
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 /// TitleBar
 
@@ -751,24 +689,6 @@ void QMainOpts::on_lstOptCate_currentItemChanged( QListWidgetItem* Current, QLis
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Content
-
-/// Page = pdDisplay_ColorScheme
-void QMainOpts::on_btnDelShortcutCMD_clicked( bool checked )
-{
-    const auto StCommandMgr = TyStCommandMgr::GetInstance();
-    QSet< int > SelectedRows = nsHC::SelectedRowsFromTbl( ui.tblShortCut );
-
-    for( const auto Row : SelectedRows )
-    {
-        const auto Default_Key = ui.tblShortCut->item( Row, 1 )->text();
-        const auto Override_Key = ui.tblShortCut->item( Row, 2 )->text();
-
-        const QString Key = Override_Key.isEmpty() == false ? Override_Key : Default_Key;
-        StCommandMgr->DelShortcut( QKeySequence( Key )[0] );
-    }
-
-    RefreshShortcuts();
-}
 
 void QMainOpts::on_btnAddWLX_clicked( bool checked )
 {
@@ -987,11 +907,9 @@ void QMainOpts::initializeDesignPages()
         Mode->setCheckable(true); Group->addButton(Mode, I); Modes->addWidget(Mode);
     }
     connect(Group, &QButtonGroup::idClicked, this, [this, Theme](int Index) { themeModeEdited_ = true; Theme->setCurrentIndex(Index); });
-    connect(Theme, &QComboBox::currentIndexChanged, this, [this, Group, Theme](int Value) {
+    connect(Theme, &QComboBox::currentIndexChanged, this, [this, Group](int Value) {
         themeModeEdited_ = true;
         if (auto* B = Group->button(Value)) B->setChecked(true);
-        const bool Dark = Value == 1 || (Value == 2 && qApp->styleHints()->colorScheme() == Qt::ColorScheme::Dark);
-        RefreshColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
     });
     auto* Accent = new fm::ui::AccentPicker(ThemeCard); Accent->setObjectName("hc.settings.accent"); ThemeForm->addWidget(new QLabel(tr("강조색 · 버튼·진행·선택"), ThemeCard)); ThemeForm->addWidget(Accent);
     connect(Accent, &fm::ui::AccentPicker::accentChosen, this, [this](const auto& Color) { themeSettings_->SetAccent(Color); });
@@ -1215,23 +1133,6 @@ void QMainOpts::initializeDesignPages()
     auto* DetailsNote = new QLabel(tr("작업 진행 창에 파일별 처리 결과와 진단 기록을 표시합니다. 기본값은 꺼짐입니다. 오류 안내와 확인·암호 입력 요청은 이 설정과 관계없이 표시합니다. 작업 복구·진행률 저장과 독립적으로 사용합니다."), DetailsCard);
     DetailsNote->setWordWrap(true); DetailsLayout->addWidget(DetailsNote); qobject_cast<QVBoxLayout*>(Laboratory->layout())->addWidget(DetailsCard);
     qobject_cast<QVBoxLayout*>(Laboratory->layout())->addStretch();
-    auto* Keyboard = ui.pgShortcut;
-    ui.keySequenceEdit->setMaximumSequenceLength(1);
-    auto* KeyOptions = new QWidget(Keyboard); auto* KeyForm = new QFormLayout(KeyOptions);
-    auto* Preset = new QComboBox(KeyOptions); Preset->setObjectName("hc.settings.shortcutPreset");
-    Preset->addItems({tr("기존 기본값 (F5 새로 고침)"), tr("파일 작업 기본값 (F5 새로 고침 · F6 이동 · F7 새 폴더 · F8 삭제)"), tr("제품 기본값 (Ctrl+C 복사 · Ctrl+M 이동 · Ctrl+K 새 폴더)")});
-    KeyForm->addRow(tr("기본 단축키"), Preset);
-    auto* ResetKeys = new QPushButton(tr("선택한 기본값으로 단축키 초기화"), KeyOptions); ResetKeys->setObjectName("hc.settings.resetShortcuts"); KeyForm->addRow(ResetKeys);
-    auto* KeyHelp = new QLabel(tr("사용자가 지정한 키는 기본값보다 우선합니다. 변경 내용은 적용/확인으로 저장하고, 취소하면 되돌립니다.\n기능바와 메뉴에는 현재 연결된 키가 표시됩니다."), KeyOptions); KeyHelp->setWordWrap(true); KeyForm->addRow(KeyHelp);
-    if (auto* Layout = qobject_cast<QVBoxLayout*>(Keyboard->layout())) Layout->insertWidget(0, KeyOptions); else Keyboard->layout()->addWidget(KeyOptions);
-    connect(Preset, &QComboBox::currentIndexChanged, this, [this](int Index) {
-        auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject(); General["shortcutPreset"] = hc::defaults::ShortcutPresetIds().value(Index, "legacy");
-        hc::settings::AppSettings().Put(hc::settings::Section::General, General); RefreshShortcuts();
-    });
-    connect(ResetKeys, &QPushButton::clicked, this, [this] {
-        if (hc::ui::MessageDialog::question(this, tr("단축키 초기화"), tr("사용자 지정 단축키를 지우고 선택한 기본값으로 되돌리시겠습니까?")) != QMessageBox::Yes) return;
-        hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, QJsonObject{}); RefreshShortcuts();
-    });
     keyboardSettings_ = new hc::ui::KeyboardSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(keyboardSettings_);
     // Resolve page indices from widgets so removing a page cannot retarget navigation.
     menuSettings_ = new hc::ui::MenuBarSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(menuSettings_);
@@ -1240,13 +1141,12 @@ void QMainOpts::initializeDesignPages()
     processServiceSettings_ = new hc::ui::ProcessServiceSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(processServiceSettings_);
     processServiceSettings_->SetChanged([this] { ui.btnApply->setEnabled(true); });
     auto* Permissions=hc::ui::PermissionSettingsPage(ui.stkOpts); ui.stkOpts->addWidget(Permissions);
-    legacySettings_ = new hc::ui::LegacySettingsPage(ui.stkOpts); ui.stkOpts->addWidget(legacySettings_);
     passwordSettings_ = new hc::passwords::SettingsPage(ui.stkOpts); ui.stkOpts->addWidget(passwordSettings_);
     connect(passwordSettings_, &hc::passwords::SettingsPage::Changed, this, [this] { ui.btnApply->setEnabled(true); });
     const QSignalBlocker Block(ui.lstOptCate); ui.lstOptCate->clear();
     const QList<QPair<QString, int>> Pages{{tr("일반 · 모양"), ui.stkOpts->indexOf(General)}, {tr("테마 색상"), ui.stkOpts->indexOf(themeSettings_)}, {tr("파일 패널"), ui.stkOpts->indexOf(ui.pgDisplay)},
         {tr("썸네일 보기"), ui.stkOpts->indexOf(Thumbnails)}, {tr("파일 그룹 · 색상"), ui.stkOpts->indexOf(FileColorsScroll)}, {tr("열 · 사용자 정의 열"), ui.stkOpts->indexOf(ui.pgCustomColumns)},
-        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("비밀번호 관리"), ui.stkOpts->indexOf(passwordSettings_)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("오디오 미리 듣기"), ui.stkOpts->indexOf(audioSettings_)}, {tr("프로세스 · 서비스"), ui.stkOpts->indexOf(processServiceSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}, {tr("레거시"), ui.stkOpts->indexOf(legacySettings_)}};
+        {tr("파일 작업"), ui.stkOpts->indexOf(Jobs)}, {tr("비밀번호 관리"), ui.stkOpts->indexOf(passwordSettings_)}, {tr("키보드"), ui.stkOpts->indexOf(keyboardSettings_)}, {tr("관리자 권한"), ui.stkOpts->indexOf(Permissions)}, {tr("플러그인 관리"), ui.stkOpts->indexOf(ui.pgPluginManage)}, {tr("탐색"), ui.stkOpts->indexOf(findChild<QWidget*>("hc.settings.navigation"))}, {tr("메뉴바"), ui.stkOpts->indexOf(menuSettings_)}, {tr("오디오 미리 듣기"), ui.stkOpts->indexOf(audioSettings_)}, {tr("프로세스 · 서비스"), ui.stkOpts->indexOf(processServiceSettings_)}, {tr("실험실"), ui.stkOpts->indexOf(Laboratory)}};
     for (const auto& Entry : Pages) { auto* Item = new QListWidgetItem(Entry.first, ui.lstOptCate); Item->setData(Qt::UserRole, Entry.second); }
     // One footer row: state dot + status at the left, OK · Cancel · Apply at the right; the file path is a tooltip.
     auto* SaveStatus = new SettingsStatusLabel(ui.frmFooter); SaveStatus->setObjectName("hc.settings.saveStatus"); SaveStatus->setTextFormat(Qt::PlainText);

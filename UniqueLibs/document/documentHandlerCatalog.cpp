@@ -31,15 +31,8 @@ DocumentHandlerCatalog BuildDocumentHandlerCatalog(hc::settings::Repository& Set
     std::vector<DocumentHandlerTarget> Plugins) {
     DocumentHandlerCatalog Result;
     const auto Editors = MigrateEditors(Settings.Read(hc::settings::Section::Editors));
-    const auto Config = Editors["documentHandlers"].toObject();
-    Result.defaultView_ = Config["defaultViewHandlerId"].toString(hc::defaults::DefaultValue("editors/documentHandlers/defaultViewHandlerId").toString()).toStdString();
-    Result.defaultEdit_ = Config["defaultEditHandlerId"].toString(hc::defaults::DefaultValue("editors/documentHandlers/defaultEditHandlerId").toString()).toStdString();
-    Result.overrides_ = Config["fileTypeOverrides"].toObject();
-    // Preserve old saved handler selections while moving F3 into the workspace.
-    if(Result.defaultView_=="builtin.rhwp-viewer")Result.defaultView_="builtin.hyperviewer";
-    for(auto It=Result.overrides_.begin();It!=Result.overrides_.end();++It){auto Override=It.value().toObject();
-        if(Override["view"]=="builtin.rhwp-viewer"){Override["view"]="builtin.hyperviewer";It.value()=Override;}}
-    const bool Compatible = Config["schemaVersion"].toInt() == 1;
+    Result.defaultView_ = "builtin.hyperviewer";
+    Result.defaultEdit_ = "builtin.hypereditor";
     const auto PluginConfig = Settings.Read(hc::settings::Section::Plugins).toObject();
     const auto Add = [&](DocumentHandlerTarget Target) {
         auto& Descriptor = Target.descriptor_;
@@ -64,16 +57,6 @@ DocumentHandlerCatalog BuildDocumentHandlerCatalog(hc::settings::Repository& Set
             QJsonArray Excluded; for (const auto& Ext : Descriptor.excludedExtensions_) Excluded.append(QString::fromStdString(Ext));
             Target.plugin_.applicationRule_ = QJsonObject{{"version", 1}, {"enabled", Descriptor.available_}, {"mode", "excludeExtensions"}, {"extensions", Excluded}};
         }
-        QSet<QString> Seen;
-        for (const auto& Value : Config["handlers"].toArray()) {
-            const auto Item = Value.toObject(); const auto Id = Item["stableId"].toString();
-            if (Seen.contains(Id)) continue; Seen.insert(Id);
-            if (Id.toStdString() != Descriptor.stableId_) continue;
-            if (Item["view"].isBool()) Descriptor.view_ = Item["view"].toBool();
-            if (Item["edit"].isBool()) Descriptor.edit_ = Item["edit"].toBool();
-            if (Item["enabled"].isBool() && !Item["enabled"].toBool()) Descriptor.available_ = false;
-        }
-        if (!Compatible) { Descriptor.available_ = false; Descriptor.unavailableReason_ = "document-handler-schema-unsupported"; }
         if (Result.registry_.Register(Descriptor)) Result.targets_.emplace(Descriptor.stableId_, std::move(Target));
     };
     std::vector<std::string> Formats; for (const auto Ext : DocumentExtensions) Formats.emplace_back(Ext);

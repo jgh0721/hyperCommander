@@ -34,7 +34,7 @@ inline void FilePanelGroupingUi(QMainUI* Main, CmpPanel* Panel)
 {
     QTemporaryDir Directory; QVERIFY(Directory.isValid());
     const auto Saved = Main->CaptureWorkspace(); const auto Settings = hc::settings::AppSettings().Object();
-    auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+    auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->Current();
     const auto OriginalTheme = fm::style::ThemeManager::instance().scheme();
     const auto RestoreScheme = qScopeGuard([&] { fm::style::ThemeManager::instance().setScheme(OriginalTheme); emit Colors->sigColorSchemeChanged(OriginalScheme); });
     const auto Restore = qScopeGuard([&] { hc::settings::AppSettings().Replace(Settings); hc::settings::AppSettings().Commit(); Main->RestoreWorkspace(Saved); });
@@ -190,7 +190,7 @@ inline void FilePanelGroupingUi(QMainUI* Main, CmpPanel* Panel)
     const auto Capture = qEnvironmentVariable("HC_UI_ARTIFACT_DIR");
     for (const bool Dark : {true, false}) {
         fm::style::ThemeManager::instance().setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
-        auto CursorScheme = Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
+        auto CursorScheme = Colors->ForMode(Dark);
         CursorScheme.IsInverseCursor = true; emit Colors->sigColorSchemeChanged(CursorScheme);
         View->SetPanelActive(true); View->EnsureKeyboardFocusOnView();
         for (const auto* Mode : {"one-line", "two-line"}) {

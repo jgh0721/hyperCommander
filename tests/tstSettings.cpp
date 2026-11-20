@@ -73,12 +73,8 @@ private slots:
         QCOMPARE(General["iconMode"].toString(), QString("all"));
         QCOMPARE(General["directoryStyle"].toString(), QString("brackets"));
         const auto Appearance = Fresh.Read(Section::Appearance).toObject();
-        QCOMPARE(Appearance["selected"].toString(), QString::fromUtf8("기본 다크"));
-        for (const auto& Value : Appearance["schemes"].toObject()) {
-            const auto Scheme = Value.toObject();
-            QCOMPARE(Scheme["inverseCursor"], QJsonValue(false));
-            QCOMPARE(Scheme["inverseSelection"], QJsonValue(true));
-        }
+        QCOMPARE(Appearance["inverseCursor"], QJsonValue(false));
+        QCOMPARE(Appearance["inverseSelection"], QJsonValue(true));
         const auto Options = Fresh.Read(Section::Options).toObject();
         QCOMPARE(Options["deleteToRecycle"], QJsonValue(false));
         QCOMPARE(Options["deleteWhileListing"], QJsonValue(true));
@@ -334,8 +330,7 @@ private slots:
         Repository Settings(Temp.path()); QVERIFY(Settings.Writable()); QVERIFY(!Settings.Exists());
         QCOMPARE(Settings.SizeStyle(true), SizeFormats().indexOf("adaptive2")); QVERIFY(Settings.Plugins("wlx").isEmpty());
         const auto Appearance = Settings.Read(Section::Appearance).toObject();
-        QCOMPARE(Appearance, BuiltInAppearance());
-        QCOMPARE(Appearance["schemes"].toObject().size(), 2);
+        QCOMPARE(Appearance, hc::defaults::Appearance());
         QVERIFY(!QFileInfo::exists(Settings.FileName())); QCOMPARE(Bytes(Temp.filePath("HyperCommander.ini")), Ini);
         QCOMPARE(Settings.Read(Section::General).toObject()["shortcutPreset"].toString(), QString(hc::defaults::FreshShortcutPreset));
         QVERIFY(Settings.Commit()); Repository Reload(Temp.path()); QCOMPARE(Reload.Object(), Settings.Object());
@@ -363,26 +358,33 @@ private slots:
         Settings.Put(Section::Shortcuts,QJsonObject{}); Settings.DiscardEdit();
         QCOMPARE(Settings.Read(Section::Shortcuts).toObject()["F8"].toString(), QString("cm_Copy"));
     }
-    void sparseAppearanceAndInvalidFieldDefaults()
+    void selectedSchemeMigratesDisplayPreferences()
     {
         QTemporaryDir Temp; Repository Settings(Temp.path());
-        const QJsonObject Appearance{{"selected","z-selected"},{"schemes",QJsonObject{{"a-first",QJsonObject{}},{"z-selected",QJsonObject{}}}}};
-        QVERIFY2(Settings.Put(Section::Appearance, Appearance), qPrintable(Settings.Error()));
+        auto Root = Settings.Object();
+        const QJsonObject Selected{{"dark", true}, {"inverseCursor", true},
+            {"fonts", QJsonObject{{"menu", QJsonObject{{"family", "Segoe UI"}, {"pointSize", 12}}},
+                {"list", QJsonObject{{"family", ""}, {"pointSize", -2}}}}},
+            {"fileSets", QJsonObject{{"text", QJsonObject{{"foreground", "#232323"}}}}}};
+        const QJsonObject Schemes{{"other", QJsonObject{}}, {"selected-one", Selected}};
+        Root["appearance"] = QJsonObject{{"selected", "selected-one"}, {"schemes", Schemes}};
+        auto General = Root["general"].toObject();
+        General["themeMode"] = QString();
+        Root["general"] = General;
+        const auto Original = QJsonDocument(Root).toJson();
+        QVERIFY(Write(Settings.FileName(), Original));
+        QVERIFY(Settings.Reload());
+        const auto Appearance = Settings.Read(Section::Appearance).toObject();
+        QCOMPARE(Settings.Read(Section::General).toObject()["themeMode"].toString(), QString("dark"));
+        QVERIFY(Appearance["inverseCursor"].toBool());
+        QCOMPARE(Appearance["fonts"].toObject()["menu"], Selected["fonts"].toObject()["menu"]);
+        QCOMPARE(Appearance["fonts"].toObject()["list"], hc::defaults::FontDefaults("list"));
+        QCOMPARE(Appearance["schemes"].toObject(), Schemes);
+        QVERIFY(!Settings.Issues().isEmpty());
+        QCOMPARE(Bytes(Settings.FileName()), Original);
+        QVERIFY(Settings.Commit());
         Repository Restart(Temp.path());
-        const auto Restored = Restart.Read(Section::Appearance).toObject();
-        QCOMPARE(Restored["selected"], Appearance["selected"]);
-        QVERIFY(Restored["schemes"].toObject().contains("a-first"));
-        QVERIFY(Restored["schemes"].toObject().contains("z-selected"));
-        for (const auto& Name : BuiltInAppearance()["schemes"].toObject().keys()) QVERIFY(Restored["schemes"].toObject().contains(Name));
-        auto Root = Restart.Object();
-        const QJsonObject Invalid{{"fonts",QJsonObject{{"list",QJsonObject{{"family",""},{"pointSize",-2}}}}},
-            {"colors",QJsonObject{{"listText","not-a-color"}}}};
-        Root["appearance"] = QJsonObject{{"selected","sample"},{"schemes",QJsonObject{{"sample",Invalid}}}};
-        const auto Original = QJsonDocument(Root).toJson(); QVERIFY(Write(Settings.FileName(),Original)); QVERIFY(Restart.Reload());
-        const auto Scheme = Restart.Read(Section::Appearance).toObject()["schemes"].toObject()["sample"].toObject();
-        QCOMPARE(Scheme["fonts"].toObject()["list"].toObject()["pointSize"].toInt(),16);
-        QCOMPARE(Scheme["colors"].toObject()["listText"].toString(),QString("#202020"));
-        QVERIFY(!Restart.Issues().isEmpty()); QCOMPARE(Bytes(Settings.FileName()),Original);
+        QCOMPARE(Restart.Read(Section::Appearance).toObject(), Appearance);
     }
     void corruptAndFutureAreProtected()
     {

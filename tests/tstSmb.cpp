@@ -81,7 +81,6 @@
 #include "UIs/menuBarSettingsPage.hpp"
 #include "UIs/themeSettingsPage.hpp"
 #include "UIs/keyboardSettingsPage.hpp"
-#include "UIs/legacySettingsPage.hpp"
 #include "UIs/cmpPanel.hpp"
 #include "memoryStorage.hpp"
 #include "commandMgr.hpp"
@@ -394,7 +393,7 @@ private slots:
     {
         if (localOnly_)
         {
-            const QStringList Allowed{"environmentCommandsUi", "environmentViewUi", "registryRegDocumentUi", "registryImportUi", "registrySearchUi", "registryLinksUi", "registryRestartUi", "registryPolicyUi", "registryAutorunUi", "registryHistoryUi", "registryTreeUi", "registryMutationUi", "registryFocusUi", "registryEditorUi", "registryViewUi", "registryNavigationUi", "registryAsyncSelectionUi", "contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "windowSwitchFocusUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "mainWindowEdgeResizeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "removedLegacyAppearanceUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
+            const QStringList Allowed{"environmentCommandsUi", "environmentViewUi", "registryRegDocumentUi", "registryImportUi", "registrySearchUi", "registryLinksUi", "registryRestartUi", "registryPolicyUi", "registryAutorunUi", "registryHistoryUi", "registryTreeUi", "registryMutationUi", "registryFocusUi", "registryEditorUi", "registryViewUi", "registryNavigationUi", "registryAsyncSelectionUi", "contentContainerNavigationUi", "flatViewUi", "zipDeleteAfterUseUi", "mappedDeleteFailureUi", "viewerPreparationBanner", "systemViewUi", "audioPreviewUi", "createdFolderFocusUi","fileCompareUi", "archiveNavigationPositionUi", "navigationProgressUi", "navigationEnterRepeatUi","navigationLargeFolderScrollUi","fileDeleteCursorUi", "itemSelectionUi", "itemSelectionRefreshUi", "selectionRefreshAndArchiveGuardUi", "driveRootNavigationUi", "folderSizesUi", "renameCancellationFocusUi", "hiddenViewerPreparationKeepsFocusUi", "dialogFocusReturnUi", "commandLineFocusReturnUi", "windowActivationStateRepairUi", "windowSwitchFocusUi", "shellMenuUi", "nativeCellEditingBlockedUi", "inlineRenameClicksUi", "inlineRenameUi", "inlineRenameGeometryUi", "pluginApplicationSelectionUi", "rhwpDownloadsTimingUi", "rhwpF4ProductUi", "rhwpF3ProductUi", "documentProductSavesUi", "documentCommandsUi", "epubProductKeys", "epubStartupFailureUi", "r23FileWritesUi", "r23ArchiveBenchmark", "r22LaboratoryUi", "r22ArchiveBenchmark", "r21TransferProgressUi", "r21ArchiveBenchmark", "r20LaboratoryUi", "r20ArchiveBenchmark", "r19ArchiveBenchmark", "r18ManyFilesExtractUi", "r18LargeExtractUi", "r16ArchiveCommandsUi", "r15RenameQueueUi", "r15RenameRestartUi", "r14ThemeConsistencyUi", "r14ThemeRestartUi", "r14SettingsPolishUi", "r13SettingsOptionsUi", "r13AutomaticColumnsUi", "r13SingleInstanceUi", "r13RestartUi", "r12ReferenceMainUi", "r12RestartUi", "r11ResponsiveJobsUi", "r10PermissionChoicesUi", "r9FileMasksUi", "r9LargeRenameUi", "r9NewFileUi", "r8CopyDefaultsUi", "r8CopyCommandsUi", "r7JobHistoryRestartUi", "r7QueueAndRetryUi", "r6FileDialogsUi", "r6FileOperationsUi", "r6RecentRestartUi", "r5SettingsUi", "r5RestartUi", "menuBarSettingsUi", "thumbnailProviderUi", "thumbnailViewUi", "thumbnailSettingsUi", "thumbnailRestartUi", "listPresentationUi", "mainPanelChromeUi", "mainWindowEdgeResizeUi", "permissionsUi", "fileToolsUi", "fileColorSettingsUi", "fileColorLayoutUi", "fileColorAppearanceUi", "fileColorPreviewUi", "fileColorFinalReviewUi", "fileColorConditionsUi", "fileColorPatternModesUi", "fileColorFirstPaintUi", "fileColorLargeFolderUi", "settingsPagesCaptureUi", "favoritesCaptureUi", "favoritesShellAndReorderUi", "favoritesAddCurrentUi", "displayPreferencesPreserveStoredRulesUi", "foregroundJobsAndTimeoutUi", "backgroundJobManagerUi", "builtinNestedArchives", "sevenZipCreateUi", "builtinUnEggNavigation", "builtinSevenZipNavigation", "fileJobDesignUi", "fileJobResultPagesUi", "closingWindowCancelsWaitingFileJob", "activePanelAppearanceUi", "displayAndNavigationSettingsUi", "directoryHotListPlacementUi", "directoryHotListFocusUi", "navigationRefreshSettingsUi", "comboAndListPreferencesUi", "watercolorSettingsUi", "watercolorGridStateUi", "firstRunAppearanceUi", "appearanceInteractionUi", "columnWdxUi", "columnLuaUi", "columnsLargeListingUi", "columnWorkspaceSelectionUi", "columnPreviewAndScopesUi", "columnTemplatesAndAsyncUi", "columnFieldPickerUi", "fieldConditionColorsAndSelectionUi", "fieldConditionPrefetchAndGraceUi", "fieldConditionPreviewCaptureUi", "listLayoutSettingsUi", "listLayoutRestartUi", "jsonSettingsUi", "passwordAndNestedArchivesUi", "qtitanCacheAndSortUi", "qtitanFileManagerUi", "columnMetadataTextUi", "columnFitToPaneUi", "columnWidthLayoutAndSettings", "columnResizeVisibilityAndScrollbars", "automationCommandsUi", "scopedSearchUi", "workspaceBootUi", "workspaceRestoreUi", "workspaceWatchAndMetadataUi", "protectedParentNavigationUi", "isoPluginUi", "dopusPluginsUi", "dataPluginsUi", "networkDriveStartup", "archiveCommandsAndBatchUi", "archiveCrossContainerMovesUi", "viewerCommandsAndPreviewUi", "wcxHostSettingsPersistence", "wcxHostApprovalUi", "configuredHostNavigation", "viewerLifetimeSoak", "wlxViewerCommandsUi"};
             QVERIFY2(Allowed.contains(QString::fromLatin1(QTest::currentTestFunction()))
                 || QString::fromLatin1(QTest::currentTestFunction()) == "passwordManagerSettingsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardCommandColumnsUi"
@@ -423,7 +422,7 @@ private slots:
                 || QString::fromLatin1(QTest::currentTestFunction()) == "fileColorRtlUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "panelBreadcrumbUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "panelBreadcrumbNavigationUi"
-                || (QStringList{"legacySettingsDraftUi", "legacySettingsApplyCancelUi", "legacySettingsLayoutUi"}.contains(QString::fromLatin1(QTest::currentTestFunction())))
+                || QString::fromLatin1(QTest::currentTestFunction()) == "keyboardBuiltInDefaultsUi"
                 || QString::fromLatin1(QTest::currentTestFunction()).startsWith("todoBug")
                 || QString::fromLatin1(QTest::currentTestFunction()) == "everythingPanelStreamingUi"
                 || QString::fromLatin1(QTest::currentTestFunction()) == "columnQueryOverlayUi"
@@ -465,7 +464,7 @@ private slots:
         using namespace hc::columns;
         auto& Settings = AppSettings(); const auto Original = Settings.Object();
         const auto Workspace = main_->CaptureWorkspace(); auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto OriginalScheme = Colors->Current();
         const auto Restore = qScopeGuard([&] {
             Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
             emit Colors->sigColorSchemeChanged(OriginalScheme); TyStCommandMgr::GetInstance()->Refresh(); main_->RestoreWorkspace(Workspace);
@@ -714,8 +713,8 @@ private slots:
         });
         auto General = Settings.Read(hc::settings::Section::General).toObject(); General["useBuiltInShortcuts"] = true;
         QVERIFY(Settings.Put(hc::settings::Section::General, General));
-        QVERIFY(Settings.Put(hc::settings::Section::Shortcuts, QJsonObject{})); Manager->Refresh();
-        Manager->SaveSettings(); Manager->Refresh(); // Reproduce the saved panel-key snapshot.
+        QVERIFY(Settings.Put(hc::settings::Section::Shortcuts, QJsonObject{{"Return", "hc.navigate.open"}}));
+        Manager->Refresh();
         const auto PanelKeys = Manager->Retrieve();
         QCOMPARE(hc::ui::CommandId(PanelKeys.value(QKeyCombination(Qt::Key_Return))), QString("hc.navigate.open"));
         {
@@ -750,7 +749,7 @@ private slots:
             Selector->SetCommand("hc.commandLine.execute"); Selector->SetCommand("hc.commandLine.keepOpen");
             QVERIFY(Assign->isEnabled()); Assign->click();
         }
-        Manager->SaveSettings(); Manager->Refresh();
+        Manager->Refresh();
         const auto Saved = Settings.Read(hc::settings::Section::Shortcuts).toObject();
         QCOMPARE(Saved["Return"].toString(), QString("hc.navigate.open"));
         QCOMPARE(Saved["commandLine"].toObject()["Return"].toString(), QString("hc.commandLine.execute"));
@@ -2991,7 +2990,7 @@ private slots:
     void r5SettingsUi()
     {
         auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
-        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->Current();
         auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(OriginalScheme); TyStCommandMgr::GetInstance()->Refresh(); Bridge->RefreshFunctionBar(); main_->RestoreWorkspace(Workspace); });
         const auto Screenshot = [&](QMainOpts& Dialog, int Page, const QString& Name) { const auto Artifacts = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Artifacts.isEmpty()) return true;
@@ -3150,7 +3149,7 @@ private slots:
         { hc::ui::ThemeSettingsPage Page; const QJsonObject Future{{"format", "fm-color-scheme"}, {"version", 99}, {"future", "preserve"}}; Page.Load(Future); QVERIFY(!Page.isEnabled()); QCOMPARE(Page.Save(), Future); }
         // Migration is an explicit draft action, keeps source bytes, stable IDs
         // and independently proves attribute/size preview inputs.
-        const QJsonArray Legacy{QJsonObject{{"name", "R5 소스"}, {"flags", FILE_SET_NOR_EXT_FILTERS | FILE_SET_EXP_ATTRIBUTE}, {"extensions", QJsonArray{"cpp", "hpp"}}, {"attributes", 32}, {"filters", QJsonArray{}}, {"size", 0}}}; Settings.Put(hc::settings::Section::FileSets, Legacy);
+        const QJsonArray Legacy{QJsonObject{{"name", "R5 소스"}, {"flags", 0x102}, {"extensions", QJsonArray{"cpp", "hpp"}}, {"attributes", 32}, {"filters", QJsonArray{}}, {"size", 0}}}; Settings.Put(hc::settings::Section::FileSets, Legacy);
         { hc::ui::FileColorRulesPage Page; Page.ImportLegacy(); const auto Doc = Page.Document(); QVERIFY(Doc.contains("legacyBackup")); QCOMPARE(Doc["legacyBackup"].toObject()["fileSets"].toArray(), Legacy); const auto Groups = Doc["groups"].toArray(); QCOMPARE(Groups.size(), 1); Page.ImportLegacy(); QCOMPARE(Page.Document()["groups"].toArray(), Groups);
           hc::settings::FileColorRules Rules; Rules.Load(Doc); QVERIFY(Rules.Evaluate("sample.cpp", 32, 1, false).matched_); QVERIFY(!Rules.Evaluate("sample.cpp", 0, 1, false).matched_); QVERIFY(!Rules.Evaluate("sample.txt", 32, 1, false).matched_); }
     }
@@ -3600,7 +3599,7 @@ private slots:
         auto* Toolbar = main_->findChild<QToolBar*>("hc.navigationToolbar"); QVERIFY(Toolbar);
         auto* Find = main_->findChild<QLineEdit*>("hc.mainFind"); QVERIFY(Find);
         auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Scheme = Colors->Current();
         const auto Restore = qScopeGuard([&] { Find->clear(); Settings.Replace(Before); main_->OnColorSchemeChanged(Scheme); });
         auto General = Settings.Read(hc::settings::Section::General).toObject();
         QVERIFY(!General["showMainToolbar"].toBool(false));
@@ -4267,15 +4266,15 @@ private slots:
         using namespace hc::settings; using namespace fm::style;
         auto& Settings = AppSettings(); const auto Original = Settings.Object();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); });
         auto General = Settings.Read(Section::General).toObject(); General["themeMode"] = "light"; Settings.Put(Section::General, General);
-        auto Appearance = BuiltInAppearance(); auto Schemes = Appearance["schemes"].toObject();
-        auto Dark = Schemes[QStringLiteral("기본 다크")].toObject(); const auto CustomColors = Dark["colors"].toObject();
-        Dark["dark"] = false; Dark["future"] = "keep";
-        Dark["colorOverrides"] = QJsonObject{{"dialogText", true}, {"dialogBackground", true}, {"listText", true}, {"listBackground", true}, {"listCursor", true}, {"listSelection", true}};
-        Schemes[QStringLiteral("기본 다크")] = Dark; Appearance["schemes"] = Schemes;
+        auto Appearance = hc::defaults::Appearance();
+        fm::style::ColorScheme Theme;
+        const QColor CustomSurface("#232931");
+        Theme.overridesFor(hc::theme::ProductDesign, Variant::Dark)[indexOf(Token::Surface)] = CustomSurface;
+        Appearance["watercolorTheme"] = Theme.toJson();
         Settings.Put(Section::Appearance, Appearance); QVERIFY(Settings.Commit());
-        Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current());
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(80); Dialog.LoadSettings();
         const auto Save = [&](const QString& Name) { const auto Dir = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); return Dir.isEmpty() || Dialog.grab().save(QDir(Dir).filePath(Name)); };
         auto* Mode = Dialog.findChild<QComboBox*>("hc.settings.theme"); QVERIFY(Mode);
@@ -4288,10 +4287,7 @@ private slots:
         QCOMPARE(Search->palette().color(QPalette::Base), ThemeManager::instance().colors()[Token::Surface]);
         QVERIFY(Search->palette().color(QPalette::Base) != QColor(Qt::white));
         QCOMPARE(Settings.Read(Section::General).toObject()["themeMode"].toString(), QString("dark"));
-        const auto StoredDark = Settings.Read(Section::Appearance).toObject()["schemes"].toObject()[QStringLiteral("기본 다크")].toObject();
-        QVERIFY(StoredDark["dark"].toBool()); QCOMPARE(StoredDark["future"].toString(), QString("keep"));
-        for (auto It = CustomColors.begin(); It != CustomColors.end(); ++It)
-            QCOMPARE(QColor(StoredDark["colors"].toObject()[It.key()].toString()), QColor(It.value().toString()));
+        QCOMPARE(ThemeManager::instance().colors()[Token::Surface], CustomSurface);
         QVERIFY(Save("r14-theme-general-dark.png"));
         auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
         for (int Row = 0; Row < Categories->count(); ++Row) {
@@ -4321,7 +4317,7 @@ private slots:
     {
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object();
-        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Scheme = Colors->Current();
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Scheme); });
         const auto MakeGroup = [](const QString& Id, const QString& Name, const QString& Color) {
             return QJsonObject{{"id", Id}, {"name", Name}, {"enabled", true}, {"join", "any"},
@@ -6696,7 +6692,7 @@ private slots:
         const auto ApplyRules = [this, Colors] {
             auto* Left = main_->findChild<CmpPanel*>("cmpLeftPanel");
             if (auto* Current = qobject_cast<CFSModel*>(static_cast<CGridView*>(Left->GetFocusView(Left->CurrentTabIndex()))->BaseModel()))
-                Current->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+                Current->SetColorScheme(Colors->Current());
         };
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); ApplyRules(); main_->RestoreWorkspace(Workspace); });
         // HC_SMALL_FOLDER_ROOT places the fixture on another volume (the default is the temp folder).
@@ -7256,7 +7252,7 @@ private slots:
         using namespace hc::columns;
         auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
         const auto Workspace = main_->CaptureWorkspace(); const auto Size = main_->size();
-        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Scheme = Colors->Current();
         auto* Bridge = TyStCommandMgr::GetInstance()->Bridge();
         const auto Restore = qScopeGuard([&] {
             Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit();
@@ -7281,7 +7277,7 @@ private slots:
             QDir().mkpath(Out); QTest::qWait(120); return main_->grab().save(QDir(Out).filePath(Name + '-' + QString::number(main_->devicePixelRatioF()) + ".png"));
         };
         main_->showNormal(); main_->resize(1420, 900); Left->sig_NotifyPanelActivated();
-        auto Light = Colors->GetColorScheme(QStringLiteral("기본 라이트")); Light.FileList_Font.setPixelSize(13);
+        auto Light = Colors->ForMode(false); Light.FileList_Font.setPixelSize(13);
         emit Colors->sigColorSchemeChanged(Light);
         QVERIFY(View->ApplyColumnProfile(DefaultProfile())); QVERIFY(Other->ApplyColumnProfile(DefaultProfile()));
         QVERIFY(Capture("r12-existing-profile"));
@@ -7325,7 +7321,7 @@ private slots:
         View->ColumnWidths()->Apply();
         QVERIFY2(View->BaseView()->horizontalScrollBar()->maximum() <= 2, "Reference columns should fit the normal-width pane");
         QVERIFY(Capture("r12-reference-main-light"));
-        auto Dark = Colors->GetColorScheme(QStringLiteral("기본 다크")); Dark.FileList_Font.setPixelSize(13); emit Colors->sigColorSchemeChanged(Dark);
+        auto Dark = Colors->ForMode(true); Dark.FileList_Font.setPixelSize(13); emit Colors->sigColorSchemeChanged(Dark);
         QVERIFY(Capture("r12-reference-main-dark")); emit Colors->sigColorSchemeChanged(Light);
         const auto Saved = View->CaptureWorkspaceView();
         QVERIFY(View->ApplyColumnProfile(DefaultProfile())); View->RestoreWorkspaceView(Saved);
@@ -7391,7 +7387,7 @@ private slots:
 
         auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
         const auto Workspace = main_->CaptureWorkspace();
-        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Scheme = Colors->Current();
         const auto Restore = qScopeGuard([&] {
             Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit();
             emit Colors->sigColorSchemeChanged(Scheme); main_->RestoreWorkspace(Workspace); main_->SaveWorkspace();
@@ -7408,7 +7404,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!model(Panel)->IsLoading() && model(Panel)->rowCount() == 182, 10000);
         auto* View = static_cast<CGridView*>(Panel->GetFocusView(0));
         auto* Native = View->BaseView(); auto* Grid = View->findChild<Qtitan::Grid*>();
-        auto Light = Colors->GetColorScheme(QStringLiteral("기본 라이트")); Light.FileList_Font.setPixelSize(13);
+        auto Light = Colors->ForMode(false); Light.FileList_Font.setPixelSize(13);
         emit Colors->sigColorSchemeChanged(Light); main_->resize(1360, 850); Panel->sig_NotifyPanelActivated();
         auto General = Settings.Read(hc::settings::Section::General).toObject();
         General["filePanel"] = QJsonObject{{"version", 1}, {"defaultMode", "one-line"}};
@@ -7508,7 +7504,7 @@ private slots:
             auto Capture = [&](const QString& Name) { QTest::qWait(150); return main_->grab().save(QDir(Artifacts).filePath(Name)); };
             emit Colors->sigColorSchemeChanged(Light); View->SetListMode("one-line"); QVERIFY(Capture("r3-main-one-line.png"));
             View->SetListMode("two-line"); QVERIFY(Capture("r3-main-two-line.png"));
-            auto Dark = Colors->GetColorScheme(QStringLiteral("기본 다크")); Dark.FileList_Font.setPixelSize(13);
+            auto Dark = Colors->ForMode(true); Dark.FileList_Font.setPixelSize(13);
             emit Colors->sigColorSchemeChanged(Dark); QVERIFY(Capture("r3-main-dark.png"));
             emit Colors->sigColorSchemeChanged(Light); View->SetListMode("auto"); main_->resize(900, 650); QVERIFY(Capture("r3-main-auto-narrow.png"));
         }
@@ -7596,9 +7592,9 @@ private slots:
             QDir().mkpath(Artifacts); QTest::qWait(100);
             QVERIFY(main_->grab().save(QDir(Artifacts).filePath("r2-main-light.png")));
             auto* Colors = TyStColorSchemeMgr::GetInstance();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(QStringLiteral("기본 다크"))); QTest::qWait(100);
+            emit Colors->sigColorSchemeChanged(Colors->ForMode(true)); QTest::qWait(100);
             QVERIFY(main_->grab().save(QDir(Artifacts).filePath("r2-main-dark.png")));
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(QStringLiteral("기본 라이트")));
+            emit Colors->sigColorSchemeChanged(Colors->ForMode(false));
             main_->resize(900, 650); QTest::qWait(100);
             QVERIFY(main_->grab().save(QDir(Artifacts).filePath("r2-main-narrow.png")));
         }
@@ -7754,7 +7750,7 @@ private slots:
             SetFileAttributesW(Custom.toStdWString().c_str(), FILE_ATTRIBUTE_NORMAL);
             Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit();
             auto* Colors = TyStColorSchemeMgr::GetInstance();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            emit Colors->sigColorSchemeChanged(Colors->Current());
             main_->RestoreWorkspace(Workspace);
         });
         QVERIFY(QDir(Directory.path()).mkdir("custom")); QVERIFY(QDir(Directory.path()).mkdir("plain"));
@@ -7875,7 +7871,7 @@ private slots:
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         const auto Restore = qScopeGuard([&] {
             Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            emit Colors->sigColorSchemeChanged(Colors->Current());
             main_->RestoreWorkspace(Workspace);
         });
         QVERIFY(QDir(Directory.path()).mkdir("zzPrevious"));
@@ -8521,7 +8517,7 @@ private slots:
         auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Workspace = main_->CaptureWorkspace();
         const auto Restore = qScopeGuard([&] {
             Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            emit Colors->sigColorSchemeChanged(Colors->Current());
             main_->RestoreWorkspace(Workspace);
         });
         auto* Panel = panels_.front(); auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
@@ -8531,7 +8527,7 @@ private slots:
         QVERIFY(!main_->findChild<QAction*>("hc.toolbar.hc.view.columns"));
         const auto Before = Adapter->WorkspaceLayout();
         for (const bool Dark : {false, true}) {
-            auto Scheme = Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
+            auto Scheme = Colors->ForMode(Dark);
             Scheme.Dialog_Font.setPointSize(Dark ? 18 : 11);
             emit Colors->sigColorSchemeChanged(Scheme);
             main_->activateWindow(); QTest::qWait(150);
@@ -8625,79 +8621,32 @@ private slots:
         auto* Colors = TyStColorSchemeMgr::GetInstance();
         const auto Restore = qScopeGuard([&] {
             Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            emit Colors->sigColorSchemeChanged(Colors->Current());
         });
         auto* Proxy = qobject_cast<QProxyStyle*>(qApp->style());
         QVERIFY(Proxy);
         QPointer<QStyle> Style(qApp->style()), Base(Proxy->baseStyle());
         QVERIFY(qobject_cast<PaperFluentStyle*>(Base.data()));
         QCOMPARE(Base->parent(), Style.data());
-        QVERIFY(Settings.Put(Section::Appearance, BuiltInAppearance()));
-        Colors->Refresh();
+        QVERIFY(Settings.Put(Section::Appearance, hc::defaults::Appearance()));
         for (const bool Dark : {false, true}) {
-            const auto Name = Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트");
-            auto General = Settings.Read(Section::General).toObject();
-            General["themeMode"] = Dark ? "dark" : "light";
-            auto Appearance = Settings.Read(Section::Appearance).toObject(); Appearance["selected"] = Name;
-            QVERIFY(Settings.Put(Section::General, General)); QVERIFY(Settings.Put(Section::Appearance, Appearance)); Colors->Refresh();
-            auto Scheme = Colors->GetColorScheme(Name);
-            const ThemeColors Defaults(Dark ? Variant::Dark : Variant::Light, hc::theme::ProductDesign);
-            QVERIFY(Scheme.explicitColors_.isEmpty());
-            QCOMPARE(Scheme.Dialog_BGColor, Defaults[Token::Win]);
-            QCOMPARE(Scheme.FileList_BGColor, Defaults[Token::Surface]);
-            // Saving unrelated font changes must not freeze resolved theme colors.
-            Scheme.Dialog_Font.setPointSize(17);
-            Colors->UpsertColorScheme(Scheme, true);
-            QVERIFY(Settings.Commit());
-            Colors->Refresh();
-            Scheme = Colors->GetColorScheme(Name);
-            QVERIFY(Scheme.explicitColors_.isEmpty());
+            const ThemeColors Expected(Dark ? Variant::Dark : Variant::Light, hc::theme::ProductDesign);
+            QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
+            Dialog.findChild<QComboBox*>("hc.settings.theme")->setCurrentIndex(Dark ? 1 : 0);
+            Dialog.findChild<QSpinBox*>("hc.settings.dialogFontSize")->setValue(17);
+            QVERIFY(Dialog.SaveSettings());
+            QVERIFY(Dialog.SaveSettings());
+            const auto Scheme = Colors->Current();
+            QCOMPARE(Scheme.IsDarkMode, Dark);
             QCOMPARE(Scheme.Dialog_Font.pointSize(), 17);
-            emit Colors->sigColorSchemeChanged(Scheme);
+            QCOMPARE(Scheme.FileList_BGColor, Expected[Token::Surface]);
             QCOMPARE(ThemeManager::instance().design(), hc::theme::ProductDesign);
             QCOMPARE(ThemeManager::instance().effectiveVariant(), Dark ? Variant::Dark : Variant::Light);
-            QCOMPARE(QApplication::palette().color(QPalette::Window), Defaults[Token::Win]);
-        }
-        {
-            QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
-            Dialog.findChild<QComboBox*>("hc.settings.theme")->setCurrentIndex(1);
-            QVERIFY(Dialog.SaveSettings());
-            QVERIFY(Dialog.SaveSettings());
-            const auto Changed = Colors->GetColorScheme(QStringLiteral("기본 다크"));
-            QVERIFY(Changed.IsDarkMode);
-            QVERIFY(Changed.explicitColors_.isEmpty());
+            QCOMPARE(QApplication::palette().color(QPalette::Window), Expected[Token::Win]);
             Dialog.accept();
         }
-        // Legacy custom colors migrate, including an explicit color equal to the
-        // old default when the file already records the user's override intent.
-        auto Appearance = BuiltInAppearance();
-        auto Schemes = Appearance["schemes"].toObject();
-        const auto Name = QStringLiteral("기본 라이트");
-        auto Record = Schemes[Name].toObject();
-        auto Values = Record["colors"].toObject();
-        Values["dialogBackground"] = "#e1e8d7";
-        Values["listText"] = "#29462b";
-        Record["colors"] = Values; Schemes[Name] = Record; Appearance["schemes"] = Schemes;
-        QVERIFY(Settings.Put(Section::Appearance, Appearance));
-        Colors->Refresh();
-        auto Scheme = Colors->GetColorScheme(Name);
-        QCOMPARE(Scheme.explicitColors_.size(), 2);
-        QCOMPARE(Scheme.Dialog_BGColor, QColor("#e1e8d7"));
-        Scheme.FileList_Cursor = QColor("#E0EBFF"); // Explicit old default.
-        Scheme.explicitColors_.insert("listCursor");
-        Colors->UpsertColorScheme(Scheme, true);
-        QVERIFY(Settings.Commit());
-        Repository Restart(QFileInfo(Settings.FileName()).absolutePath());
-        const auto Saved = Restart.Read(Section::Appearance).toObject()["schemes"].toObject()[Name].toObject();
-        QVERIFY(Saved["colorOverrides"].toObject()["listCursor"].toBool());
-        Colors->Refresh();
-        Scheme = Colors->GetColorScheme(Name);
-        QCOMPARE(Scheme.FileList_Cursor, QColor("#E0EBFF"));
-        QCOMPARE(Scheme.FileList_FGColor, QColor("#29462b"));
-        emit Colors->sigColorSchemeChanged(Scheme);
-        QCOMPARE(QApplication::palette().color(QPalette::Window), QColor("#e1e8d7"));
         for (int Index = 0; Index < 12; ++Index) {
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Index % 2 ? Name : QStringLiteral("기본 다크")));
+            emit Colors->sigColorSchemeChanged(Colors->ForMode(Index % 2 == 0));
             QCoreApplication::processEvents();
             QCOMPARE(qApp->style(), Style.data());
             QCOMPARE(Proxy->baseStyle(), Base.data());
@@ -8712,12 +8661,10 @@ private slots:
         const auto Inspected = InspectManifestFile(ManifestPath);
         QVERIFY2(Inspected.HasValue(), Inspected.HasValue() ? "" : Inspected.Failure().code_.c_str());
         const auto OriginalPlugins = hc::settings::AppSettings().Read(hc::settings::Section::Plugins);
-        const auto OriginalEditors = hc::settings::AppSettings().Read(hc::settings::Section::Editors);
         auto* Host = static_cast<QtViewerHost*>(main_->findChild<QObject*>("hc.viewer.host")); QVERIFY(Host);
         const auto Restore = qScopeGuard([&] {
             Host->CloseAll(); while (!Host->IsIdle()) QTest::qWait(10);
             hc::settings::AppSettings().Put(hc::settings::Section::Plugins, OriginalPlugins);
-            hc::settings::AppSettings().Put(hc::settings::Section::Editors, OriginalEditors);
             TyStPlugInMgr::GetInstance()->Refresh();
         });
         hc::settings::AppSettings().SetPlugins("wlx", {});
@@ -8728,9 +8675,6 @@ private slots:
         hc::settings::AppSettings().Commit(); TyStPlugInMgr::GetInstance()->Refresh();
         const auto Choices = QPluginHostSettings::ViewerChoices(hc::settings::AppSettings()); QVERIFY(!Choices.empty());
         const auto Target = hc::document::BuildPluginViewerTarget(Choices.front().name_, Choices.front().options_, Choices.front().extensions_);
-        auto Editors = hc::settings::AppSettings().Read(hc::settings::Section::Editors).toObject();
-        auto Handlers = Editors["documentHandlers"].toObject(); Handlers["defaultViewHandlerId"] = QString::fromStdString(Target.descriptor_.stableId_);
-        Editors["documentHandlers"] = Handlers; hc::settings::AppSettings().Put(hc::settings::Section::Editors, Editors);
         QTemporaryDir Content; const auto Name = QFileInfo(qEnvironmentVariable("HC_WLX_SOURCE")).fileName();
         QVERIFY(QFile::copy(qEnvironmentVariable("HC_WLX_SOURCE"), Content.filePath(Name)));
         auto* Source = panels_.front(); auto* Other = panels_.back();
@@ -10303,7 +10247,7 @@ private slots:
         auto* Colors = TyStColorSchemeMgr::GetInstance();
         const auto Restore = qScopeGuard([&] {
             Settings.DiscardEdit(); Settings.Replace(Before); Settings.Commit();
-            Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current());
             main_->RestoreWorkspace(Workspace);
         });
         auto Options = Settings.Read(Section::Options).toObject(); Options["folderSizeMode"] = "local"; Options["folderSizeUseEverything"] = false;
@@ -10344,7 +10288,7 @@ private slots:
         QTest::keyClick(Grid, Qt::Key_Down); QVERIFY(View->CaptureFocus() != FirstKey);
         const auto Moved = View->CaptureFocus(); QVERIFY(!Moved.isEmpty()); QCOMPARE(Model->PendingDirectorySizes(), 256);
         // A color cache miss must return immediately, then update in a later turn.
-        Model->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        Model->SetColorScheme(Colors->Current());
         QSignalSpy Painted(Model, &QAbstractItemModel::dataChanged);
         QVERIFY(Model->data(First, Qt::ForegroundRole).value<QColor>() != QColor("#3182ce")); QCOMPARE(Painted.count(), 0);
         QTRY_COMPARE(Model->data(First, Qt::ForegroundRole).value<QColor>(), QColor("#3182ce"));
@@ -11006,7 +10950,7 @@ private slots:
             .absoluteFilePath("../_build/ui-validation/watercolor"));
         QVERIFY(QDir().mkpath(Artifacts.absolutePath()));
         auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Original = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Original = Colors->Current();
         const auto Workspace = main_->CaptureWorkspace();
         const auto Restore = qScopeGuard([&] {
             emit Colors->sigColorSchemeChanged(Original);
@@ -11047,8 +10991,7 @@ private slots:
         QVERIFY(Scroll > 0);
         const auto Layout = View->CaptureWorkspaceView();
         for (int Index = 0; Index < 8; ++Index) {
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Index % 2
-                ? QStringLiteral("기본 라이트") : QStringLiteral("기본 다크")));
+            emit Colors->sigColorSchemeChanged(Colors->ForMode(Index % 2 == 0));
             QCoreApplication::processEvents();
             QCOMPARE(View->findChild<QLineEdit*>("hc.file.renameEditor"), Input);
             QCOMPARE(Input->text(), QStringLiteral("pending-name.txt"));
@@ -11074,11 +11017,10 @@ private slots:
         const auto Workspace = main_->CaptureWorkspace();
         const auto Restore = qScopeGuard([&] {
             Settings.DiscardEdit(); Settings.Replace(Original); Colors->Refresh();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            emit Colors->sigColorSchemeChanged(Colors->Current());
             main_->RestoreWorkspace(Workspace);
         });
         QVERIFY(Settings.Exists());
-        QCOMPARE(Colors->GetNames().size(), 2);
         for (auto* Panel : panels_) {
             auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
             const auto Model = static_cast<CFSModel*>(model(Panel));
@@ -11086,7 +11028,7 @@ private slots:
             QVERIFY(!Model->LastNavigationError());
             QCOMPARE(QDir::fromNativeSeparators(QString::fromStdString(Model->WorkspaceLocation().root_)), QDir::homePath());
             const auto Columns = View->BaseView();
-            QCOMPARE(Columns->options().backgroundColor(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).FileList_BGColor);
+            QCOMPARE(Columns->options().backgroundColor(), Colors->Current().FileList_BGColor);
             QTRY_VERIFY(Columns->getColumnByModelColumn(0)->width() >= 200);
             QVERIFY2(Columns->getColumnByModelColumn(1)->width() >= 88, qPrintable(QString::number(Columns->getColumnByModelColumn(1)->width())));
             // The date column is sized to its measured content (170 px under Paper Fluent); require the
@@ -11101,14 +11043,12 @@ private slots:
         auto* Model = model(panels_.front());
         QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && names(Model).contains("first-run-example.txt"), 10000);
         for (const bool Dark : {true, false}) {
-            const auto Name = Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트");
             QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
             Dialog.findChild<QComboBox*>("hc.settings.theme")->setCurrentIndex(Dark ? 1 : 0);
             Dialog.findChild<QPushButton*>("btnApply")->click();
             QVERIFY(Settings.Error().isEmpty());
-            QCOMPARE(qApp->style()->property("hc.theme").toString(), Name);
-            QCOMPARE(QApplication::palette().color(QPalette::Window), Colors->GetColorScheme(Name).Dialog_BGColor);
-            const auto Scheme = Colors->GetColorScheme(Name);
+            QCOMPARE(QApplication::palette().color(QPalette::Window), fm::style::ThemeManager::instance().colors()[fm::style::Token::Win]);
+            const auto Scheme = Colors->Current();
             QTRY_COMPARE(Model->index(0, 0).data(Qt::ForegroundRole).value<QColor>(), Scheme.FileList_FGColor);
             QCOMPARE(Model->index(0, 0).data(Qt::BackgroundRole).value<QColor>(), Scheme.FileList_BGColor);
             auto* View = qobject_cast<CGridView*>(panels_.front()->GetFocusView(panels_.front()->CurrentTabIndex()));
@@ -11122,7 +11062,7 @@ private slots:
             QTRY_COMPARE(EmptyBackground(), Scheme.FileList_BGColor);
             QCOMPARE(Model->index(0, 0).data(Qt::FontRole).value<QFont>().pointSize(), 16);
             Repository Restart(QFileInfo(Settings.FileName()).absolutePath());
-            QCOMPARE(Restart.Read(Section::Appearance).toObject()["selected"].toString(), Name);
+            QCOMPARE(Restart.Read(Section::General).toObject()["themeMode"].toString(), Dark ? QString("dark") : QString("light"));
             const auto Applied = QApplication::palette();
             Dialog.findChild<QComboBox*>("hc.settings.theme")->setCurrentIndex(Dark ? 0 : 1);
             Dialog.reject(); QCOMPARE(QApplication::palette(), Applied);
@@ -11140,7 +11080,7 @@ private slots:
         auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Workspace = main_->CaptureWorkspace();
         const auto Restore = qScopeGuard([&] {
             Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+            emit Colors->sigColorSchemeChanged(Colors->Current());
             main_->RestoreWorkspace(Workspace);
         });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
@@ -11156,7 +11096,6 @@ private slots:
         Base->selectRow(2); Base->selectRow(3); Base->setFocusedRowIndex(2);
         const auto Selected = View->CaptureSelection(); QVERIFY(!Selected.isEmpty());
         for (const bool Dark : {false, true, false}) {
-            const auto Name = Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트");
             for (int Mask = 0; Mask < 4; ++Mask) {
                 QMainOpts Dialog(main_); Dialog.show(); QCoreApplication::processEvents();
                 Dialog.findChild<QComboBox*>("hc.settings.theme")->setCurrentIndex(Dark ? 1 : 0);
@@ -11176,13 +11115,13 @@ private slots:
                 }
                 Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(0);
                 QCoreApplication::processEvents();
-                const auto Scheme = Colors->GetColorScheme(Name);
+                const auto Scheme = Colors->Current();
                 QCOMPARE(Scheme.IsInverseCursor, bool(Mask & 1)); QCOMPARE(Scheme.IsInverseSelect, bool(Mask & 2));
                 QCOMPARE(Base->fileManagerOptions().invertedCursor(), bool(Mask & 1));
                 QCOMPARE(Base->fileManagerOptions().invertedSelection(), bool(Mask & 2));
                 QCOMPARE(View->CaptureSelection(), Selected);
                 Repository Restart(QFileInfo(Settings.FileName()).absolutePath());
-                const auto Saved = Restart.Read(Section::Appearance).toObject()["schemes"].toObject()[Name].toObject();
+                const auto Saved = Restart.Read(Section::Appearance).toObject();
                 QCOMPARE(Saved["inverseCursor"].toBool(), bool(Mask & 1));
                 QCOMPARE(Saved["inverseSelection"].toBool(), bool(Mask & 2));
                 for (auto* Combo : Dialog.findChildren<QComboBox*>()) {
@@ -11258,106 +11197,51 @@ private slots:
         QCOMPARE(Settings.Object(), Before);
     }
 
-    void legacySettingsDraftUi()
-    {
-        auto Fixture = hc::defaults::Settings();
-        auto Appearance = Fixture["appearance"].toObject(); auto Schemes = Appearance["schemes"].toObject();
-        auto Dark = Schemes[QStringLiteral("기본 다크")].toObject(); QJsonObject Flags;
-        for (const auto& Key : Dark["colors"].toObject().keys()) Flags[Key] = true;
-        Dark["colorOverrides"] = Flags; Dark["future"] = "retained"; Schemes[QStringLiteral("기본 다크")] = Dark;
-        Appearance["schemes"] = Schemes; Appearance["selected"] = QStringLiteral("기본 다크"); Fixture["appearance"] = Appearance;
-        auto General = Fixture["general"].toObject(); General["themeMode"] = "dark"; Fixture["general"] = General;
-        auto Plugins = Fixture["plugins"].toObject(); Plugins["wlx"] = QJsonArray{QJsonObject{{"path", "old.wlx64"}, {"detect", "EXT=\"TXT\""}, {"future", true}}}; Fixture["plugins"] = Plugins;
-        Fixture["future"] = QJsonObject{{"retain", true}};
-        hc::ui::LegacySettingsPage Page; Page.Load(Fixture);
-        QVERIFY(Page.Prepare()); auto Unchanged = Fixture; QVERIFY(Page.Apply(Unchanged)); QCOMPARE(Unchanged, Fixture);
-        auto* Cursor = Page.findChild<QCheckBox*>("hc.legacy.override.listCursor"); QVERIFY(Cursor); QVERIFY(Cursor->isChecked()); Cursor->setChecked(false);
-        Page.findChild<QComboBox*>("hc.legacy.defaultView")->setEditText("external.viewer");
-        Page.findChild<QComboBox*>("hc.legacy.selectionPolicy")->setEditText("comparison-only");
-        Page.findChild<QTableWidget*>("hc.legacy.wlxDetect")->item(0, 1)->setText("EXT=\"MD\"");
-        auto* Standard = Page.findChild<QPlainTextEdit*>("hc.legacy.standard"); Standard->setPlainText("{\"dark\":{\"seeds\":{\"invcur\":\"#445566\"}}}");
-        auto Current = Fixture; auto NewGeneral = Current["general"].toObject(); NewGeneral["monoFontPx"] = 23; Current["general"] = NewGeneral;
-        auto NewPlugins = Current["plugins"].toObject(); auto Wlx = NewPlugins["wlx"].toArray(); auto Item = Wlx[0].toObject(); Item["hostManifest"] = "new-manifest.json"; Wlx[0] = Item;
-        Wlx.append(QJsonObject{{"path", "added.wlx64"}, {"detect", ""}}); NewPlugins["wlx"] = Wlx; Current["plugins"] = NewPlugins;
-        QVERIFY(Page.Prepare()); QVERIFY(Page.Apply(Current));
-        QCOMPARE(Current["general"].toObject()["monoFontPx"].toInt(), 23);
-        const auto SavedDark = Current["appearance"].toObject()["schemes"].toObject()[QStringLiteral("기본 다크")].toObject();
-        QVERIFY(!SavedDark["colorOverrides"].toObject()["listCursor"].toBool()); QVERIFY(SavedDark["colorOverrides"].toObject()["listText"].toBool()); QCOMPARE(SavedDark["future"].toString(), QString("retained"));
-        QCOMPARE(Current["plugins"].toObject()["wlx"].toArray().size(), 2);
-        QCOMPARE(Current["plugins"].toObject()["wlx"].toArray()[0].toObject()["hostManifest"].toString(), QString("new-manifest.json"));
-        QCOMPARE(Current["plugins"].toObject()["wlx"].toArray()[0].toObject()["detect"].toString(), QString("EXT=\"MD\""));
-        QCOMPARE(Current["editors"].toObject()["documentHandlers"].toObject()["defaultViewHandlerId"].toString(), QString("external.viewer"));
-        QCOMPARE(Current["editors"].toObject()["documentHandlers"].toObject()["selectionPolicy"].toString(), QString("comparison-only"));
-        QCOMPARE(Current["future"], Fixture["future"]);
-        Page.Load(Current); QVERIFY(Page.Prepare()); auto Again = Current; QVERIFY(Page.Apply(Again)); QCOMPARE(Again, Current);
-        auto* Text = Page.findChild<QLineEdit*>("hc.legacy.color.listCursor"); Cursor->setChecked(true); Text->setText("invalid");
-        QVERIFY(!Page.Prepare()); QVERIFY(!Page.findChild<QLabel*>("hc.legacy.error")->text().isEmpty());
-        Text->setText("#445566"); QVERIFY(Page.Prepare()); QVERIFY(Page.Apply(Again));
-        auto Removed = Current; auto RemovedPlugins = Removed["plugins"].toObject(); RemovedPlugins["wlx"] = QJsonArray{}; Removed["plugins"] = RemovedPlugins;
-        Page.Load(Current); Page.findChild<QTableWidget*>("hc.legacy.wlxDetect")->item(0, 1)->setText("EXT=\"LOG\""); QVERIFY(Page.Prepare());
-        const auto BeforeFailure = Removed; QVERIFY(!Page.Apply(Removed)); QCOMPARE(Removed, BeforeFailure);
-    }
-
-    void legacySettingsApplyCancelUi()
+    void keyboardBuiltInDefaultsUi()
     {
         using namespace hc::settings;
-        auto& Settings = AppSettings(); const auto Original = Settings.Object();
-        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(OriginalScheme); TyStCommandMgr::GetInstance()->Refresh(); });
-        auto Fixture = hc::defaults::Settings(); auto Appearance = Fixture["appearance"].toObject(); auto Schemes = Appearance["schemes"].toObject();
-        auto Light = Schemes[QStringLiteral("기본 라이트")].toObject(); QJsonObject Flags;
-        for (const auto& Key : Light["colors"].toObject().keys()) Flags[Key] = true;
-        Light["colorOverrides"] = Flags; Light["inverseCursor"] = true; Schemes[QStringLiteral("기본 라이트")] = Light; Appearance["schemes"] = Schemes; Fixture["appearance"] = Appearance;
-        Fixture["fileSets"] = QJsonArray{QJsonObject{{"name", "legacy-test"}, {"flags", 2}, {"filters", QJsonArray{}}, {"extensions", QJsonArray{"txt"}}, {"attributes", 0}, {"size", 0}, {"future", "retained"}}};
-        QVERIFY(Settings.Replace(Fixture)); QVERIFY(Settings.Commit()); Colors->Refresh(); TyStCommandMgr::GetInstance()->Refresh();
-        const auto ReadDisk = [&] { QFile File(Settings.FileName()); if (!File.open(QIODevice::ReadOnly)) return QByteArray{}; return File.readAll(); };
-        const auto Before = ReadDisk();
-        { QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(60); Dialog.LoadSettings();
-          auto* Page = Dialog.findChild<QWidget*>("hc.settings.legacy"); QVERIFY(Page);
-          Dialog.findChild<QCheckBox*>("hc.legacy.override.listCursor")->setChecked(false); Dialog.reject(); }
-        QCOMPARE(ReadDisk(), Before);
-        QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(60); Dialog.LoadSettings();
-        auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); const auto Matches = Categories->findItems(QStringLiteral("레거시"), Qt::MatchExactly); QCOMPARE(Matches.size(), 1); Categories->setCurrentItem(Matches.front());
-        Dialog.findChild<QCheckBox*>("hc.legacy.override.listCursor")->setChecked(false);
-        Dialog.findChild<QCheckBox*>("hc.legacy.builtInShortcuts")->setChecked(false);
-        Dialog.findChild<QSpinBox*>("hc.settings.monoSize")->setValue(17);
-        QVERIFY(Dialog.SaveSettings());
-        QVERIFY(!Settings.Read(Section::Appearance).toObject()["schemes"].toObject()[QStringLiteral("기본 라이트")].toObject()["colorOverrides"].toObject()["listCursor"].toBool());
-        QVERIFY(!Settings.Read(Section::General).toObject()["useBuiltInShortcuts"].toBool(true));
-        QCOMPARE(Settings.Read(Section::General).toObject()["monoFontPx"].toInt(), 17);
-        QCOMPARE(Settings.Read(Section::FileSets).toArray()[0].toObject()["future"].toString(), QString("retained"));
-        QVERIFY(TyStCommandMgr::GetInstance()->Retrieve().isEmpty());
-        QVERIFY(!Colors->GetColorScheme(Colors->GetCurrentColorScheme()).explicitColors_.contains("listCursor"));
-        auto* PanelView = static_cast<CGridView*>(panels_.front()->GetFocusView(panels_.front()->CurrentTabIndex()));
-        QVERIFY(PanelView->ListAppearance().invertCursor);
-        QCOMPARE(PanelView->RecordColors()[fm::style::Token::InvCur], fm::style::themeColorsFor(PanelView)[fm::style::Token::InvCur]);
-        QVERIFY(Dialog.SaveSettings()); const auto Applied = ReadDisk();
-        Dialog.findChild<QCheckBox*>("hc.legacy.override.listCursor")->setChecked(true);
-        Dialog.findChild<QLineEdit*>("hc.legacy.color.listCursor")->setText("invalid");
-        QVERIFY(!Dialog.SaveSettings()); QCOMPARE(ReadDisk(), Applied);
-        Dialog.reject(); QCOMPARE(ReadDisk(), Applied);
-        Repository Restart(QFileInfo(Settings.FileName()).absolutePath()); QVERIFY(!Restart.Read(Section::General).toObject()["useBuiltInShortcuts"].toBool(true));
-    }
+        auto& Settings = AppSettings();
+        auto* Commands = TyStCommandMgr::GetInstance();
+        const auto Original = Settings.Object();
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Commands->Refresh(); });
+        auto General = Settings.Read(Section::General).toObject();
+        General["useBuiltInShortcuts"] = true;
+        QVERIFY(Settings.Put(Section::General, General));
+        QVERIFY(Settings.Put(Section::Shortcuts, QJsonObject{}));
+        Commands->Refresh();
+        const auto Defaults = Commands->Retrieve();
+        QVERIFY(!Defaults.isEmpty());
 
-    void legacySettingsLayoutUi()
-    {
-        auto& Settings = hc::settings::AppSettings(); const auto Original = Settings.Object();
-        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(OriginalScheme); });
-        for (int Mode = 0; Mode < 2; ++Mode) {
-            QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(60); Dialog.LoadSettings();
-            Dialog.findChild<QComboBox*>("hc.settings.theme")->setCurrentIndex(Mode); QVERIFY(Dialog.SaveSettings());
-            auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); Categories->setCurrentItem(Categories->findItems(QStringLiteral("레거시"), Qt::MatchExactly).front());
-            auto* Tabs = Dialog.findChild<QTabWidget*>("hc.legacy.tabs"); QCOMPARE(Tabs->count(), 4);
-            Dialog.resize(1000, 720);
-            for (int Tab = 0; Tab < Tabs->count(); ++Tab) {
-                Tabs->setCurrentIndex(Tab); QTest::qWait(30);
-                QVERIFY(Dialog.findChild<QPushButton*>("btnApply")->isVisible());
-                QVERIFY(Dialog.height() <= Dialog.screen()->availableGeometry().height());
-                const auto Path = QDir(QCoreApplication::applicationDirPath()).filePath(QString("legacy-%1-%2.png").arg(Mode ? "dark" : "light").arg(Tab)); QVERIFY(Dialog.grab().save(Path));
-            }
+        const QKeyCombination CustomKey(Qt::AltModifier | Qt::ShiftModifier, Qt::Key_F12);
+        const QKeyCombination InheritedKey = Defaults.cbegin().key();
+        QVERIFY(!Defaults.contains(CustomKey));
+        Commands->SetShortcutWithCMD(CustomKey, "hc.viewer.open");
+        QCOMPARE(Settings.Read(Section::Shortcuts).toObject().size(), 1);
+
+        {
+            QMainOpts Dialog(main_); Dialog.LoadSettings();
+            auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate");
+            QVERIFY(Categories->findItems(QStringLiteral("레거시"), Qt::MatchExactly).isEmpty());
+            Categories->setCurrentItem(Categories->findItems(QStringLiteral("키보드"), Qt::MatchExactly).front());
+            auto* BuiltInKeys = Dialog.findChild<QCheckBox*>("hc.keys.builtInShortcuts");
+            QVERIFY(BuiltInKeys && BuiltInKeys->isChecked());
+            BuiltInKeys->setChecked(false);
+            QVERIFY(!Commands->Retrieve().contains(InheritedKey));
+            QVERIFY(Commands->Retrieve().contains(CustomKey));
             Dialog.reject();
         }
+        QVERIFY(Commands->Retrieve().contains(InheritedKey));
+        {
+            QMainOpts Dialog(main_); Dialog.LoadSettings();
+            Dialog.findChild<QCheckBox*>("hc.keys.builtInShortcuts")->setChecked(false);
+            QVERIFY(Dialog.SaveSettings());
+            QVERIFY(!Commands->Retrieve().contains(InheritedKey));
+            QVERIFY(Commands->Retrieve().contains(CustomKey));
+            Dialog.reject();
+        }
+        Repository Restart(QFileInfo(Settings.FileName()).absolutePath());
+        QCOMPARE(Restart.Read(Section::General).toObject()["useBuiltInShortcuts"].toBool(true), false);
+        QCOMPARE(Restart.Read(Section::Shortcuts).toObject().size(), 1);
     }
 
     void jsonSettingsUi()
@@ -11953,7 +11837,7 @@ private slots:
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         for (const auto* Name : {"marked.txt", "plain.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("body"); }
         {
@@ -11972,7 +11856,7 @@ private slots:
             {"conditions", QJsonArray{QJsonObject{{"type", "field"}, {"field", "file.alternateDataStream.count"}, {"valueType", "unsigned"}, {"op", "ge"}, {"value", "1"}}}}}}};
         QVERIFY(Settings.Put(Section::General, General));
         auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
-        Model->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        Model->SetColorScheme(Colors->Current());
         Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 3);
         const auto IndexOf = [&](const QString& Name) { for (int Row = 0; Row < Model->rowCount(); ++Row) if (Model->GetName(Model->index(Row, 0)) == Name) return Model->index(Row, 0); return QModelIndex{}; };
         // Painting asks for the value; the arrival re-keys the row and decides it.
@@ -12011,7 +11895,7 @@ private slots:
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         // Every file carries an internet-zone mark, so every row waits for the same slow field.
         for (int At = 0; At < 300; ++At) {
@@ -12027,7 +11911,7 @@ private slots:
             {"light", QJsonObject{{"foreground", "#aa0000"}}}, {"dark", QJsonObject{{"foreground", "#aa0000"}}}}};
         auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = Rules; QVERIFY(Settings.Put(Section::Options, Options));
         auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
-        Model->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        Model->SetColorScheme(Colors->Current());
         Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!Model->IsLoading() && Model->rowCount() == 301);
         Panel->sig_NotifyPanelActivated();
         auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View); QVERIFY(Model->HasSlowFileRuleFields());
@@ -12122,7 +12006,7 @@ private slots:
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); auto* Manager = TyStColorSchemeMgr::GetInstance();
         auto& Theme = fm::style::ThemeManager::instance(); const auto Scheme = Theme.scheme();
-        const auto Restore = qScopeGuard([&] { Theme.setScheme(Scheme); Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Manager->GetCurrentColorScheme())); });
+        const auto Restore = qScopeGuard([&] { Theme.setScheme(Scheme); Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->Current()); });
         const QDir Out(qEnvironmentVariable("HC_UI_ARTIFACT_DIR")); const bool Capture = !qEnvironmentVariableIsEmpty("HC_UI_ARTIFACT_DIR"); if (Capture) QDir().mkpath(Out.path());
         QMainOpts Dialog(main_); Dialog.resize(1280, 940); Dialog.show(); QTest::qWait(50); Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(4);
         auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors")); QVERIFY(Page);
@@ -12153,7 +12037,7 @@ private slots:
         QVERIFY(Installer >= 0 && Source >= 0 && Archive >= 0);
         for (const bool Dark : {false, true}) {
             Theme.setScheme(Dark ? fm::style::ThemeManager::Scheme::Dark : fm::style::ThemeManager::Scheme::Light);
-            emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); DarkPreview->setChecked(Dark);
+            emit Manager->sigColorSchemeChanged(Manager->ForMode(Dark)); DarkPreview->setChecked(Dark);
             // The applied group is the last column; the selected group's field sits before it.
             const int Group = Table->columnCount() - 1; QCOMPARE(Group, 3);
             QTRY_COMPARE(Table->item(Installer, Group)->text(), QStringLiteral("확인 중 · 필드 값 필요"));
@@ -12162,7 +12046,7 @@ private slots:
             Save(Card, QString("examples-%1").arg(Dark ? "dark" : "light"));
         }
         Theme.setScheme(fm::style::ThemeManager::Scheme::Light);
-        emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(QStringLiteral("기본 라이트"))); DarkPreview->setChecked(false);
+        emit Manager->sigColorSchemeChanged(Manager->ForMode(false)); DarkPreview->setChecked(false);
         // The custom input takes field values as text: name=value pairs, '-' empty, '!' error, absent = being checked.
         Page->findChild<QAbstractButton*>("hc.rules.customToggle")->setChecked(true);
         auto* Name = Page->findChild<QLineEdit*>("hc.rules.sample"); auto* Fields = Page->findChild<QLineEdit*>("hc.rules.sampleFields"); auto* Size = Page->findChild<QLineEdit*>("hc.rules.sampleSize");
@@ -14225,7 +14109,7 @@ private slots:
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
         auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
-        const auto ApplyRules = [&] { Model->SetColorScheme(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); };
+        const auto ApplyRules = [&] { Model->SetColorScheme(Colors->Current()); };
         const auto Restore = qScopeGuard([&] {
             Settings.Replace(Original); Settings.Commit(); TyStPlugInMgr::GetInstance()->Refresh(); ApplyRules(); main_->RestoreWorkspace(Workspace);
         });
@@ -16030,7 +15914,7 @@ private slots:
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); auto* Manager = TyStColorSchemeMgr::GetInstance();
         auto& Theme = fm::style::ThemeManager::instance();
         const bool NativeDialogs = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs); QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Manager->GetCurrentColorScheme())); QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, NativeDialogs); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->Current()); QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, NativeDialogs); });
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(4);
         auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors"));
         Page->Load(FileColorExamples::AddTo(FileColorRules::Empty())); Page->findChild<QRadioButton*>("hc.rules.merge")->click();
@@ -16064,7 +15948,7 @@ private slots:
         for (const auto Design : {Theme.design()}) {
             // Exercise the installed product style. Replacing QApplication style directly would destroy its Qtitan proxy.
             for (const bool Dark : {false, true}) {
-                emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); Page->findChild<QCheckBox*>("hc.rules.previewDark")->setChecked(Dark); QTest::qWait(30);
+                emit Manager->sigColorSchemeChanged(Manager->ForMode(Dark)); Page->findChild<QCheckBox*>("hc.rules.previewDark")->setChecked(Dark); QTest::qWait(30);
                 const auto Prefix = QString("review-%1-%2").arg(fm::style::designKey(Design), Dark ? "dark" : "light");
                 for (auto* Scroll : Page->findChildren<QScrollArea*>()) Scroll->verticalScrollBar()->setValue(0); QCoreApplication::processEvents(); Capture(Prefix + "-top");
                 for (auto* Scroll : Page->findChildren<QScrollArea*>()) Scroll->verticalScrollBar()->setValue(Scroll->verticalScrollBar()->maximum()); QCoreApplication::processEvents(); Capture(Prefix + "-preview");
@@ -16091,7 +15975,7 @@ private slots:
     {
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace(); auto* Manager = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Manager->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->Current()); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; for (const auto* Name : {"BandedPanelView.cpp", "placeholder-notes.txt", "Qt Creator 18.lnk"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); if (qstrcmp(Name, "placeholder-notes.txt")) File.write("data"); QVERIFY(File.setFileTime(QDateTime::currentDateTimeUtc().addSecs(qstrcmp(Name, "BandedPanelView.cpp") ? -172800 : -3600), QFileDevice::FileModificationTime)); }
         panels_.front()->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!model(panels_.front())->IsLoading() && names(model(panels_.front())).contains("BandedPanelView.cpp"));
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(4);
@@ -16116,7 +16000,7 @@ private slots:
         auto* Groups = Page->findChild<QListWidget*>("hc.rules.groups"); Groups->setCurrentRow(6);
         auto* Dark = Page->findChild<QCheckBox*>("hc.rules.previewDark");
         for (const bool IsDark : {false, true}) {
-            emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(IsDark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); Dark->setChecked(IsDark);
+            emit Manager->sigColorSchemeChanged(Manager->ForMode(IsDark)); Dark->setChecked(IsDark);
             Table->selectRow(4); QCoreApplication::processEvents();
             for (auto* Scroll : Page->findChildren<QScrollArea*>()) if (Scroll->isAncestorOf(Table)) Scroll->ensureWidgetVisible(Table);
             QCoreApplication::processEvents(); const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (!Out.isEmpty()) { QDir().mkpath(Out); QVERIFY(Dialog.grab().save(QDir(Out).filePath(QString("preview-%1-%2.png").arg(IsDark ? "dark" : "light").arg(Dialog.devicePixelRatioF())))); }
@@ -16129,7 +16013,7 @@ private slots:
     {
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); auto* Manager = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Manager->GetCurrentColorScheme())); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh(); emit Manager->sigColorSchemeChanged(Manager->Current()); });
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(4);
         auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors"));
         auto Doc = FileColorRules::Empty(); QJsonObject G{{"id", "appearance"}, {"name", "색상 보존"}, {"join", "any"}, {"conditions", QJsonArray{QJsonObject{{"type", "extension"}, {"value", "txt"}}}},
@@ -16151,7 +16035,7 @@ private slots:
         Repository Restart(QFileInfo(Settings.FileName()).absolutePath()); QCOMPARE(Restart.Read(Section::Options).toObject()["fileColorRules"].toObject(), Saved);
         Page->Load(Saved); Auto->setChecked(false); QCOMPARE(*Dark->color(), QColor("#abcdef"));
         for (const bool IsDark : {false, true}) {
-            emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(IsDark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); QCoreApplication::processEvents();
+            emit Manager->sigColorSchemeChanged(Manager->ForMode(IsDark)); QCoreApplication::processEvents();
             for (int I = 0; I < 2; ++I) QVERIFY(Page->findChild<QLabel*>("hc.rules.contrast." + QString::number(I))->text().contains(":1"));
             const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (!Out.isEmpty()) { QDir().mkpath(Out); QVERIFY(Dialog.grab().save(QDir(Out).filePath(QString("appearance-%1-%2.png").arg(IsDark ? "dark" : "light").arg(Dialog.devicePixelRatioF())))); }
         }
@@ -16163,7 +16047,7 @@ private slots:
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Before); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Before); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         const auto Nfc = QStringLiteral("한글-NFC.txt"), Nfd = QStringLiteral("한글-NFD.txt").normalized(QString::NormalizationForm_D);
         const auto Mixed = QStringLiteral("한글-") + QStringLiteral("이름").normalized(QString::NormalizationForm_D) + ".txt";
         const auto Folder = QStringLiteral("분리 폴더").normalized(QString::NormalizationForm_D);
@@ -16217,7 +16101,7 @@ private slots:
         auto& Settings = AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Before); Settings.Commit(); Colors->Refresh();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+            emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         const QStringList Rtl{QStringLiteral("left-\u05d0.txt"), QStringLiteral("left-\u0627.txt"), QStringLiteral("safe-\u202etxt.exe")};
         const QStringList Plain{QStringLiteral("ASCII.txt"), QStringLiteral("한글.txt")};
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
@@ -16280,7 +16164,7 @@ private slots:
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         for (int I = 0; I < 400; ++I) { QFile F(Directory.filePath(QString("report_%1.txt").arg(I, 4, 10, QChar('0')))); QVERIFY(F.open(QIODevice::WriteOnly)); F.write("data"); }
         QFile Other(Directory.filePath("notes.dat")); QVERIFY(Other.open(QIODevice::WriteOnly)); Other.write("data"); Other.close();
@@ -16297,7 +16181,7 @@ private slots:
         Op->setCurrentIndex(Op->findData("globMatches"));
         Table->cellWidget(0, 2)->findChild<QLineEdit*>("hc.condition.value")->setText("t?t");
         QCOMPARE(Page->Document()["version"], QJsonValue(3)); QVERIFY(Page->Validate()); QVERIFY(Dialog.SaveSettings());
-        const auto ExpectedColor = Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#88BBEE") : QColor("#2266AA");
+        const auto ExpectedColor = Colors->Current().IsDarkMode ? QColor("#88BBEE") : QColor("#2266AA");
         // Request more rows than the pending cap once. Completion must retry
         // deferred rows without requiring another user scroll or key event.
         for (int Row = 0; Row < Model->rowCount(); ++Row) Model->index(Row, 0).data(Qt::ForegroundRole);
@@ -16339,7 +16223,7 @@ private slots:
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         for (int I = 0; I < 120; ++I) { QFile F(Directory.filePath(QString("note_%1.txt").arg(I, 3, 10, QChar('0')))); QVERIFY(F.open(QIODevice::WriteOnly)); F.write("data"); }
         QVERIFY(QDir(Directory.path()).mkdir("nested")); QFile Other(Directory.filePath("other.dat")); QVERIFY(Other.open(QIODevice::WriteOnly)); Other.write("data"); Other.close();
@@ -16349,7 +16233,7 @@ private slots:
             {"light", QJsonObject{{"foreground", "#2266aa"}}}, {"dark", QJsonObject{{"foreground", "#88bbee"}}}}};
         auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = Rules; QVERIFY(Settings.Put(Section::Options, Options));
         auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
-        const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme()); Model->SetColorScheme(Scheme);
+        const auto Scheme = Colors->Current(); Model->SetColorScheme(Scheme);
         const QColor Expected(Scheme.IsDarkMode ? "#88bbee" : "#2266aa");
         const auto StyleUpdates = [](const QSignalSpy& Spy) {
             int Count = 0;
@@ -16393,12 +16277,12 @@ private slots:
         // and reports how far each page scrolls; input for the style review.
         const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) QSKIP("HC_UI_ARTIFACT_DIR not set");
         auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Workspace = main_->CaptureWorkspace();
-        const auto Restore = qScopeGuard([&] { Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50); Dialog.LoadSettings();
         auto* Categories = Dialog.findChild<QListWidget*>("lstOptCate"); QVERIFY(Categories);
         auto* Stack = Dialog.findChild<QStackedWidget*>("stkOpts"); QVERIFY(Stack);
         for (const bool Dark : {false, true}) {
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); QTest::qWait(80);
+            emit Colors->sigColorSchemeChanged(Colors->ForMode(Dark)); QTest::qWait(80);
             for (int Row = 0; Row < Categories->count(); ++Row) {
                 Categories->setCurrentRow(Row); QCoreApplication::processEvents(); QTest::qWait(40);
                 QVERIFY(Dialog.grab().save(QDir(Out).filePath(QString("settings-%1-%2.png").arg(Row, 2, 10, QChar('0')).arg(Dark ? "dark" : "light"))));
@@ -16423,7 +16307,7 @@ private slots:
         const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) QSKIP("HC_UI_ARTIFACT_DIR not set");
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto Workspace = main_->CaptureWorkspace();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); TyStFavoriteDirMgr::GetInstance()->Refresh(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); TyStFavoriteDirMgr::GetInstance()->Refresh(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         const QJsonArray Items{QJsonObject{{"name", "프로젝트 · HyperCommander"}, {"command", "cd"}, {"path", "D:\\Dev\\HyperCommander"}},
             QJsonObject{{"name", "다운로드"}, {"command", "cd"}, {"path", "C:\\Users\\jgh0721\\Downloads"}},
             QJsonObject{{"name", "문서 · 보고서"}, {"command", "cd"}, {"path", "D:\\Documents\\Reports"}},
@@ -16432,7 +16316,7 @@ private slots:
         QVERIFY(Settings.Put(Section::Favorites, QJsonObject{{"items", Items}, {"drivesOn", "bottom"}})); TyStFavoriteDirMgr::GetInstance()->Refresh();
         auto* Panel = panels_.front(); Panel->sig_NotifyPanelActivated();
         for (const bool Dark : {false, true}) {
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); QTest::qWait(80);
+            emit Colors->sigColorSchemeChanged(Colors->ForMode(Dark)); QTest::qWait(80);
             bool Seen = false;
             QTimer::singleShot(150, main_, [&] {
                 auto* Menu = qobject_cast<QMenu*>(QApplication::activePopupWidget()); if (!Menu) return;
@@ -16456,7 +16340,7 @@ private slots:
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         // More rows than the worker seeds and than the indexed-order threshold.
         const int Count = qEnvironmentVariableIntValue("HC_COLOR_BOUNDARY_ROWS") > 0 ? qEnvironmentVariableIntValue("HC_COLOR_BOUNDARY_ROWS") : 4400;
@@ -16467,7 +16351,7 @@ private slots:
             {"light", QJsonObject{{"foreground", "#2266aa"}}}, {"dark", QJsonObject{{"foreground", "#88bbee"}}}}};
         auto Options = Settings.Read(Section::Options).toObject(); Options["fileColorRules"] = Rules; QVERIFY(Settings.Put(Section::Options, Options));
         auto* Panel = panels_.front(); auto* Model = static_cast<CFSModel*>(model(Panel));
-        const auto Scheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme()); Model->SetColorScheme(Scheme);
+        const auto Scheme = Colors->Current(); Model->SetColorScheme(Scheme);
         const QColor Expected(Scheme.IsDarkMode ? "#88bbee" : "#2266aa");
         Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY_WITH_TIMEOUT(!Model->IsLoading() && Model->rowCount() >= Count, 30000);
         QCOMPARE(Model->UsesIndexedOrder(), Count > int(CFSModel::IndexedOrderThreshold));
@@ -16489,7 +16373,7 @@ private slots:
     {
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace(); auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         for (const auto* Name : {"CMakeLists.txt", "example.cmake", "plain.txt", "launcher.lnk"}) { QFile F(Directory.filePath(Name)); QVERIFY(F.open(QIODevice::WriteOnly)); F.write("data"); QVERIFY(F.setFileTime(QDateTime::currentDateTimeUtc().addSecs(qstrcmp(Name, "plain.txt") == 0 ? -56 : -3600), QFileDevice::FileModificationTime)); }
         panels_.front()->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!model(panels_.front())->IsLoading() && names(model(panels_.front())).contains("example.cmake"));
@@ -16512,15 +16396,15 @@ private slots:
         hc::ui::FileColorConditionRow::CellEditor<QPushButton>(Table, 1, 3)->click(); QCOMPARE(Table->rowCount(), 1); QVERIFY(Page->Validate()); QVERIFY(Dialog.SaveSettings());
         const auto SavedPattern = Page->Document();
         auto* Model = static_cast<CFSModel*>(model(panels_.front())); const auto RowOf = [&](const QString& Name) { for (int I = 0; I < Model->rowCount(); ++I) if (Model->GetName(Model->index(I, 0)) == Name) return I; return -1; };
-        QTRY_COMPARE(Model->index(RowOf("example.cmake"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
+        QTRY_COMPARE(Model->index(RowOf("example.cmake"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->Current().IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
         auto Links = SavedPattern; auto LinkGroups = Links["groups"].toArray(); auto LinkGroup = LinkGroups[0].toObject(); LinkGroup["conditions"] = QJsonArray{QJsonObject{{"type", "link"}, {"op", "is"}, {"value", "any"}}}; LinkGroups[0] = LinkGroup; Links["groups"] = LinkGroups;
         Page->Load(Links); QVERIFY(Dialog.SaveSettings());
-        const auto CurrentScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme()); const auto ExplicitColor = CurrentScheme.IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800");
+        const auto CurrentScheme = Colors->Current(); const auto ExplicitColor = CurrentScheme.IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800");
         QTRY_COMPARE(Model->index(RowOf("launcher.lnk"), 0).data(Qt::ForegroundRole).value<QColor>(), ExplicitColor);
         QTRY_COMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), CurrentScheme.FileList_FGColor);
         auto Recent = SavedPattern; auto Groups = Recent["groups"].toArray(); auto Group = Groups[0].toObject();
         Group["conditions"] = QJsonArray{QJsonObject{{"type", "modified"}, {"op", "within"}, {"value", "24"}, {"unit", "hours"}}}; Groups[0] = Group; Recent["groups"] = Groups;
-        Page->Load(Recent); QVERIFY(Dialog.SaveSettings()); QTRY_COMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->GetColorScheme(Colors->GetCurrentColorScheme()).IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
+        Page->Load(Recent); QVERIFY(Dialog.SaveSettings()); QTRY_COMPARE(Model->index(RowOf("plain.txt"), 0).data(Qt::ForegroundRole).value<QColor>(), Colors->Current().IsDarkMode ? QColor("#ffbd72") : QColor("#9a3800"));
         auto Expiring = Recent; auto ExpiringGroups = Expiring["groups"].toArray(); auto ExpiringGroup = ExpiringGroups[0].toObject(); ExpiringGroup["conditions"] = QJsonArray{QJsonObject{{"type", "modified"}, {"op", "within"}, {"value", "1"}, {"unit", "minutes"}}}; ExpiringGroups[0] = ExpiringGroup; Expiring["groups"] = ExpiringGroups;
         // The steps above take seconds (opening the settings dialog alone is about 3 s here). Restamp so
         // the one-minute window starts now instead of when the fixture was written.
@@ -16539,7 +16423,7 @@ private slots:
         Page->findChild<QCheckBox*>("hc.rules.sampleModifiedKnown")->setChecked(true); Page->findChild<QDateTimeEdit*>("hc.rules.sampleModified")->setDateTime(QDateTime::currentDateTimeUtc().addSecs(-3600));
         Page->findChild<QPushButton*>("hc.rules.addCondition")->click(); auto* LinkField = hc::ui::FileColorConditionRow::CellEditor<QComboBox>(Table, 1, 0); LinkField->setCurrentIndex(LinkField->findData("link")); Page->findChild<QPushButton*>("hc.rules.any")->click();
         const auto Capture = [&](const QString& Name) { const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) return; QDir().mkpath(Out); QVERIFY(Dialog.grab().save(QDir(Out).filePath(Name + '-' + QString::number(Dialog.devicePixelRatioF()) + ".png"))); };
-        for (const bool Dark : {false, true}) { emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); QCoreApplication::processEvents(); Capture(Dark ? "conditions-dark" : "conditions-light"); }
+        for (const bool Dark : {false, true}) { emit Colors->sigColorSchemeChanged(Colors->ForMode(Dark)); QCoreApplication::processEvents(); Capture(Dark ? "conditions-dark" : "conditions-light"); }
         QCOMPARE(Table->verticalScrollBar()->maximum(), 0);
         auto Numeric = Before; auto NumericGroups = Numeric["groups"].toArray(); auto NumericGroup = NumericGroups[0].toObject();
         NumericGroup["conditions"] = QJsonArray{QJsonObject{{"type", "size"}, {"op", "ge"}, {"value", "1"}, {"unit", "MiB"}}, QJsonObject{{"type", "attributes"}, {"op", "any"}, {"value", "6"}}, QJsonObject{{"type", "modified"}, {"op", "before"}, {"value", "2026-10-13T12:00:00Z"}}}; NumericGroups[0] = NumericGroup; Numeric["groups"] = NumericGroups;
@@ -16548,7 +16432,7 @@ private slots:
         QCOMPARE(Page->Document()["groups"].toArray()[0].toObject()["conditions"].toArray()[1].toObject()["value"], QJsonValue("4"));
         AttributePicker->menu()->actions()[1]->setChecked(true); QCOMPARE(Page->Document()["groups"].toArray()[0].toObject()["conditions"].toArray()[1].toObject()["value"], QJsonValue("6"));
         QVERIFY(Page->Validate());
-        for (const bool Dark : {false, true}) { emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"))); QCoreApplication::processEvents(); Capture(Dark ? "conditions-values-dark" : "conditions-values-light"); }
+        for (const bool Dark : {false, true}) { emit Colors->sigColorSchemeChanged(Colors->ForMode(Dark)); QCoreApplication::processEvents(); Capture(Dark ? "conditions-values-dark" : "conditions-values-light"); }
         QCOMPARE(Table->verticalScrollBar()->maximum(), 0);
         const auto FullSize = Dialog.size(); Dialog.resize(QSize(900, 650)); QCoreApplication::processEvents(); Capture("conditions-small"); Dialog.resize(FullSize); QCoreApplication::processEvents(); QCOMPARE(Dialog.size(), FullSize);
         const auto Size = Dialog.size(); Dialog.move(Dialog.pos() + QPoint(20, 20)); QCoreApplication::processEvents(); QCOMPARE(Dialog.size(), Size);
@@ -16556,40 +16440,44 @@ private slots:
         Repository Restart(QFileInfo(Settings.FileName()).absolutePath()); QCOMPARE(Restart.Read(Section::Options).toObject()["fileColorRules"].toObject(), Before);
     }
 
-    void removedLegacyAppearanceUi()
+    void displayPreferencesPreserveStoredRulesUi()
     {
         using namespace hc::settings;
-        auto& Settings = AppSettings(); const auto Original = Settings.Object(); auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); });
-        auto Appearance = BuiltInAppearance(); auto Schemes = Appearance["schemes"].toObject();
-        auto Custom = Schemes[QStringLiteral("기본 라이트")].toObject(); Custom["name"] = "user-custom";
-        Custom["futureMetadata"] = "preserve";
-        auto Values = Custom["colors"].toObject(); Values["listText"] = "#29462b"; Values["listBackground"] = "#e1e8d7"; Custom["colors"] = Values;
-        Custom["fileSets"] = QJsonObject{{"legacy-documents", QJsonObject{{"foreground", "#558800"}, {"background", "#eeeecc"}}}};
-        Schemes["user-custom"] = Custom; Appearance["schemes"] = Schemes; Appearance["selected"] = "user-custom";
-        QVERIFY(Settings.Put(Section::Appearance, Appearance)); QVERIFY(Settings.Commit()); Colors->Refresh();
-        const auto Before = Colors->GetColorScheme("user-custom");
-        QMainOpts Dialog(main_); Dialog.show(); QTest::qWait(50);
-        QVERIFY(!Dialog.findChild<QWidget*>("pgDisplay_ColorScheme"));
-        QCOMPARE(Dialog.findChild<QFontComboBox*>("hc.settings.listFont")->currentFont().family(), Before.FileList_Font.family());
+        auto& Settings = AppSettings();
+        const auto Original = Settings.Object();
+        auto* Colors = TyStColorSchemeMgr::GetInstance();
+        const auto Restore = qScopeGuard([&] {
+            Settings.DiscardEdit(); Settings.Replace(Original); Colors->Refresh();
+            emit Colors->sigColorSchemeChanged(Colors->Current());
+        });
+        auto Appearance = Settings.Read(Section::Appearance).toObject();
+        const QJsonObject Legacy{{"old", QJsonObject{{"fileSets", QJsonObject{{"docs", QJsonObject{{"foreground", "#558800"}}}}}}}};
+        Appearance["schemes"] = Legacy;
+        QVERIFY(Settings.Put(Section::Appearance, Appearance));
+        Colors->Refresh();
+        const auto Before = Colors->Current();
+        QMainOpts Dialog(main_); Dialog.show(); Dialog.LoadSettings();
         Dialog.findChild<QSpinBox*>("hc.settings.listFontSize")->setValue(15);
-        QVERIFY(Dialog.SaveSettings()); QVERIFY(Dialog.SaveSettings());
-        const auto After = Colors->GetColorScheme("user-custom");
-        QCOMPARE(After.FileList_Font.pointSize(), 15); QCOMPARE(After.explicitColors_, Before.explicitColors_);
-        QCOMPARE(After.FileList_FGColor, Before.FileList_FGColor); QCOMPARE(After.FileList_BGColor, Before.FileList_BGColor);
-        QCOMPARE(After.MapNameToColors, Before.MapNameToColors); QCOMPARE(After.Dialog_Font, Before.Dialog_Font); QCOMPARE(After.Menu_Font, Before.Menu_Font);
-        Repository Restart(QFileInfo(Settings.FileName()).absolutePath()); const auto Saved = Restart.Read(Section::Appearance).toObject();
-        QCOMPARE(Saved["selected"].toString(), QString("user-custom"));
-        QCOMPARE(Saved["schemes"].toObject()["user-custom"].toObject()["futureMetadata"].toString(), QString("preserve"));
-        Dialog.findChild<QSpinBox*>("hc.settings.listFontSize")->setValue(17); Dialog.reject();
-        QCOMPARE(Colors->GetColorScheme("user-custom").FileList_Font.pointSize(), 15);
+        QVERIFY(Dialog.SaveSettings());
+        QVERIFY(Dialog.SaveSettings());
+        const auto After = Colors->Current();
+        QCOMPARE(After.FileList_Font.pointSize(), 15);
+        QCOMPARE(After.FileList_FGColor, Before.FileList_FGColor);
+        QCOMPARE(After.Dialog_Font, Before.Dialog_Font);
+        QCOMPARE(After.Menu_Font, Before.Menu_Font);
+        Repository Restart(QFileInfo(Settings.FileName()).absolutePath());
+        const auto Saved = Restart.Read(Section::Appearance).toObject();
+        QCOMPARE(Saved["schemes"].toObject(), Legacy);
+        QCOMPARE(Saved["fonts"].toObject()["list"].toObject()["pointSize"].toInt(), 15);
+        Dialog.findChild<QSpinBox*>("hc.settings.listFontSize")->setValue(17);
+        Dialog.reject();
+        QCOMPARE(Colors->Current().FileList_Font.pointSize(), 15);
     }
 
     void todoBugFocusFrameFontDpi()
     {
         const auto Workspace = main_->CaptureWorkspace(); auto* Colors = TyStColorSchemeMgr::GetInstance();
-        const auto Original = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        const auto Original = Colors->Current();
         const auto Restore = qScopeGuard([&] { emit Colors->sigColorSchemeChanged(Original); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         QFile File(Directory.filePath("focus.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("frame"); File.close();
@@ -16623,7 +16511,7 @@ private slots:
     {
         using namespace hc::settings;
         auto& Settings = AppSettings(); const auto Before = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
-        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->GetColorScheme(Colors->GetCurrentColorScheme());
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); const auto OriginalScheme = Colors->Current();
         const auto Restore = qScopeGuard([&] { Settings.Replace(Before); Settings.Commit(); emit Colors->sigColorSchemeChanged(OriginalScheme); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         QFile File(Directory.filePath("row-style.txt")); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("all columns"); File.close();
@@ -16648,7 +16536,7 @@ private slots:
             return false;
         };
         for (const bool Dark : {false, true}) for (const auto* Mode : {"one-line", "two-line"}) {
-            auto Scheme = Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
+            auto Scheme = Colors->ForMode(Dark);
             const QColor Foreground(Dark ? "#48ed73" : "#9434b0");
             QVERIFY(View->SetListMode(Mode)); View->RestoreSelection({}, {}); View->BaseView()->setFocusedRowIndex(0);
             QVector<QImage> Plain;
@@ -16692,7 +16580,7 @@ private slots:
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace(); auto* Manager = TyStColorSchemeMgr::GetInstance();
         auto& Theme = fm::style::ThemeManager::instance(); const auto Scheme = Theme.scheme();
         const auto Restore = qScopeGuard([&] { Theme.setScheme(Scheme); Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Manager->Refresh();
-            emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(Manager->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+            emit Manager->sigColorSchemeChanged(Manager->Current()); main_->RestoreWorkspace(Workspace); });
         const QDir Out(qEnvironmentVariable("HC_UI_ARTIFACT_DIR")); const bool Capture = !qEnvironmentVariableIsEmpty("HC_UI_ARTIFACT_DIR"); if (Capture) QDir().mkpath(Out.path());
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         for (const auto* Name : {"setup.exe", "tool.exe", "notes.txt"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("body"); }
@@ -16703,7 +16591,7 @@ private slots:
         }
         auto* Panel = panels_.front(); Panel->ChangeCurrentPath(QDir::toNativeSeparators(Directory.path()), {}); QTRY_VERIFY(!model(Panel)->IsLoading() && names(model(Panel)).contains("setup.exe"));
         auto* View = qobject_cast<CGridView*>(Panel->GetFocusView(Panel->CurrentTabIndex())); QVERIFY(View);
-        Theme.setScheme(fm::style::ThemeManager::Scheme::Light); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(QStringLiteral("기본 라이트")));
+        Theme.setScheme(fm::style::ThemeManager::Scheme::Light); emit Manager->sigColorSchemeChanged(Manager->ForMode(false));
         QMainOpts Dialog(main_); Dialog.SetListView(View); Dialog.resize(1100, 800); Dialog.show(); QTest::qWait(50);
         Dialog.findChild<QListWidget*>("lstOptCate")->setCurrentRow(4); QTest::qWait(50);
         auto* Page = static_cast<hc::ui::FileColorRulesPage*>(Dialog.findChild<QWidget*>("hc.settings.fileColors")); QVERIFY(Page);
@@ -16844,7 +16732,7 @@ private slots:
             QVERIFY(Small->findChild<QWidget*>("hc.rules.top")->height() >= 200);
             Save(&Host, "layout-compact-light");
         }
-        Theme.setScheme(fm::style::ThemeManager::Scheme::Dark); emit Manager->sigColorSchemeChanged(Manager->GetColorScheme(QStringLiteral("기본 다크")));
+        Theme.setScheme(fm::style::ThemeManager::Scheme::Dark); emit Manager->sigColorSchemeChanged(Manager->ForMode(true));
         Page->findChild<QCheckBox*>("hc.rules.previewDark")->setChecked(true); Dialog.resize(1100, 800); QTest::qWait(80);
         Save(&Dialog, "layout-folder-dark"); Tabs->setCurrentIndex(1); Save(&Dialog, "layout-appearance-dark");
         Dialog.reject();
@@ -16857,7 +16745,7 @@ private slots:
         auto& Settings = AppSettings(); const auto Original = Settings.Object(); const auto Workspace = main_->CaptureWorkspace();
         auto* Colors = TyStColorSchemeMgr::GetInstance();
         const auto Restore = qScopeGuard([&] { Settings.DiscardEdit(); Settings.Replace(Original); Settings.Commit(); Colors->Refresh();
-            emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme())); main_->RestoreWorkspace(Workspace); });
+            emit Colors->sigColorSchemeChanged(Colors->Current()); main_->RestoreWorkspace(Workspace); });
         QTemporaryDir Directory; QVERIFY(Directory.isValid());
         for (const auto* Name : {"sample.txt", "UPPER.TXT", "photo.jpg", "archive.tar.gz", "README"}) { QFile File(Directory.filePath(Name)); QVERIFY(File.open(QIODevice::WriteOnly)); File.write("p4 fixture"); }
         QVERIFY(QDir(Directory.path()).mkdir("folder.txt"));
@@ -16897,7 +16785,7 @@ private slots:
         QVERIFY(Dialog.SaveSettings());
         const auto Save = [&](QWidget* Widget, const QString& Name) { const auto Out = qEnvironmentVariable("HC_UI_ARTIFACT_DIR"); if (Out.isEmpty()) return; QDir().mkpath(Out); QVERIFY(Widget->grab().save(QDir(Out).filePath(Name + '-' + QString::number(Widget->devicePixelRatioF()) + ".png"))); };
         for (const bool Dark : {false, true}) {
-            auto Scheme = Colors->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트")); emit Colors->sigColorSchemeChanged(Scheme);
+            auto Scheme = Colors->ForMode(Dark); emit Colors->sigColorSchemeChanged(Scheme);
             for (auto* Panel : panels_) {
                 auto* Model = static_cast<CFSModel*>(model(Panel));
                 for (int Row = 0; Row < Model->rowCount(); ++Row) {

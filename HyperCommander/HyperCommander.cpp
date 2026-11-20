@@ -18,7 +18,6 @@
 #include "cmnTypeDefs_Name.hpp"
 #include "cmnTypeDefs_Opts.hpp"
 #include "externalEditorMgr.hpp"
-#include "fileSetMgr.hpp"
 #include "QtnPlatform.h"
 #include <fmstyle/ThemeManager.h>
 #include "UniqueLibs/productTheme.hpp"
@@ -70,24 +69,17 @@ public:
         auto& Manager = ThemeManager::instance();
         {
             ThemeManager::Batch Batch(Manager);
-            Manager.clearOverrides();
             const auto General = hc::settings::AppSettings().Read(hc::settings::Section::General).toObject();
             const auto Appearance = hc::settings::AppSettings().Read(hc::settings::Section::Appearance).toObject();
             Manager.setColorScheme(hc::theme::ReadProductScheme(Appearance["watercolorTheme"].toObject()));
             Manager.setDarkTitleBar(General["darkTitleBar"].toBool(hc::defaults::DefaultValue("general/darkTitleBar").toBool()));
             Manager.setMonoFont(General["monoFontFamily"].toString(hc::defaults::DefaultValue("general/monoFontFamily").toString()), General["monoFontPx"].toInt(hc::defaults::DefaultValue("general/monoFontPx").toInt()));
-            const auto VariantValue = Scheme.IsDarkMode ? Variant::Dark : Variant::Light;
-            if (Scheme.explicitColors_.contains("dialogText"))
-                Manager.setOverride(VariantValue, Token::Fg, Scheme.Dialog_FGColor);
-            if (Scheme.explicitColors_.contains("dialogBackground"))
-                Manager.setOverride(VariantValue, Token::Win, Scheme.Dialog_BGColor);
             Manager.setScheme(General["themeMode"] == "system" ? ThemeManager::Scheme::System : Scheme.IsDarkMode ? ThemeManager::Scheme::Dark : ThemeManager::Scheme::Light);
             QPixmapCache::clear();
         }
         QApplication::setFont(Scheme.Dialog_Font);
         QApplication::setFont(Scheme.Menu_Font, "QMenu");
         QApplication::setFont(Scheme.Menu_Font, "QMenuBar");
-        setProperty("hc.theme", Scheme.Name);
         const auto Accent = Manager.colors()[Token::Accent];
         for (const auto Pair : {qMakePair(Qtitan::GridThemeManager::SortAscendingIcon, false),
                                qMakePair(Qtitan::GridThemeManager::SortDescendingIcon, true)}) {
@@ -208,12 +200,12 @@ HyperCommanderApp::HyperCommanderApp( int& argc, char** argv )
     initialize();
     hc::startup::Record("app.initialize.end");
     const auto Colors = TyStColorSchemeMgr::GetInstance();
-    Style->Apply(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+    Style->Apply(Colors->Current());
     connect(Colors, &CColorSchemeMgr::sigColorSchemeChanged, this, [Style](const TyColorScheme& Scheme) { Style->Apply(Scheme); });
     connect(styleHints(), &QStyleHints::colorSchemeChanged, this, [](Qt::ColorScheme) {
         auto& Settings = hc::settings::AppSettings();
         if (Settings.Editing() || Settings.Read(hc::settings::Section::General).toObject()["themeMode"] != "system") return;
-        auto* Colors = TyStColorSchemeMgr::GetInstance(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->GetColorScheme(Colors->GetCurrentColorScheme()));
+        auto* Colors = TyStColorSchemeMgr::GetInstance(); Colors->Refresh(); emit Colors->sigColorSchemeChanged(Colors->Current());
     });
     if (!Settings.Exists() && Settings.Writable()) Settings.Commit();
 
@@ -238,7 +230,6 @@ void HyperCommanderApp::initialize()
 
     TyStExternalEditorMgr::GetInstance()->Refresh();
     TyStPlugInMgr::GetInstance()->Refresh();
-    TyStFileSetMgr::GetInstance()->Refresh();
     TyStFavoriteDirMgr::GetInstance()->Refresh();
 
     StCommandMgr->Refresh();

@@ -245,8 +245,6 @@ set(UNIQUELIBS_SRC
         ../UniqueLibs/commandMgr_Defs.hpp
         ../UniqueLibs/externalEditorMgr.cpp
         ../UniqueLibs/externalEditorMgr.hpp
-        ../UniqueLibs/fileSetMgr.cpp
-        ../UniqueLibs/fileSetMgr.hpp
         ../UniqueLibs/globalCtx.hpp
         ../UniqueLibs/model_defs.cpp
         ../UniqueLibs/model_defs.hpp

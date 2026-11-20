@@ -1426,39 +1426,15 @@ namespace hc::defaults
             return { { "version", 2 }, { "mode", "first" }, { "groups", QJsonArray{} } };
         return { { "version", 4 }, { "mode", "merge" }, { "groups", DefaultFileGroups() } };
     }
-    inline QJsonArray LegacyFileSets()
+    inline QJsonObject FontDefaults(const QString& Role, bool Recovery = false)
     {
-        // name, flags, filters[], extensions[], attributes, size 형식의 구형 파일 집합.
-        return {};
+        return {{"family", Role == "list" ? "D2Coding ligature" : "Malgun Gothic"},
+            {"pointSize", Role == "list" ? 16 : Recovery ? 9 : 11}};
     }
-    inline QJsonObject LegacyFileSetColors( bool Dark )
+    inline QJsonObject Appearance(bool ExistingInstallation = false)
     {
-        // 집합 이름 -> {foreground: "#RRGGBB", background: "#RRGGBB"}.
-        Q_UNUSED( Dark );
-        return {};
-    }
-    inline QJsonObject Appearance( bool ExistingInstallation = false )
-    {
-        QJsonObject Schemes;
-        for( const bool Dark : { false, true } )
-        {
-            const QJsonObject Font{ { "family", "Malgun Gothic" }, { "pointSize", 11 } };
-            const QJsonObject ListFont{ { "family", "D2Coding ligature" }, { "pointSize", 16 } };
-            Schemes[ Dark ? QStringLiteral( "기본 다크" ) : QStringLiteral( "기본 라이트" ) ] =
-                QJsonObject{ { "dark", Dark },
-                             { "inverseCursor",           false },
-                             { "inverseSelection",        !ExistingInstallation },
-                             { "fonts",                   QJsonObject{ { "menu", Font }, { "dialog", Font }, { "list", ListFont } } },
-                             { "colors",
-                               QJsonObject{ { "dialogText", Dark ? "#E8EDF5" : "#20242B" },
-                                            { "dialogBackground",        Dark ? "#20252E" : "#F4F6FA" },
-                                            { "listText",                Dark ? "#E8EDF5" : "#20242B" },
-                                            { "listBackground",          Dark ? "#181C23" : "#FFFFFF" },
-                                            { "listCursor",              Dark ? "#34445C" : "#E0EBFF" },
-                                            { "listSelection",           Dark ? "#405575" : "#C9D9F1" } } },
-                             { "fileSets",                LegacyFileSetColors( Dark ) } };
-        }
-        return { { "selected", ExistingInstallation ? QStringLiteral( "기본 라이트" ) : QStringLiteral( "기본 다크" ) }, { "schemes", Schemes } };
+        return {{"inverseCursor", false}, {"inverseSelection", !ExistingInstallation},
+            {"fonts", QJsonObject{{"menu", FontDefaults("menu")}, {"dialog", FontDefaults("dialog")}, {"list", FontDefaults("list")}}}};
     }
     inline QJsonObject FilePanel()
     {
@@ -1535,8 +1511,7 @@ namespace hc::defaults
                  { "newTabPosition",          "last" },
                  { "monoFontFamily",          "Cascadia Mono" },
                  { "monoFontPx",              12 },
-                 // 빈 themeMode는 저장된 선택 색상표의 light/dark를 따른다(기존 설치 호환).
-                 { "themeMode",               ExistingInstallation ? "" : "dark" },
+                 { "themeMode",               ExistingInstallation ? "light" : "dark" },
                  { "functionCommands",        QJsonArray::fromStringList( FunctionCommands() ) },
                  { "functionCaptions",        QJsonArray{} },
                  { "filePanel",               FilePanel() },
@@ -1580,15 +1555,6 @@ namespace hc::defaults
                  { "showJobDetails",          false },
                  { "fileColorRules",          FileGroups( ExistingInstallation ) } };
     }
-    inline QJsonObject DocumentHandlers()
-    {
-        return { { "schemaVersion", 1 },
-                 { "handlers",                QJsonArray{} },
-                 { "defaultViewHandlerId",    "builtin.hyperviewer" },
-                 { "defaultEditHandlerId",    "builtin.hypereditor" },
-                 { "selectionPolicy",         "askWhenMultiple" },
-                 { "fileTypeOverrides",       QJsonObject{} } };
-    }
     inline QJsonObject Settings( bool ExistingInstallation = false )
     {
         return { { "schemaVersion", 1 },
@@ -1597,8 +1563,8 @@ namespace hc::defaults
                  // shortcuts는 사용자 차이만 저장한다. 제품 키는 위 명령·프리셋에서 설정한다.
                  { "shortcuts",               QJsonObject{} },
                  { "favorites",               QJsonObject{ { "drivesOn", "none" }, { "items", QJsonArray{} } } },
-                 { "fileSets",                LegacyFileSets() },
-                 { "editors",                 QJsonObject{ { "items", QJsonArray{} }, { "documentHandlers", DocumentHandlers() } } },
+                 { "fileSets",                QJsonArray{} },
+                 { "editors",                 QJsonObject{ { "items", QJsonArray{} } } },
                  { "plugins",
                    QJsonObject{ { "viewerSelection", "manual" },
                                 { "wlx",                     QJsonArray{} },
@@ -1656,13 +1622,6 @@ namespace hc::defaults
         const auto Value = Find(ExistingInstallation ? Existing : Fresh);
         return Value.isUndefined() ? Find(Extra) : Value;
     }
-    inline QJsonObject FontDefaults(const QString& Role, bool Recovery = false)
-    {
-        return {{"family", Role == "list" ? "D2Coding ligature" : "Malgun Gothic"},
-            {"pointSize", Role == "list" ? 16 : Recovery ? 9 : 11}};
-    }
-    inline QString InvalidColor(const QString& Role)
-    { return Role.contains("Background") ? "#FFFFFF" : "#202020"; }
     template<typename Design> inline constexpr Design ProductDesign = Design::PaperFluent;
 
     inline QJsonObject StoreDefaults() { return {{"schemaVersion", 1}}; }

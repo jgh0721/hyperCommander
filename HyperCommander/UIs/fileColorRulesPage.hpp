@@ -415,6 +415,10 @@ protected:
     void resizeEvent(QResizeEvent* Event) override { QWidget::resizeEvent(Event); if (!splitApplied_ && isVisible()) QTimer::singleShot(0, this, [this] { applyInitialSplit(); }); }
 public:
     void ImportLegacy() {
+        constexpr int PatternFlag = 0x1;
+        constexpr int ExtensionFlag = 0x2;
+        constexpr int AttributeFlag = 0x100;
+        constexpr int SizeFlags = 0x1000 | 0x2000 | 0x4000;
         const auto Files = settings::AppSettings().Read(settings::Section::FileSets).toArray();
         const auto Appearance = settings::AppSettings().Read(settings::Section::Appearance).toObject();
         const auto Schemes = Appearance["schemes"].toObject();
@@ -427,10 +431,10 @@ public:
             if (Ids.contains(Id)) continue; const auto Flags = F["flags"].toInteger(); QJsonArray Conditions;
             const auto Add = [&](const QString& Type, const QString& Value) { Conditions.append(QJsonObject{{"type", Type}, {"value", Value}}); };
             bool Review = false;
-            if (Flags & FILE_SET_NOR_EXT_FILTERS) { QStringList Extensions; for (const auto E : F["extensions"].toArray()) Extensions.append(E.toString().isEmpty() ? "<none>" : E.toString()); if (!Extensions.isEmpty()) Add("extension", Extensions.join(", ")); else Review = true; }
-            else if (Flags & FILE_SET_NOR_FILTERS) { for (const auto P : F["filters"].toArray()) if (!P.toString().isEmpty()) Add("pattern", P.toString()); Review = true; }
-            if (Flags & FILE_SET_EXP_ATTRIBUTE) Add("attributes", QString::number(F["attributes"].toInteger() & 0x4837));
-            if (Flags & (FILE_SET_EXP_SIZE_EQUAL | FILE_SET_EXP_SIZE_LESS | FILE_SET_EXP_SIZE_MORE)) Review = true;
+            if (Flags & ExtensionFlag) { QStringList Extensions; for (const auto E : F["extensions"].toArray()) Extensions.append(E.toString().isEmpty() ? "<none>" : E.toString()); if (!Extensions.isEmpty()) Add("extension", Extensions.join(", ")); else Review = true; }
+            else if (Flags & PatternFlag) { for (const auto P : F["filters"].toArray()) if (!P.toString().isEmpty()) Add("pattern", P.toString()); Review = true; }
+            if (Flags & AttributeFlag) Add("attributes", QString::number(F["attributes"].toInteger() & 0x4837));
+            if (Flags & SizeFlags) Review = true;
             if (Conditions.isEmpty()) Add("pattern", "*");
             QString Label = Name; int N = 1; while (Names.contains(Label.toCaseFolded())) Label = Name + tr(" (기존 %1)").arg(N++); Names.insert(Label.toCaseFolded());
             if (document_["version"].toInt() >= 2) { QJsonArray Upgraded; for (const auto C : Conditions) Upgraded.append(settings::FileColorRules::NormalizeCondition(C.toObject(), 1)); Conditions = Upgraded; }
@@ -641,7 +645,7 @@ private:
         // The preview starts at about nine rows (the six examples with room to spare) and the editor takes the rest;
         // a short page keeps 170 for the preview (a few rows).
         const int TopMinimum = splitter_->widget(0)->minimumSizeHint().height();
-        const int Row = previewTable_->rowCount() ? previewTable_->rowHeight(0) : qMax(24, QFontMetrics(recordScheme(previewDark_->isChecked()).FileList_Font).height() + 8);
+        const int Row = previewTable_->rowCount() ? previewTable_->rowHeight(0) : qMax(24, QFontMetrics(TyStColorSchemeMgr::GetInstance()->Current().FileList_Font).height() + 8);
         const int Chrome = qMax(0, previewCard_->height() - previewTable_->height());
         const int Rows = Chrome + previewTable_->horizontalHeader()->sizeHint().height() + 2 * previewTable_->frameWidth() + 9 * Row;
         const int Preview = qBound(previewCard_->minimumHeight(), Total >= 560 ? Rows : 170, qMax(previewCard_->minimumHeight(), Total - TopMinimum));
@@ -674,17 +678,11 @@ private:
         if (!Copy && document_["version"].toInt() >= 2) G["conditions"] = QJsonArray{settings::FileColorRules::NormalizeCondition({{"type", "extension"}, {"value", "txt"}}, 1)};
         G["id"] = QUuid::createUuid().toString(QUuid::WithoutBraces); G["name"] = tr("새 그룹 %1").arg(G["id"].toString().left(8)); Groups.append(G); document_["groups"] = Groups; refreshList(Groups.size() - 1);
     }
-    TyColorScheme recordScheme(bool Dark) const {
-        auto* Manager = TyStColorSchemeMgr::GetInstance(); auto Scheme = Manager->GetColorScheme(Manager->GetCurrentColorScheme());
-        if (Scheme.IsDarkMode != Dark) Scheme = Manager->GetColorScheme(Dark ? QStringLiteral("기본 다크") : QStringLiteral("기본 라이트"));
-        return Scheme;
-    }
     QPair<QColor, QColor> recordPair(bool Dark, const settings::FileRuleResult& Result, bool Selected, bool Name = true) const {
         using namespace fm::style; using namespace fm::filelist; using namespace fm::filelist::detail;
-        const auto Scheme = recordScheme(Dark); auto Colors = ThemeManager::instance().colors(Dark ? Variant::Dark : Variant::Light);
-        Colors.setColor(Token::Surface, Scheme.FileList_BGColor); Colors.setColor(Token::Fg, Scheme.FileList_FGColor);
-        if (Scheme.explicitColors_.contains("listSelection")) { Colors.setColor(Token::Sel, Scheme.FileList_Selected); Colors.setColor(Token::InvSel, Scheme.FileList_Selected); }
-        ListAppearance Appearance; Appearance.invertSelection = Scheme.IsInverseSelect;
+        const auto& Colors = ThemeManager::instance().colors(Dark ? Variant::Dark : Variant::Light);
+        ListAppearance Appearance;
+        Appearance.invertSelection = TyStColorSchemeMgr::GetInstance()->Current().IsInverseSelect;
         if (const auto* Inverse = window()->findChild<QCheckBox*>("hc.settings.inverseSelection")) Appearance.invertSelection = Inverse->isChecked();
         RecordState State; State.active = true; State.marked = Selected;
         const auto Geometry = RecordGeometry::make(Colors.design(), false, Appearance);
@@ -939,7 +937,7 @@ private:
         error_->setText(validationError_); previewStyles_ = Output.samples_; updateSampleTable(Work);
         const auto& Result = Output.custom_;
         const auto Pair = recordPair(Work.input_.dark_, Result, previewSelected_->isChecked()); auto Palette = palette(); Palette.setColor(QPalette::WindowText, Pair.first); Palette.setColor(QPalette::Window, Pair.second);
-        preview_->setPalette(Palette); preview_->setFont(Result.Font(recordScheme(Work.input_.dark_).FileList_Font)); preview_->setText(previewName_->text());
+        preview_->setPalette(Palette); preview_->setFont(Result.Font(TyStColorSchemeMgr::GetInstance()->Current().FileList_Font)); preview_->setText(previewName_->text());
         preview_->setProperty("hc.fileEffects", QVariant::fromValue(Result.font_)); preview_->update();
         const auto EffectNames = effectNames();
         QStringList Owners; for (auto It = Result.owners_.begin(); It != Result.owners_.end(); ++It) Owners.append(EffectNames.value(It.key(), It.key()) + ": " + It.value());
@@ -975,7 +973,7 @@ private:
         for (int Col = 2; Col < Columns; ++Col) Header->setSectionResizeMode(Col, Col == GroupColumn ? QHeaderView::Stretch : QHeaderView::Fixed);
         // Field columns are measured with the row fonts the delegate draws, like the size column.
         QVector<int> FieldWidths; for (int Col = 2; Col < GroupColumn; ++Col) FieldWidths.append(Header->fontMetrics().horizontalAdvance(Headers[Col]) + 24);
-        const auto BaseFont = recordScheme(previewDark_->isChecked()).FileList_Font;
+        const auto BaseFont = TyStColorSchemeMgr::GetInstance()->Current().FileList_Font;
         const auto Labels = effectNames();
         int SizeWidth = previewTable_->fontMetrics().horizontalAdvance(tr("크기")) + 20;
         previewTable_->setRowCount(int(Work.rows_.size()));

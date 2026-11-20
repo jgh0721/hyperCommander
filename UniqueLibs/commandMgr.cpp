@@ -38,26 +38,6 @@ void CCommandMgr::Refresh()
     emit ShortcutsChanged();
 }
 
-void CCommandMgr::SaveSettings()
-{
-    QJsonObject Overrides;
-    const auto Current = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
-    const auto Scoped = hc::ui::CommandLineShortcutOverrides(Current);
-    if (!Scoped.isEmpty()) Overrides["commandLine"] = Scoped;
-    // 보기 입력 범위의 사용자 지정은 전역 맵과 따로 저장되어 있다. 다시 만들 때 그대로 둔다.
-    for (const auto Scope : {hc::ui::InputScope::ProcessView, hc::ui::InputScope::ServiceView, hc::ui::InputScope::RegistryView, hc::ui::InputScope::SystemEnvironmentView}) {
-        const auto View = Current[hc::ui::ScopeKey(Scope)].toObject();
-        if (!View.isEmpty()) Overrides[hc::ui::ScopeKey(Scope)] = View;
-    }
-    const auto Values = Retrieve();
-    const auto Defaults = hc::ui::DefaultShortcuts(hc::settings::AppSettings().Read(hc::settings::Section::General).toObject());
-    for (auto It = Defaults.cbegin(); It != Defaults.cend(); ++It)
-        if (!Values.contains(It.key())) Overrides[QKeySequence(It.key()).toString(QKeySequence::PortableText)] = QJsonValue::Null;
-    for (auto It = Values.begin(); It != Values.end(); ++It)
-        Overrides[QKeySequence(It.key()).toString(QKeySequence::PortableText)] = hc::ui::CommandId(It.value());
-    hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides);
-}
-
 TyMapShortcutToCMDStr CCommandMgr::Retrieve() const
 {
     return *( retrieve() );
@@ -134,7 +114,9 @@ void CCommandMgr::SetShortcutWithCMD( QKeyCombination Key, const QString& CMD )
         hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides);
         emit ShortcutsChanged(); return;
     }
-    (*SpMapKeyToCMDText_)[Key] = GetDefaultCMD(CMD).Name; SaveSettings(); emit ShortcutsChanged();
+    auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+    Overrides[QKeySequence(Key).toString(QKeySequence::PortableText)] = hc::ui::CommandId(CMD);
+    if (hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides)) Refresh();
 }
 
 void CCommandMgr::DelShortcut( QKeyCombination Key, const QString& Id )
@@ -148,7 +130,9 @@ void CCommandMgr::DelShortcut( QKeyCombination Key, const QString& Id )
         hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides);
         emit ShortcutsChanged(); return;
     }
-    SpMapKeyToCMDText_->remove(Key); SaveSettings(); emit ShortcutsChanged();
+    auto Overrides = hc::settings::AppSettings().Read(hc::settings::Section::Shortcuts).toObject();
+    Overrides[QKeySequence(Key).toString(QKeySequence::PortableText)] = QJsonValue::Null;
+    if (hc::settings::AppSettings().Put(hc::settings::Section::Shortcuts, Overrides)) Refresh();
 }
 
 QWidget* CCommandMgr::GetMainUI() const

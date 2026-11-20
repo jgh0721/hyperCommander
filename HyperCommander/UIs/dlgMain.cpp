@@ -243,9 +243,6 @@ void QMainUI::OnMediaRemoved( const QString& Root )
 
 void QMainUI::OnColorSchemeChanged( const TyColorScheme& ColorScheme )
 {
-    if( ColorScheme.Name.isEmpty() == true )
-        return;
-
     QApplication::setFont( ColorScheme.Dialog_Font );
     setFont(ColorScheme.Dialog_Font);
     ui.menubar->setFont(ColorScheme.Menu_Font);

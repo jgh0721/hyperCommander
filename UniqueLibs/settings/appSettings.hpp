@@ -80,7 +80,6 @@ inline QStringList SizeFormats()
         "adaptiveT3", "adaptiveT2", "adaptiveT1", "adaptiveT0", "adaptiveM1", "adaptiveM0"};
 }
 // 이전 API는 유지하고 제품 정의는 한 헤더에서만 만든다.
-inline QJsonObject BuiltInAppearance() { return hc::defaults::Appearance(); }
 inline QJsonObject Defaults() { return hc::defaults::Settings(true); }
 inline QJsonObject MergeDefaults(QJsonObject Value, const QJsonObject& Base, const QString& Path, QStringList& Issues)
 {
@@ -303,6 +302,19 @@ protected:
     {
         Document["editors"] = hc::document::MigrateEditors(Document["editors"]);
         hc::defaults::MigrateCommandSettings( Document );
+        auto Appearance = Document["appearance"].toObject();
+        const auto Selected = Appearance.value("schemes").toObject().value(Appearance.value("selected").toString()).toObject();
+        // These preferences moved to the shared display settings. Keep the source for file rule imports.
+        for (const auto* Key : {"fonts", "inverseCursor", "inverseSelection"})
+            if (!Appearance.contains(Key) && Selected.contains(Key)) Appearance[Key] = Selected[Key];
+        Document["appearance"] = Appearance;
+
+        auto General = Document["general"].toObject();
+        const auto Mode = General.value("themeMode");
+        if ((Mode.isString() && Mode.toString().isEmpty()) || (Mode.isUndefined() && !Selected.isEmpty())) {
+            General["themeMode"] = Selected["dark"].toBool() ? "dark" : "light";
+            Document["general"] = General;
+        }
     }
     void normalize(QJsonObject& Document, QStringList& Issues) override
     {
@@ -399,29 +411,25 @@ protected:
             Plugins[Format] = Valid;
         }
         Document["plugins"] = Plugins;
-        auto Appearance = Document["appearance"].toObject(); auto Schemes = Appearance["schemes"].toObject();
-        const QRegularExpression Color("^#[0-9A-Fa-f]{6}$");
-        for (auto It = Schemes.begin(); It != Schemes.end(); ++It) {
-            auto Record = It.value().toObject(); const auto Prefix = "appearance.schemes." + It.key();
-            if (!It.value().isObject()) { Report(Prefix); It.value() = QJsonObject{}; continue; }
-            auto Fonts = Record.value("fonts").toObject();
-            for (auto Font = Fonts.begin(); Font != Fonts.end(); ++Font) {
-                auto Value = Font.value().toObject();
-                if (!Value["family"].isString() || Value["family"].toString().isEmpty()) { Value["family"] = hc::defaults::FontDefaults(Font.key(), true)["family"]; Report(Prefix + ".fonts." + Font.key() + ".family"); }
-                const auto Size = Value["pointSize"].toDouble(-1);
-                if (Size < 6 || Size > 72 || Size != int(Size)) { Value["pointSize"] = hc::defaults::FontDefaults(Font.key(), true)["pointSize"]; Report(Prefix + ".fonts." + Font.key() + ".pointSize"); }
-                Font.value() = Value;
+        auto Appearance = Document["appearance"].toObject();
+        auto Fonts = Appearance["fonts"].toObject();
+        for (const auto* Role : {"menu", "dialog", "list"}) {
+            auto Font = Fonts[Role].toObject();
+            const auto Defaults = hc::defaults::FontDefaults(Role, true);
+            const auto Path = "appearance.fonts." + QString::fromLatin1(Role);
+            if (Font["family"].toString().isEmpty()) {
+                Font["family"] = Defaults["family"];
+                Report(Path + ".family");
             }
-            if (Record.contains("fonts")) Record["fonts"] = Fonts;
-            auto Colors = Record.value("colors").toObject();
-            for (auto Entry = Colors.begin(); Entry != Colors.end(); ++Entry)
-                if (!Entry.value().isString() || !Color.match(Entry.value().toString()).hasMatch()) {
-                    Entry.value() = hc::defaults::InvalidColor(Entry.key()); Report(Prefix + ".colors." + Entry.key());
-                }
-            if (Record.contains("colors")) Record["colors"] = Colors;
-            It.value() = Record;
+            const auto Size = Font["pointSize"].toDouble();
+            if (Size < 6 || Size > 72 || Size != int(Size)) {
+                Font["pointSize"] = Defaults["pointSize"];
+                Report(Path + ".pointSize");
+            }
+            Fonts[Role] = Font;
         }
-        Appearance["schemes"] = Schemes; Document["appearance"] = Appearance;
+        Appearance["fonts"] = Fonts;
+        Document["appearance"] = Appearance;
     }
 };
 inline ConfigPaths Paths() { return ConfigPaths::Resolve(QCoreApplication::arguments(), QCoreApplication::applicationDirPath()); }

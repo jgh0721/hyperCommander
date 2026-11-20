@@ -40,8 +40,6 @@
 #include <numeric>
 #include <Shlwapi.h>
 
-#include "colorSchemeMgr.hpp"
-#include "fileSetMgr.hpp"
 
 #pragma comment( lib, "shlwapi" )
 
@@ -172,22 +170,8 @@ TyOsError CFSModel::InsertChildItem( const QString& NewName )
     createBuiltFsValues( QVector< nsHC::TySpFileSource >() << Item );
     
     const auto Row = rowCount();
-    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
 
     beginInsertRows( QModelIndex(), Row, Row );
-
-    // 기본 전경/배경 
-    vecRowColors_.push_back( QPair< QColor, QColor >() );
-
-    // 확장자 등에 의한 색상 설정
-    for( const auto& FileSet : vecFileSetColors_ )
-    {
-        if( StColorSchemeMgr->JudgeFileSet( FileSet.first, Item.get(), nullptr, nullptr ) == false )
-            continue;
-
-        vecRowColors_[ Row - 1 ] = FileSet.second;
-        break;
-    }
 
     vecNode_.push_back( Item );
     refreshNameSortRanks();
@@ -377,23 +361,13 @@ void CFSModel::multiData( const QModelIndex& index, QModelRoleDataSpan roleDataS
 
             case FileEffectsRole: { RoleWith.setData(RuleStyle.font_); } break;
             case FileColorOverrideRole: {
-                RoleWith.setData(RuleStyle.matched_ || RuleStyle.pending_ ||
-                    (vecRowColors_[Row].first.isValid() && vecRowColors_[Row].first != colorScheme_.FileList_FGColor) ||
-                    (vecRowColors_[Row].second.isValid() && vecRowColors_[Row].second != colorScheme_.FileList_BGColor));
+                RoleWith.setData(RuleStyle.matched_ || RuleStyle.pending_);
             } break;
             case Qt::ForegroundRole: {
-                if (RuleStyle.matched_ || RuleStyle.pending_) { RoleWith.setData(RuleStyle.foreground_.isValid() ? RuleStyle.foreground_ : colorScheme_.FileList_FGColor); break; }
-                if( vecRowColors_[ Row ].first.isValid() == true )
-                    RoleWith.setData( vecRowColors_[ Row ].first );
-                else if( colorScheme_.FileList_FGColor.isValid() == true )
-                    RoleWith.setData( colorScheme_.FileList_FGColor );   // no fixed white: an unset scheme leaves the view palette
+                RoleWith.setData(RuleStyle.foreground_.isValid() ? RuleStyle.foreground_ : colorScheme_.FileList_FGColor);
             } break;
             case Qt::BackgroundRole: {
-                if (RuleStyle.matched_ || RuleStyle.pending_) { RoleWith.setData(RuleStyle.background_.isValid() ? RuleStyle.background_ : colorScheme_.FileList_BGColor); break; }
-                if( vecRowColors_[ Row ].second.isValid() == true )
-                    RoleWith.setData( vecRowColors_[ Row ].second );
-                else if( colorScheme_.FileList_BGColor.isValid() == true )
-                    RoleWith.setData( colorScheme_.FileList_BGColor );
+                RoleWith.setData(RuleStyle.background_.isValid() ? RuleStyle.background_ : colorScheme_.FileList_BGColor);
             } break;
             case Qt::FontRole: {
                 RoleWith.setData( RuleStyle.Font(colorScheme_.FileList_Font) );
@@ -506,9 +480,7 @@ void CFSModel::doRefresh()
     int DirectoryCount = 0;
     uint64_t TotalSize = 0;
 
-    QVector< TyPrFGWithBG > VecRowColors;
     QVector< nsHC::TySpFileSource > VecItems;
-    const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
     auto Attr = Root->GetCate() == nsHC::FS_CATE_VIRTUAL ? FILE_ATTRIBUTE_VIRTUAL : GetFileAttributesW( Base.toStdWString().c_str() );
     const auto AttributeError = Attr == INVALID_FILE_ATTRIBUTES ? GetLastError() : DWORD(ERROR_SUCCESS);
     const bool ServerOnly = Root->GetCate() == nsHC::FS_CATE_REMOTE && Base.startsWith("\\\\") && Base.count('\\') == 2;
@@ -592,7 +564,6 @@ void CFSModel::doRefresh()
         auto Parent = std::make_shared<nsHC::CFileSourceT>(); Parent->Name_ = ".."; Parent->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
         VecItems = {Parent};
     }
-    VecRowColors.resize( VecItems.count(), qMakePair( colorScheme_.FileList_FGColor, colorScheme_.FileList_BGColor ) );
     createBuiltFsValues( VecItems );
 
     for( qsizetype idx = 0; idx < VecItems.size(); ++idx )
@@ -607,14 +578,6 @@ void CFSModel::doRefresh()
             TotalSize += Item->Size_;
         }
 
-        for( const auto& FileSet : vecFileSetColors_ )
-        {
-            if( StColorSchemeMgr->JudgeFileSet( FileSet.first, Item.get(), nullptr, nullptr ) == false )
-                continue;
-
-            VecRowColors[ idx ] = FileSet.second;
-            break;
-        }
     }
 
     {
@@ -622,7 +585,6 @@ void CFSModel::doRefresh()
         if( FsIconGatherer_ != nullptr )
             FsIconGatherer_->requestInterruption();
         qSwap( VecItems, vecNode_ );
-        qSwap( VecRowColors, vecRowColors_ );
         qSwap( FileCount, fileCount_ );
         qSwap( DirectoryCount, directoryCount_ );
         qSwap( TotalSize, totalSize_ );
@@ -757,7 +719,7 @@ void CFSModel::SetPlaceholder(const hc::storage::Locator& Location, const QStrin
     elevatedDirectorySession_.reset();
     CancelNavigation(); tracker_.SetLocation({});
     columnQueries_->Reset(); clearRuleFields();
-    beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); fileCount_ = directoryCount_ = 0; totalSize_ = 0;
+    beginResetModel(); vecNode_.clear(); fileCount_ = directoryCount_ = 0; totalSize_ = 0;
     vecFs_.clear(); acceptedRoots_.clear(); acceptedProvider_.reset(); path_.clear(); acceptedPath_.clear();
     placeholder_ = Location; recoveryLocation_.reset(); index_.Publish({}); setProperty("hc.snapshotLocation", QString{});
     pageSource_.reset(); pageView_.reset();
@@ -783,7 +745,7 @@ void CFSModel::publishNavigationFallback(const hc::storage::Locator& Location)
     recoveryLocation_ = Location;
     auto Parent = std::make_shared<nsHC::CFileSourceT>();
     Parent->Name_ = ".."; Parent->Attributes_ = FILE_ATTRIBUTE_DIRECTORY;
-    vecNode_ = {Parent}; vecRowColors_ = {{QColor{}, QColor{}}};
+    vecNode_ = {Parent};
     fileCount_ = directoryCount_ = 0; totalSize_ = 0;
     nameSortRanks_.clear(); columnSortRanks_.clear();
     createBuiltFsValues(vecNode_);
@@ -1318,7 +1280,7 @@ void CFSModel::StartEverythingSearch(const QString& Query, const QString& Match,
     if (!searchLocal_) searchLocal_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
     if (!searchSmb_) searchSmb_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
     resetSortWorker();
-    beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); nameSortRanks_.clear(); columnSortRanks_.clear();
+    beginResetModel(); vecNode_.clear(); nameSortRanks_.clear(); columnSortRanks_.clear();
     fileCount_ = directoryCount_ = 0; totalSize_ = 0; endResetModel();
     everythingSession_ = std::make_unique<hc::search::EverythingSession>(this, searchLocal_, searchSmb_);
     everythingSession_->append_ = [this](auto Entries) { appendSearchResults(std::move(Entries)); };
@@ -1348,7 +1310,7 @@ void CFSModel::StartFlatListing(hc::flat::ListingOptions Options)
     if (!searchLocal_) searchLocal_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Local);
     if (!searchSmb_) searchSmb_ = hc::storage::MakeNativeReadProvider(hc::storage::LocatorKind::Smb);
     resetSortWorker();
-    beginResetModel(); vecNode_.clear(); vecRowColors_.clear(); nameSortRanks_.clear(); columnSortRanks_.clear();
+    beginResetModel(); vecNode_.clear(); nameSortRanks_.clear(); columnSortRanks_.clear();
     fileCount_ = directoryCount_ = 0; totalSize_ = 0; endResetModel();
     flatSession_ = std::make_unique<hc::flat::ListingSession>(this, flatKind_ == hc::storage::LocatorKind::Smb ? searchSmb_ : searchLocal_, std::move(Options));
     flatSession_->append_ = [this](auto Entries) { appendSearchResults(std::move(Entries)); };
@@ -1416,7 +1378,6 @@ void CFSModel::RemoveSearchRows(QVector<int> Rows)
             else { --fileCount_; totalSize_ -= std::min<quint64>(totalSize_, quint64(Item->Size_)); }
         }
         vecNode_.erase(vecNode_.begin() + First, vecNode_.begin() + Last + 1);
-        vecRowColors_.erase(vecRowColors_.begin() + First, vecRowColors_.begin() + Last + 1);
         // 아직 끝나지 않은 삭제 구간 동안 Qtitan이 읽는 정렬 값은 행 번호다(크기 불일치).
         endRemoveRows();
     }
@@ -1710,9 +1671,6 @@ void CFSModel::appendSearchResults(std::vector<hc::storage::EntrySnapshot> Entri
     const auto First = vecNode_.size();
     beginInsertRows({}, int(First), int(First + Items.size() - 1));
     for (auto& Item : Items) {
-        auto Color = qMakePair(colorScheme_.FileList_FGColor, colorScheme_.FileList_BGColor);
-        for (const auto& Set : vecFileSetColors_) if (TyStColorSchemeMgr::GetInstance()->JudgeFileSet(Set.first, Item.get(), nullptr, nullptr)) { Color = Set.second; break; }
-        vecRowColors_.push_back(Color);
         if (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) ++directoryCount_;
         else { ++fileCount_; totalSize_ += quint64(Item->Size_); }
         if (flatGroupRecent_ && IsFlatListing()) noteFlatFolder(Item);
@@ -1855,21 +1813,12 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
                 if (const auto Known = KnownRuleFields.constFind(Path); Known != KnownRuleFields.cend() && Known->first == IconIdentity(*Item->storageEntry_))
                     { ruleFields_.insert(Path, Known->second); ruleFieldsStale_.insert(Path); }
     { hc::startup::Span Values("listing.values"); createBuiltFsValues(Items); }
-    QVector<TyPrFGWithBG> Colors; Colors.reserve(Items.size());
     int Files = 0, Directories = 0;
     std::uint64_t Size = 0;
-    const auto ColorMgr = TyStColorSchemeMgr::GetInstance();
-    { hc::startup::Span Phase("listing.legacyColors");
-    for (const auto& Item : Items)
-    {
-        auto Color = qMakePair(colorScheme_.FileList_FGColor, colorScheme_.FileList_BGColor);
-        for (const auto& Set : vecFileSetColors_)
-            if (ColorMgr->JudgeFileSet(Set.first, Item.get(), nullptr, nullptr)) { Color = Set.second; break; }
-        Colors.push_back(Color);
+    for (const auto& Item : Items) {
         // Measured folder sizes count toward the total, as when a measurement arrives.
         if (Item->Attributes_ & FILE_ATTRIBUTE_DIRECTORY) { ++Directories; if (Item->directorySize_) Size += *Item->directorySize_; }
         else { ++Files; Size += Item->Size_; }
-    }
     }
     { hc::startup::Span Phase("listing.modelReset");
     beginResetModel();
@@ -1883,7 +1832,6 @@ void CFSModel::publishProvider(std::vector<hc::storage::EntrySnapshot> Entries, 
         if (!DisplayDeadline || It->expiresAt_ < DisplayDeadline) DisplayDeadline = It->expiresAt_;
     }
     if (DisplayDeadline) fileRuleDisplayTimer_.start(int(qMax(qint64(1), DisplayDeadline - fileRuleDisplayClock_.elapsed())));
-    vecRowColors_ = std::move(Colors);
     fileCount_ = Files;
     directoryCount_ = Directories;
     totalSize_ = Size;
@@ -2625,15 +2573,6 @@ void CFSModel::SetColorScheme(const TyColorScheme& Scheme)
 {
     resetFileRules();
     CFsModelT::SetColorScheme(Scheme);
-    // Recolor the existing snapshot without an I/O refresh or selection reset.
-    const auto Manager = TyStColorSchemeMgr::GetInstance();
-    vecRowColors_.clear(); vecRowColors_.reserve(vecNode_.size());
-    for (const auto& Item : vecNode_) {
-        auto Color = qMakePair(Scheme.FileList_FGColor, Scheme.FileList_BGColor);
-        for (const auto& Set : vecFileSetColors_)
-            if (Manager->JudgeFileSet(Set.first, Item.get(), nullptr, nullptr)) { Color = Set.second; break; }
-        vecRowColors_.push_back(Color);
-    }
     if (rowCount() && columnCount()) emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1),
         {Qt::ForegroundRole, Qt::BackgroundRole, Qt::FontRole, FileEffectsRole});
 }
@@ -2677,184 +2616,7 @@ void CFSModel::createBuiltFsValues(const nsHC::TySpFileSource& Item, int Column)
 //}
 //
 
-//void FSModel::Refresh()
-//{
-//    HRESULT hRet = OleInitialize( 0 );
-//    
-//    int FileCount_Refresh = 0;
-//    int DirectoryCount_Refresh = 0;
-//    int64_t TotalSize_Refresh = 0;
-//    QVector< TyPrFBWithBG > VecRowColors_Refresh;
-//    const auto VecFileSet = TyStFileSetMgr::GetInstance()->GetNames();
-//    TyStColorSchemeMgr::GetInstance()->SetCurrentColorScheme( "Default" );
-//
-//    if( Icon_Directory.isNull() == true )
-//    {
-//        SHFILEINFOW SHInfo = { 0, };
-//        if( SHGetFileInfoW( L"룽슈멜", FILE_ATTRIBUTE_DIRECTORY, &SHInfo, sizeof( SHFILEINFOW ), SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES | SHGFI_TYPENAME ) != FALSE )
-//            Icon_Directory = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
-//    }
-//
-//    const auto Base = CurrentPath.length() == 1 ? Root + CurrentPath : Root + CurrentPath + "\\";
-//
-
-//    QVector< Node > Nodes;
-//
-//    if( CurrentPath.length() != 1 )
-//    {
-//        Node Item;
-//
-//        Item.Attiributes = FILE_ATTRIBUTE_DIRECTORY;
-//        Item.Name = "..";
-//        Item.Size = 0;
-//        if( Icon_Directory.isNull() == false )
-//            Item.Icon = Icon_Directory;
-//
-//        Nodes.push_back( Item );
-//
-//        TyPrFBWithBG Colors;
-//        for( const auto& FileSetName : VecFileSet )
-//        {
-//            if( TyStColorSchemeMgr::GetInstance()->JudgeFileSet( TyStFileSetMgr::GetInstance()->GetFileSet( FileSetName ), Item, &Colors.first, &Colors.second ) == false )
-//                continue;
-//
-//            break;
-//        }
-//
-//        VecRowColors_Refresh.push_back( Colors );
-//    }
-//
-//    WIN32_FIND_DATA wfd = { 0 };
-//    const auto Filter = Base + "*.*";
-//    HANDLE hFile = FindFirstFileExW( Filter.toStdWString().c_str(),
-//                                     FindExInfoBasic,
-//                                     &wfd, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH );
-//
-//    QFileIconProvider Provider;
-//    
-//    if( hFile != INVALID_HANDLE_VALUE )
-//    {
-//        do
-//        {
-//            if( wcscmp( wfd.cFileName, L"." ) == 0 ||
-//                wcscmp( wfd.cFileName, L".." ) == 0 )
-//                continue;
-//
-//            Node Item;
-//
-//            Item.Attiributes    = wfd.dwFileAttributes;
-//            Item.Reserved0      = wfd.dwReserved0;
-//            Item.Name           = QString::fromWCharArray( wfd.cFileName );
-//            // Item.IsNormalizedByNFD = IsNormalizedString( NormalizationD, wfd.cFileName, -1 );
-//            // NOTE: OS 의 IsNormalizedString 의 정상적인 Latin1 문자열도 TRUE 를 반환한다. 
-//            Item.IsNormalizedByNFD = Item.Name != Item.Name.normalized( QString::NormalizationForm_C );
-//            Item.Ext            = nsCmn::nsCmnPath::GetFileExtension( Item.Name );
-//            if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
-//            {
-//                if( MapDirNameToSize.contains( Item.Name ) == true )
-//                    Item.Size = MapDirNameToSize[ Item.Name ];
-//                else
-//                    Item.Size = 0;
-//            }
-//            else
-//            {
-//                Item.Size       = (static_cast< int64_t >( wfd.nFileSizeHigh ) << 32) | (wfd.nFileSizeLow);
-//            }
-//            Item.Created        = nsCmn::ConvertTo( wfd.ftCreationTime, false );
-//            Item.Modified       = nsCmn::ConvertTo( wfd.ftLastWriteTime, false );
-//
-//            if( FlagOn( Item.Attiributes, FILE_ATTRIBUTE_DIRECTORY ) )
-//            {
-//                if( Icon_Directory.isNull() == false )
-//                    Item.Icon = Icon_Directory;
-//
-//                DirectoryCount_Refresh++;
-//            }
-//            else
-//            {
-//                Item.Icon = Provider.icon( QFileInfo( Base + Item.Name ) ).pixmap( 24, 24 );
-//
-//                //do
-//                //{
-//                //    SHFILEINFOW SHInfo = { 0, };
-//                //    const auto File = Item.Name.toStdWString();
-//                //    SHGetFileInfoW( File.c_str(), FILE_ATTRIBUTE_NORMAL, &SHInfo, sizeof( SHFILEINFOW ),
-//                //                    SHGFI_USEFILEATTRIBUTES | SHGFI_ADDOVERLAYS | SHGFI_ICON | SHGFI_LARGEICON );
-//
-//                //    if( SHInfo.hIcon != Q_NULLPTR )
-//                //    {
-//                //        Item.Icon = QPixmap::fromImage( QImage::fromHICON( SHInfo.hIcon ) );
-//                //        DestroyIcon( SHInfo.hIcon );
-//                //    }
-//
-//                //} while( false );
-//
-//                FileCount_Refresh++;
-//                TotalSize_Refresh += Item.Size;
-//            }
-//
-//            Nodes.push_back( Item );
-//
-//            TyPrFBWithBG Colors;
-//            for( const auto& FileSetName : VecFileSet )
-//            {
-//                if( TyStColorSchemeMgr::GetInstance()->JudgeFileSet( TyStFileSetMgr::GetInstance()->GetFileSet( FileSetName ), Item, &Colors.first, &Colors.second ) == false )
-//                    continue;
-//
-//                break;
-//            }
-//
-//            VecRowColors_Refresh.push_back( Colors );
-//
-//        } while( FindNextFileW( hFile, &wfd ) != 0 );
-//
-//        FindClose( hFile );
-//    }
-//
-//    beginResetModel();
-//    qSwap( Nodes, VecNode );
-//    FileCount = FileCount_Refresh;
-//    DirectoryCount = DirectoryCount_Refresh;
-//    TotalSize = TotalSize_Refresh;
-//    qSwap( VecRowColors_Refresh, VecRowColors );
-//    endResetModel();
-//
-//    CoUninitialize();
-//}
-//
-//
-//bool FSModel::setData( const QModelIndex& index, const QVariant& value, int role )
-//{
-//    if( role == Qt::EditRole )
-//    {
-//        if( index.isValid() == false )
-//            return QAbstractItemModel::setData( index, value, role );
-//
-//        const auto Row = index.row();
-//        const auto Col = index.column();
-//
-//        if( Row < 0 || Row >= VecNode.size() )
-//            return QAbstractItemModel::setData( index, value, role );
-//
-//        if( Col < 0 || Col >= CurrentView.VecColumns.size() )
-//            return QAbstractItemModel::setData( index, value, role );
-//
-//        if( Col == 0 )
-//        {
-//            auto& Node = VecNode[ Row ];
-//            Node.Name = value.toString();
-//            Node.IsNormalizedByNFD = FALSE;
-//            Node.VecContent[ Col ] = value;
-//            emit dataChanged( index, index, QList<int>() << Qt::DisplayRole << Qt::EditRole << Qt::FontRole );
-//            return true;
-//        }
-//    }
-//
-//    return QAbstractItemModel::setData( index, value, role );
-//}
-
 ////////////////////////////////////////////////////////////////////////////////
-///
 
 void CFSProxyModel::SetHiddenSystem( bool IsShow )
 {

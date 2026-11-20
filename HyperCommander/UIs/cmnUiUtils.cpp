@@ -94,15 +94,11 @@ namespace nsHC
     void QBaseUI::initializeColorScheme()
     {
         const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
-        const auto ColorScheme = StColorSchemeMgr->GetColorScheme( StColorSchemeMgr->GetCurrentColorScheme() );
+        const auto ColorScheme = StColorSchemeMgr->Current();
 
         auto Palette = palette();
         setFont( ColorScheme.Dialog_Font );
         //
-        //Palette.setColor( QPalette::ColorRole::Window, ColorScheme.Dialog_BGColor );
-        //Palette.setColor( QPalette::ColorRole::Button, ColorScheme.Dialog_BGColor );
-        //Palette.setColor( QPalette::ColorRole::WindowText, ColorScheme.Dialog_FGColor );
-        //Palette.setColor( QPalette::ColorRole::ButtonText, ColorScheme.Dialog_FGColor );
 
         //if( ColorScheme.IsDarkMode == true )
         //{

@@ -92,7 +92,7 @@ CmpPanel::CmpPanel( QWidget* parent, Qt::WindowFlags f )
     initializeUIs();
 
     const auto StColorSchemeMgr = TyStColorSchemeMgr::GetInstance();
-    OnColorSchemeChanged( StColorSchemeMgr->GetColorScheme( StColorSchemeMgr->GetCurrentColorScheme() ) );
+    OnColorSchemeChanged( StColorSchemeMgr->Current() );
 
     QMetaObject::invokeMethod( this, "RefreshVolumeList", Qt::QueuedConnection );
     QTimer::singleShot(0, this, [this] { QTimer::singleShot(0, this, [this]() {
@@ -383,7 +383,7 @@ void CmpPanel::materializeTab(int Index)
     }
     View->RestoreWorkspaceView(State->pending_ ? hc::workspace::MergeView(workspaceDefaults_, State->workspace_.view_) : QJsonObject{});
     const auto Color = TyStColorSchemeMgr::GetInstance();
-    View->ApplyColorScheme(Color->GetColorScheme(Color->GetCurrentColorScheme()));
+    View->ApplyColorScheme(Color->Current());
     View->SetPanelActive(activePanel_);
     hc::startup::Record("tab.materialized", {{"tab", State->workspace_.id_}});
 }
@@ -1136,7 +1136,7 @@ void CmpPanel::ExternalEditorMenu( const QModelIndex& SrcIndex )
      */
 
     const auto StExternalMgr = TyStExternalEditorMgr::GetInstance();
-    const auto ColorScheme = TyStColorSchemeMgr::GetInstance()->GetColorScheme( TyStColorSchemeMgr::GetInstance()->GetCurrentColorScheme() );
+    const auto ColorScheme = TyStColorSchemeMgr::GetInstance()->Current();
     const auto State = retrieveFocusState();
     const auto View = State->View;
     const auto Fs = State->Model->GetRoot();
@@ -2533,7 +2533,7 @@ void CmpPanel::processPanelStatusText()
 //    //ui.cbxVolume->setEditable( true );
 //    //ui.cbxVolume->lineEdit()->setReadOnly( true );
 //
-//    const auto ColorScheme = TyStColorSchemeMgr::GetInstance()->GetColorScheme( TyStColorSchemeMgr::GetInstance()->GetCurrentColorScheme() );
+//    const auto ColorScheme = TyStColorSchemeMgr::GetInstance()->Current();
 //
 //    sltColorSchemeChanged( ColorScheme );
 //
@@ -2556,9 +2556,6 @@ void CmpPanel::processPanelStatusText()
 //    auto Palette = ui.cbxVolume->palette();
 //    ui.cbxVolume->setFont( ColorScheme.Dialog_Font );
 //
-//    Palette.setColor( ui.cbxVolume->backgroundRole(), ColorScheme.Dialog_BGColor );
-//    Palette.setColor( QPalette::Base, ColorScheme.Dialog_BGColor );
-//    Palette.setColor( ui.cbxVolume->foregroundRole(), ColorScheme.Dialog_FGColor );
 //
 //    // TODO: 현재 있는 그리드들에 색상 / 글꼴 적용
 //}

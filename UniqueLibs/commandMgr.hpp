@@ -25,7 +25,6 @@ class CCommandMgr : public QObject, public QAbstractNativeEventFilter
     QString GlobalShortcutError(const QString& Id) const;
 
     void                  Refresh();
-    void                  SaveSettings();
     TyMapShortcutToCMDStr Retrieve() const;
     TyMapShortcutToCMDStr RetrieveForCommand(const QString& Id) const;
     TyHC_COMMAND          GetDefaultCMD( const QString& Command );

@@ -123,7 +123,6 @@ protected:
 
     ColumnView                      columnView_;
     TyColorScheme                   colorScheme_;
-    QVector< QPair< TyFileSet, TyPrFGWithBG > > vecFileSetColors_;
     hc::settings::FileColorRules fileColorRules_;
     QJsonObject fileRuleDocument_;
     quint64 fileRuleLoadGeneration_ = 0;
@@ -139,7 +138,6 @@ protected:
     mutable nsCmn::nsConcurrent::CCmnMutex  lock;
     QVector< nsHC::TySpFileSystem > vecFs_;         // 어떠한 FS 에서 PACKER 를 호출하면 PACKER FS 가 추가된다.
     QVector< nsHC::TySpFileSource > vecNode_;
-    QVector< TyPrFGWithBG >         vecRowColors_;
 
     int                             fileCount_ = 0;
     int                             directoryCount_ = 0;

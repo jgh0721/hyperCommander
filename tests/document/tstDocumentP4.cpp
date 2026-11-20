@@ -304,12 +304,12 @@ private slots:
         const auto Migrated = Settings.Read(hc::settings::Section::Editors).toObject(); const auto Entries = Migrated["items"].toArray();
         QCOMPARE(Entries.size(), 2); QCOMPARE(Entries[0].toObject()["arguments"], Items[0].toObject()["arguments"]);
         QVERIFY(Entries[0].toObject()["stableId"] != Entries[1].toObject()["stableId"]);
-        QCOMPARE(Settings.Object()["schemaVersion"].toInt(), 1); QCOMPARE(Migrated["documentHandlers"].toObject()["schemaVersion"].toInt(), 1);
+        QCOMPARE(Settings.Object()["schemaVersion"].toInt(), 1);
         auto Expected = Legacy; hc::defaults::MigrateCommandSettings(Expected);
         QCOMPARE(Settings.Read(hc::settings::Section::Shortcuts), Expected["shortcuts"]);
         QFile Original(Temp.filePath("settings.json")); QVERIFY(Original.open(QIODevice::ReadOnly)); QCOMPARE(Original.readAll(), Bytes); Original.close();
         QVERIFY(Settings.Commit()); hc::settings::Repository Reload(Temp.path()); QCOMPARE(Reload.Object(), Settings.Object());
-        QVERIFY(Reload.Put(hc::settings::Section::Editors, Items)); QCOMPARE(Reload.Read(hc::settings::Section::Editors).toObject()["documentHandlers"], Migrated["documentHandlers"]);
+        QVERIFY(Reload.Put(hc::settings::Section::Editors, Items)); QCOMPARE(Reload.Read(hc::settings::Section::Editors), Migrated);
         const auto Keys = hc::ui::EffectiveShortcuts(Settings.Read(hc::settings::Section::General).toObject(), Legacy["shortcuts"].toObject());
         QVERIFY(!Keys.contains(QKeyCombination(Qt::Key_F3))); QCOMPARE(hc::ui::CommandId(Keys.value(QKeyCombination(Qt::Key_F4))), QString("hc.file.copy"));
         QCOMPARE(hc::ui::CommandId(Keys.value(QKeyCombination(Qt::AltModifier, Qt::Key_V))), QString("hc.viewer.open"));
@@ -324,7 +324,8 @@ private slots:
         QCOMPARE(Edit.candidates_.size(), size_t(1)); QVERIFY(Edit.candidates_[0].starts_with("external."));
         auto Config = Settings.Read(hc::settings::Section::Editors).toObject(); auto Child = Config["documentHandlers"].toObject(); Child["schemaVersion"] = 77; Config["documentHandlers"] = Child;
         QVERIFY(Settings.Put(hc::settings::Section::Editors, Config)); const auto Unknown = BuildDocumentHandlerCatalog(Settings, Temp.path());
-        QVERIFY(DocumentHandlerResolver::Resolve(Unknown.registry_, DocumentIntent::Edit, {{"a.txt"}}).candidates_.empty()); QCOMPARE(Settings.Read(hc::settings::Section::Editors).toObject()["documentHandlers"].toObject()["schemaVersion"].toInt(), 77);
+        QCOMPARE(DocumentHandlerResolver::Resolve(Unknown.registry_, DocumentIntent::Edit, {{"a.txt"}}).candidates_, Edit.candidates_);
+        QCOMPARE(Settings.Read(hc::settings::Section::Editors).toObject()["documentHandlers"].toObject(), Child);
     }
     void productRhwpEditorCatalog() {
         QTemporaryDir Temp; hc::settings::Repository Settings(Temp.path());

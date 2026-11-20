@@ -5,13 +5,12 @@
 
 #include "ui_dlgOpts.h"
 
-struct TyFileSet;
 struct TyColorScheme;
 class QPluginManagementPage;
 class CGridView;
 class QtColumnProfileEditor;
 namespace hc::passwords { class SettingsPage; }
-namespace hc::ui { class ProcessServiceSettingsPage; class AudioSettingsPage; class FileColorRulesPage; class ThumbnailSettingsPage; class MenuBarSettingsPage; class ThemeSettingsPage; class KeyboardSettingsPage; class LegacySettingsPage; }
+namespace hc::ui { class ProcessServiceSettingsPage; class AudioSettingsPage; class FileColorRulesPage; class ThumbnailSettingsPage; class MenuBarSettingsPage; class ThemeSettingsPage; class KeyboardSettingsPage; }
 
 
 class QMainOpts : public nsHC::QBaseUI
@@ -28,11 +27,8 @@ public:
 
     Q_INVOKABLE void                    LoadSettings();
     Q_INVOKABLE bool                    SaveSettings();
-    Q_INVOKABLE void                    SaveSettings_ColorScheme();
     Q_INVOKABLE void                    SaveSettings_PluginList();
-    Q_INVOKABLE void                    RefreshColorScheme( const QString& SchemeName );
     Q_INVOKABLE void                    RefreshPluginList();
-    Q_INVOKABLE void                    RefreshShortcuts();
 
 signals:
     void                                NotifyColorSchemeChanged( const TyColorScheme& ColorScheme );
@@ -53,8 +49,6 @@ protected slots:
     /// Content
 
     
-    /// Page = pgShortcut
-    void                                on_btnDelShortcutCMD_clicked( bool checked = false );
 
     /// Page = pgPluginManage
 
@@ -71,10 +65,11 @@ protected slots:
 private:
     void                                initialize();
     void initializeDesignPages();
+    void loadDisplayAppearance(const TyColorScheme& Scheme);
+    void storeDisplayAppearance(QJsonObject& Appearance) const;
     QJsonObject committedSettings_;
     hc::ui::ThemeSettingsPage* themeSettings_ = nullptr;
     hc::ui::KeyboardSettingsPage* keyboardSettings_ = nullptr;
-    hc::ui::LegacySettingsPage* legacySettings_ = nullptr;
     hc::passwords::SettingsPage* passwordSettings_ = nullptr;
 
     hc::ui::MenuBarSettingsPage* menuSettings_ = nullptr;
@@ -93,7 +88,6 @@ private:
     QSpinBox* defaultSpeed_ = nullptr;
     QLabel* defaultCopyError_ = nullptr;
 
-    QString selectedScheme_;
     QCheckBox* inverseCursor_ = nullptr;
     QCheckBox* inverseSelection_ = nullptr;
 

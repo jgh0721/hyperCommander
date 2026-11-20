@@ -3,14 +3,9 @@
 #include <QJsonArray>
 #include <QCryptographicHash>
 #include <QSet>
-#include "UniqueLibs/productDefaults.hpp"
 namespace hc::document {
-inline QJsonObject DefaultDocumentHandlers() {
-    return hc::defaults::DocumentHandlers();
-}
 inline QJsonObject MigrateEditors(QJsonValue Value) {
     auto Result = Value.isObject() ? Value.toObject() : QJsonObject{{"items", Value.toArray()}};
-    if (!Result.contains("documentHandlers")) Result["documentHandlers"] = DefaultDocumentHandlers();
     QJsonArray Items; QSet<QString> Ids;
     for (const auto& Value : Result["items"].toArray()) {
         auto Item = Value.toObject(); auto Id = Item["stableId"].toString();

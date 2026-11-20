@@ -86,6 +86,10 @@ public:
         auto* Header = new fm::ui::DialogHeader(this); Header->setTitle(tr("키보드 · 기능 키 막대")); Header->setSubtitle(tr("명령과 키를 찾고 바꿉니다. 사용 중인 키는 충돌 명령을 확인한 후 재지정합니다.")); Root->addWidget(Header);
         auto* Tabs = new QTabWidget(this); Root->addWidget(Tabs, 1);
         auto* Page = new QWidget; auto* Rows = new QVBoxLayout(Page); Tabs->addTab(Page, tr("단축키"));
+        builtInKeys_ = new QCheckBox(tr("전역 기본 단축키 사용"), Page);
+        builtInKeys_->setObjectName("hc.keys.builtInShortcuts");
+        builtInKeys_->setToolTip(tr("끄면 전역 단축키는 사용자 지정 키만 사용합니다."));
+        Rows->addWidget(builtInKeys_);
         auto* Filter = new QHBoxLayout; Rows->addLayout(Filter);
         search_ = new fm::ui::SearchField(Page); search_->setObjectName("hc.keys.search"); search_->setPlaceholderText(tr("명령 또는 키 찾기")); Filter->addWidget(search_, 1);
         scope_ = new QComboBox(Page); scope_->setObjectName("hc.keys.scope"); scope_->addItems({tr("전체"), tr("파일 작업"), tr("패널·탭"), tr("탐색"), tr("창·설정"), tr("명령행 입력"), tr("오디오"), tr("프로세스 보기"), tr("서비스 보기"), tr("레지스트리 보기"), tr("환경 변수 보기")}); Filter->addWidget(scope_);
@@ -171,6 +175,13 @@ public:
             else for (const auto& K : CommandKeys(M->RetrieveForCommand(Id), Id)) M->DelShortcut(K[0], Id);
             Refresh();
         });
+        connect(builtInKeys_, &QCheckBox::toggled, this, [this](bool Enabled) {
+            if (loading_) return;
+            auto& Settings = settings::AppSettings();
+            auto General = Settings.Read(settings::Section::General).toObject();
+            General["useBuiltInShortcuts"] = Enabled;
+            if (Settings.Put(settings::Section::General, General)) Refresh();
+        });
         connect(preset_, &QComboBox::currentIndexChanged, this, [this](int I) { if (loading_) return; auto G = settings::AppSettings().Read(settings::Section::General).toObject(); G["shortcutPreset"] = hc::defaults::ShortcutPresetIds().value(I, "legacy"); settings::AppSettings().Put(settings::Section::General, G); Refresh(); });
         connect(Reset, &QPushButton::clicked, this, [this] { if (hc::ui::MessageDialog::question(this, tr("단축키 초기화"), tr("사용자 키를 지우고 선택한 기본값으로 되돌리시겠습니까?")) != QMessageBox::Yes) return; settings::AppSettings().Put(settings::Section::Shortcuts, QJsonObject{}); Refresh(); });
         connect(resetScope_, &QPushButton::clicked, this, [this] {
@@ -182,6 +193,7 @@ public:
     }
     void Load() {
         loading_ = true; const auto G = settings::AppSettings().Read(settings::Section::General).toObject();
+        builtInKeys_->setChecked(G["useBuiltInShortcuts"].toBool(hc::defaults::DefaultValue("general/useBuiltInShortcuts").toBool()));
         preset_->setCurrentIndex(qMax(0, hc::defaults::ShortcutPresetIds().indexOf(G["shortcutPreset"].toString(hc::defaults::DefaultValue("general/shortcutPreset").toString()))));
         for (int Kind = 0; Kind < int(FunctionBarKind::SystemEnvironmentView) + 1; ++Kind) {
             const auto Value = FunctionBarKind(Kind);
@@ -295,6 +307,7 @@ private:
     void showFunctions(int Kind) {
         for (int I = 0; I < functions_.size(); ++I) { functions_[I]->SetCommand(drafts_[Kind].commands_.value(I)); captions_[I]->setText(drafts_[Kind].captions_.value(I)); }
     }
+    QCheckBox* builtInKeys_ = nullptr;
     QLineEdit* search_; QComboBox *scope_, *preset_, *functionKind_; QTableWidget* table_; CommandSelector* selector_; fm::ui::KeyCaptureEdit* key_; QLabel* conflict_; QPushButton *assign_, *reassign_, *resetScope_; QList<CommandSelector*> functions_; QList<QLineEdit*> captions_; bool loading_ = false;
     InputScope editScope_ = InputScope::Global; int shownKind_ = 0; FunctionDraft drafts_[int(FunctionBarKind::SystemEnvironmentView) + 1];
 };

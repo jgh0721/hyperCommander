@@ -1,7 +1,6 @@
 ﻿#include "stdafx.h"
 #include "mdlFileModel.hpp"
 
-#include "fileSetMgr.hpp"
 #include "solTCPluginMgr.hpp"
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
@@ -340,25 +339,6 @@ void CFsModelT::SetColorScheme( const TyColorScheme& ColorScheme )
         } else fileRulesError_=fileColorRules_.Load(Document);
     }
     fileRuleClock_->stop(); fileRuleExpiry_.reset();
-
-    decltype( vecFileSetColors_ ) VecFileSetColors;
-    if( colorScheme_.Name.isEmpty() == true )
-    {
-        qSwap( VecFileSetColors, vecFileSetColors_ );
-        return;
-    }
-
-    const auto StFileSetMgr = TyStFileSetMgr::GetInstance();
-    for( const auto& Name : colorScheme_.MapNameToColors.keys() )
-    {
-        const auto& Set = StFileSetMgr->GetFileSet( Name );
-        if( Set.Name.isEmpty() == true )
-            continue;
-
-        VecFileSetColors.push_back( qMakePair( Set, colorScheme_.MapNameToColors[ Name ] ) );
-    }
-
-    qSwap( VecFileSetColors, vecFileSetColors_ );
 }
 
 //////////////////////////////////////////////////////////////////////////

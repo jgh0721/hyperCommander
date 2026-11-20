@@ -212,20 +212,13 @@ bool DocumentOpenController::Open(const QString& Token) {
     return true;
 }
 bool DocumentOpenController::selectHandler(const QString& Token, DocumentOpenRequest Request, HandlerSelection Selection, DocumentHandlerCatalog Catalog) {
-    auto Default = Request.intent_ == DocumentIntent::View ? Catalog.defaultView_ : Catalog.defaultEdit_;
-    if (!Selection.names_.empty()) {
-        const auto Name = QString::fromStdString(Selection.names_.front()); const auto Ext = QFileInfo(Name).suffix().toLower();
-        const auto Override = Catalog.overrides_[Ext].toObject()[Request.intent_ == DocumentIntent::View ? "view" : "edit"].toString();
-        if (!Override.isEmpty()) Default = Override.toStdString();
-    }
+    const auto& Default = Request.intent_ == DocumentIntent::View ? Catalog.defaultView_ : Catalog.defaultEdit_;
     const auto Resolution = DocumentHandlerResolver::Resolve(Catalog.registry_, Request.intent_, Selection, Default);
     if (Selection.directory_ || !Selection.providerSupported_ || Selection.names_.empty()) { report(Token, "rejected", QString::fromStdString(Resolution.reason_)); return true; }
     DocumentHandlerChoice Choice;
     if (Resolution.candidates_.size() == 1) {
         Choice.handler_ = Resolution.candidates_.front(); for (std::size_t I = 0; I < Request.documents_.size(); ++I) Choice.indexes_.push_back(I);
     } else {
-        Catalog.defaultView_ = Request.intent_ == DocumentIntent::View ? Default : Catalog.defaultView_;
-        Catalog.defaultEdit_ = Request.intent_ == DocumentIntent::Edit ? Default : Catalog.defaultEdit_;
         Choice = DocumentHandlerMenu::Choose(main_, Catalog, Request.intent_, Selection, Resolution);
     }
     if (Choice.configure_) { report(Token, "cancelled"); emit ConfigureRequested(); return true; }
